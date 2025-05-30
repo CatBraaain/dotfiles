@@ -1,0 +1,5 @@
+[tasks.apply]
+run = "chezmoi apply -c chezmoi.yaml"
+
+[tasks.diff]
+run = "chezmoi diff -c chezmoi.yaml"
