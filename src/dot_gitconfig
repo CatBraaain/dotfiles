@@ -1,0 +1,21 @@
+[user]
+email = 84499939+CatBraaain@users.noreply.github.com
+name = CatBraaain
+[filter "lfs"]
+process = git-lfs filter-process
+required = true
+clean = git-lfs clean -- %f
+smudge = git-lfs smudge -- %f
+[credential]
+helper = manager-core
+[core]
+editor = code --wait
+autocrlf = false
+[include]
+path = .gitconfig.alias
+[alias]
+ss = "!git status -s -u; git stash -u -m \"snapshot: $(date)\" -q && git stash apply \"stash@{0}\" --index -q"
+ssr = "!git status -s -u && git stash -u -m \"snapshot: before restoring\" -q && echo \"=>\" && git checkout stash@{0} -- . && git status -s -u"
+sw = switch
+swc = switch -c
+clone-lean = clone --depth 1 --filter=blob:none --no-checkout
