@@ -1,5 +1,5 @@
 {
   "files.associations": {
-    "dot_gitconfig": "ini"
+    "dot_*": "ini"
   }
 }
