@@ -1,5 +1,6 @@
 {
   "files.associations": {
-    "dot_*": "ini"
+    "dot_*": "ini",
+    "*.ps1.tmpl": "powershell"
   }
 }
