@@ -8,6 +8,8 @@ clean = git-lfs clean -- %f
 smudge = git-lfs smudge -- %f
 [credential]
 helper = manager-core
+[credential "helperselector"]
+selected = manager
 [core]
 editor = code --wait
 autocrlf = false
