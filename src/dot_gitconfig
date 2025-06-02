@@ -17,6 +17,7 @@ autocrlf = false
 path = .gitconfig.alias
 [alias]
 ss = "!git status -s -u; git stash -u -m \"snapshot: $(date)\" -q && git stash apply \"stash@{0}\" --index -q"
+sss = "!git status -s -u; git stash -u -m \"snapshot: $(date)\" -q"
 ssr = "!git status -s -u && git stash -u -m \"snapshot: before restoring\" -q && echo \"=>\" && git checkout stash@{0} -- . && git status -s -u"
 sw = switch
 swc = switch -c
