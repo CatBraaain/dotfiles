@@ -1,0 +1,9 @@
+[tools]
+bun = "latest"
+go = "latest"
+node = "lts"
+watchexec = "latest"
+
+[settings]
+experimental = true
+windows_shim_mode = "symlink"
