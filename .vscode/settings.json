@@ -2,5 +2,11 @@
   "files.associations": {
     "dot_*": "ini",
     "*.ps1.tmpl": "powershell"
-  }
+  },
+  "[json][jsonc]": {
+    "editor.formatOnPaste": false,
+    "editor.formatOnSave": false,
+    "editor.formatOnType": false
+  },
+  "files.insertFinalNewline": false,
 }
