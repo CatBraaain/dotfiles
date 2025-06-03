@@ -652,7 +652,7 @@
   "TrayLeftClickAction": "None",
   "TrayLeftDoubleClickAction": "OpenMainWindow",
   "TrayMiddleClickAction": "None",
-  "AutoCheckUpdate": true,
+  "AutoCheckUpdate": false,
   "UpdateChannel": "Release",
   "CheckPreReleaseUpdates": false,
   "Themes": [
@@ -871,89 +871,8 @@
   ],
   "HistorySaveTasks": true,
   "HistoryCheckURL": false,
-  "RecentTasks": [
-    {
-      "FilePath": "D:\\Downloads\\2025-05-14 13 48 55.jpg",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-14T04:48:57.3601388Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-05-14 13 49 15.jpg",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-14T04:49:17.3110114Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-05-14 13 54 10.jpg",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-14T04:54:13.0118669Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-05-14 14 39 32.png",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-14T05:39:32.9216719Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-05-14 16 11 24.jpg",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-14T07:11:25.6568632Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-05-26 11 41 45.png",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-26T02:41:46.4195175Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-05-29 15 48 50.png",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-29T06:48:51.0813484Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-05-29 15 49 07.png",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-05-29T06:49:08.051221Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-06-01 16 37 35.png",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-06-01T07:37:35.9672381Z"
-    },
-    {
-      "FilePath": "D:\\Downloads\\2025-06-01 21 23 39.png",
-      "URL": null,
-      "ThumbnailURL": null,
-      "DeletionURL": null,
-      "ShortenedURL": null,
-      "Time": "2025-06-01T12:23:40.0548461Z"
-    }
-  ],
-  "RecentTasksSave": true,
+  "RecentTasks": null,
+  "RecentTasksSave": false,
   "RecentTasksMaxCount": 10,
   "RecentTasksShowInMainWindow": true,
   "RecentTasksShowInTrayMenu": true,

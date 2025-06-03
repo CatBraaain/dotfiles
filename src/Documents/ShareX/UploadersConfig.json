@@ -252,7 +252,7 @@
   "ZeroWidthShortenerURL": "https://api.zws.im",
   "ZeroWidthShortenerToken": "",
   "TwitterOAuthInfoList": [],
-  "TwitterSelectedAccount": 0,
+  "TwitterSelectedAccount": -1,
   "TwitterSkipMessageBox": false,
   "TwitterDefaultMessage": "",
   "CustomUploadersList": [],
