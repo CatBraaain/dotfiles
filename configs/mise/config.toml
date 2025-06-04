@@ -1,7 +1,4 @@
 [tools]
-bun = "latest"
-go = "latest"
-node = "lts"
 watchexec = "latest"
 
 [settings]
