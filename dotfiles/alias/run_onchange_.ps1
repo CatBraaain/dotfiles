@@ -1,4 +1,3 @@
-{{ if eq .chezmoi.os "windows" }}
 $aliasDir = "$env:USERPROFILE\alias"
 
 remove-item "$aliasDir\*"
@@ -8,4 +7,3 @@ remove-item "$aliasDir\*"
 ) | % {
     New-Item "$aliasDir\$($_.aliasName).cmd" -Value $_.commandName -Force > $null
 }
-{{ end }}
