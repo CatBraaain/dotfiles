@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://aka.ms/winget-packages.schema.2.0.json
+
+$schema: "https://aka.ms/winget-packages.schema.2.0.json"
+Sources:
+  - SourceDetails:
+      Argument: https://cdn.winget.microsoft.com/cache
+      Identifier: Microsoft.Winget.Source_8wekyb3d8bbwe
+      Name: winget
+      Type: Microsoft.PreIndexed.Package
+    Packages:
+      # dev tools
+      - PackageIdentifier: twpayne.chezmoi
+      - PackageIdentifier: M2Team.NanaZip
+      - PackageIdentifier: MikeFarah.yq
+      # - PackageIdentifier: Gyan.FFmpeg
+
+      - PackageIdentifier: Git.Git
+      - PackageIdentifier: ezwinports.make
+      - PackageIdentifier: jdx.mise
+      - PackageIdentifier: astral-sh.uv
+      - PackageIdentifier: AutoHotkey.AutoHotkey
+        Version: 1.1.37.02 # pin this
+
+      - PackageIdentifier: Microsoft.VisualStudioCode
+      - PackageIdentifier: Microsoft.WindowsTerminal
+      - PackageIdentifier: TortoiseGit.TortoiseGit
+      - PackageIdentifier: MongoDB.Compass.Full
+      - PackageIdentifier: Docker.DockerDesktop
+
+      # others
+      - PackageIdentifier: MartiCliment.UniGetUI
+
+      - PackageIdentifier: Google.Chrome
+      - PackageIdentifier: Mozilla.Firefox
+      - PackageIdentifier: Microsoft.Edge
+
+      - PackageIdentifier: BluePointLilac.ContextMenuManager
+      - PackageIdentifier: AdrienAllard.FileConverter
+      - PackageIdentifier: GIMP.GIMP.3
+      - PackageIdentifier: DuongDieuPhap.ImageGlass
+      - PackageIdentifier: ch.LosslessCut
+      - PackageIdentifier: MPC-BE.MPC-BE
+      - PackageIdentifier: ShareX.ShareX
+      - PackageIdentifier: OBSProject.OBSStudio
+      - PackageIdentifier: Meltytech.Shotcut
+      - PackageIdentifier: StirlingTools.StirlingPDF
+      - PackageIdentifier: WinDirStat.WinDirStat
+      - PackageIdentifier: mulaRahul.Keyviz
+
+      - PackageIdentifier: Discord.Discord
+      - PackageIdentifier: Valve.Steam
+      - PackageIdentifier: Mojang.MinecraftLauncher
+
+      - PackageIdentifier: Guru3D.Afterburner
