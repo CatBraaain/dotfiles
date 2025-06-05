@@ -9,9 +9,9 @@ run = "chezmoi diff -c chezmoi.yaml"
 
 [tasks."apply:winget"]
 run = [
-    "yq configs/.winget/packages.yaml -o json > configs/.winget/packages.json",
+    "yq src/configs/.winget/packages.yaml -o json > dist/winget-packages.json",
     "winget pin reset --force",
-    "winget import configs/.winget/packages.json",
+    "winget import dist/winget-packages.json",
     "winget pin add Autohotkey.AutoHotkey",
     "del /q %USERPROFILE%\\Desktop\\*.lnk",
 ]
