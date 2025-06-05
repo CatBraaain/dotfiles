@@ -5,8 +5,8 @@ import { dirname } from "path";
 const aliasDir = "./dotfiles/exact_alias";
 
 const aliases = [
-  { aliasName: "npm", commandName: "pnpm" },
-  { aliasName: "rnpm", commandName: "C:\\Program Files\\nodejs\\npm" },
+  { aliasName: "npm", commandName: "pnpm %*" },
+  { aliasName: "rnpm", commandName: "C:\\Program Files\\nodejs\\npm %*" },
 ];
 
 async function setupAliases() {
