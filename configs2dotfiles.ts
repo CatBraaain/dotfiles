@@ -11,20 +11,23 @@ const map = [
   { src: ".chezmoiexternal.yaml", dist: ".chezmoiexternal.yaml" },
 ];
 
+const dotSrc = "src/configs";
+const dotDist = "dist/dotfiles";
+
 map.forEach(({ src, dist }) => {
-  fs.cpSync(`src/configs/${src}`, `dist/dotfiles/${dist}`, {
+  fs.cpSync(`${dotSrc}/${src}`, `${dotDist}/${dist}`, {
     recursive: true,
     force: true,
   });
 });
 
 (async () => {
-  const scriptDir = "src/configs/.dynamic";
-  const scripts = await readdir(scriptDir);
-  for (const script of scripts) {
-    if (script.endsWith(".ts")) {
-      console.log(`./${scriptDir}/${script}`);
-      await import(`./${scriptDir}/${script}`);
+  const scriptDir = `${dotSrc}/.dynamic`;
+  const scriptNames = await readdir(scriptDir);
+  for (const scriptName of scriptNames) {
+    if (scriptName.endsWith(".ts")) {
+      console.log(`./${scriptDir}/${scriptName}`);
+      await import(`./${scriptDir}/${scriptName}`);
     }
   }
 })();
