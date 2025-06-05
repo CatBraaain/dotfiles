@@ -1,6 +1,6 @@
 [tasks."apply:dotfiles"]
 run = [
-    "tsx configs2dotfiles.ts",
+    "powershell compiler/configs2dotfiles.ps1",
     "chezmoi apply -c chezmoi.yaml --force",
 ]
 
