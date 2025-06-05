@@ -12,14 +12,14 @@ const map = [
 ];
 
 map.forEach(({ src, dist }) => {
-  fs.cpSync(`configs/${src}`, `dotfiles/${dist}`, {
+  fs.cpSync(`src/configs/${src}`, `dist/dotfiles/${dist}`, {
     recursive: true,
     force: true,
   });
 });
 
 (async () => {
-  const scriptDir = "configs/.dynamic";
+  const scriptDir = "src/configs/.dynamic";
   const scripts = await readdir(scriptDir);
   for (const script of scripts) {
     if (script.endsWith(".ts")) {

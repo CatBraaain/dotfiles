@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dirname } from "path";
 
-const aliasDir = "./dotfiles/exact_alias";
+const aliasDir = "./dist/dotfiles/exact_alias";
 
 const aliases = [
   { aliasName: "npm", commandName: "pnpm %*" },
