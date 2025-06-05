@@ -12,6 +12,8 @@ Sources:
       - PackageIdentifier: twpayne.chezmoi
       - PackageIdentifier: M2Team.NanaZip
       - PackageIdentifier: MikeFarah.yq
+      # - PackageIdentifier: uutils.coreutils
+      - PackageIdentifier: frippery.busybox-w32
       # - PackageIdentifier: Gyan.FFmpeg
 
       - PackageIdentifier: Git.Git
@@ -20,6 +22,10 @@ Sources:
       - PackageIdentifier: astral-sh.uv
       - PackageIdentifier: AutoHotkey.AutoHotkey
         Version: 1.1.37.02 # pin this
+      - PackageIdentifier: Oven-sh.Bun
+      - PackageIdentifier: OpenJS.NodeJS.LTS
+      # - PackageIdentifier: pnpm.pnpm
+      - PackageIdentifier: GoLang.Go
 
       - PackageIdentifier: Microsoft.VisualStudioCode
       - PackageIdentifier: Microsoft.WindowsTerminal
