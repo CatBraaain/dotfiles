@@ -3,6 +3,7 @@ $map = @(
     @{ src = "mise"; dist = "dot_config/mise" },
     @{ src = "sharex"; dist = "Documents/ShareX" },
     @{ src = ".gitconfig"; dist = "dot_gitconfig" },
+    @{ src = ".nirc"; dist = "dot_nirc" },
     @{ src = ".wslconfig"; dist = "dot_wslconfig" },
     @{ src = ".chezmoiexternal.yaml"; dist = ".chezmoiexternal.yaml" }
 )
