@@ -5,7 +5,10 @@ run = [
 ]
 
 [tasks.diff]
-run = "chezmoi diff -c chezmoi.yaml"
+run = [
+    "powershell compiler/configs2dotfiles.ps1",
+    "chezmoi diff -c chezmoi.yaml",
+]
 
 [tasks."apply:winget"]
 run = [
