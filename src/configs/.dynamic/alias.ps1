@@ -1,8 +1,8 @@
 $aliasDir = ".\dist\dotfiles\exact_alias"
 
 $aliases = @(
-    @{ aliasName = "npm"; commandName = "pnpm %*" },
-    @{ aliasName = "rnpm"; commandName = "C:\Program Files\nodejs\npm %*" }
+    # @{ aliasName = "npm"; commandName = "pnpm %*" },
+    # @{ aliasName = "rnpm"; commandName = "C:\Program Files\nodejs\npm %*" }
 )
 
 New-Item -ItemType "Directory" -Path $aliasDir -Force | Out-Null
