@@ -16,6 +16,7 @@ Sources:
       - PackageIdentifier: frippery.busybox-w32
       # - PackageIdentifier: Gyan.FFmpeg
 
+      - PackageIdentifier: beekeeper-studio.beekeeper-studio
       - PackageIdentifier: Git.Git
       - PackageIdentifier: ezwinports.make
       - PackageIdentifier: jdx.mise
