@@ -3,6 +3,7 @@ $aliasDir = ".\dist\dotfiles\exact_alias"
 $aliases = @(
     @{ aliasName = "mr"; commandName = "mise run %*" }
     @{ aliasName = "uv-python-update"; commandName = "uv python install --reinstall 3.11 3.12 3.13" }
+    @{ aliasName = "uv-init"; commandName = "uv init --bare & uv venv" }
 )
 
 New-Item -ItemType "Directory" -Path $aliasDir -Force | Out-Null
