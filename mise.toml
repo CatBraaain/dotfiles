@@ -1,12 +1,12 @@
 [tasks."apply:dotfiles"]
 run = [
-    "powershell compiler/configs2dotfiles.ps1",
+    "bun compiler/configs2dotfiles.bun.js",
     "chezmoi apply -c chezmoi.yaml --force",
 ]
 
 [tasks.diff]
 run = [
-    "powershell compiler/configs2dotfiles.ps1",
+    "bun compiler/configs2dotfiles.bun.js",
     "chezmoi diff -c chezmoi.yaml",
 ]
 
