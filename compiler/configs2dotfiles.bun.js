@@ -5,23 +5,24 @@ const map = [
   { src: "obs-studio", dist: "AppData/Roaming/obs-studio" },
   { src: "mise", dist: "dot_config/mise" },
   { src: "sharex", dist: "Documents/ShareX" },
-  { src: ".gitconfig", dist: "dot_gitconfig" },
-  { src: ".nirc", dist: "dot_nirc" },
-  { src: ".wslconfig", dist: "dot_wslconfig" },
-  { src: ".chezmoiexternal.yaml", dist: ".chezmoiexternal.yaml" },
 ];
 
 const dotfilesSrc = "src/dotfiles";
 const dotfilesDist = "dist/dotfiles";
 
 await $`rm -rf ${dotfilesDist}`;
-await $`mkdir -p ${dotfilesDist}`;
+await $`cp -R ${dotfilesSrc} ${dotfilesDist}`;
 
 map.forEach(async (item) => {
-  await $`mkdir -p ${dotfilesDist}`;
-  const srcPath = `${dotfilesSrc}/${item.src}`;
-  const distPath = `${dotfilesDist}/${item.dist}`;
-  await $`cp -R ${srcPath} ${distPath}`;
+  await $`cp -R ${dotfilesDist}/${item.src} ${dotfilesDist}/${item.dist}`;
+  await $`rm -rf ${dotfilesDist}/${item.src}`;
+});
+await $`rm -rf ${dotfilesDist}/.scripts`;
+const itemNames = await readdir(dotfilesDist);
+itemNames.forEach(async (itemName) => {
+  if (itemName.startsWith(".") && !itemName.startsWith(".chezmoi")) {
+    await $`mv ${dotfilesDist}/${itemName} ${dotfilesDist}/${itemName.replace(/^\./, "dot_")}`;
+  }
 });
 
 const scriptsDir = `${dotfilesSrc}/.scripts`;
