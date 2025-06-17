@@ -11,20 +11,20 @@ const map = [
   { src: ".chezmoiexternal.yaml", dist: ".chezmoiexternal.yaml" },
 ];
 
-const dotsSrc = "src/configs";
-const dotsDist = "dist/dotfiles";
+const dotfilesSrc = "src/dotfiles";
+const dotfilesDist = "dist/dotfiles";
 
-await $`rm -rf ${dotsDist}`;
-await $`mkdir -p ${dotsDist}`;
+await $`rm -rf ${dotfilesDist}`;
+await $`mkdir -p ${dotfilesDist}`;
 
 map.forEach(async (item) => {
-  await $`mkdir -p ${dotsDist}`;
-  const srcPath = `${dotsSrc}/${item.src}`;
-  const distPath = `${dotsDist}/${item.dist}`;
+  await $`mkdir -p ${dotfilesDist}`;
+  const srcPath = `${dotfilesSrc}/${item.src}`;
+  const distPath = `${dotfilesDist}/${item.dist}`;
   await $`cp -R ${srcPath} ${distPath}`;
 });
 
-const scriptsDir = `${dotsSrc}/.scripts`;
+const scriptsDir = `${dotfilesSrc}/.scripts`;
 const scripts = await readdir(scriptsDir);
 scripts.forEach(async (script) => {
   await $`bun ${scriptsDir}/${script}`;
