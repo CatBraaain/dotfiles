@@ -1,4 +1,4 @@
-[tasks."apply:dotfiles"]
+[tasks.apply]
 run = [
     "bun compiler/configs2dotfiles.bun.js",
     "chezmoi apply -c chezmoi.yaml --force",
@@ -10,7 +10,7 @@ run = [
     "chezmoi diff -c chezmoi.yaml",
 ]
 
-[tasks."apply:winget"]
+[tasks.winget-install]
 run = [
     "yq src/configs/.winget/packages.yaml -o json > dist/winget-packages.json",
     "winget pin reset --force",
