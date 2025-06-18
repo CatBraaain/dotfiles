@@ -10,6 +10,7 @@ const aliases = [
     commandName: "uv python install --reinstall 3.11 3.12 3.13",
   },
   { aliasName: "uv-init", commandName: "uv init --bare & uv venv" },
+  { aliasName: "mise-init", commandName: "mise gen config -o mise.toml" },
 ];
 
 await $`rm -rf ${aliasDir}`;
