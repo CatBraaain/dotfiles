@@ -12,6 +12,8 @@ const aliases = [
   { aliasName: "uv-init", commandName: "uv init --bare & uv venv" },
   { aliasName: "mise-init", commandName: "mise gen config -o mise.toml" },
   { aliasName: "venv", commandName: ".venv\\Scripts\\activate" },
+  { aliasName: "j", commandName: "just %*" },
+  { aliasName: "jg", commandName: "just -g %*" },
 ];
 
 await $`rm -rf ${aliasDir}`;
