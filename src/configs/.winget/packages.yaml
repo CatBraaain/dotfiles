@@ -15,6 +15,7 @@ Sources:
       # - PackageIdentifier: uutils.coreutils
       - PackageIdentifier: frippery.busybox-w32
       # - PackageIdentifier: Gyan.FFmpeg
+      - PackageIdentifier: Casey.Just
 
       - PackageIdentifier: beekeeper-studio.beekeeper-studio
       - PackageIdentifier: Git.Git
