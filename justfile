@@ -1,3 +1,6 @@
+_:
+  @just --list
+
 apply:
   bun compiler/configs2dotfiles.bun.js
   chezmoi apply -c chezmoi.yaml --force
