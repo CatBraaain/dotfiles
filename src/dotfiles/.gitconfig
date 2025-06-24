@@ -11,6 +11,7 @@ selected = manager
 [core]
 editor = code --wait
 autocrlf = false
+ignorecase = false
 [include]
 path = .gitconfig.alias
 [alias]
