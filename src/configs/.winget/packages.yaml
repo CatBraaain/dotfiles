@@ -16,6 +16,8 @@ Sources:
       - PackageIdentifier: frippery.busybox-w32
       # - PackageIdentifier: Gyan.FFmpeg
       - PackageIdentifier: Casey.Just
+      - PackageIdentifier: gerardog.gsudo
+      - PackageIdentifier: Microsoft.NuGet
 
       - PackageIdentifier: beekeeper-studio.beekeeper-studio
       - PackageIdentifier: Git.Git
