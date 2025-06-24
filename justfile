@@ -9,6 +9,11 @@ diff:
   bun compiler/configs2dotfiles.bun.js
   chezmoi diff -c chezmoi.yaml
 
+apply-tasks:
+  bun compiler/configs2dotfiles.bun.js
+  chezmoi apply "$USERPROFILE/.taskscheduler/tasks.yaml" -c chezmoi.yaml --force
+  tsm apply --path $USERPROFILE/.taskscheduler/tasks.yaml
+
 winget-install:
   yq src/configs/.winget/packages.yaml -o json > dist/winget-packages.json
   winget pin reset --force
