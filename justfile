@@ -12,7 +12,7 @@ diff:
 apply-tasks:
   bun compiler/configs2dotfiles.bun.js
   chezmoi apply "$USERPROFILE/.taskscheduler/tasks.yaml" -c chezmoi.yaml --force
-  tsm apply --path $USERPROFILE/.taskscheduler/tasks.yaml
+  taskscheduler apply --path $USERPROFILE/.taskscheduler/tasks.yaml
 
 winget-install:
   yq src/configs/.winget/packages.yaml -o json > dist/winget-packages.json
