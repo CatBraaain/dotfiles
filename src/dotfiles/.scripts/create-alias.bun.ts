@@ -14,6 +14,7 @@ const aliases = [
   { aliasName: "venv", commandName: ".venv\\Scripts\\activate" },
   { aliasName: "j", commandName: "just %*" },
   { aliasName: "jg", commandName: "just -g %*" },
+  { aliasName: "dc", commandName: "docker compose %*" },
 ];
 
 await $`rm -rf ${aliasDir}`;
