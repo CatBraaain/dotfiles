@@ -15,6 +15,11 @@ const aliases = [
   { aliasName: "j", commandName: "just %*" },
   { aliasName: "jg", commandName: "just -g %*" },
   { aliasName: "dc", commandName: "docker compose %*" },
+  {
+    aliasName: "just-init",
+    commandName:
+      '(echo export JUST_UNSORTED := "true" & echo. & echo._: & echo.  @just --list) > justfile',
+  },
 ];
 
 await $`rm -rf ${aliasDir}`;
