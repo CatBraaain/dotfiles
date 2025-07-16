@@ -35,13 +35,13 @@ Sources:
       - PackageIdentifier: Microsoft.WindowsTerminal
       - PackageIdentifier: TortoiseGit.TortoiseGit
       - PackageIdentifier: MongoDB.Compass.Full
-      - PackageIdentifier: Docker.DockerDesktop
+      - PackageIdentifier: Docker.DockerDesktop # pin this
 
       # others
       - PackageIdentifier: MartiCliment.UniGetUI
 
       - PackageIdentifier: Google.Chrome
-      - PackageIdentifier: Mozilla.Firefox
+      - PackageIdentifier: Mozilla.Firefox # pin this
       - PackageIdentifier: Microsoft.Edge
 
       - PackageIdentifier: BluePointLilac.ContextMenuManager
