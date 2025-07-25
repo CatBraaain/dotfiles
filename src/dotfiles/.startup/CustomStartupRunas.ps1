@@ -2,7 +2,7 @@
 
 RunAsync "C:\Projects\AutoHotkey\Scripts\ScreenLock.ahk"
 
-Invoke-Expression "winget upgrade --all --uninstall-previous"
+# Invoke-Expression "winget upgrade --all --uninstall-previous"
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 
 RunAsync "C:\Projects\AutoHotkey\src\Main.ahk"
