@@ -1,6 +1,6 @@
 {
     "DesktopAudioDevice1": {
-        "prev_ver": 520093699,
+        "prev_ver": 520159233,
         "name": "Desktop Audio",
         "uuid": "0d16d6ff-5ef5-4f47-8ff2-1cebe47113c9",
         "id": "wasapi_output_capture",
@@ -46,7 +46,7 @@
             "id": "scene",
             "versioned_id": "scene",
             "settings": {
-                "id_counter": 4,
+                "id_counter": 5,
                 "custom_size": false,
                 "items": [
                     {
@@ -128,13 +128,13 @@
             "private_settings": {}
         },
         {
-            "prev_ver": 520093699,
+            "prev_ver": 520159233,
             "name": "Display Capture",
             "uuid": "3ff085d5-7f16-4b99-88cd-6256ba068a36",
             "id": "monitor_capture",
             "versioned_id": "monitor_capture",
             "settings": {
-                "monitor_id": "\\\\?\\DISPLAY#GSM7706#5&b9b14af&3&UID268#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+                "monitor_id": "\\\\?\\DISPLAY#GSM7706#5&f0ee13f&0&UID45313#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
             },
             "mixers": 0,
             "sync": 0,
