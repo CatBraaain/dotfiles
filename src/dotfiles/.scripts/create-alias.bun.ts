@@ -20,6 +20,7 @@ const aliases = [
     commandName:
       '(echo export JUST_UNSORTED := "true" & echo. & echo._: & echo.  @just --list) > justfile',
   },
+  { aliasName: "docker-inspect", commandName: "docker exec -it %* /bin/sh" },
 ];
 
 await $`rm -rf ${aliasDir}`;
