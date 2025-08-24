@@ -17,8 +17,7 @@ const aliases = [
   { aliasName: "dc", commandName: "docker compose %*" },
   {
     aliasName: "just-init",
-    commandName:
-      '(echo export JUST_UNSORTED := "true" & echo. & echo._: & echo.  @just --list) > justfile',
+    commandName: "(echo _:& echo.  @just --list --unsorted) > justfile",
   },
   { aliasName: "docker-inspect", commandName: "docker exec -it %* /bin/sh" },
 ];
