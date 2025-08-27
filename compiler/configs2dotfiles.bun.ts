@@ -18,12 +18,6 @@ map.forEach(async (item) => {
   await $`rm -rf ${dotfilesDist}/${item.src}`;
 });
 await $`rm -rf ${dotfilesDist}/.scripts`;
-const itemNames = await readdir(dotfilesDist);
-itemNames.forEach(async (itemName) => {
-  if (itemName.startsWith(".") && !itemName.startsWith(".chezmoi")) {
-    await $`mv ${dotfilesDist}/${itemName} ${dotfilesDist}/${itemName.replace(/^\./, "dot_")}`;
-  }
-});
 
 const scriptsDir = `${dotfilesSrc}/.scripts`;
 const scripts = await readdir(scriptsDir);
