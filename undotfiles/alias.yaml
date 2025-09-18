@@ -1,0 +1,20 @@
+- alias: mr
+  command: mise run %*
+- alias: uv-python-update
+  command: uv python install --reinstall 3.11 3.12 3.13
+- alias: uv-init
+  command: uv init --bare & uv venv
+- alias: mise-init
+  command: mise gen config -o mise.toml
+- alias: venv
+  command: .venv\Scripts\activate
+- alias: j
+  command: just %*
+- alias: jg
+  command: just -g %*
+- alias: dc
+  command: docker compose %*
+- alias: just-init
+  command: (echo _:& echo.  @just --list --unsorted) > justfile
+- alias: docker-inspect
+  command: docker exec -it %* /bin/sh

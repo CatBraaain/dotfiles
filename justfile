@@ -7,9 +7,6 @@ apply:
 diff:
   chezmoi diff -c chezmoi.yaml
 
-alias:
-  bun undotfiles/alias.bun.ts
-
 taskscheduler:
   taskscheduler apply --path undotfiles/taskscheduler-tasks.yaml
 
