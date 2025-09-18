@@ -1,7 +1,7 @@
 {
   "files.associations": {
     "dot_*": "ini",
-    "*.ps1.tmpl": "powershell"
+    "modify_*": "gotmpl"
   },
   "[json][jsonc]": {
     "editor.formatOnPaste": false,

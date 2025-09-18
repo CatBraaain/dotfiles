@@ -1,0 +1,9 @@
+{{- /* chezmoi:modify-template */ -}}
+{{-
+  .chezmoi.stdin
+  | replaceAllRegex `("AfterCaptureJob"): "(CopyImageToClipboard, SaveImageToFile), UploadImageToHost"` `${1}: "${2}"`
+  | replaceAllRegex `("AfterUploadJob"): "CopyURLToClipboard"` `${1}: "None"`
+  | replaceAllRegex `("Hotkey"): "PrintScreen"((.*\n){1,20}.*"Job": "(RectangleRegion|ScreenRecorder|ScreenRecorderGIF)")` `${1}: "None"${2}`
+  | replaceAllRegex `("Hotkey"): "PrintScreen"((.*\n){1,20}.*"Job": "ActiveWindow")` `${1}: "PrintScreen"${2}`
+  | replaceAllRegex `("Hotkey"): "PrintScreen"((.*\n){1,20}.*"Job": "PrintScreen")` `${1}: "None"${2}`
+-}}
