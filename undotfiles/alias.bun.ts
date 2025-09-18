@@ -1,7 +1,7 @@
 import { $ } from "bun";
 import { join } from "path";
 
-const aliasDir = "dist/dotfiles/exact_alias";
+const aliasDir = join(process.env.USERPROFILE!, "alias");
 
 const aliases = [
   { aliasName: "mr", commandName: "mise run %*" },
