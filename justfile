@@ -7,8 +7,9 @@ apply:
 diff:
   chezmoi diff -c chezmoi.yaml
 
-taskscheduler:
-  taskscheduler apply --path undotfiles/taskscheduler-tasks.yaml
+wintasks:
+  wintasks jsonschema > undotfiles/wintasks/wintasks-schema.json
+  wintasks apply --path undotfiles/wintasks/wintasks.yaml
 
 winget:
   yq undotfiles/winget-packages.yaml -o json > ${TEMP}/winget-packages.json

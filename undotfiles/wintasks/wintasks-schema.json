@@ -1,0 +1,144 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "trigger": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "cron",
+                    "startup",
+                    "boot",
+                    "once",
+                    "at_now"
+                  ]
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "cron",
+                  "startup",
+                  "boot",
+                  "once",
+                  "at_now"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "action": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string"
+                },
+                "args": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "working_directory": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "working_directory": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "setting": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "run_as": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "logon_type": {
+            "enum": [
+              "s4u",
+              "interactive_token",
+              null
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "trigger",
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

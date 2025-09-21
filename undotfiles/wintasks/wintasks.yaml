@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=./wintasks-schema.json
+
+- name: 運動
+  trigger: { type: cron, value: "20 09 * * *" }
+  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "運動" }
+
+- name: 昼食
+  trigger: { type: cron, value: "00 12 * * *" }
+  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "昼食" }
+
+- name: 夕食
+  trigger: { type: cron, value: "00 18 * * *" }
+  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "夕食" }
+
+- name: お風呂
+  trigger: { type: cron, value: "15 22 * * *" }
+  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "お風呂" }
+
+- name: ストレッチ
+  trigger: { type: cron, value: "45 23 * * *" }
+  action:
+    { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "ストレッチ" }
+
+- name: Holiday
+  trigger: { type: cron, value: "00 20 * * *" }
+  action: { command: "C:\\Projects\\my-holidays\\HolidayNotifier.vbs" }
+
+- name: setup
+  trigger: { type: startup, value: "00:00" }
+  action: { command: "C:\\Users\\PRO\\.startup\\CustomStartupRunas.vbs" }
+  setting: { run_as: true }
+
+- name: SyncTime
+  trigger: { type: boot, value: "00:00" }
+  action:
+    {
+      command: "%windir%\\system32\\sc.exe",
+      args: "start w32time task_started",
+    }
+  setting: { run_as: true, logon_type: s4u }
