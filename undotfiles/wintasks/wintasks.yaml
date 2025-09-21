@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=./wintasks-schema.json
 
-- name: 運動
-  trigger: { type: cron, value: "20 09 * * *" }
-  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "運動" }
+# - name: 運動
+#   trigger: { type: cron, value: "20 09 * * *" }
+#   action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "運動" }
 
 - name: 昼食
   trigger: { type: cron, value: "00 12 * * *" }
