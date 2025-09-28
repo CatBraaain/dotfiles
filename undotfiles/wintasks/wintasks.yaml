@@ -25,9 +25,14 @@
   trigger: { type: cron, value: "00 20 * * *" }
   action: { command: "C:\\Projects\\my-holidays\\HolidayNotifier.vbs" }
 
-- name: setup
+- name: stratapps
   trigger: { type: startup, value: "00:00" }
-  action: { command: "C:\\Users\\PRO\\.startup\\CustomStartupRunas.vbs" }
+  action:
+    {
+      command: "startapps",
+      args: "--path %USERPROFILE%\\.startup\\startapps.yaml",
+    }
+    # { command: "startapps --path C:\\Users\\PRO\\.startup\\startapps.yaml" }
   setting: { run_as: true }
 
 - name: SyncTime

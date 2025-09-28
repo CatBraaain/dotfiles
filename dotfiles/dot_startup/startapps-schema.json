@@ -1,0 +1,44 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string"
+      },
+      "base_directory": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "wait_for_window": {
+        "type": "boolean",
+        "default": false
+      },
+      "window_style": {
+        "enum": [
+          "hide",
+          "normal",
+          "minimize",
+          "maximize",
+          null
+        ],
+        "default": "normal"
+      },
+      "run_as": {
+        "type": "boolean",
+        "default": false
+      },
+      "single_instance": {
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [
+      "command"
+    ],
+    "additionalProperties": false
+  }
+}
