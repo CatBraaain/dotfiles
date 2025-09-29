@@ -17,3 +17,11 @@ winget:
   winget import ${TEMP}/winget-packages.json
   winget pin add Autohotkey.AutoHotkey
   del /q %USERPROFILE%\Desktop\*.lnk
+
+import "undotfiles/debloat/justfile"
+debloat:
+  just win11debloat
+  just winutil
+  just setup-powerplan
+
+set unstable

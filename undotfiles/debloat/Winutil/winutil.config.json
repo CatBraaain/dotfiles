@@ -1,0 +1,28 @@
+{
+  "WPFTweaks": [
+    "WPFTweaksRestorePoint",
+    "WPFTweaksWifi",
+    "WPFTweaksDebloatAdobe",
+    "WPFTweaksStorage",
+    "WPFTweaksHiber",
+    "WPFTweaksRemoveHome",
+    "WPFTweaksConsumerFeatures",
+    "WPFTweaksDVR",
+    "WPFTweaksRemoveGallery",
+    "WPFTweaksTele",
+    "WPFTweaksEndTaskOnTaskbar",
+    "WPFTweaksBlockAdobeNet",
+    "WPFTweaksEdgeDebloat",
+    "WPFTweaksRemoveCopilot",
+    "WPFTweaksRemoveOnedrive",
+    "WPFTweaksHome",
+    "WPFTweaksDisableExplorerAutoDiscovery",
+    "WPFTweaksPowershell7Tele",
+    "WPFTweaksRecallOff",
+    "WPFTweaksDisableBGapps",
+    "WPFTweaksServices"
+  ],
+  "Install": [],
+  "WPFInstall": [],
+  "WPFFeature": []
+}

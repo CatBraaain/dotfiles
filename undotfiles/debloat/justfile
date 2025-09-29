@@ -1,0 +1,18 @@
+win11debloat-cmd := "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/')))"
+[script("powershell","-NoProfile","-ExecutionPolicy","Bypass","-Command")]
+win11debloat:
+  cp -r ./undotfiles/debloat/Win11Debloat ${TEMP}
+  {{win11debloat-cmd}} -RunSavedSettings -RemoveAppsCustom -Silent
+
+winutil-cmd := "& ([scriptblock]::Create((irm 'https://christitus.com/win')))"
+winutil-config := "$(realpath ./undotfiles/debloat/Winutil/winutil.config.json)"
+path := "HKCU:\\SOFTWARE\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\Bags\\AllFolders\\Shell\\{5C4F28B5-F869-4E84-8E60-F11DB97C5CC7}"
+[script("powershell","-NoProfile","-ExecutionPolicy","Bypass","-Command")]
+winutil:
+  {{winutil-cmd}} -Config {{winutil-config}} -Run
+
+highPerfPlan := "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+setup-powerplan:
+  powercfg /setactive {{highPerfPlan}}
+  powercfg /change monitor-timeout-ac 0
+  powercfg /change monitor-timeout-dc 0
