@@ -1,5 +1,5 @@
 _:
-  @just --list
+  @just --list --unsorted
 
 apply:
   chezmoi apply -c chezmoi.yaml --force
