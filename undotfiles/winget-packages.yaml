@@ -8,57 +8,55 @@ Sources:
       Name: winget
       Type: Microsoft.PreIndexed.Package
     Packages:
-      # dev tools
-      - PackageIdentifier: twpayne.chezmoi
-      - PackageIdentifier: M2Team.NanaZip
-      - PackageIdentifier: MikeFarah.yq
-      # - PackageIdentifier: uutils.coreutils
-      - PackageIdentifier: frippery.busybox-w32
-      # - PackageIdentifier: Gyan.FFmpeg
-      - PackageIdentifier: Casey.Just
-      - PackageIdentifier: gerardog.gsudo
-      - PackageIdentifier: Microsoft.NuGet
-
-      - PackageIdentifier: beekeeper-studio.beekeeper-studio
-      - PackageIdentifier: Git.Git
-      - PackageIdentifier: ezwinports.make
-      - PackageIdentifier: jdx.mise
+      - PackageIdentifier: AdrienAllard.FileConverter
       - PackageIdentifier: astral-sh.uv
       - PackageIdentifier: AutoHotkey.AutoHotkey
         Version: 1.1.37.02 # pin this
-      - PackageIdentifier: Oven-sh.Bun
-      - PackageIdentifier: OpenJS.NodeJS.LTS
-      # - PackageIdentifier: pnpm.pnpm
+      - PackageIdentifier: beekeeper-studio.beekeeper-studio
+      - PackageIdentifier: BluePointLilac.ContextMenuManager
+      - PackageIdentifier: Canonical.Ubuntu
+      - PackageIdentifier: Casey.Just
+      - PackageIdentifier: ch.LosslessCut
+      # - PackageIdentifier: CPUID.CPU-Z
+      - PackageIdentifier: Discord.Discord
+      - PackageIdentifier: Docker.DockerDesktop
+      - PackageIdentifier: DuongDieuPhap.ImageGlass
+      - PackageIdentifier: ezwinports.make
+      - PackageIdentifier: frippery.busybox-w32
+      - PackageIdentifier: gerardog.gsudo
+      - PackageIdentifier: GIMP.GIMP.3
+      - PackageIdentifier: Git.Git
+      - PackageIdentifier: GitHub.cli
       - PackageIdentifier: GoLang.Go
-
+      - PackageIdentifier: Google.Chrome
+      - PackageIdentifier: Guru3D.Afterburner
+      - PackageIdentifier: Guru3D.RTSS
+      - PackageIdentifier: Gyan.FFmpeg
+      # - PackageIdentifier: HaraldBoegeholz.h2testw
+      - PackageIdentifier: jdx.mise
+      - PackageIdentifier: M2Team.NanaZip
+      - PackageIdentifier: MartiCliment.UniGetUI
+      - PackageIdentifier: Meltytech.Shotcut
+      - PackageIdentifier: Microsoft.AppInstaller
       - PackageIdentifier: Microsoft.VisualStudioCode
       - PackageIdentifier: Microsoft.WindowsTerminal
-      - PackageIdentifier: TortoiseGit.TortoiseGit
-      - PackageIdentifier: MongoDB.Compass.Full
-      - PackageIdentifier: Docker.DockerDesktop # pin this
-
-      # others
-      - PackageIdentifier: MartiCliment.UniGetUI
-
-      - PackageIdentifier: Google.Chrome
-      - PackageIdentifier: Mozilla.Firefox # pin this
-      - PackageIdentifier: Microsoft.Edge
-
-      - PackageIdentifier: BluePointLilac.ContextMenuManager
-      - PackageIdentifier: AdrienAllard.FileConverter
-      - PackageIdentifier: GIMP.GIMP.3
-      - PackageIdentifier: DuongDieuPhap.ImageGlass
-      - PackageIdentifier: ch.LosslessCut
-      - PackageIdentifier: MPC-BE.MPC-BE
-      - PackageIdentifier: ShareX.ShareX
-      - PackageIdentifier: OBSProject.OBSStudio
-      - PackageIdentifier: Meltytech.Shotcut
-      - PackageIdentifier: StirlingTools.StirlingPDF
-      - PackageIdentifier: WinDirStat.WinDirStat
-      - PackageIdentifier: mulaRahul.Keyviz
-
-      - PackageIdentifier: Discord.Discord
-      - PackageIdentifier: Valve.Steam
+      - PackageIdentifier: MikeFarah.yq
       - PackageIdentifier: Mojang.MinecraftLauncher
-
-      - PackageIdentifier: Guru3D.Afterburner
+      - PackageIdentifier: MongoDB.Compass.Full
+      - PackageIdentifier: Mozilla.Firefox
+      - PackageIdentifier: MPC-BE.MPC-BE
+      - PackageIdentifier: mulaRahul.Keyviz
+      - PackageIdentifier: nektos.act
+      - PackageIdentifier: OBSProject.OBSStudio
+      - PackageIdentifier: OpenJS.NodeJS.LTS
+      - PackageIdentifier: Oven-sh.Bun
+      - PackageIdentifier: pnpm.pnpm
+      - PackageIdentifier: qishibo.AnotherRedisDesktopManager
+      - PackageIdentifier: ShareX.ShareX
+      - PackageIdentifier: StirlingTools.StirlingPDF
+      - PackageIdentifier: sxyazi.yazi
+      - PackageIdentifier: TortoiseGit.TortoiseGit
+      - PackageIdentifier: twpayne.chezmoi
+      - PackageIdentifier: uutils.coreutils
+      - PackageIdentifier: Valve.Steam
+      - PackageIdentifier: WinDirStat.WinDirStat
