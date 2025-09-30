@@ -31,7 +31,7 @@ DisableRecall#- Disable Windows Recall snapshots. (Windows 11 only)
 DisableEdgeAI#- Disable AI features in Edge. (Windows 11 only)
 DisablePaintAI#- Disable AI features in Paint. (Windows 11 only)
 DisableNotepadAI#- Disable AI features in Notepad. (Windows 11 only)
-# RevertContextMenu#- Restore the old Windows 10 style context menu. (Windows 11 only)
+RevertContextMenu#- Restore the old Windows 10 style context menu. (Windows 11 only)
 DisableMouseAcceleration#- Turn off Enhance Pointer Precision, also known as mouse acceleration. Requires reboot to apply.
 DisableStickyKeys#- Disable the Sticky Keys keyboard shortcut.
 TaskbarAlignLeft#- Align taskbar icons to the left. (Windows 11 only)
