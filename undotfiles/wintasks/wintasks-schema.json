@@ -19,7 +19,7 @@
                     "startup",
                     "boot",
                     "once",
-                    "at_now"
+                    "now"
                   ]
                 },
                 "value": {
@@ -42,7 +42,7 @@
                   "startup",
                   "boot",
                   "once",
-                  "at_now"
+                  "now"
                 ]
               },
               "value": {
