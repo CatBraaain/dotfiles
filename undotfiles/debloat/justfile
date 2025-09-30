@@ -1,14 +1,12 @@
-pscmd := "powershell -NoProfile -ExecutionPolicy Bypass -Command"
-
 win11debloat-cmd := "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/')))"
 win11debloat:
   cp -r ./undotfiles/debloat/Win11Debloat ${TEMP}
-  {{pscmd}} "{{win11debloat-cmd}}" -RunSavedSettings -RemoveAppsCustom -Silent
+  {{run_ps_cmd}} "{{win11debloat-cmd}}" -RunSavedSettings -RemoveAppsCustom -Silent
 
-winutil-cmd := "& ([scriptblock]::Create((irm 'https://christitus.com/win')))"
-winutil-config := "${PWD}/undotfiles/debloat/Winutil/winutil.config.json"
+winutil_cmd := "& ([scriptblock]::Create((irm 'https://christitus.com/win')))"
+winutil_config := "${PWD}/undotfiles/debloat/Winutil/winutil.config.json"
 winutil:
-  {{pscmd}} "{{winutil-cmd}}" -Config {{winutil-config}} -Run
+  {{run_ps_cmd}} "{{winutil_cmd}}" -Config {{winutil_config}} -Run
 
 highPerfPlan := "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
 setup-powerplan:

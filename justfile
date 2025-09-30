@@ -1,4 +1,4 @@
-set unstable
+run_ps_cmd := "powershell -NoProfile -ExecutionPolicy Bypass -Command"
 
 _:
   @just --list --unsorted
