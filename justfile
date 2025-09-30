@@ -18,7 +18,8 @@ winget:
   winget pin reset --force
   winget import ${TEMP}/winget-packages.json
   winget pin add Autohotkey.AutoHotkey
-  del /q %USERPROFILE%\Desktop\*.lnk
+  rm -f $(cygpath $USERPROFILE/Desktop/*.lnk)
+  rm -f $(cygpath $PUBLIC/Desktop/*.lnk)
 
 import "undotfiles/debloat/justfile"
 debloat:
