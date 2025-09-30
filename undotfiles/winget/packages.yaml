@@ -46,6 +46,7 @@ Sources:
       - PackageIdentifier: MPC-BE.MPC-BE
       - PackageIdentifier: mulaRahul.Keyviz
       - PackageIdentifier: nektos.act
+      - PackageIdentifier: Nushell.Nushell
       - PackageIdentifier: OBSProject.OBSStudio
       - PackageIdentifier: OpenJS.NodeJS.LTS
       - PackageIdentifier: Oven-sh.Bun
