@@ -3,7 +3,7 @@ $utilsList = @(coreutils --list)
 $utilsList | ? {
     $_ -notin @("[")
 } | % {
-    "${env:USERPROFILE}\local\coreutils\${_}.exe"
+    "${env:USERPROFILE}\.local\coreutils\${_}.exe"
 } | ? {
     -not (Test-Path $_)
 } | % {
