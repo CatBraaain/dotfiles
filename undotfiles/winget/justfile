@@ -1,0 +1,8 @@
+_winget
+  yq undotfiles/winget/packages.yaml -o json > ${TEMP}/packages.json
+  winget pin reset --force
+  winget import ${TEMP}/packages.json
+  winget pin add Autohotkey.AutoHotkey
+  rm -f $(cygpath $USERPROFILE/Desktop/*.lnk)
+  rm -f $(cygpath $PUBLIC/Desktop/*.lnk)
+  {{run_ps_file}} undotfiles/winget/expand_coreutils.ps1
