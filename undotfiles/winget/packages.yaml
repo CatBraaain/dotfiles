@@ -22,7 +22,6 @@ Sources:
       - PackageIdentifier: Docker.DockerDesktop
       - PackageIdentifier: DuongDieuPhap.ImageGlass
       - PackageIdentifier: ezwinports.make
-      - PackageIdentifier: frippery.busybox-w32
       - PackageIdentifier: gerardog.gsudo
       - PackageIdentifier: GIMP.GIMP.3
       - PackageIdentifier: Git.Git
