@@ -41,7 +41,7 @@ HideSearchTb#- Hide search icon from the taskbar. (Windows 11 only)
 # ShowSearchBoxTb#- Show search box on the taskbar. (Windows 11 only)
 HideTaskview#- Hide the taskview button from the taskbar. (Windows 11 only)
 EnableEndTask#- Enable the End Task option in the taskbar right click menu.
-EnableLastActiveClick#- Enable the 'Last Active Click' behavior in the taskbar app area. This allows you to repeatedly click on an application's icon in the taskbar to switch focus between the open windows of that application.
+# EnableLastActiveClick#- Enable the 'Last Active Click' behavior in the taskbar app area. This allows you to repeatedly click on an application's icon in the taskbar to switch focus between the open windows of that application.
 HideHome#- Hide the home section from the File Explorer navigation pane and add a toggle in the File Explorer folder options. (Windows 11 only)
 HideGallery#- Hide the gallery section from the File Explorer navigation pane and add a toggle in the File Explorer folder options. (Windows 11 only)
 # ExplorerToHome#- Change File Explorer to open to Home.
