@@ -21,9 +21,9 @@
   action:
     { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "ストレッチ" }
 
-- name: Holiday
-  trigger: { type: cron, value: "00 20 * * *" }
-  action: { command: "C:\\Projects\\my-holidays\\HolidayNotifier.vbs" }
+# - name: Holiday
+#   trigger: { type: cron, value: "00 20 * * *" }
+#   action: { command: "C:\\Projects\\my-holidays\\HolidayNotifier.vbs" }
 
 - name: stratapps
   trigger: { type: startup, value: "00:00" }
