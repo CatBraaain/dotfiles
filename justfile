@@ -1,3 +1,5 @@
+set unstable
+
 _:
   @just --list --unsorted
 
@@ -23,5 +25,3 @@ debloat:
   just win11debloat
   just winutil
   just setup-powerplan
-
-set unstable
