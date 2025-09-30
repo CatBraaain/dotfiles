@@ -1,3 +1,5 @@
+set shell := ["nu", "-c"]
+
 run_ps_cmd := "powershell -NoProfile -ExecutionPolicy Bypass -Command"
 run_ps_file := "powershell -NoProfile -ExecutionPolicy Bypass -File"
 
@@ -11,17 +13,12 @@ diff:
   chezmoi diff -c chezmoi.yaml
 
 wintasks:
-  wintasks jsonschema > undotfiles/wintasks/wintasks-schema.json
+  wintasks jsonschema | save -f undotfiles/wintasks/wintasks-schema.json
   wintasks apply --path undotfiles/wintasks/wintasks.yaml
 
+import "undotfiles/winget/justfile"
 winget:
-  yq undotfiles/winget/packages.yaml -o json > ${TEMP}/packages.json
-  winget pin reset --force
-  winget import ${TEMP}/packages.json
-  winget pin add Autohotkey.AutoHotkey
-  rm -f $(cygpath $USERPROFILE/Desktop/*.lnk)
-  rm -f $(cygpath $PUBLIC/Desktop/*.lnk)
-  {{run_ps_file}} undotfiles/winget/expand_coreutils.ps1
+  gsudo just _winget
 
 import "undotfiles/debloat/justfile"
 debloat:
