@@ -1,7 +1,7 @@
 _winconfig:
   just win11debloat
   just winutil
-  just setup-powerplan
+  just my-custom
 
 win11debloat_cmd := "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/')))"
 win11debloat:
@@ -13,8 +13,5 @@ winutil_config := "($env.PWD)/undotfiles/winconfig/Winutil/winutil.config.json"
 winutil:
   {{run_ps_cmd}} "{{winutil_cmd}}" -Config {{winutil_config}} -Run
 
-highPerfPlan := "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
-setup-powerplan:
-  powercfg /setactive {{highPerfPlan}}
-  powercfg /change monitor-timeout-ac 0
-  powercfg /change monitor-timeout-dc 0
+my-custom:
+  {{run_ps_file}} "undotfiles/winconfig/my-custom.ps1"
