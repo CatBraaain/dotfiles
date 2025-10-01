@@ -20,8 +20,8 @@ import "undotfiles/winget/justfile"
 winget:
   gsudo just _winget
 
-import "undotfiles/debloat/justfile"
-debloat:
+import "undotfiles/winconfig/justfile"
+winconfig:
   just win11debloat
   just winutil
   just setup-powerplan

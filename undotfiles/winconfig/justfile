@@ -1,10 +1,10 @@
 win11debloat-cmd := "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/')))"
 win11debloat:
-  cp -r ./undotfiles/debloat/Win11Debloat ${TEMP}
+  cp -r ./undotfiles/winconfig/Win11Debloat $env.TEMP
   {{run_ps_cmd}} "{{win11debloat-cmd}}" -RunSavedSettings -RemoveAppsCustom -Silent
 
 winutil_cmd := "& ([scriptblock]::Create((irm 'https://christitus.com/win')))"
-winutil_config := "${PWD}/undotfiles/debloat/Winutil/winutil.config.json"
+winutil_config := "($env.PWD)/undotfiles/winconfig/Winutil/winutil.config.json"
 winutil:
   {{run_ps_cmd}} "{{winutil_cmd}}" -Config {{winutil_config}} -Run
 
