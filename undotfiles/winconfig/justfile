@@ -3,10 +3,10 @@ _winconfig:
   just winutil
   just setup-powerplan
 
-win11debloat-cmd := "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/')))"
+win11debloat_cmd := "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/')))"
 win11debloat:
   cp -r ./undotfiles/winconfig/Win11Debloat $env.TEMP
-  {{run_ps_cmd}} "{{win11debloat-cmd}}" -RunSavedSettings -RemoveAppsCustom -Silent
+  {{run_ps_cmd}} "{{win11debloat_cmd}}" -RunSavedSettings -RemoveAppsCustom -Silent
 
 winutil_cmd := "& ([scriptblock]::Create((irm 'https://christitus.com/win')))"
 winutil_config := "($env.PWD)/undotfiles/winconfig/Winutil/winutil.config.json"
