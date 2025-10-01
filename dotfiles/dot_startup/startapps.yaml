@@ -33,7 +33,7 @@
   wait_for_window: true
   window_style: maximize
 
-- command: 'cmd.exe /c ""C:\Users\PRO\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd""" ""C:\Users\PRO\Documents\TasksTodo""'
+- command: 'cmd.exe /c ""%LocalAppData%\Programs\Microsoft VS Code\bin\code.cmd""" ""%USERPROFILE%\Documents\TasksTodo""'
   # wait_for_window: true
 
 - command: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
