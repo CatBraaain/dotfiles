@@ -55,6 +55,6 @@ HideGiveAccessTo#- Hide the Give access to option in the context menu. (Windows 
 HideShare#- Hide the Share option in the context menu. (Windows 10 only)
 ShowHiddenFolders#- Show hidden files, folders and drives.
 HideDupliDrive#- Hide duplicate removable drive entries from the File Explorer navigation pane, so only the entry under This PC remains.
-EnableDarkMode#- Enable dark mode for system and apps.
+# EnableDarkMode#- Enable dark mode for system and apps.
 # DisableTransparency#- Disable transparency effects.
 # DisableAnimations#- Disable animations and visual effects.
