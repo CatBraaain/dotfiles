@@ -1,0 +1,22 @@
+
+cleanup context menu (removing pin to quick access)
+remove recycle bin from desktop
+
+add C:\Program Files\Git\bin to PATH
+add C:\Users\USERNAME\alias to PATH
+set key repeat delay to 0
+set system sound to none
+set mouse pointer speed to 12
+set TaskManager HideWhenMin
+remove all startup
+task bar show only main and opened
+os auto login
+auto archive apps
+
+set download folder group key to 4
+
+docker desktop settings
+
+use .gitattributes to fix eol and encoding
+
+git clone repos by list
