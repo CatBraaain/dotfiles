@@ -22,6 +22,4 @@ winget:
 
 import "undotfiles/winconfig/justfile"
 winconfig:
-  just win11debloat
-  just winutil
-  just setup-powerplan
+  gsudo just _winconfig

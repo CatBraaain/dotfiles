@@ -1,3 +1,8 @@
+_winconfig:
+  just win11debloat
+  just winutil
+  just setup-powerplan
+
 win11debloat-cmd := "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/')))"
 win11debloat:
   cp -r ./undotfiles/winconfig/Win11Debloat $env.TEMP
