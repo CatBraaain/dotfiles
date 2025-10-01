@@ -29,7 +29,7 @@
   trigger: { type: startup, value: "00:00" }
   action:
     {
-      command: "startapps",
+      command: "%USERPROFILE%\\.local\\bin\\startapps",
       args: "--path %USERPROFILE%\\.startup\\startapps.yaml",
     }
   setting: { run_as: true }
