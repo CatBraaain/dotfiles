@@ -55,6 +55,7 @@ Sources:
       - PackageIdentifier: ShareX.ShareX
       - PackageIdentifier: StirlingTools.StirlingPDF
       - PackageIdentifier: sxyazi.yazi
+      - PackageIdentifier: Sysinternals.Autologon
       - PackageIdentifier: TortoiseGit.TortoiseGit
       - PackageIdentifier: twpayne.chezmoi
       - PackageIdentifier: uutils.coreutils
