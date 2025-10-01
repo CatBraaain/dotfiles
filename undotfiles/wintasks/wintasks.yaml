@@ -25,7 +25,7 @@
 #   trigger: { type: cron, value: "00 20 * * *" }
 #   action: { command: "C:\\Projects\\my-holidays\\HolidayNotifier.vbs" }
 
-- name: stratapps
+- name: startapps
   trigger: { type: startup, value: "00:00" }
   action:
     {
