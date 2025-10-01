@@ -32,7 +32,6 @@
       command: "startapps",
       args: "--path %USERPROFILE%\\.startup\\startapps.yaml",
     }
-    # { command: "startapps --path C:\\Users\\PRO\\.startup\\startapps.yaml" }
   setting: { run_as: true }
 
 - name: SyncTime
