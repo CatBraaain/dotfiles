@@ -60,4 +60,5 @@ Sources:
       - PackageIdentifier: twpayne.chezmoi
       - PackageIdentifier: uutils.coreutils
       - PackageIdentifier: Valve.Steam
+      - PackageIdentifier: w4po.ExplorerTabUtility
       - PackageIdentifier: WinDirStat.WinDirStat
