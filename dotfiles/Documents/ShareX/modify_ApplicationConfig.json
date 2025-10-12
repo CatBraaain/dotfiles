@@ -18,7 +18,7 @@
   | replaceAllRegex `("TrayMiddleClickAction"): .*,` `${1}: "None"${2},`
   | replaceAllRegex `("AutoCheckUpdate"): .*,` `${1}: false${2},`
   | replaceAllRegex `("UseCustomScreenshotsPath"): .*,` `${1}: true${2},`
-  | replaceAllRegex `("CustomScreenshotsPath"): .*,` `${1}: "D:\\Downloads"${2},`
+  | replaceAllRegex `("CustomScreenshotsPath"): .*,` `${1}: "%UserProfile%\\Downloads"${2},`
   | replaceAllRegex `("SaveImageSubFolderPattern"): .*,` `${1}: ""${2},`
   | replaceAllRegex `("AcceptInvalidSSLCertificates"): .*,` `${1}: false${2},`
   | replaceAllRegex `("ShowUploadWarning"): .*,` `${1}: false${2},`
