@@ -13,10 +13,26 @@ task bar show only main and opened
 os auto login
 auto archive apps
 
-set download folder group key to 4
-
 docker desktop settings
 
 use .gitattributes to fix eol and encoding
 
 git clone repos by list
+
+FolderGroupByNone
+SecondsInSystemClock
+ClockInNotificationCenter
+WindowsColorModeDark
+AppColorModeLight
+ShortcutsSuffix
+RestorePreviousFolders
+
+EditWithClipchampContext
+EditWithPhotosContext
+EditWithPaintContext
+PrintCMDContext
+CompressedFolderNewContext
+MultipleInvokeContext
+UseStoreOpenWith
+OpenWindowsTerminalContext
+OpenWindowsTerminalAdminContext
