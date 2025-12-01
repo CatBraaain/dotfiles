@@ -1,12 +1,12 @@
 # yaml-language-server: $schema=./startapps-schema.json
 
-- command: '"C:\Program Files\AutoHotkey\AutoHotkey.exe" C:\Projects\AutoHotkey\Scripts\ScreenLock.ahk'
+- command: '"c:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe" C:\Projects\ahkfiles\ScreenLock\ScreenLock.ahk'
   single_instance: true
 
 # - command: "winget upgrade --all --uninstall-previous"
 # - command: 'del /f "%USERPROFILE%\Desktop\*.lnk"'
 
-- command: '"C:\Program Files\AutoHotkey\AutoHotkey.exe" C:\Projects\AutoHotkey\src\Main.ahk'
+- command: '"c:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe" C:\Projects\ahkfiles\Main\Main.ahk'
   run_as: true
 
 - command: 'C:\Program Files (x86)\MSI Afterburner\MSIAfterburner.exe'
