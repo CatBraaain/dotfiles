@@ -16,9 +16,8 @@ wintasks:
   wintasks jsonschema | save -f undotfiles/wintasks/wintasks-schema.json
   wintasks apply --path undotfiles/wintasks/wintasks.yaml
 
-import "undotfiles/winget/justfile"
 winget:
-  gsudo just _winget
+  gsudo {{run_ps_file}} undotfiles/winget.ps1
 
 import "undotfiles/winconfig/justfile"
 winconfig:

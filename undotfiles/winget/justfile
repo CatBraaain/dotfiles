@@ -1,7 +1,0 @@
-_winget:
-  open ./undotfiles/winget/packages.yaml | to json | save ($env.TEMP)/packages.json -f
-  winget pin reset --force
-  winget import ($env.TEMP)/packages.json
-  winget pin add Autohotkey.AutoHotkey
-  [$env.USERPROFILE $env.PUBLIC] | each {|p| rm -f (($p)/Desktop/*.lnk | into glob)}
-  {{run_ps_file}} undotfiles/winget/expand_coreutils.ps1
