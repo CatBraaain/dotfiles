@@ -21,3 +21,5 @@ ssr = "!git status -s -u && git stash -u -m \"snapshot: before restoring\" -q &&
 sw = switch
 swc = switch -c
 clone-lean = clone --depth 1 --filter=blob:none --no-checkout
+[init]
+defaultBranch = main
