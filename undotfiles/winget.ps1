@@ -47,6 +47,7 @@ $managedPackages = @(
     "pnpm.pnpm"
     "qishibo.AnotherRedisDesktopManager"
     "ShareX.ShareX"
+    "Solidiquis.Erdtree"
     # "StirlingTools.StirlingPDF"
     "sxyazi.yazi"
     "Sysinternals.Autologon"

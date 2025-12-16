@@ -1,6 +1,6 @@
 {
   "files.associations": {
-    "dot_*": "ini",
+    // "dot_*": "ini",
     "modify_*": "gotmpl"
   },
   "[json][jsonc]": {

@@ -1,0 +1,10 @@
+sort = "name"
+dir-order = "last"
+layout = "inverted"
+hidden = true
+no-git = true
+suppress-size = true
+
+[size]
+human = true
+suppress-size = false
