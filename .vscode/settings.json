@@ -9,4 +9,5 @@
     "editor.formatOnType": false
   },
   "files.insertFinalNewline": false,
+  "files.trimTrailingWhitespace": false,
 }
