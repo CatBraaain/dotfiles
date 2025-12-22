@@ -60,7 +60,7 @@
             "keys": "ctrl+w"
         },
         {
-            "id": "Terminal.PasteFromClipboard",
+            "id": null,
             "keys": "ctrl+v"
         },
         {
