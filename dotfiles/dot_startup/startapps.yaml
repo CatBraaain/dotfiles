@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=./startapps-schema.json
+# yaml-language-server: $schema=./startapps.schema.json
 
 - command: '"c:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe" C:\Projects\ahkfiles\ScreenLock\ScreenLock.ahk'
   single_instance: true

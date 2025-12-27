@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=./wintasks-schema.json
+# yaml-language-server: $schema=./wintasks.schema.json
 
 # - name: 運動
 #   trigger: { type: cron, value: "20 09 * * *" }
