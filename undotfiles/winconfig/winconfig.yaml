@@ -1,0 +1,270 @@
+# yaml-language-server: $schema=./winconfig.schema.json
+
+Actions:
+  Appearance:
+    SystemDarkMode: apply
+    AppDarkMode: apply
+
+  Windows:
+    DisableWindowsSuggestions: apply
+    EnableWindowsRestoreLastSession: skip
+
+  Taskbar:
+    AlignTaskbarLeft: apply
+    EnableEndTaskMenu: apply
+    HideSearch: apply
+    HideTaskView: apply
+    HideWidgets: apply
+    ShowClockSeconds: apply
+    MultiMonitorTaskbar: apply
+
+  Desktop:
+    HideRecycleBin: apply
+
+  NotificationCenter:
+    ShowClock: apply
+
+  Settings:
+    HideSuggestions: apply
+
+  StartMenu:
+    DisableBingSearch: apply
+    HideRecommendations: apply
+    HideAccountNotifications: apply
+    CreateGodModeFolder: apply
+
+  FileExplorer:
+    ShowHiddenFiles: apply
+    ShowFileExtensions: apply
+    HideHome: apply
+    HideGallery: apply
+    DisableOneDrive: apply
+    DisableGroupView: apply
+    EnableRestoreLastSession: revert
+    HideRecentFiles: apply
+    HideFrequentFolders: apply
+    DisableShortcutSuffix: apply
+
+  Security:
+    DisableUnsafeFileMarking: apply
+    DisableSmartAppControl: apply
+
+  ContextMenu:
+    ClassicContextMenu: apply
+    ExpandSelectionLimit: apply
+    HideClipchamp: apply
+    HideEditWithPhotos: apply
+    HideEditWithPaint: apply
+    HideEditWithNotepad: apply
+    HideExtractAll: apply
+    HideOpenInWindowsTerminal: apply
+    HidePrint: apply
+    HideCompressedFolder: apply
+    HideSearchMsStore: apply
+    HideShare: apply
+    HideAddToFavorites: apply
+    HidePreviousVersions: apply
+    HideSendTo: apply
+    HideAddToLibrary: apply
+    HideGiveAccessTo: apply
+
+  MouseKeyboard:
+    DisableMouseAcceleration: apply
+    DisableF1HelpShortcut: apply
+    DisableStickyShift: apply
+    FastKeyRepeat: apply
+    DisableTouchPad: apply
+
+  Sound:
+    DisableSystemSound: apply
+
+  Background:
+    DisableAutoDeleteTemp: apply
+    DisableXboxGameBar: apply
+
+  PowerPlan:
+    HighPerformancePlan: apply
+    DisableAutoSleep: apply
+
+  Personalization:
+    OpenWithCode: apply
+    EditSharexContextMenu: apply
+    EditMouseSensitivity: apply
+    EditWindowsPATH: apply
+    SetAdvancedKeyRepeat: revert
+
+Definitions:
+  Personalization:
+    OpenWithCode:
+      description: Add the "Open with Code" item to context menu.
+      registries:
+        - path: HKCR\*\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\*\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              old_value: <NotExist>
+
+        - path: HKCR\directory\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\directory\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              old_value: <NotExist>
+
+        - path: HKCR\directory\background\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\directory\background\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              old_value: <NotExist>
+
+        - path: HKCR\drive\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\drive\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              old_value: <NotExist>
+    EditSharexContextMenu:
+      description: Edit ShareX context menu.
+      registries:
+        - path: HKCU\Software\Classes\SystemFileAssociations\image\shell\ShareXImageEditor
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: Edit with ShareX
+              old_value: <NotExist>
+            - name: Icon
+              type: String
+              new_value: '"C:\Program Files\ShareX\ShareX.exe",0'
+              old_value: <NotExist>
+        - path: HKCU\Software\Classes\SystemFileAssociations\image\shell\ShareXImageEditor\command
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: '"C:\Program Files\ShareX\ShareX.exe" -ImageEditor "%1"'
+              old_value: <NotExist>
+
+        - path: HKCU\Software\Classes\*\shell\ShareX
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: Upload with ShareX
+            - name: Icon
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe",0'
+        - path: HKCU\Software\Classes\*\shell\ShareX\command
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe" "%1"'
+    EditMouseSensitivity:
+      description: Set mouse sensitivity.
+      registries:
+        - path: HKCU\Control Panel\Mouse
+          entries:
+            - name: MouseSensitivity
+              type: String
+              new_value: "12"
+              old_value: "10"
+    EditWindowsPATH:
+      description: Edit windows path.
+      script:
+        apply: |-
+          $gitPath = "C:\Program Files\Git\bin"
+          $oldPath = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
+          if (-not ($oldPath -contains $gitPath)) {
+            $newPath = ($oldPath + $gitPath) -join ';'
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+          }
+        revert: |-
+          $gitPath = "C:\Program Files\Git\bin"
+          $oldPath = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
+          if ($oldPath -contains $gitPath) {
+            $newPath = ($oldPath | ? { $_ -ne $gitPath }) -join ';'
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+          }
+    SetAdvancedKeyRepeat:
+      description: More Fast Key Repeat
+      registries:
+        - path: HKCU\Control Panel\Accessibility\Keyboard Response
+          entries:
+            - name: AutoRepeatDelay
+              type: String
+              new_value: "200"
+              old_value: "1000"
+            - name: AutoRepeatRate
+              type: String
+              new_value: "30"
+              old_value: "500"
+            - name: DelayBeforeAcceptance
+              type: String
+              new_value: "0"
+              old_value: "1000"
+            - name: Flags
+              type: String
+              new_value: "3"
+              old_value: "126"

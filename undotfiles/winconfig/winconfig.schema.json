@@ -1,0 +1,583 @@
+{
+  "$defs": {
+    "ActionConfig": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ActionMode"
+        },
+        "propertyNames": {
+          "$ref": "#/$defs/ActionName"
+        },
+        "type": "object"
+      },
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/ActionGroupName"
+      },
+      "type": "object"
+    },
+    "ActionGroupName": {
+      "type": "string"
+    },
+    "ActionMode": {
+      "enum": ["apply", "revert", "skip"],
+      "title": "ActionMode",
+      "type": "string"
+    },
+    "ActionName": {
+      "type": "string"
+    },
+    "DefinitionBody": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": ["registries"]
+        },
+        {
+          "required": ["scheduled_tasks"]
+        },
+        {
+          "required": ["services"]
+        },
+        {
+          "required": ["script"]
+        }
+      ],
+      "description": "A single, self-contained configuration task.",
+      "properties": {
+        "description": {
+          "description": "A description of the task's purpose.",
+          "type": "string"
+        },
+        "registries": {
+          "default": [],
+          "description": "The registry values to be modified.",
+          "items": {
+            "$ref": "#/$defs/RegistryPathDefinition"
+          },
+          "type": "array"
+        },
+        "scheduled_tasks": {
+          "default": [],
+          "description": "The scheduled tasks to be modified.",
+          "items": {
+            "$ref": "#/$defs/SchtaskDefinition"
+          },
+          "type": "array"
+        },
+        "services": {
+          "default": [],
+          "description": "The Windows services to be modified.",
+          "items": {
+            "$ref": "#/$defs/ServiceDefinition"
+          },
+          "type": "array"
+        },
+        "script": {
+          "$ref": "#/$defs/ScriptDefinition",
+          "default": {
+            "apply": "",
+            "revert": ""
+          },
+          "description": "Custom PowerShell scripts for actions not covered by registry, services, or scheduled tasks."
+        }
+      },
+      "required": ["description"],
+      "type": "object"
+    },
+    "DefinitionConfig": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "$ref": "#/$defs/DefinitionBody"
+        },
+        "propertyNames": {
+          "$ref": "#/$defs/DefinitionName"
+        },
+        "type": "object"
+      },
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/DefinitionGroupName"
+      },
+      "type": "object"
+    },
+    "DefinitionGroupName": {
+      "type": "string"
+    },
+    "DefinitionName": {
+      "type": "string"
+    },
+    "ExistType": {
+      "const": "<Exist>",
+      "type": "string"
+    },
+    "NotChangeType": {
+      "const": "<NotChange>",
+      "type": "string"
+    },
+    "NotExistType": {
+      "const": "<NotExist>",
+      "type": "string"
+    },
+    "RegistryEntryDefinition": {
+      "additionalProperties": false,
+      "description": "Represents a single registry entry value to be modified.",
+      "properties": {
+        "name": {
+          "description": "The name of the registry value.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/RegistryValueKind",
+          "description": "The type of the registry value."
+        },
+        "old_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/NotExistType"
+            }
+          ],
+          "description": "The default value of the registry entry."
+        },
+        "new_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/NotExistType"
+            }
+          ],
+          "description": "The desired value of the registry entry."
+        }
+      },
+      "required": ["name", "type", "old_value", "new_value"],
+      "type": "object"
+    },
+    "RegistryPathDefinition": {
+      "additionalProperties": false,
+      "description": "Represents a single registry key and entry(s) to be modified.",
+      "properties": {
+        "path": {
+          "description": "The path to the registry key.",
+          "type": "string"
+        },
+        "old_existence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotChangeType"
+            },
+            {
+              "$ref": "#/$defs/ExistType"
+            },
+            {
+              "$ref": "#/$defs/NotExistType"
+            }
+          ],
+          "default": "<Exist>",
+          "description": "The default existance of the registry key."
+        },
+        "new_existence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotChangeType"
+            },
+            {
+              "$ref": "#/$defs/ExistType"
+            },
+            {
+              "$ref": "#/$defs/NotExistType"
+            }
+          ],
+          "default": "<Exist>",
+          "description": "The desired existance of the registry key."
+        },
+        "entries": {
+          "default": [],
+          "description": "The registry entries to be modified.",
+          "items": {
+            "$ref": "#/$defs/RegistryEntryDefinition"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["path"],
+      "type": "object"
+    },
+    "RegistryValueKind": {
+      "enum": [
+        "String",
+        "ExpandString",
+        "Binary",
+        "DWord",
+        "MultiString",
+        "QWord"
+      ],
+      "type": "string"
+    },
+    "SchtaskDefinition": {
+      "additionalProperties": false,
+      "description": "Represents a scheduled task to be enabled or disabled.",
+      "properties": {
+        "full_path": {
+          "description": "The full path of the scheduled task.",
+          "type": "string"
+        },
+        "old_state": {
+          "$ref": "#/$defs/SchtaskState",
+          "description": "The default state of the scheduled task."
+        },
+        "new_state": {
+          "$ref": "#/$defs/SchtaskState",
+          "description": "The desired state of the scheduled task."
+        }
+      },
+      "required": ["full_path", "old_state", "new_state"],
+      "type": "object"
+    },
+    "SchtaskState": {
+      "enum": ["Enabled", "Disabled"],
+      "type": "string"
+    },
+    "ScriptDefinition": {
+      "additionalProperties": false,
+      "description": "Represents PowerShell scripts to be executed.",
+      "properties": {
+        "apply": {
+          "default": "",
+          "description": "The script to run for the desired configuration.",
+          "type": "string"
+        },
+        "revert": {
+          "default": "",
+          "description": "The script to run for the default configuration.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ServiceDefinition": {
+      "additionalProperties": false,
+      "description": "Represents a Windows service to be modified.",
+      "properties": {
+        "name": {
+          "description": "The name of the service.",
+          "type": "string"
+        },
+        "old_startup": {
+          "$ref": "#/$defs/ServiceStartupType",
+          "description": "The default startup type of the service."
+        },
+        "new_startup": {
+          "$ref": "#/$defs/ServiceStartupType",
+          "description": "The desired startup type of the service."
+        }
+      },
+      "required": ["name", "old_startup", "new_startup"],
+      "type": "object"
+    },
+    "ServiceStartupType": {
+      "enum": [
+        "Automatic",
+        "AutomaticDelayedStart",
+        "Disabled",
+        "InvalidValue",
+        "Manual"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The root model for a winconfig definition file.",
+  "properties": {
+    "Definitions": {
+      "$ref": "#/$defs/DefinitionConfig",
+      "description": "Task definition entries."
+    },
+    "Actions": {
+      "properties": {
+        "Appearance": {
+          "type": "object",
+          "properties": {
+            "SystemDarkMode": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "AppDarkMode": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Windows": {
+          "type": "object",
+          "properties": {
+            "DisableWindowsSuggestions": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "EnableWindowsRestoreLastSession": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Taskbar": {
+          "type": "object",
+          "properties": {
+            "AlignTaskbarLeft": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "EnableEndTaskMenu": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideSearch": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideTaskView": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideWidgets": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "ShowClockSeconds": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "MultiMonitorTaskbar": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Desktop": {
+          "type": "object",
+          "properties": {
+            "HideRecycleBin": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "NotificationCenter": {
+          "type": "object",
+          "properties": {
+            "ShowClock": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Settings": {
+          "type": "object",
+          "properties": {
+            "HideSuggestions": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "StartMenu": {
+          "type": "object",
+          "properties": {
+            "DisableBingSearch": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideRecommendations": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideAccountNotifications": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "CreateGodModeFolder": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "FileExplorer": {
+          "type": "object",
+          "properties": {
+            "ShowHiddenFiles": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "ShowFileExtensions": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideHome": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideGallery": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableOneDrive": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableGroupView": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "EnableRestoreLastSession": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideRecentFiles": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideFrequentFolders": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableShortcutSuffix": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Security": {
+          "type": "object",
+          "properties": {
+            "DisableUnsafeFileMarking": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableSmartAppControl": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "ContextMenu": {
+          "type": "object",
+          "properties": {
+            "ClassicContextMenu": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "ExpandSelectionLimit": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideClipchamp": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideEditWithPhotos": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideEditWithPaint": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideEditWithNotepad": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideExtractAll": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideOpenInWindowsTerminal": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HidePrint": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideCompressedFolder": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideSearchMsStore": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideShare": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideAddToFavorites": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HidePreviousVersions": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideSendTo": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideAddToLibrary": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideGiveAccessTo": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "MouseKeyboard": {
+          "type": "object",
+          "properties": {
+            "DisableMouseAcceleration": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableF1HelpShortcut": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableStickyShift": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "FastKeyRepeat": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableTouchPad": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Sound": {
+          "type": "object",
+          "properties": {
+            "DisableSystemSound": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Background": {
+          "type": "object",
+          "properties": {
+            "DisableAutoDeleteTemp": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableXboxGameBar": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "PowerPlan": {
+          "type": "object",
+          "properties": {
+            "HighPerformancePlan": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "DisableAutoSleep": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        },
+        "Personalization": {
+          "type": "object",
+          "properties": {
+            "OpenWithCode": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "EditSharexContextMenu": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "EditMouseSensitivity": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "EditWindowsPATH": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "SetAdvancedKeyRepeat": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object"
+}

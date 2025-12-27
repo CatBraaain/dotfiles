@@ -12,13 +12,14 @@ apply:
 diff:
   chezmoi diff -c chezmoi.yaml
 
+winconfig:
+  winconfig run undotfiles/winconfig/winconfig.yaml
+
 wintasks:
-  wintasks jsonschema > undotfiles/wintasks/wintasks-schema.json
   wintasks apply --path undotfiles/wintasks/wintasks.yaml
 
 winget:
   gsudo {{run_ps_file}} undotfiles/winget.ps1
 
-import "undotfiles/winconfig/justfile"
-winconfig:
-  gsudo just _winconfig
+autologon:
+  autologon64
