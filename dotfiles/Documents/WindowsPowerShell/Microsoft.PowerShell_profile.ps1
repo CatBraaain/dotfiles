@@ -3,4 +3,10 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 Import-Module Microsoft.PowerShell.Management
-Get-Alias | % { if ($_.Name -notin @("%", "?")) { Remove-Item -Force "Alias:$($_.Name)" } }
+$unneccessaryAliases = @(
+    "where"
+)
+$unneccessaryAliases | % { Remove-Item -Force "Alias:$_" }
+
+Set-Alias -Name "where" -Value where.exe
+Set-Alias -Name "which" -Value where.exe
