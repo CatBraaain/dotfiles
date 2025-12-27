@@ -13,7 +13,7 @@
   run_as: true
   single_instance: true
 
-- command: "Taskmgr.exe"
+- command: Taskmgr.exe
   run_as: true
   single_instance: true
   wait_for_window: true
@@ -33,7 +33,7 @@
   wait_for_window: true
   window_style: maximize
 
-- command: 'cmd.exe /c ""%LocalAppData%\Programs\Microsoft VS Code\bin\code.cmd""" ""%USERPROFILE%\Documents\TasksTodo""'
+- command: cmd /c "code C:\Projects\winconfig"
   # wait_for_window: true
 
 - command: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
