@@ -1,4 +1,4 @@
-set shell := ["nu", "-c"]
+set shell := ["powershell.exe", "-c"]
 
 run_ps_cmd := "powershell -NoProfile -ExecutionPolicy Bypass -Command"
 run_ps_file := "powershell -NoProfile -ExecutionPolicy Bypass -File"
@@ -13,7 +13,7 @@ diff:
   chezmoi diff -c chezmoi.yaml
 
 wintasks:
-  wintasks jsonschema | save -f undotfiles/wintasks/wintasks-schema.json
+  wintasks jsonschema > undotfiles/wintasks/wintasks-schema.json
   wintasks apply --path undotfiles/wintasks/wintasks.yaml
 
 winget:
