@@ -62,6 +62,7 @@ winget install "AutoHotkey.AutoHotkey" --version 1.1.37.02 --no-upgrade --source
 winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
 
+Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 
 $coreutils_path = "${env:LOCALAPPDATA}\Microsoft\WinGet\Links\coreutils.exe"
 $expand_path = "${env:USERPROFILE}\.local\coreutils"
