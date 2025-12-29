@@ -234,19 +234,21 @@ Definitions:
       description: Edit windows path.
       script:
         apply: |-
-          $gitPath = "C:\Program Files\Git\bin"
-          $oldPath = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
-          if (-not ($oldPath -contains $gitPath)) {
-            $newPath = ($oldPath + $gitPath) -join ';'
-            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-          }
+          $additionalPaths = @(
+              "C:\Program Files\Git\bin"
+          )
+          $oldPaths = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
+          $newPaths = $oldPaths + $additionalPaths | Select-Object -Unique
+          $additionalPaths | ? { $oldPaths -notcontains $_ } | % { }
+          [Environment]::SetEnvironmentVariable("Path", ($newPaths -join ';'), "User")
         revert: |-
-          $gitPath = "C:\Program Files\Git\bin"
-          $oldPath = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
-          if ($oldPath -contains $gitPath) {
-            $newPath = ($oldPath | ? { $_ -ne $gitPath }) -join ';'
-            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-          }
+          $additionalPaths = @(
+              "C:\Program Files\Git\bin"
+          )
+          $oldPaths = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
+          $newPaths = $oldPaths | ? { $additionalPaths -notcontains $_ }
+          $additionalPaths | ? { $oldPaths -notcontains $_ } | % { }
+          [Environment]::SetEnvironmentVariable("Path", ($newPaths -join ';'), "User")
     SetAdvancedKeyRepeat:
       description: More Fast Key Repeat
       registries:
