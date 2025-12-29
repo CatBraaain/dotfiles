@@ -236,6 +236,7 @@ Definitions:
         apply: |-
           $additionalPaths = @(
               "C:\Program Files\Git\bin"
+              "C:\Users\USERNAME\.cargo\bin"
           )
           $oldPaths = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
           $newPaths = $oldPaths + $additionalPaths | Select-Object -Unique
@@ -244,6 +245,7 @@ Definitions:
         revert: |-
           $additionalPaths = @(
               "C:\Program Files\Git\bin"
+              "C:\Users\USERNAME\.cargo\bin"
           )
           $oldPaths = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
           $newPaths = $oldPaths | ? { $additionalPaths -notcontains $_ }
