@@ -25,12 +25,15 @@
 #   trigger: { type: cron, value: "00 20 * * *" }
 #   action: { command: "C:\\Projects\\my-holidays\\HolidayNotifier.vbs" }
 
-- name: startapps
+- name: startup
   trigger: { type: startup, value: "00:00" }
-  action:
-    {
-      command: "%USERPROFILE%\\.local\\bin\\startapps",
-      args: "--path %USERPROFILE%\\.startup\\startapps.yaml",
+  action: {
+      # command: "powershell",
+      # args: '-File C:\Projects\startup\startup.ps1',
+      # working_directory: 'C:\Projects\startup',
+      command: "powershell",
+      args: '-File C:\Projects\runx\startup.ps1',
+      working_directory: 'C:\Projects\runx',
     }
   setting: { run_as: true }
 
