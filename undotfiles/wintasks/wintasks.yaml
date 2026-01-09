@@ -26,7 +26,7 @@
 #   action: { command: "C:\\Projects\\my-holidays\\HolidayNotifier.vbs" }
 
 - name: startup
-  trigger: { type: startup, value: "00:00" }
+  trigger: { type: startup, value: "00:00:01" }
   action: {
       # command: "powershell",
       # args: '-File C:\Projects\startup\startup.ps1',
