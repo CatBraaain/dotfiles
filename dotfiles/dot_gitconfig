@@ -15,6 +15,10 @@ ignorecase = false
 [include]
 path = .gitconfig.alias
 [alias]
+rebasedate = rebase --committer-date-is-author-date
+date = show -s --format=%aI
+pushf = push --force
+stashk = stash -u -k
 ss = "!git status -s -u; git stash -u -m \"snapshot: $(date)\" -q && git stash apply \"stash@{0}\" --index -q"
 sss = "!git status -s -u; git stash -u -m \"snapshot: $(date)\" -q"
 ssr = "!git status -s -u && git stash -u -m \"snapshot: before restoring\" -q && echo \"=>\" && git restore . -s stash@{0} && git status -s -u && git stash apply -q"
@@ -23,3 +27,5 @@ swc = switch -c
 clone-lean = clone --depth 1 --filter=blob:none --no-checkout
 [init]
 defaultBranch = main
+[push]
+followTags = true
