@@ -1,0 +1,1 @@
+gsudo config PowerShellLoadProfile true
