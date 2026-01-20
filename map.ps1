@@ -11,7 +11,7 @@ $pathMaps = @{
     "sharex"           = "Documents/ShareX"
 }
 
-Remove-Item dist/* -Force -Recurse
+Remove-Item dist/* -Force -Recurse -ErrorAction SilentlyContinue
 robocopy dotfiles dist /e | Out-Null
 foreach ($pathMap in $pathMaps.GetEnumerator()) {
     robocopy dist/$($pathMap.Name) dist/$($pathMap.Value) /e /move | Out-Null
