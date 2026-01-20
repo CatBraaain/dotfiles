@@ -2,24 +2,24 @@
 {{-
   .chezmoi.stdin
   | replaceAllRegex `("AfterCaptureJob"): .*,` `${1}: "CopyImageToClipboard, SaveImageToFile",`
-  | replaceAllRegex `("AfterUploadJob"): .*,` `${1}: "None"${2},`
-  | replaceAllRegex `("PlaySoundAfterCapture"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("PlaySoundAfterUpload"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("ShowToastNotificationAfterTaskCompleted"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("ShowMagnifier"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("ShowEditorPanTip"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("EditorNewImageTransparent"): .*,` `${1}: true${2},`
-  | replaceAllRegex `("NameFormatPattern"): .*,` `${1}: "%y-%mo-%d %h %mi %s"${2},`
-  | replaceAllRegex `("NameFormatPatternActiveWindow"): .*,` `${1}: "%y-%mo-%d %h %mi %s"${2},`
-  | replaceAllRegex `("AutoFillBackground"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("Language"): .*,` `${1}: "English"${2},`
-  | replaceAllRegex `("SilentRun"): .*,` `${1}: true${2},`
-  | replaceAllRegex `("TrayLeftClickAction"): .*,` `${1}: "None"${2},`
-  | replaceAllRegex `("TrayMiddleClickAction"): .*,` `${1}: "None"${2},`
-  | replaceAllRegex `("AutoCheckUpdate"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("UseCustomScreenshotsPath"): .*,` `${1}: true${2},`
-  | replaceAllRegex `("CustomScreenshotsPath"): .*,` `${1}: "%userprofile%\\Downloads"${2},`
-  | replaceAllRegex `("SaveImageSubFolderPattern"): .*,` `${1}: ""${2},`
-  | replaceAllRegex `("AcceptInvalidSSLCertificates"): .*,` `${1}: false${2},`
-  | replaceAllRegex `("ShowUploadWarning"): .*,` `${1}: false${2},`
+  | replaceAllRegex `("AfterUploadJob"): .*,` `${1}: "None",`
+  | replaceAllRegex `("PlaySoundAfterCapture"): .*,` `${1}: false,`
+  | replaceAllRegex `("PlaySoundAfterUpload"): .*,` `${1}: false,`
+  | replaceAllRegex `("ShowToastNotificationAfterTaskCompleted"): .*,` `${1}: false,`
+  | replaceAllRegex `("ShowMagnifier"): .*,` `${1}: false,`
+  | replaceAllRegex `("ShowEditorPanTip"): .*,` `${1}: false,`
+  | replaceAllRegex `("EditorNewImageTransparent"): .*,` `${1}: true,`
+  | replaceAllRegex `("NameFormatPattern"): .*,` `${1}: "%y-%mo-%d %h %mi %s",`
+  | replaceAllRegex `("NameFormatPatternActiveWindow"): .*,` `${1}: "%y-%mo-%d %h %mi %s",`
+  | replaceAllRegex `("AutoFillBackground"): .*,` `${1}: false,`
+  | replaceAllRegex `("Language"): .*,` `${1}: "English",`
+  | replaceAllRegex `("SilentRun"): .*,` `${1}: true,`
+  | replaceAllRegex `("TrayLeftClickAction"): .*,` `${1}: "None",`
+  | replaceAllRegex `("TrayMiddleClickAction"): .*,` `${1}: "None",`
+  | replaceAllRegex `("AutoCheckUpdate"): .*,` `${1}: false,`
+  | replaceAllRegex `("UseCustomScreenshotsPath"): .*,` `${1}: true,`
+  | replaceAllRegex `("CustomScreenshotsPath"): .*,` `${1}: "%userprofile%\\Downloads",`
+  | replaceAllRegex `("SaveImageSubFolderPattern"): .*,` `${1}: "",`
+  | replaceAllRegex `("AcceptInvalidSSLCertificates"): .*,` `${1}: false,`
+  | replaceAllRegex `("ShowUploadWarning"): .*,` `${1}: false,`
 -}}
