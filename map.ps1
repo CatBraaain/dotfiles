@@ -2,20 +2,25 @@ $pathMaps = @{
     "docker"           = "AppData/Roaming/Docker"
     "erdtree"          = "AppData/Roaming/erdtree"
     "gemini"           = ".gemini"
-    "gsudo"            = "gsudo"
     "mise"             = ".config/mise"
     "nushell"          = "AppData/Roaming/nushell"
     "obs-studio"       = "AppData/Roaming/obs-studio"
     "powershell"       = "Documents/WindowsPowerShell"
     "windows-terminal" = "AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState"
     "roo"              = ".roo"
-
-    ".gitconfig"       = ".gitconfig"
-    ".nirc"            = ".nirc"
-    ".wslconfig"       = ".wslconfig"
+    "sharex"           = "Documents/ShareX"
 }
 
 Remove-Item dist/* -Force -Recurse
+robocopy dotfiles dist /e | Out-Null
 foreach ($pathMap in $pathMaps.GetEnumerator()) {
-    Copy-Item dotfiles/$($pathMap.Name) dist/$($pathMap.Value) -Recurse -Force
+    robocopy dist/$($pathMap.Name) dist/$($pathMap.Value) /e /move | Out-Null
+}
+
+Get-ChildItem -Path ./dist -Recurse | % {
+    if ($_.Name -like ".*" -and $_.Name -notlike ".chezmoi*") {
+        $srcPath = (Resolve-Path $_.FullName -Relative)
+        $dstPath = $srcPath -replace "\\[.]", "\dot_"
+        Move-Item $srcPath $dstPath -Force
+    }
 }
