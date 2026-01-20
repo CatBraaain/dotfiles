@@ -15,10 +15,10 @@ diff:
   chezmoi diff -c chezmoi.yaml
 
 winconfig:
-  winconfig run undotfiles/winconfig/winconfig.yaml
+  gsudo winconfig run undotfiles/winconfig/winconfig.yaml
 
 wintasks:
-  wintasks apply --path undotfiles/wintasks/wintasks.yaml
+  gsudo wintasks apply --path undotfiles/wintasks/wintasks.yaml
 
 winget:
   gsudo {{run_ps_file}} undotfiles/winget.ps1
