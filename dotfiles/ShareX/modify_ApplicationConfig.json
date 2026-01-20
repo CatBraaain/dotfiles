@@ -12,7 +12,7 @@
   | replaceAllRegex `("NameFormatPattern"): .*,` `${1}: "%y-%mo-%d %h %mi %s",`
   | replaceAllRegex `("NameFormatPatternActiveWindow"): .*,` `${1}: "%y-%mo-%d %h %mi %s",`
   | replaceAllRegex `("AutoFillBackground"): .*,` `${1}: false,`
-  | replaceAllRegex `("Language"): .*,` `${1}: "English",`
+  | replaceAllRegex `(^  "Language"): .*,` `${1}: "English",`
   | replaceAllRegex `("SilentRun"): .*,` `${1}: true,`
   | replaceAllRegex `("TrayLeftClickAction"): .*,` `${1}: "None",`
   | replaceAllRegex `("TrayMiddleClickAction"): .*,` `${1}: "None",`
