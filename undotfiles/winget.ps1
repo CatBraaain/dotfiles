@@ -15,6 +15,8 @@ $managedPackages = @(
     "AutoHotkey.AutoHotkey"
     "BluePointLilac.ContextMenuManager"
     "Canonical.Ubuntu"
+    "CatBraaain.runx"
+    "CatBraaain.winconfig"
     "Casey.Just"
     "ch.LosslessCut"
     "CPUID.CPU-Z"
