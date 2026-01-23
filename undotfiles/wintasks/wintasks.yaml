@@ -4,22 +4,22 @@
 #   trigger: { type: cron, value: "20 09 * * *" }
 #   action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "運動" }
 
-- name: 昼食
-  trigger: { type: cron, value: "00 12 * * *" }
-  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "昼食" }
+# - name: 昼食
+#   trigger: { type: cron, value: "00 12 * * *" }
+#   action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "昼食" }
 
-- name: 夕食
-  trigger: { type: cron, value: "00 18 * * *" }
-  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "夕食" }
+# - name: 夕食
+#   trigger: { type: cron, value: "00 18 * * *" }
+#   action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "夕食" }
 
-- name: お風呂
-  trigger: { type: cron, value: "15 22 * * *" }
-  action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "お風呂" }
+# - name: お風呂
+#   trigger: { type: cron, value: "15 22 * * *" }
+#   action: { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "お風呂" }
 
-- name: ストレッチ
-  trigger: { type: cron, value: "45 23 * * *" }
-  action:
-    { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "ストレッチ" }
+# - name: ストレッチ
+#   trigger: { type: cron, value: "45 23 * * *" }
+#   action:
+#     { command: "C:\\Projects\\Toaster\\src\\Toaster.vbs", args: "ストレッチ" }
 
 # - name: Holiday
 #   trigger: { type: cron, value: "00 20 * * *" }
@@ -32,7 +32,7 @@
       # args: '-File C:\Projects\startup\startup.ps1',
       # working_directory: 'C:\Projects\startup',
       command: "powershell",
-      args: '-File C:\Projects\runx\startup.ps1',
+      args: '-File C:\Projects\dotfiles\undotfiles\startup.ps1',
       working_directory: 'C:\Projects\runx',
     }
   setting: { run_as: true }
