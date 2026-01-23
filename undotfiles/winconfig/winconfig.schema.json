@@ -571,6 +571,9 @@
             },
             "SetAdvancedKeyRepeat": {
               "$ref": "#/$defs/ActionMode"
+            },
+            "DisablePythonAppExecutionAlias": {
+              "$ref": "#/$defs/ActionMode"
             }
           },
           "additionalProperties": false

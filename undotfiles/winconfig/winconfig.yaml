@@ -92,6 +92,7 @@ Actions:
     EditMouseSensitivity: apply
     EditWindowsPATH: apply
     SetAdvancedKeyRepeat: revert
+    DisablePythonAppExecutionAlias: apply
 
 Definitions:
   Personalization:
@@ -272,3 +273,7 @@ Definitions:
               type: String
               new_value: "3"
               old_value: "126"
+    DisablePythonAppExecutionAlias:
+      description: Disable Python App Execution Alias
+      script:
+        apply: Remove-Item -Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\python*.exe"
