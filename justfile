@@ -15,6 +15,7 @@ diff:
   chezmoi diff -c chezmoi.yaml
 
 winconfig:
+  winconfig schema undotfiles/winconfig/winconfig.yaml --output undotfiles/winconfig/winconfig.schema.json --strict
   gsudo winconfig run undotfiles/winconfig/winconfig.yaml
 
 wintasks:
