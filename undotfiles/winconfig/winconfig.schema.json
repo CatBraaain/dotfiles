@@ -528,6 +528,9 @@
             },
             "HideGiveAccessTo": {
               "$ref": "#/$defs/ActionMode"
+            },
+            "HidePinToStartScreen": {
+              "$ref": "#/$defs/ActionMode"
             }
           },
           "additionalProperties": false

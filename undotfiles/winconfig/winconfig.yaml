@@ -67,6 +67,7 @@ Actions:
     HideSendTo: apply
     HideAddToLibrary: apply
     HideGiveAccessTo: apply
+    HidePinToStartScreen: apply
 
   MouseKeyboard:
     DisableMouseAcceleration: apply
