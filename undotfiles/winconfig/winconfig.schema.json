@@ -20,7 +20,11 @@
       "type": "string"
     },
     "ActionMode": {
-      "enum": ["apply", "revert", "skip"],
+      "enum": [
+        "apply",
+        "revert",
+        "skip"
+      ],
       "title": "ActionMode",
       "type": "string"
     },
@@ -31,16 +35,24 @@
       "additionalProperties": false,
       "anyOf": [
         {
-          "required": ["registries"]
+          "required": [
+            "registries"
+          ]
         },
         {
-          "required": ["scheduled_tasks"]
+          "required": [
+            "scheduled_tasks"
+          ]
         },
         {
-          "required": ["services"]
+          "required": [
+            "services"
+          ]
         },
         {
-          "required": ["script"]
+          "required": [
+            "script"
+          ]
         }
       ],
       "description": "A single, self-contained configuration task.",
@@ -82,7 +94,9 @@
           "description": "Custom PowerShell scripts for actions not covered by registry, services, or scheduled tasks."
         }
       },
-      "required": ["description"],
+      "required": [
+        "description"
+      ],
       "type": "object"
     },
     "DefinitionConfig": {
@@ -154,7 +168,12 @@
           "description": "The desired value of the registry entry."
         }
       },
-      "required": ["name", "type", "old_value", "new_value"],
+      "required": [
+        "name",
+        "type",
+        "old_value",
+        "new_value"
+      ],
       "type": "object"
     },
     "RegistryPathDefinition": {
@@ -204,7 +223,9 @@
           "type": "array"
         }
       },
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "type": "object"
     },
     "RegistryValueKind": {
@@ -235,11 +256,18 @@
           "description": "The desired state of the scheduled task."
         }
       },
-      "required": ["full_path", "old_state", "new_state"],
+      "required": [
+        "full_path",
+        "old_state",
+        "new_state"
+      ],
       "type": "object"
     },
     "SchtaskState": {
-      "enum": ["Enabled", "Disabled"],
+      "enum": [
+        "Enabled",
+        "Disabled"
+      ],
       "type": "string"
     },
     "ScriptDefinition": {
@@ -276,7 +304,11 @@
           "description": "The desired startup type of the service."
         }
       },
-      "required": ["name", "old_startup", "new_startup"],
+      "required": [
+        "name",
+        "old_startup",
+        "new_startup"
+      ],
       "type": "object"
     },
     "ServiceStartupType": {
@@ -573,6 +605,15 @@
               "$ref": "#/$defs/ActionMode"
             },
             "DisablePythonAppExecutionAlias": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideTortoiseGit": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "HideVisualStudio": {
+              "$ref": "#/$defs/ActionMode"
+            },
+            "BrowserifyExplorerContextMenu": {
               "$ref": "#/$defs/ActionMode"
             }
           },

@@ -93,6 +93,8 @@ Actions:
     EditWindowsPATH: apply
     SetAdvancedKeyRepeat: revert
     DisablePythonAppExecutionAlias: apply
+    HideTortoiseGit: apply
+    BrowserifyExplorerContextMenu: apply
 
 Definitions:
   Personalization:
@@ -222,6 +224,24 @@ Definitions:
               type: String
               new_value: <NotExist>
               old_value: '"C:\Program Files\ShareX\ShareX.exe" "%1"'
+        - path: HKCU\Software\Classes\Directory\shell\ShareX
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: Upload with ShareX
+            - name: Icon
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe",0'
+        - path: HKCU\Software\Classes\Directory\shell\ShareX\command
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe" "%1"'
     EditMouseSensitivity:
       description: Set mouse sensitivity.
       registries:
@@ -277,3 +297,55 @@ Definitions:
       description: Disable Python App Execution Alias
       script:
         apply: Remove-Item -Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\python*.exe"
+    HideTortoiseGit:
+      description: Hide TortoiseGit
+      registries:
+        - path: HKCR\Directory\Background\shellex\ContextMenuHandlers\TortoiseGit
+          entries:
+          - name: (default)
+            type: String
+            new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+            old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+        - path: HKCR\Drive\ShellEx\ContextMenuHandlers\TortoiseGit
+          entries:
+          - name: (default)
+            type: String
+            new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+            old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+        - path: HKCR\Directory\ShellEx\ContextMenuHandlers\TortoiseGit
+          entries:
+          - name: (default)
+            type: String
+            new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+            old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+        - path: HKCR\Folder\ShellEx\ContextMenuHandlers\TortoiseGit
+          entries:
+          - name: (default)
+            type: String
+            new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+            old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+    HideVisualStudio:
+      description: Hide VisualStudio
+      registries:
+        - path: HKCR\Directory\Background\shell\AnyCode
+          entries:
+          - name: (default)
+            type: String
+            new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+            old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+    BrowserifyExplorerContextMenu:
+      description: Set File Explorer contextmenu hotkeys like in browser.
+      registries:
+        - path: HKCR\Folder\shell\opennewtab
+          entries:
+            - name: "MUIVerb"
+              type: String
+              new_value: Open in new tab (&T)
+              old_value: "@windows.storage.dll,-8519"
+        - path: HKCR\Folder\shell\opennewwindow
+          entries:
+            - name: "MUIVerb"
+              type: String
+              new_value: Open in new window (&W)
+              old_value: "@windows.storage.dll,-8517"
+
