@@ -2,6 +2,7 @@ $pathMaps = @{
     "docker"           = "AppData/Roaming/Docker"
     "erdtree"          = "AppData/Roaming/erdtree"
     "gemini"           = ".gemini"
+    "git-cliff"        = "AppData/Roaming/git-cliff"
     "mise"             = ".config/mise"
     "nushell"          = "AppData/Roaming/nushell"
     "obs-studio"       = "AppData/Roaming/obs-studio"
