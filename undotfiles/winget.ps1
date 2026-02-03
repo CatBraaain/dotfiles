@@ -51,6 +51,7 @@ $managedPackages = @(
     "Oven-sh.Bun"
     "pnpm.pnpm"
     "qishibo.AnotherRedisDesktopManager"
+    "Rem0o.FanControl"
     "RussellBanks.Komac"
     "Schniz.fnm"
     "ShareX.ShareX"
