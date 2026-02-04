@@ -56,6 +56,7 @@ $managedPackages = @(
     "Schniz.fnm"
     "ShareX.ShareX"
     "Solidiquis.Erdtree"
+    "sordum.EasyContextMenu"
     # "StirlingTools.StirlingPDF"
     "Microsoft.Sysinternals.Autologon"
     "twpayne.chezmoi"
