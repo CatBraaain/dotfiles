@@ -14,3 +14,7 @@ Set-Alias -Name "mise-init" -Value "mise gen config -o mise.toml"
 Set-Alias -Name "mr" -Value "mise run"
 Set-Alias -Name "uv-init" -Value "uv init --bare & uv venv"
 Set-Alias -Name "uv-python-update" -Value "uv python install --reinstall 3.11 3.12 3.13"
+
+function bunr {
+  bun run $args
+}
