@@ -54,6 +54,7 @@ $managedPackages = @(
     "Rem0o.FanControl"
     "RussellBanks.Komac"
     "Schniz.fnm"
+    "sharkdp.fd"
     "ShareX.ShareX"
     "Solidiquis.Erdtree"
     "sordum.EasyContextMenu"
