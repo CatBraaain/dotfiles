@@ -16,5 +16,9 @@ Set-Alias -Name "uv-init" -Value "uv init --bare & uv venv"
 Set-Alias -Name "uv-python-update" -Value "uv python install --reinstall 3.11 3.12 3.13"
 
 function bunr {
-  bun run $args
+    bun run $args
+}
+
+function eza-tree {
+    eza --git-ignore --group-directories-first --tree $args
 }

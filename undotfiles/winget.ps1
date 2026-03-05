@@ -21,6 +21,7 @@ $managedPackages = @(
     "ch.LosslessCut"
     "CPUID.CPU-Z"
     "DuongDieuPhap.ImageGlass"
+    "eza-community.eza"
     "ezwinports.make"
     "gerardog.gsudo"
     "GIMP.GIMP.3"
