@@ -8,6 +8,7 @@ Remove-Item -Force "Alias:rm"
 Set-Alias -Name "where" -Value "where.exe"
 Set-Alias -Name "which" -Value "where.exe"
 
+Set-Alias -Name "c2p" -Value "code2prompt"
 Set-Alias -Name "dc" -Value "docker compose"
 Set-Alias -Name "docker-inspect" -Value "docker exec -it %* /bin/sh"
 Set-Alias -Name "j" -Value "just"
