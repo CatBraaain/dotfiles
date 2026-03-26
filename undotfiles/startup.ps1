@@ -14,7 +14,7 @@ Remove-Item "C:\Users\Public\Desktop\*.lnk" -Force
 & runx "`"C:\Program Files\ShareX\ShareX.exe`"" --single-instance
 & runx "`"C:\Program Files\obs-studio\bin\64bit\obs64.exe`"" `
     --arg-line "--startreplaybuffer --minimize-to-tray --disable-shutdown-check" `
-    --directory "C:\Program Files\obs-studio\bin\64bit" --run-as --single-instance
+    --directory "C:\Program Files\obs-studio\bin\64bit" --single-instance
 & runx "explorer.exe" --win-title ".* - エクスプローラー" --win-action maximize
 & runx "powershell" --arg-line "-c `"`"start-process -WindowStyle Hidden cmd.exe '/c code'`"`"" `
     --process-name "code.exe" --win-action activate --single-instance --log-level trace
