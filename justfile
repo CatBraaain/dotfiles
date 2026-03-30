@@ -1,6 +1,5 @@
 set shell := ["powershell.exe", "-c"]
 
-run_ps_cmd := "powershell -NoProfile -ExecutionPolicy Bypass -Command"
 run_ps_file := "powershell -NoProfile -ExecutionPolicy Bypass -File"
 
 _:
