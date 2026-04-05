@@ -11,7 +11,6 @@ body = """
     ### {{ group | striptags | trim | upper_first }}
     {% for commit in commits %}
         - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
-            {% if commit.breaking %}[**breaking**] {% endif %}\
             {{ commit.message | upper_first }}\
     {% endfor %}
 {% endfor %}
@@ -24,17 +23,19 @@ postprocessors = [  ]
 [git]
 conventional_commits = true
 require_conventional = true
-commit_preprocessors = [  ]
+commit_preprocessors = [ { pattern = "^$", replace = "chore: empty commit" } ]
 commit_parsers = [
-    { message = "^feat", group = "<!-- 0 -->🚀 Features" },
-    { message = "^fix", group = "<!-- 1 -->🐛 Bug Fixes" },
-    { message = "^perf", group = "<!-- 2 -->⚡ Performance" },
-    { message = "^doc", skip = true },
-    { message = "^refactor", skip = true },
-    { message = "^style", skip = true },
-    { message = "^test", skip = true },
-    { message = "^chore|^ci", skip = true },
-    { message = ".*", skip = true },
+    { message = "^\\w+!", group = "<!-- 0 -->💥 BREAKING CHANGE" },
+    { message = "^feat", group = "<!-- 1 -->🚀 Features" },
+    { message = "^fix", group = "<!-- 2 -->🐛 Bug Fixes" },
+    { message = "^refactor", group = "<!-- 3 -->🚜 Refactor" },
+    { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
+    { message = "^style", group = "<!-- 5 -->🎨 Styling" },
+    { message = "^doc", group = "<!-- 6 -->📚 Documentation" },
+    { message = "^test", group = "<!-- 7 -->🧪 Testing" },
+    { message = "^chore|^ci|^build", group = "<!-- 8 -->⚙️ Miscellaneous Tasks" },
+    { message = "^revert", group = "<!-- 9 -->◀️ Revert" },
+    { message = ".*", group = "<!-- 10 -->💼 Other" },
 ]
 filter_commits = false
 link_parsers = [  ]
