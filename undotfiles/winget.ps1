@@ -45,7 +45,6 @@ $managedPackages = @(
     "MPC-BE.MPC-BE"
     "mulaRahul.Keyviz"
     "nektos.act"
-    "Nushell.Nushell"
     "OBSProject.OBSStudio"
     "orhun.git-cliff"
     "OpenJS.NodeJS.LTS"
