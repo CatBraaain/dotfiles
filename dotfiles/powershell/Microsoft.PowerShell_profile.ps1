@@ -5,6 +5,9 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 Remove-Item -Force "Alias:where"
 Remove-Item -Force "Alias:cp"
 Remove-Item -Force "Alias:rm"
+Remove-Item -Force "Alias:select"
+Remove-Item -Force "Alias:sleep"
+Remove-Item -Force "Alias:sort"
 Set-Alias -Name "where" -Value "where.exe"
 Set-Alias -Name "which" -Value "where.exe"
 
