@@ -14,6 +14,7 @@ $managedPackages = @(
     "astral-sh.uv"
     "AutoHotkey.AutoHotkey"
     "BluePointLilac.ContextMenuManager"
+    "BurntSushi.ripgrep.MSVC"
     "Canonical.Ubuntu"
     "CatBraaain.runx"
     "CatBraaain.winconfig"
