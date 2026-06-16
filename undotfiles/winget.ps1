@@ -54,7 +54,7 @@ $managedPackages = @(
     "nektos.act"
     "twpayne.chezmoi"
     "GitHub.cli"
-    "uutils.coreutils"
+    "Microsoft.coreutils"
     "eza-community.eza"
     "sharkdp.fd"
     "Schniz.fnm"
@@ -76,17 +76,3 @@ winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
 
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
-
-$coreutils_path = "${env:LOCALAPPDATA}\Microsoft\WinGet\Links\coreutils.exe"
-$expand_path = "${env:USERPROFILE}\.local\coreutils"
-New-Item -Path $expand_path -ItemType Directory -Force | Out-Null
-$utilsList = @(coreutils --list)
-$utilsList | ? {
-    $_ -notin @("[")
-} | % {
-    "${expand_path}\${_}.exe"
-} | ? {
-    -not (Test-Path $_)
-} | % {
-    New-Item -ItemType SymbolicLink -Path $_ -Target $coreutils_path
-}
