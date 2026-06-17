@@ -76,3 +76,9 @@ winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
 
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
+
+$packagesDir = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
+$linksDir = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+Get-ChildItem -Path $packagesDir -Filter *.exe -Recurse | % {
+    New-Item -ItemType SymbolicLink -Path $linksDir -Name $_.Name -Value $_.FullName -Force | Out-Null
+}
