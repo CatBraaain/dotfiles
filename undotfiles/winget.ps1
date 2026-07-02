@@ -47,7 +47,7 @@ $managedPackages = @(
     "Microsoft.Sysinternals.Autologon"
     "XAMPPRocky.Tokei"
     "Canonical.Ubuntu"
-    "MartiCliment.UniGetUI"
+    "Devolutions.UniGetUI"
     "Microsoft.VisualStudioCode"
     "WinDirStat.WinDirStat"
     "Microsoft.WindowsTerminal"
