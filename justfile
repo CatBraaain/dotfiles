@@ -23,5 +23,8 @@ wintasks:
 winget:
   gsudo {{run_ps_file}} undotfiles/winget.ps1
 
+msime:
+  {{run_ps_file}} undotfiles/ime/custom-msime-roma.ps1
+
 autologon:
   autologon64
