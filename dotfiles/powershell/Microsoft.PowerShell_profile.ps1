@@ -15,11 +15,17 @@ Set-Alias -Name "c2p" -Value "code2prompt"
 Set-Alias -Name "dc" -Value "docker compose"
 Set-Alias -Name "docker-inspect" -Value "docker exec -it %* /bin/sh"
 Set-Alias -Name "j" -Value "just"
-Set-Alias -Name "just-init" -Value "`"_:`n@just --list --unsorted`" | Out-File -Encoding utf8 justfile"
 Set-Alias -Name "mise-init" -Value "mise gen config -o mise.toml"
 Set-Alias -Name "mr" -Value "mise run"
-Set-Alias -Name "uv-init" -Value "uv init --bare & uv venv"
 Set-Alias -Name "uv-python-update" -Value "uv python install --reinstall 3.11 3.12 3.13"
+
+function just-init {
+    "_:`n  @just --list --unsorted" | Out-File -Encoding utf8 justfile
+}
+
+function uv-init {
+    uv init --bare; uv venv
+}
 
 function bunr {
     bun run $args
