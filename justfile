@@ -1,6 +1,6 @@
-set shell := ["powershell.exe", "-c"]
+set shell := ["pwsh", "-c"]
 
-run_ps_file := "powershell -NoProfile -ExecutionPolicy Bypass -File"
+run_ps_file := "pwsh -NoProfile -ExecutionPolicy Bypass -File"
 
 _:
   @just --list --unsorted

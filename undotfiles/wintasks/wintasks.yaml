@@ -27,11 +27,9 @@
 
 - name: startup
   trigger: { type: startup, value: "00:00:01" }
-  action: {
-      # command: "powershell",
-      # args: '-File C:\Projects\startup\startup.ps1',
-      # working_directory: 'C:\Projects\startup',
-      command: "powershell",
+  action:
+    {
+      command: "pwsh",
       args: '-File C:\Projects\dotfiles\undotfiles\startup.ps1',
       working_directory: 'C:\Projects\runx',
     }
@@ -39,9 +37,5 @@
 
 - name: SyncTime
   trigger: { type: boot, value: "00:00" }
-  action:
-    {
-      command: "%windir%\\system32\\sc.exe",
-      args: "start w32time task_started",
-    }
+  action: { command: "%windir%\\system32\\sc.exe", args: "start w32time task_started" }
   setting: { run_as: true, logon_type: s4u }

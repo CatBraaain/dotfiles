@@ -3,7 +3,7 @@ $codeExe = "`"C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\Code.ex
 
 & runx $ahkExe --arg-line "C:\Projects\ahkfiles\ScreenLock\ScreenLock.ahk"
 
-Invoke-Expression "powershell.exe -File C:\Projects\dotfiles\undotfiles\winget.ps1"
+Invoke-Expression "pwsh -File C:\Projects\dotfiles\undotfiles\winget.ps1"
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 Remove-Item "C:\Users\Public\Desktop\*.lnk" -Force
 
@@ -16,7 +16,7 @@ Remove-Item "C:\Users\Public\Desktop\*.lnk" -Force
     --arg-line "--startreplaybuffer --minimize-to-tray --disable-shutdown-check" `
     --directory "C:\Program Files\obs-studio\bin\64bit" --single-instance
 & runx "explorer.exe" --win-title ".* - エクスプローラー" --win-action maximize
-& runx "powershell" --arg-line "-c `"`"start-process -WindowStyle Hidden cmd.exe '/c code'`"`"" `
+& runx "pwsh" --arg-line "-c `"`"start-process -WindowStyle Hidden cmd.exe '/c code'`"`"" `
     --process-name "code.exe" --win-action activate --single-instance --log-level trace
 & runx "C:\Program Files\Google\Chrome\Application\chrome.exe" `
     --win-title ".* - Google Chrome" --single-instance --win-action activate

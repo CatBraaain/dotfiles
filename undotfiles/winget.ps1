@@ -1,4 +1,4 @@
-if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) { Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs; exit }
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) { Start-Process pwsh "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs; exit }
 
 $unmanagedPackages = @(
     # keep-sorted start by_regex=\..+ sticky_comments=no
@@ -39,6 +39,7 @@ $managedPackages = @(
     "M2Team.NanaZip"
     "OpenJS.NodeJS.LTS"
     "OBSProject.OBSStudio"
+    "Microsoft.PowerShell"
     "Guru3D.RTSS"
     "ShareX.ShareX"
     "Meltytech.Shotcut"
