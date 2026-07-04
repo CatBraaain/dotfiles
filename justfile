@@ -6,11 +6,11 @@ _:
   @just --list --unsorted
 
 apply:
-  {{run_ps_file}} map.ps1
+  {{run_ps_file}} pre-chezmoi.ps1
   chezmoi apply -c chezmoi.yaml --force
 
 diff:
-  {{run_ps_file}} map.ps1
+  {{run_ps_file}} pre-chezmoi.ps1
   chezmoi diff -c chezmoi.yaml
 
 winconfig:
