@@ -72,7 +72,7 @@ $managedPackages = @(
     "MikeFarah.yq"
     # keep-sorted end
 )
-winget install "AutoHotkey.AutoHotkey" --version 1.1.37.02 --no-upgrade --source winget
+winget install "AutoHotkey.AutoHotkey" --silent --version 1.1.37.02 --no-upgrade --source winget
 winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
 

@@ -4,7 +4,7 @@ _:
   @just --list --unsorted
 
 setup:
-  Set-ExecutionPolicy -Scope CurrentUser Bypass -Force
+  powershell setup.ps1
 
 apply:
   pwsh pre-chezmoi.ps1
@@ -15,8 +15,10 @@ diff:
   chezmoi diff -c chezmoi.yaml
 
 winconfig:
-  winconfig schema undotfiles/winconfig/winconfig.yaml --output undotfiles/winconfig/winconfig.schema.json --strict
-  gsudo winconfig run undotfiles/winconfig/winconfig.yaml
+  gsudo { \
+    winconfig schema undotfiles/winconfig/winconfig.yaml --output undotfiles/winconfig/winconfig.schema.json --strict; \
+    winconfig run undotfiles/winconfig/winconfig.yaml; \
+  }
 
 wintasks:
   gsudo wintasks apply --path undotfiles/wintasks/wintasks.yaml
