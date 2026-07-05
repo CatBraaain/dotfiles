@@ -228,3 +228,12 @@ class IME {
 # http://jgrammar.life.coocan.jp/ja/tools/imekeys.htm
 # コンピューター\HKEY_CURRENT_USER\SOFTWARE\Microsoft\IME\15.0\IMEJP\RomaDef\CustomRoma
 # データ数320が限界
+
+# TODO:
+#   HKCU\Software\Microsoft\IME\15.0\IMEJP\MSIME
+#     入力モード切替通知
+#     予測入力オフ
+#   HKCU\Software\Microsoft\IME\15.0\IMEJP\StyleList\Custom
+#     無変換削除
+#     F7 => 無変換
+#     全角半角 => 入力中など全モードで有効化
