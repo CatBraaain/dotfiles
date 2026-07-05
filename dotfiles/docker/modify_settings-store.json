@@ -1,6 +1,7 @@
 {{- /* chezmoi:modify-template */ -}}
 {{-
-  fromJson .chezmoi.stdin
+  (or .chezmoi.stdin "{}")
+  | fromJson 
   | setValueAtPath "AutoDownloadUpdates" true
   | setValueAtPath "AutoStart" false
   | setValueAtPath "OpenUIOnStartupDisabled" true
