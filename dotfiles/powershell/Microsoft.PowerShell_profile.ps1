@@ -2,6 +2,8 @@
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
+Set-PSReadLineOption -PredictionSource None
+
 Remove-Item -Force "Alias:where"
 Remove-Item -Force "Alias:cp"
 Remove-Item -Force "Alias:rm"
