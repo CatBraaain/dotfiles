@@ -1,16 +1,17 @@
 set shell := ["pwsh", "-c"]
 
-run_ps_file := "pwsh -NoProfile -ExecutionPolicy Bypass -File"
-
 _:
   @just --list --unsorted
 
+setup:
+  Set-ExecutionPolicy -Scope CurrentUser Bypass -Force
+
 apply:
-  {{run_ps_file}} pre-chezmoi.ps1
+  pwsh pre-chezmoi.ps1
   chezmoi apply -c chezmoi.yaml --force
 
 diff:
-  {{run_ps_file}} pre-chezmoi.ps1
+  pwsh pre-chezmoi.ps1
   chezmoi diff -c chezmoi.yaml
 
 winconfig:
@@ -21,10 +22,10 @@ wintasks:
   gsudo wintasks apply --path undotfiles/wintasks/wintasks.yaml
 
 winget:
-  gsudo {{run_ps_file}} undotfiles/winget.ps1
+  gsudo pwsh undotfiles/winget.ps1
 
 msime:
-  {{run_ps_file}} undotfiles/ime/custom-msime-roma.ps1
+  pwsh undotfiles/ime/custom-msime-roma.ps1
 
 autologon:
   autologon64
