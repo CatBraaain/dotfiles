@@ -1,5 +1,5 @@
-$ahkExe = "`"C:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe`""
-$codeExe = "`"C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\Code.exe`""
+$ahkExe = "C:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe"
+$codeExe = "C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\Code.exe"
 
 & runx $ahkExe --arg-line "C:\Projects\ahkfiles\ScreenLock\ScreenLock.ahk"
 
@@ -10,9 +10,9 @@ Remove-Item "C:\Users\Public\Desktop\*.lnk" -Force
 & runx $ahkExe --arg-line "C:\Projects\ahkfiles\Main\Main.ahk" --run-as
 & runx "C:\Program Files (x86)\MSI Afterburner\MSIAfterburner.exe" --run-as --single-instance
 & runx "Taskmgr.exe" --win-action minimize --run-as --single-instance
-& runx "`"C:\Program Files\Docker\Docker\Docker Desktop.exe`"" --single-instance
-& runx "`"C:\Program Files\ShareX\ShareX.exe`"" --single-instance
-& runx "`"C:\Program Files\obs-studio\bin\64bit\obs64.exe`"" `
+& runx "C:\Program Files\Docker\Docker\Docker Desktop.exe" --single-instance
+& runx "C:\Program Files\ShareX\ShareX.exe" --single-instance
+& runx "C:\Program Files\obs-studio\bin\64bit\obs64.exe" `
     --arg-line "--startreplaybuffer --minimize-to-tray --disable-shutdown-check" `
     --directory "C:\Program Files\obs-studio\bin\64bit" --single-instance
 & runx "explorer.exe" --win-title ".* - エクスプローラー" --win-action maximize
