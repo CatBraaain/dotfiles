@@ -13,68 +13,73 @@ $unmanagedPackages = @(
 $managedPackages = @(
     # keep-sorted start by_regex=\..+ sticky_comments=no
     "Guru3D.Afterburner"
-    "qishibo.AnotherRedisDesktopManager"
     # "Microsoft.AppInstaller"
-    "AutoHotkey.AutoHotkey"
-    "Oven-sh.Bun"
     "CPUID.CPU-Z"
-    "MongoDB.Compass.Full"
+    # "MongoDB.Compass.Full"
     "BluePointLilac.ContextMenuManager"
     "sordum.EasyContextMenu"
-    "Solidiquis.Erdtree"
     "w4po.ExplorerTabUtility"
-    "Gyan.FFmpeg"
     "Rem0o.FanControl"
     "AdrienAllard.FileConverter"
     "GIMP.GIMP.3"
-    "Git.Git"
-    "GoLang.Go"
     "DuongDieuPhap.ImageGlass"
-    "Casey.Just"
-    "mulaRahul.Keyviz"
-    "RussellBanks.Komac"
+    # "mulaRahul.Keyviz"
     "ch.LosslessCut"
     "MPC-BE.MPC-BE"
     "Mojang.MinecraftLauncher"
     "M2Team.NanaZip"
-    "OpenJS.NodeJS.LTS"
     "OBSProject.OBSStudio"
-    "Microsoft.PowerShell"
     "Guru3D.RTSS"
     "ShareX.ShareX"
     "Meltytech.Shotcut"
     "Valve.Steam"
     # "StirlingTools.StirlingPDF"
     "Microsoft.Sysinternals.Autologon"
-    "XAMPPRocky.Tokei"
-    "Canonical.Ubuntu"
     "Devolutions.UniGetUI"
     "Microsoft.VisualStudioCode"
     "WinDirStat.WinDirStat"
     "Microsoft.WindowsTerminal"
+    "HaraldBoegeholz.h2testw"
+    # keep-sorted end
+)
+$managedDevPackages = @(
+    # keep-sorted start by_regex=\..+ sticky_comments=no
+    # "qishibo.AnotherRedisDesktopManager"
+    "AutoHotkey.AutoHotkey" # windows
+    "Oven-sh.Bun"
+    "Solidiquis.Erdtree"
+    "Gyan.FFmpeg"
+    "Git.Git"
+    "GoLang.Go"
+    "Casey.Just"
+    "RussellBanks.Komac"
+    "OpenJS.NodeJS.LTS"
+    "Microsoft.PowerShell" # windows
+    "XAMPPRocky.Tokei"
+    "Canonical.Ubuntu" # windows
     "nektos.act"
     "twpayne.chezmoi"
     "GitHub.cli"
     "Microsoft.coreutils"
     "eza-community.eza"
     "sharkdp.fd"
-    "Schniz.fnm"
     "orhun.git-cliff"
-    "gerardog.gsudo"
-    "HaraldBoegeholz.h2testw"
+    "gerardog.gsudo" # windows
     "ezwinports.make"
     "jdx.mise"
     "pnpm.pnpm"
     "BurntSushi.ripgrep.MSVC"
-    "CatBraaain.runx"
+    "CatBraaain.runx" # windows
     "astral-sh.uv"
-    "CatBraaain.winconfig"
+    "CatBraaain.winconfig" # windows
     "MikeFarah.yq"
     # keep-sorted end
 )
+
 winget install "AutoHotkey.AutoHotkey" --silent --version 1.1.37.02 --no-upgrade --source winget
 winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
+winget install $managedDevPackages --source winget
 
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 
