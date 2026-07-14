@@ -1,6 +1,0 @@
-[tools]
-watchexec = "latest"
-
-[settings]
-experimental = true
-windows_shim_mode = "symlink"
