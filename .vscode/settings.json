@@ -6,8 +6,8 @@
   "[json][jsonc]": {
     "editor.formatOnPaste": false,
     "editor.formatOnSave": false,
-    "editor.formatOnType": false
+    "editor.formatOnType": false,
+    "files.insertFinalNewline": false,
+    "files.trimTrailingWhitespace": false,
   },
-  "files.insertFinalNewline": false,
-  "files.trimTrailingWhitespace": false,
 }
