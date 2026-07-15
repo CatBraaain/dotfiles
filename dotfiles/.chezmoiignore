@@ -1,0 +1,8 @@
+{{- if ne .chezmoi.os "windows" }}
+gsudo
+obs-studio
+powershell
+ShareX
+windows-terminal
+.wslconfig
+{{- end }}
