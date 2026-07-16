@@ -108,7 +108,7 @@ Definitions:
           entries:
             - name: (default)
               type: String
-              new_value: "Open with Code (&Q)"
+              new_value: "Open with WSL Code (&Q)"
               old_value: <NotExist>
             - name: Icon
               type: ExpandString
@@ -120,7 +120,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              new_value: wsl --cd "%V" code .
               old_value: <NotExist>
 
         - path: HKCR\directory\shell\VSCode
@@ -129,7 +129,7 @@ Definitions:
           entries:
             - name: (default)
               type: String
-              new_value: "Open with Code (&Q)"
+              new_value: "Open with WSL Code (&Q)"
               old_value: <NotExist>
             - name: Icon
               type: ExpandString
@@ -141,7 +141,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              new_value: wsl --cd "%V" code .
               old_value: <NotExist>
 
         - path: HKCR\directory\background\shell\VSCode
@@ -150,7 +150,7 @@ Definitions:
           entries:
             - name: (default)
               type: String
-              new_value: "Open with Code (&Q)"
+              new_value: "Open with WSL Code (&Q)"
               old_value: <NotExist>
             - name: Icon
               type: ExpandString
@@ -162,7 +162,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              new_value: wsl --cd "%V" code .
               old_value: <NotExist>
 
         - path: HKCR\drive\shell\VSCode
@@ -171,7 +171,7 @@ Definitions:
           entries:
             - name: (default)
               type: String
-              new_value: "Open with Code (&Q)"
+              new_value: "Open with WSL Code (&Q)"
               old_value: <NotExist>
             - name: Icon
               type: ExpandString
@@ -183,7 +183,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: "\"%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe\" \"%V\""
+              new_value: wsl --cd "%V" code .
               old_value: <NotExist>
     EditSharexContextMenu:
       description: Edit ShareX context menu.
