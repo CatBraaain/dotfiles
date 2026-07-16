@@ -8,10 +8,13 @@ esac
 # keep-sorted start
 alias agent="cursor-agent"
 alias c2p="code2prompt"
+alias cmd="cmd.exe"
 alias dc="docker compose"
 alias j="just"
 alias ksort="keep-sorted"
+alias powershell="powershell.exe"
 alias uv-python-update="uv python install --reinstall 3.11 3.12 3.13"
+alias wt="wt.exe"
 # keep-sorted end
 
 docker-inspect() {
