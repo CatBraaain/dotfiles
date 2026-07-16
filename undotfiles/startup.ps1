@@ -1,13 +1,13 @@
 $ahkExe = "C:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe"
 $codeExe = "C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\Code.exe"
 
-& runx $ahkExe --arg-line "C:\Projects\ahkfiles\ScreenLock\ScreenLock.ahk"
+& runx $ahkExe --arg-line "\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\ScreenLock\ScreenLock.ahk"
 
-Invoke-Expression "pwsh -File C:\Projects\dotfiles\undotfiles\winget.ps1"
+Invoke-Expression "pwsh -File \\wsl.localhost\Ubuntu\home\username\projects\dotfiles\undotfiles\winget.ps1"
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 Remove-Item "C:\Users\Public\Desktop\*.lnk" -Force
 
-& runx $ahkExe --arg-line "C:\Projects\ahkfiles\Main\Main.ahk" --run-as
+& runx $ahkExe --arg-line "\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\Main\Main.ahk" --run-as
 & runx "C:\Program Files (x86)\MSI Afterburner\MSIAfterburner.exe" --run-as --single-instance
 & runx "Taskmgr.exe" --win-action minimize --run-as --single-instance
 & runx "C:\Program Files\Docker\Docker\Docker Desktop.exe" --single-instance

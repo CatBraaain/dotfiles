@@ -30,8 +30,7 @@
   action:
     {
       command: "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\pwsh.exe",
-      args: 'C:\Projects\dotfiles\undotfiles\startup.ps1',
-      working_directory: 'C:\Projects\runx',
+      args: '\\wsl.localhost\Ubuntu\home\username\projects\dotfiles\undotfiles\startup.ps1',
     }
   setting: { run_as: true }
 
