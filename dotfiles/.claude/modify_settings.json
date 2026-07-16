@@ -1,0 +1,63 @@
+{{- /* chezmoi:modify-template */ -}}
+{{-
+  mergeOverwrite
+    ((or .chezmoi.stdin "{}") | fromJson)
+    (fromJson `
+      {
+        "env": {
+          "ANTHROPIC_AUTH_TOKEN_SAMPLE": "<REMOVE '_SAMPLE' FROM KEY NAME AND PUT YOUR API KEY HERE>",
+          "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5",
+          "API_TIMEOUT_MS": "3000000",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+        },
+        "permissions": {
+          "allow": [
+            "Edit",
+            "Read",
+            "WebFetch",
+            "WebSearch",
+            "Bash(echo:*)",
+            "Bash(bun:*)",
+            "Bash(npm:*)",
+            "Bash(npx:*)",
+            "Bash(uv:*)",
+            "Bash(cargo:*)",
+            "Bash(rustc:*)",
+            "Bash(cat:*)",
+            "Bash(cd:*)",
+            "Bash(dir:*)",
+            "Bash(find:*)",
+            "Bash(git:*)",
+            "Bash(jq:*)",
+            "Bash(mkdir:*)",
+            "Bash(xargs:*)",
+            "mcp__context7__resolve-library-id",
+            "mcp__context7__query-docs"
+          ],
+          "deny": [],
+          "read": {
+            "deny": [
+              "**/.env*"
+            ]
+          }
+        },
+        "attribution": {
+          "commit": "",
+          "pr": ""
+        },
+        "language": "japanese",
+        "model": "sonnet",
+        "theme": "dark",
+        "preferredNotifChannel": "terminal_bell",
+        "sandbox": {
+          "enabled": true,
+          "autoAllowBashIfSandboxed": true
+        }
+      }
+    `)
+  | toPrettyJson
+-}}
