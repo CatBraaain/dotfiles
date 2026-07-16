@@ -70,6 +70,7 @@
             ripgrep
             socat # bash-sandbox
             tokei
+            tsgolint
             uv
             yq-go
             # keep-sorted end
