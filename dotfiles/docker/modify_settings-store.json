@@ -1,9 +1,11 @@
 {{- /* chezmoi:modify-template */ -}}
 {{-
-  (or .chezmoi.stdin "{}")
-  | fromJson 
-  | setValueAtPath "AutoDownloadUpdates" true
-  | setValueAtPath "AutoStart" false
-  | setValueAtPath "OpenUIOnStartupDisabled" true
+  mergeOverwrite
+    ((or .chezmoi.stdin "{}") | fromJson)
+    (fromJson `{
+      "AutoDownloadUpdates": true,
+      "AutoStart": false,
+      "OpenUIOnStartupDisabled": true
+    }`)
   | toPrettyJson
 -}}
