@@ -1,6 +1,6 @@
 [user]
-email = 84499939+CatBraaain@users.noreply.github.com
 name = CatBraaain
+email = 84499939+CatBraaain@users.noreply.github.com # https://github.com/settings/emails
 [filter "lfs"]
 process = git-lfs filter-process
 required = true
