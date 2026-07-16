@@ -63,6 +63,8 @@
             mise
             nixfmt
             nodejs
+            oxfmt
+            oxlint
             pnpm
             powershell
             ripgrep
