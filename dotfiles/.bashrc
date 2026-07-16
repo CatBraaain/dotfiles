@@ -10,6 +10,7 @@ alias dc="docker compose"
 alias j="just"
 alias uv-python-update="uv python install --reinstall 3.11 3.12 3.13"
 alias ksort="keep-sorted"
+alias agent="cursor-agent"
 
 docker-inspect() {
   docker exec -it "$@" /bin/sh
