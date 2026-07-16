@@ -31,6 +31,7 @@
             apm
             cc-switch-cli
             claude-code
+            coderabbit-cli
             cursor-agent
             # oh-my-opencode
             opencode
