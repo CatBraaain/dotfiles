@@ -120,7 +120,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: wsl --cd "%V" code .
+              new_value: wsl --cd "%V" bash -lc "code ."
               old_value: <NotExist>
 
         - path: HKCR\directory\shell\VSCode
@@ -141,7 +141,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: wsl --cd "%V" code .
+              new_value: wsl --cd "%V" bash -lc "code ."
               old_value: <NotExist>
 
         - path: HKCR\directory\background\shell\VSCode
@@ -162,7 +162,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: wsl --cd "%V" code .
+              new_value: wsl --cd "%V" bash -lc "code ."
               old_value: <NotExist>
 
         - path: HKCR\drive\shell\VSCode
@@ -183,7 +183,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: wsl --cd "%V" code .
+              new_value: wsl --cd "%V" bash -lc "code ."
               old_value: <NotExist>
     EditSharexContextMenu:
       description: Edit ShareX context menu.
