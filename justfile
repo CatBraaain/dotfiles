@@ -26,6 +26,10 @@ diff:
 nix:
   nix profile upgrade undotfiles/flakes
 
+[linux]
+vscode:
+  bash undotfiles/manage-vscode-extensions.sh
+
 [windows]
 setup:
   powershell setup.ps1
