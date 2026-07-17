@@ -22,8 +22,9 @@ stashk = stash -u -k
 ss = "!git status -s -u; git stash -u -m \"snapshot: $(date)\" -q && git stash apply \"stash@{0}\" --index -q"
 sss = "!git status -s -u; git stash -u -m \"snapshot: $(date)\" -q"
 ssr = "!git status -s -u && git stash -u -m \"snapshot: before restoring\" -q && echo \"=>\" && git restore . -s stash@{0} && git status -s -u && git stash apply -q"
-sw = switch
-swc = switch -c
+st = status
+s = switch
+sc = switch -c
 clone-lean = clone --depth 1 --filter=blob:none --no-checkout
 [init]
 defaultBranch = main
