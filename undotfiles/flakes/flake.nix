@@ -51,6 +51,7 @@
             eza
             fd
             ffmpeg
+            gcc
             gh
             git
             git-cliff
