@@ -120,7 +120,7 @@ Definitions:
           entries:
             - name: (default)
               type: ExpandString
-              new_value: wsl --cd "%V" bash -lc "code ."
+              new_value: 'wsl bash -lc "code `$(wslpath ''%V'')"'
               old_value: <NotExist>
 
         - path: HKCR\directory\shell\VSCode
