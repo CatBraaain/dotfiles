@@ -64,6 +64,7 @@
             ripgrep
             socat # bash-sandbox
             tokei
+            tree-sitter
             tsgolint
             uv
             yq-go
