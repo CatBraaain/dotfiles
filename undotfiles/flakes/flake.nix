@@ -7,14 +7,14 @@
   };
 
   outputs =
-    input:
+    inputs:
     let
       system = "x86_64-linux"; # WSL2
-      pkgs = import input.nixpkgs {
+      pkgs = import inputs.nixpkgs {
         inherit system;
         config.allowUnfree = true;
         overlays = [
-          input.llm-agents.overlays.shared-nixpkgs
+          inputs.llm-agents.overlays.shared-nixpkgs
         ];
       };
     in
