@@ -7,38 +7,31 @@
   };
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      llm-agents,
-    }:
+    input:
     let
       system = "x86_64-linux"; # WSL2
-      pkgs = import nixpkgs {
+      pkgs = import input.nixpkgs {
         inherit system;
         config.allowUnfree = true;
         overlays = [
-          llm-agents.overlays.shared-nixpkgs
+          input.llm-agents.overlays.shared-nixpkgs
         ];
       };
     in
     {
       packages.${system}.default = pkgs.buildEnv {
         name = "user-packages";
-        paths =
-          (with pkgs.llm-agents; [
-            # keep-sorted start by_regex=\s*#?\s*(.*) sticky_comments=no
-            apm
-            cc-switch-cli
-            claude-code
-            coderabbit-cli
-            cursor-agent
-            # oh-my-opencode
-            opencode
-            # keep-sorted end
-          ])
-          ++ (with pkgs; [
-            # keep-sorted start by_regex=\s*#?\s*(.*) sticky_comments=no
+        paths = (
+          with pkgs;
+          [
+            # keep-sorted start by_regex=\s*#?\s*(.*) sticky_comments=no  prefix_order=llm-agents,
+            llm-agents.apm
+            llm-agents.cc-switch-cli
+            llm-agents.claude-code
+            llm-agents.coderabbit-cli
+            llm-agents.cursor-agent
+            # llm-agents.oh-my-opencode
+            llm-agents.opencode
             act
             bubblewrap # bash-sandbox
             bun
@@ -75,7 +68,8 @@
             uv
             yq-go
             # keep-sorted end
-          ]);
+          ]
+        );
       };
     };
 }
