@@ -1,6 +1,6 @@
-[user]
-name = CatBraaain
-email = 84499939+CatBraaain@users.noreply.github.com # https://github.com/settings/emails
+[include]
+path = .gitconfig.alias
+path = .gitconfig.local
 [filter "lfs"]
 process = git-lfs filter-process
 required = true
@@ -12,8 +12,6 @@ selected = manager
 editor = code --wait
 autocrlf = false
 ignorecase = false
-[include]
-path = .gitconfig.alias
 [alias]
 rebasedate = rebase --committer-date-is-author-date
 date = show -s --format=%aI

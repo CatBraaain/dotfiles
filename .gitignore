@@ -1,4 +1,5 @@
 dist
 node_modules
 
+dotfiles/.gitconfig.local
 chezmoistate.boltdb

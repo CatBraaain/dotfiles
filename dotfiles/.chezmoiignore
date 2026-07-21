@@ -4,5 +4,6 @@ obs-studio
 powershell
 ShareX
 windows-terminal
+.gitconfig.local.sample
 .wslconfig
 {{- end }}
