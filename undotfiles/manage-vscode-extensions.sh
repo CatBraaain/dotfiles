@@ -33,6 +33,7 @@ extensions_for_linux=(
   github.remotehub
   github.vscode-github-actions
   golang.go
+  grapecity.gc-excelviewer
   gurumukhi.selected-lines-count
   hashhar.gitattributes
   hediet.vscode-drawio
@@ -83,6 +84,7 @@ extensions_for_linux=(
   vitest.explorer
   vsls-contrib.gistfs
   yoavbls.pretty-ts-errors
+  yzane.markdown-pdf
   yzhang.markdown-all-in-one
   # keep-sorted end
 )
