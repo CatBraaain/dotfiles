@@ -46,7 +46,7 @@ diff:
 
 [windows]
 managed:
-  bash pre-chezmoi.sh
+  pwsh pre-chezmoi.ps1
   chezmoi managed -c chezmoi.yaml
 
 [windows]
