@@ -3,3 +3,5 @@ sourceDir: dist
 diff:
   exclude:
     - scripts
+
+persistentState: ~/.config/chezmoi/chezmoi.boltdb
