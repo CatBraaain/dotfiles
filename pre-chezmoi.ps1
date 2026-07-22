@@ -10,6 +10,7 @@ $pathMaps = @{
     "windows-terminal" = "AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState"
     "roo"              = ".roo"
     "sharex"           = "Documents/ShareX"
+    "vscode"           = "AppData/Roaming/Code/User"
 }
 
 Remove-Item dist/* -Force -Recurse -ErrorAction SilentlyContinue

@@ -3,6 +3,7 @@ gsudo
 obs-studio
 powershell
 ShareX
+vscode
 windows-terminal
 .gitconfig.local.sample
 .wslconfig
