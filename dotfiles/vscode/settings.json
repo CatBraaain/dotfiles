@@ -501,7 +501,7 @@
   "powershell.developer.editorServicesLogLevel": "Error",
   "powershell.integratedConsole.startInBackground": true,
   "powershell.powerShellAdditionalExePaths": {
-    "pwsh": "/home/username/.nix-profile/bin/pwsh"
+    "pwsh": "~/.nix-profile/bin/pwsh"
   },
   "powershell.scriptAnalysis.enable": false,
   "prettier.embeddedLanguageFormatting": "auto",

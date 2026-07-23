@@ -56,11 +56,6 @@
     "when": "editorTextFocus && !inlineSuggestionsVisible"
   },
   {
-    "key": "alt+a",
-    "command": "codeium.diffActionAccept",
-    "when": "editorTextFocus && !inlineSuggestionsVisible && editorLangId != 'todo'"
-  },
-  {
     "key": "alt+b",
     "command": "bookmarks.jumpToNext",
     "when": "editorTextFocus"
@@ -102,11 +97,6 @@
   },
   {
     "key": "alt+c",
-    "command": "codeium.cancelCodeiumCommand",
-    "when": "codeium.commandEnabled && editorTextFocus && editorLangId != 'todo'"
-  },
-  {
-    "key": "alt+c",
     "command": "markdown.extension.editing.toggleCodeSpan",
     "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^markdown$|^rmd$|^quarto$/"
   },
@@ -128,11 +118,6 @@
     "key": "alt+f",
     "command": "-codeium.diffActionFollowup",
     "when": "editorTextFocus && !inlineSuggestionsVisible"
-  },
-  {
-    "key": "alt+f",
-    "command": "codeium.diffActionFollowup",
-    "when": "editorTextFocus && !inlineSuggestionsVisible && editorLangId != 'todo'"
   },
   {
     "key": "alt+f1",
@@ -168,28 +153,13 @@
     "when": "editorTextFocus && !inlineSuggestionsVisible"
   },
   {
-    "key": "alt+l",
-    "command": "codeium.chatAboutBlock",
-    "when": "editorTextFocus && !inlineSuggestionsVisible && editorLangId != 'todo'"
-  },
-  {
     "key": "alt+oem_5",
     "command": "-editor.action.inlineSuggest.trigger",
     "when": "editorTextFocus && !editorHasSelection && !inlineSuggestionsVisible"
   },
   {
-    "key": "alt+oem_5",
-    "command": "editor.action.inlineSuggest.trigger",
-    "when": "editorTextFocus && !editorHasSelection && !inlineSuggestionsVisible && editorLangId != 'todo'"
-  },
-  {
     "key": "alt+oem_comma",
     "command": "-codeium.showPreviousCortexStep"
-  },
-  {
-    "key": "alt+oem_comma",
-    "command": "codeium.showPreviousCortexStep",
-    "when": " editorLangId != 'todo'"
   },
   {
     "key": "alt+oem_period",
@@ -199,16 +169,6 @@
   {
     "key": "alt+oem_period",
     "command": "-codeium.showNextCortexStep"
-  },
-  {
-    "key": "alt+oem_period",
-    "command": "codeium.forceSupercomplete",
-    "when": "editorTextFocus && editorLangId != 'todo'"
-  },
-  {
-    "key": "alt+oem_period",
-    "command": "codeium.showNextCortexStep",
-    "when": "editorLangId != 'todo'"
   },
   {
     "key": "alt+p",
@@ -241,11 +201,6 @@
     "when": "terminalFindFocused && terminalHasBeenCreated || terminalFindFocused && terminalProcessSupported || terminalFocus && terminalHasBeenCreated || terminalFocus && terminalProcessSupported"
   },
   {
-    "key": "alt+r",
-    "command": "codeium.diffActionReject",
-    "when": "editorTextFocus && !inlineSuggestionsVisible && editorLangId != 'todo'"
-  },
-  {
     "key": "alt+s",
     "command": "workbench.action.openSettings",
     "when": "editorLangId != todo"
@@ -253,10 +208,6 @@
   {
     "key": "alt+t",
     "command": "workbench.action.createTerminalEditor"
-  },
-  {
-    "key": "alt+t",
-    "command": "workbench.action.terminal.toggleTerminal"
   },
   {
     "key": "alt+up",
@@ -1359,16 +1310,7 @@
   },
   {
     "key": "ctrl+shift+s",
-    "command": "-workbench.action.files.saveAs"
-  },
-  {
-    "key": "ctrl+shift+s",
     "command": "workbench.action.files.saveAs"
-  },
-  {
-    "key": "ctrl+shift+space",
-    "command": "-editor.action.triggerParameterHints",
-    "when": "editorHasSignatureHelpProvider && editorTextFocus"
   },
   {
     "key": "ctrl+shift+space",
