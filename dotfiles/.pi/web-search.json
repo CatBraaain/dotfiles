@@ -1,0 +1,5 @@
+{
+  "searchModel": "deepseek-v4-flash",
+  "summaryModel": "deepseek-v4-pro",
+  "workflow": "none"
+}

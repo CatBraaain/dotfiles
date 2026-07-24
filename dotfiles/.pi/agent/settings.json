@@ -1,0 +1,32 @@
+{
+  "lastChangelogVersion": "0.80.6",
+  "theme": "dark",
+  "defaultProvider": "commandcode",
+  "defaultModel": "deepseek/deepseek-v4-pro",
+  "defaultThinkingLevel": "high",
+  "externalEditor": "code --wait",
+  "hideThinkingBlock": true,
+  "quietStartup": false,
+  "enabledModels": ["**"],
+  "packages": [
+    "npm:pi-web-access",
+    "npm:@entelligentsia/pi-claude-compat",
+    "https://github.com/DietrichGebert/ponytail",
+    "https://github.com/arpagon/pi-rewind",
+    "npm:pi-commandcode-provider",
+    {
+      "source": "https://github.com/anthropics/skills",
+      "extensions": [],
+      "skills": ["skills/**", "!skills/brand-guidelines", "!skills/claude-api"],
+      "prompts": [],
+      "themes": []
+    },
+    {
+      "source": "https://github.com/mattpocock/skills",
+      "extensions": [],
+      "skills": ["skills/**", "!skills/deprecated/**", "!skills/personal/**"],
+      "prompts": [],
+      "themes": []
+    }
+  ]
+}
