@@ -80,11 +80,11 @@ extensions_for_linux=(
   thenuprojectcontributors.vscode-nushell-lang
   tintinweb.graphviz-interactive-preview
   tombonnike.vscode-status-bar-format-toggle
+  tomoki1207.pdf
   unifiedjs.vscode-mdx
   vitest.explorer
   vsls-contrib.gistfs
   yoavbls.pretty-ts-errors
-  yzane.markdown-pdf
   yzhang.markdown-all-in-one
   # keep-sorted end
 )
