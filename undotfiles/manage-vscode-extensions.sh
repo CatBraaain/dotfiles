@@ -2,7 +2,10 @@
 set -euo pipefail
 
 extensions_for_windows=(
+  # keep-sorted start by_regex=(?:#\s)?(.*) sticky_comments=no
   ms-vscode-remote.remote-wsl
+  tomoki1207.pdf
+  # keep-sorted end
 )
 
 extensions_for_linux=(
@@ -80,7 +83,7 @@ extensions_for_linux=(
   thenuprojectcontributors.vscode-nushell-lang
   tintinweb.graphviz-interactive-preview
   tombonnike.vscode-status-bar-format-toggle
-  tomoki1207.pdf
+  # tomoki1207.pdf # for linux but not for wsl
   unifiedjs.vscode-mdx
   vitest.explorer
   vsls-contrib.gistfs
