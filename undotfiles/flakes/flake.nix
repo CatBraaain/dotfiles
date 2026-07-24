@@ -32,6 +32,7 @@
             llm-agents.cursor-agent
             # llm-agents.oh-my-opencode
             llm-agents.opencode
+            llm-agents.pi
             act
             bubblewrap # bash-sandbox
             bun
