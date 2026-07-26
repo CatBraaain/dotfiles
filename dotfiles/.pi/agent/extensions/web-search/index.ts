@@ -50,13 +50,18 @@ function jinaHeaders(accept: string): HeadersInit {
 
 // Trim every result section (delimited by a `##` header) to its first 3 lines
 // so the terminal stays readable. Generic over markdown.new + openserp output.
-function trimPerResult(text: string, maxLines = 3): string {
+// maxLineChars caps long single lines (raw JSON blobs, unwrapped paragraphs) so
+// a header-less or blob-shaped fallback can never dump the whole page.
+function trimPerResult(text: string, maxLines = 3, maxLineChars = 300): string {
   const parts = text.split(/(?=^#{1,3}\s)/m);
   return parts
     .map((p) => p.trim())
     .filter(Boolean)
     .map((p) => {
-      const lines = p.split("\n").filter((l) => l.trim());
+      const lines = p
+        .split("\n")
+        .filter((l) => l.trim())
+        .map((l) => (l.length > maxLineChars ? `${l.slice(0, maxLineChars)}…` : l));
       return lines.slice(0, maxLines).join("\n");
     })
     .join("\n\n");
@@ -64,36 +69,27 @@ function trimPerResult(text: string, maxLines = 3): string {
 
 // ── web_search backends ──────────────────────────────────────────────
 
-interface JinaSearchItem {
-  title?: string;
-  url?: string;
-  description?: string;
-  content?: string;
-}
-interface JinaSearchResponse {
-  data?: { content?: JinaSearchItem[] };
-}
-
 // Jina Search returns JSON; reformat each result to title/url/snippet.
+// s.jina.ai now returns { data: [...] } (array directly); older docs showed
+// data.content. Accept both so a shape change can't silently dump raw JSON.
+// Use `description` (the search snippet) — `content` is the full page and must
+// never reach search output.
 function formatJinaSearch(raw: string): string {
   try {
-    const items = (JSON.parse(raw) as JinaSearchResponse)?.data?.content;
-    if (!Array.isArray(items)) return raw;
+    const data = (JSON.parse(raw) as { data?: unknown })?.data;
+    const items = Array.isArray(data) ? data : (data as { content?: unknown[] } | null)?.content;
+    if (!Array.isArray(items)) return "";
     return items
       .map((it) => {
-        const title = `## ${it.title || it.url || "(no title)"}`;
-        const url = it.url ? `\n${it.url}` : "";
-        const body = (it.content || it.description || "")
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .slice(0, 1)
-          .join("\n");
-        return `${title}${url}\n${body}`;
+        const item = it as { title?: string; url?: string; description?: string };
+        const title = `## ${item.title || item.url || "(no title)"}`;
+        const url = item.url ? `\n${item.url}` : "";
+        const body = (item.description || "").trim();
+        return body ? `${title}${url}\n${body}` : `${title}${url}`;
       })
       .join("\n\n---\n\n");
   } catch {
-    return raw;
+    return "";
   }
 }
 
@@ -107,9 +103,23 @@ async function jinaSearch(query: string, signal?: AbortSignal): Promise<string |
   return raw ? formatJinaSearch(raw) : null;
 }
 
-// markdown.new — top N Google results via Serper.dev, each as Markdown.
-const markdownNewSearch = (query: string, signal?: AbortSignal) =>
-  fetchText(`https://markdown.new/search/${encodeURIComponent(query)}?n=5`, undefined, signal);
+// markdown.new — top N Google results via Serper.dev. Each result embeds the
+// full page after a <!-- BEGIN MARKDOWN --> marker; for search we keep only the
+// title/url metadata block, otherwise the page's internal ## / ### subheadings
+// get treated as separate "results" by trimPerResult and the output explodes.
+async function markdownNewSearch(query: string, signal?: AbortSignal): Promise<string | null> {
+  const raw = await fetchText(
+    `https://markdown.new/search/${encodeURIComponent(query)}?n=5`,
+    undefined,
+    signal,
+  );
+  if (!raw) return null;
+  return raw
+    .split(/(?=^## \d+\.\s)/m)
+    .map((p) => p.split("<!-- BEGIN MARKDOWN")[0].trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 // openserp ecosia — no browser needed in --raw mode. Snippets only.
 async function openSerpSearch(query: string, signal?: AbortSignal): Promise<string | null> {
