@@ -22,10 +22,10 @@
 
 ## リント・フォーマット
 
-編集後は必ず該当するリンター・フォーマッターを実行すること。
+編集後は必ず該当するリンター、フォーマッター、タイプチェックを実行すること。
 
-- **Python**: `ruff format`, `ruff check`
-- **JavaScript/TypeScript**: `vp format`, `vp check`
+- **Python**: `ruff format`, `ruff check`, `ty`
+- **JavaScript/TypeScript**: `vp format` or `oxfmt`, `vp check` or `oxlint`
 - **その他言語**: 適切なリンター・フォーマッターを選択して実行
 - **不要**: powershell, shell script, justfile（選択肢が少ない、または文法が単純なため）
 
