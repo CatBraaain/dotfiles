@@ -9,7 +9,6 @@
   "quietStartup": false,
   "enabledModels": ["**"],
   "packages": [
-    "npm:pi-web-access",
     "npm:@gotgenes/pi-permission-system",
     "npm:@entelligentsia/pi-claude-compat",
     "https://github.com/DietrichGebert/ponytail",
