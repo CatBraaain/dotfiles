@@ -24,7 +24,9 @@ diff:
 
 [linux]
 nix:
-  nix profile upgrade undotfiles/flakes
+  # nix profile add ./undotfiles/nix
+  nix profile upgrade undotfiles/nix
+  bash undotfiles/nix/unflake.sh
 
 [linux]
 vscode:
