@@ -1,186 +1,243 @@
+/**
+ * web_search + web_fetch overrides.
+ *
+ * web_search: Jina Search → markdown.new → openserp CLI
+ * web_fetch:  Jina Reader  → md.dhr.wtf    → crawl4ai CLI (crwl)
+ *
+ * s.jina.ai (search) requires JINA_API_KEY — skipped entirely without it.
+ * r.jina.ai (reader) works unauthenticated; sends Bearer only if key is set.
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
+const execFileAsync = promisify(execFile);
+
+const JINA_KEY = process.env.JINA_API_KEY;
+const FETCH_TIMEOUT_MS = 15_000;
+
+interface SearchResult {
+  text: string;
+  backend: string;
+}
+
+// ── shared helpers ───────────────────────────────────────────────────
+
+// fetch → text, with a hard timeout so a hung backend can't block forever.
 async function fetchText(
   url: string,
-  opts: { headers?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal },
-): Promise<string> {
-  const timeout = AbortSignal.timeout(opts.timeoutMs ?? 30_000);
-  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
-  const resp = await fetch(url, { headers: opts.headers, signal });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.text();
-}
-
-// --- search ---
-
-async function searchJina(query: string, signal?: AbortSignal): Promise<string> {
-  const headers: Record<string, string> = {};
-  if (process.env.JINA_API_KEY) {
-    headers["Authorization"] = `Bearer ${process.env.JINA_API_KEY}`;
-  }
-  return fetchText(`https://s.jina.ai/${encodeURIComponent(query)}`, {
-    headers,
-    timeoutMs: 30_000,
-    signal,
-  });
-}
-
-async function searchOpenSERP(query: string, signal?: AbortSignal): Promise<string> {
-  if (!process.env.OPENSERP_API_KEY) {
-    throw new Error("OPENSERP_API_KEY not set");
-  }
-  const url = `https://api.openserp.org/v1/google/search?text=${encodeURIComponent(query)}&limit=10&lang=EN`;
-  return fetchText(url, {
-    headers: { Authorization: `Bearer ${process.env.OPENSERP_API_KEY}` },
-    timeoutMs: 15_000,
-    signal,
-  });
-}
-
-async function doSearch(query: string, signal?: AbortSignal): Promise<string> {
+  opts?: RequestInit,
+  signal?: AbortSignal,
+): Promise<string | null> {
   try {
-    return await searchJina(query, signal);
+    const signals: AbortSignal[] = [AbortSignal.timeout(FETCH_TIMEOUT_MS)];
+    if (signal) signals.push(signal);
+    const res = await fetch(url, { ...opts, signal: AbortSignal.any(signals) });
+    if (!res.ok) return null;
+    const t = await res.text();
+    return t.trim() || null;
   } catch {
-    return searchOpenSERP(query, signal);
+    return null;
   }
 }
 
-// --- fetch ---
+function jinaHeaders(accept: string): HeadersInit {
+  const h: Record<string, string> = { Accept: accept };
+  if (JINA_KEY) h.Authorization = `Bearer ${JINA_KEY}`;
+  return h;
+}
 
-async function fetchJina(url: string, signal?: AbortSignal): Promise<string> {
-  const headers: Record<string, string> = { Accept: "text/markdown" };
-  if (process.env.JINA_API_KEY) {
-    headers["Authorization"] = `Bearer ${process.env.JINA_API_KEY}`;
+// Trim every result section (delimited by a `##` header) to its first 3 lines
+// so the terminal stays readable. Generic over markdown.new + openserp output.
+function trimPerResult(text: string, maxLines = 3): string {
+  const parts = text.split(/(?=^#{1,3}\s)/m);
+  return parts
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => {
+      const lines = p.split("\n").filter((l) => l.trim());
+      return lines.slice(0, maxLines).join("\n");
+    })
+    .join("\n\n");
+}
+
+// ── web_search backends ──────────────────────────────────────────────
+
+interface JinaSearchItem {
+  title?: string;
+  url?: string;
+  description?: string;
+  content?: string;
+}
+interface JinaSearchResponse {
+  data?: { content?: JinaSearchItem[] };
+}
+
+// Jina Search returns JSON; reformat each result to title/url/snippet.
+function formatJinaSearch(raw: string): string {
+  try {
+    const items = (JSON.parse(raw) as JinaSearchResponse)?.data?.content;
+    if (!Array.isArray(items)) return raw;
+    return items
+      .map((it) => {
+        const title = `## ${it.title || it.url || "(no title)"}`;
+        const url = it.url ? `\n${it.url}` : "";
+        const body = (it.content || it.description || "")
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .slice(0, 1)
+          .join("\n");
+        return `${title}${url}\n${body}`;
+      })
+      .join("\n\n---\n\n");
+  } catch {
+    return raw;
   }
-  return fetchText(`https://r.jina.ai/${url}`, {
-    headers,
-    timeoutMs: 30_000,
+}
+
+// Jina Search API — https://s.jina.ai. Reads JINA_API_KEY if present.
+async function jinaSearch(query: string, signal?: AbortSignal): Promise<string | null> {
+  const raw = await fetchText(
+    `https://s.jina.ai/?q=${encodeURIComponent(query)}`,
+    { headers: jinaHeaders("application/json") },
     signal,
-  });
+  );
+  return raw ? formatJinaSearch(raw) : null;
 }
 
-async function fetchMarkdownNew(url: string, signal?: AbortSignal): Promise<string> {
-  const encoded = encodeURIComponent(url);
-  return fetchText(`https://markdown.new/${encoded}`, {
-    headers: { Accept: "text/markdown" },
-    timeoutMs: 30_000,
-    signal,
-  });
-}
+// markdown.new — top N Google results via Serper.dev, each as Markdown.
+const markdownNewSearch = (query: string, signal?: AbortSignal) =>
+  fetchText(`https://markdown.new/search/${encodeURIComponent(query)}?n=5`, undefined, signal);
 
-function fetchCrawl4ai(url: string): string {
-  return execFileSync("crwl", [url, "-o", "markdown"], {
-    encoding: "utf-8",
-    timeout: 60_000,
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-
-async function doFetch(url: string, signal?: AbortSignal): Promise<string> {
+// openserp ecosia — no browser needed in --raw mode. Snippets only.
+async function openSerpSearch(query: string, signal?: AbortSignal): Promise<string | null> {
   try {
-    return await fetchJina(url, signal);
-  } catch { /* fall through */ }
-  try {
-    return await fetchMarkdownNew(url, signal);
-  } catch { /* fall through */ }
-  return fetchCrawl4ai(url);
+    const { stdout } = await execFileAsync(
+      "openserp",
+      [
+        "search",
+        "ecosia",
+        query,
+        "--format",
+        "markdown",
+        "--limit",
+        "10",
+        "--raw",
+        "--timeout",
+        "20",
+      ],
+      { timeout: 25_000, maxBuffer: 512 * 1024, signal },
+    );
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
-// --- extension ---
+// ── web_fetch backends ───────────────────────────────────────────────
+
+// Jina Reader API — URL → Markdown. https://r.jina.ai/<url>
+const jinaReader = (url: string, signal?: AbortSignal) =>
+  fetchText(`https://r.jina.ai/${url}`, { headers: jinaHeaders("text/markdown") }, signal);
+
+// md.dhr.wtf (Markdowner) — URL → Markdown. ~5 req/min free.
+const mdDhrWtf = (url: string, signal?: AbortSignal) =>
+  fetchText(`https://md.dhr.wtf/?url=${encodeURIComponent(url)}`, undefined, signal);
+
+// crawl4ai CLI (crwl) — local headless browser, Markdown output.
+async function crawl4aiFetch(url: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("crwl", [url, "-o", "markdown", "-bc"], {
+      timeout: 60_000,
+      maxBuffer: 2 * 1024 * 1024,
+      signal,
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// ── orchestration ────────────────────────────────────────────────────
+
+async function searchOne(query: string, signal?: AbortSignal): Promise<SearchResult> {
+  const jina = JINA_KEY ? await jinaSearch(query, signal) : null;
+  if (jina) return { text: trimPerResult(jina), backend: "jina" };
+
+  const mdNew = await markdownNewSearch(query, signal);
+  if (mdNew)
+    return { text: `*(via markdown.new)*\n\n${trimPerResult(mdNew)}`, backend: "markdown.new" };
+
+  const os = await openSerpSearch(query, signal);
+  if (os)
+    return {
+      text: `*(via openserp ecosia — snippets only)*\n\n${trimPerResult(os)}`,
+      backend: "openserp",
+    };
+
+  throw new Error(`Search failed for "${query}": all backends unavailable`);
+}
+
+async function fetchOne(url: string, signal?: AbortSignal): Promise<SearchResult> {
+  const jina = await jinaReader(url, signal);
+  if (jina) return { text: jina, backend: "jina-reader" };
+
+  const md = await mdDhrWtf(url, signal);
+  if (md) return { text: `*(via md.dhr.wtf)*\n\n${md}`, backend: "md.dhr.wtf" };
+
+  const cr = await crawl4aiFetch(url, signal);
+  if (cr) return { text: `*(via crawl4ai)*\n\n${cr}`, backend: "crawl4ai" };
+
+  throw new Error(`Fetch failed for ${url}: all backends unavailable`);
+}
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the web using Jina (20 RPM, no auth) with fallback to OpenSERP (requires OPENSERP_API_KEY). For comprehensive research, prefer queries (plural) with 2-4 varied angles over a single query for broader coverage.",
-    promptSnippet:
       "Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage.",
     parameters: Type.Object({
-      query: Type.Optional(Type.String({ description: "Single search query" })),
+      query: Type.String({ description: "Single search query" }),
       queries: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Multiple queries for broader coverage (preferred)",
+          description: "Multiple search queries for comprehensive coverage (2-4 recommended)",
         }),
       ),
     }),
-    async execute(_toolCallId, params, signal) {
-      const queryList =
-        params.queries && params.queries.length > 0
-          ? params.queries
-          : params.query
-            ? [params.query]
-            : [];
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      const queries: string[] = params.queries?.length ? params.queries : [params.query];
+      const results = await Promise.all(queries.map((q) => searchOne(q, signal)));
 
-      if (queryList.length === 0) {
-        return {
-          content: [{ type: "text", text: "No query provided." }],
-          details: { error: "no_query" },
-        };
-      }
-
-      const results: string[] = [];
-      for (const q of queryList) {
-        try {
-          const r = await doSearch(q, signal);
-          results.push(`## Query: "${q}"\n\n${r}`);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          results.push(`## Query: "${q}"\n\nError: ${msg}`);
-        }
-      }
+      const text = results
+        .map((r, i) =>
+          queries.length > 1 ? `## Query ${i + 1}: ${queries[i]}\n\n${r.text}` : r.text,
+        )
+        .join("\n\n---\n\n");
 
       return {
-        content: [{ type: "text", text: results.join("\n\n---\n\n") }],
-        details: { queryCount: queryList.length },
+        content: [{ type: "text", text }],
+        details: { queries, backends: results.map((r) => r.backend) },
       };
     },
   });
 
   pi.registerTool({
-    name: "fetch_content",
-    label: "Fetch Content",
+    name: "web_fetch",
+    label: "Web Fetch",
     description:
-      "Extract readable content from URL(s) as Markdown. Fallback: Jina Reader (20 RPM) → markdown.new (500 RPD) → crawl4ai. Supports YouTube, GitHub repos, and local video files via Jina Reader.",
-    promptSnippet:
-      "Fetch readable content from URL(s) as Markdown.",
+      "Fetch a single URL and return its content as Markdown. Use for reading a specific page the user gave or that search results pointed to.",
     parameters: Type.Object({
-      url: Type.Optional(Type.String({ description: "Single URL to fetch" })),
-      urls: Type.Optional(
-        Type.Array(Type.String(), { description: "Multiple URLs to fetch" }),
-      ),
+      url: Type.String({ description: "Absolute URL to fetch" }),
     }),
-    async execute(_toolCallId, params, signal) {
-      const urlList =
-        params.urls && params.urls.length > 0
-          ? params.urls
-          : params.url
-            ? [params.url]
-            : [];
-
-      if (urlList.length === 0) {
-        return {
-          content: [{ type: "text", text: "No URL provided." }],
-          details: { error: "no_url" },
-        };
-      }
-
-      const results: string[] = [];
-      for (const url of urlList) {
-        try {
-          results.push(await doFetch(url, signal));
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          results.push(`Error fetching ${url}: ${msg}`);
-        }
-      }
-
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      const { text, backend } = await fetchOne(params.url, signal);
       return {
-        content: [{ type: "text", text: results.join("\n\n---\n\n") }],
-        details: { urlCount: urlList.length },
+        content: [{ type: "text", text }],
+        details: { url: params.url, backend },
       };
     },
   });
-};
+}
