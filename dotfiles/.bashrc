@@ -4,6 +4,7 @@ case $- in
 esac
 
 [ -f ~/.config/bash/bashrc ] && . ~/.config/bash/bashrc
+[ -f ~/.secrets.sh ] && . ~/.secrets.sh
 
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$HOME/go/bin:$PATH"
