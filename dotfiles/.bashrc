@@ -5,6 +5,13 @@ esac
 
 [ -f ~/.config/bash/bashrc ] && . ~/.config/bash/bashrc
 
+export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/go/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.bun/bin:$PATH"
+export PATH="$HOME/.local/share/pnpm:$PATH"
+. "$HOME/.vite-plus/env"
+
 # keep-sorted start
 alias agent="cursor-agent"
 alias c2p="code2prompt"
