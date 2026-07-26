@@ -9,7 +9,6 @@
   "quietStartup": false,
   "enabledModels": ["**"],
   "packages": [
-    "npm:@gotgenes/pi-permission-system",
     "npm:@entelligentsia/pi-claude-compat",
     "https://github.com/DietrichGebert/ponytail",
     "https://github.com/arpagon/pi-rewind",
