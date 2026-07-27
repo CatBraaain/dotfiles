@@ -9,17 +9,17 @@ setup:
 
 [linux]
 apply:
-  bash pre-chezmoi.sh
+  bun pre-chezmoi.ts
   chezmoi apply -c chezmoi.yaml --force
 
 [linux]
 managed:
-  bash pre-chezmoi.sh
+  bun pre-chezmoi.ts
   chezmoi managed -c chezmoi.yaml
 
 [linux]
 diff:
-  bash pre-chezmoi.sh
+  bun pre-chezmoi.ts
   chezmoi diff -c chezmoi.yaml
 
 [linux]
@@ -38,17 +38,17 @@ setup:
 
 [windows]
 apply:
-  & "C:/Program Files/Git/bin/bash.exe" pre-chezmoi.sh
+  bun pre-chezmoi.ts
   chezmoi apply -c chezmoi.yaml --force
 
 [windows]
 diff:
-  & "C:/Program Files/Git/bin/bash.exe" pre-chezmoi.sh
+  bun pre-chezmoi.ts
   chezmoi diff -c chezmoi.yaml
 
 [windows]
 managed:
-  & "C:/Program Files/Git/bin/bash.exe" pre-chezmoi.sh
+  bun pre-chezmoi.ts
   chezmoi managed -c chezmoi.yaml
 
 [windows]

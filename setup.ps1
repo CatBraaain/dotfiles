@@ -1,6 +1,6 @@
 winget install Microsoft.PowerShell --source winget
 & pwsh -c {
-    winget install twpayne.chezmoi Git.Git gerardog.gsudo Casey.Just --source winget
+    winget install twpayne.chezmoi Git.Git gerardog.gsudo Casey.Just Oven-sh.Bun --source winget
     Set-ExecutionPolicy -Scope CurrentUser Bypass -Force
     if (-not (Test-Path C:/Projects/dotfiles)) {
         git clone https://github.com/CatBraaain/dotfiles.git C:\Projects\dotfiles
