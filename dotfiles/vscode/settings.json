@@ -503,6 +503,7 @@
   "powershell.powerShellAdditionalExePaths": {
     "pwsh": "~/.nix-profile/bin/pwsh"
   },
+  "powershell.promptToUpdatePowerShell": false,
   "powershell.scriptAnalysis.enable": false,
   "prettier.embeddedLanguageFormatting": "auto",
   "prettier.resolveGlobalModules": true,
