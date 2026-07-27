@@ -38,17 +38,17 @@ setup:
 
 [windows]
 apply:
-  pwsh pre-chezmoi.ps1
+  & "C:/Program Files/Git/bin/bash.exe" pre-chezmoi.sh
   chezmoi apply -c chezmoi.yaml --force
 
 [windows]
 diff:
-  pwsh pre-chezmoi.ps1
+  & "C:/Program Files/Git/bin/bash.exe" pre-chezmoi.sh
   chezmoi diff -c chezmoi.yaml
 
 [windows]
 managed:
-  pwsh pre-chezmoi.ps1
+  & "C:/Program Files/Git/bin/bash.exe" pre-chezmoi.sh
   chezmoi managed -c chezmoi.yaml
 
 [windows]
