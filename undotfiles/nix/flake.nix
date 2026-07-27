@@ -64,6 +64,7 @@
             pnpm
             powershell
             ripgrep
+            rtk
             socat # bash-sandbox
             tokei
             tree-sitter
