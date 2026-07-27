@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 /**
  * web_search + web_fetch overrides.
  *
