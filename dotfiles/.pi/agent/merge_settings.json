@@ -1,8 +1,6 @@
 {
   "lastChangelogVersion": "0.80.6",
   "theme": "dark",
-  "defaultProvider": "commandcode",
-  "defaultModel": "deepseek/deepseek-v4-pro",
   "defaultThinkingLevel": "high",
   "externalEditor": "code --wait",
   "hideThinkingBlock": true,
