@@ -192,15 +192,38 @@ async function searchOne(query: string, signal?: AbortSignal): Promise<SearchRes
   throw new Error(`Search failed for "${query}": all backends unavailable`);
 }
 
-async function fetchOne(url: string, signal?: AbortSignal): Promise<SearchResult> {
+// Cap fetch output so the TUI stays readable. Keeps first N lines, truncates
+// long single lines. Full content goes into details for manual expansion.
+function trimFetchContent(text: string, maxLines = 50, maxLineChars = 500): string {
+  const lines = text
+    .split("\n")
+    .map((l) => (l.length > maxLineChars ? `${l.slice(0, maxLineChars)}…` : l));
+  const trimmed = lines.slice(0, maxLines).join("\n");
+  return lines.length > maxLines ? `${trimmed}\n\n…(truncated)` : trimmed;
+}
+
+async function fetchOne(
+  url: string,
+  signal?: AbortSignal,
+): Promise<SearchResult & { rawText: string }> {
   const jina = await jinaReader(url, signal);
-  if (jina) return { text: jina, backend: "jina-reader" };
+  if (jina) return { text: trimFetchContent(jina), rawText: jina, backend: "jina-reader" };
 
   const md = await mdDhrWtf(url, signal);
-  if (md) return { text: `*(via md.dhr.wtf)*\n\n${md}`, backend: "md.dhr.wtf" };
+  if (md)
+    return {
+      text: `*(via md.dhr.wtf)*\n\n${trimFetchContent(md)}`,
+      rawText: md,
+      backend: "md.dhr.wtf",
+    };
 
   const cr = await crawl4aiFetch(url, signal);
-  if (cr) return { text: `*(via crawl4ai)*\n\n${cr}`, backend: "crawl4ai" };
+  if (cr)
+    return {
+      text: `*(via crawl4ai)*\n\n${trimFetchContent(cr)}`,
+      rawText: cr,
+      backend: "crawl4ai",
+    };
 
   throw new Error(`Fetch failed for ${url}: all backends unavailable`);
 }
@@ -245,10 +268,10 @@ export default function (pi: ExtensionAPI) {
       url: Type.String({ description: "Absolute URL to fetch" }),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
-      const { text, backend } = await fetchOne(params.url, signal);
+      const { text, rawText, backend } = await fetchOne(params.url, signal);
       return {
         content: [{ type: "text", text }],
-        details: { url: params.url, backend },
+        details: { url: params.url, backend, rawContent: rawText },
       };
     },
   });
