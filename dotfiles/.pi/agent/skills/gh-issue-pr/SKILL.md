@@ -1,10 +1,7 @@
 ---
-name: gh-cli
+name: gh-issue-pr
 description: >-
-  `gh` CLI で GitHub の Issue や PR(Pull Request)を作成する。作成前に必ず
-  リポジトリのコントリビューション方針とテンプレートを確認・評価する。
-  ユーザーが Issue や PR を「立てて」「作成」「open」「create」「submit」
-  「file」するよう依頼した場合は常に使用する。
+  Use this skill whenever the user wants to create/edit Github Issue/PR.
 ---
 
 # GitHub CLI (gh)
