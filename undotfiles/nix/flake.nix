@@ -58,6 +58,7 @@
             mise
             nixfmt
             nodejs
+            noto-fonts-cjk-sans
             oxfmt
             oxlint
             pnpm
