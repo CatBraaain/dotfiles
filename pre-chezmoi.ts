@@ -48,7 +48,7 @@ for await (const entry of new Bun.Glob("dist/**/merge_*.json").scan({ dot: true 
 {{-
   mergeOverwrite
     ((or .chezmoi.stdin "{}") | fromJson)
-    (fromJson \`
+    (fromJsonc \`
 ${content}
 \`)
   | toPrettyJson
