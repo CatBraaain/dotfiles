@@ -9,3 +9,7 @@ windows-terminal
 .secrets.sh.sample
 .wslconfig
 {{- end }}
+
+{{- if eq .chezmoi.os "windows" }}
+.pi
+{{- end }}
