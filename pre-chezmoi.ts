@@ -52,6 +52,7 @@ for await (const entry of new Bun.Glob("dist/**/merge_*.json").scan({ dot: true 
 ${content}
 \`)
   | toPrettyJson
+  | println
 -}}`;
   await writeFile(modifyFile, template);
   await rm(entry);
