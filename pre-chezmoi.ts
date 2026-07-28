@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, rm, rename, mkdir } from "node:fs/promises";
+import { readFile, writeFile, rm, rename, mkdir, lstat } from "node:fs/promises";
 import { join, dirname } from "node:path";
 
 const pathMaps =
@@ -68,5 +68,17 @@ dotEntries.sort((a, b) => b.split("/").length - a.split("/").length);
 for (const entry of dotEntries) {
   const name = entry.split("/").pop();
   const dstPath = join(dirname(entry), `dot_${name.slice(1)}`);
+  await rename(entry, dstPath);
+}
+
+// directory xxx.exact -> exact_xxx (run after dot-rename so .xxx.exact -> exact_dot_xxx)
+const exactEntries: string[] = [];
+for await (const entry of new Bun.Glob("dist/**/*.exact").scan({ dot: true, onlyFiles: false })) {
+  if ((await lstat(entry)).isDirectory()) exactEntries.push(entry);
+}
+exactEntries.sort((a, b) => b.split("/").length - a.split("/").length);
+for (const entry of exactEntries) {
+  const name = entry.split("/").pop()!;
+  const dstPath = join(dirname(entry), `exact_${name.replace(/\.exact$/, "")}`);
   await rename(entry, dstPath);
 }
