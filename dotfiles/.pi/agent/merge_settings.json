@@ -32,6 +32,13 @@
       "skills": ["skills/find-skills"],
       "prompts": [],
       "themes": []
+    },
+    {
+      "source": "https://github.com/github/awesome-copilot",
+      "extensions": [],
+      "skills": ["skills/make-repo-contribution"],
+      "prompts": [],
+      "themes": []
     }
   ]
 }
