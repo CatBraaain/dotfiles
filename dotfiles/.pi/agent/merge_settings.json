@@ -25,6 +25,13 @@
       "skills": ["skills/**", "!skills/deprecated/**", "!skills/personal/**"],
       "prompts": [],
       "themes": []
+    },
+    {
+      "source": "https://github.com/vercel-labs/skills",
+      "extensions": [],
+      "skills": ["skills/find-skills"],
+      "prompts": [],
+      "themes": []
     }
   ]
 }
