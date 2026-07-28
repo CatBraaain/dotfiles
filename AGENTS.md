@@ -21,3 +21,9 @@
 - `just nix` / `just vscode` / `just winconfig` 等のシステム変更を伴う just タスク全般
 
 変更はファイル編集のみで完結させ、反映はユーザーに任せること。
+
+## TypeScript のテスト
+
+TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。
+
+このリポジトリでは Bun の auto-install で依存を解決する。通常のテストランナー経由だと auto-install が動かないため、Vitest / Jest などは使えない。代わりに、テストスクリプト側で `describe` / `it` 相当の関数を内蔵する形で書くこと。
