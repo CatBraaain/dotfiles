@@ -1,0 +1,9 @@
+rules:
+  - provider: zai
+    model: glm-5.2
+    # z.ai peak hours 14:00-18:00 (UTC+8) => 05:00-09:00 UTC
+    when: 'h=$(date -u +%H); ! { [ "$h" -ge 05 ] && [ "$h" -lt 9 ]; }'
+  - provider: zai
+    model: glm-5.1
+  - provider: xiaomi
+    model: mimo-v2.5-pro

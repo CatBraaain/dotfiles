@@ -1,0 +1,106 @@
+# model-router
+
+pi coding agent 拡張。条件に応じてモデルを動的に切り替え、429 (rate limit) 時は
+cooldown 付きで下位ルールへ fallback する汎用ルーター。
+
+## 目的
+
+- z.ai の busytime（peak hours）など、時間帯でモデルの消費倍率・可用性が変わる環境で
+  モデルを自動選択する
+- 429 時は retry せず、該当モデルを cooldown に入れて次候補へ即 fallback する
+- 非 429 の retry は pi 側の provider retry 設定に委譲する（本拡張は 429 のみケア）
+
+## 配置
+
+| 種別 | パス（source）                                             | 展開先（chezmoi）                                      |
+| ---- | ---------------------------------------------------------- | ------------------------------------------------------ |
+| 拡張 | `dotfiles/.pi/agent/extensions.exact/model-router/index.ts` | `~/.pi/agent/extensions/model-router/index.ts`          |
+| 設定 | `dotfiles/.pi/agent/extensions.exact/model-router/config.yaml` | `~/.pi/agent/extensions/model-router/config.yaml`    |
+
+設定は拡張と同ディレクトリの `config.yaml`。読めなければ空ルールで安全に動作する。
+
+## 設定スキーマ
+
+```yaml
+rules:
+  - provider: string  # 必須
+    model: string     # 必須
+    when: string      # 任意。bash コマンド。exit 0 = true / 非 0 = false。省略時は常に true
+```
+
+記述例:
+
+```yaml
+rules:
+  - provider: zai
+    model: glm-5.2
+    # z.ai peak hours 14:00-18:00 (UTC+8) => 06:00-10:00 UTC
+    when: 'h=$(date -u +%H); [ "$h" -ge 06 ] && [ "$h" -lt 10 ]'
+  - provider: zai
+    model: glm-5.1
+```
+
+`rules: []` でルーティング無効化。
+
+## 評価ルール
+
+1. 配列を上から順に試す
+2. `when` が true（省略時は常に true）であること
+3. `modelRegistry` に存在するモデルのみ候補（無ければスキップ）
+4. cooldown 中のモデルは候補から除外
+5. 最初に一致した候補を採用し、現状と異なれば切替（`ui.confirm`）
+6. 全候補が外れたら切替なし
+
+## トリガー
+
+| イベント                  | 役割                                              |
+| ------------------------- | ------------------------------------------------- |
+| `session_start`           | 設定ロード・状態リセット・ルール評価（`/new`・`/reload` 両方でリセット） |
+| `before_agent_start`      | プロンプト直前に再評価（busytime 抜け等）                           |
+| `after_provider_response` | 429 検知・cooldown 記録・次候補切替（再実行を予約）                 |
+| `agent_settled`           | 予約された失敗ターンの自動再実行                                    |
+| `model_select`            | 手動選択フラグの管理                                                |
+
+## 429 と fallback
+
+- 429 は retry しない。そのモデルを cooldown 対象にする
+- cooldown 期間は優先順: `Retry-After` ヘッダ → 取れなければ **30 分**
+- 次候補へ即 fallback（auto 時は `ui.notify` のみ、confirm なし）
+- fallback 切替後、失敗したターンを `agent_settled` で自動再実行
+- 全候補が失敗したらエラー表示
+
+> `after_provider_response` は body stream 消費前に発火するため body からの待機時間パースは不可。`Retry-After` ヘッダのみ対応（`ponytail:`）。
+
+## 手動選択
+
+- `model_select` の `source` が `"set"` / `"cycle"` → 手動選択扱い
+- 本拡張自身の `setModel`（`switching`）と `source === "restore"` は手動扱いしない
+- confirm をキャンセルした場合も現状維持＋手動扱い
+- 手動選択中はルールによる自動切替を停止（429 時のみ fallback を confirm 提案）
+- 手動フラグは `/new`・`/reload` いずれでもリセットされる
+
+## UI 方針
+
+| 状況                       | UI                              |
+| -------------------------- | ------------------------------- |
+| 通常の自動切替             | `ui.confirm` 必須               |
+| 上位モデルへの復帰         | `ui.confirm` 必須               |
+| rate limit による auto fallback | `ui.notify`（confirm なし） |
+| 手動選択中の rate limit    | `ui.confirm` で fallback 提案   |
+| confirm キャンセル         | 現状維持＋手動扱い              |
+| 全候補失敗                 | エラー表示                      |
+
+## 状態の保持
+
+cooldown・手動フラグはセッションメモリのみ。プロセス再起動・セッションまたぎ
+（`/new`）・`/reload`（設定再読み込み）いずれでもリセットされる。
+
+## 実装メモ
+
+- `when` コマンドは 5 秒でタイムアウト（`WHEN_TIMEOUT_MS`）。exit code を返すコマンドを指定すること
+- 再送は直前のプロンプトと同一の場合、連続送信を抑制する（重複防止）
+- cooldown は参照時に期限切れエントリを都度削除する（stale な entry が候補を永続ブロックしない）
+
+## 未確定（後回し）
+
+- 具体的な `rules` 中身（ユーザーが実運用で詰める）
