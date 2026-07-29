@@ -1,7 +1,8 @@
-import { $ } from "bun";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, rm, rename, mkdir, lstat } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { readFile, writeFile, rm, rename, mkdir, lstat, cp } from "node:fs/promises";
+import { join, dirname, basename } from "node:path";
+
+const pathDepth = (p: string) => p.split(/[/\\]/).length;
 
 const pathMaps =
   process.platform === "win32"
@@ -27,8 +28,7 @@ const pathMaps =
       };
 
 await rm("dist", { recursive: true, force: true });
-await mkdir("dist", { recursive: true });
-await $`cp -a dotfiles/. dist/`;
+await cp("dotfiles", "dist", { recursive: true });
 
 for (const [src, dst] of Object.entries(pathMaps)) {
   const srcPath = join("dist", src);
@@ -43,7 +43,7 @@ for (const [src, dst] of Object.entries(pathMaps)) {
 // merge_*.json -> modify_*.json (chezmoi modify template)
 for await (const entry of new Bun.Glob("dist/**/merge_*.json").scan({ dot: true })) {
   const content = await readFile(entry, "utf-8");
-  const modifyFile = entry.replace(/merge_([^/]+)$/, "modify_$1");
+  const modifyFile = join(dirname(entry), basename(entry).replace(/^merge_/, "modify_"));
   const template = `{{- /* chezmoi:modify-template */ -}}
 {{-
   mergeOverwrite
@@ -64,9 +64,9 @@ for await (const entry of new Bun.Glob("dist/**/.*").scan({ dot: true, onlyFiles
   if (entry.includes(".chezmoi")) continue;
   dotEntries.push(entry);
 }
-dotEntries.sort((a, b) => b.split("/").length - a.split("/").length);
+dotEntries.sort((a, b) => pathDepth(b) - pathDepth(a));
 for (const entry of dotEntries) {
-  const name = entry.split("/").pop();
+  const name = basename(entry);
   const dstPath = join(dirname(entry), `dot_${name.slice(1)}`);
   await rename(entry, dstPath);
 }
@@ -76,9 +76,9 @@ const exactEntries: string[] = [];
 for await (const entry of new Bun.Glob("dist/**/*.exact").scan({ dot: true, onlyFiles: false })) {
   if ((await lstat(entry)).isDirectory()) exactEntries.push(entry);
 }
-exactEntries.sort((a, b) => b.split("/").length - a.split("/").length);
+exactEntries.sort((a, b) => pathDepth(b) - pathDepth(a));
 for (const entry of exactEntries) {
-  const name = entry.split("/").pop()!;
+  const name = basename(entry);
   const dstPath = join(dirname(entry), `exact_${name.replace(/\.exact$/, "")}`);
   await rename(entry, dstPath);
 }
