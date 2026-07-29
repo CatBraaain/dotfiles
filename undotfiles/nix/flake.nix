@@ -24,6 +24,17 @@
         paths = (
           with pkgs;
           [
+            # keep-sorted start sticky_comments=no # LLM-only CLI tools
+            ast-grep
+            dasel
+            difftastic
+            hyperfine
+            jq
+            sd
+            shellcheck
+            shfmt
+            watchexec
+            # keep-sorted end
             # keep-sorted start by_regex=\s*#?\s*(.*) sticky_comments=no  prefix_order=llm-agents,
             llm-agents.apm
             llm-agents.cc-switch-cli
