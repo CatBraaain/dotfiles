@@ -13,7 +13,7 @@
 ## Abbreviations
 
 - `kwsk`: 詳しく教えて
-- `is nani`: 詳しく教えて
+- `is nani`: ~は何?
 
 ## 技術スタック
 
