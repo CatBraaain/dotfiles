@@ -555,6 +555,7 @@
   "svelte.enable-ts-plugin": true,
   "tailwindCSS.classFunctions": ["clsx", "cva", "tw", "cx", "cn", "tv", "cnMerge"],
   "task.allowAutomaticTasks": "on",
+  "terminal.integrated.defaultLocation": "editor",
   // "terminal.integrated.defaultProfile.windows": "Command Prompt",
   // "terminal.integrated.defaultProfile.windows": "Git Bash",
   "terminal.integrated.defaultProfile.windows": "Ubuntu (WSL)",
