@@ -1,9 +1,9 @@
 {
-  "lastChangelogVersion": "0.80.6",
   "theme": "dark",
   // "defaultModel": "glm-5.1",
   // "defaultProvider": "zai",
   "defaultThinkingLevel": "high",
+  "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
   "hideThinkingBlock": true,
   "quietStartup": false,
