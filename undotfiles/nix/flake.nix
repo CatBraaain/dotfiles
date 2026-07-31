@@ -62,6 +62,7 @@
             git-cliff
             gnumake
             go
+            google-chrome
             gopls
             just
             just-lsp
