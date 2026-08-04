@@ -1,10 +1,10 @@
 # annotation.plan.md
 
-ソースコードに行頭コメント `AI-NOTE:` で注釈を書くと、pi への送信時に自動収集・削除してプロンプトに前置する pi extension を実装する計画。
+ソースコードに行頭コメント `AGENT:` で注釈を書くと、pi への送信時に自動収集・削除してプロンプトに前置する pi extension を実装する計画。
 
 ## 目的
 
-diff viewer や専用 GUI を導入せず、普段のコードリーディングの延長でフィードバックを書けるようにする。エディタで pi の成果物を読みながら気になった行に直接 `AI-NOTE:` を書き、pi への送信時にそれを**ファイル・行・周辺コード付きの構造化テキスト**に変換して自動で送る。
+diff viewer や専用 GUI を導入せず、普段のコードリーディングの延長でフィードバックを書けるようにする。エディタで pi の成果物を読みながら気になった行に直接 `AGENT:` を書き、pi への送信時にそれを**ファイル・行・周辺コード付きの構造化テキスト**に変換して自動で送る。
 
 レビュー（「ここを直して」）だけでなく、ソースへの一般的な言及（「これは参照」「ここ疑問」）にも使える汎用な注釈チャネル。
 
@@ -12,9 +12,9 @@ diff viewer や専用 GUI を導入せず、普段のコードリーディング
 
 ### マーカー
 
-- キーワード: `AI-NOTE:`（pi 固有でなく、任意の agent で再利用可能な汎用名）
+- キーワード: `AGENT:`（pi 固有でなく、任意の agent で再利用可能な汎用名）
 - **行頭コメントのみ許可**。インライン（行末）注釈は無視
-  - 行頭コメント = 行の先頭（インデント許容）が言語のコメント記号で始まり、その直後に `AI-NOTE:` が続く
+  - 行頭コメント = 行の先頭（インデント許容）が言語のコメント記号で始まり、その直後に `AGENT:` が続く
   - 対象記号: `//` `#` `--` `;` `*` `/*` `<!--` 等（正規表現で判定）
   - インラインを許すと「行全体削除」で実コードまで消えるため禁止
 
@@ -45,7 +45,7 @@ diff viewer や専用 GUI を導入せず、普段のコードリーディング
 
 | 役割 | API | 内容 |
 |------|-----|------|
-| 検出 | `pi.on("input")` | コマンド/スキル以外のユーザー送信時に `git grep -n "AI-NOTE:"` |
+| 検出 | `pi.on("input")` | コマンド/スキル以外のユーザー送信時に `git grep -n "AGENT:"` |
 | 判定 | 正規表現 | 行頭コメントのみ抽出。インラインは除外 |
 | 確認 | `ctx.ui.confirm` / `ctx.ui.select` | プレビュー付きで送信/キャンナル選択 |
 | 削除 | `node:fs/promises` | マーカー行を行番号降順に削除 |
@@ -60,7 +60,7 @@ diff viewer や専用 GUI を導入せず、普段のコードリーディング
 
 ### チェックポイント整合
 
-git-checkpoint extension は `turn_start` で `git stash create` する。`input` → `before_agent_start` → … → `turn_start` の順なので、**注釈削除は stash 作成より前に完了**する。チェックポイントに `AI-NOTE:` 行は混入しない。
+git-checkpoint extension は `turn_start` で `git stash create` する。`input` → `before_agent_start` → … → `turn_start` の順なので、**注釈削除は stash 作成より前に完了**する。チェックポイントに `AGENT:` 行は混入しない。
 
 ## 状態管理
 
@@ -69,7 +69,7 @@ git-checkpoint extension は `turn_start` で `git stash create` する。`input
 
 ## 決定事項
 
-- マーカー: `AI-NOTE:`（行頭コメントのみ）
+- マーカー: `AGENT:`（行頭コメントのみ）
 - 起点: `input` イベント・自動検出（コマンド不要）
 - 除外: 非 interactive 送信・`/` 始まりの入力・ヒット0件
 - 確認: transform 前にダイアログ（プレビュー付き・送信/キャンセル）
@@ -81,7 +81,7 @@ git-checkpoint extension は `turn_start` で `git stash create` する。`input
 
 ## タスク
 
-- [ ] マーカー検出（`git grep -n "AI-NOTE:"` ＋ 行頭コメント正規表現でフィルタ）
+- [ ] マーカー検出（`git grep -n "AGENT:"` ＋ 行頭コメント正規表現でフィルタ）
 - [ ] 行削除ロジック（ファイルごとに行番号降順で削除・書き戻し）
 - [ ] 注釈の Markdown 構造化（`path:line` ＋ 周辺コード ＋ 注釈本文）
 - [ ] `input` イベントハンドラ（除外判定 → 検出 → 確認ダイアログ → transform/continue）
@@ -97,7 +97,7 @@ git-checkpoint extension は `turn_start` で `git stash create` する。`input
   - 「編集して送信」を入れるなら `ctx.ui.editor` で注釈を編集できると更强力
 - **プレビュー表示**（実装時に決定）: confirm の message 内 vs `ctx.ui.setWidget` で別表示 vs `ctx.ui.notify`。注釈が多いと confirm message が膨らむので件数でトリム要
 - **周辺コードの幅**: 注釈行の前後何行を Markdown に含めるか（2〜3行想定・実装時調整）
-- **untracked ファイル**: `git grep` は tracked のみ。新規ファイル中の `AI-NOTE:` は拾えない。必要なら `rg --no-ignore-vcs` 等に切り替え（YAGNI・初版は tracked のみ）
+- **untracked ファイル**: `git grep` は tracked のみ。新規ファイル中の `AGENT:` は拾えない。必要なら `rg --no-ignore-vcs` 等に切り替え（YAGNI・初版は tracked のみ）
 - **複数ファイル跨ぎ**: 1つの transform に全件まとめて前置する
 - pi の input イベントは skill/template 展開の**前**に走る。`/` 始まりで弾けば安全
 - 検出〜削除〜transform は input ハンドラ内で同期的に完結。ユーザー送信の流れをブロックするが、確認ダイアログで待機するので体感問題なし
