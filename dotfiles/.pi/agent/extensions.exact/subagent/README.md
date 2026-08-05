@@ -43,17 +43,11 @@ Use the subagent tool with task: "Find all authentication code"
 
 Single mode only.
 
-| Parameter | Type | CLI flag | Purpose |
-|-----------|------|----------|---------|
-| `task` | string (required) | — | Task delegated to the child |
 | `model` | string? | `--model` | Model override |
-| `tools` | string? | `--tools` | Comma-separated tool allowlist |
 | `cwd` | string? | — | Working directory (defaults to the parent's `cwd`) |
 
-The child process is launched as:
-
 ```
-pi --mode json -p --no-session [--model X] [--tools a,b]
+pi --mode json -p --no-session [--model X]
 ```
 
 with `Task: <task>` as the final argument.

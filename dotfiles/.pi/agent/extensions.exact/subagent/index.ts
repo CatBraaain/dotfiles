@@ -6,8 +6,8 @@
  * final text is returned to the parent. Cancellation propagates: SIGTERM,
  * then SIGKILL after 5s.
  *
- * Single mode only. The child keeps the parent's skill auto-discovery; only
- * model / tools overrides are supported.
+ * Single mode only. The child keeps the parent's skill auto-discovery; model
+ * override is supported.
  */
 
 import { spawn } from "node:child_process";
@@ -40,10 +40,9 @@ export function formatToolCall(
   return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
 }
 
-/** Per-child options applied to the spawned task. */
+/** Model override applied to the spawned task. */
 export interface TaskConfig {
   model?: string;
-  tools?: string[];
 }
 
 interface SingleResult {
@@ -139,7 +138,6 @@ async function runSingleAgent(
 ): Promise<SingleResult> {
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
   if (config.model) args.push("--model", config.model);
-  if (config.tools && config.tools.length > 0) args.push("--tools", config.tools.join(","));
   args.push(`Task: ${task}`);
 
   const currentResult: SingleResult = {
@@ -239,9 +237,6 @@ const SubagentParams = Type.Object({
   model: Type.Optional(
     Type.String({ description: "Model override passed via --model. Optional." }),
   ),
-  tools: Type.Optional(
-    Type.String({ description: "Comma-separated tool allowlist passed via --tools. Optional." }),
-  ),
   cwd: Type.Optional(
     Type.String({
       description: "Working directory for the child process. Defaults to the parent's cwd.",
@@ -255,19 +250,13 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
     description: [
       "Spawn an isolated child pi process to run a task with its own context window.",
-      "Options: model (--model), tools (--tools). The child keeps the parent's skill auto-discovery.",
+      "Option: model (--model). The child keeps the parent's skill auto-discovery.",
       "Cancellation (Ctrl+C) propagates to kill the child process.",
     ].join(" "),
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const config: TaskConfig = {
-        model: params.model,
-        tools: params.tools
-          ?.split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-      };
+      const config: TaskConfig = { model: params.model };
 
       if (!params.task) {
         return {
