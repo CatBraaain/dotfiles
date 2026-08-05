@@ -602,6 +602,7 @@
   "workbench.editorAssociations": {
     "git-rebase-todo": "gitlens.rebase"
   },
+  "workbench.experimental.modernUI": false,
   "workbench.localHistory.maxFileEntries": 100,
   "workbench.secondarySideBar.defaultVisibility": "hidden",
   "workbench.settings.editor": "json",
