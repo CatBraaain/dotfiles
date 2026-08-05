@@ -1741,18 +1741,21 @@
   },
   {
     "key": "tab",
-    "command": "editor.action.inlineSuggest.acceptNextLine",
-    "when": "inlineSuggestionVisible && !editorReadonly"
+    // order: 1
+    "command": "insertBestCompletion",
+    "when": "atEndOfWord && textInputFocus && !hasOtherSuggestions && !inSnippetMode && !suggestWidgetVisible && config.editor.tabCompletion == 'on' && !editorHasSelection"
   },
   {
     "key": "tab",
+    // order: 2
     "command": "editor.action.inlineSuggest.acceptNextWord",
     "when": "inlineSuggestionVisible && !editorReadonly"
   },
   {
     "key": "tab",
-    "command": "insertBestCompletion",
-    "when": "atEndOfWord && textInputFocus && !hasOtherSuggestions && !inSnippetMode && !suggestWidgetVisible && config.editor.tabCompletion == 'on' && !editorHasSelection"
+    // order: 3
+    "command": "editor.action.inlineSuggest.acceptNextLine",
+    "when": "inlineSuggestionVisible && !editorReadonly"
   }
   // keep-sorted end
 ]
