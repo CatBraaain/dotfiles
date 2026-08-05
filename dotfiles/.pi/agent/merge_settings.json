@@ -16,14 +16,23 @@
     {
       "source": "https://github.com/anthropics/skills",
       "extensions": [],
-      "skills": ["skills/**", "!skills/brand-guidelines", "!skills/claude-api"],
+      "skills": ["skills/doc-coauthoring", "skills/skill-creator", "skills/pdf", "skills/xlsx"],
       "prompts": [],
       "themes": []
     },
     {
       "source": "https://github.com/mattpocock/skills",
       "extensions": [],
-      "skills": ["skills/**", "!skills/deprecated/**", "!skills/personal/**"],
+      "skills": [
+        "skills/*/grill-me",
+        "skills/*/grilling",
+        "skills/*/batch-grill-me",
+        "skills/*/code-review",
+        "skills/*/prototype",
+        "skills/*/diagnosing-bugs",
+        "skills/*/research",
+        "skills/*/tdd"
+      ],
       "prompts": [],
       "themes": []
     },
