@@ -1314,12 +1314,14 @@
   },
   {
     "key": "ctrl+shift+space",
-    "command": "editor.action.showDefinitionPreviewHover"
+    // order: 1
+    "command": "editor.action.triggerParameterHints",
+    "when": "editorHasSignatureHelpProvider && editorTextFocus"
   },
   {
     "key": "ctrl+shift+space",
-    "command": "editor.action.triggerParameterHints",
-    "when": "editorHasSignatureHelpProvider && editorTextFocus"
+    // order: 2
+    "command": "editor.action.showDefinitionPreviewHover"
   },
   {
     "key": "ctrl+shift+tab",
