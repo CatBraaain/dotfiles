@@ -16,7 +16,7 @@
     {
       "source": "https://github.com/anthropics/skills",
       "extensions": [],
-      "skills": ["skills/doc-coauthoring", "skills/skill-creator", "skills/pdf", "skills/xlsx"],
+      "skills": ["skills/doc-coauthoring", "skills/skill-creator"],
       "prompts": [],
       "themes": []
     },
