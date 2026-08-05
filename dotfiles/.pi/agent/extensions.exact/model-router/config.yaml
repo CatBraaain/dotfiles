@@ -1,9 +1,13 @@
 rules:
   - provider: zai
     model: glm-5.2
-    # z.ai peak hours 14:00-18:00 (UTC+8) => 05:00-09:00 UTC
-    when: 'h=$(date -u +%H); ! { [ "$h" -ge 05 ] && [ "$h" -lt 9 ]; }'
-  - provider: zai
-    model: glm-5.1
-  - provider: xiaomi
-    model: mimo-v2.5-pro
+    # z.ai peak hours 14:00-18:00 (UTC+8) => 06:00-10:00 UTC
+    when: 'h=$(date -u +%H); ! { [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }'
+  - provider: commandcode
+    model: gpt-5.6-luna
+  - provider: commandcode
+    model: xiaomi/mimo-v2.5-pro
+  - provider: commandcode
+    model: deepseek/deepseek-v4-pro
+  - provider: deepseek
+    model: deepseek-v4-pro
