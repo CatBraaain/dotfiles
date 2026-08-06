@@ -231,6 +231,7 @@
   // "debug.openDebug": "openOnSessionStart",
   "editor.acceptSuggestionOnCommitCharacter": false,
   "editor.acceptSuggestionOnEnter": "off",
+  "editor.accessibilitySupport": "off",
   "editor.codeActionsOnSave": {
     // "source.fixAll.biome": "explicit",
     // "source.fixAll.eslint": "explicit",
