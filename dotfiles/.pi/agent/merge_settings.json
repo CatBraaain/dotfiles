@@ -49,6 +49,13 @@
       "skills": ["skills/make-repo-contribution"],
       "prompts": [],
       "themes": []
+    },
+    {
+      "extensions": [],
+      "prompts": [],
+      "skills": ["skills/officecli"],
+      "source": "https://github.com/iOfficeAI/OfficeCLI",
+      "themes": []
     }
   ]
 }

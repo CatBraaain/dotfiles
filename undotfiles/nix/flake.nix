@@ -30,6 +30,7 @@
             difftastic
             hyperfine
             jq
+            officecli
             sd
             shellcheck
             shfmt
