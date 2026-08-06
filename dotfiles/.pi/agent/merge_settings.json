@@ -60,6 +60,13 @@
     {
       "extensions": [],
       "prompts": [],
+      "skills": ["skills/thinking-partner"],
+      "source": "https://github.com/mattnowdev/thinking-partner",
+      "themes": []
+    },
+    {
+      "extensions": [],
+      "prompts": [],
       "skills": [
         "skills/taste-skill",
         "skills/redesign-skill",
