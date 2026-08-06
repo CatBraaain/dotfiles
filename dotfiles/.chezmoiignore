@@ -13,3 +13,5 @@ windows-terminal
 {{- if eq .chezmoi.os "windows" }}
 .pi
 {{- end }}
+
+.pi/agent/extensions/*/index.test.ts
