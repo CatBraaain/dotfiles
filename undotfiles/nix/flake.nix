@@ -31,6 +31,7 @@
             hyperfine
             jq
             officecli
+            pdfcpu
             sd
             shellcheck
             shfmt
