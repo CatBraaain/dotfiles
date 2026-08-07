@@ -339,6 +339,7 @@
     "*.mjs": "${capture}.mjs.map, ${capture}.d.mts",
     "*.mts": "${capture}([_.]*)?.mjs, ${capture}([_.]*)?.mts, ${capture}.*.map",
     "*.s3db": "${capture}.${extname}-*",
+    "*.sample": "${capture}",
     "*.sdb": "${capture}.${extname}-*",
     "*.sqlite": "${capture}.${extname}-*",
     "*.sqlite3": "${capture}.${extname}-*",
