@@ -44,3 +44,7 @@
 
 - **Python**: `ruff format`, `ruff check`, `ty`, `pytest`
 - **JavaScript/TypeScript**: (`vp format` or `oxfmt`), (`vp check` or `oxlint`), `vitest`
+
+## 調査タスク
+
+検索結果の引用を出すときは必ずmarkdown link　の形式で出力する
