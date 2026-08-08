@@ -15,3 +15,4 @@ windows-terminal
 {{- end }}
 
 .pi/agent/extensions/*/index.test.ts
+BEHAVIORS.md
