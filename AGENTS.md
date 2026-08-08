@@ -4,20 +4,38 @@
 
 このリポジトリは dotfiles であり、chezmoi でホームディレクトリへ展開する前提で運用する。
 
-## 編集対象
+## ディレクトリ構成
 
-- このワークスペース内のファイルのみ編集すること。`~/xxx`（ホームディレクトリ配下）を直接読み書き・変更してはいけない。
-- chezmoi が読む sourceDir は `dist/` だが、`dist/` は `pre-chezmoi.ts` が `dotfiles/` から毎回再生成する成果物（gitignore 済み）なので編集しないこと。実体は `dotfiles/` 配下を編集する。
-- chezmoi 管理外の設定は `undotfiles/` 配下。
+```
+~/projects/dotfiles/          （ワークスペースルート）
+├── dotfiles/                 # chezmoi で ~ へ展開する dotfile 群の実体
+├── dist/                     # pre-chezmoi.ts が生成（gitignore、編集不可）
+├── undotfiles/               # chezmoi 管理外（Nix、VSCode 拡張、winconfig 等）
+└── pre-chezmoi.ts            # dotfiles/ → dist/ へ変換コピー
+```
+
+データフロー: `dotfiles/` --(pre-chezmoi.ts)--> `dist/` --(chezmoi apply)--> `~/`
+
+編集はこのワークスペース内のみ。`~/xxx`（ホームディレクトリ配下）を直接読み書き・変更してはいけない。
+
+## `dotfiles/` 内の命名規則
+
+`dotfiles/` は人間が読みやすい素の記法で書き、`pre-chezmoi.ts` が `dist/` へのコピー時に chezmoi 記法へ変換する:
+
+| `dotfiles/` 内 | 変換後（`dist/`） | 意味 |
+|---|---|---|
+| `.xxx` | `dot_xxx` | ドットファイル表現 |
+| `xxx.exact`（ディレクトリ） | `exact_xxx` | 完全一致ディレクトリ（`.xxx.exact` → `exact_dot_xxx`） |
+| `merge_*.json` | `modify_*.json` | 独自: `~` の実ファイルと JSON を深くマージする modify-template |
+
+> **注意**: 相対パス `dotfiles/.pi/agent/skills.exact` は `~/projects/dotfiles/dotfiles/.pi/agent/skills.exact` を指す。ルート直下（`~/projects/dotfiles/.pi/...`）ではない — 同名の `dotfiles/` が二重に現れる点に注意。
 
 ## 実行禁止
 
 以下はユーザーが手動で実行するため、エージェントが勝手に実行してはいけない:
 
-- `chezmoi apply`
-- `chezmoi diff`
-- `chezmoi managed`
-- `just apply` / `just diff` / `just managed`（上記を含むため）
+- `chezmoi apply` / `chezmoi diff` / `chezmoi managed`
+- `just apply` / `just diff` / `just managed`（上記を含む）
 - `just nix` / `just vscode` / `just winconfig` 等のシステム変更を伴う just タスク全般
 
 変更はファイル編集のみで完結させ、反映はユーザーに任せること。
