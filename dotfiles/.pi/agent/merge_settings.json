@@ -29,7 +29,7 @@
         "skills/*/code-review",
         "skills/*/prototype",
         "skills/*/diagnosing-bugs",
-        "skills/*/research",
+        // "skills/*/research",
         "skills/*/tdd"
       ],
       "prompts": [],
