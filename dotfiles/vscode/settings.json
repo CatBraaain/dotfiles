@@ -589,6 +589,7 @@
   "workbench.editor.alwaysShowEditorActions": true,
   "workbench.editor.customLabels.patterns": {
     // "**/*.config.*": "${dirname}/${filename}.${extname}",
+    "**/BEHAVIORS.md": "${filename}.${extname}(${dirname})",
     "**/index.*": "${filename}.${extname}(${dirname})",
     "**/main.*": "${filename}.${extname}(${dirname})",
     "**/mod.rs": "${filename}.${extname}(${dirname})",
