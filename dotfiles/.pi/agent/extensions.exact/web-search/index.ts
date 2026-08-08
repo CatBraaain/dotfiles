@@ -5,7 +5,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
 export const BACKEND_COOLDOWN_MS = 30 * 60 * 1000;
+export const BACKEND_TIMEOUT_MS = 15_000;
+export const SEARCH_RESULT_LIMIT = 10;
 export const __backendFailures = new Map<string, number>();
 
 export const isAvailable = (backend: string) =>
@@ -26,7 +29,10 @@ async function fetchText(
 ): Promise<string> {
   const response = await fetch(url, {
     headers,
-    signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(15_000)]),
+    signal: AbortSignal.any([
+      signal ?? new AbortController().signal,
+      AbortSignal.timeout(BACKEND_TIMEOUT_MS),
+    ]),
   });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.text();
@@ -35,13 +41,12 @@ async function fetchText(
 async function run(command: string, args: string[], signal?: AbortSignal): Promise<string> {
   const { stdout } = await execFileAsync(command, args, {
     signal,
-    timeout: 60_000,
+    timeout: BACKEND_TIMEOUT_MS,
     maxBuffer: 4 * 1024 * 1024,
   });
   return stdout.trim();
 }
 
-// ponytail: openserp 0.8.12 は markdown 出力で --limit を無視して常に10件返すため、実装側で先頭5件に切り詰める。openserp 修正後も5件以下になるだけで害なし。
 function takeFirstEntries(markdown: string, limit: number): string {
   const lines = markdown.split("\n");
   const kept: string[] = [];
@@ -56,22 +61,57 @@ function takeFirstEntries(markdown: string, limit: number): string {
   return kept.join("\n").trimEnd();
 }
 
-async function openserp(engine: string, query: string, signal?: AbortSignal) {
-  const markdown = await run("openserp", ["search", engine, query, "--limit", "5", "--format", "markdown"], signal);
-  return takeFirstEntries(markdown, 5);
+export function openserpError(error: unknown): Error {
+  const stderr = (error as { stderr?: string })?.stderr ?? "";
+  const errorDetail = stderr
+    .split("\n")
+    .findLast((line) => line.startsWith("Error:"))
+    ?.replace(/^Error:\s*/, "")
+    .trim();
+  return new Error(errorDetail ?? (error instanceof Error ? error.message : String(error)));
+}
+
+async function openserp(engine: string, query: string, signal?: AbortSignal, lang?: string) {
+  try {
+    const args = [
+      "search",
+      engine,
+      query,
+      "--limit",
+      String(SEARCH_RESULT_LIMIT),
+      "--format",
+      "markdown",
+    ];
+    if (lang) args.push("--lang", lang);
+    const markdown = await run("openserp", args, signal);
+    return takeFirstEntries(markdown, SEARCH_RESULT_LIMIT);
+  } catch (error) {
+    throw openserpError(error);
+  }
 }
 
 async function searchMarkdownNew(query: string, signal?: AbortSignal) {
-  return fetchText(`https://markdown.new/search/${encodeURIComponent(query)}?n=5`, signal);
+  return fetchText(
+    `https://markdown.new/search/${encodeURIComponent(query)}?n=${SEARCH_RESULT_LIMIT}`,
+    signal,
+  );
 }
+
+export type Attempt =
+  | { readonly backend: string; readonly ok: true }
+  | { readonly backend: string; readonly ok: false; readonly error: string };
 
 export type BackendEntry = readonly [name: string, run: () => Promise<string>];
 
-export function defaultSearchBackends(query: string, signal?: AbortSignal): BackendEntry[] {
+export function defaultSearchBackends(
+  query: string,
+  signal?: AbortSignal,
+  lang?: string,
+): BackendEntry[] {
   return [
-    ["openserp(google)", () => openserp("google", query, signal)],
-    ["openserp(duckduckgo)", () => openserp("duckduckgo", query, signal)],
-    ["openserp(bing)", () => openserp("bing", query, signal)],
+    ["openserp(google)", () => openserp("google", query, signal, lang)],
+    ["openserp(duckduckgo)", () => openserp("duckduckgo", query, signal, lang)],
+    ["openserp(bing)", () => openserp("bing", query, signal, lang)],
     ["markdown.new", () => searchMarkdownNew(query, signal)],
   ];
 }
@@ -79,25 +119,34 @@ export function defaultSearchBackends(query: string, signal?: AbortSignal): Back
 export async function searchOne(
   query: string,
   signal: AbortSignal | undefined,
-  notify: (message: string) => void,
-  backends: BackendEntry[] = defaultSearchBackends(query, signal),
-): Promise<{ text: string; backend: string }> {
-  const errors: string[] = [];
+  backends?: BackendEntry[],
+  lang?: string,
+): Promise<{ text: string; backend: string; attempts: Attempt[] }> {
+  const resolvedBackends = backends ?? defaultSearchBackends(query, signal, lang);
+  const attempts: Attempt[] = [];
 
-  for (const [name, search] of backends) {
+  for (const [name, search] of resolvedBackends) {
     if (!isAvailable(name)) continue;
     try {
       const text = await search();
-      if (text) return { text, backend: name };
-      throw new Error("empty response");
+      if (!text) throw new Error("empty response");
+      attempts.push({ backend: name, ok: true });
+      return { text, backend: name, attempts };
     } catch (error) {
       markFailed(name);
-      const message = `${name}: ${error instanceof Error ? error.message : String(error)}`;
-      errors.push(message);
-      notify(message);
+      attempts.push({
+        backend: name,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
-  throw new Error(`All web search backends failed: ${errors.join("; ")}`);
+  throw new Error(
+    `All web search backends failed: ${attempts
+      .filter((a) => !a.ok)
+      .map((a) => `${a.backend}: ${a.error}`)
+      .join("; ")}`,
+  );
 }
 
 async function trafilaturaFetch(url: string, signal?: AbortSignal) {
@@ -125,23 +174,30 @@ export function defaultFetchBackends(url: string, signal?: AbortSignal): Backend
 export async function fetchOne(
   url: string,
   signal: AbortSignal | undefined,
-  notify: (message: string) => void,
   backends: BackendEntry[] = defaultFetchBackends(url, signal),
-): Promise<{ text: string; backend: string }> {
-  const errors: string[] = [];
+): Promise<{ text: string; backend: string; attempts: Attempt[] }> {
+  const attempts: Attempt[] = [];
 
   for (const [name, fetcher] of backends) {
     try {
       const text = await fetcher();
-      if (text) return { text, backend: name };
-      throw new Error("empty response");
+      if (!text) throw new Error("empty response");
+      attempts.push({ backend: name, ok: true });
+      return { text, backend: name, attempts };
     } catch (error) {
-      const message = `${name}: ${error instanceof Error ? error.message : String(error)}`;
-      errors.push(message);
-      notify(message);
+      attempts.push({
+        backend: name,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
-  throw new Error(`All web fetch backends failed: ${errors.join("; ")}`);
+  throw new Error(
+    `All web fetch backends failed: ${attempts
+      .filter((a) => !a.ok)
+      .map((a) => `${a.backend}: ${a.error}`)
+      .join("; ")}`,
+  );
 }
 
 export async function pageTitle(
@@ -158,12 +214,28 @@ export async function pageTitle(
   }
 }
 
-export function fetchResultLine(title: string | null, url: string): string {
-  return title ? `${url} - ${title}` : url;
+export function formatBackendLine(attempt: Attempt, successTitle?: string | null): string {
+  if (!attempt.ok) return `✗ ${attempt.backend} - "${attempt.error}"`;
+  return successTitle ? `✓ ${attempt.backend} - "${successTitle}"` : `✓ ${attempt.backend}`;
+}
+
+export function formatBackendLines(
+  attempts: readonly Attempt[],
+  successTitle: string | null = null,
+): string[] {
+  return attempts.map((attempt, index) => {
+    const isFinalSuccess = attempt.ok && index === attempts.length - 1;
+    return formatBackendLine(attempt, isFinalSuccess ? successTitle : null);
+  });
 }
 
 const searchParameters = Type.Object({
   query: Type.String({ description: "Single search query" }),
+  lang: Type.Optional(
+    Type.String({
+      description: "Language hint passed to openserp (e.g. EN, DE, JA). Ignored by markdown.new.",
+    }),
+  ),
 });
 const fetchParameters = Type.Object({ url: Type.String({ description: "Absolute URL to fetch" }) });
 
@@ -173,23 +245,26 @@ export default function (pi: ExtensionAPI) {
     label: "Web Search",
     description: "Search the web with a single query.",
     parameters: searchParameters,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const { text, backend } = await searchOne(params.query, signal, (message) => {
-        if (ctx.hasUI) ctx.ui.notify(message, "warning");
-      });
-      return { content: [{ type: "text", text }], details: { backend } };
+    async execute(_toolCallId, params, signal) {
+      const { text, backend, attempts } = await searchOne(
+        params.query,
+        signal,
+        undefined,
+        params.lang,
+      );
+      return { content: [{ type: "text", text }], details: { backend, attempts } };
     },
-    renderCall(_args, theme, context) {
-      const label = context.state.backend ? `web_search - ${context.state.backend}` : "web_search";
-      return new Text(theme.fg("toolTitle", theme.bold(label)), 0, 0);
+    renderCall(args, theme) {
+      const langSuffix = args.lang ? ` [lang=${args.lang}]` : "";
+      return new Text(
+        theme.fg("toolTitle", theme.bold(`web_search - "${args.query ?? ""}"${langSuffix}`)),
+        0,
+        0,
+      );
     },
-    renderResult(result, _options, _theme, context) {
-      const backend = (result.details as { backend?: string } | undefined)?.backend;
-      if (backend && context.state.backend !== backend) {
-        context.state.backend = backend;
-        queueMicrotask(() => context.invalidate());
-      }
-      return new Text(context.args.query, 0, 0);
+    renderResult(result) {
+      const attempts = (result.details as { attempts?: Attempt[] } | undefined)?.attempts ?? [];
+      return new Text(formatBackendLines(attempts).join("\n"), 0, 0);
     },
   });
 
@@ -198,25 +273,21 @@ export default function (pi: ExtensionAPI) {
     label: "Web Fetch",
     description: "Fetch a single URL as Markdown.",
     parameters: fetchParameters,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const { text, backend } = await fetchOne(params.url, signal, (message) => {
-        if (ctx.hasUI) ctx.ui.notify(message, "warning");
-      });
+    async execute(_toolCallId, params, signal) {
+      const { text, backend, attempts } = await fetchOne(params.url, signal);
       const title = await pageTitle(params.url, signal);
-      return { content: [{ type: "text", text }], details: { title, backend } };
+      return { content: [{ type: "text", text }], details: { backend, attempts, title } };
     },
-    renderCall(_args, theme, context) {
-      const label = context.state.backend ? `web_fetch - ${context.state.backend}` : "web_fetch";
-      return new Text(theme.fg("toolTitle", theme.bold(label)), 0, 0);
+    renderCall(args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold(`web_fetch - "${args.url ?? ""}"`)), 0, 0);
     },
-    renderResult(result, _options, _theme, context) {
-      const details = result.details as { backend?: string; title?: string | null } | undefined;
-      const backend = details?.backend;
-      if (backend && context.state.backend !== backend) {
-        context.state.backend = backend;
-        queueMicrotask(() => context.invalidate());
-      }
-      return new Text(fetchResultLine(details?.title ?? null, context.args.url), 0, 0);
+    renderResult(result) {
+      const details = result.details as { attempts?: Attempt[]; title?: string | null } | undefined;
+      return new Text(
+        formatBackendLines(details?.attempts ?? [], details?.title ?? null).join("\n"),
+        0,
+        0,
+      );
     },
   });
 }
