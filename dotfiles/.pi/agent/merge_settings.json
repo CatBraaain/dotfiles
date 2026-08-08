@@ -5,7 +5,7 @@
   "defaultThinkingLevel": "high",
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
-  "hideThinkingBlock": true,
+  "hideThinkingBlock": false,
   "quietStartup": false,
   "enabledModels": ["**"],
   "packages": [
