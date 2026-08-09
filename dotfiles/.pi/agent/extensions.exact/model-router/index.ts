@@ -66,7 +66,7 @@ export function parseRetryAfter(value: string | undefined): number | null {
   const s = value.trim();
   if (/^\d+$/.test(s)) {
     const sec = parseInt(s, 10);
-    return Number.isFinite(sec) ? sec * 1000 : null;
+    return Number.isFinite(sec) ? Math.max(0, sec * 1000) : null;
   }
   const ms = Date.parse(s);
   return Number.isNaN(ms) ? null : Math.max(0, ms - Date.now());
@@ -203,7 +203,7 @@ export async function evalWhen(
 // A model_select event suspends auto-routing only when it is a genuine user
 // pick — not our own setModel in flight (switching), nor a session restore.
 export function isManualSelect(source: string | undefined, switching: boolean): boolean {
-  return !switching && source !== "restore";
+  return !switching && (source === "set" || source === "cycle");
 }
 
 // What to do after a 429: `confirm` asks before switching (user is in manual
@@ -248,7 +248,6 @@ export default async function (pi: ExtensionAPI) {
   let manual = false; // user picked a model manually -> suspend auto-routing
   let switching = false; // our own setModel is in flight (NOT "manual")
   const cooldowns = new Map<string, number>(); // modelKey -> expiry epoch ms
-  let pendingResend = false; // a 429 happened; resend last user msg on settle
   let lastResent = ""; // dedupe back-to-back resends of the same prompt
 
   const bashExec = bashExecFrom(createLocalBashOperations());
@@ -321,7 +320,6 @@ export default async function (pi: ExtensionAPI) {
       ctx.ui.notify(`[model-router] ${invalid.length} invalid rule(s); routing disabled`, "error");
     }
     manual = false;
-    pendingResend = false;
     lastResent = "";
     cooldowns.clear();
     if (ctx.hasUI) ctx.ui.setStatus("model-router", undefined);
@@ -350,7 +348,7 @@ export default async function (pi: ExtensionAPI) {
     if (!current) return;
 
     const key = modelKey(current);
-    const ra = event.headers["retry-after"] ?? event.headers["Retry-After"];
+    const ra = event.headers["retry-after"];
     const ms = parseRetryAfter(ra) ?? DEFAULT_COOLDOWN_MS;
     recordCooldown(cooldowns, key, ms, Date.now());
 
@@ -378,7 +376,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       case "switch":
         await switchTo(action.model);
-        pendingResend = true;
+        await resendLastUserMessage(ctx);
         if (ctx.hasUI) {
           ctx.ui.notify(
             `Rate limited on ${key}; switched to ${action.model.provider}/${action.model.id}`,
@@ -387,11 +385,5 @@ export default async function (pi: ExtensionAPI) {
         }
         return;
     }
-  });
-
-  pi.on("agent_settled", async (_event, ctx) => {
-    if (!pendingResend) return;
-    pendingResend = false;
-    await resendLastUserMessage(ctx);
   });
 }
