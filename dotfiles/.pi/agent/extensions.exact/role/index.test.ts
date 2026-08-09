@@ -55,7 +55,7 @@ interface CapturedExtension {
 const noOpUi = { setStatus: () => {}, notify: () => {} };
 
 // factory をモック pi で起動し、イベントハンドラとコマンドを捕捉する。
-// quiet-bash の captureBashTool と同じ粒度の seam。
+// quiet-tools の captureTool と同じ粒度の seam。
 function captureRoleExtension(): CapturedExtension {
   const handlers: Record<string, Array<(event: unknown, ctx: unknown) => Promise<unknown>>> = {};
   const commands = new Map<string, (args: string | undefined) => Promise<void>>();

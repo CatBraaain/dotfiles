@@ -1,7 +1,12 @@
 // 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
-import quietBashExtension, { COMMAND_PREVIEW_LIMIT, formatDuration, truncateCommand } from "./index";
+import quietToolsExtension, {
+  COMMAND_PREVIEW_LIMIT,
+  formatDuration,
+  formatSize,
+  truncateCommand,
+} from "./index";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
 let group = "";
@@ -26,12 +31,12 @@ type Tool = {
 
 const identityTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
-function captureBashTool(): Tool {
+function captureTool(name: string): Tool {
   const tools = new Map<string, Tool>();
-  quietBashExtension({ registerTool: (tool: Tool) => tools.set(tool.name, tool) } as never);
-  const bash = tools.get("bash");
-  assert.ok(bash, "bash tool not registered");
-  return bash;
+  quietToolsExtension({ registerTool: (tool: Tool) => tools.set(tool.name, tool) } as never);
+  const tool = tools.get(name);
+  assert.ok(tool, `${name} tool not registered`);
+  return tool;
 }
 
 function renderedLines(component: Renderable): string[] {
@@ -46,6 +51,17 @@ function renderBashResult(
 ): string[] {
   const result = { content: [{ type: "text" as const, text }], details: undefined };
   return renderedLines(bash.renderResult(result, options, identityTheme, context));
+}
+
+function renderWriteResult(
+  write: Tool,
+  fileContent: string,
+  options: { expanded: boolean; isPartial: boolean },
+  context: { isError: boolean; args: { path: string; content: string } },
+): string[] {
+  const successMessage = `Successfully wrote ${fileContent.length} bytes to ${context.args.path}`;
+  const result = { content: [{ type: "text" as const, text: successMessage }], details: undefined };
+  return renderedLines(write.renderResult(result, options, identityTheme, context));
 }
 
 describe("truncateCommand", () => {
@@ -81,15 +97,31 @@ describe("formatDuration", () => {
   });
 });
 
-describe("renderCall", () => {
+describe("formatSize", () => {
+  it("1023バイト以下はB単位で表示する", () => {
+    assert.equal(formatSize(0), "0B");
+    assert.equal(formatSize(1023), "1023B");
+  });
+
+  it("1024バイト以上はKB単位で小数第一位まで表示する", () => {
+    assert.equal(formatSize(1024), "1.0KB");
+    assert.equal(formatSize(1536), "1.5KB");
+  });
+
+  it("1MiB以上はMB単位で小数第一位まで表示する", () => {
+    assert.equal(formatSize(1024 * 1024), "1.0MB");
+  });
+});
+
+describe("bash renderCall", () => {
   it("コマンドを$プロンプト付きで表示する", () => {
-    const bash = captureBashTool();
+    const bash = captureTool("bash");
     const lines = renderedLines(bash.renderCall({ command: "git status" }, identityTheme, { executionStarted: false }));
     assert.deepEqual(lines, ["$ git status"]);
   });
 
   it("長すぎるコマンドは切り詰めて表示する", () => {
-    const bash = captureBashTool();
+    const bash = captureTool("bash");
     const longCommand = `echo ${"x".repeat(COMMAND_PREVIEW_LIMIT)}`;
     const lines = renderedLines(bash.renderCall({ command: longCommand }, identityTheme, { executionStarted: false }));
     const rendered = lines.join("");
@@ -98,9 +130,9 @@ describe("renderCall", () => {
   });
 });
 
-describe("renderResult", () => {
+describe("bash renderResult", () => {
   it("実行中はRunning...を表示する", () => {
-    const bash = captureBashTool();
+    const bash = captureTool("bash");
     const lines = renderBashResult(
       bash,
       "",
@@ -111,7 +143,7 @@ describe("renderResult", () => {
   });
 
   it("成功かつ折りたたみ時は実行秒数を表示する", () => {
-    const bash = captureBashTool();
+    const bash = captureTool("bash");
     const lines = renderBashResult(
       bash,
       "huge output here",
@@ -122,7 +154,7 @@ describe("renderResult", () => {
   });
 
   it("実行時刻が不明な成功結果はdoneを表示する", () => {
-    const bash = captureBashTool();
+    const bash = captureTool("bash");
     const lines = renderBashResult(
       bash,
       "huge output here",
@@ -133,7 +165,7 @@ describe("renderResult", () => {
   });
 
   it("エラー時はコマンドの出力を表示する", () => {
-    const bash = captureBashTool();
+    const bash = captureTool("bash");
     const errorMessage = "Command exited with code 1";
     const lines = renderBashResult(
       bash,
@@ -145,13 +177,74 @@ describe("renderResult", () => {
   });
 
   it("展開時はコマンドの出力を表示する", () => {
-    const bash = captureBashTool();
+    const bash = captureTool("bash");
     const multiLineOutput = "line1\nline2";
     const lines = renderBashResult(
       bash,
       multiLineOutput,
       { expanded: true, isPartial: false },
       { isError: false },
+    );
+    assert.deepEqual(lines, ["line1", "line2"]);
+  });
+});
+
+describe("write renderCall", () => {
+  it("パスをwriteプロンプト付きで表示し内容は出さない", () => {
+    const write = captureTool("write");
+    const multiLineContent = "line1\nline2\nline3";
+    const lines = renderedLines(
+      write.renderCall({ path: "src/main.ts", content: multiLineContent }, identityTheme, { executionStarted: false }),
+    );
+    assert.deepEqual(lines, ["write src/main.ts"]);
+  });
+});
+
+describe("write renderResult", () => {
+  it("実行中はRunning...を表示する", () => {
+    const write = captureTool("write");
+    const lines = renderWriteResult(
+      write,
+      "",
+      { expanded: false, isPartial: true },
+      { isError: false, args: { path: "a.txt", content: "" } },
+    );
+    assert.deepEqual(lines, ["Running..."]);
+  });
+
+  it("成功かつ折りたたみ時は書き込んだサイズを表示する", () => {
+    const write = captureTool("write");
+    const fiveBytesContent = "hello";
+    const lines = renderWriteResult(
+      write,
+      fiveBytesContent,
+      { expanded: false, isPartial: false },
+      { isError: false, args: { path: "a.txt", content: fiveBytesContent } },
+    );
+    assert.deepEqual(lines, ["wrote 5B"]);
+  });
+
+  it("エラー時はエラーメッセージを表示する", () => {
+    const write = captureTool("write");
+    const errorMessage = "EACCES: permission denied";
+    const result = { content: [{ type: "text" as const, text: errorMessage }], details: undefined };
+    const lines = renderedLines(
+      write.renderResult(result, { expanded: false, isPartial: false }, identityTheme, {
+        isError: true,
+        args: { path: "a.txt", content: "" },
+      }),
+    );
+    assert.deepEqual(lines, [errorMessage]);
+  });
+
+  it("展開時は書き込んだ内容を表示する", () => {
+    const write = captureTool("write");
+    const multiLineContent = "line1\nline2";
+    const lines = renderWriteResult(
+      write,
+      multiLineContent,
+      { expanded: true, isPartial: false },
+      { isError: false, args: { path: "a.txt", content: multiLineContent } },
     );
     assert.deepEqual(lines, ["line1", "line2"]);
   });
