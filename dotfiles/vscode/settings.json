@@ -206,11 +206,9 @@
         "refactor",
         "build",
         "ci",
-        "revert",
         "style",
         "test",
-        "chore",
-        "content"
+        "chore"
       ]
     ]
   },
