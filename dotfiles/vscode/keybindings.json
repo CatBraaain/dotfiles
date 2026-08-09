@@ -57,11 +57,6 @@
   },
   {
     "key": "alt+b",
-    "command": "bookmarks.jumpToNext",
-    "when": "editorTextFocus"
-  },
-  {
-    "key": "alt+b",
     "command": "markdown.extension.editing.toggleBold",
     "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^markdown$|^rmd$|^quarto$/"
   },
@@ -199,11 +194,6 @@
     "key": "alt+r",
     "command": "-workbench.action.terminal.toggleFindRegex",
     "when": "terminalFindFocused && terminalHasBeenCreated || terminalFindFocused && terminalProcessSupported || terminalFocus && terminalHasBeenCreated || terminalFocus && terminalProcessSupported"
-  },
-  {
-    "key": "alt+s",
-    "command": "workbench.action.openSettings",
-    "when": "editorLangId != todo"
   },
   {
     "key": "alt+t",
@@ -399,14 +389,6 @@
     "command": "editor.action.copyLinesDownAction"
   },
   {
-    "key": "ctrl+e",
-    "command": "-workbench.action.quickOpen"
-  },
-  {
-    "key": "ctrl+e",
-    "command": "editor.action.copyLinesUpAction"
-  },
-  {
     "key": "ctrl+enter",
     "command": "-editor.action.insertLineAfter",
     "when": "editorTextFocus && !editorReadonly"
@@ -452,31 +434,6 @@
   {
     "key": "ctrl+g",
     "command": "workbench.action.showCommands"
-  },
-  {
-    "key": "ctrl+h",
-    "command": "-editor.action.startFindReplaceAction",
-    "when": "editorFocus || editorIsOpen"
-  },
-  {
-    "key": "ctrl+h",
-    "command": "editor.createFoldingRangeFromSelection",
-    "when": "editorTextFocus && foldingEnabled"
-  },
-  {
-    "key": "ctrl+i",
-    "command": "-editor.action.triggerSuggest",
-    "when": "editorHasCompletionItemProvider && textInputFocus && !editorReadonly && !suggestWidgetVisible"
-  },
-  {
-    "key": "ctrl+i",
-    "command": "-markdown.extension.editing.toggleItalic",
-    "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^markdown$|^rmd$|^quarto$/"
-  },
-  {
-    "key": "ctrl+i",
-    "command": "editor.action.insertSnippet",
-    "when": "editorTextFocus && !editorReadonly"
   },
   {
     "key": "ctrl+insert",
@@ -606,11 +563,6 @@
     "key": "ctrl+k ctrl+j",
     "command": "-editor.unfoldAll",
     "when": "editorTextFocus && foldingEnabled"
-  },
-  {
-    "key": "ctrl+k ctrl+k",
-    "command": "-editor.action.defineKeybinding",
-    "when": "resource == 'vscode-userdata:/c%3A/Users/ps22521/AppData/Roaming/Code/User/keybindings.json'"
   },
   {
     "key": "ctrl+k ctrl+k",
@@ -778,10 +730,6 @@
     "key": "ctrl+k ctrl+x",
     "command": "-editor.action.trimTrailingWhitespace",
     "when": "editorTextFocus && !editorReadonly"
-  },
-  {
-    "key": "ctrl+k ctrl+z",
-    "command": "workbench.action.toggleZenMode"
   },
   {
     "key": "ctrl+k d",
@@ -969,11 +917,6 @@
   },
   {
     "key": "ctrl+p",
-    "command": "jsonnet.evalFile",
-    "when": "editorLangId == jsonnet"
-  },
-  {
-    "key": "ctrl+p",
     "command": "markdown.showPreview"
   },
   {
@@ -1140,15 +1083,6 @@
     "when": "workbench.scm.active"
   },
   {
-    "key": "ctrl+shift+h",
-    "command": "-workbench.action.replaceInFiles"
-  },
-  {
-    "key": "ctrl+shift+h",
-    "command": "editor.removeManualFoldingRanges",
-    "when": "editorTextFocus && foldingEnabled"
-  },
-  {
     "key": "ctrl+shift+j",
     "command": "-workbench.action.search.toggleQueryDetails",
     "when": "inSearchEditor || searchViewletFocus"
@@ -1263,6 +1197,10 @@
     "command": "-workbench.action.showCommands"
   },
   {
+    "key": "ctrl+shift+p",
+    "command": "markdown.showLockedPreviewToSide"
+  },
+  {
     "key": "ctrl+shift+pagedown",
     "command": "-workbench.action.moveEditorRightInGroup"
   },
@@ -1310,7 +1248,7 @@
   },
   {
     "key": "ctrl+shift+s",
-    "command": "workbench.action.files.saveAs"
+    "command": "workbench.action.openSettings"
   },
   {
     "key": "ctrl+shift+space",
@@ -1469,26 +1407,6 @@
     "when": "editorHasDefinitionProvider && editorTextFocus && !isInEmbeddedEditor"
   },
   {
-    "key": "f2",
-    "command": "-editor.action.rename",
-    "when": "editorHasRenameProvider && editorTextFocus && !editorReadonly"
-  },
-  {
-    "key": "f2",
-    "command": "-renameFile",
-    "when": "filesExplorerFocus && foldersViewVisible && !explorerResourceIsRoot && !explorerResourceReadonly && !inputFocus"
-  },
-  {
-    "key": "f2",
-    "command": "editor.action.rename",
-    "when": "editorHasRenameProvider && editorTextFocus && !editorReadonly"
-  },
-  {
-    "key": "f3",
-    "command": "-editor.action.nextMatchFindAction",
-    "when": "editorFocus"
-  },
-  {
     "key": "f8",
     "command": "-PowerShell.RunSelection",
     "when": "editorTextFocus && editorLangId == 'powershell'"
@@ -1519,11 +1437,6 @@
     "key": "shift+alt+a",
     "command": "-editor.action.blockComment",
     "when": "editorTextFocus && !editorReadonly"
-  },
-  {
-    "key": "shift+alt+b",
-    "command": "bookmarks.jumpToPrevious",
-    "when": "editorTextFocus"
   },
   {
     "key": "shift+alt+c",
@@ -1631,16 +1544,6 @@
     "when": "editorTextFocus"
   },
   {
-    "key": "shift+alt+s",
-    "command": "editor.action.defineKeybinding",
-    "when": "resource == 'vscode-userdata:/c%3A/Users/ps22521/AppData/Roaming/Code/User/keybindings.json'"
-  },
-  {
-    "key": "shift+alt+s",
-    "command": "workbench.action.openGlobalKeybindings",
-    "when": "resource != 'vscode-userdata:/c%3A/Users/ps22521/AppData/Roaming/Code/User/keybindings.json'"
-  },
-  {
     "key": "shift+alt+up",
     "command": "-editor.action.copyLinesUpAction",
     "when": "editorTextFocus && !editorReadonly"
@@ -1725,11 +1628,6 @@
   {
     "key": "shift+insert",
     "command": "-editor.action.clipboardPasteAction"
-  },
-  {
-    "key": "shift+tab",
-    "command": "deleteLeft",
-    "when": "editorTextFocus && !editorReadonly && editorHasMultipleSelections && !editorHasSelection"
   },
   {
     "key": "shift+tab",
