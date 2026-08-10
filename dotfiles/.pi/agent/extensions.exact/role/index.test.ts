@@ -3,7 +3,7 @@
 // role 拡張機能の振る舞いを検証する。
 // 権限マトリクス等は ./index.ts の純粋関数を直接叩き、
 // session_start / before_agent_start / tool_call / role:* コマンドは factory をモック起動して検証する。
-// 各 it のタイトルが要件仕様（出典: ./BEHAVIORS.md）。
+// 各 it のタイトルが要件仕様（出典: ./SPEC.md）。
 import assert from "node:assert/strict";
 import roleExtension, {
   FAILURE_CATEGORIES,

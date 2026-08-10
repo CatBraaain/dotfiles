@@ -1,4 +1,4 @@
-# session-search 拡張機能 Behaviors
+# session-search 拡張機能 Spec
 
 pi に **過去セッション検索** の2つのツールを追加する。エージェントがユーザーの指示に応じて、自身の過去のやりとりを「探す」「見る」。ワークフローは web_search（リストを得る）→ web_fetch（1件を取得）と同じ2ステップ構成。
 

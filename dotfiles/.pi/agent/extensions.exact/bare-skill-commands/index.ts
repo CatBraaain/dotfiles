@@ -1,5 +1,5 @@
 // skill コマンドの /skill: prefix を / に見せかける拡張。
-// 詳細は ./BEHAVIORS.md。
+// 詳細は ./SPEC.md。
 
 import type { ExtensionAPI, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";

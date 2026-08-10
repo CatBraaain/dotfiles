@@ -1,7 +1,7 @@
 // 実行: bun --install=auto run index.test.ts
 //
 // new-session 拡張機能の振る舞いを検証する。
-// 出典: ./BEHAVIORS.md。各 it のタイトルが要件仕様。
+// 出典: ./SPEC.md。各 it のタイトルが要件仕様。
 // 決定関数は ./index.ts の純粋関数を直接叩き、
 // ツール execute と /new-session コマンドは factory をモック起動して検証する。
 import assert from "node:assert/strict";

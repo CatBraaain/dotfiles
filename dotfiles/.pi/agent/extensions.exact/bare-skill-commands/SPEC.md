@@ -1,4 +1,4 @@
-# bare-skill-commands 拡張機能 Behaviors
+# bare-skill-commands 拡張機能 Spec
 
 skill コマンドを `/skill:foo` ではなく `/foo` で呼べるようにする。補完（`/` 入力時の候補）にも `/foo` で表示する。
 
