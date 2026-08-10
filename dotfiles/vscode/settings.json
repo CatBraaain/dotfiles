@@ -555,6 +555,7 @@
   "terminal.integrated.initialHint": false,
   "terminal.integrated.mouseWheelScrollSensitivity": 3,
   "terminal.integrated.scrollback": 2000,
+  "terminal.integrated.tabs.title": "${sequence}",
   "testing.automaticallyOpenTestResults": "openOnTestFailure",
   "ty.diagnosticMode": "workspace",
   "ty.inlayHints.callArgumentNames": false,
