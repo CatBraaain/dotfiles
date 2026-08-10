@@ -1,5 +1,5 @@
 ---
-name: to-behaviors
+name: behaviors-create
 description: >-
   合意した要件を、ユーザーが観測可能な振る舞い（behaviors）のみに絞った視覚的仕様書に変換する — markdown とテーブル/mermaid で構造を預け、実装コードもテストも書かない。仕様書・behaviors・振る舞い起点・spec・要件を文書化、BSDD（behavior spec driven development）の仕様書作成フェーズ。
 disable-model-invocation: true
