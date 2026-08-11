@@ -139,9 +139,14 @@ export default function newSessionExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(NEW_SESSION_COMMAND_NAME, {
-    description: "Start a clean new session (internal bridge used by the new_session tool).",
-    handler: async (_args, ctx) => {
-      const kickoff = consumePendingKickoff();
+    description:
+      "Start a clean new session. An optional argument is placed in the new session's editor as a draft.",
+    handler: async (args, ctx) => {
+      const commandMessage = normalizeFirstMessage(args);
+      const kickoff =
+        commandMessage === undefined
+          ? consumePendingKickoff()
+          : newSessionKickoff(commandMessage);
       // No parentSession, no setup: the new session is completely clean and
       // carries nothing over from the current session.
       await ctx.newSession({

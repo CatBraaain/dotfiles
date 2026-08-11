@@ -137,13 +137,13 @@ interface CommandInvocation {
 
 async function runCommand(
   captured: Captured,
-  options: { newSessionCancelled?: boolean } = {},
+  options: { newSessionCancelled?: boolean; args?: string } = {},
 ): Promise<CommandInvocation> {
   let newSessionOptions: CommandInvocation["newSessionOptions"] = {};
   let draftInEditor = "";
   const notified: string[] = [];
   const command = captured.commands.get(NEW_SESSION_COMMAND_NAME)!;
-  await command.handler(undefined, {
+  await command.handler(options.args, {
     ui: { notify: (message) => notified.push(message) },
     newSession: async (opts) => {
       newSessionOptions = opts;
@@ -343,6 +343,31 @@ describe("前セッションからの引き継ぎ", () => {
     requestNewSession({ kind: "draft-first-message", message: "x" }, () => {});
     assert.deepEqual(consumePendingKickoff(), { kind: "draft-first-message", message: "x" });
     assert.deepEqual(consumePendingKickoff(), { kind: "empty" });
+    __resetPendingKickoff();
+  });
+});
+
+describe("ユーザーの prompt command", () => {
+  it("/new-session の引数を新セッションの入力欄へドラフトとして設定する", async () => {
+    __resetPendingKickoff();
+    const captured = capture();
+    const command = await runCommand(captured, { args: "hi" });
+    assert.equal(command.draftInEditor, "hi");
+  });
+
+  it("/new-session の引数が空白だけなら空のセッションとして開く", async () => {
+    __resetPendingKickoff();
+    const captured = capture();
+    const command = await runCommand(captured, { args: "   " });
+    assert.equal(command.draftInEditor, "");
+  });
+
+  it("ユーザーコマンドの引数は保留中のツール入力より優先される", async () => {
+    __resetPendingKickoff();
+    requestNewSession({ kind: "draft-first-message", message: "tool message" }, () => {});
+    const captured = capture();
+    const command = await runCommand(captured, { args: "user message" });
+    assert.equal(command.draftInEditor, "user message");
     __resetPendingKickoff();
   });
 });
