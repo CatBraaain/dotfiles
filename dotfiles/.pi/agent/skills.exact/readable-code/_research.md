@@ -26,5 +26,5 @@ ponytail が「減らす」なら readable-code は「残った行を分かり�
 - dev.to: self-documenting vs comments — 解決の4階層 Logic → Name → Type → Comment(whyのみ)
 
 ## 適用判断
-- 本文は日本語（dotfiles AGENTS.md / oss-mirror スキルに倣う）。コード例・識別子は英語。
+- 本文は日本語（dotfiles AGENTS.md / research-strategy スキルに倣う）。コード例・識別子は英語。
 - 既存 clean-code スキルと被る名前/コメントは、軸（認知負荷）を明示して差別化。
