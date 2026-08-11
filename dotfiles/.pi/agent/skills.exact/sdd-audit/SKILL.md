@@ -1,5 +1,5 @@
 ---
-name: spec-audit
+name: sdd-audit
 description: >-
   既存のテストと実装が spec と一致しているかを監査する スキル — spec を第一 oracle とし、テストの coverage（未カバー振る舞い/過剰検証/順序ズレ）と fidelity（偽陽性リスク）を2軸で照合する。実装やテストからの逆指摘で spec 側の不備も検出する。指摘のみ出し、テストも本番コードも編集しない。review, audit, 監査, 適合性, テストは十分か, 仕様と実装のズレ, SDD（spec driven development）の検証フェーズ。
 disable-model-invocation: true
@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Spec Conformance Audit
 
-spec（spec-create の出力）を **oracle（真実の基準）** とし、既存のテストと実装がそれに適合しているかを監査する。出力はギャップレポート（指摘のみ）。テストも本番コードも編集しない、実行もしない。
+sdd-spec の出力である spec を **oracle（真実の基準）** とし、既存のテストと実装がそれに適合しているかを監査する。出力はギャップレポート（指摘のみ）。テストも本番コードも編集しない、実行もしない。
 
 ## 監査の3軸
 
