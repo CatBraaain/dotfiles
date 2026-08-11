@@ -15,4 +15,4 @@ windows-terminal
 {{- end }}
 
 .pi/agent/extensions/*/index.test.ts
-SPEC.md
+**/SPEC.md
