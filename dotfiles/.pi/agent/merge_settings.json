@@ -10,7 +10,13 @@
   "enabledModels": ["**"],
   "packages": [
     "npm:@entelligentsia/pi-claude-compat",
-    "https://github.com/DietrichGebert/ponytail",
+    {
+      "source": "https://github.com/DietrichGebert/ponytail",
+      "extensions": [],
+      "skills": ["skills/ponytail-review", "skills/ponytail-audit"],
+      "prompts": [],
+      "themes": []
+    },
     "npm:pi-commandcode-provider",
     "npm:pi-hashline-edit",
     {
