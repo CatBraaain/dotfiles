@@ -3,13 +3,13 @@
 //
 // The agent calls the `new_session` tool; the tool shows a confirm dialog and,
 // only on approval, switches to a completely clean new session. Optionally the
-// agent can supply a first message that is sent into the new session on open.
+// agent can supply a first message that is placed in the new session's editor.
 //
 // pi only lets command handlers call ctx.newSession(), not tools. So on approval
 // the tool stages the kickoff and queues an internal /new-session follow-up
-// command (pi.sendUserMessage deliverAs:"followUp"); that command performs the
+// command (pi.sendUserMessage deliverAs: "followUp"); that command performs the
 // actual session switch. The observable behavior — propose -> confirm -> switch
-// -> optional first message — is unchanged.
+// -> optional first-message draft — is unchanged.
 //
 // All routing decisions live in pure functions (decideOnApproval /
 // newSessionKickoff / buildAgentResultText / normalizeFirstMessage /
@@ -28,7 +28,7 @@ export const newSessionParameters = Type.Object({
   firstMessage: Type.Optional(
     Type.String({
       description:
-        "First user message to send into the new session. Omit to open an empty session.",
+        "First user message to place in the new session's editor as a draft. Omit to open an empty session.",
     }),
   ),
 });
@@ -56,13 +56,13 @@ export function decideOnApproval(approved: boolean): ApprovalDecision {
 
 /** How the new session opens, decided solely by the presence of a first message. */
 export type NewSessionKickoff =
-  | { readonly kind: "send-first-message"; readonly message: FirstMessage }
+  | { readonly kind: "draft-first-message"; readonly message: FirstMessage }
   | { readonly kind: "empty" };
 
 export function newSessionKickoff(firstMessage: FirstMessage | undefined): NewSessionKickoff {
   return firstMessage === undefined
     ? { kind: "empty" }
-    : { kind: "send-first-message", message: firstMessage };
+    : { kind: "draft-first-message", message: firstMessage };
 }
 
 /** Text returned to the agent so it can recognize approval vs rejection. */
@@ -73,8 +73,8 @@ export function buildAgentResultText(
   if (decision.kind === "rejected") {
     return "The owner rejected the request to start a new session. Staying in the current session.";
   }
-  return kickoff.kind === "send-first-message"
-    ? `The owner approved a new session. It will open with the first message: "${kickoff.message}".`
+  return kickoff.kind === "draft-first-message"
+    ? `The owner approved a new session. It will open with the first message in the editor: "${kickoff.message}".`
     : "The owner approved a new session. It will open as an empty session.";
 }
 
@@ -111,7 +111,7 @@ export default function newSessionExtension(pi: ExtensionAPI): void {
     description:
       "Propose starting a new, completely clean session. Always asks the owner to confirm before switching. " +
       "Nothing from the current session is carried over. " +
-      "Pass firstMessage to send it as the opening message of the new session.",
+      "Pass firstMessage to place it in the new session's editor as a draft.",
     promptSnippet: "Propose a new session (the owner must confirm)",
     parameters: newSessionParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -146,8 +146,8 @@ export default function newSessionExtension(pi: ExtensionAPI): void {
       // carries nothing over from the current session.
       await ctx.newSession({
         withSession: async (replacementCtx) => {
-          if (kickoff.kind === "send-first-message") {
-            await replacementCtx.sendUserMessage(kickoff.message);
+          if (kickoff.kind === "draft-first-message") {
+            replacementCtx.ui.setEditorText(kickoff.message);
           }
         },
       });

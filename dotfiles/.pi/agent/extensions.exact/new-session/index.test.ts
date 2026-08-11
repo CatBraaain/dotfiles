@@ -70,7 +70,7 @@ interface CommandCtx {
   newSession: (options: {
     parentSession?: string;
     setup?: unknown;
-    withSession?: (ctx: { sendUserMessage: (content: string) => Promise<void> }) => Promise<void>;
+    withSession?: (ctx: { ui: { setEditorText: (text: string) => void } }) => Promise<void>;
   }) => Promise<{ cancelled: boolean }>;
 }
 
@@ -130,7 +130,7 @@ interface CommandInvocation {
     setup?: unknown;
     withSession?: unknown;
   };
-  sentInNewSession: string[];
+  draftInEditor: string;
   notified: string[];
   cancelled: boolean;
 }
@@ -140,7 +140,7 @@ async function runCommand(
   options: { newSessionCancelled?: boolean } = {},
 ): Promise<CommandInvocation> {
   let newSessionOptions: CommandInvocation["newSessionOptions"] = {};
-  const sentInNewSession: string[] = [];
+  let draftInEditor = "";
   const notified: string[] = [];
   const command = captured.commands.get(NEW_SESSION_COMMAND_NAME)!;
   await command.handler(undefined, {
@@ -148,12 +148,12 @@ async function runCommand(
     newSession: async (opts) => {
       newSessionOptions = opts;
       if (opts.withSession) {
-        await opts.withSession({ sendUserMessage: async (content) => sentInNewSession.push(content) });
+        await opts.withSession({ ui: { setEditorText: (text) => (draftInEditor = text) } });
       }
       return { cancelled: options.newSessionCancelled ?? false };
     },
   });
-  return { newSessionOptions, sentInNewSession, notified, cancelled: false };
+  return { newSessionOptions, draftInEditor, notified, cancelled: false };
 }
 
 describe("ツール一覧", () => {
@@ -187,7 +187,7 @@ describe("実行の流れ", () => {
     // ツールが予約したコマンドは、切替を行うために登録されたコマンドと一致する
     assert.ok(captured.commands.has(queuedCommandName));
     const switchResult = await runCommand(captured);
-    assert.deepEqual(switchResult.sentInNewSession, ["開幕メッセージ"]);
+    assert.equal(switchResult.draftInEditor, "開幕メッセージ");
   });
 
   it("拒否すると、新セッションへの切り替えを予約せず現行セッションのままにする", async () => {
@@ -263,7 +263,7 @@ describe("応答と結果", () => {
   it("buildAgentResultText は承認かつメッセージありのとき、そのメッセージを添えて開くことを伝える", () => {
     const messageApprovalText = buildAgentResultText(
       { kind: "proceed" },
-      { kind: "send-first-message", message: "次はこれ" },
+      { kind: "draft-first-message", message: "次はこれ" },
     );
     assert.ok(messageApprovalText.includes("approved"));
     assert.ok(messageApprovalText.includes("次はこれ"));
@@ -271,12 +271,12 @@ describe("応答と結果", () => {
 });
 
 describe("承認時の新セッション初期状態", () => {
-  it("最初のメッセージがあるとき、新セッションはそのメッセージが送られた状態で開く", async () => {
+  it("最初のメッセージがあるとき、新セッションの入力欄にドラフトとして設定される", async () => {
     __resetPendingKickoff();
     const captured = capture();
     await invokeTool(captured, { firstMessage: "新しい話題" }, true);
     const command = await runCommand(captured);
-    assert.deepEqual(command.sentInNewSession, ["新しい話題"]);
+    assert.equal(command.draftInEditor, "新しい話題");
   });
 
   it("最初のメッセージがないとき、新セッションは空のセッションとして開く", async () => {
@@ -284,7 +284,7 @@ describe("承認時の新セッション初期状態", () => {
     const captured = capture();
     await invokeTool(captured, {}, true);
     const command = await runCommand(captured);
-    assert.deepEqual(command.sentInNewSession, []);
+    assert.equal(command.draftInEditor, "");
   });
 
   it("空白のみの firstMessage はメッセージなし扱いになり、空のセッションとして開く", async () => {
@@ -292,13 +292,13 @@ describe("承認時の新セッション初期状態", () => {
     const captured = capture();
     await invokeTool(captured, { firstMessage: "   " }, true);
     const command = await runCommand(captured);
-    assert.deepEqual(command.sentInNewSession, []);
+    assert.equal(command.draftInEditor, "");
   });
 
-  it("newSessionKickoff は最初のメッセージの有無で送信か空かを決める", () => {
+  it("newSessionKickoff は最初のメッセージの有無でドラフトか空かを決める", () => {
     assert.deepEqual(newSessionKickoff(undefined), { kind: "empty" });
     assert.deepEqual(newSessionKickoff("こんにちは"), {
-      kind: "send-first-message",
+      kind: "draft-first-message",
       message: "こんにちは",
     });
   });
@@ -328,20 +328,20 @@ describe("前セッションからの引き継ぎ", () => {
     assert.equal(command.newSessionOptions.parentSession, undefined);
   });
 
-  it("新セッションの withSession は最初のメッセージの送信のみを行い、それ以外は何も引き継がない", async () => {
+  it("新セッションの withSession は最初のメッセージを入力欄へ設定し、それ以外は何も引き継がない", async () => {
     __resetPendingKickoff();
     const captured = capture();
     await invokeTool(captured, { firstMessage: "carry nothing but this" }, true);
     const command = await runCommand(captured);
-    assert.deepEqual(command.sentInNewSession, ["carry nothing but this"]);
+    assert.equal(command.draftInEditor, "carry nothing but this");
     assert.equal(command.newSessionOptions.setup, undefined);
     assert.equal(command.newSessionOptions.parentSession, undefined);
   });
 
   it("requestNewSession / consumePendingKickoff は kickoff を受け渡し、消費後にクリアする", () => {
     __resetPendingKickoff();
-    requestNewSession({ kind: "send-first-message", message: "x" }, () => {});
-    assert.deepEqual(consumePendingKickoff(), { kind: "send-first-message", message: "x" });
+    requestNewSession({ kind: "draft-first-message", message: "x" }, () => {});
+    assert.deepEqual(consumePendingKickoff(), { kind: "draft-first-message", message: "x" });
     assert.deepEqual(consumePendingKickoff(), { kind: "empty" });
     __resetPendingKickoff();
   });
