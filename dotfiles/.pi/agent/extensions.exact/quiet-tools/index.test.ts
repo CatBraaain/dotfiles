@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import quietToolsExtension, {
   COMMAND_PREVIEW_LIMIT,
+  countResultLines,
   formatDuration,
   formatSize,
   truncateCommand,
@@ -62,6 +63,28 @@ function renderWriteResult(
   const successMessage = `Successfully wrote ${fileContent.length} bytes to ${context.args.path}`;
   const result = { content: [{ type: "text" as const, text: successMessage }], details: undefined };
   return renderedLines(write.renderResult(result, options, identityTheme, context));
+}
+
+function renderEditResult(
+  edit: Tool,
+  diff: string,
+  editCount: number,
+  options: { expanded: boolean; isPartial: boolean },
+  context: { isError: boolean; args: { path: string; edits: { oldText: string; newText: string }[] } },
+): string[] {
+  const successMessage = `Successfully replaced ${editCount} block(s) in ${context.args.path}.`;
+  const result = { content: [{ type: "text" as const, text: successMessage }], details: { diff } };
+  return renderedLines(edit.renderResult(result, options, identityTheme, context));
+}
+
+function renderTextResult(
+  tool: Tool,
+  text: string,
+  options: { expanded: boolean; isPartial: boolean },
+  context: { isError: boolean },
+): string[] {
+  const result = { content: [{ type: "text" as const, text }], details: undefined };
+  return renderedLines(tool.renderResult(result, options, identityTheme, context));
 }
 
 describe("truncateCommand", () => {
@@ -250,6 +273,186 @@ describe("write renderResult", () => {
   });
 });
 
+
+describe("edit renderCall", () => {
+  it("パスをeditプロンプト付きで表示し編集内容は出さない", () => {
+    const edit = captureTool("edit");
+    const edits = [{ oldText: "line1", newText: "line1-changed" }];
+    const lines = renderedLines(
+      edit.renderCall({ path: "src/main.ts", edits }, identityTheme, { executionStarted: false }),
+    );
+    assert.deepEqual(lines, ["edit src/main.ts"]);
+  });
+});
+
+describe("edit renderResult", () => {
+  it("実行中はRunning...を表示する", () => {
+    const edit = captureTool("edit");
+    const lines = renderEditResult(
+      edit,
+      "",
+      1,
+      { expanded: false, isPartial: true },
+      { isError: false, args: { path: "a.ts", edits: [{ oldText: "x", newText: "y" }] } },
+    );
+    assert.deepEqual(lines, ["Running..."]);
+  });
+
+  it("成功かつ折りたたみ時は置換ブロック数を表示する", () => {
+    const edit = captureTool("edit");
+    const threeEdits = [
+      { oldText: "a", newText: "b" },
+      { oldText: "c", newText: "d" },
+      { oldText: "e", newText: "f" },
+    ];
+    const lines = renderEditResult(
+      edit,
+      "@@ diff @@",
+      threeEdits.length,
+      { expanded: false, isPartial: false },
+      { isError: false, args: { path: "a.ts", edits: threeEdits } },
+    );
+    assert.deepEqual(lines, ["edited 3 block(s)"]);
+  });
+
+  it("エラー時はエラーメッセージを表示する", () => {
+    const edit = captureTool("edit");
+    const errorMessage = "oldText not found in file";
+    const result = { content: [{ type: "text" as const, text: errorMessage }], details: undefined };
+    const lines = renderedLines(
+      edit.renderResult(result, { expanded: false, isPartial: false }, identityTheme, {
+        isError: true,
+        args: { path: "a.ts", edits: [{ oldText: "x", newText: "y" }] },
+      }),
+    );
+    assert.deepEqual(lines, [errorMessage]);
+  });
+
+  it("展開時は差分を表示する", () => {
+    const edit = captureTool("edit");
+    const diff = "-old\n+new";
+    const lines = renderEditResult(
+      edit,
+      diff,
+      1,
+      { expanded: true, isPartial: false },
+      { isError: false, args: { path: "a.ts", edits: [{ oldText: "old", newText: "new" }] } },
+    );
+    assert.deepEqual(lines, ["-old", "+new"]);
+  });
+});
+
+describe("countResultLines", () => {
+  it("空文字は0を返す", () => {
+    assert.equal(countResultLines(""), 0);
+  });
+
+  it("1行は1を返す", () => {
+    assert.equal(countResultLines("a"), 1);
+  });
+
+  it("複数行は行数を返す", () => {
+    assert.equal(countResultLines("a\nb\nc"), 3);
+  });
+
+  it("末尾の改行は行数に含めない", () => {
+    assert.equal(countResultLines("a\nb\n"), 2);
+  });
+});
+
+describe("read renderCall", () => {
+  it("パスをreadプロンプト付きで表示する", () => {
+    const read = captureTool("read");
+    const lines = renderedLines(read.renderCall({ path: "src/main.ts" }, identityTheme, { executionStarted: false }));
+    assert.deepEqual(lines, ["read src/main.ts"]);
+  });
+});
+
+describe("read renderResult", () => {
+  it("実行中はRunning...を表示する", () => {
+    const read = captureTool("read");
+    const lines = renderTextResult(read, "", { expanded: false, isPartial: true }, { isError: false });
+    assert.deepEqual(lines, ["Running..."]);
+  });
+
+  it("成功かつ折りたたみ時は読み込んだ行数を表示する", () => {
+    const read = captureTool("read");
+    const threeLineFile = "line1\nline2\nline3";
+    const lines = renderTextResult(read, threeLineFile, { expanded: false, isPartial: false }, { isError: false });
+    assert.deepEqual(lines, ["3 lines"]);
+  });
+
+  it("エラー時は結果のメッセージを表示する", () => {
+    const read = captureTool("read");
+    const errorMessage = "File not found";
+    const lines = renderTextResult(read, errorMessage, { expanded: false, isPartial: false }, { isError: true });
+    assert.deepEqual(lines, [errorMessage]);
+  });
+
+  it("展開時はファイルの内容を表示する", () => {
+    const read = captureTool("read");
+    const fileContent = "line1\nline2";
+    const lines = renderTextResult(read, fileContent, { expanded: true, isPartial: false }, { isError: false });
+    assert.deepEqual(lines, ["line1", "line2"]);
+  });
+});
+
+describe("grep renderCall", () => {
+  it("検索パターンをgrepプロンプト付きで表示する", () => {
+    const grep = captureTool("grep");
+    const lines = renderedLines(grep.renderCall({ pattern: "TODO" }, identityTheme, { executionStarted: false }));
+    assert.deepEqual(lines, ["grep TODO"]);
+  });
+});
+
+describe("grep renderResult", () => {
+  it("成功かつ折りたたみ時はマッチ数を表示する", () => {
+    const grep = captureTool("grep");
+    const twoMatches = "a.ts:1:TODO\nb.ts:5:TODO";
+    const lines = renderTextResult(grep, twoMatches, { expanded: false, isPartial: false }, { isError: false });
+    assert.deepEqual(lines, ["2 matches"]);
+  });
+});
+
+describe("find renderCall", () => {
+  it("検索パターンをfindプロンプト付きで表示する", () => {
+    const find = captureTool("find");
+    const lines = renderedLines(find.renderCall({ pattern: "*.ts" }, identityTheme, { executionStarted: false }));
+    assert.deepEqual(lines, ["find *.ts"]);
+  });
+});
+
+describe("find renderResult", () => {
+  it("成功かつ折りたたみ時はファイル数を表示する", () => {
+    const find = captureTool("find");
+    const twoFiles = "src/a.ts\nsrc/b.ts";
+    const lines = renderTextResult(find, twoFiles, { expanded: false, isPartial: false }, { isError: false });
+    assert.deepEqual(lines, ["2 files"]);
+  });
+});
+
+describe("ls renderCall", () => {
+  it("パスをlsプロンプト付きで表示する", () => {
+    const ls = captureTool("ls");
+    const lines = renderedLines(ls.renderCall({ path: "src" }, identityTheme, { executionStarted: false }));
+    assert.deepEqual(lines, ["ls src"]);
+  });
+
+  it("パス未指定時はカレントディレクトリを表示する", () => {
+    const ls = captureTool("ls");
+    const lines = renderedLines(ls.renderCall({}, identityTheme, { executionStarted: false }));
+    assert.deepEqual(lines, ["ls ."]);
+  });
+});
+
+describe("ls renderResult", () => {
+  it("成功かつ折りたたみ時はエントリ数を表示する", () => {
+    const ls = captureTool("ls");
+    const threeEntries = "a.ts\nb.ts\ndir";
+    const lines = renderTextResult(ls, threeEntries, { expanded: false, isPartial: false }, { isError: false });
+    assert.deepEqual(lines, ["3 entries"]);
+  });
+});
 let passed = 0;
 const failures: string[] = [];
 for (const test of tests) {
