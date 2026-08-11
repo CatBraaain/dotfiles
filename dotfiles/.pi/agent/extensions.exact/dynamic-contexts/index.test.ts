@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import dynamicContextsExtension, {
   activateRulesForFile,
-  buildRulesContext,
+  buildRulesMessage,
   buildRulesWidgetLines,
   createRuleState,
   discoverRules,
+  markRulesInjected,
   matchesPathGlob,
+  newlyActivatedRules,
   type DynamicRule,
 } from "./index";
 
@@ -185,6 +187,42 @@ describe("path matching and activation", () => {
   });
 });
 
+describe("rule injection", () => {
+  it("treats rules without paths as newly activated at session start", () => {
+    const alwaysRule = rule({ id: "source:always.md", paths: undefined });
+    const state = createRuleState([alwaysRule]);
+
+    assert.deepEqual(
+      newlyActivatedRules(state).map((activatedRule) => activatedRule.id),
+      ["source:always.md"],
+    );
+  });
+
+  it("does not report injected rules as newly activated again", () => {
+    const alwaysRule = rule({ id: "source:always.md", paths: undefined });
+    const state = createRuleState([alwaysRule]);
+    markRulesInjected(state, newlyActivatedRules(state));
+
+    assert.deepEqual(newlyActivatedRules(state), []);
+  });
+
+  it("reports a path-gated rule as newly activated only after a matching file operation", () => {
+    const typescriptRule = rule({ id: "source:typescript.md", paths: ["src/**/*.ts"] });
+    const state = createRuleState([typescriptRule]);
+
+    assert.deepEqual(newlyActivatedRules(state), []);
+
+    activateRulesForFile(state, "/project/src/index.ts", "/project");
+    assert.deepEqual(
+      newlyActivatedRules(state).map((activatedRule) => activatedRule.id),
+      ["source:typescript.md"],
+    );
+
+    markRulesInjected(state, newlyActivatedRules(state));
+    assert.deepEqual(newlyActivatedRules(state), []);
+  });
+});
+
 describe("context and status", () => {
   it("renders active rule paths and bodies in resolution order", () => {
     const rules = [
@@ -197,15 +235,16 @@ describe("context and status", () => {
       }),
     ];
 
-    const context = buildRulesContext(rules);
+    const message = buildRulesMessage(rules);
 
-    assert.ok(context.indexOf(".pi/rules/first.md") < context.indexOf(".claude/rules/second.md"));
-    assert.ok(context.includes("First body"));
-    assert.ok(context.includes("Second body"));
+    assert.ok(message);
+    assert.ok(message.indexOf(".pi/rules/first.md") < message.indexOf(".claude/rules/second.md"));
+    assert.ok(message.includes("First body"));
+    assert.ok(message.includes("Second body"));
   });
 
-  it("returns no context and clears the widget when no rules are active", () => {
-    assert.equal(buildRulesContext([]), "");
+  it("returns no message and clears the widget when no rules are active", () => {
+    assert.equal(buildRulesMessage([]), undefined);
     assert.equal(buildRulesWidgetLines([]), undefined);
   });
 

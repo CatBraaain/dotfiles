@@ -6,6 +6,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from "node:pat
 import { parse as parseYaml } from "yaml";
 
 export const DYNAMIC_CONTEXT_STATUS_KEY = "dynamic-contexts";
+export const DYNAMIC_CONTEXT_MESSAGE_TYPE = "dynamic-contexts";
 
 export interface DynamicRule {
   readonly id: string;
@@ -20,6 +21,7 @@ export interface DynamicRule {
 export interface RuleState {
   readonly rules: readonly DynamicRule[];
   readonly activeRuleIds: Set<string>;
+  readonly injectedRuleIds: Set<string>;
 }
 
 type RuleSource = {
@@ -244,6 +246,7 @@ export function createRuleState(rules: readonly DynamicRule[]): RuleState {
     activeRuleIds: new Set(
       rules.filter((rule) => !rule.paths || rule.paths.length === 0).map((rule) => rule.id),
     ),
+    injectedRuleIds: new Set(),
   };
 }
 
@@ -266,10 +269,20 @@ export function activeRules(state: RuleState): DynamicRule[] {
   return state.rules.filter((rule) => state.activeRuleIds.has(rule.id));
 }
 
-export function buildRulesContext(rules: readonly DynamicRule[]): string {
-  if (rules.length === 0) return "";
+export function buildRulesMessage(rules: readonly DynamicRule[]): string | undefined {
+  if (rules.length === 0) return undefined;
   const sections = rules.map((rule) => `### ${rule.displayPath}\n${rule.body}`);
-  return `\n\n## Dynamic rules\n\n${sections.join("\n\n")}`;
+  return `## Dynamic rules\n\n${sections.join("\n\n")}`;
+}
+
+export function newlyActivatedRules(state: RuleState): DynamicRule[] {
+  return state.rules.filter(
+    (rule) => state.activeRuleIds.has(rule.id) && !state.injectedRuleIds.has(rule.id),
+  );
+}
+
+export function markRulesInjected(state: RuleState, rules: readonly DynamicRule[]): void {
+  for (const rule of rules) state.injectedRuleIds.add(rule.id);
 }
 
 export function buildRulesWidgetLines(rules: readonly DynamicRule[]): string[] | undefined {
@@ -310,14 +323,23 @@ export default function dynamicContextsExtension(pi: ExtensionAPI): void {
     if (filePath) activateRulesForFile(state, filePath, projectRoot);
   });
 
-  pi.on("before_agent_start", async (event, ctx) => {
+  pi.on("before_agent_start", async (_event, ctx) => {
     const rules = activeRules(state);
     if (ctx.hasUI)
       ctx.ui.setWidget(DYNAMIC_CONTEXT_STATUS_KEY, buildRulesWidgetLines(rules), {
         placement: "aboveEditor",
       });
-    const context = buildRulesContext(rules);
-    if (!context) return;
-    return { systemPrompt: event.systemPrompt + context };
+    const pending = newlyActivatedRules(state);
+    if (pending.length === 0) return;
+    const content = buildRulesMessage(pending);
+    if (!content) return;
+    markRulesInjected(state, pending);
+    return {
+      message: {
+        customType: DYNAMIC_CONTEXT_MESSAGE_TYPE,
+        content,
+        display: false,
+      },
+    };
   });
 }
