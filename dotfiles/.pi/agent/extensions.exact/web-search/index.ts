@@ -6,21 +6,8 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export const BACKEND_COOLDOWN_MS = 30 * 60 * 1000;
 export const BACKEND_TIMEOUT_MS = 15_000;
 export const SEARCH_RESULT_LIMIT = 10;
-export const __backendFailures = new Map<string, number>();
-
-export const isAvailable = (backend: string) =>
-  Date.now() - (__backendFailures.get(backend) ?? 0) >= BACKEND_COOLDOWN_MS;
-
-export const markFailed = (backend: string) => {
-  __backendFailures.set(backend, Date.now());
-};
-
-export const __resetBackendFailures = () => {
-  __backendFailures.clear();
-};
 
 async function fetchText(
   url: string,
@@ -101,6 +88,20 @@ export type Attempt =
   | { readonly backend: string; readonly ok: true }
   | { readonly backend: string; readonly ok: false; readonly error: string };
 
+class AllBackendsFailedError extends Error {
+  constructor(
+    readonly operation: "web search" | "web fetch",
+    readonly attempts: Attempt[],
+  ) {
+    super(
+      `All ${operation} backends failed: ${attempts
+        .filter((attempt) => !attempt.ok)
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join("; ")}`,
+    );
+  }
+}
+
 export type BackendEntry = readonly [name: string, run: () => Promise<string>];
 
 export function defaultSearchBackends(
@@ -126,14 +127,12 @@ export async function searchOne(
   const attempts: Attempt[] = [];
 
   for (const [name, search] of resolvedBackends) {
-    if (!isAvailable(name)) continue;
     try {
       const text = await search();
       if (!text) throw new Error("empty response");
       attempts.push({ backend: name, ok: true });
       return { text, backend: name, attempts };
     } catch (error) {
-      markFailed(name);
       attempts.push({
         backend: name,
         ok: false,
@@ -141,12 +140,7 @@ export async function searchOne(
       });
     }
   }
-  throw new Error(
-    `All web search backends failed: ${attempts
-      .filter((a) => !a.ok)
-      .map((a) => `${a.backend}: ${a.error}`)
-      .join("; ")}`,
-  );
+  throw new AllBackendsFailedError("web search", attempts);
 }
 
 async function trafilaturaFetch(url: string, signal?: AbortSignal) {
@@ -192,12 +186,7 @@ export async function fetchOne(
       });
     }
   }
-  throw new Error(
-    `All web fetch backends failed: ${attempts
-      .filter((a) => !a.ok)
-      .map((a) => `${a.backend}: ${a.error}`)
-      .join("; ")}`,
-  );
+  throw new AllBackendsFailedError("web fetch", attempts);
 }
 
 export async function pageTitle(
@@ -229,6 +218,13 @@ export function formatBackendLines(
   });
 }
 
+type BackendRenderState = { attempts?: Attempt[] };
+function attemptsForRender(result: { details?: unknown }, state?: BackendRenderState): Attempt[] {
+  const details = result.details as { attempts?: Attempt[] } | undefined;
+  if (details?.attempts && state) state.attempts = details.attempts;
+  return details?.attempts ?? state?.attempts ?? [];
+}
+
 const searchParameters = Type.Object({
   query: Type.String({ description: "Single search query" }),
   lang: Type.Optional(
@@ -245,14 +241,21 @@ export default function (pi: ExtensionAPI) {
     label: "Web Search",
     description: "Search the web with a single query.",
     parameters: searchParameters,
-    async execute(_toolCallId, params, signal) {
-      const { text, backend, attempts } = await searchOne(
-        params.query,
-        signal,
-        undefined,
-        params.lang,
-      );
-      return { content: [{ type: "text", text }], details: { backend, attempts } };
+    async execute(_toolCallId, params, signal, onUpdate) {
+      try {
+        const { text, backend, attempts } = await searchOne(
+          params.query,
+          signal,
+          undefined,
+          params.lang,
+        );
+        return { content: [{ type: "text", text }], details: { backend, attempts } };
+      } catch (error) {
+        if (error instanceof AllBackendsFailedError) {
+          onUpdate?.({ content: [], details: { attempts: error.attempts } });
+        }
+        throw error;
+      }
     },
     renderCall(args, theme) {
       const langSuffix = args.lang ? ` [lang=${args.lang}]` : "";
@@ -262,8 +265,8 @@ export default function (pi: ExtensionAPI) {
         0,
       );
     },
-    renderResult(result) {
-      const attempts = (result.details as { attempts?: Attempt[] } | undefined)?.attempts ?? [];
+    renderResult(result, _options, _theme, context) {
+      const attempts = attemptsForRender(result, context?.state as BackendRenderState | undefined);
       return new Text(formatBackendLines(attempts).join("\n"), 0, 0);
     },
   });
@@ -273,21 +276,25 @@ export default function (pi: ExtensionAPI) {
     label: "Web Fetch",
     description: "Fetch a single URL as Markdown.",
     parameters: fetchParameters,
-    async execute(_toolCallId, params, signal) {
-      const { text, backend, attempts } = await fetchOne(params.url, signal);
-      const title = await pageTitle(params.url, signal);
-      return { content: [{ type: "text", text }], details: { backend, attempts, title } };
+    async execute(_toolCallId, params, signal, onUpdate) {
+      try {
+        const { text, backend, attempts } = await fetchOne(params.url, signal);
+        const title = await pageTitle(params.url, signal);
+        return { content: [{ type: "text", text }], details: { backend, attempts, title } };
+      } catch (error) {
+        if (error instanceof AllBackendsFailedError) {
+          onUpdate?.({ content: [], details: { attempts: error.attempts } });
+        }
+        throw error;
+      }
     },
     renderCall(args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold(`web_fetch - "${args.url ?? ""}"`)), 0, 0);
     },
-    renderResult(result) {
-      const details = result.details as { attempts?: Attempt[]; title?: string | null } | undefined;
-      return new Text(
-        formatBackendLines(details?.attempts ?? [], details?.title ?? null).join("\n"),
-        0,
-        0,
-      );
+    renderResult(result, _options, _theme, context) {
+      const details = result.details as { title?: string | null } | undefined;
+      const attempts = attemptsForRender(result, context?.state as BackendRenderState | undefined);
+      return new Text(formatBackendLines(attempts, details?.title ?? null).join("\n"), 0, 0);
     },
   });
 }

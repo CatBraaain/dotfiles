@@ -2,17 +2,12 @@
 
 import assert from "node:assert/strict";
 import webSearchExtension, {
-  __backendFailures,
-  __resetBackendFailures,
-  BACKEND_COOLDOWN_MS,
   BACKEND_TIMEOUT_MS,
   defaultFetchBackends,
   defaultSearchBackends,
   fetchOne,
   formatBackendLine,
   formatBackendLines,
-  isAvailable,
-  markFailed,
   openserpError,
   pageTitle,
   SEARCH_RESULT_LIMIT,
@@ -95,7 +90,6 @@ async function callFetch(
 
 describe("web_search 単体（searchOne・モックバックエンド）", () => {
   it("失敗バックエンドを順に飛ばし、最初の成功バックエンドで本文とその名前を返す", async () => {
-    __resetBackendFailures();
     const backends = [failBackend("A"), failBackend("B"), okBackend("C"), okBackend("D")];
     const result = await searchOne("query", undefined, backends);
     assert.equal(result.backend, "C");
@@ -103,7 +97,6 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
   });
 
   it("試行ごとの成否を attempts に記録し、最後は成功バックエンドになる", async () => {
-    __resetBackendFailures();
     const backends = [failBackend("A"), failBackend("B"), okBackend("C")];
     const result = await searchOne("query", undefined, backends);
     assert.deepEqual(result.attempts, [
@@ -114,7 +107,6 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
   });
 
   it("失敗バックエンドのエラー文は本文に含まず、attempts だけに含む", async () => {
-    __resetBackendFailures();
     const backends = [failBackend("A", "致命的エラー文"), okBackend("B", "成功本文")];
     const result = await searchOne("query", undefined, backends);
     assert.equal(result.text, "成功本文");
@@ -125,13 +117,11 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
   });
 
   it("全バックエンドが失敗したら例外を出す", async () => {
-    __resetBackendFailures();
     const backends = [failBackend("A"), failBackend("B")];
     await assert.rejects(searchOne("query", undefined, backends), /All web search backends failed/);
   });
 
   it("成功バックエンドの本文をそのまま返す", async () => {
-    __resetBackendFailures();
     const expectedText = "そのまま渡される本文";
     const backends = [okBackend("A", expectedText)];
     const result = await searchOne("query", undefined, backends);
@@ -156,27 +146,40 @@ describe("web_search 統合（execute 経由・実バックエンド）", () => 
   });
 
   it(`検索結果は${SEARCH_RESULT_LIMIT}件出力する`, async () => {
-    __resetBackendFailures();
     const resultText = textOf(await callSearch("pi coding agent"));
     const headings = resultText.match(/^#{2,3} \d+\./gm) ?? [];
     assert.equal(headings.length, SEARCH_RESULT_LIMIT);
   });
 
-  it("エラーを起こしたバックエンドは30分間スキップし、セッション内で共有される", () => {
-    __resetBackendFailures();
-    assert.equal(BACKEND_COOLDOWN_MS, 30 * 60 * 1000);
+  it("失敗したバックエンドも次の検索で再試行する", async () => {
+    const attemptsPerSearch: string[][] = [];
+    const backends = [
+      [
+        "A",
+        async () => {
+          attemptsPerSearch.push(["A"]);
+          throw new Error("A error");
+        },
+      ],
+      [
+        "B",
+        async () => {
+          attemptsPerSearch[attemptsPerSearch.length - 1]?.push("B");
+          throw new Error("B error");
+        },
+      ],
+    ] satisfies BackendEntry[];
 
-    markFailed("openserp(google)");
-    assert.equal(isAvailable("openserp(google)"), false);
-    assert.equal(isAvailable("openserp(duckduckgo)"), true);
+    await assert.rejects(searchOne("query", undefined, backends));
+    await assert.rejects(searchOne("query", undefined, backends));
 
-    const expiredTimestamp = Date.now() - BACKEND_COOLDOWN_MS - 1;
-    __backendFailures.set("openserp(google)", expiredTimestamp);
-    assert.equal(isAvailable("openserp(google)"), true);
+    assert.deepEqual(attemptsPerSearch, [
+      ["A", "B"],
+      ["A", "B"],
+    ]);
   });
 
   it("実バックエンドで検索が成功する", async () => {
-    __resetBackendFailures();
     const resultText = textOf(await callSearch("hello world"));
     assert.ok(resultText.length > 0);
   });
@@ -204,6 +207,25 @@ describe("web_search 表示", () => {
     };
     const lines = renderedLines(search.renderResult(result));
     assert.deepEqual(lines, ['✗ openserp(google) - "captcha detected"', "✓ openserp(bing)"]);
+  });
+
+  it("全バックエンド失敗時も renderResult が失敗行を表示する", () => {
+    const attempts: Attempt[] = [
+      { backend: "openserp(google)", ok: false, error: "captcha detected" },
+      { backend: "openserp(bing)", ok: false, error: "timeout" },
+    ];
+    const lines = renderedLines(
+      search.renderResult(
+        { content: [{ type: "text", text: "All failed" }], details: undefined },
+        {},
+        identityTheme,
+        { state: { attempts } },
+      ),
+    );
+    assert.deepEqual(lines, [
+      '✗ openserp(google) - "captcha detected"',
+      '✗ openserp(bing) - "timeout"',
+    ]);
   });
 });
 
@@ -235,15 +257,12 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     );
   });
 
-  it("web_fetch の失敗はクールダウンに入れない", async () => {
-    __resetBackendFailures();
+  it("全バックエンド失敗時にすべての失敗を記録して例外を出す", async () => {
     const backends = [failBackend("X"), failBackend("Y")];
     await assert.rejects(
       fetchOne("https://example.com/", undefined, backends),
-      /All web fetch backends failed/,
+      /All web fetch backends failed.*X: X error.*Y: Y error/,
     );
-    assert.equal(isAvailable("X"), true);
-    assert.equal(isAvailable("Y"), true);
   });
 
   it("デフォルトのバックエンド順序は trafilatura→Jina Reader→md.dhr.wtf", () => {
