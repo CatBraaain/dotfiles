@@ -48,17 +48,31 @@ interface BeforeAgentStartResult {
 interface CapturedExtension {
   fireSessionStart: () => Promise<void>;
   runRoleCommand: (role: Role) => Promise<void>;
+  getRoleWidget: () => string[] | undefined;
+  getRoleWidgetPlacement: () => string | undefined;
   onToolCall: (toolName: string) => Promise<ToolCallResult | undefined>;
   fireBeforeAgentStart: (systemPrompt: string) => Promise<BeforeAgentStartResult | undefined>;
 }
 
-const noOpUi = { setStatus: () => {}, notify: () => {} };
+const roleWidgetUi = {
+  roleWidget: undefined as unknown,
+  roleWidgetPlacement: undefined as string | undefined,
+  setWidget(key: string, content: unknown, options?: { placement?: string }) {
+    if (key === "role") {
+      this.roleWidget = content;
+      this.roleWidgetPlacement = options?.placement;
+    }
+  },
+  notify: () => {},
+};
 
 // factory をモック pi で起動し、イベントハンドラとコマンドを捕捉する。
 // quiet-tools の captureTool と同じ粒度の seam。
 function captureRoleExtension(): CapturedExtension {
   const handlers: Record<string, Array<(event: unknown, ctx: unknown) => Promise<unknown>>> = {};
   const commands = new Map<string, (args: string | undefined) => Promise<void>>();
+  roleWidgetUi.roleWidget = undefined;
+  roleWidgetUi.roleWidgetPlacement = undefined;
   roleExtension({
     on: (event: string, handler: typeof handlers[string][number]) => {
       (handlers[event] ??= []).push(handler);
@@ -71,15 +85,24 @@ function captureRoleExtension(): CapturedExtension {
   return {
     async fireSessionStart() {
       for (const handler of handlers.session_start ?? []) {
-        await handler({}, { ui: noOpUi });
+        await handler({}, { ui: roleWidgetUi });
       }
     },
     async runRoleCommand(role: Role) {
-      await commands.get(`role:${role}`)?.(undefined, { ui: noOpUi });
+      await commands.get(`role:${role}`)?.(undefined, { ui: roleWidgetUi });
+    },
+    getRoleWidget() {
+      const widgetFactory = roleWidgetUi.roleWidget as
+        | ((_ui: unknown, theme: { fg: (color: string, text: string) => string }) => { render: () => string[] })
+        | undefined;
+      return widgetFactory?.({}, { fg: (color, text) => `${color}(${text})` })?.render();
+    },
+    getRoleWidgetPlacement() {
+      return roleWidgetUi.roleWidgetPlacement;
     },
     async onToolCall(toolName: string) {
       for (const handler of handlers.tool_call ?? []) {
-        const result = (await handler({ toolName }, { ui: noOpUi })) as ToolCallResult | undefined;
+        const result = (await handler({ toolName }, { ui: roleWidgetUi })) as ToolCallResult | undefined;
         if (result?.block) return result;
       }
       return undefined;
@@ -286,6 +309,12 @@ describe("拡張の接続", () => {
     await extension.fireSessionStart();
     const result = await extension.onToolCall("read");
     assert.equal(result?.block ?? false, false);
+  });
+  it("session_start で role は dim 色の aboveEditor widget に表示される", async () => {
+    const extension = captureRoleExtension();
+    await extension.fireSessionStart();
+    assert.deepEqual(extension.getRoleWidget(), ["dim(🤖 role: manager)"]);
+    assert.equal(extension.getRoleWidgetPlacement(), "aboveEditor");
   });
   it("role:orch コマンドで orch に切り替えると、read の tool_call がハードブロックされる", async () => {
     const extension = captureRoleExtension();

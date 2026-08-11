@@ -111,7 +111,10 @@ export default function roleExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     currentRole = initialRole();
-    ctx.ui.setStatus("role", `role: ${currentRole}`);
+    ctx.ui.setWidget("role", (_ui, theme) => ({
+      render: () => [theme.fg("dim", `🤖 role: ${currentRole}`)],
+      invalidate: () => {},
+    }), { placement: "aboveEditor" });
   });
 
   pi.on("before_agent_start", async (event) => {
@@ -131,7 +134,10 @@ export default function roleExtension(pi: ExtensionAPI): void {
       description: `Switch the session role to ${role}.`,
       handler: async (_args, ctx) => {
         currentRole = switchRole(role);
-        ctx.ui.setStatus("role", `role: ${currentRole}`);
+        ctx.ui.setWidget("role", (_ui, theme) => ({
+          render: () => [theme.fg("dim", `🤖 role: ${currentRole}`)],
+          invalidate: () => {},
+        }), { placement: "aboveEditor" });
         ctx.ui.notify(`role: ${currentRole}`, "info");
       },
     });
