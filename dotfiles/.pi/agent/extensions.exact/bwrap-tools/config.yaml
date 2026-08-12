@@ -1,0 +1,48 @@
+read:
+  allow:
+    - "*"
+  ask: []
+  deny:
+    - "**/.env"
+    - "**/.env.local"
+    - "**/.env.*.local"
+    - ~/.ssh
+
+write:
+  allow:
+    - .
+    - ~/.pi
+    - ~/.config
+    - /tmp
+    - ~/.npm
+    - ~/.bun/install/cache
+    - ~/.local/share/pnpm/store
+    - ~/.yarn/berry/cache
+    - ~/.vite-plus/cache
+    - ~/.vite-plus/package_manager
+    - ~/.cache/uv
+    - ~/.cache/pip
+    - ~/.cargo/registry
+    - ~/.cache/go-build
+    - ~/go/pkg/mod
+  ask: []
+  deny: []
+
+commands:
+  allow:
+    - "*"
+  ask:
+    - git push
+    - "{npm,bun,pnpm} publish"
+    - gh pr create
+    - git reset --hard
+    - git clean -fd
+    - git push {--force,-f}
+    - "{cargo,go,pip,uv,pipx} install"
+    - rm -rf
+    - rm -fr
+    - systemctl
+    - crontab
+  deny:
+    - sudo
+    - doas
