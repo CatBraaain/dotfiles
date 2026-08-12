@@ -28,6 +28,8 @@ write:
   ask: []
   deny: []
 
+credentials: []
+
 commands:
   allow:
     - "*"

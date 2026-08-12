@@ -17,9 +17,8 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 
 ---
 
-## 2. パスのアクセス結果（全 fs ツール共通）
-
-パスごとにアクション（`allow` / `deny` / `ask`）を解決し（§3）、読み書きともに結果が決まる。
+## 2. パスのアクセス結果（通常の fs ツール共通）
+パスごとにアクション（`allow` / `deny` / `ask`）を解決し（§3）、読み書きともに結果が決まる。`credentials` に指定されたパスは §2.1 の例外に従う。
 
 | パスのアクション | 結果 |
 | --- | --- |
@@ -31,13 +30,23 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 - 秘密ファイル（`~/.ssh`, `~/.aws`, `~/.gnupg` 等）は `allow` に入れないことで読み出しを制限する。
 - `web_fetch` / `web_search` は fs 制限の対象外。
 
+### credentials の例外
+
+`credentials` は、bash コマンドが利用する必要はあるが、pi の fs ツールからは扱わせないファイルパスパターンを指定する。
+
+- `credentials` のパスは bash の sandbox に read-only で bind される。bash からの読み取りは `commands` のアクションに従う。
+- `read` `write` `edit` `grep` `find` `ls` からは常に拒否される。`paths` の設定で `allow` または動的許可になっていても、この拒否を上書きできない。
+- `credentials` のパスは `paths` のアクション判定および動的許可の対象外とする。
+- `credentials` に glob を指定した場合の絶対パス解決・起動時展開は、`paths` と同じ規則（§3）に従う。
+- `credentials` は秘密情報を agent から秘匿する機能ではない。bash は読み取った内容を標準出力や network 経由で漏洩させられる。
+
 ---
 
 ## 3. パスの解決
 
 ### パス文字列の解決
 
-`config.yaml` のパスエントリは以下の規則で絶対パスに解決し、その絶対パスでアクション判定（下記）・ bwrap の bind（§6.1）を行う。
+`config.yaml` の `paths` および `credentials` のパスエントリは以下の規則で絶対パスに解決する。`paths` はその絶対パスでアクション判定を行い、`paths` と `credentials` は bwrap の bind 対象（§6.1）とする。
 
 | 記述 | 解決先 |
 | --- | --- |
@@ -47,7 +56,7 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 
 ### glob パターン
 
-`paths` のエントリに glob（`*` `?` `**` `[...]`）を含められる。パターンは絶対パスへ解決（上記）した後に展開し、マッチした実パスそれぞれをアクション判定・ bind 対象とする。
+`paths` と `credentials` のエントリに glob（`*` `?` `**` `[...]`）を含められる。パターンは絶対パスへ解決（上記）した後に展開する。`paths` はマッチした実パスそれぞれをアクション判定・ bind 対象とし、`credentials` は bind 対象とする。
 
 | パターン | 意味 |
 | --- | --- |
@@ -106,11 +115,12 @@ network は開放。fs 制限の対象外。
 
 ## 6. 設定（`config.yaml`）
 
-ユーザーが `dotfiles/.pi/agent/extensions.exact/bwrap-tools/config.yaml` で制御。パスもコマンドも `allow` / `deny` / `ask` の3アクションで指定する。
+ユーザーが `dotfiles/.pi/agent/extensions.exact/bwrap-tools/config.yaml` で制御。通常のパスとコマンドは `allow` / `deny` / `ask` の3アクションで指定し、bash 専用パスは `credentials` で指定する。
 
 | 項目 | 意味 |
 | --- | --- |
-| `paths.allow` / `.ask` / `.deny` | パスのアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決）。実在しないパスは起動時に作成される（§6.1） |
+| `paths.allow` / `.ask` / `.deny` | 通常の fs ツールと bash のパスアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決）。実在しないパスは起動時に作成される（§6.1） |
+| `credentials` | bash の sandbox に read-only で bind するパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、`paths` のアクション判定・動的許可の対象外（§2.1・§3） |
 | `commands.allow` / `.ask` / `.deny` | コマンドのアクション（§4）。`"*"` は全コマンドにマッチ |
 
 - 優先度 `deny` > `ask` > `allow`。いずれにもマッチしないパス・コマンドは `deny`。
@@ -118,6 +128,8 @@ network は開放。fs 制限の対象外。
 
 > パス・コマンドの照合ルール（前置一致・トークン一致・`"*"` の扱い等）は実装で決定する。本 spec は「何が設定可能か」のみを規定する。
 
-### 6.1 許可パスの実在保証
+### 6.1 bind とパスの実在保証
 
-`allow` 中のパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `allow` の全パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。
+`paths` の `allow` 中のパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `allow` の全パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。
+
+`credentials` のパスは bash の sandbox にのみ `--ro-bind` する。credentials のファイル自体や glob のマッチ先は作成せず、存在するパスだけを起動時に bind する。
