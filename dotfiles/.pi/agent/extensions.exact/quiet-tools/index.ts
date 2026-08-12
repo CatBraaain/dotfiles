@@ -112,62 +112,62 @@ export default function quietToolsExtension(pi: ExtensionAPI) {
     },
   });
 
-  const originalEdit = createEditTool(process.cwd());
-  pi.registerTool({
-    name: "edit",
-    label: "edit",
-    description: originalEdit.description,
-    parameters: originalEdit.parameters,
+  // const originalEdit = createEditTool(process.cwd());
+  // pi.registerTool({
+  //   name: "edit",
+  //   label: "edit",
+  //   description: originalEdit.description,
+  //   parameters: originalEdit.parameters,
 
-    async execute(toolCallId, params, signal, onUpdate) {
-      return originalEdit.execute(toolCallId, params, signal, onUpdate);
-    },
+  //   async execute(toolCallId, params, signal, onUpdate) {
+  //     return originalEdit.execute(toolCallId, params, signal, onUpdate);
+  //   },
 
-    renderCall(args, theme) {
-      return new Text(
-        `${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", args.path)}`,
-        0,
-        0,
-      );
-    },
+  //   renderCall(args, theme) {
+  //     return new Text(
+  //       `${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", args.path)}`,
+  //       0,
+  //       0,
+  //     );
+  //   },
 
-    renderResult(result, { expanded, isPartial }, theme, context) {
-      if (isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
+  //   renderResult(result, { expanded, isPartial }, theme, context) {
+  //     if (isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
 
-      const output = result.content[0]?.type === "text" ? result.content[0].text : "";
-      if (context.isError) return new Text(theme.fg("error", output), 0, 0);
+  //     const output = result.content[0]?.type === "text" ? result.content[0].text : "";
+  //     if (context.isError) return new Text(theme.fg("error", output), 0, 0);
 
-      const diff = (result.details as { diff?: string } | undefined)?.diff;
-      if (expanded) return new Text(theme.fg("dim", diff ?? output), 0, 0);
+  //     const diff = (result.details as { diff?: string } | undefined)?.diff;
+  //     if (expanded) return new Text(theme.fg("dim", diff ?? output), 0, 0);
 
-      const editCount = Array.isArray(context.args?.edits) ? context.args.edits.length : 1;
-      return new Text(theme.fg("success", `edited ${editCount} block(s)`), 0, 0);
-    },
-  });
+  //     const editCount = Array.isArray(context.args?.edits) ? context.args.edits.length : 1;
+  //     return new Text(theme.fg("success", `edited ${editCount} block(s)`), 0, 0);
+  //   },
+  // });
 
-  const originalRead = createReadTool(process.cwd());
-  pi.registerTool({
-    name: "read",
-    label: "read",
-    description: originalRead.description,
-    parameters: originalRead.parameters,
+  // const originalRead = createReadTool(process.cwd());
+  // pi.registerTool({
+  //   name: "read",
+  //   label: "read",
+  //   description: originalRead.description,
+  //   parameters: originalRead.parameters,
 
-    async execute(toolCallId, params, signal, onUpdate) {
-      return originalRead.execute(toolCallId, params, signal, onUpdate);
-    },
+  //   async execute(toolCallId, params, signal, onUpdate) {
+  //     return originalRead.execute(toolCallId, params, signal, onUpdate);
+  //   },
 
-    renderCall(args, theme) {
-      return new Text(
-        `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", args.path)}`,
-        0,
-        0,
-      );
-    },
+  //   renderCall(args, theme) {
+  //     return new Text(
+  //       `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", args.path)}`,
+  //       0,
+  //       0,
+  //     );
+  //   },
 
-    renderResult(result, options, theme, context) {
-      return renderTextToolResult(result, options, theme, context, "lines");
-    },
-  });
+  //   renderResult(result, options, theme, context) {
+  //     return renderTextToolResult(result, options, theme, context, "lines");
+  //   },
+  // });
 
   const originalGrep = createGrepTool(process.cwd());
   pi.registerTool({
