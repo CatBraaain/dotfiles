@@ -2,7 +2,12 @@
 // 詳細は ./SPEC.md。
 
 import type { ExtensionAPI, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
+import {
+	fuzzyFilter,
+	type AutocompleteItem,
+	type AutocompleteProvider,
+	type AutocompleteSuggestions,
+} from "@earendil-works/pi-tui";
 
 const SKILL_PREFIX = "skill:";
 
@@ -34,13 +39,13 @@ export function rewriteCompletionItems(
 	items: ReadonlyArray<AutocompleteItem>,
 	slashPrefix: string,
 ): AutocompleteItem[] {
-	return items
-		.map((item) => {
-			if (!item.value.startsWith(SKILL_PREFIX)) return item;
-			const bareName = item.value.slice(SKILL_PREFIX.length);
-			return { ...item, value: bareName, label: bareName };
-		})
-		.filter((item) => item.value.startsWith(slashPrefix));
+	const rewrittenItems = items.map((item) => {
+		if (!item.value.startsWith(SKILL_PREFIX)) return item;
+		const bareName = item.value.slice(SKILL_PREFIX.length);
+		return { ...item, value: bareName, label: bareName };
+	});
+
+	return fuzzyFilter(rewrittenItems, slashPrefix, (item) => item.value);
 }
 
 function slashPrefixBeforeCursor(textBeforeCursor: string): string | undefined {

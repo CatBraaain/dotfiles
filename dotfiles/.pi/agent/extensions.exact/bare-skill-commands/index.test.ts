@@ -53,7 +53,7 @@ describe("補完の表示", () => {
 		]);
 	});
 
-	it("/fo の入力では fo で始まる裸名だけ残る", () => {
+	it("/fo の入力では fo に一致する裸名だけ残る", () => {
 		const allCommandItems: AutocompleteItem[] = [
 			completionItem("skill:foo"),
 			completionItem("skill:bar"),
@@ -65,10 +65,18 @@ describe("補完の表示", () => {
 		assert.deepEqual(displayedItems, [{ value: "foo", label: "foo" }]);
 	});
 
-	it("/sk の入力では skill: を剥がした裸名がどれも sk で始まらないため候補が空になる", () => {
+	it("/bsk の入力では文字が順番に現れる裸名が残る", () => {
+		const skillPrefixedItems: AutocompleteItem[] = [completionItem("skill:bare-skill-commands")];
+
+		const displayedItems = rewriteCompletionItems(skillPrefixedItems, "bsk");
+
+		assert.deepEqual(displayedItems, [{ value: "bare-skill-commands", label: "bare-skill-commands" }]);
+	});
+
+	it("/z の入力では一致する候補がないため空になる", () => {
 		const skillPrefixedItems: AutocompleteItem[] = [completionItem("skill:foo"), completionItem("skill:bar")];
 
-		const displayedItems = rewriteCompletionItems(skillPrefixedItems, "sk");
+		const displayedItems = rewriteCompletionItems(skillPrefixedItems, "z");
 
 		assert.deepEqual(displayedItems, []);
 	});
