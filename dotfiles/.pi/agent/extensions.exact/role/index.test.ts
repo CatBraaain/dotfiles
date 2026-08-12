@@ -1,26 +1,25 @@
-// 実行: bun --install=auto run index.test.ts
-//
-// role 拡張機能の振る舞いを検証する。
-// 権限マトリクス等は ./index.ts の純粋関数を直接叩き、
-// session_start / before_agent_start / tool_call / role:* コマンドは factory をモック起動して検証する。
-// 各 it のタイトルが要件仕様（出典: ./SPEC.md）。
+import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
+import { Container } from "@earendil-works/pi-tui";
 import roleExtension, {
+  __abortTimer,
+  __spawn,
   FAILURE_CATEGORIES,
   FAILURE_CATEGORY_LABELS,
-  ROLES,
+  type ChildObservation,
+  type RoleConfig,
   buildRoleSystemPromptAddendum,
   canDelegate,
-  canOperateFiles,
   childRole,
   initialRole,
   isOwnerDisplayObservation,
   isParentReportObservation,
+  parseRoleConfig,
   reportDestination,
+  formatToolCall,
   shouldBlockToolCall,
   switchRole,
 } from "./index";
-import type { ChildObservation, Principal, Role } from "./index";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
 let group = "";
@@ -36,320 +35,618 @@ function it(name: string, fn: () => Promise<void> | void): void {
   tests.push({ name: group ? `${group} > ${name}` : name, fn });
 }
 
-interface ToolCallResult {
-  block?: boolean;
-  reason?: string;
-}
-
-interface BeforeAgentStartResult {
-  systemPrompt?: string;
-}
-
-interface CapturedExtension {
-  fireSessionStart: () => Promise<void>;
-  runRoleCommand: (role: Role) => Promise<void>;
-  getRoleWidget: () => string[] | undefined;
-  getRoleWidgetPlacement: () => string | undefined;
-  onToolCall: (toolName: string) => Promise<ToolCallResult | undefined>;
-  fireBeforeAgentStart: (systemPrompt: string) => Promise<BeforeAgentStartResult | undefined>;
-}
-
-const roleWidgetUi = {
-  roleWidget: undefined as unknown,
-  roleWidgetPlacement: undefined as string | undefined,
-  setWidget(key: string, content: unknown, options?: { placement?: string }) {
-    if (key === "role") {
-      this.roleWidget = content;
-      this.roleWidgetPlacement = options?.placement;
-    }
+const config: RoleConfig = {
+  default: "manager",
+  roles: {
+    manager: {
+      model: "zai/glm-5.2",
+      tools: ["*"],
+      subagents: ["worker"],
+      systemPrompt: "ファイル操作は禁止",
+    },
+    worker: { model: "commandcode/gpt-5.6-luna", tools: ["*"], subagents: [], systemPrompt: "" },
+    chat: {
+      model: "commandcode/gpt-5.6-luna",
+      tools: ["web_search", "web_fetch"],
+      subagents: [],
+      systemPrompt: "",
+    },
   },
-  notify: () => {},
 };
 
-// factory をモック pi で起動し、イベントハンドラとコマンドを捕捉する。
-// quiet-tools の captureTool と同じ粒度の seam。
-function captureRoleExtension(): CapturedExtension {
-  const handlers: Record<string, Array<(event: unknown, ctx: unknown) => Promise<unknown>>> = {};
-  const commands = new Map<string, (args: string | undefined) => Promise<void>>();
-  roleWidgetUi.roleWidget = undefined;
-  roleWidgetUi.roleWidgetPlacement = undefined;
-  roleExtension({
-    on: (event: string, handler: typeof handlers[string][number]) => {
-      (handlers[event] ??= []).push(handler);
+type CapturedTool = {
+  execute: (...args: any[]) => Promise<any>;
+  renderResult?: (...args: any[]) => unknown;
+};
+type Handler = (event: any, ctx: any) => Promise<any>;
+
+class FakeChild extends EventEmitter {
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  killed = false;
+  killHistory: string[] = [];
+  ignoreTerm = false;
+
+  kill(signal = "SIGTERM"): boolean {
+    this.killHistory.push(signal);
+    if (signal === "SIGKILL" || !this.ignoreTerm) {
+      this.killed = true;
+      setImmediate(() => this.emit("close", 1));
+    }
+    return true;
+  }
+}
+
+function captureRoleExtension(
+  injectedConfig: { config?: RoleConfig; error?: string } = { config },
+) {
+  const handlers = new Map<string, Handler[]>();
+  const commands = new Map<string, Handler>();
+  const notifications: string[] = [];
+  const activeTools: string[][] = [];
+  const selectedModels: unknown[] = [];
+  const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
+  const children: FakeChild[] = [];
+  let spawnResponder: (child: FakeChild) => void = () => {};
+  let roleWidget: any;
+  let registeredTool: CapturedTool | undefined;
+
+  const originalSpawn = __spawn.current;
+  __spawn.current = ((command: string, args: string[], options: { cwd?: string }) => {
+    const child = new FakeChild();
+    spawnCalls.push({ command, args, cwd: options.cwd });
+    children.push(child);
+    setImmediate(() => spawnResponder(child));
+    return child;
+  }) as unknown as typeof __spawn.current;
+
+  roleExtension(
+    {
+      on(event: string, handler: Handler) {
+        const eventHandlers = handlers.get(event) ?? [];
+        eventHandlers.push(handler);
+        handlers.set(event, eventHandlers);
+      },
+      registerCommand(name: string, definition: { handler: Handler }) {
+        commands.set(name, definition.handler);
+      },
+      registerFlag() {},
+      registerTool(tool: CapturedTool) {
+        registeredTool = tool;
+      },
+      getFlag() {},
+      getAllTools() {
+        return [{ name: "read" }, { name: "bash" }, { name: "subagent" }];
+      },
+      setActiveTools(tools: string[]) {
+        activeTools.push(tools);
+      },
+      async setModel(model: unknown) {
+        selectedModels.push(model);
+        return true;
+      },
+    } as never,
+    injectedConfig,
+  );
+
+  const ui = {
+    setWidget(_key: string, widget: unknown) {
+      roleWidget = widget;
     },
-    registerCommand: (name: string, def: { handler: (args: string | undefined) => Promise<void> }) => {
-      commands.set(name, def.handler);
+    notify(message: string) {
+      notifications.push(message);
     },
-  } as never);
+  };
+  const context = {
+    cwd: "/parent",
+    ui,
+    modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+  };
 
   return {
-    async fireSessionStart() {
-      for (const handler of handlers.session_start ?? []) {
-        await handler({}, { ui: roleWidgetUi });
+    children,
+    commands,
+    context,
+    notifications,
+    activeTools,
+    selectedModels,
+    spawnCalls,
+    restore() {
+      __spawn.current = originalSpawn;
+    },
+    respondToChild(responder: (child: FakeChild) => void) {
+      spawnResponder = responder;
+    },
+    async sessionStart() {
+      for (const handler of handlers.get("session_start") ?? []) await handler({}, context);
+    },
+    async runCommand(role: string) {
+      await commands.get(`role:${role}`)?.({}, context);
+    },
+    roleWidget() {
+      return roleWidget?.({}, { fg: (_color: string, text: string) => text })?.render();
+    },
+    async toolCall(toolName: string) {
+      for (const handler of handlers.get("tool_call") ?? []) {
+        const result = await handler({ toolName }, context);
+        if (result) return result;
       }
+      return undefined;
     },
-    async runRoleCommand(role: Role) {
-      await commands.get(`role:${role}`)?.(undefined, { ui: roleWidgetUi });
-    },
-    getRoleWidget() {
-      const widgetFactory = roleWidgetUi.roleWidget as
-        | ((_ui: unknown, theme: { fg: (color: string, text: string) => string }) => { render: () => string[] })
-        | undefined;
-      return widgetFactory?.({}, { fg: (color, text) => `${color}(${text})` })?.render();
-    },
-    getRoleWidgetPlacement() {
-      return roleWidgetUi.roleWidgetPlacement;
-    },
-    async onToolCall(toolName: string) {
-      for (const handler of handlers.tool_call ?? []) {
-        const result = (await handler({ toolName }, { ui: roleWidgetUi })) as ToolCallResult | undefined;
-        if (result?.block) return result;
+    async beforeAgentStart(systemPrompt: string) {
+      for (const handler of handlers.get("before_agent_start") ?? []) {
+        const result = await handler({ systemPrompt }, context);
+        if (result) return result;
       }
       return undefined;
     },
-    async fireBeforeAgentStart(systemPrompt: string) {
-      for (const handler of handlers.before_agent_start ?? []) {
-        const result = (await handler({ systemPrompt }, {})) as BeforeAgentStartResult | undefined;
-        if (result?.systemPrompt) return result;
-      }
-      return undefined;
+    async executeSubagent(
+      params: Record<string, unknown>,
+      signal?: AbortSignal,
+      onUpdate?: (update: any) => void,
+    ) {
+      return registeredTool?.execute("call", params, signal, onUpdate, context);
+    },
+    renderResult(...args: any[]) {
+      return registeredTool?.renderResult?.(...args);
     },
   };
 }
+describe("設定", () => {
+  it("YAML を role 設定として読み込む", () => {
+    const result = parseRoleConfig(`default: manager
+roles:
+  manager:
+    model: test/model
+    tools: [read]
+    subagents: []
+    systemPrompt: hello`);
+    assert.equal(result.config?.default, "manager");
+    assert.deepEqual(result.config?.roles.manager.tools, ["read"]);
+  });
 
-describe("セッションのロール遷移", () => {
-  it("新規セッションは manager で始まる", () => {
-    assert.equal(initialRole(), "manager");
+  it("未定義の default role を拒否する", () => {
+    const result = parseRoleConfig("default: missing\nroles: {}\n");
+    assert.match(result.error ?? "", /not defined/);
   });
-  it("保存済みセッションを再開すると、保存前のロール（orch / manager / worker / chat）によらず manager で始まる", () => {
-    for (const previousRole of ROLES) {
-      assert.equal(initialRole(previousRole), "manager");
-    }
-  });
-  it("オーナーがロールを orch へ切り替えると、セッションのロールは orch になる", () => {
-    assert.equal(switchRole("orch"), "orch");
-  });
-  it("オーナーがロールを manager へ切り替えると、セッションのロールは manager になる", () => {
-    assert.equal(switchRole("manager"), "manager");
-  });
-  it("オーナーがロールを worker へ切り替えると、セッションのロールは worker になる", () => {
-    assert.equal(switchRole("worker"), "worker");
-  });
-  it("オーナーがロールを chat へ切り替えると、セッションのロールは chat になる", () => {
-    assert.equal(switchRole("chat"), "chat");
+
+  it("未定義の委譲先を拒否する", () => {
+    const result = parseRoleConfig(`default: manager
+roles:
+  manager:
+    model: test/model
+    tools: []
+    subagents: [missing]
+    systemPrompt: ""`);
+    assert.match(result.error ?? "", /undefined role/);
   });
 });
 
-describe("ファイル操作の権限", () => {
-  it("orch のセッションで read / write / edit を要求すると、操作はハードブロックされる", () => {
-    const hardBlockedTools = ["read", "write", "edit"] as const;
-    for (const tool of hardBlockedTools) {
-      assert.equal(shouldBlockToolCall("orch", tool), true);
-    }
+describe("セッションの role", () => {
+  it("config の default role で開始し、指定された role は子セッションの開始 role にする", () => {
+    assert.equal(initialRole(config), "manager");
+    assert.equal(initialRole(config, "chat"), "chat");
+    assert.equal(initialRole(config, "missing"), "manager");
   });
-  it("orch のセッションで bash を要求すると、操作は実行される", () => {
-    assert.equal(shouldBlockToolCall("orch", "bash"), false);
-  });
-  it("manager / worker のセッションでは read / write / edit / bash すべて実行される", () => {
-    const rolesWithFileAccess: Role[] = ["manager", "worker"];
-    const executableTools = ["read", "write", "edit", "bash"] as const;
-    for (const role of rolesWithFileAccess) {
-      assert.equal(canOperateFiles(role), true);
-      for (const tool of executableTools) {
-        assert.equal(shouldBlockToolCall(role, tool), false);
-      }
-    }
-  });
-  it("chat のセッションで read / write / edit を要求すると、操作はハードブロックされる", () => {
-    const hardBlockedTools = ["read", "write", "edit"] as const;
-    for (const tool of hardBlockedTools) {
-      assert.equal(shouldBlockToolCall("chat", tool), true);
-    }
+  it("定義済み role に切り替える", () => {
+    assert.equal(switchRole("chat", config), "chat");
   });
 });
 
-describe("ファイル操作禁止のシステムプロンプト指定", () => {
-  it("orch ロールでは、システムプロンプトにファイル操作禁止の指示を追加する", () => {
-    const addendum = buildRoleSystemPromptAddendum("orch");
-    assert.ok(addendum.length > 0);
-    assert.ok(addendum.includes("ファイル操作"));
+describe("ツール許可", () => {
+  it("許可一覧にないツールをブロックする", () => {
+    assert.equal(shouldBlockToolCall("chat", "bash", config), true);
   });
-  it("chat ロールでは、システムプロンプトにファイル操作禁止の指示を追加する", () => {
-    const addendum = buildRoleSystemPromptAddendum("chat");
-    assert.ok(addendum.length > 0);
-    assert.ok(addendum.includes("ファイル操作"));
+
+  it("ワイルドカードは未知のツールを含むすべてを許可する", () => {
+    assert.equal(shouldBlockToolCall("manager", "future_tool", config), false);
   });
-  it("manager / worker ロールでは、システムプロンプトへの追加は空になる", () => {
-    assert.equal(buildRoleSystemPromptAddendum("manager"), "");
-    assert.equal(buildRoleSystemPromptAddendum("worker"), "");
+
+  it("subagent は role のツール一覧に関係なく利用可能", () => {
+    assert.equal(shouldBlockToolCall("chat", "subagent", config), false);
+  });
+
+  it("chat は web_search と web_fetch だけを許可する", () => {
+    assert.equal(shouldBlockToolCall("chat", "web_search", config), false);
+    assert.equal(shouldBlockToolCall("chat", "web_fetch", config), false);
   });
 });
 
-describe("委譲の可否", () => {
-  it("orch から orch へ委譲すると、子セッションは起動せず orch のセッションが継続する", () => {
-    assert.equal(canDelegate("orch", "orch"), false);
-    assert.equal(childRole("orch", "orch"), undefined);
-  });
-  it("orch から manager へ委譲すると、manager ロールの子セッションが起動する", () => {
-    assert.equal(canDelegate("orch", "manager"), true);
-    assert.equal(childRole("orch", "manager"), "manager");
-  });
-  it("orch から worker へ委譲すると、子セッションは起動せず orch のセッションが継続する", () => {
-    assert.equal(canDelegate("orch", "worker"), false);
-    assert.equal(childRole("orch", "worker"), undefined);
-  });
-  it("orch から chat へ委譲すると、子セッションは起動せず orch のセッションが継続する", () => {
-    assert.equal(canDelegate("orch", "chat"), false);
-    assert.equal(childRole("orch", "chat"), undefined);
-  });
-  it("manager から orch へ委譲すると、子セッションは起動せず manager のセッションが継続する", () => {
-    assert.equal(canDelegate("manager", "orch"), false);
-    assert.equal(childRole("manager", "orch"), undefined);
-  });
-  it("manager から manager へ委譲すると、子セッションは起動せず manager のセッションが継続する", () => {
-    assert.equal(canDelegate("manager", "manager"), false);
-    assert.equal(childRole("manager", "manager"), undefined);
-  });
-  it("manager から worker へ委譲すると、worker ロールの子セッションが起動する", () => {
-    assert.equal(canDelegate("manager", "worker"), true);
-    assert.equal(childRole("manager", "worker"), "worker");
-  });
-  it("manager から chat へ委譲すると、子セッションは起動せず manager のセッションが継続する", () => {
-    assert.equal(canDelegate("manager", "chat"), false);
-    assert.equal(childRole("manager", "chat"), undefined);
-  });
-  it("worker から orch へ委譲すると、子セッションは起動せず worker のセッションが継続する", () => {
-    assert.equal(canDelegate("worker", "orch"), false);
-    assert.equal(childRole("worker", "orch"), undefined);
-  });
-  it("worker から manager へ委譲すると、子セッションは起動せず worker のセッションが継続する", () => {
-    assert.equal(canDelegate("worker", "manager"), false);
-    assert.equal(childRole("worker", "manager"), undefined);
-  });
-  it("worker から worker へ委譲すると、子セッションは起動せず worker のセッションが継続する", () => {
-    assert.equal(canDelegate("worker", "worker"), false);
-    assert.equal(childRole("worker", "worker"), undefined);
-  });
-  it("chat から worker へ委譲すると、子セッションは起動せず chat のセッションが継続する", () => {
-    assert.equal(canDelegate("chat", "worker"), false);
-    assert.equal(childRole("chat", "worker"), undefined);
+describe("委譲", () => {
+  it("manager は設定された worker だけを起動できる", () => {
+    assert.equal(canDelegate("manager", "worker", config), true);
+    assert.equal(canDelegate("manager", "chat", config), false);
+    assert.equal(childRole("manager", "worker", config), "worker");
   });
 });
 
-describe("chat ロールのツール制限", () => {
-  it("chat のセッションで web_search / web_fetch を要求すると、操作は実行される", () => {
-    const allowedTools = ["web_search", "web_fetch"] as const;
-    for (const tool of allowedTools) {
-      assert.equal(shouldBlockToolCall("chat", tool), false);
+describe("システムプロンプトと報告", () => {
+  it("role の systemPrompt を追記する", () => {
+    assert.match(buildRoleSystemPromptAddendum("manager", config), /ファイル操作は禁止/);
+  });
+
+  it("子の進行だけを owner に表示し、完了報告の3種だけを親へ渡す", () => {
+    const progress: ChildObservation = { kind: "progress", content: "running" };
+    assert.equal(isOwnerDisplayObservation(progress), true);
+    assert.equal(isParentReportObservation({ kind: "intermediate-log", content: "log" }), false);
+    for (const kind of ["final-result", "work-highlights", "artifact-info"] as const) {
+      assert.equal(isParentReportObservation({ kind, content: "result" }), true);
     }
   });
-  it("chat のセッションで web_search / web_fetch 以外のツール（ファイル操作・bash など）を要求すると、操作は実行されない", () => {
-    const blockedTools = ["read", "write", "edit", "bash"] as const;
-    for (const tool of blockedTools) {
-      assert.equal(shouldBlockToolCall("chat", tool), true);
-    }
-  });
-});
 
-describe("委譲結果の観測", () => {
-  it("委譲中、子エージェントの進行（メッセージ・ツール実行）はオーナーに表示される", () => {
-    const childProgress: ChildObservation = { kind: "progress", content: "running bash..." };
-    assert.equal(isOwnerDisplayObservation(childProgress), true);
+  it("worker は委譲元へ報告する", () => {
+    assert.equal(reportDestination("worker", "manager"), "manager");
   });
-  it("子エージェントの中間ログは親エージェントに渡らない", () => {
-    const childIntermediateLog: ChildObservation = { kind: "intermediate-log", content: "log line" };
-    assert.equal(isParentReportObservation(childIntermediateLog), false);
-  });
-  it("委譲完了時、親エージェントに渡るのは 最終結果・作業要点・成果物情報 の3つだけで、中間ログは含まれない", () => {
-    const parentReportKinds = ["final-result", "work-highlights", "artifact-info"] as const;
-    for (const kind of parentReportKinds) {
-      const observation: ChildObservation = { kind, content: "x" };
-      assert.equal(isParentReportObservation(observation), true);
-    }
-    assert.equal(isParentReportObservation({ kind: "intermediate-log", content: "x" }), false);
-    assert.equal(isParentReportObservation({ kind: "progress", content: "x" }), false);
-  });
-});
 
-describe("報告", () => {
-  it("タスクを遂行できないとき、理由を 権限不足 と 力量・情報不足 の2区分で報告する", () => {
+  it("manager は caller ではなく owner へ報告する", () => {
+    assert.equal(reportDestination("manager", "orchestrator"), "owner");
+  });
+
+  it("失敗理由の区分を公開する", () => {
     assert.deepEqual([...FAILURE_CATEGORIES], ["permission", "capacity"]);
     assert.equal(FAILURE_CATEGORY_LABELS.permission, "権限不足");
-    assert.equal(FAILURE_CATEGORY_LABELS.capacity, "力量・情報不足");
   });
-  it("worker が manager から呼ばれて遂行できないとき、報告先は manager になる", () => {
-    const destination: Principal = reportDestination("worker", "manager");
-    assert.equal(destination, "manager");
-  });
-  it("worker がオーナー直下で遂行できないとき、報告先はオーナーになる", () => {
-    const destination: Principal = reportDestination("worker", "owner");
-    assert.equal(destination, "owner");
-  });
-  it("manager が orch から呼ばれて遂行できないとき、報告先は orch になる", () => {
-    const destination: Principal = reportDestination("manager", "orch");
-    assert.equal(destination, "orch");
-  });
-  it("manager がオーナー直下で遂行できないとき、報告先はオーナーになる", () => {
-    const destination: Principal = reportDestination("manager", "owner");
-    assert.equal(destination, "owner");
-  });
-  it("orch が遂行できないとき、報告先はオーナーになる", () => {
-    const destination: Principal = reportDestination("orch", "owner");
-    assert.equal(destination, "owner");
-  });
-  it("chat が遂行できないとき、報告先はオーナーになる", () => {
-    const destination: Principal = reportDestination("chat", "owner");
-    assert.equal(destination, "owner");
+});
+
+describe("ツール実行の表示", () => {
+  it("引数プレビューを100文字まで表示する", () => {
+    const renderedCall = formatToolCall(
+      "bash",
+      { command: "x".repeat(95) },
+      (_color, text) => text,
+    );
+    assert.equal(renderedCall.length, 108);
   });
 });
 
 describe("拡張の接続", () => {
-  it("session_start でセッションのロールは manager に初期化され、ファイル操作が許可される", async () => {
+  it("起動時に default role を適用し、role 表示と allowlist を更新する", async () => {
     const extension = captureRoleExtension();
-    await extension.fireSessionStart();
-    const result = await extension.onToolCall("read");
-    assert.equal(result?.block ?? false, false);
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.roleWidget(), ["🤖 role: manager"]);
+      assert.deepEqual(extension.activeTools.at(-1), ["read", "bash", "subagent"]);
+    } finally {
+      extension.restore();
+    }
   });
-  it("session_start で role は dim 色の aboveEditor widget に表示される", async () => {
+
+  it("role 切り替え時にモデル、ツール、表示を role の設定へ切り替える", async () => {
     const extension = captureRoleExtension();
-    await extension.fireSessionStart();
-    assert.deepEqual(extension.getRoleWidget(), ["dim(🤖 role: manager)"]);
-    assert.equal(extension.getRoleWidgetPlacement(), "aboveEditor");
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("chat");
+      assert.deepEqual(extension.activeTools.at(-1), ["web_search", "web_fetch", "subagent"]);
+      assert.deepEqual(extension.selectedModels.at(-1), {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
+      assert.deepEqual(extension.roleWidget(), ["🤖 role: chat"]);
+      assert.deepEqual(extension.notifications, ["role: chat"]);
+    } finally {
+      extension.restore();
+    }
   });
-  it("role:orch コマンドで orch に切り替えると、read の tool_call がハードブロックされる", async () => {
+
+  it("許可されないツールの tool_call をブロックし、セッション継続理由を返す", async () => {
     const extension = captureRoleExtension();
-    await extension.runRoleCommand("orch");
-    const result = await extension.onToolCall("read");
-    assert.equal(result?.block, true);
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("chat");
+      const blockedCall = await extension.toolCall("bash");
+      assert.deepEqual(blockedCall, { block: true, reason: "role chat cannot use bash" });
+    } finally {
+      extension.restore();
+    }
   });
-  it("role:orch コマンドで orch に切り替えても、bash の tool_call は許可される", async () => {
+
+  it("設定された systemPrompt を次回実行のシステムプロンプトへ追記する", async () => {
     const extension = captureRoleExtension();
-    await extension.runRoleCommand("orch");
-    const result = await extension.onToolCall("bash");
-    assert.equal(result?.block ?? false, false);
+    try {
+      await extension.runCommand("manager");
+      const result = await extension.beforeAgentStart("base");
+      assert.match(result.systemPrompt, /^base\n\nファイル操作は禁止$/);
+    } finally {
+      extension.restore();
+    }
   });
-  it("role:chat コマンドで chat に切り替えると、web_search は許可され bash はブロックされる", async () => {
+
+  it("許可された role の subagent を指定モデルと role で起動し、最終結果を親へ返す", async () => {
     const extension = captureRoleExtension();
-    await extension.runRoleCommand("chat");
-    const webSearchResult = await extension.onToolCall("web_search");
-    const bashResult = await extension.onToolCall("bash");
-    assert.equal(webSearchResult?.block ?? false, false);
-    assert.equal(bashResult?.block, true);
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "pwd" } })}\n${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } })}\n`,
+        ),
+      );
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({
+        role: "worker",
+        task: "work",
+        cwd: "/child",
+      });
+      assert.equal(result.content[0].text, "done");
+      assert.equal(extension.spawnCalls.length, 1);
+      assert.equal(extension.spawnCalls[0].cwd, "/child");
+      assert.deepEqual(extension.spawnCalls[0].args.slice(1), [
+        "--mode",
+        "json",
+        "-p",
+        "--no-session",
+        "--model",
+        "commandcode/gpt-5.6-luna",
+        "--role",
+        "worker",
+        "Task: work",
+      ]);
+    } finally {
+      extension.restore();
+    }
   });
-  it("orch ロールの before_agent_start は、システムプロンプトにファイル操作禁止を追記する", async () => {
+
+  it("委譲が許可されない role からの subagent を起動せず理由を返す", async () => {
     const extension = captureRoleExtension();
-    await extension.runRoleCommand("orch");
-    const basePrompt = "元のシステムプロンプト";
-    const result = await extension.fireBeforeAgentStart(basePrompt);
-    assert.ok(result?.systemPrompt?.startsWith(basePrompt));
-    assert.ok(result?.systemPrompt?.includes("ファイル操作"));
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "manager", task: "work" });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /Permission denied/);
+      assert.equal(extension.spawnCalls.length, 0);
+    } finally {
+      extension.restore();
+    }
   });
-  it("manager ロールの before_agent_start は、システムプロンプトを変更しない", async () => {
+
+  it("未定義 role の subagent を起動せず理由を返す", async () => {
     const extension = captureRoleExtension();
-    await extension.runRoleCommand("manager");
-    const basePrompt = "元のシステムプロンプト";
-    const result = await extension.fireBeforeAgentStart(basePrompt);
-    assert.equal(result?.systemPrompt ?? basePrompt, basePrompt);
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "missing", task: "work" });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /not defined/);
+      assert.equal(extension.spawnCalls.length, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("subagent の実行中に子の結果を onUpdate へ渡す", async () => {
+    const extension = captureRoleExtension();
+    const updates: any[] = [];
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "pwd" } })}\n${JSON.stringify({ type: "tool_execution_update", toolCallId: "call-1", toolName: "bash", args: { command: "pwd" }, partialResult: { content: [] } })}\n${JSON.stringify({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: { content: [] }, isError: false })}\n`,
+        ),
+      );
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      await extension.executeSubagent({ role: "worker", task: "work" }, undefined, (update) =>
+        updates.push(update),
+      );
+      assert.equal(updates.length, 3);
+      assert.equal(updates[0].details.results[0].actions[0].name, "bash");
+      assert.equal(updates[0].details.results[0].actions[0].args.command, "pwd");
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("親のキャンセルを SIGTERM として子へ伝播し、子を中断結果にする", async () => {
+    const extension = captureRoleExtension();
+    const controller = new AbortController();
+    let scheduledAbortTimer = false;
+    let clearedAbortTimer = false;
+    const originalAbortTimer = __abortTimer.set;
+    const originalClearAbortTimer = __abortTimer.clear;
+    __abortTimer.set = (callback) => {
+      scheduledAbortTimer = true;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    __abortTimer.clear = () => {
+      clearedAbortTimer = true;
+    };
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent(
+        { role: "worker", task: "work" },
+        controller.signal,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      controller.abort();
+      const result = await execution;
+      assert.equal(result.isError, true);
+      assert.equal(result.details.results[0].stopReason, "aborted");
+      assert.match(result.content[0].text, /aborted/);
+      assert.deepEqual(extension.children[0].killHistory, ["SIGTERM"]);
+      assert.equal(scheduledAbortTimer, true);
+      assert.equal(clearedAbortTimer, true);
+    } finally {
+      __abortTimer.set = originalAbortTimer;
+      __abortTimer.clear = originalClearAbortTimer;
+      extension.restore();
+    }
+  });
+
+  it("SIGTERM を無視する子へ 5 秒後に SIGKILL を送る", async () => {
+    const extension = captureRoleExtension();
+    const controller = new AbortController();
+    let runAbortTimer: (() => void) | undefined;
+    const originalAbortTimer = __abortTimer.set;
+    __abortTimer.set = (callback) => {
+      runAbortTimer = callback;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    extension.respondToChild((child) => {
+      child.ignoreTerm = true;
+    });
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent(
+        { role: "worker", task: "work" },
+        controller.signal,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      controller.abort();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(runAbortTimer !== undefined, true);
+      runAbortTimer?.();
+      const result = await execution;
+      assert.equal(result.isError, true);
+      assert.deepEqual(extension.children[0].killHistory, ["SIGTERM", "SIGKILL"]);
+    } finally {
+      __abortTimer.set = originalAbortTimer;
+      extension.restore();
+    }
+  });
+
+  it("正常終了した子に対する親の abort を無視する", async () => {
+    const extension = captureRoleExtension();
+    const controller = new AbortController();
+    extension.respondToChild((child) => child.emit("close", 0));
+    try {
+      await extension.sessionStart();
+      await extension.executeSubagent({ role: "worker", task: "work" }, controller.signal);
+      controller.abort();
+      assert.deepEqual(extension.children[0].killHistory, []);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("設定エラーを subagent のエラー結果として返す", async () => {
+    const extension = captureRoleExtension({ error: "invalid config" });
+    try {
+      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /invalid config/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("空の task を拒否し、子プロセスを起動しない", async () => {
+    const extension = captureRoleExtension();
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "worker", task: "" });
+      assert.equal(result.content[0].text, "Invalid parameters. Provide a task.");
+      assert.equal(extension.spawnCalls.length, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("role の設定エラーを session_start で owner に通知する", async () => {
+    const extension = captureRoleExtension({ error: "invalid config" });
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.notifications, ["role configuration error: invalid config"]);
+    } finally {
+      extension.restore();
+    }
+  });
+});
+
+describe("subagent の表示", () => {
+  it("常に展開形式で task、ツール実行、最終応答を表示する", async () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [
+        {
+          role: "worker",
+          task: "work",
+          exitCode: 0,
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "toolCall", name: "bash", arguments: { command: "pwd" } }],
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+          ],
+          actions: [],
+          stderr: "",
+        },
+      ],
+    };
+    try {
+      const rendered = extension.renderResult(
+        { content: [], details },
+        {},
+        {
+          fg: (color: string, text: string) => `[${color}]${text}`,
+          bold: (text: string) => `*${text}*`,
+        },
+      );
+      assert.ok(rendered instanceof Container);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("ツール利用がない場合は Actions を表示しない", () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [{ role: "worker", task: "work", exitCode: 0, messages: [], actions: [], stderr: "" }],
+    };
+    try {
+      const rendered = extension.renderResult({ content: [], details }, {}, {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      });
+      assert.equal((rendered as Container).render(200).some((line) => line.includes("─── Actions ───")), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("出力が確定するまで Output を表示しない", () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [{ role: "worker", task: "work", exitCode: 0, messages: [], actions: [], stderr: "" }],
+    };
+    try {
+      const rendered = extension.renderResult({ content: [], details }, { isPartial: true }, {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      });
+      assert.equal((rendered as Container).render(200).some((line) => line.includes("─── Output ───")), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("出力がある場合だけ Output を表示する", () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [{
+        role: "worker",
+        task: "work",
+        exitCode: 0,
+        messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+        actions: [],
+        stderr: "",
+      }],
+    };
+    try {
+      const rendered = extension.renderResult({ content: [], details }, { isPartial: false }, {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      });
+      assert.ok((rendered as Container).render(200).some((line) => line.includes("─── Output ───")));
+    } finally {
+      extension.restore();
+    }
   });
 });
 
