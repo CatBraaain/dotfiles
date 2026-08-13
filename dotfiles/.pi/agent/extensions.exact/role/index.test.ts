@@ -42,14 +42,14 @@ const config: RoleConfig = {
       model: "zai/glm-5.2",
       tools: ["*"],
       subagents: ["worker"],
-      systemPrompt: "ファイル操作は禁止",
+      systemPrompt: ["ファイル操作は禁止"],
     },
-    worker: { model: "commandcode/gpt-5.6-luna", tools: ["*"], subagents: [], systemPrompt: "" },
+    worker: { model: "commandcode/gpt-5.6-luna", tools: ["*"], subagents: [], systemPrompt: [] },
     chat: {
       model: "commandcode/gpt-5.6-luna",
       tools: ["web_search", "web_fetch"],
       subagents: [],
-      systemPrompt: "",
+      systemPrompt: [],
     },
   },
 };
@@ -205,9 +205,32 @@ roles:
     model: test/model
     tools: [read]
     subagents: []
-    systemPrompt: hello`);
+    systemPrompt: [hello]`);
     assert.equal(result.config?.default, "manager");
     assert.deepEqual(result.config?.roles.manager.tools, ["read"]);
+  });
+
+  it("YAML アンカーで共有した prompt 要素を配列として読み込む", () => {
+    const result = parseRoleConfig(`default: manager
+_common: &common shared
+roles:
+  manager:
+    model: test/model
+    tools: []
+    subagents: []
+    systemPrompt: [*common]`);
+    assert.deepEqual(result.config?.roles.manager.systemPrompt, ["shared"]);
+  });
+
+  it("配列でない systemPrompt を拒否する", () => {
+    const result = parseRoleConfig(`default: manager
+roles:
+  manager:
+    model: test/model
+    tools: []
+    subagents: []
+    systemPrompt: hello`);
+    assert.match(result.error ?? "", /invalid systemPrompt/);
   });
 
   it("未定義の default role を拒否する", () => {
@@ -222,7 +245,7 @@ roles:
     model: test/model
     tools: []
     subagents: [missing]
-    systemPrompt: ""`);
+    systemPrompt: []`);
     assert.match(result.error ?? "", /undefined role/);
   });
 });

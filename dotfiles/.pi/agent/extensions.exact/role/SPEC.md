@@ -17,7 +17,7 @@ roles:
     model: <model-id>
     tools: [<tool-name>, ...]   # ["*"] allows every tool
     subagents: [<role-name>, ...]
-    systemPrompt: <string>
+    systemPrompt: [<prompt-fragment>, ...]
 ```
 
 | 項目・操作 | 内容と振る舞い |
@@ -27,7 +27,7 @@ roles:
 | `model` | role のモデル。role 切り替え時に適用し、ユーザーの手動選択には干渉しない |
 | `tools` | pi 標準ツールと拡張機能の allowlist。指定したツールを実行し、未指定のツールを拒否してセッションを継続する。`["*"]` はすべてのツール、`[]` はツールなしを許可する |
 | `subagents` | subagent ツールでの起動を許可する子エージェントの一覧。定義済みの role が一覧に含まれる場合は起動し、含まれない場合や一覧が空の場合は起動せずセッションを継続する。未定義の role を指定した場合は理由を報告する |
-| `systemPrompt` | 次回のエージェント実行時に追記するシステムプロンプト |
+| `systemPrompt` | 次回のエージェント実行時に、配列要素を記載順で結合して追記する role 固有のシステムプロンプト。YAML のアンカーとエイリアスで複数 role 間で要素を共有できる |
 | `/role:<name> [message]` | 指定した role を即時に有効にする。次のユーザーメッセージの実行時から切り替え先の設定を適用し、role 表示も更新する。`message` を続けた場合は role 切り替え完了後にそのテキスト（前後の空白を除く）をユーザーメッセージとして送信し、切り替え先の role 設定で直ちにターンを開始する。`message` を省略した場合は切り替えのみ行う |
 
 
@@ -38,6 +38,8 @@ roles:
 ```text
 🤖 role: <currentRole>
 ```
+
+表示のテキスト色はグレーとする。
 
 ## subagent ツール
 

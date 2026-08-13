@@ -19,7 +19,7 @@ export interface RoleDefinition {
   model: string;
   tools: readonly string[];
   subagents: readonly Role[];
-  systemPrompt: string;
+  systemPrompt: readonly string[];
 }
 
 export interface RoleConfig {
@@ -55,8 +55,12 @@ export function parseRoleConfig(source: string): ConfigLoadResult {
       if (!Array.isArray(subagents) || !subagents.every((role) => typeof role === "string")) {
         return { error: `role ${name} has invalid subagents` };
       }
-      if (typeof systemPrompt !== "string")
+      if (
+        !Array.isArray(systemPrompt) ||
+        !systemPrompt.every((prompt) => typeof prompt === "string")
+      ) {
         return { error: `role ${name} has an invalid systemPrompt` };
+      }
       roles[name] = { model, tools, subagents, systemPrompt };
     }
 
@@ -104,7 +108,8 @@ export function shouldBlockToolCall(role: Role, toolName: string, config: RoleCo
 }
 
 export function buildRoleSystemPromptAddendum(role: Role, config: RoleConfig): string {
-  return config.roles[role]?.systemPrompt ? `\n\n${config.roles[role].systemPrompt}` : "";
+  const prompts = (config.roles[role]?.systemPrompt ?? []).filter(Boolean);
+  return prompts.length > 0 ? `\n\n${prompts.join("\n\n")}` : "";
 }
 
 export function canDelegate(fromRole: Role, toRole: Role, config: RoleConfig): boolean {
