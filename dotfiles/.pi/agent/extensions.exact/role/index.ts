@@ -525,9 +525,11 @@ export default function roleExtension(
   for (const role of Object.keys(config.roles)) {
     pi.registerCommand(`role:${role}`, {
       description: `Switch the session role to ${role}.`,
-      handler: async (_args, ctx) => {
+      handler: async (args, ctx) => {
         await activateRole(role, ctx);
         ctx.ui.notify(`role: ${currentRole}`, "info");
+        const followUpMessage = args.trim();
+        if (followUpMessage) pi.sendUserMessage(followUpMessage);
       },
     });
   }

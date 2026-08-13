@@ -85,6 +85,7 @@ function captureRoleExtension(
   const notifications: string[] = [];
   const activeTools: string[][] = [];
   const selectedModels: unknown[] = [];
+  const sentMessages: string[] = [];
   const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
   const children: FakeChild[] = [];
   let spawnResponder: (child: FakeChild) => void = () => {};
@@ -125,6 +126,9 @@ function captureRoleExtension(
         selectedModels.push(model);
         return true;
       },
+      sendUserMessage(content: string) {
+        sentMessages.push(content);
+      },
     } as never,
     injectedConfig,
   );
@@ -150,6 +154,7 @@ function captureRoleExtension(
     notifications,
     activeTools,
     selectedModels,
+    sentMessages,
     spawnCalls,
     restore() {
       __spawn.current = originalSpawn;
@@ -160,8 +165,8 @@ function captureRoleExtension(
     async sessionStart() {
       for (const handler of handlers.get("session_start") ?? []) await handler({}, context);
     },
-    async runCommand(role: string) {
-      await commands.get(`role:${role}`)?.({}, context);
+    async runCommand(role: string, args = "") {
+      await commands.get(`role:${role}`)?.(args, context);
     },
     roleWidget() {
       return roleWidget?.({}, { fg: (_color: string, text: string) => text })?.render();
@@ -323,6 +328,28 @@ describe("拡張の接続", () => {
       });
       assert.deepEqual(extension.roleWidget(), ["🤖 role: chat"]);
       assert.deepEqual(extension.notifications, ["role: chat"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("role 切り替え時の引数を切り替え後のユーザーメッセージとして送信する", async () => {
+    const extension = captureRoleExtension();
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("chat", "  hello world  ");
+      assert.deepEqual(extension.sentMessages, ["hello world"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("引数のない role 切り替えはユーザーメッセージを送信しない", async () => {
+    const extension = captureRoleExtension();
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("chat");
+      assert.deepEqual(extension.sentMessages, []);
     } finally {
       extension.restore();
     }
