@@ -18,7 +18,6 @@
       "themes": []
     },
     "npm:pi-commandcode-provider",
-    "npm:pi-hashline-edit",
     {
       "source": "https://github.com/anthropics/skills",
       "extensions": [],
