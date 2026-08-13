@@ -9,7 +9,7 @@ import {
   formatDuration,
   formatGrepMatches,
   formatSize,
-  parseBwrapConfig,
+  parseGuardrailsConfig,
   resolveCommandAction,
   resolvePathAction,
   truncateCommand,
@@ -35,7 +35,7 @@ function withSandbox(
   test: (sandbox: Sandbox) => Promise<void> | void,
 ): () => Promise<void> {
   return async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "bwrap-test-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "guardrails-test-"));
     try {
       const configPath = join(tempDir, "config.yaml");
       writeFileSync(configPath, configYaml);
@@ -381,7 +381,7 @@ commands:
 
 describe("§6 設定", () => {
   it("全セクションを読み込む", () => {
-    const config = parseBwrapConfig(`
+    const config = parseGuardrailsConfig(`
 read:
   allow: ["*"]
 write:

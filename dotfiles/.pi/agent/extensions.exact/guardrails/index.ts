@@ -31,7 +31,7 @@ export type Action = "allow" | "deny" | "ask";
 
 type RuleSection = { allow?: string[]; ask?: string[]; deny?: string[] };
 
-type BwrapConfig = {
+type GuardrailsConfig = {
   read?: RuleSection;
   write?: RuleSection;
   credentials?: string[];
@@ -88,9 +88,9 @@ function asPatterns(value: unknown): string[] {
     : [];
 }
 
-export function parseBwrapConfig(source: string): BwrapConfig {
+export function parseGuardrailsConfig(source: string): GuardrailsConfig {
   const parsed = parseYaml(source) as unknown;
-  if (!isRecord(parsed)) throw new Error("bwrap-tools config must be a mapping");
+  if (!isRecord(parsed)) throw new Error("guardrails config must be a mapping");
 
   const parseSection = (value: unknown): RuleSection | undefined => {
     if (value === undefined) return undefined;
@@ -208,7 +208,7 @@ export function resolveCommandAction(section: RuleSection | undefined, command: 
   return "deny";
 }
 
-function getPathSection(config: BwrapConfig, operation: "read" | "write"): RuleSection | undefined {
+function getPathSection(config: GuardrailsConfig, operation: "read" | "write"): RuleSection | undefined {
   return config[operation];
 }
 
@@ -346,14 +346,14 @@ export async function formatGrepMatches(
 
 export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
-  private readonly config: BwrapConfig;
+  private readonly config: GuardrailsConfig;
 
   constructor(
     private readonly cwd: string,
     configPath = join(import.meta.dir, "config.yaml"),
   ) {
     try {
-      this.config = parseBwrapConfig(readFileSync(configPath, "utf8"));
+      this.config = parseGuardrailsConfig(readFileSync(configPath, "utf8"));
     } catch {
       this.config = {};
     }
@@ -727,7 +727,7 @@ function renderTextToolResult(
   return new Text(theme.fg("success", `${countResultLines(output)} ${unit}`), 0, 0);
 }
 
-export default function bwrapToolsExtension(pi: ExtensionAPI): void {
+export default function guardrailsExtension(pi: ExtensionAPI): void {
   const cwd = process.cwd();
   const sandbox = new Sandbox(cwd);
   const readOperations = sandbox.createReadOperations();

@@ -1,4 +1,4 @@
-# ADR: bwrap-tools — サンドボックス方針
+# ADR: guardrails — サンドボックス方針
 
 | | |
 |---|---|

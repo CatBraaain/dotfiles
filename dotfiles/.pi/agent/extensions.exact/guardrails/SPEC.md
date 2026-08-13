@@ -1,4 +1,4 @@
-# bwrap-tools — 仕様書
+# guardrails — 仕様書
 
 pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash）を置き換え、**パスの読み書きと bash コマンドを `allow` / `deny` / `ask` で制限**しつつ、network 系は自由に使う拡張機能。
 
@@ -117,7 +117,7 @@ network は開放。fs 制限の対象外。
 
 ## 6. 設定（`config.yaml`）
 
-ユーザーが `dotfiles/.pi/agent/extensions.exact/bwrap-tools/config.yaml` で制御。通常のパスとコマンドは `allow` / `deny` / `ask` の3アクションで指定し、bash 専用パスは `credentials` で指定する。
+ユーザーが `dotfiles/.pi/agent/extensions.exact/guardrails/config.yaml` で制御。通常のパスとコマンドは `allow` / `deny` / `ask` の3アクションで指定し、bash 専用パスは `credentials` で指定する。
 
 | 項目 | 意味 |
 | --- | --- |
