@@ -206,6 +206,10 @@ export function isManualSelect(source: string | undefined, switching: boolean): 
   return !switching && (source === "set" || source === "cycle");
 }
 
+export function requiresSwitchConfirmation(sessionStartReason: string | undefined): boolean {
+  return sessionStartReason !== "startup";
+}
+
 // What to do after a 429: `confirm` asks before switching (user is in manual
 // mode), `error` means no fallback exists, `switch` is auto mode.
 export type FallbackAction<M extends { provider: string; id: string }> =
@@ -276,6 +280,7 @@ export default async function (pi: ExtensionAPI) {
   async function evaluateAndMaybeSwitch(
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    confirmSwitch = true,
   ): Promise<void> {
     if (manual || rules.length === 0) return;
     const candidate = await pickFor(ctx, signal);
@@ -283,7 +288,7 @@ export default async function (pi: ExtensionAPI) {
     const current = ctx.model;
     if (current && modelKey(current) === modelKey(candidate)) return;
 
-    if (ctx.hasUI) {
+    if (confirmSwitch && ctx.hasUI) {
       const ok = await ctx.ui.confirm(
         "model-router",
         `Switch ${current ? `${current.provider}/${current.id} \u2192 ` : ""}${candidate.provider}/${candidate.id}?`,
@@ -313,7 +318,7 @@ export default async function (pi: ExtensionAPI) {
 
   // ── session lifecycle ──────────────────────────────────────────────
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     const { rules: loaded, invalid } = loadConfigFromPath(configPath);
     rules = loaded;
     if (invalid.length > 0 && ctx.hasUI) {
@@ -323,7 +328,7 @@ export default async function (pi: ExtensionAPI) {
     lastResent = "";
     cooldowns.clear();
     if (ctx.hasUI) ctx.ui.setStatus("model-router", undefined);
-    await evaluateAndMaybeSwitch(ctx);
+    await evaluateAndMaybeSwitch(ctx, undefined, requiresSwitchConfirmation(event.reason));
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {

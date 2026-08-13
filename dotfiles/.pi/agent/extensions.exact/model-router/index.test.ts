@@ -11,6 +11,7 @@ import {
   bashExecFrom,
   decideFallback,
   evalWhen,
+  requiresSwitchConfirmation,
   isCoolingDown,
   lastUserText,
   loadConfigFromPath,
@@ -161,7 +162,19 @@ describe("UC3: cooldown 期限が過ぎたら再候補化する", () => {
   });
 });
 
-describe("UC4: 手動選択中の rate limit fallback", () => {
+describe("UC4: セッション開始時の切替確認", () => {
+  it("初回起動では確認を求めない", () => {
+    assert.strictEqual(requiresSwitchConfirmation("startup"), false);
+  });
+
+  it("初回起動以外では確認を求める", () => {
+    assert.strictEqual(requiresSwitchConfirmation("new"), true);
+    assert.strictEqual(requiresSwitchConfirmation("reload"), true);
+    assert.strictEqual(requiresSwitchConfirmation("resume"), true);
+  });
+});
+
+describe("UC5: 手動選択中の rate limit fallback", () => {
   const fallbackModel = { provider: "zai", id: "glm-5.1" };
 
   it("manual でなければ即座に切替する", () => {
@@ -184,7 +197,7 @@ describe("UC4: 手動選択中の rate limit fallback", () => {
   });
 });
 
-describe("UC5: config.yaml を順序通り安全に読み込む", () => {
+describe("UC6: config.yaml を順序通り安全に読み込む", () => {
   function withTmpDir(fn: (dir: string) => void): void {
     const dir = mkdtempSync(join(tmpdir(), "mr-"));
     try {
@@ -243,7 +256,7 @@ describe("UC5: config.yaml を順序通り安全に読み込む", () => {
     }));
 });
 
-describe("UC6: Retry-After ヘッダから cooldown 期間を読む", () => {
+describe("UC7: Retry-After ヘッダから cooldown 期間を読む", () => {
   it("秒数文字列はミリ秒に変換する", () => {
     assert.strictEqual(parseRetryAfter("120"), 120_000);
   });
@@ -260,7 +273,7 @@ describe("UC6: Retry-After ヘッダから cooldown 期間を読む", () => {
   });
 });
 
-describe("UC7: 再送は直近のユーザ発言を送る", () => {
+describe("UC8: 再送は直近のユーザ発言を送る", () => {
   type Entry = { type: string; message: { role: string; content: unknown } };
   const message = (role: string, content: unknown): Entry => ({
     type: "message",
