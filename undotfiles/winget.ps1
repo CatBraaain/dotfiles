@@ -6,8 +6,6 @@ $unmanagedPackages = @(
     "Discord.Discord"
     "Docker.DockerDesktop"
     "Mozilla.Firefox"
-    "TortoiseGit.TortoiseGit"
-    "beekeeper-studio.beekeeper-studio"
     # keep-sorted end
 )
 $managedPackages = @(
@@ -15,7 +13,6 @@ $managedPackages = @(
     "Guru3D.Afterburner"
     # "Microsoft.AppInstaller"
     "CPUID.CPU-Z"
-    # "MongoDB.Compass.Full"
     "BluePointLilac.ContextMenuManager"
     "sordum.EasyContextMenu"
     "w4po.ExplorerTabUtility"
@@ -48,31 +45,17 @@ $managedDevPackages = @(
     "AutoHotkey.AutoHotkey" # windows
     "Oven-sh.Bun"
     "Solidiquis.Erdtree"
-    "Gyan.FFmpeg"
-    "Git.Git"
-    "GoLang.Go"
     "Casey.Just"
     "RussellBanks.Komac"
     "OpenJS.NodeJS.LTS"
     "Microsoft.PowerShell" # windows
-    "XAMPPRocky.Tokei"
     "Canonical.Ubuntu" # windows
-    "nektos.act"
     "twpayne.chezmoi"
     "GitHub.cli"
     "Microsoft.coreutils"
-    "eza-community.eza"
-    "sharkdp.fd"
-    "orhun.git-cliff"
     "gerardog.gsudo" # windows
-    "ezwinports.make"
-    "jdx.mise"
-    "pnpm.pnpm"
-    "BurntSushi.ripgrep.MSVC"
     "CatBraaain.runx" # windows
-    "astral-sh.uv"
     "CatBraaain.winconfig" # windows
-    "MikeFarah.yq"
     # keep-sorted end
 )
 
