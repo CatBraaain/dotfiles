@@ -2,16 +2,18 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import dynamicContextsExtension, {
+import rulesExtension, {
   activateRulesForFile,
   buildRulesMessage,
   buildRulesWidgetLines,
   createRuleState,
   discoverRules,
+  RULES_STATUS_KEY,
   markRulesInjected,
   matchesPathGlob,
   newlyActivatedRules,
-  type DynamicRule,
+  updateRulesWidget,
+  type Rule,
 } from "./index";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
@@ -28,7 +30,7 @@ function it(name: string, fn: () => Promise<void> | void): void {
   tests.push({ name: group ? `${group} > ${name}` : name, fn });
 }
 
-function rule(overrides: Partial<DynamicRule> = {}): DynamicRule {
+function rule(overrides: Partial<Rule> = {}): Rule {
   return {
     id: "source:rule.md",
     filePath: "/project/.pi/rules/rule.md",
@@ -42,7 +44,7 @@ function rule(overrides: Partial<DynamicRule> = {}): DynamicRule {
 }
 
 async function withTemporaryDirectory(test: (directory: string) => Promise<void>): Promise<void> {
-  const directory = await mkdtemp(join(tmpdir(), "dynamic-contexts-"));
+  const directory = await mkdtemp(join(tmpdir(), "rules-"));
   try {
     await test(directory);
   } finally {
@@ -248,20 +250,73 @@ describe("context and status", () => {
     assert.equal(buildRulesWidgetLines([]), undefined);
   });
 
+  it("prefixes the rules line with the scroll emoji", () => {
+    const lines = buildRulesWidgetLines([rule({ name: "typescript" })]);
+
+    assert.deepEqual(lines, ["📜 rules: typescript"]);
+  });
+
   it("adds a path when active rules have the same name", () => {
-    assert.deepEqual(buildRulesWidgetLines([
-      rule({ id: "first", displayPath: ".pi/rules/typescript.md", name: "typescript" }),
-      rule({ id: "second", displayPath: ".claude/rules/typescript.md", name: "typescript" }),
-    ]), [
-      "rules: typescript (.pi/rules/typescript.md), typescript (.claude/rules/typescript.md)",
-    ]);
+    assert.deepEqual(
+      buildRulesWidgetLines([
+        rule({ id: "first", displayPath: ".pi/rules/typescript.md", name: "typescript" }),
+        rule({ id: "second", displayPath: ".claude/rules/typescript.md", name: "typescript" }),
+      ]),
+      ["📜 rules: typescript (.pi/rules/typescript.md), typescript (.claude/rules/typescript.md)"],
+    );
+  });
+});
+
+describe("widget rendering", () => {
+  it("registers a widget line colored with the muted theme color", () => {
+    const setWidgetCalls: Array<{ key: string; content: unknown }> = [];
+    const ui = {
+      setWidget(key: string, content: unknown) {
+        setWidgetCalls.push({ key, content });
+      },
+    };
+
+    updateRulesWidget(ui as never, [rule({ name: "typescript" })]);
+
+    assert.equal(setWidgetCalls[0]?.key, RULES_STATUS_KEY);
+
+    type WidgetFactory = (
+      tui: unknown,
+      theme: { fg(color: string, text: string): string },
+    ) => { render(): string[] };
+    const fgCalls: Array<{ color: string; text: string }> = [];
+    const grayify = (text: string): string => `<gray>${text}</gray>`;
+    const widgetFactory = setWidgetCalls[0]!.content as WidgetFactory;
+    const widget = widgetFactory(undefined, {
+      fg: (color, text) => {
+        fgCalls.push({ color, text });
+        return grayify(text);
+      },
+    });
+    const renderedLines = widget.render();
+
+    assert.deepEqual(renderedLines, ["<gray>📜 rules: typescript</gray>"]);
+    assert.deepEqual(fgCalls, [{ color: "muted", text: "📜 rules: typescript" }]);
+  });
+
+  it("clears the widget when no rules are active", () => {
+    const setWidgetCalls: Array<{ key: string; content: unknown }> = [];
+    const ui = {
+      setWidget(key: string, content: unknown) {
+        setWidgetCalls.push({ key, content });
+      },
+    };
+
+    updateRulesWidget(ui as never, []);
+
+    assert.deepEqual(setWidgetCalls, [{ key: RULES_STATUS_KEY, content: undefined }]);
   });
 });
 
 describe("extension lifecycle", () => {
   it("registers session, tool result, and before-agent-start handlers", () => {
     const events: string[] = [];
-    dynamicContextsExtension({
+    rulesExtension({
       on(event: string) {
         events.push(event);
       },

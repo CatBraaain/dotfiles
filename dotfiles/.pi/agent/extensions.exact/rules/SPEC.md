@@ -13,7 +13,7 @@ Claude Code の rules 仕様に準拠し、対象ファイルに応じた Markdo
 
 | 順序 | エージェント | プロジェクト | グローバル |
 | ---: | --- | --- | --- |
-| 1 | pi | `./.pi/rules/**/*.md` | `~/.pi/rules/**/*.md` |
+| 1 | pi | `./.pi/agent/rules/**/*.md` | `~/.pi/agent/rules/**/*.md` |
 | 2 | Claude Code | `./.claude/rules/**/*.md` | `~/.claude/rules/**/*.md` |
 | 3 | Cursor | `./.cursor/rules/**/*.mdc` | —（User Rules は UI 管理） |
 | 4 | Windsurf | `./.devin/rules/**/*.md`（優先）、`./.windsurf/rules/**/*.md`（旧形式） | `~/.codeium/windsurf/memories/global_rules.md` |
@@ -54,11 +54,11 @@ Use the repository's existing TypeScript conventions.
 
 解決順は次のとおりとする。ローカルのエージェント優先順位を維持したまま、すべてのローカルをグローバルより先に解決する。
 
-1. プロジェクトの `.pi/rules/`
+1. プロジェクトの `.pi/agent/rules/`
 2. プロジェクトの `.claude/rules/`
 3. プロジェクトの `.cursor/rules/`
 4. プロジェクトの `.devin/rules/` または `.windsurf/rules/`
-5. グローバルの `~/.pi/rules/`
+5. グローバルの `~/.pi/agent/rules/`
 6. グローバルの `~/.claude/rules/`
 7. グローバルの Cursor User Rules（ファイル探索対象外）
 8. グローバルの `~/.codeium/windsurf/memories/global_rules.md`
@@ -111,10 +111,10 @@ Claude Code の rules と同じ方式で、rules をシステムプロンプト�
 
 ## ルールの適用状況表示
 
-現在適用中の rules を、`aboveEditor` の widget に次の形式で表示する。
+現在適用中の rules を、`aboveEditor` の widget に次の形式で表示する。文字色はグレーにする。
 
 ```text
-rules: <ルール名>, <ルール名>
+📜 rules: <ルール名>, <ルール名>
 ```
 
 適用中の rules がない場合は widget を消去する。表示順は解決順とし、同名の rules はファイルパスを付けて区別する。新しい rule が適用されると、次のターンの開始時に widget を更新する。

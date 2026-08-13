@@ -1,14 +1,14 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 
-export const DYNAMIC_CONTEXT_STATUS_KEY = "dynamic-contexts";
-export const DYNAMIC_CONTEXT_MESSAGE_TYPE = "dynamic-contexts";
+export const RULES_STATUS_KEY = "rules";
+export const RULES_MESSAGE_TYPE = "rules";
 
-export interface DynamicRule {
+export interface Rule {
   readonly id: string;
   readonly filePath: string;
   readonly displayPath: string;
@@ -19,7 +19,7 @@ export interface DynamicRule {
 }
 
 export interface RuleState {
-  readonly rules: readonly DynamicRule[];
+  readonly rules: readonly Rule[];
   readonly activeRuleIds: Set<string>;
   readonly injectedRuleIds: Set<string>;
 }
@@ -106,7 +106,7 @@ async function readRule(
   displayPath: string,
   relativePath: string,
   sourceId: string,
-): Promise<DynamicRule | undefined> {
+): Promise<Rule | undefined> {
   try {
     const content = await readFile(filePath, "utf8");
     const parsed = parseRuleContent(content);
@@ -129,7 +129,7 @@ function homeDisplayPath(homeDirectory: string, filePath: string): string {
   return `~/${normalizeSlashes(relative(homeDirectory, filePath))}`;
 }
 
-export function deduplicateRules(rules: readonly DynamicRule[]): DynamicRule[] {
+export function deduplicateRules(rules: readonly Rule[]): Rule[] {
   const seenRelativePaths = new Set<string>();
   return rules.filter((rule) => {
     if (seenRelativePaths.has(rule.relativePath)) return false;
@@ -141,8 +141,8 @@ export function deduplicateRules(rules: readonly DynamicRule[]): DynamicRule[] {
 export async function discoverRules(
   projectRoot: string,
   homeDirectory = homedir(),
-): Promise<DynamicRule[]> {
-  const discoveredRules: DynamicRule[] = [];
+): Promise<Rule[]> {
+  const discoveredRules: Rule[] = [];
 
   for (const source of PROJECT_RULE_SOURCES) {
     const directory = join(projectRoot, source.relativeDirectory);
@@ -240,7 +240,7 @@ export function matchesPathGlob(filePath: string, pattern: string): boolean {
   return globToRegExp(pattern).test(normalizeSlashes(filePath));
 }
 
-export function createRuleState(rules: readonly DynamicRule[]): RuleState {
+export function createRuleState(rules: readonly Rule[]): RuleState {
   return {
     rules,
     activeRuleIds: new Set(
@@ -265,27 +265,27 @@ export function activateRulesForFile(
   }
 }
 
-export function activeRules(state: RuleState): DynamicRule[] {
+export function activeRules(state: RuleState): Rule[] {
   return state.rules.filter((rule) => state.activeRuleIds.has(rule.id));
 }
 
-export function buildRulesMessage(rules: readonly DynamicRule[]): string | undefined {
+export function buildRulesMessage(rules: readonly Rule[]): string | undefined {
   if (rules.length === 0) return undefined;
   const sections = rules.map((rule) => `### ${rule.displayPath}\n${rule.body}`);
-  return `## Dynamic rules\n\n${sections.join("\n\n")}`;
+  return `## Rules\n\n${sections.join("\n\n")}`;
 }
 
-export function newlyActivatedRules(state: RuleState): DynamicRule[] {
+export function newlyActivatedRules(state: RuleState): Rule[] {
   return state.rules.filter(
     (rule) => state.activeRuleIds.has(rule.id) && !state.injectedRuleIds.has(rule.id),
   );
 }
 
-export function markRulesInjected(state: RuleState, rules: readonly DynamicRule[]): void {
+export function markRulesInjected(state: RuleState, rules: readonly Rule[]): void {
   for (const rule of rules) state.injectedRuleIds.add(rule.id);
 }
 
-export function buildRulesWidgetLines(rules: readonly DynamicRule[]): string[] | undefined {
+export function buildRulesWidgetLines(rules: readonly Rule[]): string[] | undefined {
   if (rules.length === 0) return undefined;
   const names = rules.map((rule, _, allRules) => {
     const duplicateName = allRules.some(
@@ -293,7 +293,23 @@ export function buildRulesWidgetLines(rules: readonly DynamicRule[]): string[] |
     );
     return duplicateName ? `${rule.name} (${rule.displayPath})` : rule.name;
   });
-  return [`rules: ${names.join(", ")}`];
+  return [`📜 rules: ${names.join(", ")}`];
+}
+
+export function updateRulesWidget(ui: ExtensionUIContext, rules: readonly Rule[]): void {
+  const lines = buildRulesWidgetLines(rules);
+  if (!lines) {
+    ui.setWidget(RULES_STATUS_KEY, undefined);
+    return;
+  }
+  ui.setWidget(
+    RULES_STATUS_KEY,
+    (_tui, theme) => ({
+      render: () => lines.map((line) => theme.fg("muted", line)),
+      invalidate: () => {},
+    }),
+    { placement: "aboveEditor" },
+  );
 }
 
 function isFileOperationTool(toolName: string): boolean {
@@ -304,17 +320,14 @@ function inputFilePath(input: Record<string, unknown>): string | undefined {
   return typeof input.path === "string" ? input.path : undefined;
 }
 
-export default function dynamicContextsExtension(pi: ExtensionAPI): void {
+export default function rulesExtension(pi: ExtensionAPI): void {
   let state: RuleState = createRuleState([]);
   let projectRoot = process.cwd();
 
   pi.on("session_start", async (_event, ctx) => {
     projectRoot = ctx.cwd;
     state = createRuleState(await discoverRules(projectRoot));
-    if (ctx.hasUI)
-      ctx.ui.setWidget(DYNAMIC_CONTEXT_STATUS_KEY, buildRulesWidgetLines(activeRules(state)), {
-        placement: "aboveEditor",
-      });
+    if (ctx.hasUI) updateRulesWidget(ctx.ui, activeRules(state));
   });
 
   pi.on("tool_result", async (event, _ctx) => {
@@ -324,11 +337,7 @@ export default function dynamicContextsExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
-    const rules = activeRules(state);
-    if (ctx.hasUI)
-      ctx.ui.setWidget(DYNAMIC_CONTEXT_STATUS_KEY, buildRulesWidgetLines(rules), {
-        placement: "aboveEditor",
-      });
+    if (ctx.hasUI) updateRulesWidget(ctx.ui, activeRules(state));
     const pending = newlyActivatedRules(state);
     if (pending.length === 0) return;
     const content = buildRulesMessage(pending);
@@ -336,7 +345,7 @@ export default function dynamicContextsExtension(pi: ExtensionAPI): void {
     markRulesInjected(state, pending);
     return {
       message: {
-        customType: DYNAMIC_CONTEXT_MESSAGE_TYPE,
+        customType: RULES_MESSAGE_TYPE,
         content,
         display: false,
       },
