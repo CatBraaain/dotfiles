@@ -207,7 +207,7 @@ export function isManualSelect(source: string | undefined, switching: boolean): 
 }
 
 export function requiresSwitchConfirmation(sessionStartReason: string | undefined): boolean {
-  return sessionStartReason !== "startup";
+  return sessionStartReason !== "startup" && sessionStartReason !== "new";
 }
 
 // What to do after a 429: `confirm` asks before switching (user is in manual

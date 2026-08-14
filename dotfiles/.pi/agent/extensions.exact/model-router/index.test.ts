@@ -167,8 +167,11 @@ describe("UC4: セッション開始時の切替確認", () => {
     assert.strictEqual(requiresSwitchConfirmation("startup"), false);
   });
 
-  it("初回起動以外では確認を求める", () => {
-    assert.strictEqual(requiresSwitchConfirmation("new"), true);
+  it("new では確認を求めない", () => {
+    assert.strictEqual(requiresSwitchConfirmation("new"), false);
+  });
+
+  it("reload と復元では確認を求める", () => {
     assert.strictEqual(requiresSwitchConfirmation("reload"), true);
     assert.strictEqual(requiresSwitchConfirmation("resume"), true);
   });
