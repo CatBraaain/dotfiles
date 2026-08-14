@@ -31,7 +31,6 @@ type WidgetContext = {
   context: {
     cwd: string;
     hasUI: boolean;
-    isIdle: () => boolean;
     sessionManager: { getEntries: () => any[] };
     ui: { setWidget: (...args: any[]) => void };
   };
@@ -85,7 +84,6 @@ function widgetContext(hasUI = true): WidgetContext {
     context: {
       cwd: "/project",
       hasUI,
-      isIdle: () => false,
       sessionManager: { getEntries: () => [] },
       ui: {
         setWidget: (...args: any[]) => {

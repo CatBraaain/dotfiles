@@ -150,7 +150,6 @@ export default function skillStatusExtension(pi: ExtensionAPI): void {
     if (event.toolName !== "read") return;
     const filePath = event.input.path;
     if (typeof filePath !== "string") return;
-    if (ctx.isIdle()) return;
     if (skillNameForReadPath(state, filePath, ctx.cwd)) {
       state.pendingSkillReadToolCallIds.add(event.toolCallId);
     }
