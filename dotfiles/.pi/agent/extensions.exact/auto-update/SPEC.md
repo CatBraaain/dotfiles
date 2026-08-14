@@ -1,4 +1,4 @@
-# auto-update-extensions 拡張機能 Spec
+# auto-update 拡張機能 Spec
 
 pi 起動時に、拡張機能（パッケージ）の更新をバックグラウンドで1回だけ実行する。ユーザーの操作を待たず、更新結果も表示しない。
 
