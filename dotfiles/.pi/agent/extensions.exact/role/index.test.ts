@@ -4,18 +4,12 @@ import { Container } from "@earendil-works/pi-tui";
 import roleExtension, {
   __abortTimer,
   __spawn,
-  FAILURE_CATEGORIES,
-  FAILURE_CATEGORY_LABELS,
-  type ChildObservation,
   type RoleConfig,
   buildRoleSystemPromptAddendum,
   canDelegate,
   childRole,
   initialRole,
-  isOwnerDisplayObservation,
-  isParentReportObservation,
   parseRoleConfig,
-  reportDestination,
   formatToolCall,
   shouldBlockToolCall,
   switchRole,
@@ -288,31 +282,9 @@ describe("委譲", () => {
   });
 });
 
-describe("システムプロンプトと報告", () => {
+describe("システムプロンプト", () => {
   it("role の systemPrompt を追記する", () => {
     assert.match(buildRoleSystemPromptAddendum("manager", config), /ファイル操作は禁止/);
-  });
-
-  it("子の進行だけを owner に表示し、完了報告の3種だけを親へ渡す", () => {
-    const progress: ChildObservation = { kind: "progress", content: "running" };
-    assert.equal(isOwnerDisplayObservation(progress), true);
-    assert.equal(isParentReportObservation({ kind: "intermediate-log", content: "log" }), false);
-    for (const kind of ["final-result", "work-highlights", "artifact-info"] as const) {
-      assert.equal(isParentReportObservation({ kind, content: "result" }), true);
-    }
-  });
-
-  it("worker は委譲元へ報告する", () => {
-    assert.equal(reportDestination("worker", "manager"), "manager");
-  });
-
-  it("manager は caller ではなく owner へ報告する", () => {
-    assert.equal(reportDestination("manager", "orchestrator"), "owner");
-  });
-
-  it("失敗理由の区分を公開する", () => {
-    assert.deepEqual([...FAILURE_CATEGORIES], ["permission", "capacity"]);
-    assert.equal(FAILURE_CATEGORY_LABELS.permission, "権限不足");
   });
 });
 

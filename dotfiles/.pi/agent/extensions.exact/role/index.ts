@@ -120,44 +120,6 @@ export function childRole(fromRole: Role, toRole: Role, config: RoleConfig): Rol
   return canDelegate(fromRole, toRole, config) ? toRole : undefined;
 }
 
-export type ChildObservationKind =
-  | "progress"
-  | "intermediate-log"
-  | "final-result"
-  | "work-highlights"
-  | "artifact-info";
-
-export interface ChildObservation {
-  readonly kind: ChildObservationKind;
-  readonly content: string;
-}
-
-export const PARENT_REPORT_OBSERVATION_KINDS: readonly ChildObservationKind[] = [
-  "final-result",
-  "work-highlights",
-  "artifact-info",
-];
-
-export function isOwnerDisplayObservation(observation: ChildObservation): boolean {
-  return observation.kind === "progress";
-}
-
-export function isParentReportObservation(observation: ChildObservation): boolean {
-  return PARENT_REPORT_OBSERVATION_KINDS.includes(observation.kind);
-}
-
-export type Principal = Role | "owner";
-export type FailureCategory = "permission" | "capacity";
-export const FAILURE_CATEGORIES: readonly FailureCategory[] = ["permission", "capacity"];
-export const FAILURE_CATEGORY_LABELS: Record<FailureCategory, string> = {
-  permission: "権限不足",
-  capacity: "力量・情報不足",
-};
-
-export function reportDestination(reportingRole: Role, caller: Principal): Principal {
-  return reportingRole === "worker" ? caller : "owner";
-}
-
 export const __spawn: { current: typeof spawn } = { current: spawn };
 
 export const __abortTimer: {
