@@ -208,7 +208,10 @@ export function resolveCommandAction(section: RuleSection | undefined, command: 
   return "deny";
 }
 
-function getPathSection(config: GuardrailsConfig, operation: "read" | "write"): RuleSection | undefined {
+function getPathSection(
+  config: GuardrailsConfig,
+  operation: "read" | "write",
+): RuleSection | undefined {
   return config[operation];
 }
 
@@ -886,6 +889,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
   });
   pi.registerTool({
     ...editTool,
+    renderShell: "default",
     async execute(id, params, signal, onUpdate, context) {
       await sandbox.authorizePath("read", resolve(cwd, params.path), context);
       await sandbox.authorizePath("write", resolve(cwd, params.path), context);
