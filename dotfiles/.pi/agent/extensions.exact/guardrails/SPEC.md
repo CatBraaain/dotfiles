@@ -189,7 +189,7 @@ network は開放。fs 制限の対象外。
 | `bash` | `$ <command>`（80文字で切り詰め） | 実行秒数（例: `1.2s`） | stdout/stderr |
 | `write` | `write <path>` | `wrote <size>` | 書き込んだ内容 |
 | `edit` | `edit <path>` | `edited N block(s)` | diff |
-| `read` | `read <path>` | `N lines` | ファイル内容 |
+| `read` | `read <path>`（SKILL.md のとき `[skill] <name>`） | `N lines` | ファイル内容 |
 | `grep` | `grep <pattern>` | `N matches`（context 行を含まない純マッチ数） | マッチ結果（context 行を含む） |
 | `find` | `find <pattern>` | `N files` | パス一覧 |
 | `ls` | `ls <path>`（未指定は `.`） | `N entries` | エントリ一覧 |

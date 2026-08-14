@@ -727,6 +727,36 @@ function renderTextToolResult(
   return new Text(theme.fg("success", `${countResultLines(output)} ${unit}`), 0, 0);
 }
 
+export function classifyReadPath(
+  args: { path?: unknown },
+  cwd: string,
+): { kind: "skill"; label: string } | undefined {
+  const rawPath = args?.path;
+  if (typeof rawPath !== "string" || rawPath === "") return undefined;
+  const absolutePath = resolve(cwd, rawPath);
+  if (basename(absolutePath) !== "SKILL.md") return undefined;
+  return { kind: "skill", label: basename(dirname(absolutePath)) || "SKILL.md" };
+}
+
+function formatReadCall(args: { path?: unknown }, cwd: string, theme: any): Text {
+  const skill = classifyReadPath(args, cwd);
+  if (skill) {
+    return new Text(
+      theme.fg("customMessageLabel", "\x1b[1m[skill]\x1b[22m ") +
+        theme.fg("customMessageText", skill.label),
+      0,
+      0,
+    );
+  }
+  const rawPath = args?.path;
+  const pathText = typeof rawPath === "string" ? rawPath : "";
+  return new Text(
+    `${theme.fg("toolTitle", theme.bold("read "))}${theme.fg("accent", pathText)}`,
+    0,
+    0,
+  );
+}
+
 export default function guardrailsExtension(pi: ExtensionAPI): void {
   const cwd = process.cwd();
   const sandbox = new Sandbox(cwd);
@@ -792,6 +822,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     unit: string,
     getCall: (args: any) => string,
     authorize: (args: any, context: ToolContext) => Promise<void>,
+    renderOptions?: { renderCall?: (args: any, theme: any) => Text },
   ) => {
     pi.registerTool({
       ...tool,
@@ -806,10 +837,13 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
         return tool.execute(id, params, signal, onUpdate);
       },
       renderCall(args: any, theme: any) {
-        return new Text(
-          `${theme.fg("toolTitle", theme.bold(`${name} `))}${theme.fg("accent", getCall(args))}`,
-          0,
-          0,
+        return (
+          renderOptions?.renderCall?.(args, theme) ??
+          new Text(
+            `${theme.fg("toolTitle", theme.bold(`${name} `))}${theme.fg("accent", getCall(args))}`,
+            0,
+            0,
+          )
         );
       },
       renderResult(result: any, options: any, theme: any, context: any) {
@@ -823,6 +857,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     "lines",
     (args) => args.path,
     (args, context) => sandbox.authorizePath("read", resolve(cwd, args.path), context),
+    { renderCall: (args, theme) => formatReadCall(args, cwd, theme) },
   );
   pi.registerTool({
     ...writeTool,

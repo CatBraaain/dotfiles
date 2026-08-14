@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   COMMAND_PREVIEW_LIMIT,
   Sandbox,
+  classifyReadPath,
   countResultLines,
   formatDuration,
   formatGrepMatches,
@@ -511,6 +512,34 @@ describe("§8 表示", () => {
 
   it("バイト数を適切な単位で表示する", () => {
     assert.equal(formatSize(1536), "1.5KB");
+  });
+
+  it("read が SKILL.md のとき skill 分類を返す", () => {
+    const classification = classifyReadPath({ path: "/skills/my-skill/SKILL.md" }, "/cwd");
+    assert.deepEqual(classification, { kind: "skill", label: "my-skill" });
+  });
+
+  it("read が SKILL.md 以外のファイルのとき undefined を返す", () => {
+    const classification = classifyReadPath({ path: "/skills/my-skill/README.md" }, "/cwd");
+    assert.equal(classification, undefined);
+  });
+
+  it("read の相対パスを cwd 起点で解決して SKILL.md を判定する", () => {
+    const classification = classifyReadPath(
+      { path: "skills/my-skill/SKILL.md" },
+      "/workspace",
+    );
+    assert.deepEqual(classification, { kind: "skill", label: "my-skill" });
+  });
+
+  it("read の path が文字列でないとき undefined を返す", () => {
+    const classification = classifyReadPath({ path: undefined }, "/cwd");
+    assert.equal(classification, undefined);
+  });
+
+  it("read の path が空文字のとき undefined を返す", () => {
+    const classification = classifyReadPath({ path: "" }, "/cwd");
+    assert.equal(classification, undefined);
   });
 });
 
