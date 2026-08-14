@@ -40,6 +40,8 @@ paths:
 Use the repository's existing TypeScript conventions.
 ```
 
+frontmatter の終端は `---` に加えて `...` も受け付ける。
+
 | `paths` の状態 | 適用条件 |
 | --- | --- |
 | 未指定 | セッション開始時に適用する |
@@ -47,6 +49,17 @@ Use the repository's existing TypeScript conventions.
 | 1つ以上の glob | glob のいずれかが対象ファイルのパスに一致した操作の次のターンに適用する |
 
 `paths` のないルールは、対象ファイルを操作していなくてもセッション開始時から適用する。
+
+形式が不正なルールは、ワーニングを表示したうえで適用対象から除外する。除外する条件は次のとおりとする。
+
+| ルールファイルの状態 | 扱い |
+| --- | --- |
+| 読み取りに失敗した | 除外する |
+| frontmatter の YAML パースに失敗した | 除外する |
+| frontmatter が object でない | 除外する |
+| `paths` が文字列の配列でない | 除外する |
+
+除外したルールごとに、session_start 時にルールファイルのパスと除外理由を含む warning を UI に1件表示する。UI のない環境では表示しない。
 
 ## ルールの解決順
 
@@ -65,6 +78,8 @@ Use the repository's existing TypeScript conventions.
 
 同じ相対パスでないルールについては、解決順によって他のルールを除外しない。
 
+同一ソース内のルールは、パス名の辞書順に並べる。
+
 ## 自動適用
 
 ### 判定対象
@@ -77,6 +92,8 @@ Use the repository's existing TypeScript conventions.
 | `write` | する |
 | `edit` | する |
 | 上記以外の操作 | しない |
+
+エラーとして終了した操作は、パスが一致していても自動適用の対象にしない。
 
 対象ファイルのパスが相対パスの場合はプロジェクトルートからの相対パスとして判定する。絶対パスの場合も、プロジェクト内のファイルであればプロジェクトルートからの相対パスとして判定する。
 

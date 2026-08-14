@@ -106,11 +106,15 @@ async function readRule(
   displayPath: string,
   relativePath: string,
   sourceId: string,
+  onWarning?: (message: string) => void,
 ): Promise<Rule | undefined> {
   try {
     const content = await readFile(filePath, "utf8");
     const parsed = parseRuleContent(content);
-    if (!parsed) return undefined;
+    if (!parsed) {
+      onWarning?.(`Skipped rule ${displayPath}: malformed frontmatter`);
+      return undefined;
+    }
     return {
       id: `${sourceId}:${relativePath}`,
       filePath,
@@ -121,6 +125,7 @@ async function readRule(
       body: parsed.body,
     };
   } catch {
+    onWarning?.(`Skipped rule ${displayPath}: failed to read rule file`);
     return undefined;
   }
 }
@@ -141,6 +146,7 @@ export function deduplicateRules(rules: readonly Rule[]): Rule[] {
 export async function discoverRules(
   projectRoot: string,
   homeDirectory = homedir(),
+  onWarning?: (message: string) => void,
 ): Promise<Rule[]> {
   const discoveredRules: Rule[] = [];
 
@@ -154,6 +160,7 @@ export async function discoverRules(
         `${source.relativeDirectory}/${relativePath}`,
         relativePath,
         source.relativeDirectory,
+        onWarning,
       );
       if (rule) discoveredRules.push(rule);
     }
@@ -169,6 +176,7 @@ export async function discoverRules(
         homeDisplayPath(homeDirectory, filePath),
         relativePath,
         source.displayDirectory,
+        onWarning,
       );
       if (rule) discoveredRules.push(rule);
     }
@@ -181,6 +189,7 @@ export async function discoverRules(
       homeDisplayPath(homeDirectory, globalWindsurfPath),
       "global_rules.md",
       "~/.codeium/windsurf/memories",
+      onWarning,
     );
     if (rule) discoveredRules.push(rule);
   }
@@ -326,7 +335,10 @@ export default function rulesExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     projectRoot = ctx.cwd;
-    state = createRuleState(await discoverRules(projectRoot));
+    const notifyWarning = ctx.hasUI
+      ? (message: string) => ctx.ui.notify(message, "warning")
+      : undefined;
+    state = createRuleState(await discoverRules(projectRoot, homedir(), notifyWarning));
     if (ctx.hasUI) updateRulesWidget(ctx.ui, activeRules(state));
   });
 

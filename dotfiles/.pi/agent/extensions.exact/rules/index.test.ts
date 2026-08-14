@@ -143,17 +143,23 @@ describe("rule parsing", () => {
     });
   });
 
-  it("ignores a rule with malformed frontmatter without disabling other rules", async () => {
+  it("excludes a rule with malformed frontmatter with a warning, without disabling other rules", async () => {
     await withTemporaryDirectory(async (projectRoot) => {
       await writeRule(projectRoot, ".pi/agent/rules/broken.md", "---\npaths: [\n---\nbroken");
       await writeRule(projectRoot, ".pi/agent/rules/valid.md", "valid");
 
-      const rules = await discoverRules(projectRoot, join(projectRoot, "home"));
+      const warningMessages: string[] = [];
+      const rules = await discoverRules(projectRoot, join(projectRoot, "home"), (message) => {
+        warningMessages.push(message);
+      });
 
       assert.deepEqual(
         rules.map((discoveredRule) => discoveredRule.name),
         ["valid"],
       );
+      assert.deepEqual(warningMessages, [
+        "Skipped rule .pi/agent/rules/broken.md: malformed frontmatter",
+      ]);
     });
   });
 });
