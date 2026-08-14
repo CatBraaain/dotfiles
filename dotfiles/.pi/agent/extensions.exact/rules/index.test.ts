@@ -33,8 +33,8 @@ function it(name: string, fn: () => Promise<void> | void): void {
 function rule(overrides: Partial<Rule> = {}): Rule {
   return {
     id: "source:rule.md",
-    filePath: "/project/.pi/rules/rule.md",
-    displayPath: ".pi/rules/rule.md",
+    filePath: "/project/.pi/agent/rules/rule.md",
+    displayPath: ".pi/agent/rules/rule.md",
     relativePath: "rule.md",
     name: "rule",
     paths: undefined,
@@ -61,7 +61,7 @@ async function writeRule(directory: string, relativePath: string, content: strin
 describe("rule discovery", () => {
   it("discovers supported local rule files recursively in the documented order", async () => {
     await withTemporaryDirectory(async (projectRoot) => {
-      await writeRule(projectRoot, ".pi/rules/nested/pi.md", "pi");
+      await writeRule(projectRoot, ".pi/agent/rules/nested/pi.md", "pi");
       await writeRule(projectRoot, ".claude/rules/claude.md", "claude");
       await writeRule(projectRoot, ".cursor/rules/cursor.mdc", "cursor");
       await writeRule(projectRoot, ".cursor/rules/ignored.md", "ignored");
@@ -73,7 +73,7 @@ describe("rule discovery", () => {
       assert.deepEqual(
         rules.map((discoveredRule) => discoveredRule.displayPath),
         [
-          ".pi/rules/nested/pi.md",
+          ".pi/agent/rules/nested/pi.md",
           ".claude/rules/claude.md",
           ".cursor/rules/cursor.mdc",
           ".devin/rules/devin.md",
@@ -88,7 +88,7 @@ describe("rule discovery", () => {
       const projectRoot = join(directory, "project");
       const homeDirectory = join(directory, "home");
       await mkdir(projectRoot, { recursive: true });
-      await writeRule(homeDirectory, ".pi/rules/pi.md", "pi");
+      await writeRule(homeDirectory, ".pi/agent/rules/pi.md", "pi");
       await writeRule(homeDirectory, ".claude/rules/claude.md", "claude");
       await writeRule(homeDirectory, ".codeium/windsurf/memories/global_rules.md", "windsurf");
 
@@ -97,7 +97,7 @@ describe("rule discovery", () => {
       assert.deepEqual(
         rules.map((discoveredRule) => discoveredRule.displayPath),
         [
-          "~/.pi/rules/pi.md",
+          "~/.pi/agent/rules/pi.md",
           "~/.claude/rules/claude.md",
           "~/.codeium/windsurf/memories/global_rules.md",
         ],
@@ -107,7 +107,7 @@ describe("rule discovery", () => {
 
   it("uses the first rule when multiple sources have the same relative path", async () => {
     await withTemporaryDirectory(async (projectRoot) => {
-      await writeRule(projectRoot, ".pi/rules/shared.md", "pi body");
+      await writeRule(projectRoot, ".pi/agent/rules/shared.md", "pi body");
       await writeRule(projectRoot, ".claude/rules/shared.md", "Claude body");
       await writeRule(projectRoot, ".devin/rules/shared.md", "Windsurf body");
 
@@ -122,7 +122,7 @@ describe("rule discovery", () => {
 describe("rule parsing", () => {
   it("removes YAML frontmatter and keeps a rule without paths always active", async () => {
     await withTemporaryDirectory(async (projectRoot) => {
-      await writeRule(projectRoot, ".pi/rules/always.md", "---\ntitle: Always\n---\n\nAlways body");
+      await writeRule(projectRoot, ".pi/agent/rules/always.md", "---\ntitle: Always\n---\n\nAlways body");
 
       const [alwaysRule] = await discoverRules(projectRoot, join(projectRoot, "home"));
 
@@ -134,7 +134,7 @@ describe("rule parsing", () => {
 
   it("keeps an empty paths array always active", async () => {
     await withTemporaryDirectory(async (projectRoot) => {
-      await writeRule(projectRoot, ".pi/rules/always.md", "---\npaths: []\n---\nbody");
+      await writeRule(projectRoot, ".pi/agent/rules/always.md", "---\npaths: []\n---\nbody");
 
       const [alwaysRule] = await discoverRules(projectRoot, join(projectRoot, "home"));
 
@@ -145,8 +145,8 @@ describe("rule parsing", () => {
 
   it("ignores a rule with malformed frontmatter without disabling other rules", async () => {
     await withTemporaryDirectory(async (projectRoot) => {
-      await writeRule(projectRoot, ".pi/rules/broken.md", "---\npaths: [\n---\nbroken");
-      await writeRule(projectRoot, ".pi/rules/valid.md", "valid");
+      await writeRule(projectRoot, ".pi/agent/rules/broken.md", "---\npaths: [\n---\nbroken");
+      await writeRule(projectRoot, ".pi/agent/rules/valid.md", "valid");
 
       const rules = await discoverRules(projectRoot, join(projectRoot, "home"));
 
@@ -228,7 +228,12 @@ describe("rule injection", () => {
 describe("context and status", () => {
   it("renders active rule paths and bodies in resolution order", () => {
     const rules = [
-      rule({ id: "first", displayPath: ".pi/rules/first.md", name: "first", body: "First body" }),
+      rule({
+        id: "first",
+        displayPath: ".pi/agent/rules/first.md",
+        name: "first",
+        body: "First body",
+      }),
       rule({
         id: "second",
         displayPath: ".claude/rules/second.md",
@@ -240,7 +245,9 @@ describe("context and status", () => {
     const message = buildRulesMessage(rules);
 
     assert.ok(message);
-    assert.ok(message.indexOf(".pi/rules/first.md") < message.indexOf(".claude/rules/second.md"));
+    assert.ok(
+      message.indexOf(".pi/agent/rules/first.md") < message.indexOf(".claude/rules/second.md"),
+    );
     assert.ok(message.includes("First body"));
     assert.ok(message.includes("Second body"));
   });
@@ -259,10 +266,16 @@ describe("context and status", () => {
   it("adds a path when active rules have the same name", () => {
     assert.deepEqual(
       buildRulesWidgetLines([
-        rule({ id: "first", displayPath: ".pi/rules/typescript.md", name: "typescript" }),
+        rule({
+          id: "first",
+          displayPath: ".pi/agent/rules/typescript.md",
+          name: "typescript",
+        }),
         rule({ id: "second", displayPath: ".claude/rules/typescript.md", name: "typescript" }),
       ]),
-      ["📜 rules: typescript (.pi/rules/typescript.md), typescript (.claude/rules/typescript.md)"],
+      [
+        "📜 rules: typescript (.pi/agent/rules/typescript.md), typescript (.claude/rules/typescript.md)",
+      ],
     );
   });
 });

@@ -18,7 +18,7 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
 
 ## agent/rules/
 
-対象ファイルに応じた Markdown ルールをエージェントへ自動適用する仕組み（Claude Code 互換）。`.md` を配置するだけで、該当ファイルを操作した次ターンにルール本文がエージェントへ注入される。実装は `extensions.exact/rules/` だが、**ルールの読込対象はこの `agent/rules/`
+対象ファイルに応じた Markdown ルールをエージェントへ自動適用する仕組み（Claude Code 互換）。`.md` を配置するだけで、該当ファイルを操作した次ターンにルール本文がエージェントへ注入される。実装は `extensions.exact/rules/` だが、**ルールの読込対象はこの `agent/rules/`**。
 
 **書き方** — YAML frontmatter の `paths` で適用対象ファイルを glob 指定、本文は Markdown。
 

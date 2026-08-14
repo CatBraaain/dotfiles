@@ -33,7 +33,7 @@ type RuleSource = {
 const PROJECT_RULE_SOURCES: readonly (Omit<RuleSource, "directory" | "displayDirectory"> & {
   readonly relativeDirectory: string;
 })[] = [
-  { relativeDirectory: ".pi/rules", extension: ".md" },
+  { relativeDirectory: ".pi/agent/rules", extension: ".md" },
   { relativeDirectory: ".claude/rules", extension: ".md" },
   { relativeDirectory: ".cursor/rules", extension: ".mdc" },
   { relativeDirectory: ".devin/rules", extension: ".md" },
@@ -41,7 +41,7 @@ const PROJECT_RULE_SOURCES: readonly (Omit<RuleSource, "directory" | "displayDir
 ];
 
 const GLOBAL_RULE_SOURCES: readonly RuleSource[] = [
-  { directory: "", displayDirectory: "~/.pi/rules", extension: ".md" },
+  { directory: "", displayDirectory: "~/.pi/agent/rules", extension: ".md" },
   { directory: "", displayDirectory: "~/.claude/rules", extension: ".md" },
 ];
 
