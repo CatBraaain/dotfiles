@@ -1,10 +1,10 @@
 ---
-name: sdd-strategy
+name: sdd-workflow
 description: >-
-  ロジックを伴う成果物を spec（＝観測可能な振る舞いの仕様書）を唯一の仕様ソースとして開発し、要件合意から実装・レビュー・収束までを管理する SDD（spec driven development）の実行戦略。specだけを作る依頼、実装依頼、sdd-reviewによる適合性レビュー、レビュー後の収束に対応する。spec 駆動開発、仕様書、観測可能な振る舞い、適合性レビュー、収束フロー。
+  ロジックを伴う成果物を spec（＝観測可能な振る舞いの仕様書）を唯一の仕様ソースとして開発し、要件合意から実装・レビュー・収束までを管理する SDD（spec driven development）の実行ワークフロー。specだけを作る依頼、実装依頼、sdd-reviewによる適合性レビュー、レビュー後の収束に対応する。spec 駆動開発、仕様書、観測可能な振る舞い、適合性レビュー、収束フロー。
 ---
 
-# SDD Strategy
+# SDD Workflow
 
 作業開始時に `sdd-standard` スキルを読み、SDD の共通規約を適用する。
 

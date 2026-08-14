@@ -1,12 +1,12 @@
 ---
 name: sdd-standard
 description: >-
-  SDD で共有する仕様作成・適合性レビューの標準を定義するスキル。spec を唯一の仕様ソースとして設計・実装・テスト・レビューを進めるとき、sdd-strategy または sdd-review と併用して必ず参照する。spec の書き方、観測可能な振る舞い、仕様の配置、Mermaid の表現、照合単位、セルフチェックを扱う。
+  SDD で共有する仕様作成・適合性レビューの標準を定義するスキル。spec を唯一の仕様ソースとして設計・実装・テスト・レビューを進めるとき、sdd-workflow または sdd-review と併用して必ず参照する。spec の書き方、観測可能な振る舞い、仕様の配置、Mermaid の表現、照合単位、セルフチェックを扱う。
 ---
 
 # SDD Standard
 
-このスキルは、SDD の仕様作成と適合性レビューが共有する規約を定義する。実行フローは `sdd-strategy`、適合性レビューの手順は `sdd-review` が担う。`sdd-strategy` または `sdd-review` と併用するときは、このスキルの規約を適用する。
+このスキルは、SDD の仕様作成と適合性レビューが共有する規約を定義する。実行ワークフローは `sdd-workflow`、適合性レビューの手順は `sdd-review` が担う。`sdd-workflow` または `sdd-review` と併用するときは、このスキルの規約を適用する。
 
 ## 仕様ソースと oracle
 
