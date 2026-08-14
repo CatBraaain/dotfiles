@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
- * /note command extension.
+ * /aside command extension.
  *
  * Appends text (empty allowed) to the session history as a message that
  * participates in LLM context, without triggering an AI response.
@@ -13,14 +13,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  * for the next prompt and the LLM is not called. It is stored as a
  * CustomMessage (role:"custom"), which still participates in LLM context.
  */
-export default function noteCommandExtension(pi: ExtensionAPI): void {
-	pi.registerCommand("note", {
-		description: "Append a note to the session history without triggering an AI response.",
-		handler: async (args) => {
-			pi.sendMessage(
-				{ customType: "note", content: args, display: true },
-				{ deliverAs: "nextTurn" },
-			);
-		},
-	});
+export default function asideExtension(pi: ExtensionAPI): void {
+  pi.registerCommand("aside", {
+    description: "Append a message to the session history without triggering an AI response.",
+    handler: async (args) => {
+      pi.sendMessage(
+        { customType: "aside", content: args, display: true },
+        { deliverAs: "nextTurn" },
+      );
+    },
+  });
 }
