@@ -1,1 +1,41 @@
-read https://pi.dev/docs/latest/settings
+# .pi/
+
+pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs/latest/settings を参照。
+
+## 構成
+
+```text
+.pi/
+├── README                      # 本ファイル
+└── agent/
+    ├── AGENTS.md               # エージェント共通の指示書
+    ├── merge_settings.json     # pi 設定（settings.json へ深くマージ）
+    ├── extensions.exact/       # 自作拡張機能
+    ├── prompts.exact/          # プロンプトテンプレート
+    ├── rules/                  # rules 拡張の読込対象（ルール .md を配置）
+    └── skills.exact/           # 自作スキル
+```
+
+## agent/rules/
+
+対象ファイルに応じた Markdown ルールをエージェントへ自動適用する仕組み（Claude Code 互換）。`.md` を配置するだけで、該当ファイルを操作した次ターンにルール本文がエージェントへ注入される。実装は `extensions.exact/rules/` だが、**ルールの読込対象はこの `agent/rules/`
+
+**書き方** — YAML frontmatter の `paths` で適用対象ファイルを glob 指定、本文は Markdown。
+
+```markdown
+---
+paths:
+  - src/**/*.ts
+---
+
+# TypeScript rules
+
+リポジトリ既存の TS 規約に従う。
+```
+
+**適用タイミング**
+
+| `paths` | 適用条件 |
+| --- | --- |
+| 未指定／空 | セッション開始時から常に適用 |
+| glob 指定 | read/write/edit で一致ファイルを触った**次のターン**に1回だけ注入、以後アクティブ維持 |
