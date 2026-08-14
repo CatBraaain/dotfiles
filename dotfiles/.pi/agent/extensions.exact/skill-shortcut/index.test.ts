@@ -1,7 +1,7 @@
 // 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
-import bareSkillCommands, { resolveSlashInput, rewriteCompletionItems } from "./index";
+import skillShortcut, { resolveSlashInput, rewriteCompletionItems } from "./index";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
@@ -65,12 +65,12 @@ describe("補完の表示", () => {
 		assert.deepEqual(displayedItems, [{ value: "foo", label: "foo" }]);
 	});
 
-	it("/bsk の入力では文字が順番に現れる裸名が残る", () => {
-		const skillPrefixedItems: AutocompleteItem[] = [completionItem("skill:bare-skill-commands")];
+	it("/sht の入力では文字が順番に現れる裸名が残る", () => {
+		const skillPrefixedItems: AutocompleteItem[] = [completionItem("skill:skill-shortcut")];
 
-		const displayedItems = rewriteCompletionItems(skillPrefixedItems, "bsk");
+		const displayedItems = rewriteCompletionItems(skillPrefixedItems, "sht");
 
-		assert.deepEqual(displayedItems, [{ value: "bare-skill-commands", label: "bare-skill-commands" }]);
+		assert.deepEqual(displayedItems, [{ value: "skill-shortcut", label: "skill-shortcut" }]);
 	});
 
 	it("/z の入力では一致する候補がないため空になる", () => {
@@ -162,7 +162,7 @@ describe("起動直後の補完", () => {
 			},
 		};
 
-		bareSkillCommands(fakePi as never);
+		skillShortcut(fakePi as never);
 
 		assert.ok(registeredEvents.includes("session_start"));
 		assert.equal(typeof registeredProviderFactory, "function");

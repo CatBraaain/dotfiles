@@ -1,4 +1,4 @@
-# bare-skill-commands 拡張機能 Spec
+# skill-shortcut 拡張機能 Spec
 
 skill コマンドを `/skill:foo` ではなく `/foo` で呼べるようにする。補完（`/` 入力時の候補）にも `/foo` で表示する。
 
@@ -10,7 +10,7 @@ skill コマンドを `/skill:foo` ではなく `/foo` で呼べるようにす�
 |------------|-------------------|
 | `/`     | 全 skill が `/foo` `/bar` … と表示される |
 | `/fo`   | `/foo`（`fo` の文字が順番どおり現れる skill） |
-| `/bsk`  | `/bare-skill-commands`（`b` → `s` → `k` の順に現れる skill） |
+| `/sht`  | `/skill-shortcut`（`s` → `h` → `t` の順に現れる skill） |
 | `/sk`   | `s` → `k` の順に現れる候補 |
 
 非 skill のコマンド（ビルトイン・拡張コマンド・prompt テンプレート）は `/` 付きでそのまま候補に出る。`skill:` の剥離は skill にのみ適用され、非 skill は書き換えない。

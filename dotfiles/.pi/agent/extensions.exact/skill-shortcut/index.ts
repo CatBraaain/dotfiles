@@ -54,7 +54,7 @@ function slashPrefixBeforeCursor(textBeforeCursor: string): string | undefined {
 	return textBeforeCursor.slice(1);
 }
 
-export default function bareSkillCommands(pi: ExtensionAPI): void {
+export default function skillShortcut(pi: ExtensionAPI): void {
 	pi.on("input", async (event) => {
 		if (event.source === "extension") return { action: "continue" };
 		return resolveSlashInput(event.text, pi.getCommands());

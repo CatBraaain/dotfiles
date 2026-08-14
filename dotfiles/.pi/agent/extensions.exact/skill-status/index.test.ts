@@ -1,7 +1,7 @@
 // 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
-import bareSkillCommands from "../bare-skill-commands/index";
+import skillShortcut from "../skill-shortcut/index";
 import skillStatusExtension, {
   buildSkillStatusWidgetLines,
   createSkillStatusState,
@@ -73,7 +73,7 @@ function captureActualExtensionPath(): { handlers: Map<string, Handler[]>; comma
     },
     appendEntry() {},
   };
-  bareSkillCommands(pi as never);
+  skillShortcut(pi as never);
   skillStatusExtension(pi as never);
   return { handlers, commands };
 }
