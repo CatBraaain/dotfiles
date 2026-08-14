@@ -41,6 +41,10 @@ export default function (pi: ExtensionAPI) {
 		}, 80);
 	}
 
+	pi.on("session_start", async (_event, ctx) => {
+		ctx.ui.setTitle(getBaseTitle(pi));
+	});
+
 	pi.on("agent_start", async (_event, ctx) => {
 		startAnimation(ctx);
 	});
