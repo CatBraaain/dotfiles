@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   Sandbox,
   classifyReadPath,
   countResultLines,
+  expandPathSection,
   formatDuration,
   formatGrepMatches,
   formatSize,
@@ -225,84 +226,131 @@ describe("§3.a パス文字列の解決", () => {
   const projectRoot = "/workspace/project";
 
   it("相対パスは cwd を起点に解決する", () => {
-    const action = resolvePathAction(
-      { allow: ["./sub"] },
-      "/workspace/project/sub/file.txt",
-      projectRoot,
-    );
-    assert.equal(action, "allow");
+    const section = expandPathSection({ allow: ["./sub"] }, projectRoot);
+    assert.equal(resolvePathAction(section, "/workspace/project/sub/file.txt"), "allow");
   });
 
   it("~ はホームディレクトリに解決する", () => {
-    const action = resolvePathAction(
-      { allow: ["~/docs"] },
-      `${homedir()}/docs/file.txt`,
-      projectRoot,
-    );
-    assert.equal(action, "allow");
+    const section = expandPathSection({ allow: ["~/docs"] }, projectRoot);
+    assert.equal(resolvePathAction(section, `${homedir()}/docs/file.txt`), "allow");
   });
 
   it("絶対パスはそのまま解決する", () => {
-    const action = resolvePathAction({ allow: ["/opt/data"] }, "/opt/data/file.txt", projectRoot);
-    assert.equal(action, "allow");
+    const section = expandPathSection({ allow: ["/opt/data"] }, "/cwd");
+    assert.equal(resolvePathAction(section, "/opt/data/file.txt"), "allow");
   });
 });
 
 describe("§3.b glob パターン", () => {
-  it("* はパス区切りを含まない名前にマッチする", () => {
-    assert.equal(resolvePathAction({ allow: ["/cache/*"] }, "/cache/uv", "/cwd"), "allow");
-  });
+  const withGlobDir = (test: (dir: string) => Promise<void> | void) => async () => {
+    const dir = mkdtempSync(join(tmpdir(), "guardrails-glob-"));
+    try {
+      await test(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
 
-  it("* はパス区切りを越えてマッチしない", () => {
-    assert.equal(resolvePathAction({ allow: ["/cache/*"] }, "/cache/uv/nested", "/cwd"), "deny");
-  });
+  it(
+    "* は直下の既存パスに展開される",
+    withGlobDir((dir) => {
+      mkdirSync(join(dir, "uv"));
+      mkdirSync(join(dir, "pip"));
+      const section = expandPathSection({ allow: [join(dir, "*")] }, "/cwd");
+      assert.equal(resolvePathAction(section, join(dir, "uv")), "allow");
+      assert.equal(resolvePathAction(section, join(dir, "pip")), "allow");
+    }),
+  );
 
-  it("** はパス区切りを含む任意文字列にマッチする", () => {
-    assert.equal(
-      resolvePathAction({ allow: ["/cache/**"] }, "/cache/uv/nested/deep", "/cwd"),
-      "allow",
-    );
-  });
+  it(
+    "** は再帰的な既存パスに展開される",
+    withGlobDir((dir) => {
+      mkdirSync(join(dir, "uv", "nested", "deep"), { recursive: true });
+      const section = expandPathSection({ allow: [join(dir, "**")] }, "/cwd");
+      assert.equal(resolvePathAction(section, join(dir, "uv", "nested", "deep")), "allow");
+    }),
+  );
 
-  it("? は任意1文字にマッチする", () => {
-    assert.equal(resolvePathAction({ allow: ["/x/a?c"] }, "/x/abc", "/cwd"), "allow");
-  });
+  it(
+    "? は任意1文字にマッチする",
+    withGlobDir((dir) => {
+      writeFileSync(join(dir, "a.txt"), "");
+      const section = expandPathSection({ allow: [join(dir, "?.txt")] }, "/cwd");
+      assert.equal(resolvePathAction(section, join(dir, "a.txt")), "allow");
+    }),
+  );
 
-  it("[...] は文字クラスにマッチする", () => {
-    assert.equal(resolvePathAction({ allow: ["/x/[abc].txt"] }, "/x/b.txt", "/cwd"), "allow");
-  });
+  it(
+    "[...] は文字クラスにマッチする",
+    withGlobDir((dir) => {
+      writeFileSync(join(dir, "b.txt"), "");
+      const section = expandPathSection({ allow: [join(dir, "[abc].txt")] }, "/cwd");
+      assert.equal(resolvePathAction(section, join(dir, "b.txt")), "allow");
+    }),
+  );
+
+  it(
+    "セッション中に新規作成されたパスは対象外",
+    withGlobDir((dir) => {
+      mkdirSync(join(dir, "existing"));
+      return withSandbox(
+        `
+read:
+  allow: ["${join(dir, "*")}"]
+`,
+        "/cwd",
+        async (sandbox) => {
+          mkdirSync(join(dir, "latecomer"));
+          await assert.rejects(
+            async () => sandbox.authorizePath("read", join(dir, "latecomer"), { cwd: "/cwd" }),
+            /Access requires confirmation/,
+          );
+        },
+      )();
+    }),
+  );
 });
 
 describe("§3.c アクションの決定", () => {
   const projectRoot = "/workspace/project";
 
-  it("deny を allow より優先する", () => {
-    assert.equal(
-      resolvePathAction(
-        { allow: ["."], deny: ["**/.env"] },
-        "/workspace/project/.env",
-        projectRoot,
-      ),
-      "deny",
-    );
-  });
+  const withProjectEnvFile = (test: (dir: string) => void) => () => {
+    const dir = mkdtempSync(join(tmpdir(), "guardrails-action-"));
+    try {
+      writeFileSync(join(dir, ".env"), "");
+      test(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
 
-  it("deny を ask より優先する", () => {
-    assert.equal(
-      resolvePathAction({ ask: ["."], deny: ["**/.env"] }, "/workspace/project/.env", projectRoot),
-      "deny",
-    );
-  });
+  it(
+    "deny を allow より優先する",
+    withProjectEnvFile((dir) => {
+      const section = expandPathSection({ allow: ["."], deny: ["**/.env"] }, dir);
+      assert.equal(resolvePathAction(section, join(dir, ".env")), "deny");
+    }),
+  );
 
-  it("ask を allow より優先する", () => {
-    assert.equal(
-      resolvePathAction({ allow: ["."], ask: ["**/.env"] }, "/workspace/project/.env", projectRoot),
-      "ask",
-    );
-  });
+  it(
+    "deny を ask より優先する",
+    withProjectEnvFile((dir) => {
+      const section = expandPathSection({ ask: ["."], deny: ["**/.env"] }, dir);
+      assert.equal(resolvePathAction(section, join(dir, ".env")), "deny");
+    }),
+  );
+
+  it(
+    "ask を allow より優先する",
+    withProjectEnvFile((dir) => {
+      const section = expandPathSection({ allow: ["."], ask: ["**/.env"] }, dir);
+      assert.equal(resolvePathAction(section, join(dir, ".env")), "ask");
+    }),
+  );
 
   it("一致しないパスは deny になる", () => {
-    assert.equal(resolvePathAction({ allow: ["."] }, "/tmp/file.txt", projectRoot), "deny");
+    const section = expandPathSection({ allow: ["."] }, projectRoot);
+    assert.equal(resolvePathAction(section, "/tmp/file.txt"), "deny");
   });
 });
 

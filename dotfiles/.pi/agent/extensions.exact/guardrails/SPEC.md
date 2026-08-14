@@ -64,8 +64,10 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 | `**` | パス区切りを含む任意文字列（再帰） |
 | `?` | 任意1文字 |
 | `[...]` | 文字クラス |
+| `{a,b}` | カンマ区切りの選択肢のいずれかに展開（ブレース展開） |
+| `"*"` 単体（`read.allow` のみ） | すべてのパスにマッチする。全パスの read を許可し、ルート全体を read-only bind の対象とする（§6.1） |
 
-例: `~/.cache/*` → `~/.cache/uv` `~/.cache/pip` `~/.cache/go-build` ... に展開される。
+例: `~/.cache/*` → `~/.cache/uv` `~/.cache/pip` `~/.cache/go-build` ... に展開される。`~/.config/{git,npm}` → `~/.config/git` `~/.config/npm` に展開される。
 
 glob は起動時に既存パスへ展開され、セッション中の新規パスは対象外。§6.1 の `mkdir -p` は固定パスのみで、glob には適用しない。
 
@@ -137,6 +139,17 @@ network は開放。fs 制限の対象外。
 
 `credentials` のパスは bash の sandbox にのみ `--ro-bind` する。credentials のファイル自体や glob のマッチ先は作成せず、存在するパスだけを起動時に bind する。
 
+### fs sandbox での deny パス・credentials パスの隠蔽
+
+fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）用の sandbox では、`read.deny` と `credentials` に指定されたパス（glob 展開後・実在するもののみ）は実体が見えないようマスクされる。
+
+| 対象パスの種類 | fs sandbox 内での見え方 |
+| --- | --- |
+| ディレクトリ | 空のディレクトリ（tmpfs マウント） |
+| ファイル | 空のファイル（`/dev/null` を read-only bind） |
+
+bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.1 のとおり read-only で bind される。
+
 ---
 
 ## 7. Operations による fs IO
@@ -153,7 +166,7 @@ network は開放。fs 制限の対象外。
 | `ls` | `createLsTool` | `exists`, `stat`, `readdir` |
 | `bash` | `createBashTool` | `BashOperations.exec` |
 
-標準 factory が担当する offset/limit、oldText/newText 置換、diff、結果の truncation、glob の結果整形、画像判定などは本拡張で再実装しない。`edit` は pi 標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
+標準 factory が担当する offset/limit、oldText/newText 置換、diff、結果の truncation、glob の結果整形は本拡張で再実装しない。画像判定のみ本拡張が拡張子ベースで行う: `png` / `jpg` / `jpeg` / `gif` / `webp` / `bmp` は対応する MIME type を返し、それ以外の拡張子は非画像として扱う。`edit` は pi 標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
 
 ### 7.1 `grep` の例外
 

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, globSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -164,34 +164,6 @@ function resolvePattern(pattern: string, cwd: string): string {
   return isAbsolute(homeExpanded) ? resolve(homeExpanded) : resolve(cwd, homeExpanded);
 }
 
-function patternMatchesPath(pattern: string, candidatePath: string, cwd: string): boolean {
-  const resolvedPattern = resolvePattern(pattern, cwd);
-  const normalizedCandidate = resolve(candidatePath);
-  if (hasGlob(resolvedPattern)) {
-    return expandBraces(resolvedPattern).some((expandedPattern) =>
-      globToRegExp(expandedPattern).test(normalizedCandidate),
-    );
-  }
-  return (
-    normalizedCandidate === resolvedPattern ||
-    normalizedCandidate.startsWith(`${resolvedPattern}${sep}`)
-  );
-}
-
-export function resolvePathAction(
-  section: RuleSection | undefined,
-  candidatePath: string,
-  cwd: string,
-): Action {
-  if (!section) return "deny";
-  const matches = (patterns: string[] | undefined) =>
-    patterns?.some((pattern) => patternMatchesPath(pattern, candidatePath, cwd)) ?? false;
-  if (matches(section.deny)) return "deny";
-  if (matches(section.ask)) return "ask";
-  if (matches(section.allow)) return "allow";
-  return "deny";
-}
-
 export function resolveCommandAction(section: RuleSection | undefined, command: string): Action {
   if (!section) return "deny";
   const matches = (patterns: string[] | undefined) =>
@@ -215,12 +187,75 @@ function getPathSection(
   return config[operation];
 }
 
-function resolveConfigPatterns(patterns: string[] | undefined, cwd: string): string[] {
+// "/**" is the sentinel produced by resolvePattern("*") and means "all paths" (§3).
+// bun's globSync silently drops dotfiles, so expand by walking the static prefix
+// and testing each path with globToRegExp (same semantics as command matching).
+// ponytail: walks the whole prefix subtree; add per-segment matching if large trees get slow.
+function expandGlobPattern(absolutePattern: string): string[] {
+  const regexes = expandBraces(absolutePattern).map(globToRegExp);
+  let staticPrefix = "";
+  for (const segment of absolutePattern.split("/")) {
+    if (hasGlob(segment) || segment.includes("{")) break;
+    staticPrefix = staticPrefix ? join(staticPrefix, segment) : segment || "/";
+  }
+  const matches: string[] = [];
+  const walk = (directory: string) => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (regexes.some((regex) => regex.test(path))) matches.push(path);
+      if (entry.isDirectory()) walk(path);
+    }
+  };
+  walk(staticPrefix);
+  return matches;
+}
+
+function expandPathPatterns(patterns: string[] | undefined, cwd: string): string[] {
   return (patterns ?? []).flatMap((pattern) => {
     const resolvedPattern = resolvePattern(pattern, cwd);
-    if (!hasGlob(resolvedPattern)) return [resolvedPattern];
-    return globSync(resolvedPattern, { absolute: true, dot: true }) as string[];
+    if (resolvedPattern === "/**" || !hasGlob(resolvedPattern)) return [resolvedPattern];
+    return expandGlobPattern(resolvedPattern);
   });
+}
+
+export type ExpandedPathSection = { allow: string[]; ask: string[]; deny: string[] };
+
+export function expandPathSection(
+  section: RuleSection | undefined,
+  cwd: string,
+): ExpandedPathSection {
+  return {
+    allow: expandPathPatterns(section?.allow, cwd),
+    ask: expandPathPatterns(section?.ask, cwd),
+    deny: expandPathPatterns(section?.deny, cwd),
+  };
+}
+
+function pathsMatchCandidate(paths: string[], candidatePath: string): boolean {
+  const normalizedCandidate = resolve(candidatePath);
+  return paths.some(
+    (path) =>
+      path === "/**" ||
+      normalizedCandidate === path ||
+      normalizedCandidate.startsWith(`${path}${sep}`),
+  );
+}
+
+export function resolvePathAction(
+  section: ExpandedPathSection | undefined,
+  candidatePath: string,
+): Action {
+  if (!section) return "deny";
+  if (pathsMatchCandidate(section.deny, candidatePath)) return "deny";
+  if (pathsMatchCandidate(section.ask, candidatePath)) return "ask";
+  if (pathsMatchCandidate(section.allow, candidatePath)) return "allow";
+  return "deny";
 }
 
 function addParentDirectories(args: string[], targetPath: string): void {
@@ -350,6 +385,9 @@ export async function formatGrepMatches(
 export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
   private readonly config: GuardrailsConfig;
+  private readonly readPaths: ExpandedPathSection;
+  private readonly writePaths: ExpandedPathSection;
+  private readonly credentialPaths: string[];
 
   constructor(
     private readonly cwd: string,
@@ -360,6 +398,9 @@ export class Sandbox {
     } catch {
       this.config = {};
     }
+    this.readPaths = expandPathSection(this.config.read, cwd);
+    this.writePaths = expandPathSection(this.config.write, cwd);
+    this.credentialPaths = expandPathPatterns(this.config.credentials, cwd);
     this.prepareWriteDirectories();
   }
 
@@ -393,14 +434,14 @@ export class Sandbox {
     };
 
     if (!this.readAllPaths()) {
-      for (const path of resolveConfigPatterns(readSection?.allow, this.cwd)) mount(path, false);
+      for (const path of expandPathPatterns(readSection?.allow, this.cwd)) mount(path, false);
     }
-    for (const path of resolveConfigPatterns(writeSection?.allow, this.cwd)) mount(path, true);
+    for (const path of expandPathPatterns(writeSection?.allow, this.cwd)) mount(path, true);
     for (const [path, accessModes] of this.dynamicPaths) mount(path, accessModes.has("write"));
 
     if (!this.readAllPaths()) mount(this.cwd, false);
     if (mode === "bash") {
-      for (const path of resolveConfigPatterns(this.config.credentials, this.cwd)) {
+      for (const path of this.credentialPaths) {
         if (existsSync(path)) mount(path, false);
       }
     }
@@ -412,7 +453,7 @@ export class Sandbox {
       ...(getPathSection(this.config, "read")?.deny ?? []),
       ...(this.config.credentials ?? []),
     ];
-    const hiddenPaths = resolveConfigPatterns(hiddenPatterns, this.cwd);
+    const hiddenPaths = expandPathPatterns(hiddenPatterns, this.cwd);
     for (const path of hiddenPaths) {
       if (!existsSync(path)) continue;
       addParentDirectories(args, path);
@@ -441,22 +482,16 @@ export class Sandbox {
     context: ToolContext,
   ): Promise<void> {
     const absolutePath = resolve(candidatePath);
-    if (
-      (this.config.credentials ?? []).some((pattern) =>
-        patternMatchesPath(pattern, absolutePath, this.cwd),
-      )
-    ) {
+    if (pathsMatchCandidate(this.credentialPaths, absolutePath)) {
       throw new Error(`Access denied for credential path: ${absolutePath}`);
     }
     const dynamicAccess = this.dynamicPaths.get(absolutePath);
     if (dynamicAccess?.has(operation)) return Promise.resolve();
 
-    const section = getPathSection(this.config, operation);
-    const action = resolvePathAction(section, absolutePath, this.cwd);
+    const section = operation === "read" ? this.readPaths : this.writePaths;
+    const action = resolvePathAction(section, absolutePath);
     if (action === "allow") return Promise.resolve();
-    const explicitlyDenied =
-      section?.deny?.some((pattern) => patternMatchesPath(pattern, absolutePath, this.cwd)) ??
-      false;
+    const explicitlyDenied = pathsMatchCandidate(section.deny, absolutePath);
     if (action === "deny" && explicitlyDenied) throw new Error(`Access denied: ${absolutePath}`);
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
