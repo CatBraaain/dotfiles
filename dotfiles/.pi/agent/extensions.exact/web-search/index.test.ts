@@ -10,7 +10,6 @@ import webSearchExtension, {
   formatBackendLines,
   openserpError,
   pageTitle,
-  SEARCH_RESULT_LIMIT,
   searchOne,
   type Attempt,
   type BackendEntry,
@@ -145,10 +144,11 @@ describe("web_search 統合（execute 経由・実バックエンド）", () => 
     assert.deepEqual(parameterKeys, ["query", "lang"]);
   });
 
-  it(`検索結果は${SEARCH_RESULT_LIMIT}件出力する`, async () => {
+  it("検索結果は最大10件を出力し、件数が実バックエンドの結果数に満たないこともある", async () => {
     const resultText = textOf(await callSearch("pi coding agent"));
     const headings = resultText.match(/^#{2,3} \d+\./gm) ?? [];
-    assert.equal(headings.length, SEARCH_RESULT_LIMIT);
+    assert.ok(headings.length > 0);
+    assert.ok(headings.length <= 10);
   });
 
   it("失敗したバックエンドも次の検索で再試行する", async () => {

@@ -27,7 +27,7 @@
 
 ### Windows トースト通知
 
-`powershell.exe -NoProfile -Command` を実行し、Windows の ToastNotification API でトーストを表示する。
+`powershell.exe -NoProfile -Command` を実行し、Windows の ToastNotification API でトーストを表示する。トーストの本文には `<本文>` のみが表示され、`<タイトル>` は表示されない。タイトルは Windows の通知元識別（AppId）文字列として使用される。
 
 ### OSC 99（Kitty / VSCode）
 

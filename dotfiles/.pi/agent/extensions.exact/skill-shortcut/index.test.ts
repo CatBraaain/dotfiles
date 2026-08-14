@@ -141,16 +141,20 @@ describe("名前の衝突", () => {
 });
 
 describe("起動直後の補完", () => {
-	it("session_start のタイミングで autocomplete provider を登録する", () => {
-		const registeredEvents: string[] = [];
-		let registeredProviderFactory: ((current: unknown) => unknown) | undefined;
+	it("session_start のタイミングで登録した provider が /foo 入力に裸名の候補を返す", async () => {
+		const currentProvider = {
+			triggerCharacters: ["/"],
+			async getSuggestions(): Promise<AutocompleteSuggestions | null> {
+				return { items: [completionItem("skill:foo"), completionItem("model")], prefix: "/" };
+			},
+		} as AutocompleteProvider;
+		let registeredProviderFactory: ((current: AutocompleteProvider) => AutocompleteProvider) | undefined;
 		const fakePi = {
 			on(event: string, handler: unknown) {
-				registeredEvents.push(event);
 				if (event !== "session_start") return;
 				const ctx = {
 					ui: {
-						addAutocompleteProvider(factory: (current: unknown) => unknown) {
+						addAutocompleteProvider(factory: (current: AutocompleteProvider) => AutocompleteProvider) {
 							registeredProviderFactory = factory;
 						},
 					},
@@ -164,8 +168,11 @@ describe("起動直後の補完", () => {
 
 		skillShortcut(fakePi as never);
 
-		assert.ok(registeredEvents.includes("session_start"));
-		assert.equal(typeof registeredProviderFactory, "function");
+		assert.ok(registeredProviderFactory, "provider factory is registered at session_start");
+		const wrappedProvider = registeredProviderFactory(currentProvider);
+		const fooSuggestions = await wrappedProvider.getSuggestions(["/foo"], 0, 4, undefined as never);
+
+		assert.deepEqual(fooSuggestions, { items: [{ value: "foo", label: "foo" }], prefix: "/" });
 	});
 });
 

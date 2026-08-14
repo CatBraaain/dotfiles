@@ -166,7 +166,7 @@ describe("session_list", () => {
 
 describe("session_get", () => {
   it("returns the first fifty messages by default", async () => {
-    const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
+    const entries = Array.from({ length: 51 }, (_, index) =>
       messageEntry("user", `message ${index}`, String(index)),
     );
     const longSession = session({
@@ -178,9 +178,9 @@ describe("session_get", () => {
       { id: "long" },
       source([longSession], { [longSession.path]: entries }),
     );
-    assert.equal(result.messages.length, DEFAULT_MESSAGE_LIMIT);
+    assert.equal(result.messages.length, 50);
     assert.equal(result.offset, 1);
-    assert.equal(result.total, DEFAULT_MESSAGE_LIMIT + 1);
+    assert.equal(result.total, 51);
   });
 
   it("returns the requested one-based range", async () => {

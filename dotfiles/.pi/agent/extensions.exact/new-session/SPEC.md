@@ -9,6 +9,8 @@
 | `/new-session` | 任意の文字列 | 完全にクリーンな新セッションへ切り替える |
 | `/ns` | 任意の文字列 | `/new-session` と同じ処理で完全にクリーンな新セッションへ切り替える |
 
+両コマンドとも、コマンド一覧（`/help` など）に説明文 "Start a clean new session. An optional argument is placed in the new session's editor as a draft." を表示する。
+
 エージェント向けツール、エージェント起点の処理、確認ダイアログは提供しない。
 
 ## 引数とドラフト

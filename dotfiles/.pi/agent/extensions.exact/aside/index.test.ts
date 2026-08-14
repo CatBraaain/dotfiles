@@ -1,7 +1,7 @@
 // 実行: bun --install=auto run index.test.ts
 //
 // aside 拡張機能の振る舞いを検証する。
-// 出典: ./BEHAVIORS.md
+// 出典: ./SPEC.md
 // factory をモック pi で起動し、/aside コマンドの handler と
 // pi.sendMessage への呼び出し（メッセージ本文・配信モード）を検証する。
 // 各 it のタイトルが要件仕様。
@@ -86,14 +86,14 @@ describe("履歴への追記", () => {
 });
 
 describe("AI 応答の抑制", () => {
-  it("/aside を打っても LLM は呼ばれずトークンを消費しない（deliverAs が nextTurn）", async () => {
+  it("/aside を打つと、deliverAs に nextTurn を渡して sendMessage する", async () => {
     const extension = captureAsideExtension();
     await extension.runAside("認証完成");
 
     const deliveryMode = extension.sentMessages[0]?.options.deliverAs;
     assert.equal(deliveryMode, "nextTurn");
   });
-  it("/aside を打っても即時の LLM 呼び出しは起こらない（triggerTurn が未設定）", async () => {
+  it("/aside を打つと、triggerTurn を指定せずに sendMessage する", async () => {
     const extension = captureAsideExtension();
     await extension.runAside("認証完成");
 
@@ -103,11 +103,13 @@ describe("AI 応答の抑制", () => {
 });
 
 describe("メッセージの永続性", () => {
-  it("append したメッセージは LLM context に参加するメッセージとして送られる（sendMessage 経由）", async () => {
+  it("append したメッセージは customType aside のメッセージとして1回 sendMessage される", async () => {
     const extension = captureAsideExtension();
     await extension.runAside("認証完成");
 
+    const sentMessage = extension.sentMessages[0];
     assert.equal(extension.sentMessages.length, 1);
+    assert.equal(sentMessage?.message.customType, "aside");
   });
   it("append したメッセージはセッション画面に表示される（display が true）", async () => {
     const extension = captureAsideExtension();
