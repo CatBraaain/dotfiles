@@ -39,12 +39,9 @@
             # keep-sorted end
             # keep-sorted start by_regex=\s*#?\s*(.*) sticky_comments=no  prefix_order=llm-agents,
             llm-agents.apm
-            llm-agents.cc-switch-cli
             llm-agents.claude-code
-            llm-agents.coderabbit-cli
             llm-agents.cursor-agent
-            # llm-agents.oh-my-opencode
-            llm-agents.opencode
+            # (llm-agents.pi.override { useBun = false; })
             llm-agents.pi
             act
             bubblewrap # bash-sandbox
