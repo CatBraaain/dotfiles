@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import type {
   BashOperations,
@@ -391,7 +392,7 @@ export class Sandbox {
 
   constructor(
     private readonly cwd: string,
-    configPath = join(import.meta.dir, "config.yaml"),
+    configPath = join(dirname(fileURLToPath(import.meta.url)), "config.yaml"),
   ) {
     try {
       this.config = parseGuardrailsConfig(readFileSync(configPath, "utf8"));
