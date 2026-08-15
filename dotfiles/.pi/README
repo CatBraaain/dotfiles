@@ -10,11 +10,22 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
 └── agent/
     ├── AGENTS.md               # エージェント共通の指示書
     ├── merge_settings.json     # pi 設定（settings.json へ深くマージ）
+    ├── package.json            # 拡張のランタイム依存（yaml 等）
     ├── extensions.exact/       # 自作拡張機能
     ├── prompts.exact/          # プロンプトテンプレート
     ├── rules/                  # rules 拡張の読込対象（ルール .md を配置）
     └── skills.exact/           # 自作スキル
 ```
+
+## agent/package.json
+
+拡張（rules / role / model-router / guardrails）が import するランタイム依存を定義する。pi 本体は拡張の依存を同梱しないため、各マシンで `~/.pi/agent/` にて一度だけ install が必要（node_modules は chezmoi 管理外）:
+
+```sh
+cd ~/.pi/agent && bun install
+```
+
+依存を増やす場合はこの package.json に追加し、再度 install する。
 
 ## agent/rules/
 
