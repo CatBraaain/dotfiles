@@ -3,3 +3,4 @@ node_modules
 
 dotfiles/.gitconfig.local
 dotfiles/.secrets.sh
+undotfiles/nix/flake.lock
