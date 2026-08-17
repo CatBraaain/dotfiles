@@ -1,3 +1,3 @@
 #!/bin/sh
 
-cd "$HOME/.pi/agent" && bun install
+cd ~/.pi/agent && bun init -y -m && bun i
