@@ -65,9 +65,7 @@ read / write / edit / bash ── 独自拡張でリプレイス、fs 読み書�
 許可リスト                 ── 拡張内に1箇所・ユーザー承認で動的拡張可
 ```
 
-- **read**: offset/limit 等のロジックは pi プロセス内で組み立て、最終 fs 読み込みだけ bwrap 経由
-- **bash**: コマンド実行全体を bwrap で包む（bind 外は読めないし書けない）
-- **write/edit**: アンカー処理等のロジックは pi プロセス内に残し、最終的な fs 書き込みだけ bwrap 経由
+- **全 fs ツール**: ツール execute 全体を 1 回の bwrap で実行。sandbox 内の `bun run-tools.ts <tool>` が pi 標準 tool definition を呼び出すため、置換・diff・rg・shell 等のロジックも sandbox 内
 - **web_fetch / web_search**: network 系なので fs 制限の対象外・そのまま
 
 ---
@@ -78,18 +76,13 @@ read / write / edit / bash ── 独自拡張でリプレイス、fs 読み書�
 flowchart TD
     subgraph PI["pi プロセス（フェンス外・network 自由）"]
         API["LLM API / web_fetch / web_search"]
-        READ["read ツール"]
-        BASH["bash ツール"]
-        WRITE["write / edit ツール"]
+        TOOLS["fs ツール (guardrails)<br/>schema / 認可 / render"]
     end
-    BASH --> GATE{"危険コマンド?<br/>push / publish / rm 等"}
-    GATE -- Yes --> CONFIRM["ctx.ui.confirm()"]
-    CONFIRM -- 拒否 --> STOP["ブロック"]
-    CONFIRM -- 承認 --> RW
-    GATE -- No --> RW["共通 bwrap ラッパー<br/>(fs 読み書き制限)"]
-    READ --> RW
-    WRITE --> RW
-    RW --> ALLOWLIST["許可リスト(動的拡張可)<br/>workspace + /tmp + 中央キャッシュ<br/>network: 開放 / /nix: ro-bind"]
+    TOOLS --> AUTH{"パス・コマンド認可<br/>allow / deny / ask"}
+    AUTH -- "deny / 拒否" --> BLOCK["ブロック"]
+    AUTH -- "allow / 承認" --> RUNTOOL["Sandbox.runTool<br/>bwrap 1 回（bind は許可リストから）<br/>network: 開放 / /nix: ro-bind"]
+    RUNTOOL --> CLI["bun run-tools.ts tool"]
+    CLI --> DEF["pi 標準 tool definition<br/>fs / fd / rg / shell"]
 ```
 
 ---
@@ -118,10 +111,8 @@ flowchart TD
    - workspace ＋ ~/.pi ＋ ~/.config ＋ /tmp ＋ PM 中央キャッシュ
    - 全 fs ツールがこのリストを参照(単一ソース・bwrap の bind 設定へ展開)
 
-2. 全 fs アクセスツールをリプレイス（共通 bwrap ラッパー経由）
-   - read → offset/limit 等は pi プロセス内で組み立て、最終 fs 読み込みだけ bwrap 経由
-   - bash → コマンド実行全体を bwrap で包む
-   - write/edit → アンカー処理等は pi プロセス内で組み立て、最終 fs 書き込みだけ bwrap 経由
+2. 全 fs アクセスツールをリプレイス（execute 全体を bwrap 内 run-tools CLI 経由）
+   - read / write / edit / grep / find / ls / bash → `Sandbox.runTool` から `bun run-tools.ts <tool>` を 1 回の bwrap で実行、pi 標準 tool definition に委譲
 
 3. 動的拡張の承認フロー
    - ユーザー承認で許可リストへパス追加(エージェントからは不可)

@@ -152,44 +152,29 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 
 ---
 
-## 7. Operations による fs IO
+## 7. run-tools CLI による fs IO
 
-本拡張は pi の標準 tool factory を利用し、テキスト処理は pi 標準に委譲する。各 factory の `operations` に bwrap バックエンドを渡し、低レベル fs IO だけを bwrap CLI 経由にする。
+本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、execute を差し替える。認可（§2〜§4）を通ったツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
-| ツール | 標準 factory | bwrap 経由の operations |
-| --- | --- | --- |
-| `read` | `createReadTool` | `access`, `readFile` |
-| `write` | `createWriteTool` | `mkdir`, `writeFile` |
-| `edit` | `createEditTool` | `access`, `readFile`, `writeFile` |
-| `grep` | `createGrepTool`（execute のみ上書き、§7.1） | rg 実行は sandbox 内で自前、truncation は pi ヘルパ再利用、context は標準ロジックを移植 |
-| `find` | `createFindTool` | `exists`, `glob` |
-| `ls` | `createLsTool` | `exists`, `stat`, `readdir` |
-| `bash` | `createBashTool` | `BashOperations.exec` |
+| ツール | sandbox 内での実行 |
+| --- | --- |
+| `read` `write` `edit` `grep` `find` `ls` `bash` | `bun run-tools.ts <tool-name>` → pi 標準 tool definition の execute |
 
-標準 factory が担当する offset/limit、oldText/newText 置換、diff、結果の truncation、glob の結果整形は本拡張で再実装しない。画像判定のみ本拡張が拡張子ベースで行う: `png` / `jpg` / `jpeg` / `gif` / `webp` / `bmp` は対応する MIME type を返し、それ以外の拡張子は非画像として扱う。`edit` は pi 標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
-
-### 7.1 `grep` の例外
-
-`GrepOperations` は `isDirectory` / `readFile` のみで、rg の実行方法をカスタマイズできない。`createGrepTool` の factory は内部で直接 `spawn(rg)` するため、operations を差し替えても rg が sandbox 外の fs 全体を走査し、§2 のパス制限が無意味になる。
-
-よって `grep` だけは `createGrepTool` の schema と定義を利用しつつ **execute を上書き** し、rg を sandbox 内で実行する。この上書きで失われる factory 機能は pi の `truncateLine` / `truncateHead` / `DEFAULT_MAX_BYTES` を再利用しつつ、標準 grep と同一の出力になるよう移植して互換性を担保する:
-
-- **context 表示**: マッチ行の前後 N 行を `path-行番号-` 形式で出力（標準 `formatBlock` と同一）
-- **行長 truncation**: pi の `truncateLine`（500字）を再利用
-- **バイト truncation**: pi の `truncateHead`（50KB）を再利用
-- **マッチリミット通知**: 標準と同一の notices 文言を生成
-
-実行互換性（出力が標準 grep と一致する）を最優先とする。rg の match-limit 到達時の早期 kill は性能最適化であり結果には影響しないため、本拡張では省略する（巨大リポジトリで rg が最後まで走る分遅くなる可能性がある）。
+- **入力**: stdin に tool call パラメータの JSON を渡す。bash は `PI_*` 環境変数用のセッション情報も受け取る。
+- **出力**: stdout に tool result の JSON（`ok: true` なら `result`、`ok: false` なら `error`）。失敗時は非 0 で終了する。
+- 標準 tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob 結果整形、rg 実行、shell 実行と timeout）は本拡張で再実装しない。
+- `edit` は pi 標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
+- ツールの実行結果はコマンド完了時に一度に返る。bash のストリーミング部分表示は行わない。
 
 ### bwrap 起動
 
-各 operation は次の構成で `bwrap` を起動する。
+各ツール呼び出しは次の構成で `bwrap` を起動する。
 
 1. `--die-with-parent`、`--proc /proc`、`--dev /dev` を設定する。
 2. 設定済みの allow パスを `--bind-try`、read-only パスと credentials を `--ro-bind-try` で bind する。
-3. NixOS で実行ファイルと共有ライブラリを解決できるよう `/nix` 等の runtime path を read-only で bind する。
-4. `bash` は `bash -c <command>` を bwrap 内で実行し、network namespace は分離しない。
-5. abort と timeout は child process を停止し、標準出力・標準エラーを pi 標準の tool result へ渡す。
+3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bind する。pi パッケージ自体は `/nix` 配下のため追加の bind 不要。
+4. sandbox 内で `bun run-tools.ts <tool-name>` を実行し、network namespace は分離しない。
+5. abort は bwrap ごと child process を停止する。bash の timeout は sandbox 内の tool definition が処理する。
 
 ---
 

@@ -1,21 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import {
+import guardrailsExtension, {
   COMMAND_PREVIEW_LIMIT,
-  Sandbox,
   classifyReadPath,
+  countMatchLines,
   countResultLines,
-  expandPathSection,
   formatDuration,
-  formatGrepMatches,
   formatSize,
+  truncateCommand,
+} from "./index";
+import {
+  Sandbox,
+  expandPathSection,
   parseGuardrailsConfig,
   resolveCommandAction,
   resolvePathAction,
-  truncateCommand,
-} from "./index";
+} from "./sandbox";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
 let group = "";
@@ -49,6 +51,15 @@ function withSandbox(
 }
 
 const approvingUi = { confirm: async () => true };
+
+// 拡張 factory を stub API で読み込み、registerTool されたツールを取り出す
+const captureRegisteredTools = (): Map<string, any> => {
+  const registered = new Map<string, any>();
+  guardrailsExtension({
+    registerTool: (tool: any) => registered.set(tool.name, tool),
+  } as any);
+  return registered;
+};
 
 describe("§2 パスのアクセス結果", () => {
   const projectRoot = "/workspace/project";
@@ -194,6 +205,30 @@ read:
       },
     ),
   );
+
+  it("edit は read.deny パスを read チェックで拒否する", async () => {
+    const editTool = captureRegisteredTools().get("edit");
+    const deniedFilePath = join(homedir(), ".pi/agent/auth.json");
+    await assert.rejects(
+      () =>
+        editTool.execute("t", { path: deniedFilePath, edits: [] }, undefined, undefined, {
+          hasUI: false,
+        }),
+      /Access denied/,
+    );
+  });
+
+  it("edit は read 許可後も write チェックで止まる", async () => {
+    const editTool = captureRegisteredTools().get("edit");
+    const homeNotePath = join(homedir(), "guardrails-edit-write-gate.txt");
+    await assert.rejects(
+      () =>
+        editTool.execute("t", { path: homeNotePath, edits: [] }, undefined, undefined, {
+          hasUI: false,
+        }),
+      /Access requires confirmation/,
+    );
+  });
 });
 
 describe("§2.1 credentials の例外", () => {
@@ -288,6 +323,22 @@ describe("§3.b glob パターン", () => {
       assert.equal(resolvePathAction(section, join(dir, "b.txt")), "allow");
     }),
   );
+
+  it(
+    "{a,b} はカンマ区切りの選択肢に展開される",
+    withGlobDir((dir) => {
+      mkdirSync(join(dir, "git"));
+      mkdirSync(join(dir, "npm"));
+      const section = expandPathSection({ allow: [join(dir, "{git,npm}")] }, "/cwd");
+      assert.equal(resolvePathAction(section, join(dir, "git")), "allow");
+      assert.equal(resolvePathAction(section, join(dir, "npm")), "allow");
+    }),
+  );
+
+  it('"*" 単体はすべてのパスを read 許可にする', () => {
+    const section = expandPathSection({ allow: ["*"] }, "/cwd");
+    assert.equal(resolvePathAction(section, "/etc/passwd"), "allow");
+  });
 
   it(
     "セッション中に新規作成されたパスは対象外",
@@ -456,92 +507,96 @@ commands:
   });
 });
 
-describe("§7.1 grep の例外", () => {
-  const emptyFile = () => Promise.resolve("");
+describe("§6.1 bind とパスの実在保証", () => {
+  const withSandboxDir =
+    (test: (dir: string, configPath: string) => Promise<void> | void) => async () => {
+      const dir = mkdtempSync(join(tmpdir(), "guardrails-bind-"));
+      try {
+        const configPath = join(dir, "config.yaml");
+        writeFileSync(configPath, "");
+        await test(dir, configPath);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
 
-  it("context なしはマッチ行だけを path:行番号: 形式で出す", async () => {
-    const singleMatch = [{ filePath: "/proj/a.txt", lineNumber: 2, lineText: "match" }];
-    const result = await formatGrepMatches(singleMatch, {
-      context: 0,
-      limit: 100,
-      isDirectory: true,
-      searchPath: "/proj",
-      readFile: emptyFile,
-    });
-    assert.equal(result.text, "a.txt:2: match");
-    assert.equal(result.details.matchCount, 1);
-  });
+  it(
+    "write.allow の固定パスは起動時に作成される",
+    withSandboxDir(async (dir, configPath) => {
+      const targetDir = join(dir, "made", "dir");
+      writeFileSync(configPath, `write:\n  allow: ["${targetDir}"]\n`);
+      new Sandbox("/cwd", configPath);
+      assert.equal(existsSync(targetDir), true);
+    }),
+  );
 
-  it("context ありは前後行を path-行番号- 形式で出す", async () => {
-    const singleMatch = [{ filePath: "/proj/a.txt", lineNumber: 2, lineText: "match" }];
-    const fileContents = new Map([["/proj/a.txt", "before\nmatch\nafter"]]);
-    const result = await formatGrepMatches(singleMatch, {
-      context: 1,
-      limit: 100,
-      isDirectory: true,
-      searchPath: "/proj",
-      readFile: (path) => Promise.resolve(fileContents.get(path) ?? ""),
-    });
-    assert.equal(result.text, ["a.txt-1- before", "a.txt:2: match", "a.txt-3- after"].join("\n"));
-  });
+  it(
+    "fs モードは deny ディレクトリを空ディレクトリで隠す",
+    withSandboxDir((dir, configPath) => {
+      const secretDir = join(dir, "secret-dir");
+      mkdirSync(secretDir);
+      writeFileSync(configPath, `read:\n  deny: ["${secretDir}"]\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("fs");
+      const tmpfsAt = args.indexOf(secretDir);
+      assert.deepEqual(args.slice(tmpfsAt - 1, tmpfsAt + 1), ["--tmpfs", secretDir]);
+    }),
+  );
 
-  it("500字超の行は切り詰めて truncation 通知を出す", async () => {
-    const oversizedLine = "x".repeat(600);
-    const singleMatch = [{ filePath: "/proj/a.txt", lineNumber: 1, lineText: oversizedLine }];
-    const result = await formatGrepMatches(singleMatch, {
-      context: 0,
-      limit: 100,
-      isDirectory: false,
-      searchPath: "/proj/a.txt",
-      readFile: emptyFile,
-    });
-    assert.equal(result.details.linesTruncated, true);
-    assert.ok(result.text.includes("[truncated]"));
-  });
+  it(
+    "fs モードは deny ファイルを空ファイルで隠す",
+    withSandboxDir((dir, configPath) => {
+      const secretFile = join(dir, "secret.txt");
+      writeFileSync(secretFile, "secret");
+      writeFileSync(configPath, `read:\n  deny: ["${secretFile}"]\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("fs");
+      const maskAt = args.indexOf(secretFile);
+      assert.deepEqual(args.slice(maskAt - 2, maskAt + 1), [
+        "--ro-bind-try",
+        "/dev/null",
+        secretFile,
+      ]);
+    }),
+  );
 
-  it("50KB 超の出力はバイト truncation 通知を出す", async () => {
-    const manyMatches = Array.from({ length: 1000 }, (_, index) => ({
-      filePath: "/proj/big.txt",
-      lineNumber: index + 1,
-      lineText: "x".repeat(100),
-    }));
-    const result = await formatGrepMatches(manyMatches, {
-      context: 0,
-      limit: 1000,
-      isDirectory: false,
-      searchPath: "/proj/big.txt",
-      readFile: emptyFile,
-    });
-    assert.equal(result.details.truncation?.truncated, true);
-  });
+  it(
+    "fs モードは credentials パスを空ファイルで隠す",
+    withSandboxDir((dir, configPath) => {
+      const credentialFile = join(dir, "cred.txt");
+      writeFileSync(credentialFile, "token");
+      writeFileSync(configPath, `credentials: ["${credentialFile}"]\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("fs");
+      const maskAt = args.indexOf(credentialFile);
+      assert.deepEqual(args.slice(maskAt - 2, maskAt + 1), [
+        "--ro-bind-try",
+        "/dev/null",
+        credentialFile,
+      ]);
+    }),
+  );
 
-  it("limit 到達でマッチリミット通知を出す", async () => {
-    const twoMatches = [
-      { filePath: "/proj/a.txt", lineNumber: 1, lineText: "m" },
-      { filePath: "/proj/a.txt", lineNumber: 2, lineText: "m" },
-    ];
-    const result = await formatGrepMatches(twoMatches, {
-      context: 0,
-      limit: 2,
-      isDirectory: false,
-      searchPath: "/proj/a.txt",
-      readFile: emptyFile,
-    });
-    assert.ok(result.text.includes("2 matches limit reached"));
-    assert.equal(result.details.matchLimitReached, 2);
-  });
+  it(
+    "bash モードは credentials パスを実体として read-only bind し隠蔽しない",
+    withSandboxDir((dir, configPath) => {
+      const credentialFile = join(dir, "cred.txt");
+      writeFileSync(credentialFile, "token");
+      writeFileSync(configPath, `credentials: ["${credentialFile}"]\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("bash");
+      const bindAt = args.indexOf(credentialFile);
+      assert.deepEqual(args.slice(bindAt - 1, bindAt + 1), ["--ro-bind-try", credentialFile]);
+      assert.equal(args.includes("--tmpfs"), false);
+      assert.equal(args.includes("/dev/null"), false);
+    }),
+  );
 
-  it("マッチがないときは No matches found を返す", async () => {
-    const result = await formatGrepMatches([], {
-      context: 0,
-      limit: 100,
-      isDirectory: true,
-      searchPath: "/proj",
-      readFile: emptyFile,
-    });
-    assert.equal(result.text, "No matches found");
-    assert.equal(result.details.matchCount, 0);
-  });
+  it(
+    'read.allow "*" はルート全体を read-only bind する',
+    withSandboxDir((_dir, configPath) => {
+      writeFileSync(configPath, `read:\n  allow: ["*"]\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("fs");
+      const rootBindAt = args.indexOf("/");
+      assert.deepEqual(args.slice(rootBindAt - 1, rootBindAt + 2), ["--ro-bind", "/", "/"]);
+    }),
+  );
 });
 
 describe("§8 表示", () => {
@@ -562,6 +617,17 @@ describe("§8 表示", () => {
     assert.equal(formatSize(1536), "1.5KB");
   });
 
+  it("grep のマッチ行を context 行と区別して数える", () => {
+    const grepOutputWithOneMatch = ["a.txt-1- before", "a.txt:2: match", "a.txt-3- after"].join(
+      "\n",
+    );
+    assert.equal(countMatchLines(grepOutputWithOneMatch), 1);
+  });
+
+  it("grep の No matches found は 0 matches と数える", () => {
+    assert.equal(countMatchLines("No matches found"), 0);
+  });
+
   it("read が SKILL.md のとき skill 分類を返す", () => {
     const classification = classifyReadPath({ path: "/skills/my-skill/SKILL.md" }, "/cwd");
     assert.deepEqual(classification, { kind: "skill", label: "my-skill" });
@@ -573,10 +639,7 @@ describe("§8 表示", () => {
   });
 
   it("read の相対パスを cwd 起点で解決して SKILL.md を判定する", () => {
-    const classification = classifyReadPath(
-      { path: "skills/my-skill/SKILL.md" },
-      "/workspace",
-    );
+    const classification = classifyReadPath({ path: "skills/my-skill/SKILL.md" }, "/workspace");
     assert.deepEqual(classification, { kind: "skill", label: "my-skill" });
   });
 

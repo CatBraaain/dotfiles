@@ -47,12 +47,6 @@ commands:
     - git reflog expire
     - git gc
     - git prune
-    # filesystem
-    - rm -rf
-    - rm -fr
-    - shred
-    - truncate
-    - dd
     # system
     - systemctl
     - crontab
