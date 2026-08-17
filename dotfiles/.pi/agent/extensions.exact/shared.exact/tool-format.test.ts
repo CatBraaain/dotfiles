@@ -1,0 +1,220 @@
+import assert from "node:assert/strict";
+import {
+  CALL_PREVIEW_LIMIT,
+  formatFallbackCall,
+  formatToolCall,
+  formatToolResultSummary,
+  resultText,
+  type ToolTheme,
+} from "./tool-format.ts";
+
+const tests: { name: string; fn: () => Promise<void> | void }[] = [];
+let group = "";
+
+function describe(name: string, fn: () => void): void {
+  const previousGroup = group;
+  group = name;
+  fn();
+  group = previousGroup;
+}
+
+function it(name: string, fn: () => Promise<void> | void): void {
+  tests.push({ name: group ? `${group} > ${name}` : name, fn });
+}
+
+const plainTheme: ToolTheme = {
+  fg: (_color, text) => text,
+  bold: (text) => text,
+};
+
+describe("formatToolCall", () => {
+  it("bash は $ 付きコマンドを表示する", () => {
+    const call = formatToolCall("bash", { command: "git status" }, "/cwd", plainTheme);
+    assert.equal(call, "$ git status");
+  });
+
+  it("read はパスを表示する", () => {
+    const call = formatToolCall("read", { path: "src/a.ts" }, "/cwd", plainTheme);
+    assert.equal(call, "read src/a.ts");
+  });
+
+  it("read は SKILL.md をスキル名で表示する", () => {
+    const call = formatToolCall("read", { path: "/skills/my-skill/SKILL.md" }, "/cwd", plainTheme);
+    assert.ok(call.includes("[skill]"));
+    assert.ok(call.includes("my-skill"));
+  });
+
+  it("write はパスを表示する", () => {
+    const call = formatToolCall("write", { path: "a.ts" }, "/cwd", plainTheme);
+    assert.equal(call, "write a.ts");
+  });
+
+  it("edit はパスを表示する", () => {
+    const call = formatToolCall("edit", { path: "b.ts" }, "/cwd", plainTheme);
+    assert.equal(call, "edit b.ts");
+  });
+
+  it("grep はパターンを表示する", () => {
+    const call = formatToolCall("grep", { pattern: "TODO" }, "/cwd", plainTheme);
+    assert.equal(call, "grep TODO");
+  });
+
+  it("find はパターンを表示する", () => {
+    const call = formatToolCall("find", { pattern: "*.ts" }, "/cwd", plainTheme);
+    assert.equal(call, "find *.ts");
+  });
+
+  it("ls はパス未指定で . を表示する", () => {
+    const call = formatToolCall("ls", {}, "/cwd", plainTheme);
+    assert.equal(call, "ls .");
+  });
+
+  it("未知ツールは引数 JSON の先頭100文字で表示する", () => {
+    const call = formatToolCall("custom", { data: "x".repeat(95) }, "/cwd", plainTheme);
+    const expectedJson = JSON.stringify({ data: "x".repeat(95) });
+    assert.equal(call, `custom ${expectedJson.slice(0, CALL_PREVIEW_LIMIT)}...`);
+  });
+});
+
+describe("formatToolResultSummary", () => {
+  const textResult = (text: string) => ({ content: [{ type: "text", text }] });
+
+  it("bash は実行秒数を表示する", () => {
+    const summary = formatToolResultSummary(
+      "bash",
+      { command: "ls" },
+      textResult(""),
+      { durationMs: 1200 },
+      plainTheme,
+    );
+    assert.equal(summary, "1.2s");
+  });
+
+  it("bash は duration がないとき done を表示する", () => {
+    const summary = formatToolResultSummary("bash", { command: "ls" }, textResult(""), {}, plainTheme);
+    assert.equal(summary, "done");
+  });
+
+  it("write は書き込みサイズを表示する", () => {
+    const summary = formatToolResultSummary(
+      "write",
+      { path: "a.ts", content: "x".repeat(1536) },
+      textResult(""),
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "wrote 1.5KB");
+  });
+
+  it("edit はブロック数を表示する", () => {
+    const summary = formatToolResultSummary(
+      "edit",
+      { path: "a.ts", edits: [{ oldText: "x", newText: "y" }, { oldText: "a", newText: "b" }] },
+      textResult(""),
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "edited 2 block(s)");
+  });
+
+  it("read は結果テキストの行数を表示する", () => {
+    const summary = formatToolResultSummary(
+      "read",
+      { path: "a.ts" },
+      textResult("a\nb\n"),
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "2 lines");
+  });
+
+  it("grep はマッチ行だけを数えて matches を表示する", () => {
+    const output = ["a.txt-1- before", "a.txt:2: match", "b.txt:3- context", "b.txt:4: match"].join(
+      "\n",
+    );
+    const summary = formatToolResultSummary(
+      "grep",
+      { pattern: "match" },
+      textResult(output),
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "2 matches");
+  });
+
+  it("find はファイル数を表示する", () => {
+    const summary = formatToolResultSummary(
+      "find",
+      { pattern: "*.ts" },
+      textResult("a\nb"),
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "2 files");
+  });
+
+  it("ls はエントリ数を表示する", () => {
+    const summary = formatToolResultSummary(
+      "ls",
+      { path: "." },
+      textResult("a\nb\nc"),
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "3 entries");
+  });
+
+  it("エラー時は結果テキスト全体を返す", () => {
+    const summary = formatToolResultSummary(
+      "read",
+      { path: "a.ts" },
+      textResult("File not found"),
+      { isError: true },
+      plainTheme,
+    );
+    assert.equal(summary, "File not found");
+  });
+
+  it("未知ツールはサマリーを返さない", () => {
+    const summary = formatToolResultSummary("custom", {}, textResult("output"), {}, plainTheme);
+    assert.equal(summary, undefined);
+  });
+});
+
+describe("resultText", () => {
+  it("最初の text パートを取り出す", () => {
+    const output = resultText({ content: [{ type: "text", text: "hello" }] });
+    assert.equal(output, "hello");
+  });
+
+  it("text パートがないとき空文字を返す", () => {
+    const output = resultText({ content: [{ type: "image" }] });
+    assert.equal(output, "");
+  });
+});
+
+describe("formatFallbackCall", () => {
+  it("引数がないツールは {} で表示する", () => {
+    const call = formatFallbackCall("notify", {}, plainTheme);
+    assert.equal(call, "notify {}");
+  });
+});
+
+let passed = 0;
+const failures: string[] = [];
+for (const test of tests) {
+  try {
+    await test.fn();
+    passed++;
+  } catch (error) {
+    failures.push(
+      `  ✗ ${test.name}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+    );
+  }
+}
+
+if (failures.length > 0) {
+  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
+  process.exitCode = 1;
+}
+console.log(`\n${passed} passed, ${failures.length} failed`);
