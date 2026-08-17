@@ -10,8 +10,8 @@ import roleExtension, {
   childRole,
   initialRole,
   parseRoleConfig,
-  formatToolCall,
   shouldBlockToolCall,
+  spinnerFrame,
   switchRole,
 } from "./index";
 
@@ -288,14 +288,13 @@ describe("システムプロンプト", () => {
   });
 });
 
-describe("ツール実行の表示", () => {
-  it("引数プレビューを100文字まで表示する", () => {
-    const renderedCall = formatToolCall(
-      "bash",
-      { command: "x".repeat(95) },
-      (_color, text) => text,
-    );
-    assert.equal(renderedCall.length, 108);
+describe("待機スピナー", () => {
+  it("フレームを - \\ | / の順で 0.1 秒間隔で循環させる", () => {
+    assert.equal(spinnerFrame(0), "-");
+    assert.equal(spinnerFrame(100), "\\");
+    assert.equal(spinnerFrame(200), "|");
+    assert.equal(spinnerFrame(300), "/");
+    assert.equal(spinnerFrame(400), "-");
   });
 });
 
@@ -461,6 +460,49 @@ describe("拡張の接続", () => {
     }
   });
 
+  it("tool_execution_end の結果を toolCallId で対応する action へ紐づける", async () => {
+    const extension = captureRoleExtension();
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "pwd" } })}\n${JSON.stringify({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: { content: [{ type: "text", text: "/child" }] }, isError: false })}\n`,
+        ),
+      );
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const action = result.details.results[0].actions[0];
+      assert.equal(action.result?.content?.[0]?.text, "/child");
+      assert.equal(action.isError, false);
+      assert.ok(action.startedAt !== undefined && action.endedAt !== undefined);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("toolCallId のない tool_execution_end はどの action にも紐づけない", async () => {
+    const extension = captureRoleExtension();
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "pwd" } })}\n${JSON.stringify({ type: "tool_execution_end", toolName: "bash", result: { content: [{ type: "text", text: "done" }] }, isError: false })}\n`,
+        ),
+      );
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      assert.equal(result.details.results[0].actions[0].result, undefined);
+    } finally {
+      extension.restore();
+    }
+  });
+
   it("親のキャンセルを SIGTERM として子へ伝播し、子を中断結果にする", async () => {
     const extension = captureRoleExtension();
     const controller = new AbortController();
@@ -578,6 +620,145 @@ describe("拡張の接続", () => {
 });
 
 describe("subagent の表示", () => {
+  it("Actions をツール別の整形と結果サマリー行で表示する", () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [
+        {
+          role: "worker",
+          task: "work",
+          cwd: "/child",
+          pending: false,
+          exitCode: 0,
+          messages: [],
+          actions: [
+            {
+              toolCallId: "call-1",
+              name: "edit",
+              args: { path: "a.ts", edits: [{ oldText: "x", newText: "y" }] },
+              startedAt: 1000,
+              endedAt: 2500,
+              result: { content: [{ type: "text", text: "" }] },
+              isError: false,
+            },
+          ],
+          stderr: "",
+        },
+      ],
+    };
+    try {
+      const rendered = extension.renderResult(
+        { content: [], details },
+        {},
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+      );
+      const lines = (rendered as Container).render(200);
+      assert.ok(lines.some((line) => line.includes("→ edit a.ts")));
+      assert.ok(lines.some((line) => line.includes("  edited 1 block(s)")));
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("結果を受け取る前のツール呼び出しは結果行を表示しない", () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [
+        {
+          role: "worker",
+          task: "work",
+          cwd: "/child",
+          pending: false,
+          exitCode: 0,
+          messages: [],
+          actions: [{ toolCallId: "call-1", name: "edit", args: { path: "a.ts" } }],
+          stderr: "",
+        },
+      ],
+    };
+    try {
+      const rendered = extension.renderResult(
+        { content: [], details },
+        {},
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+      );
+      const lines = (rendered as Container).render(200);
+      assert.equal(lines.some((line) => line.includes("edited")), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("実行中はブロックの末尾にスピナー行を表示する", () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [
+        {
+          role: "worker",
+          task: "work",
+          cwd: "/child",
+          pending: true,
+          exitCode: 0,
+          messages: [],
+          actions: [],
+          stderr: "",
+        },
+      ],
+    };
+    try {
+      const rendered = extension.renderResult(
+        { content: [], details },
+        {},
+        {
+          fg: (color: string, text: string) => `[${color}]${text}`,
+          bold: (text: string) => `*${text}*`,
+        },
+      );
+      const lines = (rendered as Container).render(200);
+      assert.ok(lines.some((line) => /^\[muted\][-\\|/] worker/.test(line)));
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("実行確定後はスピナー行を表示しない", () => {
+    const extension = captureRoleExtension();
+    const details = {
+      results: [
+        {
+          role: "worker",
+          task: "work",
+          cwd: "/child",
+          pending: false,
+          exitCode: 0,
+          messages: [],
+          actions: [],
+          stderr: "",
+        },
+      ],
+    };
+    try {
+      const rendered = extension.renderResult(
+        { content: [], details },
+        {},
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+      );
+      const lines = (rendered as Container).render(200);
+      assert.equal(lines.some((line) => /^[-\\|/] worker/.test(line)), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
   it("常に展開形式で task、ツール実行、最終応答を表示する", async () => {
     const extension = captureRoleExtension();
     const details = {

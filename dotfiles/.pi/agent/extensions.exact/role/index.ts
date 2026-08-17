@@ -12,6 +12,12 @@ import {
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { parse as parseYaml } from "yaml";
+import {
+  formatToolCall,
+  formatToolResultSummary,
+  type ToolResultLike,
+  type ToolTheme,
+} from "../shared/tool-format.ts";
 
 export type Role = string;
 
@@ -130,25 +136,45 @@ export const __abortTimer: {
   clear: (timer) => clearTimeout(timer),
 };
 
-export function formatToolCall(
-  toolName: string,
-  args: Record<string, unknown>,
-  themeFg: (color: any, text: string) => string,
-): string {
-  const argsString = JSON.stringify(args) ?? "{}";
-  const preview = argsString.length > 100 ? `${argsString.slice(0, 100)}...` : argsString;
-  return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
+const SPINNER_FRAMES = ["-", "\\", "|", "/"];
+const SPINNER_INTERVAL_MS = 100;
+
+export function spinnerFrame(nowMs: number): string {
+  const index = Math.floor(nowMs / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
+  return SPINNER_FRAMES[index < 0 ? index + SPINNER_FRAMES.length : index];
+}
+
+let tuiHandle: { requestRender: () => void } | undefined;
+let spinnerTimer: ReturnType<typeof setInterval> | undefined;
+let pendingChildren = 0;
+
+function startSpinnerTimer(): void {
+  if (spinnerTimer !== undefined) return;
+  spinnerTimer = setInterval(() => tuiHandle?.requestRender(), SPINNER_INTERVAL_MS);
+}
+
+function stopSpinnerTimerIfIdle(): void {
+  if (pendingChildren <= 0 && spinnerTimer !== undefined) {
+    clearInterval(spinnerTimer);
+    spinnerTimer = undefined;
+  }
 }
 
 interface ChildAction {
   toolCallId?: string;
   name: string;
   args: Record<string, unknown>;
+  startedAt?: number;
+  endedAt?: number;
+  result?: ToolResultLike;
+  isError?: boolean;
 }
 
 interface ChildRun {
   role: Role;
   task: string;
+  cwd: string;
+  pending: boolean;
   exitCode: number;
   messages: Message[];
   actions: ChildAction[];
@@ -223,7 +249,16 @@ async function runChild(
     role,
     `Task: ${task}`,
   ];
-  const childResult: ChildRun = { role, task, exitCode: 0, messages: [], actions: [], stderr: "" };
+  const childResult: ChildRun = {
+    role,
+    task,
+    cwd: cwd ?? defaultCwd,
+    pending: true,
+    exitCode: 0,
+    messages: [],
+    actions: [],
+    stderr: "",
+  };
   let wasAborted = false;
 
   const emitUpdate = () => {
@@ -236,7 +271,7 @@ async function runChild(
   const exitCode = await new Promise<number>((resolve) => {
     const invocation = getPiInvocation(args);
     const processHandle = __spawn.current(invocation.command, invocation.args, {
-      cwd: cwd ?? defaultCwd,
+      cwd: childResult.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -274,11 +309,23 @@ async function runChild(
           toolCallId: typeof event.toolCallId === "string" ? event.toolCallId : undefined,
           name: event.toolName,
           args: isRecord(event.args) ? event.args : {},
+          startedAt: Date.now(),
         });
         emitUpdate();
       }
       if (event.type === "tool_execution_update") emitUpdate();
-      if (event.type === "tool_execution_end") emitUpdate();
+      if (event.type === "tool_execution_end") {
+        const action = childResult.actions.find(
+          (candidate) =>
+            candidate.toolCallId !== undefined && candidate.toolCallId === event.toolCallId,
+        );
+        if (action) {
+          action.endedAt = Date.now();
+          action.result = isRecord(event.result) ? event.result : undefined;
+          action.isError = event.isError === true;
+        }
+        emitUpdate();
+      }
       if (event.type === "tool_result_end" && event.message) {
         childResult.messages.push(event.message as Message);
         emitUpdate();
@@ -320,6 +367,7 @@ async function runChild(
   });
 
   childResult.exitCode = exitCode;
+  childResult.pending = false;
   if (wasAborted) {
     childResult.stopReason = "aborted";
     childResult.errorMessage = "Subagent was aborted";
@@ -330,10 +378,13 @@ async function runChild(
 function registerRoleWidget(ctx: ExtensionContext, currentRole: () => Role): void {
   ctx.ui.setWidget(
     "role",
-    (_ui, theme) => ({
-      render: () => [theme.fg("dim", `🤖 role: ${currentRole()}`)],
-      invalidate: () => {},
-    }),
+    (ui, theme) => {
+      tuiHandle = ui;
+      return {
+        render: () => [theme.fg("dim", `🤖 role: ${currentRole()}`)],
+        invalidate: () => {},
+      };
+    },
     { placement: "aboveEditor" },
   );
 }
@@ -388,15 +439,23 @@ export default function roleExtension(
         };
       }
 
-      const result = await runChild(
-        ctx.cwd,
-        params.task,
-        params.role,
-        config,
-        params.cwd,
-        signal,
-        onUpdate,
-      );
+      pendingChildren++;
+      startSpinnerTimer();
+      let result: ChildRun;
+      try {
+        result = await runChild(
+          ctx.cwd,
+          params.task,
+          params.role,
+          config,
+          params.cwd,
+          signal,
+          onUpdate,
+        );
+      } finally {
+        pendingChildren--;
+        stopSpinnerTimerIfIdle();
+      }
       if (isFailedResult(result)) {
         return {
           content: [textPart(`Child ${result.stopReason || "failed"}: ${getResultOutput(result)}`)],
@@ -422,24 +481,40 @@ export default function roleExtension(
 
       const actions = childResult.actions;
       const finalOutput = getFinalOutput(childResult.messages);
+      const childCwd = childResult.cwd ?? process.cwd();
+      const toolTheme: ToolTheme = { fg: theme.fg.bind(theme), bold: theme.bold.bind(theme) };
       const container = new Container();
       container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
       container.addChild(new Text(theme.fg("dim", childResult.task), 0, 0));
       if (actions.length > 0) {
         container.addChild(new Text(theme.fg("muted", "─── Actions ───"), 0, 0));
         for (const action of actions) {
-          container.addChild(
-            new Text(
-              `${theme.fg("muted", "→ ")}${formatToolCall(action.name, action.args, theme.fg.bind(theme))}`,
-              0,
-              0,
-            ),
-          );
+          const callText = formatToolCall(action.name, action.args, childCwd, toolTheme);
+          container.addChild(new Text(`${theme.fg("muted", "→ ")}${callText}`, 0, 0));
+          const durationMs =
+            action.startedAt !== undefined && action.endedAt !== undefined
+              ? action.endedAt - action.startedAt
+              : undefined;
+          const summary =
+            action.result !== undefined
+              ? formatToolResultSummary(
+                  action.name,
+                  action.args,
+                  action.result,
+                  { isError: action.isError, durationMs },
+                  toolTheme,
+                )
+              : undefined;
+          if (summary !== undefined) container.addChild(new Text(`  ${summary}`, 0, 0));
         }
       }
       if (finalOutput) {
         container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
         container.addChild(new Markdown(finalOutput.trim(), 0, 0, getMarkdownTheme()));
+      }
+      if (childResult.pending) {
+        const waitingLine = `${spinnerFrame(Date.now())} ${childResult.role}`;
+        container.addChild(new Text(theme.fg("muted", waitingLine), 0, 0));
       }
       return container;
     },
