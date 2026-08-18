@@ -1,4 +1,4 @@
-# readable-code スキル — 調査メモ
+# readable-code-standard スキル — 調査メモ
 
 ## 既存スキルの探索
 
