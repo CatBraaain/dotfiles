@@ -53,7 +53,7 @@
 
 ## SDD開発フロー
 
-ロジックを伴う成果物は **spec（＝観測可能な振る舞いの仕様書）** を唯一の仕様ソースとして開発する（SDD: Spec Driven Development）。オーナーは spec だけ読んで go/no-go を出し、実装コードの詳細は読まない。フェーズ・収束ルールの詳細は `/skill:sdd-workflow` を参照。
+ロジックを伴う成果物は **spec（＝観測可能な振る舞いの仕様書）** を唯一の仕様ソースとして開発する（SDD: Spec Driven Development）。オーナーは spec だけ読んで go/no-go を出し、実装コードの詳細は読まない。spec の規則は sdd-standard が所有し、フェーズ・収束ルールは `sdd-standard` の `references/workflow.md` が定める（汎用ワークフローの手続きで適用する）。
 
 ## コーディング規範（lazy）
 

@@ -2,6 +2,8 @@
 
 ## 判断の要約
 
+その後の再編（2026-08）: sdd-workflow / sdd-review の入口は廃止し、規則本体を sdd-standard の SKILL.md、ワークフロー手続きを `references/workflow.md`、適合性レビュー手続きを `references/review.md` へ移設した。手続きの骨格は汎用3スキル（any-implement / any-review / any-workflow）が担う。この再編の背景は `skills.exact/any-standard/SKILL.md` を参照。以下は当初の統合時点の記録である。
+
 sdd-spec と sdd-audit は、それぞれ仕様書の整備と適合性の監査に特化していた。しかし、仕様と実装の乖離を継続的に扱う開発全体の判断を、複数の入口に分けたまま維持する負担が明らかになったため、両者を sdd-workflow に統合した。統合後は sdd-workflow を唯一の入口とし、spec-only、実装、監査、収束というモードで開発の段階を表すことにした。
 
 これは spec の書き方や監査の観点を捨てたものではなく、要件合意から収束までを一つの判断体系として扱うための再配置だった。

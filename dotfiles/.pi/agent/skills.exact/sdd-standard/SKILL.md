@@ -1,12 +1,20 @@
 ---
 name: sdd-standard
 description: >-
-  SDD で共有する仕様作成・適合性レビューの標準を定義するスキル。spec を唯一の仕様ソースとして設計・実装・テスト・レビューを進めるとき、sdd-workflow または sdd-review と併用して必ず参照する。spec の書き方、観測可能な振る舞い、仕様の配置、Mermaid の表現、照合単位、セルフチェックを扱う。
+  spec（＝観測可能な振る舞いの仕様書）を唯一の仕様ソースとする開発（SDD）の標準。spec の書き方、観測可能な振る舞い、仕様の配置、Mermaid の表現、照合単位、適合性レビューの軸、依頼モードと収束ルールを所有し、汎用スキル（any-implement / any-review / any-workflow）と組み合わせて使う。spec 駆動開発、仕様書、観測可能な振る舞い、適合性レビュー、収束フロー、テストは十分か、仕様と実装のズレ等の依頼で使う。
 ---
 
 # SDD Standard
 
-このスキルは、SDD の仕様作成と適合性レビューが共有する規約を定義する。実行ワークフローは `sdd-workflow`、適合性レビューの手順は `sdd-review` が担う。`sdd-workflow` または `sdd-review` と併用するときは、このスキルの規約を適用する。
+この標準は、SDD の規則本体（spec の書き方・照合単位）と、汎用スキルへ提供する固有手続き（`references/`）を所有する。手続きの骨格は汎用スキルが担い、この標準の規則を適用する:
+
+| 作業 | 手続き | 適用する規則 |
+| --- | --- | --- |
+| spec の作成・修正 | any-implement | この SKILL.md |
+| spec・テスト・実装の適合性レビュー | any-review | `references/review.md`（4軸・種別・指摘形式） |
+| 依頼モードと収束の管理 | any-workflow | `references/workflow.md`（依頼モード・フェーズ・収束ルール・乖離検知） |
+
+判断の背景（旧 TDD からの転換、統合の経緯、トレードオフ）は `note.md` が記録する。
 
 ## 仕様ソースと oracle
 
