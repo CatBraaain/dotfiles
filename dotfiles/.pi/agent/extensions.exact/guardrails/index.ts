@@ -121,7 +121,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
       await sandbox.authorizePath("read", resolve(cwd, args.path), context);
       return sandbox.runTool("read", args, { mode: "fs", signal });
     },
-    { renderCall: (args, theme) => formatReadCall(args, cwd, theme) },
+    { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
   );
   pi.registerTool({
     ...writeTool,
