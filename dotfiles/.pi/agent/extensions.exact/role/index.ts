@@ -138,6 +138,7 @@ export const __abortTimer: {
 
 const SPINNER_FRAMES = ["-", "\\", "|", "/"];
 const SPINNER_INTERVAL_MS = 100;
+const EXIT_STDIO_GRACE_MS = 100;
 
 export function spinnerFrame(nowMs: number): string {
   const index = Math.floor(nowMs / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
@@ -276,14 +277,25 @@ async function runChild(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let buffer = "";
-    let hasClosed = false;
+    let settled = false;
+    let processExitCode: number | null | undefined;
     let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearIdleTimer = () => {
+      if (idleTimer !== undefined) {
+        __abortTimer.clear(idleTimer);
+        idleTimer = undefined;
+      }
+    };
     const cleanup = () => {
       signal?.removeEventListener("abort", killChild);
       if (abortTimer !== undefined) {
         __abortTimer.clear(abortTimer);
         abortTimer = undefined;
       }
+      clearIdleTimer();
+      processHandle.stdout?.destroy();
+      processHandle.stderr?.destroy();
     };
 
     const processLine = (line: string) => {
@@ -332,12 +344,34 @@ async function runChild(
       }
     };
 
+    // ponytail: 孫プロセスが stdout の fd を握ると close が永久に来ない。
+    // pi 本体の waitForChildProcess と同じく、exit 後は stdio が 0.1 秒静穏になった時点で確定する
+    const finalize = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (buffer.trim()) processLine(buffer);
+      if (code === null && !wasAborted) {
+        childResult.stopReason = "killed";
+        childResult.errorMessage = "Child process was killed by a signal";
+      }
+      resolve(code ?? 1);
+    };
+
+    const armIdleTimer = () => {
+      clearIdleTimer();
+      idleTimer = __abortTimer.set(() => {
+        idleTimer = undefined;
+        if (processExitCode !== undefined) finalize(processExitCode);
+      }, EXIT_STDIO_GRACE_MS);
+    };
+
     const killChild = () => {
       if (wasAborted) return;
       wasAborted = true;
       processHandle.kill("SIGTERM");
       abortTimer = __abortTimer.set(() => {
-        if (!hasClosed) processHandle.kill("SIGKILL");
+        if (!settled) processHandle.kill("SIGKILL");
       }, 5000);
     };
 
@@ -346,20 +380,21 @@ async function runChild(
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
       for (const line of lines) processLine(line);
+      if (processExitCode !== undefined && !settled) armIdleTimer();
     });
     processHandle.stderr.on("data", (data) => {
       childResult.stderr += data.toString();
+      if (processExitCode !== undefined && !settled) armIdleTimer();
+    });
+    processHandle.on("exit", (code) => {
+      processExitCode = code;
+      if (!settled) armIdleTimer();
     });
     processHandle.on("close", (code) => {
-      hasClosed = true;
-      cleanup();
-      if (buffer.trim()) processLine(buffer);
-      resolve(code ?? 0);
+      finalize(code);
     });
     processHandle.on("error", () => {
-      hasClosed = true;
-      cleanup();
-      resolve(1);
+      finalize(1);
     });
 
     if (signal?.aborted) killChild();

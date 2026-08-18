@@ -54,9 +54,13 @@ type CapturedTool = {
 };
 type Handler = (event: any, ctx: any) => Promise<any>;
 
+class FakeChildStream extends EventEmitter {
+  destroy(): void {}
+}
+
 class FakeChild extends EventEmitter {
-  stdout = new EventEmitter();
-  stderr = new EventEmitter();
+  stdout = new FakeChildStream();
+  stderr = new FakeChildStream();
   killed = false;
   killHistory: string[] = [];
   ignoreTerm = false;
@@ -567,6 +571,81 @@ describe("拡張の接続", () => {
       assert.deepEqual(extension.children[0].killHistory, ["SIGTERM", "SIGKILL"]);
     } finally {
       __abortTimer.set = originalAbortTimer;
+      extension.restore();
+    }
+  });
+
+  it("子が exit しても close が来なければ、静穏タイマーで結果を確定する", async () => {
+    const extension = captureRoleExtension();
+    let fireIdleTimer: (() => void) | undefined;
+    const originalSet = __abortTimer.set;
+    __abortTimer.set = (callback) => {
+      fireIdleTimer = callback;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } })}\n`,
+        ),
+      );
+      child.emit("exit", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent({ role: "worker", task: "work" });
+      await new Promise((resolve) => setImmediate(resolve));
+      fireIdleTimer?.();
+      const result = await execution;
+      assert.equal(result.isError, undefined);
+      assert.equal(result.content[0].text, "done");
+    } finally {
+      __abortTimer.set = originalSet;
+      extension.restore();
+    }
+  });
+
+  it("子の exit 後に届いた stdout の行も結果へ含める", async () => {
+    const extension = captureRoleExtension();
+    let fireIdleTimer: (() => void) | undefined;
+    const originalSet = __abortTimer.set;
+    __abortTimer.set = (callback) => {
+      fireIdleTimer = callback;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    extension.respondToChild((child) => {
+      child.emit("exit", 0);
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "late done" }] } })}\n`,
+        ),
+      );
+    });
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent({ role: "worker", task: "work" });
+      await new Promise((resolve) => setImmediate(resolve));
+      fireIdleTimer?.();
+      const result = await execution;
+      assert.equal(result.content[0].text, "late done");
+    } finally {
+      __abortTimer.set = originalSet;
+      extension.restore();
+    }
+  });
+
+  it("シグナルで死亡した子をエラーとして扱う", async () => {
+    const extension = captureRoleExtension();
+    extension.respondToChild((child) => child.emit("close", null));
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      assert.equal(result.isError, true);
+      assert.equal(result.details.results[0].stopReason, "killed");
+      assert.match(result.content[0].text, /killed by a signal/);
+    } finally {
       extension.restore();
     }
   });
