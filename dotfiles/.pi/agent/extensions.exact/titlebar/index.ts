@@ -7,7 +7,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const SPINNER_FRAMES = ["-", "\\", "|", "/"];
+export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 100;
 
 export const __timers: {
@@ -20,9 +20,9 @@ export const __timers: {
   now: () => Date.now(),
 };
 
-export function spinnerFrame(nowMs: number): string {
-  const index = Math.floor(nowMs / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
-  return SPINNER_FRAMES[index < 0 ? index + SPINNER_FRAMES.length : index];
+export function spinnerFrame(nowMs: number, frames: string[] = SPINNER_FRAMES): string {
+  const index = Math.floor(nowMs / SPINNER_INTERVAL_MS) % frames.length;
+  return frames[index < 0 ? index + frames.length : index];
 }
 
 export function buildTitle(sessionName: string | undefined, frame?: string): string {

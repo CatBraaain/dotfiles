@@ -1,7 +1,7 @@
 // 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
-import titlebar, { __timers, buildTitle, spinnerFrame } from "./index";
+import titlebar, { __timers, buildTitle, SPINNER_FRAMES, spinnerFrame } from "./index";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
 let group = "";
@@ -60,16 +60,26 @@ function captureTitleExtension(sessionName: string | undefined): {
 }
 
 describe("スピナー", () => {
-  it("0.1 秒ごとに - \\ | / の順で切り替わる", () => {
-    assert.equal(spinnerFrame(0), "-");
-    assert.equal(spinnerFrame(100), "\\");
-    assert.equal(spinnerFrame(200), "|");
-    assert.equal(spinnerFrame(300), "/");
+  it("0.1 秒ごとに点字スピナーのフレームが順に切り替わる", () => {
+    assert.equal(spinnerFrame(0), "⠋");
+    assert.equal(spinnerFrame(100), "⠙");
+    assert.equal(spinnerFrame(200), "⠹");
+    assert.equal(spinnerFrame(300), "⠸");
   });
 
-  it("4 フレーム目で先頭のフレームへ循環する", () => {
-    assert.equal(spinnerFrame(400), "-");
-    assert.equal(spinnerFrame(700), "/");
+  it("10 フレーム目で先頭のフレームへ循環する", () => {
+    assert.equal(spinnerFrame(1000), "⠋");
+    assert.equal(spinnerFrame(1100), "⠙");
+  });
+
+  it("すべてのフレームは点字ブロックの1文字で横幅が等しい", () => {
+    assert.ok(SPINNER_FRAMES.length > 0, "フレームが空でない");
+    assert.equal(new Set(SPINNER_FRAMES).size, SPINNER_FRAMES.length, "フレームが重複しない");
+    for (const frame of SPINNER_FRAMES) {
+      const code = frame.codePointAt(0)!;
+      assert.ok(frame.length === 1, `${frame} は 1 文字である`);
+      assert.ok(code >= 0x2800 && code <= 0x28ff, `${frame} は点字ブロック (U+2800–U+28FF) に含まれる`);
+    }
   });
 });
 
@@ -83,11 +93,11 @@ describe("タイトルの構成", () => {
   });
 
   it("動作中はスピナーフレームを先頭に付ける", () => {
-    assert.equal(buildTitle("session-a", "-"), "- π - session-a");
+    assert.equal(buildTitle("session-a", "⠋"), "⠋ π - session-a");
   });
 
   it("動作中でセッション名がない場合はスピナーと π のみを表示する", () => {
-    assert.equal(buildTitle(undefined, "\\"), "\\ π");
+    assert.equal(buildTitle(undefined, "⠙"), "⠙ π");
   });
 });
 
@@ -105,7 +115,7 @@ describe("状態遷移", () => {
 
     invoke("agent_start", 200);
 
-    assert.equal(titleCalls.at(-1), "| π - session-a");
+    assert.equal(titleCalls.at(-1), "⠹ π - session-a");
   });
 
   it("agent_start は 0.1 秒間隔のタイマーを起動する", () => {
@@ -124,7 +134,7 @@ describe("状態遷移", () => {
     fakeNowMs = 150;
     spinnerTimer.callback();
 
-    assert.equal(titleCalls.at(-1), "\\ π");
+    assert.equal(titleCalls.at(-1), "⠙ π");
   });
 
   it("agent_end でタイマーを停止して待機中タイトルへ戻す", () => {
