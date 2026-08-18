@@ -1,14 +1,13 @@
 # standard・汎用スキル作成手続き（any-implement 用）
 
-any-implement が any-standard と組み合わせるときに適用する、standard・汎用スキルの作成・改修手続き。規則セットの組み立て、推測で書き始めない停止規則、Verify による自己検証の骨格は any-implement が所有し、ここでは繰り返さない。
+any-implement が any-standard と組み合わせるときに適用する、standard・汎用スキルの作成・改修手続き。規則セットの組み立て、入力と完了範囲の確定、Verify による自己検証の骨格は any-implement が所有し、ここでは繰り返さない。
 
 ## 入力と完了範囲の確定
 
-書き始め前に次を整理する:
+any-implement の一般手順に加え、次を整理する:
 
 - 対象の種別: standard の新規作成 / 既存 standard の改修 / 汎用3スキルの改修 / 単発スキルの作成
 - スキルが所有するドメインと目的、適用条件
-- 変更してよい範囲
 
 ## 対象の判別
 
@@ -25,7 +24,7 @@ any-implement が any-standard と組み合わせるときに適用する、stan
 2. `xxx-standard` で命名する。
 3. SKILL.md に規則本体（適用条件・記法・Verify）を書く。本文の品質は instruction-standard の規則に従う。
 4. 汎用のデフォルトプロトコルで足りない固有手続きがあるときだけ、対応する `references/`（implement.md / review.md / workflow.md）を書く。
-5. 手続きの骨格（規則セットの組み立て・検証・出力形式・指摘形式）を SKILL.md や `references/` へコピーしない。
+5. 手続きの骨格（規則セットの組み立て・検証・出力形式・指摘形式）を SKILL.md や `references/` へコピーしない。他の standard が所有する規則もコピーせず参照する。
 
 ## 既存 standard の改修
 
