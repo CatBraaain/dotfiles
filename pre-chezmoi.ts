@@ -40,21 +40,34 @@ for (const [src, dst] of Object.entries(pathMaps)) {
   }
 }
 
-// merge_*.json -> modify_*.json (chezmoi modify template)
-for await (const entry of new Bun.Glob("dist/**/merge_*.json").scan({ dot: true })) {
-  const content = await readFile(entry, "utf-8");
-  const modifyFile = join(dirname(entry), basename(entry).replace(/^merge_/, "modify_"));
-  const template = `{{- /* chezmoi:modify-template */ -}}
+// merge_*.json / merge_*.yaml -> modify_* (chezmoi modify template)
+const modifyTemplates = {
+  json: (repoContent: string) => `{{- /* chezmoi:modify-template */ -}}
 {{-
   mergeOverwrite
     ((or .chezmoi.stdin "{}") | fromJson)
     (fromJsonc \`
-${content}
+${repoContent}
 \`)
   | toPrettyJson
   | println
--}}`;
-  await writeFile(modifyFile, template);
+-}}`,
+  yaml: (repoContent: string) => `{{- /* chezmoi:modify-template */ -}}
+{{-
+  mergeOverwrite
+    ((or .chezmoi.stdin "{}") | fromYaml)
+    (fromYaml \`
+${repoContent}
+\`)
+  | toYaml
+-}}`,
+};
+
+for await (const entry of new Bun.Glob("dist/**/merge_*.{json,yaml}").scan({ dot: true })) {
+  const format = entry.endsWith(".yaml") ? "yaml" : "json";
+  const content = await readFile(entry, "utf-8");
+  const modifyFile = join(dirname(entry), basename(entry).replace(/^merge_/, "modify_"));
+  await writeFile(modifyFile, modifyTemplates[format](content));
   await rm(entry);
 }
 

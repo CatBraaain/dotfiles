@@ -26,7 +26,7 @@
 |---|---|---|
 | `.xxx` | `dot_xxx` | ドットファイル表現 |
 | `xxx.exact`（ディレクトリ） | `exact_xxx` | 完全一致ディレクトリ（`.xxx.exact` → `exact_dot_xxx`） |
-| `merge_*.json` | `modify_*.json` | 独自: `~` の実ファイルと JSON を深くマージする modify-template |
+| `merge_*.json` / `merge_*.yaml` | `modify_*.json` / `modify_*.yaml` | 独自: `~` の実ファイルと JSON/YAML を深くマージする modify-template |
 
 > **注意**: 相対パス `dotfiles/.pi/agent/skills.exact` は `~/projects/dotfiles/dotfiles/.pi/agent/skills.exact` を指す。ルート直下（`~/projects/dotfiles/.pi/...`）ではない — 同名の `dotfiles/` が二重に現れる点に注意。
 
