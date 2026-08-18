@@ -1,59 +1,67 @@
 /**
  * Titlebar Spinner Extension
  *
- * Shows a braille spinner animation in the terminal title while the agent is working.
+ * Shows a spinner animation in the terminal title while the agent is working.
  * Uses `ctx.ui.setTitle()` to update the terminal title via the extension API.
  */
 
-import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES = ["-", "\\", "|", "/"];
+const SPINNER_INTERVAL_MS = 100;
 
-function getBaseTitle(pi: ExtensionAPI): string {
-	const cwd = path.basename(process.cwd());
-	const session = pi.getSessionName();
-	return session ? `π - ${session} - ${cwd}` : `π - ${cwd}`;
+export const __timers: {
+  set: (callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>;
+  clear: (timer: ReturnType<typeof setInterval>) => void;
+  now: () => number;
+} = {
+  set: (callback, intervalMs) => setInterval(callback, intervalMs),
+  clear: (timer) => clearInterval(timer),
+  now: () => Date.now(),
+};
+
+export function spinnerFrame(nowMs: number): string {
+  const index = Math.floor(nowMs / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
+  return SPINNER_FRAMES[index < 0 ? index + SPINNER_FRAMES.length : index];
+}
+
+export function buildTitle(sessionName: string | undefined, frame?: string): string {
+  const base = sessionName ? `π - ${sessionName}` : "π";
+  return frame ? `${frame} ${base}` : base;
 }
 
 export default function (pi: ExtensionAPI) {
-	let timer: ReturnType<typeof setInterval> | null = null;
-	let frameIndex = 0;
+  let timer: ReturnType<typeof setInterval> | null = null;
 
-	function stopAnimation(ctx: ExtensionContext) {
-		if (timer) {
-			clearInterval(timer);
-			timer = null;
-		}
-		frameIndex = 0;
-		ctx.ui.setTitle(getBaseTitle(pi));
-	}
+  function stopAnimation(ctx: ExtensionContext) {
+    if (timer) {
+      __timers.clear(timer);
+      timer = null;
+    }
+    ctx.ui.setTitle(buildTitle(pi.getSessionName()));
+  }
 
-	function startAnimation(ctx: ExtensionContext) {
-		stopAnimation(ctx);
-		timer = setInterval(() => {
-			const frame = BRAILLE_FRAMES[frameIndex % BRAILLE_FRAMES.length];
-			const cwd = path.basename(process.cwd());
-			const session = pi.getSessionName();
-			const title = session ? `${frame} π - ${session} - ${cwd}` : `${frame} π - ${cwd}`;
-			ctx.ui.setTitle(title);
-			frameIndex++;
-		}, 80);
-	}
+  function startAnimation(ctx: ExtensionContext) {
+    stopAnimation(ctx);
+    const render = () =>
+      ctx.ui.setTitle(buildTitle(pi.getSessionName(), spinnerFrame(__timers.now())));
+    render();
+    timer = __timers.set(render, SPINNER_INTERVAL_MS);
+  }
 
-	pi.on("session_start", async (_event, ctx) => {
-		ctx.ui.setTitle(getBaseTitle(pi));
-	});
+  pi.on("session_start", async (_event, ctx) => {
+    ctx.ui.setTitle(buildTitle(pi.getSessionName()));
+  });
 
-	pi.on("agent_start", async (_event, ctx) => {
-		startAnimation(ctx);
-	});
+  pi.on("agent_start", async (_event, ctx) => {
+    startAnimation(ctx);
+  });
 
-	pi.on("agent_end", async (_event, ctx) => {
-		stopAnimation(ctx);
-	});
+  pi.on("agent_end", async (_event, ctx) => {
+    stopAnimation(ctx);
+  });
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		stopAnimation(ctx);
-	});
+  pi.on("session_shutdown", async (_event, ctx) => {
+    stopAnimation(ctx);
+  });
 }
