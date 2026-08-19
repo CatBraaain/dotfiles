@@ -1,25 +1,20 @@
-// 実行: bun --install=auto run index.test.ts
+// 実行: bun --install=auto run routing.test.ts
 //
 // `when` は冪等なフェイクコマンド（echo 1=有効 / exit 1=無効）で駆動する。
 
 import assert from "node:assert/strict";
 import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   bashExecFrom,
-  decideFallback,
   evalWhen,
-  requiresSwitchConfirmation,
   isCoolingDown,
+  isManualSelect,
   lastUserText,
-  loadConfigFromPath,
   parseRetryAfter,
   pickCandidate,
   recordCooldown,
-} from "./index";
-import type { Rule } from "./index";
+  type ModelCandidate,
+} from "./routing";
 
 // ponytail: 自作ランナー（vitest は bun auto-install 非互換のため逐次実行）。
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
@@ -55,7 +50,7 @@ const availableModels: ModelFound[] = [
 ];
 
 const route = (
-  rules: Rule[],
+  candidates: ModelCandidate[],
   {
     available = availableModels,
     cooldowns = new Map<string, number>(),
@@ -63,84 +58,66 @@ const route = (
     available?: ModelFound[];
     cooldowns?: Map<string, number>;
   } = {},
-): Promise<ModelFound | null> => pickCandidate(rules, cooldowns, findIn(available), runWhen, 0);
+): Promise<ModelFound | null> => pickCandidate(candidates, cooldowns, findIn(available), runWhen, 0);
 
-const writeConfig = (dir: string, name: string, lines: string[]): string => {
-  const path = join(dir, name);
-  writeFileSync(path, lines.join("\n"));
-  return path;
-};
-
-const silently = <T>(fn: () => T): T => {
-  const original = console.warn;
-  console.warn = () => {};
-  try {
-    return fn();
-  } finally {
-    console.warn = original;
-  }
-};
-
-describe("UC1: when 条件で最初の候補を選ぶ", () => {
-  it("when が通るルールを採用する", async () => {
-    const rules: Rule[] = [
+describe("tier の候補選択", () => {
+  it("when が通る候補を採用する", async () => {
+    const candidates: ModelCandidate[] = [
       { provider: "zai", model: "glm-5.2", when: exitZeroCommand },
       { provider: "zai", model: "glm-5.1" },
     ];
-    const selectedModel = await route(rules);
+    const selectedModel = await route(candidates);
     assert.strictEqual(selectedModel?.id, "glm-5.2");
   });
 
-  it("when が外れたルールは次候補へフォールスルーする", async () => {
-    const rules: Rule[] = [
+  it("when が外れた候補は次候補へフォールスルーする", async () => {
+    const candidates: ModelCandidate[] = [
       { provider: "zai", model: "glm-5.2", when: exitOneCommand },
       { provider: "zai", model: "glm-5.1" },
     ];
-    const selectedModel = await route(rules);
+    const selectedModel = await route(candidates);
     assert.strictEqual(selectedModel?.id, "glm-5.1");
   });
 
   it("when 無しは常に候補になる", async () => {
-    const rules: Rule[] = [
+    const candidates: ModelCandidate[] = [
       { provider: "zai", model: "free" },
       { provider: "zai", model: "paid" },
     ];
-    const selectedModel = await route(rules);
+    const selectedModel = await route(candidates);
     assert.strictEqual(selectedModel?.id, "free");
   });
 
-  it("利用可能モデルに無いものは when に関わらず飛ばす", async () => {
-    const rules: Rule[] = [
+  it("モデルレジストリに無いものは when に関わらず飛ばす", async () => {
+    const candidates: ModelCandidate[] = [
       { provider: "zai", model: "ghost", when: exitZeroCommand },
       { provider: "zai", model: "real", when: exitZeroCommand },
     ];
     const availables = [{ provider: "zai", id: "real" }];
-    const selectedModel = await route(rules, { available: availables });
+    const selectedModel = await route(candidates, { available: availables });
     assert.strictEqual(selectedModel?.id, "real");
+  });
+
+  it("全候補が不成立なら null を返す", async () => {
+    const candidates: ModelCandidate[] = [{ provider: "zai", model: "x", when: exitOneCommand }];
+    const selectedModel = await route(candidates);
+    assert.strictEqual(selectedModel, null);
   });
 });
 
-describe("UC2: rate limit で制限モデルを退避し、次候補へ fallback", () => {
-  it("制限中の上位モデルを飛ばして下位モデルを採用する", async () => {
-    const rules: Rule[] = [
+describe("cooldown", () => {
+  it("冷却中の候補を飛ばして次候補を採用する", async () => {
+    const candidates: ModelCandidate[] = [
       { provider: "zai", model: "glm-5.2" },
       { provider: "zai", model: "glm-5.1" },
     ];
     const glm52InCooldown = new Map<string, number>();
     recordCooldown(glm52InCooldown, "zai/glm-5.2", 60_000, 0);
 
-    const selectedModel = await route(rules, { cooldowns: glm52InCooldown });
+    const selectedModel = await route(candidates, { cooldowns: glm52InCooldown });
     assert.strictEqual(selectedModel?.id, "glm-5.1");
   });
 
-  it("全候補が外れたら null を返す", async () => {
-    const rules: Rule[] = [{ provider: "zai", model: "x", when: exitOneCommand }];
-    const selectedModel = await route(rules);
-    assert.strictEqual(selectedModel, null);
-  });
-});
-
-describe("UC3: cooldown 期限が過ぎたら再候補化する", () => {
   it("期限内は冷却中と判定する", () => {
     const cooldowns = new Map<string, number>();
     const now = 1000;
@@ -162,104 +139,7 @@ describe("UC3: cooldown 期限が過ぎたら再候補化する", () => {
   });
 });
 
-describe("UC4: セッション開始時の切替確認", () => {
-  it("初回起動では確認を求めない", () => {
-    assert.strictEqual(requiresSwitchConfirmation("startup"), false);
-  });
-
-  it("new では確認を求めない", () => {
-    assert.strictEqual(requiresSwitchConfirmation("new"), false);
-  });
-
-  it("reload と復元では確認を求める", () => {
-    assert.strictEqual(requiresSwitchConfirmation("reload"), true);
-    assert.strictEqual(requiresSwitchConfirmation("resume"), true);
-  });
-});
-
-describe("UC5: 手動選択中の rate limit fallback", () => {
-  const fallbackModel = { provider: "zai", id: "glm-5.1" };
-
-  it("manual でなければ即座に切替する", () => {
-    assert.deepStrictEqual(decideFallback(false, fallbackModel), {
-      kind: "switch",
-      model: fallbackModel,
-    });
-  });
-
-  it("manual 中は切替前に確認を求める", () => {
-    assert.deepStrictEqual(decideFallback(true, fallbackModel), {
-      kind: "confirm",
-      model: fallbackModel,
-    });
-  });
-
-  it("fallback 候補が無ければ manual に関わらずエラーにする", () => {
-    assert.deepStrictEqual(decideFallback(false, null), { kind: "error" });
-    assert.deepStrictEqual(decideFallback(true, null), { kind: "error" });
-  });
-});
-
-describe("UC6: config.yaml を順序通り安全に読み込む", () => {
-  function withTmpDir(fn: (dir: string) => void): void {
-    const dir = mkdtempSync(join(tmpdir(), "mr-"));
-    try {
-      fn(dir);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-
-  it("rules を上から下へ順序を保って解析する", () =>
-    withTmpDir((dir) => {
-      const path = writeConfig(dir, "c.yaml", [
-        "rules:",
-        "  - provider: zai",
-        "    model: glm-5.2",
-        "  - provider: zai",
-        "    model: glm-5.1",
-      ]);
-      const { rules } = loadConfigFromPath(path);
-      assert.deepStrictEqual(rules, [
-        { provider: "zai", model: "glm-5.2" },
-        { provider: "zai", model: "glm-5.1" },
-      ]);
-    }));
-
-  it("不正ルールがあればルーティングを停止し、原因を収集する", () =>
-    withTmpDir((dir) => {
-      const path = writeConfig(dir, "c.yaml", [
-        "rules:",
-        "  - provider: zai",
-        "    model: glm-5.2",
-        "  - model: nope", // provider 無し
-        "  - provider: zai",
-        "    model: glm-5.1",
-        "    when: 123", // when が数値
-      ]);
-      const { rules, invalid } = loadConfigFromPath(path);
-      assert.deepStrictEqual(rules, []); // 部分適用せず停止
-      assert.deepStrictEqual(invalid, [
-        { model: "nope" },
-        { provider: "zai", model: "glm-5.1", when: 123 },
-      ]);
-    }));
-
-  it("存在しないファイルは空配列を返す（例外を投げない）", () =>
-    withTmpDir((dir) => {
-      const { rules } = loadConfigFromPath(join(dir, "nope.yaml"));
-      assert.deepStrictEqual(rules, []);
-    }));
-
-  it("壊れた YAML は空配列を返す（例外を投げない）", () =>
-    withTmpDir((dir) => {
-      const broken = writeConfig(dir, "b.yaml", ["rules: [this is broken"]);
-      const { rules } = silently(() => loadConfigFromPath(broken));
-      assert.deepStrictEqual(rules, []);
-    }));
-});
-
-describe("UC7: Retry-After ヘッダから cooldown 期間を読む", () => {
+describe("Retry-After ヘッダ", () => {
   it("秒数文字列はミリ秒に変換する", () => {
     assert.strictEqual(parseRetryAfter("120"), 120_000);
   });
@@ -276,7 +156,20 @@ describe("UC7: Retry-After ヘッダから cooldown 期間を読む", () => {
   });
 });
 
-describe("UC8: 再送は直近のユーザ発言を送る", () => {
+describe("手動選択の判定", () => {
+  it("ユーザーの set / cycle は手動選択とする", () => {
+    assert.strictEqual(isManualSelect("set", false), true);
+    assert.strictEqual(isManualSelect("cycle", false), true);
+  });
+
+  it("自拡張の setModel 中と restore は手動選択としない", () => {
+    assert.strictEqual(isManualSelect("set", true), false);
+    assert.strictEqual(isManualSelect("restore", false), false);
+    assert.strictEqual(isManualSelect(undefined, false), false);
+  });
+});
+
+describe("再送は直近のユーザ発言を送る", () => {
   type Entry = { type: string; message: { role: string; content: unknown } };
   const message = (role: string, content: unknown): Entry => ({
     type: "message",

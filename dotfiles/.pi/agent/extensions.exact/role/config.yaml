@@ -1,6 +1,44 @@
 default: agent
 
-_shared:
+_when:
+  # z.ai peak hours are weekdays, 14:00–18:00 (UTC+8). => 06:00-10:00 UTC
+  zaiOffPeak: &zai-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }'
+  # DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC
+  deepseekOffPeak: &deepseek-off-peak 'h=$(date -u +%H); ! { { [ "$h" -ge 01 ] && [ "$h" -lt 04 ]; } || { [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }; }'
+
+tiers:
+  high:
+    - provider: zai
+      model: glm-5.3
+      when: *zai-off-peak
+    - provider: zai
+      model: glm-5.2
+    - provider: openai-codex
+      model: gpt-5.6-luna
+    - provider: commandcode
+      model: deepseek/deepseek-v4-flash
+      when: *deepseek-off-peak
+    - provider: deepseek
+      model: deepseek-v4-flash
+      when: *deepseek-off-peak
+  middle:
+    - provider: openai-codex
+      model: gpt-5.6-luna
+    - provider: commandcode
+      model: deepseek/deepseek-v4-flash
+      when: *deepseek-off-peak
+    - provider: deepseek
+      model: deepseek-v4-flash
+      when: *deepseek-off-peak
+  low:
+    - provider: commandcode
+      model: deepseek/deepseek-v4-flash
+      when: *deepseek-off-peak
+    - provider: deepseek
+      model: deepseek-v4-flash
+      when: *deepseek-off-peak
+
+_systemPrompts:
   roleOverview: &role-overview |
     ## Role 一覧
 
@@ -96,7 +134,7 @@ _shared:
 
 roles:
   agent:
-    model: zai/glm-5.3
+    tier: high
     tools: ["*"]
     subagents: [manager, worker]
     systemPrompt:
@@ -107,7 +145,7 @@ roles:
           統合・最終判断・owner への報告は自分が担います。
 
   manager:
-    model: zai/glm-5.2
+    tier: high
     tools: ["*"]
     subagents: [worker]
     systemPrompt:
@@ -117,7 +155,7 @@ roles:
           あなたは manager です。タスクを分解・統括するプレイングマネージャーとして動きます。
 
   worker:
-    model: commandcode/deepseek/deepseek-v4-flash
+    tier: low
     tools: ["*"]
     subagents: []
     systemPrompt:
@@ -126,7 +164,7 @@ roles:
           あなたは worker です。
 
   chat:
-    model: commandcode/deepseek/deepseek-v4-flash
+    tier: middle
     tools: [web_search, web_fetch]
     subagents: []
     systemPrompt:
