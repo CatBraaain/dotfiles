@@ -47,7 +47,7 @@
 
 ## TypeScript のテスト
 
-TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。
+TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。ただし、./pre-chezmoi.tsは除く。
 
 このリポジトリでは Bun の auto-install で依存を解決する。通常のテストランナー経由だと auto-install が動かないため、Vitest / Jest などは使えない。代わりに、テストスクリプト側で `describe` / `it` 相当の関数を内蔵する形で書くこと。
 assertion は自作 helper を作らず、`node:assert/strict` を使うこと。読みやすさは説明変数やテスト名で担保し、assertion の再発明では担保しない。
