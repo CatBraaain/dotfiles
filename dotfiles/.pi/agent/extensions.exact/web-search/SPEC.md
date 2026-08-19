@@ -46,11 +46,11 @@ sequenceDiagram
 
 ### web_fetch のバックエンド
 
-| 順序 | バックエンド |
-| ---- | ------------ |
-| 1    | trafilatura  |
-| 2    | Jina Reader  |
-| 3    | md.dhr.wtf   |
+| 順序 | バックエンド         | 取得方法                                                              |
+| ---- | -------------------- | --------------------------------------------------------------------- |
+| 1    | trafilatura          | trafilatura 自身のダウンローダで URL を直接取得                        |
+| 2    | fetch+trafilatura    | 生 fetch で HTML を取得し、trafilatura に標準入力で渡して Markdown 化 |
+| 3    | Jina Reader          | `https://r.jina.ai/<url>`                                             |
 
 ## クールダウン
 

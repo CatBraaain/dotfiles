@@ -265,9 +265,9 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     );
   });
 
-  it("デフォルトのバックエンド順序は trafilatura→Jina Reader→md.dhr.wtf", () => {
+  it("デフォルトのバックエンド順序は trafilatura→fetch+trafilatura→Jina Reader", () => {
     const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["trafilatura", "Jina Reader", "md.dhr.wtf"]);
+    assert.deepEqual(backendNames, ["trafilatura", "fetch+trafilatura", "Jina Reader"]);
   });
 });
 
@@ -280,6 +280,13 @@ describe("web_fetch 統合（execute 経由・実バックエンド）", () => {
   it("実バックエンドでフェッチが成功する", async () => {
     const resultText = textOf(await callFetch("https://example.com/"));
     assert.ok(resultText.length > 0);
+  });
+
+  it("HTML 以外の本文（text/plain）は変換せずそのまま返す", async () => {
+    const plainTextUrl =
+      "https://raw.githubusercontent.com/karust/openserp/main/README.md";
+    const resultText = textOf(await callFetch(plainTextUrl));
+    assert.match(resultText, /OpenSERP/);
   });
 });
 

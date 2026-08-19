@@ -8,6 +8,8 @@ const execFileAsync = promisify(execFile);
 
 export const BACKEND_TIMEOUT_MS = 15_000;
 export const SEARCH_RESULT_LIMIT = 10;
+const BROWSER_USER_AGENT =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 async function fetchText(
   url: string,
@@ -15,7 +17,7 @@ async function fetchText(
   headers?: HeadersInit,
 ): Promise<string> {
   const response = await fetch(url, {
-    headers,
+    headers: { "User-Agent": BROWSER_USER_AGENT, ...headers },
     signal: AbortSignal.any([
       signal ?? new AbortController().signal,
       AbortSignal.timeout(BACKEND_TIMEOUT_MS),
@@ -32,6 +34,26 @@ async function run(command: string, args: string[], signal?: AbortSignal): Promi
     maxBuffer: 4 * 1024 * 1024,
   });
   return stdout.trim();
+}
+
+function runWithStdin(
+  command: string,
+  args: string[],
+  input: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      { signal, timeout: BACKEND_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout.trim());
+      },
+    );
+    child.stdin.end(input);
+  });
 }
 
 function takeFirstEntries(markdown: string, limit: number): string {
@@ -143,6 +165,23 @@ export async function searchOne(
   throw new AllBackendsFailedError("web search", attempts);
 }
 
+// Raw-fetch the URL and convert to Markdown via trafilatura stdin.
+// Non-HTML bodies (text/plain etc.) are returned as-is without conversion.
+async function fetchToMarkdown(url: string, signal?: AbortSignal) {
+  const response = await fetch(url, {
+    headers: { "User-Agent": BROWSER_USER_AGENT },
+    signal: AbortSignal.any([
+      signal ?? new AbortController().signal,
+      AbortSignal.timeout(BACKEND_TIMEOUT_MS),
+    ]),
+  });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  const body = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("html")) return body;
+  return runWithStdin("trafilatura", ["--markdown"], body, signal);
+}
+
 async function trafilaturaFetch(url: string, signal?: AbortSignal) {
   return run("trafilatura", ["--URL", url, "--markdown"], signal);
 }
@@ -153,15 +192,11 @@ async function jinaFetch(url: string, signal?: AbortSignal) {
   return fetchText(`https://r.jina.ai/${url}`, signal, headers);
 }
 
-async function dhrFetch(url: string, signal?: AbortSignal) {
-  return fetchText(`https://md.dhr.wtf/?url=${encodeURIComponent(url)}`, signal);
-}
-
 export function defaultFetchBackends(url: string, signal?: AbortSignal): BackendEntry[] {
   return [
     ["trafilatura", () => trafilaturaFetch(url, signal)],
+    ["fetch+trafilatura", () => fetchToMarkdown(url, signal)],
     ["Jina Reader", () => jinaFetch(url, signal)],
-    ["md.dhr.wtf", () => dhrFetch(url, signal)],
   ];
 }
 
