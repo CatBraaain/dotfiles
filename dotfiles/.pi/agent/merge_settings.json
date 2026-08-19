@@ -8,6 +8,8 @@
   "quietStartup": false,
   "enabledModels": ["**"],
   "packages": [
+    "npm:pi-commandcode-provider",
+    "npm:pi-cursor-sdk",
     "npm:@entelligentsia/pi-claude-compat",
     {
       "source": "https://github.com/DietrichGebert/ponytail",
@@ -16,7 +18,6 @@
       "prompts": [],
       "themes": []
     },
-    "npm:pi-commandcode-provider",
     {
       "source": "https://github.com/anthropics/skills",
       "extensions": [],
