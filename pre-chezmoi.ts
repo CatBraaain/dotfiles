@@ -40,7 +40,7 @@ for (const [src, dst] of Object.entries(pathMaps)) {
   }
 }
 
-// merge_*.json / merge_*.yaml -> modify_* (chezmoi modify template)
+// xxx.merge.{json,yaml} -> modify_xxx.{json,yaml} (chezmoi modify template)
 const modifyTemplates = {
   json: (repoContent: string) => `{{- /* chezmoi:modify-template */ -}}
 {{-
@@ -63,10 +63,11 @@ ${repoContent}
 -}}`,
 };
 
-for await (const entry of new Bun.Glob("dist/**/merge_*.{json,yaml}").scan({ dot: true })) {
+for await (const entry of new Bun.Glob("dist/**/*.merge.{json,yaml}").scan({ dot: true })) {
   const format = entry.endsWith(".yaml") ? "yaml" : "json";
   const content = await readFile(entry, "utf-8");
-  const modifyFile = join(dirname(entry), basename(entry).replace(/^merge_/, "modify_"));
+  const baseName = basename(entry).replace(/\.merge\./, ".");
+  const modifyFile = join(dirname(entry), `modify_${baseName}`);
   await writeFile(modifyFile, modifyTemplates[format](content));
   await rm(entry);
 }

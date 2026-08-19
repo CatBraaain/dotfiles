@@ -9,7 +9,7 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
 ├── README                      # 本ファイル
 └── agent/
     ├── AGENTS.md               # エージェント共通の指示書
-    ├── merge_settings.json     # pi 設定（settings.json へ深くマージ）
+    ├── settings.merge.json      # pi 設定（settings.json へ深くマージ）
     ├── package.json            # 拡張のランタイム依存（yaml 等）
     ├── extensions.exact/       # 自作拡張機能
     ├── prompts.exact/          # プロンプトテンプレート
