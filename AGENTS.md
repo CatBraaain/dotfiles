@@ -27,6 +27,7 @@
 | `.xxx` | `dot_xxx` | ドットファイル表現 |
 | `xxx.exact`（ディレクトリ） | `exact_xxx` | 完全一致ディレクトリ（`.xxx.exact` → `exact_dot_xxx`） |
 | `xxx.merge.json` / `xxx.merge.yaml` | `modify_xxx.json` / `modify_xxx.yaml` | 独自: `~` の実ファイルと JSON/YAML を深くマージする modify-template |
+| `xxx.overwrite.json` / `xxx.overwrite.yaml` | （ベースへ統合され消滅） | 独自: 同階層のベース `xxx.json` / `xxx.yaml` へ深くマージする。PC ごとのローカル差分用（gitignore、配列は tier キー単位で丸ごと置換） |
 
 > **注意**: 相対パス `dotfiles/.pi/agent/skills.exact` は `~/projects/dotfiles/dotfiles/.pi/agent/skills.exact` を指す。ルート直下（`~/projects/dotfiles/.pi/...`）ではない — 同名の `dotfiles/` が二重に現れる点に注意。
 

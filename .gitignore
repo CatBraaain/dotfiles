@@ -3,4 +3,6 @@ node_modules
 
 dotfiles/.gitconfig.local
 dotfiles/.secrets.sh
+dotfiles/**/*.overwrite.json
+dotfiles/**/*.overwrite.yaml
 undotfiles/nix/flake.lock

@@ -1,8 +1,87 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile, rm, rename, mkdir, lstat, cp } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 const pathDepth = (p: string) => p.split(/[/\\]/).length;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepMerge<T>(base: T, overwrite: T): T {
+  if (isPlainObject(base) && isPlainObject(overwrite)) {
+    const merged: Record<string, unknown> = { ...base };
+    for (const [key, overwriteValue] of Object.entries(overwrite)) {
+      merged[key] = deepMerge(merged[key], overwriteValue);
+    }
+    return merged as T;
+  }
+  return overwrite;
+}
+
+const fileFormats = {
+  json: {
+    parse: JSON.parse,
+    stringify: (value: unknown) => `${JSON.stringify(value, null, 2)}\n`,
+  },
+  yaml: {
+    parse: parseYaml,
+    stringify: (value: unknown) => stringifyYaml(value),
+  },
+} as const;
+
+type FileFormat = keyof typeof fileFormats;
+
+const formatOf = (path: string): FileFormat => (path.endsWith(".yaml") ? "yaml" : "json");
+
+// xxx.overwrite.{json,yaml}: deep-merge into sibling base xxx.{json,yaml}, then delete the overwrite file.
+async function mergeOverwriteFiles(): Promise<void> {
+  for await (const entry of new Bun.Glob("dist/**/*.overwrite.{json,yaml}").scan({ dot: true })) {
+    const format = formatOf(entry);
+    const baseFile = entry.replace(/\.overwrite\.\w+$/, `.${format}`);
+    if (!existsSync(baseFile)) throw new Error(`overwrite target not found: ${baseFile}`);
+    const { parse, stringify } = fileFormats[format];
+    const baseContent = parse(await readFile(baseFile, "utf-8"));
+    const overwriteContent = parse(await readFile(entry, "utf-8"));
+    await writeFile(baseFile, stringify(deepMerge(baseContent, overwriteContent)));
+    await rm(entry);
+  }
+}
+
+// xxx.merge.{json,yaml} -> modify_xxx.{json,yaml} (chezmoi modify template)
+const modifyTemplate = (format: FileFormat, repoContent: string) =>
+  format === "json"
+    ? `{{- /* chezmoi:modify-template */ -}}
+{{
+  mergeOverwrite
+    ((or .chezmoi.stdin "{}") | fromJson)
+    (fromJsonc \`
+${repoContent}
+\`)
+  | toPrettyJson
+  | println
+-}}`
+    : `{{- /* chezmoi:modify-template */ -}}
+{{
+  mergeOverwrite
+    ((or .chezmoi.stdin "{}") | fromYaml)
+    (fromYaml \`
+${repoContent}
+\`)
+  | toYaml
+-}}`;
+
+async function convertMergeFiles(): Promise<void> {
+  for await (const entry of new Bun.Glob("dist/**/*.merge.{json,yaml}").scan({ dot: true })) {
+    const format = formatOf(entry);
+    const content = await readFile(entry, "utf-8");
+    const baseName = basename(entry).replace(/\.merge\./, ".");
+    const modifyFile = join(dirname(entry), `modify_${baseName}`);
+    await writeFile(modifyFile, modifyTemplate(format, content));
+    await rm(entry);
+  }
+}
 
 const pathMaps =
   process.platform === "win32"
@@ -40,37 +119,8 @@ for (const [src, dst] of Object.entries(pathMaps)) {
   }
 }
 
-// xxx.merge.{json,yaml} -> modify_xxx.{json,yaml} (chezmoi modify template)
-const modifyTemplates = {
-  json: (repoContent: string) => `{{- /* chezmoi:modify-template */ -}}
-{{-
-  mergeOverwrite
-    ((or .chezmoi.stdin "{}") | fromJson)
-    (fromJsonc \`
-${repoContent}
-\`)
-  | toPrettyJson
-  | println
--}}`,
-  yaml: (repoContent: string) => `{{- /* chezmoi:modify-template */ -}}
-{{-
-  mergeOverwrite
-    ((or .chezmoi.stdin "{}") | fromYaml)
-    (fromYaml \`
-${repoContent}
-\`)
-  | toYaml
--}}`,
-};
-
-for await (const entry of new Bun.Glob("dist/**/*.merge.{json,yaml}").scan({ dot: true })) {
-  const format = entry.endsWith(".yaml") ? "yaml" : "json";
-  const content = await readFile(entry, "utf-8");
-  const baseName = basename(entry).replace(/\.merge\./, ".");
-  const modifyFile = join(dirname(entry), `modify_${baseName}`);
-  await writeFile(modifyFile, modifyTemplates[format](content));
-  await rm(entry);
-}
+await mergeOverwriteFiles();
+await convertMergeFiles();
 
 // .xxx -> dot_xxx (deepest first: renaming a parent orphans its children's paths)
 const dotEntries: string[] = [];
