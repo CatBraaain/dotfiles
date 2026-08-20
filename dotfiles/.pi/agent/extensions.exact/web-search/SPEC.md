@@ -44,6 +44,10 @@ sequenceDiagram
 | 3    | openserp(bing)       |
 | 4    | markdown.new         |
 
+### openserp のブラウザ起動
+
+openserp は Chrome を起動して検索するが、nix 由来の Chrome は NixOS 以外のホストで SUID sandbox エラーになり起動に失敗する。そのため拡張同梱の `scripts/google-chrome-nosandbox`（`--no-sandbox` 付きで nix の Chrome を起動するラッパー）が存在するときは、openserp に `--browser-path` で指定する。ラッパーが存在しない環境では指定せず、openserp 既定のブラウザ探索に従う。
+
 ### web_fetch のバックエンド
 
 | 順序 | バックエンド         | 取得方法                                                              |

@@ -2,6 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -10,6 +12,12 @@ export const BACKEND_TIMEOUT_MS = 15_000;
 export const SEARCH_RESULT_LIMIT = 10;
 const BROWSER_USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+// openserp launches nix Chrome, which fails with a SUID-sandbox error on non-NixOS
+// hosts. When this wrapper (shipped beside the extension) exists, pass it via --browser-path.
+const CHROME_NOSANDBOX_WRAPPER = fileURLToPath(
+  new URL("./scripts/google-chrome-nosandbox", import.meta.url),
+);
 
 async function fetchText(
   url: string,
@@ -92,6 +100,9 @@ async function openserp(engine: string, query: string, signal?: AbortSignal, lan
       "markdown",
     ];
     if (lang) args.push("--lang", lang);
+    if (existsSync(CHROME_NOSANDBOX_WRAPPER)) {
+      args.push("--browser-path", CHROME_NOSANDBOX_WRAPPER);
+    }
     const markdown = await run("openserp", args, signal);
     return takeFirstEntries(markdown, SEARCH_RESULT_LIMIT);
   } catch (error) {
