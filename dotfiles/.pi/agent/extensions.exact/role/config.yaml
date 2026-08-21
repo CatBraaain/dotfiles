@@ -1,7 +1,7 @@
 default: agent
 
 _when:
-  # z.ai peak hours are weekdays, 14:00–18:00 (UTC+8). => 06:00-10:00 UTC
+  # z.ai peak hours are weekdays, 14:00–18:00 (UTC+8) => 06:00-10:00 UTC
   zaiOffPeak: &zai-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }'
   # DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC
   deepseekOffPeak: &deepseek-off-peak 'h=$(date -u +%H); ! { { [ "$h" -ge 01 ] && [ "$h" -lt 04 ]; } || { [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }; }'
@@ -37,6 +37,8 @@ tiers:
     - provider: deepseek
       model: deepseek-v4-flash
       when: *deepseek-off-peak
+    - provider: openai-codex
+      model: gpt-5.6-luna
 
 _systemPrompts:
   roleOverview: &role-overview |
