@@ -591,6 +591,7 @@
   "workbench.editor.tabSizing": "shrink",
   "workbench.editor.useModal": "off",
   "workbench.editorAssociations": {
+    "*.md": "vscode.markdown.editor",
     "git-rebase-todo": "gitlens.rebase"
   },
   "workbench.experimental.modernUI": false,
