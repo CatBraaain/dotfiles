@@ -36,6 +36,7 @@ $managedPackages = @(
     "Microsoft.VisualStudioCode"
     "WinDirStat.WinDirStat"
     "Microsoft.WindowsTerminal"
+    "ZedIndustries.Zed"
     "HaraldBoegeholz.h2testw"
     # keep-sorted end
 )
