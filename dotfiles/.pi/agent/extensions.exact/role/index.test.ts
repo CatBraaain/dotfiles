@@ -570,6 +570,29 @@ describe("tier によるモデルルーティング", () => {
     }
   });
 
+  it("UI のない環境で全候補が不成立のとき stderr へ出力し終了コードを 1 にする", async () => {
+    const extension = captureRoleExtension({ config }, { findModel: () => undefined });
+    const stderrLines: string[] = [];
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    const originalExitCode = process.exitCode;
+    process.stderr.write = ((chunk: Uint8Array | string) => {
+      stderrLines.push(Buffer.from(chunk).toString());
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      extension.context.hasUI = false;
+      await extension.sessionStart();
+      const handledPrompt = await extension.input("hello");
+      assert.deepEqual(handledPrompt, { action: "handled" });
+      assert.deepEqual(stderrLines, ["no available model for role manager: tier middle\n"]);
+      assert.equal(process.exitCode, 1);
+    } finally {
+      process.stderr.write = originalStderrWrite;
+      process.exitCode = originalExitCode;
+      extension.restore();
+    }
+  });
+
   it("拡張からのメッセージ（再送・role 切替 follow-up）は再評価しない", async () => {
     const extension = captureRoleExtension();
     try {
@@ -1062,6 +1085,38 @@ describe("subagent", () => {
       assert.equal(result.isError, true);
       assert.equal(result.details.results[0].stopReason, "killed");
       assert.match(result.content[0].text, /killed by a signal/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("exit 0 でも出力のない子をエラーとして親へ返す", async () => {
+    const extension = captureRoleExtension();
+    extension.respondToChild((child) => child.emit("close", 0));
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      assert.equal(result.isError, true);
+      assert.equal(result.content[0].text, "Child failed: (no output)");
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("exit 0 で出力がなく stderr がある子は stderr を失敗出力として親へ返す", async () => {
+    const extension = captureRoleExtension();
+    extension.respondToChild((child) => {
+      child.stderr.emit("data", Buffer.from("no available model for role worker: tier low\n"));
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      assert.equal(result.isError, true);
+      assert.equal(
+        result.content[0].text,
+        "Child failed: no available model for role worker: tier low\n",
+      );
     } finally {
       extension.restore();
     }

@@ -270,7 +270,13 @@ function getFinalOutput(messages: Message[]): string {
 }
 
 function isFailedResult(result: ChildRun): boolean {
-  return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+  // exit 0 でも最終アシスタント出力が空なら、モデル未割当等の静かな失敗として扱う
+  return (
+    result.exitCode !== 0 ||
+    result.stopReason === "error" ||
+    result.stopReason === "aborted" ||
+    getFinalOutput(result.messages) === ""
+  );
 }
 
 function getResultOutput(result: ChildRun): string {
@@ -673,8 +679,16 @@ export default function roleExtension(
   }
 
   function notifyNoModel(role: Role, ctx: ExtensionContext, level: "warning" | "error"): void {
-    if (!ctx.hasUI) return;
-    ctx.ui.notify(`no available model for role ${role}: tier ${config.roles[role].tier}`, level);
+    const message = `no available model for role ${role}: tier ${config.roles[role].tier}`;
+    if (!ctx.hasUI) {
+      // UI のない子プロセスでは通知が見えないまま終わるため、stderr と終了コードで伝える
+      if (level === "error") {
+        process.stderr.write(`${message}\n`);
+        process.exitCode = 1;
+      }
+      return;
+    }
+    ctx.ui.notify(message, level);
   }
 
   function applyRoleTools(ctx: ExtensionContext, role: Role): void {
