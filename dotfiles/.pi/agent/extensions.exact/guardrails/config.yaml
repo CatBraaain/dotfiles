@@ -27,7 +27,8 @@ write:
     - ~/.cache/go-build
     - ~/go/pkg/mod
   ask: []
-  deny: []
+  deny:
+    - ~/.pi/agent/extensions/guardrails/config.yaml
 
 credentials: []
 
