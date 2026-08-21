@@ -161,11 +161,13 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 
 ## 7. run-tools CLI による fs IO
 
-本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、execute を差し替える。認可（§2〜§4）を通ったツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
+本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `bash` には書き込み失敗（read-only file system）時に `write` / `edit` での許可要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通ったツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
 | ツール | sandbox 内での実行 |
 | --- | --- |
 | `read` `write` `edit` `grep` `find` `ls` `bash` | `bun run-tools.ts <tool-name>` → pi 標準 tool definition の execute |
+
+bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾に `write` / `edit` での許可要求へ誘導するヒント文を追記してモデルへ返す。
 
 - **入力**: stdin に tool call パラメータの JSON を渡す。bash は `PI_*` 環境変数用のセッション情報も受け取る。
 - **出力**: stdout に tool result の JSON（`ok: true` なら `result`、`ok: false` なら `error`）。失敗時は非 0 で終了する。

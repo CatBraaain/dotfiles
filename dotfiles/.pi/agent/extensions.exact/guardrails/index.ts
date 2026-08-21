@@ -53,6 +53,16 @@ function sessionFromContext(context: any): ToolSession {
   };
 }
 
+const EROFS_HINT =
+  "Sandbox blocked this write. Do not retry with bash; call the write or edit tool on the target path to request access from the user.";
+
+/** Append the EROFS guidance to the bash tool result so the model sees it at failure time. */
+function appendErofsHint(result: AgentToolResult<any>): AgentToolResult<any> {
+  const text = result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+  if (!text.includes("Read-only file system")) return result;
+  return { ...result, content: [...result.content, { type: "text", text: EROFS_HINT }] };
+}
+
 export default function guardrailsExtension(pi: ExtensionAPI): void {
   const cwd = process.cwd();
   const sandbox = new Sandbox(cwd);
@@ -66,13 +76,15 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     ...bashTool,
+    description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call the write or edit tool on the target path to request access from the user.`,
     async execute(id, params, signal, _onUpdate, context) {
       await sandbox.authorizeCommand(params.command, context);
-      return sandbox.runTool("bash", params, {
+      const result = await sandbox.runTool("bash", params, {
         mode: "bash",
         signal,
         session: sessionFromContext(context),
       });
+      return appendErofsHint(result);
     },
     renderCall(args, theme, context) {
       if (context.state && context.executionStarted && context.state.startedAt === undefined)
@@ -85,8 +97,14 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
       if (options.expanded) return new Text(theme.fg("dim", resultText(result)), 0, 0);
       const state = context.state;
       const durationMs =
-        state?.startedAt !== undefined ? (state.endedAt ?? Date.now()) - state.startedAt : undefined;
-      return new Text(formatToolResultSummary("bash", {}, result, { durationMs }, theme) ?? "", 0, 0);
+        state?.startedAt !== undefined
+          ? (state.endedAt ?? Date.now()) - state.startedAt
+          : undefined;
+      return new Text(
+        formatToolResultSummary("bash", {}, result, { durationMs }, theme) ?? "",
+        0,
+        0,
+      );
     },
   });
 
@@ -125,6 +143,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
   );
   pi.registerTool({
     ...writeTool,
+    description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
     async execute(_id, params, signal, _onUpdate, context) {
       await sandbox.authorizePath("write", resolve(cwd, params.path), context);
       return sandbox.runTool("write", params, { mode: "fs", signal });
@@ -145,6 +164,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
   });
   pi.registerTool({
     ...editTool,
+    description: `${editTool.description} Editing an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
     renderShell: "default",
     async execute(_id, params, signal, _onUpdate, context) {
       await sandbox.authorizePath("read", resolve(cwd, params.path), context);
