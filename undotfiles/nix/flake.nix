@@ -42,8 +42,8 @@
             llm-agents.apm
             llm-agents.claude-code
             llm-agents.cursor-agent
-            # (llm-agents.pi.override { useBun = false; })
-            llm-agents.pi
+            (llm-agents.pi.override { useBun = false; })
+            # llm-agents.pi
             act
             bubblewrap # bash-sandbox
             bun
