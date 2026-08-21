@@ -78,6 +78,7 @@
             ripgrep
             rtk
             socat # bash-sandbox
+            tmux
             tokei
             tree-sitter
             tsgolint
