@@ -132,33 +132,6 @@ read: {}
   );
 
   it(
-    "read の動的許可は write の許可にならない",
-    withSandbox(
-      `
-read: {}
-write: {}
-`,
-      projectRoot,
-      async (sandbox) => {
-        const confirmedOperations: string[] = [];
-        const context = {
-          cwd: projectRoot,
-          hasUI: true,
-          ui: {
-            confirm: async (title: string) => {
-              confirmedOperations.push(title);
-              return true;
-            },
-          },
-        };
-        await sandbox.authorizePath("read", "/workspace/project/file.txt", context);
-        await sandbox.authorizePath("write", "/workspace/project/file.txt", context);
-        assert.deepEqual(confirmedOperations, ["Allow read access?", "Allow write access?"]);
-      },
-    ),
-  );
-
-  it(
     "ask パスはユーザー拒否で失敗する",
     withSandbox(
       `
@@ -403,6 +376,173 @@ describe("§3.c アクションの決定", () => {
     const section = expandPathSection({ allow: ["."] }, projectRoot);
     assert.equal(resolvePathAction(section, "/tmp/file.txt"), "deny");
   });
+});
+
+describe("§3 動的拡張のライフサイクル", () => {
+  const withDynamicSandbox =
+    (configYaml: string, test: (dir: string, sandbox: Sandbox) => Promise<void> | void) =>
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "guardrails-dynamic-"));
+      try {
+        const configPath = join(dir, "config.yaml");
+        writeFileSync(configPath, configYaml);
+        await test(dir, new Sandbox(dir, configPath));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+  const confirmOnlyUi = { confirm: async () => true };
+  const chooseDirectoryScopeUi = {
+    confirm: async () => true,
+    select: async (_title: string, scopeOptions: string[]) => scopeOptions[1],
+  };
+
+  it(
+    "read の動的許可は write の許可にならない",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const notePath = join(dir, "file.txt");
+      const confirmedOperations: string[] = [];
+      const context = {
+        cwd: dir,
+        hasUI: true,
+        ui: {
+          confirm: async (title: string) => {
+            confirmedOperations.push(title);
+            return true;
+          },
+        },
+      };
+      await sandbox.authorizePath("read", notePath, context);
+      await sandbox.authorizePath("write", notePath, context);
+      assert.deepEqual(confirmedOperations, ["Allow read access?", "Allow write access?"]);
+    }),
+  );
+
+  it(
+    "write のファイルスコープ承認は存在しないファイルをフェンス外で作成する",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const newFilePath = join(dir, "nested", "new.txt");
+      await sandbox.authorizePath("write", newFilePath, {
+        cwd: dir,
+        hasUI: true,
+        ui: confirmOnlyUi,
+      });
+      assert.equal(existsSync(newFilePath), true);
+    }),
+  );
+
+  it(
+    "write の動的許可パスは書き込み可能 bind になる",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const filePath = join(dir, "new.txt");
+      await sandbox.authorizePath("write", filePath, {
+        cwd: dir,
+        hasUI: true,
+        ui: confirmOnlyUi,
+      });
+      const bindAt = sandbox.buildArgs("bash").indexOf(filePath);
+      assert.deepEqual(sandbox.buildArgs("bash").slice(bindAt - 1, bindAt + 2), [
+        "--bind-try",
+        filePath,
+        filePath,
+      ]);
+    }),
+  );
+
+  it(
+    "write のディレクトリスコープ承認は親ディレクトリを作成しファイルは作らない",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const newFilePath = join(dir, "made", "sub", "new.txt");
+      await sandbox.authorizePath("write", newFilePath, {
+        cwd: dir,
+        hasUI: true,
+        ui: chooseDirectoryScopeUi,
+      });
+      assert.equal(existsSync(join(dir, "made", "sub")), true);
+      assert.equal(existsSync(newFilePath), false);
+    }),
+  );
+
+  it(
+    "ディレクトリスコープの動的許可は配下の別ファイルで再確認しない",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      let selectCount = 0;
+      const context = {
+        cwd: dir,
+        hasUI: true,
+        ui: {
+          confirm: async () => true,
+          select: async (_title: string, scopeOptions: string[]) => {
+            selectCount++;
+            return scopeOptions[1];
+          },
+        },
+      };
+      await sandbox.authorizePath("write", join(dir, "pkg", "a.txt"), context);
+      await sandbox.authorizePath("write", join(dir, "pkg", "b.txt"), context);
+      assert.equal(selectCount, 1);
+    }),
+  );
+
+  it(
+    "write スコープ選択のキャンセルは拒否される",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      await assert.rejects(async () => {
+        await sandbox.authorizePath("write", join(dir, "new.txt"), {
+          cwd: dir,
+          hasUI: true,
+          ui: {
+            confirm: async () => true,
+            select: async () => undefined,
+          },
+        });
+      }, /Access denied by user/);
+    }),
+  );
+
+  it("明示 deny は動的許可のスコープ伝播より優先する", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "guardrails-dynamic-deny-"));
+    try {
+      writeFileSync(join(dir, ".env"), "");
+      const configPath = join(dir, "config.yaml");
+      writeFileSync(configPath, `read: {}\nwrite:\n  deny: ["**/.env"]\n`);
+      const sandbox = new Sandbox(dir, configPath);
+      let selectCount = 0;
+      const context = {
+        cwd: dir,
+        hasUI: true,
+        ui: {
+          confirm: async () => true,
+          select: async (_title: string, scopeOptions: string[]) => {
+            selectCount++;
+            return scopeOptions[1];
+          },
+        },
+      };
+      await sandbox.authorizePath("write", join(dir, "note.txt"), context);
+      await assert.rejects(
+        async () => sandbox.authorizePath("write", join(dir, ".env"), context),
+        /Access denied/,
+      );
+      assert.equal(selectCount, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it(
+    "read の動的許可はパスを作成しない",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const missingPath = join(dir, "missing.txt");
+      await sandbox.authorizePath("read", missingPath, {
+        cwd: dir,
+        hasUI: true,
+        ui: confirmOnlyUi,
+      });
+      assert.equal(existsSync(missingPath), false);
+    }),
+  );
 });
 
 describe("§4 bash コマンドの実行結果", () => {

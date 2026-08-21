@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,10 +28,15 @@ type GuardrailsConfig = {
   commands?: RuleSection;
 };
 
+type ToolUI = {
+  confirm(title: string, message: string): Promise<boolean>;
+  select?(title: string, options: string[]): Promise<string | undefined>;
+};
+
 type ToolContext = {
   cwd: string;
   hasUI?: boolean;
-  ui?: { confirm(title: string, message: string): Promise<boolean> };
+  ui?: ToolUI;
 };
 
 type RunOptions = {
@@ -209,14 +214,18 @@ export function expandPathSection(
   };
 }
 
-function pathsMatchCandidate(paths: string[], candidatePath: string): boolean {
+function pathCovers(grantedPath: string, candidatePath: string): boolean {
   const normalizedCandidate = resolve(candidatePath);
-  return paths.some(
-    (path) =>
-      path === "/**" ||
-      normalizedCandidate === path ||
-      normalizedCandidate.startsWith(`${path}${sep}`),
+  return (
+    grantedPath === "/**" ||
+    grantedPath === "/" ||
+    normalizedCandidate === grantedPath ||
+    normalizedCandidate.startsWith(`${grantedPath}${sep}`)
   );
+}
+
+function pathsMatchCandidate(paths: string[], candidatePath: string): boolean {
+  return paths.some((path) => pathCovers(path, candidatePath));
 }
 
 export function resolvePathAction(
@@ -365,7 +374,7 @@ export class Sandbox {
     return args;
   }
 
-  authorizePath(
+  async authorizePath(
     operation: "read" | "write",
     candidatePath: string,
     context: ToolContext,
@@ -374,22 +383,63 @@ export class Sandbox {
     if (pathsMatchCandidate(this.credentialPaths, absolutePath)) {
       throw new Error(`Access denied for credential path: ${absolutePath}`);
     }
-    const dynamicAccess = this.dynamicPaths.get(absolutePath);
-    if (dynamicAccess?.has(operation)) return Promise.resolve();
-
     const section = operation === "read" ? this.readPaths : this.writePaths;
     const action = resolvePathAction(section, absolutePath);
-    if (action === "allow") return Promise.resolve();
+    if (action === "allow") return;
     const explicitlyDenied = pathsMatchCandidate(section.deny, absolutePath);
     if (action === "deny" && explicitlyDenied) throw new Error(`Access denied: ${absolutePath}`);
+    if (this.hasDynamicGrant(operation, absolutePath)) return;
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
-    return context.ui.confirm(`Allow ${operation} access?`, absolutePath).then((approved) => {
-      if (!approved) throw new Error(`Access denied by user: ${absolutePath}`);
-      const accessModes = this.dynamicPaths.get(absolutePath) ?? new Set<"read" | "write">();
-      accessModes.add(operation);
-      this.dynamicPaths.set(absolutePath, accessModes);
-    });
+    await this.requestAccess(operation, absolutePath, context.ui);
+  }
+
+  private hasDynamicGrant(operation: "read" | "write", candidatePath: string): boolean {
+    for (const [grantedPath, accessModes] of this.dynamicPaths)
+      if (accessModes.has(operation) && pathCovers(grantedPath, candidatePath)) return true;
+    return false;
+  }
+
+  private async requestAccess(
+    operation: "read" | "write",
+    absolutePath: string,
+    ui: ToolUI,
+  ): Promise<void> {
+    const directoryScopeOption = "Directory (subtree)";
+    if (operation === "write" && ui.select) {
+      const selectedScope = await ui.select(`Allow write access? ${absolutePath}`, [
+        "File only",
+        directoryScopeOption,
+      ]);
+      if (selectedScope === undefined) throw new Error(`Access denied by user: ${absolutePath}`);
+      const scope = selectedScope === directoryScopeOption ? "directory" : "file";
+      const grantPath = scope === "directory" ? dirname(absolutePath) : absolutePath;
+      this.addDynamicGrant("write", grantPath, scope);
+      return;
+    }
+    const approved = await ui.confirm(`Allow ${operation} access?`, absolutePath);
+    if (!approved) throw new Error(`Access denied by user: ${absolutePath}`);
+    this.addDynamicGrant(operation, absolutePath, "file");
+  }
+
+  private addDynamicGrant(
+    operation: "read" | "write",
+    grantPath: string,
+    scope: "file" | "directory",
+  ): void {
+    const accessModes = this.dynamicPaths.get(grantPath) ?? new Set<"read" | "write">();
+    accessModes.add(operation);
+    this.dynamicPaths.set(grantPath, accessModes);
+    if (operation === "write") this.ensureGrantPathExists(grantPath, scope);
+  }
+
+  private ensureGrantPathExists(grantPath: string, scope: "file" | "directory"): void {
+    if (scope === "directory") {
+      mkdirSync(grantPath, { recursive: true });
+      return;
+    }
+    mkdirSync(dirname(grantPath), { recursive: true });
+    if (!existsSync(grantPath)) writeFileSync(grantPath, "");
   }
 
   authorizeCommand(command: string, context: ToolContext): Promise<void> {
