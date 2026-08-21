@@ -26,6 +26,7 @@
 |---|---|---|
 | `.xxx` | `dot_xxx` | ドットファイル表現 |
 | `xxx.exact`（ディレクトリ） | `exact_xxx` | 完全一致ディレクトリ（`.xxx.exact` → `exact_dot_xxx`） |
+| `xxx.executable`（ファイル） | `executable_xxx` | 実行可能ファイル（chezmoi はソースの実行ビットを無視するため、名前で指定する） |
 | `xxx.merge.json` / `xxx.merge.yaml` | `modify_xxx.json` / `modify_xxx.yaml` | 独自: `~` の実ファイルと JSON/YAML を深くマージする modify-template |
 | `xxx.overwrite.json` / `xxx.overwrite.yaml` | （ベースへ統合され消滅） | 独自: 同階層のベース `xxx.json` / `xxx.yaml` へ深くマージする。PC ごとのローカル差分用（gitignore、配列は tier キー単位で丸ごと置換） |
 

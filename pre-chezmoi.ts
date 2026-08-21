@@ -146,3 +146,11 @@ for (const entry of exactEntries) {
   const dstPath = join(dirname(entry), `exact_${name.replace(/\.exact$/, "")}`);
   await rename(entry, dstPath);
 }
+
+// file xxx.executable -> executable_xxx (chezmoi derives the exec bit from the
+// name prefix, not from the source file's mode)
+for await (const entry of new Bun.Glob("dist/**/*.executable").scan({ dot: true })) {
+  const name = basename(entry);
+  const dstPath = join(dirname(entry), `executable_${name.replace(/\.executable$/, "")}`);
+  await rename(entry, dstPath);
+}
