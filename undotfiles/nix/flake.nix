@@ -67,6 +67,7 @@
             just
             just-lsp
             keep-sorted
+            mieru
             mise
             nixfmt
             nodejs
