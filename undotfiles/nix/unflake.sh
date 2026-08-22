@@ -3,3 +3,4 @@ if ! command -v vp >/dev/null 2>&1; then
 fi
 go install github.com/karust/openserp@latest
 uv tool install trafilatura[all]
+uv tool install mineru[all]
