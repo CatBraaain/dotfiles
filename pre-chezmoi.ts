@@ -99,11 +99,13 @@ const pathMaps =
         roo: ".roo",
         sharex: "Documents/ShareX",
         vscode: "AppData/Roaming/Code/User",
+        zed: "AppData/Roaming/Zed",
       }
     : {
         docker: ".docker/desktop",
         erdtree: ".config/erdtree",
         "git-cliff": ".config/git-cliff",
+        zed: ".config/zed",
       };
 
 await rm("dist", { recursive: true, force: true });

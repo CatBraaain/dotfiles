@@ -1,0 +1,97 @@
+[
+  {
+    "context": "Workspace",
+    "use_key_equivalents": true,
+    "bindings": {
+      "alt-e": "workspace::FocusCenterPane",
+      "alt-t": "workspace::NewTerminal",
+      "ctrl-g": "command_palette::Toggle",
+      "ctrl-k ctrl-e": "encoding_selector::Toggle",
+      "ctrl-k ctrl-l": "language_selector::Toggle",
+      "ctrl-s": "workspace::Save",
+      "ctrl-shift-s": "zed::OpenSettings",
+      "ctrl-t": "workspace::NewFile"
+    }
+  },
+  {
+    "context": "Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-0": "editor::UnfoldAll",
+      "ctrl-1": "editor::FoldAtLevel_1",
+      "ctrl-2": "editor::FoldAtLevel_2",
+      "ctrl-3": "editor::FoldAtLevel_3",
+      "ctrl-4": "editor::FoldAtLevel_4",
+      "ctrl-5": "editor::FoldAtLevel_5",
+      "ctrl-6": "editor::FoldAtLevel_6",
+      "ctrl-7": "editor::FoldAtLevel_7",
+      "ctrl-a": "editor::SelectAll",
+      "ctrl-b": "editor::ToggleBookmark",
+      "ctrl-c": "editor::Copy",
+      "ctrl-d": "editor::DuplicateLineDown",
+      "ctrl-q": ["editor::ToggleComments", { "advance_downwards": false }],
+      "ctrl-shift-a": "editor::SelectLargerSyntaxNode",
+      "ctrl-shift-d": "editor::DeleteLine",
+      "ctrl-shift-q": "editor::ToggleBlockComments",
+      "ctrl-shift-space": "editor::ShowSignatureHelp",
+      "ctrl-v": "editor::Paste",
+      "ctrl-x": "editor::Cut",
+      "ctrl-z": "editor::Undo",
+      "ctrl-shift-z": "editor::Redo",
+      "tab": "editor::ConfirmCompletion"
+    }
+  },
+  {
+    "context": "Editor && mode == full",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-f": "buffer_search::Deploy",
+      "ctrl-g": "command_palette::Toggle",
+      "ctrl-k ctrl-f": "editor::Format",
+      "ctrl-r": "editor::SpawnNearestTask",
+      "ctrl-shift-f": "editor::Rename",
+      "ctrl-shift-s": "zed::OpenSettings"
+    }
+  },
+  {
+    "context": "Editor && extension == md",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-p": "markdown::OpenPreview"
+    }
+  },
+  {
+    "context": "ProjectPanel",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-n": "project_panel::NewFile",
+      "ctrl-shift-f": "project_panel::Rename",
+      "ctrl-shift-n": "project_panel::NewDirectory"
+    }
+  },
+  {
+    "context": "Pane",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-tab": "pane::ActivateNextItem",
+      "ctrl-shift-tab": "pane::ActivatePreviousItem",
+      "ctrl-w": ["pane::CloseActiveItem", { "close_pinned": false }],
+      "ctrl-shift-t": "pane::ReopenClosedItem"
+    }
+  },
+  {
+    "context": "BufferSearchBar > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-f": "search::SelectNextMatch",
+      "ctrl-shift-f": "search::SelectPreviousMatch"
+    }
+  },
+  {
+    "context": "Terminal",
+    "use_key_equivalents": true,
+    "bindings": {
+      "alt-t": "workspace::NewTerminal"
+    }
+  }
+]
