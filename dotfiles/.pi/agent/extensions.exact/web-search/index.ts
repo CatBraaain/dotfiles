@@ -249,6 +249,37 @@ export async function pageTitle(
   }
 }
 
+export type WebToolOperations = {
+  search: typeof searchOne;
+  fetch: typeof fetchOne;
+  pageTitle: typeof pageTitle;
+};
+
+const defaultWebToolOperations: WebToolOperations = {
+  search: searchOne,
+  fetch: fetchOne,
+  pageTitle,
+};
+
+class SerialTaskQueue {
+  private previousTask = Promise.resolve();
+
+  async run<Result>(task: () => Promise<Result>): Promise<Result> {
+    const taskBefore = this.previousTask;
+    let completeCurrentTask!: () => void;
+    this.previousTask = new Promise((resolve) => {
+      completeCurrentTask = resolve;
+    });
+
+    await taskBefore;
+    try {
+      return await task();
+    } finally {
+      completeCurrentTask();
+    }
+  }
+}
+
 export function formatBackendLine(attempt: Attempt, successTitle?: string | null): string {
   if (!attempt.ok) return `✗ ${attempt.backend} - "${attempt.error}"`;
   return successTitle ? `✓ ${attempt.backend} - "${successTitle}"` : `✓ ${attempt.backend}`;
@@ -281,7 +312,13 @@ const searchParameters = Type.Object({
 });
 const fetchParameters = Type.Object({ url: Type.String({ description: "Absolute URL to fetch" }) });
 
-export default function (pi: ExtensionAPI) {
+export default function (
+  pi: ExtensionAPI,
+  operations: WebToolOperations = defaultWebToolOperations,
+) {
+  const searchQueue = new SerialTaskQueue();
+  const fetchQueue = new SerialTaskQueue();
+
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
@@ -289,11 +326,8 @@ export default function (pi: ExtensionAPI) {
     parameters: searchParameters,
     async execute(_toolCallId, params, signal, onUpdate) {
       try {
-        const { text, backend, attempts } = await searchOne(
-          params.query,
-          signal,
-          undefined,
-          params.lang,
+        const { text, backend, attempts } = await searchQueue.run(() =>
+          operations.search(params.query, signal, undefined, params.lang),
         );
         return { content: [{ type: "text", text }], details: { backend, attempts } };
       } catch (error) {
@@ -324,9 +358,11 @@ export default function (pi: ExtensionAPI) {
     parameters: fetchParameters,
     async execute(_toolCallId, params, signal, onUpdate) {
       try {
-        const { text, backend, attempts } = await fetchOne(params.url, signal);
-        const title = await pageTitle(params.url, signal);
-        return { content: [{ type: "text", text }], details: { backend, attempts, title } };
+        return await fetchQueue.run(async () => {
+          const { text, backend, attempts } = await operations.fetch(params.url, signal);
+          const title = await operations.pageTitle(params.url, signal);
+          return { content: [{ type: "text", text }], details: { backend, attempts, title } };
+        });
       } catch (error) {
         if (error instanceof AllBackendsFailedError) {
           onUpdate?.({ content: [], details: { attempts: error.attempts } });

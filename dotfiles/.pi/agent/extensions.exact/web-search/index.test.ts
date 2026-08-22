@@ -13,6 +13,7 @@ import webSearchExtension, {
   searchOne,
   type Attempt,
   type BackendEntry,
+  type WebToolOperations,
 } from "./index";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
@@ -37,10 +38,35 @@ type Tool = {
   renderResult: (...args: any[]) => { render(width: number): string[] };
 };
 
-function captureTools(): Map<string, Tool> {
+function captureTools(operations?: WebToolOperations): Map<string, Tool> {
   const tools = new Map<string, Tool>();
-  webSearchExtension({ registerTool: (tool: Tool) => tools.set(tool.name, tool) } as never);
+  webSearchExtension(
+    { registerTool: (tool: Tool) => tools.set(tool.name, tool) } as never,
+    operations,
+  );
   return tools;
+}
+
+type WebOperationResult = Awaited<ReturnType<typeof searchOne>>;
+
+function createWebToolOperations(overrides: Partial<WebToolOperations>): WebToolOperations {
+  return { search: searchOne, fetch: fetchOne, pageTitle, ...overrides };
+}
+
+function successfulOperationResult(input: string): WebOperationResult {
+  return {
+    text: `result for ${input}`,
+    backend: "test",
+    attempts: [{ backend: "test", ok: true }],
+  };
+}
+
+function createDeferred<Result>() {
+  let resolve!: (value: Result | PromiseLike<Result>) => void;
+  const promise = new Promise<Result>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function textOf(result: unknown): string {
@@ -86,6 +112,133 @@ async function callFetch(
 ): Promise<unknown> {
   return fetchTool.execute("call", { url }, signal, undefined, executionContext);
 }
+
+describe("tool request queues", () => {
+  it("starts the next web_search after the preceding search completes", async () => {
+    const firstSearchCompletion = createDeferred<WebOperationResult>();
+    const searchStartOrder: string[] = [];
+    const queuedSearch = captureTools(
+      createWebToolOperations({
+        search: async (query) => {
+          searchStartOrder.push(query);
+          return query === "first"
+            ? firstSearchCompletion.promise
+            : successfulOperationResult(query);
+        },
+      }),
+    ).get("web_search")!;
+
+    const firstRequest = queuedSearch.execute("first", { query: "first" });
+    const secondRequest = queuedSearch.execute("second", { query: "second" });
+
+    await Promise.resolve();
+    assert.deepEqual(searchStartOrder, ["first"]);
+
+    firstSearchCompletion.resolve(successfulOperationResult("first"));
+    await Promise.all([firstRequest, secondRequest]);
+
+    assert.deepEqual(searchStartOrder, ["first", "second"]);
+  });
+
+  it("starts the next web_search after the preceding search fails", async () => {
+    const searchStartOrder: string[] = [];
+    const queuedSearch = captureTools(
+      createWebToolOperations({
+        search: async (query) => {
+          searchStartOrder.push(query);
+          if (query === "first") throw new Error("first search failed");
+          return successfulOperationResult(query);
+        },
+      }),
+    ).get("web_search")!;
+
+    const failedRequest = queuedSearch.execute("first", { query: "first" });
+    const secondRequest = queuedSearch.execute("second", { query: "second" });
+
+    await assert.rejects(failedRequest, /first search failed/);
+    await secondRequest;
+
+    assert.deepEqual(searchStartOrder, ["first", "second"]);
+  });
+
+  it("starts the next web_fetch after the preceding title lookup completes", async () => {
+    const firstTitleCompletion = createDeferred<string | null>();
+    const fetchStartOrder: string[] = [];
+    const queuedFetch = captureTools(
+      createWebToolOperations({
+        fetch: async (url) => {
+          fetchStartOrder.push(url);
+          return successfulOperationResult(url);
+        },
+        pageTitle: async (url) => (url.endsWith("first") ? firstTitleCompletion.promise : null),
+      }),
+    ).get("web_fetch")!;
+
+    const firstRequest = queuedFetch.execute("first", { url: "https://example.com/first" });
+    const secondRequest = queuedFetch.execute("second", { url: "https://example.com/second" });
+
+    await Promise.resolve();
+    assert.deepEqual(fetchStartOrder, ["https://example.com/first"]);
+
+    firstTitleCompletion.resolve(null);
+    await Promise.all([firstRequest, secondRequest]);
+
+    assert.deepEqual(fetchStartOrder, ["https://example.com/first", "https://example.com/second"]);
+  });
+
+  it("starts the next web_fetch after the preceding fetch fails", async () => {
+    const fetchStartOrder: string[] = [];
+    const queuedFetch = captureTools(
+      createWebToolOperations({
+        fetch: async (url) => {
+          fetchStartOrder.push(url);
+          if (url.endsWith("first")) throw new Error("first fetch failed");
+          return successfulOperationResult(url);
+        },
+        pageTitle: async () => null,
+      }),
+    ).get("web_fetch")!;
+
+    const failedRequest = queuedFetch.execute("first", { url: "https://example.com/first" });
+    const secondRequest = queuedFetch.execute("second", { url: "https://example.com/second" });
+
+    await assert.rejects(failedRequest, /first fetch failed/);
+    await secondRequest;
+
+    assert.deepEqual(fetchStartOrder, ["https://example.com/first", "https://example.com/second"]);
+  });
+
+  it("starts web_search and web_fetch independently", async () => {
+    const searchCompletion = createDeferred<WebOperationResult>();
+    const fetchCompletion = createDeferred<WebOperationResult>();
+    const startedTools: string[] = [];
+    const queuedTools = captureTools(
+      createWebToolOperations({
+        search: async () => {
+          startedTools.push("web_search");
+          return searchCompletion.promise;
+        },
+        fetch: async () => {
+          startedTools.push("web_fetch");
+          return fetchCompletion.promise;
+        },
+        pageTitle: async () => null,
+      }),
+    );
+
+    const searchRequest = queuedTools.get("web_search")!.execute("search", { query: "query" });
+    const fetchRequest = queuedTools
+      .get("web_fetch")!
+      .execute("fetch", { url: "https://example.com/" });
+
+    await Promise.resolve();
+    assert.deepEqual(startedTools.sort(), ["web_fetch", "web_search"]);
+
+    searchCompletion.resolve(successfulOperationResult("query"));
+    fetchCompletion.resolve(successfulOperationResult("https://example.com/"));
+    await Promise.all([searchRequest, fetchRequest]);
+  });
+});
 
 describe("web_search 単体（searchOne・モックバックエンド）", () => {
   it("失敗バックエンドを順に飛ばし、最初の成功バックエンドで本文とその名前を返す", async () => {
@@ -283,8 +436,7 @@ describe("web_fetch 統合（execute 経由・実バックエンド）", () => {
   });
 
   it("HTML 以外の本文（text/plain）は変換せずそのまま返す", async () => {
-    const plainTextUrl =
-      "https://raw.githubusercontent.com/karust/openserp/main/README.md";
+    const plainTextUrl = "https://raw.githubusercontent.com/karust/openserp/main/README.md";
     const resultText = textOf(await callFetch(plainTextUrl));
     assert.match(resultText, /OpenSERP/);
   });
