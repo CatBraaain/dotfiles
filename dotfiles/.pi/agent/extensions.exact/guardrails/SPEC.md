@@ -18,7 +18,7 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 ---
 
 ## 2. パスのアクセス結果（通常の fs ツール共通）
-read / write の各操作ごとに、対応する設定セクションからパスのアクション（`allow` / `deny` / `ask`）を解決し（§3）、結果が決まる。edit は対象パスに対して read と write の両方を確認する。`credentials` に指定されたパスは §2.1 の例外に従う。
+read / write の各操作ごとに、対応する設定セクションからパスのアクション（`allow` / `deny` / `ask`）を解決し（§3）、結果が決まる。edit は対象パスに対して read と write の両方を確認する。許可された画像ファイルの `read` は §2.1 に従う。`credentials` に指定されたパスは §2.2 の例外に従う。
 
 | パスのアクション | 結果 |
 | --- | --- |
@@ -30,7 +30,54 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 - 秘密ファイル（`~/.ssh`, `~/.aws`, `~/.gnupg` 等）は `allow` に入れないことで読み出しを制限する。
 - `web_fetch` / `web_search` は fs 制限の対象外。
 
-### credentials の例外
+### 2.1 画像ファイルの read
+
+画像ファイルは、MIMEタイプが `image/*` のファイルである。MIMEタイプを判定できないときだけ、拡張子を補助的に使う。`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`、`.tiff`、`.tif` は画像ファイルとして扱う。
+
+画像ファイルのパスに対する `read` アクセスが許可された後、画像本体を返さずにブロックする。対応するOCRファイルは、元画像のパスに `.ocr.md` を付加したパスである。
+
+| OCRファイル | `read` の結果 |
+| --- | --- |
+| 存在する | 「OCRファイルが存在する場合」のメッセージを返す。 |
+| 存在しない | 「OCRファイルが存在しない場合」のメッセージを返す。 |
+
+返却メッセージの `<image-path>` は、`read` に渡された元画像のパスで置き換える。
+
+OCRファイルが存在する場合:
+
+```text
+IMAGE_BINARY_BLOCKED
+
+画像は直接読み込めない。
+抽出済みのOCRファイルを読み込むこと:
+
+<image-path>.ocr.md
+```
+
+OCRファイルが存在しない場合:
+
+```text
+IMAGE_BINARY_BLOCKED
+
+画像バイナリの直接読み込みは禁止されている。
+画像の内容を読む場合は、AGENTS.mdの画像OCR手順に従うこと。
+
+1. 対応するOCRファイルを確認する:
+   <image-path>.ocr.md
+
+2. OCRファイルが存在しない場合:
+   AGENTS.mdに記載されたMinerU CLIを実行して作成する。
+
+3. 作成済みのOCRファイルをread toolで読み込む。
+
+元画像をVision入力へ自動添付してはならない。
+```
+
+ブロック結果は元画像のバイナリまたは画像コンテンツを含まない。OCRファイルを自動生成・上書き・代読せず、Vision入力へ元画像を自動添付しない。MinerUが失敗しても同じ規則を維持する。
+
+画像以外のファイルは、既存の `read` の振る舞いを維持する。
+
+### 2.2 credentials の例外
 
 `credentials` は、bash コマンドが利用する必要はあるが、pi の fs ツールからは扱わせないファイルパスパターンを指定する。
 
@@ -130,7 +177,7 @@ network は開放。fs 制限の対象外。
 | --- | --- |
 | `read.allow` / `.ask` / `.deny` | read / grep / find / ls のパスアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決） |
 | `write.allow` / `.ask` / `.deny` | write / edit のパスアクション（§2・§3）。allow の固定パスは起動時に作成される（§6.1） |
-| `credentials` | bash の sandbox に read-only で bind するパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.1・§3） |
+| `credentials` | bash の sandbox に read-only で bind するパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands.allow` / `.ask` / `.deny` | コマンドのアクション（§4）。`"*"` は全コマンドにマッチ |
 
 - 優先度 `deny` > `ask` > `allow`。いずれにもマッチしないパス・コマンドは `deny`。
@@ -155,7 +202,7 @@ fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）用の sandbox で�
 | ディレクトリ | 空のディレクトリ（tmpfs マウント） |
 | ファイル | 空のファイル（`/dev/null` を read-only bind） |
 
-bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.1 のとおり read-only で bind される。
+bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.2 のとおり read-only で bind される。
 
 ---
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   CALL_PREVIEW_LIMIT,
   formatFallbackCall,
+  formatPath,
   formatToolCall,
   formatToolResultSummary,
   resultText,
@@ -27,6 +28,18 @@ const plainTheme: ToolTheme = {
   bold: (text) => text,
 };
 
+describe("formatPath", () => {
+  it("cwd 配下の絶対パスを相対パスで表示する", () => {
+    const renderedPath = formatPath("/workspace/project/src/a.ts", "/workspace/project");
+    assert.equal(renderedPath, "src/a.ts");
+  });
+
+  it("親ディレクトリ経由のパスを絶対パスで表示する", () => {
+    const renderedPath = formatPath("../README.md", "/workspace/project");
+    assert.equal(renderedPath, "/workspace/README.md");
+  });
+});
+
 describe("formatToolCall", () => {
   it("bash は $ 付きコマンドを表示する", () => {
     const call = formatToolCall("bash", { command: "git status" }, "/cwd", plainTheme);
@@ -44,14 +57,14 @@ describe("formatToolCall", () => {
     assert.ok(call.includes("my-skill"));
   });
 
-  it("write はパスを表示する", () => {
-    const call = formatToolCall("write", { path: "a.ts" }, "/cwd", plainTheme);
+  it("write は cwd 配下の絶対パスを相対表示する", () => {
+    const call = formatToolCall("write", { path: "/cwd/a.ts" }, "/cwd", plainTheme);
     assert.equal(call, "write a.ts");
   });
 
-  it("edit はパスを表示する", () => {
-    const call = formatToolCall("edit", { path: "b.ts" }, "/cwd", plainTheme);
-    assert.equal(call, "edit b.ts");
+  it("edit は cwd の親にあるパスを絶対表示する", () => {
+    const call = formatToolCall("edit", { path: "/parent/b.ts" }, "/cwd", plainTheme);
+    assert.equal(call, "edit /parent/b.ts");
   });
 
   it("grep はパターンを表示する", () => {
@@ -91,7 +104,13 @@ describe("formatToolResultSummary", () => {
   });
 
   it("bash は duration がないとき done を表示する", () => {
-    const summary = formatToolResultSummary("bash", { command: "ls" }, textResult(""), {}, plainTheme);
+    const summary = formatToolResultSummary(
+      "bash",
+      { command: "ls" },
+      textResult(""),
+      {},
+      plainTheme,
+    );
     assert.equal(summary, "done");
   });
 
@@ -109,7 +128,13 @@ describe("formatToolResultSummary", () => {
   it("edit はブロック数を表示する", () => {
     const summary = formatToolResultSummary(
       "edit",
-      { path: "a.ts", edits: [{ oldText: "x", newText: "y" }, { oldText: "a", newText: "b" }] },
+      {
+        path: "a.ts",
+        edits: [
+          { oldText: "x", newText: "y" },
+          { oldText: "a", newText: "b" },
+        ],
+      },
       textResult(""),
       {},
       plainTheme,

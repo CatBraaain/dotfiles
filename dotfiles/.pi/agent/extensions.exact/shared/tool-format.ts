@@ -1,4 +1,4 @@
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 
 /**
  * Shared formatting helpers for tool call/result rendering.
@@ -67,6 +67,13 @@ export function formatNamedCall(name: string, value: string, theme: ToolTheme): 
   return `${theme.fg("toolTitle", theme.bold(`${name} `))}${theme.fg("accent", value)}`;
 }
 
+export function formatPath(path: string, cwd: string): string {
+  const absolutePath = resolve(cwd, path);
+  const relativePath = relative(cwd, absolutePath);
+  const isOutsideCwd = relativePath === ".." || relativePath.startsWith(`..${sep}`);
+  return isOutsideCwd ? absolutePath : relativePath || ".";
+}
+
 export function formatReadCall(args: { path?: unknown }, cwd: string, theme: ToolTheme): string {
   const skill = classifyReadPath(args, cwd);
   if (skill) {
@@ -76,7 +83,7 @@ export function formatReadCall(args: { path?: unknown }, cwd: string, theme: Too
     );
   }
   const rawPath = args?.path;
-  const pathText = typeof rawPath === "string" ? rawPath : "";
+  const pathText = typeof rawPath === "string" ? formatPath(rawPath, cwd) : "";
   return formatNamedCall("read", pathText, theme);
 }
 
@@ -105,9 +112,9 @@ export function formatToolCall(
     case "read":
       return formatReadCall(args, cwd, theme);
     case "write":
-      return formatNamedCall("write", String(args.path ?? ""), theme);
+      return formatNamedCall("write", formatPath(String(args.path ?? ""), cwd), theme);
     case "edit":
-      return formatNamedCall("edit", String(args.path ?? ""), theme);
+      return formatNamedCall("edit", formatPath(String(args.path ?? ""), cwd), theme);
     case "grep":
       return formatNamedCall("grep", String(args.pattern ?? ""), theme);
     case "find":

@@ -129,7 +129,6 @@ function hasGlob(pattern: string): boolean {
 }
 
 function resolvePattern(pattern: string, cwd: string): string {
-  if (pattern === "*") return "/**";
   const homeExpanded =
     pattern === "~"
       ? homedir()
@@ -162,7 +161,7 @@ function getPathSection(
   return config[operation];
 }
 
-// "/**" is the sentinel produced by resolvePattern("*") and means "all paths" (§3).
+// "/**" is the `read.allow` sentinel for all paths (§3).
 // bun's globSync silently drops dotfiles, so expand by walking the static prefix
 // and testing each path with globToRegExp (same semantics as command matching).
 // ponytail: walks the whole prefix subtree; add per-segment matching if large trees get slow.
@@ -191,11 +190,16 @@ function expandGlobPattern(absolutePattern: string): string[] {
   return matches;
 }
 
-function expandPathPatterns(patterns: string[] | undefined, cwd: string): string[] {
+function expandPathPatterns(
+  patterns: string[] | undefined,
+  cwd: string,
+  allowAllPaths = false,
+): string[] {
   return (patterns ?? []).flatMap((pattern) =>
     expandBraces(pattern).flatMap((expandedPattern) => {
+      if (allowAllPaths && expandedPattern === "*") return ["/**"];
       const resolvedPattern = resolvePattern(expandedPattern, cwd);
-      if (resolvedPattern === "/**" || !hasGlob(resolvedPattern)) return [resolvedPattern];
+      if (!hasGlob(resolvedPattern)) return [resolvedPattern];
       return expandGlobPattern(resolvedPattern);
     }),
   );
@@ -206,9 +210,10 @@ export type ExpandedPathSection = { allow: string[]; ask: string[]; deny: string
 export function expandPathSection(
   section: RuleSection | undefined,
   cwd: string,
+  allowAllPaths = false,
 ): ExpandedPathSection {
   return {
-    allow: expandPathPatterns(section?.allow, cwd),
+    allow: expandPathPatterns(section?.allow, cwd, allowAllPaths),
     ask: expandPathPatterns(section?.ask, cwd),
     deny: expandPathPatterns(section?.deny, cwd),
   };
@@ -275,6 +280,7 @@ export class Sandbox {
   private readonly readPaths: ExpandedPathSection;
   private readonly writePaths: ExpandedPathSection;
   private readonly credentialPaths: string[];
+  private readonly hiddenFsPaths: string[];
   private readonly runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
   private readonly piPackageDir = getPackageDir();
 
@@ -287,9 +293,13 @@ export class Sandbox {
     } catch {
       this.config = {};
     }
-    this.readPaths = expandPathSection(this.config.read, cwd);
+    this.readPaths = expandPathSection(this.config.read, cwd, true);
     this.writePaths = expandPathSection(this.config.write, cwd);
     this.credentialPaths = expandPathPatterns(this.config.credentials, cwd);
+    this.hiddenFsPaths = [
+      ...expandPathPatterns(getPathSection(this.config, "read")?.deny, cwd),
+      ...this.credentialPaths,
+    ];
     this.prepareWriteDirectories();
   }
 
@@ -323,7 +333,7 @@ export class Sandbox {
     };
 
     if (!this.readAllPaths()) {
-      for (const path of expandPathPatterns(readSection?.allow, this.cwd)) mount(path, false);
+      for (const path of expandPathPatterns(readSection?.allow, this.cwd, true)) mount(path, false);
     }
     for (const path of expandPathPatterns(writeSection?.allow, this.cwd)) mount(path, true);
     for (const [path, accessModes] of this.dynamicPaths) mount(path, accessModes.has("write"));
@@ -338,12 +348,7 @@ export class Sandbox {
 
   private addHiddenPaths(args: string[], mode: "fs" | "bash"): void {
     if (mode === "bash") return;
-    const hiddenPatterns = [
-      ...(getPathSection(this.config, "read")?.deny ?? []),
-      ...(this.config.credentials ?? []),
-    ];
-    const hiddenPaths = expandPathPatterns(hiddenPatterns, this.cwd);
-    for (const path of hiddenPaths) {
+    for (const path of this.hiddenFsPaths) {
       if (!existsSync(path)) continue;
       addParentDirectories(args, path);
       if (statSync(path).isDirectory()) args.push("--tmpfs", path);

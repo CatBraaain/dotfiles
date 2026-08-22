@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import guardrailsExtension, {
   COMMAND_PREVIEW_LIMIT,
+  createImageReadBlockResult,
   classifyReadPath,
   countMatchLines,
   countResultLines,
@@ -50,6 +51,17 @@ function withSandbox(
   };
 }
 
+function withTempDirectory(test: (directory: string) => Promise<void> | void): () => Promise<void> {
+  return async () => {
+    const directory = mkdtempSync(join(tmpdir(), "guardrails-test-"));
+    try {
+      await test(directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  };
+}
+
 const approvingUi = { confirm: async () => true };
 
 // 拡張 factory を stub API で読み込み、registerTool されたツールを取り出す
@@ -60,6 +72,23 @@ const captureRegisteredTools = (): Map<string, any> => {
   } as any);
   return registered;
 };
+
+const plainTheme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+};
+
+function renderToolCall(toolName: string, args: Record<string, unknown>): string {
+  const tool = captureRegisteredTools().get(toolName);
+  return tool.renderCall(args, plainTheme).render(200).join("\n").trimEnd();
+}
+
+describe("§1 ツールごとの扱い", () => {
+  it("全 built-in fs ツールを置き換える", () => {
+    const toolNames = [...captureRegisteredTools().keys()].sort();
+    assert.deepEqual(toolNames, ["bash", "edit", "find", "grep", "ls", "read", "write"]);
+  });
+});
 
 describe("§2 パスのアクセス結果", () => {
   const projectRoot = "/workspace/project";
@@ -204,7 +233,61 @@ read:
   });
 });
 
-describe("§2.1 credentials の例外", () => {
+describe("§2.1 画像ファイルの read", () => {
+  const pngBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL0IAAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  it(
+    "OCRファイルがある画像はOCRファイルを案内する",
+    withTempDirectory(async (directory) => {
+      const imagePath = join(directory, "image");
+      writeFileSync(imagePath, pngBytes);
+      writeFileSync(`${imagePath}.ocr.md`, "recognized text");
+
+      const readTool = captureRegisteredTools().get("read");
+      const readResult = await readTool.execute("t", { path: imagePath }, undefined, undefined, {
+        hasUI: false,
+      });
+
+      assert.equal(
+        readResult.content[0].text,
+        `IMAGE_BINARY_BLOCKED\n\n画像は直接読み込めない。\n抽出済みのOCRファイルを読み込むこと:\n\n${imagePath}.ocr.md`,
+      );
+    }),
+  );
+
+  it(
+    "OCRファイルがない画像はOCR手順を案内する",
+    withTempDirectory(async (directory) => {
+      const imagePath = join(directory, "image");
+      writeFileSync(imagePath, pngBytes);
+
+      const readTool = captureRegisteredTools().get("read");
+      const readResult = await readTool.execute("t", { path: imagePath }, undefined, undefined, {
+        hasUI: false,
+      });
+
+      assert.equal(
+        readResult.content[0].text,
+        `IMAGE_BINARY_BLOCKED\n\n画像バイナリの直接読み込みは禁止されている。\n画像の内容を読む場合は、AGENTS.mdの画像OCR手順に従うこと。\n\n1. 対応するOCRファイルを確認する:\n   ${imagePath}.ocr.md\n\n2. OCRファイルが存在しない場合:\n   AGENTS.mdに記載されたMinerU CLIを実行して作成する。\n\n3. 作成済みのOCRファイルをread toolで読み込む。\n\n元画像をVision入力へ自動添付してはならない。`,
+      );
+    }),
+  );
+
+  it("MIMEタイプを判定できないときは画像拡張子を使う", () => {
+    const imageResult = createImageReadBlockResult("/tmp/image.png", null);
+    assert.notEqual(imageResult, undefined);
+  });
+
+  it("判定済みの非画像MIMEタイプでは画像拡張子を使わない", () => {
+    const imageResult = createImageReadBlockResult("/tmp/image.png", "text/plain");
+    assert.equal(imageResult, undefined);
+  });
+});
+
+describe("§2.2 credentials の例外", () => {
   const projectRoot = "/workspace/project";
 
   it(
@@ -309,9 +392,35 @@ describe("§3.b glob パターン", () => {
   );
 
   it('"*" 単体はすべてのパスを read 許可にする', () => {
-    const section = expandPathSection({ allow: ["*"] }, "/cwd");
+    const section = expandPathSection({ allow: ["*"] }, "/cwd", true);
     assert.equal(resolvePathAction(section, "/etc/passwd"), "allow");
   });
+
+  it(
+    '"*" 単体は write の全パス許可にならない',
+    withGlobDir((dir) => {
+      const section = expandPathSection({ allow: ["*"] }, dir);
+      assert.equal(resolvePathAction(section, "/etc/passwd"), "deny");
+    }),
+  );
+
+  it(
+    '"*" 単体は credentials の全パス制限にならない',
+    withGlobDir((dir) => {
+      writeFileSync(join(dir, "credential"), "secret");
+      return withSandbox(
+        `
+read:
+  allow: [/]
+credentials: ["*"]
+`,
+        dir,
+        async (sandbox) => {
+          await sandbox.authorizePath("read", "/etc/passwd", { cwd: dir });
+        },
+      )();
+    }),
+  );
 
   it(
     "セッション中に新規作成されたパスは対象外",
@@ -332,6 +441,41 @@ read:
         },
       )();
     }),
+  );
+
+  it(
+    "セッション中に新規作成された read.deny glob一致パスを隠さない",
+    withGlobDir((dir) =>
+      withSandbox(
+        `
+read:
+  deny: ["${join(dir, "*")}"]
+`,
+        dir,
+        (sandbox) => {
+          const latePath = join(dir, "latecomer");
+          writeFileSync(latePath, "secret");
+          assert.equal(sandbox.buildArgs("fs").includes(latePath), false);
+        },
+      )(),
+    ),
+  );
+
+  it(
+    "セッション中に新規作成された credentials glob一致パスを隠さない",
+    withGlobDir((dir) =>
+      withSandbox(
+        `
+credentials: ["${join(dir, "*")}"]
+`,
+        dir,
+        (sandbox) => {
+          const latePath = join(dir, "latecomer");
+          writeFileSync(latePath, "secret");
+          assert.equal(sandbox.buildArgs("fs").includes(latePath), false);
+        },
+      )(),
+    ),
   );
 });
 
@@ -740,6 +884,17 @@ describe("§6.1 bind とパスの実在保証", () => {
 });
 
 describe("§8 表示", () => {
+  it("main agent の fs ツールは作業ディレクトリ内外でパスを表示し分ける", () => {
+    const workspacePath = join(process.cwd(), "src", "a.ts");
+    const parentPath = resolve(process.cwd(), "..", "README.md");
+    const renderedCalls = [
+      renderToolCall("read", { path: workspacePath }),
+      renderToolCall("write", { path: parentPath, content: "" }),
+      renderToolCall("edit", { path: workspacePath, edits: [] }),
+    ];
+    assert.deepEqual(renderedCalls, ["read src/a.ts", `write ${parentPath}`, "edit src/a.ts"]);
+  });
+
   it("長いコマンドを80文字に切り詰める", () => {
     const longCommand = "a".repeat(COMMAND_PREVIEW_LIMIT + 1);
     assert.equal(truncateCommand(longCommand).length, COMMAND_PREVIEW_LIMIT);

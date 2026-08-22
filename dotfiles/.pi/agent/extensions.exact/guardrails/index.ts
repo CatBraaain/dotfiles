@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { extname, resolve } from "node:path";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashTool,
@@ -14,6 +16,7 @@ import { Sandbox, type ToolSession } from "./sandbox";
 import {
   formatBashCall,
   formatNamedCall,
+  formatPath,
   formatReadCall,
   formatToolResultSummary,
   resultText,
@@ -55,6 +58,61 @@ function sessionFromContext(context: any): ToolSession {
 
 const EROFS_HINT =
   "Sandbox blocked this write. Do not retry with bash; call the write or edit tool on the target path to request access from the user.";
+
+const IMAGE_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".webp",
+  ".gif",
+  ".bmp",
+  ".tiff",
+  ".tif",
+]);
+
+function imageMimeType(path: string): string | null {
+  const result = spawnSync("file", ["--brief", "--mime-type", "--", path], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
+export function createImageReadBlockResult(
+  imagePath: string,
+  detectedMimeType = imageMimeType(imagePath),
+): AgentToolResult<any> | undefined {
+  const isImage =
+    detectedMimeType === null
+      ? IMAGE_EXTENSIONS.has(extname(imagePath).toLowerCase())
+      : detectedMimeType.startsWith("image/");
+  if (!isImage) return undefined;
+
+  const ocrPath = `${imagePath}.ocr.md`;
+  const text = existsSync(ocrPath)
+    ? [
+        "IMAGE_BINARY_BLOCKED",
+        "",
+        "画像は直接読み込めない。",
+        "抽出済みのOCRファイルを読み込むこと:",
+        "",
+        ocrPath,
+      ].join("\n")
+    : [
+        "IMAGE_BINARY_BLOCKED",
+        "",
+        "画像バイナリの直接読み込みは禁止されている。",
+        "画像の内容を読む場合は、AGENTS.mdの画像OCR手順に従うこと。",
+        "",
+        "1. 対応するOCRファイルを確認する:",
+        `   ${ocrPath}`,
+        "",
+        "2. OCRファイルが存在しない場合:",
+        "   AGENTS.mdに記載されたMinerU CLIを実行して作成する。",
+        "",
+        "3. 作成済みのOCRファイルをread toolで読み込む。",
+        "",
+        "元画像をVision入力へ自動添付してはならない。",
+      ].join("\n");
+  return { content: [{ type: "text", text }] } as AgentToolResult<any>;
+}
 
 /** Append the EROFS guidance to the bash tool result so the model sees it at failure time. */
 function appendErofsHint(result: AgentToolResult<any>): AgentToolResult<any> {
@@ -136,8 +194,12 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     "read",
     (args) => args.path,
     async (args, signal, context) => {
-      await sandbox.authorizePath("read", resolve(cwd, args.path), context);
-      return sandbox.runTool("read", args, { mode: "fs", signal });
+      const imagePath = resolve(cwd, args.path);
+      await sandbox.authorizePath("read", imagePath, context);
+      return (
+        createImageReadBlockResult(imagePath) ??
+        sandbox.runTool("read", args, { mode: "fs", signal })
+      );
     },
     { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
   );
@@ -149,7 +211,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
       return sandbox.runTool("write", params, { mode: "fs", signal });
     },
     renderCall(args, theme) {
-      return new Text(formatNamedCall("write", args.path, theme), 0, 0);
+      return new Text(formatNamedCall("write", formatPath(args.path, cwd), theme), 0, 0);
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
@@ -172,7 +234,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
       return sandbox.runTool("edit", params, { mode: "fs", signal });
     },
     renderCall(args, theme) {
-      return new Text(formatNamedCall("edit", args.path, theme), 0, 0);
+      return new Text(formatNamedCall("edit", formatPath(args.path, cwd), theme), 0, 0);
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
