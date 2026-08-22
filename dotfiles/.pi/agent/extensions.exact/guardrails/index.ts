@@ -75,10 +75,10 @@ function imageMimeType(path: string): string | null {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-export function createImageReadBlockResult(
+export function createImageReadBlockError(
   imagePath: string,
   detectedMimeType = imageMimeType(imagePath),
-): AgentToolResult<any> | undefined {
+): Error | undefined {
   const isImage =
     detectedMimeType === null
       ? IMAGE_EXTENSIONS.has(extname(imagePath).toLowerCase())
@@ -111,7 +111,7 @@ export function createImageReadBlockResult(
         "",
         "元画像をVision入力へ自動添付してはならない。",
       ].join("\n");
-  return { content: [{ type: "text", text }] } as AgentToolResult<any>;
+  return new Error(text);
 }
 
 /** Append the EROFS guidance to the bash tool result so the model sees it at failure time. */
@@ -196,10 +196,9 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     async (args, signal, context) => {
       const imagePath = resolve(cwd, args.path);
       await sandbox.authorizePath("read", imagePath, context);
-      return (
-        createImageReadBlockResult(imagePath) ??
-        sandbox.runTool("read", args, { mode: "fs", signal })
-      );
+      const imageReadBlockError = createImageReadBlockError(imagePath);
+      if (imageReadBlockError) throw imageReadBlockError;
+      return sandbox.runTool("read", args, { mode: "fs", signal });
     },
     { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
   );
