@@ -95,7 +95,7 @@ tier をまたいだ降格は行わない。
 
 | タイミング | 動作 |
 | --- | --- |
-| セッション開始 | 初期 role（`--role` フラグで指定された role、なければ `default`）の tier の候補を適用する |
+| セッション開始 | 初期 role（`--role` フラグで指定された定義済みの role、指定なしまたは未定義なら `default`）の tier の候補を適用する |
 | `/new` | 手動選択を解除し、cooldown をすべて破棄し、初期 role の tier の候補を適用する |
 | セッション切替・分岐（`/resume`・`/fork`） | 手動選択を解除し、初期 role の tier の候補を適用する |
 | `/reload` | 設定を読み込み直す。手動選択状態と cooldown は維持する |
@@ -131,7 +131,14 @@ stateDiagram-v2
 
 ## レート制限（429）時のフォールバック
 
-429 を受信したモデルは cooldown（待機状態）に入る。待機期間は `Retry-After` ヘッダーで決まる。
+次のいずれかを受けたモデルは cooldown（待機状態）に入る。
+
+| 入力 | レート制限として扱う条件 | 待機期間 |
+| --- | --- | --- |
+| HTTPレスポンス | status が `429` | `Retry-After` ヘッダーに従う |
+| 最終assistantエラー | `stopReason` が `error` で、`errorMessage` に `429`、`code":"1310"`、`Weekly Limit Exhausted`、または `Monthly Limit Exhausted` を含む | 30分 |
+
+HTTPレスポンスの `Retry-After` は次のように解釈する。
 
 | `Retry-After` の内容 | 待機期間 |
 | --- | --- |
@@ -141,20 +148,37 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-    A([429 を受信]) --> B[現在のモデルを cooldown に入れる]
+    A([レート制限を受信]) --> B[現在のモデルを cooldown に入れる]
     B --> C{tier 内に次候補あり?}
-    C -->|なし| D[エラーを通知して再送しない]
+    C -->|なし| D[エラーを通知してターンを終了]
     C -->|あり| E[次候補へ切り替える]
-    E --> F{直前のユーザープロンプトあり?}
-    F -->|なし| G[切替のみ行う]
-    F -->|あり| H[プロンプトを再送する]
+    E --> F[待機せず同じユーザーメッセージでターンを再試行]
 ```
 
 - 手動状態でも同じ流れでフォールバックする。
-- 429 に対しては再試行せず次候補へ進む。429 以外のエラーの再試行はプロバイダーの再試行設定に従う。
-- 再送は直前のユーザープロンプトについて 1 回だけ行う。直前のプロンプトがなければ再送しない。
+- 次候補への切替後、Pi は追加の待機を入れず、現在のユーザーメッセージを追加せずにターンを再試行する。ユーザーメッセージの履歴件数は増えない。
+- 現在の設定にある最大3候補を順に試行するため、1ターンで最大2回再試行する。
 - フォールバックで切り替えに成功したら `rate limited on <provider>/<model>; switched to <provider>/<model>` を warning で通知する。
-- 次候補がない場合は `rate limited on <provider>/<model>; no fallback available` を error で通知し、再送しない。
+- 次候補がない場合は `rate limited on <provider>/<model>; no fallback available` を error で通知し、再試行しない。
+
+### pi の再試行設定
+
+429 フォールバックでは Pi の agent-level retry を使い、provider-level retry は使わない。`~/.pi/agent/settings.json` には次を設定する。
+
+```json
+{
+  "retry": {
+    "enabled": true,
+    "maxRetries": 2,
+    "baseDelayMs": 0,
+    "provider": {
+      "maxRetries": 0
+    }
+  }
+}
+```
+
+429、`code":"1310"`、`Weekly Limit Exhausted`、`Monthly Limit Exhausted` を含む最終assistantエラーは、次候補への切替後に待機せず再試行する。
 
 ### cooldown（待機状態）
 
@@ -260,7 +284,7 @@ subagent <child-agent>
 
 ### 待機スピナー
 
-子エージェントの実行が確定するまで、ブロックの末尾に待機行を表示する。
+subagent の呼び出しを受け付けた直後から子エージェントの実行が確定するまで、ブロックの末尾に待機行を表示する。
 
 ```text
 <frame> <child-agent>
@@ -268,7 +292,7 @@ subagent <child-agent>
 
 | 項目 | 振る舞い |
 | --- | --- |
-| フレーム | `-` `\` `|` `/` の 4 文字をこの順で循環させる |
+| フレーム | titlebar と同じ `⠋` `⠙` `⠹` `⠸` `⠼` `⠴` `⠦` `⠧` `⠇` `⠏` の 10 文字をこの順で循環させる |
 | 切り替え | 0.1 秒間隔でフレーム文字を切り替える。行を増やさず同じ位置で更新する |
 | テキスト色 | セクション区切りと同じグレー系とする |
 | 消去 | 子エージェントの実行が確定した時点で待機行を消す |

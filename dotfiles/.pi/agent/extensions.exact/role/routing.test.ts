@@ -9,7 +9,7 @@ import {
   evalWhen,
   isCoolingDown,
   isManualSelect,
-  lastUserText,
+  isRateLimitedError,
   parseRetryAfter,
   pickCandidate,
   recordCooldown,
@@ -58,7 +58,8 @@ const route = (
     available?: ModelFound[];
     cooldowns?: Map<string, number>;
   } = {},
-): Promise<ModelFound | null> => pickCandidate(candidates, cooldowns, findIn(available), runWhen, 0);
+): Promise<ModelFound | null> =>
+  pickCandidate(candidates, cooldowns, findIn(available), runWhen, 0);
 
 describe("tier の候補選択", () => {
   it("when が通る候補を採用する", async () => {
@@ -77,6 +78,36 @@ describe("tier の候補選択", () => {
     ];
     const selectedModel = await route(candidates);
     assert.strictEqual(selectedModel?.id, "glm-5.1");
+  });
+
+  it("when の空文字は常に有効になる", async () => {
+    const isAvailable = await evalWhen("   ", async () => {
+      throw new Error("must not execute");
+    }, 5000);
+    assert.equal(isAvailable, true);
+  });
+
+  it("when のタイムアウトは候補を無効にする", async () => {
+    const isAvailable = await evalWhen(
+      "sleep 10",
+      async (_command, options) => {
+        assert.equal(options.timeout, 5000);
+        throw new Error("timed out");
+      },
+      5000,
+    );
+    assert.equal(isAvailable, false);
+  });
+
+  it("when の実行失敗は候補を無効にする", async () => {
+    const isAvailable = await evalWhen(
+      "broken command",
+      async () => {
+        throw new Error("spawn failed");
+      },
+      5000,
+    );
+    assert.equal(isAvailable, false);
   });
 
   it("when 無しは常に候補になる", async () => {
@@ -156,6 +187,28 @@ describe("Retry-After ヘッダ", () => {
   });
 });
 
+describe("最終assistantエラーのレート制限判定", () => {
+  it("429 をレート制限として扱う", () => {
+    assert.equal(isRateLimitedError("Error: 429: too many requests"), true);
+  });
+
+  it("1310 をレート制限として扱う", () => {
+    assert.equal(isRateLimitedError('Error: {"code":"1310"}'), true);
+  });
+
+  it("Weekly Limit Exhausted をレート制限として扱う", () => {
+    assert.equal(isRateLimitedError("Weekly Limit Exhausted"), true);
+  });
+
+  it("Monthly Limit Exhausted をレート制限として扱う", () => {
+    assert.equal(isRateLimitedError("Monthly Limit Exhausted"), true);
+  });
+
+  it("一致しないエラーはレート制限として扱わない", () => {
+    assert.equal(isRateLimitedError("Error: service unavailable"), false);
+  });
+});
+
 describe("手動選択の判定", () => {
   it("ユーザーの set / cycle は手動選択とする", () => {
     assert.strictEqual(isManualSelect("set", false), true);
@@ -166,41 +219,6 @@ describe("手動選択の判定", () => {
     assert.strictEqual(isManualSelect("set", true), false);
     assert.strictEqual(isManualSelect("restore", false), false);
     assert.strictEqual(isManualSelect(undefined, false), false);
-  });
-});
-
-describe("再送は直近のユーザ発言を送る", () => {
-  type Entry = { type: string; message: { role: string; content: unknown } };
-  const message = (role: string, content: unknown): Entry => ({
-    type: "message",
-    message: { role, content },
-  });
-
-  it("branch 内の直近のユーザ発言を返す", () => {
-    const branch = [
-      message("user", "first"),
-      message("assistant", "hi"),
-      message("user", "second"),
-    ];
-    const text = lastUserText(branch as never);
-    assert.strictEqual(text, "second");
-  });
-
-  it("ユーザ発言が無ければ null を返す", () => {
-    const branch = [message("assistant", "hi")];
-    const text = lastUserText(branch as never);
-    assert.strictEqual(text, null);
-  });
-
-  it("複数パートのテキストは連結する", () => {
-    const branch = [
-      message("user", [
-        { type: "text", text: "a" },
-        { type: "text", text: "b" },
-      ]),
-    ];
-    const text = lastUserText(branch as never);
-    assert.strictEqual(text, "a\nb");
   });
 });
 

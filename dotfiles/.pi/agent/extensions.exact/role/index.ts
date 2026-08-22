@@ -12,13 +12,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { spinnerFrame } from "../titlebar/index.ts";
 import { parse as parseYaml } from "yaml";
 import {
   bashExecFrom,
   DEFAULT_COOLDOWN_MS,
   evalWhen,
   isManualSelect,
-  lastUserText,
+  isRateLimitedError,
   modelKey,
   parseRetryAfter,
   pickCandidate,
@@ -182,7 +183,6 @@ export const __abortTimer: {
 interface SavedRoutingState {
   role: Role;
   manual: boolean;
-  lastResent: string;
   cooldowns: Map<string, number>;
 }
 
@@ -202,14 +202,18 @@ export function __resetRoutingState(): void {
   delete (globalThis as Record<string, unknown>)[ROUTING_STATE_KEY];
 }
 
-const SPINNER_FRAMES = ["-", "\\", "|", "/"];
 const SPINNER_INTERVAL_MS = 100;
 const EXIT_STDIO_GRACE_MS = 100;
 
-export function spinnerFrame(nowMs: number): string {
-  const index = Math.floor(nowMs / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
-  return SPINNER_FRAMES[index < 0 ? index + SPINNER_FRAMES.length : index];
-}
+export const __spinnerTimers: {
+  set: (callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>;
+  clear: (timer: ReturnType<typeof setInterval>) => void;
+  now: () => number;
+} = {
+  set: (callback, intervalMs) => setInterval(callback, intervalMs),
+  clear: (timer) => clearInterval(timer),
+  now: () => Date.now(),
+};
 
 let tuiHandle: { requestRender: () => void } | undefined;
 let spinnerTimer: ReturnType<typeof setInterval> | undefined;
@@ -217,12 +221,12 @@ let pendingChildren = 0;
 
 function startSpinnerTimer(): void {
   if (spinnerTimer !== undefined) return;
-  spinnerTimer = setInterval(() => tuiHandle?.requestRender(), SPINNER_INTERVAL_MS);
+  spinnerTimer = __spinnerTimers.set(() => tuiHandle?.requestRender(), SPINNER_INTERVAL_MS);
 }
 
 function stopSpinnerTimerIfIdle(): void {
   if (pendingChildren <= 0 && spinnerTimer !== undefined) {
-    clearInterval(spinnerTimer);
+    __spinnerTimers.clear(spinnerTimer);
     spinnerTimer = undefined;
   }
 }
@@ -328,6 +332,8 @@ async function runChild(
       details: { results: [childResult] },
     });
   };
+
+  emitUpdate();
 
   const exitCode = await new Promise<number>((resolve) => {
     const invocation = getPiInvocation(args);
@@ -453,7 +459,8 @@ async function runChild(
     processHandle.on("close", (code) => {
       finalize(code);
     });
-    processHandle.on("error", () => {
+    processHandle.on("error", (error) => {
+      childResult.errorMessage = error.message;
       finalize(1);
     });
 
@@ -565,7 +572,7 @@ export default function roleExtension(
     renderCall(args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold(`subagent ${args.role ?? "..."}`)), 0, 0);
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, options, theme) {
       const details = result.details as RoleToolDetails | undefined;
       const childResult = details?.results[0];
       if (!childResult) {
@@ -602,13 +609,18 @@ export default function roleExtension(
           if (summary !== undefined) container.addChild(new Text(`  ${summary}`, 0, 0));
         }
       }
-      if (finalOutput) {
+      if (finalOutput && !options.isPartial) {
         container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
         container.addChild(new Markdown(finalOutput.trim(), 0, 0, getMarkdownTheme()));
       }
       if (childResult.pending) {
-        const waitingLine = `${spinnerFrame(Date.now())} ${childResult.role}`;
-        container.addChild(new Text(theme.fg("muted", waitingLine), 0, 0));
+        container.addChild({
+          render: () =>
+            childResult.pending
+              ? [theme.fg("muted", `${spinnerFrame(__spinnerTimers.now())} ${childResult.role}`)]
+              : [],
+          invalidate: () => {},
+        });
       }
       return container;
     },
@@ -624,8 +636,8 @@ export default function roleExtension(
   // ── model routing state ─────────────────────────────────────────────
   let manual = false; // user picked a model manually -> suspend auto-routing
   let switching = false; // our own setModel is in flight (NOT "manual")
-  let lastResent = ""; // dedupe back-to-back resends of the same prompt
   let cooldowns = new Map<string, number>(); // modelKey -> expiry epoch ms
+  let httpRateLimitAwaitingMessage: { modelKey: string; fallbackSucceeded: boolean } | undefined;
 
   const bashExec = bashExecFrom(createLocalBashOperations());
   const runWhen = (when: string | undefined, signal?: AbortSignal) =>
@@ -715,7 +727,6 @@ export default function roleExtension(
           ? saved.role
           : initialRole(config, pi.getFlag("role") as string | undefined);
         manual = saved.manual;
-        lastResent = saved.lastResent;
         cooldowns = saved.cooldowns;
       }
       applyRoleTools(ctx, currentRole);
@@ -723,7 +734,6 @@ export default function roleExtension(
     }
 
     manual = false;
-    lastResent = "";
     // /new は cooldown をすべて破棄する。セッション切替・分岐（resume/fork）は維持する。
     cooldowns =
       event.reason === "startup" || event.reason === "new"
@@ -736,7 +746,7 @@ export default function roleExtension(
   });
 
   pi.on("session_shutdown", async () => {
-    saveRoutingState({ role: currentRole, manual, lastResent, cooldowns });
+    saveRoutingState({ role: currentRole, manual, cooldowns });
   });
 
   // ── pre-prompt re-evaluation ────────────────────────────────────────
@@ -764,26 +774,57 @@ export default function roleExtension(
 
   // ── 429 detection + fallback ────────────────────────────────────────
 
-  pi.on("after_provider_response", async (event, ctx) => {
-    if (event.status !== 429) return;
-    const current = ctx.model;
-    if (!current) return;
-
-    const key = modelKey(current);
-    const waitMs = parseRetryAfter(event.headers["retry-after"]) ?? DEFAULT_COOLDOWN_MS;
-    recordCooldown(cooldowns, key, waitMs, Date.now());
+  async function fallbackAfterRateLimit(
+    rateLimitedModelKey: string,
+    cooldownMs: number,
+    ctx: ExtensionContext,
+  ): Promise<boolean> {
+    recordCooldown(cooldowns, rateLimitedModelKey, cooldownMs, Date.now());
 
     const switchedTo = await applyTierModel(currentRole, ctx, ctx.signal, false);
     if (!switchedTo) {
-      if (ctx.hasUI) ctx.ui.notify(`rate limited on ${key}; no fallback available`, "error");
-      return;
+      if (ctx.hasUI)
+        ctx.ui.notify(`rate limited on ${rateLimitedModelKey}; no fallback available`, "error");
+      return false;
     }
-    if (ctx.hasUI) ctx.ui.notify(`rate limited on ${key}; switched to ${switchedTo}`, "warning");
-    const text = lastUserText(ctx.sessionManager.getBranch());
-    if (text && text !== lastResent) {
-      lastResent = text;
-      pi.sendUserMessage(text, { deliverAs: "followUp" });
+    if (ctx.hasUI)
+      ctx.ui.notify(`rate limited on ${rateLimitedModelKey}; switched to ${switchedTo}`, "warning");
+    return true;
+  }
+
+  function makeRetryableRateLimitMessage(message: Message): Message {
+    const errorMessage = message.errorMessage ?? "provider request failed";
+    return { ...message, errorMessage: `429 fallback available: ${errorMessage}` };
+  }
+
+  pi.on("after_provider_response", async (event, ctx) => {
+    if (event.status !== 429 || !ctx.model) return;
+
+    const rateLimitedModelKey = modelKey(ctx.model);
+    const cooldownMs = parseRetryAfter(event.headers["retry-after"]) ?? DEFAULT_COOLDOWN_MS;
+    const fallbackSucceeded = await fallbackAfterRateLimit(rateLimitedModelKey, cooldownMs, ctx);
+    httpRateLimitAwaitingMessage = { modelKey: rateLimitedModelKey, fallbackSucceeded };
+  });
+
+  pi.on("message_end", async (event, ctx) => {
+    const message = event.message;
+    if (message.role !== "assistant" || message.stopReason !== "error") return;
+
+    const rateLimitedModelKey = modelKey({ provider: message.provider, id: message.model });
+    if (httpRateLimitAwaitingMessage?.modelKey === rateLimitedModelKey) {
+      const { fallbackSucceeded } = httpRateLimitAwaitingMessage;
+      httpRateLimitAwaitingMessage = undefined;
+      if (!fallbackSucceeded) return;
+      return { message: makeRetryableRateLimitMessage(message) };
     }
+    if (!isRateLimitedError(message.errorMessage)) return;
+
+    const fallbackSucceeded = await fallbackAfterRateLimit(
+      rateLimitedModelKey,
+      DEFAULT_COOLDOWN_MS,
+      ctx,
+    );
+    if (fallbackSucceeded) return { message: makeRetryableRateLimitMessage(message) };
   });
 
   // ── tool gating & role commands ─────────────────────────────────────

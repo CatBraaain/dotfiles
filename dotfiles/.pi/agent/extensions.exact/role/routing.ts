@@ -3,12 +3,7 @@
 // extension. Every routing decision lives in these dependency-injected pure
 // functions so tests need neither the pi runtime nor bash.
 
-import type { TextContent } from "@earendil-works/pi-ai";
-import type {
-  BashOperations,
-  SessionEntry,
-  SessionMessageEntry,
-} from "@earendil-works/pi-coding-agent";
+import type { BashOperations } from "@earendil-works/pi-coding-agent";
 
 export interface ModelCandidate {
   provider: string;
@@ -18,6 +13,20 @@ export interface ModelCandidate {
 
 export const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000;
 export const WHEN_TIMEOUT_MS = 5_000;
+
+const RATE_LIMIT_ERROR_PATTERNS = [
+  /\b429\b/,
+  /code"\s*:\s*"1310"/,
+  /Weekly Limit Exhausted/,
+  /Monthly Limit Exhausted/,
+];
+
+export function isRateLimitedError(errorMessage: string | undefined): boolean {
+  return (
+    errorMessage !== undefined &&
+    RATE_LIMIT_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage))
+  );
+}
 
 export function modelKey(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
@@ -120,31 +129,4 @@ export async function evalWhen(
 // pick — not our own setModel in flight (switching), nor a session restore.
 export function isManualSelect(source: string | undefined, switching: boolean): boolean {
   return !switching && (source === "set" || source === "cycle");
-}
-
-export function extractUserText(entry: SessionMessageEntry): string | null {
-  const content = entry.message.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return null;
-  const texts = content.filter(
-    (part): part is TextContent =>
-      typeof part === "object" &&
-      part !== null &&
-      (part as { type?: string }).type === "text",
-  );
-  const joined = texts.map((part) => part.text).join("\n");
-  return joined || null;
-}
-
-// Most recent user message text in a branch, or null if there is none.
-// This is what gets resent after a 429 fallback switch.
-export function lastUserText(branch: SessionEntry[]): string | null {
-  for (let i = branch.length - 1; i >= 0; i--) {
-    const entry = branch[i];
-    if (entry.type === "message" && entry.message.role === "user") {
-      const text = extractUserText(entry as SessionMessageEntry);
-      if (text !== null) return text;
-    }
-  }
-  return null;
 }

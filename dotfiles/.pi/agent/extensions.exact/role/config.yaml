@@ -14,13 +14,7 @@ tiers:
     - provider: zai
       model: glm-5.2
     - provider: openai-codex
-      model: gpt-5.6-luna
-    - provider: commandcode
-      model: deepseek/deepseek-v4-flash
-      when: *deepseek-off-peak
-    - provider: deepseek
-      model: deepseek-v4-flash
-      when: *deepseek-off-peak
+      model: gpt-5.6-terra
   middle:
     - provider: openai-codex
       model: gpt-5.6-luna
