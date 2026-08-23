@@ -13,23 +13,21 @@ tiers:
       when: *zai-off-peak
     - provider: zai
       model: glm-5.2
-    - provider: openai-codex
-      model: gpt-5.6-terra
+    - provider: openrouter
+      model: z-ai/glm-5.2:free
+    - provider: openrouter
+      model: stealth/ox-alpha
+    - provider: commandcode
+      model: stealth/ox-alpha
   middle:
     - provider: openai-codex
       model: gpt-5.6-luna
     - provider: commandcode
       model: deepseek/deepseek-v4-flash
       when: *deepseek-off-peak
-    - provider: deepseek
-      model: deepseek-v4-flash
-      when: *deepseek-off-peak
   low:
     - provider: commandcode
       model: deepseek/deepseek-v4-flash
-      when: *deepseek-off-peak
-    - provider: deepseek
-      model: deepseek-v4-flash
       when: *deepseek-off-peak
     - provider: openai-codex
       model: gpt-5.6-luna

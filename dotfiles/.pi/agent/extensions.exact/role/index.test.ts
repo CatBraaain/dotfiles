@@ -267,13 +267,13 @@ function captureRoleExtension(
   };
 }
 describe("設定", () => {
-  it("agent retry configuration retries twice without a delay", () => {
+  it("agent retry configuration retries five times without a delay", () => {
     const settingsPath = new URL("../../settings.merge.json", import.meta.url);
     const settings = readFileSync(settingsPath, "utf8");
 
     assert.match(
       settings,
-      /"maxRetries": 2,\s*"baseDelayMs": 0,\s*"provider": \{\s*"maxRetries": 0/m,
+      /"maxRetries": 5,\s*"baseDelayMs": 0,\s*"provider": \{\s*"maxRetries": 0/m,
     );
   });
 

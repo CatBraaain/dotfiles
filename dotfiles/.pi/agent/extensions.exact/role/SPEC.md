@@ -157,7 +157,7 @@ flowchart TD
 
 - 手動状態でも同じ流れでフォールバックする。
 - 次候補への切替後、Pi は追加の待機を入れず、現在のユーザーメッセージを追加せずにターンを再試行する。ユーザーメッセージの履歴件数は増えない。
-- 現在の設定にある最大3候補を順に試行するため、1ターンで最大2回再試行する。
+- 現在の role の tier の候補数を N とすると、1ターンで最大 N-1 回再試行し、最大 N 候補を順に試行する。再試行回数は `~/.pi/agent/settings.json` の `retry.maxRetries`（候補数以上を推奨）が上限となる
 - フォールバックで切り替えに成功したら `rate limited on <provider>/<model>; switched to <provider>/<model>` を warning で通知する。
 - 次候補がない場合は `rate limited on <provider>/<model>; no fallback available` を error で通知し、再試行しない。
 
@@ -169,7 +169,7 @@ flowchart TD
 {
   "retry": {
     "enabled": true,
-    "maxRetries": 2,
+    "maxRetries": 5,
     "baseDelayMs": 0,
     "provider": {
       "maxRetries": 0
