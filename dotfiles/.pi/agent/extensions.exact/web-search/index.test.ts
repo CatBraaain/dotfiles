@@ -4,11 +4,16 @@ import assert from "node:assert/strict";
 import webSearchExtension, {
   BACKEND_TIMEOUT_MS,
   defaultFetchBackends,
+  fetchRedditMarkdown,
   defaultSearchBackends,
   fetchOne,
   formatBackendLine,
   formatBackendLines,
   openserpError,
+  parseRedditAtom,
+  parseRedditEmbed,
+  parseRedditOEmbed,
+  parseRedditPostUrl,
   pageTitle,
   searchOne,
   type Attempt,
@@ -544,6 +549,195 @@ describe("web_fetch 表示", () => {
     };
     const lines = renderedLines(fetchTool.renderResult(result));
     assert.deepEqual(lines, ["✓ Jina Reader"]);
+  });
+});
+
+const redditPostUrl = "https://www.reddit.com/r/programming/comments/abc123/test_post/";
+
+// Reddit Atom 実形式に合わせたフィクスチャ（content は HTML エスケープ、本文は Markdown 構文込み）
+const redditAtomFixture = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<feed xmlns="http://www.w3.org/2005/Atom">',
+  '<category term="programming" label="r/programming"/>',
+  "<entry>",
+  "<id>t3_abc123</id>",
+  "<title>Announcement: We&#39;ve Updated The Rules</title>",
+  "<author><name>/u/SampleAuthor</name><uri>https://www.reddit.com/user/SampleAuthor</uri></author>",
+  '<content type="html">&lt;!-- SC_OFF --&gt;&lt;div class=&quot;md&quot;&gt;&lt;p&gt;Hello &lt;a href=&quot;https://example.com/page/&quot;&gt;world&lt;/a&gt;.&lt;/p&gt; &lt;p&gt;&lt;blockquote&gt;&lt;p&gt;Quoted &amp;amp; cited&lt;/p&gt;&lt;/blockquote&gt;&lt;/p&gt;&lt;/div&gt;&lt;!-- SC_ON --&gt;</content>',
+  "<updated>2026-05-23T13:54:37+00:00</updated>",
+  '<link href="https://www.reddit.com/r/programming/comments/abc123/test_post/"/>',
+  "</entry>",
+  "<entry>",
+  "<id>t1_def456</id>",
+  "<title>/u/Commenter on Announcement: We&#39;ve Updated The Rules</title>",
+  "<author><name>/u/Commenter</name></author>",
+  '<content type="html">&lt;div class=&quot;md&quot;&gt;&lt;p&gt;A &lt;em&gt;comment&lt;/em&gt; body.&lt;/p&gt;&lt;/div&gt;</content>',
+  "<updated>2026-05-23T14:18:41+00:00</updated>",
+  '<link href="https://www.reddit.com/r/programming/comments/abc123/test_post/def456/"/>',
+  "</entry>",
+  "</feed>",
+].join("");
+
+type MockResponse = { status: number; statusText: string; body: string };
+
+function mockRedditFetcher(responses: Record<string, MockResponse>): typeof fetch {
+  return (async (url: string) => {
+    const response = responses[url];
+    if (!response) throw new Error(`unexpected request: ${url}`);
+    return {
+      ok: response.status < 400,
+      status: response.status,
+      statusText: response.statusText,
+      text: async () => response.body,
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+}
+
+describe("Reddit URL 判定", () => {
+  it("投稿パーマリンクから RSS・embed・oEmbed の各 URL を組み立てる", () => {
+    const post = parseRedditPostUrl(redditPostUrl);
+    assert.ok(post);
+    assert.equal(post.postId, "abc123");
+    assert.equal(post.permalink, redditPostUrl);
+    assert.equal(post.rssUrl, `${redditPostUrl}.rss?limit=500&sort=top`);
+    assert.match(
+      post.embedUrl,
+      /^https:\/\/embed\.reddit\.com\/r\/programming\/comments\/abc123\/test_post\/\?ref_source=embed/,
+    );
+    assert.match(post.oembedUrl, /reddit\.com\/oembed\?url=/);
+  });
+
+  it("www 省略・末尾スラッシュなしでも permalink を正規化する", () => {
+    const post = parseRedditPostUrl("https://reddit.com/r/programming/comments/abc123");
+    assert.ok(post);
+    assert.equal(post.permalink, "https://www.reddit.com/r/programming/comments/abc123/");
+  });
+
+  it("サブレディット一覧・ユーザーページ・他サイトは対象外", () => {
+    assert.equal(parseRedditPostUrl("https://www.reddit.com/r/programming/"), undefined);
+    assert.equal(parseRedditPostUrl("https://www.reddit.com/user/SampleAuthor"), undefined);
+    assert.equal(
+      parseRedditPostUrl("https://example.com/r/programming/comments/abc123/x/"),
+      undefined,
+    );
+  });
+});
+
+describe("Reddit Atom パース", () => {
+  const parsed = parseRedditAtom(redditAtomFixture)!;
+
+  it("投稿（t3_）のタイトル・作者・更新時刻を取り出す", () => {
+    assert.equal(parsed.post.title, "Announcement: We've Updated The Rules");
+    assert.equal(parsed.post.author, "u/SampleAuthor");
+    assert.equal(parsed.post.updated, "2026-05-23T13:54:37+00:00");
+    assert.equal(parsed.post.permalink, redditPostUrl);
+  });
+
+  it("投稿本文をリンクと引用を保った Markdown に変換する", () => {
+    assert.match(parsed.post.bodyMarkdown, /Hello \[world\]\(https:\/\/example\.com\/page\/\)\./);
+    assert.match(parsed.post.bodyMarkdown, /^> Quoted & cited$/m);
+  });
+
+  it("コメント（t1_）を本文ごと列挙する", () => {
+    assert.equal(parsed.comments.length, 1);
+    assert.equal(parsed.comments[0].author, "u/Commenter");
+    assert.match(parsed.comments[0].bodyMarkdown, /A \*comment\* body\./);
+  });
+
+  it("投稿エントリがないフィードは undefined", () => {
+    assert.equal(parseRedditAtom("<feed></feed>"), undefined);
+  });
+});
+
+describe("Reddit フォールバックパース", () => {
+  it("embed ページからタイトルと表示コメント数を取り出す", () => {
+    const embedHtml = '<a id="embed-title" href="x">Sample Title</a> ... 175 comments';
+    assert.deepEqual(parseRedditEmbed(embedHtml), {
+      title: "Sample Title",
+      displayedCommentCount: 175,
+    });
+  });
+
+  it("embed ページに有効な要素がなければ undefined", () => {
+    assert.equal(parseRedditEmbed("<html></html>"), undefined);
+  });
+
+  it("oEmbed JSON からタイトルを取り出す", () => {
+    assert.deepEqual(parseRedditOEmbed('{"title":"OEmbed Title"}'), { title: "OEmbed Title" });
+    assert.equal(parseRedditOEmbed("not json"), undefined);
+  });
+});
+
+describe("fetchRedditMarkdown", () => {
+  const post = parseRedditPostUrl(redditPostUrl)!;
+
+  it("RSS 成功時は投稿本文とコメント一覧を返す", async () => {
+    const markdown = await fetchRedditMarkdown(
+      redditPostUrl,
+      undefined,
+      mockRedditFetcher({
+        [post.rssUrl]: { status: 200, statusText: "OK", body: redditAtomFixture },
+      }),
+    );
+    assert.match(markdown, /^# Announcement: We've Updated The Rules$/m);
+    assert.match(markdown, /^## Post$/m);
+    assert.match(markdown, /^## Comments \(1 retrieved\)$/m);
+    assert.match(markdown, /^### 1\. u\/Commenter$/m);
+  });
+
+  it("RSS が 429 のとき embed にフォールバックする", async () => {
+    const markdown = await fetchRedditMarkdown(
+      redditPostUrl,
+      undefined,
+      mockRedditFetcher({
+        [post.rssUrl]: { status: 429, statusText: "Too Many Requests", body: "" },
+        [post.embedUrl]: {
+          status: 200,
+          statusText: "OK",
+          body: '<a id="embed-title">Embed Title</a> 42 comments',
+        },
+      }),
+    );
+    assert.match(markdown, /^# Embed Title$/m);
+    assert.match(markdown, /^- Comments: unavailable \(Reddit displays 42\)$/m);
+    assert.match(markdown, /post body unavailable/);
+  });
+
+  it("RSS も embed も失敗するとき oEmbed を試す", async () => {
+    const markdown = await fetchRedditMarkdown(
+      redditPostUrl,
+      undefined,
+      mockRedditFetcher({
+        [post.rssUrl]: { status: 429, statusText: "Too Many Requests", body: "" },
+        [post.embedUrl]: { status: 403, statusText: "Forbidden", body: "" },
+        [post.oembedUrl]: { status: 200, statusText: "OK", body: '{"title":"OEmbed Title"}' },
+      }),
+    );
+    assert.match(markdown, /^# OEmbed Title$/m);
+  });
+
+  it("全経路が失敗したら例外を出す", async () => {
+    const allFailedFetcher = mockRedditFetcher({
+      [post.rssUrl]: { status: 429, statusText: "Too Many Requests", body: "" },
+      [post.embedUrl]: { status: 403, statusText: "Forbidden", body: "" },
+      [post.oembedUrl]: { status: 404, statusText: "Not Found", body: "" },
+    });
+    await assert.rejects(
+      fetchRedditMarkdown(redditPostUrl, undefined, allFailedFetcher),
+      /Unable to fetch Reddit post abc123/,
+    );
+  });
+});
+
+describe("web_fetch バックエンド構成（Reddit 分岐）", () => {
+  it("Reddit 投稿パーマリンクのときバックエンドは Reddit のみでフォールバックしない", () => {
+    const backendNames = defaultFetchBackends(redditPostUrl).map(([name]) => name);
+    assert.deepEqual(backendNames, ["Reddit"]);
+  });
+
+  it("その他の URL では従来どおり trafilatura→fetch+trafilatura→Jina Reader", () => {
+    const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
+    assert.deepEqual(backendNames, ["trafilatura", "fetch+trafilatura", "Jina Reader"]);
   });
 });
 

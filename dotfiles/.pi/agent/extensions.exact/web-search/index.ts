@@ -203,7 +203,302 @@ async function jinaFetch(url: string, signal?: AbortSignal) {
   return fetchText(`https://r.jina.ai/${url}`, signal, headers);
 }
 
+// --- Reddit backend (post permalink -> Atom feed, embed/oEmbed fallback) ---
+
+const REDDIT_USER_AGENT = "Mozilla/5.0 (compatible; pi-web-search/1.0)";
+
+export interface RedditPostUrl {
+  postId: string;
+  permalink: string;
+  rssUrl: string;
+  embedUrl: string;
+  oembedUrl: string;
+}
+
+export function parseRedditPostUrl(rawUrl: string): RedditPostUrl | undefined {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return undefined;
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== "reddit.com" && hostname !== "www.reddit.com") return undefined;
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (
+    parts.length < 4 ||
+    parts[0]?.toLowerCase() !== "r" ||
+    parts[2]?.toLowerCase() !== "comments"
+  ) {
+    return undefined;
+  }
+  const subreddit = parts[1];
+  const postId = parts[3]?.toLowerCase();
+  if (!subreddit || !postId || !/^[a-z0-9]+$/.test(postId)) return undefined;
+  const slug = parts[4] && parts[4] !== ".rss" ? parts[4] : undefined;
+  const rootPath = `/r/${subreddit}/comments/${postId}/${slug ? `${slug}/` : ""}`;
+  const permalink = `https://www.reddit.com${rootPath}`;
+  const oembedUrl = new URL("https://www.reddit.com/oembed");
+  oembedUrl.searchParams.set("url", permalink);
+  return {
+    postId,
+    permalink,
+    rssUrl: `${permalink}.rss?limit=500&sort=top`,
+    embedUrl: `https://embed.reddit.com${rootPath}?ref_source=embed&ref=share&embed=true`,
+    oembedUrl: oembedUrl.toString(),
+  };
+}
+
+function unescapeEntities(text: string): string {
+  // Reddit のフィードは二重エンコード（&amp;amp; 等）のことがあるため安定するまで繰り返す
+  let previous = "";
+  let current = text;
+  while (current !== previous) {
+    previous = current;
+    current = current
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&apos;/gi, "'")
+      .replace(/&(?:#x([0-9a-f]+)|#(\d+));/gi, (_, hex, dec) =>
+        String.fromCodePoint(Number.parseInt(hex ?? dec, hex ? 16 : 10)),
+      );
+  }
+  return current;
+}
+
+// Reddit's Atom content carries Markdown syntax (**bold**, # heading, * list)
+// inside plain HTML tags (<p>, <blockquote>, <a>). Convert tags to Markdown and
+// leave the existing Markdown syntax untouched.
+function htmlFragmentToMarkdown(fragment: string): string {
+  let text = fragment.replace(/<!--[\s\S]*?-->/g, "");
+  text = text.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, inner) => {
+    const quoted = htmlFragmentToMarkdown(inner).replace(/^/gm, "> ");
+    return `\n\n${quoted}\n\n`;
+  });
+  text = text
+    .replace(
+      /<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+      (_, href, label) => `[${label.trim()}](${href})`,
+    )
+    .replace(/<img\b[^>]*src="([^"]*)"[^>]*>/gi, (_, src) => `![](${src})`)
+    .replace(/<(?:strong|b)\b[^>]*>/gi, "**")
+    .replace(/<\/(?:strong|b)>/gi, "**")
+    .replace(/<(?:em|i)\b[^>]*>/gi, "*")
+    .replace(/<\/(?:em|i)>/gi, "*")
+    .replace(/<(?:del|s|strike)\b[^>]*>/gi, "~~")
+    .replace(/<\/(?:del|s|strike)>/gi, "~~")
+    .replace(/<(?:code|kbd)\b[^>]*>/gi, "`")
+    .replace(/<\/(?:code|kbd)>/gi, "`")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<hr\s*\/?>/gi, "\n---\n")
+    .replace(/<li\b[^>]*>/gi, "- ")
+    .replace(/<\/(li|p|div|h[1-6]|ul|ol|pre|tr)>/gi, "\n\n")
+    .replace(/<[^>]*>/g, "");
+  return text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+interface RedditEntry {
+  id: string;
+  title: string;
+  author?: string;
+  bodyMarkdown: string;
+  permalink: string;
+  updated?: string;
+}
+
+export interface RedditFeed {
+  post: RedditEntry;
+  comments: RedditEntry[];
+}
+
+function atomText(entryXml: string, tag: string): string | undefined {
+  const match = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`).exec(entryXml);
+  return match?.[1]?.trim() || undefined;
+}
+
+function cleanAuthor(name: string | undefined): string | undefined {
+  return name?.replace(/^\/u\//, "u/");
+}
+
+export function parseRedditAtom(xml: string): RedditFeed | undefined {
+  const entries: RedditEntry[] = [];
+  for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const entryXml = match[1];
+    const id = atomText(entryXml, "id");
+    if (!id || (!id.startsWith("t3_") && !id.startsWith("t1_"))) continue;
+    const linkHref = /<link\b[^>]*href="([^"]*)"/.exec(entryXml)?.[1];
+    entries.push({
+      id,
+      title: unescapeEntities(atomText(entryXml, "title") ?? "Untitled"),
+      author: cleanAuthor(atomText(entryXml, "name")),
+      bodyMarkdown: htmlFragmentToMarkdown(unescapeEntities(atomText(entryXml, "content") ?? "")),
+      permalink: linkHref ?? "",
+      updated: atomText(entryXml, "updated"),
+    });
+  }
+  const post = entries.find((entry) => entry.id.startsWith("t3_"));
+  if (!post) return undefined;
+  return { post, comments: entries.filter((entry) => entry.id.startsWith("t1_")) };
+}
+
+export function parseRedditEmbed(
+  html: string,
+): { title?: string; displayedCommentCount?: number } | undefined {
+  const title = /id="embed-title"[^>]*>([^<]+)/.exec(html)?.[1]?.trim() || undefined;
+  const countText = /(\d[\d,]*)\s+comments?/i.exec(html)?.[1];
+  const displayedCommentCount =
+    countText === undefined ? undefined : Number.parseInt(countText.replaceAll(",", ""), 10);
+  if (!title && displayedCommentCount === undefined) return undefined;
+  return { title, displayedCommentCount };
+}
+
+export function parseRedditOEmbed(json: string): { title?: string } | undefined {
+  try {
+    const value = JSON.parse(json) as { title?: unknown };
+    const title =
+      typeof value.title === "string" && value.title.trim() ? value.title.trim() : undefined;
+    return title ? { title } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+interface RedditFetchAttempt {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  body: string;
+}
+
+async function fetchRedditText(
+  url: string,
+  signal: AbortSignal,
+  fetcher: typeof fetch,
+): Promise<RedditFetchAttempt> {
+  try {
+    const response = await fetcher(url, {
+      signal,
+      headers: {
+        Accept:
+          "application/atom+xml, application/xml, application/json, text/html;q=0.9, */*;q=0.1",
+        "User-Agent": REDDIT_USER_AGENT,
+      },
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      body: await response.text(),
+    };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return {
+      ok: false,
+      status: 0,
+      statusText: error instanceof Error ? error.message : String(error),
+      body: "",
+    };
+  }
+}
+
+function renderRedditMarkdown(
+  url: RedditPostUrl,
+  feed: RedditFeed | undefined,
+  embed: { title?: string; displayedCommentCount?: number } | undefined,
+  oembed: { title?: string } | undefined,
+): string {
+  const post = feed?.post;
+  const title = post?.title ?? embed?.title ?? oembed?.title ?? `Reddit post ${url.postId}`;
+  const comments = feed?.comments ?? [];
+  const displayed = embed?.displayedCommentCount;
+  const lines = [
+    `# ${title}`,
+    "",
+    `- Author: ${post?.author ?? "unknown"}`,
+    `- Permalink: ${post?.permalink || url.permalink}`,
+  ];
+  if (post?.updated) lines.push(`- Updated: ${post.updated}`);
+  if (feed) {
+    const count =
+      displayed === undefined
+        ? `${comments.length} fetched`
+        : `${comments.length} fetched / ${displayed} displayed`;
+    lines.push(`- Comments: ${count}`);
+  } else {
+    lines.push(
+      `- Comments: unavailable${displayed === undefined ? "" : ` (Reddit displays ${displayed})`}`,
+    );
+  }
+  lines.push(
+    "",
+    "## Post",
+    "",
+    post?.bodyMarkdown || "(post body unavailable from accessible Reddit endpoints)",
+  );
+  if (feed) {
+    // ponytail: RSS はスコア・返信階層を持たない。階層付きスレッドが必要になったら
+    // old.reddit JSON 等の別経路を検討する。
+    lines.push(
+      "",
+      `## Comments (${comments.length} retrieved)`,
+      "",
+      "Scores and reply hierarchy are not exposed by Reddit RSS.",
+      "",
+    );
+    for (const [index, comment] of comments.entries()) {
+      lines.push(
+        `### ${index + 1}. ${comment.author ?? "unknown"}`,
+        "",
+        comment.bodyMarkdown || "(no comment body)",
+        "",
+      );
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+export async function fetchRedditMarkdown(
+  rawUrl: string,
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  const url = parseRedditPostUrl(rawUrl);
+  if (!url) throw new Error(`Not a supported Reddit post URL: ${rawUrl}`);
+  const attemptSignal = AbortSignal.any([
+    signal ?? new AbortController().signal,
+    AbortSignal.timeout(BACKEND_TIMEOUT_MS),
+  ]);
+  const rssAttempt = await fetchRedditText(url.rssUrl, attemptSignal, fetcher);
+  const feed = rssAttempt.ok ? parseRedditAtom(rssAttempt.body) : undefined;
+  let embed: ReturnType<typeof parseRedditEmbed>;
+  if (!feed) {
+    const embedAttempt = await fetchRedditText(url.embedUrl, attemptSignal, fetcher);
+    embed = embedAttempt.ok ? parseRedditEmbed(embedAttempt.body) : undefined;
+  }
+  let oembed: ReturnType<typeof parseRedditOEmbed>;
+  if (!feed && !embed) {
+    const oembedAttempt = await fetchRedditText(url.oembedUrl, attemptSignal, fetcher);
+    oembed = oembedAttempt.ok ? parseRedditOEmbed(oembedAttempt.body) : undefined;
+  }
+  if (!feed && !embed && !oembed) {
+    throw new Error(
+      `Unable to fetch Reddit post ${url.postId} (RSS ${rssAttempt.status || rssAttempt.statusText})`,
+    );
+  }
+  return renderRedditMarkdown(url, feed, embed, oembed);
+}
+
 export function defaultFetchBackends(url: string, signal?: AbortSignal): BackendEntry[] {
+  if (parseRedditPostUrl(url)) {
+    return [["Reddit", () => fetchRedditMarkdown(url, signal)]];
+  }
   return [
     ["trafilatura", () => trafilaturaFetch(url, signal)],
     ["fetch+trafilatura", () => fetchToMarkdown(url, signal)],
@@ -278,6 +573,11 @@ class SerialTaskQueue {
       completeCurrentTask();
     }
   }
+}
+
+function titleFromMarkdown(markdown: string): string | null {
+  const match = /^# (.+)$/m.exec(markdown);
+  return match?.[1]?.trim() || null;
 }
 
 export function formatBackendLine(attempt: Attempt, successTitle?: string | null): string {
@@ -360,7 +660,11 @@ export default function (
       try {
         return await fetchQueue.run(async () => {
           const { text, backend, attempts } = await operations.fetch(params.url, signal);
-          const title = await operations.pageTitle(params.url, signal);
+          // Reddit 投稿はページシェルの汎用タイトル（"Reddit"）ではなく本文先頭の投稿タイトルを使う
+          const title =
+            backend === "Reddit"
+              ? titleFromMarkdown(text)
+              : await operations.pageTitle(params.url, signal);
           return { content: [{ type: "text", text }], details: { backend, attempts, title } };
         });
       } catch (error) {
