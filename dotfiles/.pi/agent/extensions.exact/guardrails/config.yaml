@@ -21,10 +21,8 @@ write:
     - ~/.yarn/berry/cache
     - ~/.vite-plus/cache
     - ~/.vite-plus/package_manager
-    - ~/.cache/uv
-    - ~/.cache/pip
+    - ~/.cache
     - ~/.cargo/registry
-    - ~/.cache/go-build
     - ~/go/pkg/mod
   ask: []
   deny:
