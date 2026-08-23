@@ -4,13 +4,14 @@
     "use_key_equivalents": true,
     "bindings": {
       "alt-e": "workspace::FocusCenterPane",
-      "alt-t": "workspace::NewTerminal",
+      "alt-t": "workspace::NewCenterTerminal",
       "ctrl-g": "command_palette::Toggle",
       "ctrl-k ctrl-e": "encoding_selector::Toggle",
       "ctrl-k ctrl-l": "language_selector::Toggle",
       "ctrl-s": "workspace::Save",
       "ctrl-shift-s": "zed::OpenSettings",
-      "ctrl-t": "workspace::NewFile"
+      "ctrl-t": "workspace::NewFile",
+      "ctrl-w": ["pane::CloseActiveItem", { "close_pinned": false }]
     }
   },
   {
@@ -91,7 +92,8 @@
     "context": "Terminal",
     "use_key_equivalents": true,
     "bindings": {
-      "alt-t": "workspace::NewTerminal"
+      "alt-t": "workspace::NewTerminal",
+      "ctrl-w": ["pane::CloseActiveItem", { "close_pinned": false }]
     }
   }
 ]

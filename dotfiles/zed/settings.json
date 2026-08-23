@@ -1,0 +1,117 @@
+{
+  "agent": {
+    "button": false,
+    "favorite_models": [],
+    "model_parameters": []
+  },
+  "git_panel": {
+    "entry_primary_click_action": "file_diff",
+    "group_by": "staging",
+    "tree_view": true,
+    "dock": "left"
+  },
+  "icon_theme": {
+    "mode": "dark",
+    "light": "Zed (Default)",
+    "dark": "Zed (Default)"
+  },
+  "telemetry": {
+    "diagnostics": false,
+    "metrics": false,
+    "anthropic_retention": false
+  },
+  "session": {
+    "trust_all_worktrees": true
+  },
+  "terminal": {
+    "max_scroll_history_lines": 2000,
+    "bell": "system",
+    "toolbar": {
+      "breadcrumbs": true
+    }
+  },
+  "project_panel": {
+    "dock": "left",
+    "git_status": true,
+    "auto_fold_dirs": true
+  },
+  "outline_panel": {
+    "dock": "right",
+    "git_status": true
+  },
+  "git": {
+    "inline_blame": {
+      "enabled": false
+    }
+  },
+  "base_keymap": "VSCode",
+  "preview_tabs": {
+    "enabled": false
+  },
+  "tabs": {
+    "git_status": true,
+    "activate_on_close": "left_neighbour"
+  },
+  "mouse_wheel_zoom": true,
+  "gutter": {
+    "folds": true
+  },
+  "minimap": {
+    "show": "never",
+    "thumb": "always"
+  },
+  "hover_popover_delay": 10000,
+  "buffer_font_fallbacks": [
+    "Courier New",
+    "monospace"
+  ],
+  "buffer_font_family": "Consolas",
+  "file_types": {
+    "dotenv": [
+      ".env.*"
+    ],
+    "yaml": [
+      "*.yml.*"
+    ],
+    "jsonc": [
+      "*.json"
+    ],
+    "ahk2": [
+      "*.ahk"
+    ]
+  },
+  "show_completions_on_input": true,
+  "auto_indent_on_paste": false,
+  "linked_edits": true,
+  "use_on_type_format": false,
+  "line_ending": "prefer_lf",
+  "ensure_final_newline_on_save": true,
+  "remove_trailing_whitespace_on_save": true,
+  "format_on_save": "off",
+  "ui_font_size": 16,
+  "buffer_font_size": 20.0,
+  "theme": {
+    "mode": "dark",
+    "light": "One Light",
+    "dark": "One Dark"
+  },
+  "auto_install_extensions": {},
+  "wsl_connections": [
+    {
+      "distro_name": "Ubuntu",
+      "user": null,
+      "projects": [
+        {
+          "paths": [
+            "/home/username/projects/dotfiles"
+          ]
+        },
+        {
+          "paths": [
+            "/home/username/projects/use-zed/./"
+          ]
+        }
+      ]
+    }
+  ]
+}
