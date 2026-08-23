@@ -78,10 +78,10 @@ commit メッセージの scope は「リポジトリのどこを変更したか
 ```sh
 ocr_output_dir=$(mktemp -d)
 trap 'rm -rf "$ocr_output_dir"' EXIT
-mineru -p "$image_path" -o "$ocr_output_dir" -m ocr -b pipeline
+ORT_DISABLE_TELEMETRY=1 mineru -p "$image_path" -o "$ocr_output_dir" -m ocr -b pipeline
 ocr_markdown=$(find "$ocr_output_dir" -type f -name '*.md' -print -quit)
 test -n "$ocr_markdown"
 cp "$ocr_markdown" "${image_path}.ocr.md"
 ```
 
-4. OCRテキストは原画像ではなく、抽出誤りを含みうる。金額、日付、固有名詞、契約・法的文言を含む場合は、OCRファイルの作成直後にのみ、オーナーに確認依頼を投げる。
+4. OCRテキストは原画像ではなく、抽出誤りを含みうる。OCRファイルを新規生成した直後に限り、金額、日付、固有名詞、契約・法的文言のいずれかが含まれる場合は、原画像との照合をオーナーに依頼する。既存の`.ocr.md`を読むだけの場合や、重要項目を含まない場合は、照合の要否を質問しない。
