@@ -1,9 +1,23 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, lstatSync } from "node:fs";
 import { readFile, writeFile, rm, rename, mkdir, lstat, cp } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 const pathDepth = (p: string) => p.split(/[/\\]/).length;
+
+async function copyDir(src: string, dst: string): Promise<void> {
+  await mkdir(dst, { recursive: true });
+  for (const entry of readdirSync(src)) {
+    if (entry === "node_modules") continue;
+    const srcPath = join(src, entry);
+    const dstPath = join(dst, entry);
+    if (lstatSync(srcPath).isDirectory()) {
+      await copyDir(srcPath, dstPath);
+    } else {
+      await cp(srcPath, dstPath);
+    }
+  }
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -109,7 +123,7 @@ const pathMaps =
       };
 
 await rm("dist", { recursive: true, force: true });
-await cp("dotfiles", "dist", { recursive: true });
+await copyDir("dotfiles", "dist");
 
 for (const [src, dst] of Object.entries(pathMaps)) {
   const srcPath = join("dist", src);
