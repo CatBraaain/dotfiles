@@ -20,7 +20,7 @@
     "openai-codex/**",
     "commandcode/**",
     "openrouter/z-ai/**",
-    "openrouter/dots-studio/**",
+    "openrouter/**/*:free",
     "openrouter/stealth/**"
   ],
   "packages": [
