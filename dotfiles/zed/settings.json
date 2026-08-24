@@ -1,8 +1,13 @@
 {
   "agent": {
-    "button": false,
+    "button": true,
     "favorite_models": [],
     "model_parameters": []
+  },
+  "agent_servers": {
+    "pi-acp": {
+      "type": "registry"
+    }
   },
   "git_panel": {
     "entry_primary_click_action": "file_diff",
@@ -50,7 +55,7 @@
   },
   "tabs": {
     "git_status": true,
-    "activate_on_close": "left_neighbour"
+    "activate_on_close": "neighbour"
   },
   "mouse_wheel_zoom": true,
   "gutter": {
