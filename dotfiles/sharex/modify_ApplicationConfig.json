@@ -8,6 +8,7 @@
   | replaceAllRegex `("ShowToastNotificationAfterTaskCompleted"): .*,` `${1}: false,`
   | replaceAllRegex `("ShowMagnifier"): .*,` `${1}: false,`
   | replaceAllRegex `("ShowEditorPanTip"): .*,` `${1}: false,`
+  | replaceAllRegex `("ShowCursor"): .*,` `${1}: false,`
   | replaceAllRegex `("EditorNewImageTransparent"): .*,` `${1}: true,`
   | replaceAllRegex `("NameFormatPattern"): .*,` `${1}: "%y-%mo-%d %h %mi %s",`
   | replaceAllRegex `("NameFormatPatternActiveWindow"): .*,` `${1}: "%y-%mo-%d %h %mi %s",`
