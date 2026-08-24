@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -122,7 +123,11 @@ describe("rule discovery", () => {
 describe("rule parsing", () => {
   it("removes YAML frontmatter and keeps a rule without paths always active", async () => {
     await withTemporaryDirectory(async (projectRoot) => {
-      await writeRule(projectRoot, ".pi/agent/rules/always.md", "---\ntitle: Always\n---\n\nAlways body");
+      await writeRule(
+        projectRoot,
+        ".pi/agent/rules/always.md",
+        "---\ntitle: Always\n---\n\nAlways body",
+      );
 
       const [alwaysRule] = await discoverRules(projectRoot, join(projectRoot, "home"));
 
@@ -302,7 +307,7 @@ describe("widget rendering", () => {
     type WidgetFactory = (
       tui: unknown,
       theme: { fg(color: string, text: string): string },
-    ) => { render(): string[] };
+    ) => { render(width: number): string[] };
     const fgCalls: Array<{ color: string; text: string }> = [];
     const grayify = (text: string): string => `<gray>${text}</gray>`;
     const widgetFactory = setWidgetCalls[0]!.content as WidgetFactory;
@@ -312,10 +317,36 @@ describe("widget rendering", () => {
         return grayify(text);
       },
     });
-    const renderedLines = widget.render();
+    const renderedLines = widget.render(100);
 
     assert.deepEqual(renderedLines, ["<gray>📜 rules: typescript</gray>"]);
     assert.deepEqual(fgCalls, [{ color: "muted", text: "📜 rules: typescript" }]);
+  });
+
+  it("truncates a long widget line to the available width", () => {
+    const setWidgetCalls: Array<{ key: string; content: unknown }> = [];
+    const ui = {
+      setWidget(key: string, content: unknown) {
+        setWidgetCalls.push({ key, content });
+      },
+    };
+    const availableWidth = 20;
+
+    updateRulesWidget(ui as never, [
+      rule({ name: "asking-format" }),
+      rule({ name: "report-format" }),
+      rule({ name: "working-files-strategy" }),
+    ]);
+
+    type WidgetFactory = (
+      tui: unknown,
+      theme: { fg(color: string, text: string): string },
+    ) => { render(width: number): string[] };
+    const widgetFactory = setWidgetCalls[0]!.content as WidgetFactory;
+    const widget = widgetFactory(undefined, { fg: (_color, text) => text });
+    const renderedWidgetLine = widget.render(availableWidth)[0] ?? "";
+
+    assert.equal(visibleWidth(renderedWidgetLine), availableWidth);
   });
 
   it("clears the widget when no rules are active", () => {

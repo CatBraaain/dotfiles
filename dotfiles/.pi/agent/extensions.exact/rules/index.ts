@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { parse as parseYaml } from "yaml";
 
 export const RULES_STATUS_KEY = "rules";
@@ -314,7 +315,7 @@ export function updateRulesWidget(ui: ExtensionUIContext, rules: readonly Rule[]
   ui.setWidget(
     RULES_STATUS_KEY,
     (_tui, theme) => ({
-      render: () => lines.map((line) => theme.fg("muted", line)),
+      render: (width) => lines.map((line) => truncateToWidth(theme.fg("muted", line), width)),
       invalidate: () => {},
     }),
     { placement: "aboveEditor" },
