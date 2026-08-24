@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -16,6 +17,7 @@ import {
   Sandbox,
   expandPathSection,
   parseGuardrailsConfig,
+  resolveGitMainWorktreePath,
   resolveCommandAction,
   resolvePathAction,
 } from "./sandbox";
@@ -58,6 +60,36 @@ function withTempDirectory(test: (directory: string) => Promise<void> | void): (
       await test(directory);
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  };
+}
+
+function runGit(cwd: string, args: string[]): void {
+  execFileSync("git", args, { cwd, stdio: "pipe" });
+}
+
+function withLinkedWorktree(
+  test: (
+    mainWorktreePath: string,
+    linkedWorktreePath: string,
+    workspacePath: string,
+  ) => Promise<void> | void,
+): () => Promise<void> {
+  return async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "guardrails-git-"));
+    const mainWorktreePath = join(workspacePath, "main");
+    const linkedWorktreePath = join(workspacePath, "linked");
+    try {
+      runGit(workspacePath, ["init", mainWorktreePath]);
+      runGit(mainWorktreePath, ["config", "user.email", "guardrails@example.com"]);
+      runGit(mainWorktreePath, ["config", "user.name", "Guardrails"]);
+      writeFileSync(join(mainWorktreePath, "README.md"), "initial\n");
+      runGit(mainWorktreePath, ["add", "README.md"]);
+      runGit(mainWorktreePath, ["commit", "-m", "initial"]);
+      runGit(mainWorktreePath, ["worktree", "add", linkedWorktreePath]);
+      await test(mainWorktreePath, linkedWorktreePath, workspacePath);
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
     }
   };
 }
@@ -324,6 +356,28 @@ describe("§3.a パス文字列の解決", () => {
     const section = expandPathSection({ allow: ["/opt/data"] }, "/cwd");
     assert.equal(resolvePathAction(section, "/opt/data/file.txt"), "allow");
   });
+
+  it(
+    "${GIT_MAIN_WORKTREE_PATH} は linked worktree から main worktree に解決する",
+    withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_MAIN_WORKTREE_PATH}/.git\n");
+      const sandbox = new Sandbox(linkedWorktreePath, configPath);
+      const mainGitDirectory = join(mainWorktreePath, ".git", "refs", "heads", "topic");
+
+      assert.equal(resolveGitMainWorktreePath(linkedWorktreePath), mainWorktreePath);
+      await sandbox.authorizePath("write", mainGitDirectory, { cwd: linkedWorktreePath });
+    }),
+  );
+
+  it(
+    "${GIT_MAIN_WORKTREE_PATH} は Git repository 外ではパスを許可しない",
+    withTempDirectory((directory) => {
+      const section = expandPathSection({ allow: ["${GIT_MAIN_WORKTREE_PATH}/.git"] }, directory);
+
+      assert.deepEqual(section.allow, []);
+    }),
+  );
 });
 
 describe("§3.b glob パターン", () => {

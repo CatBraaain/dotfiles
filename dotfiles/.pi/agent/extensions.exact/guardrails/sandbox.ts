@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -124,17 +124,48 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`${source}$`);
 }
 
+export const GIT_MAIN_WORKTREE_PATH = "${GIT_MAIN_WORKTREE_PATH}";
+
 function hasGlob(pattern: string): boolean {
   return /[*?[]/.test(pattern);
 }
 
-function resolvePattern(pattern: string, cwd: string): string {
+export function resolveGitMainWorktreePath(cwd: string): string | undefined {
+  try {
+    const worktrees = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const mainWorktree = worktrees.split("\n").find((line) => line.startsWith("worktree "));
+    return mainWorktree === undefined ? undefined : resolve(mainWorktree.slice("worktree ".length));
+  } catch {
+    return undefined;
+  }
+}
+
+function expandGitMainWorktreePath(
+  pattern: string,
+  gitMainWorktreePath: string | undefined,
+): string | undefined {
+  if (pattern.includes(GIT_MAIN_WORKTREE_PATH) && gitMainWorktreePath === undefined)
+    return undefined;
+  return pattern.replaceAll(GIT_MAIN_WORKTREE_PATH, gitMainWorktreePath ?? "");
+}
+
+function resolvePattern(
+  pattern: string,
+  cwd: string,
+  gitMainWorktreePath: string | undefined,
+): string | undefined {
+  const gitPathExpanded = expandGitMainWorktreePath(pattern, gitMainWorktreePath);
+  if (gitPathExpanded === undefined) return undefined;
   const homeExpanded =
-    pattern === "~"
+    gitPathExpanded === "~"
       ? homedir()
-      : pattern.startsWith("~/")
-        ? join(homedir(), pattern.slice(2))
-        : pattern;
+      : gitPathExpanded.startsWith("~/")
+        ? join(homedir(), gitPathExpanded.slice(2))
+        : gitPathExpanded;
   return isAbsolute(homeExpanded) ? resolve(homeExpanded) : resolve(cwd, homeExpanded);
 }
 
@@ -193,16 +224,20 @@ function expandGlobPattern(absolutePattern: string): string[] {
 function expandPathPatterns(
   patterns: string[] | undefined,
   cwd: string,
+  gitMainWorktreePath: string | undefined,
   allowAllPaths = false,
 ): string[] {
-  return (patterns ?? []).flatMap((pattern) =>
-    expandBraces(pattern).flatMap((expandedPattern) => {
+  return (patterns ?? []).flatMap((pattern) => {
+    const gitPathExpanded = expandGitMainWorktreePath(pattern, gitMainWorktreePath);
+    if (gitPathExpanded === undefined) return [];
+    return expandBraces(gitPathExpanded).flatMap((expandedPattern) => {
       if (allowAllPaths && expandedPattern === "*") return ["/**"];
-      const resolvedPattern = resolvePattern(expandedPattern, cwd);
+      const resolvedPattern = resolvePattern(expandedPattern, cwd, gitMainWorktreePath);
+      if (resolvedPattern === undefined) return [];
       if (!hasGlob(resolvedPattern)) return [resolvedPattern];
       return expandGlobPattern(resolvedPattern);
-    }),
-  );
+    });
+  });
 }
 
 export type ExpandedPathSection = { allow: string[]; ask: string[]; deny: string[] };
@@ -211,11 +246,12 @@ export function expandPathSection(
   section: RuleSection | undefined,
   cwd: string,
   allowAllPaths = false,
+  gitMainWorktreePath = resolveGitMainWorktreePath(cwd),
 ): ExpandedPathSection {
   return {
-    allow: expandPathPatterns(section?.allow, cwd, allowAllPaths),
-    ask: expandPathPatterns(section?.ask, cwd),
-    deny: expandPathPatterns(section?.deny, cwd),
+    allow: expandPathPatterns(section?.allow, cwd, gitMainWorktreePath, allowAllPaths),
+    ask: expandPathPatterns(section?.ask, cwd, gitMainWorktreePath),
+    deny: expandPathPatterns(section?.deny, cwd, gitMainWorktreePath),
   };
 }
 
@@ -281,6 +317,7 @@ export class Sandbox {
   private readonly writePaths: ExpandedPathSection;
   private readonly credentialPaths: string[];
   private readonly hiddenFsPaths: string[];
+  private readonly gitMainWorktreePath: string | undefined;
   private readonly runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
   private readonly piPackageDir = getPackageDir();
 
@@ -293,11 +330,20 @@ export class Sandbox {
     } catch {
       this.config = {};
     }
-    this.readPaths = expandPathSection(this.config.read, cwd, true);
-    this.writePaths = expandPathSection(this.config.write, cwd);
-    this.credentialPaths = expandPathPatterns(this.config.credentials, cwd);
+    this.gitMainWorktreePath = resolveGitMainWorktreePath(cwd);
+    this.readPaths = expandPathSection(this.config.read, cwd, true, this.gitMainWorktreePath);
+    this.writePaths = expandPathSection(this.config.write, cwd, false, this.gitMainWorktreePath);
+    this.credentialPaths = expandPathPatterns(
+      this.config.credentials,
+      cwd,
+      this.gitMainWorktreePath,
+    );
     this.hiddenFsPaths = [
-      ...expandPathPatterns(getPathSection(this.config, "read")?.deny, cwd),
+      ...expandPathPatterns(
+        getPathSection(this.config, "read")?.deny,
+        cwd,
+        this.gitMainWorktreePath,
+      ),
       ...this.credentialPaths,
     ];
     this.prepareWriteDirectories();
@@ -306,8 +352,8 @@ export class Sandbox {
   private prepareWriteDirectories(): void {
     for (const pattern of getPathSection(this.config, "write")?.allow ?? []) {
       if (hasGlob(pattern)) continue;
-      const path = resolvePattern(pattern, this.cwd);
-      if (!existsSync(path)) mkdirSync(path, { recursive: true });
+      const path = resolvePattern(pattern, this.cwd, this.gitMainWorktreePath);
+      if (path !== undefined && !existsSync(path)) mkdirSync(path, { recursive: true });
     }
   }
 
@@ -333,9 +379,16 @@ export class Sandbox {
     };
 
     if (!this.readAllPaths()) {
-      for (const path of expandPathPatterns(readSection?.allow, this.cwd, true)) mount(path, false);
+      for (const path of expandPathPatterns(
+        readSection?.allow,
+        this.cwd,
+        this.gitMainWorktreePath,
+        true,
+      ))
+        mount(path, false);
     }
-    for (const path of expandPathPatterns(writeSection?.allow, this.cwd)) mount(path, true);
+    for (const path of expandPathPatterns(writeSection?.allow, this.cwd, this.gitMainWorktreePath))
+      mount(path, true);
     for (const [path, accessModes] of this.dynamicPaths) mount(path, accessModes.has("write"));
 
     if (!this.readAllPaths()) mount(this.cwd, false);

@@ -12,6 +12,7 @@ read:
 write:
   allow:
     - .
+    - ${GIT_MAIN_WORKTREE_PATH}
     - ~/.pi
     - ~/.config
     - /tmp

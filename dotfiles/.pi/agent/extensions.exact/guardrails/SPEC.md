@@ -97,13 +97,16 @@ IMAGE_BINARY_BLOCKED
 
 | 記述 | 解決先 |
 | --- | --- |
+| `${GIT_MAIN_WORKTREE_PATH}` | cwd を含む Git repository の main worktree の絶対パス |
 | 相対パス（`.` `./...` `../...`） | セッションの cwd を起点 |
 | `~` | ホームディレクトリ |
 | それ以外 | 絶対パス（そのまま） |
 
+`${GIT_MAIN_WORKTREE_PATH}` はパスエントリ内の任意の位置に記述できる。Git repository 外では、この変数を含むエントリはパスを許可・bind・作成しない。
+
 ### glob パターン
 
-`read` / `write` と `credentials` のエントリに glob（`*` `?` `**` `[...]`）を含められる。パターンは絶対パスへ解決（上記）した後に展開する。`read` / `write` はマッチした実パスそれぞれを対応する操作のアクション判定・bind 対象とし、`credentials` は bind 対象とする。
+`read` / `write` と `credentials` のエントリに glob（`*` `?` `**` `[...]`）を含められる。パターンは変数展開と絶対パス解決（上記）の後に展開する。`read` / `write` はマッチした実パスそれぞれを対応する操作のアクション判定・bind 対象とし、`credentials` は bind 対象とする。
 
 | パターン | 意味 |
 | --- | --- |
