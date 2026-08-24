@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export const SKILL_STATUS_WIDGET_KEY = "skill-status";
 const SKILL_STATUS_ENTRY_TYPE = "skill-status";
@@ -107,7 +108,7 @@ function updateWidget(ctx: ExtensionContext, state: SkillStatusState): void {
     SKILL_STATUS_WIDGET_KEY,
     lines
       ? (_ui, theme) => ({
-          render: () => lines.map((line) => theme.fg("dim", line)),
+          render: (width) => lines.map((line) => truncateToWidth(theme.fg("dim", line), width)),
           invalidate: () => {},
         })
       : undefined,

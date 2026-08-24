@@ -1,6 +1,7 @@
 // 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import skillShortcut from "../skill-shortcut/index";
 import skillStatusExtension, {
   buildSkillStatusWidgetLines,
@@ -77,7 +78,7 @@ function captureActualExtensionPath(): { handlers: Map<string, Handler[]>; comma
   return { handlers, commands };
 }
 
-function widgetContext(hasUI = true): WidgetContext {
+function widgetContext(hasUI = true, widgetWidth = 80): WidgetContext {
   const widgetCalls: any[][] = [];
   const widgetColors: string[] = [];
   return {
@@ -96,7 +97,7 @@ function widgetContext(hasUI = true): WidgetContext {
                   return text;
                 },
               },
-            ).render();
+            ).render(widgetWidth);
           }
           widgetCalls.push(args);
         },
@@ -493,6 +494,25 @@ describe("状態", () => {
 });
 
 describe("UI", () => {
+  it("横幅が不足する場合は widget を表示領域内へ切り詰める", () => {
+    const availableWidth = 66;
+    const { handlers } = captureExtension();
+    const { context, widgetCalls } = widgetContext(true, availableWidth);
+
+    for (const skillName of [
+      "readable-code-standard",
+      "diagnosing-bugs",
+      "sdd-standard",
+      "any-implement",
+    ]) {
+      recordSkill(handlers, context, skillName);
+    }
+
+    const renderedWidgetLine = widgetCalls.at(-1)?.[1]?.[0] ?? "";
+
+    assert.equal(visibleWidth(renderedWidgetLine), availableWidth);
+  });
+
   it("UI がなければ path 登録後の成功 read で内部状態だけを更新する", () => {
     const { handlers } = captureExtension();
     const { context, widgetCalls, widgetColors } = widgetContext(false);
