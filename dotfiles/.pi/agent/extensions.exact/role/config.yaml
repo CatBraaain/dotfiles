@@ -1,41 +1,5 @@
 default: agent
 
-_when:
-  # z.ai peak hours are weekdays, 14:00–18:00 (UTC+8) => 06:00-10:00 UTC
-  zaiOffPeak: &zai-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }'
-  # DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC
-  deepseekOffPeak: &deepseek-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { { [ "$d" -le 5 ] && [ "$h" -ge 01 ] && [ "$h" -lt 04 ]; } || { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }; }'
-
-tiers:
-  high:
-    - provider: zai
-      model: glm-5.3
-      when: *zai-off-peak
-    - provider: zai
-      model: glm-5.2
-    - provider: openrouter
-      model: z-ai/glm-5.2:free
-    - provider: openai-codex
-      model: gpt-5.6-luna
-    - provider: openrouter
-      model: nvidia/nemotron-3-ultra-550b-a55b:free
-    - provider: openrouter
-      model: stealth/ox-alpha
-    - provider: commandcode
-      model: stealth/ox-alpha
-  middle:
-    - provider: openai-codex
-      model: gpt-5.6-luna
-    - provider: commandcode
-      model: deepseek/deepseek-v4-flash
-      when: *deepseek-off-peak
-  low:
-    - provider: commandcode
-      model: deepseek/deepseek-v4-flash
-      when: *deepseek-off-peak
-    - provider: openai-codex
-      model: gpt-5.6-luna
-
 _systemPrompts:
   roleOverview: &role-overview |
     ## Role 一覧
@@ -139,8 +103,8 @@ roles:
       - *role-overview
       - *task-breakdown
       - |
-          あなたは owner 直下の agent です。manager と同等の実行能力を持つ、owner の側近です。
-          統合・最終判断・owner への報告は自分が担います。
+        あなたは owner 直下の agent です。manager と同等の実行能力を持つ、owner の側近です。
+        統合・最終判断・owner への報告は自分が担います。
 
   manager:
     tier: high
@@ -150,7 +114,7 @@ roles:
       - *role-overview
       - *task-breakdown
       - |
-          あなたは manager です。タスクを分解・統括するプレイングマネージャーとして動きます。
+        あなたは manager です。タスクを分解・統括するプレイングマネージャーとして動きます。
 
   worker:
     tier: low
@@ -159,7 +123,7 @@ roles:
     systemPrompt:
       - *role-overview
       - |
-          あなたは worker です。
+        あなたは worker です。
 
   chat:
     tier: middle
@@ -168,5 +132,5 @@ roles:
     systemPrompt:
       - *role-overview
       - |
-          あなたは chat role です。
-          外部情報を参照するときは web_search と web_fetch を使い、引用は markdown link で行ってください。
+        あなたは chat role です。
+        外部情報を参照するときは web_search と web_fetch を使い、引用は markdown link で行ってください。

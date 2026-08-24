@@ -1,0 +1,31 @@
+default: agent
+
+_when:
+  # z.ai peak hours are weekdays, 14:00–18:00 (UTC+8) => 06:00-10:00 UTC
+  zaiOffPeak: &zai-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }'
+  # DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC
+  deepseekOffPeak: &deepseek-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { { [ "$d" -le 5 ] && [ "$h" -ge 01 ] && [ "$h" -lt 04 ]; } || { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }; }'
+
+tiers:
+  high:
+    - provider: zai
+      model: glm-5.3
+      when: *zai-off-peak
+    - provider: zai
+      model: glm-5.2
+    - provider: openrouter
+      model: stealth/ox-alpha
+    - provider: commandcode
+      model: stealth/ox-alpha
+  middle:
+    - provider: openai-codex
+      model: gpt-5.6-luna
+    - provider: commandcode
+      model: deepseek/deepseek-v4-flash
+      when: *deepseek-off-peak
+  low:
+    - provider: commandcode
+      model: deepseek/deepseek-v4-flash
+      when: *deepseek-off-peak
+    - provider: openai-codex
+      model: gpt-5.6-luna
