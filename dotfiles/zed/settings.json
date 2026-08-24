@@ -10,7 +10,8 @@
     }
   },
   "git_panel": {
-    "entry_primary_click_action": "file_diff",
+    // file_diff cannot show staged and unstaged changes as separate diffs.
+    "entry_primary_click_action": "project_diff",
     "group_by": "staging",
     "tree_view": true,
     "dock": "left"
