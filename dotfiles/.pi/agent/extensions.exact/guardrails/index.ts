@@ -32,6 +32,17 @@ export {
   truncateCommand,
 } from "../shared/tool-format.ts";
 
+const ERROR_PREVIEW_LINE_LIMIT = 3;
+
+function renderToolError(result: any, theme: any): Text {
+  const errorLines = resultText(result).split(/\r?\n/);
+  if (errorLines.at(-1) === "") errorLines.pop();
+  const preview = errorLines.slice(0, ERROR_PREVIEW_LINE_LIMIT).join("\n");
+  const hasMoreLines = errorLines.length > ERROR_PREVIEW_LINE_LIMIT;
+  const displayText = hasMoreLines ? `${preview}\n…` : preview;
+  return new Text(theme.fg("error", displayText), 0, 0);
+}
+
 function renderTextToolResult(
   result: any,
   options: { expanded: boolean; isPartial: boolean },
@@ -40,8 +51,7 @@ function renderTextToolResult(
   name: string,
 ): Text {
   if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-  if (context.isError) return new Text(theme.fg("error", resultText(result)), 0, 0);
-  if (options.expanded) return new Text(theme.fg("dim", resultText(result)), 0, 0);
+  if (context.isError) return renderToolError(result, theme);
   const summary = formatToolResultSummary(name, context.args ?? {}, result, {}, theme);
   return new Text(summary ?? "", 0, 0);
 }
@@ -151,8 +161,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return new Text(theme.fg("error", resultText(result)), 0, 0);
-      if (options.expanded) return new Text(theme.fg("dim", resultText(result)), 0, 0);
+      if (context.isError) return renderToolError(result, theme);
       const state = context.state;
       const durationMs =
         state?.startedAt !== undefined
@@ -214,8 +223,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return new Text(theme.fg("error", resultText(result)), 0, 0);
-      if (options.expanded) return new Text(theme.fg("dim", context.args?.content ?? ""), 0, 0);
+      if (context.isError) return renderToolError(result, theme);
       return new Text(
         formatToolResultSummary("write", context.args ?? {}, result, {}, theme) ?? "",
         0,
@@ -237,11 +245,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return new Text(theme.fg("error", resultText(result)), 0, 0);
-      if (options.expanded) {
-        const diff = (result.details as { diff?: string } | undefined)?.diff ?? resultText(result);
-        return new Text(theme.fg("dim", diff), 0, 0);
-      }
+      if (context.isError) return renderToolError(result, theme);
       return new Text(
         formatToolResultSummary("edit", context.args ?? {}, result, {}, theme) ?? "",
         0,
@@ -260,8 +264,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return new Text(theme.fg("error", resultText(result)), 0, 0);
-      if (options.expanded) return new Text(theme.fg("dim", resultText(result)), 0, 0);
+      if (context.isError) return renderToolError(result, theme);
       return new Text(
         formatToolResultSummary("grep", context.args ?? {}, result, {}, theme) ?? "",
         0,

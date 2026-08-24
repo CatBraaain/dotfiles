@@ -889,6 +889,43 @@ describe("§8 表示", () => {
     assert.deepEqual(renderedCalls, ["read src/a.ts", `write ${parentPath}`, "edit src/a.ts"]);
   });
 
+  it("all built-in tool errors show only the first three lines", () => {
+    const errorResult = {
+      content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4" }],
+    };
+    const expectedError = "line 1\nline 2\nline 3\n…";
+
+    for (const toolName of ["bash", "edit", "find", "grep", "ls", "read", "write"]) {
+      const tool = captureRegisteredTools().get(toolName);
+      const renderedError = tool
+        .renderResult(errorResult, { isPartial: false }, plainTheme, {
+          isError: true,
+          args: {},
+        })
+        .render(200)
+        .map((line: string) => line.trimEnd())
+        .join("\n");
+      assert.equal(renderedError, expectedError);
+    }
+  });
+
+  it("errors with exactly three lines do not show an ellipsis", () => {
+    const errorResult = {
+      content: [{ type: "text", text: "line 1\nline 2\nline 3\n" }],
+    };
+
+    const tool = captureRegisteredTools().get("read");
+    const renderedError = tool
+      .renderResult(errorResult, { isPartial: false }, plainTheme, {
+        isError: true,
+        args: {},
+      })
+      .render(200)
+      .map((line: string) => line.trimEnd())
+      .join("\n");
+    assert.equal(renderedError, "line 1\nline 2\nline 3");
+  });
+
   it("長いコマンドを80文字に切り詰める", () => {
     const longCommand = "a".repeat(COMMAND_PREVIEW_LIMIT + 1);
     assert.equal(truncateCommand(longCommand).length, COMMAND_PREVIEW_LIMIT);
