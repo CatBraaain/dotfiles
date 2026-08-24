@@ -285,12 +285,12 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     assert.equal(result.text, expectedText);
   });
 
-  it("デフォルトのバックエンド順序は openserp(google)→duckduckgo→bing→markdown.new", () => {
+  it("デフォルトのバックエンド順序は openserp(bing)→duckduckgo→google→markdown.new", () => {
     const backendNames = defaultSearchBackends("query").map(([name]) => name);
     assert.deepEqual(backendNames, [
-      "openserp(google)",
-      "openserp(duckduckgo)",
       "openserp(bing)",
+      "openserp(duckduckgo)",
+      "openserp(google)",
       "markdown.new",
     ]);
   });

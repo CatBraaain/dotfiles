@@ -143,9 +143,9 @@ export function defaultSearchBackends(
   lang?: string,
 ): BackendEntry[] {
   return [
-    ["openserp(google)", () => openserp("google", query, signal, lang)],
-    ["openserp(duckduckgo)", () => openserp("duckduckgo", query, signal, lang)],
     ["openserp(bing)", () => openserp("bing", query, signal, lang)],
+    ["openserp(duckduckgo)", () => openserp("duckduckgo", query, signal, lang)],
+    ["openserp(google)", () => openserp("google", query, signal, lang)],
     ["markdown.new", () => searchMarkdownNew(query, signal)],
   ];
 }

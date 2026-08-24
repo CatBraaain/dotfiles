@@ -49,9 +49,9 @@ sequenceDiagram
 
 | 順序 | バックエンド         |
 | ---- | -------------------- |
-| 1    | openserp(google)     |
+| 1    | openserp(bing)       |
 | 2    | openserp(duckduckgo) |
-| 3    | openserp(bing)       |
+| 3    | openserp(google)     |
 | 4    | markdown.new         |
 
 ### openserp のブラウザ起動
@@ -134,13 +134,13 @@ web_search / web_fetch のいずれにもクールダウンを設けない。過
 
 openserp バックエンドの失敗行の `<エラー>` は、openserp の stderr にある `Error:` で始まる行（複数あれば最後）から `Error:` プレフィックスを除いたものとする。該当行がなければ、発生したエラーの元のメッセージを使う。
 
-例（web_search で google/duckduckgo が失敗し bing が成功）：
+例（web_search で bing/duckduckgo が失敗し google が成功）：
 
 ```
 web_search - "<クエリ>"
-✗ openserp(google) - "google search: captcha detected"
+✗ openserp(bing) - "bing search: timeout."
 ✗ openserp(duckduckgo) - "duckduckgo search: timeout."
-✓ openserp(bing)
+✓ openserp(google)
 ```
 
 ## 環境変数
