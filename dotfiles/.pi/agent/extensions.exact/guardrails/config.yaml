@@ -51,7 +51,6 @@ commands:
     # system
     - systemctl
     - crontab
-    - "{killall,pkill}"
     - chmod -R
     - chown -R
     - sudo
