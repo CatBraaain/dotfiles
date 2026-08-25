@@ -213,6 +213,109 @@ read:
   );
 
   it(
+    "ask パスで No を選び理由を入力するとエラーメッセージに含まれる",
+    withSandbox(
+      `
+read:
+  ask: [/workspace/project]
+`,
+      projectRoot,
+      async (sandbox) => {
+        await assert.rejects(async () => {
+          await sandbox.authorizePath("read", "/workspace/project/file.txt", {
+            cwd: projectRoot,
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async (_title, options) => options[1],
+              input: async () => "なぜこのパスが必要か説明して",
+            },
+          });
+        }, /Access denied by user: \/workspace\/project\/file\.txt\nUser reason: なぜこのパスが必要か説明して$/);
+      },
+    ),
+  );
+
+  it(
+    "ask パスで No を選び理由欄を空欄で確定すると理由なしで拒否される",
+    withSandbox(
+      `
+read:
+  ask: [/workspace/project]
+`,
+      projectRoot,
+      async (sandbox) => {
+        await assert.rejects(async () => {
+          await sandbox.authorizePath("read", "/workspace/project/file.txt", {
+            cwd: projectRoot,
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async (_title, options) => options[1],
+              input: async () => "",
+            },
+          });
+        }, /Access denied by user: \/workspace\/project\/file\.txt$/);
+      },
+    ),
+  );
+
+  it(
+    "ask パスで Yes を選ぶと承認される",
+    withSandbox(
+      `
+read:
+  ask: [/workspace/project]
+`,
+      projectRoot,
+      async (sandbox) => {
+        const selectionOptions: string[][] = [];
+        await sandbox.authorizePath("read", "/workspace/project/file.txt", {
+          cwd: projectRoot,
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async (_title, options) => {
+              selectionOptions.push(options);
+              return options[0];
+            },
+          },
+        });
+        assert.deepEqual(selectionOptions, [["Yes, allow", "No, deny (reason next)"]]);
+      },
+    ),
+  );
+
+  it(
+    "ask パスの選択をキャンセルしたら理由入力のキャンセル後に理由なしで拒否される",
+    withSandbox(
+      `
+read:
+  ask: [/workspace/project]
+`,
+      projectRoot,
+      async (sandbox) => {
+        let inputCalled = false;
+        await assert.rejects(async () => {
+          await sandbox.authorizePath("read", "/workspace/project/file.txt", {
+            cwd: projectRoot,
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async () => undefined,
+              input: async () => {
+                inputCalled = true;
+                return undefined;
+              },
+            },
+          });
+        }, /Access denied by user: \/workspace\/project\/file\.txt$/);
+        assert.equal(inputCalled, true);
+      },
+    ),
+  );
+
+  it(
     "明示 deny パスは許可要求なしで拒否される",
     withSandbox(
       `
@@ -625,6 +728,22 @@ describe("§3 動的拡張のライフサイクル", () => {
   );
 
   it(
+    "write で File only を選ぶと存在しないファイルをフェンス外で作成する",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const newFilePath = join(dir, "nested", "new.txt");
+      await sandbox.authorizePath("write", newFilePath, {
+        cwd: dir,
+        hasUI: true,
+        ui: {
+          confirm: async () => false,
+          select: async (_title, options) => options[0],
+        },
+      });
+      assert.equal(existsSync(newFilePath), true);
+    }),
+  );
+
+  it(
     "write の動的許可パスは書き込み可能 bind になる",
     withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
       const filePath = join(dir, "new.txt");
@@ -690,6 +809,35 @@ describe("§3 動的拡張のライフサイクル", () => {
           },
         });
       }, /Access denied by user/);
+    }),
+  );
+
+  it(
+    "write で No を選び理由を入力するとエラーメッセージに含まれる",
+    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const newFilePath = join(dir, "new.txt");
+      const selectionOptions: string[][] = [];
+      await assert.rejects(
+        () =>
+          sandbox.authorizePath("write", newFilePath, {
+            cwd: dir,
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async (_title, options) => {
+                selectionOptions.push(options);
+                return options[2];
+              },
+              input: async () => "スコープをファイル単体にして",
+            },
+          }),
+        (error: Error) =>
+          error.message ===
+          `Access denied by user: ${newFilePath}\nUser reason: スコープをファイル単体にして`,
+      );
+      assert.deepEqual(selectionOptions, [
+        ["File only", "Directory (subtree)", "No, deny (reason next)"],
+      ]);
     }),
   );
 
@@ -770,6 +918,108 @@ commands:
           },
         });
         assert.deepEqual(confirmedCommands, ["git push origin main"]);
+      },
+    ),
+  );
+
+  it(
+    "ask コマンドで Yes を選ぶと承認される",
+    withSandbox(
+      `
+commands:
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        const selectionOptions: string[][] = [];
+        await sandbox.authorizeCommand("git push origin main", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async (_title: string, options: string[]) => {
+              selectionOptions.push(options);
+              return options[0];
+            },
+          },
+        });
+        assert.deepEqual(selectionOptions, [["Yes, allow", "No, deny (reason next)"]]);
+      },
+    ),
+  );
+
+  it(
+    "ask コマンドで No を選び理由を入力するとエラーメッセージに含まれる",
+    withSandbox(
+      `
+commands:
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        await assert.rejects(async () => {
+          await sandbox.authorizeCommand("git push origin main", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async (_title, options) => options[1],
+              input: async () => "force push は禁止",
+            },
+          });
+        }, /Command denied by user: git push origin main\nUser reason: force push は禁止$/);
+      },
+    ),
+  );
+
+  it(
+    "ask コマンドの選択をキャンセルしたら理由入力のキャンセル後に理由なしで拒否される",
+    withSandbox(
+      `
+commands:
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        let inputCalled = false;
+        await assert.rejects(async () => {
+          await sandbox.authorizeCommand("git push origin main", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async () => undefined,
+              input: async () => {
+                inputCalled = true;
+                return undefined;
+              },
+            },
+          });
+        }, /Command denied by user: git push origin main$/);
+        assert.equal(inputCalled, true);
+      },
+    ),
+  );
+
+  it(
+    "select 非対応 UI のコマンド拒否で入力した理由はエラーメッセージに含まれる",
+    withSandbox(
+      `
+commands:
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        await assert.rejects(async () => {
+          await sandbox.authorizeCommand("git push origin main", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              input: async () => "公開は承認後にして",
+            },
+          });
+        }, /Command denied by user: git push origin main\nUser reason: 公開は承認後にして$/);
       },
     ),
   );

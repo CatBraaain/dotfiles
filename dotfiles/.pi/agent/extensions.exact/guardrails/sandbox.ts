@@ -31,7 +31,11 @@ type GuardrailsConfig = {
 type ToolUI = {
   confirm(title: string, message: string): Promise<boolean>;
   select?(title: string, options: string[]): Promise<string | undefined>;
+  input?(title: string, placeholder?: string): Promise<string | undefined>;
 };
+
+const ALLOW_OPTION = "Yes, allow";
+const DENY_OPTION = "No, deny (reason next)";
 
 type ToolContext = {
   cwd: string;
@@ -487,20 +491,42 @@ export class Sandbox {
     ui: ToolUI,
   ): Promise<void> {
     const directoryScopeOption = "Directory (subtree)";
-    if (operation === "write" && ui.select) {
-      const selectedScope = await ui.select(`Allow write access? ${absolutePath}`, [
-        "File only",
-        directoryScopeOption,
-      ]);
-      if (selectedScope === undefined) throw new Error(`Access denied by user: ${absolutePath}`);
-      const scope = selectedScope === directoryScopeOption ? "directory" : "file";
-      const grantPath = scope === "directory" ? dirname(absolutePath) : absolutePath;
-      this.addDynamicGrant("write", grantPath, scope);
+    const title = `Allow ${operation} access?\n${absolutePath}`;
+    if (ui.select) {
+      const selectedOption = await ui.select(
+        title,
+        operation === "write"
+          ? ["File only", directoryScopeOption, DENY_OPTION]
+          : [ALLOW_OPTION, DENY_OPTION],
+      );
+      if (selectedOption === undefined || selectedOption === DENY_OPTION)
+        throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
+      if (operation === "write") {
+        if (selectedOption !== "File only" && selectedOption !== directoryScopeOption)
+          throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
+        const scope = selectedOption === directoryScopeOption ? "directory" : "file";
+        const grantPath = scope === "directory" ? dirname(absolutePath) : absolutePath;
+        this.addDynamicGrant("write", grantPath, scope);
+        return;
+      }
+      if (selectedOption !== ALLOW_OPTION)
+        throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
+      this.addDynamicGrant(operation, absolutePath, "file");
       return;
     }
     const approved = await ui.confirm(`Allow ${operation} access?`, absolutePath);
-    if (!approved) throw new Error(`Access denied by user: ${absolutePath}`);
+    if (!approved) throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
     this.addDynamicGrant(operation, absolutePath, "file");
+  }
+
+  private denialMessage(base: string, reason?: string): string {
+    return reason === undefined ? base : `${base}\nUser reason: ${reason}`;
+  }
+
+  /** Build the denial error after a canceled selection dialog, asking for an optional reason (§2.3). */
+  private async deniedError(message: string, ui: ToolUI): Promise<Error> {
+    const reason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
+    return new Error(this.denialMessage(message, reason || undefined));
   }
 
   private addDynamicGrant(
@@ -529,8 +555,18 @@ export class Sandbox {
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
-    return this.withUiLock(() => ui.confirm("Allow command?", command)).then((approved) => {
-      if (!approved) throw new Error(`Command denied by user: ${command}`);
+    return this.withUiLock(async () => {
+      if (ui.select) {
+        const selectedOption = await ui.select(`Allow command?\n${command}`, [
+          ALLOW_OPTION,
+          DENY_OPTION,
+        ]);
+        if (selectedOption !== ALLOW_OPTION)
+          throw await this.deniedError(`Command denied by user: ${command}`, ui);
+        return;
+      }
+      if (await ui.confirm("Allow command?", command)) return;
+      throw await this.deniedError(`Command denied by user: ${command}`, ui);
     });
   }
 
