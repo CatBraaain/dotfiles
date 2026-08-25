@@ -44,14 +44,6 @@
 - **Python**: `ruff format`, `ruff check`, `ty`, `pytest`
 - **JavaScript/TypeScript**: (`vp format` or `oxfmt`), (`vp check` or `oxlint`), `vitest`
 
-## Git commit
-
-commit メッセージの scope は「リポジトリのどこを変更したか」を一意に表す領域名にする。
-
-- リポジトリのディレクトリ・モジュール構成に即した名前を使う（例: `frontend`, `backend`, `db`）
-- 外部ツールや環境の設定を管理するリポジトリでは、対象システム名を scope にする（例: `ci`, `docker`）。システム配下の機能名単独は対象が一意に定まらないため使わない
-- 対応する領域名がない変更は scope を省略する
-
 ## 調査タスク
 
 検索結果・ウェブサイト・コードベース（リポジトリ・ファイル・関数など）など、何かを説明・言及・引用するときは、該当箇所へクリックでジャンプできるリンクを必ず添える。
