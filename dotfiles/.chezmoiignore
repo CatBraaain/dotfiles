@@ -3,7 +3,6 @@ gsudo
 obs-studio
 powershell
 sharex
-vscode
 windows-terminal
 .gitconfig.local.sample
 .secrets.sh.sample
