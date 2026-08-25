@@ -312,6 +312,10 @@ function parseRunToolsResponse(execution: RunResult): RunToolsResponse {
 
 export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
+  // pi's TUI has a single slot for extension dialogs: a second dialog replaces
+  // the first without resolving its promise, deadlocking that tool call.
+  // ponytail: one global queue; split per dialog kind if contention ever matters.
+  private uiQueue: Promise<void> = Promise.resolve();
   private readonly config: GuardrailsConfig;
   private readonly readPaths: ExpandedPathSection;
   private readonly writePaths: ExpandedPathSection;
@@ -449,7 +453,26 @@ export class Sandbox {
     if (this.hasDynamicGrant(operation, absolutePath)) return;
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
-    await this.requestAccess(operation, absolutePath, context.ui);
+    const ui = context.ui;
+    await this.withUiLock(async () => {
+      // A sibling tool call may have obtained the grant while this call queued.
+      if (this.hasDynamicGrant(operation, absolutePath)) return;
+      await this.requestAccess(operation, absolutePath, ui);
+    });
+  }
+
+  private async withUiLock<T>(showDialog: () => Promise<T>): Promise<T> {
+    const previous = this.uiQueue;
+    let release!: () => void;
+    this.uiQueue = new Promise<void>((resolveRelease) => {
+      release = resolveRelease;
+    });
+    await previous;
+    try {
+      return await showDialog();
+    } finally {
+      release();
+    }
   }
 
   private hasDynamicGrant(operation: "read" | "write", candidatePath: string): boolean {
@@ -505,7 +528,8 @@ export class Sandbox {
     if (action === "allow") return Promise.resolve();
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
-    return context.ui.confirm("Allow command?", command).then((approved) => {
+    const ui = context.ui;
+    return this.withUiLock(() => ui.confirm("Allow command?", command)).then((approved) => {
       if (!approved) throw new Error(`Command denied by user: ${command}`);
     });
   }

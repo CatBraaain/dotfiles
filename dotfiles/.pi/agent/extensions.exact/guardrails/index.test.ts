@@ -811,6 +811,90 @@ commands:
   );
 });
 
+describe("§2・§4 確認の直列化", () => {
+  const withDialogSandbox =
+    (test: (dir: string, sandbox: Sandbox) => Promise<void> | void) => async () => {
+      const dir = mkdtempSync(join(tmpdir(), "guardrails-dialog-"));
+      try {
+        const configPath = join(dir, "config.yaml");
+        writeFileSync(configPath, "read: {}\nwrite: {}\n");
+        await test(dir, new Sandbox(dir, configPath));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+  const countOverlappingConfirmsUi = () => {
+    let activeDialogCount = 0;
+    let maxActiveDialogCount = 0;
+    return {
+      ui: {
+        confirm: async () => {
+          activeDialogCount++;
+          maxActiveDialogCount = Math.max(maxActiveDialogCount, activeDialogCount);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          activeDialogCount--;
+          return true;
+        },
+      },
+      maxOverlappingDialogs: () => maxActiveDialogCount,
+    };
+  };
+
+  it(
+    "並行する2つのパス確認は一度に1つだけ表示する",
+    withDialogSandbox(async (dir, sandbox) => {
+      const { ui, maxOverlappingDialogs } = countOverlappingConfirmsUi();
+      await Promise.all([
+        sandbox.authorizePath("read", join(dir, "a.txt"), { cwd: dir, hasUI: true, ui }),
+        sandbox.authorizePath("read", join(dir, "b.txt"), { cwd: dir, hasUI: true, ui }),
+      ]);
+      assert.equal(maxOverlappingDialogs(), 1);
+    }),
+  );
+
+  it(
+    "並行する同じパスへの確認は1回で済む",
+    withDialogSandbox(async (dir, sandbox) => {
+      let confirmCount = 0;
+      const context = {
+        cwd: dir,
+        hasUI: true,
+        ui: {
+          confirm: async () => {
+            confirmCount++;
+            return true;
+          },
+        },
+      };
+      await Promise.all([
+        sandbox.authorizePath("read", join(dir, "same.txt"), context),
+        sandbox.authorizePath("read", join(dir, "same.txt"), context),
+      ]);
+      assert.equal(confirmCount, 1);
+    }),
+  );
+
+  it(
+    "並行する2つのコマンド確認は一度に1つだけ表示する",
+    withSandbox(
+      `
+commands:
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        const { ui, maxOverlappingDialogs } = countOverlappingConfirmsUi();
+        await Promise.all([
+          sandbox.authorizeCommand("git push origin main", { cwd: "/cwd", hasUI: true, ui }),
+          sandbox.authorizeCommand("git push origin topic", { cwd: "/cwd", hasUI: true, ui }),
+        ]);
+        assert.equal(maxOverlappingDialogs(), 1);
+      },
+    ),
+  );
+});
+
 describe("§6 設定", () => {
   it("全セクションを読み込む", () => {
     const config = parseGuardrailsConfig(`
