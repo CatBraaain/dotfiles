@@ -22,6 +22,7 @@ extensions_for_linux=(
   codeium.codeium
   davidkol.fastcompare
   donjayamanne.githistory
+  eamodio.gitlens
   emeraldwalk.runonsave
   formulahendry.code-runner
   foxundermoon.shell-format
