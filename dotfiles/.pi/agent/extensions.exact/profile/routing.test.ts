@@ -81,9 +81,13 @@ describe("tier の候補選択", () => {
   });
 
   it("when の空文字は常に有効になる", async () => {
-    const isAvailable = await evalWhen("   ", async () => {
-      throw new Error("must not execute");
-    }, 5000);
+    const isAvailable = await evalWhen(
+      "   ",
+      async () => {
+        throw new Error("must not execute");
+      },
+      5000,
+    );
     assert.equal(isAvailable, true);
   });
 

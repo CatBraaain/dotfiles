@@ -34,23 +34,23 @@ import {
   type ToolTheme,
 } from "../shared/tool-format.ts";
 
-export type Role = string;
+export type Profile = string;
 
-export interface RoleDefinition {
+export interface ProfileDefinition {
   tier: string;
   tools: readonly string[];
-  subagents: readonly Role[];
+  subagents: readonly Profile[];
   systemPrompt: readonly string[];
 }
 
-export interface RoleConfig {
-  default: Role;
+export interface ProfileConfig {
+  default: Profile;
   tiers: Record<string, readonly ModelCandidate[]>;
-  roles: Record<Role, RoleDefinition>;
+  profiles: Record<Profile, ProfileDefinition>;
 }
 
 export interface ConfigLoadResult {
-  config?: RoleConfig;
+  config?: ProfileConfig;
   error?: string;
 }
 
@@ -80,11 +80,15 @@ function parseCandidates(raw: unknown, tierName: string): ModelCandidate[] | str
   return candidates;
 }
 
-export function parseRoleConfig(source: string): ConfigLoadResult {
+export function parseProfileConfig(source: string): ConfigLoadResult {
   try {
     const document = parseYaml(source) as unknown;
-    if (!isRecord(document) || !isNonEmptyString(document.default) || !isRecord(document.roles)) {
-      return { error: "default and roles are required" };
+    if (
+      !isRecord(document) ||
+      !isNonEmptyString(document.default) ||
+      !isRecord(document.profiles)
+    ) {
+      return { error: "default and profiles are required" };
     }
     if (!isRecord(document.tiers)) return { error: "tiers are required" };
 
@@ -95,77 +99,89 @@ export function parseRoleConfig(source: string): ConfigLoadResult {
       tiers[tierName] = candidates;
     }
 
-    const roles: Record<Role, RoleDefinition> = {};
-    for (const [name, rawDefinition] of Object.entries(document.roles)) {
-      if (!isRecord(rawDefinition)) return { error: `role ${name} must be an object` };
+    const profiles: Record<Profile, ProfileDefinition> = {};
+    for (const [name, rawDefinition] of Object.entries(document.profiles)) {
+      if (!isRecord(rawDefinition)) return { error: `profile ${name} must be an object` };
       const { tier, tools, subagents, systemPrompt } = rawDefinition;
-      if (!isNonEmptyString(tier)) return { error: `role ${name} has an invalid tier` };
-      if (!(tier in tiers)) return { error: `role ${name} references undefined tier ${tier}` };
+      if (!isNonEmptyString(tier)) return { error: `profile ${name} has an invalid tier` };
+      if (!(tier in tiers)) return { error: `profile ${name} references undefined tier ${tier}` };
       if (!Array.isArray(tools) || !tools.every((tool) => typeof tool === "string")) {
-        return { error: `role ${name} has invalid tools` };
+        return { error: `profile ${name} has invalid tools` };
       }
-      if (!Array.isArray(subagents) || !subagents.every((role) => typeof role === "string")) {
-        return { error: `role ${name} has invalid subagents` };
+      if (!Array.isArray(subagents) || !subagents.every((profile) => typeof profile === "string")) {
+        return { error: `profile ${name} has invalid subagents` };
       }
       if (
         !Array.isArray(systemPrompt) ||
         !systemPrompt.every((prompt) => typeof prompt === "string")
       ) {
-        return { error: `role ${name} has an invalid systemPrompt` };
+        return { error: `profile ${name} has an invalid systemPrompt` };
       }
-      roles[name] = { tier, tools, subagents, systemPrompt };
+      profiles[name] = { tier, tools, subagents, systemPrompt };
     }
 
-    if (!roles[document.default])
-      return { error: `default role ${document.default} is not defined` };
-    for (const [name, definition] of Object.entries(roles)) {
-      const unknownSubagent = definition.subagents.find((role) => !roles[role]);
+    if (!profiles[document.default])
+      return { error: `default profile ${document.default} is not defined` };
+    for (const [name, definition] of Object.entries(profiles)) {
+      const unknownSubagent = definition.subagents.find((profile) => !profiles[profile]);
       if (unknownSubagent)
-        return { error: `role ${name} delegates to undefined role ${unknownSubagent}` };
+        return { error: `profile ${name} delegates to undefined profile ${unknownSubagent}` };
     }
 
-    return { config: { default: document.default, tiers, roles } };
+    return { config: { default: document.default, tiers, profiles } };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export function loadRoleConfig(
-  configPath = join(getAgentDir(), "extensions", "role", "config.yaml"),
+export function loadProfileConfig(
+  configPath = join(getAgentDir(), "extensions", "profile", "config.yaml"),
 ): ConfigLoadResult {
   if (!existsSync(configPath)) return { error: `config file not found: ${configPath}` };
   try {
-    return parseRoleConfig(readFileSync(configPath, "utf8"));
+    return parseProfileConfig(readFileSync(configPath, "utf8"));
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export function initialRole(config: RoleConfig, requestedRole?: Role): Role {
-  return requestedRole && config.roles[requestedRole] ? requestedRole : config.default;
+export function initialProfile(config: ProfileConfig, requestedProfile?: Profile): Profile {
+  return requestedProfile && config.profiles[requestedProfile] ? requestedProfile : config.default;
 }
 
-export function isToolAllowed(role: Role, toolName: string, config: RoleConfig): boolean {
+export function isToolAllowed(profile: Profile, toolName: string, config: ProfileConfig): boolean {
   if (toolName === "subagent") return true;
-  const tools = config.roles[role]?.tools ?? [];
+  const tools = config.profiles[profile]?.tools ?? [];
   return tools.includes("*") || tools.includes(toolName);
 }
 
-export function shouldBlockToolCall(role: Role, toolName: string, config: RoleConfig): boolean {
-  return !isToolAllowed(role, toolName, config);
+export function shouldBlockToolCall(
+  profile: Profile,
+  toolName: string,
+  config: ProfileConfig,
+): boolean {
+  return !isToolAllowed(profile, toolName, config);
 }
 
-export function buildRoleSystemPromptAddendum(role: Role, config: RoleConfig): string {
-  const prompts = (config.roles[role]?.systemPrompt ?? []).filter(Boolean);
+export function buildProfileSystemPromptAddendum(profile: Profile, config: ProfileConfig): string {
+  const prompts = (config.profiles[profile]?.systemPrompt ?? []).filter(Boolean);
   return prompts.length > 0 ? `\n\n${prompts.join("\n\n")}` : "";
 }
 
-export function canDelegate(fromRole: Role, toRole: Role, config: RoleConfig): boolean {
-  return config.roles[fromRole]?.subagents.includes(toRole) ?? false;
+export function canDelegate(
+  fromProfile: Profile,
+  toProfile: Profile,
+  config: ProfileConfig,
+): boolean {
+  return config.profiles[fromProfile]?.subagents.includes(toProfile) ?? false;
 }
 
-export function childRole(fromRole: Role, toRole: Role, config: RoleConfig): Role | undefined {
-  return canDelegate(fromRole, toRole, config) ? toRole : undefined;
+export function childProfile(
+  fromProfile: Profile,
+  toProfile: Profile,
+  config: ProfileConfig,
+): Profile | undefined {
+  return canDelegate(fromProfile, toProfile, config) ? toProfile : undefined;
 }
 
 export const __spawn: { current: typeof spawn } = { current: spawn };
@@ -181,12 +197,12 @@ export const __abortTimer: {
 // /reload で拡張インスタンスが再生成されても手動選択状態と cooldown を維持するため、
 // session_shutdown 時に globalThis へ退避し、次インスタンスの session_start で復元する。
 interface SavedRoutingState {
-  role: Role;
+  profile: Profile;
   manual: boolean;
   cooldowns: Map<string, number>;
 }
 
-const ROUTING_STATE_KEY = "__piRoleRoutingState";
+const ROUTING_STATE_KEY = "__piProfileRoutingState";
 
 function saveRoutingState(state: SavedRoutingState): void {
   (globalThis as Record<string, unknown>)[ROUTING_STATE_KEY] = state;
@@ -242,7 +258,7 @@ interface ChildAction {
 }
 
 interface ChildRun {
-  role: Role;
+  profile: Profile;
   task: string;
   cwd: string;
   pending: boolean;
@@ -254,7 +270,7 @@ interface ChildRun {
   errorMessage?: string;
 }
 
-interface RoleToolDetails {
+interface ProfileToolDetails {
   results: ChildRun[];
 }
 
@@ -302,20 +318,20 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
   return { command: "pi", args };
 }
 
-type OnUpdateCallback = (partialResult: AgentToolResult<RoleToolDetails>) => void;
+type OnUpdateCallback = (partialResult: AgentToolResult<ProfileToolDetails>) => void;
 
 async function runChild(
   defaultCwd: string,
   task: string,
-  role: Role,
+  profile: Profile,
   cwd: string | undefined,
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<ChildRun> {
-  // モデルは渡さない。子セッションが自分の role の tier から解決する。
-  const args = ["--mode", "json", "-p", "--no-session", "--role", role, `Task: ${task}`];
+  // モデルは渡さない。子セッションが自分の profile の tier から解決する。
+  const args = ["--mode", "json", "-p", "--no-session", "--profile", profile, `Task: ${task}`];
   const childResult: ChildRun = {
-    role,
+    profile,
     task,
     cwd: cwd ?? defaultCwd,
     pending: true,
@@ -477,19 +493,19 @@ async function runChild(
   return childResult;
 }
 
-function registerRoleWidget(
+function registerProfileWidget(
   ctx: ExtensionContext,
-  currentRole: () => Role,
+  currentProfile: () => Profile,
   isManual: () => boolean,
 ): void {
   ctx.ui.setWidget(
-    "role",
+    "profile",
     (ui, theme) => {
       tuiHandle = ui;
       return {
         render: () => {
           const suffix = isManual() ? " (manual)" : "";
-          return [theme.fg("dim", `🤖 role: ${currentRole()}${suffix}`)];
+          return [theme.fg("dim", `🤖 profile: ${currentProfile()}${suffix}`)];
         },
         invalidate: () => {},
       };
@@ -498,23 +514,23 @@ function registerRoleWidget(
   );
 }
 
-export default function roleExtension(
+export default function profileExtension(
   pi: ExtensionAPI,
-  injectedConfig: ConfigLoadResult = loadRoleConfig(),
+  injectedConfig: ConfigLoadResult = loadProfileConfig(),
 ): void {
   const loadedConfig = injectedConfig;
   const config = loadedConfig.config;
-  let currentRole = config?.default ?? "invalid";
+  let currentProfile = config?.default ?? "invalid";
 
-  pi.registerFlag("role", { type: "string", description: "Role for a child session." });
+  pi.registerFlag("profile", { type: "string", description: "Profile for a child session." });
 
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Spawn an isolated child pi process using a configured role.",
+    description: "Spawn an isolated child pi process using a configured profile.",
     parameters: Type.Object({
       task: Type.String({ description: "Task to delegate to the child process" }),
-      role: Type.String({ description: "Configured child role name" }),
+      profile: Type.String({ description: "Configured child profile name" }),
       cwd: Type.Optional(
         Type.String({ description: "Working directory; defaults to the parent cwd" }),
       ),
@@ -522,7 +538,7 @@ export default function roleExtension(
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       if (!config)
         return {
-          content: [textPart(`Role configuration error: ${loadedConfig.error}`)],
+          content: [textPart(`Profile configuration error: ${loadedConfig.error}`)],
           details: { results: [] },
           isError: true,
         };
@@ -531,17 +547,19 @@ export default function roleExtension(
           content: [textPart("Invalid parameters. Provide a task.")],
           details: { results: [] },
         };
-      if (!config.roles[params.role]) {
+      if (!config.profiles[params.profile]) {
         return {
-          content: [textPart(`Cannot delegate: role ${params.role} is not defined.`)],
+          content: [textPart(`Cannot delegate: profile ${params.profile} is not defined.`)],
           details: { results: [] },
           isError: true,
         };
       }
-      if (!canDelegate(currentRole, params.role, config)) {
+      if (!canDelegate(currentProfile, params.profile, config)) {
         return {
           content: [
-            textPart(`Permission denied: role ${currentRole} cannot delegate to ${params.role}.`),
+            textPart(
+              `Permission denied: profile ${currentProfile} cannot delegate to ${params.profile}.`,
+            ),
           ],
           details: { results: [] },
           isError: true,
@@ -552,7 +570,7 @@ export default function roleExtension(
       startSpinnerTimer();
       let result: ChildRun;
       try {
-        result = await runChild(ctx.cwd, params.task, params.role, params.cwd, signal, onUpdate);
+        result = await runChild(ctx.cwd, params.task, params.profile, params.cwd, signal, onUpdate);
       } finally {
         pendingChildren--;
         stopSpinnerTimerIfIdle();
@@ -570,10 +588,10 @@ export default function roleExtension(
       };
     },
     renderCall(args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold(`subagent ${args.role ?? "..."}`)), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold(`subagent ${args.profile ?? "..."}`)), 0, 0);
     },
     renderResult(result, options, theme) {
-      const details = result.details as RoleToolDetails | undefined;
+      const details = result.details as ProfileToolDetails | undefined;
       const childResult = details?.results[0];
       if (!childResult) {
         const fallback = result.content[0];
@@ -617,7 +635,7 @@ export default function roleExtension(
         container.addChild({
           render: () =>
             childResult.pending
-              ? [theme.fg("muted", `${spinnerFrame(__spinnerTimers.now())} ${childResult.role}`)]
+              ? [theme.fg("muted", `${spinnerFrame(__spinnerTimers.now())} ${childResult.profile}`)]
               : [],
           invalidate: () => {},
         });
@@ -628,7 +646,7 @@ export default function roleExtension(
 
   if (!config) {
     pi.on("session_start", async (_event, ctx) => {
-      if (ctx.hasUI) ctx.ui.notify(`role configuration error: ${loadedConfig.error}`, "error");
+      if (ctx.hasUI) ctx.ui.notify(`profile configuration error: ${loadedConfig.error}`, "error");
     });
     return;
   }
@@ -655,15 +673,15 @@ export default function roleExtension(
   // tier の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立の候補は
   // pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外して次候補へ
   // 進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
-  // notifySwitch を false にすると切替時の `role model →` 通知を省く（429 フォールバックは
+  // notifySwitch を false にすると切替時の `profile model →` 通知を省く（429 フォールバックは
   // 「レート制限時のフォールバック」節の通知が専らを定めるため）。
   async function applyTierModel(
-    role: Role,
+    profile: Profile,
     ctx: ExtensionContext,
     signal?: AbortSignal,
     notifySwitch = true,
   ): Promise<string | null> {
-    const tierName = config.roles[role]?.tier;
+    const tierName = config.profiles[profile]?.tier;
     if (!tierName) return null;
     let candidates = config.tiers[tierName] ?? [];
     for (;;) {
@@ -680,7 +698,7 @@ export default function roleExtension(
       }
       if (await switchTo(model)) {
         if (notifySwitch && ctx.hasUI)
-          ctx.ui.notify(`role model → ${model.provider}/${model.id}`, "info");
+          ctx.ui.notify(`profile model → ${model.provider}/${model.id}`, "info");
         return modelKey(model);
       }
       const failed = model;
@@ -690,8 +708,12 @@ export default function roleExtension(
     }
   }
 
-  function notifyNoModel(role: Role, ctx: ExtensionContext, level: "warning" | "error"): void {
-    const message = `no available model for role ${role}: tier ${config.roles[role].tier}`;
+  function notifyNoModel(
+    profile: Profile,
+    ctx: ExtensionContext,
+    level: "warning" | "error",
+  ): void {
+    const message = `no available model for profile ${profile}: tier ${config.profiles[profile].tier}`;
     if (!ctx.hasUI) {
       // UI のない子プロセスでは通知が見えないまま終わるため、stderr と終了コードで伝える
       if (level === "error") {
@@ -703,15 +725,15 @@ export default function roleExtension(
     ctx.ui.notify(message, level);
   }
 
-  function applyRoleTools(ctx: ExtensionContext, role: Role): void {
-    const roleDefinition = config.roles[role];
-    const activeTools = roleDefinition.tools.includes("*")
+  function applyProfileTools(ctx: ExtensionContext, profile: Profile): void {
+    const profileDefinition = config.profiles[profile];
+    const activeTools = profileDefinition.tools.includes("*")
       ? pi.getAllTools().map((tool) => tool.name)
-      : [...new Set([...roleDefinition.tools, "subagent"])];
+      : [...new Set([...profileDefinition.tools, "subagent"])];
     pi.setActiveTools(activeTools);
-    registerRoleWidget(
+    registerProfileWidget(
       ctx,
-      () => currentRole,
+      () => currentProfile,
       () => manual,
     );
   }
@@ -723,13 +745,13 @@ export default function roleExtension(
       // 設定を読み込み直す。手動選択状態と cooldown は維持し、モデルは変更しない。
       const saved = takeSavedRoutingState();
       if (saved) {
-        currentRole = config.roles[saved.role]
-          ? saved.role
-          : initialRole(config, pi.getFlag("role") as string | undefined);
+        currentProfile = config.profiles[saved.profile]
+          ? saved.profile
+          : initialProfile(config, pi.getFlag("profile") as string | undefined);
         manual = saved.manual;
         cooldowns = saved.cooldowns;
       }
-      applyRoleTools(ctx, currentRole);
+      applyProfileTools(ctx, currentProfile);
       return;
     }
 
@@ -739,28 +761,28 @@ export default function roleExtension(
       event.reason === "startup" || event.reason === "new"
         ? new Map()
         : (takeSavedRoutingState()?.cooldowns ?? new Map());
-    currentRole = initialRole(config, pi.getFlag("role") as string | undefined);
-    applyRoleTools(ctx, currentRole);
-    const applied = await applyTierModel(currentRole, ctx);
-    if (!applied) notifyNoModel(currentRole, ctx, "warning");
+    currentProfile = initialProfile(config, pi.getFlag("profile") as string | undefined);
+    applyProfileTools(ctx, currentProfile);
+    const applied = await applyTierModel(currentProfile, ctx);
+    if (!applied) notifyNoModel(currentProfile, ctx, "warning");
   });
 
   pi.on("session_shutdown", async () => {
-    saveRoutingState({ role: currentRole, manual, cooldowns });
+    saveRoutingState({ profile: currentProfile, manual, cooldowns });
   });
 
   // ── pre-prompt re-evaluation ────────────────────────────────────────
 
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension" || manual) return;
-    const applied = await applyTierModel(currentRole, ctx, ctx.signal);
+    const applied = await applyTierModel(currentProfile, ctx, ctx.signal);
     if (applied) return;
-    notifyNoModel(currentRole, ctx, "error");
+    notifyNoModel(currentProfile, ctx, "error");
     return { action: "handled" };
   });
 
   pi.on("before_agent_start", async (event) => {
-    const addendum = buildRoleSystemPromptAddendum(currentRole, config);
+    const addendum = buildProfileSystemPromptAddendum(currentProfile, config);
     return addendum ? { systemPrompt: event.systemPrompt + addendum } : undefined;
   });
 
@@ -781,7 +803,7 @@ export default function roleExtension(
   ): Promise<boolean> {
     recordCooldown(cooldowns, rateLimitedModelKey, cooldownMs, Date.now());
 
-    const switchedTo = await applyTierModel(currentRole, ctx, ctx.signal, false);
+    const switchedTo = await applyTierModel(currentProfile, ctx, ctx.signal, false);
     if (!switchedTo) {
       if (ctx.hasUI)
         ctx.ui.notify(`rate limited on ${rateLimitedModelKey}; no fallback available`, "error");
@@ -827,24 +849,24 @@ export default function roleExtension(
     if (fallbackSucceeded) return { message: makeRetryableRateLimitMessage(message) };
   });
 
-  // ── tool gating & role commands ─────────────────────────────────────
+  // ── tool gating & profile commands ─────────────────────────────────────
 
   pi.on("tool_call", async (event) => {
-    if (shouldBlockToolCall(currentRole, event.toolName, config)) {
-      return { block: true, reason: `role ${currentRole} cannot use ${event.toolName}` };
+    if (shouldBlockToolCall(currentProfile, event.toolName, config)) {
+      return { block: true, reason: `profile ${currentProfile} cannot use ${event.toolName}` };
     }
   });
 
-  for (const role of Object.keys(config.roles)) {
-    pi.registerCommand(`role:${role}`, {
-      description: `Switch the session role to ${role}.`,
+  for (const profile of Object.keys(config.profiles)) {
+    pi.registerCommand(`profile:${profile}`, {
+      description: `Switch the session profile to ${profile}.`,
       handler: async (args, ctx) => {
-        currentRole = role;
+        currentProfile = profile;
         manual = false;
-        applyRoleTools(ctx, currentRole);
+        applyProfileTools(ctx, currentProfile);
         tuiHandle?.requestRender();
-        const applied = await applyTierModel(currentRole, ctx);
-        if (!applied) notifyNoModel(currentRole, ctx, "warning");
+        const applied = await applyTierModel(currentProfile, ctx);
+        if (!applied) notifyNoModel(currentProfile, ctx, "warning");
         const followUpMessage = args.trim();
         if (followUpMessage) pi.sendUserMessage(followUpMessage);
       },

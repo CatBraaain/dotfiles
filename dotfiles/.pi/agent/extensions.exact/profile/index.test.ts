@@ -2,18 +2,18 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { Container, Text } from "@earendil-works/pi-tui";
-import roleExtension, {
+import profileExtension, {
   __abortTimer,
   __resetRoutingState,
   __spawn,
   __spinnerTimers,
-  type RoleConfig,
-  buildRoleSystemPromptAddendum,
+  type ProfileConfig,
+  buildProfileSystemPromptAddendum,
   canDelegate,
-  childRole,
-  initialRole,
-  loadRoleConfig,
-  parseRoleConfig,
+  childProfile,
+  initialProfile,
+  loadProfileConfig,
+  parseProfileConfig,
   shouldBlockToolCall,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
@@ -32,7 +32,7 @@ function it(name: string, fn: () => Promise<void> | void): void {
   tests.push({ name: group ? `${group} > ${name}` : name, fn });
 }
 
-const config: RoleConfig = {
+const config: ProfileConfig = {
   default: "manager",
   tiers: {
     middle: [
@@ -41,7 +41,7 @@ const config: RoleConfig = {
     ],
     low: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
   },
-  roles: {
+  profiles: {
     manager: {
       tier: "middle",
       tools: ["*"],
@@ -93,8 +93,8 @@ interface CaptureOptions {
   setModelSucceeds?: boolean | boolean[];
 }
 
-function captureRoleExtension(
-  injectedConfig: { config?: RoleConfig; error?: string } = { config },
+function captureProfileExtension(
+  injectedConfig: { config?: ProfileConfig; error?: string } = { config },
   options: CaptureOptions = {},
 ) {
   const handlers = new Map<string, Handler[]>();
@@ -107,7 +107,7 @@ function captureRoleExtension(
   const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
   const children: FakeChild[] = [];
   let spawnResponder: (child: FakeChild) => void = () => {};
-  let roleWidget: any;
+  let profileWidget: any;
   let requestedRenderCount = 0;
   let registeredTool: CapturedTool | undefined;
 
@@ -120,7 +120,7 @@ function captureRoleExtension(
     return child;
   }) as unknown as typeof __spawn.current;
 
-  roleExtension(
+  profileExtension(
     {
       on(event: string, handler: Handler) {
         const eventHandlers = handlers.get(event) ?? [];
@@ -162,7 +162,7 @@ function captureRoleExtension(
 
   const ui = {
     setWidget(_key: string, widget: unknown) {
-      roleWidget = widget;
+      profileWidget = widget;
     },
     notify(message: string, level: string) {
       notifications.push(message);
@@ -202,8 +202,8 @@ function captureRoleExtension(
     async sessionShutdown() {
       for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
     },
-    async runCommand(role: string, args = "") {
-      await commands.get(`role:${role}`)?.(args, context);
+    async runCommand(profile: string, args = "") {
+      await commands.get(`profile:${profile}`)?.(args, context);
     },
     async input(text: string, source = "interactive") {
       let result: unknown;
@@ -228,8 +228,8 @@ function captureRoleExtension(
       }
       return result;
     },
-    roleWidget() {
-      return roleWidget?.(
+    profileWidget() {
+      return profileWidget?.(
         { requestRender: () => requestedRenderCount++ },
         { fg: (_color: string, text: string) => text },
       )?.render();
@@ -277,14 +277,14 @@ describe("設定", () => {
     );
   });
 
-  it("YAML を tier つき role 設定として読み込む", () => {
-    const result = parseRoleConfig(`default: manager
+  it("YAML を tier つき profile 設定として読み込む", () => {
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle:
     - provider: zai
       model: glm-5.2
       when: 'exit 0'
-roles:
+profiles:
   manager:
     tier: middle
     tools: [read]
@@ -294,104 +294,104 @@ roles:
     assert.deepEqual(result.config?.tiers.middle, [
       { provider: "zai", model: "glm-5.2", when: "exit 0" },
     ]);
-    assert.equal(result.config?.roles.manager.tier, "middle");
-    assert.deepEqual(result.config?.roles.manager.tools, ["read"]);
+    assert.equal(result.config?.profiles.manager.tier, "middle");
+    assert.deepEqual(result.config?.profiles.manager.tools, ["read"]);
   });
 
   it("YAML アンカーで共有した prompt 要素を配列として読み込む", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
 _common: &common shared
-roles:
+profiles:
   manager:
     tier: middle
     tools: []
     subagents: []
     systemPrompt: [*common]`);
-    assert.deepEqual(result.config?.roles.manager.systemPrompt, ["shared"]);
+    assert.deepEqual(result.config?.profiles.manager.systemPrompt, ["shared"]);
   });
 
   it("設定ファイルがない場合は読み込みエラーを返す", () => {
-    const result = loadRoleConfig("/path/that/does/not/exist/role-config.yaml");
+    const result = loadProfileConfig("/path/that/does/not/exist/profile-config.yaml");
     assert.match(result.error ?? "", /config file not found/);
   });
 
   it("設定ファイルを読み取れない場合は読み込みエラーを返す", () => {
-    const result = loadRoleConfig("/");
+    const result = loadProfileConfig("/");
     assert.ok(result.error);
   });
 
   it("YAML として不正な設定を拒否する", () => {
-    const result = parseRoleConfig("roles: [");
+    const result = parseProfileConfig("profiles: [");
     assert.ok(result.error);
   });
 
   it("default が文字列でない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: 123
-roles: {}
+    const result = parseProfileConfig(`default: 123
+profiles: {}
 tiers: {}`);
-    assert.match(result.error ?? "", /default and roles are required/);
+    assert.match(result.error ?? "", /default and profiles are required/);
   });
 
-  it("roles がオブジェクトでない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
-roles: []
+  it("profiles がオブジェクトでない設定を拒否する", () => {
+    const result = parseProfileConfig(`default: manager
+profiles: []
 tiers: {}`);
-    assert.match(result.error ?? "", /default and roles are required/);
+    assert.match(result.error ?? "", /default and profiles are required/);
   });
 
   it("tier の候補要素がオブジェクトでない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: [invalid]
-roles:
+profiles:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /candidate must be an object/);
   });
 
-  it("role 定義がオブジェクトでない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+  it("profile 定義がオブジェクトでない設定を拒否する", () => {
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: []
-roles:
+profiles:
   manager: invalid`);
-    assert.match(result.error ?? "", /role manager must be an object/);
+    assert.match(result.error ?? "", /profile manager must be an object/);
   });
 
   it("tools の要素が文字列でない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: []
-roles:
+profiles:
   manager: {tier: middle, tools: [123], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid tools/);
   });
 
   it("subagents の要素が文字列でない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: []
-roles:
+profiles:
   manager: {tier: middle, tools: [], subagents: [123], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid subagents/);
   });
 
   it("systemPrompt の要素が文字列でない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: []
-roles:
+profiles:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: [123]}`);
     assert.match(result.error ?? "", /invalid systemPrompt/);
   });
 
-  it("複数の systemPrompt 要素を順序どおりに読み込み、role 間で共有する", () => {
-    const result = parseRoleConfig(`default: manager
+  it("複数の systemPrompt 要素を順序どおりに読み込み、profile 間で共有する", () => {
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
 _common: &common shared
-roles:
+profiles:
   manager:
     tier: middle
     tools: []
@@ -402,69 +402,69 @@ roles:
     tools: []
     subagents: []
     systemPrompt: [*common, worker-only]`);
-    assert.deepEqual(result.config?.roles.manager.systemPrompt, ["shared", "manager-only"]);
-    assert.deepEqual(result.config?.roles.worker.systemPrompt, ["shared", "worker-only"]);
+    assert.deepEqual(result.config?.profiles.manager.systemPrompt, ["shared", "manager-only"]);
+    assert.deepEqual(result.config?.profiles.worker.systemPrompt, ["shared", "worker-only"]);
   });
 
   it("tiers がない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
-roles:
+    const result = parseProfileConfig(`default: manager
+profiles:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /tiers are required/);
   });
 
   it("tier が配列でないものを拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: {provider: zai}
-roles:
+profiles:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must be an array/);
   });
 
   it("provider か model のない候補を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle:
     - provider: zai
-roles:
+profiles:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /provider and model strings/);
   });
 
   it("when が文字列でない候補を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle:
     - {provider: zai, model: glm-5.2, when: 123}
-roles:
+profiles:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid when/);
   });
 
-  it("role の tier がない設定を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+  it("profile の tier がない設定を拒否する", () => {
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-roles:
+profiles:
   manager: {tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid tier/);
   });
 
-  it("未定義の tier を参照する role を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+  it("未定義の tier を参照する profile を拒否する", () => {
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-roles:
+profiles:
   manager: {tier: high, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /undefined tier high/);
   });
 
   it("配列でない systemPrompt を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-roles:
+profiles:
   manager:
     tier: middle
     tools: []
@@ -473,33 +473,33 @@ roles:
     assert.match(result.error ?? "", /invalid systemPrompt/);
   });
 
-  it("未定義の default role を拒否する", () => {
-    const result = parseRoleConfig(`default: missing
+  it("未定義の default profile を拒否する", () => {
+    const result = parseProfileConfig(`default: missing
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-roles: {}`);
+profiles: {}`);
     assert.match(result.error ?? "", /not defined/);
   });
 
   it("未定義の委譲先を拒否する", () => {
-    const result = parseRoleConfig(`default: manager
+    const result = parseProfileConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-roles:
+profiles:
   manager:
     tier: middle
     tools: []
     subagents: [missing]
     systemPrompt: []`);
-    assert.match(result.error ?? "", /undefined role/);
+    assert.match(result.error ?? "", /undefined profile/);
   });
 });
 
-describe("セッションの role", () => {
-  it("config の default role で開始し、指定された role は子セッションの開始 role にする", () => {
-    assert.equal(initialRole(config), "manager");
-    assert.equal(initialRole(config, "chat"), "chat");
-    assert.equal(initialRole(config, "missing"), "manager");
+describe("セッションの profile", () => {
+  it("config の default profile で開始し、指定された profile は子セッションの開始 profile にする", () => {
+    assert.equal(initialProfile(config), "manager");
+    assert.equal(initialProfile(config, "chat"), "chat");
+    assert.equal(initialProfile(config, "missing"), "manager");
   });
 });
 
@@ -512,7 +512,7 @@ describe("ツール許可", () => {
     assert.equal(shouldBlockToolCall("manager", "future_tool", config), false);
   });
 
-  it("subagent は role のツール一覧に関係なく利用可能", () => {
+  it("subagent は profile のツール一覧に関係なく利用可能", () => {
     assert.equal(shouldBlockToolCall("chat", "subagent", config), false);
   });
 
@@ -523,31 +523,31 @@ describe("ツール許可", () => {
 });
 
 describe("委譲", () => {
-  it("親 role と子 role の subagents 設定に従って再委譲を許可する", () => {
+  it("親 profile と子 profile の subagents 設定に従って再委譲を許可する", () => {
     assert.equal(canDelegate("manager", "worker", config), true);
     assert.equal(canDelegate("manager", "chat", config), false);
     assert.equal(canDelegate("worker", "chat", config), true);
-    assert.equal(childRole("manager", "worker", config), "worker");
-    assert.equal(childRole("worker", "chat", config), "chat");
+    assert.equal(childProfile("manager", "worker", config), "worker");
+    assert.equal(childProfile("worker", "chat", config), "chat");
   });
 });
 
 describe("システムプロンプト", () => {
-  it("role の systemPrompt を追記する", () => {
-    assert.match(buildRoleSystemPromptAddendum("manager", config), /ファイル操作は禁止/);
+  it("profile の systemPrompt を追記する", () => {
+    assert.match(buildProfileSystemPromptAddendum("manager", config), /ファイル操作は禁止/);
   });
 
   it("appends multiple prompts in configured order", () => {
-    const configuredPrompts: RoleConfig = {
+    const configuredPrompts: ProfileConfig = {
       ...config,
-      roles: {
-        ...config.roles,
-        manager: { ...config.roles.manager, systemPrompt: ["first", "second"] },
+      profiles: {
+        ...config.profiles,
+        manager: { ...config.profiles.manager, systemPrompt: ["first", "second"] },
       },
     };
 
     assert.equal(
-      buildRoleSystemPromptAddendum("manager", configuredPrompts),
+      buildProfileSystemPromptAddendum("manager", configuredPrompts),
       "\n\nfirst\n\nsecond",
     );
   });
@@ -562,16 +562,16 @@ describe("待機スピナー", () => {
 });
 
 describe("拡張の接続", () => {
-  it("起動時に default role の tier 候補を適用し、role 表示と allowlist を更新する", async () => {
-    const extension = captureRoleExtension();
+  it("起動時に default profile の tier 候補を適用し、profile 表示と allowlist を更新する", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
-      assert.deepEqual(extension.notifications, ["role model → zai/glm-5.2"]);
+      assert.deepEqual(extension.notifications, ["profile model → zai/glm-5.2"]);
       assert.deepEqual(extension.notificationEvents, [
-        { message: "role model → zai/glm-5.2", level: "info" },
+        { message: "profile model → zai/glm-5.2", level: "info" },
       ]);
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: manager"]);
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager"]);
       assert.deepEqual(extension.activeTools.at(-1), ["read", "bash", "subagent"]);
     } finally {
       extension.restore();
@@ -579,7 +579,7 @@ describe("拡張の接続", () => {
   });
 
   it("does not notify model switches without a UI", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       extension.context.hasUI = false;
       await extension.sessionStart();
@@ -590,19 +590,19 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("--role フラグの role で開始する", async () => {
-    const extension = captureRoleExtension({ config }, { flags: { role: "chat" } });
+  it("--profile フラグの profile で開始する", async () => {
+    const extension = captureProfileExtension({ config }, { flags: { profile: "chat" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: chat"]);
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: chat"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
     }
   });
 
-  it("role 切り替え時に tier 候補のモデル、ツール、表示を切り替える", async () => {
-    const extension = captureRoleExtension();
+  it("profile 切り替え時に tier 候補のモデル、ツール、表示を切り替える", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat");
@@ -611,34 +611,34 @@ describe("拡張の接続", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: chat"]);
-      assert.ok(extension.notifications.includes("role model → commandcode/gpt-5.6-luna"));
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: chat"]);
+      assert.ok(extension.notifications.includes("profile model → commandcode/gpt-5.6-luna"));
     } finally {
       extension.restore();
     }
   });
 
-  it("tools が空の role は標準ツールを拒否し subagent だけを有効にする", async () => {
-    const extension = captureRoleExtension();
+  it("tools が空の profile は標準ツールを拒否し subagent だけを有効にする", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("locked");
       assert.deepEqual(extension.activeTools.at(-1), ["subagent"]);
       assert.deepEqual(await extension.toolCall("bash"), {
         block: true,
-        reason: "role locked cannot use bash",
+        reason: "profile locked cannot use bash",
       });
     } finally {
       extension.restore();
     }
   });
 
-  it("subagents が空の role は子 role の起動を拒否する", async () => {
-    const extension = captureRoleExtension();
+  it("subagents が空の profile は子 profile の起動を拒否する", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("locked");
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /Permission denied/);
       assert.equal(extension.spawnCalls.length, 0);
@@ -648,21 +648,21 @@ describe("拡張の接続", () => {
   });
 
   it("先頭候補の適用失敗後に次候補の適用を試みる", async () => {
-    const extension = captureRoleExtension({ config }, { setModelSucceeds: [false, true] });
+    const extension = captureProfileExtension({ config }, { setModelSucceeds: [false, true] });
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.selectedModels, [
         { provider: "zai", id: "glm-5.2" },
         { provider: "commandcode", id: "gpt-5.6-luna" },
       ]);
-      assert.equal(extension.notifications.at(-1), "role model → commandcode/gpt-5.6-luna");
+      assert.equal(extension.notifications.at(-1), "profile model → commandcode/gpt-5.6-luna");
     } finally {
       extension.restore();
     }
   });
 
   it("tier の全候補に失敗したら現在のモデルを維持し warning で通知する", async () => {
-    const extension = captureRoleExtension({ config }, { setModelSucceeds: false });
+    const extension = captureProfileExtension({ config }, { setModelSucceeds: false });
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.selectedModels, [
@@ -671,15 +671,15 @@ describe("拡張の接続", () => {
       ]);
       assert.deepEqual(
         extension.notifications.at(-1),
-        "no available model for role manager: tier middle",
+        "no available model for profile manager: tier middle",
       );
     } finally {
       extension.restore();
     }
   });
 
-  it("role 切り替え時の引数を切り替え後のユーザーメッセージとして送信する", async () => {
-    const extension = captureRoleExtension();
+  it("profile 切り替え時の引数を切り替え後のユーザーメッセージとして送信する", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat", "  hello world  ");
@@ -689,8 +689,8 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("role 切り替え後の follow-up は切替先の systemPrompt で実行される", async () => {
-    const extension = captureRoleExtension();
+  it("profile 切り替え後の follow-up は切替先の systemPrompt で実行される", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat", "hello");
@@ -702,8 +702,8 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("引数のない role 切り替えはユーザーメッセージを送信しない", async () => {
-    const extension = captureRoleExtension();
+  it("引数のない profile 切り替えはユーザーメッセージを送信しない", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat");
@@ -714,19 +714,19 @@ describe("拡張の接続", () => {
   });
 
   it("許可されないツールの tool_call をブロックし、セッション継続理由を返す", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat");
       const blockedCall = await extension.toolCall("bash");
-      assert.deepEqual(blockedCall, { block: true, reason: "role chat cannot use bash" });
+      assert.deepEqual(blockedCall, { block: true, reason: "profile chat cannot use bash" });
     } finally {
       extension.restore();
     }
   });
 
   it("設定された systemPrompt を次回実行のシステムプロンプトへ追記する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.runCommand("manager");
       const result = await extension.beforeAgentStart("base");
@@ -739,7 +739,7 @@ describe("拡張の接続", () => {
 
 describe("tier によるモデルルーティング", () => {
   it("プロンプト送信前に候補を再評価し、同じモデルなら切り替えない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
@@ -752,7 +752,7 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("プロンプト送信前に成立した別候補へ切り替える", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       extension.context.model = { provider: "zai", id: "other" };
@@ -764,7 +764,7 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("プロンプト送信前に全候補が不成立ならエラー通知してプロンプトを実行しない", async () => {
-    const extension = captureRoleExtension({ config }, { findModel: () => undefined });
+    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart();
@@ -774,7 +774,7 @@ describe("tier によるモデルルーティング", () => {
       assert.equal(extension.sentMessages.length, 0);
       assert.deepEqual(
         extension.notifications.at(-1),
-        "no available model for role manager: tier middle",
+        "no available model for profile manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -782,15 +782,15 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("tier の候補が不成立でも別 tier へ降格せず現在のモデルを維持する", async () => {
-    const noDowngradeConfig: RoleConfig = {
-      default: "highRole",
+    const noDowngradeConfig: ProfileConfig = {
+      default: "highProfile",
       tiers: {
         high: [{ provider: "zai", model: "high-model" }],
         low: [{ provider: "zai", model: "low-model" }],
       },
-      roles: { highRole: { tier: "high", tools: [], subagents: [], systemPrompt: [] } },
+      profiles: { highProfile: { tier: "high", tools: [], subagents: [], systemPrompt: [] } },
     };
-    const extension = captureRoleExtension(
+    const extension = captureProfileExtension(
       { config: noDowngradeConfig },
       {
         findModel: (_provider, id) => (id === "low-model" ? { provider: "zai", id } : undefined),
@@ -803,7 +803,7 @@ describe("tier によるモデルルーティング", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for role highRole: tier high",
+        "no available model for profile highProfile: tier high",
       );
     } finally {
       extension.restore();
@@ -811,7 +811,7 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("UI のない環境で全候補が不成立のとき stderr へ出力し終了コードを 1 にする", async () => {
-    const extension = captureRoleExtension({ config }, { findModel: () => undefined });
+    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
     const stderrLines: string[] = [];
     const originalStderrWrite = process.stderr.write.bind(process.stderr);
     const originalExitCode = process.exitCode;
@@ -824,7 +824,7 @@ describe("tier によるモデルルーティング", () => {
       await extension.sessionStart();
       const handledPrompt = await extension.input("hello");
       assert.deepEqual(handledPrompt, { action: "handled" });
-      assert.deepEqual(stderrLines, ["no available model for role manager: tier middle\n"]);
+      assert.deepEqual(stderrLines, ["no available model for profile manager: tier middle\n"]);
       assert.equal(process.exitCode, 1);
     } finally {
       process.stderr.write = originalStderrWrite;
@@ -833,8 +833,8 @@ describe("tier によるモデルルーティング", () => {
     }
   });
 
-  it("拡張からのメッセージ（role 切替 follow-up）は再評価しない", async () => {
-    const extension = captureRoleExtension();
+  it("拡張からのメッセージ（profile 切替 follow-up）は再評価しない", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       extension.context.model = { provider: "zai", id: "other" };
@@ -849,18 +849,18 @@ describe("tier によるモデルルーティング", () => {
 
 describe("手動モデル選択", () => {
   it("ユーザーの model_select で手動状態になり、表示に (manual) を付ける", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: manager (manual)"]);
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager (manual)"]);
     } finally {
       extension.restore();
     }
   });
 
   it("手動状態はプロンプト送信前の再評価を行わない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
@@ -874,23 +874,23 @@ describe("手動モデル選択", () => {
   });
 
   it("restore 由来の model_select は手動状態にしない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("restore");
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: manager"]);
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager"]);
     } finally {
       extension.restore();
     }
   });
 
-  it("role 切り替えで手動状態を解除する", async () => {
-    const extension = captureRoleExtension();
+  it("profile 切り替えで手動状態を解除する", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
       await extension.runCommand("chat");
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: chat"]);
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: chat"]);
     } finally {
       extension.restore();
     }
@@ -899,7 +899,7 @@ describe("手動モデル選択", () => {
 
 describe("レート制限（429）時のフォールバック", () => {
   it("429 の fallback 成功時は最終エラーを retryable に置換し、user message を送らない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.providerResponse(429);
@@ -931,7 +931,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("does not notify fallback switches without a UI", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       extension.context.hasUI = false;
       await extension.sessionStart();
@@ -944,14 +944,14 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("HTTP 429 の Retry-After を cooldown に適用してセッション切替後の候補選択へ反映する", async () => {
-    const before = captureRoleExtension();
-    let after: ReturnType<typeof captureRoleExtension> | undefined;
+    const before = captureProfileExtension();
+    let after: ReturnType<typeof captureProfileExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.providerResponse(429, { "retry-after": "120" });
       await before.sessionShutdown();
 
-      after = captureRoleExtension();
+      after = captureProfileExtension();
       await after.sessionStart("resume");
       assert.deepEqual(after.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
@@ -961,7 +961,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("3候補では最大2回だけ再試行し、user message の履歴を増やさない", async () => {
-    const threeCandidateConfig: RoleConfig = {
+    const threeCandidateConfig: ProfileConfig = {
       default: "manager",
       tiers: {
         middle: [
@@ -970,9 +970,9 @@ describe("レート制限（429）時のフォールバック", () => {
           { provider: "zai", model: "third" },
         ],
       },
-      roles: { manager: { tier: "middle", tools: [], subagents: [], systemPrompt: [] } },
+      profiles: { manager: { tier: "middle", tools: [], subagents: [], systemPrompt: [] } },
     };
-    const extension = captureRoleExtension({ config: threeCandidateConfig });
+    const extension = captureProfileExtension({ config: threeCandidateConfig });
     try {
       await extension.sessionStart();
       await extension.providerResponse(429);
@@ -1012,7 +1012,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("1310 の fallback 成功時は最終エラーを retryable に置換する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       const replacement = await extension.messageEnd({
@@ -1030,7 +1030,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("非レート制限の最終assistantエラーでは切り替えない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       const selectedModelCount = extension.selectedModels.length;
@@ -1050,7 +1050,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("HTTP 429 の後の同一最終エラーでは二重に fallback しない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.providerResponse(429);
@@ -1071,7 +1071,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("次候補がない場合は retryable に置換せず user message を送らない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("worker");
@@ -1095,7 +1095,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("手動状態でもフォールバックし、手動状態を維持する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
@@ -1104,14 +1104,14 @@ describe("レート制限（429）時のフォールバック", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: manager (manual)"]);
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager (manual)"]);
     } finally {
       extension.restore();
     }
   });
 
   it("429 以外のステータスでは何もしない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
@@ -1126,17 +1126,17 @@ describe("レート制限（429）時のフォールバック", () => {
 
 describe("セッションライフサイクル", () => {
   it("/reload では手動選択状態と cooldown を維持し、モデルを変更しない", async () => {
-    const before = captureRoleExtension({ config }, { flags: { role: "chat" } });
-    let after: ReturnType<typeof captureRoleExtension> | undefined;
+    const before = captureProfileExtension({ config }, { flags: { profile: "chat" } });
+    let after: ReturnType<typeof captureProfileExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.modelSelect("set");
       await before.providerResponse(429); // cooldown を 1 つ作る
       await before.sessionShutdown();
 
-      after = captureRoleExtension();
+      after = captureProfileExtension();
       await after.sessionStart("reload");
-      assert.deepEqual(after.roleWidget(), ["🤖 role: chat (manual)"]);
+      assert.deepEqual(after.profileWidget(), ["🤖 profile: chat (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1144,22 +1144,22 @@ describe("セッションライフサイクル", () => {
     }
   });
 
-  it("設定変更を伴う /reload は保存済み role が消えた場合に default role へ戻す", async () => {
-    const before = captureRoleExtension({ config }, { flags: { role: "chat" } });
-    let after: ReturnType<typeof captureRoleExtension> | undefined;
-    const changedConfig: RoleConfig = {
+  it("設定変更を伴う /reload は保存済み profile が消えた場合に default profile へ戻す", async () => {
+    const before = captureProfileExtension({ config }, { flags: { profile: "chat" } });
+    let after: ReturnType<typeof captureProfileExtension> | undefined;
+    const changedConfig: ProfileConfig = {
       default: "manager",
       tiers: { middle: config.tiers.middle },
-      roles: { manager: config.roles.manager },
+      profiles: { manager: config.profiles.manager },
     };
     try {
       await before.sessionStart("startup");
       await before.modelSelect("set");
       await before.sessionShutdown();
 
-      after = captureRoleExtension({ config: changedConfig });
+      after = captureProfileExtension({ config: changedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.roleWidget(), ["🤖 role: manager (manual)"]);
+      assert.deepEqual(after.profileWidget(), ["🤖 profile: manager (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1168,31 +1168,31 @@ describe("セッションライフサイクル", () => {
   });
 
   it("/fork では手動選択状態を解除する", async () => {
-    const before = captureRoleExtension();
-    let after: ReturnType<typeof captureRoleExtension> | undefined;
+    const before = captureProfileExtension();
+    let after: ReturnType<typeof captureProfileExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.modelSelect("set");
       await before.sessionShutdown();
 
-      after = captureRoleExtension();
+      after = captureProfileExtension();
       await after.sessionStart("fork");
-      assert.deepEqual(after.roleWidget(), ["🤖 role: manager"]);
+      assert.deepEqual(after.profileWidget(), ["🤖 profile: manager"]);
     } finally {
       after?.restore();
       before.restore();
     }
   });
 
-  it("/new では cooldown を破棄して初期 role の候補を適用する", async () => {
-    const before = captureRoleExtension();
-    let after: ReturnType<typeof captureRoleExtension> | undefined;
+  it("/new では cooldown を破棄して初期 profile の候補を適用する", async () => {
+    const before = captureProfileExtension();
+    let after: ReturnType<typeof captureProfileExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.providerResponse(429); // zai/glm-5.2 が cooldown
       await before.sessionShutdown();
 
-      after = captureRoleExtension();
+      after = captureProfileExtension();
       await after.sessionStart("new");
       assert.deepEqual(after.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
     } finally {
@@ -1202,14 +1202,14 @@ describe("セッションライフサイクル", () => {
   });
 
   it("セッション切替（resume）では cooldown を維持して次候補を適用する", async () => {
-    const before = captureRoleExtension();
-    let after: ReturnType<typeof captureRoleExtension> | undefined;
+    const before = captureProfileExtension();
+    let after: ReturnType<typeof captureProfileExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.providerResponse(429); // zai/glm-5.2 が cooldown
       await before.sessionShutdown();
 
-      after = captureRoleExtension();
+      after = captureProfileExtension();
       await after.sessionStart("resume");
       assert.deepEqual(after.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
@@ -1219,27 +1219,27 @@ describe("セッションライフサイクル", () => {
   });
 
   it("セッション開始時に手動選択状態を解除する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart("startup");
       await extension.modelSelect("set");
       await extension.sessionShutdown();
       await extension.sessionStart("new");
-      assert.deepEqual(extension.roleWidget(), ["🤖 role: manager"]);
+      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager"]);
     } finally {
       extension.restore();
     }
   });
 
   it("/new で全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureRoleExtension({ config }, { findModel: () => undefined });
+    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart("new");
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for role manager: tier middle",
+        "no available model for profile manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -1247,14 +1247,14 @@ describe("セッションライフサイクル", () => {
   });
 
   it("/resume で全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureRoleExtension({ config }, { findModel: () => undefined });
+    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart("resume");
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for role manager: tier middle",
+        "no available model for profile manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -1262,27 +1262,27 @@ describe("セッションライフサイクル", () => {
   });
 
   it("/fork で全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureRoleExtension({ config }, { findModel: () => undefined });
+    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart("fork");
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for role manager: tier middle",
+        "no available model for profile manager: tier middle",
       );
     } finally {
       extension.restore();
     }
   });
 
-  it("/role 切り替えで全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureRoleExtension({ config }, { findModel: () => undefined });
+  it("/profile 切り替えで全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
+    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.runCommand("chat");
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
-      assert.equal(extension.notifications.at(-1), "no available model for role chat: tier low");
+      assert.equal(extension.notifications.at(-1), "no available model for profile chat: tier low");
     } finally {
       extension.restore();
     }
@@ -1290,8 +1290,8 @@ describe("セッションライフサイクル", () => {
 });
 
 describe("subagent", () => {
-  it("子 role の tier、tools、systemPrompt、再委譲設定を適用する", async () => {
-    const extension = captureRoleExtension();
+  it("子 profile の tier、tools、systemPrompt、再委譲設定を適用する", async () => {
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1308,7 +1308,7 @@ describe("subagent", () => {
       const prompt = await extension.beforeAgentStart("base");
       assert.equal(prompt.systemPrompt, "base\n\nworker prompt");
       assert.equal(
-        (await extension.executeSubagent({ role: "chat", task: "work" })).isError,
+        (await extension.executeSubagent({ profile: "chat", task: "work" })).isError,
         undefined,
       );
     } finally {
@@ -1316,8 +1316,8 @@ describe("subagent", () => {
     }
   });
 
-  it("許可された role の subagent を --role だけ渡して起動し、最終結果を親へ返す", async () => {
-    const extension = captureRoleExtension();
+  it("許可された profile の subagent を --profile だけ渡して起動し、最終結果を親へ返す", async () => {
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1330,7 +1330,7 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       const result = await extension.executeSubagent({
-        role: "worker",
+        profile: "worker",
         task: "work",
         cwd: "/child",
       });
@@ -1342,7 +1342,7 @@ describe("subagent", () => {
         "json",
         "-p",
         "--no-session",
-        "--role",
+        "--profile",
         "worker",
         "Task: work",
       ]);
@@ -1352,7 +1352,7 @@ describe("subagent", () => {
   });
 
   it("cwd を省略した subagent は親の cwd で起動する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1364,7 +1364,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ role: "worker", task: "work", model: "forbidden" });
+      await extension.executeSubagent({ profile: "worker", task: "work", model: "forbidden" });
       assert.equal(extension.spawnCalls[0].cwd, "/parent");
       assert.equal(extension.spawnCalls[0].args.includes("--model"), false);
     } finally {
@@ -1372,11 +1372,11 @@ describe("subagent", () => {
     }
   });
 
-  it("委譲が許可されない role からの subagent を起動せず理由を返す", async () => {
-    const extension = captureRoleExtension();
+  it("委譲が許可されない profile からの subagent を起動せず理由を返す", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "manager", task: "work" });
+      const result = await extension.executeSubagent({ profile: "manager", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /Permission denied/);
       assert.equal(extension.spawnCalls.length, 0);
@@ -1385,11 +1385,11 @@ describe("subagent", () => {
     }
   });
 
-  it("未定義 role の subagent を起動せず理由を返す", async () => {
-    const extension = captureRoleExtension();
+  it("未定義 profile の subagent を起動せず理由を返す", async () => {
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "missing", task: "work" });
+      const result = await extension.executeSubagent({ profile: "missing", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /not defined/);
       assert.equal(extension.spawnCalls.length, 0);
@@ -1399,12 +1399,12 @@ describe("subagent", () => {
   });
 
   it("子が出力する前から pending の実行結果を onUpdate へ渡す", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const updates: any[] = [];
     try {
       await extension.sessionStart();
       const execution = extension.executeSubagent(
-        { role: "worker", task: "work" },
+        { profile: "worker", task: "work" },
         undefined,
         (update) => updates.push(update),
       );
@@ -1419,7 +1419,7 @@ describe("subagent", () => {
   });
 
   it("実行中は 0.1 秒ごとに TUI の再描画を要求する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const originalTimers = { ...__spinnerTimers };
     let spinnerCallback: (() => void) | undefined;
     let spinnerIntervalMs: number | undefined;
@@ -1431,8 +1431,8 @@ describe("subagent", () => {
     __spinnerTimers.clear = () => {};
     try {
       await extension.sessionStart();
-      extension.roleWidget();
-      const execution = extension.executeSubagent({ role: "worker", task: "work" });
+      extension.profileWidget();
+      const execution = extension.executeSubagent({ profile: "worker", task: "work" });
       spinnerCallback?.();
 
       assert.deepEqual(
@@ -1449,7 +1449,7 @@ describe("subagent", () => {
   });
 
   it("subagent の実行中に子の結果を onUpdate へ渡す", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const updates: any[] = [];
     extension.respondToChild((child) => {
       child.stdout.emit(
@@ -1462,7 +1462,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ role: "worker", task: "work" }, undefined, (update) =>
+      await extension.executeSubagent({ profile: "worker", task: "work" }, undefined, (update) =>
         updates.push(update),
       );
       assert.equal(updates.length, 4);
@@ -1474,7 +1474,7 @@ describe("subagent", () => {
   });
 
   it("tool_execution_end の結果を toolCallId で対応する action へ紐づける", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1486,7 +1486,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       const action = result.details.results[0].actions[0];
       assert.equal(action.result?.content?.[0]?.text, "/child");
       assert.equal(action.isError, false);
@@ -1497,7 +1497,7 @@ describe("subagent", () => {
   });
 
   it("toolCallId のない tool_execution_end はどの action にも紐づけない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1509,7 +1509,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.details.results[0].actions[0].result, undefined);
     } finally {
       extension.restore();
@@ -1517,7 +1517,7 @@ describe("subagent", () => {
   });
 
   it("親のキャンセルを SIGTERM として子へ伝播し、子を中断結果にする", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const controller = new AbortController();
     let scheduledAbortTimer = false;
     let clearedAbortTimer = false;
@@ -1533,7 +1533,7 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       const execution = extension.executeSubagent(
-        { role: "worker", task: "work" },
+        { profile: "worker", task: "work" },
         controller.signal,
       );
       await new Promise((resolve) => setImmediate(resolve));
@@ -1553,7 +1553,7 @@ describe("subagent", () => {
   });
 
   it("SIGTERM を無視する子へ 5 秒後に SIGKILL を送る", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const controller = new AbortController();
     let runAbortTimer: (() => void) | undefined;
     const originalAbortTimer = __abortTimer.set;
@@ -1567,7 +1567,7 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       const execution = extension.executeSubagent(
-        { role: "worker", task: "work" },
+        { profile: "worker", task: "work" },
         controller.signal,
       );
       await new Promise((resolve) => setImmediate(resolve));
@@ -1585,7 +1585,7 @@ describe("subagent", () => {
   });
 
   it("子が exit しても close が来なければ、静穏タイマーで結果を確定する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     let fireIdleTimer: (() => void) | undefined;
     const originalSet = __abortTimer.set;
     __abortTimer.set = (callback) => {
@@ -1603,7 +1603,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const execution = extension.executeSubagent({ role: "worker", task: "work" });
+      const execution = extension.executeSubagent({ profile: "worker", task: "work" });
       await new Promise((resolve) => setImmediate(resolve));
       fireIdleTimer?.();
       const result = await execution;
@@ -1616,7 +1616,7 @@ describe("subagent", () => {
   });
 
   it("子の exit 後に届いた stdout の行も結果へ含める", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     let fireIdleTimer: (() => void) | undefined;
     const originalSet = __abortTimer.set;
     __abortTimer.set = (callback) => {
@@ -1634,7 +1634,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const execution = extension.executeSubagent({ role: "worker", task: "work" });
+      const execution = extension.executeSubagent({ profile: "worker", task: "work" });
       await new Promise((resolve) => setImmediate(resolve));
       fireIdleTimer?.();
       const result = await execution;
@@ -1646,11 +1646,11 @@ describe("subagent", () => {
   });
 
   it("シグナルで死亡した子をエラーとして扱う", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => child.emit("close", null));
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.details.results[0].stopReason, "killed");
       assert.match(result.content[0].text, /killed by a signal/);
@@ -1660,14 +1660,14 @@ describe("subagent", () => {
   });
 
   it("非0終了した子をエラーとして stderr を親へ返す", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stderr.emit("data", Buffer.from("child stderr\n"));
       child.emit("close", 2);
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child failed: child stderr\n");
     } finally {
@@ -1676,14 +1676,14 @@ describe("subagent", () => {
   });
 
   it("子プロセスの error イベントを優先して親へ返す", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stderr.emit("data", Buffer.from("stderr fallback\n"));
       child.emit("error", new Error("spawn failed"));
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child failed: spawn failed");
     } finally {
@@ -1692,7 +1692,7 @@ describe("subagent", () => {
   });
 
   it("子の error stopReason では errorMessage を stderr と最終出力より優先する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
       child.stderr.emit("data", Buffer.from("stderr fallback\n"));
       child.stdout.emit(
@@ -1713,7 +1713,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child error: assistant error");
     } finally {
@@ -1722,11 +1722,11 @@ describe("subagent", () => {
   });
 
   it("exit 0 でも出力のない子をエラーとして親へ返す", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => child.emit("close", 0));
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child failed: (no output)");
     } finally {
@@ -1735,18 +1735,18 @@ describe("subagent", () => {
   });
 
   it("exit 0 で出力がなく stderr がある子は stderr を失敗出力として親へ返す", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     extension.respondToChild((child) => {
-      child.stderr.emit("data", Buffer.from("no available model for role worker: tier low\n"));
+      child.stderr.emit("data", Buffer.from("no available model for profile worker: tier low\n"));
       child.emit("close", 0);
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(
         result.content[0].text,
-        "Child failed: no available model for role worker: tier low\n",
+        "Child failed: no available model for profile worker: tier low\n",
       );
     } finally {
       extension.restore();
@@ -1754,12 +1754,12 @@ describe("subagent", () => {
   });
 
   it("正常終了した子に対する親の abort を無視する", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const controller = new AbortController();
     extension.respondToChild((child) => child.emit("close", 0));
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ role: "worker", task: "work" }, controller.signal);
+      await extension.executeSubagent({ profile: "worker", task: "work" }, controller.signal);
       controller.abort();
 
       assert.deepEqual(extension.children[0].killHistory, []);
@@ -1769,9 +1769,9 @@ describe("subagent", () => {
   });
 
   it("設定エラーを subagent のエラー結果として返す", async () => {
-    const extension = captureRoleExtension({ error: "invalid config" });
+    const extension = captureProfileExtension({ error: "invalid config" });
     try {
-      const result = await extension.executeSubagent({ role: "worker", task: "work" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /invalid config/);
     } finally {
@@ -1780,10 +1780,10 @@ describe("subagent", () => {
   });
 
   it("空の task を拒否し、子プロセスを起動しない", async () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ role: "worker", task: "" });
+      const result = await extension.executeSubagent({ profile: "worker", task: "" });
       assert.equal(result.content[0].text, "Invalid parameters. Provide a task.");
       assert.equal(extension.spawnCalls.length, 0);
     } finally {
@@ -1791,11 +1791,11 @@ describe("subagent", () => {
     }
   });
 
-  it("role の設定エラーを session_start で owner に通知する", async () => {
-    const extension = captureRoleExtension({ error: "invalid config" });
+  it("profile の設定エラーを session_start で owner に通知する", async () => {
+    const extension = captureProfileExtension({ error: "invalid config" });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.notifications, ["role configuration error: invalid config"]);
+      assert.deepEqual(extension.notifications, ["profile configuration error: invalid config"]);
     } finally {
       extension.restore();
     }
@@ -1803,11 +1803,11 @@ describe("subagent", () => {
 });
 
 describe("subagent の表示", () => {
-  it("呼び出し時に subagent と role 名を表示する", () => {
-    const extension = captureRoleExtension();
+  it("呼び出し時に subagent と profile 名を表示する", () => {
+    const extension = captureProfileExtension();
     try {
       const rendered = extension.renderCall(
-        { role: "worker" },
+        { profile: "worker" },
         { fg: (_color: string, text: string) => text, bold: (text: string) => text },
       ) as Text;
       assert.ok(rendered.render(200).some((line) => line.includes("subagent worker")));
@@ -1817,11 +1817,11 @@ describe("subagent の表示", () => {
   });
 
   it("Actions をツール別の整形と結果サマリー行で表示する", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "work",
           cwd: "/child",
           pending: false,
@@ -1860,11 +1860,11 @@ describe("subagent の表示", () => {
   });
 
   it("結果を受け取る前のツール呼び出しは結果行を表示しない", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "work",
           cwd: "/child",
           pending: false,
@@ -1895,11 +1895,11 @@ describe("subagent の表示", () => {
   });
 
   it("実行中はブロックの末尾にスピナー行を表示する", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "work",
           cwd: "/child",
           pending: true,
@@ -1931,12 +1931,12 @@ describe("subagent の表示", () => {
   });
 
   it("再描画時に待機スピナーのフレームを進める", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const originalNow = __spinnerTimers.now;
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "work",
           cwd: "/child",
           pending: true,
@@ -1973,11 +1973,11 @@ describe("subagent の表示", () => {
   });
 
   it("実行確定時に表示済みのスピナー行を消す", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "work",
           cwd: "/child",
           pending: true,
@@ -2013,11 +2013,11 @@ describe("subagent の表示", () => {
   });
 
   it("task、Actions、確定した Output の内容を展開表示する", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "inspect files",
           cwd: "/child",
           pending: false,
@@ -2058,10 +2058,10 @@ describe("subagent の表示", () => {
   });
 
   it("ツール利用がない場合は Actions を表示しない", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
-        { role: "worker", task: "work", exitCode: 0, messages: [], actions: [], stderr: "" },
+        { profile: "worker", task: "work", exitCode: 0, messages: [], actions: [], stderr: "" },
       ],
     };
     try {
@@ -2083,11 +2083,11 @@ describe("subagent の表示", () => {
   });
 
   it("出力が確定するまで Output を表示しない", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "work",
           exitCode: 0,
           messages: [{ role: "assistant", content: [{ type: "text", text: "partial final" }] }],
@@ -2115,11 +2115,11 @@ describe("subagent の表示", () => {
   });
 
   it("出力がある場合だけ Output を表示する", () => {
-    const extension = captureRoleExtension();
+    const extension = captureProfileExtension();
     const details = {
       results: [
         {
-          role: "worker",
+          profile: "worker",
           task: "work",
           exitCode: 0,
           messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
