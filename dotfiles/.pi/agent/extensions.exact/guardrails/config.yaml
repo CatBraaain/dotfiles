@@ -25,6 +25,7 @@ write:
     - ~/.cache
     - ~/.cargo/registry
     - ~/go/pkg/mod
+    - ~/mirrors
   ask: []
   deny:
     - ~/.pi/agent/extensions/guardrails/config.yaml
