@@ -34,23 +34,23 @@ import {
   type ToolTheme,
 } from "../shared/tool-format.ts";
 
-export type Profile = string;
+export type Agent = string;
 
-export interface ProfileDefinition {
+export interface AgentDefinition {
   tier: string;
   tools: readonly string[];
-  subagents: readonly Profile[];
+  subagents: readonly Agent[];
   systemPrompt: readonly string[];
 }
 
-export interface ProfileConfig {
-  default: Profile;
+export interface AgentConfig {
+  default: Agent;
   tiers: Record<string, readonly ModelCandidate[]>;
-  profiles: Record<Profile, ProfileDefinition>;
+  agents: Record<Agent, AgentDefinition>;
 }
 
 export interface ConfigLoadResult {
-  config?: ProfileConfig;
+  config?: AgentConfig;
   error?: string;
 }
 
@@ -80,15 +80,11 @@ function parseCandidates(raw: unknown, tierName: string): ModelCandidate[] | str
   return candidates;
 }
 
-export function parseProfileConfig(source: string): ConfigLoadResult {
+export function parseAgentConfig(source: string): ConfigLoadResult {
   try {
     const document = parseYaml(source) as unknown;
-    if (
-      !isRecord(document) ||
-      !isNonEmptyString(document.default) ||
-      !isRecord(document.profiles)
-    ) {
-      return { error: "default and profiles are required" };
+    if (!isRecord(document) || !isNonEmptyString(document.default) || !isRecord(document.agents)) {
+      return { error: "default and agents are required" };
     }
     if (!isRecord(document.tiers)) return { error: "tiers are required" };
 
@@ -99,89 +95,81 @@ export function parseProfileConfig(source: string): ConfigLoadResult {
       tiers[tierName] = candidates;
     }
 
-    const profiles: Record<Profile, ProfileDefinition> = {};
-    for (const [name, rawDefinition] of Object.entries(document.profiles)) {
-      if (!isRecord(rawDefinition)) return { error: `profile ${name} must be an object` };
+    const agents: Record<Agent, AgentDefinition> = {};
+    for (const [name, rawDefinition] of Object.entries(document.agents)) {
+      if (!isRecord(rawDefinition)) return { error: `agent ${name} must be an object` };
       const { tier, tools, subagents, systemPrompt } = rawDefinition;
-      if (!isNonEmptyString(tier)) return { error: `profile ${name} has an invalid tier` };
-      if (!(tier in tiers)) return { error: `profile ${name} references undefined tier ${tier}` };
+      if (!isNonEmptyString(tier)) return { error: `agent ${name} has an invalid tier` };
+      if (!(tier in tiers)) return { error: `agent ${name} references undefined tier ${tier}` };
       if (!Array.isArray(tools) || !tools.every((tool) => typeof tool === "string")) {
-        return { error: `profile ${name} has invalid tools` };
+        return { error: `agent ${name} has invalid tools` };
       }
-      if (!Array.isArray(subagents) || !subagents.every((profile) => typeof profile === "string")) {
-        return { error: `profile ${name} has invalid subagents` };
+      if (!Array.isArray(subagents) || !subagents.every((agent) => typeof agent === "string")) {
+        return { error: `agent ${name} has invalid subagents` };
       }
       if (
         !Array.isArray(systemPrompt) ||
         !systemPrompt.every((prompt) => typeof prompt === "string")
       ) {
-        return { error: `profile ${name} has an invalid systemPrompt` };
+        return { error: `agent ${name} has an invalid systemPrompt` };
       }
-      profiles[name] = { tier, tools, subagents, systemPrompt };
+      agents[name] = { tier, tools, subagents, systemPrompt };
     }
 
-    if (!profiles[document.default])
-      return { error: `default profile ${document.default} is not defined` };
-    for (const [name, definition] of Object.entries(profiles)) {
-      const unknownSubagent = definition.subagents.find((profile) => !profiles[profile]);
+    if (!agents[document.default])
+      return { error: `default agent ${document.default} is not defined` };
+    for (const [name, definition] of Object.entries(agents)) {
+      const unknownSubagent = definition.subagents.find((agent) => !agents[agent]);
       if (unknownSubagent)
-        return { error: `profile ${name} delegates to undefined profile ${unknownSubagent}` };
+        return { error: `agent ${name} delegates to undefined agent ${unknownSubagent}` };
     }
 
-    return { config: { default: document.default, tiers, profiles } };
+    return { config: { default: document.default, tiers, agents } };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export function loadProfileConfig(
+export function loadAgentConfig(
   configPath = join(getAgentDir(), "extensions", "profile", "config.yaml"),
 ): ConfigLoadResult {
   if (!existsSync(configPath)) return { error: `config file not found: ${configPath}` };
   try {
-    return parseProfileConfig(readFileSync(configPath, "utf8"));
+    return parseAgentConfig(readFileSync(configPath, "utf8"));
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export function initialProfile(config: ProfileConfig, requestedProfile?: Profile): Profile {
-  return requestedProfile && config.profiles[requestedProfile] ? requestedProfile : config.default;
+export function initialAgent(config: AgentConfig, requestedAgent?: Agent): Agent {
+  return requestedAgent && config.agents[requestedAgent] ? requestedAgent : config.default;
 }
 
-export function isToolAllowed(profile: Profile, toolName: string, config: ProfileConfig): boolean {
+export function isToolAllowed(agent: Agent, toolName: string, config: AgentConfig): boolean {
   if (toolName === "subagent") return true;
-  const tools = config.profiles[profile]?.tools ?? [];
+  const tools = config.agents[agent]?.tools ?? [];
   return tools.includes("*") || tools.includes(toolName);
 }
 
-export function shouldBlockToolCall(
-  profile: Profile,
-  toolName: string,
-  config: ProfileConfig,
-): boolean {
-  return !isToolAllowed(profile, toolName, config);
+export function shouldBlockToolCall(agent: Agent, toolName: string, config: AgentConfig): boolean {
+  return !isToolAllowed(agent, toolName, config);
 }
 
-export function buildProfileSystemPromptAddendum(profile: Profile, config: ProfileConfig): string {
-  const prompts = (config.profiles[profile]?.systemPrompt ?? []).filter(Boolean);
+export function buildAgentSystemPromptAddendum(agent: Agent, config: AgentConfig): string {
+  const prompts = (config.agents[agent]?.systemPrompt ?? []).filter(Boolean);
   return prompts.length > 0 ? `\n\n${prompts.join("\n\n")}` : "";
 }
 
-export function canDelegate(
-  fromProfile: Profile,
-  toProfile: Profile,
-  config: ProfileConfig,
-): boolean {
-  return config.profiles[fromProfile]?.subagents.includes(toProfile) ?? false;
+export function canDelegate(fromAgent: Agent, toAgent: Agent, config: AgentConfig): boolean {
+  return config.agents[fromAgent]?.subagents.includes(toAgent) ?? false;
 }
 
-export function childProfile(
-  fromProfile: Profile,
-  toProfile: Profile,
-  config: ProfileConfig,
-): Profile | undefined {
-  return canDelegate(fromProfile, toProfile, config) ? toProfile : undefined;
+export function childAgent(
+  fromAgent: Agent,
+  toAgent: Agent,
+  config: AgentConfig,
+): Agent | undefined {
+  return canDelegate(fromAgent, toAgent, config) ? toAgent : undefined;
 }
 
 export const __spawn: { current: typeof spawn } = { current: spawn };
@@ -197,12 +185,12 @@ export const __abortTimer: {
 // /reload で拡張インスタンスが再生成されても手動選択状態と cooldown を維持するため、
 // session_shutdown 時に globalThis へ退避し、次インスタンスの session_start で復元する。
 interface SavedRoutingState {
-  profile: Profile;
+  agent: Agent;
   manual: boolean;
   cooldowns: Map<string, number>;
 }
 
-const ROUTING_STATE_KEY = "__piProfileRoutingState";
+const ROUTING_STATE_KEY = "__piAgentRoutingState";
 
 function saveRoutingState(state: SavedRoutingState): void {
   (globalThis as Record<string, unknown>)[ROUTING_STATE_KEY] = state;
@@ -258,7 +246,7 @@ interface ChildAction {
 }
 
 interface ChildRun {
-  profile: Profile;
+  agent: Agent;
   task: string;
   cwd: string;
   pending: boolean;
@@ -270,7 +258,7 @@ interface ChildRun {
   errorMessage?: string;
 }
 
-interface ProfileToolDetails {
+interface AgentToolDetails {
   results: ChildRun[];
 }
 
@@ -318,20 +306,20 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
   return { command: "pi", args };
 }
 
-type OnUpdateCallback = (partialResult: AgentToolResult<ProfileToolDetails>) => void;
+type OnUpdateCallback = (partialResult: AgentToolResult<AgentToolDetails>) => void;
 
 async function runChild(
   defaultCwd: string,
   task: string,
-  profile: Profile,
+  agent: Agent,
   cwd: string | undefined,
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<ChildRun> {
-  // モデルは渡さない。子セッションが自分の profile の tier から解決する。
-  const args = ["--mode", "json", "-p", "--no-session", "--profile", profile, `Task: ${task}`];
+  // モデルは渡さない。子セッションが指定された agent の tier から解決する。
+  const args = ["--mode", "json", "-p", "--no-session", "--profile", agent, `Task: ${task}`];
   const childResult: ChildRun = {
-    profile,
+    agent,
     task,
     cwd: cwd ?? defaultCwd,
     pending: true,
@@ -493,19 +481,19 @@ async function runChild(
   return childResult;
 }
 
-function registerProfileWidget(
+function registerAgentWidget(
   ctx: ExtensionContext,
-  currentProfile: () => Profile,
+  currentAgent: () => Agent,
   isManual: () => boolean,
 ): void {
   ctx.ui.setWidget(
-    "profile",
+    "agent",
     (ui, theme) => {
       tuiHandle = ui;
       return {
         render: () => {
           const suffix = isManual() ? " (manual)" : "";
-          return [theme.fg("dim", `🤖 profile: ${currentProfile()}${suffix}`)];
+          return [theme.fg("dim", `🤖 agent: ${currentAgent()}${suffix}`)];
         },
         invalidate: () => {},
       };
@@ -516,21 +504,21 @@ function registerProfileWidget(
 
 export default function profileExtension(
   pi: ExtensionAPI,
-  injectedConfig: ConfigLoadResult = loadProfileConfig(),
+  injectedConfig: ConfigLoadResult = loadAgentConfig(),
 ): void {
   const loadedConfig = injectedConfig;
   const config = loadedConfig.config;
-  let currentProfile = config?.default ?? "invalid";
+  let currentAgent = config?.default ?? "invalid";
 
-  pi.registerFlag("profile", { type: "string", description: "Profile for a child session." });
+  pi.registerFlag("profile", { type: "string", description: "Agent for a child session." });
 
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Spawn an isolated child pi process using a configured profile.",
+    description: "Spawn an isolated child pi process using a configured agent.",
     parameters: Type.Object({
       task: Type.String({ description: "Task to delegate to the child process" }),
-      profile: Type.String({ description: "Configured child profile name" }),
+      profile: Type.String({ description: "Configured child agent name" }),
       cwd: Type.Optional(
         Type.String({ description: "Working directory; defaults to the parent cwd" }),
       ),
@@ -538,7 +526,7 @@ export default function profileExtension(
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       if (!config)
         return {
-          content: [textPart(`Profile configuration error: ${loadedConfig.error}`)],
+          content: [textPart(`Agent configuration error: ${loadedConfig.error}`)],
           details: { results: [] },
           isError: true,
         };
@@ -547,18 +535,18 @@ export default function profileExtension(
           content: [textPart("Invalid parameters. Provide a task.")],
           details: { results: [] },
         };
-      if (!config.profiles[params.profile]) {
+      if (!config.agents[params.profile]) {
         return {
-          content: [textPart(`Cannot delegate: profile ${params.profile} is not defined.`)],
+          content: [textPart(`Cannot delegate: agent ${params.profile} is not defined.`)],
           details: { results: [] },
           isError: true,
         };
       }
-      if (!canDelegate(currentProfile, params.profile, config)) {
+      if (!canDelegate(currentAgent, params.profile, config)) {
         return {
           content: [
             textPart(
-              `Permission denied: profile ${currentProfile} cannot delegate to ${params.profile}.`,
+              `Permission denied: agent ${currentAgent} cannot delegate to ${params.profile}.`,
             ),
           ],
           details: { results: [] },
@@ -591,7 +579,7 @@ export default function profileExtension(
       return new Text(theme.fg("toolTitle", theme.bold(`subagent ${args.profile ?? "..."}`)), 0, 0);
     },
     renderResult(result, options, theme) {
-      const details = result.details as ProfileToolDetails | undefined;
+      const details = result.details as AgentToolDetails | undefined;
       const childResult = details?.results[0];
       if (!childResult) {
         const fallback = result.content[0];
@@ -635,7 +623,7 @@ export default function profileExtension(
         container.addChild({
           render: () =>
             childResult.pending
-              ? [theme.fg("muted", `${spinnerFrame(__spinnerTimers.now())} ${childResult.profile}`)]
+              ? [theme.fg("muted", `${spinnerFrame(__spinnerTimers.now())} ${childResult.agent}`)]
               : [],
           invalidate: () => {},
         });
@@ -646,7 +634,7 @@ export default function profileExtension(
 
   if (!config) {
     pi.on("session_start", async (_event, ctx) => {
-      if (ctx.hasUI) ctx.ui.notify(`profile configuration error: ${loadedConfig.error}`, "error");
+      if (ctx.hasUI) ctx.ui.notify(`agent configuration error: ${loadedConfig.error}`, "error");
     });
     return;
   }
@@ -673,15 +661,15 @@ export default function profileExtension(
   // tier の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立の候補は
   // pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外して次候補へ
   // 進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
-  // notifySwitch を false にすると切替時の `profile model →` 通知を省く（429 フォールバックは
+  // notifySwitch を false にすると切替時の `agent model →` 通知を省く（429 フォールバックは
   // 「レート制限時のフォールバック」節の通知が専らを定めるため）。
   async function applyTierModel(
-    profile: Profile,
+    agent: Agent,
     ctx: ExtensionContext,
     signal?: AbortSignal,
     notifySwitch = true,
   ): Promise<string | null> {
-    const tierName = config.profiles[profile]?.tier;
+    const tierName = config.agents[agent]?.tier;
     if (!tierName) return null;
     let candidates = config.tiers[tierName] ?? [];
     for (;;) {
@@ -698,7 +686,7 @@ export default function profileExtension(
       }
       if (await switchTo(model)) {
         if (notifySwitch && ctx.hasUI)
-          ctx.ui.notify(`profile model → ${model.provider}/${model.id}`, "info");
+          ctx.ui.notify(`agent model → ${model.provider}/${model.id}`, "info");
         return modelKey(model);
       }
       const failed = model;
@@ -708,12 +696,8 @@ export default function profileExtension(
     }
   }
 
-  function notifyNoModel(
-    profile: Profile,
-    ctx: ExtensionContext,
-    level: "warning" | "error",
-  ): void {
-    const message = `no available model for profile ${profile}: tier ${config.profiles[profile].tier}`;
+  function notifyNoModel(agent: Agent, ctx: ExtensionContext, level: "warning" | "error"): void {
+    const message = `no available model for agent ${agent}: tier ${config.agents[agent].tier}`;
     if (!ctx.hasUI) {
       // UI のない子プロセスでは通知が見えないまま終わるため、stderr と終了コードで伝える
       if (level === "error") {
@@ -725,15 +709,15 @@ export default function profileExtension(
     ctx.ui.notify(message, level);
   }
 
-  function applyProfileTools(ctx: ExtensionContext, profile: Profile): void {
-    const profileDefinition = config.profiles[profile];
-    const activeTools = profileDefinition.tools.includes("*")
+  function applyAgentTools(ctx: ExtensionContext, agent: Agent): void {
+    const agentDefinition = config.agents[agent];
+    const activeTools = agentDefinition.tools.includes("*")
       ? pi.getAllTools().map((tool) => tool.name)
-      : [...new Set([...profileDefinition.tools, "subagent"])];
+      : [...new Set([...agentDefinition.tools, "subagent"])];
     pi.setActiveTools(activeTools);
-    registerProfileWidget(
+    registerAgentWidget(
       ctx,
-      () => currentProfile,
+      () => currentAgent,
       () => manual,
     );
   }
@@ -745,13 +729,13 @@ export default function profileExtension(
       // 設定を読み込み直す。手動選択状態と cooldown は維持し、モデルは変更しない。
       const saved = takeSavedRoutingState();
       if (saved) {
-        currentProfile = config.profiles[saved.profile]
-          ? saved.profile
-          : initialProfile(config, pi.getFlag("profile") as string | undefined);
+        currentAgent = config.agents[saved.agent]
+          ? saved.agent
+          : initialAgent(config, pi.getFlag("profile") as string | undefined);
         manual = saved.manual;
         cooldowns = saved.cooldowns;
       }
-      applyProfileTools(ctx, currentProfile);
+      applyAgentTools(ctx, currentAgent);
       return;
     }
 
@@ -761,28 +745,28 @@ export default function profileExtension(
       event.reason === "startup" || event.reason === "new"
         ? new Map()
         : (takeSavedRoutingState()?.cooldowns ?? new Map());
-    currentProfile = initialProfile(config, pi.getFlag("profile") as string | undefined);
-    applyProfileTools(ctx, currentProfile);
-    const applied = await applyTierModel(currentProfile, ctx);
-    if (!applied) notifyNoModel(currentProfile, ctx, "warning");
+    currentAgent = initialAgent(config, pi.getFlag("profile") as string | undefined);
+    applyAgentTools(ctx, currentAgent);
+    const applied = await applyTierModel(currentAgent, ctx);
+    if (!applied) notifyNoModel(currentAgent, ctx, "warning");
   });
 
   pi.on("session_shutdown", async () => {
-    saveRoutingState({ profile: currentProfile, manual, cooldowns });
+    saveRoutingState({ agent: currentAgent, manual, cooldowns });
   });
 
   // ── pre-prompt re-evaluation ────────────────────────────────────────
 
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension" || manual) return;
-    const applied = await applyTierModel(currentProfile, ctx, ctx.signal);
+    const applied = await applyTierModel(currentAgent, ctx, ctx.signal);
     if (applied) return;
-    notifyNoModel(currentProfile, ctx, "error");
+    notifyNoModel(currentAgent, ctx, "error");
     return { action: "handled" };
   });
 
   pi.on("before_agent_start", async (event) => {
-    const addendum = buildProfileSystemPromptAddendum(currentProfile, config);
+    const addendum = buildAgentSystemPromptAddendum(currentAgent, config);
     return addendum ? { systemPrompt: event.systemPrompt + addendum } : undefined;
   });
 
@@ -803,7 +787,7 @@ export default function profileExtension(
   ): Promise<boolean> {
     recordCooldown(cooldowns, rateLimitedModelKey, cooldownMs, Date.now());
 
-    const switchedTo = await applyTierModel(currentProfile, ctx, ctx.signal, false);
+    const switchedTo = await applyTierModel(currentAgent, ctx, ctx.signal, false);
     if (!switchedTo) {
       if (ctx.hasUI)
         ctx.ui.notify(`rate limited on ${rateLimitedModelKey}; no fallback available`, "error");
@@ -852,21 +836,21 @@ export default function profileExtension(
   // ── tool gating & profile commands ─────────────────────────────────────
 
   pi.on("tool_call", async (event) => {
-    if (shouldBlockToolCall(currentProfile, event.toolName, config)) {
-      return { block: true, reason: `profile ${currentProfile} cannot use ${event.toolName}` };
+    if (shouldBlockToolCall(currentAgent, event.toolName, config)) {
+      return { block: true, reason: `agent ${currentAgent} cannot use ${event.toolName}` };
     }
   });
 
-  for (const profile of Object.keys(config.profiles)) {
-    pi.registerCommand(`profile:${profile}`, {
-      description: `Switch the session profile to ${profile}.`,
+  for (const agent of Object.keys(config.agents)) {
+    pi.registerCommand(`profile:${agent}`, {
+      description: `Switch the session agent to ${agent}.`,
       handler: async (args, ctx) => {
-        currentProfile = profile;
+        currentAgent = agent;
         manual = false;
-        applyProfileTools(ctx, currentProfile);
+        applyAgentTools(ctx, currentAgent);
         tuiHandle?.requestRender();
-        const applied = await applyTierModel(currentProfile, ctx);
-        if (!applied) notifyNoModel(currentProfile, ctx, "warning");
+        const applied = await applyTierModel(currentAgent, ctx);
+        if (!applied) notifyNoModel(currentAgent, ctx, "warning");
         const followUpMessage = args.trim();
         if (followUpMessage) pi.sendUserMessage(followUpMessage);
       },

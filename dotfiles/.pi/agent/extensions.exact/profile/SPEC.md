@@ -1,17 +1,17 @@
-# Profile 拡張機能 Spec
+# Agent Profile 拡張機能 Spec
 
 ## 概要
 
-セッションは **profile** を持つ。profile は、tier によるモデル選択、利用できるツール、subagent ツールで起動できる子エージェント、システムプロンプト追記をまとめた実行プロファイルである。
+セッションは **agent** を実行する。agent は tier によるモデル選択、利用できるツール、委譲できる子 agent、システムプロンプトを持つ実行主体である。profile は Pi が agent を選択する操作とフラグである。
 
-モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `config.yaml` で tier と profile を管理し、セッション中に profile を切り替えられる。
+モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `config.yaml` で tier と agent を管理し、`/profile:<agent>` で実行する agent を切り替えられる。
 
 ## 設定
 
 設定ファイル: `~/.pi/agent/extensions/profile/config.yaml`
 
 ```yaml
-default: agent
+default: main
 
 tiers:
   high:
@@ -32,8 +32,8 @@ tiers:
     - provider: deepseek
       model: deepseek-v4-flash
 
-profiles:
-  agent:
+agents:
+  main:
     tier: high
     tools: ["*"]
     subagents: [manager, worker]
@@ -47,31 +47,32 @@ profiles:
 
 | 項目・操作 | 内容と振る舞い |
 | --- | --- |
-| 設定ファイル | 起動時に検証する。有効な場合は profile を利用でき、不正な場合はエラーを通知する（後述） |
-| `default` | 新規セッションと保存済みセッションで開始する profile |
+| 設定ファイル | 起動時に検証する。有効な場合は agent を利用でき、不正な場合はエラーを通知する（後述） |
+| `default` | 新規セッションと保存済みセッションで開始する agent |
+| `agents.<name>` | agent の定義 |
 | `tiers.<name>` | tier のモデル候補の配列。配列の先頭から fallback 順序として評価する |
 | 候補の `provider` / `model` | 候補のモデル |
 | 候補の `when` | bash コマンド。終了コード `0` のときだけ候補が有効になる。省略・空文字なら常に有効。5 秒でタイムアウトし、タイムアウト・失敗時は無効 |
-| `tier` | profile が使う tier。必須 |
+| `tier` | agent が使う tier。必須 |
 | `tools` | pi 標準ツールと拡張機能の allowlist。指定したツールを実行し、未指定のツールを拒否してセッションを継続する。`["*"]` はすべてのツール、`[]` はツールなしを許可する |
-| `subagents` | subagent ツールでの起動を許可する子エージェントの一覧。定義済みの profile が一覧に含まれる場合は起動し、含まれない場合や一覧が空の場合は起動せずセッションを継続する |
-| `systemPrompt` | 次回のエージェント実行時に、配列要素を記載順で結合して追記する profile 固有のシステムプロンプト。YAML のアンカーとエイリアスで複数 profile 間で要素を共有できる |
-| `/profile:<name> [message]` | 指定した profile を即時に有効にする。モデルは切替先 profile の tier の候補を適用し、ツール・profile 表示も切り替える。`message` を続けた場合は profile 切り替え完了後にそのテキスト（前後の空白を除く）をユーザーメッセージとして送信し、切り替え先の profile 設定で直ちにターンを開始する。`message` を省略した場合は切り替えのみ行う |
+| `subagents` | subagent ツールでの起動を許可する子 agent の一覧。定義済みの agent が一覧に含まれる場合は起動し、含まれない場合や一覧が空の場合は起動せずセッションを継続する |
+| `systemPrompt` | 次回のエージェント実行時に、配列要素を記載順で結合して追記する agent 固有のシステムプロンプト。YAML のアンカーとエイリアスで複数 agent 間で要素を共有できる |
+| `/profile:<name> [message]` | 指定した agent を即時に有効にする。モデルは切替先 agent の tier の候補を適用し、ツール・agent 表示も切り替える。`message` を続けた場合は agent 切り替え完了後にそのテキスト（前後の空白を除く）をユーザーメッセージとして送信し、切替先 agent の設定で直ちにターンを開始する。`message` を省略した場合は切り替えのみ行う |
 
 ## 設定の検証
 
-起動時に設定ファイルを検証する。次のいずれかに該当する場合はエラーを通知し、拡張のすべての機能（profile 切替、ツール制限、subagent、モデルルーティング）を無効にする。不正な設定を一部分だけ適用することはない。
+起動時に設定ファイルを検証する。次のいずれかに該当する場合はエラーを通知し、拡張のすべての機能（agent 切替、ツール制限、subagent、モデルルーティング）を無効にする。不正な設定を一部分だけ適用することはない。
 
 - 設定ファイルがない・読めない・YAML として不正
-- `default` か `profiles` がない、型が違う
-- `profiles` の各定義がオブジェクトでない
-- profile の `tier` がない、文字列でない
-- profile が `tiers` に定義されていない tier を参照している
+- `default` か `agents` がない、型が違う
+- `agents` の各定義がオブジェクトでない
+- agent の `tier` がない、文字列でない
+- agent が `tiers` に定義されていない tier を参照している
 - `tiers` がない・オブジェクトでない、tier の値が配列でない
 - 候補の `provider` か `model` がない・文字列でない、`when` が文字列でない
 - `tools`・`subagents`・`systemPrompt` が配列でない、要素が文字列でない
-- `default` が未定義の profile を指している
-- `subagents` が未定義の profile を含む
+- `default` が未定義の agent を指している
+- `subagents` が未定義の agent を含む
 
 ## tier によるモデル選択
 
@@ -95,20 +96,20 @@ tier をまたいだ降格は行わない。
 
 | タイミング | 動作 |
 | --- | --- |
-| セッション開始 | 初期 profile（`--profile` フラグで指定された定義済みの profile、指定なしまたは未定義なら `default`）の tier の候補を適用する |
-| `/new` | 手動選択を解除し、cooldown をすべて破棄し、初期 profile の tier の候補を適用する |
-| セッション切替・分岐（`/resume`・`/fork`） | 手動選択を解除し、初期 profile の tier の候補を適用する |
+| セッション開始 | 初期 agent（`--profile` フラグで指定された定義済みの agent、指定なしまたは未定義なら `default`）の tier の候補を適用する |
+| `/new` | 手動選択を解除し、cooldown をすべて破棄し、初期 agent の tier の候補を適用する |
+| セッション切替・分岐（`/resume`・`/fork`） | 手動選択を解除し、初期 agent の tier の候補を適用する |
 | `/reload` | 設定を読み込み直す。手動選択状態と cooldown は維持する |
-| 各プロンプト送信前（自動状態のとき） | 現在の profile の tier の候補を再評価し、現在のモデルと異なる候補が成立したら切り替える。全候補が不成立の場合はエラーを通知し、プロンプトを実行しない |
-| `/profile:<name>` | profile を切り替え、手動選択を解除し、切替先 profile の tier の候補を適用してから後続メッセージを送信する |
+| 各プロンプト送信前（自動状態のとき） | 現在の agent の tier の候補を再評価し、現在のモデルと異なる候補が成立したら切り替える。全候補が不成立の場合はエラーを通知し、プロンプトを実行しない |
+| `/profile:<name>` | agent を切り替え、手動選択を解除し、切替先 agent の tier の候補を適用してから後続メッセージを送信する |
 | 429 受信時 | 「レート制限（429）時のフォールバック」に従う |
 
-モデルの切り替えに成功したら `profile model → <provider>/<model>` を info で通知する。
+モデルの切り替えに成功したら `agent model → <provider>/<model>` を info で通知する。
 
 | 全候補が不成立になる場面 | 結果 |
 | --- | --- |
-| セッション開始・`/new`・セッション切替・分岐・`/profile:<name>` | 現在のモデルを維持し、`no available model for profile <name>: tier <tier-name>` を warning で通知する |
-| プロンプト送信前 | `no available model for profile <name>: tier <tier-name>` を error で通知し、プロンプトを実行しない |
+| セッション開始・`/new`・セッション切替・分岐・`/profile:<name>` | 現在のモデルを維持し、`no available model for agent <name>: tier <tier-name>` を warning で通知する |
+| プロンプト送信前 | `no available model for agent <name>: tier <tier-name>` を error で通知し、プロンプトを実行しない |
 | 429 受信時 | 「レート制限（429）時のフォールバック」に従う |
 
 ## 手動モデル選択
@@ -119,7 +120,7 @@ stateDiagram-v2
     [*] --> 自動: セッション開始
     自動 --> 手動: ユーザーが /model で選択
     手動 --> 自動: /new・セッション切替・分岐
-    手動 --> 自動: /profile で profile 切替
+    手動 --> 自動: /profile で agent 切替
 ```
 
 | 状態 | 振る舞い |
@@ -157,7 +158,7 @@ flowchart TD
 
 - 手動状態でも同じ流れでフォールバックする。
 - 次候補への切替後、Pi は追加の待機を入れず、現在のユーザーメッセージを追加せずにターンを再試行する。ユーザーメッセージの履歴件数は増えない。
-- 現在の profile の tier の候補数を N とすると、1ターンで最大 N-1 回再試行し、最大 N 候補を順に試行する。再試行回数は `~/.pi/agent/settings.json` の `retry.maxRetries`（候補数以上を推奨）が上限となる
+- 現在の agent の tier の候補数を N とすると、1ターンで最大 N-1 回再試行し、最大 N 候補を順に試行する。再試行回数は `~/.pi/agent/settings.json` の `retry.maxRetries`（候補数以上を推奨）が上限となる
 - フォールバックで切り替えに成功したら `rate limited on <provider>/<model>; switched to <provider>/<model>` を warning で通知する。
 - 次候補がない場合は `rate limited on <provider>/<model>; no fallback available` を error で通知し、再試行しない。
 
@@ -189,15 +190,15 @@ flowchart TD
 
 cooldown の破棄・維持は、発生タイミングごとに「モデルの適用タイミング」の表が定める。
 
-## Profile 表示
+## Agent 表示
 
-セッション開始時と profile 切り替え時に、現在の profile を表示する。
+セッション開始時と agent 切り替え時に、現在の agent を表示する。
 
 ```text
-🤖 profile: <currentProfile>
+🤖 agent: <currentAgent>
 ```
 
-手動状態のときは `🤖 profile: <currentProfile> (manual)` と表示する。表示のテキスト色はグレーとする。
+手動状態のときは `🤖 agent: <currentAgent> (manual)` と表示する。表示のテキスト色はグレーとする。
 
 ## 通知のない環境
 
@@ -205,27 +206,27 @@ UI を持たない環境（`--mode json`、パイプ、SDK、subagent の子セ�
 
 ## subagent ツール
 
-subagent ツールは常に利用できる。子セッションを起動できるかは、現在の profile の `subagents` で決まる。
+subagent ツールは常に利用できる。子セッションを起動できるかは、現在の agent の `subagents` で決まる。
 
-subagent ツールは子セッションを起動するとき `--profile <name>` だけを渡し、モデルを指定しない。子セッションは自分の profile の tier から候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429 フォールバック）が同じように働く。
+subagent ツールは子セッションを起動するとき `--profile <name>` だけを渡し、モデルを指定しない。子セッションは指定された agent の tier から候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429 フォールバック）が同じように働く。
 
 ### subagent ツールの入力
 
 | パラメータ | 必須 | 内容 |
 | --- | --- | --- |
 | `task` | 必須 | 子エージェントへ渡すタスク |
-| `profile` | 必須 | `config.yaml` に定義された子エージェントの profile 名 |
+| `profile` | 必須 | `config.yaml` に定義された子 agent 名 |
 | `cwd` | 任意 | 子エージェントの作業ディレクトリ。省略時は親と同じ |
-| `model` | 使用不可 | モデルは指定した子エージェントの profile の tier から解決される |
+| `model` | 使用不可 | モデルは指定した子 agent の tier から解決される |
 
-subagent ツールで起動した子エージェントには、指定された profile の設定が適用される。子エージェントの `default` は適用されない。子エージェントは自身の `subagents` に従って、さらに subagent ツールを実行できる。
+subagent ツールで起動した子エージェントには、指定された agent の設定が適用される。子エージェントの `default` は適用されない。子エージェントは自身の `subagents` に従って、さらに subagent ツールを実行できる。
 
 | 設定 | 子セッションへの適用 |
 | --- | --- |
 | スキル自動発見 | 親と同じルール |
-| モデル | 指定された子エージェントの profile の tier から、子セッションが解決する |
-| ツール | 指定された子エージェントの `tools` |
-| システムプロンプト | 指定された子エージェントの `systemPrompt` を追記 |
+| モデル | 指定された子 agent の tier から、子セッションが解決する |
+| ツール | 指定された子 agent の `tools` |
+| システムプロンプト | 指定された子 agent の `systemPrompt` を追記 |
 | さらなる subagent 実行 | 子エージェントの `subagents` で判定 |
 
 ## subagent 実行中の表示フォーマット
@@ -253,7 +254,7 @@ subagent <child-agent>
 
 | 項目 | 形式・条件 |
 | --- | --- |
-| `child-agent` | 実行した子エージェントの profile 名 |
+| `child-agent` | 実行した子 agent 名 |
 | `task` | subagent ツールに渡したタスク全文 |
 | `<actions>` | 子エージェントがツールを利用した場合のみ、受け取った時系列順ですべて表示する |
 | `<output>` | 最終アシスタントテキストが確定した場合のみ Markdown として表示する |
@@ -306,7 +307,7 @@ sequenceDiagram
     participant Child as 子エージェント
 
     Owner->>Parent: タスク依頼
-    Parent->>Child: profile を指定して subagent ツールを実行
+    Parent->>Child: agent を指定して subagent ツールを実行
     Child-->>Owner: 上記フォーマットで進行状況・ツール実行を表示
     Child-->>Parent: 最終結果・作業要点・成果物情報
     Parent-->>Owner: 結果を報告
@@ -314,7 +315,7 @@ sequenceDiagram
 
 ## 実行できない場合の報告
 
-エージェントがタスクを遂行できない場合は、理由（権限不足、力量・情報不足など）を添えて報告する。報告先（subagent 実行中は委譲元エージェント、直接実行時はオーナー）の指定は拡張コードで強制せず、各 profile の systemPrompt の規範に委ねる。
+エージェントがタスクを遂行できない場合は、理由（権限不足、力量・情報不足など）を添えて報告する。報告先（subagent 実行中は委譲元エージェント、直接実行時はオーナー）の指定は拡張コードで強制せず、各 agent の systemPrompt の規範に委ねる。
 
 ## 停止
 

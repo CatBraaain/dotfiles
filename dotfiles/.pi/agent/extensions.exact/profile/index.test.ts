@@ -7,13 +7,13 @@ import profileExtension, {
   __resetRoutingState,
   __spawn,
   __spinnerTimers,
-  type ProfileConfig,
-  buildProfileSystemPromptAddendum,
+  type AgentConfig,
+  buildAgentSystemPromptAddendum,
   canDelegate,
-  childProfile,
-  initialProfile,
-  loadProfileConfig,
-  parseProfileConfig,
+  childAgent,
+  initialAgent,
+  loadAgentConfig,
+  parseAgentConfig,
   shouldBlockToolCall,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
@@ -32,7 +32,7 @@ function it(name: string, fn: () => Promise<void> | void): void {
   tests.push({ name: group ? `${group} > ${name}` : name, fn });
 }
 
-const config: ProfileConfig = {
+const config: AgentConfig = {
   default: "manager",
   tiers: {
     middle: [
@@ -41,7 +41,7 @@ const config: ProfileConfig = {
     ],
     low: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
   },
-  profiles: {
+  agents: {
     manager: {
       tier: "middle",
       tools: ["*"],
@@ -94,7 +94,7 @@ interface CaptureOptions {
 }
 
 function captureProfileExtension(
-  injectedConfig: { config?: ProfileConfig; error?: string } = { config },
+  injectedConfig: { config?: AgentConfig; error?: string } = { config },
   options: CaptureOptions = {},
 ) {
   const handlers = new Map<string, Handler[]>();
@@ -107,7 +107,7 @@ function captureProfileExtension(
   const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
   const children: FakeChild[] = [];
   let spawnResponder: (child: FakeChild) => void = () => {};
-  let profileWidget: any;
+  let agentWidget: any;
   let requestedRenderCount = 0;
   let registeredTool: CapturedTool | undefined;
 
@@ -162,7 +162,7 @@ function captureProfileExtension(
 
   const ui = {
     setWidget(_key: string, widget: unknown) {
-      profileWidget = widget;
+      agentWidget = widget;
     },
     notify(message: string, level: string) {
       notifications.push(message);
@@ -228,8 +228,8 @@ function captureProfileExtension(
       }
       return result;
     },
-    profileWidget() {
-      return profileWidget?.(
+    agentWidget() {
+      return agentWidget?.(
         { requestRender: () => requestedRenderCount++ },
         { fg: (_color: string, text: string) => text },
       )?.render();
@@ -277,14 +277,14 @@ describe("設定", () => {
     );
   });
 
-  it("YAML を tier つき profile 設定として読み込む", () => {
-    const result = parseProfileConfig(`default: manager
+  it("YAML を tier つき agent 設定として読み込む", () => {
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle:
     - provider: zai
       model: glm-5.2
       when: 'exit 0'
-profiles:
+agents:
   manager:
     tier: middle
     tools: [read]
@@ -294,104 +294,104 @@ profiles:
     assert.deepEqual(result.config?.tiers.middle, [
       { provider: "zai", model: "glm-5.2", when: "exit 0" },
     ]);
-    assert.equal(result.config?.profiles.manager.tier, "middle");
-    assert.deepEqual(result.config?.profiles.manager.tools, ["read"]);
+    assert.equal(result.config?.agents.manager.tier, "middle");
+    assert.deepEqual(result.config?.agents.manager.tools, ["read"]);
   });
 
   it("YAML アンカーで共有した prompt 要素を配列として読み込む", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
 _common: &common shared
-profiles:
+agents:
   manager:
     tier: middle
     tools: []
     subagents: []
     systemPrompt: [*common]`);
-    assert.deepEqual(result.config?.profiles.manager.systemPrompt, ["shared"]);
+    assert.deepEqual(result.config?.agents.manager.systemPrompt, ["shared"]);
   });
 
   it("設定ファイルがない場合は読み込みエラーを返す", () => {
-    const result = loadProfileConfig("/path/that/does/not/exist/profile-config.yaml");
+    const result = loadAgentConfig("/path/that/does/not/exist/profile-config.yaml");
     assert.match(result.error ?? "", /config file not found/);
   });
 
   it("設定ファイルを読み取れない場合は読み込みエラーを返す", () => {
-    const result = loadProfileConfig("/");
+    const result = loadAgentConfig("/");
     assert.ok(result.error);
   });
 
   it("YAML として不正な設定を拒否する", () => {
-    const result = parseProfileConfig("profiles: [");
+    const result = parseAgentConfig("agents: [");
     assert.ok(result.error);
   });
 
   it("default が文字列でない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: 123
-profiles: {}
+    const result = parseAgentConfig(`default: 123
+agents: {}
 tiers: {}`);
-    assert.match(result.error ?? "", /default and profiles are required/);
+    assert.match(result.error ?? "", /default and agents are required/);
   });
 
-  it("profiles がオブジェクトでない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
-profiles: []
+  it("agents がオブジェクトでない設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+agents: []
 tiers: {}`);
-    assert.match(result.error ?? "", /default and profiles are required/);
+    assert.match(result.error ?? "", /default and agents are required/);
   });
 
   it("tier の候補要素がオブジェクトでない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: [invalid]
-profiles:
+agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /candidate must be an object/);
   });
 
-  it("profile 定義がオブジェクトでない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+  it("agent 定義がオブジェクトでない設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: []
-profiles:
+agents:
   manager: invalid`);
-    assert.match(result.error ?? "", /profile manager must be an object/);
+    assert.match(result.error ?? "", /agent manager must be an object/);
   });
 
   it("tools の要素が文字列でない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: []
-profiles:
+agents:
   manager: {tier: middle, tools: [123], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid tools/);
   });
 
   it("subagents の要素が文字列でない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: []
-profiles:
+agents:
   manager: {tier: middle, tools: [], subagents: [123], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid subagents/);
   });
 
   it("systemPrompt の要素が文字列でない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: []
-profiles:
+agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: [123]}`);
     assert.match(result.error ?? "", /invalid systemPrompt/);
   });
 
-  it("複数の systemPrompt 要素を順序どおりに読み込み、profile 間で共有する", () => {
-    const result = parseProfileConfig(`default: manager
+  it("複数の systemPrompt 要素を順序どおりに読み込み、agent 間で共有する", () => {
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
 _common: &common shared
-profiles:
+agents:
   manager:
     tier: middle
     tools: []
@@ -402,69 +402,69 @@ profiles:
     tools: []
     subagents: []
     systemPrompt: [*common, worker-only]`);
-    assert.deepEqual(result.config?.profiles.manager.systemPrompt, ["shared", "manager-only"]);
-    assert.deepEqual(result.config?.profiles.worker.systemPrompt, ["shared", "worker-only"]);
+    assert.deepEqual(result.config?.agents.manager.systemPrompt, ["shared", "manager-only"]);
+    assert.deepEqual(result.config?.agents.worker.systemPrompt, ["shared", "worker-only"]);
   });
 
   it("tiers がない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
-profiles:
+    const result = parseAgentConfig(`default: manager
+agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /tiers are required/);
   });
 
   it("tier が配列でないものを拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: {provider: zai}
-profiles:
+agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must be an array/);
   });
 
   it("provider か model のない候補を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle:
     - provider: zai
-profiles:
+agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /provider and model strings/);
   });
 
   it("when が文字列でない候補を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle:
     - {provider: zai, model: glm-5.2, when: 123}
-profiles:
+agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid when/);
   });
 
-  it("profile の tier がない設定を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+  it("agent の tier がない設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-profiles:
+agents:
   manager: {tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid tier/);
   });
 
-  it("未定義の tier を参照する profile を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+  it("未定義の tier を参照する agent を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-profiles:
+agents:
   manager: {tier: high, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /undefined tier high/);
   });
 
   it("配列でない systemPrompt を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-profiles:
+agents:
   manager:
     tier: middle
     tools: []
@@ -473,33 +473,42 @@ profiles:
     assert.match(result.error ?? "", /invalid systemPrompt/);
   });
 
-  it("未定義の default profile を拒否する", () => {
-    const result = parseProfileConfig(`default: missing
+  it("未定義の default agent を拒否する", () => {
+    const result = parseAgentConfig(`default: missing
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-profiles: {}`);
+agents: {}`);
     assert.match(result.error ?? "", /not defined/);
   });
 
   it("未定義の委譲先を拒否する", () => {
-    const result = parseProfileConfig(`default: manager
+    const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
-profiles:
+agents:
   manager:
     tier: middle
     tools: []
     subagents: [missing]
     systemPrompt: []`);
-    assert.match(result.error ?? "", /undefined profile/);
+    assert.match(result.error ?? "", /undefined agent/);
+  });
+
+  it("廃止した profiles キーを agent 定義として受け入れない", () => {
+    const result = parseAgentConfig(`default: main
+tiers:
+  high: []
+profiles:
+  main: {tier: high, tools: [], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /default and agents are required/);
   });
 });
 
-describe("セッションの profile", () => {
-  it("config の default profile で開始し、指定された profile は子セッションの開始 profile にする", () => {
-    assert.equal(initialProfile(config), "manager");
-    assert.equal(initialProfile(config, "chat"), "chat");
-    assert.equal(initialProfile(config, "missing"), "manager");
+describe("セッションの agent", () => {
+  it("config の default agent で開始し、指定された agent は子セッションの開始 agent にする", () => {
+    assert.equal(initialAgent(config), "manager");
+    assert.equal(initialAgent(config, "chat"), "chat");
+    assert.equal(initialAgent(config, "missing"), "manager");
   });
 });
 
@@ -512,7 +521,7 @@ describe("ツール許可", () => {
     assert.equal(shouldBlockToolCall("manager", "future_tool", config), false);
   });
 
-  it("subagent は profile のツール一覧に関係なく利用可能", () => {
+  it("subagent は agent のツール一覧に関係なく利用可能", () => {
     assert.equal(shouldBlockToolCall("chat", "subagent", config), false);
   });
 
@@ -523,31 +532,31 @@ describe("ツール許可", () => {
 });
 
 describe("委譲", () => {
-  it("親 profile と子 profile の subagents 設定に従って再委譲を許可する", () => {
+  it("親 agent と子 agent の subagents 設定に従って再委譲を許可する", () => {
     assert.equal(canDelegate("manager", "worker", config), true);
     assert.equal(canDelegate("manager", "chat", config), false);
     assert.equal(canDelegate("worker", "chat", config), true);
-    assert.equal(childProfile("manager", "worker", config), "worker");
-    assert.equal(childProfile("worker", "chat", config), "chat");
+    assert.equal(childAgent("manager", "worker", config), "worker");
+    assert.equal(childAgent("worker", "chat", config), "chat");
   });
 });
 
 describe("システムプロンプト", () => {
-  it("profile の systemPrompt を追記する", () => {
-    assert.match(buildProfileSystemPromptAddendum("manager", config), /ファイル操作は禁止/);
+  it("agent の systemPrompt を追記する", () => {
+    assert.match(buildAgentSystemPromptAddendum("manager", config), /ファイル操作は禁止/);
   });
 
   it("appends multiple prompts in configured order", () => {
-    const configuredPrompts: ProfileConfig = {
+    const configuredPrompts: AgentConfig = {
       ...config,
-      profiles: {
-        ...config.profiles,
-        manager: { ...config.profiles.manager, systemPrompt: ["first", "second"] },
+      agents: {
+        ...config.agents,
+        manager: { ...config.agents.manager, systemPrompt: ["first", "second"] },
       },
     };
 
     assert.equal(
-      buildProfileSystemPromptAddendum("manager", configuredPrompts),
+      buildAgentSystemPromptAddendum("manager", configuredPrompts),
       "\n\nfirst\n\nsecond",
     );
   });
@@ -562,16 +571,16 @@ describe("待機スピナー", () => {
 });
 
 describe("拡張の接続", () => {
-  it("起動時に default profile の tier 候補を適用し、profile 表示と allowlist を更新する", async () => {
+  it("起動時に default agent の tier 候補を適用し、agent 表示と allowlist を更新する", async () => {
     const extension = captureProfileExtension();
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
-      assert.deepEqual(extension.notifications, ["profile model → zai/glm-5.2"]);
+      assert.deepEqual(extension.notifications, ["agent model → zai/glm-5.2"]);
       assert.deepEqual(extension.notificationEvents, [
-        { message: "profile model → zai/glm-5.2", level: "info" },
+        { message: "agent model → zai/glm-5.2", level: "info" },
       ]);
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager"]);
       assert.deepEqual(extension.activeTools.at(-1), ["read", "bash", "subagent"]);
     } finally {
       extension.restore();
@@ -594,7 +603,7 @@ describe("拡張の接続", () => {
     const extension = captureProfileExtension({ config }, { flags: { profile: "chat" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: chat"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
@@ -611,8 +620,8 @@ describe("拡張の接続", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: chat"]);
-      assert.ok(extension.notifications.includes("profile model → commandcode/gpt-5.6-luna"));
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat"]);
+      assert.ok(extension.notifications.includes("agent model → commandcode/gpt-5.6-luna"));
     } finally {
       extension.restore();
     }
@@ -626,7 +635,7 @@ describe("拡張の接続", () => {
       assert.deepEqual(extension.activeTools.at(-1), ["subagent"]);
       assert.deepEqual(await extension.toolCall("bash"), {
         block: true,
-        reason: "profile locked cannot use bash",
+        reason: "agent locked cannot use bash",
       });
     } finally {
       extension.restore();
@@ -655,7 +664,7 @@ describe("拡張の接続", () => {
         { provider: "zai", id: "glm-5.2" },
         { provider: "commandcode", id: "gpt-5.6-luna" },
       ]);
-      assert.equal(extension.notifications.at(-1), "profile model → commandcode/gpt-5.6-luna");
+      assert.equal(extension.notifications.at(-1), "agent model → commandcode/gpt-5.6-luna");
     } finally {
       extension.restore();
     }
@@ -671,7 +680,7 @@ describe("拡張の接続", () => {
       ]);
       assert.deepEqual(
         extension.notifications.at(-1),
-        "no available model for profile manager: tier middle",
+        "no available model for agent manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -719,7 +728,7 @@ describe("拡張の接続", () => {
       await extension.sessionStart();
       await extension.runCommand("chat");
       const blockedCall = await extension.toolCall("bash");
-      assert.deepEqual(blockedCall, { block: true, reason: "profile chat cannot use bash" });
+      assert.deepEqual(blockedCall, { block: true, reason: "agent chat cannot use bash" });
     } finally {
       extension.restore();
     }
@@ -774,7 +783,7 @@ describe("tier によるモデルルーティング", () => {
       assert.equal(extension.sentMessages.length, 0);
       assert.deepEqual(
         extension.notifications.at(-1),
-        "no available model for profile manager: tier middle",
+        "no available model for agent manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -782,13 +791,13 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("tier の候補が不成立でも別 tier へ降格せず現在のモデルを維持する", async () => {
-    const noDowngradeConfig: ProfileConfig = {
+    const noDowngradeConfig: AgentConfig = {
       default: "highProfile",
       tiers: {
         high: [{ provider: "zai", model: "high-model" }],
         low: [{ provider: "zai", model: "low-model" }],
       },
-      profiles: { highProfile: { tier: "high", tools: [], subagents: [], systemPrompt: [] } },
+      agents: { highProfile: { tier: "high", tools: [], subagents: [], systemPrompt: [] } },
     };
     const extension = captureProfileExtension(
       { config: noDowngradeConfig },
@@ -803,7 +812,7 @@ describe("tier によるモデルルーティング", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for profile highProfile: tier high",
+        "no available model for agent highProfile: tier high",
       );
     } finally {
       extension.restore();
@@ -824,7 +833,7 @@ describe("tier によるモデルルーティング", () => {
       await extension.sessionStart();
       const handledPrompt = await extension.input("hello");
       assert.deepEqual(handledPrompt, { action: "handled" });
-      assert.deepEqual(stderrLines, ["no available model for profile manager: tier middle\n"]);
+      assert.deepEqual(stderrLines, ["no available model for agent manager: tier middle\n"]);
       assert.equal(process.exitCode, 1);
     } finally {
       process.stderr.write = originalStderrWrite;
@@ -853,7 +862,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager (manual)"]);
     } finally {
       extension.restore();
     }
@@ -878,7 +887,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("restore");
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager"]);
     } finally {
       extension.restore();
     }
@@ -890,7 +899,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.modelSelect("set");
       await extension.runCommand("chat");
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: chat"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat"]);
     } finally {
       extension.restore();
     }
@@ -961,7 +970,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("3候補では最大2回だけ再試行し、user message の履歴を増やさない", async () => {
-    const threeCandidateConfig: ProfileConfig = {
+    const threeCandidateConfig: AgentConfig = {
       default: "manager",
       tiers: {
         middle: [
@@ -970,7 +979,7 @@ describe("レート制限（429）時のフォールバック", () => {
           { provider: "zai", model: "third" },
         ],
       },
-      profiles: { manager: { tier: "middle", tools: [], subagents: [], systemPrompt: [] } },
+      agents: { manager: { tier: "middle", tools: [], subagents: [], systemPrompt: [] } },
     };
     const extension = captureProfileExtension({ config: threeCandidateConfig });
     try {
@@ -1104,7 +1113,7 @@ describe("レート制限（429）時のフォールバック", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager (manual)"]);
     } finally {
       extension.restore();
     }
@@ -1136,7 +1145,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureProfileExtension();
       await after.sessionStart("reload");
-      assert.deepEqual(after.profileWidget(), ["🤖 profile: chat (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: chat (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1147,10 +1156,10 @@ describe("セッションライフサイクル", () => {
   it("設定変更を伴う /reload は保存済み profile が消えた場合に default profile へ戻す", async () => {
     const before = captureProfileExtension({ config }, { flags: { profile: "chat" } });
     let after: ReturnType<typeof captureProfileExtension> | undefined;
-    const changedConfig: ProfileConfig = {
+    const changedConfig: AgentConfig = {
       default: "manager",
       tiers: { middle: config.tiers.middle },
-      profiles: { manager: config.profiles.manager },
+      agents: { manager: config.agents.manager },
     };
     try {
       await before.sessionStart("startup");
@@ -1159,7 +1168,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureProfileExtension({ config: changedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.profileWidget(), ["🤖 profile: manager (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1177,7 +1186,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureProfileExtension();
       await after.sessionStart("fork");
-      assert.deepEqual(after.profileWidget(), ["🤖 profile: manager"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager"]);
     } finally {
       after?.restore();
       before.restore();
@@ -1225,7 +1234,7 @@ describe("セッションライフサイクル", () => {
       await extension.modelSelect("set");
       await extension.sessionShutdown();
       await extension.sessionStart("new");
-      assert.deepEqual(extension.profileWidget(), ["🤖 profile: manager"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager"]);
     } finally {
       extension.restore();
     }
@@ -1239,7 +1248,7 @@ describe("セッションライフサイクル", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for profile manager: tier middle",
+        "no available model for agent manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -1254,7 +1263,7 @@ describe("セッションライフサイクル", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for profile manager: tier middle",
+        "no available model for agent manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -1269,7 +1278,7 @@ describe("セッションライフサイクル", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for profile manager: tier middle",
+        "no available model for agent manager: tier middle",
       );
     } finally {
       extension.restore();
@@ -1282,7 +1291,7 @@ describe("セッションライフサイクル", () => {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.runCommand("chat");
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
-      assert.equal(extension.notifications.at(-1), "no available model for profile chat: tier low");
+      assert.equal(extension.notifications.at(-1), "no available model for agent chat: tier low");
     } finally {
       extension.restore();
     }
@@ -1431,7 +1440,7 @@ describe("subagent", () => {
     __spinnerTimers.clear = () => {};
     try {
       await extension.sessionStart();
-      extension.profileWidget();
+      extension.agentWidget();
       const execution = extension.executeSubagent({ profile: "worker", task: "work" });
       spinnerCallback?.();
 
@@ -1737,7 +1746,7 @@ describe("subagent", () => {
   it("exit 0 で出力がなく stderr がある子は stderr を失敗出力として親へ返す", async () => {
     const extension = captureProfileExtension();
     extension.respondToChild((child) => {
-      child.stderr.emit("data", Buffer.from("no available model for profile worker: tier low\n"));
+      child.stderr.emit("data", Buffer.from("no available model for agent worker: tier low\n"));
       child.emit("close", 0);
     });
     try {
@@ -1746,7 +1755,7 @@ describe("subagent", () => {
       assert.equal(result.isError, true);
       assert.equal(
         result.content[0].text,
-        "Child failed: no available model for profile worker: tier low\n",
+        "Child failed: no available model for agent worker: tier low\n",
       );
     } finally {
       extension.restore();
@@ -1791,11 +1800,11 @@ describe("subagent", () => {
     }
   });
 
-  it("profile の設定エラーを session_start で owner に通知する", async () => {
+  it("agent の設定エラーを session_start で owner に通知する", async () => {
     const extension = captureProfileExtension({ error: "invalid config" });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.notifications, ["profile configuration error: invalid config"]);
+      assert.deepEqual(extension.notifications, ["agent configuration error: invalid config"]);
     } finally {
       extension.restore();
     }
@@ -1803,7 +1812,7 @@ describe("subagent", () => {
 });
 
 describe("subagent の表示", () => {
-  it("呼び出し時に subagent と profile 名を表示する", () => {
+  it("呼び出し時に subagent と agent 名を表示する", () => {
     const extension = captureProfileExtension();
     try {
       const rendered = extension.renderCall(
@@ -1821,7 +1830,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "work",
           cwd: "/child",
           pending: false,
@@ -1864,7 +1873,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "work",
           cwd: "/child",
           pending: false,
@@ -1899,7 +1908,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "work",
           cwd: "/child",
           pending: true,
@@ -1936,7 +1945,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "work",
           cwd: "/child",
           pending: true,
@@ -1977,7 +1986,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "work",
           cwd: "/child",
           pending: true,
@@ -2017,7 +2026,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "inspect files",
           cwd: "/child",
           pending: false,
@@ -2061,7 +2070,7 @@ describe("subagent の表示", () => {
     const extension = captureProfileExtension();
     const details = {
       results: [
-        { profile: "worker", task: "work", exitCode: 0, messages: [], actions: [], stderr: "" },
+        { agent: "worker", task: "work", exitCode: 0, messages: [], actions: [], stderr: "" },
       ],
     };
     try {
@@ -2087,7 +2096,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "work",
           exitCode: 0,
           messages: [{ role: "assistant", content: [{ type: "text", text: "partial final" }] }],
@@ -2119,7 +2128,7 @@ describe("subagent の表示", () => {
     const details = {
       results: [
         {
-          profile: "worker",
+          agent: "worker",
           task: "work",
           exitCode: 0,
           messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],

@@ -1,4 +1,4 @@
-default: agent
+default: main
 
 _when:
   # z.ai peak hours are weekdays, 14:00–18:00 (UTC+8) => 06:00-10:00 UTC
