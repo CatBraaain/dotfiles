@@ -1274,7 +1274,7 @@ describe("§8 表示", () => {
       renderToolCall("write", { path: parentPath, content: "" }),
       renderToolCall("edit", { path: workspacePath, edits: [] }),
     ];
-    assert.deepEqual(renderedCalls, ["read src/a.ts", `write ${parentPath}`, "edit src/a.ts"]);
+    assert.deepEqual(renderedCalls, ["read ./src/a.ts", `write ${parentPath}`, "edit ./src/a.ts"]);
   });
 
   it("all built-in tool errors show only the first three lines", () => {

@@ -71,7 +71,7 @@ export function formatPath(path: string, cwd: string): string {
   const absolutePath = resolve(cwd, path);
   const relativePath = relative(cwd, absolutePath);
   const isOutsideCwd = relativePath === ".." || relativePath.startsWith(`..${sep}`);
-  return isOutsideCwd ? absolutePath : relativePath || ".";
+  return isOutsideCwd ? absolutePath : relativePath ? `./${relativePath}` : ".";
 }
 
 export function formatReadCall(args: { path?: unknown }, cwd: string, theme: ToolTheme): string {

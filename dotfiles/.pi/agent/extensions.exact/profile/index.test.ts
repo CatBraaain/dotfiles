@@ -1852,7 +1852,7 @@ describe("subagent の表示", () => {
         },
       );
       const lines = (rendered as Container).render(200);
-      assert.ok(lines.some((line) => line.includes("→ edit a.ts")));
+      assert.ok(lines.some((line) => line.includes("→ edit ./a.ts")));
       assert.ok(lines.some((line) => line.includes("  edited 1 block(s)")));
     } finally {
       extension.restore();

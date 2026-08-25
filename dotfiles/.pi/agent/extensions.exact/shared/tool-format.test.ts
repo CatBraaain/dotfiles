@@ -29,9 +29,14 @@ const plainTheme: ToolTheme = {
 };
 
 describe("formatPath", () => {
-  it("cwd 配下の絶対パスを相対パスで表示する", () => {
-    const renderedPath = formatPath("/workspace/project/src/a.ts", "/workspace/project");
-    assert.equal(renderedPath, "src/a.ts");
+  it("cwd 配下のパスを ./ から始まる相対パスで表示する", () => {
+    const renderedPath = formatPath("childfolder/a.ts", "/workspace/project");
+    assert.equal(renderedPath, "./childfolder/a.ts");
+  });
+
+  it("cwd 自体を . で表示する", () => {
+    const renderedPath = formatPath("/workspace/project", "/workspace/project");
+    assert.equal(renderedPath, ".");
   });
 
   it("親ディレクトリ経由のパスを絶対パスで表示する", () => {
@@ -46,9 +51,9 @@ describe("formatToolCall", () => {
     assert.equal(call, "$ git status");
   });
 
-  it("read はパスを表示する", () => {
+  it("read は cwd 配下のパスを ./ から始めて表示する", () => {
     const call = formatToolCall("read", { path: "src/a.ts" }, "/cwd", plainTheme);
-    assert.equal(call, "read src/a.ts");
+    assert.equal(call, "read ./src/a.ts");
   });
 
   it("read は SKILL.md をスキル名で表示する", () => {
@@ -57,9 +62,9 @@ describe("formatToolCall", () => {
     assert.ok(call.includes("my-skill"));
   });
 
-  it("write は cwd 配下の絶対パスを相対表示する", () => {
+  it("write は cwd 配下の絶対パスを ./ から始めて表示する", () => {
     const call = formatToolCall("write", { path: "/cwd/a.ts" }, "/cwd", plainTheme);
-    assert.equal(call, "write a.ts");
+    assert.equal(call, "write ./a.ts");
   });
 
   it("edit は cwd の親にあるパスを絶対表示する", () => {
