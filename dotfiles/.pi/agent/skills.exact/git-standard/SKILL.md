@@ -17,36 +17,20 @@ git の commit・branch・push・PR に関する判断規則を所有する。�
 
 git 操作の前に、このラダーで対象リポジトリの規約を特定する。
 
-### 目標
+目標：branch 運用・commit 規約・PR 手順を、観測可能な根拠（ドキュメントの該当箇所・履歴）で特定する。
 
-branch 運用・commit 規約・PR 手順を、観測可能な根拠（ドキュメントの該当箇所・履歴）で特定する。
+最初に成立する段で止まる。
 
-### 段
+1. 条件：ローカルのリポジトリに規約を述べたドキュメントがあり、branch・commit・PR の必要な規約が特定できるか？
+   行動：CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit 規約・PR 手順を読む。
+2. 条件：ドキュメントに規約がなく、同一形式のコミット・branch 名が履歴に繰り返し現れ、慣習が一貫して観測できるか？
+   行動：`git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch 命名・PR 運用の実績を読む。
+3. 条件：外部リポジトリへの contribution で、ローカルに案内がないか？
+   行動：公式の contribution guide・issue tracker から、PR 受付可否、issue 先行の要否、CLA/DCO 署名要件を確認する。手段の選択は research-strategy に従う。
+4. 条件：前段までで規約を特定できないか？
+   行動：本標準の一般規則を適用する。その後も判断が分かれる点は、質問して止まる。
 
-#### 第1段：リポジトリ内ドキュメント
-
-- 適用条件: ローカルにリポジトリがある。
-- 実行内容: CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit 規約・PR 手順を読む。
-- 停止条件: branch・commit・PR の必要な規約が特定できた。
-- エスカレーション条件: 規約を述べたドキュメントが存在しない。
-
-#### 第2段：履歴からの慣習の読み取り
-
-- 適用条件: ドキュメントに規約がない。
-- 実行内容: `git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch 命名・PR 運用の実績を読む。
-- 停止条件: 同一形式のコミット・branch 名が履歴に繰り返し現れ、慣習が一貫して観測できた。
-- エスカレーション条件: 履歴が規約の根拠として薄い（コミット数が少ない、形式が混在する）。
-
-#### 第3段：リモートの公式情報（web 可）
-
-- 適用条件: 外部リポジトリへの contribution で、ローカルに案内がない。手段の選択は research-strategy に従う。
-- 実行内容: 公式の contribution guide・issue tracker から、PR 受付可否、issue 先行の要否、CLA/DCO 署名要件を確認する。
-- 停止条件: 受付可否と要求手順が特定できた。
-- エスカレーション条件: —（最終段）
-
-### 最終フォールバック
-
-規約を特定できないときは本標準の一般規則を適用する。その後も判断が分かれる点は、質問して止まる。
+検証：特定した規約と根拠（ドキュメントの該当箇所・履歴の観測・公式情報）を確認する。
 
 ## コミットの分割
 
