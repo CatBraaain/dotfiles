@@ -116,11 +116,19 @@ export function formatToolCall(
     case "edit":
       return formatNamedCall("edit", formatPath(String(args.path ?? ""), cwd), theme);
     case "grep":
-      return formatNamedCall("grep", String(args.pattern ?? ""), theme);
+      return formatNamedCall(
+        "grep",
+        `${String(args.pattern ?? "")} in ${formatPath(String(args.path ?? ""), cwd)}`,
+        theme,
+      );
     case "find":
-      return formatNamedCall("find", String(args.pattern ?? ""), theme);
+      return formatNamedCall(
+        "find",
+        `${String(args.pattern ?? "")} in ${formatPath(String(args.path ?? ""), cwd)}`,
+        theme,
+      );
     case "ls":
-      return formatNamedCall("ls", String(args.path ?? "."), theme);
+      return formatNamedCall("ls", formatPath(String(args.path ?? ""), cwd), theme);
     default:
       return formatFallbackCall(toolName, args, theme);
   }

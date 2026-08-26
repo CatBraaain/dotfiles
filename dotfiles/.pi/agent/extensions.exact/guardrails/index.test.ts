@@ -120,6 +120,21 @@ describe("§1 ツールごとの扱い", () => {
     const toolNames = [...captureRegisteredTools().keys()].sort();
     assert.deepEqual(toolNames, ["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
+
+  it("grep は cwd 自体を . で表示する", () => {
+    const call = renderToolCall("grep", { pattern: "TODO", path: process.cwd() });
+    assert.equal(call, "grep TODO in .");
+  });
+
+  it("find は cwd 自体を . で表示する", () => {
+    const call = renderToolCall("find", { pattern: "*.ts", path: process.cwd() });
+    assert.equal(call, "find *.ts in .");
+  });
+
+  it("ls は cwd 自体を . で表示する", () => {
+    const call = renderToolCall("ls", { path: process.cwd() });
+    assert.equal(call, "ls .");
+  });
 });
 
 describe("§2 パスのアクセス結果", () => {

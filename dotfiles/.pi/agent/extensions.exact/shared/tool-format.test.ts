@@ -72,18 +72,33 @@ describe("formatToolCall", () => {
     assert.equal(call, "edit /parent/b.ts");
   });
 
-  it("grep はパターンを表示する", () => {
+  it("grep は path 未指定時に cwd を表示する", () => {
     const call = formatToolCall("grep", { pattern: "TODO" }, "/cwd", plainTheme);
-    assert.equal(call, "grep TODO");
+    assert.equal(call, "grep TODO in .");
   });
 
-  it("find はパターンを表示する", () => {
+  it("grep は cwd 配下の path を表示する", () => {
+    const call = formatToolCall("grep", { pattern: "TODO", path: "src" }, "/cwd", plainTheme);
+    assert.equal(call, "grep TODO in ./src");
+  });
+
+  it("find は path 未指定時に cwd を表示する", () => {
     const call = formatToolCall("find", { pattern: "*.ts" }, "/cwd", plainTheme);
-    assert.equal(call, "find *.ts");
+    assert.equal(call, "find *.ts in .");
+  });
+
+  it("find は cwd 配下の path を表示する", () => {
+    const call = formatToolCall("find", { pattern: "*.ts", path: "src" }, "/cwd", plainTheme);
+    assert.equal(call, "find *.ts in ./src");
   });
 
   it("ls はパス未指定で . を表示する", () => {
     const call = formatToolCall("ls", {}, "/cwd", plainTheme);
+    assert.equal(call, "ls .");
+  });
+
+  it("ls は cwd 自体を . で表示する", () => {
+    const call = formatToolCall("ls", { path: "/cwd" }, "/cwd", plainTheme);
     assert.equal(call, "ls .");
   });
 

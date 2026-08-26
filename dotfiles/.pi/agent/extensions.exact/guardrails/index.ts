@@ -260,7 +260,8 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
       return sandbox.runTool("grep", params, { mode: "fs", signal });
     },
     renderCall(args, theme) {
-      return new Text(formatNamedCall("grep", args.pattern, theme), 0, 0);
+      const path = formatPath(String(args.path ?? ""), cwd);
+      return new Text(formatNamedCall("grep", `${args.pattern} in ${path}`, theme), 0, 0);
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
@@ -275,7 +276,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
   registerTextTool(
     findTool,
     "find",
-    (args) => args.pattern,
+    (args) => `${args.pattern} in ${formatPath(String(args.path ?? ""), cwd)}`,
     async (args, signal, context) => {
       await sandbox.authorizePath("read", resolve(cwd, args.path ?? "."), context);
       return sandbox.runTool("find", args, { mode: "fs", signal });
@@ -284,7 +285,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
   registerTextTool(
     lsTool,
     "ls",
-    (args) => args.path ?? ".",
+    (args) => formatPath(String(args.path ?? ""), cwd),
     async (args, signal, context) => {
       await sandbox.authorizePath("read", resolve(cwd, args.path ?? "."), context);
       return sandbox.runTool("ls", args, { mode: "fs", signal });
