@@ -55,6 +55,53 @@ branch 運用・commit 規約・PR 手順を、観測可能な根拠（ドキュ
 - 意味の異なる変更が混在しているときは `git add -p` 等で分割する。
 - 分割すると中間の commit がビルド・テストを通らない変更（依存するリファクタと修正など）は、1 commit にまとめてよい。
 
+### バックアップと一致確認（必須）
+
+分割は add/reset の繰り返しで変更を失いやすい。分割の前後で次の手順を必ず実行する。バックアップ branch 名は以下をそのまま使う。
+
+**1. 分割前 — バックアップの作成**
+
+未コミット変更・untracked ファイルがあるときは、まず一時コミットに固める（既存 commit の分割し直しで未コミット変更がないときは不要）:
+
+```sh
+git add -A
+git commit -m "WIP: backup before split"
+```
+
+バックアップ branch を作る:
+
+```sh
+git branch backup/split-$(date +%Y%m%d-%H%M%S)
+```
+
+分割開始状態へ戻す:
+
+```sh
+git reset --soft HEAD~1        # 未コミット変更をこれから分割してコミットするとき（WIP を解いて staged へ戻す）
+git reset --soft <commit>^      # 既存 commit を分割し直すとき（分割対象の最初の commit の親へ戻す。例: git reset --soft abc1234^）
+```
+
+**2. 分割後 — 一致確認**
+
+すべてのコミットが終わったら、`git diff` が空であること（ツリー内容が同一であること）を確認する。コミット履歴・ハッシュの一致は不要:
+
+```sh
+git diff backup/split-<timestamp> HEAD   # 差分が空であること
+git status                               # 分割対象の変更が残っていないこと
+```
+
+- 差分が空なら変更を失っていない。バックアップ branch を削除する:
+
+```sh
+git branch -D backup/split-<timestamp>
+```
+
+- 差分が出たらコミット漏れか誤削除。バックアップへ戻して分割をやり直す:
+
+```sh
+git reset --hard backup/split-<timestamp>
+```
+
 ## コミットメッセージ
 
 リポジトリに規約（Conventional Commits、`.gitmessage`、履歴の慣習）があればそれに従う。規約がないときの scope は「リポジトリのどこを変更したか」を一意に表す領域名にする:
@@ -92,6 +139,8 @@ PR を作る前に、次を評価する。
 
 - [ ] git 操作の前にリポジトリ規約を Decision Ladder で確認した
 - [ ] commit が論理単位に分割されている
+- [ ] 分割前にバックアップ branch を作成した
+- [ ] 分割後に `git diff <backup> HEAD` が空であることを確認した
 - [ ] commit メッセージがリポジトリ規約（なければ本標準）に従う
 - [ ] branch・push が規約と慣習に沿っている
 - [ ] force push・履歴の書き換えを行っていない、または承認済みである
