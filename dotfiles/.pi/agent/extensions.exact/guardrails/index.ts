@@ -101,7 +101,7 @@ export function createImageReadBlockError(
         "IMAGE_BINARY_BLOCKED",
         "",
         "画像は直接読み込めない。",
-        "抽出済みのOCRファイルを読み込むこと:",
+        "画像内の文字情報が必要な場合、抽出済みのOCRファイルを読み込むこと:",
         "",
         ocrPath,
       ].join("\n")
@@ -109,7 +109,8 @@ export function createImageReadBlockError(
         "IMAGE_BINARY_BLOCKED",
         "",
         "画像バイナリの直接読み込みは禁止されている。",
-        "画像の内容を読む場合は、AGENTS.mdの画像OCR手順に従うこと。",
+        "文字情報以外（レイアウト・見た目など）は読み取る手段がないため、ソースコード参照など別の手段で確認すること。",
+        "画像内の文字情報が必要な場合だけ、AGENTS.mdの画像OCR手順に従うこと。",
         "",
         "1. 対応するOCRファイルを確認する:",
         `   ${ocrPath}`,

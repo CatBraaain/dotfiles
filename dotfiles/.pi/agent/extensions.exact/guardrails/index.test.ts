@@ -397,7 +397,7 @@ describe("§2.1 画像ファイルの read", () => {
       writeFileSync(`${imagePath}.ocr.md`, "recognized text");
 
       const readTool = captureRegisteredTools().get("read");
-      const expectedErrorMessage = `IMAGE_BINARY_BLOCKED\n\n画像は直接読み込めない。\n抽出済みのOCRファイルを読み込むこと:\n\n${imagePath}.ocr.md`;
+      const expectedErrorMessage = `IMAGE_BINARY_BLOCKED\n\n画像は直接読み込めない。\n画像内の文字情報が必要な場合、抽出済みのOCRファイルを読み込むこと:\n\n${imagePath}.ocr.md`;
       await assert.rejects(
         () => readTool.execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
         { message: expectedErrorMessage },
@@ -406,13 +406,13 @@ describe("§2.1 画像ファイルの read", () => {
   );
 
   it(
-    "OCRファイルがない画像をエラーでブロックしMinerU CLIを案内する",
+    "OCRファイルがない画像をエラーでブロックしOCR手順と代替手段を案内する",
     withTempDirectory(async (directory) => {
       const imagePath = join(directory, "image");
       writeFileSync(imagePath, pngBytes);
 
       const readTool = captureRegisteredTools().get("read");
-      const expectedErrorMessage = `IMAGE_BINARY_BLOCKED\n\n画像バイナリの直接読み込みは禁止されている。\n画像の内容を読む場合は、AGENTS.mdの画像OCR手順に従うこと。\n\n1. 対応するOCRファイルを確認する:\n   ${imagePath}.ocr.md\n\n2. OCRファイルが存在しない場合:\n   AGENTS.mdに記載されたMinerU CLIを実行して作成する。\n\n3. 作成済みのOCRファイルをread toolで読み込む。\n\n元画像をVision入力へ自動添付してはならない。`;
+      const expectedErrorMessage = `IMAGE_BINARY_BLOCKED\n\n画像バイナリの直接読み込みは禁止されている。\n文字情報以外（レイアウト・見た目など）は読み取る手段がないため、ソースコード参照など別の手段で確認すること。\n画像内の文字情報が必要な場合だけ、AGENTS.mdの画像OCR手順に従うこと。\n\n1. 対応するOCRファイルを確認する:\n   ${imagePath}.ocr.md\n\n2. OCRファイルが存在しない場合:\n   AGENTS.mdに記載されたMinerU CLIを実行して作成する。\n\n3. 作成済みのOCRファイルをread toolで読み込む。\n\n元画像をVision入力へ自動添付してはならない。`;
       await assert.rejects(
         () => readTool.execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
         { message: expectedErrorMessage },
