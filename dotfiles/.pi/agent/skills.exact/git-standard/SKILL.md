@@ -13,24 +13,24 @@ git の commit・branch・push・PR に関する判断規則を所有する。�
 - 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
 - 適用しない: コード変更そのものの品質（readable-code-standard 等）、調査手段の選択（research-strategy）。
 
-## Decision Ladder：リポジトリ規約の確認
+## Decision Ladder: リポジトリ規約の確認
 
 git 操作の前に、このラダーで対象リポジトリの規約を特定する。
 
-目標：branch 運用・commit 規約・PR 手順を、観測可能な根拠（ドキュメントの該当箇所・履歴）で特定する。
+目標: branch 運用・commit 規約・PR 手順を、観測可能な根拠（ドキュメントの該当箇所・履歴）で特定する。
 
 最初に成立する段で止まる。
 
-1. 条件：ローカルのリポジトリに規約を述べたドキュメントがあり、branch・commit・PR の必要な規約が特定できるか？
-   行動：CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit 規約・PR 手順を読む。
-2. 条件：ドキュメントに規約がなく、同一形式のコミット・branch 名が履歴に繰り返し現れ、慣習が一貫して観測できるか？
-   行動：`git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch 命名・PR 運用の実績を読む。
-3. 条件：外部リポジトリへの contribution で、ローカルに案内がないか？
-   行動：公式の contribution guide・issue tracker から、PR 受付可否、issue 先行の要否、CLA/DCO 署名要件を確認する。手段の選択は research-strategy に従う。
-4. 条件：前段までで規約を特定できないか？
-   行動：本標準の一般規則を適用する。その後も判断が分かれる点は、質問して止まる。
+1. 条件: ローカルのリポジトリに規約を述べたドキュメントがあり、branch・commit・PR の必要な規約が特定できるか？
+   行動: CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit 規約・PR 手順を読む。
+2. 条件: ドキュメントに規約がなく、同一形式のコミット・branch 名が履歴に繰り返し現れ、慣習が一貫して観測できるか？
+   行動: `git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch 命名・PR 運用の実績を読む。
+3. 条件: 外部リポジトリへの contribution で、ローカルに案内がないか？
+   行動: 公式の contribution guide・issue tracker から、PR 受付可否、issue 先行の要否、CLA/DCO 署名要件を確認する。手段の選択は research-strategy に従う。
+4. 条件: 前段までで規約を特定できないか？
+   行動: 本標準の一般規則を適用する。その後も判断が分かれる点は、質問して止まる。
 
-検証：特定した規約と根拠（ドキュメントの該当箇所・履歴の観測・公式情報）を確認する。
+検証: 特定した規約と根拠（ドキュメントの該当箇所・履歴の観測・公式情報）を確認する。
 
 ## コミットの分割
 
