@@ -36,12 +36,12 @@ agents:
   main:
     tier: high
     tools: ["*"]
-    subagents: [manager, worker]
+    subagents: [senior, junior]
     systemPrompt: ["...", "..."]
-  manager:
+  senior:
     tier: middle
     tools: ["*"]
-    subagents: [worker]
+    subagents: [junior]
     systemPrompt: ["...", "..."]
 ```
 
