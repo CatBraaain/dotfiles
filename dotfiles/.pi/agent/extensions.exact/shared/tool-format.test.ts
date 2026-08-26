@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
 import {
   CALL_PREVIEW_LIMIT,
   formatFallbackCall,
@@ -42,6 +43,16 @@ describe("formatPath", () => {
   it("親ディレクトリ経由のパスを絶対パスで表示する", () => {
     const renderedPath = formatPath("../README.md", "/workspace/project");
     assert.equal(renderedPath, "/workspace/README.md");
+  });
+
+  it("ホームディレクトリを ~ で表示する", () => {
+    const renderedPath = formatPath(homedir(), "/workspace/project");
+    assert.equal(renderedPath, "~");
+  });
+
+  it("ホームディレクトリ配下のパスを ~ から始めて表示する", () => {
+    const renderedPath = formatPath(`${homedir()}/documents/report.md`, "/workspace/project");
+    assert.equal(renderedPath, "~/documents/report.md");
   });
 });
 

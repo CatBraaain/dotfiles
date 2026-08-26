@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 
 /**
@@ -71,7 +72,14 @@ export function formatPath(path: string, cwd: string): string {
   const absolutePath = resolve(cwd, path);
   const relativePath = relative(cwd, absolutePath);
   const isOutsideCwd = relativePath === ".." || relativePath.startsWith(`..${sep}`);
-  return isOutsideCwd ? absolutePath : relativePath ? `./${relativePath}` : ".";
+  if (!isOutsideCwd) return relativePath ? `./${relativePath}` : ".";
+
+  const homePath = homedir();
+  if (absolutePath === homePath) return "~";
+  if (absolutePath.startsWith(`${homePath}${sep}`)) {
+    return `~${absolutePath.slice(homePath.length)}`;
+  }
+  return absolutePath;
 }
 
 export function formatReadCall(args: { path?: unknown }, cwd: string, theme: ToolTheme): string {
