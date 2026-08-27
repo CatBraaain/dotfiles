@@ -4,7 +4,6 @@
   "defaultThinkingLevel": "high",
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
-  "hideThinkingBlock": false,
   "quietStartup": false,
   "retry": {
     "enabled": true,
