@@ -2,11 +2,10 @@
 
 import assert from "node:assert/strict";
 import type { SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
-import sessionFooterExtension, {
+import footerExtension, {
   buildFooterLines,
   collectUsageSummary,
   formatCwdForFooter,
-  formatSessionId,
   formatTokens,
   type FooterRenderData,
 } from "./index";
@@ -28,6 +27,16 @@ function it(name: string, fn: () => Promise<void> | void): void {
 
 const plainTheme: Pick<Theme, "fg"> = {
   fg: (_color, text) => text,
+};
+
+const ansiCodes: Record<string, string> = {
+  dim: "\x1B[2m",
+  error: "\x1B[91m",
+  warning: "\x1B[93m",
+};
+
+const taggingTheme: Pick<Theme, "fg"> = {
+  fg: (color, text) => `${ansiCodes[color] ?? "\x1B[39m"}${text}\x1B[0m`,
 };
 
 function usage(
@@ -108,10 +117,6 @@ describe("formatting", () => {
     assert.equal(formatCwdForFooter("/home/user/project", "/home/user"), "~/project");
     assert.equal(formatCwdForFooter("/workspace/project", "/home/user"), "/workspace/project");
   });
-
-  it("セッションIDを先頭8文字と末尾4文字へ短縮する", () => {
-    assert.equal(formatSessionId("12345678-1234-1234-1234-abcdefabcdef"), "12345678...cdef");
-  });
 });
 
 describe("usage", () => {
@@ -137,7 +142,7 @@ describe("extension lifecycle", () => {
   it("TUI の session_start でカスタムフッターを登録する", () => {
     const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
     let setFooterCalls = 0;
-    sessionFooterExtension({
+    footerExtension({
       on(event: string, handler: (event: unknown, ctx: unknown) => void) {
         handlers.set(event, handler);
       },
@@ -151,7 +156,7 @@ describe("extension lifecycle", () => {
   it("TUI 以外ではカスタムフッターを登録しない", () => {
     const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
     let setFooterCalls = 0;
-    sessionFooterExtension({
+    footerExtension({
       on(event: string, handler: (event: unknown, ctx: unknown) => void) {
         handlers.set(event, handler);
       },
@@ -172,8 +177,8 @@ describe("footer", () => {
 
     assert.equal(lines.length, 2);
     assert.match(lines[0]!, /^\/workspace\/project \(main\)/);
-    assert.match(lines[0]!, /session: 12345678\.\.\.cdef$/);
-    assert.match(lines[1]!, /↑57k ↓1.8k R94k CH88\.7% \$0\.015 20\.6%\/272k/);
+    assert.match(lines[0]!, /session: 12345678-1234-1234-1234-abcdefabcdef$/);
+    assert.match(lines[1]!, /↑57k ↓1.8k R94k W0 CH88\.7% \$0\.015 20\.6%\/272k/);
     assert.match(lines[1]!, /\(openai-codex\) gpt-5\.6-luna • high$/);
     assert.equal(visibleWidth(lines[0]!), 140);
     assert.equal(visibleWidth(lines[1]!), 140);
@@ -204,11 +209,40 @@ describe("footer", () => {
     assert.match(lines[1]!, /\?\/272k/);
   });
 
+  it("usage がすべて0でも各項目を0で表示する", () => {
+    const lines = buildFooterLines(
+      140,
+      renderData({
+        usage: {
+          totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+          latestCacheHitRate: undefined,
+        },
+      }),
+      plainTheme,
+    );
+
+    assert.match(lines[1]!, /^↑0 ↓0 R0 W0 CH0\.0% \$0\.000 /);
+  });
+
   it("表示幅が不足してもすべての行を端末幅以内に収める", () => {
     const width = 36;
     const lines = buildFooterLines(width, renderData(), plainTheme);
 
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
+  });
+
+  it("すべての行を dim だけで表示する", () => {
+    const lines = buildFooterLines(
+      140,
+      renderData({ extensionStatuses: new Map([["alpha", "alpha status"]]) }),
+      taggingTheme,
+    );
+
+    assert.equal(lines.length, 3);
+    for (const line of lines) {
+      const withoutDim = line.replaceAll("\x1B[2m", "").replaceAll("\x1B[0m", "");
+      assert.ok(!withoutDim.includes("\x1B"), `non-dim color used in: ${JSON.stringify(line)}`);
+    }
   });
 });
 

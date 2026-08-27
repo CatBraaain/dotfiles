@@ -10,8 +10,6 @@ import { relative, resolve, sep, isAbsolute } from "node:path";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Usage } from "@earendil-works/pi-ai";
 
-const SESSION_ID_PREFIX_LENGTH = 8;
-const SESSION_ID_SUFFIX_LENGTH = 4;
 const MIN_LINE_PADDING = 2;
 
 export interface UsageTotals {
@@ -72,13 +70,6 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
 
   if (!isInsideHome) return cwd;
   return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
-}
-
-export function formatSessionId(sessionId: string): string {
-  if (sessionId.length <= SESSION_ID_PREFIX_LENGTH + SESSION_ID_SUFFIX_LENGTH) {
-    return sessionId;
-  }
-  return `${sessionId.slice(0, SESSION_ID_PREFIX_LENGTH)}...${sessionId.slice(-SESSION_ID_SUFFIX_LENGTH)}`;
 }
 
 function emptyUsageTotals(): UsageTotals {
@@ -152,16 +143,13 @@ function contextDisplay(
   theme: FooterTheme,
 ): string {
   const contextWindow = contextUsage?.contextWindow ?? model?.contextWindow ?? 0;
-  const contextPercentValue = contextUsage?.percent ?? 0;
-  const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+  const percent = contextUsage?.percent ?? null;
+  const contextPercent = percent === null ? "?" : percent.toFixed(1);
   const display =
     contextPercent === "?"
       ? `?/${formatTokens(contextWindow)}`
       : `${contextPercent}%/${formatTokens(contextWindow)}`;
-
-  if (contextPercentValue > 90) return theme.fg("error", display);
-  if (contextPercentValue > 70) return theme.fg("warning", display);
-  return display;
+  return theme.fg("dim", display);
 }
 
 function modelDisplay(
@@ -184,16 +172,14 @@ function modelDisplay(
 
 function buildStatsLine(width: number, data: FooterRenderData, theme: FooterTheme): string {
   const { totals, latestCacheHitRate } = data.usage;
-  const dimParts: string[] = [];
-
-  if (totals.input) dimParts.push(`↑${formatTokens(totals.input)}`);
-  if (totals.output) dimParts.push(`↓${formatTokens(totals.output)}`);
-  if (totals.cacheRead) dimParts.push(`R${formatTokens(totals.cacheRead)}`);
-  if (totals.cacheWrite) dimParts.push(`W${formatTokens(totals.cacheWrite)}`);
-  if ((totals.cacheRead > 0 || totals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
-    dimParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
-  }
-  if (totals.cost) dimParts.push(`$${totals.cost.toFixed(3)}`);
+  const dimParts: string[] = [
+    `↑${formatTokens(totals.input)}`,
+    `↓${formatTokens(totals.output)}`,
+    `R${formatTokens(totals.cacheRead)}`,
+    `W${formatTokens(totals.cacheWrite)}`,
+    `CH${(latestCacheHitRate ?? 0).toFixed(1)}%`,
+    `$${totals.cost.toFixed(3)}`,
+  ];
 
   const leftParts = dimParts.map((part) => theme.fg("dim", part));
   leftParts.push(contextDisplay(data.contextUsage, data.model, theme));
@@ -220,7 +206,7 @@ export function buildFooterLines(
   const branch = data.branch ? ` (${data.branch})` : "";
   const sessionName = data.sessionName ? ` • ${data.sessionName}` : "";
   const location = theme.fg("dim", `${cwd}${branch}${sessionName}`);
-  const session = theme.fg("dim", `session: ${formatSessionId(data.sessionId)}`);
+  const session = theme.fg("dim", `session: ${data.sessionId}`);
 
   const lines = [rightAlignedLine(location, session, width), buildStatsLine(width, data, theme)];
   const statuses = [...data.extensionStatuses.entries()]
@@ -228,7 +214,7 @@ export function buildFooterLines(
     .map(([, text]) => sanitizeStatusText(text))
     .join(" ");
   if (data.extensionStatuses.size > 0) {
-    lines.push(truncateToWidth(statuses, width, theme.fg("dim", "...")));
+    lines.push(theme.fg("dim", truncateToWidth(statuses, width, "...")));
   }
   return lines;
 }
@@ -260,7 +246,7 @@ function getFooterRenderData(
   };
 }
 
-export default function sessionFooterExtension(pi: ExtensionAPI): void {
+export default function footerExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
 
