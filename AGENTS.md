@@ -56,3 +56,4 @@ assertion は自作 helper を作らず、`node:assert/strict` を使うこと�
 ## dotfiles/.pi
 
 dotfiles/.piを編集するときは必ずdotfiles/.pi/READMEを読む
+dotfiles/.pi/agent/extensions.exact配下のfooter・widgetの文字色は指定がない限りgrayにすること
