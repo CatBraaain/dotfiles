@@ -591,10 +591,13 @@ export default function profileExtension(
       const childCwd = childResult.cwd ?? process.cwd();
       const toolTheme: ToolTheme = { fg: theme.fg.bind(theme), bold: theme.bold.bind(theme) };
       const container = new Container();
-      container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
-      container.addChild(new Text(theme.fg("dim", childResult.task), 0, 0));
+      container.addChild(new Text(theme.fg("muted", "┌─── Task ──────"), 0, 0));
+      container.addChild(new Text(theme.fg("text", childResult.task), 0, 0));
+      container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       if (actions.length > 0) {
-        container.addChild(new Text(theme.fg("muted", "─── Actions ───"), 0, 0));
+        container.addChild(
+          new Text(theme.fg("muted", "┌─── Actions ───（ツール利用がある場合のみ表示）"), 0, 0),
+        );
         for (const action of actions) {
           const callText = formatToolCall(action.name, action.args, childCwd, toolTheme);
           container.addChild(new Text(`${theme.fg("muted", "→ ")}${callText}`, 0, 0));
@@ -614,10 +617,14 @@ export default function profileExtension(
               : undefined;
           if (summary !== undefined) container.addChild(new Text(`  ${summary}`, 0, 0));
         }
+        container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       }
       if (finalOutput && !options.isPartial) {
-        container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
+        container.addChild(
+          new Text(theme.fg("muted", "┌─── Output ────（出力が確定したときに表示）"), 0, 0),
+        );
         container.addChild(new Markdown(finalOutput.trim(), 0, 0, getMarkdownTheme()));
+        container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       }
       if (childResult.pending) {
         container.addChild({

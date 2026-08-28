@@ -1929,10 +1929,10 @@ describe("subagent の表示", () => {
         },
       );
       const lines = (rendered as Container).render(200);
-      assert.ok(
-        lines.some((line) =>
-          SPINNER_FRAMES.some((frame) => line.includes(`[muted]${frame} worker`)),
-        ),
+      assert.equal(
+        lines.at(-1) &&
+          SPINNER_FRAMES.some((frame) => lines.at(-1)?.includes(`[muted]${frame} worker`)),
+        true,
       );
     } finally {
       extension.restore();
@@ -1973,7 +1973,7 @@ describe("subagent の表示", () => {
 
       assert.deepEqual(
         [initialLines.length, nextLines.length, initialLines.at(-1), nextLines.at(-1)],
-        [3, 3, "[muted]⠋ worker", "[muted]⠙ worker"],
+        [4, 4, "[muted]⠋ worker", "[muted]⠙ worker"],
       );
     } finally {
       __spinnerTimers.now = originalNow;
@@ -2057,9 +2057,20 @@ describe("subagent の表示", () => {
         },
       ) as Container;
       const lines = rendered.render(200);
+      const sectionLines = lines
+        .filter((line) => line.startsWith("[muted]┌") || line.startsWith("[muted]└"))
+        .map((line) => line.trimEnd());
+      assert.deepEqual(sectionLines, [
+        "[muted]┌─── Task ──────",
+        "[muted]└───────────────",
+        "[muted]┌─── Actions ───（ツール利用がある場合のみ表示）",
+        "[muted]└───────────────",
+        "[muted]┌─── Output ────（出力が確定したときに表示）",
+        "[muted]└───────────────",
+      ]);
       assert.ok(lines.some((line) => line.includes("inspect files")));
+      assert.ok(lines.some((line) => line.includes("[text]inspect files")));
       assert.ok(lines.some((line) => line.includes("pwd")));
-      assert.ok(lines.some((line) => line.includes("─── Output ───")));
       assert.ok(lines.some((line) => line.includes("finished")));
     } finally {
       extension.restore();
@@ -2082,10 +2093,12 @@ describe("subagent の表示", () => {
           bold: (text: string) => text,
         },
       );
+      const lines = (rendered as Container).render(200);
       assert.equal(
-        (rendered as Container).render(200).some((line) => line.includes("─── Actions ───")),
+        lines.some((line) => line.includes("┌─── Actions ")),
         false,
       );
+      assert.equal(lines.filter((line) => line.trimEnd() === "└───────────────").length, 1);
     } finally {
       extension.restore();
     }
@@ -2114,10 +2127,12 @@ describe("subagent の表示", () => {
           bold: (text: string) => text,
         },
       );
+      const lines = (rendered as Container).render(200);
       assert.equal(
-        (rendered as Container).render(200).some((line) => line.includes("─── Output ───")),
+        lines.some((line) => line.includes("┌─── Output ")),
         false,
       );
+      assert.equal(lines.filter((line) => line.trimEnd() === "└───────────────").length, 1);
     } finally {
       extension.restore();
     }
@@ -2146,9 +2161,9 @@ describe("subagent の表示", () => {
           bold: (text: string) => text,
         },
       );
-      assert.ok(
-        (rendered as Container).render(200).some((line) => line.includes("─── Output ───")),
-      );
+      const lines = (rendered as Container).render(200);
+      assert.ok(lines.some((line) => line.includes("┌─── Output ")));
+      assert.equal(lines.filter((line) => line.trimEnd() === "└───────────────").length, 2);
     } finally {
       extension.restore();
     }
