@@ -11,7 +11,6 @@ extensions_for_windows=(
 extensions_for_linux=(
   # keep-sorted start by_regex=(?:#\s)?(.*) sticky_comments=no
   alefragnani.bookmarks
-  astral-sh.ty
   awalsh128.keep-sorted
   bierner.markdown-yaml-preamble
   bpruitt-goddard.mermaid-markdown-syntax-highlighting
@@ -46,7 +45,6 @@ extensions_for_linux=(
   oxc.oxc-vscode
   pomber.git-file-history
   redhat.vscode-yaml
-  rust-lang.rust-analyzer
   saber2pr.file-git-history
   svelte.svelte-vscode
   takumii.markdowntable
