@@ -53,7 +53,7 @@ Decision Ladder は、優先順位付きの行動手順を記述する記法。�
 以下は Decision Ladder のテンプレート。`<...>` は実際の内容に置き換え、完成した Decision Ladder に残さない。
 
 ```markdown
-## Decision Ladder: <名前>
+## <名前>ラダー
 
 目標: <観測可能な成果と受入条件>
 
