@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@opencode-ai/models": "0.0.56",
     "shell-quote": "1.10.0",
     "yaml": "2.9.0"
   }
