@@ -98,6 +98,8 @@ IMAGE_BINARY_BLOCKED
 | read と commands | `Yes, allow` / `No, deny (reason next)` |
 | write | `File only` / `Directory (subtree)` / `No, deny (reason next)` |
 
+選択ダイアログ（および `confirm` に置き換わる場合のメッセージ）には、確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob 展開後の絶対パスを、コマンドはブレース展開後のパターンを表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
+
 拒否を選択・キャンセルしたとき、拡張は理由入力ダイアログを続けて表示する。入力は任意で、空欄またはキャンセルなら理由なしとして扱う。理由が入力されたときは、拒否のエラーメッセージ（`Access denied by user: <path>` / `Command denied by user: <command>`）に `User reason: <入力>` の行を追記して agent へ返す。
 
 選択ダイアログを提供できない UI では確認ダイアログ（`confirm`）に置き換え、拒否時の理由入力はテキスト入力ダイアログを提供できる場合のみ行う。理由は agent への伝達のみに使い、以降のアクセス判定には影響しない。確認・理由入力のダイアログは §2 の直列化に従う。

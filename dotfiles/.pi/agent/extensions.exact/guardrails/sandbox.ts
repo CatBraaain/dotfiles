@@ -9,6 +9,9 @@ import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-a
 
 export type Action = "allow" | "deny" | "ask";
 
+/** Action resolution result together with the pattern that caused it (§2.3). */
+export type ActionMatch = { action: Action; matched?: string };
+
 export type ToolName = "read" | "write" | "edit" | "grep" | "find" | "ls" | "bash";
 
 /** Session metadata forwarded to run-tools so the sandboxed bash tool can expose PI_* env vars. */
@@ -244,31 +247,48 @@ export function splitCommandSegments(command: string): string[] {
   return segments;
 }
 
-export function resolveCommandAction(section: RuleSection | undefined, command: string): Action {
-  if (!section) return "deny";
-  const matches = (patterns: string[] | undefined, candidate: string) =>
-    patterns?.some((pattern) =>
-      expandBraces(pattern).some((expandedPattern) => {
-        if (expandedPattern === "*") return true;
-        if (hasGlob(expandedPattern)) return globToRegExp(expandedPattern).test(candidate);
-        return candidate === expandedPattern || candidate.startsWith(`${expandedPattern} `);
-      }),
-    ) ?? false;
-  const actionFor = (candidate: string): Action => {
-    if (matches(section.deny, candidate)) return "deny";
-    if (matches(section.ask, candidate)) return "ask";
-    if (matches(section.allow, candidate)) return "allow";
-    return "deny";
+function findCommandPattern(patterns: string[] | undefined, candidate: string): string | undefined {
+  for (const pattern of patterns ?? []) {
+    for (const expandedPattern of expandBraces(pattern)) {
+      if (expandedPattern === "*") return "*";
+      if (hasGlob(expandedPattern)) {
+        if (globToRegExp(expandedPattern).test(candidate)) return expandedPattern;
+      } else if (candidate === expandedPattern || candidate.startsWith(`${expandedPattern} `)) {
+        return expandedPattern;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function resolveCommandActionMatch(
+  section: RuleSection | undefined,
+  command: string,
+): ActionMatch {
+  if (!section) return { action: "deny" };
+  const actionFor = (candidate: string): ActionMatch => {
+    const deny = findCommandPattern(section.deny, candidate);
+    if (deny !== undefined) return { action: "deny", matched: deny };
+    const ask = findCommandPattern(section.ask, candidate);
+    if (ask !== undefined) return { action: "ask", matched: ask };
+    const allow = findCommandPattern(section.allow, candidate);
+    if (allow !== undefined) return { action: "allow", matched: allow };
+    return { action: "deny" };
   };
   // Parse fallback: a command that yields no segments (empty or unparsable)
   // is checked as the raw string, preserving the pre-split behavior.
   const candidates = splitCommandSegments(command);
   if (candidates.length === 0) candidates.push(command);
-  const actions = candidates.map(actionFor);
-  if (actions.includes("deny")) return "deny";
-  if (actions.includes("ask")) return "ask";
-  if (actions.includes("allow")) return "allow";
-  return "deny";
+  const results = candidates.map(actionFor);
+  return (
+    results.find((result) => result.action === "deny") ??
+    results.find((result) => result.action === "ask") ??
+    results.find((result) => result.action === "allow") ?? { action: "deny" }
+  );
+}
+
+export function resolveCommandAction(section: RuleSection | undefined, command: string): Action {
+  return resolveCommandActionMatch(section, command).action;
 }
 
 function getPathSection(
@@ -355,15 +375,32 @@ function pathsMatchCandidate(paths: string[], candidatePath: string): boolean {
   return paths.some((path) => pathCovers(path, candidatePath));
 }
 
+export function resolvePathActionMatch(
+  section: ExpandedPathSection | undefined,
+  candidatePath: string,
+): ActionMatch {
+  if (!section) return { action: "deny" };
+  const matchedIn = (paths: string[]): string | undefined =>
+    paths.find((path) => pathCovers(path, candidatePath));
+  const deny = matchedIn(section.deny);
+  if (deny !== undefined) return { action: "deny", matched: deny };
+  const ask = matchedIn(section.ask);
+  if (ask !== undefined) return { action: "ask", matched: ask };
+  const allow = matchedIn(section.allow);
+  if (allow !== undefined) return { action: "allow", matched: allow };
+  return { action: "deny" };
+}
+
 export function resolvePathAction(
   section: ExpandedPathSection | undefined,
   candidatePath: string,
 ): Action {
-  if (!section) return "deny";
-  if (pathsMatchCandidate(section.deny, candidatePath)) return "deny";
-  if (pathsMatchCandidate(section.ask, candidatePath)) return "ask";
-  if (pathsMatchCandidate(section.allow, candidatePath)) return "allow";
-  return "deny";
+  return resolvePathActionMatch(section, candidatePath).action;
+}
+
+/** Dialog line explaining which pattern caused the confirmation (§2.3). */
+function matchedPatternNote(matched: string | undefined): string {
+  return matched === undefined ? "no matching pattern (default ask)" : `matched: ${matched}`;
 }
 
 function addParentDirectories(args: string[], targetPath: string): void {
@@ -532,10 +569,10 @@ export class Sandbox {
       throw new Error(`Access denied for credential path: ${absolutePath}`);
     }
     const section = operation === "read" ? this.readPaths : this.writePaths;
-    const action = resolvePathAction(section, absolutePath);
+    const { action, matched } = resolvePathActionMatch(section, absolutePath);
     if (action === "allow") return;
-    const explicitlyDenied = pathsMatchCandidate(section.deny, absolutePath);
-    if (action === "deny" && explicitlyDenied) throw new Error(`Access denied: ${absolutePath}`);
+    if (action === "deny" && matched !== undefined)
+      throw new Error(`Access denied: ${absolutePath}`);
     if (this.hasDynamicGrant(operation, absolutePath)) return;
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
@@ -543,7 +580,7 @@ export class Sandbox {
     await this.withUiLock(async () => {
       // A sibling tool call may have obtained the grant while this call queued.
       if (this.hasDynamicGrant(operation, absolutePath)) return;
-      await this.requestAccess(operation, absolutePath, ui);
+      await this.requestAccess(operation, absolutePath, ui, matched);
     });
   }
 
@@ -571,9 +608,10 @@ export class Sandbox {
     operation: "read" | "write",
     absolutePath: string,
     ui: ToolUI,
+    matched?: string,
   ): Promise<void> {
     const directoryScopeOption = "Directory (subtree)";
-    const title = `Allow ${operation} access?\n${absolutePath}`;
+    const title = `Allow ${operation} access?\n${absolutePath}\n${matchedPatternNote(matched)}`;
     if (ui.select) {
       const selectedOption = await ui.select(
         title,
@@ -596,7 +634,10 @@ export class Sandbox {
       this.addDynamicGrant(operation, absolutePath, "file");
       return;
     }
-    const approved = await ui.confirm(`Allow ${operation} access?`, absolutePath);
+    const approved = await ui.confirm(
+      `Allow ${operation} access?`,
+      `${absolutePath}\n${matchedPatternNote(matched)}`,
+    );
     if (!approved) throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
     this.addDynamicGrant(operation, absolutePath, "file");
   }
@@ -632,14 +673,15 @@ export class Sandbox {
   }
 
   authorizeCommand(command: string, context: ToolContext): Promise<void> {
-    const action = resolveCommandAction(this.config.commands, command);
+    const { action, matched } = resolveCommandActionMatch(this.config.commands, command);
     if (action === "allow") return Promise.resolve();
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
+    const note = matchedPatternNote(matched);
     return this.withUiLock(async () => {
       if (ui.select) {
-        const selectedOption = await ui.select(`Allow command?\n${command}`, [
+        const selectedOption = await ui.select(`Allow command?\n${command}\n${note}`, [
           ALLOW_OPTION,
           DENY_OPTION,
         ]);
@@ -647,7 +689,7 @@ export class Sandbox {
           throw await this.deniedError(`Command denied by user: ${command}`, ui);
         return;
       }
-      if (await ui.confirm("Allow command?", command)) return;
+      if (await ui.confirm("Allow command?", `${command}\n${note}`)) return;
       throw await this.deniedError(`Command denied by user: ${command}`, ui);
     });
   }

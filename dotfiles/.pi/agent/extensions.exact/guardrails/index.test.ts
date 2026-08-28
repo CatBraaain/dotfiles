@@ -19,7 +19,9 @@ import {
   parseGuardrailsConfig,
   resolveGitMainWorktreePath,
   resolveCommandAction,
+  resolveCommandActionMatch,
   resolvePathAction,
+  resolvePathActionMatch,
 } from "./sandbox";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
@@ -176,7 +178,9 @@ read:
             },
           },
         });
-        assert.deepEqual(confirmedPaths, ["/workspace/project/file.txt"]);
+        assert.deepEqual(confirmedPaths, [
+          "/workspace/project/file.txt\nmatched: /workspace/project",
+        ]);
       },
     ),
   );
@@ -688,6 +692,126 @@ describe("§3.c アクションの決定", () => {
   });
 });
 
+describe("§2.3 確認ダイアログの一致パターン表示", () => {
+  it("コマンド ask は一致したパターンを返す", () => {
+    const match = resolveCommandActionMatch(
+      { allow: ["*"], ask: ["git push", "gh pr create"], deny: [] },
+      "git push -u origin main",
+    );
+    assert.deepEqual(match, { action: "ask", matched: "git push" });
+  });
+
+  it("ブレース展開後のパターンを返す", () => {
+    const match = resolveCommandActionMatch(
+      { allow: [], ask: ["{npm,pnpm} publish"], deny: [] },
+      "npm publish",
+    );
+    assert.deepEqual(match, { action: "ask", matched: "npm publish" });
+  });
+
+  it("複合コマンドは ask セグメントの一致パターンを返す", () => {
+    const match = resolveCommandActionMatch(
+      { allow: ["ls"], ask: ["git push"], deny: [] },
+      "ls; git push -u origin main",
+    );
+    assert.deepEqual(match, { action: "ask", matched: "git push" });
+  });
+
+  it("deny が優先されるとき deny の一致パターンを返す", () => {
+    const match = resolveCommandActionMatch(
+      { allow: ["*"], ask: ["git push"], deny: ["sudo"] },
+      "sudo git push",
+    );
+    assert.deepEqual(match, { action: "deny", matched: "sudo" });
+  });
+
+  it("どのパターンにも一致しないコマンドは matched なしの deny", () => {
+    const match = resolveCommandActionMatch({ allow: ["git status"] }, "git push");
+    assert.deepEqual(match, { action: "deny" });
+  });
+
+  it("パス ask は展開後の一致パスを返す", () => {
+    const section = expandPathSection({ allow: ["."], ask: ["/opt/data"] }, "/workspace/project");
+    const match = resolvePathActionMatch(section, "/opt/data/file.txt");
+    assert.deepEqual(match, { action: "ask", matched: "/opt/data" });
+  });
+
+  it("設定に一致しないパスは matched なしの deny", () => {
+    const section = expandPathSection({ allow: ["."] }, "/workspace/project");
+    const match = resolvePathActionMatch(section, "/tmp/file.txt");
+    assert.deepEqual(match, { action: "deny" });
+  });
+
+  it(
+    "コマンド確認ダイアログのタイトルに一致パターンを表示する",
+    withSandbox(
+      `
+commands:
+  allow: ["*"]
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        let title = "";
+        await sandbox.authorizeCommand("git push -u origin main", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
+            },
+          },
+        });
+        assert.ok(title.includes("matched: git push"), title);
+      },
+    ),
+  );
+
+  it(
+    "ask パスの確認ダイアログは一致パターンを表示する",
+    withSandbox(
+      `
+read:
+  ask: [~/guardrails-ask-dir]
+`,
+      "/cwd",
+      async (sandbox) => {
+        let title = "";
+        await sandbox.authorizePath("read", join(homedir(), "guardrails-ask-dir", "file.txt"), {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
+            },
+          },
+        });
+        assert.ok(title.includes(`matched: ${join(homedir(), "guardrails-ask-dir")}`), title);
+      },
+    ),
+  );
+
+  it(
+    "未設定パスの許可要求ダイアログは一致パターンなしを表示する",
+    withSandbox("read: {}\nwrite: {}\n", "/cwd", async (sandbox) => {
+      let title = "";
+      await sandbox.authorizePath("read", "/tmp/guardrails-unmatched.txt", {
+        cwd: "/cwd",
+        hasUI: true,
+        ui: {
+          select: async (dialogTitle) => {
+            title = dialogTitle;
+            return "Yes, allow";
+          },
+        },
+      });
+      assert.ok(title.includes("no matching pattern (default ask)"), title);
+    }),
+  );
+});
+
 describe("§3 動的拡張のライフサイクル", () => {
   const withDynamicSandbox =
     (configYaml: string, test: (dir: string, sandbox: Sandbox) => Promise<void> | void) =>
@@ -932,7 +1056,7 @@ commands:
             },
           },
         });
-        assert.deepEqual(confirmedCommands, ["git push origin main"]);
+        assert.deepEqual(confirmedCommands, ["git push origin main\nmatched: git push"]);
       },
     ),
   );
