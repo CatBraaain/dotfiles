@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { parse as parseShell } from "shell-quote";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 
 export type Action = "allow" | "deny" | "ask";
@@ -173,19 +174,100 @@ function resolvePattern(
   return isAbsolute(homeExpanded) ? resolve(homeExpanded) : resolve(cwd, homeExpanded);
 }
 
+type ShellToken = string | { op?: string; pattern?: string; comment?: string };
+
+/** Control operators that end one simple command and start the next. */
+const SEGMENT_OPS = new Set([";", "&&", "||", "|", "|&", ";;", "&", "(", ")", "<("]);
+
+/** Leading words that wrap the real command head (`env gh pr create` etc.). */
+const SEGMENT_HEAD_SKIPS = new Set(["{", "}", "env"]);
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/**
+ * Split a shell command into one candidate per simple command it may run, so
+ * that `deny`/`ask` patterns cannot be bypassed by compound commands
+ * (`git remote add ...; git push ...`). shell-quote keeps quoting and operator
+ * semantics but flattens newlines, so newlines become ";" first. Parentheses
+ * also open a segment: subshells, command substitutions, and process
+ * substitutions all execute their contents. Heredoc bodies, comments, and
+ * empty expansion words are skipped; leading `{`, `}`, `env`, and `VAR=value`
+ * words are stripped so patterns match the actual command head.
+ *
+ * Known blind spots (ADR): backtick substitution, `bash -c`/`eval`/script
+ * indirection, and other wrapper prefixes (`nohup`, `timeout`, ...).
+ */
+export function splitCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let words: string[] = [];
+  let consecutiveHeredocOps = 0;
+  let expectHeredocDelimiter = false;
+  let heredocEnd: string | null = null;
+
+  const flush = () => {
+    while (words.length > 0 && (SEGMENT_HEAD_SKIPS.has(words[0]) || ENV_ASSIGNMENT.test(words[0])))
+      words.shift();
+    if (words.length > 0) {
+      segments.push(words.join(" "));
+      words = [];
+    }
+  };
+
+  for (const token of parseShell(command.replaceAll("\n", ";")) as ShellToken[]) {
+    if (heredocEnd !== null) {
+      if (typeof token === "string" && token === heredocEnd) heredocEnd = null;
+      continue;
+    }
+    if (typeof token === "string" || token.pattern !== undefined) {
+      const word = typeof token === "string" ? token : token.pattern;
+      if (word === "") continue;
+      if (expectHeredocDelimiter) {
+        heredocEnd = word.replace(/^-+/, "");
+        expectHeredocDelimiter = false;
+        continue;
+      }
+      consecutiveHeredocOps = 0;
+      words.push(word);
+      continue;
+    }
+    if (token.comment !== undefined) continue;
+    const op = token.op;
+    expectHeredocDelimiter = false;
+    if (op === "<") {
+      consecutiveHeredocOps++;
+      if (consecutiveHeredocOps === 2) expectHeredocDelimiter = true;
+      continue;
+    }
+    consecutiveHeredocOps = 0;
+    if (op !== undefined && SEGMENT_OPS.has(op)) flush();
+  }
+  flush();
+  return segments;
+}
+
 export function resolveCommandAction(section: RuleSection | undefined, command: string): Action {
   if (!section) return "deny";
-  const matches = (patterns: string[] | undefined) =>
+  const matches = (patterns: string[] | undefined, candidate: string) =>
     patterns?.some((pattern) =>
       expandBraces(pattern).some((expandedPattern) => {
         if (expandedPattern === "*") return true;
-        if (hasGlob(expandedPattern)) return globToRegExp(expandedPattern).test(command);
-        return command === expandedPattern || command.startsWith(`${expandedPattern} `);
+        if (hasGlob(expandedPattern)) return globToRegExp(expandedPattern).test(candidate);
+        return candidate === expandedPattern || candidate.startsWith(`${expandedPattern} `);
       }),
     ) ?? false;
-  if (matches(section.deny)) return "deny";
-  if (matches(section.ask)) return "ask";
-  if (matches(section.allow)) return "allow";
+  const actionFor = (candidate: string): Action => {
+    if (matches(section.deny, candidate)) return "deny";
+    if (matches(section.ask, candidate)) return "ask";
+    if (matches(section.allow, candidate)) return "allow";
+    return "deny";
+  };
+  // Parse fallback: a command that yields no segments (empty or unparsable)
+  // is checked as the raw string, preserving the pre-split behavior.
+  const candidates = splitCommandSegments(command);
+  if (candidates.length === 0) candidates.push(command);
+  const actions = candidates.map(actionFor);
+  if (actions.includes("deny")) return "deny";
+  if (actions.includes("ask")) return "ask";
+  if (actions.includes("allow")) return "allow";
   return "deny";
 }
 

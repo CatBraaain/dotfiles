@@ -1066,6 +1066,57 @@ commands:
     ),
   );
 
+  it("複合コマンド内の最も厳しいアクションを適用する", () => {
+    const section = { allow: ["*"], ask: ["git push", "gh pr create"], deny: ["sudo"] };
+    assert.equal(
+      resolveCommandAction(
+        section,
+        "git remote add fork https://example.test/repo.git; git remote -v | grep fork && git push -u fork feature | tail -4",
+      ),
+      "ask",
+    );
+    assert.equal(resolveCommandAction(section, "git status\ngit push -u origin main"), "ask");
+    assert.equal(resolveCommandAction(section, "gh pr create --repo owner/repo 2>&1"), "ask");
+    assert.equal(resolveCommandAction(section, "cat body.md | gh pr create --body-file -"), "ask");
+    assert.equal(resolveCommandAction(section, "echo $(git push -u origin main)"), "ask");
+    assert.equal(resolveCommandAction(section, "tee >(gh pr create --repo owner/repo)"), "ask");
+    assert.equal(
+      resolveCommandAction(section, "(cd /tmp && gh pr create --repo owner/repo)"),
+      "ask",
+    );
+    assert.equal(resolveCommandAction(section, "ls; sudo reboot"), "deny");
+  });
+
+  it("heredoc 本文・コメント・クォート内の文字列をコマンドにしない", () => {
+    const section = { allow: ["*"], ask: ["gh pr create"] };
+    assert.equal(
+      resolveCommandAction(section, "cat << 'EOF'\ngh pr create --repo owner/repo\nEOF"),
+      "allow",
+    );
+    assert.equal(
+      resolveCommandAction(section, "cat <<-EOF\ngh pr create --repo owner/repo\nEOF\necho done"),
+      "allow",
+    );
+    assert.equal(resolveCommandAction(section, "echo 'gh pr create --repo owner/repo'"), "allow");
+    assert.equal(
+      resolveCommandAction(section, "git status # gh pr create --repo owner/repo"),
+      "allow",
+    );
+  });
+
+  it("env と環境変数代入の後ろにあるコマンドを照合する", () => {
+    const section = { allow: ["*"], ask: ["git push", "gh pr create"] };
+    assert.equal(
+      resolveCommandAction(section, "GH_PAGER=cat gh pr create --repo owner/repo"),
+      "ask",
+    );
+    assert.equal(resolveCommandAction(section, "env git push -u origin main"), "ask");
+  });
+
+  it("空コマンドでも既存の allow wildcard の扱いを維持する", () => {
+    assert.equal(resolveCommandAction({ allow: ["*"] }, ""), "allow");
+  });
+
   it(
     "未設定コマンドはブロックされる",
     withSandbox(``, "/cwd", async (sandbox) => {
@@ -1289,7 +1340,14 @@ describe("§8 表示", () => {
       renderToolCall("write", { path: parentPath, content: "" }),
       renderToolCall("edit", { path: workspacePath, edits: [] }),
     ];
-    assert.deepEqual(renderedCalls, ["read ./src/a.ts", `write ${parentPath}`, "edit ./src/a.ts"]);
+    const displayedParentPath = parentPath.startsWith(`${homedir()}/`)
+      ? `~${parentPath.slice(homedir().length)}`
+      : parentPath;
+    assert.deepEqual(renderedCalls, [
+      "read ./src/a.ts",
+      `write ${displayedParentPath}`,
+      "edit ./src/a.ts",
+    ]);
   });
 
   it("all built-in tool errors show only the first three lines", () => {
