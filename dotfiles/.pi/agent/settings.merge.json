@@ -29,6 +29,13 @@
     "npm:@narumitw/pi-stamp",
     "npm:@narumitw/pi-usage",
     {
+      "source": "https://github.com/DreambigOu/ELI5",
+      "extensions": [],
+      "skills": ["skills/eli5"],
+      "prompts": [],
+      "themes": []
+    },
+    {
       "source": "https://github.com/DietrichGebert/ponytail",
       "extensions": [],
       "skills": ["skills/ponytail-review", "skills/ponytail-audit"],
