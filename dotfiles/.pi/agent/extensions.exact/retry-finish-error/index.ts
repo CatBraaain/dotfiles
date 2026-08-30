@@ -19,7 +19,7 @@
  */
 
 import type { ExtensionAPI, MessageEndEvent } from "@earendil-works/pi-coding-agent";
-import type { Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 
 export const FINISH_ERROR_PREFIX = "Provider finish_reason: ";
 export const RETRYABLE_PREFIX = "provider returned error: ";
@@ -33,7 +33,7 @@ function isUnknownFinishErrorMessage(message: string): boolean {
   return !EXPLICIT_FINISH_REASONS.includes(reason);
 }
 
-function makeRetryable(message: Message): Message {
+function makeRetryable(message: AssistantMessage): AssistantMessage {
   const errorMessage = message.errorMessage ?? "provider request failed";
   return {
     ...message,

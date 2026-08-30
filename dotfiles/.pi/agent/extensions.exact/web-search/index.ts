@@ -22,7 +22,7 @@ const CHROME_NOSANDBOX_WRAPPER = fileURLToPath(
 async function fetchText(
   url: string,
   signal?: AbortSignal,
-  headers?: HeadersInit,
+  headers?: Record<string, string>,
 ): Promise<string> {
   const response = await fetch(url, {
     headers: { "User-Agent": BROWSER_USER_AGENT, ...headers },
@@ -60,7 +60,7 @@ function runWithStdin(
         else resolve(stdout.trim());
       },
     );
-    child.stdin.end(input);
+    child.stdin?.end(input);
   });
 }
 
@@ -198,7 +198,7 @@ async function trafilaturaFetch(url: string, signal?: AbortSignal) {
 }
 
 async function jinaFetch(url: string, signal?: AbortSignal) {
-  const headers: HeadersInit = { Accept: "text/markdown" };
+  const headers: Record<string, string> = { Accept: "text/markdown" };
   if (process.env.JINA_API_KEY) headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
   return fetchText(`https://r.jina.ai/${url}`, signal, headers);
 }
@@ -330,7 +330,7 @@ function cleanAuthor(name: string | undefined): string | undefined {
 export function parseRedditAtom(xml: string): RedditFeed | undefined {
   const entries: RedditEntry[] = [];
   for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
-    const entryXml = match[1];
+    const entryXml = match[1] ?? "";
     const id = atomText(entryXml, "id");
     if (!id || (!id.startsWith("t3_") && !id.startsWith("t1_"))) continue;
     const linkHref = /<link\b[^>]*href="([^"]*)"/.exec(entryXml)?.[1];

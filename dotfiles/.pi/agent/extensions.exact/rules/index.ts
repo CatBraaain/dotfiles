@@ -90,7 +90,7 @@ function parseRuleContent(
   if (!frontmatter) return undefined;
 
   try {
-    const parsed = parseYaml(frontmatter[1]) as unknown;
+    const parsed = parseYaml(frontmatter[1] ?? "") as unknown;
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
     const paths = (parsed as { paths?: unknown }).paths;
     if (paths === undefined)
@@ -222,7 +222,7 @@ export function globToRegExp(pattern: string): RegExp {
   const normalizedPattern = normalizeSlashes(pattern).replace(/^\.\//, "");
   let expression = "^";
   for (let index = 0; index < normalizedPattern.length; index += 1) {
-    const character = normalizedPattern[index];
+    const character = normalizedPattern.charAt(index);
     if (character === "*") {
       if (normalizedPattern[index + 1] === "*") {
         index += 1;

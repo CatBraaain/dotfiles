@@ -59,7 +59,7 @@ type RunOptions = {
 
 type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
 
-type RunToolsResponse = { ok: true; result: AgentToolResult } | { ok: false; error: string };
+type RunToolsResponse = { ok: true; result: AgentToolResult<any> } | { ok: false; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -107,7 +107,7 @@ function expandBraces(pattern: string): string[] {
 function globToRegExp(pattern: string): RegExp {
   let source = "^";
   for (let index = 0; index < pattern.length; index++) {
-    const character = pattern[index];
+    const character = pattern.charAt(index);
     if (character === "*") {
       if (pattern[index + 1] === "*") {
         const hasFollowingSlash = pattern[index + 2] === "/";
@@ -207,8 +207,12 @@ export function splitCommandSegments(command: string): string[] {
   let heredocEnd: string | null = null;
 
   const flush = () => {
-    while (words.length > 0 && (SEGMENT_HEAD_SKIPS.has(words[0]) || ENV_ASSIGNMENT.test(words[0])))
-      words.shift();
+    while (words.length > 0) {
+      const head = words[0];
+      if (head !== undefined && (SEGMENT_HEAD_SKIPS.has(head) || ENV_ASSIGNMENT.test(head)))
+        words.shift();
+      else break;
+    }
     if (words.length > 0) {
       segments.push(words.join(" "));
       words = [];
@@ -222,7 +226,7 @@ export function splitCommandSegments(command: string): string[] {
     }
     if (typeof token === "string" || token.pattern !== undefined) {
       const word = typeof token === "string" ? token : token.pattern;
-      if (word === "") continue;
+      if (word === undefined || word === "") continue;
       if (expectHeredocDelimiter) {
         heredocEnd = word.replace(/^-+/, "");
         expectHeredocDelimiter = false;
@@ -415,7 +419,7 @@ function parseRunToolsResponse(execution: RunResult): RunToolsResponse {
   try {
     const parsed = JSON.parse(execution.stdout.toString("utf8")) as {
       ok?: boolean;
-      result?: AgentToolResult;
+      result?: AgentToolResult<any>;
       error?: string;
     };
     if (parsed.ok === true && parsed.result !== undefined)
@@ -702,7 +706,7 @@ export class Sandbox {
     toolName: ToolName,
     params: unknown,
     options: { mode: "fs" | "bash"; signal?: AbortSignal; session?: ToolSession },
-  ): Promise<AgentToolResult> {
+  ): Promise<AgentToolResult<any>> {
     const request = JSON.stringify({ toolCallId: "cli", params, session: options.session });
     const execution = await this.run("bun", [this.runToolsPath, toolName], {
       input: request,

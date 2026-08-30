@@ -22,7 +22,7 @@ export const __timers: {
 
 export function spinnerFrame(nowMs: number, frames: string[] = SPINNER_FRAMES): string {
   const index = Math.floor(nowMs / SPINNER_INTERVAL_MS) % frames.length;
-  return frames[index < 0 ? index + frames.length : index];
+  return frames[index < 0 ? index + frames.length : index]!;
 }
 
 export function buildTitle(sessionName: string | undefined, frame?: string): string {

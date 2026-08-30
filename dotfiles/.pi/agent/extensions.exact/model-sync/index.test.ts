@@ -193,8 +193,8 @@ describe("extractRemoteModels", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    assert.equal(composedModels[0].reasoning, false);
-    assert.deepEqual(composedModels[0].input, ["text"]);
+    assert.equal(composedModels[0]?.reasoning, false);
+    assert.deepEqual(composedModels[0]?.input, ["text"]);
   });
 });
 
@@ -294,8 +294,8 @@ describe("composeProviderModels", () => {
       composedModels.map((entry) => entry.id),
       ["remote-model", "custom-model"],
     );
-    assert.equal(composedModels[0].api, "openai-completions");
-    assert.equal(composedModels[0].contextWindow, 128_000);
+    assert.equal(composedModels[0]?.api, "openai-completions");
+    assert.equal(composedModels[0]?.contextWindow, 128_000);
   });
 });
 

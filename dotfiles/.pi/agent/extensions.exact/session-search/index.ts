@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
+import { type ToolTheme } from "../shared/tool-format.ts";
 
 export const DEFAULT_SESSION_LIST_LIMIT = 20;
 export const DEFAULT_MESSAGE_LIMIT = 50;
@@ -290,11 +291,7 @@ function formatGetResult(
   return `${header}\n${formatMessages(result.messages)}${pagination}`;
 }
 
-function renderInput(
-  toolName: string,
-  input: Record<string, unknown>,
-  theme: { fg: (color: string, text: string) => string; bold: (text: string) => string },
-): Text {
+function renderInput(toolName: string, input: Record<string, unknown>, theme: ToolTheme): Text {
   const visibleArguments = Object.entries(input)
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
@@ -314,7 +311,7 @@ function renderToolResult(
   collapsedText: string,
   expanded: boolean,
   isError: boolean,
-  theme: { fg: (color: string, text: string) => string },
+  theme: ToolTheme,
  ): Text {
   const output = result.content.find((item) => item.type === "text")?.text ?? "";
   if (!expanded) {

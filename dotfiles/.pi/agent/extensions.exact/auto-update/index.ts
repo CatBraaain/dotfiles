@@ -12,7 +12,6 @@ export default function (pi: ExtensionAPI): void {
         shell: true,
       });
       child.unref();
-      return child;
     }
   });
 }

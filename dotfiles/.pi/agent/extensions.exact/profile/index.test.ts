@@ -294,8 +294,8 @@ agents:
     assert.deepEqual(result.config?.tiers.middle, [
       { provider: "zai", model: "glm-5.2", when: "exit 0" },
     ]);
-    assert.equal(result.config?.agents.manager.tier, "middle");
-    assert.deepEqual(result.config?.agents.manager.tools, ["read"]);
+    assert.equal(result.config?.agents.manager?.tier, "middle");
+    assert.deepEqual(result.config?.agents.manager?.tools, ["read"]);
   });
 
   it("YAML アンカーで共有した prompt 要素を配列として読み込む", () => {
@@ -309,7 +309,7 @@ agents:
     tools: []
     subagents: []
     systemPrompt: [*common]`);
-    assert.deepEqual(result.config?.agents.manager.systemPrompt, ["shared"]);
+    assert.deepEqual(result.config?.agents.manager?.systemPrompt, ["shared"]);
   });
 
   it("設定ファイルがない場合は読み込みエラーを返す", () => {
@@ -402,8 +402,8 @@ agents:
     tools: []
     subagents: []
     systemPrompt: [*common, worker-only]`);
-    assert.deepEqual(result.config?.agents.manager.systemPrompt, ["shared", "manager-only"]);
-    assert.deepEqual(result.config?.agents.worker.systemPrompt, ["shared", "worker-only"]);
+    assert.deepEqual(result.config?.agents.manager?.systemPrompt, ["shared", "manager-only"]);
+    assert.deepEqual(result.config?.agents.worker?.systemPrompt, ["shared", "worker-only"]);
   });
 
   it("tiers がない設定を拒否する", () => {
@@ -551,7 +551,7 @@ describe("システムプロンプト", () => {
       ...config,
       agents: {
         ...config.agents,
-        manager: { ...config.agents.manager, systemPrompt: ["first", "second"] },
+        manager: { ...config.agents.manager!, systemPrompt: ["first", "second"] },
       },
     };
 
@@ -1158,8 +1158,8 @@ describe("セッションライフサイクル", () => {
     let after: ReturnType<typeof captureProfileExtension> | undefined;
     const changedConfig: AgentConfig = {
       default: "manager",
-      tiers: { middle: config.tiers.middle },
-      agents: { manager: config.agents.manager },
+      tiers: { middle: config.tiers.middle! },
+      agents: { manager: config.agents.manager! },
     };
     try {
       await before.sessionStart("startup");
@@ -1345,8 +1345,8 @@ describe("subagent", () => {
       });
       assert.equal(result.content[0].text, "done");
       assert.equal(extension.spawnCalls.length, 1);
-      assert.equal(extension.spawnCalls[0].cwd, "/child");
-      assert.deepEqual(extension.spawnCalls[0].args.slice(1), [
+      assert.equal(extension.spawnCalls[0]?.cwd, "/child");
+      assert.deepEqual(extension.spawnCalls[0]?.args.slice(1), [
         "--mode",
         "json",
         "-p",
@@ -1374,8 +1374,8 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       await extension.executeSubagent({ profile: "worker", task: "work", model: "forbidden" });
-      assert.equal(extension.spawnCalls[0].cwd, "/parent");
-      assert.equal(extension.spawnCalls[0].args.includes("--model"), false);
+      assert.equal(extension.spawnCalls[0]?.cwd, "/parent");
+      assert.equal(extension.spawnCalls[0]?.args.includes("--model"), false);
     } finally {
       extension.restore();
     }
@@ -1420,7 +1420,7 @@ describe("subagent", () => {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(updates[0].details.results[0].pending, true);
 
-      extension.children[0].emit("close", 0);
+      extension.children[0]?.emit("close", 0);
       await execution;
     } finally {
       extension.restore();
@@ -1449,7 +1449,7 @@ describe("subagent", () => {
         { spinnerIntervalMs: 100, requestedRenderCount: 1 },
       );
 
-      extension.children[0].emit("close", 0);
+      extension.children[0]?.emit("close", 0);
       await execution;
     } finally {
       Object.assign(__spinnerTimers, originalTimers);
@@ -1551,7 +1551,7 @@ describe("subagent", () => {
       assert.equal(result.isError, true);
       assert.equal(result.details.results[0].stopReason, "aborted");
       assert.match(result.content[0].text, /aborted/);
-      assert.deepEqual(extension.children[0].killHistory, ["SIGTERM"]);
+      assert.deepEqual(extension.children[0]?.killHistory, ["SIGTERM"]);
       assert.equal(scheduledAbortTimer, true);
       assert.equal(clearedAbortTimer, true);
     } finally {
@@ -1586,7 +1586,7 @@ describe("subagent", () => {
       runAbortTimer?.();
       const result = await execution;
       assert.equal(result.isError, true);
-      assert.deepEqual(extension.children[0].killHistory, ["SIGTERM", "SIGKILL"]);
+      assert.deepEqual(extension.children[0]?.killHistory, ["SIGTERM", "SIGKILL"]);
     } finally {
       __abortTimer.set = originalAbortTimer;
       extension.restore();
@@ -1771,7 +1771,7 @@ describe("subagent", () => {
       await extension.executeSubagent({ profile: "worker", task: "work" }, controller.signal);
       controller.abort();
 
-      assert.deepEqual(extension.children[0].killHistory, []);
+      assert.deepEqual(extension.children[0]?.killHistory, []);
     } finally {
       extension.restore();
     }
@@ -2010,7 +2010,7 @@ describe("subagent の表示", () => {
         .render(200)
         .some((line) => SPINNER_FRAMES.some((frame) => line.includes(`${frame} worker`)));
 
-      details.results[0].pending = false;
+      details.results[0]!.pending = false;
       const clearedSpinnerLine = rendered
         .render(200)
         .some((line) => SPINNER_FRAMES.some((frame) => line.includes(`${frame} worker`)));

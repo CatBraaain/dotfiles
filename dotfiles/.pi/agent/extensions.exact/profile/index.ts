@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Api, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import {
   createLocalBashOperations,
   getAgentDir,
@@ -676,9 +676,9 @@ export default function profileExtension(
     signal?: AbortSignal,
     notifySwitch = true,
   ): Promise<string | null> {
-    const tierName = config.agents[agent]?.tier;
+    const tierName = config?.agents[agent]?.tier;
     if (!tierName) return null;
-    let candidates = config.tiers[tierName] ?? [];
+    let candidates = config?.tiers[tierName] ?? [];
     for (;;) {
       const model = await pickCandidate(
         candidates,
@@ -704,7 +704,8 @@ export default function profileExtension(
   }
 
   function notifyNoModel(agent: Agent, ctx: ExtensionContext, level: "warning" | "error"): void {
-    const message = `no available model for agent ${agent}: tier ${config.agents[agent].tier}`;
+    const tier = config?.agents[agent]?.tier ?? "unknown";
+    const message = `no available model for agent ${agent}: tier ${tier}`;
     if (!ctx.hasUI) {
       // UI のない子プロセスでは通知が見えないまま終わるため、stderr と終了コードで伝える
       if (level === "error") {
@@ -717,7 +718,8 @@ export default function profileExtension(
   }
 
   function applyAgentTools(ctx: ExtensionContext, agent: Agent): void {
-    const agentDefinition = config.agents[agent];
+    const agentDefinition = config?.agents[agent];
+    if (!agentDefinition) return;
     const activeTools = agentDefinition.tools.includes("*")
       ? pi.getAllTools().map((tool) => tool.name)
       : [...new Set([...agentDefinition.tools, "subagent"])];
@@ -805,7 +807,7 @@ export default function profileExtension(
     return true;
   }
 
-  function makeRetryableRateLimitMessage(message: Message): Message {
+  function makeRetryableRateLimitMessage(message: AssistantMessage): AssistantMessage {
     const errorMessage = message.errorMessage ?? "provider request failed";
     return { ...message, errorMessage: `429 fallback available: ${errorMessage}` };
   }

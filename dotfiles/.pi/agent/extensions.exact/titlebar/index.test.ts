@@ -33,7 +33,7 @@ __timers.set = (callback, intervalMs) => {
   return spinnerTimer.id as never;
 };
 __timers.clear = (timer) => {
-  clearedTimerIds.push(timer as number);
+  clearedTimerIds.push(timer as unknown as number);
 };
 __timers.now = () => fakeNowMs ?? originalTimers.now();
 

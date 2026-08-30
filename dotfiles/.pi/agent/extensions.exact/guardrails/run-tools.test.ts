@@ -56,7 +56,7 @@ describe("run-tools CLI", () => {
         result: { content: { type: string; text: string }[] };
       };
       assert.equal(response.ok, true);
-      assert.equal(response.result.content[0].text, "hello guardrails");
+      assert.equal(response.result.content[0]?.text, "hello guardrails");
     }),
   );
 
@@ -107,7 +107,7 @@ describe("run-tools CLI", () => {
         result: { content: { type: string; text: string }[] };
       };
       assert.equal(response.ok, true);
-      assert.match(response.result.content[0].text, /note\.txt:1: needle here/);
+      assert.match(response.result.content[0]?.text ?? "", /note\.txt:1: needle here/);
     }),
   );
 
@@ -121,7 +121,7 @@ describe("run-tools CLI", () => {
         result: { content: { type: string; text: string }[] };
       };
       assert.equal(response.ok, true);
-      assert.match(response.result.content[0].text, /target\.txt/);
+      assert.match(response.result.content[0]?.text ?? "", /target\.txt/);
     }),
   );
 
@@ -135,7 +135,7 @@ describe("run-tools CLI", () => {
         result: { content: { type: string; text: string }[] };
       };
       assert.equal(response.ok, true);
-      assert.match(response.result.content[0].text, /entry\.txt/);
+      assert.match(response.result.content[0]?.text ?? "", /entry\.txt/);
     }),
   );
 
@@ -158,7 +158,7 @@ describe("run-tools CLI", () => {
         result: { content: { type: string; text: string }[] };
       };
       assert.equal(response.ok, true);
-      assert.match(response.result.content[0].text, /session=test-session-42/);
+      assert.match(response.result.content[0]?.text ?? "", /session=test-session-42/);
     }),
   );
 });
@@ -185,7 +185,7 @@ describe("Sandbox.runTool（bwrap 統合）", () => {
       const readResult = (await sandbox.runTool("read", { path: "hello.txt" }, { mode: "fs" })) as {
         content: { type: string; text: string }[];
       };
-      assert.equal(readResult.content[0].text, "through bwrap");
+      assert.equal(readResult.content[0]?.text, "through bwrap");
     }),
   );
 });

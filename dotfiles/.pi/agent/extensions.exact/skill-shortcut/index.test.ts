@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import skillShortcut, { resolveSlashInput, rewriteCompletionItems } from "./index";
-import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
 let group = "";
@@ -142,12 +142,15 @@ describe("名前の衝突", () => {
 
 describe("起動直後の補完", () => {
 	it("session_start のタイミングで登録した provider が /foo 入力に裸名の候補を返す", async () => {
-		const currentProvider = {
+		const currentProvider: AutocompleteProvider = {
 			triggerCharacters: ["/"],
 			async getSuggestions(): Promise<AutocompleteSuggestions | null> {
 				return { items: [completionItem("skill:foo"), completionItem("model")], prefix: "/" };
 			},
-		} as AutocompleteProvider;
+			applyCompletion(_lines, cursorLine, cursorCol, item) {
+				return { lines: [item.value], cursorLine, cursorCol };
+			},
+		};
 		let registeredProviderFactory: ((current: AutocompleteProvider) => AutocompleteProvider) | undefined;
 		const fakePi = {
 			on(event: string, handler: unknown) {

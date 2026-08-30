@@ -370,7 +370,8 @@ async function readCustomModelIds(): Promise<CustomModelIds> {
       const definitions = new Map<string, CustomModelDefinition>();
       for (const model of models) {
         const rawModel = asRecord(model);
-        const id = rawModel?.id;
+        if (!rawModel) continue;
+        const id = rawModel.id;
         if (typeof id !== "string") continue;
         definitions.set(id, customModelDefinition(rawModel));
       }

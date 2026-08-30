@@ -180,7 +180,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     tool: any,
     name: string,
     getCall: (args: any) => string,
-    run: (args: any, signal: AbortSignal | undefined, context: any) => Promise<AgentToolResult>,
+    run: (args: any, signal: AbortSignal | undefined, context: any) => Promise<AgentToolResult<any>>,
     renderOptions?: { renderCall?: (args: any, theme: any) => Text },
   ) => {
     pi.registerTool({

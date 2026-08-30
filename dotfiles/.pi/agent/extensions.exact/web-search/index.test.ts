@@ -640,8 +640,8 @@ describe("Reddit Atom パース", () => {
 
   it("コメント（t1_）を本文ごと列挙する", () => {
     assert.equal(parsed.comments.length, 1);
-    assert.equal(parsed.comments[0].author, "u/Commenter");
-    assert.match(parsed.comments[0].bodyMarkdown, /A \*comment\* body\./);
+    assert.equal(parsed.comments[0]?.author, "u/Commenter");
+    assert.match(parsed.comments[0]?.bodyMarkdown ?? "", /A \*comment\* body\./);
   });
 
   it("投稿エントリがないフィードは undefined", () => {

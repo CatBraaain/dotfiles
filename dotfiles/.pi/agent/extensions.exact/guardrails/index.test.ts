@@ -757,6 +757,7 @@ commands:
           cwd: "/cwd",
           hasUI: true,
           ui: {
+            confirm: async () => true,
             select: async (dialogTitle) => {
               title = dialogTitle;
               return "Yes, allow";
@@ -782,6 +783,7 @@ read:
           cwd: "/cwd",
           hasUI: true,
           ui: {
+            confirm: async () => true,
             select: async (dialogTitle) => {
               title = dialogTitle;
               return "Yes, allow";
@@ -801,6 +803,7 @@ read:
         cwd: "/cwd",
         hasUI: true,
         ui: {
+          confirm: async () => true,
           select: async (dialogTitle) => {
             title = dialogTitle;
             return "Yes, allow";

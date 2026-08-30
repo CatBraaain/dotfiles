@@ -56,7 +56,7 @@ function buildBashContext(session: ToolSession | undefined) {
 export async function executeToolRequest(
   toolName: string,
   request: ToolRequest,
-): Promise<AgentToolResult> {
+): Promise<AgentToolResult<any>> {
   const pi = await importPiTools();
   const cwd = process.cwd();
   const definitions: Record<ToolName, () => ToolDefinition<any, any, any>> = {

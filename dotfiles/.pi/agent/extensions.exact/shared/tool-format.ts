@@ -1,16 +1,17 @@
 import { homedir } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 
 /**
  * Shared formatting helpers for tool call/result rendering.
  * Pure string functions with no TUI dependency; callers wrap them in Text.
  * Lives in extensions/shared/ (no index.ts) so the extension loader ignores it.
+ *
+ * ToolTheme is a type-only projection of the real Theme class, so it stays in
+ * sync with pi's theme API without a runtime dependency.
  */
 
-export type ToolTheme = {
-  fg: (color: string, text: string) => string;
-  bold: (text: string) => string;
-};
+export type ToolTheme = Pick<Theme, "fg" | "bold">;
 
 export type ToolResultContent = { type: string; text?: string };
 
