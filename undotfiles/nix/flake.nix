@@ -52,6 +52,7 @@
             chezmoi
             code2prompt
             coreutils
+            drawio
             erdtree
             eza
             fd
