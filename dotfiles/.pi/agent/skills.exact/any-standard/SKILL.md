@@ -16,7 +16,7 @@ description: >-
 ## 適用条件
 
 - 適用する: standard スキル（`xxx-standard`）の新規作成・改修・調整。汎用3スキル自体の作成・改修。新しいスキルを standard スキルとして作るかの判断。規則スキル構成のレビュー。
-- 適用しない: AI に与える指示テキスト一般の品質（記法・Forbidden・Verify の書き方）は instruction-standard、各 standard が所有するドメインの規則内容（spec の書き方・可読性の基準等）は該当する standard、個別の実装・レビュー作業の手続きは汎用3スキル + 該当する standard がそれぞれ担う。
+- 適用しない: AI に与える指示テキスト一般の品質（契約の書き方・Decision Ladder 記法・種別規範）は instruction-standard、各 standard が所有するドメインの規則内容（spec の書き方・可読性の基準等）は該当する standard、個別の実装・レビュー作業の手続きは汎用3スキル + 該当する standard がそれぞれ担う。
 
 ## 規則スキル構成
 
