@@ -46,6 +46,7 @@ extensions_for_linux=(
   pomber.git-file-history
   redhat.vscode-yaml
   saber2pr.file-git-history
+  shd101wyy.markdown-preview-enhanced
   svelte.svelte-vscode
   takumii.markdowntable
   tamasfe.even-better-toml
