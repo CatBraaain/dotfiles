@@ -39,7 +39,6 @@
             # keep-sorted end
             # keep-sorted start by_regex=\s*#?\s*(.*) sticky_comments=no  prefix_order=llm-agents,
             llm-agents.agent-browser
-            llm-agents.apm
             llm-agents.claude-code
             llm-agents.cursor-agent
             (llm-agents.pi.override { useBun = false; })
