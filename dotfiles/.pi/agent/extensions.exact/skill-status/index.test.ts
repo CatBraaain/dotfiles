@@ -499,12 +499,7 @@ describe("UI", () => {
     const { handlers } = captureExtension();
     const { context, widgetCalls } = widgetContext(true, availableWidth);
 
-    for (const skillName of [
-      "readable-code-standard",
-      "diagnosing-bugs",
-      "sdd-standard",
-      "any-implement",
-    ]) {
+    for (const skillName of ["readable-code", "diagnosing-bugs", "sdd", "instruction-authoring"]) {
       recordSkill(handlers, context, skillName);
     }
 

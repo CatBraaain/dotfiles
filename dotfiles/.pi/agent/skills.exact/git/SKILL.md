@@ -1,17 +1,17 @@
 ---
-name: git-standard
+name: git
 description: >-
   git の commit・branch・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。「コミットして」「コミットを分けて」「push して」「ブランチ切って」「PR 作って」「OSS にコントリビュートしたい」等の git 操作で使う。
 ---
 
-# Git Standard
+# Git
 
 git の commit・branch・push・PR に関する判断規則を所有する。リポジトリ固有の規約が、常に本標準の一般規則より優先する。
 
 ## 適用条件
 
 - 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
-- 適用しない: コード変更そのものの品質（readable-code-standard 等）、調査手段の選択（research-strategy）。
+- 適用しない: コード変更そのものの品質（readable-code 等）、調査手段の選択（research-strategy）。
 
 ## Decision Ladder: リポジトリ規約の確認
 
