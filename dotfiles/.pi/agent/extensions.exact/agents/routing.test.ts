@@ -16,7 +16,7 @@ import {
   type ModelCandidate,
 } from "./routing";
 
-// ponytail: 自作ランナー（vitest は bun auto-install 非互換のため逐次実行）。
+// Custom runner executes sequentially because Vitest is incompatible with Bun auto-install.
 const tests: { name: string; fn: () => Promise<void> | void }[] = [];
 let group = "";
 function describe(name: string, fn: () => void): void {
@@ -208,8 +208,74 @@ describe("最終assistantエラーのレート制限判定", () => {
     assert.equal(isRateLimitedError("Monthly Limit Exhausted"), true);
   });
 
+  it("Codex の usage limit エラーをレート制限として扱う", () => {
+    assert.equal(isRateLimitedError("Codex error: The usage limit has been reached"), true);
+  });
+
+  it("ChatGPT usage limit のフレンドリーメッセージをレート制限として扱う", () => {
+    assert.equal(
+      isRateLimitedError(
+        "You have hit your ChatGPT usage limit (plus plan). Try again in ~43 min.",
+      ),
+      true,
+    );
+  });
+
   it("一致しないエラーはレート制限として扱わない", () => {
     assert.equal(isRateLimitedError("Error: service unavailable"), false);
+  });
+
+  it("過負荷・サーバエラー・タイムアウトはレート制限として扱わない", () => {
+    assert.equal(isRateLimitedError("Error: 500: internal server error"), false);
+    assert.equal(isRateLimitedError("Provider returned error: overloaded"), false);
+    assert.equal(isRateLimitedError("Request timed out"), false);
+    assert.equal(isRateLimitedError("fetch failed"), false);
+  });
+
+  it("Z.AI のクォータ・未払いコードをレート制限として扱う", () => {
+    assert.equal(isRateLimitedError('Error: {"error":{"code":"1310"}}'), true);
+    assert.equal(isRateLimitedError('Error: {"error":{"code":"1113"}}'), true);
+  });
+
+  it("OpenCode Zen のサブスク制限をレート制限として扱う", () => {
+    assert.equal(isRateLimitedError("GoUsageLimitError: go limit reached"), true);
+    assert.equal(isRateLimitedError("FreeUsageLimitError"), true);
+    assert.equal(
+      isRateLimitedError("Monthly usage limit reached. Enable available balance usage."),
+      true,
+    );
+  });
+
+  it("OpenAI 系のクォータ・残高エラーをレート制限として扱う", () => {
+    assert.equal(
+      isRateLimitedError(
+        'Error: {"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}',
+      ),
+      true,
+    );
+    assert.equal(isRateLimitedError("402: Insufficient Balance"), true);
+    assert.equal(isRateLimitedError("Your account has run out of budget"), true);
+    assert.equal(isRateLimitedError("payment required: billing issue"), true);
+  });
+
+  it("Anthropic のクレジット不足をレート制限として扱う", () => {
+    assert.equal(
+      isRateLimitedError(
+        "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade your plan.",
+      ),
+      true,
+    );
+    assert.equal(isRateLimitedError("anthropic error: rate_limit_error"), true);
+  });
+
+  it("Google と Bedrock のスロットリングをレート制限として扱う", () => {
+    assert.equal(isRateLimitedError("429 RESOURCE_EXHAUSTED: Quota exceeded for model"), true);
+    assert.equal(isRateLimitedError("ThrottlingException: rate exceeded"), true);
+  });
+
+  it("汎用スロットリング表現をレート制限として扱う", () => {
+    assert.equal(isRateLimitedError("OpenAI API error: Rate limit reached"), true);
+    assert.equal(isRateLimitedError("429 Too Many Requests"), true);
   });
 });
 

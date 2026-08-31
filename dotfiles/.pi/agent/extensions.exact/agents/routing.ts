@@ -14,11 +14,43 @@ export interface ModelCandidate {
 export const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000;
 export const WHEN_TIMEOUT_MS = 5_000;
 
+// Errors treated as rate/usage limits. The HTTP 429 path in after_provider_response
+// is provider-independent (raw status code), so these text patterns only matter for
+// in-band stream errors that never surface a status: pi-ai normalizes every
+// provider error to the errorMessage string, so each provider family needs its
+// wording here. Mirrors pi-ai's own classification (utils/retry.js) plus
+// provider-specific codes; transient server failures (5xx, "overloaded",
+// "service unavailable") are intentionally excluded — pi core retries those.
 const RATE_LIMIT_ERROR_PATTERNS = [
+  // HTTP status codes echoed into the normalized message text.
   /\b429\b/,
-  /code"\s*:\s*"1310"/,
-  /Weekly Limit Exhausted/,
-  /Monthly Limit Exhausted/,
+  /\b402\b/,
+  // Z.AI coding-plan: usage quota exhausted (1310) / account arrears (1113).
+  /code"\s*:\s*"(1310|1113)"/,
+  // OpenCode Zen subscription limits and Go / free-tier error types.
+  /Weekly Limit Exhausted/i,
+  /Monthly Limit Exhausted/i,
+  /GoUsageLimitError/i,
+  /FreeUsageLimitError/i,
+  /available.?balance/i,
+  // Codex / ChatGPT plan: in-band stream error ("Codex error: The usage limit
+  // has been reached"), the friendly HTTP 429 message ("You have hit your
+  // ChatGPT usage limit ..."), and the raw usage_limit_reached body code.
+  /usage.?limit/i,
+  // OpenAI and generic quota / billing exhaustion (also gateways wrapping them).
+  /insufficient_quota/i,
+  /quota exceeded/i,
+  /out of budget/i,
+  /billing/i,
+  /insufficient.?balance/i,
+  /insufficient.?credits?/i,
+  // Generic throttle wording: Anthropic rate_limit_error, OpenAI "Rate limit
+  // reached", gateways "ratelimit", etc.
+  /rate.?limit/i,
+  /too many requests/i,
+  // Google (gRPC status) and AWS Bedrock throttling.
+  /RESOURCE_EXHAUSTED/i,
+  /throttl/i,
 ];
 
 export function isRateLimitedError(errorMessage: string | undefined): boolean {
