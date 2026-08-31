@@ -131,7 +131,7 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
 }
 
 export function loadAgentConfig(
-  configPath = join(getAgentDir(), "extensions", "profile", "config.yaml"),
+  configPath = join(getAgentDir(), "extensions", "agents", "config.yaml"),
 ): ConfigLoadResult {
   if (!existsSync(configPath)) return { error: `config file not found: ${configPath}` };
   try {
@@ -317,7 +317,7 @@ async function runChild(
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<ChildRun> {
   // モデルは渡さない。子セッションが指定された agent の tier から解決する。
-  const args = ["--mode", "json", "-p", "--no-session", "--profile", agent, `Task: ${task}`];
+  const args = ["--mode", "json", "-p", "--no-session", "--agent", agent, `Task: ${task}`];
   const childResult: ChildRun = {
     agent,
     task,
@@ -414,8 +414,8 @@ async function runChild(
       }
     };
 
-    // ponytail: 孫プロセスが stdout の fd を握ると close が永久に来ない。
-    // pi 本体の waitForChildProcess と同じく、exit 後は stdio が 0.1 秒静穏になった時点で確定する
+    // A grandchild holding stdout's fd would otherwise prevent close indefinitely.
+    // Like pi's waitForChildProcess, settle after stdio is quiet for 0.1 seconds after exit.
     const finalize = (code: number | null) => {
       if (settled) return;
       settled = true;
@@ -502,7 +502,7 @@ function registerAgentWidget(
   );
 }
 
-export default function profileExtension(
+export default function agentsExtension(
   pi: ExtensionAPI,
   injectedConfig: ConfigLoadResult = loadAgentConfig(),
 ): void {
@@ -510,7 +510,7 @@ export default function profileExtension(
   const config = loadedConfig.config;
   let currentAgent = config?.default ?? "invalid";
 
-  pi.registerFlag("profile", { type: "string", description: "Agent for a child session." });
+  pi.registerFlag("agent", { type: "string", description: "Agent for a child session." });
 
   pi.registerTool({
     name: "subagent",
@@ -518,7 +518,7 @@ export default function profileExtension(
     description: "Spawn an isolated child pi process using a configured agent.",
     parameters: Type.Object({
       task: Type.String({ description: "Task to delegate to the child process" }),
-      profile: Type.String({ description: "Configured child agent name" }),
+      agent: Type.String({ description: "Configured child agent name" }),
       cwd: Type.Optional(
         Type.String({ description: "Working directory; defaults to the parent cwd" }),
       ),
@@ -535,18 +535,18 @@ export default function profileExtension(
           content: [textPart("Invalid parameters. Provide a task.")],
           details: { results: [] },
         };
-      if (!config.agents[params.profile]) {
+      if (!config.agents[params.agent]) {
         return {
-          content: [textPart(`Cannot delegate: agent ${params.profile} is not defined.`)],
+          content: [textPart(`Cannot delegate: agent ${params.agent} is not defined.`)],
           details: { results: [] },
           isError: true,
         };
       }
-      if (!canDelegate(currentAgent, params.profile, config)) {
+      if (!canDelegate(currentAgent, params.agent, config)) {
         return {
           content: [
             textPart(
-              `Permission denied: agent ${currentAgent} cannot delegate to ${params.profile}.`,
+              `Permission denied: agent ${currentAgent} cannot delegate to ${params.agent}.`,
             ),
           ],
           details: { results: [] },
@@ -558,7 +558,7 @@ export default function profileExtension(
       startSpinnerTimer();
       let result: ChildRun;
       try {
-        result = await runChild(ctx.cwd, params.task, params.profile, params.cwd, signal, onUpdate);
+        result = await runChild(ctx.cwd, params.task, params.agent, params.cwd, signal, onUpdate);
       } finally {
         pendingChildren--;
         stopSpinnerTimerIfIdle();
@@ -576,7 +576,7 @@ export default function profileExtension(
       };
     },
     renderCall(args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold(`subagent ${args.profile ?? "..."}`)), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold(`subagent ${args.agent ?? "..."}`)), 0, 0);
     },
     renderResult(result, options, theme) {
       const details = result.details as AgentToolDetails | undefined;
@@ -740,7 +740,7 @@ export default function profileExtension(
       if (saved) {
         currentAgent = config.agents[saved.agent]
           ? saved.agent
-          : initialAgent(config, pi.getFlag("profile") as string | undefined);
+          : initialAgent(config, pi.getFlag("agent") as string | undefined);
         manual = saved.manual;
         cooldowns = saved.cooldowns;
       }
@@ -754,7 +754,7 @@ export default function profileExtension(
       event.reason === "startup" || event.reason === "new"
         ? new Map()
         : (takeSavedRoutingState()?.cooldowns ?? new Map());
-    currentAgent = initialAgent(config, pi.getFlag("profile") as string | undefined);
+    currentAgent = initialAgent(config, pi.getFlag("agent") as string | undefined);
     applyAgentTools(ctx, currentAgent);
     const applied = await applyTierModel(currentAgent, ctx);
     if (!applied) notifyNoModel(currentAgent, ctx, "warning");
@@ -842,7 +842,7 @@ export default function profileExtension(
     if (fallbackSucceeded) return { message: makeRetryableRateLimitMessage(message) };
   });
 
-  // ── tool gating & profile commands ─────────────────────────────────────
+  // ── tool gating & agent commands ─────────────────────────────────────
 
   pi.on("tool_call", async (event) => {
     if (shouldBlockToolCall(currentAgent, event.toolName, config)) {
@@ -851,7 +851,7 @@ export default function profileExtension(
   });
 
   for (const agent of Object.keys(config.agents)) {
-    pi.registerCommand(`profile:${agent}`, {
+    pi.registerCommand(`agent:${agent}`, {
       description: `Switch the session agent to ${agent}.`,
       handler: async (args, ctx) => {
         currentAgent = agent;

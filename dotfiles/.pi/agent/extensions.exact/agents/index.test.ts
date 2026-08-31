@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { Container, Text } from "@earendil-works/pi-tui";
-import profileExtension, {
+import agentsExtension, {
   __abortTimer,
   __resetRoutingState,
   __spawn,
@@ -93,7 +93,7 @@ interface CaptureOptions {
   setModelSucceeds?: boolean | boolean[];
 }
 
-function captureProfileExtension(
+function captureAgentsExtension(
   injectedConfig: { config?: AgentConfig; error?: string } = { config },
   options: CaptureOptions = {},
 ) {
@@ -103,6 +103,7 @@ function captureProfileExtension(
   const notificationEvents: Array<{ message: string; level: string }> = [];
   const activeTools: string[][] = [];
   const selectedModels: unknown[] = [];
+  const registeredFlags: string[] = [];
   const sentMessages: Array<{ content: string; options?: unknown }> = [];
   const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
   const children: FakeChild[] = [];
@@ -120,7 +121,7 @@ function captureProfileExtension(
     return child;
   }) as unknown as typeof __spawn.current;
 
-  profileExtension(
+  agentsExtension(
     {
       on(event: string, handler: Handler) {
         const eventHandlers = handlers.get(event) ?? [];
@@ -130,7 +131,9 @@ function captureProfileExtension(
       registerCommand(name: string, definition: { handler: Handler }) {
         commands.set(name, definition.handler);
       },
-      registerFlag() {},
+      registerFlag(name: string) {
+        registeredFlags.push(name);
+      },
       registerTool(tool: CapturedTool) {
         registeredTool = tool;
       },
@@ -187,6 +190,7 @@ function captureProfileExtension(
     notificationEvents,
     activeTools,
     selectedModels,
+    registeredFlags,
     sentMessages,
     spawnCalls,
     restore() {
@@ -202,8 +206,8 @@ function captureProfileExtension(
     async sessionShutdown() {
       for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
     },
-    async runCommand(profile: string, args = "") {
-      await commands.get(`profile:${profile}`)?.(args, context);
+    async runCommand(agent: string, args = "") {
+      await commands.get(`agent:${agent}`)?.(args, context);
     },
     async input(text: string, source = "interactive") {
       let result: unknown;
@@ -313,7 +317,7 @@ agents:
   });
 
   it("設定ファイルがない場合は読み込みエラーを返す", () => {
-    const result = loadAgentConfig("/path/that/does/not/exist/profile-config.yaml");
+    const result = loadAgentConfig("/path/that/does/not/exist/agents-config.yaml");
     assert.match(result.error ?? "", /config file not found/);
   });
 
@@ -572,7 +576,7 @@ describe("待機スピナー", () => {
 
 describe("拡張の接続", () => {
   it("起動時に default agent の tier 候補を適用し、agent 表示と allowlist を更新する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
@@ -588,7 +592,7 @@ describe("拡張の接続", () => {
   });
 
   it("does not notify model switches without a UI", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       extension.context.hasUI = false;
       await extension.sessionStart();
@@ -599,9 +603,10 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("--profile フラグの profile で開始する", async () => {
-    const extension = captureProfileExtension({ config }, { flags: { profile: "chat" } });
+  it("--agent フラグの agent で開始する", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { agent: "chat" } });
     try {
+      assert.deepEqual(extension.registeredFlags, ["agent"]);
       await extension.sessionStart();
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
@@ -610,8 +615,8 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("profile 切り替え時に tier 候補のモデル、ツール、表示を切り替える", async () => {
-    const extension = captureProfileExtension();
+  it("agent 切り替え時に tier 候補のモデル、ツール、表示を切り替える", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat");
@@ -627,8 +632,8 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("tools が空の profile は標準ツールを拒否し subagent だけを有効にする", async () => {
-    const extension = captureProfileExtension();
+  it("tools が空の agent は標準ツールを拒否し subagent だけを有効にする", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("locked");
@@ -642,12 +647,12 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("subagents が空の profile は子 profile の起動を拒否する", async () => {
-    const extension = captureProfileExtension();
+  it("subagents が空の agent は子 agent の起動を拒否する", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("locked");
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /Permission denied/);
       assert.equal(extension.spawnCalls.length, 0);
@@ -657,7 +662,7 @@ describe("拡張の接続", () => {
   });
 
   it("先頭候補の適用失敗後に次候補の適用を試みる", async () => {
-    const extension = captureProfileExtension({ config }, { setModelSucceeds: [false, true] });
+    const extension = captureAgentsExtension({ config }, { setModelSucceeds: [false, true] });
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.selectedModels, [
@@ -671,7 +676,7 @@ describe("拡張の接続", () => {
   });
 
   it("tier の全候補に失敗したら現在のモデルを維持し warning で通知する", async () => {
-    const extension = captureProfileExtension({ config }, { setModelSucceeds: false });
+    const extension = captureAgentsExtension({ config }, { setModelSucceeds: false });
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.selectedModels, [
@@ -687,8 +692,8 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("profile 切り替え時の引数を切り替え後のユーザーメッセージとして送信する", async () => {
-    const extension = captureProfileExtension();
+  it("agent 切り替え時の引数を切り替え後のユーザーメッセージとして送信する", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat", "  hello world  ");
@@ -698,8 +703,8 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("profile 切り替え後の follow-up は切替先の systemPrompt で実行される", async () => {
-    const extension = captureProfileExtension();
+  it("agent 切り替え後の follow-up は切替先の systemPrompt で実行される", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat", "hello");
@@ -711,8 +716,8 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("引数のない profile 切り替えはユーザーメッセージを送信しない", async () => {
-    const extension = captureProfileExtension();
+  it("引数のない agent 切り替えはユーザーメッセージを送信しない", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat");
@@ -723,7 +728,7 @@ describe("拡張の接続", () => {
   });
 
   it("許可されないツールの tool_call をブロックし、セッション継続理由を返す", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("chat");
@@ -735,7 +740,7 @@ describe("拡張の接続", () => {
   });
 
   it("設定された systemPrompt を次回実行のシステムプロンプトへ追記する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.runCommand("manager");
       const result = await extension.beforeAgentStart("base");
@@ -748,7 +753,7 @@ describe("拡張の接続", () => {
 
 describe("tier によるモデルルーティング", () => {
   it("プロンプト送信前に候補を再評価し、同じモデルなら切り替えない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
@@ -761,7 +766,7 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("プロンプト送信前に成立した別候補へ切り替える", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       extension.context.model = { provider: "zai", id: "other" };
@@ -773,7 +778,7 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("プロンプト送信前に全候補が不成立ならエラー通知してプロンプトを実行しない", async () => {
-    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
+    const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart();
@@ -799,7 +804,7 @@ describe("tier によるモデルルーティング", () => {
       },
       agents: { highProfile: { tier: "high", tools: [], subagents: [], systemPrompt: [] } },
     };
-    const extension = captureProfileExtension(
+    const extension = captureAgentsExtension(
       { config: noDowngradeConfig },
       {
         findModel: (_provider, id) => (id === "low-model" ? { provider: "zai", id } : undefined),
@@ -820,7 +825,7 @@ describe("tier によるモデルルーティング", () => {
   });
 
   it("UI のない環境で全候補が不成立のとき stderr へ出力し終了コードを 1 にする", async () => {
-    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
+    const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     const stderrLines: string[] = [];
     const originalStderrWrite = process.stderr.write.bind(process.stderr);
     const originalExitCode = process.exitCode;
@@ -842,8 +847,8 @@ describe("tier によるモデルルーティング", () => {
     }
   });
 
-  it("拡張からのメッセージ（profile 切替 follow-up）は再評価しない", async () => {
-    const extension = captureProfileExtension();
+  it("拡張からのメッセージ（agent 切替 follow-up）は再評価しない", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       extension.context.model = { provider: "zai", id: "other" };
@@ -858,7 +863,7 @@ describe("tier によるモデルルーティング", () => {
 
 describe("手動モデル選択", () => {
   it("ユーザーの model_select で手動状態になり、表示に (manual) を付ける", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
@@ -869,7 +874,7 @@ describe("手動モデル選択", () => {
   });
 
   it("手動状態はプロンプト送信前の再評価を行わない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
@@ -883,7 +888,7 @@ describe("手動モデル選択", () => {
   });
 
   it("restore 由来の model_select は手動状態にしない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("restore");
@@ -893,8 +898,8 @@ describe("手動モデル選択", () => {
     }
   });
 
-  it("profile 切り替えで手動状態を解除する", async () => {
-    const extension = captureProfileExtension();
+  it("agent 切り替えで手動状態を解除する", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
@@ -908,7 +913,7 @@ describe("手動モデル選択", () => {
 
 describe("レート制限（429）時のフォールバック", () => {
   it("429 の fallback 成功時は最終エラーを retryable に置換し、user message を送らない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.providerResponse(429);
@@ -940,7 +945,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("does not notify fallback switches without a UI", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       extension.context.hasUI = false;
       await extension.sessionStart();
@@ -953,14 +958,14 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("HTTP 429 の Retry-After を cooldown に適用してセッション切替後の候補選択へ反映する", async () => {
-    const before = captureProfileExtension();
-    let after: ReturnType<typeof captureProfileExtension> | undefined;
+    const before = captureAgentsExtension();
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.providerResponse(429, { "retry-after": "120" });
       await before.sessionShutdown();
 
-      after = captureProfileExtension();
+      after = captureAgentsExtension();
       await after.sessionStart("resume");
       assert.deepEqual(after.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
@@ -981,7 +986,7 @@ describe("レート制限（429）時のフォールバック", () => {
       },
       agents: { manager: { tier: "middle", tools: [], subagents: [], systemPrompt: [] } },
     };
-    const extension = captureProfileExtension({ config: threeCandidateConfig });
+    const extension = captureAgentsExtension({ config: threeCandidateConfig });
     try {
       await extension.sessionStart();
       await extension.providerResponse(429);
@@ -1021,7 +1026,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("1310 の fallback 成功時は最終エラーを retryable に置換する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       const replacement = await extension.messageEnd({
@@ -1039,7 +1044,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("非レート制限の最終assistantエラーでは切り替えない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       const selectedModelCount = extension.selectedModels.length;
@@ -1059,7 +1064,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("HTTP 429 の後の同一最終エラーでは二重に fallback しない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.providerResponse(429);
@@ -1080,7 +1085,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("次候補がない場合は retryable に置換せず user message を送らない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.runCommand("worker");
@@ -1104,7 +1109,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("手動状態でもフォールバックし、手動状態を維持する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
@@ -1120,7 +1125,7 @@ describe("レート制限（429）時のフォールバック", () => {
   });
 
   it("429 以外のステータスでは何もしない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
@@ -1135,15 +1140,15 @@ describe("レート制限（429）時のフォールバック", () => {
 
 describe("セッションライフサイクル", () => {
   it("/reload では手動選択状態と cooldown を維持し、モデルを変更しない", async () => {
-    const before = captureProfileExtension({ config }, { flags: { profile: "chat" } });
-    let after: ReturnType<typeof captureProfileExtension> | undefined;
+    const before = captureAgentsExtension({ config }, { flags: { agent: "chat" } });
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.modelSelect("set");
       await before.providerResponse(429); // cooldown を 1 つ作る
       await before.sessionShutdown();
 
-      after = captureProfileExtension();
+      after = captureAgentsExtension();
       await after.sessionStart("reload");
       assert.deepEqual(after.agentWidget(), ["🤖 agent: chat (manual)"]);
       assert.equal(after.selectedModels.length, 0);
@@ -1153,9 +1158,9 @@ describe("セッションライフサイクル", () => {
     }
   });
 
-  it("設定変更を伴う /reload は保存済み profile が消えた場合に default profile へ戻す", async () => {
-    const before = captureProfileExtension({ config }, { flags: { profile: "chat" } });
-    let after: ReturnType<typeof captureProfileExtension> | undefined;
+  it("設定変更を伴う /reload は保存済み agent が消えた場合に default agent へ戻す", async () => {
+    const before = captureAgentsExtension({ config }, { flags: { agent: "chat" } });
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
     const changedConfig: AgentConfig = {
       default: "manager",
       tiers: { middle: config.tiers.middle! },
@@ -1166,7 +1171,7 @@ describe("セッションライフサイクル", () => {
       await before.modelSelect("set");
       await before.sessionShutdown();
 
-      after = captureProfileExtension({ config: changedConfig });
+      after = captureAgentsExtension({ config: changedConfig });
       await after.sessionStart("reload");
       assert.deepEqual(after.agentWidget(), ["🤖 agent: manager (manual)"]);
       assert.equal(after.selectedModels.length, 0);
@@ -1177,14 +1182,14 @@ describe("セッションライフサイクル", () => {
   });
 
   it("/fork では手動選択状態を解除する", async () => {
-    const before = captureProfileExtension();
-    let after: ReturnType<typeof captureProfileExtension> | undefined;
+    const before = captureAgentsExtension();
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.modelSelect("set");
       await before.sessionShutdown();
 
-      after = captureProfileExtension();
+      after = captureAgentsExtension();
       await after.sessionStart("fork");
       assert.deepEqual(after.agentWidget(), ["🤖 agent: manager"]);
     } finally {
@@ -1193,15 +1198,15 @@ describe("セッションライフサイクル", () => {
     }
   });
 
-  it("/new では cooldown を破棄して初期 profile の候補を適用する", async () => {
-    const before = captureProfileExtension();
-    let after: ReturnType<typeof captureProfileExtension> | undefined;
+  it("/new では cooldown を破棄して初期 agent の候補を適用する", async () => {
+    const before = captureAgentsExtension();
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.providerResponse(429); // zai/glm-5.2 が cooldown
       await before.sessionShutdown();
 
-      after = captureProfileExtension();
+      after = captureAgentsExtension();
       await after.sessionStart("new");
       assert.deepEqual(after.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
     } finally {
@@ -1211,14 +1216,14 @@ describe("セッションライフサイクル", () => {
   });
 
   it("セッション切替（resume）では cooldown を維持して次候補を適用する", async () => {
-    const before = captureProfileExtension();
-    let after: ReturnType<typeof captureProfileExtension> | undefined;
+    const before = captureAgentsExtension();
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
       await before.providerResponse(429); // zai/glm-5.2 が cooldown
       await before.sessionShutdown();
 
-      after = captureProfileExtension();
+      after = captureAgentsExtension();
       await after.sessionStart("resume");
       assert.deepEqual(after.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
@@ -1228,7 +1233,7 @@ describe("セッションライフサイクル", () => {
   });
 
   it("セッション開始時に手動選択状態を解除する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart("startup");
       await extension.modelSelect("set");
@@ -1241,7 +1246,7 @@ describe("セッションライフサイクル", () => {
   });
 
   it("/new で全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
+    const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart("new");
@@ -1256,7 +1261,7 @@ describe("セッションライフサイクル", () => {
   });
 
   it("/resume で全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
+    const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart("resume");
@@ -1271,7 +1276,7 @@ describe("セッションライフサイクル", () => {
   });
 
   it("/fork で全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
+    const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart("fork");
@@ -1285,8 +1290,8 @@ describe("セッションライフサイクル", () => {
     }
   });
 
-  it("/profile 切り替えで全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
-    const extension = captureProfileExtension({ config }, { findModel: () => undefined });
+  it("/agent 切り替えで全候補が不成立でも既存モデルを維持し warning を通知する", async () => {
+    const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.runCommand("chat");
@@ -1299,8 +1304,8 @@ describe("セッションライフサイクル", () => {
 });
 
 describe("subagent", () => {
-  it("子 profile の tier、tools、systemPrompt、再委譲設定を適用する", async () => {
-    const extension = captureProfileExtension();
+  it("子 agent の tier、tools、systemPrompt、再委譲設定を適用する", async () => {
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1317,7 +1322,7 @@ describe("subagent", () => {
       const prompt = await extension.beforeAgentStart("base");
       assert.equal(prompt.systemPrompt, "base\n\nworker prompt");
       assert.equal(
-        (await extension.executeSubagent({ profile: "chat", task: "work" })).isError,
+        (await extension.executeSubagent({ agent: "chat", task: "work" })).isError,
         undefined,
       );
     } finally {
@@ -1325,8 +1330,8 @@ describe("subagent", () => {
     }
   });
 
-  it("許可された profile の subagent を --profile だけ渡して起動し、最終結果を親へ返す", async () => {
-    const extension = captureProfileExtension();
+  it("許可された agent の subagent を --agent だけ渡して起動し、最終結果を親へ返す", async () => {
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1339,7 +1344,7 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       const result = await extension.executeSubagent({
-        profile: "worker",
+        agent: "worker",
         task: "work",
         cwd: "/child",
       });
@@ -1351,7 +1356,7 @@ describe("subagent", () => {
         "json",
         "-p",
         "--no-session",
-        "--profile",
+        "--agent",
         "worker",
         "Task: work",
       ]);
@@ -1361,7 +1366,7 @@ describe("subagent", () => {
   });
 
   it("cwd を省略した subagent は親の cwd で起動する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1373,7 +1378,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ profile: "worker", task: "work", model: "forbidden" });
+      await extension.executeSubagent({ agent: "worker", task: "work", model: "forbidden" });
       assert.equal(extension.spawnCalls[0]?.cwd, "/parent");
       assert.equal(extension.spawnCalls[0]?.args.includes("--model"), false);
     } finally {
@@ -1381,11 +1386,11 @@ describe("subagent", () => {
     }
   });
 
-  it("委譲が許可されない profile からの subagent を起動せず理由を返す", async () => {
-    const extension = captureProfileExtension();
+  it("委譲が許可されない agent からの subagent を起動せず理由を返す", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "manager", task: "work" });
+      const result = await extension.executeSubagent({ agent: "manager", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /Permission denied/);
       assert.equal(extension.spawnCalls.length, 0);
@@ -1394,11 +1399,11 @@ describe("subagent", () => {
     }
   });
 
-  it("未定義 profile の subagent を起動せず理由を返す", async () => {
-    const extension = captureProfileExtension();
+  it("未定義 agent の subagent を起動せず理由を返す", async () => {
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "missing", task: "work" });
+      const result = await extension.executeSubagent({ agent: "missing", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /not defined/);
       assert.equal(extension.spawnCalls.length, 0);
@@ -1408,12 +1413,12 @@ describe("subagent", () => {
   });
 
   it("子が出力する前から pending の実行結果を onUpdate へ渡す", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const updates: any[] = [];
     try {
       await extension.sessionStart();
       const execution = extension.executeSubagent(
-        { profile: "worker", task: "work" },
+        { agent: "worker", task: "work" },
         undefined,
         (update) => updates.push(update),
       );
@@ -1428,7 +1433,7 @@ describe("subagent", () => {
   });
 
   it("実行中は 0.1 秒ごとに TUI の再描画を要求する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const originalTimers = { ...__spinnerTimers };
     let spinnerCallback: (() => void) | undefined;
     let spinnerIntervalMs: number | undefined;
@@ -1441,7 +1446,7 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       extension.agentWidget();
-      const execution = extension.executeSubagent({ profile: "worker", task: "work" });
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
       spinnerCallback?.();
 
       assert.deepEqual(
@@ -1458,7 +1463,7 @@ describe("subagent", () => {
   });
 
   it("subagent の実行中に子の結果を onUpdate へ渡す", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const updates: any[] = [];
     extension.respondToChild((child) => {
       child.stdout.emit(
@@ -1471,7 +1476,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ profile: "worker", task: "work" }, undefined, (update) =>
+      await extension.executeSubagent({ agent: "worker", task: "work" }, undefined, (update) =>
         updates.push(update),
       );
       assert.equal(updates.length, 4);
@@ -1483,7 +1488,7 @@ describe("subagent", () => {
   });
 
   it("tool_execution_end の結果を toolCallId で対応する action へ紐づける", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1495,7 +1500,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       const action = result.details.results[0].actions[0];
       assert.equal(action.result?.content?.[0]?.text, "/child");
       assert.equal(action.isError, false);
@@ -1506,7 +1511,7 @@ describe("subagent", () => {
   });
 
   it("toolCallId のない tool_execution_end はどの action にも紐づけない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
@@ -1518,7 +1523,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.details.results[0].actions[0].result, undefined);
     } finally {
       extension.restore();
@@ -1526,7 +1531,7 @@ describe("subagent", () => {
   });
 
   it("親のキャンセルを SIGTERM として子へ伝播し、子を中断結果にする", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const controller = new AbortController();
     let scheduledAbortTimer = false;
     let clearedAbortTimer = false;
@@ -1542,7 +1547,7 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       const execution = extension.executeSubagent(
-        { profile: "worker", task: "work" },
+        { agent: "worker", task: "work" },
         controller.signal,
       );
       await new Promise((resolve) => setImmediate(resolve));
@@ -1562,7 +1567,7 @@ describe("subagent", () => {
   });
 
   it("SIGTERM を無視する子へ 5 秒後に SIGKILL を送る", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const controller = new AbortController();
     let runAbortTimer: (() => void) | undefined;
     const originalAbortTimer = __abortTimer.set;
@@ -1576,7 +1581,7 @@ describe("subagent", () => {
     try {
       await extension.sessionStart();
       const execution = extension.executeSubagent(
-        { profile: "worker", task: "work" },
+        { agent: "worker", task: "work" },
         controller.signal,
       );
       await new Promise((resolve) => setImmediate(resolve));
@@ -1594,7 +1599,7 @@ describe("subagent", () => {
   });
 
   it("子が exit しても close が来なければ、静穏タイマーで結果を確定する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     let fireIdleTimer: (() => void) | undefined;
     const originalSet = __abortTimer.set;
     __abortTimer.set = (callback) => {
@@ -1612,7 +1617,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const execution = extension.executeSubagent({ profile: "worker", task: "work" });
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
       await new Promise((resolve) => setImmediate(resolve));
       fireIdleTimer?.();
       const result = await execution;
@@ -1625,7 +1630,7 @@ describe("subagent", () => {
   });
 
   it("子の exit 後に届いた stdout の行も結果へ含める", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     let fireIdleTimer: (() => void) | undefined;
     const originalSet = __abortTimer.set;
     __abortTimer.set = (callback) => {
@@ -1643,7 +1648,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const execution = extension.executeSubagent({ profile: "worker", task: "work" });
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
       await new Promise((resolve) => setImmediate(resolve));
       fireIdleTimer?.();
       const result = await execution;
@@ -1655,11 +1660,11 @@ describe("subagent", () => {
   });
 
   it("シグナルで死亡した子をエラーとして扱う", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => child.emit("close", null));
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.details.results[0].stopReason, "killed");
       assert.match(result.content[0].text, /killed by a signal/);
@@ -1669,14 +1674,14 @@ describe("subagent", () => {
   });
 
   it("非0終了した子をエラーとして stderr を親へ返す", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stderr.emit("data", Buffer.from("child stderr\n"));
       child.emit("close", 2);
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child failed: child stderr\n");
     } finally {
@@ -1685,14 +1690,14 @@ describe("subagent", () => {
   });
 
   it("子プロセスの error イベントを優先して親へ返す", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stderr.emit("data", Buffer.from("stderr fallback\n"));
       child.emit("error", new Error("spawn failed"));
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child failed: spawn failed");
     } finally {
@@ -1701,7 +1706,7 @@ describe("subagent", () => {
   });
 
   it("子の error stopReason では errorMessage を stderr と最終出力より優先する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stderr.emit("data", Buffer.from("stderr fallback\n"));
       child.stdout.emit(
@@ -1722,7 +1727,7 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child error: assistant error");
     } finally {
@@ -1731,11 +1736,11 @@ describe("subagent", () => {
   });
 
   it("exit 0 でも出力のない子をエラーとして親へ返す", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => child.emit("close", 0));
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child failed: (no output)");
     } finally {
@@ -1744,14 +1749,14 @@ describe("subagent", () => {
   });
 
   it("exit 0 で出力がなく stderr がある子は stderr を失敗出力として親へ返す", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stderr.emit("data", Buffer.from("no available model for agent worker: tier low\n"));
       child.emit("close", 0);
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(
         result.content[0].text,
@@ -1763,12 +1768,12 @@ describe("subagent", () => {
   });
 
   it("正常終了した子に対する親の abort を無視する", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const controller = new AbortController();
     extension.respondToChild((child) => child.emit("close", 0));
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ profile: "worker", task: "work" }, controller.signal);
+      await extension.executeSubagent({ agent: "worker", task: "work" }, controller.signal);
       controller.abort();
 
       assert.deepEqual(extension.children[0]?.killHistory, []);
@@ -1778,9 +1783,9 @@ describe("subagent", () => {
   });
 
   it("設定エラーを subagent のエラー結果として返す", async () => {
-    const extension = captureProfileExtension({ error: "invalid config" });
+    const extension = captureAgentsExtension({ error: "invalid config" });
     try {
-      const result = await extension.executeSubagent({ profile: "worker", task: "work" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /invalid config/);
     } finally {
@@ -1789,10 +1794,10 @@ describe("subagent", () => {
   });
 
   it("空の task を拒否し、子プロセスを起動しない", async () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ profile: "worker", task: "" });
+      const result = await extension.executeSubagent({ agent: "worker", task: "" });
       assert.equal(result.content[0].text, "Invalid parameters. Provide a task.");
       assert.equal(extension.spawnCalls.length, 0);
     } finally {
@@ -1801,7 +1806,7 @@ describe("subagent", () => {
   });
 
   it("agent の設定エラーを session_start で owner に通知する", async () => {
-    const extension = captureProfileExtension({ error: "invalid config" });
+    const extension = captureAgentsExtension({ error: "invalid config" });
     try {
       await extension.sessionStart();
       assert.deepEqual(extension.notifications, ["agent configuration error: invalid config"]);
@@ -1813,10 +1818,10 @@ describe("subagent", () => {
 
 describe("subagent の表示", () => {
   it("呼び出し時に subagent と agent 名を表示する", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     try {
       const rendered = extension.renderCall(
-        { profile: "worker" },
+        { agent: "worker" },
         { fg: (_color: string, text: string) => text, bold: (text: string) => text },
       ) as Text;
       assert.ok(rendered.render(200).some((line) => line.includes("subagent worker")));
@@ -1826,7 +1831,7 @@ describe("subagent の表示", () => {
   });
 
   it("Actions をツール別の整形と結果サマリー行で表示する", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         {
@@ -1869,7 +1874,7 @@ describe("subagent の表示", () => {
   });
 
   it("結果を受け取る前のツール呼び出しは結果行を表示しない", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         {
@@ -1904,7 +1909,7 @@ describe("subagent の表示", () => {
   });
 
   it("実行中はブロックの末尾にスピナー行を表示する", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         {
@@ -1940,7 +1945,7 @@ describe("subagent の表示", () => {
   });
 
   it("再描画時に待機スピナーのフレームを進める", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const originalNow = __spinnerTimers.now;
     const details = {
       results: [
@@ -1982,7 +1987,7 @@ describe("subagent の表示", () => {
   });
 
   it("実行確定時に表示済みのスピナー行を消す", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         {
@@ -2022,7 +2027,7 @@ describe("subagent の表示", () => {
   });
 
   it("task、Actions、確定した Output の内容を展開表示する", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         {
@@ -2078,7 +2083,7 @@ describe("subagent の表示", () => {
   });
 
   it("ツール利用がない場合は Actions を表示しない", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         { agent: "worker", task: "work", exitCode: 0, messages: [], actions: [], stderr: "" },
@@ -2105,7 +2110,7 @@ describe("subagent の表示", () => {
   });
 
   it("出力が確定するまで Output を表示しない", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         {
@@ -2139,7 +2144,7 @@ describe("subagent の表示", () => {
   });
 
   it("出力がある場合だけ Output を表示する", () => {
-    const extension = captureProfileExtension();
+    const extension = captureAgentsExtension();
     const details = {
       results: [
         {
