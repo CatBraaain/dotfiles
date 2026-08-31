@@ -22,12 +22,20 @@
     "openrouter/**/*:free",
     "openrouter/stealth/**"
   ],
+  "skills": ["~/.pi/agent/git/github.com/jgraph/drawio-mcp/plugins/claude-code/skills/drawio"],
   "packages": [
     "npm:pi-commandcode-provider",
     "npm:pi-cursor-sdk",
     "npm:@entelligentsia/pi-claude-compat",
     "npm:@narumitw/pi-stamp",
     "npm:@narumitw/pi-usage",
+    {
+      "source": "https://github.com/jgraph/drawio-mcp",
+      "extensions": [],
+      "skills": ["plugins/claude-code/skills/drawio"],
+      "prompts": [],
+      "themes": []
+    },
     {
       "source": "https://github.com/DreambigOu/ELI5",
       "extensions": [],
