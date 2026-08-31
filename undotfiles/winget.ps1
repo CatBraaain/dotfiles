@@ -32,6 +32,7 @@ $managedPackages = @(
     "Valve.Steam"
     # "StirlingTools.StirlingPDF"
     "Microsoft.Sysinternals.Autologon"
+    "Typeless SimplyCA.Typeless"
     "Devolutions.UniGetUI"
     "Microsoft.VisualStudioCode"
     "WinDirStat.WinDirStat"
