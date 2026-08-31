@@ -13,6 +13,7 @@ editor = code --wait
 autocrlf = false
 ignorecase = false
 [alias]
+empty = commit -m \"chore: empty commit\" --allow-empty
 rebasedate = rebase --committer-date-is-author-date
 date = show -s --format=%aI
 pushf = push --force
