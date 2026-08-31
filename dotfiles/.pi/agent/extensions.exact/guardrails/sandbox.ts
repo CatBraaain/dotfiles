@@ -305,7 +305,7 @@ function getPathSection(
 // "/**" is the `read.allow` sentinel for all paths (§3).
 // bun's globSync silently drops dotfiles, so expand by walking the static prefix
 // and testing each path with globToRegExp (same semantics as command matching).
-// ponytail: walks the whole prefix subtree; add per-segment matching if large trees get slow.
+// Walks the whole prefix subtree; add per-segment matching if large trees get slow.
 function expandGlobPattern(absolutePattern: string): string[] {
   const regexes = expandBraces(absolutePattern).map(globToRegExp);
   let staticPrefix = "";
@@ -441,7 +441,7 @@ export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
   // pi's TUI has a single slot for extension dialogs: a second dialog replaces
   // the first without resolving its promise, deadlocking that tool call.
-  // ponytail: one global queue; split per dialog kind if contention ever matters.
+  // One global queue; split per dialog kind if contention ever matters.
   private uiQueue: Promise<void> = Promise.resolve();
   private readonly config: GuardrailsConfig;
   private readonly readPaths: ExpandedPathSection;

@@ -443,8 +443,8 @@ function renderRedditMarkdown(
     post?.bodyMarkdown || "(post body unavailable from accessible Reddit endpoints)",
   );
   if (feed) {
-    // ponytail: RSS はスコア・返信階層を持たない。階層付きスレッドが必要になったら
-    // old.reddit JSON 等の別経路を検討する。
+    // RSS has no score or reply hierarchy. Use another source such as old.reddit JSON
+    // if a threaded view is needed.
     lines.push(
       "",
       `## Comments (${comments.length} retrieved)`,
