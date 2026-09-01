@@ -13,6 +13,7 @@
       pkgs = import inputs.nixpkgs {
         inherit system;
         config.allowUnfree = true;
+        config.android_sdk.accept_license = true;
         overlays = [
           inputs.llm-agents.overlays.shared-nixpkgs
         ];
@@ -44,6 +45,7 @@
             (llm-agents.pi.override { useBun = false; })
             # llm-agents.pi
             act
+            androidsdk
             bubblewrap # bash-sandbox
             bun
             cargo
