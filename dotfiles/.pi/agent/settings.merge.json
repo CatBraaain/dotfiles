@@ -18,9 +18,7 @@
     "zai/**",
     "openai-codex/**",
     "commandcode/**",
-    "openrouter/z-ai/**",
-    "openrouter/**/*:free",
-    "openrouter/stealth/**"
+    "openrouter/**/*:free"
   ],
   "packages": [
     "npm:pi-commandcode-provider",
