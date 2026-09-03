@@ -11,6 +11,7 @@ windows-terminal
 
 {{- if eq .chezmoi.os "windows" }}
 .pi
+**/sync_vscode_extensions.sh
 {{- end }}
 
 **/node_modules
