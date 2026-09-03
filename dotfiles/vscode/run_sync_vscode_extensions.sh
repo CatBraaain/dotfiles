@@ -71,7 +71,7 @@ exclude_local_extensions() {
   grep -Fvx -f <(printf '%s\n' "${local_vscode_extensions[@]}") <<< "$1" || true
 }
 
-build_todo_lsp_vsix() {
+ensure_todo_lsp_repo() {
   if [[ -d "$todo_lsp_repo/.git" ]]; then
     git -C "$todo_lsp_repo" pull --ff-only origin "$default_branch" >&2
   elif [[ -e "$todo_lsp_repo" ]]; then
@@ -81,7 +81,9 @@ build_todo_lsp_vsix() {
     mkdir -p "$(dirname "$todo_lsp_repo")"
     git clone https://github.com/CatBraaain/todo-lsp.git "$todo_lsp_repo"
   fi
+}
 
+build_todo_lsp_vsix() {
   local extension_version vsix_path
   extension_version="$(cd "$todo_lsp_repo/vscode-todo" && node -p "require('./package.json').version")"
   vsix_path="$todo_lsp_repo/vscode-todo/todo-$extension_version.vsix"
@@ -100,6 +102,25 @@ build_todo_lsp_vsix() {
 
 install_local_extensions() {
   local -a code_cmd=("$@")
+  local local_head="" remote_head=""
+
+  # Skip the whole clone/pull/build/install when the local HEAD already
+  # matches the remote tip (checked via ls-remote, without pulling), tracked
+  # files are unmodified (untracked build artifacts such as the built VSIX are
+  # ignored), and the extension is still installed.
+  if [[ -d "$todo_lsp_repo/.git" ]]; then
+    local_head="$(git -C "$todo_lsp_repo" rev-parse HEAD)"
+    remote_head="$(git -C "$todo_lsp_repo" ls-remote origin "refs/heads/$default_branch" | awk '{print $1}')"
+    if [[ -n "$remote_head" && "$local_head" == "$remote_head" ]] &&
+      [[ -z "$(git -C "$todo_lsp_repo" status --porcelain --untracked-files=no)" ]] &&
+      "${code_cmd[@]}" --list-extensions 2>/dev/null | tr -d '\r' | grep -Fxq "todo-lsp.todo"; then
+      echo "[linux] cached   todo-lsp.todo @ ${local_head:0:12}"
+      return 0
+    fi
+  fi
+
+  ensure_todo_lsp_repo
+
   local vsix_path
   vsix_path="$(build_todo_lsp_vsix)"
   echo "[linux] install $vsix_path"
