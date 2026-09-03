@@ -223,6 +223,48 @@ let tuiHandle: { requestRender: () => void } | undefined;
 let spinnerTimer: ReturnType<typeof setInterval> | undefined;
 let pendingChildren = 0;
 
+const MAX_CONCURRENT_CHILDREN = 2;
+let runningChildren = 0;
+const childWaiters: Array<() => void> = [];
+
+// 同時実行数の上限（SPEC.md「同時実行数の制限」）。tryAcquireChildSlot は同期で取得を
+// 試み、上限に達している場合は waitChildSlot で空きが出るまで待機する。待機中に
+// abort されたら false を返す。即時取得を await なしで済ませるのは、execute の呼び出し
+// 直後に子プロセスが起動する同期性を既存の振る舞いとして維持するためである。
+function tryAcquireChildSlot(): boolean {
+  if (runningChildren < MAX_CONCURRENT_CHILDREN) {
+    runningChildren++;
+    return true;
+  }
+  return false;
+}
+
+function waitChildSlot(signal: AbortSignal | undefined): Promise<boolean> {
+  return new Promise((resolve) => {
+    const wake = () => {
+      signal?.removeEventListener("abort", onAbort);
+      runningChildren++;
+      resolve(true);
+    };
+    const onAbort = () => {
+      const index = childWaiters.indexOf(wake);
+      if (index !== -1) childWaiters.splice(index, 1);
+      resolve(false);
+    };
+    childWaiters.push(wake);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function releaseChildSlot(): void {
+  runningChildren--;
+  childWaiters.shift()?.();
+}
+
 function startSpinnerTimer(): void {
   if (spinnerTimer !== undefined) return;
   spinnerTimer = __spinnerTimers.set(() => tuiHandle?.requestRender(), SPINNER_INTERVAL_MS);
@@ -558,7 +600,24 @@ export default function agentsExtension(
       startSpinnerTimer();
       let result: ChildRun;
       try {
-        result = await runChild(ctx.cwd, params.task, params.agent, params.cwd, signal, onUpdate);
+        if (!tryAcquireChildSlot()) {
+          onUpdate?.({
+            content: [textPart("(waiting for a free subagent slot...)")],
+            details: { results: [] },
+          });
+          if (!(await waitChildSlot(signal))) {
+            return {
+              content: [textPart("Subagent was aborted while waiting for a free slot.")],
+              details: { results: [] },
+              isError: true,
+            };
+          }
+        }
+        try {
+          result = await runChild(ctx.cwd, params.task, params.agent, params.cwd, signal, onUpdate);
+        } finally {
+          releaseChildSlot();
+        }
       } finally {
         pendingChildren--;
         stopSpinnerTimerIfIdle();

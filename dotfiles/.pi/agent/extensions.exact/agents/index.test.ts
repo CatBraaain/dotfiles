@@ -19,7 +19,6 @@ import agentsExtension, {
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
 
-
 const config: AgentConfig = {
   default: "manager",
   tiers: {
@@ -73,6 +72,16 @@ class FakeChild extends EventEmitter {
     }
     return true;
   }
+}
+
+function succeedChild(child: FakeChild): void {
+  child.stdout.emit(
+    "data",
+    Buffer.from(
+      `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } })}\n`,
+    ),
+  );
+  child.emit("close", 0);
 }
 
 interface CaptureOptions {
@@ -1415,6 +1424,90 @@ describe("subagent", () => {
 
       extension.children[0]?.emit("close", 0);
       await execution;
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("同時実行は2つまでで、3つ目以降は空きが出ると先に待機した順に起動する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const executions = [
+        extension.executeSubagent({ agent: "worker", task: "first" }),
+        extension.executeSubagent({ agent: "worker", task: "second" }),
+        extension.executeSubagent({ agent: "worker", task: "third" }),
+        extension.executeSubagent({ agent: "worker", task: "fourth" }),
+      ];
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(extension.spawnCalls.length, 2);
+
+      succeedChild(extension.children[0]!);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(extension.spawnCalls.length, 3);
+      assert.match(extension.spawnCalls[2]!.args.at(-1)!, /Task: third/);
+
+      succeedChild(extension.children[1]!);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(extension.spawnCalls.length, 4);
+      assert.match(extension.spawnCalls[3]!.args.at(-1)!, /Task: fourth/);
+
+      succeedChild(extension.children[2]!);
+      succeedChild(extension.children[3]!);
+      await Promise.all(executions);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("待機中の呼び出しは待機中の表示を onUpdate へ渡す", async () => {
+    const extension = captureAgentsExtension();
+    const updates: any[] = [];
+    try {
+      await extension.sessionStart();
+      const first = extension.executeSubagent({ agent: "worker", task: "first" });
+      const second = extension.executeSubagent({ agent: "worker", task: "second" });
+      const waiting = extension.executeSubagent(
+        { agent: "worker", task: "third" },
+        undefined,
+        (update) => updates.push(update),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(updates[0].content[0].text, "(waiting for a free subagent slot...)");
+
+      succeedChild(extension.children[0]!);
+      succeedChild(extension.children[1]!);
+      await new Promise((resolve) => setImmediate(resolve));
+      succeedChild(extension.children[2]!);
+      await Promise.all([first, second, waiting]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("待機中の呼び出しを親がキャンセルしたらエラーとして終了する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const controller = new AbortController();
+      const first = extension.executeSubagent({ agent: "worker", task: "first" });
+      const second = extension.executeSubagent({ agent: "worker", task: "second" });
+      const waiting = extension.executeSubagent(
+        { agent: "worker", task: "third" },
+        controller.signal,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(extension.spawnCalls.length, 2);
+
+      controller.abort();
+      const result = await waiting;
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /aborted/);
+      assert.equal(extension.spawnCalls.length, 2);
+
+      succeedChild(extension.children[0]!);
+      succeedChild(extension.children[1]!);
+      await Promise.all([first, second]);
     } finally {
       extension.restore();
     }
