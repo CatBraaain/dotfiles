@@ -5,33 +5,13 @@ description: draw.io、.drawio、.drawio.svg、PNG、SVG、PDFの図、フロー
 
 # Draw.io
 
-## 前提と知識
+## 永続成果物と対象
 
 Draw.io Desktop CLIはMermaid変換、ELKレイアウト、出力に必要である。`.drawio.svg`は`content`属性にdiagram XMLを埋め込んだSVGである。
 
-## 原則
-
-標準的な図はMermaidで簡潔に書き、draw.ioへ自動配置させる。細かな配置・スタイル・固有シェイプが必要な図はXMLで作成する。
-
-XMLでは座標を手作業で計算するより、用途に合うELKレイアウトを優先する。XMLで作成した図だけ、必要に応じてレイアウトを適用する。図形・アイコンには、draw.io標準シェイプや既存アイコンを自作より優先して使う。
-
-ファイル名は内容を表す。
-
-## 契約
-
-### 永続成果物と対象
-
 `.drawio.svg`だけを永続的な正本とする。`.drawio`と`.mmd`は一時ファイルであり、処理後に削除する。埋め込みdiagram dataを持たない通常のSVG画像は対象外である。
 
-### CLI実行
-
-sandboxエラーで起動しない環境では、すべてのCLI呼び出しに`--no-sandbox`を追加する。
-
-### 詳細参照
-
-URL出力、OS別の開き方、透明背景・倍率・サイズなどの詳細な出力オプションが必要な場合だけ[URL・詳細出力](references/url-output.md)を読む。
-
-### CLIラダー
+## CLIラダー
 
 最初に成立する段でCLIを決める。
 
@@ -42,7 +22,17 @@ URL出力、OS別の開き方、透明背景・倍率・サイズなどの詳細
 3. 条件: 前段まででCLIが見つからない。
    行動: `.drawio.svg`を生成できないため中止して報告する。`.drawio`やURLを代替の永続成果物として納品しない。
 
-### 作成・出力
+## CLI実行
+
+sandboxエラーで起動しない環境では、すべてのCLI呼び出しに`--no-sandbox`を追加する。
+
+## 詳細参照
+
+URL出力、OS別の開き方、透明背景・倍率・サイズなどの詳細な出力オプションが必要な場合だけ[URL・詳細出力](references/url-output.md)を読む。
+
+## 図の作成と出力
+
+標準的な図はMermaidで簡潔に書き、draw.ioへ自動配置させる。細かな配置・スタイル・固有シェイプが必要な図はXMLで作成する。図形・アイコンには、draw.io標準シェイプや既存アイコンを自作より優先して使う。
 
 1. 標準的な図は`NAME.mmd`へMermaidを書き、`drawio -x -f xml -o NAME.drawio NAME.mmd`で一時`NAME.drawio`へ変換する。Mermaid構文が不明または変換に失敗した場合だけ、[Mermaidリファレンス](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/mermaid-reference.md)を確認する。
 2. 細かな配置・スタイル・固有シェイプを要する図は、各ページを`diagram`要素で表す`mxfile` XMLを`NAME.drawio`へ書く。[draw.io XMLリファレンス](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/xml-reference.md)を確認する。
@@ -52,11 +42,13 @@ URL出力、OS別の開き方、透明背景・倍率・サイズなどの詳細
 
 形式を指定されなければ、`NAME.drawio.svg`だけを作成する。Mermaidを画像へ直接出力してはならない。必ず`.drawio`へ変換してから出力する。Mermaidを変換済みの図にはELKレイアウトを追加しない。
 
-### ラベルとファイル名
+## ラベルとファイル名
 
-図のラベルはユーザーの言語に合わせる。ファイル名は小文字ハイフン区切りにする。例: `login-flow.drawio.svg`。
+ファイル名は内容を表す。図のラベルはユーザーの言語に合わせる。ファイル名は小文字ハイフン区切りにする。例: `login-flow.drawio.svg`。
 
-### XMLレイアウト
+## XMLレイアウト
+
+XMLでは座標を手作業で計算するより、用途に合うELKレイアウトを優先する。XMLで作成した図だけ、必要に応じてレイアウトを適用する。
 
 XMLのノード配置には`--layout`を使う。
 
@@ -73,7 +65,7 @@ drawio -x -f xml --layout verticalFlow -o NAME.drawio NAME.drawio
 
 細かな制御には`elkLayered`などのELK設定を含むJSON配列を`--layout`へ渡す。配置済みのXML図でエッジだけを直交ルーティングする場合は`--layout libavoid`を使う。flow/treeレイアウトの後には使わない。
 
-### 編集と検証
+## 編集と検証
 
 1. `NAME.drawio.svg`の`content`属性を確認する。なければ中止して報告する。
 2. `drawio -x -f xml -o NAME.drawio NAME.drawio.svg`でXMLを取り出す。
