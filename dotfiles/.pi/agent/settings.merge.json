@@ -37,13 +37,6 @@
       "themes": []
     },
     {
-      "source": "https://github.com/DietrichGebert/ponytail",
-      "extensions": [],
-      "skills": ["skills/ponytail-review", "skills/ponytail-audit"],
-      "prompts": [],
-      "themes": []
-    },
-    {
       "source": "https://github.com/anthropics/skills",
       "extensions": [],
       "skills": ["skills/doc-coauthoring", "skills/skill-creator"],
