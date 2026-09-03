@@ -1,0 +1,4 @@
+# Repositories cloned into ~/projects/ by `just repos` (also run by `just apply`).
+# One repository URL per line. '#' starts a comment.
+#
+# https://github.com/owner/repo

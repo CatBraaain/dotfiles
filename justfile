@@ -11,6 +11,11 @@ setup:
 apply:
   bun pre-chezmoi.ts
   chezmoi apply -c chezmoi.yaml --force
+  bun undotfiles/repos/clone-repos.ts
+
+[linux]
+repos:
+  bun undotfiles/repos/clone-repos.ts
 
 [linux]
 managed:
@@ -41,6 +46,11 @@ setup:
 apply:
   bun pre-chezmoi.ts
   chezmoi apply -c chezmoi.yaml --force
+  bun undotfiles/repos/clone-repos.ts
+
+[windows]
+repos:
+  bun undotfiles/repos/clone-repos.ts
 
 [windows]
 diff:
