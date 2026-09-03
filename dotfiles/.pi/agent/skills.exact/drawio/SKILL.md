@@ -13,7 +13,9 @@ Draw.io Desktop CLIはMermaid変換、ELKレイアウト、出力に必要であ
 
 ## CLIラダー
 
-最初に成立する段でCLIを決める。
+目標: 利用できる draw.io Desktop CLI コマンドを1つ特定する。
+
+最初に成立する段で止まる。
 
 1. 条件: `drawio`がPATHにある、またはWindowsで`where draw.io`が見つかる。
    行動: 見つかったコマンドを使う。
