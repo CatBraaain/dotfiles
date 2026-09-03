@@ -45,9 +45,9 @@
 - ウェブ上のものは markdown link（`[text](url)`）
 - ローカルファイル・コードベース内は平文のパス（markdown link にしない）
 
-## SDD開発フロー
+## 優先される開発フロー
 
-ロジックを伴う成果物は **spec（＝観測可能な振る舞いの仕様書）** を唯一の仕様ソースとして開発する（SDD: Spec Driven Development）。オーナーは spec だけ読んで go/no-go を出し、実装コードの詳細は読まない。spec、SDD適合性レビュー、収束時のSDD固有境界は `sdd/SKILL.md`、編集せず評価する手続きは `review/SKILL.md`、修正・検証・再評価の反復は `converge/SKILL.md` を直接の正本とする。
+ロジックを伴う実装では、着手前に観測可能な振る舞いの合意を取る。
 
 ## 画像のOCRテキスト
 
