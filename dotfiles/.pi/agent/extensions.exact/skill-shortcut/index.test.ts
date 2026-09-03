@@ -1,22 +1,9 @@
-// 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import skillShortcut, { resolveSlashInput, rewriteCompletionItems } from "./index";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-	const previousGroup = group;
-	group = name;
-	fn();
-	group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-	tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 type CommandRef = { name: string; source: "extension" | "prompt" | "skill" };
 
@@ -178,21 +165,3 @@ describe("起動直後の補完", () => {
 		assert.deepEqual(fooSuggestions, { items: [{ value: "foo", label: "foo" }], prefix: "/" });
 	});
 });
-
-let failed = 0;
-for (const test of tests) {
-	try {
-		await test.fn();
-		console.log(`ok - ${test.name}`);
-	} catch (error) {
-		failed += 1;
-		console.error(`not ok - ${test.name}`);
-		console.error(error);
-	}
-}
-
-if (failed > 0) {
-	console.error(`\n${failed}/${tests.length} tests failed`);
-	process.exit(1);
-}
-console.log(`\n${tests.length} tests passed`);

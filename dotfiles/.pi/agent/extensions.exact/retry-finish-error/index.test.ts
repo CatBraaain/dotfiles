@@ -1,28 +1,9 @@
-// 実行: bun --install=auto run index.test.ts
-//
-// retry-finish-error 拡張機能の振る舞いを検証する。
-// 出典: ./SPEC.md
-// handleFinishErrorMessage に各種 message_end イベントを渡し、
-// 書き換えの有無と書き換え後の errorMessage を検証する。
-// 各 it のタイトルが要件仕様。
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { FINISH_ERROR_PREFIX, RETRYABLE_PREFIX, handleFinishErrorMessage } from "./index";
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-  const previousGroup = group;
-  group = name;
-  fn();
-  group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 function assistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
@@ -133,14 +114,3 @@ describe("エラー以外のメッセージ", () => {
     assert.equal(handleFinishErrorMessage(event), undefined);
   });
 });
-
-for (const test of tests) {
-  try {
-    await test.fn();
-    console.log(`✅ ${test.name}`);
-  } catch (error) {
-    console.error(`❌ ${test.name}`);
-    throw error;
-  }
-}
-console.log(`\n${tests.length} tests passed`);

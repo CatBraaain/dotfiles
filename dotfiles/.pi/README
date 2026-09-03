@@ -27,6 +27,12 @@ cd ~/.pi/agent && bun install
 
 依存を増やす場合はこの package.json に追加し、再度 install する。
 
+`devDependencies` はテスト用: `@types/bun`（`bun:test` の型）と、`@earendil-works/pi-coding-agent` / `@earendil-works/pi-tui`（テスト実行時のモジュール解決用。pi を更新したらバージョンを合わせる）。テストはワークスペース側で実行する:
+
+```sh
+cd dotfiles/.pi/agent && bun install && bun test
+```
+
 ## agent/rules/
 
 対象ファイルに応じた Markdown ルールをエージェントへ自動適用する仕組み（Claude Code 互換）。`.md` を配置するだけで、該当ファイルを操作した次ターンにルール本文がエージェントへ注入される。実装は `extensions.exact/rules/` だが、**ルールの読込対象はこの `agent/rules/`**。

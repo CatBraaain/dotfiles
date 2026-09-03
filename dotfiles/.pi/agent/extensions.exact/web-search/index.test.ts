@@ -1,6 +1,6 @@
-// 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import webSearchExtension, {
   BACKEND_TIMEOUT_MS,
   defaultFetchBackends,
@@ -21,19 +21,6 @@ import webSearchExtension, {
   type WebToolOperations,
 } from "./index";
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-  const previousGroup = group;
-  group = name;
-  fn();
-  group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 type Tool = {
   name: string;
@@ -307,7 +294,7 @@ describe("web_search 統合（execute 経由・実バックエンド）", () => 
     const headings = resultText.match(/^#{2,3} \d+\./gm) ?? [];
     assert.ok(headings.length > 0);
     assert.ok(headings.length <= 10);
-  });
+  }, 60_000);
 
   it("失敗したバックエンドも次の検索で再試行する", async () => {
     const attemptsPerSearch: string[][] = [];
@@ -340,7 +327,7 @@ describe("web_search 統合（execute 経由・実バックエンド）", () => 
   it("実バックエンドで検索が成功する", async () => {
     const resultText = textOf(await callSearch("hello world"));
     assert.ok(resultText.length > 0);
-  });
+  }, 60_000);
 });
 
 describe("web_search 表示", () => {
@@ -438,13 +425,13 @@ describe("web_fetch 統合（execute 経由・実バックエンド）", () => {
   it("実バックエンドでフェッチが成功する", async () => {
     const resultText = textOf(await callFetch("https://example.com/"));
     assert.ok(resultText.length > 0);
-  });
+  }, 60_000);
 
   it("HTML 以外の本文（text/plain）は変換せずそのまま返す", async () => {
     const plainTextUrl = "https://raw.githubusercontent.com/karust/openserp/main/README.md";
     const resultText = textOf(await callFetch(plainTextUrl));
     assert.match(resultText, /OpenSERP/);
-  });
+  }, 60_000);
 });
 
 describe("バックエンド結果行のフォーマット", () => {
@@ -740,22 +727,3 @@ describe("web_fetch バックエンド構成（Reddit 分岐）", () => {
     assert.deepEqual(backendNames, ["trafilatura", "fetch+trafilatura", "Jina Reader"]);
   });
 });
-
-let passed = 0;
-const failures: string[] = [];
-for (const test of tests) {
-  try {
-    await test.fn();
-    passed++;
-  } catch (error) {
-    failures.push(
-      `  ✗ ${test.name}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
-    );
-  }
-}
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
-  process.exitCode = 1;
-}
-console.log(`\n${passed} passed, ${failures.length} failed`);
