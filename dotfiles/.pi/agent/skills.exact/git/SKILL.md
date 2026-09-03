@@ -1,7 +1,7 @@
 ---
 name: git
 description: >-
-  git の commit・branch・merge・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。「コミットして」「コミットを分けて」「マージして」「push して」「ブランチ切って」「PR 作って」「OSS にコントリビュートしたい」等の git 操作で使う。
+  git の commit・branch・merge・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、worktree の finish・discard・close、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。「コミットして」「コミットを分けて」「マージして」「push して」「ブランチ切って」「finish this worktree」「discard this worktree (wt)」「close this worktree」「ワークツリーを閉じて」「PR 作って」「OSS にコントリビュートしたい」等の git 操作で使う。
 ---
 
 # Git
@@ -12,7 +12,7 @@ git の commit・branch・push・PR に関する判断規則を所有する。
 
 リポジトリ固有の規約が、常に本標準の一般規則より優先する。
 
-- 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、worktree ブランチの統合、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
+- 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、worktree ブランチの統合、worktree の finish・discard・close、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
 - 適用しない: コード変更そのものの品質（readable-code 等）、調査手段の選択（research-strategy）。
 
 ## Decision Ladder: リポジトリ規約の確認
@@ -120,6 +120,42 @@ branch 名・分岐元は、リポジトリの branch strategy に従う。文�
 - 適用しない: remote へ push 済みで共有しているブランチ。トポロジーとして作業のまとまりを記録したいタスクは、worktree ではなく PR で統合する。
 
 検証: 統合後に `git log --graph --oneline -n <統合した commit 数 + 2>` を確認し、merge commit がなく線形であること。
+
+## worktree の finish・discard・close
+
+ローカルの使い捨て worktree を閉じるときは、次の3語で区別する。
+
+| 言葉 | 意味 | 手順 |
+| --- | --- | --- |
+| finish | 成果を統合先へ取り込んで閉じる | commit → 統合 → close |
+| discard | 変更と branch を捨てて閉じる | close（`--force`・`-D`） |
+| close | VSCode のワークスペースから外し、worktree と branch を削除する | 下記の手順 |
+
+### finish
+
+1. worktree 内の変更を確認し、あれば「コミットの作成と分割」に従って commit する。手順3の backup branch は、close で worktree ごと削除するため作らない。
+2. 「worktree ブランチの統合」に従って統合先へマージする。
+3. close の手順を実行する。
+
+### discard
+
+owner が discard を明示した指示のときだけ実行する。
+
+1. worktree の branch 名と未コミット変更を確認し、捨てる対象を特定する。
+2. close の手順を `--force` と `-D` で実行する。
+
+### close
+
+1. `code --remove <worktree のパス>` で、最後のアクティブウィンドウのワークスペースから外す。この操作は常に最後のアクティブウィンドウに作用する。
+2. `git worktree remove <worktree のパス>` で worktree を削除する。未コミット変更が残って失敗するときは、finish で commit するか、discard の `--force` を使う。
+3. `git branch -d <branch>` で、worktree が checkout していた branch を削除する。未マージで失敗するときは、finish で統合するか、discard の `-D` を使う。
+4. `git worktree list` に prunable な参照が残っていれば、`git worktree prune` を実行する。
+
+検証: `git worktree list` に対象 worktree がなく、`git branch --list <branch>` が空であること。
+
+### 指示の解釈
+
+finish・discard を指定しない閉じる指示では、未コミット変更または未マージの branch があるとき finish か discard かを質問し、どちらもなければ close だけを実行する。
 
 ## 実行の境界
 
