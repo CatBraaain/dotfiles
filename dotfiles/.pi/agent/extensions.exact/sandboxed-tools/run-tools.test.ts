@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,19 +13,6 @@ const piPackageDir = resolve(
   "..",
 );
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-  const previousGroup = group;
-  group = name;
-  fn();
-  group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 function runToolsCli(toolName: string, request: unknown) {
   return spawnSync("bun", [runToolsPath, toolName], {
@@ -189,22 +177,3 @@ describe("Sandbox.runTool（bwrap 統合）", () => {
     }),
   );
 });
-
-let passed = 0;
-const failures: string[] = [];
-for (const test of tests) {
-  try {
-    await test.fn();
-    passed++;
-  } catch (error) {
-    failures.push(
-      `  ✗ ${test.name}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
-    );
-  }
-}
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
-  process.exitCode = 1;
-}
-console.log(`\n${passed} passed, ${failures.length} failed`);

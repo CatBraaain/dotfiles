@@ -1,8 +1,5 @@
-// 実行: bun --install=auto run routing.test.ts
-//
-// `when` は冪等なフェイクコマンド（echo 1=有効 / exit 1=無効）で駆動する。
-
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import {
   bashExecFrom,
@@ -16,18 +13,6 @@ import {
   type ModelCandidate,
 } from "./routing";
 
-// Custom runner executes sequentially because Vitest is incompatible with Bun auto-install.
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-function describe(name: string, fn: () => void): void {
-  const prev = group;
-  group = name;
-  fn();
-  group = prev;
-}
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 type ModelFound = { provider: string; id: string };
 
@@ -291,21 +276,3 @@ describe("手動選択の判定", () => {
     assert.strictEqual(isManualSelect(undefined, false), false);
   });
 });
-
-let passed = 0;
-const failures: string[] = [];
-for (const t of tests) {
-  try {
-    await t.fn();
-    passed++;
-  } catch (err) {
-    failures.push(
-      `  \u2717 ${t.name}\n${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
-    );
-  }
-}
-if (failures.length > 0) {
-  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
-  process.exitCode = 1;
-}
-console.log(`\n${passed} passed, ${failures.length} failed`);

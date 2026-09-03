@@ -1,6 +1,6 @@
-// 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import skillShortcut from "../skill-shortcut/index";
 import skillStatusExtension, {
@@ -12,19 +12,6 @@ import skillStatusExtension, {
   SKILL_STATUS_WIDGET_KEY,
 } from "./index";
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-  const previousGroup = group;
-  group = name;
-  fn();
-  group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -545,23 +532,3 @@ describe("UI", () => {
     assert.deepEqual(widgetColors, ["dim"]);
   });
 });
-
-let passed = 0;
-const failures: string[] = [];
-for (const test of tests) {
-  try {
-    await test.fn();
-    passed += 1;
-    console.log(`ok - ${test.name}`);
-  } catch (error) {
-    failures.push(
-      `  ✗ ${test.name}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
-    );
-  }
-}
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
-  process.exitCode = 1;
-}
-console.log(`\n${passed} passed, ${failures.length} failed`);

@@ -1,26 +1,7 @@
-// 実行: bun --install=auto run index.test.ts
-//
-// aside 拡張機能の振る舞いを検証する。
-// 出典: ./SPEC.md
-// factory をモック pi で起動し、/aside コマンドの handler と
-// pi.sendMessage への呼び出し（メッセージ本文・配信モード）を検証する。
-// 各 it のタイトルが要件仕様。
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import asideExtension from "./index";
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-  const previousGroup = group;
-  group = name;
-  fn();
-  group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 interface SentMessage {
   message: { customType: string; content: string; display: boolean };
@@ -130,22 +111,3 @@ describe("複数 append の順序", () => {
     assert.deepEqual(appendedOrder, ["A", "B"]);
   });
 });
-
-let passed = 0;
-const failures: string[] = [];
-for (const test of tests) {
-  try {
-    await test.fn();
-    passed++;
-  } catch (error) {
-    failures.push(
-      `  ✗ ${test.name}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
-    );
-  }
-}
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
-  process.exitCode = 1;
-}
-console.log(`\n${passed} passed, ${failures.length} failed`);

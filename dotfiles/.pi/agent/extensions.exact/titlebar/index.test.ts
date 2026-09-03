@@ -1,21 +1,8 @@
-// 実行: bun --install=auto run index.test.ts
 
 import assert from "node:assert/strict";
+import { afterAll, describe, it } from "bun:test";
 import titlebar, { __timers, buildTitle, SPINNER_FRAMES, spinnerFrame } from "./index";
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-  const previousGroup = group;
-  group = name;
-  fn();
-  group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -36,6 +23,10 @@ __timers.clear = (timer) => {
   clearedTimerIds.push(timer as unknown as number);
 };
 __timers.now = () => fakeNowMs ?? originalTimers.now();
+
+afterAll(() => {
+  Object.assign(__timers, originalTimers);
+});
 
 function captureTitleExtension(sessionName: string | undefined): {
   titleCalls: string[];
@@ -159,25 +150,3 @@ describe("状態遷移", () => {
     assert.equal(clearedTimerIds.at(-1), spinnerTimerId);
   });
 });
-
-let passed = 0;
-const failures: string[] = [];
-for (const test of tests) {
-  try {
-    await test.fn();
-    passed += 1;
-    console.log(`ok - ${test.name}`);
-  } catch (error) {
-    failures.push(
-      `  ✗ ${test.name}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
-    );
-  }
-}
-
-Object.assign(__timers, originalTimers);
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
-  process.exitCode = 1;
-}
-console.log(`\n${passed} passed, ${failures.length} failed`);

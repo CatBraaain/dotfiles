@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { describe, it } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,19 +18,6 @@ import rulesExtension, {
   type Rule,
 } from "./index";
 
-const tests: { name: string; fn: () => Promise<void> | void }[] = [];
-let group = "";
-
-function describe(name: string, fn: () => void): void {
-  const previousGroup = group;
-  group = name;
-  fn();
-  group = previousGroup;
-}
-
-function it(name: string, fn: () => Promise<void> | void): void {
-  tests.push({ name: group ? `${group} > ${name}` : name, fn });
-}
 
 function rule(overrides: Partial<Rule> = {}): Rule {
   return {
@@ -375,23 +363,3 @@ describe("extension lifecycle", () => {
     assert.deepEqual(events, ["session_start", "tool_result", "before_agent_start"]);
   });
 });
-
-let passed = 0;
-const failures: string[] = [];
-for (const test of tests) {
-  try {
-    await test.fn();
-    passed += 1;
-    console.log(`ok - ${test.name}`);
-  } catch (error) {
-    failures.push(
-      `  ✗ ${test.name}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
-    );
-  }
-}
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} test(s) FAILED:\n${failures.join("\n")}\n`);
-  process.exitCode = 1;
-}
-console.log(`\n${passed} passed, ${failures.length} failed`);
