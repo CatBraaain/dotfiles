@@ -32,7 +32,7 @@ gwt() {
   repository_root=$(git rev-parse --show-toplevel) || return
 
   local worktree_directory
-  worktree_directory="$(dirname "$repository_root")/$(basename "$repository_root")-$1"
+  worktree_directory="$(dirname "$repository_root")/$(basename "$repository_root")-worktree/$1"
 
   git worktree add -b "$1" "$worktree_directory" || return
   code --add "$worktree_directory"
