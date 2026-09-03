@@ -1,4 +1,4 @@
-# ADR: guardrails — サンドボックス方針
+# ADR: sandboxed-tools — サンドボックス方針
 
 | | |
 |---|---|
@@ -76,7 +76,7 @@ read / write / edit / bash ── 独自拡張でリプレイス、fs 読み書�
 flowchart TD
     subgraph PI["pi プロセス（フェンス外・network 自由）"]
         API["LLM API / web_fetch / web_search"]
-        TOOLS["fs ツール (guardrails)<br/>schema / 認可 / render"]
+        TOOLS["fs ツール (sandboxed-tools)<br/>schema / 認可 / render"]
     end
     TOOLS --> AUTH{"パス・コマンド認可<br/>allow / deny / ask"}
     AUTH -- "deny / 拒否" --> BLOCK["ブロック"]

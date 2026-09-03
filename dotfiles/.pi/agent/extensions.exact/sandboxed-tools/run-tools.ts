@@ -1,9 +1,9 @@
-// Runs inside the guardrails bwrap sandbox: executes one pi-standard tool
+// Runs inside the sandboxed-tools bwrap sandbox: executes one pi-standard tool
 // definition per invocation and prints the result as a JSON envelope on stdout.
 //
 // The pi package cannot be imported by its bare specifier here (no jiti
 // virtualModules outside the pi process), so the extension passes the pi
-// package directory via GUARDRAILS_PI_PACKAGE_DIR and we import its entry
+// package directory via SANDBOXED_TOOLS_PI_PACKAGE_DIR and we import its entry
 // dynamically. Type-only imports are erased at runtime and stay safe.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,8 +28,8 @@ export type ToolRequest = {
 };
 
 async function importPiTools(): Promise<typeof import("@earendil-works/pi-coding-agent")> {
-  const packageDir = process.env.GUARDRAILS_PI_PACKAGE_DIR;
-  if (!packageDir) throw new Error("GUARDRAILS_PI_PACKAGE_DIR is not set");
+  const packageDir = process.env.SANDBOXED_TOOLS_PI_PACKAGE_DIR;
+  if (!packageDir) throw new Error("SANDBOXED_TOOLS_PI_PACKAGE_DIR is not set");
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")) as {
     main?: string;
   };

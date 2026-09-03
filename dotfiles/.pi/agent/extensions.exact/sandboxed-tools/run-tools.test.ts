@@ -30,7 +30,7 @@ function runToolsCli(toolName: string, request: unknown) {
   return spawnSync("bun", [runToolsPath, toolName], {
     input: JSON.stringify(request),
     encoding: "utf8",
-    env: { ...process.env, GUARDRAILS_PI_PACKAGE_DIR: piPackageDir },
+    env: { ...process.env, SANDBOXED_TOOLS_PI_PACKAGE_DIR: piPackageDir },
   });
 }
 
@@ -49,14 +49,14 @@ describe("run-tools CLI", () => {
   it(
     "read はファイル内容を ok:true の result で返す",
     withTempDir(async (dir) => {
-      writeFileSync(join(dir, "note.txt"), "hello guardrails");
+      writeFileSync(join(dir, "note.txt"), "hello sandboxed-tools");
       const cliResult = runToolsCli("read", { params: { path: join(dir, "note.txt") } });
       const response = JSON.parse(cliResult.stdout) as {
         ok: boolean;
         result: { content: { type: string; text: string }[] };
       };
       assert.equal(response.ok, true);
-      assert.equal(response.result.content[0]?.text, "hello guardrails");
+      assert.equal(response.result.content[0]?.text, "hello sandboxed-tools");
     }),
   );
 
@@ -167,7 +167,7 @@ describe("Sandbox.runTool（bwrap 統合）", () => {
   it(
     "bwrap 内で write → read のラウンドトリップができる",
     withTempDir(async (dir) => {
-      // Nested user namespaces (e.g. agent bash already inside guardrails bwrap)
+      // Nested user namespaces (e.g. agent bash already inside sandboxed-tools bwrap)
       // cannot create uid maps; probe with a real invocation instead of --version.
       const bwrapProbe = spawnSync("bwrap", ["--", "true"], { encoding: "utf8" });
       if (bwrapProbe.status !== 0) {

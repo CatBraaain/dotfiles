@@ -28,7 +28,7 @@ write:
     - ~/mirrors
   ask: []
   deny:
-    - ~/.pi/agent/extensions/guardrails/config.yaml
+    - ~/.pi/agent/extensions/sandboxed-tools/config.yaml
 
 credentials: []
 

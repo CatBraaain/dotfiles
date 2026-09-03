@@ -126,7 +126,7 @@ function findFirstMarkdown(directory: string): string | undefined {
 function runMineru(
   imagePath: string,
 ): { ok: true; markdown: string } | { ok: false; message: string } {
-  const outputDirectory = mkdtempSync(join(tmpdir(), "guardrails-mineru-"));
+  const outputDirectory = mkdtempSync(join(tmpdir(), "sandboxed-tools-mineru-"));
   try {
     const result = spawnSync(
       "mineru",
@@ -177,7 +177,7 @@ function imageOcrCachePath(imagePath: string): string {
   return join(
     ocrCacheRoot(imagePath),
     "pi",
-    "guardrails",
+    "sandboxed-tools",
     "ocr",
     OCR_CACHE_VERSION,
     `${imageHash}.md`,
@@ -214,7 +214,7 @@ function appendErofsHint(result: AgentToolResult<any>): AgentToolResult<any> {
   return { ...result, content: [...result.content, { type: "text", text: EROFS_HINT }] };
 }
 
-export default function guardrailsExtension(pi: ExtensionAPI): void {
+export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
   const cwd = process.cwd();
   const sandbox = new Sandbox(cwd);
   const readTool = createReadTool(cwd);

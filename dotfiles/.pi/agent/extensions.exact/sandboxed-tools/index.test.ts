@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import guardrailsExtension, {
+import sandboxedToolsExtension, {
   COMMAND_PREVIEW_LIMIT,
   classifyReadPath,
   countMatchLines,
@@ -16,7 +16,7 @@ import guardrailsExtension, {
 import {
   Sandbox,
   expandPathSection,
-  parseGuardrailsConfig,
+  parseSandboxedToolsConfig,
   resolveGitMainWorktreePath,
   resolveCommandAction,
   resolveCommandActionMatch,
@@ -44,7 +44,7 @@ function withSandbox(
   test: (sandbox: Sandbox) => Promise<void> | void,
 ): () => Promise<void> {
   return async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "guardrails-test-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "sandboxed-tools-test-"));
     try {
       const configPath = join(tempDir, "config.yaml");
       writeFileSync(configPath, configYaml);
@@ -57,7 +57,7 @@ function withSandbox(
 
 function withTempDirectory(test: (directory: string) => Promise<void> | void): () => Promise<void> {
   return async () => {
-    const directory = mkdtempSync(join(tmpdir(), "guardrails-test-"));
+    const directory = mkdtempSync(join(tmpdir(), "sandboxed-tools-test-"));
     try {
       await test(directory);
     } finally {
@@ -92,9 +92,9 @@ function withImageDirectory(
     const previousPath = process.env.PATH;
     let stubDirectory: string | undefined;
     if (mineruMode === "missing") {
-      process.env.PATH = "/nonexistent-guardrails-mineru";
+      process.env.PATH = "/nonexistent-sandboxed-tools-mineru";
     } else {
-      stubDirectory = mkdtempSync(join(tmpdir(), "guardrails-mineru-stub-"));
+      stubDirectory = mkdtempSync(join(tmpdir(), "sandboxed-tools-mineru-stub-"));
       writeFileSync(join(stubDirectory, "mineru"), stubMineruScript(mineruMode), {
         mode: 0o755,
       });
@@ -121,13 +121,13 @@ function withLinkedWorktree(
   ) => Promise<void> | void,
 ): () => Promise<void> {
   return async () => {
-    const workspacePath = mkdtempSync(join(tmpdir(), "guardrails-git-"));
+    const workspacePath = mkdtempSync(join(tmpdir(), "sandboxed-tools-git-"));
     const mainWorktreePath = join(workspacePath, "main");
     const linkedWorktreePath = join(workspacePath, "linked");
     try {
       runGit(workspacePath, ["init", mainWorktreePath]);
-      runGit(mainWorktreePath, ["config", "user.email", "guardrails@example.com"]);
-      runGit(mainWorktreePath, ["config", "user.name", "Guardrails"]);
+      runGit(mainWorktreePath, ["config", "user.email", "sandboxed-tools@example.com"]);
+      runGit(mainWorktreePath, ["config", "user.name", "SandboxedTools"]);
       writeFileSync(join(mainWorktreePath, "README.md"), "initial\n");
       runGit(mainWorktreePath, ["add", "README.md"]);
       runGit(mainWorktreePath, ["commit", "-m", "initial"]);
@@ -144,7 +144,7 @@ const approvingUi = { confirm: async () => true };
 // 拡張 factory を stub API で読み込み、registerTool されたツールを取り出す
 const captureRegisteredTools = (): Map<string, any> => {
   const registered = new Map<string, any>();
-  guardrailsExtension({
+  sandboxedToolsExtension({
     registerTool: (tool: any) => registered.set(tool.name, tool),
   } as any);
   return registered;
@@ -419,7 +419,7 @@ read:
 
   it("edit は read 許可後も write チェックで止まる", async () => {
     const editTool = captureRegisteredTools().get("edit");
-    const homeNotePath = join(homedir(), "guardrails-edit-write-gate.txt");
+    const homeNotePath = join(homedir(), "sandboxed-tools-edit-write-gate.txt");
     await assert.rejects(
       () =>
         editTool.execute("t", { path: homeNotePath, edits: [] }, undefined, undefined, {
@@ -439,7 +439,7 @@ describe("§2.1 画像ファイルの read", () => {
 
   function cachePath(cacheRoot: string, imageBytes: Buffer): string {
     const imageHash = createHash("sha256").update(imageBytes).digest("hex");
-    return join(cacheRoot, "pi", "guardrails", "ocr", "v1", `${imageHash}.md`);
+    return join(cacheRoot, "pi", "sandboxed-tools", "ocr", "v1", `${imageHash}.md`);
   }
 
   async function withOcrCache(cacheRoot: string, test: () => Promise<void> | void): Promise<void> {
@@ -716,7 +716,7 @@ describe("§3.a パス文字列の解決", () => {
 
 describe("§3.b glob パターン", () => {
   const withGlobDir = (test: (dir: string) => Promise<void> | void) => async () => {
-    const dir = mkdtempSync(join(tmpdir(), "guardrails-glob-"));
+    const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-glob-"));
     try {
       await test(dir);
     } finally {
@@ -865,7 +865,7 @@ describe("§3.c アクションの決定", () => {
   const projectRoot = "/workspace/project";
 
   const withProjectEnvFile = (test: (dir: string) => void) => () => {
-    const dir = mkdtempSync(join(tmpdir(), "guardrails-action-"));
+    const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-action-"));
     try {
       writeFileSync(join(dir, ".env"), "");
       test(dir);
@@ -986,23 +986,27 @@ commands:
     withSandbox(
       `
 read:
-  ask: [~/guardrails-ask-dir]
+  ask: [~/sandboxed-tools-ask-dir]
 `,
       "/cwd",
       async (sandbox) => {
         let title = "";
-        await sandbox.authorizePath("read", join(homedir(), "guardrails-ask-dir", "file.txt"), {
-          cwd: "/cwd",
-          hasUI: true,
-          ui: {
-            confirm: async () => true,
-            select: async (dialogTitle) => {
-              title = dialogTitle;
-              return "Yes, allow";
+        await sandbox.authorizePath(
+          "read",
+          join(homedir(), "sandboxed-tools-ask-dir", "file.txt"),
+          {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: {
+              confirm: async () => true,
+              select: async (dialogTitle) => {
+                title = dialogTitle;
+                return "Yes, allow";
+              },
             },
           },
-        });
-        assert.ok(title.includes(`matched: ${join(homedir(), "guardrails-ask-dir")}`), title);
+        );
+        assert.ok(title.includes(`matched: ${join(homedir(), "sandboxed-tools-ask-dir")}`), title);
       },
     ),
   );
@@ -1011,7 +1015,7 @@ read:
     "未設定パスの許可要求ダイアログは一致パターンなしを表示する",
     withSandbox("read: {}\nwrite: {}\n", "/cwd", async (sandbox) => {
       let title = "";
-      await sandbox.authorizePath("read", "/tmp/guardrails-unmatched.txt", {
+      await sandbox.authorizePath("read", "/tmp/sandboxed-tools-unmatched.txt", {
         cwd: "/cwd",
         hasUI: true,
         ui: {
@@ -1031,7 +1035,7 @@ describe("§3 動的拡張のライフサイクル", () => {
   const withDynamicSandbox =
     (configYaml: string, test: (dir: string, sandbox: Sandbox) => Promise<void> | void) =>
     async () => {
-      const dir = mkdtempSync(join(tmpdir(), "guardrails-dynamic-"));
+      const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-dynamic-"));
       try {
         const configPath = join(dir, "config.yaml");
         writeFileSync(configPath, configYaml);
@@ -1196,7 +1200,7 @@ describe("§3 動的拡張のライフサイクル", () => {
   );
 
   it("明示 deny は動的許可のスコープ伝播より優先する", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "guardrails-dynamic-deny-"));
+    const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-dynamic-deny-"));
     try {
       writeFileSync(join(dir, ".env"), "");
       const configPath = join(dir, "config.yaml");
@@ -1469,7 +1473,7 @@ commands:
 describe("§2・§4 確認の直列化", () => {
   const withDialogSandbox =
     (test: (dir: string, sandbox: Sandbox) => Promise<void> | void) => async () => {
-      const dir = mkdtempSync(join(tmpdir(), "guardrails-dialog-"));
+      const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-dialog-"));
       try {
         const configPath = join(dir, "config.yaml");
         writeFileSync(configPath, "read: {}\nwrite: {}\n");
@@ -1552,7 +1556,7 @@ commands:
 
 describe("§6 設定", () => {
   it("全セクションを読み込む", () => {
-    const config = parseGuardrailsConfig(`
+    const config = parseSandboxedToolsConfig(`
 read:
   allow: ["*"]
 write:
@@ -1581,7 +1585,7 @@ commands:
 describe("§6.1 bind とパスの実在保証", () => {
   const withSandboxDir =
     (test: (dir: string, configPath: string) => Promise<void> | void) => async () => {
-      const dir = mkdtempSync(join(tmpdir(), "guardrails-bind-"));
+      const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-bind-"));
       try {
         const configPath = join(dir, "config.yaml");
         writeFileSync(configPath, "");

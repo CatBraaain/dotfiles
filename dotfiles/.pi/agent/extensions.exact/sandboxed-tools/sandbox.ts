@@ -25,7 +25,7 @@ export type ToolSession = {
 
 type RuleSection = { allow?: string[]; ask?: string[]; deny?: string[] };
 
-type GuardrailsConfig = {
+type SandboxedToolsConfig = {
   read?: RuleSection;
   write?: RuleSection;
   credentials?: string[];
@@ -71,9 +71,9 @@ function asPatterns(value: unknown): string[] {
     : [];
 }
 
-export function parseGuardrailsConfig(source: string): GuardrailsConfig {
+export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig {
   const parsed = parseYaml(source) as unknown;
-  if (!isRecord(parsed)) throw new Error("guardrails config must be a mapping");
+  if (!isRecord(parsed)) throw new Error("sandboxed-tools config must be a mapping");
 
   const parseSection = (value: unknown): RuleSection | undefined => {
     if (value === undefined) return undefined;
@@ -296,7 +296,7 @@ export function resolveCommandAction(section: RuleSection | undefined, command: 
 }
 
 function getPathSection(
-  config: GuardrailsConfig,
+  config: SandboxedToolsConfig,
   operation: "read" | "write",
 ): RuleSection | undefined {
   return config[operation];
@@ -443,7 +443,7 @@ export class Sandbox {
   // the first without resolving its promise, deadlocking that tool call.
   // One global queue; split per dialog kind if contention ever matters.
   private uiQueue: Promise<void> = Promise.resolve();
-  private readonly config: GuardrailsConfig;
+  private readonly config: SandboxedToolsConfig;
   private readonly readPaths: ExpandedPathSection;
   private readonly writePaths: ExpandedPathSection;
   private readonly credentialPaths: string[];
@@ -457,7 +457,7 @@ export class Sandbox {
     configPath = join(dirname(fileURLToPath(import.meta.url)), "config.yaml"),
   ) {
     try {
-      this.config = parseGuardrailsConfig(readFileSync(configPath, "utf8"));
+      this.config = parseSandboxedToolsConfig(readFileSync(configPath, "utf8"));
     } catch {
       this.config = {};
     }
@@ -712,7 +712,7 @@ export class Sandbox {
       input: request,
       mode: options.mode,
       signal: options.signal,
-      env: { ...process.env, GUARDRAILS_PI_PACKAGE_DIR: this.piPackageDir },
+      env: { ...process.env, SANDBOXED_TOOLS_PI_PACKAGE_DIR: this.piPackageDir },
     });
     const response = parseRunToolsResponse(execution);
     if (!response.ok) throw new Error(response.error);

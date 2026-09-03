@@ -19,7 +19,7 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
 
 ## agent/package.json
 
-拡張（rules / agents / guardrails）が import するランタイム依存を定義する。pi 本体は拡張の依存を同梱しないため、各マシンで `~/.pi/agent/` にて一度だけ install が必要（node_modules は chezmoi 管理外）:
+拡張（rules / agents / sandboxed-tools）が import するランタイム依存を定義する。pi 本体は拡張の依存を同梱しないため、各マシンで `~/.pi/agent/` にて一度だけ install が必要（node_modules は chezmoi 管理外）:
 
 ```sh
 cd ~/.pi/agent && bun install
