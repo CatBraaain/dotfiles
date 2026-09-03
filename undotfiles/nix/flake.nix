@@ -75,6 +75,7 @@
             noto-fonts-cjk-sans
             oxfmt
             oxlint
+            pandoc
             pnpm
             powershell
             ripgrep
