@@ -9,8 +9,11 @@ import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-a
 
 export type Action = "allow" | "deny" | "ask";
 
+/** Where a command pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
+export type MatchSpan = { candidate: string; index: number; length: number };
+
 /** Action resolution result together with the pattern that caused it (§2.3). */
-export type ActionMatch = { action: Action; matched?: string };
+export type ActionMatch = { action: Action; matched?: string; matchSpan?: MatchSpan };
 
 export type ToolName = "read" | "write" | "edit" | "grep" | "find" | "ls" | "bash";
 
@@ -251,14 +254,22 @@ export function splitCommandSegments(command: string): string[] {
   return segments;
 }
 
-function findCommandPattern(patterns: string[] | undefined, candidate: string): string | undefined {
+type CommandPatternMatch = { pattern: string; index: number; length: number };
+
+function findCommandPattern(
+  patterns: string[] | undefined,
+  candidate: string,
+): CommandPatternMatch | undefined {
   for (const pattern of patterns ?? []) {
     for (const expandedPattern of expandBraces(pattern)) {
-      if (expandedPattern === "*") return "*";
+      if (expandedPattern === "*")
+        return { pattern: expandedPattern, index: 0, length: candidate.length };
       if (hasGlob(expandedPattern)) {
-        if (globToRegExp(expandedPattern).test(candidate)) return expandedPattern;
+        const match = globToRegExp(expandedPattern).exec(candidate);
+        if (match !== null)
+          return { pattern: expandedPattern, index: match.index, length: match[0].length };
       } else if (candidate === expandedPattern || candidate.startsWith(`${expandedPattern} `)) {
-        return expandedPattern;
+        return { pattern: expandedPattern, index: 0, length: expandedPattern.length };
       }
     }
   }
@@ -270,13 +281,22 @@ export function resolveCommandActionMatch(
   command: string,
 ): ActionMatch {
   if (!section) return { action: "deny" };
+  const withSpan = (
+    action: Action,
+    match: CommandPatternMatch,
+    candidate: string,
+  ): ActionMatch => ({
+    action,
+    matched: match.pattern,
+    matchSpan: { candidate, index: match.index, length: match.length },
+  });
   const actionFor = (candidate: string): ActionMatch => {
     const deny = findCommandPattern(section.deny, candidate);
-    if (deny !== undefined) return { action: "deny", matched: deny };
+    if (deny !== undefined) return withSpan("deny", deny, candidate);
     const ask = findCommandPattern(section.ask, candidate);
-    if (ask !== undefined) return { action: "ask", matched: ask };
+    if (ask !== undefined) return withSpan("ask", ask, candidate);
     const allow = findCommandPattern(section.allow, candidate);
-    if (allow !== undefined) return { action: "allow", matched: allow };
+    if (allow !== undefined) return withSpan("allow", allow, candidate);
     return { action: "deny" };
   };
   // Parse fallback: a command that yields no segments (empty or unparsable)
@@ -405,6 +425,47 @@ export function resolvePathAction(
 /** Dialog line explaining which pattern caused the confirmation (§2.3). */
 function matchedPatternNote(matched: string | undefined): string {
   return matched === undefined ? "no matching pattern (default ask)" : `matched: ${matched}`;
+}
+
+// Selective ANSI (color only, no full reset) so the dialog's accent/bold styling survives.
+const MATCH_HIGHLIGHT = "\x1b[33m";
+const MATCH_HIGHLIGHT_END = "\x1b[39m";
+
+/** Characters that may surround a shell word in the raw command string. */
+const WORD_BOUNDARY = /[\s;&|()<>"'`]/;
+
+function isWordBoundary(character: string | undefined): boolean {
+  return character === undefined || WORD_BOUNDARY.test(character);
+}
+
+/** First occurrence of `text` in `raw` that starts and ends on shell word boundaries. */
+function findWordBoundaryIndex(raw: string, text: string): number {
+  for (let at = raw.indexOf(text); at !== -1; at = raw.indexOf(text, at + 1)) {
+    if (isWordBoundary(raw[at - 1]) && isWordBoundary(raw[at + text.length])) return at;
+  }
+  return -1;
+}
+
+/**
+ * Highlight the matched span inside the raw command for the ask dialog (§2.3).
+ * The span lives in the reassembled candidate (quotes stripped, head words skipped),
+ * so map it back: try the whole candidate first, then the matched text alone.
+ * Return the raw command unchanged when neither is found (quoted commands).
+ */
+function highlightCommandMatch(raw: string, span: MatchSpan): string {
+  const candidateAt = findWordBoundaryIndex(raw, span.candidate);
+  const start =
+    candidateAt !== -1
+      ? candidateAt + span.index
+      : findWordBoundaryIndex(raw, span.candidate.slice(span.index, span.index + span.length));
+  if (start === -1) return raw;
+  return (
+    raw.slice(0, start) +
+    MATCH_HIGHLIGHT +
+    raw.slice(start, start + span.length) +
+    MATCH_HIGHLIGHT_END +
+    raw.slice(start + span.length)
+  );
 }
 
 function addParentDirectories(args: string[], targetPath: string): void {
@@ -677,15 +738,19 @@ export class Sandbox {
   }
 
   authorizeCommand(command: string, context: ToolContext): Promise<void> {
-    const { action, matched } = resolveCommandActionMatch(this.config.commands, command);
+    const { action, matched, matchSpan } = resolveCommandActionMatch(this.config.commands, command);
     if (action === "allow") return Promise.resolve();
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
     const note = matchedPatternNote(matched);
+    const display =
+      matchSpan !== undefined && !process.env.NO_COLOR
+        ? highlightCommandMatch(command, matchSpan)
+        : command;
     return this.withUiLock(async () => {
       if (ui.select) {
-        const selectedOption = await ui.select(`Allow command?\n${command}\n${note}`, [
+        const selectedOption = await ui.select(`Allow command?\n${display}\n${note}`, [
           ALLOW_OPTION,
           DENY_OPTION,
         ]);
@@ -693,7 +758,7 @@ export class Sandbox {
           throw await this.deniedError(`Command denied by user: ${command}`, ui);
         return;
       }
-      if (await ui.confirm("Allow command?", `${command}\n${note}`)) return;
+      if (await ui.confirm("Allow command?", `${display}\n${note}`)) return;
       throw await this.deniedError(`Command denied by user: ${command}`, ui);
     });
   }

@@ -113,6 +113,9 @@ function runGit(cwd: string, args: string[]): void {
   execFileSync("git", args, { cwd, stdio: "pipe" });
 }
 
+/** Expected ANSI-wrapped dialog highlight for a matched command span. */
+const highlighted = (text: string): string => `\u001b[33m${text}\u001b[39m`;
+
 function withLinkedWorktree(
   test: (
     mainWorktreePath: string,
@@ -905,12 +908,16 @@ describe("§3.c アクションの決定", () => {
 });
 
 describe("§2.3 確認ダイアログの一致パターン表示", () => {
-  it("コマンド ask は一致したパターンを返す", () => {
+  it("コマンド ask は一致したパターンと一致範囲を返す", () => {
     const match = resolveCommandActionMatch(
       { allow: ["*"], ask: ["git push", "gh pr create"], deny: [] },
       "git push -u origin main",
     );
-    assert.deepEqual(match, { action: "ask", matched: "git push" });
+    assert.deepEqual(match, {
+      action: "ask",
+      matched: "git push",
+      matchSpan: { candidate: "git push -u origin main", index: 0, length: 8 },
+    });
   });
 
   it("ブレース展開後のパターンを返す", () => {
@@ -918,7 +925,20 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
       { allow: [], ask: ["{npm,pnpm} publish"], deny: [] },
       "npm publish",
     );
-    assert.deepEqual(match, { action: "ask", matched: "npm publish" });
+    assert.deepEqual(match, {
+      action: "ask",
+      matched: "npm publish",
+      matchSpan: { candidate: "npm publish", index: 0, length: 11 },
+    });
+  });
+
+  it("glob パターンはセグメント全体を一致範囲として返す", () => {
+    const match = resolveCommandActionMatch({ allow: [], ask: ["git p*"], deny: [] }, "git push");
+    assert.deepEqual(match, {
+      action: "ask",
+      matched: "git p*",
+      matchSpan: { candidate: "git push", index: 0, length: 8 },
+    });
   });
 
   it("複合コマンドは ask セグメントの一致パターンを返す", () => {
@@ -926,7 +946,11 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
       { allow: ["ls"], ask: ["git push"], deny: [] },
       "ls; git push -u origin main",
     );
-    assert.deepEqual(match, { action: "ask", matched: "git push" });
+    assert.deepEqual(match, {
+      action: "ask",
+      matched: "git push",
+      matchSpan: { candidate: "git push -u origin main", index: 0, length: 8 },
+    });
   });
 
   it("deny が優先されるとき deny の一致パターンを返す", () => {
@@ -934,7 +958,11 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
       { allow: ["*"], ask: ["git push"], deny: ["sudo"] },
       "sudo git push",
     );
-    assert.deepEqual(match, { action: "deny", matched: "sudo" });
+    assert.deepEqual(match, {
+      action: "deny",
+      matched: "sudo",
+      matchSpan: { candidate: "sudo git push", index: 0, length: 4 },
+    });
   });
 
   it("どのパターンにも一致しないコマンドは matched なしの deny", () => {
@@ -977,6 +1005,124 @@ commands:
           },
         });
         assert.ok(title.includes("matched: git push"), title);
+        assert.ok(title.includes(highlighted("git push")), title);
+      },
+    ),
+  );
+
+  it(
+    "コマンド確認ダイアログは先頭の VAR= を読み飛ばした位置を強調する",
+    withSandbox(
+      `
+commands:
+  allow: ["*"]
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        let title = "";
+        await sandbox.authorizeCommand("FOO=1 git push origin main", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => true,
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
+            },
+          },
+        });
+        assert.ok(title.includes(`FOO=1 ${highlighted("git push")} origin main`), title);
+      },
+    ),
+  );
+
+  it(
+    "コマンド確認ダイアログは語境界にない部分一致を飛ばして次の出現を強調する",
+    withSandbox(
+      `
+commands:
+  allow: ["*"]
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        let title = "";
+        await sandbox.authorizeCommand("echo mygit pushx; git push", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => true,
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
+            },
+          },
+        });
+        assert.ok(title.includes(`echo mygit pushx; ${highlighted("git push")}`), title);
+      },
+    ),
+  );
+
+  it(
+    "一致範囲がコマンド文字列で見つからないときは強調しない",
+    withSandbox(
+      `
+commands:
+  allow: ["*"]
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        let title = "";
+        await sandbox.authorizeCommand('git "push" origin main', {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => true,
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
+            },
+          },
+        });
+        assert.ok(title.includes('git "push" origin main'), title);
+        assert.ok(!title.includes("\u001b[33m"), title);
+      },
+    ),
+  );
+
+  it(
+    "NO_COLOR が設定されているときは強調しない",
+    withSandbox(
+      `
+commands:
+  allow: ["*"]
+  ask: [git push]
+`,
+      "/cwd",
+      async (sandbox) => {
+        const previousNoColor = process.env.NO_COLOR;
+        process.env.NO_COLOR = "1";
+        let title = "";
+        try {
+          await sandbox.authorizeCommand("git push origin main", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: {
+              confirm: async () => true,
+              select: async (dialogTitle) => {
+                title = dialogTitle;
+                return "Yes, allow";
+              },
+            },
+          });
+        } finally {
+          if (previousNoColor === undefined) delete process.env.NO_COLOR;
+          else process.env.NO_COLOR = previousNoColor;
+        }
+        assert.ok(title.includes("git push origin main"), title);
+        assert.ok(!title.includes("\u001b[33m"), title);
       },
     ),
   );
@@ -1275,7 +1421,9 @@ commands:
             },
           },
         });
-        assert.deepEqual(confirmedCommands, ["git push origin main\nmatched: git push"]);
+        assert.deepEqual(confirmedCommands, [
+          `${highlighted("git push")} origin main\nmatched: git push`,
+        ]);
       },
     ),
   );
