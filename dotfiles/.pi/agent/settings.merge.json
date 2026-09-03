@@ -50,10 +50,10 @@
         // "skills/*/grill-me",
         "skills/*/grilling",
         "skills/*/code-review",
-        "skills/*/prototype",
-        "skills/*/diagnosing-bugs",
+        // "skills/*/prototype",
+        "skills/*/diagnosing-bugs"
         // "skills/*/research",
-        "skills/*/tdd"
+        // "skills/*/tdd"
       ],
       "prompts": [],
       "themes": []
