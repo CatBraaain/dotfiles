@@ -1,7 +1,7 @@
 ---
 name: git
 description: >-
-  git の commit・branch・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。「コミットして」「コミットを分けて」「push して」「ブランチ切って」「PR 作って」「OSS にコントリビュートしたい」等の git 操作で使う。
+  git の commit・branch・merge・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。「コミットして」「コミットを分けて」「マージして」「push して」「ブランチ切って」「PR 作って」「OSS にコントリビュートしたい」等の git 操作で使う。
 ---
 
 # Git
@@ -12,7 +12,7 @@ git の commit・branch・push・PR に関する判断規則を所有する。
 
 リポジトリ固有の規約が、常に本標準の一般規則より優先する。
 
-- 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
+- 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、worktree ブランチの統合、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
 - 適用しない: コード変更そのものの品質（readable-code 等）、調査手段の選択（research-strategy）。
 
 ## Decision Ladder: リポジトリ規約の確認
@@ -107,6 +107,19 @@ git reset --hard backup/split-<timestamp>
 ## branch
 
 branch 名・分岐元は、リポジトリの branch strategy に従う。文書化されていないときは、既存 branch の慣習に従う。
+
+## worktree ブランチの統合
+
+`git worktree` で運用するローカルの使い捨てブランチを統合先（main 等）へマージするときは、履歴を線形に保つ。
+
+1. 統合先で `git merge --ff-only <branch>` を実行する。
+2. 統合先が diverge して失敗するときは、対象ブランチを `git rebase <統合先>` してから再度 ff-only マージする。
+3. `--no-ff` による merge commit と `--squash` による squash 統合は行わない。
+
+- 適用する: ローカルの使い捨て worktree ブランチの統合。この統合のための rebase は、「コミットの作成と分割」の rebase 禁止の対象外とする。
+- 適用しない: remote へ push 済みで共有しているブランチ。トポロジーとして作業のまとまりを記録したいタスクは、worktree ではなく PR で統合する。
+
+検証: 統合後に `git log --graph --oneline -n <統合した commit 数 + 2>` を確認し、merge commit がなく線形であること。
 
 ## 実行の境界
 
