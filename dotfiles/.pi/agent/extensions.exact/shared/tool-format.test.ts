@@ -184,6 +184,17 @@ describe("formatToolResultSummary", () => {
     assert.equal(summary, "2 lines");
   });
 
+  it("read は画像を新規抽出したときOCR抽出を行数に添える", () => {
+    const summary = formatToolResultSummary(
+      "read",
+      { path: "a.png" },
+      { content: [{ type: "text", text: "a\nb\n" }], details: { generated: true } },
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "OCR extracted, 2 lines");
+  });
+
   it("grep はマッチ行だけを数えて matches を表示する", () => {
     const output = ["a.txt-1- before", "a.txt:2: match", "b.txt:3- context", "b.txt:4: match"].join(
       "\n",

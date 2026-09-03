@@ -1,6 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashTool,
@@ -85,44 +95,116 @@ function imageMimeType(path: string): string | null {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-export function createImageReadBlockError(
-  imagePath: string,
-  detectedMimeType = imageMimeType(imagePath),
-): Error | undefined {
-  const isImage =
-    detectedMimeType === null
-      ? IMAGE_EXTENSIONS.has(extname(imagePath).toLowerCase())
-      : detectedMimeType.startsWith("image/");
-  if (!isImage) return undefined;
+function isImageFile(imagePath: string, detectedMimeType = imageMimeType(imagePath)): boolean {
+  return detectedMimeType === null
+    ? IMAGE_EXTENSIONS.has(extname(imagePath).toLowerCase())
+    : detectedMimeType.startsWith("image/");
+}
 
-  const ocrPath = `${imagePath}.ocr.md`;
-  const text = existsSync(ocrPath)
-    ? [
-        "IMAGE_BINARY_BLOCKED",
-        "",
-        "画像は直接読み込めない。",
-        "画像内の文字情報が必要な場合、抽出済みのOCRファイルを読み込むこと:",
-        "",
-        ocrPath,
-      ].join("\n")
-    : [
-        "IMAGE_BINARY_BLOCKED",
-        "",
-        "画像バイナリの直接読み込みは禁止されている。",
-        "文字情報以外（レイアウト・見た目など）は読み取る手段がないため、ソースコード参照など別の手段で確認すること。",
-        "画像内の文字情報が必要な場合だけ、AGENTS.mdの画像OCR手順に従うこと。",
-        "",
-        "1. 対応するOCRファイルを確認する:",
-        `   ${ocrPath}`,
-        "",
-        "2. OCRファイルが存在しない場合:",
-        "   AGENTS.mdに記載されたMinerU CLIを実行して作成する。",
-        "",
-        "3. 作成済みのOCRファイルをread toolで読み込む。",
-        "",
-        "元画像をVision入力へ自動添付してはならない。",
-      ].join("\n");
-  return new Error(text);
+const OCR_GENERATION_NOTE = [
+  "このテキストはOCR抽出であり、原画像ではなく抽出誤りを含みうる。",
+  "金額、日付、固有名詞、契約・法的文言のいずれかが含まれる場合は、原画像との照合をオーナーに依頼すること。",
+  "",
+].join("\n");
+
+function findFirstMarkdown(directory: string): string | undefined {
+  const entries = [...readdirSync(directory, { withFileTypes: true })].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  for (const entry of entries) {
+    const fullPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      const found = findFirstMarkdown(fullPath);
+      if (found !== undefined) return found;
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      return fullPath;
+    }
+  }
+  return undefined;
+}
+
+function runMineru(
+  imagePath: string,
+): { ok: true; markdown: string } | { ok: false; message: string } {
+  const outputDirectory = mkdtempSync(join(tmpdir(), "guardrails-mineru-"));
+  try {
+    const result = spawnSync(
+      "mineru",
+      ["-p", imagePath, "-o", outputDirectory, "-m", "ocr", "-b", "pipeline"],
+      { encoding: "utf8", env: { ...process.env, ORT_DISABLE_TELEMETRY: "1" } },
+    );
+    if (result.error) {
+      const reason =
+        (result.error as NodeJS.ErrnoException).code === "ENOENT"
+          ? "mineru is not installed"
+          : result.error.message;
+      return { ok: false, message: `MinerU execution failed: ${reason}` };
+    }
+    if (result.status !== 0) {
+      const stderr = (result.stderr ?? "").trim();
+      return { ok: false, message: `MinerU exited with status ${result.status}: ${stderr}` };
+    }
+    const markdownPath = findFirstMarkdown(outputDirectory);
+    if (markdownPath === undefined) {
+      return { ok: false, message: "MinerU produced no markdown output" };
+    }
+    return { ok: true, markdown: readFileSync(markdownPath, "utf8") };
+  } finally {
+    rmSync(outputDirectory, { recursive: true, force: true });
+  }
+}
+
+const OCR_CACHE_VERSION = "v1";
+
+function isPathWithin(path: string, parent: string): boolean {
+  const relativePath = relative(parent, path);
+  return relativePath === "" || (!relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+}
+
+function ocrCacheRoot(imagePath: string): string {
+  const defaultCacheRoot = join(process.env.HOME || homedir(), ".cache");
+  const configuredCacheRoot = process.env.XDG_CACHE_HOME;
+  if (!configuredCacheRoot) return defaultCacheRoot;
+
+  const resolvedCacheRoot = resolve(configuredCacheRoot);
+  const isWithinProject = isPathWithin(resolvedCacheRoot, process.cwd());
+  const isAdjacentToImage = isPathWithin(resolvedCacheRoot, dirname(imagePath));
+  return isWithinProject || isAdjacentToImage ? defaultCacheRoot : resolvedCacheRoot;
+}
+
+function imageOcrCachePath(imagePath: string): string {
+  const imageHash = createHash("sha256").update(readFileSync(imagePath)).digest("hex");
+  return join(
+    ocrCacheRoot(imagePath),
+    "pi",
+    "guardrails",
+    "ocr",
+    OCR_CACHE_VERSION,
+    `${imageHash}.md`,
+  );
+}
+
+function createImageReadResult(imagePath: string): {
+  content: [{ type: "text"; text: string }];
+  details: { generated: boolean };
+} {
+  const cachePath = imageOcrCachePath(imagePath);
+  if (existsSync(cachePath)) {
+    return {
+      content: [{ type: "text", text: readFileSync(cachePath, "utf8") }],
+      details: { generated: false },
+    };
+  }
+
+  const mineru = runMineru(imagePath);
+  if (!mineru.ok) throw new Error(mineru.message);
+
+  mkdirSync(dirname(cachePath), { recursive: true, mode: 0o700 });
+  writeFileSync(cachePath, mineru.markdown, { encoding: "utf8", mode: 0o600 });
+  return {
+    content: [{ type: "text", text: OCR_GENERATION_NOTE + mineru.markdown }],
+    details: { generated: true },
+  };
 }
 
 /** Append the EROFS guidance to the bash tool result so the model sees it at failure time. */
@@ -180,7 +262,11 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     tool: any,
     name: string,
     getCall: (args: any) => string,
-    run: (args: any, signal: AbortSignal | undefined, context: any) => Promise<AgentToolResult<any>>,
+    run: (
+      args: any,
+      signal: AbortSignal | undefined,
+      context: any,
+    ) => Promise<AgentToolResult<any>>,
     renderOptions?: { renderCall?: (args: any, theme: any) => Text },
   ) => {
     pi.registerTool({
@@ -200,14 +286,16 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
     });
   };
   registerTextTool(
-    readTool,
+    {
+      ...readTool,
+      description: `${readTool.description} Images are internally processed by OCR or image analysis and returned only as text. Layout, appearance, color, and other non-text information are unavailable. Image binary is never automatically attached as Vision input.`,
+    },
     "read",
     (args) => args.path,
     async (args, signal, context) => {
       const imagePath = resolve(cwd, args.path);
       await sandbox.authorizePath("read", imagePath, context);
-      const imageReadBlockError = createImageReadBlockError(imagePath);
-      if (imageReadBlockError) throw imageReadBlockError;
+      if (isImageFile(imagePath)) return createImageReadResult(imagePath);
       return sandbox.runTool("read", args, { mode: "fs", signal });
     },
     { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },

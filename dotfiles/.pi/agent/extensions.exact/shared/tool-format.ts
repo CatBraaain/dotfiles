@@ -165,8 +165,11 @@ export function formatToolResultSummary(
       const editCount = Array.isArray(args.edits) ? args.edits.length : 1;
       return theme.fg("success", `edited ${editCount} block(s)`);
     }
-    case "read":
-      return theme.fg("success", `${countResultLines(resultText(result))} lines`);
+    case "read": {
+      const generated = (result.details as { generated?: boolean } | undefined)?.generated === true;
+      const lines = countResultLines(resultText(result));
+      return theme.fg("success", `${generated ? "OCR extracted, " : ""}${lines} lines`);
+    }
     case "grep":
       return theme.fg("success", `${countMatchLines(resultText(result))} matches`);
     case "find":

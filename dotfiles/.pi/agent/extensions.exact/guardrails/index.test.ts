@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import guardrailsExtension, {
   COMMAND_PREVIEW_LIMIT,
-  createImageReadBlockError,
   classifyReadPath,
   countMatchLines,
   countResultLines,
@@ -62,6 +62,49 @@ function withTempDirectory(test: (directory: string) => Promise<void> | void): (
       await test(directory);
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  };
+}
+
+function stubMineruScript(mode: "generate" | "fail"): string {
+  if (mode === "fail") {
+    return '#!/bin/sh\necho "stub mineru failure" >&2\nexit 3\n';
+  }
+  return [
+    "#!/bin/sh",
+    "outdir=",
+    "prev=",
+    'for arg in "$@"; do',
+    '  if [ "$prev" = "-o" ]; then outdir="$arg"; fi',
+    '  prev="$arg"',
+    "done",
+    'mkdir -p "$outdir/out"',
+    "printf '# stub ocr\\n\\nrecognized stub text\\n' > \"$outdir/out/doc.md\"",
+    "",
+  ].join("\n");
+}
+
+function withImageDirectory(
+  mineruMode: "generate" | "fail" | "missing",
+  test: (directory: string) => Promise<void> | void,
+): () => Promise<void> {
+  return async () => {
+    const previousPath = process.env.PATH;
+    let stubDirectory: string | undefined;
+    if (mineruMode === "missing") {
+      process.env.PATH = "/nonexistent-guardrails-mineru";
+    } else {
+      stubDirectory = mkdtempSync(join(tmpdir(), "guardrails-mineru-stub-"));
+      writeFileSync(join(stubDirectory, "mineru"), stubMineruScript(mineruMode), {
+        mode: 0o755,
+      });
+      process.env.PATH = `${stubDirectory}${delimiter}${previousPath}`;
+    }
+    try {
+      await withTempDirectory(test)();
+    } finally {
+      if (stubDirectory) rmSync(stubDirectory, { recursive: true, force: true });
+      process.env.PATH = previousPath;
     }
   };
 }
@@ -392,47 +435,216 @@ describe("§2.1 画像ファイルの read", () => {
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL0IAAAAABJRU5ErkJggg==",
     "base64",
   );
+  const stubMarkdown = "# stub ocr\n\nrecognized stub text\n";
+
+  function cachePath(cacheRoot: string, imageBytes: Buffer): string {
+    const imageHash = createHash("sha256").update(imageBytes).digest("hex");
+    return join(cacheRoot, "pi", "guardrails", "ocr", "v1", `${imageHash}.md`);
+  }
+
+  async function withOcrCache(cacheRoot: string, test: () => Promise<void> | void): Promise<void> {
+    const previousCacheRoot = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cacheRoot;
+    try {
+      await test();
+    } finally {
+      if (previousCacheRoot === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previousCacheRoot;
+    }
+  }
+
+  it("read の説明文は画像の文字情報だけを返すことを示す", () => {
+    const description = captureRegisteredTools().get("read").description;
+    assert.match(description, /OCR or image analysis/);
+    assert.match(description, /Layout, appearance, color/);
+    assert.match(description, /never automatically attached as Vision input/);
+  });
 
   it(
-    "OCRファイルがある画像をエラーでブロックしOCRファイルを案内する",
-    withTempDirectory(async (directory) => {
-      const imagePath = join(directory, "image");
-      writeFileSync(imagePath, pngBytes);
-      writeFileSync(`${imagePath}.ocr.md`, "recognized text");
+    "画像の read は新規抽出したテキストに照合依頼を添え、隠しキャッシュへ保存する",
+    withImageDirectory("generate", async (directory) => {
+      const cacheRoot = join(directory, "cache");
+      const projectDirectory = join(directory, "project");
+      await withOcrCache(cacheRoot, async () => {
+        const imagePath = join(projectDirectory, "image.png");
+        const ocrCachePath = cachePath(cacheRoot, pngBytes);
+        mkdirSync(projectDirectory);
+        writeFileSync(imagePath, pngBytes);
 
-      const readTool = captureRegisteredTools().get("read");
-      const expectedErrorMessage = `IMAGE_BINARY_BLOCKED\n\n画像は直接読み込めない。\n画像内の文字情報が必要な場合、抽出済みのOCRファイルを読み込むこと:\n\n${imagePath}.ocr.md`;
-      await assert.rejects(
-        () => readTool.execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
-        { message: expectedErrorMessage },
-      );
+        const result = await captureRegisteredTools()
+          .get("read")
+          .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
+
+        assert.equal(result.content.length, 1);
+        assert.equal(result.content[0].type, "text");
+        assert.ok(result.content[0].text.startsWith("このテキストはOCR抽出であり"));
+        assert.match(result.content[0].text, /金額、日付、固有名詞、契約・法的文言/);
+        assert.match(result.content[0].text, /原画像との照合をオーナーに依頼/);
+        assert.ok(result.content[0].text.endsWith(stubMarkdown));
+        assert.equal(result.details.generated, true);
+        assert.equal(existsSync(`${imagePath}.ocr.md`), false);
+        assert.equal(ocrCachePath.startsWith(`${projectDirectory}/`), false);
+        assert.equal(existsSync(ocrCachePath), true);
+      });
     }),
   );
 
   it(
-    "OCRファイルがない画像をエラーでブロックしOCR手順と代替手段を案内する",
-    withTempDirectory(async (directory) => {
-      const imagePath = join(directory, "image");
-      writeFileSync(imagePath, pngBytes);
+    "プロジェクト配下のXDG_CACHE_HOMEは既定の隠しキャッシュへフォールバックする",
+    withImageDirectory("generate", async (directory) => {
+      const projectDirectory = join(directory, "project");
+      const defaultCacheRoot = join(directory, "home", ".cache");
+      const previousCwd = process.cwd();
+      const previousHome = process.env.HOME;
+      mkdirSync(projectDirectory);
+      process.chdir(projectDirectory);
+      process.env.HOME = join(directory, "home");
+      try {
+        await withOcrCache(join(projectDirectory, ".cache"), async () => {
+          const imagePath = join(projectDirectory, "image.png");
+          writeFileSync(imagePath, pngBytes);
 
-      const readTool = captureRegisteredTools().get("read");
-      const expectedErrorMessage = `IMAGE_BINARY_BLOCKED\n\n画像バイナリの直接読み込みは禁止されている。\n文字情報以外（レイアウト・見た目など）は読み取る手段がないため、ソースコード参照など別の手段で確認すること。\n画像内の文字情報が必要な場合だけ、AGENTS.mdの画像OCR手順に従うこと。\n\n1. 対応するOCRファイルを確認する:\n   ${imagePath}.ocr.md\n\n2. OCRファイルが存在しない場合:\n   AGENTS.mdに記載されたMinerU CLIを実行して作成する。\n\n3. 作成済みのOCRファイルをread toolで読み込む。\n\n元画像をVision入力へ自動添付してはならない。`;
-      await assert.rejects(
-        () => readTool.execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
-        { message: expectedErrorMessage },
-      );
+          await captureRegisteredTools()
+            .get("read")
+            .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
+
+          assert.equal(existsSync(join(projectDirectory, ".cache")), false);
+          assert.equal(existsSync(cachePath(defaultCacheRoot, pngBytes)), true);
+        });
+      } finally {
+        process.chdir(previousCwd);
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+      }
     }),
   );
 
-  it("MIMEタイプを判定できないときは画像拡張子でブロックする", () => {
-    const imageReadBlockError = createImageReadBlockError("/tmp/image.png", null);
-    assert.notEqual(imageReadBlockError, undefined);
-  });
+  it(
+    "画像の隣のXDG_CACHE_HOMEは既定の隠しキャッシュへフォールバックする",
+    withImageDirectory("generate", async (directory) => {
+      const imageDirectory = join(directory, "images");
+      const projectDirectory = join(directory, "project");
+      const defaultCacheRoot = join(directory, "home", ".cache");
+      const previousCwd = process.cwd();
+      const previousHome = process.env.HOME;
+      mkdirSync(imageDirectory);
+      mkdirSync(projectDirectory);
+      process.chdir(projectDirectory);
+      process.env.HOME = join(directory, "home");
+      try {
+        await withOcrCache(imageDirectory, async () => {
+          const imagePath = join(imageDirectory, "image.png");
+          writeFileSync(imagePath, pngBytes);
 
-  it("判定済みの非画像MIMEタイプはブロックしない", () => {
-    const imageReadBlockError = createImageReadBlockError("/tmp/image.png", "text/plain");
-    assert.equal(imageReadBlockError, undefined);
-  });
+          await captureRegisteredTools()
+            .get("read")
+            .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
+
+          assert.equal(existsSync(join(imageDirectory, "pi")), false);
+          assert.equal(existsSync(cachePath(defaultCacheRoot, pngBytes)), true);
+        });
+      } finally {
+        process.chdir(previousCwd);
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+      }
+    }),
+  );
+
+  it(
+    "画像の read はキャッシュしたテキストを注意書きなしで返す",
+    withImageDirectory("fail", async (directory) => {
+      await withOcrCache(join(directory, "cache"), async () => {
+        const imageDirectory = join(directory, "images");
+        const imagePath = join(imageDirectory, "image.png");
+        const ocrCachePath = cachePath(join(directory, "cache"), pngBytes);
+        mkdirSync(imageDirectory);
+        writeFileSync(imagePath, pngBytes);
+        mkdirSync(dirname(ocrCachePath), { recursive: true });
+        writeFileSync(ocrCachePath, "cached ocr text");
+
+        const result = await captureRegisteredTools()
+          .get("read")
+          .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
+
+        assert.equal(result.content.length, 1);
+        assert.equal(result.content[0].type, "text");
+        assert.equal(result.content[0].text, "cached ocr text");
+        assert.doesNotMatch(result.content[0].text, /このテキストはOCR抽出/);
+        assert.equal(result.details.generated, false);
+      });
+    }),
+  );
+
+  it(
+    "同一パスの画像内容が変わると新しいハッシュのキャッシュへ再抽出する",
+    withImageDirectory("generate", async (directory) => {
+      await withOcrCache(join(directory, "cache"), async () => {
+        const imageDirectory = join(directory, "images");
+        const imagePath = join(imageDirectory, "image.png");
+        const changedPngBytes = Buffer.from(pngBytes);
+        changedPngBytes[20] ^= 1;
+        mkdirSync(imageDirectory);
+        writeFileSync(imagePath, pngBytes);
+
+        const readTool = captureRegisteredTools().get("read");
+        const first = await readTool.execute("t", { path: imagePath }, undefined, undefined, {
+          hasUI: false,
+        });
+        writeFileSync(imagePath, changedPngBytes);
+        const second = await readTool.execute("t", { path: imagePath }, undefined, undefined, {
+          hasUI: false,
+        });
+
+        assert.equal(first.details.generated, true);
+        assert.equal(second.details.generated, true);
+        assert.equal(existsSync(cachePath(join(directory, "cache"), pngBytes)), true);
+        assert.equal(existsSync(cachePath(join(directory, "cache"), changedPngBytes)), true);
+      });
+    }),
+  );
+
+  it(
+    "mineruが未導入のときはエラー",
+    withImageDirectory("missing", async (directory) => {
+      await withOcrCache(join(directory, "cache"), async () => {
+        const imageDirectory = join(directory, "images");
+        const imagePath = join(imageDirectory, "image.png");
+        mkdirSync(imageDirectory);
+        writeFileSync(imagePath, pngBytes);
+
+        await assert.rejects(
+          () =>
+            captureRegisteredTools()
+              .get("read")
+              .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
+          { message: "MinerU execution failed: mineru is not installed" },
+        );
+        assert.equal(existsSync(cachePath(join(directory, "cache"), pngBytes)), false);
+      });
+    }),
+  );
+
+  it(
+    "mineruが失敗するときはエラー",
+    withImageDirectory("fail", async (directory) => {
+      await withOcrCache(join(directory, "cache"), async () => {
+        const imageDirectory = join(directory, "images");
+        const imagePath = join(imageDirectory, "image.png");
+        mkdirSync(imageDirectory);
+        writeFileSync(imagePath, pngBytes);
+
+        await assert.rejects(
+          () =>
+            captureRegisteredTools()
+              .get("read")
+              .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
+          /MinerU exited with status 3: stub mineru failure/,
+        );
+        assert.equal(existsSync(cachePath(join(directory, "cache"), pngBytes)), false);
+      });
+    }),
+  );
 });
 
 describe("§2.2 credentials の例外", () => {

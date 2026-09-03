@@ -48,22 +48,3 @@
 ## 優先される開発フロー
 
 ロジックを伴う実装では、着手前に観測可能な振る舞いの合意を取る。
-
-## 画像のOCRテキスト
-
-画像内の文字情報が必要な場合だけ、次に従う。不要な場合は適用しない。
-
-1. 元画像と同じディレクトリの `{元画像のファイル名}.ocr.md` をOCRファイルとする。例: `document.png` → `document.png.ocr.md`。
-2. OCRファイルが存在するときは、それを読む。`mineru` を実行せず、OCRファイルを再生成・上書きしない。
-3. OCRファイルが存在しないときは、次を実行して生成されたMarkdownをOCRファイルへコピーする。`image_path` は元画像のパスとする。
-
-```sh
-ocr_output_dir=$(mktemp -d)
-trap 'rm -rf "$ocr_output_dir"' EXIT
-ORT_DISABLE_TELEMETRY=1 mineru -p "$image_path" -o "$ocr_output_dir" -m ocr -b pipeline
-ocr_markdown=$(find "$ocr_output_dir" -type f -name '*.md' -print -quit)
-test -n "$ocr_markdown"
-cp "$ocr_markdown" "${image_path}.ocr.md"
-```
-
-4. OCRテキストは原画像ではなく、抽出誤りを含みうる。OCRファイルを新規生成した直後に限り、金額、日付、固有名詞、契約・法的文言のいずれかが含まれる場合は、原画像との照合をオーナーに依頼する。既存の`.ocr.md`を読むだけの場合や、重要項目を含まない場合は、照合の要否を質問しない。
