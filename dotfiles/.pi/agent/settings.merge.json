@@ -5,6 +5,9 @@
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
   "quietStartup": false,
+  "compaction": {
+    "keepRecentTokens": 50000 // default: 20000
+  },
   "retry": {
     "enabled": true,
     "maxRetries": 5,
