@@ -56,6 +56,56 @@ extensions_for_linux=(
   # keep-sorted end
 )
 
+# Built locally from source and installed via VSIX instead of the Marketplace.
+local_vscode_extensions=(
+  # keep-sorted start by_regex=(?:#\s)?(.*) sticky_comments=no
+  todo-lsp.todo
+  # keep-sorted end
+)
+
+todo_lsp_repo="$HOME/mirrors/github.com/CatBraaain/todo-lsp"
+
+default_branch="main"
+
+exclude_local_extensions() {
+  grep -Fvx -f <(printf '%s\n' "${local_vscode_extensions[@]}") <<< "$1" || true
+}
+
+build_todo_lsp_vsix() {
+  if [[ -d "$todo_lsp_repo/.git" ]]; then
+    git -C "$todo_lsp_repo" pull --ff-only origin "$default_branch" >&2
+  elif [[ -e "$todo_lsp_repo" ]]; then
+    echo "error: mirror path is not a Git repository: $todo_lsp_repo" >&2
+    return 1
+  else
+    mkdir -p "$(dirname "$todo_lsp_repo")"
+    git clone https://github.com/CatBraaain/todo-lsp.git "$todo_lsp_repo"
+  fi
+
+  local extension_version vsix_path
+  extension_version="$(cd "$todo_lsp_repo/vscode-todo" && node -p "require('./package.json').version")"
+  vsix_path="$todo_lsp_repo/vscode-todo/todo-$extension_version.vsix"
+
+  rm -f "$vsix_path"
+  (cd "$todo_lsp_repo" && just prod) >&2
+  (cd "$todo_lsp_repo/vscode-todo" && npm run package -- \
+    --allow-missing-repository --no-rewrite-relative-links) >&2
+
+  [[ -f "$vsix_path" ]] || {
+    echo "error: VSIX was not created: $vsix_path" >&2
+    return 1
+  }
+  printf '%s\n' "$vsix_path"
+}
+
+install_local_extensions() {
+  local -a code_cmd=("$@")
+  local vsix_path
+  vsix_path="$(build_todo_lsp_vsix)"
+  echo "[linux] install $vsix_path"
+  "${code_cmd[@]}" --install-extension "$vsix_path" --force
+}
+
 # usage: sync_extensions <label>   (label: linux | windows)
 sync_extensions() {
   local label="$1"
@@ -82,9 +132,13 @@ sync_extensions() {
                 | sort -u )" || true
   want="$( printf '%s\n' "${desired[@]}" | sort -u )"
 
+  local installed_marketplace desired_marketplace
+  installed_marketplace="$(exclude_local_extensions "$installed")"
+  desired_marketplace="$(exclude_local_extensions "$want")"
+
   local to_install to_remove
-  to_install="$( comm -13 <(printf '%s\n' "$installed") <(printf '%s\n' "$want") )"
-  to_remove="$( comm -23 <(printf '%s\n' "$installed") <(printf '%s\n' "$want") )"
+  to_install="$( comm -13 <(printf '%s\n' "$installed_marketplace") <(printf '%s\n' "$desired_marketplace") )"
+  to_remove="$( comm -23 <(printf '%s\n' "$installed_marketplace") <(printf '%s\n' "$desired_marketplace") )"
 
   while IFS= read -r ext; do
     [[ -z "$ext" ]] && continue
@@ -101,6 +155,7 @@ sync_extensions() {
 
 main() {
   if command -v code >/dev/null 2>&1; then
+    install_local_extensions code
     sync_extensions "linux"
   else
     echo "warn: 'code' not found; skipping linux extensions" >&2
@@ -111,5 +166,7 @@ main() {
   fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
 
