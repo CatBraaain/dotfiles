@@ -1,16 +1,18 @@
 /**
  * Titlebar Spinner Extension
  *
- * Shows a spinner animation in the terminal title while the agent is working.
- * Uses `ctx.ui.setTitle()` to update the terminal title via the extension API.
- * Title control runs only in TUI mode; other modes never receive setTitle
- * notifications, and the spinner timer does not run either.
+ * Shows a spinner animation in the terminal title while the agent is working,
+ * and a static pause symbol while a blocking extension UI prompt is waiting
+ * for user input. Uses `ctx.ui.setTitle()` to update the terminal title via
+ * the extension API. Title control runs only in TUI mode; other modes never
+ * receive setTitle notifications, and the spinner timer does not run either.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 100;
+const WAITING_FRAME = "⏸";
 
 export const __timers: {
   set: (callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>;
@@ -34,8 +36,15 @@ export function buildTitle(sessionName: string | undefined, frame?: string): str
 
 export default function (pi: ExtensionAPI) {
   let timer: ReturnType<typeof setInterval> | null = null;
+  let waitingPrompt = false;
+
+  function render(ctx: ExtensionContext) {
+    const frame = waitingPrompt ? WAITING_FRAME : spinnerFrame(__timers.now());
+    ctx.ui.setTitle(buildTitle(pi.getSessionName(), frame));
+  }
 
   function stopAnimation(ctx: ExtensionContext) {
+    waitingPrompt = false;
     if (timer) {
       __timers.clear(timer);
       timer = null;
@@ -45,10 +54,8 @@ export default function (pi: ExtensionAPI) {
 
   function startAnimation(ctx: ExtensionContext) {
     stopAnimation(ctx);
-    const render = () =>
-      ctx.ui.setTitle(buildTitle(pi.getSessionName(), spinnerFrame(__timers.now())));
-    render();
-    timer = __timers.set(render, SPINNER_INTERVAL_MS);
+    render(ctx);
+    timer = __timers.set(() => render(ctx), SPINNER_INTERVAL_MS);
   }
 
   pi.on("session_start", async (_event, ctx) => {
@@ -64,6 +71,18 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     stopAnimation(ctx);
+  });
+
+  pi.on("ui_prompt_start", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    waitingPrompt = true;
+    render(ctx);
+  });
+
+  pi.on("ui_prompt_end", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    waitingPrompt = false;
+    render(ctx);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

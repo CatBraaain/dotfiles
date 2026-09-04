@@ -45,9 +45,9 @@ function captureTitleExtension(
   } as never);
   const ctx = { mode, ui: { setTitle: (title: string) => titleCalls.push(title) } };
 
-  const invoke = (event: string, nowMs: number): void => {
+  const invoke = (event: string, nowMs: number, eventObj: Record<string, unknown> = {}): void => {
     fakeNowMs = nowMs;
-    handlers.get(event)!({}, ctx);
+    handlers.get(event)!(eventObj, ctx);
     fakeNowMs = undefined;
   };
   return { titleCalls, invoke };
@@ -157,6 +157,69 @@ describe("状態遷移", () => {
   });
 });
 
+describe("入力待ち", () => {
+  it("入力ダイアログの表示中は ⏸ を先頭に付けた表示へ切り替わる", () => {
+    const { titleCalls, invoke } = captureTitleExtension("session-a");
+    invoke("agent_start", 0);
+
+    invoke("ui_prompt_start", 500);
+
+    assert.equal(titleCalls.at(-1), "⏸ π - session-a");
+  });
+
+  it("入力待ちの間はタイマーが進んでも表示が変わらない", () => {
+    const { titleCalls, invoke } = captureTitleExtension(undefined);
+    invoke("agent_start", 0);
+    const spinnerTimer = startedTimers.at(-1)!;
+    invoke("ui_prompt_start", 0);
+    titleCalls.length = 0;
+
+    fakeNowMs = 1500;
+    spinnerTimer.callback();
+
+    assert.equal(titleCalls.at(-1), "⏸ π");
+  });
+
+  it("プロンプトの種別はタイトルに含めない", () => {
+    const { titleCalls, invoke } = captureTitleExtension("session-a");
+    invoke("agent_start", 0);
+
+    invoke("ui_prompt_start", 0, { kind: "select", title: "choose one" });
+
+    assert.equal(titleCalls.at(-1), "⏸ π - session-a");
+  });
+
+  it("入力ダイアログの終了でスピナー表示へ戻る", () => {
+    const { titleCalls, invoke } = captureTitleExtension(undefined);
+    invoke("agent_start", 0);
+    invoke("ui_prompt_start", 0);
+
+    invoke("ui_prompt_end", 700);
+
+    assert.equal(titleCalls.at(-1), "⠧ π");
+  });
+
+  it("入力待ちのまま agent_end になった場合は待機中タイトルへ戻す", () => {
+    const { titleCalls, invoke } = captureTitleExtension("session-a");
+    invoke("agent_start", 0);
+    invoke("ui_prompt_start", 0);
+
+    invoke("agent_end", 500);
+
+    assert.equal(titleCalls.at(-1), "π - session-a");
+  });
+
+  it("入力待ちのまま session_shutdown になった場合は待機中タイトルへ戻す", () => {
+    const { titleCalls, invoke } = captureTitleExtension("session-a");
+    invoke("agent_start", 0);
+    invoke("ui_prompt_start", 0);
+
+    invoke("session_shutdown", 500);
+
+    assert.equal(titleCalls.at(-1), "π - session-a");
+  });
+});
+
 describe("非 TUI モード", () => {
   for (const mode of ["rpc", "json", "print"] as const) {
     it(`${mode} モードではどのイベントでも setTitle を呼ばない`, () => {
@@ -164,6 +227,8 @@ describe("非 TUI モード", () => {
 
       invoke("session_start", 0);
       invoke("agent_start", 0);
+      invoke("ui_prompt_start", 0, { kind: "confirm" });
+      invoke("ui_prompt_end", 100);
       invoke("agent_end", 500);
       invoke("session_shutdown", 500);
 
