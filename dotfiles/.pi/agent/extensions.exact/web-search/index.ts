@@ -223,7 +223,7 @@ export function parseRedditPostUrl(rawUrl: string): RedditPostUrl | undefined {
     return undefined;
   }
   const hostname = url.hostname.toLowerCase();
-  if (hostname !== "reddit.com" && hostname !== "www.reddit.com") return undefined;
+  if (hostname !== "reddit.com" && !hostname.endsWith(".reddit.com")) return undefined;
   const parts = url.pathname.split("/").filter(Boolean);
   if (
     parts.length < 4 ||
@@ -530,30 +530,14 @@ export async function fetchOne(
   throw new AllBackendsFailedError("web fetch", attempts);
 }
 
-export async function pageTitle(
-  url: string,
-  signal?: AbortSignal,
-  fetcher: (url: string, signal?: AbortSignal) => Promise<string> = fetchText,
-): Promise<string | null> {
-  try {
-    const html = await fetcher(url, signal);
-    const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    return match?.[1]?.replace(/\s+/g, " ").trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 export type WebToolOperations = {
   search: typeof searchOne;
   fetch: typeof fetchOne;
-  pageTitle: typeof pageTitle;
 };
 
 const defaultWebToolOperations: WebToolOperations = {
   search: searchOne,
   fetch: fetchOne,
-  pageTitle,
 };
 
 class SerialTaskQueue {
@@ -575,8 +559,13 @@ class SerialTaskQueue {
   }
 }
 
-function titleFromMarkdown(markdown: string): string | null {
-  const match = /^# (.+)$/m.exec(markdown);
+const H1_TITLE = /^# (.+)$/m;
+const NUMBERED_HEADING_TITLE = /^#{2,3} \d+\. (.+)$/m;
+
+// SPEC: web_fetch のタイトルは取得済み本文（Markdown）の見出しからのみ取り出す。
+// h1 に加えて `## <数字>. <タイトル>` / `### <数字>. <タイトル>` もタイトルとして扱う。
+export function titleFromMarkdown(markdown: string): string | null {
+  const match = H1_TITLE.exec(markdown) ?? NUMBERED_HEADING_TITLE.exec(markdown);
   return match?.[1]?.trim() || null;
 }
 
@@ -660,11 +649,8 @@ export default function (
       try {
         return await fetchQueue.run(async () => {
           const { text, backend, attempts } = await operations.fetch(params.url, signal);
-          // Reddit 投稿はページシェルの汎用タイトル（"Reddit"）ではなく本文先頭の投稿タイトルを使う
-          const title =
-            backend === "Reddit"
-              ? titleFromMarkdown(text)
-              : await operations.pageTitle(params.url, signal);
+          // SPEC: タイトルは取得済み本文（Markdown）の見出しからのみ取り出す
+          const title = titleFromMarkdown(text);
           return { content: [{ type: "text", text }], details: { backend, attempts, title } };
         });
       } catch (error) {

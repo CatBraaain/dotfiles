@@ -1,4 +1,3 @@
-
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import webSearchExtension, {
@@ -14,13 +13,12 @@ import webSearchExtension, {
   parseRedditEmbed,
   parseRedditOEmbed,
   parseRedditPostUrl,
-  pageTitle,
   searchOne,
+  titleFromMarkdown,
   type Attempt,
   type BackendEntry,
   type WebToolOperations,
 } from "./index";
-
 
 type Tool = {
   name: string;
@@ -42,7 +40,7 @@ function captureTools(operations?: WebToolOperations): Map<string, Tool> {
 type WebOperationResult = Awaited<ReturnType<typeof searchOne>>;
 
 function createWebToolOperations(overrides: Partial<WebToolOperations>): WebToolOperations {
-  return { search: searchOne, fetch: fetchOne, pageTitle, ...overrides };
+  return { search: searchOne, fetch: fetchOne, ...overrides };
 }
 
 function successfulOperationResult(input: string): WebOperationResult {
@@ -153,16 +151,17 @@ describe("tool request queues", () => {
     assert.deepEqual(searchStartOrder, ["first", "second"]);
   });
 
-  it("starts the next web_fetch after the preceding title lookup completes", async () => {
-    const firstTitleCompletion = createDeferred<string | null>();
+  it("starts the next web_fetch after the preceding fetch completes", async () => {
+    const firstFetchCompletion = createDeferred<WebOperationResult>();
     const fetchStartOrder: string[] = [];
     const queuedFetch = captureTools(
       createWebToolOperations({
         fetch: async (url) => {
           fetchStartOrder.push(url);
-          return successfulOperationResult(url);
+          return url.endsWith("first")
+            ? firstFetchCompletion.promise
+            : successfulOperationResult(url);
         },
-        pageTitle: async (url) => (url.endsWith("first") ? firstTitleCompletion.promise : null),
       }),
     ).get("web_fetch")!;
 
@@ -172,7 +171,7 @@ describe("tool request queues", () => {
     await Promise.resolve();
     assert.deepEqual(fetchStartOrder, ["https://example.com/first"]);
 
-    firstTitleCompletion.resolve(null);
+    firstFetchCompletion.resolve(successfulOperationResult("first"));
     await Promise.all([firstRequest, secondRequest]);
 
     assert.deepEqual(fetchStartOrder, ["https://example.com/first", "https://example.com/second"]);
@@ -187,7 +186,6 @@ describe("tool request queues", () => {
           if (url.endsWith("first")) throw new Error("first fetch failed");
           return successfulOperationResult(url);
         },
-        pageTitle: async () => null,
       }),
     ).get("web_fetch")!;
 
@@ -214,7 +212,6 @@ describe("tool request queues", () => {
           startedTools.push("web_fetch");
           return fetchCompletion.promise;
         },
-        pageTitle: async () => null,
       }),
     );
 
@@ -462,18 +459,6 @@ describe("バックエンド結果行のフォーマット", () => {
       '✓ openserp(bing) - "成功タイトル"',
     ]);
   });
-
-  it("pageTitle は title 要素がある HTML からタイトルを取り出す", async () => {
-    const htmlWithTitle = "<html><head><title>Example</title></head><body></body></html>";
-    const title = await pageTitle("https://example.com/", undefined, async () => htmlWithTitle);
-    assert.equal(title, "Example");
-  });
-
-  it("pageTitle は title 要素がない HTML で null を返す", async () => {
-    const htmlWithoutTitle = "<html><body>no title</body></html>";
-    const title = await pageTitle("https://example.com/", undefined, async () => htmlWithoutTitle);
-    assert.equal(title, null);
-  });
 });
 
 describe("openserp のエラー抽出", () => {
@@ -539,6 +524,28 @@ describe("web_fetch 表示", () => {
   });
 });
 
+describe("web_fetch のタイトル抽出", () => {
+  it("h1 見出し（# <タイトル>）からタイトルを取り出す", () => {
+    assert.equal(titleFromMarkdown("# Hello World\n\nbody text"), "Hello World");
+  });
+
+  it("`## <数字>. <タイトル>` 形式の見出しもタイトルとして取り出す", () => {
+    assert.equal(titleFromMarkdown("## 1. First Result\n\nbody text"), "First Result");
+  });
+
+  it("`### <数字>. <タイトル>` 形式の見出しもタイトルとして取り出す", () => {
+    assert.equal(titleFromMarkdown("### 2. Second Result\n\nbody text"), "Second Result");
+  });
+
+  it("h1 と数字見出しが両方ある本文は h1 を優先する", () => {
+    assert.equal(titleFromMarkdown("# Page Title\n\n## 1. First Result"), "Page Title");
+  });
+
+  it("タイトル候補の見出しがない本文は null を返す", () => {
+    assert.equal(titleFromMarkdown("plain body\n\n## no numbered heading\ntail"), null);
+  });
+});
+
 const redditPostUrl = "https://www.reddit.com/r/programming/comments/abc123/test_post/";
 
 // Reddit Atom 実形式に合わせたフィクスチャ（content は HTML エスケープ、本文は Markdown 構文込み）
@@ -598,6 +605,22 @@ describe("Reddit URL 判定", () => {
     const post = parseRedditPostUrl("https://reddit.com/r/programming/comments/abc123");
     assert.ok(post);
     assert.equal(post.permalink, "https://www.reddit.com/r/programming/comments/abc123/");
+  });
+
+  it("対象ホストは reddit.com と *.reddit.com（old・np 等のサブドメインを含む）", () => {
+    const hosts = ["reddit.com", "www.reddit.com", "old.reddit.com", "np.reddit.com"];
+    for (const host of hosts) {
+      const post = parseRedditPostUrl(`https://${host}/r/programming/comments/abc123/title/`);
+      assert.ok(post, `host should be accepted: ${host}`);
+      assert.equal(post.permalink, "https://www.reddit.com/r/programming/comments/abc123/title/");
+    }
+  });
+
+  it("reddit.com 以外のホスト（notreddit.com）は対象外", () => {
+    assert.equal(
+      parseRedditPostUrl("https://notreddit.com/r/programming/comments/abc123/title/"),
+      undefined,
+    );
   });
 
   it("サブレディット一覧・ユーザーページ・他サイトは対象外", () => {
