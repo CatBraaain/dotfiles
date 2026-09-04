@@ -3,6 +3,8 @@
  *
  * Shows a spinner animation in the terminal title while the agent is working.
  * Uses `ctx.ui.setTitle()` to update the terminal title via the extension API.
+ * Title control runs only in TUI mode; other modes never receive setTitle
+ * notifications, and the spinner timer does not run either.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -50,18 +52,22 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
     ctx.ui.setTitle(buildTitle(pi.getSessionName()));
   });
 
   pi.on("agent_start", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
     startAnimation(ctx);
   });
 
   pi.on("agent_end", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
     stopAnimation(ctx);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
     stopAnimation(ctx);
   });
 }

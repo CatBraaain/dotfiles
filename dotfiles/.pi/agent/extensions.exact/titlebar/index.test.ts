@@ -1,8 +1,6 @@
-
 import assert from "node:assert/strict";
 import { afterAll, describe, it } from "bun:test";
 import titlebar, { __timers, buildTitle, SPINNER_FRAMES, spinnerFrame } from "./index";
-
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -28,7 +26,12 @@ afterAll(() => {
   Object.assign(__timers, originalTimers);
 });
 
-function captureTitleExtension(sessionName: string | undefined): {
+type Mode = "tui" | "rpc" | "json" | "print";
+
+function captureTitleExtension(
+  sessionName: string | undefined,
+  mode: Mode = "tui",
+): {
   titleCalls: string[];
   invoke: (event: string, nowMs: number) => void;
 } {
@@ -40,7 +43,7 @@ function captureTitleExtension(sessionName: string | undefined): {
     },
     getSessionName: () => sessionName,
   } as never);
-  const ctx = { ui: { setTitle: (title: string) => titleCalls.push(title) } };
+  const ctx = { mode, ui: { setTitle: (title: string) => titleCalls.push(title) } };
 
   const invoke = (event: string, nowMs: number): void => {
     fakeNowMs = nowMs;
@@ -69,7 +72,10 @@ describe("スピナー", () => {
     for (const frame of SPINNER_FRAMES) {
       const code = frame.codePointAt(0)!;
       assert.ok(frame.length === 1, `${frame} は 1 文字である`);
-      assert.ok(code >= 0x2800 && code <= 0x28ff, `${frame} は点字ブロック (U+2800–U+28FF) に含まれる`);
+      assert.ok(
+        code >= 0x2800 && code <= 0x28ff,
+        `${frame} は点字ブロック (U+2800–U+28FF) に含まれる`,
+      );
     }
   });
 });
@@ -149,4 +155,28 @@ describe("状態遷移", () => {
     assert.equal(titleCalls.at(-1), "π - session-a");
     assert.equal(clearedTimerIds.at(-1), spinnerTimerId);
   });
+});
+
+describe("非 TUI モード", () => {
+  for (const mode of ["rpc", "json", "print"] as const) {
+    it(`${mode} モードではどのイベントでも setTitle を呼ばない`, () => {
+      const { titleCalls, invoke } = captureTitleExtension("session-a", mode);
+
+      invoke("session_start", 0);
+      invoke("agent_start", 0);
+      invoke("agent_end", 500);
+      invoke("session_shutdown", 500);
+
+      assert.deepEqual(titleCalls, []);
+    });
+
+    it(`${mode} モードでは agent_start でもタイマーが起動しない`, () => {
+      const { invoke } = captureTitleExtension("session-a", mode);
+      const timersBefore = startedTimers.length;
+
+      invoke("agent_start", 0);
+
+      assert.equal(startedTimers.length, timersBefore);
+    });
+  }
 });
