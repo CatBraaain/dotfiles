@@ -55,6 +55,33 @@ type ToolUI = {
 const ALLOW_OPTION = "Yes, allow";
 const DENY_OPTION = "No, deny (reason next)";
 
+/** Max concurrently running sandbox (bwrap) processes per pi process (SPEC §7). */
+const MAX_CONCURRENT_SANDBOX_RUNS = 4;
+
+/**
+ * Process-wide semaphore state for SPEC §7: every Sandbox instance in this
+ * pi process shares one cap, so "1 つの pi プロセス内で最大 4" holds even if
+ * the extension ever creates multiple instances. Waiters are woken strictly
+ * FIFO by finishing runs.
+ */
+let runningSandboxRuns = 0;
+const sandboxWaiters: (() => void)[] = [];
+
+function withSandboxSlot<T>(run: () => Promise<T>): Promise<T> {
+  const start = async () => {
+    if (runningSandboxRuns >= MAX_CONCURRENT_SANDBOX_RUNS)
+      await new Promise<void>((resolve) => sandboxWaiters.push(resolve));
+    runningSandboxRuns++;
+    try {
+      return await run();
+    } finally {
+      runningSandboxRuns--;
+      sandboxWaiters.shift()?.();
+    }
+  };
+  return start();
+}
+
 type ToolContext = {
   cwd: string;
   hasUI?: boolean;
@@ -813,6 +840,14 @@ export class Sandbox {
     commandArgs: string[],
     options: RunOptions = {},
   ): Promise<RunResult> {
+    return this.withSandboxSlot(() => this.runSandboxProcess(command, commandArgs, options));
+  }
+
+  private runSandboxProcess(
+    command: string,
+    commandArgs: string[],
+    options: RunOptions,
+  ): Promise<RunResult> {
     return new Promise((resolveRun, rejectRun) => {
       const child = spawn(
         "bwrap",
@@ -857,5 +892,14 @@ export class Sandbox {
       });
       if (options.input !== undefined) child.stdin?.end(options.input);
     });
+  }
+
+  /**
+   * Gate one sandbox run on the SPEC §7 concurrency limit. Waiters queue in
+   * FIFO order and a finishing run wakes the next waiter, so waiting never
+   * changes the run's outcome and start order is preserved.
+   */
+  private withSandboxSlot<T>(run: () => Promise<T>): Promise<T> {
+    return withSandboxSlot(run);
   }
 }

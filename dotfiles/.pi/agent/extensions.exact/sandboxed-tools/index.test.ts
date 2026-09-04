@@ -2353,6 +2353,159 @@ describe("§7 bash の stderr 逐次表示", () => {
   });
 });
 
+describe("§7 sandbox 実行の同時数の上限", () => {
+  /**
+   * Replace Sandbox.runSandboxProcess (the semaphore-gated run() delegates
+   * here) with a counting stub; restore via the return value. The stub
+   * records call start order and peak concurrency, then delegates the
+   * outcome to `behavior` per call index.
+   */
+  const stubCountingRun = (behavior: (callIndex: number) => Promise<unknown>) => {
+    const sandboxPrototype = Sandbox.prototype as unknown as {
+      runSandboxProcess: (
+        command: string,
+        commandArgs: string[],
+        options: any,
+      ) => Promise<unknown>;
+    };
+    const originalRun = sandboxPrototype.runSandboxProcess;
+    let active = 0;
+    let maxActive = 0;
+    let callIndex = 0;
+    const startOrder: number[] = [];
+    sandboxPrototype.runSandboxProcess = function () {
+      const index = callIndex++;
+      startOrder.push(index);
+      active++;
+      maxActive = Math.max(maxActive, active);
+      return behavior(index).finally(() => {
+        active--;
+      });
+    };
+    return {
+      maxActive: () => maxActive,
+      resetMaxActive: () => {
+        maxActive = 0;
+      },
+      startOrder: () => startOrder,
+      restore: () => {
+        sandboxPrototype.runSandboxProcess = originalRun;
+      },
+    };
+  };
+
+  const okEnvelope = () =>
+    Buffer.from(
+      JSON.stringify({ ok: true, result: { content: [{ type: "text", text: "done" }] } }),
+    );
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it(
+    "並行 runTool の同時 sandbox 実行は最大4で、開始順に実行され全呼び出しが完了する",
+    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+      const stub = stubCountingRun(async () => {
+        await delay(60);
+        return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
+      });
+      try {
+        const results = await Promise.all(
+          Array.from({ length: 6 }, (_unused, i) =>
+            sandbox.runTool("read", { path: `/tmp/concurrent-${i}.txt` }, { mode: "fs" }),
+          ),
+        );
+        assert.equal(results.length, 6);
+        for (const result of results) assert.equal(result.content[0]?.text, "done");
+        assert.equal(stub.maxActive(), 4);
+        assert.deepEqual(stub.startOrder(), [0, 1, 2, 3, 4, 5]);
+      } finally {
+        stub.restore();
+      }
+    }),
+  );
+
+  it(
+    "sandbox 実行が失敗しても待機中の呼び出しが開始される",
+    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+      const stub = stubCountingRun((index) =>
+        index === 0
+          ? Promise.reject(new Error("boom"))
+          : delay(30).then(() => ({
+              exitCode: 0,
+              stdout: okEnvelope(),
+              stderr: Buffer.alloc(0),
+            })),
+      );
+      try {
+        const settled = await Promise.allSettled(
+          Array.from({ length: 6 }, (_unused, i) =>
+            sandbox.runTool("read", { path: `/tmp/fail-release-${i}.txt` }, { mode: "fs" }),
+          ),
+        );
+        assert.match(String(settled[0]?.reason), /boom/);
+        for (const outcome of settled.slice(1)) assert.equal(outcome.status, "fulfilled");
+        assert.equal(stub.maxActive(), 4);
+        assert.deepEqual(stub.startOrder(), [0, 1, 2, 3, 4, 5]);
+      } finally {
+        stub.restore();
+      }
+    }),
+  );
+
+  it(
+    "続く2度目の並行バッチでも同時実行は最大4を維持する",
+    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+      const stub = stubCountingRun(async () => {
+        await delay(50);
+        return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
+      });
+      const runBatch = () =>
+        Promise.all(
+          Array.from({ length: 6 }, (_unused, i) =>
+            sandbox.runTool("read", { path: `/tmp/wave-${i}.txt` }, { mode: "fs" }),
+          ),
+        );
+      try {
+        await runBatch();
+        assert.equal(stub.maxActive(), 4);
+        stub.resetMaxActive();
+        await runBatch();
+        assert.equal(
+          stub.maxActive(),
+          4,
+          "second batch must keep the full cap (no leftover slot accounting)",
+        );
+      } finally {
+        stub.restore();
+      }
+    }),
+  );
+
+  it(
+    "Sandbox インスタンスが違っても同時実行はプロセス全体で最大4",
+    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+      const other = new Sandbox(process.cwd());
+      const stub = stubCountingRun(async () => {
+        await delay(50);
+        return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
+      });
+      try {
+        const results = await Promise.all([
+          ...Array.from({ length: 3 }, (_unused, i) =>
+            sandbox.runTool("read", { path: `/tmp/multi-a-${i}.txt` }, { mode: "fs" }),
+          ),
+          ...Array.from({ length: 3 }, (_unused, i) =>
+            other.runTool("read", { path: `/tmp/multi-b-${i}.txt` }, { mode: "fs" }),
+          ),
+        ]);
+        assert.equal(results.length, 6);
+        assert.equal(stub.maxActive(), 4);
+      } finally {
+        stub.restore();
+      }
+    }),
+  );
+});
+
 describe("§8 表示", () => {
   it("main agent の fs ツールは作業ディレクトリ内外でパスを表示し分ける", () => {
     const workspacePath = join(process.cwd(), "src", "a.ts");
