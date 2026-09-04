@@ -66,6 +66,7 @@
             go
             google-chrome
             gopls
+            harlequin
             just
             just-lsp
             keep-sorted
