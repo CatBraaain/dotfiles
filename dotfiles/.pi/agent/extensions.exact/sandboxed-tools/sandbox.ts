@@ -9,6 +9,17 @@ import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-a
 
 export type Action = "allow" | "deny" | "ask";
 
+/**
+ * Dialog approval info returned when the user approved access through a
+ * confirmation dialog (§2.3). `undefined` means access passed without a new
+ * dialog approval (config allow or an existing dynamic grant).
+ */
+export type PathApproval = {
+  operation: "read" | "write";
+  scope: "file" | "directory";
+  grantedPath: string;
+};
+
 /** Where a command pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
 export type MatchSpan = { candidate: string; index: number; length: number };
 
@@ -628,24 +639,24 @@ export class Sandbox {
     operation: "read" | "write",
     candidatePath: string,
     context: ToolContext,
-  ): Promise<void> {
+  ): Promise<PathApproval | undefined> {
     const absolutePath = resolve(candidatePath);
     if (pathsMatchCandidate(this.credentialPaths, absolutePath)) {
       throw new Error(`Access denied for credential path: ${absolutePath}`);
     }
     const section = operation === "read" ? this.readPaths : this.writePaths;
     const { action, matched } = resolvePathActionMatch(section, absolutePath);
-    if (action === "allow") return;
+    if (action === "allow") return undefined;
     if (action === "deny" && matched !== undefined)
       throw new Error(`Access denied: ${absolutePath}`);
-    if (this.hasDynamicGrant(operation, absolutePath)) return;
+    if (this.hasDynamicGrant(operation, absolutePath)) return undefined;
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
     const ui = context.ui;
-    await this.withUiLock(async () => {
+    return this.withUiLock(async () => {
       // A sibling tool call may have obtained the grant while this call queued.
-      if (this.hasDynamicGrant(operation, absolutePath)) return;
-      await this.requestAccess(operation, absolutePath, ui, matched);
+      if (this.hasDynamicGrant(operation, absolutePath)) return undefined;
+      return this.requestAccess(operation, absolutePath, ui, matched);
     });
   }
 
@@ -674,7 +685,7 @@ export class Sandbox {
     absolutePath: string,
     ui: ToolUI,
     matched?: string,
-  ): Promise<void> {
+  ): Promise<PathApproval> {
     const directoryScopeOption = "Directory (subtree)";
     const title = `Allow ${operation} access?\n${absolutePath}\n${matchedPatternNote(matched)}`;
     if (ui.select) {
@@ -692,12 +703,12 @@ export class Sandbox {
         const scope = selectedOption === directoryScopeOption ? "directory" : "file";
         const grantPath = scope === "directory" ? dirname(absolutePath) : absolutePath;
         this.addDynamicGrant("write", grantPath, scope);
-        return;
+        return { operation: "write", scope, grantedPath: grantPath };
       }
       if (selectedOption !== ALLOW_OPTION)
         throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
       this.addDynamicGrant(operation, absolutePath, "file");
-      return;
+      return { operation, scope: "file", grantedPath: absolutePath };
     }
     const approved = await ui.confirm(
       `Allow ${operation} access?`,
@@ -705,6 +716,7 @@ export class Sandbox {
     );
     if (!approved) throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
     this.addDynamicGrant(operation, absolutePath, "file");
+    return { operation, scope: "file", grantedPath: absolutePath };
   }
 
   private denialMessage(base: string, reason?: string): string {
@@ -737,9 +749,15 @@ export class Sandbox {
     if (!existsSync(grantPath)) writeFileSync(grantPath, "");
   }
 
-  authorizeCommand(command: string, context: ToolContext): Promise<void> {
+  /**
+   * Resolve the command action and, for `ask`, confirm with the user. Returns
+   * true when the user approved this call through a confirmation dialog
+   * (§2.3 approval note), false when the command passed without a dialog
+   * (config allow). Denial throws.
+   */
+  authorizeCommand(command: string, context: ToolContext): Promise<boolean> {
     const { action, matched, matchSpan } = resolveCommandActionMatch(this.config.commands, command);
-    if (action === "allow") return Promise.resolve();
+    if (action === "allow") return Promise.resolve(false);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
@@ -756,9 +774,9 @@ export class Sandbox {
         ]);
         if (selectedOption !== ALLOW_OPTION)
           throw await this.deniedError(`Command denied by user: ${command}`, ui);
-        return;
+        return true;
       }
-      if (await ui.confirm("Allow command?", `${display}\n${note}`)) return;
+      if (await ui.confirm("Allow command?", `${display}\n${note}`)) return true;
       throw await this.deniedError(`Command denied by user: ${command}`, ui);
     });
   }

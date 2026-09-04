@@ -13,6 +13,7 @@ import sandboxedToolsExtension, {
   formatDuration,
   formatSize,
   truncateCommand,
+  writeApprovalNote,
 } from "./index";
 import {
   Sandbox,
@@ -1163,6 +1164,249 @@ read:
       assert.ok(title.includes("no matching pattern (default ask)"), title);
     }),
   );
+});
+
+describe("§2.3 承認ノート", () => {
+  const withApprovalSandbox =
+    (configYaml: string, test: (dir: string, sandbox: Sandbox) => Promise<void> | void) =>
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-approval-"));
+      try {
+        const configPath = join(dir, "config.yaml");
+        writeFileSync(configPath, configYaml);
+        await test(dir, new Sandbox(dir, configPath));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+  /** Replace Sandbox.run with a canned run-tools envelope; restore via the return value. */
+  const stubSandboxRun = (resultText: string) => {
+    const envelope = JSON.stringify({
+      ok: true,
+      result: { content: [{ type: "text", text: resultText }] },
+    });
+    const sandboxPrototype = Sandbox.prototype as unknown as {
+      run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
+    };
+    const originalRun = sandboxPrototype.run;
+    sandboxPrototype.run = async () => ({
+      exitCode: 0,
+      stdout: Buffer.from(envelope),
+      stderr: Buffer.alloc(0),
+    });
+    return () => {
+      sandboxPrototype.run = originalRun;
+    };
+  };
+
+  const resultTexts = (result: any): string[] => result.content.map((block: any) => block.text);
+
+  it(
+    "write のファイルスコープ承認は approval を返す",
+    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const filePath = join(dir, "file.txt");
+      const approval = await sandbox.authorizePath("write", filePath, {
+        cwd: dir,
+        hasUI: true,
+        ui: { confirm: async () => true },
+      });
+      assert.deepEqual(approval, { operation: "write", scope: "file", grantedPath: filePath });
+    }),
+  );
+
+  it(
+    "write のディレクトリスコープ承認は grant ディレクトリを返す",
+    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const approval = await sandbox.authorizePath("write", join(dir, "file.txt"), {
+        cwd: dir,
+        hasUI: true,
+        ui: { confirm: async () => true, select: async (_title, options) => options[1] },
+      });
+      assert.deepEqual(approval, {
+        operation: "write",
+        scope: "directory",
+        grantedPath: dir,
+      });
+    }),
+  );
+
+  it(
+    "read の承認も approval を返す",
+    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const filePath = join(dir, "file.txt");
+      const approval = await sandbox.authorizePath("read", filePath, {
+        cwd: dir,
+        hasUI: true,
+        ui: { confirm: async () => true },
+      });
+      assert.deepEqual(approval, { operation: "read", scope: "file", grantedPath: filePath });
+    }),
+  );
+
+  it(
+    "許可済みパスの再 authorize は approval を返さない",
+    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+      const filePath = join(dir, "file.txt");
+      const context = {
+        cwd: dir,
+        hasUI: true,
+        ui: { confirm: async () => true },
+      };
+      await sandbox.authorizePath("write", filePath, context);
+      const second = await sandbox.authorizePath("write", filePath, context);
+      assert.equal(second, undefined);
+    }),
+  );
+
+  it(
+    "allow コマンドは approval なし、ask コマンドの承認は approval を返す",
+    withApprovalSandbox("commands:\n  allow: [echo]\n  ask: [git push]\n", async (dir, sandbox) => {
+      const context = {
+        cwd: dir,
+        hasUI: true,
+        ui: { confirm: async () => true },
+      };
+      assert.equal(await sandbox.authorizeCommand("echo hi", context), false);
+      assert.equal(await sandbox.authorizeCommand("git push origin main", context), true);
+    }),
+  );
+
+  it("writeApprovalNote はスコープごとの承認ノート文言を返す", () => {
+    assert.equal(
+      writeApprovalNote({ operation: "write", scope: "file", grantedPath: "/tmp/a.txt" }),
+      "User approved write access via confirmation (scope: file /tmp/a.txt); writable for the rest of the session, including via bash.",
+    );
+    assert.equal(
+      writeApprovalNote({ operation: "write", scope: "directory", grantedPath: "/tmp/dir" }),
+      "User approved write access via confirmation (scope: directory /tmp/dir); the subtree is writable for the rest of the session, including via bash.",
+    );
+  });
+
+  it("write のディレクトリスコープ承認は subtree の承認ノートを付け、以降の同配下書き込みには付かない", async () => {
+    // The grant directory must already exist so the dynamic grant performs no host-side writes.
+    const filePath = join(homedir(), "projects", "sandboxed-tools-note-probe.txt");
+    const restore = stubSandboxRun(`Successfully wrote 10 bytes to ${filePath}`);
+    try {
+      const writeTool = captureRegisteredTools().get("write");
+      const first = await writeTool.execute("t", { path: filePath, content: "x" }, undefined, undefined, {
+        cwd: process.cwd(),
+        hasUI: true,
+        ui: { confirm: async () => false, select: async (_title, options) => options[1] },
+      });
+      assert.deepEqual(resultTexts(first), [
+        `Successfully wrote 10 bytes to ${filePath}`,
+        `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
+      ]);
+      const second = await writeTool.execute("t", { path: filePath, content: "x" }, undefined, undefined, {
+        cwd: process.cwd(),
+        hasUI: true,
+        // A dialog here would throw: the directory grant must suppress it, and no note is appended.
+        ui: { confirm: async () => false, select: async () => "No, deny (reason next)" },
+      });
+      assert.deepEqual(resultTexts(second), [`Successfully wrote 10 bytes to ${filePath}`]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("write のディレクトリスコープ承認は subtree の承認ノートを付ける", async () => {
+    const filePath = join(homedir(), "projects", "sandboxed-tools-note-dir.txt");
+    const restore = stubSandboxRun(`Successfully wrote 10 bytes to ${filePath}`);
+    try {
+      const result = await captureRegisteredTools()
+        .get("write")
+        .execute("t", { path: filePath, content: "x" }, undefined, undefined, {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { confirm: async () => false, select: async (_title, options) => options[1] },
+        });
+      assert.deepEqual(resultTexts(result), [
+        `Successfully wrote 10 bytes to ${filePath}`,
+        `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("edit の write 承認で結果末尾に承認ノートが付く", async () => {
+    const filePath = join(homedir(), "projects", "sandboxed-tools-note-edit.txt");
+    const restore = stubSandboxRun(`Successfully replaced 1 block(s) in ${filePath}.`);
+    try {
+      const result = await captureRegisteredTools()
+        .get("edit")
+        .execute("t", { path: filePath, edits: [] }, undefined, undefined, {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { confirm: async () => false, select: async (_title, options) => options[1] },
+        });
+      assert.deepEqual(resultTexts(result), [
+        `Successfully replaced 1 block(s) in ${filePath}.`,
+        `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("bash の ask 承認で結果末尾に承認ノートが付く", async () => {
+    const restore = stubSandboxRun("1 file changed, 2 insertions(+)");
+    try {
+      const result = await captureRegisteredTools()
+        .get("bash")
+        .execute("t", { command: "git push origin main" }, undefined, undefined, {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { confirm: async () => false, select: async (_title, options) => options[0] },
+        });
+      assert.deepEqual(resultTexts(result), [
+        "1 file changed, 2 insertions(+)",
+        "User approved this command via confirmation.",
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("bash の EROFS ではヒント文の後に承認ノートが最終行に来る", async () => {
+    const restore = stubSandboxRun(
+      "touch: cannot touch '/outside/x': Read-only file system",
+    );
+    try {
+      const result = await captureRegisteredTools()
+        .get("bash")
+        .execute("t", { command: "git push origin main" }, undefined, undefined, {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { confirm: async () => false, select: async (_title, options) => options[0] },
+        });
+      assert.deepEqual(resultTexts(result), [
+        "touch: cannot touch '/outside/x': Read-only file system",
+        "Sandbox blocked this write. Do not retry with bash; call the write or edit tool on the target path to request access from the user.",
+        "User approved this command via confirmation.",
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("read の結果には承認ノートを付けない", async () => {
+    const filePath = join(process.cwd(), "sandboxed-tools-note-noappend.txt");
+    const restore = stubSandboxRun("file body");
+    try {
+      const result = await captureRegisteredTools()
+        .get("read")
+        .execute("t", { path: filePath }, undefined, undefined, {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { confirm: async () => true },
+        });
+      assert.deepEqual(resultTexts(result), ["file body"]);
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe("§3 動的拡張のライフサイクル", () => {

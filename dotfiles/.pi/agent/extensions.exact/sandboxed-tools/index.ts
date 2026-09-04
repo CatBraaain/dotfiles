@@ -22,7 +22,7 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Sandbox, type ToolSession } from "./sandbox";
+import { Sandbox, type PathApproval, type ToolSession } from "./sandbox";
 import { normalizeToolPath } from "../shared/normalize-path.ts";
 import {
   formatBashCall,
@@ -79,6 +79,20 @@ function sessionFromContext(context: any): ToolSession {
 
 const EROFS_HINT =
   "Sandbox blocked this write. Do not retry with bash; call the write or edit tool on the target path to request access from the user.";
+
+const COMMAND_APPROVAL_NOTE = "User approved this command via confirmation.";
+
+/** §2.3 approval note for a write grant approved via a confirmation dialog. */
+export function writeApprovalNote(approval: PathApproval): string {
+  return approval.scope === "directory"
+    ? `User approved write access via confirmation (scope: directory ${approval.grantedPath}); the subtree is writable for the rest of the session, including via bash.`
+    : `User approved write access via confirmation (scope: file ${approval.grantedPath}); writable for the rest of the session, including via bash.`;
+}
+
+/** Append a note as its own text block at the end of the final tool result (§2.3). */
+function appendNote(result: AgentToolResult<any>, note: string): AgentToolResult<any> {
+  return { ...result, content: [...result.content, { type: "text", text: note }] };
+}
 
 const IMAGE_EXTENSIONS = new Set([
   ".png",
@@ -269,14 +283,15 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     ...bashTool,
     description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call the write or edit tool on the target path to request access from the user.`,
     async execute(id, params, signal, onUpdate, context) {
-      await sandbox.authorizeCommand(params.command, context);
+      const approved = await sandbox.authorizeCommand(params.command, context);
       const result = await sandbox.runTool("bash", params, {
         mode: "bash",
         signal,
         session: sessionFromContext(context),
         onData: onUpdate === undefined ? undefined : stderrLineUpdater(onUpdate),
       });
-      return appendErofsHint(result);
+      // The approval note follows other appended text, so it is the last line (§2.3).
+      return approved ? appendNote(appendErofsHint(result), COMMAND_APPROVAL_NOTE) : appendErofsHint(result);
     },
     renderCall(args, theme, context) {
       if (context.state && context.executionStarted && context.state.startedAt === undefined)
@@ -356,8 +371,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
-      await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
-      return sandbox.runTool("write", normalized, { mode: "fs", signal });
+      const approval = await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
+      const result = await sandbox.runTool("write", normalized, { mode: "fs", signal });
+      return approval === undefined ? result : appendNote(result, writeApprovalNote(approval));
     },
     renderCall(args, theme) {
       return new Text(formatNamedCall("write", formatPath(args.path, cwd), theme), 0, 0);
@@ -379,8 +395,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
       await sandbox.authorizePath("read", resolve(cwd, normalized.path), context);
-      await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
-      return sandbox.runTool("edit", normalized, { mode: "fs", signal });
+      const approval = await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
+      const result = await sandbox.runTool("edit", normalized, { mode: "fs", signal });
+      return approval === undefined ? result : appendNote(result, writeApprovalNote(approval));
     },
     renderCall(args, theme) {
       return new Text(formatNamedCall("edit", formatPath(args.path, cwd), theme), 0, 0);
