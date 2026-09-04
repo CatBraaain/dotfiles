@@ -10,7 +10,6 @@ import sessionSearchExtension, {
 } from "./index";
 import type { SessionEntry, SessionInfo } from "@earendil-works/pi-coding-agent";
 
-
 function session(overrides: Partial<SessionInfo>): SessionInfo {
   return {
     path: `/sessions/${overrides.id ?? "default"}.jsonl`,
@@ -205,6 +204,63 @@ describe("session_get", () => {
     assert.deepEqual(result.messages, []);
   });
 
+  it("returns the message at the requested offset across a gap in the query hit context", async () => {
+    const entries = Array.from({ length: 13 }, (_, index) =>
+      messageEntry(
+        "user",
+        index === 2 || index === 10 ? `needle message ${index}` : `filler message ${index}`,
+        String(index),
+      ),
+    );
+    const gappedSession = session({
+      id: "query-gap",
+      path: "/sessions/query-gap.jsonl",
+      messageCount: entries.length,
+    });
+    const result = await getSession(
+      { id: "query-gap", query: "needle", offset: 6, limit: 1 },
+      source([gappedSession], { [gappedSession.path]: entries }),
+    );
+    assert.deepEqual(
+      result.messages.map((message) => message.text),
+      ["filler message 8"],
+    );
+    assert.equal(result.total, 10);
+  });
+
+  it("applies offset and limit to the query hit context", async () => {
+    const result = await getSession(
+      { id: "recent", query: "harness", offset: 2, limit: 1 },
+      testSource,
+    );
+    assert.deepEqual(
+      result.messages.map((message) => message.text),
+      ["The harness is ready"],
+    );
+    assert.equal(result.total, 3);
+    assert.equal(result.offset, 2);
+  });
+
+  it("returns messages at and after the requested offset in query mode", async () => {
+    const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
+      messageEntry("user", `harness message ${index}`, String(index)),
+    );
+    const longSession = session({
+      id: "query-offset",
+      path: "/sessions/query-offset.jsonl",
+      messageCount: entries.length,
+    });
+    const result = await getSession(
+      { id: "query-offset", query: "harness", offset: DEFAULT_MESSAGE_LIMIT + 1 },
+      source([longSession], { [longSession.path]: entries }),
+    );
+    assert.deepEqual(
+      result.messages.map((message) => message.text),
+      [`harness message ${DEFAULT_MESSAGE_LIMIT}`],
+    );
+    assert.equal(result.total, DEFAULT_MESSAGE_LIMIT + 1);
+  });
+
   it("rejects an unknown session id", async () => {
     await assert.rejects(getSession({ id: "missing" }, testSource), /Session not found/);
   });
@@ -265,12 +321,9 @@ describe("tool registration and rendering", () => {
     };
     const result = await tool.execute("call", { query: "harness" });
     const collapsedLines = renderedLines(
-      tool.renderResult(
-        result,
-        { expanded: false, isPartial: false },
-        identityTheme,
-        { isError: false },
-      ),
+      tool.renderResult(result, { expanded: false, isPartial: false }, identityTheme, {
+        isError: false,
+      }),
     );
     assert.deepEqual(collapsedLines, ["1 sessions"]);
 
@@ -295,12 +348,9 @@ describe("tool registration and rendering", () => {
     };
     const result = await tool.execute("call", { id: "recent" });
     const expandedLines = renderedLines(
-      tool.renderResult(
-        result,
-        { expanded: true, isPartial: false },
-        identityTheme,
-        { isError: false },
-      ),
+      tool.renderResult(result, { expanded: true, isPartial: false }, identityTheme, {
+        isError: false,
+      }),
     );
     assert.ok(expandedLines.some((line) => line.includes("[user] Discuss the harness")));
   });
@@ -313,12 +363,9 @@ describe("tool registration and rendering", () => {
     };
     const result = await tool.execute("call", {});
     const collapsedLines = renderedLines(
-      tool.renderResult(
-        result,
-        { expanded: false, isPartial: false },
-        identityTheme,
-        { isError: true },
-      ),
+      tool.renderResult(result, { expanded: false, isPartial: false }, identityTheme, {
+        isError: true,
+      }),
     );
     assert.deepEqual(collapsedLines, ["error"]);
   });
@@ -353,6 +400,31 @@ describe("tool execution results", () => {
     assert.equal(resultText, 'ヒットなし: "missing"');
   });
 
+  it("session_get does not report hitなし when the query hits but the offset exceeds the context", async () => {
+    const tool = captureTools().get("session_get");
+    const resultText = textOf(
+      await tool.execute("call", { id: "recent", query: "harness", offset: 10 }),
+    );
+    assert.ok(!resultText.includes("ヒットなし"));
+    assert.match(resultText, /指定位置にメッセージなし/);
+  });
+
+  it("session_get reports pagination for a long full session", async () => {
+    const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
+      messageEntry("user", `message ${index}`, String(index)),
+    );
+    const longSession = session({
+      id: "full-long",
+      path: "/sessions/full-long.jsonl",
+      messageCount: entries.length,
+    });
+    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
+      "session_get",
+    );
+    const resultText = textOf(await tool.execute("call", { id: "full-long" }));
+    assert.match(resultText, /全51件中 1〜50件を表示。続きは offset=51/);
+  });
+
   it("session_get reports pagination for a long query result", async () => {
     const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
       messageEntry("user", `harness message ${index}`, String(index)),
@@ -369,11 +441,29 @@ describe("tool execution results", () => {
     assert.match(resultText, /全51件中 1〜50件を表示。続きは offset=51/);
   });
 
-  it("session_get uses query mode when query and range parameters are both provided", async () => {
-    const tool = captureTools().get("session_get");
-    const resultText = textOf(
-      await tool.execute("call", { id: "recent", query: "harness", offset: 2, limit: 1 }),
+  it("session_get paginates the query hit context by offset and limit", async () => {
+    const entries = Array.from({ length: 52 }, (_, index) =>
+      messageEntry("user", `harness message ${index}`, String(index)),
     );
-    assert.match(resultText, /\[assistant\] The harness is ready/);
+    const longSession = session({
+      id: "query-pagination",
+      path: "/sessions/query-pagination.jsonl",
+      messageCount: entries.length,
+    });
+    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
+      "session_get",
+    );
+    const resultText = textOf(
+      await tool.execute("call", {
+        id: "query-pagination",
+        query: "harness",
+        offset: 50,
+        limit: 2,
+      }),
+    );
+    assert.match(resultText, /全52件中 50〜51件を表示。続きは offset=52/);
+    assert.ok(resultText.includes("[user] harness message 49"));
+    assert.ok(resultText.includes("[user] harness message 50"));
+    assert.ok(!resultText.includes("[user] harness message 48"));
   });
 });

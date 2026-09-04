@@ -210,6 +210,18 @@ function searchMessageIndexes(messages: SessionMessage[], query: string): number
   return messages.flatMap((message, index) => (isSubsequence(query, message.text) ? [index] : []));
 }
 
+function messagesAroundHits(messages: SessionMessage[], query: string): SessionMessage[] {
+  const hitIndexes = searchMessageIndexes(messages, query);
+  const contextIndexes = new Set<number>();
+  for (const hitIndex of hitIndexes) {
+    const firstContextIndex = Math.max(0, hitIndex - SEARCH_CONTEXT_RADIUS);
+    const lastContextIndex = Math.min(messages.length - 1, hitIndex + SEARCH_CONTEXT_RADIUS);
+    for (let index = firstContextIndex; index <= lastContextIndex; index++)
+      contextIndexes.add(index);
+  }
+  return [...contextIndexes].sort((left, right) => left - right).map((index) => messages[index]!);
+}
+
 function selectMessages(
   messages: SessionMessage[],
   input: SessionGetInput,
@@ -217,35 +229,15 @@ function selectMessages(
   const roleFilteredMessages = input.role
     ? messages.filter((message) => message.role === input.role)
     : messages;
-
-  if (input.query) {
-    const hitIndexes = searchMessageIndexes(roleFilteredMessages, input.query);
-    const selectedIndexes = new Set<number>();
-    for (const hitIndex of hitIndexes) {
-      const firstContextIndex = Math.max(0, hitIndex - SEARCH_CONTEXT_RADIUS);
-      const lastContextIndex = Math.min(
-        roleFilteredMessages.length - 1,
-        hitIndex + SEARCH_CONTEXT_RADIUS,
-      );
-      for (let index = firstContextIndex; index <= lastContextIndex; index++)
-        selectedIndexes.add(index);
-    }
-    const matchingMessages = [...selectedIndexes]
-      .sort((left, right) => left - right)
-      .map((index) => roleFilteredMessages[index]!);
-    return {
-      selected: matchingMessages.slice(0, DEFAULT_MESSAGE_LIMIT),
-      total: matchingMessages.length,
-      offset: 1,
-    };
-  }
-
+  const candidates = input.query
+    ? messagesAroundHits(roleFilteredMessages, input.query)
+    : roleFilteredMessages;
   const offset = input.offset ?? 1;
   const limit = input.limit ?? DEFAULT_MESSAGE_LIMIT;
   const startIndex = offset - 1;
   return {
-    selected: roleFilteredMessages.slice(startIndex, startIndex + limit),
-    total: roleFilteredMessages.length,
+    selected: candidates.slice(startIndex, startIndex + limit),
+    total: candidates.length,
     offset,
   };
 }
@@ -282,8 +274,9 @@ function formatGetResult(
   result: Awaited<ReturnType<typeof getSession>>,
   input: SessionGetInput,
 ): string {
-  if (input.query && result.messages.length === 0) return `ヒットなし: "${input.query}"`;
+  if (input.query && result.total === 0) return `ヒットなし: "${input.query}"`;
   const header = `## ${result.session.created.toISOString().slice(0, 10)} ${result.session.cwd} — ${result.session.id}`;
+  if (result.messages.length === 0) return `${header}\n指定位置にメッセージなし`;
   const hasMore = result.offset - 1 + result.messages.length < result.total;
   const pagination = hasMore
     ? `\n全${result.total}件中 ${result.offset}〜${result.offset + result.messages.length - 1}件を表示。続きは offset=${result.offset + result.messages.length}`
@@ -312,7 +305,7 @@ function renderToolResult(
   expanded: boolean,
   isError: boolean,
   theme: ToolTheme,
- ): Text {
+): Text {
   const output = result.content.find((item) => item.type === "text")?.text ?? "";
   if (!expanded) {
     const status = isError ? "error" : collapsedText;
