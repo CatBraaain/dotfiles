@@ -15,22 +15,22 @@ default: main
 
 tiers:
   high:
-    - provider: zai
-      model: glm-5.3
-      # z.ai peak hours 14:00-18:00 (UTC+8) => 06:00-10:00 UTC
-      when: 'd=$(date -u +%u); h=$(date -u +%H); ! { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }'
-    - provider: zai
-      model: glm-5.2
+    - provider: <provider>
+      model: <model>
+      # 時間帯で候補の有効/無効を切り替える例（終了コード 0 のとき有効）
+      when: '<bash command>'
+    - provider: <provider>
+      model: <model>
   middle:
-    - provider: zai
-      model: glm-5.2
-    - provider: commandcode
-      model: deepseek/deepseek-v4-flash
+    - provider: <provider>
+      model: <model>
+    - provider: <provider>
+      model: <model>
   low:
-    - provider: commandcode
-      model: deepseek/deepseek-v4-flash
-    - provider: deepseek
-      model: deepseek-v4-flash
+    - provider: <provider>
+      model: <model>
+    - provider: <provider>
+      model: <model>
 
 agents:
   main:
@@ -151,15 +151,7 @@ HTTPレスポンスの `Retry-After` は次のように解釈する。
 
 HTTP 429 はステータスコードで判定するため全プロバイダ共通。最終assistantエラーは pi-ai が文字列化するため、プロバイダファミリごとの文言を大文字小文字を区別せず部分一致で判定する。一過性の障害（5xx、`overloaded`、`service unavailable`、タイムアウト等）は含めず、pi 本体の再試行に任せる。
 
-| 分類                       | パターン                                                                                                             |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| HTTP ステータス            | `429`、`402`                                                                                                         |
-| Z.AI（コーディングプラン） | `code":"1310"`、`code":"1113"`                                                                                       |
-| OpenCode Zen               | `Weekly Limit Exhausted`、`Monthly Limit Exhausted`、`GoUsageLimitError`、`FreeUsageLimitError`、`available balance` |
-| Codex / ChatGPT            | `usage limit`                                                                                                        |
-| 汎用クォータ・課金         | `insufficient_quota`、`quota exceeded`、`out of budget`、`billing`、`insufficient balance`、`insufficient credit`    |
-| 汎用スロットリング         | `rate limit`、`too many requests`                                                                                    |
-| Google / Bedrock           | `RESOURCE_EXHAUSTED`、`throttl`（前方一致）                                                                          |
+パターンの一覧の正本は実装（`routing.ts` の `RATE_LIMIT_ERROR_PATTERNS`）が持つ。本 spec は一覧を転記しない。パターンの追加・変更は実装側で行うが、判定方法（大文字小文字を区別しない部分一致）と、一過性の障害を含めない方針はこの節の規定に従う。
 
 ```mermaid
 flowchart TD
@@ -174,7 +166,8 @@ flowchart TD
 - 次候補への切替後、Pi は追加の待機を入れず、現在のユーザーメッセージを追加せずにターンを再試行する。ユーザーメッセージの履歴件数は増えない。
 - 現在の agent の tier の候補数を N とすると、1ターンで最大 N-1 回再試行し、最大 N 候補を順に試行する。再試行回数は `~/.pi/agent/settings.json` の `retry.maxRetries`（候補数以上を推奨）が上限となる
 - フォールバックで切り替えに成功したら `rate limited on <provider>/<model>; switched to <provider>/<model>` を warning で通知する。
-- 次候補がない場合は `rate limited on <provider>/<model>; no fallback available` を error で通知し、再試行しない。
+- フォールバックに成功した場合、レート制限エラーとなった最終assistantメッセージのエラー文言を、フォールバック済みであることを示す置換文言へ差し替えてから再試行する。置換後の文言には元のエラー文言を含めない。quota・課金系の文言（`insufficient_quota` 等）が残ったまま再試行されると、pi 本体がそのメッセージを再試行不可と判定してターンがエラー終了するためである。
+- 次候補がない場合は `rate limited on <provider>/<model>; no fallback available` を error で通知し、再試行しない。この通知には元のエラー文言と、ユーザーによるメッセージ再送を促す案内を含める。
 
 ### pi の再試行設定
 

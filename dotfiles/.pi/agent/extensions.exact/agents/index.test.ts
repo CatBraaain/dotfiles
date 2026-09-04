@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import agentsExtension, {
   __abortTimer,
   __resetRoutingState,
@@ -921,21 +922,47 @@ describe("レート制限（429）時のフォールバック", () => {
         model: "glm-5.2",
         errorMessage: "provider error",
       });
-      assert.match(replacement.message.errorMessage, /^429 fallback available:/);
+      assert.equal(
+        replacement.message.errorMessage,
+        "429 rate limit error; already switched to a fallback model",
+      );
+      assert.equal(replacement.message.errorMessage.includes("provider error"), false);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.ok(
-        extension.notifications.includes(
-          "rate limited on zai/glm-5.2; switched to commandcode/gpt-5.6-luna",
-        ),
-      );
       assert.deepEqual(extension.notificationEvents.at(-1), {
         message: "rate limited on zai/glm-5.2; switched to commandcode/gpt-5.6-luna",
         level: "warning",
       });
       assert.equal(extension.sentMessages.length, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("quota 系 in-band エラーはフォールバック後の置換文言で pi-ai の retryable 判定を満たす", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const quotaError =
+        "OpenAI API error: 429 insufficient_quota: You exceeded your current quota, please check your plan and billing details.";
+      const erroredMessage = {
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage: quotaError,
+      };
+      // pi-ai の実パターン判定: 置換前の quota 系メッセージは再試行不可
+      assert.equal(isRetryableAssistantError(erroredMessage as never), false);
+
+      const replacement = await extension.messageEnd(erroredMessage);
+      const replacedErrorMessage: string = replacement.message.errorMessage;
+      assert.equal(replacedErrorMessage.includes(quotaError), false);
+      assert.equal(replacedErrorMessage.includes("insufficient_quota"), false);
+      // pi-ai の実パターン判定: 置換後のメッセージは再試行可能
+      assert.equal(isRetryableAssistantError(replacement.message), true);
     } finally {
       extension.restore();
     }
@@ -1033,7 +1060,11 @@ describe("レート制限（429）時のフォールバック", () => {
         model: "glm-5.2",
         errorMessage: 'Error: {"code":"1310","message":"Weekly/Monthly Limit Exhausted"}',
       });
-      assert.match(replacement.message.errorMessage, /^429 fallback available:/);
+      assert.equal(
+        replacement.message.errorMessage,
+        "429 rate limit error; already switched to a fallback model",
+      );
+      assert.equal(replacement.message.errorMessage.includes("1310"), false);
       assert.equal(extension.sentMessages.length, 0);
     } finally {
       extension.restore();
@@ -1073,7 +1104,11 @@ describe("レート制限（429）時のフォールバック", () => {
         model: "glm-5.2",
         errorMessage: "Error: 429: too many requests",
       });
-      assert.match(replacement.message.errorMessage, /^429 fallback available:/);
+      assert.equal(
+        replacement.message.errorMessage,
+        "429 rate limit error; already switched to a fallback model",
+      );
+      assert.equal(replacement.message.errorMessage.includes("too many requests"), false);
       assert.equal(extension.selectedModels.length, selectedModelCount);
       assert.equal(extension.sentMessages.length, 0);
     } finally {
@@ -1096,10 +1131,45 @@ describe("レート制限（429）時のフォールバック", () => {
       });
       assert.equal(replacement, undefined);
       assert.equal(extension.sentMessages.length, 0);
-      assert.deepEqual(
-        extension.notifications.at(-1),
-        "rate limited on commandcode/gpt-5.6-luna; no fallback available",
+      const noFallback = extension.notificationEvents.at(-1);
+      assert.ok(noFallback);
+      assert.equal(noFallback.level, "error");
+      assert.match(
+        noFallback.message,
+        /^rate limited on commandcode\/gpt-5.6-luna; no fallback available/,
       );
+      assert.ok(noFallback.message.includes("Error: 429: too many requests"));
+      assert.match(noFallback.message, /resend your message/i);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("in-band エラーで次候補がない場合も元エラーと再送案内を通知する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("worker");
+      const replacement = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "commandcode",
+        model: "gpt-5.6-luna",
+        errorMessage: "Error: insufficient_quota: You exceeded your current quota",
+      });
+      assert.equal(replacement, undefined);
+      assert.equal(extension.sentMessages.length, 0);
+      const noFallback = extension.notificationEvents.at(-1);
+      assert.ok(noFallback);
+      assert.equal(noFallback.level, "error");
+      assert.match(
+        noFallback.message,
+        /^rate limited on commandcode\/gpt-5.6-luna; no fallback available/,
+      );
+      assert.ok(
+        noFallback.message.includes("Error: insufficient_quota: You exceeded your current quota"),
+      );
+      assert.match(noFallback.message, /resend your message/i);
     } finally {
       extension.restore();
     }

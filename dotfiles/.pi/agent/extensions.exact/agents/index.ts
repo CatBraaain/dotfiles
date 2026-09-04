@@ -209,6 +209,14 @@ export function __resetRoutingState(): void {
 const SPINNER_INTERVAL_MS = 100;
 const EXIT_STDIO_GRACE_MS = 100;
 
+// SPEC「レート制限（429）時のフォールバック」: フォールバック済みであることを示す置換文言。
+// 元のエラー文言は含めない。quota・課金系の文言（insufficient_quota 等）が残ったまま
+// 再試行されると、pi 本体（pi-ai の isRetryableAssistantError）がそのメッセージを再試行
+// 不可と判定してターンがエラー終了するためである。文言は pi-ai の RETRYABLE パターン
+// （"429"、"rate limit"）に一致し、NON_RETRYABLE パターンには一致しない。
+const RATE_LIMIT_FALLBACK_APPLIED_MESSAGE =
+  "429 rate limit error; already switched to a fallback model";
+
 export const __spinnerTimers: {
   set: (callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>;
   clear: (timer: ReturnType<typeof setInterval>) => void;
@@ -856,19 +864,36 @@ export default function agentsExtension(
     recordCooldown(cooldowns, rateLimitedModelKey, cooldownMs, Date.now());
 
     const switchedTo = await applyTierModel(currentAgent, ctx, ctx.signal, false);
-    if (!switchedTo) {
+    if (switchedTo) {
       if (ctx.hasUI)
-        ctx.ui.notify(`rate limited on ${rateLimitedModelKey}; no fallback available`, "error");
-      return false;
+        ctx.ui.notify(
+          `rate limited on ${rateLimitedModelKey}; switched to ${switchedTo}`,
+          "warning",
+        );
+      return true;
     }
-    if (ctx.hasUI)
-      ctx.ui.notify(`rate limited on ${rateLimitedModelKey}; switched to ${switchedTo}`, "warning");
-    return true;
+    return false;
   }
 
-  function makeRetryableRateLimitMessage(message: AssistantMessage): AssistantMessage {
-    const errorMessage = message.errorMessage ?? "provider request failed";
-    return { ...message, errorMessage: `429 fallback available: ${errorMessage}` };
+  // SPEC「レート制限（429）時のフォールバック」: 次候補がない場合の error 通知。元の
+  // エラー文言とユーザーによるメッセージ再送の案内を含める。フォールバックの可否は
+  // after_provider_response（HTTP 429）の時点でも決まるが、元のエラー文言は最終
+  // assistant メッセージにしか現れないため、通知は message_end で行う。
+  function notifyNoFallback(
+    rateLimitedModelKey: string,
+    errorMessage: string | undefined,
+    ctx: ExtensionContext,
+  ): void {
+    if (!ctx.hasUI) return;
+    const originalError = errorMessage ? `\n${errorMessage}` : "";
+    ctx.ui.notify(
+      `rate limited on ${rateLimitedModelKey}; no fallback available${originalError}\nResend your message to retry.`,
+      "error",
+    );
+  }
+
+  function makeFallbackAppliedMessage(message: AssistantMessage): AssistantMessage {
+    return { ...message, errorMessage: RATE_LIMIT_FALLBACK_APPLIED_MESSAGE };
   }
 
   pi.on("after_provider_response", async (event, ctx) => {
@@ -888,8 +913,11 @@ export default function agentsExtension(
     if (httpRateLimitAwaitingMessage?.modelKey === rateLimitedModelKey) {
       const { fallbackSucceeded } = httpRateLimitAwaitingMessage;
       httpRateLimitAwaitingMessage = undefined;
-      if (!fallbackSucceeded) return;
-      return { message: makeRetryableRateLimitMessage(message) };
+      if (!fallbackSucceeded) {
+        notifyNoFallback(rateLimitedModelKey, message.errorMessage, ctx);
+        return;
+      }
+      return { message: makeFallbackAppliedMessage(message) };
     }
     if (!isRateLimitedError(message.errorMessage)) return;
 
@@ -898,7 +926,8 @@ export default function agentsExtension(
       DEFAULT_COOLDOWN_MS,
       ctx,
     );
-    if (fallbackSucceeded) return { message: makeRetryableRateLimitMessage(message) };
+    if (fallbackSucceeded) return { message: makeFallbackAppliedMessage(message) };
+    notifyNoFallback(rateLimitedModelKey, message.errorMessage, ctx);
   });
 
   // ── tool gating & agent commands ─────────────────────────────────────
