@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Sandbox, type ToolSession } from "./sandbox";
+import { normalizeToolPath } from "../shared/normalize-path.ts";
 import {
   formatBashCall,
   formatNamedCall,
@@ -214,6 +215,45 @@ function appendErofsHint(result: AgentToolResult<any>): AgentToolResult<any> {
   return { ...result, content: [...result.content, { type: "text", text: EROFS_HINT }] };
 }
 
+/**
+ * Apply SPEC §3 path normalization to a tool-call `path` argument and return
+ * params carrying the normalized path, so authorize and run-tools receive the
+ * identical value (the reviewed path is the executed path). Params without a
+ * usable path string are returned unchanged.
+ */
+function withNormalizedPath(params: { path?: unknown }): { path?: unknown } {
+  if (typeof params.path !== "string" || params.path === "") return params;
+  const normalized = normalizeToolPath(params.path);
+  return normalized === params.path ? params : { ...params, path: normalized };
+}
+
+/**
+ * Forward child stderr to onUpdate line-by-line (SPEC §7): each completed
+ * non-empty line becomes a partial tool result so the UI shows progress while
+ * the command runs. Bytes are buffered until a newline so multibyte UTF-8
+ * split across chunks decodes as a complete sequence. stdout (the run-tools
+ * JSON envelope) is not streamed, and the final result still returns once, at
+ * completion.
+ */
+function stderrLineUpdater(
+  onUpdate: (partialResult: AgentToolResult<any>) => void,
+): (data: Buffer, stream: "stdout" | "stderr") => void {
+  let pending = Buffer.alloc(0);
+  return (data, stream) => {
+    if (stream !== "stderr") return;
+    pending = Buffer.concat([pending, data]);
+    for (
+      let newlineAt = pending.indexOf(0x0a);
+      newlineAt !== -1;
+      newlineAt = pending.indexOf(0x0a)
+    ) {
+      const line = pending.subarray(0, newlineAt).toString("utf8").replace(/\r$/, "");
+      pending = pending.subarray(newlineAt + 1);
+      if (line !== "") onUpdate({ content: [{ type: "text", text: line }] });
+    }
+  };
+}
+
 export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
   const cwd = process.cwd();
   const sandbox = new Sandbox(cwd);
@@ -228,12 +268,13 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     ...bashTool,
     description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call the write or edit tool on the target path to request access from the user.`,
-    async execute(id, params, signal, _onUpdate, context) {
+    async execute(id, params, signal, onUpdate, context) {
       await sandbox.authorizeCommand(params.command, context);
       const result = await sandbox.runTool("bash", params, {
         mode: "bash",
         signal,
         session: sessionFromContext(context),
+        onData: onUpdate === undefined ? undefined : stderrLineUpdater(onUpdate),
       });
       return appendErofsHint(result);
     },
@@ -243,7 +284,16 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
       return new Text(formatBashCall(args.command, theme), 0, 0);
     },
     renderResult(result, options, theme, context) {
-      if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
+      if (options.isPartial) {
+        // While running, show the latest streamed stderr line as progress;
+        // until the first line arrives this stays "Running..." (SPEC §7・§8).
+        const progressLine = resultText(result);
+        return new Text(
+          theme.fg("warning", progressLine === "" ? "Running..." : progressLine),
+          0,
+          0,
+        );
+      }
       if (context.isError) return renderToolError(result, theme);
       const state = context.state;
       const durationMs =
@@ -293,10 +343,11 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     "read",
     (args) => args.path,
     async (args, signal, context) => {
-      const imagePath = resolve(cwd, args.path);
+      const normalized = withNormalizedPath(args) as { path: string };
+      const imagePath = resolve(cwd, normalized.path);
       await sandbox.authorizePath("read", imagePath, context);
       if (isImageFile(imagePath)) return createImageReadResult(imagePath);
-      return sandbox.runTool("read", args, { mode: "fs", signal });
+      return sandbox.runTool("read", normalized, { mode: "fs", signal });
     },
     { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
   );
@@ -304,8 +355,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     ...writeTool,
     description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
     async execute(_id, params, signal, _onUpdate, context) {
-      await sandbox.authorizePath("write", resolve(cwd, params.path), context);
-      return sandbox.runTool("write", params, { mode: "fs", signal });
+      const normalized = withNormalizedPath(params) as { path: string };
+      await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
+      return sandbox.runTool("write", normalized, { mode: "fs", signal });
     },
     renderCall(args, theme) {
       return new Text(formatNamedCall("write", formatPath(args.path, cwd), theme), 0, 0);
@@ -325,9 +377,10 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     description: `${editTool.description} Editing an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
     renderShell: "default",
     async execute(_id, params, signal, _onUpdate, context) {
-      await sandbox.authorizePath("read", resolve(cwd, params.path), context);
-      await sandbox.authorizePath("write", resolve(cwd, params.path), context);
-      return sandbox.runTool("edit", params, { mode: "fs", signal });
+      const normalized = withNormalizedPath(params) as { path: string };
+      await sandbox.authorizePath("read", resolve(cwd, normalized.path), context);
+      await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
+      return sandbox.runTool("edit", normalized, { mode: "fs", signal });
     },
     renderCall(args, theme) {
       return new Text(formatNamedCall("edit", formatPath(args.path, cwd), theme), 0, 0);
@@ -345,8 +398,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     ...grepTool,
     async execute(_id, params, signal, _onUpdate, context) {
-      await sandbox.authorizePath("read", resolve(cwd, params.path ?? "."), context);
-      return sandbox.runTool("grep", params, { mode: "fs", signal });
+      const normalized = withNormalizedPath(params) as { path?: string };
+      await sandbox.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
+      return sandbox.runTool("grep", normalized, { mode: "fs", signal });
     },
     renderCall(args, theme) {
       const path = formatPath(String(args.path ?? ""), cwd);
@@ -367,8 +421,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     "find",
     (args) => `${args.pattern} in ${formatPath(String(args.path ?? ""), cwd)}`,
     async (args, signal, context) => {
-      await sandbox.authorizePath("read", resolve(cwd, args.path ?? "."), context);
-      return sandbox.runTool("find", args, { mode: "fs", signal });
+      const normalized = withNormalizedPath(args) as { path?: string };
+      await sandbox.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
+      return sandbox.runTool("find", normalized, { mode: "fs", signal });
     },
   );
   registerTextTool(
@@ -376,8 +431,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     "ls",
     (args) => formatPath(String(args.path ?? ""), cwd),
     async (args, signal, context) => {
-      await sandbox.authorizePath("read", resolve(cwd, args.path ?? "."), context);
-      return sandbox.runTool("ls", args, { mode: "fs", signal });
+      const normalized = withNormalizedPath(args) as { path?: string };
+      await sandbox.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
+      return sandbox.runTool("ls", normalized, { mode: "fs", signal });
     },
   );
 }

@@ -16,10 +16,12 @@ pi の bash / read / write / edit を安全に回しつつ、network 系は自�
 |---|---|
 | **守る** | workspace 外への **読み書き** を機械的に制限（bash も read/write/edit も） |
 | **守る** | push / publish 等の破壊的・外部公開操作に確認ゲート |
-| **守る** | 秘密ファイル（`~/.ssh`, `~/.aws` 等）の読み出しを制限 |
+| **守る** | fs 系ツール（read / write / edit / grep / find / ls）経由の秘密ファイル（`~/.ssh`, `~/.aws` 等）の読み出しを、`read.deny` と `credentials` のマスクで制限 |
 | **自由** | web_fetch / web_search（network は開放） |
 | **自由** | bash コマンドの実行自体 |
 | **運用** | セッション中の動的許可拡張（ユーザー主導・エージェントからは不可） |
+
+**既知の限界（bash 経由の秘密読み出し）**: bash コマンドの sandbox では `read.deny` のマスクを行わず、現状の `credentials` は空である。したがって bash からの秘密ファイル読み出しの制限は、現行実装の守る範囲に含めない。bash での読み出し制限（マスク・bind 対象からの除外等）の機能追加は別検討とする。
 
 **対象スコープ**: 自分のマシン・自分のリポジトリ（信頼できないコードは今は扱わない）
 
@@ -94,7 +96,8 @@ flowchart TD
 | ✓ | fetch が自由 |
 | ✓ | workspace 外の読み書きを機械的に弾く（bash も read/write/edit も）|
 | ✓ | push/publish に承認を挟む |
-| ✓ | 秘密ファイルの読み出しを制限 |
+| ✓ | fs 系ツール経由の秘密ファイル読み出しを制限（`read.deny`・`credentials` のマスク） |
+| ✗ | bash 経由の秘密ファイル読み出しは制限しない（bash モードは `read.deny` のマスクなし・`credentials` 空）。bash での読み出し制限の機能追加は別検討 |
 | ✓ | セッション中の動的許可拡張(ユーザー主導) |
 | ✓ | 許可リスト1箇所で DRY |
 | ✗ | 網羅性の手動担保: 新ツールを共通 bwrap ラッパーに繋がないと抜け道 |

@@ -54,7 +54,7 @@ type RunOptions = {
   cwd?: string;
   input?: string | Buffer;
   env?: NodeJS.ProcessEnv;
-  onData?: (data: Buffer) => void;
+  onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
   signal?: AbortSignal;
   timeout?: number;
   mode?: "fs" | "bash";
@@ -770,7 +770,12 @@ export class Sandbox {
   async runTool(
     toolName: ToolName,
     params: unknown,
-    options: { mode: "fs" | "bash"; signal?: AbortSignal; session?: ToolSession },
+    options: {
+      mode: "fs" | "bash";
+      signal?: AbortSignal;
+      session?: ToolSession;
+      onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
+    },
   ): Promise<AgentToolResult<any>> {
     const request = JSON.stringify({ toolCallId: "cli", params, session: options.session });
     const execution = await this.run("bun", [this.runToolsPath, toolName], {
@@ -778,6 +783,7 @@ export class Sandbox {
       mode: options.mode,
       signal: options.signal,
       env: { ...process.env, SANDBOXED_TOOLS_PI_PACKAGE_DIR: this.piPackageDir },
+      onData: options.onData,
     });
     const response = parseRunToolsResponse(execution);
     if (!response.ok) throw new Error(response.error);
@@ -813,11 +819,11 @@ export class Sandbox {
       options.signal?.addEventListener("abort", onAbort, { once: true });
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout.push(chunk);
-        options.onData?.(chunk);
+        options.onData?.(chunk, "stdout");
       });
       child.stderr?.on("data", (chunk: Buffer) => {
         stderr.push(chunk);
-        options.onData?.(chunk);
+        options.onData?.(chunk, "stderr");
       });
       child.on("error", rejectRun);
       child.on("close", (exitCode) => {

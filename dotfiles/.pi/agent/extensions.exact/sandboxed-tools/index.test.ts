@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -24,7 +24,7 @@ import {
   resolvePathAction,
   resolvePathActionMatch,
 } from "./sandbox";
-
+import { startStderrTeeReceiver } from "./run-tools";
 
 function withSandbox(
   configYaml: string,
@@ -1377,6 +1377,101 @@ describe("§3 動的拡張のライフサイクル", () => {
   );
 });
 
+describe("§3 ツール引数パスの正規化", () => {
+  it("@・~ 付き引数は審査パスと run-tools 実行パスを一致させる", async () => {
+    const authorized: { operation: string; path: string }[] = [];
+    const runToolCalls: { toolName: string; params: any }[] = [];
+    const originalAuthorizePath = Sandbox.prototype.authorizePath;
+    const originalRunTool = Sandbox.prototype.runTool;
+    Sandbox.prototype.authorizePath = async function (operation, path) {
+      authorized.push({ operation, path });
+    };
+    Sandbox.prototype.runTool = async function (toolName, params) {
+      runToolCalls.push({ toolName, params });
+      return { content: [{ type: "text", text: "stub" }] };
+    };
+    try {
+      const tools = captureRegisteredTools();
+      const cases: {
+        toolName: string;
+        params: Record<string, unknown>;
+        expectedPath: string;
+      }[] = [
+        {
+          toolName: "read",
+          params: { path: "@/abs/read-target.txt" },
+          expectedPath: "/abs/read-target.txt",
+        },
+        {
+          toolName: "write",
+          params: { path: "@/abs/write-target.txt", content: "" },
+          expectedPath: "/abs/write-target.txt",
+        },
+        {
+          toolName: "edit",
+          params: { path: "@/abs/edit-target.txt", edits: [] },
+          expectedPath: "/abs/edit-target.txt",
+        },
+        {
+          toolName: "grep",
+          params: { pattern: "needle", path: "@/abs/grep-root" },
+          expectedPath: "/abs/grep-root",
+        },
+        {
+          toolName: "find",
+          params: { pattern: "*.ts", path: "@/abs/find-root" },
+          expectedPath: "/abs/find-root",
+        },
+        {
+          toolName: "ls",
+          params: { path: "@/abs/ls-root" },
+          expectedPath: "/abs/ls-root",
+        },
+        {
+          toolName: "read",
+          params: { path: "~/normalized-note.txt" },
+          expectedPath: join(homedir(), "normalized-note.txt"),
+        },
+        {
+          toolName: "write",
+          params: { path: "@~/normalized-note.txt", content: "" },
+          expectedPath: join(homedir(), "normalized-note.txt"),
+        },
+      ];
+      for (const testCase of cases) {
+        authorized.length = 0;
+        runToolCalls.length = 0;
+        await tools
+          .get(testCase.toolName)
+          .execute("t", testCase.params, undefined, undefined, { hasUI: false });
+        assert.equal(runToolCalls.length, 1, testCase.toolName);
+        assert.equal(runToolCalls[0].toolName, testCase.toolName);
+        assert.equal(
+          resolve(process.cwd(), runToolCalls[0].params.path),
+          testCase.expectedPath,
+          testCase.toolName,
+        );
+        assert.ok(authorized.length >= 1, testCase.toolName);
+        for (const entry of authorized)
+          assert.equal(entry.path, testCase.expectedPath, testCase.toolName);
+      }
+    } finally {
+      Sandbox.prototype.authorizePath = originalAuthorizePath;
+      Sandbox.prototype.runTool = originalRunTool;
+    }
+  });
+
+  it("正規化により ~ 付き引数は deny エントリに照合されブロックされる", async () => {
+    const readTool = captureRegisteredTools().get("read");
+    for (const deniedPath of ["@~/.pi/agent/auth.json", "~/.pi/agent/auth.json"]) {
+      await assert.rejects(
+        () => readTool.execute("t", { path: deniedPath }, undefined, undefined, { hasUI: false }),
+        /Access denied/,
+      );
+    }
+  });
+});
+
 describe("§4 bash コマンドの実行結果", () => {
   it("コマンドの完全な先頭語に一致する", () => {
     assert.equal(
@@ -1808,6 +1903,210 @@ describe("§6.1 bind とパスの実在保証", () => {
       assert.deepEqual(args.slice(rootBindAt - 1, rootBindAt + 2), ["--ro-bind", "/", "/"]);
     }),
   );
+});
+
+describe("§7 bash の stderr 逐次表示", () => {
+  it("stderr 行を onUpdate へ逐次流し、最終結果は完了時に一度に返る", async () => {
+    const envelope = JSON.stringify({
+      ok: true,
+      result: { content: [{ type: "text", text: "final output" }] },
+    });
+    // Simulate a slow run-tools child: delayed stderr lines (one split across
+    // chunks, one empty) and the JSON envelope on stdout only at completion.
+    // bwrap is not usable in every test environment, so replace Sandbox.run's
+    // child spawn; runTool and the bash execute stay real.
+    const childScript = [
+      "echo one >&2",
+      "sleep 0.3",
+      "printf par >&2",
+      "sleep 0.1",
+      "printf 'tial\\n' >&2",
+      "echo >&2",
+      "sleep 0.3",
+      "echo two >&2",
+      `printf '%s\\n' '${envelope}'`,
+    ].join("; ");
+    const sandboxPrototype = Sandbox.prototype as unknown as {
+      run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
+    };
+    const originalRun = sandboxPrototype.run;
+    sandboxPrototype.run = function (_command, _commandArgs, runOptions) {
+      return new Promise((resolveRun, rejectRun) => {
+        const child = spawn("bash", ["-c", childScript], { stdio: ["ignore", "pipe", "pipe"] });
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        child.stdout?.on("data", (chunk: Buffer) => {
+          stdout.push(chunk);
+          runOptions.onData?.(chunk, "stdout");
+        });
+        child.stderr?.on("data", (chunk: Buffer) => {
+          stderr.push(chunk);
+          runOptions.onData?.(chunk, "stderr");
+        });
+        child.on("error", rejectRun);
+        child.on("close", (exitCode) =>
+          resolveRun({
+            exitCode,
+            stdout: Buffer.concat(stdout),
+            stderr: Buffer.concat(stderr),
+          }),
+        );
+      });
+    };
+    try {
+      const updates: { text: string; at: number }[] = [];
+      const result = await captureRegisteredTools()
+        .get("bash")
+        .execute(
+          "t",
+          { command: "simulated slow command" },
+          undefined,
+          (partial: any) => updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
+          { hasUI: false },
+        );
+      assert.deepEqual(
+        updates.map((update) => update.text),
+        ["one", "partial", "two"],
+      );
+      assert.ok(
+        updates[2].at - updates[0].at >= 200,
+        `stderr lines must stream during execution (gap: ${updates[2].at - updates[0].at}ms)`,
+      );
+      assert.equal(result.content[0].text, "final output");
+    } finally {
+      sandboxPrototype.run = originalRun;
+    }
+  });
+
+  it("実行中の表示は直近の stderr 行、無ければ Running... になる", () => {
+    const bashTool = captureRegisteredTools().get("bash");
+    const renderPartial = (result: unknown): string =>
+      bashTool
+        .renderResult(result, { isPartial: true }, plainTheme, {})
+        .render(200)
+        .join("\\n")
+        .trimEnd();
+    assert.equal(renderPartial({ content: [] }), "Running...");
+    assert.equal(renderPartial({ content: [{ type: "text", text: "one" }] }), "one");
+  });
+
+  it("実コマンドの stderr が行単位で onUpdate へ流れ、最終結果は envelope から一度に返る", async () => {
+    // Full chain without bwrap (unavailable in every test environment):
+    // replace Sandbox.run's bwrap spawn with a direct bun spawn of run-tools,
+    // keeping runTool, execute, and parseRunToolsResponse real. Inside
+    // run-tools the real pi bash definition runs the command with the stderr
+    // tee commandPrefix, so the command's stderr reaches this process's
+    // stderr only through the new forwarding path.
+    const sandboxPrototype = Sandbox.prototype as unknown as {
+      run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
+    };
+    const originalRun = sandboxPrototype.run;
+    sandboxPrototype.run = function (_command, _commandArgs, runOptions) {
+      return new Promise((resolveRun, rejectRun) => {
+        const child = spawn(_command, _commandArgs, {
+          cwd: process.cwd(),
+          env: runOptions.env,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        child.stdout?.on("data", (chunk: Buffer) => {
+          stdout.push(chunk);
+          runOptions.onData?.(chunk, "stdout");
+        });
+        child.stderr?.on("data", (chunk: Buffer) => {
+          stderr.push(chunk);
+          runOptions.onData?.(chunk, "stderr");
+        });
+        child.on("error", rejectRun);
+        child.on("close", (exitCode) =>
+          resolveRun({
+            exitCode,
+            stdout: Buffer.concat(stdout),
+            stderr: Buffer.concat(stderr),
+          }),
+        );
+        child.stdin?.end(runOptions.input);
+      });
+    };
+    try {
+      // Delayed stderr with a multibyte line split across two chunks, an empty
+      // line, and a trailing partial line without a newline.
+      const updates: { text: string; at: number }[] = [];
+      const result = await captureRegisteredTools()
+        .get("bash")
+        .execute(
+          "t",
+          {
+            command:
+              "echo first >&2; sleep 0.3; printf '進' >&2; sleep 0.15; printf '行中\\n' >&2; printf '\\n' >&2; echo done; printf 'tail' >&2",
+          },
+          undefined,
+          (partial: any) => updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
+          { hasUI: false },
+        );
+      assert.deepEqual(
+        updates.map((update) => update.text),
+        ["first", "進行中"],
+      );
+      assert.ok(
+        updates[1].at - updates[0].at >= 200,
+        `stderr lines must stream during execution (gap: ${updates[1].at - updates[0].at}ms)`,
+      );
+      // pi's accumulator interleaves stdout and stderr chunks in arrival
+      // order, so characters of a stderr line may be separated by stdout in
+      // the final text (e.g. "進done\n行中"); assert per-character presence
+      // for the result and keep the reassembly check on onUpdate, which sees
+      // the stderr stream alone.
+      const finalText = result.content[0].text;
+      assert.ok(finalText.includes("done"), `stdout missing from result: ${finalText}`);
+      assert.ok(finalText.includes("first"), `stderr missing from result: ${finalText}`);
+      assert.ok(finalText.includes("進"), `split multibyte broken in result: ${finalText}`);
+      assert.ok(finalText.includes("行中"), `split multibyte broken in result: ${finalText}`);
+      assert.ok(finalText.includes("tail"), `partial tail missing from result: ${finalText}`);
+    } finally {
+      sandboxPrototype.run = originalRun;
+    }
+  });
+
+  it("レシーバへの接続が拒否されてもフォールバックし、コマンド結果は従来どおり返る", async () => {
+    // Connection-refused fallback (review F5): take the receiver's real
+    // commandPrefix, then close the receiver so its port is closed before the
+    // command's /dev/tcp connect. The command must behave exactly like the
+    // plain (no-prefix) definition that executeToolRequest falls back to.
+    const tee = await startStderrTeeReceiver();
+    await tee.close();
+    const pi = await import("@earendil-works/pi-coding-agent");
+    const runBash = async (options: { commandPrefix: string } | undefined): Promise<Error> => {
+      try {
+        await pi
+          .createBashToolDefinition(process.cwd(), options)
+          .execute(
+            "t",
+            { command: "echo out; echo err >&2; exit 7" },
+            undefined,
+            undefined,
+            undefined,
+          );
+      } catch (error) {
+        return error as Error;
+      }
+      throw new Error("expected the exit code 7 command to reject");
+    };
+    const fallbackError = await runBash({ commandPrefix: tee.commandPrefix });
+    const plainError = await runBash(undefined);
+    assert.match(fallbackError.message, /out/);
+    assert.match(fallbackError.message, /err/);
+    assert.match(fallbackError.message, /Command exited with code 7/);
+    // pi's accumulator interleaves stdout and stderr in arrival order, so
+    // compare the output as an unordered set of lines.
+    const messageLines = (message: string) =>
+      message
+        .split("\n")
+        .filter((line) => line !== "")
+        .sort();
+    assert.deepEqual(messageLines(fallbackError.message), messageLines(plainError.message));
+  });
 });
 
 describe("§8 表示", () => {

@@ -85,6 +85,15 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 ## 3. パスの解決
 
+### ツール引数パスの正規化（authorize 前）
+
+fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）が引数に受け取るパスは、アクション判定（authorize）の前に共有ヘルパーで正規化する。承認（§2.3 のダイアログ・許可要求）と実行（§7 の run-tools へ渡すパス）は同一の正規化結果を用い、審査したパスと実行するパスを一致させる。
+
+| 引数の記述 | 正規化 |
+| --- | --- |
+| `@` 接頭（`@/abs/path` 等） | 接頭 `@` を取り除く |
+| `~`・`~/...` | ホームディレクトリへ展開する |
+
 ### パス文字列の解決
 
 `config.yaml` の `read` / `write` および `credentials` のパスエントリは以下の規則で絶対パスに解決する。`read` / `write` はそれぞれの設定でアクション判定を行い、`read` / `write` と `credentials` は bwrap の bind 対象（§6.1）とする。
@@ -221,7 +230,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 - **出力**: stdout に tool result の JSON（`ok: true` なら `result`、`ok: false` なら `error`）。失敗時は非 0 で終了する。
 - 標準 tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob 結果整形、rg 実行、shell 実行と timeout）は本拡張で再実装しない。
 - `edit` は pi 標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
-- ツールの実行結果はコマンド完了時に一度に返る。bash のストリーミング部分表示は行わない。
+- ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で逐次表示し、進行を可視化する。stdout は run-tools CLI の JSON envelope に使うため、逐次表示の対象外である。逐次表示はツールの最終結果を変えず、最終結果は完了時に一度に返る。
 
 ### bwrap 起動
 
