@@ -2485,6 +2485,20 @@ describe("§4 bash コマンドの実行結果", () => {
     );
   });
 
+  it("後の allow エントリが前の ask エントリを上書きする（systemctl 3分類）", () => {
+    const entries = [
+      { action: "allow", patterns: ["*"] },
+      { action: "ask", patterns: ["systemctl"] },
+      { action: "allow", patterns: ["systemctl status", "systemctl list-*"] },
+      { action: "deny", patterns: ["systemctl reboot", "{shutdown,reboot,poweroff,halt}"] },
+    ];
+    assert.equal(resolveCommandAction(entries, "systemctl status nginx"), "allow");
+    assert.equal(resolveCommandAction(entries, "systemctl list-units --all"), "allow");
+    assert.equal(resolveCommandAction(entries, "systemctl restart nginx"), "ask");
+    assert.equal(resolveCommandAction(entries, "systemctl reboot"), "deny");
+    assert.equal(resolveCommandAction(entries, "reboot"), "deny");
+  });
+
   it(
     "ask コマンドは承認で実行される",
     withSandbox(

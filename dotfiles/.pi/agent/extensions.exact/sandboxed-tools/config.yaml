@@ -51,6 +51,28 @@ commands:
       - chmod -R
       - chown -R
       - sudo
+  # systemctl: read-only subcommands run without confirmation (last match wins)
+  - allow:
+      - systemctl status
+      - systemctl show
+      - systemctl cat
+      - systemctl help
+      - systemctl list-*
+      - systemctl is-*
+      - systemctl get-default
+      - systemctl show-environment
+  # power/session control, incl. via systemctl, is denied outright
+  - deny:
+      - systemctl reboot
+      - systemctl poweroff
+      - systemctl halt
+      - systemctl shutdown
+      - systemctl suspend
+      - systemctl hibernate
+      - systemctl hybrid-sleep
+      - systemctl suspend-then-hibernate
+      - systemctl kexec
+      - systemctl exit
   - deny:
       - doas
       - "{mkfs,mkfs.ext2,mkfs.ext3,mkfs.ext4,mkfs.xfs,mkfs.btrfs,mkfs.vfat,mkfs.ntfs,mkfs.exfat}"
