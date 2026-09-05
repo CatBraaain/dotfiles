@@ -826,6 +826,87 @@ describe("§3.a パス文字列の解決", () => {
       assert.equal(sandbox.buildArgs("fs").includes(worktreesDirectory), true);
     }),
   );
+
+  it(
+    "${XDG_RUNTIME_DIR} は $XDG_RUNTIME_DIR へ展開される",
+    withTempDirectory((directory) => {
+      const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
+      process.env.XDG_RUNTIME_DIR = directory;
+      try {
+        const section = expandPathSection(
+          [{ action: "allow", patterns: ["${XDG_RUNTIME_DIR}"] }],
+          "/cwd",
+        );
+
+        assert.deepEqual(
+          section.flatMap((entry) => entry.paths),
+          [directory],
+        );
+      } finally {
+        if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+        else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
+      }
+    }),
+  );
+
+  it("${XDG_RUNTIME_DIR} は未設定なら /run/user/<uid> へフォールバックする", () => {
+    const uid = process.getuid?.();
+    assert.notEqual(uid, undefined, "test requires POSIX process.getuid");
+    const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
+    delete process.env.XDG_RUNTIME_DIR;
+    try {
+      const section = expandPathSection(
+        [{ action: "allow", patterns: ["${XDG_RUNTIME_DIR}/app"] }],
+        "/cwd",
+      );
+
+      assert.deepEqual(
+        section.flatMap((entry) => entry.paths),
+        [`/run/user/${uid}/app`],
+      );
+    } finally {
+      if (previousRuntimeDir !== undefined) process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
+    }
+  });
+
+  it(
+    "${XDG_RUNTIME_DIR} は書き込みを許可し bind に含める",
+    withTempDirectory(async (directory) => {
+      const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
+      process.env.XDG_RUNTIME_DIR = directory;
+      try {
+        const configPath = join(directory, "config.yaml");
+        writeFileSync(configPath, 'write:\n  - {allow: "${XDG_RUNTIME_DIR}"}\n');
+        const sandbox = new Sandbox(directory, configPath);
+
+        await sandbox.authorizePath("write", join(directory, "app.sock"), { cwd: directory });
+        assert.equal(sandbox.buildArgs("fs").includes(directory), true);
+      } finally {
+        if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+        else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
+      }
+    }),
+  );
+
+  it(
+    "${XDG_RUNTIME_DIR} を含むエントリは起動時に作成しない",
+    withTempDirectory((directory) => {
+      const absentRuntimeDir = join(directory, "runtime");
+      const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
+      process.env.XDG_RUNTIME_DIR = absentRuntimeDir;
+      try {
+        const configPath = join(directory, "config.yaml");
+        writeFileSync(configPath, 'write:\n  - {allow: "${XDG_RUNTIME_DIR}"}\n');
+        new Sandbox(directory, configPath);
+
+        assert.equal(existsSync(absentRuntimeDir), false);
+        assert.deepEqual(readdirSync(directory), ["config.yaml"]);
+      } finally {
+        if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+        else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
+      }
+    }),
+  );
 });
 
 describe("§3.b glob パターン", () => {

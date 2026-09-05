@@ -15,6 +15,7 @@ write:
       - ~/.pi
       - ~/.config
       - /tmp
+      - ${XDG_RUNTIME_DIR}
       - ~/.npm
       - ~/.bun/install/cache
       - ~/.local/share/pnpm/store
@@ -23,6 +24,7 @@ write:
       - ~/.vite-plus/package_manager
       - ~/.cache
       - ~/.camoufox
+      - ~/.agent-browser
       - ~/.cargo/registry
       - ~/go/pkg/mod
       - ~/mirrors

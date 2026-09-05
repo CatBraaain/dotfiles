@@ -223,7 +223,34 @@ export function resolveGitMainWorktreePath(cwd: string): string | undefined {
  */
 function expandGitMainWorktreePath(pattern: string, mainWorktree: string | undefined): string[] {
   if (!pattern.includes(GIT_MAIN_WORKTREE_PATH)) return [pattern];
-  return mainWorktree === undefined ? [] : [pattern.replaceAll(GIT_MAIN_WORKTREE_PATH, mainWorktree)];
+  return mainWorktree === undefined
+    ? []
+    : [pattern.replaceAll(GIT_MAIN_WORKTREE_PATH, mainWorktree)];
+}
+
+export const XDG_RUNTIME_DIR = "${XDG_RUNTIME_DIR}";
+
+/**
+ * Absolute path of the user's runtime directory (systemd-logind tmpfs):
+ * $XDG_RUNTIME_DIR when set, falling back to the /run/user/<uid> convention.
+ */
+export function resolveXdgRuntimeDir(): string {
+  // getuid is optional in @types for cross-platform compat, but this
+  // extension requires bwrap (Linux); "unknown" names a path that never
+  // exists, so --bind-try safely skips it on platforms without getuid.
+  const uid = process.getuid?.();
+  return process.env.XDG_RUNTIME_DIR ?? `/run/user/${uid ?? "unknown"}`;
+}
+
+/**
+ * Expand every single-valued runtime variable in a pattern.
+ * ${GIT_MAIN_WORKTREE_PATH} expands to nothing outside a Git repository
+ * (§3); ${XDG_RUNTIME_DIR} resolves everywhere.
+ */
+function expandRuntimeVariables(pattern: string, mainWorktree: string | undefined): string[] {
+  return expandGitMainWorktreePath(pattern, mainWorktree).map((expanded) =>
+    expanded.replaceAll(XDG_RUNTIME_DIR, resolveXdgRuntimeDir()),
+  );
 }
 
 function resolvePattern(pattern: string, cwd: string): string {
@@ -425,9 +452,9 @@ function expandPathPatterns(
   globCache?: Map<string, string[]>,
 ): string[] {
   return (patterns ?? []).flatMap((pattern) =>
-    // The single-valued ${GIT_MAIN_WORKTREE_PATH} must fan out before the
+    // The single-valued runtime variables must fan out before the
     // brace expansion below.
-    expandGitMainWorktreePath(pattern, gitMainWorktreePath).flatMap((variableExpanded) =>
+    expandRuntimeVariables(pattern, gitMainWorktreePath).flatMap((variableExpanded) =>
       expandBraces(variableExpanded).flatMap((expandedPattern) => {
         if (allowAllPaths && expandedPattern === "*") return ["/**"];
         const resolvedPattern = resolvePattern(expandedPattern, cwd);
@@ -678,10 +705,13 @@ export class Sandbox {
     // Globs expand to existing paths only, so they skip the mkdir -p guarantee
     // (§6.1). Entries with ${GIT_MAIN_WORKTREE_PATH} expand to the main
     // worktree itself (already existing) or a derived directory such as
-    // `-worktrees`, which is created here for the same guarantee.
+    // `-worktrees`, which is created here for the same guarantee. Entries with
+    // ${XDG_RUNTIME_DIR} skip it too: /run/user/<uid> belongs to the session
+    // manager, so an absent runtime directory is left unbound by --bind-try
+    // instead of being created.
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     for (const pattern of actionPatterns(this.config.write, "allow")) {
-      if (hasGlob(pattern)) continue;
+      if (hasGlob(pattern) || pattern.includes(XDG_RUNTIME_DIR)) continue;
       for (const expanded of expandGitMainWorktreePath(pattern, gitMainWorktreePath)) {
         const path = resolvePattern(expanded, this.cwd);
         if (!existsSync(path)) mkdirSync(path, { recursive: true });
