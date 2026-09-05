@@ -43,7 +43,7 @@ sequenceDiagram
 
 ## バックエンドの順序とタイムアウト
 
-1バックエンドあたりの最大待ち時間は全バックエンド一律 **15秒**。
+1バックエンドあたりの最大待ち時間は全バックエンド一律 **15秒**。ただし camofox+trafilatura は、サーバーへの HTTP 操作（サーバー起動待ちを含む）と trafilatura 変換の各段に 15秒を適用する。
 
 ### web_search のバックエンド
 
@@ -65,7 +65,7 @@ openserp は Chrome を起動して検索するが、nix 由来の Chrome は Ni
 | 条件（URL） | バックエンド順序 |
 | ----------- | ---------------- |
 | Reddit 投稿パーマリンク | Reddit のみ |
-| その他      | trafilatura → fetch+trafilatura → Jina Reader |
+| その他      | trafilatura → camofox+trafilatura |
 
 Reddit バックエンドが失敗した場合も通常どおりバックエンド失敗として扱い、web_fetch 全体が例外となる。
 
@@ -74,9 +74,36 @@ Reddit バックエンドが失敗した場合も通常どおりバックエン�
 | バックエンド       | 取得方法                                                              |
 | ------------------ | --------------------------------------------------------------------- |
 | trafilatura        | trafilatura 自身のダウンローダで URL を直接取得                        |
-| fetch+trafilatura  | 生 fetch で HTML を取得し、trafilatura に標準入力で渡して Markdown 化 |
-| Jina Reader        | `https://r.jina.ai/<url>`                                             |
+| camofox+trafilatura | camofox-browser サーバーで描画した DOM を trafilatura で Markdown 化（§camofox+trafilatura バックエンド参照） |
 | Reddit             | §Reddit バックエンド参照                                               |
+
+## camofox+trafilatura バックエンド
+
+常駐する camofox-browser サーバー（REST API）でページを描画し、得られた HTML を trafilatura で Markdown 化する。JavaScript での描画が必要なページや、Bot 検出で素の HTTP 取得が弾かれるページの受け皿。
+
+### サーバー
+
+| 項目             | 値                                 |
+| ---------------- | ---------------------------------- |
+| 既定の接続先     | `http://127.0.0.1:9377`            |
+| 接続先の変更     | 環境変数 `CAMOFOX_BASE_URL`        |
+| サーバー実行形式 | `npx @askjo/camofox-browser@1.14.0` |
+
+リクエストのたびにサーバーのヘルスチェック（`GET /health`）を行う。成功しないときはサーバーをバックグラウンドで起動し、ヘルスチェックが成功するまで待ってから処理を続ける。起動時に拡張が設定する環境変数は次のとおりで、利用者の環境変数があればそちらを優先し、それ以外の環境変数も引き継ぐ。
+
+| 変数                            | 設定値    | 意味                                   |
+| ------------------------------- | --------- | -------------------------------------- |
+| `CAMOFOX_BIND_HOST`             | `127.0.0.1` | ローカルホスト以外へのバインドを防ぐ   |
+| `CAMOFOX_CRASH_REPORT_ENABLED`  | `false`   | テレメトリ送信を無効化する             |
+
+すでにヘルスチェックが成功するサーバーがあるときは起動しない。複数の pi セッションが同時に起動を試みても、サーバー側のポート確保により1つだけが残る。タイムアウトまでにヘルスチェックが成功しない場合はバックエンドの失敗となるが、起動したサーバープロセスは残るため、次のリクエストでは成功しうる。
+
+### 取得経路
+
+1. タブを作成して URL へ移動する（`userId=pi`・`sessionKey=web-fetch`。userId は全リクエストで共通のため、cookie などのセッション状態は web_fetch の利用全体で共有される）
+2. 描画済み DOM（`document.documentElement.outerHTML`）を取得する
+3. タブを閉じる（成否に関わらず）
+4. HTML を trafilatura で Markdown 化する
 
 ## Reddit バックエンド
 
@@ -147,6 +174,6 @@ web_search - "<クエリ>"
 
 ## 環境変数
 
-| 変数         | 影響                                                                |
+| 変数             | 影響                                                                    |
 | ------------ | ------------------------------------------------------------------- |
-| JINA_API_KEY | 設定すると Jina Reader が認証付きリクエストになる（未設定でも動作） |
+| CAMOFOX_BASE_URL | camofox+trafilatura バックエンドの接続先（既定 `http://127.0.0.1:9377`） |

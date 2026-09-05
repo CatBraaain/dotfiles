@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -90,24 +90,36 @@ export function openserpError(error: unknown): Error {
 
 async function openserp(engine: string, query: string, signal?: AbortSignal, lang?: string) {
   try {
-    const args = [
-      "search",
-      engine,
-      query,
-      "--limit",
-      String(SEARCH_RESULT_LIMIT),
-      "--format",
-      "markdown",
-    ];
-    if (lang) args.push("--lang", lang);
-    if (existsSync(CHROME_NOSANDBOX_WRAPPER)) {
-      args.push("--browser-path", CHROME_NOSANDBOX_WRAPPER);
-    }
-    const markdown = await run("openserp", args, signal);
+    const markdown = await run(
+      "openserp",
+      openserpArgs(engine, query, lang, existsSync(CHROME_NOSANDBOX_WRAPPER)),
+      signal,
+    );
     return takeFirstEntries(markdown, SEARCH_RESULT_LIMIT);
   } catch (error) {
     throw openserpError(error);
   }
+}
+
+// SPEC: openserp への引数組み立て（言語ヒント・nosandbox ラッパー指定）。
+export function openserpArgs(
+  engine: string,
+  query: string,
+  lang: string | undefined,
+  hasChromeNosandboxWrapper: boolean,
+): string[] {
+  const args = [
+    "search",
+    engine,
+    query,
+    "--limit",
+    String(SEARCH_RESULT_LIMIT),
+    "--format",
+    "markdown",
+  ];
+  if (lang) args.push("--lang", lang);
+  if (hasChromeNosandboxWrapper) args.push("--browser-path", CHROME_NOSANDBOX_WRAPPER);
+  return args;
 }
 
 async function searchMarkdownNew(query: string, signal?: AbortSignal) {
@@ -176,31 +188,181 @@ export async function searchOne(
   throw new AllBackendsFailedError("web search", attempts);
 }
 
-// Raw-fetch the URL and convert to Markdown via trafilatura stdin.
-// Non-HTML bodies (text/plain etc.) are returned as-is without conversion.
-async function fetchToMarkdown(url: string, signal?: AbortSignal) {
-  const response = await fetch(url, {
-    headers: { "User-Agent": BROWSER_USER_AGENT },
-    signal: AbortSignal.any([
-      signal ?? new AbortController().signal,
-      AbortSignal.timeout(BACKEND_TIMEOUT_MS),
-    ]),
-  });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  const body = await response.text();
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("html")) return body;
-  return runWithStdin("trafilatura", ["--markdown"], body, signal);
-}
-
 async function trafilaturaFetch(url: string, signal?: AbortSignal) {
   return run("trafilatura", ["--URL", url, "--markdown"], signal);
 }
 
-async function jinaFetch(url: string, signal?: AbortSignal) {
-  const headers: Record<string, string> = { Accept: "text/markdown" };
-  if (process.env.JINA_API_KEY) headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
-  return fetchText(`https://r.jina.ai/${url}`, signal, headers);
+// --- camofox+trafilatura backend (camofox-browser REST -> rendered DOM -> trafilatura) ---
+
+const CAMOFOX_DEFAULT_BASE_URL = "http://127.0.0.1:9377";
+const CAMOFOX_USER_ID = "pi";
+const CAMOFOX_SESSION_KEY = "web-fetch";
+const CAMOFOX_SERVER_PACKAGE = "@askjo/camofox-browser@1.14.0";
+const CAMOFOX_HEALTH_POLL_INTERVAL_MS = 250;
+
+// SPEC: 接続先は環境変数 CAMOFOX_BASE_URL で変更できる（既定はローカルホスト）。
+export function camofoxBaseUrl(env: Record<string, string | undefined> = process.env): string {
+  return env.CAMOFOX_BASE_URL ?? CAMOFOX_DEFAULT_BASE_URL;
+}
+
+// SPEC: 起動時に拡張が設定する環境変数。利用者の設定を優先し、他の変数は引き継ぐ。
+export function camofoxServerEnv(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  return {
+    ...env,
+    CAMOFOX_BIND_HOST: env.CAMOFOX_BIND_HOST ?? "127.0.0.1",
+    CAMOFOX_CRASH_REPORT_ENABLED: env.CAMOFOX_CRASH_REPORT_ENABLED ?? "false",
+  };
+}
+
+export function buildCamofoxServerSpawn(): {
+  command: string;
+  args: string[];
+  options: {
+    env: Record<string, string | undefined>;
+    detached: boolean;
+    stdio: "ignore";
+    shell: boolean;
+  };
+} {
+  return {
+    command: "npx",
+    args: [CAMOFOX_SERVER_PACKAGE],
+    options: {
+      env: camofoxServerEnv(),
+      detached: true,
+      stdio: "ignore",
+      shell: process.platform === "win32",
+    },
+  };
+}
+
+// Detached spawn: the server is machine-scoped and outlives this pi process
+// (SPEC: 起動したサーバープロセスは残るため、次のリクエストでは成功しうる)。
+export function spawnCamofoxServer(): void {
+  const { command, args, options } = buildCamofoxServerSpawn();
+  const child = spawn(command, args, options);
+  child.unref();
+}
+
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+async function camofoxRequest(
+  path: string,
+  options: { method?: string; json?: unknown },
+  signal: AbortSignal,
+  fetcher: typeof fetch,
+): Promise<unknown> {
+  const response = await fetcher(`${camofoxBaseUrl()}${path}`, {
+    method: options.method ?? "GET",
+    headers: { "Content-Type": "application/json" },
+    body: options.json === undefined ? undefined : JSON.stringify(options.json),
+    signal,
+  });
+  if (!response.ok) {
+    const errorBody = (await response.json().catch(() => undefined)) as { error?: string } | undefined;
+    throw new Error(errorBody?.error ?? `${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+async function camofoxHealthy(signal: AbortSignal, fetcher: typeof fetch): Promise<boolean> {
+  try {
+    return (await fetcher(`${camofoxBaseUrl()}/health`, { signal })).ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureCamofoxServer(
+  signal: AbortSignal,
+  spawnServer: () => void,
+  fetcher: typeof fetch,
+): Promise<void> {
+  if (await camofoxHealthy(signal, fetcher)) return;
+  spawnServer();
+  while (!signal.aborted) {
+    await delay(CAMOFOX_HEALTH_POLL_INTERVAL_MS, signal);
+    if (await camofoxHealthy(signal, fetcher)) return;
+  }
+  throw new Error(`camofox server not ready at ${camofoxBaseUrl()}`);
+}
+
+export type CamofoxDeps = {
+  fetcher?: typeof fetch;
+  spawnServer?: () => void;
+  toMarkdown?: (html: string, signal?: AbortSignal) => Promise<string>;
+};
+
+// SPEC: camofox+trafilatura バックエンド。HTTP 操作（サーバー起動待ちを含む）と
+// trafilatura 変換の各段に 15秒を適用する。タブは成否に関わらず閉じる。
+export async function camofoxFetch(
+  url: string,
+  signal?: AbortSignal,
+  deps: CamofoxDeps = {},
+): Promise<string> {
+  const fetcher = deps.fetcher ?? fetch;
+  const spawnServer = deps.spawnServer ?? spawnCamofoxServer;
+  const toMarkdown =
+    deps.toMarkdown ??
+    ((html, convertSignal) => runWithStdin("trafilatura", ["--markdown"], html, convertSignal));
+  const httpSignal = AbortSignal.any([
+    signal ?? new AbortController().signal,
+    AbortSignal.timeout(BACKEND_TIMEOUT_MS),
+  ]);
+
+  await ensureCamofoxServer(httpSignal, spawnServer, fetcher);
+  const tab = (await camofoxRequest(
+    "/tabs",
+    { method: "POST", json: { userId: CAMOFOX_USER_ID, sessionKey: CAMOFOX_SESSION_KEY, url } },
+    httpSignal,
+    fetcher,
+  )) as { tabId?: string };
+  if (!tab.tabId) throw new Error("camofox server returned no tabId");
+
+  // SPEC: タブは DOM取得後・変換前に閉じる。閉鎖失敗は結果に影響させない。
+  let tabClosed = false;
+  const closeTab = async (): Promise<void> => {
+    tabClosed = true;
+    await camofoxRequest(
+      `/tabs/${encodeURIComponent(tab.tabId)}?userId=${encodeURIComponent(CAMOFOX_USER_ID)}`,
+      { method: "DELETE" },
+      AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(BACKEND_TIMEOUT_MS)]),
+      fetcher,
+    ).catch(() => {});
+  };
+
+  try {
+    const evaluated = (await camofoxRequest(
+      `/tabs/${encodeURIComponent(tab.tabId)}/evaluate`,
+      {
+        method: "POST",
+        json: { userId: CAMOFOX_USER_ID, expression: "document.documentElement.outerHTML" },
+      },
+      httpSignal,
+      fetcher,
+    )) as { result?: unknown };
+    if (typeof evaluated.result !== "string" || !evaluated.result) {
+      throw new Error("evaluate returned no HTML");
+    }
+    await closeTab();
+    return await toMarkdown(evaluated.result, signal);
+  } finally {
+    if (!tabClosed) await closeTab();
+  }
 }
 
 // --- Reddit backend (post permalink -> Atom feed, embed/oEmbed fallback) ---
@@ -501,8 +663,7 @@ export function defaultFetchBackends(url: string, signal?: AbortSignal): Backend
   }
   return [
     ["trafilatura", () => trafilaturaFetch(url, signal)],
-    ["fetch+trafilatura", () => fetchToMarkdown(url, signal)],
-    ["Jina Reader", () => jinaFetch(url, signal)],
+    ["camofox+trafilatura", () => camofoxFetch(url, signal)],
   ];
 }
 

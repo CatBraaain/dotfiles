@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import webSearchExtension, {
   BACKEND_TIMEOUT_MS,
+  buildCamofoxServerSpawn,
+  camofoxBaseUrl,
+  camofoxFetch,
+  camofoxServerEnv,
   defaultFetchBackends,
   fetchRedditMarkdown,
+  openserpArgs,
   defaultSearchBackends,
   fetchOne,
   formatBackendLine,
@@ -269,6 +274,13 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     assert.equal(result.text, expectedText);
   });
 
+  it("空の本文を返すバックエンドは失敗として次へフォールバックする", async () => {
+    const backends = [okBackend("A", ""), okBackend("B", "本文")];
+    const result = await searchOne("query", undefined, backends);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+  });
+
   it("デフォルトのバックエンド順序は openserp(bing)→duckduckgo→google→markdown.new", () => {
     const backendNames = defaultSearchBackends("query").map(([name]) => name);
     assert.deepEqual(backendNames, [
@@ -407,9 +419,16 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     );
   });
 
-  it("デフォルトのバックエンド順序は trafilatura→fetch+trafilatura→Jina Reader", () => {
+  it("空の本文を返すバックエンドは失敗として次へフォールバックする", async () => {
+    const backends = [okBackend("A", ""), okBackend("B", "本文")];
+    const result = await fetchOne("https://example.com/", undefined, backends);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+  });
+
+  it("デフォルトのバックエンド順序は trafilatura→camofox+trafilatura", () => {
     const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["trafilatura", "fetch+trafilatura", "Jina Reader"]);
+    assert.deepEqual(backendNames, ["trafilatura", "camofox+trafilatura"]);
   });
 });
 
@@ -422,12 +441,6 @@ describe("web_fetch 統合（execute 経由・実バックエンド）", () => {
   it("実バックエンドでフェッチが成功する", async () => {
     const resultText = textOf(await callFetch("https://example.com/"));
     assert.ok(resultText.length > 0);
-  }, 60_000);
-
-  it("HTML 以外の本文（text/plain）は変換せずそのまま返す", async () => {
-    const plainTextUrl = "https://raw.githubusercontent.com/karust/openserp/main/README.md";
-    const resultText = textOf(await callFetch(plainTextUrl));
-    assert.match(resultText, /OpenSERP/);
   }, 60_000);
 });
 
@@ -458,6 +471,40 @@ describe("バックエンド結果行のフォーマット", () => {
       '✗ openserp(google) - "captcha detected"',
       '✓ openserp(bing) - "成功タイトル"',
     ]);
+  });
+});
+
+describe("openserp 引数組み立て", () => {
+  it("検索エンジン・クエリ・件数上限・形式を渡す", () => {
+    assert.deepEqual(openserpArgs("google", "query", undefined, false), [
+      "search",
+      "google",
+      "query",
+      "--limit",
+      "10",
+      "--format",
+      "markdown",
+    ]);
+  });
+
+  it("lang 指定時は --lang を渡す", () => {
+    assert.deepEqual(openserpArgs("bing", "query", "JA", false), [
+      "search",
+      "bing",
+      "query",
+      "--limit",
+      "10",
+      "--format",
+      "markdown",
+      "--lang",
+      "JA",
+    ]);
+  });
+
+  it("nosandbox ラッパーが存在するときは --browser-path で拡張同梱のラッパーを渡す", () => {
+    const args = openserpArgs("google", "query", undefined, true);
+    assert.equal(args.at(-2), "--browser-path");
+    assert.ok(args.at(-1)?.endsWith("/google-chrome-nosandbox"));
   });
 });
 
@@ -503,24 +550,59 @@ describe("web_fetch 表示", () => {
   it("結果行は成功バックエンドにだけタイトルを付ける", () => {
     const attempts: Attempt[] = [
       { backend: "trafilatura", ok: false, error: "timeout" },
-      { backend: "Jina Reader", ok: true },
+      { backend: "camofox+trafilatura", ok: true },
     ];
     const result = {
       content: [{ type: "text", text: "本文" }],
-      details: { backend: "Jina Reader", attempts, title: "Example Page" },
+      details: { backend: "camofox+trafilatura", attempts, title: "Example Page" },
     };
     const lines = renderedLines(fetchTool.renderResult(result));
-    assert.deepEqual(lines, ['✗ trafilatura - "timeout"', '✓ Jina Reader - "Example Page"']);
+    assert.deepEqual(lines, [
+      '✗ trafilatura - "timeout"',
+      '✓ camofox+trafilatura - "Example Page"',
+    ]);
   });
 
   it("結果行はタイトルがない成功バックエンドにはタイトルを付けない", () => {
-    const attempts: Attempt[] = [{ backend: "Jina Reader", ok: true }];
+    const attempts: Attempt[] = [{ backend: "camofox+trafilatura", ok: true }];
     const result = {
       content: [{ type: "text", text: "本文" }],
-      details: { backend: "Jina Reader", attempts, title: null },
+      details: { backend: "camofox+trafilatura", attempts, title: null },
     };
     const lines = renderedLines(fetchTool.renderResult(result));
-    assert.deepEqual(lines, ["✓ Jina Reader"]);
+    assert.deepEqual(lines, ["✓ camofox+trafilatura"]);
+  });
+
+  it("全バックエンド失敗時、execute は onUpdate へ attempts を渡し結果行に失敗行を出す", async () => {
+    const failedFetch = captureTools(
+      createWebToolOperations({
+        fetch: (url, signal) => fetchOne(url, signal, [failBackend("X", "boom")]),
+      }),
+    ).get("web_fetch")!;
+    const updates: Array<{ details?: { attempts?: Attempt[] } }> = [];
+
+    await assert.rejects(
+      failedFetch.execute(
+        "call",
+        { url: "https://example.com/" },
+        AbortSignal.timeout(30_000),
+        (update) => updates.push(update),
+        executionContext,
+      ),
+      /All web fetch backends failed/,
+    );
+
+    const attempts = updates[0]?.details?.attempts;
+    assert.deepEqual(attempts, [{ backend: "X", ok: false, error: "boom" }]);
+    const lines = renderedLines(
+      failedFetch.renderResult(
+        { content: [], details: undefined },
+        {},
+        identityTheme,
+        { state: { attempts } },
+      ),
+    );
+    assert.deepEqual(lines, ['✗ X - "boom"']);
   });
 });
 
@@ -745,8 +827,374 @@ describe("web_fetch バックエンド構成（Reddit 分岐）", () => {
     assert.deepEqual(backendNames, ["Reddit"]);
   });
 
-  it("その他の URL では従来どおり trafilatura→fetch+trafilatura→Jina Reader", () => {
+  it("その他の URL では trafilatura→camofox+trafilatura", () => {
     const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["trafilatura", "fetch+trafilatura", "Jina Reader"]);
+    assert.deepEqual(backendNames, ["trafilatura", "camofox+trafilatura"]);
+  });
+});
+
+// --- camofox+trafilatura バックエンド（モック） ---
+
+const camofoxBase = "http://127.0.0.1:9377";
+const networkError = Symbol("network-error");
+
+type CamofoxCall = { method: string; path: string; body?: unknown; signal?: AbortSignal };
+
+interface CamofoxRoute {
+  method: string;
+  pattern: RegExp;
+  status?: number;
+  statusText?: string;
+  body?: unknown;
+  respond?: () => unknown;
+}
+
+function mockCamofoxFetcher(routes: CamofoxRoute[], calls: CamofoxCall[]): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const path = String(input).replace(camofoxBase, "");
+    const method = (init?.method ?? "GET").toUpperCase();
+    calls.push({
+      method,
+      path,
+      body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      signal: init?.signal as AbortSignal | undefined,
+    });
+    const route = routes.find(
+      (candidate) => candidate.method === method && candidate.pattern.test(path),
+    );
+    if (!route) throw new Error(`unexpected request: ${method} ${path}`);
+    const body = route.respond ? route.respond() : route.body;
+    if (body === networkError) throw new TypeError("fetch failed");
+    const status = route.status ?? 200;
+    return {
+      ok: status < 400,
+      status,
+      statusText: route.statusText ?? "OK",
+      json: async () => (status < 400 ? body : { error: route.body }),
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+}
+
+function camofoxDeps(fetcher: typeof fetch, spawns: { count: number } = { count: 0 }) {
+  return {
+    fetcher,
+    spawnServer: () => {
+      spawns.count++;
+    },
+    toMarkdown: async (html: string) => `md:${html}`,
+  };
+}
+
+describe("camofox+trafilatura バックエンド", () => {
+  it("サーバーが既に応答するときは起動せず、タブ作成→DOM取得→タブ削除→変換の順で進む", async () => {
+    const calls: CamofoxCall[] = [];
+    const spawns = { count: 0 };
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1", url: "https://example.com/" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: "<html>body</html>" },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      calls,
+    );
+
+    const markdown = await camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher, spawns));
+
+    assert.equal(markdown, "md:<html>body</html>");
+    assert.equal(spawns.count, 0);
+    assert.deepEqual(
+      calls.map(({ method, path, body }) => ({ method, path, body })),
+      [
+        { method: "GET", path: "/health", body: undefined },
+        {
+          method: "POST",
+          path: "/tabs",
+          body: { userId: "pi", sessionKey: "web-fetch", url: "https://example.com/" },
+        },
+        {
+          method: "POST",
+          path: "/tabs/TAB1/evaluate",
+          body: { userId: "pi", expression: "document.documentElement.outerHTML" },
+        },
+        { method: "DELETE", path: "/tabs/TAB1?userId=pi", body: undefined },
+      ],
+    );
+  });
+
+  it("ヘルスチェックが失敗する間はサーバーを1回だけ起動し、成功したら処理を再開する", async () => {
+    const calls: CamofoxCall[] = [];
+    const spawns = { count: 0 };
+    let healthChecks = 0;
+    const fetcher = mockCamofoxFetcher(
+      [
+        {
+          method: "GET",
+          pattern: /^\/health$/,
+          respond: () => (++healthChecks <= 2 ? networkError : { ok: true }),
+        },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: "<html>x</html>" },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      calls,
+    );
+
+    const markdown = await camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher, spawns));
+
+    assert.equal(markdown, "md:<html>x</html>");
+    assert.equal(spawns.count, 1);
+    assert.equal(healthChecks, 3);
+  });
+
+  it("タイムアウト内にサーバーが準備できなければ例外を出す", async () => {
+    const fetcher = mockCamofoxFetcher(
+      [{ method: "GET", pattern: /^\/health$/, respond: () => networkError }],
+      [],
+    );
+
+    await assert.rejects(
+      camofoxFetch("https://example.com/", AbortSignal.timeout(50), camofoxDeps(fetcher)),
+      /camofox server not ready/,
+    );
+  });
+
+  it("DOM 取得に失敗してもタブを閉じる", async () => {
+    const calls: CamofoxCall[] = [];
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          status: 500,
+          statusText: "Internal Server Error",
+          body: "evaluate failed",
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      calls,
+    );
+
+    await assert.rejects(
+      camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher)),
+      /evaluate failed/,
+    );
+    assert.ok(calls.some((call) => call.method === "DELETE"));
+  });
+
+  it("DOM が文字列で返らない場合は例外を出す", async () => {
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: null },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      [],
+    );
+
+    await assert.rejects(
+      camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher)),
+      /no HTML/,
+    );
+  });
+
+  it("タブ削除の失敗は変換結果に影響しない", async () => {
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: "<html>y</html>" },
+        },
+        {
+          method: "DELETE",
+          pattern: /^\/tabs\/TAB1\?userId=pi$/,
+          status: 500,
+          statusText: "Internal Server Error",
+          body: "close failed",
+        },
+      ],
+      [],
+    );
+
+    const markdown = await camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher));
+
+    assert.equal(markdown, "md:<html>y</html>");
+  });
+
+  it("DOM取得後にタブを閉じてから trafilatura 変換する", async () => {
+    const calls: CamofoxCall[] = [];
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: "<html>z</html>" },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      calls,
+    );
+
+    await camofoxFetch("https://example.com/", undefined, {
+      fetcher,
+      spawnServer: () => {},
+      toMarkdown: async () => {
+        calls.push({ method: "CONVERT", path: "(markdown)" });
+        return "md";
+      },
+    });
+
+    assert.deepEqual(
+      calls.map((call) => `${call.method} ${call.path}`),
+      [
+        "GET /health",
+        "POST /tabs",
+        "POST /tabs/TAB1/evaluate",
+        "DELETE /tabs/TAB1?userId=pi",
+        "CONVERT (markdown)",
+      ],
+    );
+  });
+
+  it("HTTP 操作と trafilatura 変換は別々のシグナルを使う", async () => {
+    const calls: CamofoxCall[] = [];
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: "<html>s</html>" },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      calls,
+    );
+    const callerSignal = new AbortController().signal;
+    let convertSignal: AbortSignal | undefined;
+
+    await camofoxFetch("https://example.com/", callerSignal, {
+      fetcher,
+      spawnServer: () => {},
+      toMarkdown: async (_html, toMarkdownSignal) => {
+        convertSignal = toMarkdownSignal;
+        return "md";
+      },
+    });
+
+    assert.ok(calls.every((call) => call.signal !== undefined && call.signal !== callerSignal));
+    assert.equal(convertSignal, callerSignal);
+  });
+
+  it("起動待ちで失敗した次のリクエストは、応答するサーバーで再起動せず成功する", async () => {
+    const spawns = { count: 0 };
+    const spawnServer = () => {
+      spawns.count++;
+    };
+    const coldFetcher = mockCamofoxFetcher(
+      [{ method: "GET", pattern: /^\/health$/, respond: () => networkError }],
+      [],
+    );
+
+    await assert.rejects(
+      camofoxFetch("https://example.com/", AbortSignal.timeout(50), {
+        fetcher: coldFetcher,
+        spawnServer,
+        toMarkdown: async () => "md",
+      }),
+      /camofox server not ready/,
+    );
+    assert.equal(spawns.count, 1);
+
+    const warmFetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: "<html>w</html>" },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      [],
+    );
+    const markdown = await camofoxFetch("https://example.com/", undefined, {
+      fetcher: warmFetcher,
+      spawnServer,
+      toMarkdown: async () => "md",
+    });
+
+    assert.equal(markdown, "md");
+    assert.equal(spawns.count, 1);
+  });
+});
+
+describe("camofox サーバー起動時の環境変数", () => {
+  it("未設定の変数だけ既定値を注入する", () => {
+    assert.deepEqual(camofoxServerEnv({}), {
+      CAMOFOX_BIND_HOST: "127.0.0.1",
+      CAMOFOX_CRASH_REPORT_ENABLED: "false",
+    });
+  });
+
+  it("利用者の設定を優先し、他の変数を引き継ぐ", () => {
+    assert.deepEqual(
+      camofoxServerEnv({
+        CAMOFOX_BIND_HOST: "0.0.0.0",
+        CAMOUFOX_EXECUTABLE: "/path/to/camoufox-bin",
+      }),
+      {
+        CAMOUFOX_EXECUTABLE: "/path/to/camoufox-bin",
+        CAMOFOX_BIND_HOST: "0.0.0.0",
+        CAMOFOX_CRASH_REPORT_ENABLED: "false",
+      },
+    );
+  });
+});
+
+describe("camofox サーバー起動コマンド", () => {
+  it("npx @askjo/camofox-browser@1.14.0 をバックグラウンドで起動する", () => {
+    const spawnSpec = buildCamofoxServerSpawn();
+
+    assert.equal(spawnSpec.command, "npx");
+    assert.deepEqual(spawnSpec.args, ["@askjo/camofox-browser@1.14.0"]);
+    assert.equal(spawnSpec.options.detached, true);
+    assert.equal(spawnSpec.options.stdio, "ignore");
+    assert.deepEqual(spawnSpec.options.env, camofoxServerEnv());
+  });
+});
+
+describe("camofox 接続先", () => {
+  it("既定は http://127.0.0.1:9377", () => {
+    assert.equal(camofoxBaseUrl({}), "http://127.0.0.1:9377");
+  });
+
+  it("環境変数 CAMOFOX_BASE_URL で変更できる", () => {
+    assert.equal(
+      camofoxBaseUrl({ CAMOFOX_BASE_URL: "http://localhost:9999" }),
+      "http://localhost:9999",
+    );
   });
 });
