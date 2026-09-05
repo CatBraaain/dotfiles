@@ -90,11 +90,11 @@
       "extensions": [],
       "prompts": [],
       "skills": [
-        "skills/taste-skill",
-        "skills/redesign-skill",
-        "skills/soft-skill",
-        "skills/minimalist-skill",
-        "skills/brutalist-skill"
+        "skills/taste-skill"
+        // "skills/redesign-skill",
+        // "skills/soft-skill",
+        // "skills/minimalist-skill",
+        // "skills/brutalist-skill"
       ],
       "source": "https://github.com/leonxlnx/taste-skill",
       "themes": []
