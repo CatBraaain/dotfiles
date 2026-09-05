@@ -2,47 +2,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
-
-export const BACKEND_TIMEOUT_MS = 15_000;
 export const SEARCH_RESULT_LIMIT = 10;
-const BROWSER_USER_AGENT =
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-// openserp launches nix Chrome, which fails with a SUID-sandbox error on non-NixOS
-// hosts. When this wrapper (shipped beside the extension) exists, pass it via --browser-path.
-const CHROME_NOSANDBOX_WRAPPER = fileURLToPath(
-  new URL("./scripts/google-chrome-nosandbox", import.meta.url),
-);
-
-async function fetchText(
-  url: string,
-  signal?: AbortSignal,
-  headers?: Record<string, string>,
-): Promise<string> {
-  const response = await fetch(url, {
-    headers: { "User-Agent": BROWSER_USER_AGENT, ...headers },
-    signal: AbortSignal.any([
-      signal ?? new AbortController().signal,
-      AbortSignal.timeout(BACKEND_TIMEOUT_MS),
-    ]),
-  });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return response.text();
-}
-
-async function run(command: string, args: string[], signal?: AbortSignal): Promise<string> {
-  const { stdout } = await execFileAsync(command, args, {
-    signal,
-    timeout: BACKEND_TIMEOUT_MS,
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  return stdout.trim();
-}
+// SPEC: 段階ごとの最大待ち時間（§タイムアウト）。
+export const SERVER_WAIT_TIMEOUT_MS = 15_000;
+export const RENDER_TIMEOUT_MS = 30_000;
+export const PARSE_TIMEOUT_MS = 15_000;
+export const CONVERT_TIMEOUT_MS = 15_000;
+export const REDDIT_TIMEOUT_MS = 15_000;
 
 function runWithStdin(
   command: string,
@@ -54,7 +22,7 @@ function runWithStdin(
     const child = execFile(
       command,
       args,
-      { signal, timeout: BACKEND_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+      { signal, timeout: CONVERT_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout) => {
         if (error) reject(error);
         else resolve(stdout.trim());
@@ -78,127 +46,14 @@ function takeFirstEntries(markdown: string, limit: number): string {
   return kept.join("\n").trimEnd();
 }
 
-export function openserpError(error: unknown): Error {
-  const stderr = (error as { stderr?: string })?.stderr ?? "";
-  const errorDetail = stderr
-    .split("\n")
-    .findLast((line) => line.startsWith("Error:"))
-    ?.replace(/^Error:\s*/, "")
-    .trim();
-  return new Error(errorDetail ?? (error instanceof Error ? error.message : String(error)));
-}
-
-async function openserp(engine: string, query: string, signal?: AbortSignal, lang?: string) {
-  try {
-    const markdown = await run(
-      "openserp",
-      openserpArgs(engine, query, lang, existsSync(CHROME_NOSANDBOX_WRAPPER)),
-      signal,
-    );
-    return takeFirstEntries(markdown, SEARCH_RESULT_LIMIT);
-  } catch (error) {
-    throw openserpError(error);
-  }
-}
-
-// SPEC: openserp への引数組み立て（言語ヒント・nosandbox ラッパー指定）。
-export function openserpArgs(
-  engine: string,
-  query: string,
-  lang: string | undefined,
-  hasChromeNosandboxWrapper: boolean,
-): string[] {
-  const args = [
-    "search",
-    engine,
-    query,
-    "--limit",
-    String(SEARCH_RESULT_LIMIT),
-    "--format",
-    "markdown",
-  ];
-  if (lang) args.push("--lang", lang);
-  if (hasChromeNosandboxWrapper) args.push("--browser-path", CHROME_NOSANDBOX_WRAPPER);
-  return args;
-}
-
-async function searchMarkdownNew(query: string, signal?: AbortSignal) {
-  return fetchText(
-    `https://markdown.new/search/${encodeURIComponent(query)}?n=${SEARCH_RESULT_LIMIT}`,
-    signal,
-  );
-}
-
-export type Attempt =
-  | { readonly backend: string; readonly ok: true }
-  | { readonly backend: string; readonly ok: false; readonly error: string };
-
-class AllBackendsFailedError extends Error {
-  constructor(
-    readonly operation: "web search" | "web fetch",
-    readonly attempts: Attempt[],
-  ) {
-    super(
-      `All ${operation} backends failed: ${attempts
-        .filter((attempt) => !attempt.ok)
-        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-        .join("; ")}`,
-    );
-  }
-}
-
-export type BackendEntry = readonly [name: string, run: () => Promise<string>];
-
-export function defaultSearchBackends(
-  query: string,
-  signal?: AbortSignal,
-  lang?: string,
-): BackendEntry[] {
-  return [
-    ["openserp(bing)", () => openserp("bing", query, signal, lang)],
-    ["openserp(duckduckgo)", () => openserp("duckduckgo", query, signal, lang)],
-    ["openserp(google)", () => openserp("google", query, signal, lang)],
-    ["markdown.new", () => searchMarkdownNew(query, signal)],
-  ];
-}
-
-export async function searchOne(
-  query: string,
-  signal: AbortSignal | undefined,
-  backends?: BackendEntry[],
-  lang?: string,
-): Promise<{ text: string; backend: string; attempts: Attempt[] }> {
-  const resolvedBackends = backends ?? defaultSearchBackends(query, signal, lang);
-  const attempts: Attempt[] = [];
-
-  for (const [name, search] of resolvedBackends) {
-    try {
-      const text = await search();
-      if (!text) throw new Error("empty response");
-      attempts.push({ backend: name, ok: true });
-      return { text, backend: name, attempts };
-    } catch (error) {
-      attempts.push({
-        backend: name,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  throw new AllBackendsFailedError("web search", attempts);
-}
-
-async function trafilaturaFetch(url: string, signal?: AbortSignal) {
-  return run("trafilatura", ["--URL", url, "--markdown"], signal);
-}
-
-// --- camofox+trafilatura backend (camofox-browser REST -> rendered DOM -> trafilatura) ---
+// --- camofox-browser server (rendering) ---
 
 const CAMOFOX_DEFAULT_BASE_URL = "http://127.0.0.1:9377";
 const CAMOFOX_USER_ID = "pi";
-const CAMOFOX_SESSION_KEY = "web-fetch";
+const CAMOFOX_FETCH_SESSION_KEY = "web-fetch";
+const CAMOFOX_SEARCH_SESSION_KEY = "web-search";
 const CAMOFOX_SERVER_PACKAGE = "@askjo/camofox-browser@1.14.0";
-const CAMOFOX_HEALTH_POLL_INTERVAL_MS = 250;
+const SERVER_HEALTH_POLL_INTERVAL_MS = 250;
 
 // SPEC: 接続先は環境変数 CAMOFOX_BASE_URL で変更できる（既定はローカルホスト）。
 export function camofoxBaseUrl(env: Record<string, string | undefined> = process.env): string {
@@ -246,6 +101,36 @@ export function spawnCamofoxServer(): void {
   child.unref();
 }
 
+// --- openserp server (SERP parsing) ---
+
+const OPENSERP_DEFAULT_BASE_URL = "http://127.0.0.1:7000";
+
+// SPEC: 接続先と起動アドレス・ポートは環境変数 OPENSERP_BASE_URL で変更できる。
+export function openserpBaseUrl(env: Record<string, string | undefined> = process.env): string {
+  return env.OPENSERP_BASE_URL ?? OPENSERP_DEFAULT_BASE_URL;
+}
+
+export function buildOpenserpServerSpawn(): {
+  command: string;
+  args: string[];
+  options: { detached: boolean; stdio: "ignore"; shell: boolean };
+} {
+  const { hostname, port } = new URL(openserpBaseUrl());
+  return {
+    command: "openserp",
+    args: ["serve", "-a", hostname, "-p", port, "--quiet"],
+    options: { detached: true, stdio: "ignore", shell: process.platform === "win32" },
+  };
+}
+
+export function spawnOpenserpServer(): void {
+  const { command, args, options } = buildOpenserpServerSpawn();
+  const child = spawn(command, args, options);
+  child.unref();
+}
+
+// --- shared server bootstrap (health check -> background spawn -> wait) ---
+
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -260,109 +145,393 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function camofoxRequest(
+async function serverRequest(
+  baseUrl: string,
   path: string,
   options: { method?: string; json?: unknown },
   signal: AbortSignal,
   fetcher: typeof fetch,
-): Promise<unknown> {
-  const response = await fetcher(`${camofoxBaseUrl()}${path}`, {
+): Promise<Response> {
+  return fetcher(`${baseUrl}${path}`, {
     method: options.method ?? "GET",
-    headers: { "Content-Type": "application/json" },
+    headers: options.json === undefined ? undefined : { "Content-Type": "application/json" },
     body: options.json === undefined ? undefined : JSON.stringify(options.json),
     signal,
   });
-  if (!response.ok) {
-    const errorBody = (await response.json().catch(() => undefined)) as { error?: string } | undefined;
-    throw new Error(errorBody?.error ?? `${response.status} ${response.statusText}`);
-  }
-  return response.json();
 }
 
-async function camofoxHealthy(signal: AbortSignal, fetcher: typeof fetch): Promise<boolean> {
+async function serverHealthy(
+  baseUrl: string,
+  path: string,
+  signal: AbortSignal,
+  fetcher: typeof fetch,
+): Promise<boolean> {
   try {
-    return (await fetcher(`${camofoxBaseUrl()}/health`, { signal })).ok;
+    return (await serverRequest(baseUrl, path, {}, signal, fetcher)).ok;
   } catch {
     return false;
   }
 }
 
-async function ensureCamofoxServer(
+// Prefer the camofox error body ("{"error": "..."}") over the bare status.
+async function responseDetail(response: Response): Promise<string> {
+  const body = (await response.json().catch(() => undefined)) as { error?: unknown } | undefined;
+  return typeof body?.error === "string" && body.error
+    ? body.error
+    : `${response.status} ${response.statusText}`;
+}
+
+async function ensureServer(
+  baseUrl: string,
+  healthPath: string,
+  serverName: string,
   signal: AbortSignal,
   spawnServer: () => void,
   fetcher: typeof fetch,
 ): Promise<void> {
-  if (await camofoxHealthy(signal, fetcher)) return;
+  if (await serverHealthy(baseUrl, healthPath, signal, fetcher)) return;
   spawnServer();
   while (!signal.aborted) {
-    await delay(CAMOFOX_HEALTH_POLL_INTERVAL_MS, signal);
-    if (await camofoxHealthy(signal, fetcher)) return;
+    await delay(SERVER_HEALTH_POLL_INTERVAL_MS, signal);
+    if (await serverHealthy(baseUrl, healthPath, signal, fetcher)) return;
   }
-  throw new Error(`camofox server not ready at ${camofoxBaseUrl()}`);
+  throw new Error(`${serverName} server not ready at ${baseUrl}`);
 }
 
-export type CamofoxDeps = {
+export type ServerDeps = {
   fetcher?: typeof fetch;
-  spawnServer?: () => void;
+  spawnCamofox?: () => void;
+  spawnOpenserp?: () => void;
+};
+
+// SPEC: §camofox による描画。タブ生成・ナビゲーション・描画済み DOM の取得に
+// 30秒を適用する。タブは成否に関わらず閉じ、閉鎖失敗は結果に影響させない。
+// エラーには "render:" 段階ラベルを付ける（§表示 のエラー例）。
+export async function camofoxRender(
+  url: string,
+  sessionKey: string,
+  signal?: AbortSignal,
+  deps: ServerDeps = {},
+): Promise<string> {
+  const fetcher = deps.fetcher ?? fetch;
+  const spawnServer = deps.spawnCamofox ?? spawnCamofoxServer;
+  const waitSignal = AbortSignal.any([
+    signal ?? new AbortController().signal,
+    AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
+  ]);
+
+  await ensureServer(camofoxBaseUrl(), "/health", "camofox", waitSignal, spawnServer, fetcher);
+
+  const renderSignal = AbortSignal.any([
+    signal ?? new AbortController().signal,
+    AbortSignal.timeout(RENDER_TIMEOUT_MS),
+  ]);
+  const renderError = (error: unknown): Error =>
+    new Error(`render: ${error instanceof Error ? error.message : String(error)}`);
+
+  const tabResponse = await serverRequest(
+    camofoxBaseUrl(),
+    "/tabs",
+    {
+      method: "POST",
+      json: { userId: CAMOFOX_USER_ID, sessionKey, url },
+    },
+    renderSignal,
+    fetcher,
+  ).catch(renderError);
+  if (tabResponse instanceof Error) throw tabResponse;
+  if (!tabResponse.ok) throw renderError(await responseDetail(tabResponse));
+  const tab = (await tabResponse.json().catch(() => undefined)) as { tabId?: string } | undefined;
+  if (!tab?.tabId) throw renderError("camofox server returned no tabId");
+
+  let tabClosed = false;
+  const closeTab = async (): Promise<void> => {
+    tabClosed = true;
+    await fetcher(
+      `${camofoxBaseUrl()}/tabs/${encodeURIComponent(tab.tabId!)}?userId=${encodeURIComponent(CAMOFOX_USER_ID)}`,
+      {
+        method: "DELETE",
+        signal: AbortSignal.any([
+          signal ?? new AbortController().signal,
+          AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
+        ]),
+      },
+    ).catch(() => {});
+  };
+
+  try {
+    // SPEC: networkidle とハイドレーションの完了を待つ。SPA の検索結果など
+    // JS で後から差し込まれるコンテンツは、ナビゲーション直後の DOM に無い。
+    // 待ち失敗（ready: false）は続行する。
+    const waitResponse = await serverRequest(
+      camofoxBaseUrl(),
+      `/tabs/${encodeURIComponent(tab.tabId)}/wait`,
+      { method: "POST", json: { userId: CAMOFOX_USER_ID, waitForNetwork: true } },
+      renderSignal,
+      fetcher,
+    ).catch(renderError);
+    if (waitResponse instanceof Error) throw waitResponse;
+    if (!waitResponse.ok) throw renderError(await responseDetail(waitResponse));
+
+    const evaluatedResponse = await serverRequest(
+      camofoxBaseUrl(),
+      `/tabs/${encodeURIComponent(tab.tabId)}/evaluate`,
+      {
+        method: "POST",
+        json: {
+          userId: CAMOFOX_USER_ID,
+          expression: "document.documentElement.outerHTML",
+        },
+      },
+      renderSignal,
+      fetcher,
+    ).catch(renderError);
+    if (evaluatedResponse instanceof Error) throw evaluatedResponse;
+    if (!evaluatedResponse.ok) throw renderError(await responseDetail(evaluatedResponse));
+    const evaluated = (await evaluatedResponse.json().catch(() => undefined)) as
+      | {
+          result?: unknown;
+        }
+      | undefined;
+    if (typeof evaluated?.result !== "string" || !evaluated.result) {
+      throw renderError("evaluate returned no HTML");
+    }
+    await closeTab();
+    return evaluated.result;
+  } finally {
+    if (!tabClosed) await closeTab();
+  }
+}
+
+// --- search backend: SERP URL -> camofox render -> openserp parse ---
+
+export type SearchEngine = "bing" | "duckduckgo" | "google";
+
+// Locale parameter values follow openserp's engine URL builders
+// (bing/url.go mkt, duckduckgo/url.go kl, google/url.go hl+gl).
+const BING_MARKET_BY_LANGUAGE: Record<string, string> = {
+  en: "en-US",
+  de: "de-DE",
+  ru: "ru-RU",
+  fr: "fr-FR",
+  es: "es-ES",
+  it: "it-IT",
+  pt: "pt-BR",
+  zh: "zh-CN",
+  ja: "ja-JP",
+  ko: "ko-KR",
+  nl: "nl-NL",
+  pl: "pl-PL",
+  tr: "tr-TR",
+  ar: "ar-SA",
+};
+
+const DUCKDUCKGO_KL_BY_LANGUAGE: Record<string, string> = {
+  en: "us-en",
+  de: "de-de",
+  fr: "fr-fr",
+  es: "es-es",
+  it: "it-it",
+  nl: "nl-nl",
+  pt: "pt-pt",
+  ru: "ru-ru",
+  pl: "pl-pl",
+  cs: "cz-cs",
+  sk: "sk-sk",
+  hu: "hu-hu",
+  ro: "ro-ro",
+  da: "dk-da",
+  sv: "se-sv",
+  no: "no-no",
+  fi: "fi-fi",
+  tr: "tr-tr",
+  el: "gr-el",
+  he: "il-he",
+  ar: "xa-ar",
+  zh: "cn-zh",
+  ja: "jp-ja",
+  ko: "kr-ko",
+};
+
+const GOOGLE_COUNTRY_BY_LANGUAGE: Record<string, string> = {
+  en: "us",
+  pt: "br",
+  zh: "cn",
+  ja: "jp",
+  ko: "kr",
+};
+
+const SERP_BASE_URL: Record<SearchEngine, string> = {
+  bing: "https://www.bing.com/search",
+  duckduckgo: "https://duckduckgo.com/",
+  google: "https://www.google.com/search",
+};
+
+// SPEC: §camofox+openserp バックエンド。クエリを URL エンコードし、lang 指定時は
+// 各エンジンの言語パラメータへ反映する（値のない lang は指定なしとして扱う）。
+export function serpUrl(engine: SearchEngine, query: string, lang?: string): string {
+  const params = new URLSearchParams({ q: query });
+  const language = lang?.toLowerCase();
+  if (language) {
+    if (engine === "bing") {
+      const market = BING_MARKET_BY_LANGUAGE[language];
+      if (market) params.set("mkt", market);
+    } else if (engine === "duckduckgo") {
+      const kl = DUCKDUCKGO_KL_BY_LANGUAGE[language];
+      if (kl) params.set("kl", kl);
+    } else {
+      params.set("hl", language);
+      const gl = GOOGLE_COUNTRY_BY_LANGUAGE[language];
+      if (gl) params.set("gl", gl);
+    }
+  }
+  const base = SERP_BASE_URL[engine];
+  return `${base}${base.includes("?") ? "&" : "?"}${params}`;
+}
+
+// SPEC: HTML を openserp の POST /<engine>/parse?format=markdown へ送る。
+// パース要求の往復には 15秒、CAPTCHA・チャレンジ・空結果は 4xx エラーとして
+// 次のエンジンへのフォールバック材料になる。エラーには "parse:" を付ける。
+export async function openserpParse(
+  engine: SearchEngine,
+  html: string,
+  signal?: AbortSignal,
+  deps: ServerDeps = {},
+): Promise<string> {
+  const fetcher = deps.fetcher ?? fetch;
+  const spawnServer = deps.spawnOpenserp ?? spawnOpenserpServer;
+  const waitSignal = AbortSignal.any([
+    signal ?? new AbortController().signal,
+    AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
+  ]);
+
+  await ensureServer(openserpBaseUrl(), "/ready", "openserp", waitSignal, spawnServer, fetcher);
+
+  const parseSignal = AbortSignal.any([
+    signal ?? new AbortController().signal,
+    AbortSignal.timeout(PARSE_TIMEOUT_MS),
+  ]);
+  const response = await fetcher(`${openserpBaseUrl()}/${engine}/parse?format=markdown`, {
+    method: "POST",
+    headers: { "Content-Type": "text/html" },
+    body: html,
+    signal: parseSignal,
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => undefined)) as
+      | {
+          message?: unknown;
+        }
+      | undefined;
+    const detail =
+      typeof body?.message === "string" && body.message
+        ? body.message
+        : `${response.status} ${response.statusText}`;
+    throw new Error(`parse: ${detail}`);
+  }
+  const markdown = await response.text();
+  if (!markdown.trim()) throw new Error("parse: empty response");
+  return markdown;
+}
+
+// SPEC: §camofox+openserp バックエンド。SERP URL 構築 → camofox 描画 → openserp
+// パース → 先頭から最大10件（### <数字>. 見出し単位）。
+export async function camofoxOpenserpSearch(
+  engine: SearchEngine,
+  query: string,
+  signal?: AbortSignal,
+  lang?: string,
+  deps: ServerDeps = {},
+): Promise<string> {
+  const html = await camofoxRender(
+    serpUrl(engine, query, lang),
+    CAMOFOX_SEARCH_SESSION_KEY,
+    signal,
+    deps,
+  );
+  const markdown = await openserpParse(engine, html, signal, deps);
+  return takeFirstEntries(markdown, SEARCH_RESULT_LIMIT);
+}
+
+// --- fetch backend: camofox render -> trafilatura ---
+
+export type CamofoxDeps = ServerDeps & {
   toMarkdown?: (html: string, signal?: AbortSignal) => Promise<string>;
 };
 
-// SPEC: camofox+trafilatura バックエンド。HTTP 操作（サーバー起動待ちを含む）と
-// trafilatura 変換の各段に 15秒を適用する。タブは成否に関わらず閉じる。
+// SPEC: §camofox+trafilatura バックエンド。描画と trafilatura 変換の各段に
+// それぞれのタイムアウトを適用する。
 export async function camofoxFetch(
   url: string,
   signal?: AbortSignal,
   deps: CamofoxDeps = {},
 ): Promise<string> {
-  const fetcher = deps.fetcher ?? fetch;
-  const spawnServer = deps.spawnServer ?? spawnCamofoxServer;
   const toMarkdown =
     deps.toMarkdown ??
     ((html, convertSignal) => runWithStdin("trafilatura", ["--markdown"], html, convertSignal));
-  const httpSignal = AbortSignal.any([
-    signal ?? new AbortController().signal,
-    AbortSignal.timeout(BACKEND_TIMEOUT_MS),
-  ]);
+  const html = await camofoxRender(url, CAMOFOX_FETCH_SESSION_KEY, signal, deps);
+  return toMarkdown(html, signal);
+}
 
-  await ensureCamofoxServer(httpSignal, spawnServer, fetcher);
-  const tab = (await camofoxRequest(
-    "/tabs",
-    { method: "POST", json: { userId: CAMOFOX_USER_ID, sessionKey: CAMOFOX_SESSION_KEY, url } },
-    httpSignal,
-    fetcher,
-  )) as { tabId?: string };
-  if (!tab.tabId) throw new Error("camofox server returned no tabId");
+// --- backend chain shared by both tools ---
 
-  // SPEC: タブは DOM取得後・変換前に閉じる。閉鎖失敗は結果に影響させない。
-  let tabClosed = false;
-  const closeTab = async (): Promise<void> => {
-    tabClosed = true;
-    await camofoxRequest(
-      `/tabs/${encodeURIComponent(tab.tabId)}?userId=${encodeURIComponent(CAMOFOX_USER_ID)}`,
-      { method: "DELETE" },
-      AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(BACKEND_TIMEOUT_MS)]),
-      fetcher,
-    ).catch(() => {});
-  };
+export type Attempt =
+  | { readonly backend: string; readonly ok: true }
+  | { readonly backend: string; readonly ok: false; readonly error: string };
 
-  try {
-    const evaluated = (await camofoxRequest(
-      `/tabs/${encodeURIComponent(tab.tabId)}/evaluate`,
-      {
-        method: "POST",
-        json: { userId: CAMOFOX_USER_ID, expression: "document.documentElement.outerHTML" },
-      },
-      httpSignal,
-      fetcher,
-    )) as { result?: unknown };
-    if (typeof evaluated.result !== "string" || !evaluated.result) {
-      throw new Error("evaluate returned no HTML");
-    }
-    await closeTab();
-    return await toMarkdown(evaluated.result, signal);
-  } finally {
-    if (!tabClosed) await closeTab();
+class AllBackendsFailedError extends Error {
+  constructor(
+    readonly operation: "web search" | "web fetch",
+    readonly attempts: Attempt[],
+  ) {
+    super(
+      `All ${operation} backends failed: ${attempts
+        .filter((attempt) => !attempt.ok)
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join("; ")}`,
+    );
   }
+}
+
+export type BackendEntry = readonly [name: string, run: () => Promise<string>];
+
+export function defaultSearchBackends(
+  query: string,
+  signal?: AbortSignal,
+  lang?: string,
+  deps: ServerDeps = {},
+): BackendEntry[] {
+  return (["google", "duckduckgo", "bing"] as const).map((engine) => [
+    `camofox+openserp(${engine})`,
+    () => camofoxOpenserpSearch(engine, query, signal, lang, deps),
+  ]);
+}
+
+export async function searchOne(
+  query: string,
+  signal: AbortSignal | undefined,
+  backends?: BackendEntry[],
+  lang?: string,
+): Promise<{ text: string; backend: string; attempts: Attempt[] }> {
+  const resolvedBackends = backends ?? defaultSearchBackends(query, signal, lang);
+  const attempts: Attempt[] = [];
+
+  for (const [name, search] of resolvedBackends) {
+    try {
+      const text = await search();
+      // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
+      if (!text.trim()) throw new Error("empty response");
+      attempts.push({ backend: name, ok: true });
+      return { text, backend: name, attempts };
+    } catch (error) {
+      attempts.push({
+        backend: name,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  throw new AllBackendsFailedError("web search", attempts);
 }
 
 // --- Reddit backend (post permalink -> Atom feed, embed/oEmbed fallback) ---
@@ -635,7 +804,7 @@ export async function fetchRedditMarkdown(
   if (!url) throw new Error(`Not a supported Reddit post URL: ${rawUrl}`);
   const attemptSignal = AbortSignal.any([
     signal ?? new AbortController().signal,
-    AbortSignal.timeout(BACKEND_TIMEOUT_MS),
+    AbortSignal.timeout(REDDIT_TIMEOUT_MS),
   ]);
   const rssAttempt = await fetchRedditText(url.rssUrl, attemptSignal, fetcher);
   const feed = rssAttempt.ok ? parseRedditAtom(rssAttempt.body) : undefined;
@@ -657,14 +826,17 @@ export async function fetchRedditMarkdown(
   return renderRedditMarkdown(url, feed, embed, oembed);
 }
 
-export function defaultFetchBackends(url: string, signal?: AbortSignal): BackendEntry[] {
+// SPEC: §web_fetch のバックエンド。Reddit 投稿パーマリンクは Reddit のみ、
+// その他は camofox+trafilatura のみ。
+export function defaultFetchBackends(
+  url: string,
+  signal?: AbortSignal,
+  deps: CamofoxDeps = {},
+): BackendEntry[] {
   if (parseRedditPostUrl(url)) {
     return [["Reddit", () => fetchRedditMarkdown(url, signal)]];
   }
-  return [
-    ["trafilatura", () => trafilaturaFetch(url, signal)],
-    ["camofox+trafilatura", () => camofoxFetch(url, signal)],
-  ];
+  return [["camofox+trafilatura", () => camofoxFetch(url, signal, deps)]];
 }
 
 export async function fetchOne(
@@ -677,7 +849,8 @@ export async function fetchOne(
   for (const [name, fetcher] of backends) {
     try {
       const text = await fetcher();
-      if (!text) throw new Error("empty response");
+      // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
+      if (!text.trim()) throw new Error("empty response");
       attempts.push({ backend: name, ok: true });
       return { text, backend: name, attempts };
     } catch (error) {
@@ -756,7 +929,7 @@ const searchParameters = Type.Object({
   query: Type.String({ description: "Single search query" }),
   lang: Type.Optional(
     Type.String({
-      description: "Language hint passed to openserp (e.g. EN, DE, JA). Ignored by markdown.new.",
+      description: "Language hint reflected in the search engine locale (e.g. EN, DE, JA).",
     }),
   ),
 });

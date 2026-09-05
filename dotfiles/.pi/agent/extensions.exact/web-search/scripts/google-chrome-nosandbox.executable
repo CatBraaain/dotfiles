@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# openserp launches nix Chrome via go-rod, which aborts with a SUID-sandbox
-# error on non-NixOS hosts (/nix/store is read-only, so chrome-sandbox can
-# never be root:4755). openserp has no flag to pass --no-sandbox itself,
-# so it points --browser-path at this wrapper. See web-search SPEC.md.
-exec "$HOME/.nix-profile/bin/google-chrome-stable" --no-sandbox "$@"

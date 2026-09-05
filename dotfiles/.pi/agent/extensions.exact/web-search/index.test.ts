@@ -1,24 +1,32 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import webSearchExtension, {
-  BACKEND_TIMEOUT_MS,
   buildCamofoxServerSpawn,
+  buildOpenserpServerSpawn,
   camofoxBaseUrl,
   camofoxFetch,
+  camofoxOpenserpSearch,
+  camofoxRender,
   camofoxServerEnv,
+  CONVERT_TIMEOUT_MS,
   defaultFetchBackends,
   fetchRedditMarkdown,
-  openserpArgs,
+  openserpBaseUrl,
+  openserpParse,
   defaultSearchBackends,
   fetchOne,
   formatBackendLine,
   formatBackendLines,
-  openserpError,
+  PARSE_TIMEOUT_MS,
   parseRedditAtom,
   parseRedditEmbed,
   parseRedditOEmbed,
   parseRedditPostUrl,
+  REDDIT_TIMEOUT_MS,
+  RENDER_TIMEOUT_MS,
   searchOne,
+  SERVER_WAIT_TIMEOUT_MS,
+  serpUrl,
   titleFromMarkdown,
   type Attempt,
   type BackendEntry,
@@ -281,13 +289,19 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
   });
 
-  it("デフォルトのバックエンド順序は openserp(bing)→duckduckgo→google→markdown.new", () => {
+  it("空白・改行のみの本文も空として失敗扱いにする", async () => {
+    const backends = [okBackend("A", " \n\t "), okBackend("B", "本文")];
+    const result = await searchOne("query", undefined, backends);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+  });
+
+  it("デフォルトのバックエンド順序は camofox+openserp(google)→duckduckgo→bing", () => {
     const backendNames = defaultSearchBackends("query").map(([name]) => name);
     assert.deepEqual(backendNames, [
-      "openserp(bing)",
-      "openserp(duckduckgo)",
-      "openserp(google)",
-      "markdown.new",
+      "camofox+openserp(google)",
+      "camofox+openserp(duckduckgo)",
+      "camofox+openserp(bing)",
     ]);
   });
 });
@@ -299,11 +313,11 @@ describe("web_search 統合（execute 経由・実バックエンド）", () => 
   });
 
   it("検索結果は最大10件を出力し、件数が実バックエンドの結果数に満たないこともある", async () => {
-    const resultText = textOf(await callSearch("pi coding agent"));
+    const resultText = textOf(await callSearch("pi coding agent", AbortSignal.timeout(120_000)));
     const headings = resultText.match(/^#{2,3} \d+\./gm) ?? [];
     assert.ok(headings.length > 0);
     assert.ok(headings.length <= 10);
-  }, 60_000);
+  }, 150_000);
 
   it("失敗したバックエンドも次の検索で再試行する", async () => {
     const attemptsPerSearch: string[][] = [];
@@ -334,9 +348,9 @@ describe("web_search 統合（execute 経由・実バックエンド）", () => 
   });
 
   it("実バックエンドで検索が成功する", async () => {
-    const resultText = textOf(await callSearch("hello world"));
+    const resultText = textOf(await callSearch("hello world", AbortSignal.timeout(120_000)));
     assert.ok(resultText.length > 0);
-  }, 60_000);
+  }, 150_000);
 });
 
 describe("web_search 表示", () => {
@@ -426,9 +440,16 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
   });
 
-  it("デフォルトのバックエンド順序は trafilatura→camofox+trafilatura", () => {
+  it("空白・改行のみの本文も空として失敗扱いにする", async () => {
+    const backends = [okBackend("A", " \n\t "), okBackend("B", "本文")];
+    const result = await fetchOne("https://example.com/", undefined, backends);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+  });
+
+  it("デフォルトのバックエンド順序は camofox+trafilatura のみ", () => {
     const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["trafilatura", "camofox+trafilatura"]);
+    assert.deepEqual(backendNames, ["camofox+trafilatura"]);
   });
 });
 
@@ -439,9 +460,11 @@ describe("web_fetch 統合（execute 経由・実バックエンド）", () => {
   });
 
   it("実バックエンドでフェッチが成功する", async () => {
-    const resultText = textOf(await callFetch("https://example.com/"));
+    const resultText = textOf(
+      await callFetch("https://example.com/", AbortSignal.timeout(120_000)),
+    );
     assert.ok(resultText.length > 0);
-  }, 60_000);
+  }, 150_000);
 });
 
 describe("バックエンド結果行のフォーマット", () => {
@@ -474,68 +497,40 @@ describe("バックエンド結果行のフォーマット", () => {
   });
 });
 
-describe("openserp 引数組み立て", () => {
-  it("検索エンジン・クエリ・件数上限・形式を渡す", () => {
-    assert.deepEqual(openserpArgs("google", "query", undefined, false), [
-      "search",
-      "google",
-      "query",
-      "--limit",
-      "10",
-      "--format",
-      "markdown",
-    ]);
+describe("SERP URL 構築", () => {
+  it("クエリを q パラメータへ URL エンコードする", () => {
+    assert.equal(serpUrl("bing", "hello world"), "https://www.bing.com/search?q=hello+world");
+    assert.equal(serpUrl("google", "a&b=c"), "https://www.google.com/search?q=a%26b%3Dc");
   });
 
-  it("lang 指定時は --lang を渡す", () => {
-    assert.deepEqual(openserpArgs("bing", "query", "JA", false), [
-      "search",
-      "bing",
-      "query",
-      "--limit",
-      "10",
-      "--format",
-      "markdown",
-      "--lang",
-      "JA",
-    ]);
+  it("lang 指定時は各エンジンの言語パラメータへ反映する（大文字でも小文字に正規化）", () => {
+    assert.equal(serpUrl("bing", "query", "JA"), "https://www.bing.com/search?q=query&mkt=ja-JP");
+    assert.equal(serpUrl("duckduckgo", "query", "JA"), "https://duckduckgo.com/?q=query&kl=jp-ja");
+    assert.equal(
+      serpUrl("google", "query", "JA"),
+      "https://www.google.com/search?q=query&hl=ja&gl=jp",
+    );
   });
 
-  it("nosandbox ラッパーが存在するときは --browser-path で拡張同梱のラッパーを渡す", () => {
-    const args = openserpArgs("google", "query", undefined, true);
-    assert.equal(args.at(-2), "--browser-path");
-    assert.ok(args.at(-1)?.endsWith("/google-chrome-nosandbox"));
+  it("lang 未指定時は言語パラメータを付けない", () => {
+    assert.equal(serpUrl("google", "query"), "https://www.google.com/search?q=query");
+  });
+
+  it("対応する値のない lang は指定なしとして扱う", () => {
+    assert.equal(serpUrl("bing", "query", "xx"), "https://www.bing.com/search?q=query");
+    assert.equal(serpUrl("duckduckgo", "query", "xx"), "https://duckduckgo.com/?q=query");
+    // google は hl に lang を直接渡し、gl は対応国があるときだけ付く
+    assert.equal(serpUrl("google", "query", "sv"), "https://www.google.com/search?q=query&hl=sv");
   });
 });
 
-describe("openserp のエラー抽出", () => {
-  it("stderr から Error: 行だけを取り出しプレフィックスを外す", () => {
-    const openserpStderr = [
-      'time="2026-08-08T13:41:14+09:00" level=warning msg="cannot read config"',
-      '[2026-08-08 13:41:15][error][engine=google][query_hash=e43c51c2b000]["Page classified as captcha detected"]',
-      "Error: google search: captcha detected",
-    ].join("\n");
-    const execFileError = {
-      message: "Command failed: openserp search google chikawa",
-      stderr: openserpStderr,
-    };
-    assert.equal(openserpError(execFileError).message, "google search: captcha detected");
-  });
-
-  it("Error: 行が複数あれば最後を使う", () => {
-    const execFileError = { stderr: "Error: first attempt failed\nError: second attempt failed" };
-    assert.equal(openserpError(execFileError).message, "second attempt failed");
-  });
-
-  it("Error: 行がなければ元のエラーメッセージにフォールバックする", () => {
-    const timeoutError = new Error("Command failed: openserp timed out");
-    assert.equal(openserpError(timeoutError).message, "Command failed: openserp timed out");
-  });
-});
-
-describe("バックエンドタイムアウト", () => {
-  it("1バックエンドあたりの最大待ち時間は15秒で全バックエンド一律", () => {
-    assert.equal(BACKEND_TIMEOUT_MS, 15_000);
+describe("段階別タイムアウト", () => {
+  it("サーバー起動待ち・パース・変換・Reddit は各15秒、描画は30秒", () => {
+    assert.equal(SERVER_WAIT_TIMEOUT_MS, 15_000);
+    assert.equal(RENDER_TIMEOUT_MS, 30_000);
+    assert.equal(PARSE_TIMEOUT_MS, 15_000);
+    assert.equal(CONVERT_TIMEOUT_MS, 15_000);
+    assert.equal(REDDIT_TIMEOUT_MS, 15_000);
   });
 });
 
@@ -595,12 +590,9 @@ describe("web_fetch 表示", () => {
     const attempts = updates[0]?.details?.attempts;
     assert.deepEqual(attempts, [{ backend: "X", ok: false, error: "boom" }]);
     const lines = renderedLines(
-      failedFetch.renderResult(
-        { content: [], details: undefined },
-        {},
-        identityTheme,
-        { state: { attempts } },
-      ),
+      failedFetch.renderResult({ content: [], details: undefined }, {}, identityTheme, {
+        state: { attempts },
+      }),
     );
     assert.deepEqual(lines, ['✗ X - "boom"']);
   });
@@ -772,6 +764,8 @@ describe("fetchRedditMarkdown", () => {
       }),
     );
     assert.match(markdown, /^# Announcement: We've Updated The Rules$/m);
+    assert.match(markdown, /^- Updated: /m);
+    assert.match(markdown, /^- Comments: 1 fetched$/m);
     assert.match(markdown, /^## Post$/m);
     assert.match(markdown, /^## Comments \(1 retrieved\)$/m);
     assert.match(markdown, /^### 1\. u\/Commenter$/m);
@@ -827,18 +821,27 @@ describe("web_fetch バックエンド構成（Reddit 分岐）", () => {
     assert.deepEqual(backendNames, ["Reddit"]);
   });
 
-  it("その他の URL では trafilatura→camofox+trafilatura", () => {
+  it("その他の URL では camofox+trafilatura のみ", () => {
     const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["trafilatura", "camofox+trafilatura"]);
+    assert.deepEqual(backendNames, ["camofox+trafilatura"]);
   });
 });
 
 // --- camofox+trafilatura バックエンド（モック） ---
 
+// --- モックサーバーフェッチャー（camofox / openserp 共用） ---
+
 const camofoxBase = "http://127.0.0.1:9377";
+const openserpBase = "http://127.0.0.1:7000";
 const networkError = Symbol("network-error");
 
-type CamofoxCall = { method: string; path: string; body?: unknown; signal?: AbortSignal };
+type CamofoxCall = {
+  method: string;
+  path: string;
+  body?: unknown;
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+};
 
 interface CamofoxRoute {
   method: string;
@@ -849,36 +852,50 @@ interface CamofoxRoute {
   respond?: () => unknown;
 }
 
-function mockCamofoxFetcher(routes: CamofoxRoute[], calls: CamofoxCall[]): typeof fetch {
-  return (async (input: string | URL | Request, init?: RequestInit) => {
-    const path = String(input).replace(camofoxBase, "");
-    const method = (init?.method ?? "GET").toUpperCase();
-    calls.push({
-      method,
-      path,
-      body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
-      signal: init?.signal as AbortSignal | undefined,
-    });
-    const route = routes.find(
-      (candidate) => candidate.method === method && candidate.pattern.test(path),
-    );
-    if (!route) throw new Error(`unexpected request: ${method} ${path}`);
-    const body = route.respond ? route.respond() : route.body;
-    if (body === networkError) throw new TypeError("fetch failed");
-    const status = route.status ?? 200;
-    return {
-      ok: status < 400,
-      status,
-      statusText: route.statusText ?? "OK",
-      json: async () => (status < 400 ? body : { error: route.body }),
-    } as unknown as Response;
-  }) as unknown as typeof fetch;
+function tryParseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
+
+function createMockServerFetcher(baseUrl: string) {
+  return (routes: CamofoxRoute[], calls: CamofoxCall[]): typeof fetch =>
+    (async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input).replace(baseUrl, "");
+      const method = (init?.method ?? "GET").toUpperCase();
+      calls.push({
+        method,
+        path,
+        body: init?.body === undefined ? undefined : tryParseJson(String(init.body)),
+        signal: init?.signal as AbortSignal | undefined,
+        headers: (init?.headers as Record<string, string> | undefined) ?? undefined,
+      });
+      const route = routes.find(
+        (candidate) => candidate.method === method && candidate.pattern.test(path),
+      );
+      if (!route) throw new Error(`unexpected request: ${method} ${path}`);
+      const body = route.respond ? route.respond() : route.body;
+      if (body === networkError) throw new TypeError("fetch failed");
+      const status = route.status ?? 200;
+      return {
+        ok: status < 400,
+        status,
+        statusText: route.statusText ?? "OK",
+        json: async () => (status < 400 ? body : { error: route.body, message: route.body }),
+        text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+}
+
+const mockCamofoxFetcher = createMockServerFetcher(camofoxBase);
+const mockOpenserpFetcher = createMockServerFetcher(openserpBase);
 
 function camofoxDeps(fetcher: typeof fetch, spawns: { count: number } = { count: 0 }) {
   return {
     fetcher,
-    spawnServer: () => {
+    spawnCamofox: () => {
       spawns.count++;
     },
     toMarkdown: async (html: string) => `md:${html}`,
@@ -892,7 +909,16 @@ describe("camofox+trafilatura バックエンド", () => {
     const fetcher = mockCamofoxFetcher(
       [
         { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1", url: "https://example.com/" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs$/,
+          body: { tabId: "TAB1", url: "https://example.com/" },
+        },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
         {
           method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
@@ -903,7 +929,11 @@ describe("camofox+trafilatura バックエンド", () => {
       calls,
     );
 
-    const markdown = await camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher, spawns));
+    const markdown = await camofoxFetch(
+      "https://example.com/",
+      undefined,
+      camofoxDeps(fetcher, spawns),
+    );
 
     assert.equal(markdown, "md:<html>body</html>");
     assert.equal(spawns.count, 0);
@@ -915,6 +945,11 @@ describe("camofox+trafilatura バックエンド", () => {
           method: "POST",
           path: "/tabs",
           body: { userId: "pi", sessionKey: "web-fetch", url: "https://example.com/" },
+        },
+        {
+          method: "POST",
+          path: "/tabs/TAB1/wait",
+          body: { userId: "pi", waitForNetwork: true },
         },
         {
           method: "POST",
@@ -940,6 +975,11 @@ describe("camofox+trafilatura バックエンド", () => {
         { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
         {
           method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
+        {
+          method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
           body: { ok: true, result: "<html>x</html>" },
         },
@@ -948,7 +988,11 @@ describe("camofox+trafilatura バックエンド", () => {
       calls,
     );
 
-    const markdown = await camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher, spawns));
+    const markdown = await camofoxFetch(
+      "https://example.com/",
+      undefined,
+      camofoxDeps(fetcher, spawns),
+    );
 
     assert.equal(markdown, "md:<html>x</html>");
     assert.equal(spawns.count, 1);
@@ -975,6 +1019,11 @@ describe("camofox+trafilatura バックエンド", () => {
         { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
         {
           method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
+        {
+          method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
           status: 500,
           statusText: "Internal Server Error",
@@ -987,7 +1036,7 @@ describe("camofox+trafilatura バックエンド", () => {
 
     await assert.rejects(
       camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher)),
-      /evaluate failed/,
+      /render: evaluate failed/,
     );
     assert.ok(calls.some((call) => call.method === "DELETE"));
   });
@@ -997,6 +1046,11 @@ describe("camofox+trafilatura バックエンド", () => {
       [
         { method: "GET", pattern: /^\/health$/, body: { ok: true } },
         { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
         {
           method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
@@ -1009,7 +1063,7 @@ describe("camofox+trafilatura バックエンド", () => {
 
     await assert.rejects(
       camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher)),
-      /no HTML/,
+      /render: evaluate returned no HTML/,
     );
   });
 
@@ -1018,6 +1072,11 @@ describe("camofox+trafilatura バックエンド", () => {
       [
         { method: "GET", pattern: /^\/health$/, body: { ok: true } },
         { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
         {
           method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
@@ -1047,6 +1106,11 @@ describe("camofox+trafilatura バックエンド", () => {
         { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
         {
           method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
+        {
+          method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
           body: { ok: true, result: "<html>z</html>" },
         },
@@ -1057,7 +1121,7 @@ describe("camofox+trafilatura バックエンド", () => {
 
     await camofoxFetch("https://example.com/", undefined, {
       fetcher,
-      spawnServer: () => {},
+      spawnCamofox: () => {},
       toMarkdown: async () => {
         calls.push({ method: "CONVERT", path: "(markdown)" });
         return "md";
@@ -1069,6 +1133,7 @@ describe("camofox+trafilatura バックエンド", () => {
       [
         "GET /health",
         "POST /tabs",
+        "POST /tabs/TAB1/wait",
         "POST /tabs/TAB1/evaluate",
         "DELETE /tabs/TAB1?userId=pi",
         "CONVERT (markdown)",
@@ -1084,6 +1149,11 @@ describe("camofox+trafilatura バックエンド", () => {
         { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
         {
           method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
+        {
+          method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
           body: { ok: true, result: "<html>s</html>" },
         },
@@ -1096,7 +1166,7 @@ describe("camofox+trafilatura バックエンド", () => {
 
     await camofoxFetch("https://example.com/", callerSignal, {
       fetcher,
-      spawnServer: () => {},
+      spawnCamofox: () => {},
       toMarkdown: async (_html, toMarkdownSignal) => {
         convertSignal = toMarkdownSignal;
         return "md";
@@ -1109,7 +1179,7 @@ describe("camofox+trafilatura バックエンド", () => {
 
   it("起動待ちで失敗した次のリクエストは、応答するサーバーで再起動せず成功する", async () => {
     const spawns = { count: 0 };
-    const spawnServer = () => {
+    const spawnCamofox = () => {
       spawns.count++;
     };
     const coldFetcher = mockCamofoxFetcher(
@@ -1120,7 +1190,7 @@ describe("camofox+trafilatura バックエンド", () => {
     await assert.rejects(
       camofoxFetch("https://example.com/", AbortSignal.timeout(50), {
         fetcher: coldFetcher,
-        spawnServer,
+        spawnCamofox,
         toMarkdown: async () => "md",
       }),
       /camofox server not ready/,
@@ -1133,6 +1203,11 @@ describe("camofox+trafilatura バックエンド", () => {
         { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
         {
           method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
+        {
+          method: "POST",
           pattern: /^\/tabs\/TAB1\/evaluate$/,
           body: { ok: true, result: "<html>w</html>" },
         },
@@ -1142,7 +1217,7 @@ describe("camofox+trafilatura バックエンド", () => {
     );
     const markdown = await camofoxFetch("https://example.com/", undefined, {
       fetcher: warmFetcher,
-      spawnServer,
+      spawnCamofox,
       toMarkdown: async () => "md",
     });
 
@@ -1196,5 +1271,305 @@ describe("camofox 接続先", () => {
       camofoxBaseUrl({ CAMOFOX_BASE_URL: "http://localhost:9999" }),
       "http://localhost:9999",
     );
+  });
+});
+
+describe("camofox による描画（camofoxRender）", () => {
+  it("web_search と web_fetch で sessionKey を分ける", async () => {
+    const renderTabs = (sessionKeys: string[]) =>
+      mockCamofoxFetcher(
+        [
+          { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+          {
+            method: "POST",
+            pattern: /^\/tabs$/,
+            respond: () => {
+              return { tabId: `TAB${sessionKeys.length}` };
+            },
+          },
+          {
+            method: "POST",
+            pattern: /^\/tabs\/TAB\d+\/wait$/,
+            body: { ok: true, ready: true },
+          },
+          {
+            method: "POST",
+            pattern: /^\/tabs\/TAB\d+\/evaluate$/,
+            body: { ok: true, result: "<html>x</html>" },
+          },
+          { method: "DELETE", pattern: /^\/tabs\/TAB\d+\?userId=pi$/, body: { ok: true } },
+        ],
+        [],
+      );
+
+    const sessionKeys: string[] = [];
+    const fetcher = (input: string | URL | Request, init?: RequestInit) => {
+      const body = init?.body === undefined ? undefined : tryParseJson(String(init.body));
+      if (
+        String(input).endsWith("/tabs") &&
+        body &&
+        typeof body === "object" &&
+        "sessionKey" in body
+      ) {
+        sessionKeys.push((body as { sessionKey: string }).sessionKey);
+      }
+      return renderTabs(sessionKeys)(input, init);
+    };
+
+    await camofoxRender("https://example.com/a", "web-search", undefined, {
+      fetcher,
+      spawnCamofox: () => {},
+    });
+    await camofoxRender("https://example.com/b", "web-fetch", undefined, {
+      fetcher,
+      spawnCamofox: () => {},
+    });
+
+    assert.deepEqual(sessionKeys, ["web-search", "web-fetch"]);
+  });
+
+  it("描画失敗のエラーには render: 段階ラベルを付ける", async () => {
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, status: 500, statusText: "Server Error" },
+      ],
+      [],
+    );
+
+    await assert.rejects(
+      camofoxRender("https://example.com/", "web-search", undefined, {
+        fetcher,
+        spawnCamofox: () => {},
+      }),
+      /render: 500 Server Error/,
+    );
+  });
+});
+
+describe("openserp パース（openserpParse）", () => {
+  it("ready を確認してから HTML を POST /<engine>/parse?format=markdown へ送る", async () => {
+    const calls: CamofoxCall[] = [];
+    const fetcher = mockOpenserpFetcher(
+      [
+        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
+        {
+          method: "POST",
+          pattern: /^\/bing\/parse\?format=markdown$/,
+          body: "### 1. Example\n\n-> https://example.com/",
+        },
+      ],
+      calls,
+    );
+
+    const markdown = await openserpParse("bing", "<html>serp</html>", undefined, {
+      fetcher,
+      spawnOpenserp: () => {},
+    });
+
+    assert.equal(markdown, "### 1. Example\n\n-> https://example.com/");
+    const parseCall = calls.find((call) => call.method === "POST");
+    assert.equal(parseCall?.path, "/bing/parse?format=markdown");
+    assert.equal(parseCall?.body, "<html>serp</html>");
+    assert.equal(parseCall?.headers?.["Content-Type"], "text/html");
+  });
+
+  it("サーバーが応答しないときは起動して準備を待つ", async () => {
+    const calls: CamofoxCall[] = [];
+    let readyChecks = 0;
+    const fetcher = mockOpenserpFetcher(
+      [
+        {
+          method: "GET",
+          pattern: /^\/ready$/,
+          respond: () => (++readyChecks <= 1 ? networkError : { status: "ready" }),
+        },
+        {
+          method: "POST",
+          pattern: /^\/duckduckgo\/parse\?format=markdown$/,
+          body: "### 1. Example",
+        },
+      ],
+      calls,
+    );
+    const spawns = { count: 0 };
+
+    await openserpParse("duckduckgo", "<html>serp</html>", undefined, {
+      fetcher,
+      spawnOpenserp: () => {
+        spawns.count++;
+      },
+    });
+
+    assert.equal(spawns.count, 1);
+    assert.equal(readyChecks, 2);
+  });
+
+  it("ready 応答時はサーバーを起動しない", async () => {
+    const spawns = { count: 0 };
+    const fetcher = mockOpenserpFetcher(
+      [
+        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
+        {
+          method: "POST",
+          pattern: /^\/bing\/parse\?format=markdown$/,
+          body: "### 1. Example",
+        },
+      ],
+      [],
+    );
+
+    await openserpParse("bing", "<html>serp</html>", undefined, {
+      fetcher,
+      spawnOpenserp: () => {
+        spawns.count++;
+      },
+    });
+
+    assert.equal(spawns.count, 0);
+  });
+
+  it("タイムアウト内にサーバーが準備できなければ例外を出す", async () => {
+    const fetcher = mockOpenserpFetcher(
+      [{ method: "GET", pattern: /^\/ready$/, respond: () => networkError }],
+      [],
+    );
+
+    await assert.rejects(
+      openserpParse("bing", "<html>serp</html>", AbortSignal.timeout(50), {
+        fetcher,
+        spawnOpenserp: () => {},
+      }),
+      /openserp server not ready/,
+    );
+  });
+
+  it("CAPTCHA 等 4xx エラーは 'parse: <メッセージ>' で失敗する", async () => {
+    const fetcher = mockOpenserpFetcher(
+      [
+        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
+        {
+          method: "POST",
+          pattern: /^\/google\/parse\?format=markdown$/,
+          status: 422,
+          statusText: "Unprocessable Entity",
+          body: "captcha detected",
+        },
+      ],
+      [],
+    );
+
+    await assert.rejects(
+      openserpParse("google", "<html>serp</html>", undefined, {
+        fetcher,
+        spawnOpenserp: () => {},
+      }),
+      /parse: captcha detected/,
+    );
+  });
+
+  it("パース結果が空なら 'parse: empty response' で失敗する", async () => {
+    const fetcher = mockOpenserpFetcher(
+      [
+        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
+        { method: "POST", pattern: /^\/bing\/parse\?format=markdown$/, body: "" },
+      ],
+      [],
+    );
+
+    await assert.rejects(
+      openserpParse("bing", "<html>serp</html>", undefined, {
+        fetcher,
+        spawnOpenserp: () => {},
+      }),
+      /parse: empty response/,
+    );
+  });
+});
+
+describe("camofox+openserp 検索バックエンド（camofoxOpenserpSearch）", () => {
+  it("SERP URL を構築し web-search セッションで描画し、パース結果を10件に切る", async () => {
+    const camofoxCalls: CamofoxCall[] = [];
+    const openserpCalls: CamofoxCall[] = [];
+    const camofoxFetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        {
+          method: "POST",
+          pattern: /^\/tabs$/,
+          body: { tabId: "TAB1" },
+        },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/wait$/,
+          body: { ok: true, ready: true },
+        },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: { ok: true, result: "<html>serp</html>" },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      camofoxCalls,
+    );
+    const twelveResults = Array.from(
+      { length: 12 },
+      (_, index) => `### ${index + 1}. Result ${index + 1}\n\n-> https://example.com/${index + 1}`,
+    ).join("\n\n");
+    const openserpFetcher = mockOpenserpFetcher(
+      [
+        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
+        {
+          method: "POST",
+          pattern: /^\/bing\/parse\?format=markdown$/,
+          body: twelveResults,
+        },
+      ],
+      openserpCalls,
+    );
+    const deps = {
+      fetcher: ((input: string | URL | Request, init?: RequestInit) =>
+        String(input).startsWith(camofoxBase)
+          ? camofoxFetcher(input, init)
+          : openserpFetcher(input, init)) as unknown as typeof fetch,
+      spawnCamofox: () => {},
+      spawnOpenserp: () => {},
+    };
+
+    const markdown = await camofoxOpenserpSearch("bing", "クエリ", undefined, "JA", deps);
+
+    const headings = markdown.match(/^### \d+\./gm) ?? [];
+    assert.equal(headings.length, 10);
+    const tabCall = camofoxCalls.find((call) => call.path === "/tabs");
+    assert.deepEqual(tabCall?.body, {
+      userId: "pi",
+      sessionKey: "web-search",
+      url: "https://www.bing.com/search?q=%E3%82%AF%E3%82%A8%E3%83%AA&mkt=ja-JP",
+    });
+    const parseCall = openserpCalls.find((call) => call.method === "POST");
+    assert.equal(parseCall?.body, "<html>serp</html>");
+  });
+});
+
+describe("openserp 接続先と起動コマンド", () => {
+  it("既定は http://127.0.0.1:7000", () => {
+    assert.equal(openserpBaseUrl({}), "http://127.0.0.1:7000");
+  });
+
+  it("環境変数 OPENSERP_BASE_URL で変更できる", () => {
+    assert.equal(
+      openserpBaseUrl({ OPENSERP_BASE_URL: "http://localhost:8123" }),
+      "http://localhost:8123",
+    );
+  });
+
+  it("openserp serve を base URL の host・port で --quiet 付きバックグラウンド起動する", () => {
+    const spawnSpec = buildOpenserpServerSpawn();
+
+    assert.equal(spawnSpec.command, "openserp");
+    assert.deepEqual(spawnSpec.args, ["serve", "-a", "127.0.0.1", "-p", "7000", "--quiet"]);
+    assert.equal(spawnSpec.options.detached, true);
+    assert.equal(spawnSpec.options.stdio, "ignore");
   });
 });
