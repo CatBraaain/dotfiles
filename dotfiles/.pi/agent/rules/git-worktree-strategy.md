@@ -9,7 +9,7 @@ main worktree ではファイルを編集しない。編集を伴う作業は、
 ## 作成と移行
 
 1. branch 名は取り組む機能を表す kebab-case 英語（例: `add-export-command`）。リポジトリ規約があれば優先する。
-2. `git worktree add ~/projects/<リポジトリ名>-<branch> -b <branch>` で HEAD から worktree を作成する。
+2. `git worktree add ~/projects/<リポジトリ名>-worktrees/<branch> -b <branch>` で HEAD から worktree を作成する。worktree はリポジトリごとに `<リポジトリ名>-worktrees` ディレクトリへ集約する。
 3. 未コミット変更があるときは `git stash push -u -m worktree-migration:<branch>` で退避する。
 4. `cd` ツールでセッションを worktree へ移す。bash の `cd` はシェルごとに閉じるため、セッションの cwd は変わらない。
 5. 退避した変更は worktree 側で `git stash pop` で受け取る。
