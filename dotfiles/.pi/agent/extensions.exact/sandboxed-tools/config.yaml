@@ -12,8 +12,8 @@ read:
 write:
   allow:
     - .
-    - ${GIT_WORKTREE_PATHS}
-    - ${GIT_WORKTREE_CONTAINER}
+    - ${GIT_MAIN_WORKTREE_PATH}
+    - ${GIT_MAIN_WORKTREE_PATH}-worktrees
     - ~/.pi
     - ~/.config
     - /tmp

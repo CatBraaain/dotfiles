@@ -115,17 +115,12 @@ fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission
 
 | 記述                             | 解決先                                                          |
 | -------------------------------- | --------------------------------------------------------------- |
-| `${GIT_WORKTREE_PATHS}`          | cwd を含む Git repository の全 worktree（main を含む）の絶対パス |
-| `${GIT_WORKTREE_CONTAINER}`      | cwd を含む Git repository の main worktree ルートの兄弟 `<basename>-worktrees` ディレクトリ |
+| `${GIT_MAIN_WORKTREE_PATH}`      | cwd を含む Git repository の main worktree の絶対パス |
 | 相対パス（`.` `./...` `../...`） | セッションの cwd を起点                                         |
 | `~`                              | ホームディレクトリ                                              |
 | それ以外                         | 絶対パス（そのまま）                                            |
 
-`${GIT_WORKTREE_PATHS}` はパスエントリ内の任意の位置に記述できる。Git repository 外では、この変数を含むエントリはパスを許可・bind・作成しない。
-
-`${GIT_WORKTREE_PATHS}` を含むエントリは、全 worktree のパスそれぞれへ展開される。展開先には実在するパスのみを含める（`git worktree list` はディレクトリが失われた worktree も表示するが、これらは含めない）。展開はアクション判定と bind のそれぞれの機会に `git worktree list` を実行し直して行うため、セッション中に追加・削除された worktree は、それ以降のアクション判定・bind に反映される。glob（下記）が起動時に展開されるのに対し、この変数は都度再取得される。
-
-`${GIT_WORKTREE_CONTAINER}` もパスエントリ内の任意の位置に記述でき、main worktree ルート（`git worktree list` の最初のエントリ）のディレクトリ名から兄弟位置の `<basename>-worktrees` へ1つに展開する。セッション cwd が linked worktree でも main worktree 基準で解決する。展開先は実在しなくてもよく、`${GIT_WORKTREE_PATHS}` と同じくアクション判定と bind のそれぞれの機会に解決し直す。Git repository 外では、この変数を含むエントリはパスを許可・bind・作成しない。
+`${GIT_MAIN_WORKTREE_PATH}` はパスエントリ内の任意の位置に記述できる。セッション cwd が linked worktree でも main worktree（`git worktree list` の最初のエントリ）基準で解決し、アクション判定と bind のそれぞれの機会に解決し直す。Git repository 外では、この変数を含むエントリはパスを許可・bind・作成しない。
 
 ### glob パターン
 
@@ -237,7 +232,7 @@ network は開放。fs 制限の対象外。
 
 ### 6.1 bind とパスの実在保証
 
-`read` / `write` の allow 中のパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `write.allow` の固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。`${GIT_WORKTREE_PATHS}` を含むエントリは `mkdir -p` の対象外とする（展開先は実在する worktree のパスのため）。`${GIT_WORKTREE_CONTAINER}` を含むエントリは、Git repository 内で解決できたとき `mkdir -p` の対象とする（worktree をこれから置くディレクトリのため）。リポジトリ外では作成しない。
+`read` / `write` の allow 中のパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `write.allow` の固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。`${GIT_MAIN_WORKTREE_PATH}` を含むエントリも、Git repository 内で解決できたとき `mkdir -p` の対象とする（`${GIT_MAIN_WORKTREE_PATH}-worktrees` のような派生ディレクトリをこれから作るため。main worktree 自体は実在するため作成されない）。リポジトリ外では作成しない。
 
 `write` の動的許可パスも同じ実在保証の対象とし、承認時にフェンス外で作成する（ファイル単体スコープは親ディレクトリの `mkdir -p` と空ファイル作成、ディレクトリスコープは対象ディレクトリの `mkdir -p`）。`read` の動的許可でパスは作成しない。
 
