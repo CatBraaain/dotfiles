@@ -1787,7 +1787,7 @@ describe("§3 許可要求ツール", () => {
       async (dir, sandbox) => {
         await assert.rejects(
           () =>
-            sandbox.requestWritePermission(join(dir, "secret"), {
+            sandbox.requestWritePermission(join(dir, "secret"), "to edit the secret file", {
               cwd: dir,
               hasUI: true,
               ui: noDialogUi,
@@ -1805,7 +1805,7 @@ describe("§3 許可要求ツール", () => {
       async (dir, sandbox) => {
         await assert.rejects(
           () =>
-            sandbox.requestWritePermission(join(dir, "cred"), {
+            sandbox.requestWritePermission(join(dir, "cred"), "to edit the credential file", {
               cwd: dir,
               hasUI: true,
               ui: noDialogUi,
@@ -1821,7 +1821,7 @@ describe("§3 許可要求ツール", () => {
     withAskPermissionSandbox(
       (dir) => `write:\n  allow: [${dir}]\n`,
       async (dir, sandbox) => {
-        const outcome = await sandbox.requestWritePermission(join(dir, "sub"), {
+        const outcome = await sandbox.requestWritePermission(join(dir, "sub"), "to start editing", {
           cwd: dir,
           hasUI: true,
           ui: noDialogUi,
@@ -1837,7 +1837,11 @@ describe("§3 許可要求ツール", () => {
       () => "read: {}\nwrite: {}\n",
       async (dir, sandbox) => {
         await assert.rejects(
-          () => sandbox.requestWritePermission(join(dir, "work"), { cwd: dir, hasUI: false }),
+          () =>
+            sandbox.requestWritePermission(join(dir, "work"), "to start editing", {
+              cwd: dir,
+              hasUI: false,
+            }),
           /Access requires confirmation: /,
         );
       },
@@ -1857,7 +1861,7 @@ describe("§3 許可要求ツール", () => {
             select: async (_title, options) => options[1],
           },
         });
-        const outcome = await sandbox.requestWritePermission(join(dir, "sub"), {
+        const outcome = await sandbox.requestWritePermission(join(dir, "sub"), "to start editing", {
           cwd: dir,
           hasUI: true,
           ui: noDialogUi,
@@ -1873,18 +1877,56 @@ describe("§3 許可要求ツール", () => {
       () => "read: {}\nwrite: {}\n",
       async (dir, sandbox) => {
         const selectionOptions: string[][] = [];
-        await sandbox.requestWritePermission(join(dir, "work"), {
-          cwd: dir,
-          hasUI: true,
-          ui: {
-            ...grantUi,
-            select: async (_title, options) => {
-              selectionOptions.push(options);
-              return options[0];
+        await sandbox.requestWritePermission(
+          join(dir, "work"),
+          "to edit files in the new worktree",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: {
+              ...grantUi,
+              select: async (_title, options) => {
+                selectionOptions.push(options);
+                return options[0];
+              },
             },
           },
-        });
-        assert.deepEqual(selectionOptions, [["Directory (subtree)", "No, deny (reason next)"]]);
+        );
+        assert.deepEqual(selectionOptions, [["Yes, allow", "No, deny (reason next)"]]);
+      },
+    ),
+  );
+
+  it(
+    "ask_permission のダイアログは問いかけ・理由・設定パターンを行順どおりに表示する",
+    withAskPermissionSandbox(
+      () => "read: {}\nwrite: {}\n",
+      async (dir, sandbox) => {
+        let title = "";
+        await sandbox.requestWritePermission(
+          join(dir, "work"),
+          "to edit files in the new worktree",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: {
+              ...grantUi,
+              select: async (dialogTitle, options) => {
+                title = dialogTitle;
+                return options[0];
+              },
+            },
+          },
+        );
+        assert.equal(
+          title,
+          [
+            "Allow write access to directory subtree?",
+            join(dir, "work"),
+            "reason: to edit files in the new worktree",
+            "no matching pattern (default ask)",
+          ].join("\n"),
+        );
       },
     ),
   );
@@ -1895,18 +1937,57 @@ describe("§3 許可要求ツール", () => {
       (dir) => `write:\n  ask: [${dir}/asked]\n`,
       async (dir, sandbox) => {
         let title = "";
-        await sandbox.requestWritePermission(join(dir, "asked"), {
-          cwd: dir,
-          hasUI: true,
-          ui: {
-            ...grantUi,
-            select: async (dialogTitle, options) => {
-              title = dialogTitle;
-              return options[0];
+        await sandbox.requestWritePermission(
+          join(dir, "asked"),
+          "to edit files under the asked directory",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: {
+              ...grantUi,
+              select: async (dialogTitle, options) => {
+                title = dialogTitle;
+                return options[0];
+              },
             },
           },
-        });
+        );
         assert.ok(title.includes(`matched: ${join(dir, "asked")}`), title);
+      },
+    ),
+  );
+
+  it(
+    "select を提供しない UI では confirm に置き換えて理由行を表示する",
+    withAskPermissionSandbox(
+      () => "read: {}\nwrite: {}\n",
+      async (dir, sandbox) => {
+        const confirmed: { question: string; message: string }[] = [];
+        const outcome = await sandbox.requestWritePermission(
+          join(dir, "work"),
+          "to edit files in the new worktree",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: {
+              confirm: async (question, message) => {
+                confirmed.push({ question, message });
+                return true;
+              },
+            },
+          },
+        );
+        assert.deepEqual(outcome, { status: "granted", grantedPath: join(dir, "work") });
+        assert.equal(confirmed.length, 1);
+        assert.equal(confirmed[0]?.question, "Allow write access to directory subtree?");
+        assert.equal(
+          confirmed[0]?.message,
+          [
+            join(dir, "work"),
+            "reason: to edit files in the new worktree",
+            "no matching pattern (default ask)",
+          ].join("\n"),
+        );
       },
     ),
   );
@@ -1916,11 +1997,15 @@ describe("§3 許可要求ツール", () => {
     withAskPermissionSandbox(
       () => "read: {}\nwrite: {}\n",
       async (dir, sandbox) => {
-        const outcome = await sandbox.requestWritePermission(dir, {
-          cwd: dir,
-          hasUI: true,
-          ui: grantUi,
-        });
+        const outcome = await sandbox.requestWritePermission(
+          dir,
+          "to start editing the repository",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: grantUi,
+          },
+        );
         assert.deepEqual(outcome, { status: "granted", grantedPath: dir });
         await sandbox.authorizePath("write", join(dir, "any", "file.txt"), { cwd: dir });
         const bindAt = sandbox.buildArgs("bash").indexOf(dir);
@@ -1939,7 +2024,7 @@ describe("§3 許可要求ツール", () => {
       () => "read: {}\nwrite: {}\n",
       async (dir, sandbox) => {
         const target = join(dir, "made", "worktree");
-        await sandbox.requestWritePermission(target, {
+        await sandbox.requestWritePermission(target, "to create a worktree", {
           cwd: dir,
           hasUI: true,
           ui: grantUi,
@@ -1954,11 +2039,15 @@ describe("§3 許可要求ツール", () => {
     withAskPermissionSandbox(
       () => "read: {}\nwrite: {}\n",
       async (dir, sandbox) => {
-        const outcome = await sandbox.requestWritePermission(dir, {
-          cwd: dir,
-          hasUI: true,
-          ui: { ...denyUi, input: async () => "not now" },
-        });
+        const outcome = await sandbox.requestWritePermission(
+          dir,
+          "to start editing the repository",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: { ...denyUi, input: async () => "not now" },
+          },
+        );
         assert.deepEqual(outcome, { status: "denied", grantedPath: dir, reason: "not now" });
         let confirmCalls = 0;
         await assert.rejects(
@@ -1988,11 +2077,15 @@ describe("§3 許可要求ツール", () => {
       async (dir, sandbox) => {
         const filePath = join(dir, "existing.txt");
         writeFileSync(filePath, "");
-        const outcome = await sandbox.requestWritePermission(filePath, {
-          cwd: dir,
-          hasUI: true,
-          ui: grantUi,
-        });
+        const outcome = await sandbox.requestWritePermission(
+          filePath,
+          "to edit the existing file",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: grantUi,
+          },
+        );
         assert.deepEqual(outcome, { status: "granted", grantedPath: dir });
         await sandbox.authorizePath("write", join(dir, "other.txt"), { cwd: dir });
       },
@@ -2014,11 +2107,17 @@ describe("§3 許可要求ツール", () => {
     try {
       const result = await captureRegisteredTools()
         .get("ask_permission")
-        .execute("t", { path: probeDirectory }, undefined, undefined, {
-          cwd: process.cwd(),
-          hasUI: true,
-          ui: grantUi,
-        });
+        .execute(
+          "t",
+          { path: probeDirectory, reason: "to edit files in the probe directory" },
+          undefined,
+          undefined,
+          {
+            cwd: process.cwd(),
+            hasUI: true,
+            ui: grantUi,
+          },
+        );
       assert.deepEqual(result.content, [
         {
           type: "text",
@@ -2039,11 +2138,17 @@ describe("§3 許可要求ツール", () => {
     const deniedDirectory = join(homedir(), "projects", "sandboxed-tools-ask-perm-denied");
     const result = await captureRegisteredTools()
       .get("ask_permission")
-      .execute("t", { path: deniedDirectory }, undefined, undefined, {
-        cwd: process.cwd(),
-        hasUI: true,
-        ui: { ...denyUi, input: async () => "not now" },
-      });
+      .execute(
+        "t",
+        { path: deniedDirectory, reason: "to edit files in the denied directory" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { ...denyUi, input: async () => "not now" },
+        },
+      );
     assert.deepEqual(result.content, [
       {
         type: "text",
@@ -2057,11 +2162,17 @@ describe("§3 許可要求ツール", () => {
     const deniedDirectory = join(homedir(), "projects", "sandboxed-tools-ask-perm-denied-empty");
     const result = await captureRegisteredTools()
       .get("ask_permission")
-      .execute("t", { path: deniedDirectory }, undefined, undefined, {
-        cwd: process.cwd(),
-        hasUI: true,
-        ui: denyUi,
-      });
+      .execute(
+        "t",
+        { path: deniedDirectory, reason: "to edit files in the denied directory" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: denyUi,
+        },
+      );
     assert.deepEqual(result.content, [
       { type: "text", text: `User denied write access to ${deniedDirectory}.` },
     ]);
@@ -2071,11 +2182,17 @@ describe("§3 許可要求ツール", () => {
   it("ask_permission ツールは許可済みパスに許可済みを返す", async () => {
     const result = await captureRegisteredTools()
       .get("ask_permission")
-      .execute("t", { path: process.cwd() }, undefined, undefined, {
-        cwd: process.cwd(),
-        hasUI: true,
-        ui: noDialogUi,
-      });
+      .execute(
+        "t",
+        { path: process.cwd(), reason: "to edit files in the cwd" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: noDialogUi,
+        },
+      );
     assert.deepEqual(result.details, {
       status: "already granted",
       grantedPath: process.cwd(),
@@ -2086,7 +2203,8 @@ describe("§3 許可要求ツール", () => {
   it("ask_permission は @・~・相対パスを cwd 基準で解決する", async () => {
     const requested: string[] = [];
     const originalRequest = Sandbox.prototype.requestWritePermission;
-    Sandbox.prototype.requestWritePermission = async function (path: string) {
+    Sandbox.prototype.requestWritePermission = async function (path: string, reason: string) {
+      assert.equal(typeof reason, "string");
       requested.push(path);
       return { status: "denied", grantedPath: path };
     };
@@ -2099,19 +2217,25 @@ describe("§3 許可要求ツール", () => {
     try {
       await tool.execute(
         "t",
-        { path: "@/abs/ask-permission-target" },
+        { path: "@/abs/ask-permission-target", reason: "probe" },
         undefined,
         undefined,
         context,
       );
       await tool.execute(
         "t",
-        { path: "~/sandboxed-tools-tilde-probe" },
+        { path: "~/sandboxed-tools-tilde-probe", reason: "probe" },
         undefined,
         undefined,
         context,
       );
-      await tool.execute("t", { path: "relative/probe" }, undefined, undefined, context);
+      await tool.execute(
+        "t",
+        { path: "relative/probe", reason: "probe" },
+        undefined,
+        undefined,
+        context,
+      );
     } finally {
       Sandbox.prototype.requestWritePermission = originalRequest;
     }
@@ -2120,6 +2244,16 @@ describe("§3 許可要求ツール", () => {
       join(homedir(), "sandboxed-tools-tilde-probe"),
       resolve(process.cwd(), "relative/probe"),
     ]);
+  });
+
+  it("ask_permission の reason パラメータは必須", () => {
+    const tool = captureRegisteredTools().get("ask_permission");
+    const schema = tool.parameters as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+    assert.ok(schema.properties.reason);
+    assert.ok(schema.required?.includes("reason"));
   });
 
   it("説明文と promptGuidelines は作業着手前の利用を誘導する", () => {

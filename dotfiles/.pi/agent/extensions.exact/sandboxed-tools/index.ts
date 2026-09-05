@@ -292,7 +292,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
         onData: onUpdate === undefined ? undefined : stderrLineUpdater(onUpdate),
       });
       // The approval note follows other appended text, so it is the last line (§2.3).
-      return approved ? appendNote(appendErofsHint(result), COMMAND_APPROVAL_NOTE) : appendErofsHint(result);
+      return approved
+        ? appendNote(appendErofsHint(result), COMMAND_APPROVAL_NOTE)
+        : appendErofsHint(result);
     },
     renderCall(args, theme, context) {
       if (context.state && context.executionStarted && context.state.startedAt === undefined)
@@ -468,10 +470,18 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
         description:
           "Directory to request write access for. Absolute path (~ allowed); relative paths resolve against the current cwd. A file path requests its parent directory subtree.",
       }),
+      reason: Type.String({
+        description:
+          "Why write access to this directory subtree is needed. Shown to the user in the confirmation dialog as a decision hint; keep it to one or two sentences.",
+      }),
     }),
     async execute(_id, params, _signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
-      const outcome = await sandbox.requestWritePermission(resolve(cwd, normalized.path), context);
+      const outcome = await sandbox.requestWritePermission(
+        resolve(cwd, normalized.path),
+        params.reason.trim(),
+        context,
+      );
       const text =
         outcome.status === "granted"
           ? writeApprovalNote({

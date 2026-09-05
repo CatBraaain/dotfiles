@@ -797,6 +797,7 @@ export class Sandbox {
    */
   async requestWritePermission(
     directoryPath: string,
+    reason: string,
     context: ToolContext,
   ): Promise<WritePermissionRequest> {
     const absolutePath = resolve(directoryPath);
@@ -815,7 +816,7 @@ export class Sandbox {
       // A sibling tool call may have obtained the grant while this call queued.
       if (this.hasDynamicGrant("write", grantedPath))
         return { status: "already granted", grantedPath };
-      return this.confirmWritePermission(grantedPath, ui, matched);
+      return this.confirmWritePermission(grantedPath, reason, ui, matched);
     });
   }
 
@@ -831,23 +832,27 @@ export class Sandbox {
 
   private async confirmWritePermission(
     grantedPath: string,
+    reason: string,
     ui: ToolUI,
     matched?: string,
   ): Promise<WritePermissionRequest> {
-    const title = `Allow write access to directory?\n${grantedPath}\n${matchedPatternNote(matched)}`;
+    const question = "Allow write access to directory subtree?";
+    const details = `${grantedPath}\nreason: ${reason}\n${matchedPatternNote(matched)}`;
     if (ui.select) {
-      const directoryScopeOption = "Directory (subtree)";
-      const selectedOption = await ui.select(title, [directoryScopeOption, DENY_OPTION]);
-      if (selectedOption === directoryScopeOption) {
+      const selectedOption = await ui.select(`${question}\n${details}`, [
+        ALLOW_OPTION,
+        DENY_OPTION,
+      ]);
+      if (selectedOption === ALLOW_OPTION) {
         this.addDynamicGrant("write", grantedPath, "directory");
         return { status: "granted", grantedPath };
       }
-    } else if (await ui.confirm("Allow write access to directory?", title)) {
+    } else if (await ui.confirm(question, details)) {
       this.addDynamicGrant("write", grantedPath, "directory");
       return { status: "granted", grantedPath };
     }
-    const reason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
-    return { status: "denied", grantedPath, ...(reason ? { reason } : {}) };
+    const denialReason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
+    return { status: "denied", grantedPath, ...(denialReason ? { reason: denialReason } : {}) };
   }
 
   private async requestAccess(
