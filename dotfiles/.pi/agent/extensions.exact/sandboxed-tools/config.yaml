@@ -24,6 +24,7 @@ write:
     - ~/.vite-plus/cache
     - ~/.vite-plus/package_manager
     - ~/.cache
+    - ~/.camoufox
     - ~/.cargo/registry
     - ~/go/pkg/mod
     - ~/mirrors
