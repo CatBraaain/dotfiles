@@ -56,6 +56,8 @@ type ToolUI = {
   confirm(title: string, message: string): Promise<boolean>;
   select?(title: string, options: string[]): Promise<string | undefined>;
   input?(title: string, placeholder?: string): Promise<string | undefined>;
+  /** Provides the dialog accent color so the highlight can restore it afterwards. */
+  theme?: { getFgAnsi(color: "accent"): string };
 };
 
 const ALLOW_OPTION = "Yes, allow";
@@ -489,7 +491,6 @@ function matchedPatternNote(matched: string | undefined): string {
 
 // Selective ANSI (color only, no full reset) so the dialog's accent/bold styling survives.
 const MATCH_HIGHLIGHT = "\x1b[33m";
-const MATCH_HIGHLIGHT_END = "\x1b[39m";
 
 /** Characters that may surround a shell word in the raw command string. */
 const WORD_BOUNDARY = /[\s;&|()<>"'`]/;
@@ -511,8 +512,9 @@ function findWordBoundaryIndex(raw: string, text: string): number {
  * The span lives in the reassembled candidate (quotes stripped, head words skipped),
  * so map it back: try the whole candidate first, then the matched text alone.
  * Return the raw command unchanged when neither is found (quoted commands).
+ * The span is terminated with `accentStart` so the dialog accent color continues after it.
  */
-function highlightCommandMatch(raw: string, span: MatchSpan): string {
+function highlightCommandMatch(raw: string, span: MatchSpan, accentStart: string): string {
   const candidateAt = findWordBoundaryIndex(raw, span.candidate);
   const start =
     candidateAt !== -1
@@ -523,7 +525,7 @@ function highlightCommandMatch(raw: string, span: MatchSpan): string {
     raw.slice(0, start) +
     MATCH_HIGHLIGHT +
     raw.slice(start, start + span.length) +
-    MATCH_HIGHLIGHT_END +
+    accentStart +
     raw.slice(start + span.length)
   );
 }
@@ -931,8 +933,8 @@ export class Sandbox {
     const ui = context.ui;
     const note = matchedPatternNote(matched);
     const display =
-      matchSpan !== undefined && !process.env.NO_COLOR
-        ? highlightCommandMatch(command, matchSpan)
+      matchSpan !== undefined && ui.theme && !process.env.NO_COLOR
+        ? highlightCommandMatch(command, matchSpan, ui.theme.getFgAnsi("accent"))
         : command;
     return this.withUiLock(async () => {
       if (ui.select) {

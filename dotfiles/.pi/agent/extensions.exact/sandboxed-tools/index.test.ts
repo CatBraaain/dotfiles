@@ -101,8 +101,14 @@ function runGit(cwd: string, args: string[]): void {
   execFileSync("git", args, { cwd, stdio: "pipe" });
 }
 
+/** Dialog accent color stub matching the highlight terminator below. */
+const ACCENT_START = "\u001b[34m";
+
 /** Expected ANSI-wrapped dialog highlight for a matched command span. */
-const highlighted = (text: string): string => `\u001b[33m${text}\u001b[39m`;
+const highlighted = (text: string): string => `\u001b[33m${text}${ACCENT_START}`;
+
+/** UI theme stub exposing the dialog accent color. */
+const uiTheme = { getFgAnsi: () => ACCENT_START };
 
 function withLinkedWorktree(
   test: (
@@ -1093,6 +1099,7 @@ commands:
               title = dialogTitle;
               return "Yes, allow";
             },
+            theme: uiTheme,
           },
         });
         assert.ok(title.includes("matched: git push"), title);
@@ -1121,6 +1128,7 @@ commands:
               title = dialogTitle;
               return "Yes, allow";
             },
+            theme: uiTheme,
           },
         });
         assert.ok(title.includes(`FOO=1 ${highlighted("git push")} origin main`), title);
@@ -1148,6 +1156,7 @@ commands:
               title = dialogTitle;
               return "Yes, allow";
             },
+            theme: uiTheme,
           },
         });
         assert.ok(title.includes(`echo mygit pushx; ${highlighted("git push")}`), title);
@@ -1175,6 +1184,7 @@ commands:
               title = dialogTitle;
               return "Yes, allow";
             },
+            theme: uiTheme,
           },
         });
         assert.ok(title.includes('git "push" origin main'), title);
@@ -1206,6 +1216,7 @@ commands:
                 title = dialogTitle;
                 return "Yes, allow";
               },
+              theme: uiTheme,
             },
           });
         } finally {
@@ -2266,6 +2277,7 @@ commands:
               confirmedCommands.push(command);
               return true;
             },
+            theme: uiTheme,
           },
         });
         assert.deepEqual(confirmedCommands, [
