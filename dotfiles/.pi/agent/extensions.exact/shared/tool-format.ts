@@ -138,6 +138,8 @@ export function formatToolCall(
       );
     case "ls":
       return formatNamedCall("ls", formatPath(String(args.path ?? ""), cwd), theme);
+    case "ask_permission":
+      return formatNamedCall("ask_permission", formatPath(String(args.path ?? ""), cwd), theme);
     default:
       return formatFallbackCall(toolName, args, theme);
   }
@@ -176,6 +178,12 @@ export function formatToolResultSummary(
       return theme.fg("success", `${countResultLines(resultText(result))} files`);
     case "ls":
       return theme.fg("success", `${countResultLines(resultText(result))} entries`);
+    case "ask_permission": {
+      const status = (result.details as { status?: string } | undefined)?.status;
+      if (status !== "granted" && status !== "denied" && status !== "already granted")
+        return undefined;
+      return theme.fg("success", status);
+    }
     default:
       return undefined;
   }

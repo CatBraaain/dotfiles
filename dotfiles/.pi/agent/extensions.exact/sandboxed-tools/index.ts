@@ -22,6 +22,7 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { Sandbox, type PathApproval, type ToolSession } from "./sandbox";
 import { normalizeToolPath } from "../shared/normalize-path.ts";
 import {
@@ -78,7 +79,7 @@ function sessionFromContext(context: any): ToolSession {
 }
 
 const EROFS_HINT =
-  "Sandbox blocked this write. Do not retry with bash; call the write or edit tool on the target path to request access from the user.";
+  "Sandbox blocked this write. Do not retry with bash; call ask_permission to approve the directory subtree.";
 
 const COMMAND_APPROVAL_NOTE = "User approved this command via confirmation.";
 
@@ -281,7 +282,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     ...bashTool,
-    description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call the write or edit tool on the target path to request access from the user.`,
+    description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call ask_permission to approve the working directory subtree.`,
     async execute(id, params, signal, onUpdate, context) {
       const approved = await sandbox.authorizeCommand(params.command, context);
       const result = await sandbox.runTool("bash", params, {
@@ -453,4 +454,49 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
       return sandbox.runTool("ls", normalized, { mode: "fs", signal });
     },
   );
+  pi.registerTool({
+    name: "ask_permission",
+    label: "ask_permission",
+    description:
+      "Ask the user to grant write access to a directory subtree. Use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory): once approved, the subtree becomes writable for the rest of the session, including from bash. Relative paths resolve against the session cwd.",
+    promptSnippet: "Ask the user for write access to a directory subtree",
+    promptGuidelines: [
+      "Before starting edit-heavy work in a directory that is not yet writable (e.g. a worktree outside the allowed paths), call ask_permission on the worktree directory or its parent so the user can approve it up front.",
+    ],
+    parameters: Type.Object({
+      path: Type.String({
+        description:
+          "Directory to request write access for. Absolute path (~ allowed); relative paths resolve against the current cwd. A file path requests its parent directory subtree.",
+      }),
+    }),
+    async execute(_id, params, _signal, _onUpdate, context) {
+      const normalized = withNormalizedPath(params) as { path: string };
+      const outcome = await sandbox.requestWritePermission(resolve(cwd, normalized.path), context);
+      const text =
+        outcome.status === "granted"
+          ? writeApprovalNote({
+              operation: "write",
+              scope: "directory",
+              grantedPath: outcome.grantedPath,
+            })
+          : outcome.status === "already granted"
+            ? `Already granted: ${outcome.grantedPath} is writable for the rest of the session, including via bash.`
+            : `User denied write access to ${outcome.grantedPath}.` +
+              (outcome.reason === undefined ? "" : `\nUser reason: ${outcome.reason}`);
+      return {
+        content: [{ type: "text" as const, text }],
+        details: { status: outcome.status, grantedPath: outcome.grantedPath },
+      };
+    },
+    renderCall(args: any, theme: any) {
+      return new Text(
+        formatNamedCall("ask_permission", formatPath(String(args.path ?? ""), cwd), theme),
+        0,
+        0,
+      );
+    },
+    renderResult(result: any, options: any, theme: any, context: any) {
+      return renderTextToolResult(result, options, theme, context, "ask_permission");
+    },
+  });
 }

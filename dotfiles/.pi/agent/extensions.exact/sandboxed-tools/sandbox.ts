@@ -37,6 +37,12 @@ export type ToolSession = {
   reasoningLevel?: string;
 };
 
+/** ask_permission tool outcome (§3 許可要求ツール): denial resolves instead of throwing. */
+export type WritePermissionRequest =
+  | { status: "already granted"; grantedPath: string }
+  | { status: "granted"; grantedPath: string }
+  | { status: "denied"; grantedPath: string; reason?: string };
+
 type RuleSection = { allow?: string[]; ask?: string[]; deny?: string[] };
 
 type SandboxedToolsConfig = {
@@ -705,6 +711,66 @@ export class Sandbox {
     for (const [grantedPath, accessModes] of this.dynamicPaths)
       if (accessModes.has(operation) && pathCovers(grantedPath, candidatePath)) return true;
     return false;
+  }
+
+  /**
+   * Request user approval for writing under a directory subtree via the
+   * ask_permission tool (§3 許可要求ツール). Explicit deny and credential
+   * paths throw; denial resolves so the tool can return it as its result.
+   */
+  async requestWritePermission(
+    directoryPath: string,
+    context: ToolContext,
+  ): Promise<WritePermissionRequest> {
+    const absolutePath = resolve(directoryPath);
+    if (pathsMatchCandidate(this.credentialPaths, absolutePath))
+      throw new Error(`Access denied for credential path: ${absolutePath}`);
+    const { action, matched } = resolvePathActionMatch(this.writePaths, absolutePath);
+    if (action === "deny" && matched !== undefined)
+      throw new Error(`Access denied: ${absolutePath}`);
+    const grantedPath = this.directoryScopePath(absolutePath);
+    if (action === "allow" || this.hasDynamicGrant("write", grantedPath))
+      return { status: "already granted", grantedPath };
+    if (!context.hasUI || !context.ui)
+      throw new Error(`Access requires confirmation: ${absolutePath}`);
+    const ui = context.ui;
+    return this.withUiLock(async () => {
+      // A sibling tool call may have obtained the grant while this call queued.
+      if (this.hasDynamicGrant("write", grantedPath))
+        return { status: "already granted", grantedPath };
+      return this.confirmWritePermission(grantedPath, ui, matched);
+    });
+  }
+
+  /** The write scope for a permission request: the path itself, or its parent for a file path (§3). */
+  private directoryScopePath(absolutePath: string): string {
+    try {
+      return statSync(absolutePath).isDirectory() ? absolutePath : dirname(absolutePath);
+    } catch {
+      // Non-existent paths (e.g. a worktree to create) request the subtree at the path.
+      return absolutePath;
+    }
+  }
+
+  private async confirmWritePermission(
+    grantedPath: string,
+    ui: ToolUI,
+    matched?: string,
+  ): Promise<WritePermissionRequest> {
+    const title = `Allow write access to directory?\n${grantedPath}\n${matchedPatternNote(matched)}`;
+    if (ui.select) {
+      const directoryScopeOption = "Directory (subtree)";
+      const selectedOption = await ui.select(title, [directoryScopeOption, DENY_OPTION]);
+      if (selectedOption === directoryScopeOption) {
+        this.addDynamicGrant("write", grantedPath, "directory");
+        return { status: "granted", grantedPath };
+      }
+    } else if (await ui.confirm("Allow write access to directory?", title)) {
+      this.addDynamicGrant("write", grantedPath, "directory");
+      return { status: "granted", grantedPath };
+    }
+    const reason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
+    return { status: "denied", grantedPath, ...(reason ? { reason } : {}) };
   }
 
   private async requestAccess(

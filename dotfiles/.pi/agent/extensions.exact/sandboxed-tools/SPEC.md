@@ -12,6 +12,7 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 | `bash`                                   | 置き換え           | あり            | 開放    |
 | `web_fetch` `web_search`                 | 対象外（そのまま） | —               | 開放    |
 | LLM API / pi プロセス本体                | 対象外             | —               | 開放    |
+| `ask_permission`（本拡張の追加ツール）   | 追加（§3）         | —               | —       |
 
 置き換え対象は pi の **全 built-in fs ツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。
 
@@ -72,6 +73,7 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 | ---------------- | -------------------------------------------------------------- |
 | read と commands | `Yes, allow` / `No, deny (reason next)`                        |
 | write            | `File only` / `Directory (subtree)` / `No, deny (reason next)` |
+| ask_permission（§3） | `Directory (subtree)` / `No, deny (reason next)`           |
 
 選択ダイアログ（および `confirm` に置き換わる場合のメッセージ）には、確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob 展開後の絶対パスを、コマンドはブレース展開後のパターンを表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
 
@@ -96,7 +98,7 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 ### ツール引数パスの正規化（authorize 前）
 
-fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）が引数に受け取るパスは、アクション判定（authorize）の前に共有ヘルパーで正規化する。承認（§2.3 のダイアログ・許可要求）と実行（§7 の run-tools へ渡すパス）は同一の正規化結果を用い、審査したパスと実行するパスを一致させる。
+fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission` が引数に受け取るパスは、アクション判定（authorize）の前に共有ヘルパーで正規化する。fs 系ツールでは、承認（§2.3 のダイアログ・許可要求）と実行（§7 の run-tools へ渡すパス）は同一の正規化結果を用い、審査したパスと実行するパスを一致させる。
 
 | 引数の記述 | 正規化 |
 | --- | --- |
@@ -157,6 +159,24 @@ flowchart TD
 - 明示 `deny` は動的許可より優先する。
 - `write` の許可要求では、スコープを「ファイル単体 / 親ディレクトリ配下」から選択できる。
 - `write` の許可パスは §6.1 の実在保証の対象とする（承認時にフェンス外で作成する）。`read` の許可でパスは作成しない。
+
+### 許可要求ツール
+
+エージェントは `ask_permission` ツールで、指定パス配下への `write` 許可をユーザーへ事前に要求できる。read の許可はこのツールで要求しない。
+
+パラメータ `path` は「ツール引数パスの正規化」と同じ規則で正規化し、セッションの cwd 基準の絶対パスへ解決する。許可スコープは `path` 配下一択で、ファイル単体の選択肢は出さない（ファイル単体は `write` / `edit` の確認に任せる）。`path` が実在するファイルパスのときは、その親ディレクトリ配下をスコープとする（存在しないパスはそのパス配下）。
+
+| `ask_permission` 呼び出し時の状態                     | 結果                                       |
+| ----------------------------------------------------- | ------------------------------------------ |
+| `write.deny`（明示 deny）に一致                       | エラー。要求不可                           |
+| `credentials` に一致（§2.2 の対象外）                  | エラー。要求不可                           |
+| `write.allow` または動的許可で `path` 配下が書き込み可 | ダイアログなし。ツール結果に許可済みを返す |
+| `write.ask` に一致、または未設定                      | 確認ダイアログ（§2.3）                    |
+| 確認ダイアログを提供できない UI                        | エラー                                     |
+
+ダイアログでの承認は `write` の動的許可（ディレクトリスコープ）と同じ効果を持つ: `path` 配下がセッション内で書き込み可（bash 経由の書き込みも可）になり、bind 対象に追加され、実在保証は §6.1 に従う。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは `path` 配下がセッション内（bash を含む）で書き込み可能になったことを伝える。拒否はエラーではなく、以降の `write` / `edit` は従来どおり個別に確認される。
+
+`ask_permission` の説明文と promptGuidelines には、編集を伴う作業の着手前に作業場所（worktree 作成先やその親ディレクトリ）の書き込み許可をユーザーへ要求するために使う旨を含める。
 
 ---
 
@@ -227,13 +247,13 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 
 ## 7. run-tools CLI による fs IO
 
-本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像が内部OCRまたは画像解析でテキストとして返り、レイアウト・見た目・色など文字以外の情報は得られない旨を、`bash` には書き込み失敗（read-only file system）時に `write` / `edit` での許可要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通ったツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
+本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像が内部OCRまたは画像解析でテキストとして返り、レイアウト・見た目・色など文字以外の情報は得られない旨を、`bash` には書き込み失敗（read-only file system）時に `ask_permission` での許可要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通ったツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
 | ツール                                          | sandbox 内での実行                                                  |
 | ----------------------------------------------- | ------------------------------------------------------------------- |
 | `read` `write` `edit` `grep` `find` `ls` `bash` | `bun run-tools.ts <tool-name>` → pi 標準 tool definition の execute |
 
-bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾に `write` / `edit` での許可要求へ誘導するヒント文を追記してモデルへ返す。
+bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾に `ask_permission` での許可要求へ誘導するヒント文を追記してモデルへ返す。
 
 - **入力**: stdin に tool call パラメータの JSON を渡す。bash は `PI_*` 環境変数用のセッション情報も受け取る。
 - **出力**: stdout に tool result の JSON（`ok: true` なら `result`、`ok: false` なら `error`）。失敗時は非 0 で終了する。
@@ -261,14 +281,15 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 
 全ツールの実行中表示は `Running...`、エラー表示はエラーメッセージの先頭3行とする。4行目以降がある場合は、3行目の後に `…` を表示する。成功時の折りたたみ表示は次のサマリーとする。展開時は結果本体を表示する。
 
-| ツール  | コール行                                          | 折りたたみ時の成功サマリー                                     | 展開時                         |
-| ------- | ------------------------------------------------- | -------------------------------------------------------------- | ------------------------------ |
-| `bash`  | `$ <command>`（80文字で切り詰め）                 | 実行秒数（例: `1.2s`）                                         | stdout/stderr                  |
-| `write` | `write <path>`                                    | `wrote <size>`                                                 | 書き込んだ内容                 |
-| `edit`  | `edit <path>`                                     | `edited N block(s)`                                            | diff                           |
-| `read`  | `read <path>`（SKILL.md のとき `[skill] <name>`） | `N lines`（画像を新規抽出したときは `OCR extracted, N lines`） | ファイル内容または抽出テキスト |
-| `grep`  | `grep <pattern>`                                  | `N matches`（context 行を含まない純マッチ数）                  | マッチ結果（context 行を含む） |
-| `find`  | `find <pattern>`                                  | `N files`                                                      | パス一覧                       |
-| `ls`    | `ls <path>`（未指定は `.`）                       | `N entries`                                                    | エントリ一覧                   |
+| ツール           | コール行                                          | 折りたたみ時の成功サマリー                                     | 展開時                         |
+| ---------------- | ------------------------------------------------- | -------------------------------------------------------------- | ------------------------------ |
+| `bash`           | `$ <command>`（80文字で切り詰め）                 | 実行秒数（例: `1.2s`）                                         | stdout/stderr                  |
+| `write`          | `write <path>`                                    | `wrote <size>`                                                 | 書き込んだ内容                 |
+| `edit`           | `edit <path>`                                     | `edited N block(s)`                                            | diff                           |
+| `read`           | `read <path>`（SKILL.md のとき `[skill] <name>`） | `N lines`（画像を新規抽出したときは `OCR extracted, N lines`） | ファイル内容または抽出テキスト |
+| `grep`           | `grep <pattern>`                                  | `N matches`（context 行を含まない純マッチ数）                  | マッチ結果（context 行を含む） |
+| `find`           | `find <pattern>`                                  | `N files`                                                      | パス一覧                       |
+| `ls`             | `ls <path>`（未指定は `.`）                       | `N entries`                                                    | エントリ一覧                   |
+| `ask_permission` | `ask_permission <path>`                           | `granted` / `denied` / `already granted`                       | 結果テキスト                   |
 
 表示はツールの実行結果を変更せず、pi TUI の renderer だけを置き換える。
