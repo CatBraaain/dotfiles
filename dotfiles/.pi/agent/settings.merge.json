@@ -98,6 +98,13 @@
       ],
       "source": "https://github.com/leonxlnx/taste-skill",
       "themes": []
+    },
+    {
+      "extensions": [],
+      "prompts": [],
+      "skills": ["skills/agent-browser"],
+      "source": "https://github.com/vercel-labs/agent-browser",
+      "themes": []
     }
   ]
 }
