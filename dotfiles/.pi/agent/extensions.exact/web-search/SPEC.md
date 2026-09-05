@@ -125,9 +125,23 @@ camofox-browser のタブAPIでページを描画し、HTML を取得する。we
 URL のページ本文を Markdown で得る経路:
 
 1. camofox-browser で URL を描画し、HTML を取得する（§camofox による描画）
-2. HTML を trafilatura で Markdown 化する
+2. 描画済み HTML がチャレンジページなら、失敗として扱う（§チャレンジページ検出）
+3. HTML を trafilatura で Markdown 化する
 
 本文が空の場合は失敗として扱う。
+
+## チャレンジページ検出
+
+描画済み HTML がボット検証のチャレンジページのとき、camofox+trafilatura バックエンドは本文を返さず失敗として扱う。失敗時のエラー文言は `challenge detected` とする。判定は trafilatura 変換前の描画済み HTML に対して行う。
+
+チャレンジページは HTML の構造シグナルで判定し、ロケール依存の表示文言は使わない。次のシグナルのいずれか1つでも含まれる HTML をチャレンジページとする:
+
+| シグナル | 意味 |
+| --- | --- |
+| `cdn-cgi/challenge-platform/` | Cloudflare チャレンジスクリプトの読み込みパス |
+| `id="challenge-running"`・`id="challenge-form"`・`id="challenge-stage"`・`id="challenge-error-text"` | Cloudflare チャレンジページの固定 DOM 構造 |
+| `<title>` が `Just a moment...` | Cloudflare チャレンジページの固定タイトル |
+| `cf-turnstile` | Cloudflare Turnstile ウィジェット |
 
 ## Reddit バックエンド
 

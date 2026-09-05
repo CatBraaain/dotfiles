@@ -455,6 +455,14 @@ export async function camofoxOpenserpSearch(
 
 // --- fetch backend: camofox render -> trafilatura ---
 
+// SPEC: §チャレンジページ検出。構造シグナルで判定し、ロケール依存の文言は使わない。
+export function detectChallengePage(html: string): boolean {
+  if (/cdn-cgi\/challenge-platform\//.test(html)) return true;
+  if (/id="challenge-(?:running|form|stage|error-text)"/.test(html)) return true;
+  if (/<title[^>]*>\s*Just a moment\.\.\.\s*<\/title>/i.test(html)) return true;
+  return /\bcf-turnstile\b/.test(html);
+}
+
 export type CamofoxDeps = ServerDeps & {
   toMarkdown?: (html: string, signal?: AbortSignal) => Promise<string>;
 };
@@ -470,6 +478,8 @@ export async function camofoxFetch(
     deps.toMarkdown ??
     ((html, convertSignal) => runWithStdin("trafilatura", ["--markdown"], html, convertSignal));
   const html = await camofoxRender(url, CAMOFOX_FETCH_SESSION_KEY, signal, deps);
+  // SPEC: §チャレンジページ検出。変換前に描画済み HTML を判定する。
+  if (detectChallengePage(html)) throw new Error("challenge detected");
   return toMarkdown(html, signal);
 }
 

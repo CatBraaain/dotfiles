@@ -10,6 +10,7 @@ import webSearchExtension, {
   camofoxServerEnv,
   CONVERT_TIMEOUT_MS,
   defaultFetchBackends,
+  detectChallengePage,
   fetchRedditMarkdown,
   openserpBaseUrl,
   openserpParse,
@@ -1571,5 +1572,65 @@ describe("openserp 接続先と起動コマンド", () => {
     assert.deepEqual(spawnSpec.args, ["serve", "-a", "127.0.0.1", "-p", "7000", "--quiet"]);
     assert.equal(spawnSpec.options.detached, true);
     assert.equal(spawnSpec.options.stdio, "ignore");
+  });
+});
+
+describe("チャレンジページ検出", () => {
+  it("Cloudflare の各構造シグナルを含む HTML をチャレンジページと判定する", () => {
+    const challengePages = [
+      '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/challenge_page/1.abc.html"></script>',
+      '<div id="challenge-running"></div>',
+      '<form id="challenge-form" action="/xyz/__cf_chl_jschl_tk__="></form>',
+      '<div id="challenge-stage"></div>',
+      '<div id="challenge-error-text"></div>',
+      "<html><head><title>Just a moment...</title></head></html>",
+      '<div class="cf-turnstile" data-sitekey="x"></div>',
+    ];
+    for (const html of challengePages) {
+      assert.equal(detectChallengePage(html), true, html);
+    }
+  });
+
+  it("通常ページと文言だけが似ているページはチャレンジページとしない", () => {
+    assert.equal(
+      detectChallengePage("<html><head><title>Example Domain</title></head></html>"),
+      false,
+    );
+    assert.equal(detectChallengePage('<p>Enable JavaScript and cookies to continue</p>'), false);
+    assert.equal(detectChallengePage("<html><head><title>Just a moment</title></head></html>"), false);
+  });
+
+  it("camofoxFetch はチャレンジページの描画結果を challenge detected で失敗扱いにする", async () => {
+    const calls: CamofoxCall[] = [];
+    const fetcher = mockCamofoxFetcher(
+      [
+        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
+        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
+        { method: "POST", pattern: /^\/tabs\/TAB1\/wait$/, body: { ok: true, ready: true } },
+        {
+          method: "POST",
+          pattern: /^\/tabs\/TAB1\/evaluate$/,
+          body: {
+            ok: true,
+            result: '<html><head><title>Just a moment...</title></head></html>',
+          },
+        },
+        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
+      ],
+      calls,
+    );
+    let toMarkdownCalls = 0;
+
+    await assert.rejects(
+      camofoxFetch("https://example.com/", undefined, {
+        ...camofoxDeps(fetcher),
+        toMarkdown: async () => {
+          toMarkdownCalls++;
+          return "md";
+        },
+      }),
+      /challenge detected/,
+    );
+    assert.equal(toMarkdownCalls, 0);
   });
 });
