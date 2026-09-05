@@ -12,7 +12,7 @@ import sandboxedToolsExtension, {
   countResultLines,
   formatDuration,
   formatSize,
-  truncateCommand,
+  truncateText,
   writeApprovalNote,
 } from "./index";
 import {
@@ -2232,7 +2232,11 @@ describe("§3 許可要求ツール", () => {
         text: `User denied write access to ${deniedDirectory}.\nUser reason: not now`,
       },
     ]);
-    assert.deepEqual(result.details, { status: "denied", grantedPath: deniedDirectory });
+    assert.deepEqual(result.details, {
+      status: "denied",
+      grantedPath: deniedDirectory,
+      reason: "not now",
+    });
   });
 
   it("ask_permission ツールの拒否で理由が空欄のときは理由行を付けない", async () => {
@@ -2360,6 +2364,20 @@ describe("§3 許可要求ツール", () => {
     assert.equal(summary("granted"), "granted");
     assert.equal(summary("denied"), "denied");
     assert.equal(summary("already granted"), "already granted");
+    const summaryWithReason = tool
+      .renderResult(
+        {
+          content: [{ type: "text", text: "denied" }],
+          details: { status: "denied", reason: "not now" },
+        },
+        { isPartial: false },
+        plainTheme,
+        { isError: false, args: {} },
+      )
+      .render(200)
+      .join("\n")
+      .trimEnd();
+    assert.equal(summaryWithReason, "denied — not now");
   });
 });
 
@@ -3392,7 +3410,7 @@ describe("§8 表示", () => {
 
   it("長いコマンドを80文字に切り詰める", () => {
     const longCommand = "a".repeat(COMMAND_PREVIEW_LIMIT + 1);
-    assert.equal(truncateCommand(longCommand).length, COMMAND_PREVIEW_LIMIT);
+    assert.equal(truncateText(longCommand).length, COMMAND_PREVIEW_LIMIT);
   });
 
   it("実行時間を秒の小数一桁で表示する", () => {

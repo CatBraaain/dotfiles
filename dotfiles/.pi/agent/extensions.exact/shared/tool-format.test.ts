@@ -3,6 +3,7 @@ import { describe, it } from "bun:test";
 import { homedir } from "node:os";
 import {
   CALL_PREVIEW_LIMIT,
+  DENIED_REASON_PREVIEW_LIMIT,
   formatFallbackCall,
   formatPath,
   formatToolCall,
@@ -10,7 +11,6 @@ import {
   resultText,
   type ToolTheme,
 } from "./tool-format.ts";
-
 
 const plainTheme: ToolTheme = {
   fg: (_color, text) => text,
@@ -217,6 +217,48 @@ describe("formatToolResultSummary", () => {
       plainTheme,
     );
     assert.equal(summary, "3 entries");
+  });
+
+  it("ask_permission は許可状態を表示する", () => {
+    const summary = (details: unknown) =>
+      formatToolResultSummary("ask_permission", {}, { content: [], details }, {}, plainTheme);
+    assert.equal(summary({ status: "granted" }), "granted");
+    assert.equal(summary({ status: "denied" }), "denied");
+    assert.equal(summary({ status: "already granted" }), "already granted");
+    assert.equal(summary({ status: "unknown" }), undefined);
+  });
+
+  it("ask_permission は拒否理由を併記する", () => {
+    const summary = formatToolResultSummary(
+      "ask_permission",
+      {},
+      { content: [], details: { status: "denied", reason: "not now" } },
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "denied — not now");
+  });
+
+  it("ask_permission は拒否理由を80文字に切り詰めて併記する", () => {
+    const summary = formatToolResultSummary(
+      "ask_permission",
+      {},
+      { content: [], details: { status: "denied", reason: "x".repeat(90) } },
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, `denied — ${"x".repeat(DENIED_REASON_PREVIEW_LIMIT - 3)}...`);
+  });
+
+  it("ask_permission は空欄の拒否理由を併記しない", () => {
+    const summary = formatToolResultSummary(
+      "ask_permission",
+      {},
+      { content: [], details: { status: "denied", reason: "" } },
+      {},
+      plainTheme,
+    );
+    assert.equal(summary, "denied");
   });
 
   it("エラー時は結果テキスト全体を返す", () => {

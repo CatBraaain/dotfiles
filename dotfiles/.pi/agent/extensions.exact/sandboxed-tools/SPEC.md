@@ -309,6 +309,6 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 | `grep`           | `grep <pattern>`                                  | `N matches`（context 行を含まない純マッチ数）                  | マッチ結果（context 行を含む） |
 | `find`           | `find <pattern>`                                  | `N files`                                                      | パス一覧                       |
 | `ls`             | `ls <path>`（未指定は `.`）                       | `N entries`                                                    | エントリ一覧                   |
-| `ask_permission` | `ask_permission <path>`                           | `granted` / `denied` / `already granted`                       | 結果テキスト                   |
+| `ask_permission` | `ask_permission <path>`                           | `granted` / `already granted`。`denied`（理由入力があれば `denied — <理由>` の形式で理由を80文字に切り詰めて併記） | 結果テキスト                   |
 
 表示はツールの実行結果を変更せず、pi TUI の renderer だけを置き換える。

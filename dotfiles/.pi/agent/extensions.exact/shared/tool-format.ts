@@ -21,8 +21,11 @@ export const COMMAND_PREVIEW_LIMIT = 80;
 
 export const CALL_PREVIEW_LIMIT = 100;
 
-export function truncateCommand(command: string, limit = COMMAND_PREVIEW_LIMIT): string {
-  return command.length > limit ? `${command.slice(0, limit - 3)}...` : command;
+/** Preview limit for the user-entered denial reason shown in the ask_permission summary. */
+export const DENIED_REASON_PREVIEW_LIMIT = 80;
+
+export function truncateText(text: string, limit = COMMAND_PREVIEW_LIMIT): string {
+  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
 }
 
 export function formatDuration(milliseconds: number): string {
@@ -62,7 +65,7 @@ export function classifyReadPath(
 }
 
 export function formatBashCall(command: string, theme: ToolTheme): string {
-  return `${theme.fg("toolTitle", theme.bold("$ "))}${theme.fg("accent", truncateCommand(command))}`;
+  return `${theme.fg("toolTitle", theme.bold("$ "))}${theme.fg("accent", truncateText(command))}`;
 }
 
 export function formatNamedCall(name: string, value: string, theme: ToolTheme): string {
@@ -179,10 +182,16 @@ export function formatToolResultSummary(
     case "ls":
       return theme.fg("success", `${countResultLines(resultText(result))} entries`);
     case "ask_permission": {
-      const status = (result.details as { status?: string } | undefined)?.status;
+      const details = result.details as { status?: string; reason?: string } | undefined;
+      const status = details?.status;
       if (status !== "granted" && status !== "denied" && status !== "already granted")
         return undefined;
-      return theme.fg("success", status);
+      const reason = status === "denied" ? details?.reason : undefined;
+      if (typeof reason !== "string" || reason === "") return theme.fg("success", status);
+      return (
+        theme.fg("success", "denied — ") +
+        theme.fg("dim", truncateText(reason, DENIED_REASON_PREVIEW_LIMIT))
+      );
     }
     default:
       return undefined;

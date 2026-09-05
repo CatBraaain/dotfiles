@@ -41,7 +41,7 @@ export {
   countResultLines,
   formatDuration,
   formatSize,
-  truncateCommand,
+  truncateText,
 } from "../shared/tool-format.ts";
 
 const ERROR_PREVIEW_LINE_LIMIT = 3;
@@ -495,7 +495,13 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
               (outcome.reason === undefined ? "" : `\nUser reason: ${outcome.reason}`);
       return {
         content: [{ type: "text" as const, text }],
-        details: { status: outcome.status, grantedPath: outcome.grantedPath },
+        details: {
+          status: outcome.status,
+          grantedPath: outcome.grantedPath,
+          ...(outcome.status === "denied" && outcome.reason !== undefined
+            ? { reason: outcome.reason }
+            : {}),
+        },
       };
     },
     renderCall(args: any, theme: any) {
