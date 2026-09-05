@@ -2,25 +2,23 @@
 
 main worktree ではファイルを編集しない。編集を伴う作業は、1ファイルの軽微な修正も含め、常にサブワークツリーとブランチを作成して着手する。
 
-- 着手時: 「作成と移行」の手順で worktree を作成し、セッションを移す。
+- 着手時: 「作成」の手順で worktree を作成する。セッションの cwd は main worktree に置いたまま、worktree を指定して作業する。
 - まとまった作業単位の完了時: 「finish・discard・close」の finish を、owner の承認を得てから実行する。
 - 適用しない: 読み取りのみの調査・検索・検証、コミット・マージなど worktree を必要としない操作。
 
-## 作成と移行
+## 作成
 
 1. branch 名は取り組む機能を表す kebab-case 英語（例: `add-export-command`）。リポジトリ規約があれば優先する。
-2. `git worktree add ~/projects/<リポジトリ名>-worktrees/<branch> -b <branch>` で HEAD から worktree を作成する。worktree はリポジトリごとに `<リポジトリ名>-worktrees` ディレクトリへ集約する。
-3. 未コミット変更があるときは `git stash push -u -m worktree-migration:<branch>` で退避する。
-4. `cd` ツールでセッションを worktree へ移す。bash の `cd` はシェルごとに閉じるため、セッションの cwd は変わらない。
-5. 退避した変更は worktree 側で `git stash pop` で受け取る。
+2. `git worktree add ~/projects/<リポジトリ名>-worktrees/<branch> -b <branch>` で HEAD から worktree を作成する。worktree はリポジトリごとに `<リポジトリ名>-worktrees` ディレクトリへ集約する。書き込みが sandbox にブロックされたら、作成先の worktree パス（またはその親ディレクトリ）を ask_permission で承認させる。
+3. worktree 内のファイルは絶対パスで read/write/edit する。相対パスはセッション cwd（main worktree）に解決されるため、worktree のファイル指定に使わない。git 操作は `git -C <worktree のパス>` で実行する。
 
-main へ戻るときも `cd` ツールを使う。未コミット変更の持ち帰りも同じく stash 経由。worktree と branch はそのまま残る。
+main の未コミット変更はその場に残す。worktree への持ち運びは行わない。
 
 ## 統合
 
 ローカルの使い捨て worktree ブランチを統合先（main 等）へマージするときは、履歴を線形に保つ。
 
-1. 統合先で `git merge --ff-only <branch>` を実行する。worktree セッションのまま `git -C <main worktree のパス> merge --ff-only <branch>` でも実行できる。
+1. 統合先で `git merge --ff-only <branch>` を実行する。`git -C <main worktree のパス> merge --ff-only <branch>` でも実行できる。
 2. 統合先が diverge して失敗するときは、対象ブランチを `git rebase <統合先>` してから再度 ff-only マージする。
 3. `--no-ff` による merge commit と `--squash` による squash 統合は行わない。
 
@@ -42,16 +40,15 @@ worktree は自動掃除されないため、エージェントが作業完了�
 finish — 統合の判断が入るため、マージ前に owner の承認を得る。承認後:
 
 1. worktree 内の変更を確認し、あれば git skill「コミットの作成と分割」に従って commit する。手順3の backup branch は、close で worktree ごと削除するため作らない。
-2. 「統合」に従って統合先へマージする。worktree セッションのまま `git -C` で実行してよい。
-3. `cd` ツールで main worktree へ戻り、close を実行する。
+2. 「統合」に従って統合先へマージする。
+3. close を実行する。
 
 discard — 成果を捨てる判断が入るため、実行前に owner の承認を得る。承認後:
 
 1. worktree の branch 名と未コミット変更を確認し、捨てる対象を特定する。
-2. `cd` ツールで main worktree へ戻る。未コミット変更・branch はその場に残る。
-3. close を `--force` と `-D` で実行する。
+2. close を `--force` と `-D` で実行する。
 
-close — main worktree 側にいる状態で実行する。自分がいる worktree は削除できないため、worktree セッションのまま実行しない。エディタのワークスペースから worktree を外す操作は本手順に含まず、owner が手動で行う。
+close — bash のカレントディレクトリが対象 worktree 内にあると削除に失敗するため、対象外のディレクトリから実行する。エディタのワークスペースから worktree を外す操作は本手順に含まず、owner が手動で行う。
 
 1. `git worktree remove <worktree のパス>` で worktree を削除する。
 2. `git branch -d <branch>` で、worktree が checkout していた branch を削除する。
