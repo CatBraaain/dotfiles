@@ -20,6 +20,8 @@ import agentsExtension, {
   __resetRoutingState,
   __spawn,
   __spinnerTimers,
+  __updateTimers,
+  createThrottledEmitter,
   type AgentConfig,
   buildAgentSystemPromptAddendum,
   canDelegate,
@@ -1661,9 +1663,120 @@ describe("subagent", () => {
       await extension.executeSubagent({ agent: "worker", task: "work" }, undefined, (update) =>
         updates.push(update),
       );
-      assert.equal(updates.length, 4);
+      // 初回の (running...) と tool_execution_start の即時送出、および窓内の
+      // update / end が併合された送出1回の計3回。flush で最新状態（end の結果まで）が
+      // 反映される。
+      assert.equal(updates.length, 3);
       assert.equal(updates[1].details.results[0].actions[0].name, "bash");
       assert.equal(updates[1].details.results[0].actions[0].args.command, "pwd");
+      assert.equal(updates[2].details.results[0].actions[0].endedAt !== undefined, true);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("onUpdate の送出をスロットリングして stdout の読み取りを優先する", () => {
+    const originalTimers = { ...__updateTimers };
+    let currentNow = 0;
+    let scheduled: { callback: () => void; delayMs: number } | undefined;
+    __updateTimers.now = () => currentNow;
+    __updateTimers.set = (callback, delayMs) => {
+      scheduled = { callback, delayMs };
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    __updateTimers.clear = () => {
+      scheduled = undefined;
+    };
+    try {
+      const emitted: number[] = [];
+      const throttled = createThrottledEmitter(() => emitted.push(currentNow));
+
+      // 初回は同期的に送出する
+      throttled.call();
+      assert.deepEqual(emitted, [0]);
+
+      // 窓内の連続した call は送出せず、タイマーで1回だけ併合送出する
+      throttled.call();
+      throttled.call();
+      throttled.call();
+      assert.deepEqual(emitted, [0]);
+      assert.ok(scheduled !== undefined);
+      const timer = scheduled!;
+      currentNow += timer.delayMs;
+      timer.callback();
+      assert.deepEqual(emitted, [0, 150]);
+
+      // 窓を空けた call は再び同期的に送出する
+      currentNow += 150;
+      throttled.call();
+      assert.deepEqual(emitted, [0, 150, 300]);
+
+      // flush は保留中の送出を即座に行う
+      throttled.call();
+      assert.deepEqual(emitted, [0, 150, 300]);
+      throttled.flush();
+      assert.deepEqual(emitted, [0, 150, 300, 300]);
+    } finally {
+      Object.assign(__updateTimers, originalTimers);
+    }
+  });
+
+  it("大量の tool_execution_update が流れても onUpdate の送出は間引き、受領は全伴する", async () => {
+    const extension = captureAgentsExtension();
+    const eventCount = 2000;
+    let onUpdateCalls = 0;
+    extension.respondToChild((child) => {
+      const lines: string[] = [
+        JSON.stringify({
+          type: "tool_execution_start",
+          toolCallId: "call-1",
+          toolName: "bash",
+          args: { command: "cat huge.log" },
+        }),
+      ];
+      for (let i = 0; i < eventCount; i++) {
+        lines.push(
+          JSON.stringify({
+            type: "tool_execution_update",
+            toolCallId: "call-1",
+            toolName: "bash",
+            args: { command: "cat huge.log" },
+            partialResult: { content: [{ type: "text", text: `chunk ${i}` }] },
+          }),
+        );
+      }
+      lines.push(
+        JSON.stringify({
+          type: "tool_execution_end",
+          toolCallId: "call-1",
+          toolName: "bash",
+          result: { content: [{ type: "text", text: "done" }] },
+          isError: false,
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "finished" }] },
+        }),
+      );
+      child.stdout.emit("data", Buffer.from(`${lines.join("\n")}\n`));
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" }, undefined, () => {
+        onUpdateCalls++;
+        // レンダリングの代替の重い同期処理。窓内のイベントごとに呼ばれると stdout の
+        // 読み取りが止まるため、間引きが機能していれば呼び出し回数はイベント数より
+        // 桁違いに少なくなる。
+        const until = Date.now() + 5;
+        while (Date.now() < until) {}
+      });
+      // 受領は全伴: 最終イベントまで処理して確定する
+      assert.equal(result.isError, undefined);
+      assert.equal(result.content[0].text, "finished");
+      assert.equal(result.details.results[0].actions[0].result?.content?.[0]?.text, "done");
+      // 送出は間引き: 初回・start・flush の数回に留まる
+      assert.ok(onUpdateCalls < 10, `onUpdate called ${onUpdateCalls} times`);
     } finally {
       extension.restore();
     }

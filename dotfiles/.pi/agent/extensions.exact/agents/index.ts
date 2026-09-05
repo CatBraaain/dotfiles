@@ -208,6 +208,7 @@ export function __resetRoutingState(): void {
 
 const SPINNER_INTERVAL_MS = 100;
 const EXIT_STDIO_GRACE_MS = 100;
+const UPDATE_THROTTLE_MS = 150;
 
 // SPEC「レート制限（429）時のフォールバック」: フォールバック済みであることを示す置換文言。
 // 元のエラー文言は含めない。quota・課金系の文言（insufficient_quota 等）が残ったまま
@@ -226,6 +227,64 @@ export const __spinnerTimers: {
   clear: (timer) => clearInterval(timer),
   now: () => Date.now(),
 };
+
+// テストが onUpdate のスロットリング用タイマーを差し替える出口。本番は標準の
+// setTimeout / Date.now を使う。
+export const __updateTimers: {
+  set: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+  clear: (timer: ReturnType<typeof setTimeout>) => void;
+  now: () => number;
+} = {
+  set: (callback, delayMs) => setTimeout(callback, delayMs),
+  clear: (timer) => clearTimeout(timer),
+  now: () => Date.now(),
+};
+
+// onUpdate はレンダリングを同期実行する重処理になり得る。stdout の data ハンドラから
+// 直接呼ぶと、子が bash 等で大量の tool_execution_update を流したときに親のイベント
+// ループがレンダリングで占有され、stdout の読み取りが止まる。子 pi（--mode json）は
+// stdout のバックプレッシャーで agent loop を止めるため、親が読み続けることが子の
+// 進行条件になる。そこで表示更新を UPDATE_THROTTLE_MS に1回までに間引き、data
+// ハンドラの処理（イベントの受領・記録）だけを軽量に保つ。窓内の連続したイベントは
+// 最新状態に併合され、flush で即座に送出する。
+export function createThrottledEmitter(emit: () => void): {
+  call: () => void;
+  flush: () => void;
+} {
+  let lastSentAt = -Infinity;
+  let pending = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const send = (): void => {
+    if (!pending) return;
+    pending = false;
+    if (timer !== undefined) {
+      __updateTimers.clear(timer);
+      timer = undefined;
+    }
+    lastSentAt = __updateTimers.now();
+    emit();
+  };
+
+  return {
+    call(): void {
+      if (pending) return;
+      const delay = UPDATE_THROTTLE_MS - (__updateTimers.now() - lastSentAt);
+      pending = true;
+      if (delay <= 0) {
+        send();
+        return;
+      }
+      timer = __updateTimers.set(() => {
+        timer = undefined;
+        send();
+      }, delay);
+    },
+    flush(): void {
+      send();
+    },
+  };
+}
 
 let tuiHandle: { requestRender: () => void } | undefined;
 let spinnerTimer: ReturnType<typeof setInterval> | undefined;
@@ -460,6 +519,8 @@ async function runChild(
     });
   };
 
+  const throttledEmit = createThrottledEmitter(emitUpdate);
+
   emitUpdate();
 
   const exitCode = await new Promise<number>((resolve) => {
@@ -507,7 +568,7 @@ async function runChild(
           if (message.stopReason) childResult.stopReason = message.stopReason;
           if (message.errorMessage) childResult.errorMessage = message.errorMessage;
         }
-        emitUpdate();
+        throttledEmit.call();
       }
       if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
         childResult.actions.push({
@@ -516,9 +577,9 @@ async function runChild(
           args: isRecord(event.args) ? event.args : {},
           startedAt: Date.now(),
         });
-        emitUpdate();
+        throttledEmit.call();
       }
-      if (event.type === "tool_execution_update") emitUpdate();
+      if (event.type === "tool_execution_update") throttledEmit.call();
       if (event.type === "tool_execution_end") {
         const action = childResult.actions.find(
           (candidate) =>
@@ -529,11 +590,11 @@ async function runChild(
           action.result = isRecord(event.result) ? event.result : undefined;
           action.isError = event.isError === true;
         }
-        emitUpdate();
+        throttledEmit.call();
       }
       if (event.type === "tool_result_end" && event.message) {
         childResult.messages.push(event.message as Message);
-        emitUpdate();
+        throttledEmit.call();
       }
     };
 
@@ -601,6 +662,7 @@ async function runChild(
     childResult.stopReason = "aborted";
     childResult.errorMessage = "Subagent was aborted";
   }
+  throttledEmit.flush();
   return childResult;
 }
 
