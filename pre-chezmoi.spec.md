@@ -46,10 +46,10 @@
 マージの規則: 同じキーが両方でプレーンオブジェクトのときだけ再帰し、それ以外（スカラー・配列・オブジェクトと非オブジェクトの組合せ）は overwrite 側の値で丸ごと置き換える。片側にだけあるキーの値は維持する。
 
 ```
-dotfiles/.claude/settings.json            {"a":1,"nested":{"x":1,"y":2},"list":[1,2]}
-dotfiles/.claude/settings.overwrite.json  {"nested":{"y":9,"z":3},"list":[3]}
+dotfiles/.foo/settings.json            {"a":1,"nested":{"x":1,"y":2},"list":[1,2]}
+dotfiles/.foo/settings.overwrite.json  {"nested":{"y":9,"z":3},"list":[3]}
 
-→ dist/.claude/settings.json = {"a":1,"nested":{"x":1,"y":9,"z":3},"list":[3]}
+→ dist/.foo/settings.json = {"a":1,"nested":{"x":1,"y":9,"z":3},"list":[3]}
   overwrite ファイルは dist に存在しない
 ```
 
