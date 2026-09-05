@@ -10,6 +10,7 @@ extensions_for_windows=(
 
 extensions_for_linux=(
   # keep-sorted start by_regex=(?:#\s)?(.*) sticky_comments=no
+  116ideas.worktree-autosync
   alefragnani.bookmarks
   awalsh128.keep-sorted
   bierner.markdown-yaml-preamble
