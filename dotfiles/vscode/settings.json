@@ -141,8 +141,6 @@
   "auto-fix-venv.forceRun": true,
   "biome.requireConfiguration": true,
   "chat.disableAIFeatures": true,
-  "claudeCode.preferredLocation": "panel",
-  "claudeCode.useTerminal": true,
   // "breadcrumbs.enabled": true,
   "code-runner.executorMap": {
     // https://github.com/formulahendry/vscode-code-runner
