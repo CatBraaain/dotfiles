@@ -196,7 +196,7 @@ describe("§2 パスのアクセス結果", () => {
     withSandbox(
       `
 read:
-  allow: [/workspace/project]
+  - {allow: [/workspace/project]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -212,7 +212,7 @@ read:
     withSandbox(
       `
 read:
-  ask: [/workspace/project]
+  - {ask: [/workspace/project]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -238,7 +238,7 @@ read:
     "未設定パスは承認後に同じ操作で再確認されない",
     withSandbox(
       `
-read: {}
+read: []
 `,
       projectRoot,
       async (sandbox) => {
@@ -265,7 +265,7 @@ read: {}
     withSandbox(
       `
 read:
-  ask: [/workspace/project]
+  - {ask: [/workspace/project]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -285,7 +285,7 @@ read:
     withSandbox(
       `
 read:
-  ask: [/workspace/project]
+  - {ask: [/workspace/project]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -309,7 +309,7 @@ read:
     withSandbox(
       `
 read:
-  ask: [/workspace/project]
+  - {ask: [/workspace/project]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -333,7 +333,7 @@ read:
     withSandbox(
       `
 read:
-  ask: [/workspace/project]
+  - {ask: [/workspace/project]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -359,7 +359,7 @@ read:
     withSandbox(
       `
 read:
-  ask: [/workspace/project]
+  - {ask: [/workspace/project]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -388,8 +388,8 @@ read:
     withSandbox(
       `
 read:
-  allow: [/workspace/project]
-  deny: [/workspace/project/secret]
+  - {allow: [/workspace/project]}
+  - {deny: [/workspace/project/secret]}
 `,
       projectRoot,
       async (sandbox) => {
@@ -661,7 +661,7 @@ describe("§2.2 credentials の例外", () => {
     withSandbox(
       `
 read:
-  allow: [/workspace/project]
+  - {allow: [/workspace/project]}
 credentials:
   - /workspace/project/secret
 `,
@@ -683,17 +683,17 @@ describe("§3.a パス文字列の解決", () => {
   const projectRoot = "/workspace/project";
 
   it("相対パスは cwd を起点に解決する", () => {
-    const section = expandPathSection({ allow: ["./sub"] }, projectRoot);
+    const section = expandPathSection([{ action: "allow", patterns: ["./sub"] }], projectRoot);
     assert.equal(resolvePathAction(section, "/workspace/project/sub/file.txt"), "allow");
   });
 
   it("~ はホームディレクトリに解決する", () => {
-    const section = expandPathSection({ allow: ["~/docs"] }, projectRoot);
+    const section = expandPathSection([{ action: "allow", patterns: ["~/docs"] }], projectRoot);
     assert.equal(resolvePathAction(section, `${homedir()}/docs/file.txt`), "allow");
   });
 
   it("絶対パスはそのまま解決する", () => {
-    const section = expandPathSection({ allow: ["/opt/data"] }, "/cwd");
+    const section = expandPathSection([{ action: "allow", patterns: ["/opt/data"] }], "/cwd");
     assert.equal(resolvePathAction(section, "/opt/data/file.txt"), "allow");
   });
 
@@ -701,7 +701,7 @@ describe("§3.a パス文字列の解決", () => {
     "${GIT_MAIN_WORKTREE_PATH} は linked worktree を cwd にしても main worktree への書き込みを許可する",
     withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath, workspacePath) => {
       const configPath = join(workspacePath, "config.yaml");
-      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_MAIN_WORKTREE_PATH}/.git\n");
+      writeFileSync(configPath, 'write:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}/.git"}\n');
       const sandbox = new Sandbox(linkedWorktreePath, configPath);
       const mainGitDirectory = join(mainWorktreePath, ".git", "refs", "heads", "topic");
 
@@ -712,9 +712,15 @@ describe("§3.a パス文字列の解決", () => {
   it(
     "${GIT_MAIN_WORKTREE_PATH} は linked worktree を cwd にしても main worktree へ展開される",
     withLinkedWorktree((mainWorktreePath, linkedWorktreePath) => {
-      const section = expandPathSection({ allow: ["${GIT_MAIN_WORKTREE_PATH}"] }, linkedWorktreePath);
+      const section = expandPathSection(
+        [{ action: "allow", patterns: ["${GIT_MAIN_WORKTREE_PATH}"] }],
+        linkedWorktreePath,
+      );
 
-      assert.deepEqual(section.allow, [mainWorktreePath]);
+      assert.deepEqual(
+        section.flatMap((entry) => entry.paths),
+        [mainWorktreePath],
+      );
     }),
   );
 
@@ -722,11 +728,14 @@ describe("§3.a パス文字列の解決", () => {
     "${GIT_MAIN_WORKTREE_PATH} はパスエントリ内の任意の位置に記述できる",
     withLinkedWorktree((mainWorktreePath) => {
       const section = expandPathSection(
-        { allow: ["${GIT_MAIN_WORKTREE_PATH}/.git"] },
+        [{ action: "allow", patterns: ["${GIT_MAIN_WORKTREE_PATH}/.git"] }],
         mainWorktreePath,
       );
 
-      assert.deepEqual(section.allow, [join(mainWorktreePath, ".git")]);
+      assert.deepEqual(
+        section.flatMap((entry) => entry.paths),
+        [join(mainWorktreePath, ".git")],
+      );
     }),
   );
 
@@ -734,11 +743,14 @@ describe("§3.a パス文字列の解決", () => {
     "${GIT_MAIN_WORKTREE_PATH} は Git repository 外ではパスを許可しない",
     withTempDirectory((directory) => {
       const section = expandPathSection(
-        { allow: ["${GIT_MAIN_WORKTREE_PATH}-worktrees"] },
+        [{ action: "allow", patterns: ["${GIT_MAIN_WORKTREE_PATH}-worktrees"] }],
         directory,
       );
 
-      assert.deepEqual(section.allow, []);
+      assert.deepEqual(
+        section.flatMap((entry) => entry.paths),
+        [],
+      );
     }),
   );
 
@@ -746,11 +758,14 @@ describe("§3.a パス文字列の解決", () => {
     "${GIT_MAIN_WORKTREE_PATH}-worktrees は main worktree の兄弟へ展開される",
     withLinkedWorktree((_mainWorktreePath, linkedWorktreePath, workspacePath) => {
       const section = expandPathSection(
-        { allow: ["${GIT_MAIN_WORKTREE_PATH}-worktrees"] },
+        [{ action: "allow", patterns: ["${GIT_MAIN_WORKTREE_PATH}-worktrees"] }],
         linkedWorktreePath,
       );
 
-      assert.deepEqual(section.allow, [join(workspacePath, "main-worktrees")]);
+      assert.deepEqual(
+        section.flatMap((entry) => entry.paths),
+        [join(workspacePath, "main-worktrees")],
+      );
     }),
   );
 
@@ -761,11 +776,14 @@ describe("§3.a パス文字列の解決", () => {
       runGit(workspacePath, ["init", otherRepoPath]);
       try {
         const section = expandPathSection(
-          { allow: ["${GIT_MAIN_WORKTREE_PATH}-worktrees"] },
+          [{ action: "allow", patterns: ["${GIT_MAIN_WORKTREE_PATH}-worktrees"] }],
           mainWorktreePath,
         );
 
-        assert.deepEqual(section.allow, [join(workspacePath, "main-worktrees")]);
+        assert.deepEqual(
+          section.flatMap((entry) => entry.paths),
+          [join(workspacePath, "main-worktrees")],
+        );
       } finally {
         rmSync(otherRepoPath, { recursive: true, force: true });
       }
@@ -776,10 +794,7 @@ describe("§3.a パス文字列の解決", () => {
     "${GIT_MAIN_WORKTREE_PATH}-worktrees を含むエントリは起動時に作成する",
     withLinkedWorktree((mainWorktreePath, _linkedWorktreePath, workspacePath) => {
       const configPath = join(workspacePath, "config.yaml");
-      writeFileSync(
-        configPath,
-        "write:\n  allow:\n    - ${GIT_MAIN_WORKTREE_PATH}-worktrees\n",
-      );
+      writeFileSync(configPath, 'write:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}-worktrees"}\n');
       new Sandbox(mainWorktreePath, configPath);
 
       assert.equal(existsSync(join(workspacePath, "main-worktrees")), true);
@@ -790,10 +805,7 @@ describe("§3.a パス文字列の解決", () => {
     "${GIT_MAIN_WORKTREE_PATH}-worktrees を含むエントリは Git repository 外では作成しない",
     withTempDirectory((directory) => {
       const configPath = join(directory, "config.yaml");
-      writeFileSync(
-        configPath,
-        "write:\n  allow:\n    - ${GIT_MAIN_WORKTREE_PATH}-worktrees\n",
-      );
+      writeFileSync(configPath, 'write:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}-worktrees"}\n');
       new Sandbox(directory, configPath);
 
       assert.deepEqual(readdirSync(directory), ["config.yaml"]);
@@ -804,10 +816,7 @@ describe("§3.a パス文字列の解決", () => {
     "${GIT_MAIN_WORKTREE_PATH}-worktrees は worktree の作成先への書き込みを許可し bind に含める",
     withLinkedWorktree(async (mainWorktreePath, _linkedWorktreePath, workspacePath) => {
       const configPath = join(workspacePath, "config.yaml");
-      writeFileSync(
-        configPath,
-        "write:\n  allow:\n    - ${GIT_MAIN_WORKTREE_PATH}-worktrees\n",
-      );
+      writeFileSync(configPath, 'write:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}-worktrees"}\n');
       const sandbox = new Sandbox(mainWorktreePath, configPath);
       const worktreesDirectory = join(workspacePath, "main-worktrees");
 
@@ -834,7 +843,7 @@ describe("§3.b glob パターン", () => {
     withGlobDir((dir) => {
       mkdirSync(join(dir, "uv"));
       mkdirSync(join(dir, "pip"));
-      const section = expandPathSection({ allow: [join(dir, "*")] }, "/cwd");
+      const section = expandPathSection([{ action: "allow", patterns: [join(dir, "*")] }], "/cwd");
       assert.equal(resolvePathAction(section, join(dir, "uv")), "allow");
       assert.equal(resolvePathAction(section, join(dir, "pip")), "allow");
     }),
@@ -844,7 +853,7 @@ describe("§3.b glob パターン", () => {
     "** は再帰的な既存パスに展開される",
     withGlobDir((dir) => {
       mkdirSync(join(dir, "uv", "nested", "deep"), { recursive: true });
-      const section = expandPathSection({ allow: [join(dir, "**")] }, "/cwd");
+      const section = expandPathSection([{ action: "allow", patterns: [join(dir, "**")] }], "/cwd");
       assert.equal(resolvePathAction(section, join(dir, "uv", "nested", "deep")), "allow");
     }),
   );
@@ -853,7 +862,10 @@ describe("§3.b glob パターン", () => {
     "? は任意1文字にマッチする",
     withGlobDir((dir) => {
       writeFileSync(join(dir, "a.txt"), "");
-      const section = expandPathSection({ allow: [join(dir, "?.txt")] }, "/cwd");
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(dir, "?.txt")] }],
+        "/cwd",
+      );
       assert.equal(resolvePathAction(section, join(dir, "a.txt")), "allow");
     }),
   );
@@ -862,7 +874,10 @@ describe("§3.b glob パターン", () => {
     "[...] は文字クラスにマッチする",
     withGlobDir((dir) => {
       writeFileSync(join(dir, "b.txt"), "");
-      const section = expandPathSection({ allow: [join(dir, "[abc].txt")] }, "/cwd");
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(dir, "[abc].txt")] }],
+        "/cwd",
+      );
       assert.equal(resolvePathAction(section, join(dir, "b.txt")), "allow");
     }),
   );
@@ -872,21 +887,24 @@ describe("§3.b glob パターン", () => {
     withGlobDir((dir) => {
       mkdirSync(join(dir, "git"));
       mkdirSync(join(dir, "npm"));
-      const section = expandPathSection({ allow: [join(dir, "{git,npm}")] }, "/cwd");
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(dir, "{git,npm}")] }],
+        "/cwd",
+      );
       assert.equal(resolvePathAction(section, join(dir, "git")), "allow");
       assert.equal(resolvePathAction(section, join(dir, "npm")), "allow");
     }),
   );
 
   it('"*" 単体はすべてのパスを read 許可にする', () => {
-    const section = expandPathSection({ allow: ["*"] }, "/cwd", true);
+    const section = expandPathSection([{ action: "allow", patterns: ["*"] }], "/cwd", true);
     assert.equal(resolvePathAction(section, "/etc/passwd"), "allow");
   });
 
   it(
     '"*" 単体は write の全パス許可にならない',
     withGlobDir((dir) => {
-      const section = expandPathSection({ allow: ["*"] }, dir);
+      const section = expandPathSection([{ action: "allow", patterns: ["*"] }], dir);
       assert.equal(resolvePathAction(section, "/etc/passwd"), "deny");
     }),
   );
@@ -898,7 +916,7 @@ describe("§3.b glob パターン", () => {
       return withSandbox(
         `
 read:
-  allow: [/]
+  - {allow: [/]}
 credentials: ["*"]
 `,
         dir,
@@ -916,7 +934,7 @@ credentials: ["*"]
       return withSandbox(
         `
 read:
-  allow: ["${join(dir, "*")}"]
+  - {allow: "${join(dir, "*")}"}
 `,
         "/cwd",
         async (sandbox) => {
@@ -936,7 +954,7 @@ read:
       withSandbox(
         `
 read:
-  deny: ["${join(dir, "*")}"]
+  - {deny: "${join(dir, "*")}"}
 `,
         dir,
         (sandbox) => {
@@ -980,31 +998,63 @@ describe("§3.c アクションの決定", () => {
   };
 
   it(
-    "deny を allow より優先する",
+    "後の deny エントリが前の allow エントリを上書きする",
     withProjectEnvFile((dir) => {
-      const section = expandPathSection({ allow: ["."], deny: ["**/.env"] }, dir);
+      const section = expandPathSection(
+        [
+          { action: "allow", patterns: ["."] },
+          { action: "deny", patterns: ["**/.env"] },
+        ],
+        dir,
+      );
       assert.equal(resolvePathAction(section, join(dir, ".env")), "deny");
     }),
   );
 
   it(
-    "deny を ask より優先する",
+    "後の deny エントリが前の ask エントリを上書きする",
     withProjectEnvFile((dir) => {
-      const section = expandPathSection({ ask: ["."], deny: ["**/.env"] }, dir);
+      const section = expandPathSection(
+        [
+          { action: "ask", patterns: ["."] },
+          { action: "deny", patterns: ["**/.env"] },
+        ],
+        dir,
+      );
       assert.equal(resolvePathAction(section, join(dir, ".env")), "deny");
     }),
   );
 
   it(
-    "ask を allow より優先する",
+    "後の ask エントリが前の allow エントリを上書きする",
     withProjectEnvFile((dir) => {
-      const section = expandPathSection({ allow: ["."], ask: ["**/.env"] }, dir);
+      const section = expandPathSection(
+        [
+          { action: "allow", patterns: ["."] },
+          { action: "ask", patterns: ["**/.env"] },
+        ],
+        dir,
+      );
       assert.equal(resolvePathAction(section, join(dir, ".env")), "ask");
     }),
   );
 
+  it(
+    "後の allow エントリが前の ask エントリを上書きする",
+    withProjectEnvFile((dir) => {
+      const section = expandPathSection(
+        [
+          { action: "ask", patterns: ["."] },
+          { action: "allow", patterns: ["**/.env"] },
+        ],
+        dir,
+      );
+      assert.equal(resolvePathAction(section, join(dir, ".env")), "allow");
+    }),
+  );
+
   it("一致しないパスは deny になる", () => {
-    const section = expandPathSection({ allow: ["."] }, projectRoot);
+    const section = expandPathSection([{ action: "allow", patterns: ["."] }], projectRoot);
     assert.equal(resolvePathAction(section, "/tmp/file.txt"), "deny");
   });
 });
@@ -1012,7 +1062,10 @@ describe("§3.c アクションの決定", () => {
 describe("§2.3 確認ダイアログの一致パターン表示", () => {
   it("コマンド ask は一致したパターンと一致範囲を返す", () => {
     const match = resolveCommandActionMatch(
-      { allow: ["*"], ask: ["git push", "gh pr create"], deny: [] },
+      [
+        { action: "allow", patterns: ["*"] },
+        { action: "ask", patterns: ["git push", "gh pr create"] },
+      ],
       "git push -u origin main",
     );
     assert.deepEqual(match, {
@@ -1024,7 +1077,7 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
 
   it("ブレース展開後のパターンを返す", () => {
     const match = resolveCommandActionMatch(
-      { allow: [], ask: ["{npm,pnpm} publish"], deny: [] },
+      [{ action: "ask", patterns: ["{npm,pnpm} publish"] }],
       "npm publish",
     );
     assert.deepEqual(match, {
@@ -1035,7 +1088,7 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
   });
 
   it("glob パターンはセグメント全体を一致範囲として返す", () => {
-    const match = resolveCommandActionMatch({ allow: [], ask: ["git p*"], deny: [] }, "git push");
+    const match = resolveCommandActionMatch([{ action: "ask", patterns: ["git p*"] }], "git push");
     assert.deepEqual(match, {
       action: "ask",
       matched: "git p*",
@@ -1045,7 +1098,10 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
 
   it("複合コマンドは ask セグメントの一致パターンを返す", () => {
     const match = resolveCommandActionMatch(
-      { allow: ["ls"], ask: ["git push"], deny: [] },
+      [
+        { action: "allow", patterns: ["ls"] },
+        { action: "ask", patterns: ["git push"] },
+      ],
       "ls; git push -u origin main",
     );
     assert.deepEqual(match, {
@@ -1055,9 +1111,13 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
     });
   });
 
-  it("deny が優先されるとき deny の一致パターンを返す", () => {
+  it("後の deny エントリが前のエントリを上書きするとき deny の一致パターンを返す", () => {
     const match = resolveCommandActionMatch(
-      { allow: ["*"], ask: ["git push"], deny: ["sudo"] },
+      [
+        { action: "allow", patterns: ["*"] },
+        { action: "ask", patterns: ["git push"] },
+        { action: "deny", patterns: ["sudo"] },
+      ],
       "sudo git push",
     );
     assert.deepEqual(match, {
@@ -1068,18 +1128,27 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
   });
 
   it("どのパターンにも一致しないコマンドは matched なしの deny", () => {
-    const match = resolveCommandActionMatch({ allow: ["git status"] }, "git push");
+    const match = resolveCommandActionMatch(
+      [{ action: "allow", patterns: ["git status"] }],
+      "git push",
+    );
     assert.deepEqual(match, { action: "deny" });
   });
 
   it("パス ask は展開後の一致パスを返す", () => {
-    const section = expandPathSection({ allow: ["."], ask: ["/opt/data"] }, "/workspace/project");
+    const section = expandPathSection(
+      [
+        { action: "allow", patterns: ["."] },
+        { action: "ask", patterns: ["/opt/data"] },
+      ],
+      "/workspace/project",
+    );
     const match = resolvePathActionMatch(section, "/opt/data/file.txt");
     assert.deepEqual(match, { action: "ask", matched: "/opt/data" });
   });
 
   it("設定に一致しないパスは matched なしの deny", () => {
-    const section = expandPathSection({ allow: ["."] }, "/workspace/project");
+    const section = expandPathSection([{ action: "allow", patterns: ["."] }], "/workspace/project");
     const match = resolvePathActionMatch(section, "/tmp/file.txt");
     assert.deepEqual(match, { action: "deny" });
   });
@@ -1089,8 +1158,8 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
     withSandbox(
       `
 commands:
-  allow: ["*"]
-  ask: [git push]
+  - {allow: ["*"]}
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -1118,8 +1187,8 @@ commands:
     withSandbox(
       `
 commands:
-  allow: ["*"]
-  ask: [git push]
+  - {allow: ["*"]}
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -1146,8 +1215,8 @@ commands:
     withSandbox(
       `
 commands:
-  allow: ["*"]
-  ask: [git push]
+  - {allow: ["*"]}
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -1174,8 +1243,8 @@ commands:
     withSandbox(
       `
 commands:
-  allow: ["*"]
-  ask: [git push]
+  - {allow: ["*"]}
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -1203,8 +1272,8 @@ commands:
     withSandbox(
       `
 commands:
-  allow: ["*"]
-  ask: [git push]
+  - {allow: ["*"]}
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -1239,7 +1308,7 @@ commands:
     withSandbox(
       `
 read:
-  ask: [~/sandboxed-tools-ask-dir]
+  - {ask: [~/sandboxed-tools-ask-dir]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -1266,7 +1335,7 @@ read:
 
   it(
     "未設定パスの許可要求ダイアログは一致パターンなしを表示する",
-    withSandbox("read: {}\nwrite: {}\n", "/cwd", async (sandbox) => {
+    withSandbox("read: []\nwrite: []\n", "/cwd", async (sandbox) => {
       let title = "";
       await sandbox.authorizePath("read", "/tmp/sandboxed-tools-unmatched.txt", {
         cwd: "/cwd",
@@ -1322,7 +1391,7 @@ describe("§2.3 承認ノート", () => {
 
   it(
     "write のファイルスコープ承認は approval を返す",
-    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withApprovalSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const filePath = join(dir, "file.txt");
       const approval = await sandbox.authorizePath("write", filePath, {
         cwd: dir,
@@ -1335,7 +1404,7 @@ describe("§2.3 承認ノート", () => {
 
   it(
     "write のディレクトリスコープ承認は grant ディレクトリを返す",
-    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withApprovalSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const approval = await sandbox.authorizePath("write", join(dir, "file.txt"), {
         cwd: dir,
         hasUI: true,
@@ -1351,7 +1420,7 @@ describe("§2.3 承認ノート", () => {
 
   it(
     "read の承認も approval を返す",
-    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withApprovalSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const filePath = join(dir, "file.txt");
       const approval = await sandbox.authorizePath("read", filePath, {
         cwd: dir,
@@ -1364,7 +1433,7 @@ describe("§2.3 承認ノート", () => {
 
   it(
     "許可済みパスの再 authorize は approval を返さない",
-    withApprovalSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withApprovalSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const filePath = join(dir, "file.txt");
       const context = {
         cwd: dir,
@@ -1379,15 +1448,18 @@ describe("§2.3 承認ノート", () => {
 
   it(
     "allow コマンドは approval なし、ask コマンドの承認は approval を返す",
-    withApprovalSandbox("commands:\n  allow: [echo]\n  ask: [git push]\n", async (dir, sandbox) => {
-      const context = {
-        cwd: dir,
-        hasUI: true,
-        ui: { confirm: async () => true },
-      };
-      assert.equal(await sandbox.authorizeCommand("echo hi", context), false);
-      assert.equal(await sandbox.authorizeCommand("git push origin main", context), true);
-    }),
+    withApprovalSandbox(
+      "commands:\n  - {allow: echo}\n  - {ask: git push}\n",
+      async (dir, sandbox) => {
+        const context = {
+          cwd: dir,
+          hasUI: true,
+          ui: { confirm: async () => true },
+        };
+        assert.equal(await sandbox.authorizeCommand("echo hi", context), false);
+        assert.equal(await sandbox.authorizeCommand("git push origin main", context), true);
+      },
+    ),
   );
 
   it("writeApprovalNote はスコープごとの承認ノート文言を返す", () => {
@@ -1559,7 +1631,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "read の動的許可は write の許可にならない",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const notePath = join(dir, "file.txt");
       const confirmedOperations: string[] = [];
       const context = {
@@ -1580,7 +1652,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "write のファイルスコープ承認は存在しないファイルをフェンス外で作成する",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const newFilePath = join(dir, "nested", "new.txt");
       await sandbox.authorizePath("write", newFilePath, {
         cwd: dir,
@@ -1593,7 +1665,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "write で File only を選ぶと存在しないファイルをフェンス外で作成する",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const newFilePath = join(dir, "nested", "new.txt");
       await sandbox.authorizePath("write", newFilePath, {
         cwd: dir,
@@ -1609,7 +1681,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "write の動的許可パスは書き込み可能 bind になる",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const filePath = join(dir, "new.txt");
       await sandbox.authorizePath("write", filePath, {
         cwd: dir,
@@ -1627,7 +1699,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "write のディレクトリスコープ承認は親ディレクトリを作成しファイルは作らない",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const newFilePath = join(dir, "made", "sub", "new.txt");
       await sandbox.authorizePath("write", newFilePath, {
         cwd: dir,
@@ -1641,7 +1713,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "ディレクトリスコープの動的許可は配下の別ファイルで再確認しない",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       let selectCount = 0;
       const context = {
         cwd: dir,
@@ -1662,7 +1734,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "write スコープ選択のキャンセルは拒否される",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       await assert.rejects(async () => {
         await sandbox.authorizePath("write", join(dir, "new.txt"), {
           cwd: dir,
@@ -1678,7 +1750,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "write で No を選び理由を入力するとエラーメッセージに含まれる",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const newFilePath = join(dir, "new.txt");
       const selectionOptions: string[][] = [];
       await assert.rejects(
@@ -1710,7 +1782,7 @@ describe("§3 動的拡張のライフサイクル", () => {
     try {
       writeFileSync(join(dir, ".env"), "");
       const configPath = join(dir, "config.yaml");
-      writeFileSync(configPath, `read: {}\nwrite:\n  deny: ["**/.env"]\n`);
+      writeFileSync(configPath, `read: []\nwrite:\n  - {deny: "**/.env"}\n`);
       const sandbox = new Sandbox(dir, configPath);
       let selectCount = 0;
       const context = {
@@ -1737,7 +1809,7 @@ describe("§3 動的拡張のライフサイクル", () => {
 
   it(
     "read の動的許可はパスを作成しない",
-    withDynamicSandbox("read: {}\nwrite: {}\n", async (dir, sandbox) => {
+    withDynamicSandbox("read: []\nwrite: []\n", async (dir, sandbox) => {
       const missingPath = join(dir, "missing.txt");
       await sandbox.authorizePath("read", missingPath, {
         cwd: dir,
@@ -1788,7 +1860,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "write.deny に一致するパスは許可要求できない",
     withAskPermissionSandbox(
-      (dir) => `write:\n  deny: [${dir}/secret]\n`,
+      (dir) => `write:\n  - {deny: ${dir}/secret}\n`,
       async (dir, sandbox) => {
         await assert.rejects(
           () =>
@@ -1806,7 +1878,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "credentials パスは許可要求できない",
     withAskPermissionSandbox(
-      (dir) => `write: {}\ncredentials: [${dir}/cred]\n`,
+      (dir) => `write: []\ncredentials: [${dir}/cred]\n`,
       async (dir, sandbox) => {
         await assert.rejects(
           () =>
@@ -1824,7 +1896,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "write.allow のパスはダイアログなしで許可済みを返す",
     withAskPermissionSandbox(
-      (dir) => `write:\n  allow: [${dir}]\n`,
+      (dir) => `write:\n  - {allow: ${dir}}\n`,
       async (dir, sandbox) => {
         const outcome = await sandbox.requestWritePermission(join(dir, "sub"), "to start editing", {
           cwd: dir,
@@ -1839,7 +1911,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "確認ダイアログを提供できない UI ではエラーになる",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         await assert.rejects(
           () =>
@@ -1856,7 +1928,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "動的許可済みの配下はダイアログなしで許可済みを返す",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         await sandbox.authorizePath("write", join(dir, "file.txt"), {
           cwd: dir,
@@ -1879,7 +1951,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "未設定パスは選択肢2つの確認ダイアログを表示する",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         const selectionOptions: string[][] = [];
         await sandbox.requestWritePermission(
@@ -1939,7 +2011,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "write.ask に一致するダイアログは一致パターンを表示する",
     withAskPermissionSandbox(
-      (dir) => `write:\n  ask: [${dir}/asked]\n`,
+      (dir) => `write:\n  - {ask: ${dir}/asked}\n`,
       async (dir, sandbox) => {
         let title = "";
         await sandbox.requestWritePermission(
@@ -2000,7 +2072,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "承認は path 配下をセッション内で書き込み可にし bind に追加する",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         const outcome = await sandbox.requestWritePermission(
           dir,
@@ -2026,7 +2098,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "承認時に存在しないディレクトリをフェンス外で作成する",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         const target = join(dir, "made", "worktree");
         await sandbox.requestWritePermission(target, "to create a worktree", {
@@ -2042,7 +2114,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "拒否はエラーにならず以降の write は従来どおり確認される",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         const outcome = await sandbox.requestWritePermission(
           dir,
@@ -2078,7 +2150,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "path がファイルのときは親ディレクトリ配下をスコープにする",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         const filePath = join(dir, "existing.txt");
         writeFileSync(filePath, "");
@@ -2387,15 +2459,30 @@ describe("§3 ツール引数パスの正規化", () => {
 });
 
 describe("§4 bash コマンドの実行結果", () => {
-  it("コマンドの完全な先頭語に一致する", () => {
+  it("deny エントリにマッチしないコマンドは前の allow エントリのまま", () => {
     assert.equal(
-      resolveCommandAction({ allow: ["git status"], deny: ["sudo"] }, "git status --short"),
+      resolveCommandAction(
+        [
+          { action: "allow", patterns: ["git status"] },
+          { action: "deny", patterns: ["sudo"] },
+        ],
+        "git status --short",
+      ),
       "allow",
     );
   });
 
-  it("コマンド deny を allow より優先する", () => {
-    assert.equal(resolveCommandAction({ allow: ["*"], deny: ["sudo"] }, "sudo ls"), "deny");
+  it("後の deny エントリが前の allow エントリを上書きする", () => {
+    assert.equal(
+      resolveCommandAction(
+        [
+          { action: "allow", patterns: ["*"] },
+          { action: "deny", patterns: ["sudo"] },
+        ],
+        "sudo ls",
+      ),
+      "deny",
+    );
   });
 
   it(
@@ -2403,7 +2490,7 @@ describe("§4 bash コマンドの実行結果", () => {
     withSandbox(
       `
 commands:
-  ask: [git push]
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -2431,7 +2518,7 @@ commands:
     withSandbox(
       `
 commands:
-  ask: [git push]
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -2457,7 +2544,7 @@ commands:
     withSandbox(
       `
 commands:
-  ask: [git push]
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -2481,7 +2568,7 @@ commands:
     withSandbox(
       `
 commands:
-  ask: [git push]
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -2510,7 +2597,7 @@ commands:
     withSandbox(
       `
 commands:
-  ask: [git push]
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -2533,7 +2620,7 @@ commands:
     withSandbox(
       `
 commands:
-  deny: [sudo]
+  - {deny: [sudo]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -2556,7 +2643,11 @@ commands:
   );
 
   it("複合コマンド内の最も厳しいアクションを適用する", () => {
-    const section = { allow: ["*"], ask: ["git push", "gh pr create"], deny: ["sudo"] };
+    const section = [
+      { action: "allow", patterns: ["*"] },
+      { action: "ask", patterns: ["git push", "gh pr create"] },
+      { action: "deny", patterns: ["sudo"] },
+    ];
     assert.equal(
       resolveCommandAction(
         section,
@@ -2577,7 +2668,10 @@ commands:
   });
 
   it("heredoc 本文・コメント・クォート内の文字列をコマンドにしない", () => {
-    const section = { allow: ["*"], ask: ["gh pr create"] };
+    const section = [
+      { action: "allow", patterns: ["*"] },
+      { action: "ask", patterns: ["gh pr create"] },
+    ];
     assert.equal(
       resolveCommandAction(section, "cat << 'EOF'\ngh pr create --repo owner/repo\nEOF"),
       "allow",
@@ -2594,7 +2688,10 @@ commands:
   });
 
   it("env と環境変数代入の後ろにあるコマンドを照合する", () => {
-    const section = { allow: ["*"], ask: ["git push", "gh pr create"] };
+    const section = [
+      { action: "allow", patterns: ["*"] },
+      { action: "ask", patterns: ["git push", "gh pr create"] },
+    ];
     assert.equal(
       resolveCommandAction(section, "GH_PAGER=cat gh pr create --repo owner/repo"),
       "ask",
@@ -2603,7 +2700,7 @@ commands:
   });
 
   it("空コマンドでも既存の allow wildcard の扱いを維持する", () => {
-    assert.equal(resolveCommandAction({ allow: ["*"] }, ""), "allow");
+    assert.equal(resolveCommandAction([{ action: "allow", patterns: ["*"] }], ""), "allow");
   });
 
   it(
@@ -2622,7 +2719,7 @@ describe("§2・§4 確認の直列化", () => {
       const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-dialog-"));
       try {
         const configPath = join(dir, "config.yaml");
-        writeFileSync(configPath, "read: {}\nwrite: {}\n");
+        writeFileSync(configPath, "read: []\nwrite: []\n");
         await test(dir, new Sandbox(dir, configPath));
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -2685,7 +2782,7 @@ describe("§2・§4 確認の直列化", () => {
     withSandbox(
       `
 commands:
-  ask: [git push]
+  - {ask: [git push]}
 `,
       "/cwd",
       async (sandbox) => {
@@ -2704,28 +2801,55 @@ describe("§6 設定", () => {
   it("全セクションを読み込む", () => {
     const config = parseSandboxedToolsConfig(`
 read:
-  allow: ["*"]
+  - {allow: "*"}
 write:
-  allow: ["."]
-  deny: ["**/.env"]
+  - {allow: .}
+  - {deny: "**/.env"}
 credentials: ["~/.ssh"]
 commands:
-  allow: [git status]
-  deny: [sudo]
+  - {allow: git status}
+  - {deny: sudo}
 `);
-    assert.deepEqual(config.read, { allow: ["*"], ask: [], deny: [] });
-    assert.deepEqual(config.write, {
-      allow: ["."],
-      ask: [],
-      deny: ["**/.env"],
-    });
+    assert.deepEqual(config.read, [{ action: "allow", patterns: ["*"] }]);
+    assert.deepEqual(config.write, [
+      { action: "allow", patterns: ["."] },
+      { action: "deny", patterns: ["**/.env"] },
+    ]);
     assert.deepEqual(config.credentials, ["~/.ssh"]);
-    assert.deepEqual(config.commands, {
-      allow: ["git status"],
-      ask: [],
-      deny: ["sudo"],
-    });
+    assert.deepEqual(config.commands, [
+      { action: "allow", patterns: ["git status"] },
+      { action: "deny", patterns: ["sudo"] },
+    ]);
   });
+
+  it("1 要素に複数パターンを宣言できる", () => {
+    const config = parseSandboxedToolsConfig(`
+commands:
+  - {ask: [git push, "gh pr create"]}
+`);
+    assert.deepEqual(config.commands, [{ action: "ask", patterns: ["git push", "gh pr create"] }]);
+  });
+
+  it("記法を満たさない config は throw する", () => {
+    assert.throws(() => parseSandboxedToolsConfig('read:\n  allow: ["."]\n'));
+    assert.throws(() => parseSandboxedToolsConfig('read:\n  - {allow: ".", deny: "x"}\n'));
+    assert.throws(() => parseSandboxedToolsConfig('read:\n  - {permit: "."}\n'));
+    assert.throws(() => parseSandboxedToolsConfig("read:\n  - {allow: 1}\n"));
+  });
+
+  it(
+    "記法を満たさない config で構築した Sandbox は全セクション未設定で動作する",
+    withSandbox('read:\n  allow: ["."]\n', "/cwd", async (sandbox) => {
+      await assert.rejects(
+        () => sandbox.authorizePath("read", "/cwd/file.txt", { cwd: "/cwd" }),
+        /Access requires confirmation/,
+      );
+      await assert.rejects(
+        async () => sandbox.authorizeCommand("ls", { cwd: "/cwd" }),
+        /Command denied/,
+      );
+    }),
+  );
 });
 
 describe("§6.1 bind とパスの実在保証", () => {
@@ -2745,7 +2869,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     "write.allow の固定パスは起動時に作成される",
     withSandboxDir(async (dir, configPath) => {
       const targetDir = join(dir, "made", "dir");
-      writeFileSync(configPath, `write:\n  allow: ["${targetDir}"]\n`);
+      writeFileSync(configPath, `write:\n  - {allow: "${targetDir}"}\n`);
       new Sandbox("/cwd", configPath);
       assert.equal(existsSync(targetDir), true);
     }),
@@ -2756,9 +2880,23 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir((dir, configPath) => {
       const secretDir = join(dir, "secret-dir");
       mkdirSync(secretDir);
-      writeFileSync(configPath, `read:\n  deny: ["${secretDir}"]\n`);
+      writeFileSync(configPath, `read:\n  - {deny: "${secretDir}"}\n`);
       const args = new Sandbox("/cwd", configPath).buildArgs("fs");
       const tmpfsAt = args.indexOf(secretDir);
+      assert.deepEqual(args.slice(tmpfsAt - 1, tmpfsAt + 1), ["--tmpfs", secretDir]);
+    }),
+  );
+
+  it(
+    "fs モードは後勝ちで allow が確定したパスも deny 宣言されていれば隠す",
+    withSandboxDir((dir, configPath) => {
+      const secretDir = join(dir, "secret-dir");
+      mkdirSync(secretDir);
+      writeFileSync(configPath, `read:\n  - {deny: "${secretDir}"}\n  - {allow: "${secretDir}"}\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("fs");
+      // The allow entry adds --ro-bind-try first, but the deny-declared mask
+      // (--tmpfs) mounts later in bwrap args and therefore hides the content.
+      const tmpfsAt = args.lastIndexOf(secretDir);
       assert.deepEqual(args.slice(tmpfsAt - 1, tmpfsAt + 1), ["--tmpfs", secretDir]);
     }),
   );
@@ -2768,7 +2906,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir((dir, configPath) => {
       const secretFile = join(dir, "secret.txt");
       writeFileSync(secretFile, "secret");
-      writeFileSync(configPath, `read:\n  deny: ["${secretFile}"]\n`);
+      writeFileSync(configPath, `read:\n  - {deny: "${secretFile}"}\n`);
       const args = new Sandbox("/cwd", configPath).buildArgs("fs");
       const maskAt = args.indexOf(secretFile);
       assert.deepEqual(args.slice(maskAt - 2, maskAt + 1), [
@@ -2812,7 +2950,7 @@ describe("§6.1 bind とパスの実在保証", () => {
   it(
     'read.allow "*" はルート全体を read-only bind する',
     withSandboxDir((_dir, configPath) => {
-      writeFileSync(configPath, `read:\n  allow: ["*"]\n`);
+      writeFileSync(configPath, `read:\n  - {allow: "*"}\n`);
       const args = new Sandbox("/cwd", configPath).buildArgs("fs");
       const rootBindAt = args.indexOf("/");
       assert.deepEqual(args.slice(rootBindAt - 1, rootBindAt + 2), ["--ro-bind", "/", "/"]);
@@ -3069,7 +3207,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "並行 runTool の同時 sandbox 実行は最大4で、開始順に実行され全呼び出しが完了する",
-    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+    withSandbox("read: []\nwrite: []\n", process.cwd(), async (sandbox) => {
       const stub = stubCountingRun(async () => {
         await delay(60);
         return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
@@ -3092,7 +3230,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "sandbox 実行が失敗しても待機中の呼び出しが開始される",
-    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+    withSandbox("read: []\nwrite: []\n", process.cwd(), async (sandbox) => {
       const stub = stubCountingRun((index) =>
         index === 0
           ? Promise.reject(new Error("boom"))
@@ -3120,7 +3258,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "続く2度目の並行バッチでも同時実行は最大4を維持する",
-    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+    withSandbox("read: []\nwrite: []\n", process.cwd(), async (sandbox) => {
       const stub = stubCountingRun(async () => {
         await delay(50);
         return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
@@ -3149,7 +3287,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "Sandbox インスタンスが違っても同時実行はプロセス全体で最大4",
-    withSandbox("read: {}\nwrite: {}\n", process.cwd(), async (sandbox) => {
+    withSandbox("read: []\nwrite: []\n", process.cwd(), async (sandbox) => {
       const other = new Sandbox(process.cwd());
       const stub = stubCountingRun(async () => {
         await delay(50);

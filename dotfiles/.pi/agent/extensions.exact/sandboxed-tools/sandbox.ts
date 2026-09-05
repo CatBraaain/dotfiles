@@ -43,13 +43,14 @@ export type WritePermissionRequest =
   | { status: "granted"; grantedPath: string }
   | { status: "denied"; grantedPath: string; reason?: string };
 
-type RuleSection = { allow?: string[]; ask?: string[]; deny?: string[] };
+/** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
+type RuleEntry = { action: Action; patterns: string[] };
 
 type SandboxedToolsConfig = {
-  read?: RuleSection;
-  write?: RuleSection;
+  read?: RuleEntry[];
+  write?: RuleEntry[];
   credentials?: string[];
-  commands?: RuleSection;
+  commands?: RuleEntry[];
 };
 
 type ToolUI = {
@@ -124,21 +125,31 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
   const parsed = parseYaml(source) as unknown;
   if (!isRecord(parsed)) throw new Error("sandboxed-tools config must be a mapping");
 
-  const parseSection = (value: unknown): RuleSection | undefined => {
+  const parseEntries = (value: unknown): RuleEntry[] | undefined => {
     if (value === undefined) return undefined;
-    if (!isRecord(value)) throw new Error("rule section must be a mapping");
-    return {
-      allow: asPatterns(value.allow),
-      ask: asPatterns(value.ask),
-      deny: asPatterns(value.deny),
-    };
+    if (!Array.isArray(value)) throw new Error("rule section must be a list of entries");
+    return value.map((element): RuleEntry => {
+      if (!isRecord(element)) throw new Error("rule entry must be a mapping");
+      const keys = Object.keys(element);
+      if (keys.length !== 1) throw new Error("rule entry must declare exactly one action");
+      const [action] = keys;
+      if (action !== "allow" && action !== "ask" && action !== "deny")
+        throw new Error(`unknown action: ${action}`);
+      const pattern = element[action];
+      if (typeof pattern !== "string" && !Array.isArray(pattern))
+        throw new Error("rule entry pattern must be a string or a list of strings");
+      return {
+        action,
+        patterns: typeof pattern === "string" ? [pattern] : asPatterns(pattern),
+      };
+    });
   };
 
   return {
-    read: parseSection(parsed.read),
-    write: parseSection(parsed.write),
+    read: parseEntries(parsed.read),
+    write: parseEntries(parsed.write),
     credentials: asPatterns(parsed.credentials),
-    commands: parseSection(parsed.commands),
+    commands: parseEntries(parsed.commands),
   };
 }
 
@@ -322,10 +333,10 @@ function findCommandPattern(
 }
 
 export function resolveCommandActionMatch(
-  section: RuleSection | undefined,
+  entries: RuleEntry[] | undefined,
   command: string,
 ): ActionMatch {
-  if (!section) return { action: "deny" };
+  if (!entries) return { action: "deny" };
   const withSpan = (
     action: Action,
     match: CommandPatternMatch,
@@ -335,14 +346,16 @@ export function resolveCommandActionMatch(
     matched: match.pattern,
     matchSpan: { candidate, index: match.index, length: match.length },
   });
+  // Last match wins (SPEC §6): every matching entry overwrites the resolution,
+  // so a later `{allow: systemctl status}` carves allow out of an earlier
+  // `{ask: systemctl}`. No match at all is unset (deny).
   const actionFor = (candidate: string): ActionMatch => {
-    const deny = findCommandPattern(section.deny, candidate);
-    if (deny !== undefined) return withSpan("deny", deny, candidate);
-    const ask = findCommandPattern(section.ask, candidate);
-    if (ask !== undefined) return withSpan("ask", ask, candidate);
-    const allow = findCommandPattern(section.allow, candidate);
-    if (allow !== undefined) return withSpan("allow", allow, candidate);
-    return { action: "deny" };
+    let resolved: ActionMatch = { action: "deny" };
+    for (const entry of entries) {
+      const match = findCommandPattern(entry.patterns, candidate);
+      if (match !== undefined) resolved = withSpan(entry.action, match, candidate);
+    }
+    return resolved;
   };
   // Parse fallback: a command that yields no segments (empty or unparsable)
   // is checked as the raw string, preserving the pre-split behavior.
@@ -356,15 +369,15 @@ export function resolveCommandActionMatch(
   );
 }
 
-export function resolveCommandAction(section: RuleSection | undefined, command: string): Action {
-  return resolveCommandActionMatch(section, command).action;
+export function resolveCommandAction(entries: RuleEntry[] | undefined, command: string): Action {
+  return resolveCommandActionMatch(entries, command).action;
 }
 
-function getPathSection(
-  config: SandboxedToolsConfig,
-  operation: "read" | "write",
-): RuleSection | undefined {
-  return config[operation];
+/** All patterns declared with `action` across the flat entries, in list order. */
+function actionPatterns(entries: RuleEntry[] | undefined, action: Action): string[] {
+  return (entries ?? [])
+    .filter((entry) => entry.action === action)
+    .flatMap((entry) => entry.patterns);
 }
 
 // "/**" is the `read.allow` sentinel for all paths (§3).
@@ -430,26 +443,27 @@ function expandPathPatterns(
   );
 }
 
-export type ExpandedPathSection = { allow: string[]; ask: string[]; deny: string[] };
+export type ExpandedPathSection = { action: Action; paths: string[] }[];
 
 export function expandPathSection(
-  section: RuleSection | undefined,
+  entries: RuleEntry[] | undefined,
   cwd: string,
   allowAllPaths = false,
   gitMainWorktreePath = resolveGitMainWorktreePath(cwd),
   globCache?: Map<string, string[]>,
 ): ExpandedPathSection {
-  return {
-    allow: expandPathPatterns(
-      section?.allow,
+  // `allowAllPaths` (read section) turns the `"*"` sentinel into "/**" only
+  // for allow entries, preserving the read-only-whole-filesystem semantics.
+  return (entries ?? []).map((entry) => ({
+    action: entry.action,
+    paths: expandPathPatterns(
+      entry.patterns,
       cwd,
       gitMainWorktreePath,
-      allowAllPaths,
+      allowAllPaths && entry.action === "allow",
       globCache,
     ),
-    ask: expandPathPatterns(section?.ask, cwd, gitMainWorktreePath, false, globCache),
-    deny: expandPathPatterns(section?.deny, cwd, gitMainWorktreePath, false, globCache),
-  };
+  }));
 }
 
 function pathCovers(grantedPath: string, candidatePath: string): boolean {
@@ -471,15 +485,14 @@ export function resolvePathActionMatch(
   candidatePath: string,
 ): ActionMatch {
   if (!section) return { action: "deny" };
-  const matchedIn = (paths: string[]): string | undefined =>
-    paths.find((path) => pathCovers(path, candidatePath));
-  const deny = matchedIn(section.deny);
-  if (deny !== undefined) return { action: "deny", matched: deny };
-  const ask = matchedIn(section.ask);
-  if (ask !== undefined) return { action: "ask", matched: ask };
-  const allow = matchedIn(section.allow);
-  if (allow !== undefined) return { action: "allow", matched: allow };
-  return { action: "deny" };
+  // Last match wins (SPEC §6). When nothing matched, `matched` stays undefined,
+  // which callers treat as unset (deny, but a permission request is possible).
+  let resolved: ActionMatch = { action: "deny" };
+  for (const entry of section) {
+    const path = entry.paths.find((candidate) => pathCovers(candidate, candidatePath));
+    if (path !== undefined) resolved = { action: entry.action, matched: path };
+  }
+  return resolved;
 }
 
 export function resolvePathAction(
@@ -645,7 +658,7 @@ export class Sandbox {
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     return [
       ...expandPathPatterns(
-        getPathSection(this.config, "read")?.deny,
+        actionPatterns(this.config.read, "deny"),
         this.cwd,
         gitMainWorktreePath,
         false,
@@ -667,7 +680,7 @@ export class Sandbox {
     // worktree itself (already existing) or a derived directory such as
     // `-worktrees`, which is created here for the same guarantee.
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
-    for (const pattern of getPathSection(this.config, "write")?.allow ?? []) {
+    for (const pattern of actionPatterns(this.config.write, "allow")) {
       if (hasGlob(pattern)) continue;
       for (const expanded of expandGitMainWorktreePath(pattern, gitMainWorktreePath)) {
         const path = resolvePattern(expanded, this.cwd);
@@ -677,7 +690,7 @@ export class Sandbox {
   }
 
   private readAllPaths(): boolean {
-    return getPathSection(this.config, "read")?.allow?.some((pattern) => pattern === "*") ?? false;
+    return actionPatterns(this.config.read, "allow").includes("*");
   }
 
   private addMount(args: string[], sourcePath: string, writable: boolean): void {
@@ -686,8 +699,6 @@ export class Sandbox {
   }
 
   private addConfiguredMounts(args: string[], mode: "fs" | "bash"): void {
-    const readSection = getPathSection(this.config, "read");
-    const writeSection = getPathSection(this.config, "write");
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     const mounted = new Set<string>();
 
@@ -700,7 +711,7 @@ export class Sandbox {
 
     if (!this.readAllPaths()) {
       for (const path of expandPathPatterns(
-        readSection?.allow,
+        actionPatterns(this.config.read, "allow"),
         this.cwd,
         gitMainWorktreePath,
         true,
@@ -709,7 +720,7 @@ export class Sandbox {
         mount(path, false);
     }
     for (const path of expandPathPatterns(
-      writeSection?.allow,
+      actionPatterns(this.config.write, "allow"),
       this.cwd,
       gitMainWorktreePath,
       false,

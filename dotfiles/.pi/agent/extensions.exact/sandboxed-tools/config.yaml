@@ -1,63 +1,58 @@
 read:
-  allow:
-    - "*"
-  ask: []
-  deny:
-    - "**/.env"
-    - "**/.env.local"
-    - "**/.env.*.local"
-    - ~/.ssh
-    - ~/.pi/agent/auth.json
+  - {allow: "*"}
+  - deny:
+      - "**/.env"
+      - "**/.env.local"
+      - "**/.env.*.local"
+      - ~/.ssh
+      - ~/.pi/agent/auth.json
 
 write:
-  allow:
-    - .
-    - ${GIT_MAIN_WORKTREE_PATH}
-    - ${GIT_MAIN_WORKTREE_PATH}-worktrees
-    - ~/.pi
-    - ~/.config
-    - /tmp
-    - ~/.npm
-    - ~/.bun/install/cache
-    - ~/.local/share/pnpm/store
-    - ~/.yarn/berry/cache
-    - ~/.vite-plus/cache
-    - ~/.vite-plus/package_manager
-    - ~/.cache
-    - ~/.camoufox
-    - ~/.cargo/registry
-    - ~/go/pkg/mod
-    - ~/mirrors
-  ask: []
-  deny:
-    - ~/.pi/agent/extensions/sandboxed-tools/config.yaml
+  - allow:
+      - .
+      - ${GIT_MAIN_WORKTREE_PATH}
+      - ${GIT_MAIN_WORKTREE_PATH}-worktrees
+      - ~/.pi
+      - ~/.config
+      - /tmp
+      - ~/.npm
+      - ~/.bun/install/cache
+      - ~/.local/share/pnpm/store
+      - ~/.yarn/berry/cache
+      - ~/.vite-plus/cache
+      - ~/.vite-plus/package_manager
+      - ~/.cache
+      - ~/.camoufox
+      - ~/.cargo/registry
+      - ~/go/pkg/mod
+      - ~/mirrors
+  - {deny: ~/.pi/agent/extensions/sandboxed-tools/config.yaml}
 
 credentials: []
 
 commands:
-  allow:
-    - "*"
-  ask:
-    - "{npm,bun,pnpm} publish"
-    - gh pr create
-    # git
-    - git reset --hard
-    - git clean -fd
-    # - git push {--force,-f,--delete,-d}
-    - git push
-    - git replace
-    - git update-ref
-    - git reflog expire
-    - git gc
-    - git prune
-    # system
-    - systemctl
-    - crontab
-    - chmod -R
-    - chown -R
-    - sudo
-  deny:
-    - doas
-    - "{mkfs,mkfs.ext2,mkfs.ext3,mkfs.ext4,mkfs.xfs,mkfs.btrfs,mkfs.vfat,mkfs.ntfs,mkfs.exfat}"
-    - "{wipefs,parted,fdisk,sfdisk,sgdisk}"
-    - "{shutdown,reboot,poweroff,halt}"
+  - {allow: "*"}
+  - ask:
+      - "{npm,bun,pnpm} publish"
+      - gh pr create
+      # git
+      - git reset --hard
+      - git clean -fd
+      # - git push {--force,-f,--delete,-d}
+      - git push
+      - git replace
+      - git update-ref
+      - git reflog expire
+      - git gc
+      - git prune
+      # system
+      - systemctl
+      - crontab
+      - chmod -R
+      - chown -R
+      - sudo
+  - deny:
+      - doas
+      - "{mkfs,mkfs.ext2,mkfs.ext3,mkfs.ext4,mkfs.xfs,mkfs.btrfs,mkfs.vfat,mkfs.ntfs,mkfs.exfat}"
+      - "{wipefs,parted,fdisk,sfdisk,sgdisk}"
+      - "{shutdown,reboot,poweroff,halt}"
