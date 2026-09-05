@@ -1,5 +1,15 @@
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -13,10 +23,14 @@ import agentsExtension, {
   buildAgentSystemPromptAddendum,
   canDelegate,
   childAgent,
+  childInvocationArgs,
+  cleanupOldSubagentSessions,
   initialAgent,
   loadAgentConfig,
   parseAgentConfig,
+  sessionNameFor,
   shouldBlockToolCall,
+  subagentSessionDir,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
 
@@ -1397,7 +1411,7 @@ describe("subagent", () => {
     }
   });
 
-  it("許可された agent の subagent を --agent だけ渡して起動し、最終結果を親へ返す", async () => {
+  it("許可された agent の subagent を起動し、セッションを隔離先へ記録して最終結果を親へ返す", async () => {
     const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
@@ -1422,9 +1436,12 @@ describe("subagent", () => {
         "--mode",
         "json",
         "-p",
-        "--no-session",
         "--agent",
         "worker",
+        "--session-dir",
+        subagentSessionDir(),
+        "--name",
+        "worker: work",
         "Task: work",
       ]);
     } finally {
@@ -2322,6 +2339,85 @@ describe("subagent の表示", () => {
       assert.equal(lines.filter((line) => line.trimEnd() === "└───────────────").length, 2);
     } finally {
       extension.restore();
+    }
+  });
+});
+
+describe("sessionNameFor", () => {
+  it("prefixes agent name to the first line of the task", () => {
+    const name = sessionNameFor("junior", "目的: バローのURL確定\n\n背景: JAN価格DB");
+    assert.equal(name, "junior: 目的: バローのURL確定");
+  });
+
+  it("truncates long first lines with an ellipsis", () => {
+    const long = "あ".repeat(50);
+    const name = sessionNameFor("junior", long);
+    const expectedLength = Array.from("junior: ").length + 30 + 1;
+    assert.equal(Array.from(name).length, expectedLength);
+    assert.ok(name.endsWith("…"));
+  });
+
+  it("falls back to the agent name for an empty task", () => {
+    assert.equal(sessionNameFor("senior", ""), "senior");
+  });
+});
+
+describe("childInvocationArgs", () => {
+  it("records sessions to the isolated subagent-sessions dir instead of --no-session", () => {
+    const args = childInvocationArgs("junior", "do the thing");
+    assert.ok(!args.includes("--no-session"));
+    const dirIndex = args.indexOf("--session-dir");
+    assert.notEqual(dirIndex, -1);
+    assert.ok(args[dirIndex + 1].endsWith("subagent-sessions"));
+    const nameIndex = args.indexOf("--name");
+    assert.equal(args[nameIndex + 1], "junior: do the thing");
+    assert.equal(args.at(-1), "Task: do the thing");
+  });
+});
+
+describe("cleanupOldSubagentSessions", () => {
+  it("removes jsonl files older than 30 days and keeps the rest", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-sessions-"));
+    try {
+      const oldFile = join(dir, "old.jsonl");
+      const freshFile = join(dir, "fresh.jsonl");
+      const otherFile = join(dir, "keep.txt");
+      writeFileSync(oldFile, "{}");
+      writeFileSync(freshFile, "{}");
+      writeFileSync(otherFile, "x");
+      const now = Date.now();
+      const staleDate = new Date(now - 31 * 24 * 60 * 60 * 1000);
+      utimesSync(oldFile, staleDate, staleDate);
+
+      const removed = cleanupOldSubagentSessions(dir, now);
+
+      assert.equal(removed, 1);
+      assert.ok(!existsSync(oldFile));
+      assert.ok(existsSync(freshFile));
+      assert.ok(existsSync(otherFile));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 0 when the directory does not exist", () => {
+    const missing = join(tmpdir(), `pi-no-such-dir-${Date.now()}`);
+    assert.equal(cleanupOldSubagentSessions(missing), 0);
+  });
+
+  it("ignores directories named like session files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-sessions-"));
+    try {
+      const nested = join(dir, "nested.jsonl");
+      mkdirSync(nested);
+      const now = Date.now();
+      const staleDate = new Date(now - 40 * 24 * 60 * 60 * 1000);
+      utimesSync(nested, staleDate, staleDate);
+
+      assert.equal(cleanupOldSubagentSessions(dir, now), 0);
+      assert.ok(existsSync(nested));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

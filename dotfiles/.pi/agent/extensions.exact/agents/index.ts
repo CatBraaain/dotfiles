@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
@@ -358,6 +358,67 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partialResult: AgentToolResult<AgentToolDetails>) => void;
 
+const SUBAGENT_SESSION_DIR_NAME = "subagent-sessions";
+const SUBAGENT_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const SUBAGENT_SESSION_NAME_MAX_CHARS = 30;
+
+// 子セッションは ~/.pi/agent/subagent-sessions へ隔離保存する。main の sessions/ を汚染
+// せず、`pi --session-dir <dir> -r` で事後調査できる。
+export function subagentSessionDir(): string {
+  return join(getAgentDir(), SUBAGENT_SESSION_DIR_NAME);
+}
+
+// セッション一覧での識別用の表示名。agent 名 + task 先頭1行の切り詰め。
+export function sessionNameFor(agent: Agent, task: string): string {
+  const firstLine = (task.split("\n", 1)[0] ?? "").trim();
+  const chars = Array.from(firstLine);
+  const summary =
+    chars.length > SUBAGENT_SESSION_NAME_MAX_CHARS
+      ? `${chars.slice(0, SUBAGENT_SESSION_NAME_MAX_CHARS).join("")}…`
+      : chars.join("");
+  return summary ? `${agent}: ${summary}` : agent;
+}
+
+export function childInvocationArgs(agent: Agent, task: string): string[] {
+  return [
+    "--mode",
+    "json",
+    "-p",
+    "--agent",
+    agent,
+    "--session-dir",
+    subagentSessionDir(),
+    "--name",
+    sessionNameFor(agent, task),
+    `Task: ${task}`,
+  ];
+}
+
+// 30日超の古い子セッションを削除する。放置で無限に増えるのを防ぐ。
+export function cleanupOldSubagentSessions(dir: string, now = Date.now()): number {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.endsWith(".jsonl")) continue;
+    const filePath = join(dir, entry);
+    try {
+      const stats = statSync(filePath);
+      if (stats.isFile() && now - stats.mtimeMs > SUBAGENT_SESSION_MAX_AGE_MS) {
+        unlinkSync(filePath);
+        removed++;
+      }
+    } catch {
+      // 読めない・消せないファイルは飛ばす
+    }
+  }
+  return removed;
+}
+
 async function runChild(
   defaultCwd: string,
   task: string,
@@ -367,7 +428,8 @@ async function runChild(
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<ChildRun> {
   // モデルは渡さない。子セッションが指定された agent の tier から解決する。
-  const args = ["--mode", "json", "-p", "--no-session", "--agent", agent, `Task: ${task}`];
+  // セッションは --no-session にせず隔離先へ保存し、事後調査できるようにする。
+  const args = childInvocationArgs(agent, task);
   const childResult: ChildRun = {
     agent,
     task,
@@ -556,6 +618,14 @@ export default function agentsExtension(
   pi: ExtensionAPI,
   injectedConfig: ConfigLoadResult = loadAgentConfig(),
 ): void {
+  // 子セッションの保存先を用意し、古いものを掃除する
+  try {
+    const sessionDir = subagentSessionDir();
+    mkdirSync(sessionDir, { recursive: true });
+    cleanupOldSubagentSessions(sessionDir);
+  } catch {
+    // 保存先が用意できなくても subagent 実行は続ける
+  }
   const loadedConfig = injectedConfig;
   const config = loadedConfig.config;
   let currentAgent = config?.default ?? "invalid";
