@@ -19,7 +19,6 @@ import {
   Sandbox,
   expandPathSection,
   parseSandboxedToolsConfig,
-  resolveGitMainWorktreePath,
   resolveCommandAction,
   resolveCommandActionMatch,
   resolvePathAction,
@@ -693,24 +692,118 @@ describe("§3.a パス文字列の解決", () => {
   });
 
   it(
-    "${GIT_MAIN_WORKTREE_PATH} は linked worktree から main worktree に解決する",
+    "${GIT_WORKTREE_PATHS} は linked worktree を cwd にしても main worktree への書き込みを許可する",
     withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath, workspacePath) => {
       const configPath = join(workspacePath, "config.yaml");
-      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_MAIN_WORKTREE_PATH}/.git\n");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_WORKTREE_PATHS}\n");
       const sandbox = new Sandbox(linkedWorktreePath, configPath);
       const mainGitDirectory = join(mainWorktreePath, ".git", "refs", "heads", "topic");
 
-      assert.equal(resolveGitMainWorktreePath(linkedWorktreePath), mainWorktreePath);
       await sandbox.authorizePath("write", mainGitDirectory, { cwd: linkedWorktreePath });
     }),
   );
 
   it(
-    "${GIT_MAIN_WORKTREE_PATH} は Git repository 外ではパスを許可しない",
+    "${GIT_WORKTREE_PATHS} は main を含む全 worktree に展開される",
+    withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath) => {
+      const section = expandPathSection({ allow: ["${GIT_WORKTREE_PATHS}"] }, linkedWorktreePath);
+
+      assert.deepEqual(section.allow.sort(), [mainWorktreePath, linkedWorktreePath].sort());
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_PATHS} はディレクトリが失われた worktree を展開先に含めない",
+    withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath) => {
+      rmSync(linkedWorktreePath, { recursive: true, force: true });
+      const section = expandPathSection({ allow: ["${GIT_WORKTREE_PATHS}"] }, mainWorktreePath);
+
+      assert.deepEqual(section.allow, [mainWorktreePath]);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_PATHS} はパスエントリ内の任意の位置に記述できる",
+    withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath) => {
+      const section = expandPathSection(
+        { allow: ["${GIT_WORKTREE_PATHS}/sub"] },
+        linkedWorktreePath,
+      );
+
+      assert.deepEqual(
+        section.allow.sort(),
+        [join(mainWorktreePath, "sub"), join(linkedWorktreePath, "sub")].sort(),
+      );
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_PATHS} は Git repository 外ではパスを許可しない",
     withTempDirectory((directory) => {
-      const section = expandPathSection({ allow: ["${GIT_MAIN_WORKTREE_PATH}/.git"] }, directory);
+      const section = expandPathSection({ allow: ["${GIT_WORKTREE_PATHS}"] }, directory);
 
       assert.deepEqual(section.allow, []);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_PATHS} はセッション中に追加・削除した worktree を以降の判定に反映する",
+    withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_WORKTREE_PATHS}\n");
+      const sandbox = new Sandbox(mainWorktreePath, configPath);
+
+      await sandbox.authorizePath("write", join(linkedWorktreePath, "file.txt"), {
+        cwd: mainWorktreePath,
+      });
+
+      const addedWorktreePath = join(workspacePath, "added");
+      runGit(mainWorktreePath, ["worktree", "add", addedWorktreePath]);
+      try {
+        await sandbox.authorizePath("write", join(addedWorktreePath, "file.txt"), {
+          cwd: mainWorktreePath,
+        });
+      } finally {
+        runGit(mainWorktreePath, ["worktree", "remove", "--force", addedWorktreePath]);
+      }
+
+      await assert.rejects(
+        () =>
+          sandbox.authorizePath("write", join(addedWorktreePath, "file.txt"), {
+            cwd: mainWorktreePath,
+          }),
+        /Access requires confirmation/,
+      );
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_PATHS} はセッション中に追加・削除した worktree を以降の bind に反映する",
+    withLinkedWorktree(async (mainWorktreePath, _linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_WORKTREE_PATHS}\n");
+      const sandbox = new Sandbox(mainWorktreePath, configPath);
+
+      const addedWorktreePath = join(workspacePath, "added");
+      runGit(mainWorktreePath, ["worktree", "add", addedWorktreePath]);
+      try {
+        assert.equal(sandbox.buildArgs("fs").includes(addedWorktreePath), true);
+      } finally {
+        runGit(mainWorktreePath, ["worktree", "remove", "--force", addedWorktreePath]);
+      }
+
+      assert.equal(sandbox.buildArgs("fs").includes(addedWorktreePath), false);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_PATHS} を含むエントリは mkdir の対象外",
+    withLinkedWorktree(async (mainWorktreePath, _linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_WORKTREE_PATHS}/created\n");
+      new Sandbox(mainWorktreePath, configPath);
+
+      assert.equal(existsSync(join(mainWorktreePath, "created")), false);
     }),
   );
 });
@@ -1298,21 +1391,33 @@ describe("§2.3 承認ノート", () => {
     const restore = stubSandboxRun(`Successfully wrote 10 bytes to ${filePath}`);
     try {
       const writeTool = captureRegisteredTools().get("write");
-      const first = await writeTool.execute("t", { path: filePath, content: "x" }, undefined, undefined, {
-        cwd: process.cwd(),
-        hasUI: true,
-        ui: { confirm: async () => false, select: async (_title, options) => options[1] },
-      });
+      const first = await writeTool.execute(
+        "t",
+        { path: filePath, content: "x" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { confirm: async () => false, select: async (_title, options) => options[1] },
+        },
+      );
       assert.deepEqual(resultTexts(first), [
         `Successfully wrote 10 bytes to ${filePath}`,
         `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
       ]);
-      const second = await writeTool.execute("t", { path: filePath, content: "x" }, undefined, undefined, {
-        cwd: process.cwd(),
-        hasUI: true,
-        // A dialog here would throw: the directory grant must suppress it, and no note is appended.
-        ui: { confirm: async () => false, select: async () => "No, deny (reason next)" },
-      });
+      const second = await writeTool.execute(
+        "t",
+        { path: filePath, content: "x" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          // A dialog here would throw: the directory grant must suppress it, and no note is appended.
+          ui: { confirm: async () => false, select: async () => "No, deny (reason next)" },
+        },
+      );
       assert.deepEqual(resultTexts(second), [`Successfully wrote 10 bytes to ${filePath}`]);
     } finally {
       restore();
@@ -1379,9 +1484,7 @@ describe("§2.3 承認ノート", () => {
   });
 
   it("bash の EROFS ではヒント文の後に承認ノートが最終行に来る", async () => {
-    const restore = stubSandboxRun(
-      "touch: cannot touch '/outside/x': Read-only file system",
-    );
+    const restore = stubSandboxRun("touch: cannot touch '/outside/x': Read-only file system");
     try {
       const result = await captureRegisteredTools()
         .get("bash")
@@ -2779,11 +2882,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
    */
   const stubCountingRun = (behavior: (callIndex: number) => Promise<unknown>) => {
     const sandboxPrototype = Sandbox.prototype as unknown as {
-      runSandboxProcess: (
-        command: string,
-        commandArgs: string[],
-        options: any,
-      ) => Promise<unknown>;
+      runSandboxProcess: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
     };
     const originalRun = sandboxPrototype.runSandboxProcess;
     let active = 0;
