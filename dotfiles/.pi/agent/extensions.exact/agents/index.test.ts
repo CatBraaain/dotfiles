@@ -2250,9 +2250,9 @@ describe("subagent の表示", () => {
       assert.deepEqual(sectionLines, [
         "[muted]┌─── Task ──────",
         "[muted]└───────────────",
-        "[muted]┌─── Actions ───（ツール利用がある場合のみ表示）",
+        "[muted]┌─── Actions ───",
         "[muted]└───────────────",
-        "[muted]┌─── Output ────（出力が確定したときに表示）",
+        "[muted]┌─── Output ────",
         "[muted]└───────────────",
       ]);
       assert.ok(lines.some((line) => line.includes("inspect files")));
