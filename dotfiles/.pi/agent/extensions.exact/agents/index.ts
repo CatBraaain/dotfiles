@@ -419,6 +419,17 @@ export function cleanupOldSubagentSessions(dir: string, now = Date.now()): numbe
   return removed;
 }
 
+// テストが拡張ロード時の fs 操作を差し替えられる出口。本番は node:fs と本ファイルの
+// 実装をそのまま使う。
+export const __fs: {
+  current: {
+    mkdirSync: typeof mkdirSync;
+    cleanupOldSubagentSessions: typeof cleanupOldSubagentSessions;
+  };
+} = {
+  current: { mkdirSync, cleanupOldSubagentSessions },
+};
+
 async function runChild(
   defaultCwd: string,
   task: string,
@@ -621,8 +632,8 @@ export default function agentsExtension(
   // 子セッションの保存先を用意し、古いものを掃除する
   try {
     const sessionDir = subagentSessionDir();
-    mkdirSync(sessionDir, { recursive: true });
-    cleanupOldSubagentSessions(sessionDir);
+    __fs.current.mkdirSync(sessionDir, { recursive: true });
+    __fs.current.cleanupOldSubagentSessions(sessionDir);
   } catch {
     // 保存先が用意できなくても subagent 実行は続ける
   }

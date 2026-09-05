@@ -16,6 +16,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import agentsExtension, {
   __abortTimer,
+  __fs,
   __resetRoutingState,
   __spawn,
   __spinnerTimers,
@@ -125,6 +126,17 @@ function captureAgentsExtension(
   let registeredTool: CapturedTool | undefined;
 
   const originalSpawn = __spawn.current;
+  const originalFs = __fs.current;
+  const fsCalls: Array<{ op: "mkdir" | "cleanup"; dir: string }> = [];
+  __fs.current = {
+    mkdirSync: ((dir: string) => {
+      fsCalls.push({ op: "mkdir", dir });
+    }) as typeof __fs.current.mkdirSync,
+    cleanupOldSubagentSessions: (dir: string) => {
+      fsCalls.push({ op: "cleanup", dir });
+      return 0;
+    },
+  };
   __spawn.current = ((command: string, args: string[], options: { cwd?: string }) => {
     const child = new FakeChild();
     spawnCalls.push({ command, args, cwd: options.cwd });
@@ -205,8 +217,10 @@ function captureAgentsExtension(
     registeredFlags,
     sentMessages,
     spawnCalls,
+    fsCalls,
     restore() {
       __spawn.current = originalSpawn;
+      __fs.current = originalFs;
       __resetRoutingState();
     },
     respondToChild(responder: (child: FakeChild) => void) {
@@ -2343,13 +2357,26 @@ describe("subagent の表示", () => {
   });
 });
 
-describe("sessionNameFor", () => {
-  it("prefixes agent name to the first line of the task", () => {
+describe("子セッションのセッション記録", () => {
+  it("拡張のロード時に子セッションの保存先を用意して古いセッションを掃除する", () => {
+    const extension = captureAgentsExtension();
+    try {
+      const sessionDir = subagentSessionDir();
+      assert.deepEqual(extension.fsCalls, [
+        { op: "mkdir", dir: sessionDir },
+        { op: "cleanup", dir: sessionDir },
+      ]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("表示名は agent 名と task 先頭行の先頭30文字で組み立てる", () => {
     const name = sessionNameFor("junior", "目的: バローのURL確定\n\n背景: JAN価格DB");
     assert.equal(name, "junior: 目的: バローのURL確定");
   });
 
-  it("truncates long first lines with an ellipsis", () => {
+  it("task の先頭行が31文字を超えるときは30文字で切り詰めて … を付ける", () => {
     const long = "あ".repeat(50);
     const name = sessionNameFor("junior", long);
     const expectedLength = Array.from("junior: ").length + 30 + 1;
@@ -2357,13 +2384,11 @@ describe("sessionNameFor", () => {
     assert.ok(name.endsWith("…"));
   });
 
-  it("falls back to the agent name for an empty task", () => {
+  it("task の先頭行が空のときは表示名を agent 名のみにする", () => {
     assert.equal(sessionNameFor("senior", ""), "senior");
   });
-});
 
-describe("childInvocationArgs", () => {
-  it("records sessions to the isolated subagent-sessions dir instead of --no-session", () => {
+  it("子セッションは --no-session ではなく隔離先の --session-dir へ保存する", () => {
     const args = childInvocationArgs("junior", "do the thing");
     assert.ok(!args.includes("--no-session"));
     const dirIndex = args.indexOf("--session-dir");
@@ -2373,10 +2398,8 @@ describe("childInvocationArgs", () => {
     assert.equal(args[nameIndex + 1], "junior: do the thing");
     assert.equal(args.at(-1), "Task: do the thing");
   });
-});
 
-describe("cleanupOldSubagentSessions", () => {
-  it("removes jsonl files older than 30 days and keeps the rest", () => {
+  it("掃除は30日超の jsonl を削除し、それ以外のファイルは残す", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-subagent-sessions-"));
     try {
       const oldFile = join(dir, "old.jsonl");
@@ -2400,12 +2423,12 @@ describe("cleanupOldSubagentSessions", () => {
     }
   });
 
-  it("returns 0 when the directory does not exist", () => {
+  it("保存先ディレクトリがないときは掃除せず 0 件の削除を返す", () => {
     const missing = join(tmpdir(), `pi-no-such-dir-${Date.now()}`);
     assert.equal(cleanupOldSubagentSessions(missing), 0);
   });
 
-  it("ignores directories named like session files", () => {
+  it("セッションファイルと同名のディレクトリは削除しない", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-subagent-sessions-"));
     try {
       const nested = join(dir, "nested.jsonl");
