@@ -6,8 +6,10 @@ import sessionSearchExtension, {
   filterSessions,
   getSession,
   listSessions,
+  resolveSessionDir,
   type SessionSource,
 } from "./index";
+import { subagentSessionDir } from "../agents/index.ts";
 import type { SessionEntry, SessionInfo } from "@earendil-works/pi-coding-agent";
 
 function session(overrides: Partial<SessionInfo>): SessionInfo {
@@ -38,10 +40,23 @@ function messageEntry(role: string, content: string, id: string): SessionEntry {
 function source(
   sessions: SessionInfo[],
   entriesByPath: Record<string, SessionEntry[]>,
-): SessionSource {
+): SessionSource & {
+  listAllCalls: Array<string | undefined>;
+  setExists: (value: boolean) => void;
+} {
+  const listAllCalls: Array<string | undefined> = [];
+  let directoryExists = true;
   return {
-    listAll: async () => sessions,
+    listAll: async (sessionDir?: string) => {
+      listAllCalls.push(sessionDir);
+      return sessions;
+    },
     open: (path) => ({ getEntries: () => entriesByPath[path] ?? [] }),
+    exists: () => directoryExists,
+    listAllCalls,
+    setExists: (value) => {
+      directoryExists = value;
+    },
   };
 }
 
@@ -465,5 +480,65 @@ describe("tool execution results", () => {
     assert.ok(resultText.includes("[user] harness message 49"));
     assert.ok(resultText.includes("[user] harness message 50"));
     assert.ok(!resultText.includes("[user] harness message 48"));
+  });
+});
+
+describe("session_dir", () => {
+  it("passes the resolved directory to listAll on session_list", async () => {
+    const testSource = source([recentSession], {});
+    await listSessions({ session_dir: "/custom/sessions" }, testSource);
+    assert.deepEqual(testSource.listAllCalls, ["/custom/sessions"]);
+  });
+
+  it("passes undefined to listAll when session_dir is omitted", async () => {
+    const testSource = source([recentSession], {});
+    await listSessions({}, testSource);
+    assert.deepEqual(testSource.listAllCalls, [undefined]);
+  });
+
+  it("expands a ~/ prefix with the home directory", () => {
+    const resolved = resolveSessionDir(
+      { session_dir: "~/subagent-sessions" },
+      { exists: () => true },
+      "/home/user",
+    );
+    assert.equal(resolved, "/home/user/subagent-sessions");
+  });
+
+  it("rejects a relative path", () => {
+    assert.throws(
+      () => resolveSessionDir({ session_dir: "sessions" }, { exists: () => true }),
+      /absolute path/,
+    );
+  });
+
+  it("rejects a directory that does not exist", () => {
+    assert.throws(
+      () => resolveSessionDir({ session_dir: "/custom/sessions" }, { exists: () => false }),
+      /does not exist/,
+    );
+  });
+
+  it("passes the same session_dir to listAll on session_get", async () => {
+    const testSource = source([recentSession], entriesByPath);
+    await getSession({ id: "recent", session_dir: "/custom/sessions" }, testSource);
+    assert.deepEqual(testSource.listAllCalls, ["/custom/sessions"]);
+  });
+
+  it("suggests session_dir when a session id is not found", async () => {
+    const testSource = source([], {});
+    await assert.rejects(() => getSession({ id: "missing" }, testSource), /session_dir/);
+  });
+
+  it("mentions the subagent session directory in the session_dir description", () => {
+    const tools = captureTools();
+    const listDescription = tools
+      .get("session_list")
+      .parameters.properties.session_dir.description;
+    const getDescription = tools
+      .get("session_get")
+      .parameters.properties.session_dir.description;
+    assert.ok(listDescription.includes(subagentSessionDir()));
+    assert.ok(getDescription.includes(subagentSessionDir()));
   });
 });

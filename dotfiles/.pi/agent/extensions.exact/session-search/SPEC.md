@@ -39,10 +39,23 @@ sequenceDiagram
 | since      | この日時以降（ISO date）               | 制限なし       |
 | until      | この日時以前（ISO date）               | 制限なし       |
 | limit      | 返すセッション数の上限                 | 20             |
+| session_dir | 検索対象のセッション保存ディレクトリ | 通常の保存先 |
 
 `query` と `cwd` の使い分け: `cwd=dotfiles` はプロジェクトで確実に絞る。`query=dotfiles` は本文含めて広く拾う。両方同時にも指定できる（AND）。
 
 `since` / `until` に不正な ISO date を指定した場合はエラーを返す。
+
+### 検索対象ディレクトリ（session_dir）
+
+`session_dir` でセッションの保存ディレクトリを切り替える。`pi --session-dir` フラグと同じ位置を指す。
+
+- 受け付ける値は絶対パス、または `~/` 始まり（ツール側でホームに展開）。相対パスと存在しないディレクトリはエラー
+- 省略時は通常の保存先（`~/.pi/agent/sessions/`）
+- subagent の子セッションは `~/.pi/agent/subagent-sessions/` に保存される（agents 拡張 SPEC の「子セッションのセッション記録」参照）。このディレクトリを指定すれば検索・展開できる
+
+`session_get` にも同じ `session_dir` があり、`session_list` で指定したのと同じ値を渡す。id が見つからないときのエラーはその旨のヒントを含む。
+
+パラメータの description に subagent の保存先を記載しており、エージェントはツール定義だけからこの場所を知れる。
 
 ### 検索対象（query がヒットする箇所）
 
@@ -104,6 +117,7 @@ sequenceDiagram
 | offset     | 開始メッセージ位置（1-based・全モードで適用） | 1          |
 | limit      | 取得メッセージ数上限（全モードで適用）  | 50         |
 | role       | user / assistant 絞り込み              | any        |
+| session_dir | 検索対象のセッション保存ディレクトリ（session_list と同じ値） | 通常の保存先 |
 
 `role` は offset・limit を掛ける前に適用する（user 発言だけ拾う、等で実質的にサイズを減らせる）。
 

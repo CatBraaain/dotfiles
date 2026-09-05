@@ -5,7 +5,11 @@ import {
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { Type, type Static } from "typebox";
+import { subagentSessionDir } from "../agents/index.ts";
 import { type ToolTheme } from "../shared/tool-format.ts";
 
 export const DEFAULT_SESSION_LIST_LIMIT = 20;
@@ -20,8 +24,9 @@ export type SessionMessage = {
 };
 
 export type SessionSource = {
-  readonly listAll: () => Promise<SessionInfo[]>;
+  readonly listAll: (sessionDir?: string) => Promise<SessionInfo[]>;
   readonly open: (path: string) => SessionReader;
+  readonly exists: (dir: string) => boolean;
 };
 
 export type SessionReader = {
@@ -29,9 +34,19 @@ export type SessionReader = {
 };
 
 const defaultSessionSource: SessionSource = {
-  listAll: () => SessionManager.listAll(),
+  listAll: (sessionDir?: string) =>
+    sessionDir === undefined
+      ? SessionManager.listAll()
+      : SessionManager.listAll(sessionDir),
   open: (path) => SessionManager.open(path),
+  exists: (dir) => existsSync(dir),
 };
+
+const sessionDirParameter = Type.Optional(
+  Type.String({
+    description: `Session directory to search, same as the pi --session-dir flag. Defaults to ~/.pi/agent/sessions/. Subagent child sessions are saved in ${subagentSessionDir()}/. Accepts an absolute path or a ~/ prefix.`,
+  }),
+);
 
 const sessionListParameters = Type.Object({
   query: Type.Optional(
@@ -47,6 +62,7 @@ const sessionListParameters = Type.Object({
   limit: Type.Optional(
     Type.Integer({ minimum: 1, description: "Maximum number of sessions to return (default: 20)" }),
   ),
+  session_dir: sessionDirParameter,
 });
 
 const sessionGetParameters = Type.Object({
@@ -61,6 +77,7 @@ const sessionGetParameters = Type.Object({
       description: "Restrict messages before applying offset and limit",
     }),
   ),
+  session_dir: sessionDirParameter,
 });
 
 function normalizeForSearch(text: string): string {
@@ -193,11 +210,34 @@ function formatSession(session: SessionInfo): string {
   ].join("\n");
 }
 
+export function expandTildePath(value: string, home: string): string {
+  if (value === "~") return home;
+  if (value.startsWith("~/")) return join(home, value.slice(2));
+  return value;
+}
+
+export function resolveSessionDir(
+  input: { readonly session_dir?: string },
+  source: Pick<SessionSource, "exists">,
+  home: string = homedir(),
+): string | undefined {
+  if (input.session_dir === undefined) return undefined;
+  const expanded = expandTildePath(input.session_dir, home);
+  if (!isAbsolute(expanded)) {
+    throw new Error(`session_dir must be an absolute path or start with ~/: ${input.session_dir}`);
+  }
+  if (!source.exists(expanded)) {
+    throw new Error(`session_dir does not exist: ${expanded}`);
+  }
+  return expanded;
+}
+
 export async function listSessions(
   input: SessionListInput,
   source: SessionSource = defaultSessionSource,
 ): Promise<SessionInfo[]> {
-  const sessions = await source.listAll();
+  const sessionDir = resolveSessionDir(input, source);
+  const sessions = await source.listAll(sessionDir);
   const filteredSessions = filterSessions(sessions, input);
   return filteredSessions;
 }
@@ -256,9 +296,14 @@ export async function getSession(
   offset: number;
   isQuery: boolean;
 }> {
-  const sessions = await source.listAll();
+  const sessionDir = resolveSessionDir(input, source);
+  const sessions = await source.listAll(sessionDir);
   const session = sessions.find((candidate) => candidate.id === input.id);
-  if (!session) throw new Error(`Session not found: ${input.id}`);
+  if (!session) {
+    throw new Error(
+      `Session not found: ${input.id}. If session_list was called with session_dir, pass the same session_dir to session_get.`,
+    );
+  }
   const allMessages = extractMessages(source.open(session.path).getEntries());
   const selection = selectMessages(allMessages, input);
   return {
