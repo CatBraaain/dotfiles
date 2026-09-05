@@ -108,7 +108,7 @@ export default function cdExtension(
       "Switch this session's working directory to the given path. Queues /cd as a follow-up command.",
     promptSnippet: "Switch this session's working directory",
     promptGuidelines: [
-      "bash `cd` only changes that shell's directory; the session cwd stays the same. Use the cd tool to move the session to another directory (a git worktree, another repository, etc.). Before starting write-heavy work, follow the git skill's worktree workflow: create a worktree and move the session there with cd.",
+      "bash `cd` only changes that shell's directory; the session cwd stays the same. Use the cd tool to move the session to another directory (a git worktree, another repository, etc.). Before starting any edit work, follow the git worktree strategy rule: create a worktree and move the session there with cd.",
     ],
     parameters: Type.Object({
       path: Type.String({
