@@ -12,6 +12,7 @@ import webSearchExtension, {
   defaultFetchBackends,
   detectChallengePage,
   fetchRedditMarkdown,
+  fetchStackOverflowMarkdown,
   openserpBaseUrl,
   openserpParse,
   defaultSearchBackends,
@@ -23,11 +24,14 @@ import webSearchExtension, {
   parseRedditEmbed,
   parseRedditOEmbed,
   parseRedditPostUrl,
+  parseStackOverflowAtom,
+  parseStackOverflowQuestionUrl,
   REDDIT_TIMEOUT_MS,
   RENDER_TIMEOUT_MS,
   searchOne,
   SERVER_WAIT_TIMEOUT_MS,
   serpUrl,
+  STACKOVERFLOW_TIMEOUT_MS,
   titleFromMarkdown,
   type Attempt,
   type BackendEntry,
@@ -526,12 +530,13 @@ describe("SERP URL 構築", () => {
 });
 
 describe("段階別タイムアウト", () => {
-  it("サーバー起動待ち・パース・変換・Reddit は各15秒、描画は30秒", () => {
+  it("サーバー起動待ち・パース・変換・Reddit・StackOverflow は各15秒、描画は30秒", () => {
     assert.equal(SERVER_WAIT_TIMEOUT_MS, 15_000);
     assert.equal(RENDER_TIMEOUT_MS, 30_000);
     assert.equal(PARSE_TIMEOUT_MS, 15_000);
     assert.equal(CONVERT_TIMEOUT_MS, 15_000);
     assert.equal(REDDIT_TIMEOUT_MS, 15_000);
+    assert.equal(STACKOVERFLOW_TIMEOUT_MS, 15_000);
   });
 });
 
@@ -1596,8 +1601,11 @@ describe("チャレンジページ検出", () => {
       detectChallengePage("<html><head><title>Example Domain</title></head></html>"),
       false,
     );
-    assert.equal(detectChallengePage('<p>Enable JavaScript and cookies to continue</p>'), false);
-    assert.equal(detectChallengePage("<html><head><title>Just a moment</title></head></html>"), false);
+    assert.equal(detectChallengePage("<p>Enable JavaScript and cookies to continue</p>"), false);
+    assert.equal(
+      detectChallengePage("<html><head><title>Just a moment</title></head></html>"),
+      false,
+    );
   });
 
   it("camofoxFetch はチャレンジページの描画結果を challenge detected で失敗扱いにする", async () => {
@@ -1612,7 +1620,7 @@ describe("チャレンジページ検出", () => {
           pattern: /^\/tabs\/TAB1\/evaluate$/,
           body: {
             ok: true,
-            result: '<html><head><title>Just a moment...</title></head></html>',
+            result: "<html><head><title>Just a moment...</title></head></html>",
           },
         },
         { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
@@ -1632,5 +1640,266 @@ describe("チャレンジページ検出", () => {
       /challenge detected/,
     );
     assert.equal(toMarkdownCalls, 0);
+  });
+});
+
+describe("StackOverflow バックエンド", () => {
+  const stackOverflowQuestionUrl =
+    "https://stackoverflow.com/questions/231767/what-does-the-yield-keyword-do-in-python";
+
+  type SoRoute = { match: RegExp; status?: number; body: unknown };
+
+  function soRouteFetcher(routes: SoRoute[], requests: string[] = []): typeof fetch {
+    return (async (input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      const route = routes.find((route) => route.match.test(url));
+      if (!route) throw new Error(`unexpected request: ${url}`);
+      const status = route.status ?? 200;
+      return {
+        ok: status < 400,
+        status,
+        statusText: "OK",
+        json: async () => route.body,
+        text: async () =>
+          typeof route.body === "string" ? route.body : JSON.stringify(route.body),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+  }
+
+  const apiQuestionUrl =
+    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\?site=stackoverflow&filter=withbody$/;
+  const apiAnswersPage1Url =
+    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\/answers\?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=1$/;
+  const apiAnswersPage2Url =
+    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\/answers\?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=2$/;
+  const apiAnswersAnyPageUrl =
+    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\/answers\?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=\d+$/;
+  const feedUrl = /^https:\/\/stackoverflow\.com\/feeds\/question\/231767$/;
+
+  const apiQuestion = {
+    title: "What does the &quot;yield&quot; keyword do in Python?",
+    body: "<p>What does the <code>yield</code> keyword do?</p>",
+    score: 14000,
+    answer_count: 2,
+    tags: ["python", "generator"],
+    owner: { display_name: "Alex" },
+  };
+  const apiAnswerItems = [
+    {
+      body: "<p><strong>Iterables</strong></p>",
+      score: 18316,
+      is_accepted: true,
+      owner: { display_name: "Bite code" },
+    },
+    { body: "<p>Second answer</p>", score: 100, owner: { display_name: "Other" } },
+  ];
+  const feedXml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>https://stackoverflow.com/q/231767</id>
+    <title>What does the yield keyword do in Python?</title>
+    <link rel="alternate" href="https://stackoverflow.com/questions/231767/" />
+    <author><name>Alex</name></author>
+    <summary type="html">&lt;p&gt;What does the yield keyword do?&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <id>https://stackoverflow.com/a/231855</id>
+    <title>Answers to What does the yield keyword do in Python?</title>
+    <author><name>Bite code</name></author>
+    <summary type="html">&lt;p&gt;&lt;strong&gt;Iterables&lt;/strong&gt;&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <id>https://stackoverflow.com/a/999999</id>
+    <title>Answers to What does the yield keyword do in Python?</title>
+    <author><name>Other</name></author>
+    <summary type="html">&lt;p&gt;Second answer&lt;/p&gt;</summary>
+  </entry>
+</feed>`;
+
+  it("質問パーマリンク（slug・クエリ・www 付き）を解析する", () => {
+    const parsed = parseStackOverflowQuestionUrl(stackOverflowQuestionUrl);
+    assert.equal(parsed?.questionId, "231767");
+    assert.equal(parsed?.permalink, "https://stackoverflow.com/questions/231767");
+    assert.equal(parsed?.feedUrl, "https://stackoverflow.com/feeds/question/231767");
+    assert.equal(
+      parseStackOverflowQuestionUrl("https://stackoverflow.com/questions/231767")?.questionId,
+      "231767",
+    );
+    assert.equal(
+      parseStackOverflowQuestionUrl(
+        "https://www.stackoverflow.com/questions/231767/yield?noredirect=1#tab-top",
+      )?.questionId,
+      "231767",
+    );
+  });
+
+  it("質問パーマリンク以外は対象外とする", () => {
+    assert.equal(parseStackOverflowQuestionUrl("https://stackoverflow.com/tags/python"), undefined);
+    assert.equal(parseStackOverflowQuestionUrl("https://stackoverflow.com/users/1/"), undefined);
+    assert.equal(
+      parseStackOverflowQuestionUrl("https://ja.stackoverflow.com/questions/1/x"),
+      undefined,
+    );
+    assert.equal(parseStackOverflowQuestionUrl("https://serverfault.com/questions/1/x"), undefined);
+    assert.equal(
+      parseStackOverflowQuestionUrl("https://stackoverflow.com/questions/abc/x"),
+      undefined,
+    );
+  });
+
+  it("SE API で質問と回答を取得して Markdown 化する", async () => {
+    const requests: string[] = [];
+    const fetcher = soRouteFetcher(
+      [
+        { match: apiQuestionUrl, body: { items: [apiQuestion] } },
+        { match: apiAnswersPage1Url, body: { items: apiAnswerItems, has_more: false } },
+      ],
+      requests,
+    );
+
+    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
+
+    assert.match(markdown, /^# What does the "yield" keyword do in Python\?$/m);
+    assert.match(markdown, /^- Author: Alex$/m);
+    assert.match(markdown, /^- Score: 14000$/m);
+    assert.match(markdown, /^- Answers: 2 retrieved \/ 2 total$/m);
+    assert.match(markdown, /^- Tags: python, generator$/m);
+    assert.match(markdown, /^## Question$/m);
+    assert.match(markdown, /^What does the `yield` keyword do\?$/m);
+    assert.match(markdown, /^### 1\. Bite code \(accepted, score 18316\)$/m);
+    assert.match(markdown, /^\*\*Iterables\*\*$/m);
+    assert.match(markdown, /^### 2\. Other \(score 100\)$/m);
+    assert.equal(requests.length, 2);
+  });
+
+  it("has_more が true の間は回答ページを進める", async () => {
+    const requests: string[] = [];
+    const fetcher = soRouteFetcher(
+      [
+        { match: apiQuestionUrl, body: { items: [apiQuestion] } },
+        { match: apiAnswersPage1Url, body: { items: apiAnswerItems, has_more: true } },
+        {
+          match: apiAnswersPage2Url,
+          body: {
+            items: [{ body: "<p>page2</p>", score: 1, owner: { display_name: "Third" } }],
+            has_more: false,
+          },
+        },
+      ],
+      requests,
+    );
+
+    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
+
+    assert.match(markdown, /3 retrieved/);
+    assert.match(markdown, /^### 3\. Third \(score 1\)$/m);
+    assert.equal(requests.filter((url) => url.includes("/answers?")).length, 2);
+  });
+
+  it("backoff を返されたときはその秒数待ってから次のリクエストを送る", async () => {
+    const requests: string[] = [];
+    const fetcher = soRouteFetcher(
+      [
+        { match: apiQuestionUrl, body: { items: [apiQuestion], backoff: 1 } },
+        { match: apiAnswersPage1Url, body: { items: apiAnswerItems, has_more: false } },
+      ],
+      requests,
+    );
+
+    const startedAt = Date.now();
+    await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.ok(elapsedMs >= 950, `expected >= 950ms, got ${elapsedMs}ms`);
+    assert.equal(requests.length, 2);
+  });
+
+  it("質問フィードの先頭 entry を質問、以降を回答として解析する", () => {
+    const entries = parseStackOverflowAtom(feedXml);
+
+    assert.equal(entries.length, 3);
+    assert.equal(entries[0]?.title, "What does the yield keyword do in Python?");
+    assert.equal(entries[0]?.author, "Alex");
+    assert.equal(entries[0]?.link, "https://stackoverflow.com/questions/231767/");
+    assert.match(entries[0]?.bodyMarkdown ?? "", /yield/);
+    assert.equal(entries[1]?.author, "Bite code");
+    assert.match(entries[1]?.bodyMarkdown ?? "", /\*\*Iterables\*\*/);
+  });
+
+  it("entry のないフィードは空配列を返す", () => {
+    assert.deepEqual(
+      parseStackOverflowAtom('<feed xmlns="http://www.w3.org/2005/Atom"></feed>'),
+      [],
+    );
+  });
+
+  it("回答は投票順で最大500件まででページングを打ち切る", async () => {
+    const requests: string[] = [];
+    const hundredItems = Array.from({ length: 100 }, (_, index) => ({
+      body: `<p>answer ${index}</p>`,
+      score: index,
+      owner: { display_name: `user${index}` },
+    }));
+    const fetcher = soRouteFetcher(
+      [
+        { match: apiQuestionUrl, body: { items: [apiQuestion] } },
+        { match: apiAnswersAnyPageUrl, body: { items: hundredItems, has_more: true } },
+      ],
+      requests,
+    );
+
+    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
+
+    assert.match(markdown, /500 retrieved/);
+    // 500件に達したら page=6 を要求しない（要求すれば requests が 6 になり fail する）
+    assert.equal(requests.filter((url) => url.includes("/answers?")).length, 5);
+  });
+
+  it("SE API が失敗したときは質問フィードへフォールバックする", async () => {
+    const requests: string[] = [];
+    const fetcher = soRouteFetcher(
+      [
+        {
+          match: apiQuestionUrl,
+          status: 429,
+          body: { error_id: 502, error_name: "throttle_violation" },
+        },
+        { match: feedUrl, body: feedXml },
+      ],
+      requests,
+    );
+
+    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
+
+    assert.match(markdown, /^# What does the yield keyword do in Python\?$/m);
+    assert.match(markdown, /^- Author: Alex$/m);
+    assert.match(markdown, /^- Permalink: https:\/\/stackoverflow\.com\/questions\/231767$/m);
+    assert.match(markdown, /What does the yield keyword do\?/);
+    assert.doesNotMatch(markdown, /^- (Score|Answers|Tags): /m);
+    assert.match(markdown, /^Note: score, accepted and vote order are unavailable/m);
+    assert.match(markdown, /^### 1\. Bite code$/m);
+    assert.match(markdown, /^### 2\. Other$/m);
+    assert.ok(!requests.some((url) => url.includes("/answers?")));
+  });
+
+  it("SE API と質問フィードの両方が失敗したら例外を出す", async () => {
+    const fetcher = soRouteFetcher([
+      { match: apiQuestionUrl, status: 429, body: { error_id: 502 } },
+      { match: feedUrl, status: 503, body: "unavailable" },
+    ]);
+
+    await assert.rejects(
+      fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher),
+      /Unable to fetch StackOverflow question 231767/,
+    );
+  });
+
+  it("質問パーマリンクのデフォルトバックエンドは StackOverflow のみ", () => {
+    const backends = defaultFetchBackends(stackOverflowQuestionUrl);
+    assert.deepEqual(
+      backends.map(([name]) => name),
+      ["StackOverflow"],
+    );
   });
 });

@@ -836,6 +836,255 @@ export async function fetchRedditMarkdown(
   return renderRedditMarkdown(url, feed, embed, oembed);
 }
 
+// --- StackOverflow backend: SE API -> question feed (SPEC: §StackOverflow バックエンド) ---
+
+const SE_API_BASE_URL = "https://api.stackexchange.com/2.3";
+export const STACKOVERFLOW_TIMEOUT_MS = 15_000;
+export const STACKOVERFLOW_MAX_ANSWERS = 500;
+
+export interface StackOverflowQuestionUrl {
+  questionId: string;
+  permalink: string;
+  feedUrl: string;
+}
+
+export function parseStackOverflowQuestionUrl(
+  rawUrl: string,
+): StackOverflowQuestionUrl | undefined {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return undefined;
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== "stackoverflow.com" && hostname !== "www.stackoverflow.com") return undefined;
+  const questionId = /^\/questions\/(\d+)(?:\/[^/]+)?\/?$/.exec(url.pathname)?.[1];
+  if (!questionId) return undefined;
+  return {
+    questionId,
+    permalink: `https://stackoverflow.com/questions/${questionId}`,
+    feedUrl: `https://stackoverflow.com/feeds/question/${questionId}`,
+  };
+}
+
+interface SeApiResponse {
+  items?: {
+    title?: string;
+    body?: string;
+    score?: number;
+    answer_count?: number;
+    tags?: string[];
+    is_accepted?: boolean;
+    owner?: { display_name?: string };
+  }[];
+  has_more?: boolean;
+  backoff?: number;
+}
+
+export interface StackOverflowQuestion {
+  title: string;
+  author?: string;
+  score?: number;
+  answerCount?: number;
+  tags?: string[];
+  bodyMarkdown: string;
+}
+
+export interface StackOverflowAnswer {
+  author?: string;
+  score?: number;
+  accepted: boolean;
+  bodyMarkdown: string;
+}
+
+export interface StackOverflowFeedEntry {
+  title: string;
+  author?: string;
+  bodyMarkdown: string;
+  link: string;
+}
+
+async function fetchStackExchangeApi(
+  path: string,
+  signal: AbortSignal | undefined,
+  fetcher: typeof fetch,
+): Promise<SeApiResponse> {
+  const response = await fetcher(`${SE_API_BASE_URL}${path}`, {
+    signal: AbortSignal.any([
+      signal ?? new AbortController().signal,
+      AbortSignal.timeout(STACKOVERFLOW_TIMEOUT_MS),
+    ]),
+  });
+  const json = (await response.json().catch(() => undefined)) as SeApiResponse | undefined;
+  if (!response.ok || json === undefined) {
+    throw new Error(`SE API ${response.status} ${response.statusText}`);
+  }
+  return json;
+}
+
+async function fetchStackOverflowFromApi(
+  url: StackOverflowQuestionUrl,
+  signal: AbortSignal | undefined,
+  fetcher: typeof fetch,
+): Promise<{ question: StackOverflowQuestion; answers: StackOverflowAnswer[] }> {
+  // SPEC: レスポンスが backoff を含むときは、その秒数待ってから次のリクエストを送る
+  const request = async (path: string): Promise<SeApiResponse> => {
+    const response = await fetchStackExchangeApi(path, signal, fetcher);
+    if (typeof response.backoff === "number" && response.backoff > 0) {
+      await delay(response.backoff * 1000, signal ?? new AbortController().signal);
+    }
+    return response;
+  };
+
+  const questionItem = (
+    await request(`/questions/${url.questionId}?site=stackoverflow&filter=withbody`)
+  ).items?.[0];
+  if (!questionItem?.body) {
+    throw new Error(`SE API returned no question ${url.questionId}`);
+  }
+
+  const answers: StackOverflowAnswer[] = [];
+  // SPEC: has_more が true の間はページを進め、投票順で最大500件まで取得する
+  for (let page = 1; answers.length < STACKOVERFLOW_MAX_ANSWERS; page++) {
+    const answerResponse = await request(
+      `/questions/${url.questionId}/answers?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=${page}`,
+    );
+    for (const item of answerResponse.items ?? []) {
+      answers.push({
+        author: item.owner?.display_name,
+        score: typeof item.score === "number" ? item.score : undefined,
+        accepted: item.is_accepted === true,
+        bodyMarkdown: htmlFragmentToMarkdown(item.body ?? ""),
+      });
+    }
+    if (!answerResponse.has_more) break;
+  }
+
+  return {
+    question: {
+      // SE API の title は HTML エスケープされて返るためデコードする
+      title: unescapeEntities(questionItem.title ?? `StackOverflow question ${url.questionId}`),
+      author: questionItem.owner?.display_name,
+      score: typeof questionItem.score === "number" ? questionItem.score : undefined,
+      answerCount:
+        typeof questionItem.answer_count === "number" ? questionItem.answer_count : undefined,
+      tags: questionItem.tags,
+      bodyMarkdown: htmlFragmentToMarkdown(questionItem.body),
+    },
+    answers: answers.slice(0, STACKOVERFLOW_MAX_ANSWERS),
+  };
+}
+
+export function parseStackOverflowAtom(xml: string): StackOverflowFeedEntry[] {
+  const entries: StackOverflowFeedEntry[] = [];
+  for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const entryXml = match[1] ?? "";
+    const body = atomText(entryXml, "summary") ?? atomText(entryXml, "content");
+    if (!body) continue;
+    entries.push({
+      title: unescapeEntities(atomText(entryXml, "title") ?? "Untitled"),
+      author: atomText(entryXml, "name") || undefined,
+      bodyMarkdown: htmlFragmentToMarkdown(unescapeEntities(body)),
+      link: /<link\b[^>]*href="([^"]*)"/.exec(entryXml)?.[1] ?? "",
+    });
+  }
+  return entries;
+}
+
+function answerHeading(index: number, answer: StackOverflowAnswer): string {
+  const parts: string[] = [];
+  if (answer.accepted) parts.push("accepted");
+  if (typeof answer.score === "number") parts.push(`score ${answer.score}`);
+  return `### ${index + 1}. ${answer.author ?? "unknown"}${parts.length ? ` (${parts.join(", ")})` : ""}`;
+}
+
+function renderStackOverflowMarkdown(
+  url: StackOverflowQuestionUrl,
+  apiResult: { question: StackOverflowQuestion; answers: StackOverflowAnswer[] } | undefined,
+  feed: StackOverflowFeedEntry[] | undefined,
+): string {
+  const question = apiResult?.question;
+  const feedPost = feed?.[0];
+  const title = question?.title ?? feedPost?.title ?? `StackOverflow question ${url.questionId}`;
+  const answers: StackOverflowAnswer[] =
+    apiResult?.answers ??
+    (feed ?? []).slice(1).map((entry) => ({
+      author: entry.author,
+      score: undefined,
+      accepted: false,
+      bodyMarkdown: entry.bodyMarkdown,
+    }));
+
+  const lines = [
+    `# ${title}`,
+    "",
+    `- Author: ${question?.author ?? feedPost?.author ?? "unknown"}`,
+    `- Permalink: ${url.permalink}`,
+  ];
+  if (question) {
+    lines.push(`- Score: ${question.score ?? "unknown"}`);
+    lines.push(
+      `- Answers: ${answers.length} retrieved${typeof question.answerCount === "number" ? ` / ${question.answerCount} total` : ""}`,
+    );
+    if (question.tags?.length) lines.push(`- Tags: ${question.tags.join(", ")}`);
+  } else {
+    // SPEC: §StackOverflow バックエンドの出力表。フィード利用時の注記は3要素に絞る。
+    lines.push("", "Note: score, accepted and vote order are unavailable from the question feed.");
+  }
+  lines.push(
+    "",
+    "## Question",
+    "",
+    question?.bodyMarkdown || feedPost?.bodyMarkdown || "(question body unavailable)",
+  );
+  lines.push("", `## Answers (${answers.length} retrieved)`, "");
+  for (const [index, answer] of answers.entries()) {
+    lines.push(answerHeading(index, answer), "", answer.bodyMarkdown || "(no answer body)", "");
+  }
+  return lines.join("\n").trim();
+}
+
+export async function fetchStackOverflowMarkdown(
+  rawUrl: string,
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  const url = parseStackOverflowQuestionUrl(rawUrl);
+  if (!url) throw new Error(`Not a supported StackOverflow question URL: ${rawUrl}`);
+
+  let apiResult: Awaited<ReturnType<typeof fetchStackOverflowFromApi>> | undefined;
+  try {
+    apiResult = await fetchStackOverflowFromApi(url, signal, fetcher);
+  } catch {
+    apiResult = undefined;
+  }
+
+  let feed: StackOverflowFeedEntry[] | undefined;
+  if (!apiResult) {
+    try {
+      const response = await fetcher(url.feedUrl, {
+        signal: AbortSignal.any([
+          signal ?? new AbortController().signal,
+          AbortSignal.timeout(STACKOVERFLOW_TIMEOUT_MS),
+        ]),
+        headers: { Accept: "application/atom+xml, application/xml, */*" },
+      });
+      if (response.ok) {
+        const entries = parseStackOverflowAtom(await response.text());
+        if (entries.length > 0) feed = entries;
+      }
+    } catch {
+      feed = undefined;
+    }
+  }
+
+  if (!apiResult && !feed) {
+    throw new Error(`Unable to fetch StackOverflow question ${url.questionId}`);
+  }
+  return renderStackOverflowMarkdown(url, apiResult, feed);
+}
+
 // SPEC: §web_fetch のバックエンド。Reddit 投稿パーマリンクは Reddit のみ、
 // その他は camofox+trafilatura のみ。
 export function defaultFetchBackends(
@@ -845,6 +1094,10 @@ export function defaultFetchBackends(
 ): BackendEntry[] {
   if (parseRedditPostUrl(url)) {
     return [["Reddit", () => fetchRedditMarkdown(url, signal)]];
+  }
+  // SPEC: §web_fetch のバックエンド。StackOverflow 質問パーマリンクは StackOverflow のみ。
+  if (parseStackOverflowQuestionUrl(url)) {
+    return [["StackOverflow", () => fetchStackOverflowMarkdown(url, signal)]];
   }
   return [["camofox+trafilatura", () => camofoxFetch(url, signal, deps)]];
 }

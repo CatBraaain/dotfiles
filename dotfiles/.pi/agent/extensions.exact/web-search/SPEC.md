@@ -71,14 +71,15 @@ openserp の起動アドレスとポートは接続先（`OPENSERP_BASE_URL`）�
 
 ### web_fetch のバックエンド
 
-バックエンドの構成は URL が Reddit 投稿パーマリンク（§Reddit バックエンド）かどうかで変わる。Reddit 投稿パーマリンクでは Reddit バックエンドのみを試行し、汎用バックエンドへのフォールバックは行わない。
+バックエンドの構成は URL が Reddit 投稿パーマリンク（§Reddit バックエンド）か StackOverflow 質問パーマリンク（§StackOverflow バックエンド）かどうかで変わる。いずれの専用 URL でもその専用バックエンドのみを試行し、汎用バックエンドへのフォールバックは行わない。
 
 | 条件（URL）             | バックエンド順序         |
 | ----------------------- | ------------------------ |
 | Reddit 投稿パーマリンク | Reddit のみ              |
+| StackOverflow 質問パーマリンク | StackOverflow のみ |
 | その他                  | camofox+trafilatura のみ |
 
-Reddit バックエンドが失敗した場合も通常どおりバックエンド失敗として扱い、web_fetch 全体が例外となる。
+Reddit・StackOverflow バックエンドが失敗した場合も通常どおりバックエンド失敗として扱い、web_fetch 全体が例外となる。
 
 ## タイムアウト
 
@@ -91,6 +92,7 @@ Reddit バックエンドが失敗した場合も通常どおりバックエン�
 | openserp へのパース要求        | `POST /<engine>/parse` の往復                 | 15秒         |
 | trafilatura による変換         | HTML → Markdown 変換                          | 15秒         |
 | Reddit の各取得                | フィード・埋め込み・oEmbed の1要求ごと        | 15秒         |
+| StackOverflow の各取得         | SE API・質問フィードの1リクエストごと        | 15秒         |
 
 ## camofox+openserp バックエンド（web_search）
 
@@ -173,6 +175,38 @@ Reddit 投稿パーマリンクを、Reddit 公式の匿名アクセス用エン
 非公開・削除済み・年齢制限の投稿は取得できず、通常のバックエンド失敗として扱う。
 
 結果行のタイトルは投稿タイトルを使い、Reddit ページシェルの汎用タイトル（例: `"Reddit - Dive into anything"`）は使わない。
+
+## StackOverflow バックエンド
+
+StackOverflow の質問ページを、匿名でアクセスできる StackExchange のエンドポイントから取得する。質問ページ HTML は Cloudflare のチャレンジで取得できないため、この専用経路のみを使う。
+
+対象 URL は `https://[www.]stackoverflow.com/questions/<質問ID>/[<slug>]` 形式とする（末尾スラッシュ・クエリ・フラグメントは任意）。それ以外の StackOverflow URL（一覧・タグ・ユーザーページ等）や他の Stack Exchange サイトは対象外とし、StackOverflow バックエンドを構成しない。
+
+### 取得経路
+
+次の順に試行し、成功した時点で以降を省略する。
+
+1. StackExchange API
+   - `GET https://api.stackexchange.com/2.3/questions/<質問ID>?site=stackoverflow&filter=withbody` で質問（タイトル・本文・スコア・回答数・タグ・質問者）を取得する
+   - `GET https://api.stackexchange.com/2.3/questions/<質問ID>/answers?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=<n>` で回答を取得する。`has_more` が true の間はページを進め、投票順で最大500件まで取得する
+   - レスポンスが `backoff` を含むときは、その秒数待ってから次のリクエストを送る
+   - quota 超過・エラー・質問が見つからない場合はこの経路の失敗とし、質問フィードへフォールバックする
+2. 質問フィード `https://stackoverflow.com/feeds/question/<質問ID>`（Atom）。先頭 entry を質問、以降の entry を回答として扱う
+
+両方失敗した場合は StackOverflow バックエンドの失敗とし、web_fetch 全体が例外となる。
+
+### 出力（Markdown）
+
+| 要素                     | 内容                                                                     |
+| ------------------------ | ------------------------------------------------------------------------ |
+| タイトル・質問者・パーマリンク | 取得した質問のもの                                               |
+| スコア・回答数・タグ       | API 成功時のみ。フィード利用時は省略する                                 |
+| 質問本文                 | 取得した HTML を Markdown 化したもの                                     |
+| 回答                     | `### N. <回答者>` 形式で列挙。API では投票順、フィードでは掲載順         |
+| 注記                     | フィード利用時にスコア・accepted・投票順が取れないこと                   |
+
+API の回答は `### N. <回答者> (score <n>)`、accepted 回答は `(accepted)` を追加して表示する。
+結果行のタイトルは質問タイトルを使う。
 
 ## クールダウン
 
