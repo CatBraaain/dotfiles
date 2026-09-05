@@ -3,7 +3,7 @@
 main worktree ではファイルを編集しない。編集を伴う作業は、1ファイルの軽微な修正も含め、常にサブワークツリーとブランチを作成して着手する。
 
 - 着手時: 「作成と移行」の手順で worktree を作成し、セッションを移す。
-- まとまった作業単位の完了時: 「finish・discard・close」の finish を、オーナーの指示を待たずに実行する。
+- まとまった作業単位の完了時: 「finish・discard・close」の finish を、owner の承認を得てから実行する。
 - 適用しない: 読み取りのみの調査・検索・検証、コミット・マージなど worktree を必要としない操作。
 
 ## 作成と移行
@@ -35,11 +35,11 @@ worktree は自動掃除されないため、エージェントが作業完了�
 
 | 言葉 | 意味 |
 | --- | --- |
-| finish | 成果を統合先へ取り込んで閉じる |
+| finish | 成果を統合先へ取り込んで閉じる。owner の承認を得てから実行する |
 | discard | 変更と branch を捨てて閉じる。owner の承認を得てから実行する |
 | close | worktree と branch を削除する。finish・discard の最終段として実行する |
 
-finish:
+finish — 統合の判断が入るため、マージ前に owner の承認を得る。承認後:
 
 1. worktree 内の変更を確認し、あれば git skill「コミットの作成と分割」に従って commit する。手順3の backup branch は、close で worktree ごと削除するため作らない。
 2. 「統合」に従って統合先へマージする。worktree セッションのまま `git -C` で実行してよい。
