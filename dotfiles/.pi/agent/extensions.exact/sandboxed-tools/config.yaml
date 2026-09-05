@@ -13,6 +13,7 @@ write:
   allow:
     - .
     - ${GIT_WORKTREE_PATHS}
+    - ${GIT_WORKTREE_CONTAINER}
     - ~/.pi
     - ~/.config
     - /tmp

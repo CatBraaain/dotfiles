@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import sandboxedToolsExtension, {
@@ -810,6 +810,74 @@ describe("§3.a パス文字列の解決", () => {
       new Sandbox(mainWorktreePath, configPath);
 
       assert.equal(existsSync(join(mainWorktreePath, "created")), false);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_CONTAINER} は linked worktree を cwd にしても main worktree の兄弟へ展開される",
+    withLinkedWorktree((_mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const section = expandPathSection({ allow: ["${GIT_WORKTREE_CONTAINER}"] }, linkedWorktreePath);
+
+      assert.deepEqual(section.allow, [join(workspacePath, "main-worktrees")]);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_CONTAINER} は Git repository 外ではパスを許可しない",
+    withTempDirectory((directory) => {
+      const section = expandPathSection({ allow: ["${GIT_WORKTREE_CONTAINER}"] }, directory);
+
+      assert.deepEqual(section.allow, []);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_CONTAINER} は他リポジトリの worktree 置き場を許可しない",
+    withLinkedWorktree(async (mainWorktreePath, _linkedWorktreePath, workspacePath) => {
+      const otherRepoPath = join(workspacePath, "other");
+      runGit(workspacePath, ["init", otherRepoPath]);
+      try {
+        const section = expandPathSection({ allow: ["${GIT_WORKTREE_CONTAINER}"] }, mainWorktreePath);
+
+        assert.deepEqual(section.allow, [join(workspacePath, "main-worktrees")]);
+      } finally {
+        rmSync(otherRepoPath, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_CONTAINER} を含むエントリは起動時に作成する",
+    withLinkedWorktree((mainWorktreePath, _linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_WORKTREE_CONTAINER}\n");
+      new Sandbox(mainWorktreePath, configPath);
+
+      assert.equal(existsSync(join(workspacePath, "main-worktrees")), true);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_CONTAINER} を含むエントリは Git repository 外では作成しない",
+    withTempDirectory((directory) => {
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_WORKTREE_CONTAINER}\n");
+      new Sandbox(directory, configPath);
+
+      assert.deepEqual(readdirSync(directory), ["config.yaml"]);
+    }),
+  );
+
+  it(
+    "${GIT_WORKTREE_CONTAINER} は worktree の作成先への書き込みを許可し bind に含める",
+    withLinkedWorktree(async (mainWorktreePath, _linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(configPath, "write:\n  allow:\n    - ${GIT_WORKTREE_CONTAINER}\n");
+      const sandbox = new Sandbox(mainWorktreePath, configPath);
+      const container = join(workspacePath, "main-worktrees");
+
+      await sandbox.authorizePath("write", join(container, "topic"), { cwd: mainWorktreePath });
+      assert.equal(sandbox.buildArgs("fs").includes(container), true);
     }),
   );
 });
