@@ -44,8 +44,11 @@ export const PACKAGE_LISTS = {
   brewFormulae: [
     // system packages
     "bubblewrap",
+    "coreutils",
     "ffmpeg",
+    "gcc",
     "git",
+    "make",
     "powershell",
     "socat",
     "tmux",
@@ -85,6 +88,7 @@ export const PACKAGE_LISTS = {
     "mise",
     "nixfmt",
     "pandoc",
+    "pnpm",
     "ripgrep",
     "tokei",
     "tree-sitter-cli",
