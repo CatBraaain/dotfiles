@@ -35,9 +35,7 @@ export type SessionReader = {
 
 const defaultSessionSource: SessionSource = {
   listAll: (sessionDir?: string) =>
-    sessionDir === undefined
-      ? SessionManager.listAll()
-      : SessionManager.listAll(sessionDir),
+    sessionDir === undefined ? SessionManager.listAll() : SessionManager.listAll(sessionDir),
   open: (path) => SessionManager.open(path),
   exists: (dir) => existsSync(dir),
 };
@@ -138,7 +136,7 @@ function parseDateBoundary(value: string | undefined, endOfDay: boolean): number
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) throw new Error(`Invalid ISO date: ${value}`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return parsed;
-  return Date.parse(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`);
+  return Date.parse(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`);
 }
 
 function sortNewestFirst(sessions: SessionInfo[]): SessionInfo[] {
@@ -199,7 +197,17 @@ export function extractMessages(entries: SessionEntry[]): SessionMessage[] {
   });
 }
 
-function formatSession(session: SessionInfo): string {
+export function extractTokens(entries: SessionEntry[]): number | undefined {
+  let tokens: number | undefined;
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const usage = (entry.message as { usage?: { totalTokens?: unknown } }).usage;
+    if (usage && typeof usage.totalTokens === "number") tokens = usage.totalTokens;
+  }
+  return tokens;
+}
+
+function formatSession(session: SessionInfo, tokens?: number): string {
   const name = session.name ? ` — "${session.name}"` : "";
   return [
     `## ${session.created.toISOString().slice(0, 10)}${name}`,
@@ -207,6 +215,7 @@ function formatSession(session: SessionInfo): string {
     `cwd: ${session.cwd}`,
     `firstMessage: ${session.firstMessage}`,
     `messages: ${session.messageCount}`,
+    ...(tokens === undefined ? [] : [`tokens: ${tokens}`]),
   ].join("\n");
 }
 
@@ -372,7 +381,19 @@ export default function sessionSearchExtension(
     async execute(_toolCallId, params) {
       const sessions = await listSessions(params, source);
       return {
-        content: [{ type: "text" as const, text: sessions.map(formatSession).join("\n\n") }],
+        content: [
+          {
+            type: "text" as const,
+            text: sessions
+              .map((sessionItem) =>
+                formatSession(
+                  sessionItem,
+                  extractTokens(source.open(sessionItem.path).getEntries()),
+                ),
+              )
+              .join("\n\n"),
+          },
+        ],
         details: { count: sessions.length },
       };
     },

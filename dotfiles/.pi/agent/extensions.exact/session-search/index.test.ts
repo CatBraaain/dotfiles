@@ -27,13 +27,18 @@ function session(overrides: Partial<SessionInfo>): SessionInfo {
   };
 }
 
-function messageEntry(role: string, content: string, id: string): SessionEntry {
+function messageEntry(
+  role: string,
+  content: string,
+  id: string,
+  usage?: { totalTokens: number },
+): SessionEntry {
   return {
     type: "message",
     id,
     parentId: null,
     timestamp: "2026-08-10T12:00:00Z",
-    message: { role, content, timestamp: Date.parse("2026-08-10T12:00:00Z") } as never,
+    message: { role, content, timestamp: Date.parse("2026-08-10T12:00:00Z"), usage } as never,
   };
 }
 
@@ -91,7 +96,7 @@ const oldSession = session({
 const entriesByPath = {
   [recentSession.path]: [
     messageEntry("user", "Discuss the harness", "1"),
-    messageEntry("assistant", "The harness is ready", "2"),
+    messageEntry("assistant", "The harness is ready", "2", { totalTokens: 224126 }),
     messageEntry("user", "A later question", "3"),
   ],
   [oldSession.path]: [messageEntry("user", "Unrelated work", "4")],
@@ -108,7 +113,11 @@ describe("session_list", () => {
   });
 
   it("filters by cwd, since, until, and limit", () => {
-    const filteredSessions = filterSessions([oldSession, recentSession], {
+    const dotfilesRecent = session({
+      id: "dotfiles-recent",
+      created: new Date(2026, 7, 10, 12, 0, 0),
+    });
+    const filteredSessions = filterSessions([oldSession, dotfilesRecent], {
       cwd: "dotfiles",
       since: "2026-08-09",
       until: "2026-08-10",
@@ -116,11 +125,89 @@ describe("session_list", () => {
     });
     assert.deepEqual(
       filteredSessions.map((item) => item.id),
-      ["recent"],
+      ["dotfiles-recent"],
     );
   });
 
-  it("searches cwd, name, first message, and all message text case-insensitively", () => {
+  it("excludes sessions outside the since and until boundaries", () => {
+    const beforeSince = session({
+      id: "before-since",
+      created: new Date(2026, 7, 8, 23, 59, 59, 999),
+      firstMessage: "boundary probe",
+      allMessagesText: "boundary probe",
+    });
+    const sinceDayStart = session({
+      id: "since-day-start",
+      created: new Date(2026, 7, 9, 0, 0, 0, 0),
+      firstMessage: "boundary probe",
+      allMessagesText: "boundary probe",
+    });
+    const inRange = session({
+      id: "in-range",
+      created: new Date(2026, 7, 10, 12, 0, 0),
+      firstMessage: "boundary probe",
+      allMessagesText: "boundary probe",
+    });
+    const afterUntil = session({
+      id: "after-until",
+      created: new Date(2026, 7, 11, 0, 0, 0, 0),
+      firstMessage: "boundary probe",
+      allMessagesText: "boundary probe",
+    });
+    assert.deepEqual(
+      filterSessions([beforeSince, sinceDayStart, inRange, afterUntil], {
+        since: "2026-08-09",
+        until: "2026-08-10",
+      }).map((item) => item.id),
+      ["in-range", "since-day-start"],
+    );
+  });
+
+  it("combines query and cwd filters as an intersection", () => {
+    const inProject = session({
+      id: "in-project",
+      firstMessage: "harness",
+      allMessagesText: "harness",
+    });
+    const outsideProject = session({
+      id: "outside",
+      cwd: "/home/user/projects/other",
+      firstMessage: "harness",
+      allMessagesText: "harness",
+    });
+    assert.deepEqual(
+      filterSessions([outsideProject, inProject], { query: "harness", cwd: "dotfiles" }).map(
+        (item) => item.id,
+      ),
+      ["in-project"],
+    );
+  });
+
+  it("rejects an invalid ISO date", () => {
+    assert.throws(
+      () => filterSessions([recentSession], { since: "not-a-date" }),
+      /Invalid ISO date/,
+    );
+    assert.throws(
+      () => filterSessions([recentSession], { until: "not-a-date" }),
+      /Invalid ISO date/,
+    );
+  });
+
+  it("matches a keyword found only in cwd", () => {
+    const cwdOnly = session({
+      id: "cwd-only",
+      cwd: "/home/user/projects/legumes",
+      firstMessage: "unrelated topic",
+      allMessagesText: "unrelated topic",
+    });
+    assert.deepEqual(
+      filterSessions([cwdOnly], { query: "legumes" }).map((item) => item.id),
+      ["cwd-only"],
+    );
+  });
+
+  it("matches a keyword in the session name case-insensitively", () => {
     const nameSession = session({
       id: "named",
       name: "Harness work",
@@ -131,6 +218,18 @@ describe("session_list", () => {
     assert.deepEqual(
       matchedSessions.map((item) => item.id),
       ["named"],
+    );
+  });
+
+  it("matches a keyword found only in the first message", () => {
+    const firstMessageOnly = session({
+      id: "first-message-only",
+      firstMessage: "zephyr report",
+      allMessagesText: "later talk only",
+    });
+    assert.deepEqual(
+      filterSessions([firstMessageOnly], { query: "zephyr" }).map((item) => item.id),
+      ["first-message-only"],
     );
   });
 
@@ -150,9 +249,43 @@ describe("session_list", () => {
     );
   });
 
-  it("returns an empty list when no session matches", async () => {
-    const sessions = await listSessions({ query: "missing" }, testSource);
-    assert.deepEqual(sessions, []);
+  it("applies the same normalization in subsequence matching", () => {
+    const matchedSessions = filterSessions([recentSession], { query: "HrNs" });
+    assert.deepEqual(
+      matchedSessions.map((item) => item.id),
+      ["recent"],
+    );
+  });
+
+  it("stops at exact matches without subsequence fallback when both kinds hit", () => {
+    const exactHit = session({
+      id: "exact-hit",
+      firstMessage: "harness",
+      allMessagesText: "harness",
+    });
+    const fuzzyOnly = session({
+      id: "fuzzy-only",
+      firstMessage: "h a r n e s s",
+      allMessagesText: "h a r n e s s",
+    });
+    assert.deepEqual(
+      filterSessions([fuzzyOnly, exactHit], { query: "harness" }).map((item) => item.id),
+      ["exact-hit"],
+    );
+  });
+
+  it("returns sessions newest first and keeps the newest ones under limit", () => {
+    const oldest = session({ id: "oldest", created: new Date("2026-07-01T00:00:00Z") });
+    const middle = session({ id: "middle", created: new Date("2026-08-05T00:00:00Z") });
+    const newest = session({ id: "newest", created: new Date("2026-08-15T00:00:00Z") });
+    assert.deepEqual(
+      filterSessions([oldest, newest, middle], {}).map((item) => item.id),
+      ["newest", "middle", "oldest"],
+    );
+    assert.deepEqual(
+      filterSessions([oldest, newest, middle], { limit: 2 }).map((item) => item.id),
+      ["newest", "middle"],
+    );
   });
 
   it("uses twenty as the default result limit", () => {
@@ -161,8 +294,67 @@ describe("session_list", () => {
     );
     assert.equal(filterSessions(sessions, {}).length, 20);
   });
+  it("returns an empty list when no session matches", async () => {
+    const sessions = await listSessions({ query: "missing" }, testSource);
+    assert.deepEqual(sessions, []);
+  });
 });
 
+describe("session_dir", () => {
+  it("passes the resolved directory to listAll on session_list", async () => {
+    const testSource = source([recentSession], {});
+    await listSessions({ session_dir: "/custom/sessions" }, testSource);
+    assert.deepEqual(testSource.listAllCalls, ["/custom/sessions"]);
+  });
+
+  it("passes undefined to listAll when session_dir is omitted", async () => {
+    const testSource = source([recentSession], {});
+    await listSessions({}, testSource);
+    assert.deepEqual(testSource.listAllCalls, [undefined]);
+  });
+
+  it("expands a ~/ prefix with the home directory", () => {
+    const resolved = resolveSessionDir(
+      { session_dir: "~/subagent-sessions" },
+      { exists: () => true },
+      "/home/user",
+    );
+    assert.equal(resolved, "/home/user/subagent-sessions");
+  });
+
+  it("rejects a relative path", () => {
+    assert.throws(
+      () => resolveSessionDir({ session_dir: "sessions" }, { exists: () => true }),
+      /absolute path/,
+    );
+  });
+
+  it("rejects a directory that does not exist", () => {
+    assert.throws(
+      () => resolveSessionDir({ session_dir: "/custom/sessions" }, { exists: () => false }),
+      /does not exist/,
+    );
+  });
+
+  it("passes the same session_dir to listAll on session_get", async () => {
+    const testSource = source([recentSession], entriesByPath);
+    await getSession({ id: "recent", session_dir: "/custom/sessions" }, testSource);
+    assert.deepEqual(testSource.listAllCalls, ["/custom/sessions"]);
+  });
+
+  it("suggests session_dir when a session id is not found", async () => {
+    const testSource = source([], {});
+    await assert.rejects(() => getSession({ id: "missing" }, testSource), /session_dir/);
+  });
+
+  it("mentions the subagent session directory in the session_dir description", () => {
+    const tools = captureTools();
+    const listDescription = tools.get("session_list").parameters.properties.session_dir.description;
+    const getDescription = tools.get("session_get").parameters.properties.session_dir.description;
+    assert.ok(listDescription.includes(subagentSessionDir()));
+    assert.ok(getDescription.includes(subagentSessionDir()));
+  });
+});
 describe("session_get", () => {
   it("returns the first fifty messages by default", async () => {
     const entries = Array.from({ length: 51 }, (_, index) =>
@@ -182,6 +374,42 @@ describe("session_get", () => {
     assert.equal(result.total, 51);
   });
 
+  it("returns messages around every query hit", async () => {
+    const result = await getSession({ id: "recent", query: "harness" }, testSource);
+    assert.deepEqual(
+      result.messages.map((message) => message.text),
+      ["Discuss the harness", "The harness is ready", "A later question"],
+    );
+  });
+
+  it("stops at exact message matches without subsequence fallback in query mode", async () => {
+    const entries = [
+      messageEntry("user", "plain opener", "1"),
+      messageEntry("user", "harness question", "2"),
+      messageEntry("user", "plain middle", "3"),
+      messageEntry("user", "plain spacer", "4"),
+      messageEntry("user", "h a r n e s s note", "5"),
+    ];
+    const mixedFallbackSession = session({
+      id: "mixed-fallback",
+      messageCount: entries.length,
+    });
+    const result = await getSession(
+      { id: "mixed-fallback", query: "harness" },
+      source([mixedFallbackSession], { [mixedFallbackSession.path]: entries }),
+    );
+    assert.equal(result.total, 4);
+    assert.deepEqual(
+      result.messages.map((message) => message.text),
+      ["plain opener", "harness question", "plain middle", "plain spacer"],
+    );
+  });
+
+  it("uses subsequence matching for query mode when exact matching has no result", async () => {
+    const result = await getSession({ id: "recent", query: "hrns" }, testSource);
+    assert.equal(result.messages.length, 3);
+  });
+
   it("returns the requested one-based range", async () => {
     const result = await getSession({ id: "recent", offset: 2, limit: 1 }, testSource);
     assert.deepEqual(
@@ -199,24 +427,6 @@ describe("session_get", () => {
       result.messages.map((message) => message.text),
       ["A later question"],
     );
-  });
-
-  it("returns messages around every query hit", async () => {
-    const result = await getSession({ id: "recent", query: "harness" }, testSource);
-    assert.deepEqual(
-      result.messages.map((message) => message.text),
-      ["Discuss the harness", "The harness is ready", "A later question"],
-    );
-  });
-
-  it("uses subsequence matching for query mode when exact matching has no result", async () => {
-    const result = await getSession({ id: "recent", query: "hrns" }, testSource);
-    assert.equal(result.messages.length, 3);
-  });
-
-  it("returns no messages when a query has no hit", async () => {
-    const result = await getSession({ id: "recent", query: "missing" }, testSource);
-    assert.deepEqual(result.messages, []);
   });
 
   it("returns the message at the requested offset across a gap in the query hit context", async () => {
@@ -276,10 +486,6 @@ describe("session_get", () => {
     assert.equal(result.total, DEFAULT_MESSAGE_LIMIT + 1);
   });
 
-  it("rejects an unknown session id", async () => {
-    await assert.rejects(getSession({ id: "missing" }, testSource), /Session not found/);
-  });
-
   it("extracts text from text arrays and bash execution messages", () => {
     const entries = [
       messageEntry("assistant", "plain", "1"),
@@ -295,6 +501,172 @@ describe("session_get", () => {
       { role: "assistant", text: "plain" },
       { role: "bashExecution", text: "ls\nfile" },
     ]);
+  });
+
+  it("extracts text from text, thinking, and toolCall blocks", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "1",
+        parentId: null,
+        timestamp: "now",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "visible body" },
+            { thinking: "inner monologue" },
+            { type: "toolCall", name: "bash", arguments: { command: "ls" } },
+          ],
+          timestamp: 0,
+        },
+      } as never,
+    ];
+    assert.deepEqual(extractMessages(entries), [
+      { role: "assistant", text: 'visible body\ninner monologue\nbash {"command":"ls"}' },
+    ]);
+  });
+  it("returns no messages when a query has no hit", async () => {
+    const result = await getSession({ id: "recent", query: "missing" }, testSource);
+    assert.deepEqual(result.messages, []);
+  });
+
+  it("rejects an unknown session id", async () => {
+    await assert.rejects(getSession({ id: "missing" }, testSource), /Session not found/);
+  });
+});
+
+describe("tool execution results", () => {
+  it("session_list returns id and all required session metadata", async () => {
+    const tool = captureTools().get("session_list");
+    const result = await tool.execute("call", { query: "harness" });
+    const resultText = textOf(result);
+    assert.match(resultText, /id: recent/);
+    assert.match(resultText, /2026-08-10/);
+    assert.match(resultText, /cwd: \/home\/user\/projects\/dotfiles/);
+    assert.match(resultText, /firstMessage: Discuss the harness/);
+    assert.match(resultText, /messages: 2/);
+    assert.match(resultText, /tokens: 224126/);
+  });
+
+  it("session_list shows the session display name in the header", async () => {
+    const namedSession = session({
+      id: "named",
+      name: "Harness work",
+      firstMessage: "Nothing else",
+      allMessagesText: "Nothing else",
+    });
+    const tool = captureTools(source([namedSession], {})).get("session_list");
+    const resultText = textOf(await tool.execute("call", { query: "Harness work" }));
+    assert.match(resultText, /— "Harness work"/);
+  });
+
+  it("session_list omits the tokens line when no entry reports usage", async () => {
+    const tool = captureTools().get("session_list");
+    const resultText = textOf(await tool.execute("call", { query: "Unrelated" }));
+    assert.match(resultText, /id: old/);
+    assert.ok(!resultText.includes("tokens:"));
+  });
+
+  it("session_list reports the last reported usage as tokens", async () => {
+    const twiceReportedSession = session({
+      id: "twice-reported",
+      firstMessage: "Measured twice",
+      allMessagesText: "Measured twice",
+    });
+    const tool = captureTools(
+      source([twiceReportedSession], {
+        [twiceReportedSession.path]: [
+          messageEntry("user", "Measured twice", "1"),
+          messageEntry("assistant", "First report", "2", { totalTokens: 100 }),
+          messageEntry("assistant", "Second report", "3", { totalTokens: 200 }),
+        ],
+      }),
+    ).get("session_list");
+    const resultText = textOf(await tool.execute("call", { query: "twice" }));
+    assert.match(resultText, /tokens: 200/);
+  });
+
+  it("session_get reports pagination for a long full session", async () => {
+    const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
+      messageEntry("user", `message ${index}`, String(index)),
+    );
+    const longSession = session({
+      id: "full-long",
+      path: "/sessions/full-long.jsonl",
+      messageCount: entries.length,
+    });
+    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
+      "session_get",
+    );
+    const resultText = textOf(await tool.execute("call", { id: "full-long" }));
+    assert.match(resultText, /全51件中 1〜50件を表示。続きは offset=51/);
+  });
+
+  it("session_get reports pagination for a long query result", async () => {
+    const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
+      messageEntry("user", `harness message ${index}`, String(index)),
+    );
+    const longSession = session({
+      id: "query-long",
+      path: "/sessions/query-long.jsonl",
+      messageCount: entries.length,
+    });
+    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
+      "session_get",
+    );
+    const resultText = textOf(await tool.execute("call", { id: "query-long", query: "harness" }));
+    assert.match(resultText, /全51件中 1〜50件を表示。続きは offset=51/);
+  });
+
+  it("session_get paginates the query hit context by offset and limit", async () => {
+    const entries = Array.from({ length: 52 }, (_, index) =>
+      messageEntry("user", `harness message ${index}`, String(index)),
+    );
+    const longSession = session({
+      id: "query-pagination",
+      path: "/sessions/query-pagination.jsonl",
+      messageCount: entries.length,
+    });
+    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
+      "session_get",
+    );
+    const resultText = textOf(
+      await tool.execute("call", {
+        id: "query-pagination",
+        query: "harness",
+        offset: 50,
+        limit: 2,
+      }),
+    );
+    assert.match(resultText, /全52件中 50〜51件を表示。続きは offset=52/);
+    assert.ok(resultText.includes("[user] harness message 49"));
+    assert.ok(resultText.includes("[user] harness message 50"));
+    assert.ok(!resultText.includes("[user] harness message 48"));
+  });
+  it("session_get returns a dated header and role-prefixed messages in chronological order", async () => {
+    const tool = captureTools().get("session_get");
+    const result = await tool.execute("call", { id: "recent" });
+    const resultText = textOf(result);
+    assert.match(resultText, /## 2026-08-10 \/home\/user\/projects\/dotfiles — recent/);
+    assert.ok(
+      resultText.indexOf("[user] Discuss the harness") <
+        resultText.indexOf("[assistant] The harness is ready"),
+    );
+  });
+
+  it("session_get returns hitなし without returning the full session for a miss", async () => {
+    const tool = captureTools().get("session_get");
+    const resultText = textOf(await tool.execute("call", { id: "recent", query: "missing" }));
+    assert.equal(resultText, 'ヒットなし: "missing"');
+  });
+
+  it("session_get does not report hitなし when the query hits but the offset exceeds the context", async () => {
+    const tool = captureTools().get("session_get");
+    const resultText = textOf(
+      await tool.execute("call", { id: "recent", query: "harness", offset: 10 }),
+    );
+    assert.ok(!resultText.includes("ヒットなし"));
+    assert.match(resultText, /指定位置にメッセージなし/);
   });
 });
 
@@ -383,162 +755,5 @@ describe("tool registration and rendering", () => {
       }),
     );
     assert.deepEqual(collapsedLines, ["error"]);
-  });
-});
-
-describe("tool execution results", () => {
-  it("session_list returns id and all required session metadata", async () => {
-    const tool = captureTools().get("session_list");
-    const result = await tool.execute("call", { query: "harness" });
-    const resultText = textOf(result);
-    assert.match(resultText, /id: recent/);
-    assert.match(resultText, /2026-08-10/);
-    assert.match(resultText, /cwd: \/home\/user\/projects\/dotfiles/);
-    assert.match(resultText, /firstMessage: Discuss the harness/);
-    assert.match(resultText, /messages: 2/);
-  });
-
-  it("session_get returns a dated header and role-prefixed messages in chronological order", async () => {
-    const tool = captureTools().get("session_get");
-    const result = await tool.execute("call", { id: "recent" });
-    const resultText = textOf(result);
-    assert.match(resultText, /## 2026-08-10 \/home\/user\/projects\/dotfiles — recent/);
-    assert.ok(
-      resultText.indexOf("[user] Discuss the harness") <
-        resultText.indexOf("[assistant] The harness is ready"),
-    );
-  });
-
-  it("session_get returns hitなし without returning the full session for a miss", async () => {
-    const tool = captureTools().get("session_get");
-    const resultText = textOf(await tool.execute("call", { id: "recent", query: "missing" }));
-    assert.equal(resultText, 'ヒットなし: "missing"');
-  });
-
-  it("session_get does not report hitなし when the query hits but the offset exceeds the context", async () => {
-    const tool = captureTools().get("session_get");
-    const resultText = textOf(
-      await tool.execute("call", { id: "recent", query: "harness", offset: 10 }),
-    );
-    assert.ok(!resultText.includes("ヒットなし"));
-    assert.match(resultText, /指定位置にメッセージなし/);
-  });
-
-  it("session_get reports pagination for a long full session", async () => {
-    const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
-      messageEntry("user", `message ${index}`, String(index)),
-    );
-    const longSession = session({
-      id: "full-long",
-      path: "/sessions/full-long.jsonl",
-      messageCount: entries.length,
-    });
-    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
-      "session_get",
-    );
-    const resultText = textOf(await tool.execute("call", { id: "full-long" }));
-    assert.match(resultText, /全51件中 1〜50件を表示。続きは offset=51/);
-  });
-
-  it("session_get reports pagination for a long query result", async () => {
-    const entries = Array.from({ length: DEFAULT_MESSAGE_LIMIT + 1 }, (_, index) =>
-      messageEntry("user", `harness message ${index}`, String(index)),
-    );
-    const longSession = session({
-      id: "query-long",
-      path: "/sessions/query-long.jsonl",
-      messageCount: entries.length,
-    });
-    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
-      "session_get",
-    );
-    const resultText = textOf(await tool.execute("call", { id: "query-long", query: "harness" }));
-    assert.match(resultText, /全51件中 1〜50件を表示。続きは offset=51/);
-  });
-
-  it("session_get paginates the query hit context by offset and limit", async () => {
-    const entries = Array.from({ length: 52 }, (_, index) =>
-      messageEntry("user", `harness message ${index}`, String(index)),
-    );
-    const longSession = session({
-      id: "query-pagination",
-      path: "/sessions/query-pagination.jsonl",
-      messageCount: entries.length,
-    });
-    const tool = captureTools(source([longSession], { [longSession.path]: entries })).get(
-      "session_get",
-    );
-    const resultText = textOf(
-      await tool.execute("call", {
-        id: "query-pagination",
-        query: "harness",
-        offset: 50,
-        limit: 2,
-      }),
-    );
-    assert.match(resultText, /全52件中 50〜51件を表示。続きは offset=52/);
-    assert.ok(resultText.includes("[user] harness message 49"));
-    assert.ok(resultText.includes("[user] harness message 50"));
-    assert.ok(!resultText.includes("[user] harness message 48"));
-  });
-});
-
-describe("session_dir", () => {
-  it("passes the resolved directory to listAll on session_list", async () => {
-    const testSource = source([recentSession], {});
-    await listSessions({ session_dir: "/custom/sessions" }, testSource);
-    assert.deepEqual(testSource.listAllCalls, ["/custom/sessions"]);
-  });
-
-  it("passes undefined to listAll when session_dir is omitted", async () => {
-    const testSource = source([recentSession], {});
-    await listSessions({}, testSource);
-    assert.deepEqual(testSource.listAllCalls, [undefined]);
-  });
-
-  it("expands a ~/ prefix with the home directory", () => {
-    const resolved = resolveSessionDir(
-      { session_dir: "~/subagent-sessions" },
-      { exists: () => true },
-      "/home/user",
-    );
-    assert.equal(resolved, "/home/user/subagent-sessions");
-  });
-
-  it("rejects a relative path", () => {
-    assert.throws(
-      () => resolveSessionDir({ session_dir: "sessions" }, { exists: () => true }),
-      /absolute path/,
-    );
-  });
-
-  it("rejects a directory that does not exist", () => {
-    assert.throws(
-      () => resolveSessionDir({ session_dir: "/custom/sessions" }, { exists: () => false }),
-      /does not exist/,
-    );
-  });
-
-  it("passes the same session_dir to listAll on session_get", async () => {
-    const testSource = source([recentSession], entriesByPath);
-    await getSession({ id: "recent", session_dir: "/custom/sessions" }, testSource);
-    assert.deepEqual(testSource.listAllCalls, ["/custom/sessions"]);
-  });
-
-  it("suggests session_dir when a session id is not found", async () => {
-    const testSource = source([], {});
-    await assert.rejects(() => getSession({ id: "missing" }, testSource), /session_dir/);
-  });
-
-  it("mentions the subagent session directory in the session_dir description", () => {
-    const tools = captureTools();
-    const listDescription = tools
-      .get("session_list")
-      .parameters.properties.session_dir.description;
-    const getDescription = tools
-      .get("session_get")
-      .parameters.properties.session_dir.description;
-    assert.ok(listDescription.includes(subagentSessionDir()));
-    assert.ok(getDescription.includes(subagentSessionDir()));
   });
 });
