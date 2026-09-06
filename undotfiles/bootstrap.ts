@@ -21,18 +21,26 @@ const BREW_FALLBACK_DIR = "/home/linuxbrew/.linuxbrew";
 // Android SDK install target of the sdkmanager postinstall in the Brewfile.
 const SDK_DIR = join(homedir(), ".android-sdk");
 
+// Plain apt prerequisites, kept outside the generated Brewfile.
+const APT_PACKAGES = [
+  "flatpak", // used by the Brewfile `flatpak` entries
+  "fonts-noto-cjk",
+  "libasound2t64",
+  "xvfb",
+];
+
 // Package lists: fed into the generated Brewfile, grouped by `brew bundle`
 // DSL type. Order matters: formulae come first (runtimes listed early), then
 // npm/uv/go entries which need those runtimes.
 
-type PackageLists = {
+export type PackageLists = {
   brewFormulae: string[];
   npmPackages: string[];
   uvTools: string[];
   goPackages: string[];
 };
 
-const PACKAGE_LISTS = {
+export const PACKAGE_LISTS = {
   brewFormulae: [
     // system packages
     "bubblewrap",
@@ -106,11 +114,51 @@ const PACKAGE_LISTS = {
   ],
 } satisfies PackageLists;
 
-function dslEntries(dslType: string, entries: string[]): string[] {
-  return entries.map((entry) => `${dslType} "${entry}"`);
+async function main(): Promise<void> {
+  log("apt prerequisites");
+  ensureAptPackages(APT_PACKAGES);
+
+  log("homebrew");
+  const brew = setupBrew();
+  await brewBundle(brew);
+  ensureRustupToolchain();
 }
 
-function generateBrewfile(lists: PackageLists, brewPrefix: string): string {
+function ensureAptPackages(pkgs: string[]): void {
+  const missing = pkgs.filter((pkg) => !commandSucceeded(["dpkg", "-s", pkg]));
+  if (missing.length === 0) return;
+  run(["sudo", "apt", "update"]);
+  for (const pkg of missing) {
+    run(["sudo", "apt", "install", "-y", pkg]);
+  }
+}
+
+type Brew = { bin: string; prefix: string };
+
+// Finds brew's executable and prefix, and puts brew's bin dir on PATH (the
+// `brew shellenv` equivalent) so brew-installed CLIs like rustup resolve.
+function setupBrew(): Brew {
+  const bin = Bun.which("brew") ?? `${BREW_FALLBACK_DIR}/bin/brew`;
+  if (!existsSync(bin)) {
+    throw new Error(`brew not found at ${bin}; run setup.sh first to install Homebrew`);
+  }
+  const prefix = Bun.spawnSync([bin, "--prefix"], { stdout: "pipe" }).stdout.toString().trim();
+  process.env.PATH = `${prefix}/bin:${process.env.PATH ?? ""}`;
+  return { bin, prefix };
+}
+
+async function brewBundle(brew: Brew): Promise<void> {
+  const brewfileDir = await mkdtemp(join(tmpdir(), "bootstrap-"));
+  const brewfilePath = join(brewfileDir, "Brewfile");
+  try {
+    await writeFile(brewfilePath, generateBrewfile(PACKAGE_LISTS, brew.prefix));
+    run([brew.bin, "bundle", `--file=${brewfilePath}`]);
+  } finally {
+    await rm(brewfileDir, { recursive: true, force: true });
+  }
+}
+
+export function generateBrewfile(lists: PackageLists, brewPrefix: string): string {
   const sdkmanager = `${brewPrefix}/bin/sdkmanager`;
   const acceptLicenses = `yes | ${sdkmanager} --sdk_root=${SDK_DIR} --licenses >/dev/null`;
   const installSdkPackages = `${sdkmanager} --sdk_root=${SDK_DIR} 'cmdline-tools;latest' 'platform-tools' >/dev/null`;
@@ -127,6 +175,17 @@ function generateBrewfile(lists: PackageLists, brewPrefix: string): string {
   ].join("\n");
 }
 
+type BrewfileDslType = "brew" | "npm" | "uv" | "go";
+
+function dslEntries(dslType: BrewfileDslType, entries: string[]): string[] {
+  return entries.map((entry) => `${dslType} "${entry}"`);
+}
+
+function ensureRustupToolchain(): void {
+  if (commandSucceeded(["rustup", "default"])) return;
+  run(["rustup", "default", "stable"]);
+}
+
 function log(message: string): void {
   console.log(`\x1b[1;32m==>\x1b[0m ${message}`);
 }
@@ -141,58 +200,6 @@ function run(command: string[]): void {
 // Reports whether a probe command succeeded, without any output.
 function commandSucceeded(command: string[]): boolean {
   return Bun.spawnSync(command, { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
-}
-
-let aptUpdated = false;
-
-function ensureApt(pkg: string): void {
-  if (commandSucceeded(["dpkg", "-s", pkg])) return;
-  if (!aptUpdated) {
-    run(["sudo", "apt", "update"]);
-    aptUpdated = true;
-  }
-  run(["sudo", "apt", "install", "-y", pkg]);
-}
-
-// Finds brew's executable and prefix, and puts brew's bin dir on PATH (the
-// `brew shellenv` equivalent) so brew-installed CLIs like rustup resolve.
-function setupBrew(): { bin: string; prefix: string } {
-  const bin = Bun.which("brew") ?? `${BREW_FALLBACK_DIR}/bin/brew`;
-  if (!existsSync(bin)) {
-    throw new Error(`brew not found at ${bin}; run setup.sh first to install Homebrew`);
-  }
-  const prefix = Bun.spawnSync([bin, "--prefix"], { stdout: "pipe" }).stdout.toString().trim();
-  process.env.PATH = `${prefix}/bin:${process.env.PATH ?? ""}`;
-  return { bin, prefix };
-}
-
-async function brewBundle(brewBin: string, brewPrefix: string): Promise<void> {
-  const brewfileDir = await mkdtemp(join(tmpdir(), "bootstrap-"));
-  const brewfilePath = join(brewfileDir, "Brewfile");
-  try {
-    await writeFile(brewfilePath, generateBrewfile(PACKAGE_LISTS, brewPrefix));
-    run([brewBin, "bundle", `--file=${brewfilePath}`]);
-  } finally {
-    await rm(brewfileDir, { recursive: true, force: true });
-  }
-}
-
-function ensureRustupToolchain(): void {
-  if (commandSucceeded(["rustup", "default"])) return;
-  run(["rustup", "default", "stable"]);
-}
-
-async function main(): Promise<void> {
-  log("apt prerequisites");
-  ensureApt("flatpak"); // Brewfile `flatpak` entries use it
-  ensureApt("fonts-noto-cjk");
-  ensureApt("libasound2t64");
-  ensureApt("xvfb");
-
-  log("homebrew");
-  const brew = setupBrew();
-  await brewBundle(brew.bin, brew.prefix);
-  ensureRustupToolchain();
 }
 
 if (import.meta.main) {
