@@ -29,10 +29,6 @@ nix:
   nix profile upgrade undotfiles/nix --no-warn-dirty
   bash undotfiles/nix/unflake.sh
 
-[linux]
-vscode:
-  bash undotfiles/manage-vscode-extensions.sh
-
 [windows]
 setup:
   powershell setup.ps1
