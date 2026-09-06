@@ -1,5 +1,5 @@
 read:
-  - {allow: "*"}
+  - allow: "*"
   - deny:
       - "**/.env"
       - "**/.env.local"
@@ -28,12 +28,12 @@ write:
       - ~/.cargo/registry
       - ~/go/pkg/mod
       - ~/mirrors
-  - {deny: ~/.pi/agent/extensions/sandboxed-tools/config.yaml}
+  - { deny: ~/.pi/agent/extensions/sandboxed-tools/config.yaml }
 
 credentials: []
 
 commands:
-  - {allow: "*"}
+  - allow: "*"
   - ask:
       - "{npm,bun,pnpm} publish"
       - gh pr create
