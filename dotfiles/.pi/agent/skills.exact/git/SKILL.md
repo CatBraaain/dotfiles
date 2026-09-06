@@ -1,7 +1,7 @@
 ---
 name: git
 description: >-
-  git の commit・branch・merge・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。「コミットして」「コミットを分けて」「マージして」「push して」「ブランチ切って」「PR 作って」「OSS にコントリビュートしたい」等の git 操作で使う。
+  git の commit・branch・merge・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。git コマンド（add・reset・restore・stash・commit・merge・rebase・push 等、index・worktree・branch を変更する操作、および staged/unstaged の確認）を実行する前に必ず読む。「コミットして」「コミットを分けて」「マージして」「push して」「ブランチ切って」「PR 作って」「OSS にコントリビュートしたい」等の明示的な依頼のほか、調査・実装・検証の途中で自発的に git コマンドを実行するときも使う。
 ---
 
 # Git
@@ -110,7 +110,8 @@ branch 名・分岐元は、リポジトリの branch strategy に従う。文�
 
 ## 実行の境界
 
-- coding agent の変更は、owner が staged/unstaged の状態で管理・レビューする。owner が明示的に staging、commit の作成・分割など staging を必要とする操作を指示した場合を除き、`git add` 等で変更を staged にしてはならない。
+- coding agent の変更は、owner が staged/unstaged の状態で管理・レビューする。`git add`・`git reset`・`git restore`・`git stash` 等の index または worktree の状態を変更する操作は、owner が staging、commit の作成・分割など staging を必要とする操作を明示的に指示（承認を含む）した場合のほか実行しない。owner が staged にした変更の解除や、owner の未コミット変更の破棄も指示がない限り行わない。
+- index の状態が予期しないものに見えても、勝手に正さず owner に確認する。owner または前段の操作が staged にした可能性があり、index の状態自体が owner の管理領域である。
 - remote への push と PR の作成は、明示的な指示があるときだけ行う。
 - 共有 branch への force push・履歴の書き換えは、owner の承認があるまで行わない。
 
