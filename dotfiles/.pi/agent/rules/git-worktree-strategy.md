@@ -31,13 +31,15 @@ main の未コミット変更はその場に残す。worktree への持ち運び
 
 worktree は自動掃除されないため、エージェントが作業完了時に自分で閉じる。原則として finish で閉じ、成果を捨てるときは discard で閉じる。閉じ方は次の3語で区別する。
 
+owner は worktree を「wt」と略すことがある（例: finish wt）。略記も worktree への指示として解釈する。
+
 | 言葉 | 意味 |
 | --- | --- |
 | finish | 成果を統合先へ取り込んで閉じる。owner の承認を得てから実行する |
 | discard | 変更と branch を捨てて閉じる。owner の承認を得てから実行する |
 | close | worktree と branch を削除する。finish・discard の最終段として実行する |
 
-finish — 統合の判断が入るため、マージ前に owner の承認を得る。承認後:
+finish — 統合の判断が入るため、commit 前の未コミットの状態で owner の承認を得る。検証まで済ませた段階で承認を求め、commit は承認後に行う。承認後:
 
 1. worktree 内の変更を確認し、あれば git skill「コミットの作成と分割」に従って commit する。手順3の backup branch は、close で worktree ごと削除するため作らない。
 2. 「統合」に従って統合先へマージする。
