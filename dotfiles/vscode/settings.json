@@ -560,6 +560,7 @@
   "ty.inlayHints.variableTypes": false,
   "update.mode": "start",
   "window.commandCenter": false,
+  "window.confirmSaveUntitledWorkspace": false,
   "window.customMenuBarAltFocus": false,
   "window.enableMenuBarMnemonics": false,
   "window.menuBarVisibility": "compact",
