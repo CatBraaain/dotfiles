@@ -24,7 +24,7 @@ diff:
 
 [linux]
 install:
-  bash undotfiles/bootstrap.sh
+  bun undotfiles/bootstrap.ts
 
 [windows]
 setup:
