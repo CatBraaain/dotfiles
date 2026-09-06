@@ -14,5 +14,5 @@ cd "$DOTFILES_DIR"
 
 bash undotfiles/bootstrap.sh
 
-export PATH="$HOME/.local/bin:$HOME/.local/go/bin:$HOME/.bun/bin:$PATH"
+eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 just apply

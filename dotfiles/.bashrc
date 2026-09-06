@@ -14,10 +14,14 @@ export PATH="$HOME/.cargo/bin:$PATH"
 export PATH="$HOME/.bun/bin:$PATH"
 export PATH="$HOME/.local/share/pnpm:$PATH"
 
+if [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+fi
+
 export ANDROID_HOME="$HOME/.android-sdk"
 export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 
-. "$HOME/.vite-plus/env"
+[ -f "$HOME/.vite-plus/env" ] && . "$HOME/.vite-plus/env"
 
 # keep-sorted start
 alias a="pi"
