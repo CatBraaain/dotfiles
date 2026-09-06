@@ -27,18 +27,6 @@ alias uv-python-update="uv python install --reinstall 3.11 3.12 3.13"
 alias wt="wt.exe"
 # keep-sorted end
 
-gwt() {
-  local repository_root
-  repository_root=$(git rev-parse --show-toplevel) || return
-
-  local worktree_directory
-  worktree_directory="$(dirname "$repository_root")/$(basename "$repository_root")-worktree/$1"
-
-  git worktree add -b "$1" "$worktree_directory" || return
-  code --add "$worktree_directory"
-  cd "$worktree_directory" || return
-}
-
 docker-inspect() {
   docker exec -it "$@" /bin/sh
 }
