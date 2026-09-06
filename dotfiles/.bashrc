@@ -7,10 +7,16 @@ esac
 [ -f ~/.secrets.sh ] && . ~/.secrets.sh
 
 export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/go/bin:$PATH"
+export PATH="$HOME/.local/node/bin:$PATH"
 export PATH="$HOME/go/bin:$PATH"
 export PATH="$HOME/.cargo/bin:$PATH"
 export PATH="$HOME/.bun/bin:$PATH"
 export PATH="$HOME/.local/share/pnpm:$PATH"
+
+export ANDROID_HOME="$HOME/.android-sdk"
+export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
 . "$HOME/.vite-plus/env"
 
 # keep-sorted start

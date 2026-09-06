@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v nix >/dev/null 2>&1; then
-  curl --proto '=https' --tlsv1.2 -sSf -L \
-    https://install.determinate.systems/nix | sh -s -- install
-fi
-export PATH="$HOME/.nix-profile/bin:$PATH"
-
 if ! command -v git >/dev/null 2>&1; then
-  nix profile add nixpkgs#git
+  sudo apt update
+  sudo apt install -y git curl
 fi
 
 DOTFILES_DIR="$HOME/projects/dotfiles"
@@ -17,6 +12,7 @@ if [[ ! -d "$DOTFILES_DIR" ]]; then
 fi
 cd "$DOTFILES_DIR"
 
-nix profile add ./undotfiles/flakes
-nix profile upgrade undotfiles/flakes
+bash undotfiles/bootstrap.sh
+
+export PATH="$HOME/.local/bin:$HOME/.local/go/bin:$HOME/.bun/bin:$PATH"
 just apply
