@@ -10,7 +10,7 @@
 //
 // Run with `bun undotfiles/bootstrap.ts` (or `just install`).
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,9 @@ const BREW_FALLBACK_DIR = "/home/linuxbrew/.linuxbrew";
 
 // Android SDK install target of the Android SDK run entries in PACKAGES.
 const SDK_DIR = join(homedir(), ".android-sdk");
+
+// Install target of the obscura custom entry in PACKAGES.
+const BIN_DIR = join(homedir(), ".local/bin");
 
 // PACKAGES entry types: kind is the install method (the Brewfile DSL, "apt"
 // for packages installed outside the Brewfile, "run" for shell commands, or
@@ -115,6 +118,9 @@ const PACKAGES: readonly Package[] = [
   brew("watchexec"),
   npm("@earendil-works/pi-coding-agent"),
   npm("agent-browser"),
+  // homebrew-core's formula builds without the stealth feature, so install
+  // the stealth release binary from GitHub Releases instead
+  custom("obscura"),
   npm("cursor-agent"),
   npm("officecli"),
   uv("trafilatura[all]"),
@@ -201,6 +207,7 @@ function installApt(pkg: string): void {
 async function runCustomPackages(): Promise<void> {
   for (const pkg of customPackages()) {
     if (pkg.name === "drawio") await installDrawioDeb();
+    else if (pkg.name === "obscura") await installObscura();
     else throw new Error(`custom install step not defined: ${pkg.name}`);
   }
 }
@@ -243,6 +250,59 @@ async function installDrawioDeb(): Promise<void> {
     const debFile = readdirSync(dir).find((file: string) => file.endsWith(".deb"));
     if (!debFile) throw new Error(`no .deb downloaded into ${dir}`);
     exec(["sudo", "apt", "install", "-y", join(dir, debFile)]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// Obscura's homebrew-core formula builds without the stealth feature, so the
+// stealth release binary comes from GitHub Releases instead. The archive
+// ships obscura + obscura-worker; keep them side by side (the parallel
+// `scrape` command needs the worker next to the main binary). Same-version
+// installs are skipped via the binary's --version output.
+async function installObscura(): Promise<void> {
+  const repo = "h4ckf0r0day/obscura";
+  const tag = commandOutput([
+    "gh",
+    "release",
+    "view",
+    "--repo",
+    repo,
+    "--json",
+    "tagName",
+    "--jq",
+    ".tagName",
+  ]);
+  const version = tag.replace(/^v/, "");
+  const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+  const bin = join(BIN_DIR, "obscura");
+  if (existsSync(bin) && commandOutput([bin, "--version"]) === `obscura ${version}`) {
+    return;
+  }
+
+  const dir = await mkdtemp(join(tmpdir(), "bootstrap-obscura-"));
+  try {
+    exec([
+      "gh",
+      "release",
+      "download",
+      tag,
+      "--repo",
+      repo,
+      "--pattern",
+      `obscura-${arch}-linux-stealth.tar.gz`,
+      "--dir",
+      dir,
+    ]);
+    const tarball = readdirSync(dir).find((file: string) => file.endsWith(".tar.gz"));
+    if (!tarball) throw new Error(`no .tar.gz downloaded into ${dir}`);
+    exec(["tar", "xzf", join(dir, tarball), "-C", dir]);
+    mkdirSync(BIN_DIR, { recursive: true });
+    for (const name of ["obscura", "obscura-worker"]) {
+      const src = join(dir, name);
+      if (!existsSync(src)) throw new Error(`obscura archive is missing ${name}`);
+      exec(["install", "-m", "755", src, join(BIN_DIR, name)]);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
