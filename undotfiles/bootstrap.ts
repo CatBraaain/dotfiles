@@ -1,8 +1,10 @@
 // Bootstrap system packages and CLI tools for this dotfiles setup.
-// Every package below goes through `sudo apt` (apt() entries), a generated
-// temporary Brewfile applied via `brew bundle` (most entries), a custom
-// install step for sources no package manager covers (custom() entries), or
-// a shell command run on every bootstrap (run() entries).
+// PACKAGES reads top-to-bottom: setup() entries act in place at their line
+// (sudo apt update; putting brew on PATH), apt() entries install in place,
+// and the rest defers to the end — a generated temporary Brewfile applied
+// via `brew bundle` (most entries), a custom install step for sources no
+// package manager covers (custom() entries), or a shell command run on
+// every bootstrap (run() entries).
 // No version management: every tool installs/updates to its latest release.
 // Prerequisites, installed by setup.sh: Homebrew on Linux and bun.
 //
@@ -21,17 +23,26 @@ const BREW_FALLBACK_DIR = "/home/linuxbrew/.linuxbrew";
 const SDK_DIR = join(homedir(), ".android-sdk");
 
 // PACKAGES entry types: kind is the install method (the Brewfile DSL, "apt"
-// for packages installed outside the Brewfile, or "run" for shell commands).
-type Package = AptEntry | BrewEntry | FlatpakEntry | ToolEntry | CustomEntry | RunEntry;
+// for packages installed outside the Brewfile, "run" for shell commands, or
+// "setup" for in-place bootstrap actions).
+type Package =
+  | AptEntry
+  | BrewEntry
+  | FlatpakEntry
+  | ToolEntry
+  | CustomEntry
+  | RunEntry
+  | SetupEntry;
 type AptEntry = { kind: "apt"; name: string };
 type BrewEntry = { kind: "brew" | "cask"; name: string };
 type FlatpakEntry = { kind: "flatpak"; name: string; url?: string };
 type ToolEntry = { kind: "npm" | "uv" | "go"; name: string };
 type CustomEntry = { kind: "custom"; name: string };
 type RunEntry = { kind: "run"; command: string };
+type SetupEntry = { kind: "setup"; phase: "apt" | "brew" };
 
-// Everything except apt, custom, and run entries becomes Brewfile lines.
-type BrewfileEntry = Exclude<Package, AptEntry | CustomEntry | RunEntry>;
+// Everything except apt, custom, run, and setup entries becomes Brewfile lines.
+type BrewfileEntry = Exclude<Package, AptEntry | CustomEntry | RunEntry | SetupEntry>;
 
 // Entry builders: keep PACKAGES declarative while the types above constrain
 // each method's options (url for flatpak).
@@ -49,20 +60,23 @@ const uv = (name: string): ToolEntry => ({ kind: "uv", name });
 const go = (name: string): ToolEntry => ({ kind: "go", name });
 const custom = (name: string): CustomEntry => ({ kind: "custom", name });
 const run = (command: string): RunEntry => ({ kind: "run", command });
+const setup = (phase: SetupEntry["phase"]): SetupEntry => ({ kind: "setup", phase });
 
-// Every package in one list. One entry = its install method + options:
-// apt entries go through `sudo apt install`; custom entries run their named
-// custom install step; run entries execute a shell command on every
-// bootstrap; everything else becomes one Brewfile line in list order, e.g.
-// brew("jq") -> `brew "jq"`.
+// Every package in one list, read top-to-bottom: setup entries act in
+// place at their line; apt entries install in place when missing; custom
+// entries run their named custom install step; run entries execute a shell
+// command on every bootstrap; everything else becomes one Brewfile line in
+// list order, e.g. brew("jq") -> `brew "jq"`.
 // Order matters: brew entries install the language runtimes first, so keep
 // npm/uv/go entries after the runtime they need (brew bundle runs lines in order).
 const PACKAGES: readonly Package[] = [
+  setup("apt"), // in place: sudo apt update
   // apt prerequisites (installed outside the Brewfile)
   apt("flatpak"), // used by the disabled Chrome flatpak entry below
   apt("fonts-noto-cjk"),
   apt("libasound2t64"),
   apt("xvfb"),
+  setup("brew"), // in place: locate brew and put it on PATH
   // system packages
   brew("bubblewrap"),
   brew("coreutils"),
@@ -140,11 +154,23 @@ const PACKAGES: readonly Package[] = [
 ];
 
 async function main(): Promise<void> {
-  log("apt prerequisites");
-  ensureAptPackages(aptPackages());
+  let brewBin: string | undefined;
+  for (const entry of PACKAGES) {
+    switch (entry.kind) {
+      case "setup":
+        if (entry.phase === "apt") exec(["sudo", "apt", "update"]);
+        else brewBin = setupBrew();
+        break;
+      case "apt":
+        installApt(entry.name);
+        break;
+      default:
+        break; // brew family, custom, and run entries defer to the steps below
+    }
+  }
 
   log("homebrew");
-  await brewBundle(setupBrew());
+  await brewBundle(brewBin ?? setupBrew());
 
   log("custom installs");
   await runCustomPackages();
@@ -155,10 +181,6 @@ async function main(): Promise<void> {
   }
 }
 
-function aptPackages(): string[] {
-  return PACKAGES.filter((pkg) => pkg.kind === "apt").map((pkg) => pkg.name);
-}
-
 function customPackages(): CustomEntry[] {
   return PACKAGES.filter((pkg): pkg is CustomEntry => pkg.kind === "custom");
 }
@@ -167,13 +189,11 @@ function runCommands(): string[] {
   return PACKAGES.filter((pkg) => pkg.kind === "run").map((pkg) => pkg.command);
 }
 
-function ensureAptPackages(pkgs: string[]): void {
-  const missing = pkgs.filter((pkg) => !commandSucceeded(["dpkg", "-s", pkg]));
-  if (missing.length === 0) return;
-  exec(["sudo", "apt", "update"]);
-  for (const pkg of missing) {
-    exec(["sudo", "apt", "install", "-y", pkg]);
-  }
+// Installs one apt package when missing. The setup("apt") entry runs
+// `sudo apt update` beforehand, so no conditional update here.
+function installApt(pkg: string): void {
+  if (commandSucceeded(["dpkg", "-s", pkg])) return;
+  exec(["sudo", "apt", "install", "-y", pkg]);
 }
 
 // Named custom install steps for sources no package manager entry covers.
@@ -206,7 +226,18 @@ async function installDrawioDeb(): Promise<void> {
 
   const dir = await mkdtemp(join(tmpdir(), "bootstrap-drawio-"));
   try {
-    exec(["gh", "release", "download", tag, "--repo", repo, "--pattern", "drawio-amd64-*.deb", "--dir", dir]);
+    exec([
+      "gh",
+      "release",
+      "download",
+      tag,
+      "--repo",
+      repo,
+      "--pattern",
+      "drawio-amd64-*.deb",
+      "--dir",
+      dir,
+    ]);
     const debFile = readdirSync(dir).find((file: string) => file.endsWith(".deb"));
     if (!debFile) throw new Error(`no .deb downloaded into ${dir}`);
     exec(["sudo", "apt", "install", "-y", join(dir, debFile)]);
@@ -242,7 +273,7 @@ async function brewBundle(brewBin: string): Promise<void> {
 function generateBrewfile(): string {
   const lines = PACKAGES.filter(
     (pkg): pkg is BrewfileEntry =>
-      pkg.kind !== "apt" && pkg.kind !== "custom" && pkg.kind !== "run",
+      pkg.kind !== "apt" && pkg.kind !== "custom" && pkg.kind !== "run" && pkg.kind !== "setup",
   ).map(brewfileLine);
   return [...lines, ""].join("\n");
 }
