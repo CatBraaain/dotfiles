@@ -56,59 +56,6 @@ describe("tier の候補選択", () => {
     assert.strictEqual(selectedModel?.id, "glm-5.2");
   });
 
-  it("画像必須の要件は画像対応候補だけを選ぶ", async () => {
-    const models = [
-      { provider: "zai", id: "glm-5.2", input: ["text"] },
-      { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
-    ];
-    const candidates: ModelCandidate[] = [
-      { provider: "zai", model: "glm-5.2" },
-      { provider: "zai", model: "glm-5.3-flash" },
-    ];
-    const selected = await pickCandidate(
-      candidates,
-      new Map(),
-      findIn(models as never),
-      runWhen,
-      0,
-      "required",
-    );
-    assert.strictEqual(selected?.id, "glm-5.3-flash");
-  });
-
-  it("画像禁止の要件は画像非対応候補だけを選ぶ", async () => {
-    const models = [
-      { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
-      { provider: "zai", id: "glm-5.2", input: ["text"] },
-    ];
-    const candidates: ModelCandidate[] = [
-      { provider: "zai", model: "glm-5.3-flash" },
-      { provider: "zai", model: "glm-5.2" },
-    ];
-    const selected = await pickCandidate(
-      candidates,
-      new Map(),
-      findIn(models as never),
-      runWhen,
-      0,
-      "forbidden",
-    );
-    assert.strictEqual(selected?.id, "glm-5.2");
-  });
-
-  it("要件に合う候補がないときは null を返す", async () => {
-    const models = [{ provider: "zai", id: "glm-5.2", input: ["text"] }];
-    const selected = await pickCandidate(
-      [{ provider: "zai", model: "glm-5.2" }],
-      new Map(),
-      findIn(models as never),
-      runWhen,
-      0,
-      "required",
-    );
-    assert.strictEqual(selected, null);
-  });
-
   it("when が外れた候補は次候補へフォールスルーする", async () => {
     const candidates: ModelCandidate[] = [
       { provider: "zai", model: "glm-5.2", when: exitOneCommand },

@@ -1048,6 +1048,80 @@ describe("tier によるモデルルーティング", () => {
       extension.restore();
     }
   });
+
+  it("自動選択は画像能力で候補を除外しない", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      {
+        findModel: (provider, id) => ({
+          provider,
+          id,
+          input: id === "glm-5.2" ? ["text", "image"] : ["text"],
+        }),
+      },
+    );
+    try {
+      await extension.sessionStart();
+      // tier はデフォルトフォールバックの候補順序であり、モデルの種類による制限は
+      // しない。仮に画像対応除外が復活すると先頭候補が飛ばされて次候補
+      // （gpt-5.6-luna）へ変わり、この assert が失敗する。
+      assert.deepEqual(extension.selectedModels, [
+        { provider: "zai", id: "glm-5.2", input: ["text", "image"] },
+      ]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("main の自動選択は tier 先頭の画像対応候補を除外しない", async () => {
+    const extension = captureAgentsExtension(
+      {
+        config: {
+          ...config,
+          default: "main",
+          agents: {
+            ...config.agents,
+            main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "visual_agent"], systemPrompt: [] },
+          },
+        },
+      },
+      {
+        findModel: (provider, id) => ({
+          provider,
+          id,
+          input: id === "glm-5.2" ? ["text", "image"] : ["text"],
+        }),
+      },
+    );
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.selectedModels, [
+        { provider: "zai", id: "glm-5.2", input: ["text", "image"] },
+      ]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("visual_agent の自動選択は vision tier の画像非対応候補を除外しない", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      { findModel: (provider, id) => ({ provider, id, input: ["text"] }) },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("visual_agent");
+      assert.deepEqual(extension.selectedModels, [
+        { provider: "zai", id: "glm-5.2", input: ["text"] },
+        { provider: "zai", id: "glm-5.3-flash", input: ["text"] },
+      ]);
+      assert.ok(
+        !extension.notifications.some((message) => message.includes("no available model")),
+      );
+    } finally {
+      extension.restore();
+    }
+  });
 });
 
 describe("手動モデル選択", () => {
@@ -1087,26 +1161,24 @@ describe("手動モデル選択", () => {
     }
   });
 
-  it("main の model_select は画像対応モデルを拒否して前のモデルへ戻す", async () => {
+  it("main の model_select は画像対応モデルも受け入れて手動状態にする", async () => {
     const extension = captureAgentsExtension(
       { config: { ...config, default: "main", agents: { ...config.agents, main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "visual_agent"], systemPrompt: [] } } } },
       { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
     );
     try {
       await extension.sessionStart();
-      const previous = extension.context.model;
       await extension.modelSelect("set", { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main"]);
-      assert.deepEqual(extension.context.model, previous);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main (manual)"]);
       assert.ok(
-        extension.notifications.some((message) => message.includes("not allowed for agent main")),
+        !extension.notifications.some((message) => message.includes("not allowed")),
       );
     } finally {
       extension.restore();
     }
   });
 
-  it("visual_agent の model_select は画像非対応モデルを拒否して前のモデルへ戻す", async () => {
+  it("visual_agent の model_select は vision tier 外の画像非対応モデルも受け入れて手動状態にする", async () => {
     const extension = captureAgentsExtension(
       { config },
       { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
@@ -1114,50 +1186,10 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.runCommand("visual_agent");
-      const previous = extension.context.model;
       await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text"] });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: visual_agent"]);
-      assert.deepEqual(extension.context.model, previous);
-      assert.ok(
-        extension.notifications.some((message) =>
-          message.includes("not allowed for agent visual_agent"),
-        ),
-      );
-    } finally {
-      extension.restore();
-    }
-  });
-
-  it("visual_agent の model_select は vision tier の画像対応候補を受け入れる", async () => {
-    const extension = captureAgentsExtension(
-      { config },
-      { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
-    );
-    try {
-      await extension.sessionStart();
-      await extension.runCommand("visual_agent");
-      await extension.modelSelect("set", { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] });
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: visual_agent (manual)"]);
-    } finally {
-      extension.restore();
-    }
-  });
-
-  it("visual_agent の model_select は画像対応でも vision tier 外を拒否する", async () => {
-    const extension = captureAgentsExtension(
-      { config },
-      { findModel: (provider, id) => ({ provider, id, input: ["text", "image"] }) },
-    );
-    try {
-      await extension.sessionStart();
-      await extension.runCommand("visual_agent");
-      const previous = extension.context.model;
-      await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text", "image"] });
-      assert.deepEqual(extension.context.model, previous);
       assert.ok(
-        extension.notifications.some((message) =>
-          message.includes("not allowed for agent visual_agent"),
-        ),
+        !extension.notifications.some((message) => message.includes("not allowed")),
       );
     } finally {
       extension.restore();
@@ -1231,30 +1263,6 @@ describe("手動モデル選択", () => {
           message.startsWith("visual_agent delegation failed:"),
         ),
       );
-    } finally {
-      extension.restore();
-    }
-  });
-
-  it("main 以外の agent は画像対応候補をそのまま選ぶ", async () => {
-    const extension = captureAgentsExtension(
-      { config },
-      {
-        findModel: (provider, id) => ({
-          provider,
-          id,
-          input: id === "glm-5.2" ? ["text", "image"] : ["text"],
-        }),
-      },
-    );
-    try {
-      await extension.sessionStart();
-      // manager は main でも visual_agent でもないため、spec の catch-all 行どおり
-      // 先頭候補（画像対応）がそのまま適用される。仮に画像対応除外が全 agent へ
-      // 拡大されると次候補（gpt-5.6-luna）へ変わり、この assert が失敗する。
-      assert.deepEqual(extension.selectedModels, [
-        { provider: "zai", id: "glm-5.2", input: ["text", "image"] },
-      ]);
     } finally {
       extension.restore();
     }

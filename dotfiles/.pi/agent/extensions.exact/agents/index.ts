@@ -960,18 +960,8 @@ export default function agentsExtension(
     }
   }
 
-  // SPEC「tier によるモデル選択」: main は画像入力非対応モデルだけ、visual_agent は
-  // 画像入力対応モデルだけを候補として受け付ける。判定は model.input（pi-ai の Model 型）
-  // に基づく。他の agent への制約は spec が定めないため適用しない。
-  function imageRequirementFor(agent: Agent): "required" | "forbidden" | undefined {
-    if (!config?.agents[agent]) return undefined;
-    if (agent === "visual_agent") return "required";
-    if (agent === "main") return "forbidden";
-    return undefined;
-  }
-
-  // tier の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立・画像能力
-  // 不適合の候補は pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外
+  // tier の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立の候補は
+  // pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外
   // して次候補へ進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
   // notifySwitch を false にすると切替時の `agent model →` 通知を省く（429 フォールバックは
   // 「レート制限時のフォールバック」節の通知が専らを定めるため）。
@@ -983,7 +973,6 @@ export default function agentsExtension(
   ): Promise<string | null> {
     const tierName = config?.agents[agent]?.tier;
     if (!tierName) return null;
-    const imageRequirement = imageRequirementFor(agent);
     let candidates = config?.tiers[tierName] ?? [];
     for (;;) {
       const model = await pickCandidate(
@@ -992,7 +981,6 @@ export default function agentsExtension(
         (provider, id) => ctx.modelRegistry.find(provider, id),
         (when) => runWhen(when, signal),
         Date.now(),
-        imageRequirement,
       );
       if (!model) return null;
       if (ctx.model && ctx.model.provider === model.provider && ctx.model.id === model.id) {
@@ -1177,42 +1165,13 @@ export default function agentsExtension(
 
   // ── manual selection tracking ───────────────────────────────────────
 
-  // SPEC「画像入力を使う agent」: main は画像入力非対応モデルだけ、visual_agent は
-  // vision tier の画像対応候補だけを /model で受け付ける。違反はエラー通知して
-  // 直前のモデルへ戻し、手動状態にしない。
-  pi.on("model_select", async (event, ctx) => {
+  // 手動選択はモデルを問わず受け入れる。tier はデフォルトフォールバックの候補
+  // 順序であり、モデル制限ではない。
+  pi.on("model_select", async (event) => {
     if (!isManualSelect(event.source, switching)) return;
-    const requirement = event.model ? imageRequirementFor(currentAgent) : undefined;
-    if (requirement !== undefined) {
-      const supportsImages = modelSupportsImages(event.model as { input?: readonly string[] });
-      const disallowed =
-        requirement === "forbidden"
-          ? supportsImages && currentAgent === "main"
-          : !supportsImages || !isVisionTierCandidate(event.model);
-      if (disallowed) {
-        if (event.previousModel) await switchTo(event.previousModel as Model<Api>);
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            `model ${event.model.provider}/${event.model.id} is not allowed for agent ${currentAgent}` +
-              (requirement === "forbidden"
-                ? ": main uses text-only models; image input is handled by visual_agent"
-                : ": visual_agent uses image-capable vision tier models"),
-            "error",
-          );
-        }
-        return;
-      }
-    }
     manual = true;
     tuiHandle?.requestRender();
   });
-
-  function isVisionTierCandidate(model: { provider: string; id: string }): boolean {
-    const candidates = config?.tiers.vision ?? [];
-    return candidates.some(
-      (candidate) => candidate.provider === model.provider && candidate.model === model.id,
-    );
-  }
 
   // ── 429 detection + fallback ────────────────────────────────────────
 
