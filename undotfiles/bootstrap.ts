@@ -19,7 +19,7 @@ import { join } from "node:path";
 // PATH lookup may miss brew when this runs outside setup.sh's shellenv.
 const BREW_FALLBACK_DIR = "/home/linuxbrew/.linuxbrew";
 
-// Android SDK install target of the sdkmanager run entries in PACKAGES.
+// Android SDK install target of the Android SDK run entries in PACKAGES.
 const SDK_DIR = join(homedir(), ".android-sdk");
 
 // PACKAGES entry types: kind is the install method (the Brewfile DSL, "apt"
@@ -148,9 +148,9 @@ const PACKAGES: readonly Package[] = [
   custom("drawio"),
   // flatpak("com.google.Chrome", { url: "https://dl.flathub.org/repo/flathub.flatpakrepo" }), // disabled for now
   cask("android-commandlinetools"),
-  // sdkmanager resolves via the PATH set in setupBrew; keep SDK packages current
+  // sdkmanager accepts licenses; Android CLI installs SDK packages via setupBrew's PATH.
   run(`yes | sdkmanager --sdk_root=${SDK_DIR} --licenses >/dev/null`),
-  run(`sdkmanager --sdk_root=${SDK_DIR} 'cmdline-tools;latest' 'platform-tools' >/dev/null`),
+  run(`android --sdk=${SDK_DIR} sdk install 'cmdline-tools/latest' platform-tools >/dev/null`),
 ];
 
 async function main(): Promise<void> {
@@ -250,7 +250,7 @@ async function installDrawioDeb(): Promise<void> {
 
 // Finds brew's executable and puts brew's bin dir on PATH (the
 // `brew shellenv` equivalent) so brew-installed CLIs resolve inside
-// postinstall steps (rustup, sdkmanager).
+// postinstall steps (rustup and Android SDK CLIs).
 function setupBrew(): string {
   const bin = Bun.which("brew") ?? `${BREW_FALLBACK_DIR}/bin/brew`;
   if (!existsSync(bin)) {
