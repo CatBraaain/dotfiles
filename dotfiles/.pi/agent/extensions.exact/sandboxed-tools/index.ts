@@ -1,16 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, extname, join, resolve } from "node:path";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashTool,
@@ -118,110 +108,27 @@ function isImageFile(imagePath: string, detectedMimeType = imageMimeType(imagePa
     : detectedMimeType.startsWith("image/");
 }
 
-const OCR_GENERATION_NOTE = [
-  "このテキストはOCR抽出であり、原画像ではなく抽出誤りを含みうる。",
-  "金額、日付、固有名詞、契約・法的文言のいずれかが含まれる場合は、原画像との照合をオーナーに依頼すること。",
-  "",
-].join("\n");
+export { isImageFile };
 
-function findFirstMarkdown(directory: string): string | undefined {
-  const entries = [...readdirSync(directory, { withFileTypes: true })].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
-  for (const entry of entries) {
-    const fullPath = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      const found = findFirstMarkdown(fullPath);
-      if (found !== undefined) return found;
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      return fullPath;
-    }
-  }
-  return undefined;
-}
-
-function runMineru(
-  imagePath: string,
-): { ok: true; markdown: string } | { ok: false; message: string } {
-  const outputDirectory = mkdtempSync(join(tmpdir(), "sandboxed-tools-mineru-"));
-  try {
-    const result = spawnSync(
-      "mineru",
-      ["-p", imagePath, "-o", outputDirectory, "-m", "ocr", "-b", "pipeline"],
-      { encoding: "utf8", env: { ...process.env, ORT_DISABLE_TELEMETRY: "1" } },
-    );
-    if (result.error) {
-      const reason =
-        (result.error as NodeJS.ErrnoException).code === "ENOENT"
-          ? "mineru is not installed"
-          : result.error.message;
-      return { ok: false, message: `MinerU execution failed: ${reason}` };
-    }
-    if (result.status !== 0) {
-      const stderr = (result.stderr ?? "").trim();
-      return { ok: false, message: `MinerU exited with status ${result.status}: ${stderr}` };
-    }
-    const markdownPath = findFirstMarkdown(outputDirectory);
-    if (markdownPath === undefined) {
-      return { ok: false, message: "MinerU produced no markdown output" };
-    }
-    return { ok: true, markdown: readFileSync(markdownPath, "utf8") };
-  } finally {
-    rmSync(outputDirectory, { recursive: true, force: true });
-  }
-}
-
-const OCR_CACHE_VERSION = "v1";
-
-function isPathWithin(path: string, parent: string): boolean {
-  const relativePath = relative(parent, path);
-  return relativePath === "" || (!relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
-}
-
-function ocrCacheRoot(imagePath: string): string {
-  const defaultCacheRoot = join(process.env.HOME || homedir(), ".cache");
-  const configuredCacheRoot = process.env.XDG_CACHE_HOME;
-  if (!configuredCacheRoot) return defaultCacheRoot;
-
-  const resolvedCacheRoot = resolve(configuredCacheRoot);
-  const isWithinProject = isPathWithin(resolvedCacheRoot, process.cwd());
-  const isAdjacentToImage = isPathWithin(resolvedCacheRoot, dirname(imagePath));
-  return isWithinProject || isAdjacentToImage ? defaultCacheRoot : resolvedCacheRoot;
-}
-
-function imageOcrCachePath(imagePath: string): string {
-  const imageHash = createHash("sha256").update(readFileSync(imagePath)).digest("hex");
-  return join(
-    ocrCacheRoot(imagePath),
-    "pi",
-    "sandboxed-tools",
-    "ocr",
-    OCR_CACHE_VERSION,
-    `${imageHash}.md`,
+// SPEC §2.1: 画像に対する read は OCR せず、visual_agent の利用を促す。
+export function imageReadErrorMessage(imagePath: string): string {
+  return (
+    `Image files are not readable via read. Image input is handled by the visual_agent agent ` +
+    `using the read_image tool. Switch the session to visual_agent or delegate this image to ` +
+    `visual_agent. Path: ${imagePath}`
   );
 }
 
-function createImageReadResult(imagePath: string): {
-  content: [{ type: "text"; text: string }];
-  details: { generated: boolean };
-} {
-  const cachePath = imageOcrCachePath(imagePath);
-  if (existsSync(cachePath)) {
-    return {
-      content: [{ type: "text", text: readFileSync(cachePath, "utf8") }],
-      details: { generated: false },
-    };
-  }
-
-  const mineru = runMineru(imagePath);
-  if (!mineru.ok) throw new Error(mineru.message);
-
-  mkdirSync(dirname(cachePath), { recursive: true, mode: 0o700 });
-  writeFileSync(cachePath, mineru.markdown, { encoding: "utf8", mode: 0o600 });
-  return {
-    content: [{ type: "text", text: OCR_GENERATION_NOTE + mineru.markdown }],
-    details: { generated: true },
-  };
+// SPEC「画像入力を使う agent」: read_image は visual_agent セッションでのみ Vision 入力を
+// 作る。agents 拡張が親・子セッションへ PI_AGENT_NAME を設定する（applyAgentTools と
+// runChild の env）。判定できない環境では拒否側に倒す。
+export function isVisualAgentSession(context: unknown): boolean {
+  const agentName =
+    process.env.PI_AGENT_NAME ??
+    (context !== null && typeof context === "object"
+      ? (context as { agent?: unknown }).agent
+      : undefined);
+  return agentName === "visual_agent";
 }
 
 /** Append the EROFS guidance to the bash tool result so the model sees it at failure time. */
@@ -265,7 +172,7 @@ function stderrLineUpdater(
     ) {
       const line = pending.subarray(0, newlineAt).toString("utf8").replace(/\r$/, "");
       pending = pending.subarray(newlineAt + 1);
-      if (line !== "") onUpdate({ content: [{ type: "text", text: line }] });
+      if (line !== "") onUpdate({ content: [{ type: "text", text: line }], details: {} });
     }
   };
 }
@@ -357,7 +264,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
   registerTextTool(
     {
       ...readTool,
-      description: `${readTool.description} Images are internally processed by OCR or image analysis and returned only as text. Layout, appearance, color, and other non-text information are unavailable. Image binary is never automatically attached as Vision input.`,
+      description: `${readTool.description} Image files cannot be read via read. Text extraction, appearance judgement, and layout work are handled by the visual_agent agent using the read_image tool (Vision input); text-only agents cannot read images.`,
     },
     "read",
     (args) => args.path,
@@ -365,11 +272,62 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
       const normalized = withNormalizedPath(args) as { path: string };
       const imagePath = resolve(cwd, normalized.path);
       await sandbox.authorizePath("read", imagePath, context);
-      if (isImageFile(imagePath)) return createImageReadResult(imagePath);
+      if (isImageFile(imagePath)) throw new Error(imageReadErrorMessage(imagePath));
       return sandbox.runTool("read", normalized, { mode: "fs", signal });
     },
     { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
   );
+  pi.registerTool({
+    name: "read_image",
+    label: "read_image",
+    description:
+      "Read an image file and return it as Vision input to the current model. Only the visual_agent agent can use this tool: it is how the visual_agent reads images for text extraction, appearance judgement, and layout work. Text-only agents cannot read images. The image is attached only to this agent's tool result and child session record, never to a parent agent.",
+    promptSnippet: "Read an image file as Vision input (visual_agent only)",
+    promptGuidelines: [
+      "Use read_image instead of read for image files: read rejects images and returns an error pointing here.",
+      "Re-read an image with read_image after edits when the task depends on how the result looks (layout, appearance, color).",
+    ],
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the image file to read as Vision input" }),
+    }),
+    async execute(_id, params, signal, _onUpdate, context) {
+      const normalized = withNormalizedPath(params) as { path: string };
+      const imagePath = resolve(cwd, normalized.path);
+      if (!isVisualAgentSession(context)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: imageReadErrorMessage(imagePath),
+            },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+      await sandbox.authorizePath("read", imagePath, context);
+      if (!isImageFile(imagePath)) {
+        throw new Error(`Not an image file: ${imagePath}`);
+      }
+      const data = readFileSync(imagePath);
+      const mimeType = imageMimeType(imagePath) ?? "application/octet-stream";
+      return {
+        content: [{ type: "image" as const, data: data.toString("base64"), mimeType }],
+        details: {},
+      };
+    },
+    renderCall(args: any, theme: any) {
+      return new Text(formatNamedCall("read_image", formatPath(args.path ?? "", cwd), theme), 0, 0);
+    },
+    renderResult(result: any, options: any, theme: any, context: any) {
+      if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
+      if (context.isError) return renderToolError(result, theme);
+      const hasImage = Array.isArray(result.content) && result.content.some(
+        (part: { type: string }) => part.type === "image",
+      );
+      return new Text(hasImage ? "image input" : "", 0, 0);
+    },
+  });
   pi.registerTool({
     ...writeTool,
     description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,

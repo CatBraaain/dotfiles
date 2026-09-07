@@ -12,9 +12,9 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 | `bash`                                   | 置き換え           | あり            | 開放    |
 | `web_fetch` `web_search`                 | 対象外（そのまま） | —               | 開放    |
 | LLM API / pi プロセス本体                | 対象外             | —               | 開放    |
-| `ask_permission`（本拡張の追加ツール）   | 追加（§3）         | —               | —       |
+| `read_image` `ask_permission`            | 追加               | あり            | —       |
 
-置き換え対象は pi の **全 built-in fs ツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。
+置き換え対象は pi の **全 built-in fs ツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。`read_image` は画像を Vision 入力として返す追加ツールである。
 
 ---
 
@@ -33,27 +33,25 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 - `web_fetch` / `web_search` は fs 制限の対象外。
 - 複数のツール呼び出しが並行して確認を要求するときも、確認は一度に1つずつ表示して順に解決する。待機中に他の呼び出しの承認で動的許可（§3）が追加されたパスは、あらためて確認しない。このとき確認なしで通った呼び出しの結果には、承認ノート（§2.3）を付けない。
 
-### 2.1 画像ファイルの read
+### 2.1 画像ファイル
 
 画像ファイルは、MIMEタイプが `image/*` のファイルである。MIMEタイプを判定できないときだけ、拡張子を補助的に使う。`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`、`.tiff`、`.tif` は画像ファイルとして扱う。
 
-画像ファイルのパスに対する `read` は、パスのアクセス制御（§2・§3）を通った後、画像内の文字情報を抽出してテキストだけを返す。画像以外のファイルは、既存の `read` の振る舞いを維持する。
+`read` は画像を OCR・画像解析テキストへ変換しない。画像に対する `read` は、パスのアクセス制御（§2・§3）を通った後に `read_image` と `visual_agent` が必要であることを示すエラーを返す。画像以外のファイルは既存の `read` の振る舞いを維持する。
 
-`read` の説明文は、画像の結果が内部OCRまたは画像解析によるテキストであり、レイアウト・見た目・色など文字以外の情報は得られないことを明記する。
+`read_image` は画像専用の追加ツールである。agents 拡張が active agent を `visual_agent` として有効にした場合だけ実行できる。agent 設定が無効、または active agent が `visual_agent` でない場合は、パスを開かず Vision 入力を作らないエラーを返す。実行できる場合は、パスの read アクセス制御を通った画像だけを Vision 入力として現在のモデルへ渡す。画像でないパスにはエラーを返す。画像は `read_image` を実行した agent のツール結果と子セッションの記録にだけ含め、親 agent には含めない。agent ごとの利用可否と子 agent への振り分けは agents の spec が定める。
 
-抽出結果は、プロジェクト配下および元画像の隣に作成しない隠しキャッシュへ保存して、同じ画像内容にだけ再利用できる。画像内容が変わると再抽出する。`read` の公開インターフェースは、抽出器を別の画像AIへ置き換えても変えない。
+| 操作・状態 | 結果 |
+| --- | --- |
+| `read` に画像でないパスを渡す | 既存の `read` の結果を返す |
+| `read` に許可されない画像パスを渡す | §2 のとおり拒否する |
+| `read` に許可された画像パスを渡す | `read_image` と `visual_agent` が必要であることを示すエラーを返す |
+| 無効な agent 設定、または active agent が `visual_agent` でない | Vision 入力を作らずエラーを返す |
+| `read_image` に許可された画像パスを渡す | 画像を Vision 入力として返す |
+| `read_image` に画像でないパスを渡す | エラーを返す |
+| `read_image` に許可されない画像パスを渡す | §2 のとおり拒否する |
 
-| 状態                                   | `read` の結果                                          |
-| -------------------------------------- | ------------------------------------------------------ |
-| パスが画像でない                       | 既存の `read` の結果を返す                             |
-| パスの read が許可されない             | §2 のとおり拒否                                        |
-| 抽出結果をキャッシュから再利用できる   | キャッシュしたテキストを返す                           |
-| 抽出結果をキャッシュから再利用できない | 画像内の文字情報を抽出してテキストを返す               |
-| 文字情報の抽出に失敗する               | エラー。抽出器をインストールせず、エラー内容を報告する |
-
-画像に対する `read` の結果はテキストだけであり、画像バイナリや画像コンテンツを含まない。元画像をVision入力へ自動添付しない。
-
-文字情報を新規に抽出した直後の結果には、抽出誤りを含みうる旨と、金額・日付・固有名詞・契約・法的文言のいずれかを含む場合は原画像との照合をオーナーに依頼する旨を添える。キャッシュしたテキストを返すだけのときは添えない。
+`read` と `read_image` の説明文には、画像の文字抽出・見た目の判断・レイアウト作業は `visual_agent` が担い、テキスト専用 agent は画像を読めないことを明記する。
 
 ### 2.2 credentials の例外
 
@@ -283,11 +281,12 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 
 ## 7. run-tools CLI による fs IO
 
-本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像が内部OCRまたは画像解析でテキストとして返り、レイアウト・見た目・色など文字以外の情報は得られない旨を、`bash` には書き込み失敗（read-only file system）時に `ask_permission` での許可要求へ誘導する文と、理由必須ゲート（`ask_with_reason`）で差し戻されたときに `ask_permission` での承認要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通ったツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
+本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、`read_image` を追加し、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像を読めず `visual_agent` が必要である旨を、`read_image` には画像の文字抽出・見た目の判断・レイアウト作業に使う Vision 入力である旨を、`bash` には書き込み失敗（read-only file system）時に `ask_permission` での許可要求へ誘導する文と、理由必須ゲート（`ask_with_reason`）で差し戻されたときに `ask_permission` での承認要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通った fs ツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
-| ツール                                          | sandbox 内での実行                                                  |
-| ----------------------------------------------- | ------------------------------------------------------------------- |
-| `read` `write` `edit` `grep` `find` `ls` `bash` | `bun run-tools.ts <tool-name>` → pi 標準 tool definition の execute |
+| ツール                                          | 実行 |
+| ----------------------------------------------- | ---- |
+| `read` `write` `edit` `grep` `find` `ls` `bash` | sandbox 内で `bun run-tools.ts <tool-name>` → pi 標準 tool definition の execute |
+| `read_image` | パスを認可した後、画像を Vision 入力として返す |
 
 bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾に `ask_permission` での許可要求へ誘導するヒント文を追記してモデルへ返す。
 
@@ -322,7 +321,8 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 | `bash`           | `$ <command>`（80文字で切り詰め）                                                                | 実行秒数（例: `1.2s`）                                                                                             | stdout/stderr                  |
 | `write`          | `write <path>`                                                                                   | `wrote <size>`                                                                                                     | 書き込んだ内容                 |
 | `edit`           | `edit <path>`                                                                                    | `edited N block(s)`                                                                                                | diff                           |
-| `read`           | `read <path>`（SKILL.md のとき `[skill] <name>`）                                                | `N lines`（画像を新規抽出したときは `OCR extracted, N lines`）                                                     | ファイル内容または抽出テキスト |
+| `read`           | `read <path>`（SKILL.md のとき `[skill] <name>`）                                                | `N lines`。画像は `read_image` が必要であるエラー                                                                  | ファイル内容またはエラー |
+| `read_image`     | `read_image <path>`                                                                              | `image input`                                                                                                      | 画像 |
 | `grep`           | `grep <pattern>`                                                                                 | `N matches`（context 行を含まない純マッチ数）                                                                      | マッチ結果（context 行を含む） |
 | `find`           | `find <pattern>`                                                                                 | `N files`                                                                                                          | パス一覧                       |
 | `ls`             | `ls <path>`（未指定は `.`）                                                                      | `N entries`                                                                                                        | エントリ一覧                   |

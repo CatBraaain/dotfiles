@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -12,6 +11,7 @@ import sandboxedToolsExtension, {
   countResultLines,
   formatDuration,
   formatSize,
+  isImageFile,
   truncateText,
   writeApprovalNote,
 } from "./index";
@@ -168,6 +168,7 @@ describe("§1 ツールごとの扱い", () => {
       "grep",
       "ls",
       "read",
+      "read_image",
       "write",
     ]);
   });
@@ -436,219 +437,163 @@ read:
   });
 });
 
-describe("§2.1 画像ファイルの read", () => {
+describe("§2.1 画像ファイル", () => {
   const pngBytes = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL0IAAAAABJRU5ErkJggg==",
     "base64",
   );
-  const stubMarkdown = "# stub ocr\n\nrecognized stub text\n";
 
-  function cachePath(cacheRoot: string, imageBytes: Buffer): string {
-    const imageHash = createHash("sha256").update(imageBytes).digest("hex");
-    return join(cacheRoot, "pi", "sandboxed-tools", "ocr", "v1", `${imageHash}.md`);
+  function writeImage(directory: string): string {
+    mkdirSync(directory, { recursive: true });
+    const imagePath = join(directory, "image.png");
+    writeFileSync(imagePath, pngBytes);
+    return imagePath;
   }
 
-  async function withOcrCache(cacheRoot: string, test: () => Promise<void> | void): Promise<void> {
-    const previousCacheRoot = process.env.XDG_CACHE_HOME;
-    process.env.XDG_CACHE_HOME = cacheRoot;
-    try {
-      await test();
-    } finally {
-      if (previousCacheRoot === undefined) delete process.env.XDG_CACHE_HOME;
-      else process.env.XDG_CACHE_HOME = previousCacheRoot;
-    }
-  }
-
-  it("read の説明文は画像の文字情報だけを返すことを示す", () => {
+  it("read の説明文は画像の職務が visual_agent と read_image 側にあることを示す", () => {
     const description = captureRegisteredTools().get("read").description;
-    assert.match(description, /OCR or image analysis/);
-    assert.match(description, /Layout, appearance, color/);
-    assert.match(description, /never automatically attached as Vision input/);
+    assert.match(description, /Image files cannot be read via read/);
+    assert.match(description, /Text extraction, appearance judgement, and layout work/);
+    assert.match(description, /visual_agent/);
+    assert.match(description, /read_image/);
+    assert.match(description, /text-only agents cannot read images/);
+  });
+
+  it("isImageFile は MIME 判定不能時に拡張子へフォールバックする", () => {
+    // MIME 判定不能（null）→ 拡張子で判定する
+    assert.equal(isImageFile("/tmp/photo.png", null), true);
+    assert.equal(isImageFile("/tmp/photo.PNG", null), true);
+    assert.equal(isImageFile("/tmp/photo.webp", null), true);
+    assert.equal(isImageFile("/tmp/notes.txt", null), false);
+    assert.equal(isImageFile("/tmp/noext", null), false);
+    // MIME 判定可能 → MIME を優先する（拡張子と矛盾しても MIME どおり）
+    assert.equal(isImageFile("/tmp/photo.png", "image/png"), true);
+    assert.equal(isImageFile("/tmp/photo.png", "text/plain"), false);
+    assert.equal(isImageFile("/tmp/notes.txt", "image/jpeg"), true);
   });
 
   it(
-    "画像の read は新規抽出したテキストに照合依頼を添え、隠しキャッシュへ保存する",
+    "画像に対する read は visual_agent を案内するエラーを返す",
     withImageDirectory("generate", async (directory) => {
-      const cacheRoot = join(directory, "cache");
-      const projectDirectory = join(directory, "project");
-      await withOcrCache(cacheRoot, async () => {
-        const imagePath = join(projectDirectory, "image.png");
-        const ocrCachePath = cachePath(cacheRoot, pngBytes);
-        mkdirSync(projectDirectory);
-        writeFileSync(imagePath, pngBytes);
+      const imagePath = writeImage(join(directory, "images"));
 
-        const result = await captureRegisteredTools()
-          .get("read")
-          .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
-
-        assert.equal(result.content.length, 1);
-        assert.equal(result.content[0].type, "text");
-        assert.ok(result.content[0].text.startsWith("このテキストはOCR抽出であり"));
-        assert.match(result.content[0].text, /金額、日付、固有名詞、契約・法的文言/);
-        assert.match(result.content[0].text, /原画像との照合をオーナーに依頼/);
-        assert.ok(result.content[0].text.endsWith(stubMarkdown));
-        assert.equal(result.details.generated, true);
-        assert.equal(existsSync(`${imagePath}.ocr.md`), false);
-        assert.equal(ocrCachePath.startsWith(`${projectDirectory}/`), false);
-        assert.equal(existsSync(ocrCachePath), true);
-      });
+      await assert.rejects(
+        () =>
+          captureRegisteredTools()
+            .get("read")
+            .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
+        /visual_agent/,
+      );
     }),
   );
 
   it(
-    "プロジェクト配下のXDG_CACHE_HOMEは既定の隠しキャッシュへフォールバックする",
+    "許可されない画像パスへの read は §2 どおり拒否する",
+    withImageDirectory("generate", async () => {
+      const readTool = captureRegisteredTools().get("read");
+      await assert.rejects(
+        () => readTool.execute("t", { path: join(homedir(), ".pi/agent/auth.json") }, undefined, undefined, { hasUI: false }),
+        /Access denied/,
+      );
+    }),
+  );
+
+  it("read_image の説明文は visual_agent 専用の Vision 入力であることを示す", () => {
+    const tool = captureRegisteredTools().get("read_image");
+    assert.match(tool.description, /visual_agent/);
+    assert.match(tool.description, /Vision input/);
+    assert.match(tool.description, /never to a parent agent/);
+  });
+
+  it(
+    "visual_agent セッション外の read_image は Vision 入力を作らずエラーを返す",
     withImageDirectory("generate", async (directory) => {
-      const projectDirectory = join(directory, "project");
-      const defaultCacheRoot = join(directory, "home", ".cache");
-      const previousCwd = process.cwd();
-      const previousHome = process.env.HOME;
-      mkdirSync(projectDirectory);
-      process.chdir(projectDirectory);
-      process.env.HOME = join(directory, "home");
+      const imagePath = writeImage(join(directory, "images"));
+
+      const result = await captureRegisteredTools()
+        .get("read_image")
+        .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
+
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /visual_agent/);
+      assert.equal(
+        Array.isArray(result.content) && result.content.some((part: { type: string }) => part.type === "image"),
+        false,
+      );
+    }),
+  );
+
+  it(
+    "visual_agent セッションの read_image は許可済み画像を Vision 入力として返す",
+    withImageDirectory("generate", async (directory) => {
+      const imagePath = writeImage(join(directory, "images"));
+      const previousAgentName = process.env.PI_AGENT_NAME;
+      process.env.PI_AGENT_NAME = "visual_agent";
       try {
-        await withOcrCache(join(projectDirectory, ".cache"), async () => {
-          const imagePath = join(projectDirectory, "image.png");
-          writeFileSync(imagePath, pngBytes);
+        const result = await captureRegisteredTools()
+          .get("read_image")
+          .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
 
-          await captureRegisteredTools()
-            .get("read")
-            .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
-
-          assert.equal(existsSync(join(projectDirectory, ".cache")), false);
-          assert.equal(existsSync(cachePath(defaultCacheRoot, pngBytes)), true);
-        });
+        assert.equal(result.isError, undefined);
+        const imagePart = result.content.find((part: { type: string }) => part.type === "image");
+        assert.ok(imagePart);
+        assert.equal(imagePart.mimeType, "image/png");
+        assert.equal(
+          Buffer.from(imagePart.data, "base64").equals(pngBytes),
+          true,
+        );
       } finally {
-        process.chdir(previousCwd);
-        if (previousHome === undefined) delete process.env.HOME;
-        else process.env.HOME = previousHome;
+        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+        else process.env.PI_AGENT_NAME = previousAgentName;
       }
     }),
   );
 
   it(
-    "画像の隣のXDG_CACHE_HOMEは既定の隠しキャッシュへフォールバックする",
+    "visual_agent セッションの read_image は画像でないパスにエラーを返す",
     withImageDirectory("generate", async (directory) => {
-      const imageDirectory = join(directory, "images");
-      const projectDirectory = join(directory, "project");
-      const defaultCacheRoot = join(directory, "home", ".cache");
-      const previousCwd = process.cwd();
-      const previousHome = process.env.HOME;
-      mkdirSync(imageDirectory);
-      mkdirSync(projectDirectory);
-      process.chdir(projectDirectory);
-      process.env.HOME = join(directory, "home");
+      mkdirSync(join(directory, "images"), { recursive: true });
+      const textPath = join(directory, "images", "notes.txt");
+      writeFileSync(textPath, "plain text");
+      const previousAgentName = process.env.PI_AGENT_NAME;
+      process.env.PI_AGENT_NAME = "visual_agent";
       try {
-        await withOcrCache(imageDirectory, async () => {
-          const imagePath = join(imageDirectory, "image.png");
-          writeFileSync(imagePath, pngBytes);
-
-          await captureRegisteredTools()
-            .get("read")
-            .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
-
-          assert.equal(existsSync(join(imageDirectory, "pi")), false);
-          assert.equal(existsSync(cachePath(defaultCacheRoot, pngBytes)), true);
-        });
+        await assert.rejects(
+          () =>
+            captureRegisteredTools()
+              .get("read_image")
+              .execute("t", { path: textPath }, undefined, undefined, { hasUI: false }),
+          /Not an image file/,
+        );
       } finally {
-        process.chdir(previousCwd);
-        if (previousHome === undefined) delete process.env.HOME;
-        else process.env.HOME = previousHome;
+        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+        else process.env.PI_AGENT_NAME = previousAgentName;
       }
     }),
   );
 
   it(
-    "画像の read はキャッシュしたテキストを注意書きなしで返す",
-    withImageDirectory("fail", async (directory) => {
-      await withOcrCache(join(directory, "cache"), async () => {
-        const imageDirectory = join(directory, "images");
-        const imagePath = join(imageDirectory, "image.png");
-        const ocrCachePath = cachePath(join(directory, "cache"), pngBytes);
-        mkdirSync(imageDirectory);
-        writeFileSync(imagePath, pngBytes);
-        mkdirSync(dirname(ocrCachePath), { recursive: true });
-        writeFileSync(ocrCachePath, "cached ocr text");
-
-        const result = await captureRegisteredTools()
-          .get("read")
-          .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
-
-        assert.equal(result.content.length, 1);
-        assert.equal(result.content[0].type, "text");
-        assert.equal(result.content[0].text, "cached ocr text");
-        assert.doesNotMatch(result.content[0].text, /このテキストはOCR抽出/);
-        assert.equal(result.details.generated, false);
-      });
-    }),
-  );
-
-  it(
-    "同一パスの画像内容が変わると新しいハッシュのキャッシュへ再抽出する",
-    withImageDirectory("generate", async (directory) => {
-      await withOcrCache(join(directory, "cache"), async () => {
-        const imageDirectory = join(directory, "images");
-        const imagePath = join(imageDirectory, "image.png");
-        const changedPngBytes = Buffer.from(pngBytes);
-        changedPngBytes[20] ^= 1;
-        mkdirSync(imageDirectory);
-        writeFileSync(imagePath, pngBytes);
-
-        const readTool = captureRegisteredTools().get("read");
-        const first = await readTool.execute("t", { path: imagePath }, undefined, undefined, {
-          hasUI: false,
-        });
-        writeFileSync(imagePath, changedPngBytes);
-        const second = await readTool.execute("t", { path: imagePath }, undefined, undefined, {
-          hasUI: false,
-        });
-
-        assert.equal(first.details.generated, true);
-        assert.equal(second.details.generated, true);
-        assert.equal(existsSync(cachePath(join(directory, "cache"), pngBytes)), true);
-        assert.equal(existsSync(cachePath(join(directory, "cache"), changedPngBytes)), true);
-      });
-    }),
-  );
-
-  it(
-    "mineruが未導入のときはエラー",
-    withImageDirectory("missing", async (directory) => {
-      await withOcrCache(join(directory, "cache"), async () => {
-        const imageDirectory = join(directory, "images");
-        const imagePath = join(imageDirectory, "image.png");
-        mkdirSync(imageDirectory);
-        writeFileSync(imagePath, pngBytes);
-
+    "visual_agent セッションの read_image も許可されないパスは §2 どおり拒否する",
+    withImageDirectory("generate", async () => {
+      const previousAgentName = process.env.PI_AGENT_NAME;
+      process.env.PI_AGENT_NAME = "visual_agent";
+      try {
+        const readImageTool = captureRegisteredTools().get("read_image");
         await assert.rejects(
           () =>
-            captureRegisteredTools()
-              .get("read")
-              .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
-          { message: "MinerU execution failed: mineru is not installed" },
+            readImageTool.execute(
+              "t",
+              { path: join(homedir(), ".pi/agent/auth.json") },
+              undefined,
+              undefined,
+              { hasUI: false },
+            ),
+          /Access denied/,
         );
-        assert.equal(existsSync(cachePath(join(directory, "cache"), pngBytes)), false);
-      });
-    }),
-  );
-
-  it(
-    "mineruが失敗するときはエラー",
-    withImageDirectory("fail", async (directory) => {
-      await withOcrCache(join(directory, "cache"), async () => {
-        const imageDirectory = join(directory, "images");
-        const imagePath = join(imageDirectory, "image.png");
-        mkdirSync(imageDirectory);
-        writeFileSync(imagePath, pngBytes);
-
-        await assert.rejects(
-          () =>
-            captureRegisteredTools()
-              .get("read")
-              .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
-          /MinerU exited with status 3: stub mineru failure/,
-        );
-        assert.equal(existsSync(cachePath(join(directory, "cache"), pngBytes)), false);
-      });
+      } finally {
+        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+        else process.env.PI_AGENT_NAME = previousAgentName;
+      }
     }),
   );
 });
@@ -3861,6 +3806,39 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 });
 
 describe("§8 表示", () => {
+  it("read_image のコール行は read_image <path> で表示する", () => {
+    const workspacePath = join(process.cwd(), "img", "a.png");
+    assert.equal(renderToolCall("read_image", { path: workspacePath }), "read_image ./img/a.png");
+  });
+
+  it("read_image の成功サマリーは image input、エラーは先頭3行", () => {
+    const tool = captureRegisteredTools().get("read_image");
+    const summary = tool
+      .renderResult(
+        { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },
+        { isPartial: false },
+        plainTheme,
+        { isError: false, args: {} },
+      )
+      .render(200)
+      .join("\n")
+      .trimEnd();
+    assert.equal(summary, "image input");
+
+    const errorResult = {
+      content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4\n" }],
+    };
+    const renderedError = tool
+      .renderResult(errorResult, { isPartial: false }, plainTheme, {
+        isError: true,
+        args: {},
+      })
+      .render(200)
+      .map((line: string) => line.trimEnd())
+      .join("\n");
+    assert.equal(renderedError, "line 1\nline 2\nline 3\n…");
+  });
+
   it("main agent の fs ツールは作業ディレクトリ内外でパスを表示し分ける", () => {
     const workspacePath = join(process.cwd(), "src", "a.ts");
     const parentPath = resolve(process.cwd(), "..", "README.md");
