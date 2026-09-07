@@ -95,7 +95,7 @@ const PACKAGES: readonly Package[] = [
   brew("bun"),
   brew("go"),
   brew("node"),
-  brew("openjdk"), // sdkmanager needs a JDK; the android-commandlinetools cask ships none
+  brew("openjdk"), // the Android SDK CLIs need a JDK; the android-commandlinetools cask ships none
   brew("rustup"),
   // toolchains live in ~/.rustup, outside brew: keep stable current and default
   run("rustup update stable && rustup default stable"),
@@ -154,8 +154,7 @@ const PACKAGES: readonly Package[] = [
   custom("drawio"),
   // flatpak("com.google.Chrome", { url: "https://dl.flathub.org/repo/flathub.flatpakrepo" }), // disabled for now
   cask("android-commandlinetools"),
-  // sdkmanager accepts licenses; Android CLI installs SDK packages via setupBrew's PATH.
-  run(`yes | sdkmanager --sdk_root=${SDK_DIR} --licenses >/dev/null`),
+  // Android CLI accepts licenses implicitly on install; sdkmanager is deprecated.
   run(`android --sdk=${SDK_DIR} sdk install 'cmdline-tools/latest' platform-tools >/dev/null`),
 ];
 
