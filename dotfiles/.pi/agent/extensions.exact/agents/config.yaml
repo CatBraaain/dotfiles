@@ -119,8 +119,8 @@ _systemPrompts:
 agents:
   main:
     tier: high
-    tools: ["*"]
-    subagents: [senior, junior]
+    tools: ["*", "!read_image"]
+    subagents: [senior, junior, visual_agent]
     systemPrompt:
       - *agent-overview
       - *subagent-strategy
@@ -132,8 +132,8 @@ agents:
 
   senior:
     tier: high
-    tools: ["*"]
-    subagents: [junior]
+    tools: ["*", "!read_image"]
+    subagents: [junior, visual_agent]
     systemPrompt:
       - *agent-overview
       - *subagent-strategy
@@ -145,7 +145,7 @@ agents:
 
   junior:
     tier: low
-    tools: ["*"]
+    tools: ["*", "!read_image"]
     subagents: []
     systemPrompt:
       - *subagent-report
@@ -155,6 +155,20 @@ agents:
         あなたは junior です。明示された1つのタスクを、依頼文の前提と完了条件に従って完結させます。
         依頼文に前提として与えられていない判断を要する場面では、独自に判断せず、その判断の必要性と選択肢を報告に含めてください。
         他のエージェントへの依頼は行いません。
+        画像を含む成果物を確認する必要があるときは、画像の確認が必要であることを依頼元へ報告してください。
+
+  visual_agent:
+    tier: vision
+    tools: ["*"]
+    subagents: []
+    systemPrompt:
+      - |
+        ## 役割
+
+        あなたは visual_agent です。画像入力対応モデルで動作し、テキスト専用の agent から視覚作業を引き受ける実行主体です。
+        画像は read_image で読み、文字列・表・図の抽出、見た目の判断、レイアウト確認を画像を見ながら行います。
+        親 agent には画像を返さず、観察した内容と結論をテキストで報告します。
+        作業結果が見た目に依存する場合は、編集後に read_image で再読して確認してください。
 
   chat:
     tier: middle

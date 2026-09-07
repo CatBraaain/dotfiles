@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
 import {
   createLocalBashOperations,
   getAgentDir,
@@ -21,6 +22,7 @@ import {
   isManualSelect,
   isRateLimitedError,
   modelKey,
+  modelSupportsImages,
   parseRetryAfter,
   pickCandidate,
   recordCooldown,
@@ -124,6 +126,41 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
         return { error: `agent ${name} delegates to undefined agent ${unknownSubagent}` };
     }
 
+    const visualAgent = agents.visual_agent;
+    if (!visualAgent) return { error: "visual_agent agent is required" };
+    if (visualAgent.tier !== "vision") {
+      return { error: "agent visual_agent must use the vision tier" };
+    }
+    const allowsReadImage = (tools: readonly string[]): boolean =>
+      tools.includes("*") || tools.includes("read_image");
+    for (const [name, definition] of Object.entries(agents)) {
+      for (const entry of definition.tools) {
+        if (!entry.startsWith("!")) continue;
+        const negatedTool = entry.slice(1);
+        if (negatedTool === "") {
+          return { error: `agent ${name} has a bare "!" negation` };
+        }
+        if (negatedTool !== "*" && definition.tools.includes(negatedTool)) {
+          return { error: `agent ${name} both allows and negates tool ${negatedTool}` };
+        }
+      }
+      if (name === "visual_agent") {
+        if (!allowsReadImage(definition.tools)) {
+          return { error: "agent visual_agent must allow read_image" };
+        }
+      } else if (allowsReadImage(definition.tools) && !definition.tools.includes("!read_image")) {
+        return { error: `agent ${name} must exclude read_image via "!read_image"` };
+      }
+      if (name === "main" || name === "senior") {
+        if (!definition.subagents.includes("visual_agent")) {
+          return { error: `agent ${name} must delegate to visual_agent` };
+        }
+      }
+      if (name === "junior" && definition.subagents.includes("visual_agent")) {
+        return { error: "agent junior must not delegate to visual_agent" };
+      }
+    }
+
     return { config: { default: document.default, tiers, agents } };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
@@ -148,6 +185,7 @@ export function initialAgent(config: AgentConfig, requestedAgent?: Agent): Agent
 export function isToolAllowed(agent: Agent, toolName: string, config: AgentConfig): boolean {
   if (toolName === "subagent") return true;
   const tools = config.agents[agent]?.tools ?? [];
+  if (tools.includes(`!${toolName}`)) return false;
   return tools.includes("*") || tools.includes(toolName);
 }
 
@@ -209,6 +247,37 @@ export function __resetRoutingState(): void {
 const SPINNER_INTERVAL_MS = 100;
 const EXIT_STDIO_GRACE_MS = 100;
 const UPDATE_THROTTLE_MS = 150;
+
+// 添付画像を visual_agent 子セッションへ渡すための一時ファイル。親セッションのモデルへ
+// 画像を送らず、子が read_image で読める形にする。子の起動が終わったら削除する。
+function saveAttachedImages(
+  images: ImageContent[],
+): Array<{ path: string; cleanup: () => void }> {
+  const saved: Array<{ path: string; cleanup: () => void }> = [];
+  try {
+    const directory = mkdtempSync(join(tmpdir(), "pi-attached-images-"));
+    images.forEach((image, index) => {
+      const extension = image.mimeType.startsWith("image/")
+        ? `.${image.mimeType.slice("image/".length).split(";")[0] || "png"}`
+        : ".png";
+      const imagePath = join(directory, `image-${index + 1}${extension}`);
+      writeFileSync(imagePath, Buffer.from(image.data, "base64"), { mode: 0o600 });
+      saved.push({
+        path: imagePath,
+        cleanup: () => {
+          try {
+            unlinkSync(imagePath);
+          } catch {
+            // 削除できないファイルは放置する
+          }
+        },
+      });
+    });
+  } catch {
+    // 一時ディレクトリを作れない場合は空を返し、子セッションを起動しない
+  }
+  return saved;
+}
 
 // SPEC「レート制限（429）時のフォールバック」: フォールバック済みであることを示す置換文言。
 // 元のエラー文言は含めない。quota・課金系の文言（insufficient_quota 等）が残ったまま
@@ -529,6 +598,9 @@ async function runChild(
       cwd: childResult.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      // 子セッションの拡張（sandboxed-tools の read_image など）が active agent を知るため。
+      // pi の ExtensionContext に agent フィールドはないため、環境変数で伝える。
+      env: { ...process.env, PI_AGENT_NAME: agent },
     });
     let buffer = "";
     let settled = false;
@@ -853,6 +925,19 @@ export default function agentsExtension(
     pi.on("session_start", async (_event, ctx) => {
       if (ctx.hasUI) ctx.ui.notify(`agent configuration error: ${loadedConfig.error}`, "error");
     });
+    // SPEC「設定の検証」: 設定が無効でも画像添付はモデルへ送らず Vision 入力を作らない
+    // エラーを返す。read_image は PI_AGENT_NAME が設定されないため常に拒否される。
+    pi.on("input", async (event, ctx) => {
+      if (!event.images || event.images.length === 0) return;
+      const message =
+        "image input is not available: the agent configuration is invalid; use visual_agent";
+      if (ctx.hasUI) ctx.ui.notify(message, "error");
+      else {
+        process.stderr.write(`${message}\n`);
+        process.exitCode = 1;
+      }
+      return { action: "handled" };
+    });
     return;
   }
 
@@ -875,9 +960,19 @@ export default function agentsExtension(
     }
   }
 
-  // tier の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立の候補は
-  // pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外して次候補へ
-  // 進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
+  // SPEC「tier によるモデル選択」: main は画像入力非対応モデルだけ、visual_agent は
+  // 画像入力対応モデルだけを候補として受け付ける。判定は model.input（pi-ai の Model 型）
+  // に基づく。他の agent への制約は spec が定めないため適用しない。
+  function imageRequirementFor(agent: Agent): "required" | "forbidden" | undefined {
+    if (!config?.agents[agent]) return undefined;
+    if (agent === "visual_agent") return "required";
+    if (agent === "main") return "forbidden";
+    return undefined;
+  }
+
+  // tier の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立・画像能力
+  // 不適合の候補は pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外
+  // して次候補へ進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
   // notifySwitch を false にすると切替時の `agent model →` 通知を省く（429 フォールバックは
   // 「レート制限時のフォールバック」節の通知が専らを定めるため）。
   async function applyTierModel(
@@ -888,6 +983,7 @@ export default function agentsExtension(
   ): Promise<string | null> {
     const tierName = config?.agents[agent]?.tier;
     if (!tierName) return null;
+    const imageRequirement = imageRequirementFor(agent);
     let candidates = config?.tiers[tierName] ?? [];
     for (;;) {
       const model = await pickCandidate(
@@ -896,6 +992,7 @@ export default function agentsExtension(
         (provider, id) => ctx.modelRegistry.find(provider, id),
         (when) => runWhen(when, signal),
         Date.now(),
+        imageRequirement,
       );
       if (!model) return null;
       if (ctx.model && ctx.model.provider === model.provider && ctx.model.id === model.id) {
@@ -930,9 +1027,17 @@ export default function agentsExtension(
   function applyAgentTools(ctx: ExtensionContext, agent: Agent): void {
     const agentDefinition = config?.agents[agent];
     if (!agentDefinition) return;
+    // 親セッション自身の active agent も sandboxed-tools の read_image などへ伝える。
+    process.env.PI_AGENT_NAME = agent;
+    const excluded = new Set(
+      agentDefinition.tools.filter((tool) => tool.startsWith("!")).map((tool) => tool.slice(1)),
+    );
+    const included = agentDefinition.tools.filter(
+      (tool) => tool !== "*" && !tool.startsWith("!"),
+    );
     const activeTools = agentDefinition.tools.includes("*")
-      ? pi.getAllTools().map((tool) => tool.name)
-      : [...new Set([...agentDefinition.tools, "subagent"])];
+      ? pi.getAllTools().map((tool) => tool.name).filter((tool) => !excluded.has(tool))
+      : [...new Set([...included, "subagent"])].filter((tool) => !excluded.has(tool));
     pi.setActiveTools(activeTools);
     registerAgentWidget(
       ctx,
@@ -977,12 +1082,93 @@ export default function agentsExtension(
   // ── pre-prompt re-evaluation ────────────────────────────────────────
 
   pi.on("input", async (event, ctx) => {
+    // 画像添付を親セッションのモデルへ送らない。main / senior は依頼文ごと visual_agent
+    // 子セッションへ委譲し、親のターンは handled で止める。報告は通知で返る。
+    if (event.images && event.images.length > 0) return routeImageInput(event, ctx);
     if (event.source === "extension" || manual) return;
     const applied = await applyTierModel(currentAgent, ctx, ctx.signal);
     if (applied) return;
     notifyNoModel(currentAgent, ctx, "error");
     return { action: "handled" };
   });
+
+  // SPEC「画像入力を使う agent」: チャット貼り付けと CLI @file の画像の振り分け。
+  // visual_agent は画像対応モデルのときだけそのまま送る。main / senior は visual_agent
+  // 子セッションへ委譲し、junior は依頼元への報告を促す。その他・設定無効時は画像を送らない。
+  function routeImageInput(
+    event: { text?: string; images?: ImageContent[]; source?: string },
+    ctx: ExtensionContext,
+  ): { action: "continue" } | { action: "handled" } {
+    if (!config) {
+      notifyImageUnavailable(ctx);
+      return { action: "handled" };
+    }
+    if (currentAgent === "visual_agent") {
+      if (ctx.model && !modelSupportsImages(ctx.model as { input?: readonly string[] })) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            "image input is not available: the current model does not support images",
+            "error",
+          );
+        } else {
+          process.stderr.write("image input is not available: model does not support images\n");
+        }
+        return { action: "handled" };
+      }
+      return { action: "continue" };
+    }
+    if (canDelegate(currentAgent, "visual_agent", config)) {
+      void delegateImageToVisualAgent(event, ctx).catch(() => {});
+      return { action: "handled" };
+    }
+    notifyImageUnavailable(ctx);
+    return { action: "handled" };
+  }
+
+  function notifyImageUnavailable(ctx: ExtensionContext): void {
+    const juniorGuidance =
+      currentAgent === "junior"
+        ? " Report to the caller that visual confirmation by visual_agent is needed."
+        : " Delegate to visual_agent to handle the image.";
+    const message = `image input is not available for agent ${currentAgent}.${juniorGuidance}`;
+    if (!ctx.hasUI) {
+      process.stderr.write(`${message}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    ctx.ui.notify(message, "warning");
+  }
+
+  async function delegateImageToVisualAgent(
+    event: { text?: string; images?: ImageContent[] },
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    const saved = saveAttachedImages(event.images ?? []);
+    const paths = saved.map((file) => file.path);
+    const request = (event.text ?? "").trim();
+    const task =
+      `The owner attached ${paths.length} image(s) with the following request. Read each image with read_image and complete it.` +
+      `\n\nRequest:\n${request || "(none)"}\n\nImages:\n${paths.join("\n")}`;
+    try {
+      const child = await runChild(ctx.cwd, task, "visual_agent", undefined, ctx.signal, undefined);
+      if (isFailedResult(child)) {
+        const reason = getResultOutput(child);
+        const message = `visual_agent delegation failed: ${reason}`;
+        if (ctx.hasUI) ctx.ui.notify(message, "error");
+        else process.stderr.write(`${message}\n`);
+      } else {
+        const report = getFinalOutput(child.messages).trim() || "finished without output.";
+        if (ctx.hasUI) ctx.ui.notify(`visual_agent: ${report}`, "info");
+        else process.stderr.write(`visual_agent: ${report}\n`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (ctx.hasUI) ctx.ui.notify(`visual_agent delegation failed: ${reason}`, "error");
+      else process.stderr.write(`visual_agent delegation failed: ${reason}\n`);
+    } finally {
+      for (const file of saved) file.cleanup();
+    }
+  }
 
   pi.on("before_agent_start", async (event) => {
     const addendum = buildAgentSystemPromptAddendum(currentAgent, config);
@@ -991,11 +1177,42 @@ export default function agentsExtension(
 
   // ── manual selection tracking ───────────────────────────────────────
 
-  pi.on("model_select", async (event) => {
+  // SPEC「画像入力を使う agent」: main は画像入力非対応モデルだけ、visual_agent は
+  // vision tier の画像対応候補だけを /model で受け付ける。違反はエラー通知して
+  // 直前のモデルへ戻し、手動状態にしない。
+  pi.on("model_select", async (event, ctx) => {
     if (!isManualSelect(event.source, switching)) return;
+    const requirement = event.model ? imageRequirementFor(currentAgent) : undefined;
+    if (requirement !== undefined) {
+      const supportsImages = modelSupportsImages(event.model as { input?: readonly string[] });
+      const disallowed =
+        requirement === "forbidden"
+          ? supportsImages && currentAgent === "main"
+          : !supportsImages || !isVisionTierCandidate(event.model);
+      if (disallowed) {
+        if (event.previousModel) await switchTo(event.previousModel as Model<Api>);
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `model ${event.model.provider}/${event.model.id} is not allowed for agent ${currentAgent}` +
+              (requirement === "forbidden"
+                ? ": main uses text-only models; image input is handled by visual_agent"
+                : ": visual_agent uses image-capable vision tier models"),
+            "error",
+          );
+        }
+        return;
+      }
+    }
     manual = true;
     tuiHandle?.requestRender();
   });
+
+  function isVisionTierCandidate(model: { provider: string; id: string }): boolean {
+    const candidates = config?.tiers.vision ?? [];
+    return candidates.some(
+      (candidate) => candidate.provider === model.provider && candidate.model === model.id,
+    );
+  }
 
   // ── 429 detection + fallback ────────────────────────────────────────
 

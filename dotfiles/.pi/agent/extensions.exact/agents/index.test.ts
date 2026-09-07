@@ -45,12 +45,13 @@ const config: AgentConfig = {
       { provider: "commandcode", model: "gpt-5.6-luna" },
     ],
     low: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
+    vision: [{ provider: "zai", model: "glm-5.3-flash" }],
   },
   agents: {
     manager: {
       tier: "middle",
-      tools: ["*"],
-      subagents: ["worker"],
+      tools: ["*", "!read_image"],
+      subagents: ["worker", "visual_agent"],
       systemPrompt: ["ファイル操作は禁止"],
     },
     worker: { tier: "low", tools: ["bash"], subagents: ["chat"], systemPrompt: ["worker prompt"] },
@@ -61,6 +62,12 @@ const config: AgentConfig = {
       systemPrompt: ["チャット用"],
     },
     locked: { tier: "low", tools: [], subagents: [], systemPrompt: [] },
+    visual_agent: {
+      tier: "vision",
+      tools: ["*"],
+      subagents: [],
+      systemPrompt: ["visual prompt"],
+    },
   },
 };
 
@@ -120,7 +127,7 @@ function captureAgentsExtension(
   const selectedModels: unknown[] = [];
   const registeredFlags: string[] = [];
   const sentMessages: Array<{ content: string; options?: unknown }> = [];
-  const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
+  const spawnCalls: Array<{ command: string; args: string[]; cwd?: string; env?: Record<string, string | undefined> }> = [];
   const children: FakeChild[] = [];
   let spawnResponder: (child: FakeChild) => void = () => {};
   let agentWidget: any;
@@ -139,9 +146,9 @@ function captureAgentsExtension(
       return 0;
     },
   };
-  __spawn.current = ((command: string, args: string[], options: { cwd?: string }) => {
+  __spawn.current = ((command: string, args: string[], options: { cwd?: string; env?: Record<string, string | undefined> }) => {
     const child = new FakeChild();
-    spawnCalls.push({ command, args, cwd: options.cwd });
+    spawnCalls.push({ command, args, cwd: options.cwd, env: options.env });
     children.push(child);
     setImmediate(() => spawnResponder(child));
     return child;
@@ -237,16 +244,24 @@ function captureAgentsExtension(
     async runCommand(agent: string, args = "") {
       await commands.get(`agent:${agent}`)?.(args, context);
     },
-    async input(text: string, source = "interactive") {
+    async input(
+      text: string,
+      source = "interactive",
+      images?: Array<{ type: "image"; data: string; mimeType: string }>,
+    ) {
       let result: unknown;
       for (const handler of handlers.get("input") ?? []) {
-        const handled = await handler({ text, source }, context);
+        const handled = await handler({ text, source, ...(images ? { images } : {}) }, context);
         if (handled) result = handled;
       }
       return result;
     },
-    async modelSelect(source: string) {
-      for (const handler of handlers.get("model_select") ?? []) await handler({ source }, context);
+    async modelSelect(source: string, model?: { provider: string; id: string; input?: string[] }) {
+      for (const handler of handlers.get("model_select") ?? [])
+        await handler(
+          model ? { source, model, previousModel: context.model } : { source },
+          context,
+        );
     },
     async providerResponse(status: number, headers: Record<string, string> = {}) {
       for (const handler of handlers.get("after_provider_response") ?? [])
@@ -316,12 +331,18 @@ tiers:
     - provider: zai
       model: glm-5.2
       when: 'exit 0'
+  vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
   manager:
     tier: middle
     tools: [read]
     subagents: []
-    systemPrompt: [hello]`);
+    systemPrompt: [hello]
+  visual_agent:
+    tier: vision
+    tools: ["*"]
+    subagents: []
+    systemPrompt: []`);
     assert.equal(result.config?.default, "manager");
     assert.deepEqual(result.config?.tiers.middle, [
       { provider: "zai", model: "glm-5.2", when: "exit 0" },
@@ -334,13 +355,19 @@ agents:
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
 _common: &common shared
 agents:
   manager:
     tier: middle
     tools: []
     subagents: []
-    systemPrompt: [*common]`);
+    systemPrompt: [*common]
+  visual_agent:
+    tier: vision
+    tools: ["*"]
+    subagents: []
+    systemPrompt: []`);
     assert.deepEqual(result.config?.agents.manager?.systemPrompt, ["shared"]);
   });
 
@@ -422,6 +449,7 @@ agents:
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
 _common: &common shared
 agents:
   manager:
@@ -433,7 +461,12 @@ agents:
     tier: middle
     tools: []
     subagents: []
-    systemPrompt: [*common, worker-only]`);
+    systemPrompt: [*common, worker-only]
+  visual_agent:
+    tier: vision
+    tools: ["*"]
+    subagents: []
+    systemPrompt: []`);
     assert.deepEqual(result.config?.agents.manager?.systemPrompt, ["shared", "manager-only"]);
     assert.deepEqual(result.config?.agents.worker?.systemPrompt, ["shared", "worker-only"]);
   });
@@ -534,6 +567,117 @@ profiles:
   main: {tier: high, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /default and agents are required/);
   });
+
+  it("visual_agent がない設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+agents:
+  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /visual_agent agent is required/);
+  });
+
+  it("visual_agent が vision tier を参照しない設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+agents:
+  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}
+  visual_agent: {tier: middle, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /must use the vision tier/);
+  });
+
+  it("visual_agent が read_image を許可しない設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
+  visual_agent: {tier: vision, tools: [read], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /must allow read_image/);
+  });
+
+  it("visual_agent 以外が read_image を否定なしで許可する設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {tier: middle, tools: ["*"], subagents: [], systemPrompt: []}
+  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /must exclude read_image/);
+  });
+
+  it("visual_agent 以外が read_image を明示許可しても否定なしの設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {tier: middle, tools: [read_image], subagents: [], systemPrompt: []}
+  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /must exclude read_image/);
+  });
+
+  it("main と senior の subagents に visual_agent がない設定を拒否する", () => {
+    const result = parseAgentConfig(`default: main
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  main: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
+  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
+  junior: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
+  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /must delegate to visual_agent/);
+  });
+
+  it("junior が visual_agent を委譲先に持つ設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
+  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
+  junior: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
+  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /junior must not delegate to visual_agent/);
+  });
+
+  it("visual_agent が vision tier で read_image を許可する設定を受け入れる", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
+  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.equal(result.error, undefined);
+  });
+
+  it("否定指定が ! 単体の設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {tier: middle, tools: ["!"], subagents: [visual_agent], systemPrompt: []}
+  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /bare "!" negation/);
+  });
+
+  it("同じツールを許可と否定の両方で指定する設定を拒否する", () => {
+    const result = parseAgentConfig(`default: manager
+tiers:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {tier: middle, tools: [read, "!read", "*"], subagents: [visual_agent], systemPrompt: []}
+  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /both allows and negates tool read/);
+  });
 });
 
 describe("セッションの agent", () => {
@@ -561,7 +705,24 @@ describe("ツール許可", () => {
     assert.equal(shouldBlockToolCall("chat", "web_search", config), false);
     assert.equal(shouldBlockToolCall("chat", "web_fetch", config), false);
   });
+
+  it("!read_image はワイルドカードがあっても read_image を拒否する", () => {
+    assert.equal(shouldBlockToolCall("manager", "read_image", config), true);
+    assert.equal(isToolAllowed("manager", "future_tool", config), true);
+  });
+
+  it("visual_agent は read_image を許可する", () => {
+    assert.equal(shouldBlockToolCall("visual_agent", "read_image", config), false);
+  });
 });
+
+function isToolAllowed(
+  agent: Parameters<typeof shouldBlockToolCall>[0],
+  toolName: string,
+  agentConfig: Parameters<typeof shouldBlockToolCall>[2],
+): boolean {
+  return !shouldBlockToolCall(agent, toolName, agentConfig);
+}
 
 describe("委譲", () => {
   it("親 agent と子 agent の subagents 設定に従って再委譲を許可する", () => {
@@ -921,6 +1082,294 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.modelSelect("restore");
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("main の model_select は画像対応モデルを拒否して前のモデルへ戻す", async () => {
+    const extension = captureAgentsExtension(
+      { config: { ...config, default: "main", agents: { ...config.agents, main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "visual_agent"], systemPrompt: [] } } } },
+      { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
+    );
+    try {
+      await extension.sessionStart();
+      const previous = extension.context.model;
+      await extension.modelSelect("set", { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main"]);
+      assert.deepEqual(extension.context.model, previous);
+      assert.ok(
+        extension.notifications.some((message) => message.includes("not allowed for agent main")),
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("visual_agent の model_select は画像非対応モデルを拒否して前のモデルへ戻す", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("visual_agent");
+      const previous = extension.context.model;
+      await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text"] });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: visual_agent"]);
+      assert.deepEqual(extension.context.model, previous);
+      assert.ok(
+        extension.notifications.some((message) =>
+          message.includes("not allowed for agent visual_agent"),
+        ),
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("visual_agent の model_select は vision tier の画像対応候補を受け入れる", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("visual_agent");
+      await extension.modelSelect("set", { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: visual_agent (manual)"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("visual_agent の model_select は画像対応でも vision tier 外を拒否する", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      { findModel: (provider, id) => ({ provider, id, input: ["text", "image"] }) },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("visual_agent");
+      const previous = extension.context.model;
+      await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text", "image"] });
+      assert.deepEqual(extension.context.model, previous);
+      assert.ok(
+        extension.notifications.some((message) =>
+          message.includes("not allowed for agent visual_agent"),
+        ),
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("画像添付の input は visual_agent 以外では親モデルへ送らず handled で止める", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const result = await extension.input("see this", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(result, { action: "handled" });
+      assert.equal(extension.sentMessages.length, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("画像添付の input は visual_agent 子セッションへ委譲する", async () => {
+    const extension = captureAgentsExtension();
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "looked at image" }] } })}\n`,
+        ),
+      );
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.input("check this diagram", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(result, { action: "handled" });
+      assert.equal(extension.spawnCalls.length, 1);
+      assert.equal(extension.spawnCalls[0]?.args.includes("--agent"), true);
+      const agentFlagIndex = extension.spawnCalls[0]!.args.indexOf("--agent");
+      assert.equal(extension.spawnCalls[0]!.args[agentFlagIndex + 1], "visual_agent");
+      const taskArg = extension.spawnCalls[0]!.args.at(-1)!;
+      assert.match(taskArg, /read_image/);
+      assert.match(taskArg, /check this diagram/);
+      // 子セッションへ active agent を伝える（read_image の visual_agent 判定）。
+      assert.equal(extension.spawnCalls[0]?.env?.PI_AGENT_NAME, "visual_agent");
+      // 子の完了を待ち、最終テキストが親へ報告される。
+      await Bun.sleep(20);
+      assert.ok(
+        extension.notifications.some((message) => message === "visual_agent: looked at image"),
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("画像委譲の子が失敗したら親へエラーを報告する", async () => {
+    const extension = captureAgentsExtension();
+    extension.respondToChild((child) => {
+      child.stderr.emit("data", Buffer.from("boom\n"));
+      child.emit("close", 2);
+    });
+    try {
+      await extension.sessionStart();
+      await extension.input("see this", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      await Bun.sleep(20);
+      assert.ok(
+        extension.notifications.some((message) =>
+          message.startsWith("visual_agent delegation failed:"),
+        ),
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("main 以外の agent は画像対応候補をそのまま選ぶ", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      {
+        findModel: (provider, id) => ({
+          provider,
+          id,
+          input: id === "glm-5.2" ? ["text", "image"] : ["text"],
+        }),
+      },
+    );
+    try {
+      await extension.sessionStart();
+      // manager は main でも visual_agent でもないため、spec の catch-all 行どおり
+      // 先頭候補（画像対応）がそのまま適用される。仮に画像対応除外が全 agent へ
+      // 拡大されると次候補（gpt-5.6-luna）へ変わり、この assert が失敗する。
+      assert.deepEqual(extension.selectedModels, [
+        { provider: "zai", id: "glm-5.2", input: ["text", "image"] },
+      ]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("agent 切り替えで PI_AGENT_NAME を切り替える", async () => {
+    const extension = captureAgentsExtension();
+    const previousAgentName = process.env.PI_AGENT_NAME;
+    try {
+      await extension.sessionStart();
+      assert.equal(process.env.PI_AGENT_NAME, "manager");
+      await extension.runCommand("visual_agent");
+      assert.equal(process.env.PI_AGENT_NAME, "visual_agent");
+    } finally {
+      if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+      else process.env.PI_AGENT_NAME = previousAgentName;
+      extension.restore();
+    }
+  });
+
+  it("visual_agent の画像添付は画像対応モデルのときだけ親モデルへ送る", async () => {
+    const imageCapableFind = (provider: string, id: string) => ({
+      provider,
+      id,
+      input: id.includes("flash") ? ["text", "image"] : ["text"],
+    });
+    // 画像対応モデル: そのまま送る（handled にしない）
+    const extension = captureAgentsExtension({ config }, { findModel: imageCapableFind });
+    try {
+      await extension.sessionStart();
+      await extension.runCommand("visual_agent");
+      const result = await extension.input("see this", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(result, { action: "continue" });
+    } finally {
+      extension.restore();
+    }
+    // 画像非対応モデル: handled で止めてエラー
+    const textOnlyExtension = captureAgentsExtension({ config }, { findModel: (provider, id) => ({ provider, id, input: ["text"] }) });
+    try {
+      await textOnlyExtension.sessionStart();
+      await textOnlyExtension.runCommand("visual_agent");
+      const blocked = await textOnlyExtension.input("see this", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(blocked, { action: "handled" });
+      assert.ok(
+        textOnlyExtension.notifications.some((message) =>
+          message.includes("does not support images"),
+        ),
+      );
+      assert.equal(textOnlyExtension.spawnCalls.length, 0);
+    } finally {
+      textOnlyExtension.restore();
+    }
+  });
+
+  it("junior とその他 agent の画像添付は委譲せず案内する", async () => {
+    const juniorConfig: AgentConfig = {
+      ...config,
+      agents: {
+        ...config.agents,
+        junior: { tier: "low", tools: ["*", "!read_image"], subagents: [], systemPrompt: [] },
+      },
+    };
+    const junior = captureAgentsExtension({ config: juniorConfig });
+    try {
+      await junior.sessionStart();
+      await junior.runCommand("junior");
+      const result = await junior.input("see this", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(result, { action: "handled" });
+      assert.equal(junior.spawnCalls.length, 0);
+      assert.ok(
+        junior.notifications.some((message) =>
+          message.includes("Report to the caller that visual confirmation by visual_agent"),
+        ),
+      );
+    } finally {
+      junior.restore();
+    }
+    const other = captureAgentsExtension({ config });
+    try {
+      await other.sessionStart();
+      await other.runCommand("chat");
+      const result = await other.input("see this", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(result, { action: "handled" });
+      assert.equal(other.spawnCalls.length, 0);
+      assert.ok(
+        other.notifications.some((message) =>
+          message.includes("image input is not available for agent chat"),
+        ),
+      );
+    } finally {
+      other.restore();
+    }
+  });
+
+  it("設定が無効なとき画像添付はモデルへ送らずエラーを返す", async () => {
+    const extension = captureAgentsExtension({ error: "tiers are required" });
+    try {
+      await extension.sessionStart();
+      const result = await extension.input("see this", "interactive", [
+        { type: "image", data: "aGk=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(result, { action: "handled" });
+      assert.ok(
+        extension.notifications.some((message) =>
+          message.includes("agent configuration is invalid"),
+        ),
+      );
     } finally {
       extension.restore();
     }
@@ -2506,7 +2955,7 @@ describe("子セッションのセッション記録", () => {
     assert.ok(!args.includes("--no-session"));
     const dirIndex = args.indexOf("--session-dir");
     assert.notEqual(dirIndex, -1);
-    assert.ok(args[dirIndex + 1].endsWith("subagent-sessions"));
+    assert.ok(args[dirIndex + 1]!.endsWith("subagent-sessions"));
     const nameIndex = args.indexOf("--name");
     assert.equal(args[nameIndex + 1], "junior: do the thing");
     assert.equal(args.at(-1), "Task: do the thing");

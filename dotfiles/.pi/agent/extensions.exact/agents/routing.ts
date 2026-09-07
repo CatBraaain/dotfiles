@@ -99,23 +99,44 @@ export function recordCooldown(
 }
 
 // The first candidate (top-to-bottom) whose model exists in the registry, is
-// not cooling down, and whose `when` passes. find + evalWhen + now are
-// injected so this needs neither pi nor bash to test.
+// not cooling down, whose `when` passes, and whose image capability satisfies
+// the agent's requirement. find + evalWhen + now are injected so this needs
+// neither pi nor bash to test.
 export async function pickCandidate<M extends { provider: string; id: string }>(
   candidates: readonly ModelCandidate[],
   cooldowns: Map<string, number>,
   find: (provider: string, id: string) => M | undefined,
   evalWhen: (when: string | undefined) => Promise<boolean>,
   now: number,
+  imageRequirement?: "required" | "forbidden",
 ): Promise<M | null> {
   for (const candidate of candidates) {
     const model = find(candidate.provider, candidate.model);
     if (!model) continue;
     if (isCoolingDown(modelKey(model), cooldowns, now)) continue;
     if (!(await evalWhen(candidate.when))) continue;
+    if (
+      imageRequirement !== undefined &&
+      !imageCapabilityMatches(model as { input?: readonly string[] }, imageRequirement)
+    )
+      continue;
     return model;
   }
   return null;
+}
+
+// pi-ai models declare their input modalities as ("text" | "image")[]. A
+// model supports image input exactly when "image" is present.
+export function modelSupportsImages(model: { input?: readonly string[] }): boolean {
+  return Array.isArray(model.input) && model.input.includes("image");
+}
+
+function imageCapabilityMatches(
+  model: { input?: readonly string[] },
+  requirement: "required" | "forbidden",
+): boolean {
+  const supportsImages = modelSupportsImages(model);
+  return requirement === "required" ? supportsImages : !supportsImages;
 }
 
 // `when` コマンドの実行器。bashExecFrom(createLocalBashOperations()) が pi の
