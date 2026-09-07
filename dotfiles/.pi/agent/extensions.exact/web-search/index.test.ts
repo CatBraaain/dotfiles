@@ -17,6 +17,7 @@ import webSearchExtension, {
   openserpParse,
   defaultSearchBackends,
   fetchOne,
+  spawnDetachedServer,
   formatBackendLine,
   formatBackendLines,
   PARSE_TIMEOUT_MS,
@@ -1577,6 +1578,17 @@ describe("openserp 接続先と起動コマンド", () => {
     assert.deepEqual(spawnSpec.args, ["serve", "-a", "127.0.0.1", "-p", "7000", "--quiet"]);
     assert.equal(spawnSpec.options.detached, true);
     assert.equal(spawnSpec.options.stdio, "ignore");
+  });
+});
+
+describe("サーバー起動のエラーハンドリング", () => {
+  it("起動コマンドが存在しないとき spawn の error を握り、プロセスを落とさない", async () => {
+    const child = spawnDetachedServer("no-such-server-binary-for-test", [], { stdio: "ignore" });
+
+    assert.ok(child.listenerCount("error") >= 1, "spawn の error を握る listener が必要");
+    // ENOENT の "error" は次 tick 以降に emit される。ここまで到達し、
+    // このテスト自体が uncaughtException で死ななければ握りが機能している。
+    await new Promise((resolve) => setTimeout(resolve, 50));
   });
 });
 

@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { execFile, spawn } from "node:child_process";
+import { type ChildProcess, type SpawnOptions, execFile, spawn } from "node:child_process";
 
 export const SEARCH_RESULT_LIMIT = 10;
 
@@ -93,12 +93,9 @@ export function buildCamofoxServerSpawn(): {
   };
 }
 
-// Detached spawn: the server is machine-scoped and outlives this pi process
-// (SPEC: 起動したサーバープロセスは残るため、次のリクエストでは成功しうる)。
 export function spawnCamofoxServer(): void {
   const { command, args, options } = buildCamofoxServerSpawn();
-  const child = spawn(command, args, options);
-  child.unref();
+  spawnDetachedServer(command, args, options);
 }
 
 // --- openserp server (SERP parsing) ---
@@ -125,11 +122,27 @@ export function buildOpenserpServerSpawn(): {
 
 export function spawnOpenserpServer(): void {
   const { command, args, options } = buildOpenserpServerSpawn();
-  const child = spawn(command, args, options);
-  child.unref();
+  spawnDetachedServer(command, args, options);
 }
 
 // --- shared server bootstrap (health check -> background spawn -> wait) ---
+
+// Detached spawn: the server is machine-scoped and outlives this pi process
+// (SPEC: 起動したサーバープロセスは残るため、次のリクエストでは成功しうる)。
+// Swallow spawn errors (e.g. binary missing from PATH): without an "error"
+// listener Node rethrows them as an uncaughtException that kills pi, while
+// the health-check loop should report them as a backend failure instead
+// (SPEC: 起動コマンドの実行に失敗した場合もバックエンドの失敗として扱う)。
+export function spawnDetachedServer(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+): ChildProcess {
+  const child = spawn(command, args, options);
+  child.on("error", () => {});
+  child.unref();
+  return child;
+}
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
