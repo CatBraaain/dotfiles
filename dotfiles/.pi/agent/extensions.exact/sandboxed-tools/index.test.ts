@@ -2408,29 +2408,242 @@ describe("§3 許可要求ツール", () => {
     ]);
   });
 
-  it("ask_permission の reason パラメータは必須", () => {
-    const tool = captureRegisteredTools().get("ask_permission");
-    const schema = tool.parameters as {
-      properties: Record<string, unknown>;
-      required?: string[];
-    };
-    assert.ok(schema.properties.reason);
-    assert.ok(schema.required?.includes("reason"));
+  it(
+    "command のダイアログは問いかけ・理由・設定パターンを行順どおりに表示する",
+    withAskPermissionSandbox(
+      () => `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      async (_dir, sandbox) => {
+        let title = "";
+        await sandbox.requestCommandPermission("sudo reboot", "to restart the hung service", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            ...grantUi,
+            select: async (dialogTitle, options) => {
+              title = dialogTitle;
+              return options[0];
+            },
+          },
+        });
+        assert.equal(
+          title,
+          [
+            "Allow command execution?",
+            "sudo reboot",
+            "reason: to restart the hung service",
+            "matched: sudo",
+          ].join("\n"),
+        );
+      },
+    ),
+  );
+
+  it(
+    "command の確認ダイアログは一致範囲を強調表示する",
+    withAskPermissionSandbox(
+      () => `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      async (_dir, sandbox) => {
+        const dialogTitles: string[] = [];
+        await sandbox.requestCommandPermission("sudo reboot", "to restart the hung service", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async (title, options) => {
+              dialogTitles.push(title);
+              return options[1];
+            },
+            theme: uiTheme,
+          },
+        });
+        assert.deepEqual(dialogTitles, [
+          [
+            "Allow command execution?",
+            `${highlighted("sudo")} reboot`,
+            "reason: to restart the hung service",
+            "matched: sudo",
+          ].join("\n"),
+        ]);
+      },
+    ),
+  );
+
+  it(
+    "command の拒否は拒否と理由を結果として返し以降も差し戻される",
+    withAskPermissionSandbox(
+      () => `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      async (_dir, sandbox) => {
+        const outcome = await sandbox.requestCommandPermission(
+          "sudo reboot",
+          "to restart the hung service",
+          {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: { ...denyUi, input: async () => "not now" },
+          },
+        );
+        assert.deepEqual(outcome, {
+          status: "denied",
+          command: "sudo reboot",
+          reason: "not now",
+        });
+        await assert.rejects(async () => {
+          await sandbox.authorizeCommand("sudo reboot", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: approvingUi,
+          });
+        }, /Command requires a reason: sudo reboot/);
+      },
+    ),
+  );
+
+  it(
+    "allow コマンドはダイアログなしで許可済みを返す",
+    withAskPermissionSandbox(
+      () => `
+commands:
+  - {allow: ls}
+`,
+      async (_dir, sandbox) => {
+        const outcome = await sandbox.requestCommandPermission("ls -la", "to list files", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: noDialogUi,
+        });
+        assert.deepEqual(outcome, { status: "already granted", command: "ls -la" });
+      },
+    ),
+  );
+
+  it(
+    "deny コマンドは許可要求できない",
+    withAskPermissionSandbox(
+      () => `
+commands:
+  - {deny: sudo}
+`,
+      async (_dir, sandbox) => {
+        await assert.rejects(
+          () =>
+            sandbox.requestCommandPermission("sudo reboot", "to restart", {
+              cwd: "/cwd",
+              hasUI: true,
+              ui: noDialogUi,
+            }),
+          /Command denied: sudo reboot/,
+        );
+      },
+    ),
+  );
+
+  it("ask_permission ツールのコマンド承認は1回限りの実行承認を返す", async () => {
+    const result = await captureRegisteredTools()
+      .get("ask_permission")
+      .execute(
+        "t",
+        { command: "sudo reboot", reason: "to restart the hung service" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: grantUi,
+        },
+      );
+    assert.deepEqual(result.content, [
+      {
+        type: "text",
+        text: "User approved this command via ask_permission; re-send the same bash call to run it (one-shot).",
+      },
+    ]);
+    assert.deepEqual(result.details, { status: "granted", command: "sudo reboot" });
   });
 
-  it("説明文と promptGuidelines は作業着手前の利用を誘導する", () => {
+  it("ask_permission ツールのコマンド拒否は拒否と理由を結果として返す", async () => {
+    const result = await captureRegisteredTools()
+      .get("ask_permission")
+      .execute(
+        "t",
+        { command: "sudo reboot", reason: "to restart the hung service" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: { ...denyUi, input: async () => "not now" },
+        },
+      );
+    assert.deepEqual(result.content, [
+      { type: "text", text: "User denied this command.\nUser reason: not now" },
+    ]);
+    assert.deepEqual(result.details, {
+      status: "denied",
+      command: "sudo reboot",
+      reason: "not now",
+    });
+  });
+
+  it("ask_permission のパラメータは path または command と reason を必須とする", () => {
+    const tool = captureRegisteredTools().get("ask_permission");
+    const schema = tool.parameters as {
+      anyOf?: { properties?: Record<string, unknown>; required?: string[] }[];
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    const variants = schema.anyOf ?? [schema];
+    assert.ok(
+      variants.some(
+        (variant) => variant.properties?.path !== undefined && variant.required?.includes("reason"),
+      ),
+    );
+    assert.ok(
+      variants.some(
+        (variant) =>
+          variant.properties?.command !== undefined && variant.required?.includes("reason"),
+      ),
+    );
+  });
+
+  it("説明文と promptGuidelines は作業着手前と理由必須ゲートの利用を誘導する", () => {
     const tool = captureRegisteredTools().get("ask_permission");
     assert.match(tool.description, /before starting edit-heavy work/i);
     assert.match(tool.description, /worktree/i);
-    assert.equal(tool.promptGuidelines?.length, 1);
+    assert.match(tool.description, /exact rejected command/i);
+    assert.equal(tool.promptGuidelines?.length, 2);
     assert.match(tool.promptGuidelines[0], /before starting edit-heavy work/i);
     assert.match(tool.promptGuidelines[0], /worktree/i);
+    assert.match(tool.promptGuidelines[1], /Command requires a reason/);
   });
 
   it("ask_permission のコール行とサマリー表示", () => {
     const tool = captureRegisteredTools().get("ask_permission");
     const call = renderToolCall("ask_permission", { path: join(process.cwd(), "work") });
     assert.equal(call, "ask_permission ./work");
+    const commandCall = renderToolCall("ask_permission", { command: "sudo reboot" });
+    assert.equal(commandCall, "ask_permission sudo reboot");
+    const longCommand = `sudo systemctl restart ${"x".repeat(100)}`;
+    assert.equal(
+      renderToolCall("ask_permission", { command: longCommand }),
+      `ask_permission ${truncateText(longCommand)}`,
+    );
+    const longPath = `${"d".repeat(100)}/file.txt`;
+    assert.equal(
+      renderToolCall("ask_permission", { path: longPath }),
+      `ask_permission ${truncateText(`./${longPath}`)}`,
+    );
     const summary = (status: string) =>
       tool
         .renderResult(
@@ -2816,6 +3029,178 @@ commands:
     assert.equal(resolveCommandAction([{ action: "allow", patterns: ["*"] }], ""), "allow");
   });
 
+  it("ask_with_reason は deny > ask_with_reason > ask > allow の順序を適用する", () => {
+    const entries = [
+      { action: "allow", patterns: ["*"] },
+      { action: "ask", patterns: ["git push"] },
+      { action: "ask_with_reason", patterns: ["sudo"] },
+    ];
+    assert.equal(resolveCommandAction(entries, "sudo reboot"), "ask_with_reason");
+    assert.equal(resolveCommandAction(entries, "git push && sudo reboot"), "ask_with_reason");
+    assert.equal(resolveCommandAction(entries, "git push"), "ask");
+    const withDeny = [...entries, { action: "deny", patterns: ["mkfs"] }];
+    assert.equal(resolveCommandAction(withDeny, "sudo reboot; mkfs /dev/sda"), "deny");
+  });
+
+  it(
+    "ask_with_reason コマンドはダイアログを出さず理由必須で差し戻す",
+    withSandbox(
+      `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      "/cwd",
+      async (sandbox) => {
+        await assert.rejects(async () => {
+          await sandbox.authorizeCommand("sudo reboot", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: {
+              confirm: async () => {
+                throw new Error("unexpected dialog");
+              },
+            },
+          });
+        }, /Command requires a reason: sudo reboot\nThis command requires a reason\. Call ask_permission with this exact command and a reason; do not rewrite the command to bypass the gate\./);
+      },
+    ),
+  );
+
+  it(
+    "ask_with_reason の承認は同一コマンドを1回だけ通す",
+    withSandbox(
+      `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      "/cwd",
+      async (sandbox) => {
+        const outcome = await sandbox.requestCommandPermission(
+          "sudo reboot",
+          "to restart the hung service",
+          { cwd: "/cwd", hasUI: true, ui: approvingUi },
+        );
+        assert.deepEqual(outcome, { status: "granted", command: "sudo reboot" });
+        const approved = await sandbox.authorizeCommand("sudo reboot", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: approvingUi,
+        });
+        assert.equal(approved, true);
+        await assert.rejects(async () => {
+          await sandbox.authorizeCommand("sudo reboot", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: approvingUi,
+          });
+        }, /Command requires a reason: sudo reboot/);
+      },
+    ),
+  );
+
+  it(
+    "承認は引用の付け方の違いを同一コマンドとみなす",
+    withSandbox(
+      `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      "/cwd",
+      async (sandbox) => {
+        await sandbox.requestCommandPermission(
+          'sudo systemctl restart "foo bar"',
+          "to restart the service",
+          { cwd: "/cwd", hasUI: true, ui: approvingUi },
+        );
+        const approved = await sandbox.authorizeCommand("sudo systemctl restart 'foo bar'", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: approvingUi,
+        });
+        assert.equal(approved, true);
+      },
+    ),
+  );
+
+  it(
+    "承認済みコマンドの一部改変は再ゲートされる",
+    withSandbox(
+      `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      "/cwd",
+      async (sandbox) => {
+        await sandbox.requestCommandPermission("sudo reboot", "to restart", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: approvingUi,
+        });
+        await assert.rejects(async () => {
+          await sandbox.authorizeCommand("sudo reboot now", {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: approvingUi,
+          });
+        }, /Command requires a reason: sudo reboot now/);
+      },
+    ),
+  );
+
+  it(
+    "ask コマンドは事前承認の対象外",
+    withSandbox(
+      `
+commands:
+  - {ask: [git push]}
+`,
+      "/cwd",
+      async (sandbox) => {
+        await assert.rejects(
+          () =>
+            sandbox.requestCommandPermission("git push origin main", "to publish", {
+              cwd: "/cwd",
+              hasUI: true,
+              ui: approvingUi,
+            }),
+          /Command is confirmed when run via bash; no pre-approval needed: git push origin main/,
+        );
+      },
+    ),
+  );
+
+  it(
+    "ask_with_reason の許可要求は確認ダイアログを提供できない UI ではエラーになる",
+    withSandbox(
+      `
+commands:
+  - {allow: "*"}
+  - {ask_with_reason: [sudo]}
+`,
+      "/cwd",
+      async (sandbox) => {
+        await assert.rejects(
+          () =>
+            sandbox.requestCommandPermission("sudo reboot", "to restart", {
+              cwd: "/cwd",
+              hasUI: false,
+            }),
+          /Access requires confirmation: sudo reboot/,
+        );
+      },
+    ),
+  );
+
+  it("bash の説明文は理由必須ゲートの誘導を含む", () => {
+    const tool = captureRegisteredTools().get("bash");
+    assert.match(tool.description, /Command requires a reason/);
+    assert.match(tool.description, /do not rewrite them to bypass the gate/);
+  });
+
   it(
     "未設定コマンドはブロックされる",
     withSandbox(``, "/cwd", async (sandbox) => {
@@ -2941,6 +3326,21 @@ commands:
   - {ask: [git push, "gh pr create"]}
 `);
     assert.deepEqual(config.commands, [{ action: "ask", patterns: ["git push", "gh pr create"] }]);
+  });
+
+  it("commands は ask_with_reason を読み込む", () => {
+    const config = parseSandboxedToolsConfig(`
+commands:
+  - {ask_with_reason: [sudo, "chmod -R"]}
+`);
+    assert.deepEqual(config.commands, [
+      { action: "ask_with_reason", patterns: ["sudo", "chmod -R"] },
+    ]);
+  });
+
+  it("read と write で ask_with_reason は設定エラーになる", () => {
+    assert.throws(() => parseSandboxedToolsConfig("read:\n  - {ask_with_reason: ~/.ssh}\n"));
+    assert.throws(() => parseSandboxedToolsConfig("write:\n  - {ask_with_reason: /tmp}\n"));
   });
 
   it("記法を満たさない config は throw する", () => {

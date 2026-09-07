@@ -37,22 +37,24 @@ commands:
   - ask:
       - "{npm,bun,pnpm} publish"
       - gh pr create
+      - git push
+  # destructive or privileged commands: agent must request approval with a
+  # reason via ask_permission, then re-send the same bash command (SPEC §4)
+  - ask_with_reason:
       # git
       - git reset --hard
       - git clean -fd
-      # - git push {--force,-f,--delete,-d}
-      - git push
       - git replace
       - git update-ref
       - git reflog expire
       - git gc
       - git prune
       # system
+      - sudo
       - systemctl
       - crontab
       - chmod -R
       - chown -R
-      - sudo
   # systemctl: read-only subcommands run without confirmation (last match wins)
   - allow:
       - systemctl status

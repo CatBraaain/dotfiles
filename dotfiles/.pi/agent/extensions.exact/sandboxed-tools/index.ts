@@ -32,6 +32,7 @@ import {
   formatReadCall,
   formatToolResultSummary,
   resultText,
+  truncateText,
 } from "../shared/tool-format.ts";
 
 export {
@@ -282,7 +283,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     ...bashTool,
-    description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call ask_permission to approve the working directory subtree.`,
+    description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call ask_permission to approve the working directory subtree. Commands rejected with "Command requires a reason" must be re-requested via ask_permission with the same command and a reason; do not rewrite them to bypass the gate.`,
     async execute(id, params, signal, onUpdate, context) {
       const approved = await sandbox.authorizeCommand(params.command, context);
       const result = await sandbox.runTool("bash", params, {
@@ -460,22 +461,59 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     name: "ask_permission",
     label: "ask_permission",
     description:
-      "Ask the user to grant write access to a directory subtree. Use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory): once approved, the subtree becomes writable for the rest of the session, including from bash. Relative paths resolve against the session cwd.",
-    promptSnippet: "Ask the user for write access to a directory subtree",
+      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory); once approved, the subtree becomes writable for the rest of the session, including from bash. For a command: pass the exact rejected command; once approved, re-sending the same bash call runs it once without another dialog.",
+    promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
       "Before starting edit-heavy work in a directory that is not yet writable (e.g. a worktree outside the allowed paths), call ask_permission on the worktree directory or its parent so the user can approve it up front.",
+      'When bash rejects a command with "Command requires a reason", call ask_permission with that exact command and a reason instead of rewriting the command.',
     ],
-    parameters: Type.Object({
-      path: Type.String({
-        description:
-          "Directory to request write access for. Absolute path (~ allowed); relative paths resolve against the current cwd. A file path requests its parent directory subtree.",
+    parameters: Type.Union([
+      Type.Object({
+        path: Type.String({
+          description:
+            "Directory to request write access for. Absolute path (~ allowed); relative paths resolve against the current cwd. A file path requests its parent directory subtree.",
+        }),
+        reason: Type.String({
+          description:
+            "Why write access to this directory subtree is needed. Shown to the user in the confirmation dialog as a decision hint; keep it to one or two sentences.",
+        }),
       }),
-      reason: Type.String({
-        description:
-          "Why write access to this directory subtree is needed. Shown to the user in the confirmation dialog as a decision hint; keep it to one or two sentences.",
+      Type.Object({
+        command: Type.String({
+          description:
+            'Exact command string that bash rejected with "Command requires a reason". Pass it verbatim; the approval lets this same command run once via bash.',
+        }),
+        reason: Type.String({
+          description:
+            "Why this command is necessary. Shown to the user in the confirmation dialog as a decision hint; keep it to one or two sentences.",
+        }),
       }),
-    }),
+    ]),
     async execute(_id, params, _signal, _onUpdate, context) {
+      if (typeof params.command === "string") {
+        const outcome = await sandbox.requestCommandPermission(
+          params.command,
+          params.reason.trim(),
+          context,
+        );
+        const text =
+          outcome.status === "granted"
+            ? "User approved this command via ask_permission; re-send the same bash call to run it (one-shot)."
+            : outcome.status === "already granted"
+              ? `No approval needed: ${outcome.command} is allowed by config.`
+              : `User denied this command.` +
+                (outcome.reason === undefined ? "" : `\nUser reason: ${outcome.reason}`);
+        return {
+          content: [{ type: "text" as const, text }],
+          details: {
+            status: outcome.status,
+            command: outcome.command,
+            ...(outcome.status === "denied" && outcome.reason !== undefined
+              ? { reason: outcome.reason }
+              : {}),
+          },
+        };
+      }
       const normalized = withNormalizedPath(params) as { path: string };
       const outcome = await sandbox.requestWritePermission(
         resolve(cwd, normalized.path),
@@ -505,11 +543,11 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
       };
     },
     renderCall(args: any, theme: any) {
-      return new Text(
-        formatNamedCall("ask_permission", formatPath(String(args.path ?? ""), cwd), theme),
-        0,
-        0,
-      );
+      const target =
+        typeof args.command === "string"
+          ? truncateText(args.command)
+          : truncateText(formatPath(String(args.path ?? ""), cwd));
+      return new Text(formatNamedCall("ask_permission", target, theme), 0, 0);
     },
     renderResult(result: any, options: any, theme: any, context: any) {
       return renderTextToolResult(result, options, theme, context, "ask_permission");

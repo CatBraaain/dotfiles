@@ -141,8 +141,13 @@ export function formatToolCall(
       );
     case "ls":
       return formatNamedCall("ls", formatPath(String(args.path ?? ""), cwd), theme);
-    case "ask_permission":
-      return formatNamedCall("ask_permission", formatPath(String(args.path ?? ""), cwd), theme);
+    case "ask_permission": {
+      const target =
+        typeof args.command === "string"
+          ? truncateText(args.command)
+          : truncateText(formatPath(String(args.path ?? ""), cwd));
+      return formatNamedCall("ask_permission", target, theme);
+    }
     default:
       return formatFallbackCall(toolName, args, theme);
   }

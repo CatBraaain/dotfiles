@@ -7,7 +7,11 @@ import { parse as parseYaml } from "yaml";
 import { parse as parseShell } from "shell-quote";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 
-export type Action = "allow" | "deny" | "ask";
+export type PathAction = "allow" | "deny" | "ask";
+
+/** Commands add the reason-gated action: the call is returned to the agent,
+ * which must obtain a one-shot approval via ask_permission (SPEC §3・§4). */
+export type CommandAction = PathAction | "ask_with_reason";
 
 /**
  * Dialog approval info returned when the user approved access through a
@@ -24,7 +28,13 @@ export type PathApproval = {
 export type MatchSpan = { candidate: string; index: number; length: number };
 
 /** Action resolution result together with the pattern that caused it (§2.3). */
-export type ActionMatch = { action: Action; matched?: string; matchSpan?: MatchSpan };
+export type PathActionMatch = { action: PathAction; matched?: string };
+export type CommandActionMatch = {
+  action: CommandAction;
+  matched?: string;
+  /** Where the pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
+  matchSpan?: MatchSpan;
+};
 
 export type ToolName = "read" | "write" | "edit" | "grep" | "find" | "ls" | "bash";
 
@@ -43,14 +53,21 @@ export type WritePermissionRequest =
   | { status: "granted"; grantedPath: string }
   | { status: "denied"; grantedPath: string; reason?: string };
 
+/** ask_permission outcome for `command` (§3): same semantics, one-shot command approval. */
+export type CommandPermissionRequest =
+  | { status: "already granted"; command: string }
+  | { status: "granted"; command: string }
+  | { status: "denied"; command: string; reason?: string };
+
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
-type RuleEntry = { action: Action; patterns: string[] };
+type PathRuleEntry = { action: PathAction; patterns: string[] };
+type CommandRuleEntry = { action: CommandAction; patterns: string[] };
 
 type SandboxedToolsConfig = {
-  read?: RuleEntry[];
-  write?: RuleEntry[];
+  read?: PathRuleEntry[];
+  write?: PathRuleEntry[];
   credentials?: string[];
-  commands?: RuleEntry[];
+  commands?: CommandRuleEntry[];
 };
 
 type ToolUI = {
@@ -63,6 +80,10 @@ type ToolUI = {
 
 const ALLOW_OPTION = "Yes, allow";
 const DENY_OPTION = "No, deny (reason next)";
+
+/** Guidance returned with an `ask_with_reason` rejection so the model re-requests via ask_permission (§3・§4). */
+const COMMAND_REASON_HINT =
+  "This command requires a reason. Call ask_permission with this exact command and a reason; do not rewrite the command to bypass the gate.";
 
 /** Max concurrently running sandbox (bwrap) processes per pi process (SPEC §7). */
 const MAX_CONCURRENT_SANDBOX_RUNS = 4;
@@ -125,16 +146,18 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
   const parsed = parseYaml(source) as unknown;
   if (!isRecord(parsed)) throw new Error("sandboxed-tools config must be a mapping");
 
-  const parseEntries = (value: unknown): RuleEntry[] | undefined => {
+  const parseEntries = <A extends PathAction | CommandAction>(
+    value: unknown,
+    allowedActions: readonly A[],
+  ): { action: A; patterns: string[] }[] | undefined => {
     if (value === undefined) return undefined;
     if (!Array.isArray(value)) throw new Error("rule section must be a list of entries");
-    return value.map((element): RuleEntry => {
+    return value.map((element): { action: A; patterns: string[] } => {
       if (!isRecord(element)) throw new Error("rule entry must be a mapping");
       const keys = Object.keys(element);
       if (keys.length !== 1) throw new Error("rule entry must declare exactly one action");
-      const [action] = keys;
-      if (action !== "allow" && action !== "ask" && action !== "deny")
-        throw new Error(`unknown action: ${action}`);
+      const [action] = keys as [A];
+      if (!allowedActions.includes(action)) throw new Error(`unknown action: ${action}`);
       const pattern = element[action];
       if (typeof pattern !== "string" && !Array.isArray(pattern))
         throw new Error("rule entry pattern must be a string or a list of strings");
@@ -145,11 +168,14 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
     });
   };
 
+  const pathActions = ["allow", "ask", "deny"];
+  const commandActions = [...pathActions, "ask_with_reason"];
+
   return {
-    read: parseEntries(parsed.read),
-    write: parseEntries(parsed.write),
+    read: parseEntries(parsed.read, pathActions),
+    write: parseEntries(parsed.write, pathActions),
     credentials: asPatterns(parsed.credentials),
-    commands: parseEntries(parsed.commands),
+    commands: parseEntries(parsed.commands, commandActions),
   };
 }
 
@@ -360,15 +386,15 @@ function findCommandPattern(
 }
 
 export function resolveCommandActionMatch(
-  entries: RuleEntry[] | undefined,
+  entries: CommandRuleEntry[] | undefined,
   command: string,
-): ActionMatch {
+): CommandActionMatch {
   if (!entries) return { action: "deny" };
   const withSpan = (
-    action: Action,
+    action: CommandAction,
     match: CommandPatternMatch,
     candidate: string,
-  ): ActionMatch => ({
+  ): CommandActionMatch => ({
     action,
     matched: match.pattern,
     matchSpan: { candidate, index: match.index, length: match.length },
@@ -391,17 +417,21 @@ export function resolveCommandActionMatch(
   const results = candidates.map(actionFor);
   return (
     results.find((result) => result.action === "deny") ??
+    results.find((result) => result.action === "ask_with_reason") ??
     results.find((result) => result.action === "ask") ??
     results.find((result) => result.action === "allow") ?? { action: "deny" }
   );
 }
 
-export function resolveCommandAction(entries: RuleEntry[] | undefined, command: string): Action {
+export function resolveCommandAction(
+  entries: CommandRuleEntry[] | undefined,
+  command: string,
+): CommandAction {
   return resolveCommandActionMatch(entries, command).action;
 }
 
 /** All patterns declared with `action` across the flat entries, in list order. */
-function actionPatterns(entries: RuleEntry[] | undefined, action: Action): string[] {
+function actionPatterns(entries: PathRuleEntry[] | undefined, action: PathAction): string[] {
   return (entries ?? [])
     .filter((entry) => entry.action === action)
     .flatMap((entry) => entry.patterns);
@@ -470,10 +500,10 @@ function expandPathPatterns(
   );
 }
 
-export type ExpandedPathSection = { action: Action; paths: string[] }[];
+export type ExpandedPathSection = { action: PathAction; paths: string[] }[];
 
 export function expandPathSection(
-  entries: RuleEntry[] | undefined,
+  entries: PathRuleEntry[] | undefined,
   cwd: string,
   allowAllPaths = false,
   gitMainWorktreePath = resolveGitMainWorktreePath(cwd),
@@ -510,11 +540,11 @@ function pathsMatchCandidate(paths: string[], candidatePath: string): boolean {
 export function resolvePathActionMatch(
   section: ExpandedPathSection | undefined,
   candidatePath: string,
-): ActionMatch {
+): PathActionMatch {
   if (!section) return { action: "deny" };
   // Last match wins (SPEC §6). When nothing matched, `matched` stays undefined,
   // which callers treat as unset (deny, but a permission request is possible).
-  let resolved: ActionMatch = { action: "deny" };
+  let resolved: PathActionMatch = { action: "deny" };
   for (const entry of section) {
     const path = entry.paths.find((candidate) => pathCovers(candidate, candidatePath));
     if (path !== undefined) resolved = { action: entry.action, matched: path };
@@ -525,7 +555,7 @@ export function resolvePathActionMatch(
 export function resolvePathAction(
   section: ExpandedPathSection | undefined,
   candidatePath: string,
-): Action {
+): PathAction {
   return resolvePathActionMatch(section, candidatePath).action;
 }
 
@@ -607,6 +637,8 @@ function parseRunToolsResponse(execution: RunResult): RunToolsResponse {
 
 export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
+  /** One-shot ask_permission approvals, as normalized command segments (§3). */
+  private readonly approvedCommands: string[][] = [];
   // pi's TUI has a single slot for extension dialogs: a second dialog replaces
   // the first without resolving its promise, deadlocking that tool call.
   // One global queue; split per dialog kind if contention ever matters.
@@ -980,15 +1012,93 @@ export class Sandbox {
   }
 
   /**
-   * Resolve the command action and, for `ask`, confirm with the user. Returns
-   * true when the user approved this call through a confirmation dialog
-   * (§2.3 approval note), false when the command passed without a dialog
-   * (config allow). Denial throws.
+   * Match `command` against the one-shot ask_permission approvals (§3).
+   * Quoting differences normalize away because segments are reassembled
+   * words; partial matches never consume. Consumes the approval on match.
+   */
+  private consumeApprovedCommand(command: string): boolean {
+    const segments = splitCommandSegments(command);
+    const index = this.approvedCommands.findIndex(
+      (approved) =>
+        approved.length === segments.length &&
+        approved.every((segment, i) => segment === segments[i]),
+    );
+    if (index === -1) return false;
+    this.approvedCommands.splice(index, 1);
+    return true;
+  }
+
+  /**
+   * Request user approval for a gated command via the ask_permission tool
+   * (§3 許可要求ツール). Explicit deny and `ask` (confirmed at bash time)
+   * throw; denial resolves so the tool can return it as its result.
+   */
+  async requestCommandPermission(
+    command: string,
+    reason: string,
+    context: ToolContext,
+  ): Promise<CommandPermissionRequest> {
+    const { action, matched, matchSpan } = resolveCommandActionMatch(this.config.commands, command);
+    if (action === "deny") throw new Error(`Command denied: ${command}`);
+    if (action === "allow") return { status: "already granted", command };
+    if (action === "ask")
+      throw new Error(`Command is confirmed when run via bash; no pre-approval needed: ${command}`);
+    if (!context.hasUI || !context.ui) throw new Error(`Access requires confirmation: ${command}`);
+    const ui = context.ui;
+    return this.withUiLock(() =>
+      this.confirmCommandPermission(command, reason, ui, matched, matchSpan),
+    );
+  }
+
+  private async confirmCommandPermission(
+    command: string,
+    reason: string,
+    ui: ToolUI,
+    matched?: string,
+    matchSpan?: MatchSpan,
+  ): Promise<CommandPermissionRequest> {
+    const question = "Allow command execution?";
+    // Same highlight rule as the `ask` dialog (§2.3): show where the pattern
+    // matched, unless the UI lacks a theme or NO_COLOR is set.
+    const display =
+      matchSpan !== undefined && ui.theme && !process.env.NO_COLOR
+        ? highlightCommandMatch(command, matchSpan, ui.theme.getFgAnsi("accent"))
+        : command;
+    const details = `${display}\nreason: ${reason}\n${matchedPatternNote(matched)}`;
+    if (ui.select) {
+      const selectedOption = await ui.select(`${question}\n${details}`, [
+        ALLOW_OPTION,
+        DENY_OPTION,
+      ]);
+      if (selectedOption === ALLOW_OPTION) return this.grantCommandApproval(command);
+    } else if (await ui.confirm(question, details)) {
+      return this.grantCommandApproval(command);
+    }
+    const denialReason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
+    return { status: "denied", command, ...(denialReason ? { reason: denialReason } : {}) };
+  }
+
+  private grantCommandApproval(command: string): CommandPermissionRequest {
+    this.approvedCommands.push(splitCommandSegments(command));
+    return { status: "granted", command };
+  }
+
+  /**
+   * Resolve the command action and, for `ask`, confirm with the user. For
+   * `ask_with_reason`, consume a one-shot ask_permission approval when the
+   * command matches one (§3), otherwise return the call to the agent with a
+   * guidance hint. Returns true when this call passed through an approval
+   * (dialog or one-shot; §2.3 approval note), false when it passed without a
+   * dialog (config allow). Denial throws.
    */
   authorizeCommand(command: string, context: ToolContext): Promise<boolean> {
     const { action, matched, matchSpan } = resolveCommandActionMatch(this.config.commands, command);
     if (action === "allow") return Promise.resolve(false);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
+    if (action === "ask_with_reason") {
+      if (this.consumeApprovedCommand(command)) return Promise.resolve(true);
+      throw new Error(`Command requires a reason: ${command}\n${COMMAND_REASON_HINT}`);
+    }
     if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
     const note = matchedPatternNote(matched);
