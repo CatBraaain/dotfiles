@@ -1,7 +1,6 @@
 // Bootstrap system packages and CLI tools for this dotfiles setup.
-// Everything except plain apt prerequisites is generated into a temporary
-// Brewfile from the package lists below and applied via `brew bundle`
-// (Homebrew on Linux + Flathub).
+// Every package below goes through `sudo apt` (apt: entries) or a generated
+// temporary Brewfile applied via `brew bundle` (everything else).
 // No version management: every tool installs/updates to its latest release.
 // Prerequisites, installed by setup.sh: Homebrew on Linux and bun.
 //
@@ -21,111 +20,104 @@ const BREW_FALLBACK_DIR = "/home/linuxbrew/.linuxbrew";
 // Android SDK install target of the sdkmanager postinstall in the Brewfile.
 const SDK_DIR = join(homedir(), ".android-sdk");
 
-// Plain apt prerequisites, kept outside the generated Brewfile.
-const APT_PACKAGES = [
-  "flatpak", // used by the Brewfile `flatpak` entries
-  "fonts-noto-cjk",
-  "libasound2t64",
-  "xvfb",
+// Every package in one list, prefixed with its install method:
+// "apt:<package>", "brew:<formula>", "cask:<cask>", "npm:<package>",
+// "uv:<tool>", "go:<module>", or "setup:<name>" for entries with an extra
+// setup step a plain name cannot express (full line built in
+// setupBrewfileLine). A prefix maps to one install step: apt goes through
+// `sudo apt install`, everything else becomes one Brewfile line,
+// e.g. "brew:jq" -> `brew "jq"`.
+// Order matters: brew entries install the language runtimes first, so keep
+// npm/uv/go entries after the runtime they need (brew bundle runs lines in order).
+const PACKAGES = [
+  // apt prerequisites (installed outside the Brewfile)
+  "apt:flatpak", // used by the disabled Chrome flatpak entry below
+  "apt:fonts-noto-cjk",
+  "apt:libasound2t64",
+  "apt:xvfb",
+  // system packages
+  "brew:bubblewrap",
+  "brew:coreutils",
+  "brew:ffmpeg",
+  "brew:gcc",
+  "brew:git",
+  "brew:make",
+  "brew:powershell",
+  "brew:socat",
+  "brew:tmux",
+  "brew:unzip",
+  // language runtimes (npm/uv/go entries below depend on these)
+  "brew:bun",
+  "brew:go",
+  "brew:node",
+  "setup:rustup", // brew "rustup" + postinstall: set default toolchain on install
+  "brew:uv",
+  // standalone tools (vp / vpr / oxfmt / oxlint via vite-plus)
+  "npm:vite-plus",
+  // LLM-only CLI tools
+  "brew:ast-grep",
+  "brew:code2prompt",
+  "brew:dasel",
+  "brew:difftastic",
+  "brew:hyperfine",
+  "brew:jq",
+  "brew:keep-sorted",
+  "brew:pdfcpu",
+  "brew:rtk",
+  "brew:sd",
+  "brew:shellcheck",
+  "brew:shfmt",
+  "brew:watchexec",
+  "npm:@earendil-works/pi-coding-agent",
+  "npm:agent-browser",
+  "npm:cursor-agent",
+  "npm:officecli",
+  "uv:trafilatura[all]",
+  "uv:mineru[all]",
+  "go:github.com/karust/openserp",
+  // general CLI tools
+  "brew:act",
+  "brew:cargo-binstall",
+  "brew:chezmoi",
+  "brew:erdtree",
+  "brew:eza",
+  "brew:fd",
+  "brew:gh",
+  "brew:git-cliff",
+  "brew:gopls",
+  "brew:just",
+  "brew:just-lsp",
+  "brew:mise",
+  "brew:nixfmt",
+  "brew:pandoc",
+  "brew:pnpm",
+  "brew:ripgrep",
+  "brew:tokei",
+  "brew:tree-sitter-cli",
+  "brew:yq",
+  "npm:@typescript/native-preview", // tsgo / tsgolint
+  "uv:harlequin",
+  // apps and SDKs
+  "cask:drawio",
+  // "setup:com.google.Chrome", // flatpak via Flathub, disabled for now
+  "setup:android-commandlinetools",
 ];
-
-// Package lists: fed into the generated Brewfile, grouped by `brew bundle`
-// DSL type. Order matters: formulae come first (runtimes listed early), then
-// npm/uv/go entries which need those runtimes.
-
-export type PackageLists = {
-  brewFormulae: string[];
-  npmPackages: string[];
-  uvTools: string[];
-  goPackages: string[];
-};
-
-export const PACKAGE_LISTS = {
-  brewFormulae: [
-    // system packages
-    "bubblewrap",
-    "coreutils",
-    "ffmpeg",
-    "gcc",
-    "git",
-    "make",
-    "powershell",
-    "socat",
-    "tmux",
-    "unzip",
-    // language runtimes (npm/uv/go entries depend on these)
-    "bun",
-    "go",
-    "node",
-    "rustup",
-    "uv",
-    // LLM-only CLI tools
-    "ast-grep",
-    "code2prompt",
-    "dasel",
-    "difftastic",
-    "hyperfine",
-    "jq",
-    "keep-sorted",
-    "pdfcpu",
-    "rtk",
-    "sd",
-    "shellcheck",
-    "shfmt",
-    "watchexec",
-    // general CLI tools
-    "act",
-    "cargo-binstall",
-    "chezmoi",
-    "erdtree",
-    "eza",
-    "fd",
-    "gh",
-    "git-cliff",
-    "gopls",
-    "just",
-    "just-lsp",
-    "mise",
-    "nixfmt",
-    "pandoc",
-    "pnpm",
-    "ripgrep",
-    "tokei",
-    "tree-sitter-cli",
-    "yq",
-  ],
-  npmPackages: [
-    // standalone tools (vp / vpr / oxfmt / oxlint via vite-plus)
-    "vite-plus",
-    // LLM-only CLI tools
-    "@earendil-works/pi-coding-agent",
-    "agent-browser",
-    "cursor-agent",
-    "officecli",
-    // general CLI tools
-    "@typescript/native-preview", // tsgo / tsgolint
-  ],
-  uvTools: [
-    // LLM-only CLI tools
-    "trafilatura[all]",
-    "mineru[all]",
-    // general CLI tools
-    "harlequin",
-  ],
-  goPackages: [
-    // LLM-only CLI tools
-    "github.com/karust/openserp",
-  ],
-} satisfies PackageLists;
 
 async function main(): Promise<void> {
   log("apt prerequisites");
-  ensureAptPackages(APT_PACKAGES);
+  ensureAptPackages(aptPackages());
 
   log("homebrew");
   const brew = setupBrew();
   await brewBundle(brew);
-  ensureRustupToolchain();
+}
+
+const APT_PREFIX = "apt:";
+
+function aptPackages(): string[] {
+  return PACKAGES.filter((spec) => spec.startsWith(APT_PREFIX)).map((spec) =>
+    spec.slice(APT_PREFIX.length),
+  );
 }
 
 function ensureAptPackages(pkgs: string[]): void {
@@ -155,39 +147,43 @@ async function brewBundle(brew: Brew): Promise<void> {
   const brewfileDir = await mkdtemp(join(tmpdir(), "bootstrap-"));
   const brewfilePath = join(brewfileDir, "Brewfile");
   try {
-    await writeFile(brewfilePath, generateBrewfile(PACKAGE_LISTS, brew.prefix));
+    await writeFile(brewfilePath, generateBrewfile(brew.prefix));
     run([brew.bin, "bundle", `--file=${brewfilePath}`]);
   } finally {
     await rm(brewfileDir, { recursive: true, force: true });
   }
 }
 
-export function generateBrewfile(lists: PackageLists, brewPrefix: string): string {
-  const sdkmanager = `${brewPrefix}/bin/sdkmanager`;
-  const acceptLicenses = `yes | ${sdkmanager} --sdk_root=${SDK_DIR} --licenses >/dev/null`;
-  const installSdkPackages = `${sdkmanager} --sdk_root=${SDK_DIR} 'cmdline-tools;latest' 'platform-tools' >/dev/null`;
-  return [
-    "# Generated by undotfiles/bootstrap.ts -- edit the package lists in the script, not this file.",
-    ...dslEntries("brew", lists.brewFormulae),
-    `flatpak "com.google.Chrome", url: "${FLATHUB_REPO_URL}"`,
-    'cask "drawio"',
-    `cask "android-commandlinetools", postinstall: "${acceptLicenses} && ${installSdkPackages}"`,
-    ...dslEntries("npm", lists.npmPackages),
-    ...dslEntries("uv", lists.uvTools),
-    ...dslEntries("go", lists.goPackages),
-    "",
-  ].join("\n");
+function generateBrewfile(brewPrefix: string): string {
+  const brewEntries = PACKAGES.filter((spec) => !spec.startsWith(APT_PREFIX)).map((spec) =>
+    brewfileLine(spec, brewPrefix),
+  );
+  return [...brewEntries, ""].join("\n");
 }
 
-type BrewfileDslType = "brew" | "npm" | "uv" | "go";
-
-function dslEntries(dslType: BrewfileDslType, entries: string[]): string[] {
-  return entries.map((entry) => `${dslType} "${entry}"`);
+function brewfileLine(spec: string, brewPrefix: string): string {
+  const [dsl, ...name] = spec.split(":");
+  const pkg = name.join(":");
+  if (dsl === "setup") return setupBrewfileLine(pkg, brewPrefix);
+  return `${dsl} "${pkg}"`;
 }
 
-function ensureRustupToolchain(): void {
-  if (commandSucceeded(["rustup", "default"])) return;
-  run(["rustup", "default", "stable"]);
+// `setup:` entries pair an install with an extra setup step that a plain
+// name cannot express, so their full Brewfile lines are defined here.
+function setupBrewfileLine(name: string, brewPrefix: string): string {
+  if (name === "rustup") {
+    return `brew "rustup", postinstall: "rustup default stable"`;
+  }
+  if (name === "android-commandlinetools") {
+    const sdkmanager = `${brewPrefix}/bin/sdkmanager`;
+    const acceptLicenses = `yes | ${sdkmanager} --sdk_root=${SDK_DIR} --licenses >/dev/null`;
+    const installSdkPackages = `${sdkmanager} --sdk_root=${SDK_DIR} 'cmdline-tools;latest' 'platform-tools' >/dev/null`;
+    return `cask "android-commandlinetools", postinstall: "${acceptLicenses} && ${installSdkPackages}"`;
+  }
+  if (name === "com.google.Chrome") {
+    return `flatpak "${name}", url: "${FLATHUB_REPO_URL}"`;
+  }
+  throw new Error(`setup package not defined: ${name}`);
 }
 
 function log(message: string): void {
