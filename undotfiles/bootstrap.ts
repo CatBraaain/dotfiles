@@ -123,6 +123,12 @@ const PACKAGES: readonly Package[] = [
   custom("obscura"),
   npm("cursor-agent"),
   npm("officecli"),
+  npm("@askjo/camofox-browser"),
+  // brew bundle installs npm lines with lifecycle scripts blocked, which
+  // skips camofox-browser's postinstall (Camoufox browser download into
+  // ~/.cache/camoufox, shared with the npx-spawned copy): install via npm
+  // directly with scripts allowed for this package only
+  run("npm install -g --allow-scripts=@askjo/camofox-browser @askjo/camofox-browser"),
   uv("trafilatura[all]"),
   uv("mineru[all]"),
   go("github.com/karust/openserp"),
