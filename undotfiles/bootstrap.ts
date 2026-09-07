@@ -267,6 +267,8 @@ async function brewBundle(brewBin: string): Promise<void> {
   try {
     await writeFile(brewfilePath, generateBrewfile());
     exec([brewBin, "bundle", `--file=${brewfilePath}`]);
+    // Keep Brewfile-managed packages declarative; cleanup also resets Homebrew trust.
+    exec([brewBin, "bundle", "cleanup", "--force", `--file=${brewfilePath}`]);
   } finally {
     await rm(brewfileDir, { recursive: true, force: true });
   }
