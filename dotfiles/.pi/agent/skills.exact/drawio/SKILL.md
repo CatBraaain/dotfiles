@@ -7,9 +7,9 @@ description: draw.io、.drawio、.drawio.svg、PNG、SVG、PDFの図、フロー
 
 ## 永続成果物と対象
 
-Draw.io Desktop CLIはMermaid変換、ELKレイアウト、出力に必要である。`.drawio.svg`は`content`属性にdiagram XMLを埋め込んだSVGである。
+Draw.io Desktop CLIはELKレイアウトと出力に必要である。`.drawio.svg`は`content`属性にdiagram XMLを埋め込んだSVGである。
 
-`.drawio.svg`だけを永続的な正本とする。`.drawio`と`.mmd`は一時ファイルであり、処理後に削除する。埋め込みdiagram dataを持たない通常のSVG画像は対象外である。
+`.drawio.svg`だけを永続的な正本とする。`.drawio`は一時ファイルであり、処理後に削除する。埋め込みdiagram dataを持たない通常のSVG画像は対象外である。
 
 ## CLIラダー
 
@@ -36,25 +36,23 @@ URL出力、OS別の開き方、透明背景・倍率・サイズなどの詳細
 
 ## 図の作成と出力
 
-標準的な図はMermaidで簡潔に書き、draw.ioへ自動配置させる。細かな配置・スタイル・固有シェイプが必要な図はXMLで作成する。図形・アイコンには、draw.io標準シェイプや既存アイコンを自作より優先して使う。
+図形・アイコンには、draw.io標準シェイプや既存アイコンを自作より優先して使う。
 
-1. 標準的な図は`NAME.mmd`へMermaidを書き、`drawio -x -f xml -o NAME.drawio NAME.mmd`で一時`NAME.drawio`へ変換する。Mermaid構文が不明または変換に失敗した場合だけ、[Mermaidリファレンス](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/mermaid-reference.md)を確認する。
-2. 細かな配置・スタイル・固有シェイプを要する図は、各ページを`diagram`要素で表す`mxfile` XMLを`NAME.drawio`へ書く。[draw.io XMLリファレンス](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/xml-reference.md)を確認する。
+1. 各ページを`diagram`要素で表す`mxfile` XMLを`NAME.drawio`へ書く。[draw.io XMLリファレンス](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/xml-reference.md)を確認する。
+2. 「レイアウト」のELKレイアウトを`--layout`で適用する。座標を手作業で計算しない。
 3. `drawio -x -f svg -e -b 10 -o NAME.drawio.svg NAME.drawio`で正本を生成する。
 4. ユーザーが明示したときだけ、同じ一時ファイルからPNG、PDF、JPG、URLを派生出力する。PNGとPDFには`-e`を付け、JPGには付けない。URLは[URL・詳細出力](references/url-output.md)の手順を使う。
-5. 出力に成功した後、`NAME.mmd`と`NAME.drawio`を削除する。出力またはURLを開けなければ、絶対パスまたはURLを表示する。
+5. 出力に成功した後、`NAME.drawio`を削除する。出力またはURLを開けなければ、絶対パスまたはURLを表示する。
 
-形式を指定されなければ、`NAME.drawio.svg`だけを作成する。Mermaidを画像へ直接出力してはならない。必ず`.drawio`へ変換してから出力する。Mermaidを変換済みの図にはELKレイアウトを追加しない。
+形式を指定されなければ、`NAME.drawio.svg`だけを作成する。Mermaidからdraw.ioへの変換と、チャット本文のMermaidコードブロックは対象外である。
 
 ## ラベルとファイル名
 
 ファイル名は内容を表す。図のラベルはユーザーの言語に合わせる。ファイル名は小文字ハイフン区切りにする。例: `login-flow.drawio.svg`。
 
-## XMLレイアウト
+## レイアウト
 
-XMLでは座標を手作業で計算するより、用途に合うELKレイアウトを優先する。XMLで作成した図だけ、必要に応じてレイアウトを適用する。
-
-XMLのノード配置には`--layout`を使う。
+座標を手作業で計算するより、用途に合うELKレイアウトを優先する。ノード配置には`--layout`を使う。
 
 | 名前 | 用途 |
 |---|---|
