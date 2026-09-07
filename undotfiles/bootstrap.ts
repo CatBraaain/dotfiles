@@ -1,13 +1,14 @@
 // Bootstrap system packages and CLI tools for this dotfiles setup.
 // Every package below goes through `sudo apt` (apt() entries), a generated
-// temporary Brewfile applied via `brew bundle` (most entries), or a shell
-// command run on every bootstrap (run() entries).
+// temporary Brewfile applied via `brew bundle` (most entries), a custom
+// install step for sources no package manager covers (custom() entries), or
+// a shell command run on every bootstrap (run() entries).
 // No version management: every tool installs/updates to its latest release.
 // Prerequisites, installed by setup.sh: Homebrew on Linux and bun.
 //
 // Run with `bun undotfiles/bootstrap.ts` (or `just install`).
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,15 +22,16 @@ const SDK_DIR = join(homedir(), ".android-sdk");
 
 // PACKAGES entry types: kind is the install method (the Brewfile DSL, "apt"
 // for packages installed outside the Brewfile, or "run" for shell commands).
-type Package = AptEntry | BrewEntry | FlatpakEntry | ToolEntry | RunEntry;
+type Package = AptEntry | BrewEntry | FlatpakEntry | ToolEntry | CustomEntry | RunEntry;
 type AptEntry = { kind: "apt"; name: string };
 type BrewEntry = { kind: "brew" | "cask"; name: string };
 type FlatpakEntry = { kind: "flatpak"; name: string; url?: string };
 type ToolEntry = { kind: "npm" | "uv" | "go"; name: string };
+type CustomEntry = { kind: "custom"; name: string };
 type RunEntry = { kind: "run"; command: string };
 
-// Everything except apt and run entries becomes Brewfile lines.
-type BrewfileEntry = Exclude<Package, AptEntry | RunEntry>;
+// Everything except apt, custom, and run entries becomes Brewfile lines.
+type BrewfileEntry = Exclude<Package, AptEntry | CustomEntry | RunEntry>;
 
 // Entry builders: keep PACKAGES declarative while the types above constrain
 // each method's options (url for flatpak).
@@ -45,12 +47,14 @@ const flatpak = (name: string, opts: { url?: string } = {}): FlatpakEntry => ({
 const npm = (name: string): ToolEntry => ({ kind: "npm", name });
 const uv = (name: string): ToolEntry => ({ kind: "uv", name });
 const go = (name: string): ToolEntry => ({ kind: "go", name });
+const custom = (name: string): CustomEntry => ({ kind: "custom", name });
 const run = (command: string): RunEntry => ({ kind: "run", command });
 
 // Every package in one list. One entry = its install method + options:
-// apt entries go through `sudo apt install`; run entries execute a shell
-// command on every bootstrap; everything else becomes one Brewfile line in
-// list order, e.g. brew("jq") -> `brew "jq"`.
+// apt entries go through `sudo apt install`; custom entries run their named
+// custom install step; run entries execute a shell command on every
+// bootstrap; everything else becomes one Brewfile line in list order, e.g.
+// brew("jq") -> `brew "jq"`.
 // Order matters: brew entries install the language runtimes first, so keep
 // npm/uv/go entries after the runtime they need (brew bundle runs lines in order).
 const PACKAGES: readonly Package[] = [
@@ -125,7 +129,9 @@ const PACKAGES: readonly Package[] = [
   npm("@typescript/native-preview"), // tsgo / tsgolint
   uv("harlequin"),
   // apps and SDKs
-  cask("drawio"),
+  // the CLI export mode ships inside the desktop binary; the deb registers
+  // /usr/bin/drawio (postinst) while the cask AppImage cannot run on WSL2
+  custom("drawio"),
   // flatpak("com.google.Chrome", { url: "https://dl.flathub.org/repo/flathub.flatpakrepo" }), // disabled for now
   cask("android-commandlinetools"),
   // sdkmanager resolves via the PATH set in setupBrew; keep SDK packages current
@@ -140,6 +146,9 @@ async function main(): Promise<void> {
   log("homebrew");
   await brewBundle(setupBrew());
 
+  log("custom installs");
+  await runCustomPackages();
+
   log("setup steps");
   for (const command of runCommands()) {
     exec(["bash", "-c", command]);
@@ -148,6 +157,10 @@ async function main(): Promise<void> {
 
 function aptPackages(): string[] {
   return PACKAGES.filter((pkg) => pkg.kind === "apt").map((pkg) => pkg.name);
+}
+
+function customPackages(): CustomEntry[] {
+  return PACKAGES.filter((pkg): pkg is CustomEntry => pkg.kind === "custom");
 }
 
 function runCommands(): string[] {
@@ -160,6 +173,45 @@ function ensureAptPackages(pkgs: string[]): void {
   exec(["sudo", "apt", "update"]);
   for (const pkg of missing) {
     exec(["sudo", "apt", "install", "-y", pkg]);
+  }
+}
+
+// Named custom install steps for sources no package manager entry covers.
+// Depends on gh, so runs after the Brewfile that installs it.
+async function runCustomPackages(): Promise<void> {
+  for (const pkg of customPackages()) {
+    if (pkg.name === "drawio") await installDrawioDeb();
+    else throw new Error(`custom install step not defined: ${pkg.name}`);
+  }
+}
+
+// drawio's deb lives only on GitHub Releases; the deb registers /usr/bin/drawio
+// (postinst update-alternatives) and apt-resolves its deps. Same-version
+// reinstalls are skipped.
+async function installDrawioDeb(): Promise<void> {
+  const repo = "jgraph/drawio-desktop";
+  const tag = commandOutput([
+    "gh",
+    "release",
+    "view",
+    "--repo",
+    repo,
+    "--json",
+    "tagName",
+    "--jq",
+    ".tagName",
+  ]);
+  const installed = commandOutput(["dpkg-query", "-W", "-f=${Version}", "drawio"]);
+  if (installed === tag.replace(/^v/, "")) return;
+
+  const dir = await mkdtemp(join(tmpdir(), "bootstrap-drawio-"));
+  try {
+    exec(["gh", "release", "download", tag, "--repo", repo, "--pattern", "drawio-amd64-*.deb", "--dir", dir]);
+    const debFile = readdirSync(dir).find((file: string) => file.endsWith(".deb"));
+    if (!debFile) throw new Error(`no .deb downloaded into ${dir}`);
+    exec(["sudo", "apt", "install", "-y", join(dir, debFile)]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -189,7 +241,8 @@ async function brewBundle(brewBin: string): Promise<void> {
 
 function generateBrewfile(): string {
   const lines = PACKAGES.filter(
-    (pkg): pkg is BrewfileEntry => pkg.kind !== "apt" && pkg.kind !== "run",
+    (pkg): pkg is BrewfileEntry =>
+      pkg.kind !== "apt" && pkg.kind !== "custom" && pkg.kind !== "run",
   ).map(brewfileLine);
   return [...lines, ""].join("\n");
 }
@@ -215,6 +268,12 @@ function exec(command: string[]): void {
 // Reports whether a probe command succeeded, without any output.
 function commandSucceeded(command: string[]): boolean {
   return Bun.spawnSync(command, { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+}
+
+// Captures a command's stdout; "" on failure (e.g. dpkg-query for an
+// uninstalled package).
+function commandOutput(command: string[]): string {
+  return Bun.spawnSync(command, { stdout: "pipe", stderr: "ignore" }).stdout.toString().trim();
 }
 
 if (import.meta.main) {
