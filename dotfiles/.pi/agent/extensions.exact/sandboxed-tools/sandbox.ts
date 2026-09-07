@@ -756,6 +756,7 @@ export class Sandbox {
   }
 
   private addMount(args: string[], sourcePath: string, writable: boolean): void {
+    if (!existsSync(sourcePath)) return;
     addParentDirectories(args, sourcePath);
     args.push(writable ? "--bind-try" : "--ro-bind-try", sourcePath, sourcePath);
   }
@@ -996,10 +997,10 @@ export class Sandbox {
     grantPath: string,
     scope: "file" | "directory",
   ): void {
+    if (operation === "write") this.ensureGrantPathExists(grantPath, scope);
     const accessModes = this.dynamicPaths.get(grantPath) ?? new Set<"read" | "write">();
     accessModes.add(operation);
     this.dynamicPaths.set(grantPath, accessModes);
-    if (operation === "write") this.ensureGrantPathExists(grantPath, scope);
   }
 
   private ensureGrantPathExists(grantPath: string, scope: "file" | "directory"): void {

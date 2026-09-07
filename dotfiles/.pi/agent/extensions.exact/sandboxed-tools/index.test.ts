@@ -897,10 +897,11 @@ describe("§3.a パス文字列の解決", () => {
       try {
         const configPath = join(directory, "config.yaml");
         writeFileSync(configPath, 'write:\n  - {allow: "${XDG_RUNTIME_DIR}"}\n');
-        new Sandbox(directory, configPath);
+        const args = new Sandbox(directory, configPath).buildArgs("fs");
 
         assert.equal(existsSync(absentRuntimeDir), false);
         assert.deepEqual(readdirSync(directory), ["config.yaml"]);
+        assert.equal(args.includes(absentRuntimeDir), false);
       } finally {
         if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
         else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
@@ -3385,6 +3386,41 @@ describe("§6.1 bind とパスの実在保証", () => {
       writeFileSync(configPath, `write:\n  - {allow: "${targetDir}"}\n`);
       new Sandbox("/cwd", configPath);
       assert.equal(existsSync(targetDir), true);
+    }),
+  );
+
+  it(
+    "実在保証に失敗した write の動的許可は bind 対象に追加しない",
+    withSandboxDir(async (dir, configPath) => {
+      writeFileSync(configPath, 'read:\n  - {allow: "*"}\nwrite: []\n');
+      const sandbox = new Sandbox(dir, configPath);
+      const failedGrantPath = join(dir, "uncreated", "file.txt");
+      let confirmationCount = 0;
+      const context = {
+        cwd: dir,
+        hasUI: true,
+        ui: {
+          confirm: async (_title: string, _message: string) => {
+            confirmationCount++;
+            return true;
+          },
+        },
+      };
+      const mutableSandbox = sandbox as unknown as { ensureGrantPathExists: () => void };
+      mutableSandbox.ensureGrantPathExists = () => {
+        throw new Error("grant path unavailable");
+      };
+
+      await assert.rejects(
+        () => sandbox.authorizePath("write", failedGrantPath, context),
+        /grant path unavailable/,
+      );
+      await assert.rejects(
+        () => sandbox.authorizePath("write", failedGrantPath, context),
+        /grant path unavailable/,
+      );
+      assert.equal(confirmationCount, 2);
+      assert.equal(sandbox.buildArgs("fs").includes(failedGrantPath), false);
     }),
   );
 
