@@ -74,6 +74,7 @@ const PACKAGES: readonly Package[] = [
   brew("bun"),
   brew("go"),
   brew("node"),
+  brew("openjdk"), // sdkmanager needs a JDK; the android-commandlinetools cask ships none
   brew("rustup"),
   // toolchains live in ~/.rustup, outside brew: keep stable current and default
   run("rustup update stable && rustup default stable"),
