@@ -221,7 +221,9 @@ async function installDrawioDeb(): Promise<void> {
     "--jq",
     ".tagName",
   ]);
-  const installed = commandOutput(["dpkg-query", "-W", "-f=${Version}", "drawio"]);
+  // The deb's dpkg package name is "draw.io", not "drawio" (which would make
+  // dpkg-query fail and re-download on every run).
+  const installed = commandOutput(["dpkg-query", "-W", "-f=${Version}", "draw.io"]);
   if (installed === tag.replace(/^v/, "")) return;
 
   const dir = await mkdtemp(join(tmpdir(), "bootstrap-drawio-"));
