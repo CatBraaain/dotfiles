@@ -22,9 +22,8 @@ diff:
   bun pre-chezmoi.ts
   chezmoi diff -c chezmoi.yaml
 
-[linux]
 install:
-  bun undotfiles/bootstrap.ts
+  bun undotfiles/bootstrap/bootstrap.ts sync
 
 [windows]
 setup:
