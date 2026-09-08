@@ -41,6 +41,7 @@ const validKeys = new Set<Key>([
 ]);
 const configPath = join(import.meta.dir, "config.yaml");
 const androidSdkDir = join(homedir(), ".android-sdk");
+const vscodeDownloadUrl = "https://update.code.visualstudio.com/latest/linux-deb-x64/stable";
 
 export class Bootstrap {
   private readonly failures: string[] = [];
@@ -218,11 +219,15 @@ export class Bootstrap {
     return new Map([
       ["android-sdk", () => this.installAndroidSdk()],
       ["drawio", () => this.installDrawio()],
+      ["vscode", () => this.installVscode()],
     ]);
   }
 
   private skipsCustom(name: string): boolean {
-    return this.platform === "windows" && (name === "android-sdk" || name === "drawio");
+    return (
+      this.platform === "windows" &&
+      (name === "android-sdk" || name === "drawio" || name === "vscode")
+    );
   }
 
   private installGo(specification: string): void {
@@ -247,6 +252,24 @@ export class Bootstrap {
       "cmdline-tools/latest",
       "platform-tools",
     ]);
+  }
+
+  private async installVscode(): Promise<void> {
+    const directory = await mkdtemp(join(tmpdir(), "bootstrap-vscode-"));
+    const file = join(directory, "code.deb");
+    try {
+      this.runtime.execute([
+        "curl",
+        "--fail",
+        "--location",
+        "--output",
+        file,
+        vscodeDownloadUrl,
+      ]);
+      this.runtime.execute(["sudo", "apt", "install", "-y", file]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 
   private async installDrawio(): Promise<void> {

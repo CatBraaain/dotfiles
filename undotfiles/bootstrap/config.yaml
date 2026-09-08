@@ -81,4 +81,5 @@
 
 # Apps and SDKs
 - custom: drawio
+- custom: vscode
 - custom: android-sdk

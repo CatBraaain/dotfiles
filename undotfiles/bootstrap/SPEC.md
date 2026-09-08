@@ -47,7 +47,7 @@
 
 実行プラットフォームで有効な`uv`、`bun`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除とInstall / Ensure Phaseの導入を行わず、失敗として記録する。
 
-`apt`と`winget`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`と`android-sdk`はLinuxで目的状態を保証し、Windowsでは何もしない。
+`apt`と`winget`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`vscode`はLinuxで目的状態を保証し、Windowsでは何もしない。
 
 ## sync
 
@@ -80,11 +80,11 @@ Uninstall Phaseは、設定ファイル内の要素順序に従わない。Manag
 | `go` | gupを通じて指定されたGo toolのinstall操作を実行する。 |
 | `brew` | 指定されたFormulaのinstall操作を実行する。 |
 | `brew-cask` | 指定されたCaskのinstall操作を実行する。 |
-| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`drawio`と`android-sdk`はWindowsで何もしない。名前に対応するHandlerがなければ失敗として記録する。 |
+| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`drawio`、`android-sdk`、`vscode`はWindowsで何もしない。Linuxの`vscode`は公式Stable版Linux x64の`.deb`を`https://update.code.visualstudio.com/latest/linux-deb-x64/stable`から取得し、`sudo apt install -y`でインストールする。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを、Linuxでは`bash -c`、Windowsでは`pwsh -Command`で実行する。同期ごとに必ず実行する。 |
 
 ## diff
 
-`diff` はホストを変更しない。Declarative Managerでは、現在のグローバル状態とDesired Stateの差を、Uninstall Phaseと同じManager名のアルファベット順で削除予定として表示する。状態取得に失敗したManagerの差分は表示しない。次に、Install / Ensure Phaseの予定を設定配列の順序で1要素ずつ表示する。状態取得に失敗したManagerのパッケージ項目は、この予定にも含めない。その他のパッケージ項目は、導入済みかどうかにかかわらずinstall / update予定として表示する。`custom`と`run`は配列上の位置で、同期時に呼び出すHandlerまたは実行するコマンドとして表示する。ただしWindowsの`drawio`と`android-sdk`は表示しない。未知のCustom Handlerもその位置で表示して失敗を記録する。状態取得の失敗は記録し、他の項目の表示を続ける。
+`diff` はホストを変更しない。Declarative Managerでは、現在のグローバル状態とDesired Stateの差を、Uninstall Phaseと同じManager名のアルファベット順で削除予定として表示する。状態取得に失敗したManagerの差分は表示しない。次に、Install / Ensure Phaseの予定を設定配列の順序で1要素ずつ表示する。状態取得に失敗したManagerのパッケージ項目は、この予定にも含めない。その他のパッケージ項目は、導入済みかどうかにかかわらずinstall / update予定として表示する。`custom`と`run`は配列上の位置で、同期時に呼び出すHandlerまたは実行するコマンドとして表示する。ただしWindowsの`drawio`、`android-sdk`、`vscode`は表示しない。未知のCustom Handlerもその位置で表示して失敗を記録する。状態取得の失敗は記録し、他の項目の表示を続ける。
 
 差分の有無にかかわらず、失敗がなければ`diff`は終了コード0で終了する。設定エラーは処理せずに異常終了する。

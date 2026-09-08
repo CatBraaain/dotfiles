@@ -293,12 +293,33 @@ describe("sync", () => {
       [
         { key: "custom", value: "drawio" },
         { key: "custom", value: "android-sdk" },
+        { key: "custom", value: "vscode" },
       ],
       windowsRuntime,
       "windows",
     ).sync();
     assert.equal(windowsExitCode, 0);
     assert.deepEqual(windowsRuntime.commands, []);
+  });
+
+  it("downloads and installs the latest Linux VS Code deb", async () => {
+    const runtime = new FakeRuntime();
+
+    const exitCode = await new Bootstrap("linux", [{ key: "custom", value: "vscode" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    const download = runtime.commands[0]!;
+    const debPath = download[4]!;
+    assert.deepEqual(download, [
+      "curl",
+      "--fail",
+      "--location",
+      "--output",
+      debPath,
+      "https://update.code.visualstudio.com/latest/linux-deb-x64/stable",
+    ]);
+    assert.match(debPath, /\/bootstrap-vscode-[^/]+\/code\.deb$/);
+    assert.deepEqual(runtime.commands[1], ["sudo", "apt", "install", "-y", debPath]);
   });
 
   it("runs commands on every sync with the platform shell", async () => {
