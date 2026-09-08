@@ -3,7 +3,7 @@ import { describe, it } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import sandboxedToolsExtension, {
   COMMAND_PREVIEW_LIMIT,
   classifyReadPath,
@@ -50,49 +50,6 @@ function withTempDirectory(test: (directory: string) => Promise<void> | void): (
       await test(directory);
     } finally {
       rmSync(directory, { recursive: true, force: true });
-    }
-  };
-}
-
-function stubMineruScript(mode: "generate" | "fail"): string {
-  if (mode === "fail") {
-    return '#!/bin/sh\necho "stub mineru failure" >&2\nexit 3\n';
-  }
-  return [
-    "#!/bin/sh",
-    "outdir=",
-    "prev=",
-    'for arg in "$@"; do',
-    '  if [ "$prev" = "-o" ]; then outdir="$arg"; fi',
-    '  prev="$arg"',
-    "done",
-    'mkdir -p "$outdir/out"',
-    "printf '# stub ocr\\n\\nrecognized stub text\\n' > \"$outdir/out/doc.md\"",
-    "",
-  ].join("\n");
-}
-
-function withImageDirectory(
-  mineruMode: "generate" | "fail" | "missing",
-  test: (directory: string) => Promise<void> | void,
-): () => Promise<void> {
-  return async () => {
-    const previousPath = process.env.PATH;
-    let stubDirectory: string | undefined;
-    if (mineruMode === "missing") {
-      process.env.PATH = "/nonexistent-sandboxed-tools-mineru";
-    } else {
-      stubDirectory = mkdtempSync(join(tmpdir(), "sandboxed-tools-mineru-stub-"));
-      writeFileSync(join(stubDirectory, "mineru"), stubMineruScript(mineruMode), {
-        mode: 0o755,
-      });
-      process.env.PATH = `${stubDirectory}${delimiter}${previousPath}`;
-    }
-    try {
-      await withTempDirectory(test)();
-    } finally {
-      if (stubDirectory) rmSync(stubDirectory, { recursive: true, force: true });
-      process.env.PATH = previousPath;
     }
   };
 }
@@ -474,7 +431,7 @@ describe("§2.1 画像ファイル", () => {
 
   it(
     "画像に対する read は vision を案内するエラーを返す",
-    withImageDirectory("generate", async (directory) => {
+    withTempDirectory(async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
 
       await assert.rejects(
@@ -489,10 +446,17 @@ describe("§2.1 画像ファイル", () => {
 
   it(
     "許可されない画像パスへの read は §2 どおり拒否する",
-    withImageDirectory("generate", async () => {
+    withTempDirectory(async () => {
       const readTool = captureRegisteredTools().get("read");
       await assert.rejects(
-        () => readTool.execute("t", { path: join(homedir(), ".pi/agent/auth.json") }, undefined, undefined, { hasUI: false }),
+        () =>
+          readTool.execute(
+            "t",
+            { path: join(homedir(), ".pi/agent/auth.json") },
+            undefined,
+            undefined,
+            { hasUI: false },
+          ),
         /Access denied/,
       );
     }),
@@ -507,7 +471,7 @@ describe("§2.1 画像ファイル", () => {
 
   it(
     "vision セッション外の read_image は Vision 入力を作らずエラーを返す",
-    withImageDirectory("generate", async (directory) => {
+    withTempDirectory(async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
 
       const result = await captureRegisteredTools()
@@ -517,7 +481,8 @@ describe("§2.1 画像ファイル", () => {
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /vision/);
       assert.equal(
-        Array.isArray(result.content) && result.content.some((part: { type: string }) => part.type === "image"),
+        Array.isArray(result.content) &&
+          result.content.some((part: { type: string }) => part.type === "image"),
         false,
       );
     }),
@@ -525,7 +490,7 @@ describe("§2.1 画像ファイル", () => {
 
   it(
     "vision セッションの read_image は許可済み画像を Vision 入力として返す",
-    withImageDirectory("generate", async (directory) => {
+    withTempDirectory(async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
       const previousAgentName = process.env.PI_AGENT_NAME;
       process.env.PI_AGENT_NAME = "vision";
@@ -538,10 +503,7 @@ describe("§2.1 画像ファイル", () => {
         const imagePart = result.content.find((part: { type: string }) => part.type === "image");
         assert.ok(imagePart);
         assert.equal(imagePart.mimeType, "image/png");
-        assert.equal(
-          Buffer.from(imagePart.data, "base64").equals(pngBytes),
-          true,
-        );
+        assert.equal(Buffer.from(imagePart.data, "base64").equals(pngBytes), true);
       } finally {
         if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
         else process.env.PI_AGENT_NAME = previousAgentName;
@@ -551,7 +513,7 @@ describe("§2.1 画像ファイル", () => {
 
   it(
     "vision セッションの read_image は画像でないパスにエラーを返す",
-    withImageDirectory("generate", async (directory) => {
+    withTempDirectory(async (directory) => {
       mkdirSync(join(directory, "images"), { recursive: true });
       const textPath = join(directory, "images", "notes.txt");
       writeFileSync(textPath, "plain text");
@@ -574,7 +536,7 @@ describe("§2.1 画像ファイル", () => {
 
   it(
     "vision セッションの read_image も許可されないパスは §2 どおり拒否する",
-    withImageDirectory("generate", async () => {
+    withTempDirectory(async () => {
       const previousAgentName = process.env.PI_AGENT_NAME;
       process.env.PI_AGENT_NAME = "vision";
       try {
