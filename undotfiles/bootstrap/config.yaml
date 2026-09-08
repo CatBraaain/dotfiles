@@ -1,7 +1,10 @@
+# System prerequisites
 - apt: flatpak
 - apt: fonts-noto-cjk
 - apt: libasound2t64
 - apt: xvfb
+
+# System packages
 - brew-formula: bubblewrap
 - brew-formula: coreutils
 - brew-formula: ffmpeg
@@ -12,6 +15,8 @@
 - brew-formula: socat
 - brew-formula: tmux
 - brew-formula: unzip
+
+# Language runtimes
 - brew-formula: bun
 - brew-formula: go
 - brew-formula: node
@@ -19,7 +24,11 @@
 - brew-formula: rustup
 - run: "rustup update stable && rustup default stable"
 - brew-formula: uv
+
+# Standalone tools
 - bun: vite-plus
+
+# LLM-only CLI tools
 - brew-formula: ast-grep
 - brew-formula: code2prompt
 - brew-formula: dasel
@@ -43,6 +52,8 @@
 - uv: "trafilatura[all]"
 - uv: "mineru[all]"
 - go: github.com/karust/openserp
+
+# General CLI tools
 - brew-formula: act
 - brew-formula: cargo-binstall
 - brew-formula: chezmoi
@@ -64,5 +75,7 @@
 - brew-formula: yq
 - bun: "@typescript/native-preview"
 - uv: harlequin
+
+# Apps and SDKs
 - custom: drawio
 - custom: android-sdk
