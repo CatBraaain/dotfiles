@@ -8,6 +8,9 @@
   "compaction": {
     "keepRecentTokens": 50000 // default: 20000
   },
+  // default: 300000. Raise so a silent (>5 min) thinking phase on junior-tier
+  // models is not aborted with "Request aborted" mid-stream.
+  "httpIdleTimeoutMs": 600000,
   "retry": {
     "enabled": true,
     "maxRetries": 5,
