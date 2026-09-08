@@ -17,3 +17,5 @@ windows-terminal
 **/node_modules
 .pi/agent/extensions/*/index.test.ts
 **/SPEC.md
+
+**/*.merge.local.*
