@@ -58,10 +58,14 @@ function bootstrap(
 
 describe("parseConfig", () => {
   it("preserves ordered single-key entries", () => {
-    const entries = parseConfig("- apt: curl\n- uv: ruff\n- run: echo ready\n");
+    const entries = parseConfig(
+      "- apt: curl\n- brew: jq\n- brew-cask: visual-studio-code\n- uv: ruff\n- run: echo ready\n",
+    );
 
     assert.deepEqual(entries, [
       { key: "apt", value: "curl" },
+      { key: "brew", value: "jq" },
+      { key: "brew-cask", value: "visual-studio-code" },
       { key: "uv", value: "ruff" },
       { key: "run", value: "echo ready" },
     ]);
@@ -144,7 +148,7 @@ describe("sync", () => {
       { key: "uv", value: "keep-uv>=2" },
       { key: "bun", value: "keep-bun@2" },
       { key: "go", value: "keep-go@v2" },
-      { key: "brew-formula", value: "keep-formula" },
+      { key: "brew", value: "keep-formula" },
       { key: "brew-cask", value: "keep-cask" },
     ];
 
@@ -174,7 +178,7 @@ describe("sync", () => {
       { key: "uv", value: "ruff==1" },
       { key: "bun", value: "@scope/tool@2" },
       { key: "go", value: "example.com/tool@v3" },
-      { key: "brew-formula", value: "jq" },
+      { key: "brew", value: "jq" },
       { key: "brew-cask", value: "visual-studio-code" },
     ];
 

@@ -20,7 +20,7 @@
 | `uv` | Pythonパッケージ指定 | 共通 | 宣言的 |
 | `bun` | npmパッケージ指定 | 共通 | 宣言的 |
 | `go` | Go toolのパッケージパス | 共通 | 宣言的（gup） |
-| `brew-formula` | Homebrew Formula名 | 共通 | 宣言的 |
+| `brew` | Homebrew Formula名 | 共通 | 宣言的 |
 | `brew-cask` | Homebrew Cask名 | 共通 | 宣言的 |
 | `custom` | Custom Handler名 | 共通 | Handlerによる存在保証 |
 | `run` | シェルコマンド | 共通 | 毎回実行 |
@@ -31,7 +31,7 @@
     - uv: ruff
     - bun: prettier
     - go: golang.org/x/tools/gopls
-    - brew-formula: jq
+    - brew: jq
     - brew-cask: visual-studio-code
     - winget: Microsoft.VisualStudioCode
     - custom: docker
@@ -45,7 +45,7 @@
 
 ## Desired State
 
-実行プラットフォームで有効な`uv`、`bun`、`go`、`brew-formula`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除とInstall / Ensure Phaseの導入を行わず、失敗として記録する。
+実行プラットフォームで有効な`uv`、`bun`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除とInstall / Ensure Phaseの導入を行わず、失敗として記録する。
 
 `apt`と`winget`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`と`android-sdk`はLinuxで目的状態を保証し、Windowsでは何もしない。
 
@@ -62,10 +62,10 @@
 | uv | Desired StateにないPythonパッケージ | uvごとにまとめて処理 |
 | bun | Desired Stateにないグローバルnpmパッケージ | bunごとにまとめて処理 |
 | go | Desired StateにないGo tool | gupごとにまとめて処理 |
-| brew-formula | Desired StateにないFormula | Formula群として処理 |
+| brew | Desired StateにないFormula | Formula群として処理 |
 | brew-cask | Desired StateにないCask | Cask群として処理 |
 
-Uninstall Phaseは、設定ファイル内の要素順序に従わない。Managerはキー名のアルファベット順、`brew-cask`、`brew-formula`、`bun`、`go`、`uv`で処理する。`apt`、`winget`、`custom`、`run`はこのフェーズで処理しない。
+Uninstall Phaseは、設定ファイル内の要素順序に従わない。Managerはキー名のアルファベット順、`brew-cask`、`brew`、`bun`、`go`、`uv`で処理する。`apt`、`winget`、`custom`、`run`はこのフェーズで処理しない。
 
 ### 2. Install / Ensure Phase
 
@@ -78,7 +78,7 @@ Uninstall Phaseは、設定ファイル内の要素順序に従わない。Manag
 | `uv` | 指定されたPythonパッケージのグローバルinstall操作を実行する。 |
 | `bun` | 指定されたnpmパッケージのグローバルinstall操作を実行する。 |
 | `go` | gupを通じて指定されたGo toolのinstall操作を実行する。 |
-| `brew-formula` | 指定されたFormulaのinstall操作を実行する。 |
+| `brew` | 指定されたFormulaのinstall操作を実行する。 |
 | `brew-cask` | 指定されたCaskのinstall操作を実行する。 |
 | `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`drawio`と`android-sdk`はWindowsで何もしない。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを、Linuxでは`bash -c`、Windowsでは`pwsh -Command`で実行する。同期ごとに必ず実行する。 |

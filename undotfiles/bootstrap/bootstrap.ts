@@ -9,11 +9,11 @@ export type Key =
   | "uv"
   | "bun"
   | "go"
-  | "brew-formula"
+  | "brew"
   | "brew-cask"
   | "custom"
   | "run";
-type DeclarativeKey = "uv" | "bun" | "go" | "brew-formula" | "brew-cask";
+type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
 export type Platform = "linux" | "windows";
 type State = Map<DeclarativeKey, Map<string, string>>;
@@ -27,14 +27,14 @@ export interface Runtime {
   error(message: string): void;
 }
 
-const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew-formula", "bun", "go", "uv"];
+const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew", "bun", "go", "uv"];
 const validKeys = new Set<Key>([
   "apt",
   "winget",
   "uv",
   "bun",
   "go",
-  "brew-formula",
+  "brew",
   "brew-cask",
   "custom",
   "run",
@@ -109,7 +109,7 @@ export class Bootstrap {
 
   private readState(key: DeclarativeKey): Map<string, string> {
     switch (key) {
-      case "brew-formula":
+      case "brew":
         return names(this.runtime.output(["brew", "list", "--formula", "-1"]));
       case "brew-cask":
         return names(this.runtime.output(["brew", "list", "--cask", "-1"]));
@@ -138,7 +138,7 @@ export class Bootstrap {
 
     this.attempt(`remove ${key}`, () => {
       switch (key) {
-        case "brew-formula":
+        case "brew":
           this.runtime.execute(["brew", "uninstall", ...unused.map(([name]) => name)]);
           return;
         case "brew-cask":
@@ -198,7 +198,7 @@ export class Bootstrap {
         case "go":
           this.installGo(entry.value);
           return;
-        case "brew-formula":
+        case "brew":
           this.runtime.execute(["brew", "install", entry.value]);
           return;
         case "brew-cask":
@@ -344,7 +344,7 @@ function desiredNames(entries: readonly Entry[], key: DeclarativeKey): Set<strin
 }
 
 function packageName(key: DeclarativeKey, value: string): string {
-  if (key === "brew-formula" || key === "brew-cask") return value;
+  if (key === "brew" || key === "brew-cask") return value;
   if (key === "go") return splitVersion(value)[0];
   if (key === "bun") return bunName(value);
   return value.split(/[<>=!~[ ;]/, 1)[0]!;
