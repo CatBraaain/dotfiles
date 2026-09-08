@@ -2282,6 +2282,35 @@ describe("subagent", () => {
     }
   });
 
+  it("renders nested subagent errors in the error color", async () => {
+    const extension = captureAgentsExtension();
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "tool_execution_start", toolCallId: "call-1", toolName: "subagent", args: { agent: "chat", task: "work" } })}\n${JSON.stringify({ type: "tool_execution_end", toolCallId: "call-1", toolName: "subagent", result: { content: [{ type: "text", text: "Permission denied" }], isError: true }, isError: false })}\n${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "delegation failed" }] } })}\n`,
+        ),
+      );
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
+      const rendered = extension.renderResult(
+        result,
+        { isPartial: false },
+        {
+          fg: (color: string, text: string) => `[${color}]${text}`,
+          bold: (text: string) => text,
+        },
+      ) as Container;
+
+      assert.ok(rendered.render(200).some((line) => line.includes("[error]Permission denied")));
+    } finally {
+      extension.restore();
+    }
+  });
+
   it("親のキャンセルを SIGTERM として子へ伝播し、子を中断結果にする", async () => {
     const extension = captureAgentsExtension();
     const controller = new AbortController();

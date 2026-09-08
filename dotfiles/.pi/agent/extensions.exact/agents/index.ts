@@ -659,8 +659,9 @@ async function runChild(
         );
         if (action) {
           action.endedAt = Date.now();
-          action.result = isRecord(event.result) ? event.result : undefined;
-          action.isError = event.isError === true;
+          const result = isRecord(event.result) ? event.result : undefined;
+          action.result = result;
+          action.isError = event.isError === true || result?.isError === true;
         }
         throttledEmit.call();
       }
