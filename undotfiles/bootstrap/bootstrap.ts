@@ -3,16 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Key =
-  | "apt"
-  | "deb-get"
-  | "uv"
-  | "bun"
-  | "go"
-  | "brew"
-  | "brew-cask"
-  | "custom"
-  | "run";
+export type Key = "apt" | "deb-get" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
 type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
 type State = Map<DeclarativeKey, Map<string, string>>;
@@ -58,13 +49,10 @@ export class Bootstrap {
   }
 
   async sync(): Promise<number> {
+    for (const entry of this.entries) await this.install(entry);
+
     const states = this.readStates();
     for (const key of declarativeKeys) this.removeUnused(key, states.get(key));
-
-    for (const entry of this.entries) {
-      if (isDeclarative(entry.key) && !states.has(entry.key)) continue;
-      await this.install(entry);
-    }
     return this.finish();
   }
 
@@ -110,11 +98,11 @@ export class Bootstrap {
   private readState(key: DeclarativeKey): Map<string, string> {
     switch (key) {
       case "brew":
-        return names(this.runtime.output(["brew", "list", "--formula", "-1"]));
+        return names(this.runtime.output(["brew", "leaves"]));
       case "brew-cask":
         return names(this.runtime.output(["brew", "list", "--cask", "-1"]));
       case "uv":
-        return names(this.runtime.output(["uv", "tool", "list"]), firstWord);
+        return names(this.runtime.output(["uv", "tool", "list"]), uvName);
       case "bun":
         return names(this.runtime.output(["bun", "pm", "ls", "-g"]), bunName);
       case "go":
@@ -220,7 +208,6 @@ export class Bootstrap {
   }
 
   private installAndroidSdk(): void {
-    this.runtime.execute(["brew", "install", "--cask", "android-commandlinetools"]);
     this.runtime.execute([
       "android",
       `--sdk=${androidSdkDir}`,
@@ -341,12 +328,13 @@ function packageName(key: DeclarativeKey, value: string): string {
 }
 
 function bunName(value: string): string {
-  const packageValue = value
-    .trim()
-    .replace(/^[├└│\s-]+/, "")
-    .split(/\s+/, 1)[0]!;
-  const versionAt = packageValue.lastIndexOf("@");
-  return versionAt > 0 ? packageValue.slice(0, versionAt) : packageValue;
+  const line = value.trim();
+  const packageValue = line.match(/^[├└]──\s+(\S+)/)?.[1];
+  if (line.startsWith("/") || (!packageValue && line.startsWith("-"))) return "";
+
+  const packageSpec = packageValue ?? line.split(/\s+/, 1)[0]!;
+  const versionAt = packageSpec.lastIndexOf("@");
+  return versionAt > 0 ? packageSpec.slice(0, versionAt) : packageSpec;
 }
 
 function splitVersion(value: string): [string, string | undefined] {
@@ -354,17 +342,18 @@ function splitVersion(value: string): [string, string | undefined] {
   return index > 0 ? [value.slice(0, index), value.slice(index + 1)] : [value, undefined];
 }
 
-function firstWord(value: string): string {
-  return value.trim().split(/\s+/, 1)[0]!;
+function uvName(value: string): string {
+  const line = value.trim();
+  return line.startsWith("-") ? "" : line.split(/\s+/, 1)[0]!;
 }
 
 function names(output: string, name = (line: string) => line): Map<string, string> {
   return new Map(
     output
       .split("\n")
-      .map((line) => line.trim())
+      .map((line) => name(line.trim()))
       .filter(Boolean)
-      .map((line) => [name(line), name(line)]),
+      .map((packageName) => [packageName, packageName]),
   );
 }
 
@@ -392,7 +381,11 @@ const systemRuntime: Runtime = {
     return result.exitCode === 0 ? result.stdout.toString().trim() : "";
   },
   succeeds(command) {
-    return Bun.spawnSync([...command], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+    try {
+      return Bun.spawnSync([...command], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+    } catch {
+      return false;
+    }
   },
   log(message) {
     console.log(message);

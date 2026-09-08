@@ -19,6 +19,7 @@
 
 # Language runtimes
 - brew: bun
+- brew: gup
 - brew: go
 - brew: node
 - brew: openjdk
@@ -83,4 +84,5 @@
 # Apps and SDKs
 - deb-get: code
 - custom: drawio
+- brew-cask: android-commandlinetools
 - custom: android-sdk

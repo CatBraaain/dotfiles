@@ -6,7 +6,7 @@ import { describe, it } from "bun:test";
 import { Bootstrap, parseConfig, run, type Entry, type Runtime } from "./bootstrap.ts";
 
 const stateCommands = [
-  ["brew", "list", "--formula", "-1"],
+  ["brew", "leaves"],
   ["brew", "list", "--cask", "-1"],
   ["uv", "tool", "list"],
   ["bun", "pm", "ls", "-g"],
@@ -15,6 +15,7 @@ const stateCommands = [
 
 class FakeRuntime implements Runtime {
   readonly commands: string[][] = [];
+  readonly events: string[] = [];
   readonly errors: string[] = [];
   readonly logs: string[] = [];
   readonly outputs = new Map<string, string>();
@@ -26,6 +27,7 @@ class FakeRuntime implements Runtime {
   }
 
   execute(command: readonly string[]): void {
+    this.events.push(`execute ${command.join(" ")}`);
     this.commands.push([...command]);
     if (command.slice(0, 3).join(" ") === "gh release download") {
       const directory = command[command.indexOf("--dir") + 1]!;
@@ -35,16 +37,19 @@ class FakeRuntime implements Runtime {
   }
 
   output(command: readonly string[]): string {
+    this.events.push(`output ${command.join(" ")}`);
     const key = command.join("\0");
     if (this.failures.has(command.join(" "))) throw new Error(`failed: ${command.join(" ")}`);
     return this.outputs.get(key) ?? "";
   }
 
   outputAllowFailure(command: readonly string[]): string {
+    this.events.push(`outputAllowFailure ${command.join(" ")}`);
     return this.outputs.get(command.join("\0")) ?? "";
   }
 
   succeeds(command: readonly string[]): boolean {
+    this.events.push(`succeeds ${command.join(" ")}`);
     return !this.failures.has(command.join(" "));
   }
 
@@ -142,22 +147,40 @@ describe("CLI entrypoint", () => {
 
     assert.match(justfile, /\ninstall:\n  bun undotfiles\/bootstrap\/bootstrap\.ts sync\n/);
   });
+
+  it("declares bootstrap dependencies before their dependent entries", async () => {
+    const config = parseConfig(await Bun.file(new URL("./config.yaml", import.meta.url)).text());
+    const gupIndex = config.findIndex((entry) => entry.key === "brew" && entry.value === "gup");
+    const goIndex = config.findIndex((entry) => entry.key === "go");
+    const androidCaskIndex = config.findIndex(
+      (entry) => entry.key === "brew-cask" && entry.value === "android-commandlinetools",
+    );
+    const androidHandlerIndex = config.findIndex(
+      (entry) => entry.key === "custom" && entry.value === "android-sdk",
+    );
+
+    assert.ok(gupIndex >= 0 && gupIndex < goIndex);
+    assert.ok(androidCaskIndex >= 0 && androidCaskIndex < androidHandlerIndex);
+  });
 });
 
 describe("sync", () => {
-  it("removes undesired packages by manager order before ordered installs", async () => {
+  it("installs all entries before removing unused packages by manager order", async () => {
     const runtime = new FakeRuntime();
     runtime.outputs.set("brew\0list\0--cask\0-1", "keep-cask\nold-cask");
-    runtime.outputs.set("brew\0list\0--formula\0-1", "keep-formula\nold-formula");
-    runtime.outputs.set("bun\0pm\0ls\0-g", "keep-bun@1\nold-bun@1");
+    runtime.outputs.set("brew\0leaves", "keep-formula\nold-formula");
+    runtime.outputs.set(
+      "bun\0pm\0ls\0-g",
+      "/home/username/.bun/install/global\n├── @scope/tool@1\n└── old-bun@1",
+    );
     runtime.outputs.set(
       "gup\0list\0--json",
       '[{"import_path":"keep-go","name":"keep"},{"import_path":"old-go","name":"old"}]',
     );
-    runtime.outputs.set("uv\0tool\0list", "keep-uv 1\nold-uv 1");
+    runtime.outputs.set("uv\0tool\0list", "trafilatura 1\n- trafilatura\nold-uv 1\n- old-uv");
     const entries: Entry[] = [
-      { key: "uv", value: "keep-uv>=2" },
-      { key: "bun", value: "keep-bun@2" },
+      { key: "uv", value: "trafilatura[all]" },
+      { key: "bun", value: "@scope/tool@2" },
       { key: "go", value: "keep-go@v2" },
       { key: "brew", value: "keep-formula" },
       { key: "brew-cask", value: "keep-cask" },
@@ -166,19 +189,24 @@ describe("sync", () => {
     const exitCode = await bootstrap(entries, runtime).sync();
 
     assert.equal(exitCode, 0);
+    const firstStateRead = runtime.events.indexOf("output brew leaves");
+    const firstCleanup = runtime.events.indexOf("execute brew uninstall --cask old-cask");
+    assert.ok(firstStateRead > 4);
+    assert.equal(firstCleanup - firstStateRead, stateCommands.length);
     assert.deepEqual(runtime.commands.slice(0, 5), [
+      ["uv", "tool", "install", "trafilatura[all]"],
+      ["bun", "add", "-g", "@scope/tool@2"],
+      ["gup", "import", "--file", runtime.commands[2]![3]!],
+      ["brew", "install", "keep-formula"],
+      ["brew", "install", "--cask", "keep-cask"],
+    ]);
+    assert.deepEqual(runtime.commands.slice(5), [
       ["brew", "uninstall", "--cask", "old-cask"],
       ["brew", "uninstall", "old-formula"],
       ["bun", "remove", "-g", "old-bun"],
       ["gup", "remove", "--force", "old"],
       ["uv", "tool", "uninstall", "old-uv"],
     ]);
-    assert.deepEqual(runtime.commands.slice(5, 7), [
-      ["uv", "tool", "install", "keep-uv>=2"],
-      ["bun", "add", "-g", "keep-bun@2"],
-    ]);
-    assert.deepEqual(runtime.commands.at(-2), ["brew", "install", "keep-formula"]);
-    assert.deepEqual(runtime.commands.at(-1), ["brew", "install", "--cask", "keep-cask"]);
   });
 
   it("passes every configured package value to its backend install operation", async () => {
@@ -196,15 +224,13 @@ describe("sync", () => {
     const exitCode = await bootstrap(entries, runtime).sync();
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(runtime.commands.slice(0, 6), [
+    assert.deepEqual(runtime.commands.slice(0, 8), [
       ["sudo", "apt", "update"],
       ["sudo", "apt", "install", "-y", "curl=8"],
       ["deb-get", "install", "code"],
       ["uv", "tool", "install", "ruff==1"],
       ["bun", "add", "-g", "@scope/tool@2"],
       ["gup", "import", "--file", runtime.commands[5]![3]!],
-    ]);
-    assert.deepEqual(runtime.commands.slice(-2), [
       ["brew", "install", "jq"],
       ["brew", "install", "--cask", "visual-studio-code"],
     ]);
@@ -244,7 +270,7 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands, [["deb-get", "install", "code"]]);
   });
 
-  it("continues after a state read failure while skipping that manager", async () => {
+  it("continues after a state read failure while skipping that manager's cleanup", async () => {
     const runtime = new FakeRuntime();
     runtime.failures.add("uv tool list");
     const entries: Entry[] = [
@@ -257,13 +283,22 @@ describe("sync", () => {
 
     assert.equal(exitCode, 1);
     assert.equal(
-      runtime.commands.some((command) => command[0] === "uv"),
-      false,
+      runtime.commands.some(
+        (command) => command[0] === "uv" && command[1] === "tool" && command[2] === "install",
+      ),
+      true,
     );
     assert.deepEqual(runtime.commands, [
+      ["uv", "tool", "install", "ruff"],
       ["bun", "add", "-g", "prettier"],
       ["bash", "-c", "echo done"],
     ]);
+    assert.equal(
+      runtime.commands.some(
+        (command) => command[0] === "uv" && command[1] === "tool" && command[2] === "uninstall",
+      ),
+      false,
+    );
     assert.match(runtime.errors[0]!, /^uv state:/);
   });
 
@@ -334,7 +369,6 @@ describe("sync", () => {
 
     assert.equal(exitCode, 0);
     assert.deepEqual(runtime.commands, [
-      ["brew", "install", "--cask", "android-commandlinetools"],
       [
         "android",
         "--sdk=/home/username/.android-sdk",
@@ -413,7 +447,7 @@ describe("sync", () => {
 describe("diff", () => {
   it("shows removals before ordered plans without changing the host", async () => {
     const runtime = new FakeRuntime();
-    runtime.outputs.set("bun\0pm\0ls\0-g", "old@1");
+    runtime.outputs.set("bun\0pm\0ls\0-g", "/home/username/.bun/install/global\n└── old@1");
     const entries: Entry[] = [
       { key: "bun", value: "new@2" },
       { key: "deb-get", value: "code" },
@@ -421,7 +455,11 @@ describe("diff", () => {
       { key: "custom", value: "known" },
     ];
 
-    const exitCode = await bootstrap(entries, runtime, new Map([["known", () => undefined]])).diff();
+    const exitCode = await bootstrap(
+      entries,
+      runtime,
+      new Map([["known", () => undefined]]),
+    ).diff();
 
     assert.equal(exitCode, 0);
     assert.deepEqual(runtime.commands, []);
