@@ -334,6 +334,24 @@ describe("pre-chezmoi", () => {
     );
   });
 
+  it("resolves YAML aliases in merge layers", async () => {
+    const root = await fixture({
+      "dotfiles/settings.merge.local.yaml": [
+        "command: &command 'exit 0'",
+        "settings:",
+        "  when: *command",
+        "",
+      ].join("\n"),
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    assert.equal(
+      await readFile(join(root, "dist/settings.yaml"), "utf-8"),
+      ["command: exit 0", "settings:", "  when: exit 0", ""].join("\n"),
+    );
+  });
+
   it("treats a missing, empty, or null home file as an empty layer", async () => {
     const root = await fixture({
       "dotfiles/missing/settings.merge.yaml": "theme: dark\n",

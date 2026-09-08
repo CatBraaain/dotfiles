@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { isMap, parseDocument, stringify as stringifyYaml } from "yaml";
+import { toJS, type ToJSContext } from "yaml/util";
 
 export type Platform = "win32" | "other";
 
@@ -197,9 +198,19 @@ function parseLayer(content: string, format: FileFormat): Layer {
 
   const normal: PlainObject = {};
   const operations: Operations = new Map();
+  // Keep one conversion context so aliases resolve against this document while
+  // duplicate operation keys continue to be processed individually.
+  const yamlContext: ToJSContext = {
+    anchors: new Map(),
+    doc: document,
+    keep: false,
+    mapAsMap: false,
+    mapKeyWarned: false,
+    maxAliasCount: 100,
+  };
   for (const pair of document.contents.items) {
     const key = String(pair.key?.toJSON());
-    const value = pair.value?.toJSON();
+    const value = pair.value ? toJS(pair.value, null, yamlContext) : undefined;
     if (!key.includes(".$")) {
       normal[key] = value;
       continue;
