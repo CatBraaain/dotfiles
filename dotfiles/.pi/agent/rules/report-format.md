@@ -36,7 +36,7 @@ paths: []
 | `🔎 Researched` | 調査が主成果物 |
 | `👀 Reviewed` | レビューが主成果物 |
 | `📋 Planned` | 計画が主成果物 |
-| `🏁 Closed` | finish により worktree を統合・close まで完了した |
+| `✅ Closed` | finish により worktree を統合・close まで完了した |
 | `🧹 Discarded` | discard により worktree と branch を破棄した |
 | `🟡 Partial` | 一部を完了したが、残課題がある |
 | `⏳ Ready` | 検証済みの worktree を finish するため、オーナーの承認を待つ |
