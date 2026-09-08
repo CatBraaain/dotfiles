@@ -305,7 +305,11 @@ describe("sync", () => {
   it("downloads and installs the latest Linux VS Code deb", async () => {
     const runtime = new FakeRuntime();
 
-    const exitCode = await new Bootstrap("linux", [{ key: "custom", value: "vscode" }], runtime).sync();
+    const exitCode = await new Bootstrap(
+      "linux",
+      [{ key: "custom", value: "vscode" }],
+      runtime,
+    ).sync();
 
     assert.equal(exitCode, 0);
     const download = runtime.commands[0]!;

@@ -3,16 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Key =
-  | "apt"
-  | "winget"
-  | "uv"
-  | "bun"
-  | "go"
-  | "brew"
-  | "brew-cask"
-  | "custom"
-  | "run";
+export type Key = "apt" | "winget" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
 type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
 export type Platform = "linux" | "windows";
@@ -258,14 +249,7 @@ export class Bootstrap {
     const directory = await mkdtemp(join(tmpdir(), "bootstrap-vscode-"));
     const file = join(directory, "code.deb");
     try {
-      this.runtime.execute([
-        "curl",
-        "--fail",
-        "--location",
-        "--output",
-        file,
-        vscodeDownloadUrl,
-      ]);
+      this.runtime.execute(["curl", "--fail", "--location", "--output", file, vscodeDownloadUrl]);
       this.runtime.execute(["sudo", "apt", "install", "-y", file]);
     } finally {
       await rm(directory, { recursive: true, force: true });
