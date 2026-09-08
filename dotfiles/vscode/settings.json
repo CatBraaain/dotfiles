@@ -487,9 +487,6 @@
   "playwright.reuseBrowser": true,
   "powershell.developer.editorServicesLogLevel": "Error",
   "powershell.integratedConsole.startInBackground": true,
-  "powershell.powerShellAdditionalExePaths": {
-    "pwsh": "~/.nix-profile/bin/pwsh"
-  },
   "powershell.promptToUpdatePowerShell": false,
   "powershell.scriptAnalysis.enable": false,
   "prettier.embeddedLanguageFormatting": "auto",
