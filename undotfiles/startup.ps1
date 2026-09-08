@@ -10,7 +10,7 @@ Remove-Item "C:\Users\Public\Desktop\*.lnk" -Force
 & runx $ahkExe --arg-line "\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\Main\Main.ahk" --run-as
 & runx "C:\Program Files (x86)\MSI Afterburner\MSIAfterburner.exe" --run-as --single-instance
 & runx "Taskmgr.exe" --win-action minimize --run-as --single-instance
-& runx "C:\Program Files\Docker\Docker\Docker Desktop.exe" --single-instance
+# & runx "C:\Program Files\Docker\Docker\Docker Desktop.exe" --single-instance
 & runx "C:\Program Files\ShareX\ShareX.exe" --single-instance
 & runx "C:\Program Files\obs-studio\bin\64bit\obs64.exe" `
     --arg-line "--startreplaybuffer --minimize-to-tray --disable-shutdown-check" `
