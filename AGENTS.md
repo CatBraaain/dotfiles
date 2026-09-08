@@ -27,8 +27,8 @@
 | `.xxx` | `dot_xxx` | ドットファイル表現 |
 | `xxx.exact`（ディレクトリ） | `exact_xxx` | 完全一致ディレクトリ（`.xxx.exact` → `exact_dot_xxx`） |
 | `xxx.executable`（ファイル） | `executable_xxx` | 実行可能ファイル（chezmoi はソースの実行ビットを無視するため、名前で指定する） |
-| `xxx.merge.json` / `xxx.merge.yaml` | `modify_xxx.json` / `modify_xxx.yaml` | 独自: `~` の実ファイルと JSON/YAML を深くマージする modify-template |
-| `xxx.overwrite.json` / `xxx.overwrite.yaml` | （ベースへ統合され消滅） | 独自: 同階層のベース `xxx.json` / `xxx.yaml` へ深くマージする。PC ごとのローカル差分用（gitignore、配列は tier キー単位で丸ごと置換） |
+| `xxx.merge.json` / `xxx.merge.yaml` | （完成形 `xxx.json` / `xxx.yaml` を出力） | 独自: ホーム実ファイルと plain base に深くマージする共有 merge レイヤー（詳細は pre-chezmoi.spec.md §6–7） |
+| `xxx.merge.local.json` / `xxx.merge.local.yaml` | （完成形 `xxx.json` / `xxx.yaml` を出力） | 独自: merge ターゲットへ最後にマージするマシン固有レイヤー（gitignore） |
 
 > **注意**: 相対パス `dotfiles/.pi/agent/skills.exact` は `~/projects/dotfiles/dotfiles/.pi/agent/skills.exact` を指す。ルート直下（`~/projects/dotfiles/.pi/...`）ではない — 同名の `dotfiles/` が二重に現れる点に注意。
 

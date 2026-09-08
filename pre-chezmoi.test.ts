@@ -28,7 +28,7 @@ const linuxUnmovedDirectories = [
   "vscode",
 ];
 
-const windowsDestinations = {
+const windowsDestinations: Record<string, string> = {
   docker: "AppData/Roaming/Docker",
   erdtree: "AppData/Roaming/erdtree",
   gemini: "dot_gemini",
@@ -63,28 +63,70 @@ async function fixture(files: Record<string, string>, prefix = "pre-chezmoi-"): 
 
 const json = (value: unknown) => JSON.stringify(value);
 
-async function runCli(root: string): Promise<void> {
-  const process = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
-  assert.equal(await process.exited, 0, await new Response(process.stderr).text());
-}
+// Resolves dist paths like real chezmoi (dot_x -> .x, exact_x -> x, per segment),
+// with the trailing newline a real `chezmoi target-path` stdout carries.
+const homeResolver = (root: string) => {
+  const homeDir = join(root, "home");
+  return (_root: string, sourcePath: string) =>
+    Promise.resolve(
+      `${join(
+        homeDir,
+        sourcePath
+          .split("/")
+          .map((segment) => segment.replace(/^exact_/, "").replace(/^dot_/, "."))
+          .join("/"),
+      )}\n`,
+    );
+};
 
-async function expectCliError(files: Record<string, string>, message: string): Promise<void> {
+async function expectMergeError(files: Record<string, string>, message: string): Promise<void> {
   const root = await fixture(files);
-  const process = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
-
-  assert.equal(await process.exited, 1);
-  assert.equal(await new Response(process.stderr).text(), `${message}\n`);
+  await assert.rejects(run(root, "other", homeResolver(root)), { message });
 }
 
 describe("pre-chezmoi", () => {
-  it("rebuilds dist without node_modules and moves every non-Windows directory", async () => {
+  it("rebuilds dist without node_modules and stale files through the CLI", async () => {
     const root = await fixture({
       "dist/stale": "stale",
       "dotfiles/node_modules/ignored": "ignored",
       "dotfiles/nested/node_modules/ignored": "ignored",
+      "dotfiles/.config/.gitconfig": "config",
+      "dotfiles/.pi/agent/skills.exact/skill": "skill",
+      "dotfiles/.pi.exact/agent/skill": "skill",
+      "dotfiles/memo.exact": "memo",
+      "dotfiles/bin/setup.executable": "setup",
+      "dotfiles/bin.executable/child": "child",
+      "dotfiles/.chezmoiignore": "ignored",
+      "dotfiles/custom/modify_HotkeysConfig.json":
+        "{{- /* chezmoi:modify-template */ -}}\n{{ fromJson .chezmoi.stdin | toPrettyJson }}\n",
+    });
+
+    const proc = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
+    assert.equal(await proc.exited, 0, await new Response(proc.stderr).text());
+
+    assert.equal(existsSync(join(root, "dist/stale")), false);
+    assert.equal(existsSync(join(root, "dist/node_modules")), false);
+    assert.equal(existsSync(join(root, "dist/nested/node_modules")), false);
+    assert.equal(existsSync(join(root, "dist/dot_config/dot_gitconfig")), true);
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/exact_skills/skill")), true);
+    assert.equal(existsSync(join(root, "dist/exact_dot_pi/agent/skill")), true);
+    assert.equal(existsSync(join(root, "dist/memo.exact")), true);
+    assert.equal(existsSync(join(root, "dist/bin/executable_setup")), true);
+    assert.equal(existsSync(join(root, "dist/bin.executable/child")), true);
+    assert.equal(existsSync(join(root, "dist/.chezmoiignore")), true);
+    assert.equal(
+      await readFile(join(root, "dist/custom/modify_HotkeysConfig.json"), "utf-8"),
+      "{{- /* chezmoi:modify-template */ -}}\n{{ fromJson .chezmoi.stdin | toPrettyJson }}\n",
+    );
+  });
+
+  it("moves every non-Windows directory and composes the docker merge target", async () => {
+    const root = await fixture({
+      "dist/stale": "stale",
       "dotfiles/.docker/desktop/replaced": "replaced",
       "dotfiles/custom/settings.json": "{}",
-      "dotfiles/docker/settings-store.merge.json": "{}",
+      "dotfiles/docker/settings-store.merge.json": json({ LastLanguage: "ja" }),
+      "home/.docker/desktop/settings-store.json": json({ AutoStart: false }),
       ...Object.fromEntries(
         Object.keys(linuxDestinations).map((source) => [`dotfiles/${source}/settings.json`, "{}"]),
       ),
@@ -93,12 +135,13 @@ describe("pre-chezmoi", () => {
       ),
     });
 
-    await runCli(root);
+    await run(root, "other", homeResolver(root));
 
     assert.equal(existsSync(join(root, "dist/stale")), false);
-    assert.equal(existsSync(join(root, "dist/node_modules")), false);
-    assert.equal(existsSync(join(root, "dist/nested/node_modules")), false);
     assert.equal(existsSync(join(root, "dist/custom/settings.json")), true);
+    for (const source of Object.keys(linuxDestinations)) {
+      assert.equal(existsSync(join(root, "dist", source)), false, source);
+    }
     for (const destination of Object.values(linuxDestinations)) {
       assert.equal(existsSync(join(root, "dist", destination, "settings.json")), true);
     }
@@ -107,229 +150,285 @@ describe("pre-chezmoi", () => {
     }
     assert.equal(existsSync(join(root, "dist/dot_docker/desktop/replaced")), false);
     assert.equal(
-      existsSync(join(root, "dist/dot_docker/desktop/modify_settings-store.json")),
-      true,
+      await readFile(join(root, "dist/dot_docker/desktop/settings-store.json"), "utf-8"),
+      `${JSON.stringify({ AutoStart: false, LastLanguage: "ja" }, null, 2)}\n`,
+    );
+    assert.equal(
+      existsSync(join(root, "dist/dot_docker/desktop/settings-store.merge.json")),
+      false,
     );
   });
 
-  it("moves every Windows directory and leaves non-mapped directories at the root", async () => {
+  it("moves every Windows directory and skips missing and non-directory sources", async () => {
+    const skip = new Set(["gemini", "docker"]);
+    const sources = Object.fromEntries(
+      Object.keys(windowsDestinations)
+        .filter((source) => !skip.has(source))
+        .map((source) => [`dotfiles/${source}/settings.json`, "{}"]),
+    );
     const root = await fixture({
       "dotfiles/AppData/Roaming/Docker/replaced": "replaced",
       "dotfiles/custom/settings.json": "{}",
-      ...Object.fromEntries(
-        Object.keys(windowsDestinations).map((source) => [
-          `dotfiles/${source}/settings.json`,
-          "{}",
-        ]),
-      ),
+      "dotfiles/docker": "a file, not a directory",
+      ...sources,
     });
 
     await run(root, "win32");
 
     assert.equal(existsSync(join(root, "dist/custom/settings.json")), true);
-    for (const destination of Object.values(windowsDestinations)) {
-      assert.equal(existsSync(join(root, "dist", destination, "settings.json")), true);
+    assert.equal(existsSync(join(root, "dist/dot_gemini")), false);
+    assert.equal(existsSync(join(root, "dist/docker")), true);
+    for (const source of Object.keys(windowsDestinations)) {
+      if (skip.has(source)) continue;
+      assert.equal(existsSync(join(root, "dist", source)), false, source);
+      assert.equal(
+        existsSync(join(root, "dist", windowsDestinations[source], "settings.json")),
+        true,
+        source,
+      );
     }
-    assert.equal(existsSync(join(root, "dist/AppData/Roaming/Docker/replaced")), false);
+    // docker did not move, so the pre-existing destination directory survives
+    assert.equal(existsSync(join(root, "dist/AppData/Roaming/Docker/replaced")), true);
   });
 
-  it("deep-merges normal keys before applying overwrite operations", async () => {
+  it("composes home, plain base, merge, and merge.local layers in order", async () => {
     const root = await fixture({
-      "dotfiles/settings.json": json({
-        packages: [{ source: "keep" }, { source: "remove" }],
-        tags: ["keep", "remove"],
-        tiers: { high: "high", low: "low" },
-        enabledModels: ["old"],
-        nested: { keep: true, remove: true },
-        replaceMe: ["old"],
-      }),
-      "dotfiles/settings.overwrite.json": json({
+      "home/.pi/agent/settings.json": json({
         theme: "light",
-        nested: { added: true },
-        "packages.$remove": [{ source: "remove" }],
-        "packages.$append": [{ source: "keep" }, { source: "added" }],
-        "tags.$remove": ["remove"],
-        "tags.$append": ["keep", "added"],
-        "tiers.$remove": ["high"],
-        "nested.remove.$unset": true,
-        "missing.$unset": true,
-        "enabledModels.$replace": ["zai/**", "openrouter/**"],
-        "replaceMe.$append": "ignored because replace wins",
-        "replaceMe.$replace": ["replacement"],
-        "missing.$remove": ["anything"],
-        "alsoMissing.$replace": "ignored",
+        packages: [{ source: "home" }],
+        homeOnly: true,
+      }),
+      "dotfiles/.pi/agent/settings.json":
+        '{\n  // plain base\n  "packages": [{ "source": "base" }],\n  "baseOnly": 1,\n  "replaced": ["old"]\n}',
+      "dotfiles/.pi/agent/settings.merge.json": [
+        "{",
+        "  // shared layer",
+        '  "packages.$append": [{ "source": "base" }, { "source": "added" }],',
+        '  "packages.$remove": [{ "source": "home" }],',
+        '  "missing.$unset": true,',
+        '  "replaced.$replace": { "x": 1 }',
+        "}",
+        "",
+      ].join("\n"),
+      "dotfiles/.pi/agent/settings.merge.local.json": json({
+        tiers: { high: "HIGH" },
+        homeOnly: [1, 2],
       }),
     });
 
-    await run(root);
+    await run(root, "other", homeResolver(root));
 
     const expected = {
-      packages: [{ source: "keep" }, { source: "added" }],
-      tags: ["keep", "added"],
-      tiers: { low: "low" },
-      enabledModels: ["zai/**", "openrouter/**"],
-      nested: { keep: true, added: true },
-      replaceMe: ["replacement"],
       theme: "light",
+      packages: [{ source: "base" }, { source: "added" }],
+      homeOnly: [1, 2],
+      baseOnly: 1,
+      replaced: { x: 1 },
+      tiers: { high: "HIGH" },
     };
-    const output = await readFile(join(root, "dist/settings.json"), "utf-8");
-    assert.equal(output, `${JSON.stringify(expected, null, 2)}\n`);
-    assert.equal(existsSync(join(root, "dist/settings.overwrite.json")), false);
-  });
-
-  it("replaces normal keys of non-object types in nested files", async () => {
-    const root = await fixture({
-      "dotfiles/nested/settings.json": json({
-        scalar: "base",
-        array: ["base"],
-        object: { keep: true },
-      }),
-      "dotfiles/nested/settings.overwrite.json": json({
-        scalar: { replacement: true },
-        array: { replacement: true },
-        object: "replacement",
-      }),
-    });
-
-    await run(root);
-
-    const output = await readFile(join(root, "dist/nested/settings.json"), "utf-8");
     assert.equal(
-      output,
-      `${JSON.stringify(
-        { scalar: { replacement: true }, array: { replacement: true }, object: "replacement" },
-        null,
-        2,
-      )}\n`,
+      await readFile(join(root, "dist/dot_pi/agent/settings.json"), "utf-8"),
+      `${JSON.stringify(expected, null, 2)}\n`,
     );
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/settings.merge.json")), false);
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/settings.merge.local.json")), false);
   });
 
-  it("deep-merges YAML and combines repeated operation keys", async () => {
+  it("composes YAML layers through exact directories and combines repeated op keys", async () => {
     const root = await fixture({
-      "dotfiles/settings.yaml":
-        "packages:\n  - source: keep\nnested:\n  keep: true\n  drop: base\ntheme: base\n",
-      "dotfiles/settings.overwrite.yaml": [
-        "nested:",
-        "  added: true",
-        "nested.drop.$unset:",
+      "home/.pi/agent/extensions/agents/config.yaml": "homeKey: true\ntiers:\n  low: home\n",
+      "dotfiles/.pi/agent/extensions.exact/agents/config.yaml":
+        "tiers:\n  high: base\n  low: base\npackages:\n  - source: base\ntheme: base\n",
+      "dotfiles/.pi/agent/extensions.exact/agents/config.merge.local.yaml": [
+        "tiers.$remove: [high]",
         "packages.$append:",
-        "  - source: added-one",
+        "  - source: one",
         "packages.$append:",
-        "  - source: keep",
-        "  - source: added-two",
+        "  - source: two",
         "theme.$replace: first",
         "theme.$replace: final",
         "",
       ].join("\n"),
     });
 
-    await run(root);
+    await run(root, "other", homeResolver(root));
 
-    const output = await readFile(join(root, "dist/settings.yaml"), "utf-8");
+    const output = await readFile(
+      join(root, "dist/dot_pi/agent/exact_extensions/agents/config.yaml"),
+      "utf-8",
+    );
     assert.equal(
       output,
-      "packages:\n  - source: keep\n  - source: added-one\n  - source: added-two\nnested:\n  keep: true\n  added: true\ntheme: final\n",
+      [
+        "homeKey: true",
+        "tiers:",
+        "  low: base",
+        "packages:",
+        "  - source: base",
+        "  - source: one",
+        "  - source: two",
+        "theme: final",
+        "",
+      ].join("\n"),
+    );
+    assert.equal(
+      existsSync(join(root, "dist/dot_pi/agent/exact_extensions/agents/config.merge.local.yaml")),
+      false,
     );
   });
 
-  it("converts merge files to JSONC and YAML modify templates", async () => {
+  it("treats a missing, empty, or null home file as an empty layer", async () => {
     const root = await fixture({
-      "dotfiles/settings.merge.json": '{\n  // comment\n  "theme": "dark"\n}',
-      "dotfiles/settings.merge.yaml": "theme: dark\n",
+      "dotfiles/missing/settings.merge.yaml": "theme: dark\n",
+      "dotfiles/empty/settings.merge.yaml": "theme: dark\n",
+      "home/empty/settings.yaml": "",
+      "dotfiles/nullish/settings.merge.yaml": "theme: dark\n",
+      "home/nullish/settings.yaml": "null\n",
     });
 
-    await run(root);
+    await run(root, "other", homeResolver(root));
 
-    const jsonTemplate = await readFile(join(root, "dist/modify_settings.json"), "utf-8");
-    const yamlTemplate = await readFile(join(root, "dist/modify_settings.yaml"), "utf-8");
-    assert.match(jsonTemplate, /mergeOverwrite/);
-    assert.match(jsonTemplate, /fromJsonc/);
-    assert.match(jsonTemplate, /\/\/ comment/);
-    assert.match(yamlTemplate, /mergeOverwrite/);
-    assert.match(yamlTemplate, /fromYaml/);
-    assert.equal(existsSync(join(root, "dist/settings.merge.json")), false);
-    assert.equal(existsSync(join(root, "dist/settings.merge.yaml")), false);
+    for (const name of ["missing", "empty", "nullish"]) {
+      assert.equal(
+        await readFile(join(root, "dist", name, "settings.yaml"), "utf-8"),
+        "theme: dark\n",
+        name,
+      );
+    }
   });
 
-  it("converts nested dot entries and exact and executable directories by entry type", async () => {
+  it("applies object removal, string matching, and same-path op precedence", async () => {
     const root = await fixture({
-      "dotfiles/.config/.gitconfig": "config",
-      "dotfiles/.pi/agent/skills.exact/skill": "skill",
-      "dotfiles/.pi.exact/agent/skill": "skill",
-      "dotfiles/memo.exact": "memo",
-      "dotfiles/bin/setup.executable": "setup",
-      "dotfiles/bin.executable/child": "child",
-      "dotfiles/.chezmoiignore": "ignored",
+      "dotfiles/s.json": json({
+        tiers: { high: 1, mid: 2, low: 3 },
+        tags: ["keep", "remove"],
+        order: ["keep"],
+        nested: { drop: true, keep: true },
+        replaceMe: ["old"],
+      }),
+      "dotfiles/s.merge.json": json({
+        "tiers.$remove": ["high", "mid"],
+        "tags.$remove": ["remove"],
+        "tags.$append": ["keep", "new", "new"],
+        "order.$remove": ["dup"],
+        "order.$append": ["dup"],
+        "nested.drop.$unset": true,
+        "goneUnset.$unset": true,
+        "goneRemove.$remove": ["anything"],
+        "goneReplace.$replace": "ignored",
+        "replaceMe.$replace": ["new"],
+        "replaceMe.$append": ["ignored"],
+        "replaceMe.$unset": true,
+      }),
     });
 
-    await run(root);
+    await run(root, "other", homeResolver(root));
 
-    assert.equal(existsSync(join(root, "dist/dot_config/dot_gitconfig")), true);
-    assert.equal(existsSync(join(root, "dist/dot_pi/agent/exact_skills/skill")), true);
-    assert.equal(existsSync(join(root, "dist/exact_dot_pi/agent/skill")), true);
-    assert.equal(existsSync(join(root, "dist/memo.exact")), true);
-    assert.equal(existsSync(join(root, "dist/bin/executable_setup")), true);
-    assert.equal(existsSync(join(root, "dist/bin.executable/child")), true);
-    assert.equal(existsSync(join(root, "dist/.chezmoiignore")), true);
+    // "order" pins remove-before-append: reversed order would drop "dup"
+    const expected = {
+      tiers: { low: 3 },
+      tags: ["keep", "new"],
+      order: ["keep", "dup"],
+      nested: { keep: true },
+      replaceMe: ["new"],
+    };
+    assert.equal(
+      await readFile(join(root, "dist/s.json"), "utf-8"),
+      `${JSON.stringify(expected, null, 2)}\n`,
+    );
   });
 
-  it("reports every specified overwrite error through the CLI", async () => {
-    await expectCliError(
-      { "dotfiles/settings.overwrite.json": "{}" },
-      "overwrite target not found: dist/settings.json",
+  it("reports merge errors through the CLI with stderr and a non-zero exit code", async () => {
+    const root = await fixture({
+      "chezmoi.yaml": "sourceDir: dist\n",
+      "dotfiles/s.json": "{}",
+      "dotfiles/s.merge.json": '{"a.$unknown": 1}',
+    });
+    const proc = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
+
+    const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    assert.equal(exitCode, 1);
+    assert.equal(stderr, "invalid merge op key: a.$unknown\n");
+  });
+
+  it("fails when chezmoi target-path fails", async () => {
+    const root = await fixture({
+      "chezmoi.yaml": "sourceDir: elsewhere\n",
+      "dotfiles/settings.merge.json": "{}",
+    });
+    const proc = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
+
+    const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    assert.equal(exitCode, 1);
+    assert.match(stderr, /not in .*elsewhere/);
+  });
+
+  it("reports every specified merge error", async () => {
+    await expectMergeError(
+      { "dotfiles/s.json": "{}", "dotfiles/s.merge.json": '{"a.$unknown": 1}' },
+      "invalid merge op key: a.$unknown",
     );
-    await expectCliError(
-      { "dotfiles/settings.json": "{}", "dotfiles/settings.overwrite.json": '{"a.$unknown": 1}' },
-      "invalid overwrite op key: a.$unknown",
+    await expectMergeError(
+      { "dotfiles/s.json": "{}", "dotfiles/s.merge.json": '{"a[0].$append": []}' },
+      "invalid merge op key: a[0].$append",
     );
-    await expectCliError(
+    await expectMergeError(
       {
-        "dotfiles/settings.json": "{}",
-        "dotfiles/settings.overwrite.json": '{"a[0].$append": []}',
+        "dotfiles/s.json": '{"items": "not an array"}',
+        "dotfiles/s.merge.json": '{"items.$append": []}',
       },
-      "invalid overwrite op key: a[0].$append",
+      "merge append requires array at path: items",
     );
-    await expectCliError(
+    await expectMergeError(
       {
-        "dotfiles/settings.json": '{"items": "not an array"}',
-        "dotfiles/settings.overwrite.json": '{"items.$append": []}',
+        "dotfiles/s.json": '{"items": "not removable"}',
+        "dotfiles/s.merge.json": '{"items.$remove": []}',
       },
-      "overwrite append requires array at path: items",
+      "merge remove requires array or object at path: items",
     );
-    await expectCliError(
+    await expectMergeError(
       {
-        "dotfiles/settings.json": '{"items": "not removable"}',
-        "dotfiles/settings.overwrite.json": '{"items.$remove": []}',
+        "dotfiles/s.json": '{"items": []}',
+        "dotfiles/s.merge.json": '{"items.$append": "no"}',
       },
-      "overwrite remove requires array or object at path: items",
+      "merge append value must be array: items.$append",
     );
-    await expectCliError(
+    await expectMergeError(
       {
-        "dotfiles/settings.json": '{"items": []}',
-        "dotfiles/settings.overwrite.json": '{"items.$append": "no"}',
+        "dotfiles/s.json": '{"items": []}',
+        "dotfiles/s.merge.json": '{"items.$remove": "no"}',
       },
-      "overwrite append value must be array: items.$append",
+      "merge remove value must be array: items.$remove",
     );
-    await expectCliError(
+    await expectMergeError(
       {
-        "dotfiles/settings.json": '{"items": []}',
-        "dotfiles/settings.overwrite.json": '{"items.$remove": "no"}',
+        "dotfiles/s.json": '{"items": {}}',
+        "dotfiles/s.merge.json": '{"items.$remove": [1]}',
       },
-      "overwrite remove value must be array: items.$remove",
+      "merge remove object keys must be strings: items.$remove",
     );
-    await expectCliError(
-      {
-        "dotfiles/settings.json": '{"items": {}}',
-        "dotfiles/settings.overwrite.json": '{"items.$remove": [1]}',
-      },
-      "overwrite remove object keys must be strings: items.$remove",
+    await expectMergeError(
+      { "dotfiles/s.json": "{}", "dotfiles/s.merge.json": '{"items.$append": []}' },
+      "merge append path not found: items",
     );
-    await expectCliError(
+    await expectMergeError(
+      { "dotfiles/s.json": '{"a": [1]}', "dotfiles/s.merge.json": '{"a.b.$append": []}' },
+      "merge append path not found: a.b",
+    );
+    await expectMergeError(
       {
-        "dotfiles/settings.json": "{}",
-        "dotfiles/settings.overwrite.json": '{"items.$append": []}',
+        "dotfiles/s.json": '{"gone": [1]}',
+        "dotfiles/s.merge.json": '{"gone.$unset": true, "gone.$append": []}',
       },
-      "overwrite append path not found: items",
+      "merge append path not found: gone",
+    );
+    await expectMergeError(
+      { "home/s.json": "[1]", "dotfiles/s.merge.json": '{"items.$append": []}' },
+      "merge append path not found: items",
+    );
+    await expectMergeError(
+      { "dotfiles/s.json": "{}", "dotfiles/s.merge.json": '{".$append": []}' },
+      "invalid merge op key: .$append",
     );
   });
 });
