@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "bun:test";
 
 import { Bootstrap, parseConfig, run, type Entry, type Runtime } from "./bootstrap.ts";
@@ -25,6 +27,10 @@ class FakeRuntime implements Runtime {
 
   execute(command: readonly string[]): void {
     this.commands.push([...command]);
+    if (command.slice(0, 3).join(" ") === "gh release download") {
+      const directory = command[command.indexOf("--dir") + 1]!;
+      writeFileSync(join(directory, "drawio-amd64-1.0.0.deb"), "");
+    }
     if (this.failures.has(command.join(" "))) throw new Error(`failed: ${command.join(" ")}`);
   }
 
@@ -50,10 +56,9 @@ class FakeRuntime implements Runtime {
 function bootstrap(
   entries: readonly Entry[],
   runtime: FakeRuntime,
-  platform: "linux" | "windows" = "linux",
   handlers = new Map<string, () => void | Promise<void>>(),
 ): Bootstrap {
-  return new Bootstrap(platform, entries, runtime, handlers);
+  return new Bootstrap(entries, runtime, handlers);
 }
 
 describe("parseConfig", () => {
@@ -78,6 +83,7 @@ describe("parseConfig", () => {
       "- curl",
       "- apt: [curl]",
       "- { apt: curl, uv: ruff }",
+      "- winget: Microsoft.PowerToys",
       "- unknown: value",
     ]) {
       assert.throws(() => parseConfig(source));
@@ -174,7 +180,6 @@ describe("sync", () => {
     const runtime = new FakeRuntime();
     const entries: Entry[] = [
       { key: "apt", value: "curl=8" },
-      { key: "winget", value: "Ignored.On.Linux@1" },
       { key: "uv", value: "ruff==1" },
       { key: "bun", value: "@scope/tool@2" },
       { key: "go", value: "example.com/tool@v3" },
@@ -195,30 +200,6 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands.slice(-2), [
       ["brew", "install", "jq"],
       ["brew", "install", "--cask", "visual-studio-code"],
-    ]);
-    assert.equal(
-      runtime.commands.some((command) => command[0] === "winget"),
-      false,
-    );
-  });
-
-  it("ignores apt on Windows and winget on Linux", async () => {
-    const linux = new FakeRuntime();
-    const windows = new FakeRuntime();
-    const entries: Entry[] = [
-      { key: "apt", value: "curl" },
-      { key: "winget", value: "Microsoft.PowerToys@0.1" },
-    ];
-
-    await bootstrap(entries, linux).sync();
-    await bootstrap(entries, windows, "windows").sync();
-
-    assert.deepEqual(linux.commands, [
-      ["sudo", "apt", "update"],
-      ["sudo", "apt", "install", "-y", "curl"],
-    ]);
-    assert.deepEqual(windows.commands, [
-      ["winget", "install", "--id", "Microsoft.PowerToys", "-e", "--version", "0.1"],
     ]);
   });
 
@@ -262,7 +243,7 @@ describe("sync", () => {
     ]);
   });
 
-  it("calls known custom handlers, rejects unknown handlers, and skips Linux-only handlers on Windows", async () => {
+  it("calls known custom handlers and rejects unknown handlers", async () => {
     const runtime = new FakeRuntime();
     let knownCalls = 0;
     const entries: Entry[] = [
@@ -273,7 +254,6 @@ describe("sync", () => {
     const exitCode = await bootstrap(
       entries,
       runtime,
-      "linux",
       new Map([
         [
           "known",
@@ -287,29 +267,83 @@ describe("sync", () => {
     assert.equal(exitCode, 1);
     assert.equal(knownCalls, 1);
     assert.match(runtime.errors.at(-1)!, /unknown custom handler/);
+  });
 
-    const windowsRuntime = new FakeRuntime();
-    const windowsExitCode = await bootstrap(
+  it("continues after a custom handler failure", async () => {
+    const runtime = new FakeRuntime();
+
+    const exitCode = await bootstrap(
       [
-        { key: "custom", value: "drawio" },
-        { key: "custom", value: "android-sdk" },
-        { key: "custom", value: "vscode" },
+        { key: "custom", value: "broken" },
+        { key: "run", value: "echo done" },
       ],
-      windowsRuntime,
-      "windows",
+      runtime,
+      new Map([["broken", () => Promise.reject(new Error("failed"))]]),
     ).sync();
-    assert.equal(windowsExitCode, 0);
-    assert.deepEqual(windowsRuntime.commands, []);
+
+    assert.equal(exitCode, 1);
+    assert.deepEqual(runtime.commands, [["bash", "-c", "echo done"]]);
+    assert.deepEqual(runtime.errors, ["custom broken: failed"]);
+  });
+
+  it("installs the Android SDK custom handler", async () => {
+    const runtime = new FakeRuntime();
+
+    const exitCode = await new Bootstrap([{ key: "custom", value: "android-sdk" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, [
+      ["brew", "install", "--cask", "android-commandlinetools"],
+      [
+        "android",
+        "--sdk=/home/username/.android-sdk",
+        "sdk",
+        "install",
+        "cmdline-tools/latest",
+        "platform-tools",
+      ],
+    ]);
+  });
+
+  it("downloads and installs the latest draw.io deb", async () => {
+    const runtime = new FakeRuntime();
+    runtime.outputs.set(
+      [
+        "gh",
+        "release",
+        "view",
+        "--repo",
+        "jgraph/drawio-desktop",
+        "--json",
+        "tagName",
+        "--jq",
+        ".tagName",
+      ].join("\0"),
+      "v1.0.0",
+    );
+
+    const exitCode = await new Bootstrap([{ key: "custom", value: "drawio" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands[0], [
+      "gh",
+      "release",
+      "download",
+      "v1.0.0",
+      "--repo",
+      "jgraph/drawio-desktop",
+      "--pattern",
+      "drawio-amd64-*.deb",
+      "--dir",
+      runtime.commands[0]![9]!,
+    ]);
+    assert.match(runtime.commands[1]![4]!, /\/drawio-amd64-1\.0\.0\.deb$/);
   });
 
   it("downloads and installs the latest Linux VS Code deb", async () => {
     const runtime = new FakeRuntime();
 
-    const exitCode = await new Bootstrap(
-      "linux",
-      [{ key: "custom", value: "vscode" }],
-      runtime,
-    ).sync();
+    const exitCode = await new Bootstrap([{ key: "custom", value: "vscode" }], runtime).sync();
 
     assert.equal(exitCode, 0);
     const download = runtime.commands[0]!;
@@ -326,16 +360,32 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands[1], ["sudo", "apt", "install", "-y", debPath]);
   });
 
-  it("runs commands on every sync with the platform shell", async () => {
-    const linux = new FakeRuntime();
-    const windows = new FakeRuntime();
-    const entries: Entry[] = [{ key: "run", value: "echo ready" }];
+  it("runs commands on every sync with bash", async () => {
+    const runtime = new FakeRuntime();
 
-    await bootstrap(entries, linux).sync();
-    await bootstrap(entries, windows, "windows").sync();
+    await bootstrap([{ key: "run", value: "echo ready" }], runtime).sync();
 
-    assert.deepEqual(linux.commands, [["bash", "-c", "echo ready"]]);
-    assert.deepEqual(windows.commands, [["pwsh", "-Command", "echo ready"]]);
+    assert.deepEqual(runtime.commands, [["bash", "-c", "echo ready"]]);
+  });
+
+  it("continues after a run command failure", async () => {
+    const runtime = new FakeRuntime();
+    runtime.failures.add("bash -c broken");
+
+    const exitCode = await bootstrap(
+      [
+        { key: "run", value: "broken" },
+        { key: "run", value: "echo done" },
+      ],
+      runtime,
+    ).sync();
+
+    assert.equal(exitCode, 1);
+    assert.deepEqual(runtime.commands, [
+      ["bash", "-c", "broken"],
+      ["bash", "-c", "echo done"],
+    ]);
+    assert.deepEqual(runtime.errors, ["install run: broken: failed: bash -c broken"]);
   });
 });
 
@@ -349,12 +399,7 @@ describe("diff", () => {
       { key: "custom", value: "known" },
     ];
 
-    const exitCode = await bootstrap(
-      entries,
-      runtime,
-      "linux",
-      new Map([["known", () => undefined]]),
-    ).diff();
+    const exitCode = await bootstrap(entries, runtime, new Map([["known", () => undefined]])).diff();
 
     assert.equal(exitCode, 0);
     assert.deepEqual(runtime.commands, []);
@@ -366,21 +411,24 @@ describe("diff", () => {
     ]);
   });
 
-  it("omits unavailable managers and Windows-only skipped custom handlers from plans", async () => {
+  it("omits unavailable managers from plans", async () => {
     const runtime = new FakeRuntime();
     runtime.failures.add("uv tool list");
     const entries: Entry[] = [
       { key: "apt", value: "curl" },
       { key: "uv", value: "ruff" },
-      { key: "custom", value: "drawio" },
       { key: "custom", value: "unknown" },
       { key: "run", value: "echo ready" },
     ];
 
-    const exitCode = await bootstrap(entries, runtime, "windows").diff();
+    const exitCode = await bootstrap(entries, runtime).diff();
 
     assert.equal(exitCode, 1);
-    assert.deepEqual(runtime.logs, ["custom: unknown", "run: echo ready"]);
+    assert.deepEqual(runtime.logs, [
+      "install / update apt: curl",
+      "custom: unknown",
+      "run: echo ready",
+    ]);
     assert.match(runtime.errors[0]!, /^uv state:/);
     assert.match(runtime.errors[1]!, /unknown custom handler/);
   });

@@ -3,10 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Key = "apt" | "winget" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
+export type Key = "apt" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
 type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
-export type Platform = "linux" | "windows";
 type State = Map<DeclarativeKey, Map<string, string>>;
 type CustomHandler = () => void | Promise<void>;
 
@@ -21,7 +20,6 @@ export interface Runtime {
 const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew", "bun", "go", "uv"];
 const validKeys = new Set<Key>([
   "apt",
-  "winget",
   "uv",
   "bun",
   "go",
@@ -40,7 +38,6 @@ export class Bootstrap {
   private aptUpdated = false;
 
   constructor(
-    private readonly platform: Platform,
     private readonly entries: readonly Entry[],
     private readonly runtime: Runtime = systemRuntime,
     customHandlers?: ReadonlyMap<string, CustomHandler>,
@@ -53,7 +50,7 @@ export class Bootstrap {
     for (const key of declarativeKeys) this.removeUnused(key, states.get(key));
 
     for (const entry of this.entries) {
-      if (!this.isActive(entry) || (isDeclarative(entry.key) && !states.has(entry.key))) continue;
+      if (isDeclarative(entry.key) && !states.has(entry.key)) continue;
       await this.install(entry);
     }
     return this.finish();
@@ -70,9 +67,8 @@ export class Bootstrap {
     }
 
     for (const entry of this.entries) {
-      if (!this.isActive(entry) || (isDeclarative(entry.key) && !states.has(entry.key))) continue;
+      if (isDeclarative(entry.key) && !states.has(entry.key)) continue;
       if (entry.key === "custom") {
-        if (this.skipsCustom(entry.value)) continue;
         this.runtime.log(`custom: ${entry.value}`);
         if (!this.customHandlers.has(entry.value))
           this.fail(`unknown custom handler: ${entry.value}`);
@@ -150,7 +146,6 @@ export class Bootstrap {
 
   private async install(entry: Entry): Promise<void> {
     if (entry.key === "custom") {
-      if (this.skipsCustom(entry.value)) return;
       const handler = this.customHandlers.get(entry.value);
       if (!handler) {
         this.fail(`unknown custom handler: ${entry.value}`);
@@ -169,18 +164,6 @@ export class Bootstrap {
           }
           this.runtime.execute(["sudo", "apt", "install", "-y", entry.value]);
           return;
-        case "winget": {
-          const [id, version] = splitVersion(entry.value);
-          this.runtime.execute([
-            "winget",
-            "install",
-            "--id",
-            id,
-            "-e",
-            ...(version ? ["--version", version] : []),
-          ]);
-          return;
-        }
         case "uv":
           this.runtime.execute(["uv", "tool", "install", entry.value]);
           return;
@@ -197,11 +180,7 @@ export class Bootstrap {
           this.runtime.execute(["brew", "install", "--cask", entry.value]);
           return;
         case "run":
-          this.runtime.execute(
-            this.platform === "linux"
-              ? ["bash", "-c", entry.value]
-              : ["pwsh", "-Command", entry.value],
-          );
+          this.runtime.execute(["bash", "-c", entry.value]);
       }
     });
   }
@@ -212,13 +191,6 @@ export class Bootstrap {
       ["drawio", () => this.installDrawio()],
       ["vscode", () => this.installVscode()],
     ]);
-  }
-
-  private skipsCustom(name: string): boolean {
-    return (
-      this.platform === "windows" &&
-      (name === "android-sdk" || name === "drawio" || name === "vscode")
-    );
   }
 
   private installGo(specification: string): void {
@@ -310,13 +282,6 @@ export class Bootstrap {
     } catch (error) {
       this.fail(`${label}: ${message(error)}`);
     }
-  }
-
-  private isActive(entry: Entry): boolean {
-    return !(
-      (entry.key === "apt" && this.platform === "windows") ||
-      (entry.key === "winget" && this.platform === "linux")
-    );
   }
 
   private fail(problem: string): void {
@@ -420,7 +385,6 @@ export async function run(
   arguments_: readonly string[],
   readConfig = () => Bun.file(configPath).text(),
   runtime: Runtime = systemRuntime,
-  platform: Platform = process.platform === "win32" ? "windows" : "linux",
 ): Promise<number> {
   const [command] = arguments_;
   if (arguments_.length !== 1 || (command !== "sync" && command !== "diff")) {
@@ -429,7 +393,7 @@ export async function run(
   }
 
   try {
-    const bootstrap = new Bootstrap(platform, parseConfig(await readConfig()), runtime);
+    const bootstrap = new Bootstrap(parseConfig(await readConfig()), runtime);
     return command === "sync" ? await bootstrap.sync() : await bootstrap.diff();
   } catch (error) {
     runtime.error(message(error));

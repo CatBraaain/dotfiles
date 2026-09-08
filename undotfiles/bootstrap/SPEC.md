@@ -2,7 +2,7 @@
 
 `undotfiles/bootstrap/bootstrap.ts` の観測可能な振る舞いの仕様。対象は、BunでCLIを実行するときの、`undotfiles/bootstrap/config.yaml` に書かれた環境構成から、ホストのグローバルパッケージと指定コマンドの実行結果への同期である。読者は、このspecだけを読んで要件を承認するオーナーと、実装・テストの担当者。
 
-- 対応プラットフォーム: LinuxとWindows。
+- 対応プラットフォーム: Linux。
 - 実行形式: `bun undotfiles/bootstrap/bootstrap.ts <sync|diff>`。引数は`sync`または`diff`の1つだけを受け付ける。
 - 引数の省略または追加、`sync`・`diff`以外の引数は、使用法を出力して終了コード0以外で終了する。
 - `just install` は `sync` を実行する入口とする。`setup.sh`はBootstrapの外部呼び出し元であり、このspecの対象外とする。
@@ -13,17 +13,16 @@
 
 設定ファイルは`bootstrap.ts`と同じディレクトリにある`config.yaml`である。トップレベルは配列で、各要素はキーが1つだけのマップとし、その値は1つの文字列とする。配列の順序はInstall / Ensure Phaseの実行順序を表す。
 
-| キー | 値 | 対象プラットフォーム | 管理方式 |
-| --- | --- | --- | --- |
-| `apt` | Debianパッケージ指定 | Linux | 最新化保証 |
-| `winget` | wingetパッケージ指定 | Windows | 最新化保証 |
-| `uv` | Pythonパッケージ指定 | 共通 | 宣言的 |
-| `bun` | npmパッケージ指定 | 共通 | 宣言的 |
-| `go` | Go toolのパッケージパス | 共通 | 宣言的（gup） |
-| `brew` | Homebrew Formula名 | 共通 | 宣言的 |
-| `brew-cask` | Homebrew Cask名 | 共通 | 宣言的 |
-| `custom` | Custom Handler名 | 共通 | Handlerによる存在保証 |
-| `run` | シェルコマンド | 共通 | 毎回実行 |
+| キー | 値 | 管理方式 |
+| --- | --- | --- |
+| `apt` | Debianパッケージ指定 | 最新化保証 |
+| `uv` | Pythonパッケージ指定 | 宣言的 |
+| `bun` | npmパッケージ指定 | 宣言的 |
+| `go` | Go toolのパッケージパス | 宣言的（gup） |
+| `brew` | Homebrew Formula名 | 宣言的 |
+| `brew-cask` | Homebrew Cask名 | 宣言的 |
+| `custom` | Custom Handler名 | Handlerによる存在保証 |
+| `run` | シェルコマンド | 毎回実行 |
 
 設定の例:
 
@@ -33,11 +32,8 @@
     - go: golang.org/x/tools/gopls
     - brew: jq
     - brew-cask: visual-studio-code
-    - winget: Microsoft.VisualStudioCode
     - custom: docker
     - run: "git config --global init.defaultBranch main"
-
-`apt` はWindowsで、`winget` はLinuxで無視する。無視された要素は、差分表示、削除、Install / Ensure Phaseのいずれにも含めない。`共通`のキーは両プラットフォームで処理し、必要なバックエンドが使えないときは失敗として記録する。
 
 パッケージキーの値は、対応するバックエンドが受け付けるパッケージ指定として扱う。各Managerは、その指定からバックエンドが導入対象として識別するパッケージ識別子を解決する。バージョン指定はこの識別子を変えず、導入するバージョンだけを指定する。
 
@@ -45,9 +41,9 @@
 
 ## Desired State
 
-実行プラットフォームで有効な`uv`、`bun`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除とInstall / Ensure Phaseの導入を行わず、失敗として記録する。
+`uv`、`bun`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除とInstall / Ensure Phaseの導入を行わず、失敗として記録する。
 
-`apt`と`winget`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`vscode`はLinuxで目的状態を保証し、Windowsでは何もしない。
+`apt`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`vscode`は目的状態を保証する。
 
 ## sync
 
@@ -65,7 +61,7 @@
 | brew | Desired StateにないFormula | Formula群として処理 |
 | brew-cask | Desired StateにないCask | Cask群として処理 |
 
-Uninstall Phaseは、設定ファイル内の要素順序に従わない。Managerはキー名のアルファベット順、`brew-cask`、`brew`、`bun`、`go`、`uv`で処理する。`apt`、`winget`、`custom`、`run`はこのフェーズで処理しない。
+Uninstall Phaseは、設定ファイル内の要素順序に従わない。Managerはキー名のアルファベット順、`brew-cask`、`brew`、`bun`、`go`、`uv`で処理する。`apt`、`custom`、`run`はこのフェーズで処理しない。
 
 ### 2. Install / Ensure Phase
 
@@ -73,18 +69,17 @@ Uninstall Phaseは、設定ファイル内の要素順序に従わない。Manag
 
 | キー | 振る舞い |
 | --- | --- |
-| `apt` | Linuxで指定されたパッケージのinstall操作を実行する。 |
-| `winget` | Windowsで指定されたパッケージのinstall操作を実行する。 |
+| `apt` | 指定されたパッケージのinstall操作を実行する。 |
 | `uv` | 指定されたPythonパッケージのグローバルinstall操作を実行する。 |
 | `bun` | 指定されたnpmパッケージのグローバルinstall操作を実行する。 |
 | `go` | gupを通じて指定されたGo toolのinstall操作を実行する。 |
 | `brew` | 指定されたFormulaのinstall操作を実行する。 |
 | `brew-cask` | 指定されたCaskのinstall操作を実行する。 |
-| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`drawio`、`android-sdk`、`vscode`はWindowsで何もしない。Linuxの`vscode`は公式Stable版Linux x64の`.deb`を`https://update.code.visualstudio.com/latest/linux-deb-x64/stable`から取得し、`sudo apt install -y`でインストールする。名前に対応するHandlerがなければ失敗として記録する。 |
-| `run` | 指定されたコマンドを、Linuxでは`bash -c`、Windowsでは`pwsh -Command`で実行する。同期ごとに必ず実行する。 |
+| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`vscode`は公式Stable版Linux x64の`.deb`を`https://update.code.visualstudio.com/latest/linux-deb-x64/stable`から取得し、`sudo apt install -y`でインストールする。名前に対応するHandlerがなければ失敗として記録する。 |
+| `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
 
 ## diff
 
-`diff` はホストを変更しない。Declarative Managerでは、現在のグローバル状態とDesired Stateの差を、Uninstall Phaseと同じManager名のアルファベット順で削除予定として表示する。状態取得に失敗したManagerの差分は表示しない。次に、Install / Ensure Phaseの予定を設定配列の順序で1要素ずつ表示する。状態取得に失敗したManagerのパッケージ項目は、この予定にも含めない。その他のパッケージ項目は、導入済みかどうかにかかわらずinstall / update予定として表示する。`custom`と`run`は配列上の位置で、同期時に呼び出すHandlerまたは実行するコマンドとして表示する。ただしWindowsの`drawio`、`android-sdk`、`vscode`は表示しない。未知のCustom Handlerもその位置で表示して失敗を記録する。状態取得の失敗は記録し、他の項目の表示を続ける。
+`diff` はホストを変更しない。Declarative Managerでは、現在のグローバル状態とDesired Stateの差を、Uninstall Phaseと同じManager名のアルファベット順で削除予定として表示する。状態取得に失敗したManagerの差分は表示しない。次に、Install / Ensure Phaseの予定を設定配列の順序で1要素ずつ表示する。状態取得に失敗したManagerのパッケージ項目は、この予定にも含めない。その他のパッケージ項目は、導入済みかどうかにかかわらずinstall / update予定として表示する。`custom`と`run`は配列上の位置で、同期時に呼び出すHandlerまたは実行するコマンドとして表示する。未知のCustom Handlerもその位置で表示して失敗を記録する。状態取得の失敗は記録し、他の項目の表示を続ける。
 
 差分の有無にかかわらず、失敗がなければ`diff`は終了コード0で終了する。設定エラーは処理せずに異常終了する。
