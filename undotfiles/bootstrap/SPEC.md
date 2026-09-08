@@ -16,6 +16,7 @@
 | キー | 値 | 管理方式 |
 | --- | --- | --- |
 | `apt` | Debianパッケージ指定 | 最新化保証 |
+| `deb-get` | deb-getパッケージ名 | 最新化保証 |
 | `uv` | Pythonパッケージ指定 | 宣言的 |
 | `bun` | npmパッケージ指定 | 宣言的 |
 | `go` | Go toolのパッケージパス | 宣言的（gup） |
@@ -32,6 +33,7 @@
     - go: golang.org/x/tools/gopls
     - brew: jq
     - brew-cask: visual-studio-code
+    - deb-get: code
     - custom: docker
     - run: "git config --global init.defaultBranch main"
 
@@ -43,7 +45,7 @@
 
 `uv`、`bun`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除とInstall / Ensure Phaseの導入を行わず、失敗として記録する。
 
-`apt`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`vscode`は目的状態を保証する。
+`apt`と`deb-get`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`と`android-sdk`は目的状態を保証する。
 
 ## sync
 
@@ -61,7 +63,7 @@
 | brew | Desired StateにないFormula | Formula群として処理 |
 | brew-cask | Desired StateにないCask | Cask群として処理 |
 
-Uninstall Phaseは、設定ファイル内の要素順序に従わない。Managerはキー名のアルファベット順、`brew-cask`、`brew`、`bun`、`go`、`uv`で処理する。`apt`、`custom`、`run`はこのフェーズで処理しない。
+Uninstall Phaseは、設定ファイル内の要素順序に従わない。Managerはキー名のアルファベット順、`brew-cask`、`brew`、`bun`、`go`、`uv`で処理する。`apt`、`deb-get`、`custom`、`run`はこのフェーズで処理しない。
 
 ### 2. Install / Ensure Phase
 
@@ -70,12 +72,13 @@ Uninstall Phaseは、設定ファイル内の要素順序に従わない。Manag
 | キー | 振る舞い |
 | --- | --- |
 | `apt` | 指定されたパッケージのinstall操作を実行する。 |
+| `deb-get` | 指定されたパッケージのinstall操作を実行する。初回の`deb-get`項目の処理時に`deb-get version`が成功しなければ、`sudo apt install -y curl lsb-release wget jq`を実行し、公式スクリプトを`curl -fsSL https://raw.githubusercontent.com/wimpysworld/deb-get/main/deb-get | sudo -E bash -s install deb-get`で実行してからパッケージを導入する。 |
 | `uv` | 指定されたPythonパッケージのグローバルinstall操作を実行する。 |
 | `bun` | 指定されたnpmパッケージのグローバルinstall操作を実行する。 |
 | `go` | gupを通じて指定されたGo toolのinstall操作を実行する。 |
 | `brew` | 指定されたFormulaのinstall操作を実行する。 |
 | `brew-cask` | 指定されたCaskのinstall操作を実行する。 |
-| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`vscode`は公式Stable版Linux x64の`.deb`を`https://update.code.visualstudio.com/latest/linux-deb-x64/stable`から取得し、`sudo apt install -y`でインストールする。名前に対応するHandlerがなければ失敗として記録する。 |
+| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
 
 ## diff

@@ -44,6 +44,10 @@ class FakeRuntime implements Runtime {
     return this.outputs.get(command.join("\0")) ?? "";
   }
 
+  succeeds(command: readonly string[]): boolean {
+    return !this.failures.has(command.join(" "));
+  }
+
   log(message: string): void {
     this.logs.push(message);
   }
@@ -64,13 +68,14 @@ function bootstrap(
 describe("parseConfig", () => {
   it("preserves ordered single-key entries", () => {
     const entries = parseConfig(
-      "- apt: curl\n- brew: jq\n- brew-cask: visual-studio-code\n- uv: ruff\n- run: echo ready\n",
+      "- apt: curl\n- brew: jq\n- brew-cask: visual-studio-code\n- deb-get: code\n- uv: ruff\n- run: echo ready\n",
     );
 
     assert.deepEqual(entries, [
       { key: "apt", value: "curl" },
       { key: "brew", value: "jq" },
       { key: "brew-cask", value: "visual-studio-code" },
+      { key: "deb-get", value: "code" },
       { key: "uv", value: "ruff" },
       { key: "run", value: "echo ready" },
     ]);
@@ -180,6 +185,7 @@ describe("sync", () => {
     const runtime = new FakeRuntime();
     const entries: Entry[] = [
       { key: "apt", value: "curl=8" },
+      { key: "deb-get", value: "code" },
       { key: "uv", value: "ruff==1" },
       { key: "bun", value: "@scope/tool@2" },
       { key: "go", value: "example.com/tool@v3" },
@@ -190,17 +196,52 @@ describe("sync", () => {
     const exitCode = await bootstrap(entries, runtime).sync();
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(runtime.commands.slice(0, 5), [
+    assert.deepEqual(runtime.commands.slice(0, 6), [
       ["sudo", "apt", "update"],
       ["sudo", "apt", "install", "-y", "curl=8"],
+      ["deb-get", "install", "code"],
       ["uv", "tool", "install", "ruff==1"],
       ["bun", "add", "-g", "@scope/tool@2"],
-      ["gup", "import", "--file", runtime.commands[4]![3]!],
+      ["gup", "import", "--file", runtime.commands[5]![3]!],
     ]);
     assert.deepEqual(runtime.commands.slice(-2), [
       ["brew", "install", "jq"],
       ["brew", "install", "--cask", "visual-studio-code"],
     ]);
+  });
+
+  it("bootstraps deb-get before installing its packages when it is missing", async () => {
+    const runtime = new FakeRuntime();
+    runtime.failures.add("deb-get version");
+
+    const exitCode = await bootstrap(
+      [
+        { key: "deb-get", value: "code" },
+        { key: "deb-get", value: "other" },
+      ],
+      runtime,
+    ).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, [
+      ["sudo", "apt", "install", "-y", "curl", "lsb-release", "wget", "jq"],
+      [
+        "bash",
+        "-c",
+        "curl -fsSL https://raw.githubusercontent.com/wimpysworld/deb-get/main/deb-get | sudo -E bash -s install deb-get",
+      ],
+      ["deb-get", "install", "code"],
+      ["deb-get", "install", "other"],
+    ]);
+  });
+
+  it("does not bootstrap deb-get when it is already installed", async () => {
+    const runtime = new FakeRuntime();
+
+    const exitCode = await bootstrap([{ key: "deb-get", value: "code" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, [["deb-get", "install", "code"]]);
   });
 
   it("continues after a state read failure while skipping that manager", async () => {
@@ -340,26 +381,6 @@ describe("sync", () => {
     assert.match(runtime.commands[1]![4]!, /\/drawio-amd64-1\.0\.0\.deb$/);
   });
 
-  it("downloads and installs the latest Linux VS Code deb", async () => {
-    const runtime = new FakeRuntime();
-
-    const exitCode = await new Bootstrap([{ key: "custom", value: "vscode" }], runtime).sync();
-
-    assert.equal(exitCode, 0);
-    const download = runtime.commands[0]!;
-    const debPath = download[4]!;
-    assert.deepEqual(download, [
-      "curl",
-      "--fail",
-      "--location",
-      "--output",
-      debPath,
-      "https://update.code.visualstudio.com/latest/linux-deb-x64/stable",
-    ]);
-    assert.match(debPath, /\/bootstrap-vscode-[^/]+\/code\.deb$/);
-    assert.deepEqual(runtime.commands[1], ["sudo", "apt", "install", "-y", debPath]);
-  });
-
   it("runs commands on every sync with bash", async () => {
     const runtime = new FakeRuntime();
 
@@ -395,6 +416,7 @@ describe("diff", () => {
     runtime.outputs.set("bun\0pm\0ls\0-g", "old@1");
     const entries: Entry[] = [
       { key: "bun", value: "new@2" },
+      { key: "deb-get", value: "code" },
       { key: "run", value: "echo ready" },
       { key: "custom", value: "known" },
     ];
@@ -406,6 +428,7 @@ describe("diff", () => {
     assert.deepEqual(runtime.logs, [
       "remove bun: old",
       "install / update bun: new@2",
+      "install / update deb-get: code",
       "run: echo ready",
       "custom: known",
     ]);

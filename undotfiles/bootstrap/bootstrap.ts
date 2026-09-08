@@ -3,7 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Key = "apt" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
+export type Key =
+  | "apt"
+  | "deb-get"
+  | "uv"
+  | "bun"
+  | "go"
+  | "brew"
+  | "brew-cask"
+  | "custom"
+  | "run";
 type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
 type State = Map<DeclarativeKey, Map<string, string>>;
@@ -13,6 +22,7 @@ export interface Runtime {
   execute(command: readonly string[]): void;
   output(command: readonly string[]): string;
   outputAllowFailure(command: readonly string[]): string;
+  succeeds(command: readonly string[]): boolean;
   log(message: string): void;
   error(message: string): void;
 }
@@ -20,6 +30,7 @@ export interface Runtime {
 const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew", "bun", "go", "uv"];
 const validKeys = new Set<Key>([
   "apt",
+  "deb-get",
   "uv",
   "bun",
   "go",
@@ -30,12 +41,13 @@ const validKeys = new Set<Key>([
 ]);
 const configPath = join(import.meta.dir, "config.yaml");
 const androidSdkDir = join(homedir(), ".android-sdk");
-const vscodeDownloadUrl = "https://update.code.visualstudio.com/latest/linux-deb-x64/stable";
+const debGetScriptUrl = "https://raw.githubusercontent.com/wimpysworld/deb-get/main/deb-get";
 
 export class Bootstrap {
   private readonly failures: string[] = [];
   private readonly customHandlers: ReadonlyMap<string, CustomHandler>;
   private aptUpdated = false;
+  private debGetPrepared = false;
 
   constructor(
     private readonly entries: readonly Entry[],
@@ -164,6 +176,9 @@ export class Bootstrap {
           }
           this.runtime.execute(["sudo", "apt", "install", "-y", entry.value]);
           return;
+        case "deb-get":
+          this.installDebGet(entry.value);
+          return;
         case "uv":
           this.runtime.execute(["uv", "tool", "install", entry.value]);
           return;
@@ -189,7 +204,6 @@ export class Bootstrap {
     return new Map([
       ["android-sdk", () => this.installAndroidSdk()],
       ["drawio", () => this.installDrawio()],
-      ["vscode", () => this.installVscode()],
     ]);
   }
 
@@ -217,15 +231,19 @@ export class Bootstrap {
     ]);
   }
 
-  private async installVscode(): Promise<void> {
-    const directory = await mkdtemp(join(tmpdir(), "bootstrap-vscode-"));
-    const file = join(directory, "code.deb");
-    try {
-      this.runtime.execute(["curl", "--fail", "--location", "--output", file, vscodeDownloadUrl]);
-      this.runtime.execute(["sudo", "apt", "install", "-y", file]);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
+  private installDebGet(packageName: string): void {
+    if (!this.debGetPrepared) {
+      if (!this.runtime.succeeds(["deb-get", "version"])) {
+        this.runtime.execute(["sudo", "apt", "install", "-y", "curl", "lsb-release", "wget", "jq"]);
+        this.runtime.execute([
+          "bash",
+          "-c",
+          `curl -fsSL ${debGetScriptUrl} | sudo -E bash -s install deb-get`,
+        ]);
+      }
+      this.debGetPrepared = true;
     }
+    this.runtime.execute(["deb-get", "install", packageName]);
   }
 
   private async installDrawio(): Promise<void> {
@@ -372,6 +390,9 @@ const systemRuntime: Runtime = {
   outputAllowFailure(command) {
     const result = Bun.spawnSync([...command], { stdout: "pipe", stderr: "ignore" });
     return result.exitCode === 0 ? result.stdout.toString().trim() : "";
+  },
+  succeeds(command) {
+    return Bun.spawnSync([...command], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
   },
   log(message) {
     console.log(message);

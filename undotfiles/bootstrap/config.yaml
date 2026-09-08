@@ -81,6 +81,6 @@
 - uv: harlequin
 
 # Apps and SDKs
+- deb-get: code
 - custom: drawio
-- custom: vscode
 - custom: android-sdk
