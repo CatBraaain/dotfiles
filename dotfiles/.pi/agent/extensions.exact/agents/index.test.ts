@@ -51,7 +51,7 @@ const config: AgentConfig = {
     manager: {
       tier: "middle",
       tools: ["*", "!read_image"],
-      subagents: ["worker", "visual_agent"],
+      subagents: ["worker", "vision"],
       systemPrompt: ["ファイル操作は禁止"],
     },
     worker: { tier: "low", tools: ["bash"], subagents: ["chat"], systemPrompt: ["worker prompt"] },
@@ -62,7 +62,7 @@ const config: AgentConfig = {
       systemPrompt: ["チャット用"],
     },
     locked: { tier: "low", tools: [], subagents: [], systemPrompt: [] },
-    visual_agent: {
+    vision: {
       tier: "vision",
       tools: ["*"],
       subagents: [],
@@ -338,7 +338,7 @@ agents:
     tools: [read]
     subagents: []
     systemPrompt: [hello]
-  visual_agent:
+  vision:
     tier: vision
     tools: ["*"]
     subagents: []
@@ -363,7 +363,7 @@ agents:
     tools: []
     subagents: []
     systemPrompt: [*common]
-  visual_agent:
+  vision:
     tier: vision
     tools: ["*"]
     subagents: []
@@ -462,7 +462,7 @@ agents:
     tools: []
     subagents: []
     systemPrompt: [*common, worker-only]
-  visual_agent:
+  vision:
     tier: vision
     tools: ["*"]
     subagents: []
@@ -568,92 +568,92 @@ profiles:
     assert.match(result.error ?? "", /default and agents are required/);
   });
 
-  it("visual_agent がない設定を拒否する", () => {
+  it("vision がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /visual_agent agent is required/);
+    assert.match(result.error ?? "", /vision agent is required/);
   });
 
-  it("visual_agent が vision tier を参照しない設定を拒否する", () => {
+  it("vision が vision tier を参照しない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
   manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}
-  visual_agent: {tier: middle, tools: ["*"], subagents: [], systemPrompt: []}`);
+  vision: {tier: middle, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must use the vision tier/);
   });
 
-  it("visual_agent が read_image を許可しない設定を拒否する", () => {
+  it("vision が read_image を許可しない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
   manager: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
-  visual_agent: {tier: vision, tools: [read], subagents: [], systemPrompt: []}`);
+  vision: {tier: vision, tools: [read], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must allow read_image/);
   });
 
-  it("visual_agent 以外が read_image を否定なしで許可する設定を拒否する", () => {
+  it("vision 以外が read_image を否定なしで許可する設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
   manager: {tier: middle, tools: ["*"], subagents: [], systemPrompt: []}
-  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must exclude read_image/);
   });
 
-  it("visual_agent 以外が read_image を明示許可しても否定なしの設定を拒否する", () => {
+  it("vision 以外が read_image を明示許可しても否定なしの設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
   manager: {tier: middle, tools: [read_image], subagents: [], systemPrompt: []}
-  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must exclude read_image/);
   });
 
-  it("main と senior の subagents に visual_agent がない設定を拒否する", () => {
+  it("main と senior の subagents に vision がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: main
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
   main: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
-  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
+  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
   junior: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
-  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /must delegate to visual_agent/);
+  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /must delegate to vision/);
   });
 
-  it("junior が visual_agent を委譲先に持つ設定を拒否する", () => {
+  it("junior が vision を委譲先に持つ設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
-  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
-  junior: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
-  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /junior must not delegate to visual_agent/);
+  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  junior: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /junior must not delegate to vision/);
   });
 
-  it("visual_agent が vision tier で read_image を許可する設定を受け入れる", () => {
+  it("vision が vision tier で read_image を許可する設定を受け入れる", () => {
     const result = parseAgentConfig(`default: manager
 tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [visual_agent], systemPrompt: []}
-  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.equal(result.error, undefined);
   });
 
@@ -663,8 +663,8 @@ tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["!"], subagents: [visual_agent], systemPrompt: []}
-  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {tier: middle, tools: ["!"], subagents: [vision], systemPrompt: []}
+  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /bare "!" negation/);
   });
 
@@ -674,8 +674,8 @@ tiers:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: [read, "!read", "*"], subagents: [visual_agent], systemPrompt: []}
-  visual_agent: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {tier: middle, tools: [read, "!read", "*"], subagents: [vision], systemPrompt: []}
+  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /both allows and negates tool read/);
   });
 });
@@ -711,8 +711,8 @@ describe("ツール許可", () => {
     assert.equal(isToolAllowed("manager", "future_tool", config), true);
   });
 
-  it("visual_agent は read_image を許可する", () => {
-    assert.equal(shouldBlockToolCall("visual_agent", "read_image", config), false);
+  it("vision は read_image を許可する", () => {
+    assert.equal(shouldBlockToolCall("vision", "read_image", config), false);
   });
 });
 
@@ -1081,7 +1081,7 @@ describe("tier によるモデルルーティング", () => {
           default: "main",
           agents: {
             ...config.agents,
-            main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "visual_agent"], systemPrompt: [] },
+            main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "vision"], systemPrompt: [] },
           },
         },
       },
@@ -1103,14 +1103,14 @@ describe("tier によるモデルルーティング", () => {
     }
   });
 
-  it("visual_agent の自動選択は vision tier の画像非対応候補を除外しない", async () => {
+  it("vision の自動選択は vision tier の画像非対応候補を除外しない", async () => {
     const extension = captureAgentsExtension(
       { config },
       { findModel: (provider, id) => ({ provider, id, input: ["text"] }) },
     );
     try {
       await extension.sessionStart();
-      await extension.runCommand("visual_agent");
+      await extension.runCommand("vision");
       assert.deepEqual(extension.selectedModels, [
         { provider: "zai", id: "glm-5.2", input: ["text"] },
         { provider: "zai", id: "glm-5.3-flash", input: ["text"] },
@@ -1163,7 +1163,7 @@ describe("手動モデル選択", () => {
 
   it("main の model_select は画像対応モデルも受け入れて手動状態にする", async () => {
     const extension = captureAgentsExtension(
-      { config: { ...config, default: "main", agents: { ...config.agents, main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "visual_agent"], systemPrompt: [] } } } },
+      { config: { ...config, default: "main", agents: { ...config.agents, main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "vision"], systemPrompt: [] } } } },
       { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
     );
     try {
@@ -1178,16 +1178,16 @@ describe("手動モデル選択", () => {
     }
   });
 
-  it("visual_agent の model_select は vision tier 外の画像非対応モデルも受け入れて手動状態にする", async () => {
+  it("vision の model_select は vision tier 外の画像非対応モデルも受け入れて手動状態にする", async () => {
     const extension = captureAgentsExtension(
       { config },
       { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
     );
     try {
       await extension.sessionStart();
-      await extension.runCommand("visual_agent");
+      await extension.runCommand("vision");
       await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text"] });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: visual_agent (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision (manual)"]);
       assert.ok(
         !extension.notifications.some((message) => message.includes("not allowed")),
       );
@@ -1196,7 +1196,7 @@ describe("手動モデル選択", () => {
     }
   });
 
-  it("画像添付の input は visual_agent 以外では親モデルへ送らず handled で止める", async () => {
+  it("画像添付の input は vision 以外では親モデルへ送らず handled で止める", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
@@ -1210,7 +1210,7 @@ describe("手動モデル選択", () => {
     }
   });
 
-  it("画像添付の input は visual_agent 子セッションへ委譲する", async () => {
+  it("画像添付の input は vision 子セッションへ委譲する", async () => {
     const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
@@ -1230,16 +1230,16 @@ describe("手動モデル選択", () => {
       assert.equal(extension.spawnCalls.length, 1);
       assert.equal(extension.spawnCalls[0]?.args.includes("--agent"), true);
       const agentFlagIndex = extension.spawnCalls[0]!.args.indexOf("--agent");
-      assert.equal(extension.spawnCalls[0]!.args[agentFlagIndex + 1], "visual_agent");
+      assert.equal(extension.spawnCalls[0]!.args[agentFlagIndex + 1], "vision");
       const taskArg = extension.spawnCalls[0]!.args.at(-1)!;
       assert.match(taskArg, /read_image/);
       assert.match(taskArg, /check this diagram/);
-      // 子セッションへ active agent を伝える（read_image の visual_agent 判定）。
-      assert.equal(extension.spawnCalls[0]?.env?.PI_AGENT_NAME, "visual_agent");
+      // 子セッションへ active agent を伝える（read_image の vision 判定）。
+      assert.equal(extension.spawnCalls[0]?.env?.PI_AGENT_NAME, "vision");
       // 子の完了を待ち、最終テキストが親へ報告される。
       await Bun.sleep(20);
       assert.ok(
-        extension.notifications.some((message) => message === "visual_agent: looked at image"),
+        extension.notifications.some((message) => message === "vision: looked at image"),
       );
     } finally {
       extension.restore();
@@ -1260,7 +1260,7 @@ describe("手動モデル選択", () => {
       await Bun.sleep(20);
       assert.ok(
         extension.notifications.some((message) =>
-          message.startsWith("visual_agent delegation failed:"),
+          message.startsWith("vision delegation failed:"),
         ),
       );
     } finally {
@@ -1274,8 +1274,8 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       assert.equal(process.env.PI_AGENT_NAME, "manager");
-      await extension.runCommand("visual_agent");
-      assert.equal(process.env.PI_AGENT_NAME, "visual_agent");
+      await extension.runCommand("vision");
+      assert.equal(process.env.PI_AGENT_NAME, "vision");
     } finally {
       if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
       else process.env.PI_AGENT_NAME = previousAgentName;
@@ -1283,7 +1283,7 @@ describe("手動モデル選択", () => {
     }
   });
 
-  it("visual_agent の画像添付は画像対応モデルのときだけ親モデルへ送る", async () => {
+  it("vision の画像添付は画像対応モデルのときだけ親モデルへ送る", async () => {
     const imageCapableFind = (provider: string, id: string) => ({
       provider,
       id,
@@ -1293,7 +1293,7 @@ describe("手動モデル選択", () => {
     const extension = captureAgentsExtension({ config }, { findModel: imageCapableFind });
     try {
       await extension.sessionStart();
-      await extension.runCommand("visual_agent");
+      await extension.runCommand("vision");
       const result = await extension.input("see this", "interactive", [
         { type: "image", data: "aGk=", mimeType: "image/png" },
       ]);
@@ -1305,7 +1305,7 @@ describe("手動モデル選択", () => {
     const textOnlyExtension = captureAgentsExtension({ config }, { findModel: (provider, id) => ({ provider, id, input: ["text"] }) });
     try {
       await textOnlyExtension.sessionStart();
-      await textOnlyExtension.runCommand("visual_agent");
+      await textOnlyExtension.runCommand("vision");
       const blocked = await textOnlyExtension.input("see this", "interactive", [
         { type: "image", data: "aGk=", mimeType: "image/png" },
       ]);
@@ -1340,7 +1340,7 @@ describe("手動モデル選択", () => {
       assert.equal(junior.spawnCalls.length, 0);
       assert.ok(
         junior.notifications.some((message) =>
-          message.includes("Report to the caller that visual confirmation by visual_agent"),
+          message.includes("Report to the caller that visual confirmation by vision"),
         ),
       );
     } finally {

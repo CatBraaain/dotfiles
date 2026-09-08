@@ -110,25 +110,25 @@ function isImageFile(imagePath: string, detectedMimeType = imageMimeType(imagePa
 
 export { isImageFile };
 
-// SPEC §2.1: 画像に対する read は OCR せず、visual_agent の利用を促す。
+// SPEC §2.1: 画像に対する read は OCR せず、vision の利用を促す。
 export function imageReadErrorMessage(imagePath: string): string {
   return (
-    `Image files are not readable via read. Image input is handled by the visual_agent agent ` +
-    `using the read_image tool. Switch the session to visual_agent or delegate this image to ` +
-    `visual_agent. Path: ${imagePath}`
+    `Image files are not readable via read. Image input is handled by the vision agent ` +
+    `using the read_image tool. Switch the session to vision or delegate this image to ` +
+    `vision. Path: ${imagePath}`
   );
 }
 
-// SPEC「画像入力を使う agent」: read_image は visual_agent セッションでのみ Vision 入力を
+// SPEC「画像入力を使う agent」: read_image は vision セッションでのみ Vision 入力を
 // 作る。agents 拡張が親・子セッションへ PI_AGENT_NAME を設定する（applyAgentTools と
 // runChild の env）。判定できない環境では拒否側に倒す。
-export function isVisualAgentSession(context: unknown): boolean {
+export function isVisionAgentSession(context: unknown): boolean {
   const agentName =
     process.env.PI_AGENT_NAME ??
     (context !== null && typeof context === "object"
       ? (context as { agent?: unknown }).agent
       : undefined);
-  return agentName === "visual_agent";
+  return agentName === "vision";
 }
 
 /** Append the EROFS guidance to the bash tool result so the model sees it at failure time. */
@@ -264,7 +264,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
   registerTextTool(
     {
       ...readTool,
-      description: `${readTool.description} Image files cannot be read via read. Text extraction, appearance judgement, and layout work are handled by the visual_agent agent using the read_image tool (Vision input); text-only agents cannot read images.`,
+      description: `${readTool.description} Image files cannot be read via read. Text extraction, appearance judgement, and layout work are handled by the vision agent using the read_image tool (Vision input); text-only agents cannot read images.`,
     },
     "read",
     (args) => args.path,
@@ -281,8 +281,8 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     name: "read_image",
     label: "read_image",
     description:
-      "Read an image file and return it as Vision input to the current model. Only the visual_agent agent can use this tool: it is how the visual_agent reads images for text extraction, appearance judgement, and layout work. Text-only agents cannot read images. The image is attached only to this agent's tool result and child session record, never to a parent agent.",
-    promptSnippet: "Read an image file as Vision input (visual_agent only)",
+      "Read an image file and return it as Vision input to the current model. Only the vision agent can use this tool: it is how the vision agent reads images for text extraction, appearance judgement, and layout work. Text-only agents cannot read images. The image is attached only to this agent's tool result and child session record, never to a parent agent.",
+    promptSnippet: "Read an image file as Vision input (vision only)",
     promptGuidelines: [
       "Use read_image instead of read for image files: read rejects images and returns an error pointing here.",
       "Re-read an image with read_image after edits when the task depends on how the result looks (layout, appearance, color).",
@@ -293,7 +293,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
       const imagePath = resolve(cwd, normalized.path);
-      if (!isVisualAgentSession(context)) {
+      if (!isVisionAgentSession(context)) {
         return {
           content: [
             {

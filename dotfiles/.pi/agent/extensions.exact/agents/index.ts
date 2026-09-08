@@ -126,10 +126,10 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
         return { error: `agent ${name} delegates to undefined agent ${unknownSubagent}` };
     }
 
-    const visualAgent = agents.visual_agent;
-    if (!visualAgent) return { error: "visual_agent agent is required" };
-    if (visualAgent.tier !== "vision") {
-      return { error: "agent visual_agent must use the vision tier" };
+    const visionAgent = agents.vision;
+    if (!visionAgent) return { error: "vision agent is required" };
+    if (visionAgent.tier !== "vision") {
+      return { error: "agent vision must use the vision tier" };
     }
     const allowsReadImage = (tools: readonly string[]): boolean =>
       tools.includes("*") || tools.includes("read_image");
@@ -144,20 +144,20 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
           return { error: `agent ${name} both allows and negates tool ${negatedTool}` };
         }
       }
-      if (name === "visual_agent") {
+      if (name === "vision") {
         if (!allowsReadImage(definition.tools)) {
-          return { error: "agent visual_agent must allow read_image" };
+          return { error: "agent vision must allow read_image" };
         }
       } else if (allowsReadImage(definition.tools) && !definition.tools.includes("!read_image")) {
         return { error: `agent ${name} must exclude read_image via "!read_image"` };
       }
       if (name === "main" || name === "senior") {
-        if (!definition.subagents.includes("visual_agent")) {
-          return { error: `agent ${name} must delegate to visual_agent` };
+        if (!definition.subagents.includes("vision")) {
+          return { error: `agent ${name} must delegate to vision` };
         }
       }
-      if (name === "junior" && definition.subagents.includes("visual_agent")) {
-        return { error: "agent junior must not delegate to visual_agent" };
+      if (name === "junior" && definition.subagents.includes("vision")) {
+        return { error: "agent junior must not delegate to vision" };
       }
     }
 
@@ -248,7 +248,7 @@ const SPINNER_INTERVAL_MS = 100;
 const EXIT_STDIO_GRACE_MS = 100;
 const UPDATE_THROTTLE_MS = 150;
 
-// 添付画像を visual_agent 子セッションへ渡すための一時ファイル。親セッションのモデルへ
+// 添付画像を vision 子セッションへ渡すための一時ファイル。親セッションのモデルへ
 // 画像を送らず、子が read_image で読める形にする。子の起動が終わったら削除する。
 function saveAttachedImages(
   images: ImageContent[],
@@ -930,7 +930,7 @@ export default function agentsExtension(
     pi.on("input", async (event, ctx) => {
       if (!event.images || event.images.length === 0) return;
       const message =
-        "image input is not available: the agent configuration is invalid; use visual_agent";
+        "image input is not available: the agent configuration is invalid; use vision";
       if (ctx.hasUI) ctx.ui.notify(message, "error");
       else {
         process.stderr.write(`${message}\n`);
@@ -1070,7 +1070,7 @@ export default function agentsExtension(
   // ── pre-prompt re-evaluation ────────────────────────────────────────
 
   pi.on("input", async (event, ctx) => {
-    // 画像添付を親セッションのモデルへ送らない。main / senior は依頼文ごと visual_agent
+    // 画像添付を親セッションのモデルへ送らない。main / senior は依頼文ごと vision
     // 子セッションへ委譲し、親のターンは handled で止める。報告は通知で返る。
     if (event.images && event.images.length > 0) return routeImageInput(event, ctx);
     if (event.source === "extension" || manual) return;
@@ -1081,7 +1081,7 @@ export default function agentsExtension(
   });
 
   // SPEC「画像入力を使う agent」: チャット貼り付けと CLI @file の画像の振り分け。
-  // visual_agent は画像対応モデルのときだけそのまま送る。main / senior は visual_agent
+  // vision は画像対応モデルのときだけそのまま送る。main / senior は vision
   // 子セッションへ委譲し、junior は依頼元への報告を促す。その他・設定無効時は画像を送らない。
   function routeImageInput(
     event: { text?: string; images?: ImageContent[]; source?: string },
@@ -1091,7 +1091,7 @@ export default function agentsExtension(
       notifyImageUnavailable(ctx);
       return { action: "handled" };
     }
-    if (currentAgent === "visual_agent") {
+    if (currentAgent === "vision") {
       if (ctx.model && !modelSupportsImages(ctx.model as { input?: readonly string[] })) {
         if (ctx.hasUI) {
           ctx.ui.notify(
@@ -1105,8 +1105,8 @@ export default function agentsExtension(
       }
       return { action: "continue" };
     }
-    if (canDelegate(currentAgent, "visual_agent", config)) {
-      void delegateImageToVisualAgent(event, ctx).catch(() => {});
+    if (canDelegate(currentAgent, "vision", config)) {
+      void delegateImageToVisionAgent(event, ctx).catch(() => {});
       return { action: "handled" };
     }
     notifyImageUnavailable(ctx);
@@ -1116,8 +1116,8 @@ export default function agentsExtension(
   function notifyImageUnavailable(ctx: ExtensionContext): void {
     const juniorGuidance =
       currentAgent === "junior"
-        ? " Report to the caller that visual confirmation by visual_agent is needed."
-        : " Delegate to visual_agent to handle the image.";
+        ? " Report to the caller that visual confirmation by vision is needed."
+        : " Delegate to vision to handle the image.";
     const message = `image input is not available for agent ${currentAgent}.${juniorGuidance}`;
     if (!ctx.hasUI) {
       process.stderr.write(`${message}\n`);
@@ -1127,7 +1127,7 @@ export default function agentsExtension(
     ctx.ui.notify(message, "warning");
   }
 
-  async function delegateImageToVisualAgent(
+  async function delegateImageToVisionAgent(
     event: { text?: string; images?: ImageContent[] },
     ctx: ExtensionContext,
   ): Promise<void> {
@@ -1138,21 +1138,21 @@ export default function agentsExtension(
       `The owner attached ${paths.length} image(s) with the following request. Read each image with read_image and complete it.` +
       `\n\nRequest:\n${request || "(none)"}\n\nImages:\n${paths.join("\n")}`;
     try {
-      const child = await runChild(ctx.cwd, task, "visual_agent", undefined, ctx.signal, undefined);
+      const child = await runChild(ctx.cwd, task, "vision", undefined, ctx.signal, undefined);
       if (isFailedResult(child)) {
         const reason = getResultOutput(child);
-        const message = `visual_agent delegation failed: ${reason}`;
+        const message = `vision delegation failed: ${reason}`;
         if (ctx.hasUI) ctx.ui.notify(message, "error");
         else process.stderr.write(`${message}\n`);
       } else {
         const report = getFinalOutput(child.messages).trim() || "finished without output.";
-        if (ctx.hasUI) ctx.ui.notify(`visual_agent: ${report}`, "info");
-        else process.stderr.write(`visual_agent: ${report}\n`);
+        if (ctx.hasUI) ctx.ui.notify(`vision: ${report}`, "info");
+        else process.stderr.write(`vision: ${report}\n`);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      if (ctx.hasUI) ctx.ui.notify(`visual_agent delegation failed: ${reason}`, "error");
-      else process.stderr.write(`visual_agent delegation failed: ${reason}\n`);
+      if (ctx.hasUI) ctx.ui.notify(`vision delegation failed: ${reason}`, "error");
+      else process.stderr.write(`vision delegation failed: ${reason}\n`);
     } finally {
       for (const file of saved) file.cleanup();
     }

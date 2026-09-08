@@ -37,21 +37,21 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 画像ファイルは、MIMEタイプが `image/*` のファイルである。MIMEタイプを判定できないときだけ、拡張子を補助的に使う。`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`、`.tiff`、`.tif` は画像ファイルとして扱う。
 
-`read` は画像を OCR・画像解析テキストへ変換しない。画像に対する `read` は、パスのアクセス制御（§2・§3）を通った後に `read_image` と `visual_agent` が必要であることを示すエラーを返す。画像以外のファイルは既存の `read` の振る舞いを維持する。
+`read` は画像を OCR・画像解析テキストへ変換しない。画像に対する `read` は、パスのアクセス制御（§2・§3）を通った後に `read_image` と `vision` が必要であることを示すエラーを返す。画像以外のファイルは既存の `read` の振る舞いを維持する。
 
-`read_image` は画像専用の追加ツールである。agents 拡張が active agent を `visual_agent` として有効にした場合だけ実行できる。agent 設定が無効、または active agent が `visual_agent` でない場合は、パスを開かず Vision 入力を作らないエラーを返す。実行できる場合は、パスの read アクセス制御を通った画像だけを Vision 入力として現在のモデルへ渡す。画像でないパスにはエラーを返す。画像は `read_image` を実行した agent のツール結果と子セッションの記録にだけ含め、親 agent には含めない。agent ごとの利用可否と子 agent への振り分けは agents の spec が定める。
+`read_image` は画像専用の追加ツールである。agents 拡張が active agent を `vision` として有効にした場合だけ実行できる。agent 設定が無効、または active agent が `vision` でない場合は、パスを開かず Vision 入力を作らないエラーを返す。実行できる場合は、パスの read アクセス制御を通った画像だけを Vision 入力として現在のモデルへ渡す。画像でないパスにはエラーを返す。画像は `read_image` を実行した agent のツール結果と子セッションの記録にだけ含め、親 agent には含めない。agent ごとの利用可否と子 agent への振り分けは agents の spec が定める。
 
 | 操作・状態 | 結果 |
 | --- | --- |
 | `read` に画像でないパスを渡す | 既存の `read` の結果を返す |
 | `read` に許可されない画像パスを渡す | §2 のとおり拒否する |
-| `read` に許可された画像パスを渡す | `read_image` と `visual_agent` が必要であることを示すエラーを返す |
-| 無効な agent 設定、または active agent が `visual_agent` でない | Vision 入力を作らずエラーを返す |
+| `read` に許可された画像パスを渡す | `read_image` と `vision` が必要であることを示すエラーを返す |
+| 無効な agent 設定、または active agent が `vision` でない | Vision 入力を作らずエラーを返す |
 | `read_image` に許可された画像パスを渡す | 画像を Vision 入力として返す |
 | `read_image` に画像でないパスを渡す | エラーを返す |
 | `read_image` に許可されない画像パスを渡す | §2 のとおり拒否する |
 
-`read` と `read_image` の説明文には、画像の文字抽出・見た目の判断・レイアウト作業は `visual_agent` が担い、テキスト専用 agent は画像を読めないことを明記する。
+`read` と `read_image` の説明文には、画像の文字抽出・見た目の判断・レイアウト作業は `vision` が担い、テキスト専用 agent は画像を読めないことを明記する。
 
 ### 2.2 credentials の例外
 
@@ -281,7 +281,7 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 
 ## 7. run-tools CLI による fs IO
 
-本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、`read_image` を追加し、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像を読めず `visual_agent` が必要である旨を、`read_image` には画像の文字抽出・見た目の判断・レイアウト作業に使う Vision 入力である旨を、`bash` には書き込み失敗（read-only file system）時に `ask_permission` での許可要求へ誘導する文と、理由必須ゲート（`ask_with_reason`）で差し戻されたときに `ask_permission` での承認要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通った fs ツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
+本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、`read_image` を追加し、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像を読めず `vision` が必要である旨を、`read_image` には画像の文字抽出・見た目の判断・レイアウト作業に使う Vision 入力である旨を、`bash` には書き込み失敗（read-only file system）時に `ask_permission` での許可要求へ誘導する文と、理由必須ゲート（`ask_with_reason`）で差し戻されたときに `ask_permission` での承認要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通った fs ツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
 | ツール                                          | 実行 |
 | ----------------------------------------------- | ---- |

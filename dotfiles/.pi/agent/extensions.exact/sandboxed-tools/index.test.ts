@@ -450,11 +450,11 @@ describe("§2.1 画像ファイル", () => {
     return imagePath;
   }
 
-  it("read の説明文は画像の職務が visual_agent と read_image 側にあることを示す", () => {
+  it("read の説明文は画像の職務が vision と read_image 側にあることを示す", () => {
     const description = captureRegisteredTools().get("read").description;
     assert.match(description, /Image files cannot be read via read/);
     assert.match(description, /Text extraction, appearance judgement, and layout work/);
-    assert.match(description, /visual_agent/);
+    assert.match(description, /vision/);
     assert.match(description, /read_image/);
     assert.match(description, /text-only agents cannot read images/);
   });
@@ -473,7 +473,7 @@ describe("§2.1 画像ファイル", () => {
   });
 
   it(
-    "画像に対する read は visual_agent を案内するエラーを返す",
+    "画像に対する read は vision を案内するエラーを返す",
     withImageDirectory("generate", async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
 
@@ -482,7 +482,7 @@ describe("§2.1 画像ファイル", () => {
           captureRegisteredTools()
             .get("read")
             .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
-        /visual_agent/,
+        /vision/,
       );
     }),
   );
@@ -498,15 +498,15 @@ describe("§2.1 画像ファイル", () => {
     }),
   );
 
-  it("read_image の説明文は visual_agent 専用の Vision 入力であることを示す", () => {
+  it("read_image の説明文は vision 専用の Vision 入力であることを示す", () => {
     const tool = captureRegisteredTools().get("read_image");
-    assert.match(tool.description, /visual_agent/);
+    assert.match(tool.description, /vision/);
     assert.match(tool.description, /Vision input/);
     assert.match(tool.description, /never to a parent agent/);
   });
 
   it(
-    "visual_agent セッション外の read_image は Vision 入力を作らずエラーを返す",
+    "vision セッション外の read_image は Vision 入力を作らずエラーを返す",
     withImageDirectory("generate", async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
 
@@ -515,7 +515,7 @@ describe("§2.1 画像ファイル", () => {
         .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
 
       assert.equal(result.isError, true);
-      assert.match(result.content[0].text, /visual_agent/);
+      assert.match(result.content[0].text, /vision/);
       assert.equal(
         Array.isArray(result.content) && result.content.some((part: { type: string }) => part.type === "image"),
         false,
@@ -524,11 +524,11 @@ describe("§2.1 画像ファイル", () => {
   );
 
   it(
-    "visual_agent セッションの read_image は許可済み画像を Vision 入力として返す",
+    "vision セッションの read_image は許可済み画像を Vision 入力として返す",
     withImageDirectory("generate", async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
       const previousAgentName = process.env.PI_AGENT_NAME;
-      process.env.PI_AGENT_NAME = "visual_agent";
+      process.env.PI_AGENT_NAME = "vision";
       try {
         const result = await captureRegisteredTools()
           .get("read_image")
@@ -550,13 +550,13 @@ describe("§2.1 画像ファイル", () => {
   );
 
   it(
-    "visual_agent セッションの read_image は画像でないパスにエラーを返す",
+    "vision セッションの read_image は画像でないパスにエラーを返す",
     withImageDirectory("generate", async (directory) => {
       mkdirSync(join(directory, "images"), { recursive: true });
       const textPath = join(directory, "images", "notes.txt");
       writeFileSync(textPath, "plain text");
       const previousAgentName = process.env.PI_AGENT_NAME;
-      process.env.PI_AGENT_NAME = "visual_agent";
+      process.env.PI_AGENT_NAME = "vision";
       try {
         await assert.rejects(
           () =>
@@ -573,10 +573,10 @@ describe("§2.1 画像ファイル", () => {
   );
 
   it(
-    "visual_agent セッションの read_image も許可されないパスは §2 どおり拒否する",
+    "vision セッションの read_image も許可されないパスは §2 どおり拒否する",
     withImageDirectory("generate", async () => {
       const previousAgentName = process.env.PI_AGENT_NAME;
-      process.env.PI_AGENT_NAME = "visual_agent";
+      process.env.PI_AGENT_NAME = "vision";
       try {
         const readImageTool = captureRegisteredTools().get("read_image");
         await assert.rejects(

@@ -38,14 +38,14 @@ agents:
   main:
     tier: high
     tools: ["*", "!read_image"]
-    subagents: [senior, junior, visual_agent]
+    subagents: [senior, junior, vision]
     systemPrompt: ["...", "..."]
   senior:
     tier: middle
     tools: ["*", "!read_image"]
-    subagents: [junior, visual_agent]
+    subagents: [junior, vision]
     systemPrompt: ["...", "..."]
-  visual_agent:
+  vision:
     tier: vision
     tools: ["*"]
     subagents: []
@@ -79,10 +79,10 @@ agents:
 - 候補の `provider` か `model` がない・文字列でない、`when` が文字列でない
 - `tools`・`subagents`・`systemPrompt` が配列でない、要素が文字列でない
 - `tools` の否定指定が `!` だけ、または `"*"` 以外の同じツール名を許可と否定の両方で指定する
-- `visual_agent` がない、または `tier` が `vision` でない
-- `visual_agent` 以外の agent が `read_image` を許可する、または `visual_agent` が `read_image` を許可しない
-- main または senior の `subagents` が `visual_agent` を含まない
-- junior の `subagents` が `visual_agent` を含む
+- `vision` がない、または `tier` が `vision` でない
+- `vision` 以外の agent が `read_image` を許可する、または `vision` が `read_image` を許可しない
+- main または senior の `subagents` が `vision` を含まない
+- junior の `subagents` が `vision` を含む
 - `default` が未定義の agent を指している
 - `subagents` が未定義の agent を含む
 
@@ -213,21 +213,21 @@ cooldown の破棄・維持は、発生タイミングごとに「モデルの�
 
 ## 画像入力を使う agent
 
-`visual_agent` は、テキスト専用モデルを使う agent から視覚作業を分離する agent である。モデルレジストリの `Model.input` が `"image"` を含むモデルを画像入力対応、含まないモデルを画像非対応とする。`vision` tier に画像入力対応モデルを置くことで、`visual_agent` の自動選択が画像入力対応モデルに向く。tier はデフォルトフォールバックの候補順序であり、モデルの種類による制限はしない。
+`vision` は、テキスト専用モデルを使う agent から視覚作業を分離する agent である。モデルレジストリの `Model.input` が `"image"` を含むモデルを画像入力対応、含まないモデルを画像非対応とする。`vision` tier に画像入力対応モデルを置くことで、`vision` の自動選択が画像入力対応モデルに向く。tier はデフォルトフォールバックの候補順序であり、モデルの種類による制限はしない。
 
-`read_image` は画像を現在のモデルへの Vision 入力として返す専用ツールであり、`visual_agent` だけが利用する。`visual_agent` 以外で `tools` が `"*"` または `"read_image"` を含む agent は `"!read_image"` も指定しなければならない。`visual_agent` は `"*"` または `"read_image"` を指定しなければならない。設定検証はこの規則を満たさない構成を拒否する。`read` は画像を OCR テキストへ変換しない。画像ファイルを読む振る舞いは sandboxed-tools の spec が定める。
+`read_image` は画像を現在のモデルへの Vision 入力として返す専用ツールであり、`vision` だけが利用する。`vision` 以外で `tools` が `"*"` または `"read_image"` を含む agent は `"!read_image"` も指定しなければならない。`vision` は `"*"` または `"read_image"` を指定しなければならない。設定検証はこの規則を満たさない構成を拒否する。`read` は画像を OCR テキストへ変換しない。画像ファイルを読む振る舞いは sandboxed-tools の spec が定める。
 
-手動選択の受け入れは「手動モデル選択」節が定める。`visual_agent` が画像非対応モデルを選択している状態で画像が入力された場合は、画像をモデルへ送らずエラーを通知する。
+手動選択の受け入れは「手動モデル選択」節が定める。`vision` が画像非対応モデルを選択している状態で画像が入力された場合は、画像をモデルへ送らずエラーを通知する。
 
 | 発生元 | 画像を必要とする場合の振る舞い |
 | --- | --- |
-| main / senior | `visual_agent` を子 agent として起動し、画像と依頼を渡す。親には子の最終テキストと成果物だけを返す。 |
+| main / senior | `vision` を子 agent として起動し、画像と依頼を渡す。親には子の最終テキストと成果物だけを返す。 |
 | junior | 子 agent を起動せず、画像の確認が必要であることを依頼元へ報告する。 |
-| visual_agent | `read_image` で画像を読み、画像を見ながら依頼を完了する。 |
+| vision | `read_image` で画像を読み、画像を見ながら依頼を完了する。 |
 
-チャット貼り付けと CLI の `@file` で画像が入力された場合、active agent が main または senior なら、画像を含む子セッションを `visual_agent` として起動する。親セッションのモデルには画像を送らず、親へ返すのは子の最終テキストと成果物だけとする。active agent が junior なら子を起動せず依頼元へ報告する。`visual_agent` を直接選択している場合は、そのセッションのモデルへ画像を送る。その他の agent、または agent 設定が無効な場合は、画像をモデルへ送らずエラーを返す。
+チャット貼り付けと CLI の `@file` で画像が入力された場合、active agent が main または senior なら、画像を含む子セッションを `vision` として起動する。親セッションのモデルには画像を送らず、親へ返すのは子の最終テキストと成果物だけとする。active agent が junior なら子を起動せず依頼元へ報告する。`vision` を直接選択している場合は、そのセッションのモデルへ画像を送る。その他の agent、または agent 設定が無効な場合は、画像をモデルへ送らずエラーを返す。
 
-画像を処理できるモデルがない場合（`visual_agent` への委譲が tier 候補の不成立で失敗した場合や、`visual_agent` が画像非対応モデルを選択している場合を含む）は、画像をテキスト専用モデルへ送るフォールバックを行わず、画像を処理できないエラーを返す。
+画像を処理できるモデルがない場合（`vision` への委譲が tier 候補の不成立で失敗した場合や、`vision` が画像非対応モデルを選択している場合を含む）は、画像をテキスト専用モデルへ送るフォールバックを行わず、画像を処理できないエラーを返す。
 
 この機能の目的は、テキスト専用の main モデルを画像入力から分離することである。ファイルシステム・ツール出力・セッション保存先を横断した画像データの機密性を保証する機能ではない。
 
