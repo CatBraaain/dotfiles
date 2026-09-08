@@ -137,7 +137,7 @@ agents:
 
   senior:
     tier: high
-    tools: ["*", "!read_image"]
+    tools: ["*", "!read_image", "!handoff_session"]
     subagents: [junior, vision]
     systemPrompt:
       - *agent-overview
@@ -150,7 +150,7 @@ agents:
 
   junior:
     tier: low
-    tools: ["*", "!read_image"]
+    tools: ["*", "!read_image", "!handoff_session"]
     subagents: []
     systemPrompt:
       - *subagent-report
@@ -164,7 +164,7 @@ agents:
 
   vision:
     tier: vision
-    tools: ["*"]
+    tools: ["*", "!handoff_session"]
     subagents: []
     systemPrompt:
       - |
@@ -177,7 +177,7 @@ agents:
 
   chat:
     tier: middle
-    tools: [web_search, web_fetch]
+    tools: [web_search, web_fetch, "!handoff_session"]
     subagents: []
     systemPrompt:
       - *agent-overview

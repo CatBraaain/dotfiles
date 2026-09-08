@@ -4,6 +4,7 @@ import handoffSessionExtension, { HANDOFF_SESSION_COMMAND_NAME } from "./index";
 
 interface ToolDefinition {
   name: string;
+  promptGuidelines?: string[];
   execute: (
     toolCallId: string,
     params: { reason?: unknown; handoff?: unknown },
@@ -57,6 +58,13 @@ describe("登録", () => {
     assert.deepEqual([...captured.tools.keys()], ["handoff_session"]);
     assert.deepEqual([...captured.commands.keys()], [HANDOFF_SESSION_COMMAND_NAME]);
   });
+
+  it("ツールに日本語の誘導文 promptGuidelines を1件持つ", () => {
+    const captured = captureExtension();
+    const guidelines = captured.tools.get("handoff_session")!.promptGuidelines;
+    assert.equal(guidelines?.length, 1);
+    assert.match(guidelines![0]!, /handoff_session を使う/);
+  });
 });
 
 describe("ツールの入力検証", () => {
@@ -85,7 +93,10 @@ describe("ツールの入力検証", () => {
 describe("ツールの移行予約", () => {
   it("有効な入力のとき、エラーでない応答を返す", async () => {
     const captured = captureExtension();
-    const result = await runTool(captured, { reason: "context full", handoff: "continue the work" });
+    const result = await runTool(captured, {
+      reason: "context full",
+      handoff: "continue the work",
+    });
     assert.equal(result.isError, undefined);
   });
 
@@ -109,7 +120,10 @@ describe("ツールの移行予約", () => {
     const commandArgs = sent.content.slice(`/${HANDOFF_SESSION_COMMAND_NAME} `.length);
     const [encodedReason, ...encodedHandoff] = commandArgs.split(" ");
     assert.equal(decodeURIComponent(encodedReason!), "phase 1 done");
-    assert.equal(decodeURIComponent(encodedHandoff!.join(" ")), "continue with spec at /tmp/a b.md");
+    assert.equal(
+      decodeURIComponent(encodedHandoff!.join(" ")),
+      "continue with spec at /tmp/a b.md",
+    );
   });
 
   it("前後の空白を trim して渡す", async () => {
@@ -144,9 +158,7 @@ interface CommandInvocation {
   confirmCalls: number;
   confirmMessage: string;
   newSessionCalls: number;
-  newSessionOptionsList: CommandContextMock["newSession"] extends (
-    options: infer O,
-  ) => unknown
+  newSessionOptionsList: CommandContextMock["newSession"] extends (options: infer O) => unknown
     ? O[]
     : never[];
   sentToNewSession: string[];
@@ -156,7 +168,12 @@ interface CommandInvocation {
 async function runCommand(
   captured: CapturedExtension,
   args: string,
-  overrides: { approved?: boolean; hasUI?: boolean; newSessionError?: Error; sendError?: Error } = {},
+  overrides: {
+    approved?: boolean;
+    hasUI?: boolean;
+    newSessionError?: Error;
+    sendError?: Error;
+  } = {},
 ): Promise<CommandInvocation> {
   const approved = overrides.approved ?? true;
   const hasUI = overrides.hasUI ?? true;

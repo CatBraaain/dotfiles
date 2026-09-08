@@ -33,6 +33,9 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
       "End the current session and move to a brand-new session after the owner confirms. " +
       "reason explains why the current session ends; handoff is the natural-language prompt " +
       "automatically sent as the first user message of the new session.",
+    promptGuidelines: [
+      "main agent は、収束ループを開始するとき、または senior によるレビューか実装が完了したときに handoff_session を使う。handoff には目的、spec・work ファイルのパス、決定事項、完了済みの作業と検証、未解決事項、次の phase の完了条件を含める。オーナーの承認後は新しい main agent として再開し、次の phase を別の senior に委譲する。収束条件を満たしたときは handoff_session を使わず、オーナーへ結果を報告する。",
+    ],
     parameters: Type.Object({
       reason: Type.String({ description: "Why the current session ends (non-empty)" }),
       handoff: Type.String({
@@ -57,10 +60,13 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
       // Tools run with ExtensionContext, which has no newSession. Queue the
       // internal command as a follow-up so it runs after the current turn
       // completes, with ExtensionCommandContext available.
-      pi.sendUserMessage(`/${HANDOFF_SESSION_COMMAND_NAME} ${encodeHandoffPayload({ reason, handoff })}`, {
-        deliverAs: "followUp",
-        expandPromptTemplates: true,
-      });
+      pi.sendUserMessage(
+        `/${HANDOFF_SESSION_COMMAND_NAME} ${encodeHandoffPayload({ reason, handoff })}`,
+        {
+          deliverAs: "followUp",
+          expandPromptTemplates: true,
+        },
+      );
       return {
         content: [
           {
@@ -74,11 +80,15 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(HANDOFF_SESSION_COMMAND_NAME, {
-    description: "Internal: confirm and apply the session handoff queued by the handoff_session tool.",
+    description:
+      "Internal: confirm and apply the session handoff queued by the handoff_session tool.",
     handler: async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
       const payload = decodeHandoffPayload(args);
       if (!payload) {
-        ctx.ui.notify("handoff-session: invalid handoff payload; staying in the current session", "error");
+        ctx.ui.notify(
+          "handoff-session: invalid handoff payload; staying in the current session",
+          "error",
+        );
         return;
       }
 
