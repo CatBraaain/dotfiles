@@ -1,7 +1,8 @@
 # System prerequisites
-- apt: flatpak
 - apt: fonts-noto-cjk
+# Camoufox/Playwright's Firefox runtime needs libasound.so.2 (ALSA), even headless.
 - apt: libasound2t64
+# Camoufox uses Xvfb for a virtual X display and software-rendered WebGL in headless mode.
 - apt: xvfb
 
 # System packages
