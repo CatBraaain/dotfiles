@@ -103,6 +103,13 @@
       "themes": []
     },
     {
+      "source": "https://github.com/vshulcz/deja-vu",
+      "extensions": [],
+      "skills": ["skills/deja-search"],
+      "prompts": [],
+      "themes": []
+    },
+    {
       "extensions": [],
       "prompts": [],
       "skills": ["skills/agent-browser"],
