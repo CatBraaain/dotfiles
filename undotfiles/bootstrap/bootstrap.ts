@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +41,6 @@ const validKeys = new Set<Key>([
 ]);
 const configPath = join(import.meta.dir, "config.yaml");
 const androidSdkDir = join(homedir(), ".android-sdk");
-const localBinDir = join(homedir(), ".local", "bin");
 
 export class Bootstrap {
   private readonly failures: string[] = [];
@@ -219,7 +218,6 @@ export class Bootstrap {
     return new Map([
       ["android-sdk", () => this.installAndroidSdk()],
       ["drawio", () => this.installDrawio()],
-      ["obscura", () => this.installObscura()],
     ]);
   }
 
@@ -286,58 +284,6 @@ export class Bootstrap {
       const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
       if (!file) throw new Error("draw.io release archive is missing a deb package");
       this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  }
-
-  private async installObscura(): Promise<void> {
-    const tag = this.runtime.output([
-      "gh",
-      "release",
-      "view",
-      "--repo",
-      "h4ckf0r0day/obscura",
-      "--json",
-      "tagName",
-      "--jq",
-      ".tagName",
-    ]);
-    const version = tag.replace(/^v/, "");
-    const binary = join(localBinDir, "obscura");
-    if (
-      existsSync(binary) &&
-      this.runtime.outputAllowFailure([binary, "--version"]) === `obscura ${version}`
-    )
-      return;
-
-    const directory = await mkdtemp(join(tmpdir(), "bootstrap-obscura-"));
-    const architecture = process.arch === "arm64" ? "aarch64" : "x86_64";
-    try {
-      this.runtime.execute([
-        "gh",
-        "release",
-        "download",
-        tag,
-        "--repo",
-        "h4ckf0r0day/obscura",
-        "--pattern",
-        `obscura-${architecture}-linux-stealth.tar.gz`,
-        "--dir",
-        directory,
-      ]);
-      const archive = readdirSync(directory).find((name) => name.endsWith(".tar.gz"));
-      if (!archive) throw new Error("obscura release archive is missing");
-      this.runtime.execute(["tar", "xzf", join(directory, archive), "-C", directory]);
-      mkdirSync(localBinDir, { recursive: true });
-      for (const name of ["obscura", "obscura-worker"])
-        this.runtime.execute([
-          "install",
-          "-m",
-          "755",
-          join(directory, name),
-          join(localBinDir, name),
-        ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

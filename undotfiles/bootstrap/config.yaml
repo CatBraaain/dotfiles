@@ -44,7 +44,6 @@
 - brew-formula: watchexec
 - bun: "@earendil-works/pi-coding-agent"
 - bun: agent-browser
-- custom: obscura
 - bun: cursor-agent
 - bun: officecli
 - bun: "@askjo/camofox-browser"
