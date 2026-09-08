@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "target": "ESNext",
+    "types": ["bun"]
+  },
+  "include": ["pre-chezmoi.ts", "pre-chezmoi.test.ts"]
+}
