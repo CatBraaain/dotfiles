@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { isMap, parseDocument, stringify as stringifyYaml } from "yaml";
@@ -37,7 +37,7 @@ export async function run(
 
   await rm(distDir, { recursive: true, force: true });
   await copyDir(sourceDir, distDir);
-  await movePlatformDirectories(distDir, platform);
+  await movePlatformEntries(distDir, platform);
   await convertDotEntries(distDir);
   await convertExactDirectories(distDir);
   await convertExecutableFiles(distDir);
@@ -63,6 +63,8 @@ function pathMaps(platform: Platform): Record<string, string> {
         erdtree: "AppData/Roaming/erdtree",
         gemini: ".gemini",
         "git-cliff": "AppData/Roaming/git-cliff",
+        "localsend/settings.merge.json":
+          "AppData/Roaming/LocalSend/settings.merge.json",
         mise: ".config/mise",
         nushell: "AppData/Roaming/nushell",
         "obs-studio": "AppData/Roaming/obs-studio",
@@ -78,14 +80,16 @@ function pathMaps(platform: Platform): Record<string, string> {
         docker: ".docker/desktop",
         erdtree: ".config/erdtree",
         "git-cliff": ".config/git-cliff",
+        "localsend/settings.merge.json":
+          ".local/share/org.localsend.localsend_app/shared_preferences.merge.json",
         zed: ".config/zed",
       };
 }
 
-async function movePlatformDirectories(distDir: string, platform: Platform): Promise<void> {
+async function movePlatformEntries(distDir: string, platform: Platform): Promise<void> {
   for (const [source, destination] of Object.entries(pathMaps(platform))) {
     const sourcePath = join(distDir, source);
-    if (statSync(sourcePath, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
+    if (!existsSync(sourcePath)) continue;
 
     const destinationPath = join(distDir, destination);
     await mkdir(dirname(destinationPath), { recursive: true });

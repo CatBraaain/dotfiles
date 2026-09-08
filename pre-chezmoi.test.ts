@@ -85,6 +85,20 @@ async function expectMergeError(files: Record<string, string>, message: string):
 }
 
 describe("pre-chezmoi", () => {
+  it("keeps only the selected LocalSend settings", async () => {
+    const settings = JSON.parse(
+      await readFile(join(import.meta.dir, "dotfiles/localsend/settings.merge.json"), "utf-8"),
+    );
+
+    assert.deepEqual(settings, {
+      "flutter.ls_minimize_to_tray": true,
+      "flutter.ls_auto_finish": true,
+      "flutter.ls_quick_save": true,
+      "flutter.ls_quick_save_from_favorites": false,
+      "flutter.ls_advanced_settings": true,
+    });
+  });
+
   it("rebuilds dist without node_modules and stale files through the CLI", async () => {
     const root = await fixture({
       "dist/stale": "stale",
@@ -159,7 +173,7 @@ describe("pre-chezmoi", () => {
     );
   });
 
-  it("moves every Windows directory and skips missing and non-directory sources", async () => {
+  it("moves every Windows mapped directory and leaves unmapped files", async () => {
     const skip = new Set(["gemini", "docker"]);
     const sources = Object.fromEntries(
       Object.keys(windowsDestinations)
@@ -169,7 +183,7 @@ describe("pre-chezmoi", () => {
     const root = await fixture({
       "dotfiles/AppData/Roaming/Docker/replaced": "replaced",
       "dotfiles/custom/settings.json": "{}",
-      "dotfiles/docker": "a file, not a directory",
+      "dotfiles/unmapped": "a file, not a mapped entry",
       ...sources,
     });
 
@@ -177,7 +191,7 @@ describe("pre-chezmoi", () => {
 
     assert.equal(existsSync(join(root, "dist/custom/settings.json")), true);
     assert.equal(existsSync(join(root, "dist/dot_gemini")), false);
-    assert.equal(existsSync(join(root, "dist/docker")), true);
+    assert.equal(existsSync(join(root, "dist/unmapped")), true);
     for (const source of Object.keys(windowsDestinations)) {
       if (skip.has(source)) continue;
       assert.equal(existsSync(join(root, "dist", source)), false, source);
@@ -187,8 +201,51 @@ describe("pre-chezmoi", () => {
         source,
       );
     }
-    // docker did not move, so the pre-existing destination directory survives
+    // docker was not included in the fixture, so the pre-existing destination survives
     assert.equal(existsSync(join(root, "dist/AppData/Roaming/Docker/replaced")), true);
+  });
+
+  it("maps a nested file to the Linux preferences filename", async () => {
+    const root = await fixture({
+      "dotfiles/localsend/settings.merge.json": '{"flutter.ls_auto_finish":true}',
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    assert.equal(
+      existsSync(
+        join(
+          root,
+          "dist/dot_local/share/org.localsend.localsend_app/shared_preferences.json",
+        ),
+      ),
+      true,
+    );
+    assert.equal(
+      existsSync(
+        join(root, "dist/dot_local/share/org.localsend.localsend_app/settings.json"),
+      ),
+      false,
+    );
+  });
+
+  it("maps a nested file to the Windows settings filename", async () => {
+    const root = await fixture({
+      "dotfiles/localsend/settings.merge.json": '{"flutter.ls_auto_finish":true}',
+    });
+
+    await run(root, "win32", homeResolver(root));
+
+    assert.equal(
+      existsSync(join(root, "dist/AppData/Roaming/LocalSend/settings.json")),
+      true,
+    );
+    assert.equal(
+      existsSync(
+        join(root, "dist/AppData/Roaming/LocalSend/shared_preferences.json"),
+      ),
+      false,
+    );
   });
 
   it("composes home, plain base, merge, and merge.local layers in order", async () => {

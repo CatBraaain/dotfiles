@@ -23,23 +23,26 @@
 
 ## 2. パス移動
 
-`dist/` 直下の、下表のディレクトリを、実行プラットフォームの配置先（`dist/` からの相対パス）へ移動する。配置先が既に存在するときは置き換える。移動元ディレクトリが `dist/` に存在しない行は何も起きない。セルが「移動しない」の組合せと表にないディレクトリは、`dist/` 直下に置かれたままになる。
+下表の移動元エントリ（ファイルまたはディレクトリ）を、実行プラットフォームの配置先（`dist/` からの相対パス）へ移動する。配置先が既に存在するときは置き換える。移動元エントリが `dist/` に存在しない行は何も起きない。表にないエントリは、`dist/` 直下または元の階層に置かれたままになる。
 
-| ディレクトリ     | Windows                                                                   | それ以外          |
-| ---------------- | ------------------------------------------------------------------------- | ----------------- |
-| docker           | AppData/Roaming/Docker                                                    | .docker/desktop   |
-| erdtree          | AppData/Roaming/erdtree                                                   | .config/erdtree   |
-| gemini           | .gemini                                                                   | 移動しない        |
-| git-cliff        | AppData/Roaming/git-cliff                                                 | .config/git-cliff |
-| mise             | .config/mise                                                              | 移動しない        |
-| nushell          | AppData/Roaming/nushell                                                   | 移動しない        |
-| obs-studio       | AppData/Roaming/obs-studio                                                | 移動しない        |
-| powershell       | Documents/PowerShell                                                      | 移動しない        |
-| windows-terminal | AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState | 移動しない        |
-| roo              | .roo                                                                      | 移動しない        |
-| sharex           | Documents/ShareX                                                          | 移動しない        |
-| vscode           | AppData/Roaming/Code/User                                                 | 移動しない        |
-| zed              | AppData/Roaming/Zed                                                       | .config/zed       |
+| 移動元エントリ | Windows | それ以外 |
+| --- | --- | --- |
+| docker | AppData/Roaming/Docker | .docker/desktop |
+| erdtree | AppData/Roaming/erdtree | .config/erdtree |
+| gemini | .gemini | 移動しない |
+| git-cliff | AppData/Roaming/git-cliff | .config/git-cliff |
+| localsend/settings.merge.json | AppData/Roaming/LocalSend/settings.merge.json | .local/share/org.localsend.localsend_app/shared_preferences.merge.json |
+| mise | .config/mise | 移動しない |
+| nushell | AppData/Roaming/nushell | 移動しない |
+| obs-studio | AppData/Roaming/obs-studio | 移動しない |
+| powershell | Documents/PowerShell | 移動しない |
+| windows-terminal | AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState | 移動しない |
+| roo | .roo | 移動しない |
+| sharex | Documents/ShareX | 移動しない |
+| vscode | AppData/Roaming/Code/User | 移動しない |
+| zed | AppData/Roaming/Zed | .config/zed |
+
+パス移動では、ディレクトリだけでなくファイルも扱う。
 
 ## 3. dot 変換
 
