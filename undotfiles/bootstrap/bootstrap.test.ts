@@ -22,6 +22,7 @@ class FakeRuntime implements Runtime {
   readonly outputs = new Map<string, string>();
   readonly failures = new Set<string>();
   readonly installedApt = new Set<string>();
+  readonly installedFlatpak = new Set<string>();
 
   constructor() {
     for (const command of stateCommands) this.outputs.set(command.join("\0"), "");
@@ -54,6 +55,8 @@ class FakeRuntime implements Runtime {
     this.events.push(`succeeds ${command.join(" ")}`);
     if (command[0] === "dpkg-query" && command[1] === "-W" && command.length === 3)
       return this.installedApt.has(command[2]!);
+    if (command[0] === "flatpak" && command[1] === "info" && command[2] === "--user" && command.length === 4)
+      return this.installedFlatpak.has(command[3]!);
     return !this.failures.has(command.join(" "));
   }
 
@@ -77,14 +80,14 @@ function bootstrap(
 describe("parseConfig", () => {
   it("preserves ordered single-key entries", () => {
     const entries = parseConfig(
-      "- apt: curl\n- brew: jq\n- brew-cask: visual-studio-code\n- deb-get: code\n- uv: ruff\n- run: echo ready\n",
+      "- apt: curl\n- brew: jq\n- brew-cask: visual-studio-code\n- flatpak: com.visualstudio.code\n- uv: ruff\n- run: echo ready\n",
     );
 
     assert.deepEqual(entries, [
       { key: "apt", value: "curl" },
       { key: "brew", value: "jq" },
       { key: "brew-cask", value: "visual-studio-code" },
-      { key: "deb-get", value: "code" },
+      { key: "flatpak", value: "com.visualstudio.code" },
       { key: "uv", value: "ruff" },
       { key: "run", value: "echo ready" },
     ]);
@@ -201,8 +204,8 @@ describe("coalesceEntries", () => {
     const entries: Entry[] = [
       { key: "go", value: "example.com/a" },
       { key: "go", value: "example.com/b" },
-      { key: "deb-get", value: "code" },
-      { key: "deb-get", value: "other" },
+      { key: "flatpak", value: "com.visualstudio.code" },
+      { key: "flatpak", value: "com.google.Chrome" },
       { key: "brew", value: "jq" },
       { key: "run", value: "echo break" },
       { key: "brew", value: "fd" },
@@ -210,7 +213,7 @@ describe("coalesceEntries", () => {
 
     assert.deepEqual(coalesceEntries(entries), [
       { key: "go", values: ["example.com/a", "example.com/b"] },
-      { key: "deb-get", values: ["code", "other"] },
+      { key: "flatpak", values: ["com.visualstudio.code", "com.google.Chrome"] },
       { key: "brew", values: ["jq"] },
       { key: "run", value: "echo break" },
       { key: "brew", values: ["fd"] },
@@ -296,7 +299,7 @@ describe("sync", () => {
     const runtime = new FakeRuntime();
     const entries: Entry[] = [
       { key: "apt", value: "curl=8" },
-      { key: "deb-get", value: "code" },
+      { key: "flatpak", value: "com.visualstudio.code" },
       { key: "uv", value: "ruff==1" },
       { key: "bun", value: "@scope/tool@2" },
       { key: "go", value: "example.com/tool@v3" },
@@ -307,10 +310,18 @@ describe("sync", () => {
     const exitCode = await bootstrap(entries, runtime).sync();
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(runtime.commands.slice(0, 8), [
+    assert.deepEqual(runtime.commands.slice(0, 9), [
       ["sudo", "apt", "update"],
       ["sudo", "apt", "install", "-y", "curl=8"],
-      ["deb-get", "install", "code"],
+      [
+        "flatpak",
+        "remote-add",
+        "--if-not-exists",
+        "--user",
+        "flathub",
+        "https://dl.flathub.org/repo/flathub.flatpakrepo",
+      ],
+      ["flatpak", "install", "-y", "--user", "flathub", "com.visualstudio.code"],
       ["uv", "tool", "install", "ruff==1"],
       ["bun", "add", "-g", "@scope/tool@2"],
       ["go", "install", "example.com/tool@v3"],
@@ -379,37 +390,76 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands[0], ["go", "install", "example.com/tool@latest"]);
   });
 
-  it("bootstraps deb-get before installing its packages when it is missing", async () => {
+  it("adds the flathub remote before installing flatpak packages", async () => {
     const runtime = new FakeRuntime();
-    runtime.failures.add("deb-get version");
 
     const exitCode = await bootstrap(
       [
-        { key: "deb-get", value: "code" },
-        { key: "deb-get", value: "other" },
+        { key: "flatpak", value: "com.visualstudio.code" },
+        { key: "flatpak", value: "com.google.Chrome" },
       ],
       runtime,
     ).sync();
 
     assert.equal(exitCode, 0);
     assert.deepEqual(runtime.commands, [
-      ["sudo", "apt", "install", "-y", "curl", "lsb-release", "wget", "jq"],
       [
-        "bash",
-        "-c",
-        "curl -fsSL https://raw.githubusercontent.com/wimpysworld/deb-get/main/deb-get | sudo -E bash -s install deb-get",
+        "flatpak",
+        "remote-add",
+        "--if-not-exists",
+        "--user",
+        "flathub",
+        "https://dl.flathub.org/repo/flathub.flatpakrepo",
       ],
-      ["deb-get", "install", "code", "other"],
+      [
+        "flatpak",
+        "install",
+        "-y",
+        "--user",
+        "flathub",
+        "com.visualstudio.code",
+        "com.google.Chrome",
+      ],
     ]);
   });
 
-  it("does not bootstrap deb-get when it is already installed", async () => {
+  it("skips flatpak packages that are already installed", async () => {
     const runtime = new FakeRuntime();
+    runtime.installedFlatpak.add("com.visualstudio.code");
 
-    const exitCode = await bootstrap([{ key: "deb-get", value: "code" }], runtime).sync();
+    const exitCode = await bootstrap(
+      [
+        { key: "flatpak", value: "com.visualstudio.code" },
+        { key: "flatpak", value: "com.google.Chrome" },
+      ],
+      runtime,
+    ).sync();
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(runtime.commands, [["deb-get", "install", "code"]]);
+    assert.deepEqual(runtime.commands, [
+      [
+        "flatpak",
+        "remote-add",
+        "--if-not-exists",
+        "--user",
+        "flathub",
+        "https://dl.flathub.org/repo/flathub.flatpakrepo",
+      ],
+      ["flatpak", "install", "-y", "--user", "flathub", "com.google.Chrome"],
+    ]);
+  });
+
+  it("does not add the flathub remote when all flatpak packages are installed", async () => {
+    const runtime = new FakeRuntime();
+    runtime.installedFlatpak.add("com.visualstudio.code");
+
+    const exitCode = await bootstrap(
+      [{ key: "flatpak", value: "com.visualstudio.code" }],
+      runtime,
+    ).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, []);
   });
 
   it("continues after a state read failure while skipping that manager's cleanup", async () => {
@@ -592,7 +642,7 @@ describe("diff", () => {
     runtime.outputs.set("bun\0pm\0ls\0-g", "/home/username/.bun/install/global\n└── old@1");
     const entries: Entry[] = [
       { key: "bun", value: "new@2" },
-      { key: "deb-get", value: "code" },
+      { key: "flatpak", value: "com.visualstudio.code" },
       { key: "run", value: "echo ready" },
       { key: "custom", value: "known" },
     ];
@@ -608,7 +658,7 @@ describe("diff", () => {
     assert.deepEqual(runtime.logs, [
       "remove bun: old",
       "install / update bun: new@2",
-      "install / update deb-get: code",
+      "install / update flatpak: com.visualstudio.code",
       "run: echo ready",
       "custom: known",
     ]);
@@ -642,7 +692,7 @@ describe("diff", () => {
     const entries: Entry[] = [
       { key: "apt", value: "curl" },
       { key: "apt", value: "wget" },
-      { key: "deb-get", value: "code" },
+      { key: "flatpak", value: "com.visualstudio.code" },
     ];
 
     const exitCode = await bootstrap(entries, runtime).diff();
@@ -650,7 +700,21 @@ describe("diff", () => {
     assert.equal(exitCode, 0);
     assert.deepEqual(runtime.logs, [
       "install / update apt: wget",
-      "install / update deb-get: code",
+      "install / update flatpak: com.visualstudio.code",
     ]);
+  });
+
+  it("omits installed flatpak packages from diff plans", async () => {
+    const runtime = new FakeRuntime();
+    runtime.installedFlatpak.add("com.visualstudio.code");
+    const entries: Entry[] = [
+      { key: "flatpak", value: "com.visualstudio.code" },
+      { key: "flatpak", value: "com.google.Chrome" },
+    ];
+
+    const exitCode = await bootstrap(entries, runtime).diff();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.logs, ["install / update flatpak: com.google.Chrome"]);
   });
 });

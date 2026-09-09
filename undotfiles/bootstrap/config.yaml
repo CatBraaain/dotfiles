@@ -1,4 +1,5 @@
 # System prerequisites
+- apt: flatpak
 - apt: fonts-noto-cjk
 # Camoufox/Playwright's Firefox runtime needs libasound.so.2 (ALSA), even headless.
 - apt: libasound2t64
@@ -82,7 +83,7 @@
 - uv: harlequin
 
 # Apps and SDKs
-- deb-get: code
+- flatpak: com.visualstudio.code
 - custom: drawio
 - brew-cask: android-commandlinetools
 - custom: android-sdk

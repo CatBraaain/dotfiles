@@ -3,9 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Key = "apt" | "deb-get" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
+export type Key = "apt" | "flatpak" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
 type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
-type BatchableKey = "apt" | "deb-get" | "uv" | "bun" | "go" | "brew" | "brew-cask";
+type BatchableKey = "apt" | "flatpak" | "uv" | "bun" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
 export type InstallBatch = { key: BatchableKey; values: readonly string[] } | Entry;
 type State = Map<DeclarativeKey, Map<string, string>>;
@@ -21,10 +21,10 @@ export interface Runtime {
 }
 
 const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew", "bun", "go", "uv"];
-const batchableKeys = new Set<BatchableKey>(["apt", "deb-get", "uv", "bun", "go", "brew", "brew-cask"]);
+const batchableKeys = new Set<BatchableKey>(["apt", "flatpak", "uv", "bun", "go", "brew", "brew-cask"]);
 const validKeys = new Set<Key>([
   "apt",
-  "deb-get",
+  "flatpak",
   "uv",
   "bun",
   "go",
@@ -35,13 +35,13 @@ const validKeys = new Set<Key>([
 ]);
 const configPath = join(import.meta.dir, "config.yaml");
 const androidSdkDir = join(homedir(), ".android-sdk");
-const debGetScriptUrl = "https://raw.githubusercontent.com/wimpysworld/deb-get/main/deb-get";
+const flathubRepoUrl = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 
 export class Bootstrap {
   private readonly failures: string[] = [];
   private readonly customHandlers: ReadonlyMap<string, CustomHandler>;
   private aptUpdated = false;
-  private debGetPrepared = false;
+  private flatpakRemotePrepared = false;
 
   constructor(
     private readonly entries: readonly Entry[],
@@ -78,6 +78,7 @@ export class Bootstrap {
         continue;
       }
       if (entry.key === "apt" && isAptInstalled(this.runtime, entry.value)) continue;
+      if (entry.key === "flatpak" && isFlatpakInstalled(this.runtime, entry.value)) continue;
       this.runtime.log(
         entry.key === "run"
           ? `run: ${entry.value}`
@@ -180,10 +181,13 @@ export class Bootstrap {
           this.runtime.execute(["sudo", "apt", "install", "-y", ...missing]);
           return;
         }
-        case "deb-get":
-          this.ensureDebGet();
-          this.runtime.execute(["deb-get", "install", ...batch.values]);
+        case "flatpak": {
+          const missing = batch.values.filter((value) => !isFlatpakInstalled(this.runtime, value));
+          if (missing.length === 0) return;
+          this.ensureFlatpakRemote();
+          this.runtime.execute(["flatpak", "install", "-y", "--user", "flathub", ...missing]);
           return;
+        }
         case "uv":
           for (const value of batch.values)
             this.runtime.execute(["uv", "tool", "install", value]);
@@ -225,17 +229,17 @@ export class Bootstrap {
     ]);
   }
 
-  private ensureDebGet(): void {
-    if (this.debGetPrepared) return;
-    if (!this.runtime.succeeds(["deb-get", "version"])) {
-      this.runtime.execute(["sudo", "apt", "install", "-y", "curl", "lsb-release", "wget", "jq"]);
-      this.runtime.execute([
-        "bash",
-        "-c",
-        `curl -fsSL ${debGetScriptUrl} | sudo -E bash -s install deb-get`,
-      ]);
-    }
-    this.debGetPrepared = true;
+  private ensureFlatpakRemote(): void {
+    if (this.flatpakRemotePrepared) return;
+    this.runtime.execute([
+      "flatpak",
+      "remote-add",
+      "--if-not-exists",
+      "--user",
+      "flathub",
+      flathubRepoUrl,
+    ]);
+    this.flatpakRemotePrepared = true;
   }
 
   private async installDrawio(): Promise<void> {
@@ -358,6 +362,10 @@ function aptPackageName(value: string): string {
 
 function isAptInstalled(runtime: Runtime, value: string): boolean {
   return runtime.succeeds(["dpkg-query", "-W", aptPackageName(value)]);
+}
+
+function isFlatpakInstalled(runtime: Runtime, value: string): boolean {
+  return runtime.succeeds(["flatpak", "info", "--user", value]);
 }
 
 function packageName(key: DeclarativeKey, value: string): string {
