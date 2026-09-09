@@ -11,7 +11,7 @@ write:
   - allow:
       - .
       - ${GIT_MAIN_WORKTREE_PATH}
-      - ~/projects/worktrees
+      - ~/projects/worktrees/${REPOSITORY_NAME}
       - ~/.pi
       - ~/.config
       - /tmp

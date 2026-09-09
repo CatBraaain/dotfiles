@@ -113,13 +113,16 @@ fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission
 
 | 記述                             | 解決先                                                                               |
 | -------------------------------- | ------------------------------------------------------------------------------------ |
-| `${GIT_MAIN_WORKTREE_PATH}`      | cwd を含む Git repository の main worktree の絶対パス                                |
+| `${GIT_MAIN_WORKTREE_PATH}`              | cwd を含む Git repository の main worktree の絶対パス                                      |
+| `${REPOSITORY_NAME}`                     | cwd を含む Git repository のリポジトリ名。main worktree の basename              |
 | `${XDG_RUNTIME_DIR}`             | ユーザーのランタイムディレクトリ（`$XDG_RUNTIME_DIR`、未設定なら `/run/user/<uid>`） |
 | 相対パス（`.` `./...` `../...`） | セッションの cwd を起点                                                              |
 | `~`                              | ホームディレクトリ                                                                   |
 | それ以外                         | 絶対パス（そのまま）                                                                 |
 
 `${GIT_MAIN_WORKTREE_PATH}` はパスエントリ内の任意の位置に記述できる。セッション cwd が linked worktree でも main worktree（`git worktree list` の最初のエントリ）基準で解決し、アクション判定と bind のそれぞれの機会に解決し直す。Git repository 外では、この変数を含むエントリはパスを許可・bind・作成しない。
+
+`${REPOSITORY_NAME}` は main worktree の basename へ展開する。セッション cwd が linked worktree でも main worktree 基準で解決し、Git repository 外ではパスを許可・bind・作成しない。`~/projects/worktrees/${REPOSITORY_NAME}` のようにパスの任意の位置に記述でき、展開後のパス配下だけが write の allow および read-write bind の対象となる。
 
 `${XDG_RUNTIME_DIR}` もパスエントリ内の任意の位置に記述できる。UID がユーザー・マシンごとに異なるため、`/run/user/1000` のような固定パスの代わりにこの変数で記述する。ランタイムディレクトリはセッションマネージャーが管理するため、§6.1 の `mkdir -p` の対象外とし、実在しなければ bind しない。
 
@@ -260,7 +263,7 @@ commands:
 
 ### 6.1 bind とパスの実在保証
 
-`read` / `write` の `allow` アクションのパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `write` の `allow` アクションの固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。`${GIT_MAIN_WORKTREE_PATH}` を含むエントリも、Git repository 内で解決できたとき `mkdir -p` の対象とする（`${GIT_MAIN_WORKTREE_PATH}-worktrees` のような派生ディレクトリをこれから作るため。main worktree 自体は実在するため作成されない）。リポジトリ外では作成しない。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、pi が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
+`read` / `write` の `allow` アクションのパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `write` の `allow` アクションの固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、Git repository 内で解決できたとき `mkdir -p` の対象とする（`~/projects/worktrees/${REPOSITORY_NAME}` のような worktrees ディレクトリをこれから作るため）。リポジトリ外では作成しない。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、pi が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
 
 `write` の動的許可パスも同じ実在保証の対象とし、承認時にフェンス外で作成する（ファイル単体スコープは親ディレクトリの `mkdir -p` と空ファイル作成、ディレクトリスコープは対象ディレクトリの `mkdir -p`）。実在保証に成功した許可だけを動的許可と bind 対象に追加する。作成に失敗した許可要求はエラーを返し、後続のツール呼び出しの動作を変えない。`read` の動的許可でパスは作成しない。
 

@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import sandboxedToolsExtension, {
   COMMAND_PREVIEW_LIMIT,
   classifyReadPath,
@@ -673,6 +681,119 @@ describe("§3.a パス文字列の解決", () => {
         section.flatMap((entry) => entry.paths),
         [join(workspacePath, "main-worktrees")],
       );
+    }),
+  );
+
+  it(
+    "${REPOSITORY_NAME} は main worktree の basename へ展開される",
+    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")] }],
+        linkedWorktreePath,
+      );
+
+      assert.deepEqual(
+        section.flatMap((entry) => entry.paths),
+        [join(workspacePath, "worktrees", basename(mainWorktreePath))],
+      );
+    }),
+  );
+
+  it(
+    "${REPOSITORY_NAME} を含むパスは current repository の worktree 置き場配下を許可する",
+    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")] }],
+        linkedWorktreePath,
+      );
+
+      assert.equal(
+        resolvePathAction(
+          section,
+          join(workspacePath, "worktrees", basename(mainWorktreePath), "topic"),
+        ),
+        "allow",
+      );
+    }),
+  );
+
+  it(
+    "${REPOSITORY_NAME} を含むパスは他リポジトリの worktree 置き場を許可しない",
+    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")] }],
+        linkedWorktreePath,
+      );
+
+      assert.equal(
+        resolvePathAction(section, join(workspacePath, "worktrees", "other", "topic")),
+        "deny",
+      );
+    }),
+  );
+
+  it(
+    "${REPOSITORY_NAME} を含むパスは Git repository 外ではパスを許可しない",
+    withTempDirectory((directory) => {
+      const section = expandPathSection(
+        [{ action: "allow", patterns: ["~/projects/worktrees/${REPOSITORY_NAME}"] }],
+        directory,
+      );
+
+      assert.deepEqual(
+        section.flatMap((entry) => entry.paths),
+        [],
+      );
+    }),
+  );
+
+  it("出荷configは repository 専用の worktrees パスを許可する", () => {
+    const config = parseSandboxedToolsConfig(
+      readFileSync(new URL("./config.yaml", import.meta.url), "utf8"),
+    );
+    const writeAllowPatterns = config.write
+      ?.filter((entry) => entry.action === "allow")
+      .flatMap((entry) => entry.patterns);
+
+    assert.equal(writeAllowPatterns?.includes("~/projects/worktrees/${REPOSITORY_NAME}"), true);
+  });
+
+  it(
+    "${REPOSITORY_NAME} を含むパスは Git repository 外で作成も bind もしない",
+    withTempDirectory((directory) => {
+      const configPath = join(directory, "config.yaml");
+      const worktreesDirectory = join(directory, "worktrees", "repository");
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${directory}/worktrees/\${REPOSITORY_NAME}"}\n`,
+      );
+      const sandbox = new Sandbox(directory, configPath);
+
+      assert.equal(existsSync(worktreesDirectory), false);
+      assert.equal(sandbox.buildArgs("fs").includes(worktreesDirectory), false);
+    }),
+  );
+
+  it(
+    "${REPOSITORY_NAME} を含むパスは current repository の worktrees を作成して bind する",
+    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      const currentWorktreesDirectory = join(
+        workspacePath,
+        "worktrees",
+        basename(mainWorktreePath),
+      );
+      const otherWorktreesDirectory = join(workspacePath, "worktrees", "other");
+      mkdirSync(otherWorktreesDirectory, { recursive: true });
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${workspacePath}/worktrees/\${REPOSITORY_NAME}"}\n`,
+      );
+      const sandbox = new Sandbox(linkedWorktreePath, configPath);
+
+      assert.equal(existsSync(currentWorktreesDirectory), true);
+      assert.equal(sandbox.buildArgs("fs").includes(currentWorktreesDirectory), true);
+      assert.equal(sandbox.buildArgs("fs").includes(otherWorktreesDirectory), false);
     }),
   );
 

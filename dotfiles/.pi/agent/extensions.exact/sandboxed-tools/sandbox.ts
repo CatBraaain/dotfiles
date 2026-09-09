@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { parse as parseShell } from "shell-quote";
@@ -219,6 +219,7 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 export const GIT_MAIN_WORKTREE_PATH = "${GIT_MAIN_WORKTREE_PATH}";
+export const REPOSITORY_NAME = "${REPOSITORY_NAME}";
 
 function hasGlob(pattern: string): boolean {
   return /[*?[]/.test(pattern);
@@ -254,6 +255,13 @@ function expandGitMainWorktreePath(pattern: string, mainWorktree: string | undef
     : [pattern.replaceAll(GIT_MAIN_WORKTREE_PATH, mainWorktree)];
 }
 
+function expandRepositoryName(pattern: string, mainWorktree: string | undefined): string[] {
+  if (!pattern.includes(REPOSITORY_NAME)) return [pattern];
+  return mainWorktree === undefined
+    ? []
+    : [pattern.replaceAll(REPOSITORY_NAME, basename(mainWorktree))];
+}
+
 export const XDG_RUNTIME_DIR = "${XDG_RUNTIME_DIR}";
 
 /**
@@ -270,13 +278,13 @@ export function resolveXdgRuntimeDir(): string {
 
 /**
  * Expand every single-valued runtime variable in a pattern.
- * ${GIT_MAIN_WORKTREE_PATH} expands to nothing outside a Git repository
- * (§3); ${XDG_RUNTIME_DIR} resolves everywhere.
+ * Git variables expand to nothing outside a Git repository (§3); ${XDG_RUNTIME_DIR}
+ * resolves everywhere.
  */
 function expandRuntimeVariables(pattern: string, mainWorktree: string | undefined): string[] {
-  return expandGitMainWorktreePath(pattern, mainWorktree).map((expanded) =>
-    expanded.replaceAll(XDG_RUNTIME_DIR, resolveXdgRuntimeDir()),
-  );
+  return expandGitMainWorktreePath(pattern, mainWorktree)
+    .flatMap((expanded) => expandRepositoryName(expanded, mainWorktree))
+    .map((expanded) => expanded.replaceAll(XDG_RUNTIME_DIR, resolveXdgRuntimeDir()));
 }
 
 function resolvePattern(pattern: string, cwd: string): string {
@@ -468,8 +476,8 @@ function expandGlobPattern(absolutePattern: string): string[] {
 
 /**
  * Expand config path patterns into absolute paths. `gitMainWorktreePath` is
- * re-resolved by the caller on every access, so ${GIT_MAIN_WORKTREE_PATH}
- * entries track the repository state during the session. Globs, in contrast,
+ * re-resolved by the caller on every access, so Git-variable entries track
+ * the repository state during the session. Globs, in contrast,
  * keep the startup-expansion semantics (§3): pass a `globCache` to reuse the
  * first expansion per resolved pattern instead of picking up paths created
  * later in the session.
@@ -681,8 +689,8 @@ export class Sandbox {
   }
 
   // Path sections are recomputed on every access instead of cached, so
-  // ${GIT_MAIN_WORKTREE_PATH} re-runs `git worktree list` per authorization
-  // and bind decision (§3). Globs stay startup-expanded via globCache.
+  // Git variables re-run `git worktree list` per authorization and bind
+  // decision (§3). Globs stay startup-expanded via globCache.
   private readPaths(): ExpandedPathSection {
     return expandPathSection(
       this.config.read,
@@ -735,16 +743,15 @@ export class Sandbox {
 
   private prepareWriteDirectories(): void {
     // Globs expand to existing paths only, so they skip the mkdir -p guarantee
-    // (§6.1). Entries with ${GIT_MAIN_WORKTREE_PATH} expand to the main
-    // worktree itself (already existing) or a derived directory such as
-    // `-worktrees`, which is created here for the same guarantee. Entries with
+    // (§6.1). Entries with Git worktree variables create their resolved paths
+    // here so a new worktree can be created inside the sandbox. Entries with
     // ${XDG_RUNTIME_DIR} skip it too: /run/user/<uid> belongs to the session
     // manager, so an absent runtime directory is left unbound by --bind-try
     // instead of being created.
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     for (const pattern of actionPatterns(this.config.write, "allow")) {
       if (hasGlob(pattern) || pattern.includes(XDG_RUNTIME_DIR)) continue;
-      for (const expanded of expandGitMainWorktreePath(pattern, gitMainWorktreePath)) {
+      for (const expanded of expandRuntimeVariables(pattern, gitMainWorktreePath)) {
         const path = resolvePattern(expanded, this.cwd);
         if (!existsSync(path)) mkdirSync(path, { recursive: true });
       }
