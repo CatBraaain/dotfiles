@@ -10,6 +10,7 @@ windows-terminal
 {{- end }}
 
 {{- if eq .chezmoi.os "windows" }}
+.agents
 .pi
 **/sync_vscode_extensions.sh
 {{- end }}
