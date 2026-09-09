@@ -20,20 +20,19 @@
 
 # Language runtimes
 - brew: bun
+- brew: node
+- brew: uv
 - brew: gup
 - brew: go
-- brew: node
 - brew: openjdk
 - brew: rustup
-- run: "rustup update stable && rustup default stable"
-- brew: uv
+- run: "rustup update stable"
 
 # Standalone tools
 - bun: vite-plus
 
 # deja-vu
 - run: "curl -fsSL https://raw.githubusercontent.com/vshulcz/deja-vu/main/install.sh | sh"
-- run: "deja install --auto"
 
 # LLM-only CLI tools
 - brew: ast-grep
@@ -54,7 +53,6 @@
 - bun: cursor-agent
 - bun: officecli
 - bun: "@askjo/camofox-browser"
-- run: "npm install -g --allow-scripts=@askjo/camofox-browser @askjo/camofox-browser"
 - uv: "trafilatura[all]"
 - uv: "mineru[all]"
 - go: github.com/karust/openserp
