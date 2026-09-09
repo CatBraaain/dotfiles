@@ -5,7 +5,9 @@ import { join } from "node:path";
 
 export type Key = "apt" | "deb-get" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
 type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
+type BatchableKey = "apt" | "deb-get" | "uv" | "bun" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
+export type InstallBatch = { key: BatchableKey; values: readonly string[] } | Entry;
 type State = Map<DeclarativeKey, Map<string, string>>;
 type CustomHandler = () => void | Promise<void>;
 
@@ -19,6 +21,7 @@ export interface Runtime {
 }
 
 const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew", "bun", "go", "uv"];
+const batchableKeys = new Set<BatchableKey>(["apt", "deb-get", "uv", "bun", "go", "brew", "brew-cask"]);
 const validKeys = new Set<Key>([
   "apt",
   "deb-get",
@@ -49,7 +52,7 @@ export class Bootstrap {
   }
 
   async sync(): Promise<number> {
-    for (const entry of this.entries) await this.install(entry);
+    for (const batch of coalesceEntries(this.entries)) await this.install(batch);
 
     const states = this.readStates();
     for (const key of declarativeKeys) this.removeUnused(key, states.get(key));
@@ -144,48 +147,58 @@ export class Bootstrap {
     });
   }
 
-  private async install(entry: Entry): Promise<void> {
-    if (entry.key === "custom") {
-      const handler = this.customHandlers.get(entry.value);
-      if (!handler) {
-        this.fail(`unknown custom handler: ${entry.value}`);
+  private async install(batch: InstallBatch): Promise<void> {
+    if (!isBatch(batch)) {
+      const entry = batch;
+      if (entry.key === "custom") {
+        const handler = this.customHandlers.get(entry.value);
+        if (!handler) {
+          this.fail(`unknown custom handler: ${entry.value}`);
+          return;
+        }
+        await this.attemptAsync(`custom ${entry.value}`, handler);
         return;
       }
-      await this.attemptAsync(`custom ${entry.value}`, handler);
+
+      this.attempt(`install ${entry.key}: ${entry.value}`, () => {
+        if (entry.key === "run") this.runtime.execute(["bash", "-c", entry.value]);
+      });
       return;
     }
 
-    this.attempt(`install ${entry.key}: ${entry.value}`, () => {
-      switch (entry.key) {
+    const label = `install ${batch.key}: ${batch.values.join(" ")}`;
+    this.attempt(label, () => {
+      switch (batch.key) {
         case "apt":
           if (!this.aptUpdated) {
             this.runtime.execute(["sudo", "apt", "update"]);
             this.aptUpdated = true;
           }
-          this.runtime.execute(["sudo", "apt", "install", "-y", entry.value]);
+          this.runtime.execute(["sudo", "apt", "install", "-y", ...batch.values]);
           return;
         case "deb-get":
-          this.installDebGet(entry.value);
+          this.ensureDebGet();
+          this.runtime.execute(["deb-get", "install", ...batch.values]);
           return;
         case "uv":
-          this.runtime.execute(["uv", "tool", "install", entry.value]);
+          for (const value of batch.values)
+            this.runtime.execute(["uv", "tool", "install", value]);
           return;
         case "bun":
-          this.runtime.execute(["bun", "add", "-g", entry.value]);
+          this.runtime.execute(["bun", "add", "-g", ...batch.values]);
           return;
-        case "go": {
-          const [importPath, version = "latest"] = splitVersion(entry.value);
-          this.runtime.execute(["go", "install", `${importPath}@${version}`]);
+        case "go":
+          this.runtime.execute([
+            "go",
+            "install",
+            ...batch.values.map((value) => goInstallArg(value)),
+          ]);
           return;
-        }
         case "brew":
-          this.runtime.execute(["brew", "install", entry.value]);
+          this.runtime.execute(["brew", "install", ...batch.values]);
           return;
         case "brew-cask":
-          this.runtime.execute(["brew", "install", "--cask", entry.value]);
-          return;
-        case "run":
-          this.runtime.execute(["bash", "-c", entry.value]);
+          this.runtime.execute(["brew", "install", "--cask", ...batch.values]);
       }
     });
   }
@@ -208,19 +221,17 @@ export class Bootstrap {
     ]);
   }
 
-  private installDebGet(packageName: string): void {
-    if (!this.debGetPrepared) {
-      if (!this.runtime.succeeds(["deb-get", "version"])) {
-        this.runtime.execute(["sudo", "apt", "install", "-y", "curl", "lsb-release", "wget", "jq"]);
-        this.runtime.execute([
-          "bash",
-          "-c",
-          `curl -fsSL ${debGetScriptUrl} | sudo -E bash -s install deb-get`,
-        ]);
-      }
-      this.debGetPrepared = true;
+  private ensureDebGet(): void {
+    if (this.debGetPrepared) return;
+    if (!this.runtime.succeeds(["deb-get", "version"])) {
+      this.runtime.execute(["sudo", "apt", "install", "-y", "curl", "lsb-release", "wget", "jq"]);
+      this.runtime.execute([
+        "bash",
+        "-c",
+        `curl -fsSL ${debGetScriptUrl} | sudo -E bash -s install deb-get`,
+      ]);
     }
-    this.runtime.execute(["deb-get", "install", packageName]);
+    this.debGetPrepared = true;
   }
 
   private async installDrawio(): Promise<void> {
@@ -289,6 +300,33 @@ export class Bootstrap {
   }
 }
 
+export function coalesceEntries(entries: readonly Entry[]): InstallBatch[] {
+  const batches: InstallBatch[] = [];
+  let index = 0;
+  while (index < entries.length) {
+    const entry = entries[index]!;
+    if (!batchableKeys.has(entry.key as BatchableKey)) {
+      batches.push(entry);
+      index += 1;
+      continue;
+    }
+
+    const values = [entry.value];
+    let next = index + 1;
+    while (next < entries.length && entries[next]!.key === entry.key) {
+      values.push(entries[next]!.value);
+      next += 1;
+    }
+    batches.push({ key: entry.key as BatchableKey, values });
+    index = next;
+  }
+  return batches;
+}
+
+function isBatch(batch: InstallBatch): batch is { key: BatchableKey; values: readonly string[] } {
+  return "values" in batch;
+}
+
 export function parseConfig(source: string): Entry[] {
   const parsed = Bun.YAML.parse(source);
   if (!Array.isArray(parsed)) throw new Error("config top-level value must be an array");
@@ -330,6 +368,11 @@ function bunName(value: string): string {
 function splitVersion(value: string): [string, string | undefined] {
   const index = value.lastIndexOf("@");
   return index > 0 ? [value.slice(0, index), value.slice(index + 1)] : [value, undefined];
+}
+
+function goInstallArg(value: string): string {
+  const [, version] = splitVersion(value);
+  return version === undefined ? `${value}@latest` : value;
 }
 
 function uvName(value: string): string {

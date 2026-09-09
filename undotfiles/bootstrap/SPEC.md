@@ -53,15 +53,15 @@
 
 ### 1. Install / Ensure Phase
 
-設定配列を先頭から末尾へ1要素ずつ処理する。同じ種類のキーが離れて配置されても、その位置で処理する。各項目の処理は、対応するパッケージマネージャーやコマンドが導入済みかどうかにかかわらず実行する。
+設定配列を先頭から末尾へ処理する。`apt`、`deb-get`、`uv`、`bun`、`go`、`brew`、`brew-cask`では、配列上で連続する同じキーの項目を1つのバックエンド操作にまとめる。`custom`と`run`はまとめない。異なるキーが挟まれたあとに再び同じキーが現れた場合は、別のバッチとして処理する。`go install`は同一バッチ内の引数でバージョンsuffixが一致している必要があり、不一致のときはバックエンドが失敗する。各項目の処理は、対応するパッケージマネージャーやコマンドが導入済みかどうかにかかわらず実行する。
 
 | キー | 振る舞い |
 | --- | --- |
 | `apt` | 指定されたパッケージのinstall操作を実行する。 |
 | `deb-get` | 指定されたパッケージのinstall操作を実行する。初回の`deb-get`項目の処理時に`deb-get version`が成功しなければ、`sudo apt install -y curl lsb-release wget jq`を実行し、公式スクリプトを`curl -fsSL https://raw.githubusercontent.com/wimpysworld/deb-get/main/deb-get | sudo -E bash -s install deb-get`で実行してからパッケージを導入する。 |
-| `uv` | 指定されたPythonパッケージのグローバルinstall操作を実行する。 |
+| `uv` | 指定されたPythonパッケージごとにグローバルinstall操作を実行する。連続する`uv`項目は1つの処理単位にまとめるが、`uv tool install`は1パッケージずつ実行する。 |
 | `bun` | 指定されたnpmパッケージのグローバルinstall操作を実行する。 |
-| `go` | 指定されたGo toolに対して`go install <パス>@<バージョン>`を実行する。バージョン指定がない値は`@latest`を使う。 |
+| `go` | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。 |
 | `brew` | 指定されたFormulaのinstall操作を実行する。 |
 | `brew-cask` | 指定されたCaskのinstall操作を実行する。 |
 | `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。名前に対応するHandlerがなければ失敗として記録する。 |

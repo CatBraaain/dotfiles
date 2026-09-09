@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
 
-import { Bootstrap, parseConfig, run, type Entry, type Runtime } from "./bootstrap.ts";
+import { Bootstrap, coalesceEntries, parseConfig, run, type Entry, type Runtime } from "./bootstrap.ts";
 
 const stateCommands = [
   ["brew", "leaves"],
@@ -166,7 +167,84 @@ describe("CLI entrypoint", () => {
   });
 });
 
+describe("coalesceEntries", () => {
+  it("merges consecutive batchable entries with the same key", () => {
+    const entries: Entry[] = [
+      { key: "brew", value: "jq" },
+      { key: "brew", value: "ripgrep" },
+      { key: "run", value: "echo ready" },
+      { key: "brew", value: "fd" },
+      { key: "apt", value: "curl" },
+      { key: "apt", value: "wget" },
+      { key: "bun", value: "prettier" },
+      { key: "uv", value: "ruff" },
+      { key: "uv", value: "black" },
+      { key: "brew-cask", value: "visual-studio-code" },
+      { key: "brew-cask", value: "iterm2" },
+    ];
+
+    assert.deepEqual(coalesceEntries(entries), [
+      { key: "brew", values: ["jq", "ripgrep"] },
+      { key: "run", value: "echo ready" },
+      { key: "brew", values: ["fd"] },
+      { key: "apt", values: ["curl", "wget"] },
+      { key: "bun", values: ["prettier"] },
+      { key: "uv", values: ["ruff", "black"] },
+      { key: "brew-cask", values: ["visual-studio-code", "iterm2"] },
+    ]);
+  });
+
+  it("does not merge non-batchable or interrupted sequences", () => {
+    const entries: Entry[] = [
+      { key: "go", value: "example.com/a" },
+      { key: "go", value: "example.com/b" },
+      { key: "deb-get", value: "code" },
+      { key: "deb-get", value: "other" },
+      { key: "brew", value: "jq" },
+      { key: "run", value: "echo break" },
+      { key: "brew", value: "fd" },
+    ];
+
+    assert.deepEqual(coalesceEntries(entries), [
+      { key: "go", values: ["example.com/a", "example.com/b"] },
+      { key: "deb-get", values: ["code", "other"] },
+      { key: "brew", values: ["jq"] },
+      { key: "run", value: "echo break" },
+      { key: "brew", values: ["fd"] },
+    ]);
+  });
+});
+
 describe("sync", () => {
+  it("installs consecutive batchable entries in one backend command", async () => {
+    const runtime = new FakeRuntime();
+    const entries: Entry[] = [
+      { key: "apt", value: "curl" },
+      { key: "apt", value: "wget" },
+      { key: "brew", value: "jq" },
+      { key: "brew", value: "ripgrep" },
+      { key: "brew-cask", value: "visual-studio-code" },
+      { key: "brew-cask", value: "iterm2" },
+      { key: "bun", value: "prettier" },
+      { key: "bun", value: "eslint" },
+      { key: "uv", value: "ruff" },
+      { key: "uv", value: "black" },
+    ];
+
+    const exitCode = await bootstrap(entries, runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands.slice(0, 7), [
+      ["sudo", "apt", "update"],
+      ["sudo", "apt", "install", "-y", "curl", "wget"],
+      ["brew", "install", "jq", "ripgrep"],
+      ["brew", "install", "--cask", "visual-studio-code", "iterm2"],
+      ["bun", "add", "-g", "prettier", "eslint"],
+      ["uv", "tool", "install", "ruff"],
+      ["uv", "tool", "install", "black"],
+    ]);
+  });
+
   it("installs all entries before removing unused packages by manager order", async () => {
     const runtime = new FakeRuntime();
     runtime.outputs.set("brew\0list\0--cask\0-1", "keep-cask\nold-cask");
@@ -191,7 +269,7 @@ describe("sync", () => {
     const exitCode = await bootstrap(entries, runtime).sync();
 
     assert.equal(exitCode, 0);
-    const firstStateRead = runtime.events.indexOf("output brew leaves");
+    const firstStateRead = runtime.events.indexOf("output brew list --cask -1");
     const firstCleanup = runtime.events.indexOf("execute brew uninstall --cask old-cask");
     assert.ok(firstStateRead > 4);
     assert.equal(firstCleanup - firstStateRead, stateCommands.length);
@@ -238,7 +316,25 @@ describe("sync", () => {
     ]);
   });
 
-  it("installs a Go tool without a version at latest", async () => {
+  it("installs consecutive go entries in one go install command", async () => {
+    const runtime = new FakeRuntime();
+    const entries: Entry[] = [
+      { key: "go", value: "example.com/a" },
+      { key: "go", value: "example.com/b@v2" },
+    ];
+
+    const exitCode = await bootstrap(entries, runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands[0], [
+      "go",
+      "install",
+      "example.com/a@latest",
+      "example.com/b@v2",
+    ]);
+  });
+
+  it("installs a Go tool without a version suffix", async () => {
     const runtime = new FakeRuntime();
 
     const exitCode = await bootstrap([{ key: "go", value: "example.com/tool" }], runtime).sync();
@@ -267,8 +363,7 @@ describe("sync", () => {
         "-c",
         "curl -fsSL https://raw.githubusercontent.com/wimpysworld/deb-get/main/deb-get | sudo -E bash -s install deb-get",
       ],
-      ["deb-get", "install", "code"],
-      ["deb-get", "install", "other"],
+      ["deb-get", "install", "code", "other"],
     ]);
   });
 
@@ -382,7 +477,7 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands, [
       [
         "android",
-        "--sdk=/home/username/.android-sdk",
+        `--sdk=${join(homedir(), ".android-sdk")}`,
         "sdk",
         "install",
         "cmdline-tools/latest",
