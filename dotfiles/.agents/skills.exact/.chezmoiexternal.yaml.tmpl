@@ -1,0 +1,12 @@
+{{- range $repo, $paths := .externalSkills }}
+{{- range $path := $paths }}
+{{ base $path }}:
+  type: archive
+  url: https://github.com/{{ $repo }}/archive/HEAD.tar.gz
+  exact: true
+  stripComponents: {{ add 1 (len (splitList "/" $path)) }}
+  include:
+    - "*/{{ $path }}/**"
+  refreshPeriod: 24h
+{{- end }}
+{{- end }}

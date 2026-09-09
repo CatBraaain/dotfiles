@@ -1,0 +1,41 @@
+externalSkills:
+  DreambigOu/ELI5:
+    - skills/eli5
+
+  anthropics/skills:
+    - skills/doc-coauthoring
+    - skills/skill-creator
+
+  mattpocock/skills:
+    # - skills/*/grill-me
+    - skills/*/grilling
+    - skills/*/code-review
+    # - skills/*/prototype
+    - skills/*/diagnosing-bugs
+    # - skills/*/research
+    # - skills/*/tdd
+
+  vercel-labs/skills:
+    - skills/find-skills
+
+  # github/awesome-copilot:
+  #   - skills/make-repo-contribution
+
+  iOfficeAI/OfficeCLI:
+    - skills/officecli
+
+  mattnowdev/thinking-partner:
+    - skills/thinking-partner
+
+  leonxlnx/taste-skill:
+    - skills/taste-skill
+    # - skills/redesign-skill
+    # - skills/soft-skill
+    # - skills/minimalist-skill
+    # - skills/brutalist-skill
+
+  vshulcz/deja-vu:
+    - skills/deja-search
+
+  vercel-labs/agent-browser:
+    - skills/agent-browser
