@@ -18,10 +18,13 @@ write:
       - ${XDG_RUNTIME_DIR}
       - ~/.npm
       - ~/.bun/install/cache
+      - ~/.bun/install/global
       - ~/.local/share/pnpm/store
       - ~/.yarn/berry/cache
       - ~/.vite-plus/cache
       - ~/.vite-plus/package_manager
+      # npm's global package directory when Node comes from Homebrew.
+      - /home/linuxbrew/.linuxbrew/lib/node_modules
       - ~/.cache
       - ~/.camoufox
       - ~/.camofox
