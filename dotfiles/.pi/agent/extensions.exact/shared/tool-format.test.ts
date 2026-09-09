@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { homedir } from "node:os";
 import {
+  ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
   CALL_PREVIEW_LIMIT,
+  COMMAND_PREVIEW_LIMIT,
   DENIED_REASON_PREVIEW_LIMIT,
   formatFallbackCall,
   formatPath,
@@ -48,6 +50,18 @@ describe("formatToolCall", () => {
   it("bash は $ 付きコマンドを表示する", () => {
     const call = formatToolCall("bash", { command: "git status" }, "/cwd", plainTheme);
     assert.equal(call, "$ git status");
+  });
+
+  it("bash の長いコマンドを300文字に切り詰める", () => {
+    const command = "a".repeat(COMMAND_PREVIEW_LIMIT + 1);
+    const call = formatToolCall("bash", { command }, "/cwd", plainTheme);
+    assert.equal(call, `$ ${"a".repeat(COMMAND_PREVIEW_LIMIT - 3)}...`);
+  });
+
+  it("ask_permission の対象は80文字に切り詰める", () => {
+    const command = "a".repeat(ASK_PERMISSION_TARGET_PREVIEW_LIMIT + 1);
+    const call = formatToolCall("ask_permission", { command }, "/cwd", plainTheme);
+    assert.equal(call, `ask_permission ${"a".repeat(ASK_PERMISSION_TARGET_PREVIEW_LIMIT - 3)}...`);
   });
 
   it("read は cwd 配下のパスを ./ から始めて表示する", () => {

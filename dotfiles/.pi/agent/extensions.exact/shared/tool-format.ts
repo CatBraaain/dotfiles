@@ -17,9 +17,12 @@ export type ToolResultContent = { type: string; text?: string };
 
 export type ToolResultLike = { content?: ToolResultContent[]; details?: unknown };
 
-export const COMMAND_PREVIEW_LIMIT = 80;
+export const COMMAND_PREVIEW_LIMIT = 300;
 
 export const CALL_PREVIEW_LIMIT = 100;
+
+/** Preview limit for ask_permission command and path targets. */
+export const ASK_PERMISSION_TARGET_PREVIEW_LIMIT = 80;
 
 /** Preview limit for the user-entered denial reason shown in the ask_permission summary. */
 export const DENIED_REASON_PREVIEW_LIMIT = 80;
@@ -144,8 +147,11 @@ export function formatToolCall(
     case "ask_permission": {
       const target =
         typeof args.command === "string"
-          ? truncateText(args.command)
-          : truncateText(formatPath(String(args.path ?? ""), cwd));
+          ? truncateText(args.command, ASK_PERMISSION_TARGET_PREVIEW_LIMIT)
+          : truncateText(
+              formatPath(String(args.path ?? ""), cwd),
+              ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
+            );
       return formatNamedCall("ask_permission", target, theme);
     }
     default:

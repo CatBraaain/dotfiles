@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import sandboxedToolsExtension, {
+  ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
   COMMAND_PREVIEW_LIMIT,
   classifyReadPath,
   countMatchLines,
@@ -2666,12 +2667,12 @@ commands:
     const longCommand = `sudo systemctl restart ${"x".repeat(100)}`;
     assert.equal(
       renderToolCall("ask_permission", { command: longCommand }),
-      `ask_permission ${truncateText(longCommand)}`,
+      `ask_permission ${truncateText(longCommand, ASK_PERMISSION_TARGET_PREVIEW_LIMIT)}`,
     );
     const longPath = `${"d".repeat(100)}/file.txt`;
     assert.equal(
       renderToolCall("ask_permission", { path: longPath }),
-      `ask_permission ${truncateText(`./${longPath}`)}`,
+      `ask_permission ${truncateText(`./${longPath}`, ASK_PERMISSION_TARGET_PREVIEW_LIMIT)}`,
     );
     const summary = (status: string) =>
       tool
@@ -3986,7 +3987,7 @@ describe("§8 表示", () => {
     assert.equal(renderedError, "line 1\nline 2\nline 3");
   });
 
-  it("長いコマンドを80文字に切り詰める", () => {
+  it("長いコマンドを300文字に切り詰める", () => {
     const longCommand = "a".repeat(COMMAND_PREVIEW_LIMIT + 1);
     assert.equal(truncateText(longCommand).length, COMMAND_PREVIEW_LIMIT);
   });

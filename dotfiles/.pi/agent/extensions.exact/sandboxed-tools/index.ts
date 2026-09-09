@@ -16,6 +16,7 @@ import { Type } from "typebox";
 import { Sandbox, type PathApproval, type ToolSession } from "./sandbox";
 import { normalizeToolPath } from "../shared/normalize-path.ts";
 import {
+  ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
   formatBashCall,
   formatNamedCall,
   formatPath,
@@ -26,6 +27,7 @@ import {
 } from "../shared/tool-format.ts";
 
 export {
+  ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
   COMMAND_PREVIEW_LIMIT,
   classifyReadPath,
   countMatchLines,
@@ -503,8 +505,11 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     renderCall(args: any, theme: any) {
       const target =
         typeof args.command === "string"
-          ? truncateText(args.command)
-          : truncateText(formatPath(String(args.path ?? ""), cwd));
+          ? truncateText(args.command, ASK_PERMISSION_TARGET_PREVIEW_LIMIT)
+          : truncateText(
+              formatPath(String(args.path ?? ""), cwd),
+              ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
+            );
       return new Text(formatNamedCall("ask_permission", target, theme), 0, 0);
     },
     renderResult(result: any, options: any, theme: any, context: any) {
