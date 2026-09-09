@@ -150,7 +150,9 @@ describe("CLI entrypoint", () => {
 
   it("declares bootstrap dependencies before their dependent entries", async () => {
     const config = parseConfig(await Bun.file(new URL("./config.yaml", import.meta.url)).text());
-    const gupIndex = config.findIndex((entry) => entry.key === "brew" && entry.value === "gup");
+    const goRuntimeIndex = config.findIndex(
+      (entry) => entry.key === "brew" && entry.value === "go",
+    );
     const goIndex = config.findIndex((entry) => entry.key === "go");
     const androidCaskIndex = config.findIndex(
       (entry) => entry.key === "brew-cask" && entry.value === "android-commandlinetools",
@@ -159,7 +161,7 @@ describe("CLI entrypoint", () => {
       (entry) => entry.key === "custom" && entry.value === "android-sdk",
     );
 
-    assert.ok(gupIndex >= 0 && gupIndex < goIndex);
+    assert.ok(goRuntimeIndex >= 0 && goRuntimeIndex < goIndex);
     assert.ok(androidCaskIndex >= 0 && androidCaskIndex < androidHandlerIndex);
   });
 });
@@ -196,7 +198,7 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands.slice(0, 5), [
       ["uv", "tool", "install", "trafilatura[all]"],
       ["bun", "add", "-g", "@scope/tool@2"],
-      ["gup", "import", "--file", runtime.commands[2]![3]!],
+      ["go", "install", "keep-go@v2"],
       ["brew", "install", "keep-formula"],
       ["brew", "install", "--cask", "keep-cask"],
     ]);
@@ -230,10 +232,19 @@ describe("sync", () => {
       ["deb-get", "install", "code"],
       ["uv", "tool", "install", "ruff==1"],
       ["bun", "add", "-g", "@scope/tool@2"],
-      ["gup", "import", "--file", runtime.commands[5]![3]!],
+      ["go", "install", "example.com/tool@v3"],
       ["brew", "install", "jq"],
       ["brew", "install", "--cask", "visual-studio-code"],
     ]);
+  });
+
+  it("installs a Go tool without a version at latest", async () => {
+    const runtime = new FakeRuntime();
+
+    const exitCode = await bootstrap([{ key: "go", value: "example.com/tool" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands[0], ["go", "install", "example.com/tool@latest"]);
   });
 
   it("bootstraps deb-get before installing its packages when it is missing", async () => {

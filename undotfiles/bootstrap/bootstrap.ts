@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,9 +173,11 @@ export class Bootstrap {
         case "bun":
           this.runtime.execute(["bun", "add", "-g", entry.value]);
           return;
-        case "go":
-          this.installGo(entry.value);
+        case "go": {
+          const [importPath, version = "latest"] = splitVersion(entry.value);
+          this.runtime.execute(["go", "install", `${importPath}@${version}`]);
           return;
+        }
         case "brew":
           this.runtime.execute(["brew", "install", entry.value]);
           return;
@@ -193,18 +195,6 @@ export class Bootstrap {
       ["android-sdk", () => this.installAndroidSdk()],
       ["drawio", () => this.installDrawio()],
     ]);
-  }
-
-  private installGo(specification: string): void {
-    const [importPath, version = "latest"] = splitVersion(specification);
-    const directory = mkdtempSync("bootstrap-gup-");
-    const file = join(directory, "gup.json");
-    try {
-      writeFileSync(file, JSON.stringify({ packages: [{ import_path: importPath, version }] }));
-      this.runtime.execute(["gup", "import", "--file", file]);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
   }
 
   private installAndroidSdk(): void {
