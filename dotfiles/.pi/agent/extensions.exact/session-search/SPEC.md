@@ -51,7 +51,7 @@ sequenceDiagram
 
 - 受け付ける値は絶対パス、または `~/` 始まり（ツール側でホームに展開）。相対パスと存在しないディレクトリはエラー
 - 省略時は通常の保存先（`~/.pi/agent/sessions/`）
-- subagent の子セッションは `~/.pi/agent/subagent-sessions/` に保存される（agents 拡張 SPEC の「子セッションのセッション記録」参照）。このディレクトリを指定すれば検索・展開できる
+- subagent の子セッションは `~/.pi/agent/sessions/<project-key>/subagents/` に保存される（agents 拡張 SPEC の「子セッションのセッション記録」参照）。`~/.pi/agent/sessions/` またはプロジェクトディレクトリを指定すれば、配下の保存先を含めて検索・展開できる
 
 `session_get` にも同じ `session_dir` があり、`session_list` で指定したのと同じ値を渡す。id が見つからないときのエラーはその旨のヒントを含む。
 

@@ -6,10 +6,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Type, type Static } from "typebox";
-import { subagentSessionDir } from "../agents/index.ts";
+import { subagentSessionRootDir } from "../agents/index.ts";
 import { type ToolTheme } from "../shared/tool-format.ts";
 
 export const DEFAULT_SESSION_LIST_LIMIT = 20;
@@ -33,16 +34,43 @@ export type SessionReader = {
   readonly getEntries: () => SessionEntry[];
 };
 
+async function listNestedSessionDirectories(root: string): Promise<string[]> {
+  const directories = [root];
+  for (let index = 0; index < directories.length; index++) {
+    const directory = directories[index]!;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) directories.push(join(directory, entry.name));
+    }
+  }
+  return directories;
+}
+
+export async function listNestedSessions(
+  root: string,
+  listAll: (directory: string) => Promise<SessionInfo[]> = (directory) =>
+    SessionManager.listAll(directory),
+): Promise<SessionInfo[]> {
+  const directories = await listNestedSessionDirectories(root);
+  const sessions = await Promise.all(directories.map((directory) => listAll(directory)));
+  return sessions.flat();
+}
+
 const defaultSessionSource: SessionSource = {
   listAll: (sessionDir?: string) =>
-    sessionDir === undefined ? SessionManager.listAll() : SessionManager.listAll(sessionDir),
+    sessionDir === undefined ? SessionManager.listAll() : listNestedSessions(sessionDir),
   open: (path) => SessionManager.open(path),
   exists: (dir) => existsSync(dir),
 };
 
 const sessionDirParameter = Type.Optional(
   Type.String({
-    description: `Session directory to search, same as the pi --session-dir flag. Defaults to ~/.pi/agent/sessions/. Subagent child sessions are saved in ${subagentSessionDir()}/. Accepts an absolute path or a ~/ prefix.`,
+    description: `Session directory to search, same as the pi --session-dir flag. Defaults to ~/.pi/agent/sessions/. Subagent child sessions are saved below ${subagentSessionRootDir()}/. Accepts an absolute path or a ~/ prefix.`,
   }),
 );
 

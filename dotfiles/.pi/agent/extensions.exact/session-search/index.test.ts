@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "bun:test";
 import sessionSearchExtension, {
   DEFAULT_MESSAGE_LIMIT,
   extractMessages,
   filterSessions,
   getSession,
+  listNestedSessions,
   listSessions,
   resolveSessionDir,
   type SessionSource,
 } from "./index";
-import { subagentSessionDir } from "../agents/index.ts";
+import { projectKeyFor, subagentSessionRootDir } from "../agents/index.ts";
 import type { SessionEntry, SessionInfo } from "@earendil-works/pi-coding-agent";
 
 function session(overrides: Partial<SessionInfo>): SessionInfo {
@@ -93,6 +97,34 @@ const oldSession = session({
   created: new Date("2026-08-01T12:00:00Z"),
   firstMessage: "Unrelated work",
 });
+function createNestedSessionRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "pi-session-search-"));
+  const projectDirectory = join(root, projectKeyFor("/home/user/projects/dotfiles"));
+  const subagentsDirectory = join(projectDirectory, "subagents");
+  mkdirSync(subagentsDirectory, { recursive: true });
+  const sessionPath = join(subagentsDirectory, "nested.jsonl");
+  writeFileSync(
+    sessionPath,
+    [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "nested",
+        timestamp: "2026-08-10T12:00:00.000Z",
+        cwd: "/home/user/projects/dotfiles",
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "message",
+        parentId: null,
+        timestamp: "2026-08-10T12:00:01.000Z",
+        message: { role: "user", content: "nested session" },
+      }),
+    ].join("\n"),
+  );
+  return root;
+}
+
 const entriesByPath = {
   [recentSession.path]: [
     messageEntry("user", "Discuss the harness", "1"),
@@ -301,6 +333,53 @@ describe("session_list", () => {
 });
 
 describe("session_dir", () => {
+  it("finds sessions in nested project directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-session-search-"));
+    const projectDirectory = join(root, projectKeyFor("/home/user/projects/dotfiles"));
+    const subagentsDirectory = join(projectDirectory, "subagents");
+    mkdirSync(subagentsDirectory, { recursive: true });
+    const listedDirectories: string[] = [];
+    try {
+      const sessions = await listNestedSessions(root, async (directory) => {
+        listedDirectories.push(directory);
+        return directory === subagentsDirectory ? [recentSession] : [];
+      });
+      assert.deepEqual(
+        listedDirectories.sort(),
+        [root, projectDirectory, subagentsDirectory].sort(),
+      );
+      assert.deepEqual(
+        sessions.map((item) => item.id),
+        ["recent"],
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("session_list finds a session in a nested project directory", async () => {
+    const root = createNestedSessionRoot();
+    try {
+      const sessions = await listSessions({ session_dir: root });
+      assert.deepEqual(
+        sessions.map((item) => item.id),
+        ["nested"],
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("session_get opens a session from a nested project directory", async () => {
+    const root = createNestedSessionRoot();
+    try {
+      const result = await getSession({ id: "nested", session_dir: root });
+      assert.equal(result.messages[0]?.text, "nested session");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("passes the resolved directory to listAll on session_list", async () => {
     const testSource = source([recentSession], {});
     await listSessions({ session_dir: "/custom/sessions" }, testSource);
@@ -351,8 +430,8 @@ describe("session_dir", () => {
     const tools = captureTools();
     const listDescription = tools.get("session_list").parameters.properties.session_dir.description;
     const getDescription = tools.get("session_get").parameters.properties.session_dir.description;
-    assert.ok(listDescription.includes(subagentSessionDir()));
-    assert.ok(getDescription.includes(subagentSessionDir()));
+    assert.ok(listDescription.includes(subagentSessionRootDir()));
+    assert.ok(getDescription.includes(subagentSessionRootDir()));
   });
 });
 describe("session_get", () => {

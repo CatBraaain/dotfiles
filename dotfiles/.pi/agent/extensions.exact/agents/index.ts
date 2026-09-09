@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
 import {
@@ -250,9 +257,7 @@ const UPDATE_THROTTLE_MS = 150;
 
 // 添付画像を vision 子セッションへ渡すための一時ファイル。親セッションのモデルへ
 // 画像を送らず、子が read_image で読める形にする。子の起動が終わったら削除する。
-function saveAttachedImages(
-  images: ImageContent[],
-): Array<{ path: string; cleanup: () => void }> {
+function saveAttachedImages(images: ImageContent[]): Array<{ path: string; cleanup: () => void }> {
   const saved: Array<{ path: string; cleanup: () => void }> = [];
   try {
     const directory = mkdtempSync(join(tmpdir(), "pi-attached-images-"));
@@ -486,14 +491,20 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partialResult: AgentToolResult<AgentToolDetails>) => void;
 
-const SUBAGENT_SESSION_DIR_NAME = "subagent-sessions";
-const SUBAGENT_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const SUBAGENT_SESSION_NAME_MAX_CHARS = 30;
 
-// 子セッションは ~/.pi/agent/subagent-sessions へ隔離保存する。main の sessions/ を汚染
-// せず、`pi --session-dir <dir> -r` で事後調査できる。
-export function subagentSessionDir(): string {
-  return join(getAgentDir(), SUBAGENT_SESSION_DIR_NAME);
+export function projectKeyFor(cwd: string, resolveCwd: (path: string) => string = resolve): string {
+  const resolvedCwd = resolveCwd(cwd);
+  const safePath = resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
+  return `--${safePath}--`;
+}
+
+export function subagentSessionRootDir(): string {
+  return join(getAgentDir(), "sessions");
+}
+
+export function subagentSessionDir(cwd = process.cwd()): string {
+  return join(subagentSessionRootDir(), projectKeyFor(cwd), "subagents");
 }
 
 // セッション一覧での識別用の表示名。agent 名 + task 先頭1行の切り詰め。
@@ -507,7 +518,7 @@ export function sessionNameFor(agent: Agent, task: string): string {
   return summary ? `${agent}: ${summary}` : agent;
 }
 
-export function childInvocationArgs(agent: Agent, task: string): string[] {
+export function childInvocationArgs(agent: Agent, task: string, cwd = process.cwd()): string[] {
   return [
     "--mode",
     "json",
@@ -515,36 +526,11 @@ export function childInvocationArgs(agent: Agent, task: string): string[] {
     "--agent",
     agent,
     "--session-dir",
-    subagentSessionDir(),
+    subagentSessionDir(cwd),
     "--name",
     sessionNameFor(agent, task),
     `Task: ${task}`,
   ];
-}
-
-// 30日超の古い子セッションを削除する。放置で無限に増えるのを防ぐ。
-export function cleanupOldSubagentSessions(dir: string, now = Date.now()): number {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return 0;
-  }
-  let removed = 0;
-  for (const entry of entries) {
-    if (!entry.endsWith(".jsonl")) continue;
-    const filePath = join(dir, entry);
-    try {
-      const stats = statSync(filePath);
-      if (stats.isFile() && now - stats.mtimeMs > SUBAGENT_SESSION_MAX_AGE_MS) {
-        unlinkSync(filePath);
-        removed++;
-      }
-    } catch {
-      // 読めない・消せないファイルは飛ばす
-    }
-  }
-  return removed;
 }
 
 // テストが拡張ロード時の fs 操作を差し替えられる出口。本番は node:fs と本ファイルの
@@ -552,10 +538,9 @@ export function cleanupOldSubagentSessions(dir: string, now = Date.now()): numbe
 export const __fs: {
   current: {
     mkdirSync: typeof mkdirSync;
-    cleanupOldSubagentSessions: typeof cleanupOldSubagentSessions;
   };
 } = {
-  current: { mkdirSync, cleanupOldSubagentSessions },
+  current: { mkdirSync },
 };
 
 async function runChild(
@@ -568,11 +553,12 @@ async function runChild(
 ): Promise<ChildRun> {
   // モデルは渡さない。子セッションが指定された agent の tier から解決する。
   // セッションは --no-session にせず隔離先へ保存し、事後調査できるようにする。
-  const args = childInvocationArgs(agent, task);
+  const childCwd = cwd ?? defaultCwd;
+  const args = childInvocationArgs(agent, task, childCwd);
   const childResult: ChildRun = {
     agent,
     task,
-    cwd: cwd ?? defaultCwd,
+    cwd: childCwd,
     pending: true,
     exitCode: 0,
     messages: [],
@@ -764,11 +750,9 @@ export default function agentsExtension(
   pi: ExtensionAPI,
   injectedConfig: ConfigLoadResult = loadAgentConfig(),
 ): void {
-  // 子セッションの保存先を用意し、古いものを掃除する
+  // 子セッションの保存先を用意する。
   try {
-    const sessionDir = subagentSessionDir();
-    __fs.current.mkdirSync(sessionDir, { recursive: true });
-    __fs.current.cleanupOldSubagentSessions(sessionDir);
+    __fs.current.mkdirSync(subagentSessionDir(), { recursive: true });
   } catch {
     // 保存先が用意できなくても subagent 実行は続ける
   }
@@ -878,9 +862,7 @@ export default function agentsExtension(
       container.addChild(new Text(theme.fg("text", childResult.task), 0, 0));
       container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       if (actions.length > 0) {
-        container.addChild(
-          new Text(theme.fg("muted", "┌─── Actions ───"), 0, 0),
-        );
+        container.addChild(new Text(theme.fg("muted", "┌─── Actions ───"), 0, 0));
         for (const action of actions) {
           const callText = formatToolCall(action.name, action.args, childCwd, toolTheme);
           container.addChild(new Text(`${theme.fg("muted", "→ ")}${callText}`, 0, 0));
@@ -903,9 +885,7 @@ export default function agentsExtension(
         container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       }
       if (finalOutput && !options.isPartial) {
-        container.addChild(
-          new Text(theme.fg("muted", "┌─── Output ────"), 0, 0),
-        );
+        container.addChild(new Text(theme.fg("muted", "┌─── Output ────"), 0, 0));
         container.addChild(new Markdown(finalOutput.trim(), 0, 0, getMarkdownTheme()));
         container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       }
@@ -1021,11 +1001,12 @@ export default function agentsExtension(
     const excluded = new Set(
       agentDefinition.tools.filter((tool) => tool.startsWith("!")).map((tool) => tool.slice(1)),
     );
-    const included = agentDefinition.tools.filter(
-      (tool) => tool !== "*" && !tool.startsWith("!"),
-    );
+    const included = agentDefinition.tools.filter((tool) => tool !== "*" && !tool.startsWith("!"));
     const activeTools = agentDefinition.tools.includes("*")
-      ? pi.getAllTools().map((tool) => tool.name).filter((tool) => !excluded.has(tool))
+      ? pi
+          .getAllTools()
+          .map((tool) => tool.name)
+          .filter((tool) => !excluded.has(tool))
       : [...new Set([...included, "subagent"])].filter((tool) => !excluded.has(tool));
     pi.setActiveTools(activeTools);
     registerAgentWidget(

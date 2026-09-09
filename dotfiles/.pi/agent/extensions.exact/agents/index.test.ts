@@ -1,15 +1,7 @@
 import { EventEmitter } from "node:events";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -27,12 +19,12 @@ import agentsExtension, {
   canDelegate,
   childAgent,
   childInvocationArgs,
-  cleanupOldSubagentSessions,
   initialAgent,
   loadAgentConfig,
   parseAgentConfig,
   sessionNameFor,
   shouldBlockToolCall,
+  projectKeyFor,
   subagentSessionDir,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
@@ -113,6 +105,7 @@ interface CaptureOptions {
   flags?: Record<string, string>;
   findModel?: (provider: string, id: string) => { provider: string; id: string } | undefined;
   setModelSucceeds?: boolean | boolean[];
+  mockFs?: boolean;
 }
 
 function captureAgentsExtension(
@@ -127,7 +120,12 @@ function captureAgentsExtension(
   const selectedModels: unknown[] = [];
   const registeredFlags: string[] = [];
   const sentMessages: Array<{ content: string; options?: unknown }> = [];
-  const spawnCalls: Array<{ command: string; args: string[]; cwd?: string; env?: Record<string, string | undefined> }> = [];
+  const spawnCalls: Array<{
+    command: string;
+    args: string[];
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }> = [];
   const children: FakeChild[] = [];
   let spawnResponder: (child: FakeChild) => void = () => {};
   let agentWidget: any;
@@ -136,17 +134,19 @@ function captureAgentsExtension(
 
   const originalSpawn = __spawn.current;
   const originalFs = __fs.current;
-  const fsCalls: Array<{ op: "mkdir" | "cleanup"; dir: string }> = [];
-  __fs.current = {
-    mkdirSync: ((dir: string) => {
-      fsCalls.push({ op: "mkdir", dir });
-    }) as typeof __fs.current.mkdirSync,
-    cleanupOldSubagentSessions: (dir: string) => {
-      fsCalls.push({ op: "cleanup", dir });
-      return 0;
-    },
-  };
-  __spawn.current = ((command: string, args: string[], options: { cwd?: string; env?: Record<string, string | undefined> }) => {
+  const fsCalls: Array<{ op: "mkdir"; dir: string }> = [];
+  if (options.mockFs ?? true) {
+    __fs.current = {
+      mkdirSync: ((dir: string) => {
+        fsCalls.push({ op: "mkdir", dir });
+      }) as typeof __fs.current.mkdirSync,
+    };
+  }
+  __spawn.current = ((
+    command: string,
+    args: string[],
+    options: { cwd?: string; env?: Record<string, string | undefined> },
+  ) => {
     const child = new FakeChild();
     spawnCalls.push({ command, args, cwd: options.cwd, env: options.env });
     children.push(child);
@@ -1081,7 +1081,12 @@ describe("tier によるモデルルーティング", () => {
           default: "main",
           agents: {
             ...config.agents,
-            main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "vision"], systemPrompt: [] },
+            main: {
+              tier: "middle",
+              tools: ["*", "!read_image"],
+              subagents: ["worker", "vision"],
+              systemPrompt: [],
+            },
           },
         },
       },
@@ -1115,9 +1120,7 @@ describe("tier によるモデルルーティング", () => {
         { provider: "zai", id: "glm-5.2", input: ["text"] },
         { provider: "zai", id: "glm-5.3-flash", input: ["text"] },
       ]);
-      assert.ok(
-        !extension.notifications.some((message) => message.includes("no available model")),
-      );
+      assert.ok(!extension.notifications.some((message) => message.includes("no available model")));
     } finally {
       extension.restore();
     }
@@ -1163,16 +1166,38 @@ describe("手動モデル選択", () => {
 
   it("main の model_select は画像対応モデルも受け入れて手動状態にする", async () => {
     const extension = captureAgentsExtension(
-      { config: { ...config, default: "main", agents: { ...config.agents, main: { tier: "middle", tools: ["*", "!read_image"], subagents: ["worker", "vision"], systemPrompt: [] } } } },
-      { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
+      {
+        config: {
+          ...config,
+          default: "main",
+          agents: {
+            ...config.agents,
+            main: {
+              tier: "middle",
+              tools: ["*", "!read_image"],
+              subagents: ["worker", "vision"],
+              systemPrompt: [],
+            },
+          },
+        },
+      },
+      {
+        findModel: (provider, id) => ({
+          provider,
+          id,
+          input: id.includes("flash") ? ["text", "image"] : ["text"],
+        }),
+      },
     );
     try {
       await extension.sessionStart();
-      await extension.modelSelect("set", { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] });
+      await extension.modelSelect("set", {
+        provider: "zai",
+        id: "glm-5.3-flash",
+        input: ["text", "image"],
+      });
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: main (manual)"]);
-      assert.ok(
-        !extension.notifications.some((message) => message.includes("not allowed")),
-      );
+      assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
     }
@@ -1181,16 +1206,20 @@ describe("手動モデル選択", () => {
   it("vision の model_select は vision tier 外の画像非対応モデルも受け入れて手動状態にする", async () => {
     const extension = captureAgentsExtension(
       { config },
-      { findModel: (provider, id) => ({ provider, id, input: id.includes("flash") ? ["text", "image"] : ["text"] }) },
+      {
+        findModel: (provider, id) => ({
+          provider,
+          id,
+          input: id.includes("flash") ? ["text", "image"] : ["text"],
+        }),
+      },
     );
     try {
       await extension.sessionStart();
       await extension.runCommand("vision");
       await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text"] });
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision (manual)"]);
-      assert.ok(
-        !extension.notifications.some((message) => message.includes("not allowed")),
-      );
+      assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
     }
@@ -1238,9 +1267,7 @@ describe("手動モデル選択", () => {
       assert.equal(extension.spawnCalls[0]?.env?.PI_AGENT_NAME, "vision");
       // 子の完了を待ち、最終テキストが親へ報告される。
       await Bun.sleep(20);
-      assert.ok(
-        extension.notifications.some((message) => message === "vision: looked at image"),
-      );
+      assert.ok(extension.notifications.some((message) => message === "vision: looked at image"));
     } finally {
       extension.restore();
     }
@@ -1259,9 +1286,7 @@ describe("手動モデル選択", () => {
       ]);
       await Bun.sleep(20);
       assert.ok(
-        extension.notifications.some((message) =>
-          message.startsWith("vision delegation failed:"),
-        ),
+        extension.notifications.some((message) => message.startsWith("vision delegation failed:")),
       );
     } finally {
       extension.restore();
@@ -1302,7 +1327,10 @@ describe("手動モデル選択", () => {
       extension.restore();
     }
     // 画像非対応モデル: handled で止めてエラー
-    const textOnlyExtension = captureAgentsExtension({ config }, { findModel: (provider, id) => ({ provider, id, input: ["text"] }) });
+    const textOnlyExtension = captureAgentsExtension(
+      { config },
+      { findModel: (provider, id) => ({ provider, id, input: ["text"] }) },
+    );
     try {
       await textOnlyExtension.sessionStart();
       await textOnlyExtension.runCommand("vision");
@@ -1912,7 +1940,7 @@ describe("subagent", () => {
         "--agent",
         "worker",
         "--session-dir",
-        subagentSessionDir(),
+        subagentSessionDir("/child"),
         "--name",
         "worker: work",
         "Task: work",
@@ -1937,6 +1965,11 @@ describe("subagent", () => {
       await extension.sessionStart();
       await extension.executeSubagent({ agent: "worker", task: "work", model: "forbidden" });
       assert.equal(extension.spawnCalls[0]?.cwd, "/parent");
+      const sessionDirIndex = extension.spawnCalls[0]!.args.indexOf("--session-dir");
+      assert.equal(
+        extension.spawnCalls[0]!.args[sessionDirIndex + 1],
+        subagentSessionDir("/parent"),
+      );
       assert.equal(extension.spawnCalls[0]?.args.includes("--model"), false);
     } finally {
       extension.restore();
@@ -2220,14 +2253,18 @@ describe("subagent", () => {
     });
     try {
       await extension.sessionStart();
-      const result = await extension.executeSubagent({ agent: "worker", task: "work" }, undefined, () => {
-        onUpdateCalls++;
-        // レンダリングの代替の重い同期処理。窓内のイベントごとに呼ばれると stdout の
-        // 読み取りが止まるため、間引きが機能していれば呼び出し回数はイベント数より
-        // 桁違いに少なくなる。
-        const until = Date.now() + 5;
-        while (Date.now() < until) {}
-      });
+      const result = await extension.executeSubagent(
+        { agent: "worker", task: "work" },
+        undefined,
+        () => {
+          onUpdateCalls++;
+          // レンダリングの代替の重い同期処理。窓内のイベントごとに呼ばれると stdout の
+          // 読み取りが止まるため、間引きが機能していれば呼び出し回数はイベント数より
+          // 桁違いに少なくなる。
+          const until = Date.now() + 5;
+          while (Date.now() < until) {}
+        },
+      );
       // 受領は全伴: 最終イベントまで処理して確定する
       assert.equal(result.isError, undefined);
       assert.equal(result.content[0].text, "finished");
@@ -2957,17 +2994,46 @@ describe("subagent の表示", () => {
 });
 
 describe("子セッションのセッション記録", () => {
-  it("拡張のロード時に子セッションの保存先を用意して古いセッションを掃除する", () => {
+  it("拡張のロード時に子セッションの保存先を用意する", () => {
     const extension = captureAgentsExtension();
     try {
-      const sessionDir = subagentSessionDir();
-      assert.deepEqual(extension.fsCalls, [
-        { op: "mkdir", dir: sessionDir },
-        { op: "cleanup", dir: sessionDir },
-      ]);
+      assert.deepEqual(extension.fsCalls, [{ op: "mkdir", dir: subagentSessionDir() }]);
     } finally {
       extension.restore();
     }
+  });
+
+  it("旧保存先の子セッションを移行も削除もしない", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-agent-"));
+    const legacySession = join(agentDir, "subagent-sessions", "legacy.jsonl");
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    mkdirSync(join(agentDir, "subagent-sessions"));
+    writeFileSync(legacySession, "legacy session");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    const extension = captureAgentsExtension({ config }, { mockFs: false });
+    extension.respondToChild(succeedChild);
+    try {
+      await extension.sessionStart();
+      await extension.executeSubagent({ agent: "worker", task: "work" });
+      assert.ok(existsSync(legacySession));
+      assert.equal(readFileSync(legacySession, "utf8"), "legacy session");
+    } finally {
+      extension.restore();
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("プロジェクトの cwd を Pi 本体と同じ形式の project-key に変換する", () => {
+    assert.equal(projectKeyFor("/home/user/projects/dotfiles"), "--home-user-projects-dotfiles--");
+  });
+
+  it("Windows の cwd ではドライブ記号と区切り文字を project-key 用に置換する", () => {
+    assert.equal(
+      projectKeyFor("C:\\Users\\user\\projects\\dotfiles", win32.resolve),
+      "--C--Users-user-projects-dotfiles--",
+    );
   });
 
   it("表示名は agent 名と task 先頭行の先頭30文字で組み立てる", () => {
@@ -2987,59 +3053,15 @@ describe("子セッションのセッション記録", () => {
     assert.equal(sessionNameFor("senior", ""), "senior");
   });
 
-  it("子セッションは --no-session ではなく隔離先の --session-dir へ保存する", () => {
-    const args = childInvocationArgs("junior", "do the thing");
+  it("子セッションは --no-session ではなく cwd に対応する保存先へ保存する", () => {
+    const cwd = "/home/user/projects/dotfiles";
+    const args = childInvocationArgs("junior", "do the thing", cwd);
     assert.ok(!args.includes("--no-session"));
     const dirIndex = args.indexOf("--session-dir");
     assert.notEqual(dirIndex, -1);
-    assert.ok(args[dirIndex + 1]!.endsWith("subagent-sessions"));
+    assert.equal(args[dirIndex + 1], subagentSessionDir(cwd));
     const nameIndex = args.indexOf("--name");
     assert.equal(args[nameIndex + 1], "junior: do the thing");
     assert.equal(args.at(-1), "Task: do the thing");
-  });
-
-  it("掃除は30日超の jsonl を削除し、それ以外のファイルは残す", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-sessions-"));
-    try {
-      const oldFile = join(dir, "old.jsonl");
-      const freshFile = join(dir, "fresh.jsonl");
-      const otherFile = join(dir, "keep.txt");
-      writeFileSync(oldFile, "{}");
-      writeFileSync(freshFile, "{}");
-      writeFileSync(otherFile, "x");
-      const now = Date.now();
-      const staleDate = new Date(now - 31 * 24 * 60 * 60 * 1000);
-      utimesSync(oldFile, staleDate, staleDate);
-
-      const removed = cleanupOldSubagentSessions(dir, now);
-
-      assert.equal(removed, 1);
-      assert.ok(!existsSync(oldFile));
-      assert.ok(existsSync(freshFile));
-      assert.ok(existsSync(otherFile));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("保存先ディレクトリがないときは掃除せず 0 件の削除を返す", () => {
-    const missing = join(tmpdir(), `pi-no-such-dir-${Date.now()}`);
-    assert.equal(cleanupOldSubagentSessions(missing), 0);
-  });
-
-  it("セッションファイルと同名のディレクトリは削除しない", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-sessions-"));
-    try {
-      const nested = join(dir, "nested.jsonl");
-      mkdirSync(nested);
-      const now = Date.now();
-      const staleDate = new Date(now - 40 * 24 * 60 * 60 * 1000);
-      utimesSync(nested, staleDate, staleDate);
-
-      assert.equal(cleanupOldSubagentSessions(dir, now), 0);
-      assert.ok(existsSync(nested));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });
