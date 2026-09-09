@@ -4,7 +4,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
 
-import { Bootstrap, coalesceEntries, parseConfig, run, type Entry, type Runtime } from "./bootstrap.ts";
+import {
+  Bootstrap,
+  coalesceEntries,
+  parseConfig,
+  run,
+  type Entry,
+  type Runtime,
+} from "./bootstrap.ts";
 
 const stateCommands = [
   ["brew", "leaves"],
@@ -55,7 +62,12 @@ class FakeRuntime implements Runtime {
     this.events.push(`succeeds ${command.join(" ")}`);
     if (command[0] === "dpkg-query" && command[1] === "-W" && command.length === 3)
       return this.installedApt.has(command[2]!);
-    if (command[0] === "flatpak" && command[1] === "info" && command[2] === "--user" && command.length === 4)
+    if (
+      command[0] === "flatpak" &&
+      command[1] === "info" &&
+      command[2] === "--user" &&
+      command.length === 4
+    )
       return this.installedFlatpak.has(command[3]!);
     return !this.failures.has(command.join(" "));
   }
@@ -243,11 +255,11 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands.slice(0, 7), [
       ["sudo", "apt", "update"],
       ["sudo", "apt", "install", "-y", "curl", "wget"],
-      ["brew", "install", "jq", "ripgrep"],
-      ["brew", "install", "--cask", "visual-studio-code", "iterm2"],
-      ["bun", "add", "-g", "prettier", "eslint"],
-      ["uv", "tool", "install", "ruff"],
-      ["uv", "tool", "install", "black"],
+      ["brew", "install", "--quiet", "jq", "ripgrep"],
+      ["brew", "install", "--quiet", "--cask", "visual-studio-code", "iterm2"],
+      ["bun", "add", "-g", "--silent", "prettier", "eslint"],
+      ["uv", "tool", "install", "-q", "ruff"],
+      ["uv", "tool", "install", "-q", "black"],
     ]);
   });
 
@@ -280,11 +292,11 @@ describe("sync", () => {
     assert.ok(firstStateRead > 4);
     assert.equal(firstCleanup - firstStateRead, stateCommands.length);
     assert.deepEqual(runtime.commands.slice(0, 5), [
-      ["uv", "tool", "install", "trafilatura[all]"],
-      ["bun", "add", "-g", "@scope/tool@2"],
+      ["uv", "tool", "install", "-q", "trafilatura[all]"],
+      ["bun", "add", "-g", "--silent", "@scope/tool@2"],
       ["go", "install", "keep-go@v2"],
-      ["brew", "install", "keep-formula"],
-      ["brew", "install", "--cask", "keep-cask"],
+      ["brew", "install", "--quiet", "keep-formula"],
+      ["brew", "install", "--quiet", "--cask", "keep-cask"],
     ]);
     assert.deepEqual(runtime.commands.slice(5), [
       ["brew", "uninstall", "--cask", "old-cask"],
@@ -322,11 +334,11 @@ describe("sync", () => {
         "https://dl.flathub.org/repo/flathub.flatpakrepo",
       ],
       ["flatpak", "install", "-y", "--user", "flathub", "com.visualstudio.code"],
-      ["uv", "tool", "install", "ruff==1"],
-      ["bun", "add", "-g", "@scope/tool@2"],
+      ["uv", "tool", "install", "-q", "ruff==1"],
+      ["bun", "add", "-g", "--silent", "@scope/tool@2"],
       ["go", "install", "example.com/tool@v3"],
-      ["brew", "install", "jq"],
-      ["brew", "install", "--cask", "visual-studio-code"],
+      ["brew", "install", "--quiet", "jq"],
+      ["brew", "install", "--quiet", "--cask", "visual-studio-code"],
     ]);
   });
 
@@ -343,7 +355,7 @@ describe("sync", () => {
     const exitCode = await bootstrap(entries, runtime).sync();
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(runtime.commands, [["brew", "install", "jq"]]);
+    assert.deepEqual(runtime.commands, [["brew", "install", "--quiet", "jq"]]);
   });
 
   it("installs only missing apt packages in a batch", async () => {
@@ -481,8 +493,8 @@ describe("sync", () => {
       true,
     );
     assert.deepEqual(runtime.commands, [
-      ["uv", "tool", "install", "ruff"],
-      ["bun", "add", "-g", "prettier"],
+      ["uv", "tool", "install", "-q", "ruff"],
+      ["bun", "add", "-g", "--silent", "prettier"],
       ["bash", "-c", "echo done"],
     ]);
     assert.equal(
@@ -496,7 +508,7 @@ describe("sync", () => {
 
   it("records failures and continues with later entries", async () => {
     const runtime = new FakeRuntime();
-    runtime.failures.add("bun add -g broken");
+    runtime.failures.add("bun add -g --silent broken");
     const entries: Entry[] = [
       { key: "bun", value: "broken" },
       { key: "run", value: "echo done" },
@@ -506,7 +518,7 @@ describe("sync", () => {
 
     assert.equal(exitCode, 1);
     assert.deepEqual(runtime.commands.slice(-2), [
-      ["bun", "add", "-g", "broken"],
+      ["bun", "add", "-g", "--silent", "broken"],
       ["bash", "-c", "echo done"],
     ]);
   });

@@ -21,7 +21,15 @@ export interface Runtime {
 }
 
 const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew", "bun", "go", "uv"];
-const batchableKeys = new Set<BatchableKey>(["apt", "flatpak", "uv", "bun", "go", "brew", "brew-cask"]);
+const batchableKeys = new Set<BatchableKey>([
+  "apt",
+  "flatpak",
+  "uv",
+  "bun",
+  "go",
+  "brew",
+  "brew-cask",
+]);
 const validKeys = new Set<Key>([
   "apt",
   "flatpak",
@@ -190,10 +198,10 @@ export class Bootstrap {
         }
         case "uv":
           for (const value of batch.values)
-            this.runtime.execute(["uv", "tool", "install", value]);
+            this.runtime.execute(["uv", "tool", "install", "-q", value]);
           return;
         case "bun":
-          this.runtime.execute(["bun", "add", "-g", ...batch.values]);
+          this.runtime.execute(["bun", "add", "-g", "--silent", ...batch.values]);
           return;
         case "go":
           this.runtime.execute([
@@ -203,10 +211,10 @@ export class Bootstrap {
           ]);
           return;
         case "brew":
-          this.runtime.execute(["brew", "install", ...batch.values]);
+          this.runtime.execute(["brew", "install", "--quiet", ...batch.values]);
           return;
         case "brew-cask":
-          this.runtime.execute(["brew", "install", "--cask", ...batch.values]);
+          this.runtime.execute(["brew", "install", "--quiet", "--cask", ...batch.values]);
       }
     });
   }

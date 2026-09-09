@@ -59,11 +59,11 @@
 | --- | --- |
 | `apt` | 各パッケージ値から解決したDebianパッケージ名について`dpkg-query -W`で導入済みか確認し、未導入のものだけinstall操作を実行する。バッチ内の対象がすべて導入済みなら何もしない。未導入のものがあるときだけ、最初の`apt`バッチ処理前に`sudo apt update`を1回実行する。 |
 | `flatpak` | 各アプリIDについて`flatpak info --user`で導入済みか確認し、未導入のものだけinstall操作を実行する。バッチ内の対象がすべて導入済みなら何もしない。未導入のものがあるときだけ、最初の`flatpak`バッチ処理前に`flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo`を1回実行する。 |
-| `uv` | 指定されたPythonパッケージごとにグローバルinstall操作を実行する。連続する`uv`項目は1つの処理単位にまとめるが、`uv tool install`は1パッケージずつ実行する。 |
-| `bun` | 指定されたnpmパッケージのグローバルinstall操作を実行する。 |
+| `uv` | 指定されたPythonパッケージごとに `uv tool install -q` を実行する。連続する`uv`項目は1つの処理単位にまとめるが、1パッケージずつ実行する。導入済みの already installed メッセージは出ない。 |
+| `bun` | 指定されたnpmパッケージに対して `bun add -g --silent` を実行する。`bun add` の installed 要約は出ない。 |
 | `go` | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。 |
-| `brew` | 指定されたFormulaのinstall操作を実行する。 |
-| `brew-cask` | 指定されたCaskのinstall操作を実行する。 |
+| `brew` | 指定されたFormulaに対して `brew install --quiet` を実行する。already-installed 警告、reinstall 案内、Homebrew の進捗表示は出ない。 |
+| `brew-cask` | 指定されたCaskに対して `brew install --quiet --cask` を実行する。Not upgrading 警告と Homebrew の進捗表示は出ない。 |
 | `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
 
