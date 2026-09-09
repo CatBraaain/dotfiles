@@ -77,6 +77,7 @@ export class Bootstrap {
           this.fail(`unknown custom handler: ${entry.value}`);
         continue;
       }
+      if (entry.key === "apt" && isAptInstalled(this.runtime, entry.value)) continue;
       this.runtime.log(
         entry.key === "run"
           ? `run: ${entry.value}`
@@ -169,13 +170,16 @@ export class Bootstrap {
     const label = `install ${batch.key}: ${batch.values.join(" ")}`;
     this.attempt(label, () => {
       switch (batch.key) {
-        case "apt":
+        case "apt": {
+          const missing = batch.values.filter((value) => !isAptInstalled(this.runtime, value));
+          if (missing.length === 0) return;
           if (!this.aptUpdated) {
             this.runtime.execute(["sudo", "apt", "update"]);
             this.aptUpdated = true;
           }
-          this.runtime.execute(["sudo", "apt", "install", "-y", ...batch.values]);
+          this.runtime.execute(["sudo", "apt", "install", "-y", ...missing]);
           return;
+        }
         case "deb-get":
           this.ensureDebGet();
           this.runtime.execute(["deb-get", "install", ...batch.values]);
@@ -346,6 +350,14 @@ function desiredNames(entries: readonly Entry[], key: DeclarativeKey): Set<strin
   return new Set(
     entries.filter((entry) => entry.key === key).map((entry) => packageName(key, entry.value)),
   );
+}
+
+function aptPackageName(value: string): string {
+  return value.split(/[<>=!~[ ;]/, 1)[0]!;
+}
+
+function isAptInstalled(runtime: Runtime, value: string): boolean {
+  return runtime.succeeds(["dpkg-query", "-W", aptPackageName(value)]);
 }
 
 function packageName(key: DeclarativeKey, value: string): string {

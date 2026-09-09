@@ -21,6 +21,7 @@ class FakeRuntime implements Runtime {
   readonly logs: string[] = [];
   readonly outputs = new Map<string, string>();
   readonly failures = new Set<string>();
+  readonly installedApt = new Set<string>();
 
   constructor() {
     for (const command of stateCommands) this.outputs.set(command.join("\0"), "");
@@ -51,6 +52,8 @@ class FakeRuntime implements Runtime {
 
   succeeds(command: readonly string[]): boolean {
     this.events.push(`succeeds ${command.join(" ")}`);
+    if (command[0] === "dpkg-query" && command[1] === "-W" && command.length === 3)
+      return this.installedApt.has(command[2]!);
     return !this.failures.has(command.join(" "));
   }
 
@@ -313,6 +316,39 @@ describe("sync", () => {
       ["go", "install", "example.com/tool@v3"],
       ["brew", "install", "jq"],
       ["brew", "install", "--cask", "visual-studio-code"],
+    ]);
+  });
+
+  it("skips apt packages that are already installed", async () => {
+    const runtime = new FakeRuntime();
+    runtime.installedApt.add("curl");
+    runtime.installedApt.add("wget");
+    const entries: Entry[] = [
+      { key: "apt", value: "curl" },
+      { key: "apt", value: "wget" },
+      { key: "brew", value: "jq" },
+    ];
+
+    const exitCode = await bootstrap(entries, runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, [["brew", "install", "jq"]]);
+  });
+
+  it("installs only missing apt packages in a batch", async () => {
+    const runtime = new FakeRuntime();
+    runtime.installedApt.add("curl");
+    const entries: Entry[] = [
+      { key: "apt", value: "curl" },
+      { key: "apt", value: "wget" },
+    ];
+
+    const exitCode = await bootstrap(entries, runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, [
+      ["sudo", "apt", "update"],
+      ["sudo", "apt", "install", "-y", "wget"],
     ]);
   });
 
@@ -598,5 +634,23 @@ describe("diff", () => {
     ]);
     assert.match(runtime.errors[0]!, /^uv state:/);
     assert.match(runtime.errors[1]!, /unknown custom handler/);
+  });
+
+  it("omits installed apt packages from diff plans", async () => {
+    const runtime = new FakeRuntime();
+    runtime.installedApt.add("curl");
+    const entries: Entry[] = [
+      { key: "apt", value: "curl" },
+      { key: "apt", value: "wget" },
+      { key: "deb-get", value: "code" },
+    ];
+
+    const exitCode = await bootstrap(entries, runtime).diff();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.logs, [
+      "install / update apt: wget",
+      "install / update deb-get: code",
+    ]);
   });
 });
