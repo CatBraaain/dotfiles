@@ -39,3 +39,6 @@ externalSkills:
 
   vercel-labs/agent-browser:
     - skills/agent-browser
+
+  microsoft/playwright-cli:
+    - skills/playwright-cli

@@ -50,6 +50,7 @@
 - brew: watchexec
 - bun: "@earendil-works/pi-coding-agent"
 - bun: agent-browser
+- bun: "@playwright/cli"
 - bun: cursor-agent
 - bun: officecli
 - bun: "@askjo/camofox-browser"
