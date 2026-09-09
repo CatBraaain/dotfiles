@@ -45,17 +45,6 @@
 - ウェブ上のものは markdown link（`[text](url)`）
 - ローカルファイル・コードベース内は平文のパス（markdown link にしない）
 
-## 過去セッション検索
-
-過去の判断・修正履歴を調べるときは、利用可能なら deja-vu を優先する。deja-vu CLI で subagent セッションを検索するときは、main 用 index と混ぜず、次の環境変数を検索・索引更新の両方に指定する。
-
-- `DEJA_PI_ROOT`: `~/.pi/agent/sessions/<project-key>/subagents`
-- `DEJA_INDEX_DIR`: subagent 専用 index（例: `~/.local/share/deja-vu/subagents`）
-- `<project-key>` は Pi 本体と同じ cwd エンコード方式で決める。先頭の `/` を除き、`/`・`\\`・`:` を `-` に置換し、前後を `--` で囲む
-- 保存構成を変更した後は、同じ環境変数で `deja index --rebuild` を実行してから検索する
-
-例: `project_key="--$(pwd -P | sed -e 's#^/##' -e 's#[/\\:]#-#g')--"; DEJA_PI_ROOT="$HOME/.pi/agent/sessions/$project_key/subagents" DEJA_INDEX_DIR="$HOME/.local/share/deja-vu/subagents" deja search --harness pi --project dotfiles "<query>"`
-
 ## 優先される開発フロー
 
 ロジックを伴う実装では、着手前に観測可能な振る舞いの合意を取る。
