@@ -157,13 +157,13 @@ dotfiles/.pi/agent/settings.merge.json
 #### `agents.yaml` + `agents.merge.local.yaml`（merge なし）
 
 ```
-dotfiles/.pi/agent/config/agents.yaml
-dotfiles/.pi/agent/config/agents.merge.local.yaml  （gitignore）
+dotfiles/.pi/agent/config.exact/agents.yaml
+dotfiles/.pi/agent/config.exact/agents.merge.local.yaml  （gitignore）
 ```
 
-1. dot 変換後: `dist/dot_pi/agent/config/agents.merge.local.yaml` 等
+1. dot 変換後: `dist/dot_pi/agent/exact_config/agents.merge.local.yaml` 等
 2. 合成: ホーム → plain base（agents.yaml）→ merge.local
-3. 出力: `dist/dot_pi/agent/config/agents.yaml`。sidecar と plain base 生ファイルは削除
+3. 出力: `dist/dot_pi/agent/exact_config/agents.yaml`。sidecar と plain base 生ファイルは削除
 
 #### 全レイヤー
 

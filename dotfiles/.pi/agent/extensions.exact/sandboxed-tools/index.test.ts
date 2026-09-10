@@ -26,6 +26,7 @@ import sandboxedToolsExtension, {
 } from "./index";
 import {
   Sandbox,
+  defaultSandboxConfigPath,
   expandPathSection,
   parseSandboxedToolsConfig,
   resolveCommandAction,
@@ -750,13 +751,25 @@ describe("§3.a パス文字列の解決", () => {
 
   it("出荷configは repository 専用の worktrees パスを許可する", () => {
     const config = parseSandboxedToolsConfig(
-      readFileSync(new URL("../../config/sandboxed-tools.yaml", import.meta.url), "utf8"),
+      readFileSync(new URL("../../config.exact/sandbox.yaml", import.meta.url), "utf8"),
     );
     const writeAllowPatterns = config.write
       ?.filter((entry) => entry.action === "allow")
       .flatMap((entry) => entry.patterns);
 
     assert.equal(writeAllowPatterns?.includes("~/projects/worktrees/${REPOSITORY_NAME}"), true);
+  });
+
+  it("展開後は config ディレクトリの sandbox.yaml を既定設定にする", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "sandboxed-tools-default-config-"));
+    try {
+      const configPath = join(agentDir, "config", "sandbox.yaml");
+      mkdirSync(join(agentDir, "config"));
+      writeFileSync(configPath, "");
+      assert.equal(defaultSandboxConfigPath(agentDir), configPath);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("既定Sandboxは集約された設定を読み込み自身の設定書き込みを拒否する", async () => {
@@ -768,11 +781,7 @@ describe("§3.a パス文字列の解決", () => {
     );
     await assert.rejects(
       () =>
-        sandbox.authorizePath(
-          "write",
-          join(homedir(), ".pi/agent/config/sandboxed-tools.yaml"),
-          context,
-        ),
+        sandbox.authorizePath("write", join(homedir(), ".pi/agent/config/sandbox.yaml"), context),
       /Access denied/,
     );
   });

@@ -643,6 +643,13 @@ function parseRunToolsResponse(execution: RunResult): RunToolsResponse {
   return { ok: false, error: stderrText || exitDetail };
 }
 
+export function defaultSandboxConfigPath(
+  agentDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".."),
+): string {
+  const deployedPath = join(agentDir, "config", "sandbox.yaml");
+  return existsSync(deployedPath) ? deployedPath : join(agentDir, "config.exact", "sandbox.yaml");
+}
+
 export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
   /** One-shot ask_permission approvals, as normalized command segments (§3). */
@@ -659,13 +666,7 @@ export class Sandbox {
 
   constructor(
     private readonly cwd: string,
-    configPath = join(
-      dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "..",
-      "config",
-      "sandboxed-tools.yaml",
-    ),
+    configPath = defaultSandboxConfigPath(),
   ) {
     try {
       this.config = parseSandboxedToolsConfig(readFileSync(configPath, "utf8"));
