@@ -4,6 +4,9 @@ import { Type } from "typebox";
 export const HANDOFF_SESSION_COMMAND_NAME = "handoff-session-apply";
 
 const CONFIRM_TITLE = "Handoff session";
+const HANDOFF_OPTION = "Yes, handoff";
+const STAY_OPTION = "No, stay (reason next)";
+const DENIAL_REASON_INPUT_TITLE = "Denied. Optional reason for the agent:";
 
 interface HandoffPayload {
   reason: string;
@@ -34,7 +37,7 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
       "reason explains why the current session ends; handoff is the natural-language prompt " +
       "automatically sent as the first user message of the new session.",
     promptGuidelines: [
-      "main agent は、収束ループを開始するとき、または senior によるレビューか実装が完了したときに handoff_session を使う。handoff には目的、spec・work ファイルのパス、決定事項、完了済みの作業と検証、未解決事項、次の phase の完了条件を含める。オーナーの承認後は新しい main agent として再開し、次の phase を別の senior に委譲する。収束条件を満たしたときは handoff_session を使わず、オーナーへ結果を報告する。",
+      "main agent は、収束ループを開始するとき、または senior によるレビューか実装が完了したときに handoff_session を使う。handoff には目的、spec・work ファイルのパス、決定事項、完了済みの作業と検証、未解決事項、次の phase の完了条件を含める。オーナーの承認後は新しい main agent として再開し、次の phase を別の senior に委譲する。確認UIで拒否された場合は、入力された理由を `no(<理由>)` として現在のagentへ返す。収束条件を満たしたときは handoff_session を使わず、オーナーへ結果を報告する。",
     ],
     parameters: Type.Object({
       reason: Type.String({ description: "Why the current session ends (non-empty)" }),
@@ -100,11 +103,18 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      const approved = await ctx.ui.confirm(
-        CONFIRM_TITLE,
-        `End this session?\n\nReason:\n${payload.reason}\n\nPrompt for the next agent:\n${payload.handoff}`,
-      );
-      if (!approved) return;
+      const confirmationMessage = `End this session?\n\nReason:\n${payload.reason}\n\nPrompt for the next agent:\n${payload.handoff}`;
+      const approved = ctx.ui.select
+        ? (await ctx.ui.select(`${CONFIRM_TITLE}\n\n${confirmationMessage}`, [
+            HANDOFF_OPTION,
+            STAY_OPTION,
+          ])) === HANDOFF_OPTION
+        : await ctx.ui.confirm(CONFIRM_TITLE, confirmationMessage);
+      if (!approved) {
+        const denialReason = (await ctx.ui.input?.(DENIAL_REASON_INPUT_TITLE))?.trim();
+        pi.sendUserMessage(`no(${denialReason ?? ""})`, { deliverAs: "followUp" });
+        return;
+      }
 
       try {
         const result = await ctx.newSession({

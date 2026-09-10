@@ -64,6 +64,7 @@ describe("登録", () => {
     const guidelines = captured.tools.get("handoff_session")!.promptGuidelines;
     assert.equal(guidelines?.length, 1);
     assert.match(guidelines![0]!, /handoff_session を使う/);
+    assert.match(guidelines![0]!, /no\(<理由>\)/);
   });
 });
 
@@ -142,6 +143,8 @@ interface CommandContextMock {
   hasUI: boolean;
   ui: {
     confirm: (title: string, message: string) => Promise<boolean>;
+    select?: (title: string, options: string[]) => Promise<string | undefined>;
+    input?: (title: string, placeholder?: string) => Promise<string | undefined>;
     notify: (message: string, level: string) => void;
   };
   newSession: (options: {
@@ -157,11 +160,17 @@ interface CommandContextMock {
 interface CommandInvocation {
   confirmCalls: number;
   confirmMessage: string;
+  selectCalls: number;
+  selectTitle: string;
+  selectOptions: string[][];
+  inputCalls: number;
+  inputTitles: string[];
   newSessionCalls: number;
   newSessionOptionsList: CommandContextMock["newSession"] extends (options: infer O) => unknown
     ? O[]
     : never[];
   sentToNewSession: string[];
+  sentToCurrentSession: SentUserMessage[];
   notifies: { message: string; level: string }[];
 }
 
@@ -170,6 +179,10 @@ async function runCommand(
   args: string,
   overrides: {
     approved?: boolean;
+    selectedOption?: string | undefined;
+    denialReason?: string | undefined;
+    hasSelect?: boolean;
+    hasInput?: boolean;
     hasUI?: boolean;
     newSessionError?: Error;
     sendError?: Error;
@@ -177,12 +190,22 @@ async function runCommand(
 ): Promise<CommandInvocation> {
   const approved = overrides.approved ?? true;
   const hasUI = overrides.hasUI ?? true;
+  const hasSelect = overrides.hasSelect ?? true;
+  const hasInput = overrides.hasInput ?? true;
+  const selectedOption =
+    "selectedOption" in overrides ? overrides.selectedOption : "Yes, handoff";
   const invocation: CommandInvocation = {
     confirmCalls: 0,
     confirmMessage: "",
+    selectCalls: 0,
+    selectTitle: "",
+    selectOptions: [],
+    inputCalls: 0,
+    inputTitles: [],
     newSessionCalls: 0,
     newSessionOptionsList: [],
     sentToNewSession: [],
+    sentToCurrentSession: captured.sentUserMessages,
     notifies: [],
   };
   const command = captured.commands.get(HANDOFF_SESSION_COMMAND_NAME);
@@ -195,6 +218,21 @@ async function runCommand(
         invocation.confirmMessage = message;
         return approved;
       },
+      select: hasSelect
+        ? async (title: string, options: string[]) => {
+            invocation.selectCalls++;
+            invocation.selectTitle = title;
+            invocation.selectOptions.push(options);
+            return selectedOption;
+          }
+        : undefined,
+      input: hasInput
+        ? async (title: string) => {
+            invocation.inputCalls++;
+            invocation.inputTitles.push(title);
+            return overrides.denialReason;
+          }
+        : undefined,
       notify: (message: string, level: string) => {
         invocation.notifies.push({ message, level });
       },
@@ -243,27 +281,98 @@ describe("コマンドの入力検証", () => {
   });
 });
 
-describe("確認ダイアログ", () => {
-  it("対話UIを利用できないとき、エラー表示し newSession を呼ばない", async () => {
+describe("確認UI", () => {
+  it("対話UIを利用できないとき、確認も移行も行わない", async () => {
     const captured = captureExtension();
     const invocation = await runCommand(captured, encodeArgs("done", "next"), { hasUI: false });
+    assert.equal(invocation.selectCalls, 0);
     assert.equal(invocation.confirmCalls, 0);
     assert.equal(invocation.newSessionCalls, 0);
     assert.equal(invocation.notifies.filter((n) => n.level === "error").length, 1);
   });
 
-  it("reason と handoff をダイアログに表示する", async () => {
+  it("select があるとき、reason と handoff を表示して handoff/stay の選択肢を出す", async () => {
     const captured = captureExtension();
     const invocation = await runCommand(captured, encodeArgs("phase done", "next steps"));
-    assert.equal(invocation.confirmCalls, 1);
-    assert.ok(invocation.confirmMessage.includes("phase done"));
-    assert.ok(invocation.confirmMessage.includes("next steps"));
+    assert.equal(invocation.selectCalls, 1);
+    assert.equal(invocation.confirmCalls, 0);
+    assert.ok(invocation.selectTitle.includes("phase done"));
+    assert.ok(invocation.selectTitle.includes("next steps"));
+    assert.deepEqual(invocation.selectOptions, [["Yes, handoff", "No, stay (reason next)"]]);
   });
 
-  it("オーナーが拒否したとき、newSession を呼ばず現在のセッションを維持する", async () => {
+  it("stay を選んだとき、理由を followUp の no(<理由>) として現在のagentへ送る", async () => {
     const captured = captureExtension();
-    const invocation = await runCommand(captured, encodeArgs("done", "next"), { approved: false });
+    const invocation = await runCommand(captured, encodeArgs("done", "next"), {
+      selectedOption: "No, stay (reason next)",
+      denialReason: "finish the tests first",
+    });
     assert.equal(invocation.newSessionCalls, 0);
+    assert.equal(invocation.inputCalls, 1);
+    assert.deepEqual(invocation.inputTitles, ["Denied. Optional reason for the agent:"]);
+    assert.deepEqual(invocation.sentToCurrentSession, [
+      { content: "no(finish the tests first)", options: { deliverAs: "followUp" } },
+    ]);
+  });
+
+  it("拒否理由が空欄のとき、no() を送って現在のセッションを維持する", async () => {
+    const captured = captureExtension();
+    const invocation = await runCommand(captured, encodeArgs("done", "next"), {
+      selectedOption: "No, stay (reason next)",
+      denialReason: "  ",
+    });
+    assert.equal(invocation.newSessionCalls, 0);
+    assert.deepEqual(invocation.sentToCurrentSession, [
+      { content: "no()", options: { deliverAs: "followUp" } },
+    ]);
+  });
+
+  it("拒否理由の入力をキャンセルしたとき、no() を送って現在のセッションを維持する", async () => {
+    const captured = captureExtension();
+    const invocation = await runCommand(captured, encodeArgs("done", "next"), {
+      selectedOption: "No, stay (reason next)",
+      denialReason: undefined,
+    });
+    assert.equal(invocation.newSessionCalls, 0);
+    assert.deepEqual(invocation.sentToCurrentSession, [
+      { content: "no()", options: { deliverAs: "followUp" } },
+    ]);
+  });
+
+  it("select のキャンセルも拒否として理由を受け取る", async () => {
+    const captured = captureExtension();
+    const invocation = await runCommand(captured, encodeArgs("done", "next"), {
+      selectedOption: undefined,
+      denialReason: "not now",
+    });
+    assert.equal(invocation.newSessionCalls, 0);
+    assert.deepEqual(invocation.sentToCurrentSession, [
+      { content: "no(not now)", options: { deliverAs: "followUp" } },
+    ]);
+  });
+
+  it("select がないとき、confirm の承認を使って既存の移行を行う", async () => {
+    const captured = captureExtension();
+    const invocation = await runCommand(captured, encodeArgs("done", "next"), { hasSelect: false });
+    assert.equal(invocation.selectCalls, 0);
+    assert.equal(invocation.confirmCalls, 1);
+    assert.equal(invocation.inputCalls, 0);
+    assert.equal(invocation.newSessionCalls, 1);
+  });
+
+  it("select がないとき、confirm の拒否後に理由を現在のagentへ送る", async () => {
+    const captured = captureExtension();
+    const invocation = await runCommand(captured, encodeArgs("done", "next"), {
+      hasSelect: false,
+      approved: false,
+      denialReason: "keep context",
+    });
+    assert.equal(invocation.confirmCalls, 1);
+    assert.equal(invocation.inputCalls, 1);
+    assert.equal(invocation.newSessionCalls, 0);
+    assert.deepEqual(invocation.sentToCurrentSession, [
+      { content: "no(keep context)", options: { deliverAs: "followUp" } },
+    ]);
   });
 });
 
