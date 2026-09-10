@@ -293,10 +293,10 @@ describe("pre-chezmoi", () => {
 
   it("composes YAML layers through exact directories and combines repeated op keys", async () => {
     const root = await fixture({
-      "home/.pi/agent/extensions/agents/config.yaml": "homeKey: true\ntiers:\n  low: home\n",
-      "dotfiles/.pi/agent/extensions.exact/agents/config.yaml":
+      "home/.pi/agent/config/agents.yaml": "homeKey: true\ntiers:\n  low: home\n",
+      "dotfiles/.pi/agent/config/agents.yaml":
         "tiers:\n  high: base\n  low: base\npackages:\n  - source: base\ntheme: base\n",
-      "dotfiles/.pi/agent/extensions.exact/agents/config.merge.local.yaml": [
+      "dotfiles/.pi/agent/config/agents.merge.local.yaml": [
         "tiers.$remove: [high]",
         "packages.$append:",
         "  - source: one",
@@ -310,10 +310,7 @@ describe("pre-chezmoi", () => {
 
     await run(root, "other", homeResolver(root));
 
-    const output = await readFile(
-      join(root, "dist/dot_pi/agent/exact_extensions/agents/config.yaml"),
-      "utf-8",
-    );
+    const output = await readFile(join(root, "dist/dot_pi/agent/config/agents.yaml"), "utf-8");
     assert.equal(
       output,
       [
@@ -328,10 +325,7 @@ describe("pre-chezmoi", () => {
         "",
       ].join("\n"),
     );
-    assert.equal(
-      existsSync(join(root, "dist/dot_pi/agent/exact_extensions/agents/config.merge.local.yaml")),
-      false,
-    );
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/config/agents.merge.local.yaml")), false);
   });
 
   it("resolves YAML aliases in merge layers", async () => {

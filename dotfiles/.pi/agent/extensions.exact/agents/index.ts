@@ -174,9 +174,11 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
   }
 }
 
-export function loadAgentConfig(
-  configPath = join(getAgentDir(), "extensions", "agents", "config.yaml"),
-): ConfigLoadResult {
+export function agentConfigPath(agentDir = getAgentDir()): string {
+  return join(agentDir, "config", "agents.yaml");
+}
+
+export function loadAgentConfig(configPath = agentConfigPath()): ConfigLoadResult {
   if (!existsSync(configPath)) return { error: `config file not found: ${configPath}` };
   try {
     return parseAgentConfig(readFileSync(configPath, "utf8"));

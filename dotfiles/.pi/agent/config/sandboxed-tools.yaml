@@ -32,7 +32,7 @@ write:
       - ~/.cargo/registry
       - ~/go/pkg/mod
       - ~/mirrors
-  - { deny: ~/.pi/agent/extensions/sandboxed-tools/config.yaml }
+  - { deny: ~/.pi/agent/config/sandboxed-tools.yaml }
 
 credentials: []
 

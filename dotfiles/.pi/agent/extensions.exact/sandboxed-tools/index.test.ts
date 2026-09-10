@@ -750,13 +750,31 @@ describe("§3.a パス文字列の解決", () => {
 
   it("出荷configは repository 専用の worktrees パスを許可する", () => {
     const config = parseSandboxedToolsConfig(
-      readFileSync(new URL("./config.yaml", import.meta.url), "utf8"),
+      readFileSync(new URL("../../config/sandboxed-tools.yaml", import.meta.url), "utf8"),
     );
     const writeAllowPatterns = config.write
       ?.filter((entry) => entry.action === "allow")
       .flatMap((entry) => entry.patterns);
 
     assert.equal(writeAllowPatterns?.includes("~/projects/worktrees/${REPOSITORY_NAME}"), true);
+  });
+
+  it("既定Sandboxは集約された設定を読み込み自身の設定書き込みを拒否する", async () => {
+    const sandbox = new Sandbox(process.cwd());
+    const context = { cwd: process.cwd() };
+
+    await assert.doesNotReject(() =>
+      sandbox.authorizePath("write", join(tmpdir(), "sandboxed-tools-config-probe"), context),
+    );
+    await assert.rejects(
+      () =>
+        sandbox.authorizePath(
+          "write",
+          join(homedir(), ".pi/agent/config/sandboxed-tools.yaml"),
+          context,
+        ),
+      /Access denied/,
+    );
   });
 
   it(

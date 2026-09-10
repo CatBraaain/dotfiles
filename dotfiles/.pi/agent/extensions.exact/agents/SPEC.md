@@ -4,11 +4,11 @@
 
 セッションは **agent** を実行する。agent は tier によるモデル選択、利用できるツール、依頼できる子 agent、システムプロンプトを持つ実行主体である。本拡張は agent 定義の管理と選択を行い、`/agent:<name>` コマンド・`--agent` フラグ・subagent ツールの `agent` パラメータを提供する。
 
-モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `config.yaml` で tier と agent を管理し、`/agent:<agent>` で実行する agent を切り替えられる。
+モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `agents.yaml` で tier と agent を管理し、`/agent:<agent>` で実行する agent を切り替えられる。
 
 ## 設定
 
-設定ファイル: `~/.pi/agent/extensions/agents/config.yaml`
+設定ファイル: `~/.pi/agent/config/agents.yaml`
 
 ```yaml
 default: main
@@ -256,7 +256,7 @@ subagent ツールは子セッションを起動するとき `--agent <name>` �
 | パラメータ | 必須     | 内容                                               |
 | ---------- | -------- | -------------------------------------------------- |
 | `task`     | 必須     | 子エージェントへ渡すタスク                         |
-| `agent`    | 必須     | `config.yaml` に定義された子 agent 名              |
+| `agent`    | 必須     | `agents.yaml` に定義された子 agent 名              |
 | `cwd`      | 任意     | 子エージェントの作業ディレクトリ。省略時は親と同じ |
 | `model`    | 使用不可 | モデルは指定した子 agent の tier から解決される    |
 

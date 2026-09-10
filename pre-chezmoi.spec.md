@@ -154,16 +154,16 @@ dotfiles/.pi/agent/settings.merge.json
 3. 合成: ホーム → merge レイヤー
 4. 出力: `dist/dot_pi/agent/settings.json`。`settings.merge.json` は削除
 
-#### `config.yaml` + `config.merge.local.yaml`（merge なし）
+#### `agents.yaml` + `agents.merge.local.yaml`（merge なし）
 
 ```
-dotfiles/.pi/agent/extensions.exact/agents/config.yaml
-dotfiles/.pi/agent/extensions.exact/agents/config.merge.local.yaml  （gitignore）
+dotfiles/.pi/agent/config/agents.yaml
+dotfiles/.pi/agent/config/agents.merge.local.yaml  （gitignore）
 ```
 
-1. exact 変換後: `dist/dot_pi/agent/exact_extensions/agents/config.merge.local.yaml` 等
-2. 合成: ホーム → plain base（config.yaml）→ merge.local
-3. 出力: `dist/.../config.yaml`。sidecar と plain base 生ファイルは削除
+1. dot 変換後: `dist/dot_pi/agent/config/agents.merge.local.yaml` 等
+2. 合成: ホーム → plain base（agents.yaml）→ merge.local
+3. 出力: `dist/dot_pi/agent/config/agents.yaml`。sidecar と plain base 生ファイルは削除
 
 #### 全レイヤー
 

@@ -14,6 +14,7 @@ import agentsExtension, {
   __spinnerTimers,
   __updateTimers,
   createThrottledEmitter,
+  agentConfigPath,
   type AgentConfig,
   buildAgentSystemPromptAddendum,
   canDelegate,
@@ -369,6 +370,42 @@ agents:
     subagents: []
     systemPrompt: []`);
     assert.deepEqual(result.config?.agents.manager?.systemPrompt, ["shared"]);
+  });
+
+  it("集約された config ディレクトリから agent 設定を読み込む", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "agents-config-test-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const configPath = join(agentDir, "config", "agents.yaml");
+      mkdirSync(join(agentDir, "config"));
+      writeFileSync(
+        configPath,
+        `default: manager
+tiers:
+  middle: []
+  vision: []
+agents:
+  manager:
+    tier: middle
+    tools: ["!read_image"]
+    subagents: [vision]
+    systemPrompt: []
+  vision:
+    tier: vision
+    tools: ["*"]
+    subagents: []
+    systemPrompt: []
+`,
+      );
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      assert.equal(agentConfigPath(agentDir), configPath);
+      const result = loadAgentConfig();
+      assert.equal(result.config?.default, "manager");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("設定ファイルがない場合は読み込みエラーを返す", () => {

@@ -109,7 +109,7 @@ fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission
 
 ### パス文字列の解決
 
-`config.yaml` の `read` / `write` の要素のパターンと `credentials` のエントリは以下の規則で絶対パスに解決する。`read` / `write` はそれぞれの設定でアクション判定を行い、`read` / `write` と `credentials` は bwrap の bind 対象（§6.1）とする。
+`sandboxed-tools.yaml` の `read` / `write` の要素のパターンと `credentials` のエントリは以下の規則で絶対パスに解決する。`read` / `write` はそれぞれの設定でアクション判定を行い、`read` / `write` と `credentials` は bwrap の bind 対象（§6.1）とする。
 
 | 記述                             | 解決先                                                                               |
 | -------------------------------- | ------------------------------------------------------------------------------------ |
@@ -145,7 +145,7 @@ glob は起動時に既存パスへ展開され、セッション中の新規パ
 
 ### アクションの決定
 
-`config.yaml`（§6）の `read` / `write` のリストを上から順に走査し、パスがマッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定し、マッチする要素がなければ未設定（= `deny`）。
+`sandboxed-tools.yaml`（§6）の `read` / `write` のリストを上から順に走査し、パスがマッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定し、マッチする要素がなければ未設定（= `deny`）。
 
 ### 動的拡張のライフサイクル
 
@@ -204,7 +204,7 @@ flowchart TD
 
 ## 4. bash コマンドの実行結果
 
-`bash` コマンドは `config.yaml`（§6）の `commands` からアクションを解決する（走査・未設定の扱いは §3 と同じ）。
+`bash` コマンドは `sandboxed-tools.yaml`（§6）の `commands` からアクションを解決する（走査・未設定の扱いは §3 と同じ）。
 
 複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。
 
@@ -231,9 +231,9 @@ network は開放。fs 制限の対象外。
 
 ---
 
-## 6. 設定（`config.yaml`）
+## 6. 設定（`sandboxed-tools.yaml`）
 
-ユーザーが `dotfiles/.pi/agent/extensions.exact/sandboxed-tools/config.yaml` で制御。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash 専用パスは `credentials` で指定する。
+ユーザーが `dotfiles/.pi/agent/config/sandboxed-tools.yaml` で制御。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash 専用パスは `credentials` で指定する。
 
 | 項目          | 意味                                                                                                                                                                            |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -244,8 +244,8 @@ network は開放。fs 制限の対象外。
 
 - `read` / `write` / `commands` は、アクション別の3リストではなく `{action: pattern}` または `{action: [patterns...]}` の要素からなるフラットなリストで書く。`action` は read・write では `allow` / `ask` / `deny` のいずれか、commands では `ask_with_reason` も使える4値のいずれかで、要素ごとに1つだけ宣言する。
 - 各リストは要素を上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
-- 実値（既定エントリ）は `config.yaml` を参照。
-- `read` / `write` / `commands` のセクションがリストでない、要素がマッピングでない、要素が複数のアクションを宣言する、アクション名が read・write では `allow` / `ask` / `deny` 以外・commands では `allow` / `ask` / `ask_with_reason` / `deny` 以外、パターンが文字列でも文字列のリストでもない場合、`config.yaml` の読み込みは失敗し、全セクションが未設定（= `deny`）として動作する。パターンリスト内の非文字列要素は無視される。
+- 実値（既定エントリ）は `sandboxed-tools.yaml` を参照。
+- `read` / `write` / `commands` のセクションがリストでない、要素がマッピングでない、要素が複数のアクションを宣言する、アクション名が read・write では `allow` / `ask` / `deny` 以外・commands では `allow` / `ask` / `ask_with_reason` / `deny` 以外、パターンが文字列でも文字列のリストでもない場合、`sandboxed-tools.yaml` の読み込みは失敗し、全セクションが未設定（= `deny`）として動作する。パターンリスト内の非文字列要素は無視される。
 
 記法の例（`commands`）:
 

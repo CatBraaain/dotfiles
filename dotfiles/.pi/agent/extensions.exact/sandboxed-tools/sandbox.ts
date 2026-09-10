@@ -659,7 +659,13 @@ export class Sandbox {
 
   constructor(
     private readonly cwd: string,
-    configPath = join(dirname(fileURLToPath(import.meta.url)), "config.yaml"),
+    configPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "config",
+      "sandboxed-tools.yaml",
+    ),
   ) {
     try {
       this.config = parseSandboxedToolsConfig(readFileSync(configPath, "utf8"));
