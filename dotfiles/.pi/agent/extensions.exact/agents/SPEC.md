@@ -248,10 +248,11 @@ cooldown の破棄・維持は、発生タイミングごとに「モデルの�
 セッション開始時と agent・class の切り替え時に、現在の agent と実効 class を表示する。
 
 ```text
-🤖 agent: <currentAgent> · class: <class-name>
+🤖 agent: <currentAgent>
+💎 class: <class-name>
 ```
 
-手動状態のときは `🤖 agent: <currentAgent> · class: <class-name> (manual)` と表示する。表示のテキスト色はグレーとする。
+class が未選択のときは agent 行のみを表示する。手動状態のときは `💎 class: <class-name> (manual)` のように class 行の末尾に `(manual)` を付ける。表示のテキスト色はグレーとする。
 
 ## 通知のない環境
 

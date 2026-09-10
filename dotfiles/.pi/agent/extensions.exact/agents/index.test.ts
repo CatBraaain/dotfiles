@@ -817,7 +817,7 @@ describe("拡張の接続", () => {
       assert.deepEqual(extension.notificationEvents, [
         { message: "agent model → zai/glm-5.2", level: "info" },
       ]);
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
       assert.deepEqual(extension.activeTools.at(-1), ["read", "bash", "subagent"]);
     } finally {
       extension.restore();
@@ -841,7 +841,7 @@ describe("拡張の接続", () => {
     try {
       assert.deepEqual(extension.registeredFlags, ["agent", "class"]);
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
@@ -858,7 +858,7 @@ describe("拡張の接続", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
       assert.ok(extension.notifications.includes("agent model → commandcode/gpt-5.6-luna"));
     } finally {
       extension.restore();
@@ -1177,7 +1177,7 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart();
       await extension.runClassCommand("low");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1216,7 +1216,7 @@ describe("class 選択", () => {
         message: "unknown class: nope",
         level: "warning",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
       assert.equal(extension.selectedModels.length, modelCountBefore);
     } finally {
       extension.restore();
@@ -1228,7 +1228,7 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart();
       await extension.runClassCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1244,7 +1244,7 @@ describe("class 選択", () => {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
       await extension.runClassCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
       assert.equal(extension.selectedModels.length, modelCountBefore);
       // キャンセルで新たな通知・モデル適用は起きない（notifications は sessionStart の1件のみ）
       assert.deepEqual(extension.notifications, ["agent model → zai/glm-5.2"]);
@@ -1263,7 +1263,7 @@ describe("class 選択", () => {
         message: "usage: /class <class-name>",
         level: "error",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
     } finally {
       extension.restore();
     }
@@ -1273,7 +1273,7 @@ describe("class 選択", () => {
     const extension = captureAgentsExtension({ config }, { flags: { class: "low" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
@@ -1287,7 +1287,7 @@ describe("class 選択", () => {
     );
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: middle"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
     } finally {
       extension.restore();
@@ -1298,7 +1298,7 @@ describe("class 選択", () => {
     const extension = captureAgentsExtension({ config }, { flags: { class: "nope" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
       assert.deepEqual(extension.notificationEvents.at(-2), {
         message: "unknown class flag: nope",
@@ -1319,7 +1319,7 @@ describe("class 選択", () => {
         message: "no available model for agent manager: class low",
         level: "warning",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
     } finally {
       extension.restore();
@@ -1331,11 +1331,11 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart();
       await extension.runClassCommand("low");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
       await extension.runCommand("chat");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
       await extension.runCommand("manager");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
       assert.deepEqual(extension.selectedModels.at(-1), { provider: "zai", id: "glm-5.2" });
     } finally {
       extension.restore();
@@ -1347,9 +1347,9 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart("startup");
       await extension.runClassCommand("middle");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
       await extension.sessionStart("new");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1365,7 +1365,7 @@ describe("class 選択", () => {
       await extension.sessionStart("startup");
       await extension.runClassCommand("middle");
       await extension.sessionStart("resume");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
     } finally {
       extension.restore();
     }
@@ -1381,7 +1381,7 @@ describe("class 選択", () => {
 
       after = captureAgentsExtension({ config }, { flags: { class: "low" } });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1404,7 +1404,7 @@ describe("class 選択", () => {
       };
       after = captureAgentsExtension({ config: reducedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
     } finally {
       after?.restore();
       before.restore();
@@ -1419,7 +1419,7 @@ describe("class 選択", () => {
       const modelCountBefore = extension.selectedModels.length;
       await extension.input("hello");
       assert.equal(extension.selectedModels.length, modelCountBefore);
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
     } finally {
       extension.restore();
     }
@@ -1486,7 +1486,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
     } finally {
       extension.restore();
     }
@@ -1511,7 +1511,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("restore");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
     } finally {
       extension.restore();
     }
@@ -1549,7 +1549,7 @@ describe("手動モデル選択", () => {
         id: "glm-5.3-flash",
         input: ["text", "image"],
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main · class: middle (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main", "💎 class: middle (manual)"]);
       assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
@@ -1571,7 +1571,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.runCommand("vision");
       await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text"] });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision · class: vision (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision", "💎 class: vision (manual)"]);
       assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
@@ -1770,7 +1770,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.modelSelect("set");
       await extension.runCommand("chat");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
     } finally {
       extension.restore();
     }
@@ -2120,7 +2120,7 @@ describe("レート制限（429）時のフォールバック", () => {
         provider: "zai",
         id: "glm-5.2",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
     } finally {
       extension.restore();
     }
@@ -2152,7 +2152,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension();
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: chat · class: low (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: chat", "💎 class: low (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -2175,7 +2175,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension({ config: changedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -2193,7 +2193,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension();
       await after.sessionStart("fork");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
     } finally {
       after?.restore();
       before.restore();
@@ -2244,7 +2244,7 @@ describe("セッションライフサイクル", () => {
       await extension.modelSelect("set");
       await extension.sessionShutdown();
       await extension.sessionStart("new");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
     } finally {
       extension.restore();
     }

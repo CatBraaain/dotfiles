@@ -742,9 +742,13 @@ function registerAgentWidget(
       tuiHandle = ui;
       return {
         render: () => {
+          const lines = [theme.fg("dim", `🤖 agent: ${currentAgent()}`)];
           const currentClassName = currentClass();
-          const suffix = `${currentClassName ? ` · class: ${currentClassName}` : ""}${isManual() ? " (manual)" : ""}`;
-          return [theme.fg("dim", `🤖 agent: ${currentAgent()}${suffix}`)];
+          if (currentClassName) {
+            const manual = isManual() ? " (manual)" : "";
+            lines.push(theme.fg("dim", `💎 class: ${currentClassName}${manual}`));
+          }
+          return lines;
         },
         invalidate: () => {},
       };
