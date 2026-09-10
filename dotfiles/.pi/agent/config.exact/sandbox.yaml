@@ -34,10 +34,38 @@ write:
       - ~/mirrors
   - { deny: ~/.pi/agent/config/sandbox.yaml }
 
-# package registry tokens: hidden from bash so publish cannot authenticate
+# Auth files that bash tools need for authentication but pi fs tools
+# (read/write/edit/grep/find/ls) must never touch. Bound read-only into the
+# bash sandbox, always denied (and masked) for fs tools. See SPEC §2.2.
 credentials:
+  # package registries
   - ~/.npmrc
   - ~/.bunfig.toml
+  - ~/.cargo/credentials
+  - ~/.cargo/credentials.toml
+  - ~/.pypirc
+  - ~/.gem/credentials
+  - ~/.m2/settings.xml
+  - ~/.gradle/gradle.properties
+  - ~/.netrc
+  # git over https
+  - ~/.git-credentials
+  - ~/.config/git/credentials
+  # cloud CLIs
+  - ~/.aws/credentials
+  - ~/.azure/msal_token_cache.json
+  - ~/.config/gcloud
+  - ~/.kube/config
+  - ~/.terraform.d/credentials.tfrc.json
+  # tool CLIs
+  - ~/.config/gh/hosts.yml
+  - ~/.config/github-copilot/hosts.json
+  - ~/.docker/config.json
+  - ~/.vercel/auth.json
+  - ~/.claude/.credentials.json
+  - ~/.codex/auth.json
+  # signing keys
+  - ~/.gnupg
 
 commands:
   - allow: ".*"
