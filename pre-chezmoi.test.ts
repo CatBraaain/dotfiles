@@ -110,6 +110,8 @@ describe("pre-chezmoi", () => {
       "dotfiles/nested/node_modules/ignored": "ignored",
       "dotfiles/.config/.gitconfig": "config",
       "dotfiles/.pi/agent/skills.exact/skill": "skill",
+      "dotfiles/.agents/skills.exact/.pre-chezmoi.skills.yaml": "externalSkills: {}\n",
+      "dotfiles/.agents/skills.exact/.pre-chezmoi.test.ts": "// test\n",
       "dotfiles/.pi.exact/agent/skill": "skill",
       "dotfiles/memo.exact": "memo",
       "dotfiles/bin/setup.executable": "setup",
@@ -127,6 +129,15 @@ describe("pre-chezmoi", () => {
     assert.equal(existsSync(join(root, "dist/nested/node_modules")), false);
     assert.equal(existsSync(join(root, "dist/dot_config/dot_gitconfig")), true);
     assert.equal(existsSync(join(root, "dist/dot_pi/agent/exact_skills/skill")), true);
+    assert.equal(
+      existsSync(join(root, "dist/dot_agents/exact_skills/.pre-chezmoi.skills.yaml")),
+      true,
+    );
+    assert.equal(
+      existsSync(join(root, "dist/dot_agents/exact_skills/dot_pre-chezmoi.skills.yaml")),
+      false,
+    );
+    assert.equal(existsSync(join(root, "dist/dot_agents/exact_skills/.pre-chezmoi.test.ts")), true);
     assert.equal(existsSync(join(root, "dist/exact_dot_pi/agent/skill")), true);
     assert.equal(existsSync(join(root, "dist/memo.exact")), true);
     assert.equal(existsSync(join(root, "dist/bin/executable_setup")), true);
@@ -217,17 +228,12 @@ describe("pre-chezmoi", () => {
 
     assert.equal(
       existsSync(
-        join(
-          root,
-          "dist/dot_local/share/org.localsend.localsend_app/shared_preferences.json",
-        ),
+        join(root, "dist/dot_local/share/org.localsend.localsend_app/shared_preferences.json"),
       ),
       true,
     );
     assert.equal(
-      existsSync(
-        join(root, "dist/dot_local/share/org.localsend.localsend_app/settings.json"),
-      ),
+      existsSync(join(root, "dist/dot_local/share/org.localsend.localsend_app/settings.json")),
       false,
     );
   });
@@ -239,14 +245,9 @@ describe("pre-chezmoi", () => {
 
     await run(root, "win32", homeResolver(root));
 
+    assert.equal(existsSync(join(root, "dist/AppData/Roaming/LocalSend/settings.json")), true);
     assert.equal(
-      existsSync(join(root, "dist/AppData/Roaming/LocalSend/settings.json")),
-      true,
-    );
-    assert.equal(
-      existsSync(
-        join(root, "dist/AppData/Roaming/LocalSend/shared_preferences.json"),
-      ),
+      existsSync(join(root, "dist/AppData/Roaming/LocalSend/shared_preferences.json")),
       false,
     );
   });
@@ -500,10 +501,7 @@ describe("pre-chezmoi", () => {
     await run(root, "other", homeResolver(root));
 
     // Same parent folder: UTF-16 order ("B" < "a"); nested folders come first.
-    assert.equal(
-      await readFile(join(root, "dist/_order.log"), "utf-8"),
-      "root\npi\nagent\nB\na\n",
-    );
+    assert.equal(await readFile(join(root, "dist/_order.log"), "utf-8"), "root\npi\nagent\nB\na\n");
     assert.equal(existsSync(join(root, "dist/node_modules")), false);
     assert.equal(existsSync(join(root, "dist/x/node_modules")), false);
   });

@@ -137,7 +137,7 @@ dist/dot_pi/agent/exact_config/placeholder
 
 ## 4. dot 変換
 
-`dist/` 内の、名前が `.` で始まるすべてのエントリ（ファイル・ディレクトリ両方、深さは問わない）の名前の先頭 `.` を `dot_` へ変える。入れ子のドットエントリは親も子も変換する。パスに `.chezmoi` を含むエントリと、名前が `.pre-chezmoi.ts` と完全一致するエントリはそのまま。
+`dist/` 内の、名前が `.` で始まるすべてのエントリ（ファイル・ディレクトリ両方、深さは問わない）の名前の先頭 `.` を `dot_` へ変える。入れ子のドットエントリは親も子も変換する。パスに `.chezmoi` を含むエントリと、名前が `.pre-chezmoi` で始まるエントリはそのまま。
 
 | 入力                      | 出力                         |
 | ------------------------- | ---------------------------- |
@@ -145,6 +145,9 @@ dist/dot_pi/agent/exact_config/placeholder
 | `.config`（ディレクトリ） | `dot_config`                 |
 | `.config/.gitconfig`      | `dot_config/dot_gitconfig`   |
 | `.chezmoiignore`          | `.chezmoiignore`（そのまま） |
+| `.pre-chezmoi.ts`         | `.pre-chezmoi.ts`（そのまま） |
+| `.pre-chezmoi.test.ts`    | `.pre-chezmoi.test.ts`（そのまま） |
+| `.pre-chezmoi.skills.yaml` | `.pre-chezmoi.skills.yaml`（そのまま） |
 
 ## 5. exact 変換
 

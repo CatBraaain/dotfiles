@@ -68,8 +68,7 @@ function pathMaps(platform: Platform): Record<string, string> {
         erdtree: "AppData/Roaming/erdtree",
         gemini: ".gemini",
         "git-cliff": "AppData/Roaming/git-cliff",
-        "localsend/settings.merge.json":
-          "AppData/Roaming/LocalSend/settings.merge.json",
+        "localsend/settings.merge.json": "AppData/Roaming/LocalSend/settings.merge.json",
         mise: ".config/mise",
         nushell: "AppData/Roaming/nushell",
         "obs-studio": "AppData/Roaming/obs-studio",
@@ -108,13 +107,17 @@ async function convertDotEntries(distDir: string): Promise<void> {
     .filter(
       (entry) =>
         basename(entry.path).startsWith(".") &&
-        basename(entry.path) !== hookFileName &&
+        !isExcludedFromDotConversion(basename(entry.path)) &&
         !relative(distDir, entry.path).includes(".chezmoi"),
     )
     .sort(deepestFirst);
   for (const entry of dotEntries) {
     await rename(entry.path, join(dirname(entry.path), `dot_${basename(entry.path).slice(1)}`));
   }
+}
+
+function isExcludedFromDotConversion(name: string): boolean {
+  return name.startsWith(".pre-chezmoi");
 }
 
 async function convertExactDirectories(distDir: string): Promise<void> {
@@ -411,7 +414,8 @@ function compareHookParents(left: string, right: string): number {
   const leftParts = left === "" ? [] : left.split("/");
   const rightParts = right === "" ? [] : right.split("/");
   for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
-    if (leftParts[index] !== rightParts[index]) return leftParts[index] < rightParts[index] ? -1 : 1;
+    if (leftParts[index] !== rightParts[index])
+      return leftParts[index] < rightParts[index] ? -1 : 1;
   }
   return leftParts.length - rightParts.length;
 }
