@@ -4,7 +4,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, it } from "bun:test";
-import { appendSkillMd, copySkillTree, loadSkillConfig, resolveSkillDir } from "./.pre-chezmoi.ts";
+import {
+  appendSkillMd,
+  copySkillTree,
+  isPullDue,
+  loadSkillConfig,
+  markPullAt,
+  readLastPullAt,
+  resolveSkillDir,
+} from "./.pre-chezmoi.ts";
 
 const cleanupDirs: string[] = [];
 
@@ -82,6 +90,72 @@ describe("loadSkillConfig", () => {
     );
 
     await assert.rejects(loadSkillConfig(configPath), /owner\/repo\[0\] must be a path string/);
+  });
+
+  it("rejects an object entry with a non-string appendSkillMd", async () => {
+    const configPath = join(
+      await fixture({
+        ".pre-chezmoi.skills.yaml":
+          "externalSkills:\n  owner/repo:\n    - path: skills/eli5\n      appendSkillMd: 123\n",
+      }),
+      ".pre-chezmoi.skills.yaml",
+    );
+
+    await assert.rejects(loadSkillConfig(configPath), /appendSkillMd must be a string/);
+  });
+
+  it("rejects a config that is not parseable as YAML", async () => {
+    const configPath = join(
+      await fixture({ ".pre-chezmoi.skills.yaml": "externalSkills: [unclosed\n" }),
+      ".pre-chezmoi.skills.yaml",
+    );
+
+    await assert.rejects(loadSkillConfig(configPath));
+  });
+});
+
+describe("isPullDue", () => {
+  const ttlMs = 6 * 60 * 60 * 1000;
+
+  it("is due when no pull time is recorded", () => {
+    assert.equal(isPullDue(undefined, 1_000, ttlMs), true);
+  });
+
+  it("is not due within the TTL", () => {
+    assert.equal(isPullDue(0, ttlMs - 1, ttlMs), false);
+  });
+
+  it("is due at the TTL boundary", () => {
+    assert.equal(isPullDue(0, ttlMs, ttlMs), true);
+  });
+
+  it("is due regardless of the last pull time when forcePull is set", () => {
+    assert.equal(isPullDue(0, 0, ttlMs, true), true);
+  });
+});
+
+describe("readLastPullAt / markPullAt", () => {
+  it("round-trips the pull time through the mirror .git directory", async () => {
+    const mirrorDir = await fixture({});
+
+    assert.equal(await readLastPullAt(mirrorDir), undefined);
+
+    const before = Date.now();
+    await markPullAt(mirrorDir);
+    const after = Date.now();
+    const pullAt = await readLastPullAt(mirrorDir);
+    const recordedWithinRun = pullAt !== undefined && pullAt >= before && pullAt <= after;
+
+    assert.ok(recordedWithinRun);
+  });
+
+  it("returns undefined for a malformed pull time file", async () => {
+    const mirrorDir = await fixture({});
+    const pullTimePath = join(mirrorDir, ".git", "pre-chezmoi-pull-time");
+    await mkdir(dirname(pullTimePath), { recursive: true });
+    await writeFile(pullTimePath, "not-a-number\n");
+
+    assert.equal(await readLastPullAt(mirrorDir), undefined);
   });
 });
 
@@ -171,6 +245,29 @@ describe("copySkillTree", () => {
     assert.equal(existsSync(join(targetDir, "sub/.git")), false);
     assert.equal(existsSync(join(targetDir, "SKILL.md")), true);
   });
+
+  it("adds new files into existing target subdirectories", async () => {
+    const sourceDir = await fixture({
+      "source/scripts/new.sh": "new",
+      "target/scripts/local.sh": "local",
+    });
+
+    await copySkillTree(join(sourceDir, "source"), join(sourceDir, "target"));
+
+    assert.equal(await readFile(join(sourceDir, "target/scripts/new.sh"), "utf-8"), "new");
+    assert.equal(await readFile(join(sourceDir, "target/scripts/local.sh"), "utf-8"), "local");
+  });
+
+  it("keeps files that only exist in the target directory", async () => {
+    const sourceDir = await fixture({
+      "source/SKILL.md": "skill",
+      "target/obsolete.txt": "obsolete",
+    });
+
+    await copySkillTree(join(sourceDir, "source"), join(sourceDir, "target"));
+
+    assert.equal(await readFile(join(sourceDir, "target/obsolete.txt"), "utf-8"), "obsolete");
+  });
 });
 
 describe("appendSkillMd", () => {
@@ -192,6 +289,14 @@ describe("appendSkillMd", () => {
 
   it("creates SKILL.md with the text when it does not exist", async () => {
     const skillDir = await fixture({});
+
+    await appendSkillMd(skillDir, "## Extra\n");
+
+    assert.equal(await readFile(join(skillDir, "SKILL.md"), "utf-8"), "## Extra\n");
+  });
+
+  it("treats an existing empty SKILL.md like a missing one", async () => {
+    const skillDir = await fixture({ "SKILL.md": "" });
 
     await appendSkillMd(skillDir, "## Extra\n");
 

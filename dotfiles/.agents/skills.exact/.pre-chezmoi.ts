@@ -13,6 +13,10 @@ export type SkillRepo = { repo: string; entries: SkillEntry[] };
 
 const hookRelativePath = "dotfiles/.agents/skills.exact/.pre-chezmoi.ts";
 const mirrorRoot = join(homedir(), "mirrors", "github.com");
+// Skip mirror pulls whose recorded pull time is younger than this.
+const pullTtlMs = 6 * 60 * 60 * 1000;
+const pullTimeFileName = "pre-chezmoi-pull-time";
+const forcePull = process.env.PRE_CHEZMOI_FORCE_PULL === "1";
 
 // Prefixes chezmoi parses as source-state attributes (scripts, removals, ...).
 // Synced skill assets must land verbatim, so names using them are wrapped in
@@ -65,39 +69,79 @@ export async function appendSkillMd(skillDir: string, text: string): Promise<voi
   await writeFile(skillMdPath, current + separator + text);
 }
 
+export function isPullDue(
+  lastPullAt: number | undefined,
+  nowMs: number,
+  ttlMs: number,
+  forcePull = false,
+): boolean {
+  if (forcePull) return true;
+  if (lastPullAt === undefined) return true;
+  return nowMs - lastPullAt >= ttlMs;
+}
+
+export async function readLastPullAt(mirrorDir: string): Promise<number | undefined> {
+  const pullTimePath = join(mirrorDir, ".git", pullTimeFileName);
+  if (!existsSync(pullTimePath)) return undefined;
+  const raw = await readFile(pullTimePath, "utf-8").catch(() => undefined);
+  const pullAt = Number(raw?.trim());
+  return Number.isFinite(pullAt) ? pullAt : undefined;
+}
+
+export async function markPullAt(mirrorDir: string): Promise<void> {
+  const gitDir = join(mirrorDir, ".git");
+  await mkdir(gitDir, { recursive: true });
+  await writeFile(join(gitDir, pullTimeFileName), `${Date.now()}\n`);
+}
+
 async function main(): Promise<void> {
   const config = await loadSkillConfig(join(import.meta.dir, ".pre-chezmoi.skills.yaml"));
-  for (const { repo, entries } of config) {
-    const mirrorDir = await syncMirror(repo);
-    for (const entry of entries) {
-      const skillDir = await resolveSkillDir(mirrorDir, entry.path);
-      const targetDir = join(process.cwd(), basename(entry.path));
-      await copySkillTree(skillDir, targetDir);
-      if (entry.appendSkillMd !== undefined) await appendSkillMd(targetDir, entry.appendSkillMd);
-      console.log(`skill: ${basename(entry.path)} (${repo})`);
-    }
-  }
+  await Promise.all(
+    config.map(async ({ repo, entries }) => {
+      const mirrorDir = await syncMirror(repo);
+      for (const entry of entries) {
+        const skillDir = await resolveSkillDir(mirrorDir, entry.path);
+        const targetDir = join(process.cwd(), basename(entry.path));
+        await copySkillTree(skillDir, targetDir);
+        if (entry.appendSkillMd !== undefined) await appendSkillMd(targetDir, entry.appendSkillMd);
+        console.log(`skill: ${basename(entry.path)} (${repo})`);
+      }
+    }),
+  );
 }
 
 async function syncMirror(repo: string): Promise<string> {
   const mirrorDir = join(mirrorRoot, ...repo.split("/"));
   if (!existsSync(mirrorDir)) {
     const url = `https://github.com/${repo}.git`;
-    const result = runGit(["clone", "--quiet", url, mirrorDir]);
+    const result = await runGit(["clone", "--depth", "1", "--quiet", url, mirrorDir]);
     if (!result.ok) throw new Error(`git clone failed for ${url}: ${result.stderr}`);
+    await markPullAt(mirrorDir);
     console.log(`mirror: cloned ${repo}`);
     return mirrorDir;
   }
 
-  const result = runGit(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
-  if (result.ok) console.log(`mirror: pulled ${repo}`);
-  else console.error(`warning: git pull failed for ${repo}: ${result.stderr}`);
+  const lastPullAt = await readLastPullAt(mirrorDir);
+  if (!isPullDue(lastPullAt, Date.now(), pullTtlMs, forcePull)) {
+    console.log(`mirror: fresh ${repo}`);
+    return mirrorDir;
+  }
+
+  const result = await runGit(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
+  if (!result.ok) {
+    console.error(`warning: git pull failed for ${repo}: ${result.stderr}`);
+    return mirrorDir;
+  }
+  await markPullAt(mirrorDir);
+  console.log(`mirror: pulled ${repo}`);
   return mirrorDir;
 }
 
-function runGit(args: string[]): { ok: boolean; stderr: string } {
-  const proc = Bun.spawnSync(["git", ...args], { stdout: "ignore", stderr: "pipe" });
-  return { ok: proc.exitCode === 0, stderr: proc.stderr.toString().trim() };
+async function runGit(args: string[]): Promise<{ ok: boolean; stderr: string }> {
+  const proc = Bun.spawn(["git", ...args], { stdout: "ignore", stderr: "pipe" });
+  const stderr = await new Response(proc.stderr).text();
+  const ok = (await proc.exited) === 0;
+  return { ok, stderr: stderr.trim() };
 }
 
 function normalizeEntries(repo: string, rawEntries: unknown): SkillEntry[] {
