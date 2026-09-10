@@ -107,6 +107,7 @@ interface CaptureOptions {
   findModel?: (provider: string, id: string) => { provider: string; id: string } | undefined;
   setModelSucceeds?: boolean | boolean[];
   mockFs?: boolean;
+  tierSelection?: string;
 }
 
 function captureAgentsExtension(
@@ -205,6 +206,9 @@ function captureAgentsExtension(
       notifications.push(message);
       notificationEvents.push({ message, level });
     },
+    async select(_title: string, _items: string[]) {
+      return options.tierSelection;
+    },
   };
   const context = {
     cwd: "/parent",
@@ -244,6 +248,9 @@ function captureAgentsExtension(
     },
     async runCommand(agent: string, args = "") {
       await commands.get(`agent:${agent}`)?.(args, context);
+    },
+    async runTierCommand(args = "") {
+      await commands.get("tier")?.(args, context);
     },
     async input(
       text: string,
@@ -810,7 +817,7 @@ describe("拡張の接続", () => {
       assert.deepEqual(extension.notificationEvents, [
         { message: "agent model → zai/glm-5.2", level: "info" },
       ]);
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
       assert.deepEqual(extension.activeTools.at(-1), ["read", "bash", "subagent"]);
     } finally {
       extension.restore();
@@ -832,9 +839,9 @@ describe("拡張の接続", () => {
   it("--agent フラグの agent で開始する", async () => {
     const extension = captureAgentsExtension({ config }, { flags: { agent: "chat" } });
     try {
-      assert.deepEqual(extension.registeredFlags, ["agent"]);
+      assert.deepEqual(extension.registeredFlags, ["agent", "tier"]);
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
@@ -851,7 +858,7 @@ describe("拡張の接続", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
       assert.ok(extension.notifications.includes("agent model → commandcode/gpt-5.6-luna"));
     } finally {
       extension.restore();
@@ -1164,13 +1171,320 @@ describe("tier によるモデルルーティング", () => {
   });
 });
 
+describe("tier 選択", () => {
+  it("/tier <name> で実効 tier を切り替え、モデルと表示を切り替える", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      await extension.runTierCommand("low");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.selectedModels.at(-1), {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
+      assert.ok(extension.notifications.includes("agent model → commandcode/gpt-5.6-luna"));
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/tier で手動選択を解除する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      await extension.modelSelect("set");
+      await extension.runTierCommand("low");
+      // 手動状態が解除されていれば、モデルが実効 tier の候補と異なるときに再評価で切替わる
+      extension.context.model = { provider: "external", id: "other" };
+      await extension.input("hello");
+      assert.deepEqual(extension.selectedModels.at(-1), {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/tier に未定義の名前は warning で無視する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const modelCountBefore = extension.selectedModels.length;
+      await extension.runTierCommand("nope");
+      assert.deepEqual(extension.notificationEvents.at(-1), {
+        message: "unknown tier: nope",
+        level: "warning",
+      });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.equal(extension.selectedModels.length, modelCountBefore);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/tier の引数なしは選択 UI で tier を選ぶ", async () => {
+    const extension = captureAgentsExtension({ config }, { tierSelection: "low" });
+    try {
+      await extension.sessionStart();
+      await extension.runTierCommand();
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.selectedModels.at(-1), {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/tier の選択 UI をキャンセルしたら何も変更しない", async () => {
+    const extension = captureAgentsExtension({ config }, { tierSelection: undefined });
+    try {
+      await extension.sessionStart();
+      const modelCountBefore = extension.selectedModels.length;
+      await extension.runTierCommand();
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.equal(extension.selectedModels.length, modelCountBefore);
+      // キャンセルで新たな通知・モデル適用は起きない（notifications は sessionStart の1件のみ）
+      assert.deepEqual(extension.notifications, ["agent model → zai/glm-5.2"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("UI のない環境で /tier の引数を省略するとエラーを通知して変更しない", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      extension.context.hasUI = false;
+      await extension.runTierCommand();
+      assert.deepEqual(extension.notificationEvents.at(-1), {
+        message: "usage: /tier <tier-name>",
+        level: "error",
+      });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("--tier フラグで初期 tier を指定できる", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("--tier と --agent は併用でき、agent と tier は独立に選ばれる", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      { flags: { agent: "chat", tier: "middle" } },
+    );
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: middle"]);
+      assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("--tier に未定義の値は warning で無視し既定 tier で開始する", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { tier: "nope" } });
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
+      assert.deepEqual(extension.notificationEvents.at(-2), {
+        message: "unknown tier flag: nope",
+        level: "warning",
+      });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/tier で全候補が不成立なら現在のモデルを維持し warning を通知する", async () => {
+    const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
+    try {
+      extension.context.model = { provider: "external", id: "kept" };
+      await extension.sessionStart();
+      await extension.runTierCommand("low");
+      assert.deepEqual(extension.notificationEvents.at(-1), {
+        message: "no available model for agent manager: tier low",
+        level: "warning",
+      });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/agent 切り替えで実効 tier は切替先 agent の既定 tier に戻る", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      await extension.runTierCommand("low");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      await extension.runCommand("chat");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
+      await extension.runCommand("manager");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.selectedModels.at(-1), { provider: "zai", id: "glm-5.2" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/new では実効 tier を初期 tier に戻す", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+    try {
+      await extension.sessionStart("startup");
+      await extension.runTierCommand("middle");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      await extension.sessionStart("new");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.selectedModels.at(-1), {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/resume では実効 tier を初期 tier に戻す", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+    try {
+      await extension.sessionStart("startup");
+      await extension.runTierCommand("middle");
+      await extension.sessionStart("resume");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/reload では実効 tier を維持する", async () => {
+    const before = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
+    try {
+      await before.sessionStart("startup");
+      await before.runTierCommand("middle");
+      await before.sessionShutdown();
+
+      after = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+      await after.sessionStart("reload");
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.equal(after.selectedModels.length, 0);
+    } finally {
+      after?.restore();
+      before.restore();
+    }
+  });
+
+  it("/reload 後に実効 tier が設定から消えていたら既定 tier へ戻す", async () => {
+    const before = captureAgentsExtension();
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
+    try {
+      await before.sessionStart("startup");
+      await before.runTierCommand("low");
+      await before.sessionShutdown();
+
+      const reducedConfig: AgentConfig = {
+        default: "manager",
+        tiers: { middle: config.tiers.middle!, vision: config.tiers.vision! },
+        agents: { manager: config.agents.manager! },
+      };
+      after = captureAgentsExtension({ config: reducedConfig });
+      await after.sessionStart("reload");
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+    } finally {
+      after?.restore();
+      before.restore();
+    }
+  });
+
+  it("プロンプト送信前の再評価は実効 tier の候補に対して行われる", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+    try {
+      await extension.sessionStart("startup");
+      // 実効 tier（low）の候補と一致しているため、既定 tier（middle）への再評価・切替は起きない
+      const modelCountBefore = extension.selectedModels.length;
+      await extension.input("hello");
+      assert.equal(extension.selectedModels.length, modelCountBefore);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("429 のフォールバックは実効 tier 内の次候補へ切り替える", async () => {
+    const twoCandidateLow: AgentConfig = {
+      ...config,
+      tiers: {
+        ...config.tiers,
+        low: [
+          { provider: "commandcode", model: "gpt-5.6-luna" },
+          { provider: "zai", model: "glm-5.2" },
+        ],
+      },
+    };
+    const extension = captureAgentsExtension(
+      { config: twoCandidateLow },
+      { flags: { tier: "low" } },
+    );
+    try {
+      await extension.sessionStart("startup");
+      await extension.providerResponse(429);
+      const replacement = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "commandcode",
+        model: "gpt-5.6-luna",
+        errorMessage: "provider error",
+      });
+      assert.equal(
+        replacement.message.errorMessage,
+        "429 rate limit error; already switched to a fallback model",
+      );
+      assert.deepEqual(extension.selectedModels.at(-1), { provider: "zai", id: "glm-5.2" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("/tier の切り替えは cooldown を維持する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      await extension.providerResponse(429); // zai/glm-5.2 が cooldown、次候補へ切り替わる
+      await extension.runTierCommand("low");
+      await extension.runTierCommand("middle");
+      // cooldown 中の zai/glm-5.2 は候補から除外され続けるため setModel は発生しない
+      assert.deepEqual(extension.selectedModels, [
+        { provider: "zai", id: "glm-5.2" },
+        { provider: "commandcode", id: "gpt-5.6-luna" },
+      ]);
+    } finally {
+      extension.restore();
+    }
+  });
+});
+
 describe("手動モデル選択", () => {
   it("ユーザーの model_select で手動状態になり、表示に (manual) を付ける", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle (manual)"]);
     } finally {
       extension.restore();
     }
@@ -1195,7 +1509,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("restore");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
     } finally {
       extension.restore();
     }
@@ -1233,7 +1547,7 @@ describe("手動モデル選択", () => {
         id: "glm-5.3-flash",
         input: ["text", "image"],
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main · tier: middle (manual)"]);
       assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
@@ -1255,7 +1569,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.runCommand("vision");
       await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text"] });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision · tier: vision (manual)"]);
       assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
@@ -1454,7 +1768,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.modelSelect("set");
       await extension.runCommand("chat");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
     } finally {
       extension.restore();
     }
@@ -1737,7 +2051,7 @@ describe("レート制限（429）時のフォールバック", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle (manual)"]);
     } finally {
       extension.restore();
     }
@@ -1769,7 +2083,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension();
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: chat (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: chat · tier: low (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1792,7 +2106,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension({ config: changedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1810,7 +2124,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension();
       await after.sessionStart("fork");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle"]);
     } finally {
       after?.restore();
       before.restore();
@@ -1858,7 +2172,7 @@ describe("セッションライフサイクル", () => {
       await extension.modelSelect("set");
       await extension.sessionShutdown();
       await extension.sessionStart("new");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
     } finally {
       extension.restore();
     }
@@ -2008,6 +2322,7 @@ describe("subagent", () => {
         subagentSessionDir("/parent"),
       );
       assert.equal(extension.spawnCalls[0]?.args.includes("--model"), false);
+      assert.equal(extension.spawnCalls[0]?.args.includes("--tier"), false);
     } finally {
       extension.restore();
     }

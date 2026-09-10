@@ -234,6 +234,7 @@ export const __abortTimer: {
 interface SavedRoutingState {
   agent: Agent;
   manual: boolean;
+  tier: string | undefined;
   cooldowns: Map<string, number>;
 }
 
@@ -730,6 +731,7 @@ async function runChild(
 function registerAgentWidget(
   ctx: ExtensionContext,
   currentAgent: () => Agent,
+  currentTier: () => string | undefined,
   isManual: () => boolean,
 ): void {
   ctx.ui.setWidget(
@@ -738,7 +740,8 @@ function registerAgentWidget(
       tuiHandle = ui;
       return {
         render: () => {
-          const suffix = isManual() ? " (manual)" : "";
+          const tier = currentTier();
+          const suffix = `${tier ? ` · tier: ${tier}` : ""}${isManual() ? " (manual)" : ""}`;
           return [theme.fg("dim", `🤖 agent: ${currentAgent()}${suffix}`)];
         },
         invalidate: () => {},
@@ -763,6 +766,7 @@ export default function agentsExtension(
   let currentAgent = config?.default ?? "invalid";
 
   pi.registerFlag("agent", { type: "string", description: "Agent for a child session." });
+  pi.registerFlag("tier", { type: "string", description: "Initial tier for the session." });
 
   pi.registerTool({
     name: "subagent",
@@ -928,6 +932,8 @@ export default function agentsExtension(
   let manual = false; // user picked a model manually -> suspend auto-routing
   let switching = false; // our own setModel is in flight (NOT "manual")
   let cooldowns = new Map<string, number>(); // modelKey -> expiry epoch ms
+  // /tier で切り替えた tier。undefined は currentAgent の既定 tier を使う（SPEC「tier によるモデル選択」）。
+  let currentTier: string | undefined;
   let httpRateLimitAwaitingMessage: { modelKey: string; fallbackSucceeded: boolean } | undefined;
 
   const bashExec = bashExecFrom(createLocalBashOperations());
@@ -948,13 +954,19 @@ export default function agentsExtension(
   // して次候補へ進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
   // notifySwitch を false にすると切替時の `agent model →` 通知を省く（429 フォールバックは
   // 「レート制限時のフォールバック」節の通知が専らを定めるため）。
+  // SPEC「tier によるモデル選択」: 実効 tier は /tier での選択を優先し、未選択なら
+  // agent の既定 tier を使う。agent の選択とは独立している。
+  function effectiveTier(agent: Agent): string | undefined {
+    return currentTier ?? config?.agents[agent]?.tier;
+  }
+
   async function applyTierModel(
     agent: Agent,
     ctx: ExtensionContext,
     signal?: AbortSignal,
     notifySwitch = true,
   ): Promise<string | null> {
-    const tierName = config?.agents[agent]?.tier;
+    const tierName = effectiveTier(agent);
     if (!tierName) return null;
     let candidates = config?.tiers[tierName] ?? [];
     for (;;) {
@@ -982,7 +994,7 @@ export default function agentsExtension(
   }
 
   function notifyNoModel(agent: Agent, ctx: ExtensionContext, level: "warning" | "error"): void {
-    const tier = config?.agents[agent]?.tier ?? "unknown";
+    const tier = effectiveTier(agent) ?? "unknown";
     const message = `no available model for agent ${agent}: tier ${tier}`;
     if (!ctx.hasUI) {
       // UI のない子プロセスでは通知が見えないまま終わるため、stderr と終了コードで伝える
@@ -1014,21 +1026,35 @@ export default function agentsExtension(
     registerAgentWidget(
       ctx,
       () => currentAgent,
+      () => effectiveTier(currentAgent),
       () => manual,
     );
   }
 
   // ── session lifecycle ───────────────────────────────────────────────
 
+  // SPEC「tier によるモデル選択」: 初期 tier は --tier フラグで決める。未定義の値は
+  // warning で通知し、agent の既定 tier を使う。
+  function resolveInitialTier(ctx: ExtensionContext): string | undefined {
+    if (!config) return undefined;
+    const requested = pi.getFlag("tier") as string | undefined;
+    if (!requested) return undefined;
+    if (config.tiers[requested]) return requested;
+    if (ctx.hasUI) ctx.ui.notify(`unknown tier flag: ${requested}`, "warning");
+    return undefined;
+  }
+
   pi.on("session_start", async (event, ctx) => {
     if (event.reason === "reload") {
-      // 設定を読み込み直す。手動選択状態と cooldown は維持し、モデルは変更しない。
+      // 設定を読み込み直す。手動選択状態・実効 tier・cooldown は維持し、モデルは変更しない。
       const saved = takeSavedRoutingState();
       if (saved) {
         currentAgent = config.agents[saved.agent]
           ? saved.agent
           : initialAgent(config, pi.getFlag("agent") as string | undefined);
         manual = saved.manual;
+        // 保存済み tier が reload 後の設定に存在しない場合は既定 tier へ戻す（agent の default 戻しと同じ扱い）。
+        currentTier = saved.tier !== undefined && config.tiers[saved.tier] ? saved.tier : undefined;
         cooldowns = saved.cooldowns;
       }
       applyAgentTools(ctx, currentAgent);
@@ -1036,6 +1062,7 @@ export default function agentsExtension(
     }
 
     manual = false;
+    currentTier = resolveInitialTier(ctx);
     // /new は cooldown をすべて破棄する。セッション切替・分岐（resume/fork）は維持する。
     cooldowns =
       event.reason === "startup" || event.reason === "new"
@@ -1043,12 +1070,11 @@ export default function agentsExtension(
         : (takeSavedRoutingState()?.cooldowns ?? new Map());
     currentAgent = initialAgent(config, pi.getFlag("agent") as string | undefined);
     applyAgentTools(ctx, currentAgent);
-    const applied = await applyTierModel(currentAgent, ctx);
-    if (!applied) notifyNoModel(currentAgent, ctx, "warning");
+    await applyCurrentTier(ctx);
   });
 
   pi.on("session_shutdown", async () => {
-    saveRoutingState({ agent: currentAgent, manual, cooldowns });
+    saveRoutingState({ agent: currentAgent, manual, tier: currentTier, cooldowns });
   });
 
   // ── pre-prompt re-evaluation ────────────────────────────────────────
@@ -1241,19 +1267,59 @@ export default function agentsExtension(
     }
   });
 
+  // SPEC「モデルの適用タイミング」: 現在の実効 tier の候補を適用し、全候補不成立なら
+  // warning で通知してモデルを維持する。
+  async function applyCurrentTier(ctx: ExtensionContext): Promise<void> {
+    const applied = await applyTierModel(currentAgent, ctx);
+    if (!applied) notifyNoModel(currentAgent, ctx, "warning");
+  }
+
+  // SPEC「設定」の /tier: 実効 tier を切り替え、手動選択を解除し、切り替え先 tier の
+  // 候補を適用する。cooldown は維持する。
+  async function switchTier(tierName: string, ctx: ExtensionContext): Promise<void> {
+    currentTier = tierName;
+    manual = false;
+    tuiHandle?.requestRender();
+    await applyCurrentTier(ctx);
+  }
+
   for (const agent of Object.keys(config.agents)) {
     pi.registerCommand(`agent:${agent}`, {
       description: `Switch the session agent to ${agent}.`,
       handler: async (args, ctx) => {
         currentAgent = agent;
+        // SPEC「モデルの適用タイミング」: agent 切替は実効 tier を既定 tier に戻し、
+        // --tier フラグは再適用しない。
+        currentTier = undefined;
         manual = false;
         applyAgentTools(ctx, currentAgent);
         tuiHandle?.requestRender();
-        const applied = await applyTierModel(currentAgent, ctx);
-        if (!applied) notifyNoModel(currentAgent, ctx, "warning");
+        await applyCurrentTier(ctx);
         const followUpMessage = args.trim();
         if (followUpMessage) pi.sendUserMessage(followUpMessage);
       },
     });
   }
+
+  pi.registerCommand("tier", {
+    description: "Switch the effective tier.",
+    handler: async (args, ctx) => {
+      const name = args.trim();
+      if (!name) {
+        if (!ctx.hasUI) {
+          ctx.ui.notify("usage: /tier <tier-name>", "error");
+          return;
+        }
+        const selected = await ctx.ui.select("Pick tier:", Object.keys(config.tiers));
+        if (!selected) return;
+        await switchTier(selected, ctx);
+        return;
+      }
+      if (!config.tiers[name]) {
+        ctx.ui.notify(`unknown tier: ${name}`, "warning");
+        return;
+      }
+      await switchTier(name, ctx);
+    },
+  });
 }
