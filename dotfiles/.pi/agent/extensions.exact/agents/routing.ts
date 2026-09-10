@@ -1,4 +1,4 @@
-// routing — tier-based model routing core (candidate selection, cooldown,
+// routing — class-based model routing core (candidate selection, cooldown,
 // Retry-After, manual-select tracking). Ported from the former model-router
 // extension. Every routing decision lives in these dependency-injected pure
 // functions so tests need neither the pi runtime nor bash.

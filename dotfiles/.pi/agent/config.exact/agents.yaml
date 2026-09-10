@@ -123,7 +123,7 @@ _systemPrompts:
 
 agents:
   main:
-    tier: high
+    class: high
     tools: ["*", "!read_image"]
     subagents: [senior, junior, vision]
     systemPrompt:
@@ -136,7 +136,7 @@ agents:
         統合・最終判断・owner への報告は自分が担います。
 
   senior:
-    tier: high
+    class: high
     tools: ["*", "!read_image", "!handoff_session"]
     subagents: [junior, vision]
     systemPrompt:
@@ -149,7 +149,7 @@ agents:
         あなたは senior です。判断を要する作業を自分で担い、単純作業は junior に依頼します。
 
   junior:
-    tier: low
+    class: low
     tools: ["*", "!read_image", "!handoff_session"]
     subagents: []
     systemPrompt:
@@ -163,7 +163,7 @@ agents:
         画像を含む成果物を確認する必要があるときは、画像の確認が必要であることを依頼元へ報告してください。
 
   vision:
-    tier: vision
+    class: vision
     tools: ["*", "!handoff_session"]
     subagents: []
     systemPrompt:
@@ -176,7 +176,7 @@ agents:
         作業結果が見た目に依存する場合は、編集後に read_image で再読して確認してください。
 
   chat:
-    tier: middle
+    class: middle
     tools: [web_search, web_fetch, "!handoff_session"]
     subagents: []
     systemPrompt:

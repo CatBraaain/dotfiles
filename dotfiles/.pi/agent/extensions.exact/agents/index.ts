@@ -46,7 +46,7 @@ import {
 export type Agent = string;
 
 export interface AgentDefinition {
-  tier: string;
+  class: string;
   tools: readonly string[];
   subagents: readonly Agent[];
   systemPrompt: readonly string[];
@@ -54,7 +54,7 @@ export interface AgentDefinition {
 
 export interface AgentConfig {
   default: Agent;
-  tiers: Record<string, readonly ModelCandidate[]>;
+  classes: Record<string, readonly ModelCandidate[]>;
   agents: Record<Agent, AgentDefinition>;
 }
 
@@ -71,18 +71,18 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-// tier の候補配列 1 件分を検証する。不正ならエラーメッセージを返す。
-function parseCandidates(raw: unknown, tierName: string): ModelCandidate[] | string {
-  if (!Array.isArray(raw)) return `tier ${tierName} must be an array of candidates`;
+// class の候補配列 1 件分を検証する。不正ならエラーメッセージを返す。
+function parseCandidates(raw: unknown, className: string): ModelCandidate[] | string {
+  if (!Array.isArray(raw)) return `class ${className} must be an array of candidates`;
   const candidates: ModelCandidate[] = [];
   for (const entry of raw) {
-    if (!isRecord(entry)) return `tier ${tierName} candidate must be an object`;
+    if (!isRecord(entry)) return `class ${className} candidate must be an object`;
     const { provider, model, when } = entry;
     if (!isNonEmptyString(provider) || !isNonEmptyString(model)) {
-      return `tier ${tierName} candidate needs provider and model strings`;
+      return `class ${className} candidate needs provider and model strings`;
     }
     if (when !== undefined && typeof when !== "string") {
-      return `tier ${tierName} candidate has an invalid when`;
+      return `class ${className} candidate has an invalid when`;
     }
     candidates.push(when === undefined ? { provider, model } : { provider, model, when });
   }
@@ -95,21 +95,22 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
     if (!isRecord(document) || !isNonEmptyString(document.default) || !isRecord(document.agents)) {
       return { error: "default and agents are required" };
     }
-    if (!isRecord(document.tiers)) return { error: "tiers are required" };
+    if (!isRecord(document.classes)) return { error: "classes are required" };
 
-    const tiers: Record<string, readonly ModelCandidate[]> = {};
-    for (const [tierName, rawCandidates] of Object.entries(document.tiers)) {
-      const candidates = parseCandidates(rawCandidates, tierName);
+    const classes: Record<string, readonly ModelCandidate[]> = {};
+    for (const [className, rawCandidates] of Object.entries(document.classes)) {
+      const candidates = parseCandidates(rawCandidates, className);
       if (typeof candidates === "string") return { error: candidates };
-      tiers[tierName] = candidates;
+      classes[className] = candidates;
     }
 
     const agents: Record<Agent, AgentDefinition> = {};
     for (const [name, rawDefinition] of Object.entries(document.agents)) {
       if (!isRecord(rawDefinition)) return { error: `agent ${name} must be an object` };
-      const { tier, tools, subagents, systemPrompt } = rawDefinition;
-      if (!isNonEmptyString(tier)) return { error: `agent ${name} has an invalid tier` };
-      if (!(tier in tiers)) return { error: `agent ${name} references undefined tier ${tier}` };
+      const { class: className, tools, subagents, systemPrompt } = rawDefinition;
+      if (!isNonEmptyString(className)) return { error: `agent ${name} has an invalid class` };
+      if (!(className in classes))
+        return { error: `agent ${name} references undefined class ${className}` };
       if (!Array.isArray(tools) || !tools.every((tool) => typeof tool === "string")) {
         return { error: `agent ${name} has invalid tools` };
       }
@@ -122,7 +123,7 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
       ) {
         return { error: `agent ${name} has an invalid systemPrompt` };
       }
-      agents[name] = { tier, tools, subagents, systemPrompt };
+      agents[name] = { class: className, tools, subagents, systemPrompt };
     }
 
     if (!agents[document.default])
@@ -135,8 +136,8 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
 
     const visionAgent = agents.vision;
     if (!visionAgent) return { error: "vision agent is required" };
-    if (visionAgent.tier !== "vision") {
-      return { error: "agent vision must use the vision tier" };
+    if (visionAgent.class !== "vision") {
+      return { error: "agent vision must use the vision class" };
     }
     const allowsReadImage = (tools: readonly string[]): boolean =>
       tools.includes("*") || tools.includes("read_image");
@@ -168,7 +169,7 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
       }
     }
 
-    return { config: { default: document.default, tiers, agents } };
+    return { config: { default: document.default, classes, agents } };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
@@ -234,7 +235,7 @@ export const __abortTimer: {
 interface SavedRoutingState {
   agent: Agent;
   manual: boolean;
-  tier: string | undefined;
+  class: string | undefined;
   cooldowns: Map<string, number>;
 }
 
@@ -554,7 +555,7 @@ async function runChild(
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<ChildRun> {
-  // モデルは渡さない。子セッションが指定された agent の tier から解決する。
+  // モデルは渡さない。子セッションが指定された agent の class から解決する。
   // セッションは --no-session にせず隔離先へ保存し、事後調査できるようにする。
   const childCwd = cwd ?? defaultCwd;
   const args = childInvocationArgs(agent, task, childCwd);
@@ -731,7 +732,7 @@ async function runChild(
 function registerAgentWidget(
   ctx: ExtensionContext,
   currentAgent: () => Agent,
-  currentTier: () => string | undefined,
+  currentClass: () => string | undefined,
   isManual: () => boolean,
 ): void {
   ctx.ui.setWidget(
@@ -740,8 +741,8 @@ function registerAgentWidget(
       tuiHandle = ui;
       return {
         render: () => {
-          const tier = currentTier();
-          const suffix = `${tier ? ` · tier: ${tier}` : ""}${isManual() ? " (manual)" : ""}`;
+          const currentClassName = currentClass();
+          const suffix = `${currentClassName ? ` · class: ${currentClassName}` : ""}${isManual() ? " (manual)" : ""}`;
           return [theme.fg("dim", `🤖 agent: ${currentAgent()}${suffix}`)];
         },
         invalidate: () => {},
@@ -766,7 +767,7 @@ export default function agentsExtension(
   let currentAgent = config?.default ?? "invalid";
 
   pi.registerFlag("agent", { type: "string", description: "Agent for a child session." });
-  pi.registerFlag("tier", { type: "string", description: "Initial tier for the session." });
+  pi.registerFlag("class", { type: "string", description: "Initial class for the session." });
 
   pi.registerTool({
     name: "subagent",
@@ -932,8 +933,8 @@ export default function agentsExtension(
   let manual = false; // user picked a model manually -> suspend auto-routing
   let switching = false; // our own setModel is in flight (NOT "manual")
   let cooldowns = new Map<string, number>(); // modelKey -> expiry epoch ms
-  // /tier で切り替えた tier。undefined は currentAgent の既定 tier を使う（SPEC「tier によるモデル選択」）。
-  let currentTier: string | undefined;
+  // /class で切り替えた class。undefined は currentAgent の既定 class を使う（SPEC「class によるモデル選択」）。
+  let currentClass: string | undefined;
   let httpRateLimitAwaitingMessage: { modelKey: string; fallbackSucceeded: boolean } | undefined;
 
   const bashExec = bashExecFrom(createLocalBashOperations());
@@ -949,26 +950,26 @@ export default function agentsExtension(
     }
   }
 
-  // tier の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立の候補は
+  // class の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立の候補は
   // pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外
   // して次候補へ進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
   // notifySwitch を false にすると切替時の `agent model →` 通知を省く（429 フォールバックは
   // 「レート制限時のフォールバック」節の通知が専らを定めるため）。
-  // SPEC「tier によるモデル選択」: 実効 tier は /tier での選択を優先し、未選択なら
-  // agent の既定 tier を使う。agent の選択とは独立している。
-  function effectiveTier(agent: Agent): string | undefined {
-    return currentTier ?? config?.agents[agent]?.tier;
+  // SPEC「class によるモデル選択」: 実効 class は /class での選択を優先し、未選択なら
+  // agent の既定 class を使う。agent の選択とは独立している。
+  function effectiveClass(agent: Agent): string | undefined {
+    return currentClass ?? config?.agents[agent]?.class;
   }
 
-  async function applyTierModel(
+  async function applyClassModel(
     agent: Agent,
     ctx: ExtensionContext,
     signal?: AbortSignal,
     notifySwitch = true,
   ): Promise<string | null> {
-    const tierName = effectiveTier(agent);
-    if (!tierName) return null;
-    let candidates = config?.tiers[tierName] ?? [];
+    const className = effectiveClass(agent);
+    if (!className) return null;
+    let candidates = config?.classes[className] ?? [];
     for (;;) {
       const model = await pickCandidate(
         candidates,
@@ -994,8 +995,8 @@ export default function agentsExtension(
   }
 
   function notifyNoModel(agent: Agent, ctx: ExtensionContext, level: "warning" | "error"): void {
-    const tier = effectiveTier(agent) ?? "unknown";
-    const message = `no available model for agent ${agent}: tier ${tier}`;
+    const className = effectiveClass(agent) ?? "unknown";
+    const message = `no available model for agent ${agent}: class ${className}`;
     if (!ctx.hasUI) {
       // UI のない子プロセスでは通知が見えないまま終わるため、stderr と終了コードで伝える
       if (level === "error") {
@@ -1026,35 +1027,36 @@ export default function agentsExtension(
     registerAgentWidget(
       ctx,
       () => currentAgent,
-      () => effectiveTier(currentAgent),
+      () => effectiveClass(currentAgent),
       () => manual,
     );
   }
 
   // ── session lifecycle ───────────────────────────────────────────────
 
-  // SPEC「tier によるモデル選択」: 初期 tier は --tier フラグで決める。未定義の値は
-  // warning で通知し、agent の既定 tier を使う。
-  function resolveInitialTier(ctx: ExtensionContext): string | undefined {
+  // SPEC「class によるモデル選択」: 初期 class は --class フラグで決める。未定義の値は
+  // warning で通知し、agent の既定 class を使う。
+  function resolveInitialClass(ctx: ExtensionContext): string | undefined {
     if (!config) return undefined;
-    const requested = pi.getFlag("tier") as string | undefined;
+    const requested = pi.getFlag("class") as string | undefined;
     if (!requested) return undefined;
-    if (config.tiers[requested]) return requested;
-    if (ctx.hasUI) ctx.ui.notify(`unknown tier flag: ${requested}`, "warning");
+    if (config.classes[requested]) return requested;
+    if (ctx.hasUI) ctx.ui.notify(`unknown class flag: ${requested}`, "warning");
     return undefined;
   }
 
   pi.on("session_start", async (event, ctx) => {
     if (event.reason === "reload") {
-      // 設定を読み込み直す。手動選択状態・実効 tier・cooldown は維持し、モデルは変更しない。
+      // 設定を読み込み直す。手動選択状態・実効 class・cooldown は維持し、モデルは変更しない。
       const saved = takeSavedRoutingState();
       if (saved) {
         currentAgent = config.agents[saved.agent]
           ? saved.agent
           : initialAgent(config, pi.getFlag("agent") as string | undefined);
         manual = saved.manual;
-        // 保存済み tier が reload 後の設定に存在しない場合は既定 tier へ戻す（agent の default 戻しと同じ扱い）。
-        currentTier = saved.tier !== undefined && config.tiers[saved.tier] ? saved.tier : undefined;
+        // 保存済み class が reload 後の設定に存在しない場合は既定 class へ戻す（agent の default 戻しと同じ扱い）。
+        currentClass =
+          saved.class !== undefined && config.classes[saved.class] ? saved.class : undefined;
         cooldowns = saved.cooldowns;
       }
       applyAgentTools(ctx, currentAgent);
@@ -1062,7 +1064,7 @@ export default function agentsExtension(
     }
 
     manual = false;
-    currentTier = resolveInitialTier(ctx);
+    currentClass = resolveInitialClass(ctx);
     // /new は cooldown をすべて破棄する。セッション切替・分岐（resume/fork）は維持する。
     cooldowns =
       event.reason === "startup" || event.reason === "new"
@@ -1070,11 +1072,11 @@ export default function agentsExtension(
         : (takeSavedRoutingState()?.cooldowns ?? new Map());
     currentAgent = initialAgent(config, pi.getFlag("agent") as string | undefined);
     applyAgentTools(ctx, currentAgent);
-    await applyCurrentTier(ctx);
+    await applyCurrentClass(ctx);
   });
 
   pi.on("session_shutdown", async () => {
-    saveRoutingState({ agent: currentAgent, manual, tier: currentTier, cooldowns });
+    saveRoutingState({ agent: currentAgent, manual, class: currentClass, cooldowns });
   });
 
   // ── pre-prompt re-evaluation ────────────────────────────────────────
@@ -1084,7 +1086,7 @@ export default function agentsExtension(
     // 子セッションへ委譲し、親のターンは handled で止める。報告は通知で返る。
     if (event.images && event.images.length > 0) return routeImageInput(event, ctx);
     if (event.source === "extension" || manual) return;
-    const applied = await applyTierModel(currentAgent, ctx, ctx.signal);
+    const applied = await applyClassModel(currentAgent, ctx, ctx.signal);
     if (applied) return;
     notifyNoModel(currentAgent, ctx, "error");
     return { action: "handled" };
@@ -1175,7 +1177,7 @@ export default function agentsExtension(
 
   // ── manual selection tracking ───────────────────────────────────────
 
-  // 手動選択はモデルを問わず受け入れる。tier はデフォルトフォールバックの候補
+  // 手動選択はモデルを問わず受け入れる。class はデフォルトフォールバックの候補
   // 順序であり、モデル制限ではない。
   pi.on("model_select", async (event) => {
     if (!isManualSelect(event.source, switching)) return;
@@ -1192,7 +1194,7 @@ export default function agentsExtension(
   ): Promise<boolean> {
     recordCooldown(cooldowns, rateLimitedModelKey, cooldownMs, Date.now());
 
-    const switchedTo = await applyTierModel(currentAgent, ctx, ctx.signal, false);
+    const switchedTo = await applyClassModel(currentAgent, ctx, ctx.signal, false);
     if (switchedTo) {
       if (ctx.hasUI)
         ctx.ui.notify(
@@ -1267,20 +1269,20 @@ export default function agentsExtension(
     }
   });
 
-  // SPEC「モデルの適用タイミング」: 現在の実効 tier の候補を適用し、全候補不成立なら
+  // SPEC「モデルの適用タイミング」: 現在の実効 class の候補を適用し、全候補不成立なら
   // warning で通知してモデルを維持する。
-  async function applyCurrentTier(ctx: ExtensionContext): Promise<void> {
-    const applied = await applyTierModel(currentAgent, ctx);
+  async function applyCurrentClass(ctx: ExtensionContext): Promise<void> {
+    const applied = await applyClassModel(currentAgent, ctx);
     if (!applied) notifyNoModel(currentAgent, ctx, "warning");
   }
 
-  // SPEC「設定」の /tier: 実効 tier を切り替え、手動選択を解除し、切り替え先 tier の
+  // SPEC「設定」の /class: 実効 class を切り替え、手動選択を解除し、切り替え先 class の
   // 候補を適用する。cooldown は維持する。
-  async function switchTier(tierName: string, ctx: ExtensionContext): Promise<void> {
-    currentTier = tierName;
+  async function switchClass(className: string, ctx: ExtensionContext): Promise<void> {
+    currentClass = className;
     manual = false;
     tuiHandle?.requestRender();
-    await applyCurrentTier(ctx);
+    await applyCurrentClass(ctx);
   }
 
   for (const agent of Object.keys(config.agents)) {
@@ -1288,38 +1290,38 @@ export default function agentsExtension(
       description: `Switch the session agent to ${agent}.`,
       handler: async (args, ctx) => {
         currentAgent = agent;
-        // SPEC「モデルの適用タイミング」: agent 切替は実効 tier を既定 tier に戻し、
-        // --tier フラグは再適用しない。
-        currentTier = undefined;
+        // SPEC「モデルの適用タイミング」: agent 切替は実効 class を既定 class に戻し、
+        // --class フラグは再適用しない。
+        currentClass = undefined;
         manual = false;
         applyAgentTools(ctx, currentAgent);
         tuiHandle?.requestRender();
-        await applyCurrentTier(ctx);
+        await applyCurrentClass(ctx);
         const followUpMessage = args.trim();
         if (followUpMessage) pi.sendUserMessage(followUpMessage);
       },
     });
   }
 
-  pi.registerCommand("tier", {
-    description: "Switch the effective tier.",
+  pi.registerCommand("class", {
+    description: "Switch the effective class.",
     handler: async (args, ctx) => {
       const name = args.trim();
       if (!name) {
         if (!ctx.hasUI) {
-          ctx.ui.notify("usage: /tier <tier-name>", "error");
+          ctx.ui.notify("usage: /class <class-name>", "error");
           return;
         }
-        const selected = await ctx.ui.select("Pick tier:", Object.keys(config.tiers));
+        const selected = await ctx.ui.select("Pick class:", Object.keys(config.classes));
         if (!selected) return;
-        await switchTier(selected, ctx);
+        await switchClass(selected, ctx);
         return;
       }
-      if (!config.tiers[name]) {
-        ctx.ui.notify(`unknown tier: ${name}`, "warning");
+      if (!config.classes[name]) {
+        ctx.ui.notify(`unknown class: ${name}`, "warning");
         return;
       }
-      await switchTier(name, ctx);
+      await switchClass(name, ctx);
     },
   });
 }

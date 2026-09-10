@@ -32,7 +32,7 @@ import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
 
 const config: AgentConfig = {
   default: "manager",
-  tiers: {
+  classes: {
     middle: [
       { provider: "zai", model: "glm-5.2" },
       { provider: "commandcode", model: "gpt-5.6-luna" },
@@ -42,21 +42,21 @@ const config: AgentConfig = {
   },
   agents: {
     manager: {
-      tier: "middle",
+      class: "middle",
       tools: ["*", "!read_image"],
       subagents: ["worker", "vision"],
       systemPrompt: ["ファイル操作は禁止"],
     },
-    worker: { tier: "low", tools: ["bash"], subagents: ["chat"], systemPrompt: ["worker prompt"] },
+    worker: { class: "low", tools: ["bash"], subagents: ["chat"], systemPrompt: ["worker prompt"] },
     chat: {
-      tier: "low",
+      class: "low",
       tools: ["web_search", "web_fetch"],
       subagents: [],
       systemPrompt: ["チャット用"],
     },
-    locked: { tier: "low", tools: [], subagents: [], systemPrompt: [] },
+    locked: { class: "low", tools: [], subagents: [], systemPrompt: [] },
     vision: {
-      tier: "vision",
+      class: "vision",
       tools: ["*"],
       subagents: [],
       systemPrompt: ["visual prompt"],
@@ -107,7 +107,7 @@ interface CaptureOptions {
   findModel?: (provider: string, id: string) => { provider: string; id: string } | undefined;
   setModelSucceeds?: boolean | boolean[];
   mockFs?: boolean;
-  tierSelection?: string;
+  classSelection?: string;
 }
 
 function captureAgentsExtension(
@@ -207,7 +207,7 @@ function captureAgentsExtension(
       notificationEvents.push({ message, level });
     },
     async select(_title: string, _items: string[]) {
-      return options.tierSelection;
+      return options.classSelection;
     },
   };
   const context = {
@@ -249,8 +249,8 @@ function captureAgentsExtension(
     async runCommand(agent: string, args = "") {
       await commands.get(`agent:${agent}`)?.(args, context);
     },
-    async runTierCommand(args = "") {
-      await commands.get("tier")?.(args, context);
+    async runClassCommand(args = "") {
+      await commands.get("class")?.(args, context);
     },
     async input(
       text: string,
@@ -332,9 +332,9 @@ describe("設定", () => {
     );
   });
 
-  it("YAML を tier つき agent 設定として読み込む", () => {
+  it("YAML を class つき agent 設定として読み込む", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle:
     - provider: zai
       model: glm-5.2
@@ -342,37 +342,37 @@ tiers:
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
   manager:
-    tier: middle
+    class: middle
     tools: [read]
     subagents: []
     systemPrompt: [hello]
   vision:
-    tier: vision
+    class: vision
     tools: ["*"]
     subagents: []
     systemPrompt: []`);
     assert.equal(result.config?.default, "manager");
-    assert.deepEqual(result.config?.tiers.middle, [
+    assert.deepEqual(result.config?.classes.middle, [
       { provider: "zai", model: "glm-5.2", when: "exit 0" },
     ]);
-    assert.equal(result.config?.agents.manager?.tier, "middle");
+    assert.equal(result.config?.agents.manager?.class, "middle");
     assert.deepEqual(result.config?.agents.manager?.tools, ["read"]);
   });
 
   it("YAML アンカーで共有した prompt 要素を配列として読み込む", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 _common: &common shared
 agents:
   manager:
-    tier: middle
+    class: middle
     tools: []
     subagents: []
     systemPrompt: [*common]
   vision:
-    tier: vision
+    class: vision
     tools: ["*"]
     subagents: []
     systemPrompt: []`);
@@ -388,17 +388,17 @@ agents:
       writeFileSync(
         configPath,
         `default: manager
-tiers:
+classes:
   middle: []
   vision: []
 agents:
   manager:
-    tier: middle
+    class: middle
     tools: ["!read_image"]
     subagents: [vision]
     systemPrompt: []
   vision:
-    tier: vision
+    class: vision
     tools: ["*"]
     subagents: []
     systemPrompt: []
@@ -433,29 +433,29 @@ agents:
   it("default が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: 123
 agents: {}
-tiers: {}`);
+classes: {}`);
     assert.match(result.error ?? "", /default and agents are required/);
   });
 
   it("agents がオブジェクトでない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 agents: []
-tiers: {}`);
+classes: {}`);
     assert.match(result.error ?? "", /default and agents are required/);
   });
 
-  it("tier の候補要素がオブジェクトでない設定を拒否する", () => {
+  it("class の候補要素がオブジェクトでない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [invalid]
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /candidate must be an object/);
   });
 
   it("agent 定義がオブジェクトでない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: []
 agents:
   manager: invalid`);
@@ -464,50 +464,50 @@ agents:
 
   it("tools の要素が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: []
 agents:
-  manager: {tier: middle, tools: [123], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [123], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid tools/);
   });
 
   it("subagents の要素が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: []
 agents:
-  manager: {tier: middle, tools: [], subagents: [123], systemPrompt: []}`);
+  manager: {class: middle, tools: [], subagents: [123], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid subagents/);
   });
 
   it("systemPrompt の要素が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: []
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: [123]}`);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: [123]}`);
     assert.match(result.error ?? "", /invalid systemPrompt/);
   });
 
   it("複数の systemPrompt 要素を順序どおりに読み込み、agent 間で共有する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 _common: &common shared
 agents:
   manager:
-    tier: middle
+    class: middle
     tools: []
     subagents: []
     systemPrompt: [*common, manager-only]
   worker:
-    tier: middle
+    class: middle
     tools: []
     subagents: []
     systemPrompt: [*common, worker-only]
   vision:
-    tier: vision
+    class: vision
     tools: ["*"]
     subagents: []
     systemPrompt: []`);
@@ -515,67 +515,67 @@ agents:
     assert.deepEqual(result.config?.agents.worker?.systemPrompt, ["shared", "worker-only"]);
   });
 
-  it("tiers がない設定を拒否する", () => {
+  it("classes がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /tiers are required/);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /classes are required/);
   });
 
-  it("tier が配列でないものを拒否する", () => {
+  it("class が配列でないものを拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: {provider: zai}
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must be an array/);
   });
 
   it("provider か model のない候補を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle:
     - provider: zai
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /provider and model strings/);
   });
 
   it("when が文字列でない候補を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle:
     - {provider: zai, model: glm-5.2, when: 123}
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid when/);
   });
 
-  it("agent の tier がない設定を拒否する", () => {
+  it("agent の class がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
   manager: {tools: [], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /invalid tier/);
+    assert.match(result.error ?? "", /invalid class/);
   });
 
-  it("未定義の tier を参照する agent を拒否する", () => {
+  it("未定義の class を参照する agent を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
-  manager: {tier: high, tools: [], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /undefined tier high/);
+  manager: {class: high, tools: [], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /undefined class high/);
   });
 
   it("配列でない systemPrompt を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
   manager:
-    tier: middle
+    class: middle
     tools: []
     subagents: []
     systemPrompt: hello`);
@@ -584,7 +584,7 @@ agents:
 
   it("未定義の default agent を拒否する", () => {
     const result = parseAgentConfig(`default: missing
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
 agents: {}`);
     assert.match(result.error ?? "", /not defined/);
@@ -592,11 +592,11 @@ agents: {}`);
 
   it("未定義の委譲先を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
   manager:
-    tier: middle
+    class: middle
     tools: []
     subagents: [missing]
     systemPrompt: []`);
@@ -605,121 +605,121 @@ agents:
 
   it("廃止した profiles キーを agent 定義として受け入れない", () => {
     const result = parseAgentConfig(`default: main
-tiers:
+classes:
   high: []
 profiles:
-  main: {tier: high, tools: [], subagents: [], systemPrompt: []}`);
+  main: {class: high, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /default and agents are required/);
   });
 
   it("vision がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /vision agent is required/);
   });
 
-  it("vision が vision tier を参照しない設定を拒否する", () => {
+  it("vision が vision class を参照しない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
 agents:
-  manager: {tier: middle, tools: [], subagents: [], systemPrompt: []}
-  vision: {tier: middle, tools: ["*"], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /must use the vision tier/);
+  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
+  vision: {class: middle, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.match(result.error ?? "", /must use the vision class/);
   });
 
   it("vision が read_image を許可しない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
-  vision: {tier: vision, tools: [read], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
+  vision: {class: vision, tools: [read], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must allow read_image/);
   });
 
   it("vision 以外が read_image を否定なしで許可する設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["*"], subagents: [], systemPrompt: []}
-  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: ["*"], subagents: [], systemPrompt: []}
+  vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must exclude read_image/);
   });
 
   it("vision 以外が read_image を明示許可しても否定なしの設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: [read_image], subagents: [], systemPrompt: []}
-  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [read_image], subagents: [], systemPrompt: []}
+  vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must exclude read_image/);
   });
 
   it("main と senior の subagents に vision がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: main
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  main: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
-  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  junior: {tier: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
-  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  main: {class: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
+  senior: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  junior: {class: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
+  vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must delegate to vision/);
   });
 
   it("junior が vision を委譲先に持つ設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  senior: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  junior: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  senior: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  junior: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /junior must not delegate to vision/);
   });
 
-  it("vision が vision tier で read_image を許可する設定を受け入れる", () => {
+  it("vision が vision class で read_image を許可する設定を受け入れる", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.equal(result.error, undefined);
   });
 
   it("否定指定が ! 単体の設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: ["!"], subagents: [vision], systemPrompt: []}
-  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: ["!"], subagents: [vision], systemPrompt: []}
+  vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /bare "!" negation/);
   });
 
   it("同じツールを許可と否定の両方で指定する設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-tiers:
+classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {tier: middle, tools: [read, "!read", "*"], subagents: [vision], systemPrompt: []}
-  vision: {tier: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+  manager: {class: middle, tools: [read, "!read", "*"], subagents: [vision], systemPrompt: []}
+  vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /both allows and negates tool read/);
   });
 });
@@ -808,7 +808,7 @@ describe("待機スピナー", () => {
 });
 
 describe("拡張の接続", () => {
-  it("起動時に default agent の tier 候補を適用し、agent 表示と allowlist を更新する", async () => {
+  it("起動時に default agent の class 候補を適用し、agent 表示と allowlist を更新する", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
@@ -817,7 +817,7 @@ describe("拡張の接続", () => {
       assert.deepEqual(extension.notificationEvents, [
         { message: "agent model → zai/glm-5.2", level: "info" },
       ]);
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
       assert.deepEqual(extension.activeTools.at(-1), ["read", "bash", "subagent"]);
     } finally {
       extension.restore();
@@ -839,16 +839,16 @@ describe("拡張の接続", () => {
   it("--agent フラグの agent で開始する", async () => {
     const extension = captureAgentsExtension({ config }, { flags: { agent: "chat" } });
     try {
-      assert.deepEqual(extension.registeredFlags, ["agent", "tier"]);
+      assert.deepEqual(extension.registeredFlags, ["agent", "class"]);
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
     }
   });
 
-  it("agent 切り替え時に tier 候補のモデル、ツール、表示を切り替える", async () => {
+  it("agent 切り替え時に class 候補のモデル、ツール、表示を切り替える", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
@@ -858,7 +858,7 @@ describe("拡張の接続", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
       assert.ok(extension.notifications.includes("agent model → commandcode/gpt-5.6-luna"));
     } finally {
       extension.restore();
@@ -908,7 +908,7 @@ describe("拡張の接続", () => {
     }
   });
 
-  it("tier の全候補に失敗したら現在のモデルを維持し warning で通知する", async () => {
+  it("class の全候補に失敗したら現在のモデルを維持し warning で通知する", async () => {
     const extension = captureAgentsExtension({ config }, { setModelSucceeds: false });
     try {
       await extension.sessionStart();
@@ -918,7 +918,7 @@ describe("拡張の接続", () => {
       ]);
       assert.deepEqual(
         extension.notifications.at(-1),
-        "no available model for agent manager: tier middle",
+        "no available model for agent manager: class middle",
       );
     } finally {
       extension.restore();
@@ -984,7 +984,7 @@ describe("拡張の接続", () => {
   });
 });
 
-describe("tier によるモデルルーティング", () => {
+describe("class によるモデルルーティング", () => {
   it("プロンプト送信前に候補を再評価し、同じモデルなら切り替えない", async () => {
     const extension = captureAgentsExtension();
     try {
@@ -1021,21 +1021,21 @@ describe("tier によるモデルルーティング", () => {
       assert.equal(extension.sentMessages.length, 0);
       assert.deepEqual(
         extension.notifications.at(-1),
-        "no available model for agent manager: tier middle",
+        "no available model for agent manager: class middle",
       );
     } finally {
       extension.restore();
     }
   });
 
-  it("tier の候補が不成立でも別 tier へ降格せず現在のモデルを維持する", async () => {
+  it("class の候補が不成立でも別 class へ降格せず現在のモデルを維持する", async () => {
     const noDowngradeConfig: AgentConfig = {
       default: "highProfile",
-      tiers: {
+      classes: {
         high: [{ provider: "zai", model: "high-model" }],
         low: [{ provider: "zai", model: "low-model" }],
       },
-      agents: { highProfile: { tier: "high", tools: [], subagents: [], systemPrompt: [] } },
+      agents: { highProfile: { class: "high", tools: [], subagents: [], systemPrompt: [] } },
     };
     const extension = captureAgentsExtension(
       { config: noDowngradeConfig },
@@ -1050,7 +1050,7 @@ describe("tier によるモデルルーティング", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for agent highProfile: tier high",
+        "no available model for agent highProfile: class high",
       );
     } finally {
       extension.restore();
@@ -1071,7 +1071,7 @@ describe("tier によるモデルルーティング", () => {
       await extension.sessionStart();
       const handledPrompt = await extension.input("hello");
       assert.deepEqual(handledPrompt, { action: "handled" });
-      assert.deepEqual(stderrLines, ["no available model for agent manager: tier middle\n"]);
+      assert.deepEqual(stderrLines, ["no available model for agent manager: class middle\n"]);
       assert.equal(process.exitCode, 1);
     } finally {
       process.stderr.write = originalStderrWrite;
@@ -1106,7 +1106,7 @@ describe("tier によるモデルルーティング", () => {
     );
     try {
       await extension.sessionStart();
-      // tier はデフォルトフォールバックの候補順序であり、モデルの種類による制限は
+      // class はデフォルトフォールバックの候補順序であり、モデルの種類による制限は
       // しない。仮に画像対応除外が復活すると先頭候補が飛ばされて次候補
       // （gpt-5.6-luna）へ変わり、この assert が失敗する。
       assert.deepEqual(extension.selectedModels, [
@@ -1117,7 +1117,7 @@ describe("tier によるモデルルーティング", () => {
     }
   });
 
-  it("main の自動選択は tier 先頭の画像対応候補を除外しない", async () => {
+  it("main の自動選択は class 先頭の画像対応候補を除外しない", async () => {
     const extension = captureAgentsExtension(
       {
         config: {
@@ -1126,7 +1126,7 @@ describe("tier によるモデルルーティング", () => {
           agents: {
             ...config.agents,
             main: {
-              tier: "middle",
+              class: "middle",
               tools: ["*", "!read_image"],
               subagents: ["worker", "vision"],
               systemPrompt: [],
@@ -1152,7 +1152,7 @@ describe("tier によるモデルルーティング", () => {
     }
   });
 
-  it("vision の自動選択は vision tier の画像非対応候補を除外しない", async () => {
+  it("vision の自動選択は vision class の画像非対応候補を除外しない", async () => {
     const extension = captureAgentsExtension(
       { config },
       { findModel: (provider, id) => ({ provider, id, input: ["text"] }) },
@@ -1171,13 +1171,13 @@ describe("tier によるモデルルーティング", () => {
   });
 });
 
-describe("tier 選択", () => {
-  it("/tier <name> で実効 tier を切り替え、モデルと表示を切り替える", async () => {
+describe("class 選択", () => {
+  it("/class <name> で実効 class を切り替え、モデルと表示を切り替える", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      await extension.runTierCommand("low");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      await extension.runClassCommand("low");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1188,13 +1188,13 @@ describe("tier 選択", () => {
     }
   });
 
-  it("/tier で手動選択を解除する", async () => {
+  it("/class で手動選択を解除する", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
-      await extension.runTierCommand("low");
-      // 手動状態が解除されていれば、モデルが実効 tier の候補と異なるときに再評価で切替わる
+      await extension.runClassCommand("low");
+      // 手動状態が解除されていれば、モデルが実効 class の候補と異なるときに再評価で切替わる
       extension.context.model = { provider: "external", id: "other" };
       await extension.input("hello");
       assert.deepEqual(extension.selectedModels.at(-1), {
@@ -1206,29 +1206,29 @@ describe("tier 選択", () => {
     }
   });
 
-  it("/tier に未定義の名前は warning で無視する", async () => {
+  it("/class に未定義の名前は warning で無視する", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
-      await extension.runTierCommand("nope");
+      await extension.runClassCommand("nope");
       assert.deepEqual(extension.notificationEvents.at(-1), {
-        message: "unknown tier: nope",
+        message: "unknown class: nope",
         level: "warning",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
       assert.equal(extension.selectedModels.length, modelCountBefore);
     } finally {
       extension.restore();
     }
   });
 
-  it("/tier の引数なしは選択 UI で tier を選ぶ", async () => {
-    const extension = captureAgentsExtension({ config }, { tierSelection: "low" });
+  it("/class の引数なしは選択 UI で class を選ぶ", async () => {
+    const extension = captureAgentsExtension({ config }, { classSelection: "low" });
     try {
       await extension.sessionStart();
-      await extension.runTierCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      await extension.runClassCommand();
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1238,13 +1238,13 @@ describe("tier 選択", () => {
     }
   });
 
-  it("/tier の選択 UI をキャンセルしたら何も変更しない", async () => {
-    const extension = captureAgentsExtension({ config }, { tierSelection: undefined });
+  it("/class の選択 UI をキャンセルしたら何も変更しない", async () => {
+    const extension = captureAgentsExtension({ config }, { classSelection: undefined });
     try {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
-      await extension.runTierCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      await extension.runClassCommand();
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
       assert.equal(extension.selectedModels.length, modelCountBefore);
       // キャンセルで新たな通知・モデル適用は起きない（notifications は sessionStart の1件のみ）
       assert.deepEqual(extension.notifications, ["agent model → zai/glm-5.2"]);
@@ -1253,55 +1253,55 @@ describe("tier 選択", () => {
     }
   });
 
-  it("UI のない環境で /tier の引数を省略するとエラーを通知して変更しない", async () => {
+  it("UI のない環境で /class の引数を省略するとエラーを通知して変更しない", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       extension.context.hasUI = false;
-      await extension.runTierCommand();
+      await extension.runClassCommand();
       assert.deepEqual(extension.notificationEvents.at(-1), {
-        message: "usage: /tier <tier-name>",
+        message: "usage: /class <class-name>",
         level: "error",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
     } finally {
       extension.restore();
     }
   });
 
-  it("--tier フラグで初期 tier を指定できる", async () => {
-    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+  it("--class フラグで初期 class を指定できる", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { class: "low" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
     }
   });
 
-  it("--tier と --agent は併用でき、agent と tier は独立に選ばれる", async () => {
+  it("--class と --agent は併用でき、agent と class は独立に選ばれる", async () => {
     const extension = captureAgentsExtension(
       { config },
-      { flags: { agent: "chat", tier: "middle" } },
+      { flags: { agent: "chat", class: "middle" } },
     );
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: middle"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
     } finally {
       extension.restore();
     }
   });
 
-  it("--tier に未定義の値は warning で無視し既定 tier で開始する", async () => {
-    const extension = captureAgentsExtension({ config }, { flags: { tier: "nope" } });
+  it("--class に未定義の値は warning で無視し既定 class で開始する", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { class: "nope" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
       assert.deepEqual(extension.notificationEvents.at(-2), {
-        message: "unknown tier flag: nope",
+        message: "unknown class flag: nope",
         level: "warning",
       });
     } finally {
@@ -1309,47 +1309,47 @@ describe("tier 選択", () => {
     }
   });
 
-  it("/tier で全候補が不成立なら現在のモデルを維持し warning を通知する", async () => {
+  it("/class で全候補が不成立なら現在のモデルを維持し warning を通知する", async () => {
     const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.sessionStart();
-      await extension.runTierCommand("low");
+      await extension.runClassCommand("low");
       assert.deepEqual(extension.notificationEvents.at(-1), {
-        message: "no available model for agent manager: tier low",
+        message: "no available model for agent manager: class low",
         level: "warning",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
     } finally {
       extension.restore();
     }
   });
 
-  it("/agent 切り替えで実効 tier は切替先 agent の既定 tier に戻る", async () => {
+  it("/agent 切り替えで実効 class は切替先 agent の既定 class に戻る", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      await extension.runTierCommand("low");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      await extension.runClassCommand("low");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
       await extension.runCommand("chat");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
       await extension.runCommand("manager");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
       assert.deepEqual(extension.selectedModels.at(-1), { provider: "zai", id: "glm-5.2" });
     } finally {
       extension.restore();
     }
   });
 
-  it("/new では実効 tier を初期 tier に戻す", async () => {
-    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+  it("/new では実効 class を初期 class に戻す", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { class: "low" } });
     try {
       await extension.sessionStart("startup");
-      await extension.runTierCommand("middle");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      await extension.runClassCommand("middle");
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
       await extension.sessionStart("new");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1359,29 +1359,29 @@ describe("tier 選択", () => {
     }
   });
 
-  it("/resume では実効 tier を初期 tier に戻す", async () => {
-    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+  it("/resume では実効 class を初期 class に戻す", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { class: "low" } });
     try {
       await extension.sessionStart("startup");
-      await extension.runTierCommand("middle");
+      await extension.runClassCommand("middle");
       await extension.sessionStart("resume");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
     } finally {
       extension.restore();
     }
   });
 
-  it("/reload では実効 tier を維持する", async () => {
-    const before = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+  it("/reload では実効 class を維持する", async () => {
+    const before = captureAgentsExtension({ config }, { flags: { class: "low" } });
     let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
-      await before.runTierCommand("middle");
+      await before.runClassCommand("middle");
       await before.sessionShutdown();
 
-      after = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+      after = captureAgentsExtension({ config }, { flags: { class: "low" } });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1389,47 +1389,47 @@ describe("tier 選択", () => {
     }
   });
 
-  it("/reload 後に実効 tier が設定から消えていたら既定 tier へ戻す", async () => {
+  it("/reload 後に実効 class が設定から消えていたら既定 class へ戻す", async () => {
     const before = captureAgentsExtension();
     let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
-      await before.runTierCommand("low");
+      await before.runClassCommand("low");
       await before.sessionShutdown();
 
       const reducedConfig: AgentConfig = {
         default: "manager",
-        tiers: { middle: config.tiers.middle!, vision: config.tiers.vision! },
+        classes: { middle: config.classes.middle!, vision: config.classes.vision! },
         agents: { manager: config.agents.manager! },
       };
       after = captureAgentsExtension({ config: reducedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle"]);
     } finally {
       after?.restore();
       before.restore();
     }
   });
 
-  it("プロンプト送信前の再評価は実効 tier の候補に対して行われる", async () => {
-    const extension = captureAgentsExtension({ config }, { flags: { tier: "low" } });
+  it("プロンプト送信前の再評価は実効 class の候補に対して行われる", async () => {
+    const extension = captureAgentsExtension({ config }, { flags: { class: "low" } });
     try {
       await extension.sessionStart("startup");
-      // 実効 tier（low）の候補と一致しているため、既定 tier（middle）への再評価・切替は起きない
+      // 実効 class（low）の候補と一致しているため、既定 class（middle）への再評価・切替は起きない
       const modelCountBefore = extension.selectedModels.length;
       await extension.input("hello");
       assert.equal(extension.selectedModels.length, modelCountBefore);
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: low"]);
     } finally {
       extension.restore();
     }
   });
 
-  it("429 のフォールバックは実効 tier 内の次候補へ切り替える", async () => {
+  it("429 のフォールバックは実効 class 内の次候補へ切り替える", async () => {
     const twoCandidateLow: AgentConfig = {
       ...config,
-      tiers: {
-        ...config.tiers,
+      classes: {
+        ...config.classes,
         low: [
           { provider: "commandcode", model: "gpt-5.6-luna" },
           { provider: "zai", model: "glm-5.2" },
@@ -1438,7 +1438,7 @@ describe("tier 選択", () => {
     };
     const extension = captureAgentsExtension(
       { config: twoCandidateLow },
-      { flags: { tier: "low" } },
+      { flags: { class: "low" } },
     );
     try {
       await extension.sessionStart("startup");
@@ -1460,13 +1460,13 @@ describe("tier 選択", () => {
     }
   });
 
-  it("/tier の切り替えは cooldown を維持する", async () => {
+  it("/class の切り替えは cooldown を維持する", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
       await extension.providerResponse(429); // zai/glm-5.2 が cooldown、次候補へ切り替わる
-      await extension.runTierCommand("low");
-      await extension.runTierCommand("middle");
+      await extension.runClassCommand("low");
+      await extension.runClassCommand("middle");
       // cooldown 中の zai/glm-5.2 は候補から除外され続けるため setModel は発生しない
       assert.deepEqual(extension.selectedModels, [
         { provider: "zai", id: "glm-5.2" },
@@ -1484,7 +1484,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle (manual)"]);
     } finally {
       extension.restore();
     }
@@ -1509,7 +1509,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("restore");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
     } finally {
       extension.restore();
     }
@@ -1524,7 +1524,7 @@ describe("手動モデル選択", () => {
           agents: {
             ...config.agents,
             main: {
-              tier: "middle",
+              class: "middle",
               tools: ["*", "!read_image"],
               subagents: ["worker", "vision"],
               systemPrompt: [],
@@ -1547,14 +1547,14 @@ describe("手動モデル選択", () => {
         id: "glm-5.3-flash",
         input: ["text", "image"],
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main · tier: middle (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main · class: middle (manual)"]);
       assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
     }
   });
 
-  it("vision の model_select は vision tier 外の画像非対応モデルも受け入れて手動状態にする", async () => {
+  it("vision の model_select は vision class 外の画像非対応モデルも受け入れて手動状態にする", async () => {
     const extension = captureAgentsExtension(
       { config },
       {
@@ -1569,7 +1569,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.runCommand("vision");
       await extension.modelSelect("set", { provider: "zai", id: "glm-5.2", input: ["text"] });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision · tier: vision (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: vision · class: vision (manual)"]);
       assert.ok(!extension.notifications.some((message) => message.includes("not allowed")));
     } finally {
       extension.restore();
@@ -1705,7 +1705,7 @@ describe("手動モデル選択", () => {
       ...config,
       agents: {
         ...config.agents,
-        junior: { tier: "low", tools: ["*", "!read_image"], subagents: [], systemPrompt: [] },
+        junior: { class: "low", tools: ["*", "!read_image"], subagents: [], systemPrompt: [] },
       },
     };
     const junior = captureAgentsExtension({ config: juniorConfig });
@@ -1745,7 +1745,7 @@ describe("手動モデル選択", () => {
   });
 
   it("設定が無効なとき画像添付はモデルへ送らずエラーを返す", async () => {
-    const extension = captureAgentsExtension({ error: "tiers are required" });
+    const extension = captureAgentsExtension({ error: "classes are required" });
     try {
       await extension.sessionStart();
       const result = await extension.input("see this", "interactive", [
@@ -1768,7 +1768,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.modelSelect("set");
       await extension.runCommand("chat");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · tier: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat · class: low"]);
     } finally {
       extension.restore();
     }
@@ -1867,14 +1867,14 @@ describe("レート制限（429）時のフォールバック", () => {
   it("3候補では最大2回だけ再試行し、user message の履歴を増やさない", async () => {
     const threeCandidateConfig: AgentConfig = {
       default: "manager",
-      tiers: {
+      classes: {
         middle: [
           { provider: "zai", model: "first" },
           { provider: "zai", model: "second" },
           { provider: "zai", model: "third" },
         ],
       },
-      agents: { manager: { tier: "middle", tools: [], subagents: [], systemPrompt: [] } },
+      agents: { manager: { class: "middle", tools: [], subagents: [], systemPrompt: [] } },
     };
     const extension = captureAgentsExtension({ config: threeCandidateConfig });
     try {
@@ -2051,7 +2051,7 @@ describe("レート制限（429）時のフォールバック", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle (manual)"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle (manual)"]);
     } finally {
       extension.restore();
     }
@@ -2083,7 +2083,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension();
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: chat · tier: low (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: chat · class: low (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -2096,7 +2096,7 @@ describe("セッションライフサイクル", () => {
     let after: ReturnType<typeof captureAgentsExtension> | undefined;
     const changedConfig: AgentConfig = {
       default: "manager",
-      tiers: { middle: config.tiers.middle! },
+      classes: { middle: config.classes.middle! },
       agents: { manager: config.agents.manager! },
     };
     try {
@@ -2106,7 +2106,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension({ config: changedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle (manual)"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -2124,7 +2124,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension();
       await after.sessionStart("fork");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager · class: middle"]);
     } finally {
       after?.restore();
       before.restore();
@@ -2172,7 +2172,7 @@ describe("セッションライフサイクル", () => {
       await extension.modelSelect("set");
       await extension.sessionShutdown();
       await extension.sessionStart("new");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · tier: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle"]);
     } finally {
       extension.restore();
     }
@@ -2186,7 +2186,7 @@ describe("セッションライフサイクル", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for agent manager: tier middle",
+        "no available model for agent manager: class middle",
       );
     } finally {
       extension.restore();
@@ -2201,7 +2201,7 @@ describe("セッションライフサイクル", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for agent manager: tier middle",
+        "no available model for agent manager: class middle",
       );
     } finally {
       extension.restore();
@@ -2216,7 +2216,7 @@ describe("セッションライフサイクル", () => {
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
       assert.equal(
         extension.notifications.at(-1),
-        "no available model for agent manager: tier middle",
+        "no available model for agent manager: class middle",
       );
     } finally {
       extension.restore();
@@ -2229,7 +2229,7 @@ describe("セッションライフサイクル", () => {
       extension.context.model = { provider: "external", id: "kept" };
       await extension.runCommand("chat");
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
-      assert.equal(extension.notifications.at(-1), "no available model for agent chat: tier low");
+      assert.equal(extension.notifications.at(-1), "no available model for agent chat: class low");
     } finally {
       extension.restore();
     }
@@ -2237,7 +2237,7 @@ describe("セッションライフサイクル", () => {
 });
 
 describe("subagent", () => {
-  it("子 agent の tier、tools、systemPrompt、再委譲設定を適用する", async () => {
+  it("子 agent の class、tools、systemPrompt、再委譲設定を適用する", async () => {
     const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
       child.stdout.emit(
@@ -2322,7 +2322,7 @@ describe("subagent", () => {
         subagentSessionDir("/parent"),
       );
       assert.equal(extension.spawnCalls[0]?.args.includes("--model"), false);
-      assert.equal(extension.spawnCalls[0]?.args.includes("--tier"), false);
+      assert.equal(extension.spawnCalls[0]?.args.includes("--class"), false);
     } finally {
       extension.restore();
     }
@@ -2921,7 +2921,7 @@ describe("subagent", () => {
   it("exit 0 で出力がなく stderr がある子は stderr を失敗出力として親へ返す", async () => {
     const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
-      child.stderr.emit("data", Buffer.from("no available model for agent worker: tier low\n"));
+      child.stderr.emit("data", Buffer.from("no available model for agent worker: class low\n"));
       child.emit("close", 0);
     });
     try {
@@ -2930,7 +2930,7 @@ describe("subagent", () => {
       assert.equal(result.isError, true);
       assert.equal(
         result.content[0].text,
-        "Child failed: no available model for agent worker: tier low\n",
+        "Child failed: no available model for agent worker: class low\n",
       );
     } finally {
       extension.restore();

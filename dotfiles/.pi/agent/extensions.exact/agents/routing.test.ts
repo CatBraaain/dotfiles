@@ -13,7 +13,6 @@ import {
   type ModelCandidate,
 } from "./routing";
 
-
 type ModelFound = { provider: string; id: string };
 
 const bashExec = bashExecFrom(createLocalBashOperations());
@@ -46,7 +45,7 @@ const route = (
 ): Promise<ModelFound | null> =>
   pickCandidate(candidates, cooldowns, findIn(available), runWhen, 0);
 
-describe("tier の候補選択", () => {
+describe("class の候補選択", () => {
   it("when が通る候補を採用する", async () => {
     const candidates: ModelCandidate[] = [
       { provider: "zai", model: "glm-5.2", when: exitZeroCommand },
