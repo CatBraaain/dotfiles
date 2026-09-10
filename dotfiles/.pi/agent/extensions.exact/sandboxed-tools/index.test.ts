@@ -2653,24 +2653,44 @@ commands:
     });
   });
 
-  it("ask_permission のパラメータは path または command と reason を必須とする", () => {
+  it("ask_permission のパラメータは単一オブジェクトで reason を必須とする", () => {
     const tool = captureRegisteredTools().get("ask_permission");
     const schema = tool.parameters as {
-      anyOf?: { properties?: Record<string, unknown>; required?: string[] }[];
+      type?: string;
+      anyOf?: unknown;
       properties?: Record<string, unknown>;
       required?: string[];
     };
-    const variants = schema.anyOf ?? [schema];
-    assert.ok(
-      variants.some(
-        (variant) => variant.properties?.path !== undefined && variant.required?.includes("reason"),
+    assert.equal(schema.type, "object");
+    assert.equal(schema.anyOf, undefined);
+    assert.ok(schema.properties?.path !== undefined);
+    assert.ok(schema.properties?.command !== undefined);
+    assert.deepEqual(schema.required, ["reason"]);
+  });
+
+  it("ask_permission は path と command の両方指定では排他エラーを返す", async () => {
+    const tool = captureRegisteredTools().get("ask_permission");
+    await assert.rejects(
+      tool.execute(
+        "t",
+        { path: "/some/dir", command: "git push", reason: "probe" },
+        undefined,
+        undefined,
+        { cwd: process.cwd(), hasUI: true, ui: denyUi },
       ),
+      /requires exactly one of "path" or "command"/,
     );
-    assert.ok(
-      variants.some(
-        (variant) =>
-          variant.properties?.command !== undefined && variant.required?.includes("reason"),
-      ),
+  });
+
+  it("ask_permission は path も command も無い呼び出しで排他エラーを返す", async () => {
+    const tool = captureRegisteredTools().get("ask_permission");
+    await assert.rejects(
+      tool.execute("t", { reason: "probe" }, undefined, undefined, {
+        cwd: process.cwd(),
+        hasUI: true,
+        ui: denyUi,
+      }),
+      /requires exactly one of "path" or "command"/,
     );
   });
 

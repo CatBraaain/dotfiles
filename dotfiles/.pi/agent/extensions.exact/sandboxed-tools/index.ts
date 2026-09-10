@@ -324,9 +324,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     renderResult(result: any, options: any, theme: any, context: any) {
       if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
       if (context.isError) return renderToolError(result, theme);
-      const hasImage = Array.isArray(result.content) && result.content.some(
-        (part: { type: string }) => part.type === "image",
-      );
+      const hasImage =
+        Array.isArray(result.content) &&
+        result.content.some((part: { type: string }) => part.type === "image");
       return new Text(hasImage ? "image input" : "", 0, 0);
     },
   });
@@ -427,29 +427,35 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
       "Before starting edit-heavy work in a directory that is not yet writable (e.g. a worktree outside the allowed paths), call ask_permission on the worktree directory or its parent so the user can approve it up front.",
       'When bash rejects a command with "Command requires a reason", call ask_permission with that exact command and a reason instead of rewriting the command.',
     ],
-    parameters: Type.Union([
-      Type.Object({
-        path: Type.String({
+    // No Type.Union/anyOf here: some models (e.g. GLM-5.3-Flash) fail to generate
+    // arguments for union schemas. See SPEC §3.
+    parameters: Type.Object({
+      path: Type.Optional(
+        Type.String({
           description:
             "Directory to request write access for. Absolute path (~ allowed); relative paths resolve against the current cwd. A file path requests its parent directory subtree.",
         }),
-        reason: Type.String({
-          description:
-            "Why write access to this directory subtree is needed. Shown to the user in the confirmation dialog as a decision hint; keep it to one or two sentences.",
-        }),
-      }),
-      Type.Object({
-        command: Type.String({
+      ),
+      command: Type.Optional(
+        Type.String({
           description:
             'Exact command string that bash rejected with "Command requires a reason". Pass it verbatim; the approval lets this same command run once via bash.',
         }),
-        reason: Type.String({
-          description:
-            "Why this command is necessary. Shown to the user in the confirmation dialog as a decision hint; keep it to one or two sentences.",
-        }),
+      ),
+      reason: Type.String({
+        description:
+          "Why write access or command execution is needed. Shown to the user in the confirmation dialog as a decision hint; keep it to one or two sentences.",
       }),
-    ]),
+    }),
     async execute(_id, params, _signal, _onUpdate, context) {
+      const hasPath = typeof params.path === "string";
+      const hasCommand = typeof params.command === "string";
+      if (hasPath === hasCommand) {
+        throw new Error(
+          'ask_permission requires exactly one of "path" or "command", plus "reason". ' +
+            'Example: {"path": "/some/dir", "reason": "..."} or {"command": "git push", "reason": "..."}',
+        );
+      }
       if (typeof params.command === "string") {
         const outcome = await sandbox.requestCommandPermission(
           params.command,
