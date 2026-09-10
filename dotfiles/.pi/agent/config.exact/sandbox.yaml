@@ -34,12 +34,17 @@ write:
       - ~/mirrors
   - { deny: ~/.pi/agent/config/sandbox.yaml }
 
-credentials: []
+# package registry tokens: hidden from bash so publish cannot authenticate
+credentials:
+  - ~/.npmrc
+  - ~/.bunfig.toml
 
 commands:
   - allow: ".*"
   - ask:
-      - '^(npm|bun|pnpm) publish(\s|$)'
+      # publish-ish action as the 2nd-4th word of any command (npm publish,
+      # wxt submit, bunx --bun wxt publish, just publish, ...)
+      - '^\S+( \S+){0,2} (publish|submit|upload)(\s|$)'
       - '^gh pr create(\s|$)'
       - '^git push(\s|$)'
   # destructive or privileged commands: agent must request approval with a
