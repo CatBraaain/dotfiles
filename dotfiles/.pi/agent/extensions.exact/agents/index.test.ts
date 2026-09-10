@@ -1464,13 +1464,15 @@ describe("class 選択", () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      await extension.providerResponse(429); // zai/glm-5.2 が cooldown、次候補へ切り替わる
+      // HTTP 429 経路の cooldown は z-ai 以外のモデルで作る（z-ai は zai-concurrency-retry 拡張の担当）
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await extension.providerResponse(429); // commandcode/gpt-5.6-luna が cooldown、fallback で zai へ戻る
       await extension.runClassCommand("low");
       await extension.runClassCommand("middle");
-      // cooldown 中の zai/glm-5.2 は候補から除外され続けるため setModel は発生しない
+      // cooldown 中の commandcode は候補から除外され続けるため、class 切り替えで setModel は発生しない
       assert.deepEqual(extension.selectedModels, [
         { provider: "zai", id: "glm-5.2" },
-        { provider: "commandcode", id: "gpt-5.6-luna" },
+        { provider: "zai", id: "glm-5.2" },
       ]);
     } finally {
       extension.restore();
