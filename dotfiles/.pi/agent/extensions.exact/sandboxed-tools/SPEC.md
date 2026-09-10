@@ -75,7 +75,7 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 選択ダイアログの表示行は、問いかけ、確認対象（パスまたはコマンド）、`reason: <理由>` の行（`ask_permission`（§3）のみ）、設定パターンの行の順とする。`confirm` に置き換わる場合、問いかけは確認の質問として表示し、メッセージは確認対象以下の行とする。
 
-選択ダイアログ（および `confirm` に置き換わる場合のメッセージ）には、確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob 展開後の絶対パスを、コマンドはブレース展開後のパターンを表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
+選択ダイアログ（および `confirm` に置き換わる場合のメッセージ）には、確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob 展開後の絶対パスを、コマンドは設定されたパターンを表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
 
 `ask_permission`（§3）の確認ダイアログの問いかけは、パスのとき `Allow write access to directory subtree?`、コマンドのとき `Allow command execution?` とし、確認対象に続けてエージェントが指定した要求理由を `reason: <理由>` の行で表示する。
 
@@ -240,26 +240,27 @@ network は開放。fs 制限の対象外。
 | `read`        | read / grep / find / ls のパスアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決）                                                                              |
 | `write`       | write / edit のパスアクション（§2・§3）。`allow` の固定パスは起動時に作成される（§6.1）                                                                                         |
 | `credentials` | bash の sandbox に read-only で bind するパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
-| `commands`    | コマンドのアクション（§4）。`"*"` は全コマンドにマッチ                                                                                                                          |
+| `commands`    | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する                                          |
 
-- `read` / `write` / `commands` は、アクション別の3リストではなく `{action: pattern}` または `{action: [patterns...]}` の要素からなるフラットなリストで書く。`action` は read・write では `allow` / `ask` / `deny` のいずれか、commands では `ask_with_reason` も使える4値のいずれかで、要素ごとに1つだけ宣言する。
+- `read` / `write` / `commands` は、アクション別の3リストではなく `{action: pattern}` または `{action: [patterns...]}` の要素からなるフラットなリストで書く。`action` は read・write では `allow` / `ask` / `deny` のいずれか、commands では `ask_with_reason` も使える4値のいずれかで、要素ごとに1つだけ宣言する。パターンの記法は read / write が glob（§3）、commands が正規表現である。
 - 各リストは要素を上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
 - 実値（既定エントリ）は `sandbox.yaml` を参照。
 - `read` / `write` / `commands` のセクションがリストでない、要素がマッピングでない、要素が複数のアクションを宣言する、アクション名が read・write では `allow` / `ask` / `deny` 以外・commands では `allow` / `ask` / `ask_with_reason` / `deny` 以外、パターンが文字列でも文字列のリストでもない場合、`sandbox.yaml` の読み込みは失敗し、全セクションが未設定（= `deny`）として動作する。パターンリスト内の非文字列要素は無視される。
+- `commands` のパターンが正規表現として解釈できないとき、そのパターンのみが無視され（マッチしない）、pi の起動時に無効だったパターンを列挙した警告メッセージを表示する。読み込み自体は成功し、他のセクション・パターンの動作は変わらない。
 
 記法の例（`commands`）:
 
 ```yaml
 commands:
-  - { allow: "*" }
-  - { ask: [git push, "gh pr create"] }
-  - { ask_with_reason: [sudo, "chmod -R"] }
-  - { ask: systemctl }
-  - { allow: "systemctl status" }
-  - { deny: [systemctl reboot, "{shutdown,reboot,poweroff,halt}"] }
+  - { allow: ".*" }
+  - { ask: ['^git push\b', '^gh pr create\b'] }
+  - { ask_with_reason: ['^sudo\b', '^chmod -R\b'] }
+  - { ask: '^systemctl\b' }
+  - { allow: '^systemctl (status|show)' }
+  - { deny: '^systemctl (reboot|poweroff|halt|shutdown)' }
 ```
 
-> パス・コマンドの照合ルール（前置一致・トークン一致・`"*"` の扱い等）は実装で決定する。本 spec は「何が設定可能か」のみを規定する。
+> パスの glob 照合ルール（§3）とコマンド正規表現の評価対象（セグメントの切り方等）は実装で決定する。本 spec は「何が設定可能か」のみを規定する。
 
 ### 6.1 bind とパスの実在保証
 

@@ -179,9 +179,9 @@ function stderrLineUpdater(
   };
 }
 
-export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
+export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: string): void {
   const cwd = process.cwd();
-  const sandbox = new Sandbox(cwd);
+  const sandbox = new Sandbox(cwd, configPath);
   const readTool = createReadTool(cwd);
   const writeTool = createWriteTool(cwd);
   const editTool = createEditTool(cwd);
@@ -521,5 +521,16 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI): void {
     renderResult(result: any, options: any, theme: any, context: any) {
       return renderTextToolResult(result, options, theme, context, "ask_permission");
     },
+  });
+
+  // Warn once at session start about command patterns that failed regex
+  // compilation and are therefore ignored (SPEC §6).
+  pi.on("session_start", (_event, ctx) => {
+    if (sandbox.invalidCommandPatterns.length === 0) return;
+    const patterns = sandbox.invalidCommandPatterns.map((p) => JSON.stringify(p)).join(", ");
+    ctx.ui.notify(
+      `sandboxed-tools: ignoring invalid command regex patterns: ${patterns}`,
+      "warning",
+    );
   });
 }

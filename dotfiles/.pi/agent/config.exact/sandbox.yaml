@@ -37,52 +37,31 @@ write:
 credentials: []
 
 commands:
-  - allow: "*"
+  - allow: ".*"
   - ask:
-      - "{npm,bun,pnpm} publish"
-      - gh pr create
-      - git push
+      - '^(npm|bun|pnpm) publish\b'
+      - '^gh pr create\b'
+      - '^git push\b'
   # destructive or privileged commands: agent must request approval with a
   # reason via ask_permission, then re-send the same bash command (SPEC §4)
   - ask_with_reason:
       # git
-      - git reset --hard
-      - git clean -fd
-      - git replace
-      - git update-ref
-      - git reflog expire
-      - git gc
-      - git prune
+      - '^git (reset --hard|clean -fd|replace|update-ref|reflog expire|gc|prune)\b'
       # system
-      - sudo
-      - systemctl
-      - crontab
-      - chmod -R
-      - chown -R
+      - '^sudo\b'
+      - '^systemctl\b'
+      - '^crontab\b'
+      - '^(chmod|chown) -R\b'
   # systemctl: read-only subcommands run without confirmation (last match wins)
+  # (\s|$) so only the enumerated subcommands are allowed, not hyphen variants
   - allow:
-      - systemctl status
-      - systemctl show
-      - systemctl cat
-      - systemctl help
-      - systemctl list-*
-      - systemctl is-*
-      - systemctl get-default
-      - systemctl show-environment
+      - '^systemctl (status|show|cat|help|get-default|show-environment)(\s|$)'
+      - "^systemctl (list-|is-)"
   # power/session control, incl. via systemctl, is denied outright
   - deny:
-      - systemctl reboot
-      - systemctl poweroff
-      - systemctl halt
-      - systemctl shutdown
-      - systemctl suspend
-      - systemctl hibernate
-      - systemctl hybrid-sleep
-      - systemctl suspend-then-hibernate
-      - systemctl kexec
-      - systemctl exit
+      - '^systemctl (reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit)\b'
   - deny:
-      - doas
-      - "{mkfs,mkfs.ext2,mkfs.ext3,mkfs.ext4,mkfs.xfs,mkfs.btrfs,mkfs.vfat,mkfs.ntfs,mkfs.exfat}"
-      - "{wipefs,parted,fdisk,sfdisk,sgdisk}"
-      - "{shutdown,reboot,poweroff,halt}"
+      - '^doas\b'
+      - '^(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b'
+      - '^(wipefs|parted|fdisk|sfdisk|sgdisk)\b'
+      - '^(shutdown|reboot|poweroff|halt)\b'

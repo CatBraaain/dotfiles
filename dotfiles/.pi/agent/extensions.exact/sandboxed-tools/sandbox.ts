@@ -61,7 +61,14 @@ export type CommandPermissionRequest =
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
 type PathRuleEntry = { action: PathAction; patterns: string[] };
-type CommandRuleEntry = { action: CommandAction; patterns: string[] };
+export type CommandRuleEntry = { action: CommandAction; patterns: string[] };
+
+/** A command pattern with its configured regex source and compiled form (SPEC §6). */
+export type CompiledCommandPattern = { source: string; regex: RegExp };
+export type CompiledCommandRuleEntry = {
+  action: CommandAction;
+  patterns: CompiledCommandPattern[];
+};
 
 type SandboxedToolsConfig = {
   read?: PathRuleEntry[];
@@ -373,28 +380,45 @@ export function splitCommandSegments(command: string): string[] {
 
 type CommandPatternMatch = { pattern: string; index: number; length: number };
 
+/**
+ * Compile configured command patterns to regexes (SPEC §6). Patterns that do
+ * not compile are dropped (they never match) and reported in `invalidPatterns`
+ * so the session start can warn about them.
+ */
+export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefined): {
+  entries: CompiledCommandRuleEntry[];
+  invalidPatterns: string[];
+} {
+  const compiled: CompiledCommandRuleEntry[] = [];
+  const invalidPatterns: string[] = [];
+  for (const entry of entries ?? []) {
+    const patterns: CompiledCommandPattern[] = [];
+    for (const source of entry.patterns) {
+      try {
+        patterns.push({ source, regex: new RegExp(source) });
+      } catch {
+        invalidPatterns.push(source);
+      }
+    }
+    compiled.push({ action: entry.action, patterns });
+  }
+  return { entries: compiled, invalidPatterns };
+}
+
 function findCommandPattern(
-  patterns: string[] | undefined,
+  patterns: CompiledCommandPattern[] | undefined,
   candidate: string,
 ): CommandPatternMatch | undefined {
   for (const pattern of patterns ?? []) {
-    for (const expandedPattern of expandBraces(pattern)) {
-      if (expandedPattern === "*")
-        return { pattern: expandedPattern, index: 0, length: candidate.length };
-      if (hasGlob(expandedPattern)) {
-        const match = globToRegExp(expandedPattern).exec(candidate);
-        if (match !== null)
-          return { pattern: expandedPattern, index: match.index, length: match[0].length };
-      } else if (candidate === expandedPattern || candidate.startsWith(`${expandedPattern} `)) {
-        return { pattern: expandedPattern, index: 0, length: expandedPattern.length };
-      }
-    }
+    const match = pattern.regex.exec(candidate);
+    if (match !== null)
+      return { pattern: pattern.source, index: match.index, length: match[0].length };
   }
   return undefined;
 }
 
 export function resolveCommandActionMatch(
-  entries: CommandRuleEntry[] | undefined,
+  entries: CompiledCommandRuleEntry[] | undefined,
   command: string,
 ): CommandActionMatch {
   if (!entries) return { action: "deny" };
@@ -432,7 +456,7 @@ export function resolveCommandActionMatch(
 }
 
 export function resolveCommandAction(
-  entries: CommandRuleEntry[] | undefined,
+  entries: CompiledCommandRuleEntry[] | undefined,
   command: string,
 ): CommandAction {
   return resolveCommandActionMatch(entries, command).action;
@@ -659,6 +683,10 @@ export class Sandbox {
   // One global queue; split per dialog kind if contention ever matters.
   private uiQueue: Promise<void> = Promise.resolve();
   private readonly config: SandboxedToolsConfig;
+  /** Command entries with patterns compiled to regex once at startup (SPEC §6). */
+  private readonly commandEntries: CompiledCommandRuleEntry[];
+  /** Configured command patterns that failed regex compilation, deduped in config order (SPEC §6). */
+  readonly invalidCommandPatterns: string[];
   /** Glob expansions are computed once per resolved pattern (§3 startup semantics). */
   private readonly globCache = new Map<string, string[]>();
   private readonly runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
@@ -673,6 +701,9 @@ export class Sandbox {
     } catch {
       this.config = {};
     }
+    const compiledCommands = compileCommandRuleEntries(this.config.commands);
+    this.commandEntries = compiledCommands.entries;
+    this.invalidCommandPatterns = [...new Set(compiledCommands.invalidPatterns)];
     this.prepareWriteDirectories();
     this.warmGlobCache();
   }
@@ -1053,7 +1084,7 @@ export class Sandbox {
     reason: string,
     context: ToolContext,
   ): Promise<CommandPermissionRequest> {
-    const { action, matched, matchSpan } = resolveCommandActionMatch(this.config.commands, command);
+    const { action, matched, matchSpan } = resolveCommandActionMatch(this.commandEntries, command);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "allow") return { status: "already granted", command };
     if (action === "ask")
@@ -1107,7 +1138,7 @@ export class Sandbox {
    * dialog (config allow). Denial throws.
    */
   authorizeCommand(command: string, context: ToolContext): Promise<boolean> {
-    const { action, matched, matchSpan } = resolveCommandActionMatch(this.config.commands, command);
+    const { action, matched, matchSpan } = resolveCommandActionMatch(this.commandEntries, command);
     if (action === "allow") return Promise.resolve(false);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "ask_with_reason") {
