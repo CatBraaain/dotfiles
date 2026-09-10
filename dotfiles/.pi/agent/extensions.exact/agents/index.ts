@@ -42,6 +42,7 @@ import {
   type ToolResultLike,
   type ToolTheme,
 } from "../shared/tool-format.ts";
+import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
 
 export type Agent = string;
 
@@ -1230,6 +1231,12 @@ export default function agentsExtension(
   pi.on("after_provider_response", async (event, ctx) => {
     if (event.status !== 429 || !ctx.model) return;
 
+    // Z.AI は 429 の body に同時実行系（1302/1305）と quota 系（1113, 1308-1321）の
+    // 両方を返し、HTTP レスポンスだけでは区別できない。z-ai モデルはここで fallback
+    // せず、最終 assistant エラーの文言判定（message_end）に任せる。同時実行系は
+    // zai-concurrency-retry 拡張が待機リトライする。
+    if (isZaiProvider(ctx.model.provider)) return;
+
     const rateLimitedModelKey = modelKey(ctx.model);
     const cooldownMs = parseRetryAfter(event.headers["retry-after"]) ?? DEFAULT_COOLDOWN_MS;
     const fallbackSucceeded = await fallbackAfterRateLimit(rateLimitedModelKey, cooldownMs, ctx);
@@ -1241,6 +1248,11 @@ export default function agentsExtension(
     if (message.role !== "assistant" || message.stopReason !== "error") return;
 
     const rateLimitedModelKey = modelKey({ provider: message.provider, id: message.model });
+
+    // z-ai の同時実行系エラー（1302/1305）は別モデルに切り替えても解決しないため
+    // fallback 対象外。zai-concurrency-retry 拡張が待機リトライする。
+    if (isZaiProvider(message.provider) && isZaiConcurrencyLimited(message.errorMessage)) return;
+
     if (httpRateLimitAwaitingMessage?.modelKey === rateLimitedModelKey) {
       const { fallbackSucceeded } = httpRateLimitAwaitingMessage;
       httpRateLimitAwaitingMessage = undefined;

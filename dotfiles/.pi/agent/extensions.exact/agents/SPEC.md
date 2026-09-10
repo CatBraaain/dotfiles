@@ -158,8 +158,10 @@ stateDiagram-v2
 
 | 入力                | レート制限として扱う条件                                                                    | 待機期間                     |
 | ------------------- | ------------------------------------------------------------------------------------------- | ---------------------------- |
-| HTTPレスポンス      | status が `429`                                                                             | `Retry-After` ヘッダーに従う |
+| HTTPレスポンス      | status が `429`（z-ai モデルを除く、下記の例外）                                            | `Retry-After` ヘッダーに従う |
 | 最終assistantエラー | `stopReason` が `error` で、`errorMessage` が「レート制限エラーパターン」に一致する（下表） | 30分                         |
+
+**z-ai モデルの例外**: Z.AI は 429 の body に同時実行系（`1302`/`1305`）と quota 系（`1113`、`1308`〜`1321`）の両方を返し、HTTPレスポンスだけでは区別できない。そこで z-ai モデルは HTTPレスポンスでは fallback せず、最終assistantエラーの文言判定に委ねる。最終assistantエラーのうち同時実行系は `zai-concurrency-retry` 拡張が待機リトライするため fallback 対象外、quota 系は従来どおり本 spec の fallback に従う（判定経路が最終assistantエラーのみのため、cooldown 待機期間は 30 分固定）。判定は `shared/zai-concurrency.ts` の共有判定を使う。
 
 HTTPレスポンスの `Retry-After` は次のように解釈する。
 
@@ -174,6 +176,8 @@ HTTPレスポンスの `Retry-After` は次のように解釈する。
 HTTP 429 はステータスコードで判定するため全プロバイダ共通。最終assistantエラーは pi-ai が文字列化するため、プロバイダファミリごとの文言を大文字小文字を区別せず部分一致で判定する。一過性の障害（5xx、`overloaded`、`service unavailable`、タイムアウト等）は含めず、pi 本体の再試行に任せる。
 
 パターンの一覧の正本は実装（`routing.ts` の `RATE_LIMIT_ERROR_PATTERNS`）が持つ。本 spec は一覧を転記しない。パターンの追加・変更は実装側で行うが、判定方法（大文字小文字を区別しない部分一致）と、一過性の障害を含めない方針はこの節の規定に従う。
+
+除外: z-ai モデルの同時実行系エラー（`1302`/`1305`、判定は `shared/zai-concurrency.ts` の `isZaiConcurrencyLimited`）は、文言がこのパターンに一致しても fallback を行わない。担当は `zai-concurrency-retry` 拡張（`zai-concurrency-retry/SPEC.md`）。
 
 ```mermaid
 flowchart TD

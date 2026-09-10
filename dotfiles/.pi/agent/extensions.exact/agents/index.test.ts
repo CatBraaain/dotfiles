@@ -1780,12 +1780,15 @@ describe("レート制限（429）時のフォールバック", () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
+      // HTTP 429 経路の fallback は z-ai 以外のモデルで検証する（z-ai は同時実行系の
+      // 可能性があるため zai-concurrency-retry 拡張の担当）
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       await extension.providerResponse(429);
       const replacement = await extension.messageEnd({
         role: "assistant",
         stopReason: "error",
-        provider: "zai",
-        model: "glm-5.2",
+        provider: "commandcode",
+        model: "gpt-5.6-luna",
         errorMessage: "provider error",
       });
       assert.equal(
@@ -1794,14 +1797,73 @@ describe("レート制限（429）時のフォールバック", () => {
       );
       assert.equal(replacement.message.errorMessage.includes("provider error"), false);
       assert.deepEqual(extension.selectedModels.at(-1), {
-        provider: "commandcode",
-        id: "gpt-5.6-luna",
+        provider: "zai",
+        id: "glm-5.2",
       });
       assert.deepEqual(extension.notificationEvents.at(-1), {
-        message: "rate limited on zai/glm-5.2; switched to commandcode/gpt-5.6-luna",
+        message: "rate limited on commandcode/gpt-5.6-luna; switched to zai/glm-5.2",
         level: "warning",
       });
       assert.equal(extension.sentMessages.length, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("z-ai モデルの HTTP 429 は fallback せず最終エラー文言の判定に委ねる", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      await extension.providerResponse(429);
+
+      // sessionStart で選ばれた zai から切り替わらない（cooldown も記録されない）
+      assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
+      assert.deepEqual(extension.notifications, ["agent model → zai/glm-5.2"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("z-ai の同時実行系エラー（1302/1305）は fallback しない", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const replacement = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage: '{"error":{"code":"1302","message":"Rate limit reached for requests"}}',
+      });
+
+      assert.equal(replacement, undefined);
+      assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("z-ai の quota 系エラー（1310）は従来どおり fallback する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const replacement = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage:
+          '{"error":{"code":"1310","message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-01-01 00:00"}}',
+      });
+
+      assert.equal(
+        replacement.message.errorMessage,
+        "429 rate limit error; already switched to a fallback model",
+      );
+      assert.deepEqual(extension.selectedModels.at(-1), {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
     } finally {
       extension.restore();
     }
@@ -1839,6 +1901,7 @@ describe("レート制限（429）時のフォールバック", () => {
     try {
       extension.context.hasUI = false;
       await extension.sessionStart();
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       await extension.providerResponse(429);
 
       assert.deepEqual(extension.notifications, []);
@@ -1852,12 +1915,14 @@ describe("レート制限（429）時のフォールバック", () => {
     let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
+      before.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       await before.providerResponse(429, { "retry-after": "120" });
       await before.sessionShutdown();
 
       after = captureAgentsExtension();
       await after.sessionStart("resume");
-      assert.deepEqual(after.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
+      // commandcode が cooldown 中なので、cooldown 外の zai が選ばれる
+      assert.deepEqual(after.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
     } finally {
       after?.restore();
       before.restore();
@@ -1961,13 +2026,14 @@ describe("レート制限（429）時のフォールバック", () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       await extension.providerResponse(429);
       const selectedModelCount = extension.selectedModels.length;
       const replacement = await extension.messageEnd({
         role: "assistant",
         stopReason: "error",
-        provider: "zai",
-        model: "glm-5.2",
+        provider: "commandcode",
+        model: "gpt-5.6-luna",
         errorMessage: "Error: 429: too many requests",
       });
       assert.equal(
@@ -2046,10 +2112,11 @@ describe("レート制限（429）時のフォールバック", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("set");
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       await extension.providerResponse(429);
       assert.deepEqual(extension.selectedModels.at(-1), {
-        provider: "commandcode",
-        id: "gpt-5.6-luna",
+        provider: "zai",
+        id: "glm-5.2",
       });
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager · class: middle (manual)"]);
     } finally {
@@ -2136,7 +2203,8 @@ describe("セッションライフサイクル", () => {
     let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
-      await before.providerResponse(429); // zai/glm-5.2 が cooldown
+      before.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await before.providerResponse(429); // commandcode/gpt-5.6-luna が cooldown
       await before.sessionShutdown();
 
       after = captureAgentsExtension();
@@ -2153,12 +2221,14 @@ describe("セッションライフサイクル", () => {
     let after: ReturnType<typeof captureAgentsExtension> | undefined;
     try {
       await before.sessionStart("startup");
-      await before.providerResponse(429); // zai/glm-5.2 が cooldown
+      before.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await before.providerResponse(429); // commandcode/gpt-5.6-luna が cooldown
       await before.sessionShutdown();
 
       after = captureAgentsExtension();
       await after.sessionStart("resume");
-      assert.deepEqual(after.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
+      // cooldown 維持で commandcode は除外され、cooldown 外の zai が選ばれる
+      assert.deepEqual(after.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
     } finally {
       after?.restore();
       before.restore();
