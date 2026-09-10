@@ -71,7 +71,7 @@ await writeFile("generated.exact/config", "value\n");
 
 dot 変換は、名前が `.pre-chezmoi.ts` と完全一致するエントリを対象外とする。これにより `dist/` 内のフックとフック生成物の `.pre-chezmoi.ts` は `dot_` に変換されず、chezmoi の管理対象にならない。
 
-ローカルフックで生成した ChezMoi の `run_before` ファイルは `dist/` に残る。ローカルフックは `run_before` より前に、`pre-chezmoi.ts` の実行中に完了する。
+ローカルフックで生成した ChezMoi の `run_before` ファイルも他の生成物と同じ既存変換を受け、変換後の名前で `dist/` に残る。ローカルフックは `run_before` より前に、`pre-chezmoi.ts` の実行中に完了する。
 
 ## 成功
 
@@ -83,7 +83,6 @@ dot 変換は、名前が `.pre-chezmoi.ts` と完全一致するエントリを
 
 次のいずれかが起きたとき、終了コード `0` 以外で終了する。
 
-- フックの起動に失敗した
 - フックが終了コード `0` 以外で終了した
 - フックがシグナルで終了した
 - フックまたは既存変換でエラーが発生した

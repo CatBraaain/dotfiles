@@ -45,6 +45,7 @@ const windowsDestinations: Record<string, string> = {
 };
 
 afterEach(async () => {
+  delete process.env.PRE_CHEZMOI_HOOK_ENV_TEST;
   await Promise.all(
     fixtureRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -62,6 +63,9 @@ async function fixture(files: Record<string, string>, prefix = "pre-chezmoi-"): 
 }
 
 const json = (value: unknown) => JSON.stringify(value);
+
+const readJson = async (root: string, path: string): Promise<unknown> =>
+  JSON.parse(await readFile(join(root, path), "utf-8"));
 
 // Resolves dist paths like real chezmoi (dot_x -> .x, exact_x -> x, per segment),
 // with the trailing newline a real `chezmoi target-path` stdout carries.
@@ -174,7 +178,7 @@ describe("pre-chezmoi", () => {
   });
 
   it("moves every Windows mapped directory and leaves unmapped files", async () => {
-    const skip = new Set(["gemini", "docker"]);
+    const skip = new Set(["docker"]);
     const sources = Object.fromEntries(
       Object.keys(windowsDestinations)
         .filter((source) => !skip.has(source))
@@ -190,7 +194,6 @@ describe("pre-chezmoi", () => {
     await run(root, "win32");
 
     assert.equal(existsSync(join(root, "dist/custom/settings.json")), true);
-    assert.equal(existsSync(join(root, "dist/dot_gemini")), false);
     assert.equal(existsSync(join(root, "dist/unmapped")), true);
     for (const source of Object.keys(windowsDestinations)) {
       if (skip.has(source)) continue;
@@ -481,6 +484,179 @@ describe("pre-chezmoi", () => {
     const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
     assert.equal(exitCode, 1);
     assert.match(stderr, /not in .*elsewhere/);
+  });
+
+  it("runs hooks parent-first and skips node_modules", async () => {
+    const root = await fixture({
+      "dotfiles/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("_order.log", "root\\n");`,
+      "dotfiles/.pi/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("../_order.log", "pi\\n");`,
+      "dotfiles/.pi/agent/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("../../_order.log", "agent\\n");`,
+      "dotfiles/B/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("../_order.log", "B\\n");`,
+      "dotfiles/a/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("../_order.log", "a\\n");`,
+      "dotfiles/node_modules/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("../_order.log", "node_modules\\n");`,
+      "dotfiles/x/node_modules/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("../_order.log", "nested node_modules\\n");`,
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    // Same parent folder: UTF-16 order ("B" < "a"); nested folders come first.
+    assert.equal(
+      await readFile(join(root, "dist/_order.log"), "utf-8"),
+      "root\npi\nagent\nB\na\n",
+    );
+    assert.equal(existsSync(join(root, "dist/node_modules")), false);
+    assert.equal(existsSync(join(root, "dist/x/node_modules")), false);
+  });
+
+  it("runs each hook with its own dist folder, the source path, and inherited env", async () => {
+    process.env.PRE_CHEZMOI_HOOK_ENV_TEST = "inherited";
+    const hook = [
+      `import { writeFile } from "node:fs/promises";`,
+      `await writeFile("meta.json", JSON.stringify({`,
+      `  cwd: process.cwd(),`,
+      `  source: import.meta.dir,`,
+      `  env: process.env.PRE_CHEZMOI_HOOK_ENV_TEST,`,
+      `}));`,
+      "",
+    ].join("\n");
+    const root = await fixture({
+      "dotfiles/.pre-chezmoi.ts": hook,
+      "dotfiles/.pi/agent/.pre-chezmoi.ts": hook,
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    assert.deepEqual(await readJson(root, "dist/meta.json"), {
+      cwd: join(root, "dist"),
+      source: join(root, "dotfiles"),
+      env: "inherited",
+    });
+    assert.deepEqual(await readJson(root, "dist/dot_pi/agent/meta.json"), {
+      cwd: join(root, "dist/.pi/agent"),
+      source: join(root, "dotfiles/.pi/agent"),
+      env: "inherited",
+    });
+  });
+
+  it("applies every existing conversion to hook output", async () => {
+    const root = await fixture({
+      "dotfiles/.pre-chezmoi.ts": [
+        `import { mkdir, writeFile } from "node:fs/promises";`,
+        `await mkdir(".config/hooks", { recursive: true });`,
+        `await writeFile(".config/hooks/setup.sh.executable", "echo hi\\n");`,
+        `await writeFile(".hidden", "x");`,
+        `await writeFile("run_before_setup.sh", "echo setup\\n");`,
+        `await mkdir("generated.exact", { recursive: true });`,
+        `await writeFile("generated.exact/config", "value\\n");`,
+        `await mkdir("docker", { recursive: true });`,
+        `await writeFile("docker/hooks.json", "{}");`,
+        "",
+      ].join("\n"),
+      "dotfiles/.pi/agent/.pre-chezmoi.ts": [
+        `import { writeFile } from "node:fs/promises";`,
+        `await writeFile("settings.json", JSON.stringify({ base: true }));`,
+        `await writeFile("settings.merge.json", JSON.stringify({ "extra.$append": [1] }));`,
+        "",
+      ].join("\n"),
+      "home/.pi/agent/settings.json": json({ keep: "home", extra: [] }),
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    assert.equal(existsSync(join(root, "dist/dot_config/hooks/executable_setup.sh")), true);
+    assert.equal(existsSync(join(root, "dist/dot_hidden")), true);
+    assert.equal(existsSync(join(root, "dist/run_before_setup.sh")), true);
+    assert.equal(existsSync(join(root, "dist/exact_generated/config")), true);
+    assert.equal(existsSync(join(root, "dist/dot_docker/desktop/hooks.json")), true);
+    const expected = { keep: "home", extra: [1], base: true };
+    assert.equal(
+      await readFile(join(root, "dist/dot_pi/agent/settings.json"), "utf-8"),
+      `${JSON.stringify(expected, null, 2)}\n`,
+    );
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/settings.merge.json")), false);
+  });
+
+  it("keeps hook files in dist without dot conversion", async () => {
+    const root = await fixture({
+      "dotfiles/.pi/agent/.pre-chezmoi.ts": [
+        `import { mkdir, writeFile } from "node:fs/promises";`,
+        `await mkdir("sub", { recursive: true });`,
+        `await writeFile("sub/.pre-chezmoi.ts", "// generated\\n");`,
+        "",
+      ].join("\n"),
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/.pre-chezmoi.ts")), true);
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/sub/.pre-chezmoi.ts")), true);
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/dot_pre-chezmoi.ts")), false);
+    assert.equal(existsSync(join(root, "dist/dot_pi/agent/sub/dot_pre-chezmoi.ts")), false);
+  });
+
+  it("does not run hooks generated by hooks", async () => {
+    const root = await fixture({
+      "dotfiles/.pre-chezmoi.ts": [
+        `import { mkdir, writeFile } from "node:fs/promises";`,
+        `await mkdir("gen", { recursive: true });`,
+        `await writeFile("gen/.pre-chezmoi.ts", "process.exit(1);\\n");`,
+        "",
+      ].join("\n"),
+    });
+    const proc = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
+
+    const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.equal(existsSync(join(root, "dist/gen/.pre-chezmoi.ts")), true);
+  });
+
+  it("forwards hook stdout and stderr through the parent process", async () => {
+    const root = await fixture({
+      "dotfiles/.pre-chezmoi.ts": `console.log("hook stdout");\nconsole.error("hook stderr");`,
+    });
+    const proc = Bun.spawn(["bun", script], {
+      cwd: root,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    assert.equal(exitCode, 0);
+    assert.match(stdout, /hook stdout/);
+    assert.match(stderr, /hook stderr/);
+  });
+
+  it("stops on hook failure with a relative path and skips the rest", async () => {
+    const root = await fixture({
+      "dotfiles/a/.pre-chezmoi.ts": `process.exit(3);`,
+      "dotfiles/b/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("hook-ran", "b\\n");`,
+      "dotfiles/.config/settings": "value",
+    });
+    const proc = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
+
+    const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    assert.equal(exitCode, 1);
+    assert.match(stderr, /local pre-chezmoi hook failed: a\/\.pre-chezmoi\.ts \(exit code 3\)/);
+    assert.equal(existsSync(join(root, "dist/b/hook-ran")), false);
+    assert.equal(existsSync(join(root, "dist/.config/settings")), true);
+  });
+
+  it("reports a hook killed by a signal as a failure", async () => {
+    const root = await fixture({
+      "dotfiles/a/.pre-chezmoi.ts": `process.kill(process.pid, "SIGKILL");`,
+      "dotfiles/b/.pre-chezmoi.ts": `import { appendFile } from "node:fs/promises";\nawait appendFile("hook-ran", "b\\n");`,
+    });
+    const proc = Bun.spawn(["bun", script], { cwd: root, stderr: "pipe", stdout: "ignore" });
+
+    const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    assert.equal(exitCode, 1);
+    assert.match(stderr, /local pre-chezmoi hook failed: a\/\.pre-chezmoi\.ts \(signal SIGKILL\)/);
+    assert.equal(existsSync(join(root, "dist/b/hook-ran")), false);
   });
 
   it("reports every specified merge error", async () => {

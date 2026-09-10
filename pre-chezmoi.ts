@@ -12,11 +12,13 @@ type PlainObject = Record<string, unknown>;
 type Operation = { key: string; value: unknown };
 type Operations = Map<string, Partial<Record<MergeOp, Operation>>>;
 type Entry = { path: string; isDirectory: boolean };
+type Hook = { absolutePath: string; relativeParent: string };
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
 type TargetPathResolver = (root: string, sourcePath: string) => Promise<string>;
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
+const hookFileName = ".pre-chezmoi.ts";
 const sidecarPattern = /\.merge(\.local)?\.(json|yaml)$/;
 
 const fileFormats = {
@@ -36,8 +38,10 @@ export async function run(
   const sourceDir = join(root, "dotfiles");
   const distDir = join(root, "dist");
 
+  const hooks = await collectHooks(sourceDir);
   await rm(distDir, { recursive: true, force: true });
   await copyDir(sourceDir, distDir);
+  await runHooks(hooks, distDir);
   await movePlatformEntries(distDir, platform);
   await convertDotEntries(distDir);
   await convertExactDirectories(distDir);
@@ -103,7 +107,9 @@ async function convertDotEntries(distDir: string): Promise<void> {
   const dotEntries = (await collectEntries(distDir))
     .filter(
       (entry) =>
-        basename(entry.path).startsWith(".") && !relative(distDir, entry.path).includes(".chezmoi"),
+        basename(entry.path).startsWith(".") &&
+        basename(entry.path) !== hookFileName &&
+        !relative(distDir, entry.path).includes(".chezmoi"),
     )
     .sort(deepestFirst);
   for (const entry of dotEntries) {
@@ -383,6 +389,52 @@ async function chezmoiTargetPath(root: string, sourcePath: string): Promise<stri
   if (exitCode !== 0)
     throw new Error(stderr.trim() || `chezmoi target-path failed: dist/${sourcePath}`);
   return stdout;
+}
+
+async function collectHooks(sourceDir: string): Promise<Hook[]> {
+  const hooks: Hook[] = [];
+  async function walk(directory: string, relativeParent: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name === "node_modules") continue;
+      const entryPath = join(directory, entry.name);
+      const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
+      if (entry.isDirectory()) await walk(entryPath, childParent);
+      else if (entry.isFile() && entry.name === hookFileName)
+        hooks.push({ absolutePath: entryPath, relativeParent });
+    }
+  }
+  await walk(sourceDir, "");
+  return hooks.sort((left, right) => compareHookParents(left.relativeParent, right.relativeParent));
+}
+
+function compareHookParents(left: string, right: string): number {
+  const leftParts = left === "" ? [] : left.split("/");
+  const rightParts = right === "" ? [] : right.split("/");
+  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] < rightParts[index] ? -1 : 1;
+  }
+  return leftParts.length - rightParts.length;
+}
+
+async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
+  for (const hook of hooks) {
+    const hookDistDir =
+      hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
+    const relativePath =
+      hook.relativeParent === "" ? hookFileName : `${hook.relativeParent}/${hookFileName}`;
+    const proc = Bun.spawn(["bun", hook.absolutePath], {
+      cwd: hookDistDir,
+      env: process.env,
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
+      throw new Error(`local pre-chezmoi hook failed: ${relativePath} (${reason})`);
+    }
+  }
 }
 
 async function collectEntries(directory: string): Promise<Entry[]> {
