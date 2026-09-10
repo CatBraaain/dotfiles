@@ -49,7 +49,7 @@
 
 ## TypeScript のテスト
 
-`dotfiles/.pi/` 配下の TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。それ以外の TS スクリプト（`pre-chezmoi.ts` 等）はテストを書かなくてよい。
+`dotfiles/.pi/` 配下の TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。`dotfiles/.pi/` 配下以外の TS スクリプト（`pre-chezmoi.ts` 等）にはテストファイルを作成しないこと。テストを書かないこれらのスクリプトの検証は `bunx tsc --noEmit` で代用する。
 
 テストは `bun:test` で書く: `import { describe, it } from "bun:test"`。実行は `cd dotfiles/.pi/agent && bun test`。`bun test` は Bun の auto-install 対象外のため、テストが import する依存は `dotfiles/.pi/agent/package.json` に明示し、`bun install` で解決しておくこと。
 assertion は自作 helper を作らず、`node:assert/strict` を使うこと。読みやすさは説明変数やテスト名で担保し、assertion の再発明では担保しない。

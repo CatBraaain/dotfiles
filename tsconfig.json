@@ -7,5 +7,5 @@
     "target": "ESNext",
     "types": ["bun"]
   },
-  "include": ["pre-chezmoi.ts", "pre-chezmoi.test.ts"]
+  "include": ["pre-chezmoi.ts"]
 }
