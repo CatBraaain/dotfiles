@@ -3,15 +3,18 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, it } from "bun:test";
+import { afterEach, describe, it, spyOn } from "bun:test";
 import {
   appendSkillMd,
   copySkillTree,
+  defaultContext,
   isPullDue,
   loadSkillConfig,
+  main,
   markPullAt,
   readLastPullAt,
   resolveSkillDir,
+  syncMirror,
 } from "./.pre-chezmoi.ts";
 
 const cleanupDirs: string[] = [];
@@ -30,6 +33,33 @@ async function fixture(files: Record<string, string>): Promise<string> {
 afterEach(async () => {
   while (cleanupDirs.length > 0) await rm(cleanupDirs.pop()!, { recursive: true, force: true });
 });
+
+function recordingGit(ok: boolean, stderr = "") {
+  const calls: string[][] = [];
+  const runGit = async (args: string[]) => {
+    calls.push(args);
+    return { ok, stderr };
+  };
+  return { calls, runGit };
+}
+
+function syncContext(
+  mirrorRoot: string,
+  runGit: (args: string[]) => Promise<{ ok: boolean; stderr: string }>,
+  overrides: { forcePull?: boolean } = {},
+) {
+  return { mirrorRoot, ttlMs: 6 * 60 * 60 * 1000, forcePull: false, runGit, ...overrides };
+}
+
+async function mirrorFixture(repo: string, pullAt?: number): Promise<string> {
+  const root = await fixture({});
+  const mirrorDir = join(root, ...repo.split("/"));
+  await mkdir(join(mirrorDir, ".git"), { recursive: true });
+  if (pullAt !== undefined) {
+    await writeFile(join(mirrorDir, ".git", "pre-chezmoi-pull-time"), `${pullAt}\n`);
+  }
+  return root;
+}
 
 describe("loadSkillConfig", () => {
   it("normalizes string and object entries", async () => {
@@ -111,6 +141,107 @@ describe("loadSkillConfig", () => {
     );
 
     await assert.rejects(loadSkillConfig(configPath));
+  });
+});
+
+describe("syncMirror", () => {
+  const repo = "owner/repo";
+  const ttlMs = 6 * 60 * 60 * 1000;
+
+  it("clones a missing mirror and records the pull time", async () => {
+    const mirrorRoot = await fixture({});
+    const { calls, runGit } = recordingGit(true);
+    const mirrorDir = join(mirrorRoot, "owner", "repo");
+
+    await syncMirror(repo, syncContext(mirrorRoot, runGit));
+
+    assert.deepEqual(calls, [
+      ["clone", "--depth", "1", "--quiet", "https://github.com/owner/repo.git", mirrorDir],
+    ]);
+    assert.ok(await readLastPullAt(mirrorDir));
+  });
+
+  it("pulls when no pull time is recorded", async () => {
+    const mirrorRoot = await mirrorFixture(repo);
+    const { calls, runGit } = recordingGit(true);
+    const mirrorDir = join(mirrorRoot, "owner", "repo");
+
+    await syncMirror(repo, syncContext(mirrorRoot, runGit));
+
+    assert.deepEqual(calls, [["-C", mirrorDir, "pull", "--ff-only", "--quiet"]]);
+    assert.ok(await readLastPullAt(mirrorDir));
+  });
+
+  it("pulls when the recorded pull time is older than the TTL", async () => {
+    const mirrorRoot = await mirrorFixture(repo, Date.now() - ttlMs);
+    const { calls, runGit } = recordingGit(true);
+
+    await syncMirror(repo, syncContext(mirrorRoot, runGit));
+
+    assert.equal(calls.length, 1);
+  });
+
+  it("does not run git when the pull time is within the TTL", async () => {
+    const mirrorRoot = await mirrorFixture(repo, Date.now());
+    const { calls, runGit } = recordingGit(true);
+
+    await syncMirror(repo, syncContext(mirrorRoot, runGit));
+
+    assert.deepEqual(calls, []);
+  });
+
+  it("pulls a fresh mirror when forcePull is set in the context", async () => {
+    const mirrorRoot = await mirrorFixture(repo, Date.now());
+    const { calls, runGit } = recordingGit(true);
+
+    await syncMirror(repo, syncContext(mirrorRoot, runGit, { forcePull: true }));
+
+    assert.equal(calls.length, 1);
+  });
+
+  it("reads PRE_CHEZMOI_FORCE_PULL in the default context", async () => {
+    const mirrorRoot = await mirrorFixture(repo, Date.now());
+    const { calls, runGit } = recordingGit(true);
+    process.env.PRE_CHEZMOI_FORCE_PULL = "1";
+
+    try {
+      await syncMirror(repo, { ...defaultContext(), mirrorRoot, runGit });
+    } finally {
+      delete process.env.PRE_CHEZMOI_FORCE_PULL;
+    }
+
+    assert.equal(calls.length, 1);
+  });
+
+  it("warns on stderr and keeps going without recording a pull time when a pull fails", async () => {
+    const mirrorRoot = await mirrorFixture(repo);
+    const { calls, runGit } = recordingGit(false, "conflict");
+    const errorSpy = spyOn(console, "error");
+
+    try {
+      const returned = await syncMirror(repo, syncContext(mirrorRoot, runGit));
+
+      assert.equal(returned, join(mirrorRoot, "owner", "repo"));
+      assert.equal(calls.length, 1);
+      const errorMessages = errorSpy.mock.calls.map((call) => String(call[0]));
+      assert.ok(
+        errorMessages.includes("warning: git pull failed for owner/repo: conflict"),
+        JSON.stringify(errorMessages),
+      );
+      assert.equal(await readLastPullAt(join(mirrorRoot, "owner", "repo")), undefined);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("rejects with the clone failure message when a clone fails", async () => {
+    const mirrorRoot = await fixture({});
+    const { runGit } = recordingGit(false, "no network");
+
+    await assert.rejects(
+      syncMirror(repo, syncContext(mirrorRoot, runGit)),
+      /git clone failed for https:\/\/github\.com\/owner\/repo\.git: no network/,
+    );
   });
 });
 
@@ -301,5 +432,67 @@ describe("appendSkillMd", () => {
     await appendSkillMd(skillDir, "## Extra\n");
 
     assert.equal(await readFile(join(skillDir, "SKILL.md"), "utf-8"), "## Extra\n");
+  });
+});
+
+describe("main", () => {
+  it("syncs skills to the working directory without writing to stdout", async () => {
+    const mirrorRoot = await fixture({
+      "owner/repo/.git/pre-chezmoi-pull-time": `${Date.now()}\n`,
+      "owner/repo/skills/foo/SKILL.md": "upstream\n",
+    });
+    const configPath = join(
+      await fixture({
+        "skills.yaml": [
+          "externalSkills:",
+          "  owner/repo:",
+          "    - path: skills/foo",
+          "      appendSkillMd: |",
+          "        ## Extra",
+          "",
+        ].join("\n"),
+      }),
+      "skills.yaml",
+    );
+    const outDir = await fixture({});
+    const logSpy = spyOn(console, "log");
+    const runGit = async (): Promise<{ ok: boolean; stderr: string }> => {
+      throw new Error("git must not run for a fresh mirror");
+    };
+    const exitCodeBefore = process.exitCode;
+
+    try {
+      await main({
+        configPath,
+        cwd: outDir,
+        context: { mirrorRoot, ttlMs: 6 * 60 * 60 * 1000, forcePull: false, runGit },
+      });
+
+      assert.deepEqual(logSpy.mock.calls, []);
+      assert.equal(process.exitCode, exitCodeBefore);
+      const syncedSkillMd = await readFile(join(outDir, "foo", "SKILL.md"), "utf-8");
+      assert.equal(syncedSkillMd, "upstream\n## Extra\n");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("reports a failure on stderr with the hook prefix and sets the exit code", async () => {
+    const configPath = join(await fixture({ "skills.yaml": "other: {}\n" }), "skills.yaml");
+    const errorSpy = spyOn(console, "error");
+    const exitCodeBefore = process.exitCode;
+
+    try {
+      await main({ configPath, cwd: await fixture({}) });
+
+      const errorMessages = errorSpy.mock.calls.map((call) => String(call[0]));
+      assert.deepEqual(errorMessages, [
+        `dotfiles/.agents/skills.exact/.pre-chezmoi.ts: .pre-chezmoi.skills.yaml must have an externalSkills mapping: ${configPath}`,
+      ]);
+      assert.equal(process.exitCode, 1);
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = exitCodeBefore;
+    }
   });
 });

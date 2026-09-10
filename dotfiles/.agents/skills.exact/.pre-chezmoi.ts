@@ -11,12 +11,30 @@ import yaml from "yaml";
 export type SkillEntry = { path: string; appendSkillMd?: string };
 export type SkillRepo = { repo: string; entries: SkillEntry[] };
 
+// Externals syncMirror/main reach through (mirror location, git runner, pull
+// policy). Tests inject fakes; production takes the defaults.
+export type SyncContext = {
+  mirrorRoot: string;
+  ttlMs: number;
+  forcePull: boolean;
+  runGit: (args: string[]) => Promise<{ ok: boolean; stderr: string }>;
+};
+
 const hookRelativePath = "dotfiles/.agents/skills.exact/.pre-chezmoi.ts";
 const mirrorRoot = join(homedir(), "mirrors", "github.com");
 // Skip mirror pulls whose recorded pull time is younger than this.
 const pullTtlMs = 6 * 60 * 60 * 1000;
 const pullTimeFileName = "pre-chezmoi-pull-time";
-const forcePull = process.env.PRE_CHEZMOI_FORCE_PULL === "1";
+
+// Read at call time so tests can flip PRE_CHEZMOI_FORCE_PULL.
+export function defaultContext(): SyncContext {
+  return {
+    mirrorRoot,
+    ttlMs: pullTtlMs,
+    forcePull: process.env.PRE_CHEZMOI_FORCE_PULL === "1",
+    runGit,
+  };
+}
 
 // Prefixes chezmoi parses as source-state attributes (scripts, removals, ...).
 // Synced skill assets must land verbatim, so names using them are wrapped in
@@ -94,46 +112,55 @@ export async function markPullAt(mirrorDir: string): Promise<void> {
   await writeFile(join(gitDir, pullTimeFileName), `${Date.now()}\n`);
 }
 
-async function main(): Promise<void> {
-  const config = await loadSkillConfig(join(import.meta.dir, ".pre-chezmoi.skills.yaml"));
-  await Promise.all(
-    config.map(async ({ repo, entries }) => {
-      const mirrorDir = await syncMirror(repo);
-      for (const entry of entries) {
-        const skillDir = await resolveSkillDir(mirrorDir, entry.path);
-        const targetDir = join(process.cwd(), basename(entry.path));
-        await copySkillTree(skillDir, targetDir);
-        if (entry.appendSkillMd !== undefined) await appendSkillMd(targetDir, entry.appendSkillMd);
-        console.log(`skill: ${basename(entry.path)} (${repo})`);
-      }
-    }),
-  );
+export async function main(
+  options: { configPath?: string; cwd?: string; context?: SyncContext } = {},
+): Promise<void> {
+  try {
+    const configPath = options.configPath ?? join(import.meta.dir, ".pre-chezmoi.skills.yaml");
+    const cwd = options.cwd ?? process.cwd();
+    const context = options.context ?? defaultContext();
+    const config = await loadSkillConfig(configPath);
+    await Promise.all(
+      config.map(async ({ repo, entries }) => {
+        const mirrorDir = await syncMirror(repo, context);
+        for (const entry of entries) {
+          const skillDir = await resolveSkillDir(mirrorDir, entry.path);
+          const targetDir = join(cwd, basename(entry.path));
+          await copySkillTree(skillDir, targetDir);
+          if (entry.appendSkillMd !== undefined) await appendSkillMd(targetDir, entry.appendSkillMd);
+        }
+      }),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`${hookRelativePath}: ${message}`);
+    process.exitCode = 1;
+  }
 }
 
-async function syncMirror(repo: string): Promise<string> {
-  const mirrorDir = join(mirrorRoot, ...repo.split("/"));
+export async function syncMirror(
+  repo: string,
+  context: SyncContext = defaultContext(),
+): Promise<string> {
+  const { mirrorRoot: root, ttlMs, forcePull, runGit: run } = context;
+  const mirrorDir = join(root, ...repo.split("/"));
   if (!existsSync(mirrorDir)) {
     const url = `https://github.com/${repo}.git`;
-    const result = await runGit(["clone", "--depth", "1", "--quiet", url, mirrorDir]);
+    const result = await run(["clone", "--depth", "1", "--quiet", url, mirrorDir]);
     if (!result.ok) throw new Error(`git clone failed for ${url}: ${result.stderr}`);
     await markPullAt(mirrorDir);
-    console.log(`mirror: cloned ${repo}`);
     return mirrorDir;
   }
 
   const lastPullAt = await readLastPullAt(mirrorDir);
-  if (!isPullDue(lastPullAt, Date.now(), pullTtlMs, forcePull)) {
-    console.log(`mirror: fresh ${repo}`);
-    return mirrorDir;
-  }
+  if (!isPullDue(lastPullAt, Date.now(), ttlMs, forcePull)) return mirrorDir;
 
-  const result = await runGit(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
+  const result = await run(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
   if (!result.ok) {
     console.error(`warning: git pull failed for ${repo}: ${result.stderr}`);
     return mirrorDir;
   }
   await markPullAt(mirrorDir);
-  console.log(`mirror: pulled ${repo}`);
   return mirrorDir;
 }
 
@@ -168,11 +195,5 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 if (import.meta.main) {
-  try {
-    await main();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`${hookRelativePath}: ${message}`);
-    process.exitCode = 1;
-  }
+  await main();
 }
