@@ -141,6 +141,22 @@ describe("copySkillTree", () => {
     assert.equal(await readFile(join(sourceDir, "target/SKILL.md"), "utf-8"), "local");
   });
 
+  it("wraps names matching chezmoi attribute prefixes in literal_", async () => {
+    const sourceDir = await fixture({
+      "source/scripts/run_eval.py": "eval",
+      "source/scripts/utils.py": "utils",
+      "source/exact_dir/keep.txt": "keep",
+    });
+    const targetDir = join(sourceDir, "target");
+
+    await copySkillTree(join(sourceDir, "source"), targetDir);
+
+    assert.equal(await readFile(join(targetDir, "scripts/literal_run_eval.py"), "utf-8"), "eval");
+    assert.equal(existsSync(join(targetDir, "scripts/run_eval.py")), false);
+    assert.equal(await readFile(join(targetDir, "scripts/utils.py"), "utf-8"), "utils");
+    assert.equal(await readFile(join(targetDir, "literal_exact_dir/keep.txt"), "utf-8"), "keep");
+  });
+
   it("skips the .git directory at any depth", async () => {
     const sourceDir = await fixture({
       "source/SKILL.md": "skill",

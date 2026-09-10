@@ -14,6 +14,12 @@ export type SkillRepo = { repo: string; entries: SkillEntry[] };
 const hookRelativePath = "dotfiles/.agents/skills.exact/.pre-chezmoi.ts";
 const mirrorRoot = join(homedir(), "mirrors", "github.com");
 
+// Prefixes chezmoi parses as source-state attributes (scripts, removals, ...).
+// Synced skill assets must land verbatim, so names using them are wrapped in
+// literal_, which stops chezmoi's attribute parsing.
+const chezmoiAttributePrefix =
+  /^(after|before|create|dot|empty|encrypted|exact|executable|external|literal|modify|once|onchange|private|readonly|remove|run|symlink)_/;
+
 export async function loadSkillConfig(configPath: string): Promise<SkillRepo[]> {
   const doc: unknown = yaml.parse(await readFile(configPath, "utf-8"));
   const externalSkills = (doc as { externalSkills?: unknown })?.externalSkills;
@@ -42,10 +48,14 @@ export async function copySkillTree(sourceDir: string, targetDir: string): Promi
     if (entry.name === ".git") continue;
 
     const sourcePath = join(sourceDir, entry.name);
-    const targetPath = join(targetDir, entry.name);
+    const targetPath = join(targetDir, safeName(entry.name));
     if (entry.isDirectory()) await copySkillTree(sourcePath, targetPath);
     else if (!existsSync(targetPath)) await copyFile(sourcePath, targetPath);
   }
+}
+
+function safeName(name: string): string {
+  return chezmoiAttributePrefix.test(name) ? `literal_${name}` : name;
 }
 
 export async function appendSkillMd(skillDir: string, text: string): Promise<void> {
