@@ -338,10 +338,7 @@ function appendAtPath(root: PlainObject, path: string, operation: Operation): vo
   if (!target) throw new Error(`merge append path not found: ${path}`);
   if (!Array.isArray(target.value)) throw new Error(`merge append requires array at path: ${path}`);
 
-  for (const value of values) {
-    if (!target.value.some((existing) => arrayElementsMatch(existing, value)))
-      target.value.push(value);
-  }
+  target.value.push(...values);
 }
 
 function removeAtPath(root: PlainObject, path: string, operation: Operation): void {
@@ -366,8 +363,7 @@ function removeAtPath(root: PlainObject, path: string, operation: Operation): vo
 }
 
 function arrayElementsMatch(left: unknown, right: unknown): boolean {
-  if (typeof left === "string" && typeof right === "string") return left === right;
-  return isPlainObject(left) && isPlainObject(right) && left.source === right.source;
+  return Bun.deepEquals(left, right);
 }
 
 async function chezmoiTargetPath(root: string, sourcePath: string): Promise<string> {

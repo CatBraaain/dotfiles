@@ -260,7 +260,7 @@ describe("pre-chezmoi", () => {
       "dotfiles/.pi/agent/settings.merge.json": [
         "{",
         "  // shared layer",
-        '  "packages.$append": [{ "source": "base" }, { "source": "added" }],',
+        '  "packages.$append": [{ "source": "added" }],',
         '  "packages.$remove": [{ "source": "home" }],',
         '  "missing.$unset": true,',
         '  "replaced.$replace": { "x": 1 }',
@@ -402,10 +402,55 @@ describe("pre-chezmoi", () => {
     // "order" pins remove-before-append: reversed order would drop "dup"
     const expected = {
       tiers: { low: 3 },
-      tags: ["keep", "new"],
+      tags: ["keep", "keep", "new", "new"],
       order: ["keep", "dup"],
       nested: { keep: true },
       replaceMe: ["new"],
+    };
+    assert.equal(
+      await readFile(join(root, "dist/s.json"), "utf-8"),
+      `${JSON.stringify(expected, null, 2)}\n`,
+    );
+  });
+
+  it("appends object elements that do not have a source property", async () => {
+    const root = await fixture({
+      "dotfiles/s.json": json({
+        commands: [{ allow: "*" }],
+      }),
+      "dotfiles/s.merge.json": json({
+        "commands.$append": [{ ask: ["ntn"] }],
+      }),
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    const expected = {
+      commands: [{ allow: "*" }, { ask: ["ntn"] }],
+    };
+    assert.equal(
+      await readFile(join(root, "dist/s.json"), "utf-8"),
+      `${JSON.stringify(expected, null, 2)}\n`,
+    );
+  });
+
+  it("removes array objects only when the whole value matches", async () => {
+    const root = await fixture({
+      "dotfiles/s.json": json({
+        packages: [
+          { source: "same", extra: 1 },
+          { source: "same", extra: 2 },
+        ],
+      }),
+      "dotfiles/s.merge.json": json({
+        "packages.$remove": [{ source: "same", extra: 1 }],
+      }),
+    });
+
+    await run(root, "other", homeResolver(root));
+
+    const expected = {
+      packages: [{ source: "same", extra: 2 }],
     };
     assert.equal(
       await readFile(join(root, "dist/s.json"), "utf-8"),
