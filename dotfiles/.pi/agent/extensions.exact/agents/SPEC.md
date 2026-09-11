@@ -295,6 +295,8 @@ subagent ツールで起動した子エージェントには、指定された a
 | 表示名 | `<agent>: <task の先頭行の先頭 30 文字>`。31 文字目以降は `…` に切り詰める。先頭行が空のときは `<agent>` のみとする    |
 | 再開   | `pi --session-dir ~/.pi/agent/sessions/<project-key>/subagents -r` で保存済みの子セッションを選んで再開できる          |
 
+分離保存は設計判断である。子の完全ログを親セッションファイルの `custom` entry に統合する案は、`custom` entry が LLM コンテキストに参加しないため技術的には成立する。ただし deja-vu は `~/.pi/agent/sessions` 配下を再帰走査して `.jsonl` を独立セッションとしてインデックスし、その pi パーサーが読むのは `session` ヘッダと role が `user` / `assistant` / `toolResult` の `message` entry だけで、`custom` entry は読まれない。統合すると子のログが deja-vu の検索対象から外れるため、子としての再開を使わない前提とファイルサイズの増大を斟酌しても、deja-vu での検索可能性を優先して分離保存を維持する。
+
 ### 同時実行数の制限
 
 親セッションあたり、同時に実行する子セッションは2つまでとする。
