@@ -36,19 +36,7 @@ function runWithStdin(
   });
 }
 
-function takeFirstEntries(markdown: string, limit: number): string {
-  const lines = markdown.split("\n");
-  const kept: string[] = [];
-  let entriesSeen = 0;
-  for (const line of lines) {
-    if (/^### \d+\./.test(line)) {
-      entriesSeen++;
-      if (entriesSeen > limit) break;
-    }
-    kept.push(line);
-  }
-  return kept.join("\n").trimEnd();
-}
+
 
 // --- camoufox server (rendering) ---
 
@@ -599,9 +587,52 @@ export function serpUrl(engine: SearchEngine, query: string, lang?: string): str
   return `${base}${base.includes("?") ? "&" : "?"}${params}`;
 }
 
-// SPEC: HTML を openserp の POST /<engine>/parse?format=markdown へ送る。
+// openserp の JSON 応答（POST /<engine>/parse?format=json）の results[] 1件分。
+// 存在しないフィールドは undefined で受け、生成時に省略する。
+export interface OpenserpSearchResult {
+  rank?: number;
+  type?: string;
+  title?: string;
+  url?: string;
+  display_url?: string;
+  snippet?: string;
+}
+
+// SPEC: openserp の results[]（rank 順にソート）から検索結果エントリの
+// Markdown を生成し、先頭 limit 件までを返す。エントリは
+// `### <番号>. <タイトル>`、`**<表示URL>** - <type>`、スニペット、`-> <URL>` の
+// 順のブロックで、欠損フィールドは省略する。openserp の応答テキストには
+// 依存しない（構造化データから生成する）。
+export function formatOpenserpResults(
+  results: readonly OpenserpSearchResult[],
+  limit: number = SEARCH_RESULT_LIMIT,
+): string {
+  const ranked = [...results].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  return ranked
+    .slice(0, limit)
+    .map((entry, index) => {
+      const title = entry.title?.trim() || entry.url?.trim() || "(no title)";
+      const source = entry.display_url?.trim();
+      const type = entry.type?.trim() || "organic";
+      const url = entry.url?.trim();
+      return [
+        `### ${index + 1}. ${title}`,
+        source ? `**${source}** - ${type}` : undefined,
+        entry.snippet?.trim() || undefined,
+        url ? `-> ${url}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    })
+    .join("\n\n");
+}
+
+// SPEC: HTML を openserp の POST /<engine>/parse?format=json へ送り、
+// 応答を JSON として受け取って results[] から検索結果エントリの Markdown を
+// 生成する（openserp が付けるテキスト表現には依存しない）。
 // パース要求の往復には 15秒、CAPTCHA・チャレンジ・空結果は 4xx エラーとして
 // 次のエンジンへのフォールバック材料になる。エラーには "parse:" を付ける。
+// results が空（検索結果ゼロ）の場合も空応答として失敗にする。
 export async function openserpParse(
   engine: SearchEngine,
   html: string,
@@ -621,7 +652,7 @@ export async function openserpParse(
     signal ?? new AbortController().signal,
     AbortSignal.timeout(PARSE_TIMEOUT_MS),
   ]);
-  const response = await fetcher(`${openserpBaseUrl()}/${engine}/parse?format=markdown`, {
+  const response = await fetcher(`${openserpBaseUrl()}/${engine}/parse?format=json`, {
     method: "POST",
     headers: { "Content-Type": "text/html" },
     body: html,
@@ -630,7 +661,13 @@ export async function openserpParse(
   if (!response.ok) {
     throw new Error(`parse: ${await responseDetail(response)}`);
   }
-  const markdown = await response.text();
+  let payload: { results?: OpenserpSearchResult[] };
+  try {
+    payload = JSON.parse(await response.text()) as { results?: OpenserpSearchResult[] };
+  } catch {
+    throw new Error("parse: response is not valid JSON");
+  }
+  const markdown = formatOpenserpResults(payload.results ?? []);
   if (!markdown.trim()) throw new Error("parse: empty response");
   return markdown;
 }
@@ -638,7 +675,9 @@ export async function openserpParse(
 export type SearchDeps = CamoufoxServerDeps & ServerDeps;
 
 // SPEC: §camoufox+openserp バックエンド。SERP URL 構築 → camoufox 描画 → openserp
-// パース → 先頭から最大10件（### <数字>. 見出し単位）。
+// パース（最大10件のエントリ生成）→ 先頭に実測値のメタデータ行を付けて返す。
+// メタデータ行は `**Query:** "<クエリ>" - **Engines:** <engine> - **Took:** <実測秒>` で、
+// 値はすべて拡張が持つもの（引数とこの試行の所要時間）から生成する。
 export async function camoufoxOpenserpSearch(
   engine: SearchEngine,
   query: string,
@@ -646,6 +685,7 @@ export async function camoufoxOpenserpSearch(
   lang?: string,
   deps: SearchDeps = {},
 ): Promise<string> {
+  const startedAt = Date.now();
   const html = await camoufoxRender(
     serpUrl(engine, query, lang),
     CAMOUFOX_SEARCH_SESSION_KEY,
@@ -653,7 +693,8 @@ export async function camoufoxOpenserpSearch(
     deps,
   );
   const markdown = await openserpParse(engine, html, signal, deps);
-  return takeFirstEntries(markdown, SEARCH_RESULT_LIMIT);
+  const tookSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  return `**Query:** ${JSON.stringify(query)} - **Engines:** ${engine} - **Took:** ${tookSeconds}s\n\n${markdown}`;
 }
 
 // --- fetch backend: camoufox render -> trafilatura ---

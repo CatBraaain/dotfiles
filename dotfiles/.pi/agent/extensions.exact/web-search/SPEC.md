@@ -101,10 +101,10 @@ Reddit・StackOverflow バックエンドが失敗した場合も通常どおり
 
 1. 検索エンジンごとの SERP URL を構築する。クエリは URL エンコードする。`lang` 指定時は各エンジンの言語パラメータへ反映する（bing: `mkt`、duckduckgo: `kl`、google: `hl`・`gl`）。未指定時は各エンジンの既定ロケールになる。bing の `mkt` と duckduckgo の `kl` は対応値のない lang を指定なしとして扱う。google は `hl` に lang を常に設定し、`gl` は対応国の定義された lang のみ設定する
 2. 常駐 camoufox server でその URL を描画し、描画済み DOM（`document.documentElement.outerHTML`）を取得する（§camoufox による描画）
-3. HTML を openserp の `POST /<engine>/parse?format=markdown` へリクエストボディとして送り、Markdown 形式の検索結果を得る
-4. 先頭から最大10件までを結果として返す（`### <数字>.` 見出し単位で数える）
+3. HTML を openserp の `POST /<engine>/parse?format=json` へリクエストボディとして送り、応答を JSON として受け取る。検索結果は応答の `results[]`（`rank`・`title`・`url`・`display_url`・`type`・`snippet`）から拡張が Markdown エントリを生成し、openserp が返すテキスト表現には依存しない
+4. `results[]` を `rank` 順に並べ替え、先頭から最大10件までをエントリとして返す。各エントリは `### <番号>. <タイトル>`、`**<表示URL>** - <type>`、スニペット、`-> <URL>` の順のブロックで、欠損フィールドの行は省略する
 
-openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなり、バックエンドの失敗として次のエンジンを試す。検索エンジンの固定ページ（チャレンジページ）はその前に描画段階で検出し、待ちを切り上げて失敗とする（§チャレンジページ検出）。パース結果の本文が空の場合も失敗として扱う。
+openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなり、バックエンドの失敗として次のエンジンを試す。検索エンジンの固定ページ（チャレンジページ）はその前に描画段階で検出し、待ちを切り上げて失敗とする（§チャレンジページ検出）。results が空（検索結果ゼロ）の場合と、応答が JSON として解釈できない場合も失敗として扱う。
 
 エンジンごとの SERP URL とパスは次のとおり。
 
@@ -217,6 +217,16 @@ API の回答は `### N. <回答者> (score <n>)`、accepted 回答は `(accepte
 ## クールダウン
 
 web_search / web_fetch のいずれにもクールダウンを設けない。過去のリクエストで失敗したバックエンドも、次のリクエストでは通常どおり記載された順序で試行する。
+
+## web_search の出力（Markdown）
+
+成功したバックエンドの結果本文は、先頭に次の 1 行のメタデータ行を付けた Markdown である:
+
+```text
+**Query:** "<クエリ>" - **Engines:** <engine> - **Took:** <実測秒>
+```
+
+メタデータ行の値はすべて拡張が持つもの（ツール引数のクエリ・成功したエンジン・当該バックエンド試行の実測所要時間）から生成し、openserp の応答内容には依存しない。秒表記は TUI の結果行と同じ `(1.2s)` 形式の `1.2s` を使う。
 
 ## 言語ヒント（web_search のみ）
 

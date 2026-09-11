@@ -23,6 +23,7 @@ import webSearchExtension, {
   fetchStackOverflowMarkdown,
   formatBackendLine,
   formatBackendLines,
+  formatOpenserpResults,
   openserpBaseUrl,
   openserpParse,
   primeServers,
@@ -1617,15 +1618,26 @@ describe("playwright-cli run-code 出力のパース", () => {
 
 
 describe("openserp パース（openserpParse）", () => {
-  it("ready を確認してから HTML を POST /<engine>/parse?format=markdown へ送る", async () => {
+  it("ready を確認してから HTML を POST /<engine>/parse?format=json へ送り、results からエントリを生成する", async () => {
     const calls: OpenserpCall[] = [];
     const fetcher = mockOpenserpFetcher(
       [
         { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
         {
           method: "POST",
-          pattern: /^\/bing\/parse\?format=markdown$/,
-          body: "### 1. Example\n\n-> https://example.com/",
+          pattern: /^\/bing\/parse\?format=json$/,
+          body: {
+            results: [
+              {
+                rank: 1,
+                type: "organic",
+                title: "Example",
+                url: "https://example.com/",
+                display_url: "example.com",
+                snippet: "Example snippet.",
+              },
+            ],
+          },
         },
       ],
       calls,
@@ -1636,9 +1648,12 @@ describe("openserp パース（openserpParse）", () => {
       spawnOpenserp: () => {},
     });
 
-    assert.equal(markdown, "### 1. Example\n\n-> https://example.com/");
+    assert.equal(
+      markdown,
+      "### 1. Example\n\n**example.com** - organic\n\nExample snippet.\n\n-> https://example.com/",
+    );
     const parseCall = calls.find((call) => call.method === "POST");
-    assert.equal(parseCall?.path, "/bing/parse?format=markdown");
+    assert.equal(parseCall?.path, "/bing/parse?format=json");
     assert.equal(parseCall?.body, "<html>serp</html>");
     assert.equal(parseCall?.headers?.["Content-Type"], "text/html");
   });
@@ -1655,8 +1670,8 @@ describe("openserp パース（openserpParse）", () => {
         },
         {
           method: "POST",
-          pattern: /^\/duckduckgo\/parse\?format=markdown$/,
-          body: "### 1. Example",
+          pattern: /^\/duckduckgo\/parse\?format=json$/,
+          body: { results: [{ rank: 1, title: "Example" }] },
         },
       ],
       calls,
@@ -1681,8 +1696,8 @@ describe("openserp パース（openserpParse）", () => {
         { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
         {
           method: "POST",
-          pattern: /^\/bing\/parse\?format=markdown$/,
-          body: "### 1. Example",
+          pattern: /^\/bing\/parse\?format=json$/,
+          body: { results: [{ rank: 1, title: "Example" }] },
         },
       ],
       [],
@@ -1719,7 +1734,7 @@ describe("openserp パース（openserpParse）", () => {
         { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
         {
           method: "POST",
-          pattern: /^\/google\/parse\?format=markdown$/,
+          pattern: /^\/google\/parse\?format=json$/,
           status: 422,
           statusText: "Unprocessable Entity",
           body: "captcha detected",
@@ -1737,11 +1752,11 @@ describe("openserp パース（openserpParse）", () => {
     );
   });
 
-  it("パース結果が空なら 'parse: empty response' で失敗する", async () => {
+  it("results が空なら 'parse: empty response' で失敗する", async () => {
     const fetcher = mockOpenserpFetcher(
       [
         { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
-        { method: "POST", pattern: /^\/bing\/parse\?format=markdown$/, body: "" },
+        { method: "POST", pattern: /^\/bing\/parse\?format=json$/, body: { results: [] } },
       ],
       [],
     );
@@ -1754,23 +1769,92 @@ describe("openserp パース（openserpParse）", () => {
       /parse: empty response/,
     );
   });
+
+  it("応答が JSON でなければ 'parse: response is not valid JSON' で失敗する", async () => {
+    const fetcher = mockOpenserpFetcher(
+      [
+        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
+        { method: "POST", pattern: /^\/bing\/parse\?format=json$/, body: "not json" },
+      ],
+      [],
+    );
+
+    await assert.rejects(
+      openserpParse("bing", "<html>serp</html>", undefined, {
+        fetcher,
+        spawnOpenserp: () => {},
+      }),
+      /parse: response is not valid JSON/,
+    );
+  });
+});
+
+describe("openserp results からのエントリ生成（formatOpenserpResults）", () => {
+  it("rank 順にソートし、欠損フィールドは省略する", () => {
+    const markdown = formatOpenserpResults([
+      { rank: 2, title: "Second", url: "https://example.org/" },
+      {
+        rank: 1,
+        type: "organic",
+        title: "First",
+        url: "https://example.com/",
+        display_url: "example.com",
+        snippet: "First snippet.",
+      },
+    ]);
+
+    assert.equal(
+      markdown,
+      "### 1. First\n\n**example.com** - organic\n\nFirst snippet.\n\n-> https://example.com/\n\n### 2. Second\n\n-> https://example.org/",
+    );
+  });
+
+  it("先頭 limit 件までに切り詰める", () => {
+    const results = Array.from({ length: 12 }, (_, index) => ({
+      rank: index + 1,
+      title: `Result ${index + 1}`,
+    }));
+
+    const markdown = formatOpenserpResults(results, 10);
+
+    assert.equal((markdown.match(/^### \d+\./gm) ?? []).length, 10);
+    assert.ok(!markdown.includes("Result 11"));
+  });
+
+  it("results が空なら空文字を返す", () => {
+    assert.equal(formatOpenserpResults([]), "");
+  });
+
+  it("title が空なら URL を見出しに使い、両方なければプレースホルダにする", () => {
+    const markdown = formatOpenserpResults([
+      { rank: 1, url: "https://example.com/" },
+      { rank: 2 },
+    ]);
+
+    assert.equal(
+      markdown,
+      "### 1. https://example.com/\n\n-> https://example.com/\n\n### 2. (no title)",
+    );
+  });
 });
 
 describe("camoufox+openserp 検索バックエンド（camoufoxOpenserpSearch）", () => {
-  it("SERP URL を構築し web-search セッションで描画し、パース結果を10件に切る", async () => {
+  it("SERP URL を構築し web-search セッションで描画し、パース結果を10件に切りメタデータ行を先頭に付ける", async () => {
     const cliCalls: CliCall[] = [];
     const openserpCalls: OpenserpCall[] = [];
-    const twelveResults = Array.from(
-      { length: 12 },
-      (_, index) => `### ${index + 1}. Result ${index + 1}\n\n-> https://example.com/${index + 1}`,
-    ).join("\n\n");
+    const results = Array.from({ length: 12 }, (_, index) => ({
+      rank: index + 1,
+      type: "organic",
+      title: `Result ${index + 1}`,
+      url: `https://example.com/${index + 1}`,
+    }));
     const openserpFetcher = mockOpenserpFetcher(
       [
         { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
         {
           method: "POST",
-          pattern: /^\/bing\/parse\?format=markdown$/,
-          body: twelveResults,
+          pattern: /^\/bing\/parse\?format=json$/,
+          body: { results },
         },
       ],
       openserpCalls,
@@ -1785,6 +1869,14 @@ describe("camoufox+openserp 検索バックエンド（camoufoxOpenserpSearch）
 
     const headings = markdown.match(/^### \d+\./gm) ?? [];
     assert.equal(headings.length, 10);
+    assert.ok(
+      markdown.startsWith('**Query:** "クエリ" - **Engines:** bing - **Took:** '),
+      "先頭行は実測値のメタデータ行",
+    );
+    assert.match(
+      markdown,
+      /^\*\*Query:\*\* "クエリ" - \*\*Engines:\*\* bing - \*\*Took:\*\* \d+\.\ds\n\n/,
+    );
     const openCall = cliCalls.find((call) => call.args[0] === "open");
     assert.equal(openCall?.sessionKey, "web-search");
     assert.deepEqual(
