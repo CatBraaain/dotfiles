@@ -14,8 +14,10 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
     ├── config.exact/          # 拡張のユーザー設定
     ├── extensions.exact/       # 自作拡張機能
     ├── prompts.exact/          # プロンプトテンプレート
-    └── skills.exact/           # 自作スキル
+    └── skills.exact/           # pi 固有の skill 用（通常は空。.keep で空を維持）
 ```
+
+`skills.exact/` は通常空（`.keep` のみ）。自作 skill は `dotfiles/.agents/skills.exact/` に置く（展開先 `~/.agents/skills/` は pi を含む複数 harness の共通位置）。
 
 ## agent/package.json
 

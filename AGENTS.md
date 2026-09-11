@@ -31,7 +31,7 @@
 | `xxx.merge.local.json` / `xxx.merge.local.yaml` | （完成形 `xxx.json` / `xxx.yaml` を出力） | 独自: merge ターゲットへ最後にマージするマシン固有レイヤー（gitignore） |
 | `.pre-chezmoi.ts`（ファイル） | （dist にそのまま残る。chezmoi は無視） | 独自: フォルダ単位の build 時フック。既存変換より前に実行され、フォルダ固有のファイルを生成できる（詳細は pre-chezmoi.spec.md §2） |
 
-> **注意**: 相対パス `dotfiles/.pi/agent/skills.exact` は `~/projects/dotfiles/dotfiles/.pi/agent/skills.exact` を指す。ルート直下（`~/projects/dotfiles/.pi/...`）ではない — 同名の `dotfiles/` が二重に現れる点に注意。
+> **注意**: 相対パス `dotfiles/.agents/skills.exact` は `~/projects/dotfiles/dotfiles/.agents/skills.exact` を指す。ルート直下（`~/projects/dotfiles/.agents/...`）ではない — 同名の `dotfiles/` が二重に現れる点に注意。
 
 ## 実行禁止
 
@@ -53,6 +53,13 @@
 
 テストは `bun:test` で書く: `import { describe, it } from "bun:test"`。実行は `cd dotfiles/.pi/agent && bun test`。`bun test` は Bun の auto-install 対象外のため、テストが import する依存は `dotfiles/.pi/agent/package.json` に明示し、`bun install` で解決しておくこと。
 assertion は自作 helper を作らず、`node:assert/strict` を使うこと。読みやすさは説明変数やテスト名で担保し、assertion の再発明では担保しない。
+
+## skill の置き場所
+
+自作 skill は `dotfiles/.agents/skills.exact/` に置く。新しい skill を作るときもここに作る。展開先 `~/.agents/skills/` は Agent Skills 標準の共通位置であり、pi を含む複数の harness から読める。
+
+- 外部リポジトリの skill の取り込みは `dotfiles/.agents/skills.exact/` 配下の `.pre-chezmoi.ts` フック + `.pre-chezmoi.skills.yaml` で行う（詳細は同フォルダの `.pre-chezmoi.spec.md`）
+- `dotfiles/.pi/agent/skills.exact/` は pi 固有の skill 用の予備。通常は空に保ち、`.keep` で空ディレクトリを維持する（`exact` 属性により、展開先でも `.keep` 以外のファイルが無い状態が保たれる）
 
 ## dotfiles/.pi
 
