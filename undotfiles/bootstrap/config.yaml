@@ -48,6 +48,7 @@
 - brew: shellcheck
 - brew: shfmt
 - brew: watchexec
+- bun: "@deepseek-ai/dsh"
 - bun: "@earendil-works/pi-coding-agent"
 - bun: "@playwright/cli"
 - bun: cursor-agent
