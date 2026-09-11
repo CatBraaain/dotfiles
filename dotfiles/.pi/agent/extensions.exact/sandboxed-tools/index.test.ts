@@ -175,7 +175,6 @@ describe("§1 ツールごとの扱い", () => {
       "grep",
       "ls",
       "read",
-      "read_image",
       "write",
     ]);
   });
@@ -457,13 +456,10 @@ describe("§2.1 画像ファイル", () => {
     return imagePath;
   }
 
-  it("read の説明文は画像の職務が vision と read_image 側にあることを示す", () => {
+  it("read の説明文は画像の Vision 入力と非対応時の vision 委譲を示す", () => {
     const description = captureRegisteredTools().get("read").description;
-    assert.match(description, /Image files cannot be read via read/);
-    assert.match(description, /Text extraction, appearance judgement, and layout work/);
-    assert.match(description, /vision/);
-    assert.match(description, /read_image/);
-    assert.match(description, /text-only agents cannot read images/);
+    assert.match(description, /Image files are returned as Vision input/);
+    assert.match(description, /delegation to the vision agent/);
   });
 
   it("isImageFile は MIME 判定不能時に拡張子へフォールバックする", () => {
@@ -478,21 +474,6 @@ describe("§2.1 画像ファイル", () => {
     assert.equal(isImageFile("/tmp/photo.png", "text/plain"), false);
     assert.equal(isImageFile("/tmp/notes.txt", "image/jpeg"), true);
   });
-
-  it(
-    "画像に対する read は vision を案内するエラーを返す",
-    withTempDirectory(async (directory) => {
-      const imagePath = writeImage(join(directory, "images"));
-
-      await assert.rejects(
-        () =>
-          captureRegisteredTools()
-            .get("read")
-            .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false }),
-        /vision/,
-      );
-    }),
-  );
 
   it(
     "許可されない画像パスへの read は §2 どおり拒否する",
@@ -512,24 +493,88 @@ describe("§2.1 画像ファイル", () => {
     }),
   );
 
-  it("read_image の説明文は vision 専用の Vision 入力であることを示す", () => {
-    const tool = captureRegisteredTools().get("read_image");
-    assert.match(tool.description, /vision/);
-    assert.match(tool.description, /Vision input/);
-    assert.match(tool.description, /never to a parent agent/);
-  });
+  it(
+    "画像入力対応モデルの read も許可されないパスは §2 どおり拒否する",
+    withTempDirectory(async () => {
+      const readTool = captureRegisteredTools().get("read");
+      await assert.rejects(
+        () =>
+          readTool.execute(
+            "t",
+            { path: join(homedir(), ".pi/agent/auth.json") },
+            undefined,
+            undefined,
+            {
+              hasUI: false,
+              model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
+            },
+          ),
+        /Access denied/,
+      );
+    }),
+  );
 
   it(
-    "vision セッション外の read_image は Vision 入力を作らずエラーを返す",
+    "画像入力対応モデルの read は許可済み画像を Vision 入力として返す",
     withTempDirectory(async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
 
       const result = await captureRegisteredTools()
-        .get("read_image")
-        .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
+        .get("read")
+        .execute("t", { path: imagePath }, undefined, undefined, {
+          hasUI: false,
+          model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
+        });
+
+      assert.equal(result.isError, undefined);
+      const imagePart = result.content.find((part: { type: string }) => part.type === "image");
+      assert.ok(imagePart);
+      assert.equal(imagePart.mimeType, "image/png");
+      assert.equal(Buffer.from(imagePart.data, "base64").equals(pngBytes), true);
+    }),
+  );
+
+  it(
+    "画像入力対応モデルの read は offset・limit が指定されても画像をそのまま返す",
+    withTempDirectory(async (directory) => {
+      const imagePath = writeImage(join(directory, "images"));
+
+      const result = await captureRegisteredTools()
+        .get("read")
+        .execute(
+          "t",
+          { path: imagePath, offset: 1, limit: 2 },
+          undefined,
+          undefined,
+          {
+            hasUI: false,
+            model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
+          },
+        );
+
+      assert.equal(result.isError, undefined);
+      const imagePart = result.content.find((part: { type: string }) => part.type === "image");
+      assert.ok(imagePart);
+      assert.equal(Buffer.from(imagePart.data, "base64").equals(pngBytes), true);
+    }),
+  );
+
+  it(
+    "画像入力非対応モデルの read は Vision 入力を作らず vision 委譲を促すエラーを返す",
+    withTempDirectory(async (directory) => {
+      const imagePath = writeImage(join(directory, "images"));
+
+      const result = await captureRegisteredTools()
+        .get("read")
+        .execute("t", { path: imagePath }, undefined, undefined, {
+          hasUI: false,
+          model: { provider: "zai", id: "glm-5.3", input: ["text"] },
+        });
 
       assert.equal(result.isError, true);
-      assert.match(result.content[0].text, /vision/);
+      assert.match(result.content[0].text, /does not support image input/);
+      assert.match(result.content[0].text, /zai\/glm-5\.3/);
+      assert.match(result.content[0].text, /vision agent/);
       assert.equal(
         Array.isArray(result.content) &&
           result.content.some((part: { type: string }) => part.type === "image"),
@@ -538,74 +583,18 @@ describe("§2.1 画像ファイル", () => {
     }),
   );
 
+  // spec 外の検証: モデル情報が取れない context では非対応側に倒す（実装の判定）。
   it(
-    "vision セッションの read_image は許可済み画像を Vision 入力として返す",
+    "モデル情報がない context の画像 read も委譲を促すエラーを返す",
     withTempDirectory(async (directory) => {
       const imagePath = writeImage(join(directory, "images"));
-      const previousAgentName = process.env.PI_AGENT_NAME;
-      process.env.PI_AGENT_NAME = "vision";
-      try {
-        const result = await captureRegisteredTools()
-          .get("read_image")
-          .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
 
-        assert.equal(result.isError, undefined);
-        const imagePart = result.content.find((part: { type: string }) => part.type === "image");
-        assert.ok(imagePart);
-        assert.equal(imagePart.mimeType, "image/png");
-        assert.equal(Buffer.from(imagePart.data, "base64").equals(pngBytes), true);
-      } finally {
-        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
-        else process.env.PI_AGENT_NAME = previousAgentName;
-      }
-    }),
-  );
+      const result = await captureRegisteredTools()
+        .get("read")
+        .execute("t", { path: imagePath }, undefined, undefined, { hasUI: false });
 
-  it(
-    "vision セッションの read_image は画像でないパスにエラーを返す",
-    withTempDirectory(async (directory) => {
-      mkdirSync(join(directory, "images"), { recursive: true });
-      const textPath = join(directory, "images", "notes.txt");
-      writeFileSync(textPath, "plain text");
-      const previousAgentName = process.env.PI_AGENT_NAME;
-      process.env.PI_AGENT_NAME = "vision";
-      try {
-        await assert.rejects(
-          () =>
-            captureRegisteredTools()
-              .get("read_image")
-              .execute("t", { path: textPath }, undefined, undefined, { hasUI: false }),
-          /Not an image file/,
-        );
-      } finally {
-        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
-        else process.env.PI_AGENT_NAME = previousAgentName;
-      }
-    }),
-  );
-
-  it(
-    "vision セッションの read_image も許可されないパスは §2 どおり拒否する",
-    withTempDirectory(async () => {
-      const previousAgentName = process.env.PI_AGENT_NAME;
-      process.env.PI_AGENT_NAME = "vision";
-      try {
-        const readImageTool = captureRegisteredTools().get("read_image");
-        await assert.rejects(
-          () =>
-            readImageTool.execute(
-              "t",
-              { path: join(homedir(), ".pi/agent/auth.json") },
-              undefined,
-              undefined,
-              { hasUI: false },
-            ),
-          /Access denied/,
-        );
-      } finally {
-        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
-        else process.env.PI_AGENT_NAME = previousAgentName;
-      }
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /does not support image input/);
     }),
   );
 });
@@ -4063,13 +4052,8 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 });
 
 describe("§8 表示", () => {
-  it("read_image のコール行は read_image <path> で表示する", () => {
-    const workspacePath = join(process.cwd(), "img", "a.png");
-    assert.equal(renderToolCall("read_image", { path: workspacePath }), "read_image ./img/a.png");
-  });
-
-  it("read_image の成功サマリーは image input、エラーは先頭3行", () => {
-    const tool = captureRegisteredTools().get("read_image");
+  it("read の成功サマリーは画像のとき image input、エラーは先頭3行", () => {
+    const tool = captureRegisteredTools().get("read");
     const summary = tool
       .renderResult(
         { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },

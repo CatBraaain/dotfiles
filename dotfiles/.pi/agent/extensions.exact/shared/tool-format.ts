@@ -181,8 +181,14 @@ export function formatToolResultSummary(
       const editCount = Array.isArray(args.edits) ? args.edits.length : 1;
       return theme.fg("success", `edited ${editCount} block(s)`);
     }
-    case "read":
+    case "read": {
+      // SPEC §8: 画像ファイルの read（画像入力対応モデル）のサマリーは image input。
+      const hasImage =
+        Array.isArray(result.content) &&
+        result.content.some((part) => (part as { type: string }).type === "image");
+      if (hasImage) return theme.fg("success", "image input");
       return theme.fg("success", `${countResultLines(resultText(result))} lines`);
+    }
     case "grep":
       return theme.fg("success", `${countMatchLines(resultText(result))} matches`);
     case "find":

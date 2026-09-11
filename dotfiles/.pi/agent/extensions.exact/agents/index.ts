@@ -140,8 +140,6 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
     if (visionAgent.class !== "vision") {
       return { error: "agent vision must use the vision class" };
     }
-    const allowsReadImage = (tools: readonly string[]): boolean =>
-      tools.includes("*") || tools.includes("read_image");
     for (const [name, definition] of Object.entries(agents)) {
       for (const entry of definition.tools) {
         if (!entry.startsWith("!")) continue;
@@ -152,13 +150,6 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
         if (negatedTool !== "*" && definition.tools.includes(negatedTool)) {
           return { error: `agent ${name} both allows and negates tool ${negatedTool}` };
         }
-      }
-      if (name === "vision") {
-        if (!allowsReadImage(definition.tools)) {
-          return { error: "agent vision must allow read_image" };
-        }
-      } else if (allowsReadImage(definition.tools) && !definition.tools.includes("!read_image")) {
-        return { error: `agent ${name} must exclude read_image via "!read_image"` };
       }
       if (name === "main" || name === "senior") {
         if (!definition.subagents.includes("vision")) {
@@ -261,7 +252,7 @@ const EXIT_STDIO_GRACE_MS = 100;
 const UPDATE_THROTTLE_MS = 150;
 
 // 添付画像を vision 子セッションへ渡すための一時ファイル。親セッションのモデルへ
-// 画像を送らず、子が read_image で読める形にする。子の起動が終わったら削除する。
+// 画像を送らず、子が read で読める形にする。子の起動が終わったら削除する。
 function saveAttachedImages(images: ImageContent[]): Array<{ path: string; cleanup: () => void }> {
   const saved: Array<{ path: string; cleanup: () => void }> = [];
   try {
@@ -589,7 +580,7 @@ async function runChild(
       cwd: childResult.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      // 子セッションの拡張（sandboxed-tools の read_image など）が active agent を知るため。
+      // 子セッションの拡張が active agent を知るため。
       // pi の ExtensionContext に agent フィールドはないため、環境変数で伝える。
       env: { ...process.env, PI_AGENT_NAME: agent },
     });
@@ -919,7 +910,7 @@ export default function agentsExtension(
       if (ctx.hasUI) ctx.ui.notify(`agent configuration error: ${loadedConfig.error}`, "error");
     });
     // SPEC「設定の検証」: 設定が無効でも画像添付はモデルへ送らず Vision 入力を作らない
-    // エラーを返す。read_image は PI_AGENT_NAME が設定されないため常に拒否される。
+    // エラーを返す。画像を処理できるかの model capability 判定は有効な設定でのみ行う。
     pi.on("input", async (event, ctx) => {
       if (!event.images || event.images.length === 0) return;
       const message =
@@ -1016,7 +1007,7 @@ export default function agentsExtension(
   function applyAgentTools(ctx: ExtensionContext, agent: Agent): void {
     const agentDefinition = config?.agents[agent];
     if (!agentDefinition) return;
-    // 親セッション自身の active agent も sandboxed-tools の read_image などへ伝える。
+    // 親セッション自身の active agent も拡張間で共有する。
     process.env.PI_AGENT_NAME = agent;
     const excluded = new Set(
       agentDefinition.tools.filter((tool) => tool.startsWith("!")).map((tool) => tool.slice(1)),
@@ -1098,8 +1089,8 @@ export default function agentsExtension(
   });
 
   // SPEC「画像入力を使う agent」: チャット貼り付けと CLI @file の画像の振り分け。
-  // vision は画像対応モデルのときだけそのまま送る。main / senior は vision
-  // 子セッションへ委譲し、junior は依頼元への報告を促す。その他・設定無効時は画像を送らない。
+  // 現在のモデルが画像入力対応ならそのまま送る。画像非対応なら、vision へ委譲
+  // できる agent は子セッションへ委譲し、できない agent は画像を送らず案内する。
   function routeImageInput(
     event: { text?: string; images?: ImageContent[]; source?: string },
     ctx: ExtensionContext,
@@ -1108,18 +1099,7 @@ export default function agentsExtension(
       notifyImageUnavailable(ctx);
       return { action: "handled" };
     }
-    if (currentAgent === "vision") {
-      if (ctx.model && !modelSupportsImages(ctx.model as { input?: readonly string[] })) {
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            "image input is not available: the current model does not support images",
-            "error",
-          );
-        } else {
-          process.stderr.write("image input is not available: model does not support images\n");
-        }
-        return { action: "handled" };
-      }
+    if (ctx.model && modelSupportsImages(ctx.model as { input?: readonly string[] })) {
       return { action: "continue" };
     }
     if (canDelegate(currentAgent, "vision", config)) {
@@ -1131,11 +1111,15 @@ export default function agentsExtension(
   }
 
   function notifyImageUnavailable(ctx: ExtensionContext): void {
-    const juniorGuidance =
-      currentAgent === "junior"
-        ? " Report to the caller that visual confirmation by vision is needed."
-        : " Delegate to vision to handle the image.";
-    const message = `image input is not available for agent ${currentAgent}.${juniorGuidance}`;
+    // SPEC「画像入力を使う agent」: 委譲できない agent（junior、vision 自身など）で
+    // 画像入力非対応モデルが選択されている場合、画像をモデルへ送らず案内する。
+    const guidance =
+      currentAgent === "vision"
+        ? " The current model does not support images; switch to an image-capable model."
+        : currentAgent === "junior"
+          ? " Report to the caller that visual confirmation by vision is needed."
+          : " Delegate to vision to handle the image.";
+    const message = `image input is not available for agent ${currentAgent}.${guidance}`;
     if (!ctx.hasUI) {
       process.stderr.write(`${message}\n`);
       process.exitCode = 1;
@@ -1152,7 +1136,7 @@ export default function agentsExtension(
     const paths = saved.map((file) => file.path);
     const request = (event.text ?? "").trim();
     const task =
-      `The owner attached ${paths.length} image(s) with the following request. Read each image with read_image and complete it.` +
+      `The owner attached ${paths.length} image(s) with the following request. Read each image with read and complete it.` +
       `\n\nRequest:\n${request || "(none)"}\n\nImages:\n${paths.join("\n")}`;
     try {
       const child = await runChild(ctx.cwd, task, "vision", undefined, ctx.signal, undefined);

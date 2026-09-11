@@ -120,9 +120,7 @@ export async function pickCandidate<M extends { provider: string; id: string }>(
 
 // pi-ai models declare their input modalities as ("text" | "image")[]. A
 // model supports image input exactly when "image" is present.
-export function modelSupportsImages(model: { input?: readonly string[] }): boolean {
-  return Array.isArray(model.input) && model.input.includes("image");
-}
+export { modelSupportsImages } from "../shared/image-input.ts";
 
 // `when` コマンドの実行器。bashExecFrom(createLocalBashOperations()) が pi の
 // local shell backend（pi.exec の実体）に繋いだ本物の実装で、テストも同じ道を通る。

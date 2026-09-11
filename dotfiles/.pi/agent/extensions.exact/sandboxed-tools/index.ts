@@ -15,6 +15,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Sandbox, type PathApproval, type ToolSession } from "./sandbox";
 import { normalizeToolPath } from "../shared/normalize-path.ts";
+import { modelSupportsImages } from "../shared/image-input.ts";
 import {
   ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
   formatBashCall,
@@ -112,25 +113,20 @@ function isImageFile(imagePath: string, detectedMimeType = imageMimeType(imagePa
 
 export { isImageFile };
 
-// SPEC §2.1: 画像に対する read は OCR せず、vision の利用を促す。
-export function imageReadErrorMessage(imagePath: string): string {
+// SPEC §2.1: 画像に対する read は OCR せず、画像入力対応モデルでは Vision 入力を返す。
+// 画像非対応モデルでは、画像をモデルへ送らず vision 子 agent への委譲を促す。
+export function imageReadErrorMessage(
+  imagePath: string,
+  model?: { provider?: string; id?: string },
+): string {
+  const modelName =
+    model?.provider && model?.id ? ` (${model.provider}/${model.id})` : "";
   return (
-    `Image files are not readable via read. Image input is handled by the vision agent ` +
-    `using the read_image tool. Switch the session to vision or delegate this image to ` +
-    `vision. Path: ${imagePath}`
+    `The current model${modelName} does not support image input; the image was not sent to the model. ` +
+    `Delegate image reading to the vision agent via subagent: have the child read the image ` +
+    `with read and report its observation as text. If you cannot spawn subagents, report ` +
+    `that image reading is needed to the requester. Path: ${imagePath}`
   );
-}
-
-// SPEC「画像入力を使う agent」: read_image は vision セッションでのみ Vision 入力を
-// 作る。agents 拡張が親・子セッションへ PI_AGENT_NAME を設定する（applyAgentTools と
-// runChild の env）。判定できない環境では拒否側に倒す。
-export function isVisionAgentSession(context: unknown): boolean {
-  const agentName =
-    process.env.PI_AGENT_NAME ??
-    (context !== null && typeof context === "object"
-      ? (context as { agent?: unknown }).agent
-      : undefined);
-  return agentName === "vision";
 }
 
 /** Append the EROFS guidance to the bash tool result so the model sees it at failure time. */
@@ -266,7 +262,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
   registerTextTool(
     {
       ...readTool,
-      description: `${readTool.description} Image files cannot be read via read. Text extraction, appearance judgement, and layout work are handled by the vision agent using the read_image tool (Vision input); text-only agents cannot read images.`,
+      description:
+        `${readTool.description} Image files are returned as Vision input when the current model supports image input. ` +
+        `A model without image input gets an error that directs delegation to the vision agent instead.`,
     },
     "read",
     (args) => args.path,
@@ -274,42 +272,16 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
       const normalized = withNormalizedPath(args) as { path: string };
       const imagePath = resolve(cwd, normalized.path);
       await sandbox.authorizePath("read", imagePath, context);
-      if (isImageFile(imagePath)) throw new Error(imageReadErrorMessage(imagePath));
-      return sandbox.runTool("read", normalized, { mode: "fs", signal });
-    },
-    { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
-  );
-  pi.registerTool({
-    name: "read_image",
-    label: "read_image",
-    description:
-      "Read an image file and return it as Vision input to the current model. Only the vision agent can use this tool: it is how the vision agent reads images for text extraction, appearance judgement, and layout work. Text-only agents cannot read images. The image is attached only to this agent's tool result and child session record, never to a parent agent.",
-    promptSnippet: "Read an image file as Vision input (vision only)",
-    promptGuidelines: [
-      "Use read_image instead of read for image files: read rejects images and returns an error pointing here.",
-      "Re-read an image with read_image after edits when the task depends on how the result looks (layout, appearance, color).",
-    ],
-    parameters: Type.Object({
-      path: Type.String({ description: "Path to the image file to read as Vision input" }),
-    }),
-    async execute(_id, params, signal, _onUpdate, context) {
-      const normalized = withNormalizedPath(params) as { path: string };
-      const imagePath = resolve(cwd, normalized.path);
-      if (!isVisionAgentSession(context)) {
+      if (!isImageFile(imagePath)) {
+        return sandbox.runTool("read", normalized, { mode: "fs", signal });
+      }
+      const model = context?.model as { input?: readonly string[]; provider?: string; id?: string } | undefined;
+      if (!modelSupportsImages(model ?? {})) {
         return {
-          content: [
-            {
-              type: "text",
-              text: imageReadErrorMessage(imagePath),
-            },
-          ],
+          content: [{ type: "text", text: imageReadErrorMessage(imagePath, model) }],
           details: {},
           isError: true,
         };
-      }
-      await sandbox.authorizePath("read", imagePath, context);
-      if (!isImageFile(imagePath)) {
-        throw new Error(`Not an image file: ${imagePath}`);
       }
       const data = readFileSync(imagePath);
       const mimeType = imageMimeType(imagePath) ?? "application/octet-stream";
@@ -318,18 +290,8 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
         details: {},
       };
     },
-    renderCall(args: any, theme: any) {
-      return new Text(formatNamedCall("read_image", formatPath(args.path ?? "", cwd), theme), 0, 0);
-    },
-    renderResult(result: any, options: any, theme: any, context: any) {
-      if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return renderToolError(result, theme);
-      const hasImage =
-        Array.isArray(result.content) &&
-        result.content.some((part: { type: string }) => part.type === "image");
-      return new Text(hasImage ? "image input" : "", 0, 0);
-    },
-  });
+    { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
+  );
   pi.registerTool({
     ...writeTool,
     description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
