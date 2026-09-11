@@ -24,6 +24,10 @@ const require = createRequire(import.meta.url);
 // SPEC: 接続先は環境変数 CAMOUFOX_BASE_URL で変更できる（既定はローカルホストの websocket）。
 const baseUrl = new URL(process.env.CAMOUFOX_BASE_URL ?? DEFAULT_BASE_URL);
 
+// index.ts appends this server's stdout/stderr to the log file across starts,
+// so leave a timestamped line to tell the runs apart when debugging hangs.
+console.log(`[camoufox-server] starting on ${baseUrl} at ${new Date().toISOString()}`);
+
 // The playwright-cli-embedded playwright-core is the single source of truth for
 // the server's protocol version: clients must send a matching major.minor in
 // their User-Agent or the upgrade is rejected with HTTP 428.

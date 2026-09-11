@@ -2,8 +2,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type ChildProcess, type SpawnOptions, execFile, spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const SEARCH_RESULT_LIMIT = 10;
@@ -106,9 +107,30 @@ export function buildCamoufoxServerSpawn(
   };
 }
 
+// SPEC: server のログは ~/.cache/pi/web-search/camoufox-server.log へ追記する。
+// spawn が detached だと server.mjs の出力を観測する手段がログしかなく、ハング
+// 調査には過去の出力が必須のため。
+export function camoufoxServerLogPath(env: Record<string, string | undefined> = process.env): string {
+  const cacheDir = env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
+  return join(cacheDir, "pi", "web-search", "camoufox-server.log");
+}
+
 export function spawnCamoufoxServer(): void {
   const { command, args, options } = buildCamoufoxServerSpawn();
-  spawnDetachedServer(command, args, options);
+  try {
+    const logPath = camoufoxServerLogPath();
+    mkdirSync(dirname(logPath), { recursive: true });
+    const logFd = openSync(logPath, "a");
+    try {
+      // The child keeps its own dup of the fd, so close ours right away.
+      spawnDetachedServer(command, args, { ...options, stdio: ["ignore", logFd, logFd] });
+    } finally {
+      closeSync(logFd);
+    }
+  } catch {
+    // Unwritable log path: keep the previous behavior (discard server output).
+    spawnDetachedServer(command, args, options);
+  }
 }
 
 // SPEC: §camoufox による描画。server に接続した playwright-cli セッションで
@@ -594,9 +616,23 @@ class AllBackendsFailedError extends Error {
       `All ${operation} backends failed: ${attempts
         .filter((attempt) => !attempt.ok)
         .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-        .join("; ")}`,
+        .join("; ")}${renderAbortHint(attempts)}`,
     );
   }
+}
+
+// A render-stage abort means every camoufox render timed out while the server
+// health check (websocket handshake) still passed: the camoufox server's
+// browser process is likely hung. Surface the manual recovery so an agent can
+// fix the environment unaided (the server respawns automatically after a kill).
+function renderAbortHint(attempts: Attempt[]): string {
+  const renderAborted = attempts.some(
+    (attempt) =>
+      !attempt.ok && attempt.error.startsWith("render:") && /aborted/i.test(attempt.error),
+  );
+  return renderAborted
+    ? `\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Kill it to recover (it respawns automatically on the next request): pkill -f "bun server.mjs"`
+    : "";
 }
 
 export type BackendEntry = readonly [name: string, run: () => Promise<string>];

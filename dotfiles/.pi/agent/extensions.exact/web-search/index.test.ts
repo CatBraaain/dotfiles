@@ -13,6 +13,7 @@ import webSearchExtension, {
   camoufoxOpenserpSearch,
   camoufoxRender,
   camoufoxServerHealthy,
+  camoufoxServerLogPath,
   CONVERT_TIMEOUT_MS,
   defaultFetchBackends,
   detectChallengePage,
@@ -288,6 +289,30 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
   it("全バックエンドが失敗したら例外を出す", async () => {
     const backends = [failBackend("A"), failBackend("B")];
     await assert.rejects(searchOne("query", undefined, backends), /All web search backends failed/);
+  });
+
+  it("render abort での全滅には camoufox サーバーの kill 手順ヒントを添える", async () => {
+    const backends = [
+      failBackend("camoufox+openserp(google)", "render: The operation was aborted"),
+      failBackend("camoufox+openserp(duckduckgo)", "render: The operation was aborted"),
+    ];
+    await assert.rejects(
+      searchOne("query", undefined, backends),
+      /pkill -f "bun server\.mjs"/,
+    );
+  });
+
+  it("render abort 以外の失敗にはヒントを添えない", async () => {
+    const backends = [
+      failBackend("camoufox+openserp(google)", "render: page.goto: Timeout exceeded"),
+      failBackend("camoufox+openserp(duckduckgo)", "parse: empty SERP"),
+    ];
+    const error = await searchOne("query", undefined, backends).then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    assert.ok(error, "全滅時は例外になる");
+    assert.ok(!error.message.includes("pkill"), "render abort 以外でヒントを出さない");
   });
 
   it("成功バックエンドの本文をそのまま返す", async () => {
@@ -1159,6 +1184,13 @@ describe("camoufox サーバー起動コマンド", () => {
     const spawnSpec = buildCamoufoxServerSpawn();
 
     assert.equal(spawnSpec.options.cwd, dirname(playwrightCliConfigPath()));
+  });
+
+  it("サーバーログはキャッシュディレクトリの pi/web-search/ 配下", () => {
+    assert.equal(
+      camoufoxServerLogPath({ XDG_CACHE_HOME: "/cache" }),
+      "/cache/pi/web-search/camoufox-server.log",
+    );
   });
 });
 
