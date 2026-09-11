@@ -37,9 +37,6 @@ externalSkills:
   vshulcz/deja-vu:
     - skills/deja-search
 
-  vercel-labs/agent-browser:
-    - skills/agent-browser
-
   microsoft/playwright-cli:
     - path: skills/playwright-cli
       appendSkillMd: |
