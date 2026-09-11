@@ -5,6 +5,7 @@
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
   "quietStartup": false,
+  "treeFilterMode": "user-only",
   "compaction": {
     "keepRecentTokens": 50000 // default: 20000
   },
