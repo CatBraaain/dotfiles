@@ -72,8 +72,11 @@ function runGit(cwd: string, args: string[]): void {
 /** Dialog accent color stub matching the highlight terminator below. */
 const ACCENT_START = "\u001b[34m";
 
-/** Expected ANSI-wrapped dialog highlight for a matched command span. */
-const highlighted = (text: string): string => `\u001b[33m${text}${ACCENT_START}`;
+/** Expected ANSI-wrapped dialog highlight (inverted region) for a matched command span. */
+const highlighted = (text: string): string => `\u001b[7m\u001b[33m${text}\u001b[27m${ACCENT_START}`;
+
+/** Any highlight SGR: the dialog must contain none of these when highlighting is off. */
+const HIGHLIGHT_ANSI = ["\u001b[7m", "\u001b[33m"];
 
 /** UI theme stub exposing the dialog accent color. */
 const uiTheme = { getFgAnsi: () => ACCENT_START };
@@ -1408,6 +1411,36 @@ commands:
   );
 
   it(
+    "一致テキストが語境界で見つかるときは再構築文字列が見つからなくても強調する",
+    withSandbox(
+      `
+commands:
+  - {allow: [".*"]}
+  - {ask: ['push\\b']}
+`,
+      "/cwd",
+      async (sandbox) => {
+        let title = "";
+        await sandbox.authorizeCommand("git  push origin main", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => true,
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
+            },
+            theme: uiTheme,
+          },
+        });
+        // The candidate collapses the double space, so the reassembled string is not
+        // found in the raw command and the fallback searches the matched text alone.
+        assert.ok(title.includes(`git  ${highlighted("push")} origin main`), title);
+      },
+    ),
+  );
+
+  it(
     "一致範囲がコマンド文字列で見つからないときは強調しない",
     withSandbox(
       `
@@ -1431,7 +1464,35 @@ commands:
           },
         });
         assert.ok(title.includes('git "push" origin main'), title);
-        assert.ok(!title.includes("\u001b[33m"), title);
+        for (const ansi of HIGHLIGHT_ANSI) assert.ok(!title.includes(ansi), title);
+      },
+    ),
+  );
+
+  it(
+    "UI がテーマを提供しないときは強調しない",
+    withSandbox(
+      `
+commands:
+  - {allow: [".*"]}
+  - {ask: ['^git push\\b']}
+`,
+      "/cwd",
+      async (sandbox) => {
+        let title = "";
+        await sandbox.authorizeCommand("git push origin main", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => true,
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
+            },
+          },
+        });
+        assert.ok(title.includes("git push origin main"), title);
+        for (const ansi of HIGHLIGHT_ANSI) assert.ok(!title.includes(ansi), title);
       },
     ),
   );
@@ -1467,7 +1528,7 @@ commands:
           else process.env.NO_COLOR = previousNoColor;
         }
         assert.ok(title.includes("git push origin main"), title);
-        assert.ok(!title.includes("\u001b[33m"), title);
+        for (const ansi of HIGHLIGHT_ANSI) assert.ok(!title.includes(ansi), title);
       },
     ),
   );

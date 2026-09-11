@@ -596,8 +596,11 @@ function matchedPatternNote(matched: string | undefined): string {
   return matched === undefined ? "no matching pattern (default ask)" : `matched: ${matched}`;
 }
 
-// Selective ANSI (color only, no full reset) so the dialog's accent/bold styling survives.
-const MATCH_HIGHLIGHT = "\x1b[33m";
+// Invert + yellow: the inverted background stays visible on any terminal palette,
+// where basic yellow alone can sit too close to the dialog accent color. Selective
+// SGRs (no full reset) so the dialog's accent/bold styling survives.
+const MATCH_HIGHLIGHT = "\x1b[7m\x1b[33m";
+const MATCH_HIGHLIGHT_END = "\x1b[27m";
 
 /** Characters that may surround a shell word in the raw command string. */
 const WORD_BOUNDARY = /[\s;&|()<>"'`]/;
@@ -619,7 +622,8 @@ function findWordBoundaryIndex(raw: string, text: string): number {
  * The span lives in the reassembled candidate (quotes stripped, head words skipped),
  * so map it back: try the whole candidate first, then the matched text alone.
  * Return the raw command unchanged when neither is found (quoted commands).
- * The span is terminated with `accentStart` so the dialog accent color continues after it.
+ * The span is closed with `MATCH_HIGHLIGHT_END` (leaving the inverted region) and
+ * `accentStart` so the dialog accent color continues after it.
  */
 function highlightCommandMatch(raw: string, span: MatchSpan, accentStart: string): string {
   const candidateAt = findWordBoundaryIndex(raw, span.candidate);
@@ -632,6 +636,7 @@ function highlightCommandMatch(raw: string, span: MatchSpan, accentStart: string
     raw.slice(0, start) +
     MATCH_HIGHLIGHT +
     raw.slice(start, start + span.length) +
+    MATCH_HIGHLIGHT_END +
     accentStart +
     raw.slice(start + span.length)
   );
