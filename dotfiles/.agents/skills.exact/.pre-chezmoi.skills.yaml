@@ -41,4 +41,28 @@ externalSkills:
     - skills/agent-browser
 
   microsoft/playwright-cli:
-    - skills/playwright-cli
+    - path: skills/playwright-cli
+      appendSkillMd: |
+        ## ローカル camoufox server への接続
+
+        単純な取得を超えた対話的な Web ブラウジング（フォーム入力・ログイン・SPA の
+        操作・snapshot ベースの遷移、プレーンなヘッドレスブラウザを弾くサイト）では、
+        pi web-search 拡張が使うローカル camoufox server（アンチ検出 Firefox）に接続する。
+        config は `open` のときだけ渡せばよく、以後のコマンドはセッション名だけでよい:
+
+        ```bash
+        playwright-cli open --config="$HOME/.pi/agent/extensions/web-search/playwright-cli.config.json" -s=browse-docs <url>
+        playwright-cli -s=browse-docs snapshot
+        playwright-cli -s=browse-docs close
+        ```
+
+        - cookie やログイン状態はセッションの中で共有・維持される。1つのタスクは同じ
+          セッション名を使い続ける
+        - 用が済んだら close してよい（開き直しはすぐ。cookie は close で消える）
+        - セッション名 `web-search` と `web-fetch` は拡張が各リクエストで close して使う
+          ため使わない。新しい名前（例: `browse-docs`）を使う
+        - 接続を拒否されたら server が起動していない。バックグラウンドで
+          `cd ~/.pi/agent/extensions/web-search && bun server.mjs &` で起動する
+          （ログは `~/.cache/pi/web-search/camoufox-server.log` に追記される）
+        - 生きているセッションが突然死んだら、拡張のハングリカバリで server が
+          kill された可能性がある。server を再起動してセッションを開き直す
