@@ -604,8 +604,13 @@ export async function camoufoxFetch(
 // --- backend chain shared by both tools ---
 
 export type Attempt =
-  | { readonly backend: string; readonly ok: true }
-  | { readonly backend: string; readonly ok: false; readonly error: string };
+  | { readonly backend: string; readonly ok: true; readonly durationMs?: number }
+  | {
+      readonly backend: string;
+      readonly ok: false;
+      readonly error: string;
+      readonly durationMs?: number;
+    };
 
 class AllBackendsFailedError extends Error {
   constructor(
@@ -659,17 +664,19 @@ export async function searchOne(
   const attempts: Attempt[] = [];
 
   for (const [name, search] of resolvedBackends) {
+    const startedAt = Date.now();
     try {
       const text = await search();
       // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
       if (!text.trim()) throw new Error("empty response");
-      attempts.push({ backend: name, ok: true });
+      attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
       return { text, backend: name, attempts };
     } catch (error) {
       attempts.push({
         backend: name,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - startedAt,
       });
     }
   }
@@ -1245,17 +1252,19 @@ export async function fetchOne(
   const attempts: Attempt[] = [];
 
   for (const [name, fetcher] of backends) {
+    const startedAt = Date.now();
     try {
       const text = await fetcher();
       // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
       if (!text.trim()) throw new Error("empty response");
-      attempts.push({ backend: name, ok: true });
+      attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
       return { text, backend: name, attempts };
     } catch (error) {
       attempts.push({
         backend: name,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - startedAt,
       });
     }
   }
@@ -1302,8 +1311,12 @@ export function titleFromMarkdown(markdown: string): string | null {
 }
 
 export function formatBackendLine(attempt: Attempt, successTitle?: string | null): string {
-  if (!attempt.ok) return `✗ ${attempt.backend} - "${attempt.error}"`;
-  return successTitle ? `✓ ${attempt.backend} - "${successTitle}"` : `✓ ${attempt.backend}`;
+  const duration =
+    attempt.durationMs === undefined ? "" : ` (${(attempt.durationMs / 1000).toFixed(1)}s)`;
+  if (!attempt.ok) return `✗ ${attempt.backend} - "${attempt.error}"${duration}`;
+  return successTitle
+    ? `✓ ${attempt.backend} - "${successTitle}"${duration}`
+    : `✓ ${attempt.backend}${duration}`;
 }
 
 export function formatBackendLines(

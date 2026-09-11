@@ -66,6 +66,12 @@ function captureTools(operations?: WebToolOperations): Map<string, Tool> {
   return tools;
 }
 
+// durationMs は実行時間で可変のため、成否・エラーの比較対象から除く
+function withoutDurationMs(attempt: Attempt): object {
+  const { durationMs: _durationMs, ...rest } = attempt;
+  return rest;
+}
+
 type WebOperationResult = Awaited<ReturnType<typeof searchOne>>;
 
 function createWebToolOperations(overrides: Partial<WebToolOperations>): WebToolOperations {
@@ -269,7 +275,7 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
   it("試行ごとの成否を attempts に記録し、最後は成功バックエンドになる", async () => {
     const backends = [failBackend("A"), failBackend("B"), okBackend("C")];
     const result = await searchOne("query", undefined, backends);
-    assert.deepEqual(result.attempts, [
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
       { backend: "A", ok: false, error: "A error" },
       { backend: "B", ok: false, error: "B error" },
       { backend: "C", ok: true },
@@ -326,14 +332,42 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     const backends = [okBackend("A", ""), okBackend("B", "本文")];
     const result = await searchOne("query", undefined, backends);
     assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
+      backend: "A",
+      ok: false,
+      error: "empty response",
+    });
   });
 
   it("空白・改行のみの本文も空として失敗扱いにする", async () => {
     const backends = [okBackend("A", " \n\t "), okBackend("B", "本文")];
     const result = await searchOne("query", undefined, backends);
     assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
+      backend: "A",
+      ok: false,
+      error: "empty response",
+    });
+  });
+
+  it("attempts には各試行の所要時間（durationMs）を記録する", async () => {
+    const backends = [failBackend("A"), okBackend("B")];
+    const result = await searchOne("query", undefined, backends);
+    const durations = result.attempts.map((attempt) => attempt.durationMs);
+    assert.ok(durations.every((duration) => typeof duration === "number"));
+  });
+
+  it("durationMs はバックエンドの実行時間を反映する", async () => {
+    const slowBackend: BackendEntry = [
+      "slow",
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return "slow text";
+      },
+    ];
+    const result = await searchOne("query", undefined, [slowBackend]);
+    const durationMs = result.attempts[0]!.durationMs ?? 0;
+    assert.ok(durationMs >= 20, `期待 >=20ms, 実際 ${durationMs}ms`);
   });
 
   it("デフォルトのバックエンド順序は camoufox+openserp(google)→duckduckgo→bing", () => {
@@ -448,7 +482,7 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
   it("試行ごとの成否を attempts に記録し、最後は成功バックエンドになる", async () => {
     const backends = [failBackend("A"), failBackend("B"), okBackend("C")];
     const result = await fetchOne("https://example.com/", undefined, backends);
-    assert.deepEqual(result.attempts, [
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
       { backend: "A", ok: false, error: "A error" },
       { backend: "B", ok: false, error: "B error" },
       { backend: "C", ok: true },
@@ -477,14 +511,29 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     const backends = [okBackend("A", ""), okBackend("B", "本文")];
     const result = await fetchOne("https://example.com/", undefined, backends);
     assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
+      backend: "A",
+      ok: false,
+      error: "empty response",
+    });
   });
 
   it("空白・改行のみの本文も空として失敗扱いにする", async () => {
     const backends = [okBackend("A", " \n\t "), okBackend("B", "本文")];
     const result = await fetchOne("https://example.com/", undefined, backends);
     assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
+    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
+      backend: "A",
+      ok: false,
+      error: "empty response",
+    });
+  });
+
+  it("fetchOne の attempts にも所要時間を記録する", async () => {
+    const backends = [failBackend("A"), okBackend("B")];
+    const result = await fetchOne("https://example.com/", undefined, backends);
+    const durations = result.attempts.map((attempt) => attempt.durationMs);
+    assert.ok(durations.every((duration) => typeof duration === "number"));
   });
 
   it("デフォルトのバックエンド順序は camoufox+trafilatura のみ", () => {
@@ -534,6 +583,29 @@ describe("バックエンド結果行のフォーマット", () => {
       '✗ openserp(google) - "captcha detected"',
       '✓ openserp(bing) - "成功タイトル"',
     ]);
+  });
+
+  it("成功行には所要時間を '(1.2s)' 形式で付ける", () => {
+    const line = formatBackendLine({ backend: "openserp(bing)", ok: true, durationMs: 1234 });
+    assert.equal(line, "✓ openserp(bing) (1.2s)");
+  });
+
+  it("失敗行にも所要時間を付ける", () => {
+    const line = formatBackendLine({
+      backend: "openserp(google)",
+      ok: false,
+      error: "captcha detected",
+      durationMs: 800,
+    });
+    assert.equal(line, '✗ openserp(google) - "captcha detected" (0.8s)');
+  });
+
+  it("タイトル付き成功行はタイトルの後に所要時間を付ける", () => {
+    const line = formatBackendLine(
+      { backend: "trafilatura", ok: true, durationMs: 500 },
+      "Example",
+    );
+    assert.equal(line, '✓ trafilatura - "Example" (0.5s)');
   });
 });
 
@@ -629,13 +701,15 @@ describe("web_fetch 表示", () => {
     );
 
     const attempts = updates[0]?.details?.attempts;
-    assert.deepEqual(attempts, [{ backend: "X", ok: false, error: "boom" }]);
+    assert.deepEqual(attempts?.map(withoutDurationMs), [{ backend: "X", ok: false, error: "boom" }]);
     const lines = renderedLines(
       failedFetch.renderResult({ content: [], details: undefined }, {}, identityTheme, {
         state: { attempts },
       }),
     );
-    assert.deepEqual(lines, ['✗ X - "boom"']);
+    // 所要時間は実行時間で可変のため形式のみ確認する
+    const resultLine = lines[0]!;
+    assert.match(resultLine, /^✗ X - "boom" \(\d+\.\d+s\)$/, `実際: ${resultLine}`);
   });
 });
 
