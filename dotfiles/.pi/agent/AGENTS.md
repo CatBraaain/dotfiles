@@ -242,9 +242,9 @@ owner は worktree を「wt」と略すことがある（例: finish wt）。略
 | discard | 変更と branch を捨てて閉じる。owner の承認を得てから実行する |
 | close | worktree と branch を削除する。finish・discard の最終段として実行する |
 
-finish — 統合の判断が入るため、commit 前の未コミットの状態で owner の承認を得る。検証まで済ませた段階で、「Asking Format」に従う `## 質問` として「この worktree を finish してよいですか？」と必ず尋ね、commit は承認後に行う。承認後:
+finish — 統合の判断が入るため、commit 前の未コミットの状態で owner の承認を得る。検証まで済ませた段階で、「Asking Format」に従う `## 質問` として「この worktree を finish してよいですか？」と必ず尋ね、commit は承認後に行う。成果物は owner が承認の回答をした時点の作業ツリーの内容であり、agent が質問した時点ではない。owner は回答をもって手直しを終えているものとする。承認後:
 
-1. worktree 内の変更を確認し、あれば git skill「コミットの作成と分割」に従って commit する。手順3の backup branch は、close で worktree ごと削除するため作らない。
+1. 作業ツリーに未コミット変更（owner の手直しを含む）があれば、質問せず成果に含めて1つのコミットで commit する（意味単位への分割はこのコミットには適用しない）。手直しを取り消してはならず、破棄は owner の明示が必要。検証のやり直しはしない。手順3の backup branch は、close で worktree ごと削除するため作らない。
 2. 「統合」に従って統合先へマージする。
 3. close を実行する。
 
