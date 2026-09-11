@@ -2,6 +2,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type ChildProcess, type SpawnOptions, execFile, spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const SEARCH_RESULT_LIMIT = 10;
 
@@ -46,46 +49,56 @@ function takeFirstEntries(markdown: string, limit: number): string {
   return kept.join("\n").trimEnd();
 }
 
-// --- camofox-browser server (rendering) ---
+// --- camoufox server (rendering) ---
 
-const CAMOFOX_DEFAULT_BASE_URL = "http://127.0.0.1:9377";
-const CAMOFOX_USER_ID = "pi";
-const CAMOFOX_FETCH_SESSION_KEY = "web-fetch";
-const CAMOFOX_SEARCH_SESSION_KEY = "web-search";
-const CAMOFOX_SERVER_PACKAGE = "@askjo/camofox-browser@1.14.0";
+const CAMOUFOX_DEFAULT_BASE_URL = "ws://127.0.0.1:9378/camoufox";
+const CAMOUFOX_SEARCH_SESSION_KEY = "web-search";
+const CAMOUFOX_FETCH_SESSION_KEY = "web-fetch";
 const SERVER_HEALTH_POLL_INTERVAL_MS = 250;
+const WEBSOCKET_HEALTH_TIMEOUT_MS = 1_000;
 
-// SPEC: 接続先は環境変数 CAMOFOX_BASE_URL で変更できる（既定はローカルホスト）。
-export function camofoxBaseUrl(env: Record<string, string | undefined> = process.env): string {
-  return env.CAMOFOX_BASE_URL ?? CAMOFOX_DEFAULT_BASE_URL;
+// Directory of this extension: server.mjs and playwright-cli.config.json live here.
+const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
+
+// SPEC: 接続先は環境変数 CAMOUFOX_BASE_URL で変更できる（既定はローカルホストの websocket）。
+export function camoufoxBaseUrl(env: Record<string, string | undefined> = process.env): string {
+  return env.CAMOUFOX_BASE_URL ?? CAMOUFOX_DEFAULT_BASE_URL;
 }
 
-// SPEC: 起動時に拡張が設定する環境変数。利用者の設定を優先し、他の変数は引き継ぐ。
-export function camofoxServerEnv(
-  env: Record<string, string | undefined> = process.env,
-): Record<string, string | undefined> {
-  return {
-    ...env,
-    CAMOFOX_BIND_HOST: env.CAMOFOX_BIND_HOST ?? "127.0.0.1",
-    CAMOFOX_CRASH_REPORT_ENABLED: env.CAMOFOX_CRASH_REPORT_ENABLED ?? "false",
-  };
+// SPEC: camoufox server のヘルスチェックは websocket 接続が成功するかで判定する。
+// A connection attempt is capped at WEBSOCKET_HEALTH_TIMEOUT_MS so a half-open
+// socket cannot stall the launch loop.
+export function camoufoxServerHealthy(baseUrl: string, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = new WebSocket(baseUrl);
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.close();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), WEBSOCKET_HEALTH_TIMEOUT_MS);
+    socket.addEventListener("open", () => finish(true));
+    socket.addEventListener("error", () => finish(false));
+    signal.addEventListener("abort", () => finish(false), { once: true });
+  });
 }
 
-export function buildCamofoxServerSpawn(): {
+// SPEC: 起動コマンドは `bun server.mjs`（拡張ディレクトリ内）。
+export function buildCamoufoxServerSpawn(
+  extensionDir: string = EXTENSION_DIR,
+): {
   command: string;
   args: string[];
-  options: {
-    env: Record<string, string | undefined>;
-    detached: boolean;
-    stdio: "ignore";
-    shell: boolean;
-  };
+  options: { cwd: string; detached: boolean; stdio: "ignore"; shell: boolean };
 } {
   return {
-    command: "npx",
-    args: [CAMOFOX_SERVER_PACKAGE],
+    command: "bun",
+    args: ["server.mjs"],
     options: {
-      env: camofoxServerEnv(),
+      cwd: extensionDir,
       detached: true,
       stdio: "ignore",
       shell: process.platform === "win32",
@@ -93,9 +106,64 @@ export function buildCamofoxServerSpawn(): {
   };
 }
 
-export function spawnCamofoxServer(): void {
-  const { command, args, options } = buildCamofoxServerSpawn();
+export function spawnCamoufoxServer(): void {
+  const { command, args, options } = buildCamoufoxServerSpawn();
   spawnDetachedServer(command, args, options);
+}
+
+// SPEC: §camoufox による描画。server に接続した playwright-cli セッションで
+// 描画するため、CLI には拡張ディレクトリ内の config（remoteEndpoint 指定）を渡す。
+export function playwrightCliConfigPath(extensionDir: string = EXTENSION_DIR): string {
+  return `${extensionDir}/playwright-cli.config.json`;
+}
+
+export function buildPlaywrightCliEnv(
+  base: Record<string, string | undefined> = process.env,
+  configPath: string = playwrightCliConfigPath(),
+): Record<string, string | undefined> {
+  return { ...base, PLAYWRIGHT_MCP_CONFIG: configPath };
+}
+
+export function buildPlaywrightCliArgs(sessionKey: string, args: readonly string[]): string[] {
+  return [`-s=${sessionKey}`, ...args];
+}
+
+export function defaultRunPlaywrightCli(
+  sessionKey: string,
+  args: string[],
+  signal: AbortSignal,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "playwright-cli",
+      buildPlaywrightCliArgs(sessionKey, args),
+      {
+        signal,
+        maxBuffer: 64 * 1024 * 1024,
+        env: buildPlaywrightCliEnv(),
+      },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout);
+      },
+    );
+  });
+}
+
+// SPEC: §camoufox による描画。`playwright-cli eval` の stdout は "### Result" 行に
+// 続いて HTML の JSON 文字列リテラルが 1 行で出る（大きなページでも stdout 全量）。
+export function parseEvalOutput(output: string): string {
+  const lines = output.split("\n");
+  const resultIndex = lines.indexOf("### Result");
+  const literal = resultIndex === -1 ? undefined : lines[resultIndex + 1];
+  if (!literal?.startsWith('"')) {
+    throw new Error("playwright-cli eval output has no result");
+  }
+  const html = JSON.parse(literal) as unknown;
+  if (typeof html !== "string" || !html) {
+    throw new Error("playwright-cli eval returned no HTML");
+  }
+  return html;
 }
 
 // --- openserp server (SERP parsing) ---
@@ -186,54 +254,104 @@ async function serverHealthy(
   }
 }
 
-// Prefer the camofox error body ("{"error": "..."}") over the bare status.
+// Prefer the openserp error body ("{"message": "..."}") over the bare status.
 async function responseDetail(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => undefined)) as { error?: unknown } | undefined;
-  return typeof body?.error === "string" && body.error
-    ? body.error
+  const body = (await response.json().catch(() => undefined)) as { message?: unknown } | undefined;
+  return typeof body?.message === "string" && body.message
+    ? body.message
     : `${response.status} ${response.statusText}`;
 }
 
-async function ensureServer(
-  baseUrl: string,
-  healthPath: string,
-  serverName: string,
+async function ensureOpenserpServer(
   signal: AbortSignal,
   spawnServer: () => void,
   fetcher: typeof fetch,
 ): Promise<void> {
-  if (await serverHealthy(baseUrl, healthPath, signal, fetcher)) return;
+  const baseUrl = openserpBaseUrl();
+  if (await serverHealthy(baseUrl, "/ready", signal, fetcher)) return;
   spawnServer();
   while (!signal.aborted) {
     await delay(SERVER_HEALTH_POLL_INTERVAL_MS, signal);
-    if (await serverHealthy(baseUrl, healthPath, signal, fetcher)) return;
+    if (await serverHealthy(baseUrl, "/ready", signal, fetcher)) return;
   }
-  throw new Error(`${serverName} server not ready at ${baseUrl}`);
+  throw new Error(`openserp server not ready at ${baseUrl}`);
+}
+
+async function ensureCamoufoxServer(
+  probe: (signal: AbortSignal) => Promise<boolean>,
+  spawnServer: () => void,
+  signal: AbortSignal,
+): Promise<void> {
+  if (await probe(signal)) return;
+  spawnServer();
+  while (!signal.aborted) {
+    await delay(SERVER_HEALTH_POLL_INTERVAL_MS, signal);
+    if (await probe(signal)) return;
+  }
+  throw new Error(`camoufox server not ready at ${camoufoxBaseUrl()}`);
 }
 
 export type ServerDeps = {
   fetcher?: typeof fetch;
-  spawnCamofox?: () => void;
   spawnOpenserp?: () => void;
 };
 
-// SPEC: §camofox による描画。タブ生成・ナビゲーション・描画済み DOM の取得に
-// 30秒を適用する。タブは成否に関わらず閉じ、閉鎖失敗は結果に影響させない。
+// camoufox server 側の注入可能な依存。openserp とは別系統のため
+//（websocket ヘルスチェック + playwright-cli 実行）、ServerDeps とは分離する。
+export type CamoufoxServerDeps = {
+  probeServer?: (signal: AbortSignal) => Promise<boolean>;
+  spawnCamoufox?: () => void;
+  runCli?: (sessionKey: string, args: string[], signal: AbortSignal) => Promise<string>;
+  syncConfig?: () => void;
+};
+
+// SPEC: §camoufox による描画。networkidle とハイドレーションの完了を待つ。
+// networkidle が永遠に来ないページがあるため、待ち自体にタイムアウトを設けて
+// 失敗を握りつぶす（待ち失敗は続行）。snippet 内で catch 済みのため run-code は
+// 原則成功するが、CLI 実行自体の失敗も無視する。
+const NETWORK_IDLE_WAIT_MS = 5_000;
+const NETWORK_IDLE_WAIT_SNIPPET = `async page => { await page.waitForLoadState('networkidle', { timeout: ${NETWORK_IDLE_WAIT_MS} }).catch(() => {}); }`;
+
+// SPEC: §camoufox による描画。playwright-cli は config の remoteEndpoint で接続先を
+// 決めるため、CAMOUFOX_BASE_URL に合わせて拡張ディレクトリ内の config を最新化する。
+export function playwrightCliConfigJson(baseUrl: string): string {
+  return `${JSON.stringify({ browser: { browserName: "firefox", remoteEndpoint: baseUrl } }, null, 2)}\n`;
+}
+
+export function syncPlaywrightCliConfig(
+  extensionDir: string = EXTENSION_DIR,
+  baseUrl: string = camoufoxBaseUrl(),
+): void {
+  try {
+    writeFileSync(playwrightCliConfigPath(extensionDir), playwrightCliConfigJson(baseUrl));
+  } catch {
+    // SPEC: 反映に失敗しても既存 config で続行する（既定の接続先なら同一内容）。
+  }
+}
+
+// SPEC: §camoufox による描画。open・ナビゲーション・描画済み DOM の取得に
+// 30秒を適用する。ページは成否に関わらず閉じ、閉鎖失敗は結果に影響させない。
 // エラーには "render:" 段階ラベルを付ける（§表示 のエラー例）。
-export async function camofoxRender(
+export async function camoufoxRender(
   url: string,
   sessionKey: string,
   signal?: AbortSignal,
-  deps: ServerDeps = {},
+  deps: CamoufoxServerDeps = {},
 ): Promise<string> {
-  const fetcher = deps.fetcher ?? fetch;
-  const spawnServer = deps.spawnCamofox ?? spawnCamofoxServer;
+  const probe =
+    deps.probeServer ??
+    ((probeSignal: AbortSignal) => camoufoxServerHealthy(camoufoxBaseUrl(), probeSignal));
+  const spawnServer = deps.spawnCamoufox ?? spawnCamoufoxServer;
+  const runCli = deps.runCli ?? defaultRunPlaywrightCli;
+  const syncConfig = deps.syncConfig ?? syncPlaywrightCliConfig;
+
   const waitSignal = AbortSignal.any([
     signal ?? new AbortController().signal,
     AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
   ]);
-
-  await ensureServer(camofoxBaseUrl(), "/health", "camofox", waitSignal, spawnServer, fetcher);
+  await ensureCamoufoxServer(probe, spawnServer, waitSignal);
+  // SPEC: 接続先（CAMOUFOX_BASE_URL）を playwright-cli の config に反映する。
+  syncConfig();
 
   const renderSignal = AbortSignal.any([
     signal ?? new AbortController().signal,
@@ -242,81 +360,53 @@ export async function camofoxRender(
   const renderError = (error: unknown): Error =>
     new Error(`render: ${error instanceof Error ? error.message : String(error)}`);
 
-  const tabResponse = await serverRequest(
-    camofoxBaseUrl(),
-    "/tabs",
-    {
-      method: "POST",
-      json: { userId: CAMOFOX_USER_ID, sessionKey, url },
-    },
-    renderSignal,
-    fetcher,
-  ).catch(renderError);
-  if (tabResponse instanceof Error) throw tabResponse;
-  if (!tabResponse.ok) throw renderError(await responseDetail(tabResponse));
-  const tab = (await tabResponse.json().catch(() => undefined)) as { tabId?: string } | undefined;
-  if (!tab?.tabId) throw renderError("camofox server returned no tabId");
-
-  let tabClosed = false;
-  const closeTab = async (): Promise<void> => {
-    tabClosed = true;
-    await fetcher(
-      `${camofoxBaseUrl()}/tabs/${encodeURIComponent(tab.tabId!)}?userId=${encodeURIComponent(CAMOFOX_USER_ID)}`,
-      {
-        method: "DELETE",
-        signal: AbortSignal.any([
-          signal ?? new AbortController().signal,
-          AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
-        ]),
-      },
+  const closePage = async (): Promise<void> => {
+    await runCli(
+      sessionKey,
+      ["close"],
+      AbortSignal.any([
+        signal ?? new AbortController().signal,
+        AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
+      ]),
     ).catch(() => {});
   };
 
   try {
+    // 各リクエストは独立。前回の閉鎖失敗で残ったセッションが cookie やページ状態を
+    // 持ち越さないよう、open の前に残存セッションを閉じておく（失敗は無視）。
+    await closePage();
+    await runCli(sessionKey, ["open", url], renderSignal).catch((error: unknown) => {
+      throw renderError(error);
+    });
+
     // SPEC: networkidle とハイドレーションの完了を待つ。SPA の検索結果など
     // JS で後から差し込まれるコンテンツは、ナビゲーション直後の DOM に無い。
-    // 待ち失敗（ready: false）は続行する。
-    const waitResponse = await serverRequest(
-      camofoxBaseUrl(),
-      `/tabs/${encodeURIComponent(tab.tabId)}/wait`,
-      { method: "POST", json: { userId: CAMOFOX_USER_ID, waitForNetwork: true } },
-      renderSignal,
-      fetcher,
-    ).catch(renderError);
-    if (waitResponse instanceof Error) throw waitResponse;
-    if (!waitResponse.ok) throw renderError(await responseDetail(waitResponse));
+    // 待ち失敗は続行する。
+    await runCli(sessionKey, ["run-code", NETWORK_IDLE_WAIT_SNIPPET], renderSignal).catch(
+      () => {},
+    );
 
-    const evaluatedResponse = await serverRequest(
-      camofoxBaseUrl(),
-      `/tabs/${encodeURIComponent(tab.tabId)}/evaluate`,
-      {
-        method: "POST",
-        json: {
-          userId: CAMOFOX_USER_ID,
-          expression: "document.documentElement.outerHTML",
-        },
-      },
+    const output = await runCli(
+      sessionKey,
+      ["eval", "() => document.documentElement.outerHTML"],
       renderSignal,
-      fetcher,
-    ).catch(renderError);
-    if (evaluatedResponse instanceof Error) throw evaluatedResponse;
-    if (!evaluatedResponse.ok) throw renderError(await responseDetail(evaluatedResponse));
-    const evaluated = (await evaluatedResponse.json().catch(() => undefined)) as
-      | {
-          result?: unknown;
-        }
-      | undefined;
-    if (typeof evaluated?.result !== "string" || !evaluated.result) {
-      throw renderError("evaluate returned no HTML");
+    ).catch((error: unknown) => {
+      throw renderError(error);
+    });
+    let html: string;
+    try {
+      html = parseEvalOutput(output);
+    } catch (error) {
+      throw renderError(error);
     }
-    await closeTab();
-    return evaluated.result;
+    return html;
   } finally {
-    if (!tabClosed) await closeTab();
+    // SPEC: ページを閉じる（成否に関わらず。閉鎖失敗は結果に影響させない）。
+    await closePage();
   }
 }
 
-// --- search backend: SERP URL -> camofox render -> openserp parse ---
+// --- search backend: SERP URL -> camoufox render -> openserp parse ---
 
 export type SearchEngine = "bing" | "duckduckgo" | "google";
 
@@ -380,7 +470,7 @@ const SERP_BASE_URL: Record<SearchEngine, string> = {
   google: "https://www.google.com/search",
 };
 
-// SPEC: §camofox+openserp バックエンド。クエリを URL エンコードし、lang 指定時は
+// SPEC: §camoufox+openserp バックエンド。クエリを URL エンコードし、lang 指定時は
 // 各エンジンの言語パラメータへ反映する（値のない lang は指定なしとして扱う）。
 export function serpUrl(engine: SearchEngine, query: string, lang?: string): string {
   const params = new URLSearchParams({ q: query });
@@ -418,7 +508,7 @@ export async function openserpParse(
     AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
   ]);
 
-  await ensureServer(openserpBaseUrl(), "/ready", "openserp", waitSignal, spawnServer, fetcher);
+  await ensureOpenserpServer(waitSignal, spawnServer, fetcher);
 
   const parseSignal = AbortSignal.any([
     signal ?? new AbortController().signal,
@@ -431,34 +521,27 @@ export async function openserpParse(
     signal: parseSignal,
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => undefined)) as
-      | {
-          message?: unknown;
-        }
-      | undefined;
-    const detail =
-      typeof body?.message === "string" && body.message
-        ? body.message
-        : `${response.status} ${response.statusText}`;
-    throw new Error(`parse: ${detail}`);
+    throw new Error(`parse: ${await responseDetail(response)}`);
   }
   const markdown = await response.text();
   if (!markdown.trim()) throw new Error("parse: empty response");
   return markdown;
 }
 
-// SPEC: §camofox+openserp バックエンド。SERP URL 構築 → camofox 描画 → openserp
+export type SearchDeps = CamoufoxServerDeps & ServerDeps;
+
+// SPEC: §camoufox+openserp バックエンド。SERP URL 構築 → camoufox 描画 → openserp
 // パース → 先頭から最大10件（### <数字>. 見出し単位）。
-export async function camofoxOpenserpSearch(
+export async function camoufoxOpenserpSearch(
   engine: SearchEngine,
   query: string,
   signal?: AbortSignal,
   lang?: string,
-  deps: ServerDeps = {},
+  deps: SearchDeps = {},
 ): Promise<string> {
-  const html = await camofoxRender(
+  const html = await camoufoxRender(
     serpUrl(engine, query, lang),
-    CAMOFOX_SEARCH_SESSION_KEY,
+    CAMOUFOX_SEARCH_SESSION_KEY,
     signal,
     deps,
   );
@@ -466,7 +549,7 @@ export async function camofoxOpenserpSearch(
   return takeFirstEntries(markdown, SEARCH_RESULT_LIMIT);
 }
 
-// --- fetch backend: camofox render -> trafilatura ---
+// --- fetch backend: camoufox render -> trafilatura ---
 
 // SPEC: §チャレンジページ検出。構造シグナルで判定し、ロケール依存の文言は使わない。
 export function detectChallengePage(html: string): boolean {
@@ -476,21 +559,21 @@ export function detectChallengePage(html: string): boolean {
   return /\bcf-turnstile\b/.test(html);
 }
 
-export type CamofoxDeps = ServerDeps & {
+export type CamoufoxFetchDeps = CamoufoxServerDeps & {
   toMarkdown?: (html: string, signal?: AbortSignal) => Promise<string>;
 };
 
-// SPEC: §camofox+trafilatura バックエンド。描画と trafilatura 変換の各段に
+// SPEC: §camoufox+trafilatura バックエンド。描画と trafilatura 変換の各段に
 // それぞれのタイムアウトを適用する。
-export async function camofoxFetch(
+export async function camoufoxFetch(
   url: string,
   signal?: AbortSignal,
-  deps: CamofoxDeps = {},
+  deps: CamoufoxFetchDeps = {},
 ): Promise<string> {
   const toMarkdown =
     deps.toMarkdown ??
     ((html, convertSignal) => runWithStdin("trafilatura", ["--markdown"], html, convertSignal));
-  const html = await camofoxRender(url, CAMOFOX_FETCH_SESSION_KEY, signal, deps);
+  const html = await camoufoxRender(url, CAMOUFOX_FETCH_SESSION_KEY, signal, deps);
   // SPEC: §チャレンジページ検出。変換前に描画済み HTML を判定する。
   if (detectChallengePage(html)) throw new Error("challenge detected");
   return toMarkdown(html, signal);
@@ -522,11 +605,11 @@ export function defaultSearchBackends(
   query: string,
   signal?: AbortSignal,
   lang?: string,
-  deps: ServerDeps = {},
+  deps: SearchDeps = {},
 ): BackendEntry[] {
   return (["google", "duckduckgo", "bing"] as const).map((engine) => [
-    `camofox+openserp(${engine})`,
-    () => camofoxOpenserpSearch(engine, query, signal, lang, deps),
+    `camoufox+openserp(${engine})`,
+    () => camoufoxOpenserpSearch(engine, query, signal, lang, deps),
   ]);
 }
 
@@ -825,20 +908,23 @@ export async function fetchRedditMarkdown(
 ): Promise<string> {
   const url = parseRedditPostUrl(rawUrl);
   if (!url) throw new Error(`Not a supported Reddit post URL: ${rawUrl}`);
-  const attemptSignal = AbortSignal.any([
-    signal ?? new AbortController().signal,
-    AbortSignal.timeout(REDDIT_TIMEOUT_MS),
-  ]);
-  const rssAttempt = await fetchRedditText(url.rssUrl, attemptSignal, fetcher);
+  // SPEC: §タイムアウト。Reddit の各取得（フィード・埋め込み・oEmbed）は
+  // 1要求ごとに15秒。前の要求で消費した時間は次の要求に引き継がない。
+  const attemptSignal = (): AbortSignal =>
+    AbortSignal.any([
+      signal ?? new AbortController().signal,
+      AbortSignal.timeout(REDDIT_TIMEOUT_MS),
+    ]);
+  const rssAttempt = await fetchRedditText(url.rssUrl, attemptSignal(), fetcher);
   const feed = rssAttempt.ok ? parseRedditAtom(rssAttempt.body) : undefined;
   let embed: ReturnType<typeof parseRedditEmbed>;
   if (!feed) {
-    const embedAttempt = await fetchRedditText(url.embedUrl, attemptSignal, fetcher);
+    const embedAttempt = await fetchRedditText(url.embedUrl, attemptSignal(), fetcher);
     embed = embedAttempt.ok ? parseRedditEmbed(embedAttempt.body) : undefined;
   }
   let oembed: ReturnType<typeof parseRedditOEmbed>;
   if (!feed && !embed) {
-    const oembedAttempt = await fetchRedditText(url.oembedUrl, attemptSignal, fetcher);
+    const oembedAttempt = await fetchRedditText(url.oembedUrl, attemptSignal(), fetcher);
     oembed = oembedAttempt.ok ? parseRedditOEmbed(oembedAttempt.body) : undefined;
   }
   if (!feed && !embed && !oembed) {
@@ -1099,11 +1185,11 @@ export async function fetchStackOverflowMarkdown(
 }
 
 // SPEC: §web_fetch のバックエンド。Reddit 投稿パーマリンクは Reddit のみ、
-// その他は camofox+trafilatura のみ。
+// その他は camoufox+trafilatura のみ。
 export function defaultFetchBackends(
   url: string,
   signal?: AbortSignal,
-  deps: CamofoxDeps = {},
+  deps: CamoufoxFetchDeps = {},
 ): BackendEntry[] {
   if (parseRedditPostUrl(url)) {
     return [["Reddit", () => fetchRedditMarkdown(url, signal)]];
@@ -1112,7 +1198,7 @@ export function defaultFetchBackends(
   if (parseStackOverflowQuestionUrl(url)) {
     return [["StackOverflow", () => fetchStackOverflowMarkdown(url, signal)]];
   }
-  return [["camofox+trafilatura", () => camofoxFetch(url, signal, deps)]];
+  return [["camoufox+trafilatura", () => camoufoxFetch(url, signal, deps)]];
 }
 
 export async function fetchOne(

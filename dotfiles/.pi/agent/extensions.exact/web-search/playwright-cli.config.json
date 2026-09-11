@@ -1,0 +1,6 @@
+{
+  "browser": {
+    "browserName": "firefox",
+    "remoteEndpoint": "ws://127.0.0.1:9378/camoufox"
+  }
+}

@@ -1,38 +1,47 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import webSearchExtension, {
-  buildCamofoxServerSpawn,
+  buildCamoufoxServerSpawn,
   buildOpenserpServerSpawn,
-  camofoxBaseUrl,
-  camofoxFetch,
-  camofoxOpenserpSearch,
-  camofoxRender,
-  camofoxServerEnv,
+  buildPlaywrightCliArgs,
+  buildPlaywrightCliEnv,
+  camoufoxBaseUrl,
+  camoufoxFetch,
+  camoufoxOpenserpSearch,
+  camoufoxRender,
+  camoufoxServerHealthy,
   CONVERT_TIMEOUT_MS,
   defaultFetchBackends,
   detectChallengePage,
   fetchRedditMarkdown,
   fetchStackOverflowMarkdown,
+  formatBackendLine,
+  formatBackendLines,
   openserpBaseUrl,
   openserpParse,
   defaultSearchBackends,
   fetchOne,
-  spawnDetachedServer,
-  formatBackendLine,
-  formatBackendLines,
-  PARSE_TIMEOUT_MS,
+  parseEvalOutput,
   parseRedditAtom,
   parseRedditEmbed,
   parseRedditOEmbed,
   parseRedditPostUrl,
   parseStackOverflowAtom,
   parseStackOverflowQuestionUrl,
+  PARSE_TIMEOUT_MS,
+  playwrightCliConfigJson,
+  playwrightCliConfigPath,
   REDDIT_TIMEOUT_MS,
   RENDER_TIMEOUT_MS,
   searchOne,
   SERVER_WAIT_TIMEOUT_MS,
   serpUrl,
+  spawnDetachedServer,
   STACKOVERFLOW_TIMEOUT_MS,
+  syncPlaywrightCliConfig,
   titleFromMarkdown,
   type Attempt,
   type BackendEntry,
@@ -302,12 +311,12 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
   });
 
-  it("デフォルトのバックエンド順序は camofox+openserp(google)→duckduckgo→bing", () => {
+  it("デフォルトのバックエンド順序は camoufox+openserp(google)→duckduckgo→bing", () => {
     const backendNames = defaultSearchBackends("query").map(([name]) => name);
     assert.deepEqual(backendNames, [
-      "camofox+openserp(google)",
-      "camofox+openserp(duckduckgo)",
-      "camofox+openserp(bing)",
+      "camoufox+openserp(google)",
+      "camoufox+openserp(duckduckgo)",
+      "camoufox+openserp(bing)",
     ]);
   });
 });
@@ -453,9 +462,9 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     assert.deepEqual(result.attempts[0], { backend: "A", ok: false, error: "empty response" });
   });
 
-  it("デフォルトのバックエンド順序は camofox+trafilatura のみ", () => {
+  it("デフォルトのバックエンド順序は camoufox+trafilatura のみ", () => {
     const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["camofox+trafilatura"]);
+    assert.deepEqual(backendNames, ["camoufox+trafilatura"]);
   });
 });
 
@@ -552,27 +561,27 @@ describe("web_fetch 表示", () => {
   it("結果行は成功バックエンドにだけタイトルを付ける", () => {
     const attempts: Attempt[] = [
       { backend: "trafilatura", ok: false, error: "timeout" },
-      { backend: "camofox+trafilatura", ok: true },
+      { backend: "camoufox+trafilatura", ok: true },
     ];
     const result = {
       content: [{ type: "text", text: "本文" }],
-      details: { backend: "camofox+trafilatura", attempts, title: "Example Page" },
+      details: { backend: "camoufox+trafilatura", attempts, title: "Example Page" },
     };
     const lines = renderedLines(fetchTool.renderResult(result));
     assert.deepEqual(lines, [
       '✗ trafilatura - "timeout"',
-      '✓ camofox+trafilatura - "Example Page"',
+      '✓ camoufox+trafilatura - "Example Page"',
     ]);
   });
 
   it("結果行はタイトルがない成功バックエンドにはタイトルを付けない", () => {
-    const attempts: Attempt[] = [{ backend: "camofox+trafilatura", ok: true }];
+    const attempts: Attempt[] = [{ backend: "camoufox+trafilatura", ok: true }];
     const result = {
       content: [{ type: "text", text: "本文" }],
-      details: { backend: "camofox+trafilatura", attempts, title: null },
+      details: { backend: "camoufox+trafilatura", attempts, title: null },
     };
     const lines = renderedLines(fetchTool.renderResult(result));
-    assert.deepEqual(lines, ["✓ camofox+trafilatura"]);
+    assert.deepEqual(lines, ["✓ camoufox+trafilatura"]);
   });
 
   it("全バックエンド失敗時、execute は onUpdate へ attempts を渡し結果行に失敗行を出す", async () => {
@@ -588,7 +597,7 @@ describe("web_fetch 表示", () => {
         "call",
         { url: "https://example.com/" },
         AbortSignal.timeout(30_000),
-        (update) => updates.push(update),
+        (update: { details?: { attempts?: Attempt[] } }) => updates.push(update),
         executionContext,
       ),
       /All web fetch backends failed/,
@@ -762,6 +771,21 @@ describe("Reddit フォールバックパース", () => {
 describe("fetchRedditMarkdown", () => {
   const post = parseRedditPostUrl(redditPostUrl)!;
 
+  it("RSS・埋め込み・oEmbed の各要求は独立したタイムアウトシグナルを持つ", async () => {
+    const signals: AbortSignal[] = [];
+    const fetcher = ((input: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      return Promise.resolve(new Response("", { status: 429 }));
+    }) as unknown as typeof fetch;
+
+    await assert.rejects(fetchRedditMarkdown(redditPostUrl, undefined, fetcher));
+
+    // SPEC: §タイムアウト。Reddit の各取得は1要求ごとに15秒。
+    assert.equal(signals.length, 3);
+    assert.ok(signals[0] !== signals[1] && signals[1] !== signals[2]);
+    assert.ok(signals.every((signal) => !signal.aborted));
+  });
+
   it("RSS 成功時は投稿本文とコメント一覧を返す", async () => {
     const markdown = await fetchRedditMarkdown(
       redditPostUrl,
@@ -828,21 +852,20 @@ describe("web_fetch バックエンド構成（Reddit 分岐）", () => {
     assert.deepEqual(backendNames, ["Reddit"]);
   });
 
-  it("その他の URL では camofox+trafilatura のみ", () => {
+  it("その他の URL では camoufox+trafilatura のみ", () => {
     const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["camofox+trafilatura"]);
+    assert.deepEqual(backendNames, ["camoufox+trafilatura"]);
   });
 });
 
-// --- camofox+trafilatura バックエンド（モック） ---
+// --- camoufox+trafilatura バックエンド（モック） ---
 
-// --- モックサーバーフェッチャー（camofox / openserp 共用） ---
+// --- モックサーバーフェッチャー（openserp 用） ---
 
-const camofoxBase = "http://127.0.0.1:9377";
 const openserpBase = "http://127.0.0.1:7000";
 const networkError = Symbol("network-error");
 
-type CamofoxCall = {
+type OpenserpCall = {
   method: string;
   path: string;
   body?: unknown;
@@ -850,7 +873,7 @@ type CamofoxCall = {
   headers?: Record<string, string>;
 };
 
-interface CamofoxRoute {
+interface OpenserpRoute {
   method: string;
   pattern: RegExp;
   status?: number;
@@ -868,7 +891,7 @@ function tryParseJson(text: string): unknown {
 }
 
 function createMockServerFetcher(baseUrl: string) {
-  return (routes: CamofoxRoute[], calls: CamofoxCall[]): typeof fetch =>
+  return (routes: OpenserpRoute[], calls: OpenserpCall[]): typeof fetch =>
     (async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input).replace(baseUrl, "");
       const method = (init?.method ?? "GET").toUpperCase();
@@ -896,110 +919,103 @@ function createMockServerFetcher(baseUrl: string) {
     }) as unknown as typeof fetch;
 }
 
-const mockCamofoxFetcher = createMockServerFetcher(camofoxBase);
 const mockOpenserpFetcher = createMockServerFetcher(openserpBase);
 
-function camofoxDeps(fetcher: typeof fetch, spawns: { count: number } = { count: 0 }) {
+// --- playwright-cli モック（camoufox render 用） ---
+
+type CliCall = { sessionKey: string; args: string[]; signal?: AbortSignal };
+
+// `playwright-cli eval` の stdout: `### Result` 行に続いて HTML の JSON 文字列
+// リテラルが 1 行で出る（§camoufox による描画）。
+function evalOutput(html: string): string {
+  return [
+    "### Result",
+    JSON.stringify(html),
+    "### Ran Playwright code",
+    "```js",
+    "await page.evaluate('() => document.documentElement.outerHTML');",
+    "```",
+    "",
+  ].join("\n");
+}
+
+type CliMockOptions = {
+  health?: "ok" | "fail";
+  openError?: Error;
+  runCodeError?: Error;
+  evalError?: Error;
+  evalOutput?: string;
+  evalHtml?: string;
+  closeError?: Error;
+};
+
+// camoufoxRender に注入する deps。CLI 呼び出しを calls に記録する。
+function cliDeps(
+  options: CliMockOptions,
+  calls: CliCall[],
+  spawns: { count: number } = { count: 0 },
+) {
   return {
-    fetcher,
-    spawnCamofox: () => {
+    probeServer: async () => options.health !== "fail",
+    spawnCamoufox: () => {
       spawns.count++;
     },
-    toMarkdown: async (html: string) => `md:${html}`,
+    runCli: async (sessionKey: string, args: string[], signal: AbortSignal) => {
+      calls.push({ sessionKey, args, signal });
+      const command = args[0];
+      if (command === "open") {
+        if (options.openError) throw options.openError;
+        return "opened";
+      }
+      if (command === "run-code") {
+        if (options.runCodeError) throw options.runCodeError;
+        return "";
+      }
+      if (command === "eval") {
+        if (options.evalError) throw options.evalError;
+        if (options.evalOutput !== undefined) return options.evalOutput;
+        return evalOutput(options.evalHtml ?? "");
+      }
+      if (command === "close") {
+        if (options.closeError) throw options.closeError;
+        return "";
+      }
+      throw new Error(`unexpected cli command: ${args.join(" ")}`);
+    },
   };
 }
 
-describe("camofox+trafilatura バックエンド", () => {
-  it("サーバーが既に応答するときは起動せず、タブ作成→DOM取得→タブ削除→変換の順で進む", async () => {
-    const calls: CamofoxCall[] = [];
+describe("camoufox+trafilatura バックエンド", () => {
+  it("サーバーが既に応答するときは起動せず、close→open→描画待ち→DOM取得→close→変換の順で進む", async () => {
+    const calls: CliCall[] = [];
     const spawns = { count: 0 };
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        {
-          method: "POST",
-          pattern: /^\/tabs$/,
-          body: { tabId: "TAB1", url: "https://example.com/" },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: "<html>body</html>" },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      calls,
-    );
 
-    const markdown = await camofoxFetch(
-      "https://example.com/",
-      undefined,
-      camofoxDeps(fetcher, spawns),
-    );
+    const markdown = await camoufoxFetch("https://example.com/", undefined, {
+      ...cliDeps({ health: "ok", evalHtml: "<html>body</html>" }, calls, spawns),
+      toMarkdown: async (html: string) => `md:${html}`,
+    });
 
     assert.equal(markdown, "md:<html>body</html>");
     assert.equal(spawns.count, 0);
     assert.deepEqual(
-      calls.map(({ method, path, body }) => ({ method, path, body })),
-      [
-        { method: "GET", path: "/health", body: undefined },
-        {
-          method: "POST",
-          path: "/tabs",
-          body: { userId: "pi", sessionKey: "web-fetch", url: "https://example.com/" },
-        },
-        {
-          method: "POST",
-          path: "/tabs/TAB1/wait",
-          body: { userId: "pi", waitForNetwork: true },
-        },
-        {
-          method: "POST",
-          path: "/tabs/TAB1/evaluate",
-          body: { userId: "pi", expression: "document.documentElement.outerHTML" },
-        },
-        { method: "DELETE", path: "/tabs/TAB1?userId=pi", body: undefined },
-      ],
+      calls.map((call) => call.args[0]),
+      ["close", "open", "run-code", "eval", "close"],
     );
+    const openCall = calls.find((call) => call.args[0] === "open");
+    assert.equal(openCall?.sessionKey, "web-fetch");
   });
 
   it("ヘルスチェックが失敗する間はサーバーを1回だけ起動し、成功したら処理を再開する", async () => {
-    const calls: CamofoxCall[] = [];
+    const calls: CliCall[] = [];
     const spawns = { count: 0 };
     let healthChecks = 0;
-    const fetcher = mockCamofoxFetcher(
-      [
-        {
-          method: "GET",
-          pattern: /^\/health$/,
-          respond: () => (++healthChecks <= 2 ? networkError : { ok: true }),
-        },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: "<html>x</html>" },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      calls,
-    );
+    const deps = cliDeps({ evalHtml: "<html>x</html>" }, calls, spawns);
 
-    const markdown = await camofoxFetch(
-      "https://example.com/",
-      undefined,
-      camofoxDeps(fetcher, spawns),
-    );
+    const markdown = await camoufoxFetch("https://example.com/", undefined, {
+      ...deps,
+      probeServer: async () => ++healthChecks > 2,
+      toMarkdown: async (html: string) => `md:${html}`,
+    });
 
     assert.equal(markdown, "md:<html>x</html>");
     assert.equal(spawns.count, 1);
@@ -1007,174 +1023,88 @@ describe("camofox+trafilatura バックエンド", () => {
   });
 
   it("タイムアウト内にサーバーが準備できなければ例外を出す", async () => {
-    const fetcher = mockCamofoxFetcher(
-      [{ method: "GET", pattern: /^\/health$/, respond: () => networkError }],
-      [],
-    );
+    const calls: CliCall[] = [];
 
     await assert.rejects(
-      camofoxFetch("https://example.com/", AbortSignal.timeout(50), camofoxDeps(fetcher)),
-      /camofox server not ready/,
+      camoufoxFetch("https://example.com/", AbortSignal.timeout(50), {
+        ...cliDeps({ health: "fail" }, calls),
+        toMarkdown: async () => "md",
+      }),
+      /camoufox server not ready/,
     );
+    assert.equal(calls.length, 0);
   });
 
-  it("DOM 取得に失敗してもタブを閉じる", async () => {
-    const calls: CamofoxCall[] = [];
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          status: 500,
-          statusText: "Internal Server Error",
-          body: "evaluate failed",
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      calls,
-    );
+  it("DOM 取得に失敗してもページを閉じる", async () => {
+    const calls: CliCall[] = [];
 
     await assert.rejects(
-      camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher)),
+      camoufoxFetch("https://example.com/", undefined, {
+        ...cliDeps({ health: "ok", evalError: new Error("evaluate failed") }, calls),
+        toMarkdown: async () => "md",
+      }),
       /render: evaluate failed/,
     );
-    assert.ok(calls.some((call) => call.method === "DELETE"));
+    assert.equal(calls.at(-1)?.args[0], "close");
   });
 
-  it("DOM が文字列で返らない場合は例外を出す", async () => {
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: null },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      [],
-    );
+  it("eval の出力に Result がなければ例外を出す", async () => {
+    const calls: CliCall[] = [];
 
     await assert.rejects(
-      camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher)),
-      /render: evaluate returned no HTML/,
+      camoufoxFetch("https://example.com/", undefined, {
+        ...cliDeps(
+          {
+            health: "ok",
+            evalOutput: "### Ran Playwright code\n```js\nawait page.evaluate();\n```\n",
+          },
+          calls,
+        ),
+        toMarkdown: async () => "md",
+      }),
+      /render: playwright-cli eval output has no result/,
     );
   });
 
-  it("タブ削除の失敗は変換結果に影響しない", async () => {
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: "<html>y</html>" },
-        },
-        {
-          method: "DELETE",
-          pattern: /^\/tabs\/TAB1\?userId=pi$/,
-          status: 500,
-          statusText: "Internal Server Error",
-          body: "close failed",
-        },
-      ],
-      [],
-    );
+  it("ページを閉じる失敗は変換結果に影響しない", async () => {
+    const calls: CliCall[] = [];
 
-    const markdown = await camofoxFetch("https://example.com/", undefined, camofoxDeps(fetcher));
+    const markdown = await camoufoxFetch("https://example.com/", undefined, {
+      ...cliDeps({
+        health: "ok",
+        evalHtml: "<html>y</html>",
+        closeError: new Error("close failed"),
+      }, calls),
+      toMarkdown: async () => "md",
+    });
 
-    assert.equal(markdown, "md:<html>y</html>");
+    assert.equal(markdown, "md");
   });
 
-  it("DOM取得後にタブを閉じてから trafilatura 変換する", async () => {
-    const calls: CamofoxCall[] = [];
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: "<html>z</html>" },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      calls,
-    );
+  it("DOM取得後にページを閉じてから trafilatura 変換する", async () => {
+    const calls: CliCall[] = [];
+    const order: string[] = [];
 
-    await camofoxFetch("https://example.com/", undefined, {
-      fetcher,
-      spawnCamofox: () => {},
+    await camoufoxFetch("https://example.com/", undefined, {
+      ...cliDeps({ health: "ok", evalHtml: "<html>z</html>" }, calls),
       toMarkdown: async () => {
-        calls.push({ method: "CONVERT", path: "(markdown)" });
+        order.push(...calls.map((call) => call.args[0] ?? ""));
+        order.push("CONVERT");
         return "md";
       },
     });
 
-    assert.deepEqual(
-      calls.map((call) => `${call.method} ${call.path}`),
-      [
-        "GET /health",
-        "POST /tabs",
-        "POST /tabs/TAB1/wait",
-        "POST /tabs/TAB1/evaluate",
-        "DELETE /tabs/TAB1?userId=pi",
-        "CONVERT (markdown)",
-      ],
-    );
+    assert.deepEqual(order, ["close", "open", "run-code", "eval", "close", "CONVERT"]);
   });
 
-  it("HTTP 操作と trafilatura 変換は別々のシグナルを使う", async () => {
-    const calls: CamofoxCall[] = [];
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: "<html>s</html>" },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      calls,
-    );
+  it("CLI 操作と trafilatura 変換は別々のシグナルを使う", async () => {
+    const calls: CliCall[] = [];
     const callerSignal = new AbortController().signal;
     let convertSignal: AbortSignal | undefined;
 
-    await camofoxFetch("https://example.com/", callerSignal, {
-      fetcher,
-      spawnCamofox: () => {},
-      toMarkdown: async (_html, toMarkdownSignal) => {
+    await camoufoxFetch("https://example.com/", callerSignal, {
+      ...cliDeps({ health: "ok", evalHtml: "<html>s</html>" }, calls),
+      toMarkdown: async (_html: string, toMarkdownSignal?: AbortSignal) => {
         convertSignal = toMarkdownSignal;
         return "md";
       },
@@ -1186,45 +1116,26 @@ describe("camofox+trafilatura バックエンド", () => {
 
   it("起動待ちで失敗した次のリクエストは、応答するサーバーで再起動せず成功する", async () => {
     const spawns = { count: 0 };
-    const spawnCamofox = () => {
+    const spawnCamoufox = () => {
       spawns.count++;
     };
-    const coldFetcher = mockCamofoxFetcher(
-      [{ method: "GET", pattern: /^\/health$/, respond: () => networkError }],
-      [],
-    );
 
     await assert.rejects(
-      camofoxFetch("https://example.com/", AbortSignal.timeout(50), {
-        fetcher: coldFetcher,
-        spawnCamofox,
+      camoufoxFetch("https://example.com/", AbortSignal.timeout(50), {
+        probeServer: async () => false,
+        spawnCamoufox,
+        runCli: async () => "",
         toMarkdown: async () => "md",
       }),
-      /camofox server not ready/,
+      /camoufox server not ready/,
     );
     assert.equal(spawns.count, 1);
 
-    const warmFetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: "<html>w</html>" },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      [],
-    );
-    const markdown = await camofoxFetch("https://example.com/", undefined, {
-      fetcher: warmFetcher,
-      spawnCamofox,
+    const calls: CliCall[] = [];
+    const markdown = await camoufoxFetch("https://example.com/", undefined, {
+      ...cliDeps({ evalHtml: "<html>w</html>" }, calls),
+      probeServer: async () => true,
+      spawnCamoufox,
       toMarkdown: async () => "md",
     });
 
@@ -1233,130 +1144,239 @@ describe("camofox+trafilatura バックエンド", () => {
   });
 });
 
-describe("camofox サーバー起動時の環境変数", () => {
-  it("未設定の変数だけ既定値を注入する", () => {
-    assert.deepEqual(camofoxServerEnv({}), {
-      CAMOFOX_BIND_HOST: "127.0.0.1",
-      CAMOFOX_CRASH_REPORT_ENABLED: "false",
-    });
-  });
+describe("camoufox サーバー起動コマンド", () => {
+  it("bun server.mjs を拡張ディレクトリでバックグラウンド起動する", () => {
+    const spawnSpec = buildCamoufoxServerSpawn("/extensions/web-search");
 
-  it("利用者の設定を優先し、他の変数を引き継ぐ", () => {
-    assert.deepEqual(
-      camofoxServerEnv({
-        CAMOFOX_BIND_HOST: "0.0.0.0",
-        CAMOUFOX_EXECUTABLE: "/path/to/camoufox-bin",
-      }),
-      {
-        CAMOUFOX_EXECUTABLE: "/path/to/camoufox-bin",
-        CAMOFOX_BIND_HOST: "0.0.0.0",
-        CAMOFOX_CRASH_REPORT_ENABLED: "false",
-      },
-    );
-  });
-});
-
-describe("camofox サーバー起動コマンド", () => {
-  it("npx @askjo/camofox-browser@1.14.0 をバックグラウンドで起動する", () => {
-    const spawnSpec = buildCamofoxServerSpawn();
-
-    assert.equal(spawnSpec.command, "npx");
-    assert.deepEqual(spawnSpec.args, ["@askjo/camofox-browser@1.14.0"]);
+    assert.equal(spawnSpec.command, "bun");
+    assert.deepEqual(spawnSpec.args, ["server.mjs"]);
+    assert.equal(spawnSpec.options.cwd, "/extensions/web-search");
     assert.equal(spawnSpec.options.detached, true);
     assert.equal(spawnSpec.options.stdio, "ignore");
-    assert.deepEqual(spawnSpec.options.env, camofoxServerEnv());
+  });
+
+  it("既定の起動ディレクトリに playwright-cli 用 config が置かれる", () => {
+    const spawnSpec = buildCamoufoxServerSpawn();
+
+    assert.equal(spawnSpec.options.cwd, dirname(playwrightCliConfigPath()));
   });
 });
 
-describe("camofox 接続先", () => {
-  it("既定は http://127.0.0.1:9377", () => {
-    assert.equal(camofoxBaseUrl({}), "http://127.0.0.1:9377");
+describe("playwright-cli 起動パラメータ", () => {
+  it("config パスは拡張ディレクトリ内の playwright-cli.config.json", () => {
+    assert.equal(
+      playwrightCliConfigPath("/ext/web-search"),
+      "/ext/web-search/playwright-cli.config.json",
+    );
   });
 
-  it("環境変数 CAMOFOX_BASE_URL で変更できる", () => {
+  it("CLI 引数はセッションを -s= で指定する", () => {
+    assert.deepEqual(buildPlaywrightCliArgs("web-fetch", ["open", "https://example.com/"]), [
+      "-s=web-fetch",
+      "open",
+      "https://example.com/",
+    ]);
+  });
+
+  it("PLAYWRIGHT_MCP_CONFIG に config パスを設定し、他の変数を引き継ぐ", () => {
+    const env = buildPlaywrightCliEnv({ EXISTING: "1" }, "/cfg.json");
+
+    assert.equal(env.PLAYWRIGHT_MCP_CONFIG, "/cfg.json");
+    assert.equal(env.EXISTING, "1");
+  });
+});
+
+describe("playwright-cli config の接続先反映", () => {
+  it("config JSON は接続先（CAMOUFOX_BASE_URL）を remoteEndpoint に反映する", () => {
+    const json = JSON.parse(playwrightCliConfigJson("ws://localhost:9999/fox")) as {
+      browser: { browserName: string; remoteEndpoint: string };
+    };
+
+    assert.equal(json.browser.remoteEndpoint, "ws://localhost:9999/fox");
+    assert.equal(json.browser.browserName, "firefox");
+  });
+
+  it("syncPlaywrightCliConfig は指定ディレクトリの config を接続先に合わせて書き込む", () => {
+    const dir = mkdtempSync(join(tmpdir(), "web-search-config-test-"));
+    try {
+      syncPlaywrightCliConfig(dir, "ws://localhost:9999/fox");
+
+      const written = readFileSync(playwrightCliConfigPath(dir), "utf8");
+      assert.equal(written, playwrightCliConfigJson("ws://localhost:9999/fox"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("syncPlaywrightCliConfig は既定で camoufoxBaseUrl() の接続先を使う", () => {
+    const dir = mkdtempSync(join(tmpdir(), "web-search-config-test-"));
+    const previous = process.env.CAMOUFOX_BASE_URL;
+    process.env.CAMOUFOX_BASE_URL = "ws://localhost:7777/fox";
+    try {
+      syncPlaywrightCliConfig(dir);
+
+      const written = JSON.parse(
+        readFileSync(playwrightCliConfigPath(dir), "utf8"),
+      ) as { browser: { remoteEndpoint: string } };
+      assert.equal(written.browser.remoteEndpoint, "ws://localhost:7777/fox");
+    } finally {
+      if (previous === undefined) delete process.env.CAMOUFOX_BASE_URL;
+      else process.env.CAMOUFOX_BASE_URL = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("camoufox 接続先", () => {
+  it("既定は ws://127.0.0.1:9378/camoufox", () => {
+    assert.equal(camoufoxBaseUrl({}), "ws://127.0.0.1:9378/camoufox");
+  });
+
+  it("環境変数 CAMOUFOX_BASE_URL で変更できる", () => {
     assert.equal(
-      camofoxBaseUrl({ CAMOFOX_BASE_URL: "http://localhost:9999" }),
-      "http://localhost:9999",
+      camoufoxBaseUrl({ CAMOUFOX_BASE_URL: "ws://localhost:9999/camoufox" }),
+      "ws://localhost:9999/camoufox",
     );
   });
 });
 
-describe("camofox による描画（camofoxRender）", () => {
-  it("web_search と web_fetch で sessionKey を分ける", async () => {
-    const renderTabs = (sessionKeys: string[]) =>
-      mockCamofoxFetcher(
-        [
-          { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-          {
-            method: "POST",
-            pattern: /^\/tabs$/,
-            respond: () => {
-              return { tabId: `TAB${sessionKeys.length}` };
-            },
-          },
-          {
-            method: "POST",
-            pattern: /^\/tabs\/TAB\d+\/wait$/,
-            body: { ok: true, ready: true },
-          },
-          {
-            method: "POST",
-            pattern: /^\/tabs\/TAB\d+\/evaluate$/,
-            body: { ok: true, result: "<html>x</html>" },
-          },
-          { method: "DELETE", pattern: /^\/tabs\/TAB\d+\?userId=pi$/, body: { ok: true } },
-        ],
-        [],
-      );
+describe("camoufox による描画（camoufoxRender）", () => {
+  it("web_search は web-search、web_fetch は web-fetch セッションで CLI を呼ぶ", async () => {
+    const calls: CliCall[] = [];
+    const deps = cliDeps({ health: "ok", evalHtml: "<html>x</html>" }, calls);
 
-    const sessionKeys: string[] = [];
-    const fetcher = (input: string | URL | Request, init?: RequestInit) => {
-      const body = init?.body === undefined ? undefined : tryParseJson(String(init.body));
-      if (
-        String(input).endsWith("/tabs") &&
-        body &&
-        typeof body === "object" &&
-        "sessionKey" in body
-      ) {
-        sessionKeys.push((body as { sessionKey: string }).sessionKey);
-      }
-      return renderTabs(sessionKeys)(input, init);
+    await camoufoxRender("https://example.com/a", "web-search", undefined, deps);
+    await camoufoxRender("https://example.com/b", "web-fetch", undefined, deps);
+
+    const openSessions = calls
+      .filter((call) => call.args[0] === "open")
+      .map((call) => call.sessionKey);
+    assert.deepEqual(openSessions, ["web-search", "web-fetch"]);
+  });
+
+  it("描画の前に playwright-cli config を接続先に合わせて更新する", async () => {
+    const calls: CliCall[] = [];
+    let synced = false;
+    const deps = {
+      ...cliDeps({ health: "ok", evalHtml: "<html>x</html>" }, calls),
+      syncConfig: () => {
+        synced = true;
+      },
     };
 
-    await camofoxRender("https://example.com/a", "web-search", undefined, {
-      fetcher,
-      spawnCamofox: () => {},
-    });
-    await camofoxRender("https://example.com/b", "web-fetch", undefined, {
-      fetcher,
-      spawnCamofox: () => {},
-    });
+    await camoufoxRender("https://example.com/", "web-fetch", undefined, deps);
 
-    assert.deepEqual(sessionKeys, ["web-search", "web-fetch"]);
+    assert.ok(synced);
+    const firstCommand = calls[0]?.args[0];
+    assert.notEqual(firstCommand, "open");
+  });
+
+  it("open の前に残存セッションを閉じ、cookie やページ状態を持ち越さない", async () => {
+    const calls: CliCall[] = [];
+
+    await camoufoxRender("https://example.com/", "web-fetch", undefined, cliDeps({
+      health: "ok",
+      evalHtml: "<html>c</html>",
+    }, calls));
+
+    assert.equal(calls[0]?.args[0], "close");
+    assert.ok(calls.findIndex((call) => call.args[0] === "open") > 0);
   });
 
   it("描画失敗のエラーには render: 段階ラベルを付ける", async () => {
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, status: 500, statusText: "Server Error" },
-      ],
-      [],
-    );
+    const calls: CliCall[] = [];
 
     await assert.rejects(
-      camofoxRender("https://example.com/", "web-search", undefined, {
-        fetcher,
-        spawnCamofox: () => {},
+      camoufoxRender("https://example.com/", "web-search", undefined, {
+        ...cliDeps({ health: "ok", openError: new Error("page.goto: Timeout") }, calls),
       }),
-      /render: 500 Server Error/,
+      /render: page\.goto: Timeout/,
     );
+  });
+
+  it("networkidle 待ち（run-code）の失敗は無視して処理を続行する", async () => {
+    const calls: CliCall[] = [];
+
+    const html = await camoufoxRender("https://example.com/", "web-fetch", undefined, {
+      ...cliDeps({
+        health: "ok",
+        evalHtml: "<html>r</html>",
+        runCodeError: new Error("waitForLoadState: timeout"),
+      }, calls),
+    });
+
+    assert.equal(html, "<html>r</html>");
+    const runCodeCall = calls.find((call) => call.args[0] === "run-code");
+    assert.match(runCodeCall?.args[1] ?? "", /waitForLoadState\('networkidle'/);
+    assert.match(runCodeCall?.args[1] ?? "", /timeout/);
   });
 });
 
+describe("camoufox ヘルスチェック（websocket）", () => {
+  it("websocket 接続が成功するサーバーは健全と判定する", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request, serve) {
+        if (serve.upgrade(request)) return;
+        return new Response("upgrade required", { status: 426 });
+      },
+      websocket: {
+        open() {},
+        message() {},
+      },
+    });
+    try {
+      const healthy = await camoufoxServerHealthy(
+        `ws://127.0.0.1:${server.port}/camoufox`,
+        AbortSignal.timeout(2_000),
+      );
+      assert.ok(healthy);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("接続できないサーバーは不健全と判定する", async () => {
+    const healthy = await camoufoxServerHealthy("ws://127.0.0.1:1/camoufox", AbortSignal.timeout(2_000));
+    assert.ok(!healthy);
+  });
+});
+
+describe("playwright-cli eval 出力のパース", () => {
+  it("### Result 行に続く JSON 文字列リテラルから HTML を取り出す", () => {
+    const output = `### Result\n${JSON.stringify("<html>body</html>")}\n### Ran Playwright code\n`;
+
+    assert.equal(parseEvalOutput(output), "<html>body</html>");
+  });
+
+  it("エスケープされた改行や引用符を含む HTML を復元する", () => {
+    const html = '<div class="a">\n</div>';
+    const output = `### Result\n${JSON.stringify(html)}\n`;
+
+    assert.equal(parseEvalOutput(output), html);
+  });
+
+  it("Result がなければ例外を出す", () => {
+    assert.throws(
+      () => parseEvalOutput("### Ran Playwright code\n```js\nx\n```\n"),
+      /no result/,
+    );
+  });
+
+  it("Result の次の行が文字列リテラルでなければ例外を出す", () => {
+    assert.throws(() => parseEvalOutput("### Result\nundefined\n"), /no result/);
+  });
+
+  it("空文字列の結果は例外を出す", () => {
+    assert.throws(() => parseEvalOutput('### Result\n""\n'), /no HTML/);
+  });
+});
+
+
+
 describe("openserp パース（openserpParse）", () => {
   it("ready を確認してから HTML を POST /<engine>/parse?format=markdown へ送る", async () => {
-    const calls: CamofoxCall[] = [];
+    const calls: OpenserpCall[] = [];
     const fetcher = mockOpenserpFetcher(
       [
         { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
@@ -1382,7 +1402,7 @@ describe("openserp パース（openserpParse）", () => {
   });
 
   it("サーバーが応答しないときは起動して準備を待つ", async () => {
-    const calls: CamofoxCall[] = [];
+    const calls: OpenserpCall[] = [];
     let readyChecks = 0;
     const fetcher = mockOpenserpFetcher(
       [
@@ -1494,32 +1514,10 @@ describe("openserp パース（openserpParse）", () => {
   });
 });
 
-describe("camofox+openserp 検索バックエンド（camofoxOpenserpSearch）", () => {
+describe("camoufox+openserp 検索バックエンド（camoufoxOpenserpSearch）", () => {
   it("SERP URL を構築し web-search セッションで描画し、パース結果を10件に切る", async () => {
-    const camofoxCalls: CamofoxCall[] = [];
-    const openserpCalls: CamofoxCall[] = [];
-    const camofoxFetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        {
-          method: "POST",
-          pattern: /^\/tabs$/,
-          body: { tabId: "TAB1" },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/wait$/,
-          body: { ok: true, ready: true },
-        },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: { ok: true, result: "<html>serp</html>" },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      camofoxCalls,
-    );
+    const cliCalls: CliCall[] = [];
+    const openserpCalls: OpenserpCall[] = [];
     const twelveResults = Array.from(
       { length: 12 },
       (_, index) => `### ${index + 1}. Result ${index + 1}\n\n-> https://example.com/${index + 1}`,
@@ -1536,24 +1534,21 @@ describe("camofox+openserp 検索バックエンド（camofoxOpenserpSearch）",
       openserpCalls,
     );
     const deps = {
-      fetcher: ((input: string | URL | Request, init?: RequestInit) =>
-        String(input).startsWith(camofoxBase)
-          ? camofoxFetcher(input, init)
-          : openserpFetcher(input, init)) as unknown as typeof fetch,
-      spawnCamofox: () => {},
+      ...cliDeps({ health: "ok", evalHtml: "<html>serp</html>" }, cliCalls),
+      fetcher: openserpFetcher,
       spawnOpenserp: () => {},
     };
 
-    const markdown = await camofoxOpenserpSearch("bing", "クエリ", undefined, "JA", deps);
+    const markdown = await camoufoxOpenserpSearch("bing", "クエリ", undefined, "JA", deps);
 
     const headings = markdown.match(/^### \d+\./gm) ?? [];
     assert.equal(headings.length, 10);
-    const tabCall = camofoxCalls.find((call) => call.path === "/tabs");
-    assert.deepEqual(tabCall?.body, {
-      userId: "pi",
-      sessionKey: "web-search",
-      url: "https://www.bing.com/search?q=%E3%82%AF%E3%82%A8%E3%83%AA&mkt=ja-JP",
-    });
+    const openCall = cliCalls.find((call) => call.args[0] === "open");
+    assert.equal(openCall?.sessionKey, "web-search");
+    assert.deepEqual(
+      openCall?.args,
+      ["open", "https://www.bing.com/search?q=%E3%82%AF%E3%82%A8%E3%83%AA&mkt=ja-JP"],
+    );
     const parseCall = openserpCalls.find((call) => call.method === "POST");
     assert.equal(parseCall?.body, "<html>serp</html>");
   });
@@ -1620,30 +1615,16 @@ describe("チャレンジページ検出", () => {
     );
   });
 
-  it("camofoxFetch はチャレンジページの描画結果を challenge detected で失敗扱いにする", async () => {
-    const calls: CamofoxCall[] = [];
-    const fetcher = mockCamofoxFetcher(
-      [
-        { method: "GET", pattern: /^\/health$/, body: { ok: true } },
-        { method: "POST", pattern: /^\/tabs$/, body: { tabId: "TAB1" } },
-        { method: "POST", pattern: /^\/tabs\/TAB1\/wait$/, body: { ok: true, ready: true } },
-        {
-          method: "POST",
-          pattern: /^\/tabs\/TAB1\/evaluate$/,
-          body: {
-            ok: true,
-            result: "<html><head><title>Just a moment...</title></head></html>",
-          },
-        },
-        { method: "DELETE", pattern: /^\/tabs\/TAB1\?userId=pi$/, body: { ok: true } },
-      ],
-      calls,
-    );
+  it("camoufoxFetch はチャレンジページの描画結果を challenge detected で失敗扱いにする", async () => {
+    const calls: CliCall[] = [];
     let toMarkdownCalls = 0;
 
     await assert.rejects(
-      camofoxFetch("https://example.com/", undefined, {
-        ...camofoxDeps(fetcher),
+      camoufoxFetch("https://example.com/", undefined, {
+        ...cliDeps(
+          { health: "ok", evalHtml: "<html><head><title>Just a moment...</title></head></html>" },
+          calls,
+        ),
         toMarkdown: async () => {
           toMarkdownCalls++;
           return "md";

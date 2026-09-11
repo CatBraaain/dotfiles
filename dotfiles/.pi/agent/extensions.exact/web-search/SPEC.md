@@ -45,17 +45,10 @@ sequenceDiagram
 
 両ツールは2つのローカル常駐サーバーを使う。いずれもリクエストのたびにヘルスチェックを行い、成功しないときはバックグラウンドで起動し、成功するまで待ってから処理を続ける。すでに動いているサーバーは起動しない。タイムアウトまでにヘルスチェックが成功しない場合はバックエンドの失敗となるが、起動したサーバープロセスは残るため、次のリクエストでは成功しうる。起動コマンドの実行に失敗した場合（実行ファイルが PATH にない等）もバックエンドの失敗として扱い、pi プロセス自体は終了しない。
 
-| サーバー        | 用途                   | 既定の接続先            | ヘルスチェック       | 起動コマンド                                                        |
-| --------------- | ---------------------- | ----------------------- | -------------------- | ------------------------------------------------------------------- |
-| camofox-browser | ページの描画とHTML取得 | `http://127.0.0.1:9377` | `GET /health` が 2xx | `npx @askjo/camofox-browser@1.14.0`                                 |
+| サーバー        | 用途                   | 既定の接続先                   | ヘルスチェック           | 起動コマンド                                                        |
+| --------------- | ---------------------- | ------------------------------ | ------------------------ | ------------------------------------------------------------------- |
+| camoufox server | ページの描画とHTML取得 | `ws://127.0.0.1:9378/camoufox` | websocket 接続が成功する | `bun server.mjs`（拡張ディレクトリ内）                              |
 | openserp        | SERP HTML のパース     | `http://127.0.0.1:7000` | `GET /ready` が 2xx  | `openserp serve -a <host> -p <port> --quiet`（logs.txt を書かない） |
-
-camofox-browser 起動時に拡張が設定する環境変数は次のとおり。利用者の環境変数があればそちらを優先し、それ以外の環境変数も引き継ぐ。
-
-| 変数                           | 設定値      | 意味                                 |
-| ------------------------------ | ----------- | ------------------------------------ |
-| `CAMOFOX_BIND_HOST`            | `127.0.0.1` | ローカルホスト以外へのバインドを防ぐ |
-| `CAMOFOX_CRASH_REPORT_ENABLED` | `false`     | テレメトリ送信を無効化する           |
 
 openserp の起動アドレスとポートは接続先（`OPENSERP_BASE_URL`）の host・port を使う。openserp はパース専用として使うためブラウザを起動せず、Chrome のインストール状態に依存しない。
 
@@ -65,9 +58,9 @@ openserp の起動アドレスとポートは接続先（`OPENSERP_BASE_URL`）�
 
 | 順序 | バックエンド                 |
 | ---- | ---------------------------- |
-| 1    | camofox+openserp(google)     |
-| 2    | camofox+openserp(duckduckgo) |
-| 3    | camofox+openserp(bing)       |
+| 1    | camoufox+openserp(google)     |
+| 2    | camoufox+openserp(duckduckgo) |
+| 3    | camoufox+openserp(bing)       |
 
 ### web_fetch のバックエンド
 
@@ -77,7 +70,7 @@ openserp の起動アドレスとポートは接続先（`OPENSERP_BASE_URL`）�
 | ----------------------- | ------------------------ |
 | Reddit 投稿パーマリンク | Reddit のみ              |
 | StackOverflow 質問パーマリンク | StackOverflow のみ |
-| その他                  | camofox+trafilatura のみ |
+| その他                  | camoufox+trafilatura のみ |
 
 Reddit・StackOverflow バックエンドが失敗した場合も通常どおりバックエンド失敗として扱い、web_fetch 全体が例外となる。
 
@@ -88,18 +81,18 @@ Reddit・StackOverflow バックエンドが失敗した場合も通常どおり
 | 段階                           | 対象                                          | 最大待ち時間 |
 | ------------------------------ | --------------------------------------------- | ------------ |
 | サーバー起動待ち（両サーバー） | ヘルスチェックのポーリングを含む              | 15秒         |
-| camofox による描画             | タブ生成・ナビゲーション・描画済み DOM の取得 | 30秒         |
+| camoufox による描画            | ページの open・ナビゲーション・描画済み DOM の取得 | 30秒    |
 | openserp へのパース要求        | `POST /<engine>/parse` の往復                 | 15秒         |
 | trafilatura による変換         | HTML → Markdown 変換                          | 15秒         |
 | Reddit の各取得                | フィード・埋め込み・oEmbed の1要求ごと        | 15秒         |
 | StackOverflow の各取得         | SE API・質問フィードの1リクエストごと        | 15秒         |
 
-## camofox+openserp バックエンド（web_search）
+## camoufox+openserp バックエンド（web_search）
 
 検索クエリから検索結果リストを得るまでの経路:
 
 1. 検索エンジンごとの SERP URL を構築する。クエリは URL エンコードする。`lang` 指定時は各エンジンの言語パラメータへ反映する（bing: `mkt`、duckduckgo: `kl`、google: `hl`・`gl`）。未指定時は各エンジンの既定ロケールになる。bing の `mkt` と duckduckgo の `kl` は対応値のない lang を指定なしとして扱う。google は `hl` に lang を常に設定し、`gl` は対応国の定義された lang のみ設定する
-2. camofox-browser でその URL を描画し、描画済み DOM（`document.documentElement.outerHTML`）を取得する（§camofox による描画）
+2. 常駐 camoufox server でその URL を描画し、描画済み DOM（`document.documentElement.outerHTML`）を取得する（§camoufox による描画）
 3. HTML を openserp の `POST /<engine>/parse?format=markdown` へリクエストボディとして送り、Markdown 形式の検索結果を得る
 4. 先頭から最大10件までを結果として返す（`### <数字>.` 見出し単位で数える）
 
@@ -113,20 +106,20 @@ openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパー
 | duckduckgo | `https://duckduckgo.com/`                                             |
 | google     | `https://www.google.com/search`（TLD は言語により既定から変更しない） |
 
-## camofox による描画
+## camoufox による描画
 
-camofox-browser のタブAPIでページを描画し、HTML を取得する。web_search と web_fetch の両方から使う共通の取得経路である。
+常駐 camoufox server に接続した playwright-cli セッションでページを描画し、HTML を取得する。web_search と web_fetch の両方から使う共通の取得経路である。
 
-1. タブを作成して URL へ移動する（userId は全リクエストで共通の `pi`。sessionKey は web_search では `web-search`、web_fetch では `web-fetch`。cookie などのセッション状態は sessionKey 単位で共有される）
+1. web_search ではセッション `web-search`、web_fetch ではセッション `web-fetch` として server に接続し、URL を開く。各リクエストは独立しており、cookie やページ状態はリクエスト間で共有されない
 2. ページの描画が落ち着くまで待つ（networkidle とハイドレーションの完了を確認）。この待ちに失敗しても処理は続行する
 3. 描画済み DOM（`document.documentElement.outerHTML`）を取得する
-4. タブを閉じる（成否に関わらず。閉鎖失敗は結果に影響させない）
+4. ページを閉じる（成否に関わらず。閉鎖失敗は結果に影響させない）
 
-## camofox+trafilatura バックエンド（web_fetch）
+## camoufox+trafilatura バックエンド（web_fetch）
 
 URL のページ本文を Markdown で得る経路:
 
-1. camofox-browser で URL を描画し、HTML を取得する（§camofox による描画）
+1. 常駐 camoufox server で URL を描画し、HTML を取得する（§camoufox による描画）
 2. 描画済み HTML がチャレンジページなら、失敗として扱う（§チャレンジページ検出）
 3. HTML を trafilatura で Markdown 化する
 
@@ -134,7 +127,7 @@ URL のページ本文を Markdown で得る経路:
 
 ## チャレンジページ検出
 
-描画済み HTML がボット検証のチャレンジページのとき、camofox+trafilatura バックエンドは本文を返さず失敗として扱う。失敗時のエラー文言は `challenge detected` とする。判定は trafilatura 変換前の描画済み HTML に対して行う。
+描画済み HTML がボット検証のチャレンジページのとき、camoufox+trafilatura バックエンドは本文を返さず失敗として扱う。失敗時のエラー文言は `challenge detected` とする。判定は trafilatura 変換前の描画済み HTML に対して行う。
 
 チャレンジページは HTML の構造シグナルで判定し、ロケール依存の表示文言は使わない。次のシグナルのいずれか1つでも含まれる HTML をチャレンジページとする:
 
@@ -214,7 +207,7 @@ web_search / web_fetch のいずれにもクールダウンを設けない。過
 
 ## 言語ヒント（web_search のみ）
 
-`lang`（任意）を指定すると、SERP URL 構築時に各エンジンの言語パラメータへ反映する（§camofox+openserp バックエンド）。未指定時は各エンジンの既定ロケールになる。
+`lang`（任意）を指定すると、SERP URL 構築時に各エンジンの言語パラメータへ反映する（§camoufox+openserp バックエンド）。未指定時は各エンジンの既定ロケールになる。
 
 ## 表示（TUI）
 
@@ -241,14 +234,14 @@ web_fetch のタイトルは、取得済みの本文（Markdown）の見出し�
 
 ```
 web_search - "<クエリ>"
-✗ camofox+openserp(google) - "parse: captcha detected"
-✗ camofox+openserp(duckduckgo) - "render: navigation timeout"
-✓ camofox+openserp(bing)
+✗ camoufox+openserp(google) - "parse: captcha detected"
+✗ camoufox+openserp(duckduckgo) - "render: navigation timeout"
+✓ camoufox+openserp(bing)
 ```
 
 ## 環境変数
 
 | 変数                | 影響                                                                    |
 | ------------------- | ----------------------------------------------------------------------- |
-| `CAMOFOX_BASE_URL`  | camofox-browser の接続先（既定 `http://127.0.0.1:9377`）                |
+| `CAMOUFOX_BASE_URL` | camoufox server の接続先（既定 `ws://127.0.0.1:9378/camoufox`）         |
 | `OPENSERP_BASE_URL` | openserp の接続先と起動アドレス・ポート（既定 `http://127.0.0.1:7000`） |
