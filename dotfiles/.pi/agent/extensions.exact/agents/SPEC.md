@@ -232,7 +232,7 @@ cooldown の破棄・維持は、発生タイミングごとに「モデルの�
 
 モデルレジストリの `Model.input` が `"image"` を含むモデルを画像入力対応、含まないモデルを画像非対応とする。
 
-`vision` class には画像入力対応モデルだけを置く。`vision` agent は `tools` と `systemPrompt` を `junior` と同じ内容に保つ agent であり、`class: vision` のみが異なる。`vision` の役割は、画像入力非対応モデルで動く agent から画像の読み取りを委譲される受け皿である。
+`vision` class には画像入力対応モデルだけを置く。`vision` agent は `tools` と `systemPrompt` を `junior` と同じ内容に保つ agent であり、`class: vision` のみが異なる。この同一性は設定検証で強制しない運用規約であり、`junior` と異なる `tools`・`systemPrompt` でも設定検証は成功する。`vision` の役割は、画像入力非対応モデルで動く agent から画像の読み取りを委譲される受け皿である。
 
 `read` は画像ファイルを現在のモデルへの Vision 入力として返す。現在のモデルの画像入力対応による振る舞いは sandboxed-tools の spec が定める。画像入力非対応モデルで動く agent は、画像の読み取りを `vision` 子 agent へ委譲する。画像を OCR テキストへ変換する処理は行わない。
 

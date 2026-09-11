@@ -583,7 +583,6 @@ describe("§2.1 画像ファイル", () => {
     }),
   );
 
-  // spec 外の検証: モデル情報が取れない context では非対応側に倒す（実装の判定）。
   it(
     "モデル情報がない context の画像 read も委譲を促すエラーを返す",
     withTempDirectory(async (directory) => {

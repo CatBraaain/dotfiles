@@ -43,7 +43,7 @@ const config: AgentConfig = {
   agents: {
     manager: {
       class: "middle",
-      tools: ["*", "!read_image"],
+      tools: ["*", "!handoff_session"],
       subagents: ["worker", "vision"],
       systemPrompt: ["ファイル操作は禁止"],
     },
@@ -394,7 +394,7 @@ classes:
 agents:
   manager:
     class: middle
-    tools: ["!read_image"]
+    tools: ["!handoff_session"]
     subagents: [vision]
     systemPrompt: []
   vision:
@@ -637,9 +637,9 @@ classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  main: {class: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
-  senior: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  junior: {class: middle, tools: ["*", "!read_image"], subagents: [], systemPrompt: []}
+  main: {class: middle, tools: ["*", "!handoff_session"], subagents: [], systemPrompt: []}
+  senior: {class: middle, tools: ["*", "!handoff_session"], subagents: [vision], systemPrompt: []}
+  junior: {class: middle, tools: ["*", "!handoff_session"], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must delegate to vision/);
   });
@@ -650,9 +650,9 @@ classes:
   middle: [{provider: zai, model: glm-5.2}]
   vision: [{provider: zai, model: glm-5.3-flash}]
 agents:
-  manager: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  senior: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
-  junior: {class: middle, tools: ["*", "!read_image"], subagents: [vision], systemPrompt: []}
+  manager: {class: middle, tools: ["*", "!handoff_session"], subagents: [vision], systemPrompt: []}
+  senior: {class: middle, tools: ["*", "!handoff_session"], subagents: [vision], systemPrompt: []}
+  junior: {class: middle, tools: ["*", "!handoff_session"], subagents: [vision], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /junior must not delegate to vision/);
   });
@@ -665,6 +665,18 @@ classes:
 agents:
   manager: {class: middle, tools: ["*"], subagents: [vision], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
+    assert.equal(result.error, undefined);
+  });
+
+  it("vision と junior の tools・systemPrompt が異なっても設定検証を通す", () => {
+    const result = parseAgentConfig(`default: manager
+classes:
+  middle: [{provider: zai, model: glm-5.2}]
+  vision: [{provider: zai, model: glm-5.3-flash}]
+agents:
+  manager: {class: middle, tools: ["*"], subagents: [vision], systemPrompt: []}
+  junior: {class: middle, tools: [bash], subagents: [], systemPrompt: [junior prompt]}
+  vision: {class: vision, tools: ["*", "!handoff_session"], subagents: [], systemPrompt: [vision prompt]}`);
     assert.equal(result.error, undefined);
   });
 
@@ -718,7 +730,7 @@ describe("ツール許可", () => {
   });
 
   it("!<tool> はワイルドカードがあってもそのツールを拒否する", () => {
-    assert.equal(shouldBlockToolCall("manager", "read_image", config), true);
+    assert.equal(shouldBlockToolCall("manager", "handoff_session", config), true);
     assert.equal(isToolAllowed("manager", "future_tool", config), true);
   });
 });
@@ -1090,7 +1102,7 @@ describe("class によるモデルルーティング", () => {
             ...config.agents,
             main: {
               class: "middle",
-              tools: ["*", "!read_image"],
+              tools: ["*", "!handoff_session"],
               subagents: ["worker", "vision"],
               systemPrompt: [],
             },
@@ -1490,7 +1502,7 @@ describe("手動モデル選択", () => {
             ...config.agents,
             main: {
               class: "middle",
-              tools: ["*", "!read_image"],
+              tools: ["*", "!handoff_session"],
               subagents: ["worker", "vision"],
               systemPrompt: [],
             },
@@ -1675,7 +1687,7 @@ describe("手動モデル選択", () => {
       ...config,
       agents: {
         ...config.agents,
-        junior: { class: "low", tools: ["*", "!read_image"], subagents: [], systemPrompt: [] },
+        junior: { class: "low", tools: ["*", "!handoff_session"], subagents: [], systemPrompt: [] },
       },
     };
     const junior = captureAgentsExtension({ config: juniorConfig });
