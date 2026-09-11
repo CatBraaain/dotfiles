@@ -14,6 +14,8 @@ import webSearchExtension, {
   camoufoxRender,
   camoufoxServerHealthy,
   camoufoxServerLogPath,
+  CHALLENGE_SIGNALS,
+  challengeWaitSnippet,
   CONVERT_TIMEOUT_MS,
   defaultFetchBackends,
   detectChallengePage,
@@ -25,8 +27,8 @@ import webSearchExtension, {
   openserpParse,
   defaultSearchBackends,
   fetchOne,
-  parseEvalOutput,
   parseRedditAtom,
+  parseRenderedPage,
   parseRedditEmbed,
   parseRedditOEmbed,
   parseRedditPostUrl,
@@ -1024,15 +1026,15 @@ const mockOpenserpFetcher = createMockServerFetcher(openserpBase);
 
 type CliCall = { sessionKey: string; args: string[]; signal?: AbortSignal };
 
-// `playwright-cli eval` の stdout: `### Result` 行に続いて HTML の JSON 文字列
+// `playwright-cli run-code` の stdout: `### Result` 行に続いて戻り値の JSON 文字列
 // リテラルが 1 行で出る（§camoufox による描画）。
-function evalOutput(html: string): string {
+function runCodeOutput(html: string, mode: "settled" | "challenge" = "settled"): string {
   return [
     "### Result",
-    JSON.stringify(html),
+    JSON.stringify({ mode, html }),
     "### Ran Playwright code",
     "```js",
-    "await page.evaluate('() => document.documentElement.outerHTML');",
+    "await (async page => { ... })(page);",
     "```",
     "",
   ].join("\n");
@@ -1042,9 +1044,9 @@ type CliMockOptions = {
   health?: "ok" | "fail";
   openError?: Error;
   runCodeError?: Error;
-  evalError?: Error;
-  evalOutput?: string;
-  evalHtml?: string;
+  runCodeOutput?: string;
+  runCodeHtml?: string;
+  runCodeMode?: "settled" | "challenge";
   closeError?: Error;
 };
 
@@ -1068,12 +1070,8 @@ function cliDeps(
       }
       if (command === "run-code") {
         if (options.runCodeError) throw options.runCodeError;
-        return "";
-      }
-      if (command === "eval") {
-        if (options.evalError) throw options.evalError;
-        if (options.evalOutput !== undefined) return options.evalOutput;
-        return evalOutput(options.evalHtml ?? "");
+        if (options.runCodeOutput !== undefined) return options.runCodeOutput;
+        return runCodeOutput(options.runCodeHtml ?? "", options.runCodeMode);
       }
       if (command === "close") {
         if (options.closeError) throw options.closeError;
@@ -1085,12 +1083,12 @@ function cliDeps(
 }
 
 describe("camoufox+trafilatura バックエンド", () => {
-  it("サーバーが既に応答するときは起動せず、close→open→描画待ち→DOM取得→close→変換の順で進む", async () => {
+  it("サーバーが既に応答するときは起動せず、close→open→描画待ち→close→変換の順で進む", async () => {
     const calls: CliCall[] = [];
     const spawns = { count: 0 };
 
     const markdown = await camoufoxFetch("https://example.com/", undefined, {
-      ...cliDeps({ health: "ok", evalHtml: "<html>body</html>" }, calls, spawns),
+      ...cliDeps({ health: "ok", runCodeHtml: "<html>body</html>" }, calls, spawns),
       toMarkdown: async (html: string) => `md:${html}`,
     });
 
@@ -1098,7 +1096,7 @@ describe("camoufox+trafilatura バックエンド", () => {
     assert.equal(spawns.count, 0);
     assert.deepEqual(
       calls.map((call) => call.args[0]),
-      ["close", "open", "run-code", "eval", "close"],
+      ["close", "open", "run-code", "close"],
     );
     const openCall = calls.find((call) => call.args[0] === "open");
     assert.equal(openCall?.sessionKey, "web-fetch");
@@ -1108,7 +1106,7 @@ describe("camoufox+trafilatura バックエンド", () => {
     const calls: CliCall[] = [];
     const spawns = { count: 0 };
     let healthChecks = 0;
-    const deps = cliDeps({ evalHtml: "<html>x</html>" }, calls, spawns);
+    const deps = cliDeps({ runCodeHtml: "<html>x</html>" }, calls, spawns);
 
     const markdown = await camoufoxFetch("https://example.com/", undefined, {
       ...deps,
@@ -1134,12 +1132,12 @@ describe("camoufox+trafilatura バックエンド", () => {
     assert.equal(calls.length, 0);
   });
 
-  it("DOM 取得に失敗してもページを閉じる", async () => {
+  it("描画（run-code）に失敗してもページを閉じる", async () => {
     const calls: CliCall[] = [];
 
     await assert.rejects(
       camoufoxFetch("https://example.com/", undefined, {
-        ...cliDeps({ health: "ok", evalError: new Error("evaluate failed") }, calls),
+        ...cliDeps({ health: "ok", runCodeError: new Error("evaluate failed") }, calls),
         toMarkdown: async () => "md",
       }),
       /render: evaluate failed/,
@@ -1147,7 +1145,7 @@ describe("camoufox+trafilatura バックエンド", () => {
     assert.equal(calls.at(-1)?.args[0], "close");
   });
 
-  it("eval の出力に Result がなければ例外を出す", async () => {
+  it("run-code の出力に Result がなければ例外を出す", async () => {
     const calls: CliCall[] = [];
 
     await assert.rejects(
@@ -1155,13 +1153,13 @@ describe("camoufox+trafilatura バックエンド", () => {
         ...cliDeps(
           {
             health: "ok",
-            evalOutput: "### Ran Playwright code\n```js\nawait page.evaluate();\n```\n",
+            runCodeOutput: "### Ran Playwright code\n```js\nawait page.evaluate();\n```\n",
           },
           calls,
         ),
         toMarkdown: async () => "md",
       }),
-      /render: playwright-cli eval output has no result/,
+      /render: playwright-cli run-code output has no result/,
     );
   });
 
@@ -1171,7 +1169,7 @@ describe("camoufox+trafilatura バックエンド", () => {
     const markdown = await camoufoxFetch("https://example.com/", undefined, {
       ...cliDeps({
         health: "ok",
-        evalHtml: "<html>y</html>",
+        runCodeHtml: "<html>y</html>",
         closeError: new Error("close failed"),
       }, calls),
       toMarkdown: async () => "md",
@@ -1185,7 +1183,7 @@ describe("camoufox+trafilatura バックエンド", () => {
     const order: string[] = [];
 
     await camoufoxFetch("https://example.com/", undefined, {
-      ...cliDeps({ health: "ok", evalHtml: "<html>z</html>" }, calls),
+      ...cliDeps({ health: "ok", runCodeHtml: "<html>z</html>" }, calls),
       toMarkdown: async () => {
         order.push(...calls.map((call) => call.args[0] ?? ""));
         order.push("CONVERT");
@@ -1193,7 +1191,7 @@ describe("camoufox+trafilatura バックエンド", () => {
       },
     });
 
-    assert.deepEqual(order, ["close", "open", "run-code", "eval", "close", "CONVERT"]);
+    assert.deepEqual(order, ["close", "open", "run-code", "close", "CONVERT"]);
   });
 
   it("CLI 操作と trafilatura 変換は別々のシグナルを使う", async () => {
@@ -1202,7 +1200,7 @@ describe("camoufox+trafilatura バックエンド", () => {
     let convertSignal: AbortSignal | undefined;
 
     await camoufoxFetch("https://example.com/", callerSignal, {
-      ...cliDeps({ health: "ok", evalHtml: "<html>s</html>" }, calls),
+      ...cliDeps({ health: "ok", runCodeHtml: "<html>s</html>" }, calls),
       toMarkdown: async (_html: string, toMarkdownSignal?: AbortSignal) => {
         convertSignal = toMarkdownSignal;
         return "md";
@@ -1232,7 +1230,7 @@ describe("camoufox+trafilatura バックエンド", () => {
 
     const calls: CliCall[] = [];
     const markdown = await camoufoxFetch("https://example.com/", undefined, {
-      ...cliDeps({ evalHtml: "<html>w</html>" }, calls),
+      ...cliDeps({ runCodeHtml: "<html>w</html>" }, calls),
       probeServer: async () => true,
       spawnCamoufox,
       toMarkdown: async () => "md",
@@ -1349,7 +1347,7 @@ describe("camoufox 接続先", () => {
 describe("camoufox による描画（camoufoxRender）", () => {
   it("web_search は web-search、web_fetch は web-fetch セッションで CLI を呼ぶ", async () => {
     const calls: CliCall[] = [];
-    const deps = cliDeps({ health: "ok", evalHtml: "<html>x</html>" }, calls);
+    const deps = cliDeps({ health: "ok", runCodeHtml: "<html>x</html>" }, calls);
 
     await camoufoxRender("https://example.com/a", "web-search", undefined, deps);
     await camoufoxRender("https://example.com/b", "web-fetch", undefined, deps);
@@ -1364,7 +1362,7 @@ describe("camoufox による描画（camoufoxRender）", () => {
     const calls: CliCall[] = [];
     let synced = false;
     const deps = {
-      ...cliDeps({ health: "ok", evalHtml: "<html>x</html>" }, calls),
+      ...cliDeps({ health: "ok", runCodeHtml: "<html>x</html>" }, calls),
       syncConfig: () => {
         synced = true;
       },
@@ -1382,7 +1380,7 @@ describe("camoufox による描画（camoufoxRender）", () => {
 
     await camoufoxRender("https://example.com/", "web-fetch", undefined, cliDeps({
       health: "ok",
-      evalHtml: "<html>c</html>",
+      runCodeHtml: "<html>c</html>",
     }, calls));
 
     assert.equal(calls[0]?.args[0], "close");
@@ -1400,21 +1398,40 @@ describe("camoufox による描画（camoufoxRender）", () => {
     );
   });
 
-  it("networkidle 待ち（run-code）の失敗は無視して処理を続行する", async () => {
+  it("run-code には networkidle 待ちとチャレンジポーリングを同時に実行するスニペットを渡す", async () => {
     const calls: CliCall[] = [];
 
-    const html = await camoufoxRender("https://example.com/", "web-fetch", undefined, {
-      ...cliDeps({
-        health: "ok",
-        evalHtml: "<html>r</html>",
-        runCodeError: new Error("waitForLoadState: timeout"),
-      }, calls),
+    await camoufoxRender("https://example.com/", "web-fetch", undefined, {
+      ...cliDeps({ health: "ok", runCodeHtml: "<html>r</html>" }, calls),
     });
 
-    assert.equal(html, "<html>r</html>");
     const runCodeCall = calls.find((call) => call.args[0] === "run-code");
-    assert.match(runCodeCall?.args[1] ?? "", /waitForLoadState\('networkidle'/);
-    assert.match(runCodeCall?.args[1] ?? "", /timeout/);
+    const snippet = runCodeCall?.args[1] ?? "";
+    assert.match(snippet, /waitForLoadState\('networkidle', \{ timeout: 5000 \}\)/);
+    assert.match(snippet, /waitForTimeout\(\d+\)/);
+    assert.match(snippet, /mode: 'challenge'/);
+    // シグナルは run-code 内で再構築できるよう source・flags が埋め込まれる
+    assert.match(snippet, /challengeSignals = \[/);
+    assert.equal([...snippet.matchAll(/new RegExp\(/g)].length, 1);
+  });
+
+  it("描画済み DOM がチャレンジページのとき render 失敗にする", async () => {
+    const calls: CliCall[] = [];
+
+    await assert.rejects(
+      camoufoxRender("https://example.com/", "web-fetch", undefined, {
+        ...cliDeps(
+          {
+            health: "ok",
+            runCodeHtml: '<html><head><title>Just a moment...</title></head></html>',
+            runCodeMode: "challenge",
+          },
+          calls,
+        ),
+      }),
+      /render: challenge detected/,
+    );
+    assert.equal(calls.at(-1)?.args[0], "close");
   });
 });
 
@@ -1448,33 +1465,42 @@ describe("camoufox ヘルスチェック（websocket）", () => {
   });
 });
 
-describe("playwright-cli eval 出力のパース", () => {
-  it("### Result 行に続く JSON 文字列リテラルから HTML を取り出す", () => {
-    const output = `### Result\n${JSON.stringify("<html>body</html>")}\n### Ran Playwright code\n`;
+describe("playwright-cli run-code 出力のパース", () => {
+  it("### Result 行に続く JSON オブジェクトから settled の HTML を取り出す", () => {
+    const output = `### Result\n${JSON.stringify({ mode: "settled", html: "<html>body</html>" })}\n### Ran Playwright code\n`;
 
-    assert.equal(parseEvalOutput(output), "<html>body</html>");
+    assert.equal(parseRenderedPage(output), "<html>body</html>");
   });
 
   it("エスケープされた改行や引用符を含む HTML を復元する", () => {
     const html = '<div class="a">\n</div>';
-    const output = `### Result\n${JSON.stringify(html)}\n`;
+    const output = `### Result\n${JSON.stringify({ mode: "settled", html })}\n`;
 
-    assert.equal(parseEvalOutput(output), html);
+    assert.equal(parseRenderedPage(output), html);
+  });
+
+  it("challenge モードは例外を出す", () => {
+    const output = `### Result\n${JSON.stringify({ mode: "challenge", html: "<html>x</html>" })}\n`;
+
+    assert.throws(() => parseRenderedPage(output), /challenge detected/);
   });
 
   it("Result がなければ例外を出す", () => {
     assert.throws(
-      () => parseEvalOutput("### Ran Playwright code\n```js\nx\n```\n"),
+      () => parseRenderedPage("### Ran Playwright code\n```js\nx\n```\n"),
       /no result/,
     );
   });
 
   it("Result の次の行が文字列リテラルでなければ例外を出す", () => {
-    assert.throws(() => parseEvalOutput("### Result\nundefined\n"), /no result/);
+    assert.throws(() => parseRenderedPage("### Result\nundefined\n"), /no result/);
   });
 
-  it("空文字列の結果は例外を出す", () => {
-    assert.throws(() => parseEvalOutput('### Result\n""\n'), /no HTML/);
+  it("html が空なら例外を出す", () => {
+    assert.throws(
+      () => parseRenderedPage(`### Result\n${JSON.stringify({ mode: "settled", html: "" })}\n`),
+      /no HTML/,
+    );
   });
 });
 
@@ -1640,7 +1666,7 @@ describe("camoufox+openserp 検索バックエンド（camoufoxOpenserpSearch）
       openserpCalls,
     );
     const deps = {
-      ...cliDeps({ health: "ok", evalHtml: "<html>serp</html>" }, cliCalls),
+      ...cliDeps({ health: "ok", runCodeHtml: "<html>serp</html>" }, cliCalls),
       fetcher: openserpFetcher,
       spawnOpenserp: () => {},
     };
@@ -1709,6 +1735,19 @@ describe("チャレンジページ検出", () => {
     }
   });
 
+  it("Google の CAPTCHA・sorry・soft block 固定ページをチャレンジページと判定する", () => {
+    const googleBlockPages = [
+      '<form id="captcha-form" action="https://www.google.com/search"></form>',
+      '<form action="https://www.google.com/sorry/index?continue=..."></form>',
+      '<body onload="document.getElementById(\'captcha\').submit()"></body>',
+      // soft block: 結果ブロック無し + noscript の JS リトライリンク
+      '<html><body><noscript><a href="https://www.google.com/search?q=x&amp;httpservice/retry/enablejs=1">enable js</a></noscript></body></html>',
+    ];
+    for (const html of googleBlockPages) {
+      assert.equal(detectChallengePage(html), true, html);
+    }
+  });
+
   it("通常ページと文言だけが似ているページはチャレンジページとしない", () => {
     assert.equal(
       detectChallengePage("<html><head><title>Example Domain</title></head></html>"),
@@ -1719,16 +1758,31 @@ describe("チャレンジページ検出", () => {
       detectChallengePage("<html><head><title>Just a moment</title></head></html>"),
       false,
     );
+    // reCAPTCHA 埋め込みの通常ページはシグナルにしない（data-sitekey・recaptcha）
+    assert.equal(
+      detectChallengePage('<div class="g-recaptcha" data-sitekey="k"><script src="https://www.google.com/recaptcha/api.js"></script></div>'),
+      false,
+    );
+    // 結果ブロックを持つ google SERP に noscript の enablejs リンクがあっても正常
+    const normalSerp = '<noscript>https://www.google.com/search?gbv=httpservice/retry/enablejs</noscript><div class="tF2Cxc">result</div>';
+    assert.equal(detectChallengePage(normalSerp), false);
   });
 
-  it("camoufoxFetch はチャレンジページの描画結果を challenge detected で失敗扱いにする", async () => {
+  it("シグナルは run-code スニペットにも単一ソースで渡される", () => {
+    const snippet = challengeWaitSnippet();
+    for (const signal of CHALLENGE_SIGNALS) {
+      assert.ok(snippet.includes(JSON.stringify(signal.source).slice(1, -1)), signal.source);
+    }
+  });
+
+  it("camoufoxFetch はチャレンジページの描画結果を render 失敗扱いにする", async () => {
     const calls: CliCall[] = [];
     let toMarkdownCalls = 0;
 
     await assert.rejects(
       camoufoxFetch("https://example.com/", undefined, {
         ...cliDeps(
-          { health: "ok", evalHtml: "<html><head><title>Just a moment...</title></head></html>" },
+          { health: "ok", runCodeHtml: "<html><head><title>Just a moment...</title></head></html>", runCodeMode: "challenge" },
           calls,
         ),
         toMarkdown: async () => {
@@ -1736,7 +1790,7 @@ describe("チャレンジページ検出", () => {
           return "md";
         },
       }),
-      /challenge detected/,
+      /render: challenge detected/,
     );
     assert.equal(toMarkdownCalls, 0);
   });

@@ -172,18 +172,20 @@ export function defaultRunPlaywrightCli(
   });
 }
 
-// SPEC: §camoufox による描画。`playwright-cli eval` の stdout は "### Result" 行に
-// 続いて HTML の JSON 文字列リテラルが 1 行で出る（大きなページでも stdout 全量）。
-export function parseEvalOutput(output: string): string {
+// SPEC: §camoufox による描画。`playwright-cli run-code` の stdout は "### Result" 行に
+// 続いて戻り値の JSON 文字列リテラルが 1 行で出る（大きなページでも stdout 全量）。
+// challenge モードは描画済み DOM がチャレンジページであることを示す。
+export function parseRenderedPage(output: string): string {
   const lines = output.split("\n");
   const resultIndex = lines.indexOf("### Result");
   const literal = resultIndex === -1 ? undefined : lines[resultIndex + 1];
-  if (!literal?.startsWith('"')) {
-    throw new Error("playwright-cli eval output has no result");
+  if (!literal || (!literal.startsWith('"') && !literal.startsWith("{"))) {
+    throw new Error("playwright-cli run-code output has no result");
   }
-  const html = JSON.parse(literal) as unknown;
+  const { mode, html } = JSON.parse(literal) as { mode?: string; html?: string };
+  if (mode === "challenge") throw new Error("challenge detected");
   if (typeof html !== "string" || !html) {
-    throw new Error("playwright-cli eval returned no HTML");
+    throw new Error("playwright-cli run-code returned no HTML");
   }
   return html;
 }
@@ -327,12 +329,52 @@ export type CamoufoxServerDeps = {
   syncConfig?: () => void;
 };
 
-// SPEC: §camoufox による描画。networkidle とハイドレーションの完了を待つ。
-// networkidle が永遠に来ないページがあるため、待ち自体にタイムアウトを設けて
-// 失敗を握りつぶす（待ち失敗は続行）。snippet 内で catch 済みのため run-code は
-// 原則成功するが、CLI 実行自体の失敗も無視する。
+// SPEC: §チャレンジページ検出。構造シグナルで判定し、ロケール依存の文言は使わない。
+// Cloudflare 分に加え、Google がボット要求に代わりに返す固定ページ2種を
+// openserp の判定に対応する構造シグナルで検知する:
+// - CAPTCHA / sorry 固定ページ（google/selectors.go CaptchaPage より。result widget
+//   の data-sitekey・recaptcha は通常ページにも現れるためシグナルにしない）
+// - soft block（google/search_raw.go isGoogleSoftBlockDocument。結果ブロック
+//   div.tF2Cxc・[data-hveid] を含まず、noscript の JS リトライリンクを含む）
+export const CHALLENGE_SIGNALS: readonly RegExp[] = [
+  /cdn-cgi\/challenge-platform\//,
+  /id="challenge-(?:running|form|stage|error-text)"/,
+  /<title[^>]*>\s*Just a moment\.\.\.\s*<\/title>/i,
+  /\bcf-turnstile\b/,
+  /<form[^>]*\bid="captcha-form"/,
+  /<form[^>]*\baction="[^"]*\/sorry\//,
+  /<body[^>]*\bonload="[^"]*captcha/i,
+  /^(?![\s\S]*(?:class="tF2Cxc"|data-hveid=))[\s\S]*httpservice\/retry\/enablejs/,
+];
+
+export function detectChallengePage(html: string): boolean {
+  return CHALLENGE_SIGNALS.some((signal) => signal.test(html));
+}
+
+// SPEC: §camoufox による描画。networkidle の待ちと並行して描画済み DOM を
+// ポーリングし、チャレンジページ（§チャレンジページ検出）が見つかった時点で
+// 早い方で待ちを切り上げる。networkidle が永遠に来ないページがあるため、
+// 待ち自体にタイムアウトを設けて失敗を握りつぶす（待ち失敗は続行）。
+const CHALLENGE_POLL_INTERVAL_MS = 250;
 const NETWORK_IDLE_WAIT_MS = 5_000;
-const NETWORK_IDLE_WAIT_SNIPPET = `async page => { await page.waitForLoadState('networkidle', { timeout: ${NETWORK_IDLE_WAIT_MS} }).catch(() => {}); }`;
+
+export function challengeWaitSnippet(): string {
+  const signals = CHALLENGE_SIGNALS.map((signal) => [signal.source, signal.flags]);
+  return `async page => {
+  const challengeSignals = ${JSON.stringify(signals)}.map(([source, flags]) => new RegExp(source, flags));
+  const grab = () => page.evaluate(() => document.documentElement.outerHTML);
+  let settled = false;
+  const idle = page.waitForLoadState('networkidle', { timeout: ${NETWORK_IDLE_WAIT_MS} }).catch(() => {}).then(() => { settled = true; });
+  const deadline = Date.now() + ${NETWORK_IDLE_WAIT_MS};
+  while (!settled && Date.now() < deadline) {
+    const html = await grab();
+    if (challengeSignals.some((signal) => signal.test(html))) return { mode: 'challenge', html };
+    await page.waitForTimeout(${CHALLENGE_POLL_INTERVAL_MS});
+  }
+  await idle;
+  return { mode: 'settled', html: await grab() };
+}`;
+}
 
 // SPEC: §camoufox による描画。playwright-cli は config の remoteEndpoint で接続先を
 // 決めるため、CAMOUFOX_BASE_URL に合わせて拡張ディレクトリ内の config を最新化する。
@@ -403,21 +445,17 @@ export async function camoufoxRender(
 
     // SPEC: networkidle とハイドレーションの完了を待つ。SPA の検索結果など
     // JS で後から差し込まれるコンテンツは、ナビゲーション直後の DOM に無い。
-    // 待ち失敗は続行する。
-    await runCli(sessionKey, ["run-code", NETWORK_IDLE_WAIT_SNIPPET], renderSignal).catch(
-      () => {},
-    );
-
+    // 待ちと並行してチャレンジページを判定し、検出時は待ちを切り上げて失敗にする。
     const output = await runCli(
       sessionKey,
-      ["eval", "() => document.documentElement.outerHTML"],
+      ["run-code", challengeWaitSnippet()],
       renderSignal,
     ).catch((error: unknown) => {
       throw renderError(error);
     });
     let html: string;
     try {
-      html = parseEvalOutput(output);
+      html = parseRenderedPage(output);
     } catch (error) {
       throw renderError(error);
     }
@@ -573,14 +611,6 @@ export async function camoufoxOpenserpSearch(
 
 // --- fetch backend: camoufox render -> trafilatura ---
 
-// SPEC: §チャレンジページ検出。構造シグナルで判定し、ロケール依存の文言は使わない。
-export function detectChallengePage(html: string): boolean {
-  if (/cdn-cgi\/challenge-platform\//.test(html)) return true;
-  if (/id="challenge-(?:running|form|stage|error-text)"/.test(html)) return true;
-  if (/<title[^>]*>\s*Just a moment\.\.\.\s*<\/title>/i.test(html)) return true;
-  return /\bcf-turnstile\b/.test(html);
-}
-
 export type CamoufoxFetchDeps = CamoufoxServerDeps & {
   toMarkdown?: (html: string, signal?: AbortSignal) => Promise<string>;
 };
@@ -595,9 +625,8 @@ export async function camoufoxFetch(
   const toMarkdown =
     deps.toMarkdown ??
     ((html, convertSignal) => runWithStdin("trafilatura", ["--markdown"], html, convertSignal));
+  // SPEC: §チャレンジページ検出。チャレンジページは描画段階で失敗になる。
   const html = await camoufoxRender(url, CAMOUFOX_FETCH_SESSION_KEY, signal, deps);
-  // SPEC: §チャレンジページ検出。変換前に描画済み HTML を判定する。
-  if (detectChallengePage(html)) throw new Error("challenge detected");
   return toMarkdown(html, signal);
 }
 

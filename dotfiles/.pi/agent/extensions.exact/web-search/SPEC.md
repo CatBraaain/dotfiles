@@ -81,7 +81,7 @@ Reddit・StackOverflow バックエンドが失敗した場合も通常どおり
 | 段階                           | 対象                                          | 最大待ち時間 |
 | ------------------------------ | --------------------------------------------- | ------------ |
 | サーバー起動待ち（両サーバー） | ヘルスチェックのポーリングを含む              | 15秒         |
-| camoufox による描画            | ページの open・ナビゲーション・描画済み DOM の取得 | 30秒    |
+| camoufox による描画            | ページの open・ナビゲーション・描画待ち（networkidle・チャレンジ検出）・描画済み DOM の取得 | 30秒    |
 | openserp へのパース要求        | `POST /<engine>/parse` の往復                 | 15秒         |
 | trafilatura による変換         | HTML → Markdown 変換                          | 15秒         |
 | Reddit の各取得                | フィード・埋め込み・oEmbed の1要求ごと        | 15秒         |
@@ -96,7 +96,7 @@ Reddit・StackOverflow バックエンドが失敗した場合も通常どおり
 3. HTML を openserp の `POST /<engine>/parse?format=markdown` へリクエストボディとして送り、Markdown 形式の検索結果を得る
 4. 先頭から最大10件までを結果として返す（`### <数字>.` 見出し単位で数える）
 
-openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなり、バックエンドの失敗として次のエンジンを試す。パース結果の本文が空の場合も失敗として扱う。
+openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなり、バックエンドの失敗として次のエンジンを試す。検索エンジンの固定ページ（チャレンジページ）はその前に描画段階で検出し、待ちを切り上げて失敗とする（§チャレンジページ検出）。パース結果の本文が空の場合も失敗として扱う。
 
 エンジンごとの SERP URL とパスは次のとおり。
 
@@ -111,23 +111,22 @@ openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパー
 常駐 camoufox server に接続した playwright-cli セッションでページを描画し、HTML を取得する。web_search と web_fetch の両方から使う共通の取得経路である。
 
 1. web_search ではセッション `web-search`、web_fetch ではセッション `web-fetch` として server に接続し、URL を開く。各リクエストは独立しており、cookie やページ状態はリクエスト間で共有されない
-2. ページの描画が落ち着くまで待つ（networkidle とハイドレーションの完了を確認）。この待ちに失敗しても処理は続行する
-3. 描画済み DOM（`document.documentElement.outerHTML`）を取得する
+2. networkidle とハイドレーションの完了待ちと、描画済み DOM に対するチャレンジページ判定（§チャレンジページ検出）のポーリングを並行に実行し、どちらか早い方で待ちを切り上げる。この待ちに失敗しても処理は続行する。チャレンジページを検出したときは描画を失敗とし、エラー `render: challenge detected` を返す
+3. 待ちの中で取得した描画済み DOM（`document.documentElement.outerHTML`）を結果とする
 4. ページを閉じる（成否に関わらず。閉鎖失敗は結果に影響させない）
 
 ## camoufox+trafilatura バックエンド（web_fetch）
 
 URL のページ本文を Markdown で得る経路:
 
-1. 常駐 camoufox server で URL を描画し、HTML を取得する（§camoufox による描画）
-2. 描画済み HTML がチャレンジページなら、失敗として扱う（§チャレンジページ検出）
-3. HTML を trafilatura で Markdown 化する
+1. 常駐 camoufox server で URL を描画し、HTML を取得する（§camoufox による描画。チャレンジページは描画段階で失敗する）
+2. HTML を trafilatura で Markdown 化する
 
 本文が空の場合は失敗として扱う。
 
 ## チャレンジページ検出
 
-描画済み HTML がボット検証のチャレンジページのとき、camoufox+trafilatura バックエンドは本文を返さず失敗として扱う。失敗時のエラー文言は `challenge detected` とする。判定は trafilatura 変換前の描画済み HTML に対して行う。
+描画済み HTML がボット検証のチャレンジページ、または検索エンジンがボットとして要求を拒否した固定ページのとき、描画段階で失敗として扱う（camoufox+openserp・camoufox+trafilatura ともに）。失敗時のエラー文言は `render: challenge detected` とする。web_search ではこの検出により、openserp へのパース要求と networkidle 待ちを待たずに次のエンジンへ切り替える。
 
 チャレンジページは HTML の構造シグナルで判定し、ロケール依存の表示文言は使わない。次のシグナルのいずれか1つでも含まれる HTML をチャレンジページとする:
 
@@ -137,6 +136,12 @@ URL のページ本文を Markdown で得る経路:
 | `id="challenge-running"`・`id="challenge-form"`・`id="challenge-stage"`・`id="challenge-error-text"` | Cloudflare チャレンジページの固定 DOM 構造 |
 | `<title>` が `Just a moment...` | Cloudflare チャレンジページの固定タイトル |
 | `cf-turnstile` | Cloudflare Turnstile ウィジェット |
+| `<form id="captcha-form">` | Google CAPTCHA 固定ページのフォーム |
+| `<form action="…/sorry/…">` | Google の sorry 固定ページへのフォーム |
+| `<body onload="…captcha…">` | Google CAPTCHA 固定ページの onload ハンドラ |
+| Google の結果ブロック（`class="tF2Cxc"`・`data-hveid`）を含まず `httpservice/retry/enablejs` を含む | Google の JS リトライ固定ページ（soft block） |
+
+`data-sitekey`・`recaptcha` は reCAPTCHA 埋め込みの通常ページにも現れるためシグナルに含めない。描画段階で検出漏れとなったチャレンジは、openserp のパース要求の 4xx エラーとして後段で失敗になる（§camoufox+openserp バックエンド）。
 
 ## Reddit バックエンド
 
@@ -234,7 +239,7 @@ web_fetch のタイトルは、取得済みの本文（Markdown）の見出し�
 
 ```
 web_search - "<クエリ>"
-✗ camoufox+openserp(google) - "parse: captcha detected" (14.2s)
+✗ camoufox+openserp(google) - "render: challenge detected" (2.1s)
 ✗ camoufox+openserp(duckduckgo) - "render: navigation timeout" (30.0s)
 ✓ camoufox+openserp(bing) (2.1s)
 ```
