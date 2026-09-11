@@ -769,7 +769,7 @@ describe("§3.a パス文字列の解決", () => {
     "${REPOSITORY_NAME} を含むパスは Git repository 外ではパスを許可しない",
     withTempDirectory((directory) => {
       const section = expandPathSection(
-        [{ action: "allow", patterns: ["~/projects/worktrees/${REPOSITORY_NAME}"] }],
+        [{ action: "allow", patterns: ["~/.agents/worktrees/${REPOSITORY_NAME}"] }],
         directory,
       );
 
@@ -788,7 +788,7 @@ describe("§3.a パス文字列の解決", () => {
       ?.filter((entry) => entry.action === "allow")
       .flatMap((entry) => entry.patterns);
 
-    assert.equal(writeAllowPatterns?.includes("~/projects/worktrees/${REPOSITORY_NAME}"), true);
+    assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${REPOSITORY_NAME}"), true);
   });
 
   it("展開後は config ディレクトリの sandbox.yaml を既定設定にする", () => {
