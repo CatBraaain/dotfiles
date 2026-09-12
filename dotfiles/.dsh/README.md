@@ -11,7 +11,7 @@ dsh（DeepSeek Harness）関係のファイル。
 
 - `plugins/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。展開先は手動編集しない
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）と `dsh.profile.bundles`（読み込み順）の**両方**に書く
-- `web/run_pnpm_install.sh` — 依存のインストール（chezmoi run script。apply 時に `web` profile dir を CWD に自動実行される。shebang は chezmoi の `exec(3)` 直接実行に必須）
+- `profiles/web/run_pnpm_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD に自動実行される。shebang は chezmoi の `exec(3)` 直接実行に必須）
 
 `~/.dsh/profiles/web/` のその他のファイル（`cordis.yml`、`cordis.patch.yml`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`node_modules`）は dsh / pnpm の生成物。
 
