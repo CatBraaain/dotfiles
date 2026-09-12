@@ -9,9 +9,12 @@ dsh（DeepSeek Harness）関係のファイル。
 
 ## 構成
 
-- `plugins/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。展開先は手動編集しない
+- `plugins/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。展開先は手動編集しない。エントリは TS で書き、`exports` はビルド済みの `./dist/index.js` を指す（Node は `node_modules` 内の `.ts` を実行できないため）
+- `plugins/run_build.sh` — 全プラグインの一括ビルド（chezmoi run script。apply 時に plugins dir を CWD に `src/index.ts` を持つプラグインを順に `bun build` する。shebang は chezmoi の `exec(3)` 直接実行に必須）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）と `dsh.profile.bundles`（読み込み順）の**両方**に書く
-- `profiles/web/run_pnpm_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD に自動実行される。shebang は chezmoi の `exec(3)` 直接実行に必須）
+- `profiles/web/run_pnpm_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD に自動実行される）
+
+run script の実行順序は target path の辞書順。`.dsh/plugins/...` は `.dsh/profiles/...` より先にソートされるため、プラグインのビルド → プロファイルへの install 再リンクの順が保たれる。
 
 `~/.dsh/profiles/web/` のその他のファイル（`cordis.yml`、`cordis.patch.yml`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`node_modules`）は dsh / pnpm の生成物。
 
@@ -19,9 +22,9 @@ dsh（DeepSeek Harness）関係のファイル。
 
 1. 自作なら `plugins/` にソースを置く。リモートなら `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
 2. `profiles/web/package.json` の `dependencies` と `dsh.profile.bundles` に追記
-3. `chezmoi apply` が run script で依存をインストールする（全プラグイン一括。1 プラグインずつは不要）
+3. `chezmoi apply` が run script でプラグインをビルドし、依存をインストールする（全プラグイン一括。1 プラグインずつは不要）
 
-- `file:` は install 時のスナップショットのため、プラグインのソース更新後は script を再実行する
+- `file:` は install 時のスナップショットのため、プラグインのソース更新後は script を再実行する。自作プラグインは apply 時にビルド → install が自動で走るので手動工程はない
 - リモートの範囲指定（`^1.2.3`）の最新化は profile dir で `pnpm update`。ピン指定（`1.2.3`）なら package.json のバージョン編集が必須
 
 ## 設定の当て先
