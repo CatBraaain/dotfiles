@@ -1,0 +1,23 @@
+{
+  "name": "dotfiles-dsh-web-search",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "trustedDependencies": [],
+  "dependencies": {
+    "@deepseek-ai/dsh-web": "^0.1.5-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "camoufox-js": "0.12.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
