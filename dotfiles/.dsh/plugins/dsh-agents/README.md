@@ -22,13 +22,10 @@ and provides:
 
 ## Install
 
-```sh
-dsh plugin --profile web add /home/username/.dsh/plugins/dsh-agents
-```
-
-`dsh plugin add` runs pnpm in the profile directory and reconciles
-`dsh.profile.bundles`; restart dsh afterwards (bundle patches are fixed at
-startup — only user-layer patches reload live). The build step:
+Registered statically in the profile manifest: append the plugin to both
+`dependencies` and `dsh.profile.bundles` in
+`dotfiles/.dsh/profiles/web/package.json`, then run `chezmoi apply`. The
+build step:
 
 ```sh
 cd dotfiles/.dsh/plugins/dsh-agents
@@ -36,8 +33,11 @@ bun build src/index.ts --outdir dist --target node --external '*'
 ```
 
 runs automatically from `dotfiles/.dsh/plugins/run_build.sh` on every
-`chezmoi apply`. External imports (`@deepseek-ai/*`, `yaml`) resolve from the
-profile closure at runtime; nothing is bundled.
+`chezmoi apply`, and `profiles/web/run_pnpm_install.sh` links the built entry
+into the profile's node_modules. External imports (`@deepseek-ai/*`, `yaml`)
+resolve from the profile closure at runtime; nothing is bundled. Restart dsh
+afterwards (bundle patches are fixed at startup — only user-layer patches
+reload live).
 
 ## Configuration
 

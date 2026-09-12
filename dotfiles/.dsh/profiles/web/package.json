@@ -3,11 +3,12 @@
   "private": true,
   "dependencies": {
     "dotfiles-model-sync": "file:../../plugins/model-sync",
-    "dotfiles-handoff-session": "file:../../plugins/handoff-session"
+    "dotfiles-handoff-session": "file:../../plugins/handoff-session",
+    "dotfiles-dsh-agents": "file:../../plugins/dsh-agents"
   },
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents"],
       "patchReload": "live"
     }
   }
