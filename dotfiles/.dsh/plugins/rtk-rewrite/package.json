@@ -1,0 +1,17 @@
+{
+  "name": "dotfiles-rtk-rewrite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-bash-sandbox": "^0.1.5-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
