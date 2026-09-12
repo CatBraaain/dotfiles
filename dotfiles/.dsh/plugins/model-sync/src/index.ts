@@ -44,7 +44,7 @@ import {
 } from "./core.ts";
 
 export const name = "model-sync";
-export const inject = ["commands", "settings", "credentials"];
+export const inject = ["commands", "settings", "credentials", "timer"];
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const REQUEST_TIMEOUT_MS = 15_000;
