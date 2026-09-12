@@ -1,0 +1,13 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "dotfiles-greeter": "file:../../plugins/greeter"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-greeter"],
+      "patchReload": "live"
+    }
+  }
+}
