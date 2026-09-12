@@ -11,12 +11,12 @@
  * - dock parent layout: copies of the observed composer stack / input bar
  *   class definitions from `dsh-client-ui-conversation`
  *
- * Output: `fixture.html` (light) and `fixture-dark.html` next to this script.
+ * Output: `dist/fixture.html` (light) and `dist/fixture-dark.html`.
  * Each page lays out the same review cases so a reviewer (human or VLM) can
  * check every visible-behavior point from the plugin SPECs against the
  * rendered visuals; see README.md for the checklist.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as React from "react";
@@ -28,6 +28,7 @@ if (!home) throw new Error("HOME is not set");
 const globalModules = join(home, ".bun/install/global/node_modules");
 const themeBundle = join(globalModules, "@deepseek-ai/dsh-client-ui-theme/lib/client.js");
 const pluginsDir = join(import.meta.dir, "../plugins");
+const outputDir = join(import.meta.dir, "dist");
 
 /**
  * React shim for the server renderer: `useSyncExternalStore` without a
@@ -226,6 +227,8 @@ function caseSection(label: string, inputDock: string, composerDock: string): st
 }
 
 async function main(): Promise<void> {
+    await mkdir(outputDir, { recursive: true });
+
     const themeCss = await extractThemeCss();
 
     const footerExports = await loadPluginBundle("dsh-footer", "dotfiles-dsh-footer");
@@ -273,7 +276,7 @@ ${cases}
 </body>
 </html>
 `;
-        const file = join(import.meta.dir, dark ? "fixture-dark.html" : "fixture.html");
+        const file = join(outputDir, dark ? "fixture-dark.html" : "fixture.html");
         await writeFile(file, html);
         console.log(`written: ${file}`);
     }

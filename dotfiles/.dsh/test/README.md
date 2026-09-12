@@ -7,7 +7,7 @@ dsh web UI の見た目を検証する fixture。dsh 本体を起動せず、com
 ```bash
 cd dotfiles/.dsh/test
 bun install
-bun run render.ts   # fixture.html（light）と fixture-dark.html を生成
+bun run render.ts   # dist/fixture.html（light）と dist/fixture-dark.html を生成
 bun serve.ts        # http://localhost:4173/ と /dark で serve（Ctrl-C で停止）
 ```
 
@@ -16,9 +16,9 @@ bun serve.ts        # http://localhost:4173/ と /dark で serve（Ctrl-C で停
 ```bash
 playwright-cli open --browser=chromium http://localhost:4173/
 playwright-cli resize 1280 900
-playwright-cli screenshot --filename=fixture.png
+playwright-cli screenshot --filename=dist/fixture.png
 playwright-cli goto http://localhost:4173/dark
-playwright-cli screenshot --filename=fixture-dark.png
+playwright-cli screenshot --filename=dist/fixture-dark.png
 playwright-cli close
 ```
 
@@ -36,7 +36,7 @@ fixture は1画面に確認観点ごとのパターン（case 1〜4）を並べ�
 | 4. footer — composer.dock | `session: <id>` 書式、文字色 gray、composer 下 dock | 書式と色。隣の StatsPills（stock）と縦に整列し、水平中央寄せ |
 | light / dark 両方 | gray は light / dark で別の token 値 | どちらのテーマでも読める gray であること（黒や白に潰れない） |
 
-VLM に依頼するときは、fixture.png と fixture-dark.png の2枚に、上の表と「各 case のラベル番号に沿って PASS/FAIL と根拠を返す」ことだけ伝えれば判定できる。
+VLM に依頼するときは、dist/fixture.png と dist/fixture-dark.png の2枚に、上の表と「各 case のラベル番号に沿って PASS/FAIL と根拠を返す」ことだけ伝えれば判定できる。
 
 titlebar は React 無関係（`document.title` への書き込み）のため fixture では検証できず、実 dsh 起動後の確認対象。
 

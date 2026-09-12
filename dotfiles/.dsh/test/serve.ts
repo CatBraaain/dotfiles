@@ -11,7 +11,7 @@ Bun.serve({
     port,
     fetch: (request) => {
         const dark = new URL(request.url).pathname === "/dark";
-        return new Response(Bun.file(join(import.meta.dir, dark ? "fixture-dark.html" : "fixture.html")));
+        return new Response(Bun.file(join(import.meta.dir, "dist", dark ? "fixture-dark.html" : "fixture.html")));
     },
 });
-console.log(`serving fixture.html on http://localhost:${port}/ and fixture-dark.html on http://localhost:${port}/dark`);
+console.log(`serving dist/fixture.html on http://localhost:${port}/ and dist/fixture-dark.html on http://localhost:${port}/dark`);
