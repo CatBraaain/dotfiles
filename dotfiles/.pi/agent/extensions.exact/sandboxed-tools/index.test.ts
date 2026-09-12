@@ -2316,8 +2316,9 @@ describe("§3 許可要求ツール", () => {
         );
         assert.deepEqual(outcome, { status: "granted", grantedPath: dir });
         await sandbox.authorizePath("write", join(dir, "any", "file.txt"), { cwd: dir });
-        const bindAt = sandbox.buildArgs("bash").indexOf(dir);
-        assert.deepEqual(sandbox.buildArgs("bash").slice(bindAt - 1, bindAt + 2), [
+        const args = sandbox.buildArgs("bash");
+        const bindAt = args.indexOf(dir, args.indexOf(dir) + 2);
+        assert.deepEqual(args.slice(bindAt - 1, bindAt + 2), [
           "--bind-try",
           dir,
           dir,
@@ -3880,6 +3881,50 @@ describe("§6.1 bind とパスの実在保証", () => {
       const rootBindAt = args.indexOf("/");
       assert.deepEqual(args.slice(rootBindAt - 1, rootBindAt + 2), ["--ro-bind", "/", "/"]);
     }),
+  );
+
+  it(
+    "cwd の read-only bind は write.allow の writable bind より前に出る",
+    withSandboxDir((dir, configPath) => {
+      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n`);
+      const args = new Sandbox(dir, configPath).buildArgs("fs");
+      const roBindAt = args.indexOf(dir);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", dir]);
+      const writableBindAt = args.indexOf(dir, roBindAt + 2);
+      assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 1), ["--bind-try", dir]);
+      assert.ok(writableBindAt > roBindAt, "writable bind must mount after the cwd read-only bind");
+      assert.equal(
+        args.indexOf("--ro-bind-try", writableBindAt),
+        -1,
+        "no read-only bind may shadow the writable bind",
+      );
+    }),
+  );
+
+  it(
+    "cwd の read-only bind は write の動的許可より前に出る",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-bind-"));
+      try {
+        const configPath = join(dir, "config.yaml");
+        writeFileSync(configPath, "write: []\n");
+        const sandbox = new Sandbox(dir, configPath);
+        await sandbox.authorizePath("write", join(dir, "note.txt"), {
+          cwd: dir,
+          hasUI: true,
+          ui: { confirm: async () => true },
+        });
+        const args = sandbox.buildArgs("fs");
+        const roBindAt = args.indexOf(dir);
+        assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", dir]);
+        const notePath = join(dir, "note.txt");
+        const grantBindAt = args.indexOf(notePath);
+        assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 1), ["--bind-try", notePath]);
+        assert.ok(grantBindAt > roBindAt, "dynamic grant must mount after the cwd read-only bind");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
   );
 });
 

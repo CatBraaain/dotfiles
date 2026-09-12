@@ -847,6 +847,10 @@ export class Sandbox {
         this.globCache,
       ))
         mount(path, false);
+      // bwrap later mounts win: the cwd read-only bind must precede every
+      // writable mount below, or it would shadow write allows and dynamic
+      // write grants inside the cwd, turning the whole tree read-only.
+      mount(this.cwd, false);
     }
     for (const path of expandPathPatterns(
       actionPatterns(this.config.write, "allow"),
@@ -858,7 +862,6 @@ export class Sandbox {
       mount(path, true);
     for (const [path, accessModes] of this.dynamicPaths) mount(path, accessModes.has("write"));
 
-    if (!this.readAllPaths()) mount(this.cwd, false);
     if (mode === "bash") {
       for (const path of this.credentialPaths()) {
         if (existsSync(path)) mount(path, false);
