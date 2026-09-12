@@ -764,6 +764,20 @@ export class Sandbox {
     );
   }
 
+  /**
+   * Expanded write-section paths whose final action is an explicit deny (§3
+   * last-match-wins): the paths fs tools hard-deny for writing, which the
+   * bash sandbox must also keep non-writable (§6.1).
+   */
+  private explicitWriteDenyPaths(): string[] {
+    const section = this.writePaths();
+    const deniedPaths = new Set<string>();
+    for (const entry of section)
+      for (const path of entry.paths)
+        if (resolvePathActionMatch(section, path).action === "deny") deniedPaths.add(path);
+    return [...deniedPaths];
+  }
+
   private hiddenFsPaths(): string[] {
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     return [
@@ -814,11 +828,13 @@ export class Sandbox {
   private addConfiguredMounts(args: string[], mode: "fs" | "bash"): void {
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     const mounted = new Set<string>();
+    const writableMountPaths: string[] = [];
 
     const mount = (path: string, writable: boolean) => {
       const normalized = resolve(path);
       if (mounted.has(`${normalized}:${writable}`)) return;
       mounted.add(`${normalized}:${writable}`);
+      if (writable) writableMountPaths.push(normalized);
       this.addMount(args, normalized, writable);
     };
 
@@ -846,6 +862,14 @@ export class Sandbox {
     if (mode === "bash") {
       for (const path of this.credentialPaths()) {
         if (existsSync(path)) mount(path, false);
+      }
+      // fs tools hard-deny explicit write denies per call; the bash sandbox
+      // has no per-path gate, so re-bind denied paths read-only after every
+      // writable bind. Later bwrap mounts win, which keeps a path non-writable
+      // even through an allowed ancestor (§6.1).
+      for (const deniedPath of this.explicitWriteDenyPaths()) {
+        if (writableMountPaths.some((writablePath) => pathCovers(writablePath, deniedPath)))
+          mount(deniedPath, false);
       }
     }
   }

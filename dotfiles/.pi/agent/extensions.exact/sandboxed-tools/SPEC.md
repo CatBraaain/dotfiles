@@ -265,6 +265,8 @@ commands:
 
 `credentials` のパスは bash の sandbox にのみ `--ro-bind` する。credentials のファイル自体や glob のマッチ先は作成せず、存在するパスだけを起動時に bind する。
 
+bash の sandbox では、`write` の deny に確定したパス（§3 の後勝ち走査で最後にマッチした要素が deny）のうち、書き込み可能 bind（`write` の allow・動的許可）のパスと同一またはその配下にあるものを、書き込み可能 bind より後に read-only bind し直す。bwrap は後続のマウントで上書きするため、許可された祖先ディレクトリ配下でも書き込みは `Read-only file system` で失敗し、fs ツールが呼び出しごとに hard deny するパスと同じ保護が bash 経由でも強制される。存在しないパスと書き込み可能 bind の対象外のパスには bind しない（deny 宣言だけでパスは作成しない）。
+
 ### fs sandbox での deny パス・credentials パスの隠蔽
 
 fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）用の sandbox では、`read` で `deny` アクションを宣言した要素のパターンに展開される実在パスと、`credentials` のパス（glob 展開後・実在するもののみ）は実体が見えないようマスクされる。マスクは宣言ベースであり、後勝ちの走査で最終的に `allow` へ確定したパスでも、`deny` 宣言要素のパターンに展開される実在パスには適用される。
@@ -274,7 +276,7 @@ fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）用の sandbox で�
 | ディレクトリ   | 空のディレクトリ（tmpfs マウント）            |
 | ファイル       | 空のファイル（`/dev/null` を read-only bind） |
 
-bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.2 のとおり read-only で bind される。
+bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.2 のとおり read-only で bind される。`write` の deny に確定したパスは、書き込み可能 bind の配下にあるとき §6.1 のとおり read-only で bind し直される。
 
 ---
 
@@ -304,7 +306,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 各ツール呼び出しは次の構成で `bwrap` を起動する。
 
 1. `--die-with-parent`、`--proc /proc`、`--dev /dev` を設定する。
-2. 設定済みの allow パスを `--bind-try`、read-only パスと credentials を `--ro-bind-try` で bind する。
+2. 設定済みの allow パスを `--bind-try`、read-only パスと credentials を `--ro-bind-try` で bind する。bash では、`write` の deny に確定したパスのうち書き込み可能 bind と同一・配下にあるものを、それらより後に `--ro-bind-try` で bind し直す（§6.1）。
 3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bind する。pi パッケージ自体は `/nix` 配下のため追加の bind 不要。
 4. sandbox 内で `bun run-tools.ts <tool-name>` を実行し、network namespace は分離しない。
 5. abort は bwrap ごと child process を停止する。bash の timeout は sandbox 内の tool definition が処理する。

@@ -3753,6 +3753,126 @@ describe("§6.1 bind とパスの実在保証", () => {
   );
 
   it(
+    "bash モードは write の deny に確定したパスを書き込み可能 bind より後に read-only bind する",
+    withSandboxDir((dir, configPath) => {
+      const protectedFile = join(dir, "protected.txt");
+      writeFileSync(protectedFile, "config");
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
+      );
+      const args = new Sandbox("/cwd", configPath).buildArgs("bash");
+      const writableBindAt = args.indexOf(dir);
+      assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 2), [
+        "--bind-try",
+        dir,
+        dir,
+      ]);
+      const roBindAt = args.indexOf(protectedFile);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
+        "--ro-bind-try",
+        protectedFile,
+      ]);
+      assert.ok(roBindAt > writableBindAt, "deny re-bind must mount after the writable bind");
+    }),
+  );
+
+  it(
+    "fs モードは write の deny パスを bind し直さない",
+    withSandboxDir((dir, configPath) => {
+      const protectedFile = join(dir, "protected.txt");
+      writeFileSync(protectedFile, "config");
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
+      );
+      const args = new Sandbox("/cwd", configPath).buildArgs("fs");
+      assert.equal(args.includes(protectedFile), false);
+    }),
+  );
+
+  it(
+    "後勝ちで allow が確定したパスは read-only bind し直さない",
+    withSandboxDir((dir, configPath) => {
+      const allowedFile = join(dir, "allowed.txt");
+      writeFileSync(allowedFile, "x");
+      writeFileSync(
+        configPath,
+        `write:\n  - {deny: "${allowedFile}"}\n  - {allow: "${allowedFile}"}\n`,
+      );
+      const args = new Sandbox("/cwd", configPath).buildArgs("bash");
+      const bindAt = args.indexOf(allowedFile);
+      assert.deepEqual(args.slice(bindAt - 1, bindAt + 2), ["--bind-try", allowedFile, allowedFile]);
+      assert.equal(args.indexOf(allowedFile, bindAt + 2), -1, "no read-only re-bind after allow");
+    }),
+  );
+
+  it(
+    "書き込み可能 bind の対象外にある deny パスは bind しない",
+    withSandboxDir((dir, configPath) => {
+      const deniedFile = join(dir, "denied.txt");
+      writeFileSync(deniedFile, "x");
+      writeFileSync(configPath, `write:\n  - {deny: "${deniedFile}"}\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("bash");
+      assert.equal(args.includes("--bind-try"), false);
+      assert.equal(args.includes(deniedFile), false);
+    }),
+  );
+
+  it(
+    "同一パスを allow から deny へ上書きしたときは read-only bind が後勝ちで確定する",
+    withSandboxDir((dir, configPath) => {
+      const file = join(dir, "same.txt");
+      writeFileSync(file, "x");
+      writeFileSync(configPath, `write:\n  - {allow: "${file}"}\n  - {deny: "${file}"}\n`);
+      const args = new Sandbox("/cwd", configPath).buildArgs("bash");
+      const writableBindAt = args.indexOf(file);
+      assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 1), ["--bind-try", file]);
+      const roBindAt = args.indexOf(file, writableBindAt + 2);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", file]);
+      assert.ok(roBindAt > writableBindAt, "read-only bind must mount after the writable bind");
+    }),
+  );
+
+  it(
+    "動的許可の配下でも write の deny パスは read-only bind する",
+    withSandboxDir(async (dir, configPath) => {
+      const protectedFile = join(dir, "protected.txt");
+      writeFileSync(protectedFile, "x");
+      writeFileSync(configPath, `read:\n  - {allow: "*"}\nwrite:\n  - {deny: "${protectedFile}"}\n`);
+      const sandbox = new Sandbox(dir, configPath);
+      await sandbox.authorizePath("write", join(dir, "note.txt"), {
+        cwd: dir,
+        hasUI: true,
+        ui: { confirm: async () => true, select: async (_title, options) => options[1] },
+      });
+      const args = sandbox.buildArgs("bash");
+      const grantBindAt = args.indexOf(dir);
+      assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 2), ["--bind-try", dir, dir]);
+      const roBindAt = args.indexOf(protectedFile);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", protectedFile]);
+      assert.ok(roBindAt > grantBindAt, "deny re-bind must mount after the dynamic grant bind");
+    }),
+  );
+
+  it(
+    "write の glob deny は展開先を実体として read-only bind する",
+    withSandboxDir((dir, configPath) => {
+      writeFileSync(join(dir, "a.yaml"), "x");
+      writeFileSync(join(dir, "b.txt"), "x");
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${dir}"}\n  - {deny: "${join(dir, "*.yaml")}"}\n`,
+      );
+      const args = new Sandbox("/cwd", configPath).buildArgs("bash");
+      const yamlFile = join(dir, "a.yaml");
+      const roBindAt = args.indexOf(yamlFile);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", yamlFile]);
+      assert.equal(args.includes(join(dir, "b.txt")), false);
+    }),
+  );
+
+  it(
     'read.allow "*" はルート全体を read-only bind する',
     withSandboxDir((_dir, configPath) => {
       writeFileSync(configPath, `read:\n  - {allow: "*"}\n`);
