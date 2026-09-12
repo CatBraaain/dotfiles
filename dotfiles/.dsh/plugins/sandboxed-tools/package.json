@@ -12,6 +12,7 @@
     }
   },
   "dependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
     "@vscode/ripgrep": "^1.18.0",
     "shell-quote": "1.10.0",
     "yaml": "2.9.0"
