@@ -59,7 +59,7 @@ Issue body
 使用できるstatusは以下の4つ。
 
 * `open`: 未着手
-* `wip`: 作業中
+* `locked`: 別のセッションが対処を保持している（排他）。着手しない
 * `closed`: 完了
 * `cancelled`: 中止
 
@@ -68,13 +68,15 @@ Issue body
 | タイミング | status |
 | --- | --- |
 | 起票時 | `open` |
-| issue の対処に着手したとき（調査を含む） | `wip` |
+| issue の対処に着手したとき（調査を含む） | `locked` |
 | 対処が完了し問題が解消したとき | `closed`。commit 等の参照があれば本文に追記する |
 | 対処しないことになったとき（重複、意図した挙動、owner 判断） | `cancelled`。理由を本文に追記する |
 
-`open` から `wip` を経由せず直接 `closed` にしてよい（外部要因で解消した場合など）。status の書き換えで本文を書き換えない。
+`open` から `locked` を経由せず直接 `closed` にしてよい（外部要因で解消した場合など）。status の書き換えで本文を書き換えない。
 
-対処に着手するときは、まず owner の承認を得る。agent が自ら選んだ issue では、issue ID、タイトル、内容の要約、考えている進め方を示して承認を求める。owner が特定の issue を明示した依頼なら、依頼自体が承認にあたる。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `wip` に書き換えて着手する。同じ issue への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
+対処に着手するときは、まず owner の承認を得る。agent が自ら選んだ issue では、issue ID、タイトル、内容の要約、考えている進め方を示して承認を求める。owner が特定の issue を明示した依頼なら、依頼自体が承認にあたる。着手してよいのは `status: open` の issue のみで、`locked` には着手しない。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `locked` に書き換えて着手する。同じ issue への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
+
+`locked` は着手したセッションが対処を完了（`closed`）または取り下げ（`cancelled`）した時点で外れる。異常終了などで `locked` が残ったときは、owner の指示で `open` に戻す。
 
 ## 編集
 
@@ -94,7 +96,7 @@ frontmatter の `status` から列挙する:
 awk 'FNR==1{n=0} /^---$/{n++} n==1 && /^status: open$/{print FILENAME}' ~/.pi/agent/issues/<project>/*.md
 ```
 
-`status` の値を変えれば `wip`・`closed` も同様に列挙できる。全 project を横断するときは glob を `~/.pi/agent/issues/*/*.md` にする。owner への一覧では issue ID とタイトル（H1）を報告する。
+`status` の値を変えれば `locked`・`closed` も同様に列挙できる。全 project を横断するときは glob を `~/.pi/agent/issues/*/*.md` にする。owner への一覧では issue ID とタイトル（H1）を報告する。
 
 ## 対象外
 
