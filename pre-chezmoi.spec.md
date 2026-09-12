@@ -4,7 +4,7 @@
 
 - プラットフォーム: Windows（`process.platform === "win32"`）と、それ以外（Linux / macOS）の2種。
 - 経路表記: 本文のパスはリポジトリルートからの相対パス。
-- `*.merge.local.{json,yaml}` は git 管理外（`.gitignore`）。`*.merge.{json,yaml}` は git 管理する共有レイヤー。
+- `*.merge.local.{json,yaml,toml}` は git 管理外（`.gitignore`）。`*.merge.{json,yaml,toml}` は git 管理する共有レイヤー。
 
 ## 変換の順序
 
@@ -129,6 +129,7 @@ dist/dot_pi/agent/exact_config/placeholder
 | powershell | Documents/PowerShell | 移動しない |
 | windows-terminal | AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState | 移動しない |
 | roo | .roo | 移動しない |
+| rtk | 移動しない | .config/rtk |
 | sharex | Documents/ShareX | 移動しない |
 | vscode | AppData/Roaming/Code/User | 移動しない |
 | zed | AppData/Roaming/Zed | .config/zed |
@@ -171,19 +172,19 @@ dot 変換の後に行うため、`.xxx.exact` の形のディレクトリは `e
 
 ## 7. merge 変換
 
-JSON/YAML の設定ファイルを、ホーム現状とリポジトリ側レイヤーから **pre-chezmoi 実行時に** 合成し、`dist/` へ完成形を書き出す。chezmoi modify template（`modify_*`）は生成しない。
+JSON/YAML/TOML の設定ファイルを、ホーム現状とリポジトリ側レイヤーから **pre-chezmoi 実行時に** 合成し、`dist/` へ完成形を書き出す。chezmoi modify template（`modify_*`）は生成しない。
 
 ### 7.1 入力ファイルの種類
 
-同一ディレクトリ内で、出力ファイル名 `<name>.{json,yaml}` に対し、次の sidecar を使う。
+同一ディレクトリ内で、出力ファイル名 `<name>.{json,yaml,toml}` に対し、次の sidecar を使う。
 
-| ファイル                         | 管理      | 役割                                       |
-| -------------------------------- | --------- | ------------------------------------------ |
-| `<name>.{json,yaml}`             | git       | plain base（リポジトリのベース本体。任意） |
-| `<name>.merge.{json,yaml}`       | git       | 共有 merge レイヤー（任意）                |
-| `<name>.merge.local.{json,yaml}` | gitignore | マシン固有 merge レイヤー（任意）          |
+| ファイル                                   | 管理      | 役割                                       |
+| ------------------------------------------ | --------- | ------------------------------------------ |
+| `<name>.{json,yaml,toml}`                  | git       | plain base（リポジトリのベース本体。任意） |
+| `<name>.merge.{json,yaml,toml}`            | git       | 共有 merge レイヤー（任意）                |
+| `<name>.merge.local.{json,yaml,toml}`      | gitignore | マシン固有 merge レイヤー（任意）          |
 
-`<name>.merge.{json,yaml}` または `<name>.merge.local.{json,yaml}` のどちらかが存在するとき、その `<name>.{json,yaml}` は **merge ターゲット** となる。
+`<name>.merge.{json,yaml,toml}` または `<name>.merge.local.{json,yaml,toml}` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は **merge ターゲット** となる。
 
 merge ターゲットでないファイルは、従来どおり `dist/` へそのまま残す。
 
@@ -191,28 +192,30 @@ merge ターゲットでないファイルは、従来どおり `dist/` へそ�
 
 merge ターゲットごとに、次を決める。
 
-- **出力パス**: sidecar と同じディレクトリの `<name>.{json,yaml}`
+- **出力パス**: sidecar と同じディレクトリの `<name>.{json,yaml,toml}`
 - **ホームパス**: `chezmoi target-path -c chezmoi.yaml dist/<出力パス>` の stdout（末尾改行除去）。chezmoi の destination 既定（`~`）に従う。
 
 sidecar 名から `<name>` への対応:
 
-| sidecar                | `<name>`   |
-| ---------------------- | ---------- |
-| `foo.merge.json`       | `foo.json` |
-| `foo.merge.local.yaml` | `foo.yaml` |
+| sidecar                      | `<name>`     |
+| ---------------------------- | ------------ |
+| `foo.merge.json`             | `foo.json`   |
+| `foo.merge.local.yaml`       | `foo.yaml`   |
+| `foo.merge.toml`             | `foo.toml`   |
+| `foo.merge.local.toml`       | `foo.toml`   |
 
 同一 `<name>` に sidecar が複数あるときは 1 ターゲットにまとめる。
 
 ### 7.3 レイヤーと適用順
 
-merge ターゲットごとに、存在するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON）または空（YAML パース結果が null/undefined のとき `{}` 扱い）。
+merge ターゲットごとに、存在するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON・TOML。YAML パース結果が null/undefined のときも `{}` 扱い）。
 
-| 順  | レイヤー    | ソース                                                                        |
-| --- | ----------- | ----------------------------------------------------------------------------- |
-| 1   | ホーム      | §7.2 のホームパス。ファイルが存在しない・空のとき `{}`                        |
-| 2   | plain base  | 同ディレクトリの `<name>.{json,yaml}`（merge / merge.local ではないファイル） |
-| 3   | merge       | `<name>.merge.{json,yaml}`                                                    |
-| 4   | merge.local | `<name>.merge.local.{json,yaml}`                                              |
+| 順  | レイヤー    | ソース                                                                                  |
+| --- | ----------- | --------------------------------------------------------------------------------------- |
+| 1   | ホーム      | §7.2 のホームパス。ファイルが存在しない・空のとき `{}`                                  |
+| 2   | plain base  | 同ディレクトリの `<name>.{json,yaml,toml}`（merge / merge.local ではないファイル）      |
+| 3   | merge       | `<name>.merge.{json,yaml,toml}`                                                         |
+| 4   | merge.local | `<name>.merge.local.{json,yaml,toml}`                                                   |
 
 後段レイヤーほど優先される。
 
@@ -222,11 +225,11 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 
 merge ターゲットごとに:
 
-1. §7.3 の合成結果を §8.4 の canonical 形式で `<name>.{json,yaml}` に書き出す。
+1. §7.3 の合成結果を §8.4 の canonical 形式で `<name>.{json,yaml,toml}` に書き出す。
 2. 入力として使った sidecar（`*.merge.*`, `*.merge.local.*`）を `dist/` から削除する。
-3. plain base の `<name>.{json,yaml}` が存在したとき、それも `dist/` から削除する（完成形のみ残す）。
+3. plain base の `<name>.{json,yaml,toml}` が存在したとき、それも `dist/` から削除する（完成形のみ残す）。
 
-`dist/` には sidecar も plain base の生ファイルも残らない。完成形 `<name>.{json,yaml}` だけが残る。
+`dist/` には sidecar も plain base の生ファイルも残らない。完成形 `<name>.{json,yaml,toml}` だけが残る。
 
 ### 7.5 対象外
 
@@ -260,6 +263,18 @@ dotfiles/.pi/agent/config.exact/agents.merge.local.yaml  （gitignore）
 1. dot 変換後: `dist/dot_pi/agent/exact_config/agents.merge.local.yaml` 等
 2. 合成: ホーム → plain base（agents.yaml）→ merge.local
 3. 出力: `dist/dot_pi/agent/exact_config/agents.yaml`。sidecar と plain base 生ファイルは削除
+
+#### `config.merge.toml` のみ（plain base なし、パス移動と組合せ）
+
+```
+dotfiles/rtk/config.merge.toml
+```
+
+1. dist 再構築後: `dist/rtk/config.merge.toml`
+2. パス移動（§3）・dot 変換後: `dist/dot_config/rtk/config.merge.toml`
+3. ホーム: `~/.config/rtk/config.toml`（`chezmoi target-path`）
+4. 合成: ホーム → merge レイヤー
+5. 出力: `dist/dot_config/rtk/config.toml`。`config.merge.toml` は削除
 
 #### 全レイヤー
 
@@ -404,6 +419,19 @@ dsh:
   - provider: cursor
 ```
 
+TOML では `$` を含むキー名を quoted key で書く。quoted key は `.` で分割されないため、祖先キーはテーブルまたは dotted key で表現する。次の2つは等価である:
+
+```toml
+# config.merge.local.toml
+[dsh.profile]
+"bundles.$replace" = [{ provider = "cursor" }]
+```
+
+```toml
+# config.merge.local.toml
+dsh.profile."bundles.$replace" = [{ provider = "cursor" }]
+```
+
 ### 8.4 出力形式（canonical）
 
 merge ターゲットの完成形は、毎回同一形式で書き出す。
@@ -412,8 +440,9 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | ---- | -------------------------------------------------- |
 | JSON | 2 スペースインデント、末尾改行 1 つ、改行コード LF |
 | YAML | YAML 形式、改行コード LF                           |
+| TOML | TOML 形式、末尾改行 1 つ、改行コード LF            |
 
-JSON の merge / merge.local ファイルおよび plain base の JSON 入力にはコメント（JSONC）を書ける。
+JSON の merge / merge.local ファイルおよび plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の merge / merge.local ファイルおよび plain base の TOML 入力にはコメントを書ける。
 
 ## エラー
 

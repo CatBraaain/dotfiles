@@ -1,0 +1,7 @@
+# https://www.rtk-ai.app/docs/getting-started/configuration
+# Only intentional overrides; unset keys fall back to rtk's hardcoded defaults.
+# `npm run lint` is excluded because rtk rewrites it to its ESLint-specific
+# `rtk lint` (rtk-ai/rtk #1489).
+
+[hooks]
+exclude_commands = ["npm run lint"]

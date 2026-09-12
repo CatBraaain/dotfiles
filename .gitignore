@@ -5,4 +5,5 @@ dotfiles/.gitconfig.local
 dotfiles/.secrets.sh
 dotfiles/**/*.merge.local.json
 dotfiles/**/*.merge.local.yaml
+dotfiles/**/*.merge.local.toml
 undotfiles/nix/flake.lock

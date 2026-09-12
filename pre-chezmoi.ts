@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 
 export type Platform = "win32" | "other";
 
-type FileFormat = "json" | "yaml";
+type FileFormat = "json" | "toml" | "yaml";
 type MergeOp = "append" | "remove" | "replace" | "unset";
 type PlainObject = Record<string, unknown>;
 type Operation = { key: string; value: unknown };
@@ -20,7 +21,7 @@ type TargetPathResolver = (root: string, sourcePath: string) => Promise<string>;
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const hookFileName = ".pre-chezmoi.ts";
-const sidecarPattern = /\.merge(\.local)?\.(json|yaml)$/;
+const sidecarPattern = /\.merge(\.local)?\.(json|yaml|toml)$/;
 
 const fileFormats = {
   json: {
@@ -28,6 +29,12 @@ const fileFormats = {
   },
   yaml: {
     stringify: (value: unknown) => stringifyYaml(value),
+  },
+  toml: {
+    stringify: (value: unknown) => {
+      const serialized = stringifyToml(value);
+      return serialized === "" ? serialized : `${serialized}\n`;
+    },
   },
 } as const;
 
@@ -87,6 +94,7 @@ function pathMaps(platform: Platform): Record<string, string> {
         "git-cliff": ".config/git-cliff",
         "localsend/settings.merge.json":
           ".local/share/org.localsend.localsend_app/shared_preferences.merge.json",
+        rtk: ".config/rtk",
         zed: ".config/zed",
       };
 }
@@ -180,7 +188,11 @@ async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
   for (const entry of await collectEntries(distDir)) {
     if (entry.isDirectory || !basename(entry.path).match(sidecarPattern)) continue;
 
-    const format = entry.path.endsWith(".yaml") ? "yaml" : "json";
+    const format: FileFormat = entry.path.endsWith(".yaml")
+      ? "yaml"
+      : entry.path.endsWith(".toml")
+        ? "toml"
+        : "json";
     const outputPath = join(
       dirname(entry.path),
       basename(entry.path).replace(sidecarPattern, `.${format}`),
@@ -200,6 +212,11 @@ async function readLayer(path: string, format: FileFormat): Promise<Layer> {
 }
 
 function parseLayer(content: string, format: FileFormat): Layer {
+  if (format === "toml") {
+    const operations: Operations = new Map();
+    const parsed = parseTomlPairs(parseToml(content), "", operations);
+    return { normal: parsed.normal, operations };
+  }
   const document = parseDocument(format === "json" ? stripJsonComments(content) : content, {
     uniqueKeys: false,
   });
@@ -262,6 +279,37 @@ function parsePairs(
       continue;
     }
     normal[key] = pair.value ? toJS(pair.value, null, context) : undefined;
+  }
+  return { normal, hasOperations };
+}
+
+// TOML counterpart of parsePairs: split a parsed plain-object layer into
+// normal keys and operation keys following the same recognition rules.
+// In TOML, `$` requires a quoted key (e.g. "key.$replace"), which does not
+// split on "."; ancestor paths are expressed through nesting or dotted keys.
+function parseTomlPairs(value: unknown, prefix: string, operations: Operations): ParsedPairs {
+  if (!isPlainObject(value)) return { normal: {}, hasOperations: false };
+  const normal: PlainObject = {};
+  let hasOperations = false;
+  for (const [key, child] of Object.entries(value)) {
+    const operation = matchOperationKey(key);
+    if (operation) {
+      const path = prefix + operation.path;
+      registerOperation(operations, path, operation.op, `${path}.$${operation.op}`, child);
+      hasOperations = true;
+      continue;
+    }
+    if (isPlainObject(child)) {
+      const parsed = parseTomlPairs(child, `${prefix}${key}.`, operations);
+      if (parsed.hasOperations && Object.keys(parsed.normal).length === 0) {
+        hasOperations = true;
+        continue;
+      }
+      normal[key] = parsed.normal;
+      hasOperations ||= parsed.hasOperations;
+      continue;
+    }
+    normal[key] = child;
   }
   return { normal, hasOperations };
 }
