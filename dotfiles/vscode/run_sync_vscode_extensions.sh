@@ -126,7 +126,7 @@ build_local_extension_vsix() {
       vsix_path="$todo_lsp_repo/vscode-todo/todo-$version.vsix"
 
       rm -f "$vsix_path"
-      (cd "$todo_lsp_repo" && just prod) >&2
+      (cd "$todo_lsp_repo" && just package) >&2
       (cd "$todo_lsp_repo/vscode-todo" && npm run package -- \
         --allow-missing-repository --no-rewrite-relative-links) >&2
       ;;
