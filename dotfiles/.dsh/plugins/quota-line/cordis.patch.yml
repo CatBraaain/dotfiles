@@ -1,0 +1,5 @@
+# Bundle patch layer for dotfiles-dsh-quota-line.
+# Joined into the profile when this package is listed in dsh.profile.bundles.
+- insert:
+    - id: quota-line
+      name: dotfiles-dsh-quota-line
