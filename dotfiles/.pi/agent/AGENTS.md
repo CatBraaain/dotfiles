@@ -38,11 +38,11 @@
 - **Python**: `ruff format`, `ruff check`, `ty`, `pytest`
 - **JavaScript/TypeScript**: (`vp format` or `oxfmt`), (`vp check` or `oxlint`), `vitest`
 
-## Out-of-Scope Issues
+## Out-of-Scope Tickets
 
-作業中に発見した依頼対象外の課題（依頼箇所以外のバグ、typo、リンター・フォーマッター・タイプチェック指摘など）は、そのセッションでは修正せず、別課題として扱う。記録は local-issues skill に従い、`~/.pi/agent/issues/<project>/` に issue として残す。この起票は「依頼外の成果物を追加しない」に対する例外であり、ほかの skill が外部 issue トラッカーの利用を指示しても記録は local-issues skill に従う。
+作業中に発見した依頼対象外の課題（依頼箇所以外のバグ、typo、リンター・フォーマッター・タイプチェック指摘など）は、そのセッションでは修正せず、別課題として扱う。記録は tickets skill に従い、`~/.pi/agent/tickets/<project>/` に ticket として残す。この起票は「依頼外の成果物を追加しない」に対する例外であり、ほかの skill が外部 issue トラッカーの利用を指示しても記録は tickets skill に従う。
 
-review ワークファイルなど別の成果物に指摘をまとめたときも、その成果物は起票の代わりにならず、issue 本文から当該箇所を参照してよい。サブエージェントに発見を委譲したときは、統合と完了報告を担う agent が起票し、サブエージェントは起票せず観測事実（場所・内容・出力）を報告に含める。
+review ワークファイルなど別の成果物に指摘をまとめたときも、その成果物は起票の代わりにならず、ticket 本文から当該箇所を参照してよい。サブエージェントに発見を委譲したときは、統合と完了報告を担う agent が起票し、サブエージェントは起票せず観測事実（場所・内容・出力）を報告に含める。
 
 完了報告で列挙し、handoff_session による次セッションへの引継ぎを提案する。依頼の変更範囲に含まれる指摘は修正してよい。
 
