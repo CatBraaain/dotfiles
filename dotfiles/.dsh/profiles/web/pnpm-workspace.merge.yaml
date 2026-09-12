@@ -5,4 +5,5 @@ nodeLinker: hoisted
 autoInstallPeers: false
 allowBuilds:
   '@google/genai': false
+  better-sqlite3: false
   protobufjs: false
