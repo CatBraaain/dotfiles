@@ -1,9 +1,9 @@
 # dotfiles-dsh-agents
 
-Host-side port of the pi `agents` extension for dsh. Behavior contract:
-**SPEC.md** (Japanese, the review artifact). Reads
-`~/.dsh/config/agents.yaml` (same schema as pi's `~/.pi/agent/config/agents.yaml`)
-and provides:
+Port of the pi `agents` extension for dsh: a host half plus a small browser
+display half. Behavior contract: **SPEC.md** (Japanese, the review artifact).
+Reads `~/.dsh/config/agents.yaml` (same schema as pi's
+`~/.pi/agent/config/agents.yaml`) and provides:
 
 - **Agent definitions** — `systemPrompt` as a persona section, `tools` as
   agent-scoped `tools.restrict`, `/agent <name>` switching with follow-up message
@@ -19,6 +19,38 @@ and provides:
 - **Vision delegation** — while the resolved route cannot take images, a scoped
   `read_image` shadow delegates the image to a vision-class one-shot child and
   returns its textual report
+- **Agent/class display** (client half) — the pi widget lines
+  `🤖 agent: <name>` / `💎 class: <name>` (with a `(manual)` suffix while a
+  manual `/model` pick suspends routing) rendered under the composer in the
+  web UI, in the same dim tone as the session-id footer
+
+## Client display
+
+The browser half (`src/client/`, prebuilt `lib/client.js`) renders one
+composer-dock entry per session. The host claims the `dsh-agents/state`
+endpoint on the shared `/api` RPC channel
+(`@deepseek-ai/dsh-client-connection`'s `rpc.intercept`); the client component
+polls it every 2 s with the session-scope `sessionId` standard prop and shows
+the returned `{ managed, agent, className, manual }`. Failed polls keep the
+last known state; an unmanaged session renders nothing. There is no config
+and no durable session-log write — the state lives in host memory only.
+
+The client bundle is **not** rebuilt by `run_build.sh` (it only handles node
+entries); `lib/client.js` is committed. To rebuild it after editing
+`src/client/`:
+
+```sh
+cd dotfiles/.dsh/plugins/agents
+bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser --external react \
+  --banner 'window.__ModuleLoader__.load({ id: "dotfiles-dsh-agents", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' \
+  --footer 'return module.exports; } });'
+```
+
+This is the same `window.__ModuleLoader__.load({ id, factory })` handoff the
+other client halves use: `react` stays an external `require` resolved through
+the shell's frozen module table. The bundle includes `src/state-rpc.ts` (the
+shared endpoint name and payload helpers) — keep that module free of dsh
+types so it stays browser-safe.
 
 ## Install
 
@@ -166,19 +198,25 @@ Additional judgment calls (not in the research list):
 5. **read_image shadow timing** — the shadow flips inside `agent/request`, so
    a same-step schema assembly may briefly show the stock tool; the delegation
    itself is unaffected.
+6. **Browser agent/class display** — the `dsh-agents/state` intercept and the
+   composer-dock entry have not been exercised against a live dsh web
+   session. The first live check should confirm that the entry appears under
+   the composer, that `/agent` / `/class` switches show up within one 2 s
+   poll, and that unmanaged sessions render nothing.
 
 ## Development
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-agents
+cd dotfiles/.dsh/plugins/agents
 bun install          # devDependencies only (@types/bun, yaml for tests)
 bunx tsc --noEmit    # typecheck (global @deepseek-ai/* via tsconfig paths)
-bun test             # unit tests for config/routing/tool-allowlist/subagent-slots
+bun test             # unit tests for config/routing/tool-allowlist/subagent-slots/state-rpc and the client half
 bun build src/index.ts --outdir dist --target node \
   --external yaml --external '@deepseek-ai/*' --external '@earendil-works/*'
 ```
 
 Pure logic (config validation, candidate picking, cooldowns, tool-list
-translation, slot semaphore) lives in `src/*.ts` beside its `*.test.ts` and
-imports no dsh types. `src/index.ts` is glue only and is covered by types, not
-tests.
+translation, slot semaphore, the state RPC payload) lives in `src/*.ts` beside
+its `*.test.ts` and imports no dsh types. `src/index.ts` is glue only and is
+covered by types, not tests; the client half keeps its display logic in
+`src/client/{format,controller,apply}.ts` and tests those.

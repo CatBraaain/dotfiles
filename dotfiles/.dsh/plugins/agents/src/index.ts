@@ -29,6 +29,13 @@ import type { FileSystem } from "@deepseek-ai/dsh-fs";
 import type { ShellExecutor } from "@deepseek-ai/dsh-shell";
 import type {} from "@deepseek-ai/dsh-api-session-controller";
 import type {} from "@deepseek-ai/dsh-subagent";
+// Type-only imports also pull in the `declare module '@deepseek-ai/cordis'`
+// augmentation that puts the host `ctx.connection` RPC registry on Context.
+import type {
+  ConnectionRpcEndpointMatcher,
+  ConnectionRpcHandler,
+  HostConnectionHandle,
+} from "@deepseek-ai/dsh-client-connection";
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -46,6 +53,7 @@ import {
 } from "./routing.ts";
 import { translateTools, type ToolFilter } from "./tool-allowlist.ts";
 import { SubagentSlots } from "./subagent-slots.ts";
+import { AGENTS_STATE_ENDPOINT, buildStatePayload, parseStateRequest, type AgentStatePayload } from "./state-rpc.ts";
 
 export const name = "dsh-agents";
 export const inject = ["commands", "tools", "llm", "systemPrompt", "subagents"];
@@ -601,6 +609,39 @@ export function apply(ctx: Context) {
     yield ctx.commands.register(classCommand);
     yield ctx.commands.register(reloadCommand);
   }, "dsh-agents commands");
+
+  // ---- client state RPC (the browser display polls the agent/class) --------
+  const connection = ctx.get?.("connection") as HostConnectionHandle | undefined;
+  if (!connection) {
+    logger.warn("connection contract unavailable; the browser agent/class display stays empty");
+    return;
+  }
+  const stateForSession = (sessionId: string | undefined): AgentStatePayload =>
+    buildStatePayload(
+      [...states].map(([managedAgent, state]) => ({
+        sessionId: managedAgent.session.id,
+        agentName: state.agentName,
+        effectiveClass: state.effectiveClass,
+        manualSelect: state.manualSelect,
+      })),
+      sessionId,
+    );
+  const matchStateEndpoint: ConnectionRpcEndpointMatcher = (endpoint) =>
+    endpoint === AGENTS_STATE_ENDPOINT;
+  const handleStateRpc: ConnectionRpcHandler = async (_endpoint, payload) => {
+    const request = parseStateRequest(payload);
+    if (!request) {
+      return {
+        ok: false,
+        error: { code: "bad-request", message: "payload must be { sessionId?: string }", details: {} },
+      };
+    }
+    return { ok: true, value: stateForSession(request.sessionId) };
+  };
+  ctx.effect(
+    () => connection.rpc.intercept("/api", matchStateEndpoint, handleStateRpc),
+    "dsh-agents state rpc",
+  );
 }
 
 // Read `--agent <name>` / `--class <name>` (space or `=` separated) from the

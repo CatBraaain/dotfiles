@@ -4,7 +4,7 @@
 
 セッションは **agent** を実行する。agent は利用できるツール、依頼できる子 agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本 plugin は、agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を host 側で提供する。
 
-本 plugin が提供するのは host 側だけである。client UI（agent/class の表示、`/class` の選択 popup、subagent の待機表示）は phase 2 で別に提供する（「対象外」節）。
+本 plugin は host 側と client 側（browser bundle）で構成する。host 側は agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を提供する。client 側は現在の agent と実効 class の表示を提供する。`/class` の選択 popup、subagent の待機表示など残りの client UI は phase 2 で別に提供する（「対象外」節）。
 
 ## 設定
 
@@ -204,13 +204,31 @@ shadow が委譲に失敗する場合（呼び出し agent の `subagents` に `
 
 待機中の呼び出しの待機表示は client 側の表現のため phase 2 であり、host では結果を返さない待ちとして現れる。待機中に親がキャンセルした場合、その呼び出しはエラーとして終了する。
 
+## Agent 表示
+
+dsh web UI の composer 直下（composer dock）に、現在の agent と実効 class を常設表示する。表示は pi widget と同じ 2 行形式で、テキスト色はグレーとする。
+
+```text
+🤖 agent: <currentAgent>
+💎 class: <class-name>
+```
+
+手動状態（本家 `/model` による手動モデル選択が効いている間）のときは class 行の末尾に `(manual)` を付ける。
+
+| 項目             | 内容と振る舞い                                                                                                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 状態の配信       | host 側が本家 `dsh-client-connection` の共有 `/api` channel 上に `dsh-agents/state` endpoint を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual }` を返す。durable な session log には書き込まず、メモリ上の状態を応答する |
+| 表示の更新       | client half が 2 秒間隔で状態を取得し、取得に失敗したときは直前の表示を維持する。agent・class の切替は次の取得まで（最大 2 秒）表示に反映される                                |
+| 未管理 session   | 本 plugin が管理しない session（plugin 無効、`agents.yaml` 不正、子 session など）では何も表示しない                                                                      |
+| 表示しない環境   | web UI 以外の profile（headless、sdk など）では client half が読み込まれないため表示は出ない。routing・フォールバックなどの host 側の動作は同じ                                    |
+
 ## 実行できない場合の報告
 
 エージェントがタスクを遂行できない場合は、理由（権限不足、力量・情報不足など）を添えて報告する。報告先（subagent 実行中は依頼元エージェント、直接実行時はオーナー）の指定は plugin コードで強制せず、各 agent の systemPrompt の規範に委ねる。
 
 ## 対象外（phase 2 以降）
 
-- client bundle（agent/class 表示、`/class` の popupSelect、subagent の待機表示・toolview、通知）
+- client bundle（`/class` の popupSelect、subagent の待機表示・toolview、通知）
 - チャットに貼り付けられた画像の自動委譲
 - Z.AI 同時実行系エラー（`1302` / `1305`）の待機リトライ
 
