@@ -275,7 +275,7 @@ merge 変換の各レイヤー、および将来同一関数を使う処理は�
 
 ### 8.1 1 レイヤー内の処理順
 
-1. 操作キー（キー名が `<path>.$<op>` 形式のもの）をレイヤーから取り除く。
+1. 操作キー（§8.3）をレイヤー内の任意の深さから取り除く。
 2. 残りのキーをベースへ深くマージする（§8.2）。
 3. 取り除いた操作キーを §8.3 の規則でベースへ適用する。
 
@@ -287,18 +287,30 @@ merge 変換の各レイヤー、および将来同一関数を使う処理は�
 
 ### 8.3 操作キー（`$append` / `$remove` / `$replace` / `$unset`）
 
-操作キーは、キー名が次の形式のときだけ認識する。
+操作キーはレイヤー内の任意のオブジェクトに置ける。キー名が次の形式で、かつ認識条件を満たすものだけが操作キーになる。
 
 ```
-<path>.$<op>
+<local>.$<op>
 ```
 
-| 部分     | 内容                                                                 |
-| -------- | -------------------------------------------------------------------- |
-| `<path>` | ドット区切りのパス（例: `packages`, `tiers.high`, `retry.provider`） |
-| `<op>`   | `append` / `remove` / `replace` / `unset` のいずれか                 |
+| 部分      | 内容                                                                    |
+| --------- | ----------------------------------------------------------------------- |
+| `<local>` | そのオブジェクト内での操作対象の相対パス（例: `bundles`, `provider`） |
+| `<op>`    | `append` / `remove` / `replace` / `unset` のいずれか                    |
 
-`<path>` に配列インデックス（`[0]` など）は書けない。
+認識条件:
+
+- `<op>` が上表の4種のいずれかである。
+- `<local>` が空でない。
+- `<local>` に `[` を含まない。
+
+操作キーの `<path>` は、キーを置いたオブジェクトからレイヤーのルートまでの祖先キーを `.` で連結し、`<local>` を末尾に付けたものである。`<path>` に配列インデックス（`[0]` など）は書けない。
+
+認識条件を満たさない `.$` を含むキー（例: `x.$nope`、`a[0].$replace`）は操作キーではなく通常キーとして扱い、深いマージ（§8.2）でそのまま出力に残る。
+
+操作キーの値は、その中をさらに走査せず、そのまま操作の値として扱う。
+
+操作キーだけを含むオブジェクトは通常キーのマージに寄与せず、その祖先キーごと欠落として扱う。
 
 #### 操作の意味
 
@@ -370,6 +382,22 @@ tiers:
 }
 ```
 
+ネストで操作キーを書く。次の2つは等価である:
+
+```yaml
+# config.merge.local.yaml
+dsh:
+  profile:
+    "bundles.$replace":
+      - provider: cursor
+```
+
+```yaml
+# config.merge.local.yaml
+"dsh.profile.bundles.$replace":
+  - provider: cursor
+```
+
 ### 8.4 出力形式（canonical）
 
 merge ターゲットの完成形は、毎回同一形式で書き出す。
@@ -386,13 +414,10 @@ JSON の merge / merge.local ファイルおよび plain base の JSON 入力に
 | 条件                                                               | 振る舞い                                                                   |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------- |
 | `chezmoi target-path` が失敗                                       | その stderr を出力して異常終了（終了コード 0 以外）                        |
-| 操作キーの形式が `<path>.$<op>` に合わない                         | `invalid merge op key: <キー名>` を出力して異常終了                        |
-| `<op>` が `append` / `remove` / `replace` / `unset` 以外           | 上記と同じ                                                                 |
-| `<path>` に `[` を含む                                             | 上記と同じ                                                                 |
 | `<path>.$append` の `<path>` が配列でない                          | `merge append requires array at path: <path>` を出力して異常終了           |
 | `<path>.$remove` の `<path>` が配列でもオブジェクトでもない        | `merge remove requires array or object at path: <path>` を出力して異常終了 |
-| `<path>.$append` / `<path>.$remove` の値が配列でない               | `merge <op> value must be array: <キー名>` を出力して異常終了              |
-| `<path>.$remove`（オブジェクト）の値の要素が文字列でない           | `merge remove object keys must be strings: <キー名>` を出力して異常終了    |
+| `<path>.$append` / `<path>.$remove` の値が配列でない               | `merge <op> value must be array: <path>.$<op>` を出力して異常終了          |
+| `<path>.$remove`（オブジェクト）の値の要素が文字列でない           | `merge remove object keys must be strings: <path>.$<op>` を出力して異常終了 |
 | `<path>` がベースに存在しない（`$unset` / `$remove` / `$replace`） | 何もしない（エラーにしない）                                               |
 | `<path>` がベースに存在しない（`$append`）                         | `merge append path not found: <path>` を出力して異常終了                   |
 

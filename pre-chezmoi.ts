@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { isMap, parseDocument, stringify as stringifyYaml } from "yaml";
+import { isMap, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 
 export type Platform = "win32" | "other";
@@ -18,6 +18,7 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 type TargetPathResolver = (root: string, sourcePath: string) => Promise<string>;
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
+const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const hookFileName = ".pre-chezmoi.ts";
 const sidecarPattern = /\.merge(\.local)?\.(json|yaml)$/;
 
@@ -205,7 +206,6 @@ function parseLayer(content: string, format: FileFormat): Layer {
   if (document.errors.length > 0) throw document.errors[0];
   if (!isMap(document.contents)) return { normal: document.toJSON() ?? {}, operations: new Map() };
 
-  const normal: PlainObject = {};
   const operations: Operations = new Map();
   // Keep one conversion context so aliases resolve against this document while
   // duplicate operation keys continue to be processed individually.
@@ -217,33 +217,78 @@ function parseLayer(content: string, format: FileFormat): Layer {
     mapKeyWarned: false,
     maxAliasCount: 100,
   };
-  for (const pair of document.contents.items) {
+  const { normal } = parsePairs(document.contents.items, "", operations, yamlContext);
+  return { normal, operations };
+}
+
+type ParsedPairs = { normal: PlainObject; hasOperations: boolean };
+
+// Recursively split a layer object into normal keys and operation keys. An
+// operation key at nesting depth contributes the ancestor keys joined by "."
+// to its target path. Keys failing the recognition rules stay as normal keys.
+// Objects holding only operation keys are dropped from the normal result so
+// they do not take part in the deep merge.
+function parsePairs(
+  items: readonly Pair<ParsedNode, ParsedNode | null>[],
+  prefix: string,
+  operations: Operations,
+  context: ToJSContext,
+): ParsedPairs {
+  const normal: PlainObject = {};
+  let hasOperations = false;
+  for (const pair of items) {
     const key = String(pair.key?.toJSON());
-    const value = pair.value ? toJS(pair.value, null, yamlContext) : undefined;
-    if (!key.includes(".$")) {
-      normal[key] = value;
+    const operation = matchOperationKey(key);
+    if (operation) {
+      const path = prefix + operation.path;
+      registerOperation(
+        operations,
+        path,
+        operation.op,
+        `${path}.$${operation.op}`,
+        pair.value ? toJS(pair.value, null, context) : undefined,
+      );
+      hasOperations = true;
       continue;
     }
-
-    const match = key.match(/^(.+)\.\$(.+)$/);
-    if (!match || match[1].includes("[") || !mergeOps.has(match[2] as MergeOp)) {
-      throw new Error(`invalid merge op key: ${key}`);
+    if (isMap(pair.value)) {
+      const child = parsePairs(pair.value.items, `${prefix}${key}.`, operations, context);
+      if (child.hasOperations && Object.keys(child.normal).length === 0) {
+        hasOperations = true;
+        continue;
+      }
+      normal[key] = child.normal;
+      hasOperations ||= child.hasOperations;
+      continue;
     }
-
-    const path = match[1];
-    const op = match[2] as MergeOp;
-    const pathOperations = operations.get(path) ?? {};
-    const previous = pathOperations[op];
-    pathOperations[op] = {
-      key,
-      value:
-        Array.isArray(previous?.value) && Array.isArray(value)
-          ? [...previous.value, ...value]
-          : value,
-    };
-    operations.set(path, pathOperations);
+    normal[key] = pair.value ? toJS(pair.value, null, context) : undefined;
   }
-  return { normal, operations };
+  return { normal, hasOperations };
+}
+
+function matchOperationKey(key: string): { path: string; op: MergeOp } | undefined {
+  const match = key.match(operationKeyPattern);
+  if (!match || match[1].includes("[")) return undefined;
+  return { path: match[1], op: match[2] as MergeOp };
+}
+
+function registerOperation(
+  operations: Operations,
+  path: string,
+  op: MergeOp,
+  key: string,
+  value: unknown,
+): void {
+  const pathOperations = operations.get(path) ?? {};
+  const previous = pathOperations[op];
+  pathOperations[op] = {
+    key,
+    value:
+      Array.isArray(previous?.value) && Array.isArray(value)
+        ? [...previous.value, ...value]
+        : value,
+  };
+  operations.set(path, pathOperations);
 }
 
 function stripJsonComments(content: string): string {
