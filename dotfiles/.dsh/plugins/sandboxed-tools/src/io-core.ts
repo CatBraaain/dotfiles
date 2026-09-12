@@ -116,10 +116,10 @@ export function applyEditLiteral(
 }
 
 // ---------------------------------------------------------------------------
-// read_image format sniffing (SPEC §2.1: signature first, extension assist)
+// image format sniffing (SPEC §2.1: signature first, extension assist)
 // ---------------------------------------------------------------------------
 
-/** Extensions read_image accepts, mapped to their declared media type. */
+/** Supported image extensions, mapped to their declared media type. */
 export const IMAGE_EXTENSIONS: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",

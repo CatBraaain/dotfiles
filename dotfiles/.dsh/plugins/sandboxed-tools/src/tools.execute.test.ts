@@ -1,5 +1,5 @@
 // Tool-registration-layer tests (SPEC §1–§4, §2.1): the defineTool bodies of
-// the eight tools + ask_permission + read_image, executed directly through a
+// the seven tools + ask_permission, executed directly through a
 // minimal ctx.tools.register sink. A real Sandbox provides the authorization
 // gates (§2/§3/§4), while the §7 bwrap execution is replaced by a per-instance
 // runTool stub that records each request; §2.1 uses fake llm/attachments
@@ -25,7 +25,6 @@ import {
   EROFS_HINT,
   NOT_BEEN_READ,
   ReadObservations,
-  registerReadImageTool,
   registerSandboxedTools,
   writeApprovalNote,
   type SandboxToolContext,
@@ -148,7 +147,6 @@ function withToolLayer(
       };
       const { ctx, tools } = captureRegistry(services ?? {});
       registerSandboxedTools(ctx, deps);
-      registerReadImageTool(ctx, deps);
       await test({
         tools,
         tool: (name) => {
@@ -167,7 +165,7 @@ function withToolLayer(
 }
 
 /** Fake llm + attachments services for §2.1, recording every call. */
-function imageServices(options?: { modalities?: string[]; saveImageError?: Error }) {
+function imageServices(options?: { modalities?: string[] }) {
   const llmCalls: { provider: string; model: string }[] = [];
   const saveCalls: { data: Uint8Array; mediaType: string; name?: string }[] = [];
   return {
@@ -182,7 +180,6 @@ function imageServices(options?: { modalities?: string[]; saveImageError?: Error
     attachments: {
       async saveImage(input: { data: Uint8Array; mediaType: string; name?: string }) {
         saveCalls.push(input);
-        if (options?.saveImageError !== undefined) throw options.saveImageError;
         return {
           attachmentId: "att-1",
           mediaType: input.mediaType,
@@ -201,13 +198,14 @@ const PNG_BYTES = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
 const GIF_BYTES = Buffer.from("GIF89a\x01\x00\x01\x00", "binary");
 
 // ---------------------------------------------------------------------------
-// §2.1 read_image — the four table rows plus the route-gate ordering
+// §2.1 read — text and image through one tool
 // ---------------------------------------------------------------------------
 
-describe("§2.1 read_image（ツール経路）", () => {
+describe("§2.1 read（ツール経路）", () => {
   const pngRespond = (path: string) => () => ({
     path,
     dataBase64: PNG_BYTES.toString("base64"),
+    mediaType: "image/png",
   });
 
   it(
@@ -219,7 +217,7 @@ describe("§2.1 read_image（ツール経路）", () => {
         respond: pngRespond(join(dir, "img.png")),
       }),
       async ({ tool, runs, dir }) => {
-        const result = await tool("read_image").execute({ file_path: "img.png" }, execOf(imageAgent()));
+        const result = await tool("read").execute({ file_path: "img.png" }, execOf(imageAgent()));
         // The attachment reference (post-normalization values from the store)
         // is what the tool returns — §2.1 downscale/normalize lives in the
         // attachment service, and the image rides the session's attachments.
@@ -236,7 +234,7 @@ describe("§2.1 read_image（ツール経路）", () => {
         });
         assert.equal(JSON.stringify(result).includes(PNG_BYTES.toString("base64")), false);
         // §2.1 render: text envelope plus the image content block.
-        const rendered = tool("read_image").output.render({}, result);
+        const rendered = tool("read").output.render({}, result);
         assert.equal(rendered[0]!.type, "text");
         assert.equal(rendered[1]!.type, "image");
         assert.equal(runs.length, 1);
@@ -245,7 +243,7 @@ describe("§2.1 read_image（ツール経路）", () => {
   );
 
   it(
-    "画像入力非対応経路 → 画像を読まずに vision 委譲エラー",
+    "画像入力非対応経路 → Vision 入力を作らず vision 委譲エラー",
     withToolLayer(
       (dir) => ({
         configYaml: `\nread:\n  - allow: ${dir}\n`,
@@ -254,21 +252,21 @@ describe("§2.1 read_image（ツール経路）", () => {
       }),
       async ({ tool, runs, dir }) => {
         await assert.rejects(
-          tool("read_image").execute({ file_path: join(dir, "img.png") }, execOf(imageAgent())),
+          tool("read").execute({ file_path: join(dir, "img.png") }, execOf(imageAgent())),
           (error: Error) =>
             error.message.includes("does not accept image input") &&
             error.message.includes("subagent") &&
             error.message.includes("vision") &&
             error.message.includes("(prov/m1)"),
         );
-        // Route gate fires before the bytes read (§2.1 画像を読まずに).
-        assert.equal(runs.length, 0);
+        // The runner inspects the signature before the host creates an image input.
+        assert.equal(runs.length, 1);
       },
     ),
   );
 
   it(
-    "provider/model が解決できない経路でも、読まずに委譲エラー",
+    "provider/model が解決できない経路でも委譲エラー",
     withToolLayer(
       (dir) => ({
         configYaml: `\nread:\n  - allow: ${dir}\n`,
@@ -277,10 +275,10 @@ describe("§2.1 read_image（ツール経路）", () => {
       }),
       async ({ tool, runs, dir }) => {
         await assert.rejects(
-          tool("read_image").execute({ file_path: join(dir, "img.png") }, execOf()),
+          tool("read").execute({ file_path: join(dir, "img.png") }, execOf()),
           /does not accept image input/,
         );
-        assert.equal(runs.length, 0);
+        assert.equal(runs.length, 1);
       },
     ),
   );
@@ -295,7 +293,7 @@ describe("§2.1 read_image（ツール経路）", () => {
       }),
       async ({ tool, runs, dir }) => {
         await assert.rejects(
-          tool("read_image").execute(
+          tool("read").execute(
             { file_path: join(dir, "secret", "k.png") },
             execOf(imageAgent()),
           ),
@@ -307,7 +305,7 @@ describe("§2.1 read_image（ツール経路）", () => {
   );
 
   it(
-    "PNG/JPEG/WebP/GIF 以外の拡張子 → 内容を読む前に形式エラー",
+    "対応外拡張子でも対応形式のシグネチャがあれば画像として返す",
     withToolLayer(
       (dir) => ({
         configYaml: `\nread:\n  - allow: ${dir}\n`,
@@ -315,39 +313,47 @@ describe("§2.1 read_image（ツール経路）", () => {
         respond: pngRespond(join(dir, "img.bmp")),
       }),
       async ({ tool, runs, dir }) => {
-        await assert.rejects(
-          tool("read_image").execute({ file_path: join(dir, "img.bmp") }, execOf(imageAgent())),
-          /the \.bmp extension does not declare a supported image format/,
+        const result = await tool("read").execute(
+          { file_path: join(dir, "img.bmp") },
+          execOf(imageAgent()),
         );
-        assert.equal(runs.length, 0);
-      },
-    ),
-  );
-
-  it(
-    "拡張子なしでシグネチャ非対応 → 形式を判定できない旨のエラー",
-    withToolLayer(
-      (dir) => ({
-        configYaml: `\nread:\n  - allow: ${dir}\n`,
-        services: imageServices(),
-        respond: () => ({
-          path: join(dir, "image"),
-          dataBase64: Buffer.from("definitely not an image").toString("base64"),
-        }),
-      }),
-      async ({ tool, runs, dir }) => {
-        await assert.rejects(
-          tool("read_image").execute({ file_path: join(dir, "image") }, execOf(imageAgent())),
-          /content is not a supported image format/,
-        );
-        // The bytes are read (inside the sandbox) before the sniff fails.
+        assert.equal((result.image as { mediaType: string }).mediaType, "image/png");
         assert.equal(runs.length, 1);
       },
     ),
   );
 
   it(
-    "拡張子宣言を優先し、シグネチャは補助に使う（.png で内容が GIF でも image/png）",
+    "拡張子なしでシグネチャ非対応のファイルは既存の read 結果を返す",
+    withToolLayer(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\n`,
+        respond: () => ({
+          path: join(dir, "image"),
+          offset: 1,
+          lines: [{ number: 1, text: "plain text" }],
+          totalLines: 1,
+          mtimeMs: 1000,
+        }),
+      }),
+      async ({ tool, runs, dir }) => {
+        const result = await tool("read").execute(
+          { file_path: join(dir, "image") },
+          execOf(),
+        );
+        assert.deepEqual(result, {
+          path: join(dir, "image"),
+          offset: 1,
+          lines: [{ number: 1, text: "plain text" }],
+          totalLines: 1,
+        });
+        assert.equal(runs.length, 1);
+      },
+    ),
+  );
+
+  it(
+    "シグネチャを優先し、拡張子は補助に使う（.png で内容が GIF なら image/gif）",
     withToolLayer(
       (dir) => ({
         configYaml: `\nread:\n  - allow: ${dir}\n`,
@@ -355,53 +361,20 @@ describe("§2.1 read_image（ツール経路）", () => {
         respond: () => ({
           path: join(dir, "mislabeled.png"),
           dataBase64: GIF_BYTES.toString("base64"),
+          mediaType: "image/gif",
         }),
       }),
       async ({ tool, dir }) => {
-        const result = await tool("read_image").execute(
+        const result = await tool("read").execute(
           { file_path: join(dir, "mislabeled.png") },
           execOf(imageAgent()),
         );
-        assert.equal((result.image as { mediaType: string }).mediaType, "image/png");
+        assert.equal((result.image as { mediaType: string }).mediaType, "image/gif");
       },
     ),
   );
 
-  it(
-    "添付上限超過エラーはダウンスケール指示に差し替える",
-    withToolLayer(
-      (dir) => ({
-        configYaml: `\nread:\n  - allow: ${dir}\n`,
-        services: imageServices({
-          saveImageError: new Error("image exceeds the 5120x5120px limit"),
-        }),
-        respond: pngRespond(join(dir, "img.png")),
-      }),
-      async ({ tool, dir }) => {
-        await assert.rejects(
-          tool("read_image").execute({ file_path: join(dir, "img.png") }, execOf(imageAgent())),
-          /downscale the image and read the smaller copy/,
-        );
-      },
-    ),
-  );
 
-  it(
-    "attachment service が無い場合は画像読み取り不可のエラー",
-    withToolLayer(
-      (dir) => ({
-        configYaml: `\nread:\n  - allow: ${dir}\n`,
-        services: { llm: imageServices().llm },
-        respond: pngRespond(join(dir, "img.png")),
-      }),
-      async ({ tool, dir }) => {
-        await assert.rejects(
-          tool("read_image").execute({ file_path: join(dir, "img.png") }, execOf(imageAgent())),
-          /no attachment service is mounted/,
-        );
-      },
-    ),
-  );
 });
 
 // ---------------------------------------------------------------------------
@@ -756,12 +729,17 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
 
 describe("§1 説明文の明記要件", () => {
   it(
-    "read_image・ask_permission・bash・write/edit の説明文に必要な案内を含む",
+    "read・ask_permission・bash・write/edit の説明文に必要な案内を含む",
     withToolLayer(
       () => ({ configYaml: "" }),
-      ({ tool }) => {
-        // §2.1: read_image notes vision delegation for image-incapable routes.
-        assert.ok(tool("read_image").description.includes("vision"));
+      ({ tools, tool }) => {
+        // §1: read_image is not registered; read owns both text and image paths.
+        assert.equal(tools.some((definition) => definition.name === "read_image"), false);
+        // §2.1: read notes Vision input and vision delegation.
+        assert.match(tool("read").description, /Image files.*image input/);
+        assert.ok(tool("read").description.includes("vision"));
+        const readSchema = (tool("read").output as unknown as { schema: { oneOf?: unknown[] } }).schema;
+        assert.equal(readSchema.oneOf?.length, 2);
         // §3: ask_permission covers worktree/parent write requests and the
         // reason-gated command re-request.
         const askPermission = tool("ask_permission").description;

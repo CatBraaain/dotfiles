@@ -1,8 +1,8 @@
 // dotfiles-sandboxed-tools — host-side port of the pi sandboxed-tools
 // extension (see SPEC.md, the oracle). This plugin replaces the stock
 // dsh-tool-fs / dsh-tool-fs-search / dsh-tool-bash model-facing tools (their
-// rows are disabled via cordis.patch.yml) and registers read / read_image /
-// write / edit / glob / grep / ls / bash / ask_permission itself (§1・§3).
+// rows are disabled via cordis.patch.yml) and registers read / write / edit /
+// glob / grep / ls / bash / ask_permission itself (§1・§3).
 // Every authorized call runs its IO inside one bwrap invocation per tool
 // call (§7) through the in-sandbox runner (dist/runner.js). sandbox.yaml (§6)
 // is reloaded at load time and at every session start. `ask` resolutions and
@@ -19,14 +19,13 @@ import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 // Augments the cordis Context with the userQuestions service declaration.
 import type {} from "@deepseek-ai/dsh-user-questions";
 import { Sandbox, type ConfirmOptions, type SandboxHostPaths } from "./sandbox";
-import { ReadObservations, registerReadImageTool, registerSandboxedTools, type SandboxToolContext } from "./tools";
+import { ReadObservations, registerSandboxedTools, type SandboxToolContext } from "./tools";
 import type { ConfirmUi } from "./confirm";
 
 export const name = "sandboxed-tools";
-// The tools service registers the eight tools + ask_permission; read_image
-// additionally mounts while ctx.attachments is available, and the §2.3
-// confirmation dialogs ride the userQuestions seam.
-export const inject = ["tools", "userQuestions"];
+// The tools service registers the seven filesystem/process tools +
+// ask_permission; the §2.3 confirmation dialogs ride the userQuestions seam.
+export const inject = ["tools", "userQuestions", "attachments"];
 
 /** Resolve the plugin's dist directory (build output of src/index.ts + src/runner.ts). */
 function distDirectory(): string {
@@ -35,15 +34,6 @@ function distDirectory(): string {
 
 export function apply(ctx: Context) {
   const logger = ctx.logger("sandboxed-tools");
-
-  // Presence marker (SPEC §1): while this plugin is loaded it is the single
-  // read_image registrar and solely owns the image path, so dsh-agents must
-  // keep its image-incapable read_image shadow off — that shadow would take
-  // precedence over this plugin's global read_image, and its vision
-  // delegation reads through ctx.fs/ctx.attachments outside the sandbox,
-  // bypassing the §2 read gate and the §2.2 credentials denial. dsh-agents
-  // probes this service by name at request time; the value is opaque.
-  ctx.provide("sandboxedTools", {});
 
   // §7 host resources bound into every sandbox run: the node binary, the
   // runner CLI, the ripgrep binary directory, and the bash spill directory.
@@ -115,9 +105,4 @@ export function apply(ctx: Context) {
 
   registerSandboxedTools(ctx, toolDeps());
 
-  // §2.1: read_image exists only while a durable attachment store is mounted
-  // (images are normalized and persisted through ctx.attachments).
-  ctx.inject(["attachments"], (imageCtx) => {
-    registerReadImageTool(imageCtx, toolDeps());
-  });
 }

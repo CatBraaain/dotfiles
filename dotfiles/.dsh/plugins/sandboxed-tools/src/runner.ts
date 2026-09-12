@@ -32,12 +32,12 @@ import {
   capBashStreams,
   compareLsEntries,
   parseGrepMatches,
+  sniffImageMediaType,
   validateGrepInclude,
 } from "./io-core";
 
 export type RunnerToolName =
   | "read"
-  | "read_image"
   | "write"
   | "edit"
   | "glob"
@@ -75,7 +75,7 @@ export type RunnerEditResult = { path: string; replacements: number; mtimeMs: nu
 export type RunnerGlobResult = { paths: string[] };
 export type RunnerGrepResult = { matches: { path: string; lineNumber: number; line: string }[] };
 export type RunnerLsResult = { path: string; text: string };
-export type RunnerImageBytesResult = { path: string; dataBase64: string };
+export type RunnerImageBytesResult = { path: string; dataBase64: string; mediaType: string };
 export type RunnerBashResult = {
   stdout: { text: string; truncated: boolean; spillPath?: string };
   stderr: { text: string; truncated: boolean; spillPath?: string };
@@ -123,21 +123,21 @@ function requireRegularFile(path: string): void {
 // fs tools
 // ---------------------------------------------------------------------------
 
-function runRead(params: Record<string, unknown>): RunnerReadResult {
+/** §2.1: the read helper detects images signature-first (extension only
+ * assists), so the host's single `read` tool serves text and images. Image
+ * reads ignore offset/limit per §2.1. */
+function runRead(params: Record<string, unknown>): RunnerReadResult | RunnerImageBytesResult {
   const filePath = requiredString(params.file_path, "file_path");
+  requireRegularFile(filePath);
+  const data = readFileSync(filePath);
+  const mediaType = sniffImageMediaType(data);
+  if (mediaType !== undefined)
+    return { path: filePath, dataBase64: data.toString("base64"), mediaType };
   const offset = params.offset === undefined ? 1 : positiveInteger(params.offset, "offset");
   const limit = params.limit === undefined ? 2000 : positiveInteger(params.limit, "limit");
   if (limit > 2000) throw new Error("limit must be less than or equal to 2000");
-  requireRegularFile(filePath);
-  const info = statSync(filePath);
-  const window = buildReadWindow(readFileSync(filePath, "utf8"), offset, limit);
-  return { path: filePath, offset, lines: window.lines, totalLines: window.totalLines, mtimeMs: info.mtimeMs };
-}
-
-function runReadImage(params: Record<string, unknown>): RunnerImageBytesResult {
-  const filePath = requiredString(params.file_path, "file_path");
-  requireRegularFile(filePath);
-  return { path: filePath, dataBase64: readFileSync(filePath).toString("base64") };
+  const window = buildReadWindow(data.toString("utf8"), offset, limit);
+  return { path: filePath, offset, lines: window.lines, totalLines: window.totalLines, mtimeMs: statSync(filePath).mtimeMs };
 }
 
 /** Enforce the §2.4 gate inside the sandbox: the last line of defense after
@@ -385,8 +385,6 @@ export async function executeRequest(request: RunnerRequest): Promise<
   switch (request.tool) {
     case "read":
       return runRead(request.params);
-    case "read_image":
-      return runReadImage(request.params);
     case "write":
       return runWrite(request.params, options.observedMtimeMs);
     case "edit":

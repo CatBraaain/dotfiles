@@ -2,8 +2,8 @@
 # Joined into the profile when this package is listed in dsh.profile.bundles.
 #
 # This plugin replaces the stock fs/bash model-facing tools: the stock rows
-# are disabled here and this plugin registers read/read_image/write/edit/
-# glob/grep/ls/bash plus ask_permission itself (SPEC §1・§3: it is the single
+# are disabled here and this plugin registers read/write/edit/glob/grep/ls/bash
+# plus ask_permission itself (SPEC §1・§3: it is the single
 # registrar, so the replacement is complete once the plugin loads). Row
 # addressing is by id with last write winning per row.
 - id: tool-bash

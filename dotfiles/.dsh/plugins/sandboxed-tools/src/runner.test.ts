@@ -13,6 +13,8 @@ import { executeRequest } from "./runner";
 import { BASH_MAX_OUTPUT_BYTES } from "./io-core";
 
 let fixtureRoot: string | undefined;
+const PNG_BYTES = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
+const GIF_BYTES = Buffer.from("GIF89a\x01\x00\x01\x00", "binary");
 
 function withFixture(build: (dir: string) => void, test: (dir: string) => Promise<void> | void): () => Promise<void> {
   return async () => {
@@ -50,6 +52,67 @@ describe("runner read", () => {
         assert.deepEqual(result.lines, [{ number: 2, text: "two" }]);
         assert.equal(result.totalLines, 3);
         assert.equal(typeof result.mtimeMs, "number");
+      },
+    ),
+  );
+
+  it(
+    "画像シグネチャの read は画像バイトと media type を返す",
+    withFixture(
+      (dir) => writeFileSync(join(dir, "image"), PNG_BYTES),
+      async (dir) => {
+        const result = (await executeRequest({
+          tool: "read",
+          params: { file_path: join(dir, "image"), offset: 10, limit: 2001 },
+        })) as { dataBase64: string; mediaType: string };
+        assert.equal(result.mediaType, "image/png");
+        assert.equal(Buffer.from(result.dataBase64, "base64").equals(PNG_BYTES), true);
+      },
+    ),
+  );
+
+  it(
+    "シグネチャを拡張子より優先して media type を判定する",
+    withFixture(
+      (dir) => writeFileSync(join(dir, "mislabeled.png"), GIF_BYTES),
+      async (dir) => {
+        const result = (await executeRequest({
+          tool: "read",
+          params: { file_path: join(dir, "mislabeled.png") },
+        })) as { dataBase64: string; mediaType: string };
+        assert.equal(result.mediaType, "image/gif");
+      },
+    ),
+  );
+
+  it(
+    "対応拡張子でもシグネチャ非対応の read はテキストを返す",
+    withFixture(
+      (dir) => writeFileSync(join(dir, "plain.png"), "one\ntwo\n"),
+      async (dir) => {
+        const result = (await executeRequest({
+          tool: "read",
+          params: { file_path: join(dir, "plain.png") },
+        })) as { lines: { number: number; text: string }[]; totalLines: number };
+        assert.deepEqual(result.lines, [
+          { number: 1, text: "one" },
+          { number: 2, text: "two" },
+        ]);
+      },
+    ),
+  );
+
+  it(
+    "シグネチャ非対応の read は従来どおり行番号付きテキストを返す",
+    withFixture(
+      (dir) => writeFileSync(join(dir, "plain"), "one\ntwo\n"),
+      async (dir) => {
+        const result = (await executeRequest({
+          tool: "read",
+          params: { file_path: join(dir, "plain"), offset: 2, limit: 1 },
+        })) as { lines: { number: number; text: string }[]; totalLines: number };
+        assert.deepEqual(result.lines, [{ number: 2, text: "two" }]);
+        assert.equal(result.totalLines, 2);
       },
     ),
   );

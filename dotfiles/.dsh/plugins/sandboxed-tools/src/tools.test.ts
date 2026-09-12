@@ -202,7 +202,7 @@ describe("§2.1 画像非対応経路のエラー文言", () => {
     assert.ok(message.includes("(prov/model-x)"));
     assert.ok(message.includes("subagent"));
     assert.ok(message.includes("vision"));
-    assert.ok(message.includes("read_image"));
+    assert.ok(message.includes("with read"));
     assert.ok(message.includes("report its observation as text"));
     assert.ok(message.includes("If you cannot spawn subagents"));
     assert.ok(message.endsWith("Path: /img.png"));

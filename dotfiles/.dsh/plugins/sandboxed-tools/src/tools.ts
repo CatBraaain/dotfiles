@@ -1,5 +1,5 @@
-// Model-facing tool definitions for sandboxed-tools: the eight tools
-// registered on the dsh tools waterfall — read / read_image / write / edit /
+// Model-facing tool definitions for sandboxed-tools: the seven tools
+// registered on the dsh tools waterfall — read / write / edit /
 // glob / grep / ls / bash (SPEC §1) — plus ask_permission (§3). Every call
 // passes the §2/§2.2/§4 authorization gate — with the §2.3 confirmation
 // dialog for ask resolutions — then executes its IO inside one bwrap
@@ -10,7 +10,7 @@
 // the final line of the rendered result, after the §4 EROFS hint when both
 // apply.
 
-import { basename, extname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
 import type { ImageMediaType } from "@deepseek-ai/dsh-attachment";
 import type { Context } from "@deepseek-ai/cordis";
@@ -22,10 +22,8 @@ import {
   formatGrepOutput,
   formatReadOutput,
   formatWriteOutput,
-  imageMediaTypeForPath,
   renderGlobPaths,
   retainGrepMatches,
-  sniffImageMediaType,
 } from "./io-core";
 import type {
   RunnerBashResult,
@@ -56,10 +54,24 @@ export function imageReadErrorMessage(
   return (
     `The current model route${route} does not accept image input, so the image was not read. ` +
     `Delegate image reading to a vision agent: call the subagent tool with the "vision" agent, ` +
-    `have it read this image with read_image, and report its observation as text. ` +
+    `have it read this image with read, and report its observation as text. ` +
     `If you cannot spawn subagents, report to the requester that reading this image is needed. Path: ${path}`
   );
 }
+
+/** §2.1 image envelope: the image rides the session's attachments, so the
+ * tool result carries the post-normalization reference, not the bytes. */
+export type ImageReadEnvelope = {
+  path: string;
+  image: {
+    attachmentId: string;
+    mediaType: string;
+    bytes: number;
+    width: number;
+    height: number;
+    name?: string;
+  };
+};
 
 // ---------------------------------------------------------------------------
 // §2.3 approval notes and the §4 EROFS hint
@@ -209,64 +221,144 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
     return context.sandbox.runTool(request, options) as Promise<T>;
   };
 
+  // §2.1 route gate: before any image bytes are read, reject an image-incapable
+  // route with the vision-delegation error (SPEC §2.1).
+  const gateImageRoute = async (filePath: string, exec: ToolRunContext): Promise<void> => {
+    const routed = exec.agent?.session.requestHeader()?.config;
+    const provider = routed?.provider ?? exec.agent?.options.provider;
+    const model = routed?.model ?? exec.agent?.options.model;
+    const llm = ctx.get("llm");
+    if (provider === undefined || model === undefined || llm === undefined)
+      throw new Error(imageReadErrorMessage(filePath, provider, model));
+    const modelInfo = await llm.resolveModelInfo(provider, model, exec.signal);
+    if (modelInfo.inputModalities === undefined || !modelInfo.inputModalities.includes("image"))
+      throw new Error(imageReadErrorMessage(filePath, provider, model));
+  };
+
+  // §2.1: normalize + persist the image through the attachments service and
+  // return the envelope carrying the post-normalization reference.
+  const saveImageAttachment = async (
+    filePath: string,
+    mediaType: string,
+    bytes: RunnerImageBytesResult,
+  ): Promise<ImageReadEnvelope> => {
+    const attachments = ctx.get("attachments")!;
+    const ref = await attachments.saveImage({
+      data: Buffer.from(bytes.dataBase64, "base64"),
+      mediaType: mediaType as ImageMediaType,
+      name: basename(filePath),
+    });
+    return {
+      path: bytes.path,
+      image: {
+        attachmentId: String(ref.attachmentId),
+        mediaType: ref.mediaType,
+        bytes: ref.bytes,
+        width: ref.width,
+        height: ref.height,
+        ...(ref.name === undefined ? {} : { name: ref.name }),
+      },
+    };
+  };
+
   // ---- read -------------------------------------------------------------
 
   ctx.tools.register(
     defineTool({
       name: "read",
       description:
-        "Read a UTF-8 text file and return line-numbered content. Use offset and limit to continue reading large files.",
+        "Read a UTF-8 text file and return line-numbered content. Use offset and limit to continue reading large files. Image files (PNG/JPEG/WebP/GIF) are returned as image input instead, and offset/limit does not apply to them; on a route without image input, reading an image returns an error that directs delegation to a vision agent via the subagent tool.",
       parameters: {
         file_path: {
           type: "string",
           required: true,
           description: "Path to read; relative paths resolve against the session cwd.",
         },
-        offset: { type: "number", description: "1-based first line to return. Defaults to 1." },
+        offset: { type: "number", description: "1-based first line to return. Defaults to 1. Not applied to image files." },
         limit: {
           type: "number",
-          description: "Maximum number of lines to return. Defaults to and caps at 2000.",
+          description: "Maximum number of lines to return. Defaults to and caps at 2000. Not applied to image files.",
         },
       },
       output: {
         schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            path: { type: "string", required: true },
-            offset: { type: "integer", required: true },
-            lines: {
-              type: "array",
-              required: true,
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  number: { type: "integer", required: true },
-                  text: { type: "string", required: true },
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                path: { type: "string", required: true },
+                offset: { type: "integer", required: true },
+                lines: {
+                  type: "array",
+                  required: true,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      number: { type: "integer", required: true },
+                      text: { type: "string", required: true },
+                    },
+                  },
+                },
+                totalLines: { type: "integer", required: true },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                path: { type: "string", required: true },
+                image: {
+                  type: "object",
+                  required: true,
+                  additionalProperties: false,
+                  properties: {
+                    attachmentId: { type: "string", required: true },
+                    mediaType: { type: "string", required: true },
+                    bytes: { type: "integer", required: true },
+                    width: { type: "integer", required: true },
+                    height: { type: "integer", required: true },
+                    name: { type: "string" },
+                  },
                 },
               },
             },
-            totalLines: { type: "integer", required: true },
-          },
+          ],
         },
-        render: (_args, value) => [
-          {
-            type: "text",
-            text: formatReadOutput(
-              value.path,
-              { lines: value.lines, totalLines: value.totalLines },
-              value.offset,
-            ),
-          },
-        ],
+        render: (_args, value): ContentBlock[] =>
+          "image" in value
+            ? [
+                { type: "text", text: formatImageReadOutput(value.path, value.image) },
+                {
+                  type: "image",
+                  attachment: {
+                    attachmentId: value.image.attachmentId as never,
+                    mediaType: value.image.mediaType as never,
+                    bytes: value.image.bytes,
+                    width: value.image.width,
+                    height: value.image.height,
+                    ...(value.image.name === undefined ? {} : { name: value.image.name }),
+                  },
+                },
+              ]
+            : [
+                {
+                  type: "text",
+                  text: formatReadOutput(
+                    value.path,
+                    { lines: value.lines, totalLines: value.totalLines },
+                    value.offset,
+                  ),
+                },
+              ],
       },
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         const context = deps.contextOf(exec);
         const filePath = absolutePathOf(context, args.file_path);
         await context.sandbox.authorizePathWithConfirm("read", filePath, context.confirm);
-        const result = await runSandboxed<RunnerReadResult>(
+        const result = await runSandboxed<RunnerReadResult | RunnerImageBytesResult>(
           exec,
           {
             tool: "read",
@@ -274,6 +366,10 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           },
           { mode: "fs", cwd: context.cwd, signal: exec.signal },
         );
+        if ("dataBase64" in result) {
+          await gateImageRoute(filePath, exec);
+          return await saveImageAttachment(filePath, result.mediaType, result);
+        }
         deps.observations.markRead(context.sessionKey, filePath, result.mtimeMs);
         return {
           path: result.path,
@@ -794,7 +890,7 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
 }
 
 // ---------------------------------------------------------------------------
-// read_image (registered while ctx.attachments is mounted, §2.1)
+// §2.1 image read output formatting
 // ---------------------------------------------------------------------------
 
 /** Format the §2.1 image envelope beside the image block (stock wording). */
@@ -827,129 +923,3 @@ export function renderBashResult(result: RunnerBashResult): string {
   return body + markers.join("\n");
 }
 
-/** Register `read_image` (§2.1). Call inside `ctx.inject(["attachments"], …)`. */
-export function registerReadImageTool(ctx: Context, deps: SandboxToolDeps): void {
-  ctx.tools.register(
-    defineTool({
-      name: "read_image",
-      description:
-        "Read a PNG/JPEG/WebP/GIF file and return the image itself. The format is detected from the file content, so extension-less files in those formats are accepted. Requires the current model to accept image input; on a route without image input this tool returns an error directing you to delegate the read to a vision agent via the subagent tool instead of reading the image yourself.",
-      parameters: {
-        file_path: {
-          type: "string",
-          required: true,
-          description: "Path to the image file; relative paths resolve against the session cwd.",
-        },
-      },
-      output: {
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            path: { type: "string", required: true },
-            image: {
-              type: "object",
-              required: true,
-              additionalProperties: false,
-              properties: {
-                attachmentId: { type: "string", required: true },
-                mediaType: { type: "string", required: true },
-                bytes: { type: "integer", required: true },
-                width: { type: "integer", required: true },
-                height: { type: "integer", required: true },
-                name: { type: "string" },
-              },
-            },
-          },
-        },
-        render: (_args, value): ContentBlock[] => [
-          { type: "text", text: formatImageReadOutput(value.path, value.image) },
-          {
-            type: "image",
-            attachment: {
-              attachmentId: value.image.attachmentId as never,
-              mediaType: value.image.mediaType as never,
-              bytes: value.image.bytes,
-              width: value.image.width,
-              height: value.image.height,
-              ...(value.image.name === undefined ? {} : { name: value.image.name }),
-            },
-          },
-        ],
-      },
-      isConcurrencySafe: () => true,
-      async execute(args, exec) {
-        if (args.file_path.trim().length === 0)
-          throw new Error("file_path must be a non-empty string");
-        const context = deps.contextOf(exec);
-        const filePath = absolutePathOf(context, args.file_path);
-        await context.sandbox.authorizePathWithConfirm("read", filePath, context.confirm);
-
-        // Route gate first (§2.1: an image-incapable route must not read the
-        // bytes at all).
-        const routed = exec.agent?.session.requestHeader()?.config;
-        const provider = routed?.provider ?? exec.agent?.options.provider;
-        const model = routed?.model ?? exec.agent?.options.model;
-        const llm = ctx.get("llm");
-        if (provider === undefined || model === undefined)
-          throw new Error(imageReadErrorMessage(filePath, provider, model));
-        if (llm === undefined)
-          throw new Error(`cannot read "${filePath}" as an image: the current model route could not be resolved`);
-        const modelInfo = await llm.resolveModelInfo(provider, model, exec.signal);
-        if (modelInfo.inputModalities === undefined || !modelInfo.inputModalities.includes("image"))
-          throw new Error(imageReadErrorMessage(filePath, provider, model));
-
-        const extension = extname(filePath).toLowerCase();
-        const declared = imageMediaTypeForPath(filePath);
-        if (declared === undefined && extension !== "")
-          throw new Error(
-            `cannot read "${filePath}": the ${extension} extension does not declare a supported image format; read_image accepts PNG/JPEG/WebP/GIF files, including extension-less files in those formats`,
-          );
-
-        const attachments = ctx.get("attachments");
-        if (attachments === undefined)
-          throw new Error(`cannot read "${filePath}" as an image: no attachment service is mounted`);
-
-        const result = await context.sandbox.runTool(
-          {
-            tool: "read_image",
-            params: { file_path: filePath },
-            options: { rgPath: deps.rgPath, spillDir: deps.spillDir, callId: context.callId },
-          },
-          { mode: "fs", cwd: context.cwd, signal: exec.signal },
-        );
-        const bytesResult = result as RunnerImageBytesResult;
-        const data = Buffer.from(bytesResult.dataBase64, "base64");
-        const mediaType = (declared ?? sniffImageMediaType(data)) as ImageMediaType | undefined;
-        if (mediaType === undefined)
-          throw new Error(
-            `cannot read "${filePath}": the file content is not a supported image format; read_image accepts PNG/JPEG/WebP/GIF`,
-          );
-
-        let ref;
-        try {
-          ref = await attachments.saveImage({ data, mediaType, name: basename(filePath) });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (/exceeds the .*px limit|decoded-size limit|byte limits/i.test(message))
-            throw new Error(
-              `cannot read "${filePath}": the image exceeds the deployment's image limits; downscale the image and read the smaller copy`,
-              { cause: error },
-            );
-          throw error;
-        }
-        return {
-          path: bytesResult.path,
-          image: {
-            attachmentId: String(ref.attachmentId),
-            mediaType: ref.mediaType,
-            bytes: ref.bytes,
-            width: ref.width,
-            height: ref.height,
-            ...(ref.name === undefined ? {} : { name: ref.name }),
-          },
-        };
-      },
-    }),
-  );
-}
