@@ -19,6 +19,9 @@
  *              `prepend: true` so this listener runs outermost, before
  *              dsh-llm-retry's budgeted retry and dsh-agents' model
  *              fallback; everything else falls through `next()` untouched
+ *   display    one `zai-concurrency-retry/wait` session event per wait
+ *              start (durable, so reloads re-render it), folded into a
+ *              one-line transcript row by the client bundle in `src/client/`
  *
  * Single self-contained module on purpose: `run_build.sh` builds entries
  * with `--external '*'`, which externalizes relative imports too, so a
@@ -33,6 +36,24 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 
 export const name = "dsh-zai-concurrency-retry";
+
+// ---- session event ------------------------------------------------------------
+
+/** Log-only event type appended once per retry-wait start. */
+export const ZAI_RETRY_WAIT_EVENT_TYPE = "zai-concurrency-retry/wait";
+
+/** Payload of {@link ZAI_RETRY_WAIT_EVENT_TYPE}: one scheduled wait. */
+export interface ZaiRetryWaitData {
+  readonly provider: string;
+  readonly attempt: number;
+  readonly waitMs: number;
+}
+
+declare module "@deepseek-ai/dsh-session/types" {
+  interface SessionEventMap {
+    "zai-concurrency-retry/wait": ZaiRetryWaitData;
+  }
+}
 
 // ---- pure logic ------------------------------------------------------------
 
@@ -157,6 +178,20 @@ export function apply(ctx: Context): void {
         `Z.AI concurrency limit on ${payload.provider} (attempt ${consecutive}); ` +
           `retrying the same step in ${Math.ceil(delayMs / 1000)}s: ${payload.failure.message}`,
       );
+      // Deferred to a microtask like dsh-skill-status's append: session.append
+      // must stay out of any open event publication window. The event is the
+      // transport for the transcript row the client bundle renders.
+      queueMicrotask(() => {
+        try {
+          payload.agent.session.append(ZAI_RETRY_WAIT_EVENT_TYPE, {
+            provider: payload.provider,
+            attempt: consecutive,
+            waitMs: delayMs,
+          });
+        } catch (error) {
+          logger.warn(`failed to append ${ZAI_RETRY_WAIT_EVENT_TYPE}: ${String(error)}`);
+        }
+      });
       // Aborted mid-wait: leave the failure terminal — the user asked to stop.
       if (!(await cancellableDelay(delayMs, payload.signal))) return;
       return { kind: "retry" };

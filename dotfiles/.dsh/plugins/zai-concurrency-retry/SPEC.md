@@ -35,8 +35,28 @@ Z.AI coding plan の同時実行制限エラー（業務コード 1302 / 1305）
 Z.AI concurrency limit on <provider> (attempt <n>); retrying the same step in <秒>s: <failure.message>
 ```
 
-ステータス領域・通知（pi の `ctx.ui.setStatus` / `notify` 相当）は持たない。トランスクリプト上での待機表示は client bundle になるため範囲外。
+### トランスクリプト表示（client bundle）
+
+待機の開始時点で、host がセッションイベント `zai-concurrency-retry/wait` を1回だけ session log へ append する。イベントは durable なので、再読込・過去ログ表示でも再表示される。待機完了・再送開始のイベントは無い。
+
+payload:
+
+| フィールド   | 型     | 値                                                           |
+| ------------ | ------ | ------------------------------------------------------------ |
+| `provider`   | string | `agent/request-error` payload の `provider`                  |
+| `attempt`    | number | 現在の連続失敗回数（警告ログの `attempt <n>` と同一名真）        |
+| `waitMs`     | number | ジッター後の待機ミリ秒                                        |
+
+client bundle（`src/client/`、成果物 `lib/client.js`）はこのイベントを Conversation Definition で transcript 内ノードへ組み、gray 1行で静的表示する。カウントダウン等のリアルタイム更新はしない。
+
+```
+zai concurrency limit — retrying in <秒>s (attempt <n>)
+```
+
+待機秒は `waitMs` の切り上げ（警告ログと同じ式）。
+
+ステータス領域・通知（pi の `ctx.ui.setStatus` / `notify` 相当）は持たない。
 
 ## 状態のスコープ
 
-再試行チェーンは agent ごと（`WeakMap<Agent>`）。プロセス再起動で消える（pi の module 変数と同じ非 durable）。セッションイベントは追加しない。
+再試行チェーン（連続エラー回数）は agent ごと（`WeakMap<Agent>`）で in-memory。プロセス再起動で消える（pi の module 変数と同じ非 durable）。再試行の待機開始のみ、上記 `zai-concurrency-retry/wait` セッションイベントとして durable log に残る。

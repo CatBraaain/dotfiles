@@ -1,7 +1,7 @@
 # dotfiles-dsh-zai-concurrency-retry
 
-Host-side port of the pi `zai-concurrency-retry` extension. Behavior
-contract: **SPEC.md** (Japanese, the review artifact).
+Host + web client port of the pi `zai-concurrency-retry` extension.
+Behavior contract: **SPEC.md** (Japanese, the review artifact).
 
 Z.AI coding plans reject concurrent requests with business codes 1302 /
 1305 (HTTP 429 whose body text surfaces in the `agent/request-error` failure
@@ -23,12 +23,27 @@ request finally goes through or the user aborts.
 - **Ownership** — the listener registers with `{prepend: true}` so it runs
   outermost regardless of plugin load order (activation is
   service-availability driven, not bundle order). Non-matching failures fall
-  through `next()` to dsh-llm-retry and dsh-agents untouched.
+  through `next()` to dsh-llm-retry and dsh-agents untouched. Because this
+  plugin owns recovery, dsh-llm-retry's `llm/retry` event never fires for
+  these failures — the transcript row below is this plugin's own channel.
 - **State** — per-agent in-memory retry chains keyed by turn+step: the agent
   loop retries inside the same step (`step/start` is not re-appended), so a
   matching turn+step grows the count and any other turn/step restarts at 1.
   Same reset timing as dsh-llm-retry's projection, non-durable like pi's
   module state.
+- **Display** — at each wait start the host appends one durable
+  `zai-concurrency-retry/wait` session event `{ provider, attempt, waitMs }`
+  (deferred to a microtask, like dsh-skill-status's append). The client
+  bundle (`src/client/`, prebuilt `lib/client.js`) folds those events —
+  history included — into chat-target Conversation nodes and renders each as
+  one gray transcript row via the `conversation.chat.node` seat:
+
+  ```
+  zai concurrency limit — retrying in 30s (attempt 2)
+  ```
+
+  Static one-liner (seconds are ceil'ed like the host log); no countdown,
+  and no completion event — wait end and resend start stay unshown.
 
 ## Install
 
@@ -57,8 +72,33 @@ request logs one warning:
 Z.AI concurrency limit on zai (attempt 3); retrying the same step in 20s: …
 ```
 
-and replays the same step after the wait. An abort mid-wait leaves the
-failure terminal.
+appends one `zai-concurrency-retry/wait` session event (rendered in the
+transcript by the client bundle as shown above), and replays the same step
+after the wait. An abort mid-wait leaves the failure terminal.
+
+## Build
+
+The host entry stays a single self-contained module (`run_build.sh` rebuilds
+`dist/index.js` on every `chezmoi apply`); see the dsh-skill-status README
+"Build" for the constraints. The client bundle is **not** rebuilt by
+`run_build.sh` (it only handles node entries); `lib/client.js` is committed.
+To rebuild it after editing `src/client/`:
+
+```sh
+cd dotfiles/.dsh/plugins/zai-concurrency-retry
+bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser --external react \
+  --banner 'window.__ModuleLoader__.load({ id: "dotfiles-dsh-zai-concurrency-retry", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' \
+  --footer 'return module.exports; } });'
+```
+
+This wraps the cjs bundle in the `window.__ModuleLoader__.load({ id, factory })`
+handoff required by `@deepseek-ai/dsh-client-modules`: `react` stays an
+external `require("react")` resolved through the shell's frozen module table,
+and the factory returns the `{ apply, inject }` exports.
+
+The event-type literal is duplicated between the host entry and
+`src/client/event.ts` (the host must not import relative modules); a unit
+test pins the two literals equal.
 
 ## Pi differences
 
@@ -77,10 +117,13 @@ failure terminal.
   pace themselves (the ±20% jitter de-synchronizes them), and a count
   restarts when the turn or step advances (pi kept it growing across turns
   until any success, including across a user abort and manual resend).
-- **Logger instead of status line** — pi showed a status line / notification
-  via `ctx.ui`; the dsh host surface here is one `logger.warn` per retry
-  (matching dsh-agents' rate-limit logging). A client bundle rendering the
-  wait in the transcript would be a follow-up.
+- **Logger plus transcript row instead of status line** — pi showed a status
+  line / notification via `ctx.ui`; the dsh host surface here is one
+  `logger.warn` per retry (matching dsh-agents' rate-limit logging) plus the
+  client bundle's transcript row described above. dsh-llm-retry's own
+  `llm/retry` → `ModelRetryNode` channel cannot be reused: this plugin owns
+  recovery with `prepend: true` and never calls `next()`, so that event
+  never fires for Z.AI concurrency failures.
 
 ## Development
 
@@ -88,9 +131,17 @@ failure terminal.
 cd dotfiles/.dsh/plugins/zai-concurrency-retry
 bun install          # devDependencies only (@types/bun)
 bunx tsc --noEmit    # typecheck (global @deepseek-ai/* via tsconfig paths)
-bun test             # unit tests for detection / backoff / chain counting
+bun test             # unit tests: detection / backoff / chains / append / client assembly
 ```
 
 Pure logic (detection, retry-after validity, backoff, chain counting) is
-exported from `src/index.ts` and tested in `src/index.test.ts`; the glue
-(`apply`) is covered by types, not tests.
+exported from `src/index.ts` and tested in `src/index.test.ts`, together
+with the `apply` glue (stub ctx: the wait event append, its attempt growth,
+and non-matching delegation). The client half's Conversation assembly,
+transcript line, and chat-node seat registration are tested in
+`src/client/*.test.ts` against handwritten stubs, react-free like
+dsh-skill-status's. `@types/react` is not installed (the typecheck
+environment resolves only the global
+`~/.bun/install/global/node_modules`); `src/types/react.d.ts` carries a
+minimal ambient `react` declaration covering the `createElement` surface
+this plugin uses. Delete it once `@types/react` becomes available.

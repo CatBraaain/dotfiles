@@ -9,6 +9,18 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "paths": {
+      "@deepseek-ai/dsh-session/types": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-session/lib/types/types.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-renderer/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-conversation/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-chat/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/types/client/index.d.ts"
+      ],
       "@deepseek-ai/*": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"
       ]
