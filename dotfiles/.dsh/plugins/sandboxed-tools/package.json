@@ -1,0 +1,22 @@
+{
+  "name": "dotfiles-sandboxed-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@vscode/ripgrep": "^1.18.0",
+    "shell-quote": "1.10.0",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

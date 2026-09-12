@@ -10,11 +10,12 @@
     "dotfiles-dsh-zai-concurrency-retry": "file:../../plugins/dsh-zai-concurrency-retry",
     "dsh-rewind-plugin": "^0.12.0",
     "dotfiles-rtk-rewrite": "file:../../plugins/rtk-rewrite",
-    "dsh-quota-panel": "0.9.2-rc.3"
+    "dsh-quota-panel": "0.9.2-rc.3",
+    "dotfiles-sandboxed-tools": "file:../../plugins/sandboxed-tools"
   },
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar", "dotfiles-dsh-zai-concurrency-retry", "dsh-rewind-plugin", "dotfiles-rtk-rewrite", "dsh-quota-panel"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar", "dotfiles-dsh-zai-concurrency-retry", "dsh-rewind-plugin", "dotfiles-rtk-rewrite", "dsh-quota-panel", "dotfiles-sandboxed-tools"],
       "patchReload": "live"
     }
   }
