@@ -12,6 +12,7 @@ write:
       - .
       - ${GIT_MAIN_WORKTREE_PATH}
       - ~/.agents/worktrees/${REPOSITORY_NAME}
+      - ~/.dsh
       - ~/.pi
       - ~/.config
       - /tmp
