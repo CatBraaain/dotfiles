@@ -29,6 +29,13 @@
 # bun build prints a per-entry summary to stdout and errors to stderr, so
 # dropping stdout keeps the apply output quiet while failures stay visible.
 #
+# The build is conditional (Make-style): a plugin is rebuilt only when it has
+# no dist/index.js yet, or some file under src/ (or this script itself, so a
+# recipe change rebuilds everything once) is newer than dist/index.js.
+# Unconditional rebuilding would rewrite dist on every apply for no benefit:
+# the profile's node_modules links file: deps per file, so it always sees the
+# plugin dirs' current content.
+#
 # Run order matters: chezmoi applies scripts in alphabetical order of their
 # target paths, and ".dsh/plugins/..." sorts before ".dsh/profiles/...", so
 # this build runs before profiles/web/run_bun_install.sh re-links the built
@@ -43,9 +50,14 @@ for plugin in */; do
         # the bwrap sandbox; include it in the build when present.
         entries="src/index.ts"
         [ -f "${plugin}src/runner.ts" ] && entries="$entries src/runner.ts"
-        # shellcheck disable=SC2086 # entries is an intentional word split
-        (cd "$plugin" && bun build $entries --outdir dist --target node \
-            --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \
-            --external '@deepseek-ai/*' --external '@earendil-works/*' >/dev/null)
+        (cd "$plugin" && {
+            if [ ! -f dist/index.js ] ||
+                [ -n "$(find src ../run_build.sh -type f -newer dist/index.js -print -quit)" ]; then
+                # shellcheck disable=SC2086 # entries is an intentional word split
+                bun build $entries --outdir dist --target node \
+                    --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \
+                    --external '@deepseek-ai/*' --external '@earendil-works/*'
+            fi
+        })
     fi
 done
