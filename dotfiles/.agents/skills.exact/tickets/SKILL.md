@@ -1,16 +1,16 @@
 ---
 name: tickets
 description: >-
-  対処すべきこと（発見した問題・依頼外課題・予定した作業）を ~/.pi/agent/tickets/ 配下の markdown ファイルで管理する。ticket の起票・一覧・着手・更新・完了・取り下げをするとき、「チケットにしといて」「ticket にしといて」「あとで直すリストに入れて」「タスク積んどいて」「open の ticket 一覧」「あの ticket クローズして」等の依頼で使う。作業・レビュー・検証中に、その場で直さない問題（依頼範囲外のバグ、lint 指摘、スペック逸脱など）を見つけたときも、「ticket」という語が無くても、記録として残すために使う。GitHub Issues 等の外部トラッカーの操作はしない。
+  対処すべきこと（発見した問題・依頼外課題・予定した作業）を ~/.agents/tickets/ 配下の markdown ファイルで管理する。ticket の起票・一覧・着手・更新・完了・取り下げをするとき、「チケットにしといて」「ticket にしといて」「あとで直すリストに入れて」「タスク積んどいて」「open の ticket 一覧」「あの ticket クローズして」等の依頼で使う。作業・レビュー・検証中に、その場で直さない問題（依頼範囲外のバグ、lint 指摘、スペック逸脱など）を見つけたときも、「ticket」という語が無くても、記録として残すために使う。GitHub Issues 等の外部トラッカーの操作はしない。
 ---
 
 # Local Tickets
 
-ローカルのチケットを `~/.pi/agent/tickets/` で管理する。
+ローカルのチケットを `~/.agents/tickets/` で管理する。
 
 ## ストア
 
-- 1 ticket = 1 markdown ファイル。`~/.pi/agent/tickets/<project>/` 配下に置く。`<project>` は対象リポジトリのルートディレクトリ名。リポジトリ外の問題ならカレントディレクトリ名
+- 1 ticket = 1 markdown ファイル。`~/.agents/tickets/<project>/` 配下に置く。`<project>` は対象リポジトリのルートディレクトリ名。リポジトリ外の問題ならカレントディレクトリ名
 - ファイル名は `<YYYYMMDD-HHMMSS>-<slug>.md`。`<slug>` は問題を表す kebab-case 英語（例: `memory-leak-in-worker`）。日時部分は起票時刻を `date +%Y%m%d-%H%M%S` で採番し（ローカル時刻）、同一秒のファイルが既にあるときは衝突しなくなるまで +1 秒ずらす
 - ticket の ID はファイル名から拡張子を除いたもの
 
@@ -93,10 +93,10 @@ frontmatterの完全な保護や構造の維持は保証しない。壊れた場
 frontmatter の `status` から列挙する:
 
 ```bash
-awk 'FNR==1{n=0} /^---$/{n++} n==1 && /^status: open$/{print FILENAME}' ~/.pi/agent/tickets/<project>/*.md
+awk 'FNR==1{n=0} /^---$/{n++} n==1 && /^status: open$/{print FILENAME}' ~/.agents/tickets/<project>/*.md
 ```
 
-`status` の値を変えれば `locked`・`closed` も同様に列挙できる。全 project を横断するときは glob を `~/.pi/agent/tickets/*/*.md` にする。owner への一覧では ticket ID とタイトル（H1）を報告する。
+`status` の値を変えれば `locked`・`closed` も同様に列挙できる。全 project を横断するときは glob を `~/.agents/tickets/*/*.md` にする。owner への一覧では ticket ID とタイトル（H1）を報告する。
 
 ## 対象外
 
