@@ -162,7 +162,6 @@ install_local_extension() {
     if [[ -n "$remote_head" && "$local_head" == "$remote_head" ]] &&
       [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]] &&
       "${code_cmd[@]}" --list-extensions 2>/dev/null | tr -d '\r' | grep -Fxq "$ext_id"; then
-      echo "[linux] cached   $ext_id @ ${local_head:0:12}"
       return 0
     fi
   fi

@@ -18,6 +18,9 @@
 # at files dist/ never contained — dotfiles-dsh-agents shipped broken that
 # way.)
 #
+# bun build prints a per-entry summary to stdout and errors to stderr, so
+# dropping stdout keeps the apply output quiet while failures stay visible.
+#
 # Run order matters: chezmoi applies scripts in alphabetical order of their
 # target paths, and ".dsh/plugins/..." sorts before ".dsh/profiles/...", so
 # this build runs before profiles/web/run_pnpm_install.sh re-links the built
@@ -32,6 +35,6 @@ for plugin in */; do
         # shellcheck disable=SC2086 # entries is an intentional word split
         (cd "$plugin" && bun build $entries --outdir dist --target node \
             --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \
-            --external '@deepseek-ai/*' --external '@earendil-works/*')
+            --external '@deepseek-ai/*' --external '@earendil-works/*' >/dev/null)
     fi
 done
