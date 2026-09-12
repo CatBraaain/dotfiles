@@ -11,7 +11,6 @@ dsh（DeepSeek Harness）関係のファイル。
 
 - `plugins/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。展開先は手動編集しない。エントリは TS で書き、`exports` はビルド済みの `./dist/index.js` を指す（Node は `node_modules` 内の `.ts` を実行できないため）
 - `plugins/run_build.sh` — 全プラグインの一括ビルドと依存インストール（chezmoi run script。apply 時に plugins dir を CWD に、各プラグインの plugin dir 内で `bun install` し、`src/index.ts` を持つプラグインを順に `bun build` する。shebang は chezmoi の `exec(3)` 直接実行に必須）
-- `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）と `dsh.profile.bundles`（読み込み順）の**両方**に書く
 - `profiles/web/run_bun_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD に `bun install` を実行する）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）、`dsh.profile.bundles`（読み込み順）、`trustedDependencies`（lifecycle script を許可する依存）の3つを管理する
 
