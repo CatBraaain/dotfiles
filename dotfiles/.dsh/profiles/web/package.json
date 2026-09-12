@@ -6,11 +6,12 @@
     "dotfiles-handoff-session": "file:../../plugins/handoff-session",
     "dotfiles-dsh-agents": "file:../../plugins/dsh-agents",
     "dotfiles-dsh-skill-status": "file:../../plugins/dsh-skill-status",
-    "dotfiles-dsh-titlebar": "file:../../plugins/dsh-titlebar"
+    "dotfiles-dsh-titlebar": "file:../../plugins/dsh-titlebar",
+    "dotfiles-dsh-zai-concurrency-retry": "file:../../plugins/dsh-zai-concurrency-retry"
   },
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar", "dotfiles-dsh-zai-concurrency-retry"],
       "patchReload": "live"
     }
   }

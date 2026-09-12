@@ -1,0 +1,17 @@
+{
+  "name": "dotfiles-dsh-zai-concurrency-retry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
