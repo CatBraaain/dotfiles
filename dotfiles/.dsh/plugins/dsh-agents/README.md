@@ -29,15 +29,19 @@ build step:
 
 ```sh
 cd dotfiles/.dsh/plugins/dsh-agents
-bun build src/index.ts --outdir dist --target node --external '*'
+bun build src/index.ts --outdir dist --target node \
+  --external yaml --external '@deepseek-ai/*' --external '@earendil-works/*'
 ```
 
 runs automatically from `dotfiles/.dsh/plugins/run_build.sh` on every
 `chezmoi apply`, and `profiles/web/run_pnpm_install.sh` links the built entry
-into the profile's node_modules. External imports (`@deepseek-ai/*`, `yaml`)
-resolve from the profile closure at runtime; nothing is bundled. Restart dsh
-afterwards (bundle patches are fixed at startup — only user-layer patches
-reload live).
+into the profile's node_modules. The build bundles the relative imports into
+the entry and keeps the listed packages external; they resolve from the
+profile closure at runtime — declare every value import that survives the
+build in `dependencies` (currently `@deepseek-ai/dsh-llm`,
+`@deepseek-ai/dsh-tools`, `yaml`); type-only imports need no declaration.
+Restart dsh afterwards (bundle patches are fixed at startup — only user-layer
+patches reload live).
 
 ## Configuration
 
@@ -170,7 +174,8 @@ cd dotfiles/.dsh/plugins/dsh-agents
 bun install          # devDependencies only (@types/bun, yaml for tests)
 bunx tsc --noEmit    # typecheck (global @deepseek-ai/* via tsconfig paths)
 bun test             # unit tests for config/routing/tool-allowlist/subagent-slots
-bun build src/index.ts --outdir dist --target node --external '*'
+bun build src/index.ts --outdir dist --target node \
+  --external yaml --external '@deepseek-ai/*' --external '@earendil-works/*'
 ```
 
 Pure logic (config validation, candidate picking, cooldowns, tool-list

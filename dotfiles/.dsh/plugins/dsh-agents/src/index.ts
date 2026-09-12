@@ -11,7 +11,8 @@
 // Glue only: pure logic lives in config.ts / routing.ts / tool-allowlist.ts /
 // subagent-slots.ts (unit-tested there). Types come from the global
 // @deepseek-ai/* install via tsconfig paths; the runtime resolves them from
-// the profile closure (everything is externalized by the build).
+// the profile closure (the build bundles the relative imports and keeps
+// package imports external).
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";

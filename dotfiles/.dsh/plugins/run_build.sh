@@ -7,11 +7,16 @@
 # plugin's package.json exports must be a built JS file. chezmoi runs this
 # script with the plugins directory as CWD on every apply.
 #
-# --packages=external keeps package imports (node_modules, @deepseek-ai/*)
-# external so they resolve from the profile closure at runtime, while
-# RELATIVE imports between the plugin's own modules are bundled — a bare
-# `--external '*'` would leave "./module.ts" imports unresolved in the
-# output and the built entry would fail to load (ERR_MODULE_NOT_FOUND).
+# Each entry is bundled: relative imports (src/*.ts helpers) are inlined into
+# the built file, while the bare-specifier imports listed below stay external
+# so they resolve from the profile's node_modules at runtime. The list must
+# cover every package a plugin imports (dynamic import() included); anything
+# unlisted would be resolved by bun's auto-install (global cache) and
+# silently bundled, duplicating the profile's copy. (The previous --external
+# '*' externalized relative imports too, which silently broke multi-file
+# entries: the emitted dist/index.js kept `from "./x.ts"` specifiers pointing
+# at files dist/ never contained — dotfiles-dsh-agents shipped broken that
+# way.)
 #
 # Run order matters: chezmoi applies scripts in alphabetical order of their
 # target paths, and ".dsh/plugins/..." sorts before ".dsh/profiles/...", so
@@ -24,6 +29,9 @@ for plugin in */; do
         # the bwrap sandbox; include it in the build when present.
         entries="src/index.ts"
         [ -f "${plugin}src/runner.ts" ] && entries="$entries src/runner.ts"
-        (cd "$plugin" && bun build $entries --outdir dist --target node --packages=external)
+        # shellcheck disable=SC2086 # entries is an intentional word split
+        (cd "$plugin" && bun build $entries --outdir dist --target node \
+            --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \
+            --external '@deepseek-ai/*' --external '@earendil-works/*')
     fi
 done
