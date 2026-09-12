@@ -60,13 +60,13 @@ Registered statically in the profile manifest: append the plugin to both
 build step:
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-agents
+cd dotfiles/.dsh/plugins/agents
 bun build src/index.ts --outdir dist --target node \
   --external yaml --external '@deepseek-ai/*' --external '@earendil-works/*'
 ```
 
 runs automatically from `dotfiles/.dsh/plugins/run_build.sh` on every
-`chezmoi apply`, and `profiles/web/run_pnpm_install.sh` links the built entry
+`chezmoi apply`, and `profiles/web/run_bun_install.sh` links the built entry
 into the profile's node_modules. The build bundles the relative imports into
 the entry and keeps the listed packages external; they resolve from the
 profile closure at runtime — declare every value import that survives the

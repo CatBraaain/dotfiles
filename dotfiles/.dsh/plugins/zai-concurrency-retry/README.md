@@ -38,13 +38,13 @@ Registered statically in the profile manifest: append the plugin to both
 build step (run automatically by `dotfiles/.dsh/plugins/run_build.sh`):
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-zai-concurrency-retry
+cd dotfiles/.dsh/plugins/zai-concurrency-retry
 bun build src/index.ts --outdir dist --target node --external '*'
 ```
 
 `src/index.ts` is a single self-contained module on purpose: `--external '*'`
 externalizes relative imports too, so a multi-file entry would emit a broken
-`dist/index.js` (see the dsh-skill-status README "Build"). No runtime
+`dist/index.js` (see the skill-status README "Build"). No runtime
 dependencies; `@deepseek-ai/*` types resolve via tsconfig paths and the
 runtime resolves them from the profile closure.
 
@@ -85,7 +85,7 @@ failure terminal.
 ## Development
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-zai-concurrency-retry
+cd dotfiles/.dsh/plugins/zai-concurrency-retry
 bun install          # devDependencies only (@types/bun)
 bunx tsc --noEmit    # typecheck (global @deepseek-ai/* via tsconfig paths)
 bun test             # unit tests for detection / backoff / chain counting

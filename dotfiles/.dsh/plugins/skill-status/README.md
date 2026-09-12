@@ -39,7 +39,7 @@ configure.
 The host entry must stay a **single self-contained module**: `run_build.sh`
 builds each plugin with `--external '*'`, which externalizes relative imports
 too, so a multi-file entry would emit a broken `dist/index.js` that still
-imports `./something.ts`. (`dsh-agents` and `model-sync` currently have
+imports `./something.ts`. (`agents` and `model-sync` currently have
 exactly that latent breakage; `bun build --packages=external` would fix
 them.) `run_build.sh` rebuilds `dist/index.js` on every `chezmoi apply`.
 
@@ -48,7 +48,7 @@ entries); `lib/client.js` is committed. To rebuild it after editing
 `src/client/`:
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-skill-status
+cd dotfiles/.dsh/plugins/skill-status
 bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser --external react \
   --banner 'window.__ModuleLoader__.load({ id: "dotfiles-dsh-skill-status", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' \
   --footer 'return module.exports; } });'
@@ -93,7 +93,7 @@ the `conversation.input.dock` entry follow stock first-party patterns
 ## Development
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-skill-status
+cd dotfiles/.dsh/plugins/skill-status
 bunx tsc --noEmit    # typecheck (global @deepseek-ai/* via tsconfig paths)
 bun test             # unit tests (pure logic only; no dsh runtime needed)
 ```

@@ -55,7 +55,7 @@ in `dsh.profile.bundles`, which joins `cordis.patch.yml` into the profile.
 ## Development
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-web-search
+cd dotfiles/.dsh/plugins/web-search
 bun install          # dev/test dependencies (trustedDependencies: [])
 bunx tsc --noEmit    # typecheck
 bun test             # unit tests (pure logic + provider contract; no dsh runtime)

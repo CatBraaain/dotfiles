@@ -51,7 +51,7 @@ bundle is not rebuilt by it — `lib/client.js` is committed. To rebuild it
 after editing `src/client/`:
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-titlebar
+cd dotfiles/.dsh/plugins/titlebar
 bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser --external react \
   --banner 'window.__ModuleLoader__.load({ id: "dotfiles-dsh-titlebar", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' \
   --footer 'return module.exports; } });'
@@ -91,7 +91,7 @@ exercised them yet.
 ## Development
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-titlebar
+cd dotfiles/.dsh/plugins/titlebar
 bunx tsc --noEmit    # typecheck (global @deepseek-ai/* via tsconfig paths)
 bun test             # unit tests (pure logic only; no dsh runtime needed)
 ```

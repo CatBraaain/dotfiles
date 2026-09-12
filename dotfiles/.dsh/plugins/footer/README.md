@@ -32,7 +32,7 @@ entries); `lib/client.js` is committed. To rebuild it after editing
 `src/client/`:
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-footer
+cd dotfiles/.dsh/plugins/footer
 bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser --external react \
   --banner 'window.__ModuleLoader__.load({ id: "dotfiles-dsh-footer", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' \
   --footer 'return module.exports; } });'
@@ -69,7 +69,7 @@ session switch.
 ## Development
 
 ```sh
-cd dotfiles/.dsh/plugins/dsh-footer
+cd dotfiles/.dsh/plugins/footer
 bunx tsc --noEmit    # typecheck (global @deepseek-ai/* via tsconfig paths)
 ```
 
