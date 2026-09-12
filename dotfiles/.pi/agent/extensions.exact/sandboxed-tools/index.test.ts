@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import {
   existsSync,
@@ -1717,7 +1718,7 @@ describe("§2.3 承認ノート", () => {
         {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title, options) => options[1] },
+          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[1] },
         },
       );
       assert.deepEqual(resultTexts(first), [
@@ -1751,7 +1752,7 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { path: filePath, content: "x" }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title, options) => options[1] },
+          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[1] },
         });
       assert.deepEqual(resultTexts(result), [
         `Successfully wrote 10 bytes to ${filePath}`,
@@ -1771,7 +1772,7 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { path: filePath, edits: [] }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title, options) => options[1] },
+          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[1] },
         });
       assert.deepEqual(resultTexts(result), [
         `Successfully replaced 1 block(s) in ${filePath}.`,
@@ -1790,7 +1791,7 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { command: "git push origin main" }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title, options) => options[0] },
+          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[0] },
         });
       assert.deepEqual(resultTexts(result), [
         "1 file changed, 2 insertions(+)",
@@ -1809,7 +1810,7 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { command: "git push origin main" }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title, options) => options[0] },
+          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[0] },
         });
       assert.deepEqual(resultTexts(result), [
         "touch: cannot touch '/outside/x': Read-only file system",
@@ -2853,9 +2854,9 @@ describe("§3 ツール引数パスの正規化", () => {
     Sandbox.prototype.authorizePath = async function (operation, path) {
       authorized.push({ operation, path });
     };
-    Sandbox.prototype.runTool = async function (toolName, params) {
+    Sandbox.prototype.runTool = async function (toolName, params, _options) {
       runToolCalls.push({ toolName, params });
-      return { content: [{ type: "text", text: "stub" }] };
+      return { content: [{ type: "text", text: "stub" }], details: undefined };
     };
     try {
       const tools = captureRegisteredTools();
@@ -2912,9 +2913,9 @@ describe("§3 ツール引数パスの正規化", () => {
           .get(testCase.toolName)
           .execute("t", testCase.params, undefined, undefined, { hasUI: false });
         assert.equal(runToolCalls.length, 1, testCase.toolName);
-        assert.equal(runToolCalls[0].toolName, testCase.toolName);
+        assert.equal(runToolCalls[0]!.toolName, testCase.toolName);
         assert.equal(
-          resolve(process.cwd(), runToolCalls[0].params.path),
+          resolve(process.cwd(), runToolCalls[0]!.params.path),
           testCase.expectedPath,
           testCase.toolName,
         );
@@ -3501,8 +3502,8 @@ describe("§6 commands パターンの正規表現評価", () => {
     assert.equal(resolveCommandAction(entries, "git push origin main"), "ask");
   });
 
-  it("Sandbox は無効パターンを重複なしで列挙し、有効なエントリは動く", () =>
-    withSandbox(
+  it("Sandbox は無効パターンを重複なしで列挙し、有効なエントリは動く", async () => {
+    await withSandbox(
       `
 commands:
   - {allow: ["*"]}
@@ -3513,7 +3514,7 @@ commands:
       async (sandbox) => {
         assert.deepEqual(sandbox.invalidCommandPatterns, ["*"]);
         await assert.rejects(
-          () =>
+          async () =>
             sandbox.authorizeCommand("sudo ls", {
               cwd: "/cwd",
               hasUI: true,
@@ -3522,15 +3523,19 @@ commands:
           /Command denied/,
         );
       },
-    ));
+    )();
+  });
 
   it("session_start で無効パターンを warning で列挙する", () => {
     const notifications = runSessionStart(
       "commands:\n  - {allow: [\"*\"]}\n  - {deny: ['^sudo\\b']}\n",
     );
     assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].level, "warning");
-    assert.ok(notifications[0].message.includes(JSON.stringify("*")), notifications[0].message);
+    assert.equal(notifications[0]!.level, "warning");
+    assert.ok(
+      notifications[0]!.message.includes(JSON.stringify("*")),
+      notifications[0]!.message,
+    );
   });
 
   it("無効パターンがなければ session_start で通知しない", () => {
@@ -3822,8 +3827,8 @@ describe("§7 bash の stderr 逐次表示", () => {
         ["one", "partial", "two"],
       );
       assert.ok(
-        updates[2].at - updates[0].at >= 200,
-        `stderr lines must stream during execution (gap: ${updates[2].at - updates[0].at}ms)`,
+        updates[2]!.at - updates[0]!.at >= 200,
+        `stderr lines must stream during execution (gap: ${updates[2]!.at - updates[0]!.at}ms)`,
       );
       assert.equal(result.content[0].text, "final output");
     } finally {
@@ -3903,8 +3908,8 @@ describe("§7 bash の stderr 逐次表示", () => {
         ["first", "進行中"],
       );
       assert.ok(
-        updates[1].at - updates[0].at >= 200,
-        `stderr lines must stream during execution (gap: ${updates[1].at - updates[0].at}ms)`,
+        updates[1]!.at - updates[0]!.at >= 200,
+        `stderr lines must stream during execution (gap: ${updates[1]!.at - updates[0]!.at}ms)`,
       );
       // pi's accumulator interleaves stdout and stderr chunks in arrival
       // order, so characters of a stderr line may be separated by stdout in
@@ -3939,7 +3944,7 @@ describe("§7 bash の stderr 逐次表示", () => {
             { command: "echo out; echo err >&2; exit 7" },
             undefined,
             undefined,
-            undefined,
+            undefined as unknown as ExtensionContext,
           );
       } catch (error) {
         return error as Error;
@@ -4019,7 +4024,8 @@ describe("§7 sandbox 実行の同時数の上限", () => {
           ),
         );
         assert.equal(results.length, 6);
-        for (const result of results) assert.equal(result.content[0]?.text, "done");
+        for (const result of results)
+          assert.equal((result.content[0] as { text: string } | undefined)?.text, "done");
         assert.equal(stub.maxActive(), 4);
         assert.deepEqual(stub.startOrder(), [0, 1, 2, 3, 4, 5]);
       } finally {
@@ -4046,7 +4052,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
             sandbox.runTool("read", { path: `/tmp/fail-release-${i}.txt` }, { mode: "fs" }),
           ),
         );
-        assert.match(String(settled[0]?.reason), /boom/);
+        assert.match(String((settled[0] as PromiseRejectedResult).reason), /boom/);
         for (const outcome of settled.slice(1)) assert.equal(outcome.status, "fulfilled");
         assert.equal(stub.maxActive(), 4);
         assert.deepEqual(stub.startOrder(), [0, 1, 2, 3, 4, 5]);

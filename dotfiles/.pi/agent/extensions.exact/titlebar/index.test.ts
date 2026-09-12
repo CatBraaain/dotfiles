@@ -33,7 +33,7 @@ function captureTitleExtension(
   mode: Mode = "tui",
 ): {
   titleCalls: string[];
-  invoke: (event: string, nowMs: number) => void;
+  invoke: (event: string, nowMs: number, eventObj?: Record<string, unknown>) => void;
 } {
   const handlers = new Map<string, Handler>();
   const titleCalls: string[] = [];

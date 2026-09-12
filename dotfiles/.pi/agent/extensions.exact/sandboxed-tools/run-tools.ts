@@ -9,7 +9,11 @@ import { readFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  BashToolInput,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 
 type ToolName = "read" | "write" | "edit" | "grep" | "find" | "ls" | "bash";
 
@@ -154,7 +158,8 @@ export async function executeToolRequest(
       );
       return await definition.execute(
         request.toolCallId ?? "cli",
-        request.params,
+        // JSON boundary: the bash definition validates its own params at runtime.
+        request.params as BashToolInput,
         undefined,
         undefined,
         context as never,
@@ -178,7 +183,10 @@ export async function executeToolRequest(
     request.params,
     undefined,
     undefined,
-    undefined,
+    // Only the bash definition reads the context (see buildBashContext); the
+    // non-bash definitions never touch it, so the required parameter stays
+    // undefined at runtime.
+    undefined as never,
   );
 }
 

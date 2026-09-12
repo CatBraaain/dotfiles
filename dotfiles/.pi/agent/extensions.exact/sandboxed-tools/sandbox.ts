@@ -175,8 +175,8 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
     });
   };
 
-  const pathActions = ["allow", "ask", "deny"];
-  const commandActions = [...pathActions, "ask_with_reason"];
+  const pathActions = ["allow", "ask", "deny"] as const;
+  const commandActions = [...pathActions, "ask_with_reason"] as const;
 
   return {
     read: parseEntries(parsed.read, pathActions),
@@ -434,8 +434,8 @@ export function resolveCommandActionMatch(
   // Last match wins (SPEC §6): every matching entry overwrites the resolution,
   // so a later `{allow: systemctl status}` carves allow out of an earlier
   // `{ask: systemctl}`. No match at all is unset (deny).
-  const actionFor = (candidate: string): ActionMatch => {
-    let resolved: ActionMatch = { action: "deny" };
+  const actionFor = (candidate: string): CommandActionMatch => {
+    let resolved: CommandActionMatch = { action: "deny" };
     for (const entry of entries) {
       const match = findCommandPattern(entry.patterns, candidate);
       if (match !== undefined) resolved = withSpan(entry.action, match, candidate);
