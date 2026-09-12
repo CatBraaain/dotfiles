@@ -3,6 +3,7 @@ packages:
 
 nodeLinker: hoisted
 autoInstallPeers: false
+strictDepBuilds: false
 allowBuilds:
   '@google/genai': false
   better-sqlite3: false
