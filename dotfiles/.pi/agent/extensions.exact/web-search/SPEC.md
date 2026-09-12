@@ -60,6 +60,8 @@ sequenceDiagram
 
 openserp の起動アドレスとポートは接続先（`OPENSERP_BASE_URL`）の host・port を使う。openserp はパース専用として使うためブラウザを起動せず、Chrome のインストール状態に依存しない。
 
+camoufox server は標準出力・標準エラー出力を `<cache>/pi/web-search/camoufox-server.log` へ追記する（`<cache>` は `XDG_CACHE_HOME`、未設定時 `~/.cache`）。ディレクトリが無いときは作成する。server はバックグラウンド起動のため出力を観測する手段がこのログに限られる。ログファイルを用意できないときは server の出力を破棄して起動を続行する。
+
 ## バックエンドの順序
 
 ### web_search のバックエンド
