@@ -233,7 +233,9 @@ merge ターゲットごとに:
 次は merge 変換の対象外とし、`dist/` にそのまま残す。
 
 - sidecar を持たない plain ファイル
-- リポジトリ内で手書きされた `modify_*` テンプレート（obs-studio 等）
+- sidecar を持たない、リポジトリ内で手書きされた `modify_*` テンプレート（obs-studio 等）
+
+`modify_*` テンプレートにも §7.1 の一般則が適用される。sidecar を置いた `modify_*` は merge ターゲットとなり、手書きテンプレートの内容が plain base レイヤーとして合成され、完成形 `modify_*` を `dist/` に書き出す。
 
 ### 7.6 例
 
