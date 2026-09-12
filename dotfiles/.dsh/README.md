@@ -13,10 +13,13 @@ dsh（DeepSeek Harness）関係のファイル。
 - `plugins/run_build.sh` — 全プラグインの一括ビルド（chezmoi run script。apply 時に plugins dir を CWD に `src/index.ts` を持つプラグインを順に `bun build` する。shebang は chezmoi の `exec(3)` 直接実行に必須）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）と `dsh.profile.bundles`（読み込み順）の**両方**に書く
 - `profiles/web/run_pnpm_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD に自動実行される）
+- `profiles/web/pnpm-workspace.merge.yaml` — `~/.dsh/profiles/web/pnpm-workspace.yaml` の merge レイヤー。pre-chezmoi がホーム現状（dsh / pnpm が書いた base 設定や pnpm が scaffold したエントリ）にこのレイヤーを合成し、chezmoi 管理の完成形を作る
 
 run script の実行順序は target path の辞書順。`.dsh/plugins/...` は `.dsh/profiles/...` より先にソートされるため、プラグインのビルド → プロファイルへの install 再リンクの順が保たれる。
 
-`~/.dsh/profiles/web/` のその他のファイル（`cordis.yml`、`cordis.patch.yml`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`node_modules`）は dsh / pnpm の生成物。
+`~/.dsh/profiles/web/` のその他のファイル（`cordis.yml`、`cordis.patch.yml`、`pnpm-lock.yaml`、`node_modules`）は dsh / pnpm の生成物。
+
+build script を持つ依存が増えると pnpm が `pnpm-workspace.yaml` へ placeholder 付きでエントリを scaffold し、未判断のままでは install がエラーになる。判断したら `pnpm-workspace.merge.yaml` の `allowBuilds` に `true` / `false` で追記する（レイヤー優先は merge > ホーム）。
 
 ## プラグインの追加・更新
 
