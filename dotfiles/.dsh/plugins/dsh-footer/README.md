@@ -15,13 +15,11 @@ remove the plugin from the profile — there is no ON/OFF setting by design.
 
 ## Install
 
-```sh
-dsh plugin --profile web add /home/username/.dsh/plugins/dsh-footer
-```
-
-`dsh plugin add` runs pnpm in the profile directory and reconciles
-`dsh.profile.bundles`; restart dsh afterwards (bundle patches are fixed at
-startup — only user-layer patches reload live). Nothing else to configure.
+Registered statically in the profile manifest: append the plugin to both
+`dependencies` and `dsh.profile.bundles` in
+`dotfiles/.dsh/profiles/web/package.json`, then run `chezmoi apply`. Restart
+dsh afterwards (bundle patches are fixed at startup — only user-layer patches
+reload live). Nothing else to configure.
 
 ## Build
 

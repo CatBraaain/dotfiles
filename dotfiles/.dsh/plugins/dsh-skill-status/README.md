@@ -28,13 +28,11 @@ ellipsis, hidden while no skill has been used yet.
 
 ## Install
 
-```sh
-dsh plugin --profile web add /home/username/.dsh/plugins/dsh-skill-status
-```
-
-`dsh plugin add` reconciles `dsh.profile.bundles`; the profile's
-`package.json` already lists the `file:` dependency. Restart dsh afterwards
-(bundle patches are fixed at startup). Nothing else to configure.
+Registered statically in the profile manifest: append the plugin to both
+`dependencies` and `dsh.profile.bundles` in
+`dotfiles/.dsh/profiles/web/package.json`, then run `chezmoi apply`. Restart
+dsh afterwards (bundle patches are fixed at startup). Nothing else to
+configure.
 
 ## Build
 
