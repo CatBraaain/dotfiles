@@ -1,6 +1,7 @@
 {
   "name": "dsh-profile-web",
   "private": true,
+  "trustedDependencies": [],
   "dependencies": {
     "dotfiles-model-sync": "file:../../plugins/model-sync",
     "dotfiles-handoff-session": "file:../../plugins/handoff-session",
