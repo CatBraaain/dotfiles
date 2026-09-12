@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "target": "ESNext",
+    "types": ["bun"],
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@deepseek-ai/*": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"
+      ],
+      "@earendil-works/*": [
+        "/home/username/.bun/install/global/node_modules/@earendil-works/*"
+      ]
+    }
+  },
+  "include": ["src"]
+}

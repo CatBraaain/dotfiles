@@ -1,0 +1,5 @@
+# Bundle patch layer for dotfiles-model-sync.
+# Joined into the profile when this package is listed in dsh.profile.bundles.
+- insert:
+    - id: model-sync
+      name: dotfiles-model-sync

@@ -1,9 +1,12 @@
 {
   "name": "dsh-profile-web",
   "private": true,
+  "dependencies": {
+    "dotfiles-model-sync": "file:../../plugins/model-sync"
+  },
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync"],
       "patchReload": "live"
     }
   }
