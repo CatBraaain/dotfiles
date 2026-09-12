@@ -5,6 +5,7 @@
   "dependencies": {
     "dotfiles-model-sync": "file:../../plugins/model-sync",
     "dotfiles-handoff-session": "file:../../plugins/handoff-session",
+    "dotfiles-dsh-custom-ui": "file:../../plugins/custom-ui",
     "dotfiles-dsh-agents": "file:../../plugins/agents",
     "dotfiles-dsh-skill-status": "file:../../plugins/skill-status",
     "dotfiles-dsh-titlebar": "file:../../plugins/titlebar",
@@ -18,7 +19,7 @@
   },
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar", "dotfiles-dsh-footer", "dotfiles-dsh-zai-concurrency-retry", "dsh-rewind-plugin", "dotfiles-rtk-rewrite", "dotfiles-dsh-quota-line", "dotfiles-sandboxed-tools", "dotfiles-dsh-web-search"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-custom-ui", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar", "dotfiles-dsh-footer", "dotfiles-dsh-zai-concurrency-retry", "dsh-rewind-plugin", "dotfiles-rtk-rewrite", "dotfiles-dsh-quota-line", "dotfiles-sandboxed-tools", "dotfiles-dsh-web-search"],
       "patchReload": "live"
     }
   }
