@@ -5,11 +5,12 @@
     "dotfiles-model-sync": "file:../../plugins/model-sync",
     "dotfiles-handoff-session": "file:../../plugins/handoff-session",
     "dotfiles-dsh-agents": "file:../../plugins/dsh-agents",
-    "dotfiles-dsh-skill-status": "file:../../plugins/dsh-skill-status"
+    "dotfiles-dsh-skill-status": "file:../../plugins/dsh-skill-status",
+    "dotfiles-dsh-titlebar": "file:../../plugins/dsh-titlebar"
   },
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar"],
       "patchReload": "live"
     }
   }

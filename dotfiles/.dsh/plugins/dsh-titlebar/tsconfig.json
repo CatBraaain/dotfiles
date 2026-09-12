@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "target": "ESNext",
+    "types": [],
+    "skipLibCheck": true,
+    "paths": {
+      "@deepseek-ai/dsh-session/types": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-session/lib/types/types.d.ts"
+      ],
+      "@deepseek-ai/dsh-api-session-controller/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-session/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-session/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/*": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"
+      ]
+    }
+  },
+  "include": ["src"]
+}
