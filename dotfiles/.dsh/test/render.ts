@@ -231,13 +231,13 @@ async function main(): Promise<void> {
 
     const themeCss = await extractThemeCss();
 
-    const footerExports = await loadPluginBundle("dsh-footer", "dotfiles-dsh-footer");
+    const footerExports = await loadPluginBundle("footer", "dotfiles-dsh-footer");
     const footerEntries = captureSlotRegistrations(footerExports.apply as (ctx: unknown) => void);
     const footerMarkup = renderComponent(findEntry(footerEntries, "session-id"), {
         sessionId: "session-1",
     });
 
-    const skillExports = await loadPluginBundle("dsh-skill-status", "dotfiles-dsh-skill-status");
+    const skillExports = await loadPluginBundle("skill-status", "dotfiles-dsh-skill-status");
     const skillEntry = findEntry(captureSlotRegistrations(skillExports.apply as (ctx: unknown) => void), "skill-status");
     const skillPopulated = renderComponent(skillEntry, {
         source: fakeSkillSource(["commit", "review", "write-docs"]),

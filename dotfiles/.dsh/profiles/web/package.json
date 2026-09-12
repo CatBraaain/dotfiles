@@ -5,16 +5,16 @@
   "dependencies": {
     "dotfiles-model-sync": "file:../../plugins/model-sync",
     "dotfiles-handoff-session": "file:../../plugins/handoff-session",
-    "dotfiles-dsh-agents": "file:../../plugins/dsh-agents",
-    "dotfiles-dsh-skill-status": "file:../../plugins/dsh-skill-status",
-    "dotfiles-dsh-titlebar": "file:../../plugins/dsh-titlebar",
-    "dotfiles-dsh-footer": "file:../../plugins/dsh-footer",
-    "dotfiles-dsh-zai-concurrency-retry": "file:../../plugins/dsh-zai-concurrency-retry",
+    "dotfiles-dsh-agents": "file:../../plugins/agents",
+    "dotfiles-dsh-skill-status": "file:../../plugins/skill-status",
+    "dotfiles-dsh-titlebar": "file:../../plugins/titlebar",
+    "dotfiles-dsh-footer": "file:../../plugins/footer",
+    "dotfiles-dsh-zai-concurrency-retry": "file:../../plugins/zai-concurrency-retry",
     "dsh-rewind-plugin": "^0.12.0",
     "dotfiles-rtk-rewrite": "file:../../plugins/rtk-rewrite",
     "dsh-quota-panel": "0.9.2-rc.3",
     "dotfiles-sandboxed-tools": "file:../../plugins/sandboxed-tools",
-    "dotfiles-dsh-web-search": "file:../../plugins/dsh-web-search"
+    "dotfiles-dsh-web-search": "file:../../plugins/web-search"
   },
   "dsh": {
     "profile": {
