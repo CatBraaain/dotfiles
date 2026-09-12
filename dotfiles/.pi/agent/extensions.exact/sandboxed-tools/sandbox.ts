@@ -16,12 +16,16 @@ export type CommandAction = PathAction | "ask_with_reason";
 /**
  * Dialog approval info returned when the user approved access through a
  * confirmation dialog (§2.3). `undefined` means access passed without a new
- * dialog approval (config allow or an existing dynamic grant).
+ * dialog approval (config allow or an existing dynamic grant). For write
+ * approvals, `bashWritable` reports whether the granted path also became
+ * writable in the bash sandbox: unset paths do, ask-final paths stay
+ * read-only there (§6.1).
  */
 export type PathApproval = {
   operation: "read" | "write";
   scope: "file" | "directory";
   grantedPath: string;
+  bashWritable?: boolean;
 };
 
 /** Where a command pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
@@ -47,10 +51,13 @@ export type ToolSession = {
   reasoningLevel?: string;
 };
 
-/** ask_permission tool outcome (§3 許可要求ツール): denial resolves instead of throwing. */
+/** ask_permission tool outcome (§3 許可要求ツール): denial resolves instead of throwing.
+ * `bashWritable` on granted/already-granted outcomes reports whether the
+ * granted subtree is also writable from bash (unset paths) or fs tools only
+ * (ask-final paths stay read-only in bash, §6.1). */
 export type WritePermissionRequest =
-  | { status: "already granted"; grantedPath: string }
-  | { status: "granted"; grantedPath: string }
+  | { status: "already granted"; grantedPath: string; bashWritable: boolean }
+  | { status: "granted"; grantedPath: string; bashWritable: boolean }
   | { status: "denied"; grantedPath: string; reason?: string };
 
 /** ask_permission outcome for `command` (§3): same semantics, one-shot command approval. */
@@ -765,17 +772,33 @@ export class Sandbox {
   }
 
   /**
-   * Expanded write-section paths whose final action is an explicit deny (§3
-   * last-match-wins): the paths fs tools hard-deny for writing, which the
-   * bash sandbox must also keep non-writable (§6.1).
+   * Expanded write-section paths split by their final resolved action (§3
+   * last-match-wins). `allow` holds the paths fs tools would allow per call —
+   * the only configured paths the bash sandbox may writable-bind. `restricted`
+   * holds the deny- and ask-final paths, which must stay non-writable in bash
+   * (§6.1) exactly as fs tools deny or ask about them per call.
    */
-  private explicitWriteDenyPaths(): string[] {
+  private writePathsByFinalAction(): { allow: string[]; restricted: string[] } {
     const section = this.writePaths();
-    const deniedPaths = new Set<string>();
+    const allow = new Set<string>();
+    const restricted = new Set<string>();
     for (const entry of section)
-      for (const path of entry.paths)
-        if (resolvePathActionMatch(section, path).action === "deny") deniedPaths.add(path);
-    return [...deniedPaths];
+      for (const path of entry.paths) {
+        if (allow.has(path) || restricted.has(path)) continue;
+        if (resolvePathActionMatch(section, path).action === "allow") allow.add(path);
+        else restricted.add(path);
+      }
+    return { allow: [...allow], restricted: [...restricted] };
+  }
+
+  /**
+   * Whether a write grant also opens the granted path in the bash sandbox
+   * (§6.1): unset paths become writable there via the dynamic-grant bind,
+   * while ask-final paths are re-bound read-only after every writable bind,
+   * so they stay non-writable in bash even after this fs-side approval.
+   */
+  private grantWritableViaBash(grantedPath: string): boolean {
+    return resolvePathActionMatch(this.writePaths(), grantedPath).action !== "ask";
   }
 
   private hiddenFsPaths(): string[] {
@@ -799,19 +822,16 @@ export class Sandbox {
   }
 
   private prepareWriteDirectories(): void {
-    // Globs expand to existing paths only, so they skip the mkdir -p guarantee
-    // (§6.1). Entries with Git worktree variables create their resolved paths
-    // here so a new worktree can be created inside the sandbox. Entries with
-    // ${XDG_RUNTIME_DIR} skip it too: /run/user/<uid> belongs to the session
-    // manager, so an absent runtime directory is left unbound by --bind-try
-    // instead of being created.
-    const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
-    for (const pattern of actionPatterns(this.config.write, "allow")) {
-      if (hasGlob(pattern) || pattern.includes(XDG_RUNTIME_DIR)) continue;
-      for (const expanded of expandRuntimeVariables(pattern, gitMainWorktreePath)) {
-        const path = resolvePattern(expanded, this.cwd);
-        if (!existsSync(path)) mkdirSync(path, { recursive: true });
-      }
+    // Only allow-final paths are created (§6.1): a deny/ask-final path is
+    // never writable-bound, so creating it would hand the sandbox a path fs
+    // tools deny writing to. Globs expand to existing paths only, so they
+    // skip the mkdir -p guarantee by themselves. Runtime-directory paths
+    // belong to the session manager: an absent runtime directory is left
+    // unbound by --bind-try instead of being created.
+    const runtimeDir = resolveXdgRuntimeDir();
+    for (const path of this.writePathsByFinalAction().allow) {
+      if (path === runtimeDir || path.startsWith(`${runtimeDir}${sep}`)) continue;
+      if (!existsSync(path)) mkdirSync(path, { recursive: true });
     }
   }
 
@@ -829,6 +849,8 @@ export class Sandbox {
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     const mounted = new Set<string>();
     const writableMountPaths: string[] = [];
+    const { allow: allowFinalPaths, restricted: restrictedFinalPaths } =
+      this.writePathsByFinalAction();
 
     const mount = (path: string, writable: boolean) => {
       const normalized = resolve(path);
@@ -852,27 +874,25 @@ export class Sandbox {
       // write grants inside the cwd, turning the whole tree read-only.
       mount(this.cwd, false);
     }
-    for (const path of expandPathPatterns(
-      actionPatterns(this.config.write, "allow"),
-      this.cwd,
-      gitMainWorktreePath,
-      false,
-      this.globCache,
-    ))
-      mount(path, true);
+    // Writable binds mirror the fs tools' per-call resolution (§6.1): only
+    // allow-final paths are mounted writable, so a later deny or ask entry
+    // keeps its paths out of the bash sandbox even when an allow entry
+    // declared them.
+    for (const path of allowFinalPaths) mount(path, true);
     for (const [path, accessModes] of this.dynamicPaths) mount(path, accessModes.has("write"));
 
     if (mode === "bash") {
       for (const path of this.credentialPaths()) {
         if (existsSync(path)) mount(path, false);
       }
-      // fs tools hard-deny explicit write denies per call; the bash sandbox
-      // has no per-path gate, so re-bind denied paths read-only after every
-      // writable bind. Later bwrap mounts win, which keeps a path non-writable
-      // even through an allowed ancestor (§6.1).
-      for (const deniedPath of this.explicitWriteDenyPaths()) {
-        if (writableMountPaths.some((writablePath) => pathCovers(writablePath, deniedPath)))
-          mount(deniedPath, false);
+      // fs tools resolve deny/ask-final paths per call; the bash sandbox has
+      // no per-path gate, so re-bind them read-only after every writable
+      // bind. Later bwrap mounts win, which keeps a path non-writable even
+      // through an allowed ancestor or a dynamic grant (§6.1) — an ask-final
+      // path stays non-writable in bash even after an fs approval.
+      for (const restrictedPath of restrictedFinalPaths) {
+        if (writableMountPaths.some((writablePath) => pathCovers(writablePath, restrictedPath)))
+          mount(restrictedPath, false);
       }
     }
   }
@@ -973,14 +993,22 @@ export class Sandbox {
       throw new Error(`Access denied: ${absolutePath}`);
     const grantedPath = this.directoryScopePath(absolutePath);
     if (action === "allow" || this.hasDynamicGrant("write", grantedPath))
-      return { status: "already granted", grantedPath };
+      return {
+        status: "already granted",
+        grantedPath,
+        bashWritable: this.grantWritableViaBash(grantedPath),
+      };
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
     const ui = context.ui;
     return this.withUiLock(async () => {
       // A sibling tool call may have obtained the grant while this call queued.
       if (this.hasDynamicGrant("write", grantedPath))
-        return { status: "already granted", grantedPath };
+        return {
+          status: "already granted",
+          grantedPath,
+          bashWritable: this.grantWritableViaBash(grantedPath),
+        };
       return this.confirmWritePermission(grantedPath, reason, ui, matched);
     });
   }
@@ -1008,16 +1036,22 @@ export class Sandbox {
         ALLOW_OPTION,
         DENY_OPTION,
       ]);
-      if (selectedOption === ALLOW_OPTION) {
-        this.addDynamicGrant("write", grantedPath, "directory");
-        return { status: "granted", grantedPath };
-      }
+      if (selectedOption === ALLOW_OPTION) return this.grantWriteDirectory(grantedPath);
     } else if (await ui.confirm(question, details)) {
-      this.addDynamicGrant("write", grantedPath, "directory");
-      return { status: "granted", grantedPath };
+      return this.grantWriteDirectory(grantedPath);
     }
     const denialReason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
     return { status: "denied", grantedPath, ...(denialReason ? { reason: denialReason } : {}) };
+  }
+
+  /** Grant the directory-scope dynamic write and build the request result (§3). */
+  private grantWriteDirectory(grantedPath: string): WritePermissionRequest {
+    this.addDynamicGrant("write", grantedPath, "directory");
+    return {
+      status: "granted",
+      grantedPath,
+      bashWritable: this.grantWritableViaBash(grantedPath),
+    };
   }
 
   private async requestAccess(
@@ -1043,7 +1077,12 @@ export class Sandbox {
         const scope = selectedOption === directoryScopeOption ? "directory" : "file";
         const grantPath = scope === "directory" ? dirname(absolutePath) : absolutePath;
         this.addDynamicGrant("write", grantPath, scope);
-        return { operation: "write", scope, grantedPath: grantPath };
+        return {
+          operation: "write",
+          scope,
+          grantedPath: grantPath,
+          bashWritable: this.grantWritableViaBash(grantPath),
+        };
       }
       if (selectedOption !== ALLOW_OPTION)
         throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
@@ -1056,6 +1095,13 @@ export class Sandbox {
     );
     if (!approved) throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
     this.addDynamicGrant(operation, absolutePath, "file");
+    if (operation === "write")
+      return {
+        operation,
+        scope: "file",
+        grantedPath: absolutePath,
+        bashWritable: this.grantWritableViaBash(absolutePath),
+      };
     return { operation, scope: "file", grantedPath: absolutePath };
   }
 

@@ -78,14 +78,16 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 拒否を選択・キャンセルしたとき、拡張は理由入力ダイアログを続けて表示する。入力は任意で、空欄またはキャンセルなら理由なしとして扱う。理由が入力されたときは、拒否のエラーメッセージ（`Access denied by user: <path>` / `Command denied by user: <command>`）に `User reason: <入力>` の行を追記して agent へ返す。
 
-承認を選択したときは、承認の事実を agent へ伝える。承認された確認ダイアログごとに、そのツール呼び出しの最終結果の最終行へ承認ノートを1行追記して返す。ノートを付けるのは `write` / `edit` / `bash` の呼び出しに限り、`read` / `grep` / `find` / `ls` の呼び出しと read の許可の承認にはノートを付けない。ノートは最終結果のみに付き、bash の逐次表示（§7）には含まれない。ヒント文（§7）など他の追記文があるときは、その後に追記する。ノートの形式は確認対象ごとに次のとおり（`<path>` は許可されたパス）。
+承認を選択したときは、承認の事実を agent へ伝える。承認された確認ダイアログごとに、そのツール呼び出しの最終結果の最終行へ承認ノートを1行追記して返す。ノートを付けるのは `write` / `edit` / `bash` の呼び出しに限り、`read` / `grep` / `find` / `ls` の呼び出しと read の許可の承認にはノートを付けない。ノートは最終結果のみに付き、bash の逐次表示（§7）には含まれない。ヒント文（§7）など他の追記文があるときは、その後に追記する。ノートの形式は確認対象ごとに次のとおり（`<path>` は許可されたパス）。write の許可では、許可されたパスの確定アクション（§3）が未設定のときは bash 経由の書き込みも可、`ask` のときは fs ツール経由のみ可（§6.1）と区別する。
 
-| 確認対象                         | 承認ノート                                                                                                                                        |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| write の許可（ファイル単体）     | `User approved write access via confirmation (scope: file <path>); writable for the rest of the session, including via bash.`                     |
-| write の許可（ディレクトリ配下） | `User approved write access via confirmation (scope: directory <path>); the subtree is writable for the rest of the session, including via bash.` |
-| コマンドの実行                   | `User approved this command via confirmation.`                                                                                                    |
-| read の許可                      | なし                                                                                                                                              |
+| 確認対象                                             | 承認ノート                                                                                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| write の許可（未設定パス・ファイル単体）            | `User approved write access via confirmation (scope: file <path>); writable for the rest of the session, including via bash.`                     |
+| write の許可（未設定パス・ディレクトリ配下）        | `User approved write access via confirmation (scope: directory <path>); the subtree is writable for the rest of the session, including via bash.` |
+| write の許可（`ask` に確定したパス・ファイル単体）  | `User approved write access via confirmation (scope: file <path>); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).` |
+| write の許可（`ask` に確定したパス・ディレクトリ配下） | `User approved write access via confirmation (scope: directory <path>); the subtree is writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).` |
+| コマンドの実行                                       | `User approved this command via confirmation.`                                                                                                    |
+| read の許可                                          | なし                                                                                                                                              |
 
 選択ダイアログを提供できない UI では確認ダイアログ（`confirm`）に置き換え、拒否時の理由入力はテキスト入力ダイアログを提供できる場合のみ行う。理由は agent への伝達のみに使い、以降のアクセス判定には影響しない。確認・理由入力のダイアログは §2 の直列化に従う。
 
@@ -181,7 +183,7 @@ flowchart TD
 | `write` の解決結果が `ask`、または未設定                 | 確認ダイアログ（§2.3）                     |
 | 確認ダイアログを提供できない UI                          | エラー                                     |
 
-ダイアログでの承認は `write` の動的許可（ディレクトリスコープ）と同じ効果を持つ: `path` 配下がセッション内で書き込み可（bash 経由の書き込みも可）になり、bind 対象に追加され、実在保証は §6.1 に従う。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは `path` 配下がセッション内（bash を含む）で書き込み可能になったことを伝える。拒否はエラーではなく、以降の `write` / `edit` は従来どおり個別に確認される。
+ダイアログでの承認は `write` の動的許可（ディレクトリスコープ）と同じ効果を持つ: `path` 配下がセッション内で書き込み可になり、bind 対象に追加され、実在保証は §6.1 に従う。bash 経由で書き込み可能になるのは `path` の確定アクション（§3）が未設定のときだけで、`ask` に確定したパスは fs ツールでのみ書き込み可になり、bash からは書けない（§6.1）。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは `path` 配下がセッション内で書き込み可能になったことと、bash 経由で書けるかどうか（§2.3 の承認ノートと同じ区分）を伝える。拒否はエラーではなく、以降の `write` / `edit` は従来どおり個別に確認される。
 
 `ask_permission` の説明文と promptGuidelines には、編集を伴う作業の着手前に作業場所（worktree 作成先やその親ディレクトリ）の書き込み許可をユーザーへ要求するために使う旨と、bash が理由必須でコマンドを差し戻したときにそのコマンドと理由を添えて承認を求めるために使う旨を含める。
 
@@ -233,7 +235,7 @@ network は開放。fs 制限の対象外。
 | 項目          | 意味                                                                                                                                                                            |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `read`        | read / grep / find / ls のパスアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決）                                                                              |
-| `write`       | write / edit のパスアクション（§2・§3）。`allow` の固定パスは起動時に作成される（§6.1）                                                                                         |
+| `write`       | write / edit のパスアクション（§2・§3）。後勝ちで `allow` に確定する固定パスは起動時に作成される（§6.1）                                                                      |
 | `credentials` | bash の sandbox に read-only で bind するパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands`    | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する                                          |
 
@@ -259,13 +261,13 @@ commands:
 
 ### 6.1 bind とパスの実在保証
 
-`read` / `write` の `allow` アクションのパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `write` の `allow` アクションの固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、Git repository 内で解決できたとき `mkdir -p` の対象とする（`~/.agents/worktrees/${REPOSITORY_NAME}` のような worktrees ディレクトリをこれから作るため）。リポジトリ外では作成しない。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、pi が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
+`read` / `write` の `allow` アクションのパスは bwrap で bind するため実在が必須（`write` は後勝ちで `allow` に確定したパスのみ。下段）。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に pi プロセス本体（フェンス外）が `write` の後勝ちで `allow` に確定する固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、Git repository 内で解決できたとき `mkdir -p` の対象とする（`~/.agents/worktrees/${REPOSITORY_NAME}` のような worktrees ディレクトリをこれから作るため）。リポジトリ外では作成しない。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、pi が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
 
 `write` の動的許可パスも同じ実在保証の対象とし、承認時にフェンス外で作成する（ファイル単体スコープは親ディレクトリの `mkdir -p` と空ファイル作成、ディレクトリスコープは対象ディレクトリの `mkdir -p`）。実在保証に成功した許可だけを動的許可と bind 対象に追加する。作成に失敗した許可要求はエラーを返し、後続のツール呼び出しの動作を変えない。`read` の動的許可でパスは作成しない。
 
 `credentials` のパスは bash の sandbox にのみ `--ro-bind` する。credentials のファイル自体や glob のマッチ先は作成せず、存在するパスだけを起動時に bind する。
 
-bash の sandbox では、`write` の deny に確定したパス（§3 の後勝ち走査で最後にマッチした要素が deny）のうち、書き込み可能 bind（`write` の allow・動的許可）のパスと同一またはその配下にあるものを、書き込み可能 bind より後に read-only bind し直す。bwrap は後続のマウントで上書きするため、許可された祖先ディレクトリ配下でも書き込みは `Read-only file system` で失敗し、fs ツールが呼び出しごとに hard deny するパスと同じ保護が bash 経由でも強制される。存在しないパスと書き込み可能 bind の対象外のパスには bind しない（deny 宣言だけでパスは作成しない）。
+bash の sandbox の書き込み可能 bind は、`write` の宣言パスのうち §3 の後勝ち走査で `allow` に確定したパスと動的許可のパスだけとする。fs ツールは呼び出しごとに同じ走査でアクションを解決するため、この選別で bash と fs の書き込み可否が一致する。`deny` または `ask` に確定したパス（`allow` 宣言パスが後続の `deny`・`ask` 宣言で上書きされた場合を含む）は書き込み可能 bind から外れ、書き込み可能 bind のパスと同一またはその配下にあるものを書き込み可能 bind より後に read-only bind し直す。bwrap は後続のマウントで上書きするため、許可された祖先ディレクトリ配下でも書き込みは `Read-only file system` で失敗し、fs ツールが呼び出しごとに deny・ask に解決するパスと同じ保護が bash 経由でも強制される。`ask` に確定したパスは fs ツールでの承認（動的許可）によって書き込み可能 bind に追加されても、read-only bind し直した方が後勝ちするため、bash からは引き続き書けない。存在しないパスと書き込み可能 bind の対象外のパスには bind しない（deny・ask 宣言だけでパスは作成しない）。このため実在しない deny・ask 確定パスは、書き込み可能 bind 配下でも bash から作成できる。fs sandbox での deny マスク（下段）も実在パスのみに適用されるのと同じ限定である。
 
 ### fs sandbox での deny パス・credentials パスの隠蔽
 
@@ -276,13 +278,13 @@ fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）用の sandbox で�
 | ディレクトリ   | 空のディレクトリ（tmpfs マウント）            |
 | ファイル       | 空のファイル（`/dev/null` を read-only bind） |
 
-bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.2 のとおり read-only で bind される。`write` の deny に確定したパスは、書き込み可能 bind の配下にあるとき §6.1 のとおり read-only で bind し直される。
+bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.2 のとおり read-only で bind される。`write` の deny・ask に確定したパスは、書き込み可能 bind の配下にあるとき §6.1 のとおり read-only で bind し直される。
 
 ---
 
 ## 7. run-tools CLI による fs IO
 
-本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision 入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時に `ask_permission` での許可要求へ誘導する文と、理由必須ゲート（`ask_with_reason`）で差し戻されたときに `ask_permission` での承認要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内（bash 含む）で書き込み可能になる旨を追記する。認可（§2〜§4）を通った fs ツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
+本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision 入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時に `ask_permission` での許可要求へ誘導する文と、理由必須ゲート（`ask_with_reason`）で差し戻されたときに `ask_permission` での承認要求へ誘導する文を、`write` / `edit` には未許可パスへの書き込みで許可ダイアログが出て承認後にセッション内で書き込み可能になる旨（`ask` に確定したパスは bash からは書けない。§6.1）を追記する。認可（§2〜§4）を通った fs ツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
 | ツール                                          | 実行 |
 | ----------------------------------------------- | ---- |
@@ -306,7 +308,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 各ツール呼び出しは次の構成で `bwrap` を起動する。
 
 1. `--die-with-parent`、`--proc /proc`、`--dev /dev` を設定する。
-2. 設定済みの allow パスを `--bind-try`、read-only パスと credentials を `--ro-bind-try` で bind する。bash では、`write` の deny に確定したパスのうち書き込み可能 bind と同一・配下にあるものを、それらより後に `--ro-bind-try` で bind し直す（§6.1）。
+2. 設定済みの allow パスを `--bind-try`、read-only パスと credentials を `--ro-bind-try` で bind する。`write` の書き込み可能 bind は後勝ちで `allow` に確定したパスのみとし、bash では `deny`・`ask` に確定したパスのうち書き込み可能 bind と同一・配下にあるものを、それらより後に `--ro-bind-try` で bind し直す（§6.1）。
 3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bind する。pi パッケージ自体は `/nix` 配下のため追加の bind 不要。
 4. sandbox 内で `bun run-tools.ts <tool-name>` を実行し、network namespace は分離しない。
 5. abort は bwrap ごと child process を停止する。bash の timeout は sandbox 内の tool definition が処理する。

@@ -77,8 +77,14 @@ const EROFS_HINT =
 
 const COMMAND_APPROVAL_NOTE = "User approved this command via confirmation.";
 
-/** §2.3 approval note for a write grant approved via a confirmation dialog. */
+/** §2.3 approval note for a write grant approved via a confirmation dialog.
+ * Unset paths become writable including via bash; ask-final paths stay
+ * read-only in the bash sandbox (§6.1), which the note spells out. */
 export function writeApprovalNote(approval: PathApproval): string {
+  if (approval.bashWritable === false)
+    return approval.scope === "directory"
+      ? `User approved write access via confirmation (scope: directory ${approval.grantedPath}); the subtree is writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).`
+      : `User approved write access via confirmation (scope: file ${approval.grantedPath}); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).`;
   return approval.scope === "directory"
     ? `User approved write access via confirmation (scope: directory ${approval.grantedPath}); the subtree is writable for the rest of the session, including via bash.`
     : `User approved write access via confirmation (scope: file ${approval.grantedPath}); writable for the rest of the session, including via bash.`;
@@ -294,7 +300,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
   );
   pi.registerTool({
     ...writeTool,
-    description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
+    description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session. Paths resolving to ask in the config stay read-only in the bash sandbox.`,
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
       const approval = await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
@@ -316,7 +322,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
   });
   pi.registerTool({
     ...editTool,
-    description: `${editTool.description} Editing an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session, including from bash.`,
+    description: `${editTool.description} Editing an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session. Paths resolving to ask in the config stay read-only in the bash sandbox.`,
     renderShell: "default",
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
@@ -383,7 +389,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     name: "ask_permission",
     label: "ask_permission",
     description:
-      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory); once approved, the subtree becomes writable for the rest of the session, including from bash. For a command: pass the exact rejected command; once approved, re-sending the same bash call runs it once without another dialog.",
+      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory); once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; once approved, re-sending the same bash call runs it once without another dialog.",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
       "Before starting edit-heavy work in a directory that is not yet writable (e.g. a worktree outside the allowed paths), call ask_permission on the worktree directory or its parent so the user can approve it up front.",
@@ -454,9 +460,12 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
               operation: "write",
               scope: "directory",
               grantedPath: outcome.grantedPath,
+              bashWritable: outcome.bashWritable,
             })
           : outcome.status === "already granted"
-            ? `Already granted: ${outcome.grantedPath} is writable for the rest of the session, including via bash.`
+            ? outcome.bashWritable
+              ? `Already granted: ${outcome.grantedPath} is writable for the rest of the session, including via bash.`
+              : `Already granted: ${outcome.grantedPath} is writable via fs tools, but not via bash.`
             : `User denied write access to ${outcome.grantedPath}.` +
               (outcome.reason === undefined ? "" : `\nUser reason: ${outcome.reason}`);
       return {

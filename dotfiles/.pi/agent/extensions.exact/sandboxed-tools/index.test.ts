@@ -1586,12 +1586,18 @@ read:
 
 describe("§2.3 承認ノート", () => {
   const withApprovalSandbox =
-    (configYaml: string, test: (dir: string, sandbox: Sandbox) => Promise<void> | void) =>
+    (
+      configYaml: string | ((dir: string) => string),
+      test: (dir: string, sandbox: Sandbox) => Promise<void> | void,
+    ) =>
     async () => {
       const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-approval-"));
       try {
         const configPath = join(dir, "config.yaml");
-        writeFileSync(configPath, configYaml);
+        writeFileSync(
+          configPath,
+          typeof configYaml === "function" ? configYaml(dir) : configYaml,
+        );
         await test(dir, new Sandbox(dir, configPath));
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -1629,7 +1635,12 @@ describe("§2.3 承認ノート", () => {
         hasUI: true,
         ui: { confirm: async () => true },
       });
-      assert.deepEqual(approval, { operation: "write", scope: "file", grantedPath: filePath });
+      assert.deepEqual(approval, {
+        operation: "write",
+        scope: "file",
+        grantedPath: filePath,
+        bashWritable: true,
+      });
     }),
   );
 
@@ -1645,6 +1656,7 @@ describe("§2.3 承認ノート", () => {
         operation: "write",
         scope: "directory",
         grantedPath: dir,
+        bashWritable: true,
       });
     }),
   );
@@ -1660,6 +1672,26 @@ describe("§2.3 承認ノート", () => {
       });
       assert.deepEqual(approval, { operation: "read", scope: "file", grantedPath: filePath });
     }),
+  );
+
+  it(
+    "ask に確定したパスへの承認は bash から書けない approval を返す",
+    withApprovalSandbox(
+      (dir) => `write:\n  - {ask: "${join(dir, "asked.txt")}"}\n`,
+      async (dir, sandbox) => {
+        const approval = await sandbox.authorizePath("write", join(dir, "asked.txt"), {
+          cwd: dir,
+          hasUI: true,
+          ui: { confirm: async () => true },
+        });
+        assert.deepEqual(approval, {
+          operation: "write",
+          scope: "file",
+          grantedPath: join(dir, "asked.txt"),
+          bashWritable: false,
+        });
+      },
+    ),
   );
 
   it(
@@ -1701,6 +1733,27 @@ describe("§2.3 承認ノート", () => {
     assert.equal(
       writeApprovalNote({ operation: "write", scope: "directory", grantedPath: "/tmp/dir" }),
       "User approved write access via confirmation (scope: directory /tmp/dir); the subtree is writable for the rest of the session, including via bash.",
+    );
+  });
+
+  it("writeApprovalNote は ask 確定パスの承認で bash 不可の文言を返す", () => {
+    assert.equal(
+      writeApprovalNote({
+        operation: "write",
+        scope: "file",
+        grantedPath: "/tmp/a.txt",
+        bashWritable: false,
+      }),
+      "User approved write access via confirmation (scope: file /tmp/a.txt); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).",
+    );
+    assert.equal(
+      writeApprovalNote({
+        operation: "write",
+        scope: "directory",
+        grantedPath: "/tmp/dir",
+        bashWritable: false,
+      }),
+      "User approved write access via confirmation (scope: directory /tmp/dir); the subtree is writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).",
     );
   });
 
@@ -2134,7 +2187,11 @@ describe("§3 許可要求ツール", () => {
           hasUI: true,
           ui: noDialogUi,
         });
-        assert.deepEqual(outcome, { status: "already granted", grantedPath: join(dir, "sub") });
+        assert.deepEqual(outcome, {
+          status: "already granted",
+          grantedPath: join(dir, "sub"),
+          bashWritable: true,
+        });
       },
     ),
   );
@@ -2174,7 +2231,11 @@ describe("§3 許可要求ツール", () => {
           hasUI: true,
           ui: noDialogUi,
         });
-        assert.deepEqual(outcome, { status: "already granted", grantedPath: join(dir, "sub") });
+        assert.deepEqual(outcome, {
+          status: "already granted",
+          grantedPath: join(dir, "sub"),
+          bashWritable: true,
+        });
       },
     ),
   );
@@ -2285,7 +2346,11 @@ describe("§3 許可要求ツール", () => {
             },
           },
         );
-        assert.deepEqual(outcome, { status: "granted", grantedPath: join(dir, "work") });
+        assert.deepEqual(outcome, {
+          status: "granted",
+          grantedPath: join(dir, "work"),
+          bashWritable: true,
+        });
         assert.equal(confirmed.length, 1);
         assert.equal(confirmed[0]?.question, "Allow write access to directory subtree?");
         assert.equal(
@@ -2314,7 +2379,11 @@ describe("§3 許可要求ツール", () => {
             ui: grantUi,
           },
         );
-        assert.deepEqual(outcome, { status: "granted", grantedPath: dir });
+        assert.deepEqual(outcome, {
+          status: "granted",
+          grantedPath: dir,
+          bashWritable: true,
+        });
         await sandbox.authorizePath("write", join(dir, "any", "file.txt"), { cwd: dir });
         const args = sandbox.buildArgs("bash");
         const bindAt = args.indexOf(dir, args.indexOf(dir) + 2);
@@ -2395,8 +2464,35 @@ describe("§3 許可要求ツール", () => {
             ui: grantUi,
           },
         );
-        assert.deepEqual(outcome, { status: "granted", grantedPath: dir });
+        assert.deepEqual(outcome, {
+          status: "granted",
+          grantedPath: dir,
+          bashWritable: true,
+        });
         await sandbox.authorizePath("write", join(dir, "other.txt"), { cwd: dir });
+      },
+    ),
+  );
+
+  it(
+    "ask に確定したパスへの承認は bash から書けないことを結果に含める",
+    withAskPermissionSandbox(
+      (dir) => `read: []\nwrite:\n  - {ask: ${dir}/asked}\n`,
+      async (dir, sandbox) => {
+        const outcome = await sandbox.requestWritePermission(
+          join(dir, "asked"),
+          "to edit the asked directory",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: grantUi,
+          },
+        );
+        assert.deepEqual(outcome, {
+          status: "granted",
+          grantedPath: join(dir, "asked"),
+          bashWritable: false,
+        });
       },
     ),
   );
@@ -3821,17 +3917,119 @@ describe("§6.1 bind とパスの実在保証", () => {
   );
 
   it(
-    "同一パスを allow から deny へ上書きしたときは read-only bind が後勝ちで確定する",
+    "同一パスを allow から deny へ上書きしたときは書き込み可能 bind しない",
     withSandboxDir((dir, configPath) => {
       const file = join(dir, "same.txt");
       writeFileSync(file, "x");
       writeFileSync(configPath, `write:\n  - {allow: "${file}"}\n  - {deny: "${file}"}\n`);
       const args = new Sandbox("/cwd", configPath).buildArgs("bash");
-      const writableBindAt = args.indexOf(file);
-      assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 1), ["--bind-try", file]);
-      const roBindAt = args.indexOf(file, writableBindAt + 2);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", file]);
-      assert.ok(roBindAt > writableBindAt, "read-only bind must mount after the writable bind");
+      // The file resolves to deny (§3 last-match-wins), so it never becomes a
+      // writable bind; no writable ancestor exists, so no read-only re-bind
+      // is needed either — bash and fs tools agree it is not writable.
+      assert.equal(args.includes("--bind-try"), false);
+      assert.equal(args.includes(file), false);
+    }),
+  );
+
+  it(
+    "後勝ちで deny に確定した allow 宣言パスは書き込み可能 bind しない",
+    withSandboxDir(async (dir, configPath) => {
+      const childDir = join(dir, "x", "y");
+      mkdirSync(childDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${childDir}"}\n  - {deny: "${join(dir, "x")}"}\n`,
+      );
+      const sandbox = new Sandbox("/cwd", configPath);
+      // fs tools deny the child write (the later deny of the parent wins) …
+      await assert.rejects(
+        () => sandbox.authorizePath("write", join(childDir, "new.txt"), { cwd: "/cwd" }),
+        /Access denied/,
+      );
+      // … and the bash sandbox mounts no writable bind for it either.
+      const args = sandbox.buildArgs("bash");
+      assert.equal(args.includes("--bind-try"), false);
+      assert.equal(args.includes(childDir), false);
+      assert.equal(args.includes(join(dir, "x")), false);
+    }),
+  );
+
+  it(
+    "後勝ちで deny に確定したパスは起動時に作成しない",
+    withSandboxDir((dir, configPath) => {
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${join(dir, "x", "y")}"}\n  - {deny: "${join(dir, "x")}"}\n`,
+      );
+      new Sandbox("/cwd", configPath);
+      assert.equal(existsSync(join(dir, "x", "y")), false);
+    }),
+  );
+
+  it(
+    "ask に確定したパスを書き込み可能 bind より後に read-only bind する",
+    withSandboxDir(async (dir, configPath) => {
+      const askedFile = join(dir, "asked.txt");
+      writeFileSync(askedFile, "x");
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${dir}"}\n  - {ask: "${askedFile}"}\n`,
+      );
+      const sandbox = new Sandbox("/cwd", configPath);
+      // fs tools ask before the child write (no UI here, so confirmation
+      // throws) …
+      await assert.rejects(
+        () => sandbox.authorizePath("write", askedFile, { cwd: "/cwd" }),
+        /Access requires confirmation/,
+      );
+      // … and the bash sandbox keeps it read-only behind the allowed parent.
+      const args = sandbox.buildArgs("bash");
+      const writableBindAt = args.indexOf(dir);
+      assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 2), [
+        "--bind-try",
+        dir,
+        dir,
+      ]);
+      const roBindAt = args.indexOf(askedFile);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
+        "--ro-bind-try",
+        askedFile,
+      ]);
+      assert.ok(roBindAt > writableBindAt, "ask re-bind must mount after the writable bind");
+    }),
+  );
+
+  it(
+    "ask に確定したパスへの動的許可があっても read-only bind が後勝ちする",
+    withSandboxDir(async (dir, configPath) => {
+      const askedFile = join(dir, "asked.txt");
+      writeFileSync(askedFile, "x");
+      writeFileSync(
+        configPath,
+        `read:\n  - {allow: "*"}\nwrite:\n  - {allow: "${dir}"}\n  - {ask: "${askedFile}"}\n`,
+      );
+      const sandbox = new Sandbox(dir, configPath);
+      await sandbox.authorizePath("write", askedFile, {
+        cwd: dir,
+        hasUI: true,
+        ui: {
+          confirm: async () => false,
+          select: async (_title, options) => options[0],
+        },
+      });
+      const args = sandbox.buildArgs("bash");
+      const grantBindAt = args.indexOf(askedFile);
+      assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 2), [
+        "--bind-try",
+        askedFile,
+        askedFile,
+      ]);
+      const roBindAt = args.indexOf(askedFile, grantBindAt + 2);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
+        "--ro-bind-try",
+        askedFile,
+      ]);
+      assert.ok(roBindAt > grantBindAt, "ask re-bind must win over the dynamic grant bind");
     }),
   );
 
