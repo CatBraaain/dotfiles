@@ -255,6 +255,12 @@ web_fetch のタイトルは、取得済みの本文（Markdown）の見出し�
 
 エラーメッセージには失敗した段階が分かる文言を含める。段階ラベルを付けるのはサーバー起動待ち・描画・パースの3段階とし、Reddit 取得と trafilatura 変換には付けない。
 
+全バックエンドが失敗したとき、失敗の中に描画の中断（`render:` で始まり `aborted` を含むエラー）が1つでもあれば、例外メッセージの末尾に改行1つで次の camoufox server の kill 手順ヒントを追加する:
+
+```
+Hint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Kill it to recover (it respawns automatically on the next request): pkill -f "bun server.mjs"
+```
+
 例（web_search で google/duckduckgo が失敗し bing が成功）：
 
 ```
