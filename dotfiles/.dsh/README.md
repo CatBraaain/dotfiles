@@ -13,6 +13,7 @@ dsh（DeepSeek Harness）関係のファイル。
 - `plugins/run_build.sh` — 全プラグインの一括ビルドと依存インストール（chezmoi run script。apply 時に plugins dir を CWD に、各プラグインの plugin dir 内で `bun install` し、`src/index.ts` を持つプラグインを順に `bun build` する。ビルドは mtime 条件で、`dist/index.js` より新しい `src/` のファイル（または `run_build.sh` 自身）があるときだけ再ビルドする。変更が無い apply では `dist/` が書き換わらないため、profile 側の `bun install` も再リンクなしの no-op になる。shebang は chezmoi の `exec(3)` 直接実行に必須）
 - `profiles/web/run_bun_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD に `bun install` を実行する。`package.json` / `bun.lock` が stamp（`node_modules/.bun-install-stamp`）より新しいときだけ実行し、変更が無い apply ではスキップする。bun は `file:` 依存を中身が変わらなくても毎回再リンクするため、スキップしないと毎回 `+` リストが出て数秒かかる）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）、`dsh.profile.bundles`（読み込み順）、`trustedDependencies`（lifecycle script を許可する依存）の3つを管理する
+- `test/` — dsh 本体を起動せずに plugin の web UI の見た目を検証する fixture（`.chezmoiignore` で展開対象外）。詳しくは `test/README.md`
 
 run script の実行順序は target path の辞書順。`.dsh/plugins/...` は `.dsh/profiles/...` より先にソートされるため、プラグインのビルド → プロファイルへの install 再リンクの順が保たれる。
 
