@@ -37,6 +37,7 @@ host 側 plugin がセッションの `skill` tool 呼び出し（`tool/call` / 
 
 - 新しいセッションに切り替えたとき、前のセッションの skill 名を表示しない
 - セッションの再開・リロード時は、`skillStatus` projection の完成値から表示を復元する。projection は host がセッション全長に渡って畳み込むため、client が読み込んだイベントウィンドウの範囲に依存しない
+- client が dsh から切断している間も、host 側 plugin は `skill-status/used` の記録と `skillStatus` projection の維持を継続する。client が再接続したとき、projection の完成値の受信で表示を復元する
 - host の再起動・plugin の再読み込みで、セッション途中の in-flight な `skill` 呼び出しまでの状態をイベントログから復元する
 
 ## 設定
