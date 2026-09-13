@@ -7,9 +7,8 @@
  * because the observation runs inside the `session/event` publication window,
  * where a re-entrant `session.append` is rejected.
  *
- * This entry is a single self-contained module on purpose: `run_build.sh`
- * builds it with `--external '*'`, which externalizes relative imports too,
- * so a multi-file host entry would produce a broken `dist/index.js` (see
+ * `run_build.sh` bundles this entry: relative imports are inlined and only
+ * the script's explicit bare-specifier externals stay external (see
  * README "Build"). The event type literal is duplicated in
  * `src/client/event.ts` and pinned equal by `src/index.test.ts`.
  */

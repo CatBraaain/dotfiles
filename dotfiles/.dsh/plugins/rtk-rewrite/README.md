@@ -56,10 +56,10 @@ Listed in `dotfiles/.dsh/profiles/web/package.json` — add
 
 ## Build
 
-`run_build.sh` builds every plugin with
-`bun build src/index.ts --outdir dist --target node --external '*'`. This
-plugin's host entry is a single self-contained module, so the known
-`--external '*'` relative-import hazard does not apply.
+`run_build.sh` builds every plugin's node entry: relative imports are
+inlined into `dist/index.js`, and only the bare-specifier externals listed
+in the script (`yaml`, `shell-quote`, `@vscode/ripgrep`, `@deepseek-ai/*`,
+`@earendil-works/*`) stay external.
 
 ## Development
 

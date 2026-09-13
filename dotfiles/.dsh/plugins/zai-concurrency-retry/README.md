@@ -54,12 +54,14 @@ build step (run automatically by `dotfiles/.dsh/plugins/run_build.sh`):
 
 ```sh
 cd dotfiles/.dsh/plugins/zai-concurrency-retry
-bun build src/index.ts --outdir dist --target node --external '*'
+bun build src/index.ts --outdir dist --target node \
+  --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \
+  --external '@deepseek-ai/*' --external '@earendil-works/*'
 ```
 
-`src/index.ts` is a single self-contained module on purpose: `--external '*'`
-externalizes relative imports too, so a multi-file entry would emit a broken
-`dist/index.js` (see the skill-status README "Build"). No runtime
+`run_build.sh` bundles `src/index.ts`: relative imports are inlined and
+only the explicit bare-specifier externals stay external (see the
+skill-status README "Build"). No runtime
 dependencies; `@deepseek-ai/*` types resolve via tsconfig paths and the
 runtime resolves them from the profile closure.
 
@@ -78,8 +80,8 @@ after the wait. An abort mid-wait leaves the failure terminal.
 
 ## Build
 
-The host entry stays a single self-contained module (`run_build.sh` rebuilds
-`dist/index.js` on every `chezmoi apply`); see the dsh-skill-status README
+The host entry is bundled by `run_build.sh` (which rebuilds
+`dist/index.js` on every `chezmoi apply`); see the skill-status README
 "Build" for the constraints. The client bundle is **not** rebuilt by
 `run_build.sh` (it only handles node entries); `lib/client.js` is committed.
 To rebuild it after editing `src/client/`:

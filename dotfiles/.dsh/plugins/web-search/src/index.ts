@@ -5,9 +5,8 @@
  * and a camoufox + trafilatura fetch provider (id `camoufox-trafilatura`).
  * Ported from the pi `web-search` extension; the behavior contract is SPEC.md.
  *
- * This entry is a single self-contained module on purpose: `run_build.sh`
- * builds it with `--external '*'`, which externalizes relative imports too,
- * so a multi-file entry would emit a broken `dist/index.js`. The camoufox
+ * `run_build.sh` bundles this entry: relative imports are inlined and only
+ * the script's explicit bare-specifier externals stay external. The camoufox
  * server (`server.mjs`) ships in the package root, outside the bundle.
  */
 import z from "@deepseek-ai/schemastery";

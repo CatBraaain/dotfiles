@@ -36,12 +36,12 @@ configure.
 
 ## Build
 
-The host entry must stay a **single self-contained module**: `run_build.sh`
-builds each plugin with `--external '*'`, which externalizes relative imports
-too, so a multi-file entry would emit a broken `dist/index.js` that still
-imports `./something.ts`. (`agents` and `model-sync` currently have
-exactly that latent breakage; `bun build --packages=external` would fix
-them.) `run_build.sh` rebuilds `dist/index.js` on every `chezmoi apply`.
+`run_build.sh` bundles each plugin's node entry: relative imports are
+inlined into `dist/index.js`, and only the bare-specifier externals listed
+in the script (`yaml`, `shell-quote`, `@vscode/ripgrep`, `@deepseek-ai/*`,
+`@earendil-works/*`) stay external, resolved at runtime from the plugin's
+own `node_modules`. `run_build.sh` rebuilds `dist/index.js` on every
+`chezmoi apply`.
 
 The client bundle is **not** rebuilt by `run_build.sh` (it only handles node
 entries); `lib/client.js` is committed. To rebuild it after editing

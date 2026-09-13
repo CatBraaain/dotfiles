@@ -2355,13 +2355,9 @@ describe("提供する plugin（entry exports・apply）", () => {
     assert.match(patchYml, /^\s*name: dotfiles-dsh-web-search$/m);
   });
 
-  it("エントリポイントは相対 import を持たない単一モジュールで、server.mjs は bundle 外に同梱する", () => {
+  it("server.mjs は bundle 外にパッケージルートへ同梱する", () => {
     const packageRoot = dirname(new URL(".", import.meta.url).pathname);
-    const entry = readFileSync(join(packageRoot, "src", "index.ts"), "utf8");
 
-    // run_build.sh builds with --external '*', which externalizes relative
-    // imports too — the entry must stay a single self-contained module.
-    assert.ok(!/["']\.[\/]/.test(entry), "relative import found in src/index.ts");
     assert.ok(existsSync(join(packageRoot, "server.mjs")), "server.mjs must ship in the package root");
   });
 });

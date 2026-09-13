@@ -33,10 +33,9 @@ PATH plus the camoufox browser executable (`CAMOUFOX_EXECUTABLE_PATH`, default
 
 ## Layout
 
-- `src/index.ts` — the whole plugin. **A single self-contained module on
-  purpose**: `run_build.sh` builds with `--external '*'`, which externalizes
-  relative imports too, so a multi-file entry would emit a broken
-  `dist/index.js`.
+- `src/index.ts` — the whole plugin. `run_build.sh` bundles it: relative
+  imports are inlined and only the script's explicit bare-specifier externals
+  stay external.
 - `server.mjs` — the camoufox server, shipped in the package root outside the
   bundle. Spawned as `bun server.mjs` (cwd = package root) with the resolved
   base URL passed through the child `CAMOUFOX_BASE_URL`. Its imports
@@ -59,7 +58,9 @@ cd dotfiles/.dsh/plugins/web-search
 bun install          # dev/test dependencies (trustedDependencies: [])
 bunx tsc --noEmit    # typecheck
 bun test             # unit tests (pure logic + provider contract; no dsh runtime)
-bun build src/index.ts --outdir dist --target node --external '*'
+bun build src/index.ts --outdir dist --target node \
+  --external yaml --external shell-quote --external '@vscode/ripgrep' \
+  --external '@deepseek-ai/*' --external '@earendil-works/*'
 ```
 
 Runtime value imports (`WebError` from `@deepseek-ai/dsh-web`, `z` from

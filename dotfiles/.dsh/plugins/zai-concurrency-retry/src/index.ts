@@ -23,10 +23,9 @@
  *              start (durable, so reloads re-render it), folded into a
  *              one-line transcript row by the client bundle in `src/client/`
  *
- * Single self-contained module on purpose: `run_build.sh` builds entries
- * with `--external '*'`, which externalizes relative imports too, so a
- * multi-file entry would emit a broken `dist/index.js` (see the
- * dsh-skill-status README "Build"). Pure logic is exported below and tested
+ * `run_build.sh` bundles entries: relative imports are inlined and only
+ * the script's explicit bare-specifier externals stay external (see the
+ * skill-status README "Build"). Pure logic is exported below and tested
  * in `src/index.test.ts`; runtime imports are types only.
  */
 

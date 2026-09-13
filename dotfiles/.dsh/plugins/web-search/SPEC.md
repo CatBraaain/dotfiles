@@ -73,4 +73,4 @@ multi-query の web_search（`queries` 2 件以上）も、provider 内部の直
 | `export const name` | `"dsh-web-search"` |
 | `export const inject` | `["web"]` |
 | 登録 | `ctx.web.registerSearchProvider`（id `camoufox-openserp`）と `ctx.web.registerFetchProvider`（id `camoufox-trafilatura`） |
-| エントリポイント構成 | 単一の自己完結モジュール（`run_build.sh` の `--external '*'` が相対 import を externalize するため、src 配下の相対 import を持たない 1 ファイルにする）。camoufox server 本体（server.mjs）はパッケージ同梱の .mjs として bundle 外に置く |
+| エントリポイント構成 | `run_build.sh` が 1 エントリとして bundle する（相対 import は inline、script に明示された bare-specifier external のみ外部解決）。camoufox server 本体（server.mjs）はパッケージ同梱の .mjs として bundle 外に置く |
