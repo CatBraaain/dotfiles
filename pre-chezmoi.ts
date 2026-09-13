@@ -54,6 +54,7 @@ export async function run(
   await convertDotEntries(distDir);
   await convertExactDirectories(distDir);
   await convertExecutableFiles(distDir);
+  await convertSymlinkFiles(distDir);
   await composeMergeTargets(root, distDir, resolveTargetPath);
 }
 
@@ -149,6 +150,21 @@ async function convertExecutableFiles(distDir: string): Promise<void> {
     await rename(
       entry.path,
       join(dirname(entry.path), `executable_${basename(entry.path).replace(/\.executable$/, "")}`),
+    );
+  }
+}
+
+async function convertSymlinkFiles(distDir: string): Promise<void> {
+  const symlinkFiles = (await collectEntries(distDir)).filter(
+    (entry) =>
+      !entry.isDirectory &&
+      entry.path.endsWith(".symlink") &&
+      !relative(distDir, entry.path).includes(".chezmoi"),
+  );
+  for (const entry of symlinkFiles) {
+    await rename(
+      entry.path,
+      join(dirname(entry.path), `symlink_${basename(entry.path).replace(/\.symlink$/, "")}`),
     );
   }
 }

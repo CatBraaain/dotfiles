@@ -16,7 +16,8 @@
 4. dot 変換
 5. exact 変換
 6. executable 変換
-7. merge 変換
+7. symlink 変換
+8. merge 変換
 
 ## 1. dist 再構築
 
@@ -71,7 +72,7 @@ await writeFile("generated.exact/config", "value\n");
 
 ### 2.3 生成物と既存変換
 
-フックは既存の platform・dot・exact・executable・merge 変換より先に実行する。そのため、フックが生成したファイルにも既存変換が適用される。platform 移動の対象フォルダに置いたフックの生成物も、通常の source ファイルと同じように platform 移動の対象になる。
+フックは既存の platform・dot・exact・executable・symlink・merge 変換より先に実行する。そのため、フックが生成したファイルにも既存変換が適用される。platform 移動の対象フォルダに置いたフックの生成物も、通常の source ファイルと同じように platform 移動の対象になる。
 
 ローカルフックで生成した ChezMoi の `run_before` ファイルも他の生成物と同じ既存変換を受け、変換後の名前で `dist/` に残る。ローカルフックは `run_before` より前に、`pre-chezmoi.ts` の実行中に完了する。
 
@@ -170,11 +171,24 @@ dot 変換の後に行うため、`.xxx.exact` の形のディレクトリは `e
 | ----------------------- | ----------------------- |
 | `run_foo.sh.executable` | `executable_run_foo.sh` |
 
-## 7. merge 変換
+## 7. symlink 変換
+
+`dist/` 内の、名前が `.symlink` で終わるファイルの名前から `.symlink` を除き、先頭に `symlink_` を付ける。ファイルの内容は書き換えない。パスに `.chezmoi` を含むエントリは dot 変換と同じく対象外。
+
+| 入力                 | 出力                 |
+| -------------------- | -------------------- |
+| `AGENTS.md.symlink`  | `symlink_AGENTS.md`  |
+| `.foo.symlink`       | `symlink_dot_foo`    |
+
+dot 変換の後に行うため、`.xxx.symlink` の形のファイルは `symlink_dot_xxx` になる。これは chezmoi が許可する source 名の prefix 順序（`symlink_` → `dot_`）と一致する。
+
+`symlink_` 付きファイルは chezmoi の symlink source として扱われる。末尾の改行 1 つを除いた内容がリンク先になり、相対パスは symlink が置かれるディレクトリから解決される。例: `dot_pi/agent/symlink_AGENTS.md` の内容 `../../.agents/AGENTS.md` は `~/.agents/AGENTS.md` を指す。
+
+## 8. merge 変換
 
 JSON/YAML/TOML の設定ファイルを、ホーム現状とリポジトリ側レイヤーから **pre-chezmoi 実行時に** 合成し、`dist/` へ完成形を書き出す。chezmoi modify template（`modify_*`）は生成しない。
 
-### 7.1 入力ファイルの種類
+### 8.1 入力ファイルの種類
 
 同一ディレクトリ内で、出力ファイル名 `<name>.{json,yaml,toml}` に対し、次の sidecar を使う。
 
@@ -188,7 +202,7 @@ JSON/YAML/TOML の設定ファイルを、ホーム現状とリポジトリ側�
 
 merge ターゲットでないファイルは、従来どおり `dist/` へそのまま残す。
 
-### 7.2 ターゲット解決
+### 8.2 ターゲット解決
 
 merge ターゲットごとに、次を決める。
 
@@ -206,41 +220,41 @@ sidecar 名から `<name>` への対応:
 
 同一 `<name>` に sidecar が複数あるときは 1 ターゲットにまとめる。
 
-### 7.3 レイヤーと適用順
+### 8.3 レイヤーと適用順
 
 merge ターゲットごとに、存在するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON・TOML。YAML パース結果が null/undefined のときも `{}` 扱い）。
 
 | 順  | レイヤー    | ソース                                                                                  |
 | --- | ----------- | --------------------------------------------------------------------------------------- |
-| 1   | ホーム      | §7.2 のホームパス。ファイルが存在しない・空のとき `{}`                                  |
+| 1   | ホーム      | §8.2 のホームパス。ファイルが存在しない・空のとき `{}`                                  |
 | 2   | plain base  | 同ディレクトリの `<name>.{json,yaml,toml}`（merge / merge.local ではないファイル）      |
 | 3   | merge       | `<name>.merge.{json,yaml,toml}`                                                         |
 | 4   | merge.local | `<name>.merge.local.{json,yaml,toml}`                                                   |
 
 後段レイヤーほど優先される。
 
-各レイヤーへの適用は §8（パッチ適用）に従う。
+各レイヤーへの適用は §9（パッチ適用）に従う。
 
-### 7.4 dist への出力
+### 8.4 dist への出力
 
 merge ターゲットごとに:
 
-1. §7.3 の合成結果を §8.4 の canonical 形式で `<name>.{json,yaml,toml}` に書き出す。
+1. §8.3 の合成結果を §9.4 の canonical 形式で `<name>.{json,yaml,toml}` に書き出す。
 2. 入力として使った sidecar（`*.merge.*`, `*.merge.local.*`）を `dist/` から削除する。
 3. plain base の `<name>.{json,yaml,toml}` が存在したとき、それも `dist/` から削除する（完成形のみ残す）。
 
 `dist/` には sidecar も plain base の生ファイルも残らない。完成形 `<name>.{json,yaml,toml}` だけが残る。
 
-### 7.5 対象外
+### 8.5 対象外
 
 次は merge 変換の対象外とし、`dist/` にそのまま残す。
 
 - sidecar を持たない plain ファイル
 - sidecar を持たない、リポジトリ内で手書きされた `modify_*` テンプレート（obs-studio 等）
 
-`modify_*` テンプレートにも §7.1 の一般則が適用される。sidecar を置いた `modify_*` は merge ターゲットとなり、手書きテンプレートの内容が plain base レイヤーとして合成され、完成形 `modify_*` を `dist/` に書き出す。
+`modify_*` テンプレートにも §8.1 の一般則が適用される。sidecar を置いた `modify_*` は merge ターゲットとなり、手書きテンプレートの内容が plain base レイヤーとして合成され、完成形 `modify_*` を `dist/` に書き出す。
 
-### 7.6 例
+### 8.6 例
 
 #### `settings.merge.json` のみ（plain base なし）
 
@@ -286,23 +300,23 @@ foo.merge.local.json
 
 合成: ホーム → plain base → merge → merge.local → `dist/.../foo.json`
 
-## 8. パッチ適用
+## 9. パッチ適用
 
 merge 変換の各レイヤー、および将来同一関数を使う処理は、ここで定義する 1 回分の **パッチ適用** として扱う。
 
-### 8.1 1 レイヤー内の処理順
+### 9.1 1 レイヤー内の処理順
 
-1. 操作キー（§8.3）をレイヤー内の任意の深さから取り除く。
-2. 残りのキーをベースへ深くマージする（§8.2）。
-3. 取り除いた操作キーを §8.3 の規則でベースへ適用する。
+1. 操作キー（§9.3）をレイヤー内の任意の深さから取り除く。
+2. 残りのキーをベースへ深くマージする（§9.2）。
+3. 取り除いた操作キーを §9.3 の規則でベースへ適用する。
 
 出力に操作キーは残らない。
 
-### 8.2 深いマージ（通常キー）
+### 9.2 深いマージ（通常キー）
 
 同じキーが両方でプレーンオブジェクトのときだけ再帰し、それ以外（スカラー・配列・オブジェクトと非オブジェクトの組合せ）はレイヤー側の値で丸ごと置き換える。片側にだけあるキーの値は維持する。
 
-### 8.3 操作キー（`$append` / `$remove` / `$replace` / `$unset`）
+### 9.3 操作キー（`$append` / `$remove` / `$replace` / `$unset`）
 
 操作キーはレイヤー内の任意のオブジェクトに置ける。キー名が次の形式で、かつ認識条件を満たすものだけが操作キーになる。
 
@@ -323,7 +337,7 @@ merge 変換の各レイヤー、および将来同一関数を使う処理は�
 
 操作キーの `<path>` は、キーを置いたオブジェクトからレイヤーのルートまでの祖先キーを `.` で連結し、`<local>` を末尾に付けたものである。`<path>` に配列インデックス（`[0]` など）は書けない。
 
-認識条件を満たさない `.$` を含むキー（例: `x.$nope`、`a[0].$replace`）は操作キーではなく通常キーとして扱い、深いマージ（§8.2）でそのまま出力に残る。
+認識条件を満たさない `.$` を含むキー（例: `x.$nope`、`a[0].$replace`）は操作キーではなく通常キーとして扱い、深いマージ（§9.2）でそのまま出力に残る。
 
 操作キーの値は、その中をさらに走査せず、そのまま操作の値として扱う。
 
@@ -334,7 +348,7 @@ merge 変換の各レイヤー、および将来同一関数を使う処理は�
 | キー              | `<path>` の値の型 | 値                  | 結果                                                                        |
 | ----------------- | ----------------- | ------------------- | --------------------------------------------------------------------------- |
 | `<path>.$append`  | 配列              | 要素の配列          | 末尾に追加する。重複していても追加する                                      |
-| `<path>.$remove`  | 配列              | マッチャの配列      | 一致する要素をすべて削除する（§8.3 配列表一致）                             |
+| `<path>.$remove`  | 配列              | マッチャの配列      | 一致する要素をすべて削除する（§9.3 配列表一致）                             |
 | `<path>.$remove`  | オブジェクト      | キー名の配列        | 列挙されたキーを削除する                                                    |
 | `<path>.$unset`   | 任意              | `true` または値なし | `<path>` が指す値を親から削除する                                           |
 | `<path>.$replace` | 任意              | 任意                | `<path>` の値を値で丸ごと置き換える                                         |
@@ -432,7 +446,7 @@ TOML では `$` を含むキー名を quoted key で書く。quoted key は `.` 
 dsh.profile."bundles.$replace" = [{ provider = "cursor" }]
 ```
 
-### 8.4 出力形式（canonical）
+### 9.4 出力形式（canonical）
 
 merge ターゲットの完成形は、毎回同一形式で書き出す。
 
@@ -470,7 +484,7 @@ Linux 実行時の `dotfiles/docker/settings-store.merge.json` は、次のよ�
 | 旧                                                  | 新                                      |
 | --------------------------------------------------- | --------------------------------------- |
 | `*.overwrite.{json,yaml}`                           | `*.merge.local.{json,yaml}`             |
-| `*.merge.*` → `modify_*`（chezmoi modify template） | `*.merge.*` → merge レイヤー（§7）      |
-| overwrite 変換（ベースへの build 時マージ）         | §7 の plain base レイヤー + merge.local |
+| `*.merge.*` → `modify_*`（chezmoi modify template） | `*.merge.*` → merge レイヤー（§8）      |
+| overwrite 変換（ベースへの build 時マージ）         | §8 の plain base レイヤー + merge.local |
 
 `.gitignore` の `*.overwrite.*` は `*.merge.local.*` に置き換える。

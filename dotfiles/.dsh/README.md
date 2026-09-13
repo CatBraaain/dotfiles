@@ -9,6 +9,7 @@ dsh（DeepSeek Harness）関係のファイル。
 
 ## 構成
 
+- `AGENTS.md.symlink` — `~/.dsh/AGENTS.md` への symlink。正本は `dotfiles/.agents/AGENTS.md`（pi の global 指示 `~/.pi/agent/AGENTS.md` と同一内容）。dsh 組み込みの `dsh-agent-instructions`（default 有効）が user-global 指示として各セッションの最初の request に注入する
 - `plugins/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。展開先は手動編集しない。エントリは TS で書き、`exports` はビルド済みの `./dist/index.js` を指す（Node は `node_modules` 内の `.ts` を実行できないため）
 - `plugins/run_build.sh` — 全プラグインの一括ビルドと依存インストール（chezmoi run script。apply 時に plugins dir を CWD に、各プラグインの plugin dir 内で `bun install` し、`src/index.ts` を持つプラグインを順に `bun build` する。ビルドは mtime 条件で、`dist/index.js` より新しい `src/` のファイル（または `run_build.sh` 自身）があるときだけ再ビルドする。変更が無い apply では `dist/` が書き換わらないため、profile 側の `bun install` も再リンクなしの no-op になる。shebang は chezmoi の `exec(3)` 直接実行に必須）
 - `profiles/web/run_bun_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD で `bun install` を実行する。install の要否にかかわらず毎回、hoist された `@deepseek-ai/dsh-tools` を closure（global 実体）への symlink に張り替える。`package.json` / `bun.lock` が stamp（`node_modules/.bun-install-stamp`）より新しいときだけ install し、変更が無い apply では bun install をスキップする。bun は `file:` 依存を中身が変わらなくても毎回再リンクするため、スキップしないと毎回 `+` リストが出て数秒かかる）
