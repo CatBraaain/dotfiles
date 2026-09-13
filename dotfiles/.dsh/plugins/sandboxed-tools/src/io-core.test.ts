@@ -13,7 +13,6 @@ import {
   formatGrepOutput,
   formatReadOutput,
   formatWriteOutput,
-  imageMediaTypeForPath,
   parseGrepMatches,
   previewGrepLine,
   readFooter,
@@ -85,12 +84,18 @@ describe("§1 read の続き行フッター", () => {
 
 describe("§1 write/edit の確認文", () => {
   it("write は Created file / Updated file", () => {
-    assert.equal(formatWriteOutput("/a", "create"), "<path>/a</path>\n<type>file</type>\n<content>\nCreated file\n</content>");
-    assert.equal(formatWriteOutput("/a", "update"), "<path>/a</path>\n<type>file</type>\n<content>\nUpdated file\n</content>");
+    assert.equal(
+      formatWriteOutput("/a", "create"),
+      "<path>/a</path>\n<type>file</type>\n<content>\nCreated file\n</content>",
+    );
+    assert.equal(
+      formatWriteOutput("/a", "update"),
+      "<path>/a</path>\n<type>file</type>\n<content>\nUpdated file\n</content>",
+    );
   });
 
   it("edit は単一置換と全置換で文言が変わる", () => {
-    assert.equal(formatEditOutput("/a", false), 'The file /a has been updated successfully.');
+    assert.equal(formatEditOutput("/a", false), "The file /a has been updated successfully.");
     assert.equal(
       formatEditOutput("/a", true),
       "The file /a has been updated. All occurrences were successfully replaced.",
@@ -107,7 +112,10 @@ describe("§1 edit のリテラル置換", () => {
   });
 
   it("不一致はエラー", () => {
-    assert.throws(() => applyEditLiteral("abc", "X", "Y", false, "/a"), /old_string was not found in "\/a"/);
+    assert.throws(
+      () => applyEditLiteral("abc", "X", "Y", false, "/a"),
+      /old_string was not found in "\/a"/,
+    );
   });
 
   it("replace_all 無しの複数一致はエラー", () => {
@@ -125,7 +133,10 @@ describe("§1 edit のリテラル置換", () => {
   });
 
   it("空の old_string はエラー", () => {
-    assert.throws(() => applyEditLiteral("a", "", "Y", false, "/a"), /old_string must be a non-empty string/);
+    assert.throws(
+      () => applyEditLiteral("a", "", "Y", false, "/a"),
+      /old_string must be a non-empty string/,
+    );
   });
 
   it("CRLF は LF に正規化してマッチする", () => {
@@ -138,22 +149,22 @@ describe("§1 edit のリテラル置換", () => {
 
 describe("§2.1 画像の形式判定", () => {
   it("シグネチャで PNG/JPEG/GIF/WebP を判定する", () => {
-    assert.equal(sniffImageMediaType(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0])), "image/png");
+    assert.equal(
+      sniffImageMediaType(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0])),
+      "image/png",
+    );
     assert.equal(sniffImageMediaType(Buffer.from([255, 216, 255, 224])), "image/jpeg");
     assert.equal(sniffImageMediaType(Buffer.from("GIF89a", "ascii")), "image/gif");
-    const webp = Buffer.concat([Buffer.from("RIFF", "ascii"), Buffer.alloc(4), Buffer.from("WEBP", "ascii")]);
+    const webp = Buffer.concat([
+      Buffer.from("RIFF", "ascii"),
+      Buffer.alloc(4),
+      Buffer.from("WEBP", "ascii"),
+    ]);
     assert.equal(sniffImageMediaType(webp), "image/webp");
   });
 
   it("非画像バイトは undefined", () => {
     assert.equal(sniffImageMediaType(Buffer.from("hello world!")), undefined);
-  });
-
-  it("拡張子から宣言型を引く", () => {
-    assert.equal(imageMediaTypeForPath("/a/b.PNG"), "image/png");
-    assert.equal(imageMediaTypeForPath("/a/b.jpg"), "image/jpeg");
-    assert.equal(imageMediaTypeForPath("/a/b.bmp"), undefined);
-    assert.equal(imageMediaTypeForPath("/a/noext"), undefined);
   });
 });
 
@@ -187,7 +198,10 @@ describe("§1 glob", () => {
 
 describe("§1 grep", () => {
   it("include はカンマ区切りリストを拒否する", () => {
-    assert.throws(() => validateGrepInclude("*.ts,*.js"), /include must be one glob, not a comma-separated list/);
+    assert.throws(
+      () => validateGrepInclude("*.ts,*.js"),
+      /include must be one glob, not a comma-separated list/,
+    );
   });
 
   it("include は否定を拒否する", () => {
@@ -207,7 +221,9 @@ describe("§1 grep", () => {
       }),
       JSON.stringify({ type: "end", data: { path: { text: "a.ts" } } }),
     ].join("\n");
-    assert.deepEqual(parseGrepMatches(stdout), [{ path: "a.ts", lineNumber: 3, line: "let x = 1;" }]);
+    assert.deepEqual(parseGrepMatches(stdout), [
+      { path: "a.ts", lineNumber: 3, line: "let x = 1;" },
+    ]);
   });
 
   it("preview は UTF-8 境界を保って切り詰める", () => {

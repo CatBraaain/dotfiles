@@ -84,7 +84,9 @@ export function apply(ctx: Context) {
     const sessionKey = String(header?.id ?? "");
     const cwd = header?.cwd ?? process.cwd();
     const sandbox =
-      sessionKey === "" ? agentlessSandbox : (sandboxes.get(sessionKey) ?? new Sandbox(cwd, undefined, hostPaths));
+      sessionKey === ""
+        ? agentlessSandbox
+        : (sandboxes.get(sessionKey) ?? new Sandbox(cwd, undefined, hostPaths));
     // §2.3 confirmation channel for this execution: the userQuestions seam,
     // the calling agent (so the Web answerer accepts the question), and the
     // call's cancellation signal.
@@ -104,5 +106,4 @@ export function apply(ctx: Context) {
   warnInvalidPatterns(agentlessSandbox, "startup");
 
   registerSandboxedTools(ctx, toolDeps());
-
 }

@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -177,7 +185,7 @@ commands:
     assert.equal(sandbox.resolveCommandAction("git status").action, "allow");
     assert.equal(sandbox.resolveCommandAction("systemctl reboot").action, "deny");
   });
-});;
+});
 
 describe("§6 commands パターンの正規表現評価", () => {
   it("正規表現は部分一致で評価され、^ と $ で制約する", () => {
@@ -356,7 +364,10 @@ describe("§3.a パス文字列の解決", () => {
         linkedWorktreePath,
       );
 
-      assert.equal(resolvePathAction(section, join(workspacePath, "worktrees", "other", "topic")), "deny");
+      assert.equal(
+        resolvePathAction(section, join(workspacePath, "worktrees", "other", "topic")),
+        "deny",
+      );
     }),
   );
 
@@ -641,7 +652,10 @@ credentials:
 `,
       "/workspace/project",
       (sandbox) => {
-        assert.equal(sandbox.resolvePathAction("read", "/workspace/project/secret/key").action, "allow");
+        assert.equal(
+          sandbox.resolvePathAction("read", "/workspace/project/secret/key").action,
+          "allow",
+        );
         assert.equal(sandbox.isCredentialPath("/workspace/project/secret/key"), true);
       },
     ),
@@ -661,7 +675,10 @@ credentials:
         (sandbox) => {
           assert.equal(sandbox.isCredentialPath(join(dir, "git", "config")), true);
           assert.equal(sandbox.isCredentialPath(join(dir, "npm", "rc")), true);
-          assert.equal(sandbox.isCredentialPath(join(homedir(), ".dsh", ".credentials.yaml")), true);
+          assert.equal(
+            sandbox.isCredentialPath(join(homedir(), ".dsh", ".credentials.yaml")),
+            true,
+          );
           assert.equal(sandbox.isCredentialPath(join(dir, "other")), false);
         },
       )();
@@ -841,7 +858,7 @@ describe("§2・§2.2 authorizePath ゲート", () => {
   it(
     "credentials パスは read/write の解決に関係なく常時拒否",
     withSandbox(
-      "\nread:\n  - allow: \"*\"\nwrite:\n  - allow: \"*\"\ncredentials:\n  - ~/secret-token\n",
+      '\nread:\n  - allow: "*"\nwrite:\n  - allow: "*"\ncredentials:\n  - ~/secret-token\n',
       "/cwd",
       (sandbox) => {
         const credential = join(homedir(), "secret-token");
@@ -875,17 +892,13 @@ describe("§2・§2.2 authorizePath ゲート", () => {
 
 describe("§6.1 buildArgs と実在保証", () => {
   it(
-    "read allow \"*\" はルート全体を ro-bind する",
-    withSandbox(
-      "\nread:\n  - allow: \"*\"\n",
-      "/cwd",
-      (sandbox) => {
-        const args = sandbox.buildArgs("fs");
-        const roBindAt = args.indexOf("--ro-bind");
-        assert.notEqual(roBindAt, -1);
-        assert.equal(args[roBindAt + 1], "/");
-      },
-    ),
+    'read allow "*" はルート全体を ro-bind する',
+    withSandbox('\nread:\n  - allow: "*"\n', "/cwd", (sandbox) => {
+      const args = sandbox.buildArgs("fs");
+      const roBindAt = args.indexOf("--ro-bind");
+      assert.notEqual(roBindAt, -1);
+      assert.equal(args[roBindAt + 1], "/");
+    }),
   );
 
   it(
@@ -1166,7 +1179,11 @@ describe("§2.3 authorizePathWithConfirm（fs ツールの確認）", () => {
       assert.equal(existsSync(grantedDir), true);
       // The subtree root itself passes afterwards without a dialog.
       assert.equal(
-        await sandbox.authorizePathWithConfirm("write", join(grantedDir, "other.txt"), confirmWith(ui)),
+        await sandbox.authorizePathWithConfirm(
+          "write",
+          join(grantedDir, "other.txt"),
+          confirmWith(ui),
+        ),
         undefined,
       );
     }),
@@ -1340,13 +1357,19 @@ describe("§3 requestWritePermission（ask_permission の path）", () => {
       // §6.1: the granted directory now exists and the subtree is writable.
       assert.equal(existsSync(join(dir, "askme")), true);
       assert.equal(
-        await sandbox.authorizePathWithConfirm("write", join(dir, "askme", "x.txt"), confirmWith(ui)),
+        await sandbox.authorizePathWithConfirm(
+          "write",
+          join(dir, "askme", "x.txt"),
+          confirmWith(ui),
+        ),
         undefined,
       );
       // bash shares the grant: the bind includes the dynamic path.
       const args = sandbox.buildArgs("bash");
       assert.equal(
-        args.some((value, index) => value === "--bind-try" && args[index + 1] === join(dir, "askme")),
+        args.some(
+          (value, index) => value === "--bind-try" && args[index + 1] === join(dir, "askme"),
+        ),
         true,
       );
     }),
@@ -1368,7 +1391,11 @@ describe("§3 requestWritePermission（ask_permission の path）", () => {
         "why",
         confirmWith(ui),
       );
-      assert.deepEqual(outcome, { status: "denied", grantedPath: join(dir, "askme"), reason: "later" });
+      assert.deepEqual(outcome, {
+        status: "denied",
+        grantedPath: join(dir, "askme"),
+        reason: "later",
+      });
       // Not granted: a write under the path still asks (and can be approved).
       const approval = await sandbox.authorizePathWithConfirm(
         "write",
@@ -1496,10 +1523,7 @@ describe("§4 authorizeCommand（bash ゲート）", () => {
     "allow は承認なし、ask はダイアログ承認で true・拒否で User reason 付きエラー",
     withTempDirectory(async (dir) => {
       const configPath = join(dir, "sandbox.yaml");
-      writeFileSync(
-        configPath,
-        "commands:\n  - { allow: '^ls$' }\n  - { ask: '^git push$' }\n",
-      );
+      writeFileSync(configPath, "commands:\n  - { allow: '^ls$' }\n  - { ask: '^git push$' }\n");
       const sandbox = new Sandbox(dir, configPath);
       const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
       assert.equal(await sandbox.authorizeCommand("ls", confirmWith(ui)), false);
@@ -1779,7 +1803,8 @@ describe("§6.1 read-deny 宣言の fs マスク", () => {
       const fsArgs = sandbox.buildArgs("fs");
       assert.equal(
         fsArgs.some(
-          (value, index) => value === "--tmpfs" && fsArgs[index + 1] === join(dir, "proj", "secret"),
+          (value, index) =>
+            value === "--tmpfs" && fsArgs[index + 1] === join(dir, "proj", "secret"),
         ),
         true,
       );
@@ -1817,21 +1842,21 @@ describe("§7 envelope と失敗扱い（parseRunnerResponse）", () => {
   });
 
   it("ok:true / ok:false の JSON envelope をそのまま返す", () => {
-    assert.deepEqual(
-      parseRunnerResponse(executionOf('{"ok":true,"result":{"path":"/a"}}')),
-      { ok: true, result: { path: "/a" } },
-    );
-    assert.deepEqual(
-      parseRunnerResponse(executionOf('{"ok":false,"error":"boom"}', "", 1)),
-      { ok: false, error: "boom" },
-    );
+    assert.deepEqual(parseRunnerResponse(executionOf('{"ok":true,"result":{"path":"/a"}}')), {
+      ok: true,
+      result: { path: "/a" },
+    });
+    assert.deepEqual(parseRunnerResponse(executionOf('{"ok":false,"error":"boom"}', "", 1)), {
+      ok: false,
+      error: "boom",
+    });
   });
 
   it("非 JSON stdout は stderr、次いで終了コードの情報で失敗扱いにする", () => {
-    assert.deepEqual(
-      parseRunnerResponse(executionOf("not json", "partial crash", 3)),
-      { ok: false, error: "partial crash" },
-    );
+    assert.deepEqual(parseRunnerResponse(executionOf("not json", "partial crash", 3)), {
+      ok: false,
+      error: "partial crash",
+    });
     assert.deepEqual(parseRunnerResponse(executionOf("garbage", "", 2)), {
       ok: false,
       error: "runner exited with code 2",
@@ -1880,7 +1905,8 @@ describe("§5・§7.3 buildArgs（network と runtime paths）", () => {
       for (const path of existing) {
         assert.equal(
           args.some(
-            (value, index) => value === "--ro-bind-try" && args[index + 1] === path && args[index + 2] === path,
+            (value, index) =>
+              value === "--ro-bind-try" && args[index + 1] === path && args[index + 2] === path,
           ),
           true,
           `${path} should be ro-bound (§7.3)`,
@@ -1893,7 +1919,10 @@ describe("§5・§7.3 buildArgs（network と runtime paths）", () => {
     "read allow * では個別の runtime path bind を省く（ルート ro-bind が覆う）",
     withSandbox('\nread:\n  - allow: "*"\n', "/cwd", (sandbox) => {
       const args = sandbox.buildArgs("fs");
-      assert.equal(args.some((value) => value === "--ro-bind-try"), false);
+      assert.equal(
+        args.some((value) => value === "--ro-bind-try"),
+        false,
+      );
     }),
   );
 });
@@ -1914,7 +1943,10 @@ describe("§7 sandbox 実行（fake bwrap 経由）", () => {
       nodePath: string;
       runnerJsPath: string;
       capturePath: string;
-      run: (request: RunnerRequest, options?: Pick<RunToolOptions, "timeoutMs" | "signal">) => Promise<unknown>;
+      run: (
+        request: RunnerRequest,
+        options?: Pick<RunToolOptions, "timeoutMs" | "signal">,
+      ) => Promise<unknown>;
     }) => Promise<void> | void,
   ): () => Promise<void> {
     return withTempDirectory(async (dir) => {
@@ -1959,10 +1991,7 @@ echo '{"ok":true,"result":{"path":"ok"}}'`,
         assert.deepEqual(await run(request), { path: "ok" });
         const [argvLine, stdinLine] = readFileSync(capturePath, "utf8").split("\n");
         // The child receives the assembled sandbox argv followed by node + runner.
-        assert.equal(
-          argvLine,
-          [...sandbox.buildArgs("fs"), nodePath, runnerJsPath].join(" "),
-        );
+        assert.equal(argvLine, [...sandbox.buildArgs("fs"), nodePath, runnerJsPath].join(" "));
         // §7: the request JSON travels over stdin, one bwrap process per call.
         assert.equal(stdinLine, JSON.stringify(request));
       },

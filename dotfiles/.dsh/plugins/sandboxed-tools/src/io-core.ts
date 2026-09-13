@@ -5,8 +5,6 @@
 // and image signature sniffing (SPEC §1, §2.1, §4 caps). No fs or process
 // access lives here, so everything is unit-testable without a sandbox.
 
-import { extname } from "node:path";
-
 // ---------------------------------------------------------------------------
 // read (SPEC §1: 2000-line default/cap, 2000 chars per line, continuation footer)
 // ---------------------------------------------------------------------------
@@ -119,15 +117,6 @@ export function applyEditLiteral(
 // image format sniffing (SPEC §2.1: signature first, extension assist)
 // ---------------------------------------------------------------------------
 
-/** Supported image extensions, mapped to their declared media type. */
-export const IMAGE_EXTENSIONS: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-};
-
 function matchesBytes(data: Buffer, offset: number, expected: number[]): boolean {
   if (data.byteLength < offset + expected.length) return false;
   return expected.every((byte, index) => data[offset + index] === byte);
@@ -147,11 +136,6 @@ export function sniffImageMediaType(data: Buffer): string | undefined {
   if (matchesAscii(data, 0, "GIF87a") || matchesAscii(data, 0, "GIF89a")) return "image/gif";
   if (matchesAscii(data, 0, "RIFF") && matchesAscii(data, 8, "WEBP")) return "image/webp";
   return undefined;
-}
-
-/** The declared media type for a path extension, or undefined when unsupported. */
-export function imageMediaTypeForPath(filePath: string): string | undefined {
-  return IMAGE_EXTENSIONS[extname(filePath).toLowerCase()];
 }
 
 // ---------------------------------------------------------------------------
@@ -199,13 +183,17 @@ export const GREP_MAX_LINE_BYTES = 2000;
 export function validateGrepInclude(include: string): void {
   if (include.trim().length === 0) throw new Error("include must be a non-empty glob when given");
   if (include.startsWith("!"))
-    throw new Error('include must be a positive glob filter; negated patterns ("!…") are not supported');
+    throw new Error(
+      'include must be a positive glob filter; negated patterns ("!…") are not supported',
+    );
   let braceDepth = 0;
   for (const char of include) {
     if (char === "{") braceDepth += 1;
     else if (char === "}") braceDepth = Math.max(0, braceDepth - 1);
     else if (char === "," && braceDepth === 0)
-      throw new Error("include must be one glob, not a comma-separated list (use {a,b} alternation instead)");
+      throw new Error(
+        "include must be one glob, not a comma-separated list (use {a,b} alternation instead)",
+      );
   }
 }
 
@@ -241,9 +229,13 @@ export function parseGrepMatches(stdout: string): GrepMatch[] {
         ? (data.path as { text?: unknown }).text
         : undefined;
     if (typeof pathText !== "string")
-      throw new Error("grep received malformed ripgrep --json output (a match record has no path text)");
+      throw new Error(
+        "grep received malformed ripgrep --json output (a match record has no path text)",
+      );
     if (typeof data.line_number !== "number")
-      throw new Error("grep received malformed ripgrep --json output (a match record has no line number)");
+      throw new Error(
+        "grep received malformed ripgrep --json output (a match record has no line number)",
+      );
     const lines = data.lines as { text?: unknown; bytes?: unknown } | undefined;
     if (typeof lines === "object" && lines !== null && typeof lines.text === "string") {
       matches.push({
@@ -252,9 +244,15 @@ export function parseGrepMatches(stdout: string): GrepMatch[] {
         line: lines.text.replace(/\r?\n$/, ""),
       });
     } else if (typeof lines === "object" && lines !== null && typeof lines.bytes === "string") {
-      matches.push({ path: pathText, lineNumber: data.line_number, line: "(line is not valid UTF-8)" });
+      matches.push({
+        path: pathText,
+        lineNumber: data.line_number,
+        line: "(line is not valid UTF-8)",
+      });
     } else {
-      throw new Error("grep received malformed ripgrep --json output (a match record has neither line text nor bytes)");
+      throw new Error(
+        "grep received malformed ripgrep --json output (a match record has neither line text nor bytes)",
+      );
     }
   }
   return matches;
@@ -269,7 +267,12 @@ export function previewGrepLine(line: string, maxBytes = GREP_MAX_LINE_BYTES): s
   return `${buffer.subarray(0, cut).toString("utf8")} (line truncated)`;
 }
 
-export type RetainedMatches = { items: GrepMatch[]; kept: number; seen: number; truncated: boolean };
+export type RetainedMatches = {
+  items: GrepMatch[];
+  kept: number;
+  seen: number;
+  truncated: boolean;
+};
 
 /** Apply the inline match cap and per-line preview budget (SPEC §1: 250 matches). */
 export function retainGrepMatches(

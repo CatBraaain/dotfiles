@@ -14,11 +14,7 @@ import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { RunnerBashResult, RunnerRequest } from "./runner";
-import {
-  Sandbox,
-  type ConfirmOptions,
-  type RunToolOptions,
-} from "./sandbox";
+import { Sandbox, type ConfirmOptions, type RunToolOptions } from "./sandbox";
 import type { ConfirmUi } from "./confirm";
 import {
   COMMAND_APPROVAL_NOTE,
@@ -38,7 +34,10 @@ type CapturedTool = {
   timeoutMs?: number;
   parameters: { properties: Record<string, unknown>; required?: string[] };
   // Captured definitions are asserted and invoked, not narrowly consumed.
-  execute: (args: Record<string, unknown>, exec: ToolRunContext) => Promise<Record<string, unknown>>;
+  execute: (
+    args: Record<string, unknown>,
+    exec: ToolRunContext,
+  ) => Promise<Record<string, unknown>>;
   output: { render: (args: unknown, value: unknown) => { type: string; text?: string }[] };
 };
 
@@ -110,15 +109,13 @@ function withToolLayer(
     respond?: (request: RunnerRequest) => unknown;
     ui?: ConfirmUi;
   },
-  test: (
-    helpers: {
-      tools: CapturedTool[];
-      tool: (name: string) => CapturedTool;
-      runs: RecordedRun[];
-      observations: ReadObservations;
-      dir: string;
-    },
-  ) => Promise<void> | void,
+  test: (helpers: {
+    tools: CapturedTool[];
+    tool: (name: string) => CapturedTool;
+    runs: RecordedRun[];
+    observations: ReadObservations;
+    dir: string;
+  }) => Promise<void> | void,
 ): () => Promise<void> {
   return async () => {
     const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-tools-"));
@@ -209,6 +206,50 @@ describe("§2.1 read（ツール経路）", () => {
   });
 
   it(
+    "拡張子なしでシグネチャ非対応のファイルは既存の read 結果を返す",
+    withToolLayer(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\n`,
+        respond: () => ({
+          path: join(dir, "image"),
+          offset: 1,
+          lines: [{ number: 1, text: "plain text" }],
+          totalLines: 1,
+          mtimeMs: 1000,
+        }),
+      }),
+      async ({ tool, runs, dir }) => {
+        const result = await tool("read").execute({ file_path: join(dir, "image") }, execOf());
+        assert.deepEqual(result, {
+          path: join(dir, "image"),
+          offset: 1,
+          lines: [{ number: 1, text: "plain text" }],
+          totalLines: 1,
+        });
+        assert.equal(runs.length, 1);
+      },
+    ),
+  );
+
+  it(
+    "未許可パス → §2 のとおり拒否",
+    withToolLayer(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\n  - deny: ${join(dir, "secret")}\n`,
+        services: imageServices(),
+        respond: pngRespond(join(dir, "secret", "k.png")),
+      }),
+      async ({ tool, runs, dir }) => {
+        await assert.rejects(
+          tool("read").execute({ file_path: join(dir, "secret", "k.png") }, execOf(imageAgent())),
+          /Access denied: /,
+        );
+        assert.equal(runs.length, 0);
+      },
+    ),
+  );
+
+  it(
     "許可 + 画像入力対応 → 正規化済みの値で画像添付を返す",
     withToolLayer(
       (dir) => ({
@@ -284,27 +325,6 @@ describe("§2.1 read（ツール経路）", () => {
   );
 
   it(
-    "未許可パス → §2 のとおり拒否",
-    withToolLayer(
-      (dir) => ({
-        configYaml: `\nread:\n  - allow: ${dir}\n  - deny: ${join(dir, "secret")}\n`,
-        services: imageServices(),
-        respond: pngRespond(join(dir, "secret", "k.png")),
-      }),
-      async ({ tool, runs, dir }) => {
-        await assert.rejects(
-          tool("read").execute(
-            { file_path: join(dir, "secret", "k.png") },
-            execOf(imageAgent()),
-          ),
-          /Access denied: /,
-        );
-        assert.equal(runs.length, 0);
-      },
-    ),
-  );
-
-  it(
     "対応外拡張子でも対応形式のシグネチャがあれば画像として返す",
     withToolLayer(
       (dir) => ({
@@ -318,35 +338,6 @@ describe("§2.1 read（ツール経路）", () => {
           execOf(imageAgent()),
         );
         assert.equal((result.image as { mediaType: string }).mediaType, "image/png");
-        assert.equal(runs.length, 1);
-      },
-    ),
-  );
-
-  it(
-    "拡張子なしでシグネチャ非対応のファイルは既存の read 結果を返す",
-    withToolLayer(
-      (dir) => ({
-        configYaml: `\nread:\n  - allow: ${dir}\n`,
-        respond: () => ({
-          path: join(dir, "image"),
-          offset: 1,
-          lines: [{ number: 1, text: "plain text" }],
-          totalLines: 1,
-          mtimeMs: 1000,
-        }),
-      }),
-      async ({ tool, runs, dir }) => {
-        const result = await tool("read").execute(
-          { file_path: join(dir, "image") },
-          execOf(),
-        );
-        assert.deepEqual(result, {
-          path: join(dir, "image"),
-          offset: 1,
-          lines: [{ number: 1, text: "plain text" }],
-          totalLines: 1,
-        });
         assert.equal(runs.length, 1);
       },
     ),
@@ -373,8 +364,6 @@ describe("§2.1 read（ツール経路）", () => {
       },
     ),
   );
-
-
 });
 
 // ---------------------------------------------------------------------------
@@ -418,7 +407,7 @@ describe("§3 ask_permission（ツール経路）", () => {
     "path と command の両方・どちらも無しは、期待する引数形式を伝えるエラー",
     withToolLayer(
       () => ({ configYaml: "\nwrite:\n  - ask: /w\n" }),
-      async ({ tool, dir }) => {
+      async ({ tool }) => {
         await assert.rejects(
           tool("ask_permission").execute(
             { path: "/w/dir", command: "git push", reason: "why" },
@@ -477,11 +466,11 @@ describe("§3 ask_permission（ツール経路）", () => {
   it(
     "command の承認は1回限り: 同じ bash 再送が確認なしで走り、承認を消費する",
     withToolLayer(
-      (dir) => ({
+      () => ({
         configYaml: "commands:\n  - { ask_with_reason: '^sudo\\b' }\n",
         ui: scriptedUi([{ label: "Yes, allow" }]).ui,
       }),
-      async ({ tool, runs, dir }) => {
+      async ({ tool, runs }) => {
         const granted = await tool("ask_permission").execute(
           { command: "sudo id", reason: "inspect" },
           execOf(),
@@ -603,7 +592,7 @@ describe("§2.3 承認ノート（write/edit/bash の render）", () => {
   it(
     "bash は EROFS ヒントの後に承認ノートを追記し、ノートが最終行になる",
     withToolLayer(
-      (dir) => ({
+      () => ({
         configYaml: "commands:\n  - { ask: '^deploy\\b' }\n",
         ui: scriptedUi([{ label: "Yes, allow" }]).ui,
         respond: () =>
@@ -616,7 +605,7 @@ describe("§2.3 承認ノート（write/edit/bash の render）", () => {
             timeoutMs: 120000,
           }) satisfies RunnerBashResult,
       }),
-      async ({ tool, dir }) => {
+      async ({ tool }) => {
         const result = (await tool("bash").execute(
           { command: "deploy --prod", description: "deploy to production" },
           execOf(),
@@ -657,7 +646,10 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
     withToolLayer(
       () => ({ configYaml: "commands:\n  - { allow: '.*' }\n" }),
       async ({ tool, runs, dir }) => {
-        await tool("bash").execute({ command: "pwd", description: "print working directory" }, execOf());
+        await tool("bash").execute(
+          { command: "pwd", description: "print working directory" },
+          execOf(),
+        );
         assert.equal(runs[0]!.request.params.workdir, dir);
         await tool("bash").execute(
           { command: "pwd", description: "print working directory", workdir: "sub" },
@@ -677,7 +669,7 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
     "bash は空 command・空 description・不正 timeoutMs を引数検証で拒否する",
     withToolLayer(
       () => ({ configYaml: "commands:\n  - { allow: '.*' }\n" }),
-      async ({ tool, dir }) => {
+      async ({ tool }) => {
         await assert.rejects(
           tool("bash").execute({ command: "  ", description: "d" }, execOf()),
           /invalid command/,
@@ -734,11 +726,15 @@ describe("§1 説明文の明記要件", () => {
       () => ({ configYaml: "" }),
       ({ tools, tool }) => {
         // §1: read_image is not registered; read owns both text and image paths.
-        assert.equal(tools.some((definition) => definition.name === "read_image"), false);
+        assert.equal(
+          tools.some((definition) => definition.name === "read_image"),
+          false,
+        );
         // §2.1: read notes Vision input and vision delegation.
         assert.match(tool("read").description, /Image files.*image input/);
         assert.ok(tool("read").description.includes("vision"));
-        const readSchema = (tool("read").output as unknown as { schema: { oneOf?: unknown[] } }).schema;
+        const readSchema = (tool("read").output as unknown as { schema: { oneOf?: unknown[] } })
+          .schema;
         assert.equal(readSchema.oneOf?.length, 2);
         // §3: ask_permission covers worktree/parent write requests and the
         // reason-gated command re-request.
@@ -747,7 +743,11 @@ describe("§1 説明文の明記要件", () => {
           assert.ok(askPermission.includes(phrase), `ask_permission: ${phrase}`);
         // §4: bash routes EROFS and the reason gate to ask_permission.
         const bash = tool("bash").description;
-        for (const phrase of ["Read-only file system", "ask_permission", "Command requires a reason"])
+        for (const phrase of [
+          "Read-only file system",
+          "ask_permission",
+          "Command requires a reason",
+        ])
           assert.ok(bash.includes(phrase), `bash: ${phrase}`);
         // §7: write/edit explain the approval → session-writable flow.
         for (const name of ["write", "edit"]) {
@@ -772,10 +772,7 @@ describe("§2.4 未読みゲート（ツール経路）", () => {
       async ({ tool, runs, dir }) => {
         const target = join(dir, "a.txt");
         await assert.rejects(
-          tool("edit").execute(
-            { file_path: target, old_string: "x", new_string: "y" },
-            execOf(),
-          ),
+          tool("edit").execute({ file_path: target, old_string: "x", new_string: "y" }, execOf()),
           (error: Error) => error.message === NOT_BEEN_READ(target),
         );
         assert.equal(runs.length, 0);
@@ -785,6 +782,32 @@ describe("§2.4 未読みゲート（ツール経路）", () => {
           execOf(),
         );
         assert.equal(runs[1]!.request.options?.observedMtimeMs, 1000);
+      },
+    ),
+  );
+
+  it(
+    "画像 read は観測せず、直後の edit は未読みで拒否する",
+    withToolLayer(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\nwrite:\n  - allow: ${dir}\n`,
+        services: imageServices(),
+        respond: () => ({
+          path: join(dir, "img.png"),
+          dataBase64: PNG_BYTES.toString("base64"),
+          mediaType: "image/png",
+        }),
+      }),
+      async ({ tool, runs, dir }) => {
+        await tool("read").execute({ file_path: join(dir, "img.png") }, execOf(imageAgent()));
+        await assert.rejects(
+          tool("edit").execute(
+            { file_path: join(dir, "img.png"), old_string: "x", new_string: "y" },
+            execOf(imageAgent()),
+          ),
+          (error: Error) => error.message === NOT_BEEN_READ(join(dir, "img.png")),
+        );
+        assert.equal(runs.length, 1);
       },
     ),
   );

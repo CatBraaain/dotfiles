@@ -28,14 +28,7 @@
 //   IO itself lives in runner.ts/io-core.ts.
 
 import { execFileSync, spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -708,7 +701,16 @@ export function parseRunnerResponse(execution: SandboxRunResult): RunnerResponse
 }
 
 /** Runtime paths ro-bound so the runner executable and its libraries resolve (NixOS included, §7). */
-export const RUNTIME_PATHS = ["/nix", "/usr", "/bin", "/lib", "/lib64", "/etc", "/run", join(homedir(), ".nix-profile")];
+export const RUNTIME_PATHS = [
+  "/nix",
+  "/usr",
+  "/bin",
+  "/lib",
+  "/lib64",
+  "/etc",
+  "/run",
+  join(homedir(), ".nix-profile"),
+];
 
 /**
  * The sandboxed-tools policy engine and sandbox launcher: configuration
@@ -762,8 +764,7 @@ export class Sandbox {
    */
   authorizePath(operation: "read" | "write", candidatePath: string): PathAuthorization {
     const absolutePath = resolve(candidatePath);
-    if (pathsMatchCandidate(this.credentialPaths(), absolutePath))
-      return { kind: "credential" };
+    if (pathsMatchCandidate(this.credentialPaths(), absolutePath)) return { kind: "credential" };
     const section = operation === "read" ? this.readSection() : this.writeSection();
     const match = resolvePathActionMatch(section, absolutePath);
     if (match.action === "allow") return { kind: "allow" };
@@ -798,8 +799,7 @@ export class Sandbox {
     if (action === "deny" && matched !== undefined)
       throw new Error(`Access denied: ${absolutePath}`);
     if (this.hasDynamicGrant(operation, absolutePath)) return undefined;
-    if (confirm.ui === undefined)
-      throw new Error(`Access requires confirmation: ${absolutePath}`);
+    if (confirm.ui === undefined) throw new Error(`Access requires confirmation: ${absolutePath}`);
     return withUiLock(async () => {
       // A sibling tool call may have obtained the grant while this call queued
       // (§2): no re-confirmation, and no approval note for this call.
@@ -821,7 +821,9 @@ export class Sandbox {
       question: `Allow ${operation} access?`,
       detail,
       options:
-        operation === "write" ? [FILE_OPTION, DIRECTORY_OPTION, DENY_OPTION] : [ALLOW_OPTION, DENY_OPTION],
+        operation === "write"
+          ? [FILE_OPTION, DIRECTORY_OPTION, DENY_OPTION]
+          : [ALLOW_OPTION, DENY_OPTION],
       agent: confirm.agent,
       signal: confirm.signal,
     });
@@ -898,8 +900,7 @@ export class Sandbox {
     const grantedPath = this.directoryScopePath(absolutePath);
     if (action === "allow" || this.hasDynamicGrant("write", grantedPath))
       return { status: "already granted", grantedPath };
-    if (confirm.ui === undefined)
-      throw new Error(`Access requires confirmation: ${absolutePath}`);
+    if (confirm.ui === undefined) throw new Error(`Access requires confirmation: ${absolutePath}`);
     return withUiLock(async () => {
       if (this.hasDynamicGrant("write", grantedPath))
         return { status: "already granted", grantedPath };
@@ -973,11 +974,8 @@ export class Sandbox {
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "allow") return { status: "already granted", command };
     if (action === "ask")
-      throw new Error(
-        `Command is confirmed when run via bash; no pre-approval needed: ${command}`,
-      );
-    if (confirm.ui === undefined)
-      throw new Error(`Access requires confirmation: ${command}`);
+      throw new Error(`Command is confirmed when run via bash; no pre-approval needed: ${command}`);
+    if (confirm.ui === undefined) throw new Error(`Access requires confirmation: ${command}`);
     return withUiLock(() => this.confirmCommandPermission(command, reason, matched, confirm));
   }
 
@@ -1010,10 +1008,7 @@ export class Sandbox {
    * dialog. Resolves true when the call passed through an approval (dialog
    * or one-shot; §2.3 approval note), false when it passed without one.
    */
-  async authorizeCommand(
-    command: string,
-    confirm: ConfirmOptions = {},
-  ): Promise<boolean> {
+  async authorizeCommand(command: string, confirm: ConfirmOptions = {}): Promise<boolean> {
     const { action, matched } = this.resolveCommandAction(command);
     if (action === "allow") return false;
     if (action === "deny") throw new Error(`Command denied: ${command}`);
@@ -1214,17 +1209,14 @@ export class Sandbox {
    */
   async runTool(request: RunnerRequest, options: RunToolOptions): Promise<unknown> {
     if (!this.hostPaths) throw new Error("sandboxed-tools: host paths are not configured");
-    const execution = await this.run(
-      [this.hostPaths.nodePath, this.hostPaths.runnerJsPath],
-      {
-        input: JSON.stringify(request),
-        mode: options.mode,
-        cwd: options.cwd,
-        signal: options.signal,
-        timeoutMs: options.timeoutMs,
-        env: options.env,
-      },
-    );
+    const execution = await this.run([this.hostPaths.nodePath, this.hostPaths.runnerJsPath], {
+      input: JSON.stringify(request),
+      mode: options.mode,
+      cwd: options.cwd,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      env: options.env,
+    });
     const response = parseRunnerResponse(execution);
     if (!response.ok) throw new Error(response.error);
     return response.result;

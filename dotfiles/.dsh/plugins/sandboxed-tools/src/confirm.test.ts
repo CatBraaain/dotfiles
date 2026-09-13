@@ -86,7 +86,10 @@ describe("§2.3 askChoice（seam アダプタ）", () => {
     assert.equal(request.questions.length, 1);
     assert.equal(request.questions[0]!.question, "Allow read access?");
     assert.equal(request.questions[0]!.detail, "/a\nmatched: /a");
-    assert.deepEqual(request.questions[0]!.options, [{ label: "Yes, allow" }, { label: "No, deny (reason next)" }]);
+    assert.deepEqual(request.questions[0]!.options, [
+      { label: "Yes, allow" },
+      { label: "No, deny (reason next)" },
+    ]);
     assert.equal(request.agent, agent);
     assert.equal(request.signal, signal);
   });
@@ -127,10 +130,7 @@ describe("§2.3 拒否理由の追問", () => {
   });
 
   it("空欄・回答なし・キャンセルは理由なし（undefined）として扱う", async () => {
-    assert.equal(
-      await askDenialReason(fakeUi({ reason: "   " }).ui, {}),
-      undefined,
-    );
+    assert.equal(await askDenialReason(fakeUi({ reason: "   " }).ui, {}), undefined);
     assert.equal(await askDenialReason(fakeUi({ reason: undefined }).ui, {}), undefined);
     assert.equal(
       await askDenialReason(fakeUi({ reason: { error: new Error("NO_PROVIDER") } }).ui, {}),

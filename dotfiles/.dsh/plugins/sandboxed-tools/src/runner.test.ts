@@ -16,7 +16,10 @@ let fixtureRoot: string | undefined;
 const PNG_BYTES = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
 const GIF_BYTES = Buffer.from("GIF89a\x01\x00\x01\x00", "binary");
 
-function withFixture(build: (dir: string) => void, test: (dir: string) => Promise<void> | void): () => Promise<void> {
+function withFixture(
+  build: (dir: string) => void,
+  test: (dir: string) => Promise<void> | void,
+): () => Promise<void> {
   return async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), "sandboxed-tools-runner-"));
     try {
@@ -167,7 +170,10 @@ describe("runner write（§2.4）", () => {
       (dir) => writeFileSync(join(dir, "a.txt"), "old"),
       async (dir) => {
         await assert.rejects(
-          executeRequest({ tool: "write", params: { file_path: join(dir, "a.txt"), content: "new" } }),
+          executeRequest({
+            tool: "write",
+            params: { file_path: join(dir, "a.txt"), content: "new" },
+          }),
           /file has not been read — read the file, then retry/,
         );
       },

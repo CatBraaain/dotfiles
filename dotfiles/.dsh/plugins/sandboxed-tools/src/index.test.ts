@@ -21,7 +21,10 @@ import { apply } from "./index";
 type CapturedTool = {
   name: string;
   // Captured definitions are asserted and invoked, not narrowly consumed.
-  execute: (args: Record<string, unknown>, exec: ToolRunContext) => Promise<Record<string, unknown>>;
+  execute: (
+    args: Record<string, unknown>,
+    exec: ToolRunContext,
+  ) => Promise<Record<string, unknown>>;
 };
 
 /** The minimal execution identity contextOf reads: the session header. */
@@ -111,10 +114,14 @@ function withPluginEnvironment(
       writeConfig(options.configYaml(workDir));
       const tools: CapturedTool[] = [];
       const warnings: string[] = [];
-      const handlers: Record<string, (session: { header: { id?: string; cwd?: string } }) => void> = {};
+      const handlers: Record<string, (session: { header: { id?: string; cwd?: string } }) => void> =
+        {};
       const ctx = {
         logger: () => ({ warn: (message: string) => warnings.push(message) }),
-        on: (event: string, handler: (session: { header: { id?: string; cwd?: string } }) => void) => {
+        on: (
+          event: string,
+          handler: (session: { header: { id?: string; cwd?: string } }) => void,
+        ) => {
           handlers[event] = handler;
         },
         tools: { register: (definition: unknown) => tools.push(definition as CapturedTool) },
@@ -176,45 +183,39 @@ describe("§6 セッション開始時の再読み込み（index.ts）", () => {
 });
 
 describe("§3 動的許可のセッション破棄（index.ts）", () => {
-  it(
-    "セッション終了で動的許可を破棄し、再開セッションでは再確認する",
-    async () => {
-      const { ui, questions } = scriptedUi([
-        { label: "Yes, allow" },
-        { label: "File only" },
-      ]);
-      await withPluginEnvironment(
-        {
-          configYaml: (workDir) => `\nwrite:\n  - ask: ${join(workDir, "dirW")}\n`,
-          ui,
-        },
-        async ({ tool, createSession, disposeSession, workDir }) => {
-          const dirW = join(workDir, "dirW");
-          createSession("s1", workDir);
-          const granted = await tool("ask_permission").execute(
-            { path: dirW, reason: "to edit files" },
-            execOf("s1", workDir),
-          );
-          assert.equal(granted.status, "granted");
-          // The grant covers writes for the rest of the session…
-          await tool("write").execute(
-            { file_path: join(dirW, "a.txt"), content: "x" },
-            execOf("s1", workDir),
-          );
-          assert.equal(questions.length, 1);
-          // …and §3 discards it when the session ends: the recreated session
-          // re-confirms the write (dialog 2).
-          disposeSession("s1");
-          createSession("s1", workDir);
-          await tool("write").execute(
-            { file_path: join(dirW, "a.txt"), content: "x" },
-            execOf("s1", workDir),
-          );
-          assert.equal(questions.length, 2);
-        },
-      )();
-    },
-  );
+  it("セッション終了で動的許可を破棄し、再開セッションでは再確認する", async () => {
+    const { ui, questions } = scriptedUi([{ label: "Yes, allow" }, { label: "File only" }]);
+    await withPluginEnvironment(
+      {
+        configYaml: (workDir) => `\nwrite:\n  - ask: ${join(workDir, "dirW")}\n`,
+        ui,
+      },
+      async ({ tool, createSession, disposeSession, workDir }) => {
+        const dirW = join(workDir, "dirW");
+        createSession("s1", workDir);
+        const granted = await tool("ask_permission").execute(
+          { path: dirW, reason: "to edit files" },
+          execOf("s1", workDir),
+        );
+        assert.equal(granted.status, "granted");
+        // The grant covers writes for the rest of the session…
+        await tool("write").execute(
+          { file_path: join(dirW, "a.txt"), content: "x" },
+          execOf("s1", workDir),
+        );
+        assert.equal(questions.length, 1);
+        // …and §3 discards it when the session ends: the recreated session
+        // re-confirms the write (dialog 2).
+        disposeSession("s1");
+        createSession("s1", workDir);
+        await tool("write").execute(
+          { file_path: join(dirW, "a.txt"), content: "x" },
+          execOf("s1", workDir),
+        );
+        assert.equal(questions.length, 2);
+      },
+    )();
+  });
 });
 
 describe("§2.4 観測のセッション破棄（index.ts）", () => {
@@ -256,8 +257,7 @@ describe("§6 無効 regex の警告（index.ts）", () => {
     "起動時に無効だったコマンドパターンを dsh ログへ警告する",
     withPluginEnvironment(
       {
-        configYaml: () =>
-          'commands:\n  - { allow: ".*" }\n  - { ask: [\'^\', "[unclosed"] }\n',
+        configYaml: () => 'commands:\n  - { allow: ".*" }\n  - { ask: [\'^\', "[unclosed"] }\n',
       },
       async ({ warnings }) => {
         assert.equal(warnings.length, 1);

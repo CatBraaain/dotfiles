@@ -274,10 +274,14 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           required: true,
           description: "Path to read; relative paths resolve against the session cwd.",
         },
-        offset: { type: "number", description: "1-based first line to return. Defaults to 1. Not applied to image files." },
+        offset: {
+          type: "number",
+          description: "1-based first line to return. Defaults to 1. Not applied to image files.",
+        },
         limit: {
           type: "number",
-          description: "Maximum number of lines to return. Defaults to and caps at 2000. Not applied to image files.",
+          description:
+            "Maximum number of lines to return. Defaults to and caps at 2000. Not applied to image files.",
         },
       },
       output: {
@@ -362,7 +366,11 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           exec,
           {
             tool: "read",
-            params: { file_path: filePath, ...("offset" in args ? { offset: args.offset } : {}), ...("limit" in args ? { limit: args.limit } : {}) },
+            params: {
+              file_path: filePath,
+              ...("offset" in args ? { offset: args.offset } : {}),
+              ...("limit" in args ? { limit: args.limit } : {}),
+            },
           },
           { mode: "fs", cwd: context.cwd, signal: exec.signal },
         );
@@ -396,7 +404,11 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           required: true,
           description: "Path to write; relative paths resolve against the session cwd.",
         },
-        content: { type: "string", required: true, description: "Full UTF-8 text content to write." },
+        content: {
+          type: "string",
+          required: true,
+          description: "Full UTF-8 text content to write.",
+        },
       },
       output: {
         schema: {
@@ -431,9 +443,7 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           {
             tool: "write",
             params: { file_path: filePath, content: args.content },
-            ...(observed !== undefined
-              ? { options: { observedMtimeMs: observed } }
-              : {}),
+            ...(observed !== undefined ? { options: { observedMtimeMs: observed } } : {}),
           },
           { mode: "fs", cwd: context.cwd, signal: exec.signal },
         );
@@ -471,7 +481,8 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
         },
         replace_all: {
           type: "boolean",
-          description: "Replace all matches. Defaults to false; when false, old_string must appear exactly once.",
+          description:
+            "Replace all matches. Defaults to false; when false, old_string must appear exactly once.",
         },
       },
       output: {
@@ -550,7 +561,8 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
         },
         path: {
           type: "string",
-          description: "Directory to search in. Defaults to the session workspace; a relative path resolves against it.",
+          description:
+            "Directory to search in. Defaults to the session workspace; a relative path resolves against it.",
         },
       },
       timeoutMs: searchTimeoutMs,
@@ -567,8 +579,7 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         const context = deps.contextOf(exec);
-        const searchPath =
-          args.path === undefined ? undefined : absolutePathOf(context, args.path);
+        const searchPath = args.path === undefined ? undefined : absolutePathOf(context, args.path);
         await context.sandbox.authorizePathWithConfirm(
           "read",
           searchPath ?? context.cwd,
@@ -583,7 +594,12 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
               ...(searchPath === undefined ? {} : { path: searchPath }),
             },
           },
-          { mode: "fs", cwd: searchPath ?? context.cwd, signal: exec.signal, timeoutMs: searchSafetyTimeoutMs },
+          {
+            mode: "fs",
+            cwd: searchPath ?? context.cwd,
+            signal: exec.signal,
+            timeoutMs: searchSafetyTimeoutMs,
+          },
         );
         return { paths: result.paths };
       },
@@ -596,14 +612,20 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
       description:
         "Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file, relative to the search directory. Returns the first 250 matches inline.",
       parameters: {
-        pattern: { type: "string", required: true, description: "Regular expression to search for (ripgrep syntax)." },
+        pattern: {
+          type: "string",
+          required: true,
+          description: "Regular expression to search for (ripgrep syntax).",
+        },
         path: {
           type: "string",
-          description: "File or directory to search. Defaults to the session workspace; a relative path resolves against it.",
+          description:
+            "File or directory to search. Defaults to the session workspace; a relative path resolves against it.",
         },
         include: {
           type: "string",
-          description: 'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.',
+          description:
+            'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.',
         },
       },
       timeoutMs: searchTimeoutMs,
@@ -634,8 +656,7 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         const context = deps.contextOf(exec);
-        const searchPath =
-          args.path === undefined ? undefined : absolutePathOf(context, args.path);
+        const searchPath = args.path === undefined ? undefined : absolutePathOf(context, args.path);
         await context.sandbox.authorizePathWithConfirm(
           "read",
           searchPath ?? context.cwd,
@@ -651,7 +672,12 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
               ...(args.include === undefined ? {} : { include: args.include }),
             },
           },
-          { mode: "fs", cwd: searchPath ?? context.cwd, signal: exec.signal, timeoutMs: searchSafetyTimeoutMs },
+          {
+            mode: "fs",
+            cwd: searchPath ?? context.cwd,
+            signal: exec.signal,
+            timeoutMs: searchSafetyTimeoutMs,
+          },
         );
         return { matches: result.matches };
       },
@@ -668,7 +694,8 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
       parameters: {
         path: {
           type: "string",
-          description: "Directory to list (default: the session cwd); a relative path resolves against it.",
+          description:
+            "Directory to list (default: the session cwd); a relative path resolves against it.",
         },
         limit: {
           type: "number",
@@ -712,7 +739,7 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
     defineTool({
       name: "bash",
       description:
-        "Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls — pass `workdir` instead of using `cd`. Non-zero exits are reported as `[exit code: N]`. The filesystem is sandboxed: writes outside approved paths fail with \"Read-only file system\". Do not retry such commands by other means; call ask_permission to approve the working directory subtree. Commands rejected with \"Command requires a reason\" must be re-requested via ask_permission with the same command and a reason; do not rewrite them to bypass the gate. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available.",
+        'Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls — pass `workdir` instead of using `cd`. Non-zero exits are reported as `[exit code: N]`. The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands by other means; call ask_permission to approve the working directory subtree. Commands rejected with "Command requires a reason" must be re-requested via ask_permission with the same command and a reason; do not rewrite them to bypass the gate. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available.',
       parameters: {
         command: { type: "string", required: true, description: "The bash command to execute." },
         description: {
@@ -727,7 +754,8 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
         },
         workdir: {
           type: "string",
-          description: "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.",
+          description:
+            "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.",
         },
       },
       output: {
@@ -774,8 +802,13 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           throw new Error("invalid command: expected a non-empty string");
         if (args.description.trim().length === 0)
           throw new Error("invalid description: expected a non-empty string");
-        if (args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0))
-          throw new Error(`invalid timeoutMs: expected a positive number, got ${JSON.stringify(args.timeoutMs)}`);
+        if (
+          args.timeoutMs !== undefined &&
+          (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)
+        )
+          throw new Error(
+            `invalid timeoutMs: expected a positive number, got ${JSON.stringify(args.timeoutMs)}`,
+          );
         const context = deps.contextOf(exec);
         const commandApproved = await context.sandbox.authorizeCommand(
           args.command,
@@ -922,4 +955,3 @@ export function renderBashResult(result: RunnerBashResult): string {
   if (!body.endsWith("\n")) body += "\n";
   return body + markers.join("\n");
 }
-

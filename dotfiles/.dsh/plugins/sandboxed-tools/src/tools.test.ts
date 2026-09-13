@@ -59,11 +59,17 @@ describe("§2.3 承認ノート", () => {
 describe("§4 EROFS ヒントとノートの追記順", () => {
   it("stdout/stderr に Read-only file system があれば EROFS と判定する", () => {
     assert.equal(
-      bashResultHasErofs(bashResult({ stdout: { text: "touch: cannot touch 'x': Read-only file system", truncated: false } })),
+      bashResultHasErofs(
+        bashResult({
+          stdout: { text: "touch: cannot touch 'x': Read-only file system", truncated: false },
+        }),
+      ),
       true,
     );
     assert.equal(
-      bashResultHasErofs(bashResult({ stderr: { text: "mkdir: Read-only file system", truncated: false } })),
+      bashResultHasErofs(
+        bashResult({ stderr: { text: "mkdir: Read-only file system", truncated: false } }),
+      ),
       true,
     );
     assert.equal(bashResultHasErofs(bashResult({})), false);
@@ -174,7 +180,9 @@ describe("§4 bash 結果テキスト", () => {
 
   it("タイムアウトは [timed out after Nms]、signal は [killed by signal: S]", () => {
     assert.equal(
-      renderBashResult(bashResult({ timedOut: true, timeoutMs: 5000, exitCode: null, signal: "SIGKILL" })),
+      renderBashResult(
+        bashResult({ timedOut: true, timeoutMs: 5000, exitCode: null, signal: "SIGKILL" }),
+      ),
       "(no output)\n[timed out after 5000ms]\n[killed by signal: SIGKILL]",
     );
   });

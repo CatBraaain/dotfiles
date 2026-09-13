@@ -36,14 +36,7 @@ import {
   validateGrepInclude,
 } from "./io-core";
 
-export type RunnerToolName =
-  | "read"
-  | "write"
-  | "edit"
-  | "glob"
-  | "grep"
-  | "ls"
-  | "bash";
+export type RunnerToolName = "read" | "write" | "edit" | "glob" | "grep" | "ls" | "bash";
 
 /** The stdin request envelope (host → runner). */
 export type RunnerRequest = {
@@ -86,7 +79,18 @@ export type RunnerBashResult = {
 };
 
 export type RunnerResponse =
-  | { ok: true; result: RunnerReadResult | RunnerWriteResult | RunnerEditResult | RunnerGlobResult | RunnerGrepResult | RunnerLsResult | RunnerImageBytesResult | RunnerBashResult }
+  | {
+      ok: true;
+      result:
+        | RunnerReadResult
+        | RunnerWriteResult
+        | RunnerEditResult
+        | RunnerGlobResult
+        | RunnerGrepResult
+        | RunnerLsResult
+        | RunnerImageBytesResult
+        | RunnerBashResult;
+    }
   | { ok: false; error: string };
 
 const RAW_OUTPUT_MAX_BYTES = 20 * 1024 * 1024;
@@ -137,7 +141,13 @@ function runRead(params: Record<string, unknown>): RunnerReadResult | RunnerImag
   const limit = params.limit === undefined ? 2000 : positiveInteger(params.limit, "limit");
   if (limit > 2000) throw new Error("limit must be less than or equal to 2000");
   const window = buildReadWindow(data.toString("utf8"), offset, limit);
-  return { path: filePath, offset, lines: window.lines, totalLines: window.totalLines, mtimeMs: statSync(filePath).mtimeMs };
+  return {
+    path: filePath,
+    offset,
+    lines: window.lines,
+    totalLines: window.totalLines,
+    mtimeMs: statSync(filePath).mtimeMs,
+  };
 }
 
 /** Enforce the §2.4 gate inside the sandbox: the last line of defense after
@@ -156,7 +166,10 @@ function assertUnchangedSinceRead(
   if (observedMtimeMs !== current) throw new Error(HAS_CHANGED(path));
 }
 
-function runWrite(params: Record<string, unknown>, observedMtimeMs: number | undefined): RunnerWriteResult {
+function runWrite(
+  params: Record<string, unknown>,
+  observedMtimeMs: number | undefined,
+): RunnerWriteResult {
   const filePath = requiredString(params.file_path, "file_path");
   if (typeof params.content !== "string") throw new Error("content must be a string");
   assertUnchangedSinceRead(filePath, observedMtimeMs, false);
@@ -166,7 +179,10 @@ function runWrite(params: Record<string, unknown>, observedMtimeMs: number | und
   return { path: filePath, operation, mtimeMs: statSync(filePath).mtimeMs };
 }
 
-function runEdit(params: Record<string, unknown>, observedMtimeMs: number | undefined): RunnerEditResult {
+function runEdit(
+  params: Record<string, unknown>,
+  observedMtimeMs: number | undefined,
+): RunnerEditResult {
   const filePath = requiredString(params.file_path, "file_path");
   const oldString = requiredString(params.old_string, "old_string");
   if (typeof params.new_string !== "string") throw new Error("new_string must be a string");
@@ -189,7 +205,8 @@ function runLs(params: Record<string, unknown>): RunnerLsResult {
   const limit = params.limit === undefined ? 500 : positiveInteger(params.limit, "limit");
   const directory = rawPath === undefined ? process.cwd() : rawPath;
   if (!existsSync(directory)) throw new Error(`cannot list "${directory}": not found`);
-  if (!statSync(directory).isDirectory()) throw new Error(`cannot list "${directory}": not a directory`);
+  if (!statSync(directory).isDirectory())
+    throw new Error(`cannot list "${directory}": not a directory`);
   const entries: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     let suffix = "";
@@ -210,8 +227,14 @@ function runLs(params: Record<string, unknown>): RunnerLsResult {
 
 type RgRun = { stdout: string; noMatches: boolean };
 
-function runRipgrep(rgPath: string | undefined, argv: string[], cwd: string, toolName: string): Promise<RgRun> {
-  if (rgPath === undefined) throw new Error(`${toolName} is unavailable: the ripgrep binary was not resolved`);
+function runRipgrep(
+  rgPath: string | undefined,
+  argv: string[],
+  cwd: string,
+  toolName: string,
+): Promise<RgRun> {
+  if (rgPath === undefined)
+    throw new Error(`${toolName} is unavailable: the ripgrep binary was not resolved`);
   return new Promise<RgRun>((resolveRun, rejectRun) => {
     const child = spawn(rgPath, ["--no-config", ...argv], {
       cwd,
@@ -249,7 +272,9 @@ function runRipgrep(rgPath: string | undefined, argv: string[], cwd: string, too
           rejectRun(new Error(`${toolName} pattern rejected by ripgrep: ${stderr}`));
         else
           rejectRun(
-            new Error(`${toolName} search failed (exit ${exitCode})${stderr.length > 0 ? `: ${stderr}` : ""}`),
+            new Error(
+              `${toolName} search failed (exit ${exitCode})${stderr.length > 0 ? `: ${stderr}` : ""}`,
+            ),
           );
         return;
       }
@@ -263,16 +288,17 @@ function runRipgrep(rgPath: string | undefined, argv: string[], cwd: string, too
  * it). A file path makes its directory the root with the file as the rg
  * target; a directory (or no path) searches that directory as cwd.
  */
-function resolveSearchRoot(
-  rawPath: string | undefined,
-): { searchRoot: string; target?: string } {
+function resolveSearchRoot(rawPath: string | undefined): { searchRoot: string; target?: string } {
   if (rawPath === undefined) return { searchRoot: process.cwd() };
   if (!existsSync(rawPath)) throw new Error(`cannot search "${rawPath}": not found`);
   if (statSync(rawPath).isDirectory()) return { searchRoot: rawPath };
   return { searchRoot: dirname(rawPath), target: basename(rawPath) };
 }
 
-async function runGlob(params: Record<string, unknown>, rgPath: string | undefined): Promise<RunnerGlobResult> {
+async function runGlob(
+  params: Record<string, unknown>,
+  rgPath: string | undefined,
+): Promise<RunnerGlobResult> {
   const pattern = requiredString(params.pattern, "pattern");
   const rawPath = optionalString(params.path, "path");
   const { searchRoot, target } = resolveSearchRoot(rawPath);
@@ -283,7 +309,10 @@ async function runGlob(params: Record<string, unknown>, rgPath: string | undefin
   return { paths: run.stdout.split("\n").filter((line) => line.length > 0) };
 }
 
-async function runGrep(params: Record<string, unknown>, rgPath: string | undefined): Promise<RunnerGrepResult> {
+async function runGrep(
+  params: Record<string, unknown>,
+  rgPath: string | undefined,
+): Promise<RunnerGrepResult> {
   if (typeof params.pattern !== "string" || params.pattern.length === 0)
     throw new Error("pattern must be a non-empty string");
   const rawPath = optionalString(params.path, "path");
@@ -301,7 +330,10 @@ async function runGrep(params: Record<string, unknown>, rgPath: string | undefin
 // bash (SPEC §4)
 // ---------------------------------------------------------------------------
 
-async function runBash(params: Record<string, unknown>, options: NonNullable<RunnerRequest["options"]>): Promise<RunnerBashResult> {
+async function runBash(
+  params: Record<string, unknown>,
+  options: NonNullable<RunnerRequest["options"]>,
+): Promise<RunnerBashResult> {
   const command = requiredString(params.command, "command");
   if (params.workdir !== undefined) optionalString(params.workdir, "workdir");
   const requested =
@@ -378,9 +410,9 @@ async function runBash(params: Record<string, unknown>, options: NonNullable<Run
 // dispatch + main
 // ---------------------------------------------------------------------------
 
-export async function executeRequest(request: RunnerRequest): Promise<
-  Exclude<RunnerResponse, { ok: false }>["result"]
-> {
+export async function executeRequest(
+  request: RunnerRequest,
+): Promise<Exclude<RunnerResponse, { ok: false }>["result"]> {
   const options = request.options ?? {};
   switch (request.tool) {
     case "read":

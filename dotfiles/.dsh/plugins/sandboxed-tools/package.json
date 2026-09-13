@@ -6,11 +6,6 @@
   "exports": {
     ".": "./dist/index.js"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
   "dependencies": {
     "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
     "@vscode/ripgrep": "^1.18.0",
@@ -19,5 +14,10 @@
   },
   "devDependencies": {
     "@types/bun": "latest"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

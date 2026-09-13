@@ -12,8 +12,7 @@ import { join } from "node:path";
 // erased at build time, so they are exempt.
 
 const dependencies = Object.keys(
-  JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"))
-    .dependencies ?? {},
+  JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")).dependencies ?? {},
 );
 
 function runtimeBareImports(source: string): string[] {
@@ -41,10 +40,6 @@ describe("§ dependencies 宣言", () => {
         ])
         .filter(([, list]) => (list as string[]).length > 0),
     );
-    assert.deepEqual(
-      missing,
-      {},
-      "runtime imports missing from package.json dependencies",
-    );
+    assert.deepEqual(missing, {}, "runtime imports missing from package.json dependencies");
   });
 });
