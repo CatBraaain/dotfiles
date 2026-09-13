@@ -27,7 +27,9 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 | `maxResults` 指定あり | 結果の上位 `maxResults` 件に cap |
 | `maxResults` 指定なし | 上位 10 件に cap |
 
+- openserp の結果は契約の `WebSearchSource` へ射影して返す。`url` の無いエントリは捨て、`title`・`snippet` は空白時に省略する。openserp の `type`・`display_url` と、pi が検索結果 Markdown に付けていた `**Query:**` / `**Took:**` メタデータ行は契約型に置き場がなく出力しない
 - 言語ヒントは対応しない。dsh 契約の `WebSearchRequest` に lang フィールドが存在せず、検索は言語指定なしで行われる
+- エンジン試行にクールダウンはなく、失敗したバックエンドも次回のリクエストでは通常どおり google → duckduckgo → bing の順で試行する
 - `available()` は、`bun`、`openserp`、`playwright-cli` の 3 バイナリが PATH 上で見つかること、および camoufox ブラウザ実行ファイル（環境変数 `CAMOUFOX_EXECUTABLE_PATH`、既定 `~/.cache/camoufox/camoufox-bin`）が存在することを条件とする。ネットワークアクセスは行わない
 
 ## fetch provider（id: `camoufox-trafilatura`）
@@ -42,6 +44,8 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 
 - 成功結果は契約に従い `body: { kind: 'text', content: <Markdown> }` として返す。`statusCode` は `200`、`url` は入力 URL または経路ごとの正規化 URL（Reddit は permalink）を返す
 - 描画は challenge 検出シグナル（Cloudflare 4 種、Google CAPTCHA 4 種）を用い、検出時はその backend の失敗として扱う
+- タイトル抽出（pi 本家の `titleFromMarkdown`、h1 と `## N.` 見出しからの抽出）と結果行の表示は本家 tool-web 側の职责で、plugin には表示フックが無いため行わない
+- 各経路の試行にクールダウンはなく、失敗したバックエンドも次回のリクエストでは通常どおり記載の順序で試行する
 - `available()` は search provider と同一条件とする
 
 ## 常駐サーバー
