@@ -45,6 +45,7 @@ __export(exports_client, {
 });
 module.exports = __toCommonJS(exports_client);
 var import_react = require("react");
+var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 
 // src/client/format.ts
 function formatSessionLabel(sessionId) {
@@ -58,13 +59,34 @@ function registerSessionIdFooter(ctx, component) {
 
 // src/client/index.ts
 var inject = ["slots"];
-var FOOTER_STYLE = {
-  color: "var(--dsw-alias-label-tertiary)",
-  fontSize: "var(--dsh-content-font-size-secondary, 13px)",
-  lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))"
-};
+var COPIED_RESET_MS = 1000;
 function SessionIdFooter({ sessionId }) {
-  return import_react.createElement("div", { style: FOOTER_STYLE }, formatSessionLabel(sessionId));
+  const [copied, setCopied] = import_react.useState(false);
+  const resetTimer = import_react.useRef(null);
+  import_react.useEffect(() => () => {
+    if (resetTimer.current !== null)
+      clearTimeout(resetTimer.current);
+  }, []);
+  const onCopy = () => {
+    if (resetTimer.current !== null)
+      return;
+    import_dsh_client_ui_primitives.writeClipboard(sessionId).then((ok) => {
+      if (!ok || resetTimer.current !== null)
+        return;
+      setCopied(true);
+      resetTimer.current = setTimeout(() => {
+        resetTimer.current = null;
+        setCopied(false);
+      }, COPIED_RESET_MS);
+    });
+  };
+  return import_react.createElement(import_dsh_client_ui_primitives.Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: onCopy,
+    title: copied ? "Copied" : "Copy session ID",
+    icon: import_react.createElement(copied ? import_dsh_client_ui_primitives.IconCheckOutline16 : import_dsh_client_ui_primitives.IconCopyOutline16)
+  }, formatSessionLabel(sessionId));
 }
 function apply(ctx) {
   registerSessionIdFooter(ctx, SessionIdFooter);

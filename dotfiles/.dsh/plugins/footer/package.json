@@ -7,10 +7,17 @@
     ".": "./dist/index.js",
     "./client": "./lib/client.js"
   },
+  "devDependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.2",
+    "@types/react": "~18.3.1"
+  },
   "dsh": {
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-renderer"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
     },
     "bundle": {
       "patch": "./cordis.patch.yml"

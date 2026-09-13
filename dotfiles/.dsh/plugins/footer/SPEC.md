@@ -6,13 +6,15 @@ dsh web UI の composer 下に、現在のセッション ID を常時表示す�
 
 ## 表示
 
-composer 下 dock に現在のセッション ID を表示する。文字色の指定がない限り gray 系（dim）で統一する。
+composer 下 dock に、現在のセッション ID をコピーできる dsh 標準 `Button`（`@deepseek-ai/dsh-client-ui-primitives`、ghost / sm）を表示する。
 
 | 状態 | 表示 |
 | --- | --- |
-| 常時 | 現在のセッションの ID を省略せず全文字表示する。セッションの切替・作成に追従する |
+| 常時 | `session: <id>` ラベル（pi footer と同じ形式）とコピーアイコン。ID は省略せず全文字表示し、セッションの切替・作成に追従する |
+| クリック | セッション ID のみ（`session: ` prefix を除く）をクリップボードへコピーする |
+| コピー成功後 | 1 秒間チェックアイコンに切り替え、その後コピーアイコンへ戻す |
 
-- 表示書式は `session: <id>`（pi footer と同じ形式）とする
+- ボタンの見た目は dsh 標準の `--dsw-alias-button-*` トークンに従い、独自の色指定はしない
 - セッション ID は client slot の標準 props（`scope: 'session'` の `sessionId`）から取得し、表示のための host 側配線を持たない
 
 ## 対象外

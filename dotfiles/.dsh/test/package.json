@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "devDependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.2",
     "@types/bun": "latest",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.0",

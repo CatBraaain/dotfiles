@@ -1,5 +1,5 @@
-/** Browser client half: keep the current session id visible under the composer. */
-import { createElement, type ReactNode } from 'react'
+/** Browser client half: keep the current session id visible (and copyable) under the composer. */
+import { createElement, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 // Context augmentation: the `ctx.slots` registry service.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -7,6 +7,13 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // SessionStandardProps augmentation: session-scope slot props carry `sessionId`.
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+// Shell-resident UI primitives: standard button, copy icons, clipboard helper.
+import {
+  Button,
+  IconCheckOutline16,
+  IconCopyOutline16,
+  writeClipboard,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { formatSessionLabel } from './format'
 import { registerSessionIdFooter } from './apply'
@@ -23,15 +30,41 @@ interface SessionIdFooterProps {
   readonly sessionId: SessionId
 }
 
-/** Dim secondary text matching the neighboring StatsPills row. */
-const FOOTER_STYLE: Readonly<Record<string, string>> = {
-  color: 'var(--dsw-alias-label-tertiary)',
-  fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
-  lineHeight: 'calc(20px + var(--dsh-content-font-delta-secondary, 0px))',
-}
+/** How long the check icon stays before reverting to the copy icon. */
+const COPIED_RESET_MS = 1000
 
 function SessionIdFooter({ sessionId }: SessionIdFooterProps): ReactNode {
-  return createElement('div', { style: FOOTER_STYLE }, formatSessionLabel(sessionId))
+  const [copied, setCopied] = useState(false)
+  /** Non-null while the copied flag is showing; doubles as the re-click guard. */
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clear the pending revert when the footer unmounts (session switch).
+  useEffect(
+    () => () => {
+      if (resetTimer.current !== null) clearTimeout(resetTimer.current)
+    },
+    [],
+  )
+
+  const onCopy = (): void => {
+    if (resetTimer.current !== null) return
+    void writeClipboard(sessionId).then((ok) => {
+      if (!ok || resetTimer.current !== null) return
+      setCopied(true)
+      resetTimer.current = setTimeout(() => {
+        resetTimer.current = null
+        setCopied(false)
+      }, COPIED_RESET_MS)
+    })
+  }
+
+  return createElement(Button, {
+    variant: 'ghost',
+    size: 'sm',
+    onClick: onCopy,
+    title: copied ? 'Copied' : 'Copy session ID',
+    icon: createElement(copied ? IconCheckOutline16 : IconCopyOutline16),
+  }, formatSessionLabel(sessionId))
 }
 
 /** Wire the footer entry into the composer dock (registration path lives in ./apply). */
