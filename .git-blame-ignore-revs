@@ -1,0 +1,7 @@
+# git-blame-ignore-revs
+#
+# Commits to skip in git blame (large mechanical changes).
+# Local setup: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style(dsh-plugins): apply vp fmt defaults to all plugin sources
+34e90f91a54a92f367115fde1ce799516d3ea49f
