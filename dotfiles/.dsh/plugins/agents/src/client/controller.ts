@@ -1,14 +1,14 @@
 /** Poll the host for the agent/class state; kept react-free for unit tests. */
-import type { AgentDisplayState } from './format'
+import type { AgentDisplayState } from "./format";
 
 /** Host-facing callbacks and clock, injectable for tests. */
 export interface StatePollerDeps {
   /** Fetch the current display state from the host. */
-  readonly fetchState: () => Promise<AgentDisplayState>
+  readonly fetchState: () => Promise<AgentDisplayState>;
   /** Receive every successful fetch. */
-  readonly onState: (state: AgentDisplayState) => void
-  readonly setInterval: (callback: () => void, intervalMs: number) => unknown
-  readonly clearInterval: (handle: unknown) => void
+  readonly onState: (state: AgentDisplayState) => void;
+  readonly setInterval: (callback: () => void, intervalMs: number) => unknown;
+  readonly clearInterval: (handle: unknown) => void;
 }
 
 /**
@@ -17,20 +17,20 @@ export interface StatePollerDeps {
  * disconnect or reconnect never blanks the display. Returns the stop function.
  */
 export function startStatePoller(intervalMs: number, deps: StatePollerDeps): () => void {
-  let stopped = false
+  let stopped = false;
   const poll = async (): Promise<void> => {
-    if (stopped) return
+    if (stopped) return;
     try {
-      const state = await deps.fetchState()
-      if (!stopped) deps.onState(state)
+      const state = await deps.fetchState();
+      if (!stopped) deps.onState(state);
     } catch {
       // Keep the last known state; the next tick retries.
     }
-  }
-  void poll()
-  const handle = deps.setInterval(() => void poll(), intervalMs)
+  };
+  void poll();
+  const handle = deps.setInterval(() => void poll(), intervalMs);
   return () => {
-    stopped = true
-    deps.clearInterval(handle)
-  }
+    stopped = true;
+    deps.clearInterval(handle);
+  };
 }

@@ -37,7 +37,10 @@ describe("isRateLimitFailure", () => {
 
 describe("cooldownMs", () => {
   it("prefers a positive providerRetryAfterMs and falls back to the default", () => {
-    assert.equal(cooldownMs({ message: "x", code: "RATE_LIMIT", providerRetryAfterMs: 5000 }), 5000);
+    assert.equal(
+      cooldownMs({ message: "x", code: "RATE_LIMIT", providerRetryAfterMs: 5000 }),
+      5000,
+    );
     assert.equal(
       cooldownMs({ message: "x", code: "RATE_LIMIT", providerRetryAfterMs: -1 }),
       DEFAULT_COOLDOWN_MS,

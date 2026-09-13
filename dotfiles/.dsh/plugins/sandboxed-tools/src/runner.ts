@@ -433,7 +433,11 @@ export async function executeRequest(
     case "read":
       return runRead(request.params);
     case "write":
-      return runWrite(request.params, options.observedMtimeMs, options.approvalCreatedFile === true);
+      return runWrite(
+        request.params,
+        options.observedMtimeMs,
+        options.approvalCreatedFile === true,
+      );
     case "edit":
       return runEdit(request.params, options.observedMtimeMs);
     case "glob":

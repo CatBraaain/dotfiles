@@ -11,6 +11,6 @@
  * dotfiles/.dsh/README.md).
  */
 
-export const name = 'dsh-titlebar'
+export const name = "dsh-titlebar";
 
 export function apply(): void {}

@@ -74,7 +74,10 @@ describe("catalogBaseUrl", () => {
     ];
     const base = catalogBaseUrl(mixed);
     assert.equal(base, "https://openrouter.ai/api/v1");
-    assert.equal(endpointUrl("openai-completions", base ?? ""), "https://openrouter.ai/api/v1/models");
+    assert.equal(
+      endpointUrl("openai-completions", base ?? ""),
+      "https://openrouter.ai/api/v1/models",
+    );
   });
 
   it("keeps the first entry when paths have the same depth", () => {
@@ -152,13 +155,12 @@ describe("extractRemoteModels", () => {
 
   it("filters non-chat models by id", () => {
     const models = extractRemoteModels("openai", {
-      data: [
-        { id: "text-embedding-3" },
-        { id: "glm-6-tts" },
-        { id: "glm-6" },
-      ],
+      data: [{ id: "text-embedding-3" }, { id: "glm-6-tts" }, { id: "glm-6" }],
     });
-    assert.deepEqual(models.map((model) => model.id), ["glm-6"]);
+    assert.deepEqual(
+      models.map((model) => model.id),
+      ["glm-6"],
+    );
   });
 
   it("enriches OpenRouter entries with metadata and pricing", () => {
@@ -225,7 +227,11 @@ describe("composeProviderModels", () => {
       "glm-5.3": { limit: { context: 2_000_000 } },
     },
   };
-  const remote = [{ id: "glm-5.3" }, { id: "glm-5.3-flash" }, { id: "glm-6", name: "GLM-6 Endpoint" }];
+  const remote = [
+    { id: "glm-5.3" },
+    { id: "glm-5.3-flash" },
+    { id: "glm-6", name: "GLM-6 Endpoint" },
+  ];
 
   it("synthesizes the whole list when no user models exist", () => {
     const result = composeProviderModels({
@@ -279,14 +285,26 @@ describe("composeProviderModels", () => {
 
   it("drops plugin-appended ids the remote no longer lists, but keeps catalog ids", () => {
     const userModels: ModelEntry[] = [
-      { id: "glm-9-preview", name: "GLM-9 Preview", contextWindow: 128000, maxTokens: 16384, input: ["text"] },
+      {
+        id: "glm-9-preview",
+        name: "GLM-9 Preview",
+        contextWindow: 128000,
+        maxTokens: 16384,
+        input: ["text"],
+      },
       { id: "glm-5.3" },
     ];
     const result = composeProviderModels({
       installed: zaiInstalled,
       userModels,
       previousWritten: [
-        { id: "glm-9-preview", name: "GLM-9 Preview", contextWindow: 128000, maxTokens: 16384, input: ["text"] },
+        {
+          id: "glm-9-preview",
+          name: "GLM-9 Preview",
+          contextWindow: 128000,
+          maxTokens: 16384,
+          input: ["text"],
+        },
         { id: "glm-5.3" },
       ],
       remote: [{ id: "glm-5.3" }],
@@ -420,7 +438,11 @@ describe("cache", () => {
     assert.equal(isCacheStale(undefined, now), true);
     assert.equal(isCacheStale(now - CACHE_TTL_MS + 1, now), false);
     assert.equal(isCacheStale(now - CACHE_TTL_MS, now), true);
-    const cached = { baseUrl: "https://api.z.ai/api/coding/paas/v4", fetchedAt: now, models: [{ id: "glm-6" }] };
+    const cached = {
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+      fetchedAt: now,
+      models: [{ id: "glm-6" }],
+    };
     assert.equal(isCachedProviderUsable(cached, "https://api.z.ai/api/coding/paas/v4", now), true);
     assert.equal(isCachedProviderUsable(cached, "https://other.example.com", now), false);
   });

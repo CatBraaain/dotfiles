@@ -12,32 +12,32 @@
 
 /** Route provider ids this display knows how to map onto a quota row. */
 const QUOTA_BY_ROUTE_PROVIDER: Readonly<Record<string, string>> = {
-  zai: 'zai',
-  'zai-coding-cn': 'zai',
-  'openai-codex': 'codex',
-}
+  zai: "zai",
+  "zai-coding-cn": "zai",
+  "openai-codex": "codex",
+};
 
 export interface ActiveProviderServices {
   sessions?: {
     list?: {
-      getSnapshot?(): { current?: unknown } | undefined
-      subscribe?(fn: () => void): () => void
-    }
-  }
+      getSnapshot?(): { current?: unknown } | undefined;
+      subscribe?(fn: () => void): () => void;
+    };
+  };
   modelDirectories?: {
     directoryFor?(sessionId: string): {
       store?: {
-        getSnapshot?(): { current?: { provider?: unknown } | null } | undefined
-        subscribe?(fn: () => void): () => void
-      }
-    }
-  }
+        getSnapshot?(): { current?: { provider?: unknown } | null } | undefined;
+        subscribe?(fn: () => void): () => void;
+      };
+    };
+  };
 }
 
 /** Map a dsh route provider id onto the quota row id it feeds, if any. */
 export function quotaIdForRouteProvider(routeProvider: string | undefined): string | undefined {
-  if (routeProvider === undefined || routeProvider === '') return undefined
-  return QUOTA_BY_ROUTE_PROVIDER[routeProvider]
+  if (routeProvider === undefined || routeProvider === "") return undefined;
+  return QUOTA_BY_ROUTE_PROVIDER[routeProvider];
 }
 
 /**
@@ -46,19 +46,20 @@ export function quotaIdForRouteProvider(routeProvider: string | undefined): stri
  * ready. Exported for the offline test.
  */
 export function resolveActiveRouteProvider(services: ActiveProviderServices): string | undefined {
-  let current: unknown
+  let current: unknown;
   try {
-    current = services.sessions?.list?.getSnapshot?.()?.current
+    current = services.sessions?.list?.getSnapshot?.()?.current;
   } catch {
-    return undefined
+    return undefined;
   }
-  if (typeof current !== 'string' || current === '') return undefined
+  if (typeof current !== "string" || current === "") return undefined;
   try {
-    const provider = services.modelDirectories?.directoryFor?.(current)?.store?.getSnapshot?.()?.current?.provider
-    return typeof provider === 'string' && provider !== '' ? provider : undefined
+    const provider = services.modelDirectories?.directoryFor?.(current)?.store?.getSnapshot?.()
+      ?.current?.provider;
+    return typeof provider === "string" && provider !== "" ? provider : undefined;
   } catch {
     // Session scope not resolvable yet — the next list event retries.
-    return undefined
+    return undefined;
   }
 }
 
@@ -69,30 +70,33 @@ export function resolveActiveRouteProvider(services: ActiveProviderServices): st
  * every session switch, so a late projection load still lands. Returns the
  * combined unsubscribe.
  */
-export function subscribeActiveChange(services: ActiveProviderServices, onChange: () => void): () => void {
-  const sessions = services.sessions
-  if (typeof sessions?.list?.subscribe !== 'function') return () => {}
-  let directoryUnsub: (() => void) | null = null
+export function subscribeActiveChange(
+  services: ActiveProviderServices,
+  onChange: () => void,
+): () => void {
+  const sessions = services.sessions;
+  if (typeof sessions?.list?.subscribe !== "function") return () => {};
+  let directoryUnsub: (() => void) | null = null;
   const followDirectory = () => {
-    directoryUnsub?.()
-    directoryUnsub = null
-    const current = sessions?.list?.getSnapshot?.()?.current
-    if (typeof current === 'string' && current !== '') {
+    directoryUnsub?.();
+    directoryUnsub = null;
+    const current = sessions?.list?.getSnapshot?.()?.current;
+    if (typeof current === "string" && current !== "") {
       try {
-        const store = services.modelDirectories?.directoryFor?.(current)?.store
-        if (typeof store?.subscribe === 'function') directoryUnsub = store.subscribe(onChange)
+        const store = services.modelDirectories?.directoryFor?.(current)?.store;
+        if (typeof store?.subscribe === "function") directoryUnsub = store.subscribe(onChange);
       } catch {
         /* directory not resolvable yet — the next session-list event retries */
       }
     }
-  }
+  };
   const offList = sessions.list.subscribe(() => {
-    followDirectory()
-    onChange()
-  })
-  followDirectory()
+    followDirectory();
+    onChange();
+  });
+  followDirectory();
   return () => {
-    offList?.()
-    directoryUnsub?.()
-  }
+    offList?.();
+    directoryUnsub?.();
+  };
 }

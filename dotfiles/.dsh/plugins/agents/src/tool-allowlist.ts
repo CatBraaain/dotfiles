@@ -22,7 +22,10 @@ export interface TranslateResult {
 // Split entries into allow/deny name sets. `"*"` marks allow-everything.
 // Unknown names (not in `known`) are collected into `skipped` and excluded
 // from both sets.
-export function translateTools(entries: readonly string[], known: ReadonlySet<string>): TranslateResult {
+export function translateTools(
+  entries: readonly string[],
+  known: ReadonlySet<string>,
+): TranslateResult {
   const allow = new Set<string>();
   const deny = new Set<string>();
   const skipped: string[] = [];

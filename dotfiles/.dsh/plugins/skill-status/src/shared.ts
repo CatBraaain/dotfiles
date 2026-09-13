@@ -12,13 +12,13 @@
  */
 
 /** Session-projection key publishing the first-use ordered used-skill names. */
-export const SKILL_STATUS_PROJECTION_KEY = 'skillStatus'
+export const SKILL_STATUS_PROJECTION_KEY = "skillStatus";
 
 /** Client-visible projection value: the used skill names in first-use order. */
-export type SkillStatusProjectionView = readonly string[]
+export type SkillStatusProjectionView = readonly string[];
 
-declare module '@deepseek-ai/dsh-session-projection/types' {
-    interface SessionProjectionMap {
-        skillStatus: SkillStatusProjectionView
-    }
+declare module "@deepseek-ai/dsh-session-projection/types" {
+  interface SessionProjectionMap {
+    skillStatus: SkillStatusProjectionView;
+  }
 }

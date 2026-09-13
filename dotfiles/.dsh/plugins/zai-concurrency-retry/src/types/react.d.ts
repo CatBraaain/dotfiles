@@ -7,10 +7,10 @@
  * available to the typecheck environment.
  */
 declare module "react" {
-    export type ReactNode = unknown
-    export function createElement(
-        type: string,
-        props: Record<string, unknown> | null,
-        ...children: readonly unknown[]
-    ): ReactNode
+  export type ReactNode = unknown;
+  export function createElement(
+    type: string,
+    props: Record<string, unknown> | null,
+    ...children: readonly unknown[]
+  ): ReactNode;
 }

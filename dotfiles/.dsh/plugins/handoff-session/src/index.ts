@@ -140,7 +140,10 @@ interface HandoffContext {
   userQuestions: UserQuestions;
   /** Optional service: absent in rosterless deployments (host-plane tools only). */
   get(service: "agentPresets"): AgentPresets | undefined;
-  effect(execute: () => Generator<Disposer | Promise<void>, void, unknown>, label?: string): unknown;
+  effect(
+    execute: () => Generator<Disposer | Promise<void>, void, unknown>,
+    label?: string,
+  ): unknown;
 }
 
 export function apply(ctx: HandoffContext): void {
@@ -247,9 +250,7 @@ async function executeHandoff(
   const handle = await ctx.agents.create({
     sessionId: newSessionId,
     signal: exec.signal,
-    ...(provider === undefined && model === undefined
-      ? {}
-      : { agentOptions: { provider, model } }),
+    ...(provider === undefined && model === undefined ? {} : { agentOptions: { provider, model } }),
     meta: {
       ...(header.cwd === undefined ? {} : { cwd: header.cwd }),
       ...(presetId === undefined ? {} : { agentPreset: presetId }),

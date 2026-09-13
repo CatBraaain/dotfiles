@@ -38,17 +38,27 @@ describe("withDefaultEffort", () => {
 
   it("keeps the base config when the model advertises only off", () => {
     const base = { provider: "zai", model: "glm-4.7" };
-    assert.deepEqual(withDefaultEffort(base, ["off"], (level) => level), base);
+    assert.deepEqual(
+      withDefaultEffort(base, ["off"], (level) => level),
+      base,
+    );
   });
 
   it("keeps the base config when nothing is advertised (catalog unresolved)", () => {
     const base = { provider: "zai", model: "glm-5.3" };
-    assert.deepEqual(withDefaultEffort(base, [], (level) => level), base);
+    assert.deepEqual(
+      withDefaultEffort(base, [], (level) => level),
+      base,
+    );
   });
 
   it("keeps an explicit selection untouched (no fallback applies)", () => {
     assert.deepEqual(
-      withDefaultEffort({ reasoningEffort: "low" }, ["off", "high", "max"], (level) => `E:${level}`),
+      withDefaultEffort(
+        { reasoningEffort: "low" },
+        ["off", "high", "max"],
+        (level) => `E:${level}`,
+      ),
       { reasoningEffort: "low" },
     );
   });

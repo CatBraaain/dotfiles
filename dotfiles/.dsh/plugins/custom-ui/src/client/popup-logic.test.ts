@@ -1,6 +1,12 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { chordPopupTarget, optionsOf, rowId, selectionOf, type DirectoryState } from "./popup-logic.ts";
+import {
+  chordPopupTarget,
+  optionsOf,
+  rowId,
+  selectionOf,
+  type DirectoryState,
+} from "./popup-logic.ts";
 
 const state: DirectoryState = {
   current: { provider: "zai", model: "glm-5.3", reasoningEffort: "high" },
@@ -9,7 +15,12 @@ const state: DirectoryState = {
       id: "zai",
       name: "Z.AI",
       models: [
-        { id: "glm-5.3", name: "GLM-5.3", description: "Flagship coding model", reasoning: { defaultEffort: "max" } },
+        {
+          id: "glm-5.3",
+          name: "GLM-5.3",
+          description: "Flagship coding model",
+          reasoning: { defaultEffort: "max" },
+        },
         { id: "glm-5.2-highspeed", name: "glm-5.2-highspeed" },
       ],
     },
@@ -38,7 +49,10 @@ describe("optionsOf", () => {
 
   it("marks only the current selection active", () => {
     const active = optionsOf(state).filter((row) => row.active);
-    assert.deepEqual(active.map((row) => row.id), ["zai/glm-5.3"]);
+    assert.deepEqual(
+      active.map((row) => row.id),
+      ["zai/glm-5.3"],
+    );
   });
 });
 
@@ -74,14 +88,23 @@ describe("selectionOf", () => {
 
 describe("chordPopupTarget", () => {
   it("returns the current ordinary session", () => {
-    assert.equal(chordPopupTarget("s1", () => undefined), "s1");
+    assert.equal(
+      chordPopupTarget("s1", () => undefined),
+      "s1",
+    );
   });
 
   it("returns undefined when no session is current (New Session screen)", () => {
-    assert.equal(chordPopupTarget(undefined, () => undefined), undefined);
+    assert.equal(
+      chordPopupTarget(undefined, () => undefined),
+      undefined,
+    );
   });
 
   it("returns undefined for an addressed subagent session (same availability as /model)", () => {
-    assert.equal(chordPopupTarget("s1", (id) => (id === "s1" ? { parent: "p" } : undefined)), undefined);
+    assert.equal(
+      chordPopupTarget("s1", (id) => (id === "s1" ? { parent: "p" } : undefined)),
+      undefined,
+    );
   });
 });

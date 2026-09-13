@@ -35,7 +35,11 @@ export function waitEventData(data: unknown): ZaiRetryWaitData | undefined {
     | { readonly provider?: unknown; readonly attempt?: unknown; readonly waitMs?: unknown }
     | undefined;
   if (typeof record?.provider !== "string" || record.provider === "") return undefined;
-  if (typeof record?.attempt !== "number" || !Number.isInteger(record.attempt) || record.attempt < 1)
+  if (
+    typeof record?.attempt !== "number" ||
+    !Number.isInteger(record.attempt) ||
+    record.attempt < 1
+  )
     return undefined;
   if (typeof record?.waitMs !== "number" || !Number.isFinite(record.waitMs) || record.waitMs <= 0)
     return undefined;
@@ -57,7 +61,9 @@ export const zaiRetryWaitDefinition: ConversationNodeDefinition<ZaiRetryWaitStat
   target: "chat",
   match(event) {
     if (event.type !== ZAI_RETRY_WAIT_EVENT_TYPE) return null;
-    return waitEventData(event.data) === undefined ? null : { id: `wait-${event.seq}`, role: "start" };
+    return waitEventData(event.data) === undefined
+      ? null
+      : { id: `wait-${event.seq}`, role: "start" };
   },
   start(_context, match) {
     const data = waitEventData(match.event.data);
@@ -72,8 +78,8 @@ export const zaiRetryWaitDefinition: ConversationNodeDefinition<ZaiRetryWaitStat
   buildViewNode(context) {
     const state = context.state;
     if (state === undefined) return null;
-    const location: ConversationLocation =
-      context.start?.location ?? context.matches[0]?.location ?? { kind: "unresolved" };
+    const location: ConversationLocation = context.start?.location ??
+      context.matches[0]?.location ?? { kind: "unresolved" };
     return {
       key: context.key,
       kind: ZAI_RETRY_WAIT_EVENT_TYPE,

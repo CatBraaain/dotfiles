@@ -189,15 +189,24 @@ export function authHeaders(
  * OpenAI-compatible endpoints get `name` at most, even if their payload
  * carries OpenRouter-shaped fields.
  */
-export function extractRemoteModels(shape: ResponseShape, payload: unknown, openrouter = false): RemoteModel[] {
+export function extractRemoteModels(
+  shape: ResponseShape,
+  payload: unknown,
+  openrouter = false,
+): RemoteModel[] {
   const response = asRecord(payload);
   if (!response) return [];
   const models =
-    shape === "anthropic" ? extractAnthropicModels(response) : extractOpenAiModels(response, openrouter);
+    shape === "anthropic"
+      ? extractAnthropicModels(response)
+      : extractOpenAiModels(response, openrouter);
   return models.filter((model) => !isExcludedModel(model.id));
 }
 
-function extractOpenAiModels(response: Record<string, unknown>, openrouter: boolean): RemoteModel[] {
+function extractOpenAiModels(
+  response: Record<string, unknown>,
+  openrouter: boolean,
+): RemoteModel[] {
   const data = asArray(response.data);
   if (!data) return [];
   return data.flatMap((entry) => {
@@ -221,7 +230,10 @@ function extractAnthropicModels(response: Record<string, unknown>): RemoteModel[
   });
 }
 
-function enrichOpenRouterModel(remoteModel: RemoteModel, model: Record<string, unknown> | undefined): void {
+function enrichOpenRouterModel(
+  remoteModel: RemoteModel,
+  model: Record<string, unknown> | undefined,
+): void {
   if (!model) return;
 
   const supportedParameters = asArray(model.supported_parameters);
@@ -337,7 +349,8 @@ export function composeProviderModels(input: ComposeInput): ComposeResult {
   const newIds: string[] = [];
   const removedIds: string[] = [];
 
-  const currentList = userModels ?? installed.map((model) => ({ id: model.id }) satisfies ModelEntry);
+  const currentList =
+    userModels ?? installed.map((model) => ({ id: model.id }) satisfies ModelEntry);
 
   for (const entry of currentList) {
     keptIds.add(entry.id);
@@ -347,7 +360,9 @@ export function composeProviderModels(input: ComposeInput): ComposeResult {
 
     if (remoteModel) {
       if (owned) {
-        entries.push(composeEntry(entry.id, remoteModel, modelsDevProvider, base, sharedApi, installed));
+        entries.push(
+          composeEntry(entry.id, remoteModel, modelsDevProvider, base, sharedApi, installed),
+        );
       } else {
         entries.push(entry);
       }
@@ -365,7 +380,16 @@ export function composeProviderModels(input: ComposeInput): ComposeResult {
   for (const model of remote) {
     if (keptIds.has(model.id)) continue;
     keptIds.add(model.id);
-    entries.push(composeEntry(model.id, model, modelsDevProvider, installedById.get(model.id), sharedApi, installed));
+    entries.push(
+      composeEntry(
+        model.id,
+        model,
+        modelsDevProvider,
+        installedById.get(model.id),
+        sharedApi,
+        installed,
+      ),
+    );
     newIds.push(model.id);
   }
 
@@ -392,7 +416,8 @@ function composeEntry(
   if (name !== undefined) entry.name = name;
   else if (!base) entry.name = id;
 
-  const contextWindow = positiveInt(remoteModel.contextWindow) ?? positiveInt(metadata?.limit?.context);
+  const contextWindow =
+    positiveInt(remoteModel.contextWindow) ?? positiveInt(metadata?.limit?.context);
   if (contextWindow !== undefined) entry.contextWindow = contextWindow;
   else if (!base) entry.contextWindow = DEFAULT_CONTEXT_WINDOW;
 
@@ -417,7 +442,9 @@ function composeEntry(
   return entry;
 }
 
-function inheritedReasoningEfforts(installed: readonly InstalledModel[]): Record<string, string> | undefined {
+function inheritedReasoningEfforts(
+  installed: readonly InstalledModel[],
+): Record<string, string> | undefined {
   for (const model of installed) {
     if (model.reasoning !== true) continue;
     const map = model.thinkingLevelMap;
@@ -602,7 +629,8 @@ function positiveInt(value: unknown): number | undefined {
 }
 
 function decimal(value: unknown): number | undefined {
-  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

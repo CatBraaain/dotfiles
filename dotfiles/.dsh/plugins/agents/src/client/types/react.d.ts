@@ -6,16 +6,16 @@
  * narrow surface this plugin uses. Delete it once `@types/react` becomes
  * available to the typecheck environment.
  */
-declare module 'react' {
-  export type ReactNode = unknown
-  export type Dispatch<S> = (value: S) => void
+declare module "react" {
+  export type ReactNode = unknown;
+  export type Dispatch<S> = (value: S) => void;
   /** Any function component; callers narrow the props themselves. */
-  export type FunctionComponent<P> = (props: P) => ReactNode
+  export type FunctionComponent<P> = (props: P) => ReactNode;
   export function createElement(
     type: string | FunctionComponent<never>,
     props: Record<string, unknown> | null,
     ...children: readonly unknown[]
-  ): ReactNode
-  export function useState<S>(initialState: S): [S, Dispatch<S>]
-  export function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void
+  ): ReactNode;
+  export function useState<S>(initialState: S): [S, Dispatch<S>];
+  export function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void;
 }

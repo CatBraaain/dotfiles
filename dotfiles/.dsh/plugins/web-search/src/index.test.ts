@@ -4,7 +4,16 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import type { SpawnOptions } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { WebError } from "@deepseek-ai/dsh-web";
@@ -97,7 +106,10 @@ function searchBackend(
   return [sourceName, async () => sources.map((source) => ({ url: source.url }))];
 }
 
-function okFetchBackend(sourceName: string, markdown = `text from ${sourceName}`): BackendEntry<string> {
+function okFetchBackend(
+  sourceName: string,
+  markdown = `text from ${sourceName}`,
+): BackendEntry<string> {
   return [sourceName, async () => markdown];
 }
 
@@ -155,7 +167,10 @@ describe("設定（resolveEndpoints・Config）", () => {
 
 describe("SERP URL 構築（serpUrl）", () => {
   it("クエリを q パラメータへ URL エンコードする", () => {
-    assert.equal(serpUrl("google", "pi coding agent"), "https://www.google.com/search?q=pi+coding+agent");
+    assert.equal(
+      serpUrl("google", "pi coding agent"),
+      "https://www.google.com/search?q=pi+coding+agent",
+    );
     assert.equal(serpUrl("duckduckgo", "a&b=c"), "https://duckduckgo.com/?q=a%26b%3Dc");
     assert.equal(serpUrl("bing", "x"), "https://www.bing.com/search?q=x");
   });
@@ -210,7 +225,9 @@ describe("openserp results の sources 変換（toSearchSources）", () => {
       [{ rank: 1, url: "/goto?url=CAES...", title: "relative" }],
       "google",
     );
-    assert.deepEqual(sources, [{ url: "https://www.google.com/goto?url=CAES...", title: "relative" }]);
+    assert.deepEqual(sources, [
+      { url: "https://www.google.com/goto?url=CAES...", title: "relative" },
+    ]);
   });
 
   it("プロトコル相対 URL は https で絶対化する（duckduckgo のリダイレクト href 形）", () => {
@@ -360,16 +377,10 @@ describe("openserp パース（openserpParse）", () => {
     );
     const spawns: string[] = [];
 
-    await openserpParse(
-      "duckduckgo",
-      "<html>serp</html>",
-      OPENSERP_DEFAULT_BASE_URL,
-      undefined,
-      {
-        fetcher,
-        spawnOpenserp: (baseUrl) => spawns.push(baseUrl),
-      },
-    );
+    await openserpParse("duckduckgo", "<html>serp</html>", OPENSERP_DEFAULT_BASE_URL, undefined, {
+      fetcher,
+      spawnOpenserp: (baseUrl) => spawns.push(baseUrl),
+    });
 
     assert.deepEqual(spawns, [OPENSERP_DEFAULT_BASE_URL]);
     assert.equal(readyChecks, 2);
@@ -404,10 +415,16 @@ describe("openserp パース（openserpParse）", () => {
     );
 
     await assert.rejects(
-      openserpParse("bing", "<html>serp</html>", OPENSERP_DEFAULT_BASE_URL, AbortSignal.timeout(50), {
-        fetcher,
-        spawnOpenserp: () => {},
-      }),
+      openserpParse(
+        "bing",
+        "<html>serp</html>",
+        OPENSERP_DEFAULT_BASE_URL,
+        AbortSignal.timeout(50),
+        {
+          fetcher,
+          spawnOpenserp: () => {},
+        },
+      ),
       /openserp server not ready/,
     );
   });
@@ -558,8 +575,20 @@ describe("camoufox による描画（camoufoxRender）", () => {
     const calls: CliCall[] = [];
     const deps = cliDeps({ health: "ok", runCodeHtml: "<html>x</html>" }, calls);
 
-    await camoufoxRender("https://example.com/a", "web-search", CAMOUFOX_DEFAULT_BASE_URL, undefined, deps);
-    await camoufoxRender("https://example.com/b", "web-fetch", CAMOUFOX_DEFAULT_BASE_URL, undefined, deps);
+    await camoufoxRender(
+      "https://example.com/a",
+      "web-search",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      deps,
+    );
+    await camoufoxRender(
+      "https://example.com/b",
+      "web-fetch",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      deps,
+    );
 
     const openSessions = calls
       .filter((call) => call.args[0] === "open")
@@ -577,7 +606,13 @@ describe("camoufox による描画（camoufoxRender）", () => {
       },
     };
 
-    await camoufoxRender("https://example.com/", "web-fetch", CAMOUFOX_DEFAULT_BASE_URL, undefined, deps);
+    await camoufoxRender(
+      "https://example.com/",
+      "web-fetch",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      deps,
+    );
 
     assert.ok(synced);
     const firstCommand = calls[0]?.args[0];
@@ -722,7 +757,7 @@ describe("チャレンジページ検出（detectChallengePage）", () => {
 
   it("通常ページと文言だけが似ているページはチャレンジページとしない", () => {
     const normalPages = [
-      '<html><body>Just a moment... is a song title we discuss here.</body></html>',
+      "<html><body>Just a moment... is a song title we discuss here.</body></html>",
       '<form action="/search"><input name="captcha-quiz"></form>',
       '<div class="result" data-hveid="1"><a href="/httpservice/retry/enablejs">docs</a></div>',
       '<div class="tF2Cxc">organic result</div>',
@@ -797,26 +832,28 @@ describe("camoufox+openserp 検索（camoufoxOpenserpSearch・searchOne）", () 
 
     assert.deepEqual(result.sources, [{ url: "https://C/" }]);
     assert.equal(result.backend, "C");
-    assert.deepEqual(
-      result.attempts.map(withoutDurationMs),
-      [
-        { backend: "A", ok: false, error: "A error" },
-        { backend: "B", ok: false, error: "B error" },
-        { backend: "C", ok: true },
-      ],
-    );
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "A error" },
+      { backend: "B", ok: false, error: "B error" },
+      { backend: "C", ok: true },
+    ]);
   });
 
   it("最初のエンジン（google）が成功したら後続エンジンは試行しない", async () => {
     const runCounts = new Map<string, number>();
-    const backends: BackendEntry<WebSearchSource[]>[] = ["google-like", "ddg-like", "bing-like"].map(
-      (backendName) => [
-        backendName,
-        async () => {
-          runCounts.set(backendName, (runCounts.get(backendName) ?? 0) + 1);
-          return [{ url: `https://${backendName}/` }];
-        },
-      ] satisfies BackendEntry<WebSearchSource[]>,
+    const backends: BackendEntry<WebSearchSource[]>[] = [
+      "google-like",
+      "ddg-like",
+      "bing-like",
+    ].map(
+      (backendName) =>
+        [
+          backendName,
+          async () => {
+            runCounts.set(backendName, (runCounts.get(backendName) ?? 0) + 1);
+            return [{ url: `https://${backendName}/` }];
+          },
+        ] satisfies BackendEntry<WebSearchSource[]>,
     );
 
     const result = await searchOne("query", endpoints, undefined, backends);
@@ -845,8 +882,14 @@ describe("camoufox+openserp 検索（camoufoxOpenserpSearch・searchOne）", () 
 
   it("render abort での全滅には camoufox サーバーの kill 手順ヒント（pkill 行）を添える", async () => {
     const backends: BackendEntry<WebSearchSource[]>[] = [
-      failBackend<WebSearchSource[]>("camoufox+openserp(google)", "render: The operation was aborted"),
-      failBackend<WebSearchSource[]>("camoufox+openserp(duckduckgo)", "render: aborted due to timeout"),
+      failBackend<WebSearchSource[]>(
+        "camoufox+openserp(google)",
+        "render: The operation was aborted",
+      ),
+      failBackend<WebSearchSource[]>(
+        "camoufox+openserp(duckduckgo)",
+        "render: aborted due to timeout",
+      ),
     ];
 
     await assert.rejects(searchOne("query", endpoints, undefined, backends), (error) => {
@@ -957,7 +1000,10 @@ describe("search provider（CamoufoxOpenserpSearchProvider）", () => {
 
 describe("available() の前提チェック（hostPrerequisitesMet・binaryOnPath）", () => {
   it("bun・openserp・playwright-cli と camoufox 実行ファイルが揃ったとき true", () => {
-    assert.equal(hostPrerequisitesMet({}, { binaryOnPath: () => true, fileExists: () => true }), true);
+    assert.equal(
+      hostPrerequisitesMet({}, { binaryOnPath: () => true, fileExists: () => true }),
+      true,
+    );
   });
 
   it("3バイナリのどれかが PATH になければ false", () => {
@@ -971,15 +1017,18 @@ describe("available() の前提チェック（hostPrerequisitesMet・binaryOnPat
   });
 
   it("camoufox ブラウザ実行ファイルが存在しなければ false", () => {
-    assert.equal(hostPrerequisitesMet({}, { binaryOnPath: () => true, fileExists: () => false }), false);
+    assert.equal(
+      hostPrerequisitesMet({}, { binaryOnPath: () => true, fileExists: () => false }),
+      false,
+    );
   });
 
   it("camoufox 実行ファイルは CAMOUFOX_EXECUTABLE_PATH、既定は ~/.cache/camoufox/camoufox-bin", () => {
-    assert.equal(camoufoxExecutablePath({ CAMOUFOX_EXECUTABLE_PATH: "/opt/camoufox" }), "/opt/camoufox");
     assert.equal(
-      camoufoxExecutablePath({}),
-      join(homedir(), ".cache", "camoufox", "camoufox-bin"),
+      camoufoxExecutablePath({ CAMOUFOX_EXECUTABLE_PATH: "/opt/camoufox" }),
+      "/opt/camoufox",
     );
+    assert.equal(camoufoxExecutablePath({}), join(homedir(), ".cache", "camoufox", "camoufox-bin"));
   });
 
   it("binaryOnPath は PATH ディレクトリから実行可能ファイルを探す", () => {
@@ -1042,10 +1091,15 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
     const calls: CliCall[] = [];
     const spawns = { count: 0 };
 
-    const markdown = await camoufoxFetch("https://example.com/", CAMOUFOX_DEFAULT_BASE_URL, undefined, {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>body</html>" }, calls, spawns),
-      toMarkdown: async (html: string) => `md:${html}`,
-    });
+    const markdown = await camoufoxFetch(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      {
+        ...cliDeps({ health: "ok", runCodeHtml: "<html>body</html>" }, calls, spawns),
+        toMarkdown: async (html: string) => `md:${html}`,
+      },
+    );
 
     assert.equal(markdown, "md:<html>body</html>");
     assert.equal(spawns.count, 0);
@@ -1062,11 +1116,16 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
     const spawns = { count: 0 };
     let healthChecks = 0;
 
-    const markdown = await camoufoxFetch("https://example.com/", CAMOUFOX_DEFAULT_BASE_URL, undefined, {
-      ...cliDeps({ runCodeHtml: "<html>x</html>" }, calls, spawns),
-      probeServer: async () => ++healthChecks > 2,
-      toMarkdown: async (html: string) => `md:${html}`,
-    });
+    const markdown = await camoufoxFetch(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      {
+        ...cliDeps({ runCodeHtml: "<html>x</html>" }, calls, spawns),
+        probeServer: async () => ++healthChecks > 2,
+        toMarkdown: async (html: string) => `md:${html}`,
+      },
+    );
 
     assert.equal(markdown, "md:<html>x</html>");
     assert.equal(spawns.count, 1);
@@ -1100,13 +1159,18 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
   });
 
   it("ページを閉じる失敗は変換結果に影響しない", async () => {
-    const markdown = await camoufoxFetch("https://example.com/", CAMOUFOX_DEFAULT_BASE_URL, undefined, {
-      ...cliDeps(
-        { health: "ok", runCodeHtml: "<html>x</html>", closeError: new Error("close failed") },
-        [],
-      ),
-      toMarkdown: async (html: string) => `md:${html}`,
-    });
+    const markdown = await camoufoxFetch(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      {
+        ...cliDeps(
+          { health: "ok", runCodeHtml: "<html>x</html>", closeError: new Error("close failed") },
+          [],
+        ),
+        toMarkdown: async (html: string) => `md:${html}`,
+      },
+    );
 
     assert.equal(markdown, "md:<html>x</html>");
   });
@@ -1175,10 +1239,15 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
       /camoufox server not ready/,
     );
 
-    const markdown = await camoufoxFetch("https://example.com/", CAMOUFOX_DEFAULT_BASE_URL, undefined, {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>x</html>" }, calls, spawns),
-      toMarkdown: async () => "md",
-    });
+    const markdown = await camoufoxFetch(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      {
+        ...cliDeps({ health: "ok", runCodeHtml: "<html>x</html>" }, calls, spawns),
+        toMarkdown: async () => "md",
+      },
+    );
 
     assert.equal(markdown, "md");
     assert.equal(spawns.count, 1);
@@ -1197,8 +1266,16 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
   });
 
   it("fetchOne は空・空白のみの本文を失敗として扱う", async () => {
-    const backends: BackendEntry<string>[] = [okFetchBackend("blank", "  \n"), okFetchBackend("ok")];
-    const result = await fetchOne("https://example.com/", CAMOUFOX_DEFAULT_BASE_URL, undefined, backends);
+    const backends: BackendEntry<string>[] = [
+      okFetchBackend("blank", "  \n"),
+      okFetchBackend("ok"),
+    ];
+    const result = await fetchOne(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      backends,
+    );
     assert.equal(result.backend, "ok");
     assert.equal(result.markdown, "text from ok");
   });
@@ -1301,7 +1378,10 @@ describe("Reddit バックエンド", () => {
       );
       assert.equal(parseRedditPostUrl("https://www.reddit.com/r/programming/"), undefined);
       assert.equal(parseRedditPostUrl("https://www.reddit.com/user/SampleAuthor"), undefined);
-      assert.equal(parseRedditPostUrl("https://example.com/r/programming/comments/abc123/x/"), undefined);
+      assert.equal(
+        parseRedditPostUrl("https://example.com/r/programming/comments/abc123/x/"),
+        undefined,
+      );
     });
   });
 
@@ -1451,7 +1531,8 @@ describe("StackOverflow バックエンド", () => {
         status,
         statusText: "OK",
         json: async () => route.body,
-        text: async () => (typeof route.body === "string" ? route.body : JSON.stringify(route.body)),
+        text: async () =>
+          typeof route.body === "string" ? route.body : JSON.stringify(route.body),
       } as unknown as Response;
     }) as unknown as typeof fetch;
   }
@@ -1526,9 +1607,15 @@ describe("StackOverflow バックエンド", () => {
   it("質問パーマリンク以外は対象外とする", () => {
     assert.equal(parseStackOverflowQuestionUrl("https://stackoverflow.com/tags/python"), undefined);
     assert.equal(parseStackOverflowQuestionUrl("https://stackoverflow.com/users/1/"), undefined);
-    assert.equal(parseStackOverflowQuestionUrl("https://ja.stackoverflow.com/questions/1/x"), undefined);
+    assert.equal(
+      parseStackOverflowQuestionUrl("https://ja.stackoverflow.com/questions/1/x"),
+      undefined,
+    );
     assert.equal(parseStackOverflowQuestionUrl("https://serverfault.com/questions/1/x"), undefined);
-    assert.equal(parseStackOverflowQuestionUrl("https://stackoverflow.com/questions/abc/x"), undefined);
+    assert.equal(
+      parseStackOverflowQuestionUrl("https://stackoverflow.com/questions/abc/x"),
+      undefined,
+    );
   });
 
   it("SE API で質問と回答を取得して Markdown 化する", async () => {
@@ -1611,7 +1698,10 @@ describe("StackOverflow バックエンド", () => {
   });
 
   it("entry のないフィードは空配列を返す", () => {
-    assert.deepEqual(parseStackOverflowAtom('<feed xmlns="http://www.w3.org/2005/Atom"></feed>'), []);
+    assert.deepEqual(
+      parseStackOverflowAtom('<feed xmlns="http://www.w3.org/2005/Atom"></feed>'),
+      [],
+    );
   });
 
   it("回答は投票順で最大500件まででページングを打ち切る", async () => {
@@ -1639,7 +1729,11 @@ describe("StackOverflow バックエンド", () => {
     const requests: string[] = [];
     const fetcher = soRouteFetcher(
       [
-        { match: apiQuestionUrl, status: 429, body: { error_id: 502, error_name: "throttle_violation" } },
+        {
+          match: apiQuestionUrl,
+          status: 429,
+          body: { error_id: 502, error_name: "throttle_violation" },
+        },
         { match: feedUrl, body: feedXml },
       ],
       requests,
@@ -1704,7 +1798,9 @@ describe("fetch provider（CamoufoxTrafilaturaFetchProvider）", () => {
       fetch: async () => "# Post",
     });
 
-    const result = await provider.fetch({ url: "https://old.reddit.com/r/sub/comments/xyz99/slug/" });
+    const result = await provider.fetch({
+      url: "https://old.reddit.com/r/sub/comments/xyz99/slug/",
+    });
 
     assert.equal(result.url, "https://www.reddit.com/r/sub/comments/xyz99/slug/");
   });
@@ -1915,7 +2011,9 @@ describe("camoufox server 起動（spawnCamoufoxServer）", () => {
         writeSync(stdoutFd, "spawned line\n");
       }) as typeof spawnDetachedServer;
 
-      withXdgCacheHome(cacheRoot, () => spawnCamoufoxServer("ws://127.0.0.1:9999/x", { spawnServer }));
+      withXdgCacheHome(cacheRoot, () =>
+        spawnCamoufoxServer("ws://127.0.0.1:9999/x", { spawnServer }),
+      );
 
       assert.equal(calls.length, 1, "spawn should be called exactly once");
       const stdio = calls[0].stdio as ("ignore" | number)[];
@@ -1999,12 +2097,17 @@ describe("サーバーログとヘルスチェック", () => {
   });
 
   it("接続できないサーバーは不健全と判定する", async () => {
-    const healthy = await camoufoxServerHealthy("ws://127.0.0.1:1/camoufox", AbortSignal.timeout(2_000));
+    const healthy = await camoufoxServerHealthy(
+      "ws://127.0.0.1:1/camoufox",
+      AbortSignal.timeout(2_000),
+    );
     assert.ok(!healthy);
   });
 
   it("起動コマンドが存在しないとき spawn の error を握り、プロセスを落とさない", async () => {
-    const child = spawnDetachedServer("definitely-missing-binary-xyz", ["arg"], { stdio: "ignore" });
+    const child = spawnDetachedServer("definitely-missing-binary-xyz", ["arg"], {
+      stdio: "ignore",
+    });
     // Give the error event a chance to fire; the swallowed handler in
     // spawnDetachedServer keeps it from becoming an uncaughtException.
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -2343,7 +2446,7 @@ describe("提供する plugin（entry exports・apply）", () => {
 
   const noopPrime = () => Promise.resolve();
 
-  it("export する name は dsh-web-search、inject は [\"web\"]", () => {
+  it('export する name は dsh-web-search、inject は ["web"]', () => {
     assert.equal(name, "dsh-web-search");
     assert.deepEqual(inject, ["web"]);
   });
@@ -2390,9 +2493,9 @@ describe("提供する plugin（entry exports・apply）", () => {
 
   it("パッケージ名は dotfiles-dsh-web-search、cordis 行 id は dsh-web-search", () => {
     const packageRoot = dirname(new URL(".", import.meta.url).pathname);
-    const packageJson = JSON.parse(
-      readFileSync(join(packageRoot, "package.json"), "utf8"),
-    ) as { name?: string };
+    const packageJson = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+      name?: string;
+    };
     const patchYml = readFileSync(join(packageRoot, "cordis.patch.yml"), "utf8");
 
     assert.equal(packageJson.name, "dotfiles-dsh-web-search");
@@ -2403,6 +2506,9 @@ describe("提供する plugin（entry exports・apply）", () => {
   it("server.mjs は bundle 外にパッケージルートへ同梱する", () => {
     const packageRoot = dirname(new URL(".", import.meta.url).pathname);
 
-    assert.ok(existsSync(join(packageRoot, "server.mjs")), "server.mjs must ship in the package root");
+    assert.ok(
+      existsSync(join(packageRoot, "server.mjs")),
+      "server.mjs must ship in the package root",
+    );
   });
 });

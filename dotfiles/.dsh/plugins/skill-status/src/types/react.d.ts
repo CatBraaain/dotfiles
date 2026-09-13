@@ -6,11 +6,11 @@
  * narrow surface this plugin uses. Delete it once `@types/react` becomes
  * available to the typecheck environment.
  */
-declare module 'react' {
-    export type ReactNode = unknown
-    export function createElement(
-        type: string,
-        props: Record<string, unknown> | null,
-        ...children: readonly unknown[]
-    ): ReactNode
+declare module "react" {
+  export type ReactNode = unknown;
+  export function createElement(
+    type: string,
+    props: Record<string, unknown> | null,
+    ...children: readonly unknown[]
+  ): ReactNode;
 }

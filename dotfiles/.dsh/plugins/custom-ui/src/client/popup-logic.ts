@@ -63,8 +63,11 @@ export function optionsOf(state: DirectoryState): PopupOption[] {
       rows.push({
         id: rowId(group.id, model.id),
         label: model.name,
-        detail: model.description !== undefined ? `${group.name} · ${model.description}` : group.name,
-        ...(state.current !== null && state.current.provider === group.id && state.current.model === model.id
+        detail:
+          model.description !== undefined ? `${group.name} · ${model.description}` : group.name,
+        ...(state.current !== null &&
+        state.current.provider === group.id &&
+        state.current.model === model.id
           ? { active: true as const }
           : {}),
       });
@@ -91,7 +94,7 @@ export function selectionOf(state: DirectoryState, id: string): ModelSelectionLi
       if (rowId(group.id, model.id) !== id) continue;
       const reasoningEffort =
         state.current?.provider === group.id && state.current.model === model.id
-          ? state.current.reasoningEffort ?? model.reasoning?.defaultEffort
+          ? (state.current.reasoningEffort ?? model.reasoning?.defaultEffort)
           : model.reasoning?.defaultEffort;
       return {
         provider: group.id,

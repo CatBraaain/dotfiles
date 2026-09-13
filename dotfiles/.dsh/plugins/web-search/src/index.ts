@@ -21,12 +21,7 @@ import type {
   WebSearchSource,
 } from "@deepseek-ai/dsh-web";
 import type { Context } from "@deepseek-ai/cordis";
-import {
-  type ChildProcess,
-  type SpawnOptions,
-  execFile,
-  spawn,
-} from "node:child_process";
+import { type ChildProcess, type SpawnOptions, execFile, spawn } from "node:child_process";
 import {
   accessSync,
   closeSync,
@@ -87,10 +82,8 @@ export function resolveEndpoints(
   env: Record<string, string | undefined> = process.env,
 ): ServerEndpoints {
   return {
-    camoufoxBaseUrl:
-      config.camoufoxBaseUrl ?? env.CAMOUFOX_BASE_URL ?? CAMOUFOX_DEFAULT_BASE_URL,
-    openserpBaseUrl:
-      config.openserpBaseUrl ?? env.OPENSERP_BASE_URL ?? OPENSERP_DEFAULT_BASE_URL,
+    camoufoxBaseUrl: config.camoufoxBaseUrl ?? env.CAMOUFOX_BASE_URL ?? CAMOUFOX_DEFAULT_BASE_URL,
+    openserpBaseUrl: config.openserpBaseUrl ?? env.OPENSERP_BASE_URL ?? OPENSERP_DEFAULT_BASE_URL,
   };
 }
 
@@ -366,11 +359,7 @@ export async function fetchOne(
   url: string,
   camoufoxBaseUrl: string,
   signal?: AbortSignal,
-  backends: readonly BackendEntry<string>[] = defaultFetchBackends(
-    url,
-    camoufoxBaseUrl,
-    signal,
-  ),
+  backends: readonly BackendEntry<string>[] = defaultFetchBackends(url, camoufoxBaseUrl, signal),
 ): Promise<FetchOutcome> {
   const { payload, backend, attempts } = await tryBackends(
     "web fetch",
@@ -499,13 +488,7 @@ export async function camoufoxOpenserpSearch(
     signal,
     deps,
   );
-  const results = await openserpParse(
-    engine,
-    html,
-    endpoints.openserpBaseUrl,
-    signal,
-    deps,
-  );
+  const results = await openserpParse(engine, html, endpoints.openserpBaseUrl, signal, deps);
   return toSearchSources(results, engine);
 }
 
@@ -1260,7 +1243,8 @@ export async function camoufoxRender(
     ((probeSignal: AbortSignal) => camoufoxServerHealthy(camoufoxBaseUrl, probeSignal));
   const spawnServer = deps.spawnCamoufox ?? (() => spawnCamoufoxServer(camoufoxBaseUrl));
   const runCli = deps.runCli ?? defaultRunPlaywrightCli;
-  const syncConfig = deps.syncConfig ?? (() => syncPlaywrightCliConfig(PACKAGE_ROOT, camoufoxBaseUrl));
+  const syncConfig =
+    deps.syncConfig ?? (() => syncPlaywrightCliConfig(PACKAGE_ROOT, camoufoxBaseUrl));
 
   const waitSignal = withTimeout(signal, SERVER_WAIT_TIMEOUT_MS);
   await ensureCamoufoxServer(camoufoxBaseUrl, probe, spawnServer, waitSignal);
@@ -1290,11 +1274,13 @@ export async function camoufoxRender(
     // Wait for networkidle + hydration: SPA search results inject content via
     // JS after navigation. Poll for challenge pages in parallel and fail fast
     // on detection.
-    const output = await runCli(sessionKey, ["run-code", challengeWaitSnippet()], renderSignal).catch(
-      (error: unknown) => {
-        throw renderError(error);
-      },
-    );
+    const output = await runCli(
+      sessionKey,
+      ["run-code", challengeWaitSnippet()],
+      renderSignal,
+    ).catch((error: unknown) => {
+      throw renderError(error);
+    });
     let html: string;
     try {
       html = parseRenderedPage(output);
@@ -1562,7 +1548,12 @@ export async function primeServers(
     // Priming failures resolve silently.
   }
   try {
-    if (!(await probeCamoufox(endpoints.camoufoxBaseUrl, AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS)))) {
+    if (
+      !(await probeCamoufox(
+        endpoints.camoufoxBaseUrl,
+        AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS),
+      ))
+    ) {
       spawnCamoufox(endpoints.camoufoxBaseUrl);
     }
   } catch {

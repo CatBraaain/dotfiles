@@ -63,10 +63,7 @@ describe("zaiRetryWaitDefinition", () => {
 
   it("update keeps the state unchanged (log-only events never update)", () => {
     const state = { data: VALID_DATA, seq: 7 };
-    assert.equal(
-      zaiRetryWaitDefinition.update({ state } as never, {} as never),
-      state,
-    );
+    assert.equal(zaiRetryWaitDefinition.update({ state } as never, {} as never), state);
   });
 
   it("buildViewNode emits one visible chat node anchored at the event seq", () => {

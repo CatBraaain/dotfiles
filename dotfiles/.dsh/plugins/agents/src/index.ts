@@ -119,9 +119,7 @@ export function apply(ctx: Context) {
   let config: AgentsConfig;
   const loaded = loadConfig();
   if (typeof loaded === "string") {
-    logger.error(
-      `agents config ${configPath} is invalid; dsh-agents stays inert: ${loaded}`,
-    );
+    logger.error(`agents config ${configPath} is invalid; dsh-agents stays inert: ${loaded}`);
     return;
   }
   config = loaded;
@@ -252,7 +250,8 @@ export function apply(ctx: Context) {
       parent,
       signal,
       agentOptions: { provider: picked.provider, model: picked.model },
-      persona: definition.systemPrompt.length > 0 ? definition.systemPrompt.join("\n\n") : undefined,
+      persona:
+        definition.systemPrompt.length > 0 ? definition.systemPrompt.join("\n\n") : undefined,
       toolFilter: filter,
     });
     const child = run.localAgent;
@@ -287,7 +286,8 @@ export function apply(ctx: Context) {
           task: {
             type: "string",
             required: true,
-            description: "Task for the subagent. Include purpose, inputs, scope, and completion criteria.",
+            description:
+              "Task for the subagent. Include purpose, inputs, scope, and completion criteria.",
           },
           agent: {
             type: "string",
@@ -297,7 +297,8 @@ export function apply(ctx: Context) {
           },
           cwd: {
             type: "string",
-            description: "Accepted for pi compatibility; the child always starts in the parent cwd.",
+            description:
+              "Accepted for pi compatibility; the child always starts in the parent cwd.",
           },
         },
         output: {
@@ -307,7 +308,9 @@ export function apply(ctx: Context) {
         async execute(args, exec) {
           if (!exec.agent) throw new Error("subagent requires a calling agent");
           if (args.cwd) {
-            logger.warn("subagent `cwd` is ignored (SubagentStartRequest has no cwd); using the parent cwd");
+            logger.warn(
+              "subagent `cwd` is ignored (SubagentStartRequest has no cwd); using the parent cwd",
+            );
           }
           if (!definition.subagents.includes(args.agent)) {
             throw new Error(`agent ${state.agentName} cannot delegate to ${args.agent}`);
@@ -332,7 +335,9 @@ export function apply(ctx: Context) {
   ): Promise<string> => {
     const parentDefinition = config.agents[state.agentName];
     if (!parentDefinition.subagents.includes("vision")) {
-      throw new Error(`cannot read "${filePath}": agent ${state.agentName} cannot delegate to vision`);
+      throw new Error(
+        `cannot read "${filePath}": agent ${state.agentName} cannot delegate to vision`,
+      );
     }
     const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
     const mediaType = IMAGE_MEDIA_TYPES[extension];
@@ -417,7 +422,9 @@ export function apply(ctx: Context) {
     }
     const { filter, skipped } = toolFilterFor(definition);
     if (skipped.length > 0) {
-      logger.warn(`agent ${agentName}: tools unknown to the registry ignored: ${skipped.join(", ")}`);
+      logger.warn(
+        `agent ${agentName}: tools unknown to the registry ignored: ${skipped.join(", ")}`,
+      );
     }
     if (filter) state.appliedDisposers.push(agent.ctx.tools.restrict(filter));
     if (definition.subagents.length > 0) {
@@ -493,14 +500,18 @@ export function apply(ctx: Context) {
     // The failed route is the one this attempt resolved (see `remember` in
     // the request handler); fall back to the request header only when the
     // plugin did not route the attempt.
-    const failed =
-      state.lastRoute ?? {
-        provider: payload.provider,
-        model:
-          payload.agent.session.requestHeader()?.config.model ?? payload.agent.options.model ?? "",
-      };
+    const failed = state.lastRoute ?? {
+      provider: payload.provider,
+      model:
+        payload.agent.session.requestHeader()?.config.model ?? payload.agent.options.model ?? "",
+    };
     const failedKey = modelKey(failed);
-    recordCooldown(state.cooldowns, failedKey, cooldownMs(payload.failure) || DEFAULT_COOLDOWN_MS, Date.now());
+    recordCooldown(
+      state.cooldowns,
+      failedKey,
+      cooldownMs(payload.failure) || DEFAULT_COOLDOWN_MS,
+      Date.now(),
+    );
     // Pre-evaluate the next live candidate: retry only when a fallback exists
     // (pi parity — otherwise the failure stays terminal).
     const picked = await pickForClass(state, payload.signal);
@@ -527,14 +538,20 @@ export function apply(ctx: Context) {
       const [name, ...rest] = rawInput.trim().split(/\s+/);
       if (!name || !config.agents[name]) {
         const available = Object.keys(config.agents).join(", ");
-        return { kind: "error", text: `unknown agent: ${name ?? "(none)"} (available: ${available})` };
+        return {
+          kind: "error",
+          text: `unknown agent: ${name ?? "(none)"} (available: ${available})`,
+        };
       }
       state.effectiveClass = config.agents[name].class;
       applyDefinition(agent, state, name);
       const message = rest.join(" ").trim();
       if (message) {
         agent.followup(
-          createUserMessage({ content: [{ type: "text", text: message }], source: { kind: "user" } }),
+          createUserMessage({
+            content: [{ type: "text", text: message }],
+            source: { kind: "user" },
+          }),
         );
       }
       return { kind: "success", text: `agent → ${name} (class ${state.effectiveClass})` };
@@ -640,10 +657,7 @@ export function apply(ctx: Context) {
       const payload: unknown = await request.json().catch(() => undefined);
       const requestState = parseStateRequest(payload);
       if (!requestState) {
-        return Response.json(
-          { error: "payload must be { sessionId?: string }" },
-          { status: 400 },
-        );
+        return Response.json({ error: "payload must be { sessionId?: string }" }, { status: 400 });
       }
       return Response.json(stateForSession(requestState.sessionId));
     },

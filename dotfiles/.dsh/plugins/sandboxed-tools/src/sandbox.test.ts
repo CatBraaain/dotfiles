@@ -1832,7 +1832,10 @@ describe("§2.3 複合コマンド ask の matched 表示", () => {
       const command = "ls; git push -u origin main";
       assert.equal(await sandbox.authorizeCommand(command, confirmWith(ui)), true);
       assert.equal(questions[0]!.question, "Allow command?");
-      assert.equal(questions[0]!.detail, `ls; >>>git push<<< -u origin main\nmatched: ^git push\\b`);
+      assert.equal(
+        questions[0]!.detail,
+        `ls; >>>git push<<< -u origin main\nmatched: ^git push\\b`,
+      );
     }),
   );
 });
@@ -1866,10 +1869,7 @@ describe("§2.3 コマンド一致範囲の強調表示", () => {
         await sandbox.authorizeCommand("FOO=1 git push origin main", confirmWith(ui)),
         true,
       );
-      assert.equal(
-        questions[0]!.detail,
-        `FOO=1 >>>git push<<< origin main\nmatched: ^git push\\b`,
-      );
+      assert.equal(questions[0]!.detail, `FOO=1 >>>git push<<< origin main\nmatched: ^git push\\b`);
     }),
   );
 
@@ -1884,10 +1884,7 @@ describe("§2.3 コマンド一致範囲の強調表示", () => {
         await sandbox.authorizeCommand("echo mygit pushx; git push", confirmWith(ui)),
         true,
       );
-      assert.equal(
-        questions[0]!.detail,
-        `echo mygit pushx; >>>git push<<<\nmatched: ^git push\\b`,
-      );
+      assert.equal(questions[0]!.detail, `echo mygit pushx; >>>git push<<<\nmatched: ^git push\\b`);
     }),
   );
 
@@ -1912,10 +1909,7 @@ describe("§2.3 コマンド一致範囲の強調表示", () => {
       writeFileSync(configPath, allowAllWithAskGitPush);
       const sandbox = new Sandbox(dir, configPath);
       const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
-      assert.equal(
-        await sandbox.authorizeCommand('git "push" origin main', confirmWith(ui)),
-        true,
-      );
+      assert.equal(await sandbox.authorizeCommand('git "push" origin main', confirmWith(ui)), true);
       assert.equal(questions[0]!.detail, `git "push" origin main\nmatched: ^git push\\b`);
     }),
   );

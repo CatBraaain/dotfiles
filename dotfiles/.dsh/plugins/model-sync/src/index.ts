@@ -74,15 +74,9 @@ interface ProviderOutcome {
 export function apply(ctx: Context) {
   const logger = ctx.logger("model-sync");
 
-  const cachePath = join(
-    process.env.DSH_HOME ?? join(homedir(), ".dsh"),
-    "model-sync-cache.json",
-  );
+  const cachePath = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "model-sync-cache.json");
 
-  ctx.settings.register(
-    "model-sync",
-    z.object({ disabled: z.boolean().default(false) }),
-  );
+  ctx.settings.register("model-sync", z.object({ disabled: z.boolean().default(false) }));
 
   const isEnabled = (): boolean => {
     const config = ctx.settings.get("model-sync") as { disabled?: boolean } | undefined;
@@ -270,7 +264,10 @@ export function apply(ctx: Context) {
     plans: SyncPlan[],
     cache: ModelSyncCache,
     modelsDev: CachedModelsDev | undefined,
-  ): { composed: Record<string, ModelEntry[]>; stats: Map<string, { total: number; added: number }> } => {
+  ): {
+    composed: Record<string, ModelEntry[]>;
+    stats: Map<string, { total: number; added: number }>;
+  } => {
     const { providers: userProviders } = readUserLayer();
     const composed: Record<string, ModelEntry[]> = {};
     const stats = new Map<string, { total: number; added: number }>();
@@ -311,7 +308,11 @@ export function apply(ctx: Context) {
         // each provider on its own so one bad model list cannot block the rest.
         for (const [id, entries] of Object.entries(composed)) {
           try {
-            await ctx.settings.update("llm-pi-ai", { providers: { [id]: { models: entries } } }, revision);
+            await ctx.settings.update(
+              "llm-pi-ai",
+              { providers: { [id]: { models: entries } } },
+              revision,
+            );
             written[id] = entries;
           } catch (perProviderError) {
             failures[id] = errorMessage(perProviderError);
@@ -339,7 +340,9 @@ export function apply(ctx: Context) {
       if (stat === undefined) continue;
       const failure = failures[plan.id];
       if (failure !== undefined) {
-        logger.warn(`llm-pi-ai update for ${plan.id} was rejected; keeping its current models: ${failure}`);
+        logger.warn(
+          `llm-pi-ai update for ${plan.id} was rejected; keeping its current models: ${failure}`,
+        );
         outcomeById.set(plan.id, { id: plan.id, status: "failed", message: failure });
       } else {
         outcomeById.set(plan.id, {
@@ -435,13 +438,10 @@ export function apply(ctx: Context) {
       });
   };
 
-  ctx.effect(
-    function* () {
-      yield ctx.commands.register(modelSyncCommand);
-      yield ctx.interval(backgroundSync, CACHE_TTL_MS);
-    },
-    "model-sync sync loop",
-  );
+  ctx.effect(function* () {
+    yield ctx.commands.register(modelSyncCommand);
+    yield ctx.interval(backgroundSync, CACHE_TTL_MS);
+  }, "model-sync sync loop");
 
   backgroundSync();
 }

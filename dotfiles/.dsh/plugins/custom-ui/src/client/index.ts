@@ -115,10 +115,16 @@ export function apply(ctx: Context): void {
   // lowest-priority registrant, and our rank sits below the stock seats'.
   ctx.inject(["slots"], (scope) => {
     scope.slots.inject("conversation.input.model", () =>
-      scope.slots.register({ name: "conversation.input.model", priority: SHADOW_PRIORITY }, SeatVoid),
+      scope.slots.register(
+        { name: "conversation.input.model", priority: SHADOW_PRIORITY },
+        SeatVoid,
+      ),
     );
     scope.slots.inject("conversation.input.plan", () =>
-      scope.slots.register({ name: "conversation.input.plan", priority: SHADOW_PRIORITY }, SeatVoid),
+      scope.slots.register(
+        { name: "conversation.input.plan", priority: SHADOW_PRIORITY },
+        SeatVoid,
+      ),
     );
     // Turn-tail chain: replace the usage/time panels (hidden via CSS above)
     // with a plain run-time display, but only when no stock tail (deliverables)
@@ -162,7 +168,10 @@ export function apply(ctx: Context): void {
           options: async () => optionsOf(await directory.load()),
           onSelect: async (option) => {
             const selection = selectionOf(directory.store.getSnapshot(), option.id);
-            if (selection === undefined) throw new Error("this provider's catalog failed to load — pick a model from a loaded group");
+            if (selection === undefined)
+              throw new Error(
+                "this provider's catalog failed to load — pick a model from a loaded group",
+              );
             await directory.select(selection);
           },
         },
@@ -184,6 +193,9 @@ export function apply(ctx: Context): void {
       if (result.open) openModelPopup();
     };
     document.addEventListener("keydown", onKeyDown, true);
-    ctx.effect(() => () => document.removeEventListener("keydown", onKeyDown, true), "custom-ui: chord keydown");
+    ctx.effect(
+      () => () => document.removeEventListener("keydown", onKeyDown, true),
+      "custom-ui: chord keydown",
+    );
   });
 }

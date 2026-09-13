@@ -20,7 +20,10 @@ function validDoc(): Record<string, unknown> {
   return {
     default: "main",
     classes: {
-      high: [{ provider: "p1", model: "m1" }, { provider: "p2", model: "m2" }],
+      high: [
+        { provider: "p1", model: "m1" },
+        { provider: "p2", model: "m2" },
+      ],
       low: [{ provider: "p3", model: "m3" }],
       vision: [{ provider: "p4", model: "m4" }],
     },
@@ -191,17 +194,12 @@ describe("validateAgentsConfig — vision/tool rules", () => {
   it("rejects a vision agent on another class", () => {
     const doc = validDoc();
     (doc.agents as Record<string, Record<string, unknown>>).vision.class = "low";
-    assert.equal(
-      expectError(validateAgentsConfig(doc)),
-      "agent vision must use the vision class",
-    );
+    assert.equal(expectError(validateAgentsConfig(doc)), "agent vision must use the vision class");
   });
 
   it("rejects main/senior without vision and junior with vision", () => {
     const noVisionForMain = validDoc();
-    (noVisionForMain.agents as Record<string, Record<string, unknown>>).main.subagents = [
-      "senior",
-    ];
+    (noVisionForMain.agents as Record<string, Record<string, unknown>>).main.subagents = ["senior"];
     assert.equal(
       expectError(validateAgentsConfig(noVisionForMain)),
       "agent main must delegate to vision",

@@ -12,8 +12,7 @@ import {
 } from "./index.ts";
 import { ZAI_RETRY_WAIT_EVENT_TYPE as CLIENT_EVENT_TYPE } from "./client/event";
 
-const RAW_JSON_BODY =
-  '{"error":{"code":"1302","message":"Rate limit reached for requests"}}';
+const RAW_JSON_BODY = '{"error":{"code":"1302","message":"Rate limit reached for requests"}}';
 
 describe("isZaiConcurrencyFailure", () => {
   it("matches raw JSON bodies and message-only forms for zai providers", () => {
@@ -33,7 +32,9 @@ describe("isZaiConcurrencyFailure", () => {
       true,
     );
     assert.equal(
-      isZaiConcurrencyFailure("zai", { message: '{"error":{"code":"1305","message":"overloaded"}}' }),
+      isZaiConcurrencyFailure("zai", {
+        message: '{"error":{"code":"1305","message":"overloaded"}}',
+      }),
       true,
     );
   });
@@ -45,11 +46,15 @@ describe("isZaiConcurrencyFailure", () => {
 
   it("rejects quota and unrelated failures", () => {
     assert.equal(
-      isZaiConcurrencyFailure("zai", { message: '{"error":{"code":"1113","message":"quota exhausted"}}' }),
+      isZaiConcurrencyFailure("zai", {
+        message: '{"error":{"code":"1113","message":"quota exhausted"}}',
+      }),
       false,
     );
     assert.equal(
-      isZaiConcurrencyFailure("zai", { message: '{"error":{"code":"1308","message":"quota exhausted"}}' }),
+      isZaiConcurrencyFailure("zai", {
+        message: '{"error":{"code":"1308","message":"quota exhausted"}}',
+      }),
       false,
     );
     assert.equal(isZaiConcurrencyFailure("zai", { message: "insufficient balance" }), false);
@@ -63,7 +68,10 @@ describe("retryAfterOverrideMs", () => {
     assert.equal(retryAfterOverrideMs({ message: "x", providerRetryAfterMs: 0 }), null);
     assert.equal(retryAfterOverrideMs({ message: "x", providerRetryAfterMs: -5 }), null);
     assert.equal(retryAfterOverrideMs({ message: "x", providerRetryAfterMs: Number.NaN }), null);
-    assert.equal(retryAfterOverrideMs({ message: "x", providerRetryAfterMs: Number.POSITIVE_INFINITY }), null);
+    assert.equal(
+      retryAfterOverrideMs({ message: "x", providerRetryAfterMs: Number.POSITIVE_INFINITY }),
+      null,
+    );
     assert.equal(retryAfterOverrideMs({ message: "x" }), null);
   });
 });
@@ -80,14 +88,29 @@ describe("nextRetryDelayMs", () => {
   });
 
   it("applies ±20% symmetric jitter around the capped value", () => {
-    assert.equal(nextRetryDelayMs(5, null, () => 0), 48_000);
-    assert.equal(nextRetryDelayMs(5, null, () => 1), 72_000);
-    assert.equal(nextRetryDelayMs(1, null, () => 0), 4_000);
-    assert.equal(nextRetryDelayMs(1, null, () => 1), 6_000);
+    assert.equal(
+      nextRetryDelayMs(5, null, () => 0),
+      48_000,
+    );
+    assert.equal(
+      nextRetryDelayMs(5, null, () => 1),
+      72_000,
+    );
+    assert.equal(
+      nextRetryDelayMs(1, null, () => 0),
+      4_000,
+    );
+    assert.equal(
+      nextRetryDelayMs(1, null, () => 1),
+      6_000,
+    );
   });
 
   it("uses a provider retry-after verbatim, without jitter", () => {
-    assert.equal(nextRetryDelayMs(3, 2_500, () => 0), 2_500);
+    assert.equal(
+      nextRetryDelayMs(3, 2_500, () => 0),
+      2_500,
+    );
   });
 });
 
@@ -169,9 +192,8 @@ describe("apply (agent/request-error)", () => {
 
     // Two consecutive failures in the same turn+step: attempts 1 then 2.
     for (const _ of [0, 1]) {
-      const pending = handler(
-        { ...concurrencyPayload(session, controller.signal), agent },
-        () => Promise.resolve({ kind: "fail" }),
+      const pending = handler({ ...concurrencyPayload(session, controller.signal), agent }, () =>
+        Promise.resolve({ kind: "fail" }),
       );
       // Flush the microtask the append is deferred to; abort the wait right
       // after so no real timer outlives the test.
