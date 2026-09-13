@@ -81,7 +81,7 @@ after the wait. An abort mid-wait leaves the failure terminal.
 ## Build
 
 The host entry is bundled by `run_build.sh` (which rebuilds
-`dist/index.js` on every `chezmoi apply`); see the skill-status README
+`dist/index.js` only when it is missing or stale); see the skill-status README
 "Build" for the constraints. The client bundle is **not** rebuilt by
 `run_build.sh` (it only handles node entries); `lib/client.js` is committed.
 To rebuild it after editing `src/client/`:

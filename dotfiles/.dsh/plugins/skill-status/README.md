@@ -40,8 +40,9 @@ configure.
 inlined into `dist/index.js`, and only the bare-specifier externals listed
 in the script (`yaml`, `shell-quote`, `@vscode/ripgrep`, `@deepseek-ai/*`,
 `@earendil-works/*`) stay external, resolved at runtime from the plugin's
-own `node_modules`. `run_build.sh` rebuilds `dist/index.js` on every
-`chezmoi apply`.
+own `node_modules`. `run_build.sh` rebuilds `dist/index.js` only when it is
+missing or stale (a `src/` file or the script itself is newer); the script
+itself runs on every `chezmoi apply`.
 
 The client bundle is **not** rebuilt by `run_build.sh` (it only handles node
 entries); `lib/client.js` is committed. To rebuild it after editing

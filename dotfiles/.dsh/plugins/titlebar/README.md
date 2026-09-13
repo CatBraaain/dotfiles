@@ -46,7 +46,8 @@ configure.
 
 ## Build
 
-`run_build.sh` rebuilds `dist/index.js` on every `chezmoi apply`; the client
+`run_build.sh` rebuilds `dist/index.js` only when it is missing or stale (a
+`src/` file or the script itself is newer); the client
 bundle is not rebuilt by it — `lib/client.js` is committed. To rebuild it
 after editing `src/client/`:
 

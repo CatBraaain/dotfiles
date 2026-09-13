@@ -66,7 +66,8 @@ bun build src/index.ts --outdir dist --target node \
 ```
 
 runs automatically from `dotfiles/.dsh/plugins/run_build.sh` on every
-`chezmoi apply`, and `profiles/web/run_bun_install.sh` links the built entry
+`chezmoi apply` whenever `dist/index.js` is missing or stale (a `src/` file
+or the script itself is newer), and `profiles/web/run_bun_install.sh` links the built entry
 into the profile's node_modules. The build bundles the relative imports into
 the entry and keeps the listed packages external; they resolve from the
 profile closure at runtime — declare every value import that survives the

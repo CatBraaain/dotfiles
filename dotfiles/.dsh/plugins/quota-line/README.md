@@ -83,12 +83,14 @@ Both upstreams are MIT; ported logic keeps the same behavior contracts.
 
 Registered statically in the profile manifest: `dotfiles/.dsh/profiles/web/package.json`
 の `dependencies` と `dsh.profile.bundles` に登録済み（`dsh-quota-panel` を置換）。
-`chezmoi apply` で build & install。Restart dsh afterwards.
+`chezmoi apply` で install（build は条件付き: `dist/index.js` が欠落、または
+`src/`・`run_build.sh` 自身の方が新しいときのみ）。Restart dsh afterwards.
 
 ## Build
 
-Host half（`src/index.ts`）は `run_build.sh` が `chezmoi apply` 時に
-`dist/index.js` へビルドする（他のローカル plugin と同じ）。
+Host half（`src/index.ts`）は `run_build.sh` が `dist/index.js` へビルドする
+（再ビルドは `dist` 欠落または `src/`・`run_build.sh` 自身が新しいときのみ。
+他のローカル plugin と同じ）。
 
 Client bundle は `run_build.sh` の対象外（node entries のみ）。`lib/client.js` は
 コミット済み。`src/client/` 編集後の再ビルド:

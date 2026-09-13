@@ -25,7 +25,9 @@ reload live). Nothing else to configure.
 
 The host half (`src/index.ts`) is an empty `apply` that only keeps the
 `cordis.patch.yml` row loadable; `run_build.sh` builds it to `dist/index.js`
-on every `chezmoi apply`, exactly like the other local plugins.
+on a Make-style conditional rebuild — only when `dist/index.js` is missing
+or stale (a `src/` file or the script itself is newer) — exactly like the
+other local plugins.
 
 The client bundle is **not** rebuilt by `run_build.sh` (it only handles node
 entries); `lib/client.js` is committed. To rebuild it after editing

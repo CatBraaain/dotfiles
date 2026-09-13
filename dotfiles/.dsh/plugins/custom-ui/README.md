@@ -15,7 +15,7 @@ Registered statically in the profile manifest: add `dotfiles-dsh-custom-ui` to b
 
 ## Build
 
-The host half (`src/index.ts`) is built to `dist/index.js` by `run_build.sh` on every `chezmoi apply`, like the other local plugins.
+The host half (`src/index.ts`) is built to `dist/index.js` by `run_build.sh` — rebuilt only when `dist/index.js` is missing or stale (a `src/` file or the script itself is newer), while the script runs on every `chezmoi apply` — like the other local plugins.
 
 The client bundle is **not** rebuilt by `run_build.sh` (it only handles node entries); `lib/client.js` is committed. To rebuild it after editing `src/client/`:
 
