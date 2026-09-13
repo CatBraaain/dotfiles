@@ -13,6 +13,10 @@ dsh web プロファイルの composer 周りを、既定のままだと邪魔�
 - **advertised effort**: 選択中のモデルが dsh カタログで対応を広告する effort レベル(off / minimal / low / medium / high / xhigh / max のうち)。
 - **既定 effort**: effort を明示選択していないときにリクエストへ設定するレベル。選択中モデルの advertised effort のうち Off を除く最も高いレベル。Off を除く advertised effort が存在しない、またはカタログから確定できない場合は effort を設定しない。
 - **chord 待ち**: Ctrl+K 入力後、1000ms 以内(ちょうど 1000ms を含む)だけ次のキーを受け付ける状態。
+- **turn 尾部**: 完了した turn のアクション行の前に置かれる chain slot(`conversation.chat.turnTail`)の表示領域。
+- **turn usage パネル / turn 時間パネル**: assistant メッセージ下のアクション行に付く、DB アイコンのトークン使用量パネルと時計アイコンの所要時間パネル。両者は同一 CSS module を共有するため CSS では区別できない。
+- **session stats pills**: composer 下の時間統計とトークン統計の pill 群。
+- **feedback ボタン**: assistant メッセージ下のアクション行に付く 👍/👎 のメッセージ評価ボタン。
 
 ## composer のモデル選択 control
 
@@ -42,6 +46,29 @@ dsh web プロファイルの composer 周りを、既定のままだと邪魔�
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
 | セッション未選択の新規セッション画面 | 入力欄の上の中央を見る | 魚アイコン・タイトル・Preview バッジのタイトル行が存在しない |
+
+## turn usage・時間パネルと自前 turn 時間表示
+
+| 条件・状態 | 操作 | 結果 |
+| --- | --- | --- |
+| セッション表示中 | 完了した turn のメッセージ下を見る | turn usage パネルと turn 時間パネルが存在しない |
+| セッション表示中 | 完了した turn のメッセージ下を見る | turn 尾部に時計アイコンと所要時間(例: `1m 23s`)の表示が存在する |
+| セッション表示中 | 未完了の turn のメッセージ下を見る | 自前の所要時間表示は存在しない |
+| 同一 turn で stock の尾部表示(deliverables 等)が描画対象 | メッセージ下を見る | 自前の所要時間表示の代わりに stock 尾部が表示される(chain は昇順試行で本 plugin は末尾) |
+| セッション表示中 | 自前の所要時間表示をクリック | 何も起きない(詳細 dialog は再実装しない) |
+
+## composer 下の session stats pills
+
+| 条件・状態 | 操作 | 結果 |
+| --- | --- | --- |
+| セッション表示中 | 入力欄の下を見る | 時間統計・トークン統計の pill 群が存在しない |
+
+## assistant メッセージの feedback ボタン
+
+| 条件・状態 | 操作 | 結果 |
+| --- | --- | --- |
+| セッション表示中 | assistant メッセージ下のアクション行を見る | 👍/👎 の feedback ボタンが存在しない |
+| セッション表示中 | メッセージ下のアクション行の他の操作(copy・branch 等)を使う | 従来どおり働く(本機能は feedback ボタンのみを消し、行自体は変えない) |
 
 ## Ctrl+K → Ctrl+M でモデル選択
 

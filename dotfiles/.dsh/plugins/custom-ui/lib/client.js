@@ -44,6 +44,20 @@ __export(exports_client, {
   inject: () => inject
 });
 module.exports = __toCommonJS(exports_client);
+var import_react = require("react");
+
+// src/client/turn-time.ts
+function turnRunMs(turn) {
+  if (turn.start === undefined || turn.end === undefined)
+    return;
+  return Math.max(0, turn.end.time - turn.start.time);
+}
+function formatRunDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
+}
 
 // src/client/chord.ts
 var CHORD_TIMEOUT_MS = 1000;
@@ -120,22 +134,48 @@ function chordPopupTarget(current, subagentAddress) {
 // src/client/index.ts
 var inject = ["commandUi", "sessions", "modelDirectories", "slots"];
 var SHADOW_PRIORITY = -1;
+var TURN_TAIL_PRIORITY = 1;
 var HIDE_CSS = [
   '[class*="heroWorkspaceRow"]',
   '[class*="pXSMma_headline"]',
   '[class*="uV2eYG_add"]',
-  '[class*="Sh0Q9G_trigger"]'
+  '[class*="Sh0Q9G_trigger"]',
+  '[class*="Q51KRG_root"]',
+  "[data-composer-stats]",
+  '[class*="_8_XoUG_action"]'
 ].map((selector) => `${selector}{display:none!important}`).join("");
+var TURN_TIME_CSS = [
+  ".custom-ui-turn-time{display:inline-flex;align-items:center;gap:4px;" + "height:calc(28px + var(--dsh-content-font-delta,0px));" + "color:var(--dsw-alias-label-tertiary);" + "font-size:var(--dsh-content-font-size-secondary,13px);" + "font-variant-numeric:tabular-nums;" + "line-height:calc(24px + var(--dsh-content-font-delta,0px));" + "white-space:nowrap;padding:6px 8px}",
+  ".custom-ui-turn-time svg{width:calc(15px + var(--dsh-content-font-delta,0px));" + "height:calc(15px + var(--dsh-content-font-delta,0px));flex:none}"
+].join("");
 function SeatVoid() {
   return null;
+}
+function ClockIcon() {
+  return import_react.createElement("svg", {
+    viewBox: "0 0 16 16",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": 1.2,
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "aria-hidden": true
+  }, import_react.createElement("circle", { cx: "8", cy: "8", r: "6.2" }), import_react.createElement("path", { d: "M8 4.6V8l2.3 1.3" }));
+}
+function TurnTimeTail(props) {
+  const runMs = turnRunMs(props.turn);
+  if (runMs === undefined)
+    return null;
+  return import_react.createElement("span", { className: "custom-ui-turn-time" }, import_react.createElement(ClockIcon, null), import_react.createElement("span", null, formatRunDuration(runMs)));
 }
 function apply(ctx) {
   ctx.inject(["slots"], (scope) => {
     scope.slots.inject("conversation.input.model", () => scope.slots.register({ name: "conversation.input.model", priority: SHADOW_PRIORITY }, SeatVoid));
     scope.slots.inject("conversation.input.plan", () => scope.slots.register({ name: "conversation.input.plan", priority: SHADOW_PRIORITY }, SeatVoid));
+    scope.slots.inject("conversation.chat.turnTail", () => scope.slots.register({ name: "conversation.chat.turnTail", select: () => true, priority: TURN_TAIL_PRIORITY }, TurnTimeTail));
   });
   const style = document.createElement("style");
-  style.textContent = HIDE_CSS;
+  style.textContent = `${HIDE_CSS}${TURN_TIME_CSS}`;
   (document.head ?? document.documentElement).appendChild(style);
   ctx.effect(() => () => style.remove(), "custom-ui: hide style");
   ctx.inject(["commandUi", "sessions", "modelDirectories"], (scope) => {

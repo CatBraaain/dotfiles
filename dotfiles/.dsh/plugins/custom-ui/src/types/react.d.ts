@@ -9,7 +9,7 @@
 declare module 'react' {
   export type ReactNode = unknown
   export function createElement(
-    type: string,
+    type: string | ((props: never) => ReactNode),
     props: Record<string, unknown> | null,
     ...children: readonly unknown[]
   ): ReactNode

@@ -21,6 +21,9 @@
       "@deepseek-ai/dsh-client-ui-conversation/client": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/types/client/index.d.ts"
       ],
+      "@deepseek-ai/dsh-client-ui-chat/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/types/client/index.d.ts"
+      ],
       "@deepseek-ai/dsh-client-ui-session/client": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-session/lib/types/client/index.d.ts"
       ],
