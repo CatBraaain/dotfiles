@@ -15,6 +15,10 @@ composer 下 dock に現在のセッション ID を表示する。文字色の�
 - 表示書式は `session: <id>`（pi footer と同じ形式）とする
 - セッション ID は client slot の標準 props（`scope: 'session'` の `sessionId`）から取得し、表示のための host 側配線を持たない
 
+## 対象外
+
+pi footer が常時表示していたセッション累積コスト（stats 行の `$金額`）は移行対象外とする。dsh client 側に金額のデータソースが存在しないためである。`tokenUsage` projection はトークン数 4 項目のみを持ち、turn 単位・provider 単位を含む全 usage 型に cost フィールドはなく、モデル別単価表も client に存在しない。代替として stock の StatsPills がセッション累計のトークン合計と cache-hit 率を表示するが、コスト表示の代替は dsh web UI 全体に存在しない。
+
 ## 設定
 
 表示の ON/OFF の設定ファイルは設けない。profile から plugin を除外することで全体を無効化する。
