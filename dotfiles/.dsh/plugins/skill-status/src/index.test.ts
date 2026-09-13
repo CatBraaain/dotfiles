@@ -2,20 +2,15 @@ import { describe, it } from 'bun:test'
 import assert from 'node:assert/strict'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import {
-    SkillUsageTracker,
     SKILL_TOOL_NAME,
     isSuccessfulToolResult,
     skillNameFromCallArguments,
     skillStatusProjectionDefinition,
-    type ReplayEvent,
-    type SkillToolCallData,
     type SkillStatusProjectionState,
+    type SkillToolCallData,
     type ToolResultData,
 } from './index'
-import {
-    SKILL_STATUS_EVENT_TYPE,
-    SKILL_STATUS_PROJECTION_KEY,
-} from './shared'
+import { SKILL_STATUS_PROJECTION_KEY } from './shared'
 
 function skillCall(callId: string, name: string): { type: 'tool/call'; data: SkillToolCallData } {
     return {
@@ -43,17 +38,12 @@ function toolResult(
     }
 }
 
-function usedEvent(name: string): ReplayEvent {
-    return { type: SKILL_STATUS_EVENT_TYPE, data: { name } }
-}
-
 describe('shared contract', () => {
     it('targets the dsh skill tool', () => {
         assert.equal(SKILL_TOOL_NAME, 'skill')
     })
 
-    it('names the log-only event and the projection key', () => {
-        assert.equal(SKILL_STATUS_EVENT_TYPE, 'skill-status/used')
+    it('names the projection key', () => {
         assert.equal(SKILL_STATUS_PROJECTION_KEY, 'skillStatus')
     })
 })
@@ -87,64 +77,12 @@ describe('isSuccessfulToolResult', () => {
     })
 })
 
-describe('SkillUsageTracker', () => {
-    it('returns a name once for the first successful use only', () => {
-        const tracker = SkillUsageTracker.empty()
-        tracker.observeCall(skillCall('c1', 'review').data)
-        assert.equal(tracker.observeResult(toolResult('c1').data), 'review')
-        assert.equal(tracker.observeResult(toolResult('c1').data), undefined)
-    })
-
-    it('keeps a repeated use silent', () => {
-        const tracker = SkillUsageTracker.fromEvents([usedEvent('review')])
-        tracker.observeCall(skillCall('c2', 'review').data)
-        assert.equal(tracker.observeResult(toolResult('c2').data), undefined)
-    })
-
-    it('does not record a failed use', () => {
-        const tracker = SkillUsageTracker.empty()
-        tracker.observeCall(skillCall('c1', 'review').data)
-        assert.equal(
-            tracker.observeResult(toolResult('c1', { error: { name: 'Error', code: 'x' } }).data),
-            undefined,
-        )
-        // A later successful retry is still the first successful use.
-        tracker.observeCall(skillCall('c2', 'review').data)
-        assert.equal(tracker.observeResult(toolResult('c2').data), 'review')
-    })
-
-    it('ignores results of other tools', () => {
-        const tracker = SkillUsageTracker.empty()
-        assert.equal(tracker.observeResult(toolResult('unknown').data), undefined)
-    })
-
-    it('restores the used set and in-flight calls from a logged prefix', () => {
-        const tracker = SkillUsageTracker.fromEvents([
-            usedEvent('review'),
-            skillCall('c1', 'converge'),
-            toolResult('c1'),
-            skillCall('c2', 'tickets'),
-        ])
-        assert.equal(tracker.usedNames().has('review'), true)
-        assert.equal(tracker.usedNames().has('converge'), false)
-        // c1 completed before the restore; only its durable record would count.
-        // c2 was still in flight: its result after the restore is a first use.
-        assert.equal(tracker.observeResult(toolResult('c2').data), 'tickets')
-    })
-
-    it('skips malformed skill arguments without state changes', () => {
-        const tracker = SkillUsageTracker.empty()
-        tracker.observeCall({ callId: 'c1', name: 'skill', arguments: 'broken' })
-        assert.equal(tracker.observeResult(toolResult('c1').data), undefined)
-    })
-})
-
 /** Minimal immutable session metadata for `init` (brands erased at runtime). */
 const header = { version: 3, id: 's1', createdAt: 0, isSeeded: false } as SessionHeader
 
-/** One logged `skill-status/used` event as the fold consumes it. */
-function loggedUsedEvent(seq: number, name: string) {
-    return { type: SKILL_STATUS_EVENT_TYPE, seq, time: 0, data: { name } } as never
+/** One logged event as the fold consumes it (brands erased at runtime). */
+function logged(event: { type: string; data: unknown }, seq: number) {
+    return { type: event.type, seq, time: 0, data: event.data } as never
 }
 
 describe('skillStatusProjectionDefinition', () => {
@@ -153,40 +91,77 @@ describe('skillStatusProjectionDefinition', () => {
     if (wire === undefined) throw new Error('unreachable: the definition declares wire')
     const offset = (value: number) => value as unknown as Parameters<typeof definition.init>[1]
 
-    it('exposes the shared key, wire view of the names, and version 1', () => {
+    function fold(...events: { type: string; data: unknown }[]): SkillStatusProjectionState {
+        let state: SkillStatusProjectionState = definition.init(header, offset(0))
+        for (const [index, event] of events.entries()) {
+            state = definition.apply(state, logged(event, index + 1))
+        }
+        return state
+    }
+
+    it('exposes the shared key, wire view of the names, and version 2', () => {
         assert.equal(definition.key, SKILL_STATUS_PROJECTION_KEY)
-        assert.equal(definition.stateVersion, 1)
-        assert.deepEqual(wire.view({ names: ['review', 'converge'] }), [
+        assert.equal(definition.stateVersion, 2)
+        assert.deepEqual(wire.view({ names: ['review', 'converge'], pending: [] }), [
             'review',
             'converge',
         ])
     })
 
-    it('starts from an empty list regardless of session metadata', () => {
+    it('starts from empty names and no in-flight calls', () => {
+        assert.deepEqual(definition.init(header, offset(0)), { names: [], pending: [] })
+    })
+
+    it('adds a name when the paired result succeeds, in completion order', () => {
+        const state = fold(skillCall('c1', 'review'), toolResult('c1'), skillCall('c2', 'converge'), toolResult('c2'))
+        assert.deepEqual(state, { names: ['review', 'converge'], pending: [] })
+    })
+
+    it('keeps an incomplete call pending so a later result still pairs', () => {
+        const state = fold(skillCall('c1', 'tickets'))
+        assert.deepEqual(state, { names: [], pending: [['c1', 'tickets']] })
+        const done = definition.apply(state, logged(toolResult('c1'), 9))
+        assert.deepEqual(done, { names: ['tickets'], pending: [] })
+    })
+
+    it('does not record a failed use and releases the call', () => {
+        const state = fold(skillCall('c1', 'review'), toolResult('c1', { isError: true }))
+        assert.deepEqual(state, { names: [], pending: [] })
+    })
+
+    it('keeps a repeated use silent', () => {
+        const state = fold(
+            skillCall('c1', 'review'),
+            toolResult('c1'),
+            skillCall('c2', 'review'),
+            toolResult('c2'),
+        )
+        assert.deepEqual(state, { names: ['review'], pending: [] })
+    })
+
+    it('ignores results of other tools and calls of other tools', () => {
+        const state = fold(
+            { type: 'tool/call', data: { callId: 'c9', name: 'bash', arguments: '{}' } },
+            { type: 'tool/result', data: { message: { content: [], source: { callId: 'c9' } } } },
+        )
+        assert.deepEqual(state, { names: [], pending: [] })
+    })
+
+    it('skips malformed skill arguments without state changes', () => {
         const state = definition.init(header, offset(0))
-        assert.deepEqual(state, { names: [] })
+        const next = definition.apply(state, logged({ type: 'tool/call', data: { callId: 'c1', name: 'skill', arguments: 'broken' } }, 1))
+        assert.equal(next, state)
     })
 
-    it('appends first-use names in log order', () => {
-        let state: SkillStatusProjectionState = definition.init(header, offset(0))
-        state = definition.apply(state, loggedUsedEvent(4, 'review'))
-        state = definition.apply(state, loggedUsedEvent(9, 'converge'))
-        assert.deepEqual(state, { names: ['review', 'converge'] })
-    })
-
-    it('keeps the same state reference for unrelated and malformed events', () => {
-        const state: SkillStatusProjectionState = { names: ['review'] }
-        assert.equal(definition.apply(state, { type: 'tool/result', seq: 1, time: 0, data: {} } as never), state)
-        assert.equal(definition.apply(state, { type: SKILL_STATUS_EVENT_TYPE, seq: 2, time: 0, data: {} } as never), state)
+    it('keeps the same state reference for unrelated and duplicate events', () => {
+        const state: SkillStatusProjectionState = { names: ['review'], pending: [] }
+        assert.equal(definition.apply(state, { type: 'turn/start', seq: 1, time: 0, data: {} } as never), state)
         assert.equal(
-            definition.apply(state, { type: SKILL_STATUS_EVENT_TYPE, seq: 3, time: 0, data: { name: 42 } } as never),
+            definition.apply(state, { type: 'tool/result', seq: 2, time: 0, data: { message: { content: [], source: { callId: 'unknown' } } } } as never),
             state,
         )
-    })
-
-    it('keeps the same state reference for an already recorded name', () => {
-        const state: SkillStatusProjectionState = { names: ['review'] }
-        assert.equal(definition.apply(state, loggedUsedEvent(4, 'review')), state)
+        const pending: SkillStatusProjectionState = { names: [], pending: [['c1', 'review']] }
+        assert.equal(definition.apply(pending, logged(skillCall('c1', 'converge'), 3)), pending)
     })
 
     it('validates the wire view against its schema', () => {
@@ -198,7 +173,11 @@ describe('skillStatusProjectionDefinition', () => {
 
     it('validates the persisted state against its schema', () => {
         const stateSchema = definition.stateSchema
-        assert.deepEqual(stateSchema.parse({ names: ['review'] }), { names: ['review'] })
-        assert.throws(() => stateSchema.parse({ names: 'review' }))
+        assert.deepEqual(stateSchema.parse({ names: ['review'], pending: [['c1', 'review']] }), {
+            names: ['review'],
+            pending: [['c1', 'review']],
+        })
+        assert.throws(() => stateSchema.parse({ names: 'review', pending: [] }))
+        assert.throws(() => stateSchema.parse({ names: [], pending: [['c1', 42]] }))
     })
 })
