@@ -1497,7 +1497,7 @@ describe("§3 requestCommandPermission（ask_permission の command）", () => {
       assert.equal(questions[0]!.question, "Allow command execution?");
       assert.equal(
         questions[0]!.detail,
-        `sudo reboot\nreason: system maintenance\nmatched: ^sudo\\b`,
+        `>>>sudo<<< reboot\nreason: system maintenance\nmatched: ^sudo\\b`,
       );
       // The one-shot approval runs once without a dialog, then is consumed.
       assert.equal(await sandbox.authorizeCommand("sudo reboot", confirmWith(ui)), true);
@@ -1537,7 +1537,7 @@ describe("§4 authorizeCommand（bash ゲート）", () => {
       assert.equal(await sandbox.authorizeCommand("git push", confirmWith(ui)), true);
       assert.equal(questions.length, 1);
       assert.equal(questions[0]!.question, "Allow command?");
-      assert.equal(questions[0]!.detail, `git push\nmatched: ^git push$`);
+      assert.equal(questions[0]!.detail, `>>>git push<<<\nmatched: ^git push$`);
       assert.deepEqual(questions[0]!.options, ["Yes, allow", "No, deny (reason next)"]);
       const denied = scriptedUi([{ label: "No, deny (reason next)" }, { custom: "wrong remote" }]);
       await assert.rejects(
@@ -1832,7 +1832,91 @@ describe("§2.3 複合コマンド ask の matched 表示", () => {
       const command = "ls; git push -u origin main";
       assert.equal(await sandbox.authorizeCommand(command, confirmWith(ui)), true);
       assert.equal(questions[0]!.question, "Allow command?");
-      assert.equal(questions[0]!.detail, `${command}\nmatched: ^git push\\b`);
+      assert.equal(questions[0]!.detail, `ls; >>>git push<<< -u origin main\nmatched: ^git push\\b`);
+    }),
+  );
+});
+
+describe("§2.3 コマンド一致範囲の強調表示", () => {
+  const allowAllWithAskGitPush = "commands:\n  - { allow: '.*' }\n  - { ask: '^git push\\b' }\n";
+
+  it(
+    "ask ダイアログは一致範囲を >>> と <<< で囲む",
+    withTempDirectory(async (dir) => {
+      const configPath = join(dir, "sandbox.yaml");
+      writeFileSync(configPath, allowAllWithAskGitPush);
+      const sandbox = new Sandbox(dir, configPath);
+      const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
+      assert.equal(
+        await sandbox.authorizeCommand("git push -u origin main", confirmWith(ui)),
+        true,
+      );
+      assert.equal(questions[0]!.detail, `>>>git push<<< -u origin main\nmatched: ^git push\\b`);
+    }),
+  );
+
+  it(
+    "先頭の VAR= を読み飛ばした位置を強調する",
+    withTempDirectory(async (dir) => {
+      const configPath = join(dir, "sandbox.yaml");
+      writeFileSync(configPath, allowAllWithAskGitPush);
+      const sandbox = new Sandbox(dir, configPath);
+      const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
+      assert.equal(
+        await sandbox.authorizeCommand("FOO=1 git push origin main", confirmWith(ui)),
+        true,
+      );
+      assert.equal(
+        questions[0]!.detail,
+        `FOO=1 >>>git push<<< origin main\nmatched: ^git push\\b`,
+      );
+    }),
+  );
+
+  it(
+    "語境界にない部分一致を飛ばして次の出現を強調する",
+    withTempDirectory(async (dir) => {
+      const configPath = join(dir, "sandbox.yaml");
+      writeFileSync(configPath, allowAllWithAskGitPush);
+      const sandbox = new Sandbox(dir, configPath);
+      const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
+      assert.equal(
+        await sandbox.authorizeCommand("echo mygit pushx; git push", confirmWith(ui)),
+        true,
+      );
+      assert.equal(
+        questions[0]!.detail,
+        `echo mygit pushx; >>>git push<<<\nmatched: ^git push\\b`,
+      );
+    }),
+  );
+
+  it(
+    "再構築候補が見つからないときは一致テキストを語境界で探して強調する",
+    withTempDirectory(async (dir) => {
+      const configPath = join(dir, "sandbox.yaml");
+      writeFileSync(configPath, "commands:\n  - { allow: '.*' }\n  - { ask: 'push\\b' }\n");
+      const sandbox = new Sandbox(dir, configPath);
+      const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
+      // The candidate collapses the double space, so the reassembled string is
+      // not found in the raw command and the fallback searches "push" alone.
+      assert.equal(await sandbox.authorizeCommand("git  push origin main", confirmWith(ui)), true);
+      assert.equal(questions[0]!.detail, `git  >>>push<<< origin main\nmatched: push\\b`);
+    }),
+  );
+
+  it(
+    "一致範囲がコマンド文字列で見つからないときは強調しない",
+    withTempDirectory(async (dir) => {
+      const configPath = join(dir, "sandbox.yaml");
+      writeFileSync(configPath, allowAllWithAskGitPush);
+      const sandbox = new Sandbox(dir, configPath);
+      const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
+      assert.equal(
+        await sandbox.authorizeCommand('git "push" origin main', confirmWith(ui)),
+        true,
+      );
+      assert.equal(questions[0]!.detail, `git "push" origin main\nmatched: ^git push\\b`);
     }),
   );
 });

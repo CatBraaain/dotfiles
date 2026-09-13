@@ -53,11 +53,14 @@ export type CommandAction = PathAction | "ask_with_reason";
 
 /** Action resolution result together with the pattern that caused it (§2.3). */
 export type PathActionMatch = { action: PathAction; matched?: string };
+
+/** Where a command pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
+export type MatchSpan = { candidate: string; index: number; length: number };
+
 export type CommandActionMatch = {
   action: CommandAction;
   matched?: string;
-  /** Where the pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
-  matchSpan?: { candidate: string; index: number; length: number };
+  matchSpan?: MatchSpan;
 };
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
@@ -421,6 +424,40 @@ export function resolveCommandAction(
   command: string,
 ): CommandAction {
   return resolveCommandActionMatch(entries, command).action;
+}
+
+/** Characters that may surround a shell word in the raw command string. */
+const WORD_BOUNDARY = /[\s;&|()<>"'`]/;
+
+function isWordBoundary(character: string | undefined): boolean {
+  return character === undefined || WORD_BOUNDARY.test(character);
+}
+
+/** First occurrence of `text` in `raw` that starts and ends on shell word boundaries. */
+function findWordBoundaryIndex(raw: string, text: string): number {
+  for (let at = raw.indexOf(text); at !== -1; at = raw.indexOf(text, at + 1)) {
+    if (isWordBoundary(raw[at - 1]) && isWordBoundary(raw[at + text.length])) return at;
+  }
+  return -1;
+}
+
+/**
+ * Fence the matched span with `>>>` / `<<<` for the §2.3 command dialogs. The
+ * question UI renders plain text, so markers replace pi's terminal invert.
+ * The span lives in the reassembled candidate (quotes stripped, head words
+ * skipped), so map it back: try the whole candidate first, then the matched
+ * text alone. Returns the raw command unchanged when neither is found
+ * (quoted commands) or when `span` is absent.
+ */
+export function highlightCommandMatch(raw: string, span?: MatchSpan): string {
+  if (span === undefined) return raw;
+  const candidateAt = findWordBoundaryIndex(raw, span.candidate);
+  const start =
+    candidateAt !== -1
+      ? candidateAt + span.index
+      : findWordBoundaryIndex(raw, span.candidate.slice(span.index, span.index + span.length));
+  if (start === -1) return raw;
+  return `${raw.slice(0, start)}>>>${raw.slice(start, start + span.length)}<<<${raw.slice(start + span.length)}`;
 }
 
 /** All patterns declared with `action` across the flat entries, in list order. */
@@ -984,25 +1021,29 @@ export class Sandbox {
     reason: string,
     confirm: ConfirmOptions = {},
   ): Promise<CommandPermissionRequest> {
-    const { action, matched } = this.resolveCommandAction(command);
+    const { action, matched, matchSpan } = this.resolveCommandAction(command);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "allow") return { status: "already granted", command };
     if (action === "ask")
       throw new Error(`Command is confirmed when run via bash; no pre-approval needed: ${command}`);
     if (confirm.ui === undefined) throw new Error(`Access requires confirmation: ${command}`);
-    return withUiLock(() => this.confirmCommandPermission(command, reason, matched, confirm));
+    return withUiLock(() =>
+      this.confirmCommandPermission(command, reason, matched, matchSpan, confirm),
+    );
   }
 
   private async confirmCommandPermission(
     command: string,
     reason: string,
     matched: string | undefined,
+    matchSpan: MatchSpan | undefined,
     confirm: ConfirmOptions,
   ): Promise<CommandPermissionRequest> {
     const ui = confirm.ui as ConfirmUi;
+    const display = highlightCommandMatch(command, matchSpan);
     const outcome = await askChoice(ui, {
       question: "Allow command execution?",
-      detail: `${command}\nreason: ${reason}\n${matchedPatternNote(matched)}`,
+      detail: `${display}\nreason: ${reason}\n${matchedPatternNote(matched)}`,
       options: [ALLOW_OPTION, DENY_OPTION],
       agent: confirm.agent,
       signal: confirm.signal,
@@ -1023,7 +1064,7 @@ export class Sandbox {
    * or one-shot; §2.3 approval note), false when it passed without one.
    */
   async authorizeCommand(command: string, confirm: ConfirmOptions = {}): Promise<boolean> {
-    const { action, matched } = this.resolveCommandAction(command);
+    const { action, matched, matchSpan } = this.resolveCommandAction(command);
     if (action === "allow") return false;
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "ask_with_reason") {
@@ -1031,10 +1072,11 @@ export class Sandbox {
       throw new Error(`Command requires a reason: ${command}\n${COMMAND_REASON_HINT}`);
     }
     if (confirm.ui === undefined) throw new Error(`Command requires confirmation: ${command}`);
+    const display = highlightCommandMatch(command, matchSpan);
     return withUiLock(async () => {
       const outcome = await askChoice(confirm.ui as ConfirmUi, {
         question: "Allow command?",
-        detail: `${command}\n${matchedPatternNote(matched)}`,
+        detail: `${display}\n${matchedPatternNote(matched)}`,
         options: [ALLOW_OPTION, DENY_OPTION],
         agent: confirm.agent,
         signal: confirm.signal,
