@@ -24,10 +24,9 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 | google の描画・パースが成功し結果 1 件以上 | google の結果を返す（後続エンジンは試行しない） |
 | google 失敗（描画失敗・チャレンジ検出・パース失敗・空結果のいずれか） | duckduckgo を試行。さらに失敗なら bing を試行 |
 | 3 エンジンすべて失敗 | `WEB_PROVIDER_ERROR` の `WebError` で失敗し、メッセージに各エンジンの失敗行が含まれる。描画の abort を含む失敗だった場合、メッセージ末尾に hung した camoufox server の kill ヒント（`pkill -f "bun server.mjs"` 行）が付く |
-| `maxResults` 指定あり | 結果の上位 `maxResults` 件に cap |
-| `maxResults` 指定なし | 上位 10 件に cap |
 
 - openserp の結果は契約の `WebSearchSource` へ射影して返す。`url` の無いエントリは捨て、`title`・`snippet` は空白時に省略する。openserp の `type`・`display_url` と、pi が検索結果 Markdown に付けていた `**Query:**` / `**Took:**` メタデータ行は契約型に置き場がなく出力しない
+- 結果の件数上限（`maxResults` cap）と `truncated` は dsh-web seam の受け持ち。provider は検索結果を全件返し、cap により行が減ったときは seam が `truncated: true` を設定する（本家 `dsh-web-search-deepseek` と同じ構造）
 - 言語ヒントは対応しない。dsh 契約の `WebSearchRequest` に lang フィールドが存在せず、検索は言語指定なしで行われる
 - エンジン試行にクールダウンはなく、失敗したバックエンドも次回のリクエストでは通常どおり google → duckduckgo → bing の順で試行する
 - `available()` は、`bun`、`openserp`、`playwright-cli` の 3 バイナリが PATH 上で見つかること、および camoufox ブラウザ実行ファイル（環境変数 `CAMOUFOX_EXECUTABLE_PATH`、既定 `~/.cache/camoufox/camoufox-bin`）が存在することを条件とする。ネットワークアクセスは行わない

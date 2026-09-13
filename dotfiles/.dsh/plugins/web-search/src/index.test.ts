@@ -848,26 +848,26 @@ describe("search provider（CamoufoxOpenserpSearchProvider）", () => {
     }));
   }
 
-  it("maxResults 指定ありのとき上位 maxResults 件に cap する", async () => {
+  it("maxResults 指定ありでも全件を返し truncated false を返す（cap は seam の受け持ち）", async () => {
     const provider = new CamoufoxOpenserpSearchProvider(endpoints, {
       search: async () => sources(5),
     });
 
     const result = await provider.search({ query: "q", maxResults: 2 });
 
-    assert.deepEqual(result.sources, sources(2));
+    assert.deepEqual(result.sources, sources(5));
     assert.equal(result.truncated, false);
   });
 
-  it("maxResults 指定なしのとき上位10件に cap する", async () => {
+  it("maxResults 指定なしでも全件を返す", async () => {
     const provider = new CamoufoxOpenserpSearchProvider(endpoints, {
       search: async () => sources(12),
     });
 
     const result = await provider.search({ query: "q" });
 
-    assert.equal(result.sources.length, 10);
-    assert.deepEqual(result.sources, sources(10));
+    assert.deepEqual(result.sources, sources(12));
+    assert.equal(result.truncated, false);
   });
 
   it("全エンジン失敗時は WEB_PROVIDER_ERROR の WebError で失敗し、メッセージに各エンジンの失敗行が含まれる", async () => {

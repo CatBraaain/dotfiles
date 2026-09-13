@@ -40,8 +40,6 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const SEARCH_RESULT_LIMIT = 10;
-
 // SPEC §"常駐サーバー" / timeouts: server launch wait and per-stage limits.
 export const SERVER_WAIT_TIMEOUT_MS = 15_000;
 export const RENDER_TIMEOUT_MS = 30_000;
@@ -159,9 +157,9 @@ export class CamoufoxOpenserpSearchProvider implements WebSearchProvider {
     try {
       // SPEC §"同種リクエストの直列化": searches run one at a time.
       const sources = await this.queue.run(() => runSearch(request.query, signal));
-      // SPEC §"search provider": cap to maxResults, or 10 when unspecified.
-      const limit = request.maxResults ?? SEARCH_RESULT_LIMIT;
-      return { sources: sources.slice(0, limit), truncated: false };
+      // SPEC §"search provider": maxResults capping and the truncated flag are
+      // owned by the dsh-web seam, matching dsh-web-search-deepseek.
+      return { sources, truncated: false };
     } catch (error) {
       throw toWebError(error);
     }
