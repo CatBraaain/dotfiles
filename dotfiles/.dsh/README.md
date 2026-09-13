@@ -17,6 +17,16 @@ dsh（DeepSeek Harness）関係のファイル。
 
 run script の実行順序は target path の辞書順。`.dsh/plugins/...` は `.dsh/profiles/...` より先にソートされるため、プラグインのビルド → プロファイルへの install 再リンクの順が保たれる。
 
+client half（`src/client/`）を持つプラグインの browser bundle は `run_build.sh` の対象外で、`lib/client.js` をリポジトリにコミットして運用する。`src/client/` を編集したときは、そのプラグイン dir で次のコマンドで再ビルドする:
+
+```sh
+bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser --external react \
+  --banner 'window.__ModuleLoader__.load({ id: "<plugin id>", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' \
+  --footer 'return module.exports; } });'
+```
+
+`<plugin id>` はプラグインの package name（例: `dotfiles-dsh-footer`）。banner / footer は `@deepseek-ai/dsh-client-modules` が要求する `window.__ModuleLoader__.load({ id, factory })` handoff で、`react` は shell の frozen module table で解決する external `require("react")` のまま残す。
+
 `~/.dsh/profiles/web/` のその他のファイル（`cordis.yml`、`cordis.patch.yml`、`bun.lock`、`node_modules`）は dsh / bun の生成物。
 
 install は bun を使う。pnpm は `file:` 依存の copy 時に `.gitignore` を除外リストとして使うため、`dist` を `.gitignore` に書いたプラグインは `dist/` が `node_modules` に欠落し、dsh の起動が plugin ロードで失敗する。

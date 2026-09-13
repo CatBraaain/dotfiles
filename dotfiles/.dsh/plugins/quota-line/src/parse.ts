@@ -3,11 +3,14 @@
  *
  * - zai: `GET {origin}/api/monitor/usage/quota/limit` (Z.AI / bigmodel GLM
  *   Coding Plan). Normalization logic ported from pi-usage
- *   (`pi-extensions/packages/pi-usage/src/providers/zai.ts`, MIT) and
- *   dsh-glm-quota (`plugin/index.js` parseQuota/percentOf, MIT).
+ *   (github.com/narumiruna/pi-extensions,
+ *   `packages/pi-usage/src/providers/zai.ts`, MIT) and dsh-glm-quota
+ *   (github.com/ardss/dsh-glm-quota, `plugin/index.js`
+ *   parseQuota/percentOf, MIT).
  * - codex: `GET https://chatgpt.com/backend-api/wham/usage` (ChatGPT
  *   subscription). Normalization logic ported from pi-usage
- *   (`src/providers/codex.ts`, MIT).
+ *   (github.com/narumiruna/pi-extensions,
+ *   `packages/pi-usage/src/providers/codex.ts`, MIT).
  *
  * Both return the same display shape: a plan label (optional) plus at least
  * one of the rolling (≈5h) / weekly windows as used percents.

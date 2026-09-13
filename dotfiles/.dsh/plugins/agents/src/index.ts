@@ -519,7 +519,7 @@ export function apply(ctx: Context) {
 
   // ---- commands --------------------------------------------------------------
   // dsh command names match /^[a-z][a-z0-9_-]*$/ so pi's `/agent:<name>`
-  // syntax is unreachable; use `/agent <name>` instead (README).
+  // syntax is unreachable; use `/agent <name>` instead.
   const agentCommand: CommandDefinition = {
     name: "agent",
     description: "Switch the active agents.yaml agent (pi: /agent:<name>)",

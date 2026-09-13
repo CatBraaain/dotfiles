@@ -29,6 +29,8 @@ host 側 plugin がセッションの `skill` tool 呼び出し（`tool/call` / 
 
 明示的な skill コマンド（`/skill:<name>` 等）は dsh 本体が pre-step で `skill-invocation` injection に変換し、model が `skill` tool を呼ぶ。本 plugin は tool 成否だけを見るため、コマンド経由か自動選択かを区別しない。
 
+`skill-status/used` は dsh 本体の既知 event 型の外にある plugin 固有の log-only event であり、envelope の `ignorable` forward-compat marker を付けられない。将来この marker を厳格に施行する harness では、本 event を含む session log の resume が拒否され得る。
+
 ## セッション間の表示
 
 表示は session event にのみ載るため、現在のセッションに属する。

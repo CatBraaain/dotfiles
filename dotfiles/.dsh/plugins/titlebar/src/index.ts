@@ -7,8 +7,8 @@
  * makes dsh load the package; it registers nothing.
  *
  * `run_build.sh` bundles this entry: relative imports are inlined and only
- * the script's explicit bare-specifier externals stay external (see the
- * skill-status README "Build").
+ * the script's explicit bare-specifier externals stay external (see
+ * dotfiles/.dsh/README.md).
  */
 
 export const name = 'dsh-titlebar'

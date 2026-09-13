@@ -2,6 +2,10 @@
 
 dsh web プロファイルの composer 周りを、既定のままだと邪魔な表示を減らし、モデル選択と reasoning effort の既定を整える dsh bundle plugin。設定ファイルは持たず、plugin を profile から外すことで全体を無効化する。対象は dsh web UI。
 
+## 読み込み順
+
+本 plugin は `dotfiles-dsh-agents` bundle より先に読み込まれることを要件とする。既定 effort のフォールバックを `agent/request` waterfall で先に処理し、`next()` で class routing（`dotfiles-dsh-agents`）へ渡すためである。
+
 ## 用語
 
 - **/model popup**: `/model` コマンド実行時に開く、provider 別グループのモデル・effort 選択画面。addressed subagent セッションでは /model コマンドが利用できないため、chord でも開かない。

@@ -9,7 +9,7 @@
  *
  * `run_build.sh` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external (see
- * README "Build"). The event type literal is duplicated in
+ * dotfiles/.dsh/README.md). The event type literal is duplicated in
  * `src/client/event.ts` and pinned equal by `src/index.test.ts`.
  */
 import type { Context } from '@deepseek-ai/cordis'

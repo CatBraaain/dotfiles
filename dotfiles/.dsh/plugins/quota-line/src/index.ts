@@ -13,7 +13,8 @@
  *   stored in the harness credential records under `llm-pi-ai/openai-codex`
  *   (written by dsh's sign-in flow). The grant is rotated inside the
  *   credential store's exclusive lock when it nears expiry; grant logic is
- *   ported from dsh-provider-usage (`src/openai-codex.ts`, MIT).
+ *   ported from dsh-provider-usage (github.com/lizhouai/dsh-provider-usage,
+ *   `src/openai-codex.ts`, MIT).
  *
  * API keys and tokens never leave this process: the route answers quota
  * numbers only. A TTL cache plus in-flight dedup keeps the endpoints' rate
