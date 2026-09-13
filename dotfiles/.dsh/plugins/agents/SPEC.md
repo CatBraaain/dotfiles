@@ -136,7 +136,8 @@ cooldown 対象の route の同定は、本 plugin が直前のリクエスト�
 - 次候補があればリクエストの再試行を指示する。dsh の agent loop が再試行時に route 解決をやり直すため、次候補が自動的に適用される。追加の待機は入れず、ユーザーメッセージは追加されない。切替時は `rate limited on <provider>/<model>; switched to <provider>/<model>` を warning でログする。
 - 次候補がない場合は元のエラー文言と再送案内を含めた `rate limited on <provider>/<model>; no fallback available: <元のエラー文言> (resend the message to retry)` を error でログし、再試行を指示しない。この場合の処理は dsh 本来のエラー経路（本家の retry policy を含む）に委ねられる。
 - 手動状態でも同じ流れでフォールバックする。
-- Z.AI の同時実行系エラー（コード `1302` / `1305`）の待機リトライは本 plugin の対象外である（「対象外」節）。
+- Z.AI の同時実行系エラー（コード `1302` / `1305`）の待機リトライは本 plugin の対象外であり、`dsh-zai-concurrency-retry` が担当する。同 plugin は `agent/request-error` waterfall の最外側で対象エラーを握って下流へ渡さないため、同 plugin が有効な profile では本節のフォールバックは発火しない。
+- 本 plugin だけが有効な環境では、`1305` は provider adapter で `RATE_LIMIT` に正規化されないためフォールバックの対象にならず、`1302` は `RATE_LIMIT` に正規化されるため対象になる。モデル切替では Z.AI の同時実行制限は解決しないため、`1302` での切替は pi と異なり無効な fallback である。
 
 ### cooldown（待機状態）
 
