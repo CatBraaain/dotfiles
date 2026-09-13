@@ -10,6 +10,7 @@ dsh web プロファイルの composer 周りを、既定のままだと邪魔�
 
 - **/model popup**: `/model` コマンド実行時に開く、provider 別グループのモデル・effort 選択画面。addressed subagent セッションでは /model コマンドが利用できないため、chord でも開かない。
 - **セッション表示中**: 既存セッションが開かれ、composer が入力可能な状態。
+- **ツール行**: composer の入力欄の下に並ぶ操作行全体。左側のボタン群(commands・add attachment 等)と右側のモデル選択 control の双方を含み、左側のみを指さない。
 - **advertised effort**: 選択中のモデルが dsh カタログで対応を広告する effort レベル(off / minimal / low / medium / high / xhigh / max のうち)。
 - **既定 effort**: effort を明示選択していないときにリクエストへ設定するレベル。選択中モデルの advertised effort のうち Off を除く最も高いレベル。Off を除く advertised effort が存在しない、またはカタログから確定できない場合は effort を設定しない。
 - **chord 待ち**: Ctrl+K 入力後、1000ms 以内(ちょうど 1000ms を含む)だけ次のキーを受け付ける状態。
@@ -20,11 +21,15 @@ dsh web プロファイルの composer 周りを、既定のままだと邪魔�
 
 ## composer のモデル選択 control
 
+本節の非表示は、セッション表示中・新規セッション画面の双方で適用される。
+
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
 | セッション表示中 | 入力欄のツール行を見る | ツール行にモデル選択 control(モデル名・effort の表示と選択メニュー)が存在しない |
 
 ## composer の tool row ボタン
+
+本節の非表示は、セッション表示中・新規セッション画面の双方で適用される。
 
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
