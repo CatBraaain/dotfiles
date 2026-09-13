@@ -27,7 +27,7 @@ host 側 plugin がセッションの `skill` tool 呼び出し（`tool/call` / 
 | `skill` tool の呼び出しが失敗した（tool/result が `error` を持つ、または結果 block が `isError`） | 表示を変更しない |
 | 表示済み skill を再度利用した | 表示順と表示名を変更しない |
 
-明示的な skill コマンド（`/skill:<name>` 等）は dsh 本体が pre-step で `skill-invocation` injection に変換し、model が `skill` tool を呼ぶ。本 plugin は tool 成否だけを見るため、コマンド経由か自動選択かを区別しない。
+dsh の明示コマンド `/<name>`（pi の `/skill:<name>` とは異なる）は、skill の内容を user message に直接展開し、`skill` tool を呼ばない（dsh 0.1.5-rc 系で実測）。本 plugin は `skill` tool の呼び出しの成否だけを見るため、明示コマンド経由の利用は記録されない。
 
 `skill-status/used` は dsh 本体の既知 event 型の外にある plugin 固有の log-only event であり、envelope の `ignorable` forward-compat marker を付けられない。将来この marker を厳格に施行する harness では、本 event を含む session log の resume が拒否され得る。
 
