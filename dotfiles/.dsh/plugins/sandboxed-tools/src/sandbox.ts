@@ -593,6 +593,10 @@ export type PathApproval = {
   operation: "read" | "write";
   scope: "file" | "directory";
   grantedPath: string;
+  /** True when the §6.1 existence guarantee created `grantedPath` as a new
+   * empty file (file-scope write approval on a not-yet-existing path). The
+   * first write to it succeeds as create without a prior read (§2.4). */
+  createdFile?: boolean;
 };
 
 /** ask_permission tool outcome for `path` (§3): denial resolves instead of throwing. */
@@ -833,8 +837,13 @@ export class Sandbox {
     }
     if (outcome.kind === "selected" && operation === "write") {
       if (outcome.label === FILE_OPTION) {
-        this.addDynamicGrant(operation, absolutePath, "file");
-        return { operation, scope: "file", grantedPath: absolutePath };
+        const createdFile = this.addDynamicGrant(operation, absolutePath, "file");
+        return {
+          operation,
+          scope: "file",
+          grantedPath: absolutePath,
+          ...(createdFile ? { createdFile: true } : {}),
+        };
       }
       if (outcome.label === DIRECTORY_OPTION) {
         const grantPath = dirname(absolutePath);
@@ -858,26 +867,31 @@ export class Sandbox {
    * guarantee first (outside the fence): directory scopes mkdir -p the
    * subtree root, file scopes mkdir -p the parent and touch the file. A
    * failing guarantee throws before the grant is recorded, so later calls
-   * behave exactly as before the request.
+   * behave exactly as before the request. Returns whether the guarantee
+   * created `grantPath` as a new empty file (file scope on a missing path).
    */
   private addDynamicGrant(
     operation: "read" | "write",
     grantPath: string,
     scope: "file" | "directory",
-  ): void {
-    if (operation === "write") this.ensureGrantPathExists(grantPath, scope);
+  ): boolean {
+    const createdFile =
+      operation === "write" ? this.ensureGrantPathExists(grantPath, scope) : false;
     const accessModes = this.dynamicPaths.get(grantPath) ?? new Set<"read" | "write">();
     accessModes.add(operation);
     this.dynamicPaths.set(grantPath, accessModes);
+    return createdFile;
   }
 
-  private ensureGrantPathExists(grantPath: string, scope: "file" | "directory"): void {
+  private ensureGrantPathExists(grantPath: string, scope: "file" | "directory"): boolean {
     if (scope === "directory") {
       mkdirSync(grantPath, { recursive: true });
-      return;
+      return false;
     }
     mkdirSync(dirname(grantPath), { recursive: true });
-    if (!existsSync(grantPath)) writeFileSync(grantPath, "");
+    if (existsSync(grantPath)) return false;
+    writeFileSync(grantPath, "");
+    return true;
   }
 
   /**

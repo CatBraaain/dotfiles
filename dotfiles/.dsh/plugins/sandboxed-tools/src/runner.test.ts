@@ -181,6 +181,39 @@ describe("runner write（§2.4）", () => {
   );
 
   it(
+    "approvalCreatedFile 付きの空ファイル（§6.1 承認プレースホルダー）は未読みでも create で書ける",
+    withFixture(
+      (dir) => writeFileSync(join(dir, "a.txt"), ""),
+      async (dir) => {
+        const result = (await executeRequest({
+          tool: "write",
+          params: { file_path: join(dir, "a.txt"), content: "hello" },
+          options: { approvalCreatedFile: true },
+        })) as { operation: string };
+        assert.equal(result.operation, "create");
+        assert.equal(readFileSync(join(dir, "a.txt"), "utf8"), "hello");
+      },
+    ),
+  );
+
+  it(
+    "approvalCreatedFile でも空でない既存ファイルは未読み拒否のまま",
+    withFixture(
+      (dir) => writeFileSync(join(dir, "a.txt"), "old"),
+      async (dir) => {
+        await assert.rejects(
+          executeRequest({
+            tool: "write",
+            params: { file_path: join(dir, "a.txt"), content: "new" },
+            options: { approvalCreatedFile: true },
+          }),
+          /file has not been read — read the file, then retry/,
+        );
+      },
+    ),
+  );
+
+  it(
     "既存ファイルは mtime が変わっていると拒否",
     withFixture(
       (dir) => writeFileSync(join(dir, "a.txt"), "old"),

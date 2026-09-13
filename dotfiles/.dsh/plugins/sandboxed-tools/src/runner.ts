@@ -45,6 +45,10 @@ export type RunnerRequest = {
   options?: {
     /** Observed mtime (§2.4): write/edit refuse an unread or changed file. */
     observedMtimeMs?: number;
+    /** Write only (§2.4): the §6.1 File-only approval guarantee just created
+     * the target as an empty placeholder file, so the first write succeeds as
+     * create without a prior read. Non-empty unread files stay refused. */
+    approvalCreatedFile?: boolean;
     /** Effective bash timeout (already clamped to the §4 cap by the host). */
     bashTimeoutMs?: number;
     /** Writable spill directory (bound into the sandbox) for capped bash output. */
@@ -156,24 +160,35 @@ function assertUnchangedSinceRead(
   path: string,
   observedMtimeMs: number | undefined,
   requireObserved: boolean,
+  allowUnreadPlaceholder = false,
 ): void {
   if (!existsSync(path)) {
     if (requireObserved) throw new Error(`cannot modify "${path}": not found`);
     return;
   }
   const current = statSync(path).mtimeMs;
-  if (observedMtimeMs === undefined) throw new Error(HAS_NOT_BEEN_READ(path));
+  if (observedMtimeMs === undefined) {
+    // §2.4: an unread write is only allowed against the empty placeholder
+    // that the §6.1 File-only approval guarantee just created.
+    if (allowUnreadPlaceholder && statSync(path).size === 0) return;
+    throw new Error(HAS_NOT_BEEN_READ(path));
+  }
   if (observedMtimeMs !== current) throw new Error(HAS_CHANGED(path));
 }
 
 function runWrite(
   params: Record<string, unknown>,
   observedMtimeMs: number | undefined,
+  approvalCreatedFile: boolean,
 ): RunnerWriteResult {
   const filePath = requiredString(params.file_path, "file_path");
   if (typeof params.content !== "string") throw new Error("content must be a string");
-  assertUnchangedSinceRead(filePath, observedMtimeMs, false);
-  const operation: "create" | "update" = existsSync(filePath) ? "update" : "create";
+  assertUnchangedSinceRead(filePath, observedMtimeMs, false, approvalCreatedFile);
+  // Overwriting the unread empty placeholder is a create, not an update: the
+  // file only exists because the approval guarantee put it there (§6.1).
+  const placeholderOverwrite = approvalCreatedFile && observedMtimeMs === undefined;
+  const operation: "create" | "update" =
+    placeholderOverwrite || !existsSync(filePath) ? "create" : "update";
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, params.content);
   return { path: filePath, operation, mtimeMs: statSync(filePath).mtimeMs };
@@ -418,7 +433,7 @@ export async function executeRequest(
     case "read":
       return runRead(request.params);
     case "write":
-      return runWrite(request.params, options.observedMtimeMs);
+      return runWrite(request.params, options.observedMtimeMs, options.approvalCreatedFile === true);
     case "edit":
       return runEdit(request.params, options.observedMtimeMs);
     case "glob":

@@ -8,7 +8,14 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
@@ -808,6 +815,117 @@ describe("§2.4 未読みゲート（ツール経路）", () => {
           (error: Error) => error.message === NOT_BEEN_READ(join(dir, "img.png")),
         );
         assert.equal(runs.length, 1);
+      },
+    ),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// §2.3×§2.4 承認フローと runner ゲートの結合（fake bwrap + 実 runner）
+// ---------------------------------------------------------------------------
+
+/**
+ * The withToolLayer harness stubs Sandbox.runTool, so the §2.4 runner gate
+ * never runs there. This harness keeps runTool real and puts a fake `bwrap`
+ * first on PATH that skips the bwrap flags and execs the runner source
+ * directly (`bun src/runner.ts`): the tool body, the §6.1 approval
+ * guarantee, the stdin JSON envelope, and the real §2.4 gate all run end to
+ * end. The real bubblewrap cannot run in this environment (nested user
+ * namespaces are denied), matching the fake-bwrap approach in
+ * sandbox.test.ts.
+ */
+function withRealRunner(
+  setup: (dir: string) => { configYaml: string; ui: ConfirmUi },
+  test: (helpers: {
+    tools: CapturedTool[];
+    tool: (name: string) => CapturedTool;
+    dir: string;
+  }) => Promise<void> | void,
+): () => Promise<void> {
+  return async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-integration-"));
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir);
+    const bwrapPath = join(binDir, "bwrap");
+    writeFileSync(
+      bwrapPath,
+      `#!/bin/sh\nwhile [ $# -gt 0 ] && [ "$1" != "${process.execPath}" ]; do shift; done\nexec "$@"\n`,
+    );
+    chmodSync(bwrapPath, 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+    try {
+      const { configYaml, ui } = setup(dir);
+      const configPath = join(dir, "sandbox.yaml");
+      writeFileSync(configPath, configYaml);
+      const sandbox = new Sandbox(dir, configPath, {
+        nodePath: process.execPath,
+        runnerJsPath: join(import.meta.dir, "runner.ts"),
+      });
+      const deps: SandboxToolDeps = {
+        contextOf: (): SandboxToolContext => ({
+          sandbox,
+          sessionKey: "s1",
+          cwd: dir,
+          callId: "call-1",
+          confirm: { ui },
+        }),
+        observations: new ReadObservations(),
+      };
+      const { ctx, tools } = captureRegistry();
+      registerSandboxedTools(ctx, deps);
+      await test({
+        tools,
+        tool: (name) => {
+          const found = tools.find((definition) => definition.name === name);
+          if (found === undefined) throw new Error(`tool not registered: ${name}`);
+          return found;
+        },
+        dir,
+      });
+    } finally {
+      process.env.PATH = originalPath;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+}
+
+describe("§2.3×§2.4 承認フローと runner ゲートの結合（fake bwrap + 実 runner）", () => {
+  it(
+    "File only 承認後の初回 write は実 runner でも create として成功する",
+    withRealRunner(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\nwrite:\n  - ask: ${join(dir, "w")}\n`,
+        ui: scriptedUi([{ label: "File only" }]).ui,
+      }),
+      async ({ tool, dir }) => {
+        const target = join(dir, "w", "new.txt");
+        const result = await tool("write").execute(
+          { file_path: target, content: "hello" },
+          execOf(),
+        );
+        assert.equal(result.operation, "create");
+        assert.equal(readFileSync(target, "utf8"), "hello");
+        assert.match(String(result.note), /scope: file/);
+      },
+    ),
+  );
+
+  it(
+    "既存ファイルへの File only 承認後の write は実 runner でも未読み拒否のまま",
+    withRealRunner(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\nwrite:\n  - ask: ${dir}\n`,
+        ui: scriptedUi([{ label: "File only" }]).ui,
+      }),
+      async ({ tool, dir }) => {
+        const target = join(dir, "existing.txt");
+        writeFileSync(target, "old");
+        await assert.rejects(
+          tool("write").execute({ file_path: target, content: "new" }, execOf()),
+          /file has not been read/,
+        );
+        assert.equal(readFileSync(target, "utf8"), "old");
       },
     ),
   );

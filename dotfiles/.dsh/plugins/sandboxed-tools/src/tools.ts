@@ -439,12 +439,20 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           context.confirm,
         );
         const observed = deps.observations.observedMtime(context.sessionKey, filePath);
+        const approvalCreatedFile = approval?.createdFile === true;
         const result = await runSandboxed<RunnerWriteResult>(
           exec,
           {
             tool: "write",
             params: { file_path: filePath, content: args.content },
-            ...(observed !== undefined ? { options: { observedMtimeMs: observed } } : {}),
+            ...(observed !== undefined || approvalCreatedFile
+              ? {
+                  options: {
+                    ...(observed !== undefined ? { observedMtimeMs: observed } : {}),
+                    ...(approvalCreatedFile ? { approvalCreatedFile: true } : {}),
+                  },
+                }
+              : {}),
           },
           { mode: "fs", cwd: context.cwd, signal: exec.signal },
         );

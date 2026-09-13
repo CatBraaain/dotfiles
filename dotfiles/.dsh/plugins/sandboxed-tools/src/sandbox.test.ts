@@ -1154,7 +1154,12 @@ describe("§2.3 authorizePathWithConfirm（fs ツールの確認）", () => {
       const sandbox = new Sandbox(dir, configPath);
       const { ui } = scriptedUi([{ label: "File only" }]);
       const approval = await sandbox.authorizePathWithConfirm("write", target, confirmWith(ui));
-      assert.deepEqual(approval, { operation: "write", scope: "file", grantedPath: target });
+      assert.deepEqual(approval, {
+        operation: "write",
+        scope: "file",
+        grantedPath: target,
+        createdFile: true,
+      } satisfies PathApproval);
       // §6.1 existence guarantee: the parent is mkdir-ed and the file touched.
       assert.equal(existsSync(target), true);
       assert.equal(statSync(target).isFile(), true);
@@ -1271,6 +1276,7 @@ describe("§2.3 authorizePathWithConfirm（fs ツールの確認）", () => {
       await sandbox.authorizePathWithConfirm("read", target, confirmWith(ui));
       // The read grant does not cover write: write still asks (2nd round).
       const approval = await sandbox.authorizePathWithConfirm("write", target, confirmWith(ui));
+      // The target already exists, so the guarantee creates nothing.
       assert.deepEqual(approval, { operation: "write", scope: "file", grantedPath: target });
     }),
   );
@@ -1406,6 +1412,7 @@ describe("§3 requestWritePermission（ask_permission の path）", () => {
         operation: "write",
         scope: "file",
         grantedPath: join(dir, "askme", "x.txt"),
+        createdFile: true,
       });
     }),
   );
