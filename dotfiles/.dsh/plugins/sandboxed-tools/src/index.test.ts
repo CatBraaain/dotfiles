@@ -125,8 +125,6 @@ function withPluginEnvironment(
           handlers[event] = handler;
         },
         tools: { register: (definition: unknown) => tools.push(definition as CapturedTool) },
-        inject: (_names: string[], mount: (ctx: Context) => void) => mount(ctx as Context),
-        provide: () => () => {},
         userQuestions: options.ui,
         get: () => undefined,
       } as unknown as Context;
