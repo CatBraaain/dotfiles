@@ -9,6 +9,21 @@ export const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 export const CACHE_VERSION = 1;
 
 export type WireApi = "openai-completions" | "openai-responses" | "anthropic-messages";
+
+/**
+ * Whether a provider's wire api has a model listing this plugin can sync.
+ * `undefined` (no profile api and no shared catalog api) keeps the
+ * openai-compatible assumption; catalog apis like google's or bedrock's speak
+ * no compatible listing and are excluded from sync.
+ */
+export function isSyncableWireApi(api: string | undefined): boolean {
+  return (
+    api === undefined ||
+    api === "openai-completions" ||
+    api === "openai-responses" ||
+    api === "anthropic-messages"
+  );
+}
 export type ResponseShape = "openai" | "anthropic";
 
 export type ModelInput = ("text" | "image")[];

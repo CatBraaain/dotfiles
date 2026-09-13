@@ -10,6 +10,7 @@ import {
   extractRemoteModels,
   isCacheStale,
   isCachedProviderUsable,
+  isSyncableWireApi,
   parseCache,
   sharedInstalledApi,
   type InstalledModel,
@@ -318,6 +319,21 @@ describe("sharedInstalledApi", () => {
       undefined,
     );
     assert.equal(sharedInstalledApi([]), undefined);
+  });
+});
+
+describe("isSyncableWireApi", () => {
+  it("accepts the dsh wire protocols and the indeterminate undefined", () => {
+    assert.equal(isSyncableWireApi("openai-completions"), true);
+    assert.equal(isSyncableWireApi("openai-responses"), true);
+    assert.equal(isSyncableWireApi("anthropic-messages"), true);
+    assert.equal(isSyncableWireApi(undefined), true);
+  });
+
+  it("excludes catalog apis whose wire has no compatible model listing", () => {
+    // pi-ai's catalog really contains these two providers.
+    assert.equal(isSyncableWireApi("google-generative-ai"), false);
+    assert.equal(isSyncableWireApi("bedrock-converse-stream"), false);
   });
 });
 

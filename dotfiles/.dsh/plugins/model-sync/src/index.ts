@@ -32,6 +32,7 @@ import {
   extractRemoteModels,
   isCacheStale,
   isCachedProviderUsable,
+  isSyncableWireApi,
   parseCache,
   sharedInstalledApi,
   type CachedModelsDev,
@@ -192,6 +193,8 @@ export function apply(ctx: Context) {
       order.push(id);
       if (!catalogIds.has(id)) continue; // hand-declared route: the user defines its models
       const installed = installedCatalogModels(id);
+      const api = (profile.api ?? sharedInstalledApi(installed)) as WireApi | undefined;
+      if (!isSyncableWireApi(api)) continue; // wire the plugin cannot speak: out of sync scope
       const baseUrl = profile.baseURL ?? catalogBaseUrl(installed);
       if (!baseUrl) {
         outcomes.push({ id, status: "failed", message: "no baseUrl in profile or catalog" });
@@ -202,7 +205,6 @@ export function apply(ctx: Context) {
         outcomes.push({ id, status: "no-auth" });
         continue;
       }
-      const api = (profile.api ?? sharedInstalledApi(installed)) as WireApi | undefined;
       const cachedProvider = cache.providers[id];
       plans.push({
         id,

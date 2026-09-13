@@ -37,9 +37,12 @@ flowchart TD
 `llm-pi-ai.providers` に profile を持つ route のうち、次のすべてを満たす id。
 
 - pi-ai の installed catalog（`@earendil-works/pi-ai/providers/all` の `getBuiltinProviders()`）に存在する
+- wire protocol（`profile.api`、未設定なら installed catalog の共通 api）が `openai-completions` / `openai-responses` / `anthropic-messages` のいずれか、または未確定（openai 互換として扱う）
 - `apiKeyEnv` が設定され、`ctx.credentials.resolve` で値に解決できる
 
 hand-declared route（カタログ外 id）は対象外。ユーザーが models を明示定義しており、models.dev の id も対応しないため。
+
+wire 非対応の catalog api（`google-generative-ai`、`bedrock-converse-stream` など）に解決される route も対象外で、`/model-sync` の結果行にも現れない。
 
 `model-sync.disabled: true`（本 plugin 固有 settings namespace）のときは同期もコマンドも何もしない。
 
@@ -178,7 +181,7 @@ pi 版の footer status 相当は dsh web client に実装しない。起動時�
 | 対象 | 固定表 26 provider のうち認証解決できたもの | 設定済み pi-ai catalog route（認証解決できるもの） |
 | endpoint baseURL | 固定表の `defaultBaseUrl`（provider ごとに手維持） | catalog の baseUrl から URL path が最も深いものを選択（固定表なし。混在時の規則は「ネットワーク取得」節） |
 | cost | 登録モデルに cost を設定 | settings schema に cost が無いため反映しない（同名 id は catalog の cost、新規 id は 0） |
-| google provider | 対応 | dsh の wire protocol に google 系が無いため対象外 |
+| google・amazon-bedrock など wire 非対応 provider | 対応 | dsh の wire protocol に無い catalog api へ解決される route は同期対象外（「対象 Provider」節） |
 | footer status / 通知 | あり（`syncing…`、全失敗で warning） | なし。`/model-sync` の結果行のみ |
 | models.json 相当の保護 | `models.json` のカスタム定義を最優先 | user section の entry を最優先（所有権規則） |
 | 新規取得の起点 | pi 起動（session_start）ごと | profile boot、12 時間 timer、コマンド |
