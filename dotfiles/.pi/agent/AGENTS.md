@@ -212,7 +212,7 @@ main worktree ではファイルを編集しない。編集を伴う作業は、
 ### 作成
 
 1. branch 名は取り組む機能を表す kebab-case 英語（例: `add-export-command`）。リポジトリ規約があれば優先する。
-2. `git worktree add ~/.agents/worktrees/<リポジトリ名>/<branch> -b <branch>` で HEAD から worktree を作成する。worktree はリポジトリごとに `~/.agents/worktrees/<リポジトリ名>/` ディレクトリへ集約する。書き込みが sandbox にブロックされたら、作成先の worktree パス（またはその親ディレクトリ）を ask_permission で承認させる。
+2. `git worktree add ~/.agents/worktrees/<リポジトリ名>/<branch> -b <branch>` で HEAD から worktree を作成する。worktree はリポジトリごとに `~/.agents/worktrees/<リポジトリ名>/` ディレクトリへ集約する。フォルダ名（末尾セグメント）が `agents-` / `copilot-` で始まるときは branch 名を変えず `wt-` を前置する（例: branch `agents-fix-x` → フォルダ `wt-agents-fix-x`。VS Code 内蔵 Git 拡張が、その名前の worktree フォルダを SCM ビューから非表示にするため）。書き込みが sandbox にブロックされたら、作成先の worktree パス（またはその親ディレクトリ）を ask_permission で承認させる。
 3. worktree 内のファイルは絶対パスで read/write/edit する。相対パスはセッション cwd（main worktree）に解決されるため、worktree のファイル指定に使わない。git 操作は `git -C <worktree のパス>` で実行する。
 
 main の未コミット変更はその場に残す。worktree への持ち運びは行わない。
