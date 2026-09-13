@@ -22,8 +22,17 @@ import { buildSkillStatusLine } from './format'
 /** Services this client half touches. */
 export const inject = ['slots', 'uiConversation']
 
-/** Gray secondary text matching the neighboring stock rows (repo gray policy). */
+/**
+ * Gray secondary text matching the neighboring stock rows (repo gray policy).
+ * Width follows the first-party input.dock convention (TodoPanel/GoalBar):
+ * a centered band narrower than the composer card, so the ellipsis has a
+ * bounded box instead of stretching to the full dock width.
+ */
 const STATUS_STYLE: Readonly<Record<string, string>> = {
+    boxSizing: 'border-box',
+    width: 'calc(100% - var(--dsh-composer-side-clearance) * 2 - var(--dsh-composer-dock-inset) * 4)',
+    maxWidth: 'calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) * 4)',
+    margin: '0 auto',
     color: 'var(--dsw-alias-label-tertiary)',
     fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
     lineHeight: 'calc(20px + var(--dsh-content-font-delta-secondary, 0px))',

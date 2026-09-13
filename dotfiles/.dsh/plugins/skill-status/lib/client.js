@@ -157,6 +157,10 @@ function buildSkillStatusLine(names) {
 // src/client/index.ts
 var inject = ["slots", "uiConversation"];
 var STATUS_STYLE = {
+  boxSizing: "border-box",
+  width: "calc(100% - var(--dsh-composer-side-clearance) * 2 - var(--dsh-composer-dock-inset) * 4)",
+  maxWidth: "calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) * 4)",
+  margin: "0 auto",
   color: "var(--dsw-alias-label-tertiary)",
   fontSize: "var(--dsh-content-font-size-secondary, 13px)",
   lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))",
