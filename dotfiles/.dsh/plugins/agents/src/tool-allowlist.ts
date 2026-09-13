@@ -2,6 +2,8 @@
 // negations) into dsh `tools.restrict` filters, dropping names unknown to the
 // current global tool registry (dsh restrict() throws on unknown names, and
 // pi-specific tool names such as `handoff_session` have no dsh counterpart).
+// Semantics match pi's default-deny allowlist: without `*` exactly the listed
+// tools stay visible (`[]` allows nothing); denies only matter beside `*`.
 // Pure logic: the known-name set is injected.
 
 /** Structural subset of dsh-tools `ToolRestriction`. */
@@ -32,38 +34,22 @@ export function translateTools(entries: readonly string[], known: ReadonlySet<st
       continue;
     }
     const name = entry.startsWith("!") ? entry.slice(1) : entry;
-    if (entry.startsWith("!")) {
-      if (name === "") continue; // bare "!" — config validation rejects it earlier
-      if (!known.has(name)) skipped.push(name);
-      else deny.add(name);
-    } else {
-      if (!known.has(name)) skipped.push(name);
-      else allow.add(name);
+    if (name === "") continue; // bare "!" — config validation rejects it earlier
+    if (!known.has(name)) {
+      skipped.push(name);
+      continue;
     }
+    (entry.startsWith("!") ? deny : allow).add(name);
   }
 
-  const isDenyOnly = allowAll && allow.size === 0;
-  if (isDenyOnly) {
-    // ["*", "!x"] — everything stays visible except the denials.
+  if (allowAll) {
+    // ["*"] — everything stays visible; denies punch holes in it.
     return deny.size === 0
       ? { filter: undefined, skipped }
       : { filter: { deny: [...deny] }, skipped };
   }
-  if (allow.size === 0 && deny.size === 0) {
-    // Everything was unknown or the list was `[]`-with-no-known-names: either
-    // way there is nothing to restrict (or nothing restrictable left).
-    return { filter: undefined, skipped };
-  }
-  if (allow.size === 0) {
-    // A pure pi allowlist whose every name is unknown cannot be expressed as
-    // an allow set (restrict rejects empty allow lists); fall back to deny-only.
-    return { filter: { deny: [...deny] }, skipped };
-  }
-  return {
-    filter: {
-      allow: [...allow],
-      ...(!allowAll && deny.size > 0 ? { deny: [...deny] } : {}),
-    },
-    skipped,
-  };
+  // Default deny (pi parity): exactly the listed known tools stay visible,
+  // so `[]` and all-unknown lists restrict to nothing. Denials without `*`
+  // are subsumed — the allow mask already excludes everything else.
+  return { filter: { allow: [...allow] }, skipped };
 }

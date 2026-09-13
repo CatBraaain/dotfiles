@@ -188,19 +188,20 @@ export function apply(ctx: Context) {
   ): { filter: ToolFilter | undefined; skipped: readonly string[] } => {
     const known = knownToolNames();
     const { filter, skipped } = translateTools(definition.tools, known);
-    const allow = new Set(filter?.allow);
+    // An empty allow mask must survive: `[]` means "no global tools", not
+    // unrestricted. Only `"*"` yields no allow mask.
+    const allow = filter?.allow !== undefined ? new Set(filter.allow) : undefined;
     const deny = new Set(filter?.deny);
     for (const tool of STOCK_SUBAGENT_TOOLS) {
       if (known.has(tool)) deny.add(tool);
     }
-    if (definition.subagents.length > 0 && allow.size > 0) allow.add("subagent");
-    const hasAllow = allow.size > 0;
-    const hasDeny = deny.size > 0;
-    if (!hasAllow && !hasDeny) return { filter: undefined, skipped };
+    // The plugin's own `subagent` tool is registered in each delegating
+    // agent's own layer, which restrictions never filter — no allow entry.
+    if (allow === undefined && deny.size === 0) return { filter: undefined, skipped };
     return {
       filter: {
-        ...(hasAllow ? { allow: [...allow] } : {}),
-        ...(hasDeny ? { deny: [...deny] } : {}),
+        ...(allow !== undefined ? { allow: [...allow] } : {}),
+        ...(deny.size > 0 ? { deny: [...deny] } : {}),
       },
       skipped,
     };

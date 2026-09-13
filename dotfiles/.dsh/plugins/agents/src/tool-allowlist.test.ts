@@ -32,9 +32,9 @@ describe("translateTools", () => {
     assert.deepEqual(result.filter, { allow: ["web_search", "web_fetch"] });
   });
 
-  it("keeps negations beside an explicit allowlist", () => {
+  it("subsumes negations beside an explicit allowlist into the allow mask", () => {
     const result = translateTools(["web_search", "!read"], known);
-    assert.deepEqual(result.filter, { allow: ["web_search"], deny: ["read"] });
+    assert.deepEqual(result.filter, { allow: ["web_search"] });
   });
 
   it("drops names unknown to the registry and reports them", () => {
@@ -49,20 +49,24 @@ describe("translateTools", () => {
     assert.deepEqual(result.skipped, ["handoff_session"]);
   });
 
-  it("returns an unrestricted filter when an allowlist is entirely unknown", () => {
+  it("restricts an entirely unknown allowlist to nothing", () => {
     const result = translateTools(["handoff_session"], known);
-    assert.deepEqual(result.filter, undefined);
+    assert.deepEqual(result.filter, { allow: [] });
     assert.deepEqual(result.skipped, ["handoff_session"]);
   });
 
-  it("falls back to deny-only when only denials are known", () => {
+  it("restricts a negation-only list to nothing", () => {
+    const result = translateTools(["!read"], known);
+    assert.deepEqual(result.filter, { allow: [] });
+  });
+
+  it("restricts a list whose only known entry is a denial to nothing", () => {
     const result = translateTools(["handoff_session", "!read"], known);
-    assert.deepEqual(result.filter, { deny: ["read"] });
+    assert.deepEqual(result.filter, { allow: [] });
     assert.deepEqual(result.skipped, ["handoff_session"]);
   });
 
-  it("treats an empty list as unrestricted (nothing restrictable)", () => {
-    const result = translateTools([], known);
-    assert.deepEqual(result, { filter: undefined, skipped: [] });
+  it("treats an empty list as no tools (pi default deny)", () => {
+    assert.deepEqual(translateTools([], known), { filter: { allow: [] }, skipped: [] });
   });
 });

@@ -158,7 +158,8 @@ Additional judgment calls (not in the research list):
 - **Unknown tool names are dropped with a warning** — `tools.restrict` throws
   on names absent from the global registry, so pi-only names (e.g.
   `handoff_session`) are filtered out before restricting. An allow list that is
-  entirely unknown degrades to "no restriction" plus a warning.
+  entirely unknown restricts to "no tools" plus a warning (pi's default-deny
+  semantics: without `*`, only listed tools stay visible).
 - **Stock delegation tools are hidden** — `subagent`, `subagent_fork`,
   `send_message`, `interrupt_agent`, `list_agents` are denied for every managed
   agent; delegating agents see this plugin's `subagent` in their allow list
