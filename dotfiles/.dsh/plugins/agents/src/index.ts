@@ -54,7 +54,13 @@ import {
 import { translateTools, type ToolFilter } from "./tool-allowlist.ts";
 import { SubagentSlots } from "./subagent-slots.ts";
 import { sessionNameFor, settleChildRun } from "./child-run.ts";
-import { AGENTS_STATE_ENDPOINT, buildStatePayload, parseStateRequest, type AgentStatePayload } from "./state-rpc.ts";
+import {
+  AGENTS_STATE_ENDPOINT,
+  buildStatePayload,
+  isDisplayedAgent,
+  parseStateRequest,
+  type AgentStatePayload,
+} from "./state-rpc.ts";
 
 export const name = "dsh-agents";
 export const inject = ["commands", "tools", "llm", "systemPrompt", "subagents"];
@@ -609,14 +615,18 @@ export function apply(ctx: Context) {
     logger.warn("connection contract unavailable; the browser agent/class display stays empty");
     return;
   }
+  // spawnSubagent transiently registers one-shot children in `states` for
+  // routing; the display RPC must still answer as if only roots existed.
   const stateForSession = (sessionId: string | undefined): AgentStatePayload =>
     buildStatePayload(
-      [...states].map(([managedAgent, state]) => ({
-        sessionId: managedAgent.session.id,
-        agentName: state.agentName,
-        effectiveClass: state.effectiveClass,
-        manualSelect: state.manualSelect,
-      })),
+      [...states]
+        .filter(([managedAgent]) => isDisplayedAgent(managedAgent))
+        .map(([managedAgent, state]) => ({
+          sessionId: managedAgent.session.id,
+          agentName: state.agentName,
+          effectiveClass: state.effectiveClass,
+          manualSelect: state.manualSelect,
+        })),
       sessionId,
     );
   const matchStateEndpoint: ConnectionRpcEndpointMatcher = (endpoint) =>

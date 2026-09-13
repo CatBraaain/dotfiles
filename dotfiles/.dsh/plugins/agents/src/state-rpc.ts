@@ -8,8 +8,8 @@ export const AGENTS_STATE_ENDPOINT = "dsh-agents/state";
 
 /**
  * Wire payload of the state RPC: the display state of one session. Unmanaged
- * means the plugin does not run the session (inert config, foreign agent, or
- * an already-disposed one-shot child).
+ * means the session has no display state (inert config, foreign agent, or a
+ * one-shot child, whether running or disposed).
  */
 export type AgentStatePayload =
   | { readonly managed: false }
@@ -34,6 +34,20 @@ export function parseStateRequest(payload: unknown): StateRequest | undefined {
   const { sessionId } = payload as { sessionId?: unknown };
   if (sessionId !== undefined && typeof sessionId !== "string") return undefined;
   return { sessionId };
+}
+
+/** Structural slice of a live agent the display filter needs; dsh-type free. */
+export interface DisplayCandidateAgent {
+  readonly session: { readonly header: { readonly origin?: string } };
+}
+
+/**
+ * Display is a root-agent-only concern: spawnSubagent transiently registers
+ * one-shot children in the routing state, but a child session never shows
+ * agent/class (SPEC: unmanaged sessions display nothing).
+ */
+export function isDisplayedAgent(agent: DisplayCandidateAgent): boolean {
+  return agent.session.header.origin !== "subagent";
 }
 
 /** The per-agent state facts the display needs, keyed by session. */

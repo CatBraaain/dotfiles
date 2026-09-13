@@ -1,6 +1,11 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { buildStatePayload, parseStateRequest, type ManagedStateEntry } from "./state-rpc.ts";
+import {
+  buildStatePayload,
+  isDisplayedAgent,
+  parseStateRequest,
+  type ManagedStateEntry,
+} from "./state-rpc.ts";
 
 const entries: readonly ManagedStateEntry[] = [
   {
@@ -30,6 +35,20 @@ describe("parseStateRequest", () => {
     assert.equal(parseStateRequest(null), undefined);
     assert.equal(parseStateRequest("s-main"), undefined);
     assert.equal(parseStateRequest({ sessionId: 7 }), undefined);
+  });
+});
+
+describe("isDisplayedAgent", () => {
+  it("displays root agents", () => {
+    assert.equal(isDisplayedAgent({ session: { header: { origin: "user" } } }), true);
+  });
+
+  it("never displays one-shot children, while running or disposed", () => {
+    assert.equal(isDisplayedAgent({ session: { header: { origin: "subagent" } } }), false);
+  });
+
+  it("displays agents whose session header carries no origin", () => {
+    assert.equal(isDisplayedAgent({ session: { header: {} } }), true);
   });
 });
 
