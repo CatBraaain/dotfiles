@@ -59,6 +59,19 @@ export function imageReadErrorMessage(
   );
 }
 
+/** File extensions mapping to the §2.1 supported image formats (PNG, JPEG,
+ * WebP, GIF). The read tool runs the §2.1 route gate with them before the
+ * sandbox read, so an image-incapable route neither opens the path nor starts
+ * the sandbox; signature sniffing (io-core) stays the source of truth for the
+ * actual image handling. */
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+
+export function hasImageExtension(filePath: string): boolean {
+  const dot = filePath.lastIndexOf(".");
+  const slash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return dot > slash && IMAGE_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
+}
+
 /** §2.1 image envelope: the image rides the session's attachments, so the
  * tool result carries the post-normalization reference, not the bytes. */
 export type ImageReadEnvelope = {
@@ -221,9 +234,11 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
     return context.sandbox.runTool(request, options) as Promise<T>;
   };
 
-  // §2.1 route gate: runs after the sandbox read has produced the image bytes
-  // for file-signature detection, rejecting an image-incapable route with the
-  // vision-delegation error before the image is returned as input (SPEC §2.1).
+  // §2.1 route gate: resolves the provider/model route and rejects an
+  // image-incapable route with the vision-delegation error (SPEC §2.1).
+  // Image-extension paths run it before the sandbox read, so an incapable
+  // route never opens the path; extensionless images run it after the sandbox
+  // read, before any attachment is created.
   const gateImageRoute = async (filePath: string, exec: ToolRunContext): Promise<void> => {
     const routed = exec.agent?.session.requestHeader()?.config;
     const provider = routed?.provider ?? exec.agent?.options.provider;
@@ -363,6 +378,11 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
         const context = deps.contextOf(exec);
         const filePath = absolutePathOf(context, args.file_path);
         await context.sandbox.authorizePathWithConfirm("read", filePath, context.confirm);
+        // §2.1: gate image-extension paths before the sandbox run, so an
+        // image-incapable route neither opens the path nor runs the sandbox;
+        // extensionless images are gated after the read (below).
+        const imageByExtension = hasImageExtension(filePath);
+        if (imageByExtension) await gateImageRoute(filePath, exec);
         const result = await runSandboxed<RunnerReadResult | RunnerImageBytesResult>(
           exec,
           {
@@ -376,7 +396,7 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           { mode: "fs", cwd: context.cwd, signal: exec.signal },
         );
         if ("dataBase64" in result) {
-          await gateImageRoute(filePath, exec);
+          if (!imageByExtension) await gateImageRoute(filePath, exec);
           return await saveImageAttachment(filePath, result.mediaType, result);
         }
         deps.observations.markRead(context.sessionKey, filePath, result.mtimeMs);

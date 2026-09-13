@@ -307,8 +307,9 @@ describe("§2.1 read（ツール経路）", () => {
             error.message.includes("vision") &&
             error.message.includes("(prov/m1)"),
         );
-        // The runner inspects the signature before the host creates an image input.
-        assert.equal(runs.length, 1);
+        // The route gate runs before the sandbox: an incapable route does not
+        // open the path nor start the §7 execution.
+        assert.equal(runs.length, 0);
       },
     ),
   );
@@ -326,7 +327,52 @@ describe("§2.1 read（ツール経路）", () => {
           tool("read").execute({ file_path: join(dir, "img.png") }, execOf()),
           /does not accept image input/,
         );
+        assert.equal(runs.length, 0);
+      },
+    ),
+  );
+
+  it(
+    "拡張子を持たない画像は sandbox 内で判定した後に委譲エラー",
+    withToolLayer(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\n`,
+        services: imageServices({ modalities: ["text"] }),
+        respond: pngRespond(join(dir, "image")),
+      }),
+      async ({ tool, runs, dir }) => {
+        await assert.rejects(
+          tool("read").execute({ file_path: join(dir, "image") }, execOf(imageAgent())),
+          /does not accept image input/,
+        );
+        // Signature detection needs the bytes, so the sandbox read still runs;
+        // the bytes are dropped instead of becoming an attachment.
         assert.equal(runs.length, 1);
+      },
+    ),
+  );
+
+  it(
+    "画像拡張子のテキストファイルも非対応経路では sandbox 実行前に委譲エラー",
+    withToolLayer(
+      (dir) => ({
+        configYaml: `\nread:\n  - allow: ${dir}\n`,
+        services: imageServices({ modalities: ["text"] }),
+        // Not reached: the extension route gate fires before the sandbox read.
+        respond: () => ({
+          path: join(dir, "notes.png"),
+          offset: 1,
+          lines: [{ number: 1, text: "plain text" }],
+          totalLines: 1,
+          mtimeMs: 1000,
+        }),
+      }),
+      async ({ tool, runs, dir }) => {
+        await assert.rejects(
+          tool("read").execute({ file_path: join(dir, "notes.png") }, execOf(imageAgent())),
+          /does not accept image input/,
+        );
+        assert.equal(runs.length, 0);
       },
     ),
   );
