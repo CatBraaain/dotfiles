@@ -53,6 +53,7 @@ import {
 } from "./routing.ts";
 import { translateTools, type ToolFilter } from "./tool-allowlist.ts";
 import { SubagentSlots } from "./subagent-slots.ts";
+import { sessionNameFor, settleChildRun } from "./child-run.ts";
 import { AGENTS_STATE_ENDPOINT, buildStatePayload, parseStateRequest, type AgentStatePayload } from "./state-rpc.ts";
 
 export const name = "dsh-agents";
@@ -208,22 +209,13 @@ export function apply(ctx: Context) {
   };
 
   // ---- one-shot subagent spawning (pi-compatible `subagent` tool) -----------
-  const contentToText = (blocks: readonly ContentBlock[]): string =>
-    blocks
-      .filter((block): block is { type: "text"; text: string } => block.type === "text")
-      .map((block) => block.text)
-      .join("\n\n");
-
   const settleRunText = async (
     run: Awaited<ReturnType<typeof ctx.subagents.start>>,
     childName: string,
   ): Promise<string> => {
-    const result = await run.result;
-    if (result.stopReason !== "completed") {
-      const detail = result.diagnostic ?? contentToText(result.output);
-      throw new Error(`child ${childName} ${result.stopReason}: ${detail || "(no output)"}`);
-    }
-    return contentToText(result.output) || "(no output)";
+    const settled = settleChildRun(await run.result, childName);
+    if (!settled.ok) throw new Error(settled.message);
+    return settled.text;
   };
 
   const spawnSubagent = async (
@@ -250,7 +242,7 @@ export function apply(ctx: Context) {
     }
     const { filter } = toolFilterFor(definition);
     const run = await ctx.subagents.start("spawn", {
-      label: `${childName}: ${task.split("\n")[0]?.slice(0, 30) ?? ""}`,
+      label: sessionNameFor(childName, task),
       prompt: [{ type: "text", text: task }, ...extraPrompt],
       parent,
       signal,
