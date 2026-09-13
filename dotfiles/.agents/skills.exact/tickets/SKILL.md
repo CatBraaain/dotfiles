@@ -1,7 +1,7 @@
 ---
 name: tickets
 description: >-
-  対処すべきこと（発見した問題・依頼外課題・予定した作業）を ~/.agents/tickets/ 配下の markdown ファイルで管理する。成果物を伴う作業（コード・ドキュメント・設定の変更、ファイル作成・削除、worktree 作業など）に着手するときは、「ticket」という語が無くても、着手前に agent が自動で起票するために使う。ticket の起票・一覧・着手・更新・完了・取り下げ・draft の登録と昇格をするとき、「チケットにしといて」「ticket にしといて」「あとで直すリストに入れて」「タスク積んどいて」「open の ticket 一覧」「あの ticket クローズして」「アイデアを溜めといて」「あの draft を open にして」等の依頼で使う。作業・レビュー・検証中に、その場で直さない対処すべき問題（依頼範囲外のバグ、lint 指摘、スペック逸脱など。review の重要度「低」の対処しなくてもよい参考指摘は起票しない）を見つけたときも、「ticket」という語が無くても、記録として残すために使う。GitHub Issues 等の外部トラッカーの操作はしない。
+  対処すべきこと（発見した問題・依頼外課題・予定した作業）を ~/.agents/tickets/ 配下の markdown ファイルで管理する。成果物を伴う作業（コード・ドキュメント・設定の変更、ファイル作成・削除、worktree 作業など）に着手するときは、「ticket」という語が無くても、着手前に agent が自動で起票するために使う。ticket の起票・一覧・着手・更新・完了・取り下げ・blocked への変更と解除・draft の登録と昇格をするとき、「チケットにしといて」「ticket にしといて」「あとで直すリストに入れて」「タスク積んどいて」「open の ticket 一覧」「あの ticket クローズして」「アイデアを溜めといて」「あの draft を open にして」等の依頼で使う。作業・レビュー・検証中に、その場で直さない対処すべき問題（依頼範囲外のバグ、lint 指摘、スペック逸脱など。review の重要度「低」の対処しなくてもよい参考指摘は起票しない）を見つけたときも、「ticket」という語が無くても、記録として残すために使う。GitHub Issues 等の外部トラッカーの操作はしない。
 ---
 
 # Local Tickets
@@ -126,10 +126,11 @@ review の指摘を扱うときは、review skill の重要度（高・中・低
 
 ## 状態
 
-使用できるstatusは以下の5つ。
+使用できるstatusは以下の6つ。
 
 * `draft`: アイデアなどを溜めている途中段階。open ではないため即座に取り掛からない
 * `open`: 未着手
+* `blocked`: 外部要因の解消を待っており、着手条件が満たされていない。着手しない
 * `locked`: 別のセッションが対処を保持している（排他）。着手しない
 * `closed`: 完了
 * `cancelled`: 中止
@@ -141,12 +142,14 @@ review の指摘を扱うときは、review skill の重要度（高・中・低
 | 起票時 | `open`。owner の明示依頼でアイデア等を溜めるときのみ `draft` で起票する |
 | owner の明示依頼で draft を昇格させるとき | `open` |
 | ticket の対処に着手したとき（調査を含む） | `locked` |
+| 外部要因の解消を待つことになったとき | `blocked`。待つ理由と解除条件を本文に書く |
+| blocked の解除条件が満たったとき | `open` |
 | 対処が完了し問題が解消したとき | `closed`。対処したチケットは「テンプレート」の対処完了時の追記を本文へ入れる |
 | 対処しないことになったとき（重複、意図した挙動、owner 判断） | `cancelled`。理由を本文に追記する |
 
 `open` から `locked` を経由せず直接 `closed` にしてよい（外部要因で解消した場合など）。status の書き換えで本文を書き換えない。
 
-対処に着手するときは、まず owner の承認を得る。agent が自ら選んだ ticket では、ticket ID、タイトル、内容の要約、考えている進め方を示して承認を求める。owner が特定の ticket を明示した依頼なら、依頼自体が承認にあたる。着手してよいのは `status: open` の ticket のみで、`draft`・`locked` には着手しない。draft に着手するときは、owner の明示依頼で `open` へ昇格させてから行う。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `locked` に書き換えて着手する。同じ ticket への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
+対処に着手するときは、まず owner の承認を得る。agent が自ら選んだ ticket では、ticket ID、タイトル、内容の要約、考えている進め方を示して承認を求める。owner が特定の ticket を明示した依頼なら、依頼自体が承認にあたる。着手してよいのは `status: open` の ticket のみで、`draft`・`blocked`・`locked` には着手しない。draft に着手するときは、owner の明示依頼で `open` へ昇格させてから行う。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `locked` に書き換えて着手する。同じ ticket への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
 
 `locked` は着手したセッションが対処を完了（`closed`）または取り下げ（`cancelled`）した時点で外れる。異常終了などで `locked` が残ったときは、owner の指示で `open` に戻す。
 
@@ -168,7 +171,7 @@ frontmatter の `status` から列挙する:
 awk 'FNR==1{n=0} /^---$/{n++} n==1 && /^status: open$/{print FILENAME}' ~/.agents/tickets/<project>/*.md
 ```
 
-`status` の値を変えれば `draft`・`locked`・`closed`・`cancelled` も同様に列挙できる。全 project を横断するときは glob を `~/.agents/tickets/*/*.md` にする。owner への一覧では ticket ID とタイトル（H1）を報告する。
+`status` の値を変えれば `draft`・`blocked`・`locked`・`closed`・`cancelled` も同様に列挙できる。全 project を横断するときは glob を `~/.agents/tickets/*/*.md` にする。owner への一覧では ticket ID とタイトル（H1）を報告する。
 
 ## 対象外
 
