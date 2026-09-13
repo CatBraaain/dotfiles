@@ -34,6 +34,7 @@ function makeSource<S>(initial: S) {
     const listeners = new Set<() => void>()
     const source = {
         snapshot: initial,
+        listeners,
         getSnapshot: (): S => source.snapshot,
         subscribe: (fn: () => void): (() => void) => {
             listeners.add(fn)
@@ -73,10 +74,11 @@ function makeHost(): FakeHost {
     return host
 }
 
-function makeController(current: string | undefined, running: boolean) {
+function makeController(current: string | undefined, running: boolean, title: string = PLAIN) {
     const list = makeSource<SessionListState>(makeListState(current, running))
     const pending = makeSource(new Map<SessionId, { key: string; kind: string; sessionId: SessionId }>())
     const host = makeHost()
+    host.title = title
     const controller = new TitlebarController(list, pending, host)
     controller.start()
     return { host, list, pending, controller }
@@ -107,12 +109,37 @@ describe('TitlebarController', () => {
         controller.dispose()
     })
 
-    it('prefers the waiting mark while a question is pending, and stops the timer', () => {
+    it('prefers the waiting mark while a question is pending, and keeps ticking', () => {
         const { host, pending } = makeController('s1', true)
         pending.snapshot = new Map([['s1' as SessionId, { key: 'k', kind: 'question', sessionId: 's1' as SessionId }]])
         pending.emit()
         assert.equal(host.title, `${WAITING_MARK} ${PLAIN}`)
-        assert.equal(host.timer, null)
+        assert.ok(host.timer !== null)
+    })
+
+    it('re-asserts the waiting mark after a stock rewrite within one tick', () => {
+        const { host, pending } = makeController('s1', true)
+        pending.snapshot = new Map([['s1' as SessionId, { key: 'k', kind: 'question', sessionId: 's1' as SessionId }]])
+        pending.emit()
+        host.title = PLAIN // stock rewrites the marked title back to plain
+        host.timer!.handler()
+        assert.equal(host.title, `${WAITING_MARK} ${PLAIN}`)
+    })
+
+    it('re-asserts the spinner after a stock rewrite while running', () => {
+        const { host } = makeController('s1', true)
+        host.title = PLAIN // stock rewrites the marked title back to plain
+        host.timer!.handler()
+        assert.equal(host.title, `${SPINNER_FRAMES[0]} ${PLAIN}`)
+    })
+
+    it('keeps a base title that starts with a mark-shaped prefix intact', () => {
+        const base = `${WAITING_MARK} odd — DeepSeek Harness`
+        const { host, pending } = makeController('s1', true, base)
+        assert.equal(host.title, `${SPINNER_FRAMES[0]} ${base}`)
+        pending.snapshot = new Map([['s1' as SessionId, { key: 'k', kind: 'question', sessionId: 's1' as SessionId }]])
+        pending.emit()
+        assert.equal(host.title, `${WAITING_MARK} ${base}`)
     })
 
     it('resumes the spinner after the pending interaction is answered', () => {
@@ -149,6 +176,25 @@ describe('TitlebarController', () => {
         assert.equal(host.timer, null)
         list.snapshot = makeListState('s1', true)
         list.emit()
+        assert.equal(host.title, PLAIN)
+    })
+
+    it('dispose unsubscribes from both state sources', () => {
+        const list = makeSource<SessionListState>(makeListState('s1', true))
+        const pending = makeSource(new Map<SessionId, { key: string; kind: string; sessionId: SessionId }>())
+        const host = makeHost()
+        const controller = new TitlebarController(list, pending, host)
+        controller.start()
+        assert.ok(list.listeners.size > 0 && pending.listeners.size > 0)
+        controller.dispose()
+        assert.equal(list.listeners.size, 0)
+        assert.equal(pending.listeners.size, 0)
+    })
+
+    it('dispose leaves a stock-rewritten plain title untouched', () => {
+        const { host, controller } = makeController('s1', true)
+        host.title = PLAIN // stock rewrote the marked title back to plain
+        controller.dispose()
         assert.equal(host.title, PLAIN)
     })
 })

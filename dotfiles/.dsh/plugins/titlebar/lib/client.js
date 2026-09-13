@@ -71,31 +71,51 @@ class TitlebarController {
   host;
   timer = null;
   disposed = false;
+  unsubscribe = null;
+  lastWritten = null;
   constructor(sessions, pending, host) {
     this.sessions = sessions;
     this.pending = pending;
     this.host = host;
   }
   start() {
-    this.sessions.subscribe(() => this.sync());
-    this.pending.subscribe(() => this.sync());
+    const unsubscribers = [
+      this.sessions.subscribe(() => this.sync()),
+      this.pending.subscribe(() => this.sync())
+    ];
+    this.unsubscribe = () => {
+      for (const fn of unsubscribers)
+        fn();
+    };
     this.sync();
   }
   dispose() {
     this.disposed = true;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
     this.stopTimer();
-    const { plain } = splitMarkedTitle(this.host.getTitle());
-    this.host.setTitle(plain);
+    const live = this.host.getTitle();
+    if (this.lastWritten !== null && live === this.lastWritten) {
+      this.host.setTitle(this.plainOf(live));
+    }
   }
   sync() {
     if (this.disposed)
       return;
+    const live = this.host.getTitle();
     const mark = this.markForNow();
-    const { plain } = splitMarkedTitle(this.host.getTitle());
-    const next = buildTitle(mark, plain);
-    if (next !== this.host.getTitle())
+    const next = buildTitle(mark, this.plainOf(live));
+    if (next !== live) {
       this.host.setTitle(next);
+      this.lastWritten = next;
+    }
     this.updateTimer(mark);
+  }
+  plainOf(live) {
+    if (this.lastWritten !== null && live === this.lastWritten) {
+      return splitMarkedTitle(live).plain;
+    }
+    return live;
   }
   markForNow() {
     const list = this.sessions.getSnapshot();
@@ -109,10 +129,10 @@ class TitlebarController {
     return;
   }
   updateTimer(mark) {
-    const running = mark !== undefined && mark !== WAITING_MARK;
-    if (running && this.timer === null) {
+    const marked = mark !== undefined;
+    if (marked && this.timer === null) {
       this.timer = this.host.startTimer(() => this.sync(), SPINNER_INTERVAL_MS);
-    } else if (!running && this.timer !== null) {
+    } else if (!marked && this.timer !== null) {
       this.stopTimer();
     }
   }

@@ -4,8 +4,8 @@
  * The titlebar owns only a leading state mark; the rest of `document.title`
  * (`{session title} — {product title}`) stays owned by the stock
  * `DocumentTitle` component in `@deepseek-ai/dsh-client-ui-layout`. Marks are
- * recognized back out of the live title so the stock component and this
- * plugin never have to agree on the base string.
+ * recognized back out of the title this plugin last wrote, so the stock
+ * component and this plugin never have to agree on the base string.
  */
 
 /** Braille spinner frames cycled every {@link SPINNER_INTERVAL_MS} while the agent runs. */

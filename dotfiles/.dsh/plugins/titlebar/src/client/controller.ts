@@ -8,10 +8,12 @@
  *
  * Mark precedence mirrors pi: an input wait (⏸) wins over the running
  * spinner, because dsh keeps `running: true` while a question is pending.
- * While idle the plugin writes the plain title at most once per transition
- * and otherwise leaves `document.title` to the stock `DocumentTitle`
- * component; the mark is recognized back out of the live title on every
- * write, so stock rewrites are self-healing.
+ * While a mark is shown the timer keeps ticking — the spinner cycles, the
+ * waiting mark stays static — so a stock rewrite of `document.title`
+ * regains its mark within one tick. While idle the plugin writes the plain
+ * title at most once per transition. Only a title the controller itself
+ * wrote is treated as marked, so a base title that merely starts with
+ * "mark + space" is never stripped.
  */
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -45,6 +47,10 @@ export class TitlebarController {
     private readonly host: TitlebarHost
     private timer: unknown = null
     private disposed = false
+    /** Unsubscribers captured by `start()`, released by `dispose()`. */
+    private unsubscribe: (() => void) | null = null
+    /** Full title string this controller last wrote; null before the first write. */
+    private lastWritten: string | null = null
 
     constructor(sessions: TitlebarSessionsSource, pending: TitlebarPendingSource, host: TitlebarHost) {
         this.sessions = sessions
@@ -54,27 +60,54 @@ export class TitlebarController {
 
     /** Subscribe to both state sources; safe to call once. */
     start(): void {
-        this.sessions.subscribe(() => this.sync())
-        this.pending.subscribe(() => this.sync())
+        const unsubscribers = [
+            this.sessions.subscribe(() => this.sync()),
+            this.pending.subscribe(() => this.sync()),
+        ]
+        this.unsubscribe = () => {
+            for (const fn of unsubscribers) fn()
+        }
         this.sync()
     }
 
     /** Unsubscribe, stop the timer, and restore the plain title. */
     dispose(): void {
         this.disposed = true
+        this.unsubscribe?.()
+        this.unsubscribe = null
         this.stopTimer()
-        const { plain } = splitMarkedTitle(this.host.getTitle())
-        this.host.setTitle(plain)
+        const live = this.host.getTitle()
+        if (this.lastWritten !== null && live === this.lastWritten) {
+            this.host.setTitle(this.plainOf(live))
+        }
+        // Otherwise stock rewrote the title after our last write, so `live` is
+        // already the plain title and must be left alone.
     }
 
     /** Recompute the mark and write the title when it differs. */
     private sync(): void {
         if (this.disposed) return
+        const live = this.host.getTitle()
         const mark = this.markForNow()
-        const { plain } = splitMarkedTitle(this.host.getTitle())
-        const next = buildTitle(mark, plain)
-        if (next !== this.host.getTitle()) this.host.setTitle(next)
+        const next = buildTitle(mark, this.plainOf(live))
+        if (next !== live) {
+            this.host.setTitle(next)
+            this.lastWritten = next
+        }
         this.updateTimer(mark)
+    }
+
+    /**
+     * Extract the plain title from a live title. Only a title this controller
+     * itself wrote is trusted to carry our leading mark; anything else —
+     * including a base title that merely starts with "mark + space" — is kept
+     * intact, so stock rewrites never get stripped.
+     */
+    private plainOf(live: string): string {
+        if (this.lastWritten !== null && live === this.lastWritten) {
+            return splitMarkedTitle(live).plain
+        }
+        return live
     }
 
     /** `⏸` while the current session waits for input, the spinner frame while it runs. */
@@ -87,12 +120,16 @@ export class TitlebarController {
         return undefined
     }
 
-    /** The spinner ticks only while the running mark is shown. */
+    /**
+     * Tick while any mark is shown: the spinner cycles its frames, and the
+     * waiting mark re-asserts itself after a stock rewrite within one tick
+     * (pi parity — pi keeps rendering while waiting for input).
+     */
     private updateTimer(mark: string | undefined): void {
-        const running = mark !== undefined && mark !== WAITING_MARK
-        if (running && this.timer === null) {
+        const marked = mark !== undefined
+        if (marked && this.timer === null) {
             this.timer = this.host.startTimer(() => this.sync(), SPINNER_INTERVAL_MS)
-        } else if (!running && this.timer !== null) {
+        } else if (!marked && this.timer !== null) {
             this.stopTimer()
         }
     }
