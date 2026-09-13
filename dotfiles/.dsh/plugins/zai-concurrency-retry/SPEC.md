@@ -44,7 +44,7 @@ payload:
 | フィールド   | 型     | 値                                                           |
 | ------------ | ------ | ------------------------------------------------------------ |
 | `provider`   | string | `agent/request-error` payload の `provider`                  |
-| `attempt`    | number | 現在の連続失敗回数（警告ログの `attempt <n>` と同一名真）        |
+| `attempt`    | number | 現在の連続失敗回数（警告ログの `attempt <n>` と同一）    |
 | `waitMs`     | number | ジッター後の待機ミリ秒                                        |
 
 client bundle（`src/client/`、成果物 `lib/client.js`）はこのイベントを Conversation Definition で transcript 内ノードへ組み、gray 1行で静的表示する。カウントダウン等のリアルタイム更新はしない。
