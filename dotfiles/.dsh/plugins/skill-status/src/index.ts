@@ -3,35 +3,70 @@
  *
  * Watches the `skill` tool of every live session and appends one log-only
  * `skill-status/used` event per first successful use; the client half renders
- * those events above the composer. The append is deferred to a microtask
- * because the observation runs inside the `session/event` publication window,
- * where a re-entrant `session.append` is rejected.
+ * the session projection folded from those events above the composer. The
+ * append is deferred to a microtask because the observation runs inside the
+ * `session/event` publication window, where a re-entrant `session.append` is
+ * rejected.
+ *
+ * The `skillStatus` session projection is the client's window-independent
+ * read model: the framework folds `init` over the whole in-memory log and
+ * drives every committed event through `apply`, so the published names cover
+ * events outside the client's paged event window (see SPEC.md).
  *
  * `run_build.sh` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external (see
- * dotfiles/.dsh/README.md). The event type literal is duplicated in
- * `src/client/event.ts` and pinned equal by `src/index.test.ts`.
+ * dotfiles/.dsh/README.md). Shared literals live in `src/shared.ts`.
  */
+import { z } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
+import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import type {} from '@deepseek-ai/dsh-session-projection/types'
 import type {} from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import {
+    SKILL_STATUS_EVENT_TYPE,
+    SKILL_STATUS_PROJECTION_KEY,
+    usedSkillName,
+} from './shared'
 
 export const name = 'dsh-skill-status'
-export const inject = ['sessions']
+export const inject = ['sessions', 'sessionProjections']
 
-/** Log-only event type appended once per first successful skill use. */
-export const SKILL_STATUS_EVENT_TYPE = 'skill-status/used'
+export { SKILL_STATUS_EVENT_TYPE, SKILL_STATUS_PROJECTION_KEY } from './shared'
+export type { SkillStatusUsedData } from './shared'
 
-/** Payload of {@link SKILL_STATUS_EVENT_TYPE}: the skill that was used. */
-export interface SkillStatusUsedData {
-    readonly name: string
+/** Host fold state: the used skill names in first-use order. */
+export interface SkillStatusProjectionState {
+    readonly names: readonly string[]
 }
 
-declare module '@deepseek-ai/dsh-session/types' {
-    interface SessionEventMap {
-        'skill-status/used': SkillStatusUsedData
+declare module '@deepseek-ai/dsh-session-projection/types' {
+    interface SessionProjectionStateMap {
+        skillStatus: SkillStatusProjectionState
     }
 }
+
+/**
+ * Fold `skill-status/used` events into the first-use ordered names. Unrelated
+ * events and malformed payloads return the same state reference, and a name
+ * already recorded is a no-op — the drive keys all downstream work on that.
+ */
+export const skillStatusProjectionDefinition = {
+    key: SKILL_STATUS_PROJECTION_KEY,
+    stateVersion: 1,
+    stateSchema: z.object({ names: z.array(z.string()) }),
+    init: (_header, _inheritedEventCount) => ({ names: [] }),
+    apply: (state, event) => {
+        if (event.type !== SKILL_STATUS_EVENT_TYPE) return state
+        const used = usedSkillName(event.data)
+        if (used === undefined || state.names.includes(used)) return state
+        return { names: [...state.names, used] }
+    },
+    wire: {
+        viewSchema: z.array(z.string()),
+        view: (state) => state.names,
+    },
+} satisfies ProjectionDefinition<'skillStatus', SkillStatusProjectionState>
 
 /** The dsh tool that loads a skill by name. */
 export const SKILL_TOOL_NAME = 'skill'
@@ -195,6 +230,11 @@ function trackerFor(
 
 export function apply(ctx: Context): void {
     const logger = ctx.logger(name)
+    // Explicit type arguments: the registry's generic inference does not
+    // recover `key` through its `Omit`-wrapped parameter type.
+    ctx.sessionProjections.register<'skillStatus', SkillStatusProjectionState>(
+        skillStatusProjectionDefinition,
+    )
     const trackers = new Map<object, SkillUsageTracker>()
 
     ctx.on('session/disposed', (session) => {

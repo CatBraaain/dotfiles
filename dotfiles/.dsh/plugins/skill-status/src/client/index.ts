@@ -1,26 +1,26 @@
 /**
  * Browser client half: keep the used-skill names visible above the composer.
  *
- * Registers (1) the Conversation Definition/view target that fold
- * `skill-status/used` events — history included — into a names snapshot, and
- * (2) one `conversation.input.dock` entry rendering that snapshot as
- * `🎯 skills: ...` in gray, clipped with an ellipsis, hidden while empty.
+ * Registers one `conversation.input.dock` entry rendering the host-computed
+ * `skillStatus` session projection as `🎯 skills: ...` in gray, clipped with
+ * an ellipsis, hidden while empty. The projection arrives through the
+ * standard `useProjection` seat (whole value seeded by the follow opening and
+ * pushed by projection frames), so the display restores from the host's
+ * whole-log fold and never depends on the loaded event window.
  */
-import { createElement, useSyncExternalStore, type ReactNode } from 'react'
+import { createElement, type ReactNode } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 // Context augmentation: the `ctx.slots` registry service.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-// SlotMap + ConversationViewSnapshotMap augmentations and `ctx.uiConversation`.
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-// SessionStandardProps augmentation: session-scope slot props carry `sessionId`.
+// SessionStandardProps augmentation: session-scope slot props carry `useProjection`.
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
-import { registerSkillStatusConversation } from './conversation'
+import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
+import { SKILL_STATUS_PROJECTION_KEY } from '../shared'
 import { registerSkillStatusDock } from './apply'
-import type { SkillStatusSource } from './source'
 import { buildSkillStatusLine } from './format'
 
 /** Services this client half touches. */
-export const inject = ['slots', 'uiConversation']
+export const inject = ['slots']
 
 /**
  * Gray secondary text matching the neighboring stock rows (repo gray policy).
@@ -42,15 +42,14 @@ const STATUS_STYLE: Readonly<Record<string, string>> = {
 }
 
 /** The dock row: nothing while no skill has been used, the line otherwise. */
-function SkillStatusRow({ source }: { readonly source: SkillStatusSource }): ReactNode {
-    const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot)
-    const line = buildSkillStatusLine(snapshot.names)
+function SkillStatusRow({ useProjection }: { readonly useProjection: UseProjection }): ReactNode {
+    const names = useProjection(SKILL_STATUS_PROJECTION_KEY)
+    const line = buildSkillStatusLine(names ?? [])
     if (line === undefined) return null
     return createElement('div', { style: STATUS_STYLE }, line)
 }
 
-/** Wire the Conversation assembly and the dock entry. */
+/** Wire the dock entry. */
 export function apply(ctx: Context): void {
-    registerSkillStatusConversation(ctx)
     registerSkillStatusDock(ctx, SkillStatusRow)
 }

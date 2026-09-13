@@ -1,16 +1,21 @@
 import { describe, it } from 'bun:test'
 import assert from 'node:assert/strict'
+import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import {
     SkillUsageTracker,
-    SKILL_STATUS_EVENT_TYPE,
     SKILL_TOOL_NAME,
     isSuccessfulToolResult,
     skillNameFromCallArguments,
+    skillStatusProjectionDefinition,
     type ReplayEvent,
     type SkillToolCallData,
+    type SkillStatusProjectionState,
     type ToolResultData,
 } from './index'
-import { SKILL_STATUS_EVENT_TYPE as CLIENT_EVENT_TYPE } from './client/event'
+import {
+    SKILL_STATUS_EVENT_TYPE,
+    SKILL_STATUS_PROJECTION_KEY,
+} from './shared'
 
 function skillCall(callId: string, name: string): { type: 'tool/call'; data: SkillToolCallData } {
     return {
@@ -42,13 +47,14 @@ function usedEvent(name: string): ReplayEvent {
     return { type: SKILL_STATUS_EVENT_TYPE, data: { name } }
 }
 
-describe('event contract', () => {
-    it('keeps the host and client event type literals identical', () => {
-        assert.equal(CLIENT_EVENT_TYPE, SKILL_STATUS_EVENT_TYPE)
-    })
-
+describe('shared contract', () => {
     it('targets the dsh skill tool', () => {
         assert.equal(SKILL_TOOL_NAME, 'skill')
+    })
+
+    it('names the log-only event and the projection key', () => {
+        assert.equal(SKILL_STATUS_EVENT_TYPE, 'skill-status/used')
+        assert.equal(SKILL_STATUS_PROJECTION_KEY, 'skillStatus')
     })
 })
 
@@ -130,5 +136,69 @@ describe('SkillUsageTracker', () => {
         const tracker = SkillUsageTracker.empty()
         tracker.observeCall({ callId: 'c1', name: 'skill', arguments: 'broken' })
         assert.equal(tracker.observeResult(toolResult('c1').data), undefined)
+    })
+})
+
+/** Minimal immutable session metadata for `init` (brands erased at runtime). */
+const header = { version: 3, id: 's1', createdAt: 0, isSeeded: false } as SessionHeader
+
+/** One logged `skill-status/used` event as the fold consumes it. */
+function loggedUsedEvent(seq: number, name: string) {
+    return { type: SKILL_STATUS_EVENT_TYPE, seq, time: 0, data: { name } } as never
+}
+
+describe('skillStatusProjectionDefinition', () => {
+    const definition = skillStatusProjectionDefinition
+    const wire = definition.wire
+    if (wire === undefined) throw new Error('unreachable: the definition declares wire')
+    const offset = (value: number) => value as unknown as Parameters<typeof definition.init>[1]
+
+    it('exposes the shared key, wire view of the names, and version 1', () => {
+        assert.equal(definition.key, SKILL_STATUS_PROJECTION_KEY)
+        assert.equal(definition.stateVersion, 1)
+        assert.deepEqual(wire.view({ names: ['review', 'converge'] }), [
+            'review',
+            'converge',
+        ])
+    })
+
+    it('starts from an empty list regardless of session metadata', () => {
+        const state = definition.init(header, offset(0))
+        assert.deepEqual(state, { names: [] })
+    })
+
+    it('appends first-use names in log order', () => {
+        let state: SkillStatusProjectionState = definition.init(header, offset(0))
+        state = definition.apply(state, loggedUsedEvent(4, 'review'))
+        state = definition.apply(state, loggedUsedEvent(9, 'converge'))
+        assert.deepEqual(state, { names: ['review', 'converge'] })
+    })
+
+    it('keeps the same state reference for unrelated and malformed events', () => {
+        const state: SkillStatusProjectionState = { names: ['review'] }
+        assert.equal(definition.apply(state, { type: 'tool/result', seq: 1, time: 0, data: {} } as never), state)
+        assert.equal(definition.apply(state, { type: SKILL_STATUS_EVENT_TYPE, seq: 2, time: 0, data: {} } as never), state)
+        assert.equal(
+            definition.apply(state, { type: SKILL_STATUS_EVENT_TYPE, seq: 3, time: 0, data: { name: 42 } } as never),
+            state,
+        )
+    })
+
+    it('keeps the same state reference for an already recorded name', () => {
+        const state: SkillStatusProjectionState = { names: ['review'] }
+        assert.equal(definition.apply(state, loggedUsedEvent(4, 'review')), state)
+    })
+
+    it('validates the wire view against its schema', () => {
+        const viewSchema = wire.viewSchema
+        assert.deepEqual(viewSchema.parse(['review', 'converge']), ['review', 'converge'])
+        assert.throws(() => viewSchema.parse(['review', 42]))
+        assert.throws(() => viewSchema.parse({ names: ['review'] }))
+    })
+
+    it('validates the persisted state against its schema', () => {
+        const stateSchema = definition.stateSchema
+        assert.deepEqual(stateSchema.parse({ names: ['review'] }), { names: ['review'] })
+        assert.throws(() => stateSchema.parse({ names: 'review' }))
     })
 })

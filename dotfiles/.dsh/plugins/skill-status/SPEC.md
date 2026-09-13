@@ -19,7 +19,7 @@ composer 上の dock（slot `conversation.input.dock`、session scope）に、�
 
 ## 表示の更新
 
-host 側 plugin がセッションの `skill` tool 呼び出し（`tool/call` / `tool/result` session event）を監視し、成功裏に完了したとき、そのセッションで初めての利用であれば log-only session event `skill-status/used`（payload `{ name }`）を1件 append する。client 側 plugin は当該 event を履歴込みで Conversation assembly（`ctx.uiConversation`）経由で受け、名前集合を first-use 順に保持・表示する。
+host 側 plugin がセッションの `skill` tool 呼び出し（`tool/call` / `tool/result` session event）を監視し、成功裏に完了したとき、そのセッションで初めての利用であれば log-only session event `skill-status/used`（payload `{ name }`）を1件 append する。host 側 plugin は、当該 event を全ログに渡って畳み込む session projection `skillStatus`（初回利用順の名前配列）を `ctx.sessionProjections` へ登録する。client 側 plugin は standard prop の `useProjection` 経由で当該 projection の完成値を受け取り、表示する。Conversation assembly は使わない。
 
 | 動作 | 表示 |
 | --- | --- |
@@ -33,10 +33,10 @@ host 側 plugin がセッションの `skill` tool 呼び出し（`tool/call` / 
 
 ## セッション間の表示
 
-表示は session event にのみ載るため、現在のセッションに属する。
+表示は session event と projection にのみ載るため、現在のセッションに属する。
 
 - 新しいセッションに切り替えたとき、前のセッションの skill 名を表示しない
-- セッションの再開・リロード時は、履歴の `skill-status/used` event から表示を復元する（イベントウィンドウの読み込み範囲に依存）
+- セッションの再開・リロード時は、`skillStatus` projection の完成値から表示を復元する。projection は host がセッション全長に渡って畳み込むため、client が読み込んだイベントウィンドウの範囲に依存しない
 - host の再起動・plugin の再読み込みで、セッション途中の in-flight な `skill` 呼び出しまでの状態をイベントログから復元する
 
 ## 設定

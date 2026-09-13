@@ -20,6 +20,15 @@
       "@deepseek-ai/dsh-client-ui-session/client": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-session/lib/types/client/index.d.ts"
       ],
+      "@deepseek-ai/dsh-session-projection/types": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-session-projection/lib/types/types.d.ts"
+      ],
+      "@deepseek-ai/dsh-api-session-controller/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/client/index.d.ts"
+      ],
+      "zod": [
+        "/home/username/.bun/install/global/node_modules/zod/index.d.cts"
+      ],
       "@deepseek-ai/*": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"
       ]

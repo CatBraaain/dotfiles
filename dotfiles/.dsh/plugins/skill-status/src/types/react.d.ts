@@ -13,9 +13,4 @@ declare module 'react' {
         props: Record<string, unknown> | null,
         ...children: readonly unknown[]
     ): ReactNode
-    export function useSyncExternalStore<S>(
-        subscribe: (onStoreChange: () => void) => () => void,
-        getSnapshot: () => S,
-        getServerSnapshot?: () => S,
-    ): S
 }

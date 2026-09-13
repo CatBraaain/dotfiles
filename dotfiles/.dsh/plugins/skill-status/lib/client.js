@@ -46,104 +46,15 @@ __export(exports_client, {
 module.exports = __toCommonJS(exports_client);
 var import_react = require("react");
 
-// src/client/event.ts
-var SKILL_STATUS_EVENT_TYPE = "skill-status/used";
-
-// src/client/conversation.ts
-var SKILL_STATUS_TARGET = "skill-status";
-var EMPTY_SKILL_STATUS_SNAPSHOT = { names: [] };
-function usedSkillName(data) {
-  const name = data?.name;
-  return typeof name === "string" && name.length > 0 ? name : undefined;
-}
-var skillStatusDefinition = {
-  kind: SKILL_STATUS_EVENT_TYPE,
-  target: SKILL_STATUS_TARGET,
-  match(event) {
-    if (event.type !== SKILL_STATUS_EVENT_TYPE)
-      return null;
-    const name = usedSkillName(event.data);
-    return name === undefined ? null : { id: name, role: "start" };
-  },
-  start(_context, match) {
-    return { name: usedSkillName(match.event.data) ?? "", seq: match.event.seq };
-  },
-  update(context) {
-    return context.state;
-  },
-  buildViewNode(context) {
-    const state = context.state;
-    return state === undefined ? null : {
-      key: context.key,
-      kind: skillStatusDefinition.kind,
-      id: context.id,
-      target: SKILL_STATUS_TARGET,
-      data: state
-    };
-  }
-};
-function namesFromNodes(nodes) {
-  const seqs = new Map;
-  for (const node of nodes) {
-    const data = node.data;
-    if (typeof data?.name !== "string" || typeof data?.seq !== "number")
-      continue;
-    const previous = seqs.get(data.name);
-    if (previous === undefined || data.seq < previous)
-      seqs.set(data.name, data.seq);
-  }
-  const names = [...seqs.entries()];
-  names.sort((left, right) => left[1] - right[1]);
-  return { names: names.map(([name]) => name) };
-}
-
-class SkillStatusBuilder {
-  nodes = new Map;
-  empty = EMPTY_SKILL_STATUS_SNAPSHOT;
-  replace(input) {
-    this.nodes.clear();
-    for (const node of input.nodes)
-      this.nodes.set(node.key, node);
-    return namesFromNodes([...this.nodes.values()]);
-  }
-  apply(input) {
-    for (const node of input.upserts)
-      this.nodes.set(node.key, node);
-    return namesFromNodes([...this.nodes.values()]);
-  }
-}
-var skillStatusViewDefinition = {
-  target: SKILL_STATUS_TARGET,
-  create: () => new SkillStatusBuilder
-};
-function registerSkillStatusConversation(ctx) {
-  ctx.uiConversation.events.register(skillStatusDefinition);
-  ctx.uiConversation.views.register(skillStatusViewDefinition);
-}
-
-// src/client/source.ts
-var cache = new WeakMap;
-function skillStatusSource(ctx, sessionId) {
-  const binding = ctx.uiConversation.binding(sessionId);
-  let source = cache.get(binding);
-  if (source === undefined) {
-    const target = binding.target(SKILL_STATUS_TARGET);
-    source = {
-      getSnapshot: () => target.getSnapshot() ?? EMPTY_SKILL_STATUS_SNAPSHOT,
-      subscribe: (listener) => target.subscribe(listener)
-    };
-    cache.set(binding, source);
-  }
-  return source;
-}
+// src/shared.ts
+var SKILL_STATUS_PROJECTION_KEY = "skillStatus";
 
 // src/client/apply.ts
 function registerSkillStatusDock(ctx, component) {
   ctx.slots.inject("conversation.input.dock", () => ctx.slots.register({
     name: "conversation.input.dock",
     id: "skill-status",
-    order: 10,
-    inject: (sessionId) => ({ source: skillStatusSource(ctx, sessionId) })
+    order: 10
   }, component));
 }
 
@@ -155,7 +66,7 @@ function buildSkillStatusLine(names) {
 }
 
 // src/client/index.ts
-var inject = ["slots", "uiConversation"];
+var inject = ["slots"];
 var STATUS_STYLE = {
   boxSizing: "border-box",
   width: "calc(100% - var(--dsh-composer-side-clearance) * 2 - var(--dsh-composer-dock-inset) * 4)",
@@ -168,15 +79,14 @@ var STATUS_STYLE = {
   overflow: "hidden",
   textOverflow: "ellipsis"
 };
-function SkillStatusRow({ source }) {
-  const snapshot = import_react.useSyncExternalStore(source.subscribe, source.getSnapshot);
-  const line = buildSkillStatusLine(snapshot.names);
+function SkillStatusRow({ useProjection }) {
+  const names = useProjection(SKILL_STATUS_PROJECTION_KEY);
+  const line = buildSkillStatusLine(names ?? []);
   if (line === undefined)
     return null;
   return import_react.createElement("div", { style: STATUS_STYLE }, line);
 }
 function apply(ctx) {
-  registerSkillStatusConversation(ctx);
   registerSkillStatusDock(ctx, SkillStatusRow);
 }
 

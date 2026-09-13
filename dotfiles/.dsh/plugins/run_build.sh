@@ -56,7 +56,7 @@ for plugin in */; do
                 # shellcheck disable=SC2086 # entries is an intentional word split
                 bun build $entries --outdir dist --target node \
                     --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \
-                    --external '@deepseek-ai/*' --external '@earendil-works/*'
+                    --external zod --external '@deepseek-ai/*' --external '@earendil-works/*'
             fi
         })
     fi

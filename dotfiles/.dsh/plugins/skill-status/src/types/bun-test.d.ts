@@ -13,7 +13,9 @@ declare module 'bun:test' {
 }
 
 declare module 'node:assert/strict' {
+    function ok(value: unknown, message?: string): asserts value
     function equal(actual: unknown, expected: unknown, message?: string): void
     function deepEqual(actual: unknown, expected: unknown, message?: string): void
-    export default { equal, deepEqual }
+    function throws(fn: () => void, message?: string): void
+    export default { ok, equal, deepEqual, throws }
 }

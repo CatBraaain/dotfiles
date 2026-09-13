@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "exports": {
     ".": "./dist/index.js",
     "./client": "./lib/client.js"
@@ -11,8 +14,9 @@
     "client": {
       "platform": "web",
       "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
         "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-session"
       ]
     },
     "bundle": {
