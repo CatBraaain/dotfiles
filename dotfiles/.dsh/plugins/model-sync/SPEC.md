@@ -67,7 +67,7 @@ endpoint URL と認証は route の wire protocol（`profile.api`、未設定な
 | `openai-completions` / `openai-responses` | `<baseURL>/models` | `Authorization: Bearer <key>` |
 | `anthropic-messages` | `<baseURL>`（末尾 `/v1` を正規化）`/v1/models?limit=1000` | `x-api-key: <key>` ＋ `anthropic-version: 2023-06-01`。key が `sk-ant-oat` で始まる場合は代わりに `Authorization: Bearer` ＋ `anthropic-beta: oauth-2025-04-20` |
 
-- `baseURL` は `profile.baseURL`、未設定なら installed catalog の当該 provider の baseUrl
+- `baseURL` は `profile.baseURL`、未設定なら installed catalog の当該 provider の baseUrl。catalog 内で baseUrl の綴りが混在するときは、URL path が最も深いものを選ぶ（例: openrouter は `…/api` と `…/api/v1` が混在するため `…/api/v1`。pi 版の固定表が持つ `https://openrouter.ai/api/v1` と同じ endpoint になる）。URL path の深さが同じときは catalog の先頭を採用する
 - API key は `profile.apiKeyEnv` を `ctx.credentials.resolve` で解決する。settings に `apiKeyEnv` が無い、解決できない、名前が reference 文法に合わない、のいずれかの provider は endpoint を呼ばない（`no auth` 扱い）
 - 1 リクエストのタイムアウトは 15 秒。応答本文は 10 MiB を超えたら失敗扱い。provider 間は並列に実行する
 
@@ -176,6 +176,7 @@ pi 版の footer status 相当は dsh web client に実装しない。起動時�
 | --- | --- | --- |
 | 反映先 | ModelRegistry への動的登録（メモリ、pi 再起動で消失） | settings の `llm-pi-ai.providers.<id>.models`（永続） |
 | 対象 | 固定表 26 provider のうち認証解決できたもの | 設定済み pi-ai catalog route（認証解決できるもの） |
+| endpoint baseURL | 固定表の `defaultBaseUrl`（provider ごとに手維持） | catalog の baseUrl から URL path が最も深いものを選択（固定表なし。混在時の規則は「ネットワーク取得」節） |
 | cost | 登録モデルに cost を設定 | settings schema に cost が無いため反映しない（同名 id は catalog の cost、新規 id は 0） |
 | google provider | 対応 | dsh の wire protocol に google 系が無いため対象外 |
 | footer status / 通知 | あり（`syncing…`、全失敗で warning） | なし。`/model-sync` の結果行のみ |

@@ -101,6 +101,38 @@ export function endpointUrl(api: WireApi | undefined, baseUrl: string): string {
   return `${root}/v1/models?limit=${ANTHROPIC_MODEL_LIMIT}`;
 }
 
+/**
+ * The catalog base URL for the model-listing endpoint.
+ *
+ * Catalog entries may spell the same root differently — openrouter lists most
+ * models under `https://openrouter.ai/api/v1` and a few under
+ * `https://openrouter.ai/api` — and only the deepest path serves
+ * `{base}/models`. The longest URL path wins; ties keep the catalog's first
+ * entry, which preserves the first-occurrence choice on uniform catalogs.
+ */
+export function catalogBaseUrl(installed: readonly InstalledModel[]): string | undefined {
+  let chosen: string | undefined;
+  let chosenDepth = -1;
+  for (const model of installed) {
+    if (model.baseUrl === undefined) continue;
+    const depth = urlPathDepth(model.baseUrl);
+    if (depth > chosenDepth) {
+      chosen = model.baseUrl;
+      chosenDepth = depth;
+    }
+  }
+  return chosen;
+}
+
+function urlPathDepth(baseUrl: string): number {
+  try {
+    const path = new URL(baseUrl).pathname.replace(/\/+$/, "");
+    return path === "" ? 0 : path.split("/").length - 1;
+  } catch {
+    return 0; // not a parseable URL: depth 0, so the first occurrence wins
+  }
+}
+
 export function authHeaders(api: WireApi | undefined, apiKey: string): Headers {
   const headers = new Headers();
   if (api === "anthropic-messages") {

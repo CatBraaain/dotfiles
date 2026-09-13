@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   CACHE_TTL_MS,
   authHeaders,
+  catalogBaseUrl,
   composeProviderModels,
   deepEqualJson,
   endpointUrl,
@@ -61,6 +62,35 @@ describe("endpointUrl", () => {
       endpointUrl("anthropic-messages", "https://api.anthropic.com/v1"),
       "https://api.anthropic.com/v1/models?limit=1000",
     );
+  });
+});
+
+describe("catalogBaseUrl", () => {
+  it("prefers the deepest catalog path when spellings of the root are mixed", () => {
+    const mixed: InstalledModel[] = [
+      { id: "a", baseUrl: "https://openrouter.ai/api" },
+      { id: "b", baseUrl: "https://openrouter.ai/api/v1" },
+    ];
+    const base = catalogBaseUrl(mixed);
+    assert.equal(base, "https://openrouter.ai/api/v1");
+    assert.equal(endpointUrl("openai-completions", base ?? ""), "https://openrouter.ai/api/v1/models");
+  });
+
+  it("keeps the first entry when paths have the same depth", () => {
+    const tied: InstalledModel[] = [
+      { id: "a", baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com" },
+      { id: "b", baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com" },
+    ];
+    assert.equal(catalogBaseUrl(tied), "https://bedrock-runtime.us-east-1.amazonaws.com");
+  });
+
+  it("returns the single base unchanged and skips entries without one", () => {
+    const uniform: InstalledModel[] = [
+      { id: "a" },
+      { id: "b", baseUrl: "https://api.z.ai/api/coding/paas/v4" },
+    ];
+    assert.equal(catalogBaseUrl(uniform), "https://api.z.ai/api/coding/paas/v4");
+    assert.equal(catalogBaseUrl([]), undefined);
   });
 });
 

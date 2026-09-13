@@ -25,6 +25,7 @@ import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/pro
 import {
   CACHE_TTL_MS,
   authHeaders,
+  catalogBaseUrl,
   composeProviderModels,
   deepEqualJson,
   endpointUrl,
@@ -191,7 +192,7 @@ export function apply(ctx: Context) {
       order.push(id);
       if (!catalogIds.has(id)) continue; // hand-declared route: the user defines its models
       const installed = installedCatalogModels(id);
-      const baseUrl = profile.baseURL ?? installed.find((model) => model.baseUrl)?.baseUrl;
+      const baseUrl = profile.baseURL ?? catalogBaseUrl(installed);
       if (!baseUrl) {
         outcomes.push({ id, status: "failed", message: "no baseUrl in profile or catalog" });
         continue;
