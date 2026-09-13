@@ -119,18 +119,25 @@ function chordPopupTarget(current, subagentAddress) {
 
 // src/client/index.ts
 var inject = ["commandUi", "sessions", "modelDirectories", "slots"];
-var HERO_ROW_HIDE_CSS = '[class*="heroWorkspaceRow"]{display:none!important}';
-function ModelSeatVoid() {
+var SHADOW_PRIORITY = -1;
+var HIDE_CSS = [
+  '[class*="heroWorkspaceRow"]',
+  '[class*="pXSMma_headline"]',
+  '[class*="uV2eYG_add"]',
+  '[class*="Sh0Q9G_trigger"]'
+].map((selector) => `${selector}{display:none!important}`).join("");
+function SeatVoid() {
   return null;
 }
 function apply(ctx) {
   ctx.inject(["slots"], (scope) => {
-    scope.slots.inject("conversation.input.model", () => scope.slots.register({ name: "conversation.input.model" }, ModelSeatVoid));
+    scope.slots.inject("conversation.input.model", () => scope.slots.register({ name: "conversation.input.model", priority: SHADOW_PRIORITY }, SeatVoid));
+    scope.slots.inject("conversation.input.plan", () => scope.slots.register({ name: "conversation.input.plan", priority: SHADOW_PRIORITY }, SeatVoid));
   });
   const style = document.createElement("style");
-  style.textContent = HERO_ROW_HIDE_CSS;
+  style.textContent = HIDE_CSS;
   (document.head ?? document.documentElement).appendChild(style);
-  ctx.effect(() => () => style.remove(), "custom-ui: hero row style");
+  ctx.effect(() => () => style.remove(), "custom-ui: hide style");
   ctx.inject(["commandUi", "sessions", "modelDirectories"], (scope) => {
     const command = scope.commandUi;
     const sessions = scope.sessions;

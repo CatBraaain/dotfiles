@@ -1,4 +1,4 @@
-/** Browser client half: hide the stock model seat and hero chips, add the Ctrl+K → Ctrl+M chord. */
+/** Browser client half: hide stock composer controls, add the Ctrl+K → Ctrl+M chord. */
 import { createElement, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 // Service augmentations this half reads: the slot registry, the composer slot
@@ -18,30 +18,52 @@ import { chordPopupTarget, optionsOf, selectionOf } from "./popup-logic";
 /** Services this client half touches. */
 export const inject = ["commandUi", "sessions", "modelDirectories", "slots"];
 
-/** CSS module names are hashed with a package-local prefix, so match on the stable suffix. */
-const HERO_ROW_HIDE_CSS = '[class*="heroWorkspaceRow"]{display:none!important}';
+/**
+ * Shadowing rank for our null occupants: one below the stock seats (which
+ * register without a priority, i.e. 0). Single slots reject a second
+ * registration at the SAME priority, so omitting this throws at apply time
+ * and kills the rest of the client half with it.
+ */
+const SHADOW_PRIORITY = -1;
 
-/** Empty occupant for the single `conversation.input.model` slot: shadows the stock ModelSelect seat. */
-function ModelSeatVoid(): ReactNode {
+/**
+ * Stock components without a slot of their own, hidden via CSS. Class names
+ * are hashed with a per-file prefix, so each selector pins the current dsh
+ * build; a dsh update that changes a hash just makes the element reappear.
+ */
+const HIDE_CSS = [
+  '[class*="heroWorkspaceRow"]', // New Session hero chips (workspace + agent preset)
+  '[class*="pXSMma_headline"]', // hero headline row (fish + title + Preview badge)
+  '[class*="uV2eYG_add"]', // commands + add attachment buttons (shared class)
+  '[class*="Sh0Q9G_trigger"]', // PermissionSelect trigger (access mode)
+]
+  .map((selector) => `${selector}{display:none!important}`)
+  .join("");
+
+/** Empty occupant shadowing the stock seats of `conversation.input.model` and `.plan`. */
+function SeatVoid(): ReactNode {
   return null;
 }
 
 export function apply(ctx: Context): void {
-  // Hide the composer model seat: the single slot renders its latest
-  // registrant, and this bundle loads after ui-model-selection's roster.
+  // Shadow the stock model seat and plan chip. The single slot renders its
+  // lowest-priority registrant, and our rank sits below the stock seats'.
   ctx.inject(["slots"], (scope) => {
     scope.slots.inject("conversation.input.model", () =>
-      scope.slots.register({ name: "conversation.input.model" }, ModelSeatVoid),
+      scope.slots.register({ name: "conversation.input.model", priority: SHADOW_PRIORITY }, SeatVoid),
+    );
+    scope.slots.inject("conversation.input.plan", () =>
+      scope.slots.register({ name: "conversation.input.plan", priority: SHADOW_PRIORITY }, SeatVoid),
     );
   });
 
-  // Hide the New Session hero row (workspace chip + agent preset chip). The
-  // chips are host-built components without a slot of their own, so CSS is
-  // the only removal surface.
+  // Hide the hero row, headline, and the built-in tool row buttons. These are
+  // host-built components without slots of their own, so CSS is the only
+  // removal surface.
   const style = document.createElement("style");
-  style.textContent = HERO_ROW_HIDE_CSS;
+  style.textContent = HIDE_CSS;
   (document.head ?? document.documentElement).appendChild(style);
-  ctx.effect(() => () => style.remove(), "custom-ui: hero row style");
+  ctx.effect(() => () => style.remove(), "custom-ui: hide style");
 
   // Ctrl+K → (within 1s) Ctrl+M opens the /model popup for the current session.
   ctx.inject(["commandUi", "sessions", "modelDirectories"], (scope) => {
