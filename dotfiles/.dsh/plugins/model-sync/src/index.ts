@@ -58,6 +58,7 @@ interface PiAiProfile {
   apiKeyEnv?: string;
   api?: string;
   baseURL?: string;
+  headers?: Record<string, string>;
 }
 type PiAiProviders = Record<string, PiAiProfile & { models?: ModelEntry[] }>;
 
@@ -154,13 +155,15 @@ export function apply(ctx: Context) {
   });
 
   const fetchEndpointModels = async (
+    openrouter: boolean,
     url: string,
     api: WireApi | undefined,
     apiKey: string,
+    routeHeaders: Record<string, string> | undefined,
   ): Promise<RemoteModel[]> => {
     const shape: ResponseShape = api === "anthropic-messages" ? "anthropic" : "openai";
-    const payload = await fetchBounded(url, authHeaders(api, apiKey));
-    return extractRemoteModels(shape, payload);
+    const payload = await fetchBounded(url, authHeaders(api, apiKey, routeHeaders));
+    return extractRemoteModels(shape, payload, openrouter);
   };
 
   // ---- sync ---------------------------------------------------------------------
@@ -171,6 +174,8 @@ export function apply(ctx: Context) {
     baseUrl: string;
     api: WireApi | undefined;
     apiKey: string;
+    /** Custom route headers, merged before the wire auth headers. */
+    headers?: Record<string, string>;
     /** Fresh cached listing usable for this sync, refreshed by the fetch phase. */
     cached: CachedProvider | undefined;
   };
@@ -212,6 +217,7 @@ export function apply(ctx: Context) {
         baseUrl,
         api,
         apiKey,
+        headers: profile.headers,
         cached:
           !force && isCachedProviderUsable(cachedProvider, baseUrl, now)
             ? cachedProvider
@@ -235,9 +241,11 @@ export function apply(ctx: Context) {
         .map(async (plan) => {
           try {
             const models = await fetchEndpointModels(
+              plan.id === "openrouter",
               endpointUrl(plan.api, plan.baseUrl),
               plan.api,
               plan.apiKey,
+              plan.headers,
             );
             if (models.length === 0) throw new Error("the endpoint listed no chat models");
             plan.cached = { baseUrl: plan.baseUrl, fetchedAt: Date.now(), models };
@@ -414,9 +422,17 @@ export function apply(ctx: Context) {
   };
 
   const backgroundSync = (): void => {
-    void syncOnce(false).catch((error) => {
-      logger.warn(`background model sync failed: ${errorMessage(error)}`);
-    });
+    void syncOnce(false)
+      .then((outcomes) => {
+        for (const outcome of outcomes) {
+          if (outcome.status === "failed") {
+            logger.warn(`model sync failed for ${outcome.id}: ${outcome.message ?? "failed"}`);
+          }
+        }
+      })
+      .catch((error) => {
+        logger.warn(`background model sync failed: ${errorMessage(error)}`);
+      });
   };
 
   ctx.effect(

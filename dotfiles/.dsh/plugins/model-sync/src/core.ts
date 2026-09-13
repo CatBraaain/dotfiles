@@ -148,8 +148,21 @@ function urlPathDepth(baseUrl: string): number {
   }
 }
 
-export function authHeaders(api: WireApi | undefined, apiKey: string): Headers {
+/**
+ * The headers for one model-listing request: the route's custom headers go in
+ * first and the wire auth headers are set after, so auth wins on name
+ * conflicts (pi's merge order). Non-string route values are skipped — raw
+ * settings ahead of the schema can carry anything.
+ */
+export function authHeaders(
+  api: WireApi | undefined,
+  apiKey: string,
+  routeHeaders?: Record<string, string>,
+): Headers {
   const headers = new Headers();
+  for (const [name, value] of Object.entries(routeHeaders ?? {})) {
+    if (typeof value === "string") headers.set(name, value);
+  }
   if (api === "anthropic-messages") {
     headers.set("anthropic-version", "2023-06-01");
     if (apiKey.startsWith("sk-ant-oat")) {
@@ -168,14 +181,23 @@ export function authHeaders(api: WireApi | undefined, apiKey: string): Headers {
 // Remote model extraction
 // ---------------------------------------------------------------------------
 
-export function extractRemoteModels(shape: ResponseShape, payload: unknown): RemoteModel[] {
+/**
+ * Extract the chat-model listing from an endpoint payload.
+ *
+ * OpenRouter's extra endpoint metadata is only read when `openrouter` is true
+ * (the route id is `openrouter`), mirroring pi's provider-id gate — other
+ * OpenAI-compatible endpoints get `name` at most, even if their payload
+ * carries OpenRouter-shaped fields.
+ */
+export function extractRemoteModels(shape: ResponseShape, payload: unknown, openrouter = false): RemoteModel[] {
   const response = asRecord(payload);
   if (!response) return [];
-  const models = shape === "anthropic" ? extractAnthropicModels(response) : extractOpenAiModels(response);
+  const models =
+    shape === "anthropic" ? extractAnthropicModels(response) : extractOpenAiModels(response, openrouter);
   return models.filter((model) => !isExcludedModel(model.id));
 }
 
-function extractOpenAiModels(response: Record<string, unknown>): RemoteModel[] {
+function extractOpenAiModels(response: Record<string, unknown>, openrouter: boolean): RemoteModel[] {
   const data = asArray(response.data);
   if (!data) return [];
   return data.flatMap((entry) => {
@@ -183,7 +205,7 @@ function extractOpenAiModels(response: Record<string, unknown>): RemoteModel[] {
     const id = text(model?.id);
     if (!id) return [];
     const remoteModel: RemoteModel = { id, name: text(model?.name) };
-    enrichOpenRouterModel(remoteModel, model);
+    if (openrouter) enrichOpenRouterModel(remoteModel, model);
     return [remoteModel];
   });
 }

@@ -114,6 +114,22 @@ describe("authHeaders", () => {
     assert.equal(headers.get("Authorization"), "Bearer sk-ant-oat01-token");
     assert.equal(headers.get("anthropic-beta"), "oauth-2025-04-20");
   });
+
+  it("sets route headers first and lets the wire auth headers win on conflicts", () => {
+    const headers = authHeaders("openai-completions", "key-1", {
+      Authorization: "route-token",
+      "X-Custom": "custom-value",
+    });
+    assert.equal(headers.get("Authorization"), "Bearer key-1");
+    assert.equal(headers.get("X-Custom"), "custom-value");
+  });
+
+  it("skips non-string route header values", () => {
+    const untypedHeaders = { "X-Count": 3, "X-Note": "note" } as unknown as Record<string, string>;
+    const headers = authHeaders("openai-completions", "key-1", untypedHeaders);
+    assert.equal(headers.get("X-Count"), null);
+    assert.equal(headers.get("X-Note"), "note");
+  });
 });
 
 describe("extractRemoteModels", () => {
@@ -146,18 +162,22 @@ describe("extractRemoteModels", () => {
   });
 
   it("enriches OpenRouter entries with metadata and pricing", () => {
-    const models = extractRemoteModels("openai", {
-      data: [
-        {
-          id: "z-ai/glm-6",
-          supported_parameters: ["reasoning"],
-          architecture: { input_modalities: ["text", "image"] },
-          context_length: 262144,
-          top_provider: { max_completion_tokens: 98304 },
-          pricing: { prompt: "0.0000012", completion: "0.0000044" },
-        },
-      ],
-    });
+    const models = extractRemoteModels(
+      "openai",
+      {
+        data: [
+          {
+            id: "z-ai/glm-6",
+            supported_parameters: ["reasoning"],
+            architecture: { input_modalities: ["text", "image"] },
+            context_length: 262144,
+            top_provider: { max_completion_tokens: 98304 },
+            pricing: { prompt: "0.0000012", completion: "0.0000044" },
+          },
+        ],
+      },
+      true,
+    );
     assert.deepEqual(models, [
       {
         id: "z-ai/glm-6",
@@ -169,6 +189,23 @@ describe("extractRemoteModels", () => {
         cost: { input: 1.2, output: 4.4, cacheRead: 0, cacheWrite: 0 },
       },
     ]);
+  });
+
+  it("keeps non-OpenRouter OpenAI listings unenriched even with OpenRouter-shaped fields", () => {
+    const models = extractRemoteModels("openai", {
+      data: [
+        {
+          id: "glm-6",
+          name: "GLM-6",
+          supported_parameters: ["reasoning"],
+          architecture: { input_modalities: ["text", "image"] },
+          context_length: 262144,
+          top_provider: { max_completion_tokens: 98304 },
+          pricing: { prompt: "0.0000012", completion: "0.0000044" },
+        },
+      ],
+    });
+    assert.deepEqual(models, [{ id: "glm-6", name: "GLM-6" }]);
   });
 
   it("returns nothing for payloads without a data array", () => {

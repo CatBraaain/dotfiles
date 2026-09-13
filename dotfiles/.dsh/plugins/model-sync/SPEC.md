@@ -72,6 +72,7 @@ endpoint URL と認証は route の wire protocol（`profile.api`、未設定な
 
 - `baseURL` は `profile.baseURL`、未設定なら installed catalog の当該 provider の baseUrl。catalog 内で baseUrl の綴りが混在するときは、URL path が最も深いものを選ぶ（例: openrouter は `…/api` と `…/api/v1` が混在するため `…/api/v1`。pi 版の固定表が持つ `https://openrouter.ai/api/v1` と同じ endpoint になる）。URL path の深さが同じときは catalog の先頭を採用する
 - API key は `profile.apiKeyEnv` を `ctx.credentials.resolve` で解決する。settings に `apiKeyEnv` が無い、解決できない、名前が reference 文法に合わない、のいずれかの provider は endpoint を呼ばない（`no auth` 扱い）
+- route profile の `headers`（`Record<string, string>`。文字列値のみ）をリクエストヘッダーへ先に設定する。同名の header は上表の認証ヘッダーが上書きする（pi 版と同じマージ順）
 - 1 リクエストのタイムアウトは 15 秒。応答本文は 10 MiB を超えたら失敗扱い。provider 間は並列に実行する
 
 ## モデル一覧の抽出
@@ -80,6 +81,8 @@ endpoint URL と認証は route の wire protocol（`profile.api`、未設定な
 | --- | --- | --- | --- |
 | OpenAI | `data[]` | `id` | OpenRouter のみ次節のフルセット、他は `name`（あれば） |
 | Anthropic | `data[]` | `id` | `display_name`（表示名として使用） |
+
+OpenRouter かどうかは route id が `openrouter` であることで判定する（pi 版の provider id 判定と同じ）。`openrouter` 以外の route の OpenAI 応答からは `name`（あれば）のみを取り出し、`supported_parameters` 等の OpenRouter 形式の field は読まない。
 
 ### チャットモデルのフィルタ
 
@@ -182,6 +185,6 @@ pi 版の footer status 相当は dsh web client に実装しない。起動時�
 | endpoint baseURL | 固定表の `defaultBaseUrl`（provider ごとに手維持） | catalog の baseUrl から URL path が最も深いものを選択（固定表なし。混在時の規則は「ネットワーク取得」節） |
 | cost | 登録モデルに cost を設定 | settings schema に cost が無いため反映しない（同名 id は catalog の cost、新規 id は 0） |
 | google・amazon-bedrock など wire 非対応 provider | 対応 | dsh の wire protocol に無い catalog api へ解決される route は同期対象外（「対象 Provider」節） |
-| footer status / 通知 | あり（`syncing…`、全失敗で warning） | なし。`/model-sync` の結果行のみ |
+| footer status / 通知 | あり（`syncing…`、全失敗で warning） | なし。失敗時 warning と `/model-sync` の結果行のみ |
 | models.json 相当の保護 | `models.json` のカスタム定義を最優先 | user section の entry を最優先（所有権規則） |
 | 新規取得の起点 | pi 起動（session_start）ごと | profile boot、12 時間 timer、コマンド |
