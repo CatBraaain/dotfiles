@@ -222,7 +222,7 @@ dsh web UI の composer 直下（composer dock）に、現在の agent と実効
 
 | 項目             | 内容と振る舞い                                                                                                                                                             |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状態の配信       | host 側が本家 `dsh-client-connection` の共有 `/api` channel 上に `dsh-agents/state` endpoint を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual }` を返す。durable な session log には書き込まず、メモリ上の状態を応答する |
+| 状態の配信       | host 側が本家 `dsh-client-connection` の `/api` channel 上に exact Fetch route `POST /api/dsh-agents/state` を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual }` を返す。共有 channel の RPC interceptor は dsh rc.2 から typert gateway が占有するため、本 plugin は exact route を使う。durable な session log には書き込まず、メモリ上の状態を応答する |
 | 表示の更新       | client half が 2 秒間隔で状態を取得し、取得に失敗したときは直前の表示を維持する。agent・class の切替は次の取得まで（最大 2 秒）表示に反映される                                |
 | 未管理 session   | 本 plugin が管理しない session（plugin 無効、`agents.yaml` 不正、子 session など）では何も表示しない                                                                      |
 | 表示しない環境   | web UI 以外の profile（headless、sdk など）では client half が読み込まれないため表示は出ない。routing・フォールバックなどの host 側の動作は同じ                                    |

@@ -46,9 +46,6 @@ __export(exports_client, {
 module.exports = __toCommonJS(exports_client);
 var import_react = require("react");
 
-// src/state-rpc.ts
-var AGENTS_STATE_ENDPOINT = "dsh-agents/state";
-
 // src/client/apply.ts
 function registerAgentClassDisplay(ctx, component) {
   ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({ name: "conversation.composer.dock", id: "agent-class", order: 2 }, component));
@@ -99,8 +96,29 @@ function parseDisplayState(value) {
   };
 }
 
+// src/state-rpc.ts
+var AGENTS_STATE_PATH = "/api/dsh-agents/state";
+
+// src/client/state.ts
+function createStateFetcher(doFetch) {
+  return async (sessionId) => {
+    try {
+      const response = await doFetch(AGENTS_STATE_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId })
+      });
+      if (!response.ok)
+        return { managed: false };
+      return parseDisplayState(await response.json());
+    } catch {
+      return { managed: false };
+    }
+  };
+}
+
 // src/client/index.ts
-var inject = ["slots", "connection"];
+var inject = ["slots"];
 var POLL_INTERVAL_MS = 2000;
 var DISPLAY_STYLE = {
   color: "var(--dsw-alias-label-tertiary)",
@@ -121,15 +139,7 @@ function AgentClassDisplay({ sessionId, fetchState }) {
   return import_react.createElement("div", { style: DISPLAY_STYLE }, ...lines.map((line) => import_react.createElement("div", { key: line }, line)));
 }
 function apply(ctx) {
-  const connection = ctx.get?.("connection");
-  const fetchState = async (sessionId) => {
-    if (!connection)
-      return { managed: false };
-    const result = await connection.rpc.call("/api", AGENTS_STATE_ENDPOINT, { sessionId });
-    if (!result.ok)
-      return { managed: false };
-    return parseDisplayState(result.value);
-  };
+  const fetchState = createStateFetcher(globalThis.fetch);
   const component = (props) => import_react.createElement(AgentClassDisplay, { ...props, fetchState });
   registerAgentClassDisplay(ctx, component);
 }

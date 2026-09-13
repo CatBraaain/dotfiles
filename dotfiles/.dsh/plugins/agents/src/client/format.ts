@@ -1,4 +1,4 @@
-/** Display state carried from the host by the `dsh-agents/state` RPC. */
+/** Display state carried from the host by the `dsh-agents/state` route. */
 export interface AgentDisplayState {
   readonly managed: boolean
   readonly agent?: string
@@ -23,7 +23,7 @@ export function agentStateLines(state: AgentDisplayState): readonly string[] {
   return lines
 }
 
-/** Narrow an untyped RPC result into the display state (defensive). */
+/** Narrow an untyped route payload into the display state (defensive). */
 export function parseDisplayState(value: unknown): AgentDisplayState {
   if (typeof value !== 'object' || value === null) return UNMANAGED_STATE
   const { managed, agent, className, manual } = value as Record<string, unknown>

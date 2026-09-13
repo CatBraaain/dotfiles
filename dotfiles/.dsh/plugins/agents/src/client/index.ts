@@ -1,9 +1,6 @@
 /** Browser client half: show the live agents.yaml agent and class under the composer. */
 import { createElement, useEffect, useState, type ReactNode } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
-// Client Connection service: `ConnectionHandle` (ctx key `connection`, no
-// cordis augmentation on the client half — read it through `ctx.get`).
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 // Context augmentation: the `ctx.slots` registry service.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // SlotMap augmentation: 'conversation.composer.dock' is a session-scope list.
@@ -11,13 +8,13 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // SessionStandardProps augmentation: session-scope slot props carry `sessionId`.
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { AGENTS_STATE_ENDPOINT } from '../state-rpc.ts'
 import { registerAgentClassDisplay } from './apply'
 import { startStatePoller } from './controller'
-import { agentStateLines, parseDisplayState, type AgentDisplayState } from './format'
+import { agentStateLines, type AgentDisplayState } from './format'
+import { createStateFetcher } from './state.ts'
 
-/** Services this client half touches (the slot registry and the RPC caller). */
-export const inject = ['slots', 'connection']
+/** Services this client half touches (the slot registry only). */
+export const inject = ['slots']
 
 /** Poll cadence; the display follows host-side switches within this delay. */
 const POLL_INTERVAL_MS = 2000
@@ -58,13 +55,7 @@ function AgentClassDisplay({ sessionId, fetchState }: DisplayProps): ReactNode {
 
 /** Wire the display into the composer dock (registration path lives in ./apply). */
 export function apply(ctx: Context): void {
-  const connection = ctx.get?.('connection') as ConnectionHandle | undefined
-  const fetchState = async (sessionId: SessionId): Promise<AgentDisplayState> => {
-    if (!connection) return { managed: false }
-    const result = await connection.rpc.call('/api', AGENTS_STATE_ENDPOINT, { sessionId })
-    if (!result.ok) return { managed: false }
-    return parseDisplayState(result.value)
-  }
+  const fetchState = createStateFetcher(globalThis.fetch)
   const component: unknown = (props: DisplayProps) =>
     createElement(AgentClassDisplay, { ...props, fetchState })
   registerAgentClassDisplay(ctx, component)

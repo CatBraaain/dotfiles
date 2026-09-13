@@ -30,10 +30,9 @@ import type { ShellExecutor } from "@deepseek-ai/dsh-shell";
 import type {} from "@deepseek-ai/dsh-api-session-controller";
 import type {} from "@deepseek-ai/dsh-subagent";
 // Type-only imports also pull in the `declare module '@deepseek-ai/cordis'`
-// augmentation that puts the host `ctx.connection` RPC registry on Context.
+// augmentation that puts the host `ctx.connection` registries on Context.
 import type {
-  ConnectionRpcEndpointMatcher,
-  ConnectionRpcHandler,
+  ConnectionFetchRoute,
   HostConnectionHandle,
 } from "@deepseek-ai/dsh-client-connection";
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
@@ -55,7 +54,7 @@ import { translateTools, type ToolFilter } from "./tool-allowlist.ts";
 import { SubagentSlots } from "./subagent-slots.ts";
 import { sessionNameFor, settleChildRun } from "./child-run.ts";
 import {
-  AGENTS_STATE_ENDPOINT,
+  AGENTS_STATE_PATH,
   buildStatePayload,
   isDisplayedAgent,
   parseStateRequest,
@@ -609,7 +608,7 @@ export function apply(ctx: Context) {
     yield ctx.commands.register(reloadCommand);
   }, "dsh-agents commands");
 
-  // ---- client state RPC (the browser display polls the agent/class) --------
+  // ---- client state route (the browser display polls the agent/class) ------
   const connection = ctx.get?.("connection") as HostConnectionHandle | undefined;
   if (!connection) {
     logger.warn("connection contract unavailable; the browser agent/class display stays empty");
@@ -629,22 +628,27 @@ export function apply(ctx: Context) {
         })),
       sessionId,
     );
-  const matchStateEndpoint: ConnectionRpcEndpointMatcher = (endpoint) =>
-    endpoint === AGENTS_STATE_ENDPOINT;
-  const handleStateRpc: ConnectionRpcHandler = async (_endpoint, payload) => {
-    const request = parseStateRequest(payload);
-    if (!request) {
-      return {
-        ok: false,
-        error: { code: "bad-request", message: "payload must be { sessionId?: string }", details: {} },
-      };
-    }
-    return { ok: true, value: stateForSession(request.sessionId) };
+  // Exact Fetch route on the /api channel. dsh rc.2 gives the shared-channel
+  // RPC interceptor to the stock typert gateway, so plugins must not call
+  // `connection.rpc.intercept` themselves; an exact route keeps the same
+  // trust + browser-auth fence and answers before the gateway's 404 fallback.
+  const stateRoute: ConnectionFetchRoute = {
+    path: AGENTS_STATE_PATH,
+    methods: ["POST"],
+    requestBody: "buffered",
+    fetch: async (request) => {
+      const payload: unknown = await request.json().catch(() => undefined);
+      const requestState = parseStateRequest(payload);
+      if (!requestState) {
+        return Response.json(
+          { error: "payload must be { sessionId?: string }" },
+          { status: 400 },
+        );
+      }
+      return Response.json(stateForSession(requestState.sessionId));
+    },
   };
-  ctx.effect(
-    () => connection.rpc.intercept("/api", matchStateEndpoint, handleStateRpc),
-    "dsh-agents state rpc",
-  );
+  ctx.effect(() => connection.fetch.register(stateRoute), "dsh-agents state rpc");
 }
 
 // Read `--agent <name>` / `--class <name>` (space or `=` separated) from the
