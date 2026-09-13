@@ -411,13 +411,27 @@ export interface OpenserpSearchResult {
 
 // Map openserp results to seam sources: rank-ascending order, URL required
 // (entries without one are unusable as citation sources and dropped), title
-// and snippet omitted when blank — the seam forbids inventing them.
-export function toSearchSources(results: readonly OpenserpSearchResult[]): WebSearchSource[] {
+// and snippet omitted when blank — the seam forbids inventing them. openserp
+// passes raw SERP hrefs through unmodified, and engines serve some of them
+// relative to their origin (google: `/goto?url=...`), so each URL resolves
+// against the engine origin; entries whose URL cannot parse (malformed
+// absolute URL) are dropped like url-less ones.
+export function toSearchSources(
+  results: readonly OpenserpSearchResult[],
+  engine: SearchEngine,
+): WebSearchSource[] {
+  const engineOrigin = new URL(SERP_BASE_URL[engine]).origin;
   const ranked = [...results].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
   const sources: WebSearchSource[] = [];
   for (const entry of ranked) {
-    const url = entry.url?.trim();
-    if (!url) continue;
+    const rawUrl = entry.url?.trim();
+    if (!rawUrl) continue;
+    let url: string;
+    try {
+      url = new URL(rawUrl, engineOrigin).toString();
+    } catch {
+      continue;
+    }
     const title = entry.title?.trim();
     const snippet = entry.snippet?.trim();
     sources.push({
@@ -492,7 +506,7 @@ export async function camoufoxOpenserpSearch(
     signal,
     deps,
   );
-  return toSearchSources(results);
+  return toSearchSources(results, engine);
 }
 
 export function defaultSearchBackends(

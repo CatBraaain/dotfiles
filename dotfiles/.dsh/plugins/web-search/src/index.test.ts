@@ -170,11 +170,14 @@ describe("SERP URL 構築（serpUrl）", () => {
 
 describe("openserp results の sources 変換（toSearchSources）", () => {
   it("rank 昇順にソートし、title・snippet を埋める", () => {
-    const sources = toSearchSources([
-      { rank: 3, url: "https://c/", title: "C", snippet: "sc" },
-      { rank: 1, url: "https://a/", title: "A", snippet: "sa" },
-      { rank: 2, url: "https://b/", title: "B" },
-    ]);
+    const sources = toSearchSources(
+      [
+        { rank: 3, url: "https://c/", title: "C", snippet: "sc" },
+        { rank: 1, url: "https://a/", title: "A", snippet: "sa" },
+        { rank: 2, url: "https://b/", title: "B" },
+      ],
+      "google",
+    );
     assert.deepEqual(sources, [
       { url: "https://a/", title: "A", snippet: "sa" },
       { url: "https://b/", title: "B" },
@@ -184,18 +187,60 @@ describe("openserp results の sources 変換（toSearchSources）", () => {
 
   it("url のないエントリは結果に含めない", () => {
     assert.deepEqual(
-      toSearchSources([
-        { rank: 1, title: "no url" },
-        { rank: 2, url: "https://a/" },
-      ]),
+      toSearchSources(
+        [
+          { rank: 1, title: "no url" },
+          { rank: 2, url: "https://a/" },
+        ],
+        "google",
+      ),
       [{ url: "https://a/" }],
     );
   });
 
   it("title・snippet が空白なら省略する（値を捏造しない）", () => {
     assert.deepEqual(
-      toSearchSources([{ rank: 1, url: "https://a/", title: "  ", snippet: "" }]),
+      toSearchSources([{ rank: 1, url: "https://a/", title: "  ", snippet: "" }], "google"),
       [{ url: "https://a/" }],
+    );
+  });
+
+  it("engine origin からの相対 URL（google の /goto?url=）を絶対化する", () => {
+    const sources = toSearchSources(
+      [{ rank: 1, url: "/goto?url=CAES...", title: "relative" }],
+      "google",
+    );
+    assert.deepEqual(sources, [{ url: "https://www.google.com/goto?url=CAES...", title: "relative" }]);
+  });
+
+  it("プロトコル相対 URL は https で絶対化する（duckduckgo のリダイレクト href 形）", () => {
+    const sources = toSearchSources(
+      [{ rank: 1, url: "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F", title: "ddg" }],
+      "duckduckgo",
+    );
+    assert.deepEqual(sources, [
+      { url: "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F", title: "ddg" },
+    ]);
+  });
+
+  it("bing など絶対 URL は origin 解決せずそのまま返す", () => {
+    const sources = toSearchSources(
+      [{ rank: 1, url: "https://example.com/page", title: "abs" }],
+      "bing",
+    );
+    assert.deepEqual(sources, [{ url: "https://example.com/page", title: "abs" }]);
+  });
+
+  it("不正な絶対 URL（host 不備など）のエントリは捨てる", () => {
+    assert.deepEqual(
+      toSearchSources(
+        [
+          { rank: 1, url: "https://exa mple.com/x", title: "invalid host" },
+          { rank: 2, url: "https://a/", title: "ok" },
+        ],
+        "google",
+      ),
+      [{ url: "https://a/", title: "ok" }],
     );
   });
 });
