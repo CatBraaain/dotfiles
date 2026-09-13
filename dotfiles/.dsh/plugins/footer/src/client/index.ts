@@ -33,6 +33,12 @@ interface SessionIdFooterProps {
 /** How long the check icon stays before reverting to the copy icon. */
 const COPIED_RESET_MS = 1000
 
+/**
+ * Gap between the composer card and this row, matching the stock stats row
+ * (StatsPills root padding-top) that shares the composer dock seat.
+ */
+const DOCK_ROW_GAP_PX = 4
+
 function SessionIdFooter({ sessionId }: SessionIdFooterProps): ReactNode {
   const [copied, setCopied] = useState(false)
   /** Non-null while the copied flag is showing; doubles as the re-click guard. */
@@ -64,6 +70,7 @@ function SessionIdFooter({ sessionId }: SessionIdFooterProps): ReactNode {
     onClick: onCopy,
     title: copied ? 'Copied' : 'Copy session ID',
     icon: createElement(copied ? IconCheckOutline16 : IconCopyOutline16),
+    style: { marginTop: DOCK_ROW_GAP_PX },
   }, formatSessionLabel(sessionId))
 }
 

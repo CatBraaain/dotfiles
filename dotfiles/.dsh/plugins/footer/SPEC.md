@@ -15,6 +15,7 @@ composer 下 dock に、現在のセッション ID をコピーできる dsh �
 | コピー成功後 | 1 秒間チェックアイコンに切り替え、その後コピーアイコンへ戻す |
 
 - ボタンの見た目は dsh 標準の `--dsw-alias-button-*` トークンに従い、独自の色指定はしない
+- 入力欄との間隔は stock の stats 行（StatsPills root の padding-top 4px）と同じ 4px の隙間を空ける。dock は InputBar root（flex column、gap なし）の直下にレンダされるため、Button へ `margin-top: 4px` を直接与える
 - セッション ID は client slot の標準 props（`scope: 'session'` の `sessionId`）から取得し、表示のための host 側配線を持たない
 
 ## 対象外
