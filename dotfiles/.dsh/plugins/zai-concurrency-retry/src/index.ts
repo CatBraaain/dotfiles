@@ -4,11 +4,14 @@
  *
  * Z.AI coding plans reject concurrent requests with business codes 1302 /
  * 1305. The rejection arrives as an HTTP 429 whose body text surfaces in the
- * LLM failure message; the numbers never appear in the stable failure `code`
- * (dsh-llm-pi-ai classifies them as plain `RATE_LIMIT`, same as quota
- * errors). The limit is account-wide, so switching models cannot recover it.
- * This plugin detects those failures, waits out an exponential backoff, and
- * retries the same step without a retry-count bound:
+ * LLM failure message; the business numbers never survive into the stable
+ * failure `code`, which cannot tell the two apart anyway — dsh-llm-pi-ai
+ * normalizes the 1302 wording to `RATE_LIMIT` while the 1305 wording matches
+ * no pattern and stays a generic `PI_AI_ERROR` (quota wordings normalize to
+ * `QUOTA`). The limit is account-wide, so switching models cannot recover
+ * it. This plugin therefore detects those failures by message pattern, waits
+ * out an exponential backoff, and retries the same step without a
+ * retry-count bound:
  *
  *   detection  provider `zai` / `zai-coding-cn` plus message patterns
  *              (quota codes 1113 / 1308-1321 are deliberately excluded and
