@@ -221,8 +221,9 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
     return context.sandbox.runTool(request, options) as Promise<T>;
   };
 
-  // §2.1 route gate: before any image bytes are read, reject an image-incapable
-  // route with the vision-delegation error (SPEC §2.1).
+  // §2.1 route gate: runs after the sandbox read has produced the image bytes
+  // for file-signature detection, rejecting an image-incapable route with the
+  // vision-delegation error before the image is returned as input (SPEC §2.1).
   const gateImageRoute = async (filePath: string, exec: ToolRunContext): Promise<void> => {
     const routed = exec.agent?.session.requestHeader()?.config;
     const provider = routed?.provider ?? exec.agent?.options.provider;
