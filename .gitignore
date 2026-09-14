@@ -6,4 +6,5 @@ dotfiles/.secrets.sh
 dotfiles/**/*.machine.json
 dotfiles/**/*.machine.yaml
 dotfiles/**/*.machine.toml
+dotfiles/.agents/skills.exact/local/
 undotfiles/nix/flake.lock

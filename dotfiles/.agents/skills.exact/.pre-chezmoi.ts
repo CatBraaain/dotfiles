@@ -1,15 +1,22 @@
 // Local pre-chezmoi hook for dotfiles/.agents/skills.exact (spec §2).
 // Syncs external skills from ~/mirrors/github.com/<owner>/<repo> into the
-// matching dist folder. Source .pre-chezmoi.skills.yaml defines what to sync; files that
-// already exist here (local overrides, e.g. a custom SKILL.md) always win.
+// matching dist folder. Source .pre-chezmoi.skills.yaml defines what to sync;
+// .pre-chezmoi.skills.machine.yaml is the machine-specific layer (spec §2.1)
+// that patches the shared config and declares localSkills; files that already
+// exist here (local overrides, e.g. a custom SKILL.md) always win.
 import { existsSync, statSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { applyYamlPatch } from "../../../pre-chezmoi.ts";
 import yaml from "yaml";
 
 export type SkillEntry = { path: string; appendSkillMd?: string };
 export type SkillRepo = { repo: string; entries: SkillEntry[] };
+export type SkillConfig = { repos: SkillRepo[]; localSkills: SkillEntry[] };
+
+const machineLayerFileName = ".pre-chezmoi.skills.machine.yaml";
+const localSkillsDirName = "local";
 
 // Externals syncMirror/main reach through (mirror location, git runner, pull
 // policy). Tests inject fakes; production takes the defaults.
@@ -42,25 +49,42 @@ export function defaultContext(): SyncContext {
 const chezmoiAttributePrefix =
   /^(after|before|create|dot|empty|encrypted|exact|executable|external|literal|modify|once|onchange|private|readonly|remove|run|symlink)_/;
 
-export async function loadSkillConfig(configPath: string): Promise<SkillRepo[]> {
+export async function loadSkillConfig(configPath: string): Promise<SkillConfig> {
   const doc: unknown = yaml.parse(await readFile(configPath, "utf-8"));
   const externalSkills = (doc as { externalSkills?: unknown })?.externalSkills;
   if (!isPlainObject(externalSkills)) {
     throw new Error(`.pre-chezmoi.skills.yaml must have an externalSkills mapping: ${configPath}`);
   }
-  return Object.entries(externalSkills).map(([repo, rawEntries]) => ({
+
+  // Machine-specific layer: patch the shared config (§9) and read localSkills.
+  const machineLayerPath = join(dirname(configPath), machineLayerFileName);
+  const merged = existsSync(machineLayerPath)
+    ? (applyYamlPatch({ externalSkills }, await readFile(machineLayerPath, "utf-8")) as {
+        externalSkills?: unknown;
+        localSkills?: unknown;
+      })
+    : { externalSkills };
+  if (!isPlainObject(merged.externalSkills)) {
+    throw new Error(
+      `${machineLayerFileName} must keep an externalSkills mapping: ${machineLayerPath}`,
+    );
+  }
+
+  const repos = Object.entries(merged.externalSkills).map(([repo, rawEntries]) => ({
     repo,
-    entries: normalizeEntries(repo, rawEntries),
+    entries: normalizeEntries(`externalSkills.${repo}`, rawEntries),
   }));
+  const localSkills = normalizeEntries("localSkills", merged.localSkills ?? []);
+  return { repos, localSkills };
 }
 
 export async function resolveSkillDir(mirrorDir: string, path: string): Promise<string> {
   const matches = [...new Bun.Glob(path).scanSync({ cwd: mirrorDir, onlyFiles: false })]
     .map((relative) => join(mirrorDir, relative))
     .filter((absolute) => statSync(absolute).isDirectory());
-  if (matches.length === 0) throw new Error(`skill path matched nothing in mirror: ${path}`);
+  if (matches.length === 0) throw new Error(`skill path matched nothing: ${path}`);
   if (matches.length > 1)
-    throw new Error(`skill path matched multiple directories in mirror: ${path}`);
+    throw new Error(`skill path matched multiple directories: ${path}`);
   return matches[0];
 }
 
@@ -120,22 +144,31 @@ export async function main(
     const cwd = options.cwd ?? process.cwd();
     const context = options.context ?? defaultContext();
     const config = await loadSkillConfig(configPath);
+    // Local skills run first: the existing-file rule then lets a local file
+    // keep its content when a synced skill ships the same relative file.
+    for (const entry of config.localSkills) {
+      await copyEntry(dirname(configPath), cwd, entry);
+    }
     await Promise.all(
-      config.map(async ({ repo, entries }) => {
+      config.repos.map(async ({ repo, entries }) => {
         const mirrorDir = await syncMirror(repo, context);
-        for (const entry of entries) {
-          const skillDir = await resolveSkillDir(mirrorDir, entry.path);
-          const targetDir = join(cwd, basename(entry.path));
-          await copySkillTree(skillDir, targetDir);
-          if (entry.appendSkillMd !== undefined) await appendSkillMd(targetDir, entry.appendSkillMd);
-        }
+        for (const entry of entries) await copyEntry(mirrorDir, cwd, entry);
       }),
     );
+    // local/ only holds localSkills sources; keep it out of dist after use.
+    await rm(join(cwd, localSkillsDirName), { recursive: true, force: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`${hookRelativePath}: ${message}`);
     process.exitCode = 1;
   }
+}
+
+async function copyEntry(baseDir: string, cwd: string, entry: SkillEntry): Promise<void> {
+  const skillDir = await resolveSkillDir(baseDir, entry.path);
+  const targetDir = join(cwd, basename(entry.path));
+  await copySkillTree(skillDir, targetDir);
+  if (entry.appendSkillMd !== undefined) await appendSkillMd(targetDir, entry.appendSkillMd);
 }
 
 export async function syncMirror(
@@ -171,22 +204,20 @@ async function runGit(args: string[]): Promise<{ ok: boolean; stderr: string }> 
   return { ok, stderr: stderr.trim() };
 }
 
-function normalizeEntries(repo: string, rawEntries: unknown): SkillEntry[] {
+function normalizeEntries(prefix: string, rawEntries: unknown): SkillEntry[] {
   if (!Array.isArray(rawEntries)) {
-    throw new Error(`externalSkills.${repo} must be an array`);
+    throw new Error(`${prefix} must be an array`);
   }
   return rawEntries.map((raw, index) => {
     if (typeof raw === "string") return { path: raw };
     if (isPlainObject(raw) && typeof raw.path === "string") {
       const appendSkillMd = raw.appendSkillMd;
       if (appendSkillMd !== undefined && typeof appendSkillMd !== "string") {
-        throw new Error(`externalSkills.${repo}[${index}].appendSkillMd must be a string`);
+        throw new Error(`${prefix}[${index}].appendSkillMd must be a string`);
       }
       return { path: raw.path, appendSkillMd };
     }
-    throw new Error(
-      `externalSkills.${repo}[${index}] must be a path string or { path, appendSkillMd }`,
-    );
+    throw new Error(`${prefix}[${index}] must be a path string or { path, appendSkillMd }`);
   });
 }
 

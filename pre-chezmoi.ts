@@ -191,7 +191,7 @@ async function composeMergeTargets(
 
     let value: unknown = {};
     for (const layer of layers) {
-      value = applyOperations(deepMerge(value, layer.normal), layer.operations);
+      value = applyLayer(value, layer);
     }
 
     await writeFile(target.outputPath, fileFormats[target.format].stringify(value));
@@ -252,6 +252,17 @@ function parseLayer(content: string, format: FileFormat): Layer {
   };
   const { normal } = parsePairs(document.contents.items, "", operations, yamlContext);
   return { normal, operations };
+}
+
+// Apply one parsed layer to a base value following pre-chezmoi.spec.md §9.
+function applyLayer(base: unknown, layer: Layer): unknown {
+  return applyOperations(deepMerge(base, layer.normal), layer.operations);
+}
+
+// Apply a YAML patch layer (pre-chezmoi.spec.md §9) to a base value. Exported
+// for local hooks that merge machine-specific config layers.
+export function applyYamlPatch(base: unknown, yamlContent: string): unknown {
+  return applyLayer(base, parseLayer(yamlContent, "yaml"));
 }
 
 type ParsedPairs = { normal: PlainObject; hasOperations: boolean };
