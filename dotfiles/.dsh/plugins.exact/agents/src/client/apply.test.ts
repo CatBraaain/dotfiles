@@ -1,7 +1,7 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import type { Context } from "@deepseek-ai/cordis";
-import { registerAgentClassDisplay } from "./apply";
+import { AGENTS_TRIGGER_CSS, registerAgentClassDisplay, TRIGGER_CLASS } from "./apply";
 
 /** Opaque stand-in for the react component (kept react-free on purpose). */
 const dummyComponent = () => null;
@@ -67,5 +67,36 @@ describe("registerAgentClassDisplay", () => {
     assert.equal(call.id, "agent-class");
     assert.equal(call.order, 2);
     assert.equal(call.component, dummyComponent);
+  });
+});
+
+describe("AGENTS_TRIGGER_CSS", () => {
+  it("hangs the stock interactive hover fill on the trigger class", () => {
+    assert.match(
+      AGENTS_TRIGGER_CSS,
+      new RegExp(`\\.${TRIGGER_CLASS}:hover:not\\(:disabled\\)`),
+    );
+    assert.match(
+      AGENTS_TRIGGER_CSS,
+      /var\(--dsw-alias-interactive-bg-hover\)/,
+    );
+  });
+
+  it("keeps the background reset out of inline style so the hover rule wins", () => {
+    // The reset is a plain class rule; the hover rule must out-rank it, which
+    // an inline `background: none` would defeat.
+    assert.match(AGENTS_TRIGGER_CSS, new RegExp(`\\.${TRIGGER_CLASS} \\{\\n  background: none;`));
+  });
+
+  it("only styles the plugin-owned class", () => {
+    // Two selectors, both scoped to the class: no bare element or universal rules.
+    const selectors = AGENTS_TRIGGER_CSS
+      .split("}")
+      .map((rule) => rule.split("{")[0]?.trim())
+      .filter((selector) => selector !== undefined && selector.length > 0);
+    assert.deepEqual(selectors, [
+      `.${TRIGGER_CLASS}`,
+      `.${TRIGGER_CLASS}:hover:not(:disabled)`,
+    ]);
   });
 });

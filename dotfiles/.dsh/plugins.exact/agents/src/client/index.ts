@@ -11,7 +11,11 @@ import type {} from "@deepseek-ai/dsh-client-ui-conversation/client";
 import type {} from "@deepseek-ai/dsh-client-ui-session/client";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import type { SelectKind } from "../state-rpc.ts";
-import { registerAgentClassDisplay } from "./apply";
+import {
+  AGENTS_TRIGGER_CSS,
+  registerAgentClassDisplay,
+  TRIGGER_CLASS,
+} from "./apply";
 import { startStatePoller } from "./controller";
 import {
   agentLineLabel,
@@ -26,20 +30,40 @@ export const inject = ["slots"];
 /** Poll cadence; the display follows host-side switches within this delay. */
 const POLL_INTERVAL_MS = 2000;
 
-/** Dim secondary text matching the neighboring session-id footer row. */
+/**
+ * Dock row band, the first-party convention (TodoPanel / skill-status): a
+ * centered band as wide as the composer card, so the agent/class rows sit
+ * aligned on top of the `🎯 skills:` row instead of hugging the dock's left
+ * edge. The column keeps each Menu's inline-flex trigger span at content
+ * width, stacking the two selector rows.
+ */
 const DISPLAY_STYLE: Readonly<Record<string, string>> = {
+  boxSizing: "border-box",
+  width: "calc(100% - var(--dsh-composer-side-clearance) * 2 - var(--dsh-composer-dock-inset) * 4)",
+  maxWidth: "calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) * 4)",
+  margin: "0 auto",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
   color: "var(--dsw-alias-label-tertiary)",
   fontSize: "var(--dsh-content-font-size-secondary, 13px)",
   lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))",
 };
 
-/** The row buttons inherit the gray caption tone (repo gray policy). */
+/**
+ * The row buttons inherit the gray caption tone (repo gray policy). The
+ * background reset and the stock hover fill arrive through `AGENTS_TRIGGER_CSS`;
+ * the negative margin keeps the label flush with the band edge while the
+ * padding gives the fill breathing room like the stock chips.
+ */
 const TRIGGER_STYLE: Readonly<Record<string, string>> = {
-  ...DISPLAY_STYLE,
-  display: "block",
-  background: "none",
+  color: "var(--dsw-alias-label-tertiary)",
+  fontSize: "var(--dsh-content-font-size-secondary, 13px)",
+  lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))",
   border: "none",
-  padding: "0",
+  borderRadius: "6px",
+  padding: "0 6px",
+  margin: "0 -6px",
   font: "inherit",
   textAlign: "inherit",
   cursor: "pointer",
@@ -83,6 +107,7 @@ function SelectorMenu({
       {
         type: "button",
         style: TRIGGER_STYLE,
+        className: TRIGGER_CLASS,
         title,
         "aria-haspopup": "menu",
         "aria-expanded": open,
@@ -162,6 +187,10 @@ function AgentClassDisplay({
 
 /** Wire the display above the composer (registration path lives in ./apply). */
 export function apply(ctx: Context): void {
+  const style = document.createElement("style");
+  style.textContent = AGENTS_TRIGGER_CSS;
+  (document.head ?? document.documentElement).appendChild(style);
+  ctx.effect(() => () => style.remove(), "agent-class: style");
   const fetchState = createStateFetcher(globalThis.fetch);
   const select = createSelectSender(globalThis.fetch);
   const component: unknown = (props: Omit<DisplayProps, "fetchState" | "select">) =>

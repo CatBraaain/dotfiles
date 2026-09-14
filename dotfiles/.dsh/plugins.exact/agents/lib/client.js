@@ -48,6 +48,15 @@ var import_react = require("react");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 
 // src/client/apply.ts
+var TRIGGER_CLASS = "dotfiles-agents-trigger";
+var AGENTS_TRIGGER_CSS = `
+.${TRIGGER_CLASS} {
+  background: none;
+}
+.${TRIGGER_CLASS}:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+`;
 function registerAgentClassDisplay(ctx, component) {
   ctx.slots.inject("conversation.input.dock", () => ctx.slots.register({ name: "conversation.input.dock", id: "agent-class", order: 2 }, component));
 }
@@ -158,16 +167,25 @@ function createSelectSender(doFetch) {
 var inject = ["slots"];
 var POLL_INTERVAL_MS = 2000;
 var DISPLAY_STYLE = {
+  boxSizing: "border-box",
+  width: "calc(100% - var(--dsh-composer-side-clearance) * 2 - var(--dsh-composer-dock-inset) * 4)",
+  maxWidth: "calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) * 4)",
+  margin: "0 auto",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
   color: "var(--dsw-alias-label-tertiary)",
   fontSize: "var(--dsh-content-font-size-secondary, 13px)",
   lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))"
 };
 var TRIGGER_STYLE = {
-  ...DISPLAY_STYLE,
-  display: "block",
-  background: "none",
+  color: "var(--dsw-alias-label-tertiary)",
+  fontSize: "var(--dsh-content-font-size-secondary, 13px)",
+  lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))",
   border: "none",
-  padding: "0",
+  borderRadius: "6px",
+  padding: "0 6px",
+  margin: "0 -6px",
   font: "inherit",
   textAlign: "inherit",
   cursor: "pointer"
@@ -185,6 +203,7 @@ function SelectorMenu({
     anchor: import_react.createElement("button", {
       type: "button",
       style: TRIGGER_STYLE,
+      className: TRIGGER_CLASS,
       title,
       "aria-haspopup": "menu",
       "aria-expanded": open,
@@ -242,6 +261,10 @@ function AgentClassDisplay({
   }));
 }
 function apply(ctx) {
+  const style = document.createElement("style");
+  style.textContent = AGENTS_TRIGGER_CSS;
+  (document.head ?? document.documentElement).appendChild(style);
+  ctx.effect(() => () => style.remove(), "agent-class: style");
   const fetchState = createStateFetcher(globalThis.fetch);
   const select = createSelectSender(globalThis.fetch);
   const component = (props) => import_react.createElement(AgentClassDisplay, { ...props, fetchState, select });

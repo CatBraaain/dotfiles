@@ -27,7 +27,7 @@ if (!home) throw new Error("HOME is not set");
 
 const globalModules = join(home, ".bun/install/global/node_modules");
 const themeBundle = join(globalModules, "@deepseek-ai/dsh-client-ui-theme/lib/client.js");
-const pluginsDir = join(import.meta.dir, "../plugins");
+const pluginsDir = join(import.meta.dir, "../plugins.exact");
 const outputDir = join(import.meta.dir, "dist");
 
 /** The installed `dsh-client-ui-primitives` package (source of the real `Button.module.css`). */
@@ -250,7 +250,7 @@ async function extractThemeCss(): Promise<string> {
 
 /**
  * Execute one plugin client bundle and return its `{ apply, inject }` exports.
- * `dir` is the plugin directory under `plugins/`, `id` the bundle id used in
+ * `dir` is the plugin directory under `plugins.exact/`, `id` the bundle id used in
  * the `__ModuleLoader__.load` banner (the plugin package name).
  */
 async function loadPluginBundle(dir: string, id: string): Promise<Record<string, unknown>> {
@@ -293,6 +293,37 @@ function findEntry(entries: RegisteredEntry[], id: string): unknown {
     const entry = entries.find((candidate) => candidate.spec.id === id);
     if (!entry) throw new Error(`slot entry not registered: ${id}`);
     return entry.component;
+}
+
+/**
+ * Execute the agents apply against a fake slot context, capturing the
+ * injected trigger stylesheet (kept as `agentsCss`) alongside the dock entry.
+ */
+let agentsCss = "";
+function captureAgentsRegistration(apply: (ctx: unknown) => void): RegisteredEntry[] {
+    const registered: RegisteredEntry[] = [];
+    const styleEl = {
+        set textContent(value: string) {
+            agentsCss = value;
+        },
+    };
+    const loaderHost = globalThis as { document?: unknown };
+    loaderHost.document = {
+        createElement: () => styleEl,
+        head: { appendChild: () => {} },
+    };
+    try {
+        apply({
+            slots: {
+                inject: (_slot: string, callback: () => void) => callback(),
+                register: (spec: SlotSpec, component: unknown) => registered.push({ spec, component }),
+            },
+            effect: (_setup: () => unknown, _label: string) => {},
+        });
+    } finally {
+        delete loaderHost.document;
+    }
+    return registered;
 }
 
 function renderComponent(component: unknown, props: Record<string, unknown>): string {
@@ -557,7 +588,7 @@ async function main(): Promise<void> {
     // `initialState` (effects never run server-side, so the poller stays idle).
     const agentsExports = await loadPluginBundle("agents", "dotfiles-dsh-agents");
     const agentsEntry = findEntry(
-        captureSlotRegistrations(agentsExports.apply as (ctx: unknown) => void),
+        captureAgentsRegistration(agentsExports.apply as (ctx: unknown) => void),
         "agent-class",
     );
     const agentsVocabulary = {
@@ -625,7 +656,7 @@ ${themeCss}
 ${buttonCss}
 ${stateDotCss}
 </style>
-<style>${dockCss}${sessionListCss}</style>
+<style>${dockCss}${sessionListCss}${agentsCss}</style>
 </head>
 <body style="--dsh-content-font-size: 14px"${bodyAttrs}>
 ${cases}

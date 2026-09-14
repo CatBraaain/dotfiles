@@ -209,12 +209,14 @@ shadow が委譲に失敗する場合（呼び出し agent の `subagents` に `
 
 ## Agent 表示
 
-dsh web UI の composer 直上（input dock）に、現在の agent と実効 class を常設表示する。表示は次の 2 つの独立した行ボタンで、テキスト色はグレーとする。
+dsh web UI の composer 直上（input dock）に、現在の agent と実効 class を常設表示する。表示は次の 2 つの独立した行ボタンで、テキスト色はグレーとする。行ボタンは縦に積む。表示領域は composer カード幅の中央バンド（本家 dock 行と同じ幅と中央寄せ）に置く。
 
 ```text
 🤖 agent: <currentAgent>
 💎 class: <class-name> (auto:<resolved-model>)
 ```
+
+行ボタンは hover で本家ボタンと同じ interactive hover fill（`--dsw-alias-interactive-bg-hover`）を表示する。
 
 手動状態（本家 `/model` による手動モデル選択が効いている間）のときは class 行の括弧内は `manual:<resolved-model>` になる。`<resolved-model>` は直近のモデルリクエストで解決した route の model 名で、コロン前後・class 名との区切りはスペース 1 つとする。最初の turn 前（idle session）など解決済み route が無いときはモデル名を省略し `(auto)` / `(manual)` とだけ表示する。
 
