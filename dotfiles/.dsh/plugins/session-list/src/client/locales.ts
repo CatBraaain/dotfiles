@@ -11,6 +11,15 @@ export const DICT_EN: Record<string, string> = {
   'time.years': '{n}y',
   'actions.archive': 'Archive session',
   'actions.copyId': 'Copy session ID',
+  'section.workspaces': 'Workspaces',
+  'group.ungrouped': 'Ungrouped',
+  'workspace.add': 'Add workspace',
+  'sessions.expand': 'Show {n} more sessions',
+  'sessions.collapse': 'Show less',
+  'close': 'Close',
+  'cancel': 'Cancel',
+  'folderError.title': 'Couldn’t open folder',
+  'folderError.retry': 'Choose again',
 }
 
 export const DICT_ZH: Record<string, string> = {
@@ -23,4 +32,13 @@ export const DICT_ZH: Record<string, string> = {
   'time.years': '{n}年',
   'actions.archive': '归档会话',
   'actions.copyId': '复制会话 ID',
+  'section.workspaces': '工作区',
+  'group.ungrouped': '未分组',
+  'workspace.add': '添加工作区',
+  'sessions.expand': '展开其余 {n} 个会话',
+  'sessions.collapse': '收起',
+  'close': '关闭',
+  'cancel': '取消',
+  'folderError.title': '无法打开文件夹',
+  'folderError.retry': '重新选择',
 }

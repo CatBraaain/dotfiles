@@ -21,12 +21,13 @@ dsh（DeepSeek Harness）関係のファイル。
 client half（`src/client/`）を持つプラグインの browser bundle は `run_after_build.sh` の対象外で、`lib/client.js` をリポジトリにコミットして運用する。`src/client/` を編集したときは、そのプラグイン dir で次のコマンドで再ビルドする:
 
 ```sh
-bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser --external react \
+bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=browser \
+  --external react --external '@deepseek-ai/*' \
   --banner 'window.__ModuleLoader__.load({ id: "<plugin id>", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' \
   --footer 'return module.exports; } });'
 ```
 
-`<plugin id>` はプラグインの package name（例: `dotfiles-dsh-session-list`）。banner / footer は `@deepseek-ai/dsh-client-modules` が要求する `window.__ModuleLoader__.load({ id, factory })` handoff で、`react` は shell の frozen module table で解決する external `require("react")` のまま残す。
+`<plugin id>` はプラグインの package name（例: `dotfiles-dsh-session-list`）。banner / footer は `@deepseek-ai/dsh-client-modules` が要求する `window.__ModuleLoader__.load({ id, factory })` handoff で、`react` と `@deepseek-ai/*` は shell の frozen module table で解決する external `require(...)` のまま残す。`@deepseek-ai/*` を external にするのは、client bundle に npm の `@deepseek-ai/*` 実体を inline すると primitives の markdown / shiki 依存（dynamic import と CSS import）まで bundle され plugin の devDependencies では解決できず、ビルドが失敗するため。実行時の解決は shell が先に load 済みの bundle（`dsh-client-ui-primitives` は `dsh-client-ui-sidebar` が require する）に依存する。
 
 `~/.dsh/profiles/web/` のその他のファイル（`cordis.yml`、`cordis.patch.yml`、`bun.lock`、`node_modules`）は dsh / bun の生成物。
 

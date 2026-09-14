@@ -72,6 +72,24 @@ const primitivesStub = {
      * out of scope for a static render. */
     Menu: ({ anchor }: { anchor: React.ReactNode }) =>
         React.createElement("span", { className: "menu-root" }, anchor),
+    // Multi-path glyphs below the fold in the real package, copied verbatim.
+    IconTriangleRightFill14: pathsIcon(14, "0 0 14 14", [
+        { d: "M4.25 2.82782L4.25 11.1722C4.25 11.6622 4.84243 11.9076 5.18891 11.5611L9.36109 7.38891C9.57588 7.17412 9.57588 6.82588 9.36109 6.61109L5.18891 2.43891C4.84243 2.09243 4.25 2.33782 4.25 2.82782Z" },
+    ]),
+    IconCloseFill14: pathsIcon(14, "0 0 14 14", [
+        { d: "M10.6074 4.40278L8.00975 6.99973L10.6074 9.59739L9.59736 10.6074L6.9997 8.00978L4.40274 10.6074L3.3927 9.59739L5.98966 6.99973L3.3927 4.40278L4.40274 3.39273L6.9997 5.98969L9.59736 3.39273L10.6074 4.40278Z" },
+    ]),
+    IconProjectAddOutline16: pathsIcon(16, "0 0 16 16", [
+        { transform: "translate(9.52 2.52)", d: "M3.55246 0L3.55246 2.44252L6 2.44252L6 3.55748L3.55246 3.55748L3.55246 6L2.43834 6L2.43834 3.55748L0 3.55748L0 2.44252L2.43834 2.44252L2.43834 0L3.55246 0Z" },
+        { transform: "translate(0.3496 2.35)", d: "M4.76367 0C5.36861 1.80598e-05 5.93113 0.310294 6.25488 0.821289L6.78027 1.64941C6.79685 1.67558 6.81791 1.69775 6.83887 1.71973C6.72186 2.15521 6.65702 2.61192 6.65137 3.08301C6.25601 2.96045 5.90909 2.70478 5.68164 2.3457L5.15723 1.5166C5.07183 1.38189 4.92318 1.3008 4.76367 1.30078L2.32422 1.30078C1.7589 1.30078 1.30078 1.7589 1.30078 2.32422L1.30078 10.1338C1.30078 10.6991 1.7589 11.1572 2.32422 11.1572L11.9766 11.1572C12.5419 11.1572 13 10.6991 13 10.1338L13 8.58398C13.4545 8.5135 13.8903 8.38748 14.3008 8.21289L14.3008 10.1338C14.3008 11.4171 13.2598 12.458 11.9766 12.458L2.32422 12.458C1.04093 12.458 0 11.4171 0 10.1338L0 2.32422C0 1.04093 1.04093 0 2.32422 0L4.76367 0Z" },
+    ]),
+    IconFolderOpen16: pathsIcon(16, "0 0 16 16", [
+        { d: "M5.19629 1.57104C5.81144 1.5711 6.38623 1.8786 6.72754 2.39038L7.19922 3.09839C7.28454 3.22635 7.42824 3.30344 7.58203 3.30347H12.1699C13.5039 3.30348 14.5859 4.38548 14.5859 5.71948V6.62671C15.2694 7.02689 15.6605 7.85012 15.4385 8.68726L14.3848 12.658C14.1037 13.7164 13.1449 14.4527 12.0498 14.4529H2.91699C1.51651 14.4529 0.451662 13.2814 0.501954 11.9519V3.98706C0.501954 2.65305 1.58396 1.57104 2.91797 1.57104H5.19629ZM3.7793 7.75562C3.30994 7.75562 2.89883 8.07153 2.77832 8.52515L1.91602 11.7722C1.74167 12.4291 2.23734 13.073 2.91699 13.073H12.0498C12.5191 13.0728 12.9304 12.757 13.0508 12.3035L14.1045 8.33374C14.1819 8.04202 13.9619 7.756 13.6602 7.75562H3.7793ZM2.91797 2.9519C2.34625 2.9519 1.88281 3.41534 1.88281 3.98706V7.2937C2.33068 6.7269 3.02249 6.37476 3.7793 6.37476H13.2051V5.71948C13.2051 5.14777 12.7416 4.68434 12.1699 4.68433H7.58203C6.96675 4.6843 6.39209 4.37595 6.05078 3.86401L5.5791 3.15601C5.49379 3.02821 5.34995 2.95196 5.19629 2.9519H2.91797Z" },
+        { opacity: "0.2", d: "M13.6602 7.75525C13.9618 7.7556 14.1815 8.04179 14.1045 8.33337L13.0508 12.3031C12.9304 12.7567 12.5191 13.0725 12.0498 13.0726H2.91701C2.23744 13.0725 1.7417 12.4287 1.91603 11.7719L2.77834 8.52478C2.89898 8.07146 3.31018 7.75532 3.77931 7.75525H13.6602ZM5.1963 2.95154C5.34985 2.95159 5.49377 3.02803 5.57912 3.15564L6.0508 3.86365C6.39205 4.37553 6.96685 4.68385 7.58205 4.68396H12.1699C12.7416 4.68396 13.2049 5.14754 13.2051 5.71912V6.37439H3.77931C3.02267 6.37444 2.33067 6.72671 1.88283 7.29333V3.98669C1.88299 3.4152 2.34649 2.95168 2.91798 2.95154H5.1963Z" },
+    ]),
+    IconFolderClose16: pathsIcon(16, "0 0 16 16", [
+        { transform: "translate(1.5 2.429)", d: "M5.05582 0.518756L4.50669 0.86654L5.05582 0.518756ZM13 9.4837L13.65 9.4837L13.65 3.53962L13 3.53962L12.35 3.53962L12.35 9.4837L13 9.4837ZM11.3264 1.86603L11.3264 1.21603L6.52313 1.21603L6.52313 1.86603L6.52313 2.51603L11.3264 2.51603L11.3264 1.86603ZM5.58054 1.34727L6.12968 0.999489L5.60495 0.170972L5.05582 0.518756L4.50669 0.86654L5.03141 1.69506L5.58054 1.34727ZM4.11323 1.23058e-13L4.11323 -0.65L1.67359 -0.65L1.67359 5.00699e-14L1.67359 0.65L4.11323 0.65L4.11323 1.23058e-13ZM0 1.67359L-0.65 1.67359L-0.65 9.4837L0 9.4837L0.65 9.4837L0.65 1.67359L0 1.67359ZM11.3264 11.1573L11.3264 10.5073L1.67359 10.5073L1.67359 11.1573L1.67359 11.8073L11.3264 11.8073L11.3264 11.1573ZM0 9.4837L-0.65 9.4837C-0.65 10.767 0.390308 11.8073 1.67359 11.8073L1.67359 11.1573L1.67359 10.5073C1.10828 10.5073 0.65 10.049 0.65 9.4837L0 9.4837ZM1.67359 5.00699e-14L1.67359 -0.65C0.390307 -0.65 -0.65 0.390309 -0.65 1.67359L0 1.67359L0.65 1.67359C0.65 1.10828 1.10828 0.65 1.67359 0.65L1.67359 5.00699e-14ZM5.05582 0.518756L5.60495 0.170972C5.28121 -0.340193 4.71829 -0.65 4.11323 -0.65L4.11323 1.23058e-13L4.11323 0.65C4.27282 0.65 4.4213 0.731715 4.50669 0.86654L5.05582 0.518756ZM6.52313 1.86603L6.52313 1.21603C6.36354 1.21603 6.21507 1.13431 6.12968 0.999489L5.58054 1.34727L5.03141 1.69506C5.35515 2.20622 5.91808 2.51603 6.52313 2.51603L6.52313 1.86603ZM13 3.53962L13.65 3.53962C13.65 2.25634 12.6097 1.21603 11.3264 1.21603L11.3264 1.86603L11.3264 2.51603C11.8917 2.51603 12.35 2.97431 12.35 3.53962L13 3.53962ZM13 9.4837L12.35 9.4837C12.35 10.049 11.8917 10.5073 11.3264 10.5073L11.3264 11.1573L11.3264 11.8073C12.6097 11.8073 13.65 10.767 13.65 9.4837L13 9.4837Z" },
+    ]),
 };
 
 /** The real StateDot's 3x3 chase matrix cells (viewBox 0 0 10 10, 2px cells). */
@@ -158,6 +176,32 @@ function icon16(d: string): () => unknown {
             "svg",
             { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg" },
             React.createElement("path", { d, fill: "currentColor" }),
+        );
+}
+
+/** One path of a multi-path glyph; `transform` / `opacity` mirror the real one. */
+interface GlyphPath {
+    readonly d: string;
+    readonly transform?: string;
+    readonly opacity?: string;
+}
+
+/** A multi-path icon component shaped like the real one (size / className props). */
+function pathsIcon(edge: number, viewBox: string, paths: readonly GlyphPath[]): (props: { size?: number; className?: string }) => unknown {
+    return ({ size, className } = {}) =>
+        React.createElement(
+            "svg",
+            {
+                width: size ?? edge,
+                height: size ?? edge,
+                className,
+                viewBox,
+                fill: "none",
+                xmlns: "http://www.w3.org/2000/svg",
+            },
+            paths.map(({ d, transform, opacity }, index) =>
+                React.createElement("path", { key: index, d, transform, opacity, fill: "currentColor" }),
+            ),
         );
 }
 
@@ -301,7 +345,7 @@ body {
 }
 .dummy-input { min-height: 24px; padding: 4px 16px; }
 .list-host { box-sizing: border-box; flex-direction: column; max-width: 300px; display: flex; }
-.list-host-tall { height: 320px; }
+.list-host-tall { height: 420px; }
 `;
 
 /**
@@ -328,6 +372,8 @@ function captureSessionListRegistration(apply: (ctx: unknown) => void): unknown 
             slots: {
                 inject: (_slot: string, callback: () => void) => callback(),
                 register: (_spec: unknown, component: unknown) => registered.push(component),
+                entries: (_key: string) => [],
+                subscribe: (_key: string) => () => {},
             },
             sessions: {},
             workspaces: {},
@@ -354,6 +400,15 @@ const sessionListEn: Record<string, string> = {
     "time.years": "{n}y",
     "actions.archive": "Archive session",
     "actions.copyId": "Copy session ID",
+    "section.workspaces": "Workspaces",
+    "group.ungrouped": "Ungrouped",
+    "workspace.add": "Add workspace",
+    "sessions.expand": "Show {n} more sessions",
+    "sessions.collapse": "Show less",
+    "close": "Close",
+    "cancel": "Cancel",
+    "folderError.title": "Couldn’t open folder",
+    "folderError.retry": "Choose again",
 };
 const translateEn = (key: string, params?: Record<string, unknown>): string =>
     (sessionListEn[key] ?? key).replace("{n}", String(params?.n ?? ""));
@@ -383,12 +438,19 @@ async function main(): Promise<void> {
     const buttonCss = await readFile(join(primitivesDir, "lib/Button.module.css"), "utf-8");
     const stateDotCss = await readFile(join(primitivesDir, "lib/StateDot.module.css"), "utf-8");
 
-    // session-list: flat sidebar session rows (uses the injected-hooks component face,
+    // session-list: workspace-grouped sidebar (uses the injected-hooks component face,
     // so the fake context must survive its apply and the props carry fake selector hooks).
     const listExports = await loadPluginBundle("session-list", "dotfiles-dsh-session-list");
     const listEntry = captureSessionListRegistration(listExports.apply as (ctx: unknown) => void);
     const now = Date.now();
-    const makeListProps = (rows: readonly { id: string; summary: Record<string, unknown> }[], current: string | undefined, pendingIds: readonly string[]) => ({
+    /** Fake host workspaces: { id, title, sessionIds } per group. */
+    type FakeWorkspace = { id: string; title: string; sessionIds: readonly string[] };
+    const makeListProps = (
+        rows: readonly { id: string; summary: Record<string, unknown> }[],
+        current: string | undefined,
+        pendingIds: readonly string[],
+        workspaces: readonly FakeWorkspace[] = [],
+    ) => ({
         wide: true,
         expandSidebar: () => {},
         useSessions: (selector: (snapshot: unknown) => unknown) =>
@@ -399,31 +461,76 @@ async function main(): Promise<void> {
             }),
         useSessionPendingInteraction: (selector: (snapshot: unknown) => unknown) =>
             selector(new Map(pendingIds.map((id) => [id, { key: `k-${id}`, kind: "question", sessionId: id }]))),
-        useWorkspaces: (selector: (snapshot: unknown) => unknown) => selector({ archivedSessionIds: [] }),
+        useWorkspaces: (selector: (snapshot: unknown) => unknown) =>
+            selector({
+                archivedSessionIds: [],
+                items: workspaces.map((workspace) => ({
+                    workspaceId: workspace.id,
+                    title: workspace.title,
+                    path: `/home/user/${workspace.title}`,
+                    sessionIds: workspace.sessionIds,
+                    createdAt: new Date(now - 30 * 86_400_000).toISOString(),
+                    updatedAt: new Date(now).toISOString(),
+                })),
+            }),
+        useDirectoryFlow: (selector: (snapshot: unknown) => unknown) => selector(true),
         t: translateEn,
+    });
+    const session = (id: string, title: string, overrides: Record<string, unknown> = {}) => ({
+        id,
+        summary: {
+            id,
+            title,
+            displayTitle: title,
+            blank: false,
+            running: false,
+            completed: false,
+            updatedAt: now - 86_400_000,
+            ...overrides,
+        },
     });
     const listMarkup = renderComponent(
         listEntry,
         makeListProps(
             [
-                { id: "s1", summary: { id: "s1", title: "refit the dock alignment", displayTitle: "refit the dock alignment", blank: false, running: true, completed: false, updatedAt: now - 90_000 } },
-                { id: "s2", summary: { id: "s2", title: "review session-list", displayTitle: "review session-list", blank: false, running: false, completed: true, updatedAt: now - 3 * 3_600_000 } },
-                { id: "s3", summary: { id: "s3", title: "refactor quota-line", displayTitle: "refactor quota-line", blank: false, running: false, completed: false, updatedAt: now - 2 * 86_400_000 } },
-                { id: "s4", summary: { id: "s4", title: undefined, displayTitle: "untitled", blank: false, running: false, completed: false, updatedAt: now - 40 * 86_400_000 } },
+                session("s1", "refit the dock alignment", { running: true, updatedAt: now - 90_000 }),
+                session("s2", "review session-list", { completed: true, updatedAt: now - 3 * 3_600_000 }),
+                session("s3", "refactor quota-line", { updatedAt: now - 2 * 86_400_000 }),
+                session("s4", "pin the theme tokens", { updatedAt: now - 5 * 86_400_000 }),
+                session("s5", "rename worktree tasks", { updatedAt: now - 9 * 86_400_000 }),
+                session("s6", "trim sidebar paddings", { updatedAt: now - 12 * 86_400_000 }),
+                session("s7", "split fixture cases", { updatedAt: now - 20 * 86_400_000 }),
+                session("stray", "loose session from before grouping", { updatedAt: now - 40 * 86_400_000 }),
             ],
             "s1",
             ["s3"],
+            [
+                { id: "w1", title: "dotfiles", sessionIds: ["s1", "s2", "s3", "s4", "s5", "s6", "s7"] },
+                { id: "w2", title: "api-server", sessionIds: [] },
+            ],
         ),
     );
     const blankListMarkup = renderComponent(
         listEntry,
         makeListProps(
             [
-                { id: "b1", summary: { id: "b1", title: "review session-list", displayTitle: "review session-list", blank: false, running: false, completed: false, updatedAt: now - 5 * 60_000 } },
-                { id: "blank-current", summary: { id: "blank-current", title: undefined, displayTitle: "New Session", blank: true, running: false, completed: false, updatedAt: now } },
+                session("b1", "review session-list", { updatedAt: now - 5 * 60_000 }),
+                {
+                    id: "blank-current",
+                    summary: {
+                        id: "blank-current",
+                        title: undefined,
+                        displayTitle: "New Session",
+                        blank: true,
+                        running: false,
+                        completed: false,
+                        updatedAt: now,
+                    },
+                },
             ],
             "blank-current",
             [],
+            [{ id: "w1", title: "dotfiles", sessionIds: ["b1", "blank-current"] }],
         ),
     );
     const emptyListMarkup = renderComponent(listEntry, makeListProps([], undefined, []));
@@ -484,11 +591,11 @@ async function main(): Promise<void> {
     });
 
     const listCase = `<div class="case">
-    <div class="case-label">4. session-list — sidebar rows with status dots, relative time, and hover actions</div>
+    <div class="case-label">4. session-list — workspace groups (header row, Add workspace, current tint, Ungrouped, Show more) with status dots, relative time, and hover actions</div>
     <div class="list-host list-host-tall">${listMarkup}</div>
 </div>
 <div class="case">
-    <div class="case-label">5. session-list — the selected blank row has no time and no actions</div>
+    <div class="case-label">5. session-list — the selected blank row inside its group has no time and no actions</div>
     <div class="list-host">${blankListMarkup}</div>
 </div>
 <div class="case">

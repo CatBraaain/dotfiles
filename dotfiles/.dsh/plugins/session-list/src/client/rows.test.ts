@@ -1,7 +1,12 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-// Describe order mirrors SPEC.md: row composition (dot / title / time), then list content.
+// Describe order mirrors SPEC.md: row composition (dot / title / time), then
+// list content, then the workspace grouping and its overflow folding.
 import {
+  COLLAPSED_SESSION_LIMIT,
+  UNGROUPED_KEY,
+  collapsedSessionRows,
+  deriveGroups,
   dotState,
   ensureCurrentBlank,
   rowTitle,
@@ -9,6 +14,7 @@ import {
   visibleRows,
   type RowListSource,
   type RowSummary,
+  type WorkspaceGroupSource,
 } from "./rows";
 
 function row(overrides: Partial<RowSummary> & { id: string }): RowSummary {
@@ -29,6 +35,10 @@ function list(rows: RowSummary[], current?: string): Pick<RowListSource, "ids" |
     byId: Object.fromEntries(rows.map((r) => [r.id, r])),
     current,
   };
+}
+
+function workspace(overrides: Partial<WorkspaceGroupSource> & { workspaceId: string }): WorkspaceGroupSource {
+  return { title: `ws-${overrides.workspaceId}`, sessionIds: [], ...overrides };
 }
 
 describe("dotState", () => {
@@ -144,5 +154,113 @@ describe("ensureCurrentBlank", () => {
     const ordinary = row({ id: "a" });
     const rows = ensureCurrentBlank([], { current: "a", byId: { a: ordinary } });
     assert.deepEqual(rows, []);
+  });
+});
+
+describe("deriveGroups", () => {
+  it("creates one group per workspace with members in the stored order", () => {
+    const groups = deriveGroups(
+      list([row({ id: "a" }), row({ id: "b" }), row({ id: "c" })]),
+      [workspace({ workspaceId: "w1", sessionIds: ["c", "a"] })],
+      [],
+    );
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0]?.key, "w1");
+    assert.deepEqual(groups[0]?.sessions.map((r) => r.id), ["c", "a"]);
+    assert.equal(groups[0]?.label, "ws-w1");
+  });
+
+  it("trails sessions outside every workspace in an ungrouped bucket", () => {
+    const groups = deriveGroups(
+      list([row({ id: "a" }), row({ id: "stray" })]),
+      [workspace({ workspaceId: "w1", sessionIds: ["a"] })],
+      [],
+    );
+    const ungrouped = groups.at(-1);
+    assert.equal(ungrouped?.key, UNGROUPED_KEY);
+    assert.equal(ungrouped?.workspaceId, undefined);
+    assert.deepEqual(ungrouped?.sessions.map((r) => r.id), ["stray"]);
+  });
+
+  it("omits the ungrouped bucket when every session is accounted for", () => {
+    const groups = deriveGroups(
+      list([row({ id: "a" })]),
+      [workspace({ workspaceId: "w1", sessionIds: ["a"] })],
+      [],
+    );
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0]?.key, "w1");
+  });
+
+  it("drops archived and subagent-origin members, and non-current blanks", () => {
+    const groups = deriveGroups(
+      list([
+        row({ id: "a" }),
+        row({ id: "s", origin: "subagent" }),
+        row({ id: "blank-idle", blank: true }),
+        row({ id: "gone" }),
+      ]),
+      [workspace({ workspaceId: "w1", sessionIds: ["a", "s", "blank-idle", "gone"] })],
+      ["gone"],
+    );
+    assert.deepEqual(groups[0]?.sessions.map((r) => r.id), ["a"]);
+  });
+
+  it("keeps the current blank row inside its workspace group", () => {
+    const groups = deriveGroups(
+      list([row({ id: "blank-current", blank: true })], "blank-current"),
+      [workspace({ workspaceId: "w1", sessionIds: ["blank-current"] })],
+      [],
+    );
+    assert.deepEqual(groups[0]?.sessions.map((r) => r.id), ["blank-current"]);
+  });
+
+  it("shows the provisional current blank in ungrouped even when the host list omits it", () => {
+    const blank = row({ id: "blank-current", blank: true });
+    const groups = deriveGroups(
+      { ids: [], byId: { "blank-current": blank }, current: "blank-current" },
+      [workspace({ workspaceId: "w1" })],
+      [],
+    );
+    const ungrouped = groups.at(-1);
+    assert.deepEqual(ungrouped?.sessions.map((r) => r.id), ["blank-current"]);
+  });
+
+  it("skips workspace membership ids absent from the host list", () => {
+    const groups = deriveGroups(
+      list([row({ id: "a" })]),
+      [workspace({ workspaceId: "w1", sessionIds: ["missing", "a"] })],
+      [],
+    );
+    assert.deepEqual(groups[0]?.sessions.map((r) => r.id), ["a"]);
+  });
+});
+
+describe("collapsedSessionRows", () => {
+  it("folds ordinary rows beyond the stock limit", () => {
+    const sessions = Array.from({ length: 8 }, (_, index) => row({ id: `s${index}` }));
+    const folded = collapsedSessionRows(sessions);
+    assert.equal(folded.rows.length, COLLAPSED_SESSION_LIMIT);
+    assert.equal(folded.hiddenCount, 3);
+  });
+
+  it("never charges the provisional blank row against the limit", () => {
+    const sessions = [
+      row({ id: "blank-first", blank: true }),
+      ...Array.from({ length: 5 }, (_, index) => row({ id: `s${index}` })),
+    ];
+    const folded = collapsedSessionRows(sessions);
+    assert.equal(folded.rows.length, 6);
+    assert.equal(folded.hiddenCount, 0);
+  });
+
+  it("keeps a blank row even when it sits past the limit", () => {
+    const sessions = [
+      ...Array.from({ length: 6 }, (_, index) => row({ id: `s${index}` })),
+      row({ id: "blank-last", blank: true }),
+    ];
+    const folded = collapsedSessionRows(sessions);
+    assert.deepEqual(folded.rows.at(-1)?.id, "blank-last");
+    assert.equal(folded.hiddenCount, 1);
   });
 });

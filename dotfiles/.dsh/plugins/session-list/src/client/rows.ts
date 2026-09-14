@@ -30,6 +30,112 @@ export interface RowListSource {
 /** StateDot states the list dot can take, in stock precedence order. */
 export type RowDotState = 'warning' | 'ongoing' | 'done' | 'idle'
 
+/** Group key for sessions outside every workspace (stock `UNGROUPED_KEY`). */
+export const UNGROUPED_KEY = ''
+
+/** Session rows visible per workspace before the Show-more overflow (stock). */
+export const COLLAPSED_SESSION_LIMIT = 5
+
+/** Minimal face of the host workspace view the grouping consumes. */
+export interface WorkspaceGroupSource {
+  readonly workspaceId: string
+  readonly title: string
+  /** Members in the workspace's durable manual order. */
+  readonly sessionIds: readonly string[]
+}
+
+/** One workspace group section: header facts + visible member sessions. */
+export interface SessionGroup {
+  /** Group key: the workspace id or {@link UNGROUPED_KEY}. */
+  readonly key: string
+  /** Backing workspace id; absent only for the ungrouped bucket. */
+  readonly workspaceId: string | undefined
+  /** Workspace display title; empty for the ungrouped bucket (the renderer
+   * substitutes the localized label). */
+  readonly label: string
+  readonly sessions: readonly RowSummary[]
+}
+
+/** Stock visibility: ordinary sessions show; among blanks only the selected
+ * provisional New Session row; archived and subagent-origin rows nowhere. */
+function groupVisible(
+  row: RowSummary,
+  archived: ReadonlySet<string>,
+  current: string | undefined,
+): boolean {
+  return row.origin !== 'subagent'
+    && !archived.has(row.id)
+    && (!row.blank || row.id === current)
+}
+
+/**
+ * Group sessions by host workspace in stable host order, with members
+ * resolved from each workspace's sessionIds in their stored order. Sessions
+ * outside every workspace trail in the Ungrouped bucket (host list order);
+ * the selected blank row rides there even when the host list omits it.
+ */
+export function deriveGroups(
+  list: Pick<RowListSource, 'ids' | 'byId' | 'current'>,
+  workspaces: readonly WorkspaceGroupSource[],
+  archivedSessionIds: readonly string[],
+): SessionGroup[] {
+  const archived = new Set(archivedSessionIds)
+  const groups: SessionGroup[] = []
+  const accounted = new Set<string>()
+  for (const workspace of workspaces) {
+    const sessions: RowSummary[] = []
+    for (const id of workspace.sessionIds) {
+      const summary = list.byId[id]
+      if (summary === undefined) continue
+      accounted.add(id)
+      if (!groupVisible(summary, archived, list.current)) continue
+      sessions.push(summary)
+    }
+    groups.push({
+      key: workspace.workspaceId,
+      workspaceId: workspace.workspaceId,
+      label: workspace.title,
+      sessions,
+    })
+  }
+  const stray: RowSummary[] = []
+  for (const id of list.ids) {
+    const summary = list.byId[id]
+    if (summary === undefined || accounted.has(id)) continue
+    if (!groupVisible(summary, archived, list.current)) continue
+    stray.push(summary)
+  }
+  if (list.current !== undefined) {
+    const current = list.byId[list.current]
+    if (current !== undefined && current.blank && !accounted.has(current.id)
+      && !stray.some((candidate) => candidate.id === current.id)) {
+      stray.unshift(current)
+    }
+  }
+  if (stray.length > 0) {
+    groups.push({ key: UNGROUPED_KEY, workspaceId: undefined, label: '', sessions: stray })
+  }
+  return groups
+}
+
+/**
+ * Fold one workspace without charging its provisional New Session row
+ * against the ordinary-row limit (stock `collapsedSessionRows`).
+ */
+export function collapsedSessionRows(sessions: readonly RowSummary[]): {
+  rows: readonly RowSummary[]
+  hiddenCount: number
+} {
+  let ordinaryCount = 0
+  const rows = sessions.filter((session) => {
+    if (session.blank) return true
+    if (ordinaryCount >= COLLAPSED_SESSION_LIMIT) return false
+    ordinaryCount += 1
+    return true
+  })
+  return { rows, hiddenCount: sessions.length - rows.length }
+}
+
 /** Host rows in host order with subagent-origin, archived, and non-selected
  * blank rows removed (stock shows only the selected blank entry). */
 export function visibleRows(
