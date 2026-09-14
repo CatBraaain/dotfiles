@@ -10,8 +10,8 @@ dsh（DeepSeek Harness）関係のファイル。
 ## 構成
 
 - `AGENTS.md.symlink` — `~/.dsh/AGENTS.md` への symlink。正本は `dotfiles/.agents/AGENTS.md`（pi の global 指示 `~/.pi/agent/AGENTS.md` と同一内容）。dsh 組み込みの `dsh-agent-instructions`（default 有効）が user-global 指示として各セッションの最初の request に注入する
-- `plugins/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。展開先は手動編集しない。エントリは TS で書き、`exports` はビルド済みの `./dist/index.js` を指す（Node は `node_modules` 内の `.ts` を実行できないため）
-- `plugins/run_after_build.sh` — 全プラグインの一括ビルドと依存インストール（chezmoi run script。`run_after_` 修飾子により全ターゲットの適用後に plugins dir を CWD で実行され、各プラグインの plugin dir 内で `bun install` し、`src/index.ts` を持つプラグインを順に `bun build` する。ビルドは mtime 条件で、`dist/index.js` より新しい `src/` のファイル（`*.test.ts` を除く。bundle に含まれないため）があるときだけ再ビルドする。レシピ自身の変更は、実行したレシピの stamp コピー（`~/.dsh/plugins/.build-recipe`）との内容比較で検出し、変更時だけ全プラグインを 1 回再ビルドする（chezmoi は run script を target に展開せず、dist 側コピーは pre-chezmoi が毎 apply 再コピーして mtime を更新するため、スクリプト自身との mtime 比較は使えない）。変更が無い apply では `dist/` が書き換わらないため、profile 側の `bun install` も再リンクなしの no-op になる。shebang は chezmoi の `exec(3)` 直接実行に必須）
+- `plugins.exact/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。`exact` 属性付きのため plugins dir 直下の source 管理外エントリ（旧 `run_build.sh` など）は apply 時に削除される。展開先は手動編集しない。エントリは TS で書き、`exports` はビルド済みの `./dist/index.js` を指す（Node は `node_modules` 内の `.ts` を実行できないため）
+- `plugins.exact/run_after_build.sh` — 全プラグインの一括ビルドと依存インストール（chezmoi run script。`run_after_` 修飾子により全ターゲットの適用後に plugins dir を CWD で実行され、各プラグインの plugin dir 内で `bun install` し、`src/index.ts` を持つプラグインを順に `bun build` する。レシピ変更の検出は実行したレシピの stamp コピー（`~/.dsh/plugins/.build-recipe`）との内容比較（chezmoi は run script を target に展開せず、dist 側コピーは pre-chezmoi が毎 apply 再コピーして mtime を更新するため、スクリプト自身との mtime 比較は使えない）。plugins dir 直下は exact 管理のためこの stamp も毎 apply で削除され、レシピ変更扱いで全プラグインを毎回再ビルドする。plugin dir 内の `dist/`・`node_modules/` は exact の掃除が plugins dir 直下にのみ働くため保持され、`bun install` は依存変更が無ければ no-op に近い。shebang は chezmoi の `exec(3)` 直接実行に必須）
 - `profiles/web/run_bun_install.sh` — 依存のインストール（chezmoi run script。apply 時に profile dir を CWD で `bun install` を実行する。install の要否にかかわらず毎回、hoist された `@deepseek-ai/dsh-tools` を closure（global 実体）への symlink に張り替える。`package.json` / `bun.lock` が stamp（`node_modules/.bun-install-stamp`）より新しいときだけ install し、変更が無い apply では bun install をスキップする。bun は `file:` 依存を中身が変わらなくても毎回再リンクするため、スキップしないと毎回 `+` リストが出て数秒かかる）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）、`dsh.profile.bundles`（読み込み順）、`trustedDependencies`（lifecycle script を許可する依存）の3つを管理する
 - `test/` — dsh 本体を起動せずに plugin の web UI の見た目を検証する fixture（`.chezmoiignore` で展開対象外）。詳しくは `test/README.md`
@@ -41,7 +41,7 @@ lifecycle script はデフォルトで実行しない。実行が必要な依存
 
 ## プラグインの追加・更新
 
-1. 自作なら `plugins/` にソースを置く。プラグイン自身の依存はその `package.json` の `dependencies` に書く。リモートなら `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
+1. 自作なら `plugins.exact/` にソースを置く。プラグイン自身の依存はその `package.json` の `dependencies` に書く。リモートなら `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
 2. `profiles/web/package.json` の `dependencies` と `dsh.profile.bundles` に追記
 3. `chezmoi apply` が run script でプラグインをビルドし、依存をインストールする（全プラグイン一括。1 プラグインずつは不要）
 

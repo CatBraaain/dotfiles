@@ -2,7 +2,7 @@
 name: dsh-plugins
 description: >-
   dsh（DeepSeek Harness）の plugin / bundle を作成・修正・レビュー・調査するときに使う。
-  dotfiles/.dsh/plugins/ 配下の TS・SPEC.md・cordis.patch.yml・package.json.dsh を扱うとき、
+  dotfiles/.dsh/plugins.exact/ 配下の TS・SPEC.md・cordis.patch.yml・package.json.dsh を扱うとき、
   dsh の API・型・slot・service・event の仕様を調べるときにも使う。API 仕様の正本は
   ミラー実ファイルであり、このスキルは参照マップとプロジェクト契約の案内役である。
 ---
@@ -20,7 +20,7 @@ API 仕様や型の詳細はこのファイルに書かない。正本はミラ�
 |---|---|---|
 | dsh 本体の仕様・型・実装 | `~/mirrors/github.com/deepseek-ai/deepseek-harness/` | API・docs の一次情報 |
 | リポジトリ運用の契約 | `dotfiles/.dsh/README.md` | ビルド・依存解決・plugin 追加手順。着手前に必ず読む |
-| 各 plugin の振る舞い | `dotfiles/.dsh/plugins/*/SPEC.md` | 観測可能な振る舞いの契約。変更時は乖離照合する |
+| 各 plugin の振る舞い | `dotfiles/.dsh/plugins.exact/*/SPEC.md` | 観測可能な振る舞いの契約。変更時は乖離照合する |
 
 ミラーは master を追わず、**実行環境に適したリリースタグ**に固定する。master は
 実行環境より先の API を含むことがある。作業のたびにタグを選んで checkout する:
@@ -86,16 +86,16 @@ docs は網羅的でない。正確な契約が必要なときは docs より先
 詳細の正本は `dotfiles/.dsh/README.md`。要点:
 
 - dsh は **web プロファイルのみ**使用する。plugin の追加先も web プロファイル
-- plugin ソースは `dotfiles/.dsh/plugins/`。追加・更新は README の「プラグインの追加・更新」
+- plugin ソースは `dotfiles/.dsh/plugins.exact/`。追加・更新は README の「プラグインの追加・更新」
 - エントリは TS で書き `dist/index.js` に build。ビルドは `run_after_build.sh` が chezmoi apply の全ターゲット適用後に一括実行
 - client half（`src/client/`）を持つ plugin の browser bundle は `lib/client.js` をリポジトリにコミットする。`src/client/` を編集したら README 記載の `bun build` コマンドで再ビルド
 - 依存解決には bun 固有の罠がある（transitive 依存の hoist 遮蔽、pnpm の `.gitignore` 除外）。依存構成を変えるときは README の該当節を読む
-- テスト: `dotfiles/.dsh/plugins/<plugin>/` で `bun test`。TS 変更には隣接 `.test.ts` を置く（グローバル AGENTS.md の規約）
+- テスト: `dotfiles/.dsh/plugins.exact/<plugin>/` で `bun test`。TS 変更には隣接 `.test.ts` を置く（グローバル AGENTS.md の規約）
 - client UI の見た目の検証は `dotfiles/.dsh/test/` の fixture。dsh 本体を起動せず light / dark のスクショで確認する。静的 render のため subscription・インタラクションは検証対象外
 
 ### 実装サンプル
 
-`dotfiles/.dsh/plugins/` に 12 plugin がある。client half あり 7 つ、bundle のみ 5 つ。
+`dotfiles/.dsh/plugins.exact/` に 12 plugin がある。client half あり 7 つ、bundle のみ 5 つ。
 近い機能の plugin を探し、実装と SPEC.md を参照する。
 
 ## レビュー時のテスト

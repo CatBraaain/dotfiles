@@ -50,9 +50,9 @@
 
 ## TypeScript のテスト
 
-`dotfiles/.pi/` と `dotfiles/.dsh/plugins/` 配下の TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。この2つ以外の TS スクリプト（`pre-chezmoi.ts` 等）にはテストファイルを作成しないこと。テストを書かないこれらのスクリプトの検証は `bunx tsc --noEmit` で代用する。
+`dotfiles/.pi/` と `dotfiles/.dsh/plugins.exact/` 配下の TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。この2つ以外の TS スクリプト（`pre-chezmoi.ts` 等）にはテストファイルを作成しないこと。テストを書かないこれらのスクリプトの検証は `bunx tsc --noEmit` で代用する。
 
-テストは `bun:test` で書く: `import { describe, it } from "bun:test"`。実行は `cd dotfiles/.pi/agent && bun test`、dsh plugin は plugin ディレクトリごとに `cd dotfiles/.dsh/plugins/<plugin> && bun test`。`bun test` は Bun の auto-install 対象外のため、テストが import する依存は配置先パッケージの `package.json` に明示し、インストールで解決しておくこと。
+テストは `bun:test` で書く: `import { describe, it } from "bun:test"`。実行は `cd dotfiles/.pi/agent && bun test`、dsh plugin は plugin ディレクトリごとに `cd dotfiles/.dsh/plugins.exact/<plugin> && bun test`。`bun test` は Bun の auto-install 対象外のため、テストが import する依存は配置先パッケージの `package.json` に明示し、インストールで解決しておくこと。
 assertion は自作 helper を作らず、`node:assert/strict` を使うこと。読みやすさは説明変数やテスト名で担保し、assertion の再発明では担保しない。
 
 ## skill の置き場所
