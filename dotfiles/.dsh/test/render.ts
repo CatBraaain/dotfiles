@@ -450,7 +450,7 @@ async function main(): Promise<void> {
 
     const cases = [
         caseSection("1. skill-status — populated (input.dock, above the composer card)", skillPopulated, ""),
-        caseSection("2. skill-status — empty snapshot (the row must not render)", skillEmpty, ""),
+        caseSection("2. skill-status — empty snapshot (the row renders the bare 🎯 skills: label)", skillEmpty, ""),
         caseSection("3. skill-status — many skills (clipped with an ellipsis, must not overflow)", skillOverflow, ""),
         listCase,
     ].join("\n");

@@ -10,7 +10,7 @@ composer 上の dock（slot `conversation.input.dock`、session scope）に、�
 
 | 状態 | 表示 |
 | --- | --- |
-| 利用完了した skill がない | 何も描画しない |
+| 利用完了した skill がない | `🎯 skills: ` のみを表示する |
 | skill の利用が成功裏に完了した | `🎯 skills: <name>, <name>` の形式で、初回利用順に追記して表示する |
 
 - 表示行は `🎯 skills: ` + skill 名を `, ` で連結したものとする

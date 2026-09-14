@@ -7,7 +7,7 @@ describe("buildSkillStatusLine", () => {
     assert.equal(buildSkillStatusLine(["review", "converge"]), "🎯 skills: review, converge");
   });
 
-  it("renders nothing without a used skill", () => {
-    assert.equal(buildSkillStatusLine([]), undefined);
+  it("renders the bare label with no used skill", () => {
+    assert.equal(buildSkillStatusLine([]), "🎯 skills: ");
   });
 });

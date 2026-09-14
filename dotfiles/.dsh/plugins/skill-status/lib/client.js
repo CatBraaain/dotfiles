@@ -60,8 +60,6 @@ function registerSkillStatusDock(ctx, component) {
 
 // src/client/format.ts
 function buildSkillStatusLine(names) {
-  if (names.length === 0)
-    return;
   return `\uD83C\uDFAF skills: ${names.join(", ")}`;
 }
 
@@ -81,10 +79,7 @@ var STATUS_STYLE = {
 };
 function SkillStatusRow({ useProjection }) {
   const names = useProjection(SKILL_STATUS_PROJECTION_KEY);
-  const line = buildSkillStatusLine(names ?? []);
-  if (line === undefined)
-    return null;
-  return import_react.createElement("div", { style: STATUS_STYLE }, line);
+  return import_react.createElement("div", { style: STATUS_STYLE }, buildSkillStatusLine(names ?? []));
 }
 function apply(ctx) {
   registerSkillStatusDock(ctx, SkillStatusRow);

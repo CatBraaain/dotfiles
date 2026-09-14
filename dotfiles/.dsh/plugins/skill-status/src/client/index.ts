@@ -3,7 +3,8 @@
  *
  * Registers one `conversation.input.dock` entry rendering the host-computed
  * `skillStatus` session projection as `🎯 skills: ...` in gray, clipped with
- * an ellipsis, hidden while empty. The projection arrives through the
+ * an ellipsis. The row always renders; before any skill completes it shows
+ * the bare `🎯 skills: ` label. The projection arrives through the
  * standard `useProjection` seat (whole value seeded by the follow opening and
  * pushed by projection frames), so the display restores from the host's
  * whole-log fold and never depends on the loaded event window.
@@ -41,12 +42,10 @@ const STATUS_STYLE: Readonly<Record<string, string>> = {
   textOverflow: "ellipsis",
 };
 
-/** The dock row: nothing while no skill has been used, the line otherwise. */
+/** The dock row: the label-only line before any skill completes, names after. */
 function SkillStatusRow({ useProjection }: { readonly useProjection: UseProjection }): ReactNode {
   const names = useProjection(SKILL_STATUS_PROJECTION_KEY);
-  const line = buildSkillStatusLine(names ?? []);
-  if (line === undefined) return null;
-  return createElement("div", { style: STATUS_STYLE }, line);
+  return createElement("div", { style: STATUS_STYLE }, buildSkillStatusLine(names ?? []));
 }
 
 /** Wire the dock entry. */

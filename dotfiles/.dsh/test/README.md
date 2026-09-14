@@ -31,7 +31,7 @@ fixture は1画面に確認観点ごとのパターン（case 1〜6）を並べ�
 | パターン | 対応する SPEC の振る舞い | レビューで確認するポイント |
 |---|---|---|
 | 1. skill-status — populated | `🎯 skills: ` に続けて skill 名を `, ` で連結、first-use 順、文字色 gray | 書式と順序。gray で読めること。行は入力欄カードの上に出る |
-| 2. skill-status — empty snapshot | スキル未使用のときは何も表示しない | カードの上に何も無い（ラベル直下が空） |
+| 2. skill-status — empty snapshot | スキル未使用のときは `🎯 skills: ` のみを表示する | ラベルのみの行が gray で出る（名前は続かない） |
 | 3. skill-status — many skills | 幅に収まらないときは `...` で行末省略 | 行末が `...` で切れ、画面外へあふれない |
 | 4. session-list — sidebar rows | 各行は status dot（running=青マトリクス / pending=橙 / done=緑 / idle=gray）+ タイトル + 相対時刻。current 行はハイライト。hover で archive と copy session id の 2 ボタンが現れ、時刻は隠れる | dot の色分け、時刻の bucket（1min / 3h / 2d / 1mo）、hover actions のフラット配置。light / dark 両方で読めること |
 | 5. session-list — blank current | 選択中の blank 行は相対時刻なし・actions なしで表示される | 行の高さ・位置が通常行と揃い、右端に何も出ないこと |
