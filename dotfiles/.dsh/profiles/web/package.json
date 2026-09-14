@@ -14,7 +14,8 @@
     "dotfiles-rtk-rewrite": "file:../../plugins/rtk-rewrite",
     "dotfiles-dsh-quota-line": "file:../../plugins/quota-line",
     "dotfiles-sandboxed-tools": "file:../../plugins/sandboxed-tools",
-    "dotfiles-dsh-web-search": "file:../../plugins/web-search"
+    "dotfiles-dsh-web-search": "file:../../plugins/web-search",
+    "dotfiles-dsh-session-list": "file:../../plugins/session-list"
   },
   "dsh": {
     "profile": {
