@@ -100,28 +100,20 @@ docs は網羅的でない。正確な契約が必要なときは docs より先
 
 ## レビュー時のテスト
 
-plugin 変更のレビュー・検証では、dsh web を起動して playwright で確認する。Web UI は
-認証付きのため、起動時に stdout へ出る token 付き URL を readiness として待つ:
+plugin 変更のレビュー・検証では、まず `dotfiles/.dsh/test/` の smoke test で dsh web の起動・表示時エラーを自動確認する。判定契約は `dotfiles/.dsh/test/SPEC.md` に定める:
 
 ```sh
-# stdout は TTY のときだけ URL 行を出すため script 経由で起動する。
-# --port 0 はランダム空き port（既定 3080 は owner の稼働 host と衝突しうる）。
-# 起動と token URL の取得は同じシェル呼び出し内で行う（バックグラウンド起動は
-# ツール呼び出しをまたぐと死ぬことがある）。URL 行は約 10〜20 秒で出る
-script -qfec "dsh web --no-open --port 0" /tmp/dsh-web.log >/dev/null 2>&1 &
-grep -oa "http://127.0.0.1:[0-9]*/?token=[A-Za-z0-9_-]*" /tmp/dsh-web.log | head -1
+cd dotfiles/.dsh/test
+bun run test:web
 ```
 
-- browser 操作は `playwright-cli` skill を使う。`playwright-cli -s=<session> open
-  --browser=chromium "<token URL>"` で開く。既定の `chrome` チャネルは未 install。
-  最初の open で cookie が確立され、以後の操作は認証済みになる
-- devtools 相当の確認: `console error`（console エラーのみ。`console` で全レベル）、
-  `requests`（network。失敗は `[4xx]` / `[5xx]` ステータス付きで列挙される）
+この smoke test は `dsh web --no-open --port 0` を `script` 経由で起動し、stdout の token 付き URL を readiness として待つ。`playwright-cli` の Chromium で開き、初期表示と reload 後の `console.error`、初期表示と reload 中の uncaught page error が 0 件であることを終了コードで検証する。チャット入力の送信・コマンド実行など **LLM を呼ぶ操作はしない**。browser・dsh web・token を含む一時 log は test 終了時に削除する。
+
+- smoke test が失敗したときの追加調査には `playwright-cli` skill を使う。既定の `chrome` チャネルは未 install のため、`playwright-cli -s=<session> open --browser=chromium "<token URL>"` とする。最初の open で cookie が確立され、以後の操作は認証済みになる
+- devtools 相当の追加確認: `console error`（console エラーのみ。`console` で全レベル）、`requests`（network。失敗は `[4xx]` / `[5xx]` ステータス付きで列挙される）
 - 確認範囲は**起動と表示まで**: page の render、console error 0、該当 plugin の UI と SPEC.md の照合
-- チャット入力の送信・コマンド実行など **LLM を呼ぶ操作はしない**。トークン消費が発生する
 - 本体起動なしの静的確認には `dotfiles/.dsh/test/` の fixture を使う
-- token 付き URL は認証情報。検証後は browser の close、dsh web の停止、token を含む
-  log ファイルの削除まで行う
+- 手動で dsh web を起動して調査するときも、token 付き URL は認証情報として扱い、検証後は browser の close、dsh web の停止、token を含む log ファイルの削除まで行う
 
 ## 作業時の判断軸
 

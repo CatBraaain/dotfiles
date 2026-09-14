@@ -11,6 +11,14 @@ bun run render.ts   # dist/fixture.html（light）と dist/fixture-dark.html を
 bun serve.ts        # http://localhost:4173/ と /dark で serve（Ctrl-C で停止）
 ```
 
+実 dsh web の起動・表示時エラーを自動確認する（`dsh` と `playwright-cli` が必要）:
+
+```bash
+bun run test:web
+```
+
+この smoke test の判定契約は `SPEC.md` に定める。`dsh web --no-open --port 0` を起動し、token URL の readiness を待って Chromium で開く。初期表示と reload 後の browser console error、および初期表示・reload 中の uncaught page error があると終了コード 1 で失敗する。チャット入力など LLM を呼ぶ操作は行わず、browser・dsh・token を含む一時ログは終了時に削除する。
+
 別ターミナルで light / dark の2枚をスクショ:
 
 ```bash
