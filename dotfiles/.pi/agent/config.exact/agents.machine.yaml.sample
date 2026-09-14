@@ -6,7 +6,7 @@ _when:
   # DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC
   deepseekOffPeak: &deepseek-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { { [ "$d" -le 5 ] && [ "$h" -ge 01 ] && [ "$h" -lt 04 ]; } || { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }; }'
 
-tiers:
+classes:
   high:
     - provider: zai
       model: glm-5.3
