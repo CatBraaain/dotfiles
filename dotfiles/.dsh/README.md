@@ -26,7 +26,7 @@ bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=brow
   --footer 'return module.exports; } });'
 ```
 
-`<plugin id>` はプラグインの package name（例: `dotfiles-dsh-footer`）。banner / footer は `@deepseek-ai/dsh-client-modules` が要求する `window.__ModuleLoader__.load({ id, factory })` handoff で、`react` は shell の frozen module table で解決する external `require("react")` のまま残す。
+`<plugin id>` はプラグインの package name（例: `dotfiles-dsh-session-list`）。banner / footer は `@deepseek-ai/dsh-client-modules` が要求する `window.__ModuleLoader__.load({ id, factory })` handoff で、`react` は shell の frozen module table で解決する external `require("react")` のまま残す。
 
 `~/.dsh/profiles/web/` のその他のファイル（`cordis.yml`、`cordis.patch.yml`、`bun.lock`、`node_modules`）は dsh / bun の生成物。
 
