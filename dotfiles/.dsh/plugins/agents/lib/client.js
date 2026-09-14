@@ -45,6 +45,7 @@ __export(exports_client, {
 });
 module.exports = __toCommonJS(exports_client);
 var import_react = require("react");
+var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 
 // src/client/apply.ts
 function registerAgentClassDisplay(ctx, component) {
@@ -73,31 +74,46 @@ function startStatePoller(intervalMs, deps) {
 
 // src/client/format.ts
 var UNMANAGED_STATE = { managed: false };
-function agentStateLines(state) {
+function agentLineLabel(state) {
   if (!state.managed || state.agent === undefined)
-    return [];
-  const lines = [`\uD83E\uDD16 agent: ${state.agent}`];
-  if (state.className !== undefined) {
-    lines.push(`\uD83D\uDC8E class: ${state.className}${state.manual ? " (manual)" : ""}`);
+    return;
+  return `\uD83E\uDD16 agent: ${state.agent}`;
+}
+function classLineLabel(state) {
+  if (!state.managed || state.agent === undefined || state.className === undefined) {
+    return;
   }
-  return lines;
+  const mode = state.manual === true ? "manual" : "auto";
+  const detail = state.model !== undefined ? `${mode}:${state.model}` : mode;
+  return `\uD83D\uDC8E class: ${state.className} (${detail})`;
+}
+function stringArray(value) {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string"))
+    return;
+  return value;
 }
 function parseDisplayState(value) {
   if (typeof value !== "object" || value === null)
     return UNMANAGED_STATE;
-  const { managed, agent, className, manual } = value;
+  const { managed, agent, className, manual, model, agents, classes } = value;
   if (managed !== true || typeof agent !== "string" || agent === "")
     return UNMANAGED_STATE;
+  const agentNames = stringArray(agents);
+  const classNames = stringArray(classes);
   return {
     managed: true,
     agent,
     ...typeof className === "string" && className !== "" ? { className } : {},
-    ...manual === true ? { manual: true } : {}
+    ...manual === true ? { manual: true } : {},
+    ...typeof model === "string" && model !== "" ? { model } : {},
+    ...agentNames !== undefined ? { agents: agentNames } : {},
+    ...classNames !== undefined ? { classes: classNames } : {}
   };
 }
 
 // src/state-rpc.ts
 var AGENTS_STATE_PATH = "/api/dsh-agents/state";
+var AGENTS_SELECT_PATH = "/api/dsh-agents/select";
 
 // src/client/state.ts
 function createStateFetcher(doFetch) {
@@ -116,6 +132,27 @@ function createStateFetcher(doFetch) {
     }
   };
 }
+function createSelectSender(doFetch) {
+  return async (sessionId, kind, name) => {
+    try {
+      const response = await doFetch(AGENTS_SELECT_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, kind, name })
+      });
+      if (!response.ok)
+        return { ok: false };
+      const payload = await response.json().catch(() => {
+        return;
+      });
+      if (typeof payload !== "object" || payload === null)
+        return { ok: false };
+      return { ok: payload.ok === true };
+    } catch {
+      return { ok: false };
+    }
+  };
+}
 
 // src/client/index.ts
 var inject = ["slots"];
@@ -125,22 +162,89 @@ var DISPLAY_STYLE = {
   fontSize: "var(--dsh-content-font-size-secondary, 13px)",
   lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))"
 };
-function AgentClassDisplay({ sessionId, fetchState }) {
-  const [state, setState] = import_react.useState({ managed: false });
+var TRIGGER_STYLE = {
+  ...DISPLAY_STYLE,
+  display: "block",
+  background: "none",
+  border: "none",
+  padding: "0",
+  font: "inherit",
+  textAlign: "inherit",
+  cursor: "pointer"
+};
+function SelectorMenu({
+  label,
+  title,
+  names,
+  selected,
+  onPick
+}) {
+  const [open, setOpen] = import_react.useState(false);
+  return import_react.createElement(import_dsh_client_ui_primitives.Menu, {
+    open,
+    anchor: import_react.createElement("button", {
+      type: "button",
+      style: TRIGGER_STYLE,
+      title,
+      "aria-haspopup": "menu",
+      "aria-expanded": open,
+      onClick: () => setOpen((current) => !current)
+    }, label),
+    items: names.map((name) => ({ id: name, label: name })),
+    selectedId: selected,
+    onSelect: (id) => {
+      setOpen(false);
+      onPick(id);
+    },
+    onClose: () => setOpen(false),
+    portal: true,
+    side: "top",
+    align: "start"
+  });
+}
+function AgentClassDisplay({
+  sessionId,
+  fetchState,
+  select,
+  initialState
+}) {
+  const [state, setState] = import_react.useState(initialState ?? { managed: false });
   import_react.useEffect(() => startStatePoller(POLL_INTERVAL_MS, {
     fetchState: () => fetchState(sessionId),
     onState: setState,
     setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
     clearInterval: (handle) => clearInterval(handle)
   }), [sessionId, fetchState]);
-  const lines = agentStateLines(state);
-  if (lines.length === 0)
+  const agentLabel = agentLineLabel(state);
+  if (agentLabel === undefined)
     return null;
-  return import_react.createElement("div", { style: DISPLAY_STYLE }, ...lines.map((line) => import_react.createElement("div", { key: line }, line)));
+  const classLabel = classLineLabel(state);
+  const pick = async (kind, name) => {
+    const result = await select(sessionId, kind, name);
+    if (!result.ok)
+      return;
+    try {
+      setState(await fetchState(sessionId));
+    } catch {}
+  };
+  return import_react.createElement("div", { style: DISPLAY_STYLE }, import_react.createElement(SelectorMenu, {
+    label: agentLabel,
+    title: "Select agent",
+    names: state.agents ?? [],
+    selected: state.agent,
+    onPick: (name) => void pick("agent", name)
+  }), classLabel !== undefined && import_react.createElement(SelectorMenu, {
+    label: classLabel,
+    title: "Select class",
+    names: state.classes ?? [],
+    selected: state.className,
+    onPick: (name) => void pick("class", name)
+  }));
 }
 function apply(ctx) {
   const fetchState = createStateFetcher(globalThis.fetch);
-  const component = (props) => import_react.createElement(AgentClassDisplay, { ...props, fetchState });
+  const select = createSelectSender(globalThis.fetch);
+  const component = (props) => import_react.createElement(AgentClassDisplay, { ...props, fetchState, select });
   registerAgentClassDisplay(ctx, component);
 }
 

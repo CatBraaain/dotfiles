@@ -55,12 +55,15 @@ import { translateTools, type ToolFilter } from "./tool-allowlist.ts";
 import { SubagentSlots } from "./subagent-slots.ts";
 import { sessionNameFor, settleChildRun } from "./child-run.ts";
 import {
+  AGENTS_SELECT_PATH,
   AGENTS_STATE_PATH,
   buildStatePayload,
   isDisplayedAgent,
   isRootSessionHeader,
+  parseSelectRequest,
   parseStateRequest,
   type AgentStatePayload,
+  type SelectOutcome,
 } from "./state-rpc.ts";
 
 export const name = "dsh-agents";
@@ -535,6 +538,36 @@ export function apply(ctx: Context) {
   // ---- commands --------------------------------------------------------------
   // dsh command names match /^[a-z][a-z0-9_-]*$/ so pi's `/agent:<name>`
   // syntax is unreachable; use `/agent <name>` instead.
+  const availableAgents = () => Object.keys(config.agents).join(", ");
+  const availableClasses = () => Object.keys(config.classes).join(", ");
+  const asCommandResult = (outcome: SelectOutcome) =>
+    outcome.ok
+      ? { kind: "success" as const, text: outcome.text }
+      : { kind: "error" as const, text: outcome.text };
+
+  // Shared apply path for `/agent <name>` and the selector menu's select
+  // route: one switch point so both take effect identically (class reset,
+  // manual-pick release, tool/persona swap).
+  const applyAgentSelection = (agent: Agent, state: AgentState, name: string): SelectOutcome => {
+    if (!config.agents[name]) {
+      return { ok: false, text: `unknown agent: ${name} (available: ${availableAgents()})` };
+    }
+    state.effectiveClass = config.agents[name].class;
+    applyDefinition(agent, state, name);
+    return { ok: true, text: `agent → ${name} (class ${state.effectiveClass})` };
+  };
+
+  // Shared apply path for `/class <name>` and the selector menu's select
+  // route (see applyAgentSelection).
+  const applyClassSelection = (state: AgentState, name: string): SelectOutcome => {
+    if (!(name in config.classes)) {
+      return { ok: false, text: `unknown class: ${name} (available: ${availableClasses()})` };
+    }
+    state.effectiveClass = name;
+    state.manualSelect = false;
+    return { ok: true, text: `class → ${name}` };
+  };
+
   const agentCommand: CommandDefinition = {
     name: "agent",
     description: "Switch the active agents.yaml agent (pi: /agent:<name>)",
@@ -543,17 +576,15 @@ export function apply(ctx: Context) {
       const state = states.get(agent);
       if (!state) return { kind: "error", text: "dsh-agents does not manage this agent" };
       const [name, ...rest] = rawInput.trim().split(/\s+/);
-      if (!name || !config.agents[name]) {
-        const available = Object.keys(config.agents).join(", ");
+      if (!name) {
         return {
           kind: "error",
-          text: `unknown agent: ${name ?? "(none)"} (available: ${available})`,
+          text: `unknown agent: (none) (available: ${availableAgents()})`,
         };
       }
-      state.effectiveClass = config.agents[name].class;
-      applyDefinition(agent, state, name);
+      const outcome = applyAgentSelection(agent, state, name);
       const message = rest.join(" ").trim();
-      if (message) {
+      if (outcome.ok && message) {
         agent.followup(
           createUserMessage({
             content: [{ type: "text", text: message }],
@@ -561,7 +592,7 @@ export function apply(ctx: Context) {
           }),
         );
       }
-      return { kind: "success", text: `agent → ${name} (class ${state.effectiveClass})` };
+      return asCommandResult(outcome);
     },
   };
 
@@ -573,23 +604,13 @@ export function apply(ctx: Context) {
       const state = states.get(agent);
       if (!state) return { kind: "error", text: "dsh-agents does not manage this agent" };
       const name = rawInput.trim();
-      const available = Object.keys(config.classes);
       if (!name) {
-        // Phase 2 replaces this listing with a client-side popupSelect.
         return {
           kind: "success",
-          text: `classes: ${available.join(", ")} (current: ${state.effectiveClass})`,
+          text: `classes: ${availableClasses()} (current: ${state.effectiveClass})`,
         };
       }
-      if (!(name in config.classes)) {
-        return {
-          kind: "error",
-          text: `unknown class: ${name} (available: ${available.join(", ")})`,
-        };
-      }
-      state.effectiveClass = name;
-      state.manualSelect = false;
-      return { kind: "success", text: `class → ${name}` };
+      return asCommandResult(applyClassSelection(state, name));
     },
   };
 
@@ -679,12 +700,14 @@ export function apply(ctx: Context) {
           agentName: state.agentName,
           effectiveClass: state.effectiveClass,
           manualSelect: state.manualSelect,
+          ...(state.lastRoute !== undefined ? { model: state.lastRoute.model } : {}),
         })),
       await rootSessionIds(),
       { agent: initialAgent, className: initialClass },
+      { agents: Object.keys(config.agents), classes: Object.keys(config.classes) },
       sessionId,
     );
-  // Exact Fetch route on the /api channel. dsh rc.2 gives the shared-channel
+  // Exact Fetch routes on the /api channel. dsh rc.2 gives the shared-channel
   // RPC interceptor to the stock typert gateway, so plugins must not call
   // `connection.rpc.intercept` themselves; an exact route keeps the same
   // trust + browser-auth fence and answers before the gateway's 404 fallback.
@@ -701,7 +724,45 @@ export function apply(ctx: Context) {
       return Response.json(await stateForSession(requestState.sessionId));
     },
   };
-  ctx.effect(() => connection.fetch.register(stateRoute), "dsh-agents state rpc");
+  // Selection write path for the selector menus: resolves the session's live
+  // root agent, then applies the pick through the same switch points as
+  // `/agent <name>` / `/class <name>`. Idle sessions have no live agent yet
+  // (dsh creates it lazily on first use), so their picks fail politely.
+  const selectRoute: ConnectionFetchRoute = {
+    path: AGENTS_SELECT_PATH,
+    methods: ["POST"],
+    requestBody: "buffered",
+    fetch: async (request) => {
+      const payload: unknown = await request.json().catch(() => undefined);
+      const selection = parseSelectRequest(payload);
+      if (!selection) {
+        return Response.json(
+          { error: "payload must be { sessionId?: string, kind: 'agent' | 'class', name: string }" },
+          { status: 400 },
+        );
+      }
+      const found = [...states].find(
+        ([managedAgent]) =>
+          isDisplayedAgent(managedAgent) && managedAgent.session.id === selection.sessionId,
+      );
+      if (!found) {
+        return Response.json({
+          ok: false,
+          text: "dsh-agents does not manage this session (no live agent)",
+        });
+      }
+      const [managedAgent, managedState] = found;
+      const outcome =
+        selection.kind === "agent"
+          ? applyAgentSelection(managedAgent, managedState, selection.name)
+          : applyClassSelection(managedState, selection.name);
+      return Response.json(outcome);
+    },
+  };
+  ctx.effect(function* () {
+    yield connection.fetch.register(stateRoute);
+    yield connection.fetch.register(selectRoute);
+  }, "dsh-agents state rpc");
 }
 
 // Read `--agent <name>` / `--class <name>` (space or `=` separated) from the

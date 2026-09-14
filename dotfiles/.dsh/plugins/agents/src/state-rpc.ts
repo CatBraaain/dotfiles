@@ -4,8 +4,17 @@
 // these functions define the wire payload and are shared by both halves.
 // Kept free of dsh types so the adjacent test runs without them.
 
-/** Absolute path this plugin claims on the `/api` channel. */
+/** Absolute path this plugin claims on the `/api` channel (state read). */
 export const AGENTS_STATE_PATH = "/api/dsh-agents/state";
+
+/** Absolute path this plugin claims on the `/api` channel (selection write). */
+export const AGENTS_SELECT_PATH = "/api/dsh-agents/select";
+
+/** The selectable vocabulary the selector menus list (agents.yaml keys). */
+export interface SelectionChoices {
+  readonly agents: readonly string[];
+  readonly classes: readonly string[];
+}
 
 /**
  * Wire payload of the state route: the display state of one session.
@@ -22,6 +31,12 @@ export type AgentStatePayload =
       readonly className: string;
       /** True while a manual /model pick suspends auto routing. */
       readonly manual: boolean;
+      /** Model of the resolved route; omitted before the first resolution. */
+      readonly model?: string;
+      /** agents.yaml agent names for the selector menu. */
+      readonly agents: readonly string[];
+      /** Class names for the selector menu. */
+      readonly classes: readonly string[];
     };
 
 /** Request payload: the session whose display state to read. */
@@ -35,6 +50,32 @@ export function parseStateRequest(payload: unknown): StateRequest | undefined {
   const { sessionId } = payload as { sessionId?: unknown };
   if (sessionId !== undefined && typeof sessionId !== "string") return undefined;
   return { sessionId };
+}
+
+/** Which selector a menu pick applies: the agent seat or the class seat. */
+export type SelectKind = "agent" | "class";
+
+/** Request payload: the selection to apply to one session. */
+export interface SelectRequest {
+  readonly sessionId?: string;
+  readonly kind: SelectKind;
+  readonly name: string;
+}
+
+/** Validate the selection payload; undefined for a malformed one. */
+export function parseSelectRequest(payload: unknown): SelectRequest | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const { sessionId, kind, name } = payload as Record<string, unknown>;
+  if (sessionId !== undefined && typeof sessionId !== "string") return undefined;
+  if (kind !== "agent" && kind !== "class") return undefined;
+  if (typeof name !== "string" || name === "") return undefined;
+  return { sessionId, kind, name };
+}
+
+/** Outcome of a selection, shared by the commands and the select route. */
+export interface SelectOutcome {
+  readonly ok: boolean;
+  readonly text: string;
 }
 
 /** Structural slice of a live agent the display filter needs; dsh-type free. */
@@ -72,6 +113,8 @@ export interface ManagedStateEntry {
   readonly agentName: string;
   readonly effectiveClass: string;
   readonly manualSelect: boolean;
+  /** Model of the route resolved by the most recent request; omitted before any. */
+  readonly model?: string;
 }
 
 /** The agent/class a session runs with before its first turn (config defaults). */
@@ -90,6 +133,7 @@ export function buildStatePayload(
   entries: readonly ManagedStateEntry[],
   rootSessionIds: ReadonlySet<string>,
   initial: InitialDisplay,
+  choices: SelectionChoices,
   sessionId: string | undefined,
 ): AgentStatePayload {
   if (sessionId === undefined) return { managed: false };
@@ -100,10 +144,20 @@ export function buildStatePayload(
       agent: entry.agentName,
       className: entry.effectiveClass,
       manual: entry.manualSelect,
+      ...(entry.model !== undefined ? { model: entry.model } : {}),
+      agents: choices.agents,
+      classes: choices.classes,
     };
   }
   if (rootSessionIds.has(sessionId)) {
-    return { managed: true, agent: initial.agent, className: initial.className, manual: false };
+    return {
+      managed: true,
+      agent: initial.agent,
+      className: initial.className,
+      manual: false,
+      agents: choices.agents,
+      classes: choices.classes,
+    };
   }
   return { managed: false };
 }

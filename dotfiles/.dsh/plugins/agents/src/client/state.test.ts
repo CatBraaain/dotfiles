@@ -1,9 +1,9 @@
-// createStateFetcher: transport and wire contract between the browser half
-// and the host's exact /api state route.
+// createStateFetcher / createSelectSender: transport and wire contract
+// between the browser half and the host's exact /api routes.
 import { strict as assert } from "node:assert/strict";
 import { describe, it } from "bun:test";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
-import { createStateFetcher } from "./state.ts";
+import { createSelectSender, createStateFetcher } from "./state.ts";
 
 const sessionId = "session-1" as SessionId;
 
@@ -59,5 +59,47 @@ describe("createStateFetcher", () => {
       throw new TypeError("network down");
     });
     assert.deepEqual(await fetcher(sessionId), { managed: false });
+  });
+});
+
+describe("createSelectSender", () => {
+  it("POSTs the pick to the select route and reports acceptance", async () => {
+    let captured: Request | undefined;
+    const select = createSelectSender(async (_input, init) => {
+      captured = new Request(new URL("/api/dsh-agents/select", "https://dsh.invalid"), init);
+      return json({ ok: true, text: "class → low" });
+    });
+    const result = await select(sessionId, "class", "low");
+    assert.equal(captured?.method, "POST");
+    assert.equal(captured?.url, "https://dsh.invalid/api/dsh-agents/select");
+    assert.equal(captured?.headers.get("content-type"), "application/json");
+    assert.deepEqual(JSON.parse(await captured!.text()), {
+      sessionId: "session-1",
+      kind: "class",
+      name: "low",
+    });
+    assert.deepEqual(result, { ok: true });
+  });
+
+  it("reports a host rejection as not accepted", async () => {
+    const select = createSelectSender(async () => json({ ok: false, text: "unknown agent" }));
+    assert.deepEqual(await select(sessionId, "agent", "nope"), { ok: false });
+  });
+
+  it("reads a non-2xx response as not accepted", async () => {
+    const select = createSelectSender(async () => new Response("not found", { status: 404 }));
+    assert.deepEqual(await select(sessionId, "agent", "main"), { ok: false });
+  });
+
+  it("reads a malformed body as not accepted", async () => {
+    const select = createSelectSender(async () => json({ ok: "yes" }));
+    assert.deepEqual(await select(sessionId, "agent", "main"), { ok: false });
+  });
+
+  it("reads a transport failure as not accepted", async () => {
+    const select = createSelectSender(async () => {
+      throw new TypeError("network down");
+    });
+    assert.deepEqual(await select(sessionId, "agent", "main"), { ok: false });
   });
 });

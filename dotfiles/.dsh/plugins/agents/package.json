@@ -10,7 +10,10 @@
   "dsh": {
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-renderer"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ]
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -22,6 +25,8 @@
     "yaml": "latest"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.2",
+    "@types/bun": "latest",
+    "@types/react": "~18.3.1"
   }
 }

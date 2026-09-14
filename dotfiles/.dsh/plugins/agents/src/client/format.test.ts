@@ -1,37 +1,89 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { agentStateLines, parseDisplayState } from "./format";
+import { agentLineLabel, classLineLabel, parseDisplayState } from "./format";
 
-describe("agentStateLines", () => {
-  it("renders the agent and class lines", () => {
-    assert.deepEqual(
-      agentStateLines({ managed: true, agent: "main", className: "middle", manual: false }),
-      ["🤖 agent: main", "💎 class: middle"],
+describe("agentLineLabel", () => {
+  it("renders the agent row label", () => {
+    assert.equal(
+      agentLineLabel({ managed: true, agent: "main", className: "middle", manual: false }),
+      "🤖 agent: main",
     );
   });
 
-  it("appends (manual) while a manual /model pick suspends routing", () => {
-    assert.deepEqual(
-      agentStateLines({ managed: true, agent: "chat", className: "low", manual: true }),
-      ["🤖 agent: chat", "💎 class: low (manual)"],
-    );
-  });
-
-  it("renders only the agent line without a class", () => {
-    assert.deepEqual(agentStateLines({ managed: true, agent: "main" }), ["🤖 agent: main"]);
+  it("renders without a class", () => {
+    assert.equal(agentLineLabel({ managed: true, agent: "main" }), "🤖 agent: main");
   });
 
   it("renders nothing for an unmanaged session", () => {
-    assert.deepEqual(agentStateLines({ managed: false }), []);
-    assert.deepEqual(agentStateLines({ managed: true }), []);
+    assert.equal(agentLineLabel({ managed: false }), undefined);
+    assert.equal(agentLineLabel({ managed: true }), undefined);
+  });
+});
+
+describe("classLineLabel", () => {
+  it("renders the auto mode with the resolved model", () => {
+    assert.equal(
+      classLineLabel({
+        managed: true,
+        agent: "main",
+        className: "middle",
+        manual: false,
+        model: "glm-5.3-flash",
+      }),
+      "💎 class: middle (auto:glm-5.3-flash)",
+    );
+  });
+
+  it("renders the manual mode with the resolved model", () => {
+    assert.equal(
+      classLineLabel({
+        managed: true,
+        agent: "chat",
+        className: "low",
+        manual: true,
+        model: "glm-5.3",
+      }),
+      "💎 class: low (manual:glm-5.3)",
+    );
+  });
+
+  it("omits the model before the first route resolution", () => {
+    assert.equal(
+      classLineLabel({ managed: true, agent: "main", className: "high", manual: false }),
+      "💎 class: high (auto)",
+    );
+    assert.equal(
+      classLineLabel({ managed: true, agent: "main", className: "high", manual: true }),
+      "💎 class: high (manual)",
+    );
+  });
+
+  it("renders nothing without a class or for an unmanaged session", () => {
+    assert.equal(classLineLabel({ managed: true, agent: "main" }), undefined);
+    assert.equal(classLineLabel({ managed: false }), undefined);
   });
 });
 
 describe("parseDisplayState", () => {
   it("keeps a managed payload with its fields", () => {
     assert.deepEqual(
-      parseDisplayState({ managed: true, agent: "main", className: "middle", manual: false }),
-      { managed: true, agent: "main", className: "middle" },
+      parseDisplayState({
+        managed: true,
+        agent: "main",
+        className: "middle",
+        manual: false,
+        model: "glm-5.3-flash",
+        agents: ["main", "senior"],
+        classes: ["high", "middle"],
+      }),
+      {
+        managed: true,
+        agent: "main",
+        className: "middle",
+        model: "glm-5.3-flash",
+        agents: ["main", "senior"],
+        classes: ["high", "middle"],
+      },
     );
   });
 
@@ -39,6 +91,18 @@ describe("parseDisplayState", () => {
     assert.deepEqual(
       parseDisplayState({ managed: true, agent: "chat", className: "low", manual: true }),
       { managed: true, agent: "chat", className: "low", manual: true },
+    );
+  });
+
+  it("drops non-string menu vocabularies instead of failing", () => {
+    assert.deepEqual(
+      parseDisplayState({
+        managed: true,
+        agent: "main",
+        agents: ["senior", 7],
+        classes: "high",
+      }),
+      { managed: true, agent: "main" },
     );
   });
 

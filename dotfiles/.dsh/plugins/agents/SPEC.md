@@ -2,7 +2,7 @@
 
 ## 概要
 
-セッションは **agent** を実行する。agent は利用できるツール、依頼できる子 agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本 plugin は host 側と client 側（browser bundle）で構成し、host 側は agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を提供する。client 側は現在の agent と実効 class の表示を提供する。`/class` の選択 popup、subagent の待機表示など残りの client UI は対象外とする（「対象外」節）。
+セッションは **agent** を実行する。agent は利用できるツール、依頼できる子 agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本 plugin は host 側と client 側（browser bundle）で構成し、host 側は agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を提供する。client 側は現在の agent と実効 class の選択ボタン表示（メニューによる切替を含む）を提供する。subagent の待機表示など残りの client UI は対象外とする（「対象外」節）。
 
 ## 設定
 
@@ -45,7 +45,7 @@ agents:
 | `subagents`               | `subagent` ツールでの起動を許可する子 agent の一覧。定義済み agent のみ指定できる                                                                                                                                                                                                                                                  |
 | `systemPrompt`            | 配列要素を記載順で結合して、agent 固有のシステムプロンプト（persona section）として追記する。YAML のアンカーとエイリアスで複数 agent 間で要素を共有できる                                                                                                                                                                          |
 | `/agent <name> [message]` | 指定した agent を即時に有効にする。実効 class は切替先 agent の既定 class に戻り、手動モデル選択は解除され、ツール制限・persona・`subagent` ツールの可視性が付け替わる。`message` を続けた場合は切替完了後にそのテキスト（前後の空白を除く）をユーザーメッセージとして送信する。未定義の `name` はエラー応答し、何も変更しない         |
-| `/class [name]`           | 実効 class を `name` に切り替え、手動モデル選択を解除する。cooldown は維持する。未定義の `name` はエラー応答し、何も変更しない。`name` を省略した場合は利用可能 class と現在値を応答する（選択 popup は対象外）                                                                                                                   |
+| `/class [name]`           | 実効 class を `name` に切り替え、手動モデル選択を解除する。cooldown は維持する。未定義の `name` はエラー応答し、何も変更しない。`name` を省略した場合は利用可能 class と現在値を応答する（メニューからの選択は「Agent 表示」節）                                                                                                                   |
 | `--agent <name>` フラグ   | 初期 agent を指定する。未定義の値は warning で無視する（`default` になる）                                                                                                                                                                                                                                                         |
 | `--class <name>` フラグ   | 初期 class を指定する。`--agent` と独立であり併用できる。未定義の値は warning で無視する                                                                                                                                                                                                                                           |
 
@@ -209,19 +209,23 @@ shadow が委譲に失敗する場合（呼び出し agent の `subagents` に `
 
 ## Agent 表示
 
-dsh web UI の composer 直上（input dock）に、現在の agent と実効 class を常設表示する。表示は次の 2 行形式で、テキスト色はグレーとする。
+dsh web UI の composer 直上（input dock）に、現在の agent と実効 class を常設表示する。表示は次の 2 つの独立した行ボタンで、テキスト色はグレーとする。
 
 ```text
 🤖 agent: <currentAgent>
-💎 class: <class-name>
+💎 class: <class-name> (auto:<resolved-model>)
 ```
 
-手動状態（本家 `/model` による手動モデル選択が効いている間）のときは class 行の末尾に `(manual)` を付ける。
+手動状態（本家 `/model` による手動モデル選択が効いている間）のときは class 行の括弧内は `manual:<resolved-model>` になる。`<resolved-model>` は直近のモデルリクエストで解決した route の model 名で、コロン前後・class 名との区切りはスペース 1 つとする。最初の turn 前（idle session）など解決済み route が無いときはモデル名を省略し `(auto)` / `(manual)` とだけ表示する。
+
+agent 行ボタンをクリックすると agents.yaml の agent 名一覧、class 行ボタンをクリックすると class 名一覧の選択メニュー（本家 `@deepseek-ai/dsh-client-ui-primitives` の Menu による popover）が開く。メニューは外側クリック・Escape で閉じる。メニューからの選択は `/agent <name>`・`/class <name>` と同一の適用経路を通る（agent 切替では実効 class リセット、手動選択解除、ツール・persona 付け替えを含む）。
 
 | 項目             | 内容と振る舞い                                                                                                                                                             |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状態の配信       | host 側が本家 `dsh-client-connection` の `/api` channel 上に exact Fetch route `POST /api/dsh-agents/state` を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual }` を返す。durable な session log には書き込まず、メモリ上の状態を応答する |
-| 表示の更新       | client half が 2 秒間隔で状態を取得し、取得に失敗したときは直前の表示を維持する。agent・class の切替は次の取得まで（最大 2 秒）表示に反映される                                |
+| 状態の配信       | host 側が本家 `dsh-client-connection` の `/api` channel 上に exact Fetch route `POST /api/dsh-agents/state` を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual, model?, agents, classes }` を返す。`model` は解決済み route の model 名（解決前に省略）、`agents`/`classes` は agents.yaml の agent 名・class 名一覧。durable な session log には書き込まず、メモリ上の状態を応答する |
+| 選択の適用       | host 側が同じ `/api` channel 上に exact Fetch route `POST /api/dsh-agents/select` を登録し、`{ sessionId, kind: "agent" \| "class", name }` に対して `{ ok, text }` を返す。適用は `/agent`・`/class` コマンドと同一の内部経路（class リセット・手動選択解除・ツール/persona 付け替え）を通る |
+| 表示の更新       | client half が 2 秒間隔で状態を取得し、取得に失敗したときは直前の表示を維持する。メニューからの選択が host に受け付けられたときは即座に再取得して表示を切り替える。拒否されたときは表示を変えず、次の取得周期で host 側の状態に戻る |
+| 選択できない session | idle session は live agent を持たないため選択に `ok: false` で応答する（表示はそのまま）。メニュー選択は live agent を持つ session でのみ有効 |
 | 未管理 session   | 本 plugin が管理しない session（plugin 無効、`agents.yaml` 不正、子 session など）では何も表示しない                                                                      |
 | 表示しない環境   | web UI 以外の profile（headless、sdk など）では client half が読み込まれないため表示は出ない。routing・フォールバックなどの host 側の動作は同じ                                    |
 
@@ -231,6 +235,6 @@ dsh web UI の composer 直上（input dock）に、現在の agent と実効 cl
 
 ## 対象外
 
-- client bundle（`/class` の popupSelect、subagent の待機表示・toolview、通知）
+- client bundle のうち subagent の待機表示・toolview、通知
 - チャットに貼り付けられた画像の自動委譲
 - Z.AI 同時実行系エラー（`1302` / `1305`）の待機リトライ

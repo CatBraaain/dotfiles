@@ -26,7 +26,7 @@ playwright-cli close
 
 ## スクショレビューのチェックリスト
 
-fixture は1画面に確認観点ごとのパターン（case 1〜6）を並べてある。light / dark の2枚を撮り、人または VLM（画像を渡せる agent）でレビューする。判定基準の正本は各 plugin の SPEC.md。case 4 は session-list の hover actions を確認するとき `playwright-cli hover '.session-list-row:nth-child(2)'` で hover 状態を撮る。
+fixture は1画面に確認観点ごとのパターン（case 1〜9）を並べてある。light / dark の2枚を撮り、人または VLM（画像を渡せる agent）でレビューする。判定基準の正本は各 plugin の SPEC.md。case 4 は session-list の hover actions を確認するとき `playwright-cli hover '.session-list-row:nth-child(2)'` で hover 状態を撮る。
 
 | パターン | 対応する SPEC の振る舞い | レビューで確認するポイント |
 |---|---|---|
@@ -36,6 +36,9 @@ fixture は1画面に確認観点ごとのパターン（case 1〜6）を並べ�
 | 4. session-list — sidebar rows | 各行は status dot（running=青マトリクス / pending=橙 / done=緑 / idle=gray）+ タイトル + 相対時刻。current 行はハイライト。hover で archive と copy session id の 2 ボタンが現れ、時刻は隠れる | dot の色分け、時刻の bucket（1min / 3h / 2d / 1mo）、hover actions のフラット配置。light / dark 両方で読めること |
 | 5. session-list — blank current | 選択中の blank 行は相対時刻なし・actions なしで表示される | 行の高さ・位置が通常行と揃い、右端に何も出ないこと |
 | 6. session-list — empty | セッションが無いときは空の領域 | リスト領域が空で、エラーや余計な表示が出ないこと |
+| 7. agents — auto class | agent 行 `🤖 agent: <name>` と class 行 `💎 class: <name> (auto:<model>)` の2行ボタン（メニュー閉状態）。文字色 gray | 2行の書式（コロン前後スペースなし、model は `auto:` に続く）、gray で読めること。行は入力欄カードの上 |
+| 8. agents — manual class | 手動選択中は `(manual:<model>)` | `manual:` 表記と model 名。agent 行も切替後の名前になること |
+| 9. agents — idle session | 初回 turn 前（解決済み route なし）は `(auto)` のみ | model 名が付かずモードだけの表記。初期 agent/class が表示されること |
 | light / dark 両方 | gray は light / dark で別の token 値 | どちらのテーマでも読めること（黒や白に潰れない） |
 
 VLM に依頼するときは、dist/fixture.png と dist/fixture-dark.png の2枚に、上の表と「各 case のラベル番号に沿って PASS/FAIL と根拠を返す」ことだけ伝えれば判定できる。
@@ -53,6 +56,6 @@ titlebar は React 無関係（`document.title` への書き込み）のため f
 
 ## 制限
 
-- 静的 render のため subscription・インタラクションは動かない（snapshot の初期値のみ反映）。session-list のクリック（行 open、archive、copy）、check icon への切替、rail（折りたたみ）表示、失敗経路（archive 失敗時の行残留と可視エラーなし、clipboard 書き込み失敗時に check icon へ変わらないこと）、表示中セッションの archive 時の New Session view 切替は実 dsh 起動後の確認対象
+- 静的 render のため subscription・インタラクションは動かない（snapshot の初期値のみ反映）。session-list のクリック（行 open、archive、copy）、check icon への切替、rail（折りたたみ）表示、失敗経路（archive 失敗時の行残留と可視エラーなし、clipboard 書き込み失敗時に check icon へ変わらないこと）、表示中セッションの archive 時の New Session view 切替、agents のメニュー開状態（popover・選択適用・外側クリックで閉じること）は実 dsh 起動後の確認対象
 - ヘッドレス chromium は絵文字グリフを持たず、`🎯` が tofu で写る
 - dsh web 全体の画面（会話履歴・hero 等）は対象外。dock 周辺のみ

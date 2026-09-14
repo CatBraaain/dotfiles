@@ -37,7 +37,8 @@ const primitivesDir = join(
 );
 
 /**
- * The `@deepseek-ai/dsh-client-ui-primitives` faces the session-list bundle consumes. The raw npm package is not loadable by bun (its
+ * The `@deepseek-ai/dsh-client-ui-primitives` faces the session-list and agents
+ * bundles consume. The raw npm package is not loadable by bun (its
  * runtime deps are bundled into the dsh web shell, and bun imports
  * `.module.css` as an empty object), so the fixture serves a stub with the
  * same DOM shape as the real primitives plus the real icon paths, styled by
@@ -66,6 +67,11 @@ const primitivesStub = {
         "M12.7962 12.5661V11.0832H7.20548V12.5661L12.7962 12.5661Z",
     ]),
     StateDot: stateDot,
+    /** Closed-menu shape only: the anchor wrapped in the Menu root span. The
+     * open popover (portal, outside-click dismiss) is interaction territory —
+     * out of scope for a static render. */
+    Menu: ({ anchor }: { anchor: React.ReactNode }) =>
+        React.createElement("span", { className: "menu-root" }, anchor),
 };
 
 /** The real StateDot's 3x3 chase matrix cells (viewBox 0 0 10 10, 2px cells). */
@@ -164,6 +170,9 @@ function icon16(d: string): () => unknown {
 const reactForServer = {
     ...React,
     useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
+    // The primitives Menu places its portal in a layout effect; a static
+    // render never opens it, so silence the server-render warning.
+    useLayoutEffect: () => {},
 } as typeof React;
 
 /** A `__ModuleLoader__` registration emitted by each plugin client bundle. */
@@ -421,7 +430,7 @@ async function main(): Promise<void> {
 
     const skillExports = await loadPluginBundle("skill-status", "dotfiles-dsh-skill-status");
     const skillEntry = findEntry(captureSlotRegistrations(skillExports.apply as (ctx: unknown) => void), "skill-status");
-    /** The component now reads its names through the session `useProjection` seat. */
+    /** The component reads its names through the session `useProjection` seat. */
     const renderSkill = (names: readonly string[]): string =>
         renderComponent(skillEntry, {
             useProjection: (key: string) => (key === "skillStatus" ? names : undefined),
@@ -434,6 +443,45 @@ async function main(): Promise<void> {
         "release-checklist", "security-audit", "performance-tuning", "api-contract-review",
         "data-migration", "docs-refresh", "ci-hardening",
     ]);
+
+    // agents: the agent/class selector rows. Static render covers the closed
+    // menus only (the popover itself is interaction territory); the row labels
+    // — including the resolved-model suffix — are what the fixture seeds via
+    // `initialState` (effects never run server-side, so the poller stays idle).
+    const agentsExports = await loadPluginBundle("agents", "dotfiles-dsh-agents");
+    const agentsEntry = findEntry(
+        captureSlotRegistrations(agentsExports.apply as (ctx: unknown) => void),
+        "agent-class",
+    );
+    const agentsVocabulary = {
+        agents: ["main", "senior", "junior", "vision"],
+        classes: ["high", "middle", "low", "vision"],
+    };
+    const renderAgents = (initialState: Record<string, unknown>): string =>
+        renderComponent(agentsEntry, { sessionId: "s-fixture", initialState });
+    const agentsAuto = renderAgents({
+        managed: true,
+        agent: "main",
+        className: "middle",
+        manual: false,
+        model: "glm-5.3-flash",
+        ...agentsVocabulary,
+    });
+    const agentsManual = renderAgents({
+        managed: true,
+        agent: "senior",
+        className: "high",
+        manual: true,
+        model: "glm-5.3",
+        ...agentsVocabulary,
+    });
+    const agentsIdle = renderAgents({
+        managed: true,
+        agent: "main",
+        className: "high",
+        manual: false,
+        ...agentsVocabulary,
+    });
 
     const listCase = `<div class="case">
     <div class="case-label">4. session-list — sidebar rows with status dots, relative time, and hover actions</div>
@@ -453,6 +501,9 @@ async function main(): Promise<void> {
         caseSection("2. skill-status — empty snapshot (the row renders the bare 🎯 skills: label)", skillEmpty, ""),
         caseSection("3. skill-status — many skills (clipped with an ellipsis, must not overflow)", skillOverflow, ""),
         listCase,
+        caseSection("7. agents — auto class with the resolved model (selector rows, menus closed)", agentsAuto, ""),
+        caseSection("8. agents — manual pick shows (manual:model) on the class row", agentsManual, ""),
+        caseSection("9. agents — idle session before the first turn (no resolved model yet)", agentsIdle, ""),
     ].join("\n");
 
     for (const dark of [false, true]) {

@@ -2,7 +2,7 @@
 // the host's exact /api route. Kept react-free so the adjacent test runs
 // without the react dependency.
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
-import { AGENTS_STATE_PATH } from "../state-rpc.ts";
+import { AGENTS_SELECT_PATH, AGENTS_STATE_PATH, type SelectKind } from "../state-rpc.ts";
 import { parseDisplayState, type AgentDisplayState } from "./format.ts";
 
 /** Minimal fetch face: avoids the runtime-specific `typeof fetch` shape. */
@@ -28,6 +28,38 @@ export function createStateFetcher(
       return parseDisplayState(await response.json());
     } catch {
       return { managed: false };
+    }
+  };
+}
+
+/** Outcome face the menus need: whether the host accepted the pick. */
+export interface SelectSenderResult {
+  readonly ok: boolean;
+}
+
+/**
+ * Build the selection sender: POST one menu pick to the plugin's exact /api
+ * select route, which applies it through the same switch points as
+ * `/agent <name>` / `/class <name>`. Any failure — transport, non-2xx, or a
+ * malformed body — reads as not-accepted so the display keeps its last state
+ * (the next poll re-syncs with the host truth).
+ */
+export function createSelectSender(
+  doFetch: FetchLike,
+): (sessionId: SessionId, kind: SelectKind, name: string) => Promise<SelectSenderResult> {
+  return async (sessionId, kind, name) => {
+    try {
+      const response = await doFetch(AGENTS_SELECT_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, kind, name }),
+      });
+      if (!response.ok) return { ok: false };
+      const payload: unknown = await response.json().catch(() => undefined);
+      if (typeof payload !== "object" || payload === null) return { ok: false };
+      return { ok: (payload as { ok?: unknown }).ok === true };
+    } catch {
+      return { ok: false };
     }
   };
 }
