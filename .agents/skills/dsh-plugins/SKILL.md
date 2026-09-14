@@ -100,16 +100,28 @@ docs は網羅的でない。正確な契約が必要なときは docs より先
 
 ## レビュー時のテスト
 
-plugin 変更のレビュー・検証では、dsh web を起動して playwright で確認する:
+plugin 変更のレビュー・検証では、dsh web を起動して playwright で確認する。Web UI は
+認証付きのため、起動時に stdout へ出る token 付き URL を readiness として待つ:
 
 ```sh
-dsh web --no-open
+# stdout は TTY のときだけ URL 行を出すため script 経由で起動する。
+# --port 0 はランダム空き port（既定 3080 は owner の稼働 host と衝突しうる）。
+# 起動と token URL の取得は同じシェル呼び出し内で行う（バックグラウンド起動は
+# ツール呼び出しをまたぐと死ぬことがある）。URL 行は約 10〜20 秒で出る
+script -qfec "dsh web --no-open --port 0" /tmp/dsh-web.log >/dev/null 2>&1 &
+grep -oa "http://127.0.0.1:[0-9]*/?token=[A-Za-z0-9_-]*" /tmp/dsh-web.log | head -1
 ```
 
-- Web UI は既定で `http://127.0.0.1:3080`。browser 操作は `playwright-cli` skill を使う
-- 確認範囲は**起動と表示まで**: page の render、console error、該当 plugin の UI と SPEC.md の照合
+- browser 操作は `playwright-cli` skill を使う。`playwright-cli -s=<session> open
+  --browser=chromium "<token URL>"` で開く。既定の `chrome` チャネルは未 install。
+  最初の open で cookie が確立され、以後の操作は認証済みになる
+- devtools 相当の確認: `console error`（console エラーのみ。`console` で全レベル）、
+  `requests`（network。失敗は `[4xx]` / `[5xx]` ステータス付きで列挙される）
+- 確認範囲は**起動と表示まで**: page の render、console error 0、該当 plugin の UI と SPEC.md の照合
 - チャット入力の送信・コマンド実行など **LLM を呼ぶ操作はしない**。トークン消費が発生する
 - 本体起動なしの静的確認には `dotfiles/.dsh/test/` の fixture を使う
+- token 付き URL は認証情報。検証後は browser の close、dsh web の停止、token を含む
+  log ファイルの削除まで行う
 
 ## 作業時の判断軸
 
