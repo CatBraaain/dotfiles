@@ -169,17 +169,6 @@ function createSessionList(deps) {
     }, []);
     const source = rowSource(list);
     const groups = import_react.useMemo(() => deriveGroups(source, workspaces.items, workspaces.archivedSessionIds), [source, workspaces]);
-    const currentGroupKey = import_react.useMemo(() => {
-      const current = list.current;
-      if (current === undefined)
-        return;
-      return groups.find((group) => group.sessions.some((row) => row.id === current))?.key;
-    }, [groups, list.current]);
-    import_react.useEffect(() => {
-      if (currentGroupKey === undefined)
-        return;
-      setCollapsedKeys((keys) => keys.includes(currentGroupKey) ? keys.filter((key) => key !== currentGroupKey) : keys);
-    }, [currentGroupKey, collapsedKeys]);
     import_react.useEffect(() => {
       if (flowOpen && !flowAvailable)
         setFlowOpen(false);

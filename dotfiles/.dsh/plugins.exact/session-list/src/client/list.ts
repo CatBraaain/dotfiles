@@ -119,20 +119,6 @@ export function createSessionList(deps: SessionListDeps): (props: SessionListPro
       () => deriveGroups(source, workspaces.items, workspaces.archivedSessionIds),
       [source, workspaces],
     )
-    // The group owning the selected session: the header's active tint and
-    // the auto-uncollapse (stock keeps the selected session's group open;
-    // folding it snaps right back instead of hiding the selection).
-    const currentGroupKey = useMemo(() => {
-      const current = list.current
-      if (current === undefined) return undefined
-      return groups.find((group) => group.sessions.some((row) => row.id === current))?.key
-    }, [groups, list.current])
-    useEffect(() => {
-      if (currentGroupKey === undefined) return
-      setCollapsedKeys((keys) => keys.includes(currentGroupKey)
-        ? keys.filter((key) => key !== currentGroupKey)
-        : keys)
-    }, [currentGroupKey, collapsedKeys])
 
     // An occupant that unloads mid-interaction leaves nobody to cancel.
     useEffect(() => {
