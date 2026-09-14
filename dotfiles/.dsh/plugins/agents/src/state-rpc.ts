@@ -51,6 +51,21 @@ export function isDisplayedAgent(agent: DisplayCandidateAgent): boolean {
   return agent.session.header.origin !== "subagent";
 }
 
+/** Structural slice of a durable/live session header the root check needs; dsh-type free. */
+export interface RootSessionHeader {
+  readonly origin?: string;
+  readonly delegationDepth?: number;
+}
+
+/**
+ * Top-level sessions are the display's idle fallback: origin 'subagent' marks
+ * a child, and delegationDepth > 0 is a child even without the origin tag
+ * (the durable header persists the depth for the recursion budget).
+ */
+export function isRootSessionHeader(header: RootSessionHeader): boolean {
+  return header.origin !== "subagent" && (header.delegationDepth ?? 0) === 0;
+}
+
 /** The per-agent state facts the display needs, keyed by session. */
 export interface ManagedStateEntry {
   readonly sessionId: string;
@@ -59,18 +74,36 @@ export interface ManagedStateEntry {
   readonly manualSelect: boolean;
 }
 
-/** Build the display payload for one session: unmanaged when no live agent matches. */
+/** The agent/class a session runs with before its first turn (config defaults). */
+export interface InitialDisplay {
+  readonly agent: string;
+  readonly className: string;
+}
+
+/**
+ * Build the display payload for one session. Live agents win; otherwise a
+ * known top-level session shows the initial agent/class: dsh resumes an agent
+ * lazily on first use, so an idle session has no live agent yet while its
+ * first turn would still run the initial agent/class.
+ */
 export function buildStatePayload(
   entries: readonly ManagedStateEntry[],
+  rootSessionIds: ReadonlySet<string>,
+  initial: InitialDisplay,
   sessionId: string | undefined,
 ): AgentStatePayload {
   if (sessionId === undefined) return { managed: false };
   const entry = entries.find((candidate) => candidate.sessionId === sessionId);
-  if (!entry) return { managed: false };
-  return {
-    managed: true,
-    agent: entry.agentName,
-    className: entry.effectiveClass,
-    manual: entry.manualSelect,
-  };
+  if (entry) {
+    return {
+      managed: true,
+      agent: entry.agentName,
+      className: entry.effectiveClass,
+      manual: entry.manualSelect,
+    };
+  }
+  if (rootSessionIds.has(sessionId)) {
+    return { managed: true, agent: initial.agent, className: initial.className, manual: false };
+  }
+  return { managed: false };
 }

@@ -35,6 +35,7 @@ import type {
   ConnectionFetchRoute,
   HostConnectionHandle,
 } from "@deepseek-ai/dsh-client-connection";
+import type { SessionQueryEngine } from "@deepseek-ai/dsh-session-query";
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -57,12 +58,18 @@ import {
   AGENTS_STATE_PATH,
   buildStatePayload,
   isDisplayedAgent,
+  isRootSessionHeader,
   parseStateRequest,
   type AgentStatePayload,
 } from "./state-rpc.ts";
 
 export const name = "dsh-agents";
-export const inject = ["commands", "tools", "llm", "systemPrompt", "subagents"];
+// `connection` backs the browser display: the exact /api route below needs
+// ctx.get("connection").fetch.register, and the host-runner sandbox only
+// exposes services listed in `inject`.
+// `sessionQuery` feeds the idle-session fallback below: dsh resumes an agent
+// lazily, so the display must answer for sessions with no live agent yet.
+export const inject = ["commands", "tools", "llm", "systemPrompt", "subagents", "connection", "sessionQuery"];
 
 /** Prompt-section order: after the deployment persona suffix (10200). */
 const PERSONA_SECTION_ORDER = 10250;
@@ -631,9 +638,39 @@ export function apply(ctx: Context) {
     logger.warn("connection contract unavailable; the browser agent/class display stays empty");
     return;
   }
+  // Idle sessions have no live agent, so the display falls back to the durable
+  // top-level session set with the initial agent/class. Small TTL cache: the
+  // browser polls every 2 s and the corpus listing is a persistence read; a
+  // newly created session invalidates via session/created.
+  let rootIdsCache: { ids: ReadonlySet<string>; loadedAtMs: number } | undefined;
+  const ROOT_IDS_CACHE_TTL_MS = 10_000;
+  ctx.on("session/created", () => {
+    rootIdsCache = undefined;
+  });
+  const rootSessionIds = async (): Promise<ReadonlySet<string>> => {
+    if (rootIdsCache && Date.now() - rootIdsCache.loadedAtMs < ROOT_IDS_CACHE_TTL_MS) {
+      return rootIdsCache.ids;
+    }
+    try {
+      const sessionQuery = ctx.get("sessionQuery") as SessionQueryEngine;
+      const records = await sessionQuery.listSessions();
+      rootIdsCache = {
+        ids: new Set(
+          records
+            .filter((record) => isRootSessionHeader(record.header))
+            .map((record) => record.header.id),
+        ),
+        loadedAtMs: Date.now(),
+      };
+    } catch {
+      // Unreadable corpus: keep the last known set (empty before the first
+      // success); the next poll retries.
+    }
+    return rootIdsCache?.ids ?? new Set();
+  };
   // spawnSubagent transiently registers one-shot children in `states` for
   // routing; the display RPC must still answer as if only roots existed.
-  const stateForSession = (sessionId: string | undefined): AgentStatePayload =>
+  const stateForSession = async (sessionId: string | undefined): Promise<AgentStatePayload> =>
     buildStatePayload(
       [...states]
         .filter(([managedAgent]) => isDisplayedAgent(managedAgent))
@@ -643,6 +680,8 @@ export function apply(ctx: Context) {
           effectiveClass: state.effectiveClass,
           manualSelect: state.manualSelect,
         })),
+      await rootSessionIds(),
+      { agent: initialAgent, className: initialClass },
       sessionId,
     );
   // Exact Fetch route on the /api channel. dsh rc.2 gives the shared-channel
@@ -659,7 +698,7 @@ export function apply(ctx: Context) {
       if (!requestState) {
         return Response.json({ error: "payload must be { sessionId?: string }" }, { status: 400 });
       }
-      return Response.json(stateForSession(requestState.sessionId));
+      return Response.json(await stateForSession(requestState.sessionId));
     },
   };
   ctx.effect(() => connection.fetch.register(stateRoute), "dsh-agents state rpc");
