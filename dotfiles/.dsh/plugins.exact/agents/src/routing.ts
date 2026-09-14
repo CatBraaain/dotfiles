@@ -64,6 +64,42 @@ export function recordCooldown(
   cooldowns.set(key, now + ms);
 }
 
+/**
+ * TTL cache for predicted display models. The browser display poll re-derives
+ * the next-request resolution far more often than routing itself runs, and a
+ * prediction re-runs the `when` commands and registry lookups; within the TTL
+ * window a repeated key reuses the first answer. Callers fold the state that
+ * may change (session, class, cooldown generation) into the key so a change
+ * predicts fresh immediately. `now` is injectable for tests.
+ */
+export interface PredictionCache {
+  read(key: string, run: () => Promise<string | undefined>): Promise<string | undefined>;
+}
+
+export function createPredictionCache(
+  ttlMs: number,
+  now: () => number = Date.now,
+): PredictionCache {
+  const entries = new Map<string, { at: number; value: Promise<string | undefined> }>();
+  return {
+    read(key, run) {
+      const at = now();
+      const cached = entries.get(key);
+      if (cached && at - cached.at < ttlMs) return cached.value;
+      const value = run();
+      entries.set(key, { at, value });
+      // Opportunistic eviction so a long-lived process cannot accumulate one
+      // dead key per class/cooldown generation.
+      if (entries.size > 64) {
+        for (const [staleKey, stale] of entries) {
+          if (at - stale.at >= ttlMs) entries.delete(staleKey);
+        }
+      }
+      return value;
+    },
+  };
+}
+
 // The first candidate (top-to-bottom) whose model exists in the registry, is
 // not cooling down, and whose `when` passes. Registry existence and `when`
 // evaluation are injected so this stays testable without dsh services.

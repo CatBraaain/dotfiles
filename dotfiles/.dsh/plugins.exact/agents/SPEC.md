@@ -213,21 +213,23 @@ dsh web UI の composer 直上（input dock）に、現在の agent と実効 cl
 
 ```text
 🤖 agent: <currentAgent>
-💎 class: <class-name> (auto:<resolved-model>)
+💎 class: <class-name> (auto: <model>)
 ```
 
-行ボタンは hover で本家ボタンと同じ interactive hover fill（`--dsw-alias-interactive-bg-hover`）を表示する。
+行ボタンは hover で本家ボタンと同じ interactive hover fill（`--dsw-alias-interactive-bg-hover`）を表示する。2 つの行ボタンはそれぞれ dock 行と同じ中央バンドに入り、行間は composer stack の dock 行間と同じリズムとする。
 
-手動状態（本家 `/model` による手動モデル選択が効いている間）のときは class 行の括弧内は `manual:<resolved-model>` になる。`<resolved-model>` は直近のモデルリクエストで解決した route の model 名で、コロン前後・class 名との区切りはスペース 1 つとする。最初の turn 前（idle session）など解決済み route が無いときはモデル名を省略し `(auto)` / `(manual)` とだけ表示する。
+auto 状態（手動モデル選択が効いていない間）のときは class 行の括弧内は `auto: <model>` になり、`<model>` は次のモデルリクエストで解決される見込みの model 名である。見込みは実効 class の候補を解決済み route と同じ規則（route 解決・cooldown・`when`）で先頭から評価したもので、評価は短い TTL キャッシュで間引かれる。全候補が不成立で見込みを得られないときは `<model>` を省略し `auto` とだけ表示する。
 
-agent 行ボタンをクリックすると agents.yaml の agent 名一覧、class 行ボタンをクリックすると class 名一覧の選択メニュー（本家 `@deepseek-ai/dsh-client-ui-primitives` の Menu による popover）が開く。メニューは外側クリック・Escape で閉じる。メニューからの選択は `/agent <name>`・`/class <name>` と同一の適用経路を通る（agent 切替では実効 class リセット、手動選択解除、ツール・persona 付け替えを含む）。
+手動状態（本家 `/model` による手動モデル選択が効いている間）のときは class 行の括弧内は `manual: <model>` になり、`<model>` は直近のモデルリクエストで解決した route の model 名である。解決済み route が無いときは `manual` とだけ表示する。コロンの後ろの区切りはスペース 1 つとする。
+
+agent 行ボタンをクリックすると agents.yaml の agent 名一覧、class 行ボタンをクリックすると class 名一覧の選択メニュー（本家 `@deepseek-ai/dsh-client-ui-primitives` の Menu による popover）が開く。メニューは外側クリック・Escape で閉じる。live agent を持つ session での選択は `/agent <name>`・`/class <name>` と同一の適用経路を通る（agent 切替では実効 class リセット、手動選択解除、ツール・persona 付け替えを含む）。live agent をまだ持たない root session（idle session）での選択は、未適用の選択（pending selection）として記録され、表示がただちに切り替わる。記録された選択は、その session が最初の turn で live agent を持つときに同じ付け替えで適用される。agent 選択は記録済みの class 選択を、class 選択は記録済みの agent 選択を維持する。名前が設定に存在しない場合は live と同じエラー応答になり、何も記録しない。子 session は選択できず `ok: false` で応答する（表示はそのまま）。
 
 | 項目             | 内容と振る舞い                                                                                                                                                             |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状態の配信       | host 側が本家 `dsh-client-connection` の `/api` channel 上に exact Fetch route `POST /api/dsh-agents/state` を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual, model?, agents, classes }` を返す。`model` は解決済み route の model 名（解決前に省略）、`agents`/`classes` は agents.yaml の agent 名・class 名一覧。durable な session log には書き込まず、メモリ上の状態を応答する |
-| 選択の適用       | host 側が同じ `/api` channel 上に exact Fetch route `POST /api/dsh-agents/select` を登録し、`{ sessionId, kind: "agent" \| "class", name }` に対して `{ ok, text }` を返す。適用は `/agent`・`/class` コマンドと同一の内部経路（class リセット・手動選択解除・ツール/persona 付け替え）を通る |
+| 状態の配信       | host 側が本家 `dsh-client-connection` の `/api` channel 上に exact Fetch route `POST /api/dsh-agents/state` を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual, model?, agents, classes }` を返す。`model` は auto のとき次リクエストで解決される見込み model、manual のとき解決済み route の model 名（いずれも得られないとき省略）、`agents`/`classes` は agents.yaml の agent 名・class 名一覧。durable な session log には書き込まず、メモリ上の状態を応答する |
+| 選択の適用       | host 側が同じ `/api` channel 上に exact Fetch route `POST /api/dsh-agents/select` を登録し、`{ sessionId, kind: "agent" \| "class", name }` に対して `{ ok, text }` を返す。live agent を持つ session では適用は `/agent`・`/class` コマンドと同一の内部経路（class リセット・手動選択解除・ツール/persona 付け替え）を通る。idle の root session では選択を pending selection として記録する |
 | 表示の更新       | client half が 2 秒間隔で状態を取得し、取得に失敗したときは直前の表示を維持する。メニューからの選択が host に受け付けられたときは即座に再取得して表示を切り替える。拒否されたときは表示を変えず、次の取得周期で host 側の状態に戻る |
-| 選択できない session | idle session は live agent を持たないため選択に `ok: false` で応答する（表示はそのまま）。メニュー選択は live agent を持つ session でのみ有効 |
+| 選択の適用先     | live agent を持つ root session では即時に適用する。idle の root session では pending selection として記録し、最初の turn で live agent が作られるときに適用する。子 session では `ok: false` で拒否する（表示はそのまま） |
 | 未管理 session   | 本 plugin が管理しない session（plugin 無効、`agents.yaml` 不正、子 session など）では何も表示しない                                                                      |
 | 表示しない環境   | web UI 以外の profile（headless、sdk など）では client half が読み込まれないため表示は出ない。routing・フォールバックなどの host 側の動作は同じ                                    |
 

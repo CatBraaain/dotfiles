@@ -32,19 +32,16 @@ const POLL_INTERVAL_MS = 2000;
 
 /**
  * Dock row band, the first-party convention (TodoPanel / skill-status): a
- * centered band as wide as the composer card, so the agent/class rows sit
- * aligned on top of the `🎯 skills:` row instead of hugging the dock's left
- * edge. The column keeps each Menu's inline-flex trigger span at content
- * width, stacking the two selector rows.
+ * centered band as wide as the composer card. Each selector row gets its own
+ * band and the wrapper is `display: contents`, so the two rows are direct
+ * flex children of the composer stack: the stack's own gap (whatever the
+ * variant or theme sets) spaces agent ↔ class ↔ skills identically.
  */
-const DISPLAY_STYLE: Readonly<Record<string, string>> = {
+const ROW_BAND_STYLE: Readonly<Record<string, string>> = {
   boxSizing: "border-box",
   width: "calc(100% - var(--dsh-composer-side-clearance) * 2 - var(--dsh-composer-dock-inset) * 4)",
   maxWidth: "calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) * 4)",
   margin: "0 auto",
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-start",
   color: "var(--dsw-alias-label-tertiary)",
   fontSize: "var(--dsh-content-font-size-secondary, 13px)",
   lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))",
@@ -164,24 +161,34 @@ function AgentClassDisplay({
     }
   };
 
+  // `display: contents` hands the two row bands to the composer stack, so
+  // the stack's own gap spaces them exactly like the neighboring dock rows.
   return createElement(
     "div",
-    { style: DISPLAY_STYLE },
-    createElement(SelectorMenu, {
-      label: agentLabel,
-      title: "Select agent",
-      names: state.agents ?? [],
-      selected: state.agent,
-      onPick: (name: string) => void pick("agent", name),
-    }),
-    classLabel !== undefined &&
+    { style: { display: "contents" } },
+    createElement(
+      "div",
+      { style: ROW_BAND_STYLE },
       createElement(SelectorMenu, {
-        label: classLabel,
-        title: "Select class",
-        names: state.classes ?? [],
-        selected: state.className,
-        onPick: (name: string) => void pick("class", name),
+        label: agentLabel,
+        title: "Select agent",
+        names: state.agents ?? [],
+        selected: state.agent,
+        onPick: (name: string) => void pick("agent", name),
       }),
+    ),
+    classLabel !== undefined &&
+      createElement(
+        "div",
+        { style: ROW_BAND_STYLE },
+        createElement(SelectorMenu, {
+          label: classLabel,
+          title: "Select class",
+          names: state.classes ?? [],
+          selected: state.className,
+          onPick: (name: string) => void pick("class", name),
+        }),
+      ),
   );
 }
 

@@ -93,7 +93,7 @@ function classLineLabel(state) {
     return;
   }
   const mode = state.manual === true ? "manual" : "auto";
-  const detail = state.model !== undefined ? `${mode}:${state.model}` : mode;
+  const detail = state.model !== undefined ? `${mode}: ${state.model}` : mode;
   return `\uD83D\uDC8E class: ${state.className} (${detail})`;
 }
 function stringArray(value) {
@@ -166,14 +166,11 @@ function createSelectSender(doFetch) {
 // src/client/index.ts
 var inject = ["slots"];
 var POLL_INTERVAL_MS = 2000;
-var DISPLAY_STYLE = {
+var ROW_BAND_STYLE = {
   boxSizing: "border-box",
   width: "calc(100% - var(--dsh-composer-side-clearance) * 2 - var(--dsh-composer-dock-inset) * 4)",
   maxWidth: "calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) * 4)",
   margin: "0 auto",
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-start",
   color: "var(--dsw-alias-label-tertiary)",
   fontSize: "var(--dsh-content-font-size-secondary, 13px)",
   lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))"
@@ -246,19 +243,19 @@ function AgentClassDisplay({
       setState(await fetchState(sessionId));
     } catch {}
   };
-  return import_react.createElement("div", { style: DISPLAY_STYLE }, import_react.createElement(SelectorMenu, {
+  return import_react.createElement("div", { style: { display: "contents" } }, import_react.createElement("div", { style: ROW_BAND_STYLE }, import_react.createElement(SelectorMenu, {
     label: agentLabel,
     title: "Select agent",
     names: state.agents ?? [],
     selected: state.agent,
     onPick: (name) => void pick("agent", name)
-  }), classLabel !== undefined && import_react.createElement(SelectorMenu, {
+  })), classLabel !== undefined && import_react.createElement("div", { style: ROW_BAND_STYLE }, import_react.createElement(SelectorMenu, {
     label: classLabel,
     title: "Select class",
     names: state.classes ?? [],
     selected: state.className,
     onPick: (name) => void pick("class", name)
-  }));
+  })));
 }
 function apply(ctx) {
   const style = document.createElement("style");

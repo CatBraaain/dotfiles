@@ -22,17 +22,18 @@ export function agentLineLabel(state: AgentDisplayState): string | undefined {
 }
 
 /**
- * The class row's trigger label: `💎 class: <name> (<mode>[:<model>])` where
- * mode is `auto` or `manual` and the model is the resolved route's — omitted
- * before the first resolution (an idle session). Undefined when the managed
- * state carries no class (the row does not render).
+ * The class row's trigger label: `💎 class: <name> (<mode>: <model>)` where
+ * mode is `auto` or `manual` and the model is what the next request would
+ * resolve to (auto) or the resolved route (manual) — omitted when neither is
+ * available. Undefined when the managed state carries no class (the row does
+ * not render).
  */
 export function classLineLabel(state: AgentDisplayState): string | undefined {
   if (!state.managed || state.agent === undefined || state.className === undefined) {
     return undefined;
   }
   const mode = state.manual === true ? "manual" : "auto";
-  const detail = state.model !== undefined ? `${mode}:${state.model}` : mode;
+  const detail = state.model !== undefined ? `${mode}: ${state.model}` : mode;
   return `💎 class: ${state.className} (${detail})`;
 }
 

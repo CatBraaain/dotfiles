@@ -45,6 +45,7 @@ import {
   DEFAULT_COOLDOWN_MS,
   WHEN_TIMEOUT_MS,
   cooldownMs,
+  createPredictionCache,
   isCoolingDown,
   isRateLimitFailure,
   modelKey,
@@ -60,9 +61,13 @@ import {
   buildStatePayload,
   isDisplayedAgent,
   isRootSessionHeader,
+  mergePendingSelection,
   parseSelectRequest,
   parseStateRequest,
+  resolveStartSelection,
   type AgentStatePayload,
+  type IdleDisplay,
+  type PendingSelection,
   type SelectOutcome,
 } from "./state-rpc.ts";
 
@@ -101,6 +106,9 @@ interface AgentState {
   agentName: string;
   effectiveClass: string;
   cooldowns: Map<string, number>;
+  /** Bumped whenever a cooldown is recorded so cached display predictions
+   *  (keyed on it) re-evaluate immediately after a 429 fallback. */
+  cooldownEpoch: number;
   manualSelect: boolean;
   slots: SubagentSlots;
   /** Route resolved by the most recent `agent/request` (cooldown key source). */
@@ -193,6 +201,51 @@ export function apply(ctx: Context) {
       Date.now(),
     );
 
+  // ---- display prediction (the browser poll's auto model) -----------------
+  // The auto display shows the model the next request would resolve to: the
+  // first valid candidate of the effective class under the same rules as
+  // routing. Predictions re-run `when` commands and registry lookups, so they
+  // are cached per session/class/cooldown generation for a short window; the
+  // poll therefore stays cheap in steady state while a switch, a /reload, or
+  // a 429 fallback (new class or epoch in the key) is reflected immediately.
+  const predictionCache = createPredictionCache(10_000);
+  const predictDisplayModel = (
+    cacheKey: string,
+    className: string,
+    cooldowns: Map<string, number>,
+    cooldownEpoch: number,
+  ): Promise<string | undefined> =>
+    predictionCache.read(`${cacheKey}|${className}|${cooldownEpoch}`, () =>
+      pickCandidate(
+        config.classes[className] ?? [],
+        cooldowns,
+        modelExists,
+        (when) => evalWhen(when),
+        Date.now(),
+      ).then((picked) => picked?.model),
+    );
+
+  // Idle-session picks (see the select route below): one entry per root
+  // session, consumed when the session's first live agent is created.
+  const pendingSelections = new Map<string, PendingSelection>();
+
+  // What an idle root session displays: its pending pick (or the process
+  // initial agent/class) plus the model its first turn would resolve to.
+  const idleDisplayFor = async (sessionId: string): Promise<IdleDisplay> => {
+    const start = resolveStartSelection(
+      pendingSelections.get(sessionId),
+      config,
+      initialAgent,
+      initialClass,
+    );
+    const model = await predictDisplayModel(`idle:${start.className}`, start.className, new Map(), 0);
+    return {
+      agent: start.agentName,
+      className: start.className,
+      ...(model !== undefined ? { model } : {}),
+    };
+  };
+
   // One tool filter for both `tools.restrict` (root agents) and `toolFilter`
   // (one-shot children): translate the pi list, hide the stock delegation
   // tools, and keep the plugin's `subagent` visible for delegating agents.
@@ -270,6 +323,7 @@ export function apply(ctx: Context) {
         agentName: childName,
         effectiveClass: definition.class,
         cooldowns: new Map<string, number>(),
+        cooldownEpoch: 0,
         manualSelect: false,
         slots: new SubagentSlots(),
         lastRoute: undefined,
@@ -444,14 +498,19 @@ export function apply(ctx: Context) {
   };
 
   ctx.on("agent/created", ({ agent }) => {
-    // Root agents adopt the initial agent; one-shot children are registered
-    // by spawnSubagent (their sessions carry origin: 'subagent').
+    // Root agents adopt the initial agent, overridden by an idle-session
+    // pick recorded before the session's first turn; one-shot children are
+    // registered by spawnSubagent (their sessions carry origin: 'subagent').
     if (agent.session.header.origin === "subagent") return;
     if (states.has(agent)) return;
+    const pending = pendingSelections.get(agent.session.id);
+    pendingSelections.delete(agent.session.id);
+    const start = resolveStartSelection(pending, config, initialAgent, initialClass);
     const state: AgentState = {
-      agentName: initialAgent,
-      effectiveClass: initialClass,
+      agentName: start.agentName,
+      effectiveClass: start.className,
       cooldowns: new Map<string, number>(),
+      cooldownEpoch: 0,
       manualSelect: false,
       slots: new SubagentSlots(),
       lastRoute: undefined,
@@ -459,7 +518,7 @@ export function apply(ctx: Context) {
       imageShadow: undefined,
     };
     states.set(agent, state);
-    applyDefinition(agent, state, initialAgent);
+    applyDefinition(agent, state, start.agentName);
     // Manual /model selections suspend auto routing (pi "manual" state) until
     // the next `/agent` or `/class` switch clears the flag.
     agent.ctx.on("session/event", (_session, event) => {
@@ -522,6 +581,8 @@ export function apply(ctx: Context) {
       cooldownMs(payload.failure) || DEFAULT_COOLDOWN_MS,
       Date.now(),
     );
+    // Cached display predictions must not keep showing the cooled-down model.
+    state.cooldownEpoch++;
     // Pre-evaluate the next live candidate: retry only when a fallback exists
     // (pi parity — otherwise the failure stays terminal).
     const picked = await pickForClass(state, payload.signal);
@@ -691,22 +752,47 @@ export function apply(ctx: Context) {
   };
   // spawnSubagent transiently registers one-shot children in `states` for
   // routing; the display RPC must still answer as if only roots existed.
-  const stateForSession = async (sessionId: string | undefined): Promise<AgentStatePayload> =>
-    buildStatePayload(
+  const stateForSession = async (sessionId: string | undefined): Promise<AgentStatePayload> => {
+    const rootIds = await rootSessionIds();
+    // Auto display shows the predicted next-request model (see the note above
+    // predictDisplayModel); manual keeps its resolved route.
+    const entries = await Promise.all(
       [...states]
         .filter(([managedAgent]) => isDisplayedAgent(managedAgent))
-        .map(([managedAgent, state]) => ({
-          sessionId: managedAgent.session.id,
-          agentName: state.agentName,
-          effectiveClass: state.effectiveClass,
-          manualSelect: state.manualSelect,
-          ...(state.lastRoute !== undefined ? { model: state.lastRoute.model } : {}),
-        })),
-      await rootSessionIds(),
-      { agent: initialAgent, className: initialClass },
+        .map(async ([managedAgent, state]) => {
+          const model = state.manualSelect
+            ? state.lastRoute?.model
+            : await predictDisplayModel(
+                managedAgent.session.id,
+                state.effectiveClass,
+                state.cooldowns,
+                state.cooldownEpoch,
+              );
+          return {
+            sessionId: managedAgent.session.id,
+            agentName: state.agentName,
+            effectiveClass: state.effectiveClass,
+            manualSelect: state.manualSelect,
+            ...(model !== undefined ? { model } : {}),
+          };
+        }),
+    );
+    // An idle root session displays its pending (or initial) selection; skip
+    // the idle prediction when a live entry already answers for the session.
+    const idle =
+      sessionId !== undefined &&
+      rootIds.has(sessionId) &&
+      !entries.some((candidate) => candidate.sessionId === sessionId)
+        ? await idleDisplayFor(sessionId)
+        : undefined;
+    return buildStatePayload(
+      entries,
+      rootIds,
       { agents: Object.keys(config.agents), classes: Object.keys(config.classes) },
       sessionId,
+      idle,
     );
+  };
   // Exact Fetch routes on the /api channel. dsh rc.2 gives the shared-channel
   // RPC interceptor to the stock typert gateway, so plugins must not call
   // `connection.rpc.intercept` themselves; an exact route keeps the same
@@ -726,8 +812,10 @@ export function apply(ctx: Context) {
   };
   // Selection write path for the selector menus: resolves the session's live
   // root agent, then applies the pick through the same switch points as
-  // `/agent <name>` / `/class <name>`. Idle sessions have no live agent yet
-  // (dsh creates it lazily on first use), so their picks fail politely.
+  // `/agent <name>` / `/class <name>`. A root session with no live agent yet
+  // (dsh creates it lazily on first use) records the pick as pending: the
+  // display switches immediately and the selection applies when the session's
+  // first turn creates its agent. Child sessions stay rejected politely.
   const selectRoute: ConnectionFetchRoute = {
     path: AGENTS_SELECT_PATH,
     methods: ["POST"],
@@ -746,6 +834,32 @@ export function apply(ctx: Context) {
           isDisplayedAgent(managedAgent) && managedAgent.session.id === selection.sessionId,
       );
       if (!found) {
+        // A root session with no live agent yet records the pick as pending;
+        // unknown names fail with the same error as the live path. Child
+        // sessions are not selectable.
+        const id = selection.sessionId;
+        if (id !== undefined && (await rootSessionIds()).has(id)) {
+          if (selection.kind === "agent" && !config.agents[selection.name]) {
+            return Response.json({
+              ok: false,
+              text: `unknown agent: ${selection.name} (available: ${availableAgents()})`,
+            });
+          }
+          if (selection.kind === "class" && !(selection.name in config.classes)) {
+            return Response.json({
+              ok: false,
+              text: `unknown class: ${selection.name} (available: ${availableClasses()})`,
+            });
+          }
+          pendingSelections.set(
+            id,
+            mergePendingSelection(pendingSelections.get(id), selection.kind, selection.name),
+          );
+          return Response.json({
+            ok: true,
+            text: `${selection.kind} → ${selection.name} (applies when the session starts)`,
+          });
+        }
         return Response.json({
           ok: false,
           text: "dsh-agents does not manage this session (no live agent)",

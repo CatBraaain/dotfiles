@@ -36,9 +36,9 @@ fixture は1画面に確認観点ごとのパターン（case 1〜9）を並べ�
 | 4. session-list — workspace groups | ヘッダー（Workspaces ラベル + Add workspace アイコン）。登録済み workspace 単位のグループヘッダー行（フォルダーアイコン + タイトル、current グループは business 色フォルダー）。各行は status dot（running=青マトリクス / pending=橙 / done=緑 / idle=gray）+ タイトル + 相対時刻。current 行はハイライト。折りたたみ上限超過のグループは `Show n more sessions`。未所属セッションは Ungrouped バケット | dot の色分け、時刻の bucket（1min / 3h / 2d / 1mo）、グループごとの空気（4px）、hover actions のフラット配置。light / dark 両方で読めること |
 | 5. session-list — blank current | 選択中の blank 行は所属グループの中で相対時刻なし・actions なしで表示される | 行の高さ・位置が通常行と揃い、右端に何も出ないこと |
 | 6. session-list — empty | セッションが無いときは空の領域（ヘッダーは残る） | リスト領域が空で、エラーや余計な表示が出ないこと |
-| 7. agents — auto class | agent 行 `🤖 agent: <name>` と class 行 `💎 class: <name> (auto:<model>)` の2行ボタン（メニュー閉状態）。文字色 gray | 2行の書式（コロン前後スペースなし、model は `auto:` に続く）、gray で読めること。行は入力欄カードの上。2行は縦に積まれ、中央バンド（case 1〜3 の `🎯 skills:` 行と同じ幅・中央寄せ）に左揃えで置かれること |
-| 8. agents — manual class | 手動選択中は `(manual:<model>)` | `manual:` 表記と model 名。agent 行も切替後の名前になること |
-| 9. agents — idle session | 初回 turn 前（解決済み route なし）は `(auto)` のみ | model 名が付かずモードだけの表記。初期 agent/class が表示されること |
+| 7. agents — auto class | agent 行 `🤖 agent: <name>` と class 行 `💎 class: <name> (auto: <model>)` の2行ボタン（メニュー閉状態）。文字色 gray | 2行の書式（コロンの後ろはスペース1つ、model は `auto: ` に続く）、gray で読めること。行は入力欄カードの上。2行は縦に積まれ、行間は dock の行間と同じリズムであること。中央バンド（case 1〜3 の `🎯 skills:` 行と同じ幅・中央寄せ）に左揃えで置かれること |
+| 8. agents — manual class | 手動選択中は `(manual: <model>)` | `manual: ` 表記と model 名。agent 行も切替後の名前になること |
+| 9. agents — idle session | 見込み model を解決できないときは `(auto)` のみ | model 名が付かずモードだけの表記。初期 agent/class が表示されること |
 | light / dark 両方 | gray は light / dark で別の token 値 | どちらのテーマでも読めること（黒や白に潰れない） |
 
 VLM に依頼するときは、dist/fixture.png と dist/fixture-dark.png の2枚に、上の表と「各 case のラベル番号に沿って PASS/FAIL と根拠を返す」ことだけ伝えれば判定できる。

@@ -21,7 +21,7 @@ describe("agentLineLabel", () => {
 });
 
 describe("classLineLabel", () => {
-  it("renders the auto mode with the resolved model", () => {
+  it("renders the auto mode with the predicted model", () => {
     assert.equal(
       classLineLabel({
         managed: true,
@@ -30,7 +30,7 @@ describe("classLineLabel", () => {
         manual: false,
         model: "glm-5.3-flash",
       }),
-      "💎 class: middle (auto:glm-5.3-flash)",
+      "💎 class: middle (auto: glm-5.3-flash)",
     );
   });
 
@@ -43,11 +43,11 @@ describe("classLineLabel", () => {
         manual: true,
         model: "glm-5.3",
       }),
-      "💎 class: low (manual:glm-5.3)",
+      "💎 class: low (manual: glm-5.3)",
     );
   });
 
-  it("omits the model before the first route resolution", () => {
+  it("omits the model when the host resolved none", () => {
     assert.equal(
       classLineLabel({ managed: true, agent: "main", className: "high", manual: false }),
       "💎 class: high (auto)",

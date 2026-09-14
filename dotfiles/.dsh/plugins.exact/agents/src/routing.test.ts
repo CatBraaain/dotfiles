@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_COOLDOWN_MS,
   cooldownMs,
+  createPredictionCache,
   isCoolingDown,
   isRateLimitFailure,
   modelKey,
@@ -93,5 +94,55 @@ describe("pickCandidate", () => {
 
     const none = await pickCandidate(candidates(), new Map(), always, never, 0);
     assert.equal(none, null);
+  });
+});
+
+describe("createPredictionCache", () => {
+  it("reuses the first answer for the same key within the TTL", async () => {
+    let clock = 0;
+    let runs = 0;
+    const cache = createPredictionCache(10_000, () => clock);
+    const run = async (): Promise<string | undefined> => {
+      runs++;
+      return "m1";
+    };
+    assert.equal(await cache.read("k", run), "m1");
+    clock = 5_000;
+    assert.equal(await cache.read("k", run), "m1");
+    assert.equal(runs, 1);
+  });
+
+  it("re-runs after the TTL window passed", async () => {
+    let clock = 0;
+    let runs = 0;
+    const cache = createPredictionCache(10_000, () => clock);
+    const run = async (): Promise<string | undefined> => {
+      runs++;
+      return `m${runs}`;
+    };
+    assert.equal(await cache.read("k", run), "m1");
+    clock = 10_000;
+    assert.equal(await cache.read("k", run), "m2");
+  });
+
+  it("treats a new key as a fresh prediction immediately", async () => {
+    let clock = 0;
+    const cache = createPredictionCache(10_000, () => clock);
+    assert.equal(await cache.read("a", async () => "m1"), "m1");
+    assert.equal(await cache.read("b", async () => "m2"), "m2");
+  });
+
+  it("caches undefined answers within the TTL", async () => {
+    let clock = 0;
+    let runs = 0;
+    const cache = createPredictionCache(10_000, () => clock);
+    const run = async (): Promise<string | undefined> => {
+      runs++;
+      return undefined;
+    };
+    assert.equal(await cache.read("k", run), undefined);
+    clock = 5_000;
+    assert.equal(await cache.read("k", run), undefined);
+    assert.equal(runs, 1);
   });
 });

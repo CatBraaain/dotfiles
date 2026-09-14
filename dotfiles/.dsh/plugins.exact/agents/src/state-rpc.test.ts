@@ -4,8 +4,10 @@ import {
   buildStatePayload,
   isDisplayedAgent,
   isRootSessionHeader,
+  mergePendingSelection,
   parseSelectRequest,
   parseStateRequest,
+  resolveStartSelection,
   type ManagedStateEntry,
 } from "./state-rpc.ts";
 
@@ -24,9 +26,6 @@ const entries: readonly ManagedStateEntry[] = [
     manualSelect: true,
   },
 ];
-
-/** The selectable vocabulary every managed answer carries. */
-const choices = { agents: ["main", "senior", "junior"], classes: ["high", "middle", "low"] };
 
 describe("parseStateRequest", () => {
   it("accepts a payload with a session id", () => {
@@ -78,11 +77,12 @@ describe("isRootSessionHeader", () => {
 
 describe("buildStatePayload", () => {
   const rootIds = new Set(["s-idle", "s-main", "s-chat"]);
-  const initial = { agent: "main", className: "high" };
-  const payload = (sessionId: string | undefined) =>
-    buildStatePayload(entries, rootIds, initial, choices, sessionId);
+  const choices = { agents: ["main", "senior", "junior"], classes: ["high", "middle", "low"] };
+  const idle = { agent: "main", className: "high", model: "glm-4.7" };
+  const payload = (sessionId: string | undefined, idleDisplay: typeof idle | undefined = idle) =>
+    buildStatePayload(entries, rootIds, choices, sessionId, idleDisplay);
 
-  it("returns the managed display state with the resolved model and menu vocabularies", () => {
+  it("returns the managed display state with the display model and menu vocabularies", () => {
     assert.deepEqual(payload("s-main"), {
       managed: true,
       agent: "main",
@@ -94,7 +94,7 @@ describe("buildStatePayload", () => {
     });
   });
 
-  it("omits the model before the first route resolution", () => {
+  it("omits the model when the display has none (manual before its first request)", () => {
     assert.equal("model" in payload("s-chat"), false);
   });
 
@@ -109,14 +109,33 @@ describe("buildStatePayload", () => {
     });
   });
 
-  it("shows the initial agent/class (no model) for an idle top-level session", () => {
+  it("shows the caller-resolved idle display (with model) for an idle top-level session", () => {
     assert.deepEqual(payload("s-idle"), {
       managed: true,
       agent: "main",
       className: "high",
       manual: false,
+      model: "glm-4.7",
       agents: ["main", "senior", "junior"],
       classes: ["high", "middle", "low"],
+    });
+  });
+
+  it("prefers a live entry over the idle display", () => {
+    assert.deepEqual(payload("s-main"), {
+      managed: true,
+      agent: "main",
+      className: "middle",
+      manual: false,
+      model: "glm-5.3-flash",
+      agents: ["main", "senior", "junior"],
+      classes: ["high", "middle", "low"],
+    });
+  });
+
+  it("returns unmanaged for a root session when the caller resolved no idle display", () => {
+    assert.deepEqual(buildStatePayload(entries, rootIds, choices, "s-idle", undefined), {
+      managed: false,
     });
   });
 
@@ -126,6 +145,86 @@ describe("buildStatePayload", () => {
 
   it("returns unmanaged when no session id was requested", () => {
     assert.deepEqual(payload(undefined), { managed: false });
+  });
+});
+
+describe("mergePendingSelection", () => {
+  it("stores an agent pick alone: the agent's default class applies", () => {
+    assert.deepEqual(
+      mergePendingSelection({ agentName: "junior", className: "low" }, "agent", "senior"),
+      { agentName: "senior" },
+    );
+  });
+
+  it("folds a class pick into a pending agent pick", () => {
+    assert.deepEqual(mergePendingSelection({ agentName: "junior" }, "class", "low"), {
+      agentName: "junior",
+      className: "low",
+    });
+  });
+
+  it("stores a class pick without a pending agent", () => {
+    assert.deepEqual(mergePendingSelection(undefined, "class", "low"), { className: "low" });
+  });
+});
+
+describe("resolveStartSelection", () => {
+  const config = {
+    default: "main",
+    agents: {
+      main: { class: "high", tools: [], subagents: [], systemPrompt: [] },
+      senior: { class: "middle", tools: [], subagents: [], systemPrompt: [] },
+    },
+    classes: { high: [], middle: [], low: [] },
+  };
+
+  it("falls back to the initial agent/class without a pending pick", () => {
+    assert.deepEqual(resolveStartSelection(undefined, config, "main", "high"), {
+      agentName: "main",
+      className: "high",
+    });
+  });
+
+  it("keeps a --class flag initial class when no pending pick exists", () => {
+    assert.deepEqual(resolveStartSelection(undefined, config, "main", "low"), {
+      agentName: "main",
+      className: "low",
+    });
+  });
+
+  it("starts a pending agent with its default class", () => {
+    assert.deepEqual(resolveStartSelection({ agentName: "senior" }, config, "main", "high"), {
+      agentName: "senior",
+      className: "middle",
+    });
+  });
+
+  it("starts a pending agent with a pending class override", () => {
+    assert.deepEqual(
+      resolveStartSelection({ agentName: "senior", className: "low" }, config, "main", "high"),
+      { agentName: "senior", className: "low" },
+    );
+  });
+
+  it("applies a class-only pending pick to the initial agent", () => {
+    assert.deepEqual(resolveStartSelection({ className: "low" }, config, "main", "high"), {
+      agentName: "main",
+      className: "low",
+    });
+  });
+
+  it("falls back to the initials when the pending agent vanished from the config", () => {
+    assert.deepEqual(resolveStartSelection({ agentName: "ghost" }, config, "main", "low"), {
+      agentName: "main",
+      className: "low",
+    });
+  });
+
+  it("falls back to the agent's default class when the pending class vanished", () => {
+    assert.deepEqual(
+      resolveStartSelection({ agentName: "senior", className: "ghost" }, config, "main", "high"),
+      { agentName: "senior", className: "middle" },
+    );
   });
 });
 

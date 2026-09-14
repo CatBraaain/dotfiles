@@ -3,6 +3,7 @@
 // (POST; same trust + browser-auth fence as the shared RPC channel);
 // these functions define the wire payload and are shared by both halves.
 // Kept free of dsh types so the adjacent test runs without them.
+import type { AgentsConfig } from "./config.ts";
 
 /** Absolute path this plugin claims on the `/api` channel (state read). */
 export const AGENTS_STATE_PATH = "/api/dsh-agents/state";
@@ -113,28 +114,86 @@ export interface ManagedStateEntry {
   readonly agentName: string;
   readonly effectiveClass: string;
   readonly manualSelect: boolean;
-  /** Model of the route resolved by the most recent request; omitted before any. */
+  /** Display model: the manual route while manual, the predicted next-request
+   *  model otherwise; omitted when neither is available. */
   readonly model?: string;
 }
 
-/** The agent/class a session runs with before its first turn (config defaults). */
-export interface InitialDisplay {
+/** The agent/class (and predicted model) an idle top-level session displays
+ *  before its first turn: the config defaults, overridden by a pending pick. */
+export interface IdleDisplay {
   readonly agent: string;
   readonly className: string;
+  /** Model the first turn would resolve to; omitted when none is available. */
+  readonly model?: string;
+}
+
+/** A selector pick recorded for a session that has no live agent yet. */
+export interface PendingSelection {
+  readonly agentName?: string;
+  readonly className?: string;
+}
+
+/**
+ * Fold one idle-session menu pick into the session's pending selection. An
+ * agent pick replaces the agent and resets the class (the `/agent` switch
+ * semantics); a class pick overrides the class and keeps a pending agent.
+ */
+export function mergePendingSelection(
+  current: PendingSelection | undefined,
+  kind: SelectKind,
+  name: string,
+): PendingSelection {
+  if (kind === "agent") return { agentName: name };
+  return {
+    ...(current?.agentName !== undefined ? { agentName: current.agentName } : {}),
+    className: name,
+  };
+}
+
+/**
+ * Resolve a pending pick into the start state for the session's next live
+ * agent: known names win, unknown or absent ones fall back to the process
+ * initial agent/class (the `--agent` / `--class` flags included). A pending
+ * agent starts with its own default class unless a pending class overrides
+ * it; a class-only pick applies to the initial agent.
+ */
+export function resolveStartSelection(
+  pending: PendingSelection | undefined,
+  config: Pick<AgentsConfig, "agents" | "classes">,
+  initialAgent: string,
+  initialClass: string,
+): { agentName: string; className: string } {
+  if (pending === undefined) return { agentName: initialAgent, className: initialClass };
+  const pendingClass =
+    pending.className !== undefined && pending.className in config.classes
+      ? pending.className
+      : undefined;
+  if (pending.agentName === undefined || config.agents[pending.agentName] === undefined) {
+    return {
+      agentName: initialAgent,
+      className: pendingClass ?? initialClass,
+    };
+  }
+  return {
+    agentName: pending.agentName,
+    className: pendingClass ?? config.agents[pending.agentName].class,
+  };
 }
 
 /**
  * Build the display payload for one session. Live agents win; otherwise a
- * known top-level session shows the initial agent/class: dsh resumes an agent
- * lazily on first use, so an idle session has no live agent yet while its
- * first turn would still run the initial agent/class.
+ * known top-level session shows the caller-resolved idle display (config
+ * defaults overridden by a pending pick, with the predicted model): dsh
+ * resumes an agent lazily on first use, so an idle session has no live agent
+ * yet while its first turn would still run that agent/class.
  */
 export function buildStatePayload(
   entries: readonly ManagedStateEntry[],
   rootSessionIds: ReadonlySet<string>,
-  initial: InitialDisplay,
   choices: SelectionChoices,
   sessionId: string | undefined,
+  idle: IdleDisplay | undefined,
 ): AgentStatePayload {
   if (sessionId === undefined) return { managed: false };
   const entry = entries.find((candidate) => candidate.sessionId === sessionId);
@@ -149,12 +208,13 @@ export function buildStatePayload(
       classes: choices.classes,
     };
   }
-  if (rootSessionIds.has(sessionId)) {
+  if (idle !== undefined && rootSessionIds.has(sessionId)) {
     return {
       managed: true,
-      agent: initial.agent,
-      className: initial.className,
+      agent: idle.agent,
+      className: idle.className,
       manual: false,
+      ...(idle.model !== undefined ? { model: idle.model } : {}),
       agents: choices.agents,
       classes: choices.classes,
     };
