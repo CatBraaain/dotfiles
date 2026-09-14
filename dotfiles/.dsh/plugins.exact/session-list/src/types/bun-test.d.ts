@@ -10,6 +10,7 @@
 declare module "bun:test" {
   export function describe(name: string, fn: () => void): void;
   export function it(name: string, fn: () => void): void;
+  export const mock: { module(name: string, factory: () => unknown): void };
 }
 
 declare module "node:assert/strict" {

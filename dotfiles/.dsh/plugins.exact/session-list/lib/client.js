@@ -223,6 +223,10 @@ function createSessionList(deps) {
         onToggle: () => {
           setCollapsedKeys((keys) => keys.includes(group.key) ? keys.filter((candidate) => candidate !== group.key) : [...keys, group.key]);
         },
+        onCreate: (workspaceId) => {
+          setCollapsedKeys((keys) => keys.filter((candidate) => candidate !== group.key));
+          deps.startSession(workspaceId);
+        },
         onToggleOverflow: () => {
           setOverflowKeys((keys) => keys.includes(group.key) ? keys.filter((candidate) => candidate !== group.key) : [...keys, group.key]);
         },
@@ -279,7 +283,15 @@ function GroupSection(props) {
       role: "treeitem",
       "aria-expanded": !collapsed,
       onClick: props.onToggle
-    }, import_react.createElement("span", { key: "folder", className: "session-list-folder" }, import_react.createElement(collapsed ? import_dsh_client_ui_primitives.IconFolderClose16 : import_dsh_client_ui_primitives.IconFolderOpen16)), import_react.createElement("span", { key: "chevron", className: "session-list-chevron" }, import_react.createElement(import_dsh_client_ui_primitives.IconTriangleRightFill14, { className: collapsed ? undefined : "session-list-chevron-open" })), import_react.createElement("span", { key: "title", className: "session-list-group-title" }, label))
+    }, import_react.createElement("span", { key: "folder", className: "session-list-folder" }, import_react.createElement(collapsed ? import_dsh_client_ui_primitives.IconFolderClose16 : import_dsh_client_ui_primitives.IconFolderOpen16)), import_react.createElement("span", { key: "chevron", className: "session-list-chevron" }, import_react.createElement(import_dsh_client_ui_primitives.IconTriangleRightFill14, { className: collapsed ? undefined : "session-list-chevron-open" })), import_react.createElement("span", { key: "title", className: "session-list-group-title" }, label), group.workspaceId === undefined ? null : import_react.createElement("span", { key: "actions", className: "session-list-group-actions" }, import_react.createElement("button", {
+      type: "button",
+      className: "session-list-group-action",
+      "aria-label": t("actions.newSession.aria", { name: label }),
+      onClick: (event) => {
+        event.stopPropagation();
+        props.onCreate(group.workspaceId);
+      }
+    }, import_react.createElement(import_dsh_client_ui_primitives.IconPlusOutline16))))
   ];
   if (!collapsed) {
     children.push(...visible.map((row) => import_react.createElement(SessionRow, {
@@ -403,6 +415,7 @@ var DICT_EN = {
   "time.years": "{n}y",
   "actions.archive": "Archive session",
   "actions.copyId": "Copy session ID",
+  "actions.newSession.aria": "New session in {name}",
   "section.workspaces": "Workspaces",
   "group.ungrouped": "Ungrouped",
   "workspace.add": "Add workspace",
@@ -423,6 +436,7 @@ var DICT_ZH = {
   "time.years": "{n}年",
   "actions.archive": "归档会话",
   "actions.copyId": "复制会话 ID",
+  "actions.newSession.aria": "在“{name}”中新建会话",
   "section.workspaces": "工作区",
   "group.ungrouped": "未分组",
   "workspace.add": "添加工作区",
@@ -455,6 +469,10 @@ var LIST_CSS = [
   ".session-list-chevron svg{transition:transform 150ms var(--ds-ease-in-out)}",
   ".session-list-chevron .session-list-chevron-open{transform:rotate(90deg)}",
   ".session-list-group-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" + "font-size:14px;line-height:20px}",
+  ".session-list-group-actions{flex:none;align-items:center;gap:10px;display:none}",
+  ".session-list-group-row:hover .session-list-group-actions{display:inline-flex}",
+  ".session-list-group-action{flex:none;display:inline-flex;justify-content:center;align-items:center;" + "width:28px;height:28px;border:none;border-radius:50%;padding:0;background:transparent;" + "cursor:pointer;color:var(--dsw-alias-label-secondary)}",
+  ".session-list-group-action:hover{background:var(--dsw-alias-interactive-bg-hover)}",
   ".session-list-overflow{width:100%;height:28px;border:none;border-radius:8px;padding:0 12px 0 28px;" + "background:transparent;cursor:pointer;text-align:left;font-size:12px;" + "color:var(--dsw-alias-label-tertiary)}",
   ".session-list-overflow:hover{background:transparent;color:var(--dsw-alias-label-secondary)}",
   ".session-list-row{cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary);" + "border-radius:8px;align-items:center;height:32px;padding:0 8px;display:flex}",

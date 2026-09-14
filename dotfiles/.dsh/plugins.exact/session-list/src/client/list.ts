@@ -1,8 +1,9 @@
 /**
  * React half of the sidebar session list. Wide state renders the stock-style
  * workspace grouping: a section header (label + Add workspace), one group per
- * host workspace with a foldable header row, Show-more overflow folding, and
- * the directory-pick add flow with its error dialog. Rail state keeps the
+ * host workspace with a foldable header row and hover New Session action,
+ * Show-more overflow folding, and the directory-pick add flow with its error
+ * dialog. Rail state keeps the
  * flat icon column. Row derivation lives in ./rows.
  */
 import {
@@ -19,6 +20,7 @@ import {
   IconCopyOutline16,
   IconFolderClose16,
   IconFolderOpen16,
+  IconPlusOutline16,
   IconProjectAddOutline16,
   IconTriangleRightFill14,
   StateDot,
@@ -185,6 +187,10 @@ export function createSessionList(deps: SessionListDeps): (props: SessionListPro
               ? keys.filter((candidate) => candidate !== group.key)
               : [...keys, group.key])
           },
+          onCreate: (workspaceId) => {
+            setCollapsedKeys((keys) => keys.filter((candidate) => candidate !== group.key))
+            deps.startSession(workspaceId)
+          },
           onToggleOverflow: () => {
             setOverflowKeys((keys) => keys.includes(group.key)
               ? keys.filter((candidate) => candidate !== group.key)
@@ -251,6 +257,7 @@ interface GroupProps {
   readonly collapsed: boolean
   readonly overflowExpanded: boolean
   readonly onToggle: () => void
+  readonly onCreate: (workspaceId: WorkspaceId) => void
   readonly onToggleOverflow: () => void
   readonly now: number
   readonly list: RowListSource
@@ -261,7 +268,7 @@ interface GroupProps {
 }
 
 /** One workspace section: foldable header row, member sessions, Show more. */
-function GroupSection(props: GroupProps): ReactNode {
+export function GroupSection(props: GroupProps): ReactNode {
   const { group, collapsed, overflowExpanded, now, list, pending, t } = props
   const label = group.workspaceId === undefined ? t('group.ungrouped') : group.label
   const containsCurrent = list.current !== undefined
@@ -289,6 +296,25 @@ function GroupSection(props: GroupProps): ReactNode {
       createElement('span', { key: 'chevron', className: 'session-list-chevron' },
         createElement(IconTriangleRightFill14, { className: collapsed ? undefined : 'session-list-chevron-open' })),
       createElement('span', { key: 'title', className: 'session-list-group-title' }, label),
+      group.workspaceId === undefined
+        ? null
+        : createElement(
+          'span',
+          { key: 'actions', className: 'session-list-group-actions' },
+          createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'session-list-group-action',
+              'aria-label': t('actions.newSession.aria', { name: label }),
+              onClick: (event: MouseEvent<HTMLElement>) => {
+                event.stopPropagation()
+                props.onCreate(group.workspaceId as WorkspaceId)
+              },
+            },
+            createElement(IconPlusOutline16),
+          ),
+        ),
     ),
   ]
   if (!collapsed) {

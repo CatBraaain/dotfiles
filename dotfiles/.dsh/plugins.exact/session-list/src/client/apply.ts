@@ -30,6 +30,12 @@ export const LIST_CSS = [
   '.session-list-chevron .session-list-chevron-open{transform:rotate(90deg)}',
   '.session-list-group-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' +
     'font-size:14px;line-height:20px}',
+  '.session-list-group-actions{flex:none;align-items:center;gap:10px;display:none}',
+  '.session-list-group-row:hover .session-list-group-actions{display:inline-flex}',
+  '.session-list-group-action{flex:none;display:inline-flex;justify-content:center;align-items:center;' +
+    'width:28px;height:28px;border:none;border-radius:50%;padding:0;background:transparent;' +
+    'cursor:pointer;color:var(--dsw-alias-label-secondary)}',
+  '.session-list-group-action:hover{background:var(--dsw-alias-interactive-bg-hover)}',
   '.session-list-overflow{width:100%;height:28px;border:none;border-radius:8px;padding:0 12px 0 28px;' +
     'background:transparent;cursor:pointer;text-align:left;font-size:12px;' +
     'color:var(--dsw-alias-label-tertiary)}',

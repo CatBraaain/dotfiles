@@ -132,6 +132,12 @@ describe("LIST_CSS", () => {
     assert.match(LIST_CSS, /\.session-list-group-row:hover \.session-list-chevron\{display:inline-flex\}/);
     assert.match(LIST_CSS, /\.session-list-group-row:hover \.session-list-folder\{display:none\}/);
   });
+
+  it("shows the workspace New Session action only while its group is hovered", () => {
+    assert.match(LIST_CSS, /\.session-list-group-actions\{[^}]*display:none\}/);
+    assert.match(LIST_CSS, /\.session-list-group-row:hover \.session-list-group-actions\{display:inline-flex\}/);
+    assert.match(LIST_CSS, /\.session-list-group-action\{[^}]*cursor:pointer/);
+  });
 });
 
 const dummyComponent = (): null => null;
