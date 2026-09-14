@@ -174,29 +174,60 @@ async function composeMergeTargets(
   distDir: string,
   resolveTargetPath: TargetPathResolver,
 ): Promise<void> {
-  for (const target of await collectMergeTargets(distDir)) {
-    const hasBase = existsSync(target.outputPath);
-    if (!hasBase) await writeFile(target.outputPath, "");
-    const homePath = (
-      await resolveTargetPath(root, relative(distDir, target.outputPath).split(sep).join("/"))
-    ).replace(/[\r\n]+$/, "");
-
-    const stem = target.outputPath.slice(0, -(target.format.length + 1));
-    const layers: Layer[] = [await readLayer(homePath, target.format)];
-    if (hasBase) layers.push(await readLayer(target.outputPath, target.format));
-    for (const suffix of ["merge", "machine"]) {
-      const sidecar = `${stem}.${suffix}.${target.format}`;
-      if (existsSync(sidecar)) layers.push(await readLayer(sidecar, target.format));
+  const targets = await collectMergeTargets(distDir);
+  if (resolveTargetPath !== chezmoiTargetPath) {
+    for (const target of targets) {
+      const hasBase = existsSync(target.outputPath);
+      if (!hasBase) await writeFile(target.outputPath, "");
+      const sourcePath = relative(distDir, target.outputPath).split(sep).join("/");
+      const homePath = (await resolveTargetPath(root, sourcePath)).replace(/[\r\n]+$/, "");
+      await composeMergeTarget(target, hasBase, homePath);
     }
-
-    let value: unknown = {};
-    for (const layer of layers) {
-      value = applyLayer(value, layer);
-    }
-
-    await writeFile(target.outputPath, fileFormats[target.format].stringify(value));
-    for (const sidecar of target.sidecarPaths) await rm(sidecar);
+    return;
   }
+
+  const hasBases: boolean[] = [];
+  for (const target of targets) {
+    const hasBase = existsSync(target.outputPath);
+    hasBases.push(hasBase);
+    if (!hasBase) await writeFile(target.outputPath, "");
+  }
+
+  const sourcePaths = targets.map((target) =>
+    relative(distDir, target.outputPath).split(sep).join("/"),
+  );
+  const homePaths = await resolveHomePaths(root, sourcePaths);
+  for (const [index, target] of targets.entries()) {
+    await composeMergeTarget(target, hasBases[index], homePaths[index]);
+  }
+}
+
+async function composeMergeTarget(
+  target: MergeTarget,
+  hasBase: boolean,
+  homePath: string,
+): Promise<void> {
+  const normalizedHomePath = homePath.replace(/[\r\n]+$/, "");
+  const stem = target.outputPath.slice(0, -(target.format.length + 1));
+  const layers: Layer[] = [await readLayer(normalizedHomePath, target.format)];
+  if (hasBase) layers.push(await readLayer(target.outputPath, target.format));
+  for (const suffix of ["merge", "machine"]) {
+    const sidecar = `${stem}.${suffix}.${target.format}`;
+    if (existsSync(sidecar)) layers.push(await readLayer(sidecar, target.format));
+  }
+
+  let value: unknown = {};
+  for (const layer of layers) {
+    value = applyLayer(value, layer);
+  }
+
+  await writeFile(target.outputPath, fileFormats[target.format].stringify(value));
+  for (const sidecar of target.sidecarPaths) await rm(sidecar);
+}
+
+async function resolveHomePaths(root: string, sourcePaths: string[]): Promise<string[]> {
+  if (sourcePaths.length === 0) return [];
+  return chezmoiTargetPaths(root, sourcePaths);
 }
 
 async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
@@ -496,8 +527,19 @@ function arrayElementsMatch(left: unknown, right: unknown): boolean {
 }
 
 async function chezmoiTargetPath(root: string, sourcePath: string): Promise<string> {
+  const [homePath] = await chezmoiTargetPaths(root, [sourcePath]);
+  return homePath;
+}
+
+async function chezmoiTargetPaths(root: string, sourcePaths: string[]): Promise<string[]> {
   const proc = Bun.spawn(
-    ["chezmoi", "target-path", "-c", "chezmoi.yaml", join("dist", sourcePath)],
+    [
+      "chezmoi",
+      "target-path",
+      "-c",
+      "chezmoi.yaml",
+      ...sourcePaths.map((sourcePath) => join("dist", sourcePath)),
+    ],
     {
       cwd: root,
       stdout: "pipe",
@@ -510,8 +552,17 @@ async function chezmoiTargetPath(root: string, sourcePath: string): Promise<stri
     proc.exited,
   ]);
   if (exitCode !== 0)
-    throw new Error(stderr.trim() || `chezmoi target-path failed: dist/${sourcePath}`);
-  return stdout;
+    throw new Error(
+      stderr.trim() || `chezmoi target-path failed: dist/${sourcePaths.join(", dist/")}`,
+    );
+
+  const homePaths = stdout.replace(/[\r\n]+$/, "").split(/\r?\n/);
+  if (homePaths.length !== sourcePaths.length) {
+    throw new Error(
+      `chezmoi target-path returned ${homePaths.length} paths for ${sourcePaths.length} sources`,
+    );
+  }
+  return homePaths;
 }
 
 async function collectHooks(sourceDir: string): Promise<Hook[]> {
