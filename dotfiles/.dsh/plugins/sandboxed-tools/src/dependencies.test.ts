@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "bun:test";
 import { join } from "node:path";
 
-// The build keeps bare specifiers external (run_build.sh passes
+// The build keeps bare specifiers external (run_after_build.sh passes
 // `--external '@deepseek-ai/*'` etc.), and Node resolves them only from this
 // plugin's own node_modules, i.e. exactly what package.json dependencies
 // install. A runtime import missing from dependencies therefore stays

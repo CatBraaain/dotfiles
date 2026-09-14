@@ -5,7 +5,7 @@
  * and a camoufox + trafilatura fetch provider (id `camoufox-trafilatura`).
  * Ported from the pi `web-search` extension; the behavior contract is SPEC.md.
  *
- * `run_build.sh` bundles this entry: relative imports are inlined and only
+ * `run_after_build.sh` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external. The camoufox
  * server (`server.mjs`) ships in the package root, outside the bundle.
  */
@@ -43,7 +43,7 @@ export const CONVERT_TIMEOUT_MS = 15_000;
 export const REDDIT_TIMEOUT_MS = 15_000;
 export const STACKOVERFLOW_TIMEOUT_MS = 15_000;
 
-// Package root: src in development, dist after `run_build.sh` — both sit one
+// Package root: src in development, dist after `run_after_build.sh` — both sit one
 // level below the root that carries server.mjs.
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 

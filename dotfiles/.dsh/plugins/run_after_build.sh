@@ -36,10 +36,14 @@
 # the profile's node_modules links file: deps per file, so it always sees the
 # plugin dirs' current content.
 #
-# Run order matters: chezmoi applies scripts in alphabetical order of their
-# target paths, and ".dsh/plugins/..." sorts before ".dsh/profiles/...", so
-# this build runs before profiles/web/run_bun_install.sh re-links the built
-# entries into the profile's node_modules.
+# The run_after_ prefix makes chezmoi run this script only after the entire
+# target state has been applied, so every plugin's src/ is fully deployed
+# before being bundled. (As a plain run_ script it executed in target-path
+# order in the middle of the apply, which bundled stale sources for plugins
+# sorting after this file's own path.) The profile's run_bun_install.sh has
+# already re-linked by then; that is harmless because bun links file: deps as
+# per-file symlinks, so the profile always resolves the freshly built dist/
+# content.
 
 for plugin in */; do
     if [ -f "${plugin}package.json" ]; then
@@ -52,7 +56,7 @@ for plugin in */; do
         [ -f "${plugin}src/runner.ts" ] && entries="$entries src/runner.ts"
         (cd "$plugin" && {
             if [ ! -f dist/index.js ] ||
-                [ -n "$(find src ../run_build.sh -type f -newer dist/index.js -print -quit)" ]; then
+                [ -n "$(find src ../run_after_build.sh -type f -newer dist/index.js -print -quit)" ]; then
                 # shellcheck disable=SC2086 # entries is an intentional word split
                 bun build $entries --outdir dist --target node \
                     --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \

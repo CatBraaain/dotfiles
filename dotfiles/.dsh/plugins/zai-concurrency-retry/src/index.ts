@@ -26,7 +26,7 @@
  *              start (durable, so reloads re-render it), folded into a
  *              one-line transcript row by the client bundle in `src/client/`
  *
- * `run_build.sh` bundles entries: relative imports are inlined and only
+ * `run_after_build.sh` bundles entries: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external (see
  * dotfiles/.dsh/README.md). Pure logic is exported below and tested
  * in `src/index.test.ts`; runtime imports are types only.

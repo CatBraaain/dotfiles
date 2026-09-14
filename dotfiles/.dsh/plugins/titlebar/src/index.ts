@@ -6,7 +6,7 @@
  * `document.title` there. The host side only provides the bundle row that
  * makes dsh load the package; it registers nothing.
  *
- * `run_build.sh` bundles this entry: relative imports are inlined and only
+ * `run_after_build.sh` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external (see
  * dotfiles/.dsh/README.md).
  */

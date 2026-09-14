@@ -15,7 +15,7 @@
  * through `apply`, so the published names cover events outside the client's
  * paged event window (see SPEC.md).
  *
- * `run_build.sh` bundles this entry: relative imports are inlined and only
+ * `run_after_build.sh` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external (see
  * dotfiles/.dsh/README.md). Shared literals live in `src/shared.ts`.
  */
