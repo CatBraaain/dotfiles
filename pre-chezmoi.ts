@@ -21,7 +21,7 @@ type TargetPathResolver = (root: string, sourcePath: string) => Promise<string>;
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const hookFileName = ".pre-chezmoi.ts";
-const sidecarPattern = /\.merge(\.local)?\.(json|yaml|toml)$/;
+const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
 
 const fileFormats = {
   json: {
@@ -184,7 +184,7 @@ async function composeMergeTargets(
     const stem = target.outputPath.slice(0, -(target.format.length + 1));
     const layers: Layer[] = [await readLayer(homePath, target.format)];
     if (hasBase) layers.push(await readLayer(target.outputPath, target.format));
-    for (const suffix of ["merge", "merge.local"]) {
+    for (const suffix of ["merge", "machine"]) {
       const sidecar = `${stem}.${suffix}.${target.format}`;
       if (existsSync(sidecar)) layers.push(await readLayer(sidecar, target.format));
     }

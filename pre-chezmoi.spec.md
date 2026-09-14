@@ -4,7 +4,7 @@
 
 - プラットフォーム: Windows（`process.platform === "win32"`）と、それ以外（Linux / macOS）の2種。
 - 経路表記: 本文のパスはリポジトリルートからの相対パス。
-- `*.merge.local.{json,yaml,toml}` は git 管理外（`.gitignore`）。`*.merge.{json,yaml,toml}` は git 管理する共有レイヤー。
+- `*.machine.{json,yaml,toml}` は git 管理外（`.gitignore`）。`*.merge.{json,yaml,toml}` は git 管理する共有レイヤー。
 
 ## 変換の順序
 
@@ -196,9 +196,9 @@ JSON/YAML/TOML の設定ファイルを、ホーム現状とリポジトリ側�
 | ------------------------------------------ | --------- | ------------------------------------------ |
 | `<name>.{json,yaml,toml}`                  | git       | plain base（リポジトリのベース本体。任意） |
 | `<name>.merge.{json,yaml,toml}`            | git       | 共有 merge レイヤー（任意）                |
-| `<name>.merge.local.{json,yaml,toml}`      | gitignore | マシン固有 merge レイヤー（任意）          |
+| `<name>.machine.{json,yaml,toml}`          | gitignore | マシン固有 merge レイヤー（任意）          |
 
-`<name>.merge.{json,yaml,toml}` または `<name>.merge.local.{json,yaml,toml}` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は **merge ターゲット** となる。
+`<name>.merge.{json,yaml,toml}` または `<name>.machine.{json,yaml,toml}` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は **merge ターゲット** となる。
 
 merge ターゲットでないファイルは、従来どおり `dist/` へそのまま残す。
 
@@ -214,9 +214,9 @@ sidecar 名から `<name>` への対応:
 | sidecar                      | `<name>`     |
 | ---------------------------- | ------------ |
 | `foo.merge.json`             | `foo.json`   |
-| `foo.merge.local.yaml`       | `foo.yaml`   |
+| `foo.machine.yaml`           | `foo.yaml`   |
 | `foo.merge.toml`             | `foo.toml`   |
-| `foo.merge.local.toml`       | `foo.toml`   |
+| `foo.machine.toml`           | `foo.toml`   |
 
 同一 `<name>` に sidecar が複数あるときは 1 ターゲットにまとめる。
 
@@ -227,9 +227,9 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 | 順  | レイヤー    | ソース                                                                                  |
 | --- | ----------- | --------------------------------------------------------------------------------------- |
 | 1   | ホーム      | §8.2 のホームパス。ファイルが存在しない・空のとき `{}`                                  |
-| 2   | plain base  | 同ディレクトリの `<name>.{json,yaml,toml}`（merge / merge.local ではないファイル）      |
+| 2   | plain base  | 同ディレクトリの `<name>.{json,yaml,toml}`（merge / machine ではないファイル）          |
 | 3   | merge       | `<name>.merge.{json,yaml,toml}`                                                         |
-| 4   | merge.local | `<name>.merge.local.{json,yaml,toml}`                                                   |
+| 4   | machine     | `<name>.machine.{json,yaml,toml}`                                                        |
 
 後段レイヤーほど優先される。
 
@@ -240,7 +240,7 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 merge ターゲットごとに:
 
 1. §8.3 の合成結果を §9.4 の canonical 形式で `<name>.{json,yaml,toml}` に書き出す。
-2. 入力として使った sidecar（`*.merge.*`, `*.merge.local.*`）を `dist/` から削除する。
+2. 入力として使った sidecar（`*.merge.*`, `*.machine.*`）を `dist/` から削除する。
 3. plain base の `<name>.{json,yaml,toml}` が存在したとき、それも `dist/` から削除する（完成形のみ残す）。
 
 `dist/` には sidecar も plain base の生ファイルも残らない。完成形 `<name>.{json,yaml,toml}` だけが残る。
@@ -267,15 +267,15 @@ dotfiles/.pi/agent/settings.merge.json
 3. 合成: ホーム → merge レイヤー
 4. 出力: `dist/dot_pi/agent/settings.json`。`settings.merge.json` は削除
 
-#### `agents.yaml` + `agents.merge.local.yaml`（merge なし）
+#### `agents.yaml` + `agents.machine.yaml`（merge なし）
 
 ```
 dotfiles/.pi/agent/config.exact/agents.yaml
-dotfiles/.pi/agent/config.exact/agents.merge.local.yaml  （gitignore）
+dotfiles/.pi/agent/config.exact/agents.machine.yaml  （gitignore）
 ```
 
-1. dot 変換後: `dist/dot_pi/agent/exact_config/agents.merge.local.yaml` 等
-2. 合成: ホーム → plain base（agents.yaml）→ merge.local
+1. dot 変換後: `dist/dot_pi/agent/exact_config/agents.machine.yaml` 等
+2. 合成: ホーム → plain base（agents.yaml）→ machine
 3. 出力: `dist/dot_pi/agent/exact_config/agents.yaml`。sidecar と plain base 生ファイルは削除
 
 #### `config.merge.toml` のみ（plain base なし、パス移動と組合せ）
@@ -295,10 +295,10 @@ dotfiles/rtk/config.merge.toml
 ```
 foo.json
 foo.merge.json
-foo.merge.local.json
+foo.machine.json
 ```
 
-合成: ホーム → plain base → merge → merge.local → `dist/.../foo.json`
+合成: ホーム → plain base → merge → machine → `dist/.../foo.json`
 
 ## 9. パッチ適用
 
@@ -402,7 +402,7 @@ merge 変換の各レイヤー、および将来同一関数を使う処理は�
 マシン固有で tiers を上書き:
 
 ```yaml
-# config.merge.local.yaml
+# config.machine.yaml
 tiers:
   high:
     - provider: cursor
@@ -420,7 +420,7 @@ tiers:
 ネストで操作キーを書く。次の2つは等価である:
 
 ```yaml
-# config.merge.local.yaml
+# config.machine.yaml
 dsh:
   profile:
     "bundles.$replace":
@@ -428,7 +428,7 @@ dsh:
 ```
 
 ```yaml
-# config.merge.local.yaml
+# config.machine.yaml
 "dsh.profile.bundles.$replace":
   - provider: cursor
 ```
@@ -436,13 +436,13 @@ dsh:
 TOML では `$` を含むキー名を quoted key で書く。quoted key は `.` で分割されないため、祖先キーはテーブルまたは dotted key で表現する。次の2つは等価である:
 
 ```toml
-# config.merge.local.toml
+# config.machine.toml
 [dsh.profile]
 "bundles.$replace" = [{ provider = "cursor" }]
 ```
 
 ```toml
-# config.merge.local.toml
+# config.machine.toml
 dsh.profile."bundles.$replace" = [{ provider = "cursor" }]
 ```
 
@@ -456,7 +456,7 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | YAML | YAML 形式、改行コード LF                           |
 | TOML | TOML 形式、末尾改行 1 つ、改行コード LF            |
 
-JSON の merge / merge.local ファイルおよび plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の merge / merge.local ファイルおよび plain base の TOML 入力にはコメントを書ける。
+JSON の merge / machine ファイルおよび plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の merge / machine ファイルおよび plain base の TOML 入力にはコメントを書ける。
 
 ## エラー
 
@@ -483,8 +483,8 @@ Linux 実行時の `dotfiles/docker/settings-store.merge.json` は、次のよ�
 
 | 旧                                                  | 新                                      |
 | --------------------------------------------------- | --------------------------------------- |
-| `*.overwrite.{json,yaml}`                           | `*.merge.local.{json,yaml}`             |
+| `*.overwrite.{json,yaml}`                           | `*.machine.{json,yaml}`                 |
 | `*.merge.*` → `modify_*`（chezmoi modify template） | `*.merge.*` → merge レイヤー（§8）      |
-| overwrite 変換（ベースへの build 時マージ）         | §8 の plain base レイヤー + merge.local |
+| overwrite 変換（ベースへの build 時マージ）         | §8 の plain base レイヤー + machine     |
 
-`.gitignore` の `*.overwrite.*` は `*.merge.local.*` に置き換える。
+`.gitignore` の `*.overwrite.*` は `*.machine.*` に置き換える。

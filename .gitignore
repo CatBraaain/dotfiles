@@ -3,7 +3,7 @@ node_modules
 
 dotfiles/.gitconfig.local
 dotfiles/.secrets.sh
-dotfiles/**/*.merge.local.json
-dotfiles/**/*.merge.local.yaml
-dotfiles/**/*.merge.local.toml
+dotfiles/**/*.machine.json
+dotfiles/**/*.machine.yaml
+dotfiles/**/*.machine.toml
 undotfiles/nix/flake.lock
