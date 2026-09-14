@@ -2,9 +2,7 @@
 
 ## 概要
 
-セッションは **agent** を実行する。agent は利用できるツール、依頼できる子 agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本 plugin は、agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を host 側で提供する。
-
-本 plugin は host 側と client 側（browser bundle）で構成する。host 側は agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を提供する。client 側は現在の agent と実効 class の表示を提供する。`/class` の選択 popup、subagent の待機表示など残りの client UI は対象外とする（「対象外」節）。
+セッションは **agent** を実行する。agent は利用できるツール、依頼できる子 agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本 plugin は host 側と client 側（browser bundle）で構成し、host 側は agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を提供する。client 側は現在の agent と実効 class の表示を提供する。`/class` の選択 popup、subagent の待機表示など残りの client UI は対象外とする（「対象外」節）。
 
 ## 設定
 
