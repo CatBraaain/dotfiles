@@ -30,11 +30,18 @@
 # dropping stdout keeps the apply output quiet while failures stay visible.
 #
 # The build is conditional (Make-style): a plugin is rebuilt only when it has
-# no dist/index.js yet, or some file under src/ (or this script itself, so a
-# recipe change rebuilds everything once) is newer than dist/index.js.
+# no dist/index.js yet, some file under src/ is newer than dist/index.js
+# (*.test.ts files are excluded: bun never bundles them, so editing them does
+# not change the build), or the recipe itself changed (see below).
 # Unconditional rebuilding would rewrite dist on every apply for no benefit:
 # the profile's node_modules links file: deps per file, so it always sees the
 # plugin dirs' current content.
+#
+# A recipe change must rebuild every plugin once. The recipe can not be
+# checked by mtime: chezmoi runs this script from the source state without
+# deploying it, and the dist/ copy $0 points at is re-copied by pre-chezmoi
+# (fresh mtime) on every apply. Compare content instead, against the last
+# executed copy of the recipe, stamped in the plugins directory.
 #
 # The run_after_ prefix makes chezmoi run this script only after the entire
 # target state has been applied, so every plugin's src/ is fully deployed
@@ -44,6 +51,11 @@
 # already re-linked by then; that is harmless because bun links file: deps as
 # per-file symlinks, so the profile always resolves the freshly built dist/
 # content.
+
+self="$(cd "$(dirname "$0")" && pwd)/run_after_build.sh"
+stamp=".build-recipe"
+recipe_changed=1
+[ -f "$self" ] && cmp -s "$self" "$stamp" && recipe_changed=0
 
 for plugin in */; do
     if [ -f "${plugin}package.json" ]; then
@@ -55,8 +67,8 @@ for plugin in */; do
         entries="src/index.ts"
         [ -f "${plugin}src/runner.ts" ] && entries="$entries src/runner.ts"
         (cd "$plugin" && {
-            if [ ! -f dist/index.js ] ||
-                [ -n "$(find src ../run_after_build.sh -type f -newer dist/index.js -print -quit)" ]; then
+            if [ ! -f dist/index.js ] || [ "$recipe_changed" = 1 ] ||
+                [ -n "$(find src -type f ! -name '*.test.ts' -newer dist/index.js -print -quit)" ]; then
                 # shellcheck disable=SC2086 # entries is an intentional word split
                 bun build $entries --outdir dist --target node \
                     --external yaml --external 'shell-quote' --external '@vscode/ripgrep' \
@@ -65,3 +77,9 @@ for plugin in */; do
         })
     fi
 done
+
+# Stamp the executed recipe only on a recipe-triggered rebuild, so a normal
+# apply (no changes, or src-only changes) writes nothing.
+if [ "$recipe_changed" = 1 ] && [ -f "$self" ]; then
+    cp "$self" "$stamp"
+fi
