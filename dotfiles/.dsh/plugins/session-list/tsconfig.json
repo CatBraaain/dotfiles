@@ -14,11 +14,17 @@
       "@deepseek-ai/dsh-client-ui-renderer/client": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"
       ],
-      "@deepseek-ai/dsh-client-ui-conversation/client": [
-        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/types/client/index.d.ts"
-      ],
       "@deepseek-ai/dsh-client-ui-session/client": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-session/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-sidebar/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-sidebar/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-layout/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-ui-layout/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-locale/client": [
+        "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-locale/lib/types/client/index.d.ts"
       ],
       "@deepseek-ai/*": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"

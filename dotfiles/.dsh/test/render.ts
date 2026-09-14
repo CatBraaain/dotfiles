@@ -37,11 +37,11 @@ const primitivesDir = join(
 );
 
 /**
- * The `@deepseek-ai/dsh-client-ui-primitives` faces the footer bundle consumes.
- * The raw npm package is not loadable by bun (its runtime deps are bundled into
- * the dsh web shell, and bun imports `.module.css` as an empty object), so the
- * fixture serves a stub with the same DOM shape as the real `Button` plus the
- * real icon paths, styled by the real `Button.module.css` read below.
+ * The `@deepseek-ai/dsh-client-ui-primitives` faces the session-list bundle consumes. The raw npm package is not loadable by bun (its
+ * runtime deps are bundled into the dsh web shell, and bun imports
+ * `.module.css` as an empty object), so the fixture serves a stub with the
+ * same DOM shape as the real primitives plus the real icon paths, styled by
+ * the real `Button.module.css` / `StateDot.module.css` read below.
  */
 const primitivesStub = {
     /** Same element shape as the shell-resident primitive (class names unhashed). */
@@ -60,7 +60,90 @@ const primitivesStub = {
     ),
     // The clipboard is never exercised by a static render.
     writeClipboard: async () => true,
+    relativeTime,
+    IconArchiveOutline20: icon20([
+        "M15.8659 2.05975C17.2603 2.05995 18.3913 3.19096 18.3914 4.58527V5.4874C18.3914 6.02747 18.2192 6.52672 17.9303 6.93735C17.9336 6.96524 17.9388 6.99318 17.9388 7.02195V12.8884C17.9388 13.6345 17.9395 14.2379 17.8996 14.7254C17.8642 15.1593 17.7936 15.5499 17.6373 15.9141L17.5654 16.0685C17.278 16.6328 16.8405 17.1046 16.3038 17.434L16.0679 17.5661C15.66 17.7739 15.2196 17.8598 14.7237 17.9003C14.2362 17.9401 13.6327 17.9405 12.8867 17.9405H7.11122C6.36511 17.9405 5.76171 17.9401 5.27418 17.9003C4.84051 17.8649 4.44949 17.7952 4.08545 17.6391L3.93104 17.5661C3.36673 17.2785 2.89392 16.8414 2.56465 16.3044L2.43245 16.0685C2.22473 15.6608 2.13878 15.2211 2.09825 14.7254C2.05841 14.2379 2.05912 13.6345 2.05912 12.8884V7.02195C2.05912 6.99284 2.06422 6.96449 2.06758 6.93629C1.77931 6.52592 1.60858 6.02687 1.60858 5.4874V4.58527C1.60876 3.19084 2.73962 2.05975 4.1341 2.05975H15.8659ZM16.4984 7.92936C16.296 7.98169 16.0847 8.01288 15.8659 8.01291H4.1341C3.91478 8.01291 3.70246 7.98194 3.49955 7.92936V12.8884C3.49955 13.6582 3.50053 14.1927 3.53445 14.608C3.56769 15.0146 3.62923 15.244 3.71635 15.415L3.7925 15.5514C3.98339 15.8627 4.25749 16.1165 4.58464 16.2833L4.72529 16.3435C4.88095 16.3993 5.08638 16.4402 5.39158 16.4651C5.80685 16.4991 6.34138 16.5001 7.11122 16.5001H12.8867C13.6564 16.5001 14.1911 16.499 14.6063 16.4651C15.0128 16.432 15.2423 16.3703 15.4133 16.2833L15.5508 16.2061C15.8618 16.0152 16.116 15.7419 16.2827 15.415L16.3429 15.2732C16.3985 15.1177 16.4396 14.9128 16.4645 14.608C16.4985 14.1927 16.4984 13.6583 16.4984 12.8884V7.92936ZM4.1341 3.50019C3.53511 3.50019 3.0492 3.98631 3.04902 4.58527V5.4874C3.04902 6.08649 3.535 6.57248 4.1341 6.57248H15.8659C16.4648 6.57228 16.951 6.08638 16.951 5.4874V4.58527C16.9509 3.98644 16.4647 3.50038 15.8659 3.50019H4.1341Z",
+        "M12.7962 12.5661V11.0832H7.20548V12.5661L12.7962 12.5661Z",
+    ]),
+    StateDot: stateDot,
 };
+
+/** The real StateDot's 3x3 chase matrix cells (viewBox 0 0 10 10, 2px cells). */
+const MATRIX_CELLS: ReadonlyArray<readonly [number, number]> = [
+    [0, 0],
+    [4, 0],
+    [8, 0],
+    [8, 4],
+    [8, 8],
+    [4, 8],
+    [0, 8],
+    [0, 4],
+];
+
+/** Same element shape as the shell-resident `StateDot` (class names unhashed). */
+function stateDot({ state, size = 10, className }: { state: string; size?: number; className?: string }): unknown {
+    if (state === "ongoing") {
+        return React.createElement(
+            "svg",
+            {
+                className: ["matrix", className].filter(Boolean).join(" "),
+                "data-state": "ongoing",
+                width: size,
+                height: size,
+                viewBox: "0 0 10 10",
+                shapeRendering: "crispEdges",
+                "aria-hidden": "true",
+            },
+            MATRIX_CELLS.map(([x, y], index) =>
+                React.createElement("rect", {
+                    key: `${x}-${y}`,
+                    className: "cell",
+                    x,
+                    y,
+                    width: "2",
+                    height: "2",
+                    style: { animationDelay: `${(index - MATRIX_CELLS.length) * 125}ms` },
+                }),
+            ),
+        );
+    }
+    return React.createElement("span", {
+        className: ["dot", className].filter(Boolean).join(" "),
+        "data-state": state,
+        style: { width: size, height: size },
+        "aria-hidden": "true",
+    });
+}
+
+/** One of the ic_ds_* 20px outline icons, faithful to the real glyph paths. */
+function icon20(paths: readonly string[]): () => unknown {
+    return () =>
+        React.createElement(
+            "svg",
+            {
+                width: 20,
+                height: 20,
+                viewBox: "0 0 20 20",
+                fill: "none",
+                xmlns: "http://www.w3.org/2000/svg",
+            },
+            paths.map((d, index) => React.createElement("path", { key: index, d, fill: "currentColor" })),
+        );
+}
+
+/** Compact relative-time bucketing, mirroring the real `relativeTime`. */
+function relativeTime(at: number, now: number): { unit: string; n: number } {
+    const MIN = 6e4;
+    const HOUR = 36e5;
+    const DAY = 864e5;
+    const diff = Math.max(0, now - at);
+    if (diff < MIN) return { unit: "now", n: 0 };
+    if (diff < HOUR) return { unit: "minutes", n: Math.floor(diff / MIN) };
+    if (diff < DAY) return { unit: "hours", n: Math.floor(diff / HOUR) };
+    if (diff < 30 * DAY) return { unit: "days", n: Math.floor(diff / DAY) };
+    if (diff < 365 * DAY) return { unit: "months", n: Math.floor(diff / (30 * DAY)) };
+    return { unit: "years", n: Math.floor(diff / (365 * DAY)) };
+}
 
 /** One of the ic_ds_* 16px outline icons, faithful to the real glyph. */
 function icon16(d: string): () => unknown {
@@ -159,11 +242,6 @@ function findEntry(entries: RegisteredEntry[], id: string): unknown {
     return entry.component;
 }
 
-/** Stand-in for `skillStatusSource`: a snapshot the dock row renders as-is. */
-function fakeSkillSource(names: readonly string[]) {
-    return { subscribe: () => () => {}, getSnapshot: () => ({ names }) };
-}
-
 function renderComponent(component: unknown, props: Record<string, unknown>): string {
     const type = component as React.ComponentType<Record<string, unknown>>;
     return renderToStaticMarkup(React.createElement(type, props));
@@ -213,43 +291,63 @@ body {
     position: relative;
 }
 .dummy-input { min-height: 24px; padding: 4px 16px; }
-.stats-root {
-    max-width: var(--dsh-chat-content-width);
-    box-sizing: border-box;
-    width: 100%;
-    padding: 4px calc(var(--dsh-composer-side-clearance) + 16px) 0px;
-    font-size: var(--dsh-content-font-size-secondary, 13px);
-    line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
-    justify-content: center;
-    gap: 12px;
-    margin: 0 auto;
-    display: flex;
-}
-.stats-pill {
-    box-sizing: border-box;
-    max-width: 100%;
-    color: var(--dsw-alias-label-tertiary);
-    font: inherit;
-    font-variant-numeric: tabular-nums;
-    line-height: inherit;
-    white-space: nowrap;
-    background: 0 0;
-    border: none;
-    border-radius: 24px;
-    align-items: center;
-    gap: 6px;
-    padding: 1px 8px;
-    display: inline-flex;
-}
-.stats-label { text-overflow: ellipsis; min-width: 0; overflow: hidden; }
+.list-host { box-sizing: border-box; flex-direction: column; max-width: 300px; display: flex; }
+.list-host-tall { height: 320px; }
 `;
 
-const statsPillsMarkup = `
-<div class="stats-root">
-    <span class="stats-pill"><span class="stats-label">ctx 12k tokens</span></span>
-    <span class="stats-pill"><span class="stats-label">seq 3</span></span>
-</div>
-`;
+/**
+ * Execute the session-list apply against a fake context and return the
+ * registered list component. The apply appends its stylesheet through the
+ * captured style element (kept as `sessionListCss`) and registers its
+ * dictionaries into a no-op locale stub.
+ */
+let sessionListCss = "";
+function captureSessionListRegistration(apply: (ctx: unknown) => void): unknown {
+    const registered: unknown[] = [];
+    const styleEl = {
+        set textContent(value: string) {
+            sessionListCss = value;
+        },
+    };
+    const loaderHost = globalThis as { document?: unknown };
+    loaderHost.document = {
+        createElement: () => styleEl,
+        head: { appendChild: () => {} },
+    };
+    try {
+        apply({
+            slots: {
+                inject: (_slot: string, callback: () => void) => callback(),
+                register: (_spec: unknown, component: unknown) => registered.push(component),
+            },
+            sessions: {},
+            workspaces: {},
+            layout: {},
+            locale: { register: () => () => {} },
+            effect: (_setup: () => unknown, _label: string) => {},
+        });
+    } finally {
+        delete loaderHost.document;
+    }
+    const component = registered[0];
+    if (component === undefined) throw new Error("session-list component not registered");
+    return component;
+}
+
+/** Minimal en dictionary for the session-list namespace (mirrors the plugin's locales.ts). */
+const sessionListEn: Record<string, string> = {
+    "session.new": "New Session",
+    "time.now": "now",
+    "time.minutes": "{n}min",
+    "time.hours": "{n}h",
+    "time.days": "{n}d",
+    "time.months": "{n}mo",
+    "time.years": "{n}y",
+    "actions.archive": "Archive session",
+    "actions.copyId": "Copy session ID",
+};
+const translateEn = (key: string, params?: Record<string, unknown>): string =>
+    (sessionListEn[key] ?? key).replace("{n}", String(params?.n ?? ""));
 
 /** One review case: a labeled composer scene with the dock contents in place. */
 function caseSection(label: string, inputDock: string, composerDock: string): string {
@@ -274,33 +372,87 @@ async function main(): Promise<void> {
 
     const themeCss = await extractThemeCss();
     const buttonCss = await readFile(join(primitivesDir, "lib/Button.module.css"), "utf-8");
+    const stateDotCss = await readFile(join(primitivesDir, "lib/StateDot.module.css"), "utf-8");
 
-    const footerExports = await loadPluginBundle("footer", "dotfiles-dsh-footer");
-    const footerEntries = captureSlotRegistrations(footerExports.apply as (ctx: unknown) => void);
-    const footerMarkup = renderComponent(findEntry(footerEntries, "session-id"), {
-        sessionId: "session-1",
+    // session-list: flat sidebar session rows (uses the injected-hooks component face,
+    // so the fake context must survive its apply and the props carry fake selector hooks).
+    const listExports = await loadPluginBundle("session-list", "dotfiles-dsh-session-list");
+    const listEntry = captureSessionListRegistration(listExports.apply as (ctx: unknown) => void);
+    const now = Date.now();
+    const makeListProps = (rows: readonly { id: string; summary: Record<string, unknown> }[], current: string | undefined, pendingIds: readonly string[]) => ({
+        wide: true,
+        expandSidebar: () => {},
+        useSessions: (selector: (snapshot: unknown) => unknown) =>
+            selector({
+                ids: rows.map((row) => row.id),
+                byId: Object.fromEntries(rows.map((row) => [row.id, row.summary])),
+                current,
+            }),
+        useSessionPendingInteraction: (selector: (snapshot: unknown) => unknown) =>
+            selector(new Map(pendingIds.map((id) => [id, { key: `k-${id}`, kind: "question", sessionId: id }]))),
+        useWorkspaces: (selector: (snapshot: unknown) => unknown) => selector({ archivedSessionIds: [] }),
+        t: translateEn,
     });
+    const listMarkup = renderComponent(
+        listEntry,
+        makeListProps(
+            [
+                { id: "s1", summary: { id: "s1", title: "refit the dock alignment", displayTitle: "refit the dock alignment", blank: false, running: true, completed: false, updatedAt: now - 90_000 } },
+                { id: "s2", summary: { id: "s2", title: "review session-list", displayTitle: "review session-list", blank: false, running: false, completed: true, updatedAt: now - 3 * 3_600_000 } },
+                { id: "s3", summary: { id: "s3", title: "refactor quota-line", displayTitle: "refactor quota-line", blank: false, running: false, completed: false, updatedAt: now - 2 * 86_400_000 } },
+                { id: "s4", summary: { id: "s4", title: undefined, displayTitle: "untitled", blank: false, running: false, completed: false, updatedAt: now - 40 * 86_400_000 } },
+            ],
+            "s1",
+            ["s3"],
+        ),
+    );
+    const blankListMarkup = renderComponent(
+        listEntry,
+        makeListProps(
+            [
+                { id: "b1", summary: { id: "b1", title: "review session-list", displayTitle: "review session-list", blank: false, running: false, completed: false, updatedAt: now - 5 * 60_000 } },
+                { id: "blank-current", summary: { id: "blank-current", title: undefined, displayTitle: "New Session", blank: true, running: false, completed: false, updatedAt: now } },
+            ],
+            "blank-current",
+            [],
+        ),
+    );
+    const emptyListMarkup = renderComponent(listEntry, makeListProps([], undefined, []));
 
     const skillExports = await loadPluginBundle("skill-status", "dotfiles-dsh-skill-status");
     const skillEntry = findEntry(captureSlotRegistrations(skillExports.apply as (ctx: unknown) => void), "skill-status");
-    const skillPopulated = renderComponent(skillEntry, {
-        source: fakeSkillSource(["commit", "review", "write-docs"]),
-    });
-    const skillEmpty = renderComponent(skillEntry, { source: fakeSkillSource([]) });
-    const skillOverflow = renderComponent(skillEntry, {
-        source: fakeSkillSource([
-            "commit", "review", "write-docs", "refactor-large-module", "migration-script",
-            "benchmark-suite", "diagnose-flaky-test", "update-dependencies", "triage-bug-reports",
-            "release-checklist", "security-audit", "performance-tuning", "api-contract-review",
-            "data-migration", "docs-refresh", "ci-hardening",
-        ]),
-    });
+    /** The component now reads its names through the session `useProjection` seat. */
+    const renderSkill = (names: readonly string[]): string =>
+        renderComponent(skillEntry, {
+            useProjection: (key: string) => (key === "skillStatus" ? names : undefined),
+        });
+    const skillPopulated = renderSkill(["commit", "review", "write-docs"]);
+    const skillEmpty = renderSkill([]);
+    const skillOverflow = renderSkill([
+        "commit", "review", "write-docs", "refactor-large-module", "migration-script",
+        "benchmark-suite", "diagnose-flaky-test", "update-dependencies", "triage-bug-reports",
+        "release-checklist", "security-audit", "performance-tuning", "api-contract-review",
+        "data-migration", "docs-refresh", "ci-hardening",
+    ]);
+
+    const listCase = `<div class="case">
+    <div class="case-label">4. session-list — sidebar rows with status dots, relative time, and hover actions</div>
+    <div class="list-host list-host-tall">${listMarkup}</div>
+</div>
+<div class="case">
+    <div class="case-label">5. session-list — the selected blank row has no time and no actions</div>
+    <div class="list-host">${blankListMarkup}</div>
+</div>
+<div class="case">
+    <div class="case-label">6. session-list — no sessions renders an empty region</div>
+    <div class="list-host">${emptyListMarkup}</div>
+</div>`;
 
     const cases = [
         caseSection("1. skill-status — populated (input.dock, above the composer card)", skillPopulated, ""),
         caseSection("2. skill-status — empty snapshot (the row must not render)", skillEmpty, ""),
         caseSection("3. skill-status — many skills (clipped with an ellipsis, must not overflow)", skillOverflow, ""),
-        caseSection("4. footer — composer.dock below the card, beside the stock stats pills", "", statsPillsMarkup + footerMarkup),
+        listCase,
     ].join("\n");
 
     for (const dark of [false, true]) {
@@ -313,8 +465,9 @@ async function main(): Promise<void> {
 <style>
 ${themeCss}
 ${buttonCss}
+${stateDotCss}
 </style>
-<style>${dockCss}</style>
+<style>${dockCss}${sessionListCss}</style>
 </head>
 <body style="--dsh-content-font-size: 14px"${bodyAttrs}>
 ${cases}
