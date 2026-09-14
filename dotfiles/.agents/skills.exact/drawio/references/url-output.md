@@ -61,4 +61,4 @@ process.stdout.write(p);
 cmd.exe /c start "" "$TMPFILE"
 ```
 
-URLがブラウザーの長さ上限を超える場合は、URL出力を中止し、正本`.drawio.svg`の絶対パスを表示する。
+URLがブラウザーの長さ上限を超える場合は、URL出力を中止し、正本の絶対パスを表示する。

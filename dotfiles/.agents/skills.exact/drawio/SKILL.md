@@ -1,15 +1,15 @@
 ---
 name: drawio
-description: draw.io、.drawio、.drawio.svg、PNG、SVG、PDFの図、フローチャート、アーキテクチャ図、ER図、シーケンス図、クラス図、ネットワーク図、モックアップ、ワイヤーフレームを作成・編集・検証・出力するときに使う。
+description: draw.io、.drawio、.drawio.svg、.drawio.png、PNG、SVG、PDFの図、フローチャート、アーキテクチャ図、ER図、シーケンス図、クラス図、ネットワーク図、モックアップ、ワイヤーフレームを作成・編集・検証・出力するときに使う。
 ---
 
 # Draw.io
 
 ## 永続成果物と対象
 
-Draw.io Desktop CLIはELKレイアウトと出力に必要である。`.drawio.svg`は`content`属性にdiagram XMLを埋め込んだSVGである。
+Draw.io Desktop CLIはELKレイアウトと出力に必要である。`.drawio.svg`は`content`属性に、`.drawio.png`はPNGに埋め込んだdiagram XMLを持つ。どちらも正本からXMLを取り出して編集し、再生成できる。
 
-`.drawio.svg`だけを永続的な正本とする。`.drawio`は一時ファイルであり、処理後に削除する。埋め込みdiagram dataを持たない通常のSVG画像は対象外である。
+`.drawio.svg`または`.drawio.png`のどちらか一方だけを永続的な正本とする。`.drawio`は一時ファイルであり、処理後に削除する。埋め込みdiagram dataを持たない通常のSVG・PNG画像は対象外である。
 
 ## CLIラダー
 
@@ -22,7 +22,7 @@ Draw.io Desktop CLIはELKレイアウトと出力に必要である。`.drawio.s
 2. 条件: OS既定の実行ファイルがある。
    行動: WSL2は`"/mnt/c/Program Files/draw.io/draw.io.exe"`、macOSは`/Applications/draw.io.app/Contents/MacOS/draw.io`、Windowsは`C:\Program Files\draw.io\draw.io.exe`を使う。WSL2では必要に応じてユーザーごとの`AppData/Local/Programs/draw.io/draw.io.exe`も確認する。
 3. 条件: 前段まででCLIが見つからない。
-   行動: `.drawio.svg`を生成できないため中止して報告する。`.drawio`やURLを代替の永続成果物として納品しない。
+   行動: 正本を生成できないため中止して報告する。`.drawio`やURLを代替の永続成果物として納品しない。
 
 ## CLI実行
 
@@ -40,8 +40,8 @@ URL出力、OS別の開き方、透明背景・倍率・サイズなどの詳細
 
 1. 各ページを`diagram`要素で表す`mxfile` XMLを`NAME.drawio`へ書く。[draw.io XMLリファレンス](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/xml-reference.md)を確認する。
 2. 「レイアウト」のELKレイアウトを`--layout`で適用する。座標を手作業で計算しない。
-3. `drawio -x -f svg -e -b 10 -o NAME.drawio.svg NAME.drawio`で正本を生成する。
-4. ユーザーが明示したときだけ、同じ一時ファイルからPNG、PDF、JPG、URLを派生出力する。PNGとPDFには`-e`を付け、JPGには付けない。URLは[URL・詳細出力](references/url-output.md)の手順を使う。
+3. `drawio -x -f svg -e -b 10 -o NAME.drawio.svg NAME.drawio`で正本を生成する。PNGを指定されたときは`drawio -x -f png -e -b 10 -o NAME.drawio.png NAME.drawio`で正本を生成する。
+4. 正本と別の形式をユーザーが明示したときだけ、同じ一時ファイルからSVG、PNG、PDF、JPG、URLを派生出力する。PNGとPDFには`-e`を付け、JPGには付けない。URLは[URL・詳細出力](references/url-output.md)の手順を使う。
 5. 出力に成功した後、`NAME.drawio`を削除する。出力またはURLを開けなければ、絶対パスまたはURLを表示する。
 
 形式を指定されなければ、`NAME.drawio.svg`だけを作成する。Mermaidからdraw.ioへの変換と、チャット本文のMermaidコードブロックは対象外である。
@@ -69,10 +69,9 @@ drawio -x -f xml --layout verticalFlow -o NAME.drawio NAME.drawio
 
 ## 編集と検証
 
-1. `NAME.drawio.svg`の`content`属性を確認する。なければ中止して報告する。
-2. `drawio -x -f xml -o NAME.drawio NAME.drawio.svg`でXMLを取り出す。
-3. XMLを直接編集する。既存の`mxCell`の`id`は再利用しない。
-4. 作成時と同じSVG出力コマンドで正本を再生成し、一時`NAME.drawio`を削除する。
+1. `drawio -x -f xml -o NAME.drawio NAME.drawio.svg`（PNG正本のときは入力に`NAME.drawio.png`を指定する）でXMLを取り出す。`content`属性がなくXMLを取り出せないときは、埋め込みdiagram dataを持たないため中止して報告する。
+2. XMLを直接編集する。既存の`mxCell`の`id`は再利用しない。
+3. 作成時と同じ出力コマンドで正本を再生成し、一時`NAME.drawio`を削除する。
 
 XMLにはコメントを一切含めない。属性値の特殊文字はエスケープし、すべての`mxCell`に一意な`id`を使う。グラフモデルには`id="0"`と`id="1"`のルートセルを置く。エッジには`<mxGeometry relative="1" as="geometry" />`を子要素として置く。
 
