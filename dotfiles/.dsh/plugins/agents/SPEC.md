@@ -4,7 +4,7 @@
 
 セッションは **agent** を実行する。agent は利用できるツール、依頼できる子 agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本 plugin は、agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を host 側で提供する。
 
-本 plugin は host 側と client 側（browser bundle）で構成する。host 側は agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を提供する。client 側は現在の agent と実効 class の表示を提供する。`/class` の選択 popup、subagent の待機表示など残りの client UI は phase 2 で別に提供する（「対象外」節）。
+本 plugin は host 側と client 側（browser bundle）で構成する。host 側は agent 定義の管理と選択、class によるモデルルーティング、レート制限（429）時のフォールバック、`subagent` ツール、画像読み取りの `vision` 委譲を提供する。client 側は現在の agent と実効 class の表示を提供する。`/class` の選択 popup、subagent の待機表示など残りの client UI は対象外とする（「対象外」節）。
 
 ## 設定
 
@@ -43,15 +43,15 @@ agents:
 | 候補の `provider`/`model` | 候補のモデル。`provider` は dsh に登録された LLM route の名前と一致しなければならない                                                                                                                                                                                                                                              |
 | 候補の `when`             | bash コマンド。終了コード `0` のときだけ候補が有効になる。省略・空文字なら常に有効。5 秒でタイムアウトし、タイムアウト・失敗・shell 契約の不在は無効と扱う                                                                                                                                                                       |
 | `class`                   | agent の既定 class。必須                                                                                                                                                                                                                                                                                                           |
-| `tools`                   | ツールの allowlist（pi と同じデフォルト拒否）。列挙したツールだけが実行でき、`[]` はツールなしを許可する。`"*"` はすべてのツールを許可し、`"!<tool-name>"` はそのツールを除外する（`["*", "!<tool-name>"]` は有効）。`"*"` を含まないリストでは否定は allow マスクに吸収される。グローバル tool レジストリに存在しない名前は warning 付きで除外し、allow 指定の全要素が未知だった場合はツールなしになり warning する                                                                            |
+| `tools`                   | ツールの allowlist（未列挙のツールは既定で拒否）。列挙したツールだけが実行でき、`[]` はツールなしを許可する。`"*"` はすべてのツールを許可し、`"!<tool-name>"` はそのツールを除外する（`["*", "!<tool-name>"]` は有効）。`"*"` を含まないリストでは否定は allow マスクに吸収される。グローバル tool レジストリに存在しない名前は warning 付きで除外し、allow 指定の全要素が未知だった場合はツールなしになり warning する                                                                            |
 | `subagents`               | `subagent` ツールでの起動を許可する子 agent の一覧。定義済み agent のみ指定できる                                                                                                                                                                                                                                                  |
 | `systemPrompt`            | 配列要素を記載順で結合して、agent 固有のシステムプロンプト（persona section）として追記する。YAML のアンカーとエイリアスで複数 agent 間で要素を共有できる                                                                                                                                                                          |
 | `/agent <name> [message]` | 指定した agent を即時に有効にする。実効 class は切替先 agent の既定 class に戻り、手動モデル選択は解除され、ツール制限・persona・`subagent` ツールの可視性が付け替わる。`message` を続けた場合は切替完了後にそのテキスト（前後の空白を除く）をユーザーメッセージとして送信する。未定義の `name` はエラー応答し、何も変更しない         |
-| `/class [name]`           | 実効 class を `name` に切り替え、手動モデル選択を解除する。cooldown は維持する。未定義の `name` はエラー応答し、何も変更しない。`name` を省略した場合は利用可能 class と現在値を応答する（選択 popup は phase 2）                                                                                                                   |
+| `/class [name]`           | 実効 class を `name` に切り替え、手動モデル選択を解除する。cooldown は維持する。未定義の `name` はエラー応答し、何も変更しない。`name` を省略した場合は利用可能 class と現在値を応答する（選択 popup は対象外）                                                                                                                   |
 | `--agent <name>` フラグ   | 初期 agent を指定する。未定義の値は warning で無視する（`default` になる）                                                                                                                                                                                                                                                         |
 | `--class <name>` フラグ   | 初期 class を指定する。`--agent` と独立であり併用できる。未定義の値は warning で無視する                                                                                                                                                                                                                                           |
 
-`--agent` / `--class` は dsh launcher が解釈しない引数として plugin に渡されることを前提とする。この経路が dsh 本家のパーサで拒否される場合は初期 agent・初期 class は指定できない（「付録」節）。
+`--agent` / `--class` は dsh launcher が解釈しない引数として plugin に渡されることを前提とする。この経路が dsh 本家のパーサで拒否される場合は初期 agent・初期 class は指定できない。
 
 本 plugin の管理下にない agent に対する `/agent`・`/class` は、その旨のエラー応答になり、何も変更しない。
 
@@ -92,7 +92,7 @@ class はデフォルトフォールバックの候補順序であり、モデ�
 
 class をまたいだ降格は行わない。
 
-pi にある「候補モデルの適用に失敗した（API キーがないなど）→ 除外して次候補へ進む」の降格は、dsh では route 解決が適用を兼ねるため概念が route 解決に吸収される。本 plugin が次候補へ降格するのは rate limit 系の失敗のみ（「レート制限（429）時のフォールバック」節）で、認証エラーなどそれ以外のリクエスト失敗は dsh 本来のエラー経路に委ねられ、次候補へ進まない。
+本 plugin が次候補へ降格するのは rate limit 系の失敗のみ（「レート制限（429）時のフォールバック」節）で、認証エラーなどそれ以外のリクエスト失敗は dsh 本来のエラー経路に委ねられ、次候補へ進まない。
 
 ## モデルの適用タイミング
 
@@ -103,7 +103,7 @@ dsh ではモデルリクエストごとに `agent/request` 経由で route が�
 | セッション開始               | 初期 agent（`--agent` フラグで指定された定義済み agent、指定なしまたは未定義なら `default`）と初期 class を適用する。dsh で agent が作られるごとに働く |
 | `/agent <name>`              | agent を切り替え、手動選択を解除し、実効 class を切替先 agent の既定 class に戻す。以後のリクエストから新しい候補評価が働く                        |
 | `/class [name]`              | 実効 class を切り替え、手動選択を解除する                                                                                                         |
-| `/reload`                    | 設定を読み込み直す。手動選択状態・実効 class・cooldown は維持する。読み込んだ設定に現在の agent または class が存在しない場合は、agent は初期 agent へ、class はその agent の既定 class へ戻す。読み込み・検証に失敗した場合は現在の設定を維持する。この名前は dsh 本家の slash コマンドと衝突しない（本家に同名コマンドはない）                                    |
+| `/reload`                    | 設定を読み込み直す。手動選択状態・実効 class・cooldown は維持する。読み込んだ設定に現在の agent または class が存在しない場合は、agent は初期 agent へ、class はその agent の既定 class へ戻す。読み込み・検証に失敗した場合は現在の設定を維持する                                    |
 | 各モデルリクエスト時（自動） | 実効 class の候補を再評価し、解決済み route と異なる候補が成立したら切り替える                                                                    |
 | 429 受信時                   | 「レート制限（429）時のフォールバック」に従う                                                                                                     |
 
@@ -139,7 +139,7 @@ cooldown 対象の route の同定は、本 plugin が直前のリクエスト�
 - 次候補がない場合は元のエラー文言と再送案内を含めた `rate limited on <provider>/<model>; no fallback available: <元のエラー文言> (resend the message to retry)` を error でログし、再試行を指示しない。この場合の処理は dsh 本来のエラー経路（本家の retry policy を含む）に委ねられる。
 - 手動状態でも同じ流れでフォールバックする。
 - Z.AI の同時実行系エラー（コード `1302` / `1305`）の待機リトライは本 plugin の対象外であり、`dsh-zai-concurrency-retry` が担当する。同 plugin は `agent/request-error` waterfall の最外側で対象エラーを握って下流へ渡さないため、同 plugin が有効な profile では本節のフォールバックは発火しない。
-- 本 plugin だけが有効な環境では、`1305` は provider adapter で `RATE_LIMIT` に正規化されないためフォールバックの対象にならず、`1302` は `RATE_LIMIT` に正規化されるため対象になる。モデル切替では Z.AI の同時実行制限は解決しないため、`1302` での切替は pi と異なり無効な fallback である。
+- 本 plugin だけが有効な環境では、`1305` は provider adapter で `RATE_LIMIT` に正規化されないためフォールバックの対象にならず、`1302` は `RATE_LIMIT` に正規化されるため対象になる。モデル切替では Z.AI の同時実行制限は解決しないため、`1302` での切替は無効な fallback である。
 
 ### cooldown（待機状態）
 
@@ -193,8 +193,8 @@ shadow が委譲に失敗する場合（呼び出し agent の `subagents` に `
 
 - 子は dsh の in-process one-shot subagent として起動される。プロセスの起動・停止・出力の読み取りは本家の subagent 機構が担い、本 plugin は関与しない。
 - 子は独自の routing 状態（独立した cooldown と、子 agent 定義の class）を持つ。子の 429 も子の class 内でフォールバックする。
-- 子の結果は最終テキストのみを親へ返す。子が正常完了以外で終了した場合と、正常完了でも最終テキストが空の場合（pi と同じくモデル未割当などの静かな失敗として扱う）は、その旨を含むエラー応答になる。エラーメッセージは `child <agent> <stopReason>: <diagnostic または最終テキスト>` 形式で、どちらも無いときは `(no output)` を添える。
-- 子セッションの表示名（label）は pi と同じ規則を使う。task の先頭行を前後の空白を除いた上で、コードポイント単位で先頭 30 文字に切り詰め、切り詰めたときは `…` を末尾に付ける。`<agent>: <summary>` 形式で、summary が空（先頭行が空）のときは agent 名のみを使う。
+- 子の結果は最終テキストのみを親へ返す。子が正常完了以外で終了した場合と、正常完了でも最終テキストが空の場合（モデル未割当などの静かな失敗として扱う）は、その旨を含むエラー応答になる。エラーメッセージは `child <agent> <stopReason>: <diagnostic または最終テキスト>` 形式で、どちらも無いときは `(no output)` を添える。
+- 子セッションの表示名（label）は次の規則で作る。task の先頭行を前後の空白を除いた上で、コードポイント単位で先頭 30 文字に切り詰め、切り詰めたときは `…` を末尾に付ける。`<agent>: <summary>` 形式で、summary が空（先頭行が空）のときは agent 名のみを使う。
 - 子セッションの記録は dsh の session store に行われ、本家 UI で閲覧できる。
 - 委譲の深さ制限は本家の既定に従う。leaf agent（`subagents` が空）には `subagent` ツールが見えないため、設定上の委譲グラフで実質的に制御される。
 
@@ -207,11 +207,11 @@ shadow が委譲に失敗する場合（呼び出し agent の `subagents` に `
 | 2 つ未満   | すぐに子を起動する                                                             |
 | 2 つ       | 実行中の子が終了して空きが出るまで待機し、先に待機した呼び出しから順に起動する |
 
-待機中の呼び出しの待機表示は client 側の表現のため phase 2 であり、host では結果を返さない待ちとして現れる。待機中に親がキャンセルした場合、その呼び出しはエラーとして終了する。
+待機中の呼び出しの待機表示は client 側の表現のため対象外であり、host では結果を返さない待ちとして現れる。待機中に親がキャンセルした場合、その呼び出しはエラーとして終了する。
 
 ## Agent 表示
 
-dsh web UI の composer 直下（composer dock）に、現在の agent と実効 class を常設表示する。表示は pi widget と同じ 2 行形式で、テキスト色はグレーとする。
+dsh web UI の composer 直下（composer dock）に、現在の agent と実効 class を常設表示する。表示は次の 2 行形式で、テキスト色はグレーとする。
 
 ```text
 🤖 agent: <currentAgent>
@@ -222,7 +222,7 @@ dsh web UI の composer 直下（composer dock）に、現在の agent と実効
 
 | 項目             | 内容と振る舞い                                                                                                                                                             |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状態の配信       | host 側が本家 `dsh-client-connection` の `/api` channel 上に exact Fetch route `POST /api/dsh-agents/state` を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual }` を返す。共有 channel の RPC interceptor は dsh rc.2 から typert gateway が占有するため、本 plugin は exact route を使う。durable な session log には書き込まず、メモリ上の状態を応答する |
+| 状態の配信       | host 側が本家 `dsh-client-connection` の `/api` channel 上に exact Fetch route `POST /api/dsh-agents/state` を登録し、`{ sessionId }` に対して `{ managed, agent, className, manual }` を返す。durable な session log には書き込まず、メモリ上の状態を応答する |
 | 表示の更新       | client half が 2 秒間隔で状態を取得し、取得に失敗したときは直前の表示を維持する。agent・class の切替は次の取得まで（最大 2 秒）表示に反映される                                |
 | 未管理 session   | 本 plugin が管理しない session（plugin 無効、`agents.yaml` 不正、子 session など）では何も表示しない                                                                      |
 | 表示しない環境   | web UI 以外の profile（headless、sdk など）では client half が読み込まれないため表示は出ない。routing・フォールバックなどの host 側の動作は同じ                                    |
@@ -231,18 +231,8 @@ dsh web UI の composer 直下（composer dock）に、現在の agent と実効
 
 エージェントがタスクを遂行できない場合は、理由（権限不足、力量・情報不足など）を添えて報告する。報告先（subagent 実行中は依頼元エージェント、直接実行時はオーナー）の指定は plugin コードで強制せず、各 agent の systemPrompt の規範に委ねる。
 
-## 対象外（phase 2 以降）
+## 対象外
 
 - client bundle（`/class` の popupSelect、subagent の待機表示・toolview、通知）
 - チャットに貼り付けられた画像の自動委譲
 - Z.AI 同時実行系エラー（`1302` / `1305`）の待機リトライ
-
-## 付録: runtime 検証を要する項目
-
-型検査・単体テストでは確認できず、実機での確認を要する項目。
-
-1. `--agent` / `--class` が dsh 本家（web-app）の引数パーサを通るか。拒否される場合は初期 agent・初期 class は指定できない
-2. one-shot 子の prompt に含めた画像 block が子のモデルリクエストに届くか、モダリティ検証がどこで働くか
-3. `model/selection` event の監視の細目（再開セッションでの挙動を含む）
-4. 子の routing 状態の登録が子の最初のリクエストに間に合うか。間に合わない場合、子の最初のリクエストは起動時に渡した静的な route で動く
-5. `read_image` shadow の付け替えが `agent/request` 内で行われるため、同一ステップの tool schema への反映タイミング

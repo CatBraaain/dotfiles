@@ -257,7 +257,7 @@ network は開放。fs 制限の対象外。
 
 ## 6. 設定（`sandbox.yaml`）
 
-ユーザーが `$DSH_HOME/config/sandbox.yaml`（`DSH_HOME` 未設定なら `~/.dsh/config/sandbox.yaml`）で制御する。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash 専用パスは `credentials` で指定する。形式は pi 版 sandbox.yaml と同一で、実値（既定エントリ）は設定ファイルを参照。
+ユーザーが `$DSH_HOME/config/sandbox.yaml`（`DSH_HOME` 未設定なら `~/.dsh/config/sandbox.yaml`）で制御する。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash 専用パスは `credentials` で指定する。実値（既定エントリ）は設定ファイルを参照。
 
 | 項目          | 意味                                                                                                                                                                            |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -289,7 +289,7 @@ commands:
 
 ### 6.1 bind とパスの実在保証
 
-`read` / `write` の `allow` アクションのパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よってセッション開始時に dsh プロセス本体（フェンス外）が、`write` セクションで `allow` を宣言した要素の固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。作成は宣言ベースであり、後続の要素が同じパスを `ask`・`deny` に上書きしていても作成する。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、Git repository 内で解決できたとき `mkdir -p` の対象とする（`~/.agents/worktrees/${REPOSITORY_NAME}` のような worktrees ディレクトリをこれから作るため）。リポジトリ外では作成しない。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、dsh が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
+`read` / `write` の `allow` アクションのパスは bwrap で bind するため実在が必須。ホワイトリスト方式（§2）なので未 bind のパスはサンドボックス内に存在せず、sandbox 内のプロセスがキャッシュディレクトリを自前作成できない。よってセッション開始時に dsh プロセス本体（フェンス外）が、`write` セクションで `allow` を宣言した要素の固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせず bind する。作成は宣言ベースであり、後続の要素が同じパスを `ask`・`deny` に上書きしていても作成する。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、Git repository 内で解決できたとき `mkdir -p` の対象とする（`~/.agents/worktrees/${REPOSITORY_NAME}` のような worktrees ディレクトリをこれから作るため）。リポジトリ外では作成しない。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、dsh が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
 
 `write` の動的許可パスも同じ実在保証の対象とし、承認時にフェンス外で作成する（ファイル単体スコープは親ディレクトリの `mkdir -p` と空ファイル作成、ディレクトリスコープは対象ディレクトリの `mkdir -p`）。空ファイル作成は、書き込み可能 bind の対象に実在を要するためである。作成した空ファイルへの初回 `write` は §2.4 の読み済み要求の対象外で、作成（`create`）として扱う。実在保証に成功した許可だけを動的許可と bind 対象に追加する。作成に失敗した許可要求はエラーを返し、後続のツール呼び出しの動作を変えない。`read` の動的許可でパスは作成しない。
 

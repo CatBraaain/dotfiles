@@ -2,7 +2,7 @@
 
 ## 目的
 
-dsh web UI の composer 上部に、現在のセッションで正常に利用完了した skill 名を常設表示する。pi extension `skill-status`（`dotfiles/.pi/agent/extensions.exact/skill-status`）と同等の機能を dsh へ移行したものである。
+dsh web UI の composer 上部に、現在のセッションで正常に利用完了した skill 名を常設表示する。
 
 ## 表示
 
@@ -31,9 +31,9 @@ host 側 plugin は session projection `skillStatus`（初回利用順の名前�
 - 失敗した結果（`error` を持つ、または結果 block が `isError`）は対の呼び出しを畳み込み状態から外すだけで、名前は追加しない。その後の同じ skill の成功した利用は初回利用として数える
 - 未完了のまま残った呼び出しは host 再起動後も log 全体の再畳み込みで復元され、後から届いた結果と対になる
 
-dsh の明示コマンド `/<name>`（pi の `/skill:<name>` とは異なる）は、skill の内容を user message に直接展開し、`skill` tool を呼ばない（dsh 0.1.5-rc 系で実測）。本 plugin は `skill` tool の呼び出しの成否だけを見るため、明示コマンド経由の利用は記録されない。
+dsh の明示コマンド `/<name>` は、skill の内容を user message に直接展開し、`skill` tool を呼ばない。本 plugin は `skill` tool の呼び出しの成否だけを見るため、明示コマンド経由の利用は記録されない。
 
-この設計により session log には dsh 本体の既知 event 型しか書かれない。かつて本 plugin は log-only event `skill-status/used` を append していたが、dsh 0.1.5-rc 系の実測では、その event を含む session log は host 再起動後の observe で `unknown to this harness and not marked ignorable` として拒否され、会話履歴が読めなくなった（dock 表示だけは projection 経由で復元する）。envelope の `ignorable` marker は `Session.append` の公開 API から指定できず、既知 event 型一覧は生成物で閉じているため、plugin 単独で marker を付けられない。`skill-status/used` を含む過去の session はこの拒否が残る既知制限であり、host 側の読み替えを待つ。
+この設計により session log には dsh 本体の既知 event 型しか書かれない。plugin 固有の log-only event を session log に書くと、その event を含む session log は host 再起動後の observe で拒否され会話履歴が読めなくなるため、本 plugin は自前の session event を持たない。
 
 ## セッション間の表示
 

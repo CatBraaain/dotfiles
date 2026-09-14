@@ -1,6 +1,6 @@
 # handoff-session plugin Spec
 
-このpluginは、作業phaseを終えたagentが次のagentへの自然言語プロンプトを用意し、オーナーの確認後に完全な新セッションへ移るための `handoff_session` ツールを提供する。対象読者は、phase境界でコンテキストを切り替えるオーナーとagentである。
+このpluginは、agentが次のagentへの自然言語プロンプトを用意し、オーナーの確認後に完全な新セッションへ移るための `handoff_session` ツールを提供する。
 
 ## 入力
 
@@ -12,12 +12,6 @@
 | `handoff` | 前後の空白を除いて空でない文字列 | 次のagentへ自動送信する自然言語プロンプト |
 
 `handoff` は続行目的、承認済みspecのパス、決定事項、作業・検証状態、未決事項、完了条件を含められる。ファイルパスを含める場合、次のagentはそのファイルを読んで続行する。
-
-## 収束ループ
-
-`handoff_session` はmain agentだけが使う。main agentは収束ループの開始時、ならびにseniorによるレビューまたは実装の完了時に呼び出す。オーナーが承認すると、新しいmain agentが次のphaseを別のseniorへ委譲する。
-
-収束条件を満たしたmain agentは、`handoff_session` を呼び出さずオーナーへ結果を報告する。
 
 ## セッション移行
 

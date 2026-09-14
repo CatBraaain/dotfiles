@@ -3,7 +3,7 @@
 ## 目的
 
 dsh web UI の入力欄の上に、provider ごとの quota 使用率を単純なテキスト行で
-常時表示する。dsh-quota-panel（右下カプセル）を置き換える。
+常時表示する。
 
 ## 表示
 

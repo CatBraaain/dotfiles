@@ -2,7 +2,7 @@
 
 ## 目的
 
-エージェントの動作状態に合わせて、web UI のタイトル（ブラウザタブの `document.title`）を切り替える。pi extension `titlebar`（`dotfiles/.pi/agent/extensions.exact/titlebar`）と同等の機能を dsh へ移行したものである。dsh に TUI 形態・ターミナルタイトル相当 API はないため、web UI のタイトルを制御対象とする。
+エージェントの動作状態に合わせて、web UI のタイトル（ブラウザタブの `document.title`）を切り替える。dsh に TUI 形態・ターミナルタイトル相当 API はないため、web UI のタイトルを制御対象とする。
 
 ## 実行条件（スコープ）
 

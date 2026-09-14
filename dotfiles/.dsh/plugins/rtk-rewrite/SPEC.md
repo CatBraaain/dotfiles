@@ -2,7 +2,7 @@
 
 ## 目的
 
-bash コマンドを実行前に `rtk rewrite` で書き換え、読み取り系コマンドを rtk のコンパクトな出力ラッパー経由にしてトークンを節約する。pi extension `rtk`（`rtk.ts`）と同等の機能を dsh へ移行したものである。書き換え規則の本体は `rtk` CLI にあり、本 plugin は書き換えの委譲のみを行う。
+bash コマンドを実行前に `rtk rewrite` で書き換え、読み取り系コマンドを rtk のコンパクトな出力ラッパー経由にしてトークンを節約する。書き換え規則の本体は `rtk` CLI にあり、本 plugin は書き換えの委譲のみを行う。
 
 ## 適用範囲
 
@@ -45,4 +45,4 @@ mount 時のバージョン判定で書き換えが無効化される条件は�
 | プラットフォーム | 挙動 |
 | --- | --- |
 | POSIX | 本 plugin が `ctx.shell` を担う（本家 bash-sandbox executor を差し替える） |
-| Windows | 本 plugin は mount されず、本家の pwsh executor が担う（差し替え前と同一） |
+| Windows | 本 plugin は mount されず、本家の pwsh executor が担う |

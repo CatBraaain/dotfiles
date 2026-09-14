@@ -2,7 +2,7 @@
 
 ## 目的
 
-dsh web の sidebar セッションリストを自前実装に置き換え、行ごとに archive と copy session id をワンクリックで実行できるようにする。合わせて、役割を終えた composer 下の session id 常時表示（`dotfiles-dsh-footer`）を profile から削除する。設定ファイルは持たず、plugin を profile から外すことで全体を無効化する。対象は dsh web UI。
+dsh web の sidebar セッションリストを自前実装に置き換え、行ごとに archive と copy session id をワンクリックで実行できるようにする。合わせて、composer 下の session id 常時表示（`dotfiles-dsh-footer`）を profile から除外する。設定ファイルは持たず、plugin を profile から外すことで全体を無効化する。対象は dsh web UI。
 
 ## 用語
 
