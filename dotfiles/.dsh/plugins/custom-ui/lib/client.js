@@ -130,6 +130,18 @@ function chordPopupTarget(current, subagentAddress) {
     return;
   return current;
 }
+function modelPopupSpec(directoryFor) {
+  return {
+    options: async (context) => optionsOf(await directoryFor(context.sessionId).load()),
+    onSelect: async (option, context) => {
+      const directory = directoryFor(context.sessionId);
+      const selection = selectionOf(directory.store.getSnapshot(), option.id);
+      if (selection === undefined)
+        throw new Error("this provider's catalog failed to load — pick a model from a loaded group");
+      await directory.select(selection);
+    }
+  };
+}
 
 // src/client/index.ts
 var inject = ["commandUi", "sessions", "modelDirectories", "slots"];
@@ -183,22 +195,17 @@ function apply(ctx) {
     const sessions = scope.sessions;
     const models = scope.modelDirectories;
     const openModelPopup = () => {
-      const id = chordPopupTarget(sessions.list.getSnapshot().current, (sessionId) => sessions.subagentAddress(sessionId));
-      if (id === undefined)
-        return;
-      const actx = sessions.scope(id);
-      if (actx === undefined)
-        return;
-      const directory = models.directoryFor(id);
-      command.popupFor(actx).open("model", {
-        options: async () => optionsOf(await directory.load()),
-        onSelect: async (option) => {
-          const selection = selectionOf(directory.store.getSnapshot(), option.id);
-          if (selection === undefined)
-            throw new Error("this provider's catalog failed to load — pick a model from a loaded group");
-          await directory.select(selection);
-        }
-      }, { sessionId: id }, { via: "enter", token: "model" });
+      try {
+        const id = chordPopupTarget(sessions.list.getSnapshot().current, (sessionId) => sessions.subagentAddress(sessionId));
+        if (id === undefined)
+          return;
+        const actx = sessions.scope(id);
+        if (actx === undefined)
+          return;
+        command.popupFor(actx).open("model", modelPopupSpec((sessionId) => models.directoryFor(sessionId)), { sessionId: id }, { via: "enter", token: "model" });
+      } catch (error) {
+        console.error("[custom-ui] Ctrl+K Ctrl+M could not open the model popup:", error);
+      }
     };
     let chord = {};
     const onKeyDown = (event) => {

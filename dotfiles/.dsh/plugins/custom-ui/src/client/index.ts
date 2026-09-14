@@ -20,7 +20,7 @@ import { formatRunDuration, turnRunMs } from "./turn-time";
 // the full ISessions face explicitly.
 import type { ISessions } from "@deepseek-ai/dsh-api-session-controller/client";
 import { onChordKey, type ChordState } from "./chord";
-import { chordPopupTarget, optionsOf, selectionOf } from "./popup-logic";
+import { chordPopupTarget, modelPopupSpec } from "./popup-logic";
 
 /** Services this client half touches. */
 export const inject = ["commandUi", "sessions", "modelDirectories", "slots"];
@@ -152,32 +152,31 @@ export function apply(ctx: Context): void {
     const models = scope.modelDirectories;
 
     const openModelPopup = () => {
-      // Current ordinary session only (spec M8: nothing on the New Session
-      // screen; addressed subagent sessions expose no model selection, same
-      // availability rule as the stock /model command).
-      const id = chordPopupTarget(sessions.list.getSnapshot().current, (sessionId) =>
-        sessions.subagentAddress(sessionId),
-      );
-      if (id === undefined) return;
-      const actx = sessions.scope(id);
-      if (actx === undefined) return;
-      const directory = models.directoryFor(id);
-      command.popupFor(actx).open(
-        "model",
-        {
-          options: async () => optionsOf(await directory.load()),
-          onSelect: async (option) => {
-            const selection = selectionOf(directory.store.getSnapshot(), option.id);
-            if (selection === undefined)
-              throw new Error(
-                "this provider's catalog failed to load — pick a model from a loaded group",
-              );
-            await directory.select(selection);
-          },
-        },
-        { sessionId: id },
-        { via: "enter", token: "model" },
-      );
+      try {
+        // Current ordinary session only (spec M8: nothing on the New Session
+        // screen; addressed subagent sessions expose no model selection, same
+        // availability rule as the stock /model command).
+        const id = chordPopupTarget(sessions.list.getSnapshot().current, (sessionId) =>
+          sessions.subagentAddress(sessionId),
+        );
+        if (id === undefined) return;
+        const actx = sessions.scope(id);
+        if (actx === undefined) return;
+        command.popupFor(actx).open(
+          "model",
+          // Directory resolution is deferred into the spec callbacks (same
+          // shape and failure copy as the stock /model contribution), so a
+          // session with degraded remote wiring fails the shell's options
+          // load (retry UI) instead of throwing out of this keydown handler.
+          modelPopupSpec((sessionId) => models.directoryFor(sessionId)),
+          { sessionId: id },
+          { via: "enter", token: "model" },
+        );
+      } catch (error) {
+        // Session lookup or popup open itself failed; never escape uncaught
+        // from a document-level capture keydown.
+        console.error("[custom-ui] Ctrl+K Ctrl+M could not open the model popup:", error);
+      }
     };
 
     let chord: ChordState = {};

@@ -119,3 +119,42 @@ export function chordPopupTarget<T>(
   if (subagentAddress(current) !== undefined) return undefined;
   return current;
 }
+
+/** Structural face of the per-session model directory the popup spec needs. */
+export interface DirectoryLike {
+  load(): Promise<DirectoryState>;
+  store: { getSnapshot(): DirectoryState };
+  select(selection: ModelSelectionLike): Promise<unknown> | unknown;
+}
+
+/** Open-time context handed to the popup spec (matches the stock spec's `session`). */
+export interface ModelPopupContext<S extends string = string> {
+  readonly sessionId: S;
+}
+
+/**
+ * Build the /model popup spec the chord opens with. Directory resolution
+ * stays inside options()/onSelect() — never at keydown time — mirroring the
+ * stock /model contribution, so a session with degraded remote wiring fails
+ * the shell's options load (its retry UI) instead of throwing out of the
+ * keydown handler.
+ */
+export function modelPopupSpec<S extends string>(
+  directoryFor: (sessionId: S) => DirectoryLike,
+): {
+  options(context: ModelPopupContext<S>): Promise<PopupOption[]>;
+  onSelect(option: PopupOption, context: ModelPopupContext<S>): Promise<void>;
+} {
+  return {
+    options: async (context) => optionsOf(await directoryFor(context.sessionId).load()),
+    onSelect: async (option, context) => {
+      const directory = directoryFor(context.sessionId);
+      const selection = selectionOf(directory.store.getSnapshot(), option.id);
+      if (selection === undefined)
+        throw new Error(
+          "this provider's catalog failed to load — pick a model from a loaded group",
+        );
+      await directory.select(selection);
+    },
+  };
+}

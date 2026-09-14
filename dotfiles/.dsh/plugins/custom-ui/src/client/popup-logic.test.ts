@@ -2,9 +2,11 @@ import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import {
   chordPopupTarget,
+  modelPopupSpec,
   optionsOf,
   rowId,
   selectionOf,
+  type DirectoryLike,
   type DirectoryState,
 } from "./popup-logic.ts";
 
@@ -83,6 +85,57 @@ describe("selectionOf", () => {
 
   it("returns undefined for an unknown row", () => {
     assert.equal(selectionOf(state, "failure/broken-provider"), undefined);
+  });
+});
+
+describe("modelPopupSpec", () => {
+  const directory: DirectoryLike = {
+    load: async () => state,
+    store: { getSnapshot: () => state },
+    select: async () => undefined,
+  };
+
+  it("resolves the directory lazily from the open-time context, not at spec build", async () => {
+    const resolved: string[] = [];
+    const spec = modelPopupSpec((sessionId) => {
+      resolved.push(sessionId);
+      return directory;
+    });
+    assert.deepEqual(resolved, []);
+    await spec.options({ sessionId: "s1" });
+    assert.deepEqual(resolved, ["s1"]);
+  });
+
+  it("maps the loaded state into rows via options", async () => {
+    const spec = modelPopupSpec(() => directory);
+    const rows = await spec.options({ sessionId: "s1" });
+    assert.equal(rows.length, optionsOf(state).length);
+    assert.equal(rows[0]?.id, rowId("zai", "glm-5.3"));
+  });
+
+  it("selects the resolved selection for the context's session", async () => {
+    const picked: { sessionId: string; provider: string; model: string }[] = [];
+    const spec = modelPopupSpec((sessionId) => ({
+      ...directory,
+      select: async (selection) => {
+        picked.push({ sessionId, provider: selection.provider, model: selection.model });
+      },
+    }));
+    await spec.onSelect(optionsOf(state)[0]!, { sessionId: "s1" });
+    assert.deepEqual(picked, [{ sessionId: "s1", provider: "zai", model: "glm-5.3" }]);
+  });
+
+  it("rejects with the stock failure copy for an unknown row", async () => {
+    const spec = modelPopupSpec(() => directory);
+    await assert.rejects(
+      spec.onSelect(
+        { id: "failure/broken-provider", label: "Broken", detail: "" },
+        {
+          sessionId: "s1",
+        },
+      ),
+      /failed to load/,
+    );
   });
 });
 
