@@ -142,20 +142,31 @@ var AGENTS_STATE_PATH = "/api/dsh-agents/state";
 var AGENTS_SELECT_PATH = "/api/dsh-agents/select";
 
 // src/client/state.ts
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+function parseStatePayload(value) {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("invalid agents state payload");
+  }
+  const payload = value;
+  if (payload.managed === false)
+    return { managed: false };
+  if (payload.managed !== true || typeof payload.agent !== "string" || payload.agent === "" || typeof payload.className !== "string" || payload.className === "" || typeof payload.manual !== "boolean" || !isStringArray(payload.agents) || !isStringArray(payload.classes) || payload.model !== undefined && (typeof payload.model !== "string" || payload.model === "")) {
+    throw new TypeError("invalid agents state payload");
+  }
+  return parseDisplayState(payload);
+}
 function createStateFetcher(doFetch) {
   return async (sessionId) => {
-    try {
-      const response = await doFetch(AGENTS_STATE_PATH, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId })
-      });
-      if (!response.ok)
-        return { managed: false };
-      return parseDisplayState(await response.json());
-    } catch {
-      return { managed: false };
-    }
+    const response = await doFetch(AGENTS_STATE_PATH, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId })
+    });
+    if (!response.ok)
+      throw new Error(`agents state request failed: ${response.status}`);
+    return parseStatePayload(await response.json());
   };
 }
 function createSelectSender(doFetch) {

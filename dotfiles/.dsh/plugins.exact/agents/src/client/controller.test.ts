@@ -1,7 +1,10 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
+import type { SessionId } from "@deepseek-ai/dsh-session/types";
+import { AGENTS_STATE_PATH } from "../state-rpc";
 import { createStateReader, startStatePoller, type StatePollerDeps } from "./controller";
 import type { AgentDisplayState } from "./format";
+import { createSelectSender, createStateFetcher } from "./state";
 
 /** Timer handles captured by the stub clock. */
 interface StubClock {
@@ -69,6 +72,40 @@ describe("createStateReader", () => {
     await firstRefresh;
 
     assert.deepEqual(seen, [{ managed: true, agent: "main", className: "high", model: "m-high" }]);
+  });
+
+  it("keeps component state when an accepted pick's immediate refresh fails", async () => {
+    const sessionId = "session-1" as SessionId;
+    const initialState = {
+      managed: true,
+      agent: "main",
+      className: "high",
+      agents: ["main"],
+      classes: ["high", "low"],
+    } satisfies AgentDisplayState;
+    let stateRequests = 0;
+    const doFetch = async (input: string | URL | Request): Promise<Response> => {
+      if (input === AGENTS_STATE_PATH) {
+        stateRequests += 1;
+        if (stateRequests > 1) return new Response("unavailable", { status: 503 });
+        return new Response(JSON.stringify({ ...initialState, manual: false }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, text: "class → low" }), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const fetchState = createStateFetcher(doFetch);
+    const select = createSelectSender(doFetch);
+    const seen: AgentDisplayState[] = [];
+    const reader = createStateReader(() => fetchState(sessionId), (state) => seen.push(state));
+
+    await reader.refresh();
+    assert.deepEqual(await select(sessionId, "class", "low"), { ok: true });
+    await reader.refresh();
+
+    assert.deepEqual(seen, [initialState]);
   });
 });
 

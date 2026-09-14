@@ -54,10 +54,11 @@ function createTestServices(routes: Map<string, CapturedRoute>) {
 }
 
 describe("dsh agents browser bundle", () => {
-  it("ignores an older state response after a newer menu refresh", async () => {
+  it("keeps the selected state when a newer menu refresh fails", async () => {
     const firstState = deferred<Response>();
     const selectedState = deferred<Response>();
     const menuProps: Array<Record<string, unknown>> = [];
+    const stateUpdates: unknown[] = [];
     let latestState: Record<string, unknown> | undefined;
     let registeredComponent: ((props: Record<string, unknown>) => unknown) | undefined;
     let fetchCount = 0;
@@ -80,6 +81,7 @@ describe("dsh agents browser bundle", () => {
           value,
           (next) => {
             value = next;
+            if (typeof next === "object" && next !== null) stateUpdates.push(next);
             if (typeof value === "object" && value !== null && "className" in value) {
               latestState = value as Record<string, unknown>;
             }
@@ -109,6 +111,8 @@ describe("dsh agents browser bundle", () => {
         if (fetchCount === 1) return firstState.promise;
         if (fetchCount === 2) return new Response(JSON.stringify({ ok: true }));
         if (fetchCount === 3) return selectedState.promise;
+        if (fetchCount === 4) return new Response(JSON.stringify({ ok: true }));
+        if (fetchCount === 5) return new Response(JSON.stringify({ managed: "invalid" }));
         throw new Error(`unexpected fetch ${fetchCount}`);
       }) as typeof fetch;
 
@@ -160,6 +164,7 @@ describe("dsh agents browser bundle", () => {
             managed: true,
             agent: "main",
             className: "high",
+            manual: false,
             model: "gpt-5.6-terra",
             agents: ["main"],
             classes: ["high", "middle"],
@@ -173,6 +178,7 @@ describe("dsh agents browser bundle", () => {
             managed: true,
             agent: "main",
             className: "middle",
+            manual: false,
             model: "gpt-5.6-luna",
             agents: ["main"],
             classes: ["high", "middle"],
@@ -183,14 +189,24 @@ describe("dsh agents browser bundle", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       assert.equal(fetchCount, 3);
-      assert.deepEqual(latestState, {
+      const selectedStateSnapshot = {
         managed: true,
         agent: "main",
         className: "high",
         model: "gpt-5.6-terra",
         agents: ["main"],
         classes: ["high", "middle"],
-      });
+      };
+      assert.deepEqual(latestState, selectedStateSnapshot);
+
+      (classMenu.onSelect as (name: string) => void)("middle");
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      assert.equal(fetchCount, 5);
+      assert.deepEqual(latestState, selectedStateSnapshot);
+      assert.deepEqual(stateUpdates, [selectedStateSnapshot]);
     } finally {
       globalThis.fetch = previousFetch;
       globalThis.setInterval = previousSetInterval;

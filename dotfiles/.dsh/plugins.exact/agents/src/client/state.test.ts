@@ -17,31 +17,53 @@ describe("createStateFetcher", () => {
     let captured: Request | undefined;
     const fetcher = createStateFetcher(async (input, init) => {
       captured = new Request(url(), init);
-      return json({ managed: true, agent: "main", className: "high", manual: false });
+      return json({
+        managed: true,
+        agent: "main",
+        className: "high",
+        manual: false,
+        agents: ["main"],
+        classes: ["high"],
+      });
     });
     const state = await fetcher(sessionId);
     assert.equal(captured?.method, "POST");
     assert.equal(captured?.url, url().href);
     assert.equal(captured?.headers.get("content-type"), "application/json");
     assert.deepEqual(JSON.parse(await captured.text()), { sessionId: "session-1" });
-    assert.deepEqual(state, { managed: true, agent: "main", className: "high" });
+    assert.deepEqual(state, {
+      managed: true,
+      agent: "main",
+      className: "high",
+      agents: ["main"],
+      classes: ["high"],
+    });
   });
 
   it("drops the manual flag from the wire payload", async () => {
     const fetcher = createStateFetcher(async () =>
-      json({ managed: true, agent: "main", className: "high", manual: true }),
+      json({
+        managed: true,
+        agent: "main",
+        className: "high",
+        manual: true,
+        agents: ["main"],
+        classes: ["high"],
+      }),
     );
     assert.deepEqual(await fetcher(sessionId), {
       managed: true,
       agent: "main",
       className: "high",
       manual: true,
+      agents: ["main"],
+      classes: ["high"],
     });
   });
 
-  it("reads a non-2xx response as unmanaged", async () => {
+  it("rejects a non-2xx response", async () => {
     const fetcher = createStateFetcher(async () => new Response("not found", { status: 404 }));
-    assert.deepEqual(await fetcher(sessionId), { managed: false });
+    await assert.rejects(fetcher(sessionId), /agents state request failed: 404/);
   });
 
   it("reads an unmanaged payload as unmanaged", async () => {
@@ -49,16 +71,16 @@ describe("createStateFetcher", () => {
     assert.deepEqual(await fetcher(sessionId), { managed: false });
   });
 
-  it("reads a malformed body as unmanaged", async () => {
+  it("rejects a malformed body", async () => {
     const fetcher = createStateFetcher(async () => json({ managed: "yes" }));
-    assert.deepEqual(await fetcher(sessionId), { managed: false });
+    await assert.rejects(fetcher(sessionId), /invalid agents state payload/);
   });
 
-  it("reads a transport failure as unmanaged", async () => {
+  it("propagates a transport failure", async () => {
     const fetcher = createStateFetcher(async () => {
       throw new TypeError("network down");
     });
-    assert.deepEqual(await fetcher(sessionId), { managed: false });
+    await assert.rejects(fetcher(sessionId), /network down/);
   });
 });
 
