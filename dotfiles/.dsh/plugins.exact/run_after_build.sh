@@ -47,8 +47,9 @@
 # target state has been applied, so every plugin's src/ is fully deployed
 # before being bundled. (As a plain run_ script it executed in target-path
 # order in the middle of the apply, which bundled stale sources for plugins
-# sorting after this file's own path.) The profile's run_bun_install.sh has
-# already re-linked by then; that is harmless because bun links file: deps as
+# sorting after this file's own path.) The profile's run_after_bun_install.sh
+# runs after this script (target-path order puts plugins/ before profiles/ in
+# the after phase); that ordering is harmless because bun links file: deps as
 # per-file symlinks, so the profile always resolves the freshly built dist/
 # content.
 

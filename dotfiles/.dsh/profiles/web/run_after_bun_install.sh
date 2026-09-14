@@ -23,7 +23,7 @@ patch_dsh_tools() {
     closure="$HOME/.dsh/profiles/node_modules/@deepseek-ai/dsh-tools"
     global=$(readlink -f "$closure")
     if [ -z "$global" ]; then
-        echo "run_bun_install.sh: $closure does not resolve; cannot patch dsh-tools" >&2
+        echo "run_after_bun_install.sh: $closure does not resolve; cannot patch dsh-tools" >&2
         return 1
     fi
     hoisted=node_modules/@deepseek-ai/dsh-tools
