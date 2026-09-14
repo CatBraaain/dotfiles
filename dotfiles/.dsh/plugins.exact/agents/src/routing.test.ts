@@ -9,6 +9,7 @@ import {
   modelKey,
   pickCandidate,
   recordCooldown,
+  snapshotRoutingState,
 } from "./routing.ts";
 import type { ModelCandidate } from "./config.ts";
 
@@ -47,6 +48,32 @@ describe("cooldownMs", () => {
       DEFAULT_COOLDOWN_MS,
     );
     assert.equal(cooldownMs({ message: "x", code: "RATE_LIMIT" }), DEFAULT_COOLDOWN_MS);
+  });
+});
+
+describe("snapshotRoutingState", () => {
+  it("copies mutable routing state before asynchronous prediction", () => {
+    const cooldowns = new Map([["p/m", 1000]]);
+    const state = {
+      effectiveClass: "middle",
+      cooldowns,
+      cooldownEpoch: 2,
+      manualSelect: false,
+      lastRoute: { provider: "p", model: "m" },
+    };
+    const snapshot = snapshotRoutingState(state);
+
+    state.effectiveClass = "high";
+    state.cooldowns.set("p/other", 2000);
+    state.lastRoute = { provider: "q", model: "n" };
+
+    assert.deepEqual(snapshot, {
+      effectiveClass: "middle",
+      cooldowns: new Map([["p/m", 1000]]),
+      cooldownEpoch: 2,
+      manualSelect: false,
+      lastRoute: { provider: "p", model: "m" },
+    });
   });
 });
 
@@ -94,6 +121,38 @@ describe("pickCandidate", () => {
 
     const none = await pickCandidate(candidates(), new Map(), always, never, 0);
     assert.equal(none, null);
+  });
+
+  it("checks route, cooldown, then when before selecting a fallback", async () => {
+    const calls: string[] = [];
+    const candidatesWithFallback: ModelCandidate[] = [
+      { provider: "p1", model: "missing", when: "not-called-1" },
+      { provider: "p2", model: "cooling", when: "not-called-2" },
+      { provider: "p3", model: "fallback", when: "eligible" },
+    ];
+    const cooldowns = new Map<string, number>();
+    recordCooldown(cooldowns, "p2/cooling", 10_000, 0);
+    const picked = await pickCandidate(
+      candidatesWithFallback,
+      cooldowns,
+      async (candidate) => {
+        calls.push(`exists:${candidate.model}`);
+        return candidate.model !== "missing";
+      },
+      async (when) => {
+        calls.push(`when:${when}`);
+        return true;
+      },
+      1000,
+    );
+
+    assert.deepEqual(picked, { provider: "p3", model: "fallback", when: "eligible" });
+    assert.deepEqual(calls, [
+      "exists:missing",
+      "exists:cooling",
+      "exists:fallback",
+      "when:eligible",
+    ]);
   });
 });
 

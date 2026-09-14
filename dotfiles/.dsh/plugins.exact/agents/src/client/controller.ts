@@ -9,6 +9,35 @@ export interface StatePollerDeps {
   readonly onState: (state: AgentDisplayState) => void;
   readonly setInterval: (callback: () => void, intervalMs: number) => unknown;
   readonly clearInterval: (handle: unknown) => void;
+  /** Shared reader used by menu refreshes to reject stale poll responses. */
+  readonly reader?: StateReader;
+}
+
+/** A state reader that rejects stale responses from older refreshes. */
+export interface StateReader {
+  readonly refresh: () => Promise<void>;
+  readonly invalidate: () => void;
+}
+
+export function createStateReader(
+  fetchState: () => Promise<AgentDisplayState>,
+  onState: (state: AgentDisplayState) => void,
+): StateReader {
+  let latestRequest = 0;
+  return {
+    invalidate(): void {
+      latestRequest++;
+    },
+    async refresh(): Promise<void> {
+      const request = ++latestRequest;
+      try {
+        const state = await fetchState();
+        if (request === latestRequest) onState(state);
+      } catch {
+        // Keep the last known state; the next refresh retries.
+      }
+    },
+  };
 }
 
 /**
@@ -18,19 +47,20 @@ export interface StatePollerDeps {
  */
 export function startStatePoller(intervalMs: number, deps: StatePollerDeps): () => void {
   let stopped = false;
+  const reader =
+    deps.reader ??
+    createStateReader(deps.fetchState, (state) => {
+      if (!stopped) deps.onState(state);
+    });
   const poll = async (): Promise<void> => {
     if (stopped) return;
-    try {
-      const state = await deps.fetchState();
-      if (!stopped) deps.onState(state);
-    } catch {
-      // Keep the last known state; the next tick retries.
-    }
+    await reader.refresh();
   };
   void poll();
   const handle = deps.setInterval(() => void poll(), intervalMs);
   return () => {
     stopped = true;
+    reader.invalidate();
     deps.clearInterval(handle);
   };
 }

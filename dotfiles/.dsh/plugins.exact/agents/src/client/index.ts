@@ -1,6 +1,6 @@
 /** Browser client half: show the live agents.yaml agent and class above the
  * composer, each row a button opening a primitives Menu selector. */
-import { createElement, useEffect, useState, type ReactNode } from "react";
+import { createElement, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { Menu } from "@deepseek-ai/dsh-client-ui-primitives";
 // Context augmentation: the `ctx.slots` registry service.
@@ -11,17 +11,9 @@ import type {} from "@deepseek-ai/dsh-client-ui-conversation/client";
 import type {} from "@deepseek-ai/dsh-client-ui-session/client";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import type { SelectKind } from "../state-rpc.ts";
-import {
-  AGENTS_TRIGGER_CSS,
-  registerAgentClassDisplay,
-  TRIGGER_CLASS,
-} from "./apply";
-import { startStatePoller } from "./controller";
-import {
-  agentLineLabel,
-  classLineLabel,
-  type AgentDisplayState,
-} from "./format";
+import { AGENTS_TRIGGER_CSS, registerAgentClassDisplay, TRIGGER_CLASS } from "./apply";
+import { createStateReader, startStatePoller } from "./controller";
+import { agentLineLabel, classLineLabel, type AgentDisplayState } from "./format";
 import { createSelectSender, createStateFetcher, type SelectSenderResult } from "./state.ts";
 
 /** Services this client half touches (the slot registry only). */
@@ -133,15 +125,20 @@ function AgentClassDisplay({
   initialState,
 }: DisplayProps): ReactNode {
   const [state, setState] = useState<AgentDisplayState>(initialState ?? { managed: false });
+  const stateReader = useMemo(
+    () => createStateReader(() => fetchState(sessionId), setState),
+    [sessionId, fetchState],
+  );
   useEffect(
     () =>
       startStatePoller(POLL_INTERVAL_MS, {
         fetchState: () => fetchState(sessionId),
         onState: setState,
+        reader: stateReader,
         setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
         clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
       }),
-    [sessionId, fetchState],
+    [sessionId, fetchState, stateReader],
   );
 
   const agentLabel = agentLineLabel(state);
@@ -154,11 +151,7 @@ function AgentClassDisplay({
   const pick = async (kind: SelectKind, name: string): Promise<void> => {
     const result = await select(sessionId, kind, name);
     if (!result.ok) return;
-    try {
-      setState(await fetchState(sessionId));
-    } catch {
-      // The next poll tick re-syncs.
-    }
+    await stateReader.refresh();
   };
 
   // `display: contents` hands the two row bands to the composer stack, so

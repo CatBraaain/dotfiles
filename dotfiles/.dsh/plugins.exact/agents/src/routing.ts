@@ -42,6 +42,32 @@ export function modelKey(route: { provider: string; model: string }): string {
   return `${route.provider}/${route.model}`;
 }
 
+export interface RoutingStateLike {
+  readonly effectiveClass: string;
+  readonly cooldowns: ReadonlyMap<string, number>;
+  readonly cooldownEpoch: number;
+  readonly manualSelect: boolean;
+  readonly lastRoute: { provider: string; model: string } | undefined;
+}
+
+export interface RoutingStateSnapshot {
+  readonly effectiveClass: string;
+  readonly cooldowns: Map<string, number>;
+  readonly cooldownEpoch: number;
+  readonly manualSelect: boolean;
+  readonly lastRoute: { provider: string; model: string } | undefined;
+}
+
+export function snapshotRoutingState(state: RoutingStateLike): RoutingStateSnapshot {
+  return {
+    effectiveClass: state.effectiveClass,
+    cooldowns: new Map(state.cooldowns),
+    cooldownEpoch: state.cooldownEpoch,
+    manualSelect: state.manualSelect,
+    lastRoute: state.lastRoute === undefined ? undefined : { ...state.lastRoute },
+  };
+}
+
 // True if `key` is still cooling down at `now`. Lazily evicts expired entries
 // so a stale cooldown never silently blocks a model forever.
 export function isCoolingDown(key: string, cooldowns: Map<string, number>, now: number): boolean {

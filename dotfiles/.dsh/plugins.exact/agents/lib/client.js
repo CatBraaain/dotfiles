@@ -62,21 +62,38 @@ function registerAgentClassDisplay(ctx, component) {
 }
 
 // src/client/controller.ts
+function createStateReader(fetchState, onState) {
+  let latestRequest = 0;
+  return {
+    invalidate() {
+      latestRequest++;
+    },
+    async refresh() {
+      const request = ++latestRequest;
+      try {
+        const state = await fetchState();
+        if (request === latestRequest)
+          onState(state);
+      } catch {}
+    }
+  };
+}
 function startStatePoller(intervalMs, deps) {
   let stopped = false;
+  const reader = deps.reader ?? createStateReader(deps.fetchState, (state) => {
+    if (!stopped)
+      deps.onState(state);
+  });
   const poll = async () => {
     if (stopped)
       return;
-    try {
-      const state = await deps.fetchState();
-      if (!stopped)
-        deps.onState(state);
-    } catch {}
+    await reader.refresh();
   };
   poll();
   const handle = deps.setInterval(() => void poll(), intervalMs);
   return () => {
     stopped = true;
+    reader.invalidate();
     deps.clearInterval(handle);
   };
 }
@@ -225,12 +242,14 @@ function AgentClassDisplay({
   initialState
 }) {
   const [state, setState] = import_react.useState(initialState ?? { managed: false });
+  const stateReader = import_react.useMemo(() => createStateReader(() => fetchState(sessionId), setState), [sessionId, fetchState]);
   import_react.useEffect(() => startStatePoller(POLL_INTERVAL_MS, {
     fetchState: () => fetchState(sessionId),
     onState: setState,
+    reader: stateReader,
     setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
     clearInterval: (handle) => clearInterval(handle)
-  }), [sessionId, fetchState]);
+  }), [sessionId, fetchState, stateReader]);
   const agentLabel = agentLineLabel(state);
   if (agentLabel === undefined)
     return null;
@@ -239,9 +258,7 @@ function AgentClassDisplay({
     const result = await select(sessionId, kind, name);
     if (!result.ok)
       return;
-    try {
-      setState(await fetchState(sessionId));
-    } catch {}
+    await stateReader.refresh();
   };
   return import_react.createElement("div", { style: { display: "contents" } }, import_react.createElement("div", { style: ROW_BAND_STYLE }, import_react.createElement(SelectorMenu, {
     label: agentLabel,

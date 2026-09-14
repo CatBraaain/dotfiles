@@ -51,6 +51,7 @@ import {
   modelKey,
   pickCandidate,
   recordCooldown,
+  snapshotRoutingState,
 } from "./routing.ts";
 import { translateTools, type ToolFilter } from "./tool-allowlist.ts";
 import { SubagentSlots } from "./subagent-slots.ts";
@@ -760,19 +761,27 @@ export function apply(ctx: Context) {
       [...states]
         .filter(([managedAgent]) => isDisplayedAgent(managedAgent))
         .map(async ([managedAgent, state]) => {
-          const model = state.manualSelect
-            ? state.lastRoute?.model
-            : await predictDisplayModel(
-                managedAgent.session.id,
-                state.effectiveClass,
-                state.cooldowns,
-                state.cooldownEpoch,
-              );
-          return {
+          // Keep class, manual mode, route, and cooldowns from one instant.
+          // The prediction can await a model registry lookup or `when` shell
+          // command while a menu selection mutates the live state.
+          const snapshot = {
             sessionId: managedAgent.session.id,
             agentName: state.agentName,
-            effectiveClass: state.effectiveClass,
-            manualSelect: state.manualSelect,
+            ...snapshotRoutingState(state),
+          };
+          const model = snapshot.manualSelect
+            ? snapshot.lastRoute?.model
+            : await predictDisplayModel(
+                snapshot.sessionId,
+                snapshot.effectiveClass,
+                snapshot.cooldowns,
+                snapshot.cooldownEpoch,
+              );
+          return {
+            sessionId: snapshot.sessionId,
+            agentName: snapshot.agentName,
+            effectiveClass: snapshot.effectiveClass,
+            manualSelect: snapshot.manualSelect,
             ...(model !== undefined ? { model } : {}),
           };
         }),

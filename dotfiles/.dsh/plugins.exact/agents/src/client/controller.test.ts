@@ -1,6 +1,6 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { startStatePoller, type StatePollerDeps } from "./controller";
+import { createStateReader, startStatePoller, type StatePollerDeps } from "./controller";
 import type { AgentDisplayState } from "./format";
 
 /** Timer handles captured by the stub clock. */
@@ -36,6 +36,41 @@ function createStubClock(): StubClock & Pick<StatePollerDeps, "setInterval" | "c
     },
   };
 }
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+describe("createStateReader", () => {
+  it("ignores an older response after a newer refresh starts", async () => {
+    const first = deferred<AgentDisplayState>();
+    const second = deferred<AgentDisplayState>();
+    const seen: AgentDisplayState[] = [];
+    const reader = createStateReader(
+      (() => {
+        const requests = [first.promise, second.promise];
+        return () => requests.shift()!;
+      })(),
+      (state) => seen.push(state),
+    );
+
+    const firstRefresh = reader.refresh();
+    const secondRefresh = reader.refresh();
+    second.resolve({ managed: true, agent: "main", className: "high", model: "m-high" });
+    await secondRefresh;
+    first.resolve({ managed: true, agent: "main", className: "middle", model: "m-middle" });
+    await firstRefresh;
+
+    assert.deepEqual(seen, [{ managed: true, agent: "main", className: "high", model: "m-high" }]);
+  });
+});
 
 describe("startStatePoller", () => {
   it("fetches once immediately, then on every interval tick", async () => {
