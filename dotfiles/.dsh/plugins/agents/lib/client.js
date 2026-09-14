@@ -48,7 +48,7 @@ var import_react = require("react");
 
 // src/client/apply.ts
 function registerAgentClassDisplay(ctx, component) {
-  ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({ name: "conversation.composer.dock", id: "agent-class", order: 2 }, component));
+  ctx.slots.inject("conversation.input.dock", () => ctx.slots.register({ name: "conversation.input.dock", id: "agent-class", order: 2 }, component));
 }
 
 // src/client/controller.ts

@@ -209,7 +209,7 @@ shadow が委譲に失敗する場合（呼び出し agent の `subagents` に `
 
 ## Agent 表示
 
-dsh web UI の composer 直下（composer dock）に、現在の agent と実効 class を常設表示する。表示は次の 2 行形式で、テキスト色はグレーとする。
+dsh web UI の composer 直上（input dock）に、現在の agent と実効 class を常設表示する。表示は次の 2 行形式で、テキスト色はグレーとする。
 
 ```text
 🤖 agent: <currentAgent>

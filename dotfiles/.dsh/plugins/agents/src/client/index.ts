@@ -1,9 +1,9 @@
-/** Browser client half: show the live agents.yaml agent and class under the composer. */
+/** Browser client half: show the live agents.yaml agent and class above the composer. */
 import { createElement, useEffect, useState, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 // Context augmentation: the `ctx.slots` registry service.
 import type {} from "@deepseek-ai/dsh-client-ui-renderer/client";
-// SlotMap augmentation: 'conversation.composer.dock' is a session-scope list.
+// SlotMap augmentation: 'conversation.input.dock' is a session-scope list.
 import type {} from "@deepseek-ai/dsh-client-ui-conversation/client";
 // SessionStandardProps augmentation: session-scope slot props carry `sessionId`.
 import type {} from "@deepseek-ai/dsh-client-ui-session/client";
@@ -53,7 +53,7 @@ function AgentClassDisplay({ sessionId, fetchState }: DisplayProps): ReactNode {
   );
 }
 
-/** Wire the display into the composer dock (registration path lives in ./apply). */
+/** Wire the display above the composer (registration path lives in ./apply). */
 export function apply(ctx: Context): void {
   const fetchState = createStateFetcher(globalThis.fetch);
   const component: unknown = (props: DisplayProps) =>

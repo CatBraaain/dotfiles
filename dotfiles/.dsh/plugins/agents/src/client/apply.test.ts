@@ -38,13 +38,13 @@ function createStubSlots() {
 }
 
 describe("registerAgentClassDisplay", () => {
-  it("injects against the composer dock slot", () => {
+  it("injects against the input dock slot above the composer", () => {
     const stub = createStubSlots();
 
     registerAgentClassDisplay(stub.ctx, dummyComponent);
 
     assert.equal(stub.injectKeys.length, 1);
-    assert.equal(stub.injectKeys[0], "conversation.composer.dock");
+    assert.equal(stub.injectKeys[0], "conversation.input.dock");
   });
 
   it("does not register before the inject factory runs", () => {
@@ -63,7 +63,7 @@ describe("registerAgentClassDisplay", () => {
 
     assert.equal(stub.registerCalls.length, 1);
     const call = stub.registerCalls[0];
-    assert.equal(call.name, "conversation.composer.dock");
+    assert.equal(call.name, "conversation.input.dock");
     assert.equal(call.id, "agent-class");
     assert.equal(call.order, 2);
     assert.equal(call.component, dummyComponent);
