@@ -6,6 +6,17 @@
 # Camoufox uses Xvfb for a virtual X display and software-rendered WebGL in headless mode.
 - apt: xvfb
 
+# Tauri Linux prerequisites.
+- apt: libwebkit2gtk-4.1-dev
+- apt: build-essential
+- apt: curl
+- apt: wget
+- apt: file
+- apt: libxdo-dev
+- apt: libssl-dev
+- apt: libayatana-appindicator3-dev
+- apt: librsvg2-dev
+
 # System packages
 - brew: bubblewrap
 - brew: coreutils

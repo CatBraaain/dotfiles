@@ -16,6 +16,7 @@ export PATH="$HOME/.local/share/pnpm:$PATH"
 if [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 fi
+export PATH="/home/linuxbrew/.linuxbrew/opt/rustup/bin:$PATH"
 
 export ANDROID_HOME="$HOME/.android-sdk"
 export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
