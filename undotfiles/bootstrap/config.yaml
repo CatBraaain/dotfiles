@@ -39,6 +39,10 @@
 - brew: rustup
 - run: "rustup update stable"
 
+# Tauri test
+- apt: webkit2gtk-driver
+- cargo: tauri-driver
+
 # Standalone tools
 - bun: vite-plus
 

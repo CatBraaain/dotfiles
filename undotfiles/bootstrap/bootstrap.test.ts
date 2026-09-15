@@ -18,6 +18,7 @@ const stateCommands = [
   ["brew", "list", "--cask", "-1"],
   ["uv", "tool", "list"],
   ["bun", "pm", "ls", "-g"],
+  ["cargo", "install", "--list"],
   ["gup", "list", "--json"],
 ] as const;
 
@@ -92,7 +93,7 @@ function bootstrap(
 describe("parseConfig", () => {
   it("preserves ordered single-key entries", () => {
     const entries = parseConfig(
-      "- apt: curl\n- brew: jq\n- brew-cask: visual-studio-code\n- flatpak: com.visualstudio.code\n- uv: ruff\n- run: echo ready\n",
+      "- apt: curl\n- brew: jq\n- brew-cask: visual-studio-code\n- flatpak: com.visualstudio.code\n- uv: ruff\n- cargo: tauri-driver@2.8.0\n- run: echo ready\n",
     );
 
     assert.deepEqual(entries, [
@@ -101,6 +102,7 @@ describe("parseConfig", () => {
       { key: "brew-cask", value: "visual-studio-code" },
       { key: "flatpak", value: "com.visualstudio.code" },
       { key: "uv", value: "ruff" },
+      { key: "cargo", value: "tauri-driver@2.8.0" },
       { key: "run", value: "echo ready" },
     ]);
   });
@@ -173,6 +175,15 @@ describe("CLI entrypoint", () => {
       (entry) => entry.key === "brew" && entry.value === "go",
     );
     const goIndex = config.findIndex((entry) => entry.key === "go");
+    const rustupIndex = config.findIndex(
+      (entry) => entry.key === "brew" && entry.value === "rustup",
+    );
+    const rustupUpdateIndex = config.findIndex(
+      (entry) => entry.key === "run" && entry.value === "rustup update stable",
+    );
+    const cargoIndex = config.findIndex(
+      (entry) => entry.key === "cargo" && entry.value === "tauri-driver",
+    );
     const androidCaskIndex = config.findIndex(
       (entry) => entry.key === "brew-cask" && entry.value === "android-commandlinetools",
     );
@@ -181,6 +192,8 @@ describe("CLI entrypoint", () => {
     );
 
     assert.ok(goRuntimeIndex >= 0 && goRuntimeIndex < goIndex);
+    assert.ok(rustupIndex >= 0 && rustupIndex < cargoIndex);
+    assert.ok(rustupUpdateIndex >= 0 && rustupUpdateIndex < cargoIndex);
     assert.ok(androidCaskIndex >= 0 && androidCaskIndex < androidHandlerIndex);
   });
 });
@@ -197,6 +210,8 @@ describe("coalesceEntries", () => {
       { key: "bun", value: "prettier" },
       { key: "uv", value: "ruff" },
       { key: "uv", value: "black" },
+      { key: "cargo", value: "tauri-driver" },
+      { key: "cargo", value: "cargo-edit" },
       { key: "brew-cask", value: "visual-studio-code" },
       { key: "brew-cask", value: "iterm2" },
     ];
@@ -208,6 +223,7 @@ describe("coalesceEntries", () => {
       { key: "apt", values: ["curl", "wget"] },
       { key: "bun", values: ["prettier"] },
       { key: "uv", values: ["ruff", "black"] },
+      { key: "cargo", values: ["tauri-driver", "cargo-edit"] },
       { key: "brew-cask", values: ["visual-studio-code", "iterm2"] },
     ]);
   });
@@ -247,12 +263,14 @@ describe("sync", () => {
       { key: "bun", value: "eslint" },
       { key: "uv", value: "ruff" },
       { key: "uv", value: "black" },
+      { key: "cargo", value: "tauri-driver" },
+      { key: "cargo", value: "cargo-edit" },
     ];
 
     const exitCode = await bootstrap(entries, runtime).sync();
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(runtime.commands.slice(0, 7), [
+    assert.deepEqual(runtime.commands.slice(0, 8), [
       ["sudo", "apt", "update"],
       ["sudo", "apt", "install", "-y", "curl", "wget"],
       ["brew", "install", "--quiet", "jq", "ripgrep"],
@@ -260,6 +278,7 @@ describe("sync", () => {
       ["bun", "add", "-g", "--silent", "prettier", "eslint"],
       ["uv", "tool", "install", "-q", "ruff"],
       ["uv", "tool", "install", "-q", "black"],
+      ["cargo", "install", "--quiet", "tauri-driver", "cargo-edit"],
     ]);
   });
 
@@ -272,6 +291,10 @@ describe("sync", () => {
       "/home/username/.bun/install/global\n├── @scope/tool@1\n└── old-bun@1",
     );
     runtime.outputs.set(
+      "cargo\0install\0--list",
+      "keep-cargo v1.0.0:\n    keep-cargo\nold-cargo v1.0.0:\n    old-cargo",
+    );
+    runtime.outputs.set(
       "gup\0list\0--json",
       '[{"import_path":"keep-go","name":"keep"},{"import_path":"old-go","name":"old"}]',
     );
@@ -279,6 +302,7 @@ describe("sync", () => {
     const entries: Entry[] = [
       { key: "uv", value: "trafilatura[all]" },
       { key: "bun", value: "@scope/tool@2" },
+      { key: "cargo", value: "keep-cargo@1.0.0" },
       { key: "go", value: "keep-go@v2" },
       { key: "brew", value: "keep-formula" },
       { key: "brew-cask", value: "keep-cask" },
@@ -291,17 +315,19 @@ describe("sync", () => {
     const firstCleanup = runtime.events.indexOf("execute brew uninstall --cask old-cask");
     assert.ok(firstStateRead > 4);
     assert.equal(firstCleanup - firstStateRead, stateCommands.length);
-    assert.deepEqual(runtime.commands.slice(0, 5), [
+    assert.deepEqual(runtime.commands.slice(0, 6), [
       ["uv", "tool", "install", "-q", "trafilatura[all]"],
       ["bun", "add", "-g", "--silent", "@scope/tool@2"],
+      ["cargo", "install", "--quiet", "keep-cargo@1.0.0"],
       ["go", "install", "keep-go@v2"],
       ["brew", "install", "--quiet", "keep-formula"],
       ["brew", "install", "--quiet", "--cask", "keep-cask"],
     ]);
-    assert.deepEqual(runtime.commands.slice(5), [
+    assert.deepEqual(runtime.commands.slice(6), [
       ["brew", "uninstall", "--cask", "old-cask"],
       ["brew", "uninstall", "old-formula"],
       ["bun", "remove", "-g", "old-bun"],
+      ["cargo", "uninstall", "old-cargo"],
       ["gup", "remove", "--force", "old"],
       ["uv", "tool", "uninstall", "old-uv"],
     ]);
@@ -652,8 +678,10 @@ describe("diff", () => {
   it("shows removals before ordered plans without changing the host", async () => {
     const runtime = new FakeRuntime();
     runtime.outputs.set("bun\0pm\0ls\0-g", "/home/username/.bun/install/global\n└── old@1");
+    runtime.outputs.set("cargo\0install\0--list", "old-cargo v1.0.0:\n    old-cargo");
     const entries: Entry[] = [
       { key: "bun", value: "new@2" },
+      { key: "cargo", value: "new-cargo@2.0.0" },
       { key: "flatpak", value: "com.visualstudio.code" },
       { key: "run", value: "echo ready" },
       { key: "custom", value: "known" },
@@ -669,7 +697,9 @@ describe("diff", () => {
     assert.deepEqual(runtime.commands, []);
     assert.deepEqual(runtime.logs, [
       "remove bun: old",
+      "remove cargo: old-cargo",
       "install / update bun: new@2",
+      "install / update cargo: new-cargo@2.0.0",
       "install / update flatpak: com.visualstudio.code",
       "run: echo ready",
       "custom: known",

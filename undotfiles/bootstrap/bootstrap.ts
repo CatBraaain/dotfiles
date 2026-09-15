@@ -3,9 +3,27 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Key = "apt" | "flatpak" | "uv" | "bun" | "go" | "brew" | "brew-cask" | "custom" | "run";
-type DeclarativeKey = "uv" | "bun" | "go" | "brew" | "brew-cask";
-type BatchableKey = "apt" | "flatpak" | "uv" | "bun" | "go" | "brew" | "brew-cask";
+export type Key =
+  | "apt"
+  | "flatpak"
+  | "uv"
+  | "bun"
+  | "cargo"
+  | "go"
+  | "brew"
+  | "brew-cask"
+  | "custom"
+  | "run";
+type DeclarativeKey = "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask";
+type BatchableKey =
+  | "apt"
+  | "flatpak"
+  | "uv"
+  | "bun"
+  | "cargo"
+  | "go"
+  | "brew"
+  | "brew-cask";
 export type Entry = { key: Key; value: string };
 export type InstallBatch = { key: BatchableKey; values: readonly string[] } | Entry;
 type State = Map<DeclarativeKey, Map<string, string>>;
@@ -20,12 +38,20 @@ export interface Runtime {
   error(message: string): void;
 }
 
-const declarativeKeys: readonly DeclarativeKey[] = ["brew-cask", "brew", "bun", "go", "uv"];
+const declarativeKeys: readonly DeclarativeKey[] = [
+  "brew-cask",
+  "brew",
+  "bun",
+  "cargo",
+  "go",
+  "uv",
+];
 const batchableKeys = new Set<BatchableKey>([
   "apt",
   "flatpak",
   "uv",
   "bun",
+  "cargo",
   "go",
   "brew",
   "brew-cask",
@@ -35,6 +61,7 @@ const validKeys = new Set<Key>([
   "flatpak",
   "uv",
   "bun",
+  "cargo",
   "go",
   "brew",
   "brew-cask",
@@ -118,6 +145,8 @@ export class Bootstrap {
         return names(this.runtime.output(["uv", "tool", "list"]), uvName);
       case "bun":
         return names(this.runtime.output(["bun", "pm", "ls", "-g"]), bunName);
+      case "cargo":
+        return names(this.runtime.output(["cargo", "install", "--list"]), cargoName);
       case "go":
         return new Map(
           (
@@ -147,6 +176,9 @@ export class Bootstrap {
           return;
         case "bun":
           this.runtime.execute(["bun", "remove", "-g", ...unused.map(([name]) => name)]);
+          return;
+        case "cargo":
+          this.runtime.execute(["cargo", "uninstall", ...unused.map(([name]) => name)]);
           return;
         case "uv":
           this.runtime.execute(["uv", "tool", "uninstall", ...unused.map(([name]) => name)]);
@@ -202,6 +234,9 @@ export class Bootstrap {
           return;
         case "bun":
           this.runtime.execute(["bun", "add", "-g", "--silent", ...batch.values]);
+          return;
+        case "cargo":
+          this.runtime.execute(["cargo", "install", "--quiet", ...batch.values]);
           return;
         case "go":
           this.runtime.execute([
@@ -378,9 +413,13 @@ function isFlatpakInstalled(runtime: Runtime, value: string): boolean {
 
 function packageName(key: DeclarativeKey, value: string): string {
   if (key === "brew" || key === "brew-cask") return value;
-  if (key === "go") return splitVersion(value)[0];
+  if (key === "go" || key === "cargo") return splitVersion(value)[0];
   if (key === "bun") return bunName(value);
   return value.split(/[<>=!~[ ;]/, 1)[0]!;
+}
+
+function cargoName(line: string): string {
+  return line.match(/^(\S+)\s+v[^:]+:$/)?.[1] ?? "";
 }
 
 function bunName(value: string): string {
