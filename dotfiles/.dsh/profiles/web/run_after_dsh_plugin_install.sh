@@ -1,10 +1,9 @@
 #!/bin/sh
 
-set -eu
+stamp=node_modules/.dsh-plugin-install-stamp
 
-# External plugins are intentionally refreshed on every profile apply.
-dsh plugin --profile web add --force --ignore-scripts dsh-codex-auth@rc
-dsh plugin --profile web add --force --ignore-scripts \
-  https://github.com/NOirBRight/dsh-llm-providers-ui/releases/latest/download/dsh-llm-providers-ui-0.2.9.tgz
-dsh plugin --profile web add --force --ignore-scripts \
-  https://github.com/NOirBRight/dsh-llm-commandcode/releases/latest/download/dsh-llm-commandcode-0.1.31.tgz
+if [ ! -f "$stamp" ] ||
+   find package.json pnpm-lock.yaml -newer "$stamp" -print -quit | grep -q .; then
+    dsh plugin --profile web install --ignore-scripts || exit 1
+    touch "$stamp"
+fi
