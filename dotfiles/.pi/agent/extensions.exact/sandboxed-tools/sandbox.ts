@@ -683,7 +683,12 @@ export function defaultSandboxConfigPath(
   agentDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".."),
 ): string {
   const deployedPath = join(agentDir, "config", "sandbox.yaml");
-  return existsSync(deployedPath) ? deployedPath : join(agentDir, "config.exact", "sandbox.yaml");
+  if (existsSync(deployedPath)) return deployedPath;
+
+  const sourcePath = join(agentDir, "config.exact", "sandbox.yaml");
+  if (existsSync(sourcePath)) return sourcePath;
+
+  return join(agentDir, "..", "..", ".agents", "config.exact", "sandbox.yaml");
 }
 
 export class Sandbox {

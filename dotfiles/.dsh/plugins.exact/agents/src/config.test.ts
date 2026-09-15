@@ -1,8 +1,14 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { validateAgentsConfig, type ConfigValidation } from "./config.ts";
+
+function sourcePathFromSymlink(symlinkPath: URL): URL {
+  const target = readFileSync(symlinkPath, "utf8").trim();
+  const deployedPath = new URL(target, symlinkPath);
+  return new URL(deployedPath.href.replace("/config/", "/config.exact/"));
+}
 
 // Narrow the validation union for assertions below.
 function expectConfig(result: ConfigValidation) {
@@ -86,10 +92,19 @@ describe("validateAgentsConfig — acceptance", () => {
   });
 
   it("accepts the migrated repository config verbatim", () => {
-    // The real dotfiles/.dsh/config/agents.yaml (copied from the pi config,
-    // including its legacy keys and YAML anchors) must validate as-is.
-    const source = readFileSync(new URL("../../../config/agents.yaml", import.meta.url), "utf8");
-    const config = expectConfig(validateAgentsConfig(parseYaml(source)));
+    // The shared base plus its machine layer must validate as the effective config.
+    const basePath = sourcePathFromSymlink(
+      new URL("../../../config/agents.yaml.symlink", import.meta.url),
+    );
+    const base = parseYaml(readFileSync(basePath, "utf8")) as Record<string, unknown>;
+    const machinePath = new URL(
+      existsSync(new URL("agents.machine.yaml", basePath))
+        ? "agents.machine.yaml"
+        : "agents.machine.yaml.sample",
+      basePath,
+    );
+    const machine = parseYaml(readFileSync(machinePath, "utf8")) as Record<string, unknown>;
+    const config = expectConfig(validateAgentsConfig({ ...base, ...machine }));
     assert.equal(config.default, "main");
     assert.ok(config.agents.vision);
     assert.equal(config.agents.vision.class, "vision");

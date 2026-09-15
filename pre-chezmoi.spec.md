@@ -270,13 +270,15 @@ dotfiles/.pi/agent/settings.merge.json
 #### `agents.yaml` + `agents.machine.yaml`（merge なし）
 
 ```
-dotfiles/.pi/agent/config.exact/agents.yaml
-dotfiles/.pi/agent/config.exact/agents.machine.yaml  （gitignore）
+dotfiles/.agents/config.exact/agents.yaml
+dotfiles/.agents/config.exact/agents.machine.yaml  （gitignore）
 ```
 
-1. dot 変換後: `dist/dot_pi/agent/exact_config/agents.machine.yaml` 等
+1. dot 変換後: `dist/dot_agents/exact_config/agents.machine.yaml` 等
 2. 合成: ホーム → plain base（agents.yaml）→ machine
-3. 出力: `dist/dot_pi/agent/exact_config/agents.yaml`。sidecar と plain base 生ファイルは削除
+3. 出力: `dist/dot_agents/exact_config/agents.yaml`。sidecar と plain base 生ファイルは削除
+
+`dotfiles/.dsh/config/` と `dotfiles/.pi/agent/config.exact/` の同名ファイルは、出力された `~/.agents/config/` のファイルへ symlink する。
 
 #### `config.merge.toml` のみ（plain base なし、パス移動と組合せ）
 

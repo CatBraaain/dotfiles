@@ -6,7 +6,7 @@
 
 ## 設定
 
-設定ファイル: `~/.dsh/config/agents.yaml`（リポジトリ内は `dotfiles/.dsh/config/agents.yaml`）。スキーマは次のとおり。未知のキーは無視する（既存ファイルに含まれる `tiers`・`tier`・`_systemPrompts`・`_when` も未知キーとして無視する）。
+設定ファイル: `~/.dsh/config/agents.yaml`（リポジトリ内の正本は `dotfiles/.agents/config.exact/agents.yaml`）。スキーマは次のとおり。未知のキーは無視する（既存ファイルに含まれる `tiers`・`tier`・`_systemPrompts`・`_when` も未知キーとして無視する）。
 
 ```yaml
 default: main

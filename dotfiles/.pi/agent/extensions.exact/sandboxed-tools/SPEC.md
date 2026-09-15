@@ -230,7 +230,7 @@ network は開放。fs 制限の対象外。
 
 ## 6. 設定（`sandbox.yaml`）
 
-ユーザーが `dotfiles/.pi/agent/config.exact/sandbox.yaml` で制御。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash 専用パスは `credentials` で指定する。
+ユーザーが `dotfiles/.agents/config.exact/sandbox.yaml` で制御する（実行時は pi の設定ディレクトリから symlink する）。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash 専用パスは `credentials` で指定する。
 
 | 項目          | 意味                                                                                                                                                                            |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

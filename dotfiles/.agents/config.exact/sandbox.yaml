@@ -6,6 +6,7 @@ read:
       - "**/.env.*.local"
       - ~/.ssh
       - ~/.dsh/.credentials.yaml
+      - ~/.pi/agent/auth.json
 
 write:
   - allow:
@@ -14,6 +15,7 @@ write:
       - ~/.agents/worktrees/${REPOSITORY_NAME}
       - ~/.agents/tickets
       - ~/.dsh
+      - ~/.pi
       - ~/.config
       - /tmp
       - ${XDG_RUNTIME_DIR}
@@ -34,9 +36,10 @@ write:
       - ~/go/pkg/mod
       - ~/mirrors
   - { deny: ~/.dsh/config/sandbox.yaml }
+  - { deny: ~/.pi/agent/config/sandbox.yaml }
 
-# Auth files that bash tools need for authentication but dsh fs tools
-# (read/write/edit/glob/grep/ls) must never touch. Bound read-only into the
+# Auth files that bash tools need for authentication but dsh and pi fs tools
+# (read/write/edit/glob/grep/find/ls) must never touch. Bound read-only into the
 # bash sandbox, always denied (and masked) for fs tools. See SPEC §2.2.
 credentials:
   # dsh credential store (dsh-credentials-local default path)

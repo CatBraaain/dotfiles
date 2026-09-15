@@ -38,6 +38,12 @@ import {
 } from "./sandbox";
 import { startStderrTeeReceiver } from "./run-tools";
 
+function sourcePathFromSymlink(symlinkPath: URL): URL {
+  const target = readFileSync(symlinkPath, "utf8").trim();
+  const deployedPath = new URL(target, symlinkPath);
+  return new URL(deployedPath.href.replace("/config/", "/config.exact/"));
+}
+
 function withSandbox(
   configYaml: string,
   cwd: string,
@@ -783,7 +789,10 @@ describe("§3.a パス文字列の解決", () => {
 
   it("出荷configは repository 専用の worktrees パスを許可する", () => {
     const config = parseSandboxedToolsConfig(
-      readFileSync(new URL("../../config.exact/sandbox.yaml", import.meta.url), "utf8"),
+      readFileSync(
+        sourcePathFromSymlink(new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url)),
+        "utf8",
+      ),
     );
     const writeAllowPatterns = config.write
       ?.filter((entry) => entry.action === "allow")

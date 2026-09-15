@@ -26,6 +26,12 @@ import {
 } from "./sandbox";
 import { existsSync } from "node:fs";
 
+function sourcePathFromSymlink(symlinkPath: URL): URL {
+  const target = readFileSync(symlinkPath, "utf8").trim();
+  const deployedPath = new URL(target, symlinkPath);
+  return new URL(deployedPath.href.replace("/config/", "/config.exact/"));
+}
+
 function withSandbox(
   configYaml: string,
   cwd: string,
@@ -163,7 +169,10 @@ commands:
 
   it("出荷configは検証を通り、repository 専用の worktrees パスを許可する", () => {
     const config = parseSandboxedToolsConfig(
-      readFileSync(new URL("../../../config/sandbox.yaml", import.meta.url), "utf8"),
+      readFileSync(
+        sourcePathFromSymlink(new URL("../../../config/sandbox.yaml.symlink", import.meta.url)),
+        "utf8",
+      ),
     );
     const writeAllowPatterns = config.write
       ?.filter((entry) => entry.action === "allow")
@@ -178,7 +187,9 @@ commands:
     // directory at the filesystem root.
     const sandbox = new Sandbox(
       mkdtempSync(join(tmpdir(), "sandboxed-tools-cwd-")),
-      fileURLToPath(new URL("../../../config/sandbox.yaml", import.meta.url)),
+      fileURLToPath(
+        sourcePathFromSymlink(new URL("../../../config/sandbox.yaml.symlink", import.meta.url)),
+      ),
     );
 
     assert.deepEqual(sandbox.invalidCommandPatterns, []);

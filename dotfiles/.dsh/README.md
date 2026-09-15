@@ -10,6 +10,7 @@ dsh（DeepSeek Harness）関係のファイル。
 ## 構成
 
 - `AGENTS.md.symlink` — `~/.dsh/AGENTS.md` への symlink。正本は `dotfiles/.agents/AGENTS.md`（pi の global 指示 `~/.pi/agent/AGENTS.md` と同一内容）。dsh 組み込みの `dsh-agent-instructions`（default 有効）が user-global 指示として各セッションの最初の request に注入する
+- `config/` — `~/.agents/config/` にある共有 agent / sandbox 設定への symlink
 - `plugins.exact/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。`exact` 属性付きのため plugins dir 直下の source 管理外エントリ（旧 `run_build.sh` など）は apply 時に削除される。展開先は手動編集しない。エントリは TS で書き、`exports` はビルド済みの `./dist/index.js` を指す（Node は `node_modules` 内の `.ts` を実行できないため）
 - `plugins.exact/run_after_build.sh` — 全プラグインの build と依存 install（chezmoi run script。`run_after_` により全ターゲットの適用後に plugins dir を CWD として実行される。各 plugin の依存を plugin dir 内へ `bun install` し、`dist/index.js` がないか、`src/` 配下のファイル（`*.test.ts` を除く）が出力より新しい plugin だけ `bun build` する。plugin dir 内の `dist/`・`node_modules/` は exact の掃除対象外である。shebang は chezmoi の `exec(3)` 直接実行に必須）
 - `profiles/web/run_after_dsh_plugin_install.sh` — dsh CLI による依存のインストール（chezmoi run script。`run_after_` 修飾子により全ターゲットの適用後に profile dir を CWD として `dsh plugin --profile web install --ignore-scripts` を実行する。stamp（`node_modules/.dsh-plugin-install-stamp`）が無い、または `package.json` / `pnpm-lock.yaml` が stamp より新しいときだけ実行して stamp を更新し、変更が無い apply ではインストールをスキップする。dsh CLI は profile dir で pnpm を実行し、成功後に `dsh.profile.bundles` を依存状態へ同期する）
