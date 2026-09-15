@@ -11,8 +11,9 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
     ├── AGENTS.md.symlink        # ~/.agents/AGENTS.md への symlink（正本は dotfiles/.agents/AGENTS.md）
     ├── settings.merge.json      # pi 設定（settings.json へ深くマージ）
     ├── package.json            # 拡張のランタイム依存（yaml 等）
-    ├── run_after_bun_install.sh  # chezmoi run script（全ターゲット適用後に ~/.pi/agent/ で bun install）
-    ├── config.exact/          # ~/.agents/config/ への symlink
+    ├── run_after_bun_install.sh       # chezmoi run script（manifest/lockfile変更時だけ ~/.pi/agent/ で bun install）
+    ├── run_after_bun_install.spec.md  # run_after_bun_install.sh の振る舞い仕様
+    ├── config.exact/                  # ~/.agents/config/ への symlink
     ├── extensions.exact/       # 自作拡張機能
     ├── prompts.exact/          # プロンプトテンプレート
     └── skills.exact/           # pi 固有の skill 用（通常は空。.keep で空を維持）
@@ -22,7 +23,7 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
 
 ## agent/package.json
 
-拡張（agents / sandboxed-tools）が import するランタイム依存を定義する。pi 本体は拡張の依存を同梱しないため、各マシンで `~/.pi/agent/` にて一度だけ install が必要（node_modules は chezmoi 管理外）:
+拡張（agents / sandboxed-tools）が import するランタイム依存を定義する。pi 本体は拡張の依存を同梱しないため、各マシンで `~/.pi/agent/` にて install が必要（node_modules は chezmoi 管理外）。apply 時は `package.json`・`bun.lock`（または `bun.lockb`）が前回 install より新しい場合、または install stamp がない場合だけ自動 install する:
 
 ```sh
 cd ~/.pi/agent && bun install
