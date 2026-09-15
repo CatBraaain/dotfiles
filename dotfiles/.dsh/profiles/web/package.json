@@ -11,7 +11,7 @@
     "dotfiles-dsh-titlebar": "file:../../plugins/titlebar",
     "dotfiles-dsh-zai-concurrency-retry": "file:../../plugins/zai-concurrency-retry",
     "dsh-rewind-plugin": "latest",
-    "dsh-codex-auth": "latest",
+    "dsh-codex-auth": "rc",
     "@mars-sea/dsh-commandcode-provider": "latest",
     "dotfiles-rtk-rewrite": "file:../../plugins/rtk-rewrite",
     "dotfiles-dsh-quota-line": "file:../../plugins/quota-line",
