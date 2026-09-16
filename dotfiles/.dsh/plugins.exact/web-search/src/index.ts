@@ -376,6 +376,7 @@ export async function fetchOne(
     "web fetch",
     backends,
     (markdown) => !markdown.trim(),
+    (error) => !signal?.aborted && isCaptchaParseError(error),
   );
   return { markdown: payload, backend, attempts };
 }

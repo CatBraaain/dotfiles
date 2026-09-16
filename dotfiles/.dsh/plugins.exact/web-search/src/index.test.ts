@@ -929,6 +929,31 @@ describe("camoufox+openserp 検索（camoufoxOpenserpSearch・searchOne）", () 
     assert.equal(result.backend, "B");
   });
 
+  it("abort 済み signal では captcha detected を再試行しない", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let firstBackendCalls = 0;
+    const backends: BackendEntry<WebSearchSource[]>[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: captcha detected");
+        },
+      ],
+      searchBackend("B"),
+    ];
+
+    const result = await searchOne("query", endpoints, controller.signal, backends);
+
+    assert.equal(firstBackendCalls, 1);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
   it("全バックエンドが失敗したら各エンジンの失敗行を含む例外を出す", async () => {
     const backends: BackendEntry<WebSearchSource[]>[] = [
       failBackend<WebSearchSource[]>("camoufox+openserp(google)", "render: challenge detected"),
@@ -980,13 +1005,21 @@ describe("camoufox+openserp 検索（camoufoxOpenserpSearch・searchOne）", () 
   });
 
   it("空の sources を返すバックエンドは失敗として次へフォールバックする", async () => {
+    let emptyBackendCalls = 0;
     const backends: BackendEntry<WebSearchSource[]>[] = [
-      searchBackend("empty", []),
+      [
+        "empty",
+        async () => {
+          emptyBackendCalls += 1;
+          return [];
+        },
+      ],
       searchBackend("next", [{ url: "https://next/" }]),
     ];
 
     const result = await searchOne("query", endpoints, undefined, backends);
 
+    assert.equal(emptyBackendCalls, 1);
     assert.equal(result.backend, "next");
     assert.deepEqual(
       result.attempts.map((attempt) => attempt.ok),
@@ -1332,9 +1365,16 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
     );
   });
 
-  it("fetchOne は空・空白のみの本文を失敗として扱う", async () => {
+  it("fetchOne は空・空白のみの本文を失敗として扱う（呼び出し1回で再試行しない）", async () => {
+    let blankBackendCalls = 0;
     const backends: BackendEntry<string>[] = [
-      okFetchBackend("blank", "  \n"),
+      [
+        "blank",
+        async () => {
+          blankBackendCalls += 1;
+          return "  \n";
+        },
+      ],
       okFetchBackend("ok"),
     ];
     const result = await fetchOne(
@@ -1343,6 +1383,7 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
       undefined,
       backends,
     );
+    assert.equal(blankBackendCalls, 1);
     assert.equal(result.backend, "ok");
     assert.equal(result.markdown, "text from ok");
   });
@@ -1364,6 +1405,123 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
         return true;
       },
     );
+  });
+
+  it("fetchOne でも captcha detected のときは同じバックエンドを1回だけ再試行する", async () => {
+    let calls = 0;
+    const backends: BackendEntry<string>[] = [
+      [
+        "A",
+        async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("parse: captcha detected");
+          return "retried markdown";
+        },
+      ],
+      okFetchBackend("B"),
+    ];
+
+    const result = await fetchOne(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      backends,
+    );
+
+    assert.equal(calls, 2);
+    assert.equal(result.backend, "A");
+    assert.equal(result.markdown, "retried markdown");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "A", ok: true },
+    ]);
+  });
+
+  it("fetchOne でも captcha detected の再試行も失敗したら次のバックエンドへ進む", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry<string>[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: captcha detected");
+        },
+      ],
+      okFetchBackend("B"),
+    ];
+
+    const result = await fetchOne(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      backends,
+    );
+
+    assert.equal(firstBackendCalls, 2);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
+  it("fetchOne でも captcha detected 以外の失敗は再試行しない", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry<string>[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: challenge detected");
+        },
+      ],
+      okFetchBackend("B"),
+    ];
+
+    const result = await fetchOne(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      backends,
+    );
+
+    assert.equal(firstBackendCalls, 1);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: challenge detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
+  it("fetchOne でも abort 済み signal では captcha detected を再試行しない", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let firstBackendCalls = 0;
+    const backends: BackendEntry<string>[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: captcha detected");
+        },
+      ],
+      okFetchBackend("B"),
+    ];
+
+    const result = await fetchOne(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      controller.signal,
+      backends,
+    );
+
+    assert.equal(firstBackendCalls, 1);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "B", ok: true },
+    ]);
   });
 });
 

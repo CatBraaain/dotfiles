@@ -775,25 +775,28 @@ function isCaptchaParseError(error: unknown): boolean {
   return error instanceof Error && error.message === "parse: captcha detected";
 }
 
-export async function searchOne(
-  query: string,
-  signal: AbortSignal | undefined,
-  backends?: BackendEntry[],
-  lang?: string,
-): Promise<{ text: string; backend: string; attempts: Attempt[] }> {
-  const resolvedBackends = backends ?? defaultSearchBackends(query, signal, lang);
+// Run backends in order, record an Attempt each, and return the first
+// non-empty payload. A whitespace-only / zero-length payload counts as a
+// failure of that backend (SPEC: empty results fall through to the next one).
+// A backend whose failure matches shouldRetry gets exactly one extra run of
+// the same backend before moving on.
+async function tryBackends(
+  operation: "web search" | "web fetch",
+  backends: readonly BackendEntry[],
+  isEmpty: (payload: string) => boolean,
+  shouldRetry?: (error: unknown) => boolean,
+): Promise<{ payload: string; backend: string; attempts: Attempt[] }> {
   const attempts: Attempt[] = [];
 
-  for (const [name, search] of resolvedBackends) {
-    let retriedForCaptcha = false;
+  for (const [name, run] of backends) {
+    let retried = false;
     while (true) {
       const startedAt = Date.now();
       try {
-        const text = await search();
-        // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
-        if (!text.trim()) throw new Error("empty response");
+        const payload = await run();
+        if (isEmpty(payload)) throw new Error("empty response");
         attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
-        return { text, backend: name, attempts };
+        return { payload, backend: name, attempts };
       } catch (error) {
         attempts.push({
           backend: name,
@@ -801,12 +804,28 @@ export async function searchOne(
           error: error instanceof Error ? error.message : String(error),
           durationMs: Date.now() - startedAt,
         });
-        if (retriedForCaptcha || signal?.aborted || !isCaptchaParseError(error)) break;
-        retriedForCaptcha = true;
+        if (retried || !shouldRetry?.(error)) break;
+        retried = true;
       }
     }
   }
-  throw new AllBackendsFailedError("web search", attempts);
+  throw new AllBackendsFailedError(operation, attempts);
+}
+
+export async function searchOne(
+  query: string,
+  signal: AbortSignal | undefined,
+  backends?: BackendEntry[],
+  lang?: string,
+): Promise<{ text: string; backend: string; attempts: Attempt[] }> {
+  const resolvedBackends = backends ?? defaultSearchBackends(query, signal, lang);
+  const { payload, backend, attempts } = await tryBackends(
+    "web search",
+    resolvedBackends,
+    (text) => !text.trim(),
+    (error) => !signal?.aborted && isCaptchaParseError(error),
+  );
+  return { text: payload, backend, attempts };
 }
 
 // --- Reddit backend (post permalink -> Atom feed, embed/oEmbed fallback) ---
@@ -1375,26 +1394,13 @@ export async function fetchOne(
   signal: AbortSignal | undefined,
   backends: BackendEntry[] = defaultFetchBackends(url, signal),
 ): Promise<{ text: string; backend: string; attempts: Attempt[] }> {
-  const attempts: Attempt[] = [];
-
-  for (const [name, fetcher] of backends) {
-    const startedAt = Date.now();
-    try {
-      const text = await fetcher();
-      // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
-      if (!text.trim()) throw new Error("empty response");
-      attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
-      return { text, backend: name, attempts };
-    } catch (error) {
-      attempts.push({
-        backend: name,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        durationMs: Date.now() - startedAt,
-      });
-    }
-  }
-  throw new AllBackendsFailedError("web fetch", attempts);
+  const { payload, backend, attempts } = await tryBackends(
+    "web fetch",
+    backends,
+    (text) => !text.trim(),
+    (error) => !signal?.aborted && isCaptchaParseError(error),
+  );
+  return { text: payload, backend, attempts };
 }
 
 export type WebToolOperations = {

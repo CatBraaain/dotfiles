@@ -358,6 +358,31 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     assert.equal(result.backend, "B");
   });
 
+  it("abort 済み signal では captcha detected を再試行しない", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: captcha detected");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await searchOne("query", controller.signal, backends);
+
+    assert.equal(firstBackendCalls, 1);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
   it("失敗バックエンドのエラー文は本文に含まず、attempts だけに含む", async () => {
     const backends = [failBackend("A", "致命的エラー文"), okBackend("B", "成功本文")];
     const result = await searchOne("query", undefined, backends);
@@ -405,8 +430,19 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
   });
 
   it("空の本文を返すバックエンドは失敗として次へフォールバックする", async () => {
-    const backends = [okBackend("A", ""), okBackend("B", "本文")];
+    let emptyBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          emptyBackendCalls += 1;
+          return "";
+        },
+      ],
+      okBackend("B", "本文"),
+    ];
     const result = await searchOne("query", undefined, backends);
+    assert.equal(emptyBackendCalls, 1);
     assert.equal(result.backend, "B");
     assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
       backend: "A",
@@ -604,8 +640,19 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
   });
 
   it("空の本文を返すバックエンドは失敗として次へフォールバックする", async () => {
-    const backends = [okBackend("A", ""), okBackend("B", "本文")];
+    let emptyBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          emptyBackendCalls += 1;
+          return "";
+        },
+      ],
+      okBackend("B", "本文"),
+    ];
     const result = await fetchOne("https://example.com/", undefined, backends);
+    assert.equal(emptyBackendCalls, 1);
     assert.equal(result.backend, "B");
     assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
       backend: "A",
@@ -630,6 +677,103 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     const result = await fetchOne("https://example.com/", undefined, backends);
     const durations = result.attempts.map((attempt) => attempt.durationMs);
     assert.ok(durations.every((duration) => typeof duration === "number"));
+  });
+
+  it("web_fetch でも captcha detected のときは同じバックエンドを1回だけ再試行する", async () => {
+    let calls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("parse: captcha detected");
+          return "retried text";
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await fetchOne("https://example.com/", undefined, backends);
+
+    assert.equal(calls, 2);
+    assert.equal(result.backend, "A");
+    assert.equal(result.text, "retried text");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "A", ok: true },
+    ]);
+  });
+
+  it("web_fetch でも captcha detected の再試行も失敗したら次のバックエンドへ進む", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: captcha detected");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await fetchOne("https://example.com/", undefined, backends);
+
+    assert.equal(firstBackendCalls, 2);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
+  it("web_fetch でも captcha detected 以外の失敗は再試行しない", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: challenge detected");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await fetchOne("https://example.com/", undefined, backends);
+
+    assert.equal(firstBackendCalls, 1);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: challenge detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
+  it("web_fetch でも abort 済み signal では captcha detected を再試行しない", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: captcha detected");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await fetchOne("https://example.com/", controller.signal, backends);
+
+    assert.equal(firstBackendCalls, 1);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "B", ok: true },
+    ]);
   });
 
   it("デフォルトのバックエンド順序は camoufox+trafilatura のみ", () => {
