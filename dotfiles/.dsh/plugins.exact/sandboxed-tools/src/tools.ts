@@ -43,6 +43,7 @@ import {
   type PathApproval,
   type WritePermissionRequest,
 } from "./sandbox";
+import type { RtkRewriter } from "./rtk";
 
 /** §2.1 vision-delegation error text (the wording source of truth is here). */
 export function imageReadErrorMessage(
@@ -211,6 +212,8 @@ export type SandboxToolDeps = {
   rgPath?: string;
   /** Writable spill directory for capped bash output (§4). */
   spillDir?: string;
+  /** Host-side rtk rewrite adapter for the model-facing bash tool. */
+  rtk?: Pick<RtkRewriter, "rewrite">;
 };
 
 /** Resolve + normalize one path argument the same way for gate and run (§3). */
@@ -843,6 +846,9 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           args.command,
           context.confirm,
         );
+        // Authorization intentionally precedes rewriting: a rewrite cannot
+        // turn a denied model command into an executable command.
+        const command = deps.rtk?.rewrite(args.command) ?? args.command;
         const workdir =
           args.workdir === undefined ? context.cwd : absolutePathOf(context, args.workdir);
         const effectiveTimeoutMs = Math.min(
@@ -853,7 +859,7 @@ export function registerSandboxedTools(ctx: Context, deps: SandboxToolDeps): voi
           exec,
           {
             tool: "bash",
-            params: { command: args.command, workdir, timeoutMs: effectiveTimeoutMs },
+            params: { command, workdir, timeoutMs: effectiveTimeoutMs },
           },
           {
             mode: "bash",

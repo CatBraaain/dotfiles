@@ -331,3 +331,30 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 3. NixOS でヘルパーの実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bind する。
 4. network namespace は分離しない。
 5. abort は bwrap ごと child process を停止する。`bash` の timeout は sandbox 内のヘルパーが処理する。
+
+---
+
+## 8. bash の rtk rewrite
+
+本 plugin が登録する model-facing `bash` の foreground 実行だけに `rtk rewrite` を適用する。fs ツール、`ctx.shell` の consumer、background 実行（本 plugin の bash は background 引数を持たない）は対象外である。
+
+### 8.1 認可と実行順序
+
+`bash` は、元の model command に対する `commands` の認可・確認・one-shot approval を完了してから、host 側で `rtk rewrite` を実行し、書き換え後の command を `Sandbox.runTool()` へ渡す。元 command が deny または理由要求で止まったとき、`rtk rewrite` と sandbox は実行しない。認可・確認の表示、one-shot approval の照合、承認ノートは元 command を対象にする。rtk は読み取り系 command を変換する信頼済みの委譲先であり、`commands` policy は元 command に適用するため、rewrite により元 command の認可を迂回しない。
+
+### 8.2 rewrite の振る舞い
+
+mount 時に `rtk --version` を一度だけ調べる。バイナリがない、version が `0.23.0` 未満、または probe に失敗したときは rewrite を無効にし、bash は元 command を実行する。version を判定できない文字列は rewrite を有効にする。無効状態でも bash の sandbox、timeout、出力上限、結果分類は変わらない。
+
+| 条件 | `Sandbox.runTool()` に渡す command |
+| --- | --- |
+| rewrite が有効で、`rtk rewrite` が exit 0 または 3 で非空の stdout を返した | stdout を trim した書き換え後 command |
+| `rtk rewrite` が exit 1、空の stdout、元 command と同一の stdout を返した | 元 command |
+| `rtk rewrite` が timeout（2 秒）、異常終了、未検出、またはその他の失敗になった | 元 command |
+| 元 command が `rtk ` で始まる、または `RTK_DISABLED=1` | 元 command。`rtk rewrite` は試行しない |
+
+書き換えが起きたとき、`bash-rtk` logger に元 command と書き換え後 command を info で記録する。rewrite の失敗や無効化は bash の失敗に変換しない。
+
+### 8.3 sandbox 内の rtk 実行環境
+
+書き換え後 command は元 command と同じ bwrap・runner・workdir・timeout・出力制限で実行する。host で検出した rtk バイナリのディレクトリ、rtk config file または config directory を bash sandbox へ read-only bind し、必要なバイナリディレクトリを `PATH` に追加する。`RTK_CONFIG` が相対パスのときは bind した絶対パスを sandbox 内の環境変数へ設定する。したがって、書き換え後 command に含まれる `rtk ...` は sandbox 内で解決され、設定を読み込んで実行できる。custom `sandbox.yaml`、bwrap argv、runner JSON 契約、結果形式は rtk 統合によって変わらない。

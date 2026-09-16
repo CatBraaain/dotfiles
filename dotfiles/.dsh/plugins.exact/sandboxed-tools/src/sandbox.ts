@@ -30,7 +30,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { parse as parseShell } from "shell-quote";
 import {
@@ -609,6 +609,10 @@ export type SandboxHostPaths = {
   rgDir?: string;
   /** Writable directory bound into the sandbox for bash output spill. */
   spillDir?: string;
+  /** Absolute rtk executable used by rewritten commands, when available. */
+  rtkPath?: string;
+  /** rtk config file or directory used by rewritten commands, when available. */
+  rtkConfigPath?: string;
 };
 
 /** One §2/§2.2 authorization outcome for a path operation. */
@@ -1233,6 +1237,14 @@ export class Sandbox {
     if (this.hostPaths.spillDir !== undefined) this.addMount(args, this.hostPaths.spillDir, true);
   }
 
+  /** Re-bind rtk resources after configured writable mounts so they stay read-only. */
+  private addRtkReadOnlyMounts(args: string[]): void {
+    if (this.hostPaths?.rtkPath === undefined) return;
+    this.addMount(args, dirname(this.hostPaths.rtkPath), false);
+    if (this.hostPaths.rtkConfigPath !== undefined)
+      this.addMount(args, this.hostPaths.rtkConfigPath, false);
+  }
+
   /**
    * Assemble the bwrap argv for one sandboxed run (§7): whitelist binds,
    * read-only mounts, masks, runtime paths, host resource mounts, and the
@@ -1249,6 +1261,7 @@ export class Sandbox {
     }
     this.addHostPathMounts(args);
     this.addConfiguredMounts(args, mode);
+    this.addRtkReadOnlyMounts(args);
     this.addHiddenPaths(args, mode);
     args.push("--chdir", commandCwd);
     return args;
@@ -1304,12 +1317,21 @@ export class Sandbox {
     },
   ): Promise<SandboxRunResult> {
     return new Promise((resolveRun, rejectRun) => {
+      const environment = { ...process.env, ...options.env };
+      if (this.hostPaths?.rtkPath !== undefined) {
+        const rtkDirectory = dirname(this.hostPaths.rtkPath);
+        const pathEntries = (environment.PATH ?? "").split(delimiter).filter(Boolean);
+        if (!pathEntries.includes(rtkDirectory)) pathEntries.unshift(rtkDirectory);
+        environment.PATH = pathEntries.join(delimiter);
+        if (this.hostPaths.rtkConfigPath !== undefined && environment.RTK_CONFIG !== undefined)
+          environment.RTK_CONFIG = this.hostPaths.rtkConfigPath;
+      }
       const child = spawn(
         "bwrap",
         [...this.buildArgs(options.mode, options.cwd ?? this.cwd), ...command],
         {
           cwd: this.cwd,
-          env: options.env,
+          env: environment,
           stdio: ["pipe", "pipe", "pipe"],
         },
       );

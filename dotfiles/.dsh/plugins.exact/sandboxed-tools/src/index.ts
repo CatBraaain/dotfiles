@@ -19,6 +19,7 @@ import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 // Augments the cordis Context with the userQuestions service declaration.
 import type {} from "@deepseek-ai/dsh-user-questions";
 import { Sandbox, type ConfirmOptions, type SandboxHostPaths } from "./sandbox";
+import { RtkRewriter } from "./rtk";
 import { ReadObservations, registerSandboxedTools, type SandboxToolContext } from "./tools";
 import type { ConfirmUi } from "./confirm";
 
@@ -34,13 +35,17 @@ function distDirectory(): string {
 
 export function apply(ctx: Context) {
   const logger = ctx.logger("sandboxed-tools");
+  const rtk = new RtkRewriter(ctx.logger("bash-rtk"));
 
-  // §7 host resources bound into every sandbox run: the node binary, the
-  // runner CLI, the ripgrep binary directory, and the bash spill directory.
+  // §7 host resources bound into every sandbox run: the node and runner
+  // binaries, the ripgrep and rtk binary directories, rtk config, and spill.
   const hostPaths: SandboxHostPaths = {
     nodePath: process.execPath,
     runnerJsPath: join(distDirectory(), "runner.js"),
     spillDir: mkdtempSync(join(tmpdir(), "dsh-sandboxed-tools-spill-")),
+    ...(rtk.binaryPath === undefined
+      ? {}
+      : { rtkPath: rtk.binaryPath, rtkConfigPath: rtk.configPath }),
   };
   let rgPathValue: string | undefined;
   const toolDeps = (): Parameters<typeof registerSandboxedTools>[1] => ({
@@ -50,6 +55,7 @@ export function apply(ctx: Context) {
       return rgPathValue;
     },
     spillDir: hostPaths.spillDir,
+    rtk,
   });
   void import("@vscode/ripgrep")
     .then((ripgrep) => {

@@ -15,6 +15,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { RunnerBashResult, RunnerRequest } from "./runner";
 import { Sandbox, type ConfirmOptions, type RunToolOptions } from "./sandbox";
+import { RtkRewriter, type RtkLogger } from "./rtk";
 import type { ConfirmUi } from "./confirm";
 import {
   COMMAND_APPROVAL_NOTE,
@@ -108,6 +109,7 @@ function withToolLayer(
     services?: Record<string, unknown>;
     respond?: (request: RunnerRequest) => unknown;
     ui?: ConfirmUi;
+    rtk?: Pick<RtkRewriter, "rewrite">;
   },
   test: (helpers: {
     tools: CapturedTool[];
@@ -120,7 +122,7 @@ function withToolLayer(
   return async () => {
     const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-tools-"));
     try {
-      const { configYaml, cwd = dir, services, respond, ui } = setup(dir);
+      const { configYaml, cwd = dir, services, respond, ui, rtk } = setup(dir);
       const configPath = join(dir, "sandbox.yaml");
       writeFileSync(configPath, configYaml);
       const sandbox = new Sandbox(cwd, configPath);
@@ -141,6 +143,7 @@ function withToolLayer(
           confirm,
         }),
         observations,
+        rtk,
       };
       const { ctx, tools } = captureRegistry(services ?? {});
       registerSandboxedTools(ctx, deps);
@@ -761,6 +764,91 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
   );
 });
 
+describe("§8 bash の rtk rewrite", () => {
+  it(
+    "認可後に書き換え後 command を runner へ渡す",
+    withToolLayer(
+      () => ({
+        configYaml: `\ncommands:\n  - allow: '^git status$'\n`,
+        rtk: { rewrite: () => "rtk git status" },
+      }),
+      async ({ tool, runs }) => {
+        await tool("bash").execute(
+          { command: "git status", description: "show repository status" },
+          execOf(),
+        );
+        assert.equal(runs.length, 1);
+        assert.equal(runs[0]!.request.params.command, "rtk git status");
+      },
+    ),
+  );
+
+  it(
+    "rewrite が元 command を返すと元 command をそのまま runner へ渡す",
+    withToolLayer(
+      () => ({
+        configYaml: "commands:\n  - allow: '.*'\n",
+        rtk: { rewrite: (command: string) => command },
+      }),
+      async ({ tool, runs }) => {
+        await tool("bash").execute(
+          { command: "echo hello", description: "print greeting" },
+          execOf(),
+        );
+        assert.equal(runs[0]!.request.params.command, "echo hello");
+      },
+    ),
+  );
+
+  it(
+    "元 command が拒否されたとき rewrite と runner を実行しない",
+    withToolLayer(
+      () => ({
+        configYaml: "commands:\n  - allow: '.*'\n  - deny: '^git status$'\n",
+        rtk: {
+          rewrite: () => {
+            throw new Error("rewrite must not run");
+          },
+        },
+      }),
+      async ({ tool, runs }) => {
+        await assert.rejects(
+          tool("bash").execute(
+            { command: "git status", description: "show repository status" },
+            execOf(),
+          ),
+          /Command denied: git status/,
+        );
+        assert.equal(runs.length, 0);
+      },
+    ),
+  );
+
+  it(
+    "理由必須の元 command は rewrite と runner を実行しない",
+    withToolLayer(
+      () => ({
+        configYaml: "commands:\n  - allow: '.*'\n  - ask_with_reason: '^sudo\\b'\n",
+        rtk: {
+          rewrite: () => {
+            throw new Error("rewrite must not run");
+          },
+        },
+      }),
+      async ({ tool, runs }) => {
+        await assert.rejects(
+          tool("bash").execute(
+            { command: "sudo id", description: "inspect user identity" },
+            execOf(),
+          ),
+          /Command requires a reason: sudo id/,
+        );
+        assert.equal(runs.length, 0);
+      },
+    ),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // §1 description requirements (spec-mandated wording)
 // ---------------------------------------------------------------------------
@@ -874,11 +962,21 @@ describe("§2.4 未読みゲート（ツール経路）", () => {
  * sandbox.test.ts.
  */
 function withRealRunner(
-  setup: (dir: string) => { configYaml: string; ui: ConfirmUi },
+  setup: (dir: string) => {
+    configYaml: string;
+    ui: ConfirmUi;
+    rtk?: {
+      rewriter: Pick<RtkRewriter, "rewrite">;
+      path: string;
+      configPath: string;
+      environment?: NodeJS.ProcessEnv;
+    };
+  },
   test: (helpers: {
     tools: CapturedTool[];
     tool: (name: string) => CapturedTool;
     dir: string;
+    sandbox: Sandbox;
   }) => Promise<void> | void,
 ): () => Promise<void> {
   return async () => {
@@ -893,13 +991,20 @@ function withRealRunner(
     chmodSync(bwrapPath, 0o755);
     const originalPath = process.env.PATH;
     process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+    const previousEnvironment = new Map<string, string | undefined>();
     try {
-      const { configYaml, ui } = setup(dir);
+      const { configYaml, ui, rtk } = setup(dir);
       const configPath = join(dir, "sandbox.yaml");
+      for (const [name, value] of Object.entries(rtk?.environment ?? {})) {
+        previousEnvironment.set(name, process.env[name]);
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
       writeFileSync(configPath, configYaml);
       const sandbox = new Sandbox(dir, configPath, {
         nodePath: process.execPath,
         runnerJsPath: join(import.meta.dir, "runner.ts"),
+        ...(rtk === undefined ? {} : { rtkPath: rtk.path, rtkConfigPath: rtk.configPath }),
       });
       const deps: SandboxToolDeps = {
         contextOf: (): SandboxToolContext => ({
@@ -910,6 +1015,7 @@ function withRealRunner(
           confirm: { ui },
         }),
         observations: new ReadObservations(),
+        ...(rtk === undefined ? {} : { rtk: rtk.rewriter }),
       };
       const { ctx, tools } = captureRegistry();
       registerSandboxedTools(ctx, deps);
@@ -921,8 +1027,12 @@ function withRealRunner(
           return found;
         },
         dir,
+        sandbox,
       });
     } finally {
+      for (const [name, value] of previousEnvironment)
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
       process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
@@ -930,6 +1040,59 @@ function withRealRunner(
 }
 
 describe("§2.3×§2.4 承認フローと runner ゲートの結合（fake bwrap + 実 runner）", () => {
+  it(
+    "host rewrite 後の rtk が sandbox の PATH と config を使って実行できる",
+    withRealRunner(
+      (dir) => {
+        const rtkDirectory = join(dir, "rtkbin");
+        const rtkPath = join(rtkDirectory, "rtk");
+        const configPath = join(dir, "rtk-config.toml");
+        mkdirSync(rtkDirectory);
+        writeFileSync(configPath, "sandbox config\\n");
+        writeFileSync(
+          rtkPath,
+          `#!/bin/sh
+case "$1" in
+  --version) printf 'rtk 0.49.0\\n' ;;
+  rewrite) printf 'rtk show-config\\n' ;;
+  show-config) cat "$RTK_CONFIG" ;;
+esac
+`,
+        );
+        chmodSync(rtkPath, 0o755);
+        const rtkLogger: RtkLogger = {
+          warn: () => {},
+          info: () => {},
+        };
+        return {
+          configYaml: `\nread:\n  - allow: ${dir}\ncommands:\n  - allow: '.*'\n`,
+          ui: scriptedUi([]).ui,
+          rtk: {
+            rewriter: new RtkRewriter(rtkLogger, { binaryPath: rtkPath, configPath }),
+            path: rtkPath,
+            configPath,
+            environment: { RTK_CONFIG: "rtk-config.toml" },
+          },
+        };
+      },
+      async ({ tool, sandbox, dir }) => {
+        const bashArgs = sandbox.buildArgs("bash");
+        const bindFor = (path: string): boolean =>
+          bashArgs.some(
+            (value, index) => value === "--ro-bind-try" && bashArgs[index + 1] === path,
+          );
+        assert.equal(bindFor(join(dir, "rtkbin")), true);
+        assert.equal(bindFor(join(dir, "rtk-config.toml")), true);
+        const result = (await tool("bash").execute(
+          { command: "echo ignored", description: "show sandbox config" },
+          execOf(),
+        )) as { stdout: { text: string }; exitCode: number | null };
+        assert.equal(result.stdout.text, "sandbox config\\n");
+        assert.equal(result.exitCode, 0);
+      },
+    ),
+  );
+
   it(
     "File only 承認後の初回 write は実 runner でも create として成功する",
     withRealRunner(

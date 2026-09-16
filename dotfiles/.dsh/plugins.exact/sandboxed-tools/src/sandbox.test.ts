@@ -982,17 +982,22 @@ describe("§6.1 buildArgs と実在保証", () => {
   );
 
   it(
-    "hostPaths を ro-bind（node/runner/rg）し spillDir を書き込み可能 bind する",
+    "hostPaths を ro-bind（node/runner/rg/rtk/config）し spillDir を書き込み可能 bind する",
     withTempDirectory(async (dir) => {
       mkdirSync(join(dir, "dist"), { recursive: true });
       mkdirSync(join(dir, "rgbin"), { recursive: true });
       mkdirSync(join(dir, "nodebin"), { recursive: true });
+      mkdirSync(join(dir, "rtkbin"), { recursive: true });
       mkdirSync(join(dir, "spill"), { recursive: true });
+      writeFileSync(join(dir, "rtkbin", "rtk"), "");
+      writeFileSync(join(dir, "rtk-config.toml"), "");
       const sandbox = new Sandbox(dir, join(dir, "none.yaml"), {
         nodePath: join(dir, "nodebin", "node"),
         runnerJsPath: join(dir, "dist", "runner.js"),
         rgDir: join(dir, "rgbin"),
         spillDir: join(dir, "spill"),
+        rtkPath: join(dir, "rtkbin", "rtk"),
+        rtkConfigPath: join(dir, "rtk-config.toml"),
       });
       const args = sandbox.buildArgs("fs");
       const at = (flag: string, path: string): number => {
@@ -1002,6 +1007,8 @@ describe("§6.1 buildArgs と実在保証", () => {
       assert.notEqual(at("--ro-bind-try", join(dir, "nodebin")), -1);
       assert.notEqual(at("--ro-bind-try", join(dir, "dist")), -1);
       assert.notEqual(at("--ro-bind-try", join(dir, "rgbin")), -1);
+      assert.notEqual(at("--ro-bind-try", join(dir, "rtkbin")), -1);
+      assert.notEqual(at("--ro-bind-try", join(dir, "rtk-config.toml")), -1);
       const spillBindAt = args.indexOf("--bind-try");
       assert.notEqual(spillBindAt, -1);
       assert.equal(args[spillBindAt + 1], join(dir, "spill"));
