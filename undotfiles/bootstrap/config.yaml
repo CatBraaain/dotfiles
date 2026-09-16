@@ -5,6 +5,8 @@
 - apt: libasound2t64
 # Camoufox uses Xvfb for a virtual X display and software-rendered WebGL in headless mode.
 - apt: xvfb
+# x11vnc publishes the headed camoufox display for human handoff (CAPTCHA, login).
+- apt: x11vnc
 
 # Tauri Linux prerequisites.
 - apt: libwebkit2gtk-4.1-dev

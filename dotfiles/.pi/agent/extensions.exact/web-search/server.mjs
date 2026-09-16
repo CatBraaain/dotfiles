@@ -8,12 +8,24 @@
 // Fingerprint generation borrows camoufox-js; the browser itself is launched by
 // the same playwright-core that playwright-cli embeds, so the server always
 // speaks the client's protocol version (no HTTP 428 on connect).
-import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+//
+// On Linux the browser runs headed on a virtual X display (Xvfb :99) so a human
+// can take over the very same page through x11vnc for CAPTCHAs and logins
+// (SPEC.md §camoufox の表示モード). CAMOUFOX_HEADLESS=1 restores plain headless.
+import { spawn, spawnSync } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import net from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { launchOptions } from "camoufox-js/dist/utils.js";
+import {
+	displaySocketPath,
+	resolveHeadless,
+	VNC_PORT,
+	x11vncArgs,
+	xvfbArgs,
+} from "./display.mjs";
 
 const DEFAULT_BASE_URL = "ws://127.0.0.1:9378/camoufox";
 const EXECUTABLE_PATH =
@@ -44,11 +56,74 @@ function resolvePlaywrightCore() {
 
 const { firefox } = resolvePlaywrightCore();
 
+// Detached helper processes (Xvfb, x11vnc) outlive this server; a restart just
+// re-checks them instead of assuming they are gone.
+const CACHE_DIR = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
+
+function spawnDetachedLog(command, args, logPath) {
+	mkdirSync(dirname(logPath), { recursive: true });
+	const logFd = openSync(logPath, "a");
+	try {
+		spawn(command, args, { detached: true, stdio: ["ignore", logFd, logFd] }).unref();
+	} finally {
+		closeSync(logFd);
+	}
+}
+
+function commandOnPath(command) {
+	return spawnSync("which", [command], { encoding: "utf8" }).status === 0;
+}
+
+function portIsOpen(port) {
+	return new Promise((resolve) => {
+		const socket = net.connect({ host: "127.0.0.1", port });
+		socket.once("connect", () => {
+			socket.destroy();
+			resolve(true);
+		});
+		socket.once("error", () => resolve(false));
+	});
+}
+
+// SPEC: headed 起動では Xvfb がソケットを作るまで待ってから Firefox を出す。
+async function ensureDisplay() {
+	const socketPath = displaySocketPath();
+	if (existsSync(socketPath)) return;
+	console.log("[camoufox-server] starting Xvfb on :99");
+	spawnDetachedLog("Xvfb", xvfbArgs(), join(CACHE_DIR, "pi", "web-search", "xvfb.log"));
+	const deadline = Date.now() + 10_000;
+	while (!existsSync(socketPath)) {
+		if (Date.now() > deadline) {
+			throw new Error(`Xvfb socket ${socketPath} did not appear within 10s`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+}
+
+async function ensureX11vnc() {
+	if (!commandOnPath("x11vnc")) {
+		console.error(
+			"[camoufox-server] x11vnc not on PATH: human handoff disabled (bootstrap: apt x11vnc)",
+		);
+		return;
+	}
+	if (await portIsOpen(VNC_PORT)) return; // already serving; another instance would just die on the port
+	console.log("[camoufox-server] starting x11vnc (connection denied until -R nodeny)");
+	spawnDetachedLog("x11vnc", x11vncArgs(), join(CACHE_DIR, "pi", "web-search", "x11vnc.log"));
+}
+
+// SPEC: Linux では既定で headed（Xvfb 上）。CAMOUFOX_HEADLESS=1 で従来の headless。
+const headless = resolveHeadless();
+if (!headless) {
+	await ensureDisplay();
+	await ensureX11vnc();
+}
+
 // Fingerprint: freshly generated on every server start (os spoofed to Windows).
 // block_webgl disables WebGL instead of spoofing it: sampling the WebGL
 // fingerprint needs better-sqlite3, whose native build is unavailable here.
 const launch = await launchOptions({
-	headless: true,
+	headless,
 	os: ["windows"],
 	executable_path: EXECUTABLE_PATH,
 	i_know_what_im_doing: true,

@@ -62,6 +62,14 @@ openserp の起動アドレスとポートは接続先（`OPENSERP_BASE_URL`）�
 
 camoufox server は標準出力・標準エラー出力を `<cache>/pi/web-search/camoufox-server.log` へ追記する（`<cache>` は `XDG_CACHE_HOME`、未設定時 `~/.cache`）。ディレクトリが無いときは作成する。server はバックグラウンド起動のため出力を観測する手段がこのログに限られる。ログファイルを用意できないときは server の出力を破棄して起動を続行する。
 
+### camoufox の表示モード（Xvfb headed と x11vnc）
+
+Linux では camoufox server は既定で headed であり、仮想ディスプレイ `:99` 上で描画される。起動時、`/tmp/.X11-unix/X99` が存在しなければバックグラウンドで `Xvfb :99` を起動し、ソケットが出現するまで待って（10秒で諦めて異常終了）から camoufox を `DISPLAY=:99` で起動する。Xvfb と x11vnc は server より長生きする detached プロセスで、server 起動のたびに存在を再確認し、無いときだけ起動する。Xvfb と x11vnc の出力は `<cache>/pi/web-search/` 配下の `xvfb.log`・`x11vnc.log` へ追記する。
+
+x11vnc が PATH にあり、ポート 5900 で待ち受けていなければ、`-deny_all`（既定は誰も接続できない）付きでバックグラウンド起動する。人間への画面公開はブラウザの再起動を伴わず、稼働中の x11vnc へ `x11vnc -display :99 -R nodeny` で受け付けを開き、`-R deny` と `-R disconnect:all` で閉じる。x11vnc が PATH に無いときは警告ログを出して起動を続行する（画面公開だけが使えない）。
+
+環境変数 `CAMOUFOX_HEADLESS=1` で従来どおりの headless 起動になり、Xvfb・x11vnc の起動も行わない。`CAMOUFOX_HEADLESS=0` で明示的に headed にできる。Windows では既定が headless である。依存パッケージ（`xvfb`、`x11vnc`）は dotfiles bootstrap が導入する。
+
 ## バックエンドの順序
 
 ### web_search のバックエンド
