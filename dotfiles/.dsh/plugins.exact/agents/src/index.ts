@@ -285,6 +285,30 @@ export function apply(ctx: Context) {
     return settled.text;
   };
 
+  // Child creation booking. The in-process driver creates the child inside
+  // `subagents.start`: `agent/created` fires before start resolves and before
+  // the child's first request assembles its tool schemas, while the child
+  // session header carries no definition name. spawnSubagent therefore books
+  // the definition here and the agent/created listener consumes it during the
+  // announce — the only window in which a child-scoped tool reaches the
+  // child's first request. The lock serializes start calls so concurrent
+  // spawns pair with the right booking.
+  let bookedChild: {
+    parentSessionId: string;
+    definition: AgentDefinition;
+    state: AgentState;
+  } | undefined;
+  let creationTail: Promise<void> = Promise.resolve();
+  const enterChildCreationWindow = async (): Promise<() => void> => {
+    const prior = creationTail;
+    let release!: () => void;
+    creationTail = new Promise<void>((resolveRelease) => {
+      release = resolveRelease;
+    });
+    await prior;
+    return release;
+  };
+
   const spawnSubagent = async (
     parent: Agent,
     childName: string,
@@ -295,8 +319,8 @@ export function apply(ctx: Context) {
     const definition = config.agents[childName];
     if (!definition) throw new Error(`undefined agent ${childName}`);
     // Resolve the child's default class here; its own 429s then fall back
-    // through the child state registered below (pi: the child session runs
-    // the same routing rules).
+    // through the child state registered by agent/created (pi: the child
+    // session runs the same routing rules).
     const picked = await pickCandidate(
       config.classes[definition.class] ?? [],
       new Map<string, number>(),
@@ -308,34 +332,49 @@ export function apply(ctx: Context) {
       throw new Error(`no available model for agent ${childName}: class ${definition.class}`);
     }
     const { filter } = toolFilterFor(definition);
-    const run = await ctx.subagents.start("spawn", {
-      label: sessionNameFor(childName, task),
-      prompt: [{ type: "text", text: task }, ...extraPrompt],
-      parent,
-      signal,
-      agentOptions: { provider: picked.provider, model: picked.model },
-      persona:
-        definition.systemPrompt.length > 0 ? definition.systemPrompt.join("\n\n") : undefined,
-      toolFilter: filter,
-    });
-    const child = run.localAgent;
-    if (child) {
-      states.set(child, {
-        agentName: childName,
-        effectiveClass: definition.class,
-        cooldowns: new Map<string, number>(),
-        cooldownEpoch: 0,
-        manualSelect: false,
-        slots: new SubagentSlots(),
-        lastRoute: undefined,
-        appliedDisposers: [],
-        imageShadow: undefined,
+    const state: AgentState = {
+      agentName: childName,
+      effectiveClass: definition.class,
+      cooldowns: new Map<string, number>(),
+      cooldownEpoch: 0,
+      manualSelect: false,
+      slots: new SubagentSlots(),
+      lastRoute: undefined,
+      appliedDisposers: [],
+      imageShadow: undefined,
+    };
+    const releaseWindow = await enterChildCreationWindow();
+    bookedChild = { parentSessionId: parent.session.id, definition, state };
+    // The window only guards the start call itself: agent/created (and thus
+    // the booking consumption) happens inside it, so the lock must drop as
+    // soon as start settles — holding it through the child's run would
+    // serialize all concurrent spawns.
+    let run: Awaited<ReturnType<typeof ctx.subagents.start>>;
+    try {
+      run = await ctx.subagents.start("spawn", {
+        label: sessionNameFor(childName, task),
+        prompt: [{ type: "text", text: task }, ...extraPrompt],
+        parent,
+        signal,
+        agentOptions: { provider: picked.provider, model: picked.model },
+        persona:
+          definition.systemPrompt.length > 0 ? definition.systemPrompt.join("\n\n") : undefined,
+        toolFilter: filter,
       });
+    } finally {
+      bookedChild = undefined;
+      releaseWindow();
     }
     try {
+      const child = run.localAgent;
+      if (child && !states.has(child)) {
+        logger.warn(
+          `child ${childName} was created without the plugin's booking (another subagents.start consumed the window); it runs without managed routing or delegation`,
+        );
+      }
       return await settleRunText(run, childName);
     } finally {
-      if (child) states.delete(child);
+      if (run.localAgent) states.delete(run.localAgent);
       await run.dispose();
     }
   };
@@ -499,10 +538,28 @@ export function apply(ctx: Context) {
   };
 
   ctx.on("agent/created", ({ agent }) => {
+    // One-shot children: agent/created fires inside subagents.start, before
+    // the child's first request assembles its tools. Consume the booking made
+    // by spawnSubagent, register the routing state, and give children whose
+    // definition delegates their own subagent tool (own layer — the child's
+    // toolFilter cannot hide it). Root-only wiring below (idle picks,
+    // manual-model tracking) must not reach children.
+    if (agent.session.header.origin === "subagent") {
+      const booking = bookedChild;
+      if (booking && agent.session.header.parentSession === booking.parentSessionId) {
+        bookedChild = undefined;
+        states.set(agent, booking.state);
+        if (booking.definition.subagents.length > 0) {
+          booking.state.appliedDisposers.push(registerSubagentTool(agent, booking.state));
+        }
+        // Safety net: a child whose start fails after publish never reaches
+        // spawnSubagent's finally, so clean its routing state on disposal.
+        agent.ctx.on("agent/disposed", () => states.delete(agent));
+      }
+      return;
+    }
     // Root agents adopt the initial agent, overridden by an idle-session
-    // pick recorded before the session's first turn; one-shot children are
-    // registered by spawnSubagent (their sessions carry origin: 'subagent').
-    if (agent.session.header.origin === "subagent") return;
+    // pick recorded before the session's first turn.
     if (states.has(agent)) return;
     const pending = pendingSelections.get(agent.session.id);
     pendingSelections.delete(agent.session.id);
