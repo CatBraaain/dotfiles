@@ -4,16 +4,19 @@ import { describe, it } from "bun:test";
 import { join } from "node:path";
 
 // The build keeps bare specifiers external (run_after_build.sh passes
-// `--external '@deepseek-ai/*'` etc.), and Node resolves them only from this
-// plugin's own node_modules, i.e. exactly what package.json dependencies
-// install. A runtime import missing from dependencies therefore stays
-// invisible to type checks and tests until dsh fails to boot with
-// ERR_MODULE_NOT_FOUND on the built dist/index.js. Type-only imports are
-// erased at build time, so they are exempt.
+// `--external '@deepseek-ai/*'` etc.), so runtime imports must be resolvable
+// where the deployed plugin lands: libraries from dependencies install into
+// the profile tree, while dsh framework packages resolve as peerDependencies
+// through the shared installation fallback. A runtime import missing from
+// both therefore stays invisible to type checks and tests until dsh fails to
+// boot with ERR_MODULE_NOT_FOUND on the built dist/index.js. Type-only
+// imports are erased at build time, so they are exempt.
 
-const dependencies = Object.keys(
-  JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")).dependencies ?? {},
-);
+const declared = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"));
+const declaredNames = [
+  ...Object.keys(declared.dependencies ?? {}),
+  ...Object.keys(declared.peerDependencies ?? {}),
+];
 
 function runtimeBareImports(source: string): string[] {
   const specifiers = new Set<string>();
@@ -27,8 +30,8 @@ function runtimeBareImports(source: string): string[] {
 }
 
 describe("§ dependencies 宣言", () => {
-  it("src の runtime import はすべて package.json dependencies に宣言する", () => {
-    const allowed = new Set([...dependencies, "bun", "bun:test"]);
+  it("src の runtime import はすべて package.json の dependencies または peerDependencies に宣言する", () => {
+    const allowed = new Set([...declaredNames, "bun", "bun:test"]);
     const missing = Object.fromEntries(
       readdirSync(import.meta.dir)
         .filter((file) => file.endsWith(".ts"))
@@ -40,6 +43,6 @@ describe("§ dependencies 宣言", () => {
         ])
         .filter(([, list]) => (list as string[]).length > 0),
     );
-    assert.deepEqual(missing, {}, "runtime imports missing from package.json dependencies");
+    assert.deepEqual(missing, {}, "runtime imports missing from package.json dependencies/peerDependencies");
   });
 });

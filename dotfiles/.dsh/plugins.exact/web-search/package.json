@@ -13,11 +13,14 @@
   },
   "trustedDependencies": [],
   "dependencies": {
-    "@deepseek-ai/dsh-web": "^0.1.5-rc.2",
     "@deepseek-ai/schemastery": "^3.18.2",
     "camoufox-js": "0.12.0"
   },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-web": "^0.1.5-rc.2"
+  },
   "devDependencies": {
+    "@deepseek-ai/dsh-web": "^0.1.5-rc.2",
     "@types/bun": "latest"
   }
 }

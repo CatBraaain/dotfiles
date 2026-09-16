@@ -36,13 +36,13 @@ bun build src/client/index.ts --outfile lib/client.js --format=cjs --target=brow
 
 profile の依存管理は公式 CLI に合わせ、`dsh plugin --profile web install --ignore-scripts` を使う。これは profile dir で pnpm を実行し、`pnpm-workspace.yaml` の `nodeLinker: hoisted` / `autoInstallPeers: false` 設定により dsh framework の peer import を `$DSH_HOME/profiles/node_modules` の共有 fallback へ解決させる。`--ignore-scripts` により依存の lifecycle script は実行しない。plugin のソースから `dist/` を生成する処理と、plugin 自身の build 依存を入れる処理には既存どおり Bun を使う。
 
-`file:` 依存は dsh CLI が profile の package tree に配置する。local plugin の `.gitignore` では `dist/` を除外しないため、pnpm の copy 後も build 成果物が残る。dsh 本体の framework package は profile 直下に別実体として hoist されず、`pnpm-workspace.yaml` の設定により Node の親ディレクトリ探索で `$DSH_HOME/profiles/node_modules` の共有 fallback から解決される。plugin のソースと build 依存は `run_after_build.sh` が管理する。
+`file:` 依存は dsh CLI が profile の package tree に配置する。local plugin の `.gitignore` では `dist/` を除外しないため、pnpm の copy 後も build 成果物が残る。plugin が dsh の framework package（service を提供する `@deepseek-ai/*`）を `dependencies` に書くと、その実体が profile 直下へ hoist され、global 側と別 module instance になる。`TOOL_RUNTIME_SCHEDULER` のような Symbol は instance ごとに一意のため、service の lookup が外れて `Cannot read properties of undefined (reading 'prepare')` のような tool 実行時エラーになる。これを避けるため framework package は `peerDependencies`（typecheck・build 用に同じものを `devDependencies` にも）に書き、`pnpm-workspace.yaml` の `autoInstallPeers: false` 設定により Node の親ディレクトリ探索で `$DSH_HOME/profiles/node_modules` の共有 fallback から解決させる。plugin のソースと build 依存は `run_after_build.sh` が管理する。
 
 lifecycle script はデフォルトで実行しない。実行が必要な依存が増えたら `trustedDependencies` に追記する（現状は空で、`@google/genai` と `protobufjs` の script は実行不要と判断済み）。
 
 ## プラグインの追加・更新
 
-1. 自作なら `plugins.exact/` にソースを置く。プラグイン自身の依存はその `package.json` の `dependencies` に書く。リモートなら `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
+1. 自作なら `plugins.exact/` にソースを置く。プラグイン自身の依存のうち、dsh の framework package（service を提供する `@deepseek-ai/*`）は `peerDependencies` に書き、typecheck・build 用に同じ範囲指定を `devDependencies` にも書く。それ以外の通常 library（`yaml`、`schemastery`、`camoufox-js` 等）は `dependencies` に書く。リモート依存は `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
 2. dotfiles で管理する plugin は `profiles/web/package.json` の `dependencies` と `dsh.profile.bundles` に追記する
 3. `chezmoi apply` が run script で plugin をビルドし、`dsh plugin --profile web install --ignore-scripts` で profile の依存をインストールする（全 plugin 一括。1 plugin ずつは不要）
 

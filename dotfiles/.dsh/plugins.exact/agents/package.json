@@ -20,11 +20,15 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-llm": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
     "yaml": "latest"
   },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2"
+  },
   "devDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.2",
     "@types/bun": "latest",
     "@types/react": "~18.3.1"

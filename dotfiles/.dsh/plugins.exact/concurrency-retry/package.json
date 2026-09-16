@@ -20,10 +20,11 @@
       "patch": "./cordis.patch.yml"
     }
   },
-  "dependencies": {
+  "peerDependencies": {
     "@deepseek-ai/dsh-llm": "^0.1.5-rc.2"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.1.5-rc.2",
     "@types/bun": "latest"
   }
 }
