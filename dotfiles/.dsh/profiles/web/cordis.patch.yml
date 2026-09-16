@@ -1,0 +1,8 @@
+# Use the user-authored bare preset as the only Web agent composition.
+# Shipped presets are excluded so built-in model-facing tools cannot be selected.
+- id: agent-presets
+  config:
+    default: bare
+    roots: []
+    includeShippedRoot: false
+    includeUserRoot: true

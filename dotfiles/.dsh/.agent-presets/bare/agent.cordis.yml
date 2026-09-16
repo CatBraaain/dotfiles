@@ -1,0 +1,9 @@
+# The bare agent preset adds no model-facing tools. The Web profile's host
+# plugins provide the available tool implementations; agents.yaml controls
+# which global plugin tools each agent may use.
+
+# Web disables the host copy of this row so presets own workspace instructions.
+- id: agent-instructions
+  name: "@deepseek-ai/dsh-agent-instructions"
+  config:
+    maxBytes: 65536
