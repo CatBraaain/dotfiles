@@ -63,3 +63,28 @@ externalSkills:
           （ログは `~/.cache/pi/web-search/camoufox-server.log` に追記される）
         - 生きているセッションが突然死んだら、拡張のハングリカバリで server が
           kill された可能性がある。server を再起動してセッションを開き直す
+
+        ## CAPTCHA・ログインを人間へ引き継ぐ（Xvfb headed + x11vnc）
+
+        CAPTCHA やログインなど人間に操作してほしい場面では、ブラウザを再起動・リロードせず
+        画面だけ後から公開する。camoufox server は Linux では既定で仮想ディスプレイ上の
+        headed であり、server が動いていれば常に非表示。必要になったとき x11vnc への
+        コマンドだけで同じ画面を公開する。ページ・CAPTCHA・cookie はそのまま維持される:
+
+        ```bash
+        # 依存 xvfb・x11vnc は dotfiles bootstrap が導入。server が両方を自動で立てる
+
+        # 公開: Windows の VNC ビューアから 127.0.0.1:5900 へ接続して人間が操作
+        x11vnc -display :99 -R nodeny
+
+        # 非公開へ戻す（ブラウザは生きたまま。playwright-cli でそのまま操作を再開できる）
+        x11vnc -display :99 -R deny
+        x11vnc -display :99 -R disconnect:all
+        ```
+
+        - CAPTCHA が見えている間は server を再起動しない。headed は起動時に決まり、
+          再起動では cookie（メモリ上の context）も消える
+        - トグルの正体は VNC 接続の受け付けの開閉。`-R nodeny` で開き、`-R deny` と
+          `-R disconnect:all` で閉じる。`-R` は X プロパティ経由のため `-display :99` が必要
+        - 公開中も playwright-cli からの操作は止まらない。人間に任せている間はエージェント側で
+          触らない
