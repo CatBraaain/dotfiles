@@ -1,2 +1,4 @@
 name: Bare
-description: Agent composition without built-in model-facing tools.
+description: >-
+  Agent composition without stock coding tools: skills, web, and compaction;
+  fs and shell tools come from host plugins.
