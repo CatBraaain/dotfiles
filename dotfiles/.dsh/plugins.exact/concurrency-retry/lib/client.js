@@ -1,4 +1,4 @@
-window.__ModuleLoader__.load({ id: "dotfiles-dsh-zai-concurrency-retry", factory: (require) => { var module = { exports: {} }; var exports = module.exports;
+window.__ModuleLoader__.load({ id: "dotfiles-dsh-concurrency-retry", factory: (require) => { var module = { exports: {} }; var exports = module.exports;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -47,7 +47,7 @@ module.exports = __toCommonJS(exports_client);
 var import_react = require("react");
 
 // src/client/event.ts
-var ZAI_RETRY_WAIT_EVENT_TYPE = "zai-concurrency-retry/wait";
+var CONCURRENCY_RETRY_WAIT_EVENT_TYPE = "concurrency-retry/wait";
 
 // src/client/conversation.ts
 function waitEventData(data) {
@@ -60,18 +60,18 @@ function waitEventData(data) {
     return;
   return { provider: record.provider, attempt: record.attempt, waitMs: record.waitMs };
 }
-var zaiRetryWaitDefinition = {
-  kind: ZAI_RETRY_WAIT_EVENT_TYPE,
+var concurrencyRetryWaitDefinition = {
+  kind: CONCURRENCY_RETRY_WAIT_EVENT_TYPE,
   target: "chat",
   match(event) {
-    if (event.type !== ZAI_RETRY_WAIT_EVENT_TYPE)
+    if (event.type !== CONCURRENCY_RETRY_WAIT_EVENT_TYPE)
       return null;
     return waitEventData(event.data) === undefined ? null : { id: `wait-${event.seq}`, role: "start" };
   },
   start(_context, match) {
     const data = waitEventData(match.event.data);
     if (data === undefined) {
-      throw new Error("zai-concurrency-retry/wait start requires a valid payload");
+      throw new Error("concurrency-retry/wait start requires a valid payload");
     }
     return { data, seq: match.event.seq };
   },
@@ -85,7 +85,7 @@ var zaiRetryWaitDefinition = {
     const location = context.start?.location ?? context.matches[0]?.location ?? { kind: "unresolved" };
     return {
       key: context.key,
-      kind: ZAI_RETRY_WAIT_EVENT_TYPE,
+      kind: CONCURRENCY_RETRY_WAIT_EVENT_TYPE,
       id: context.id,
       target: "chat",
       anchorSeq: state.seq,
@@ -95,18 +95,18 @@ var zaiRetryWaitDefinition = {
     };
   }
 };
-function registerZaiRetryConversation(ctx) {
-  ctx.uiConversation.events.register(zaiRetryWaitDefinition);
+function registerConcurrencyRetryConversation(ctx) {
+  ctx.uiConversation.events.register(concurrencyRetryWaitDefinition);
 }
 
 // src/client/apply.ts
-function registerZaiRetryChatNode(ctx, component) {
-  ctx.slots.inject("conversation.chat.node", () => ctx.slots.register({ name: "conversation.chat.node", key: ZAI_RETRY_WAIT_EVENT_TYPE }, component));
+function registerConcurrencyRetryChatNode(ctx, component) {
+  ctx.slots.inject("conversation.chat.node", () => ctx.slots.register({ name: "conversation.chat.node", key: CONCURRENCY_RETRY_WAIT_EVENT_TYPE }, component));
 }
 
 // src/client/format.ts
 function buildRetryWaitLine(data) {
-  return `zai concurrency limit — retrying in ${Math.ceil(data.waitMs / 1000)}s (attempt ${data.attempt})`;
+  return `${data.provider} concurrency limit — retrying in ${Math.ceil(data.waitMs / 1000)}s (attempt ${data.attempt})`;
 }
 
 // src/client/index.ts
@@ -116,12 +116,12 @@ var WAIT_STYLE = {
   fontSize: "var(--dsh-content-font-size-secondary, 13px)",
   lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))"
 };
-function ZaiRetryWaitRow({ node }) {
+function ConcurrencyRetryWaitRow({ node }) {
   return import_react.createElement("div", { style: WAIT_STYLE }, buildRetryWaitLine(node.data));
 }
 function apply(ctx) {
-  registerZaiRetryConversation(ctx);
-  registerZaiRetryChatNode(ctx, ZaiRetryWaitRow);
+  registerConcurrencyRetryConversation(ctx);
+  registerConcurrencyRetryChatNode(ctx, ConcurrencyRetryWaitRow);
 }
 
 return module.exports; } });
