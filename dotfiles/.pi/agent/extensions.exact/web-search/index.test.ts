@@ -290,6 +290,74 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     ]);
   });
 
+  it("captcha detected のときは同じバックエンドを1回だけ再試行する", async () => {
+    let calls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("parse: captcha detected");
+          return "retried text";
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await searchOne("query", undefined, backends);
+
+    assert.equal(calls, 2);
+    assert.equal(result.backend, "A");
+    assert.equal(result.text, "retried text");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "A", ok: true },
+    ]);
+  });
+
+  it("captcha detected の再試行も失敗したら次のバックエンドへ進む", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: captcha detected");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await searchOne("query", undefined, backends);
+
+    assert.equal(firstBackendCalls, 2);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "A", ok: false, error: "parse: captcha detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
+  it("captcha detected 以外の失敗は再試行しない", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("parse: timeout");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await searchOne("query", undefined, backends);
+
+    assert.equal(firstBackendCalls, 1);
+    assert.equal(result.backend, "B");
+  });
+
   it("失敗バックエンドのエラー文は本文に含まず、attempts だけに含む", async () => {
     const backends = [failBackend("A", "致命的エラー文"), okBackend("B", "成功本文")];
     const result = await searchOne("query", undefined, backends);
@@ -457,6 +525,26 @@ describe("web_search 表示", () => {
     };
     const lines = renderedLines(search.renderResult(result));
     assert.deepEqual(lines, ['✗ openserp(google) - "captcha detected"', "✓ openserp(bing)"]);
+  });
+
+  it("captcha retry の初回と再試行をそれぞれ1行で表示する", () => {
+    const attempts: Attempt[] = [
+      { backend: "openserp(google)", ok: false, error: "captcha detected" },
+      { backend: "openserp(google)", ok: false, error: "captcha detected" },
+      { backend: "openserp(bing)", ok: true },
+    ];
+    const result = {
+      content: [{ type: "text", text: "結果本文" }],
+      details: { backend: "openserp(bing)", attempts },
+    };
+
+    const lines = renderedLines(search.renderResult(result));
+
+    assert.deepEqual(lines, [
+      '✗ openserp(google) - "captcha detected"',
+      '✗ openserp(google) - "captcha detected"',
+      "✓ openserp(bing)",
+    ]);
   });
 
   it("全バックエンド失敗時も renderResult が失敗行を表示する", () => {

@@ -771,6 +771,10 @@ export function defaultSearchBackends(
   ]);
 }
 
+function isCaptchaParseError(error: unknown): boolean {
+  return error instanceof Error && error.message === "parse: captcha detected";
+}
+
 export async function searchOne(
   query: string,
   signal: AbortSignal | undefined,
@@ -781,20 +785,25 @@ export async function searchOne(
   const attempts: Attempt[] = [];
 
   for (const [name, search] of resolvedBackends) {
-    const startedAt = Date.now();
-    try {
-      const text = await search();
-      // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
-      if (!text.trim()) throw new Error("empty response");
-      attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
-      return { text, backend: name, attempts };
-    } catch (error) {
-      attempts.push({
-        backend: name,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        durationMs: Date.now() - startedAt,
-      });
+    let retriedForCaptcha = false;
+    while (true) {
+      const startedAt = Date.now();
+      try {
+        const text = await search();
+        // SPEC: 空（空白・改行のみを含む）の本文も失敗として扱う
+        if (!text.trim()) throw new Error("empty response");
+        attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
+        return { text, backend: name, attempts };
+      } catch (error) {
+        attempts.push({
+          backend: name,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          durationMs: Date.now() - startedAt,
+        });
+        if (retriedForCaptcha || signal?.aborted || !isCaptchaParseError(error)) break;
+        retriedForCaptcha = true;
+      }
     }
   }
   throw new AllBackendsFailedError("web search", attempts);

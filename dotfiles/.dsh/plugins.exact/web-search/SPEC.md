@@ -22,13 +22,13 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 | 条件 | 結果 |
 |---|---|
 | google の描画・パースが成功し結果 1 件以上 | google の結果を返す（後続エンジンは試行しない） |
-| google 失敗（描画失敗・チャレンジ検出・パース失敗・空結果のいずれか） | duckduckgo を試行。さらに失敗なら bing を試行 |
+| google 失敗（描画失敗・チャレンジ検出・パース失敗・空結果のいずれか） | `captcha detected` なら google を1回再試行し、それでも失敗またはそれ以外の失敗なら duckduckgo を試行。さらに失敗なら bing を試行 |
 | 3 エンジンすべて失敗 | `WEB_PROVIDER_ERROR` の `WebError` で失敗し、メッセージに各エンジンの失敗行が含まれる。描画の abort を含む失敗だった場合、メッセージ末尾に hung した camoufox server の kill ヒント（`pkill -f "bun server.mjs"` 行）が付く |
 
 - openserp の結果は契約の `WebSearchSource` へ射影して返す。`url` の無いエントリは捨て、`title`・`snippet` は空白時に省略する。openserp は SERP の生の href 属性をそのまま返すため、engine origin からの相対 URL（google の `/goto?url=...` など。プロトコル相対も含む）は engine origin で絶対化して返す。不正な URL（host 不備の絶対 URL など、解決できないもの）のエントリは `url` 無しと同様に捨てる。openserp の `type`・`display_url` と、検索のメタデータ行（使用した query・所要時間）は契約型に置き場がなく出力しない
 - 結果の件数上限（`maxResults` cap）と `truncated` は dsh-web seam の受け持ち。provider は検索結果を全件返し、cap により行が減ったときは seam が `truncated: true` を設定する（本家 `dsh-web-search-deepseek` と同じ構造）
 - 言語ヒントは対応しない。dsh 契約の `WebSearchRequest` に lang フィールドが存在せず、検索は言語指定なしで行われる
-- エンジン試行にクールダウンはなく、失敗したバックエンドも次回のリクエストでは通常どおり google → duckduckgo → bing の順で試行する
+- エンジン試行にクールダウンはなく、失敗したバックエンドも次回のリクエストでは通常どおり google → duckduckgo → bing の順で試行する。openserp のパース応答が `captcha detected` のときだけ、同じエンジンを同一リクエスト内で1回追加試行する。追加試行も失敗した場合は両方の試行を記録して次のエンジンへ進み、captcha 以外のパースエラー、描画の `challenge detected`、空結果は追加試行しない。この追加試行は web_search のみに適用し、web_fetch には適用しない
 - `available()` は、`bun`、`openserp`、`playwright-cli` の 3 バイナリが PATH 上で見つかること、および camoufox ブラウザ実行ファイル（環境変数 `CAMOUFOX_EXECUTABLE_PATH`、既定 `~/.cache/camoufox/camoufox-bin`）が存在することを条件とする。ネットワークアクセスは行わない
 
 ## fetch provider（id: `camoufox-trafilatura`）

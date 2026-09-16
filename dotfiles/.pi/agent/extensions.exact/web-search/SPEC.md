@@ -72,6 +72,8 @@ camoufox server は標準出力・標準エラー出力を `<cache>/pi/web-searc
 | 2    | camoufox+openserp(duckduckgo) |
 | 3    | camoufox+openserp(bing)       |
 
+`camoufox+openserp` backend が openserp のパース応答で `captcha detected` を受けた場合、同じエンジンの SERP 描画から同一リクエスト内で1回だけ再試行する。再試行も `captcha detected` で失敗した場合は、両方の試行を記録して次のエンジンへ進む。captcha 以外のパースエラー、描画の `challenge detected`、空結果は再試行しない。この再試行は web_search のみに適用し、web_fetch には適用しない。
+
 ### web_fetch のバックエンド
 
 バックエンドの構成は URL が Reddit 投稿パーマリンク（§Reddit バックエンド）か StackOverflow 質問パーマリンク（§StackOverflow バックエンド）かどうかで変わる。いずれの専用 URL でもその専用バックエンドのみを試行し、汎用バックエンドへのフォールバックは行わない。
@@ -106,7 +108,7 @@ Reddit・StackOverflow バックエンドが失敗した場合も通常どおり
 3. HTML を openserp の `POST /<engine>/parse?format=json` へリクエストボディとして送り、応答を JSON として受け取る。検索結果は応答の `results[]`（`rank`・`title`・`url`・`display_url`・`type`・`snippet`）から拡張が Markdown エントリを生成し、openserp が返すテキスト表現には依存しない
 4. `results[]` を `rank` 順に並べ替え、先頭から最大10件までをエントリとして返す。各エントリは `### <番号>. <タイトル>`、`**<表示URL>** - <type>`、スニペット、`-> <URL>` の順のブロックで、欠損フィールドの行は省略する
 
-openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなり、バックエンドの失敗として次のエンジンを試す。検索エンジンの固定ページ（チャレンジページ）はその前に描画段階で検出し、待ちを切り上げて失敗とする（§チャレンジページ検出）。results が空（検索結果ゼロ）の場合と、応答が JSON として解釈できない場合も失敗として扱う。
+openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなる。`captcha detected` の場合だけ同じエンジンを1回再試行し、再試行も失敗したときは次のエンジンを試す。それ以外のパース失敗は直ちに次のエンジンを試す。検索エンジンの固定ページ（チャレンジページ）はその前に描画段階で検出し、待ちを切り上げて失敗とする（§チャレンジページ検出）。results が空（検索結果ゼロ）の場合と、応答が JSON として解釈できない場合も失敗として扱う。
 
 エンジンごとの SERP URL とパスは次のとおり。
 

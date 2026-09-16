@@ -296,6 +296,10 @@ function renderAbortHint(attempts: Attempt[]): string {
 
 export type BackendEntry<T> = readonly [name: string, run: () => Promise<T>];
 
+function isCaptchaParseError(error: unknown): boolean {
+  return error instanceof Error && error.message === "parse: captcha detected";
+}
+
 // Run backends in order, record an Attempt each, and return the first
 // non-empty payload. A whitespace-only / zero-length payload counts as a
 // failure of that backend (SPEC: empty results fall through to the next one).
@@ -303,23 +307,29 @@ async function tryBackends<T>(
   operation: "web search" | "web fetch",
   backends: readonly BackendEntry<T>[],
   isEmpty: (payload: T) => boolean,
+  shouldRetry?: (error: unknown) => boolean,
 ): Promise<{ payload: T; backend: string; attempts: Attempt[] }> {
   const attempts: Attempt[] = [];
 
   for (const [name, run] of backends) {
-    const startedAt = Date.now();
-    try {
-      const payload = await run();
-      if (isEmpty(payload)) throw new Error("empty response");
-      attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
-      return { payload, backend: name, attempts };
-    } catch (error) {
-      attempts.push({
-        backend: name,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        durationMs: Date.now() - startedAt,
-      });
+    let retried = false;
+    while (true) {
+      const startedAt = Date.now();
+      try {
+        const payload = await run();
+        if (isEmpty(payload)) throw new Error("empty response");
+        attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
+        return { payload, backend: name, attempts };
+      } catch (error) {
+        attempts.push({
+          backend: name,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          durationMs: Date.now() - startedAt,
+        });
+        if (retried || !shouldRetry?.(error)) break;
+        retried = true;
+      }
     }
   }
   throw new AllBackendsFailedError(operation, attempts);
@@ -351,6 +361,7 @@ export async function searchOne(
     "web search",
     backends,
     (sources) => sources.length === 0,
+    (error) => !signal?.aborted && isCaptchaParseError(error),
   );
   return { sources: payload, backend, attempts };
 }
