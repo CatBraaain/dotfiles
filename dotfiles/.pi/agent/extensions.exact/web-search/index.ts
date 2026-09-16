@@ -775,6 +775,12 @@ function isCaptchaParseError(error: unknown): boolean {
   return error instanceof Error && error.message === "parse: captcha detected";
 }
 
+// SPEC: 描画段のチャレンジ検出（render: challenge detected）も、captcha と同じく
+// 同一バックエンドの追加試行 1 回の対象にする。
+function isChallengeRenderError(error: unknown): boolean {
+  return error instanceof Error && error.message === "render: challenge detected";
+}
+
 // Run backends in order, record an Attempt each, and return the first
 // non-empty payload. A whitespace-only / zero-length payload counts as a
 // failure of that backend (SPEC: empty results fall through to the next one).
@@ -823,7 +829,8 @@ export async function searchOne(
     "web search",
     resolvedBackends,
     (text) => !text.trim(),
-    (error) => !signal?.aborted && isCaptchaParseError(error),
+    (error) =>
+      !signal?.aborted && (isCaptchaParseError(error) || isChallengeRenderError(error)),
   );
   return { text: payload, backend, attempts };
 }
@@ -1398,7 +1405,8 @@ export async function fetchOne(
     "web fetch",
     backends,
     (text) => !text.trim(),
-    (error) => !signal?.aborted && isCaptchaParseError(error),
+    (error) =>
+      !signal?.aborted && (isCaptchaParseError(error) || isChallengeRenderError(error)),
   );
   return { text: payload, backend, attempts };
 }

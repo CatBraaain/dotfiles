@@ -300,6 +300,12 @@ function isCaptchaParseError(error: unknown): boolean {
   return error instanceof Error && error.message === "parse: captcha detected";
 }
 
+// SPEC: the render-stage challenge detection gets the same single extra run
+// of the same backend as the captcha parse error.
+function isChallengeRenderError(error: unknown): boolean {
+  return error instanceof Error && error.message === "render: challenge detected";
+}
+
 // Run backends in order, record an Attempt each, and return the first
 // non-empty payload. A whitespace-only / zero-length payload counts as a
 // failure of that backend (SPEC: empty results fall through to the next one).
@@ -361,7 +367,8 @@ export async function searchOne(
     "web search",
     backends,
     (sources) => sources.length === 0,
-    (error) => !signal?.aborted && isCaptchaParseError(error),
+    (error) =>
+      !signal?.aborted && (isCaptchaParseError(error) || isChallengeRenderError(error)),
   );
   return { sources: payload, backend, attempts };
 }
@@ -376,7 +383,8 @@ export async function fetchOne(
     "web fetch",
     backends,
     (markdown) => !markdown.trim(),
-    (error) => !signal?.aborted && isCaptchaParseError(error),
+    (error) =>
+      !signal?.aborted && (isCaptchaParseError(error) || isChallengeRenderError(error)),
   );
   return { markdown: payload, backend, attempts };
 }

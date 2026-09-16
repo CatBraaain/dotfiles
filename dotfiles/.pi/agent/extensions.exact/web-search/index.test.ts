@@ -358,6 +358,55 @@ describe("web_search 単体（searchOne・モックバックエンド）", () =>
     assert.equal(result.backend, "B");
   });
 
+  it("challenge detected のときは同じバックエンドを1回だけ再試行する", async () => {
+    let calls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("render: challenge detected");
+          return "retried text";
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await searchOne("query", undefined, backends);
+
+    assert.equal(calls, 2);
+    assert.equal(result.backend, "A");
+    assert.equal(result.text, "retried text");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: true },
+    ]);
+  });
+
+  it("challenge detected の再試行も失敗したら次のバックエンドへ進む", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("render: challenge detected");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await searchOne("query", undefined, backends);
+
+    assert.equal(firstBackendCalls, 2);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
   it("abort 済み signal では captcha detected を再試行しない", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -728,14 +777,15 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
     ]);
   });
 
-  it("web_fetch でも captcha detected 以外の失敗は再試行しない", async () => {
-    let firstBackendCalls = 0;
+  it("web_fetch でも challenge detected のときは同じバックエンドを1回だけ再試行する", async () => {
+    let calls = 0;
     const backends: BackendEntry[] = [
       [
         "A",
         async () => {
-          firstBackendCalls += 1;
-          throw new Error("parse: challenge detected");
+          calls += 1;
+          if (calls === 1) throw new Error("render: challenge detected");
+          return "retried text";
         },
       ],
       okBackend("B"),
@@ -743,10 +793,35 @@ describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
 
     const result = await fetchOne("https://example.com/", undefined, backends);
 
-    assert.equal(firstBackendCalls, 1);
+    assert.equal(calls, 2);
+    assert.equal(result.backend, "A");
+    assert.equal(result.text, "retried text");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: true },
+    ]);
+  });
+
+  it("web_fetch でも challenge detected の再試行も失敗したら次のバックエンドへ進む", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("render: challenge detected");
+        },
+      ],
+      okBackend("B"),
+    ];
+
+    const result = await fetchOne("https://example.com/", undefined, backends);
+
+    assert.equal(firstBackendCalls, 2);
     assert.equal(result.backend, "B");
     assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: challenge detected" },
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: false, error: "render: challenge detected" },
       { backend: "B", ok: true },
     ]);
   });

@@ -72,7 +72,7 @@ camoufox server は標準出力・標準エラー出力を `<cache>/pi/web-searc
 | 2    | camoufox+openserp(duckduckgo) |
 | 3    | camoufox+openserp(bing)       |
 
-`camoufox+openserp` backend が openserp のパース応答で `captcha detected` を受けた場合、同じエンジンの SERP 描画から同一リクエスト内で1回だけ再試行する。再試行も `captcha detected` で失敗した場合は、両方の試行を記録して次のエンジンへ進む。captcha 以外のパースエラー、描画の `challenge detected`、空結果は再試行しない。再試行の発火条件はエラー文言 `parse: captcha detected` との完全一致であり、abort 済み signal では再試行しない。この再試行ルールは web_search と web_fetch の両方に適用する。
+`camoufox+openserp` backend が openserp のパース応答で `captcha detected` を受けた場合、または描画が `challenge detected` で失敗した場合、同じバックエンドを同一リクエスト内で1回だけ再試行する。再試行も失敗した場合は、両方の試行を記録して次のエンジンへ進む。それ以外のパースエラー、空結果は再試行しない。再試行の発火条件はエラー文言 `parse: captcha detected` または `render: challenge detected` との完全一致であり、abort 済み signal では再試行しない。この再試行ルールは web_search と web_fetch の両方に適用する。
 
 ### web_fetch のバックエンド
 
@@ -108,7 +108,7 @@ Reddit・StackOverflow バックエンドが失敗した場合も通常どおり
 3. HTML を openserp の `POST /<engine>/parse?format=json` へリクエストボディとして送り、応答を JSON として受け取る。検索結果は応答の `results[]`（`rank`・`title`・`url`・`display_url`・`type`・`snippet`）から拡張が Markdown エントリを生成し、openserp が返すテキスト表現には依存しない
 4. `results[]` を `rank` 順に並べ替え、先頭から最大10件までをエントリとして返す。各エントリは `### <番号>. <タイトル>`、`**<表示URL>** - <type>`、スニペット、`-> <URL>` の順のブロックで、欠損フィールドの行は省略する
 
-openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなる。`captcha detected` の場合だけ同じエンジンを1回再試行し、再試行も失敗したときは次のエンジンを試す。それ以外のパース失敗は直ちに次のエンジンを試す。検索エンジンの固定ページ（チャレンジページ）はその前に描画段階で検出し、待ちを切り上げて失敗とする（§チャレンジページ検出）。results が空（検索結果ゼロ）の場合と、応答が JSON として解釈できない場合も失敗として扱う。
+openserp が CAPTCHA・チャレンジ・空結果を検出した場合はパース要求が 4xx エラーとなる。パース応答の `captcha detected` と、その前に描画段階で検出された `challenge detected` は同じエンジンを1回再試行し、再試行も失敗したときは次のエンジンを試す。それ以外のパース失敗は直ちに次のエンジンを試す。検索エンジンの固定ページ（チャレンジページ）はその前に描画段階で検出し、待ちを切り上げて失敗とする（§チャレンジページ検出）。results が空（検索結果ゼロ）の場合と、応答が JSON として解釈できない場合も失敗として扱う。
 
 エンジンごとの SERP URL とパスは次のとおり。
 
@@ -138,7 +138,7 @@ URL のページ本文を Markdown で得る経路:
 
 ## チャレンジページ検出
 
-描画済み HTML がボット検証のチャレンジページ、または検索エンジンがボットとして要求を拒否した固定ページのとき、描画段階で失敗として扱う（camoufox+openserp・camoufox+trafilatura ともに）。失敗時のエラー文言は `render: challenge detected` とする。web_search ではこの検出により、openserp へのパース要求と networkidle 待ちを待たずに次のエンジンへ切り替える。
+描画済み HTML がボット検証のチャレンジページ、または検索エンジンがボットとして要求を拒否した固定ページのとき、描画段階で失敗として扱う（camoufox+openserp・camoufox+trafilatura ともに）。失敗時のエラー文言は `render: challenge detected` とする。web_search ではこの検出により、openserp へのパース要求と networkidle 待ちを待たずに失敗となる。このエラーは captcha と同じく同一バックエンドの1回だけの再試行対象で、再試行も失敗したら次のエンジンへ切り替える。
 
 チャレンジページは HTML の構造シグナルで判定し、ロケール依存の表示文言は使わない。次のシグナルのいずれか1つでも含まれる HTML をチャレンジページとする:
 

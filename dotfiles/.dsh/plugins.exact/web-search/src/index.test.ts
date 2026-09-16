@@ -929,6 +929,54 @@ describe("camoufox+openserp 検索（camoufoxOpenserpSearch・searchOne）", () 
     assert.equal(result.backend, "B");
   });
 
+  it("challenge detected のときは同じバックエンドを1回だけ再試行する", async () => {
+    let calls = 0;
+    const backends: BackendEntry<WebSearchSource[]>[] = [
+      [
+        "A",
+        async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("render: challenge detected");
+          return [{ url: "https://a/" }];
+        },
+      ],
+      searchBackend("B"),
+    ];
+
+    const result = await searchOne("query", endpoints, undefined, backends);
+
+    assert.equal(calls, 2);
+    assert.equal(result.backend, "A");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: true },
+    ]);
+  });
+
+  it("challenge detected の再試行も失敗したら次のバックエンドへ進む", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry<WebSearchSource[]>[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("render: challenge detected");
+        },
+      ],
+      searchBackend("B"),
+    ];
+
+    const result = await searchOne("query", endpoints, undefined, backends);
+
+    assert.equal(firstBackendCalls, 2);
+    assert.equal(result.backend, "B");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "B", ok: true },
+    ]);
+  });
+
   it("abort 済み signal では captcha detected を再試行しない", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -956,7 +1004,7 @@ describe("camoufox+openserp 検索（camoufoxOpenserpSearch・searchOne）", () 
 
   it("全バックエンドが失敗したら各エンジンの失敗行を含む例外を出す", async () => {
     const backends: BackendEntry<WebSearchSource[]>[] = [
-      failBackend<WebSearchSource[]>("camoufox+openserp(google)", "render: challenge detected"),
+      failBackend<WebSearchSource[]>("camoufox+openserp(google)", "render: timeout"),
       failBackend<WebSearchSource[]>("camoufox+openserp(duckduckgo)", "parse: empty response"),
       failBackend<WebSearchSource[]>("camoufox+openserp(bing)", "render: aborted"),
     ];
@@ -966,7 +1014,7 @@ describe("camoufox+openserp 検索（camoufoxOpenserpSearch・searchOne）", () 
       assert.equal(error.operation, "web search");
       assert.match(
         error.message,
-        /All web search backends failed: camoufox\+openserp\(google\): render: challenge detected; camoufox\+openserp\(duckduckgo\): parse: empty response; camoufox\+openserp\(bing\): render: aborted/,
+        /All web search backends failed: camoufox\+openserp\(google\): render: timeout; camoufox\+openserp\(duckduckgo\): parse: empty response; camoufox\+openserp\(bing\): render: aborted/,
       );
       return true;
     });
@@ -1466,14 +1514,15 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
     ]);
   });
 
-  it("fetchOne でも captcha detected 以外の失敗は再試行しない", async () => {
-    let firstBackendCalls = 0;
+  it("fetchOne でも challenge detected のときは同じバックエンドを1回だけ再試行する", async () => {
+    let calls = 0;
     const backends: BackendEntry<string>[] = [
       [
         "A",
         async () => {
-          firstBackendCalls += 1;
-          throw new Error("parse: challenge detected");
+          calls += 1;
+          if (calls === 1) throw new Error("render: challenge detected");
+          return "retried markdown";
         },
       ],
       okFetchBackend("B"),
@@ -1486,10 +1535,40 @@ describe("camoufox+trafilatura バックエンド（camoufoxFetch・fetchOne）"
       backends,
     );
 
-    assert.equal(firstBackendCalls, 1);
+    assert.equal(calls, 2);
+    assert.equal(result.backend, "A");
+    assert.equal(result.markdown, "retried markdown");
+    assert.deepEqual(result.attempts.map(withoutDurationMs), [
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: true },
+    ]);
+  });
+
+  it("fetchOne でも challenge detected の再試行も失敗したら次のバックエンドへ進む", async () => {
+    let firstBackendCalls = 0;
+    const backends: BackendEntry<string>[] = [
+      [
+        "A",
+        async () => {
+          firstBackendCalls += 1;
+          throw new Error("render: challenge detected");
+        },
+      ],
+      okFetchBackend("B"),
+    ];
+
+    const result = await fetchOne(
+      "https://example.com/",
+      CAMOUFOX_DEFAULT_BASE_URL,
+      undefined,
+      backends,
+    );
+
+    assert.equal(firstBackendCalls, 2);
     assert.equal(result.backend, "B");
     assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: challenge detected" },
+      { backend: "A", ok: false, error: "render: challenge detected" },
+      { backend: "A", ok: false, error: "render: challenge detected" },
       { backend: "B", ok: true },
     ]);
   });
