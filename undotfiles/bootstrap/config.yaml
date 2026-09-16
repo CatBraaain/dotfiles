@@ -73,6 +73,9 @@
 - uv: "mineru[all]"
 - go: github.com/karust/openserp
 
+# Playwright browser for the dsh web smoke test.
+- run: "playwright-cli install-browser chrome-for-testing"
+
 # General CLI tools
 - brew: act
 - brew: cargo-binstall
