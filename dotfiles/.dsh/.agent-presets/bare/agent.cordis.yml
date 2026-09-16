@@ -7,3 +7,12 @@
   name: "@deepseek-ai/dsh-agent-instructions"
   config:
     maxBytes: 65536
+
+# Web disables the host copies of these rows so presets own local skill
+# discovery and the model-facing catalog/loader. Both register into this
+# preset's layer of the host skill registry, so they need no realm.
+- id: skill-filesystem
+  name: "@deepseek-ai/dsh-skill-filesystem"
+
+- id: tool-skill
+  name: "@deepseek-ai/dsh-tool-skill"
