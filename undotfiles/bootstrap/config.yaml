@@ -63,7 +63,7 @@
 - brew: shellcheck
 - brew: shfmt
 - brew: watchexec
-- bun: "@deepseek-ai/dsh"
+- bun: "@deepseek-ai/dsh@next"
 - bun: "@earendil-works/pi-coding-agent"
 - bun: "@openai/codex"
 - bun: "@playwright/cli"
