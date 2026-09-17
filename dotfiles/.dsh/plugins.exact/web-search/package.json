@@ -14,6 +14,7 @@
   "trustedDependencies": [],
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
+    "@dotfiles/agent-lib": "file:../../../.agents/lib",
     "camoufox-js": "0.12.0"
   },
   "peerDependencies": {

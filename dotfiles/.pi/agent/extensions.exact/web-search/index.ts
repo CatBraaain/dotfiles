@@ -7,6 +7,73 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  AllBackendsFailedError,
+  CHALLENGE_SIGNALS,
+  REDDIT_USER_AGENT,
+  SE_API_BASE_URL,
+  SERP_BASE_URL,
+  STACKOVERFLOW_MAX_ANSWERS,
+  SerialTaskQueue,
+  answerHeading,
+  buildPlaywrightCliArgs,
+  buildPlaywrightCliEnv,
+  buildSerpUrl,
+  challengeWaitSnippet,
+  detectChallengePage,
+  htmlFragmentToMarkdown,
+  isCaptchaParseError,
+  isChallengeRenderError,
+  parseOpenserpResponse,
+  parseRedditAtom,
+  parseRedditEmbed,
+  parseRedditOEmbed,
+  parseRedditPostUrl,
+  parseRenderedPage,
+  parseStackOverflowAtom,
+  parseStackOverflowQuestionUrl,
+  playwrightCliConfigJson,
+  renderRedditMarkdown,
+  renderStackOverflowMarkdown,
+  tryBackends,
+  unescapeEntities,
+  type Attempt,
+  type BackendEntry,
+  type OpenserpSearchResult,
+  type RedditEmbed,
+  type RedditFeed,
+  type RedditOEmbed,
+  type RedditPostUrl,
+  type SeApiResponse,
+  type SearchEngine,
+  type StackOverflowAnswer,
+  type StackOverflowFeedEntry,
+  type StackOverflowQuestion,
+  type StackOverflowQuestionUrl,
+} from "@dotfiles/agent-lib/web-search";
+
+export {
+  AllBackendsFailedError,
+  CHALLENGE_SIGNALS,
+  STACKOVERFLOW_MAX_ANSWERS,
+  buildPlaywrightCliArgs,
+  buildPlaywrightCliEnv,
+  challengeWaitSnippet,
+  detectChallengePage,
+  parseRedditAtom,
+  parseRedditEmbed,
+  parseRedditOEmbed,
+  parseRedditPostUrl,
+  parseRenderedPage,
+  parseStackOverflowAtom,
+  parseStackOverflowQuestionUrl,
+  playwrightCliConfigJson,
+  type Attempt,
+  type BackendEntry,
+  type OpenserpSearchResult,
+  type SearchEngine,
+};
+
 export const SEARCH_RESULT_LIMIT = 10;
 
 // SPEC: 段階ごとの最大待ち時間（§タイムアウト）。
@@ -15,6 +82,7 @@ export const RENDER_TIMEOUT_MS = 30_000;
 export const PARSE_TIMEOUT_MS = 15_000;
 export const CONVERT_TIMEOUT_MS = 15_000;
 export const REDDIT_TIMEOUT_MS = 15_000;
+export const STACKOVERFLOW_TIMEOUT_MS = 15_000;
 
 function runWithStdin(
   command: string,
@@ -127,17 +195,6 @@ export function playwrightCliConfigPath(extensionDir: string = EXTENSION_DIR): s
   return `${extensionDir}/playwright-cli.config.json`;
 }
 
-export function buildPlaywrightCliEnv(
-  base: Record<string, string | undefined> = process.env,
-  configPath: string = playwrightCliConfigPath(),
-): Record<string, string | undefined> {
-  return { ...base, PLAYWRIGHT_MCP_CONFIG: configPath };
-}
-
-export function buildPlaywrightCliArgs(sessionKey: string, args: readonly string[]): string[] {
-  return [`-s=${sessionKey}`, ...args];
-}
-
 export function defaultRunPlaywrightCli(
   sessionKey: string,
   args: string[],
@@ -150,7 +207,7 @@ export function defaultRunPlaywrightCli(
       {
         signal,
         maxBuffer: 64 * 1024 * 1024,
-        env: buildPlaywrightCliEnv(),
+        env: buildPlaywrightCliEnv(process.env, playwrightCliConfigPath()),
       },
       (error, stdout) => {
         if (error) reject(error);
@@ -163,21 +220,6 @@ export function defaultRunPlaywrightCli(
 // SPEC: §camoufox による描画。`playwright-cli run-code` の stdout は "### Result" 行に
 // 続いて戻り値の JSON 文字列リテラルが 1 行で出る（大きなページでも stdout 全量）。
 // challenge モードは描画済み DOM がチャレンジページであることを示す。
-export function parseRenderedPage(output: string): string {
-  const lines = output.split("\n");
-  const resultIndex = lines.indexOf("### Result");
-  const literal = resultIndex === -1 ? undefined : lines[resultIndex + 1];
-  if (!literal || (!literal.startsWith('"') && !literal.startsWith("{"))) {
-    throw new Error("playwright-cli run-code output has no result");
-  }
-  const { mode, html } = JSON.parse(literal) as { mode?: string; html?: string };
-  if (mode === "challenge") throw new Error("challenge detected");
-  if (typeof html !== "string" || !html) {
-    throw new Error("playwright-cli run-code returned no HTML");
-  }
-  return html;
-}
-
 // --- openserp server (SERP parsing) ---
 
 const OPENSERP_DEFAULT_BASE_URL = "http://127.0.0.1:7000";
@@ -324,52 +366,12 @@ export type CamoufoxServerDeps = {
 //   の data-sitekey・recaptcha は通常ページにも現れるためシグナルにしない）
 // - soft block（google/search_raw.go isGoogleSoftBlockDocument。結果ブロック
 //   div.tF2Cxc・[data-hveid] を含まず、noscript の JS リトライリンクを含む）
-export const CHALLENGE_SIGNALS: readonly RegExp[] = [
-  /cdn-cgi\/challenge-platform\//,
-  /id="challenge-(?:running|form|stage|error-text)"/,
-  /<title[^>]*>\s*Just a moment\.\.\.\s*<\/title>/i,
-  /\bcf-turnstile\b/,
-  /<form[^>]*\bid="captcha-form"/,
-  /<form[^>]*\baction="[^"]*\/sorry\//,
-  /<body[^>]*\bonload="[^"]*captcha/i,
-  /^(?![\s\S]*(?:class="tF2Cxc"|data-hveid=))[\s\S]*httpservice\/retry\/enablejs/,
-];
-
-export function detectChallengePage(html: string): boolean {
-  return CHALLENGE_SIGNALS.some((signal) => signal.test(html));
-}
-
 // SPEC: §camoufox による描画。networkidle の待ちと並行して描画済み DOM を
 // ポーリングし、チャレンジページ（§チャレンジページ検出）が見つかった時点で
 // 早い方で待ちを切り上げる。networkidle が永遠に来ないページがあるため、
 // 待ち自体にタイムアウトを設けて失敗を握りつぶす（待ち失敗は続行）。
-const CHALLENGE_POLL_INTERVAL_MS = 250;
-const NETWORK_IDLE_WAIT_MS = 5_000;
-
-export function challengeWaitSnippet(): string {
-  const signals = CHALLENGE_SIGNALS.map((signal) => [signal.source, signal.flags]);
-  return `async page => {
-  const challengeSignals = ${JSON.stringify(signals)}.map(([source, flags]) => new RegExp(source, flags));
-  const grab = () => page.evaluate(() => document.documentElement.outerHTML);
-  let settled = false;
-  const idle = page.waitForLoadState('networkidle', { timeout: ${NETWORK_IDLE_WAIT_MS} }).catch(() => {}).then(() => { settled = true; });
-  const deadline = Date.now() + ${NETWORK_IDLE_WAIT_MS};
-  while (!settled && Date.now() < deadline) {
-    const html = await grab();
-    if (challengeSignals.some((signal) => signal.test(html))) return { mode: 'challenge', html };
-    await page.waitForTimeout(${CHALLENGE_POLL_INTERVAL_MS});
-  }
-  await idle;
-  return { mode: 'settled', html: await grab() };
-}`;
-}
-
 // SPEC: §camoufox による描画。playwright-cli は config の remoteEndpoint で接続先を
 // 決めるため、CAMOUFOX_BASE_URL に合わせて拡張ディレクトリ内の config を最新化する。
-export function playwrightCliConfigJson(baseUrl: string): string {
-  return `${JSON.stringify({ browser: { browserName: "firefox", remoteEndpoint: baseUrl } }, null, 2)}\n`;
-}
-
 export function syncPlaywrightCliConfig(
   extensionDir: string = EXTENSION_DIR,
   baseUrl: string = camoufoxBaseUrl(),
@@ -456,8 +458,6 @@ export async function camoufoxRender(
 
 // --- search backend: SERP URL -> camoufox render -> openserp parse ---
 
-export type SearchEngine = "bing" | "duckduckgo" | "google";
-
 // Locale parameter values follow openserp's engine URL builders
 // (bing/url.go mkt, duckduckgo/url.go kl, google/url.go hl+gl).
 const BING_MARKET_BY_LANGUAGE: Record<string, string> = {
@@ -512,12 +512,6 @@ const GOOGLE_COUNTRY_BY_LANGUAGE: Record<string, string> = {
   ko: "kr",
 };
 
-const SERP_BASE_URL: Record<SearchEngine, string> = {
-  bing: "https://www.bing.com/search",
-  duckduckgo: "https://duckduckgo.com/",
-  google: "https://www.google.com/search",
-};
-
 // SPEC: §camoufox+openserp バックエンド。クエリを URL エンコードし、lang 指定時は
 // 各エンジンの言語パラメータへ反映する（値のない lang は指定なしとして扱う）。
 export function serpUrl(engine: SearchEngine, query: string, lang?: string): string {
@@ -536,21 +530,11 @@ export function serpUrl(engine: SearchEngine, query: string, lang?: string): str
       if (gl) params.set("gl", gl);
     }
   }
-  const base = SERP_BASE_URL[engine];
-  return `${base}${base.includes("?") ? "&" : "?"}${params}`;
+  return buildSerpUrl(engine, query, Object.fromEntries(params));
 }
 
 // openserp の JSON 応答（POST /<engine>/parse?format=json）の results[] 1件分。
 // 存在しないフィールドは undefined で受け、生成時に省略する。
-export interface OpenserpSearchResult {
-  rank?: number;
-  type?: string;
-  title?: string;
-  url?: string;
-  display_url?: string;
-  snippet?: string;
-}
-
 // SPEC: openserp の results[]（rank 順にソート）から検索結果エントリの
 // Markdown を生成し、先頭 limit 件までを返す。エントリは
 // `### <番号>. <タイトル>`、`**<表示URL>** - <type>`、スニペット、`-> <URL>` の
@@ -614,14 +598,7 @@ export async function openserpParse(
   if (!response.ok) {
     throw new Error(`parse: ${await responseDetail(response)}`);
   }
-  let payload: { results?: OpenserpSearchResult[] };
-  try {
-    payload = JSON.parse(await response.text()) as { results?: OpenserpSearchResult[] };
-  } catch {
-    throw new Error("parse: response is not valid JSON");
-  }
-  const markdown = formatOpenserpResults(payload.results ?? []);
-  if (!markdown.trim()) throw new Error("parse: empty response");
+  const markdown = formatOpenserpResults(parseOpenserpResponse(await response.text()));
   return markdown;
 }
 
@@ -673,45 +650,6 @@ export async function camoufoxFetch(
 
 // --- backend chain shared by both tools ---
 
-export type Attempt =
-  | { readonly backend: string; readonly ok: true; readonly durationMs?: number }
-  | {
-      readonly backend: string;
-      readonly ok: false;
-      readonly error: string;
-      readonly durationMs?: number;
-    };
-
-class AllBackendsFailedError extends Error {
-  constructor(
-    readonly operation: "web search" | "web fetch",
-    readonly attempts: Attempt[],
-  ) {
-    super(
-      `All ${operation} backends failed: ${attempts
-        .filter((attempt) => !attempt.ok)
-        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-        .join("; ")}${renderAbortHint(attempts)}`,
-    );
-  }
-}
-
-// A render-stage abort means every camoufox render timed out while the server
-// health check (websocket handshake) still passed: the camoufox server's
-// browser process is likely hung. Surface the manual recovery so an agent can
-// fix the environment unaided (the server respawns automatically after a kill).
-function renderAbortHint(attempts: Attempt[]): string {
-  const renderAborted = attempts.some(
-    (attempt) =>
-      !attempt.ok && attempt.error.startsWith("render:") && /aborted/i.test(attempt.error),
-  );
-  return renderAborted
-    ? `\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Kill it to recover (it respawns automatically on the next request): pkill -f "bun server.mjs"`
-    : "";
-}
-
-export type BackendEntry = readonly [name: string, run: () => Promise<string>];
-
 export function defaultSearchBackends(
   query: string,
   signal?: AbortSignal,
@@ -722,53 +660,6 @@ export function defaultSearchBackends(
     `camoufox+openserp(${engine})`,
     () => camoufoxOpenserpSearch(engine, query, signal, lang, deps),
   ]);
-}
-
-function isCaptchaParseError(error: unknown): boolean {
-  return error instanceof Error && error.message === "parse: captcha detected";
-}
-
-// SPEC: 描画段のチャレンジ検出（render: challenge detected）も、captcha と同じく
-// 同一バックエンドの追加試行 1 回の対象にする。
-function isChallengeRenderError(error: unknown): boolean {
-  return error instanceof Error && error.message === "render: challenge detected";
-}
-
-// Run backends in order, record an Attempt each, and return the first
-// non-empty payload. A whitespace-only / zero-length payload counts as a
-// failure of that backend (SPEC: empty results fall through to the next one).
-// A backend whose failure matches shouldRetry gets exactly one extra run of
-// the same backend before moving on.
-async function tryBackends(
-  operation: "web search" | "web fetch",
-  backends: readonly BackendEntry[],
-  isEmpty: (payload: string) => boolean,
-  shouldRetry?: (error: unknown) => boolean,
-): Promise<{ payload: string; backend: string; attempts: Attempt[] }> {
-  const attempts: Attempt[] = [];
-
-  for (const [name, run] of backends) {
-    let retried = false;
-    while (true) {
-      const startedAt = Date.now();
-      try {
-        const payload = await run();
-        if (isEmpty(payload)) throw new Error("empty response");
-        attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
-        return { payload, backend: name, attempts };
-      } catch (error) {
-        attempts.push({
-          backend: name,
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          durationMs: Date.now() - startedAt,
-        });
-        if (retried || !shouldRetry?.(error)) break;
-        retried = true;
-      }
-    }
-  }
-  throw new AllBackendsFailedError(operation, attempts);
 }
 
 export async function searchOne(
@@ -789,171 +680,6 @@ export async function searchOne(
 }
 
 // --- Reddit backend (post permalink -> Atom feed, embed/oEmbed fallback) ---
-
-const REDDIT_USER_AGENT = "Mozilla/5.0 (compatible; pi-web-search/1.0)";
-
-export interface RedditPostUrl {
-  postId: string;
-  permalink: string;
-  rssUrl: string;
-  embedUrl: string;
-  oembedUrl: string;
-}
-
-export function parseRedditPostUrl(rawUrl: string): RedditPostUrl | undefined {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return undefined;
-  }
-  const hostname = url.hostname.toLowerCase();
-  if (hostname !== "reddit.com" && !hostname.endsWith(".reddit.com")) return undefined;
-  const parts = url.pathname.split("/").filter(Boolean);
-  if (
-    parts.length < 4 ||
-    parts[0]?.toLowerCase() !== "r" ||
-    parts[2]?.toLowerCase() !== "comments"
-  ) {
-    return undefined;
-  }
-  const subreddit = parts[1];
-  const postId = parts[3]?.toLowerCase();
-  if (!subreddit || !postId || !/^[a-z0-9]+$/.test(postId)) return undefined;
-  const slug = parts[4] && parts[4] !== ".rss" ? parts[4] : undefined;
-  const rootPath = `/r/${subreddit}/comments/${postId}/${slug ? `${slug}/` : ""}`;
-  const permalink = `https://www.reddit.com${rootPath}`;
-  const oembedUrl = new URL("https://www.reddit.com/oembed");
-  oembedUrl.searchParams.set("url", permalink);
-  return {
-    postId,
-    permalink,
-    rssUrl: `${permalink}.rss?limit=500&sort=top`,
-    embedUrl: `https://embed.reddit.com${rootPath}?ref_source=embed&ref=share&embed=true`,
-    oembedUrl: oembedUrl.toString(),
-  };
-}
-
-function unescapeEntities(text: string): string {
-  // Reddit のフィードは二重エンコード（&amp;amp; 等）のことがあるため安定するまで繰り返す
-  let previous = "";
-  let current = text;
-  while (current !== previous) {
-    previous = current;
-    current = current
-      .replace(/&amp;/gi, "&")
-      .replace(/&lt;/gi, "<")
-      .replace(/&gt;/gi, ">")
-      .replace(/&quot;/gi, '"')
-      .replace(/&apos;/gi, "'")
-      .replace(/&(?:#x([0-9a-f]+)|#(\d+));/gi, (_, hex, dec) =>
-        String.fromCodePoint(Number.parseInt(hex ?? dec, hex ? 16 : 10)),
-      );
-  }
-  return current;
-}
-
-// Reddit's Atom content carries Markdown syntax (**bold**, # heading, * list)
-// inside plain HTML tags (<p>, <blockquote>, <a>). Convert tags to Markdown and
-// leave the existing Markdown syntax untouched.
-function htmlFragmentToMarkdown(fragment: string): string {
-  let text = fragment.replace(/<!--[\s\S]*?-->/g, "");
-  text = text.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, inner) => {
-    const quoted = htmlFragmentToMarkdown(inner).replace(/^/gm, "> ");
-    return `\n\n${quoted}\n\n`;
-  });
-  text = text
-    .replace(
-      /<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
-      (_, href, label) => `[${label.trim()}](${href})`,
-    )
-    .replace(/<img\b[^>]*src="([^"]*)"[^>]*>/gi, (_, src) => `![](${src})`)
-    .replace(/<(?:strong|b)\b[^>]*>/gi, "**")
-    .replace(/<\/(?:strong|b)>/gi, "**")
-    .replace(/<(?:em|i)\b[^>]*>/gi, "*")
-    .replace(/<\/(?:em|i)>/gi, "*")
-    .replace(/<(?:del|s|strike)\b[^>]*>/gi, "~~")
-    .replace(/<\/(?:del|s|strike)>/gi, "~~")
-    .replace(/<(?:code|kbd)\b[^>]*>/gi, "`")
-    .replace(/<\/(?:code|kbd)>/gi, "`")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<hr\s*\/?>/gi, "\n---\n")
-    .replace(/<li\b[^>]*>/gi, "- ")
-    .replace(/<\/(li|p|div|h[1-6]|ul|ol|pre|tr)>/gi, "\n\n")
-    .replace(/<[^>]*>/g, "");
-  return text
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-interface RedditEntry {
-  id: string;
-  title: string;
-  author?: string;
-  bodyMarkdown: string;
-  permalink: string;
-  updated?: string;
-}
-
-export interface RedditFeed {
-  post: RedditEntry;
-  comments: RedditEntry[];
-}
-
-function atomText(entryXml: string, tag: string): string | undefined {
-  const match = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`).exec(entryXml);
-  return match?.[1]?.trim() || undefined;
-}
-
-function cleanAuthor(name: string | undefined): string | undefined {
-  return name?.replace(/^\/u\//, "u/");
-}
-
-export function parseRedditAtom(xml: string): RedditFeed | undefined {
-  const entries: RedditEntry[] = [];
-  for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
-    const entryXml = match[1] ?? "";
-    const id = atomText(entryXml, "id");
-    if (!id || (!id.startsWith("t3_") && !id.startsWith("t1_"))) continue;
-    const linkHref = /<link\b[^>]*href="([^"]*)"/.exec(entryXml)?.[1];
-    entries.push({
-      id,
-      title: unescapeEntities(atomText(entryXml, "title") ?? "Untitled"),
-      author: cleanAuthor(atomText(entryXml, "name")),
-      bodyMarkdown: htmlFragmentToMarkdown(unescapeEntities(atomText(entryXml, "content") ?? "")),
-      permalink: linkHref ?? "",
-      updated: atomText(entryXml, "updated"),
-    });
-  }
-  const post = entries.find((entry) => entry.id.startsWith("t3_"));
-  if (!post) return undefined;
-  return { post, comments: entries.filter((entry) => entry.id.startsWith("t1_")) };
-}
-
-export function parseRedditEmbed(
-  html: string,
-): { title?: string; displayedCommentCount?: number } | undefined {
-  const title = /id="embed-title"[^>]*>([^<]+)/.exec(html)?.[1]?.trim() || undefined;
-  const countText = /(\d[\d,]*)\s+comments?/i.exec(html)?.[1];
-  const displayedCommentCount =
-    countText === undefined ? undefined : Number.parseInt(countText.replaceAll(",", ""), 10);
-  if (!title && displayedCommentCount === undefined) return undefined;
-  return { title, displayedCommentCount };
-}
-
-export function parseRedditOEmbed(json: string): { title?: string } | undefined {
-  try {
-    const value = JSON.parse(json) as { title?: unknown };
-    const title =
-      typeof value.title === "string" && value.title.trim() ? value.title.trim() : undefined;
-    return title ? { title } : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 interface RedditFetchAttempt {
   ok: boolean;
@@ -993,62 +719,6 @@ async function fetchRedditText(
   }
 }
 
-function renderRedditMarkdown(
-  url: RedditPostUrl,
-  feed: RedditFeed | undefined,
-  embed: { title?: string; displayedCommentCount?: number } | undefined,
-  oembed: { title?: string } | undefined,
-): string {
-  const post = feed?.post;
-  const title = post?.title ?? embed?.title ?? oembed?.title ?? `Reddit post ${url.postId}`;
-  const comments = feed?.comments ?? [];
-  const displayed = embed?.displayedCommentCount;
-  const lines = [
-    `# ${title}`,
-    "",
-    `- Author: ${post?.author ?? "unknown"}`,
-    `- Permalink: ${post?.permalink || url.permalink}`,
-  ];
-  if (post?.updated) lines.push(`- Updated: ${post.updated}`);
-  if (feed) {
-    const count =
-      displayed === undefined
-        ? `${comments.length} fetched`
-        : `${comments.length} fetched / ${displayed} displayed`;
-    lines.push(`- Comments: ${count}`);
-  } else {
-    lines.push(
-      `- Comments: unavailable${displayed === undefined ? "" : ` (Reddit displays ${displayed})`}`,
-    );
-  }
-  lines.push(
-    "",
-    "## Post",
-    "",
-    post?.bodyMarkdown || "(post body unavailable from accessible Reddit endpoints)",
-  );
-  if (feed) {
-    // RSS has no score or reply hierarchy. Use another source such as old.reddit JSON
-    // if a threaded view is needed.
-    lines.push(
-      "",
-      `## Comments (${comments.length} retrieved)`,
-      "",
-      "Scores and reply hierarchy are not exposed by Reddit RSS.",
-      "",
-    );
-    for (const [index, comment] of comments.entries()) {
-      lines.push(
-        `### ${index + 1}. ${comment.author ?? "unknown"}`,
-        "",
-        comment.bodyMarkdown || "(no comment body)",
-        "",
-      );
-    }
-  }
-  return lines.join("\n").trim();
-}
-
 export async function fetchRedditMarkdown(
   rawUrl: string,
   signal?: AbortSignal,
@@ -1084,73 +754,6 @@ export async function fetchRedditMarkdown(
 }
 
 // --- StackOverflow backend: SE API -> question feed (SPEC: §StackOverflow バックエンド) ---
-
-const SE_API_BASE_URL = "https://api.stackexchange.com/2.3";
-export const STACKOVERFLOW_TIMEOUT_MS = 15_000;
-export const STACKOVERFLOW_MAX_ANSWERS = 500;
-
-export interface StackOverflowQuestionUrl {
-  questionId: string;
-  permalink: string;
-  feedUrl: string;
-}
-
-export function parseStackOverflowQuestionUrl(
-  rawUrl: string,
-): StackOverflowQuestionUrl | undefined {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return undefined;
-  }
-  const hostname = url.hostname.toLowerCase();
-  if (hostname !== "stackoverflow.com" && hostname !== "www.stackoverflow.com") return undefined;
-  const questionId = /^\/questions\/(\d+)(?:\/[^/]+)?\/?$/.exec(url.pathname)?.[1];
-  if (!questionId) return undefined;
-  return {
-    questionId,
-    permalink: `https://stackoverflow.com/questions/${questionId}`,
-    feedUrl: `https://stackoverflow.com/feeds/question/${questionId}`,
-  };
-}
-
-interface SeApiResponse {
-  items?: {
-    title?: string;
-    body?: string;
-    score?: number;
-    answer_count?: number;
-    tags?: string[];
-    is_accepted?: boolean;
-    owner?: { display_name?: string };
-  }[];
-  has_more?: boolean;
-  backoff?: number;
-}
-
-export interface StackOverflowQuestion {
-  title: string;
-  author?: string;
-  score?: number;
-  answerCount?: number;
-  tags?: string[];
-  bodyMarkdown: string;
-}
-
-export interface StackOverflowAnswer {
-  author?: string;
-  score?: number;
-  accepted: boolean;
-  bodyMarkdown: string;
-}
-
-export interface StackOverflowFeedEntry {
-  title: string;
-  author?: string;
-  bodyMarkdown: string;
-  link: string;
-}
 
 async function fetchStackExchangeApi(
   path: string,
@@ -1221,75 +824,6 @@ async function fetchStackOverflowFromApi(
     },
     answers: answers.slice(0, STACKOVERFLOW_MAX_ANSWERS),
   };
-}
-
-export function parseStackOverflowAtom(xml: string): StackOverflowFeedEntry[] {
-  const entries: StackOverflowFeedEntry[] = [];
-  for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
-    const entryXml = match[1] ?? "";
-    const body = atomText(entryXml, "summary") ?? atomText(entryXml, "content");
-    if (!body) continue;
-    entries.push({
-      title: unescapeEntities(atomText(entryXml, "title") ?? "Untitled"),
-      author: atomText(entryXml, "name") || undefined,
-      bodyMarkdown: htmlFragmentToMarkdown(unescapeEntities(body)),
-      link: /<link\b[^>]*href="([^"]*)"/.exec(entryXml)?.[1] ?? "",
-    });
-  }
-  return entries;
-}
-
-function answerHeading(index: number, answer: StackOverflowAnswer): string {
-  const parts: string[] = [];
-  if (answer.accepted) parts.push("accepted");
-  if (typeof answer.score === "number") parts.push(`score ${answer.score}`);
-  return `### ${index + 1}. ${answer.author ?? "unknown"}${parts.length ? ` (${parts.join(", ")})` : ""}`;
-}
-
-function renderStackOverflowMarkdown(
-  url: StackOverflowQuestionUrl,
-  apiResult: { question: StackOverflowQuestion; answers: StackOverflowAnswer[] } | undefined,
-  feed: StackOverflowFeedEntry[] | undefined,
-): string {
-  const question = apiResult?.question;
-  const feedPost = feed?.[0];
-  const title = question?.title ?? feedPost?.title ?? `StackOverflow question ${url.questionId}`;
-  const answers: StackOverflowAnswer[] =
-    apiResult?.answers ??
-    (feed ?? []).slice(1).map((entry) => ({
-      author: entry.author,
-      score: undefined,
-      accepted: false,
-      bodyMarkdown: entry.bodyMarkdown,
-    }));
-
-  const lines = [
-    `# ${title}`,
-    "",
-    `- Author: ${question?.author ?? feedPost?.author ?? "unknown"}`,
-    `- Permalink: ${url.permalink}`,
-  ];
-  if (question) {
-    lines.push(`- Score: ${question.score ?? "unknown"}`);
-    lines.push(
-      `- Answers: ${answers.length} retrieved${typeof question.answerCount === "number" ? ` / ${question.answerCount} total` : ""}`,
-    );
-    if (question.tags?.length) lines.push(`- Tags: ${question.tags.join(", ")}`);
-  } else {
-    // SPEC: §StackOverflow バックエンドの出力表。フィード利用時の注記は3要素に絞る。
-    lines.push("", "Note: score, accepted and vote order are unavailable from the question feed.");
-  }
-  lines.push(
-    "",
-    "## Question",
-    "",
-    question?.bodyMarkdown || feedPost?.bodyMarkdown || "(question body unavailable)",
-  );
-  lines.push("", `## Answers (${answers.length} retrieved)`, "");
-  for (const [index, answer] of answers.entries()) {
-    lines.push(answerHeading(index, answer), "", answer.bodyMarkdown || "(no answer body)", "");
-  }
-  return lines.join("\n").trim();
 }
 
 export async function fetchStackOverflowMarkdown(
@@ -1373,25 +907,6 @@ const defaultWebToolOperations: WebToolOperations = {
   search: searchOne,
   fetch: fetchOne,
 };
-
-class SerialTaskQueue {
-  private previousTask = Promise.resolve();
-
-  async run<Result>(task: () => Promise<Result>): Promise<Result> {
-    const taskBefore = this.previousTask;
-    let completeCurrentTask!: () => void;
-    this.previousTask = new Promise((resolve) => {
-      completeCurrentTask = resolve;
-    });
-
-    await taskBefore;
-    try {
-      return await task();
-    } finally {
-      completeCurrentTask();
-    }
-  }
-}
 
 const H1_TITLE = /^# (.+)$/m;
 const NUMBERED_HEADING_TITLE = /^#{2,3} \d+\. (.+)$/m;

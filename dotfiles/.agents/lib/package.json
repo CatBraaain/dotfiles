@@ -1,0 +1,11 @@
+{
+  "name": "@dotfiles/agent-lib",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./web-search": "./src/web-search.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}

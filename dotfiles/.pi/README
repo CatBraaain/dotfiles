@@ -29,7 +29,7 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
 cd ~/.pi/agent && bun install
 ```
 
-依存を増やす場合はこの package.json に追加し、再度 install する。
+依存を増やす場合はこの package.json に追加し、再度 install する。`@dotfiles/agent-lib`（pi・dsh 共有の harness 非依存ロジック。正本は `dotfiles/.agents/lib/`）も `file:../../.agents/lib` で参照し、node_modules の symlink 経由で lib の更新が即座に反映される。
 
 `devDependencies` はテスト用: `@types/bun`（`bun:test` の型）と、`@earendil-works/pi-coding-agent` / `@earendil-works/pi-tui`（テスト実行時のモジュール解決用。pi を更新したらバージョンを合わせる）。テストはワークスペース側で実行する:
 

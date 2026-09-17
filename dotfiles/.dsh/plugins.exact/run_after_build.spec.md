@@ -24,7 +24,8 @@
 | --- | --- | --- |
 | `dist/index.js` がない | script を実行 | `bun build` を1回実行する |
 | 非テストの `src/` ファイルが `dist/index.js` より新しい | script を実行 | `bun build` を1回実行する |
-| `dist/index.js` があり、非テスト source がそれより新しくない | script を実行 | `bun build` を実行しない |
+| `node_modules/@dotfiles/agent-lib` 配下の file が `dist/index.js` より新しい | script を実行 | `bun build` を1回実行する。file: 依存は symlink で張られるため、共有 lib（`~/.agents/lib`）の source 更新が対象になる |
+| `dist/index.js` があり、非テスト source も共有 lib もそれより新しくない | script を実行 | `bun build` を実行しない |
 
 install の判定と build の判定は独立する。依存変更で install しても source に変更がなければ build は実行しない。処理順序は plugin install → plugin build → 次の plugin とする。
 
