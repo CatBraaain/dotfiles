@@ -1,8 +1,9 @@
 /**
  * dotfiles-dsh-startup — run the shared priming script once per harness boot.
  *
- * Spawns `~/.agents/startup` detached (behavior contract: SPEC.md; the
- * script's own tasks are contracted in dotfiles/.agents/startup.spec.md).
+ * Spawns `~/.agents/scripts/startup` detached (behavior contract: SPEC.md;
+ * the script's own tasks are contracted in
+ * dotfiles/.agents/scripts/startup.spec.md).
  * The script tolerates concurrent runs, so pi and dsh may both call it.
  * Priming must never break harness startup: spawn errors are swallowed.
  */
@@ -19,7 +20,7 @@ export type SpawnFn = (
 ) => ChildProcess;
 
 export function startupScriptPath(home: string = homedir()): string {
-  return join(home, ".agents", "startup");
+  return join(home, ".agents", "scripts", "startup");
 }
 
 export const name = "startup";

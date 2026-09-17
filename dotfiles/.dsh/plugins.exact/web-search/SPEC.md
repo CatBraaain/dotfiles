@@ -49,7 +49,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 
 ## 常駐サーバー
 
-サーバーの先行起動（priming）は共通スクリプト `~/.agents/startup`（`dotfiles/.agents/startup.spec.md`）の受け持ちであり、本 plugin は行わない。
+サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts/startup.spec.md`）の受け持ちであり、本 plugin は行わない。
 
 | 時点 | 振る舞い |
 |---|---|

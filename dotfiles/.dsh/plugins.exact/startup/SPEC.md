@@ -2,23 +2,23 @@
 
 ## 概要
 
-本 plugin は、dsh プロセスの起動時に共通 priming スクリプト `~/.agents/startup`（振る舞い契約は `dotfiles/.agents/startup.spec.md`）を detached 実行する。tool・UI・設定は一切登録しない。スクリプトの中身（何を priming するか）はこの plugin の関知外であり、スクリプト側の spec が正本である。
+本 plugin は、dsh プロセスの起動時に共通 priming スクリプト `~/.agents/scripts/startup`（振る舞い契約は `dotfiles/.agents/scripts/startup.spec.md`）を detached 実行する。tool・UI・設定は一切登録しない。スクリプトの中身（何を priming するか）はこの plugin の関知外であり、スクリプト側の spec が正本である。
 
 ## 振る舞い
 
 | 時点 | 振る舞い |
 | --- | --- |
-| plugin 適用時（`apply`、dsh プロセス起動時に 1 回） | `~/.agents/startup` を detached spawn する。完了を待たない |
+| plugin 適用時（`apply`、dsh プロセス起動時に 1 回） | `~/.agents/scripts/startup` を detached spawn する。完了を待たない |
 | その以外 | 何もしない |
 
 | 項目 | 値 |
 | ---- | -- |
-| コマンド | `startupScriptPath()` = `~/.agents/startup`（実行ビット付きで直接実行） |
+| コマンド | `startupScriptPath()` = `~/.agents/scripts/startup`（実行ビット付きで直接実行） |
 | 引数 | なし |
 | `detached` | `true`（dsh 終了後も子プロセスが生きる） |
 | `stdio` | `"ignore"` |
 
-spawn した子プロセスは `unref()` し、dsh の終了を妨げない。pi 側の `startup` 拡張と同じスクリプトを実行するため二重実行が起きるが、スクリプトの各タスクは自身で冪等性を持つ（`dotfiles/.agents/startup.spec.md`）。
+spawn した子プロセスは `unref()` し、dsh の終了を妨げない。pi 側の `startup` 拡張と同じスクリプトを実行するため二重実行が起きるが、スクリプトの各タスクは自身で冪等性を持つ（`dotfiles/.agents/scripts/startup.spec.md`）。
 
 ## 失敗時
 

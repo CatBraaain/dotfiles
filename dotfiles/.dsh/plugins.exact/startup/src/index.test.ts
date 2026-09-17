@@ -50,8 +50,8 @@ describe("plugin 契約", () => {
 });
 
 describe("スクリプトのパス", () => {
-  it("ホーム直下の .agents/startup を指す", () => {
-    assert.equal(startupScriptPath("/home/u"), "/home/u/.agents/startup");
+  it(".agents/scripts/startup を指す", () => {
+    assert.equal(startupScriptPath("/home/u"), "/home/u/.agents/scripts/startup");
   });
 });
 

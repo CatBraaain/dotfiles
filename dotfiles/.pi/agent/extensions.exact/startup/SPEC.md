@@ -1,19 +1,19 @@
 # startup 拡張機能 Spec
 
-pi のセッション開始時に、共通 priming スクリプト `~/.agents/startup`（振る舞い契約は `dotfiles/.agents/startup.spec.md`）を detached 実行する。エージェント向けツール、コマンド、UI 表示は提供しない。スクリプトの中身（何を priming するか）はこの拡張の関知外であり、スクリプト側の spec が正本である。
+pi のセッション開始時に、共通 priming スクリプト `~/.agents/scripts/startup`（振る舞い契約は `dotfiles/.agents/scripts/startup.spec.md`）を detached 実行する。エージェント向けツール、コマンド、UI 表示は提供しない。スクリプトの中身（何を priming するか）はこの拡張の関知外であり、スクリプト側の spec が正本である。
 
 ## 起動条件
 
 | イベント | `event.reason` | 動作 |
 | -------- | -------------- | ---- |
-| `session_start` | `startup` | `~/.agents/startup` を spawn する |
+| `session_start` | `startup` | `~/.agents/scripts/startup` を spawn する |
 | `session_start` | `startup` 以外（`new` / `resume` / `fork` / `reload`） | 何もしない |
 
 ## spawn の条件
 
 | 項目 | 値 |
 | ---- | -- |
-| コマンド | `startupScriptPath()` = `~/.agents/startup`（実行ビット付きで直接実行） |
+| コマンド | `startupScriptPath()` = `~/.agents/scripts/startup`（実行ビット付きで直接実行） |
 | 引数 | なし |
 | `detached` | `true`（pi 終了後も子プロセスが生きる） |
 | `stdio` | `"ignore"` |

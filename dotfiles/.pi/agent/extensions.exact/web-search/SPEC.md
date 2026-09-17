@@ -43,7 +43,7 @@ sequenceDiagram
 
 ## 常駐サーバー
 
-両ツールは2つのローカル常駐サーバーを使う。サーバーの先行起動（priming）は共通スクリプト `~/.agents/startup`（`dotfiles/.agents/startup.spec.md`）の受け持ちであり、この拡張は行わない。
+両ツールは2つのローカル常駐サーバーを使う。サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts/startup.spec.md`）の受け持ちであり、この拡張は行わない。
 
 ### ツール実行時の起動
 

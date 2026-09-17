@@ -154,7 +154,8 @@ export function resolveEndpoints(
 }
 
 // SPEC §"提供する plugin": register both providers. Server priming moved to the
-// shared `~/.agents/startup` script (dotfiles/.agents/startup.spec.md).
+// shared `~/.agents/scripts/startup` script
+// (dotfiles/.agents/scripts/startup.spec.md).
 export function apply(ctx: Context): void {
   const endpoints = resolveEndpoints();
   ctx.web.registerSearchProvider(new CamoufoxOpenserpSearchProvider(endpoints));

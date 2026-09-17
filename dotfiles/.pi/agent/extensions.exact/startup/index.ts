@@ -10,10 +10,11 @@ export type SpawnFn = (
   options: SpawnOptions,
 ) => ChildProcess;
 
-// Shared priming script deployed from dotfiles/.agents/startup.executable
-// (behavior contract: dotfiles/.agents/startup.spec.md).
+// Shared priming script deployed from
+// dotfiles/.agents/scripts/startup.executable (behavior contract:
+// dotfiles/.agents/scripts/startup.spec.md).
 export function startupScriptPath(home: string = homedir()): string {
-  return join(home, ".agents", "startup");
+  return join(home, ".agents", "scripts", "startup");
 }
 
 export default function startupExtension(pi: ExtensionAPI, spawnProcess: SpawnFn = spawn): void {
