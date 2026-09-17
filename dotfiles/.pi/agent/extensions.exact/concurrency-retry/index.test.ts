@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "bun:test";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import zaiConcurrencyRetryExtension, {
+import concurrencyRetryExtension, {
   __random,
   __resetRetryState,
   __sleep,
+  isConcurrencyError,
+  parseRetryAfterMs,
   realSleepMs,
+  RETRY_BASE_DELAY_MS,
+  RETRY_MAX_DELAY_MS,
   RETRY_MESSAGE_PREFIX,
+  nextRetryDelayMs,
 } from "./index.ts";
 
 function createHarness() {
@@ -44,7 +49,7 @@ function createHarness() {
     },
   };
 
-  zaiConcurrencyRetryExtension(pi);
+  concurrencyRetryExtension(pi);
   __sleep.current = async (ms: number) => {
     waitedMs.push(ms);
     return !abortController.signal.aborted;
@@ -90,6 +95,60 @@ async function messageEnd(harness: ReturnType<typeof createHarness>, message: un
   return result as { message: { errorMessage: string } } | undefined;
 }
 
+describe("isConcurrencyError", () => {
+  it("matches Z.AI concurrency codes in a raw JSON body", () => {
+    const body1302 = '{"error":{"code":"1302","message":"Rate limit reached for requests"}}';
+    const body1305 =
+      '{"error":{"code":"1305","message":"The service may be temporarily overloaded, please try again later"}}';
+    assert.equal(isConcurrencyError("zai", body1302), true);
+    assert.equal(isConcurrencyError("zai", body1305), true);
+  });
+
+  it("matches the plain Z.AI message wording", () => {
+    assert.equal(isConcurrencyError("zai", "Rate limit reached for requests"), true);
+    assert.equal(
+      isConcurrencyError("zai", "The service may be temporarily overloaded, please try again later"),
+      true,
+    );
+    assert.equal(isConcurrencyError("zai-coding-cn", "Rate limit reached for requests"), true);
+  });
+
+  it("does not match Z.AI quota codes or quota wording", () => {
+    const weekly =
+      '{"error":{"code":"1310","message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-01-01 00:00"}}';
+    const balance =
+      '{"error":{"code":"1113","message":"Insufficient balance or no resource package. Please recharge."}}';
+    assert.equal(isConcurrencyError("zai", weekly), false);
+    assert.equal(isConcurrencyError("zai", balance), false);
+    assert.equal(isConcurrencyError("zai", "You have exceeded your monthly quota"), false);
+  });
+
+  it("does not apply the generic matcher to providers with a dedicated rule", () => {
+    assert.equal(isConcurrencyError("zai", "Too many concurrent requests"), false);
+  });
+
+  it("matches generic concurrency wording for other providers", () => {
+    assert.equal(isConcurrencyError("openai-codex", "Too many concurrent requests"), true);
+    assert.equal(
+      isConcurrencyError("openrouter", "connection limit reached for this account"),
+      true,
+    );
+    assert.equal(isConcurrencyError("commandcode", "a concurrency limit has been reached"), true);
+  });
+
+  it("does not match non-concurrency or rate-limit-only wording for other providers", () => {
+    assert.equal(isConcurrencyError("openai-codex", "Connection refused"), false);
+    assert.equal(isConcurrencyError("openai-codex", "429 Too Many Requests"), false);
+    assert.equal(isConcurrencyError("openai-codex", "rate limit exceeded"), false);
+    assert.equal(isConcurrencyError("openrouter", "insufficient_quota: usage window exhausted"), false);
+  });
+
+  it("returns false without an error message", () => {
+    assert.equal(isConcurrencyError("zai", undefined), false);
+    assert.equal(isConcurrencyError("zai", ""), false);
+  });
+});
+
 describe("ターン内リトライ", () => {
   beforeEach(() => __resetRetryState());
 
@@ -103,11 +162,11 @@ describe("ターン内リトライ", () => {
     assert.deepEqual(harness.waitedMs, [5000]);
     // 待機開始でステータス表示、完了で消える
     assert.deepEqual(harness.statuses[0], {
-      key: "zai-concurrency-retry",
-      text: "Z.AI concurrency limit; retrying in 5s (attempt 1)",
+      key: "concurrency-retry",
+      text: "zai concurrency limit; retrying in 5s (attempt 1)",
     });
     assert.deepEqual(harness.statuses.at(-1), {
-      key: "zai-concurrency-retry",
+      key: "concurrency-retry",
       text: undefined,
     });
   });
@@ -117,6 +176,25 @@ describe("ターン内リトライ", () => {
     const replacement = await messageEnd(harness, concurrencyError());
 
     assert.equal(isRetryableAssistantError(replacement!.message as never), true);
+  });
+
+  it("他プロバイダの汎用 concurrency 文言も書き換える", async () => {
+    const harness = createHarness();
+    const replacement = await messageEnd(
+      harness,
+      concurrencyError({
+        provider: "openai-codex",
+        model: "gpt-5.6",
+        errorMessage: "Too many concurrent requests; please retry later",
+      }),
+    );
+
+    assert.ok(replacement, "expected a replacement message");
+    assert.equal(isRetryableAssistantError(replacement!.message as never), true);
+    assert.deepEqual(harness.statuses[0], {
+      key: "concurrency-retry",
+      text: "openai-codex concurrency limit; retrying in 5s (attempt 1)",
+    });
   });
 
   it("待機中に abort されたら書き換えず元のエラーを通す", async () => {
@@ -159,11 +237,22 @@ describe("ターン内リトライ", () => {
     assert.deepEqual(harness.waitedMs, []);
   });
 
-  it("z-ai 以外のプロバイダは対象外", async () => {
+  it("汎用 concurrency 文言のない他プロバイダは対象外", async () => {
     const harness = createHarness();
     const replacement = await messageEnd(
       harness,
-      concurrencyError({ provider: "openai-codex", model: "gpt-5.6" }),
+      concurrencyError({ provider: "openai-codex", model: "gpt-5.6", errorMessage: "Connection refused" }),
+    );
+
+    assert.equal(replacement, undefined);
+    assert.deepEqual(harness.waitedMs, []);
+  });
+
+  it("zai では汎用文言だけでは対象外", async () => {
+    const harness = createHarness();
+    const replacement = await messageEnd(
+      harness,
+      concurrencyError({ errorMessage: "Too many concurrent requests" }),
     );
 
     assert.equal(replacement, undefined);
@@ -183,13 +272,16 @@ describe("待機時間", () => {
     assert.deepEqual(harness.waitedMs, [5000, 10000, 20000, 40000, 60000]);
   });
 
-  it("Z.AI の Retry-After ヘッダーを次の待機に使う", async () => {
+  it("429 の Retry-After ヘッダーを次の待機に使う（プロバイダを問わない）", async () => {
     const harness = createHarness();
     await harness.call("after_provider_response", {
       status: 429,
       headers: { "retry-after": "30" },
     });
-    await messageEnd(harness, concurrencyError());
+    await messageEnd(
+      harness,
+      concurrencyError({ provider: "openai-codex", errorMessage: "Too many concurrent requests" }),
+    );
 
     assert.deepEqual(harness.waitedMs, [30_000]);
   });
@@ -200,6 +292,56 @@ describe("待機時間", () => {
     await messageEnd(harness, concurrencyError());
 
     assert.deepEqual(harness.waitedMs, [5000]);
+  });
+});
+
+describe("nextRetryDelayMs", () => {
+  it("returns the server-provided delay unchanged", () => {
+    const delay = nextRetryDelayMs(1, 12_000, () => 0.5);
+    assert.equal(delay, 12_000);
+  });
+
+  it("grows exponentially with consecutive errors", () => {
+    const noJitter = () => 0.5;
+    const first = nextRetryDelayMs(1, null, noJitter);
+    const second = nextRetryDelayMs(2, null, noJitter);
+    assert.equal(first, RETRY_BASE_DELAY_MS);
+    assert.equal(second, RETRY_BASE_DELAY_MS * 2);
+  });
+
+  it("caps the exponential growth", () => {
+    const delay = nextRetryDelayMs(20, null, () => 0.5);
+    assert.equal(delay, RETRY_MAX_DELAY_MS);
+  });
+
+  it("applies jitter within ±20% of the unjittered delay", () => {
+    const unjittered = 40_000;
+    const shortest = nextRetryDelayMs(4, null, () => 0);
+    const longest = nextRetryDelayMs(4, null, () => 1);
+    assert.ok(shortest >= Math.round(unjittered * 0.8), `shortest ${shortest}`);
+    assert.ok(longest <= Math.round(unjittered * 1.2), `longest ${longest}`);
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  const now = Date.parse("2026-01-01T00:00:00Z");
+
+  it("parses delay seconds into ms", () => {
+    assert.equal(parseRetryAfterMs("120", now), 120_000);
+  });
+
+  it("parses an HTTP-date into remaining ms", () => {
+    assert.equal(parseRetryAfterMs("Wed, 01 Jan 2026 00:02:00 GMT", now), 120_000);
+  });
+
+  it("clamps negative remaining time to zero", () => {
+    assert.equal(parseRetryAfterMs("Tue, 31 Dec 2025 23:58:00 GMT", now), 0);
+  });
+
+  it("returns null without a usable value", () => {
+    assert.equal(parseRetryAfterMs(undefined, now), null);
+    assert.equal(parseRetryAfterMs("", now), null);
+    assert.equal(parseRetryAfterMs("soon", now), null);
   });
 });
 
@@ -238,9 +380,28 @@ describe("agent_settled での turn 再実行", () => {
       message: { customType: string; display: boolean };
       options: { triggerTurn: boolean };
     };
-    assert.equal(message.customType, "zai-concurrency-retry");
+    assert.equal(message.customType, "concurrency-retry");
     assert.equal(message.display, false);
     assert.equal(options.triggerTurn, true);
+  });
+
+  it("他プロバイダの汎用 concurrency エラーでも再実行する", async () => {
+    const harness = createHarness();
+    await harness.call("agent_end", {
+      messages: [
+        concurrencyError({
+          provider: "openai-codex",
+          model: "gpt-5.6",
+          errorMessage: "Too many concurrent requests; please retry later",
+        }),
+      ],
+    });
+    await harness.call("agent_settled", {});
+
+    assert.deepEqual(harness.notifications, [
+      "openai-codex concurrency limit; retrying in 5s (attempt 1)",
+    ]);
+    assert.equal(harness.sentMessages.length, 1);
   });
 
   it("再実行の待機は turn 内の連続回数を引き継ぐ", async () => {
@@ -297,6 +458,6 @@ describe("agent_settled での turn 再実行", () => {
     await harness.call("agent_end", { messages: [concurrencyError()] });
     await harness.call("agent_settled", {});
 
-    assert.deepEqual(harness.notifications, ["Z.AI concurrency limit; retrying in 5s (attempt 1)"]);
+    assert.deepEqual(harness.notifications, ["zai concurrency limit; retrying in 5s (attempt 1)"]);
   });
 });

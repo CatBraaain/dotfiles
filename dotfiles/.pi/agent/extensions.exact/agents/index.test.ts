@@ -1439,7 +1439,7 @@ describe("class 選択", () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      // HTTP 429 経路の cooldown は z-ai 以外のモデルで作る（z-ai は zai-concurrency-retry 拡張の担当）
+      // HTTP 429 経路の cooldown は z-ai 以外のモデルで作る（z-ai は concurrency-retry 拡張の担当）
       extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       await extension.providerResponse(429); // commandcode/gpt-5.6-luna が cooldown、fallback で zai へ戻る
       await extension.runClassCommand("low");
@@ -1763,7 +1763,7 @@ describe("レート制限（429）時のフォールバック", () => {
     try {
       await extension.sessionStart();
       // HTTP 429 経路の fallback は z-ai 以外のモデルで検証する（z-ai は同時実行系の
-      // 可能性があるため zai-concurrency-retry 拡張の担当）
+      // 可能性があるため concurrency-retry 拡張の担当）
       extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       await extension.providerResponse(429);
       const replacement = await extension.messageEnd({

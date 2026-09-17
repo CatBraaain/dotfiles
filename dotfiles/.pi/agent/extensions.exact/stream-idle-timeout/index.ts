@@ -22,7 +22,7 @@ export function realArmIdleTimer(ms: number, onFire: () => void): () => void {
 }
 
 // Test seam: swap out the real timer so tests never wait minutes. Same
-// pattern as zai-concurrency-retry's __sleep / __random.
+// pattern as concurrency-retry's __sleep / __random.
 export const __armIdleTimer: {
   current: (ms: number, onFire: () => void) => () => void;
 } = { current: realArmIdleTimer };

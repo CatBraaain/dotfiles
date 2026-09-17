@@ -26,7 +26,7 @@ LLM ストリームの沈黙(最終 delta から 5 分)を検知して、現在�
 
 ## coverage 外(既知の限界)
 
-- abort はターン単位。`message_end` 後の拡張側待機(zai-concurrency-retry のバックオフ待ち)中はカウントしない
+- abort はターン単位。`message_end` 後の拡張側待機(concurrency-retry のバックオフ待ち)中はカウントしない
 - delta が細かく流れ続ける長時間生成は切らない(目的が沈黙検知のため)
 - プロバイダコールが `message_end` なしで例外終了した場合、タイマーは armed のまま残るが、次のリクエストで再起動され、idle 中の `ctx.abort()` は無害
 

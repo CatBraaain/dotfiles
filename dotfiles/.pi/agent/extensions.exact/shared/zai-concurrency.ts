@@ -7,10 +7,11 @@
 // pi-ai surfaces that body text (sometimes as raw JSON) in the final assistant
 // errorMessage, so detection is a wording match on that string.
 //
-// Shared by the agents extension (which must NOT route these errors into its
+// Used by the agents extension, which must NOT route these errors into its
 // model-fallback/cooldown path — Z.AI concurrency is account-wide, so switching
-// models cannot help) and by the zai-concurrency-retry extension (which waits
-// and retries them indefinitely).
+// models cannot help. The wait-and-retry loop lives in the concurrency-retry
+// extension; its provider-generic detection mirrors the dsh concurrency-retry
+// plugin instead of this Z.AI-specific matcher.
 
 export const ZAI_PROVIDER_IDS = ["zai", "zai-coding-cn"] as const;
 
@@ -34,39 +35,4 @@ export function isZaiConcurrencyLimited(errorMessage: string | undefined): boole
     errorMessage !== undefined &&
     CONCURRENCY_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage))
   );
-}
-
-export const RETRY_BASE_DELAY_MS = 5_000;
-export const RETRY_MAX_DELAY_MS = 60_000;
-const JITTER_RATIO = 0.2;
-
-// Delay before the next retry. A server-provided retryAfterMs wins; otherwise
-// exponential growth from RETRY_BASE_DELAY_MS (2^(consecutiveErrors - 1)),
-// capped at RETRY_MAX_DELAY_MS, scaled by jitter to de-synchronize parallel
-// retriers. consecutiveErrors starts at 1.
-export function nextRetryDelayMs(
-  consecutiveErrors: number,
-  retryAfterMs: number | null,
-  random: () => number = Math.random,
-): number {
-  if (retryAfterMs !== null) return retryAfterMs;
-  const exponential = RETRY_BASE_DELAY_MS * 2 ** (consecutiveErrors - 1);
-  const capped = Math.min(exponential, RETRY_MAX_DELAY_MS);
-  return Math.round(capped * (1 - JITTER_RATIO + random() * 2 * JITTER_RATIO));
-}
-
-// Parse a Retry-After header value (delay seconds or an HTTP-date) into ms.
-// Returns null when the value is missing or unusable.
-export function parseRetryAfterMs(
-  value: string | undefined,
-  now: number = Date.now(),
-): number | null {
-  const trimmed = value?.trim();
-  if (trimmed === undefined || trimmed === "") return null;
-  if (/^\d+$/.test(trimmed)) {
-    const seconds = Number.parseInt(trimmed, 10);
-    return Number.isFinite(seconds) ? Math.max(0, seconds * 1000) : null;
-  }
-  const resetAt = Date.parse(trimmed);
-  return Number.isNaN(resetAt) ? null : Math.max(0, resetAt - now);
 }
