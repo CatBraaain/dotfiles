@@ -26,7 +26,6 @@ import webSearchExtension, {
   formatOpenserpResults,
   openserpBaseUrl,
   openserpParse,
-  primeServers,
   defaultSearchBackends,
   fetchOne,
   parseRedditAtom,
@@ -66,8 +65,6 @@ function captureTools(operations?: WebToolOperations): Map<string, Tool> {
   webSearchExtension(
     {
       registerTool: (tool: Tool) => tools.set(tool.name, tool),
-      // セッション開始時の先行起動（session_start）登録を受けけるための noop。
-      on: () => {},
     } as never,
     operations,
   );
@@ -1394,112 +1391,6 @@ function cliDeps(
     },
   };
 }
-
-describe("セッション開始時の先行起動", () => {
-  const okResponse = (): Response => new Response(null, { status: 200 });
-  const failingFetcher = (async () => {
-    throw new Error("connection refused");
-  }) as unknown as typeof fetch;
-  const okFetcher = (async () => okResponse()) as unknown as typeof fetch;
-
-  it("session_start の発火で先行起動を開始する", () => {
-    let primed = 0;
-    const handlers = new Map<string, () => void>();
-    webSearchExtension(
-      {
-        registerTool: () => {},
-        on: (name: string, handler: () => void) => handlers.set(name, handler),
-      } as never,
-      undefined,
-      async () => {
-        primed += 1;
-      },
-    );
-    handlers.get("session_start")?.();
-
-    assert.equal(primed, 1);
-  });
-
-  it("openserp が未起動なら openserp だけを起動する", async () => {
-    const spawned: string[] = [];
-    await primeServers({
-      fetcher: failingFetcher,
-      spawnOpenserp: () => spawned.push("openserp"),
-      probeCamoufox: async () => true,
-      spawnCamoufox: () => spawned.push("camoufox"),
-    });
-
-    assert.deepEqual(spawned, ["openserp"]);
-  });
-
-  it("camoufox が未起動なら camoufox だけを起動する", async () => {
-    const spawned: string[] = [];
-    await primeServers({
-      fetcher: okFetcher,
-      spawnOpenserp: () => spawned.push("openserp"),
-      probeCamoufox: async () => false,
-      spawnCamoufox: () => spawned.push("camoufox"),
-    });
-
-    assert.deepEqual(spawned, ["camoufox"]);
-  });
-
-  it("両方未起動なら両方を起動する", async () => {
-    const spawned: string[] = [];
-    await primeServers({
-      fetcher: failingFetcher,
-      spawnOpenserp: () => spawned.push("openserp"),
-      probeCamoufox: async () => false,
-      spawnCamoufox: () => spawned.push("camoufox"),
-    });
-
-    assert.deepEqual(spawned, ["openserp", "camoufox"]);
-  });
-
-  it("両方起動済みなら何も起動しない", async () => {
-    const spawned: string[] = [];
-    await primeServers({
-      fetcher: okFetcher,
-      spawnOpenserp: () => spawned.push("openserp"),
-      probeCamoufox: async () => true,
-      spawnCamoufox: () => spawned.push("camoufox"),
-    });
-
-    assert.deepEqual(spawned, []);
-  });
-
-  it("openserp 側の失敗は camoufox の先行起動を妨げない", async () => {
-    const spawned: string[] = [];
-    await primeServers({
-      fetcher: failingFetcher,
-      spawnOpenserp: () => {
-        throw new Error("spawn failed");
-      },
-      probeCamoufox: async () => false,
-      spawnCamoufox: () => spawned.push("camoufox"),
-    });
-
-    assert.deepEqual(spawned, ["camoufox"]);
-  });
-
-  it("先行起動の失敗は解決し、後続処理に影響させない", async () => {
-    const boomFetcher = (async () => {
-      throw new Error("boom");
-    }) as unknown as typeof fetch;
-    await primeServers({
-      fetcher: boomFetcher,
-      spawnOpenserp: () => {
-        throw new Error("boom");
-      },
-      probeCamoufox: async () => {
-        throw new Error("boom");
-      },
-      spawnCamoufox: () => {
-        throw new Error("boom");
-      },
-    });
-  });
-});
 
 describe("camoufox+trafilatura バックエンド", () => {
   it("サーバーが既に応答するときは起動せず、close→open→描画待ち→close→変換の順で進む", async () => {

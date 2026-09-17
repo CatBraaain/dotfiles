@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Background tasks primed once at harness startup. pi and dsh both run this
+# script detached, so every task must tolerate running twice: deja serializes
+# index builds with its own cross-process lock, and the resident servers are
+# spawned only when their health check fails (a second spawn loses a port
+# race and exits, which is harmless).
+
+# deja index: fresh -> no-op, stale -> incremental build.
+command -v deja >/dev/null 2>&1 && deja index >/dev/null 2>&1 &
+
+# url_authority URL -> the host:port authority (scheme and path stripped).
+url_authority() {
+	local rest="$1"
+	rest="${rest#*://}"
+	rest="${rest%%/*}"
+	printf '%s\n' "$rest"
+}
+
+# port_open HOST PORT: succeed when a TCP connection is accepted.
+port_open() {
+	(exec 3<>"/dev/tcp/$1/$2") 2>/dev/null
+}
+
+# --- camoufox server: rendering backend shared by pi and dsh web-search -----
+# server.mjs maintains Xvfb/x11vnc on Linux and appends a timestamped line to
+# the log on every start, so this script only checks the port and spawns.
+camoufox_authority="$(url_authority "${CAMOUFOX_BASE_URL:-ws://127.0.0.1:9378/camoufox}")"
+if [ -n "$camoufox_authority" ]; then
+	camoufox_host="${camoufox_authority%:*}"
+	camoufox_port="${camoufox_authority##*:}"
+	if ! port_open "$camoufox_host" "$camoufox_port"; then
+		camoufox_dir="$HOME/.dsh/plugins/web-search"
+		log_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pi/web-search"
+		if [ -f "$camoufox_dir/server.mjs" ] && command -v bun >/dev/null 2>&1; then
+			mkdir -p "$log_dir"
+			(
+				cd "$camoufox_dir" || exit 0
+				nohup bun server.mjs >>"$log_dir/camoufox-server.log" 2>&1 &
+			)
+		fi
+	fi
+fi
+
+# --- openserp: SERP parsing backend -----------------------------------------
+openserp_url="${OPENSERP_BASE_URL:-http://127.0.0.1:7000}"
+if command -v openserp >/dev/null 2>&1; then
+	if ! curl -fsS --max-time 1 "$openserp_url/ready" >/dev/null 2>&1; then
+		openserp_authority="$(url_authority "$openserp_url")"
+		nohup openserp serve -a "${openserp_authority%:*}" -p "${openserp_authority##*:}" --quiet >/dev/null 2>&1 &
+	fi
+fi
+
+exit 0

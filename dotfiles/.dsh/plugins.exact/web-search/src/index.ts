@@ -51,7 +51,6 @@ const CAMOUFOX_SEARCH_SESSION_KEY = "web-search";
 const CAMOUFOX_FETCH_SESSION_KEY = "web-fetch";
 const SERVER_HEALTH_POLL_INTERVAL_MS = 250;
 const WEBSOCKET_HEALTH_TIMEOUT_MS = 1_000;
-const SERVER_PROBE_TIMEOUT_MS = 1_000;
 
 // --- plugin entry ---
 
@@ -78,7 +77,7 @@ export interface ServerEndpoints {
 
 // SPEC §"設定": priority is config value > environment variable > default.
 export function resolveEndpoints(
-  config: WebSearchPluginConfig,
+  config: WebSearchPluginConfig = {},
   env: Record<string, string | undefined> = process.env,
 ): ServerEndpoints {
   return {
@@ -87,22 +86,12 @@ export function resolveEndpoints(
   };
 }
 
-export type ApplyDeps = {
-  /** Prime hook override for tests; default `primeServers`. */
-  prime?: (endpoints: ServerEndpoints, deps?: PrimeServerDeps) => Promise<void>;
-};
-
-// SPEC §"提供する plugin": register both providers, then fire-and-forget the
-// resident-server priming (SPEC §"常駐サーバー" apply row).
-export function apply(
-  ctx: Context,
-  config: WebSearchPluginConfig = {},
-  deps: ApplyDeps = {},
-): void {
-  const endpoints = resolveEndpoints(config);
+// SPEC §"提供する plugin": register both providers. Server priming moved to the
+// shared `~/.agents/startup` script (dotfiles/.agents/startup.spec.md).
+export function apply(ctx: Context): void {
+  const endpoints = resolveEndpoints();
   ctx.web.registerSearchProvider(new CamoufoxOpenserpSearchProvider(endpoints));
   ctx.web.registerFetchProvider(new CamoufoxTrafilaturaFetchProvider(endpoints));
-  void (deps.prime ?? primeServers)(endpoints);
 }
 
 // --- providers (contract layer) ---
@@ -1529,56 +1518,6 @@ async function ensureCamoufoxServer(
     if (await probe(signal)) return;
   }
   throw new Error(`camoufox server not ready at ${baseUrl}`);
-}
-
-export type PrimeServerDeps = {
-  fetcher?: typeof fetch;
-  spawnOpenserp?: (baseUrl: string) => void;
-  probeCamoufox?: (baseUrl: string, signal: AbortSignal) => Promise<boolean>;
-  spawnCamoufox?: (baseUrl: string) => void;
-};
-
-// SPEC §"常駐サーバー" apply row: probe both servers and detached-spawn the
-// unhealthy ones. Fire-and-forget — priming failures never affect startup or
-// later tool runs (the next request retries the spawn).
-export async function primeServers(
-  endpoints: ServerEndpoints,
-  deps: PrimeServerDeps = {},
-): Promise<void> {
-  const fetcher = deps.fetcher ?? fetch;
-  const spawnOpenserp = deps.spawnOpenserp ?? spawnOpenserpServer;
-  const probeCamoufox =
-    deps.probeCamoufox ??
-    ((baseUrl: string, signal: AbortSignal) => camoufoxServerHealthy(baseUrl, signal));
-  const spawnCamoufox = deps.spawnCamoufox ?? spawnCamoufoxServer;
-
-  // Each server is independent; one side's failure must not block the other.
-  try {
-    if (
-      !(await serverHealthy(
-        endpoints.openserpBaseUrl,
-        "/ready",
-        AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS),
-        fetcher,
-      ))
-    ) {
-      spawnOpenserp(endpoints.openserpBaseUrl);
-    }
-  } catch {
-    // Priming failures resolve silently.
-  }
-  try {
-    if (
-      !(await probeCamoufox(
-        endpoints.camoufoxBaseUrl,
-        AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS),
-      ))
-    ) {
-      spawnCamoufox(endpoints.camoufoxBaseUrl);
-    }
-  } catch {
-    // Priming failures resolve silently.
-  }
 }
 
 // --- serialization ---

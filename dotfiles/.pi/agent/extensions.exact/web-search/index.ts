@@ -303,53 +303,6 @@ async function ensureCamoufoxServer(
   throw new Error(`camoufox server not ready at ${camoufoxBaseUrl()}`);
 }
 
-// セッション開始時の先行起動で、ヘルスチェック1回ごとにかけるタイムアウト。
-// 応答しないサーバーがあると spawn の投入が後ろへずれるため短く抑える。
-const SERVER_PROBE_TIMEOUT_MS = 1_000;
-
-export type PrimeServerDeps = {
-  fetcher?: typeof fetch;
-  spawnOpenserp?: () => void;
-  probeCamoufox?: (signal: AbortSignal) => Promise<boolean>;
-  spawnCamoufox?: () => void;
-};
-
-// SPEC: §常駐サーバー §セッション開始時の先行起動。セッション開始のたびに
-// 各サーバーのヘルスチェックを行い、成功しないサーバーをバックグラウンドで
-// 起動する。起動の完了は待たないため、先行起動で何が起きても解決する
-//（先行起動の成否は後続のツール実行に影響させない）。
-export async function primeServers(deps: PrimeServerDeps = {}): Promise<void> {
-  const fetcher = deps.fetcher ?? fetch;
-  const spawnOpenserp = deps.spawnOpenserp ?? spawnOpenserpServer;
-  const probeCamoufox =
-    deps.probeCamoufox ??
-    ((signal: AbortSignal) => camoufoxServerHealthy(camoufoxBaseUrl(), signal));
-  const spawnCamoufox = deps.spawnCamoufox ?? spawnCamoufoxServer;
-
-  // 各サーバーは独立に扱い、一方の失敗は他方の先行起動を妨げない。
-  try {
-    if (
-      !(await serverHealthy(
-        openserpBaseUrl(),
-        "/ready",
-        AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS),
-        fetcher,
-      ))
-    ) {
-      spawnOpenserp();
-    }
-  } catch {
-    // 先行起動の失敗は pi の起動・ツール実行のいずれにも影響しない。
-  }
-  try {
-    if (!(await probeCamoufox(AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS)))) {
-      spawnCamoufox();
-    }
-  } catch {
-    // 先行起動の失敗は pi の起動・ツール実行のいずれにも影響しない。
-  }
-}
-
 export type ServerDeps = {
   fetcher?: typeof fetch;
   spawnOpenserp?: () => void;
@@ -1486,18 +1439,9 @@ const searchParameters = Type.Object({
 });
 const fetchParameters = Type.Object({ url: Type.String({ description: "Absolute URL to fetch" }) });
 
-export default function (
-  pi: ExtensionAPI,
-  operations: WebToolOperations = defaultWebToolOperations,
-  prime: (deps?: PrimeServerDeps) => Promise<void> = primeServers,
-) {
+export default function (pi: ExtensionAPI, operations: WebToolOperations = defaultWebToolOperations) {
   const searchQueue = new SerialTaskQueue();
   const fetchQueue = new SerialTaskQueue();
-
-  // SPEC: §常駐サーバー §セッション開始時の先行起動。完了は待たない。
-  pi.on("session_start", () => {
-    void prime();
-  });
 
   pi.registerTool({
     name: "web_search",

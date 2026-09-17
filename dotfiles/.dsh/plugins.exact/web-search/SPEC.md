@@ -49,9 +49,10 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 
 ## 常駐サーバー
 
+サーバーの先行起動（priming）は共通スクリプト `~/.agents/startup`（`dotfiles/.agents/startup.spec.md`）の受け持ちであり、本 plugin は行わない。
+
 | 時点 | 振る舞い |
 |---|---|
-| plugin 適用時（`apply`） | camoufox server（`bun server.mjs`）と openserp を health probe し、未起動なら detached spawn する。完了を待たない（fire-and-forget） |
 | search / fetch 実行時 | サーバーが健康でなければ起動を待つ（15 秒上限、超過で `WEB_PROVIDER_ERROR`） |
 | 他プロセスが同一サーバーを既に起動済み | 起動済みのサーバーに接続して再利用する |
 

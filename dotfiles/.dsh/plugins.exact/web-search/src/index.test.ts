@@ -62,7 +62,6 @@ import {
   parseStackOverflowQuestionUrl,
   playwrightCliConfigJson,
   playwrightCliConfigPath,
-  primeServers,
   REDDIT_TIMEOUT_MS,
   RENDER_TIMEOUT_MS,
   resolveEndpoints,
@@ -2477,121 +2476,6 @@ describe("playwright-cli config の接続先反映", () => {
   });
 });
 
-describe("plugin 適用時の先行起動（primeServers）", () => {
-  const okResponse = (): Response => new Response(null, { status: 200 });
-  const failingFetcher = (async () => {
-    throw new Error("connection refused");
-  }) as unknown as typeof fetch;
-  const okFetcher = (async () => okResponse()) as unknown as typeof fetch;
-
-  it("openserp が未起動なら openserp だけを起動する", async () => {
-    const spawned: string[] = [];
-    await primeServers(endpoints, {
-      fetcher: failingFetcher,
-      spawnOpenserp: (baseUrl) => spawned.push(`openserp:${baseUrl}`),
-      probeCamoufox: async () => true,
-      spawnCamoufox: (baseUrl) => spawned.push(`camoufox:${baseUrl}`),
-    });
-
-    assert.deepEqual(spawned, [`openserp:${OPENSERP_DEFAULT_BASE_URL}`]);
-  });
-
-  it("camoufox が未起動なら camoufox だけを起動する", async () => {
-    const spawned: string[] = [];
-    await primeServers(endpoints, {
-      fetcher: okFetcher,
-      spawnOpenserp: (baseUrl) => spawned.push(`openserp:${baseUrl}`),
-      probeCamoufox: async () => false,
-      spawnCamoufox: (baseUrl) => spawned.push(`camoufox:${baseUrl}`),
-    });
-
-    assert.deepEqual(spawned, [`camoufox:${CAMOUFOX_DEFAULT_BASE_URL}`]);
-  });
-
-  it("両方未起動なら両方を起動する", async () => {
-    const spawned: string[] = [];
-    await primeServers(endpoints, {
-      fetcher: failingFetcher,
-      spawnOpenserp: (baseUrl) => spawned.push(`openserp:${baseUrl}`),
-      probeCamoufox: async () => false,
-      spawnCamoufox: (baseUrl) => spawned.push(`camoufox:${baseUrl}`),
-    });
-
-    assert.deepEqual(spawned, [
-      `openserp:${OPENSERP_DEFAULT_BASE_URL}`,
-      `camoufox:${CAMOUFOX_DEFAULT_BASE_URL}`,
-    ]);
-  });
-
-  it("両方起動済みなら何も起動しない", async () => {
-    const spawned: string[] = [];
-    await primeServers(endpoints, {
-      fetcher: okFetcher,
-      spawnOpenserp: (baseUrl) => spawned.push(`openserp:${baseUrl}`),
-      probeCamoufox: async () => true,
-      spawnCamoufox: (baseUrl) => spawned.push(`camoufox:${baseUrl}`),
-    });
-
-    assert.deepEqual(spawned, []);
-  });
-
-  it("openserp 側の失敗は camoufox の先行起動を妨げない", async () => {
-    const spawned: string[] = [];
-    await primeServers(endpoints, {
-      fetcher: failingFetcher,
-      spawnOpenserp: () => {
-        throw new Error("spawn failed");
-      },
-      probeCamoufox: async () => false,
-      spawnCamoufox: (baseUrl) => spawned.push(`camoufox:${baseUrl}`),
-    });
-
-    assert.deepEqual(spawned, [`camoufox:${CAMOUFOX_DEFAULT_BASE_URL}`]);
-  });
-
-  it("先行起動の失敗は解決し、後続処理に影響させない", async () => {
-    const boomFetcher = (async () => {
-      throw new Error("boom");
-    }) as unknown as typeof fetch;
-    await primeServers(endpoints, {
-      fetcher: boomFetcher,
-      spawnOpenserp: () => {
-        throw new Error("boom");
-      },
-      probeCamoufox: async () => {
-        throw new Error("boom");
-      },
-      spawnCamoufox: () => {
-        throw new Error("boom");
-      },
-    });
-  });
-
-  it("解決済み接続先に対して probe・spawn する", async () => {
-    const spawned: string[] = [];
-    const custom = resolveEndpoints(
-      { camoufoxBaseUrl: "ws://127.0.0.1:9999/x", openserpBaseUrl: "http://127.0.0.1:7100" },
-      {},
-    );
-    await primeServers(custom, {
-      fetcher: failingFetcher,
-      spawnOpenserp: (baseUrl) => spawned.push(`openserp:${baseUrl}`),
-      probeCamoufox: async (baseUrl) => {
-        spawned.push(`probe:${baseUrl}`);
-        return false;
-      },
-      spawnCamoufox: (baseUrl) => spawned.push(`camoufox:${baseUrl}`),
-    });
-
-    assert.deepEqual(spawned, [
-      "openserp:http://127.0.0.1:7100",
-      "probe:ws://127.0.0.1:9999/x",
-      "camoufox:ws://127.0.0.1:9999/x",
-    ]);
-  });
-});
-
-// --- SPEC §"同種リクエストの直列化" ---
 
 describe("同種リクエストの直列化（provider キュー）", () => {
   it("先行の web_search が完了するまで次の web_search を開始しない", async () => {
@@ -2748,8 +2632,6 @@ describe("提供する plugin（entry exports・apply）", () => {
     };
   }
 
-  const noopPrime = () => Promise.resolve();
-
   it('export する name は dsh-web-search、inject は ["web"]', () => {
     assert.equal(name, "dsh-web-search");
     assert.deepEqual(inject, ["web"]);
@@ -2758,41 +2640,12 @@ describe("提供する plugin（entry exports・apply）", () => {
   it("apply は search・fetch 両 provider を ctx.web へ登録する", () => {
     const { ctx, searchProviders, fetchProviders } = captureRegistry();
 
-    apply(ctx, {}, { prime: noopPrime });
+    apply(ctx);
 
     assert.equal(searchProviders.length, 1);
     assert.equal(searchProviders[0]?.id, SEARCH_PROVIDER_ID);
     assert.equal(fetchProviders.length, 1);
     assert.equal(fetchProviders[0]?.id, FETCH_PROVIDER_ID);
-  });
-
-  it("apply は camoufox server と openserp の先行起動を1回だけ開始する（完了を待たない）", () => {
-    const { ctx } = captureRegistry();
-    const primed: ServerEndpoints[] = [];
-
-    apply(ctx, {}, { prime: (resolved) => (primed.push(resolved), Promise.resolve()) });
-
-    assert.equal(primed.length, 1);
-  });
-
-  it("apply の先行起動は解決済み接続先（config > env > 既定）で行う", () => {
-    const { ctx } = captureRegistry();
-    const primed: ServerEndpoints[] = [];
-
-    apply(
-      ctx,
-      { camoufoxBaseUrl: "ws://cfg:1/x" },
-      {
-        prime: (resolved) => {
-          primed.push(resolved);
-          return Promise.resolve();
-        },
-      },
-    );
-
-    assert.deepEqual(primed, [
-      { camoufoxBaseUrl: "ws://cfg:1/x", openserpBaseUrl: OPENSERP_DEFAULT_BASE_URL },
-    ]);
   });
 
   it("パッケージ名は dotfiles-dsh-web-search、cordis 行 id は dsh-web-search", () => {
