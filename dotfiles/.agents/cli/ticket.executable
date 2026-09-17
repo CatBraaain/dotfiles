@@ -1,0 +1,315 @@
+#!/usr/bin/env bun
+// ticket CLI — human/agent interface for the markdown ticket store.
+// Spec: dotfiles/.agents/cli/ticket.spec.md
+
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join, relative } from "node:path";
+
+const STATUSES = ["draft", "open", "blocked", "locked", "closed", "cancelled"] as const;
+type Status = (typeof STATUSES)[number];
+
+const USAGE = `usage: ticket list [--status <s>[,<s>...]] [--project <p>] [--all] [--json]
+       ticket show <id> [--project <p>] [--json]
+       ticket status <id> <status> [--project <p>]
+       ticket claim <id> [--project <p>]
+       ticket close <id> [--project <p>]
+       ticket check [--project <p>] [--all] [--json]`;
+
+interface Flags {
+  project?: string;
+  all: boolean;
+  json: boolean;
+  statuses: string[];
+}
+
+interface Ticket {
+  id: string;
+  status: string;
+  title: string;
+  dependsOn: string[];
+  path: string;
+  project: string;
+  body: string;
+}
+
+interface Issue {
+  file: string;
+  kind: string;
+  detail: string;
+}
+
+const ALLOWED_FLAGS: Record<string, { all?: boolean; status?: boolean; json?: boolean }> = {
+  list: { all: true, status: true, json: true },
+  show: { json: true },
+  status: {},
+  claim: {},
+  close: {},
+  check: { all: true, json: true },
+};
+
+const storeRoot = () => join(homedir(), ".agents", "tickets");
+
+function fail(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
+function output(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function parseArgs(argv: string[], command: string): { flags: Flags; positional: string[] } {
+  if (!(command in ALLOWED_FLAGS)) fail(USAGE);
+  const allowed = ALLOWED_FLAGS[command]!;
+  const flags: Flags = { all: false, json: false, statuses: [] };
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    const value = () => argv[++i] ?? fail(`${arg} requires a value`);
+    if (arg === "--json" && allowed.json) flags.json = true;
+    else if (arg === "--project") flags.project = value();
+    else if (arg === "--all" && allowed.all) flags.all = true;
+    else if (arg === "--status" && allowed.status) flags.statuses = value().split(",");
+    else if (arg.startsWith("--")) fail(`unknown flag for "${command}": ${arg}`);
+    else positional.push(arg);
+  }
+  return { flags, positional };
+}
+
+function parseFrontmatter(content: string): { fields: Map<string, string | string[]>; body: string } {
+  if (!content.startsWith("---\n")) return { fields: new Map(), body: content };
+  const closing = content.indexOf("\n---\n", 4);
+  if (closing < 0) return { fields: new Map(), body: content };
+  const fields = new Map<string, string | string[]>();
+  let key = "";
+  for (const line of content.slice(4, closing).split("\n")) {
+    const item = line.match(/^  - (.+)$/);
+    if (key && item) {
+      const list = fields.get(key);
+      if (Array.isArray(list)) list.push(item[1].trim());
+      continue;
+    }
+    const pair = line.match(/^([A-Za-z_-]+):\s*(.*)$/);
+    if (pair) {
+      key = pair[1]!;
+      fields.set(key, pair[2] === "" ? [] : pair[2].trim());
+    } else {
+      key = "";
+    }
+  }
+  return { fields, body: content.slice(closing + 5) };
+}
+
+async function loadTickets(project: string): Promise<Ticket[]> {
+  const dir = join(storeRoot(), project);
+  let ids: string[];
+  try {
+    ids = (await readdir(dir))
+      .map((name) => (name.endsWith(".md") ? name.slice(0, -3) : null))
+      .filter((id): id is string => id !== null)
+      .sort();
+  } catch {
+    fail(`project not found: ${dir}`);
+  }
+  const tickets: Ticket[] = [];
+  for (const id of ids!) {
+    const path = join(dir, `${id}.md`);
+    const { fields, body } = parseFrontmatter(await readFile(path, "utf8"));
+    const deps = fields.get("depends_on");
+    tickets.push({
+      id,
+      status: String(fields.get("status") ?? ""),
+      title: body.match(/^# (.+)$/m)?.[1]?.trim() ?? id,
+      dependsOn: Array.isArray(deps) ? deps : deps ? [String(deps)] : [],
+      path,
+      project,
+      body,
+    });
+  }
+  return tickets;
+}
+
+async function allProjects(): Promise<string[]> {
+  try {
+    const entries = await readdir(storeRoot(), { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  } catch {
+    return fail(`ticket store not found: ${storeRoot()}`);
+  }
+}
+
+function resolveId(tickets: Ticket[], id: string): Ticket {
+  const exact = tickets.find((ticket) => ticket.id === id);
+  if (exact) return exact;
+  const matches = tickets.filter((ticket) => ticket.id.startsWith(id));
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length > 1) {
+    fail(`ambiguous id "${id}":\n${matches.map((ticket) => `  ${ticket.id}`).join("\n")}`);
+  }
+  fail(`ticket not found: ${id}`);
+}
+
+async function writeStatus(ticket: Ticket, status: Status): Promise<void> {
+  const content = await readFile(ticket.path, "utf8");
+  if (!content.startsWith("---\n")) fail(`no frontmatter: ${ticket.path}`);
+  const closing = content.indexOf("\n---\n", 4);
+  if (closing < 0) fail(`unclosed frontmatter: ${ticket.path}`);
+  const frontmatter = content.slice(0, closing);
+  if (!/^status:.*$/m.test(frontmatter)) fail(`no status field: ${ticket.path}`);
+  await writeFile(ticket.path, frontmatter.replace(/^status:.*$/m, `status: ${status}`) + content.slice(closing));
+}
+
+function ticketJson(ticket: Ticket, withProject: boolean): Record<string, unknown> {
+  const json: Record<string, unknown> = {
+    id: ticket.id,
+    status: ticket.status,
+    title: ticket.title,
+    depends_on: ticket.dependsOn,
+    path: ticket.path,
+  };
+  if (withProject) json.project = ticket.project;
+  return json;
+}
+
+async function listCommand(flags: Flags): Promise<void> {
+  const projects = flags.all ? await allProjects() : [flags.project ?? basename(process.cwd())];
+  const tickets = (await Promise.all(projects.map((project) => loadTickets(project)))).flat();
+  const filtered = flags.statuses.length > 0
+    ? tickets.filter((ticket) => flags.statuses.includes(ticket.status))
+    : tickets;
+  if (flags.json) return output(filtered.map((ticket) => ticketJson(ticket, flags.all)));
+  for (const ticket of filtered) {
+    const project = flags.all ? `${ticket.project}\t` : "";
+    console.log(`${project}${ticket.id}\t${ticket.status}\t${ticket.title}`);
+  }
+}
+
+async function showCommand(positional: string[], flags: Flags): Promise<void> {
+  const id = positional[0] ?? fail(USAGE);
+  const ticket = resolveId(await loadTickets(flags.project ?? basename(process.cwd())), id);
+  if (flags.json) return output({ ...ticketJson(ticket, false), body: ticket.body });
+  console.log(`${ticket.id}\nstatus: ${ticket.status}`);
+  console.log("depends_on:");
+  for (const dep of ticket.dependsOn) console.log(`  - ${dep}`);
+  console.log(`\n# ${ticket.title}\n\n${ticket.body.trimEnd()}`);
+}
+
+async function statusCommand(positional: string[], flags: Flags): Promise<void> {
+  const [id, status] = positional;
+  if (!id || !status) fail(USAGE);
+  if (!STATUSES.includes(status as Status)) {
+    fail(`invalid status "${status}" (one of: ${STATUSES.join(", ")})`);
+  }
+  const ticket = resolveId(await loadTickets(flags.project ?? basename(process.cwd())), id);
+  await writeStatus(ticket, status as Status);
+  console.log(status);
+}
+
+async function transitionCommand(positional: string[], flags: Flags, target: "locked" | "closed"): Promise<void> {
+  const id = positional[0] ?? fail(USAGE);
+  const ticket = resolveId(await loadTickets(flags.project ?? basename(process.cwd())), id);
+  if (target === "locked" && ticket.status === "locked") {
+    fail(`ticket is already locked: ${ticket.id}`);
+  }
+  await writeStatus(ticket, target);
+  console.log(target);
+}
+
+function findCycles(tickets: Ticket[]): string[][] {
+  const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+  const state = new Map<string, number>();
+  const stack: string[] = [];
+  const cycles: string[][] = [];
+  const seen = new Set<string>();
+  const visit = (id: string): void => {
+    const visited = state.get(id) ?? 0;
+    if (visited === 2) return;
+    if (visited === 1) {
+      const cycle = stack.slice(stack.indexOf(id));
+      const key = [...cycle].sort().join("|");
+      if (!seen.has(key)) {
+        seen.add(key);
+        cycles.push(cycle);
+      }
+      return;
+    }
+    state.set(id, 1);
+    stack.push(id);
+    for (const dep of byId.get(id)?.dependsOn ?? []) {
+      if (byId.has(dep)) visit(dep);
+    }
+    stack.pop();
+    state.set(id, 2);
+  };
+  for (const ticket of tickets) visit(ticket.id);
+  return cycles;
+}
+
+async function checkCommand(flags: Flags): Promise<void> {
+  const projects = flags.all ? await allProjects() : [flags.project ?? basename(process.cwd())];
+  const issues: Issue[] = [];
+  for (const project of projects) {
+    const tickets = await loadTickets(project);
+    const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+    for (const ticket of tickets) {
+      const file = relative(storeRoot(), ticket.path);
+      if (!STATUSES.includes(ticket.status as Status)) {
+        issues.push({
+          file,
+          kind: "invalid-status",
+          detail: `status "${ticket.status}" is not one of ${STATUSES.join(", ")}`,
+        });
+      }
+      const missing = ticket.dependsOn.filter((dep) => !byId.has(dep));
+      if (missing.length > 0) {
+        issues.push({ file, kind: "missing-dep", detail: `depends_on references missing ticket(s): ${missing.join(", ")}` });
+      }
+      if (ticket.status === "open") {
+        const unresolved = ticket.dependsOn.filter((dep) => byId.get(dep)?.status !== "closed");
+        if (unresolved.length > 0) {
+          const detail = unresolved.map((dep) => `${dep} (${byId.get(dep)?.status ?? "missing"})`).join(", ");
+          issues.push({ file, kind: "open-with-unresolved-deps", detail: `status is open but depends_on has unclosed ticket(s): ${detail}` });
+        }
+      }
+    }
+    for (const cycle of findCycles(tickets)) {
+      const head = byId.get(cycle[0]!)!;
+      issues.push({ file: relative(storeRoot(), head.path), kind: "dep-cycle", detail: `depends_on cycle: ${cycle.join(" -> ")}` });
+    }
+  }
+  if (flags.json) {
+    output(issues);
+    if (issues.length > 0) process.exit(1);
+    return;
+  }
+  if (issues.length === 0) {
+    console.log("ok");
+    return;
+  }
+  for (const issue of issues) console.log(`${issue.file}: ${issue.kind}: ${issue.detail}`);
+  process.exit(1);
+}
+
+async function main(): Promise<void> {
+  const [command = "", ...argv] = process.argv.slice(2);
+  const { flags, positional } = parseArgs(argv, command);
+  switch (command) {
+    case "list":
+      return listCommand(flags);
+    case "show":
+      return showCommand(positional, flags);
+    case "status":
+      return statusCommand(positional, flags);
+    case "claim":
+      return transitionCommand(positional, flags, "locked");
+    case "close":
+      return transitionCommand(positional, flags, "closed");
+    case "check":
+      return checkCommand(flags);
+    default:
+      fail(USAGE);
+  }
+}
+
+await main();

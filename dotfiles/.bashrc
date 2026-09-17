@@ -26,6 +26,9 @@ export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
 # Prefer Bun's global CLIs over stale npm globals in the Homebrew prefix.
 export PATH="$HOME/.bun/bin:$PATH"
 
+# Agent CLIs (e.g. ticket).
+export PATH="$HOME/.agents/cli:$PATH"
+
 # keep-sorted start
 alias a="pi"
 alias ac="pi -c"
