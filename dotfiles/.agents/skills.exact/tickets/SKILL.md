@@ -22,6 +22,8 @@ description: >-
 ```md
 ---
 status: open
+depends_on:
+  - 20250214-103000-fix-memory-leak
 ---
 
 # Ticket title
@@ -30,6 +32,7 @@ Ticket body
 ```
 
 * `status` はfrontmatterで管理する。project はディレクトリで表現するため、frontmatter には書かない
+* `depends_on` は、着手の前に完了しているべき ticket の ID を配列で書く。同じ `<project>/` 配下の ticket を指定し、依存がなければ省略する。書く・編集するときは、指定した ID が存在することを確認する
 * Ticketの内容はMarkdown本文で管理する。タイトルは H1 とし、日本語で書いてよい。本文には必要な見出しだけを足す
 * ファイル名やIDの規則は、既存のTicketに合わせる
 
@@ -131,7 +134,7 @@ review の指摘を扱うときは、review skill の重要度（高・中・低
 
 * `draft`: アイデアなどを溜めている途中段階。open ではないため即座に取り掛からない
 * `open`: 未着手
-* `blocked`: 外部要因の解消を待っており、着手条件が満たされていない。着手しない
+* `blocked`: 外部要因（依存 ticket の未完了を含む）の解消を待っており、着手条件が満たされていない。着手しない
 * `locked`: 別のセッションが対処を保持している（排他）。着手しない
 * `closed`: 完了
 * `cancelled`: 中止
@@ -144,15 +147,19 @@ review の指摘を扱うときは、review skill の重要度（高・中・低
 | owner の明示依頼で draft を昇格させるとき | `open` |
 | ticket の対処に着手したとき（調査を含む） | `locked` |
 | 外部要因の解消を待つことになったとき | `blocked`。待つ理由と解除条件を本文に書く |
+| 起票・更新で `depends_on` に `closed` 以外の ticket があるとき | `blocked`。待つ理由（依存先 ID）と解除条件を本文に書く |
 | blocked の解除条件が満たったとき | `open` |
+| 依存先の `closed` により `depends_on` が全て解決したとき | `open` |
 | 対処が完了し問題が解消したとき | `closed`。対処したチケットは「テンプレート」の対処完了時の追記を本文へ入れる |
 | 対処しないことになったとき（重複、意図した挙動、owner 判断） | `cancelled`。理由を本文に追記する |
 
 `open` から `locked` を経由せず直接 `closed` にしてよい（外部要因で解消した場合など）。status の書き換えで本文を書き換えない。
 
-対処に着手するときは、まず owner の承認を得る。agent が自ら選んだ ticket では、ticket ID、タイトル、内容の要約、考えている進め方を示して承認を求める。owner が特定の ticket を明示した依頼なら、依頼自体が承認にあたる。着手してよいのは `status: open` の ticket のみで、`draft`・`blocked`・`locked` には着手しない。draft に着手するときは、owner の明示依頼で `open` へ昇格させてから行う。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `locked` に書き換えて着手する。同じ ticket への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
+対処に着手するときは、まず owner の承認を得る。agent が自ら選んだ ticket では、ticket ID、タイトル、内容の要約、考えている進め方を示して承認を求める。owner が特定の ticket を明示した依頼なら、依頼自体が承認にあたる。着手してよいのは `status: open` かつ `depends_on` の全 ID が `closed` の ticket のみで、`draft`・`blocked`・`locked` には着手しない。draft に着手するときは、owner の明示依頼で `open` へ昇格させてから行う。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `locked` に書き換えて着手する。同じ ticket への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
 
 `locked` は着手したセッションが対処を完了（`closed`）または取り下げ（`cancelled`）した時点で外れる。異常終了などで `locked` が残ったときは、owner の指示で `open` に戻す。
+
+ticket を `closed` にするときは、依存されている ticket を探して解放する。`grep -l 'depends_on' ~/.agents/tickets/<project>/*.md` で `depends_on` を持つ ticket を見つけ、その `depends_on` が全て `closed` になっていれば `status` を `blocked` から `open` に戻す。
 
 ## 編集
 
