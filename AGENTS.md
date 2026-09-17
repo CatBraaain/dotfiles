@@ -32,7 +32,7 @@
 | `xxx.machine.json` / `xxx.machine.yaml` / `xxx.machine.toml` | （完成形 `xxx.json` / `xxx.yaml` / `xxx.toml` を出力） | 独自: merge ターゲットへ最後にマージするマシン固有レイヤー（gitignore） |
 | `.pre-chezmoi.ts`（ファイル） | （dist にそのまま残る。chezmoi は無視） | 独自: フォルダ単位の build 時フック。既存変換より前に実行され、フォルダ固有のファイルを生成できる（詳細は pre-chezmoi.spec.md §2） |
 
-> **注意**: 相対パス `dotfiles/.agents/skills.exact` は `~/projects/dotfiles/dotfiles/.agents/skills.exact` を指す。ルート直下（`~/projects/dotfiles/.agents/...`）ではない — 同名の `dotfiles/` が二重に現れる点に注意。
+> **chezmoi source path**: `dotfiles/.agents/skills.exact` は `~/projects/dotfiles/dotfiles/.agents/skills.exact` を指す。これは共有 skill の編集元であり、プロジェクト専用 skill の読み込み先ではない。ルート直下（`~/projects/dotfiles/.agents/...`）とは別の場所である。
 
 ## 実行禁止
 
@@ -57,10 +57,15 @@ assertion は自作 helper を作らず、`node:assert/strict` を使うこと�
 
 ## skill の置き場所
 
-自作 skill は `dotfiles/.agents/skills.exact/` に置く。新しい skill を作るときもここに作る。展開先 `~/.agents/skills/` は Agent Skills 標準の共通位置であり、pi を含む複数の harness から読める。
+skill はスコープごとに正本を分ける。この規則は skill 本文を読む前に適用する。
+
+- プロジェクト専用 skill は、現在の作業対象リポジトリのルート（worktree 使用時はその worktree）の `.agents/skills/` に置く。`dsh-plugins` の読み込み先は `.agents/skills/dsh-plugins/SKILL.md` に限る。`dotfiles/.agents/skills.exact/` や `~/.agents/skills/` を候補にしない。
+- 共有 skill は `dotfiles/.agents/skills.exact/` に置き、pre-chezmoi で `~/.agents/skills/` へ展開する。展開先は Agent Skills 標準の共通位置であり、pi を含む複数の harness から読める。
 
 - 外部リポジトリの skill の取り込みは `dotfiles/.agents/skills.exact/` 配下の `.pre-chezmoi.ts` フック + `.pre-chezmoi.skills.yaml` で行う（詳細は同フォルダの `.pre-chezmoi.spec.md`）
 - `dotfiles/.pi/agent/skills.exact/` は pi 固有の skill 用の予備。通常は空に保ち、`.keep` で空ディレクトリを維持する（`exact` 属性により、展開先でも `.keep` 以外のファイルが無い状態が保たれる）
+
+skill を読む指示は、ファイルパスではなく skill 名（例: `dsh-plugins` または `/skill:dsh-plugins`）で書く。ファイルを直接読む必要があるときは、現在のリポジトリまたは worktree のルートから `./.agents/skills/dsh-plugins/SKILL.md` を解決する。`~/.agents/skills/...` や `dotfiles/.agents/skills.exact/...` を読み込み先にしない。
 
 ## dotfiles/.pi
 
