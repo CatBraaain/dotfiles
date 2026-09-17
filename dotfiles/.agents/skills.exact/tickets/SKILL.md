@@ -12,7 +12,7 @@ description: >-
 
 - 1 ticket = 1 markdown ファイル。`~/.agents/tickets/<project>/` 配下に置く。`<project>` は対象リポジトリのルートディレクトリ名。リポジトリ外の問題ならカレントディレクトリ名
 - ticket 操作の対象ストアは、owner が対象 project（全 project 横断を含む）を明示しない限り、現在のプロジェクト（セッション cwd のリポジトリ名、リポジトリ外ならカレントディレクトリ名）の 1 つに限る。着手対象の選定（例: 「次の ticket」「open ticket を処理して」）もこの範囲から行い、他 project の ticket を候補に含めない
-- ファイル名は `<YYYYMMDD-HHMMSS>-<slug>.md`。`<slug>` は問題を表す kebab-case 英語（例: `memory-leak-in-worker`）。日時部分は起票時刻を `date +%Y%m%d-%H%M%S` で採番し（ローカル時刻）、同一秒のファイルが既にあるときは衝突しなくなるまで +1 秒ずらす
+- ファイル名は `<YYYYMMDD-HHMMSS>_<slug>.md`。ID と slug の境界は `_`、フィールド内の区切りは `-` にする。`<slug>` は原則、問題を表す日本語（例: `workerのメモリリーク`）。英語で書くときは kebab-case にする（例: `memory-leak-in-worker`）。いずれもスペースを含めない。日時部分は起票時刻を `date +%Y%m%d-%H%M%S` で採番し（ローカル時刻）、同一秒のファイルが既にあるときは衝突しなくなるまで +1 秒ずらす
 - ticket の ID はファイル名から拡張子を除いたもの
 
 ## ファイル形式
@@ -23,7 +23,7 @@ description: >-
 ---
 status: open
 depends_on:
-  - 20250214-103000-fix-memory-leak
+  - 20250214-103000_memory-leak-in-worker
 ---
 
 # Ticket title
