@@ -11,6 +11,16 @@
 - ユーザーから図表を使うことを明示的に指示された場合は、必ずdrawioかmermaidを使用する
 - チャットで markdownコードブロック を出力するときは、それを4 backticks で囲み。markdown以外のコードブロックは3 backticks で囲う
 
+## Git index の所有権
+
+- owner は Git index の staging 状態で、自身がレビュー済みの範囲を管理している
+- commit の作成・分割に必要な場合を除き、通常の作業で index / staging 状態を変更しない
+- `git add`、`git reset`、`git restore --staged`、`git stash` など、index / staging 状態を変更する操作は、owner が明示的に指示した場合だけ実行する
+- owner が staged または unstaged にしている変更を、勝手に変更・解除・破棄しない
+- owner から commit を明示的に依頼された場合は、必要なファイルだけを明示して stage する。`git add .` と `git add -A` は使わない
+- staging 状態が想定外に見えても、勝手に修正せず owner に確認する
+- `git status`、`git diff`、`git diff --cached` などの読み取り専用操作は実行してよい
+
 ## Abbreviations
 
 - `kwsk`: 詳しく教えて
