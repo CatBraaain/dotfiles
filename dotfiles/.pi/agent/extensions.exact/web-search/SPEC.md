@@ -42,7 +42,7 @@ details は `{ engine, tookMs }`。
 
 ### web_fetch
 
-本文は stdout の JSON の `body` をそのまま使う。details は `{ backend, title, tookMs }`（`title` は JSON に無いとき省略）。
+本文は stdout の JSON の `body` をそのまま使う。details は `{ backend, title, fallback, tookMs }`（`title` は JSON に無いとき省略、`fallback` は `fallbacks` があるときだけ `backend: error; ...` 形式で追加）。
 
 ## 検索・フェッチの振る舞いの委譲
 
@@ -80,6 +80,7 @@ CLI スクリプト（`browse`）は、この拡張のディレクトリから4�
 | ------------------------------- | ---------------------------------------- |
 | 成功（web_search）              | `✓ <engine> (1.2s)`                      |
 | 成功（web_fetch、タイトルあり） | `✓ <backend> - "<タイトル>" (1.2s)`      |
+| 成功（web_fetch、fallbackあり） | `✓ <backend> [- "<タイトル>"] (fallback: <backend>: <error>; ...) (1.2s)` |
 | 成功（web_fetch、タイトルなし） | `✓ <backend> (1.2s)`                     |
 | 失敗                            | `✗ <CLI名> - "<エラーメッセージ>"`       |
 

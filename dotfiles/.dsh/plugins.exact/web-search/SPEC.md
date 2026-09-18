@@ -43,12 +43,12 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 |---|---|
 | `url` | CLI JSON の `url`（Reddit / StackOverflow は permalink へ正規化済み） |
 | `statusCode` | `200` 固定（CLI はフェッチ失敗をエラーとして報告するため、非 2xx を結果として表現しない） |
-| `body` | `{ kind: "text", content: <CLI JSON の body（markdown）> }` |
+| `body` | `{ kind: "text", content: <CLI JSON の body（markdown）> }`。`fallbacks` がある場合は、本文の先頭に `✓ <backend> [- "<title>"] (fallback: <backend>: <error>; ...) (1.2s)` の1行を追加する |
 | `truncated` | `false` |
 
 - URL による経路の選択（Reddit 投稿 → RSS / embed / oEmbed、StackOverflow 質問 → StackExchange API / 質問フィード、その他 → camoufox 描画 + `trafilatura --markdown`）と各経路のフォールバックは CLI の振る舞い（`browse.spec.md`）に従う
 - 失敗時のエラー伝播は search provider と同じ（CLI stderr を逐語で持つ `WEB_PROVIDER_ERROR` の `WebError`）
-- タイトル抽出と結果行の表示は本家 tool-web 側の責務で、plugin には表示フックが無いため行わない
+- CLI が返した `fallbacks` は、標準 dsh UI の成功行へ渡せないため、成功本文の先頭1行へ表示する。タイトル抽出は本家 tool-web 側の責務だが、fallback 行のタイトルは CLI JSON の `title` を使う
 
 ## available()
 

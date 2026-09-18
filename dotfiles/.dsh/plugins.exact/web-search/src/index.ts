@@ -289,13 +289,18 @@ export interface CliSearchJson {
 }
 
 // `browse fetch --json` output (browse.spec.md §`browse fetch`): url is
-// already normalized (Reddit / StackOverflow permalinks), body is markdown.
+// already normalized (Reddit / StackOverflow permalinks), body is markdown,
+// and fallbacks records failed attempts before the successful backend.
 export interface CliFetchJson {
   readonly url: string;
   readonly backend: string;
   readonly title?: string;
   readonly body: string;
   readonly tookMs: number;
+  readonly fallbacks?: readonly {
+    readonly backend: string;
+    readonly error: string;
+  }[];
 }
 
 // openserp passes raw SERP hrefs through unmodified, and engines serve some of
@@ -342,6 +347,20 @@ export function toSearchSources(json: unknown): WebSearchSource[] {
   return sources;
 }
 
+function oneLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/** Format the successful fetch line when the CLI had to use a fallback. */
+export function formatFetchFallbackLine(json: CliFetchJson): string | undefined {
+  if (!json.fallbacks?.length) return undefined;
+  const title = json.title ? ` - "${json.title}"` : "";
+  const fallback = json.fallbacks
+    .map((attempt) => `${attempt.backend}: ${oneLine(attempt.error)}`)
+    .join("; ");
+  return `✓ ${json.backend}${title} (fallback: ${fallback}) (${(json.tookMs / 1000).toFixed(1)}s)`;
+}
+
 // SPEC §"fetch provider": statusCode is fixed at 200 (the CLI reports fetch
 // failures as errors, not as result bodies) and the result URL is the CLI
 // JSON's normalized url.
@@ -356,10 +375,11 @@ export function toFetchResult(json: unknown): WebFetchResult {
   if (typeof body !== "string") {
     throw new Error(`unexpected browse fetch CLI output: ${describeJson(json)}`);
   }
+  const fallbackLine = formatFetchFallbackLine(json as CliFetchJson);
   return {
     url,
     statusCode: 200,
-    body: { kind: "text", content: body },
+    body: { kind: "text", content: fallbackLine ? `${fallbackLine}\n\n${body}` : body },
     truncated: false,
   };
 }

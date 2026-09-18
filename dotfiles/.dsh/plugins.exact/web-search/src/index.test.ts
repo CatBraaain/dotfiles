@@ -26,6 +26,7 @@ import {
   Config,
   execCli,
   FETCH_PROVIDER_ID,
+  formatFetchFallbackLine,
   hostPrerequisitesMet,
   inject,
   name,
@@ -319,6 +320,23 @@ describe("CLI JSON の fetch result 変換（toFetchResult）", () => {
     });
   });
 
+  it("fallback履歴を成功本文の先頭行へ表示する", () => {
+    const json = JSON.parse(fetchJson({
+      backend: "camoufox+trafilatura",
+      title: "Example",
+      tookMs: 1200,
+      fallbacks: [{ backend: "camoufox+trafilatura", error: "render: challenge detected" }],
+    }));
+    assert.equal(
+      formatFetchFallbackLine(json),
+      '✓ camoufox+trafilatura - "Example" (fallback: camoufox+trafilatura: render: challenge detected) (1.2s)',
+    );
+    assert.equal(
+      (toFetchResult(json).body as { kind: "text"; content: string }).content,
+      '✓ camoufox+trafilatura - "Example" (fallback: camoufox+trafilatura: render: challenge detected) (1.2s)\n\n# Example\n\ntext',
+    );
+  });
+
   it("title・backend・tookMs は結果に使わない", () => {
     const json = JSON.parse(
       fetchJson({ title: "Page title", backend: "StackOverflow", tookMs: 99 }),
@@ -357,6 +375,22 @@ describe("fetch provider（CamoufoxTrafilaturaFetchProvider）", () => {
     assert.equal(result.statusCode, 200);
     assert.deepEqual(result.body, { kind: "text", content: "# Example\n\ntext" });
     assert.equal(result.truncated, false);
+  });
+
+  it("成功本文の fallback 行を維持する", async () => {
+    const { exec } = fakeExec({
+      [browseScript()]: fetchJson({
+        fallbacks: [{ backend: "camoufox+trafilatura", error: "render: challenge detected" }],
+      }),
+    });
+    const provider = new CamoufoxTrafilaturaFetchProvider(endpoints, { exec });
+
+    const result = await provider.fetch({ url: "https://example.com/page" });
+
+    assert.equal(
+      result.body.content,
+      '✓ camoufox+trafilatura (fallback: camoufox+trafilatura: render: challenge detected) (0.0s)\n\n# Example\n\ntext',
+    );
   });
 
   it("id は camoufox-trafilatura", () => {

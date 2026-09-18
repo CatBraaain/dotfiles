@@ -365,10 +365,16 @@ function defaultFetchBackends(url: string): BackendEntry<string>[] {
   return [["camoufox+trafilatura", () => camoufoxFetch(url)]];
 }
 
+interface FetchFallback {
+  readonly backend: string;
+  readonly error: string;
+}
+
 interface FetchOutcome {
   readonly backend: string;
   readonly markdown: string;
   readonly tookMs: number;
+  readonly fallbacks: readonly FetchFallback[];
 }
 
 async function fetchOne(url: string): Promise<FetchOutcome> {
@@ -378,7 +384,10 @@ async function fetchOne(url: string): Promise<FetchOutcome> {
     (markdown) => !markdown.trim(),
     retryOnChallenge,
   );
-  return { backend, markdown: payload, tookMs: attemptDuration(attempts) };
+  const fallbacks = attempts
+    .filter((attempt): attempt is Extract<Attempt, { readonly ok: false }> => !attempt.ok)
+    .map(({ backend: failedBackend, error }) => ({ backend: failedBackend, error }));
+  return { backend, markdown: payload, tookMs: attemptDuration(attempts), fallbacks };
 }
 
 // Spec: "challenge / captcha を検出した → 同一 backend を 1 回だけ再試行し、
@@ -623,7 +632,7 @@ function normalizedFetchUrl(rawUrl: string): string {
   );
 }
 
-// Spec: `--json` のフィールド: url、backend、title、body、tookMs。
+// Spec: `--json` のフィールド: url、backend、title、body、tookMs、fallbacks。
 function fetchJson(url: string, outcome: FetchOutcome): Record<string, unknown> {
   const title = titleFromMarkdown(outcome.markdown);
   return {
@@ -632,6 +641,7 @@ function fetchJson(url: string, outcome: FetchOutcome): Record<string, unknown> 
     ...(title ? { title } : {}),
     body: outcome.markdown,
     tookMs: outcome.tookMs,
+    ...(outcome.fallbacks.length > 0 ? { fallbacks: outcome.fallbacks } : {}),
   };
 }
 

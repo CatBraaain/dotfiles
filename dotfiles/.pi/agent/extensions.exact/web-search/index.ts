@@ -72,8 +72,9 @@ export type WebCliDeps = {
 };
 
 // Spec (browse.spec.md "--json のフィールド"): search returns query, engine,
-// tookMs and results; fetch returns url, backend, title (optional), body and
-// tookMs. Fields absent from the CLI output stay undefined.
+// tookMs and results; fetch returns url, backend, title (optional), body,
+// tookMs and fallbacks (optional). Fields absent from the CLI output stay
+// undefined.
 interface SearchCliJson {
   readonly query: string;
   readonly engine: string;
@@ -92,6 +93,10 @@ interface FetchCliJson {
   readonly title?: string;
   readonly body: string;
   readonly tookMs: number;
+  readonly fallbacks?: ReadonlyArray<{
+    readonly backend: string;
+    readonly error: string;
+  }>;
 }
 
 async function runCliJson<T>(
@@ -156,6 +161,7 @@ export type WebToolDetails = {
   backend?: string;
   title?: string;
   tookMs?: number;
+  fallback?: string;
   error?: string;
 };
 
@@ -179,11 +185,15 @@ function tookSuffix(tookMs: number | undefined): string {
   return typeof tookMs === "number" ? ` (${(tookMs / 1000).toFixed(1)}s)` : "";
 }
 
+function fallbackSuffix(fallback: string | undefined): string {
+  return fallback ? ` (fallback: ${fallback})` : "";
+}
+
 // Spec (SPEC.md §表示): `✓ <engine/backend> [- "<title>"] (1.2s)` on success,
 // `✗ <cli> - "<message>"` on failure.
 function successLine(name: string, details: WebToolDetails): string {
   const title = details.title ? ` - "${details.title}"` : "";
-  return `✓ ${name}${title}${tookSuffix(details.tookMs)}`;
+  return `✓ ${name}${title}${fallbackSuffix(details.fallback)}${tookSuffix(details.tookMs)}`;
 }
 
 function errorLine(kind: "web-search" | "web-fetch", message: string): string {
@@ -255,6 +265,11 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
         );
         const details: WebToolDetails = { backend: json.backend, tookMs: json.tookMs };
         if (json.title) details.title = json.title;
+        if (json.fallbacks?.length) {
+          details.fallback = json.fallbacks
+            .map((attempt) => `${attempt.backend}: ${attempt.error}`.replace(/\s+/g, " "))
+            .join("; ");
+        }
         return { content: [{ type: "text", text: json.body }], details };
       } catch (error) {
         onUpdate?.({ content: [], details: { error: errorMessage(error) } });

@@ -68,6 +68,15 @@ const fetchJsonOutput = JSON.stringify({
   tookMs: 1200,
 });
 
+const fetchFallbackJsonOutput = JSON.stringify({
+  url: "https://example.com/",
+  backend: "camoufox+trafilatura",
+  title: "Example",
+  body: "# Example\n\nbody",
+  tookMs: 1200,
+  fallbacks: [{ backend: "camoufox+trafilatura", error: "render: challenge detected" }],
+});
+
 const executionContext = { hasUI: true, ui: { notify: () => {} } };
 
 function callSearch(tool: Tool, params: Record<string, string>): Promise<unknown> {
@@ -87,8 +96,8 @@ function detailsOf(result: unknown): Record<string, unknown> {
   return (result as { details: Record<string, unknown> }).details;
 }
 
-function renderedLines(component: { render(width: number): string[] }): string[] {
-  return component.render(80).map((line) => line.trim());
+function renderedLines(component: { render(width: number): string[] }, width = 80): string[] {
+  return component.render(width).map((line) => line.trim());
 }
 
 const identityTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
@@ -169,6 +178,20 @@ describe("stdout to tool result", () => {
     assert.deepEqual(detailsOf(result), {
       backend: "camoufox+trafilatura",
       title: "Example",
+      tookMs: 1200,
+    });
+  });
+
+  it("keeps fallback failures in the successful fetch details", async () => {
+    const cli = fakeCli({ stdout: fetchFallbackJsonOutput });
+    const fetchTool = captureTools(cli.deps).get("web_fetch")!;
+
+    const result = await callFetch(fetchTool, "https://example.com/");
+
+    assert.deepEqual(detailsOf(result), {
+      backend: "camoufox+trafilatura",
+      title: "Example",
+      fallback: "camoufox+trafilatura: render: challenge detected",
       tookMs: 1200,
     });
   });
@@ -400,6 +423,23 @@ describe("web_fetch rendering", () => {
     assert.deepEqual(renderedLines(fetchTool.renderResult(result, {}, identityTheme)), [
       '✓ Reddit - "A post" (1.2s)',
     ]);
+  });
+
+  it("renders fallback failures in the successful line", () => {
+    const fetchTool = captureTools().get("web_fetch")!;
+    const result = {
+      content: [{ type: "text", text: "body" }],
+      details: {
+        backend: "camoufox+trafilatura",
+        title: "Example",
+        fallback: "camoufox+trafilatura: render: challenge detected",
+        tookMs: 1200,
+      },
+    };
+    assert.deepEqual(
+      renderedLines(fetchTool.renderResult(result, {}, identityTheme), 200),
+      ['✓ camoufox+trafilatura - "Example" (fallback: camoufox+trafilatura: render: challenge detected) (1.2s)'],
+    );
   });
 
   it("omits the title part when the fetch has no title", () => {
