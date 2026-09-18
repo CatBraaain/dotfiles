@@ -1,12 +1,13 @@
 /**
  * dotfiles-dsh-tickets — dsh port of the pi `tickets` extension.
  *
- * Registers four tools wrapping the ticket CLI (`~/.agents/cli/ticket`):
- * ticket_list, ticket_show, ticket_create, ticket_update. The behavior
- * contract is dotfiles/.agents/cli/ticket-tools.spec.md (harness-neutral
- * oracle; the CLI itself is specified by ticket.spec.md). The tools never
- * touch the ticket store directly — every read and write goes through the
- * CLI with `--json` via the shared lib (`@dotfiles/agent-lib/ticket`).
+ * Registers five tools wrapping the ticket CLI (`~/.agents/cli/ticket`):
+ * ticket_list, ticket_show, ticket_create, ticket_set, ticket_edit. The
+ * behavior contract is dotfiles/.agents/cli/ticket-tools.spec.md
+ * (harness-neutral oracle; the CLI itself is specified by ticket.spec.md).
+ * The tools never touch the ticket store directly — every read and write
+ * goes through the CLI with `--json` via the shared lib
+ * (`@dotfiles/agent-lib/ticket`).
  *
  * Result shape: `execute` returns the CLI's parsed JSON as the canonical
  * value, `output.render` turns it into the LLM text with the shared
@@ -54,7 +55,7 @@ export interface TicketListArgs {
 }
 
 export interface TicketShowArgs {
-  id: string;
+  selector?: string;
   project?: string;
 }
 
@@ -62,14 +63,21 @@ export interface TicketCreateArgs {
   title: string;
   body?: string;
   status?: string;
-  depends_on?: string[];
+  after?: string;
   project?: string;
 }
 
-export interface TicketUpdateArgs {
-  id: string;
-  metadata?: Record<string, unknown>;
-  body?: string;
+export interface TicketSetArgs {
+  selector?: string;
+  status?: string;
+  after?: string | null;
+  project?: string;
+}
+
+export interface TicketEditArgs {
+  selector?: string;
+  old: string;
+  new: string;
   project?: string;
 }
 
@@ -93,30 +101,34 @@ export function buildListArgs(args: TicketListArgs): string[] {
 }
 
 export function buildShowArgs(args: TicketShowArgs): string[] {
-  return ["show", args.id, ...projectFlag(args.project)];
+  return ["show", ...(args.selector !== undefined ? [args.selector] : []), ...projectFlag(args.project)];
 }
 
+// The CLI takes a single JSON object argument; only the given keys are sent.
 export function buildCreateArgs(args: TicketCreateArgs): string[] {
-  return [
-    "create",
-    args.title,
-    ...(args.status !== undefined ? ["--status", args.status] : []),
-    ...(args.depends_on !== undefined && args.depends_on.length > 0
-      ? ["--depends-on", args.depends_on.join(",")]
-      : []),
-    ...(args.body !== undefined ? ["--body", args.body] : []),
-    ...projectFlag(args.project),
-  ];
+  const payload: Record<string, unknown> = { title: args.title };
+  if (args.status !== undefined) payload.status = args.status;
+  if (args.after !== undefined) payload.after = args.after;
+  if (args.body !== undefined) payload.body = args.body;
+  return ["create", JSON.stringify(payload), ...projectFlag(args.project)];
 }
 
-export function buildUpdateArgs(args: TicketUpdateArgs): string[] {
-  return [
-    "update",
-    args.id,
-    ...(args.metadata !== undefined ? ["--metadata", JSON.stringify(args.metadata)] : []),
-    ...(args.body !== undefined ? ["--body", args.body] : []),
-    ...projectFlag(args.project),
-  ];
+// Throws when there is nothing to set (SPEC: no CLI run without status or after).
+export function buildSetArgs(args: TicketSetArgs): string[] {
+  if (args.status === undefined && args.after === undefined) {
+    throw new Error("nothing to set: pass status and/or after");
+  }
+  const payload: Record<string, unknown> = {};
+  if (args.status !== undefined) payload.status = args.status;
+  if (args.after !== undefined) payload.after = args.after;
+  const selector = args.selector !== undefined ? [args.selector] : [];
+  return ["set", ...selector, JSON.stringify(payload), ...projectFlag(args.project)];
+}
+
+export function buildEditArgs(args: TicketEditArgs): string[] {
+  if (args.old === "") throw new Error("old must be a non-empty string");
+  const selector = args.selector !== undefined ? [args.selector] : [];
+  return ["edit", ...selector, args.old, args.new, ...projectFlag(args.project)];
 }
 
 // --- execution helpers ---
@@ -139,14 +151,6 @@ export function toToolError(error: unknown): unknown {
   return error;
 }
 
-// ticket_update with neither metadata nor body is rejected before the CLI is
-// spawned (ticket-tools.spec.md `ticket_update`).
-export function assertUpdatable(args: TicketUpdateArgs): void {
-  if (args.metadata === undefined && args.body === undefined) {
-    throw new Error("nothing to update: pass metadata (status and/or depends_on) or body");
-  }
-}
-
 // --- tool definitions ---
 
 export interface TicketToolDeps {
@@ -157,25 +161,39 @@ export interface TicketToolDeps {
 const PROJECT_DESCRIPTION =
   "Read ~/.agents/tickets/<project> instead of the session cwd's project.";
 
+const SELECTOR_DESCRIPTION =
+  "Ticket selector: a ticket id, a prefix unique to one ticket, or \"next\" " +
+  "(the oldest actionable ticket). Omitted means \"next\".";
+
 const LIST_DESCRIPTION =
-  "List tickets (wraps `ticket list`): one line per ticket with id, status, and title. " +
-  "Filter with status, pick the store with project, or set all=true to list every project " +
-  "(each line prefixed with the project name). Ticket ids resolve by unique prefix.";
+  "List tickets (wraps `ticket list`): one line per ticket with id, status, and title — " +
+  "open tickets only unless you filter with status. Pick the store with project, or set " +
+  "all=true to list every project (each line prefixed with the project name). " +
+  "Ticket ids resolve by unique prefix.";
 
 const SHOW_DESCRIPTION =
-  "Show one ticket (wraps `ticket show <id>`): id, status, depends_on, title, and body. " +
-  "id may be any prefix unique to one ticket.";
+  "Show one ticket (wraps `ticket show`): id, status, after, title, and body. " +
+  "selector is a ticket id, a prefix unique to one ticket, or \"next\" (default).";
 
 const CREATE_DESCRIPTION =
-  "Create a ticket (wraps `ticket create <title>`): returns the new id, status, and path. " +
-  "body is placed under the title, status defaults to open, depends_on lists prerequisite " +
-  "ticket ids (unique prefixes are fine), project picks another store.";
+  "Create a ticket (wraps `ticket create`): returns the new id, status, after, and path. " +
+  "body is placed under the title, status defaults to open, and after sets the single ticket " +
+  "id this ticket waits on (unique prefixes are fine) — it blocks the ticket unless a status " +
+  "is given, and it must exist and not be closed or cancelled. project picks another store.";
 
-const UPDATE_DESCRIPTION =
-  "Update one ticket (wraps `ticket update <id>`): returns the updated id, status, and path. " +
-  "metadata merges frontmatter fields (status and/or depends_on only) and body replaces the " +
-  "whole body text; id may be any unique prefix. Validation can fail: a locked ticket refuses " +
-  "re-locking, and status open requires every depends_on entry closed.";
+const SET_DESCRIPTION =
+  "Update one ticket's frontmatter (wraps `ticket set`): returns the updated id, status, after, " +
+  "and path. Only status and/or after can be set; selector is a ticket id, a unique prefix, or " +
+  "\"next\" (default). The linkage auto-switches the status unless an explicit status wins: " +
+  "setting an unresolved after blocks the ticket, clearing after (null) reopens a blocked one, " +
+  "and status closed releases dependent blocked tickets back to open. The CLI validates the " +
+  "update: after must exist and must not be closed or cancelled, and cycles fail without rewriting.";
+
+const EDIT_DESCRIPTION =
+  "Edit one ticket's body (wraps `ticket edit`): returns the updated id, status, after, and path. " +
+  "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the " +
+  "body, so it can be replaced. Zero or multiple occurrences of old fail without rewriting. " +
+  "selector is a ticket id, a unique prefix, or \"next\" (default); project picks another store.";
 
 export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
   const runCli = deps.runCli ?? runTicketCli;
@@ -196,7 +214,7 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         status: {
           type: "array",
           items: { type: "string" },
-          description: 'Statuses to keep, e.g. ["open", "blocked"] (default: all statuses).',
+          description: 'Statuses to keep, e.g. ["open", "blocked"] (default: open tickets).',
         },
         project: { type: "string", description: PROJECT_DESCRIPTION },
         all: {
@@ -220,11 +238,7 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
       name: "ticket_show",
       description: SHOW_DESCRIPTION,
       parameters: {
-        id: {
-          type: "string",
-          required: true,
-          description: "Ticket id, or a prefix unique to one ticket.",
-        },
+        selector: { type: "string", description: SELECTOR_DESCRIPTION },
         project: { type: "string", description: PROJECT_DESCRIPTION },
       },
       output: {
@@ -244,12 +258,13 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         body: { type: "string", description: "Body text placed after the title heading." },
         status: {
           type: "string",
-          description: "Initial status (draft/open/blocked/locked/closed/cancelled; default open).",
+          description:
+            "Initial status (draft/open/blocked/locked/closed/cancelled; default open, or blocked when after is set).",
         },
-        depends_on: {
-          type: "array",
-          items: { type: "string" },
-          description: "Ids this ticket depends on (same project; unique prefixes are fine).",
+        after: {
+          type: "string",
+          description:
+            "Id of the ticket this one waits on (same project; unique prefixes are fine).",
         },
         project: { type: "string", description: PROJECT_DESCRIPTION },
       },
@@ -263,23 +278,18 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
       execute: (args, exec) => run(buildCreateArgs(args), exec),
     }),
     defineTool({
-      name: "ticket_update",
-      description: UPDATE_DESCRIPTION,
+      name: "ticket_set",
+      description: SET_DESCRIPTION,
       parameters: {
-        id: {
+        selector: { type: "string", description: SELECTOR_DESCRIPTION },
+        status: {
           type: "string",
-          required: true,
-          description: "Ticket id, or a prefix unique to one ticket.",
+          description: "New status (draft/open/blocked/locked/closed/cancelled).",
         },
-        metadata: {
-          type: "object",
-          additionalProperties: true,
+        after: {
+          oneOf: [{ type: "string" }, { type: "null" }],
           description:
-            "Frontmatter fields to merge: status and/or depends_on (any other key fails in the CLI).",
-        },
-        body: {
-          type: "string",
-          description: "Full replacement text for the body (the H1 title stays).",
+            "Ticket this one waits on (string, same project; unique prefixes are fine), or null to clear.",
         },
         project: { type: "string", description: PROJECT_DESCRIPTION },
       },
@@ -290,10 +300,33 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         ],
         presentationMeta: (_args, value) => value,
       },
-      execute: (args, exec) => {
-        assertUpdatable(args);
-        return run(buildUpdateArgs(args), exec);
+      execute: (args, exec) => run(buildSetArgs(args), exec),
+    }),
+    defineTool({
+      name: "ticket_edit",
+      description: EDIT_DESCRIPTION,
+      parameters: {
+        selector: { type: "string", description: SELECTOR_DESCRIPTION },
+        old: {
+          type: "string",
+          required: true,
+          description: "Text to replace; it must appear exactly once in the body.",
+        },
+        new: {
+          type: "string",
+          required: true,
+          description: "Replacement text; an empty string deletes the matched text.",
+        },
+        project: { type: "string", description: PROJECT_DESCRIPTION },
       },
+      output: {
+        schema: { type: "json" },
+        render: (_args, value) => [
+          { type: "text", text: formatTicketUpdated(asTicketJson<TicketFields>(value)) },
+        ],
+        presentationMeta: (_args, value) => value,
+      },
+      execute: (args, exec) => run(buildEditArgs(args), exec),
     }),
   ];
 }

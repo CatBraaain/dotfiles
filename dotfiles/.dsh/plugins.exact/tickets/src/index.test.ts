@@ -1,10 +1,10 @@
 // Tests for dotfiles-dsh-tickets. Cases follow the oracle spec
 // (dotfiles/.agents/cli/ticket-tools.spec.md): argument mapping, session cwd,
 // TicketCliError conversion, tool descriptions (wrapped CLI subcommand,
-// argument meanings, unique-prefix id resolution, ticket_update failure
-// modes), compiled parameter schemas, and result formatting through the
-// shared lib helpers (used as-is, never mocked). The CLI itself is never
-// spawned.
+// argument meanings, next-default selector, ticket_set / ticket_edit
+// pre-CLI validation), compiled parameter schemas, and result formatting
+// through the shared lib helpers (used as-is, never mocked). The CLI itself
+// is never spawned.
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import {
@@ -17,11 +17,11 @@ import {
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import {
   apply,
-  assertUpdatable,
   buildCreateArgs,
+  buildEditArgs,
   buildListArgs,
+  buildSetArgs,
   buildShowArgs,
-  buildUpdateArgs,
   createTicketTools,
   inject,
   name,
@@ -29,41 +29,41 @@ import {
   toToolError,
 } from "./index.ts";
 
-// CLI-shaped --json fixtures (ticket.spec.md `--json` のフィールド).
+// CLI-shaped --json fixtures (ticket.spec.md `--json` の共通フィールド).
 const LIST_JSON = [
   {
-    id: "20260918-010000_first",
+    id: "20260918-010000",
     status: "open",
     title: "First ticket",
-    depends_on: [],
-    path: "/home/x/.agents/tickets/demo/20260918-010000_first.md",
+    after: null,
+    path: "/home/x/.agents/tickets/demo/20260918-010000.md",
     project: "demo",
   },
   {
-    id: "20260918-020000_second",
+    id: "20260918-020000",
     status: "blocked",
     title: "Second ticket",
-    depends_on: ["20260918-010000_first"],
-    path: "/home/x/.agents/tickets/demo/20260918-020000_second.md",
+    after: "20260918-010000",
+    path: "/home/x/.agents/tickets/demo/20260918-020000.md",
     project: "demo",
   },
 ];
 
 const SHOW_JSON = {
-  id: "20260918-010000_first",
+  id: "20260918-010000",
   status: "open",
   title: "First ticket",
-  depends_on: [],
-  path: "/home/x/.agents/tickets/demo/20260918-010000_first.md",
+  after: null,
+  path: "/home/x/.agents/tickets/demo/20260918-010000.md",
   body: "Some body text.",
 };
 
 const CREATED_JSON = {
-  id: "20260918-030000_new",
-  status: "open",
+  id: "20260918-030000",
+  status: "blocked",
   title: "New ticket",
-  depends_on: [],
-  path: "/home/x/.agents/tickets/demo/20260918-030000_new.md",
+  after: "20260918-010000",
+  path: "/home/x/.agents/tickets/demo/20260918-030000.md",
 };
 
 // Minimal exec fixtures: session cwd comes from the agent's session header.
@@ -101,6 +101,7 @@ function descriptionOf(toolName: string): string {
 interface CompiledParameterNode {
   type?: string;
   items?: { type?: string };
+  oneOf?: Array<{ type?: string }>;
 }
 
 interface CompiledParameters {
@@ -137,9 +138,10 @@ describe("argument mapping", () => {
     ]);
   });
 
-  it("buildShowArgs: show <id> plus optional --project", () => {
-    assert.deepEqual(buildShowArgs({ id: "20260918" }), ["show", "20260918"]);
-    assert.deepEqual(buildShowArgs({ id: "20260918", project: "demo" }), [
+  it("buildShowArgs: show with an optional selector (omitted means next) and --project", () => {
+    assert.deepEqual(buildShowArgs({}), ["show"]);
+    assert.deepEqual(buildShowArgs({ selector: "20260918" }), ["show", "20260918"]);
+    assert.deepEqual(buildShowArgs({ selector: "20260918", project: "demo" }), [
       "show",
       "20260918",
       "--project",
@@ -147,45 +149,74 @@ describe("argument mapping", () => {
     ]);
   });
 
-  it("buildCreateArgs: create <title> plus status, depends_on, body, project", () => {
-    assert.deepEqual(buildCreateArgs({ title: "New ticket" }), ["create", "New ticket"]);
+  it("buildCreateArgs: create with a title-only JSON object", () => {
+    assert.deepEqual(buildCreateArgs({ title: "New ticket" }), [
+      "create",
+      '{"title":"New ticket"}',
+    ]);
+    assert.deepEqual(buildCreateArgs({ title: "T", body: "" }), [
+      "create",
+      '{"title":"T","body":""}',
+      // JSON.stringify keeps only present keys; absent optionals are omitted.
+    ]);
+  });
+
+  it("buildCreateArgs: serializes status, after, body, project in CLI order", () => {
     assert.deepEqual(
       buildCreateArgs({
         title: "New ticket",
         status: "blocked",
-        depends_on: ["a", "b"],
+        after: "20260918-010000",
         body: "Body text",
         project: "demo",
       }),
       [
         "create",
-        "New ticket",
-        "--status",
-        "blocked",
-        "--depends-on",
-        "a,b",
-        "--body",
-        "Body text",
+        JSON.stringify({
+          title: "New ticket",
+          status: "blocked",
+          after: "20260918-010000",
+          body: "Body text",
+        }),
         "--project",
         "demo",
       ],
     );
-    assert.deepEqual(buildCreateArgs({ title: "T", depends_on: [] }), ["create", "T"]);
-    assert.deepEqual(buildCreateArgs({ title: "T", body: "" }), ["create", "T", "--body", ""]);
   });
 
-  it("buildUpdateArgs: update <id> plus --metadata JSON, --body, --project", () => {
-    assert.deepEqual(buildUpdateArgs({ id: "x", metadata: { status: "closed" } }), [
-      "update",
+  it("buildSetArgs: set with a status-only JSON object and no selector (next)", () => {
+    assert.deepEqual(buildSetArgs({ status: "closed" }), ["set", '{"status":"closed"}']);
+  });
+
+  it("buildSetArgs: serializes selector, after null, and project in CLI order", () => {
+    assert.deepEqual(buildSetArgs({ selector: "x", after: null, project: "demo" }), [
+      "set",
       "x",
-      "--metadata",
-      '{"status":"closed"}',
+      '{"after":null}',
+      "--project",
+      "demo",
     ]);
-    assert.deepEqual(
-      buildUpdateArgs({ id: "x", metadata: { depends_on: ["a"] }, body: "B", project: "demo" }),
-      ["update", "x", "--metadata", '{"depends_on":["a"]}', "--body", "B", "--project", "demo"],
-    );
-    assert.deepEqual(buildUpdateArgs({ id: "x", body: "B" }), ["update", "x", "--body", "B"]);
+  });
+
+  it("buildSetArgs: throws without a CLI run when status and after are both absent", () => {
+    assert.throws(() => buildSetArgs({ selector: "x" }), /nothing to set/);
+  });
+
+  it("buildEditArgs: edit with an optional selector, old, new, and project", () => {
+    assert.deepEqual(buildEditArgs({ old: "a", new: "b" }), ["edit", "a", "b"]);
+    assert.deepEqual(buildEditArgs({ selector: "x", old: "a", new: "b", project: "demo" }), [
+      "edit",
+      "x",
+      "a",
+      "b",
+      "--project",
+      "demo",
+    ]);
+    assert.deepEqual(buildEditArgs({ selector: "x", old: "a", new: "" }), ["edit", "x", "a", ""]);
+  });
+
+  it("buildEditArgs: throws without a CLI run when old is empty", () => {
+    assert.throws(() => buildEditArgs({ old: "", new: "b" }), /old must be a non-empty string/);
   });
 });
 
@@ -217,22 +248,16 @@ describe("execution helpers", () => {
     const original = new Error("unrelated");
     assert.equal(toToolError(original), original);
   });
-
-  it("assertUpdatable: rejects metadata- and body-less updates", () => {
-    assert.throws(() => assertUpdatable({ id: "x" }), /nothing to update/);
-    assert.doesNotThrow(() => assertUpdatable({ id: "x", metadata: {} }));
-    assert.doesNotThrow(() => assertUpdatable({ id: "x", body: "B" }));
-  });
 });
 
 // --- execute: runner wiring, cwd, signal, error conversion ---
 
 describe("tool execution", () => {
-  it("registers the four ticket tools", () => {
+  it("registers the five ticket tools", () => {
     const tools = createTicketTools();
     assert.deepEqual(
       tools.map((definition) => definition.name),
-      ["ticket_list", "ticket_show", "ticket_create", "ticket_update"],
+      ["ticket_list", "ticket_show", "ticket_create", "ticket_set", "ticket_edit"],
     );
   });
 
@@ -252,7 +277,7 @@ describe("tool execution", () => {
     const tool = toolByName(createTicketTools({ runCli }), "ticket_create");
     const exec = fakeExec(undefined);
     await tool.execute({ title: "T" }, exec);
-    assert.deepEqual(calls, [[["create", "T"], process.cwd(), exec.signal]]);
+    assert.deepEqual(calls, [[["create", '{"title":"T"}'], process.cwd(), exec.signal]]);
   });
 
   it("execute converts TicketCliError into a tool failure with the CLI stderr", async () => {
@@ -260,28 +285,31 @@ describe("tool execution", () => {
       throw new TicketCliError("no such ticket", "exited 1");
     };
     const tool = toolByName(createTicketTools({ runCli }), "ticket_show");
-    await assert.rejects(tool.execute({ id: "missing" }, fakeExec("/w")), /no such ticket/);
+    await assert.rejects(tool.execute({ selector: "missing" }, fakeExec("/w")), /no such ticket/);
   });
 
-  it("ticket_update rejects before spawning the CLI when nothing to update", async () => {
+  it("ticket_set rejects before spawning the CLI when nothing to set", async () => {
     const { runCli, calls } = fakeRunner();
-    const tool = toolByName(createTicketTools({ runCli }), "ticket_update");
-    await assert.rejects(tool.execute({ id: "x" }, fakeExec("/w")), /nothing to update/);
+    const tool = toolByName(createTicketTools({ runCli }), "ticket_set");
+    await assert.rejects(
+      () => Promise.resolve(tool.execute({ selector: "x" }, fakeExec("/w"))),
+      /nothing to set/,
+    );
     assert.equal(calls.length, 0);
   });
 
-  it("ticket_update maps metadata and body to the CLI args", async () => {
+  it("ticket_set maps selector, status, and after to the CLI JSON argument", async () => {
     const { runCli, calls } = fakeRunner(CREATED_JSON);
-    const tool = toolByName(createTicketTools({ runCli }), "ticket_update");
-    await tool.execute({ id: "x", metadata: { status: "closed" }, body: "B" }, fakeExec("/w"));
-    assert.deepEqual(calls[0]?.[0], [
-      "update",
-      "x",
-      "--metadata",
-      '{"status":"closed"}',
-      "--body",
-      "B",
-    ]);
+    const tool = toolByName(createTicketTools({ runCli }), "ticket_set");
+    await tool.execute({ selector: "x", status: "open", after: null }, fakeExec("/w"));
+    assert.deepEqual(calls[0]?.[0], ["set", "x", '{"status":"open","after":null}']);
+  });
+
+  it("ticket_edit maps selector, old, and new to the CLI args", async () => {
+    const { runCli, calls } = fakeRunner(CREATED_JSON);
+    const tool = toolByName(createTicketTools({ runCli }), "ticket_edit");
+    await tool.execute({ selector: "x", old: "a", new: "b" }, fakeExec("/w"));
+    assert.deepEqual(calls[0]?.[0], ["edit", "x", "a", "b"]);
   });
 });
 
@@ -292,7 +320,8 @@ describe("tool descriptions", () => {
     assert.match(descriptionOf("ticket_list"), /ticket list/);
     assert.match(descriptionOf("ticket_show"), /ticket show/);
     assert.match(descriptionOf("ticket_create"), /ticket create/);
-    assert.match(descriptionOf("ticket_update"), /ticket update/);
+    assert.match(descriptionOf("ticket_set"), /ticket set/);
+    assert.match(descriptionOf("ticket_edit"), /ticket edit/);
   });
 
   it("explains each tool's arguments", () => {
@@ -301,36 +330,49 @@ describe("tool descriptions", () => {
     assert.match(list, /project/);
     assert.match(list, /all/);
 
-    assert.match(descriptionOf("ticket_show"), /\bid\b/);
+    assert.match(descriptionOf("ticket_show"), /selector/);
 
     const create = descriptionOf("ticket_create");
     assert.match(create, /title/);
     assert.match(create, /body/);
     assert.match(create, /status/);
-    assert.match(create, /depends_on/);
+    assert.match(create, /after/);
     assert.match(create, /project/);
 
-    const update = descriptionOf("ticket_update");
-    assert.match(update, /metadata/);
-    assert.match(update, /body/);
-    assert.match(update, /\bid\b/);
+    const set = descriptionOf("ticket_set");
+    assert.match(set, /status/);
+    assert.match(set, /after/);
+    assert.match(set, /selector/);
+
+    const edit = descriptionOf("ticket_edit");
+    assert.match(edit, /\bold\b/);
+    assert.match(edit, /\bnew\b/);
   });
 
-  it("mentions unique-prefix id resolution for the tools that take an id", () => {
-    // ticket_list takes no id argument, so the prefix requirement is out of
-    // its scope (the descriptions cover the id arguments each tool has).
-    assert.match(descriptionOf("ticket_show"), /prefix/i);
-    assert.match(descriptionOf("ticket_create"), /prefix/i);
-    assert.match(descriptionOf("ticket_update"), /prefix/i);
+  it("mentions the next-default selector for the selector-taking tools", () => {
+    // "ID / unique prefix / next" (SPEC: common selector wording)
+    for (const description of [
+      descriptionOf("ticket_show"),
+      descriptionOf("ticket_set"),
+      descriptionOf("ticket_edit"),
+    ]) {
+      assert.match(description, /next/);
+      assert.match(description, /prefix/i);
+    }
   });
 
-  it("flags ticket_update failures: locked exclusivity and open dependency resolution", () => {
-    const description = descriptionOf("ticket_update");
-    assert.match(description, /fail/i);
-    assert.match(description, /locked/);
-    assert.match(description, /re-lock/);
-    assert.match(description, /open/);
-    assert.match(description, /depends_on/);
+  it("keeps every tool description single-line (SPEC: 1-line summary via description)", () => {
+    for (const tool of createTicketTools()) {
+      assert.ok(!tool.description.includes("\n"), `${tool.name} description is single-line`);
+    }
+  });
+
+  it("flags ticket_set behavior: linkage, closed release, and validation failures", () => {
+    const description = descriptionOf("ticket_set");
+    assert.match(description, /blocks/);
+    assert.match(description, /reopens|release/);
+    assert.match(description, /closed/);
+    assert.match(description, /cyc/);
   });
 });
 
@@ -346,41 +388,56 @@ describe("parameter schemas", () => {
     assert.equal(Object.hasOwn(schema, "required"), false);
   });
 
-  it("ticket_show declares a required string id and an optional project", () => {
+  it("ticket_show declares optional selector and project", () => {
     const schema = parametersOf("ticket_show");
-    assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), ["id", "project"]);
-    assert.deepEqual(schema.required, ["id"]);
-    assert.equal(schema.properties?.id?.type, "string");
+    assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), ["project", "selector"]);
+    assert.equal(Object.hasOwn(schema, "required"), false);
+    assert.equal(schema.properties?.selector?.type, "string");
     assert.equal(schema.properties?.project?.type, "string");
   });
 
-  it("ticket_create declares a required title and optional body, status, depends_on, project", () => {
+  it("ticket_create declares a required title and optional body, status, after, project", () => {
     const schema = parametersOf("ticket_create");
     assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), [
+      "after",
       "body",
-      "depends_on",
       "project",
       "status",
       "title",
     ]);
     assert.deepEqual(schema.required, ["title"]);
     assert.equal(schema.properties?.title?.type, "string");
-    assert.equal(schema.properties?.depends_on?.type, "array");
-    assert.equal(schema.properties?.depends_on?.items?.type, "string");
+    assert.equal(schema.properties?.after?.type, "string");
+    assert.equal(schema.properties?.body?.type, "string");
   });
 
-  it("ticket_update declares a required id and optional metadata, body, project", () => {
-    const schema = parametersOf("ticket_update");
+  it("ticket_set declares optional selector, status, after (string or null), project", () => {
+    const schema = parametersOf("ticket_set");
     assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), [
-      "body",
-      "id",
-      "metadata",
+      "after",
       "project",
+      "selector",
+      "status",
     ]);
-    assert.deepEqual(schema.required, ["id"]);
-    assert.equal(schema.properties?.id?.type, "string");
-    assert.equal(schema.properties?.metadata?.type, "object");
-    assert.equal(schema.properties?.body?.type, "string");
+    assert.equal(Object.hasOwn(schema, "required"), false);
+    assert.deepEqual(schema.properties?.after?.oneOf?.map((variant) => variant.type), [
+      "string",
+      "null",
+    ]);
+    assert.equal(schema.properties?.status?.type, "string");
+  });
+
+  it("ticket_edit declares required old and new, and optional selector and project", () => {
+    const schema = parametersOf("ticket_edit");
+    assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), [
+      "new",
+      "old",
+      "project",
+      "selector",
+    ]);
+    assert.deepEqual(schema.required, ["old", "new"]);
+    assert.equal(schema.properties?.old?.type, "string");
+    assert.equal(schema.properties?.new?.type, "string");
   });
 });
 
@@ -403,19 +460,63 @@ describe("result rendering", () => {
 
   it("ticket_show renders through formatTicketShow", () => {
     const tool = toolByName(createTicketTools(), "ticket_show");
-    assert.deepEqual(tool.output.render({ id: "x" }, SHOW_JSON), [
+    assert.deepEqual(tool.output.render({ selector: "x" }, SHOW_JSON), [
       { type: "text", text: formatTicketShow(SHOW_JSON) },
     ]);
   });
 
-  it("ticket_create and ticket_update render through their formatters", () => {
-    const created = toolByName(createTicketTools(), "ticket_create");
-    const updated = toolByName(createTicketTools(), "ticket_update");
-    assert.deepEqual(created.output.render({ title: "T" }, CREATED_JSON), [
+  it("ticket_create renders through formatTicketCreated", () => {
+    const tool = toolByName(createTicketTools(), "ticket_create");
+    assert.deepEqual(tool.output.render({ title: "T" }, CREATED_JSON), [
       { type: "text", text: formatTicketCreated(CREATED_JSON) },
     ]);
-    assert.deepEqual(updated.output.render({ id: "x" }, CREATED_JSON), [
+  });
+
+  it("ticket_set and ticket_edit render through formatTicketUpdated", () => {
+    const set = toolByName(createTicketTools(), "ticket_set");
+    const edit = toolByName(createTicketTools(), "ticket_edit");
+    assert.deepEqual(set.output.render({ status: "closed" }, CREATED_JSON), [
       { type: "text", text: formatTicketUpdated(CREATED_JSON) },
+    ]);
+    assert.deepEqual(edit.output.render({ old: "a", new: "b" }, CREATED_JSON), [
+      { type: "text", text: formatTicketUpdated(CREATED_JSON) },
+    ]);
+  });
+
+  it("pins the spec-required text for list, show, create, set, and edit (not self-referential)", () => {
+    assert.deepEqual(
+      toolByName(createTicketTools(), "ticket_list").output.render({ all: true }, LIST_JSON),
+      [
+        {
+          type: "text",
+          text:
+            "demo\t20260918-010000\topen\tFirst ticket\ndemo\t20260918-020000\tblocked\tSecond ticket",
+        },
+      ],
+    );
+    assert.deepEqual(toolByName(createTicketTools(), "ticket_show").output.render({ selector: "x" }, SHOW_JSON), [
+      {
+        type: "text",
+        text: "20260918-010000\nstatus: open\nafter: -\n\n# First ticket\n\nSome body text.",
+      },
+    ]);
+    assert.deepEqual(toolByName(createTicketTools(), "ticket_create").output.render({ title: "T" }, CREATED_JSON), [
+      {
+        type: "text",
+        text: "created 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
+      },
+    ]);
+    assert.deepEqual(toolByName(createTicketTools(), "ticket_set").output.render({ status: "closed" }, CREATED_JSON), [
+      {
+        type: "text",
+        text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
+      },
+    ]);
+    assert.deepEqual(toolByName(createTicketTools(), "ticket_edit").output.render({ old: "a", new: "b" }, CREATED_JSON), [
+      {
+        type: "text",
+        text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
+      },
     ]);
   });
 
@@ -435,12 +536,18 @@ describe("plugin entry", () => {
     assert.deepEqual(inject, ["tools"]);
   });
 
-  it("apply registers the four tools on the tool registry", () => {
+  it("apply registers the five tools on the tool registry", () => {
     const registered: string[] = [];
     const ctx = {
       tools: { register: (definition: { name: string }) => void registered.push(definition.name) },
     };
     apply(ctx as unknown as Parameters<typeof apply>[0]);
-    assert.deepEqual(registered, ["ticket_list", "ticket_show", "ticket_create", "ticket_update"]);
+    assert.deepEqual(registered, [
+      "ticket_list",
+      "ticket_show",
+      "ticket_create",
+      "ticket_set",
+      "ticket_edit",
+    ]);
   });
 });

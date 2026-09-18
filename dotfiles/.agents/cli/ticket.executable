@@ -10,29 +10,25 @@ import { basename, join, relative } from "node:path";
 const STATUSES = ["draft", "open", "blocked", "locked", "closed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
-const USAGE = `usage: ticket list [--status <s>[,<s>...]] [--project <p>] [--all] [--json]
-       ticket show <id> [--project <p>] [--json]
-       ticket status <id> <status> [--project <p>]
-       ticket create <title> [--status <s>] [--depends-on <id>[,<id>...]] [--body <text>] [--project <p>] [--json]
-       ticket update <id> [--metadata <json>] [--body <text>] [--project <p>] [--json]
-       ticket check [--project <p>] [--all] [--json]`;
+const USAGE = `usage: ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]
+       ticket show [<selector>] [-p <project>] [--json]
+       ticket create <json> [-p <project>] [--json]
+       ticket set [<selector>] <json> [-p <project>] [--json]
+       ticket edit [<selector>] <old> <new> [-p <project>] [--json]
+       ticket check [-p <project>] [-a] [--json]`;
 
 interface Flags {
   project?: string;
   all: boolean;
   json: boolean;
   statuses: string[];
-  status?: string;
-  dependsOn?: string[];
-  body?: string;
-  metadata?: string;
 }
 
 interface Ticket {
   id: string;
   status: string;
+  after: string | null;
   title: string;
-  dependsOn: string[];
   path: string;
   project: string;
   body: string;
@@ -40,23 +36,18 @@ interface Ticket {
 
 interface Issue {
   file: string;
-  kind: string;
+  kind: "invalid-frontmatter" | "invalid-status" | "missing-after" | "after-cycle";
   detail: string;
 }
 
-type CommonFields = Pick<Ticket, "id" | "status" | "title" | "dependsOn" | "path" | "project">;
+type FrontmatterPatch = { status?: Status; after?: string | null };
 
-type FrontmatterPatch = { status?: Status; dependsOn?: string[] };
-
-// timestamp part of an ID, e.g. "20260917-180315"
-const ID_TIMESTAMP_LENGTH = "YYYYMMDD-HHMMSS".length;
-
-const ALLOWED_FLAGS: Record<string, { all?: boolean; statuses?: boolean; status?: boolean; dependsOn?: boolean; body?: boolean; metadata?: boolean; json?: boolean }> = {
+const ALLOWED_FLAGS: Record<string, { all?: boolean; statuses?: boolean; json?: boolean }> = {
   list: { all: true, statuses: true, json: true },
   show: { json: true },
-  status: {},
-  create: { status: true, dependsOn: true, body: true, json: true },
-  update: { metadata: true, body: true, json: true },
+  create: { json: true },
+  set: { json: true },
+  edit: { json: true },
   check: { all: true, json: true },
 };
 
@@ -67,63 +58,77 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+function usageFail(): never {
+  console.error(USAGE);
+  process.exit(2);
+}
+
 function output(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
 function parseArgs(argv: string[], command: string): { flags: Flags; positional: string[] } {
-  if (!(command in ALLOWED_FLAGS)) fail(USAGE);
-  const allowed = ALLOWED_FLAGS[command]!;
+  const allowed = ALLOWED_FLAGS[command];
+  if (!allowed) usageFail();
   const flags: Flags = { all: false, json: false, statuses: [] };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
-    const value = () => argv[++i] ?? fail(`${arg} requires a value`);
-    if (arg === "--json" && allowed.json) flags.json = true;
-    else if (arg === "--project") flags.project = value();
-    else if (arg === "--all" && allowed.all) flags.all = true;
-    else if (arg === "--status" && allowed.statuses) flags.statuses = value().split(",");
-    else if (arg === "--status" && allowed.status) flags.status = value();
-    else if (arg === "--depends-on" && allowed.dependsOn) flags.dependsOn = value().split(",");
-    else if (arg === "--body" && allowed.body) flags.body = value();
-    else if (arg === "--metadata" && allowed.metadata) flags.metadata = value();
-    else if (arg.startsWith("--")) fail(`unknown flag for "${command}": ${arg}`);
+    const value = () => argv[++i] ?? usageFail();
+    if (arg === "-p" || arg === "--project") flags.project = value();
+    else if (arg === "-a" || arg === "--all") {
+      if (!allowed.all) usageFail();
+      flags.all = true;
+    } else if (arg === "-s" || arg === "--status") {
+      if (!allowed.statuses) usageFail();
+      flags.statuses = value().split(",");
+    } else if (arg === "--json") {
+      if (!allowed.json) usageFail();
+      flags.json = true;
+    } else if (arg.startsWith("-")) usageFail();
     else positional.push(arg);
   }
   return { flags, positional };
 }
 
-function parseFrontmatter(content: string): { fields: Map<string, string | string[]>; body: string } {
-  if (!content.startsWith("---\n")) return { fields: new Map(), body: content };
-  const closing = content.indexOf("\n---\n", 4);
-  if (closing < 0) return { fields: new Map(), body: content };
-  const fields = new Map<string, string | string[]>();
-  let key = "";
-  for (const line of content.slice(4, closing).split("\n")) {
-    const item = line.match(/^  - (.+)$/);
-    if (key && item) {
-      const list = fields.get(key);
-      if (Array.isArray(list)) list.push(item[1].trim());
-      continue;
-    }
-    const pair = line.match(/^([A-Za-z_-]+):\s*(.*)$/);
-    if (pair) {
-      key = pair[1]!;
-      fields.set(key, pair[2] === "" ? [] : pair[2].trim());
-    } else {
-      key = "";
-    }
+function validateStatus(status: string): Status {
+  if (!(STATUSES as readonly string[]).includes(status)) {
+    fail(`invalid status "${status}" (one of: ${STATUSES.join(", ")})`);
   }
-  return { fields, body: content.slice(closing + 5) };
+  return status as Status;
 }
 
-async function loadTickets(project: string): Promise<Ticket[]> {
+// Returns the error detail when frontmatter is missing, unclosed, or has no status field.
+function frontmatterIssue(content: string): string | null {
+  if (!content.startsWith("---\n")) return "no frontmatter";
+  const closing = content.indexOf("\n---\n", 4);
+  if (closing < 0) return "unclosed frontmatter";
+  if (!/^status:.*$/m.test(content.slice(4, closing))) return "no status field";
+  return null;
+}
+
+// Splits a well-formed file (frontmatterIssue(content) must return null first).
+// `rest` starts with the closing "\n---\n".
+function splitFrontmatter(content: string): { frontmatter: string; fields: Map<string, string>; rest: string } {
+  const closing = content.indexOf("\n---\n", 4);
+  const frontmatter = content.slice(0, closing);
+  const fields = new Map<string, string>();
+  for (const line of frontmatter.slice(4).split("\n")) {
+    const pair = line.match(/^([A-Za-z_-]+):\s*(.*)$/);
+    if (pair) fields.set(pair[1]!, pair[2]!.trim());
+  }
+  return { frontmatter, fields, rest: content.slice(closing) };
+}
+
+// Without `collect`, broken files fail the load (exit 1); with it, check collects
+// issues for them and skips the files instead.
+async function loadTickets(project: string, collect?: Issue[]): Promise<Ticket[]> {
   const dir = join(storeRoot(), project);
   let ids: string[];
   try {
     ids = (await readdir(dir))
-      .map((name) => (name.endsWith(".md") ? name.slice(0, -3) : null))
-      .filter((id): id is string => id !== null)
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => name.slice(0, -3))
       .sort();
   } catch {
     fail(`project not found: ${dir}`);
@@ -131,13 +136,32 @@ async function loadTickets(project: string): Promise<Ticket[]> {
   const tickets: Ticket[] = [];
   for (const id of ids!) {
     const path = join(dir, `${id}.md`);
-    const { fields, body } = parseFrontmatter(await readFile(path, "utf8"));
-    const deps = fields.get("depends_on");
+    const file = relative(storeRoot(), path);
+    const content = await readFile(path, "utf8");
+    const broken = frontmatterIssue(content);
+    if (broken) {
+      if (collect) {
+        collect.push({ file, kind: "invalid-frontmatter", detail: broken });
+        continue;
+      }
+      fail(`${file}: ${broken}`);
+    }
+    const { fields, rest } = splitFrontmatter(content);
+    const status = fields.get("status") ?? "";
+    if (!(STATUSES as readonly string[]).includes(status)) {
+      const detail = `status "${status}" is not one of ${STATUSES.join(", ")}`;
+      if (collect) {
+        collect.push({ file, kind: "invalid-status", detail });
+        continue;
+      }
+      fail(`${file}: ${detail}`);
+    }
+    const body = rest.slice("\n---\n".length);
     tickets.push({
       id,
-      status: String(fields.get("status") ?? ""),
+      status,
+      after: fields.get("after") || null,
       title: body.match(/^# (.+)$/m)?.[1]?.trim() ?? id,
-      dependsOn: Array.isArray(deps) ? deps : deps ? [String(deps)] : [],
       path,
       project,
       body,
@@ -155,64 +179,36 @@ async function allProjects(): Promise<string[]> {
   }
 }
 
-function resolveId(tickets: Ticket[], id: string): Ticket {
-  const exact = tickets.find((ticket) => ticket.id === id);
+function isActionable(ticket: Ticket, byId: Map<string, Ticket>): boolean {
+  if (ticket.status !== "open") return false;
+  if (ticket.after === null) return true;
+  return byId.get(ticket.after)?.status === "closed";
+}
+
+function resolveSelector(tickets: Ticket[], selector: string | undefined): Ticket {
+  if (selector === "") usageFail();
+  if (selector === undefined || selector === "next") {
+    const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+    const first = tickets.find((ticket) => isActionable(ticket, byId));
+    if (!first) fail("no actionable ticket");
+    return first;
+  }
+  const exact = tickets.find((ticket) => ticket.id === selector);
   if (exact) return exact;
-  const matches = tickets.filter((ticket) => ticket.id.startsWith(id));
+  const matches = tickets.filter((ticket) => ticket.id.startsWith(selector));
   if (matches.length === 1) return matches[0]!;
   if (matches.length > 1) {
-    fail(`ambiguous id "${id}":\n${matches.map((ticket) => `  ${ticket.id}`).join("\n")}`);
+    fail(`ambiguous id "${selector}":\n${matches.map((ticket) => `  ${ticket.id}`).join("\n")}`);
   }
-  fail(`ticket not found: ${id}`);
+  fail(`ticket not found: ${selector}`);
 }
 
-function validateStatus(status: string): Status {
-  if (!STATUSES.includes(status as Status)) fail(`invalid status "${status}" (one of: ${STATUSES.join(", ")})`);
-  return status as Status;
-}
-
-// Splits validated frontmatter from the rest; the caller must handle the errors first.
-function splitFrontmatter(content: string, path: string): { frontmatter: string; rest: string } {
-  if (!content.startsWith("---\n")) fail(`no frontmatter: ${path}`);
-  const closing = content.indexOf("\n---\n", 4);
-  if (closing < 0) fail(`unclosed frontmatter: ${path}`);
-  const frontmatter = content.slice(0, closing);
-  if (!/^status:.*$/m.test(frontmatter)) fail(`no status field: ${path}`);
-  return { frontmatter, rest: content.slice(closing) };
-}
-
-function mergeFrontmatter(frontmatter: string, patch: FrontmatterPatch): string {
-  const lines = frontmatter.split("\n");
-  const statusIndex = lines.findIndex((line) => line.startsWith("status:"));
-  if (patch.status !== undefined) lines[statusIndex] = `status: ${patch.status}`;
-  if (patch.dependsOn !== undefined) {
-    const rendered = ["depends_on:", ...patch.dependsOn.map((dep) => `  - ${dep}`)];
-    const depIndex = lines.findIndex((line) => line.startsWith("depends_on:"));
-    if (depIndex < 0) {
-      lines.splice(statusIndex + 1, 0, ...rendered);
-    } else {
-      let listEnd = depIndex + 1;
-      while (listEnd < lines.length && lines[listEnd]!.startsWith("  - ")) listEnd++;
-      lines.splice(depIndex, listEnd - depIndex, ...rendered);
-    }
-  }
-  return lines.join("\n");
-}
-
-// rest starts with "\n---\n"; replaces everything after the H1 heading, keeping it.
-function replaceBody(rest: string, body: string): string {
-  const content = rest.slice("\n---\n".length);
-  const h1 = content.match(/^# (.+)$/m);
-  const updated = h1 ? `# ${h1[1]!.trim()}\n\n${body}` : body;
-  return `\n---\n${updated.trimEnd()}\n`;
-}
-
-function ticketJson(ticket: CommonFields, withProject: boolean): Record<string, unknown> {
+function ticketJson(ticket: Ticket, withProject: boolean): Record<string, unknown> {
   const json: Record<string, unknown> = {
     id: ticket.id,
     status: ticket.status,
+    after: ticket.after,
     title: ticket.title,
-    depends_on: ticket.dependsOn,
     path: ticket.path,
   };
   if (withProject) json.project = ticket.project;
@@ -246,19 +242,63 @@ function timestamp(date: Date): string {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
-function toSlug(title: string): string {
-  return title
-    .replace(/[^a-zA-Z0-9-\P{ASCII}]/gu, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
+function parseJsonObject(raw: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    usageFail();
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) usageFail();
+  return parsed as Record<string, unknown>;
+}
+
+// Overwrites status/after lines in place; `after: null` removes the line.
+// splitFrontmatter(content) must have validated the status line exists.
+function mergeFrontmatter(frontmatter: string, patch: FrontmatterPatch): string {
+  const lines = frontmatter.split("\n");
+  const statusIndex = lines.findIndex((line) => line.startsWith("status:"));
+  if (patch.status !== undefined) lines[statusIndex] = `status: ${patch.status}`;
+  if (patch.after !== undefined) {
+    const afterIndex = lines.findIndex((line) => line.startsWith("after:"));
+    if (patch.after === null) {
+      if (afterIndex >= 0) lines.splice(afterIndex, 1);
+    } else if (afterIndex >= 0) {
+      lines.splice(afterIndex, 1, `after: ${patch.after}`);
+    } else {
+      lines.splice(statusIndex + 1, 0, `after: ${patch.after}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// Walks the after chain from `after`; a loop back to `targetId` is a cycle.
+function createsCycle(targetId: string, after: string, byId: Map<string, Ticket>): boolean {
+  let current: string | null = after;
+  for (let steps = 0; current !== null && steps <= byId.size; steps++) {
+    if (current === targetId) return true;
+    current = byId.get(current)?.after ?? null;
+  }
+  return false;
+}
+
+// Status to write: the explicit value wins; otherwise linkage only runs when
+// after is touched — setting an unresolved after blocks, releasing one from
+// blocked reopens, and releasing from a non-blocked status keeps it.
+function linkedStatus(target: Ticket, patch: FrontmatterPatch): Status {
+  if (patch.status !== undefined) return patch.status;
+  if (patch.after === undefined) return target.status as Status;
+  if (patch.after !== null) return "blocked";
+  return target.status === "blocked" ? "open" : target.status as Status;
 }
 
 async function listCommand(flags: Flags): Promise<void> {
+  for (const status of flags.statuses) validateStatus(status);
   const projects = flags.all ? await allProjects() : [resolveProject(flags)];
   const tickets = (await Promise.all(projects.map((project) => loadTickets(project)))).flat();
   const filtered = flags.statuses.length > 0
     ? tickets.filter((ticket) => flags.statuses.includes(ticket.status))
-    : tickets;
+    : tickets.filter((ticket) => ticket.status === "open");
   if (flags.json) return output(filtered.map((ticket) => ticketJson(ticket, flags.all)));
   for (const ticket of filtered) {
     const project = flags.all ? `${ticket.project}\t` : "";
@@ -267,121 +307,153 @@ async function listCommand(flags: Flags): Promise<void> {
 }
 
 async function showCommand(positional: string[], flags: Flags): Promise<void> {
-  const id = positional[0] ?? fail(USAGE);
-  const ticket = resolveId(await loadTickets(resolveProject(flags)), id);
+  if (positional.length > 1) usageFail();
+  const ticket = resolveSelector(await loadTickets(resolveProject(flags)), positional[0]);
   if (flags.json) return output({ ...ticketJson(ticket, false), body: ticket.body });
-  console.log(`${ticket.id}\nstatus: ${ticket.status}`);
-  console.log("depends_on:");
-  for (const dep of ticket.dependsOn) console.log(`  - ${dep}`);
-  console.log(`\n# ${ticket.title}\n\n${ticket.body.trimEnd()}`);
+  console.log(`${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\n`);
+  console.log(ticket.body.trimEnd());
 }
 
-async function statusCommand(positional: string[], flags: Flags): Promise<void> {
-  const [id, status] = positional;
-  if (!id || !status) fail(USAGE);
-  const target = validateStatus(status);
-  const ticket = resolveId(await loadTickets(resolveProject(flags)), id);
-  const { frontmatter, rest } = splitFrontmatter(await readFile(ticket.path, "utf8"), ticket.path);
-  await writeFile(ticket.path, mergeFrontmatter(frontmatter, { status: target }) + rest);
-  console.log(target);
+interface CreateInput {
+  title: string;
+  status?: Status;
+  after?: string | null;
+  body?: string;
 }
 
+function parseCreateInput(raw: string | undefined): CreateInput {
+  if (raw === undefined) usageFail();
+  const parsed = parseJsonObject(raw);
+  if (typeof parsed.title !== "string") usageFail();
+  const input: CreateInput = { title: parsed.title };
+  if (parsed.status !== undefined) {
+    if (typeof parsed.status !== "string") usageFail();
+    input.status = validateStatus(parsed.status);
+  }
+  if (parsed.after !== undefined) {
+    if (parsed.after !== null && typeof parsed.after !== "string") usageFail();
+    input.after = parsed.after;
+  }
+  if (parsed.body !== undefined) {
+    if (typeof parsed.body !== "string") usageFail();
+    input.body = parsed.body;
+  }
+  return input;
+}
+
+// after targets: allowed after statuses are draft/open/locked/blocked, which are
+// all unresolved; closed/cancelled are rejected.
 async function createCommand(positional: string[], flags: Flags): Promise<void> {
-  const title = positional[0] ?? fail(USAGE);
-  const slug = toSlug(title);
-  if (!slug) fail(`cannot create slug from title: ${title}`);
-  const status = flags.status !== undefined ? validateStatus(flags.status) : "open";
+  if (positional.length !== 1) usageFail();
+  const input = parseCreateInput(positional[0]);
   const project = resolveProject(flags);
   const tickets = await loadTickets(project);
-  const dependsOn = flags.dependsOn ?? [];
   const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
-  const missing = dependsOn.filter((dep) => !byId.has(dep));
-  if (missing.length > 0) fail(`depends_on references missing ticket(s): ${missing.join(", ")}`);
-  if (status === "open") {
-    const unresolved = dependsOn.filter((dep) => byId.get(dep)?.status !== "closed");
-    if (unresolved.length > 0) {
-      const detail = unresolved.map((dep) => `${dep} (${byId.get(dep)?.status ?? "missing"})`).join(", ");
-      fail(`cannot create an open ticket: depends_on has unclosed ticket(s): ${detail}`);
-    }
+  let after: string | null = null;
+  if (input.after !== undefined && input.after !== null) {
+    const target = byId.get(input.after);
+    if (!target) fail(`after references missing ticket: ${input.after}`);
+    if (target.status === "closed") fail(`after references closed ticket: ${input.after}`);
+    if (target.status === "cancelled") fail(`after references cancelled ticket: ${input.after}`);
+    after = input.after;
   }
-  const takenTimestamps = new Set(tickets.map((ticket) => ticket.id.slice(0, ID_TIMESTAMP_LENGTH)));
+  const status: Status = input.status ?? (after !== null ? "blocked" : "open");
+  const taken = new Set(tickets.map((ticket) => ticket.id));
   let date = new Date();
-  while (takenTimestamps.has(timestamp(date))) date = new Date(date.getTime() + 1000);
-  const id = `${timestamp(date)}_${slug}`;
+  while (taken.has(timestamp(date))) date = new Date(date.getTime() + 1000);
+  const id = timestamp(date);
   const path = join(storeRoot(), project, `${id}.md`);
-  const frontmatter = [
-    "---",
-    `status: ${status}`,
-    ...(dependsOn.length > 0 ? ["depends_on:", ...dependsOn.map((dep) => `  - ${dep}`)] : []),
-    "---",
-  ].join("\n");
-  const body = flags.body !== undefined ? `# ${title}\n\n${flags.body}\n` : `# ${title}\n`;
+  const frontmatter = ["---", `status: ${status}`, ...(after !== null ? [`after: ${after}`] : []), "---"].join("\n");
+  const body = input.body !== undefined ? `# ${input.title}\n\n${input.body}\n` : `# ${input.title}\n`;
   await writeFile(path, `${frontmatter}\n${body}`);
-  if (flags.json) return output(ticketJson({ id, status, title, dependsOn, path, project }, false));
+  const ticket: Ticket = { id, status, after, title: input.title, path, project, body };
+  if (flags.json) return output(ticketJson(ticket, false));
   console.log(id);
 }
 
-// --metadata keys map onto frontmatter; other keys are rejected.
-function parseMetadata(raw: string | undefined): FrontmatterPatch {
-  if (raw === undefined) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    fail("--metadata is not valid JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) fail("--metadata must be a JSON object");
+function parseSetInput(raw: string | undefined): FrontmatterPatch {
+  if (raw === undefined) usageFail();
+  const parsed = parseJsonObject(raw);
   const patch: FrontmatterPatch = {};
-  for (const [key, value] of Object.entries(parsed)) {
+  const keys = Object.keys(parsed);
+  if (keys.length === 0) usageFail();
+  for (const key of keys) {
     if (key === "status") {
-      if (typeof value !== "string") fail('metadata key "status" must be a string');
-      patch.status = validateStatus(value);
-    } else if (key === "depends_on") {
-      if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-        fail('metadata key "depends_on" must be an array of strings');
-      }
-      patch.dependsOn = value as string[];
+      if (typeof parsed.status !== "string") usageFail();
+      patch.status = validateStatus(parsed.status);
+    } else if (key === "after") {
+      if (parsed.after !== null && typeof parsed.after !== "string") usageFail();
+      patch.after = parsed.after;
     } else {
-      fail(`unknown metadata key: ${key}`);
+      usageFail();
     }
   }
   return patch;
 }
 
-async function updateCommand(positional: string[], flags: Flags): Promise<void> {
-  const id = positional[0] ?? fail(USAGE);
-  if (flags.metadata === undefined && flags.body === undefined) fail(USAGE);
+async function setCommand(positional: string[], flags: Flags): Promise<void> {
+  if (positional.length < 1 || positional.length > 2) usageFail();
+  const [selector, jsonArg] = positional.length === 1 ? [undefined, positional[0]!] : [positional[0]!, positional[1]!];
+  const patch = parseSetInput(jsonArg);
   const tickets = await loadTickets(resolveProject(flags));
-  const ticket = resolveId(tickets, id);
-  const patch = parseMetadata(flags.metadata);
-  if (patch.status === "locked" && ticket.status === "locked") fail(`ticket is already locked: ${ticket.id}`);
-  if (patch.dependsOn !== undefined) {
-    const known = new Set(tickets.map((t) => t.id));
-    const missing = patch.dependsOn.filter((dep) => !known.has(dep));
-    if (missing.length > 0) fail(`depends_on references missing ticket(s): ${missing.join(", ")}`);
-  }
-  // Consistency checks run only when status or depends_on is touched; a body-only update is free of them.
-  if (patch.status !== undefined || patch.dependsOn !== undefined) {
-    const nextStatus = patch.status ?? ticket.status;
-    const nextDeps = patch.dependsOn ?? ticket.dependsOn;
-    if (nextStatus === "open") {
-      const byId = new Map(tickets.map((t) => [t.id, t] as const));
-      const unresolved = nextDeps.filter((dep) => byId.get(dep)?.status !== "closed");
-      if (unresolved.length > 0) {
-        const detail = unresolved.map((dep) => `${dep} (${byId.get(dep)?.status ?? "missing"})`).join(", ");
-        fail(`cannot set status to open: depends_on has unclosed ticket(s): ${detail}`);
-      }
+  const target = resolveSelector(tickets, selector);
+  const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+  if (patch.after !== undefined && patch.after !== null) {
+    const dep = byId.get(patch.after);
+    if (!dep) fail(`after references missing ticket: ${patch.after}`);
+    if (dep.status === "closed") fail(`after references closed ticket: ${patch.after}`);
+    if (dep.status === "cancelled") fail(`after references cancelled ticket: ${patch.after}`);
+    if (createsCycle(target.id, patch.after, byId)) {
+      fail(`setting after would create a cycle: ${target.id} -> ${patch.after}`);
     }
   }
-  const { frontmatter, rest } = splitFrontmatter(await readFile(ticket.path, "utf8"), ticket.path);
-  const newRest = flags.body !== undefined ? replaceBody(rest, flags.body) : rest;
-  await writeFile(ticket.path, mergeFrontmatter(frontmatter, patch) + newRest);
-  if (flags.json) {
-    return output(ticketJson({ ...ticket, status: patch.status ?? ticket.status, dependsOn: patch.dependsOn ?? ticket.dependsOn }, false));
+  const nextStatus = linkedStatus(target, patch);
+  const { frontmatter, rest } = splitFrontmatter(await readFile(target.path, "utf8"));
+  await writeFile(target.path, mergeFrontmatter(frontmatter, { status: nextStatus, after: patch.after }) + rest);
+  if (patch.status === "closed") {
+    // Release blocked tickets that wait on the target.
+    for (const ticket of tickets) {
+      if (ticket.id === target.id || ticket.status !== "blocked" || ticket.after !== target.id) continue;
+      const parts = splitFrontmatter(await readFile(ticket.path, "utf8"));
+      await writeFile(ticket.path, mergeFrontmatter(parts.frontmatter, { status: "open" }) + parts.rest);
+    }
   }
+  const updated: Ticket = {
+    ...target,
+    status: nextStatus,
+    after: patch.after !== undefined ? patch.after : target.after,
+  };
+  if (flags.json) return output(ticketJson(updated, false));
   if (patch.status !== undefined) console.log(patch.status);
+  else if (patch.after !== undefined) {
+    // after-only: linkage rewrote the status unless it kept it as a non-blocked value
+    if (patch.after !== null || target.status === "blocked") console.log(nextStatus);
+  }
 }
 
+async function editCommand(positional: string[], flags: Flags): Promise<void> {
+  if (positional.length < 2 || positional.length > 3) usageFail();
+  // 2 args: [old, new] (selector defaults to next); 3 args: [selector, old, new].
+  const [selector, old, replacement] = positional.length === 2
+    ? [undefined, positional[0]!, positional[1]!]
+    : [positional[0]!, positional[1]!, positional[2]!];
+  if (!old || replacement === undefined) usageFail();
+  const project = resolveProject(flags);
+  const tickets = await loadTickets(project);
+  const target = resolveSelector(tickets, selector);
+  const { frontmatter, rest } = splitFrontmatter(await readFile(target.path, "utf8"));
+  const body = rest.slice("\n---\n".length);
+  const count = body.split(old).length - 1;
+  if (count !== 1) fail(`${target.id}: "${old}" appears ${count} times in the body`);
+  const updatedBody = body.replace(old, replacement);
+  await writeFile(target.path, `${frontmatter}\n---\n${updatedBody}`);
+  if (flags.json) {
+    const title = updatedBody.match(/^# (.+)$/m)?.[1]?.trim() ?? target.id;
+    return output(ticketJson({ ...target, title }, false));
+  }
+}
+
+// Follows after chains (one per ticket) and reports each cycle once.
 function findCycles(tickets: Ticket[]): string[][] {
   const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
   const state = new Map<string, number>();
@@ -402,9 +474,8 @@ function findCycles(tickets: Ticket[]): string[][] {
     }
     state.set(id, 1);
     stack.push(id);
-    for (const dep of byId.get(id)?.dependsOn ?? []) {
-      if (byId.has(dep)) visit(dep);
-    }
+    const after = byId.get(id)?.after;
+    if (after !== null && after !== undefined && byId.has(after)) visit(after);
     stack.pop();
     state.set(id, 2);
   };
@@ -416,32 +487,24 @@ async function checkCommand(flags: Flags): Promise<void> {
   const projects = flags.all ? await allProjects() : [resolveProject(flags)];
   const issues: Issue[] = [];
   for (const project of projects) {
-    const tickets = await loadTickets(project);
+    const tickets = await loadTickets(project, issues);
     const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
     for (const ticket of tickets) {
-      const file = relative(storeRoot(), ticket.path);
-      if (!STATUSES.includes(ticket.status as Status)) {
+      if (ticket.after !== null && !byId.has(ticket.after)) {
         issues.push({
-          file,
-          kind: "invalid-status",
-          detail: `status "${ticket.status}" is not one of ${STATUSES.join(", ")}`,
+          file: relative(storeRoot(), ticket.path),
+          kind: "missing-after",
+          detail: `after references missing ticket: ${ticket.after}`,
         });
-      }
-      const missing = ticket.dependsOn.filter((dep) => !byId.has(dep));
-      if (missing.length > 0) {
-        issues.push({ file, kind: "missing-dep", detail: `depends_on references missing ticket(s): ${missing.join(", ")}` });
-      }
-      if (ticket.status === "open") {
-        const unresolved = ticket.dependsOn.filter((dep) => byId.get(dep)?.status !== "closed");
-        if (unresolved.length > 0) {
-          const detail = unresolved.map((dep) => `${dep} (${byId.get(dep)?.status ?? "missing"})`).join(", ");
-          issues.push({ file, kind: "open-with-unresolved-deps", detail: `status is open but depends_on has unclosed ticket(s): ${detail}` });
-        }
       }
     }
     for (const cycle of findCycles(tickets)) {
       const head = byId.get(cycle[0]!)!;
-      issues.push({ file: relative(storeRoot(), head.path), kind: "dep-cycle", detail: `depends_on cycle: ${cycle.join(" -> ")}` });
+      issues.push({
+        file: relative(storeRoot(), head.path),
+        kind: "after-cycle",
+        detail: `after cycle: ${cycle.join(" -> ")}`,
+      });
     }
   }
   if (flags.json) {
@@ -465,16 +528,16 @@ async function main(): Promise<void> {
       return listCommand(flags);
     case "show":
       return showCommand(positional, flags);
-    case "status":
-      return statusCommand(positional, flags);
     case "create":
       return createCommand(positional, flags);
-    case "update":
-      return updateCommand(positional, flags);
+    case "set":
+      return setCommand(positional, flags);
+    case "edit":
+      return editCommand(positional, flags);
     case "check":
       return checkCommand(flags);
     default:
-      fail(USAGE);
+      usageFail();
   }
 }
 

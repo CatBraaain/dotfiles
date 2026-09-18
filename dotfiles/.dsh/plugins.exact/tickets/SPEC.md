@@ -2,7 +2,7 @@
 
 ## 概要
 
-本 plugin は、ticket CLI（`~/.agents/cli/ticket`）のラッパー tool 4 つを dsh に登録する、pi `tickets` extension の host 移植。tool 群の振る舞いの正本は `dotfiles/.agents/cli/ticket-tools.spec.md`（harness 中立）であり、本 SPEC.md はそれを再定義せず、dsh での実現形（構成・依存・ビルド・結果形式）だけを定める。CLI とストアの仕様は `dotfiles/.agents/cli/ticket.spec.md` が正本。
+本 plugin は、ticket CLI（`~/.agents/cli/ticket`）のラッパー tool 5 つを dsh に登録する、pi `tickets` extension の host 移植。tool 群の振る舞いの正本は `dotfiles/.agents/cli/ticket-tools.spec.md`（harness 中立）であり、本 SPEC.md はそれを再定義せず、dsh での実現形（構成・依存・ビルド・結果形式）だけを定める。CLI とストアの仕様は `dotfiles/.agents/cli/ticket.spec.md` が正本。
 
 ## 登録する tool
 
@@ -11,18 +11,19 @@
 | tool | CLI サブコマンド | 引数 |
 | --- | --- | --- |
 | `ticket_list` | `list` | `status`（string[]）・`project`・`all`（bool） |
-| `ticket_show` | `show <id>` | `id`（必須）・`project` |
-| `ticket_create` | `create <title>` | `title`（必須）・`body`・`status`・`depends_on`（string[]）・`project` |
-| `ticket_update` | `update <id>` | `id`（必須）・`metadata`（object）・`body`・`project` |
+| `ticket_show` | `show [<selector>]` | `selector`・`project` |
+| `ticket_create` | `create <json>` | `title`（必須）・`body`・`status`・`after`・`project` |
+| `ticket_set` | `set [<selector>] <json>` | `selector`・`status`・`after`（string または null）・`project` |
+| `ticket_edit` | `edit [<selector>] <old> <new>` | `selector`・`old`（必須・空でない）・`new`（必須）・`project` |
 
-実行は共通 lib（`@dotfiles/agent-lib/ticket`）の `runTicketCli` に委譲する（`--json` 付き spawn・JSON パース・`TicketCliError`）。plugin はストアに直接アクセスしない。
+`create`・`set` に渡す JSON は、tool 引数として与えられたキーのみを含むオブジェクトを `JSON.stringify` した文字列である。`after` の `null`（解除）は `ticket_set` のみで使う。実行は共通 lib（`@dotfiles/agent-lib/ticket`）の `runTicketCli` に委譲する（`--json` 付き spawn・JSON パース・`TicketCliError`）。plugin はストアに直接アクセスしない。
 
 ## 結果形式（pi `details` 相当）
 
 | 層 | 内容 |
 | --- | --- |
 | canonical value（`execute` の戻り値） | CLI の `--json` 出力をパースした JSON そのもの |
-| model-facing text（`output.render`） | 共通 lib の `formatTicketList` / `formatTicketShow` / `formatTicketCreated` / `formatTicketUpdated` による整形テキスト（`ticket_list` は `all` 引数を第 2 引数にも渡す） |
+| model-facing text（`output.render`） | 共通 lib の `formatTicketList` / `formatTicketShow` / `formatTicketCreated` / `formatTicketUpdated` による整形テキスト（`ticket_list` は `all` 引数を第 2 引数にも渡す。`ticket_set` と `ticket_edit` は `formatTicketUpdated` を使う） |
 | 結果詳細（`output.presentationMeta`） | canonical value をそのまま返し、`tool/result` の `result.meta` として永続化する。pi extension の `details` フィールドに相当する機械可読データ |
 
 ## セッション cwd
@@ -34,7 +35,8 @@ CLI の cwd には、呼び出し元 agent の session header の `cwd`（`exec.
 | 条件 | 扱う箇所 | 結果 |
 | --- | --- | --- |
 | CLI が終了コード 1・spawn 失敗・非 JSON 出力（`TicketCliError`） | `execute` が catch して throw し直す | tool 呼び出しの失敗。エラーテキストは `TicketCliError.stderr`（空なら `message`） |
-| `ticket_update` で `metadata` も `body` もない | `execute` が CLI 起動前に throw | tool 呼び出しの失敗（`nothing to update: ...`） |
+| `ticket_set` で `status` も `after` もない | `buildSetArgs` が CLI 起動前に throw | tool 呼び出しの失敗（`nothing to set: ...`） |
+| `ticket_edit` で `old` が空文字列 | `buildEditArgs` が CLI 起動前に throw | tool 呼び出しの失敗（`old must be a non-empty string`） |
 
 ## 構成・依存関係
 

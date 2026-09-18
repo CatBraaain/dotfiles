@@ -11,7 +11,7 @@ export interface TicketFields {
   id: string;
   status: string;
   title: string;
-  depends_on: string[];
+  after: string | null;
   path: string;
   project?: string;
 }
@@ -41,13 +41,28 @@ export function ticketCliArgs(args: string[]): string[] {
   return [...args, "--json"];
 }
 
+// Injectable overrides for tests: the pi suite runs the real spawn against a
+// stub executable without depending on the caller's HOME.
+export interface RunTicketCliDeps {
+  /** Overrides the CLI executable path; defaults to ticketCliPath(). */
+  cliPath?: string;
+  /** Replaces node:child_process.execFile; defaults to the real one. */
+  exec?: typeof execFile;
+}
+
 // Runs `ticket <args> --json` with `cwd` as the CLI's working directory and
 // resolves with the parsed JSON. The CLI resolves the default project from its
 // cwd (main worktree basename or cwd basename), so callers pass the session cwd.
-export function runTicketCli(args: string[], cwd: string, signal?: AbortSignal): Promise<unknown> {
+export function runTicketCli(
+  args: string[],
+  cwd: string,
+  signal?: AbortSignal,
+  deps: RunTicketCliDeps = {},
+): Promise<unknown> {
+  const spawn = deps.exec ?? execFile;
   return new Promise((resolve, reject) => {
-    execFile(
-      ticketCliPath(),
+    spawn(
+      deps.cliPath ?? ticketCliPath(),
       ticketCliArgs(args),
       { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
@@ -82,14 +97,13 @@ export function formatTicketList(tickets: TicketFields[], all: boolean): string 
 }
 
 export function formatTicketShow(ticket: TicketWithBody): string {
-  const deps = ticket.depends_on.map((dep) => `  - ${dep}`).join("\n");
-  return [ticket.id, `status: ${ticket.status}`, `depends_on:\n${deps}`, ``, `# ${ticket.title}`, ``, ticket.body.trimEnd()].join("\n");
+  return [ticket.id, `status: ${ticket.status}`, `after: ${ticket.after ?? "-"}`, ``, `# ${ticket.title}`, ``, ticket.body.trimEnd()].join("\n");
 }
 
 export function formatTicketCreated(ticket: TicketFields): string {
-  return `created ${ticket.id}\nstatus: ${ticket.status}\npath: ${ticket.path}`;
+  return `created ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\npath: ${ticket.path}`;
 }
 
 export function formatTicketUpdated(ticket: TicketFields): string {
-  return `updated ${ticket.id}\nstatus: ${ticket.status}\npath: ${ticket.path}`;
+  return `updated ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\npath: ${ticket.path}`;
 }
