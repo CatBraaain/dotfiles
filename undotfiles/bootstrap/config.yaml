@@ -42,7 +42,7 @@
 - run: "rustup update stable"
 
 # Tauri test
-- apt: webkit2gtk-driver
+- apt: webkitgtk-webdriver
 - cargo: tauri-driver
 
 # Standalone tools
