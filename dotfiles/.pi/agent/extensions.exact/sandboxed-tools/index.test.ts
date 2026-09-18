@@ -823,7 +823,7 @@ describe("§3.a パス文字列の解決", () => {
     await assert.rejects(
       () =>
         sandbox.authorizePath("write", join(homedir(), ".pi/agent/config/sandbox.yaml"), context),
-      /Access denied/,
+      /Access denied|Access requires confirmation/,
     );
   });
 

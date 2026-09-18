@@ -33,7 +33,10 @@ write:
       - ~/.cargo/registry
       - ~/go/pkg/mod
       - ~/mirrors
-  - { ask: ~/.agents/config }
+  - ask:
+      - ~/.agents/config
+      - ~/.dsh/config
+      - ~/.pi/agent/config
 
 # Auth files that bash tools need for authentication but dsh and pi fs tools
 # (read/write/edit/glob/grep/find/ls) must never touch. Bound read-only into the
