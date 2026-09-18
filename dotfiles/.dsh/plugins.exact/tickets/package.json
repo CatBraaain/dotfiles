@@ -1,0 +1,26 @@
+{
+  "name": "dotfiles-dsh-tickets",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "trustedDependencies": [],
+  "dependencies": {
+    "@dotfiles/agent-lib": "file:../../../.agents/lib"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
+    "@types/bun": "latest"
+  }
+}

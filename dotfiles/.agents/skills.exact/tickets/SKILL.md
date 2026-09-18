@@ -12,7 +12,7 @@ description: >-
 
 - 1 ticket = 1 markdown ファイル。`~/.agents/tickets/<project>/` 配下に置く。`<project>` は対象リポジトリのルートディレクトリ名。リポジトリ外の問題ならカレントディレクトリ名
 - ticket 操作の対象ストアは、owner が対象 project（全 project 横断を含む）を明示しない限り、現在のプロジェクト（セッション cwd のリポジトリ名、リポジトリ外ならカレントディレクトリ名）の 1 つに限る。着手対象の選定（例: 「次の ticket」「open ticket を処理して」）もこの範囲から行い、他 project の ticket を候補に含めない
-- ファイル名は `<YYYYMMDD-HHMMSS>_<slug>.md`。ID と slug の境界は `_`、フィールド内の区切りは `-` にする。`<slug>` は原則、問題を表す日本語（例: `workerのメモリリーク`）。英語で書くときは kebab-case にする（例: `memory-leak-in-worker`）。いずれもスペースを含めない。日時部分は起票時刻を `date +%Y%m%d-%H%M%S` で採番し（ローカル時刻）、同一秒のファイルが既にあるときは衝突しなくなるまで +1 秒ずらす
+- ファイル名は `<YYYYMMDD-HHMMSS>_<slug>.md`。ID と slug の境界は `_`、フィールド内の区切りは `-` にする。`<slug>` は原則、問題を表す日本語（例: `workerのメモリリーク`）。英語で書くときは kebab-case にする（例: `memory-leak-in-worker`）。いずれもスペースを含めない。ID は ticket tool / CLI がローカル時刻とタイトルから採番する。fs tools で直接起票するときは `date +%Y%m%d-%H%M%S` で日時部分を採番し（ローカル時刻）、同一 ID のファイルが既にあるときは衝突しなくなるまで +1 秒ずらす
 - ticket の ID はファイル名から拡張子を除いたもの
 
 ## ファイル形式
@@ -159,29 +159,25 @@ review の指摘を扱うときは、review skill の重要度（高・中・低
 
 `locked` は着手したセッションが対処を完了（`closed`）または取り下げ（`cancelled`）した時点で外れる。異常終了などで `locked` が残ったときは、owner の指示で `open` に戻す。
 
-ticket を `closed` にするときは、依存されている ticket を探して解放する。`grep -l 'depends_on' ~/.agents/tickets/<project>/*.md` で `depends_on` を持つ ticket を見つけ、その `depends_on` が全て `closed` になっていれば `status` を `blocked` から `open` に戻す。
+ticket を `closed` にするときは、依存されている ticket を探して解放する。`ticket_list`（CLI: `ticket list --all`）で `depends_on` を持つ ticket を見つけ、その `depends_on` が全て `closed` になっていれば `status` を `blocked` から `open` に戻す。tool / CLI が使えない環境では `grep -l 'depends_on' ~/.agents/tickets/<project>/*.md` で代用する。
 
-## 編集
+## 操作
 
-Ticketの読み書き・編集には、利用可能なfs toolsを使用する。
+Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_create` / `ticket_update`）を使う。tool が無い harness では `ticket` CLI（`ticket list` / `ticket show` / `ticket create` / `ticket update`）を bash で実行する。いずれも使えない環境では fs tools でストアを直接読み書きする。
 
-本文は必要な箇所だけ編集し、可能な限り既存の内容を維持する。
+* 起票は `ticket_create`（CLI: `ticket create`）。ID は採番されるため、呼び出し側が作るのはタイトル・本文・status・`depends_on` だけである。本文テンプレート（ファイル形式）は本文全文として組み立てて渡す
+* status 変更・`depends_on` 変更・本文の更新は `ticket_update`（CLI: `ticket update`）。frontmatter は `metadata` でキー指定し、本文は `body` で全文置換する。`closed` への変更と対処記録の追記は、`ticket_show` で本文を読み、対処記録を足した本文全文を `body` に渡して 1 回の呼び出しで行う
+* `locked` への重複変更、存在しない `depends_on`、`open` かつ依存未解決は tool・CLI が検証して失敗する。失敗したら ticket を読み直して判断する
+* CLI と tool の振る舞いの正本は `~/.agents/cli/ticket.spec.md`（CLI）と `~/.agents/cli/ticket-tools.spec.md`（tool）である
 
-frontmatterも必要に応じて編集してよい。
-
-frontmatterの完全な保護や構造の維持は保証しない。壊れた場合は内容を確認し、修正する。
+fs tools で直接読み書きするときは、本文は必要な箇所だけ編集し、可能な限り既存の内容を維持する。frontmatter も必要に応じて編集してよいが、完全な保護や構造の維持は保証しない。壊れた場合は内容を確認し、修正する。
 
 ## 一覧
 
-frontmatter の `status` から列挙する:
-
-```bash
-awk 'FNR==1{n=0} /^---$/{n++} n==1 && /^status: open$/{print FILENAME}' ~/.agents/tickets/<project>/*.md
-```
-
-`status` の値を変えれば `draft`・`blocked`・`locked`・`closed`・`cancelled` も同様に列挙できる。全 project を横断するときは glob を `~/.agents/tickets/*/*.md` にする。owner への一覧では ticket ID とタイトル（H1）を報告する。
+Ticket の一覧は `ticket_list` を使う。status 絞り込みは `status` 引数、全 project 横断は `all` 引数で行う。tool が無い環境では CLI（`ticket list --status <s>[,<s>...] [--all]`）を使う。
 
 ## 対象外
 
 * GitHub Issues 等の外部トラッカーの操作はしない
-* 専用のTicket操作ツール（CLI・MCP）を前提としない
+
+fs tools で直接読み書きするのは、ticket tools と CLI がどちらも使えない環境のときだけである。tool・CLI が使える環境でストアの md ファイルを直接書き換えない（status 変更は `ticket_update`、起票は `ticket_create` を使う）。

@@ -2,6 +2,7 @@
 // ticket CLI — human/agent interface for the markdown ticket store.
 // Spec: dotfiles/.agents/cli/ticket.spec.md
 
+import { execFileSync } from "node:child_process";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
@@ -12,8 +13,8 @@ type Status = (typeof STATUSES)[number];
 const USAGE = `usage: ticket list [--status <s>[,<s>...]] [--project <p>] [--all] [--json]
        ticket show <id> [--project <p>] [--json]
        ticket status <id> <status> [--project <p>]
-       ticket claim <id> [--project <p>]
-       ticket close <id> [--project <p>]
+       ticket create <title> [--status <s>] [--depends-on <id>[,<id>...]] [--body <text>] [--project <p>] [--json]
+       ticket update <id> [--metadata <json>] [--body <text>] [--project <p>] [--json]
        ticket check [--project <p>] [--all] [--json]`;
 
 interface Flags {
@@ -21,6 +22,10 @@ interface Flags {
   all: boolean;
   json: boolean;
   statuses: string[];
+  status?: string;
+  dependsOn?: string[];
+  body?: string;
+  metadata?: string;
 }
 
 interface Ticket {
@@ -39,12 +44,19 @@ interface Issue {
   detail: string;
 }
 
-const ALLOWED_FLAGS: Record<string, { all?: boolean; status?: boolean; json?: boolean }> = {
-  list: { all: true, status: true, json: true },
+type CommonFields = Pick<Ticket, "id" | "status" | "title" | "dependsOn" | "path" | "project">;
+
+type FrontmatterPatch = { status?: Status; dependsOn?: string[] };
+
+// timestamp part of an ID, e.g. "20260917-180315"
+const ID_TIMESTAMP_LENGTH = "YYYYMMDD-HHMMSS".length;
+
+const ALLOWED_FLAGS: Record<string, { all?: boolean; statuses?: boolean; status?: boolean; dependsOn?: boolean; body?: boolean; metadata?: boolean; json?: boolean }> = {
+  list: { all: true, statuses: true, json: true },
   show: { json: true },
   status: {},
-  claim: {},
-  close: {},
+  create: { status: true, dependsOn: true, body: true, json: true },
+  update: { metadata: true, body: true, json: true },
   check: { all: true, json: true },
 };
 
@@ -70,7 +82,11 @@ function parseArgs(argv: string[], command: string): { flags: Flags; positional:
     if (arg === "--json" && allowed.json) flags.json = true;
     else if (arg === "--project") flags.project = value();
     else if (arg === "--all" && allowed.all) flags.all = true;
-    else if (arg === "--status" && allowed.status) flags.statuses = value().split(",");
+    else if (arg === "--status" && allowed.statuses) flags.statuses = value().split(",");
+    else if (arg === "--status" && allowed.status) flags.status = value();
+    else if (arg === "--depends-on" && allowed.dependsOn) flags.dependsOn = value().split(",");
+    else if (arg === "--body" && allowed.body) flags.body = value();
+    else if (arg === "--metadata" && allowed.metadata) flags.metadata = value();
     else if (arg.startsWith("--")) fail(`unknown flag for "${command}": ${arg}`);
     else positional.push(arg);
   }
@@ -150,17 +166,48 @@ function resolveId(tickets: Ticket[], id: string): Ticket {
   fail(`ticket not found: ${id}`);
 }
 
-async function writeStatus(ticket: Ticket, status: Status): Promise<void> {
-  const content = await readFile(ticket.path, "utf8");
-  if (!content.startsWith("---\n")) fail(`no frontmatter: ${ticket.path}`);
-  const closing = content.indexOf("\n---\n", 4);
-  if (closing < 0) fail(`unclosed frontmatter: ${ticket.path}`);
-  const frontmatter = content.slice(0, closing);
-  if (!/^status:.*$/m.test(frontmatter)) fail(`no status field: ${ticket.path}`);
-  await writeFile(ticket.path, frontmatter.replace(/^status:.*$/m, `status: ${status}`) + content.slice(closing));
+function validateStatus(status: string): Status {
+  if (!STATUSES.includes(status as Status)) fail(`invalid status "${status}" (one of: ${STATUSES.join(", ")})`);
+  return status as Status;
 }
 
-function ticketJson(ticket: Ticket, withProject: boolean): Record<string, unknown> {
+// Splits validated frontmatter from the rest; the caller must handle the errors first.
+function splitFrontmatter(content: string, path: string): { frontmatter: string; rest: string } {
+  if (!content.startsWith("---\n")) fail(`no frontmatter: ${path}`);
+  const closing = content.indexOf("\n---\n", 4);
+  if (closing < 0) fail(`unclosed frontmatter: ${path}`);
+  const frontmatter = content.slice(0, closing);
+  if (!/^status:.*$/m.test(frontmatter)) fail(`no status field: ${path}`);
+  return { frontmatter, rest: content.slice(closing) };
+}
+
+function mergeFrontmatter(frontmatter: string, patch: FrontmatterPatch): string {
+  const lines = frontmatter.split("\n");
+  const statusIndex = lines.findIndex((line) => line.startsWith("status:"));
+  if (patch.status !== undefined) lines[statusIndex] = `status: ${patch.status}`;
+  if (patch.dependsOn !== undefined) {
+    const rendered = ["depends_on:", ...patch.dependsOn.map((dep) => `  - ${dep}`)];
+    const depIndex = lines.findIndex((line) => line.startsWith("depends_on:"));
+    if (depIndex < 0) {
+      lines.splice(statusIndex + 1, 0, ...rendered);
+    } else {
+      let listEnd = depIndex + 1;
+      while (listEnd < lines.length && lines[listEnd]!.startsWith("  - ")) listEnd++;
+      lines.splice(depIndex, listEnd - depIndex, ...rendered);
+    }
+  }
+  return lines.join("\n");
+}
+
+// rest starts with "\n---\n"; replaces everything after the H1 heading, keeping it.
+function replaceBody(rest: string, body: string): string {
+  const content = rest.slice("\n---\n".length);
+  const h1 = content.match(/^# (.+)$/m);
+  const updated = h1 ? `# ${h1[1]!.trim()}\n\n${body}` : body;
+  return `\n---\n${updated.trimEnd()}\n`;
+}
+
+function ticketJson(ticket: CommonFields, withProject: boolean): Record<string, unknown> {
   const json: Record<string, unknown> = {
     id: ticket.id,
     status: ticket.status,
@@ -172,8 +219,42 @@ function ticketJson(ticket: Ticket, withProject: boolean): Record<string, unknow
   return json;
 }
 
+// git worktree list lists the main worktree first; fall back to the cwd name
+// when cwd is not inside a git repo or git is unavailable.
+function defaultProject(): string {
+  const cwd = process.cwd();
+  try {
+    const porcelain = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const mainPath = porcelain.match(/^worktree (.+)$/m)?.[1];
+    if (mainPath !== undefined) return basename(mainPath.trim());
+  } catch {
+    // fall through to the cwd name
+  }
+  return basename(cwd);
+}
+
+function resolveProject(flags: Flags): string {
+  return flags.project ?? defaultProject();
+}
+
+function timestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function toSlug(title: string): string {
+  return title
+    .replace(/[^a-zA-Z0-9-\P{ASCII}]/gu, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 async function listCommand(flags: Flags): Promise<void> {
-  const projects = flags.all ? await allProjects() : [flags.project ?? basename(process.cwd())];
+  const projects = flags.all ? await allProjects() : [resolveProject(flags)];
   const tickets = (await Promise.all(projects.map((project) => loadTickets(project)))).flat();
   const filtered = flags.statuses.length > 0
     ? tickets.filter((ticket) => flags.statuses.includes(ticket.status))
@@ -187,7 +268,7 @@ async function listCommand(flags: Flags): Promise<void> {
 
 async function showCommand(positional: string[], flags: Flags): Promise<void> {
   const id = positional[0] ?? fail(USAGE);
-  const ticket = resolveId(await loadTickets(flags.project ?? basename(process.cwd())), id);
+  const ticket = resolveId(await loadTickets(resolveProject(flags)), id);
   if (flags.json) return output({ ...ticketJson(ticket, false), body: ticket.body });
   console.log(`${ticket.id}\nstatus: ${ticket.status}`);
   console.log("depends_on:");
@@ -198,22 +279,107 @@ async function showCommand(positional: string[], flags: Flags): Promise<void> {
 async function statusCommand(positional: string[], flags: Flags): Promise<void> {
   const [id, status] = positional;
   if (!id || !status) fail(USAGE);
-  if (!STATUSES.includes(status as Status)) {
-    fail(`invalid status "${status}" (one of: ${STATUSES.join(", ")})`);
-  }
-  const ticket = resolveId(await loadTickets(flags.project ?? basename(process.cwd())), id);
-  await writeStatus(ticket, status as Status);
-  console.log(status);
+  const target = validateStatus(status);
+  const ticket = resolveId(await loadTickets(resolveProject(flags)), id);
+  const { frontmatter, rest } = splitFrontmatter(await readFile(ticket.path, "utf8"), ticket.path);
+  await writeFile(ticket.path, mergeFrontmatter(frontmatter, { status: target }) + rest);
+  console.log(target);
 }
 
-async function transitionCommand(positional: string[], flags: Flags, target: "locked" | "closed"): Promise<void> {
-  const id = positional[0] ?? fail(USAGE);
-  const ticket = resolveId(await loadTickets(flags.project ?? basename(process.cwd())), id);
-  if (target === "locked" && ticket.status === "locked") {
-    fail(`ticket is already locked: ${ticket.id}`);
+async function createCommand(positional: string[], flags: Flags): Promise<void> {
+  const title = positional[0] ?? fail(USAGE);
+  const slug = toSlug(title);
+  if (!slug) fail(`cannot create slug from title: ${title}`);
+  const status = flags.status !== undefined ? validateStatus(flags.status) : "open";
+  const project = resolveProject(flags);
+  const tickets = await loadTickets(project);
+  const dependsOn = flags.dependsOn ?? [];
+  const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+  const missing = dependsOn.filter((dep) => !byId.has(dep));
+  if (missing.length > 0) fail(`depends_on references missing ticket(s): ${missing.join(", ")}`);
+  if (status === "open") {
+    const unresolved = dependsOn.filter((dep) => byId.get(dep)?.status !== "closed");
+    if (unresolved.length > 0) {
+      const detail = unresolved.map((dep) => `${dep} (${byId.get(dep)?.status ?? "missing"})`).join(", ");
+      fail(`cannot create an open ticket: depends_on has unclosed ticket(s): ${detail}`);
+    }
   }
-  await writeStatus(ticket, target);
-  console.log(target);
+  const takenTimestamps = new Set(tickets.map((ticket) => ticket.id.slice(0, ID_TIMESTAMP_LENGTH)));
+  let date = new Date();
+  while (takenTimestamps.has(timestamp(date))) date = new Date(date.getTime() + 1000);
+  const id = `${timestamp(date)}_${slug}`;
+  const path = join(storeRoot(), project, `${id}.md`);
+  const frontmatter = [
+    "---",
+    `status: ${status}`,
+    ...(dependsOn.length > 0 ? ["depends_on:", ...dependsOn.map((dep) => `  - ${dep}`)] : []),
+    "---",
+  ].join("\n");
+  const body = flags.body !== undefined ? `# ${title}\n\n${flags.body}\n` : `# ${title}\n`;
+  await writeFile(path, `${frontmatter}\n${body}`);
+  if (flags.json) return output(ticketJson({ id, status, title, dependsOn, path, project }, false));
+  console.log(id);
+}
+
+// --metadata keys map onto frontmatter; other keys are rejected.
+function parseMetadata(raw: string | undefined): FrontmatterPatch {
+  if (raw === undefined) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    fail("--metadata is not valid JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) fail("--metadata must be a JSON object");
+  const patch: FrontmatterPatch = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key === "status") {
+      if (typeof value !== "string") fail('metadata key "status" must be a string');
+      patch.status = validateStatus(value);
+    } else if (key === "depends_on") {
+      if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+        fail('metadata key "depends_on" must be an array of strings');
+      }
+      patch.dependsOn = value as string[];
+    } else {
+      fail(`unknown metadata key: ${key}`);
+    }
+  }
+  return patch;
+}
+
+async function updateCommand(positional: string[], flags: Flags): Promise<void> {
+  const id = positional[0] ?? fail(USAGE);
+  if (flags.metadata === undefined && flags.body === undefined) fail(USAGE);
+  const tickets = await loadTickets(resolveProject(flags));
+  const ticket = resolveId(tickets, id);
+  const patch = parseMetadata(flags.metadata);
+  if (patch.status === "locked" && ticket.status === "locked") fail(`ticket is already locked: ${ticket.id}`);
+  if (patch.dependsOn !== undefined) {
+    const known = new Set(tickets.map((t) => t.id));
+    const missing = patch.dependsOn.filter((dep) => !known.has(dep));
+    if (missing.length > 0) fail(`depends_on references missing ticket(s): ${missing.join(", ")}`);
+  }
+  // Consistency checks run only when status or depends_on is touched; a body-only update is free of them.
+  if (patch.status !== undefined || patch.dependsOn !== undefined) {
+    const nextStatus = patch.status ?? ticket.status;
+    const nextDeps = patch.dependsOn ?? ticket.dependsOn;
+    if (nextStatus === "open") {
+      const byId = new Map(tickets.map((t) => [t.id, t] as const));
+      const unresolved = nextDeps.filter((dep) => byId.get(dep)?.status !== "closed");
+      if (unresolved.length > 0) {
+        const detail = unresolved.map((dep) => `${dep} (${byId.get(dep)?.status ?? "missing"})`).join(", ");
+        fail(`cannot set status to open: depends_on has unclosed ticket(s): ${detail}`);
+      }
+    }
+  }
+  const { frontmatter, rest } = splitFrontmatter(await readFile(ticket.path, "utf8"), ticket.path);
+  const newRest = flags.body !== undefined ? replaceBody(rest, flags.body) : rest;
+  await writeFile(ticket.path, mergeFrontmatter(frontmatter, patch) + newRest);
+  if (flags.json) {
+    return output(ticketJson({ ...ticket, status: patch.status ?? ticket.status, dependsOn: patch.dependsOn ?? ticket.dependsOn }, false));
+  }
+  if (patch.status !== undefined) console.log(patch.status);
 }
 
 function findCycles(tickets: Ticket[]): string[][] {
@@ -247,7 +413,7 @@ function findCycles(tickets: Ticket[]): string[][] {
 }
 
 async function checkCommand(flags: Flags): Promise<void> {
-  const projects = flags.all ? await allProjects() : [flags.project ?? basename(process.cwd())];
+  const projects = flags.all ? await allProjects() : [resolveProject(flags)];
   const issues: Issue[] = [];
   for (const project of projects) {
     const tickets = await loadTickets(project);
@@ -301,10 +467,10 @@ async function main(): Promise<void> {
       return showCommand(positional, flags);
     case "status":
       return statusCommand(positional, flags);
-    case "claim":
-      return transitionCommand(positional, flags, "locked");
-    case "close":
-      return transitionCommand(positional, flags, "closed");
+    case "create":
+      return createCommand(positional, flags);
+    case "update":
+      return updateCommand(positional, flags);
     case "check":
       return checkCommand(flags);
     default:

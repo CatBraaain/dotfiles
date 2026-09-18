@@ -18,11 +18,12 @@
     "dotfiles-dsh-web-search": "file:../../plugins/web-search",
     "dotfiles-dsh-session-list": "file:../../plugins/session-list",
     "dotfiles-dsh-session-id-system-prompt": "file:../../plugins/session-id-system-prompt",
-    "dotfiles-dsh-startup": "file:../../plugins/startup"
+    "dotfiles-dsh-startup": "file:../../plugins/startup",
+    "dotfiles-dsh-tickets": "file:../../plugins/tickets"
   },
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-codex-auth", "@mars-sea/dsh-commandcode-provider", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-custom-ui", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar", "dotfiles-dsh-concurrency-retry", "dsh-rewind-plugin", "dotfiles-dsh-quota-line", "dotfiles-sandboxed-tools", "dotfiles-dsh-web-search", "dotfiles-dsh-session-list", "dotfiles-dsh-session-id-system-prompt", "dotfiles-dsh-startup"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-codex-auth", "@mars-sea/dsh-commandcode-provider", "dotfiles-model-sync", "dotfiles-handoff-session", "dotfiles-dsh-custom-ui", "dotfiles-dsh-agents", "dotfiles-dsh-skill-status", "dotfiles-dsh-titlebar", "dotfiles-dsh-concurrency-retry", "dsh-rewind-plugin", "dotfiles-dsh-quota-line", "dotfiles-sandboxed-tools", "dotfiles-dsh-web-search", "dotfiles-dsh-session-list", "dotfiles-dsh-session-id-system-prompt", "dotfiles-dsh-startup", "dotfiles-dsh-tickets"],
       "patchReload": "live"
     }
   }

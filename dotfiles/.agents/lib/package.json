@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./ticket": "./src/ticket.ts",
     "./web-search": "./src/web-search.ts"
   },
   "scripts": {
