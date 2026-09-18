@@ -101,7 +101,7 @@ describe("tool spawning", () => {
     await callSearch(search, { query: "pi coding agent" });
 
     assert.equal(cli.calls.length, 1);
-    assert.equal(cli.calls[0]!.command, process.execPath);
+    assert.equal(cli.calls[0]!.command, "bun");
     assert.deepEqual(cli.calls[0]!.args, [
       join("/nonexistent-test-cli", "browse"),
       "search",
@@ -135,7 +135,7 @@ describe("tool spawning", () => {
     await callFetch(fetchTool, "https://example.com/");
 
     assert.equal(cli.calls.length, 1);
-    assert.equal(cli.calls[0]!.command, process.execPath);
+    assert.equal(cli.calls[0]!.command, "bun");
     assert.deepEqual(cli.calls[0]!.args, [
       join("/nonexistent-test-cli", "browse"),
       "fetch",

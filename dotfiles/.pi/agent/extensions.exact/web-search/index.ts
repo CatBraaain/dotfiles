@@ -105,7 +105,7 @@ async function runCliJson<T>(
   const script = browseScript(deps.env ?? process.env);
   let result: WebCliResult;
   try {
-    result = await run(process.execPath, [script, subcommand, ...args], signal);
+    result = await run("bun", [script, subcommand, ...args], signal);
   } catch (error) {
     throw new Error(`${kind}: ${error instanceof Error ? error.message : String(error)}`);
   }
