@@ -1,55 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import webSearchExtension, {
-  buildCamoufoxServerSpawn,
-  buildOpenserpServerSpawn,
-  buildPlaywrightCliArgs,
-  buildPlaywrightCliEnv,
-  camoufoxBaseUrl,
-  camoufoxFetch,
-  camoufoxOpenserpSearch,
-  camoufoxRender,
-  camoufoxServerHealthy,
-  camoufoxServerLogPath,
-  CHALLENGE_SIGNALS,
-  challengeWaitSnippet,
-  CONVERT_TIMEOUT_MS,
-  defaultFetchBackends,
-  detectChallengePage,
-  fetchRedditMarkdown,
-  fetchStackOverflowMarkdown,
-  formatBackendLine,
-  formatBackendLines,
-  formatOpenserpResults,
-  openserpBaseUrl,
-  openserpParse,
-  defaultSearchBackends,
-  fetchOne,
-  parseRedditAtom,
-  parseRenderedPage,
-  parseRedditEmbed,
-  parseRedditOEmbed,
-  parseRedditPostUrl,
-  parseStackOverflowAtom,
-  parseStackOverflowQuestionUrl,
-  PARSE_TIMEOUT_MS,
-  playwrightCliConfigJson,
-  playwrightCliConfigPath,
-  REDDIT_TIMEOUT_MS,
-  RENDER_TIMEOUT_MS,
-  searchOne,
-  SERVER_WAIT_TIMEOUT_MS,
-  serpUrl,
-  spawnDetachedServer,
-  STACKOVERFLOW_TIMEOUT_MS,
-  syncPlaywrightCliConfig,
-  titleFromMarkdown,
-  type Attempt,
-  type BackendEntry,
-  type WebToolOperations,
+  browseCliDir,
+  browseScript,
+  formatSearchText,
+  type WebCliDeps,
+  type WebCliResult,
 } from "./index";
 
 type Tool = {
@@ -60,43 +20,62 @@ type Tool = {
   renderResult: (...args: any[]) => { render(width: number): string[] };
 };
 
-function captureTools(operations?: WebToolOperations): Map<string, Tool> {
+function captureTools(deps?: WebCliDeps): Map<string, Tool> {
   const tools = new Map<string, Tool>();
   webSearchExtension(
     {
       registerTool: (tool: Tool) => tools.set(tool.name, tool),
     } as never,
-    operations,
+    deps,
   );
   return tools;
 }
 
-// durationMs は実行時間で可変のため、成否・エラーの比較対象から除く
-function withoutDurationMs(attempt: Attempt): object {
-  const { durationMs: _durationMs, ...rest } = attempt;
-  return rest;
-}
+type RecordedCall = { command: string; args: string[] };
 
-type WebOperationResult = Awaited<ReturnType<typeof searchOne>>;
-
-function createWebToolOperations(overrides: Partial<WebToolOperations>): WebToolOperations {
-  return { search: searchOne, fetch: fetchOne, ...overrides };
-}
-
-function successfulOperationResult(input: string): WebOperationResult {
-  return {
-    text: `result for ${input}`,
-    backend: "test",
-    attempts: [{ backend: "test", ok: true }],
+// Records what the tool spawned and replies with a canned CLI result. The
+// BROWSE_CLI_DIR env keeps path resolution away from the real filesystem.
+function fakeCli(output: { code?: number; stdout?: string; stderr?: string }) {
+  const calls: RecordedCall[] = [];
+  const runCli = async (command: string, args: readonly string[]): Promise<WebCliResult> => {
+    calls.push({ command, args: [...args] });
+    return { stdout: output.stdout ?? "", stderr: output.stderr ?? "", code: output.code ?? 0 };
   };
+  return { calls, deps: { runCli, env: { BROWSE_CLI_DIR: "/nonexistent-test-cli" } } };
 }
 
-function createDeferred<Result>() {
-  let resolve!: (value: Result | PromiseLike<Result>) => void;
-  const promise = new Promise<Result>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
+const searchJsonOutput = JSON.stringify({
+  query: "pi coding agent",
+  engine: "google",
+  tookMs: 2100,
+  results: [
+    {
+      rank: 1,
+      title: "Pi",
+      url: "https://example.com/1",
+      display_url: "example.com",
+      type: "organic",
+      snippet: "snip",
+    },
+  ],
+});
+
+const fetchJsonOutput = JSON.stringify({
+  url: "https://example.com/",
+  backend: "camoufox+trafilatura",
+  title: "Example",
+  body: "# Example\n\nbody",
+  tookMs: 1200,
+});
+
+const executionContext = { hasUI: true, ui: { notify: () => {} } };
+
+function callSearch(tool: Tool, params: Record<string, string>): Promise<unknown> {
+  return tool.execute("call", params, AbortSignal.timeout(5_000), undefined, executionContext);
+}
+
+function callFetch(tool: Tool, url: string): Promise<unknown> {
+  return tool.execute("call", { url }, AbortSignal.timeout(5_000), undefined, executionContext);
 }
 
 function textOf(result: unknown): string {
@@ -104,17 +83,8 @@ function textOf(result: unknown): string {
   return content.find((item) => item.type === "text")?.text ?? "";
 }
 
-function okBackend(name: string, text = `text from ${name}`): BackendEntry {
-  return [name, async () => text];
-}
-
-function failBackend(name: string, message = `${name} error`): BackendEntry {
-  return [
-    name,
-    async () => {
-      throw new Error(message);
-    },
-  ];
+function detailsOf(result: unknown): Record<string, unknown> {
+  return (result as { details: Record<string, unknown> }).details;
 }
 
 function renderedLines(component: { render(width: number): string[] }): string[] {
@@ -123,2336 +93,332 @@ function renderedLines(component: { render(width: number): string[] }): string[]
 
 const identityTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
-const tools = captureTools();
-const search = tools.get("web_search")!;
-const fetchTool = tools.get("web_fetch")!;
+describe("tool spawning", () => {
+  it("spawns `browse search` with the query and --json via bun", async () => {
+    const cli = fakeCli({ stdout: searchJsonOutput });
+    const search = captureTools(cli.deps).get("web_search")!;
 
-const executionContext = { hasUI: true, ui: { notify: () => {} } };
+    await callSearch(search, { query: "pi coding agent" });
 
-async function callSearch(
-  query: string,
-  signal: AbortSignal = AbortSignal.timeout(30_000),
-): Promise<unknown> {
-  return search.execute("call", { query }, signal, undefined, executionContext);
-}
-
-async function callFetch(
-  url: string,
-  signal: AbortSignal = AbortSignal.timeout(30_000),
-): Promise<unknown> {
-  return fetchTool.execute("call", { url }, signal, undefined, executionContext);
-}
-
-describe("tool request queues", () => {
-  it("starts the next web_search after the preceding search completes", async () => {
-    const firstSearchCompletion = createDeferred<WebOperationResult>();
-    const searchStartOrder: string[] = [];
-    const queuedSearch = captureTools(
-      createWebToolOperations({
-        search: async (query) => {
-          searchStartOrder.push(query);
-          return query === "first"
-            ? firstSearchCompletion.promise
-            : successfulOperationResult(query);
-        },
-      }),
-    ).get("web_search")!;
-
-    const firstRequest = queuedSearch.execute("first", { query: "first" });
-    const secondRequest = queuedSearch.execute("second", { query: "second" });
-
-    await Promise.resolve();
-    assert.deepEqual(searchStartOrder, ["first"]);
-
-    firstSearchCompletion.resolve(successfulOperationResult("first"));
-    await Promise.all([firstRequest, secondRequest]);
-
-    assert.deepEqual(searchStartOrder, ["first", "second"]);
-  });
-
-  it("starts the next web_search after the preceding search fails", async () => {
-    const searchStartOrder: string[] = [];
-    const queuedSearch = captureTools(
-      createWebToolOperations({
-        search: async (query) => {
-          searchStartOrder.push(query);
-          if (query === "first") throw new Error("first search failed");
-          return successfulOperationResult(query);
-        },
-      }),
-    ).get("web_search")!;
-
-    const failedRequest = queuedSearch.execute("first", { query: "first" });
-    const secondRequest = queuedSearch.execute("second", { query: "second" });
-
-    await assert.rejects(failedRequest, /first search failed/);
-    await secondRequest;
-
-    assert.deepEqual(searchStartOrder, ["first", "second"]);
-  });
-
-  it("starts the next web_fetch after the preceding fetch completes", async () => {
-    const firstFetchCompletion = createDeferred<WebOperationResult>();
-    const fetchStartOrder: string[] = [];
-    const queuedFetch = captureTools(
-      createWebToolOperations({
-        fetch: async (url) => {
-          fetchStartOrder.push(url);
-          return url.endsWith("first")
-            ? firstFetchCompletion.promise
-            : successfulOperationResult(url);
-        },
-      }),
-    ).get("web_fetch")!;
-
-    const firstRequest = queuedFetch.execute("first", { url: "https://example.com/first" });
-    const secondRequest = queuedFetch.execute("second", { url: "https://example.com/second" });
-
-    await Promise.resolve();
-    assert.deepEqual(fetchStartOrder, ["https://example.com/first"]);
-
-    firstFetchCompletion.resolve(successfulOperationResult("first"));
-    await Promise.all([firstRequest, secondRequest]);
-
-    assert.deepEqual(fetchStartOrder, ["https://example.com/first", "https://example.com/second"]);
-  });
-
-  it("starts the next web_fetch after the preceding fetch fails", async () => {
-    const fetchStartOrder: string[] = [];
-    const queuedFetch = captureTools(
-      createWebToolOperations({
-        fetch: async (url) => {
-          fetchStartOrder.push(url);
-          if (url.endsWith("first")) throw new Error("first fetch failed");
-          return successfulOperationResult(url);
-        },
-      }),
-    ).get("web_fetch")!;
-
-    const failedRequest = queuedFetch.execute("first", { url: "https://example.com/first" });
-    const secondRequest = queuedFetch.execute("second", { url: "https://example.com/second" });
-
-    await assert.rejects(failedRequest, /first fetch failed/);
-    await secondRequest;
-
-    assert.deepEqual(fetchStartOrder, ["https://example.com/first", "https://example.com/second"]);
-  });
-
-  it("starts web_search and web_fetch independently", async () => {
-    const searchCompletion = createDeferred<WebOperationResult>();
-    const fetchCompletion = createDeferred<WebOperationResult>();
-    const startedTools: string[] = [];
-    const queuedTools = captureTools(
-      createWebToolOperations({
-        search: async () => {
-          startedTools.push("web_search");
-          return searchCompletion.promise;
-        },
-        fetch: async () => {
-          startedTools.push("web_fetch");
-          return fetchCompletion.promise;
-        },
-      }),
-    );
-
-    const searchRequest = queuedTools.get("web_search")!.execute("search", { query: "query" });
-    const fetchRequest = queuedTools
-      .get("web_fetch")!
-      .execute("fetch", { url: "https://example.com/" });
-
-    await Promise.resolve();
-    assert.deepEqual(startedTools.sort(), ["web_fetch", "web_search"]);
-
-    searchCompletion.resolve(successfulOperationResult("query"));
-    fetchCompletion.resolve(successfulOperationResult("https://example.com/"));
-    await Promise.all([searchRequest, fetchRequest]);
-  });
-});
-
-describe("web_search 単体（searchOne・モックバックエンド）", () => {
-  it("失敗バックエンドを順に飛ばし、最初の成功バックエンドで本文とその名前を返す", async () => {
-    const backends = [failBackend("A"), failBackend("B"), okBackend("C"), okBackend("D")];
-    const result = await searchOne("query", undefined, backends);
-    assert.equal(result.backend, "C");
-    assert.equal(result.text, "text from C");
-  });
-
-  it("試行ごとの成否を attempts に記録し、最後は成功バックエンドになる", async () => {
-    const backends = [failBackend("A"), failBackend("B"), okBackend("C")];
-    const result = await searchOne("query", undefined, backends);
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "A error" },
-      { backend: "B", ok: false, error: "B error" },
-      { backend: "C", ok: true },
+    assert.equal(cli.calls.length, 1);
+    assert.equal(cli.calls[0]!.command, process.execPath);
+    assert.deepEqual(cli.calls[0]!.args, [
+      join("/nonexistent-test-cli", "browse"),
+      "search",
+      "pi coding agent",
+      "--json",
     ]);
   });
 
-  it("captcha detected のときは同じバックエンドを1回だけ再試行する", async () => {
-    let calls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          calls += 1;
-          if (calls === 1) throw new Error("parse: captcha detected");
-          return "retried text";
-        },
-      ],
-      okBackend("B"),
-    ];
+  it("passes --lang when the search request has a language hint", async () => {
+    const cli = fakeCli({ stdout: searchJsonOutput });
+    const search = captureTools(cli.deps).get("web_search")!;
 
-    const result = await searchOne("query", undefined, backends);
+    await callSearch(search, { query: "pi", lang: "JA" });
 
-    assert.equal(calls, 2);
-    assert.equal(result.backend, "A");
-    assert.equal(result.text, "retried text");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "A", ok: true },
-    ]);
+    assert.deepEqual(cli.calls[0]!.args.slice(1), ["search", "pi", "--lang", "JA", "--json"]);
   });
 
-  it("captcha detected の再試行も失敗したら次のバックエンドへ進む", async () => {
-    let firstBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          firstBackendCalls += 1;
-          throw new Error("parse: captcha detected");
-        },
-      ],
-      okBackend("B"),
-    ];
+  it("omits --lang when no language hint is given", async () => {
+    const cli = fakeCli({ stdout: searchJsonOutput });
+    const search = captureTools(cli.deps).get("web_search")!;
 
-    const result = await searchOne("query", undefined, backends);
+    await callSearch(search, { query: "pi" });
 
-    assert.equal(firstBackendCalls, 2);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "B", ok: true },
-    ]);
+    assert.ok(!cli.calls[0]!.args.includes("--lang"));
   });
 
-  it("captcha detected 以外の失敗は再試行しない", async () => {
-    let firstBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          firstBackendCalls += 1;
-          throw new Error("parse: timeout");
-        },
-      ],
-      okBackend("B"),
-    ];
+  it("spawns `browse fetch` with the url and --json", async () => {
+    const cli = fakeCli({ stdout: fetchJsonOutput });
+    const fetchTool = captureTools(cli.deps).get("web_fetch")!;
 
-    const result = await searchOne("query", undefined, backends);
+    await callFetch(fetchTool, "https://example.com/");
 
-    assert.equal(firstBackendCalls, 1);
-    assert.equal(result.backend, "B");
-  });
-
-  it("challenge detected のときは同じバックエンドを1回だけ再試行する", async () => {
-    let calls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          calls += 1;
-          if (calls === 1) throw new Error("render: challenge detected");
-          return "retried text";
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await searchOne("query", undefined, backends);
-
-    assert.equal(calls, 2);
-    assert.equal(result.backend, "A");
-    assert.equal(result.text, "retried text");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "render: challenge detected" },
-      { backend: "A", ok: true },
-    ]);
-  });
-
-  it("challenge detected の再試行も失敗したら次のバックエンドへ進む", async () => {
-    let firstBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          firstBackendCalls += 1;
-          throw new Error("render: challenge detected");
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await searchOne("query", undefined, backends);
-
-    assert.equal(firstBackendCalls, 2);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "render: challenge detected" },
-      { backend: "A", ok: false, error: "render: challenge detected" },
-      { backend: "B", ok: true },
-    ]);
-  });
-
-  it("abort 済み signal では captcha detected を再試行しない", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    let firstBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          firstBackendCalls += 1;
-          throw new Error("parse: captcha detected");
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await searchOne("query", controller.signal, backends);
-
-    assert.equal(firstBackendCalls, 1);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "B", ok: true },
-    ]);
-  });
-
-  it("失敗バックエンドのエラー文は本文に含まず、attempts だけに含む", async () => {
-    const backends = [failBackend("A", "致命的エラー文"), okBackend("B", "成功本文")];
-    const result = await searchOne("query", undefined, backends);
-    assert.equal(result.text, "成功本文");
-    assert.ok(!result.text.includes("致命的エラー文"));
-    assert.ok(
-      result.attempts.some((attempt) => !attempt.ok && attempt.error.includes("致命的エラー文")),
-    );
-  });
-
-  it("全バックエンドが失敗したら例外を出す", async () => {
-    const backends = [failBackend("A"), failBackend("B")];
-    await assert.rejects(searchOne("query", undefined, backends), /All web search backends failed/);
-  });
-
-  it("render abort での全滅には camoufox サーバーの kill 手順ヒントを添える", async () => {
-    const backends = [
-      failBackend("camoufox+openserp(google)", "render: The operation was aborted"),
-      failBackend("camoufox+openserp(duckduckgo)", "render: The operation was aborted"),
-    ];
-    await assert.rejects(
-      searchOne("query", undefined, backends),
-      /pkill -f "bun server\.mjs"/,
-    );
-  });
-
-  it("render abort 以外の失敗にはヒントを添えない", async () => {
-    const backends = [
-      failBackend("camoufox+openserp(google)", "render: page.goto: Timeout exceeded"),
-      failBackend("camoufox+openserp(duckduckgo)", "parse: empty SERP"),
-    ];
-    const error = await searchOne("query", undefined, backends).then(
-      () => null,
-      (error: unknown) => error as Error,
-    );
-    assert.ok(error, "全滅時は例外になる");
-    assert.ok(!error.message.includes("pkill"), "render abort 以外でヒントを出さない");
-  });
-
-  it("成功バックエンドの本文をそのまま返す", async () => {
-    const expectedText = "そのまま渡される本文";
-    const backends = [okBackend("A", expectedText)];
-    const result = await searchOne("query", undefined, backends);
-    assert.equal(result.text, expectedText);
-  });
-
-  it("空の本文を返すバックエンドは失敗として次へフォールバックする", async () => {
-    let emptyBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          emptyBackendCalls += 1;
-          return "";
-        },
-      ],
-      okBackend("B", "本文"),
-    ];
-    const result = await searchOne("query", undefined, backends);
-    assert.equal(emptyBackendCalls, 1);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
-      backend: "A",
-      ok: false,
-      error: "empty response",
-    });
-  });
-
-  it("空白・改行のみの本文も空として失敗扱いにする", async () => {
-    const backends = [okBackend("A", " \n\t "), okBackend("B", "本文")];
-    const result = await searchOne("query", undefined, backends);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
-      backend: "A",
-      ok: false,
-      error: "empty response",
-    });
-  });
-
-  it("attempts には各試行の所要時間（durationMs）を記録する", async () => {
-    const backends = [failBackend("A"), okBackend("B")];
-    const result = await searchOne("query", undefined, backends);
-    const durations = result.attempts.map((attempt) => attempt.durationMs);
-    assert.ok(durations.every((duration) => typeof duration === "number"));
-  });
-
-  it("durationMs はバックエンドの実行時間を反映する", async () => {
-    const slowBackend: BackendEntry = [
-      "slow",
-      async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        return "slow text";
-      },
-    ];
-    const result = await searchOne("query", undefined, [slowBackend]);
-    const durationMs = result.attempts[0]!.durationMs ?? 0;
-    assert.ok(durationMs >= 20, `期待 >=20ms, 実際 ${durationMs}ms`);
-  });
-
-  it("デフォルトのバックエンド順序は camoufox+openserp(google)→duckduckgo→bing", () => {
-    const backendNames = defaultSearchBackends("query").map(([name]) => name);
-    assert.deepEqual(backendNames, [
-      "camoufox+openserp(google)",
-      "camoufox+openserp(duckduckgo)",
-      "camoufox+openserp(bing)",
+    assert.equal(cli.calls.length, 1);
+    assert.equal(cli.calls[0]!.command, process.execPath);
+    assert.deepEqual(cli.calls[0]!.args, [
+      join("/nonexistent-test-cli", "browse"),
+      "fetch",
+      "https://example.com/",
+      "--json",
     ]);
   });
 });
 
-describe("web_search 統合（execute 経由・実バックエンド）", () => {
-  it("パラメータは query と lang（任意）で、複数一括クエリはサポートしない", () => {
-    const parameterKeys = Object.keys(search.parameters.properties);
-    assert.deepEqual(parameterKeys, ["query", "lang"]);
-  });
+describe("stdout to tool result", () => {
+  it("renders the search JSON as markdown text with engine and tookMs details", async () => {
+    const cli = fakeCli({ stdout: searchJsonOutput });
+    const search = captureTools(cli.deps).get("web_search")!;
 
-  it("検索結果は最大10件を出力し、件数が実バックエンドの結果数に満たないこともある", async () => {
-    const resultText = textOf(await callSearch("pi coding agent", AbortSignal.timeout(120_000)));
-    const headings = resultText.match(/^#{2,3} \d+\./gm) ?? [];
-    assert.ok(headings.length > 0);
-    assert.ok(headings.length <= 10);
-  }, 150_000);
+    const result = await callSearch(search, { query: "pi coding agent" });
 
-  it("失敗したバックエンドも次の検索で再試行する", async () => {
-    const attemptsPerSearch: string[][] = [];
-    const backends = [
-      [
-        "A",
-        async () => {
-          attemptsPerSearch.push(["A"]);
-          throw new Error("A error");
-        },
-      ],
-      [
-        "B",
-        async () => {
-          attemptsPerSearch[attemptsPerSearch.length - 1]?.push("B");
-          throw new Error("B error");
-        },
-      ],
-    ] satisfies BackendEntry[];
-
-    await assert.rejects(searchOne("query", undefined, backends));
-    await assert.rejects(searchOne("query", undefined, backends));
-
-    assert.deepEqual(attemptsPerSearch, [
-      ["A", "B"],
-      ["A", "B"],
-    ]);
-  });
-
-  it("実バックエンドで検索が成功する", async () => {
-    const resultText = textOf(await callSearch("hello world", AbortSignal.timeout(120_000)));
-    assert.ok(resultText.length > 0);
-  }, 150_000);
-});
-
-describe("web_search 表示", () => {
-  it("コール行は入力を添えて 'web_search - \"<query>\"' を出す", () => {
-    const lines = renderedLines(search.renderCall({ query: "pi coding agent" }, identityTheme));
-    assert.equal(lines[0], 'web_search - "pi coding agent"');
-  });
-
-  it("コール行は lang 指定時に [lang=<lang>] を付ける", () => {
-    const lines = renderedLines(search.renderCall({ query: "pi", lang: "JA" }, identityTheme));
-    assert.equal(lines[0], 'web_search - "pi" [lang=JA]');
-  });
-
-  it("結果行は試したバックエンドごとに ✓/✗ 行を出す", () => {
-    const attempts: Attempt[] = [
-      { backend: "openserp(google)", ok: false, error: "captcha detected" },
-      { backend: "openserp(bing)", ok: true },
-    ];
-    const result = {
-      content: [{ type: "text", text: "結果本文" }],
-      details: { backend: "openserp(bing)", attempts },
-    };
-    const lines = renderedLines(search.renderResult(result));
-    assert.deepEqual(lines, ['✗ openserp(google) - "captcha detected"', "✓ openserp(bing)"]);
-  });
-
-  it("captcha retry の初回と再試行をそれぞれ1行で表示する", () => {
-    const attempts: Attempt[] = [
-      { backend: "openserp(google)", ok: false, error: "captcha detected" },
-      { backend: "openserp(google)", ok: false, error: "captcha detected" },
-      { backend: "openserp(bing)", ok: true },
-    ];
-    const result = {
-      content: [{ type: "text", text: "結果本文" }],
-      details: { backend: "openserp(bing)", attempts },
-    };
-
-    const lines = renderedLines(search.renderResult(result));
-
-    assert.deepEqual(lines, [
-      '✗ openserp(google) - "captcha detected"',
-      '✗ openserp(google) - "captcha detected"',
-      "✓ openserp(bing)",
-    ]);
-  });
-
-  it("全バックエンド失敗時も renderResult が失敗行を表示する", () => {
-    const attempts: Attempt[] = [
-      { backend: "openserp(google)", ok: false, error: "captcha detected" },
-      { backend: "openserp(bing)", ok: false, error: "timeout" },
-    ];
-    const lines = renderedLines(
-      search.renderResult(
-        { content: [{ type: "text", text: "All failed" }], details: undefined },
-        {},
-        identityTheme,
-        { state: { attempts } },
-      ),
-    );
-    assert.deepEqual(lines, [
-      '✗ openserp(google) - "captcha detected"',
-      '✗ openserp(bing) - "timeout"',
-    ]);
-  });
-});
-
-describe("web_fetch 単体（fetchOne・モックバックエンド）", () => {
-  it("失敗バックエンドを順に飛ばし、最初の成功バックエンドで本文とその名前を返す", async () => {
-    const backends = [failBackend("A"), failBackend("B"), okBackend("C"), okBackend("D")];
-    const result = await fetchOne("https://example.com/", undefined, backends);
-    assert.equal(result.backend, "C");
-    assert.equal(result.text, "text from C");
-  });
-
-  it("試行ごとの成否を attempts に記録し、最後は成功バックエンドになる", async () => {
-    const backends = [failBackend("A"), failBackend("B"), okBackend("C")];
-    const result = await fetchOne("https://example.com/", undefined, backends);
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "A error" },
-      { backend: "B", ok: false, error: "B error" },
-      { backend: "C", ok: true },
-    ]);
-  });
-
-  it("失敗フェッチャーのエラー文は本文に含まず、attempts だけに含む", async () => {
-    const backends = [failBackend("A", "致命的エラー文"), okBackend("B", "成功本文")];
-    const result = await fetchOne("https://example.com/", undefined, backends);
-    assert.equal(result.text, "成功本文");
-    assert.ok(!result.text.includes("致命的エラー文"));
-    assert.ok(
-      result.attempts.some((attempt) => !attempt.ok && attempt.error.includes("致命的エラー文")),
-    );
-  });
-
-  it("全バックエンド失敗時にすべての失敗を記録して例外を出す", async () => {
-    const backends = [failBackend("X"), failBackend("Y")];
-    await assert.rejects(
-      fetchOne("https://example.com/", undefined, backends),
-      /All web fetch backends failed.*X: X error.*Y: Y error/,
-    );
-  });
-
-  it("空の本文を返すバックエンドは失敗として次へフォールバックする", async () => {
-    let emptyBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          emptyBackendCalls += 1;
-          return "";
-        },
-      ],
-      okBackend("B", "本文"),
-    ];
-    const result = await fetchOne("https://example.com/", undefined, backends);
-    assert.equal(emptyBackendCalls, 1);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
-      backend: "A",
-      ok: false,
-      error: "empty response",
-    });
-  });
-
-  it("空白・改行のみの本文も空として失敗扱いにする", async () => {
-    const backends = [okBackend("A", " \n\t "), okBackend("B", "本文")];
-    const result = await fetchOne("https://example.com/", undefined, backends);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(withoutDurationMs(result.attempts[0]!), {
-      backend: "A",
-      ok: false,
-      error: "empty response",
-    });
-  });
-
-  it("fetchOne の attempts にも所要時間を記録する", async () => {
-    const backends = [failBackend("A"), okBackend("B")];
-    const result = await fetchOne("https://example.com/", undefined, backends);
-    const durations = result.attempts.map((attempt) => attempt.durationMs);
-    assert.ok(durations.every((duration) => typeof duration === "number"));
-  });
-
-  it("web_fetch でも captcha detected のときは同じバックエンドを1回だけ再試行する", async () => {
-    let calls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          calls += 1;
-          if (calls === 1) throw new Error("parse: captcha detected");
-          return "retried text";
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await fetchOne("https://example.com/", undefined, backends);
-
-    assert.equal(calls, 2);
-    assert.equal(result.backend, "A");
-    assert.equal(result.text, "retried text");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "A", ok: true },
-    ]);
-  });
-
-  it("web_fetch でも captcha detected の再試行も失敗したら次のバックエンドへ進む", async () => {
-    let firstBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          firstBackendCalls += 1;
-          throw new Error("parse: captcha detected");
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await fetchOne("https://example.com/", undefined, backends);
-
-    assert.equal(firstBackendCalls, 2);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "B", ok: true },
-    ]);
-  });
-
-  it("web_fetch でも challenge detected のときは同じバックエンドを1回だけ再試行する", async () => {
-    let calls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          calls += 1;
-          if (calls === 1) throw new Error("render: challenge detected");
-          return "retried text";
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await fetchOne("https://example.com/", undefined, backends);
-
-    assert.equal(calls, 2);
-    assert.equal(result.backend, "A");
-    assert.equal(result.text, "retried text");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "render: challenge detected" },
-      { backend: "A", ok: true },
-    ]);
-  });
-
-  it("web_fetch でも challenge detected の再試行も失敗したら次のバックエンドへ進む", async () => {
-    let firstBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          firstBackendCalls += 1;
-          throw new Error("render: challenge detected");
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await fetchOne("https://example.com/", undefined, backends);
-
-    assert.equal(firstBackendCalls, 2);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "render: challenge detected" },
-      { backend: "A", ok: false, error: "render: challenge detected" },
-      { backend: "B", ok: true },
-    ]);
-  });
-
-  it("web_fetch でも abort 済み signal では captcha detected を再試行しない", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    let firstBackendCalls = 0;
-    const backends: BackendEntry[] = [
-      [
-        "A",
-        async () => {
-          firstBackendCalls += 1;
-          throw new Error("parse: captcha detected");
-        },
-      ],
-      okBackend("B"),
-    ];
-
-    const result = await fetchOne("https://example.com/", controller.signal, backends);
-
-    assert.equal(firstBackendCalls, 1);
-    assert.equal(result.backend, "B");
-    assert.deepEqual(result.attempts.map(withoutDurationMs), [
-      { backend: "A", ok: false, error: "parse: captcha detected" },
-      { backend: "B", ok: true },
-    ]);
-  });
-
-  it("デフォルトのバックエンド順序は camoufox+trafilatura のみ", () => {
-    const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["camoufox+trafilatura"]);
-  });
-});
-
-describe("web_fetch 統合（execute 経由・実バックエンド）", () => {
-  it("パラメータは url のみで、複数一括フェッチはサポートしない", () => {
-    const parameterKeys = Object.keys(fetchTool.parameters.properties);
-    assert.deepEqual(parameterKeys, ["url"]);
-  });
-
-  it("実バックエンドでフェッチが成功する", async () => {
-    const resultText = textOf(
-      await callFetch("https://example.com/", AbortSignal.timeout(120_000)),
-    );
-    assert.ok(resultText.length > 0);
-  }, 150_000);
-});
-
-describe("バックエンド結果行のフォーマット", () => {
-  it("成功（タイトルなし）は '✓ <バックエンド>' を返す", () => {
-    assert.equal(formatBackendLine({ backend: "openserp(bing)", ok: true }), "✓ openserp(bing)");
-  });
-
-  it("成功（タイトルあり）は '✓ <バックエンド> - \"<タイトル>\"' を返す", () => {
-    const line = formatBackendLine({ backend: "trafilatura", ok: true }, "Example");
-    assert.equal(line, '✓ trafilatura - "Example"');
-  });
-
-  it("失敗はタイトルの有無に関わらず '✗ <バックエンド> - \"<エラー>\"' を返す", () => {
-    const line = formatBackendLine(
-      { backend: "openserp(google)", ok: false, error: "captcha detected" },
-      "Example",
-    );
-    assert.equal(line, '✗ openserp(google) - "captcha detected"');
-  });
-
-  it("formatBackendLines は成功にだけタイトルを付け、失敗行には付けない", () => {
-    const attempts: Attempt[] = [
-      { backend: "openserp(google)", ok: false, error: "captcha detected" },
-      { backend: "openserp(bing)", ok: true },
-    ];
-    assert.deepEqual(formatBackendLines(attempts, "成功タイトル"), [
-      '✗ openserp(google) - "captcha detected"',
-      '✓ openserp(bing) - "成功タイトル"',
-    ]);
-  });
-
-  it("成功行には所要時間を '(1.2s)' 形式で付ける", () => {
-    const line = formatBackendLine({ backend: "openserp(bing)", ok: true, durationMs: 1234 });
-    assert.equal(line, "✓ openserp(bing) (1.2s)");
-  });
-
-  it("失敗行にも所要時間を付ける", () => {
-    const line = formatBackendLine({
-      backend: "openserp(google)",
-      ok: false,
-      error: "captcha detected",
-      durationMs: 800,
-    });
-    assert.equal(line, '✗ openserp(google) - "captcha detected" (0.8s)');
-  });
-
-  it("タイトル付き成功行はタイトルの後に所要時間を付ける", () => {
-    const line = formatBackendLine(
-      { backend: "trafilatura", ok: true, durationMs: 500 },
-      "Example",
-    );
-    assert.equal(line, '✓ trafilatura - "Example" (0.5s)');
-  });
-});
-
-describe("SERP URL 構築", () => {
-  it("クエリを q パラメータへ URL エンコードする", () => {
-    assert.equal(serpUrl("bing", "hello world"), "https://www.bing.com/search?q=hello+world");
-    assert.equal(serpUrl("google", "a&b=c"), "https://www.google.com/search?q=a%26b%3Dc");
-  });
-
-  it("lang 指定時は各エンジンの言語パラメータへ反映する（大文字でも小文字に正規化）", () => {
-    assert.equal(serpUrl("bing", "query", "JA"), "https://www.bing.com/search?q=query&mkt=ja-JP");
-    assert.equal(serpUrl("duckduckgo", "query", "JA"), "https://duckduckgo.com/?q=query&kl=jp-ja");
     assert.equal(
-      serpUrl("google", "query", "JA"),
-      "https://www.google.com/search?q=query&hl=ja&gl=jp",
+      textOf(result),
+      '**Query:** "pi coding agent" - **Engines:** google - **Took:** 2.1s\n\n### 1. Pi\n\n**example.com** - organic\n\nsnip\n\n-> https://example.com/1',
     );
+    assert.deepEqual(detailsOf(result), { engine: "google", tookMs: 2100 });
   });
 
-  it("lang 未指定時は言語パラメータを付けない", () => {
-    assert.equal(serpUrl("google", "query"), "https://www.google.com/search?q=query");
+  it("uses the fetch body as text with backend, title and tookMs details", async () => {
+    const cli = fakeCli({ stdout: fetchJsonOutput });
+    const fetchTool = captureTools(cli.deps).get("web_fetch")!;
+
+    const result = await callFetch(fetchTool, "https://example.com/");
+
+    assert.equal(textOf(result), "# Example\n\nbody");
+    assert.deepEqual(detailsOf(result), {
+      backend: "camoufox+trafilatura",
+      title: "Example",
+      tookMs: 1200,
+    });
   });
 
-  it("対応する値のない lang は指定なしとして扱う", () => {
-    assert.equal(serpUrl("bing", "query", "xx"), "https://www.bing.com/search?q=query");
-    assert.equal(serpUrl("duckduckgo", "query", "xx"), "https://duckduckgo.com/?q=query");
-    // google は hl に lang を直接渡し、gl は対応国があるときだけ付く
-    assert.equal(serpUrl("google", "query", "sv"), "https://www.google.com/search?q=query&hl=sv");
-  });
-});
+  it("omits the title detail when the fetch JSON has no title", async () => {
+    const output = JSON.stringify({
+      url: "https://example.com/",
+      backend: "Reddit",
+      body: "markdown",
+      tookMs: 500,
+    });
+    const cli = fakeCli({ stdout: output });
+    const fetchTool = captureTools(cli.deps).get("web_fetch")!;
 
-describe("段階別タイムアウト", () => {
-  it("サーバー起動待ち・パース・変換・Reddit・StackOverflow は各15秒、描画は30秒", () => {
-    assert.equal(SERVER_WAIT_TIMEOUT_MS, 15_000);
-    assert.equal(RENDER_TIMEOUT_MS, 30_000);
-    assert.equal(PARSE_TIMEOUT_MS, 15_000);
-    assert.equal(CONVERT_TIMEOUT_MS, 15_000);
-    assert.equal(REDDIT_TIMEOUT_MS, 15_000);
-    assert.equal(STACKOVERFLOW_TIMEOUT_MS, 15_000);
-  });
-});
+    const result = await callFetch(fetchTool, "https://example.com/");
 
-describe("web_fetch 表示", () => {
-  it("コール行は入力を添えて 'web_fetch - \"<url>\"' を出す", () => {
-    const lines = renderedLines(
-      fetchTool.renderCall({ url: "https://example.com/" }, identityTheme),
-    );
-    assert.equal(lines[0], 'web_fetch - "https://example.com/"');
+    assert.deepEqual(detailsOf(result), { backend: "Reddit", tookMs: 500 });
   });
 
-  it("結果行は成功バックエンドにだけタイトルを付ける", () => {
-    const attempts: Attempt[] = [
-      { backend: "trafilatura", ok: false, error: "timeout" },
-      { backend: "camoufox+trafilatura", ok: true },
-    ];
-    const result = {
-      content: [{ type: "text", text: "本文" }],
-      details: { backend: "camoufox+trafilatura", attempts, title: "Example Page" },
-    };
-    const lines = renderedLines(fetchTool.renderResult(result));
-    assert.deepEqual(lines, [
-      '✗ trafilatura - "timeout"',
-      '✓ camoufox+trafilatura - "Example Page"',
+  it("keeps the schema: query required + lang optional, url required", () => {
+    const tools = captureTools();
+    assert.deepEqual(Object.keys(tools.get("web_search")!.parameters.properties), [
+      "query",
+      "lang",
     ]);
+    assert.deepEqual(Object.keys(tools.get("web_fetch")!.parameters.properties), ["url"]);
   });
+});
 
-  it("結果行はタイトルがない成功バックエンドにはタイトルを付けない", () => {
-    const attempts: Attempt[] = [{ backend: "camoufox+trafilatura", ok: true }];
-    const result = {
-      content: [{ type: "text", text: "本文" }],
-      details: { backend: "camoufox+trafilatura", attempts, title: null },
-    };
-    const lines = renderedLines(fetchTool.renderResult(result));
-    assert.deepEqual(lines, ["✓ camoufox+trafilatura"]);
-  });
-
-  it("全バックエンド失敗時、execute は onUpdate へ attempts を渡し結果行に失敗行を出す", async () => {
-    const failedFetch = captureTools(
-      createWebToolOperations({
-        fetch: (url, signal) => fetchOne(url, signal, [failBackend("X", "boom")]),
-      }),
-    ).get("web_fetch")!;
-    const updates: Array<{ details?: { attempts?: Attempt[] } }> = [];
+describe("CLI error propagation", () => {
+  it("throws the CLI's stderr as the tool error and reports it via onUpdate", async () => {
+    const stderr = "All web search backends failed: camoufox+openserp(google): boom";
+    const cli = fakeCli({ code: 1, stderr });
+    const search = captureTools(cli.deps).get("web_search")!;
+    const updates: unknown[] = [];
 
     await assert.rejects(
-      failedFetch.execute(
+      search.execute(
         "call",
-        { url: "https://example.com/" },
-        AbortSignal.timeout(30_000),
-        (update: { details?: { attempts?: Attempt[] } }) => updates.push(update),
+        { query: "q" },
+        AbortSignal.timeout(5_000),
+        (update: unknown) => updates.push(update),
         executionContext,
       ),
-      /All web fetch backends failed/,
+      new Error(stderr),
     );
-
-    const attempts = updates[0]?.details?.attempts;
-    assert.deepEqual(attempts?.map(withoutDurationMs), [{ backend: "X", ok: false, error: "boom" }]);
-    const lines = renderedLines(
-      failedFetch.renderResult({ content: [], details: undefined }, {}, identityTheme, {
-        state: { attempts },
-      }),
-    );
-    // 所要時間は実行時間で可変のため形式のみ確認する
-    const resultLine = lines[0]!;
-    assert.match(resultLine, /^✗ X - "boom" \(\d+\.\d+s\)$/, `実際: ${resultLine}`);
-  });
-});
-
-describe("web_fetch のタイトル抽出", () => {
-  it("h1 見出し（# <タイトル>）からタイトルを取り出す", () => {
-    assert.equal(titleFromMarkdown("# Hello World\n\nbody text"), "Hello World");
+    assert.deepEqual(updates, [{ content: [], details: { error: stderr } }]);
   });
 
-  it("`## <数字>. <タイトル>` 形式の見出しもタイトルとして取り出す", () => {
-    assert.equal(titleFromMarkdown("## 1. First Result\n\nbody text"), "First Result");
-  });
-
-  it("`### <数字>. <タイトル>` 形式の見出しもタイトルとして取り出す", () => {
-    assert.equal(titleFromMarkdown("### 2. Second Result\n\nbody text"), "Second Result");
-  });
-
-  it("h1 と数字見出しが両方ある本文は h1 を優先する", () => {
-    assert.equal(titleFromMarkdown("# Page Title\n\n## 1. First Result"), "Page Title");
-  });
-
-  it("タイトル候補の見出しがない本文は null を返す", () => {
-    assert.equal(titleFromMarkdown("plain body\n\n## no numbered heading\ntail"), null);
-  });
-});
-
-const redditPostUrl = "https://www.reddit.com/r/programming/comments/abc123/test_post/";
-
-// Reddit Atom 実形式に合わせたフィクスチャ（content は HTML エスケープ、本文は Markdown 構文込み）
-const redditAtomFixture = [
-  '<?xml version="1.0" encoding="UTF-8"?>',
-  '<feed xmlns="http://www.w3.org/2005/Atom">',
-  '<category term="programming" label="r/programming"/>',
-  "<entry>",
-  "<id>t3_abc123</id>",
-  "<title>Announcement: We&#39;ve Updated The Rules</title>",
-  "<author><name>/u/SampleAuthor</name><uri>https://www.reddit.com/user/SampleAuthor</uri></author>",
-  '<content type="html">&lt;!-- SC_OFF --&gt;&lt;div class=&quot;md&quot;&gt;&lt;p&gt;Hello &lt;a href=&quot;https://example.com/page/&quot;&gt;world&lt;/a&gt;.&lt;/p&gt; &lt;p&gt;&lt;blockquote&gt;&lt;p&gt;Quoted &amp;amp; cited&lt;/p&gt;&lt;/blockquote&gt;&lt;/p&gt;&lt;/div&gt;&lt;!-- SC_ON --&gt;</content>',
-  "<updated>2026-05-23T13:54:37+00:00</updated>",
-  '<link href="https://www.reddit.com/r/programming/comments/abc123/test_post/"/>',
-  "</entry>",
-  "<entry>",
-  "<id>t1_def456</id>",
-  "<title>/u/Commenter on Announcement: We&#39;ve Updated The Rules</title>",
-  "<author><name>/u/Commenter</name></author>",
-  '<content type="html">&lt;div class=&quot;md&quot;&gt;&lt;p&gt;A &lt;em&gt;comment&lt;/em&gt; body.&lt;/p&gt;&lt;/div&gt;</content>',
-  "<updated>2026-05-23T14:18:41+00:00</updated>",
-  '<link href="https://www.reddit.com/r/programming/comments/abc123/test_post/def456/"/>',
-  "</entry>",
-  "</feed>",
-].join("");
-
-type MockResponse = { status: number; statusText: string; body: string };
-
-function mockRedditFetcher(responses: Record<string, MockResponse>): typeof fetch {
-  return (async (url: string) => {
-    const response = responses[url];
-    if (!response) throw new Error(`unexpected request: ${url}`);
-    return {
-      ok: response.status < 400,
-      status: response.status,
-      statusText: response.statusText,
-      text: async () => response.body,
-    } as unknown as Response;
-  }) as unknown as typeof fetch;
-}
-
-describe("Reddit URL 判定", () => {
-  it("投稿パーマリンクから RSS・embed・oEmbed の各 URL を組み立てる", () => {
-    const post = parseRedditPostUrl(redditPostUrl);
-    assert.ok(post);
-    assert.equal(post.postId, "abc123");
-    assert.equal(post.permalink, redditPostUrl);
-    assert.equal(post.rssUrl, `${redditPostUrl}.rss?limit=500&sort=top`);
-    assert.match(
-      post.embedUrl,
-      /^https:\/\/embed\.reddit\.com\/r\/programming\/comments\/abc123\/test_post\/\?ref_source=embed/,
-    );
-    assert.match(post.oembedUrl, /reddit\.com\/oembed\?url=/);
-  });
-
-  it("www 省略・末尾スラッシュなしでも permalink を正規化する", () => {
-    const post = parseRedditPostUrl("https://reddit.com/r/programming/comments/abc123");
-    assert.ok(post);
-    assert.equal(post.permalink, "https://www.reddit.com/r/programming/comments/abc123/");
-  });
-
-  it("対象ホストは reddit.com と *.reddit.com（old・np 等のサブドメインを含む）", () => {
-    const hosts = ["reddit.com", "www.reddit.com", "old.reddit.com", "np.reddit.com"];
-    for (const host of hosts) {
-      const post = parseRedditPostUrl(`https://${host}/r/programming/comments/abc123/title/`);
-      assert.ok(post, `host should be accepted: ${host}`);
-      assert.equal(post.permalink, "https://www.reddit.com/r/programming/comments/abc123/title/");
-    }
-  });
-
-  it("reddit.com 以外のホスト（notreddit.com）は対象外", () => {
-    assert.equal(
-      parseRedditPostUrl("https://notreddit.com/r/programming/comments/abc123/title/"),
-      undefined,
-    );
-  });
-
-  it("サブレディット一覧・ユーザーページ・他サイトは対象外", () => {
-    assert.equal(parseRedditPostUrl("https://www.reddit.com/r/programming/"), undefined);
-    assert.equal(parseRedditPostUrl("https://www.reddit.com/user/SampleAuthor"), undefined);
-    assert.equal(
-      parseRedditPostUrl("https://example.com/r/programming/comments/abc123/x/"),
-      undefined,
-    );
-  });
-});
-
-describe("Reddit Atom パース", () => {
-  const parsed = parseRedditAtom(redditAtomFixture)!;
-
-  it("投稿（t3_）のタイトル・作者・更新時刻を取り出す", () => {
-    assert.equal(parsed.post.title, "Announcement: We've Updated The Rules");
-    assert.equal(parsed.post.author, "u/SampleAuthor");
-    assert.equal(parsed.post.updated, "2026-05-23T13:54:37+00:00");
-    assert.equal(parsed.post.permalink, redditPostUrl);
-  });
-
-  it("投稿本文をリンクと引用を保った Markdown に変換する", () => {
-    assert.match(parsed.post.bodyMarkdown, /Hello \[world\]\(https:\/\/example\.com\/page\/\)\./);
-    assert.match(parsed.post.bodyMarkdown, /^> Quoted & cited$/m);
-  });
-
-  it("コメント（t1_）を本文ごと列挙する", () => {
-    assert.equal(parsed.comments.length, 1);
-    assert.equal(parsed.comments[0]?.author, "u/Commenter");
-    assert.match(parsed.comments[0]?.bodyMarkdown ?? "", /A \*comment\* body\./);
-  });
-
-  it("投稿エントリがないフィードは undefined", () => {
-    assert.equal(parseRedditAtom("<feed></feed>"), undefined);
-  });
-});
-
-describe("Reddit フォールバックパース", () => {
-  it("embed ページからタイトルと表示コメント数を取り出す", () => {
-    const embedHtml = '<a id="embed-title" href="x">Sample Title</a> ... 175 comments';
-    assert.deepEqual(parseRedditEmbed(embedHtml), {
-      title: "Sample Title",
-      displayedCommentCount: 175,
-    });
-  });
-
-  it("embed ページに有効な要素がなければ undefined", () => {
-    assert.equal(parseRedditEmbed("<html></html>"), undefined);
-  });
-
-  it("oEmbed JSON からタイトルを取り出す", () => {
-    assert.deepEqual(parseRedditOEmbed('{"title":"OEmbed Title"}'), { title: "OEmbed Title" });
-    assert.equal(parseRedditOEmbed("not json"), undefined);
-  });
-});
-
-describe("fetchRedditMarkdown", () => {
-  const post = parseRedditPostUrl(redditPostUrl)!;
-
-  it("RSS・埋め込み・oEmbed の各要求は独立したタイムアウトシグナルを持つ", async () => {
-    const signals: AbortSignal[] = [];
-    const fetcher = ((input: string | URL | Request, init?: RequestInit) => {
-      signals.push(init?.signal as AbortSignal);
-      return Promise.resolve(new Response("", { status: 429 }));
-    }) as unknown as typeof fetch;
-
-    await assert.rejects(fetchRedditMarkdown(redditPostUrl, undefined, fetcher));
-
-    // SPEC: §タイムアウト。Reddit の各取得は1要求ごとに15秒。
-    assert.equal(signals.length, 3);
-    assert.ok(signals[0] !== signals[1] && signals[1] !== signals[2]);
-    assert.ok(signals.every((signal) => !signal.aborted));
-  });
-
-  it("RSS 成功時は投稿本文とコメント一覧を返す", async () => {
-    const markdown = await fetchRedditMarkdown(
-      redditPostUrl,
-      undefined,
-      mockRedditFetcher({
-        [post.rssUrl]: { status: 200, statusText: "OK", body: redditAtomFixture },
-      }),
-    );
-    assert.match(markdown, /^# Announcement: We've Updated The Rules$/m);
-    assert.match(markdown, /^- Updated: /m);
-    assert.match(markdown, /^- Comments: 1 fetched$/m);
-    assert.match(markdown, /^## Post$/m);
-    assert.match(markdown, /^## Comments \(1 retrieved\)$/m);
-    assert.match(markdown, /^### 1\. u\/Commenter$/m);
-  });
-
-  it("RSS が 429 のとき embed にフォールバックする", async () => {
-    const markdown = await fetchRedditMarkdown(
-      redditPostUrl,
-      undefined,
-      mockRedditFetcher({
-        [post.rssUrl]: { status: 429, statusText: "Too Many Requests", body: "" },
-        [post.embedUrl]: {
-          status: 200,
-          statusText: "OK",
-          body: '<a id="embed-title">Embed Title</a> 42 comments',
-        },
-      }),
-    );
-    assert.match(markdown, /^# Embed Title$/m);
-    assert.match(markdown, /^- Comments: unavailable \(Reddit displays 42\)$/m);
-    assert.match(markdown, /post body unavailable/);
-  });
-
-  it("RSS も embed も失敗するとき oEmbed を試す", async () => {
-    const markdown = await fetchRedditMarkdown(
-      redditPostUrl,
-      undefined,
-      mockRedditFetcher({
-        [post.rssUrl]: { status: 429, statusText: "Too Many Requests", body: "" },
-        [post.embedUrl]: { status: 403, statusText: "Forbidden", body: "" },
-        [post.oembedUrl]: { status: 200, statusText: "OK", body: '{"title":"OEmbed Title"}' },
-      }),
-    );
-    assert.match(markdown, /^# OEmbed Title$/m);
-  });
-
-  it("全経路が失敗したら例外を出す", async () => {
-    const allFailedFetcher = mockRedditFetcher({
-      [post.rssUrl]: { status: 429, statusText: "Too Many Requests", body: "" },
-      [post.embedUrl]: { status: 403, statusText: "Forbidden", body: "" },
-      [post.oembedUrl]: { status: 404, statusText: "Not Found", body: "" },
-    });
-    await assert.rejects(
-      fetchRedditMarkdown(redditPostUrl, undefined, allFailedFetcher),
-      /Unable to fetch Reddit post abc123/,
-    );
-  });
-});
-
-describe("web_fetch バックエンド構成（Reddit 分岐）", () => {
-  it("Reddit 投稿パーマリンクのときバックエンドは Reddit のみでフォールバックしない", () => {
-    const backendNames = defaultFetchBackends(redditPostUrl).map(([name]) => name);
-    assert.deepEqual(backendNames, ["Reddit"]);
-  });
-
-  it("その他の URL では camoufox+trafilatura のみ", () => {
-    const backendNames = defaultFetchBackends("https://example.com/").map(([name]) => name);
-    assert.deepEqual(backendNames, ["camoufox+trafilatura"]);
-  });
-});
-
-// --- camoufox+trafilatura バックエンド（モック） ---
-
-// --- モックサーバーフェッチャー（openserp 用） ---
-
-const openserpBase = "http://127.0.0.1:7000";
-const networkError = Symbol("network-error");
-
-type OpenserpCall = {
-  method: string;
-  path: string;
-  body?: unknown;
-  signal?: AbortSignal;
-  headers?: Record<string, string>;
-};
-
-interface OpenserpRoute {
-  method: string;
-  pattern: RegExp;
-  status?: number;
-  statusText?: string;
-  body?: unknown;
-  respond?: () => unknown;
-}
-
-function tryParseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-function createMockServerFetcher(baseUrl: string) {
-  return (routes: OpenserpRoute[], calls: OpenserpCall[]): typeof fetch =>
-    (async (input: string | URL | Request, init?: RequestInit) => {
-      const path = String(input).replace(baseUrl, "");
-      const method = (init?.method ?? "GET").toUpperCase();
-      calls.push({
-        method,
-        path,
-        body: init?.body === undefined ? undefined : tryParseJson(String(init.body)),
-        signal: init?.signal as AbortSignal | undefined,
-        headers: (init?.headers as Record<string, string> | undefined) ?? undefined,
-      });
-      const route = routes.find(
-        (candidate) => candidate.method === method && candidate.pattern.test(path),
-      );
-      if (!route) throw new Error(`unexpected request: ${method} ${path}`);
-      const body = route.respond ? route.respond() : route.body;
-      if (body === networkError) throw new TypeError("fetch failed");
-      const status = route.status ?? 200;
-      return {
-        ok: status < 400,
-        status,
-        statusText: route.statusText ?? "OK",
-        json: async () => (status < 400 ? body : { error: route.body, message: route.body }),
-        text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
-      } as unknown as Response;
-    }) as unknown as typeof fetch;
-}
-
-const mockOpenserpFetcher = createMockServerFetcher(openserpBase);
-
-// --- playwright-cli モック（camoufox render 用） ---
-
-type CliCall = { sessionKey: string; args: string[]; signal?: AbortSignal };
-
-// `playwright-cli run-code` の stdout: `### Result` 行に続いて戻り値の JSON 文字列
-// リテラルが 1 行で出る（§camoufox による描画）。
-function runCodeOutput(html: string, mode: "settled" | "challenge" = "settled"): string {
-  return [
-    "### Result",
-    JSON.stringify({ mode, html }),
-    "### Ran Playwright code",
-    "```js",
-    "await (async page => { ... })(page);",
-    "```",
-    "",
-  ].join("\n");
-}
-
-type CliMockOptions = {
-  health?: "ok" | "fail";
-  openError?: Error;
-  runCodeError?: Error;
-  runCodeOutput?: string;
-  runCodeHtml?: string;
-  runCodeMode?: "settled" | "challenge";
-  closeError?: Error;
-};
-
-// camoufoxRender に注入する deps。CLI 呼び出しを calls に記録する。
-function cliDeps(
-  options: CliMockOptions,
-  calls: CliCall[],
-  spawns: { count: number } = { count: 0 },
-) {
-  return {
-    probeServer: async () => options.health !== "fail",
-    spawnCamoufox: () => {
-      spawns.count++;
-    },
-    runCli: async (sessionKey: string, args: string[], signal: AbortSignal) => {
-      calls.push({ sessionKey, args, signal });
-      const command = args[0];
-      if (command === "open") {
-        if (options.openError) throw options.openError;
-        return "opened";
-      }
-      if (command === "run-code") {
-        if (options.runCodeError) throw options.runCodeError;
-        if (options.runCodeOutput !== undefined) return options.runCodeOutput;
-        return runCodeOutput(options.runCodeHtml ?? "", options.runCodeMode);
-      }
-      if (command === "close") {
-        if (options.closeError) throw options.closeError;
-        return "";
-      }
-      throw new Error(`unexpected cli command: ${args.join(" ")}`);
-    },
-  };
-}
-
-describe("camoufox+trafilatura バックエンド", () => {
-  it("サーバーが既に応答するときは起動せず、close→open→描画待ち→close→変換の順で進む", async () => {
-    const calls: CliCall[] = [];
-    const spawns = { count: 0 };
-
-    const markdown = await camoufoxFetch("https://example.com/", undefined, {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>body</html>" }, calls, spawns),
-      toMarkdown: async (html: string) => `md:${html}`,
-    });
-
-    assert.equal(markdown, "md:<html>body</html>");
-    assert.equal(spawns.count, 0);
-    assert.deepEqual(
-      calls.map((call) => call.args[0]),
-      ["close", "open", "run-code", "close"],
-    );
-    const openCall = calls.find((call) => call.args[0] === "open");
-    assert.equal(openCall?.sessionKey, "web-fetch");
-  });
-
-  it("ヘルスチェックが失敗する間はサーバーを1回だけ起動し、成功したら処理を再開する", async () => {
-    const calls: CliCall[] = [];
-    const spawns = { count: 0 };
-    let healthChecks = 0;
-    const deps = cliDeps({ runCodeHtml: "<html>x</html>" }, calls, spawns);
-
-    const markdown = await camoufoxFetch("https://example.com/", undefined, {
-      ...deps,
-      probeServer: async () => ++healthChecks > 2,
-      toMarkdown: async (html: string) => `md:${html}`,
-    });
-
-    assert.equal(markdown, "md:<html>x</html>");
-    assert.equal(spawns.count, 1);
-    assert.equal(healthChecks, 3);
-  });
-
-  it("タイムアウト内にサーバーが準備できなければ例外を出す", async () => {
-    const calls: CliCall[] = [];
+  it("falls back to an exit-code message when stderr is empty", async () => {
+    const cli = fakeCli({ code: 1 });
+    const fetchTool = captureTools(cli.deps).get("web_fetch")!;
 
     await assert.rejects(
-      camoufoxFetch("https://example.com/", AbortSignal.timeout(50), {
-        ...cliDeps({ health: "fail" }, calls),
-        toMarkdown: async () => "md",
-      }),
-      /camoufox server not ready/,
+      callFetch(fetchTool, "https://example.com/"),
+      new Error("web-fetch exited with code 1"),
     );
-    assert.equal(calls.length, 0);
   });
 
-  it("描画（run-code）に失敗してもページを閉じる", async () => {
-    const calls: CliCall[] = [];
+  it("rejects non-JSON stdout on success exit", async () => {
+    const cli = fakeCli({ stdout: "not json" });
+    const search = captureTools(cli.deps).get("web_search")!;
 
     await assert.rejects(
-      camoufoxFetch("https://example.com/", undefined, {
-        ...cliDeps({ health: "ok", runCodeError: new Error("evaluate failed") }, calls),
-        toMarkdown: async () => "md",
-      }),
-      /render: evaluate failed/,
-    );
-    assert.equal(calls.at(-1)?.args[0], "close");
-  });
-
-  it("run-code の出力に Result がなければ例外を出す", async () => {
-    const calls: CliCall[] = [];
-
-    await assert.rejects(
-      camoufoxFetch("https://example.com/", undefined, {
-        ...cliDeps(
-          {
-            health: "ok",
-            runCodeOutput: "### Ran Playwright code\n```js\nawait page.evaluate();\n```\n",
-          },
-          calls,
-        ),
-        toMarkdown: async () => "md",
-      }),
-      /render: playwright-cli run-code output has no result/,
+      callSearch(search, { query: "q" }),
+      new Error("web-search: CLI stdout is not JSON"),
     );
   });
 
-  it("ページを閉じる失敗は変換結果に影響しない", async () => {
-    const calls: CliCall[] = [];
-
-    const markdown = await camoufoxFetch("https://example.com/", undefined, {
-      ...cliDeps({
-        health: "ok",
-        runCodeHtml: "<html>y</html>",
-        closeError: new Error("close failed"),
-      }, calls),
-      toMarkdown: async () => "md",
-    });
-
-    assert.equal(markdown, "md");
-  });
-
-  it("DOM取得後にページを閉じてから trafilatura 変換する", async () => {
-    const calls: CliCall[] = [];
-    const order: string[] = [];
-
-    await camoufoxFetch("https://example.com/", undefined, {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>z</html>" }, calls),
-      toMarkdown: async () => {
-        order.push(...calls.map((call) => call.args[0] ?? ""));
-        order.push("CONVERT");
-        return "md";
-      },
-    });
-
-    assert.deepEqual(order, ["close", "open", "run-code", "close", "CONVERT"]);
-  });
-
-  it("CLI 操作と trafilatura 変換は別々のシグナルを使う", async () => {
-    const calls: CliCall[] = [];
-    const callerSignal = new AbortController().signal;
-    let convertSignal: AbortSignal | undefined;
-
-    await camoufoxFetch("https://example.com/", callerSignal, {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>s</html>" }, calls),
-      toMarkdown: async (_html: string, toMarkdownSignal?: AbortSignal) => {
-        convertSignal = toMarkdownSignal;
-        return "md";
-      },
-    });
-
-    assert.ok(calls.every((call) => call.signal !== undefined && call.signal !== callerSignal));
-    assert.equal(convertSignal, callerSignal);
-  });
-
-  it("起動待ちで失敗した次のリクエストは、応答するサーバーで再起動せず成功する", async () => {
-    const spawns = { count: 0 };
-    const spawnCamoufox = () => {
-      spawns.count++;
+  it("wraps spawn failures with the CLI name", async () => {
+    const runCli = async (): Promise<WebCliResult> => {
+      throw new Error("spawn bun ENOENT");
     };
+    const search = captureTools({ runCli, env: { BROWSE_CLI_DIR: "/nonexistent-test-cli" } }).get(
+      "web_search",
+    )!;
 
     await assert.rejects(
-      camoufoxFetch("https://example.com/", AbortSignal.timeout(50), {
-        probeServer: async () => false,
-        spawnCamoufox,
-        runCli: async () => "",
-        toMarkdown: async () => "md",
-      }),
-      /camoufox server not ready/,
-    );
-    assert.equal(spawns.count, 1);
-
-    const calls: CliCall[] = [];
-    const markdown = await camoufoxFetch("https://example.com/", undefined, {
-      ...cliDeps({ runCodeHtml: "<html>w</html>" }, calls),
-      probeServer: async () => true,
-      spawnCamoufox,
-      toMarkdown: async () => "md",
-    });
-
-    assert.equal(markdown, "md");
-    assert.equal(spawns.count, 1);
-  });
-});
-
-describe("camoufox サーバー起動コマンド", () => {
-  it("bun server.mjs を拡張ディレクトリでバックグラウンド起動する", () => {
-    const spawnSpec = buildCamoufoxServerSpawn("/extensions/web-search");
-
-    assert.equal(spawnSpec.command, "bun");
-    assert.deepEqual(spawnSpec.args, ["server.mjs"]);
-    assert.equal(spawnSpec.options.cwd, "/extensions/web-search");
-    assert.equal(spawnSpec.options.detached, true);
-    assert.equal(spawnSpec.options.stdio, "ignore");
-  });
-  it("既定の起動ディレクトリに playwright-cli 用 config が置かれる", () => {
-    const spawnSpec = buildCamoufoxServerSpawn();
-
-    assert.equal(spawnSpec.options.cwd, dirname(playwrightCliConfigPath()));
-  });
-
-  it("サーバーログはキャッシュディレクトリの pi/web-search/ 配下", () => {
-    assert.equal(
-      camoufoxServerLogPath({ XDG_CACHE_HOME: "/cache" }),
-      "/cache/pi/web-search/camoufox-server.log",
+      callSearch(search, { query: "q" }),
+      new Error("web-search: spawn bun ENOENT"),
     );
   });
 });
 
-describe("playwright-cli 起動パラメータ", () => {
-  it("config パスは拡張ディレクトリ内の playwright-cli.config.json", () => {
-    assert.equal(
-      playwrightCliConfigPath("/ext/web-search"),
-      "/ext/web-search/playwright-cli.config.json",
-    );
+describe("CLI path resolution", () => {
+  it("resolves the script under BROWSE_CLI_DIR when set", () => {
+    assert.equal(browseCliDir({ BROWSE_CLI_DIR: "/opt/cli" }), "/opt/cli");
+    assert.equal(browseScript({ BROWSE_CLI_DIR: "/opt/cli" }), "/opt/cli/browse");
   });
 
-  it("CLI 引数はセッションを -s= で指定する", () => {
-    assert.deepEqual(buildPlaywrightCliArgs("web-fetch", ["open", "https://example.com/"]), [
-      "-s=web-fetch",
-      "open",
-      "https://example.com/",
-    ]);
-  });
-
-  it("PLAYWRIGHT_MCP_CONFIG に config パスを設定し、他の変数を引き継ぐ", () => {
-    const env = buildPlaywrightCliEnv({ EXISTING: "1" }, "/cfg.json");
-
-    assert.equal(env.PLAYWRIGHT_MCP_CONFIG, "/cfg.json");
-    assert.equal(env.EXISTING, "1");
-  });
-});
-
-describe("playwright-cli config の接続先反映", () => {
-  it("config JSON は接続先（CAMOUFOX_BASE_URL）を remoteEndpoint に反映する", () => {
-    const json = JSON.parse(playwrightCliConfigJson("ws://localhost:9999/fox")) as {
-      browser: { browserName: string; remoteEndpoint: string };
-    };
-
-    assert.equal(json.browser.remoteEndpoint, "ws://localhost:9999/fox");
-    assert.equal(json.browser.browserName, "firefox");
-  });
-
-  it("syncPlaywrightCliConfig は指定ディレクトリの config を接続先に合わせて書き込む", () => {
-    const dir = mkdtempSync(join(tmpdir(), "web-search-config-test-"));
+  it("prefers the source-tree .executable suffix", () => {
+    const dir = mkdtempSync(join(tmpdir(), "web-cli-"));
     try {
-      syncPlaywrightCliConfig(dir, "ws://localhost:9999/fox");
-
-      const written = readFileSync(playwrightCliConfigPath(dir), "utf8");
-      assert.equal(written, playwrightCliConfigJson("ws://localhost:9999/fox"));
+      writeFileSync(join(dir, "browse.executable"), "");
+      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, "browse.executable"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("syncPlaywrightCliConfig は既定で camoufoxBaseUrl() の接続先を使う", () => {
-    const dir = mkdtempSync(join(tmpdir(), "web-search-config-test-"));
-    const previous = process.env.CAMOUFOX_BASE_URL;
-    process.env.CAMOUFOX_BASE_URL = "ws://localhost:7777/fox";
+  it("falls back to the plain deployed file name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "web-cli-"));
     try {
-      syncPlaywrightCliConfig(dir);
-
-      const written = JSON.parse(
-        readFileSync(playwrightCliConfigPath(dir), "utf8"),
-      ) as { browser: { remoteEndpoint: string } };
-      assert.equal(written.browser.remoteEndpoint, "ws://localhost:7777/fox");
+      writeFileSync(join(dir, "browse"), "");
+      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, "browse"));
     } finally {
-      if (previous === undefined) delete process.env.CAMOUFOX_BASE_URL;
-      else process.env.CAMOUFOX_BASE_URL = previous;
       rmSync(dir, { recursive: true, force: true });
     }
   });
-});
 
-describe("camoufox 接続先", () => {
-  it("既定は ws://127.0.0.1:9378/camoufox", () => {
-    assert.equal(camoufoxBaseUrl({}), "ws://127.0.0.1:9378/camoufox");
-  });
-
-  it("環境変数 CAMOUFOX_BASE_URL で変更できる", () => {
-    assert.equal(
-      camoufoxBaseUrl({ CAMOUFOX_BASE_URL: "ws://localhost:9999/camoufox" }),
-      "ws://localhost:9999/camoufox",
-    );
+  it("defaults to .agents/cli four levels above this extension", () => {
+    const extensionDir = dirname(fileURLToPath(import.meta.url));
+    assert.equal(browseCliDir({}), join(extensionDir, "..", "..", "..", "..", ".agents", "cli"));
   });
 });
 
-describe("camoufox による描画（camoufoxRender）", () => {
-  it("web_search は web-search、web_fetch は web-fetch セッションで CLI を呼ぶ", async () => {
-    const calls: CliCall[] = [];
-    const deps = cliDeps({ health: "ok", runCodeHtml: "<html>x</html>" }, calls);
-
-    await camoufoxRender("https://example.com/a", "web-search", undefined, deps);
-    await camoufoxRender("https://example.com/b", "web-fetch", undefined, deps);
-
-    const openSessions = calls
-      .filter((call) => call.args[0] === "open")
-      .map((call) => call.sessionKey);
-    assert.deepEqual(openSessions, ["web-search", "web-fetch"]);
-  });
-
-  it("描画の前に playwright-cli config を接続先に合わせて更新する", async () => {
-    const calls: CliCall[] = [];
-    let synced = false;
-    const deps = {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>x</html>" }, calls),
-      syncConfig: () => {
-        synced = true;
-      },
-    };
-
-    await camoufoxRender("https://example.com/", "web-fetch", undefined, deps);
-
-    assert.ok(synced);
-    const firstCommand = calls[0]?.args[0];
-    assert.notEqual(firstCommand, "open");
-  });
-
-  it("open の前に残存セッションを閉じ、cookie やページ状態を持ち越さない", async () => {
-    const calls: CliCall[] = [];
-
-    await camoufoxRender("https://example.com/", "web-fetch", undefined, cliDeps({
-      health: "ok",
-      runCodeHtml: "<html>c</html>",
-    }, calls));
-
-    assert.equal(calls[0]?.args[0], "close");
-    assert.ok(calls.findIndex((call) => call.args[0] === "open") > 0);
-  });
-
-  it("描画失敗のエラーには render: 段階ラベルを付ける", async () => {
-    const calls: CliCall[] = [];
-
-    await assert.rejects(
-      camoufoxRender("https://example.com/", "web-search", undefined, {
-        ...cliDeps({ health: "ok", openError: new Error("page.goto: Timeout") }, calls),
-      }),
-      /render: page\.goto: Timeout/,
-    );
-  });
-
-  it("run-code には networkidle 待ちとチャレンジポーリングを同時に実行するスニペットを渡す", async () => {
-    const calls: CliCall[] = [];
-
-    await camoufoxRender("https://example.com/", "web-fetch", undefined, {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>r</html>" }, calls),
-    });
-
-    const runCodeCall = calls.find((call) => call.args[0] === "run-code");
-    const snippet = runCodeCall?.args[1] ?? "";
-    assert.match(snippet, /waitForLoadState\('networkidle', \{ timeout: 5000 \}\)/);
-    assert.match(snippet, /waitForTimeout\(\d+\)/);
-    assert.match(snippet, /mode: 'challenge'/);
-    // シグナルは run-code 内で再構築できるよう source・flags が埋め込まれる
-    assert.match(snippet, /challengeSignals = \[/);
-    assert.equal([...snippet.matchAll(/new RegExp\(/g)].length, 1);
-  });
-
-  it("描画済み DOM がチャレンジページのとき render 失敗にする", async () => {
-    const calls: CliCall[] = [];
-
-    await assert.rejects(
-      camoufoxRender("https://example.com/", "web-fetch", undefined, {
-        ...cliDeps(
-          {
-            health: "ok",
-            runCodeHtml: '<html><head><title>Just a moment...</title></head></html>',
-            runCodeMode: "challenge",
-          },
-          calls,
-        ),
-      }),
-      /render: challenge detected/,
-    );
-    assert.equal(calls.at(-1)?.args[0], "close");
-  });
-});
-
-describe("camoufox ヘルスチェック（websocket）", () => {
-  it("websocket 接続が成功するサーバーは健全と判定する", async () => {
-    const server = Bun.serve({
-      port: 0,
-      fetch(request, serve) {
-        if (serve.upgrade(request)) return;
-        return new Response("upgrade required", { status: 426 });
-      },
-      websocket: {
-        open() {},
-        message() {},
-      },
-    });
-    try {
-      const healthy = await camoufoxServerHealthy(
-        `ws://127.0.0.1:${server.port}/camoufox`,
-        AbortSignal.timeout(2_000),
-      );
-      assert.ok(healthy);
-    } finally {
-      server.stop(true);
-    }
-  });
-
-  it("接続できないサーバーは不健全と判定する", async () => {
-    const healthy = await camoufoxServerHealthy("ws://127.0.0.1:1/camoufox", AbortSignal.timeout(2_000));
-    assert.ok(!healthy);
-  });
-});
-
-describe("playwright-cli run-code 出力のパース", () => {
-  it("### Result 行に続く JSON オブジェクトから settled の HTML を取り出す", () => {
-    const output = `### Result\n${JSON.stringify({ mode: "settled", html: "<html>body</html>" })}\n### Ran Playwright code\n`;
-
-    assert.equal(parseRenderedPage(output), "<html>body</html>");
-  });
-
-  it("エスケープされた改行や引用符を含む HTML を復元する", () => {
-    const html = '<div class="a">\n</div>';
-    const output = `### Result\n${JSON.stringify({ mode: "settled", html })}\n`;
-
-    assert.equal(parseRenderedPage(output), html);
-  });
-
-  it("challenge モードは例外を出す", () => {
-    const output = `### Result\n${JSON.stringify({ mode: "challenge", html: "<html>x</html>" })}\n`;
-
-    assert.throws(() => parseRenderedPage(output), /challenge detected/);
-  });
-
-  it("Result がなければ例外を出す", () => {
-    assert.throws(
-      () => parseRenderedPage("### Ran Playwright code\n```js\nx\n```\n"),
-      /no result/,
-    );
-  });
-
-  it("Result の次の行が文字列リテラルでなければ例外を出す", () => {
-    assert.throws(() => parseRenderedPage("### Result\nundefined\n"), /no result/);
-  });
-
-  it("html が空なら例外を出す", () => {
-    assert.throws(
-      () => parseRenderedPage(`### Result\n${JSON.stringify({ mode: "settled", html: "" })}\n`),
-      /no HTML/,
-    );
-  });
-});
-
-
-
-describe("openserp パース（openserpParse）", () => {
-  it("ready を確認してから HTML を POST /<engine>/parse?format=json へ送り、results からエントリを生成する", async () => {
-    const calls: OpenserpCall[] = [];
-    const fetcher = mockOpenserpFetcher(
-      [
-        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
-        {
-          method: "POST",
-          pattern: /^\/bing\/parse\?format=json$/,
-          body: {
-            results: [
-              {
-                rank: 1,
-                type: "organic",
-                title: "Example",
-                url: "https://example.com/",
-                display_url: "example.com",
-                snippet: "Example snippet.",
-              },
-            ],
-          },
-        },
-      ],
-      calls,
-    );
-
-    const markdown = await openserpParse("bing", "<html>serp</html>", undefined, {
-      fetcher,
-      spawnOpenserp: () => {},
-    });
-
-    assert.equal(
-      markdown,
-      "### 1. Example\n\n**example.com** - organic\n\nExample snippet.\n\n-> https://example.com/",
-    );
-    const parseCall = calls.find((call) => call.method === "POST");
-    assert.equal(parseCall?.path, "/bing/parse?format=json");
-    assert.equal(parseCall?.body, "<html>serp</html>");
-    assert.equal(parseCall?.headers?.["Content-Type"], "text/html");
-  });
-
-  it("サーバーが応答しないときは起動して準備を待つ", async () => {
-    const calls: OpenserpCall[] = [];
-    let readyChecks = 0;
-    const fetcher = mockOpenserpFetcher(
-      [
-        {
-          method: "GET",
-          pattern: /^\/ready$/,
-          respond: () => (++readyChecks <= 1 ? networkError : { status: "ready" }),
-        },
-        {
-          method: "POST",
-          pattern: /^\/duckduckgo\/parse\?format=json$/,
-          body: { results: [{ rank: 1, title: "Example" }] },
-        },
-      ],
-      calls,
-    );
-    const spawns = { count: 0 };
-
-    await openserpParse("duckduckgo", "<html>serp</html>", undefined, {
-      fetcher,
-      spawnOpenserp: () => {
-        spawns.count++;
-      },
-    });
-
-    assert.equal(spawns.count, 1);
-    assert.equal(readyChecks, 2);
-  });
-
-  it("ready 応答時はサーバーを起動しない", async () => {
-    const spawns = { count: 0 };
-    const fetcher = mockOpenserpFetcher(
-      [
-        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
-        {
-          method: "POST",
-          pattern: /^\/bing\/parse\?format=json$/,
-          body: { results: [{ rank: 1, title: "Example" }] },
-        },
-      ],
-      [],
-    );
-
-    await openserpParse("bing", "<html>serp</html>", undefined, {
-      fetcher,
-      spawnOpenserp: () => {
-        spawns.count++;
-      },
-    });
-
-    assert.equal(spawns.count, 0);
-  });
-
-  it("タイムアウト内にサーバーが準備できなければ例外を出す", async () => {
-    const fetcher = mockOpenserpFetcher(
-      [{ method: "GET", pattern: /^\/ready$/, respond: () => networkError }],
-      [],
-    );
-
-    await assert.rejects(
-      openserpParse("bing", "<html>serp</html>", AbortSignal.timeout(50), {
-        fetcher,
-        spawnOpenserp: () => {},
-      }),
-      /openserp server not ready/,
-    );
-  });
-
-  it("CAPTCHA 等 4xx エラーは 'parse: <メッセージ>' で失敗する", async () => {
-    const fetcher = mockOpenserpFetcher(
-      [
-        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
-        {
-          method: "POST",
-          pattern: /^\/google\/parse\?format=json$/,
-          status: 422,
-          statusText: "Unprocessable Entity",
-          body: "captcha detected",
-        },
-      ],
-      [],
-    );
-
-    await assert.rejects(
-      openserpParse("google", "<html>serp</html>", undefined, {
-        fetcher,
-        spawnOpenserp: () => {},
-      }),
-      /parse: captcha detected/,
-    );
-  });
-
-  it("results が空なら 'parse: empty response' で失敗する", async () => {
-    const fetcher = mockOpenserpFetcher(
-      [
-        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
-        { method: "POST", pattern: /^\/bing\/parse\?format=json$/, body: { results: [] } },
-      ],
-      [],
-    );
-
-    await assert.rejects(
-      openserpParse("bing", "<html>serp</html>", undefined, {
-        fetcher,
-        spawnOpenserp: () => {},
-      }),
-      /parse: empty response/,
-    );
-  });
-
-  it("応答が JSON でなければ 'parse: response is not valid JSON' で失敗する", async () => {
-    const fetcher = mockOpenserpFetcher(
-      [
-        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
-        { method: "POST", pattern: /^\/bing\/parse\?format=json$/, body: "not json" },
-      ],
-      [],
-    );
-
-    await assert.rejects(
-      openserpParse("bing", "<html>serp</html>", undefined, {
-        fetcher,
-        spawnOpenserp: () => {},
-      }),
-      /parse: response is not valid JSON/,
-    );
-  });
-});
-
-describe("openserp results からのエントリ生成（formatOpenserpResults）", () => {
-  it("rank 順にソートし、欠損フィールドは省略する", () => {
-    const markdown = formatOpenserpResults([
-      { rank: 2, title: "Second", url: "https://example.org/" },
+describe("formatSearchText", () => {
+  const json = (overrides: Partial<Parameters<typeof formatSearchText>[0]> = {}) => ({
+    query: "q",
+    engine: "google",
+    tookMs: 2100,
+    results: [
       {
-        rank: 1,
-        type: "organic",
-        title: "First",
-        url: "https://example.com/",
+        title: "Pi",
+        url: "https://example.com/1",
         display_url: "example.com",
-        snippet: "First snippet.",
+        type: "organic",
+        snippet: "snip",
       },
-    ]);
-
-    assert.equal(
-      markdown,
-      "### 1. First\n\n**example.com** - organic\n\nFirst snippet.\n\n-> https://example.com/\n\n### 2. Second\n\n-> https://example.org/",
-    );
+    ],
+    ...overrides,
   });
 
-  it("先頭 limit 件までに切り詰める", () => {
-    const results = Array.from({ length: 12 }, (_, index) => ({
-      rank: index + 1,
-      title: `Result ${index + 1}`,
-    }));
-
-    const markdown = formatOpenserpResults(results, 10);
-
-    assert.equal((markdown.match(/^### \d+\./gm) ?? []).length, 10);
-    assert.ok(!markdown.includes("Result 11"));
-  });
-
-  it("results が空なら空文字を返す", () => {
-    assert.equal(formatOpenserpResults([]), "");
-  });
-
-  it("title が空なら URL を見出しに使い、両方なければプレースホルダにする", () => {
-    const markdown = formatOpenserpResults([
-      { rank: 1, url: "https://example.com/" },
-      { rank: 2 },
-    ]);
-
-    assert.equal(
-      markdown,
-      "### 1. https://example.com/\n\n-> https://example.com/\n\n### 2. (no title)",
-    );
-  });
-});
-
-describe("camoufox+openserp 検索バックエンド（camoufoxOpenserpSearch）", () => {
-  it("SERP URL を構築し web-search セッションで描画し、パース結果を10件に切りメタデータ行を先頭に付ける", async () => {
-    const cliCalls: CliCall[] = [];
-    const openserpCalls: OpenserpCall[] = [];
-    const results = Array.from({ length: 12 }, (_, index) => ({
-      rank: index + 1,
-      type: "organic",
-      title: `Result ${index + 1}`,
-      url: `https://example.com/${index + 1}`,
-    }));
-    const openserpFetcher = mockOpenserpFetcher(
-      [
-        { method: "GET", pattern: /^\/ready$/, body: { status: "ready" } },
-        {
-          method: "POST",
-          pattern: /^\/bing\/parse\?format=json$/,
-          body: { results },
-        },
-      ],
-      openserpCalls,
-    );
-    const deps = {
-      ...cliDeps({ health: "ok", runCodeHtml: "<html>serp</html>" }, cliCalls),
-      fetcher: openserpFetcher,
-      spawnOpenserp: () => {},
-    };
-
-    const markdown = await camoufoxOpenserpSearch("bing", "クエリ", undefined, "JA", deps);
-
-    const headings = markdown.match(/^### \d+\./gm) ?? [];
-    assert.equal(headings.length, 10);
+  it("starts with the meta line quoting the query, engine and seconds", () => {
     assert.ok(
-      markdown.startsWith('**Query:** "クエリ" - **Engines:** bing - **Took:** '),
-      "先頭行は実測値のメタデータ行",
+      formatSearchText(json()).startsWith('**Query:** "q" - **Engines:** google - **Took:** 2.1s'),
     );
-    assert.match(
-      markdown,
-      /^\*\*Query:\*\* "クエリ" - \*\*Engines:\*\* bing - \*\*Took:\*\* \d+\.\ds\n\n/,
-    );
-    const openCall = cliCalls.find((call) => call.args[0] === "open");
-    assert.equal(openCall?.sessionKey, "web-search");
-    assert.deepEqual(
-      openCall?.args,
-      ["open", "https://www.bing.com/search?q=%E3%82%AF%E3%82%A8%E3%83%AA&mkt=ja-JP"],
-    );
-    const parseCall = openserpCalls.find((call) => call.method === "POST");
-    assert.equal(parseCall?.body, "<html>serp</html>");
-  });
-});
-
-describe("openserp 接続先と起動コマンド", () => {
-  it("既定は http://127.0.0.1:7000", () => {
-    assert.equal(openserpBaseUrl({}), "http://127.0.0.1:7000");
   });
 
-  it("環境変数 OPENSERP_BASE_URL で変更できる", () => {
+  it("renders each result as a numbered block with source, snippet and url lines", () => {
+    const text = formatSearchText(json());
     assert.equal(
-      openserpBaseUrl({ OPENSERP_BASE_URL: "http://localhost:8123" }),
-      "http://localhost:8123",
+      text,
+      '**Query:** "q" - **Engines:** google - **Took:** 2.1s\n\n' +
+        "### 1. Pi\n\n**example.com** - organic\n\nsnip\n\n-> https://example.com/1",
     );
   });
 
-  it("openserp serve を base URL の host・port で --quiet 付きバックグラウンド起動する", () => {
-    const spawnSpec = buildOpenserpServerSpawn();
-
-    assert.equal(spawnSpec.command, "openserp");
-    assert.deepEqual(spawnSpec.args, ["serve", "-a", "127.0.0.1", "-p", "7000", "--quiet"]);
-    assert.equal(spawnSpec.options.detached, true);
-    assert.equal(spawnSpec.options.stdio, "ignore");
-  });
-});
-
-describe("サーバー起動のエラーハンドリング", () => {
-  it("起動コマンドが存在しないとき spawn の error を握り、プロセスを落とさない", async () => {
-    const child = spawnDetachedServer("no-such-server-binary-for-test", [], { stdio: "ignore" });
-
-    assert.ok(child.listenerCount("error") >= 1, "spawn の error を握る listener が必要");
-    // ENOENT の "error" は次 tick 以降に emit される。ここまで到達し、
-    // このテスト自体が uncaughtException で死ななければ握りが機能している。
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  });
-});
-
-describe("チャレンジページ検出", () => {
-  it("Cloudflare の各構造シグナルを含む HTML をチャレンジページと判定する", () => {
-    const challengePages = [
-      '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/challenge_page/1.abc.html"></script>',
-      '<div id="challenge-running"></div>',
-      '<form id="challenge-form" action="/xyz/__cf_chl_jschl_tk__="></form>',
-      '<div id="challenge-stage"></div>',
-      '<div id="challenge-error-text"></div>',
-      "<html><head><title>Just a moment...</title></head></html>",
-      '<div class="cf-turnstile" data-sitekey="x"></div>',
-    ];
-    for (const html of challengePages) {
-      assert.equal(detectChallengePage(html), true, html);
-    }
-  });
-
-  it("Google の CAPTCHA・sorry・soft block 固定ページをチャレンジページと判定する", () => {
-    const googleBlockPages = [
-      '<form id="captcha-form" action="https://www.google.com/search"></form>',
-      '<form action="https://www.google.com/sorry/index?continue=..."></form>',
-      '<body onload="document.getElementById(\'captcha\').submit()"></body>',
-      // soft block: 結果ブロック無し + noscript の JS リトライリンク
-      '<html><body><noscript><a href="https://www.google.com/search?q=x&amp;httpservice/retry/enablejs=1">enable js</a></noscript></body></html>',
-    ];
-    for (const html of googleBlockPages) {
-      assert.equal(detectChallengePage(html), true, html);
-    }
-  });
-
-  it("通常ページと文言だけが似ているページはチャレンジページとしない", () => {
-    assert.equal(
-      detectChallengePage("<html><head><title>Example Domain</title></head></html>"),
-      false,
-    );
-    assert.equal(detectChallengePage("<p>Enable JavaScript and cookies to continue</p>"), false);
-    assert.equal(
-      detectChallengePage("<html><head><title>Just a moment</title></head></html>"),
-      false,
-    );
-    // reCAPTCHA 埋め込みの通常ページはシグナルにしない（data-sitekey・recaptcha）
-    assert.equal(
-      detectChallengePage('<div class="g-recaptcha" data-sitekey="k"><script src="https://www.google.com/recaptcha/api.js"></script></div>'),
-      false,
-    );
-    // 結果ブロックを持つ google SERP に noscript の enablejs リンクがあっても正常
-    const normalSerp = '<noscript>https://www.google.com/search?gbv=httpservice/retry/enablejs</noscript><div class="tF2Cxc">result</div>';
-    assert.equal(detectChallengePage(normalSerp), false);
-  });
-
-  it("シグナルは run-code スニペットにも単一ソースで渡される", () => {
-    const snippet = challengeWaitSnippet();
-    for (const signal of CHALLENGE_SIGNALS) {
-      assert.ok(snippet.includes(JSON.stringify(signal.source).slice(1, -1)), signal.source);
-    }
-  });
-
-  it("camoufoxFetch はチャレンジページの描画結果を render 失敗扱いにする", async () => {
-    const calls: CliCall[] = [];
-    let toMarkdownCalls = 0;
-
-    await assert.rejects(
-      camoufoxFetch("https://example.com/", undefined, {
-        ...cliDeps(
-          { health: "ok", runCodeHtml: "<html><head><title>Just a moment...</title></head></html>", runCodeMode: "challenge" },
-          calls,
-        ),
-        toMarkdown: async () => {
-          toMarkdownCalls++;
-          return "md";
-        },
+  it("numbers result blocks sequentially", () => {
+    const text = formatSearchText(
+      json({
+        results: [
+          { title: "A", url: "https://a" },
+          { title: "B", url: "https://b" },
+        ],
       }),
-      /render: challenge detected/,
     );
-    assert.equal(toMarkdownCalls, 0);
+    assert.ok(text.includes("### 1. A"));
+    assert.ok(text.includes("### 2. B"));
+  });
+
+  it("drops lines for missing fields and falls back title-first to the url, then (no title)", () => {
+    const text = formatSearchText(json({ results: [{}, { url: "https://only-url" }] }));
+    assert.equal(
+      text,
+      '**Query:** "q" - **Engines:** google - **Took:** 2.1s\n\n' +
+        "### 1. (no title)\n\n" +
+        "### 2. https://only-url\n\n-> https://only-url",
+    );
+  });
+
+  it("outputs only the meta line when the CLI returned no results", () => {
+    assert.equal(
+      formatSearchText(json({ results: [] })),
+      '**Query:** "q" - **Engines:** google - **Took:** 2.1s',
+    );
   });
 });
 
-describe("StackOverflow バックエンド", () => {
-  const stackOverflowQuestionUrl =
-    "https://stackoverflow.com/questions/231767/what-does-the-yield-keyword-do-in-python";
-
-  type SoRoute = { match: RegExp; status?: number; body: unknown };
-
-  function soRouteFetcher(routes: SoRoute[], requests: string[] = []): typeof fetch {
-    return (async (input: string | URL | Request) => {
-      const url = String(input);
-      requests.push(url);
-      const route = routes.find((route) => route.match.test(url));
-      if (!route) throw new Error(`unexpected request: ${url}`);
-      const status = route.status ?? 200;
-      return {
-        ok: status < 400,
-        status,
-        statusText: "OK",
-        json: async () => route.body,
-        text: async () =>
-          typeof route.body === "string" ? route.body : JSON.stringify(route.body),
-      } as unknown as Response;
-    }) as unknown as typeof fetch;
-  }
-
-  const apiQuestionUrl =
-    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\?site=stackoverflow&filter=withbody$/;
-  const apiAnswersPage1Url =
-    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\/answers\?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=1$/;
-  const apiAnswersPage2Url =
-    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\/answers\?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=2$/;
-  const apiAnswersAnyPageUrl =
-    /^https:\/\/api\.stackexchange\.com\/2\.3\/questions\/231767\/answers\?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=\d+$/;
-  const feedUrl = /^https:\/\/stackoverflow\.com\/feeds\/question\/231767$/;
-
-  const apiQuestion = {
-    title: "What does the &quot;yield&quot; keyword do in Python?",
-    body: "<p>What does the <code>yield</code> keyword do?</p>",
-    score: 14000,
-    answer_count: 2,
-    tags: ["python", "generator"],
-    owner: { display_name: "Alex" },
-  };
-  const apiAnswerItems = [
-    {
-      body: "<p><strong>Iterables</strong></p>",
-      score: 18316,
-      is_accepted: true,
-      owner: { display_name: "Bite code" },
-    },
-    { body: "<p>Second answer</p>", score: 100, owner: { display_name: "Other" } },
-  ];
-  const feedXml = `<?xml version="1.0" encoding="utf-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <entry>
-    <id>https://stackoverflow.com/q/231767</id>
-    <title>What does the yield keyword do in Python?</title>
-    <link rel="alternate" href="https://stackoverflow.com/questions/231767/" />
-    <author><name>Alex</name></author>
-    <summary type="html">&lt;p&gt;What does the yield keyword do?&lt;/p&gt;</summary>
-  </entry>
-  <entry>
-    <id>https://stackoverflow.com/a/231855</id>
-    <title>Answers to What does the yield keyword do in Python?</title>
-    <author><name>Bite code</name></author>
-    <summary type="html">&lt;p&gt;&lt;strong&gt;Iterables&lt;/strong&gt;&lt;/p&gt;</summary>
-  </entry>
-  <entry>
-    <id>https://stackoverflow.com/a/999999</id>
-    <title>Answers to What does the yield keyword do in Python?</title>
-    <author><name>Other</name></author>
-    <summary type="html">&lt;p&gt;Second answer&lt;/p&gt;</summary>
-  </entry>
-</feed>`;
-
-  it("質問パーマリンク（slug・クエリ・www 付き）を解析する", () => {
-    const parsed = parseStackOverflowQuestionUrl(stackOverflowQuestionUrl);
-    assert.equal(parsed?.questionId, "231767");
-    assert.equal(parsed?.permalink, "https://stackoverflow.com/questions/231767");
-    assert.equal(parsed?.feedUrl, "https://stackoverflow.com/feeds/question/231767");
+describe("web_search rendering", () => {
+  it("renders the call line with the query and optional lang suffix", () => {
+    const search = captureTools().get("web_search")!;
     assert.equal(
-      parseStackOverflowQuestionUrl("https://stackoverflow.com/questions/231767")?.questionId,
-      "231767",
+      renderedLines(search.renderCall({ query: "pi coding agent" }, identityTheme))[0],
+      'web_search - "pi coding agent"',
     );
     assert.equal(
-      parseStackOverflowQuestionUrl(
-        "https://www.stackoverflow.com/questions/231767/yield?noredirect=1#tab-top",
-      )?.questionId,
-      "231767",
+      renderedLines(search.renderCall({ query: "pi", lang: "JA" }, identityTheme))[0],
+      'web_search - "pi" [lang=JA]',
     );
   });
 
-  it("質問パーマリンク以外は対象外とする", () => {
-    assert.equal(parseStackOverflowQuestionUrl("https://stackoverflow.com/tags/python"), undefined);
-    assert.equal(parseStackOverflowQuestionUrl("https://stackoverflow.com/users/1/"), undefined);
-    assert.equal(
-      parseStackOverflowQuestionUrl("https://ja.stackoverflow.com/questions/1/x"),
-      undefined,
-    );
-    assert.equal(parseStackOverflowQuestionUrl("https://serverfault.com/questions/1/x"), undefined);
-    assert.equal(
-      parseStackOverflowQuestionUrl("https://stackoverflow.com/questions/abc/x"),
-      undefined,
-    );
-  });
-
-  it("SE API で質問と回答を取得して Markdown 化する", async () => {
-    const requests: string[] = [];
-    const fetcher = soRouteFetcher(
-      [
-        { match: apiQuestionUrl, body: { items: [apiQuestion] } },
-        { match: apiAnswersPage1Url, body: { items: apiAnswerItems, has_more: false } },
-      ],
-      requests,
-    );
-
-    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
-
-    assert.match(markdown, /^# What does the "yield" keyword do in Python\?$/m);
-    assert.match(markdown, /^- Author: Alex$/m);
-    assert.match(markdown, /^- Score: 14000$/m);
-    assert.match(markdown, /^- Answers: 2 retrieved \/ 2 total$/m);
-    assert.match(markdown, /^- Tags: python, generator$/m);
-    assert.match(markdown, /^## Question$/m);
-    assert.match(markdown, /^What does the `yield` keyword do\?$/m);
-    assert.match(markdown, /^### 1\. Bite code \(accepted, score 18316\)$/m);
-    assert.match(markdown, /^\*\*Iterables\*\*$/m);
-    assert.match(markdown, /^### 2\. Other \(score 100\)$/m);
-    assert.equal(requests.length, 2);
-  });
-
-  it("has_more が true の間は回答ページを進める", async () => {
-    const requests: string[] = [];
-    const fetcher = soRouteFetcher(
-      [
-        { match: apiQuestionUrl, body: { items: [apiQuestion] } },
-        { match: apiAnswersPage1Url, body: { items: apiAnswerItems, has_more: true } },
-        {
-          match: apiAnswersPage2Url,
-          body: {
-            items: [{ body: "<p>page2</p>", score: 1, owner: { display_name: "Third" } }],
-            has_more: false,
-          },
-        },
-      ],
-      requests,
-    );
-
-    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
-
-    assert.match(markdown, /3 retrieved/);
-    assert.match(markdown, /^### 3\. Third \(score 1\)$/m);
-    assert.equal(requests.filter((url) => url.includes("/answers?")).length, 2);
-  });
-
-  it("backoff を返されたときはその秒数待ってから次のリクエストを送る", async () => {
-    const requests: string[] = [];
-    const fetcher = soRouteFetcher(
-      [
-        { match: apiQuestionUrl, body: { items: [apiQuestion], backoff: 1 } },
-        { match: apiAnswersPage1Url, body: { items: apiAnswerItems, has_more: false } },
-      ],
-      requests,
-    );
-
-    const startedAt = Date.now();
-    await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
-    const elapsedMs = Date.now() - startedAt;
-
-    assert.ok(elapsedMs >= 950, `expected >= 950ms, got ${elapsedMs}ms`);
-    assert.equal(requests.length, 2);
-  });
-
-  it("質問フィードの先頭 entry を質問、以降を回答として解析する", () => {
-    const entries = parseStackOverflowAtom(feedXml);
-
-    assert.equal(entries.length, 3);
-    assert.equal(entries[0]?.title, "What does the yield keyword do in Python?");
-    assert.equal(entries[0]?.author, "Alex");
-    assert.equal(entries[0]?.link, "https://stackoverflow.com/questions/231767/");
-    assert.match(entries[0]?.bodyMarkdown ?? "", /yield/);
-    assert.equal(entries[1]?.author, "Bite code");
-    assert.match(entries[1]?.bodyMarkdown ?? "", /\*\*Iterables\*\*/);
-  });
-
-  it("entry のないフィードは空配列を返す", () => {
-    assert.deepEqual(
-      parseStackOverflowAtom('<feed xmlns="http://www.w3.org/2005/Atom"></feed>'),
-      [],
-    );
-  });
-
-  it("回答は投票順で最大500件まででページングを打ち切る", async () => {
-    const requests: string[] = [];
-    const hundredItems = Array.from({ length: 100 }, (_, index) => ({
-      body: `<p>answer ${index}</p>`,
-      score: index,
-      owner: { display_name: `user${index}` },
-    }));
-    const fetcher = soRouteFetcher(
-      [
-        { match: apiQuestionUrl, body: { items: [apiQuestion] } },
-        { match: apiAnswersAnyPageUrl, body: { items: hundredItems, has_more: true } },
-      ],
-      requests,
-    );
-
-    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
-
-    assert.match(markdown, /500 retrieved/);
-    // 500件に達したら page=6 を要求しない（要求すれば requests が 6 になり fail する）
-    assert.equal(requests.filter((url) => url.includes("/answers?")).length, 5);
-  });
-
-  it("SE API が失敗したときは質問フィードへフォールバックする", async () => {
-    const requests: string[] = [];
-    const fetcher = soRouteFetcher(
-      [
-        {
-          match: apiQuestionUrl,
-          status: 429,
-          body: { error_id: 502, error_name: "throttle_violation" },
-        },
-        { match: feedUrl, body: feedXml },
-      ],
-      requests,
-    );
-
-    const markdown = await fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher);
-
-    assert.match(markdown, /^# What does the yield keyword do in Python\?$/m);
-    assert.match(markdown, /^- Author: Alex$/m);
-    assert.match(markdown, /^- Permalink: https:\/\/stackoverflow\.com\/questions\/231767$/m);
-    assert.match(markdown, /What does the yield keyword do\?/);
-    assert.doesNotMatch(markdown, /^- (Score|Answers|Tags): /m);
-    assert.match(markdown, /^Note: score, accepted and vote order are unavailable/m);
-    assert.match(markdown, /^### 1\. Bite code$/m);
-    assert.match(markdown, /^### 2\. Other$/m);
-    assert.ok(!requests.some((url) => url.includes("/answers?")));
-  });
-
-  it("SE API と質問フィードの両方が失敗したら例外を出す", async () => {
-    const fetcher = soRouteFetcher([
-      { match: apiQuestionUrl, status: 429, body: { error_id: 502 } },
-      { match: feedUrl, status: 503, body: "unavailable" },
+  it("renders a success line with the engine and took seconds", () => {
+    const search = captureTools().get("web_search")!;
+    const result = {
+      content: [{ type: "text", text: "body" }],
+      details: { engine: "google", tookMs: 2100 },
+    };
+    assert.deepEqual(renderedLines(search.renderResult(result, {}, identityTheme)), [
+      "✓ google (2.1s)",
     ]);
+  });
 
-    await assert.rejects(
-      fetchStackOverflowMarkdown(stackOverflowQuestionUrl, undefined, fetcher),
-      /Unable to fetch StackOverflow question 231767/,
+  it("renders the stderr message as a failure line from the render state", () => {
+    const search = captureTools().get("web_search")!;
+    const state = { details: { error: "All web search backends failed: boom" } };
+    assert.deepEqual(
+      renderedLines(search.renderResult({ content: [] }, {}, identityTheme, { state })),
+      ['✗ web-search - "All web search backends failed: boom"'],
+    );
+  });
+});
+
+describe("web_fetch rendering", () => {
+  it("renders the call line with the url", () => {
+    const fetchTool = captureTools().get("web_fetch")!;
+    assert.equal(
+      renderedLines(fetchTool.renderCall({ url: "https://example.com/" }, identityTheme))[0],
+      'web_fetch - "https://example.com/"',
     );
   });
 
-  it("質問パーマリンクのデフォルトバックエンドは StackOverflow のみ", () => {
-    const backends = defaultFetchBackends(stackOverflowQuestionUrl);
+  it("renders a success line with backend, quoted title and took seconds", () => {
+    const fetchTool = captureTools().get("web_fetch")!;
+    const result = {
+      content: [{ type: "text", text: "body" }],
+      details: { backend: "Reddit", title: "A post", tookMs: 1200 },
+    };
+    assert.deepEqual(renderedLines(fetchTool.renderResult(result, {}, identityTheme)), [
+      '✓ Reddit - "A post" (1.2s)',
+    ]);
+  });
+
+  it("omits the title part when the fetch has no title", () => {
+    const fetchTool = captureTools().get("web_fetch")!;
+    const result = {
+      content: [{ type: "text", text: "body" }],
+      details: { backend: "camoufox+trafilatura", tookMs: 1200 },
+    };
+    assert.deepEqual(renderedLines(fetchTool.renderResult(result, {}, identityTheme)), [
+      "✓ camoufox+trafilatura (1.2s)",
+    ]);
+  });
+
+  it("renders the stderr message as a failure line from the render state", () => {
+    const fetchTool = captureTools().get("web_fetch")!;
+    const state = { details: { error: "Unable to fetch Reddit post abc123" } };
     assert.deepEqual(
-      backends.map(([name]) => name),
-      ["StackOverflow"],
+      renderedLines(fetchTool.renderResult({ content: [] }, {}, identityTheme, { state })),
+      ['✗ web-fetch - "Unable to fetch Reddit post abc123"'],
     );
   });
 });

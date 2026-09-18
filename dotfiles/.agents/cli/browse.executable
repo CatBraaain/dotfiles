@@ -1,0 +1,1747 @@
+#!/usr/bin/env bun
+// browse — one CLI for web search, web fetch and the shared camoufox server.
+// Spec: dotfiles/.agents/cli/browse.spec.md
+//
+// Subcommands:
+//   browse search "<query>" [--lang <code>] [--json]
+//   browse fetch <url> [--json]
+//   browse start      ensure the camoufox server is running (idempotent)
+//   browse restart    stop and respawn the camoufox server (hang recovery)
+//
+// The `__server` subcommand is internal: it is the camoufox server process
+// itself, spawned detached by `browse start` (and by search/fetch when they
+// find the server down). It stays running until the machine shuts down or the
+// process is killed.
+
+import {
+  execFile,
+  spawn,
+  spawnSync,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import net from "node:net";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const SEARCH_RESULT_LIMIT = 10;
+
+// Stage timeouts (spec: browse.spec.md "タイムアウト").
+const SERVER_WAIT_TIMEOUT_MS = 15_000;
+const RENDER_TIMEOUT_MS = 30_000;
+const PARSE_TIMEOUT_MS = 15_000;
+const CONVERT_TIMEOUT_MS = 15_000;
+const REDDIT_TIMEOUT_MS = 15_000;
+const STACKOVERFLOW_TIMEOUT_MS = 15_000;
+const SERVER_STOP_TIMEOUT_MS = 10_000;
+
+const SERVER_HEALTH_POLL_INTERVAL_MS = 250;
+const WEBSOCKET_HEALTH_TIMEOUT_MS = 1_000;
+const CAMOUFOX_DEFAULT_BASE_URL = "ws://127.0.0.1:9378/camoufox";
+const CAMOUFOX_EXECUTABLE_PATH =
+  process.env.CAMOUFOX_EXECUTABLE_PATH ?? join(homedir(), ".cache", "camoufox", "camoufox-bin");
+const OPENSERP_DEFAULT_BASE_URL = "http://127.0.0.1:7000";
+const CAMOUFOX_SEARCH_SESSION_KEY = "web-search";
+const CAMOUFOX_FETCH_SESSION_KEY = "web-fetch";
+const SERVER_SUBCOMMAND = "__server";
+
+// --- CLI plumbing ---
+
+function fail(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
+function usageFail(usage: string): never {
+  console.error(usage);
+  process.exit(1);
+}
+
+function emitJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+// Cross-process serialization (spec: "同一種類のコマンドが同時に起動された").
+// The whole command re-executes as a child of `flock`, so the kernel releases
+// the lock even when the holder crashes; the lock file itself is only an
+// anchor and may stay behind. Search and fetch use separate lock files, so
+// they never wait for each other.
+const LOCK_HELD_ENV = "BROWSE_LOCK_HELD";
+
+async function runSerialized(kind: "search" | "fetch", run: () => Promise<void>): Promise<void> {
+  if (process.env[LOCK_HELD_ENV]) return run();
+  const stateDirPath = stateDir();
+  const lockPath = join(stateDirPath, `${kind}.lock`);
+  // flock(1) does not create the lock file's parent directory.
+  mkdirSync(stateDirPath, { recursive: true });
+  const result = spawnSync(
+    "flock",
+    [lockPath, process.execPath, import.meta.path, ...process.argv.slice(2)],
+    {
+      stdio: "inherit",
+      env: { ...process.env, [LOCK_HELD_ENV]: "1" },
+    },
+  );
+  if (result.error) return run(); // flock(1) unavailable (e.g. Windows): run unlocked
+  process.exit(result.status ?? 1);
+}
+
+function camoufoxBaseUrl(): string {
+  return process.env.CAMOUFOX_BASE_URL ?? CAMOUFOX_DEFAULT_BASE_URL;
+}
+
+function openserpBaseUrl(): string {
+  return process.env.OPENSERP_BASE_URL ?? OPENSERP_DEFAULT_BASE_URL;
+}
+
+// Log, lock, pid file and playwright-cli config all live next to the shared
+// camoufox-server log (spec: "camoufox server のログは
+// <XDG_CACHE_HOME または ~/.cache>/pi/web-search/camoufox-server.log へ追記").
+function stateDir(): string {
+  return join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "pi", "web-search");
+}
+
+// --- argument parsing ---
+
+const USAGE = `usage: browse search "<query>" [--lang <code>] [--json]
+       browse fetch <url> [--json]
+       browse start
+       browse restart`;
+
+const SEARCH_USAGE = `usage: browse search "<query>" [--lang <code>] [--json]`;
+const FETCH_USAGE = `usage: browse fetch <url> [--json]`;
+
+interface SearchArgs {
+  query: string;
+  lang?: string;
+  json: boolean;
+}
+
+function parseSearchArgs(argv: string[]): SearchArgs {
+  const flags: { json: boolean; lang?: string } = { json: false };
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--json") flags.json = true;
+    else if (arg === "--lang") flags.lang = argv[++i] ?? usageFail(SEARCH_USAGE);
+    else if (arg.startsWith("--")) usageFail(SEARCH_USAGE);
+    else positional.push(arg);
+  }
+  if (positional.length !== 1) usageFail(SEARCH_USAGE);
+  return { ...flags, query: positional[0]! };
+}
+
+interface FetchArgs {
+  url: string;
+  json: boolean;
+}
+
+function parseFetchArgs(argv: string[]): FetchArgs {
+  const flags = { json: false };
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--json") flags.json = true;
+    else if (arg.startsWith("--")) usageFail(FETCH_USAGE);
+    else positional.push(arg);
+  }
+  if (positional.length !== 1) usageFail(FETCH_USAGE);
+  return { ...flags, url: positional[0]! };
+}
+
+// Spec: 引数が絶対 URL でない → エラー 1 行を stderr へ出力し、終了コード 1。
+function isAbsoluteUrl(raw: string): boolean {
+  try {
+    new URL(raw);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// --- subcommand dispatch ---
+
+async function main(): Promise<void> {
+  const [subcommand, ...rest] = process.argv.slice(2);
+  switch (subcommand) {
+    case "search":
+      await searchCommand(rest);
+      break;
+    case "fetch":
+      await fetchCommand(rest);
+      break;
+    case "start":
+      if (rest.length > 0) usageFail(USAGE);
+      await startCommand();
+      break;
+    case "restart":
+      if (rest.length > 0) usageFail(USAGE);
+      await restartCommand();
+      break;
+    case SERVER_SUBCOMMAND:
+      await runCamoufoxServer();
+      break;
+    default:
+      usageFail(USAGE);
+  }
+}
+
+async function searchCommand(argv: string[]): Promise<void> {
+  const args = parseSearchArgs(argv);
+  await runSerialized("search", async () => {
+    const outcome = await searchOne(args.query, args.lang);
+    if (args.json) emitJson(searchJson(args.query, outcome));
+    else console.log(formatSearchMarkdown(args.query, outcome));
+  });
+}
+
+async function fetchCommand(argv: string[]): Promise<void> {
+  const args = parseFetchArgs(argv);
+  if (!isAbsoluteUrl(args.url)) fail(`not an absolute URL: ${args.url}`);
+  await runSerialized("fetch", async () => {
+    const outcome = await fetchOne(args.url);
+    if (args.json) emitJson(fetchJson(args.url, outcome));
+    else console.log(outcome.markdown);
+  });
+}
+
+// Spec: `browse start` は冪等。起動済みなら何もせず終了コード 0。
+async function startCommand(): Promise<void> {
+  const baseUrl = camoufoxBaseUrl();
+  const signal = AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS);
+  if (await camoufoxServerHealthy(baseUrl, signal)) return;
+  spawnBrowseDetached([SERVER_SUBCOMMAND]);
+  await waitForServerHealthy(baseUrl, signal);
+}
+
+// Spec: `browse restart` は実行中の server を停止してから起動し直す。
+async function restartCommand(): Promise<void> {
+  await stopCamoufoxServers();
+  await startCommand();
+}
+
+// --- search pipeline ---
+
+// Locale parameter values follow openserp's engine URL builders
+// (bing/url.go mkt, duckduckgo/url.go kl, google/url.go hl+gl).
+const BING_MARKET_BY_LANGUAGE: Record<string, string> = {
+  en: "en-US",
+  de: "de-DE",
+  ru: "ru-RU",
+  fr: "fr-FR",
+  es: "es-ES",
+  it: "it-IT",
+  pt: "pt-BR",
+  zh: "zh-CN",
+  ja: "ja-JP",
+  ko: "ko-KR",
+  nl: "nl-NL",
+  pl: "pl-PL",
+  tr: "tr-TR",
+  ar: "ar-SA",
+};
+
+const DUCKDUCKGO_KL_BY_LANGUAGE: Record<string, string> = {
+  en: "us-en",
+  de: "de-de",
+  fr: "fr-fr",
+  es: "es-es",
+  it: "it-it",
+  nl: "nl-nl",
+  pt: "pt-pt",
+  ru: "ru-ru",
+  pl: "pl-pl",
+  cs: "cz-cs",
+  sk: "sk-sk",
+  hu: "hu-hu",
+  ro: "ro-ro",
+  da: "dk-da",
+  sv: "se-sv",
+  no: "no-no",
+  fi: "fi-fi",
+  tr: "tr-tr",
+  el: "gr-el",
+  he: "il-he",
+  ar: "xa-ar",
+  zh: "cn-zh",
+  ja: "jp-ja",
+  ko: "kr-ko",
+};
+
+const GOOGLE_COUNTRY_BY_LANGUAGE: Record<string, string> = {
+  en: "us",
+  pt: "br",
+  zh: "cn",
+  ja: "jp",
+  ko: "kr",
+};
+
+// Spec: "--lang <code> がある → engine 固有のロケールパラメータへ反映する"。
+// google は hl へ常に設定し、gl は対応表にある lang のみ。bing mkt / duckduckgo kl
+// も対応表にある lang のみで、対応表にない lang では付与せず hl のみ設定される。
+function serpUrl(engine: SearchEngine, query: string, lang?: string): string {
+  const params = new URLSearchParams({ q: query });
+  const language = lang?.toLowerCase();
+  if (language) {
+    if (engine === "bing") {
+      const market = BING_MARKET_BY_LANGUAGE[language];
+      if (market) params.set("mkt", market);
+    } else if (engine === "duckduckgo") {
+      const kl = DUCKDUCKGO_KL_BY_LANGUAGE[language];
+      if (kl) params.set("kl", kl);
+    } else {
+      params.set("hl", language);
+      const gl = GOOGLE_COUNTRY_BY_LANGUAGE[language];
+      if (gl) params.set("gl", gl);
+    }
+  }
+  return buildSerpUrl(engine, query, Object.fromEntries(params));
+}
+
+async function openserpParse(engine: SearchEngine, html: string): Promise<OpenserpSearchResult[]> {
+  await ensureOpenserpServer(AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
+  const response = await fetch(`${openserpBaseUrl()}/${engine}/parse?format=json`, {
+    method: "POST",
+    headers: { "Content-Type": "text/html" },
+    body: html,
+    signal: AbortSignal.timeout(PARSE_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`parse: ${await responseDetail(response)}`);
+  }
+  return parseOpenserpResponse(await response.text());
+}
+
+interface SearchOutcome {
+  readonly engine: SearchEngine;
+  readonly results: readonly OpenserpSearchResult[];
+  readonly tookMs: number;
+}
+
+const SEARCH_ENGINES: readonly SearchEngine[] = ["google", "duckduckgo", "bing"];
+
+// Spec: "engine を google → duckduckgo → bing の順で試行し、最初に成功した
+// engine の結果上位 10 件を出力する"。空結果・captcha・challenge は backend
+// 失敗として次の engine へ進む（tryBackends）。
+async function searchOne(query: string, lang?: string): Promise<SearchOutcome> {
+  const backends: BackendEntry<{ engine: SearchEngine; results: OpenserpSearchResult[] }>[] =
+    SEARCH_ENGINES.map((engine) => [
+      `camoufox+openserp(${engine})`,
+      async () => ({
+        engine,
+        results: await openserpParse(
+          engine,
+          await camoufoxRender(serpUrl(engine, query, lang), CAMOUFOX_SEARCH_SESSION_KEY),
+        ),
+      }),
+    ]);
+  const { payload, attempts } = await tryBackends(
+    "web search",
+    backends,
+    (payload) => payload.results.length === 0,
+    retryOnChallenge,
+  );
+  return { engine: payload.engine, results: payload.results, tookMs: attemptDuration(attempts) };
+}
+
+// --- fetch pipeline ---
+
+function defaultFetchBackends(url: string): BackendEntry<string>[] {
+  if (parseRedditPostUrl(url)) return [["Reddit", () => fetchRedditMarkdown(url)]];
+  if (parseStackOverflowQuestionUrl(url))
+    return [["StackOverflow", () => fetchStackOverflowMarkdown(url)]];
+  return [["camoufox+trafilatura", () => camoufoxFetch(url)]];
+}
+
+interface FetchOutcome {
+  readonly backend: string;
+  readonly markdown: string;
+  readonly tookMs: number;
+}
+
+async function fetchOne(url: string): Promise<FetchOutcome> {
+  const { payload, backend, attempts } = await tryBackends(
+    "web fetch",
+    defaultFetchBackends(url),
+    (markdown) => !markdown.trim(),
+    retryOnChallenge,
+  );
+  return { backend, markdown: payload, tookMs: attemptDuration(attempts) };
+}
+
+// Spec: "challenge / captcha を検出した → 同一 backend を 1 回だけ再試行し、
+// それでも失敗したら次の backend へ進む"。
+function retryOnChallenge(error: unknown): boolean {
+  return isCaptchaParseError(error) || isChallengeRenderError(error);
+}
+
+function attemptDuration(attempts: readonly Attempt[]): number {
+  const last = attempts.at(-1);
+  return last?.ok ? (last.durationMs ?? 0) : 0;
+}
+
+async function camoufoxFetch(url: string): Promise<string> {
+  const html = await camoufoxRender(url, CAMOUFOX_FETCH_SESSION_KEY);
+  return runWithStdin("trafilatura", ["--markdown"], html);
+}
+
+// Spec: Reddit 投稿パーマリンク → RSS（コメント上限 500）→ embed → oEmbed の順。
+// 各要求に独立した 15 秒（前の要求の消費時間は引き継がない）。
+interface RedditFetchAttempt {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  body: string;
+}
+
+async function fetchRedditText(url: string): Promise<RedditFetchAttempt> {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(REDDIT_TIMEOUT_MS),
+      headers: {
+        Accept:
+          "application/atom+xml, application/xml, application/json, text/html;q=0.9, */*;q=0.1",
+        "User-Agent": REDDIT_USER_AGENT,
+      },
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      body: await response.text(),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      statusText: error instanceof Error ? error.message : String(error),
+      body: "",
+    };
+  }
+}
+
+async function fetchRedditMarkdown(rawUrl: string): Promise<string> {
+  const url = parseRedditPostUrl(rawUrl);
+  if (!url) throw new Error(`Not a supported Reddit post URL: ${rawUrl}`);
+  const rssAttempt = await fetchRedditText(url.rssUrl);
+  const feed = rssAttempt.ok ? parseRedditAtom(rssAttempt.body) : undefined;
+  let embed: ReturnType<typeof parseRedditEmbed>;
+  if (!feed) {
+    const embedAttempt = await fetchRedditText(url.embedUrl);
+    embed = embedAttempt.ok ? parseRedditEmbed(embedAttempt.body) : undefined;
+  }
+  let oembed: ReturnType<typeof parseRedditOEmbed>;
+  if (!feed && !embed) {
+    const oembedAttempt = await fetchRedditText(url.oembedUrl);
+    oembed = oembedAttempt.ok ? parseRedditOEmbed(oembedAttempt.body) : undefined;
+  }
+  if (!feed && !embed && !oembed) {
+    throw new Error(
+      `Unable to fetch Reddit post ${url.postId} (RSS ${rssAttempt.status || rssAttempt.statusText})`,
+    );
+  }
+  return renderRedditMarkdown(url, feed, embed, oembed);
+}
+
+// Spec: StackOverflow 質問パーマリンク → StackExchange API（投票順・1 ページ
+// 100 件で最大 500 件・backoff 指定時は指定秒待機）→ 質問フィードの順。
+async function fetchStackExchangeApi(path: string): Promise<SeApiResponse> {
+  const response = await fetch(`${SE_API_BASE_URL}${path}`, {
+    signal: AbortSignal.timeout(STACKOVERFLOW_TIMEOUT_MS),
+  });
+  const json = (await response.json().catch(() => undefined)) as SeApiResponse | undefined;
+  if (!response.ok || json === undefined) {
+    throw new Error(`SE API ${response.status} ${response.statusText}`);
+  }
+  return json;
+}
+
+async function fetchStackOverflowFromApi(
+  url: StackOverflowQuestionUrl,
+): Promise<{ question: StackOverflowQuestion; answers: StackOverflowAnswer[] }> {
+  const request = async (path: string): Promise<SeApiResponse> => {
+    const response = await fetchStackExchangeApi(path);
+    if (typeof response.backoff === "number" && response.backoff > 0) {
+      await delay(response.backoff * 1000);
+    }
+    return response;
+  };
+
+  const questionItem = (
+    await request(`/questions/${url.questionId}?site=stackoverflow&filter=withbody`)
+  ).items?.[0];
+  if (!questionItem?.body) {
+    throw new Error(`SE API returned no question ${url.questionId}`);
+  }
+
+  const answers: StackOverflowAnswer[] = [];
+  for (let page = 1; answers.length < STACKOVERFLOW_MAX_ANSWERS; page++) {
+    const answerResponse = await request(
+      `/questions/${url.questionId}/answers?site=stackoverflow&filter=withbody&order=desc&sort=votes&pagesize=100&page=${page}`,
+    );
+    for (const item of answerResponse.items ?? []) {
+      answers.push({
+        author: item.owner?.display_name,
+        score: typeof item.score === "number" ? item.score : undefined,
+        accepted: item.is_accepted === true,
+        bodyMarkdown: htmlFragmentToMarkdown(item.body ?? ""),
+      });
+    }
+    if (!answerResponse.has_more) break;
+  }
+
+  return {
+    question: {
+      // SE API の title は HTML エスケープされて返るためデコードする
+      title: unescapeEntities(questionItem.title ?? `StackOverflow question ${url.questionId}`),
+      author: questionItem.owner?.display_name,
+      score: typeof questionItem.score === "number" ? questionItem.score : undefined,
+      answerCount:
+        typeof questionItem.answer_count === "number" ? questionItem.answer_count : undefined,
+      tags: questionItem.tags,
+      bodyMarkdown: htmlFragmentToMarkdown(questionItem.body),
+    },
+    answers: answers.slice(0, STACKOVERFLOW_MAX_ANSWERS),
+  };
+}
+
+async function fetchStackOverflowMarkdown(rawUrl: string): Promise<string> {
+  const url = parseStackOverflowQuestionUrl(rawUrl);
+  if (!url) throw new Error(`Not a supported StackOverflow question URL: ${rawUrl}`);
+
+  let apiResult: Awaited<ReturnType<typeof fetchStackOverflowFromApi>> | undefined;
+  try {
+    apiResult = await fetchStackOverflowFromApi(url);
+  } catch {
+    apiResult = undefined;
+  }
+
+  let feed: StackOverflowFeedEntry[] | undefined;
+  if (!apiResult) {
+    try {
+      const response = await fetch(url.feedUrl, {
+        signal: AbortSignal.timeout(STACKOVERFLOW_TIMEOUT_MS),
+        headers: { Accept: "application/atom+xml, application/xml, */*" },
+      });
+      if (response.ok) {
+        const entries = parseStackOverflowAtom(await response.text());
+        if (entries.length > 0) feed = entries;
+      }
+    } catch {
+      feed = undefined;
+    }
+  }
+
+  if (!apiResult && !feed) {
+    throw new Error(`Unable to fetch StackOverflow question ${url.questionId}`);
+  }
+  return renderStackOverflowMarkdown(url, apiResult, feed);
+}
+
+// --- output shaping ---
+
+function rankedSearchResults(
+  results: readonly OpenserpSearchResult[],
+  limit: number = SEARCH_RESULT_LIMIT,
+): OpenserpSearchResult[] {
+  return [...results].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0)).slice(0, limit);
+}
+
+// Spec: 結果ごとに `### <番号>. <title>`、`**<display_url>** - <type>`、
+// スニペット、`-> <url>` の順のブロック。欠損フィールドの行は省略し、
+// タイトル欠損は URL、それも無ければ (no title) とする。
+function formatOpenserpResults(results: readonly OpenserpSearchResult[]): string {
+  return rankedSearchResults(results)
+    .map((entry, index) => {
+      const title = entry.title?.trim() || entry.url?.trim() || "(no title)";
+      const source = entry.display_url?.trim();
+      const type = entry.type?.trim() || "organic";
+      const url = entry.url?.trim();
+      return [
+        `### ${index + 1}. ${title}`,
+        source ? `**${source}** - ${type}` : undefined,
+        entry.snippet?.trim() || undefined,
+        url ? `-> ${url}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    })
+    .join("\n\n");
+}
+
+// Spec: 1 行目に `**Query:** "<query>" - **Engines:** <engine> - **Took:** <秒>s`。
+function formatSearchMarkdown(query: string, outcome: SearchOutcome): string {
+  const tookSeconds = (outcome.tookMs / 1000).toFixed(1);
+  const metaLine = `**Query:** ${JSON.stringify(query)} - **Engines:** ${outcome.engine} - **Took:** ${tookSeconds}s`;
+  return `${metaLine}\n\n${formatOpenserpResults(outcome.results)}`;
+}
+
+// Spec: `--json` のフィールド: query、engine、tookMs、results（各要素は rank、
+// title、url、display_url、type、snippet。欠損フィールドは省略）。
+function searchJson(query: string, outcome: SearchOutcome): Record<string, unknown> {
+  const results = rankedSearchResults(outcome.results).map((entry) => {
+    const item: Record<string, unknown> = {};
+    if (typeof entry.rank === "number") item.rank = entry.rank;
+    if (entry.title?.trim()) item.title = entry.title.trim();
+    if (entry.url?.trim()) item.url = entry.url.trim();
+    if (entry.display_url?.trim()) item.display_url = entry.display_url.trim();
+    if (entry.type?.trim()) item.type = entry.type.trim();
+    if (entry.snippet?.trim()) item.snippet = entry.snippet.trim();
+    return item;
+  });
+  return { query, engine: outcome.engine, tookMs: outcome.tookMs, results };
+}
+
+const H1_TITLE = /^# (.+)$/m;
+const NUMBERED_HEADING_TITLE = /^#{2,3} \d+\. (.+)$/m;
+
+// Spec: fetch の title は取得済み本文（Markdown）の見出しからのみ取り出す。
+// h1 に加えて `## <数字>. <タイトル>` / `### <数字>. <タイトル>` も扱う。
+function titleFromMarkdown(markdown: string): string | null {
+  const match = H1_TITLE.exec(markdown) ?? NUMBERED_HEADING_TITLE.exec(markdown);
+  return match?.[1]?.trim() || null;
+}
+
+// Spec: `--json` の url は Reddit / StackOverflow の permalink に正規化。
+function normalizedFetchUrl(rawUrl: string): string {
+  return (
+    parseRedditPostUrl(rawUrl)?.permalink ??
+    parseStackOverflowQuestionUrl(rawUrl)?.permalink ??
+    rawUrl
+  );
+}
+
+// Spec: `--json` のフィールド: url、backend、title、body、tookMs。
+function fetchJson(url: string, outcome: FetchOutcome): Record<string, unknown> {
+  const title = titleFromMarkdown(outcome.markdown);
+  return {
+    url: normalizedFetchUrl(url),
+    backend: outcome.backend,
+    ...(title ? { title } : {}),
+    body: outcome.markdown,
+    tookMs: outcome.tookMs,
+  };
+}
+
+// --- camoufox rendering (playwright-cli over the shared server) ---
+
+// Spec: open・ナビゲーション・DOM 取得に 30 秒。ページは成否に関わらず閉じ、
+// 閉鎖失敗は結果に影響させない。エラーには "render:" 段階ラベルを付ける。
+async function camoufoxRender(url: string, sessionKey: string): Promise<string> {
+  await ensureCamoufoxServer(AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
+  syncPlaywrightCliConfig();
+
+  const renderSignal = AbortSignal.timeout(RENDER_TIMEOUT_MS);
+  const renderError = (error: unknown): Error =>
+    new Error(`render: ${error instanceof Error ? error.message : String(error)}`);
+
+  const closePage = async (): Promise<void> => {
+    await runPlaywrightCli(
+      sessionKey,
+      ["close"],
+      AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS),
+    ).catch(() => {});
+  };
+
+  try {
+    // Spec: 各実行の冒頭と終了時にセッションを閉じる（cookie / ページ状態の
+    // 持ち越し防止。冒頭の閉鎖失敗は無視）。
+    await closePage();
+    await runPlaywrightCli(sessionKey, ["open", url], renderSignal).catch((error: unknown) => {
+      throw renderError(error);
+    });
+    // Spec: networkidle 待ち（5 秒）と並行して 250ms 間隔で DOM をポーリングし、
+    // challenge を検出したら早い方で待ちを切り上げる（challengeWaitSnippet）。
+    const codeOutput = await runPlaywrightCli(
+      sessionKey,
+      ["run-code", challengeWaitSnippet()],
+      renderSignal,
+    ).catch((error: unknown) => {
+      throw renderError(error);
+    });
+    try {
+      return parseRenderedPage(codeOutput);
+    } catch (error) {
+      throw renderError(error);
+    }
+  } finally {
+    await closePage();
+  }
+}
+
+function runPlaywrightCli(
+  sessionKey: string,
+  args: string[],
+  signal: AbortSignal,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "playwright-cli",
+      buildPlaywrightCliArgs(sessionKey, args),
+      {
+        signal,
+        maxBuffer: 64 * 1024 * 1024,
+        env: buildPlaywrightCliEnv(process.env, playwrightCliConfigPath()),
+      },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout);
+      },
+    );
+  });
+}
+
+function playwrightCliConfigPath(): string {
+  return join(stateDir(), "playwright-cli.config.json");
+}
+
+// Spec: playwright-cli のブラウザは firefox で remote endpoint に camoufox を
+// 使う。CAMOUFOX_BASE_URL に合わせて config を最新化する（失敗時は既存 config
+// で続行）。
+function syncPlaywrightCliConfig(): void {
+  try {
+    writeFileSync(playwrightCliConfigPath(), playwrightCliConfigJson(camoufoxBaseUrl()));
+  } catch {
+    // Keep going with the existing config (same content for the default URL).
+  }
+}
+
+// Spec: camoufox server のヘルスチェックは websocket 接続が成功するかで判定。
+// 1 接続試行は 1 秒で打ち切り（half-open socket 対策）。
+function camoufoxServerHealthy(baseUrl: string, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = new WebSocket(baseUrl);
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.close();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), WEBSOCKET_HEALTH_TIMEOUT_MS);
+    socket.addEventListener("open", () => finish(true));
+    socket.addEventListener("error", () => finish(false));
+    signal.addEventListener("abort", () => finish(false), { once: true });
+  });
+}
+
+// --- server bootstrap (health check -> spawn -> wait) ---
+
+async function ensureCamoufoxServer(signal: AbortSignal): Promise<void> {
+  const baseUrl = camoufoxBaseUrl();
+  if (await camoufoxServerHealthy(baseUrl, signal)) return;
+  // The start subcommand owns the server launch recipe; wait here for the
+  // server it brings up.
+  spawnBrowseDetached(["start"]);
+  await waitForServerHealthy(baseUrl, signal);
+}
+
+async function waitForServerHealthy(baseUrl: string, signal: AbortSignal): Promise<void> {
+  while (!signal.aborted) {
+    await delay(SERVER_HEALTH_POLL_INTERVAL_MS, signal);
+    if (await camoufoxServerHealthy(baseUrl, signal)) return;
+  }
+  throw new Error(`camoufox server not ready at ${baseUrl}`);
+}
+
+async function ensureOpenserpServer(signal: AbortSignal): Promise<void> {
+  const baseUrl = openserpBaseUrl();
+  if (await serverHealthy(baseUrl, "/ready", signal)) return;
+  spawnOpenserpServer();
+  while (!signal.aborted) {
+    await delay(SERVER_HEALTH_POLL_INTERVAL_MS, signal);
+    if (await serverHealthy(baseUrl, "/ready", signal)) return;
+  }
+  throw new Error(`openserp server not ready at ${baseUrl}`);
+}
+
+async function serverHealthy(baseUrl: string, path: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const response = await fetch(`${baseUrl}${path}`, { signal });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Spec: camoufox server のログは <XDG_CACHE_HOME|~/.cache>/pi/web-search/
+// camoufox-server.log へ追記（書き込み不能なら出力破棄で続行）。
+function spawnBrowseDetached(args: readonly string[]): void {
+  let logFd: number | "ignore" = "ignore";
+  try {
+    mkdirSync(stateDir(), { recursive: true });
+    logFd = openSync(join(stateDir(), "camoufox-server.log"), "a");
+  } catch {
+    // The append log is best effort; run the child with discarded output.
+  }
+  try {
+    // The child keeps its own dup of the fd, so close ours right away.
+    spawnDetachedServer(process.execPath, [import.meta.path, ...args], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      shell: process.platform === "win32",
+    });
+  } finally {
+    if (typeof logFd === "number") closeSync(logFd);
+  }
+}
+
+function spawnOpenserpServer(): void {
+  const { hostname, port } = new URL(openserpBaseUrl());
+  spawnDetachedServer("openserp", ["serve", "-a", hostname, "-p", port, "--quiet"], {
+    detached: true,
+    stdio: "ignore",
+    shell: process.platform === "win32",
+  });
+}
+
+// The servers are machine-scoped and outlive this CLI process, so spawn them
+// detached. Swallow spawn errors (e.g. binary missing from PATH): the
+// health-check loop reports them as a backend failure instead.
+function spawnDetachedServer(
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+): ChildProcess {
+  const child = spawn(command, args, options);
+  child.on("error", () => {});
+  child.unref();
+  return child;
+}
+
+// --- camoufox server process (`browse __server`) ---
+
+const nodeRequire = createRequire(import.meta.url);
+
+// This script (~/.agents/cli/browse) has no node_modules of its own, so
+// resolve camoufox-js explicitly from the bun-installed roots that may carry
+// it. Either root satisfies the server; which one is installed is a machine
+// detail.
+function resolveCamoufoxJsUrl(): string {
+  const candidates = [
+    join(homedir(), ".dsh", "plugins", "web-search"),
+    join(homedir(), ".pi", "agent"),
+  ];
+  for (const dir of candidates) {
+    try {
+      const resolved = nodeRequire.resolve("camoufox-js/dist/utils.js", { paths: [dir] });
+      return pathToFileURL(resolved).href;
+    } catch {
+      // not installed under this root; try the next
+    }
+  }
+  throw new Error(`camoufox-js not found under ${candidates.join(", ")}`);
+}
+
+// Fingerprint generation borrows camoufox-js; the browser itself is launched
+// by the same playwright-core that playwright-cli embeds, so the server
+// always speaks the client's protocol version (no HTTP 428 on connect).
+interface CamoufoxServerHandle {
+  close(): Promise<void>;
+}
+
+interface ServerLaunchOptions {
+  env?: Record<string, string | undefined>;
+  executablePath?: string;
+  [extra: string]: unknown;
+}
+
+interface CamoufoxJsModule {
+  launchOptions(options: Record<string, unknown>): Promise<ServerLaunchOptions>;
+}
+
+interface PlaywrightCoreModule {
+  firefox: { launchServer(options: Record<string, unknown>): Promise<CamoufoxServerHandle> };
+}
+
+// The playwright-cli-embedded playwright-core is the single source of truth
+// for the server's protocol version: clients must send a matching major.minor
+// in their User-Agent or the upgrade is rejected with HTTP 428.
+function resolvePlaywrightCore(): PlaywrightCoreModule {
+  const override = process.env.CAMOUFOX_PLAYWRIGHT_CORE;
+  if (override) return nodeRequire(override) as PlaywrightCoreModule;
+  const finder = process.platform === "win32" ? "where" : "which";
+  const output = spawnSync(finder, ["playwright-cli"], { encoding: "utf8" });
+  const binary = output.stdout?.trim().split(/\r?\n/)[0];
+  if (!binary) throw new Error("playwright-cli not found on PATH");
+  const packageDir = dirname(realpathSync(binary));
+  return nodeRequire(
+    nodeRequire.resolve("playwright-core", { paths: [packageDir] }),
+  ) as PlaywrightCoreModule;
+}
+
+// Spec: 接続先（CAMOUFOX_BASE_URL）の host・port・path で待ち受ける。
+async function runCamoufoxServer(): Promise<void> {
+  const baseUrl = new URL(process.env.CAMOUFOX_BASE_URL ?? CAMOUFOX_DEFAULT_BASE_URL);
+
+  // The spawner appends this server's stdout/stderr to the log file across
+  // starts, so leave a timestamped line to tell the runs apart when debugging
+  // hangs.
+  console.log(`[camoufox-server] starting on ${baseUrl} at ${new Date().toISOString()}`);
+
+  const { launchOptions } = (await import(resolveCamoufoxJsUrl())) as CamoufoxJsModule;
+  const { firefox } = resolvePlaywrightCore();
+
+  // Linux では既定で headed（Xvfb 上）。CAMOUFOX_HEADLESS=1 で従来の headless。
+  const headless = resolveHeadless();
+  if (!headless) {
+    await ensureDisplay();
+    await ensureX11vnc();
+  }
+
+  // Fingerprint: freshly generated on every server start (os spoofed to
+  // Windows). block_webgl disables WebGL instead of spoofing it: sampling the
+  // WebGL fingerprint needs better-sqlite3, whose native build is unavailable
+  // here.
+  const launch = await launchOptions({
+    headless,
+    os: ["windows"],
+    executable_path: CAMOUFOX_EXECUTABLE_PATH,
+    i_know_what_im_doing: true,
+    block_webgl: true,
+  });
+
+  // Firefox hangs in sandboxed environments here (same root cause as Chrome's
+  // --no-sandbox), so disable all Firefox process sandboxes.
+  launch.env = {
+    ...launch.env,
+    MOZ_DISABLE_CONTENT_SANDBOX: "1",
+    MOZ_DISABLE_GMP_SANDBOX: "1",
+    MOZ_DISABLE_RDD_SANDBOX: "1",
+    MOZ_DISABLE_SOCKET_PROCESS_SANDBOX: "1",
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}`,
+  };
+
+  const server = await firefox.launchServer({
+    ...launch,
+    host: baseUrl.hostname,
+    port: Number(baseUrl.port),
+    wsPath: baseUrl.pathname === "/" ? "/camoufox" : baseUrl.pathname,
+  });
+  writeServerPidFile();
+  console.log(`[camoufox-server] listening on ${baseUrl}`);
+  console.log(`[camoufox-server] executablePath: ${launch.executablePath}`);
+
+  process.on("SIGINT", () => void shutdownServer(server));
+  process.on("SIGTERM", () => void shutdownServer(server));
+}
+
+async function shutdownServer(server: CamoufoxServerHandle): Promise<void> {
+  clearServerPidFile();
+  await server.close();
+  process.exit(0);
+}
+
+// --- headed display helpers (Xvfb / x11vnc) ---
+
+const DISPLAY_NUMBER = 99;
+const VNC_PORT = 5900;
+const XVFB_SCREEN = "1920x1080x24";
+
+// Spec: Linux では既定で headed（Xvfb 上）。`CAMOUFOX_HEADLESS=1` で従来の
+// headless に戻せる。Xvfb のない Windows では既定で headless のまま。
+function resolveHeadless(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (env.CAMOUFOX_HEADLESS === "1") return true;
+  if (env.CAMOUFOX_HEADLESS === "0") return false;
+  return platform === "win32";
+}
+
+// Readiness probe for the display: Xvfb creates this unix socket on startup.
+function displaySocketPath(displayNumber: number = DISPLAY_NUMBER): string {
+  return `/tmp/.X11-unix/X${displayNumber}`;
+}
+
+function xvfbArgs(displayNumber: number = DISPLAY_NUMBER, screen: string = XVFB_SCREEN): string[] {
+  return [`:${displayNumber}`, "-screen", "0", screen];
+}
+
+// Spec: `-deny_all` 付きで起動し、既定では誰も接続できない。表示は稼働中
+// プロセスへの `x11vnc -R nodeny` / `-R deny` + `-R disconnect:all` で切り替える。
+function x11vncArgs(displayNumber: number = DISPLAY_NUMBER, port: number = VNC_PORT): string[] {
+  return [
+    "-display",
+    `:${displayNumber}`,
+    "-localhost",
+    "-rfbport",
+    String(port),
+    "-forever",
+    "-nopw",
+    "-deny_all",
+  ];
+}
+
+// Detached helper processes (Xvfb, x11vnc) outlive the server; a restart just
+// re-checks them instead of assuming they are gone.
+function spawnDetachedLog(command: string, args: readonly string[], logPath: string): void {
+  mkdirSync(dirname(logPath), { recursive: true });
+  const logFd = openSync(logPath, "a");
+  try {
+    spawn(command, args, { detached: true, stdio: ["ignore", logFd, logFd] }).unref();
+  } finally {
+    closeSync(logFd);
+  }
+}
+
+function commandOnPath(command: string): boolean {
+  return spawnSync("which", [command], { encoding: "utf8" }).status === 0;
+}
+
+function portIsOpen(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+  });
+}
+
+// Xvfb readiness: the socket may be a filesystem socket or — when
+// /tmp/.X11-unix is owned by another non-root user (e.g. WSLg) and X refuses
+// to create a socket there — a Linux abstract socket that never appears on
+// the filesystem. Probe both so the wait does not time out on such hosts.
+function displayIsUp(socketPath: string): boolean {
+  if (existsSync(socketPath)) return true;
+  if (process.platform === "linux") {
+    try {
+      return readFileSync("/proc/net/unix", "utf8").includes(`@${socketPath}`);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+// Headed 起動では Xvfb がソケットを作るまで待ってから Firefox を出す。
+async function ensureDisplay(): Promise<void> {
+  const socketPath = displaySocketPath();
+  if (displayIsUp(socketPath)) return;
+  console.log("[camoufox-server] starting Xvfb on :99");
+  spawnDetachedLog("Xvfb", xvfbArgs(), join(stateDir(), "xvfb.log"));
+  const deadline = Date.now() + 10_000;
+  while (!displayIsUp(socketPath)) {
+    if (Date.now() > deadline) {
+      throw new Error(`Xvfb socket ${socketPath} did not appear within 10s`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+async function ensureX11vnc(): Promise<void> {
+  if (!commandOnPath("x11vnc")) {
+    console.error(
+      "[camoufox-server] x11vnc not on PATH: human handoff disabled (bootstrap: apt x11vnc)",
+    );
+    return;
+  }
+  if (await portIsOpen(VNC_PORT)) return; // already serving; another instance would just die on the port
+  console.log("[camoufox-server] starting x11vnc (connection denied until -R nodeny)");
+  spawnDetachedLog("x11vnc", x11vncArgs(), join(stateDir(), "x11vnc.log"));
+}
+
+// --- server pid file / restart targeting ---
+
+// The server records its pid after the port is established, so `browse
+// restart` can stop exactly the server process. A port-race loser exits
+// before writing, keeping the winner's record intact.
+function serverPidFilePath(): string {
+  return join(stateDir(), "camoufox-server.pid");
+}
+
+function writeServerPidFile(): void {
+  try {
+    mkdirSync(stateDir(), { recursive: true });
+    writeFileSync(serverPidFilePath(), `${process.pid}\n`);
+  } catch {
+    // Best effort: restart falls back to the pgrep sweep below.
+  }
+}
+
+function readServerPidFile(): number | undefined {
+  try {
+    const pid = Number.parseInt(readFileSync(serverPidFilePath(), "utf8").trim(), 10);
+    return Number.isInteger(pid) ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function clearServerPidFile(): void {
+  try {
+    if (readServerPidFile() === process.pid) rmSync(serverPidFilePath());
+  } catch {
+    // Best effort: a stale pid file is validated before any kill.
+  }
+}
+
+async function stopCamoufoxServers(): Promise<void> {
+  const pids = camoufoxServerPids();
+  if (pids.length === 0) return;
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // already gone
+    }
+  }
+  const deadline = Date.now() + SERVER_STOP_TIMEOUT_MS;
+  while (Date.now() < deadline && pids.some(processAlive)) {
+    await delay(100);
+  }
+  // A hung server ignores SIGTERM; escalate so restart always recovers.
+  for (const pid of pids) {
+    if (processAlive(pid)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  }
+  // Give the kernel a moment to release the listening port after SIGKILL.
+  const killDeadline = Date.now() + 2_000;
+  while (Date.now() < killDeadline && pids.some(processAlive)) {
+    await delay(50);
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+// Identify the server processes to stop: the pid file is the primary record,
+// and pgrep sweeps of the exact "<script> __server" command line catch
+// servers whose pid file was lost. Search/fetch processes never match the
+// pattern (their command line names a different subcommand). The legacy
+// `bun server.mjs` sweep is transitional: it also stops pre-browse servers
+// started by the old web-search / web-fetch CLI layout.
+function camoufoxServerPids(): number[] {
+  const pids = new Set<number>();
+  const pidFilePid = readServerPidFile();
+  if (
+    pidFilePid !== undefined &&
+    pidFilePid !== process.pid &&
+    looksLikeCamoufoxServer(pidFilePid)
+  ) {
+    pids.add(pidFilePid);
+  }
+  for (const pattern of [`${import.meta.path} ${SERVER_SUBCOMMAND}`, "bun server.mjs"]) {
+    const sweep = spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" });
+    if (sweep.status !== 0) continue;
+    for (const line of sweep.stdout.split("\n")) {
+      const pid = Number.parseInt(line, 10);
+      if (Number.isInteger(pid) && pid !== process.pid) pids.add(pid);
+    }
+  }
+  return [...pids];
+}
+
+// A recycled pid must never be killed: on Linux verify the command line still
+// names the server mode; elsewhere fall back to the alive check alone.
+function looksLikeCamoufoxServer(pid: number): boolean {
+  if (process.platform !== "linux") return processAlive(pid);
+  try {
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return cmdline.replaceAll("\0", " ").includes(SERVER_SUBCOMMAND);
+  } catch {
+    return false;
+  }
+}
+
+// --- pure parsing & rendering (reddit / stackoverflow / serp) ---
+
+const REDDIT_USER_AGENT = "Mozilla/5.0 (compatible; pi-web-search/1.0)";
+const SE_API_BASE_URL = "https://api.stackexchange.com/2.3";
+const STACKOVERFLOW_MAX_ANSWERS = 500;
+
+interface RedditPostUrl {
+  postId: string;
+  permalink: string;
+  rssUrl: string;
+  embedUrl: string;
+  oembedUrl: string;
+}
+
+interface RedditEntry {
+  id: string;
+  title: string;
+  author?: string;
+  bodyMarkdown: string;
+  permalink: string;
+  updated?: string;
+}
+
+interface RedditFeed {
+  post: RedditEntry;
+  comments: RedditEntry[];
+}
+
+interface RedditEmbed {
+  title?: string;
+  displayedCommentCount?: number;
+}
+
+interface RedditOEmbed {
+  title?: string;
+}
+
+function parseRedditPostUrl(rawUrl: string): RedditPostUrl | undefined {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return undefined;
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== "reddit.com" && !hostname.endsWith(".reddit.com")) return undefined;
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (
+    parts.length < 4 ||
+    parts[0]?.toLowerCase() !== "r" ||
+    parts[2]?.toLowerCase() !== "comments"
+  ) {
+    return undefined;
+  }
+  const subreddit = parts[1];
+  const postId = parts[3]?.toLowerCase();
+  if (!subreddit || !postId || !/^[a-z0-9]+$/.test(postId)) return undefined;
+  const slug = parts[4] && parts[4] !== ".rss" ? parts[4] : undefined;
+  const rootPath = `/r/${subreddit}/comments/${postId}/${slug ? `${slug}/` : ""}`;
+  const permalink = `https://www.reddit.com${rootPath}`;
+  const oembedUrl = new URL("https://www.reddit.com/oembed");
+  oembedUrl.searchParams.set("url", permalink);
+  return {
+    postId,
+    permalink,
+    rssUrl: `${permalink}.rss?limit=500&sort=top`,
+    embedUrl: `https://embed.reddit.com${rootPath}?ref_source=embed&ref=share&embed=true`,
+    oembedUrl: oembedUrl.toString(),
+  };
+}
+
+function unescapeEntities(text: string): string {
+  let previous = "";
+  let current = text;
+  while (current !== previous) {
+    previous = current;
+    current = current
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&apos;/gi, "'")
+      .replace(/&(?:#x([0-9a-f]+)|#(\d+));/gi, (_, hex, dec) =>
+        String.fromCodePoint(Number.parseInt(hex ?? dec, hex ? 16 : 10)),
+      );
+  }
+  return current;
+}
+
+function htmlFragmentToMarkdown(fragment: string): string {
+  let text = fragment.replace(/<!--[\s\S]*?-->/g, "");
+  text = text.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, inner) => {
+    const quoted = htmlFragmentToMarkdown(inner).replace(/^/gm, "> ");
+    return `\n\n${quoted}\n\n`;
+  });
+  text = text
+    .replace(
+      /<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+      (_, href, label) => `[${label.trim()}](${href})`,
+    )
+    .replace(/<img\b[^>]*src="([^"]*)"[^>]*>/gi, (_, src) => `![](${src})`)
+    .replace(/<(?:strong|b)\b[^>]*>/gi, "**")
+    .replace(/<\/(?:strong|b)>/gi, "**")
+    .replace(/<(?:em|i)\b[^>]*>/gi, "*")
+    .replace(/<\/(?:em|i)>/gi, "*")
+    .replace(/<(?:del|s|strike)\b[^>]*>/gi, "~~")
+    .replace(/<\/(?:del|s|strike)>/gi, "~~")
+    .replace(/<(?:code|kbd)\b[^>]*>/gi, "`")
+    .replace(/<\/(?:code|kbd)>/gi, "`")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<hr\s*\/?>/gi, "\n---\n")
+    .replace(/<li\b[^>]*>/gi, "- ")
+    .replace(/<\/(li|p|div|h[1-6]|ul|ol|pre|tr)>/gi, "\n\n")
+    .replace(/<[^>]*>/g, "");
+  return text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function atomText(entryXml: string, tag: string): string | undefined {
+  const match = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`).exec(entryXml);
+  return match?.[1]?.trim() || undefined;
+}
+
+function cleanAuthor(name: string | undefined): string | undefined {
+  return name?.replace(/^\/u\//, "u/");
+}
+
+function parseRedditAtom(xml: string): RedditFeed | undefined {
+  const entries: RedditEntry[] = [];
+  for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const entryXml = match[1] ?? "";
+    const id = atomText(entryXml, "id");
+    if (!id || (!id.startsWith("t3_") && !id.startsWith("t1_"))) continue;
+    const linkHref = /<link\b[^>]*href="([^"]*)"/.exec(entryXml)?.[1];
+    entries.push({
+      id,
+      title: unescapeEntities(atomText(entryXml, "title") ?? "Untitled"),
+      author: cleanAuthor(atomText(entryXml, "name")),
+      bodyMarkdown: htmlFragmentToMarkdown(unescapeEntities(atomText(entryXml, "content") ?? "")),
+      permalink: linkHref ?? "",
+      updated: atomText(entryXml, "updated"),
+    });
+  }
+  const post = entries.find((entry) => entry.id.startsWith("t3_"));
+  if (!post) return undefined;
+  return { post, comments: entries.filter((entry) => entry.id.startsWith("t1_")) };
+}
+
+function parseRedditEmbed(html: string): RedditEmbed | undefined {
+  const title = /id="embed-title"[^>]*>([^<]+)/.exec(html)?.[1]?.trim() || undefined;
+  const countText = /(\d[\d,]*)\s+comments?/i.exec(html)?.[1];
+  const displayedCommentCount =
+    countText === undefined ? undefined : Number.parseInt(countText.replaceAll(",", ""), 10);
+  if (!title && displayedCommentCount === undefined) return undefined;
+  return { title, displayedCommentCount };
+}
+
+function parseRedditOEmbed(json: string): RedditOEmbed | undefined {
+  try {
+    const value = JSON.parse(json) as { title?: unknown };
+    const title =
+      typeof value.title === "string" && value.title.trim() ? value.title.trim() : undefined;
+    return title ? { title } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderRedditMarkdown(
+  url: RedditPostUrl,
+  feed: RedditFeed | undefined,
+  embed: RedditEmbed | undefined,
+  oembed: RedditOEmbed | undefined,
+): string {
+  const post = feed?.post;
+  const title = post?.title ?? embed?.title ?? oembed?.title ?? `Reddit post ${url.postId}`;
+  const comments = feed?.comments ?? [];
+  const displayed = embed?.displayedCommentCount;
+  const lines = [
+    `# ${title}`,
+    "",
+    `- Author: ${post?.author ?? "unknown"}`,
+    `- Permalink: ${post?.permalink || url.permalink}`,
+  ];
+  if (post?.updated) lines.push(`- Updated: ${post.updated}`);
+  if (feed) {
+    const count =
+      displayed === undefined
+        ? `${comments.length} fetched`
+        : `${comments.length} fetched / ${displayed} displayed`;
+    lines.push(`- Comments: ${count}`);
+  } else {
+    lines.push(
+      `- Comments: unavailable${displayed === undefined ? "" : ` (Reddit displays ${displayed})`}`,
+    );
+  }
+  lines.push(
+    "",
+    "## Post",
+    "",
+    post?.bodyMarkdown || "(post body unavailable from accessible Reddit endpoints)",
+  );
+  if (feed) {
+    lines.push(
+      "",
+      `## Comments (${comments.length} retrieved)`,
+      "",
+      "Scores and reply hierarchy are not exposed by Reddit RSS.",
+      "",
+    );
+    for (const [index, comment] of comments.entries()) {
+      lines.push(
+        `### ${index + 1}. ${comment.author ?? "unknown"}`,
+        "",
+        comment.bodyMarkdown || "(no comment body)",
+        "",
+      );
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+interface StackOverflowQuestionUrl {
+  questionId: string;
+  permalink: string;
+  feedUrl: string;
+}
+
+interface SeApiResponse {
+  items?: {
+    title?: string;
+    body?: string;
+    score?: number;
+    answer_count?: number;
+    tags?: string[];
+    is_accepted?: boolean;
+    owner?: { display_name?: string };
+  }[];
+  has_more?: boolean;
+  backoff?: number;
+}
+
+interface StackOverflowQuestion {
+  title: string;
+  author?: string;
+  score?: number;
+  answerCount?: number;
+  tags?: string[];
+  bodyMarkdown: string;
+}
+
+interface StackOverflowAnswer {
+  author?: string;
+  score?: number;
+  accepted: boolean;
+  bodyMarkdown: string;
+}
+
+interface StackOverflowFeedEntry {
+  title: string;
+  author?: string;
+  bodyMarkdown: string;
+  link: string;
+}
+
+function parseStackOverflowQuestionUrl(rawUrl: string): StackOverflowQuestionUrl | undefined {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return undefined;
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== "stackoverflow.com" && hostname !== "www.stackoverflow.com") return undefined;
+  const questionId = /^\/questions\/(\d+)(?:\/[^/]+)?\/?$/.exec(url.pathname)?.[1];
+  if (!questionId) return undefined;
+  return {
+    questionId,
+    permalink: `https://stackoverflow.com/questions/${questionId}`,
+    feedUrl: `https://stackoverflow.com/feeds/question/${questionId}`,
+  };
+}
+
+function parseStackOverflowAtom(xml: string): StackOverflowFeedEntry[] {
+  const entries: StackOverflowFeedEntry[] = [];
+  for (const match of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const entryXml = match[1] ?? "";
+    const body = atomText(entryXml, "summary") ?? atomText(entryXml, "content");
+    if (!body) continue;
+    entries.push({
+      title: unescapeEntities(atomText(entryXml, "title") ?? "Untitled"),
+      author: atomText(entryXml, "name") || undefined,
+      bodyMarkdown: htmlFragmentToMarkdown(unescapeEntities(body)),
+      link: /<link\b[^>]*href="([^"]*)"/.exec(entryXml)?.[1] ?? "",
+    });
+  }
+  return entries;
+}
+
+function answerHeading(index: number, answer: StackOverflowAnswer): string {
+  const parts: string[] = [];
+  if (answer.accepted) parts.push("accepted");
+  if (typeof answer.score === "number") parts.push(`score ${answer.score}`);
+  return `### ${index + 1}. ${answer.author ?? "unknown"}${parts.length ? ` (${parts.join(", ")})` : ""}`;
+}
+
+function renderStackOverflowMarkdown(
+  url: StackOverflowQuestionUrl,
+  apiResult: { question: StackOverflowQuestion; answers: StackOverflowAnswer[] } | undefined,
+  feed: StackOverflowFeedEntry[] | undefined,
+): string {
+  const question = apiResult?.question;
+  const feedPost = feed?.[0];
+  const title = question?.title ?? feedPost?.title ?? `StackOverflow question ${url.questionId}`;
+  const answers: StackOverflowAnswer[] =
+    apiResult?.answers ??
+    (feed ?? []).slice(1).map((entry) => ({
+      author: entry.author,
+      score: undefined,
+      accepted: false,
+      bodyMarkdown: entry.bodyMarkdown,
+    }));
+  const lines = [
+    `# ${title}`,
+    "",
+    `- Author: ${question?.author ?? feedPost?.author ?? "unknown"}`,
+    `- Permalink: ${url.permalink}`,
+  ];
+  if (question) {
+    lines.push(`- Score: ${question.score ?? "unknown"}`);
+    lines.push(
+      `- Answers: ${answers.length} retrieved${typeof question.answerCount === "number" ? ` / ${question.answerCount} total` : ""}`,
+    );
+    if (question.tags?.length) lines.push(`- Tags: ${question.tags.join(", ")}`);
+  } else {
+    lines.push("", "Note: score, accepted and vote order are unavailable from the question feed.");
+  }
+  lines.push(
+    "",
+    "## Question",
+    "",
+    question?.bodyMarkdown || feedPost?.bodyMarkdown || "(question body unavailable)",
+  );
+  lines.push("", `## Answers (${answers.length} retrieved)`, "");
+  for (const [index, answer] of answers.entries()) {
+    lines.push(answerHeading(index, answer), "", answer.bodyMarkdown || "(no answer body)", "");
+  }
+  return lines.join("\n").trim();
+}
+
+const CHALLENGE_SIGNALS: readonly RegExp[] = [
+  /cdn-cgi\/challenge-platform\//,
+  /id="challenge-(?:running|form|stage|error-text)"/,
+  /<title[^>]*>\s*Just a moment\.\.\.\s*<\/title>/i,
+  /\bcf-turnstile\b/,
+  /<form[^>]*\bid="captcha-form"/,
+  /<form[^>]*\baction="[^"]*\/sorry\//,
+  /<body[^>]*\bonload="[^"]*captcha/i,
+  /^(?![\s\S]*(?:class="tF2Cxc"|data-hveid=))[\s\S]*httpservice\/retry\/enablejs/,
+];
+
+const CHALLENGE_POLL_INTERVAL_MS = 250;
+const NETWORK_IDLE_WAIT_MS = 5_000;
+
+function challengeWaitSnippet(): string {
+  const signals = CHALLENGE_SIGNALS.map((signal) => [signal.source, signal.flags]);
+  return `async page => {
+  const challengeSignals = ${JSON.stringify(signals)}.map(([source, flags]) => new RegExp(source, flags));
+  const grab = () => page.evaluate(() => document.documentElement.outerHTML);
+  let settled = false;
+  const idle = page.waitForLoadState('networkidle', { timeout: ${NETWORK_IDLE_WAIT_MS} }).catch(() => {}).then(() => { settled = true; });
+  const deadline = Date.now() + ${NETWORK_IDLE_WAIT_MS};
+  while (!settled && Date.now() < deadline) {
+    const html = await grab();
+    if (challengeSignals.some((signal) => signal.test(html))) return { mode: 'challenge', html };
+    await page.waitForTimeout(${CHALLENGE_POLL_INTERVAL_MS});
+  }
+  await idle;
+  return { mode: 'settled', html: await grab() };
+}`;
+}
+
+function parseRenderedPage(output: string): string {
+  const lines = output.split("\n");
+  const resultIndex = lines.indexOf("### Result");
+  const literal = resultIndex === -1 ? undefined : lines[resultIndex + 1];
+  if (!literal || (!literal.startsWith('"') && !literal.startsWith("{"))) {
+    throw new Error("playwright-cli run-code output has no result");
+  }
+  const { mode, html } = JSON.parse(literal) as { mode?: string; html?: string };
+  if (mode === "challenge") throw new Error("challenge detected");
+  if (typeof html !== "string" || !html) {
+    throw new Error("playwright-cli run-code returned no HTML");
+  }
+  return html;
+}
+
+function playwrightCliConfigJson(baseUrl: string): string {
+  return `${JSON.stringify({ browser: { browserName: "firefox", remoteEndpoint: baseUrl } }, null, 2)}\n`;
+}
+
+function buildPlaywrightCliEnv(
+  base: Record<string, string | undefined>,
+  configPath: string,
+): Record<string, string | undefined> {
+  return { ...base, PLAYWRIGHT_MCP_CONFIG: configPath };
+}
+
+function buildPlaywrightCliArgs(sessionKey: string, args: readonly string[]): string[] {
+  return [`-s=${sessionKey}`, ...args];
+}
+
+type Attempt =
+  | { readonly backend: string; readonly ok: true; readonly durationMs?: number }
+  | {
+      readonly backend: string;
+      readonly ok: false;
+      readonly error: string;
+      readonly durationMs?: number;
+    };
+
+type BackendEntry<T = string> = readonly [name: string, run: () => Promise<T>];
+type BackendOperation = "web search" | "web fetch";
+
+function renderAbortHint(attempts: readonly Attempt[]): string {
+  const renderAborted = attempts.some(
+    (attempt) =>
+      !attempt.ok && attempt.error.startsWith("render:") && /aborted/i.test(attempt.error),
+  );
+  return renderAborted
+    ? `\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Run \`browse restart\` to recover (it stops and respawns the server).`
+    : "";
+}
+
+class AllBackendsFailedError extends Error {
+  constructor(
+    readonly operation: BackendOperation,
+    readonly attempts: Attempt[],
+  ) {
+    super(
+      `All ${operation} backends failed: ${attempts
+        .filter((attempt) => !attempt.ok)
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join("; ")}${renderAbortHint(attempts)}`,
+    );
+  }
+}
+
+function isCaptchaParseError(error: unknown): boolean {
+  return error instanceof Error && error.message === "parse: captcha detected";
+}
+
+function isChallengeRenderError(error: unknown): boolean {
+  return error instanceof Error && error.message === "render: challenge detected";
+}
+
+async function tryBackends<T>(
+  operation: BackendOperation,
+  backends: readonly BackendEntry<T>[],
+  isEmpty: (payload: T) => boolean,
+  shouldRetry?: (error: unknown) => boolean,
+): Promise<{ payload: T; backend: string; attempts: Attempt[] }> {
+  const attempts: Attempt[] = [];
+  for (const [name, run] of backends) {
+    let retried = false;
+    while (true) {
+      const startedAt = Date.now();
+      try {
+        const payload = await run();
+        if (isEmpty(payload)) throw new Error("empty response");
+        attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
+        return { payload, backend: name, attempts };
+      } catch (error) {
+        attempts.push({
+          backend: name,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          durationMs: Date.now() - startedAt,
+        });
+        if (retried || !shouldRetry?.(error)) break;
+        retried = true;
+      }
+    }
+  }
+  throw new AllBackendsFailedError(operation, attempts);
+}
+
+type SearchEngine = "bing" | "duckduckgo" | "google";
+
+const SERP_BASE_URL: Record<SearchEngine, string> = {
+  bing: "https://www.bing.com/search",
+  duckduckgo: "https://duckduckgo.com/",
+  google: "https://www.google.com/search",
+};
+
+function buildSerpUrl(
+  engine: SearchEngine,
+  query: string,
+  parameters: Readonly<Record<string, string | undefined>> = {},
+): string {
+  const params = new URLSearchParams({ q: query });
+  for (const [name, value] of Object.entries(parameters)) {
+    if (value) params.set(name, value);
+  }
+  const base = SERP_BASE_URL[engine];
+  return `${base}${base.includes("?") ? "&" : "?"}${params}`;
+}
+
+interface OpenserpSearchResult {
+  rank?: number;
+  type?: string;
+  title?: string;
+  url?: string;
+  display_url?: string;
+  snippet?: string;
+}
+
+function parseOpenserpResponse(body: string): OpenserpSearchResult[] {
+  let payload: { results?: OpenserpSearchResult[] };
+  try {
+    payload = JSON.parse(body) as { results?: OpenserpSearchResult[] };
+  } catch {
+    throw new Error("parse: response is not valid JSON");
+  }
+  const results = payload.results ?? [];
+  if (results.length === 0) throw new Error("parse: empty response");
+  return results;
+}
+
+// --- low-level helpers ---
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+function runWithStdin(command: string, args: string[], input: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      { timeout: CONVERT_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout.trim());
+      },
+    );
+    child.stdin?.end(input);
+  });
+}
+
+// Prefer the openserp error body ({"message": "..."}) over the bare status.
+async function responseDetail(response: Response): Promise<string> {
+  const body = (await response.json().catch(() => undefined)) as { message?: unknown } | undefined;
+  return typeof body?.message === "string" && body.message
+    ? body.message
+    : `${response.status} ${response.statusText}`;
+}
+
+await main().catch((error: unknown) => {
+  fail(error instanceof Error ? error.message : String(error));
+});

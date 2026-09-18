@@ -2,7 +2,9 @@
 
 ## 概要
 
-本 plugin は、dsh web profile の `web_search` / `web_fetch` ツール（`@deepseek-ai/dsh-tool-web`）に対し、camoufox + openserp による search provider と camoufox + trafilatura による fetch provider を host 側で提供する。client 側のコードは持たない。
+本 plugin は、dsh web profile の `web_search` / `web_fetch` ツール（`@deepseek-ai/dsh-tool-web`）に対し、search provider（id `camoufox-openserp`）と fetch provider（id `camoufox-trafilatura`）を host 側で提供する。client 側のコードは持たない。
+
+各 provider は共有 CLI コマンド `browse`（`dotfiles/.agents/cli`、展開先 `~/.agents/cli/`。振る舞いの正本は `dotfiles/.agents/cli/browse.spec.md`）の薄いラッパーである: 呼び出しごとに `bun <browse スクリプト> search|fetch <引数> --json` を子プロセス起動し、stdout の JSON から契約型（`WebSearchResult` / `WebFetchResult`）を組み立てる。エンジン試行順・challenge 検出・Reddit / StackOverflow 経路・常駐サーバーの起動・タイムアウトは CLI の受け持ちであり、本 plugin は再実装しない。
 
 provider の選択は dsh 本家契約（`ctx.web`、`@deepseek-ai/dsh-web`）に従う。設定未指定のとき usable な provider が 1 つだけなので、本 plugin を追加しただけで本家 tool-web の既定経路になる（`WEB_PROVIDER_AMBIGUOUS` は本 plugin 単独では起きない）。
 
@@ -15,59 +17,68 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 | `camoufoxBaseUrl` | 環境変数 `CAMOUFOX_BASE_URL`、それも無ければ `ws://127.0.0.1:9378/camoufox` | camoufox server の待ち受け・接続先 |
 | `openserpBaseUrl` | 環境変数 `OPENSERP_BASE_URL`、それも無ければ `http://127.0.0.1:7000` | openserp の待ち受け・接続先 |
 
+解決済みの値は子プロセスの環境変数 `CAMOUFOX_BASE_URL` / `OPENSERP_BASE_URL` として CLI へ渡る。CLI はこれを接続先として使うほか、自身が camoufox server を起動するときの待ち受けアドレスにも使うため、config 値由来の URL でも接続先と待ち受けは一致する。
+
 ## search provider（id: `camoufox-openserp`）
 
-モデル向け `web_search`（引数は tool-web 契約の `{ queries: string[] }`）の実行時に、query ごとに次の振る舞いをする。
+モデル向け `web_search`（引数は tool-web 契約の `{ queries: string[] }`）の実行時に、query ごとに `bun <browse CLI スクリプト> search "<query>" --json` を起動し、stdout の JSON を契約の `WebSearchResult` へ写像する。
 
 | 条件 | 結果 |
 |---|---|
-| google の描画・パースが成功し結果 1 件以上 | google の結果を返す（後続エンジンは試行しない） |
-| google 失敗（描画失敗・チャレンジ検出・パース失敗・空結果のいずれか） | `captcha detected` または `challenge detected` なら google を1回再試行し、それでも失敗またはそれ以外の失敗なら duckduckgo を試行。さらに失敗なら bing を試行 |
-| 3 エンジンすべて失敗 | `WEB_PROVIDER_ERROR` の `WebError` で失敗し、メッセージに各エンジンの失敗行が含まれる。描画の abort を含む失敗だった場合、メッセージ末尾に hung した camoufox server の kill ヒント（`pkill -f "bun server.mjs"` 行）が付く |
+| CLI が終了コード 0 で JSON を返した | `sources`（下記の写像）と `truncated: false` を返す |
+| CLI が終了コード 1 で失敗した（全エンジン失敗等） | `WEB_PROVIDER_ERROR` の `WebError`。メッセージは CLI の stderr 出力を逐語で持つ（各エンジンの失敗行と、描画 abort を含む失敗時の camoufox server 復旧ヒント `browse restart` を含む） |
+| signal が abort された | 子プロセスを殺し、`WEB_PROVIDER_ERROR` の `WebError` で失敗する |
+| stdout が JSON としてパースできない | `WEB_PROVIDER_ERROR` の `WebError` で失敗する |
 
-- openserp の結果は契約の `WebSearchSource` へ射影して返す。`url` の無いエントリは捨て、`title`・`snippet` は空白時に省略する。openserp は SERP の生の href 属性をそのまま返すため、engine origin からの相対 URL（google の `/goto?url=...` など。プロトコル相対も含む）は engine origin で絶対化して返す。不正な URL（host 不備の絶対 URL など、解決できないもの）のエントリは `url` 無しと同様に捨てる。openserp の `type`・`display_url` と、検索のメタデータ行（使用した query・所要時間）は契約型に置き場がなく出力しない
-- 結果の件数上限（`maxResults` cap）と `truncated` は dsh-web seam の受け持ち。provider は検索結果を全件返し、cap により行が減ったときは seam が `truncated: true` を設定する（本家 `dsh-web-search-deepseek` と同じ構造）
-- 言語ヒントは対応しない。dsh 契約の `WebSearchRequest` に lang フィールドが存在せず、検索は言語指定なしで行われる
-- エンジン試行にクールダウンはなく、失敗したバックエンドも次回のリクエストでは通常どおり google → duckduckgo → bing の順で試行する。openserp のパース応答が `captcha detected`、または描画が `challenge detected` で失敗したとき、同じエンジンを同一リクエスト内で1回追加試行する。追加試行も失敗した場合は両方の試行を記録して次のエンジンへ進み、それ以外のパースエラー、空結果は追加試行しない。追加試行の発火条件はエラー文言 `parse: captcha detected` または `render: challenge detected` との完全一致であり、abort 済み signal では再試行しない。この追加試行ルールは web_search と web_fetch の両方に適用する
-- `available()` は、`bun`、`openserp`、`playwright-cli` の 3 バイナリが PATH 上で見つかること、および camoufox ブラウザ実行ファイル（環境変数 `CAMOUFOX_EXECUTABLE_PATH`、既定 `~/.cache/camoufox/camoufox-bin`）が存在することを条件とする。ネットワークアクセスは行わない
+- CLI JSON の `results[]` は `WebSearchSource` へ射影して返す。`url` の無いエントリは捨て、`title`・`snippet` は空白時に省略する。CLI の JSON は openserp の生の href をそのまま含むため、engine origin からの相対 URL（google の `/goto?url=...` など。プロトコル相対も含む）は engine origin で絶対化して返す。不正な URL（解決できないもの）のエントリは `url` 無しと同様に捨てる。CLI の `type`・`display_url`・`rank`・`tookMs` と、検索のメタデータ行は契約型に置き場がなく出力しない
+- 検索結果は CLI が上位 10 件に限定して返す。それ以上の件数上限（`maxResults` cap）と `truncated` は dsh-web seam の受け持ちで、cap により行が減ったときは seam が `truncated: true` を設定する（本家 `dsh-web-search-deepseek` と同じ構造）
+- 言語ヒントは対応しない。dsh 契約の `WebSearchRequest` に lang フィールドが存在せず、CLI を言語指定なしで起動する
+- エンジンの試行順（google → duckduckgo → bing）、challenge / captcha 検出時の同一エンジン 1 回再試行、空結果の失敗扱いは CLI の振る舞い（`browse.spec.md`）に従う
 
 ## fetch provider（id: `camoufox-trafilatura`）
 
-モデル向け `web_fetch`（引数は tool-web 契約の `{ url: string }`）の実行時に、URL で経路を 1 つ固定する。
+モデル向け `web_fetch`（引数は tool-web 契約の `{ url: string }`）の実行時に、`bun <browse CLI スクリプト> fetch <url> --json` を起動し、stdout の JSON を契約の `WebFetchResult` へ写像する。
 
-| URL | 経路と結果 |
+| 項目 | 値 |
 |---|---|
-| Reddit 投稿（`reddit.com` またはサブドメインの `/r/<subreddit>/comments/<投稿ID>/...`） | Reddit 経路。Atom フィード → embed → oEmbed の順で試行し、Markdown を返す。全試行失敗なら `WEB_PROVIDER_ERROR` で失敗する |
-| StackOverflow 質問（`stackoverflow.com` の `/questions/<数字ID>/...`） | StackOverflow 経路。StackExchange API → 質問フィードの順で試行し、Markdown を返す。全試行失敗なら `WEB_PROVIDER_ERROR` で失敗する |
-| 上記以外 | camoufox 描画 + `trafilatura --markdown` で本文を Markdown 化して返す。描画失敗・チャレンジ検出・変換失敗は `WEB_PROVIDER_ERROR` で失敗する |
+| `url` | CLI JSON の `url`（Reddit / StackOverflow は permalink へ正規化済み） |
+| `statusCode` | `200` 固定（CLI はフェッチ失敗をエラーとして報告するため、非 2xx を結果として表現しない） |
+| `body` | `{ kind: "text", content: <CLI JSON の body（markdown）> }` |
+| `truncated` | `false` |
 
-- 成功結果は契約に従い `body: { kind: 'text', content: <Markdown> }` として返す。`statusCode` は `200`、`url` は入力 URL または経路ごとの正規化 URL（Reddit は permalink）を返す
-- 描画は challenge 検出シグナル（Cloudflare 4 種、Google CAPTCHA 4 種）を用い、検出時はその backend の失敗として扱う
+- URL による経路の選択（Reddit 投稿 → RSS / embed / oEmbed、StackOverflow 質問 → StackExchange API / 質問フィード、その他 → camoufox 描画 + `trafilatura --markdown`）と各経路のフォールバックは CLI の振る舞い（`browse.spec.md`）に従う
+- 失敗時のエラー伝播は search provider と同じ（CLI stderr を逐語で持つ `WEB_PROVIDER_ERROR` の `WebError`）
 - タイトル抽出と結果行の表示は本家 tool-web 側の責務で、plugin には表示フックが無いため行わない
-- 各経路の試行にクールダウンはなく、失敗したバックエンドも次回のリクエストでは通常どおり記載の順序で試行する
-- `available()` は search provider と同一条件とする
+
+## available()
+
+`available()` は、`bun`、`openserp`、`playwright-cli` の 3 バイナリが PATH 上で見つかること、および camoufox ブラウザ実行ファイル（環境変数 `CAMOUFOX_EXECUTABLE_PATH`、既定 `~/.cache/camoufox/camoufox-bin`）が存在することを条件とする。ネットワークアクセスは行わない。CLI がこれら全部を駆動するため、前提チェックはラッパー化前と同じ条件を維持する。
+
+## CLI スクリプトのパス解決
+
+CLI スクリプトは `~/.agents/cli/browse` で解決する。本 plugin の bundle は常に展開先（`~/.dsh/plugins/web-search/`）で動くため、ホームディレクトリ基準の解決を使う（pi 拡張と違い、source tree からの相対位置には依存しない）。
+
+環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `~/.agents/cli` の代わりに使う（テスト・開発用。pi 拡張のラッパーと同じ規則）。ディレクトリ内に `browse.executable`（chezmoi の source tree 名）があればそれを、無ければ `browse` を使う。いずれも `bun <script>` として起動するため、スクリプトの実行ビットには依存しない。
 
 ## 常駐サーバー
 
-サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts/startup.spec.md`）の受け持ちであり、本 plugin は行わない。
+サーバーの起動・ヘルスチェック・待ち（15 秒上限）は CLI の受け持ちである。本 plugin はサーバーを起動しない。
 
-| 時点 | 振る舞い |
-|---|---|
-| search / fetch 実行時 | サーバーが健康でなければ起動を待つ（15 秒上限、超過で `WEB_PROVIDER_ERROR`） |
-| 他プロセスが同一サーバーを既に起動済み | 起動済みのサーバーに接続して再利用する |
-
-- camoufox server の標準出力・標準エラーは `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記される
-- 描画のタイムアウトは 30 秒、openserp パースと trafilatura 変換は各 15 秒、Reddit・StackOverflow の各要求は 15 秒
+- camoufox server 本体は `browse` CLI に内蔵され、`browse start` サブコマンドが起動する。本 plugin は server を起動せず、server 本体も同梱しない。pi 拡張と同じ単一の server を共有する
+- サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts/startup.spec.md`）が `bun ~/.agents/cli/browse start` の detached spawn で行うのが受け持ちであり、本 plugin も CLI も起動時にこれを行わない
+- camoufox server のログは `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記される（CLI が行う）
 
 ## 同種リクエストの直列化
 
+直列化は CLI の横断プロセスロック（`flock`）の受け持ちである。本 plugin はプロセス内キューを持たない。
+
 | リクエストの組 | 実行 |
 |---|---|
-| web_search 同士 | 先行の実行完了まで後続は開始しない（provider 内部で直列化） |
+| web_search 同士 | CLI のロックにより先行の実行完了まで後続は開始しない（pi など他プロセスからの同一 CLI 起動とも直列化する） |
 | web_fetch 同士 | 同上 |
-| web_search と web_fetch | 互いに並行で実行できる |
+| web_search と web_fetch | 互いに並行で実行できる（ロックファイルが別） |
 
-multi-query の web_search（`queries` 2 件以上）も、provider 内部の直列化により 1 件ずつ順に実行する。
+multi-query の web_search（`queries` 2 件以上）も、各 query の CLI 起動が順に直列化される。
 
 ## 提供する plugin
 
@@ -77,4 +88,5 @@ multi-query の web_search（`queries` 2 件以上）も、provider 内部の直
 | `export const name` | `"dsh-web-search"` |
 | `export const inject` | `["web"]` |
 | 登録 | `ctx.web.registerSearchProvider`（id `camoufox-openserp`）と `ctx.web.registerFetchProvider`（id `camoufox-trafilatura`） |
-| エントリポイント構成 | `run_after_build.sh` が 1 エントリとして bundle する（相対 import は inline、script に明示された bare-specifier external のみ外部解決）。camoufox server 本体（server.mjs）はパッケージ同梱の .mjs として bundle 外に置く |
+| エントリポイント構成 | `run_after_build.sh` が 1 エントリとして bundle する（相対 import は inline、script に明示された bare-specifier external のみ外部解決） |
+| 依存 | 探索ロジックの依存を持たない（ロジックは browse CLI 側が持つ） |

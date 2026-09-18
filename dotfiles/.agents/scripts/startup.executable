@@ -43,21 +43,21 @@ port_open() {
 }
 
 # --- camoufox server: rendering backend shared by pi and dsh web-search -----
-# server.mjs maintains Xvfb/x11vnc on Linux and appends a timestamped line to
-# the log on every start, so this script only checks the port and spawns.
+# `browse start` is idempotent: it no-ops when the server is healthy and
+# otherwise spawns it (maintaining Xvfb/x11vnc on Linux, appending to the
+# log) and waits for readiness. This script only gates the spawn on the port
+# check so a healthy server costs nothing.
 camoufox_authority="$(url_authority "${CAMOUFOX_BASE_URL:-ws://127.0.0.1:9378/camoufox}")"
 if [ -n "$camoufox_authority" ]; then
 	camoufox_host="${camoufox_authority%:*}"
 	camoufox_port="${camoufox_authority##*:}"
 	if ! port_open "$camoufox_host" "$camoufox_port"; then
-		camoufox_dir="$HOME/.dsh/plugins/web-search"
+		camoufox_cli="$HOME/.agents/cli/browse"
+		[ -f "$camoufox_cli" ] || camoufox_cli="$camoufox_cli.executable"
 		log_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pi/web-search"
-		if [ -f "$camoufox_dir/server.mjs" ] && command -v bun >/dev/null 2>&1; then
+		if [ -f "$camoufox_cli" ] && command -v bun >/dev/null 2>&1; then
 			mkdir -p "$log_dir"
-			(
-				cd "$camoufox_dir" || exit 0
-				nohup bun server.mjs >>"$log_dir/camoufox-server.log" 2>&1 &
-			)
+			nohup bun "$camoufox_cli" start >>"$log_dir/camoufox-server.log" 2>&1 &
 		fi
 	fi
 fi

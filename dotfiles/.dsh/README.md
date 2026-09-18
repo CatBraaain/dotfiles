@@ -42,7 +42,7 @@ lifecycle script はデフォルトで実行しない。実行が必要な依存
 
 ## プラグインの追加・更新
 
-1. 自作なら `plugins.exact/` にソースを置く。プラグイン自身の依存のうち、dsh の framework package（service を提供する `@deepseek-ai/*`）は `peerDependencies` に書き、typecheck・build 用に同じ範囲指定を `devDependencies` にも書く。それ以外の通常 library（`yaml`、`schemastery`、`camoufox-js` 等）は `dependencies` に書く。リモート依存は `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
+1. 自作なら `plugins.exact/` にソースを置く。プラグイン自身の依存のうち、dsh の framework package（service を提供する `@deepseek-ai/*`）は `peerDependencies` に書き、typecheck・build 用に同じ範囲指定を `devDependencies` にも書く。それ以外の通常 library（`yaml`、`schemastery` 等）は `dependencies` に書く。リモート依存は `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
 2. dotfiles で管理する plugin は `profiles/web/package.json` の `dependencies` と `dsh.profile.bundles` に追記する
 3. `chezmoi apply` が run script で plugin をビルドし、`dsh plugin --profile web install --ignore-scripts` で profile の依存をインストールする（全 plugin 一括。1 plugin ずつは不要）
 
