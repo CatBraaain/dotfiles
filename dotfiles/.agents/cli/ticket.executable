@@ -3,7 +3,7 @@
 // Spec: dotfiles/.agents/cli/ticket.spec.md
 
 import { execFileSync } from "node:child_process";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
 
@@ -347,6 +347,8 @@ async function createCommand(positional: string[], flags: Flags): Promise<void> 
   if (positional.length !== 1) usageFail();
   const input = parseCreateInput(positional[0]);
   const project = resolveProject(flags);
+  const projectDir = join(storeRoot(), project);
+  await mkdir(projectDir, { recursive: true });
   const tickets = await loadTickets(project);
   const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
   let after: string | null = null;

@@ -28,7 +28,8 @@
 | どちらもない | 任意のコマンド実行 | cwd が Git リポジトリ内のときは main worktree の basename を、そうでないときはカレントディレクトリの basename を project 名として扱う |
 | `-a/--all` がある | `list` / `check` 実行 | `~/.agents/tickets/` 配下の全 project を横断する |
 | `-a/--all` と `-p/--project` の両方がある | `list` / `check` 実行 | `--all` を優先し、`--project` を無視する |
-| 指定 project のディレクトリが存在しない | 任意のコマンド実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
+| 指定 project のディレクトリが存在しない | `create` 実行 | project のディレクトリを作成してから起票する |
+| 指定 project のディレクトリが存在しない | `list` / `show` / `set` / `edit` / `check` 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
 | ストアルート（`~/.agents/tickets/`）が存在しない | `--all` 付きのコマンド実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
 | `--json` がある | 任意のコマンド実行 | stdout に単一の JSON を出力する（jq でパース可能） |
 | `status` を受け取る箇所（frontmatter・`-s`・JSON）に 6 種以外の値がある | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる（書き込み系はファイルを書き換えない） |
@@ -97,7 +98,7 @@ usage ミスのときは usage を stderr へ出力し、終了コード 2 で�
 
 | 条件・状態 | 操作 | 結果 |
 |---|---|---|
-| `<json>` に `title` がある | `ticket create <json>` | `<project>/<YYYYMMDD-HHMMSS>.md` を作成する。frontmatter は `status: open`、本文は `# <title>` で始まり、作成した ID を 1 行出力する |
+| `<json>` に `title` がある | `ticket create <json>` | project のディレクトリがなければ作成し、`<project>/<YYYYMMDD-HHMMSS>.md` を作成する。frontmatter は `status: open`、本文は `# <title>` で始まり、作成した ID を 1 行出力する |
 | `<json>` に `status` がある | `ticket create <json>` | frontmatter の `status` をその値にする |
 | `<json>` に未解決の `after` があり、`status` がない | `ticket create <json>` | `status: blocked` で作成する |
 | `<json>` に未解決の `after` があり、`status` がある | `ticket create <json>` | 指定された `status` で作成する（自動切り替えをしない） |
