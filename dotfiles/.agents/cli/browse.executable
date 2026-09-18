@@ -912,10 +912,17 @@ async function runCamoufoxServer(): Promise<void> {
     executable_path: CAMOUFOX_EXECUTABLE_PATH,
     i_know_what_im_doing: true,
     block_webgl: true,
+    // Headed 起動では camoufox-js の virtual_display で DISPLAY を Xvfb の :99
+    // へ固定する。未指定のままでは server が親シェルから継承した実画面の
+    // DISPLAY（例: WSLg の :0）へブラウザのウィンドウが出てしまう。
+    ...(headless ? {} : { virtual_display: `:${DISPLAY_NUMBER}` }),
   });
 
   // Firefox hangs in sandboxed environments here (same root cause as Chrome's
   // --no-sandbox), so disable all Firefox process sandboxes.
+  // Headed on Xvfb must go through X11: with WAYLAND_DISPLAY in the
+  // environment (e.g. WSLg), Firefox picks the Wayland backend and shows the
+  // window on the real screen regardless of DISPLAY.
   launch.env = {
     ...launch.env,
     MOZ_DISABLE_CONTENT_SANDBOX: "1",
@@ -923,6 +930,7 @@ async function runCamoufoxServer(): Promise<void> {
     MOZ_DISABLE_RDD_SANDBOX: "1",
     MOZ_DISABLE_SOCKET_PROCESS_SANDBOX: "1",
     XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}`,
+    ...(headless ? {} : { MOZ_ENABLE_WAYLAND: "0" }),
   };
 
   const server = await firefox.launchServer({
