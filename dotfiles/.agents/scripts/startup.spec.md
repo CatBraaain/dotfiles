@@ -17,10 +17,12 @@
 | タスク | health check | 起動コマンド | 二重実行への耐性 |
 | --- | --- | --- | --- |
 | deja index | なし（deja 側で freshness 判定） | `deja index` | deja 自身の flock で直列化、fresh なら no-op |
+| pi update | なし（stamp file で 12 時間 throttle） | `pi update --extensions`（nohup で detach） | stamp read 前に `flock -n` でロックを取得しスクリプト終了まで保持。throttle 判定と stamp 更新を直列化する |
 | camoufox server | `${CAMOUFOX_BASE_URL:-ws://127.0.0.1:9378/camoufox}` の authority に対する TCP 接続 | `bun server.mjs`（cwd: `~/.dsh/plugins/web-search`） | ポート衝突で 2 個目は終了（無害） |
 | openserp | `GET ${OPENSERP_BASE_URL:-http://127.0.0.1:7000}/ready` が 2xx | `openserp serve -a <host> -p <port> --quiet` | ポート衝突で 2 個目は終了（無害） |
 
 - camoufox server は health check が失敗したときだけ起動する。server.mjs 自身が Linux の Xvfb / x11vnc の維持を行い、出力は `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記する
+- pi update は stamp（`${TMPDIR:-/tmp}/pi-update-stamp`、Unix 秒）から 12 時間以上経過していて `pi` が PATH にあるときだけ起動する。stamp が無い・読み取れない・非数字のときは throttle なしで起動する（tmp 配下なので再起動で消えたときも含む）。stamp は spawn より先に書く（起動後の成否は追跡しない）。`flock` / `pi` が PATH に無い場合はスキップする
 - `server.mjs` が存在しない、`bun` / `openserp` / `deja` が PATH に無い場合は、そのタスクを黙ってスキップする
 - openserp の host / port は接続先 URL の authority から取る（dsh / pi の web-search 拡張と同じ解決）
 

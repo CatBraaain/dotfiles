@@ -1,12 +1,33 @@
 #!/usr/bin/env bash
 # Background tasks primed once at harness startup. pi and dsh both run this
 # script detached, so every task must tolerate running twice: deja serializes
-# index builds with its own cross-process lock, and the resident servers are
-# spawned only when their health check fails (a second spawn loses a port
-# race and exits, which is harmless).
+# index builds with its own cross-process lock, pi update serializes its
+# throttle check with flock, and the resident servers are spawned only when
+# their health check fails (a second spawn loses a port race and exits, which
+# is harmless).
 
 # deja index: fresh -> no-op, stale -> incremental build.
 command -v deja >/dev/null 2>&1 && deja index >/dev/null 2>&1 &
+
+# --- pi update: refresh pi / extensions at most once per 12h -----------------
+# The stamp (in ${TMPDIR:-/tmp}) records Unix seconds. flock is taken before
+# the stamp is read and held until this short-lived script exits, so a
+# concurrent pi/dsh launch cannot slip between the throttle check and the
+# stamp write.
+update_stamp="${TMPDIR:-/tmp}/pi-update-stamp"
+if command -v pi >/dev/null 2>&1 && command -v flock >/dev/null 2>&1 \
+	&& exec 9>"$update_stamp.lock" && flock -n 9; then
+	update_now="$(date +%s)"
+	update_last="$(cat "$update_stamp" 2>/dev/null)"
+	case "$update_last" in
+		''|*[!0-9]*) update_last=0 ;;
+	esac
+	if [ "$((update_now - update_last))" -ge $((12 * 60 * 60)) ]; then
+		printf '%s\n' "$update_now" >"$update_stamp"
+		# Close fd 9 so pi update does not inherit and hold the lock.
+		nohup pi update --extensions >/dev/null 2>&1 9>&- &
+	fi
+fi
 
 # url_authority URL -> the host:port authority (scheme and path stripped).
 url_authority() {
