@@ -15,21 +15,21 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 | 項目 | 値 |
 |---|---|
-| エージェントディレクトリ | `PI_CODING_AGENT_DIR`（未設定なら `~/.pi/agent`） |
-| セッションディレクトリ | `PI_CODING_AGENT_SESSION_DIR`（未設定なら `<エージェントディレクトリ>/sessions`） |
+| エージェントディレクトリ | `PI_CODING_AGENT_DIR`（未設定・空文字なら `~/.pi/agent`） |
+| セッションディレクトリ | `PI_CODING_AGENT_SESSION_DIR`（未設定・空文字なら `<エージェントディレクトリ>/sessions`） |
 | 一覧対象 | `<セッションディレクトリ>/<cwd ディレクトリ>/` 直下の `*.jsonl` |
-| 除外 | `subagents/` ディレクトリ配下のファイル |
+| 除外 | `subagents/` ディレクトリ配下のファイル（一覧対象ディレクトリ直下の `subagents/` を含む） |
 | セッション ID と cwd | 各ファイル 1 行目のヘッダー `{"type":"session",...}` の `id` と `cwd`。cwd はディレクトリ名から復元せず、ヘッダーを正とする |
 | 更新日時 | セッションファイルの mtime |
 
-セッションディレクトリが存在しない、または `*.jsonl` が 1 件も無い場合、一覧は空になる。
+セッションディレクトリが存在しない、または `*.jsonl` が 1 件も無い場合、一覧は空になる。セッションディレクトリの読み取りに失敗した場合、エラーメッセージを表示する。
 
 ### 表示名
 
 セッション項目の表示名は次の順で決める。
 
-1. セッションファイル内の最新の `session_info` エントリの `name`（`/name` や `pi --name` で設定される値）
-2. 最初のユーザーメッセージ text の 1 行目（先頭 80 文字）
+1. セッションファイル内の最新の `session_info` エントリの `name`（`/name` や `pi --name` で設定される値）。空文字はタイトル解除とみなし、次の規則へ進む
+2. `text` を持つ最初のユーザーメッセージの、text 全体の前後の空白を取り除いた 1 行目（先頭 80 文字）
 3. いずれも無い場合 `Untitled`
 
 ### メタデータストア
@@ -54,13 +54,13 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 - アクティブ解除は当該エントリの `active` を `false` に更新する。エントリ自体と他の属性は保持する
 - 読み書きで未知のキー・属性を保持する（将来の `pinned` / `title` / `tags` 等の追加に備える）
 - ファイルが存在しない場合はメタデータ無しとして振る舞い、初回の書き込みで作成する
-- 読み込み時に JSON を解釈できない場合はメタデータ無しとして振る舞い、書き込みは行わずエラーを表示する
+- 読み込み時に JSON を解析できない、または所定の構造でない場合（ルートと `sessions` がオブジェクトでない）はメタデータ無しとして振る舞い、書き込みは行わずエラーを表示する
 
 拡張機能が書き換えてよいのはメタデータストアのみである。セッションファイルは読み取り専用として扱い、変更・削除・移動をしない。セッションの作成と更新は Pi CLI が行う。
 
 ## サイドバービュー
 
-Activity Bar に view container `Agent Sessions` を追加し、その中に TreeView を表示する。Webview は使わない。
+Activity Bar に view container `Agent Sessions` を追加し、その中に TreeView を表示する。ビューには collapse-all アクションを付け、cwd グループは既定で展開する。Webview は使わない。
 
 ### 表示モード
 
@@ -78,8 +78,9 @@ Activity Bar に view container `Agent Sessions` を追加し、その中に Tre
 | 対象 | 規則 |
 |---|---|
 | グループ | セッションの `cwd` ごとに 1 グループ。ラベルは cwd の basename、tooltip は cwd のフルパス |
-| グループ順 | 所属セッションの最新更新日時の降順 |
-| グループ内セッション順 | 更新日時の降順 |
+| グループ順 | 所属セッションの最新更新日時の降順。同一なら cwd の昇順 |
+| グループ内セッション順 | 更新日時の降順。同一ならセッション ID の昇順 |
+| セッション項目の description | 更新日時。ロケールに応じた日時文字列で表示する |
 | セッション項目の tooltip | 表示名、セッション ID、cwd、更新日時 |
 | 空のとき | Active モードでは `No active sessions`、All モードでは `No sessions` を表示 |
 
@@ -100,17 +101,18 @@ Activity Bar に view container `Agent Sessions` を追加し、その中に Tre
 
 | 項目 | 値 |
 |---|---|
-| 起動 cwd | workspace folder があればその最初の 1 つ。無い場合はアクティブエディタのファイルのディレクトリ。それも無い場合はホームディレクトリ |
+| 起動 cwd | file scheme を持つ workspace folder があればその最初の 1 つ。無い場合はアクティブエディタのファイル（file scheme のみ対象）のディレクトリ。それも無い場合はホームディレクトリ |
 | 起動コマンド | 上記 cwd で新しい Terminal を作り `pi` を実行する（既存 Terminal は再利用しない） |
 | 起動後 | ビューを再読込し、検出した新規セッションに active マーキングを付与して対応する cwd のグループに表示する |
 | Terminal 対応 | 起動した Terminal は、検出された新規セッション ID に対応づけられ、以後そのセッションの選択で再利用される |
 
 ## セッション選択と Terminal
 
-セッション項目をクリックすると、そのセッションの Pi TUI を Editor Area の Terminal で開く。Terminal は `vscode.window.createTerminal` の Editor 位置を使い、下部の Terminal Panel には表示しない。
+セッション項目をクリックすると、そのセッションの Pi TUI を Editor Area の Terminal で開く。Terminal は `vscode.window.createTerminal` の Editor 位置を使い、下部の Terminal Panel には表示しない。Terminal の名前はセッションの表示名にする。
 
 | 条件 | 動作 |
 |---|---|
+| セッションファイルが存在しない | エラーメッセージを表示し、Terminal を起動しない |
 | 当該セッション ID に対応する Terminal が生存している | 新しいプロセスを起動せず、その Terminal を Editor Area に表示する |
 | 対応する Terminal が無い、または既に閉じている | Terminal の cwd をそのセッションの `cwd` として Editor 位置に Terminal を作り、`pi --session <セッションファイルのパス>` を実行する |
 | Terminal が閉じた | セッション ID との対応関係を解消する |

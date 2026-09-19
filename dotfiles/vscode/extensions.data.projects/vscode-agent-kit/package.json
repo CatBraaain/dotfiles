@@ -1,0 +1,125 @@
+{
+  "name": "pi-sessions",
+  "displayName": "Pi Sessions",
+  "description": "Browse Pi (pi-coding-agent) sessions in the sidebar and open them in editor terminals.",
+  "version": "0.1.0",
+  "publisher": "pi-sessions",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentSessions",
+          "title": "Agent Sessions",
+          "icon": "media/agent-sessions.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentSessions": [
+        {
+          "id": "piSessions.sessions",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "piSessions.openSession",
+        "title": "Open Session"
+      },
+      {
+        "command": "piSessions.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "piSessions.newSession",
+        "title": "New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "piSessions.deactivate",
+        "title": "Deactivate Session",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "piSessions.showActiveMode",
+        "title": "Show Active Sessions",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "piSessions.showAllMode",
+        "title": "Show All Sessions",
+        "icon": "$(list)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "piSessions.openSession",
+          "when": "false"
+        },
+        {
+          "command": "piSessions.deactivate",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "piSessions.newSession",
+          "when": "view == piSessions.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "piSessions.showAllMode",
+          "when": "view == piSessions.sessions && piSessions.mode == 'active'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "piSessions.showActiveMode",
+          "when": "view == piSessions.sessions && piSessions.mode == 'all'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "piSessions.refresh",
+          "when": "view == piSessions.sessions",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "piSessions.deactivate",
+          "when": "view == piSessions.sessions && viewItem == piSession.active",
+          "group": "inline@0"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.85.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
