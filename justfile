@@ -60,8 +60,8 @@ winget:
   gsudo pwsh undotfiles/winget.ps1
 
 [windows]
-msime:
-  bun undotfiles/ime/custom-roma-def.ts
+msime mode="apply":
+  $mode = "{{mode}}"; $romaFlag = if ($mode -eq "diff") { @("--dry-run") } elseif ($mode -eq "apply") { @() } else { throw "mode must be apply or diff: $mode" }; $keyFlag = if ($mode -eq "diff") { @("--diff") } else { @() }; bun undotfiles/ime/custom-roma-def.ts @romaFlag && bun undotfiles/ime/msime-key-settings.ts @keyFlag
 
 [windows]
 autologon:
