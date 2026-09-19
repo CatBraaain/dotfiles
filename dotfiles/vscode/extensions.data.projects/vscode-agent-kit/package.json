@@ -35,9 +35,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json",
-    "screenshot": "npm run build && node scripts/screenshot.mjs",
+    "screenshot": "bun run build && node scripts/screenshot.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "npm run build && npm run storybook:build && vitest run",
+    "test": "bun run build && bun run storybook:build && vitest run",
     "lint": "eslint .",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build"
@@ -54,7 +54,7 @@
     "typescript-eslint": "^8.0.0",
     "vitest": "^3.0.0"
   },
-  "allowScripts": {
-    "esbuild@0.28.2": true
-  }
+  "trustedDependencies": [
+    "esbuild"
+  ]
 }

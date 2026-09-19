@@ -118,7 +118,7 @@ Webview 上部のモード切替で両モードを切り替える。切替状態
 
 ### 静的プレビュー
 
-Storybook のカタログで、VS Code API と実セッションファイルを使わずに Webview の見た目と操作を確認できる。`npm run storybook` でカタログをブラウザに表示でき、`npm run storybook:build` の静的出力は任意の静的サーバで単独表示できる。カタログはサンプルデータで次の状態を確認できる。
+Storybook のカタログで、VS Code API と実セッションファイルを使わずに Webview の見た目と操作を確認できる。`bun run storybook` でカタログをブラウザに表示でき、`bun run storybook:build` の静的出力は任意の静的サーバで単独表示できる。カタログはサンプルデータで次の状態を確認できる。
 
 | ストーリーの軸 | 値 |
 |---|---|
@@ -165,7 +165,7 @@ Terminal とセッション ID の対応関係は永続化しない。再起動�
 
 | 項目 | 値 |
 |---|---|
-| コマンド | `npm run screenshot` |
+| コマンド | `bun run screenshot` |
 | 撮影内容 | Agent Sessions ビューを開いた VS Code ウィンドウ全体 |
 | 保存先 | `.screenshots/<YYYYMMDD-HHmmss>.png`（例: `20260919-183000.png`） |
 | セッションデータ | 撮影スクリプトが作成した分離環境のダミーセッション 3 件（すべて active）を表示する。実環境のセッションデータとメタデータストアは読み書きしない |
@@ -173,7 +173,7 @@ Terminal とセッション ID の対応関係は永続化しない。再起動�
 
 | 条件 | 動作 |
 |---|---|
-| `npm run screenshot` を実行 | TypeScript のビルド、このリポジトリの拡張機能を読み込んだ撮影用 VS Code の起動、Agent Sessions ビューを開いた状態での撮影、VS Code の終了まで、コマンド 1 回で完了する |
+| `bun run screenshot` を実行 | TypeScript のビルド、このリポジトリの拡張機能を読み込んだ撮影用 VS Code の起動、Agent Sessions ビューを開いた状態での撮影、VS Code の終了まで、コマンド 1 回で完了する |
 | 撮影用の VS Code が未取得 | スクリプトに定義した固定バージョンの Linux 版 VS Code を撮影の前にダウンロードし、2 回目以降は取得済みのものを再利用する |
 | 保存先ディレクトリが存在しない | 撮影の前に作成する |
 | 撮影に成功 | コマンドは終了コード 0 で終了し、保存した画像のパスを標準出力に表示する |

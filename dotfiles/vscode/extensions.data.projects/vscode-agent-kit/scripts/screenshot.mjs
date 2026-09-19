@@ -1,5 +1,5 @@
 // Takes a screenshot of the Agent Sessions view for visual review.
-// Usage: npm run screenshot
+// Usage: bun run screenshot
 //
 // Downloads a fixed-version Linux build of VS Code on first run, launches it
 // with this extension loaded via Playwright's Electron launcher, opens the
