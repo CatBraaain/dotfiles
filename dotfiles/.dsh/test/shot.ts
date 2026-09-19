@@ -3,10 +3,8 @@
  *
  * Prerequisite: `bun run render.ts` (the fixture html files must exist).
  * Starts `serve.ts` as a child process, drives a playwright-cli Chromium
- * session over the light and dark fixture pages, and writes into `dist/`:
- * - `fixture.png`        light, all review cases
- * - `fixture-hover.png`  light, a session-list row hovered (case 4 hover actions)
- * - `fixture-dark.png`   dark, all review cases
+ * session over the light and dark fixture pages, and writes combined, hover,
+ * and one light/dark screenshot for each review case into `dist/`.
  *
  * The screenshot review contract lives in REVIEW.md.
  */
@@ -17,7 +15,26 @@ const serveReadyTimeoutMs = 30_000;
 const serveUrlPattern = /http:\/\/localhost:[0-9]+\//;
 const viewport = { width: 1280, height: 900 };
 
-const screenshotNames = ["fixture.png", "fixture-hover.png", "fixture-dark.png"];
+const caseScreenshotSlugs = [
+  "skill-status-populated",
+  "skill-status-empty",
+  "skill-status-overflow",
+  "session-list-workspaces",
+  "session-list-blank-current",
+  "session-list-empty",
+  "agents-auto",
+  "agents-manual",
+  "agents-idle",
+  "quota-line",
+  "concurrency-retry",
+  "custom-ui-composer",
+] as const;
+const screenshotNames = [
+  "fixture.png",
+  "fixture-hover.png",
+  "fixture-dark.png",
+  ...caseScreenshotSlugs.flatMap((slug) => [`fixture-${slug}.png`, `fixture-${slug}-dark.png`]),
+];
 
 interface CommandResult {
   readonly exitCode: number;
@@ -108,14 +125,30 @@ async function stopServe(serve: Bun.Subprocess): Promise<void> {
 }
 
 function screenshotScript(lightUrl: string, darkUrl: string): string {
+  const caseCount = caseScreenshotSlugs.length;
+  const casePaths = caseScreenshotSlugs.map((slug) => `dist/fixture-${slug}.png`);
+  const darkCasePaths = caseScreenshotSlugs.map((slug) => `dist/fixture-${slug}-dark.png`);
   return `async page => {
     await page.setViewportSize({ width: ${viewport.width}, height: ${viewport.height} });
+    const casePaths = ${JSON.stringify(casePaths)};
+    const darkCasePaths = ${JSON.stringify(darkCasePaths)};
     await page.goto(${JSON.stringify(lightUrl)});
-    await page.screenshot({ path: "dist/fixture.png" });
+    const cases = page.locator(".case");
+    if (await cases.count() !== ${caseCount}) {
+      throw new Error("fixture case count changed; update shot.ts case names");
+    }
+    await page.screenshot({ path: "dist/fixture.png", fullPage: true });
     await page.locator(".session-list-row").first().hover();
-    await page.screenshot({ path: "dist/fixture-hover.png" });
+    await page.screenshot({ path: "dist/fixture-hover.png", fullPage: true });
+    for (let index = 0; index < ${caseCount}; index += 1) {
+      await cases.nth(index).screenshot({ path: casePaths[index] });
+    }
     await page.goto(${JSON.stringify(darkUrl)});
-    await page.screenshot({ path: "dist/fixture-dark.png" });
+    const darkCases = page.locator(".case");
+    for (let index = 0; index < ${caseCount}; index += 1) {
+      await darkCases.nth(index).screenshot({ path: darkCasePaths[index] });
+    }
+    await page.screenshot({ path: "dist/fixture-dark.png", fullPage: true });
   }`;
 }
 
@@ -127,7 +160,12 @@ async function main(): Promise<void> {
     }
   }
 
-  const serve = Bun.spawn(["bun", "run", "serve.ts"], { cwd, stdout: "pipe", stderr: "pipe" });
+  const serve = Bun.spawn(["bun", "run", "serve.ts"], {
+    cwd,
+    env: { ...process.env, PORT: "0" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   let browserStarted = false;
   let cleanedUp = false;
   const cleanup = async (): Promise<void> => {

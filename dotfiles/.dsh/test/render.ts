@@ -12,9 +12,9 @@
  *   class definitions from `dsh-client-ui-conversation`
  *
  * Output: `dist/fixture.html` (light) and `dist/fixture-dark.html`.
- * Each page lays out the same review cases so a reviewer (human or VLM) can
- * check every visible-behavior point from the plugin SPECs against the
- * rendered visuals; see README.md for the checklist.
+ * Each page lays out the review cases so a reviewer (human or VLM) can check
+ * the visible-behavior points from the plugin SPECs against rendered visuals;
+ * see README.md for the checklist.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -292,9 +292,10 @@ function captureSlotRegistrations(apply: (ctx: unknown) => void): RegisteredEntr
     return registered;
 }
 
-function findEntry(entries: RegisteredEntry[], id: string): unknown {
-    const entry = entries.find((candidate) => candidate.spec.id === id);
-    if (!entry) throw new Error(`slot entry not registered: ${id}`);
+/** Find one registered entry by entry id, or the sole entry when id is omitted. */
+function findEntry(entries: RegisteredEntry[], id: string | undefined): unknown {
+    const entry = id === undefined ? entries[0] : entries.find((candidate) => candidate.spec.id === id);
+    if (!entry) throw new Error(`slot entry not registered: ${id ?? "(any)"}`);
     return entry.component;
 }
 
@@ -380,6 +381,43 @@ body {
 .dummy-input { min-height: 24px; padding: 4px 16px; }
 .list-host { box-sizing: border-box; flex-direction: column; max-width: 300px; display: flex; }
 .list-host-tall { height: 420px; }
+.quota-line {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: var(--dsh-composer-card-max-width);
+    padding: 0 var(--dsh-composer-side-clearance);
+    color: var(--dsw-alias-label-tertiary);
+    font-size: var(--dsh-content-font-size-secondary, 13px);
+    line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+}
+.custom-composer-card {
+    min-height: 44px;
+    padding-bottom: 6px;
+}
+.custom-draft {
+    margin-right: 88px;
+}
+.custom-tool-row {
+    position: absolute;
+    right: 8px;
+    bottom: 9px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.custom-context-meter {
+    color: var(--dsw-alias-label-tertiary);
+    font-size: 12px;
+}
+.custom-tool-row button {
+    min-width: 34px;
+    height: 28px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 14px;
+    color: var(--dsw-alias-label-primary);
+    background: var(--dsw-alias-interactive-bg-hover);
+}
 `;
 
 /**
@@ -627,6 +665,44 @@ async function main(): Promise<void> {
         ...agentsVocabulary,
     });
 
+    // concurrency-retry: render the real registered chat-node row with a
+    // hand-built wait node, mirroring what `buildViewNode` produces for one
+    // durable `concurrency-retry/wait` event.
+    const retryExports = await loadPluginBundle("concurrency-retry", "dotfiles-dsh-concurrency-retry");
+    const retryEntry = findEntry(
+        captureSlotRegistrations(retryExports.apply as (ctx: unknown) => void),
+        undefined,
+    );
+    const retryLine = renderComponent(retryEntry, {
+        node: {
+            kind: "concurrency-retry/wait",
+            data: { provider: "zai", attempt: 2, waitMs: 5_000 },
+        },
+    });
+
+    // quota-line performs a live host fetch in dsh web, and the `?fixture`
+    // world serves no quota route — both channels stay silent there. This
+    // case is therefore a hand-written format reference for the documented
+    // successful line, not a bundle render.
+    const quotaLine = `<div class="quota-line">zai 42% 5h 78% wk</div>`;
+    // custom-ui is CSS over the stock InputBar DOM, which the shell owns. This
+    // case is a layout reference for the one-line composer, not a bundle
+    // render; the interactive composer appears in the web shots.
+    const customComposer = `<div class="conv-root">
+    <div class="composer-stack">
+        <div class="input-root">
+            <div class="input-card custom-composer-card" data-composer-card>
+                <div class="dummy-input custom-draft">Review the composer layout…</div>
+                <div class="custom-tool-row">
+                    <span class="custom-context-meter">34k</span>
+                    <button type="button">Stop</button>
+                    <button type="button">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>`;
+
     const listCase = `<div class="case">
     <div class="case-label">4. session-list — workspace groups (header row, Add workspace, current tint, Ungrouped, Show more) with status dots, relative time, and hover actions</div>
     <div class="list-host list-host-tall">${listMarkup}</div>
@@ -648,6 +724,12 @@ async function main(): Promise<void> {
         caseSection("7. agents — auto class with the resolved model (selector rows, menus closed)", agentsAuto, ""),
         caseSection("8. agents — manual pick shows (manual:model) on the class row", agentsManual, ""),
         caseSection("9. agents — idle session before the first turn (no resolved model yet)", agentsIdle, ""),
+        caseSection("10. quota-line — format reference for the dim provider quota line (hand-written; see note)", quotaLine, ""),
+        caseSection("11. concurrency-retry — real wait row rendered from a fixture wait node", retryLine, ""),
+        `<div class="case">
+    <div class="case-label">12. custom-ui — composer one-line layout reference (hand-written; see note)</div>
+    ${customComposer}
+</div>`,
     ].join("\n");
 
     for (const dark of [false, true]) {

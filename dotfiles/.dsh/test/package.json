@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "render": "bun run render.ts",
     "shot": "bun run shot.ts",
+    "shot:web": "bun run web-shot.ts",
+    "shot:all": "bun run render.ts && bun run shot.ts && bun run shot:web",
     "test:web": "bun run web-smoke.ts"
   },
   "devDependencies": {
