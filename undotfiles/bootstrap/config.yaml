@@ -41,6 +41,10 @@
 - brew: rustup
 - run: "rustup update stable"
 
+# Rust cross-compile target for Windows (x86_64-pc-windows-gnu).
+- brew: mingw-w64
+- run: "rustup target add x86_64-pc-windows-gnu"
+
 # Tauri test
 - apt: webkitgtk-webdriver
 - cargo: tauri-driver
