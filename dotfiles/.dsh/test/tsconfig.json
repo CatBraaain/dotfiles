@@ -3,10 +3,11 @@
     "target": "esnext",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "types": ["bun"],
+    "jsx": "react-jsx",
+    "types": ["bun", "vite/client"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["*.ts"]
+  "include": ["*.ts", ".storybook/**/*.ts", "storybook/**/*.tsx"]
 }

@@ -63,6 +63,23 @@ bun run shot:web
 LLM provider へのリクエストは発生しない。dsh の loopback control-plane RPC と WebSocket
 は画面の起動に必要なため許可する。
 
+## Storybook
+
+各 client UI plugin を個別に表示する Storybook カタログ。実 plugin の `lib/client.js` を
+fake slot context でロードし、登録された component を browser で描画する。
+
+```bash
+bun run storybook          # dev server (http://localhost:6006、使用中なら対話式で port 変更を求める)
+bun run storybook:build    # dist/storybook/ へ静的生成
+```
+
+対象は agents、concurrency-retry、custom-ui、quota-line、session-list、skill-status の6 plugin。
+toolbar の theme 切り替えで light / dark を選べる。表示確認のみで、クリック・popover・
+subscription などのインタラクションは対象外。quota-line と agents の host fetch
+(`/plugins/quota-line/quota.json`、`/api/dsh-agents/state`) は same-origin の fake 応答に置き換えられ、
+外部通信は発生しない。custom-ui は実 component が host DOM を所有するため、plugin が注入する CSS を
+stock DOM を模した host fixture に当てた状態を表示する。
+
 ## 対象ケース
 
 静的 fixture には現在の client UI plugin の主要な表示状態を12ケース収録している。
