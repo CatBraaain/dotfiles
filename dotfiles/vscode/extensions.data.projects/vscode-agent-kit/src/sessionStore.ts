@@ -26,6 +26,16 @@ export interface SessionSummary {
   mtimeMs: number;
 }
 
+/** Whether a scanned session file still exists and is a regular file. */
+export async function sessionFileExists(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 const SCAN_CONCURRENCY = 16;
 
 interface CacheEntry {

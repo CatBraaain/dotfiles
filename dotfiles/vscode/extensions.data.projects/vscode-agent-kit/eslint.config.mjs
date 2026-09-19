@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**"] },
+  { ignores: ["dist/**", "dist-webview/**", "node_modules/**", "preview/lib/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -12,6 +12,24 @@ export default tseslint.config(
         console: "readonly",
         fetch: "readonly",
         process: "readonly",
+      },
+    },
+  },
+  {
+    // Browser globals for the hand-written preview scripts; Node's process/console
+    // for the generator CLI (TS sources resolve globals via tseslint).
+    files: ["preview/*.mjs"],
+    languageOptions: {
+      globals: {
+        document: "readonly",
+        window: "readonly",
+        Element: "readonly",
+        HTMLElement: "readonly",
+        HTMLButtonElement: "readonly",
+        acquireVsCodeApi: "readonly",
+        crypto: "readonly",
+        process: "readonly",
+        console: "readonly",
       },
     },
   },

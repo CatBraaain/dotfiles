@@ -27,89 +27,20 @@
       "piSessionViews": [
         {
           "id": "piSessions.sessions",
-          "name": "Sessions"
-        }
-      ]
-    },
-    "commands": [
-      {
-        "command": "piSessions.openSession",
-        "title": "Open Session"
-      },
-      {
-        "command": "piSessions.refresh",
-        "title": "Refresh",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "piSessions.newSession",
-        "title": "New Session",
-        "icon": "$(add)"
-      },
-      {
-        "command": "piSessions.deactivate",
-        "title": "Deactivate Session",
-        "icon": "$(circle-slash)"
-      },
-      {
-        "command": "piSessions.showActiveMode",
-        "title": "Show Active Sessions",
-        "icon": "$(filter)"
-      },
-      {
-        "command": "piSessions.showAllMode",
-        "title": "Show All Sessions",
-        "icon": "$(list)"
-      }
-    ],
-    "menus": {
-      "commandPalette": [
-        {
-          "command": "piSessions.openSession",
-          "when": "false"
-        },
-        {
-          "command": "piSessions.deactivate",
-          "when": "false"
-        }
-      ],
-      "view/title": [
-        {
-          "command": "piSessions.newSession",
-          "when": "view == piSessions.sessions",
-          "group": "navigation@1"
-        },
-        {
-          "command": "piSessions.showAllMode",
-          "when": "view == piSessions.sessions && piSessions.mode == 'active'",
-          "group": "navigation@2"
-        },
-        {
-          "command": "piSessions.showActiveMode",
-          "when": "view == piSessions.sessions && piSessions.mode == 'all'",
-          "group": "navigation@2"
-        },
-        {
-          "command": "piSessions.refresh",
-          "when": "view == piSessions.sessions",
-          "group": "navigation@3"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "piSessions.deactivate",
-          "when": "view == piSessions.sessions && viewItem == piSession.active",
-          "group": "inline@0"
+          "name": "Sessions",
+          "type": "webview"
         }
       ]
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json && node scripts/generate-preview.mjs",
     "screenshot": "npm run build && node scripts/screenshot.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "lint": "eslint ."
+    "test": "npm run build && vitest run",
+    "lint": "eslint .",
+    "preview": "npm run build",
+    "preview:serve": "npx --yes serve preview --listen 4173"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

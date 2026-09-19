@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chmodSync } from "node:fs";
 import { readFile, utimes } from "node:fs/promises";
 import { join } from "node:path";
-import { listSessions } from "../src/sessionStore";
+import { listSessions, sessionFileExists } from "../src/sessionStore";
 import { cleanup, header, messageEntry, sessionInfoEntry, tempDir, writeJsonl } from "./fixtures";
 
 let root: string;
@@ -18,6 +18,16 @@ afterEach(async () => {
 function groupDir(name: string): string {
   return join(root, name);
 }
+
+describe("sessionFileExists", () => {
+  it("returns true only for an existing regular file", async () => {
+    const filePath = await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [header()]);
+
+    await expect(sessionFileExists(filePath)).resolves.toBe(true);
+    await expect(sessionFileExists(groupDir("--home-a--"))).resolves.toBe(false);
+    await expect(sessionFileExists(join(root, "missing.jsonl"))).resolves.toBe(false);
+  });
+});
 
 describe("listSessions", () => {
   it("returns an empty list when the session directory does not exist", async () => {
