@@ -7,6 +7,7 @@
 //   browse fetch <url> [--json]
 //   browse start      ensure the camoufox server is running (idempotent)
 //   browse restart    stop and respawn the camoufox server (hang recovery)
+//   browse display show|hide  toggle VNC display access
 //
 // The `__server` subcommand is internal: it is the camoufox server process
 // itself, spawned detached by `browse start` (and by search/fetch when they
@@ -118,10 +119,14 @@ function stateDir(): string {
 const USAGE = `usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
        browse start
-       browse restart`;
+       browse restart
+       browse display show
+       browse display hide`;
 
 const SEARCH_USAGE = `usage: browse search "<query>" [--lang <code>] [--json]`;
 const FETCH_USAGE = `usage: browse fetch <url> [--json]`;
+const DISPLAY_USAGE = `usage: browse display show
+       browse display hide`;
 
 interface SearchArgs {
   query: string;
@@ -190,6 +195,9 @@ async function main(): Promise<void> {
       if (rest.length > 0) usageFail(USAGE);
       await restartCommand();
       break;
+    case "display":
+      displayCommand(rest);
+      break;
     case SERVER_SUBCOMMAND:
       await runCamoufoxServer();
       break;
@@ -230,6 +238,15 @@ async function startCommand(): Promise<void> {
 async function restartCommand(): Promise<void> {
   await stopCamoufoxServers();
   await startCommand();
+}
+
+function displayCommand(argv: string[]): void {
+  const action = argv[0];
+  if (argv.length !== 1 || (action !== "show" && action !== "hide")) {
+    usageFail(DISPLAY_USAGE);
+  }
+  const requests = action === "show" ? ["nodeny"] : ["deny", "disconnect:all"];
+  for (const request of requests) runX11vncRequest(request, action);
 }
 
 // --- search pipeline ---
@@ -1002,6 +1019,20 @@ function x11vncArgs(displayNumber: number = DISPLAY_NUMBER, port: number = VNC_P
     "-nopw",
     "-deny_all",
   ];
+}
+
+function runX11vncRequest(request: string, action: "show" | "hide"): void {
+  const result = spawnSync("x11vnc", ["-display", `:${DISPLAY_NUMBER}`, "-R", request], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status === 0) return;
+  const detail = (
+    result.error?.message ||
+    String(result.stderr ?? "").trim() ||
+    `exit status ${result.status ?? "unknown"}`
+  ).replace(/\s+/g, " ");
+  fail(`display ${action} failed: ${detail}`);
 }
 
 // Detached helper processes (Xvfb, x11vnc) outlive the server; a restart just

@@ -1,6 +1,6 @@
 # browse CLI spec
 
-コマンド `browse` の仕様。サブコマンド `search` / `fetch` / `start` / `restart` を持ち、人間とコーディングエージェントが、Web 検索と URL フェッチと camoufox server の管理をコマンドラインから実行するための CLI。
+コマンド `browse` の仕様。サブコマンド `search` / `fetch` / `start` / `restart` / `display` を持ち、人間とコーディングエージェントが、Web 検索と URL フェッチと camoufox server の管理をコマンドラインから実行するための CLI。
 
 usage:
 
@@ -9,6 +9,8 @@ usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
        browse start
        browse restart
+       browse display show
+       browse display hide
 ```
 
 ## 前提と依存
@@ -40,6 +42,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | 値を要求するフラグの直後の引数 | 扱い | `--` 始まりかどうかを検査せず、そのまま値として使う |
 | 単一ダッシュで始まる引数（`-` を含む） | 扱い | フラグではなく位置引数として扱う |
 | `start` / `restart` に余分な引数を渡した | 実行 | usage を stderr へ出力し、終了コード 1 で終わる |
+| `display` の action がない・未知の action を渡した・余分な引数を渡した | 実行 | `browse display` の usage を stderr へ出力し、終了コード 1 で終わる |
 
 | 対象 | タイムアウト |
 |---|---|
@@ -72,6 +75,16 @@ hang した camoufox server の復旧用に、実行中の server を停止し�
 | 停止後 | 実行 | `browse start` と同じ手順で起動し直し、ready を待つ |
 | 実行中の server が無い | 実行 | 停止を飛ばして `browse start` の手順で起動する |
 
+## `browse display show` / `browse display hide`
+
+Xvfb `:99` 上の headed browser を VNC で人間へ引き継ぐための接続受付を切り替える。ブラウザ、ページ、cookie、playwright-cli セッションは再起動しない。headless browser そのものを headed に変更する操作ではない。
+
+| 条件・状態 | 操作 | 結果 |
+|---|---|---|
+| `browse display show` を実行し、稼働中の x11vnc を制御できる | `:99` の VNC 接続受付を開く | 新しい VNC 接続を受け付け、終了コード 0 で終わる |
+| `browse display hide` を実行し、稼働中の x11vnc を制御できる | 新しい VNC 接続を拒否し、接続中のクライアントを切断する | 画面を非公開にし、終了コード 0 で終わる |
+| x11vnc が未導入、VNC server が未起動、または `:99` を制御できない | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
+
 ## camoufox server のモード
 
 内部サーバーモード（`browse __server`）の表示モード、補助プロセス、実行環境、終了時の振る舞い。依存パッケージ（`xvfb`・`x11vnc`）は dotfiles bootstrap が導入する。
@@ -91,7 +104,7 @@ headless のときは Xvfb も x11vnc も起動しない。headed のとき、se
 - x11vnc が PATH に存在しポート 5900 ですでに待ち受けていなければ、`-deny_all`（既定は誰も接続できない）付きでバックグラウンド起動して、人間が VNC でページを引き取れる状態にする。x11vnc が PATH に無ければ警告をログへ出して続行する（画面の引き取りだけが使えない）
 - Xvfb と x11vnc は server より長生きする detached プロセスで、server は起動のたびに両者の存在を再確認し、無いときだけ起動する
 
-画面の公開はブラウザの再起動を伴わない。人間は稼働中の x11vnc へ `x11vnc -display :99 -R nodeny` で VNC 接続の受け付けを開き、`-R deny` と `-R disconnect:all` で閉じる。
+画面の公開はブラウザの再起動を伴わない。VNC 接続の受付は `browse display show` / `browse display hide` で切り替える。
 
 server の実行環境は環境変数で上書きできる:
 
