@@ -2,9 +2,9 @@
 // into the sorted `roman=kana` record list for the MS-IME custom roma-def
 // registry value.
 //
-// CLI: no arguments compiles and applies the table. `--preview` prints a
-// human-readable view and `--diff` prints the set difference against the
-// currently applied registry table; neither writes the OS.
+// CLI: no arguments prints the set difference against the currently applied
+// registry table and applies the table. `--dry-run` prints the same difference
+// without writing the OS. `--preview` prints a human-readable view.
 
 // ---------- declaration types ----------
 
@@ -349,11 +349,12 @@ export function diffRecordSets(current: readonly string[], next: readonly string
 	return { added, removed };
 }
 
-// Renders the `--diff` view of the compiled `next` records against the
+// Renders the difference view of the compiled `next` records against the
 // currently applied ones (`null` when no table can be read): a notice plus a
 // `+` line for every mapping when no table is applied, an up-to-date notice
 // when both sides match, otherwise `+` lines for added and `-` lines for
-// removed records, each side sorted. Pure; the CLI just prints it.
+// removed records, each side sorted. Pure; the CLI prints it before applying
+// or in dry-run mode.
 export function buildDiffView(applied: readonly string[] | null, next: readonly string[]): string {
 	if (applied === null) {
 		const added = diffRecordSets([], next).added.map((record) => `+ ${record}`);
@@ -395,13 +396,17 @@ async function readAppliedTable(): Promise<string[] | null> {
 	return bytes === null ? null : decodeTableRecords(bytes);
 }
 
-async function printDiff(): Promise<void> {
-	const next = compileRomaTable(currentDeclaration).records;
-	console.log(buildDiffView(await readAppliedTable(), next));
+async function loadDiffView(): Promise<{ records: string[]; view: string }> {
+	const records = compileRomaTable(currentDeclaration).records;
+	const view = buildDiffView(await readAppliedTable(), records);
+	return { records, view };
 }
 
-async function applyTable(): Promise<void> {
-	const records = compileRomaTable(currentDeclaration).records;
+async function printDryRun(): Promise<void> {
+	console.log((await loadDiffView()).view);
+}
+
+async function applyTable(records: readonly string[]): Promise<void> {
 	const bytes = buildRegistryTable(records);
 	const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(",");
 	const proc = (await loadSpawnSync())(
@@ -414,6 +419,15 @@ async function applyTable(): Promise<void> {
 	console.log(`registered ${records.length} mappings`);
 }
 
+type CliMode = "apply" | "preview" | "dry-run";
+
+function parseCliMode(args: readonly string[]): CliMode | null {
+	if (args.length === 0) return "apply";
+	if (args.length === 1 && args[0] === "--preview") return "preview";
+	if (args.length === 1 && args[0] === "--dry-run") return "dry-run";
+	return null;
+}
+
 // `main` and the Node/Bun globals are not covered by the base lib types; read
 // them dynamically so plain tsc type-checks this file without Bun's or Node's
 // type packages.
@@ -421,15 +435,18 @@ const isMain = (import.meta as { main?: boolean }).main;
 if (isMain) {
 	const node = (globalThis as { process?: { argv: string[]; exit: (code: number) => never } }).process;
 	const args = node?.argv.slice(2) ?? [];
-	if (args.length === 0) {
-		await applyTable();
-	} else if (args.length === 1 && args[0] === "--preview") {
+	const mode = parseCliMode(args);
+	if (mode === "apply") {
+		const { records, view } = await loadDiffView();
+		console.log(view);
+		await applyTable(records);
+	} else if (mode === "preview") {
 		console.log(buildPreview(currentDeclaration));
-	} else if (args.length === 1 && args[0] === "--diff") {
-		await printDiff();
+	} else if (mode === "dry-run") {
+		await printDryRun();
 	} else {
 		console.error(`unknown arguments: ${args.join(" ")}`);
-		console.error("usage: bun custom-roma-def.ts [--preview | --diff]");
+		console.error("usage: bun custom-roma-def.ts [--preview | --dry-run]");
 		node?.exit(1);
 	}
 }
