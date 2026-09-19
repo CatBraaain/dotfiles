@@ -21,6 +21,7 @@ import { formatRunDuration, turnRunMs } from "./turn-time";
 import type { ISessions } from "@deepseek-ai/dsh-api-session-controller/client";
 import { onChordKey, type ChordState } from "./chord";
 import { chordPopupTarget, modelPopupSpec } from "./popup-logic";
+import { COMPOSER_LINE_CSS } from "./composer-line";
 
 /** Services this client half touches. */
 export const inject = ["commandUi", "sessions", "modelDirectories", "slots"];
@@ -141,7 +142,7 @@ export function apply(ctx: Context): void {
   // panels, the composer stats, and the feedback buttons. Host-built components
   // without slots of their own, so CSS is the only removal surface.
   const style = document.createElement("style");
-  style.textContent = `${HIDE_CSS}${TURN_TIME_CSS}`;
+  style.textContent = `${HIDE_CSS}${COMPOSER_LINE_CSS}${TURN_TIME_CSS}`;
   (document.head ?? document.documentElement).appendChild(style);
   ctx.effect(() => () => style.remove(), "custom-ui: hide style");
 

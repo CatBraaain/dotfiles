@@ -143,6 +143,15 @@ function modelPopupSpec(directoryFor) {
   };
 }
 
+// src/client/composer-line.ts
+var COMPOSER_LINE_CSS = [
+  "[data-composer-card]{padding-bottom:6px}",
+  '[data-composer-card]>[class*="uV2eYG_scroll"]{margin-right:88px}',
+  '[data-composer-card]>[class*="uV2eYG_row"]{position:absolute;right:8px;bottom:9px;' + "padding:0;container-type:normal}",
+  '[data-composer-card] [class*="uV2eYG_primary"]{transform:none}',
+  '[data-composer-card] [class*="uV2eYG_trailing"]{background:var(--dsw-specific-input-major)}'
+].join("");
+
 // src/client/index.ts
 var inject = ["commandUi", "sessions", "modelDirectories", "slots"];
 var SHADOW_PRIORITY = -1;
@@ -187,7 +196,7 @@ function apply(ctx) {
     scope.slots.inject("conversation.chat.turnTail", () => scope.slots.register({ name: "conversation.chat.turnTail", select: () => true, priority: TURN_TAIL_PRIORITY }, TurnTimeTail));
   });
   const style = document.createElement("style");
-  style.textContent = `${HIDE_CSS}${TURN_TIME_CSS}`;
+  style.textContent = `${HIDE_CSS}${COMPOSER_LINE_CSS}${TURN_TIME_CSS}`;
   (document.head ?? document.documentElement).appendChild(style);
   ctx.effect(() => () => style.remove(), "custom-ui: hide style");
   ctx.inject(["commandUi", "sessions", "modelDirectories"], (scope) => {
