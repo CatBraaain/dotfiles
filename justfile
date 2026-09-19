@@ -61,7 +61,7 @@ winget:
 
 [windows]
 msime:
-  pwsh undotfiles/ime/custom-msime-roma.ps1
+  bun undotfiles/ime/custom-roma-def.ts
 
 [windows]
 autologon:
