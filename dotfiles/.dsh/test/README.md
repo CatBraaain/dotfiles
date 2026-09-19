@@ -8,7 +8,8 @@ dsh web UI の見た目を検証する fixture。dsh 本体を起動せず、com
 cd dotfiles/.dsh/test
 bun install
 bun run render.ts   # dist/fixture.html（light）と dist/fixture-dark.html を生成
-bun serve.ts        # http://localhost:4173/ と /dark で serve（Ctrl-C で停止）
+bun run shot.ts     # light / dark / hover のスクショを dist/ に撮影（playwright-cli が必要）
+bun serve.ts        # fixture を browser で直接見るとき。http://localhost:4173/ と /dark（Ctrl-C で停止）
 ```
 
 実 dsh web の起動・表示時エラーを自動確認する（`dsh` と `playwright-cli` が必要）:
@@ -19,39 +20,11 @@ bun run test:web
 
 この smoke test の判定契約は `SPEC.md` に定める。`dsh web --no-open --port 0` を起動し、token URL の readiness を待って Chromium で開く。初期表示と reload 後の browser console error、および初期表示・reload 中の uncaught page error があると終了コード 1 で失敗する。チャット入力など LLM を呼ぶ操作は行わず、browser・dsh・token を含む一時ログは終了時に削除する。
 
-別ターミナルで light / dark の2枚をスクショ:
-
-```bash
-playwright-cli open --browser=chromium http://localhost:4173/
-playwright-cli resize 1280 900
-playwright-cli screenshot --filename=dist/fixture.png
-playwright-cli goto http://localhost:4173/dark
-playwright-cli screenshot --filename=dist/fixture-dark.png
-playwright-cli close
-```
-
 会話幅は fixture html 内の `.conv-root` に `--dsh-chat-user-width` を設定すると変えられる（既定は clamp(680px, 64%, 920px)）。
 
-## スクショレビューのチェックリスト
+## スクショレビュー
 
-fixture は1画面に確認観点ごとのパターン（case 1〜9）を並べてある。light / dark の2枚を撮り、人または VLM（画像を渡せる agent）でレビューする。判定基準の正本は各 plugin の SPEC.md。case 4 は session-list の hover actions を確認するとき `playwright-cli hover e<ref>` で対象行の snapshot ref を指定して hover 状態を撮る（行はグループの中に入ったため CSS セレクタより ref が確実）。
-
-| パターン | 対応する SPEC の振る舞い | レビューで確認するポイント |
-|---|---|---|
-| 1. skill-status — populated | `🎯 skills: ` に続けて skill 名を `, ` で連結、first-use 順、文字色 gray | 書式と順序。gray で読めること。行は入力欄カードの上に出る |
-| 2. skill-status — empty snapshot | スキル未使用のときは `🎯 skills: ` のみを表示する | ラベルのみの行が gray で出る（名前は続かない） |
-| 3. skill-status — many skills | 幅に収まらないときは `...` で行末省略 | 行末が `...` で切れ、画面外へあふれない |
-| 4. session-list — workspace groups | ヘッダー（Workspaces ラベル + Add workspace アイコン）。登録済み workspace 単位のグループヘッダー行（フォルダーアイコン + タイトル、current グループは business 色フォルダー）。各行は status dot（running=青マトリクス / pending=橙 / done=緑 / idle=gray）+ タイトル + 相対時刻。current 行はハイライト。折りたたみ上限超過のグループは `Show n more sessions`。未所属セッションは Ungrouped バケット | dot の色分け、時刻の bucket（1min / 3h / 2d / 1mo）、グループごとの空気（4px）、hover actions のフラット配置。light / dark 両方で読めること |
-| 5. session-list — blank current | 選択中の blank 行は所属グループの中で相対時刻なし・actions なしで表示される | 行の高さ・位置が通常行と揃い、右端に何も出ないこと |
-| 6. session-list — empty | セッションが無いときは空の領域（ヘッダーは残る） | リスト領域が空で、エラーや余計な表示が出ないこと |
-| 7. agents — auto class | agent 行 `🤖 agent: <name>` と class 行 `💎 class: <name> (auto: <model>)` の2行ボタン（メニュー閉状態）。文字色 gray | 2行の書式（コロンの後ろはスペース1つ、model は `auto: ` に続く）、gray で読めること。行は入力欄カードの上。2行は縦に積まれ、行間は dock の行間と同じリズムであること。中央バンド（case 1〜3 の `🎯 skills:` 行と同じ幅・中央寄せ）に左揃えで置かれること |
-| 8. agents — manual class | 手動選択中は `(manual: <model>)` | `manual: ` 表記と model 名。agent 行も切替後の名前になること |
-| 9. agents — idle session | 見込み model を解決できないときは `(auto)` のみ | model 名が付かずモードだけの表記。初期 agent/class が表示されること |
-| light / dark 両方 | gray は light / dark で別の token 値 | どちらのテーマでも読めること（黒や白に潰れない） |
-
-VLM に依頼するときは、dist/fixture.png と dist/fixture-dark.png の2枚に、上の表と「各 case のラベル番号に沿って PASS/FAIL と根拠を返す」ことだけ伝えれば判定できる。
-
-titlebar は React 無関係（`document.title` への書き込み）のため fixture では検証できず、実 dsh 起動後の確認対象。
+fixture スクショの撮影物と合否判定基準は `REVIEW.md` に定める。判定は人が行う。
 
 ## 仕組み
 

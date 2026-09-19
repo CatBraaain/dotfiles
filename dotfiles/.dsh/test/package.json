@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "shot": "bun run shot.ts",
     "test:web": "bun run web-smoke.ts"
   },
   "devDependencies": {
