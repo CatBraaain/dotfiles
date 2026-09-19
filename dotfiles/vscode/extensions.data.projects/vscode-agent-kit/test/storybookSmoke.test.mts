@@ -60,59 +60,102 @@ describe.skipIf(!indexAvailable)("storybook static catalog smoke", () => {
     );
   });
 
-  it("lists the four session stories in the built index", async () => {
+  it("lists the session stories in the built index", async () => {
     const index = (await (await fetch(`${baseUrl}/index.json`)).json()) as {
       entries: Record<string, unknown>;
     };
     const ids = Object.keys(index.entries);
     for (const id of [
-      "sessions-sidebar--active-sessions",
-      "sessions-sidebar--all-sessions",
-      "sessions-sidebar--active-empty",
-      "sessions-sidebar--all-empty",
+      "sessions-sidebar--sample-sessions",
+      "sessions-sidebar--workspace-all-mode",
+      "sessions-sidebar--empty-sessions",
     ]) {
       expect(ids, `story ${id} missing from index.json`).toContain(id);
     }
   });
 
-  it("renders the active story and operates mode switch and deactivate", async () => {
+  it("renders the sample story and operates the workspace mode toggle and archive", async () => {
     const page = await browser!.newPage();
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--active-sessions`, {
+    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
       waitUntil: "networkidle",
     });
     await page.waitForSelector(".session-row");
     expect(await page.locator(".session-row").count()).toBe(2);
     expect(await page.locator(".indicator.active").count()).toBe(2);
 
-    await page.click('[data-mode="all"]');
-    await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 5);
+    await page.click('.group [data-mode="all"]');
+    await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 3);
     expect(await page.locator(".indicator.active").count()).toBe(2);
+    // The other workspace keeps its own Active mode (per-workspace independence).
+    expect(await page.locator(".group").nth(1).locator(".session-row").count()).toBe(1);
 
-    await page.click(".session-row [data-deactivate]");
+    await page.click(".session-row [data-archive]");
     await page.waitForFunction(() => document.querySelectorAll(".indicator.active").length === 1);
-    expect(await page.locator(".session-row").count()).toBe(5);
+    expect(await page.locator(".session-row").count()).toBe(3);
+
+    // Modes are not persisted: a fresh client starts every workspace in Active.
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".session-row");
+    expect(await page.locator(".session-row").count()).toBe(2);
+    expect(await page.locator(".indicator.active").count()).toBe(2);
     await page.close();
   });
 
-  it("renders both empty states from the static output", async () => {
+  it("renders rows spanning the full row width with the archive overlay at the right edge", async () => {
+    const page = await browser!.newPage({ viewport: { width: 320, height: 640 } });
+    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
+      waitUntil: "networkidle",
+    });
+    await page.waitForSelector(".session-row");
+    const boxes = await page.evaluate(() => {
+      const row = document.querySelector(".session-row")!.getBoundingClientRect();
+      const button = document.querySelector(".session-button")!.getBoundingClientRect();
+      const archive = document.querySelector(".archive")!.getBoundingClientRect();
+      return {
+        rowWidth: row.width,
+        buttonWidth: button.width,
+        buttonRight: button.right,
+        rowRight: row.right,
+        rowTop: row.top,
+        rowBottom: row.bottom,
+        archiveRight: archive.right,
+        archiveTop: archive.top,
+        archiveBottom: archive.bottom,
+      };
+    });
+    // The session button is the full-area click target: its box spans the row.
+    expect(boxes.buttonWidth).toBeCloseTo(boxes.rowWidth, 1);
+    expect(boxes.buttonRight).toBeCloseTo(boxes.rowRight, 1);
+    // The archive button overlays the row near its right edge, vertically inside.
+    expect(boxes.rowRight - boxes.archiveRight).toBeLessThanOrEqual(8);
+    expect(boxes.archiveTop).toBeGreaterThanOrEqual(boxes.rowTop);
+    expect(boxes.archiveBottom).toBeLessThanOrEqual(boxes.rowBottom);
+    await page.close();
+  });
+
+  it("renders the wide preview width", async () => {
+    const page = await browser!.newPage({ viewport: { width: 720, height: 640 } });
+    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
+      waitUntil: "networkidle",
+    });
+    await page.waitForSelector(".session-row");
+    expect(await page.locator(".session-row").count()).toBe(2);
+    await page.close();
+  });
+
+  it("renders the empty state from the static output", async () => {
     const page = await browser!.newPage();
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--active-empty`, {
+    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--empty-sessions`, {
       waitUntil: "networkidle",
     });
     await page.waitForSelector(".empty");
     expect(await page.locator(".empty").textContent()).toBe("No active sessions");
-
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--all-empty`, {
-      waitUntil: "networkidle",
-    });
-    await page.waitForSelector(".empty");
-    expect(await page.locator(".empty").textContent()).toBe("No sessions");
     await page.close();
   });
 
   it("captures a screenshot of the static output without the extension host", async () => {
     const page = await browser!.newPage({ viewport: { width: 320, height: 640 } });
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--active-sessions`, {
+    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
       waitUntil: "networkidle",
     });
     await page.waitForSelector(".session-row");

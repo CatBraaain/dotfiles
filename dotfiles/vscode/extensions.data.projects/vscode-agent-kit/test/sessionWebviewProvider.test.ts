@@ -70,8 +70,6 @@ function createProvider(deps: Partial<ConstructorParameters<typeof SessionWebvie
     extensionUri: root,
     sessionDir: join(root, "sessions"),
     registry: new TerminalRegistry(),
-    getMode: () => "all",
-    setMode: () => {},
     startNewSession: async () => {},
     ...deps,
     metadataPath,
@@ -96,7 +94,7 @@ describe("SessionWebviewProvider", () => {
     expect(html).toContain(`src="vscode-webview://test${root}/dist-webview/webview/client.js"`);
   });
 
-  it("sends filtered data, persists mode changes, and refreshes after deactivation", async () => {
+  it("sends every session with active marks and refreshes after archiving", async () => {
     const sessionDir = join(root, "sessions");
     const activePath = await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
       header({ id: activeSessionId, cwd: "/workspace/project" }),
@@ -104,30 +102,46 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "inactive.jsonl", [
       header({ id: inactiveSessionId, cwd: "/workspace/project" }),
     ]);
-    let mode: "active" | "all" = "active";
-    const { provider, metadataPath } = createProvider({
-      sessionDir,
-      getMode: () => mode,
-      setMode: (nextMode) => {
-        mode = nextMode;
-      },
-    });
+    const { provider, metadataPath } = createProvider({ sessionDir });
     expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
 
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(1);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(2);
     await webview.receive({ type: "setMode", mode: "all" });
-    expect(mode).toBe("all");
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(2);
 
-    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
     const metadata = readMetadataStore(metadataPath);
     expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(false);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isActive).toBe(false);
     await expect(rm(activePath)).resolves.toBeUndefined();
+  });
+
+  it("reflects disk changes on refresh without automatic updates", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: "/workspace/project" }),
+    ]);
+    const { provider } = createProvider({ sessionDir });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await vi.waitFor(() => {
+      expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(true);
+    });
+    const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(1);
+
+    await writeJsonl(join(sessionDir, "project"), "second.jsonl", [
+      header({ id: inactiveSessionId, cwd: "/workspace/project" }),
+    ]);
+    // No file watcher: the displayed list stays as-is until Refresh arrives.
+    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(sessionsCalls);
+
+    await webview.receive({ type: "refresh" });
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(2);
   });
 
   it("opens an existing session in an editor terminal and reuses it", async () => {
@@ -220,7 +234,7 @@ describe("SessionWebviewProvider", () => {
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
   });
 
-  it("shows an error and keeps the list when a deactivate write fails", async () => {
+  it("shows an error and keeps the list when an archive write fails", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
       header({ id: activeSessionId, cwd: "/workspace/project" }),
@@ -233,7 +247,7 @@ describe("SessionWebviewProvider", () => {
     const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
 
     await writeFile(metadataPath, "{ invalid", "utf8");
-    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
 
     expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
       /^session-metadata\.json is not valid JSON: /,
@@ -269,7 +283,7 @@ describe("SessionWebviewProvider", () => {
     });
   });
 
-  it("removes the row on deactivate in active mode and keeps the terminal alive", async () => {
+  it("keeps the terminal alive after archiving its session", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
       header({ id: activeSessionId, cwd: "/workspace/project" }),
@@ -277,20 +291,16 @@ describe("SessionWebviewProvider", () => {
     const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     const registry = new TerminalRegistry();
-    const { provider, metadataPath } = createProvider({
-      sessionDir,
-      registry,
-      getMode: () => "active",
-    });
+    const { provider, metadataPath } = createProvider({ sessionDir, registry });
     expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
 
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([]);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isActive).toBe(false);
     expect(registry.get(activeSessionId)).toBe(terminal);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
   });

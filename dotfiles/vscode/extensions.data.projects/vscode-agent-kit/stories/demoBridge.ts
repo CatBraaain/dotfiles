@@ -2,25 +2,15 @@
 // in-memory sample store. Never touches real session files or the metadata
 // store; openSession is ignored (terminals do not exist in the catalog).
 
-import { groupSessions } from "../src/grouping";
-import { visibleSessions } from "../src/viewMode";
+import type { SessionSummary } from "../src/sessionStore";
+import { sessionViewGroups } from "../src/webview/sessionViewData";
 
 /** Demo state a story starts from (SPEC.md「静的プレビュー」表 1 行目). */
-export type DemoState = "sample" | "all" | "active-empty" | "all-empty";
-
-/** Demo session row: SessionSummary-compatible fields for grouping/viewMode. */
-interface DemoSession {
-  sessionId: string;
-  filePath: string;
-  cwd: string;
-  displayName: string;
-  mtimeMs: number;
-}
+export type DemoState = "sample" | "empty";
 
 /** Request from the webview client, same protocol as the extension host side. */
 export interface DemoBridgeRequest {
   type: string;
-  mode?: string;
   sessionId?: string;
 }
 
@@ -34,7 +24,7 @@ const ATLAS_CWD = "/Users/aya/Projects/atlas-dashboard";
 const PI_TOOLS_CWD = "/Users/aya/Projects/pi-tools";
 const NOTES_CWD = "/Users/aya/Notes";
 
-const sampleSessions: DemoSession[] = [
+const sampleSessions: SessionSummary[] = [
   {
     sessionId: "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
     filePath: `${ATLAS_CWD}/20260919_1f0e6f9a.jsonl`,
@@ -77,7 +67,7 @@ const ACTIVE_SAMPLE_IDS = new Set([
   "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
 ]);
 
-function cloneStore(sessions: DemoSession[]): DemoSession[] {
+function cloneStore(sessions: SessionSummary[]): SessionSummary[] {
   return sessions.map((session) => ({ ...session }));
 }
 
@@ -88,48 +78,26 @@ export function createDemoBridge(): {
   reset(demoState: DemoState): void;
 } {
   let listener: (message: { type?: string; state?: unknown }) => void = () => {};
-  let store: DemoSession[] = cloneStore(sampleSessions);
+  let store: SessionSummary[] = cloneStore(sampleSessions);
   let activeIds = new Set(ACTIVE_SAMPLE_IDS);
-  let mode: "active" | "all" = "active";
 
   function postSessions(): void {
-    listener({ type: "sessions", state: viewState() });
-  }
-
-  /** Same projection as the provider's sessionViewGroups. */
-  function viewState() {
-    return {
-      mode,
-      groups: groupSessions(visibleSessions(store, mode, activeIds)).map((group) => ({
-        cwd: group.cwd,
-        label: group.label,
-        sessions: group.sessions.map((session) => ({
-          sessionId: session.sessionId,
-          displayName: session.displayName,
-          mtimeMs: session.mtimeMs,
-          isActive: activeIds.has(session.sessionId),
-        })),
-      })),
-    };
+    // Same projection as the provider's: every session with active marks.
+    listener({ type: "sessions", state: { groups: sessionViewGroups(store, activeIds) } });
   }
 
   function handleRequest(request: DemoBridgeRequest): void {
-    if (request.type === "setMode" && (request.mode === "active" || request.mode === "all")) {
-      mode = request.mode;
-      postSessions();
-      return;
-    }
     if (request.type === "refresh") {
       postSessions();
       return;
     }
-    if (request.type === "deactivateSession" && typeof request.sessionId === "string") {
+    if (request.type === "archiveSession" && typeof request.sessionId === "string") {
       activeIds.delete(request.sessionId);
       postSessions();
       return;
     }
     if (request.type === "newSession") {
-      const session: DemoSession = {
+      const session: SessionSummary = {
         sessionId: crypto.randomUUID(),
         filePath: "",
         cwd: store[0]?.cwd ?? ATLAS_CWD,
@@ -138,7 +106,6 @@ export function createDemoBridge(): {
       };
       store = [session, ...store];
       activeIds = new Set([...activeIds, session.sessionId]);
-      mode = "active";
       postSessions();
     }
     // openSession and unknown requests are ignored: nothing to open in the catalog.
@@ -146,21 +113,8 @@ export function createDemoBridge(): {
 
   /** Reset to a demo state. */
   function reset(demoState: DemoState): void {
-    if (demoState === "sample" || demoState === "all") {
-      store = cloneStore(sampleSessions);
-      activeIds = new Set(ACTIVE_SAMPLE_IDS);
-      mode = demoState === "all" ? "all" : "active";
-    } else if (demoState === "active-empty") {
-      store = cloneStore(sampleSessions);
-      activeIds = new Set();
-      mode = "active";
-    } else if (demoState === "all-empty") {
-      store = [];
-      activeIds = new Set();
-      mode = "all";
-    } else {
-      return;
-    }
+    store = cloneStore(sampleSessions);
+    activeIds = demoState === "sample" ? new Set(ACTIVE_SAMPLE_IDS) : new Set();
     postSessions();
   }
 

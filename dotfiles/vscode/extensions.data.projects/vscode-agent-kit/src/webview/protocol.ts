@@ -1,9 +1,8 @@
 export type WebviewRequest =
-  | { type: "setMode"; mode: "active" | "all" }
   | { type: "refresh" }
   | { type: "newSession" }
   | { type: "openSession"; sessionId: string }
-  | { type: "deactivateSession"; sessionId: string };
+  | { type: "archiveSession"; sessionId: string };
 
 export interface WebviewSession {
   sessionId: string;
@@ -19,7 +18,6 @@ export interface WebviewSessionGroup {
 }
 
 export interface WebviewState {
-  mode: "active" | "all";
   groups: WebviewSessionGroup[];
 }
 
@@ -29,12 +27,9 @@ export type ExtensionMessage =
 
 export function parseWebviewRequest(value: unknown): WebviewRequest | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
-  if (value.type === "setMode" && (value.mode === "active" || value.mode === "all")) {
-    return { type: value.type, mode: value.mode };
-  }
   if (value.type === "refresh" || value.type === "newSession") return { type: value.type };
   if (
-    (value.type === "openSession" || value.type === "deactivateSession") &&
+    (value.type === "openSession" || value.type === "archiveSession") &&
     typeof value.sessionId === "string" &&
     SESSION_ID_PATTERN.test(value.sessionId)
   ) {

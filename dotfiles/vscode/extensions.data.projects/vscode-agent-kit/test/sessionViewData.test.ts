@@ -19,32 +19,20 @@ describe("sessionViewGroups", () => {
     session("active", "/workspace/alpha", 200),
   ];
 
-  it("shows only active sessions in active mode", () => {
-    const groups = sessionViewGroups(sessions, "active", new Set(["active"]));
-
-    expect(groups).toEqual([
-      {
-        cwd: "/workspace/alpha",
-        label: "alpha",
-        sessions: [
-          {
-            sessionId: "active",
-            displayName: "Session active",
-            mtimeMs: 200,
-            isActive: true,
-          },
-        ],
-      },
-    ]);
-  });
-
-  it("keeps inactive sessions and active markers in all mode", () => {
-    const groups = sessionViewGroups(sessions, "all", new Set(["active"]));
+  it("sends every session of every group with active marks", () => {
+    const groups = sessionViewGroups(sessions, new Set(["active"]));
 
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/beta", "/workspace/alpha"]);
+    expect(groups[0].sessions.map((item) => [item.sessionId, item.isActive])).toEqual([["newest", false]]);
     expect(groups[1].sessions.map((item) => [item.sessionId, item.isActive])).toEqual([
       ["active", true],
       ["older", false],
     ]);
+  });
+
+  it("treats unknown sessions as inactive", () => {
+    const groups = sessionViewGroups(sessions, new Set());
+
+    expect(groups.every((group) => group.sessions.every((item) => item.isActive === false))).toBe(true);
   });
 });

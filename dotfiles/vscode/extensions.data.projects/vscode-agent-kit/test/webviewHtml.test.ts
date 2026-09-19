@@ -17,6 +17,7 @@ describe("webviewHtml", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
     expect(html).toContain('.mode-button[aria-pressed="true"]');
+    expect(html).toContain(".archive {");
     expect(html).toContain(".indicator.active");
     expect(html).toContain("#status.error");
   });
@@ -27,9 +28,14 @@ describe("webviewHtml", () => {
     expect(html).toContain('<h1>Sessions</h1>');
     expect(html).toContain('data-action="newSession"');
     expect(html).toContain('data-action="refresh"');
-    expect(html).toContain('data-mode="active"');
-    expect(html).toContain('data-mode="all"');
     expect(html).toContain('<section id="sessions"');
     expect(html).toContain('<p id="status"');
+  });
+
+  it("leaves the workspace mode toggles to the dynamically rendered groups", () => {
+    const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
+
+    expect(html).not.toContain("data-mode=");
+    expect(html).not.toContain("mode-switch");
   });
 });

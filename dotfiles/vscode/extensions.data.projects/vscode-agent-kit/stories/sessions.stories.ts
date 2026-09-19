@@ -19,7 +19,13 @@ type SessionsStory = StoryObj;
  * click listener and stories share one canvas iframe across navigation. */
 let teardown: (() => void) | undefined;
 
-function mountSessionView(demoState: DemoState): HTMLElement {
+/** Story parameters beyond the demo state, mapped 1:1 into mount options. */
+interface StoryOptions {
+  /** Toggle the first workspace's mode to All after mounting. */
+  toggleAllWorkspace?: boolean;
+}
+
+function mountSessionView(demoState: DemoState, options: StoryOptions = {}): HTMLElement {
   teardown?.();
   const host = document.createElement("div");
   host.innerHTML = webviewAppMarkup;
@@ -28,23 +34,31 @@ function mountSessionView(demoState: DemoState): HTMLElement {
   const { bridge, reset } = createDemoBridge();
   teardown = initClient(bridge);
   reset(demoState);
+  if (options.toggleAllWorkspace === true) {
+    host.querySelector<HTMLElement>(".group [data-mode=\"all\"]")?.click();
+  }
   return host;
 }
 
 /** Story that mounts the session view from the demo state in its parameters,
  * so the story-to-state mapping is verifiable without a DOM. */
-function storyFromDemoState(name: string, demoState: DemoState): SessionsStory {
+function storyFromDemoState(name: string, demoState: DemoState, options: StoryOptions = {}): SessionsStory {
   return {
     name,
-    parameters: { demoState },
-    render: (_args, context) => mountSessionView(context.parameters.demoState),
+    parameters: { demoState, ...options },
+    render: (_args, context) =>
+      mountSessionView(context.parameters.demoState as DemoState, {
+        toggleAllWorkspace: context.parameters.toggleAllWorkspace as boolean | undefined,
+      }),
   };
 }
 
-export const ActiveSessions: SessionsStory = storyFromDemoState("Active — sample data", "sample");
+export const SampleSessions: SessionsStory = storyFromDemoState("Sample — active workspaces", "sample");
 
-export const AllSessions: SessionsStory = storyFromDemoState("All — sample data", "all");
+export const WorkspaceAllMode: SessionsStory = storyFromDemoState(
+  "Sample — one workspace in All mode",
+  "sample",
+  { toggleAllWorkspace: true },
+);
 
-export const ActiveEmpty: SessionsStory = storyFromDemoState("Active — empty", "active-empty");
-
-export const AllEmpty: SessionsStory = storyFromDemoState("All — empty", "all-empty");
+export const EmptySessions: SessionsStory = storyFromDemoState("Sample — no active sessions", "empty");

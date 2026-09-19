@@ -16,10 +16,6 @@ export const webviewAppMarkup = `<main id="app">
         <button class="icon-button" type="button" data-action="refresh" aria-label="Refresh sessions">↻</button>
       </div>
     </header>
-    <div class="mode-switch" role="group" aria-label="Session display mode">
-      <button class="mode-button" type="button" data-mode="active">Active</button>
-      <button class="mode-button" type="button" data-mode="all">All</button>
-    </div>
     <section id="sessions" aria-live="polite"></section>
     <p id="status" role="status" aria-live="polite"></p>
   </main>`;

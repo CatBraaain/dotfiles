@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { SessionLauncher } from "./launcher";
 import { metadataStorePath, resolveAgentDir, resolveSessionDir } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
-import { ViewModeState } from "./viewModeState";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -12,7 +11,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessionDir = resolveSessionDir(process.env, homeDir);
   const metadataPath = metadataStorePath(agentDir);
   const registry = new TerminalRegistry();
-  const modeState = ViewModeState.restore(context.globalState);
 
   context.subscriptions.push(vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)));
 
@@ -22,8 +20,6 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionDir,
     metadataPath,
     registry,
-    getMode: () => modeState.mode,
-    setMode: (mode) => modeState.set(mode),
     startNewSession: () => startNewSession(),
   });
   const launcher = new SessionLauncher({

@@ -3,8 +3,6 @@ import { parseWebviewRequest } from "../src/webview/protocol";
 
 describe("parseWebviewRequest", () => {
   it.each([
-    [{ type: "setMode", mode: "active" }, { type: "setMode", mode: "active" }],
-    [{ type: "setMode", mode: "all" }, { type: "setMode", mode: "all" }],
     [{ type: "refresh" }, { type: "refresh" }],
     [{ type: "newSession" }, { type: "newSession" }],
     [
@@ -12,8 +10,8 @@ describe("parseWebviewRequest", () => {
       { type: "openSession", sessionId: "00000000-0000-4000-8000-000000000001" },
     ],
     [
-      { type: "deactivateSession", sessionId: "00000000-0000-4000-8000-000000000001" },
-      { type: "deactivateSession", sessionId: "00000000-0000-4000-8000-000000000001" },
+      { type: "archiveSession", sessionId: "00000000-0000-4000-8000-000000000001" },
+      { type: "archiveSession", sessionId: "00000000-0000-4000-8000-000000000001" },
     ],
   ])("accepts supported request %#", (value, expected) => {
     expect(parseWebviewRequest(value)).toEqual(expected);
@@ -23,7 +21,8 @@ describe("parseWebviewRequest", () => {
     undefined,
     null,
     "refresh",
-    { type: "setMode", mode: "other" },
+    { type: "setMode", mode: "active" },
+    { type: "setMode", mode: "all" },
     { type: "openSession" },
     { type: "openSession", sessionId: 1 },
     { type: "openSession", sessionId: "session-1" },

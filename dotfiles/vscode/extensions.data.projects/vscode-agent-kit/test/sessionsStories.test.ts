@@ -1,19 +1,18 @@
 import { describe, expect, it } from "vitest";
 import * as stories from "../stories/sessions.stories";
 
-/** Spec table row 1 (表示モードとデータ) mapped to the story export names. */
-const storyDemoStates = {
-  ActiveSessions: "sample",
-  AllSessions: "all",
-  ActiveEmpty: "active-empty",
-  AllEmpty: "all-empty",
+/** Spec table row (静的プレビュー「データ」) mapped to the story export names. */
+const storyParameters = {
+  SampleSessions: { demoState: "sample" },
+  WorkspaceAllMode: { demoState: "sample", toggleAllWorkspace: true },
+  EmptySessions: { demoState: "empty" },
 } as const;
 
 describe("sessions stories", () => {
-  for (const [exportName, demoState] of Object.entries(storyDemoStates)) {
-    it(`renders the ${exportName} story from the "${demoState}" demo state`, () => {
+  for (const [exportName, parameters] of Object.entries(storyParameters)) {
+    it(`renders the ${exportName} story from its demo parameters`, () => {
       const story = stories[exportName as keyof typeof stories];
-      expect(story.parameters).toMatchObject({ demoState });
+      expect(story.parameters).toMatchObject(parameters);
       expect(typeof story.render).toBe("function");
     });
   }

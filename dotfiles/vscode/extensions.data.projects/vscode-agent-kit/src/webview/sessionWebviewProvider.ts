@@ -4,7 +4,6 @@ import { activeSessionIds, readMetadataStore, setSessionActive } from "../metada
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { createSessionTerminal } from "../terminals";
 import type { TerminalRegistry } from "../terminalRegistry";
-import type { ViewMode } from "../viewMode";
 import { errorMessage } from "../guards";
 import { parseWebviewRequest, type ExtensionMessage } from "./protocol";
 import { sessionViewGroups } from "./sessionViewData";
@@ -17,8 +16,6 @@ export interface SessionWebviewDeps {
   sessionDir: string;
   metadataPath: string;
   registry: TerminalRegistry;
-  getMode: () => ViewMode;
-  setMode: (mode: ViewMode) => void;
   startNewSession: () => Promise<void>;
 }
 
@@ -73,21 +70,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.post({
       type: "sessions",
-      state: {
-        mode: this.deps.getMode(),
-        groups: sessionViewGroups(sessions, this.deps.getMode(), activeIds),
-      },
+      state: { groups: sessionViewGroups(sessions, activeIds) },
     });
   }
 
   private async handleMessage(message: unknown): Promise<void> {
     const request = parseWebviewRequest(message);
     if (request === undefined) return;
-    if (request.type === "setMode") {
-      this.deps.setMode(request.mode);
-      await this.refresh();
-      return;
-    }
     if (request.type === "refresh") {
       await this.refresh();
       return;
@@ -100,7 +89,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.openSession(request.sessionId);
       return;
     }
-    await this.deactivateSession(request.sessionId);
+    await this.archiveSession(request.sessionId);
   }
 
   private async openSession(sessionId: string): Promise<void> {
@@ -131,7 +120,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     await this.refresh();
   }
 
-  private async deactivateSession(sessionId: string): Promise<void> {
+  private async archiveSession(sessionId: string): Promise<void> {
     if (!this.sessionsById.has(sessionId)) {
       this.postError(`Session not found: ${sessionId}`);
       return;
