@@ -6,3 +6,12 @@
     roots: []
     includeShippedRoot: false
     includeUserRoot: true
+
+# Pin the local browsing stack (dotfiles-dsh-web-search providers) for ctx.web.
+# dsh-codex-auth re-pins the base `web` row to searchProvider: codex and its
+# whole-config replace drops the fetchProvider: http pin, so fetch fails with
+# WEB_PROVIDER_AMBIGUOUS and search with WEB_PROVIDER_CONFIGURED_UNAVAILABLE.
+- id: web
+  config:
+    searchProvider: camoufox-openserp
+    fetchProvider: camoufox-trafilatura
