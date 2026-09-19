@@ -361,7 +361,8 @@ export class Bootstrap {
       this.runtime.execute([
         "bash",
         "-c",
-        `cd ${openDesignDir} && corepack pnpm --filter @open-design/web build`,
+        // The web build's TypeScript phase exceeds Node's default ~2GB heap.
+        `cd ${openDesignDir} && NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm --filter @open-design/web build`,
       ]);
     }
 

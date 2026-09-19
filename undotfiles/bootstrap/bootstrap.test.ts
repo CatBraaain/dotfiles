@@ -672,7 +672,11 @@ describe("sync", () => {
     assert.deepEqual(runtime.commands, [
       ["git", "clone", "--depth", "1", openDesignRepoUrl, openDesignDir],
       ["bash", "-c", `cd ${openDesignDir} && corepack pnpm install`],
-      ["bash", "-c", `cd ${openDesignDir} && corepack pnpm --filter @open-design/web build`],
+      [
+        "bash",
+        "-c",
+        `cd ${openDesignDir} && NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm --filter @open-design/web build`,
+      ],
       ["bash", "-c", openDesignOdWriteCommand],
     ]);
   });
