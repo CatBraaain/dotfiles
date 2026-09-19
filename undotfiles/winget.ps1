@@ -47,6 +47,7 @@ $managedDevPackages = @(
     "AutoHotkey.AutoHotkey" # windows
     "Oven-sh.Bun"
     "Solidiquis.Erdtree"
+    "Git.Git"
     "Casey.Just"
     "RussellBanks.Komac"
     "OpenJS.NodeJS.LTS"
