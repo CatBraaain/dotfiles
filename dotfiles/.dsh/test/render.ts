@@ -11,8 +11,8 @@
  * - dock parent layout: copies of the observed composer stack / input bar
  *   class definitions from `dsh-client-ui-conversation`
  *
- * Output: `dist/fixture.html` (light) and `dist/fixture-dark.html`.
- * Each page lays out the review cases so a reviewer (human or VLM) can check
+ * Output: `dist/fixture.html` (dark).
+ * The page lays out the review cases so a reviewer (human or VLM) can check
  * the visible-behavior points from the plugin SPECs against rendered visuals;
  * see README.md for the checklist.
  */
@@ -732,13 +732,11 @@ async function main(): Promise<void> {
 </div>`,
     ].join("\n");
 
-    for (const dark of [false, true]) {
-        const bodyAttrs = dark ? " data-ds-dark-theme" : "";
-        const html = `<!doctype html>
+    const html = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>dsh dock fixture${dark ? " (dark)" : ""}</title>
+<title>dsh dock fixture</title>
 <style>
 ${themeCss}
 ${buttonCss}
@@ -746,15 +744,14 @@ ${stateDotCss}
 </style>
 <style>${dockCss}${sessionListCss}${agentsCss}</style>
 </head>
-<body style="--dsh-content-font-size: 14px"${bodyAttrs}>
+<body style="--dsh-content-font-size: 14px" data-ds-dark-theme>
 ${cases}
 </body>
 </html>
 `;
-        const file = join(outputDir, dark ? "fixture-dark.html" : "fixture.html");
-        await writeFile(file, html);
-        console.log(`written: ${file}`);
-    }
+    const file = join(outputDir, "fixture.html");
+    await writeFile(file, html);
+    console.log(`written: ${file}`);
 }
 
 await main();

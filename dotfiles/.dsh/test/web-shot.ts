@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 const readinessTimeoutMs = 60_000;
 const playwrightSession = `dsh-web-shot-${process.pid}`;
 const tokenUrlPattern = /http:\/\/127\.0\.0\.1:[0-9]+\/\?token=[A-Za-z0-9_-]+/;
-const screenshotNames = ["web-fixture.png", "web-fixture-dark.png"] as const;
+const screenshotNames = ["web-fixture.png"] as const;
 
 interface CommandResult {
   readonly exitCode: number;
@@ -185,9 +185,8 @@ async function takeScreenshots(tokenUrl: string, cwd: string): Promise<void> {
         if (!title.includes("Fixture 历史会话")) {
           throw new Error("browser title does not reflect the open session: " + title);
         }
-        await page.screenshot({ path: "dist/web-fixture.png", fullPage: true });
         await page.evaluate(() => document.body.setAttribute("data-ds-dark-theme", ""));
-        await page.screenshot({ path: "dist/web-fixture-dark.png", fullPage: true });
+        await page.screenshot({ path: "dist/web-fixture.png", fullPage: true });
         return { title, url: page.url() };
       }`,
     ],

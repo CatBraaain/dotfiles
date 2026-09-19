@@ -15,19 +15,18 @@ bun run shot:all
 `shot:all` は次の順に実行する。
 
 1. `render.ts` で静的 HTML を生成する
-2. `shot.ts` で部品別・light/dark のスクリーンショットを生成する
+2. `shot.ts` で部品別のスクリーンショットを生成する
 3. `web-shot.ts` で fake 通信の実 dsh web 全体を撮影する
 
 生成物は `dist/` に置かれる。
 
 | 生成物 | 内容 |
 |---|---|
-| `fixture.html` / `fixture-dark.html` | 部品別ケースを並べた静的レビュー画面 |
-| `fixture-<case>.png` | 各ケースの light スクリーンショット |
-| `fixture-<case>-dark.png` | 各ケースの dark スクリーンショット |
-| `fixture.png` / `fixture-dark.png` | 全部品を並べた light/dark の一覧 |
+| `fixture.html` | 部品別ケースを並べた dark テーマの静的レビュー画面 |
+| `fixture-<case>.png` | 各ケースのスクリーンショット |
+| `fixture.png` | 全部品を並べた一覧 |
 | `fixture-hover.png` | session-list の hover 状態 |
-| `web-fixture.png` / `web-fixture-dark.png` | fake RPC を使う実 dsh web 全体 |
+| `web-fixture.png` | fake RPC を使う実 dsh web 全体（dark） |
 
 ## 個別操作
 
@@ -41,8 +40,7 @@ bun run render
 
 ```bash
 bun serve.ts
-# http://localhost:4173/       light
-# http://localhost:4173/dark   dark
+# http://localhost:4173/       dark
 ```
 
 ポートが使用中のときは `PORT=<番号> bun serve.ts` で変えられる。

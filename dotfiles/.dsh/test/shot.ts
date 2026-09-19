@@ -1,10 +1,10 @@
 /**
  * Take review screenshots of the fixture pages without booting dsh.
  *
- * Prerequisite: `bun run render.ts` (the fixture html files must exist).
+ * Prerequisite: `bun run render.ts` (the fixture html file must exist).
  * Starts `serve.ts` as a child process, drives a playwright-cli Chromium
- * session over the light and dark fixture pages, and writes combined, hover,
- * and one light/dark screenshot for each review case into `dist/`.
+ * session over the dark fixture page, and writes combined, hover, and one
+ * screenshot for each review case into `dist/`.
  *
  * The screenshot review contract lives in REVIEW.md.
  */
@@ -32,8 +32,7 @@ const caseScreenshotSlugs = [
 const screenshotNames = [
   "fixture.png",
   "fixture-hover.png",
-  "fixture-dark.png",
-  ...caseScreenshotSlugs.flatMap((slug) => [`fixture-${slug}.png`, `fixture-${slug}-dark.png`]),
+  ...caseScreenshotSlugs.map((slug) => `fixture-${slug}.png`),
 ];
 
 interface CommandResult {
@@ -124,15 +123,13 @@ async function stopServe(serve: Bun.Subprocess): Promise<void> {
   await serve.exited;
 }
 
-function screenshotScript(lightUrl: string, darkUrl: string): string {
+function screenshotScript(url: string): string {
   const caseCount = caseScreenshotSlugs.length;
   const casePaths = caseScreenshotSlugs.map((slug) => `dist/fixture-${slug}.png`);
-  const darkCasePaths = caseScreenshotSlugs.map((slug) => `dist/fixture-${slug}-dark.png`);
   return `async page => {
     await page.setViewportSize({ width: ${viewport.width}, height: ${viewport.height} });
     const casePaths = ${JSON.stringify(casePaths)};
-    const darkCasePaths = ${JSON.stringify(darkCasePaths)};
-    await page.goto(${JSON.stringify(lightUrl)});
+    await page.goto(${JSON.stringify(url)});
     const cases = page.locator(".case");
     if (await cases.count() !== ${caseCount}) {
       throw new Error("fixture case count changed; update shot.ts case names");
@@ -143,18 +140,12 @@ function screenshotScript(lightUrl: string, darkUrl: string): string {
     for (let index = 0; index < ${caseCount}; index += 1) {
       await cases.nth(index).screenshot({ path: casePaths[index] });
     }
-    await page.goto(${JSON.stringify(darkUrl)});
-    const darkCases = page.locator(".case");
-    for (let index = 0; index < ${caseCount}; index += 1) {
-      await darkCases.nth(index).screenshot({ path: darkCasePaths[index] });
-    }
-    await page.screenshot({ path: "dist/fixture-dark.png", fullPage: true });
   }`;
 }
 
 async function main(): Promise<void> {
   const cwd = import.meta.dir;
-  for (const name of ["fixture.html", "fixture-dark.html"]) {
+  for (const name of ["fixture.html"]) {
     if (!(await Bun.file(join(cwd, "dist", name)).exists())) {
       throw new Error(`dist/${name} is missing. Run \`bun run render.ts\` first.`);
     }
@@ -188,7 +179,7 @@ async function main(): Promise<void> {
     browserStarted = true;
     await runPlaywright(["open", "--browser=chromium", "about:blank"], cwd);
     await Bun.sleep(1_000);
-    await runPlaywright(["run-code", screenshotScript(`${baseUrl}/`, `${baseUrl}/dark`)], cwd);
+    await runPlaywright(["run-code", screenshotScript(`${baseUrl}/`)], cwd);
     for (const name of screenshotNames) {
       if (!(await Bun.file(join(cwd, "dist", name)).exists())) {
         throw new Error(`screenshot was not written: dist/${name}`);
