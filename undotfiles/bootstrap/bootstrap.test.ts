@@ -7,6 +7,13 @@ import { describe, it } from "bun:test";
 import {
   Bootstrap,
   coalesceEntries,
+  openDesignDaemonEntry,
+  openDesignBinPath,
+  openDesignDir,
+  openDesignOdWriteCommand,
+  openDesignOdWrapper,
+  openDesignRepoUrl,
+  openDesignWebEntry,
   parseConfig,
   run,
   type Entry,
@@ -191,10 +198,18 @@ describe("CLI entrypoint", () => {
       (entry) => entry.key === "custom" && entry.value === "android-sdk",
     );
 
+    const nodeIndex = config.findIndex((entry) => entry.key === "brew" && entry.value === "node");
+    const gitIndex = config.findIndex((entry) => entry.key === "brew" && entry.value === "git");
+    const openDesignIndex = config.findIndex(
+      (entry) => entry.key === "custom" && entry.value === "opendesign",
+    );
+
     assert.ok(goRuntimeIndex >= 0 && goRuntimeIndex < goIndex);
     assert.ok(rustupIndex >= 0 && rustupIndex < cargoIndex);
     assert.ok(rustupUpdateIndex >= 0 && rustupUpdateIndex < cargoIndex);
     assert.ok(androidCaskIndex >= 0 && androidCaskIndex < androidHandlerIndex);
+    assert.ok(nodeIndex >= 0 && nodeIndex < openDesignIndex);
+    assert.ok(gitIndex >= 0 && gitIndex < openDesignIndex);
   });
 });
 
@@ -643,6 +658,43 @@ describe("sync", () => {
       runtime.commands[0]![9]!,
     ]);
     assert.match(runtime.commands[1]![4]!, /\/drawio-amd64-1\.0\.0\.deb$/);
+  });
+
+  it("clones, installs, builds, and writes the od wrapper when OpenDesign is absent", async () => {
+    const runtime = new FakeRuntime();
+    runtime.failures.add(`test -d ${join(openDesignDir, ".git")}`);
+    runtime.failures.add(`test -f ${openDesignDaemonEntry}`);
+    runtime.failures.add(`test -f ${openDesignWebEntry}`);
+
+    const exitCode = await new Bootstrap([{ key: "custom", value: "opendesign" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, [
+      ["git", "clone", "--depth", "1", openDesignRepoUrl, openDesignDir],
+      ["bash", "-c", `cd ${openDesignDir} && corepack pnpm install`],
+      ["bash", "-c", `cd ${openDesignDir} && corepack pnpm --filter @open-design/web build`],
+      ["bash", "-c", openDesignOdWriteCommand],
+    ]);
+  });
+
+  it("does nothing when the clone, build artifacts, and od wrapper are present", async () => {
+    const runtime = new FakeRuntime();
+    runtime.outputs.set(["cat", openDesignBinPath].join("\0"), openDesignOdWrapper);
+
+    const exitCode = await new Bootstrap([{ key: "custom", value: "opendesign" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, []);
+  });
+
+  it("rewrites the od wrapper when its content differs", async () => {
+    const runtime = new FakeRuntime();
+    runtime.outputs.set(["cat", openDesignBinPath].join("\0"), "#!/usr/bin/env bash\nstale");
+
+    const exitCode = await new Bootstrap([{ key: "custom", value: "opendesign" }], runtime).sync();
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(runtime.commands, [["bash", "-c", openDesignOdWriteCommand]]);
   });
 
   it("runs commands on every sync with bash", async () => {

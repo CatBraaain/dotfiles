@@ -49,6 +49,14 @@
 
 `apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`と`android-sdk`は目的状態を保証する。
 
+`opendesign`の目的状態は、次の3つを保証することとする。
+
+- `~/mirrors/open-design`が`nexu-io/open-design`のcloneである。
+- リポジトリ内のdaemonとwebのbuild成果物（`apps/daemon/dist/cli.js`と`apps/web/out/index.html`）がある。
+- リポジトリにcdしてから`corepack pnpm exec od`を実行するwrapperが`~/.local/bin/od`にある。
+
+既存のcloneの更新は対象外とする。
+
 ## sync
 
 `sync` は、Install / Ensure Phase、状態取得、Uninstall Phaseの順で環境を同期する。

@@ -71,6 +71,27 @@ const validKeys = new Set<Key>([
 const configPath = join(import.meta.dir, "config.yaml");
 const androidSdkDir = join(homedir(), ".android-sdk");
 const flathubRepoUrl = "https://dl.flathub.org/repo/flathub.flatpakrepo";
+export const openDesignDir = join(homedir(), "mirrors", "open-design");
+export const openDesignRepoUrl = "https://github.com/nexu-io/open-design.git";
+export const openDesignDaemonEntry = join(openDesignDir, "apps", "daemon", "dist", "cli.js");
+export const openDesignWebEntry = join(openDesignDir, "apps", "web", "out", "index.html");
+const openDesignBinDir = join(homedir(), ".local", "bin");
+export const openDesignBinPath = join(openDesignBinDir, "od");
+// pnpm 12 validates the repo's packageManager pin and fails, so the wrapper must
+// cd into the repo before corepack resolves pnpm.
+export const openDesignOdWrapper = [
+  "#!/usr/bin/env bash",
+  `repo="${openDesignDir}"`,
+  `cd "$repo" || exit 127`,
+  `exec corepack pnpm exec od "$@"`,
+].join("\n");
+export const openDesignOdWriteCommand = [
+  `mkdir -p ${openDesignBinDir}`,
+  `cat > ${openDesignBinPath} <<'EOF'`,
+  openDesignOdWrapper,
+  "EOF",
+  `chmod +x ${openDesignBinPath}`,
+].join("\n");
 
 export class Bootstrap {
   private readonly failures: string[] = [];
@@ -258,6 +279,7 @@ export class Bootstrap {
     return new Map([
       ["android-sdk", () => this.installAndroidSdk()],
       ["drawio", () => this.installDrawio()],
+      ["opendesign", () => this.installOpenDesign()],
     ]);
   }
 
@@ -323,6 +345,28 @@ export class Bootstrap {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  }
+
+  private installOpenDesign(): void {
+    if (!this.runtime.succeeds(["test", "-d", join(openDesignDir, ".git")])) {
+      this.runtime.execute(["git", "clone", "--depth", "1", openDesignRepoUrl, openDesignDir]);
+    }
+
+    // pnpm install's postinstall also builds the daemon CLI.
+    if (!this.runtime.succeeds(["test", "-f", openDesignDaemonEntry])) {
+      this.runtime.execute(["bash", "-c", `cd ${openDesignDir} && corepack pnpm install`]);
+    }
+
+    if (!this.runtime.succeeds(["test", "-f", openDesignWebEntry])) {
+      this.runtime.execute([
+        "bash",
+        "-c",
+        `cd ${openDesignDir} && corepack pnpm --filter @open-design/web build`,
+      ]);
+    }
+
+    if (this.runtime.outputAllowFailure(["cat", openDesignBinPath]) === openDesignOdWrapper) return;
+    this.runtime.execute(["bash", "-c", openDesignOdWriteCommand]);
   }
 
   private attempt(label: string, action: () => void): void {
