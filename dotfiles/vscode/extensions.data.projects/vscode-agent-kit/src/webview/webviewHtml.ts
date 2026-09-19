@@ -7,20 +7,8 @@ export interface WebviewHtmlOptions {
   nonce: string;
 }
 
-/** Self-contained webview document; session data arrives only through postMessage. */
-export function webviewHtml(options: WebviewHtmlOptions): string {
-  const { scriptUri, nonce } = options;
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-  <title>Sessions</title>
-  <style nonce="${nonce}">${webviewStyles}</style>
-</head>
-<body>
-  <main id="app">
+/** Fixed view markup inside <body>; the stories catalog renders the same tree. */
+export const webviewAppMarkup = `<main id="app">
     <header>
       <h1>Sessions</h1>
       <div class="header-actions">
@@ -34,7 +22,22 @@ export function webviewHtml(options: WebviewHtmlOptions): string {
     </div>
     <section id="sessions" aria-live="polite"></section>
     <p id="status" role="status" aria-live="polite"></p>
-  </main>
+  </main>`;
+
+/** Self-contained webview document; session data arrives only through postMessage. */
+export function webviewHtml(options: WebviewHtmlOptions): string {
+  const { scriptUri, nonce } = options;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+  <title>Sessions</title>
+  <style nonce="${nonce}">${webviewStyles}</style>
+</head>
+<body>
+  ${webviewAppMarkup}
   <script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

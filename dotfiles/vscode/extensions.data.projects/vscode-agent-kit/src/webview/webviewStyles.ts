@@ -1,4 +1,4 @@
-/** Styles for the sessions webview; shared as-is by the static preview (preview/app.css). */
+/** Styles for the sessions webview; shared as-is by the stories catalog. */
 export const webviewStyles = `
     :root { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }

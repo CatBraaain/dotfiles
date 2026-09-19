@@ -1,16 +1,40 @@
-// Provider-equivalent bridge for the static preview: pure logic over an
+// Provider-equivalent bridge for the stories catalog: pure logic over an
 // in-memory sample store. Never touches real session files or the metadata
-// store; openSession is ignored (terminals do not exist in the preview).
+// store; openSession is ignored (terminals do not exist in the catalog).
 
-import { groupSessions } from "./lib/grouping.js";
-import { visibleSessions } from "./lib/viewMode.js";
+import { groupSessions } from "../src/grouping";
+import { visibleSessions } from "../src/viewMode";
+
+/** Demo state a story starts from (SPEC.md「静的プレビュー」表 1 行目). */
+export type DemoState = "sample" | "all" | "active-empty" | "all-empty";
+
+/** Demo session row: SessionSummary-compatible fields for grouping/viewMode. */
+interface DemoSession {
+  sessionId: string;
+  filePath: string;
+  cwd: string;
+  displayName: string;
+  mtimeMs: number;
+}
+
+/** Request from the webview client, same protocol as the extension host side. */
+export interface DemoBridgeRequest {
+  type: string;
+  mode?: string;
+  sessionId?: string;
+}
+
+/** Bridge shape the webview client consumes (ClientBridge-compatible). */
+export interface DemoBridge {
+  postMessage(request: DemoBridgeRequest): void;
+  onMessage(callback: (message: unknown) => void): void;
+}
 
 const ATLAS_CWD = "/Users/aya/Projects/atlas-dashboard";
 const PI_TOOLS_CWD = "/Users/aya/Projects/pi-tools";
 const NOTES_CWD = "/Users/aya/Notes";
 
-/** Sample sessions (SessionSummary-compatible rows for grouping/viewMode). */
-const sampleSessions = [
+const sampleSessions: DemoSession[] = [
   {
     sessionId: "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
     filePath: `${ATLAS_CWD}/20260919_1f0e6f9a.jsonl`,
@@ -53,29 +77,22 @@ const ACTIVE_SAMPLE_IDS = new Set([
   "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
 ]);
 
-function cloneStore(sessions) {
+function cloneStore(sessions: DemoSession[]): DemoSession[] {
   return sessions.map((session) => ({ ...session }));
 }
 
-/**
- * Create a preview bridge.
- *
- * @returns {{
- *   bridge: {
- *     postMessage(request: unknown): void;
- *     onMessage(callback: (message: { type?: string; state?: any }) => void): void;
- *   };
- *   postSessions(): void;
- *   reset(demoState: string): void;
- * }}
- */
-export function createPreviewBridge() {
-  let listener = () => {};
-  let store = cloneStore(sampleSessions);
+/** Create a demo bridge for the stories catalog. */
+export function createDemoBridge(): {
+  bridge: DemoBridge;
+  postSessions(): void;
+  reset(demoState: DemoState): void;
+} {
+  let listener: (message: { type?: string; state?: unknown }) => void = () => {};
+  let store: DemoSession[] = cloneStore(sampleSessions);
   let activeIds = new Set(ACTIVE_SAMPLE_IDS);
-  let mode = "active";
+  let mode: "active" | "all" = "active";
 
-  function postSessions() {
+  function postSessions(): void {
     listener({ type: "sessions", state: viewState() });
   }
 
@@ -96,8 +113,7 @@ export function createPreviewBridge() {
     };
   }
 
-  function handleRequest(request) {
-    if (request === null || typeof request !== "object") return;
+  function handleRequest(request: DemoBridgeRequest): void {
     if (request.type === "setMode" && (request.mode === "active" || request.mode === "all")) {
       mode = request.mode;
       postSessions();
@@ -113,7 +129,7 @@ export function createPreviewBridge() {
       return;
     }
     if (request.type === "newSession") {
-      const session = {
+      const session: DemoSession = {
         sessionId: crypto.randomUUID(),
         filePath: "",
         cwd: store[0]?.cwd ?? ATLAS_CWD,
@@ -125,15 +141,15 @@ export function createPreviewBridge() {
       mode = "active";
       postSessions();
     }
-    // openSession and unknown requests are ignored: nothing to open in the preview.
+    // openSession and unknown requests are ignored: nothing to open in the catalog.
   }
 
-  /** Reset to a demo state: "sample" | "active-empty" | "all-empty". */
-  function reset(demoState) {
-    if (demoState === "sample") {
+  /** Reset to a demo state. */
+  function reset(demoState: DemoState): void {
+    if (demoState === "sample" || demoState === "all") {
       store = cloneStore(sampleSessions);
       activeIds = new Set(ACTIVE_SAMPLE_IDS);
-      mode = "active";
+      mode = demoState === "all" ? "all" : "active";
     } else if (demoState === "active-empty") {
       store = cloneStore(sampleSessions);
       activeIds = new Set();

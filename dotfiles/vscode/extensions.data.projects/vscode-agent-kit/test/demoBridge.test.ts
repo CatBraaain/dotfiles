@@ -1,31 +1,27 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createDemoBridge, type DemoBridgeRequest, type DemoState } from "../stories/demoBridge";
 
 interface CapturedState {
   mode: "active" | "all";
-  groups: { cwd: string; sessions: { sessionId: string; isActive: boolean }[] }[];
+  groups: { cwd: string; sessions: { sessionId: string; displayName: string; isActive: boolean }[] }[];
 }
 
-interface PreviewBridgeHandle {
+interface DemoBridgeHandle {
   bridge: {
-    postMessage(request: unknown): void;
-    onMessage(callback: (message: { type?: string; state?: CapturedState }) => void): void;
+    postMessage(request: DemoBridgeRequest): void;
+    onMessage(callback: (message: unknown) => void): void;
   };
   postSessions(): void;
-  reset(demoState: string): void;
+  reset(demoState: DemoState): void;
 }
 
-let createPreviewBridge: () => PreviewBridgeHandle;
-
-beforeEach(async () => {
-  ({ createPreviewBridge } = await import("../preview/previewBridge.mjs"));
-});
-
 function setup() {
-  const { bridge, postSessions, reset } = createPreviewBridge();
+  const { bridge, postSessions, reset }: DemoBridgeHandle = createDemoBridge();
   const states: CapturedState[] = [];
   bridge.onMessage((message) => {
-    if (typeof message === "object" && message !== null && message.type === "sessions" && message.state !== undefined) {
-      states.push(message.state);
+    const sessionMessage = message as { type?: string; state?: CapturedState };
+    if (sessionMessage.type === "sessions" && sessionMessage.state !== undefined) {
+      states.push(sessionMessage.state);
     }
   });
   return {
@@ -41,6 +37,10 @@ function sessionIds(state: CapturedState): string[] {
   return state.groups.flatMap((group) => group.sessions.map((session) => session.sessionId));
 }
 
+function activeSessions(state: CapturedState): { sessionId: string; isActive: boolean }[] {
+  return state.groups.flatMap((group) => group.sessions).filter((session) => session.isActive);
+}
+
 const sampleActiveIds = [
   "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
   "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
@@ -48,7 +48,7 @@ const sampleActiveIds = [
 const atlasActiveId = sampleActiveIds[0];
 const atlasInactiveId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 
-describe("createPreviewBridge", () => {
+describe("createDemoBridge", () => {
   it("sends only active sessions in the default active mode", () => {
     const { postSessions, last } = setup();
 
@@ -68,8 +68,7 @@ describe("createPreviewBridge", () => {
     const state = last();
     expect(state.mode).toBe("all");
     expect(sessionIds(state)).toHaveLength(5);
-    const marks = state.groups.flatMap((group) => group.sessions.map((session) => session.isActive));
-    expect(marks.filter(Boolean)).toHaveLength(2);
+    expect(activeSessions(state)).toHaveLength(2);
   });
 
   it("removes the row on deactivate in active mode", () => {
@@ -117,6 +116,12 @@ describe("createPreviewBridge", () => {
 
     reset("sample");
     expect(sessionIds(last())).toEqual(sampleActiveIds);
+
+    reset("all");
+    const state = last();
+    expect(state.mode).toBe("all");
+    expect(sessionIds(state)).toHaveLength(5);
+    expect(activeSessions(state)).toHaveLength(2);
   });
 
   it("resends the current state on refresh", () => {
@@ -129,4 +134,20 @@ describe("createPreviewBridge", () => {
     expect(states.length).toBe(before + 1);
     expect(sessionIds(states.at(-1) as CapturedState)).toEqual(sampleActiveIds);
   });
+
+  it("adds an active row and returns to active mode on newSession", () => {
+    const { bridge, last } = setup();
+
+    bridge.postMessage({ type: "setMode", mode: "all" });
+    bridge.postMessage({ type: "newSession" });
+
+    const state = last();
+    expect(state.mode).toBe("active");
+    const rows = state.groups.flatMap((group) => group.sessions);
+    expect(rows.filter((session) => session.isActive)).toHaveLength(3);
+    const added = rows.find((session) => session.displayName === "New Pi session");
+    expect(added).toBeDefined();
+    expect(added?.isActive).toBe(true);
+  });
+
 });

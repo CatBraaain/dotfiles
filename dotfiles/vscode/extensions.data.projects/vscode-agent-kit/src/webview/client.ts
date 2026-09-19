@@ -1,8 +1,7 @@
 /**
- * Self-contained webview client (no imports; also loaded unchanged by the
- * static preview via preview/lib). sessionListView is a pure function that
- * builds the view as an element-descriptor tree; initClient wires that view
- * to the page's fixed markup and a message bridge.
+ * Self-contained webview client (no imports). sessionListView is a pure
+ * function that builds the view as an element-descriptor tree; initClient
+ * wires that view to the page's fixed markup and a message bridge.
  */
 
 /** Display-only session data (the extension sends WebviewState-shaped values). */
@@ -141,8 +140,12 @@ function sessionDescriptor(session: ClientSession): ElementDescriptor {
   return row;
 }
 
-/** Wire click delegation and state rendering to the page's fixed markup. */
-export function initClient(bridge: ClientBridge): void {
+/**
+ * Wire click delegation and state rendering to the page's fixed markup.
+ * Returns a dispose function that removes the document-level click listener;
+ * the webview never disposes, the stories catalog disposes on story change.
+ */
+export function initClient(bridge: ClientBridge): () => void {
   const sessionsElement = document.querySelector("#sessions");
   const statusElement = document.querySelector("#status");
   if (!(sessionsElement instanceof HTMLElement) || !(statusElement instanceof HTMLElement)) {
@@ -151,10 +154,11 @@ export function initClient(bridge: ClientBridge): void {
 
   let state: ClientState = { mode: "active", groups: [] };
 
-  document.addEventListener("click", (event) => {
+  const onDocumentClick = (event: Event): void => {
     const request = webviewRequestFromClick(event);
     if (request !== undefined) bridge.postMessage(request);
-  });
+  };
+  document.addEventListener("click", onDocumentClick);
 
   bridge.onMessage((message) => {
     if (!isRecord(message)) return;
@@ -184,6 +188,10 @@ export function initClient(bridge: ClientBridge): void {
       if (existing !== null && pressed !== undefined) existing.setAttribute("aria-pressed", pressed);
     }
     sessionsElement.replaceChildren(...view.sessions.map(createElement));
+  };
+
+  return () => {
+    document.removeEventListener("click", onDocumentClick);
   };
 }
 

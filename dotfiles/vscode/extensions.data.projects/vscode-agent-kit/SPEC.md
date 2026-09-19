@@ -118,15 +118,14 @@ Webview 上部のモード切替で両モードを切り替える。切替状態
 
 ### 静的プレビュー
 
-リポジトリ内の `preview/` に、VS Code API と実セッションファイルを使わずに Webview の見た目と操作を確認できる静的プレビューを置く。プレビューはブラウザで単独表示でき、サンプルデータで次の状態を確認できる。
+Storybook のカタログで、VS Code API と実セッションファイルを使わずに Webview の見た目と操作を確認できる。`npm run storybook` でカタログをブラウザに表示でき、`npm run storybook:build` の静的出力は任意の静的サーバで単独表示できる。カタログはサンプルデータで次の状態を確認できる。
 
-- Active モードで複数の cwd グループと active セッションを表示する
-- All モードへ切り替え、非 active セッションも表示する
-- `Deactivate` で active 状態を切り替える
-- `Refresh` で一覧を再描画する
-- Active / All の空状態を表示する
+| ストーリーの軸 | 値 |
+|---|---|
+| 表示モードとデータ | Active モード（複数の cwd グループと active セッション）/ All モード（非 active セッションを含む）/ Active の空状態 / All の空状態 |
+| 幅 | narrow（320px・既定）/ wide（720px） |
 
-静的プレビューの操作結果は実セッションファイル、メタデータストア、VS Code Terminal に影響しない。プレビューは拡張機能を起動せずにスクリーンショットを撮影できる。
+カタログ上でモード切替、`Deactivate`、`Refresh`、`New session` をサンプルデータに対して実行できる。New session はサンプルデータへ行を追加して active マーキングを付け、Active モードへ切り替わる（Terminal は起動しない）。操作結果は実セッションファイル、メタデータストア、VS Code Terminal に影響しない。静的出力は拡張機能を起動せずにスクリーンショットを撮影できる。
 
 ### Refresh アクション
 
