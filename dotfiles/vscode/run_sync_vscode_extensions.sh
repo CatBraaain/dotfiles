@@ -16,15 +16,12 @@ extensions_for_linux=(
   bpruitt-goddard.mermaid-markdown-syntax-highlighting
   catbraaain.auto-fix-venv
   catbraaain.toggle-files-exclude
-  charliermarsh.ruff
   christian-kohler.path-intellisense
-  codeium.codeium
   davidkol.fastcompare
   donjayamanne.githistory
   eamodio.gitlens
   emeraldwalk.runonsave
   formulahendry.code-runner
-  foxundermoon.shell-format
   golang.go
   grapecity.gc-excelviewer
   gurumukhi.selected-lines-count
@@ -32,6 +29,7 @@ extensions_for_linux=(
   ibm.output-colorizer
   ionutvmi.reg
   jinliming2.vscode-go-template
+  jkillian.custom-local-formatters
   jnoortheen.nix-ide
   joshbolduc.commitlint
   mark-wiemer.vscode-autohotkey-plus-plus
@@ -43,7 +41,6 @@ extensions_for_linux=(
   mylesmurphy.prettify-ts
   naumovs.color-highlight
   nefrob.vscode-just-syntax
-  oxc.oxc-vscode
   pomber.git-file-history
   redhat.vscode-yaml
   saber2pr.file-git-history

@@ -63,8 +63,8 @@
     "editor.tabSize": 2
   },
   "[javascript][typescript][javascriptreact][typescriptreact]": {
-    "editor.tabSize": 2,
-    "editor.defaultFormatter": "oxc.oxc-vscode"
+    // "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.tabSize": 2
   },
   "[json][jsonc][yaml][yaml-tmlanguage]": {
     // "editor.defaultFormatter": "oxc.oxc-vscode",
@@ -203,6 +203,25 @@
   "csv-edit.disableBorders": true,
   "csv-edit.showDeleteColumnHeaderButton": false,
   "csv-edit.showDeleteRowHeaderButton": false,
+  "customLocalFormatters.formatters": [
+    // stdin->stdout formatters. prettier resolves prettier-markdown-table from the global bun install.
+    {
+      "command": "prettier --parser markdown --plugin=prettier-markdown-table",
+      "languages": ["markdown"]
+    },
+    {
+      "command": "prettier --parser yaml",
+      "languages": ["yaml"]
+    },
+    {
+      "command": "prettier --parser json",
+      "languages": ["json"]
+    },
+    {
+      "command": "prettier --parser jsonc",
+      "languages": ["jsonc"]
+    }
+  ],
   "debug.inlineValues": "on",
   // "debug.internalConsoleOptions": "openOnSessionStart",
   "debug.onTaskErrors": "debugAnyway",
@@ -230,7 +249,8 @@
     "source.organizeImports.ruff": "explicit"
   },
   "editor.copyWithSyntaxHighlighting": false,
-  "editor.defaultFormatter": "oxc.oxc-vscode",
+  // "editor.defaultFormatter": "oxc.oxc-vscode",
+  "editor.defaultFormatter": "jkillian.custom-local-formatters",
   "editor.detectIndentation": false,
   "editor.dragAndDrop": false,
   "editor.emptySelectionClipboard": false,

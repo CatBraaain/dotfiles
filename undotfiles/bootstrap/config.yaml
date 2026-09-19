@@ -99,6 +99,8 @@
 - brew: tree-sitter-cli
 - brew: yq
 - bun: "@typescript/native-preview"
+- bun: prettier
+- bun: prettier-markdown-table
 - uv: harlequin
 
 # Apps and SDKs
