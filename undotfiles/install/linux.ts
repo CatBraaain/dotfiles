@@ -464,7 +464,14 @@ function aptPackageName(value: string): string {
 }
 
 function isAptInstalled(runtime: Runtime, value: string): boolean {
-  return runtime.succeeds(["dpkg-query", "-W", aptPackageName(value)]);
+  return (
+    runtime.outputAllowFailure([
+      "dpkg-query",
+      "-W",
+      "-f=${db:Status-Status}",
+      aptPackageName(value),
+    ]) === "installed"
+  );
 }
 
 function isFlatpakInstalled(runtime: Runtime, value: string): boolean {
