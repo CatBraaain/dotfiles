@@ -43,6 +43,7 @@ extensions_for_linux=(
   nefrob.vscode-just-syntax
   pomber.git-file-history
   redhat.vscode-yaml
+  ritwickdey.LiveServer
   saber2pr.file-git-history
   shd101wyy.markdown-preview-enhanced
   svelte.svelte-vscode
