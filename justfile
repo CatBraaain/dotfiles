@@ -7,37 +7,42 @@ _:
 setup:
   bash setup.sh
 
+[windows]
+setup:
+  powershell setup.ps1
+
+[linux]
+install:
+  bun undotfiles/bootstrap/bootstrap.ts sync
+
+[windows]
+install:
+  gsudo pwsh undotfiles/winget.ps1
+
 [linux]
 apply:
   bun pre-chezmoi.ts
   chezmoi apply -c chezmoi.yaml --force
+
+[windows]
+apply:
+  bun pre-chezmoi.ts
+  chezmoi apply -c chezmoi.yaml --force
+
+[linux]
+diff:
+  bun pre-chezmoi.ts
+  chezmoi diff -c chezmoi.yaml
+
+[windows]
+diff:
+  bun pre-chezmoi.ts
+  chezmoi diff -c chezmoi.yaml
 
 [linux]
 managed:
   bun pre-chezmoi.ts
   chezmoi managed -c chezmoi.yaml
-
-[linux]
-diff:
-  bun pre-chezmoi.ts
-  chezmoi diff -c chezmoi.yaml
-
-install:
-  bun undotfiles/bootstrap/bootstrap.ts sync
-
-[windows]
-setup:
-  powershell setup.ps1
-
-[windows]
-apply:
-  bun pre-chezmoi.ts
-  chezmoi apply -c chezmoi.yaml --force
-
-[windows]
-diff:
-  bun pre-chezmoi.ts
-  chezmoi diff -c chezmoi.yaml
 
 [windows]
 managed:
@@ -54,10 +59,6 @@ winconfig:
 [windows]
 wintasks:
   gsudo wintasks apply --path undotfiles/wintasks/wintasks.yaml
-
-[windows]
-winget:
-  gsudo pwsh undotfiles/winget.ps1
 
 [windows]
 msime mode="apply":

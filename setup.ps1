@@ -7,7 +7,7 @@ winget install Microsoft.PowerShell --source winget
     }
     gsudo {
         cd C:/Projects/dotfiles
-        just winget
+        just install
         just winconfig
         just msime
         just apply

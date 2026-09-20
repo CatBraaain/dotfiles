@@ -173,7 +173,10 @@ describe("CLI entrypoint", () => {
   it("makes just install a sync entrypoint", async () => {
     const justfile = await Bun.file(new URL("../../justfile", import.meta.url)).text();
 
-    assert.match(justfile, /\ninstall:\n  bun undotfiles\/bootstrap\/bootstrap\.ts sync\n/);
+    assert.match(
+      justfile,
+      /\n\[linux\]\ninstall:\n  bun undotfiles\/bootstrap\/bootstrap\.ts sync\n/,
+    );
   });
 
   it("declares bootstrap dependencies before their dependent entries", async () => {
