@@ -169,7 +169,8 @@ export type WebToolDetails = {
 
 // pi may render a result whose details only arrived through onUpdate (e.g.
 // the error path throws before a final result), so mirror the last seen
-// details into the render state.
+// details into the render state. Thrown tool results have an empty details
+// object, which must not replace the error details from onUpdate.
 type WebRenderState = { details?: WebToolDetails };
 
 function detailsForRender(
@@ -177,8 +178,15 @@ function detailsForRender(
   state?: WebRenderState,
 ): WebToolDetails | undefined {
   const details = result.details as WebToolDetails | undefined;
-  if (details && state) state.details = details;
-  return details ?? state?.details;
+  const hasDetails = details !== undefined && Object.keys(details).length > 0;
+  if (hasDetails && state) state.details = details;
+  return hasDetails ? details : state?.details;
+}
+
+function resultText(result: {
+  content?: ReadonlyArray<{ type: string; text?: string }>;
+}): string | undefined {
+  return result.content?.find((block) => block.type === "text")?.text?.trim() || undefined;
 }
 
 function tookSuffix(tookMs: number | undefined): string {
@@ -198,6 +206,16 @@ function successLine(name: string, details: WebToolDetails): string {
 
 function errorLine(kind: "web-search" | "web-fetch", message: string): string {
   return `✗ ${kind} - "${message}"`;
+}
+
+function failureLine(
+  kind: "web-search" | "web-fetch",
+  result: { content?: ReadonlyArray<{ type: string; text?: string }> },
+  details: WebToolDetails | undefined,
+  isError: boolean,
+): string | undefined {
+  if (!isError && !details?.error) return undefined;
+  return errorLine(kind, details?.error ?? resultText(result) ?? "Error");
 }
 
 function errorMessage(error: unknown): string {
@@ -244,8 +262,9 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
     },
     renderResult(result, _options, _theme, context) {
       const details = detailsForRender(result, context?.state as WebRenderState | undefined);
+      const failure = failureLine("web-search", result, details, context?.isError ?? false);
+      if (failure) return new Text(failure, 0, 0);
       if (!details) return new Text("", 0, 0);
-      if (details.error) return new Text(errorLine("web-search", details.error), 0, 0);
       return new Text(successLine(details.engine ?? "", details), 0, 0);
     },
   });
@@ -281,8 +300,9 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
     },
     renderResult(result, _options, _theme, context) {
       const details = detailsForRender(result, context?.state as WebRenderState | undefined);
+      const failure = failureLine("web-fetch", result, details, context?.isError ?? false);
+      if (failure) return new Text(failure, 0, 0);
       if (!details) return new Text("", 0, 0);
-      if (details.error) return new Text(errorLine("web-fetch", details.error), 0, 0);
       return new Text(successLine(details.backend ?? "", details), 0, 0);
     },
   });

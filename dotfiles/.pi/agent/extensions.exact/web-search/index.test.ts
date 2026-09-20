@@ -395,12 +395,26 @@ describe("web_search rendering", () => {
     ]);
   });
 
-  it("renders the stderr message as a failure line from the render state", () => {
+  it("renders the stderr message when pi replaces the final details with an empty object", () => {
     const search = captureTools().get("web_search")!;
     const state = { details: { error: "All web search backends failed: boom" } };
+    const result = { content: [{ type: "text", text: "boom" }], details: {} };
+
+    assert.deepEqual(renderedLines(search.renderResult(result, {}, identityTheme, { state })), [
+      '✗ web-search - "All web search backends failed: boom"',
+    ]);
+  });
+
+  it("renders the error content when the render state is unavailable", () => {
+    const search = captureTools().get("web_search")!;
+    const result = {
+      content: [{ type: "text", text: "web-search: spawn bun ENOENT" }],
+      details: {},
+    };
+
     assert.deepEqual(
-      renderedLines(search.renderResult({ content: [] }, {}, identityTheme, { state })),
-      ['✗ web-search - "All web search backends failed: boom"'],
+      renderedLines(search.renderResult(result, {}, identityTheme, { isError: true })),
+      ['✗ web-search - "web-search: spawn bun ENOENT"'],
     );
   });
 });
@@ -436,10 +450,9 @@ describe("web_fetch rendering", () => {
         tookMs: 1200,
       },
     };
-    assert.deepEqual(
-      renderedLines(fetchTool.renderResult(result, {}, identityTheme), 200),
-      ['✓ camoufox+trafilatura - "Example" (fallback: camoufox+trafilatura: render: challenge detected) (1.2s)'],
-    );
+    assert.deepEqual(renderedLines(fetchTool.renderResult(result, {}, identityTheme), 200), [
+      '✓ camoufox+trafilatura - "Example" (fallback: camoufox+trafilatura: render: challenge detected) (1.2s)',
+    ]);
   });
 
   it("omits the title part when the fetch has no title", () => {
@@ -453,12 +466,41 @@ describe("web_fetch rendering", () => {
     ]);
   });
 
-  it("renders the stderr message as a failure line from the render state", () => {
+  it("renders fallback details without a title", () => {
+    const fetchTool = captureTools().get("web_fetch")!;
+    const result = {
+      content: [{ type: "text", text: "body" }],
+      details: {
+        backend: "camoufox+trafilatura",
+        fallback: "camoufox+trafilatura: render: challenge detected",
+        tookMs: 1200,
+      },
+    };
+    assert.deepEqual(renderedLines(fetchTool.renderResult(result, {}, identityTheme), 200), [
+      "✓ camoufox+trafilatura (fallback: camoufox+trafilatura: render: challenge detected) (1.2s)",
+    ]);
+  });
+
+  it("renders the stderr message when pi replaces the final details with an empty object", () => {
     const fetchTool = captureTools().get("web_fetch")!;
     const state = { details: { error: "Unable to fetch Reddit post abc123" } };
+    const result = { content: [{ type: "text", text: "request failed" }], details: {} };
+
+    assert.deepEqual(renderedLines(fetchTool.renderResult(result, {}, identityTheme, { state })), [
+      '✗ web-fetch - "Unable to fetch Reddit post abc123"',
+    ]);
+  });
+
+  it("renders the error content when the render state is unavailable", () => {
+    const fetchTool = captureTools().get("web_fetch")!;
+    const result = {
+      content: [{ type: "text", text: "web-fetch exited with code 1" }],
+      details: {},
+    };
+
     assert.deepEqual(
-      renderedLines(fetchTool.renderResult({ content: [] }, {}, identityTheme, { state })),
-      ['✗ web-fetch - "Unable to fetch Reddit post abc123"'],
+      renderedLines(fetchTool.renderResult(result, {}, identityTheme, { isError: true })),
+      ['✗ web-fetch - "web-fetch exited with code 1"'],
     );
   });
 });
