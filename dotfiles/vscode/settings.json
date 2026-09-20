@@ -506,6 +506,10 @@
   "plantuml.server": "http://www.plantuml.com/plantuml",
   "playwright.reuseBrowser": true,
   "powershell.developer.editorServicesLogLevel": "Error",
+  "powershell.powerShellAdditionalExePaths": {
+    "PowerShell 7 (WSL)": "/home/linuxbrew/.linuxbrew/bin/pwsh"
+  },
+  "powershell.powerShellDefaultVersion": "PowerShell 7 (WSL)",
   "powershell.integratedConsole.startInBackground": true,
   "powershell.promptToUpdatePowerShell": false,
   "powershell.scriptAnalysis.enable": false,
