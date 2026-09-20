@@ -2,9 +2,9 @@
 
 対象は、TypeScriptで宣言したローマ字表をMS-IME用のバイナリ値へコンパイルして適用する機能と、保存したMS-IMEキー設定スナップショットを適用・比較する機能である。利用者は、このリポジトリでWindows環境のMS-IME設定を管理するオーナーである。
 
-`just msime` は、ローマ字表の適用（`custom-roma-def.ts` を引数なしで実行）、キー設定の適用（`msime-key-settings.ts` を引数なしで実行）の順に行う。前段が失敗したときは後段を実行しない。`just msime diff` は、ローマ字表の差分（`custom-roma-def.ts` に `--dry-run` を付けて実行）、キー設定の差分（`msime-key-settings.ts` に `--diff` を付けて実行）の順に表示する。前段が失敗したときは後段を実行しない。
+`just msime` は、ローマ字表の適用（`roma-def.ts` を引数なしで実行）、キー設定の適用（`key-settings.ts` を引数なしで実行）の順に行う。前段が失敗したときは後段を実行しない。`just msime diff` は、ローマ字表の差分（`roma-def.ts` に `--dry-run` を付けて実行）、キー設定の差分（`key-settings.ts` に `--diff` を付けて実行）の順に表示する。前段が失敗したときは後段を実行しない。
 
-キー設定スナップショットは、`HKCU\Software\Microsoft\IME\15.0\IMEJP\StyleList\Custom` とそのサブキーを `reg.exe export` で保存したUTF-16LEの `undotfiles/ime/msime-stylelist-custom.reg` である。スナップショットの更新（GUIでの設定変更と `reg.exe export`）はこの仕様の対象外の手順で行う。
+キー設定スナップショットは、`HKCU\Software\Microsoft\IME\15.0\IMEJP\StyleList\Custom` とそのサブキーを `reg.exe export` で保存したUTF-16LEの `undotfiles/ime/key-settings.reg` である。スナップショットの更新（GUIでの設定変更と `reg.exe export`）はこの仕様の対象外の手順で行う。
 
 ## 用語
 

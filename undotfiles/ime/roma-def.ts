@@ -446,7 +446,7 @@ if (isMain) {
 		await printDryRun();
 	} else {
 		console.error(`unknown arguments: ${args.join(" ")}`);
-		console.error("usage: bun custom-roma-def.ts [--preview | --dry-run]");
+		console.error("usage: bun roma-def.ts [--preview | --dry-run]");
 		node?.exit(1);
 	}
 }

@@ -239,7 +239,7 @@ const ROOT_KEY = "HKCU\\SOFTWARE\\Microsoft\\IME\\15.0\\IMEJP\\StyleList\\Custom
 // reg.exe export spells the hive out, while query/add accept the HKCU alias.
 const EXPORT_ROOT_KEY = "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\IME\\15.0\\IMEJP\\StyleList\\Custom";
 const MSIME_KEY = "HKCU\\SOFTWARE\\Microsoft\\IME\\15.0\\IMEJP\\MSIME";
-const SNAPSHOT_FILE_NAME = "msime-stylelist-custom.reg";
+const SNAPSHOT_FILE_NAME = "key-settings.reg";
 
 function snapshotPath(): string {
 	const dir = (import.meta as { dir?: string }).dir;
@@ -265,7 +265,7 @@ async function loadSnapshot(): Promise<RegSnapshot> {
 // the registry is never written.
 async function readCurrentSnapshot(): Promise<RegSnapshot | null> {
 	const spawn = await loadSpawnSync();
-	const exportPath = await tempFilePath("msime-stylelist-custom-current");
+	const exportPath = await tempFilePath("key-settings-current");
 	const proc = spawn("reg.exe", ["export", ROOT_KEY, exportPath, "/y"], { windowsHide: true });
 	if (proc.error !== undefined || proc.status !== 0) return null;
 	return parseRegFileBytes((await loadFs()).readFileSync(exportPath));
@@ -282,7 +282,7 @@ async function backupCurrentKey(spawn: SpawnSync): Promise<string | null> {
 	const exists = spawn("reg.exe", ["query", ROOT_KEY], { windowsHide: true });
 	if (exists.error !== undefined) throw new Error(`cannot run reg: ${String(exists.error)}`);
 	if (exists.status !== 0) return null;
-	const backupPath = await tempFilePath("msime-stylelist-custom-backup");
+	const backupPath = await tempFilePath("key-settings-backup");
 	const proc = spawn("reg.exe", ["export", ROOT_KEY, backupPath, "/y"], { windowsHide: true });
 	if (proc.error !== undefined) throw new Error(`cannot run reg: ${String(proc.error)}`);
 	if (proc.status !== 0) throw new Error(`backup export failed with status ${proc.status}`);
@@ -325,7 +325,7 @@ if (isMain) {
 		await printDiff();
 	} else {
 		console.error(`unknown arguments: ${args.join(" ")}`);
-		console.error("usage: bun msime-key-settings.ts [--diff]");
+		console.error("usage: bun key-settings.ts [--diff]");
 		node?.exit(1);
 	}
 }

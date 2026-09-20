@@ -62,7 +62,7 @@ wintasks:
 
 [windows]
 msime mode="apply":
-  $mode = "{{mode}}"; $romaFlag = if ($mode -eq "diff") { @("--dry-run") } elseif ($mode -eq "apply") { @() } else { throw "mode must be apply or diff: $mode" }; $keyFlag = if ($mode -eq "diff") { @("--diff") } else { @() }; bun undotfiles/ime/custom-roma-def.ts @romaFlag && bun undotfiles/ime/msime-key-settings.ts @keyFlag
+  $mode = "{{mode}}"; $romaFlag = if ($mode -eq "diff") { @("--dry-run") } elseif ($mode -eq "apply") { @() } else { throw "mode must be apply or diff: $mode" }; $keyFlag = if ($mode -eq "diff") { @("--diff") } else { @() }; bun undotfiles/ime/roma-def.ts @romaFlag && bun undotfiles/ime/key-settings.ts @keyFlag
 
 [windows]
 autologon:
