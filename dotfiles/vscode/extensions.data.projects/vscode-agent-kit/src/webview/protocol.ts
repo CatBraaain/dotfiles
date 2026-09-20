@@ -2,7 +2,8 @@ export type WebviewRequest =
   | { type: "refresh" }
   | { type: "newSession" }
   | { type: "openSession"; sessionId: string }
-  | { type: "archiveSession"; sessionId: string };
+  | { type: "archiveSession"; sessionId: string }
+  | { type: "copySessionId"; sessionId: string };
 
 export interface WebviewSession {
   sessionId: string;
@@ -29,7 +30,7 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "refresh" || value.type === "newSession") return { type: value.type };
   if (
-    (value.type === "openSession" || value.type === "archiveSession") &&
+    (value.type === "openSession" || value.type === "archiveSession" || value.type === "copySessionId") &&
     typeof value.sessionId === "string" &&
     SESSION_ID_PATTERN.test(value.sessionId)
   ) {

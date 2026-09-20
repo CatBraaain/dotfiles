@@ -38,8 +38,8 @@ function modesOf(entries: Record<string, ViewMode> = {}): Map<string, ViewMode> 
   return new Map(Object.entries(entries));
 }
 
-function viewFor(modes: Map<string, ViewMode>, stateGroups = groups) {
-  return sessionListView({ groups: stateGroups } as ClientState, modes);
+function viewFor(modes: Map<string, ViewMode>, stateGroups = groups, copiedIds: ReadonlySet<string> = new Set()) {
+  return sessionListView({ groups: stateGroups } as ClientState, modes, copiedIds);
 }
 
 function collectElements(node: ElementDescriptor | string): ElementDescriptor[] {
@@ -126,7 +126,7 @@ describe("sessionListView", () => {
     ]);
   });
 
-  it("renders sessions in given order with active marks and the id in the meta line", () => {
+  it("renders sessions in given order with active marks and keeps the id off the row text", () => {
     const elements = elementsIn(viewFor(allModes));
     const rows = byClass(elements, "session-row");
     expect(rows).toHaveLength(3);
@@ -136,20 +136,52 @@ describe("sessionListView", () => {
       "indicator",
       "indicator",
     ]);
-    const metas = byClass(elements, "session-meta").map(text);
-    for (const session of [atlasActive, atlasOld, betaInactive]) {
-      expect(metas.some((meta) => meta.includes(session.sessionId))).toBe(true);
-      expect(metas.some((meta) => meta.includes(new Date(session.mtimeMs).toLocaleString()))).toBe(true);
+    // The meta line is gone: the id lives in the button hint, the time at the row's right edge.
+    expect(byClass(elements, "session-meta")).toHaveLength(0);
+    const buttons = byClass(elements, "session-button");
+    const timestamps = byClass(elements, "session-timestamp").map(text);
+    for (const [index, session] of [atlasActive, atlasOld, betaInactive].entries()) {
+      expect(buttons[index].attrs?.title).toContain(session.sessionId);
+      expect(timestamps[index]).toBe(new Date(session.mtimeMs).toLocaleString());
     }
   });
 
-  it("makes the session button the row's full-area first child and overlays the archive button", () => {
-    const rows = byClass(elementsIn(viewFor(modesOf())), "session-row");
-    expect(rows).toHaveLength(1);
+  it("orders each row as button, timestamp, copy, and the archive overlay last", () => {
+    const rowClasses = (row: ElementDescriptor): (string | undefined)[] =>
+      (row.children ?? [])
+        .filter((child): child is ElementDescriptor => typeof child !== "string")
+        .map((child) => child.attrs?.class ?? "");
 
-    const rowChildren = (rows[0].children ?? []).filter((child): child is ElementDescriptor => typeof child !== "string");
-    expect(rowChildren[0].attrs?.class).toBe("session-button");
-    expect(rowChildren[1].attrs?.class).toBe("archive");
+    const rows = byClass(elementsIn(viewFor(allModes)), "session-row");
+    expect(rowClasses(rows[0])).toEqual(["session-button", "session-timestamp", "copy", "archive"]);
+    expect(rowClasses(rows[1])).toEqual(["session-button", "session-timestamp", "copy"]);
+  });
+
+  it("renders the Copy overlay on every row with the Copy session ID hint", () => {
+    const copies = byClass(elementsIn(viewFor(allModes)), "copy");
+
+    expect(copies.map((copy) => copy.attrs?.["data-copy"])).toEqual([
+      atlasActive.sessionId,
+      atlasOld.sessionId,
+      betaInactive.sessionId,
+    ]);
+    for (const copy of copies) {
+      expect(copy.attrs?.title).toBe("Copy session ID");
+      expect(copy.attrs?.["aria-label"]).toBe("Copy session ID");
+      expect(copy.attrs?.type).toBe("button");
+    }
+  });
+
+  it("shows the check mark on the copy button of the copied session ID", () => {
+    const copies = byClass(elementsIn(viewFor(allModes, groups, new Set([atlasActive.sessionId]))), "copy");
+
+    expect(copies[0].attrs?.class).toBe("copy copied");
+    expect(copies[0].attrs?.title).toBe("Copied");
+    expect(copies[0].attrs?.["aria-label"]).toBe("Copied");
+    const icon = (copies[0].children ?? []).filter((child): child is ElementDescriptor => typeof child !== "string");
+    expect(icon[0].tag).toBe("svg");
+    expect(copies[1].attrs?.class).toBe("copy");
+    expect(copies[1].attrs?.title).toBe("Copy session ID");
   });
 
   it("renders the Archive overlay only on active rows with an icon and the Archive hint", () => {
@@ -170,7 +202,9 @@ describe("sessionListView", () => {
 
   it("uses native buttons for every interactive element", () => {
     const interactive = elementsIn(viewFor(allModes)).filter((element) =>
-      ["data-action", "data-mode", "data-session", "data-archive"].some((name) => element.attrs?.[name] !== undefined),
+      ["data-action", "data-mode", "data-session", "data-archive", "data-copy"].some(
+        (name) => element.attrs?.[name] !== undefined,
+      ),
     );
     expect(interactive.length).toBeGreaterThan(0);
     for (const element of interactive) {

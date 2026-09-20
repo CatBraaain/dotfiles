@@ -9,6 +9,7 @@ import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
 const vscodeMocks = vi.hoisted(() => ({
   createTerminal: vi.fn(),
   showErrorMessage: vi.fn(),
+  clipboardWriteText: vi.fn(),
 }));
 
 vi.mock("vscode", () => ({
@@ -19,6 +20,7 @@ vi.mock("vscode", () => ({
     }),
   },
   TerminalLocation: { Editor: 1 },
+  env: { clipboard: { writeText: vscodeMocks.clipboardWriteText } },
   window: vscodeMocks,
 }));
 
@@ -30,6 +32,7 @@ beforeEach(async () => {
   root = await tempDir("pi-webview-provider-test-");
   vscodeMocks.createTerminal.mockReset();
   vscodeMocks.showErrorMessage.mockReset();
+  vscodeMocks.clipboardWriteText.mockReset();
 });
 
 afterEach(async () => {
@@ -198,6 +201,38 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "shell", command: "pi" });
 
     expect(startNewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("copies the session ID to the clipboard on copySessionId", async () => {
+    const { provider } = createProvider();
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+
+    await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
+
+    expect(vscodeMocks.clipboardWriteText).toHaveBeenCalledWith(activeSessionId);
+    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(
+      sessionsCalls,
+    );
+  });
+
+  it("shows an error and keeps the list when the clipboard write fails", async () => {
+    const { provider } = createProvider();
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+    vscodeMocks.clipboardWriteText.mockRejectedValueOnce(new Error("denied"));
+
+    await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
+
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith("Failed to copy session ID: denied");
+    expect(webview.postMessage.mock.calls.some((call) => call[0].type === "error")).toBe(true);
+    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(
+      sessionsCalls,
+    );
   });
 
   it("shows an error and sends no list when the session directory is unreadable", async () => {

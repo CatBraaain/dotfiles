@@ -21,14 +21,15 @@ export const webviewStyles = `
     .mode-button[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
     .session-row { position: relative; min-width: 0; }
     .session-row + .session-row { border-top: 1px solid var(--vscode-widget-border); }
-    .session-button { display: grid; box-sizing: border-box; grid-template-columns: 8px minmax(0, 1fr); width: 100%; gap: 7px; min-width: 0; padding: 5px 32px 5px 8px; border-radius: 0; color: var(--vscode-foreground); background: transparent; text-align: left; }
+    .session-button { display: grid; box-sizing: border-box; grid-template-columns: 8px minmax(0, 1fr); width: 100%; gap: 7px; min-width: 0; padding: 5px calc(40% + 56px) 5px 8px; border-radius: 0; color: var(--vscode-foreground); background: transparent; text-align: left; }
     .session-button:hover { background: var(--vscode-list-hoverBackground); }
-    .session-content, .session-name, .session-meta { min-width: 0; }
-    .session-name, .session-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .session-name { font-size: 12px; }
-    .session-meta { margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .session-name { display: block; overflow: hidden; min-width: 0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .session-timestamp { position: absolute; top: 50%; right: 56px; overflow: hidden; max-width: 40%; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
     .indicator { width: 6px; height: 6px; margin-top: 4px; border: 1px solid var(--vscode-descriptionForeground); border-radius: 50%; }
     .indicator.active { border-color: var(--vscode-testing-iconPassed); background: var(--vscode-testing-iconPassed); }
+    .copy { position: absolute; top: 50%; right: 30px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
+    .copy:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .copy.copied { color: var(--vscode-testing-iconPassed); }
     .archive { position: absolute; top: 50%; right: 4px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
     .archive:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
     .empty, #status { color: var(--vscode-descriptionForeground); font-size: 12px; }

@@ -91,6 +91,11 @@ export function createDemoBridge(): {
       postSessions();
       return;
     }
+    if (request.type === "copySessionId" && typeof request.sessionId === "string") {
+      // The catalog runs in a browser: copy directly through the Clipboard API.
+      void navigator.clipboard?.writeText(request.sessionId);
+      return;
+    }
     if (request.type === "archiveSession" && typeof request.sessionId === "string") {
       activeIds.delete(request.sessionId);
       postSessions();

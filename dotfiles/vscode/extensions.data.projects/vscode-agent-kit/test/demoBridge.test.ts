@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDemoBridge, type DemoBridgeRequest, type DemoState } from "../stories/demoBridge";
 
 interface CapturedState {
@@ -80,6 +80,19 @@ describe("createDemoBridge", () => {
 
     bridge.postMessage({ type: "openSession", sessionId: atlasInactiveId });
 
+    expect(states.length).toBe(before);
+  });
+
+  it("copies the session ID through the clipboard on copySessionId", () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const { bridge, postSessions, states } = setup();
+    postSessions();
+    const before = states.length;
+
+    bridge.postMessage({ type: "copySessionId", sessionId: atlasActiveId });
+
+    expect(writeText).toHaveBeenCalledWith(atlasActiveId);
     expect(states.length).toBe(before);
   });
 

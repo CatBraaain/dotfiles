@@ -85,6 +85,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.deps.startNewSession();
       return;
     }
+    if (request.type === "copySessionId") {
+      try {
+        await vscode.env.clipboard.writeText(request.sessionId);
+      } catch (error) {
+        this.postError(`Failed to copy session ID: ${errorMessage(error)}`);
+      }
+      return;
+    }
     if (request.type === "openSession") {
       await this.openSession(request.sessionId);
       return;
