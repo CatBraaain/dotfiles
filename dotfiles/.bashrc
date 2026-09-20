@@ -43,9 +43,9 @@ alias cmd="cmd.exe"
 alias dc="docker compose"
 alias j="just"
 alias ksorted="keep-sorted"
-alias ps="powershell.exe"
 alias runp="bun run --parallel"
 alias uv-python-update="uv python install --reinstall 3.11 3.12 3.13"
+alias win="powershell.exe"
 alias wt="wt.exe"
 # keep-sorted end
 
