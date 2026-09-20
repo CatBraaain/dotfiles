@@ -20,17 +20,7 @@
 
 ## `dotfiles/` 内の命名規則
 
-`dotfiles/` は人間が読みやすい素の記法で書き、`pre-chezmoi.ts` が `dist/` へのコピー時に chezmoi 記法へ変換する:
-
-| `dotfiles/` 内 | 変換後（`dist/`） | 意味 |
-|---|---|---|
-| `.xxx` | `dot_xxx` | ドットファイル表現 |
-| `xxx.exact`（ディレクトリ） | `exact_xxx` | 完全一致ディレクトリ（`.xxx.exact` → `exact_dot_xxx`） |
-| `xxx.executable`（ファイル） | `executable_xxx` | 実行可能ファイル（chezmoi はソースの実行ビットを無視するため、名前で指定する） |
-| `xxx.symlink`（ファイル） | `symlink_xxx` | symlink source。末尾改行 1 つを除いた内容がリンク先（相対パスは symlink 置き場から解決）（詳細は pre-chezmoi.spec.md §7） |
-| `xxx.merge.json` / `xxx.merge.yaml` / `xxx.merge.toml` | （完成形 `xxx.json` / `xxx.yaml` / `xxx.toml` を出力） | 独自: ホーム実ファイルと plain base に深くマージする共有 merge レイヤー（詳細は pre-chezmoi.spec.md §8–9） |
-| `xxx.machine.json` / `xxx.machine.yaml` / `xxx.machine.toml` | （完成形 `xxx.json` / `xxx.yaml` / `xxx.toml` を出力） | 独自: merge ターゲットへ最後にマージするマシン固有レイヤー（gitignore） |
-| `.pre-chezmoi.ts`（ファイル） | （dist にそのまま残る。chezmoi は無視） | 独自: フォルダ単位の build 時フック。既存変換より前に実行され、フォルダ固有のファイルを生成できる（詳細は pre-chezmoi.spec.md §2） |
+`dotfiles/` は人間が読みやすい素の記法で書き、`pre-chezmoi.ts` が `dist/` へのコピー時に chezmoi 記法へ変換する。命名規則と変換仕様の正本は `pre-chezmoi.spec.md` とし、`dotfiles/` を編集するときは同仕様を参照する。
 
 > **chezmoi source path**: `dotfiles/.agents/skills.exact` は `~/projects/dotfiles/dotfiles/.agents/skills.exact` を指す。これは共有 skill の編集元であり、プロジェクト専用 skill の読み込み先ではない。ルート直下（`~/projects/dotfiles/.agents/...`）とは別の場所である。
 
