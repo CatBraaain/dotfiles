@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Session list</title>
+    <style>
+      :root {
+        --bg: oklch(20% 0.018 250);
+        --surface: oklch(24% 0.02 250);
+        --surface-raised: oklch(27% 0.022 250);
+        --surface-hover: oklch(30% 0.025 250);
+        --fg: oklch(91% 0.012 250);
+        --muted: oklch(68% 0.018 250);
+        --subtle: oklch(56% 0.018 250);
+        --border: oklch(34% 0.022 250);
+        --border-strong: oklch(42% 0.026 250);
+        --accent: oklch(76% 0.105 236);
+        --accent-soft: oklch(76% 0.105 236 / 0.14);
+        --success: oklch(76% 0.13 150);
+        --danger: oklch(72% 0.13 28);
+        --radius: 8px;
+        --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { min-height: 100%; }
+
+      body {
+        margin: 0;
+        color: var(--fg);
+        background: var(--bg);
+        font-family: var(--font);
+        font-size: 13px;
+        line-height: 1.45;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button {
+        font: inherit;
+        color: inherit;
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .app {
+        width: min(100%, 720px);
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 18px 16px 28px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .title-block { min-width: 0; }
+
+      .eyebrow {
+        margin: 0 0 3px;
+        color: var(--subtle);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 650;
+        letter-spacing: -0.025em;
+      }
+
+      .top-actions,
+      .workspace-modes,
+      .row-actions {
+        display: flex;
+        align-items: center;
+      }
+
+      .top-actions { gap: 7px; }
+
+      .button {
+        min-height: 34px;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        background: var(--surface-raised);
+        cursor: pointer;
+        transition: background 140ms ease-out, border-color 140ms ease-out, transform 140ms ease-out;
+      }
+
+      .button:hover {
+        border-color: var(--accent);
+        background: var(--surface-hover);
+      }
+
+      .button:active { transform: translateY(1px); }
+
+      .button-primary {
+        padding: 0 12px;
+        border-color: var(--accent);
+        color: oklch(18% 0.02 250);
+        background: var(--accent);
+        font-weight: 650;
+      }
+
+      .button-primary:hover {
+        border-color: oklch(84% 0.105 236);
+        background: oklch(84% 0.105 236);
+      }
+
+      .button-icon {
+        display: inline-flex;
+        width: 34px;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      }
+
+      .button-icon svg,
+      .row-action svg { width: 15px; height: 15px; }
+
+      .workspace-list { display: grid; gap: 12px; }
+
+      .workspace {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .workspace-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 48px;
+        padding: 8px 10px 8px 13px;
+        border-bottom: 1px solid var(--border);
+        background: oklch(26% 0.021 250);
+      }
+
+      .workspace-header[data-action="collapse"] {
+        cursor: pointer;
+      }
+
+      .workspace-header[data-action="collapse"]:hover {
+        background: var(--surface-hover);
+      }
+
+      .workspace-name {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--fg);
+        cursor: default;
+        font-size: 12px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .workspace-collapse-trigger {
+        display: inline-flex;
+        align-items: center;
+        min-width: 0;
+        gap: 7px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .workspace-collapse-trigger:hover { color: var(--accent); }
+
+      .workspace-collapse-icon {
+        display: inline-flex;
+        flex: none;
+        color: var(--muted);
+        transition: transform 140ms ease-out, color 140ms ease-out;
+      }
+
+      .workspace-collapse-icon svg { width: 13px; height: 13px; }
+      .workspace-collapse-trigger:hover .workspace-collapse-icon { color: currentColor; }
+      .workspace.is-collapsed .workspace-collapse-icon { transform: rotate(-90deg); }
+      .workspace.is-collapsed .session-row { display: none; }
+
+      .workspace-modes {
+        flex: none;
+        gap: 2px;
+        padding: 2px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+
+      .workspace-summary {
+        flex: none;
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .mode-button {
+        min-height: 26px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 4px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+        font-size: 11px;
+      }
+
+      .mode-button:hover { color: var(--fg); background: var(--surface-hover); }
+
+      .mode-button[aria-pressed="true"] {
+        color: var(--fg);
+        background: var(--border-strong);
+        box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.04);
+      }
+
+      .session-row {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        min-height: 45px;
+        padding: 0 9px 0 13px;
+        border-top: 1px solid var(--border);
+        transition: background 140ms ease-out;
+      }
+
+      .session-row:first-of-type { border-top: 0; }
+      .session-row:hover { background: var(--surface-hover); }
+      .session-row.is-selected { background: var(--accent-soft); }
+
+      .session-main {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 9px;
+        min-height: 45px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .status-dot {
+        flex: none;
+        width: 7px;
+        height: 7px;
+        border: 1px solid var(--subtle);
+        border-radius: 50%;
+      }
+
+      .status-dot.is-active {
+        border-color: var(--success);
+        background: var(--success);
+        box-shadow: 0 0 0 3px oklch(76% 0.13 150 / 0.1);
+      }
+
+      .session-copy { min-width: 0; }
+
+      .session-name {
+        display: block;
+        overflow: hidden;
+        color: var(--fg);
+        font-size: 12px;
+        font-weight: 520;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .session-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: 14px;
+      }
+
+      .session-time {
+        color: var(--muted);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      .row-actions { gap: 2px; }
+
+      .row-action {
+        display: inline-flex;
+        width: 30px;
+        height: 30px;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        border-radius: 5px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .row-action:hover { color: var(--fg); background: var(--border); }
+      .row-action.is-copied { color: var(--success); }
+      .row-action.archive:hover { color: var(--danger); }
+
+      .empty-state {
+        padding: 46px 18px 50px;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius);
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .empty-state strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .status-message {
+        min-height: 18px;
+        margin: 12px 2px 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .status-message.is-error { color: var(--danger); }
+
+      @media (max-width: 520px) {
+        .app { padding: 14px 10px 22px; }
+        .topbar { align-items: flex-start; }
+        .top-actions { gap: 5px; }
+        .button-primary { padding: 0 9px; }
+        .workspace-header { align-items: flex-start; }
+        .session-row { padding-right: 7px; }
+        .session-meta { gap: 3px; margin-left: 8px; }
+        .session-time { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app" data-od-id="session-list">
+      <header class="topbar" data-od-id="session-list-header">
+        <div class="title-block">
+          <h1 data-od-id="session-list-heading">Sessions</h1>
+        </div>
+        <div class="top-actions" aria-label="Session actions">
+          <button class="button button-primary" type="button" data-action="new" data-od-id="new-session-button">New session</button>
+          <button class="button" type="button" data-od-id="new-workspace-button">New Workspace</button>
+          <button class="button button-icon" type="button" data-action="refresh" data-od-id="refresh-button" aria-label="Refresh session list" title="Refresh">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 5.2A5.5 5.5 0 1 0 14 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M10.8 2.6h3v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <section id="workspace-list" class="workspace-list" aria-live="polite" data-od-id="workspace-list"></section>
+      <p id="status" class="status-message" role="status" aria-live="polite" data-od-id="session-status"></p>
+    </main>
+
+    <script>
+      const initialGroups = [
+        {
+          cwd: "/Users/aya/Projects/atlas-dashboard",
+          label: "atlas-dashboard",
+          sessions: [
+            { id: "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", name: "Polish the session list", time: "2026/09/19 18:42", active: true },
+            { id: "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", name: "Check keyboard navigation", time: "2026/09/19 17:16", active: false }
+          ]
+        },
+        {
+          cwd: "/Users/aya/Projects/pi-tools",
+          label: "pi-tools",
+          sessions: [
+            { id: "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72", name: "Test session metadata", time: "2026/09/18 17:34", active: true },
+            { id: "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83", name: "Untitled", time: "2026/09/17 13:08", active: false }
+          ]
+        },
+        {
+          cwd: "/Users/aya/Notes",
+          label: "Notes",
+          sessions: [
+            { id: "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94", name: "Plan the next release", time: "2026/09/16 10:52", active: false }
+          ]
+        }
+      ];
+
+      const state = {
+        groups: structuredClone(initialGroups),
+        modes: new Map(),
+        selectedId: null,
+        copiedId: null,
+        copiedTimer: null,
+        statusTimer: null,
+        collapsedWorkspaces: new Set()
+      };
+
+      const list = document.querySelector("#workspace-list");
+      const status = document.querySelector("#status");
+
+      function icon(name) {
+        const paths = {
+          copy: '<rect x="5" y="5" width="7" height="8" rx="1"/><path d="M3.5 10V4.5A1.5 1.5 0 0 1 5 3h4.5"/>',
+          check: '<path d="m3.3 8.2 3 3 6.4-6.4"/>',
+          archive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="M6.5 8.5h3"/> ',
+          unarchive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="m6 9 2-2 2 2M8 7v4"/>',
+          chevron: '<path d="m4.5 6 3.5 3.5L11.5 6"/>'
+        };
+        return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[name] + '</svg>';
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+      }
+
+      function groupVisibleSessions(group) {
+        const mode = state.modes.get(group.cwd) || "active";
+        return mode === "all" ? group.sessions : group.sessions.filter((session) => session.active);
+      }
+
+      function render() {
+        const visibleGroups = state.groups.filter((group) => groupVisibleSessions(group).length > 0);
+        if (visibleGroups.length === 0) {
+          list.innerHTML = '<div class="empty-state" data-od-id="empty-state"><strong>No active sessions</strong><span>Create a new session to see it here</span></div>';
+          return;
+        }
+
+        list.innerHTML = visibleGroups.map((group, groupIndex) => {
+          const mode = state.modes.get(group.cwd) || "active";
+          const sessions = groupVisibleSessions(group);
+          const isCollapsible = groupIndex === 0 || groupIndex === 1;
+          const isCollapsed = isCollapsible && state.collapsedWorkspaces.has(group.cwd);
+          const modeLabel = mode === "all" ? "All" : "Active";
+          const sessionLabel = sessions.length === 1 ? "session" : "sessions";
+          return `
+            <section class="workspace ${isCollapsed ? "is-collapsed" : ""}" data-cwd="${escapeHtml(group.cwd)}" data-od-id="workspace-${groupIndex}">
+              <header class="workspace-header" ${isCollapsible ? 'data-action="collapse"' : ""}>
+                ${isCollapsible ? `<button class="workspace-name workspace-collapse-trigger" type="button" data-action="collapse" aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? "Expand" : "Collapse"} ${escapeHtml(group.label)}" title="~/projects/${escapeHtml(group.label)}" data-od-id="collapse-workspace-${groupIndex}"><span class="workspace-collapse-icon">${icon("chevron")}</span><span>${escapeHtml(group.label)}</span></button>` : `<div class="workspace-name" title="${escapeHtml(group.cwd)}" data-od-id="workspace-name-${groupIndex}">${escapeHtml(group.label)}</div>`}
+                ${isCollapsed ? `<span class="workspace-summary" aria-label="${modeLabel}, ${sessions.length} ${sessionLabel}">${modeLabel} · ${sessions.length} ${sessionLabel}</span>` : `<div class="workspace-modes" role="group" aria-label="${escapeHtml(group.label)} view mode">
+                  <button class="mode-button" type="button" data-action="mode" data-mode="active" aria-pressed="${mode === "active"}" data-od-id="${groupIndex}-active-mode">Active</button>
+                  <button class="mode-button" type="button" data-action="mode" data-mode="all" aria-pressed="${mode === "all"}" data-od-id="${groupIndex}-all-mode">All</button>
+                </div>`}
+              </header>
+              ${sessions.map((session, sessionIndex) => `
+                <div class="session-row ${state.selectedId === session.id ? "is-selected" : ""}" data-session-row="${escapeHtml(session.id)}" data-od-id="session-row-${groupIndex}-${sessionIndex}">
+                  <button class="session-main" type="button" data-action="open" data-session-id="${escapeHtml(session.id)}" data-od-id="open-session-${escapeHtml(session.id)}">
+                    <span class="status-dot ${session.active ? "is-active" : ""}" aria-hidden="true"></span>
+                    <span class="session-copy">
+                      <span class="session-name">${escapeHtml(session.name)}</span>
+                    </span>
+                  </button>
+                  <div class="session-meta">
+                    <time class="session-time">${escapeHtml(session.time)}</time>
+                    <div class="row-actions">
+                      <button class="row-action ${state.copiedId === session.id ? "is-copied" : ""}" type="button" data-action="copy" data-session-id="${escapeHtml(session.id)}" data-od-id="copy-session-${escapeHtml(session.id)}" aria-label="${state.copiedId === session.id ? "Copied" : "Copy session ID"}" title="${state.copiedId === session.id ? "Copied" : "Copy session ID"}">${icon(state.copiedId === session.id ? "check" : "copy")}</button>
+                      ${session.active ? `<button class="row-action archive" type="button" data-action="archive" data-session-id="${escapeHtml(session.id)}" data-od-id="archive-session-${escapeHtml(session.id)}" aria-label="Archive" title="Archive">${icon("archive")}</button>` : `<button class="row-action unarchive" type="button" data-action="unarchive" data-session-id="${escapeHtml(session.id)}" data-od-id="unarchive-session-${escapeHtml(session.id)}" aria-label="Unarchive" title="Unarchive">${icon("unarchive")}</button>`}
+                    </div>
+                  </div>
+                </div>
+              `).join("")}
+            </section>
+          `;
+        }).join("");
+      }
+
+      function showStatus(message, isError = false) {
+        window.clearTimeout(state.statusTimer);
+        status.textContent = message;
+        status.classList.toggle("is-error", isError);
+        if (message) {
+          state.statusTimer = window.setTimeout(() => {
+            status.textContent = "";
+            status.classList.remove("is-error");
+          }, 2600);
+        }
+      }
+
+      function findSession(id) {
+        for (const group of state.groups) {
+          const session = group.sessions.find((item) => item.id === id);
+          if (session) return session;
+        }
+        return null;
+      }
+
+      async function copySessionId(id) {
+        try {
+          await navigator.clipboard.writeText(id);
+        } catch {
+          showStatus("Copy failed", true);
+        }
+        state.copiedId = id;
+        window.clearTimeout(state.copiedTimer);
+        state.copiedTimer = window.setTimeout(() => {
+          state.copiedId = null;
+          render();
+        }, 1000);
+        render();
+      }
+
+      function addSession() {
+        const firstGroup = state.groups[0];
+        if (!firstGroup) return;
+        const newId = crypto.randomUUID();
+        firstGroup.sessions.unshift({ id: newId, name: "New Pi session", time: "Just now", active: true });
+        state.modes.set(firstGroup.cwd, "active");
+        state.selectedId = newId;
+        render();
+        showStatus("New session added");
+      }
+
+      document.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element)) return;
+        const target = event.target.closest("[data-action]");
+        if (!target) return;
+        const action = target.dataset.action;
+        const id = target.dataset.sessionId;
+
+        if (action === "mode") {
+          const workspace = target.closest("[data-cwd]");
+          state.modes.set(workspace.dataset.cwd, target.dataset.mode);
+          render();
+        }
+        if (action === "collapse") {
+          const workspace = target.closest("[data-cwd]");
+          const cwd = workspace.dataset.cwd;
+          if (state.collapsedWorkspaces.has(cwd)) {
+            state.collapsedWorkspaces.delete(cwd);
+          } else {
+            state.collapsedWorkspaces.add(cwd);
+          }
+          render();
+        }
+        if (action === "refresh") {
+          render();
+          showStatus("List refreshed");
+        }
+        if (action === "new") addSession();
+        if (action === "open" && id) {
+          const session = findSession(id);
+          state.selectedId = id;
+          render();
+          showStatus(session ? `Opened “${session.name}”` : "Session opened");
+        }
+        if (action === "copy" && id) copySessionId(id);
+        if ((action === "archive" || action === "unarchive") && id) {
+          const session = findSession(id);
+          if (session) session.active = action === "unarchive";
+          if (action === "archive" && state.selectedId === id) state.selectedId = null;
+          render();
+          showStatus(action === "archive" ? "Session archived" : "Session unarchived");
+        }
+      });
+
+      render();
+    </script>
+  </body>
+</html>
