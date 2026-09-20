@@ -1,5 +1,7 @@
 # System prerequisites
 - apt: flatpak
+# OpenDesign's Linux native folder picker.
+- apt: zenity
 - apt: fonts-noto-cjk
 # Camoufox/Playwright's Firefox runtime needs libasound.so.2 (ALSA), even headless.
 - apt: libasound2t64
