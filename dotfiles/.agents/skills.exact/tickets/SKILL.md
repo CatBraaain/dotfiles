@@ -36,9 +36,9 @@ Ticket body
 * Ticketの内容はMarkdown本文で管理する。タイトルは H1 とし、日本語で書いてよい。本文には必要な見出しだけを足す
 * ファイル名やIDの規則は、既存のTicketに合わせる
 
-### テンプレート
+### fs tools で直接起票するときのファイルテンプレート
 
-成果物を伴う作業の対処を記録するチケットは、起票時に次の本文テンプレートから始める。
+成果物を伴う作業の対処を記録するチケットを fs tools で直接起票するときは、次のファイルテンプレートから始める。
 
 ```md
 ---
@@ -84,9 +84,9 @@ status: open
 
 | チケット種別 | 起票時 | 対処完了時 |
 | --- | --- | --- |
-| 作業着手の自動起票（「着手前に自動起票する」） | テンプレートを適用する | 追記を必ず入れる |
+| 作業着手の自動起票（「着手前に自動起票する」） | `ticket_create` の `title` と `body` を分けて渡す。fs tools で直接起票するときはファイルテンプレートを適用する | 追記を必ず入れる |
 | 後回し記録（「発見時に記録する」） | 「背景」に観測事実（場所・内容・出力）を書く。「要件」は対処方針が決まっているときだけ書く | 対処するセッションが追記を入れる |
-| owner 指示起票（「明示依頼で操作する」） | owner の指示内容を優先し、テンプレートはデフォルトとして使う | 対処した場合は追記を入れる |
+| owner 指示起票（「明示依頼で操作する」） | owner の指示内容を優先し、`ticket_create` の `title` と `body` を分けて渡す。fs tools で直接起票するときはファイルテンプレートを適用する | 対処した場合は追記を入れる |
 
 ## いつ使うか
 
@@ -94,7 +94,7 @@ status: open
 
 ### 着手前に自動起票する
 
-成果物を伴う作業（コード・ドキュメント・設定の変更、ファイル作成・削除、worktree 作業など）に着手するときは、対処の内容を ticket として起票してから着手する。起票の判断は agent が行い、起票のための追加確認はしない。ticket が作業ログの役割を兼ねる。起票本文と対処完了時の追記は「テンプレート」（ファイル形式）に従う。
+成果物を伴う作業（コード・ドキュメント・設定の変更、ファイル作成・削除、worktree 作業など）に着手するときは、対処の内容を ticket として起票してから着手する。起票の判断は agent が行い、起票のための追加確認はしない。ticket が作業ログの役割を兼ねる。起票時は `ticket_create` の `title` と `body` を分け、fs tools で直接起票するときはファイルテンプレートに従う。対処完了時の追記は「テンプレート」（ファイル形式）に従う。
 
 * 適用する: 成果物を伴う作業の着手。軽微な修正を含む。ticket は着手までの間 `open`、作業を始めた時点で `locked` にする
 * 適用しない: 読み取り専用の調査・検索・検証、質問・相談への回答
@@ -165,7 +165,7 @@ ticket を `closed` にするときは、依存されている ticket を探し�
 
 Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_create` / `ticket_update`）を使う。tool が無い harness では `ticket` CLI（`ticket list` / `ticket show` / `ticket create` / `ticket update`）を bash で実行する。いずれも使えない環境では fs tools でストアを直接読み書きする。
 
-* 起票は `ticket_create`（CLI: `ticket create`）。ID は採番されるため、呼び出し側が作るのはタイトル・本文・status・`depends_on` だけである。本文テンプレート（ファイル形式）は本文全文として組み立てて渡す
+* 起票は `ticket_create`（CLI: `ticket create`）。ID は採番されるため、`title`・`body`・status・依存関係の引数を分けて渡す。`body` には frontmatter と H1 を含めず、H1 の直後に置く本文だけを渡す。上記のファイルテンプレートは fs tools で直接起票するときだけ使う
 * status 変更・`depends_on` 変更・本文の更新は `ticket_update`（CLI: `ticket update`）。frontmatter は `metadata` でキー指定し、本文は `body` で全文置換する。`closed` への変更と対処記録の追記は、`ticket_show` で本文を読み、対処記録を足した本文全文を `body` に渡して 1 回の呼び出しで行う
 * `locked` への重複変更、存在しない `depends_on`、`open` かつ依存未解決は tool・CLI が検証して失敗する。失敗したら ticket を読み直して判断する
 * CLI と tool の振る舞いの正本は `~/.agents/cli/ticket.spec.md`（CLI）と `~/.agents/cli/ticket-tools.spec.md`（tool）である
