@@ -206,19 +206,19 @@
   "customLocalFormatters.formatters": [
     // stdin->stdout formatters. prettier resolves prettier-markdown-table from the global bun install.
     {
-      "command": "prettier --parser markdown --plugin=prettier-markdown-table",
+      "command": "~/.bun/bin/prettier --parser markdown --plugin=prettier-markdown-table",
       "languages": ["markdown"]
     },
     {
-      "command": "prettier --parser yaml",
+      "command": "~/.bun/bin/prettier --parser yaml",
       "languages": ["yaml"]
     },
     {
-      "command": "prettier --parser json",
+      "command": "~/.bun/bin/prettier --parser json",
       "languages": ["json"]
     },
     {
-      "command": "prettier --parser jsonc",
+      "command": "~/.bun/bin/prettier --parser jsonc",
       "languages": ["jsonc"]
     }
   ],
