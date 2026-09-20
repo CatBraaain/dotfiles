@@ -21,6 +21,7 @@ write:
       - ~/.bun/install/cache
       - ~/.bun/install/global
       - ~/.local/share/pnpm/store
+      - ~/.local/state/hyperframes
       - ~/.yarn/berry/cache
       - ~/.vite-plus/cache
       - ~/.vite-plus/package_manager
