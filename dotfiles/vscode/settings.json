@@ -127,8 +127,8 @@
   "emeraldwalk.runonsave": {
     "commands": [
       {
-        // "match": "settings.json|winget.ps1",
-        "match": "winget.ps1",
+        // "match": "settings.json|windows.ps1",
+        "match": "windows.ps1",
         "cmd": "keep-sorted ${file}"
       }
     ]

@@ -13,11 +13,11 @@ setup:
 
 [linux]
 install:
-  bun undotfiles/bootstrap/bootstrap.ts sync
+  bun undotfiles/install/linux.ts sync
 
 [windows]
 install:
-  gsudo pwsh undotfiles/winget.ps1
+  gsudo pwsh undotfiles/install/windows.ps1
 
 [linux]
 apply:

@@ -18,7 +18,7 @@ import {
   run,
   type Entry,
   type Runtime,
-} from "./bootstrap.ts";
+} from "./linux.ts";
 
 const stateCommands = [
   ["brew", "leaves"],
@@ -148,7 +148,7 @@ describe("CLI entrypoint", () => {
       assert.equal(configReads, 0);
       assert.deepEqual(runtime.commands, []);
       assert.deepEqual(runtime.errors, [
-        "usage: bun undotfiles/bootstrap/bootstrap.ts <sync|diff>",
+        "usage: bun undotfiles/install/linux.ts <sync|diff>",
       ]);
     }
   });
@@ -175,12 +175,12 @@ describe("CLI entrypoint", () => {
 
     assert.match(
       justfile,
-      /\n\[linux\]\ninstall:\n  bun undotfiles\/bootstrap\/bootstrap\.ts sync\n/,
+      /\n\[linux\]\ninstall:\n  bun undotfiles\/install\/linux\.ts sync\n/,
     );
   });
 
   it("declares bootstrap dependencies before their dependent entries", async () => {
-    const config = parseConfig(await Bun.file(new URL("./config.yaml", import.meta.url)).text());
+    const config = parseConfig(await Bun.file(new URL("./linux.config.yaml", import.meta.url)).text());
     const goRuntimeIndex = config.findIndex(
       (entry) => entry.key === "brew" && entry.value === "go",
     );

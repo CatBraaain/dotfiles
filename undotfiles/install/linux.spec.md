@@ -1,9 +1,9 @@
-# Bootstrap spec
+# Linux install spec
 
-`undotfiles/bootstrap/bootstrap.ts` の観測可能な振る舞いの仕様。対象は、BunでCLIを実行するときの、`undotfiles/bootstrap/config.yaml` に書かれた環境構成から、ホストのグローバルパッケージと指定コマンドの実行結果への同期である。読者は、このspecだけを読んで要件を承認するオーナーと、実装・テストの担当者。
+`undotfiles/install/linux.ts` の観測可能な振る舞いの仕様。対象は、BunでCLIを実行するときの、`undotfiles/install/linux.config.yaml` に書かれた環境構成から、ホストのグローバルパッケージと指定コマンドの実行結果への同期である。読者は、このspecだけを読んで要件を承認するオーナーと、実装・テストの担当者。
 
 - 対応プラットフォーム: Linux。
-- 実行形式: `bun undotfiles/bootstrap/bootstrap.ts <sync|diff>`。引数は`sync`または`diff`の1つだけを受け付ける。
+- 実行形式: `bun undotfiles/install/linux.ts <sync|diff>`。引数は`sync`または`diff`の1つだけを受け付ける。
 - 引数の省略または追加、`sync`・`diff`以外の引数は、使用法を出力して終了コード0以外で終了する。
 - `just install` は `sync` を実行する入口とする。`setup.sh`はBootstrapの外部呼び出し元であり、このspecの対象外とする。
 - パッケージ値はバージョン指定を含められる。Install / Ensure Phaseでは、宣言的Managerの各パッケージ値を、導入済みかどうかにかかわらずバックエンドのinstall操作へ渡す。`apt`と`flatpak`は未導入のパッケージだけをinstallする。バージョン指定がない値の最新化と、指定がある値への同期は、対象Managerの管理方式に従いバックエンドに委譲する。
@@ -11,7 +11,7 @@
 
 ## 設定
 
-設定ファイルは`bootstrap.ts`と同じディレクトリにある`config.yaml`である。トップレベルは配列で、各要素はキーが1つだけのマップとし、その値は1つの文字列とする。配列の順序はInstall / Ensure Phaseの実行順序を表す。
+設定ファイルは`linux.ts`と同じディレクトリにある`linux.config.yaml`である。トップレベルは配列で、各要素はキーが1つだけのマップとし、その値は1つの文字列とする。配列の順序はInstall / Ensure Phaseの実行順序を表す。
 
 | キー | 値 | 管理方式 |
 | --- | --- | --- |

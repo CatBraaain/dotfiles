@@ -21,6 +21,7 @@ rtk
 **/node_modules
 .pi/agent/extensions/*/index.test.ts
 **/SPEC.md
+**/*.spec.md
 .pi/agent/bun_install.spec.md
 .dsh/plugins/build.spec.md
 .dsh/test

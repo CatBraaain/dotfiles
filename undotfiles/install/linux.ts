@@ -68,7 +68,7 @@ const validKeys = new Set<Key>([
   "custom",
   "run",
 ]);
-const configPath = join(import.meta.dir, "config.yaml");
+const configPath = join(import.meta.dir, "linux.config.yaml");
 const androidSdkDir = join(homedir(), ".android-sdk");
 const flathubRepoUrl = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 export const openDesignDir = join(homedir(), "mirrors", "open-design");
@@ -547,7 +547,7 @@ export async function run(
 ): Promise<number> {
   const [command] = arguments_;
   if (arguments_.length !== 1 || (command !== "sync" && command !== "diff")) {
-    runtime.error("usage: bun undotfiles/bootstrap/bootstrap.ts <sync|diff>");
+    runtime.error("usage: bun undotfiles/install/linux.ts <sync|diff>");
     return 1;
   }
 

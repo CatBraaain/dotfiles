@@ -3,7 +3,7 @@ $codeExe = "C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\Code.exe"
 
 & runx $ahkExe --arg-line "\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\ScreenLock\ScreenLock.ahk"
 
-Invoke-Expression "pwsh -File \\wsl.localhost\Ubuntu\home\username\projects\dotfiles\undotfiles\winget.ps1"
+Invoke-Expression "pwsh -File \\wsl.localhost\Ubuntu\home\username\projects\dotfiles\undotfiles\install\windows.ps1"
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 Remove-Item "C:\Users\Public\Desktop\*.lnk" -Force
 

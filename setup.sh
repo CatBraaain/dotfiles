@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-shot setup for a fresh Linux machine: install the tools needed to run
 # this repo's TypeScript entry points (git, Homebrew, bun), clone the repo,
-# then hand over to undotfiles/bootstrap/bootstrap.ts (system packages) and `just apply`.
+# then hand over to undotfiles/install/linux.ts (system packages) and `just apply`.
 set -euo pipefail
 
 # Homebrew on Linux official installer default. Only this path is hardcoded:
@@ -38,10 +38,10 @@ if [[ ! -x "$BREW_BIN" ]]; then
 fi
 eval "$("$BREW_BIN" shellenv)"
 
-# bun runs bootstrap/bootstrap.ts and pre-chezmoi.ts. Also kept as a brew
-# formula in config.yaml; bootstrap keeps both paths in sync idempotently.
+# bun runs install/linux.ts and pre-chezmoi.ts. Also kept as a brew
+# formula in linux.config.yaml; install keeps both paths in sync idempotently.
 command -v bun >/dev/null 2>&1 || brew install bun
 
-bun undotfiles/bootstrap/bootstrap.ts sync
+bun undotfiles/install/linux.ts sync
 
 just apply
