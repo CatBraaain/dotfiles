@@ -83,6 +83,7 @@
 - run: "playwright-cli install-browser chrome-for-testing"
 
 # General CLI tools
+- apt: btop
 - brew: act
 - brew: cargo-binstall
 - brew: chezmoi
