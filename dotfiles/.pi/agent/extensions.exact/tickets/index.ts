@@ -116,8 +116,9 @@ export const ticketEditParameters = Type.Object({
     }),
   ),
   old: Type.String({
+    minLength: 1,
     description:
-      "Text to replace. Must appear exactly once in the body (the frontmatter is excluded, the H1 is included).",
+      "Text to replace. Must appear exactly once in the body (the frontmatter is excluded, the H1 is included). Call ticket_show first and copy old exactly, including line breaks.",
   }),
   new: Type.String({
     description: "Replacement text. An empty string deletes the matched text.",
@@ -176,7 +177,7 @@ export function buildSetArgs(params: TicketSetParams): string[] {
 export function buildEditArgs(params: TicketEditParams): string[] {
   if (params.old === "") throw new Error("ticket_edit: old must be a non-empty string");
   const selector = params.selector !== undefined ? [params.selector] : [];
-  return ["edit", ...selector, params.old, params.new, ...projectFlag(params.project)];
+  return ["edit", ...projectFlag(params.project), ...selector, "--", params.old, params.new];
 }
 
 // --- tool descriptions / prompt snippets (SPEC: 共通の振る舞い + per-tool notes) ---
@@ -208,6 +209,7 @@ export const ticketToolDescriptions = {
     "The CLI validates the update: after must exist and must not be closed or cancelled, and cycles fail without rewriting.",
   ticket_edit:
     "Edit a ticket's body via the `ticket edit` CLI subcommand and return the updated id, status, after, and path. " +
+    "Call ticket_show first and copy old exactly from its body, including line breaks. " +
     "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the body, so it can be replaced. " +
     "Zero or multiple occurrences of old fail without rewriting. " +
     "selector is a ticket ID, a unique prefix, or \"next\" (default); project selects the ticket store.",

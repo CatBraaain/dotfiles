@@ -202,18 +202,24 @@ describe("ticket_set args", () => {
 });
 
 describe("ticket_edit args", () => {
-  it("builds edit args without a selector (next)", () => {
-    assert.deepEqual(buildEditArgs({ old: "a", new: "b" }), ["edit", "a", "b"]);
+  it("builds edit args with an option terminator before old and new", () => {
+    assert.deepEqual(buildEditArgs({ old: "- old", new: "- new" }), [
+      "edit",
+      "--",
+      "- old",
+      "- new",
+    ]);
   });
 
-  it("combines selector, old, new, and project in CLI order", () => {
+  it("places project and selector before the option terminator", () => {
     assert.deepEqual(buildEditArgs({ selector: "abc", old: "a", new: "b", project: "proj" }), [
       "edit",
-      "abc",
-      "a",
-      "b",
       "--project",
       "proj",
+      "abc",
+      "--",
+      "a",
+      "b",
     ]);
   });
 
@@ -221,6 +227,7 @@ describe("ticket_edit args", () => {
     assert.deepEqual(buildEditArgs({ selector: "abc", old: "a", new: "" }), [
       "edit",
       "abc",
+      "--",
       "a",
       "",
     ]);
@@ -232,8 +239,18 @@ describe("ticket_edit args", () => {
 });
 
 describe("CLI invocation (SPEC: the CLI is spawned with --json)", () => {
-  it("ticketCliArgs appends --json to the tool args", () => {
+  it("appends --json to ordinary tool args", () => {
     assert.deepEqual(ticketCliArgs(["list"]), ["list", "--json"]);
+  });
+
+  it("places --json before an option terminator", () => {
+    assert.deepEqual(ticketCliArgs(["edit", "--", "- old", "- new"]), [
+      "edit",
+      "--json",
+      "--",
+      "- old",
+      "- new",
+    ]);
   });
 });
 
@@ -279,6 +296,8 @@ describe("tool descriptions", () => {
     assert.match(edit, /\bold\b/);
     assert.match(edit, /\bnew\b/);
     assert.match(edit, /selector/);
+    assert.match(edit, /ticket_show/);
+    assert.match(edit, /line breaks/);
   });
 
   it("describes ticket_set behavior: linkage, explicit status, closed release, and validation", () => {
@@ -346,6 +365,7 @@ describe("registration", () => {
 describe("tool parameter schemas (SPEC: ticket-tools.spec.md per-tool args)", () => {
   interface SchemaNode {
     type?: string;
+    minLength?: number;
     anyOf?: SchemaNode[];
     properties?: Record<string, SchemaNode>;
     items?: SchemaNode;
@@ -405,7 +425,9 @@ describe("tool parameter schemas (SPEC: ticket-tools.spec.md per-tool args)", ()
     assert.deepEqual(schema.required, ["old", "new"]);
     assertOptionalProps(schema, { selector: "string", project: "string" });
     assert.equal(schema.properties?.old?.type, "string");
+    assert.equal(schema.properties?.old?.minLength, 1);
     assert.equal(schema.properties?.new?.type, "string");
+    assert.equal(schema.properties?.new?.minLength, undefined);
   });
 });
 
@@ -455,6 +477,18 @@ describe("tool execute", () => {
     const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), { selector: "a" });
     assert.deepEqual(result.details, json);
     assert.deepEqual(result.content, [{ type: "text", text: formatTicketShow(json) }]);
+  });
+
+  it("ticket_show preserves trailing body whitespace for exact edits", () => {
+    const text = formatTicketShow({
+      id: "20260101-000000",
+      status: "open",
+      title: "A",
+      after: null,
+      path: "/p/a.md",
+      body: "ticket body  \n\n",
+    });
+    assert.match(text, /ticket body  \n\n$/);
   });
 
   it("ticket_create formats the runner JSON into content and returns it as details", async () => {
@@ -571,7 +605,7 @@ describe("tool execute", () => {
     assert.deepEqual(show.content, [
       {
         type: "text",
-        text: "20260101-000000\nstatus: open\nafter: 20260101-000001\n\n# A\n\nbody line",
+        text: "20260101-000000\nstatus: open\nafter: 20260101-000001\n\n# A\n\nbody line\n",
       },
     ]);
 
@@ -634,6 +668,21 @@ describe("lib runTicketCli real spawn (SPEC: common behavior)", () => {
       (error: unknown) => {
         assert.ok(error instanceof TicketCliError);
         assert.equal(error.stderr, "stub error: boom");
+        return true;
+      },
+    );
+  });
+
+  it("preserves trailing body whitespace in CLI stderr", async () => {
+    const cliPath = await installStub(
+      '#!/usr/bin/env bun\nprocess.stderr.write("error: body  \\n\\n"); process.exit(1);\n',
+      true,
+    );
+    await assert.rejects(
+      () => runTicketCli(["edit"], "/tmp", undefined, { cliPath }),
+      (error: unknown) => {
+        assert.ok(error instanceof TicketCliError);
+        assert.equal(error.stderr, "error: body  \n");
         return true;
       },
     );

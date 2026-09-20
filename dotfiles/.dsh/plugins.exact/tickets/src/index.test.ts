@@ -202,17 +202,29 @@ describe("argument mapping", () => {
     assert.throws(() => buildSetArgs({ selector: "x" }), /nothing to set/);
   });
 
-  it("buildEditArgs: edit with an optional selector, old, new, and project", () => {
-    assert.deepEqual(buildEditArgs({ old: "a", new: "b" }), ["edit", "a", "b"]);
+  it("buildEditArgs: edit uses an option terminator before old and new", () => {
+    assert.deepEqual(buildEditArgs({ old: "- old", new: "- new" }), [
+      "edit",
+      "--",
+      "- old",
+      "- new",
+    ]);
     assert.deepEqual(buildEditArgs({ selector: "x", old: "a", new: "b", project: "demo" }), [
       "edit",
-      "x",
-      "a",
-      "b",
       "--project",
       "demo",
+      "x",
+      "--",
+      "a",
+      "b",
     ]);
-    assert.deepEqual(buildEditArgs({ selector: "x", old: "a", new: "" }), ["edit", "x", "a", ""]);
+    assert.deepEqual(buildEditArgs({ selector: "x", old: "a", new: "" }), [
+      "edit",
+      "x",
+      "--",
+      "a",
+      "",
+    ]);
   });
 
   it("buildEditArgs: throws without a CLI run when old is empty", () => {
@@ -309,7 +321,7 @@ describe("tool execution", () => {
     const { runCli, calls } = fakeRunner(CREATED_JSON);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_edit");
     await tool.execute({ selector: "x", old: "a", new: "b" }, fakeExec("/w"));
-    assert.deepEqual(calls[0]?.[0], ["edit", "x", "a", "b"]);
+    assert.deepEqual(calls[0]?.[0], ["edit", "x", "--", "a", "b"]);
   });
 });
 
@@ -347,6 +359,8 @@ describe("tool descriptions", () => {
     const edit = descriptionOf("ticket_edit");
     assert.match(edit, /\bold\b/);
     assert.match(edit, /\bnew\b/);
+    assert.match(edit, /ticket_show/);
+    assert.match(edit, /line breaks/);
   });
 
   it("mentions the next-default selector for the selector-taking tools", () => {

@@ -72,10 +72,13 @@ function parseArgs(argv: string[], command: string): { flags: Flags; positional:
   if (!allowed) usageFail();
   const flags: Flags = { all: false, json: false, statuses: [] };
   const positional: string[] = [];
+  let optionsEnded = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const value = () => argv[++i] ?? usageFail();
-    if (arg === "-p" || arg === "--project") flags.project = value();
+    if (optionsEnded) positional.push(arg);
+    else if (arg === "--") optionsEnded = true;
+    else if (arg === "-p" || arg === "--project") flags.project = value();
     else if (arg === "-a" || arg === "--all") {
       if (!allowed.all) usageFail();
       flags.all = true;
@@ -446,7 +449,9 @@ async function editCommand(positional: string[], flags: Flags): Promise<void> {
   const { frontmatter, rest } = splitFrontmatter(await readFile(target.path, "utf8"));
   const body = rest.slice("\n---\n".length);
   const count = body.split(old).length - 1;
-  if (count !== 1) fail(`${target.id}: "${old}" appears ${count} times in the body`);
+  if (count !== 1) {
+    fail(`${target.id}: "${old}" appears ${count} times in the body\nCurrent body:\n${body}`);
+  }
   const updatedBody = body.replace(old, replacement);
   await writeFile(target.path, `${frontmatter}\n---\n${updatedBody}`);
   if (flags.json) {

@@ -128,7 +128,7 @@ export function buildSetArgs(args: TicketSetArgs): string[] {
 export function buildEditArgs(args: TicketEditArgs): string[] {
   if (args.old === "") throw new Error("old must be a non-empty string");
   const selector = args.selector !== undefined ? [args.selector] : [];
-  return ["edit", ...selector, args.old, args.new, ...projectFlag(args.project)];
+  return ["edit", ...projectFlag(args.project), ...selector, "--", args.old, args.new];
 }
 
 // --- execution helpers ---
@@ -191,6 +191,7 @@ const SET_DESCRIPTION =
 
 const EDIT_DESCRIPTION =
   "Edit one ticket's body (wraps `ticket edit`): returns the updated id, status, after, and path. " +
+  "Call ticket_show first and copy old exactly from its body, including line breaks. " +
   "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the " +
   "body, so it can be replaced. Zero or multiple occurrences of old fail without rewriting. " +
   "selector is a ticket id, a unique prefix, or \"next\" (default); project picks another store.";
@@ -310,7 +311,8 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         old: {
           type: "string",
           required: true,
-          description: "Text to replace; it must appear exactly once in the body.",
+          description:
+            "Non-empty text to replace; it must appear exactly once in the body. Call ticket_show first and copy it exactly, including line breaks.",
         },
         new: {
           type: "string",

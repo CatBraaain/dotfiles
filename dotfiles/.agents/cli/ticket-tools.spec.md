@@ -48,7 +48,7 @@ tool 結果の本文は LLM が読むテキストであり、pi では `details`
 
 | 条件・状態 | 操作 | 結果 |
 |---|---|---|
-| セレクタが ticket を特定する | `ticket_show` 呼び出し | ID・status・after・タイトル・本文を含むテキストを返す |
+| セレクタが ticket を特定する | `ticket_show` 呼び出し | ID・status・after・タイトル・本文を含むテキストを返す。本文の末尾空白・改行を保持する |
 | セレクタが特定できない・曖昧 | `ticket_show` 呼び出し | CLI のエラーを返す |
 
 ## `ticket_create`
@@ -76,10 +76,10 @@ LLM が操作の結果を判断できるよう、`ticket_set` の description �
 
 ## `ticket_edit`
 
-引数: `selector`（文字列、任意。省略時は `next`）、`old`（文字列、必須。空でない）、`new`（文字列、必須。空文字列は該当箇所の削除）、`project`（文字列、任意）
+引数: `selector`（文字列、任意。省略時は `next`）、`old`（空でない文字列、必須）、`new`（文字列、必須。空文字列は該当箇所の削除）、`project`（文字列、任意）
 
 | 条件・状態 | 操作 | 結果 |
 |---|---|---|
-| `old` が空でない | `ticket_edit` 呼び出し | CLI の `edit` を実行し、更新後の ticket の ID・status・after・path を返す。本文の部分置換・出現数の検証は CLI の仕様（`ticket.spec.md` の `ticket edit`）に従う |
+| `old` が空でない | `ticket_edit` 呼び出し | CLI の `edit` を実行し、更新後の ticket の ID・status・after・path を返す。本文の部分置換・出現数の検証は CLI の仕様（`ticket.spec.md` の `ticket edit`）に従う。`old`・`new` が `-` で始まっていても位置引数として渡す |
 | `old` が空 | `ticket_edit` 呼び出し | エラーを返す（CLI を起動しない） |
-| CLI が 0 回・2 回以上マッチで失敗した | `ticket_edit` 呼び出し | CLI のエラーテキストを返す |
+| CLI が 0 回・2 回以上マッチで失敗した | `ticket_edit` 呼び出し | 現在の本文全体を含む CLI のエラーテキストを返す |

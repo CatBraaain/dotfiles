@@ -38,7 +38,13 @@ export function ticketCliPath(): string {
 
 // Pure helper so tests can assert the --json flag without spawning the CLI.
 export function ticketCliArgs(args: string[]): string[] {
-  return [...args, "--json"];
+  const optionTerminator = args.indexOf("--");
+  if (optionTerminator === -1) return [...args, "--json"];
+  return [
+    ...args.slice(0, optionTerminator),
+    "--json",
+    ...args.slice(optionTerminator),
+  ];
 }
 
 // Injectable overrides for tests: the pi suite runs the real spawn against a
@@ -67,7 +73,7 @@ export function runTicketCli(
       { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
-          const stderrText = typeof stderr === "string" ? stderr.trim() : "";
+          const stderrText = typeof stderr === "string" ? stderr.replace(/\n$/, "") : "";
           if (typeof error.code === "number") {
             reject(new TicketCliError(stderrText, stderrText || `ticket exited with code ${error.code}`));
           } else {
@@ -97,7 +103,7 @@ export function formatTicketList(tickets: TicketFields[], all: boolean): string 
 }
 
 export function formatTicketShow(ticket: TicketWithBody): string {
-  return [ticket.id, `status: ${ticket.status}`, `after: ${ticket.after ?? "-"}`, ``, `# ${ticket.title}`, ``, ticket.body.trimEnd()].join("\n");
+  return [ticket.id, `status: ${ticket.status}`, `after: ${ticket.after ?? "-"}`, ``, `# ${ticket.title}`, ``, ticket.body].join("\n");
 }
 
 export function formatTicketCreated(ticket: TicketFields): string {
