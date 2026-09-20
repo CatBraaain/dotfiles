@@ -73,8 +73,8 @@
 | `bun` | 指定されたnpmパッケージに対して `bun add -g --silent` を実行する。`bun add` の installed 要約は出ない。 |
 | `cargo` | 指定されたRust binary crateに対して `cargo install --quiet` を実行する。既定のインストールルートにある導入済みcrateはCargoの判定に従って最新化または維持する。 |
 | `go` | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。 |
-| `brew` | 指定されたFormulaに対して `brew install --quiet` を実行する。already-installed 警告、reinstall 案内、Homebrew の進捗表示は出ない。 |
-| `brew-cask` | 指定されたCaskに対して `brew install --quiet --cask` を実行する。Not upgrading 警告と Homebrew の進捗表示は出ない。 |
+| `brew` | 指定されたFormulaに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet` を実行する。already-installed 警告、reinstall 案内、Homebrew の環境ヒントと進捗表示は出ない。 |
+| `brew-cask` | 指定されたCaskに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet --cask` を実行する。Not upgrading 警告、Homebrew の環境ヒントと進捗表示は出ない。 |
 | `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
 

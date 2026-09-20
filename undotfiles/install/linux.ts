@@ -267,10 +267,25 @@ export class Bootstrap {
           ]);
           return;
         case "brew":
-          this.runtime.execute(["brew", "install", "--quiet", ...batch.values]);
+          this.runtime.execute([
+            "env",
+            "HOMEBREW_NO_ENV_HINTS=1",
+            "brew",
+            "install",
+            "--quiet",
+            ...batch.values,
+          ]);
           return;
         case "brew-cask":
-          this.runtime.execute(["brew", "install", "--quiet", "--cask", ...batch.values]);
+          this.runtime.execute([
+            "env",
+            "HOMEBREW_NO_ENV_HINTS=1",
+            "brew",
+            "install",
+            "--quiet",
+            "--cask",
+            ...batch.values,
+          ]);
       }
     });
   }
