@@ -5,6 +5,7 @@
 - プラットフォーム: Windows（`process.platform === "win32"`）と、それ以外（Linux / macOS）の2種。
 - 経路表記: 本文のパスはリポジトリルートからの相対パス。
 - `*.machine.{json,yaml,toml}` は git 管理外（`.gitignore`）。`*.merge.{json,yaml,toml}` は git 管理する共有レイヤー。
+- `.wslconfig` は git 管理外のマシン固有ファイル、`.wslconfig.sample` は git 管理するサンプルである。`.wslconfig.sample` は chezmoi の展開対象外である。
 
 ## 変換の順序
 

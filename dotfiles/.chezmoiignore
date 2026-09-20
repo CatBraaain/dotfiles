@@ -1,3 +1,5 @@
+.wslconfig.sample
+
 {{- if ne .chezmoi.os "windows" }}
 gsudo
 obs-studio

@@ -3,6 +3,7 @@ node_modules
 
 dotfiles/.gitconfig.local
 dotfiles/.secrets.sh
+dotfiles/.wslconfig
 dotfiles/**/*.machine.json
 dotfiles/**/*.machine.yaml
 dotfiles/**/*.machine.toml
