@@ -29,6 +29,7 @@ import agentsExtension, {
   subagentSessionDir,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
+import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-format.ts";
 
 const config: AgentConfig = {
   default: "manager",
@@ -2906,6 +2907,27 @@ describe("subagent", () => {
       const result = await extension.executeSubagent({ agent: "worker", task: "work" });
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, "Child failed: child stderr\n");
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("長い stderr は末尾を残して親へ返す", async () => {
+    const extension = captureAgentsExtension();
+    const stderr = `head${"x".repeat(ERROR_OUTPUT_PREVIEW_LIMIT)}tail`;
+    extension.respondToChild((child) => {
+      child.stderr.emit("data", Buffer.from(stderr));
+      child.emit("close", 2);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
+      const output = result.content[0].text;
+      assert.equal(result.isError, true);
+      assert.ok(output.length <= `Child failed: `.length + ERROR_OUTPUT_PREVIEW_LIMIT);
+      assert.ok(output.includes("tail"));
+      assert.match(output, /Output truncated; showing the tail/);
+      assert.ok(!output.includes("head"));
     } finally {
       extension.restore();
     }

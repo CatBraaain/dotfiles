@@ -27,8 +27,19 @@ export const ASK_PERMISSION_TARGET_PREVIEW_LIMIT = 80;
 /** Preview limit for the user-entered denial reason shown in the ask_permission summary. */
 export const DENIED_REASON_PREVIEW_LIMIT = 80;
 
+export const ERROR_OUTPUT_PREVIEW_LIMIT = 2000;
+
+const ERROR_OUTPUT_TRUNCATION_MARKER = "\n\n[Output truncated; showing the tail.]";
+
 export function truncateText(text: string, limit = COMMAND_PREVIEW_LIMIT): string {
   return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+}
+
+export function truncateErrorOutput(text: string, limit = ERROR_OUTPUT_PREVIEW_LIMIT): string {
+  if (text.length <= limit) return text;
+
+  const tailLength = Math.max(0, limit - ERROR_OUTPUT_TRUNCATION_MARKER.length);
+  return `${text.slice(-tailLength)}${ERROR_OUTPUT_TRUNCATION_MARKER}`;
 }
 
 export function formatDuration(milliseconds: number): string {
@@ -166,7 +177,9 @@ export function formatToolResultSummary(
   options: { isError?: boolean; durationMs?: number },
   theme: ToolTheme,
 ): string | undefined {
-  if (options.isError) return theme.fg("error", resultText(result));
+  if (options.isError) {
+    return theme.fg("error", truncateErrorOutput(resultText(result)));
+  }
   switch (toolName) {
     case "bash":
       return theme.fg(

@@ -39,6 +39,7 @@ import {
 import {
   formatToolCall,
   formatToolResultSummary,
+  truncateErrorOutput,
   type ToolResultLike,
   type ToolTheme,
 } from "../shared/tool-format.ts";
@@ -468,7 +469,9 @@ function isFailedResult(result: ChildRun): boolean {
 
 function getResultOutput(result: ChildRun): string {
   if (isFailedResult(result)) {
-    return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+    return truncateErrorOutput(
+      result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)",
+    );
   }
   return getFinalOutput(result.messages) || "(no output)";
 }

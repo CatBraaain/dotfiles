@@ -6,11 +6,13 @@ import {
   CALL_PREVIEW_LIMIT,
   COMMAND_PREVIEW_LIMIT,
   DENIED_REASON_PREVIEW_LIMIT,
+  ERROR_OUTPUT_PREVIEW_LIMIT,
   formatFallbackCall,
   formatPath,
   formatToolCall,
   formatToolResultSummary,
   resultText,
+  truncateErrorOutput,
   type ToolTheme,
 } from "./tool-format.ts";
 
@@ -264,7 +266,7 @@ describe("formatToolResultSummary", () => {
     assert.equal(summary, "denied");
   });
 
-  it("エラー時は結果テキスト全体を返す", () => {
+  it("短いエラー時は結果テキスト全体を返す", () => {
     const summary = formatToolResultSummary(
       "read",
       { path: "a.ts" },
@@ -273,6 +275,36 @@ describe("formatToolResultSummary", () => {
       plainTheme,
     );
     assert.equal(summary, "File not found");
+  });
+
+  it("長いエラー時は末尾を残して2000文字以内に切り詰める", () => {
+    const output = `head${"x".repeat(ERROR_OUTPUT_PREVIEW_LIMIT)}tail`;
+    const summary = formatToolResultSummary(
+      "bash",
+      { command: "false" },
+      textResult(output),
+      { isError: true },
+      plainTheme,
+    );
+
+    assert.ok(summary);
+    assert.ok(summary.length <= ERROR_OUTPUT_PREVIEW_LIMIT);
+    assert.ok(summary.includes("tail"));
+    assert.match(summary, /Output truncated; showing the tail/);
+  });
+
+  it("エラー出力の短縮関数は短い入力を変更しない", () => {
+    assert.equal(truncateErrorOutput("short"), "short");
+  });
+
+  it("エラー出力の短縮関数は長い入力の末尾を残す", () => {
+    const output = `head${"x".repeat(ERROR_OUTPUT_PREVIEW_LIMIT)}tail`;
+    const truncated = truncateErrorOutput(output);
+
+    assert.ok(truncated.length <= ERROR_OUTPUT_PREVIEW_LIMIT);
+    assert.ok(truncated.endsWith("[Output truncated; showing the tail.]"));
+    assert.ok(truncated.includes("tail"));
+    assert.ok(!truncated.includes("head"));
   });
 
   it("未知ツールはサマリーを返さない", () => {
