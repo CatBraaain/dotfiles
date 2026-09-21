@@ -3,5 +3,10 @@ sourceDir: dist
 diff:
   exclude:
     - scripts
+  command: bun
+  args:
+    - scripts/chezmoi-diff.ts
+    - "{{ .Destination }}"
+    - "{{ .Target }}"
 
 persistentState: ~/.config/chezmoi/chezmoi.boltdb
