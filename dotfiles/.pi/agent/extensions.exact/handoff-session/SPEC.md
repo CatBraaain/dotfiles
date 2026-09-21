@@ -13,11 +13,13 @@
 
 `handoff` は続行目的、承認済みspecのパス、決定事項、作業・検証状態、未決事項、完了条件を含められる。ファイルパスを含める場合、次のagentはそのファイルを読んで続行する。
 
-## 収束ループ
+## 利用条件
 
-`handoff_session` はmain agentだけが使う。main agentは収束ループの開始時、ならびにseniorによるレビューまたは実装の完了時に呼び出す。オーナーが承認すると、新しいmain agentが次のphaseを別のseniorへ委譲する。
+`handoff_session` はmain agentだけが使う。コンテキストをリセットして長い次の作業phaseへ移る場合に限り、収束ループ開始前、またはseniorによるレビュー・実装の完了後に次の長いphaseがある場合に呼び出す。レビュー・実装の完了だけでは呼び出さない。
 
-収束条件を満たしたmain agentは、`handoff_session` を呼び出さずオーナーへ結果を報告する。
+`finish wt`・`discard` の承認待ち、ownerの判断待ち、単なる作業完了報告では呼び出さず、main agentは`Ready`または`Waiting`として通常の質問で終了する。オーナーが承認すると、新しいmain agentが次のphaseを別のseniorへ委譲する。
+
+収束条件を満たしたmain agentは、`handoff_session`を呼び出さずオーナーへ結果を報告する。
 
 ## セッション移行
 

@@ -4,6 +4,7 @@ import handoffSessionExtension, { HANDOFF_SESSION_COMMAND_NAME } from "./index";
 
 interface ToolDefinition {
   name: string;
+  description?: string;
   promptGuidelines?: string[];
   execute: (
     toolCallId: string,
@@ -59,11 +60,21 @@ describe("登録", () => {
     assert.deepEqual([...captured.commands.keys()], [HANDOFF_SESSION_COMMAND_NAME]);
   });
 
+  it("コンテキストリセット用途と承認待ちでの不使用をdescriptionに示す", () => {
+    const captured = captureExtension();
+    const description = captured.tools.get("handoff_session")!.description;
+    assert.match(description ?? "", /context reset/);
+    assert.match(description ?? "", /finish\/discard worktree approval/);
+    assert.match(description ?? "", /Ready or Waiting/);
+  });
+
   it("ツールに日本語の誘導文 promptGuidelines を1件持つ", () => {
     const captured = captureExtension();
     const guidelines = captured.tools.get("handoff_session")!.promptGuidelines;
     assert.equal(guidelines?.length, 1);
-    assert.match(guidelines![0]!, /handoff_session を使う/);
+    assert.match(guidelines![0]!, /handoff_session は/);
+    assert.match(guidelines![0]!, /長い次の作業 phase/);
+    assert.match(guidelines![0]!, /finish wt・discardの承認待ち/);
     assert.match(guidelines![0]!, /no\(<理由>\)/);
   });
 });
@@ -192,8 +203,7 @@ async function runCommand(
   const hasUI = overrides.hasUI ?? true;
   const hasSelect = overrides.hasSelect ?? true;
   const hasInput = overrides.hasInput ?? true;
-  const selectedOption =
-    "selectedOption" in overrides ? overrides.selectedOption : "Yes, handoff";
+  const selectedOption = "selectedOption" in overrides ? overrides.selectedOption : "Yes, handoff";
   const invocation: CommandInvocation = {
     confirmCalls: 0,
     confirmMessage: "",

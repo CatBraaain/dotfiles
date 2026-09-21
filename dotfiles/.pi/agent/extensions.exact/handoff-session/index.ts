@@ -33,11 +33,14 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
     name: "handoff_session",
     label: "Handoff Session",
     description:
-      "End the current session and move to a brand-new session after the owner confirms. " +
+      "Use this tool only when a context reset is needed before a substantial next work phase. " +
+      "Do not use it for ordinary completion reports, owner decisions, or finish/discard worktree approval; " +
+      "when only approval remains, report Ready or Waiting and ask normally. " +
+      "After the owner confirms, end the current session and move to a brand-new session. " +
       "reason explains why the current session ends; handoff is the natural-language prompt " +
       "automatically sent as the first user message of the new session.",
     promptGuidelines: [
-      "main agent は、収束ループを開始するとき、または senior によるレビューか実装が完了したときに handoff_session を使う。handoff には目的、spec・work ファイルのパス、決定事項、完了済みの作業と検証、未解決事項、次の phase の完了条件を含める。オーナーの承認後は新しい main agent として再開し、次の phase を別の senior に委譲する。確認UIで拒否された場合は、入力された理由を `no(<理由>)` として現在のagentへ返す。収束条件を満たしたときは handoff_session を使わず、オーナーへ結果を報告する。",
+      "handoff_session は、コンテキストをリセットして長い次の作業 phaseへ移るときだけ使う。収束ループ開始前、または実装・レビュー完了後に次の長い phaseがある場合が対象であり、実装・レビュー完了だけでは使わない。finish wt・discardの承認待ち、ownerの判断待ち、単なる作業完了報告では使わず、ReadyまたはWaitingとして通常の質問で終了する。handoffには目的、spec・workファイルのパス、決定事項、完了済みの作業と検証、未解決事項、次のphaseの完了条件を含める。オーナーの承認後は新しいmain agentとして再開し、次のphaseを別のseniorに委譲する。確認UIで拒否された場合は、入力された理由を `no(<理由>)` として現在のagentへ返す。",
     ],
     parameters: Type.Object({
       reason: Type.String({ description: "Why the current session ends (non-empty)" }),
