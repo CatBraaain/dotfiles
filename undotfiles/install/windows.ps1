@@ -33,7 +33,6 @@ $managedPackages = @(
     "Valve.Steam"
     # "StirlingTools.StirlingPDF"
     "Microsoft.Sysinternals.Autologon"
-    "Typeless SimplyCA.Typeless"
     "Devolutions.UniGetUI"
     "Microsoft.VisualStudioCode"
     "WinDirStat.WinDirStat"
@@ -54,7 +53,6 @@ $managedDevPackages = @(
     "OpenJS.NodeJS.LTS"
     "Microsoft.PowerShell" # windows
     "Canonical.Ubuntu" # windows
-    "twpayne.chezmoi"
     "GitHub.cli"
     "Microsoft.coreutils"
     "gerardog.gsudo" # windows
@@ -64,6 +62,7 @@ $managedDevPackages = @(
 )
 
 winget install "AutoHotkey.AutoHotkey" --silent --version 1.1.37.02 --no-upgrade --source winget
+winget install "twpayne.chezmoi" --scope machine --source winget
 winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
 winget install $managedDevPackages --source winget
