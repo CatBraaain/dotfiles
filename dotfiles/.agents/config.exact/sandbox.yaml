@@ -110,4 +110,4 @@ commands:
   - ask:
       - '^/mnt(?:/|\s|$)'
   - allow:
-      - '^/mnt/c/WINDOWS/system32/wsl\.exe(\s|$)'
+      - '(?i:^/mnt/c/WINDOWS/system32/wsl\.exe(\s|$))'
