@@ -1,3 +1,12 @@
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+import { statSync } from "node:fs";
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+import { mkdtemp, rm } from "node:fs/promises";
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+import { tmpdir } from "node:os";
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+import { join } from "node:path";
+
 declare const Bun: {
   file(path: string): { arrayBuffer(): Promise<ArrayBuffer> };
   which(command: string): string | null;
@@ -25,46 +34,107 @@ if (!destination || !target) {
 if (await filesDifferOnlyByIgnoredLineEndings(destination, target)) {
   process.exitCode = 0;
 } else {
-  const useDifftastic = Bun.which("difft") !== null;
-  const diff = Bun.spawn(
-    useDifftastic
-      ? [
-          "difft",
-          "--color=always",
-          "--display=inline",
-          "--skip-unchanged",
-          "--strip-cr=on",
-          "--syntax-highlight=on",
-          destination,
-          target,
-        ]
-      : [
-          "git",
-          "-c",
-          "core.safecrlf=false",
-          "diff",
-          "--no-index",
-          "--ignore-cr-at-eol",
-          "--color=always",
-          "--",
-          destination,
-          target,
-        ],
-    { stdout: "pipe", stderr: "inherit" },
+  const hasDirectoryInput =
+    isDirectoryPath(destination) || isDirectoryPath(target);
+  // chezmoi invokes the custom diff command for directory entries too, while
+  // difftastic accepts files only.
+  const useDifftastic = !hasDirectoryInput && Bun.which("difft") !== null;
+  const diffInputs = hasDirectoryInput
+    ? await prepareDirectoryInputs(destination, target)
+    : {
+        firstPath: destination,
+        secondPath: target,
+        cleanup: async () => {},
+      };
+  let exitCode: number;
+  try {
+    const diff = Bun.spawn(
+      useDifftastic
+        ? [
+            "difft",
+            "--color=always",
+            "--display=inline",
+            "--skip-unchanged",
+            "--strip-cr=on",
+            "--syntax-highlight=on",
+            diffInputs.firstPath,
+            diffInputs.secondPath,
+          ]
+        : [
+            "git",
+            "-c",
+            "core.safecrlf=false",
+            "-c",
+            "core.autocrlf=false",
+            "diff",
+            "--no-index",
+            "--ignore-cr-at-eol",
+            "--color=always",
+            "--",
+            diffInputs.firstPath,
+            diffInputs.secondPath,
+          ],
+      { stdout: "pipe", stderr: "inherit" },
+    );
+
+    const output = await new Response(diff.stdout).text();
+    const filteredOutput = useDifftastic
+      ? output
+      : output
+          .split(/\r?\n/)
+          .filter((line) => line !== "\\ No newline at end of file")
+          .join("\n");
+
+    process.stdout.write(filteredOutput);
+    exitCode = await diff.exited;
+  } finally {
+    await diffInputs.cleanup();
+  }
+
+  if (useDifftastic ? exitCode > 0 : exitCode > 1) process.exitCode = exitCode;
+}
+
+async function prepareDirectoryInputs(
+  firstPath: string,
+  secondPath: string,
+): Promise<{
+  firstPath: string;
+  secondPath: string;
+  cleanup: () => Promise<void>;
+}> {
+  const temporaryDirectories: string[] = [];
+  const inputPaths = await Promise.all(
+    [firstPath, secondPath].map(async (path) => {
+      if (isDirectoryPath(path) || !isNullDevice(path)) return path;
+      const emptyDirectory = await mkdtemp(join(tmpdir(), "chezmoi-diff-"));
+      temporaryDirectories.push(emptyDirectory);
+      return emptyDirectory;
+    }),
   );
 
-  const output = await new Response(diff.stdout).text();
-  const filteredOutput = useDifftastic
-    ? output
-    : output
-        .split(/\r?\n/)
-        .filter((line) => line !== "\\ No newline at end of file")
-        .join("\n");
+  return {
+    firstPath: inputPaths[0],
+    secondPath: inputPaths[1],
+    cleanup: async () => {
+      await Promise.all(
+        temporaryDirectories.map((path) =>
+          rm(path, { recursive: true, force: true }),
+        ),
+      );
+    },
+  };
+}
 
-  process.stdout.write(filteredOutput);
+function isNullDevice(path: string): boolean {
+  return path === "/dev/null" || path.toUpperCase() === "NUL";
+}
 
-  const exitCode = await diff.exited;
-  if (useDifftastic ? exitCode > 0 : exitCode > 1) process.exitCode = exitCode;
+function isDirectoryPath(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 async function filesDifferOnlyByIgnoredLineEndings(
