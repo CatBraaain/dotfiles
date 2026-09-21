@@ -36,6 +36,216 @@ import net from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+type CamoufoxFailureKind = "challenge" | "recoverable-render" | "other";
+
+export function classifyCamoufoxFailure(message: string): CamoufoxFailureKind {
+  if (
+    message === "parse: captcha detected" ||
+    message === "render: challenge detected"
+  ) {
+    return "challenge";
+  }
+  if (
+    message.startsWith("render:") &&
+    /aborted|closed|connection|disconnected|timed? out|timeout/i.test(message)
+  ) {
+    return "recoverable-render";
+  }
+  return "other";
+}
+
+export function camoufoxFailureKind(error: unknown): CamoufoxFailureKind {
+  return classifyCamoufoxFailure(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+interface CamoufoxRetryDecision {
+  readonly kind: CamoufoxFailureKind;
+  readonly shouldRetry: boolean;
+  readonly consumesRecoveryBudget: boolean;
+}
+
+export function decideCamoufoxRetry(
+  error: unknown,
+  backendAlreadyRetried: boolean,
+): CamoufoxRetryDecision {
+  const kind = camoufoxFailureKind(error);
+  return {
+    kind,
+    consumesRecoveryBudget: kind === "recoverable-render",
+    shouldRetry: !backendAlreadyRetried && kind !== "other",
+  };
+}
+
+export function isCamoufoxServerCommand(
+  args: readonly string[],
+  scriptPath: string,
+  serverSubcommand: string,
+): boolean {
+  return args[1] === scriptPath && args[2] === serverSubcommand;
+}
+
+export function lockedBrowseArgs(
+  lockedSubcommand: string,
+  args: readonly string[],
+): string[] {
+  return [lockedSubcommand, ...args];
+}
+
+type Attempt =
+  | {
+      readonly backend: string;
+      readonly ok: true;
+      readonly durationMs?: number;
+    }
+  | {
+      readonly backend: string;
+      readonly ok: false;
+      readonly error: string;
+      readonly durationMs?: number;
+    };
+
+type BackendEntry<T = string> = readonly [name: string, run: () => Promise<T>];
+type BackendOperation = "web search" | "web fetch";
+
+interface RetryPreparation {
+  readonly shouldRetry: boolean;
+  readonly consumesRecoveryBudget: boolean;
+}
+
+interface CamoufoxRecoveryActions {
+  readonly isServerResponsive: () => Promise<boolean>;
+  readonly restartServer: () => Promise<void>;
+}
+
+export async function prepareCamoufoxRetry(
+  error: unknown,
+  recoveryRetries: number,
+  actions: CamoufoxRecoveryActions,
+): Promise<RetryPreparation> {
+  const failureKind = camoufoxFailureKind(error);
+  if (failureKind === "challenge") {
+    return { shouldRetry: true, consumesRecoveryBudget: false };
+  }
+  if (failureKind !== "recoverable-render") {
+    return { shouldRetry: false, consumesRecoveryBudget: false };
+  }
+  if (await actions.isServerResponsive()) {
+    return { shouldRetry: true, consumesRecoveryBudget: false };
+  }
+  if (recoveryRetries > 0) {
+    return { shouldRetry: false, consumesRecoveryBudget: false };
+  }
+  await actions.restartServer();
+  return { shouldRetry: true, consumesRecoveryBudget: true };
+}
+
+type RetryHook = (
+  error: unknown,
+  recoveryRetries: number,
+) => Promise<RetryPreparation>;
+
+function renderAbortHint(attempts: readonly Attempt[]): string {
+  const renderAborted = attempts.some(
+    (attempt) =>
+      !attempt.ok &&
+      attempt.error.startsWith("render:") &&
+      /aborted/i.test(attempt.error),
+  );
+  return renderAborted
+    ? `\nHint: automatic render recovery did not resolve the failure. Run \`browse restart\` to recover the camoufox server.`
+    : "";
+}
+
+class AllBackendsFailedError extends Error {
+  constructor(
+    readonly operation: BackendOperation,
+    readonly attempts: Attempt[],
+  ) {
+    super(
+      `All ${operation} backends failed: ${attempts
+        .filter((attempt) => !attempt.ok)
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join("; ")}${renderAbortHint(attempts)}`,
+    );
+  }
+}
+
+export async function tryRecoveryBackends<T>(
+  operation: BackendOperation,
+  backends: readonly BackendEntry<T>[],
+  isEmpty: (payload: T) => boolean,
+  shouldRetry?: (error: unknown) => boolean,
+  beforeRetry?: RetryHook,
+): Promise<{ payload: T; backend: string; attempts: Attempt[] }> {
+  const attempts: Attempt[] = [];
+  let recoverableRenderRetries = 0;
+  for (const [name, run] of backends) {
+    let challengeRetried = false;
+    let recoverableRenderRetried = false;
+    while (true) {
+      const startedAt = Date.now();
+      try {
+        const payload = await run();
+        if (isEmpty(payload)) throw new Error("empty response");
+        attempts.push({
+          backend: name,
+          ok: true,
+          durationMs: Date.now() - startedAt,
+        });
+        return { payload, backend: name, attempts };
+      } catch (error) {
+        attempts.push({
+          backend: name,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          durationMs: Date.now() - startedAt,
+        });
+        const failureKind = camoufoxFailureKind(error);
+        const alreadyRetried =
+          failureKind === "challenge"
+            ? challengeRetried
+            : failureKind === "recoverable-render"
+              ? recoverableRenderRetried
+              : true;
+        const retryDecision = decideCamoufoxRetry(error, alreadyRetried);
+        if (!retryDecision.shouldRetry || !shouldRetry?.(error)) break;
+        let preparation: RetryPreparation = {
+          shouldRetry: true,
+          consumesRecoveryBudget: retryDecision.consumesRecoveryBudget,
+        };
+        try {
+          if (beforeRetry) {
+            preparation = await beforeRetry(error, recoverableRenderRetries);
+          }
+        } catch (recoveryError) {
+          attempts.push({
+            backend: `${name} recovery`,
+            ok: false,
+            error:
+              recoveryError instanceof Error
+                ? recoveryError.message
+                : String(recoveryError),
+          });
+          break;
+        }
+        if (!preparation.shouldRetry) break;
+        if (failureKind === "challenge") challengeRetried = true;
+        if (failureKind === "recoverable-render") {
+          recoverableRenderRetried = true;
+        }
+        if (preparation.consumesRecoveryBudget) recoverableRenderRetries += 1;
+      }
+    }
+  }
+  throw new AllBackendsFailedError(operation, attempts);
+}
+
+export function recoveryAttemptDuration(attempts: readonly Attempt[]): number {
+  const last = attempts.at(-1);
+  return last?.ok ? (last.durationMs ?? 0) : 0;
+}
 
 const SEARCH_RESULT_LIMIT = 10;
 
@@ -50,12 +260,14 @@ const SERVER_STOP_TIMEOUT_MS = 10_000;
 
 const SERVER_HEALTH_POLL_INTERVAL_MS = 250;
 const WEBSOCKET_HEALTH_TIMEOUT_MS = 1_000;
+const FUNCTIONAL_HEALTH_TIMEOUT_MS = 5_000;
 const CAMOUFOX_DEFAULT_BASE_URL = "ws://127.0.0.1:9378/camoufox";
 const CAMOUFOX_EXECUTABLE_PATH =
   process.env.CAMOUFOX_EXECUTABLE_PATH ?? join(homedir(), ".cache", "camoufox", "camoufox-bin");
 const OPENSERP_DEFAULT_BASE_URL = "http://127.0.0.1:7000";
 const CAMOUFOX_SEARCH_SESSION_KEY = "web-search";
 const CAMOUFOX_FETCH_SESSION_KEY = "web-fetch";
+const CAMOUFOX_HEALTH_SESSION_KEY = "web-health";
 const SERVER_SUBCOMMAND = "__server";
 
 // --- CLI plumbing ---
@@ -74,25 +286,30 @@ function emitJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
-// Cross-process serialization (spec: "同一種類のコマンドが同時に起動された").
-// The whole command re-executes as a child of `flock`, so the kernel releases
-// the lock even when the holder crashes; the lock file itself is only an
-// anchor and may stay behind. Search and fetch use separate lock files, so
-// they never wait for each other.
-const LOCK_HELD_ENV = "BROWSE_LOCK_HELD";
+// Cross-process serialization protects the shared Camoufox server. The whole
+// command re-executes as a child of `flock`, so the kernel releases the lock
+// even when the holder crashes; the lock file is only an anchor and may stay
+// behind. A single lock also prevents search/fetch and start/restart races.
+const LOCKED_SUBCOMMAND = "__locked";
+const CAMOUFOX_LOCK_FILE = "camoufox.lock";
 
-async function runSerialized(kind: "search" | "fetch", run: () => Promise<void>): Promise<void> {
-  if (process.env[LOCK_HELD_ENV]) return run();
+async function runSerialized(run: () => Promise<void>): Promise<void> {
+  if (process.argv[2] === LOCKED_SUBCOMMAND) return run();
   const stateDirPath = stateDir();
-  const lockPath = join(stateDirPath, `${kind}.lock`);
+  const lockPath = join(stateDirPath, CAMOUFOX_LOCK_FILE);
   // flock(1) does not create the lock file's parent directory.
   mkdirSync(stateDirPath, { recursive: true });
   const result = spawnSync(
     "flock",
-    [lockPath, process.execPath, import.meta.path, ...process.argv.slice(2)],
+    [
+      lockPath,
+      process.execPath,
+      import.meta.path,
+      ...lockedBrowseArgs(LOCKED_SUBCOMMAND, process.argv.slice(2)),
+    ],
     {
       stdio: "inherit",
-      env: { ...process.env, [LOCK_HELD_ENV]: "1" },
+      env: process.env,
     },
   );
   if (result.error) return run(); // flock(1) unavailable (e.g. Windows): run unlocked
@@ -179,7 +396,9 @@ function isAbsoluteUrl(raw: string): boolean {
 // --- subcommand dispatch ---
 
 async function main(): Promise<void> {
-  const [subcommand, ...rest] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const [subcommand, ...rest] =
+    args[0] === LOCKED_SUBCOMMAND ? args.slice(1) : args;
   switch (subcommand) {
     case "search":
       await searchCommand(rest);
@@ -189,11 +408,11 @@ async function main(): Promise<void> {
       break;
     case "start":
       if (rest.length > 0) usageFail(USAGE);
-      await startCommand();
+      await runSerialized(startCamoufoxServer);
       break;
     case "restart":
       if (rest.length > 0) usageFail(USAGE);
-      await restartCommand();
+      await runSerialized(restartCamoufoxServer);
       break;
     case "display":
       displayCommand(rest);
@@ -208,7 +427,7 @@ async function main(): Promise<void> {
 
 async function searchCommand(argv: string[]): Promise<void> {
   const args = parseSearchArgs(argv);
-  await runSerialized("search", async () => {
+  await runSerialized(async () => {
     const outcome = await searchOne(args.query, args.lang);
     if (args.json) emitJson(searchJson(args.query, outcome));
     else console.log(formatSearchMarkdown(args.query, outcome));
@@ -218,7 +437,7 @@ async function searchCommand(argv: string[]): Promise<void> {
 async function fetchCommand(argv: string[]): Promise<void> {
   const args = parseFetchArgs(argv);
   if (!isAbsoluteUrl(args.url)) fail(`not an absolute URL: ${args.url}`);
-  await runSerialized("fetch", async () => {
+  await runSerialized(async () => {
     const outcome = await fetchOne(args.url);
     if (args.json) emitJson(fetchJson(args.url, outcome));
     else console.log(outcome.markdown);
@@ -226,7 +445,7 @@ async function fetchCommand(argv: string[]): Promise<void> {
 }
 
 // Spec: `browse start` は冪等。起動済みなら何もせず終了コード 0。
-async function startCommand(): Promise<void> {
+async function startCamoufoxServer(): Promise<void> {
   const baseUrl = camoufoxBaseUrl();
   const signal = AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS);
   if (await camoufoxServerHealthy(baseUrl, signal)) return;
@@ -235,9 +454,9 @@ async function startCommand(): Promise<void> {
 }
 
 // Spec: `browse restart` は実行中の server を停止してから起動し直す。
-async function restartCommand(): Promise<void> {
+async function restartCamoufoxServer(): Promise<void> {
   await stopCamoufoxServers();
-  await startCommand();
+  await startCamoufoxServer();
 }
 
 function displayCommand(argv: string[]): void {
@@ -351,7 +570,7 @@ const SEARCH_ENGINES: readonly SearchEngine[] = ["google", "duckduckgo", "bing"]
 
 // Spec: "engine を google → duckduckgo → bing の順で試行し、最初に成功した
 // engine の結果上位 10 件を出力する"。空結果・captcha・challenge は backend
-// 失敗として次の engine へ進む（tryBackends）。
+// 失敗として次の engine へ進む（tryRecoveryBackends）。
 async function searchOne(query: string, lang?: string): Promise<SearchOutcome> {
   const backends: BackendEntry<{ engine: SearchEngine; results: OpenserpSearchResult[] }>[] =
     SEARCH_ENGINES.map((engine) => [
@@ -364,13 +583,18 @@ async function searchOne(query: string, lang?: string): Promise<SearchOutcome> {
         ),
       }),
     ]);
-  const { payload, attempts } = await tryBackends(
+  const { payload, attempts } = await tryRecoveryBackends(
     "web search",
     backends,
     (payload) => payload.results.length === 0,
-    retryOnChallenge,
+    shouldRetryCamoufox,
+    recoverCamoufoxBeforeRetry,
   );
-  return { engine: payload.engine, results: payload.results, tookMs: attemptDuration(attempts) };
+  return {
+    engine: payload.engine,
+    results: payload.results,
+    tookMs: recoveryAttemptDuration(attempts),
+  };
 }
 
 // --- fetch pipeline ---
@@ -395,27 +619,36 @@ interface FetchOutcome {
 }
 
 async function fetchOne(url: string): Promise<FetchOutcome> {
-  const { payload, backend, attempts } = await tryBackends(
+  const { payload, backend, attempts } = await tryRecoveryBackends(
     "web fetch",
     defaultFetchBackends(url),
     (markdown) => !markdown.trim(),
-    retryOnChallenge,
+    shouldRetryCamoufox,
+    recoverCamoufoxBeforeRetry,
   );
   const fallbacks = attempts
     .filter((attempt): attempt is Extract<Attempt, { readonly ok: false }> => !attempt.ok)
     .map(({ backend: failedBackend, error }) => ({ backend: failedBackend, error }));
-  return { backend, markdown: payload, tookMs: attemptDuration(attempts), fallbacks };
+  return {
+    backend,
+    markdown: payload,
+    tookMs: recoveryAttemptDuration(attempts),
+    fallbacks,
+  };
 }
 
-// Spec: "challenge / captcha を検出した → 同一 backend を 1 回だけ再試行し、
-// それでも失敗したら次の backend へ進む"。
-function retryOnChallenge(error: unknown): boolean {
-  return isCaptchaParseError(error) || isChallengeRenderError(error);
+function shouldRetryCamoufox(error: unknown): boolean {
+  return camoufoxFailureKind(error) !== "other";
 }
 
-function attemptDuration(attempts: readonly Attempt[]): number {
-  const last = attempts.at(-1);
-  return last?.ok ? (last.durationMs ?? 0) : 0;
+function recoverCamoufoxBeforeRetry(
+  error: unknown,
+  recoveryRetries: number,
+): Promise<RetryPreparation> {
+  return prepareCamoufoxRetry(error, recoveryRetries, {
+    isServerResponsive: camoufoxServerResponsive,
+    restartServer: restartCamoufoxServer,
+  });
 }
 
 async function camoufoxFetch(url: string): Promise<string> {
@@ -765,6 +998,36 @@ function camoufoxServerHealthy(baseUrl: string, signal: AbortSignal): Promise<bo
   });
 }
 
+async function camoufoxServerResponsive(): Promise<boolean> {
+  const deadline = Date.now() + FUNCTIONAL_HEALTH_TIMEOUT_MS;
+  const remainingSignal = (): AbortSignal =>
+    AbortSignal.timeout(Math.max(1, deadline - Date.now()));
+  const baseUrl = camoufoxBaseUrl();
+  if (!(await camoufoxServerHealthy(baseUrl, remainingSignal()))) return false;
+  syncPlaywrightCliConfig();
+  try {
+    await runPlaywrightCli(
+      CAMOUFOX_HEALTH_SESSION_KEY,
+      ["close"],
+      remainingSignal(),
+    ).catch(() => {});
+    await runPlaywrightCli(
+      CAMOUFOX_HEALTH_SESSION_KEY,
+      ["open", "about:blank"],
+      remainingSignal(),
+    );
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await runPlaywrightCli(
+      CAMOUFOX_HEALTH_SESSION_KEY,
+      ["close"],
+      remainingSignal(),
+    ).catch(() => {});
+  }
+}
+
 // --- server bootstrap (health check -> spawn -> wait) ---
 
 async function ensureCamoufoxServer(signal: AbortSignal): Promise<void> {
@@ -772,7 +1035,7 @@ async function ensureCamoufoxServer(signal: AbortSignal): Promise<void> {
   if (await camoufoxServerHealthy(baseUrl, signal)) return;
   // The start subcommand owns the server launch recipe; wait here for the
   // server it brings up.
-  spawnBrowseDetached(["start"]);
+  spawnBrowseDetached([LOCKED_SUBCOMMAND, "start"]);
   await waitForServerHealthy(baseUrl, signal);
 }
 
@@ -1181,11 +1444,9 @@ function processAlive(pid: number): boolean {
 }
 
 // Identify the server processes to stop: the pid file is the primary record,
-// and pgrep sweeps of the exact "<script> __server" command line catch
-// servers whose pid file was lost. Search/fetch processes never match the
-// pattern (their command line names a different subcommand). The legacy
-// `bun server.mjs` sweep is transitional: it also stops pre-browse servers
-// started by the old web-search / web-fetch CLI layout.
+// and a pgrep sweep of the exact "<script> __server" command line catches
+// current servers whose pid file was lost. Search/fetch processes never match
+// the pattern because their command line names a different subcommand.
 function camoufoxServerPids(): number[] {
   const pids = new Set<number>();
   const pidFilePid = readServerPidFile();
@@ -1196,24 +1457,41 @@ function camoufoxServerPids(): number[] {
   ) {
     pids.add(pidFilePid);
   }
-  for (const pattern of [`${import.meta.path} ${SERVER_SUBCOMMAND}`, "bun server.mjs"]) {
+  for (const pattern of [`${import.meta.path} ${SERVER_SUBCOMMAND}`]) {
     const sweep = spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" });
     if (sweep.status !== 0) continue;
     for (const line of sweep.stdout.split("\n")) {
       const pid = Number.parseInt(line, 10);
-      if (Number.isInteger(pid) && pid !== process.pid) pids.add(pid);
+      if (
+        Number.isInteger(pid) &&
+        pid !== process.pid &&
+        looksLikeCamoufoxServer(pid)
+      ) {
+        pids.add(pid);
+      }
     }
   }
   return [...pids];
 }
 
 // A recycled pid must never be killed: on Linux verify the command line still
-// names the server mode; elsewhere fall back to the alive check alone.
+// names this browse script and the server mode; elsewhere fall back to the
+// alive check alone.
 function looksLikeCamoufoxServer(pid: number): boolean {
   if (process.platform !== "linux") return processAlive(pid);
   try {
-    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
-    return cmdline.replaceAll("\0", " ").includes(SERVER_SUBCOMMAND);
+    const args = readFileSync(`/proc/${pid}/cmdline`, "utf8")
+      .split("\0")
+      .filter(Boolean);
+    const scriptPath = realpathSync(import.meta.path);
+    const normalizedArgs = args.map((arg) => {
+      try {
+        return realpathSync(arg);
+      } catch {
+        return arg;
+      }
+    });
+    return isCamoufoxServerCommand(normalizedArgs, scriptPath, SERVER_SUBCOMMAND);
   } catch {
     return false;
   }
@@ -1635,81 +1913,6 @@ function buildPlaywrightCliArgs(sessionKey: string, args: readonly string[]): st
   return [`-s=${sessionKey}`, ...args];
 }
 
-type Attempt =
-  | { readonly backend: string; readonly ok: true; readonly durationMs?: number }
-  | {
-      readonly backend: string;
-      readonly ok: false;
-      readonly error: string;
-      readonly durationMs?: number;
-    };
-
-type BackendEntry<T = string> = readonly [name: string, run: () => Promise<T>];
-type BackendOperation = "web search" | "web fetch";
-
-function renderAbortHint(attempts: readonly Attempt[]): string {
-  const renderAborted = attempts.some(
-    (attempt) =>
-      !attempt.ok && attempt.error.startsWith("render:") && /aborted/i.test(attempt.error),
-  );
-  return renderAborted
-    ? `\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Run \`browse restart\` to recover (it stops and respawns the server).`
-    : "";
-}
-
-class AllBackendsFailedError extends Error {
-  constructor(
-    readonly operation: BackendOperation,
-    readonly attempts: Attempt[],
-  ) {
-    super(
-      `All ${operation} backends failed: ${attempts
-        .filter((attempt) => !attempt.ok)
-        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-        .join("; ")}${renderAbortHint(attempts)}`,
-    );
-  }
-}
-
-function isCaptchaParseError(error: unknown): boolean {
-  return error instanceof Error && error.message === "parse: captcha detected";
-}
-
-function isChallengeRenderError(error: unknown): boolean {
-  return error instanceof Error && error.message === "render: challenge detected";
-}
-
-async function tryBackends<T>(
-  operation: BackendOperation,
-  backends: readonly BackendEntry<T>[],
-  isEmpty: (payload: T) => boolean,
-  shouldRetry?: (error: unknown) => boolean,
-): Promise<{ payload: T; backend: string; attempts: Attempt[] }> {
-  const attempts: Attempt[] = [];
-  for (const [name, run] of backends) {
-    let retried = false;
-    while (true) {
-      const startedAt = Date.now();
-      try {
-        const payload = await run();
-        if (isEmpty(payload)) throw new Error("empty response");
-        attempts.push({ backend: name, ok: true, durationMs: Date.now() - startedAt });
-        return { payload, backend: name, attempts };
-      } catch (error) {
-        attempts.push({
-          backend: name,
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          durationMs: Date.now() - startedAt,
-        });
-        if (retried || !shouldRetry?.(error)) break;
-        retried = true;
-      }
-    }
-  }
-  throw new AllBackendsFailedError(operation, attempts);
-}
-
 type SearchEngine = "bing" | "duckduckgo" | "google";
 
 const SERP_BASE_URL: Record<SearchEngine, string> = {
@@ -1791,6 +1994,8 @@ async function responseDetail(response: Response): Promise<string> {
     : `${response.status} ${response.statusText}`;
 }
 
-await main().catch((error: unknown) => {
-  fail(error instanceof Error ? error.message : String(error));
-});
+if (import.meta.main) {
+  await main().catch((error: unknown) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
+}

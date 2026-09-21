@@ -22,7 +22,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - camoufox server と `browse start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
 - camoufox server は起動してポートの待受を確立した時点で、自身の PID を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/camoufox-server.pid` へ書く
 - playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search`、フェッチが `web-fetch` で、各実行の冒頭と終了時にセッションを閉じる
-- 同一種類コマンド間の直列化は `flock(1)` に依存する（ロック種別は search と fetch）。`flock(1)` を利用できない環境では待ち合わせせずに実行する
+- `search`・`fetch`・`start`・`restart` のCamoufox操作は共有ロックで直列化する。ロックは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する
 
 ## 共通の振る舞い
 
@@ -31,9 +31,10 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | `--json` がある | 成功時 | 単一の JSON を stdout へ出力する（jq でパース可能） |
 | `--json` がない | 成功時 | markdown を stdout へ出力する |
 | すべての backend が失敗した | 実行 | `All <operation> backends failed: <backend>: <error>; ...`（`<operation>` は `web search` または `web fetch`）を 1 行 stderr へ出力し、終了コード 1 で終わる |
-| render が abort され camoufox server が healthy に見える | エラー出力 | `All ... failed` 行の次行へ `Hint: ...` 形式で、server が hang している可能性と `browse restart` による復旧を案内する（stderr は 2 行になる） |
-| challenge / captcha を検出した | 実行 | 同一 backend を 1 回だけ再試行し、それでも失敗したら次の backend へ進む |
-| 同一種類のコマンドが同時に起動された | 実行 | 先に開始した実行の完了を待つ（検索とフェッチは互いに待たない） |
+| render が abort される | 実行 | ページopen・closeによる機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で手動の `browse restart` を案内する |
+| challenge / captcha を検出した | 実行 | 同一 backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
+| Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを1回だけ再起動してから新しいsessionで同じbackendを再試行する。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
+| `search` または `fetch` が同時に起動された | 実行 | Camoufoxを使う処理を共有ロックで直列化し、先に開始した実行の完了を待つ。Reddit / StackOverflowの専用経路もコマンド単位では待ち合わせる |
 | サブコマンドがない・未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード 1 で終わる |
 | 未知のフラグを渡した | 実行 | 対象サブコマンドの usage 行を stderr へ出力し、終了コード 1 で終わる |
 | 必須引数が不足している（位置引数 0 個） | 実行 | 対象サブコマンドの usage 行を stderr へ出力し、終了コード 1 で終わる |
@@ -51,6 +52,8 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | ページ open・ナビゲーション・DOM 取得 | 30 秒 |
 | openserp パース・trafilatura 変換・Reddit の各要求・StackOverflow の各要求 | 15 秒 |
 | challenge 検出待ち | networkidle 待ち 5 秒・上限 5 秒（250ms 間隔で DOM ポーリング） |
+| server機能ヘルスチェック | ページopen・closeを含めて5秒 |
+| 再試行 | 1コマンドあたりserver復旧を伴う再試行は1回。challengeの再試行はbackendごとに1回 |
 
 challenge / captcha の検出は、Cloudflare 系シグナルと Google 固定ページ（CAPTCHA/sorry、JS リトライのみの soft block）の構造シグナルで行い、ロケール依存の文言は使わない。
 
@@ -71,7 +74,7 @@ hang した camoufox server の復旧用に、実行中の server を停止し�
 
 | 条件・状態 | 操作 | 結果 |
 |---|---|---|
-| 実行 | 停止 | 停止対象は常に「PID ファイルの対象（Linux では `/proc/<pid>/cmdline` で再利用された PID でないことを検証する）」と「`pgrep -f` 掃引（`<browse スクリプト> __server` と移行期間中の旧構成 `bun server.mjs`）」の和集合である。対象へ SIGTERM を送り、10 秒以内に終了しなければ SIGKILL する |
+| 実行 | 停止 | 停止対象は常に「PID ファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である。対象へ SIGTERM を送り、10 秒以内に終了しなければ SIGKILL する |
 | 停止後 | 実行 | `browse start` と同じ手順で起動し直し、ready を待つ |
 | 実行中の server が無い | 実行 | 停止を飛ばして `browse start` の手順で起動する |
 
@@ -124,6 +127,7 @@ server は SIGINT / SIGTERM を受け取ったとき、PID ファイルから自
 | 引数あり | 検索実行 | engine を google → duckduckgo → bing の順で試行し、最初に成功した engine の結果上位 10 件を出力する |
 | `--lang <code>` がある | 検索実行 | `<code>` を小文字へ正規化する。google は `hl` へ常に設定し、`gl` は対応表にある lang のみ設定する。bing の `mkt`・duckduckgo の `kl` も対応表にある lang のみ設定する。対応表にない lang では `gl`・`mkt`・`kl` を付与せず、google の `hl` のみ設定される |
 | engine が空結果・captcha・challenge で失敗した | 検索実行 | 次の engine へ進む |
+| engine のrenderがabort・timeout・切断した | 検索実行 | 同一engineを新しいsessionで再試行する。server復旧再試行を既に消費している場合は再試行せず、次のengineへ進む |
 | すべての engine が失敗した | 検索実行 | 共通の全 backend 失敗の振る舞いに従う |
 
 markdown 出力の構造: 1 行目に `**Query:** "<query>" - **Engines:** <engine> - **Took:** <秒>s` を置き、続いて結果ごとに `### <番号>. <title>`、`**<display_url>** - <type>`、スニペット、`-> <url>` の順のブロックを置く。欠損フィールドの行は省略し、タイトル欠損は URL、それも無ければ `(no title)` とする。`type` 欠損の結果は `organic` と表示し、`display_url` 欠損の結果は `**<display_url>** - <type>` 行を出力しない。
@@ -139,7 +143,7 @@ markdown 出力の構造: 1 行目に `**Query:** "<query>" - **Engines:** <engi
 | 引数が絶対 URL でない | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
 | Reddit 投稿パーマリンク | フェッチ | RSS（コメント上限 500）→ embed → oEmbed の順で取得し、投稿本文とコメントを markdown で出力する（camoufox を使わない） |
 | StackOverflow 質問パーマリンク | フェッチ | StackExchange API（投票順・1 ページ 100 件で最大 500 件・`backoff` 指定時は指定秒待機）→ 質問フィードの順で取得し、質問と回答を markdown で出力する（camoufox を使わない） |
-| その他の URL | フェッチ | camoufox で描画し、trafilatura で markdown 化して出力する |
+| その他の URL | フェッチ | camoufox で描画し、trafilatura で markdown 化して出力する。renderがabort・timeout・切断した場合は、機能ヘルスチェックと必要なserver再起動を行った後、新しいsessionで同じURLを1回だけ再試行する |
 | Reddit / StackOverflow で全取得経路が失敗した | フェッチ | 共通の全 backend 失敗の振る舞いに従う。`<error>` は Reddit では `Unable to fetch Reddit post <postId> (RSS <status>)`（`<status>` は RSS 要求の HTTP status 番号。要求自体が失敗したときはそのエラー文言）、StackOverflow では `Unable to fetch StackOverflow question <questionId>` |
 
 markdown 出力の構造（Reddit）: `# <title>`、`- Author:`、`- Permalink:`、`- Updated:`（feed の更新日時を取得できたときのみ出力）、`- Comments:`（常に出力。feed を取得できたときは `<n> fetched` または `<n> fetched / <m> displayed`、取得できなかったときは `unavailable`（embed から表示コメント数が取れるときは `unavailable (Reddit displays <m>)`））、`## Post`、`## Comments (<n> retrieved)`（feed を取得できたときのみ）、コメントは `### <番号>. <author>`。コメントのスコアと返信階層は RSS に無い旨の注記を入れる。
