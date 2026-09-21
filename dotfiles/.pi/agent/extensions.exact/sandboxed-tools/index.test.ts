@@ -4116,6 +4116,24 @@ describe("§6.1 bind とパスの実在保証", () => {
   );
 
   it(
+    "bash sandbox は WSL の GPU デバイスを dev bind する",
+    withSandboxDir((_dir, configPath) => {
+      writeFileSync(configPath, `read:\n  - {allow: "*"}\n`);
+      const sandbox = new Sandbox("/cwd", configPath);
+      const bashArgs = sandbox.buildArgs("bash");
+      const devAt = bashArgs.indexOf("--dev");
+      assert.deepEqual(bashArgs.slice(devAt, devAt + 5), [
+        "--dev",
+        "/dev",
+        "--dev-bind-try",
+        "/dev/dxg",
+        "/dev/dxg",
+      ]);
+      assert.equal(sandbox.buildArgs("fs").includes("/dev/dxg"), false);
+    }),
+  );
+
+  it(
     "cwd の read-only bind は write.allow の writable bind より前に出る",
     withSandboxDir((dir, configPath) => {
       writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n`);

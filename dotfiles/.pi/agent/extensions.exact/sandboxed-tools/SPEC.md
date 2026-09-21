@@ -307,7 +307,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 
 各ツール呼び出しは次の構成で `bwrap` を起動する。
 
-1. `--die-with-parent`、`--proc /proc`、`--dev /dev` を設定する。
+1. `--die-with-parent`、`--proc /proc`、`--dev /dev` を設定する。bash では、WSL の CUDA/NVENC 用デバイス `/dev/dxg` を `--dev-bind-try /dev/dxg /dev/dxg` で追加公開する。`--dev-bind-try` は対象が存在しない環境では無視される。
 2. 設定済みの allow パスを `--bind-try`、read-only パスと credentials を `--ro-bind-try` で bind する。`write` の書き込み可能 bind は後勝ちで `allow` に確定したパスのみとし、bash では `deny`・`ask` に確定したパスのうち書き込み可能 bind と同一・配下にあるものを、それらより後に `--ro-bind-try` で bind し直す（§6.1）。
 3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bind する。pi パッケージ自体は `/nix` 配下のため追加の bind 不要。
 4. sandbox 内で `bun run-tools.ts <tool-name>` を実行し、network namespace は分離しない。

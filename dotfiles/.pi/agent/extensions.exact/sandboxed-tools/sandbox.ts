@@ -958,6 +958,10 @@ export class Sandbox {
     const args = ["--die-with-parent", "--proc", "/proc"];
     if (this.readAllPaths()) args.push("--ro-bind", "/", "/");
     args.push("--dev", "/dev");
+    if (mode === "bash") {
+      // WSL exposes CUDA/NVENC through /dev/dxg; keep the bind optional on native Linux.
+      args.push("--dev-bind-try", "/dev/dxg", "/dev/dxg");
+    }
     for (const runtimePath of [
       "/nix",
       "/usr",
