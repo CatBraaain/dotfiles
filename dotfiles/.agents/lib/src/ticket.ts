@@ -103,7 +103,15 @@ export function formatTicketList(tickets: TicketFields[], all: boolean): string 
 }
 
 export function formatTicketShow(ticket: TicketWithBody): string {
-  return [ticket.id, `status: ${ticket.status}`, `after: ${ticket.after ?? "-"}`, ``, `# ${ticket.title}`, ``, ticket.body].join("\n");
+  return [
+    `id: ${ticket.id}`,
+    `status: ${ticket.status}`,
+    `after: ${ticket.after ?? "-"}`,
+    `title: ${ticket.title}`,
+    ``,
+    `body:`,
+    ticket.body,
+  ].join("\n");
 }
 
 export function formatTicketCreated(ticket: TicketFields): string {

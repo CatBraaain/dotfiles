@@ -90,8 +90,8 @@ usage ミスのときは usage を stderr へ出力し、終了コード 2 で�
 
 | 条件・状態 | 操作 | 結果 |
 |---|---|---|
-| セレクタが ticket を特定する | `ticket show` | ID・status・after・タイトル・本文を順に出力する |
-| `--json` がある | `ticket show` | 共通フィールド + 本文（`body`）の JSON を出力する。`body` は本文の末尾空白・改行を保持する |
+| セレクタが ticket を特定する | `ticket show` | ID・status・after に続けて、H1 を含む本文全体を出力する |
+| `--json` がある | `ticket show` | 共通フィールド + H1 を含む本文（`body`）の JSON を出力する。`body` は本文の末尾空白・改行を保持する |
 
 ## `ticket create <json>`
 

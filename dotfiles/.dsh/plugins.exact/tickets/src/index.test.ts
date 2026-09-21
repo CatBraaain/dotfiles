@@ -55,7 +55,7 @@ const SHOW_JSON = {
   title: "First ticket",
   after: null,
   path: "/home/x/.agents/tickets/demo/20260918-010000.md",
-  body: "Some body text.",
+  body: "# First ticket\n\nSome body text.",
 };
 
 const CREATED_JSON = {
@@ -511,7 +511,7 @@ describe("result rendering", () => {
     assert.deepEqual(toolByName(createTicketTools(), "ticket_show").output.render({ selector: "x" }, SHOW_JSON), [
       {
         type: "text",
-        text: "20260918-010000\nstatus: open\nafter: -\n\n# First ticket\n\nSome body text.",
+        text: "id: 20260918-010000\nstatus: open\nafter: -\ntitle: First ticket\n\nbody:\n# First ticket\n\nSome body text.",
       },
     ]);
     assert.deepEqual(toolByName(createTicketTools(), "ticket_create").output.render({ title: "T" }, CREATED_JSON), [

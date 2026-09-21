@@ -48,7 +48,7 @@ tool 結果の本文は LLM が読むテキストであり、pi では `details`
 
 | 条件・状態 | 操作 | 結果 |
 |---|---|---|
-| セレクタが ticket を特定する | `ticket_show` 呼び出し | ID・status・after・タイトル・本文を含むテキストを返す。本文の末尾空白・改行を保持する |
+| セレクタが ticket を特定する | `ticket_show` 呼び出し | `id`・`status`・`after`・`title` のメタデータ、`body:` の区切り、H1 を含む本文全体をテキストで返す。本文の末尾空白・改行を保持する |
 | セレクタが特定できない・曖昧 | `ticket_show` 呼び出し | CLI のエラーを返す |
 
 ## `ticket_create`

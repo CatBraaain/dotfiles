@@ -486,7 +486,7 @@ describe("tool execute", () => {
       title: "A",
       after: null,
       path: "/p/a.md",
-      body: "ticket body  \n\n",
+      body: "# A\n\nticket body  \n\n",
     });
     assert.match(text, /ticket body  \n\n$/);
   });
@@ -595,7 +595,7 @@ describe("tool execute", () => {
             title: "A",
             after: "20260101-000001",
             path: "/p/a.md",
-            body: "body line\n",
+            body: "# A\n\nbody line\n",
           }),
         ),
         "ticket_show",
@@ -605,7 +605,7 @@ describe("tool execute", () => {
     assert.deepEqual(show.content, [
       {
         type: "text",
-        text: "20260101-000000\nstatus: open\nafter: 20260101-000001\n\n# A\n\nbody line\n",
+        text: "id: 20260101-000000\nstatus: open\nafter: 20260101-000001\ntitle: A\n\nbody:\n# A\n\nbody line\n",
       },
     ]);
 
