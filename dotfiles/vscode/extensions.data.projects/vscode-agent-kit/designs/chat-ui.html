@@ -89,14 +89,6 @@
         background: var(--surface);
       }
 
-      .chat-kicker {
-        color: var(--accent);
-        font-family: var(--mono);
-        font-size: 9px;
-        letter-spacing: 0.11em;
-        text-transform: uppercase;
-      }
-
       .chat-title {
         margin: 3px 0 2px;
         color: var(--fg);
@@ -235,7 +227,6 @@
       .send-button:active { transform: translateY(1px); }
       .send-button svg { width: 15px; height: 15px; }
 
-      .workspace-modes,
       .workspace-header-actions,
       .row-actions {
         display: flex;
@@ -342,14 +333,6 @@
       .workspace.is-collapsed .workspace-collapse-icon { transform: rotate(-90deg); }
       .workspace.is-collapsed .session-row { display: none; }
 
-      .workspace-modes {
-        flex: none;
-        gap: 2px;
-        padding: 2px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-      }
-
       .workspace-summary {
         flex: none;
         color: var(--muted);
@@ -357,24 +340,13 @@
         white-space: nowrap;
       }
 
-      .mode-button {
-        min-height: 26px;
-        padding: 0 8px;
-        border: 0;
-        border-radius: 4px;
-        color: var(--muted);
-        background: transparent;
-        cursor: pointer;
-        font-size: 11px;
-      }
-
-      .mode-button:hover { color: var(--fg); background: var(--surface-hover); }
-
-      .mode-button[aria-pressed="true"] {
+      .workspace-mode-toggle {
+        width: 30px;
+        min-height: 30px;
         color: var(--fg);
-        background: var(--border-strong);
-        box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.04);
       }
+
+      .workspace-mode-toggle:hover { color: var(--fg); }
 
       .session-row {
         position: relative;
@@ -517,7 +489,6 @@
         <section class="chat-pane" aria-labelledby="chat-title">
           <header class="chat-header">
             <div>
-              <span class="chat-kicker">Active session</span>
               <h2 id="chat-title" class="chat-title">Polish the session list</h2>
               <p id="chat-context" class="chat-context">atlas-dashboard · /Users/aya/Projects/atlas-dashboard</p>
             </div>
@@ -595,11 +566,15 @@
           refresh: '<path d="M13.5 5.2A5.5 5.5 0 1 0 14 8"/><path d="M10.8 2.6h3v3"/>',
           archive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="M6.5 8.5h3"/> ',
           unarchive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="m6 9 2-2 2 2M8 7v4"/>',
+          modeCollapse: '<path d="M3 5h8m-8 7h8m-8 7h8m4-14 3 3 3-3m-6 14 3-3 3 3"/>',
+          modeExpand: '<path d="M3 5h8m-8 7h8m-8 7h8m4-11 3-3 3 3m-6 8 3 3 3-3"/>',
           chevron: '<path d="m4.5 6 3.5 3.5L11.5 6"/>',
           more: '<circle cx="4" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r=".7" fill="currentColor" stroke="none"/>',
           send: '<path d="m3 8 10-5-2.5 10-2.4-4.2L3 8Z"/><path d="m8.1 8.8 2.1-1.5"/>'
         };
-        return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[name] + '</svg>';
+        const viewBox = name.startsWith("mode") ? "0 0 24 24" : "0 0 16 16";
+        const strokeWidth = name.startsWith("mode") ? "1.5" : "1.25";
+        return `<svg viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
       }
 
       function escapeHtml(value) {
@@ -625,15 +600,14 @@
           const isCollapsed = isCollapsible && state.collapsedWorkspaces.has(group.cwd);
           const modeLabel = mode === "all" ? "All" : "Active";
           const sessionLabel = sessions.length === 1 ? "session" : "sessions";
+          const nextMode = mode === "all" ? "active" : "all";
+          const modeActionLabel = nextMode === "all" ? "Show all sessions" : "Show active sessions";
           return `
             <section class="workspace ${isCollapsed ? "is-collapsed" : ""}" data-cwd="${escapeHtml(group.cwd)}" data-od-id="workspace-${groupIndex}">
               <header class="workspace-header" ${isCollapsible ? 'data-action="collapse"' : ""}>
                 ${isCollapsible ? `<button class="workspace-name workspace-collapse-trigger" type="button" data-action="collapse" aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? "Expand" : "Collapse"} ${escapeHtml(group.label)}" title="~/projects/${escapeHtml(group.label)}" data-od-id="collapse-workspace-${groupIndex}"><span class="workspace-collapse-icon">${icon("chevron")}</span><span>${escapeHtml(group.label)}</span></button>` : `<div class="workspace-name" title="${escapeHtml(group.cwd)}" data-od-id="workspace-name-${groupIndex}">${escapeHtml(group.label)}</div>`}
                 <div class="workspace-header-actions">
-                  ${isCollapsed ? `<span class="workspace-summary" aria-label="${modeLabel}, ${sessions.length} ${sessionLabel}">${modeLabel} · ${sessions.length} ${sessionLabel}</span>` : `<div class="workspace-modes" role="group" aria-label="${escapeHtml(group.label)} view mode">
-                    <button class="mode-button" type="button" data-action="mode" data-mode="active" aria-pressed="${mode === "active"}" data-od-id="${groupIndex}-active-mode">Active</button>
-                    <button class="mode-button" type="button" data-action="mode" data-mode="all" aria-pressed="${mode === "all"}" data-od-id="${groupIndex}-all-mode">All</button>
-                  </div>`}
+                  ${isCollapsed ? `<span class="workspace-summary" aria-label="${modeLabel}, ${sessions.length} ${sessionLabel}">${modeLabel} · ${sessions.length} ${sessionLabel}</span>` : `<button class="button button-icon workspace-mode-toggle" type="button" data-action="mode" data-mode="${nextMode}" aria-pressed="${mode === "all"}" aria-label="${modeLabel} sessions. ${modeActionLabel}" title="${modeLabel} sessions · ${modeActionLabel}" data-od-id="${groupIndex}-mode-toggle">${icon(nextMode === "all" ? "modeExpand" : "modeCollapse")}</button>`}
                   <button class="button button-icon workspace-new-session" type="button" data-action="new" data-cwd="${escapeHtml(group.cwd)}" data-od-id="new-session-${groupIndex}" aria-label="New session in ${escapeHtml(group.label)}" title="New session">${icon("plus")}</button>
                   <button class="button button-icon workspace-refresh" type="button" data-action="refresh" data-od-id="refresh-workspace-${groupIndex}" aria-label="Refresh ${escapeHtml(group.label)}" title="Refresh">${icon("refresh")}</button>
                 </div>
