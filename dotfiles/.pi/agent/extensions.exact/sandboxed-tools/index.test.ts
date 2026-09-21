@@ -801,6 +801,29 @@ describe("§3.a パス文字列の解決", () => {
     assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${REPOSITORY_NAME}"), true);
   });
 
+  it("出荷configはWSLからWindows側へのパスとコマンドをaskにする", () => {
+    const config = parseSandboxedToolsConfig(
+      readFileSync(
+        sourcePathFromSymlink(new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url)),
+        "utf8",
+      ),
+    );
+    const readSection = expandPathSection(config.read, process.cwd(), true);
+    const writeSection = expandPathSection(config.write, process.cwd());
+    const commandEntries = compileCommandRuleEntries(config.commands).entries;
+
+    assert.equal(resolvePathAction(readSection, "/mnt/c/Users/me/file.txt"), "allow");
+    assert.equal(resolvePathAction(writeSection, "/mnt/c/Users/me/file.txt"), "ask");
+    for (const command of [
+      "PowerShell.EXE -NoProfile -Command Get-Date",
+      "/mnt/c/Windows/System32/CMD.EXE /c echo ok",
+      "cat /mnt/c/Users/me/file.txt",
+    ]) {
+      assert.equal(resolveCommandAction(commandEntries, command), "ask", command);
+    }
+    assert.equal(resolveCommandAction(commandEntries, "printf '%s\\n' ok"), "allow");
+  });
+
   it("展開後は config ディレクトリの sandbox.yaml を既定設定にする", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "sandboxed-tools-default-config-"));
     try {

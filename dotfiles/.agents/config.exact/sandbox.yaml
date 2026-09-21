@@ -5,7 +5,6 @@ read:
       - "**/.env.local"
       - "**/.env.*.local"
       - ~/.ssh
-
 write:
   - allow:
       - .
@@ -38,6 +37,7 @@ write:
       - ~/.agents/config
       - ~/.dsh/config
       - ~/.pi/agent/config
+      - /mnt
 
 # Auth files that bash tools need for authentication but dsh and pi fs tools
 # (read/write/edit/glob/grep/find/ls) must never touch. Bound read-only into the
@@ -107,3 +107,7 @@ commands:
       - '^(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b'
       - '^(wipefs|parted|fdisk|sfdisk|sgdisk)(\s|$)'
       - '^(shutdown|reboot|poweroff|halt)(\s|$)'
+  - ask:
+      - '/mnt(?:/|\s|$)'
+      - '(?i:(?:^|/)[^/\s]+\.(?:exe|com|bat|cmd|ps1)(?:\s|$))'
+      - '(?i:^(?:powershell|pwsh|cmd|wsl|explorer|reg(?:edit)?|rundll32|mshta|cscript|wscript|schtasks)(?:\s|$))'
