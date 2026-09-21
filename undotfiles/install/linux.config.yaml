@@ -111,6 +111,7 @@
 - uv: harlequin
 
 # Apps and SDKs
+- apt: chromium
 - flatpak: com.visualstudio.code
 - custom: drawio
 - brew-cask: android-commandlinetools
