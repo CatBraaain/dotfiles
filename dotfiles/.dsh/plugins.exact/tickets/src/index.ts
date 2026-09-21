@@ -89,12 +89,6 @@ function projectFlag(project: string | undefined): string[] {
   return project === undefined ? [] : ["--project", project];
 }
 
-function addOwner(args: string[], owner: string): string[] {
-  const optionTerminator = args.indexOf("--");
-  if (optionTerminator === -1) return [...args, "--owner", owner];
-  return [...args.slice(0, optionTerminator), "--owner", owner, ...args.slice(optionTerminator)];
-}
-
 export function buildListArgs(args: TicketListArgs): string[] {
   return [
     "list",
@@ -145,12 +139,6 @@ export function buildEditArgs(args: TicketEditArgs): string[] {
 // agent or header cwd is available.
 export function sessionCwd(exec: Pick<ToolRunContext, "agent">): string {
   return exec.agent?.session.header.cwd ?? process.cwd();
-}
-
-function sessionOwner(exec: Pick<ToolRunContext, "agent">): string {
-  const owner = exec.agent?.session.header.id;
-  if (!owner) throw new Error("ticket write tools require an agent session owner");
-  return owner;
 }
 
 // TicketCliError -> tool failure: the CLI's stderr text is the error the
@@ -217,9 +205,7 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
 
   const run = async (cliArgs: string[], exec: ToolRunContext): Promise<CliJson> => {
     try {
-      const writeCommand = ["create", "set", "edit"].includes(cliArgs[0]!);
-      const args = writeCommand ? addOwner(cliArgs, sessionOwner(exec)) : cliArgs;
-      return (await runCli(args, sessionCwd(exec), exec.signal)) as CliJson;
+      return (await runCli(cliArgs, sessionCwd(exec), exec.signal)) as CliJson;
     } catch (error) {
       throw toToolError(error);
     }

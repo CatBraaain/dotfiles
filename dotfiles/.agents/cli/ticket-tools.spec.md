@@ -13,7 +13,6 @@ pi と dsh は、同じ 5 tool で `ticket` CLI をラップする。ストア�
 ## 共通
 
 - tool は CLI に `--json` を付け、session cwd を渡す。`project` があれば `--project` に渡す
-- write tool（create / set / edit）は harness の session ID を `--owner` に渡す。session ID を取得できない dsh agent-less call は write tool failure とし、process cwd へ fallback しない
 - read tool の dsh agent-less call は process cwd を CLI cwd にする
 - CLI の非 0 exit、実行不能、成功 exit の非 JSON stdout は tool failure として返す。非 JSON stdout の error は `ticket CLI returned non-JSON output:` で始める
 - pi は `ticket_create`、`ticket_set`、`ticket_edit` を sequential に dispatch する。dsh の default exclusive dispatch と合わせ、同じ assistant response 内の write call は model order で実行する

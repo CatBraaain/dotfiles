@@ -13,14 +13,13 @@ type Status = (typeof STATUSES)[number];
 
 const USAGE = `usage: ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]
        ticket show [<selector>] [-p <project>] [--json]
-       ticket create <json> [-p <project>] [-o <owner>] [--json]
-       ticket set [<selector>] <json> [-p <project>] [-o <owner>] [--json]
-       ticket edit [<selector>] <old> <new> [-p <project>] [-o <owner>] [--json]
+       ticket create <json> [-p <project>] [--json]
+       ticket set [<selector>] <json> [-p <project>] [--json]
+       ticket edit [<selector>] <old> <new> [-p <project>] [--json]
        ticket check [-p <project>] [-a] [--json]`;
 
 interface Flags {
   project?: string;
-  owner?: string;
   all: boolean;
   json: boolean;
   statuses: string[];
@@ -30,7 +29,6 @@ interface Ticket {
   id: string;
   status: Status;
   after: string | null;
-  owner: string | null;
   title: string;
   path: string;
   project: string;
@@ -47,7 +45,6 @@ interface Issue {
 interface FrontmatterPatch {
   status?: Status;
   after?: string | null;
-  owner?: string | null;
 }
 
 interface TransactionChange {
@@ -70,12 +67,12 @@ class TicketError extends Error {
   }
 }
 
-const ALLOWED_FLAGS: Record<string, { all?: boolean; statuses?: boolean; json?: boolean; owner?: boolean }> = {
+const ALLOWED_FLAGS: Record<string, { all?: boolean; statuses?: boolean; json?: boolean }> = {
   list: { all: true, statuses: true, json: true },
   show: { json: true },
-  create: { json: true, owner: true },
-  set: { json: true, owner: true },
-  edit: { json: true, owner: true },
+  create: { json: true },
+  set: { json: true },
+  edit: { json: true },
   check: { all: true, json: true },
 };
 
@@ -109,10 +106,7 @@ function parseArgs(argv: string[], command: string): { flags: Flags; positional:
     if (optionsEnded) positional.push(arg);
     else if (arg === "--") optionsEnded = true;
     else if (arg === "-p" || arg === "--project") flags.project = value();
-    else if (arg === "-o" || arg === "--owner") {
-      if (!allowed.owner) usageFail();
-      flags.owner = value();
-    } else if (arg === "-a" || arg === "--all") {
+    else if (arg === "-a" || arg === "--all") {
       if (!allowed.all) usageFail();
       flags.all = true;
     } else if (arg === "-s" || arg === "--status") {
@@ -154,7 +148,7 @@ function frontmatterIssue(content: string): string | null {
     const pair = line.match(/^([A-Za-z_-]+):\s*(.*)$/);
     if (!pair) continue;
     const key = pair[1]!;
-    if (["status", "after", "owner"].includes(key) && seen.has(key)) return `duplicate ${key} field`;
+    if (["status", "after"].includes(key) && seen.has(key)) return `duplicate ${key} field`;
     seen.add(key);
   }
   if (!seen.has("status")) return "no status field";
@@ -177,14 +171,11 @@ function parseTicket(path: string, project: string, id: string, content: string)
   if (broken) fail(`${relative(storeRoot(), path)}: ${broken}`);
   const { fields, rest } = splitFrontmatter(content);
   const status = validateStatus(fields.get("status") ?? "");
-  const owner = fields.get("owner") || null;
-  if (status === "locked" && owner === null) fail(`${relative(storeRoot(), path)}: locked ticket has no owner`);
   const body = rest.slice("\n---\n".length);
   return {
     id,
     status,
     after: fields.get("after") || null,
-    owner,
     title: body.match(/^# (.+)$/m)?.[1]?.trim() ?? id,
     path,
     project,
@@ -308,7 +299,7 @@ function parseJsonObject(raw: string): Record<string, unknown> {
 
 function mergeFrontmatter(frontmatter: string, patch: FrontmatterPatch): string {
   const lines = frontmatter.split("\n");
-  const replace = (key: "status" | "after" | "owner", value: string | null | undefined) => {
+  const replace = (key: "status" | "after", value: string | null | undefined) => {
     if (value === undefined) return;
     const index = lines.findIndex((line) => line.startsWith(`${key}:`));
     if (value === null) {
@@ -322,7 +313,6 @@ function mergeFrontmatter(frontmatter: string, patch: FrontmatterPatch): string 
   };
   replace("status", patch.status);
   replace("after", patch.after);
-  replace("owner", patch.owner);
   return lines.join("\n");
 }
 
@@ -340,17 +330,6 @@ function linkedStatus(target: Ticket, patch: FrontmatterPatch): Status {
   if (patch.after === undefined) return target.status;
   if (patch.after !== null) return "blocked";
   return target.status === "blocked" ? "open" : target.status;
-}
-
-function requireOwner(owner: string | undefined): string {
-  if (!owner) fail("locked ticket updates require --owner");
-  return owner;
-}
-
-function assertOwner(target: Ticket, owner: string | undefined): void {
-  if (target.status !== "locked") return;
-  if (target.owner === null) fail(`${target.id}: locked ticket has no owner`);
-  if (target.owner !== owner) fail(`${target.id}: ticket is locked by another owner`);
 }
 
 async function acquireProjectLock(dir: string): Promise<() => Promise<void>> {
@@ -510,8 +489,7 @@ async function createCommand(positional: string[], flags: Flags): Promise<void> 
       after = dependency.id;
     }
     const status = input.status ?? (after === null ? "open" : "blocked");
-    const owner = status === "locked" ? requireOwner(flags.owner) : null;
-    const frontmatter = ["---", `status: ${status}`, ...(after ? [`after: ${after}`] : []), ...(owner ? [`owner: ${owner}`] : []), "---"].join("\n");
+    const frontmatter = ["---", `status: ${status}`, ...(after ? [`after: ${after}`] : []), "---"].join("\n");
     const body = input.body === undefined ? `# ${input.title}\n` : `# ${input.title}\n\n${input.body}\n`;
     let date = new Date();
     while (true) {
@@ -522,7 +500,7 @@ async function createCommand(positional: string[], flags: Flags): Promise<void> 
         const content = `${frontmatter}\n${body}`;
         await writeFile(temporaryPath, content, { flag: "wx" });
         await link(temporaryPath, path);
-        return { id, status, after, owner, title: input.title, path, project, body, content } satisfies Ticket;
+        return { id, status, after, title: input.title, path, project, body, content } satisfies Ticket;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         date = new Date(date.getTime() + 1_000);
@@ -563,7 +541,6 @@ async function setCommand(positional: string[], flags: Flags): Promise<void> {
   const updated = await withProjectWrite(project, async (dir) => {
     const tickets = await loadTickets(project);
     const target = resolveSelector(tickets, selector);
-    assertOwner(target, flags.owner);
     const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
     let after = patch.after;
     if (after !== undefined && after !== null) {
@@ -573,11 +550,8 @@ async function setCommand(positional: string[], flags: Flags): Promise<void> {
       after = dependency.id;
     }
     const nextStatus = linkedStatus(target, { ...patch, after });
-    const owner = nextStatus === "locked"
-      ? target.status === "locked" ? target.owner : requireOwner(flags.owner)
-      : null;
     const targetParts = splitFrontmatter(target.content);
-    const targetContent = `${mergeFrontmatter(targetParts.frontmatter, { status: nextStatus, after, owner })}${targetParts.rest}`;
+    const targetContent = `${mergeFrontmatter(targetParts.frontmatter, { status: nextStatus, after })}${targetParts.rest}`;
     const changes: TransactionChange[] = [{ path: target.path, oldContent: target.content, newContent: targetContent }];
     if (patch.status === "closed") {
       for (const dependent of tickets) {
@@ -591,7 +565,7 @@ async function setCommand(positional: string[], flags: Flags): Promise<void> {
       }
     }
     await applyChanges(dir, changes);
-    return { ...target, status: nextStatus, after: after === undefined ? target.after : after, owner, content: targetContent };
+    return { ...target, status: nextStatus, after: after === undefined ? target.after : after, content: targetContent };
   });
   if (flags.json) return output(ticketJson(updated, false));
   if (patch.status !== undefined) console.log(updated.status);
@@ -607,7 +581,6 @@ async function editCommand(positional: string[], flags: Flags): Promise<void> {
   const project = resolveProject(flags);
   const updated = await withProjectWrite(project, async (dir) => {
     const target = resolveSelector(await loadTickets(project), selector);
-    assertOwner(target, flags.owner);
     let matches = 0;
     let cursor = target.body.indexOf(old);
     while (cursor >= 0) {

@@ -224,12 +224,6 @@ export const ticketToolDescriptions = {
     "and defaults to the project resolved from the session cwd.",
 } as const;
 
-function addOwner(args: string[], owner: string): string[] {
-  const optionTerminator = args.indexOf("--");
-  if (optionTerminator === -1) return [...args, "--owner", owner];
-  return [...args.slice(0, optionTerminator), "--owner", owner, ...args.slice(optionTerminator)];
-}
-
 function truncateTicketOutput(text: string, recoveryHint: string): string {
   const truncation = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
   if (!truncation.truncated) return text;
@@ -293,9 +287,7 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     signal: AbortSignal | undefined,
   ): Promise<unknown> {
     try {
-      const writeCommand = ["create", "set", "edit"].includes(args[0]!);
-      const cliArgs = writeCommand ? addOwner(args, ctx.sessionManager.getSessionId()) : args;
-      return await runCli(cliArgs, ctx.cwd, signal);
+      return await runCli(args, ctx.cwd, signal);
     } catch (error) {
       if (error instanceof TicketCliError) throw new Error(error.stderr || error.message);
       throw error;

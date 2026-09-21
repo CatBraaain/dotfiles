@@ -82,27 +82,14 @@ describe("ticket CLI", () => {
     assert.equal((JSON.parse(result.stdout) as { after: string }).after, dependency);
   });
 
-  it("requires the lock owner for locked ticket updates", async () => {
-    const home = await ticketHome();
-    const id = create(home, "locked");
-    const lock = run(home, ["set", id, '{"status":"locked"}', "--project", "demo", "--owner", "owner-a"]);
-    assert.equal(lock.code, 0, lock.stderr);
-    const denied = run(home, ["edit", id, "locked", "changed", "--project", "demo", "--owner", "owner-b"]);
-    assert.equal(denied.code, 1);
-    assert.match(denied.stderr, /locked by another owner/);
-    const updated = run(home, ["edit", id, "locked", "changed", "--project", "demo", "--owner", "owner-a"]);
-    assert.equal(updated.code, 0, updated.stderr);
-    assert.match(await readFile(ticketPath(home, "demo", id), "utf8"), /# changed/);
-  });
-
-  it("releases every current blocked dependent when its owner closes a ticket", async () => {
+  it("releases every current blocked dependent when closing a ticket", async () => {
     const home = await ticketHome();
     const dependency = create(home, "dependency");
     const dependent = run(home, ["create", JSON.stringify({ title: "dependent", after: dependency }), "--project", "demo", "--json"]);
     assert.equal(dependent.code, 0, dependent.stderr);
     const dependentId = (JSON.parse(dependent.stdout) as { id: string }).id;
-    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo", "--owner", "owner-a"]).code, 0);
-    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo", "--owner", "owner-a"]).code, 0);
+    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code, 0);
+    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code, 0);
     const reopened = run(home, ["show", dependentId, "--project", "demo", "--json"]);
     assert.equal((JSON.parse(reopened.stdout) as { status: string }).status, "open");
   });
@@ -180,7 +167,7 @@ describe("ticket CLI", () => {
     const dependency = create(home, "dependency");
     const dependentOne = createAfter(home, "dependent one", dependency);
     const dependentTwo = createAfter(home, "dependent two", dependency);
-    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo", "--owner", "owner-a"]).code, 0);
+    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code, 0);
     const before = await Promise.all([
       readFile(ticketPath(home, "demo", dependency), "utf8"),
       readFile(ticketPath(home, "demo", dependentOne), "utf8"),
@@ -188,7 +175,7 @@ describe("ticket CLI", () => {
     ]);
     const failed = run(
       home,
-      ["set", dependency, '{"status":"closed"}', "--project", "demo", "--owner", "owner-a"],
+      ["set", dependency, '{"status":"closed"}', "--project", "demo"],
       { TICKET_TEST_FAIL_STEP: "rename:1" },
     );
     assert.equal(failed.code, 1);
@@ -200,7 +187,7 @@ describe("ticket CLI", () => {
       ]),
       before,
     );
-    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo", "--owner", "owner-a"]).code, 0);
+    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code, 0);
     assert.equal((JSON.parse(run(home, ["show", dependentOne, "--project", "demo", "--json"]).stdout) as { status: string }).status, "open");
     assert.equal((JSON.parse(run(home, ["show", dependentTwo, "--project", "demo", "--json"]).stdout) as { status: string }).status, "open");
   });
@@ -209,15 +196,15 @@ describe("ticket CLI", () => {
     const home = await ticketHome();
     const dependency = create(home, "dependency");
     const dependent = createAfter(home, "dependent", dependency);
-    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo", "--owner", "owner-a"]).code, 0);
+    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code, 0);
     const failed = run(
       home,
-      ["set", dependency, '{"status":"closed"}', "--project", "demo", "--owner", "owner-a"],
+      ["set", dependency, '{"status":"closed"}', "--project", "demo"],
       { TICKET_TEST_FAIL_STEP: "rename:1,rollback:0" },
     );
     assert.equal(failed.code, 1);
     assert.equal((JSON.parse(run(home, ["show", dependency, "--project", "demo", "--json"]).stdout) as { status: string }).status, "closed");
-    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo", "--owner", "owner-a"]).code, 0);
+    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code, 0);
     assert.equal((JSON.parse(run(home, ["show", dependent, "--project", "demo", "--json"]).stdout) as { status: string }).status, "open");
   });
 
@@ -256,19 +243,18 @@ describe("ticket CLI", () => {
     assert.equal((JSON.parse(shown.stdout) as { id: string }).id, id);
   });
 
-  it("uses the cwd project and hides owner from successful JSON results", async () => {
+  it("uses the cwd project and lists locked tickets", async () => {
     const home = await ticketHome();
     const id = run(home, ["create", '{"title":"default"}', "--json"]).stdout.trim();
     const project = basename(home);
     const ticketId = (JSON.parse(id) as { id: string }).id;
     assert.ok((await readdir(join(home, ".agents", "tickets"))).includes(project));
     const locked = create(home, "locked");
-    assert.equal(run(home, ["set", locked, '{"status":"locked"}', "--project", "demo", "--owner", "owner-a"]).code, 0);
+    assert.equal(run(home, ["set", locked, '{"status":"locked"}', "--project", "demo"]).code, 0);
     const show = JSON.parse(run(home, ["show", locked, "--project", "demo", "--json"]).stdout) as Record<string, unknown>;
     const list = JSON.parse(run(home, ["list", "--status", "locked", "--project", "demo", "--json"]).stdout) as Array<Record<string, unknown>>;
     assert.equal(show.id, locked);
-    assert.equal(Object.hasOwn(show, "owner"), false);
-    assert.equal(Object.hasOwn(list.find((ticket) => ticket.id === locked)!, "owner"), false);
+    assert.equal(list.find((ticket) => ticket.id === locked)?.id, locked);
     assert.equal((JSON.parse(run(home, ["show", ticketId, "--json"]).stdout) as { id: string }).id, ticketId);
   });
 
@@ -337,7 +323,6 @@ describe("ticket CLI", () => {
     await writeFile(join(projectDir, "cycle-a.md"), "---\nstatus: open\nafter: cycle-b\n---\n# a\n");
     await writeFile(join(projectDir, "cycle-b.md"), "---\nstatus: open\nafter: cycle-a\n---\n# b\n");
     await writeFile(join(projectDir, "duplicate-after.md"), "---\nstatus: open\nafter: a\nafter: b\n---\n# duplicate\n");
-    await writeFile(join(projectDir, "duplicate-owner.md"), "---\nstatus: open\nowner: a\nowner: b\n---\n# duplicate\n");
     const result = run(home, ["check", "--project", "demo", "--json"]);
     assert.equal(result.code, 1);
     const kinds = new Set((JSON.parse(result.stdout) as Array<{ kind: string }>).map((issue) => issue.kind));

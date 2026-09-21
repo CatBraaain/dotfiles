@@ -5,11 +5,11 @@
 ## ストアと安全境界
 
 - 1 ticket は `~/.agents/tickets/<project>/<YYYYMMDD-HHMMSS>.md`。ID は拡張子を除くファイル名、順序は ID の辞書順
-- frontmatter は `status`（必須）、`after`（任意、単一 ID）、`owner`（`status: locked` のとき必須）を持つ。本文の最初の H1 を title とし、なければ ID を title とする
+- frontmatter は `status`（必須）、`after`（任意、単一 ID）を持つ。本文の最初の H1 を title とし、なければ ID を title とする
 - `project` は `/`、`\\`、`.`、`..` を含まない単一のパス要素である。`-p/--project` と cwd から解決した project のいずれもこの制約に従い、違反時はストア外を読書きしない
 - `after` は同一 project 内の ID または一意な ID 接頭辞で指定する。保存時は完全な ID に正規化する
 - `status` は `draft`、`open`、`blocked`、`locked`、`closed`、`cancelled` のいずれか
-- 同じ frontmatter 内の `status`、`after`、`owner` の重複は破損である。読み書きコマンドは失敗し、`check` は `invalid-frontmatter` として報告する
+- 同じ frontmatter 内の `status`、`after` の重複は破損である。読み書きコマンドは失敗し、`check` は `invalid-frontmatter` として報告する
 
 ## 共通の振る舞い
 
@@ -32,19 +32,6 @@
 - 1 コマンドの複数 ticket 更新は journal と一時ファイルを用いる。すべての次内容を準備してから rename し、失敗時は既に置換した内容を復元する
 - `set` が `closed` にする場合、排他区間内で再読した `status: blocked` かつ `after` が対象 ID の ticket だけをすべて `open` にする
 
-## locked ownership
-
-`locked` は `owner` 文字列で所有者を識別する排他状態である。`-o/--owner <owner>` は `create`、`set`、`edit` で使う。
-
-| 条件 | 結果 |
-|---|---|
-| `status: locked` を create / set | 非空の `--owner` を要求し、その値を `owner` に保存する |
-| locked ticket を set / edit | 保存済み `owner` と一致する `--owner` を要求する |
-| locked から別 status | 所有者だけが実行でき、`owner` を削除する |
-| locked ticket に owner がない | 破損として更新を拒否する |
-
-`owner` は `list` / `show` / JSON 成功結果に出さない。tool wrapper は harness session ID を `--owner` に渡す。
-
 ## セレクタ
 
 `show`、`set`、`edit` の selector は完全 ID、一意な接頭辞、または `next`。省略時は `next`。複数候補、不存在、actionable ticket 不在は終了コード 1。actionable は `status: open` かつ `after` が未設定または参照 ticket が `closed` の ticket である。
@@ -63,15 +50,15 @@
 
 ID、status、after、本文全体を返す。JSON は共通フィールドと末尾空白・改行を保持した `body` を返す。
 
-### `ticket create <json> [-p <project>] [-o <owner>] [--json]`
+### `ticket create <json> [-p <project>] [--json]
 
 JSON は必須の `title` と任意の `status`、`after`、`body` を持つ。body は H1 の後の空行を挟んで置く。after が未解決で status 未指定なら blocked で作る。成功時は ID または JSON 共通フィールドを返す。
 
-### `ticket set [<selector>] <json> [-p <project>] [-o <owner>] [--json]`
+### `ticket set [<selector>] <json> [-p <project>] [--json]
 
 JSON の許可 key は `status` と `after` だけであり、少なくとも一方を含む。frontmatter と status 連動を更新する。`status: closed` は上記の原子操作で依存 ticket を解放する。成功時は status または JSON 共通フィールドを返す。
 
-### `ticket edit [<selector>] <old> <new> [-p <project>] [-o <owner>] [--json]`
+### `ticket edit [<selector>] <old> <new> [-p <project>] [--json]
 
 frontmatter を除く本文全体（H1 を含む）の literal な `<old>` を検索する。正確に 1 回なら `<new>` へ置換する。0 回または複数回なら出現数と現在本文を stderr に出し、変更しない。空の old は usage error、空の new は削除である。
 

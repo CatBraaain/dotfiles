@@ -292,13 +292,6 @@ describe("tool execution", () => {
     assert.deepEqual(calls, [[["list"], process.cwd(), exec.signal]]);
   });
 
-  it("write tools reject an agent-less execution before spawning", async () => {
-    const { runCli, calls } = fakeRunner(CREATED_JSON);
-    const tool = toolByName(createTicketTools({ runCli }), "ticket_create");
-    await assert.rejects(() => tool.execute({ title: "T" }, fakeExec(undefined)), /require an agent session owner/);
-    assert.equal(calls.length, 0);
-  });
-
   it("execute converts TicketCliError into a tool failure with the CLI stderr", async () => {
     const runCli: RunCli = async () => {
       throw new TicketCliError("no such ticket", "exited 1");
@@ -321,14 +314,14 @@ describe("tool execution", () => {
     const { runCli, calls } = fakeRunner(CREATED_JSON);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_set");
     await tool.execute({ selector: "x", status: "open", after: null }, fakeExec("/w"));
-    assert.deepEqual(calls[0]?.[0], ["set", "x", '{"status":"open","after":null}', "--owner", "dsh-session"]);
+    assert.deepEqual(calls[0]?.[0], ["set", "x", '{"status":"open","after":null}']);
   });
 
   it("ticket_edit maps selector, old, and new to the CLI args", async () => {
     const { runCli, calls } = fakeRunner(CREATED_JSON);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_edit");
     await tool.execute({ selector: "x", old: "a", new: "b" }, fakeExec("/w"));
-    assert.deepEqual(calls[0]?.[0], ["edit", "x", "--owner", "dsh-session", "--", "a", "b"]);
+    assert.deepEqual(calls[0]?.[0], ["edit", "x", "--", "a", "b"]);
   });
 });
 

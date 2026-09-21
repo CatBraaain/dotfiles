@@ -607,7 +607,7 @@ describe("tool execute", () => {
     );
   });
 
-  it("passes ctx.cwd to the runner and adds its owner to write tools", async () => {
+  it("passes ctx.cwd to the runner", async () => {
     const cases: Array<[string, Record<string, unknown>, unknown]> = [
       ["ticket_list", {}, []],
       ["ticket_show", { selector: "a" }, TICKET_JSON],
@@ -620,9 +620,6 @@ describe("tool execute", () => {
       const tool = findTool(captureTools(fake), name);
       await exec(tool, params);
       assert.deepEqual(fake.calls.map((call) => call.cwd), [SESSION_CWD]);
-      if (["ticket_create", "ticket_set", "ticket_edit"].includes(name)) {
-        assert.ok(fake.calls[0]?.args.includes("pi-session"));
-      }
     }
   });
 
