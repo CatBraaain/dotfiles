@@ -24,7 +24,7 @@
 # System packages
 - brew: bubblewrap
 - brew: coreutils
-- brew: ffmpeg
+- apt: ffmpeg
 - brew: gcc
 - brew: git
 - brew: make
