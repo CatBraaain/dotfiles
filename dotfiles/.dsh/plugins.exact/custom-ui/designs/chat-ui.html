@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Session chat</title>
+    <style>
+      :root {
+        --bg: oklch(20% 0.018 250);
+        --surface: oklch(24% 0.02 250);
+        --surface-raised: oklch(27% 0.022 250);
+        --surface-hover: oklch(30% 0.025 250);
+        --fg: oklch(91% 0.012 250);
+        --muted: oklch(68% 0.018 250);
+        --subtle: oklch(56% 0.018 250);
+        --border: oklch(34% 0.022 250);
+        --border-strong: oklch(42% 0.026 250);
+        --accent: oklch(76% 0.105 236);
+        --accent-soft: oklch(76% 0.105 236 / 0.14);
+        --success: oklch(76% 0.13 150);
+        --danger: oklch(72% 0.13 28);
+        --radius: 8px;
+        --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { min-height: 100%; }
+
+      body {
+        margin: 0;
+        color: var(--fg);
+        background: var(--bg);
+        font-family: var(--font);
+        font-size: 13px;
+        line-height: 1.45;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button {
+        font: inherit;
+        color: inherit;
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .app {
+        width: min(100%, 1320px);
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 24px 20px 32px;
+      }
+
+      .app-grid {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+      }
+
+      .session-pane {
+        position: sticky;
+        top: 24px;
+      }
+
+      .workspace-list-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .workspace-list-title {
+        margin: 0;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .new-workspace-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 30px;
+        padding: 0 9px;
+        color: var(--fg);
+        font-size: 11px;
+      }
+
+      .new-workspace-button svg { width: 14px; height: 14px; }
+
+      .chat-pane {
+        display: grid;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        grid-template-rows: auto minmax(380px, 1fr) auto;
+        min-height: calc(100vh - 56px);
+        background: var(--bg);
+      }
+
+      .chat-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 78px;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+
+      .chat-title {
+        margin: 3px 0 2px;
+        color: var(--fg);
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .chat-context {
+        margin: 0;
+        overflow: hidden;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chat-header-action {
+        flex: none;
+        width: 30px;
+        min-height: 30px;
+      }
+
+      .chat-thread {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        overflow: auto;
+        padding: 24px 20px 28px;
+      }
+
+      .message {
+        max-width: 680px;
+      }
+
+      .message.is-user {
+        align-self: flex-end;
+        max-width: min(680px, 86%);
+      }
+
+      .message-body { min-width: 0; }
+
+      .message-time {
+        display: block;
+        margin-top: 6px;
+        color: var(--subtle);
+        font-family: var(--mono);
+        font-size: 9px;
+      }
+
+      .message.is-user .message-time { text-align: right; }
+
+      .message-copy {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .message.is-user .message-copy {
+        padding: 10px 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px 2px 8px 8px;
+        color: var(--fg);
+        background: var(--surface-raised);
+      }
+
+      .message-code {
+        margin: 10px 0 0;
+        padding: 10px 12px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--fg);
+        background: oklch(18% 0.016 250);
+        font-family: var(--mono);
+        font-size: 10px;
+        line-height: 1.55;
+      }
+
+      .chat-composer {
+        margin: 0 20px 20px;
+        padding: 10px 10px 8px 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: 0 10px 28px oklch(10% 0.02 250 / 0.18);
+      }
+
+      .chat-input {
+        display: block;
+        width: 100%;
+        min-height: 42px;
+        max-height: 120px;
+        padding: 2px 0 8px;
+        resize: vertical;
+        border: 0;
+        outline: 0;
+        color: var(--fg);
+        background: transparent;
+        font: inherit;
+        font-size: 12px;
+      }
+
+      .chat-input::placeholder { color: var(--subtle); }
+
+      .composer-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .composer-hint {
+        color: var(--subtle);
+        font-family: var(--mono);
+        font-size: 9px;
+      }
+
+      .send-button {
+        display: inline-flex;
+        width: 30px;
+        height: 30px;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        color: oklch(18% 0.018 250);
+        background: var(--accent);
+        cursor: pointer;
+        transition: background 140ms ease-out, transform 140ms ease-out;
+      }
+
+      .send-button:hover { background: oklch(84% 0.105 236); }
+      .send-button:active { transform: translateY(1px); }
+      .send-button svg { width: 15px; height: 15px; }
+
+      .workspace-header-actions,
+      .row-actions {
+        display: flex;
+        align-items: center;
+      }
+
+      .workspace-header-actions { gap: 8px; }
+
+      .button {
+        min-height: 34px;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        background: var(--surface-raised);
+        cursor: pointer;
+        transition: background 140ms ease-out, border-color 140ms ease-out, transform 140ms ease-out;
+      }
+
+      .button:hover {
+        border-color: var(--accent);
+        background: var(--surface-hover);
+      }
+
+      .button:active { transform: translateY(1px); }
+
+      .button-icon {
+        display: inline-flex;
+        width: 34px;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      }
+
+      .button-icon svg,
+      .row-action svg { width: 15px; height: 15px; }
+
+      .workspace-new-session,
+      .workspace-refresh {
+        width: 30px;
+        min-height: 30px;
+      }
+
+      .workspace-list { display: grid; gap: 12px; }
+
+      .workspace {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .workspace-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 48px;
+        padding: 8px 10px 8px 13px;
+        border-bottom: 1px solid var(--border);
+        background: oklch(26% 0.021 250);
+      }
+
+      .workspace-header[data-action="collapse"] {
+        cursor: pointer;
+      }
+
+      .workspace-header[data-action="collapse"]:hover {
+        background: var(--surface-hover);
+      }
+
+      .workspace-name {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--fg);
+        cursor: default;
+        font-size: 12px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .workspace-collapse-trigger {
+        display: inline-flex;
+        align-items: center;
+        min-width: 0;
+        gap: 7px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .workspace-collapse-trigger:hover { color: var(--accent); }
+
+      .workspace-collapse-icon {
+        display: inline-flex;
+        flex: none;
+        color: var(--muted);
+        transition: transform 140ms ease-out, color 140ms ease-out;
+      }
+
+      .workspace-collapse-icon svg { width: 13px; height: 13px; }
+      .workspace-collapse-trigger:hover .workspace-collapse-icon { color: currentColor; }
+      .workspace.is-collapsed .workspace-collapse-icon { transform: rotate(-90deg); }
+      .workspace.is-collapsed .session-row { display: none; }
+
+      .workspace-summary {
+        flex: none;
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .workspace-mode-toggle {
+        width: 30px;
+        min-height: 30px;
+        color: var(--fg);
+      }
+
+      .workspace-mode-toggle:hover { color: var(--fg); }
+
+      .session-row {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        min-height: 45px;
+        padding: 0 9px 0 13px;
+        border-top: 1px solid var(--border);
+        transition: background 140ms ease-out;
+      }
+
+      .session-row:first-of-type { border-top: 0; }
+      .session-row:hover { background: var(--surface-hover); }
+      .session-row.is-selected { background: var(--accent-soft); }
+
+      .session-main {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 9px;
+        min-height: 45px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .status-dot {
+        flex: none;
+        width: 7px;
+        height: 7px;
+        border: 1px solid var(--subtle);
+        border-radius: 50%;
+      }
+
+      .status-dot.is-active {
+        border-color: var(--success);
+        background: var(--success);
+        box-shadow: 0 0 0 3px oklch(76% 0.13 150 / 0.1);
+      }
+
+      .session-copy { min-width: 0; }
+
+      .session-name {
+        display: block;
+        overflow: hidden;
+        color: var(--fg);
+        font-size: 12px;
+        font-weight: 520;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .session-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: 14px;
+      }
+
+      .session-time {
+        color: var(--muted);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      .row-actions { gap: 2px; }
+
+      .row-action {
+        display: inline-flex;
+        width: 30px;
+        height: 30px;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        border-radius: 5px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .row-action:hover { color: var(--fg); background: var(--border); }
+      .row-action.is-copied { color: var(--success); }
+      .row-action.archive:hover { color: var(--danger); }
+
+      .empty-state {
+        padding: 46px 18px 50px;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius);
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .empty-state strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .status-message {
+        min-height: 18px;
+        margin: 12px 2px 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .status-message.is-error { color: var(--danger); }
+
+      @media (max-width: 860px) {
+        .app-grid { grid-template-columns: 1fr; }
+        .session-pane { position: static; }
+        .chat-pane { min-height: 680px; }
+      }
+
+      @media (max-width: 520px) {
+        .app { padding: 14px 10px 22px; }
+        .chat-header { padding: 14px; }
+        .chat-thread { padding: 20px 14px 24px; }
+        .chat-composer { margin: 0 14px 14px; }
+        .workspace-header { align-items: flex-start; }
+        .session-row { padding-right: 7px; }
+        .session-meta { gap: 3px; margin-left: 8px; }
+        .session-time { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app" data-od-id="session-list">
+      <div class="app-grid">
+        <section class="session-pane">
+          <header class="workspace-list-header">
+            <h1 class="workspace-list-title">Workspaces</h1>
+            <button class="button new-workspace-button" type="button" data-action="new-workspace" aria-label="New Workspace" title="New Workspace" data-od-id="new-workspace">
+              <span class="new-workspace-icon" aria-hidden="true"></span>
+              <span>New Workspace</span>
+            </button>
+          </header>
+          <section id="workspace-list" class="workspace-list" aria-live="polite" data-od-id="workspace-list"></section>
+          <p id="status" class="status-message" role="status" aria-live="polite" data-od-id="session-status"></p>
+        </section>
+
+        <section class="chat-pane" aria-labelledby="chat-title">
+          <header class="chat-header">
+            <div>
+              <h2 id="chat-title" class="chat-title">Polish the session list</h2>
+              <p id="chat-context" class="chat-context">atlas-dashboard · /Users/aya/Projects/atlas-dashboard</p>
+            </div>
+            <button class="button button-icon chat-header-action" type="button" aria-label="More session actions" title="More session actions"><span class="chat-header-icon" aria-hidden="true"></span></button>
+          </header>
+
+          <div id="chat-thread" class="chat-thread" aria-live="polite">
+            <article class="message">
+              <div class="message-body">
+                <p class="message-copy">The session list is ready for a visual pass. I kept the workspace compact and made the active state easier to scan.</p>
+                <pre class="message-code"><code>designs/chat-ui.html</code></pre>
+                <time class="message-time" datetime="2026-09-21T10:42">2026/09/21 10:42</time>
+              </div>
+            </article>
+            <article class="message is-user">
+              <div class="message-body">
+                <p class="message-copy">Place the chat beside the session list so I can move between context and conversation.</p>
+                <time class="message-time" datetime="2026-09-21T10:44">2026/09/21 10:44</time>
+              </div>
+            </article>
+            <article class="message">
+              <div class="message-body">
+                <p class="message-copy">Done. The split view keeps the list available while giving the active session room for a full conversation.</p>
+                <time class="message-time" datetime="2026-09-21T10:45">2026/09/21 10:45</time>
+              </div>
+            </article>
+          </div>
+
+          <form id="chat-form" class="chat-composer">
+            <textarea id="chat-input" class="chat-input" rows="1" placeholder="Message this session…" aria-label="Message this session"></textarea>
+            <div class="composer-footer">
+              <span class="composer-hint">Enter to send · Shift + Enter for a new line</span>
+              <button class="send-button" type="submit" aria-label="Send message" title="Send message"><span class="send-icon" aria-hidden="true"></span></button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const initialGroups = [
+        {
+          cwd: "/Users/aya/Projects/atlas-dashboard",
+          label: "atlas-dashboard",
+          sessions: [
+            { id: "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", name: "Polish the session list", time: "2026/09/19 18:42", active: true },
+            { id: "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", name: "Check keyboard navigation", time: "2026/09/19 17:16", active: false }
+          ]
+        },
+        {
+          cwd: "/Users/aya/Projects/website-redesign",
+          label: "website-redesign",
+          sessions: [
+            { id: "3d8e2f6a-7b1c-4a9d-8e5f-2c6b1a4d7f90", name: "Review landing page copy", time: "2026/09/18 16:08", active: true },
+            { id: "4a7c1e9b-2d5f-4b8a-9c3e-6f1a2d5b8e70", name: "Archive old experiments", time: "2026/09/17 11:34", active: false }
+          ]
+        },
+      ];
+
+      const state = {
+        groups: structuredClone(initialGroups),
+        modes: new Map(),
+        selectedId: null,
+        copiedId: null,
+        copiedTimer: null,
+        statusTimer: null,
+        collapsedWorkspaces: new Set()
+      };
+
+      const list = document.querySelector("#workspace-list");
+      const status = document.querySelector("#status");
+      const chatTitle = document.querySelector("#chat-title");
+      const chatContext = document.querySelector("#chat-context");
+      const chatThread = document.querySelector("#chat-thread");
+      const chatForm = document.querySelector("#chat-form");
+      const chatInput = document.querySelector("#chat-input");
+
+      function icon(name) {
+        const paths = {
+          copy: '<rect x="5" y="5" width="7" height="8" rx="1"/><path d="M3.5 10V4.5A1.5 1.5 0 0 1 5 3h4.5"/>',
+          check: '<path d="m3.3 8.2 3 3 6.4-6.4"/>',
+          plus: '<path d="M8 3v10M3 8h10"/>',
+          refresh: '<path d="M13.5 5.2A5.5 5.5 0 1 0 14 8"/><path d="M10.8 2.6h3v3"/>',
+          archive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="M6.5 8.5h3"/> ',
+          unarchive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="m6 9 2-2 2 2M8 7v4"/>',
+          modeCollapse: '<path d="M3 5h8m-8 7h8m-8 7h8m4-14 3 3 3-3m-6 14 3-3 3 3"/>',
+          modeExpand: '<path d="M3 5h8m-8 7h8m-8 7h8m4-11 3-3 3 3m-6 8 3 3 3-3"/>',
+          chevron: '<path d="m4.5 6 3.5 3.5L11.5 6"/>',
+          more: '<circle cx="4" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r=".7" fill="currentColor" stroke="none"/>',
+          send: '<path d="m3 8 10-5-2.5 10-2.4-4.2L3 8Z"/><path d="m8.1 8.8 2.1-1.5"/>'
+        };
+        const viewBox = name.startsWith("mode") ? "0 0 24 24" : "0 0 16 16";
+        const strokeWidth = name.startsWith("mode") ? "1.5" : "1.25";
+        return `<svg viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+      }
+
+      function groupVisibleSessions(group) {
+        const mode = state.modes.get(group.cwd) || "active";
+        return mode === "all" ? group.sessions : group.sessions.filter((session) => session.active);
+      }
+
+      function render() {
+        const visibleGroups = state.groups.filter((group) => groupVisibleSessions(group).length > 0);
+        if (visibleGroups.length === 0) {
+          list.innerHTML = '<div class="empty-state" data-od-id="empty-state"><strong>No active sessions</strong><span>Create a new session to see it here</span></div>';
+          return;
+        }
+
+        list.innerHTML = visibleGroups.map((group, groupIndex) => {
+          const mode = state.modes.get(group.cwd) || "active";
+          const sessions = groupVisibleSessions(group);
+          const isCollapsible = groupIndex === 0 || groupIndex === 1;
+          const isCollapsed = isCollapsible && state.collapsedWorkspaces.has(group.cwd);
+          const modeLabel = mode === "all" ? "All" : "Active";
+          const sessionLabel = sessions.length === 1 ? "session" : "sessions";
+          const nextMode = mode === "all" ? "active" : "all";
+          const modeActionLabel = nextMode === "all" ? "Show all sessions" : "Show active sessions";
+          return `
+            <section class="workspace ${isCollapsed ? "is-collapsed" : ""}" data-cwd="${escapeHtml(group.cwd)}" data-od-id="workspace-${groupIndex}">
+              <header class="workspace-header" ${isCollapsible ? 'data-action="collapse"' : ""}>
+                ${isCollapsible ? `<button class="workspace-name workspace-collapse-trigger" type="button" data-action="collapse" aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? "Expand" : "Collapse"} ${escapeHtml(group.label)}" title="~/projects/${escapeHtml(group.label)}" data-od-id="collapse-workspace-${groupIndex}"><span class="workspace-collapse-icon">${icon("chevron")}</span><span>${escapeHtml(group.label)}</span></button>` : `<div class="workspace-name" title="${escapeHtml(group.cwd)}" data-od-id="workspace-name-${groupIndex}">${escapeHtml(group.label)}</div>`}
+                <div class="workspace-header-actions">
+                  ${isCollapsed ? `<span class="workspace-summary" aria-label="${modeLabel}, ${sessions.length} ${sessionLabel}">${modeLabel} · ${sessions.length} ${sessionLabel}</span>` : `<button class="button button-icon workspace-mode-toggle" type="button" data-action="mode" data-mode="${nextMode}" aria-pressed="${mode === "all"}" aria-label="${modeLabel} sessions. ${modeActionLabel}" title="${modeLabel} sessions · ${modeActionLabel}" data-od-id="${groupIndex}-mode-toggle">${icon(nextMode === "all" ? "modeExpand" : "modeCollapse")}</button>`}
+                  <button class="button button-icon workspace-new-session" type="button" data-action="new" data-cwd="${escapeHtml(group.cwd)}" data-od-id="new-session-${groupIndex}" aria-label="New session in ${escapeHtml(group.label)}" title="New session">${icon("plus")}</button>
+                  <button class="button button-icon workspace-refresh" type="button" data-action="refresh" data-od-id="refresh-workspace-${groupIndex}" aria-label="Refresh ${escapeHtml(group.label)}" title="Refresh">${icon("refresh")}</button>
+                </div>
+              </header>
+              ${sessions.map((session, sessionIndex) => `
+                <div class="session-row ${state.selectedId === session.id ? "is-selected" : ""}" data-session-row="${escapeHtml(session.id)}" data-od-id="session-row-${groupIndex}-${sessionIndex}">
+                  <button class="session-main" type="button" data-action="open" data-session-id="${escapeHtml(session.id)}" data-od-id="open-session-${escapeHtml(session.id)}">
+                    <span class="status-dot ${session.active ? "is-active" : ""}" aria-hidden="true"></span>
+                    <span class="session-copy">
+                      <span class="session-name">${escapeHtml(session.name)}</span>
+                    </span>
+                  </button>
+                  <div class="session-meta">
+                    <time class="session-time">${escapeHtml(session.time)}</time>
+                    <div class="row-actions">
+                      <button class="row-action ${state.copiedId === session.id ? "is-copied" : ""}" type="button" data-action="copy" data-session-id="${escapeHtml(session.id)}" data-od-id="copy-session-${escapeHtml(session.id)}" aria-label="${state.copiedId === session.id ? "Copied" : "Copy session ID"}" title="${state.copiedId === session.id ? "Copied" : "Copy session ID"}">${icon(state.copiedId === session.id ? "check" : "copy")}</button>
+                      ${session.active ? `<button class="row-action archive" type="button" data-action="archive" data-session-id="${escapeHtml(session.id)}" data-od-id="archive-session-${escapeHtml(session.id)}" aria-label="Archive" title="Archive">${icon("archive")}</button>` : `<button class="row-action unarchive" type="button" data-action="unarchive" data-session-id="${escapeHtml(session.id)}" data-od-id="unarchive-session-${escapeHtml(session.id)}" aria-label="Unarchive" title="Unarchive">${icon("unarchive")}</button>`}
+                    </div>
+                  </div>
+                </div>
+              `).join("")}
+            </section>
+          `;
+        }).join("");
+        updateChat(findSession(state.selectedId));
+      }
+
+      function showStatus(message, isError = false) {
+        window.clearTimeout(state.statusTimer);
+        status.textContent = message;
+        status.classList.toggle("is-error", isError);
+        if (message) {
+          state.statusTimer = window.setTimeout(() => {
+            status.textContent = "";
+            status.classList.remove("is-error");
+          }, 2600);
+        }
+      }
+
+      function findSession(id) {
+        for (const group of state.groups) {
+          const session = group.sessions.find((item) => item.id === id);
+          if (session) return session;
+        }
+        return null;
+      }
+
+      function findWorkspaceForSession(id) {
+        return state.groups.find((group) => group.sessions.some((session) => session.id === id));
+      }
+
+      function updateChat(session) {
+        const workspace = session && findWorkspaceForSession(session.id);
+        if (!session || !workspace) return;
+        chatTitle.textContent = session.name;
+        chatContext.textContent = `${workspace.label} · ${workspace.cwd}`;
+      }
+
+      function appendMessage(type, copy) {
+        const message = document.createElement("article");
+        const isUserMessage = type === "user";
+        message.className = `message${isUserMessage ? " is-user" : ""}`;
+        const sentAt = new Date();
+        const timestamp = new Intl.DateTimeFormat([], {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false
+        }).format(sentAt);
+        message.innerHTML = `<div class="message-body"><p class="message-copy"></p><time class="message-time" datetime="${sentAt.toISOString()}">${timestamp}</time></div>`;
+        message.querySelector(".message-copy").textContent = copy;
+        chatThread.append(message);
+        chatThread.scrollTop = chatThread.scrollHeight;
+      }
+
+      async function copySessionId(id) {
+        try {
+          await navigator.clipboard.writeText(id);
+        } catch {
+          showStatus("Copy failed", true);
+        }
+        state.copiedId = id;
+        window.clearTimeout(state.copiedTimer);
+        state.copiedTimer = window.setTimeout(() => {
+          state.copiedId = null;
+          render();
+        }, 1000);
+        render();
+      }
+
+      function addSession(cwd) {
+        const group = state.groups.find((item) => item.cwd === cwd);
+        if (!group) return;
+        const newId = crypto.randomUUID();
+        group.sessions.unshift({ id: newId, name: "New Pi session", time: "Just now", active: true });
+        state.modes.set(group.cwd, "active");
+        state.selectedId = newId;
+        render();
+        showStatus(`New session added to ${group.label}`);
+      }
+
+      function addWorkspace() {
+        const workspaceNumber = state.groups.length + 1;
+        const label = `new-workspace-${workspaceNumber}`;
+        const cwd = `/Users/aya/Projects/${label}`;
+        const sessionId = crypto.randomUUID();
+        state.groups.push({
+          cwd,
+          label,
+          sessions: [{ id: sessionId, name: "New Pi session", time: "Just now", active: true }]
+        });
+        state.modes.set(cwd, "active");
+        state.selectedId = sessionId;
+        render();
+        showStatus(`New workspace added to ${label}`);
+      }
+
+      document.querySelector(".chat-header-icon").innerHTML = icon("more");
+      document.querySelector(".new-workspace-icon").innerHTML = icon("plus");
+      document.querySelector(".send-icon").innerHTML = icon("send");
+
+      chatForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const message = chatInput.value.trim();
+        if (!message) return;
+        appendMessage("user", message);
+        chatInput.value = "";
+        window.setTimeout(() => appendMessage("assistant", "Message queued for this session."), 360);
+      });
+
+      chatInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          chatForm.requestSubmit();
+        }
+      });
+
+      document.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element)) return;
+        const target = event.target.closest("[data-action]");
+        if (!target) return;
+        const action = target.dataset.action;
+        const id = target.dataset.sessionId;
+        const cwd = target.dataset.cwd;
+
+        if (action === "mode") {
+          const workspace = target.closest("[data-cwd]");
+          state.modes.set(workspace.dataset.cwd, target.dataset.mode);
+          render();
+        }
+        if (action === "collapse") {
+          const workspace = target.closest("[data-cwd]");
+          const cwd = workspace.dataset.cwd;
+          if (state.collapsedWorkspaces.has(cwd)) {
+            state.collapsedWorkspaces.delete(cwd);
+          } else {
+            state.collapsedWorkspaces.add(cwd);
+          }
+          render();
+        }
+        if (action === "refresh") {
+          render();
+          showStatus("List refreshed");
+        }
+        if (action === "new-workspace") addWorkspace();
+        if (action === "new") addSession(cwd);
+        if (action === "open" && id) {
+          const session = findSession(id);
+          state.selectedId = id;
+          render();
+          showStatus(session ? `Opened “${session.name}”` : "Session opened");
+        }
+        if (action === "copy" && id) copySessionId(id);
+        if ((action === "archive" || action === "unarchive") && id) {
+          const session = findSession(id);
+          if (session) session.active = action === "unarchive";
+          if (action === "archive" && state.selectedId === id) state.selectedId = null;
+          render();
+          showStatus(action === "archive" ? "Session archived" : "Session unarchived");
+        }
+      });
+
+      render();
+    </script>
+  </body>
+</html>
