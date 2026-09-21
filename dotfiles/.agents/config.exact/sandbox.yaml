@@ -108,4 +108,6 @@ commands:
       - '^(wipefs|parted|fdisk|sfdisk|sgdisk)(\s|$)'
       - '^(shutdown|reboot|poweroff|halt)(\s|$)'
   - ask:
-      - '/mnt(?:/|\s|$)'
+      - '^/mnt(?:/|\s|$)'
+  - allow:
+      - '^/mnt/c/WINDOWS/system32/wsl\.exe(\s|$)'
