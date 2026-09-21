@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { parse as parseShell } from "shell-quote";
@@ -691,6 +691,48 @@ export function defaultSandboxConfigPath(
   return join(agentDir, "..", "..", ".agents", "config.exact", "sandbox.yaml");
 }
 
+function readKernelRelease(): string {
+  try {
+    return readFileSync("/proc/sys/kernel/osrelease", "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** WSL has explicit markers and a kernel release marker; native Linux has neither. */
+export function isWslEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+  kernelRelease = readKernelRelease(),
+): boolean {
+  return (
+    environment.WSL_INTEROP !== undefined ||
+    environment.WSL_DISTRO_NAME !== undefined ||
+    /(?:microsoft|wsl)/i.test(kernelRelease)
+  );
+}
+
+const WSL_WINDOWS_PATH_ENTRY = /^\/mnt\/[A-Za-z](?:\/|$)/;
+
+function isWslWindowsPathEntry(pathEntry: string): boolean {
+  return WSL_WINDOWS_PATH_ENTRY.test(pathEntry);
+}
+
+/** Remove only WSL-translated Windows PATH entries from one sandbox child. */
+export function sanitizeSandboxEnvironment(
+  environment: NodeJS.ProcessEnv,
+  kernelRelease = readKernelRelease(),
+): NodeJS.ProcessEnv {
+  if (!isWslEnvironment(environment, kernelRelease) || environment.PATH === undefined)
+    return { ...environment };
+
+  return {
+    ...environment,
+    PATH: environment.PATH.split(delimiter)
+      .filter((pathEntry) => !isWslWindowsPathEntry(pathEntry))
+      .join(delimiter),
+  };
+}
+
 export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
   /** One-shot ask_permission approvals, as normalized command segments (§3). */
@@ -1291,12 +1333,13 @@ export class Sandbox {
     options: RunOptions,
   ): Promise<RunResult> {
     return new Promise((resolveRun, rejectRun) => {
+      const environment = sanitizeSandboxEnvironment({ ...process.env, ...options.env });
       const child = spawn(
         "bwrap",
         [...this.buildArgs(options.mode ?? "fs", options.cwd ?? this.cwd), command, ...commandArgs],
         {
           cwd: this.cwd,
-          env: options.env,
+          env: environment,
           stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         },
       );

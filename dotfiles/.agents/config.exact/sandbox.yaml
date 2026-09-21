@@ -109,5 +109,3 @@ commands:
       - '^(shutdown|reboot|poweroff|halt)(\s|$)'
   - ask:
       - '/mnt(?:/|\s|$)'
-      - '(?i:(?:^|/)[^/\s]+\.(?:exe|com|bat|cmd)(?:\s|$))'
-      - '(?i:^(?:powershell|pwsh|cmd|wsl|explorer|reg(?:edit)?|rundll32|mshta|cscript|wscript|schtasks)(?:\s|$))'

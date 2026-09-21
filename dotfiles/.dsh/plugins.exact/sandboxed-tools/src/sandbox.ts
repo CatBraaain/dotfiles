@@ -757,6 +757,48 @@ export const RUNTIME_PATHS = [
   join(homedir(), ".nix-profile"),
 ];
 
+function readKernelRelease(): string {
+  try {
+    return readFileSync("/proc/sys/kernel/osrelease", "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** WSL has explicit markers and a kernel release marker; native Linux has neither. */
+export function isWslEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+  kernelRelease = readKernelRelease(),
+): boolean {
+  return (
+    environment.WSL_INTEROP !== undefined ||
+    environment.WSL_DISTRO_NAME !== undefined ||
+    /(?:microsoft|wsl)/i.test(kernelRelease)
+  );
+}
+
+const WSL_WINDOWS_PATH_ENTRY = /^\/mnt\/[A-Za-z](?:\/|$)/;
+
+function isWslWindowsPathEntry(pathEntry: string): boolean {
+  return WSL_WINDOWS_PATH_ENTRY.test(pathEntry);
+}
+
+/** Remove only WSL-translated Windows PATH entries from one sandbox child. */
+export function sanitizeSandboxEnvironment(
+  environment: NodeJS.ProcessEnv,
+  kernelRelease = readKernelRelease(),
+): NodeJS.ProcessEnv {
+  if (!isWslEnvironment(environment, kernelRelease) || environment.PATH === undefined)
+    return { ...environment };
+
+  return {
+    ...environment,
+    PATH: environment.PATH.split(delimiter)
+      .filter((pathEntry) => !isWslWindowsPathEntry(pathEntry))
+      .join(delimiter),
+  };
+}
+
 /**
  * The sandboxed-tools policy engine and sandbox launcher: configuration
  * loading with the all-deny fallback, pattern expansion, action resolution
@@ -1317,7 +1359,7 @@ export class Sandbox {
     },
   ): Promise<SandboxRunResult> {
     return new Promise((resolveRun, rejectRun) => {
-      const environment = { ...process.env, ...options.env };
+      const environment = sanitizeSandboxEnvironment({ ...process.env, ...options.env });
       if (this.hostPaths?.rtkPath !== undefined) {
         const rtkDirectory = dirname(this.hostPaths.rtkPath);
         const pathEntries = (environment.PATH ?? "").split(delimiter).filter(Boolean);

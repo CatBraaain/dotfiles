@@ -332,6 +332,16 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 4. network namespace は分離しない。
 5. abort は bwrap ごと child process を停止する。`bash` の timeout は sandbox 内のヘルパーが処理する。
 
+### 7.1 WSL の child process 環境
+
+WSL 上で bwrap を起動するとき、sandboxed child process に渡す `PATH` を次の規則で作る:
+
+- WSL は `WSL_INTEROP` または `WSL_DISTRO_NAME` の環境変数、または kernel release の `microsoft` / `wsl` marker で判定する。native Linux の `/mnt` を理由に WSL と判定しない。
+- WSL と判定したときだけ、`/mnt/<単一の英字ドライブ名>`（例: `/mnt/c/Windows/System32`）で始まる PATH 要素を除外する。
+- その他の PATH 要素（runtime path、rtk の PATH を含む）は保持する。WSL でない環境の PATH は変更しない。
+- 変更対象は bwrap child process の環境だけであり、host の shell・WSL・Git Bash の PATH は変更しない。
+- PATH filtering は bare command の解決に適用する。`/mnt/c/.../*.exe` のような絶対パスの実行を禁止せず、既存の `/mnt` ask と役割を分担する。
+
 ---
 
 ## 8. bash の rtk rewrite

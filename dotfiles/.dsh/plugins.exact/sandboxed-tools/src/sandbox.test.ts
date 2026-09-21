@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   Sandbox,
@@ -22,6 +22,8 @@ import {
   resolveCommandAction,
   resolvePathAction,
   resolvePathActionMatch,
+  isWslEnvironment,
+  sanitizeSandboxEnvironment,
   withSandboxSlot,
 } from "./sandbox";
 import { existsSync } from "node:fs";
@@ -1036,6 +1038,45 @@ describe("§6.1 buildArgs と実在保証", () => {
       }
     }),
   );
+});
+
+describe("§7 WSL の子プロセス PATH", () => {
+  it("WSL の Windows PATH だけを除外し、他の PATH と入力環境を保つ", () => {
+    const originalPath = [
+      "/nix/profile/bin",
+      "/mnt/c/Windows/System32",
+      "/home/user/bin",
+      "/home/user/rtk/bin",
+      "/mnt/d/Program Files/tool",
+      "/mnt/data/bin",
+    ].join(delimiter);
+    const environment = { PATH: originalPath, WSL_INTEROP: "/run/interop" };
+
+    const sanitized = sanitizeSandboxEnvironment(environment, "6.8.0-generic");
+
+    assert.equal(
+      sanitized.PATH,
+      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(delimiter),
+    );
+    assert.equal(environment.PATH, originalPath);
+  });
+
+  it("WSL でない Linux の /mnt PATH は除外しない", () => {
+    const environment = { PATH: ["/mnt/c/tools", "/mnt/data/bin", "/usr/bin"].join(delimiter) };
+
+    assert.equal(isWslEnvironment(environment, "6.8.0-generic"), false);
+    assert.equal(sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH, environment.PATH);
+  });
+
+  it("WSL kernel marker でも Windows PATH を除外する", () => {
+    const environment = { PATH: ["/mnt/c/tools", "/usr/bin"].join(delimiter) };
+
+    assert.equal(isWslEnvironment(environment, "5.15.153.1-microsoft-standard-WSL2"), true);
+    assert.equal(
+      sanitizeSandboxEnvironment(environment, "5.15.153.1-microsoft-standard-WSL2").PATH,
+      "/usr/bin",
+    );
+  });
 });
 
 describe("§7 sandbox 同時実行セマフォ", () => {
