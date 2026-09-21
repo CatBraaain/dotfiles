@@ -96,7 +96,6 @@ export const openDesignOdWriteCommand = [
 export class Bootstrap {
   private readonly failures: string[] = [];
   private readonly customHandlers: ReadonlyMap<string, CustomHandler>;
-  private aptUpdated = false;
   private flatpakRemotePrepared = false;
 
   constructor(
@@ -108,7 +107,13 @@ export class Bootstrap {
   }
 
   async sync(): Promise<number> {
-    for (const batch of coalesceEntries(this.entries)) await this.install(batch);
+    const aptValues = this.entries
+      .filter((entry) => entry.key === "apt")
+      .map((entry) => entry.value);
+    if (aptValues.length > 0) await this.install({ key: "apt", values: aptValues });
+
+    const entriesWithoutApt = this.entries.filter((entry) => entry.key !== "apt");
+    for (const batch of coalesceEntries(entriesWithoutApt)) await this.install(batch);
 
     const states = this.readStates();
     for (const key of declarativeKeys) this.removeUnused(key, states.get(key));
@@ -235,10 +240,7 @@ export class Bootstrap {
         case "apt": {
           const missing = batch.values.filter((value) => !isAptInstalled(this.runtime, value));
           if (missing.length === 0) return;
-          if (!this.aptUpdated) {
-            this.runtime.execute(["sudo", "apt", "update"]);
-            this.aptUpdated = true;
-          }
+          this.runtime.execute(["sudo", "apt", "update"]);
           this.runtime.execute(["sudo", "apt", "install", "-y", ...missing]);
           return;
         }

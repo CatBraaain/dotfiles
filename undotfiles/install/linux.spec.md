@@ -11,7 +11,7 @@
 
 ## 設定
 
-設定ファイルは`linux.ts`と同じディレクトリにある`linux.config.yaml`である。トップレベルは配列で、各要素はキーが1つだけのマップとし、その値は1つの文字列とする。配列の順序はInstall / Ensure Phaseの実行順序を表す。
+設定ファイルは`linux.ts`と同じディレクトリにある`linux.config.yaml`である。トップレベルは配列で、各要素はキーが1つだけのマップとし、その値は1つの文字列とする。`apt`以外の項目では、配列の順序がInstall / Ensure Phaseの実行順序を表す。`apt`項目はこの順序によらず、Install / Ensure Phaseの先頭でまとめて処理する。
 
 | キー | 値 | 管理方式 |
 | --- | --- | --- |
@@ -63,11 +63,11 @@
 
 ### 1. Install / Ensure Phase
 
-設定配列を先頭から末尾へ処理する。`apt`、`flatpak`、`uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`では、配列上で連続する同じキーの項目を1つのバックエンド操作にまとめる。`custom`と`run`はまとめない。異なるキーが挟まれたあとに再び同じキーが現れた場合は、別のバッチとして処理する。`go install`は同一バッチ内の引数でバージョンsuffixが一致している必要があり、不一致のときはバックエンドが失敗する。宣言的Managerと`run`の各項目は、導入済みかどうかにかかわらず実行する。
+最初に設定配列から全`apt`項目を収集し、1つのバッチとして処理する。その後、`apt`項目を除いた設定配列を先頭から末尾へ処理する。`flatpak`、`uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`では、配列上で連続する同じキーの項目を1つのバックエンド操作にまとめる。`custom`と`run`はまとめない。異なるキーが挟まれたあとに再び同じキーが現れた場合は、別のバッチとして処理する。`go install`は同一バッチ内の引数でバージョンsuffixが一致している必要があり、不一致のときはバックエンドが失敗する。宣言的Managerと`run`の各項目は、導入済みかどうかにかかわらず実行する。
 
 | キー | 振る舞い |
 | --- | --- |
-| `apt` | 各パッケージ値から解決したDebianパッケージ名について`dpkg-query -W`で導入済みか確認し、未導入のものだけinstall操作を実行する。バッチ内の対象がすべて導入済みなら何もしない。未導入のものがあるときだけ、最初の`apt`バッチ処理前に`sudo apt update`を1回実行する。 |
+| `apt` | 設定配列中の全パッケージ値から解決したDebianパッケージ名について`dpkg-query -W`で導入済みか確認し、未導入のものだけを1回のinstall操作で導入する。全対象が導入済みなら何もしない。未導入のものがあるときだけ、install操作の前に`sudo apt update`を1回実行する。 |
 | `flatpak` | 各アプリIDについて`flatpak info --user`で導入済みか確認し、未導入のものだけinstall操作を実行する。バッチ内の対象がすべて導入済みなら何もしない。未導入のものがあるときだけ、最初の`flatpak`バッチ処理前に`flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo`を1回実行する。 |
 | `uv` | 指定されたPythonパッケージごとに `uv tool install -q` を実行する。連続する`uv`項目は1つの処理単位にまとめるが、1パッケージずつ実行する。導入済みの already installed メッセージは出ない。 |
 | `bun` | 指定されたnpmパッケージに対して `bun add -g --silent` を実行する。`bun add` の installed 要約は出ない。 |
