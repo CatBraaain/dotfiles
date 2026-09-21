@@ -57,6 +57,35 @@ usage: browse search "<query>" [--lang <code>] [--json]
 
 challenge / captcha の検出は、Cloudflare 系シグナルと Google 固定ページ（CAPTCHA/sorry、JS リトライのみの soft block）の構造シグナルで行い、ロケール依存の文言は使わない。
 
+## fallback / retry の流れ
+
+Camoufox の render failure には自動復旧を適用する。Reddit / StackOverflow の専用経路には適用しない。challenge / captcha の再試行は共通の振る舞い表に従う。
+
+| 経路 | 取得方法 | render failure 時の扱い |
+|---|---|---|
+| `search` | Google → DuckDuckGo → Bing | 同じ engine の再試行後、次の engine へ進む |
+| `fetch` の Reddit | 専用経路（RSS → embed → oEmbed） | Camoufox を使わない |
+| `fetch` の StackOverflow | 専用経路（StackExchange API → 質問フィード） | Camoufox を使わない |
+| `fetch` のその他 URL | Camoufox → trafilatura | 次の図に従う |
+
+### Camoufox render failure
+
+```mermaid
+flowchart TD
+  Render["Camoufox render"] --> Result{"結果"}
+  Result -- "成功" --> Output["出力"]
+  Result -- "abort / timeout / 切断" --> Health["server の機能を確認"]
+  Health -- "応答可能" --> Retry["新しい session で同じ backend を再試行"]
+  Health -- "応答不能" --> Restart["server を再起動"]
+  Restart -- "成功" --> Retry
+  Restart -- "失敗" --> Failure["search: 次の engine / fetch: 失敗"]
+  Retry --> RetryResult{"再試行の結果"}
+  RetryResult -- "成功" --> Output
+  RetryResult -- "失敗" --> Failure
+```
+
+server の復旧を伴う再試行は1コマンド全体で1回までとする。詳細な timeout、stderr、JSON 出力は各コマンドの表に従う。
+
 ## `browse start`
 
 camoufox server の起動を保証する冪等なサブコマンド。CLI 内部（search / fetch の server 確保）と共通 startup script の priming の両方が、このサブコマンドを detached に起動する。
