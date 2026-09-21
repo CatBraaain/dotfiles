@@ -69,7 +69,7 @@ const CREATED_JSON = {
 // Minimal exec fixtures: session cwd comes from the agent's session header.
 function fakeExec(cwd?: string): ToolRunContext {
   return {
-    agent: cwd === undefined ? undefined : { session: { header: { cwd } } },
+    agent: cwd === undefined ? undefined : { session: { header: { cwd, id: "dsh-session" } } },
     signal: new AbortController().signal,
   } as unknown as ToolRunContext;
 }
@@ -284,12 +284,19 @@ describe("tool execution", () => {
     assert.deepEqual(calls, [[["list", "--all", "--project", "demo"], "/work/repo", exec.signal]]);
   });
 
-  it("execute falls back to the process cwd without an agent", async () => {
+  it("read tools fall back to the process cwd without an agent", async () => {
+    const { runCli, calls } = fakeRunner(LIST_JSON);
+    const tool = toolByName(createTicketTools({ runCli }), "ticket_list");
+    const exec = fakeExec(undefined);
+    await tool.execute({}, exec);
+    assert.deepEqual(calls, [[["list"], process.cwd(), exec.signal]]);
+  });
+
+  it("write tools reject an agent-less execution before spawning", async () => {
     const { runCli, calls } = fakeRunner(CREATED_JSON);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_create");
-    const exec = fakeExec(undefined);
-    await tool.execute({ title: "T" }, exec);
-    assert.deepEqual(calls, [[["create", '{"title":"T"}'], process.cwd(), exec.signal]]);
+    await assert.rejects(() => tool.execute({ title: "T" }, fakeExec(undefined)), /require an agent session owner/);
+    assert.equal(calls.length, 0);
   });
 
   it("execute converts TicketCliError into a tool failure with the CLI stderr", async () => {
@@ -314,14 +321,14 @@ describe("tool execution", () => {
     const { runCli, calls } = fakeRunner(CREATED_JSON);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_set");
     await tool.execute({ selector: "x", status: "open", after: null }, fakeExec("/w"));
-    assert.deepEqual(calls[0]?.[0], ["set", "x", '{"status":"open","after":null}']);
+    assert.deepEqual(calls[0]?.[0], ["set", "x", '{"status":"open","after":null}', "--owner", "dsh-session"]);
   });
 
   it("ticket_edit maps selector, old, and new to the CLI args", async () => {
     const { runCli, calls } = fakeRunner(CREATED_JSON);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_edit");
     await tool.execute({ selector: "x", old: "a", new: "b" }, fakeExec("/w"));
-    assert.deepEqual(calls[0]?.[0], ["edit", "x", "--", "a", "b"]);
+    assert.deepEqual(calls[0]?.[0], ["edit", "x", "--owner", "dsh-session", "--", "a", "b"]);
   });
 });
 
@@ -343,6 +350,7 @@ describe("tool descriptions", () => {
     assert.match(list, /all/);
 
     assert.match(descriptionOf("ticket_show"), /selector/);
+    assert.match(descriptionOf("ticket_show"), /project/);
 
     const create = descriptionOf("ticket_create");
     assert.match(create, /title/);
@@ -355,12 +363,19 @@ describe("tool descriptions", () => {
     assert.match(set, /status/);
     assert.match(set, /after/);
     assert.match(set, /selector/);
+    assert.match(set, /project/);
 
     const edit = descriptionOf("ticket_edit");
     assert.match(edit, /\bold\b/);
     assert.match(edit, /\bnew\b/);
     assert.match(edit, /ticket_show/);
     assert.match(edit, /line breaks/);
+  });
+
+  it("describes the cwd-derived project default for every tool", () => {
+    for (const tool of createTicketTools()) {
+      assert.match(tool.description, /project.*defaults to the project resolved from the session cwd/i);
+    }
   });
 
   it("mentions the next-default selector for the selector-taking tools", () => {

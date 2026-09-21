@@ -13,7 +13,14 @@ import {
   type TicketFields,
   type TicketWithBody,
 } from "@dotfiles/agent-lib/ticket";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  truncateHead,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
 // --- tool parameter schemas (argument names match ticket-tools.spec.md) ---
@@ -206,14 +213,53 @@ export const ticketToolDescriptions = {
     "Only status and/or after can be set; selector is a ticket ID, a unique prefix, or \"next\" (default). " +
     "The linkage auto-switches the status unless an explicit status is given: setting an unresolved after blocks the ticket, " +
     "clearing after (null) reopens a blocked ticket. Setting status to closed releases dependent blocked tickets back to open. " +
-    "The CLI validates the update: after must exist and must not be closed or cancelled, and cycles fail without rewriting.",
+    "The CLI validates the update: after must exist and must not be closed or cancelled, and cycles fail without rewriting. " +
+    "project selects the ticket store (defaults to the project resolved from the session cwd).",
   ticket_edit:
     "Edit a ticket's body via the `ticket edit` CLI subcommand and return the updated id, status, after, and path. " +
     "Call ticket_show first and copy old exactly from its body, including line breaks. " +
     "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the body, so it can be replaced. " +
     "Zero or multiple occurrences of old fail without rewriting. " +
-    "selector is a ticket ID, a unique prefix, or \"next\" (default); project selects the ticket store.",
+    "selector is a ticket ID, a unique prefix, or \"next\" (default); project selects the ticket store " +
+    "and defaults to the project resolved from the session cwd.",
 } as const;
+
+function addOwner(args: string[], owner: string): string[] {
+  const optionTerminator = args.indexOf("--");
+  if (optionTerminator === -1) return [...args, "--owner", owner];
+  return [...args.slice(0, optionTerminator), "--owner", owner, ...args.slice(optionTerminator)];
+}
+
+function truncateTicketOutput(text: string, recoveryHint: string): string {
+  const truncation = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
+  if (!truncation.truncated) return text;
+
+  let content = truncation.content;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const marker = `[Output truncated: ${content.split("\n").length} of ${truncation.totalLines} lines (${formatSize(Buffer.byteLength(content, "utf8"))} of ${formatSize(truncation.totalBytes)}). ${recoveryHint}]`;
+    const suffix = content === "" ? marker : `\n\n${marker}`;
+    const result = `${content}${suffix}`;
+    if (Buffer.byteLength(result, "utf8") <= DEFAULT_MAX_BYTES && result.split("\n").length <= DEFAULT_MAX_LINES) {
+      return result;
+    }
+
+    const suffixBytes = Buffer.byteLength(suffix, "utf8");
+    const suffixLines = content === "" ? 1 : 2;
+    content = truncateHead(text, {
+      maxBytes: Math.max(0, DEFAULT_MAX_BYTES - suffixBytes),
+      maxLines: Math.max(0, DEFAULT_MAX_LINES - suffixLines),
+    }).content;
+  }
+
+  return `[Output truncated: ${truncation.totalLines} lines (${formatSize(truncation.totalBytes)}). ${recoveryHint}]`;
+}
+
+function truncateTicketShow(ticket: TicketWithBody): string {
+  return truncateTicketOutput(
+    formatTicketShow(ticket),
+    "Use ticket show with this selector to read the complete body.",
+  );
+}
 
 export const ticketToolPromptSnippets = {
   ticket_list: "List tickets in the project ticket store",
@@ -247,7 +293,9 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     signal: AbortSignal | undefined,
   ): Promise<unknown> {
     try {
-      return await runCli(args, ctx.cwd, signal);
+      const writeCommand = ["create", "set", "edit"].includes(args[0]!);
+      const cliArgs = writeCommand ? addOwner(args, ctx.sessionManager.getSessionId()) : args;
+      return await runCli(cliArgs, ctx.cwd, signal);
     } catch (error) {
       if (error instanceof TicketCliError) throw new Error(error.stderr || error.message);
       throw error;
@@ -263,7 +311,13 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const json = (await runTicket(buildListArgs(params), ctx, signal)) as TicketFields[];
       return {
-        content: [{ type: "text", text: formatTicketList(json, params.all === true) }],
+        content: [{
+          type: "text",
+          text: truncateTicketOutput(
+            formatTicketList(json, params.all === true),
+            "Use ticket list with the same filters to read the complete list.",
+          ),
+        }],
         details: json,
       };
     },
@@ -278,7 +332,7 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const json = (await runTicket(buildShowArgs(params), ctx, signal)) as TicketWithBody;
       return {
-        content: [{ type: "text", text: formatTicketShow(json) }],
+        content: [{ type: "text", text: truncateTicketShow(json) }],
         details: json,
       };
     },
@@ -290,6 +344,7 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     description: ticketToolDescriptions.ticket_create,
     promptSnippet: ticketToolPromptSnippets.ticket_create,
     parameters: ticketCreateParameters,
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const json = (await runTicket(buildCreateArgs(params), ctx, signal)) as TicketFields;
       return {
@@ -305,6 +360,7 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     description: ticketToolDescriptions.ticket_set,
     promptSnippet: ticketToolPromptSnippets.ticket_set,
     parameters: ticketSetParameters,
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const json = (await runTicket(buildSetArgs(params), ctx, signal)) as TicketFields;
       return {
@@ -320,6 +376,7 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     description: ticketToolDescriptions.ticket_edit,
     promptSnippet: ticketToolPromptSnippets.ticket_edit,
     parameters: ticketEditParameters,
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const json = (await runTicket(buildEditArgs(params), ctx, signal)) as TicketFields;
       return {

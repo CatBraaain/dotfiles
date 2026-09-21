@@ -89,6 +89,12 @@ function projectFlag(project: string | undefined): string[] {
   return project === undefined ? [] : ["--project", project];
 }
 
+function addOwner(args: string[], owner: string): string[] {
+  const optionTerminator = args.indexOf("--");
+  if (optionTerminator === -1) return [...args, "--owner", owner];
+  return [...args.slice(0, optionTerminator), "--owner", owner, ...args.slice(optionTerminator)];
+}
+
 export function buildListArgs(args: TicketListArgs): string[] {
   return [
     "list",
@@ -141,6 +147,12 @@ export function sessionCwd(exec: Pick<ToolRunContext, "agent">): string {
   return exec.agent?.session.header.cwd ?? process.cwd();
 }
 
+function sessionOwner(exec: Pick<ToolRunContext, "agent">): string {
+  const owner = exec.agent?.session.header.id;
+  if (!owner) throw new Error("ticket write tools require an agent session owner");
+  return owner;
+}
+
 // TicketCliError -> tool failure: the CLI's stderr text is the error the
 // model sees (ticket-tools.spec.md 共通の振る舞い); other errors pass
 // through unchanged.
@@ -167,19 +179,21 @@ const SELECTOR_DESCRIPTION =
 
 const LIST_DESCRIPTION =
   "List tickets (wraps `ticket list`): one line per ticket with id, status, and title — " +
-  "open tickets only unless you filter with status. Pick the store with project, or set " +
-  "all=true to list every project (each line prefixed with the project name). " +
-  "Ticket ids resolve by unique prefix.";
+  "open tickets only unless you filter with status. Pick the store with project " +
+  "(defaults to the project resolved from the session cwd), or set all=true to list every " +
+  "project (each line prefixed with the project name). Ticket ids resolve by unique prefix.";
 
 const SHOW_DESCRIPTION =
   "Show one ticket (wraps `ticket show`): id, status, after, title, and body. " +
-  "selector is a ticket id, a prefix unique to one ticket, or \"next\" (default).";
+  "selector is a ticket id, a prefix unique to one ticket, or \"next\" (default). " +
+  "project picks the ticket store (defaults to the project resolved from the session cwd).";
 
 const CREATE_DESCRIPTION =
   "Create a ticket (wraps `ticket create`): returns the new id, status, after, and path. " +
   "body is placed under the title, status defaults to open, and after sets the single ticket " +
   "id this ticket waits on (unique prefixes are fine) — it blocks the ticket unless a status " +
-  "is given, and it must exist and not be closed or cancelled. project picks another store.";
+  "is given, and it must exist and not be closed or cancelled. project picks the store " +
+  "(defaults to the project resolved from the session cwd).";
 
 const SET_DESCRIPTION =
   "Update one ticket's frontmatter (wraps `ticket set`): returns the updated id, status, after, " +
@@ -187,21 +201,25 @@ const SET_DESCRIPTION =
   "\"next\" (default). The linkage auto-switches the status unless an explicit status wins: " +
   "setting an unresolved after blocks the ticket, clearing after (null) reopens a blocked one, " +
   "and status closed releases dependent blocked tickets back to open. The CLI validates the " +
-  "update: after must exist and must not be closed or cancelled, and cycles fail without rewriting.";
+  "update: after must exist and must not be closed or cancelled, and cycles fail without rewriting. " +
+  "project picks the ticket store (defaults to the project resolved from the session cwd).";
 
 const EDIT_DESCRIPTION =
   "Edit one ticket's body (wraps `ticket edit`): returns the updated id, status, after, and path. " +
   "Call ticket_show first and copy old exactly from its body, including line breaks. " +
   "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the " +
   "body, so it can be replaced. Zero or multiple occurrences of old fail without rewriting. " +
-  "selector is a ticket id, a unique prefix, or \"next\" (default); project picks another store.";
+  "selector is a ticket id, a unique prefix, or \"next\" (default); project picks the store " +
+  "(defaults to the project resolved from the session cwd).";
 
 export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
   const runCli = deps.runCli ?? runTicketCli;
 
   const run = async (cliArgs: string[], exec: ToolRunContext): Promise<CliJson> => {
     try {
-      return (await runCli(cliArgs, sessionCwd(exec), exec.signal)) as CliJson;
+      const writeCommand = ["create", "set", "edit"].includes(cliArgs[0]!);
+      const args = writeCommand ? addOwner(cliArgs, sessionOwner(exec)) : cliArgs;
+      return (await runCli(args, sessionCwd(exec), exec.signal)) as CliJson;
     } catch (error) {
       throw toToolError(error);
     }

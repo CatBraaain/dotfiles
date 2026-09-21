@@ -28,7 +28,7 @@
 
 ## セッション cwd
 
-CLI の cwd には、呼び出し元 agent の session header の `cwd`（`exec.agent.session.header.cwd`）を使う。dsh 本体の tool（tool-bash の workdir 解決）や system prompt の `cwd` 変数と同じソース。agent がいない・header に `cwd` がない場合は `process.cwd()` に fallback する。
+CLI の cwd には、呼び出し元 agent の session header の `cwd`（`exec.agent.session.header.cwd`）を使う。dsh 本体の tool（tool-bash の workdir 解決）や system prompt の `cwd` 変数と同じソース。agent がいない・header に `cwd` がない場合、read tool は `process.cwd()` を使い、write tool は agent session owner を取得できず失敗する。
 
 ## エラー
 

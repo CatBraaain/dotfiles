@@ -84,7 +84,7 @@ export function runTicketCli(
         try {
           resolve(JSON.parse(stdout));
         } catch {
-          reject(new TicketCliError(stdout.trim(), "ticket CLI returned non-JSON output"));
+          reject(new TicketCliError("", `ticket CLI returned non-JSON output: ${stdout.trim()}`));
         }
       },
     );

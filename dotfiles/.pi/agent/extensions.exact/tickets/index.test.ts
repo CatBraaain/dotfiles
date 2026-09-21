@@ -12,6 +12,7 @@ import {
   ticketCliPath,
   TicketCliError,
 } from "@dotfiles/agent-lib/ticket";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import ticketsExtension, {
   buildCreateArgs,
   buildEditArgs,
@@ -64,7 +65,10 @@ function findTool(tools: CapturedTool[], name: string): CapturedTool {
 
 // Invokes a captured tool's execute with a fixed ctx.cwd.
 function exec(tool: CapturedTool, params: Record<string, unknown>): Promise<ToolResult> {
-  return tool.execute!("toolCall", params, undefined, undefined, { cwd: SESSION_CWD });
+  return tool.execute!("toolCall", params, undefined, undefined, {
+    cwd: SESSION_CWD,
+    sessionManager: { getSessionId: () => "pi-session" },
+  } as never);
 }
 
 // Fake CLI runner resolving with `resolved` and recording every call.
@@ -287,10 +291,14 @@ describe("tool descriptions", () => {
     assert.match(create, /after/);
     assert.match(create, /project/);
 
+    const show = ticketToolDescriptions.ticket_show;
+    assert.match(show, /project/);
+
     const set = ticketToolDescriptions.ticket_set;
     assert.match(set, /status/);
     assert.match(set, /after/);
     assert.match(set, /selector/);
+    assert.match(set, /project/);
 
     const edit = ticketToolDescriptions.ticket_edit;
     assert.match(edit, /\bold\b/);
@@ -298,6 +306,12 @@ describe("tool descriptions", () => {
     assert.match(edit, /selector/);
     assert.match(edit, /ticket_show/);
     assert.match(edit, /line breaks/);
+  });
+
+  it("describes the cwd-derived project default for every tool", () => {
+    for (const description of Object.values(ticketToolDescriptions)) {
+      assert.match(description, /project.*defaults to the project resolved from the session cwd/i);
+    }
   });
 
   it("describes ticket_set behavior: linkage, explicit status, closed release, and validation", () => {
@@ -465,6 +479,22 @@ describe("tool execute", () => {
     assert.deepEqual(allResult.content, [{ type: "text", text: formatTicketList(allJson, true) }]);
   });
 
+  it("truncates oversized ticket_list content but preserves its full details", async () => {
+    const json = Array.from({ length: 2_100 }, (_, index) => ({
+      id: `20260101-${String(index).padStart(6, "0")}`,
+      status: "open",
+      title: "ticket",
+      after: null,
+      path: `/p/${index}.md`,
+    }));
+    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_list"), {});
+    const text = result.content[0]!.text;
+    assert.match(text, /Output truncated/);
+    assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
+    assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
+    assert.deepEqual(result.details, json);
+  });
+
   it("ticket_show formats the runner JSON into content and returns it as details", async () => {
     const json = {
       id: "20260101-000000",
@@ -489,6 +519,27 @@ describe("tool execute", () => {
       body: "# A\n\nticket body  \n\n",
     });
     assert.match(text, /ticket body  \n\n$/);
+  });
+
+  it("truncates oversized ticket_show content but preserves its full details", async () => {
+    const body = "line\n".repeat(2_100);
+    const json = { ...TICKET_JSON, body };
+    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), {});
+    const text = result.content[0]!.text;
+    assert.match(text, /Output truncated/);
+    assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
+    assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
+    assert.deepEqual(result.details, json);
+  });
+
+  it("keeps the byte limit when ticket_show truncates a large body", async () => {
+    const body = `${"x".repeat(200)}\n`.repeat(400);
+    const json = { ...TICKET_JSON, body };
+    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), {});
+    const text = result.content[0]!.text;
+    assert.match(text, /Output truncated/);
+    assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
+    assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
   });
 
   it("ticket_create formats the runner JSON into content and returns it as details", async () => {
@@ -556,7 +607,7 @@ describe("tool execute", () => {
     );
   });
 
-  it("passes ctx.cwd to the runner for every tool", async () => {
+  it("passes ctx.cwd to the runner and adds its owner to write tools", async () => {
     const cases: Array<[string, Record<string, unknown>, unknown]> = [
       ["ticket_list", {}, []],
       ["ticket_show", { selector: "a" }, TICKET_JSON],
@@ -568,10 +619,10 @@ describe("tool execute", () => {
       const fake = fakeRunner(resolved);
       const tool = findTool(captureTools(fake), name);
       await exec(tool, params);
-      assert.deepEqual(
-        fake.calls.map((call) => call.cwd),
-        [SESSION_CWD],
-      );
+      assert.deepEqual(fake.calls.map((call) => call.cwd), [SESSION_CWD]);
+      if (["ticket_create", "ticket_set", "ticket_edit"].includes(name)) {
+        assert.ok(fake.calls[0]?.args.includes("pi-session"));
+      }
     }
   });
 
