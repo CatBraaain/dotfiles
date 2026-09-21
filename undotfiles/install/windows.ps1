@@ -26,6 +26,7 @@ $managedPackages = @(
     "Mojang.MinecraftLauncher"
     "M2Team.NanaZip"
     "OBSProject.OBSStudio"
+    "OpenWhispr.OpenWhispr"
     "Guru3D.RTSS"
     "ShareX.ShareX"
     "Meltytech.Shotcut"

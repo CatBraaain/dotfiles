@@ -114,6 +114,7 @@
 - apt: chromium
 - flatpak: com.visualstudio.code
 - custom: drawio
+- custom: openwhispr
 - brew-cask: android-commandlinetools
 - custom: android-sdk
 # OpenDesign: source install into ~/mirrors/open-design. The od wrapper in ~/.local/bin shadows /usr/bin/od.

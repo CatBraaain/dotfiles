@@ -47,7 +47,9 @@
 
 `uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。`cargo`のパッケージ指定はcrates.ioのcrate名または`crate@version`とし、Desired Stateのパッケージ識別子は`@version`より前のcrate名とする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。`brew`の現在状態は`brew leaves`で取得し、他のFormulaの依存先であるFormulaを削除対象に含めない。`cargo`の現在状態は`cargo install --list`で取得する。`go`の現在状態は`gup list --json`で取得する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除を行わず、失敗として記録する。
 
-`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`と`android-sdk`は目的状態を保証する。
+`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`openwhispr`は目的状態を保証する。
+
+`openwhispr`の目的状態は、OpenWhisprのx86_64 Linux向け最新GitHub releaseに含まれる`.deb`を導入し、既に同じrelease versionが導入済みなら再導入しないこととする。releaseの取得に失敗した場合、またはx86_64以外のLinuxで実行した場合は失敗として記録する。
 
 `opendesign`の目的状態は、次の3つを保証することとする。
 
@@ -75,7 +77,7 @@
 | `go` | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。 |
 | `brew` | 指定されたFormulaに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet` を実行する。already-installed 警告、reinstall 案内、Homebrew の環境ヒントと進捗表示は出ない。 |
 | `brew-cask` | 指定されたCaskに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet --cask` を実行する。Not upgrading 警告、Homebrew の環境ヒントと進捗表示は出ない。 |
-| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。名前に対応するHandlerがなければ失敗として記録する。 |
+| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`openwhispr`はGitHub releaseの`.deb`を`sudo apt install -y`で導入する。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
 
 ### 2. State Read
