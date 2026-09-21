@@ -36,6 +36,7 @@ extensions_for_linux=(
   mechatroner.rainbow-csv
   mikestead.dotenv
   ms-azuretools.vscode-containers
+  ms-vscode.live-server
   ms-vscode.powershell
   ms-vscode.remote-repositories
   mylesmurphy.prettify-ts
@@ -43,7 +44,6 @@ extensions_for_linux=(
   nefrob.vscode-just-syntax
   pomber.git-file-history
   redhat.vscode-yaml
-  ritwickdey.LiveServer
   saber2pr.file-git-history
   shd101wyy.markdown-preview-enhanced
   svelte.svelte-vscode
