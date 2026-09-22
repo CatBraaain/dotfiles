@@ -29,6 +29,7 @@ write:
       - ~/.cache
       - ~/.camoufox
       - ~/.camofox
+      - ~/.lazyweb
       - ~/.agent-browser
       - ~/.cargo/registry
       - ~/go/pkg/mod

@@ -803,6 +803,21 @@ describe("§3.a パス文字列の解決", () => {
     assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${REPOSITORY_NAME}"), true);
   });
 
+  it("allows writes to the Lazyweb token directory", () => {
+    const config = parseSandboxedToolsConfig(
+      readFileSync(
+        sourcePathFromSymlink(new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url)),
+        "utf8",
+      ),
+    );
+    const writeSection = expandPathSection(config.write, process.cwd());
+
+    assert.equal(
+      resolvePathAction(writeSection, join(homedir(), ".lazyweb", "lazyweb_mcp_token")),
+      "allow",
+    );
+  });
+
   it("出荷configは/mntを含むコマンドだけをaskにする", () => {
     const config = parseSandboxedToolsConfig(
       readFileSync(
