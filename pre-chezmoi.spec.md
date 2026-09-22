@@ -127,6 +127,7 @@ dist/dot_pi/agent/exact_config/placeholder
 | localsend/settings.merge.json | AppData/Roaming/LocalSend/settings.merge.json | .local/share/org.localsend.localsend_app/shared_preferences.merge.json |
 | mise | .config/mise | 移動しない |
 | nushell | AppData/Roaming/nushell | 移動しない |
+| open-whispr | AppData/Roaming/open-whispr | 移動しない |
 | obs-studio | AppData/Roaming/obs-studio | 移動しない |
 | powershell | Documents/PowerShell | 移動しない |
 | windows-terminal | AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState | 移動しない |

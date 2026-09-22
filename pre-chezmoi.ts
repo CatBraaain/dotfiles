@@ -80,6 +80,7 @@ function pathMaps(platform: Platform): Record<string, string> {
         "localsend/settings.merge.json": "AppData/Roaming/LocalSend/settings.merge.json",
         mise: ".config/mise",
         nushell: "AppData/Roaming/nushell",
+        "open-whispr": "AppData/Roaming/open-whispr",
         "obs-studio": "AppData/Roaming/obs-studio",
         powershell: "Documents/PowerShell",
         "windows-terminal":
