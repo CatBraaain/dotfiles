@@ -21,7 +21,7 @@ import sandboxedToolsExtension, {
   countResultLines,
   formatDuration,
   formatSize,
-  isImageFile,
+  isVisionImageFile,
   truncateText,
   writeApprovalNote,
 } from "./index";
@@ -474,18 +474,51 @@ describe("§2.1 画像ファイル", () => {
     assert.match(description, /delegation to the vision agent/);
   });
 
-  it("isImageFile は MIME 判定不能時に拡張子へフォールバックする", () => {
-    // MIME 判定不能（null）→ 拡張子で判定する
-    assert.equal(isImageFile("/tmp/photo.png", null), true);
-    assert.equal(isImageFile("/tmp/photo.PNG", null), true);
-    assert.equal(isImageFile("/tmp/photo.webp", null), true);
-    assert.equal(isImageFile("/tmp/notes.txt", null), false);
-    assert.equal(isImageFile("/tmp/noext", null), false);
-    // MIME 判定可能 → MIME を優先する（拡張子と矛盾しても MIME どおり）
-    assert.equal(isImageFile("/tmp/photo.png", "image/png"), true);
-    assert.equal(isImageFile("/tmp/photo.png", "text/plain"), false);
-    assert.equal(isImageFile("/tmp/notes.txt", "image/jpeg"), true);
+  it("isVisionImageFile excludes SVG and falls back to the extension when MIME detection fails", () => {
+    assert.equal(isVisionImageFile("/tmp/icon.svg", "image/svg+xml"), false);
+    assert.equal(isVisionImageFile("/tmp/photo.png", null), true);
+    assert.equal(isVisionImageFile("/tmp/photo.PNG", null), true);
+    assert.equal(isVisionImageFile("/tmp/photo.webp", null), true);
+    assert.equal(isVisionImageFile("/tmp/notes.txt", null), false);
+    assert.equal(isVisionImageFile("/tmp/noext", null), false);
+    assert.equal(isVisionImageFile("/tmp/photo.png", "image/png"), true);
+    assert.equal(isVisionImageFile("/tmp/photo.png", "text/plain"), false);
+    assert.equal(isVisionImageFile("/tmp/notes.txt", "image/jpeg"), true);
   });
+
+  it(
+    "read returns SVG as text for an image-capable model",
+    withTempDirectory(async (directory) => {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>';
+      const svgPath = join(directory, "icon.svg");
+      writeFileSync(svgPath, svg);
+      const originalRunTool = Sandbox.prototype.runTool;
+      let didRunRead = false;
+      Sandbox.prototype.runTool = (async (toolName) => {
+        didRunRead = toolName === "read";
+        return { content: [{ type: "text", text: svg }], details: {} };
+      }) as Sandbox["runTool"];
+
+      try {
+        const result = await captureRegisteredTools()
+          .get("read")
+          .execute("t", { path: svgPath }, undefined, undefined, {
+            hasUI: false,
+            model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
+          });
+
+        assert.equal(didRunRead, true);
+        assert.equal(result.content[0]?.type, "text");
+        assert.equal(result.content[0]?.text, svg);
+        assert.equal(
+          result.content.some((part: { type: string }) => part.type === "image"),
+          false,
+        );
+      } finally {
+        Sandbox.prototype.runTool = originalRunTool;
+      }
+    }),
+  );
 
   it(
     "許可されない画像パスへの read は §2 どおり拒否する",

@@ -111,13 +111,17 @@ function imageMimeType(path: string): string | null {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-function isImageFile(imagePath: string, detectedMimeType = imageMimeType(imagePath)): boolean {
+function isVisionImageFile(
+  imagePath: string,
+  detectedMimeType = imageMimeType(imagePath),
+): boolean {
+  if (detectedMimeType === "image/svg+xml") return false;
   return detectedMimeType === null
     ? IMAGE_EXTENSIONS.has(extname(imagePath).toLowerCase())
     : detectedMimeType.startsWith("image/");
 }
 
-export { isImageFile };
+export { isVisionImageFile };
 
 // SPEC §2.1: 画像に対する read は OCR せず、画像入力対応モデルでは Vision 入力を返す。
 // 画像非対応モデルでは、画像をモデルへ送らず vision 子 agent への委譲を促す。
@@ -278,7 +282,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
       const normalized = withNormalizedPath(args) as { path: string };
       const imagePath = resolve(cwd, normalized.path);
       await sandbox.authorizePath("read", imagePath, context);
-      if (!isImageFile(imagePath)) {
+      if (!isVisionImageFile(imagePath)) {
         return sandbox.runTool("read", normalized, { mode: "fs", signal });
       }
       const model = context?.model as { input?: readonly string[]; provider?: string; id?: string } | undefined;

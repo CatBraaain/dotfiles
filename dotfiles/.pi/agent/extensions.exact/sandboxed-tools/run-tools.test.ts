@@ -49,6 +49,29 @@ describe("run-tools CLI", () => {
   );
 
   it(
+    "read returns SVG as text without an image block",
+    withTempDir(async (dir) => {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>';
+      const svgPath = join(dir, "icon.svg");
+      writeFileSync(svgPath, svg);
+
+      const cliResult = runToolsCli("read", { params: { path: svgPath } });
+      const response = JSON.parse(cliResult.stdout) as {
+        ok: boolean;
+        result: { content: { type: string; text?: string }[] };
+      };
+
+      assert.equal(response.ok, true);
+      assert.equal(response.result.content[0]?.type, "text");
+      assert.equal(response.result.content[0]?.text, svg);
+      assert.equal(
+        response.result.content.some((part) => part.type === "image"),
+        false,
+      );
+    }),
+  );
+
+  it(
     "read の失敗は ok:false と非 0 exit code で返す",
     withTempDir(async (dir) => {
       const cliResult = runToolsCli("read", { params: { path: join(dir, "missing.txt") } });
