@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 declare const Bun: {
-  file(path: string): { arrayBuffer(): Promise<ArrayBuffer> };
+  file(path: string): { text(): Promise<string> };
   which(command: string): string | null;
   spawn(
     command: string[],
@@ -31,7 +31,7 @@ if (!destination || !target) {
   throw new Error("chezmoi-diff requires destination and target paths");
 }
 
-if (await filesDifferOnlyByIgnoredLineEndings(destination, target)) {
+if (await filesDifferOnlyByIgnorableDifferences(destination, target)) {
   process.exitCode = 0;
 } else {
   const hasDirectoryInput =
@@ -137,39 +137,52 @@ function isDirectoryPath(path: string): boolean {
   }
 }
 
-async function filesDifferOnlyByIgnoredLineEndings(
+async function filesDifferOnlyByIgnorableDifferences(
   firstPath: string,
   secondPath: string,
 ): Promise<boolean> {
   try {
     const [first, second] = await Promise.all([
-      Bun.file(firstPath).arrayBuffer(),
-      Bun.file(secondPath).arrayBuffer(),
+      Bun.file(firstPath).text(),
+      Bun.file(secondPath).text(),
     ]);
-    return equalBytes(
-      normalizeLineEndings(new Uint8Array(first)),
-      normalizeLineEndings(new Uint8Array(second)),
+    const ignoreTrailingCommas =
+      isJsonPath(firstPath) && isJsonPath(secondPath);
+    return (
+      normalizeLineEndings(
+        ignoreTrailingCommas ? stripTrailingCommas(first) : first,
+      ) ===
+      normalizeLineEndings(
+        ignoreTrailingCommas ? stripTrailingCommas(second) : second,
+      )
     );
   } catch {
     return false;
   }
 }
 
-function normalizeLineEndings(bytes: Uint8Array): Uint8Array {
-  const normalized: number[] = [];
-  for (let index = 0; index < bytes.length; index += 1) {
-    if (bytes[index] === 13 && bytes[index + 1] === 10) continue;
-    normalized.push(bytes[index]);
-  }
-  if (normalized.at(-1) === 10) normalized.pop();
-  return Uint8Array.from(normalized);
+// Normalizes JSON(C) so a trailing comma's presence or absence never shows
+// as a diff: whitespace and commas immediately before a closing brace or
+// bracket are dropped, outside string literals.
+function stripTrailingCommas(text: string): string {
+  return text
+    .split(/("(?:[^"\\]|\\.)*")/)
+    .map((part, index) =>
+      index % 2 === 0 ? part.replace(/[\s,]*(?=[}\]])/g, "") : part,
+    )
+    .join("");
 }
 
-function equalBytes(first: Uint8Array, second: Uint8Array): boolean {
-  return (
-    first.length === second.length &&
-    first.every((byte, index) => byte === second[index])
-  );
+function isJsonPath(path: string): boolean {
+  const lowercasePath = path.toLowerCase();
+  return lowercasePath.endsWith(".json") || lowercasePath.endsWith(".jsonc");
+}
+
+function normalizeLineEndings(text: string): string {
+  const withoutCarriageReturnPairs = text.replaceAll("\r\n", "");
+  return withoutCarriageReturnPairs.endsWith("\n")
+    ? withoutCarriageReturnPairs.slice(0, -1)
+    : withoutCarriageReturnPairs;
 }
 
 export {};
