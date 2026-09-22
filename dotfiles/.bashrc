@@ -6,6 +6,10 @@ esac
 [ -f ~/.config/bash/bashrc ] && . ~/.config/bash/bashrc
 [ -f ~/.secrets.sh ] && . ~/.secrets.sh
 
+if [ -e /dev/dxg ] && grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease; then
+  export GALLIUM_DRIVER="d3d12"
+fi
+
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$HOME/.local/go/bin:$PATH"
 export PATH="$HOME/.local/node/bin:$PATH"
