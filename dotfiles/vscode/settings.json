@@ -204,9 +204,10 @@
   "csv-edit.showDeleteColumnHeaderButton": false,
   "csv-edit.showDeleteRowHeaderButton": false,
   "customLocalFormatters.formatters": [
-    // stdin->stdout formatters. prettier resolves prettier-markdown-table from the global bun install.
+    // stdin->stdout formatters. prettier resolves bare plugin names from the CWD's node_modules,
+    // so pass the absolute path of prettier-markdown-table installed in the global bun install.
     {
-      "command": "~/.bun/bin/prettier --parser markdown --plugin=prettier-markdown-table",
+      "command": "~/.bun/bin/prettier --parser markdown --plugin=~/.bun/install/global/node_modules/prettier-markdown-table/index.js",
       "languages": ["markdown"]
     },
     {
