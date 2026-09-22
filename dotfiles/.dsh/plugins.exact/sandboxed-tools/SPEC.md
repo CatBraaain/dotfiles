@@ -326,7 +326,7 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 
 各ツール呼び出しは次の構成で `bwrap` を起動する。
 
-1. `--die-with-parent`、`--proc /proc`、`--dev /dev` を設定する。
+1. `--die-with-parent`、`--proc /proc`、`--dev /dev` を設定する。bash では、GPU 用デバイス `/dev/dxg` と `/dev/dri` をそれぞれ `--dev-bind-try /dev/dxg /dev/dxg` と `--dev-bind-try /dev/dri /dev/dri` で追加公開する。`--dev-bind-try` は対象が存在しない環境では無視される。
 2. 設定済みの allow パスを `--bind-try`、read-only パスと credentials を `--ro-bind-try` で bind する。bash では、`write` の deny に確定したパスのうち書き込み可能 bind と同一・配下にあるものを、それらより後に `--ro-bind-try` で bind し直す（§6.1）。
 3. NixOS でヘルパーの実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bind する。
 4. network namespace は分離しない。

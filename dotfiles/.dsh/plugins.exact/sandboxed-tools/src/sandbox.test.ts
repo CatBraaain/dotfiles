@@ -984,6 +984,28 @@ describe("§6.1 buildArgs と実在保証", () => {
   );
 
   it(
+    "bash sandbox は GPU デバイスを dev bind し、fs sandbox では bind しない",
+    withTempDirectory(async (dir) => {
+      const sandbox = new Sandbox(dir, join(dir, "none.yaml"));
+      const bashArgs = sandbox.buildArgs("bash");
+      const devAt = bashArgs.indexOf("--dev");
+      assert.deepEqual(bashArgs.slice(devAt, devAt + 8), [
+        "--dev",
+        "/dev",
+        "--dev-bind-try",
+        "/dev/dxg",
+        "/dev/dxg",
+        "--dev-bind-try",
+        "/dev/dri",
+        "/dev/dri",
+      ]);
+      const fsArgs = sandbox.buildArgs("fs");
+      assert.equal(fsArgs.includes("/dev/dxg"), false);
+      assert.equal(fsArgs.includes("/dev/dri"), false);
+    }),
+  );
+
+  it(
     "hostPaths を ro-bind（node/runner/rg/rtk/config）し spillDir を書き込み可能 bind する",
     withTempDirectory(async (dir) => {
       mkdirSync(join(dir, "dist"), { recursive: true });

@@ -4122,14 +4122,19 @@ describe("§6.1 bind とパスの実在保証", () => {
       const sandbox = new Sandbox("/cwd", configPath);
       const bashArgs = sandbox.buildArgs("bash");
       const devAt = bashArgs.indexOf("--dev");
-      assert.deepEqual(bashArgs.slice(devAt, devAt + 5), [
+      assert.deepEqual(bashArgs.slice(devAt, devAt + 8), [
         "--dev",
         "/dev",
         "--dev-bind-try",
         "/dev/dxg",
         "/dev/dxg",
+        "--dev-bind-try",
+        "/dev/dri",
+        "/dev/dri",
       ]);
-      assert.equal(sandbox.buildArgs("fs").includes("/dev/dxg"), false);
+      const fsArgs = sandbox.buildArgs("fs");
+      assert.equal(fsArgs.includes("/dev/dxg"), false);
+      assert.equal(fsArgs.includes("/dev/dri"), false);
     }),
   );
 

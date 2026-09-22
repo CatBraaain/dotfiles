@@ -959,8 +959,9 @@ export class Sandbox {
     if (this.readAllPaths()) args.push("--ro-bind", "/", "/");
     args.push("--dev", "/dev");
     if (mode === "bash") {
-      // WSL exposes CUDA/NVENC through /dev/dxg; keep the bind optional on native Linux.
-      args.push("--dev-bind-try", "/dev/dxg", "/dev/dxg");
+      // Keep GPU device binds optional across native Linux and WSL environments.
+      for (const devicePath of ["/dev/dxg", "/dev/dri"])
+        args.push("--dev-bind-try", devicePath, devicePath);
     }
     for (const runtimePath of [
       "/nix",

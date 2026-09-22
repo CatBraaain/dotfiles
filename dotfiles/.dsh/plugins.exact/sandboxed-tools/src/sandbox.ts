@@ -1296,6 +1296,11 @@ export class Sandbox {
     const args = ["--die-with-parent", "--proc", "/proc"];
     if (this.readAllPaths()) args.push("--ro-bind", "/", "/");
     args.push("--dev", "/dev");
+    if (mode === "bash") {
+      // Keep GPU device binds optional across native Linux and WSL environments.
+      for (const devicePath of ["/dev/dxg", "/dev/dri"])
+        args.push("--dev-bind-try", devicePath, devicePath);
+    }
     if (!this.readAllPaths()) {
       for (const runtimePath of RUNTIME_PATHS) {
         if (existsSync(runtimePath)) args.push("--ro-bind-try", runtimePath, runtimePath);
