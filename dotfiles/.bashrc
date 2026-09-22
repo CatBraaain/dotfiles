@@ -29,8 +29,6 @@ export PATH="$HOME/.bun/bin:$PATH"
 # Agent CLIs (e.g. ticket).
 export PATH="$HOME/.agents/cli:$PATH"
 
-export HYPERFRAMES_BROWSER_PATH="$HOME/.cache/hyperframes/chrome/chrome-linux64/chrome"
-
 # keep-sorted start
 alias a="pi"
 alias ac="pi -c"
