@@ -1,0 +1,60 @@
+# The declarative romaji table shared by the MS-IME and Mozc compilers
+# (undotfiles/ime/msime/roma-def.ts and undotfiles/ime/mozc/roma-def.ts).
+# Each compiler loads this file and reflects it into its own format.
+rows:
+  "": [あ, い, う, え, お]
+  l: [ぁ, ぃ, ぅ, ぇ, ぉ]
+  k: [か, き, く, け, こ]
+  c: [か, き, く, け, こ]
+  g: [が, ぎ, ぐ, げ, ご]
+  s: [さ, し, す, せ, そ]
+  z: [ざ, じ, ず, ぜ, ぞ]
+  t: [た, ち, つ, て, と]
+  d: [だ, ぢ, づ, で, ど]
+  n: [な, に, ぬ, ね, の]
+  h: [は, ひ, ふ, へ, ほ]
+  b: [ば, び, ぶ, べ, ぼ]
+  p: [ぱ, ぴ, ぷ, ぺ, ぽ]
+  m: [ま, み, む, め, も]
+  y: [や, "", ゆ, いぇ, よ]
+  ly: [ゃ, "", ゅ, "", ょ]
+  r: [ら, り, る, れ, ろ]
+  w: [わ, うぃ, "", うぇ, を]
+  q: [くぁ, くぃ, "", くぇ, くぉ]
+  j: [じゃ, じ, じゅ, じぇ, じょ]
+  f: [ふぁ, ふぃ, ふ, ふぇ, ふぉ]
+  v: [ヴぁ, ヴぃ, ヴ, ヴぇ, ヴぉ]
+singles:
+  # dhu beats the standard yoon "ぢゅ" that the d row would generate
+  dhu: でゅ
+  who: うぉ
+  nn: ん
+  wyi: ゐ
+  wye: ゑ
+  ltu: っ
+  lwa: ゎ
+  lka: ヵ
+  lke: ヶ
+families:
+  # きゃ/きゅ/きょ, spelled also with h (kha = きゃ): i-column + small ya/yu/yo
+  - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
+    column: i
+    suffixes: { ya: ゃ, yu: ゅ, yo: ょ, ha: ゃ, hu: ゅ, ho: ょ }
+    # keep the non-standard spellings nh.* (= にゃ...) and hh.* (= ひゃ...) out
+    exclude: ["nh.*", "hh.*"]
+  # thi=てぃ, dhi=でぃ: e-column + small i
+  - rows: [t, d]
+    column: e
+    suffixes: { hi: ぃ }
+  # khe=きぇ, she=しぇ, che=ちぇ...: i-column + small e
+  - rows: [k, c, g, s, t]
+    column: i
+    suffixes: { he: ぇ }
+  # kwa=くぁ, swi=すぃ...: u-column + small a/i/e/o
+  - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
+    column: u
+    suffixes: { wa: ぁ, wi: ぃ, we: ぇ, wo: ぉ }
+  # twu=とぅ, dwu=どぅ: o-column + small u
+  - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
+    column: o
+    suffixes: { wu: ぅ }

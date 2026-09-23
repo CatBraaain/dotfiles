@@ -1,104 +1,89 @@
 // Compiles a declarative romaji table (rows + derivation families + singles)
 // into the sorted `roman=kana` record list for the MS-IME custom roma-def
-// registry value.
+// registry value. The declaration data lives in ../roma-table.yaml and the
+// aggregation engine in ../roma-table.ts, shared with the Mozc compiler.
 //
 // CLI: no arguments prints the set difference against the currently applied
 // registry table and applies the table. `--dry-run` prints the same difference
 // without writing the OS. `--preview` prints a human-readable view.
 
-// ---------- declaration types ----------
+import { buildTable, VOWELS, type Declaration, type Family } from "../roma-table.ts";
 
-// Which row column a family bases its kana on.
-export type Column = "a" | "i" | "u" | "e" | "o";
+// ---------- declaration loading ----------
 
-// A derivation family: for every row in `rows`, and every suffix spelling in
-// `suffixes`, emit `rowKey + suffix` = `row[column] + smallKana`.
-export type Family = {
-	// suffix spelling -> appended small kana (may be multiple characters)
-	suffixes: Record<string, string>;
-	// row column the base kana comes from
-	column: Column;
-	// row keys the family applies to
-	rows: string[];
-	// skip when the suffix spelling starts with the row key itself
-	// (keeps h+ha/h+hu/h+ho and y+ya/y+yu/y+yo out of the table)
-	skipSuffixStartingWithRow?: boolean;
-	// row key -> suffix prefix to exclude (keeps n+ha/n+hu/n+ho out)
-	skipSuffixPrefixByRow?: Record<string, string>;
-};
+// The shared declaration data.
+const DECLARATION_YAML_PATH = `${(import.meta as { dir?: string }).dir}/../roma-table.yaml`;
 
-export type Declaration = {
-	// row key -> the 5 kana for the a/i/u/e/o columns. "" keeps an empty slot
-	// so column positions stay aligned; empty slots are never emitted.
-	rows: Record<string, string[]>;
-	// individual mappings; they win over anything the rows/families generate
-	singles: Record<string, string>;
-	families: Family[];
-};
+async function loadModule<T>(specifier: string): Promise<T> {
+	return (await import(specifier)) as T;
+}
 
-// ---------- declaration data (the current table) ----------
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-const kRow = ["か", "き", "く", "け", "こ"];
+function validateStringMap(value: unknown, what: string): Record<string, string> {
+	if (!isRecord(value)) throw new Error(`invalid declaration: "${what}" must be a mapping`);
+	const result: Record<string, string> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (typeof entry !== "string") throw new Error(`invalid declaration: "${what}.${key}" must be a string`);
+		result[key] = entry;
+	}
+	return result;
+}
 
-// Rows that can take contracted-sound (yoon) suffixes.
-const consonantRows = ["k", "c", "g", "s", "z", "t", "d", "n", "h", "b", "p", "m", "r"];
+function validateRows(value: unknown): Record<string, string[]> {
+	if (!isRecord(value)) throw new Error(`invalid declaration: "rows" must be a mapping`);
+	const result: Record<string, string[]> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (!Array.isArray(entry) || entry.length !== 5 || !entry.every((kana) => typeof kana === "string")) {
+			throw new Error(`invalid declaration: "rows.${key}" must be an array of 5 strings`);
+		}
+		result[key] = entry as string[];
+	}
+	return result;
+}
 
-export const currentDeclaration: Declaration = {
-	rows: {
-		"": ["あ", "い", "う", "え", "お"],
-		l: ["ぁ", "ぃ", "ぅ", "ぇ", "ぉ"],
-		k: kRow,
-		c: kRow,
-		g: ["が", "ぎ", "ぐ", "げ", "ご"],
-		s: ["さ", "し", "す", "せ", "そ"],
-		z: ["ざ", "じ", "ず", "ぜ", "ぞ"],
-		t: ["た", "ち", "つ", "て", "と"],
-		d: ["だ", "ぢ", "づ", "で", "ど"],
-		n: ["な", "に", "ぬ", "ね", "の"],
-		h: ["は", "ひ", "ふ", "へ", "ほ"],
-		b: ["ば", "び", "ぶ", "べ", "ぼ"],
-		p: ["ぱ", "ぴ", "ぷ", "ぺ", "ぽ"],
-		m: ["ま", "み", "む", "め", "も"],
-		y: ["や", "", "ゆ", "いぇ", "よ"],
-		ly: ["ゃ", "", "ゅ", "", "ょ"],
-		r: ["ら", "り", "る", "れ", "ろ"],
-		w: ["わ", "うぃ", "", "うぇ", "を"],
-		q: ["くぁ", "くぃ", "", "くぇ", "くぉ"],
-		j: ["じゃ", "じ", "じゅ", "じぇ", "じょ"],
-		f: ["ふぁ", "ふぃ", "ふ", "ふぇ", "ふぉ"],
-		v: ["ヴぁ", "ヴぃ", "ヴ", "ヴぇ", "ヴぉ"],
-	},
-	singles: {
-		// dhu beats the standard yoon "ぢゅ" that the d row would generate
-		dhu: "でゅ",
-		who: "うぉ",
-		nn: "ん",
-		wyi: "ゐ",
-		wye: "ゑ",
-		ltu: "っ",
-		lwa: "ゎ",
-		lka: "ヵ",
-		lke: "ヶ",
-	},
-	families: [
-		// きゃ/きゅ/きょ, spelled also with h (kha = きゃ): i-column + small ya/yu/yo
-		{
-			suffixes: { ya: "ゃ", yu: "ゅ", yo: "ょ", ha: "ゃ", hu: "ゅ", ho: "ょ" },
-			column: "i",
-			rows: consonantRows,
-			skipSuffixStartingWithRow: true,
-			skipSuffixPrefixByRow: { n: "h" },
-		},
-		// thi=てぃ, dhi=でぃ: e-column + small i
-		{ suffixes: { hi: "ぃ" }, column: "e", rows: ["t", "d"] },
-		// khe=きぇ, she=しぇ, che=ちぇ...: i-column + small e
-		{ suffixes: { he: "ぇ" }, column: "i", rows: ["k", "c", "g", "s", "t"] },
-		// kwa=くぁ, swi=すぃ...: u-column + small a/i/e/o
-		{ suffixes: { wa: "ぁ", wi: "ぃ", we: "ぇ", wo: "ぉ" }, column: "u", rows: consonantRows },
-		// twu=とぅ, dwu=どぅ: o-column + small u
-		{ suffixes: { wu: "ぅ" }, column: "o", rows: consonantRows },
-	],
-};
+function validateFamilies(value: unknown): Family[] {
+	if (!Array.isArray(value)) throw new Error(`invalid declaration: "families" must be an array`);
+	const result: Family[] = [];
+	for (const entry of value) {
+		if (!isRecord(entry)) throw new Error(`invalid declaration: family must be a mapping`);
+		if (typeof entry.column !== "string" || !(VOWELS as readonly string[]).includes(entry.column)) {
+			throw new Error(`invalid declaration: "family.column" must be one of a/i/u/e/o`);
+		}
+		if (!Array.isArray(entry.rows) || !entry.rows.every((rowKey) => typeof rowKey === "string")) {
+			throw new Error(`invalid declaration: "family.rows" must be an array of strings`);
+		}
+		const family: Family = {
+			suffixes: validateStringMap(entry.suffixes, "family.suffixes"),
+			column: entry.column as Family["column"],
+			rows: entry.rows as string[],
+		};
+		if (entry.exclude !== undefined) {
+			if (!Array.isArray(entry.exclude) || !entry.exclude.every((pattern) => typeof pattern === "string")) {
+				throw new Error(`invalid declaration: "family.exclude" must be an array of strings`);
+			}
+			family.exclude = entry.exclude as string[];
+		}
+		result.push(family);
+	}
+	return result;
+}
+
+// Loads and validates the shared declaration data. Throws on any shape error;
+// the aggregation engine only sees typed data.
+export async function loadDeclaration(): Promise<Declaration> {
+	const fs = await loadModule<{ readFile: (path: string, encoding: "utf8") => Promise<string> }>("node:fs/promises");
+	const yaml = await loadModule<{ parse: (text: string) => unknown }>("yaml");
+	const data = yaml.parse(await fs.readFile(DECLARATION_YAML_PATH, "utf8"));
+	if (!isRecord(data)) throw new Error(`invalid declaration: ${DECLARATION_YAML_PATH} must contain a mapping`);
+	return {
+		rows: validateRows(data.rows),
+		singles: validateStringMap(data.singles, "singles"),
+		families: validateFamilies(data.families),
+	};
+}
 
 // ---------- compiler ----------
 
@@ -113,9 +98,6 @@ const FORBIDDEN: ReadonlyArray<{ ch: string; name: string }> = [
 	{ ch: "\0", name: "NUL" },
 ];
 
-const COLUMN_INDEX: Record<Column, number> = { a: 0, i: 1, u: 2, e: 3, o: 4 };
-const VOWELS = ["a", "i", "u", "e", "o"] as const;
-
 export type CompileResult = {
 	// "roman=kana" records sorted in UTF-16 code unit order
 	records: string[];
@@ -125,6 +107,13 @@ export type CompileResult = {
 // failures throw; no output is produced and nothing outside is touched.
 export function compileRomaTable(decl: Declaration): CompileResult {
 	const table = buildTable(decl);
+
+	// MS-IME's custom table needs an explicit consonant-only entry
+	// (`k\` = `k`) per row key, marking the consonant as typed with the rest
+	// of the spelling still pending. Mozc's longest-match engine does not.
+	for (const rowKey of Object.keys(decl.rows)) {
+		if (rowKey !== "" && !table.has(`${rowKey}\\`)) table.set(`${rowKey}\\`, rowKey);
+	}
 
 	for (const [roma, kana] of table) {
 		checkForbidden(roma, `roman key "${roma}"`);
@@ -136,62 +125,6 @@ export function compileRomaTable(decl: Declaration): CompileResult {
 
 	const records = [...table].map(([roma, kana]) => `${roma}=${kana}`).sort();
 	return { records };
-}
-
-// ---------- generic engine ----------
-//
-// Aggregation rule: singles are registered first and nothing overwrites an
-// existing key, so an individual mapping always wins over a generated one.
-// Generation never merges conflicting values: an equal value collapses into
-// one entry, but a different value on the same key is a declaration error.
-function buildTable(decl: Declaration): Map<string, string> {
-	const table = new Map<string, string>();
-	const individualKeys = new Set<string>();
-
-	const addIndividual = (roma: string, kana: string) => {
-		table.set(roma, kana);
-		individualKeys.add(roma);
-	};
-	const addGenerated = (roma: string, kana: string) => {
-		const existing = table.get(roma);
-		if (existing === kana) return;
-		if (existing === undefined) {
-			table.set(roma, kana);
-			return;
-		}
-		if (!individualKeys.has(roma)) {
-			throw new Error(`conflicting mapping: "${roma}" is "${existing}" and also "${kana}"`);
-		}
-	};
-
-	for (const [roma, kana] of Object.entries(decl.singles)) addIndividual(roma, kana);
-
-	for (const [rowKey, row] of Object.entries(decl.rows)) {
-		// mechanical consonant-only entry: "b\=b" from the row key itself
-		if (rowKey !== "") addGenerated(`${rowKey}\\`, rowKey);
-		for (const [i, vowel] of VOWELS.entries()) {
-			if (row[i] !== "") addGenerated(`${rowKey}${vowel}`, row[i]);
-		}
-	}
-
-	for (const family of decl.families) {
-		for (const rowKey of family.rows) {
-			const row = decl.rows[rowKey];
-			// Families may retain references to rows no longer declared.
-			if (row === undefined) continue;
-			// a small-kana-only entry would leak out on an empty slot
-			const base = row[COLUMN_INDEX[family.column]];
-			for (const [suffix, small] of Object.entries(family.suffixes)) {
-				if (family.skipSuffixStartingWithRow && suffix.startsWith(rowKey)) continue;
-				const excludedPrefix = family.skipSuffixPrefixByRow?.[rowKey];
-				if (excludedPrefix !== undefined && suffix.startsWith(excludedPrefix)) continue;
-				if (base === "" || base === undefined) continue;
-				addGenerated(`${rowKey}${suffix}`, base + small);
-			}
-		}
-	}
-
-	return table;
 }
 
 // ---------- validation helpers ----------
@@ -397,7 +330,7 @@ async function readAppliedTable(): Promise<string[] | null> {
 }
 
 async function loadDiffView(): Promise<{ records: string[]; view: string }> {
-	const records = compileRomaTable(currentDeclaration).records;
+	const records = compileRomaTable(await loadDeclaration()).records;
 	const view = buildDiffView(await readAppliedTable(), records);
 	return { records, view };
 }
@@ -441,7 +374,7 @@ if (isMain) {
 		console.log(view);
 		await applyTable(records);
 	} else if (mode === "preview") {
-		console.log(buildPreview(currentDeclaration));
+		console.log(buildPreview(await loadDeclaration()));
 	} else if (mode === "dry-run") {
 		await printDryRun();
 	} else {

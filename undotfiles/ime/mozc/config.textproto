@@ -1,0 +1,3 @@
+session_keymap: CUSTOM
+custom_keymap_table: "__KEYMAP_TABLE__"
+custom_roman_table: "__ROMAN_TABLE__"
