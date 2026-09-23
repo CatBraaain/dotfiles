@@ -2,7 +2,7 @@
 
 `pre-chezmoi.ts` の観測可能な振る舞いの仕様。対象は、リポジトリルートで Bun ランタイムにより `bun pre-chezmoi.ts` を実行したときの、入力（`dotfiles/` ツリーと実行プラットフォーム）から出力（`dist/` ツリーと終了コード）への変換。`dist/` は chezmoi の sourceDir として扱われる。読者は、この spec だけを読んで要件を承認するオーナーと、実装・テストの担当者。
 
-- プラットフォーム: Windows（`process.platform === "win32"`）と、それ以外（Linux / macOS）の2種。
+- プラットフォーム: Windows / Linux / macOS の3種。`process.platform` の `win32` / `linux` / `darwin` に対応し、それ以外は異常終了する。
 - 経路表記: 本文のパスはリポジトリルートからの相対パス。
 - `*.machine.{json,yaml,toml}` は git 管理外（`.gitignore`）。`*.merge.{json,yaml,toml}` は git 管理する共有レイヤー。
 - `.wslconfig` は git 管理外のマシン固有ファイル、`.wslconfig.sample` は git 管理するサンプルである。`.wslconfig.sample` は chezmoi の展開対象外である。
@@ -13,7 +13,7 @@
 
 1. dist 再構築
 2. ローカルフック実行
-3. パス移動（プラットフォーム別）
+3. マップ移動
 4. dot 変換
 5. exact 変換
 6. executable 変換
@@ -22,7 +22,7 @@
 
 ## 1. dist 再構築
 
-`dist/` を削除し、`dotfiles/` の完全なコピーとして作り直す。任意の階層の `node_modules/` はコピーしない。前回実行で `dist/` にあった内容は残らない。
+`dist/` を削除し、`dotfiles/` の完全なコピーとして作り直す。任意の階層の `node_modules/` はコピーしない。前回実行で `dist/` にあった内容は残らない。コピーの直後、§3 の `.pre-chezmoi-map.yaml` で行き先が `/dev/null` のエントリを `dist/` から取り除く。
 
 ## 2. ローカルフック実行
 
@@ -44,7 +44,7 @@ bun <absolute path to hook-file>
 
 検出時に source 側フックの絶対パスを確定し、その絶対パスを `bun` へ渡す。
 
-- `cwd`: platform 移動前の、フックを置いたフォルダに対応する `dist/` 内のフォルダ
+- `cwd`: マップ移動前の、フックを置いたフォルダに対応する `dist/` 内のフォルダ
 - 環境変数: 通常の親プロセス環境をそのまま継承する
 - 追加の環境変数、専用 API、設定ファイルは提供しない
 - フックは `process.cwd()` を生成物の出力先として使う
@@ -71,13 +71,19 @@ await writeFile("generated.exact/config", "value\n");
 
 この順序により、親フォルダのフックは子フォルダのフックより先に実行される。
 
-### 2.3 生成物と既存変換
+### 2.3 マップによるフックの実行抑制
 
-フックは既存の platform・dot・exact・executable・symlink・merge 変換より先に実行する。そのため、フックが生成したファイルにも既存変換が適用される。platform 移動の対象フォルダに置いたフックの生成物も、通常の source ファイルと同じように platform 移動の対象になる。
+フックの親ディレクトリ（`dotfiles/` からの相対パス）の target path が、§3 の `.pre-chezmoi-map.yaml` で行き先 `/dev/null` にマップされているとき、そのフックを実行しない。スキップされたフックは子プロセスとして起動されず、stdout・stderr にも何も出力しない。親ディレクトリがルートのフックは target path を持たないため、常に実行する。
+
+target path への変換とキーの一致規則は §3.1 のとおり。
+
+### 2.4 生成物と既存変換
+
+フックは既存のマップ移動・dot・exact・executable・symlink・merge 変換より先に実行する。そのため、フックが生成したファイルにも既存変換が適用される。マップ移動の対象フォルダに置いたフックの生成物も、通常の source ファイルと同じようにマップ移動の対象になる。
 
 ローカルフックで生成した ChezMoi の `run_before` ファイルも他の生成物と同じ既存変換を受け、変換後の名前で `dist/` に残る。ローカルフックは `run_before` より前に、`pre-chezmoi.ts` の実行中に完了する。
 
-### 2.4 成功と失敗
+### 2.5 成功と失敗
 
 すべてのローカルフックと既存変換が成功したとき、生成された `dist/` を出力として終了コード `0` で終了する。フックがない場合の結果は、ローカルフック機能を追加する前と同じである。
 
@@ -91,7 +97,7 @@ await writeFile("generated.exact/config", "value\n");
 
 エラー発生後は後続のフックと既存変換を実行しない。`dist/` の rollback、build 間の lock、staging による原子的な置換は行わない。エラー時の `dist/` は処理途中の状態になり得る。
 
-### 2.5 例
+### 2.6 例
 
 入力:
 
@@ -114,30 +120,46 @@ dist/dot_pi/agent/exact_generated/settings.json
 dist/dot_pi/agent/exact_config/placeholder
 ```
 
-## 3. パス移動
+## 3. マップ（.pre-chezmoi-map.yaml）
 
-下表の移動元エントリ（ファイルまたはディレクトリ）を、実行プラットフォームの配置先（`dist/` からの相対パス）へ移動する。配置先が既に存在するときは置き換える。移動元エントリが `dist/` に存在しない行は何も起きない。表にないエントリは、`dist/` 直下または元の階層に置かれたままになる。
+`dotfiles/.pre-chezmoi-map.yaml`（git 管理）は、dist 内のエントリの行き先をプラットフォームごとに定める。YAML のトップレベルはマッピングで、`shared`、`windows`、`linux`、`darwin` の4セクションのみを受け付ける。各セクションは省略可能で、省略時は空のマッピングとして扱う。存在するセクションの値は「エントリのパス → 行き先」のマッピングである。行き先は `dist/` からの相対パスか、`/dev/null`（`dist/` から除去）のいずれかである。マップにないエントリは、そのままの階層に置かれる。
 
-| 移動元エントリ | Windows | それ以外 |
-| --- | --- | --- |
-| docker | AppData/Roaming/Docker | .docker/desktop |
-| erdtree | AppData/Roaming/erdtree | .config/erdtree |
-| gemini | .gemini | 移動しない |
-| git-cliff | AppData/Roaming/git-cliff | .config/git-cliff |
-| localsend/settings.merge.json | AppData/Roaming/LocalSend/settings.merge.json | .local/share/org.localsend.localsend_app/shared_preferences.merge.json |
-| mise | .config/mise | 移動しない |
-| nushell | AppData/Roaming/nushell | 移動しない |
-| open-whispr | AppData/Roaming/open-whispr | 移動しない |
-| obs-studio | AppData/Roaming/obs-studio | 移動しない |
-| powershell | Documents/PowerShell | 移動しない |
-| windows-terminal | AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState | 移動しない |
-| roo | .roo | 移動しない |
-| rtk | 移動しない | .config/rtk |
-| sharex | Documents/ShareX | 移動しない |
-| vscode | AppData/Roaming/Code/User | 移動しない |
-| zed | AppData/Roaming/Zed | .config/zed |
+```yaml
+shared:
+  "**/SPEC.md": /dev/null
+windows:
+  docker: AppData/Roaming/Docker
+  rtk: /dev/null
+linux:
+  docker: .docker/desktop
+  rtk: .config/rtk
+darwin:
+  docker: .docker/desktop
+  rtk: .config/rtk
+```
 
-パス移動では、ディレクトリだけでなくファイルも扱う。
+`process.platform` が `win32` / `linux` / `darwin` のとき、対応する `windows` / `linux` / `darwin` セクションと `shared` を連結して使う。それ以外の値では異常終了する。同一のキーが `shared` と実行プラットフォームのセクションの両方に現れるとき、行き先が同値なら問題なく、異なるときは異常終了する。実行していない OS セクション間では、同一キーの異なる行き先は競合しない。
+
+設定ファイルが存在しないとき、YAML として解釈できないとき（空ファイルの null を含む）、上記以外のキーがあるとき、値が文字列でないとき、行き先が `/dev/null` ではないのに `/` で始まるときは、異常終了する。セクションの妥当性検査は、実行プラットフォームにかかわらずすべてのセクションに対して行う。キーが glob 文字（`*` `?` `[`）を含むとき、行き先は `/dev/null` のみを受け付け、ほかの行き先との組合せは異常終了する。
+
+### 3.1 除去
+
+除去は2回行う。1回目はコピーの直後・フック実行より前で、実行するマップのうち行き先が `/dev/null` のキーに一致するエントリを `dist/` から取り除く。2回目はフック実行の直後で、フックが生成したエントリも除去の対象になる。除去は再帰的で、一致したディレクトリは配下ごと削除し、配下を走査しない。除去されたエントリは、移動の対象にならない。
+
+キーの一致は、変換前の `dist/` 内のパスを次の規則で target path に見立てて判定する。glob は Bun の `Glob` と同じ方言で、`*` はセパレート1階層内、`**` は階層をまたいで一致する。
+
+| 項目 | 値 |
+|---|---|
+| 末尾が `.exact` のディレクトリ名 | `.exact` を取り除いた名前を使う |
+| 末尾が `.exact` のファイル名 | そのまま使う |
+| glob 文字を含まないキー（例: `.agents`、`.dsh/test`） | そのパスに一致する target path と、その配下のすべてのパス |
+| glob 文字を含むキー（例: `**/run_sync_vscode_extensions.sh`） | 一致するパスと、一致したディレクトリ配下のすべてのパス |
+
+キーはこの規則で target path に見立てたパスと照合されるため、取り除かれた `.exact` を含むキー（例: `skills.exact`）はどのエントリにも一致しない。
+
+### 3.2 移動
+
+フック実行の後、dot 変換より前に、行き先が `/dev/null` 以外のキーについて、移動元エントリ（ファイルまたはディレクトリ）を行き先へ移動する。配置先が既に存在するときは置き換える。移動元が `dist/` に存在しないとき、そのキーは何もしない。マップ移動では、ディレクトリだけでなくファイルも扱う。
 
 ## 4. dot 変換
 
@@ -148,7 +170,6 @@ dist/dot_pi/agent/exact_config/placeholder
 | `.bashrc`                 | `dot_bashrc`                 |
 | `.config`（ディレクトリ） | `dot_config`                 |
 | `.config/.gitconfig`      | `dot_config/dot_gitconfig`   |
-| `.chezmoiignore`          | `.chezmoiignore`（そのまま） |
 | `.pre-chezmoi.ts`         | `.pre-chezmoi.ts`（そのまま） |
 | `.pre-chezmoi.test.ts`    | `.pre-chezmoi.test.ts`（そのまま） |
 | `.pre-chezmoi.skills.yaml` | `.pre-chezmoi.skills.yaml`（そのまま） |
@@ -282,14 +303,14 @@ dotfiles/.agents/config.exact/agents.machine.yaml  （gitignore）
 
 `dotfiles/.dsh/config/` と `dotfiles/.pi/agent/config.exact/` の同名ファイルは、出力された `~/.agents/config/` のファイルへ symlink する。
 
-#### `config.merge.toml` のみ（plain base なし、パス移動と組合せ）
+#### `config.merge.toml` のみ（plain base なし、マップ移動と組合せ）
 
 ```
 dotfiles/rtk/config.merge.toml
 ```
 
 1. dist 再構築後: `dist/rtk/config.merge.toml`
-2. パス移動（§3）・dot 変換後: `dist/dot_config/rtk/config.merge.toml`
+2. マップ移動（§3）・dot 変換後: `dist/dot_config/rtk/config.merge.toml`
 3. ホーム: `~/.config/rtk/config.toml`（`chezmoi target-path`）
 4. 合成: ホーム → merge レイヤー
 5. 出力: `dist/dot_config/rtk/config.toml`。`config.merge.toml` は削除
@@ -479,7 +500,7 @@ JSON の merge / machine ファイルおよび plain base の JSON 入力には�
 Linux 実行時の `dotfiles/docker/settings-store.merge.json` は、次のように各段階のパスが決まる。
 
 1. dist 再構築: `dist/docker/settings-store.merge.json`
-2. パス移動: `dist/.docker/desktop/settings-store.merge.json`
+2. マップ移動: `dist/.docker/desktop/settings-store.merge.json`
 3. dot 変換: `dist/dot_docker/desktop/settings-store.merge.json`
 4. merge 変換: `dist/dot_docker/desktop/settings-store.json`（完成形。sidecar は存在しない）
 

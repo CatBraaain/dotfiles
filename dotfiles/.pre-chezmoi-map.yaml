@@ -1,0 +1,43 @@
+# dist 内エントリの行き先。値は dist/ からの相対パスか、/dev/null（dist から除去）。
+# キーの一致規則は pre-chezmoi.spec.md §3。
+shared:
+  .wslconfig.sample: /dev/null
+  "**/node_modules": /dev/null
+  .pi/agent/extensions/*/index.test.ts: /dev/null
+  "**/SPEC.md": /dev/null
+  "**/*.spec.md": /dev/null
+  .dsh/test: /dev/null
+  "**/*.merge.local.*": /dev/null
+windows:
+  docker: AppData/Roaming/Docker
+  erdtree: AppData/Roaming/erdtree
+  git-cliff: AppData/Roaming/git-cliff
+  localsend/settings.merge.json: AppData/Roaming/LocalSend/settings.merge.json
+  open-whispr: AppData/Roaming/open-whispr
+  obs-studio: AppData/Roaming/obs-studio
+  powershell: Documents/PowerShell
+  windows-terminal: AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState
+  sharex: Documents/ShareX
+  vscode: AppData/Roaming/Code/User
+  zed: AppData/Roaming/Zed
+  .agents: /dev/null
+  .dsh: /dev/null
+  .pi: /dev/null
+  .playwright: /dev/null
+  rtk: /dev/null
+  "**/run_sync_vscode_extensions.sh": /dev/null
+linux:
+  docker: .docker/desktop
+  erdtree: .config/erdtree
+  git-cliff: .config/git-cliff
+  localsend/settings.merge.json: .local/share/org.localsend.localsend_app/shared_preferences.merge.json
+  rtk: .config/rtk
+  zed: .config/zed
+  gsudo: /dev/null
+  obs-studio: /dev/null
+  powershell: /dev/null
+  sharex: /dev/null
+  windows-terminal: /dev/null
+  .gitconfig.local.sample: /dev/null
+  .secrets.sh.sample: /dev/null
+  .wslconfig: /dev/null

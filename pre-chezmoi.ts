@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import { isMap, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
+import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 
-export type Platform = "win32" | "other";
+export type Platform = "windows" | "linux" | "darwin";
 
 type FileFormat = "json" | "toml" | "yaml";
 type MergeOp = "append" | "remove" | "replace" | "unset";
@@ -40,17 +40,24 @@ const fileFormats = {
 
 export async function run(
   root = process.cwd(),
-  platform: Platform = process.platform === "win32" ? "win32" : "other",
+  platform: Platform = currentPlatform(),
   resolveTargetPath: TargetPathResolver = chezmoiTargetPath,
 ): Promise<void> {
+  assertPlatform(platform);
   const sourceDir = join(root, "dotfiles");
   const distDir = join(root, "dist");
 
+  const pathMap = await loadPathMap(sourceDir, platform);
   const hooks = await collectHooks(sourceDir);
   await rm(distDir, { recursive: true, force: true });
   await copyDir(sourceDir, distDir);
-  await runHooks(hooks, distDir);
-  await movePlatformEntries(distDir, platform);
+  await removeMappedEntries(distDir, "", pathMap.removals);
+  await runHooks(
+    hooks.filter((hook) => !isIgnoredTarget(hook.relativeParent, pathMap.removals)),
+    distDir,
+  );
+  await removeMappedEntries(distDir, "", pathMap.removals);
+  await moveMappedEntries(distDir, pathMap.moves);
   await convertDotEntries(distDir);
   await convertExactDirectories(distDir);
   await convertExecutableFiles(distDir);
@@ -70,39 +77,111 @@ async function copyDir(sourceDir: string, destinationDir: string): Promise<void>
   }
 }
 
-function pathMaps(platform: Platform): Record<string, string> {
-  return platform === "win32"
-    ? {
-        docker: "AppData/Roaming/Docker",
-        erdtree: "AppData/Roaming/erdtree",
-        gemini: ".gemini",
-        "git-cliff": "AppData/Roaming/git-cliff",
-        "localsend/settings.merge.json": "AppData/Roaming/LocalSend/settings.merge.json",
-        mise: ".config/mise",
-        nushell: "AppData/Roaming/nushell",
-        "open-whispr": "AppData/Roaming/open-whispr",
-        "obs-studio": "AppData/Roaming/obs-studio",
-        powershell: "Documents/PowerShell",
-        "windows-terminal":
-          "AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState",
-        roo: ".roo",
-        sharex: "Documents/ShareX",
-        vscode: "AppData/Roaming/Code/User",
-        zed: "AppData/Roaming/Zed",
-      }
-    : {
-        docker: ".docker/desktop",
-        erdtree: ".config/erdtree",
-        "git-cliff": ".config/git-cliff",
-        "localsend/settings.merge.json":
-          ".local/share/org.localsend.localsend_app/shared_preferences.merge.json",
-        rtk: ".config/rtk",
-        zed: ".config/zed",
-      };
+// .pre-chezmoi-map.yaml unifies platform moves and removals in one mapping:
+// a destination path moves the entry after hooks, /dev/null discards it before
+// hooks (which also skips hooks living in a discarded folder).
+const mapFileName = ".pre-chezmoi-map.yaml";
+const removeDestination = "/dev/null";
+const mapSectionNames = new Set(["shared", "windows", "linux", "darwin"]);
+const platformNames = ["windows", "linux", "darwin"] as const;
+type PathMap = { removals: string[]; moves: Array<{ source: string; destination: string }> };
+
+function currentPlatform(): Platform {
+  switch (process.platform) {
+    case "win32":
+      return "windows";
+    case "linux":
+      return "linux";
+    case "darwin":
+      return "darwin";
+    default:
+      throw new Error(`Unsupported platform: ${process.platform}`);
+  }
 }
 
-async function movePlatformEntries(distDir: string, platform: Platform): Promise<void> {
-  for (const [source, destination] of Object.entries(pathMaps(platform))) {
+function assertPlatform(platform: string): asserts platform is Platform {
+  if (!platformNames.includes(platform as Platform))
+    throw new Error(`Unsupported platform: ${platform}`);
+}
+
+async function loadPathMap(sourceDir: string, platform: Platform): Promise<PathMap> {
+  const mapFilePath = join(sourceDir, mapFileName);
+  if (!existsSync(mapFilePath)) throw new Error(`${mapFileName} not found: ${mapFilePath}`);
+  const doc: unknown = parseYaml(await readFile(mapFilePath, "utf-8"));
+  if (!isPlainObject(doc)) throw new Error(`${mapFileName} must be a mapping`);
+  const unknownKey = Object.keys(doc).find((key) => !mapSectionNames.has(key));
+  if (unknownKey !== undefined)
+    throw new Error(`${mapFileName} has an unsupported key: ${unknownKey}`);
+
+  const sections = [
+    sectionEntries(mapFilePath, "shared", doc.shared),
+    sectionEntries(mapFilePath, "windows", doc.windows),
+    sectionEntries(mapFilePath, "linux", doc.linux),
+    sectionEntries(mapFilePath, "darwin", doc.darwin),
+  ];
+  const platformIndex = platformNames.indexOf(platform);
+  const activeSections = [sections[0], sections[platformIndex + 1]];
+  const merged = new Map<string, string>();
+  for (const entries of activeSections) {
+    for (const [key, destination] of entries) {
+      const existing = merged.get(key);
+      if (existing !== undefined && existing !== destination)
+        throw new Error(`${mapFileName} maps ${key} to both ${existing} and ${destination}`);
+      merged.set(key, destination);
+    }
+  }
+
+  const removals: string[] = [];
+  const moves: Array<{ source: string; destination: string }> = [];
+  for (const [source, destination] of merged) {
+    if (destination === removeDestination) removals.push(source);
+    else moves.push({ source, destination });
+  }
+  return { removals, moves };
+}
+
+function sectionEntries(
+  mapFilePath: string,
+  section: string,
+  value: unknown,
+): Array<[string, string]> {
+  if (value === undefined) return [];
+  if (!isPlainObject(value))
+    throw new Error(`${mapFileName} ${section} must be a mapping: ${mapFilePath}`);
+  return Object.entries(value).map(([key, destination]) => {
+    if (typeof destination !== "string")
+      throw new Error(`${mapFileName} ${section}.${key} must be a string: ${mapFilePath}`);
+    if (destination.startsWith("/") && destination !== removeDestination)
+      throw new Error(
+        `${mapFileName} ${section}.${key} has an unsupported destination: ${destination}`,
+      );
+    if (destination !== removeDestination && globPatternCharacters.test(key))
+      throw new Error(`${mapFileName} cannot map the glob key ${key} to ${destination}`);
+    return [key, destination];
+  });
+}
+
+async function removeMappedEntries(
+  distDir: string,
+  relativeParent: string,
+  removals: string[],
+): Promise<void> {
+  for (const entry of await readdir(distDir, { withFileTypes: true })) {
+    const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
+    const entryPath = join(distDir, entry.name);
+    if (isIgnoredTarget(childParent, removals, !entry.isDirectory())) {
+      await rm(entryPath, { recursive: true, force: true });
+      continue;
+    }
+    if (entry.isDirectory()) await removeMappedEntries(entryPath, childParent, removals);
+  }
+}
+
+async function moveMappedEntries(
+  distDir: string,
+  moves: Array<{ source: string; destination: string }>,
+): Promise<void> {
+  for (const { source, destination } of moves) {
     const sourcePath = join(distDir, source);
     if (!existsSync(sourcePath)) continue;
 
@@ -590,6 +669,29 @@ function compareHookParents(left: string, right: string): number {
       return leftParts[index] < rightParts[index] ? -1 : 1;
   }
   return leftParts.length - rightParts.length;
+}
+
+const globPatternCharacters = /[*?[]/;
+
+function isIgnoredTarget(relativeParent: string, patterns: string[], isFile = false): boolean {
+  if (relativeParent === "") return false;
+  // Source folder names use human-readable .exact suffixes; target paths do not.
+  // Files keep their suffix because exact conversion only rewrites directories.
+  const segments = relativeParent.split("/");
+  const targetSegments = segments.map((name, index) =>
+    isFile && index === segments.length - 1 ? name : name.replace(/\.exact$/, ""),
+  );
+  const targetPath = targetSegments.join("/");
+  const targetPrefixes: string[] = [];
+  for (let index = 1; index <= targetSegments.length; index++)
+    targetPrefixes.push(targetSegments.slice(0, index).join("/"));
+  return targetPrefixes.some((prefix) =>
+    patterns.some((pattern) =>
+      globPatternCharacters.test(pattern)
+        ? new Bun.Glob(pattern).match(prefix)
+        : pattern === prefix,
+    ),
+  );
 }
 
 async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
