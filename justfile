@@ -66,7 +66,7 @@ msime mode="apply":
 
 [windows]
 mozc mode="apply":
-  $mode = "{{mode}}"; $flag = if ($mode -eq "diff") { @("--dry-run") } elseif ($mode -eq "apply") { @() } else { throw "mode must be apply or diff: $mode" }; bun undotfiles/ime/mozc/roma-def.ts @flag
+  $mode = "{{ mode }}"; if ($mode -eq "diff") { bun undotfiles/ime/mozc/roma-def.ts --dry-run } elseif ($mode -eq "apply") { bun undotfiles/ime/mozc/roma-def.ts } else { throw "mode must be apply or diff: $mode" }
 
 [windows]
 autologon:
