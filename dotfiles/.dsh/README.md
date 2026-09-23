@@ -17,7 +17,7 @@ dsh（DeepSeek Harness）関係のファイル。
 - `profiles/web/run_after_dsh_plugin_install.sh` — dsh CLI による依存のインストール（chezmoi run script。`run_after_` 修飾子により全ターゲットの適用後に profile dir を CWD として `dsh plugin --profile web install --ignore-scripts` を実行する。stamp（`node_modules/.dsh-plugin-install-stamp`）が無い、または `package.json` / `pnpm-lock.yaml` が stamp より新しいときだけ実行して stamp を更新し、変更が無い apply ではインストールをスキップする。dsh CLI は profile dir で pnpm を実行し、成功後に `dsh.profile.bundles` を依存状態へ同期する）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）、`dsh.profile.bundles`（読み込み順）、`trustedDependencies`（lifecycle script を許可する依存）の3つを管理する
 - `profiles/web/pnpm-workspace.yaml` — dsh CLI の profile 依存解決設定。`nodeLinker: hoisted` と `autoInstallPeers: false` により、framework の peer import を shared fallback へ解決する
-- `test/` — dsh 本体を起動せずに plugin の web UI の見た目を検証する fixture（`.pre-chezmoi-map.yaml` で展開対象外）。詳しくは `test/README.md`
+- `test/` — dsh 本体を起動せずに plugin の web UI の見た目を検証する fixture（`.pre-chezmoi-map.md` で展開対象外）。詳しくは `test/README.md`
 
 通常の run script は target path の辞書順で apply の途中に実行され、`run_after_` 付きは全ターゲットの適用後に実行される。ビルド（`run_after_build.sh`）は after で実行するため、plugin の `src/` が全て展開されてから bundle される。profile の `run_after_dsh_plugin_install.sh` による依存インストールはビルドに後続する。`file:` 依存はビルド後の plugin package を pnpm が profile の package tree に配置するため、順序は問題にならない。
 

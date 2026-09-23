@@ -77,14 +77,13 @@ async function copyDir(sourceDir: string, destinationDir: string): Promise<void>
   }
 }
 
-// .pre-chezmoi-map.yaml unifies platform moves and removals in one mapping:
-// a destination path moves the entry after hooks, /dev/null discards it before
-// hooks (which also skips hooks living in a discarded folder).
-const mapFileName = ".pre-chezmoi-map.yaml";
-const removeDestination = "/dev/null";
-const mapSectionNames = new Set(["shared", "windows", "linux", "darwin"]);
+// .pre-chezmoi-map.md lists one source path per row and a destination or removal per platform.
+const mapFileName = ".pre-chezmoi-map.md";
+const removeDestination = "-";
+const mapColumns = ["key", "linux", "windows", "macos"] as const;
 const platformNames = ["windows", "linux", "darwin"] as const;
 type PathMap = { removals: string[]; moves: Array<{ source: string; destination: string }> };
+type PathMapRow = [key: string, linux: string, windows: string, macos: string];
 
 function currentPlatform(): Platform {
   switch (process.platform) {
@@ -107,58 +106,81 @@ function assertPlatform(platform: string): asserts platform is Platform {
 async function loadPathMap(sourceDir: string, platform: Platform): Promise<PathMap> {
   const mapFilePath = join(sourceDir, mapFileName);
   if (!existsSync(mapFilePath)) throw new Error(`${mapFileName} not found: ${mapFilePath}`);
-  const doc: unknown = parseYaml(await readFile(mapFilePath, "utf-8"));
-  if (!isPlainObject(doc)) throw new Error(`${mapFileName} must be a mapping`);
-  const unknownKey = Object.keys(doc).find((key) => !mapSectionNames.has(key));
-  if (unknownKey !== undefined)
-    throw new Error(`${mapFileName} has an unsupported key: ${unknownKey}`);
-
-  const sections = [
-    sectionEntries(mapFilePath, "shared", doc.shared),
-    sectionEntries(mapFilePath, "windows", doc.windows),
-    sectionEntries(mapFilePath, "linux", doc.linux),
-    sectionEntries(mapFilePath, "darwin", doc.darwin),
-  ];
-  const platformIndex = platformNames.indexOf(platform);
-  const activeSections = [sections[0], sections[platformIndex + 1]];
-  const merged = new Map<string, string>();
-  for (const entries of activeSections) {
-    for (const [key, destination] of entries) {
-      const existing = merged.get(key);
-      if (existing !== undefined && existing !== destination)
-        throw new Error(`${mapFileName} maps ${key} to both ${existing} and ${destination}`);
-      merged.set(key, destination);
-    }
-  }
-
+  const rows = parsePathMap(await readFile(mapFilePath, "utf-8"), mapFilePath);
+  const columnIndex = platform === "linux" ? 1 : platform === "windows" ? 2 : 3;
   const removals: string[] = [];
   const moves: Array<{ source: string; destination: string }> = [];
-  for (const [source, destination] of merged) {
-    if (destination === removeDestination) removals.push(source);
-    else moves.push({ source, destination });
+
+  for (const row of rows) {
+    const destination = row[columnIndex];
+    if (destination === "") continue;
+    if (destination === removeDestination) removals.push(row[0]);
+    else moves.push({ source: row[0], destination });
   }
   return { removals, moves };
 }
 
-function sectionEntries(
-  mapFilePath: string,
-  section: string,
-  value: unknown,
-): Array<[string, string]> {
-  if (value === undefined) return [];
-  if (!isPlainObject(value))
-    throw new Error(`${mapFileName} ${section} must be a mapping: ${mapFilePath}`);
-  return Object.entries(value).map(([key, destination]) => {
-    if (typeof destination !== "string")
-      throw new Error(`${mapFileName} ${section}.${key} must be a string: ${mapFilePath}`);
-    if (destination.startsWith("/") && destination !== removeDestination)
-      throw new Error(
-        `${mapFileName} ${section}.${key} has an unsupported destination: ${destination}`,
-      );
-    if (destination !== removeDestination && globPatternCharacters.test(key))
-      throw new Error(`${mapFileName} cannot map the glob key ${key} to ${destination}`);
-    return [key, destination];
-  });
+function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
+  const lines = content.split(/\r?\n/);
+  const headerIndex = lines.findIndex((line) => line.trim().startsWith("|"));
+  if (headerIndex < 0 || !sameCells(parseTableRow(lines[headerIndex]), mapColumns)) {
+    throw new Error(
+      `${mapFileName} must have columns: ${mapColumns.join(" | ")}: ${mapFilePath}`,
+    );
+  }
+
+  const separator = parseTableRow(lines[headerIndex + 1] ?? "");
+  if (
+    separator.length !== mapColumns.length ||
+    separator.some((cell) => !/^:?-{3,}:?$/.test(cell))
+  )
+    throw new Error(`${mapFileName} has an invalid Markdown table separator: ${mapFilePath}`);
+
+  const rows: string[][] = [];
+  const keys = new Set<string>();
+  for (const line of lines.slice(headerIndex + 2)) {
+    if (!line.trim().startsWith("|")) {
+      if (line.trim() === "") continue;
+      break;
+    }
+    const cells = parseTableRow(line);
+    if (cells.length !== mapColumns.length)
+      throw new Error(`${mapFileName} has an invalid table row: ${line}`);
+    const [key, ...destinations] = cells;
+    if (!key) throw new Error(`${mapFileName} contains an empty key`);
+    if (keys.has(key)) throw new Error(`${mapFileName} contains a duplicate key: ${key}`);
+    keys.add(key);
+
+    for (const destination of destinations) {
+      if (destination === "" || destination === removeDestination) continue;
+      if (destination.startsWith("/"))
+        throw new Error(
+          `${mapFileName} has an unsupported destination for ${key}: ${destination}`,
+        );
+      if (globPatternCharacters.test(key))
+        throw new Error(`${mapFileName} cannot map the glob key ${key} to ${destination}`);
+    }
+    rows.push(cells as PathMapRow);
+  }
+  return rows;
+}
+
+function parseTableRow(line: string): string[] {
+  const trimmed = line.trim();
+  const withoutEdges = trimmed.replace(/^\|/, "").replace(/\|$/, "");
+  return withoutEdges.split("|").map((cell) =>
+    cell
+      .trim()
+      .replace(/\\([*?])/g, "$1")
+      .replaceAll("\\[", "[")
+      .replaceAll("\\]", "]"),
+  );
+}
+
+function sameCells(actual: string[], expected: readonly string[]): boolean {
+  return (
+    actual.length === expected.length && actual.every((cell, index) => cell === expected[index])
+  );
 }
 
 async function removeMappedEntries(
