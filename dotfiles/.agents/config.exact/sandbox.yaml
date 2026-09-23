@@ -100,6 +100,9 @@ commands:
   - allow:
       - '^systemctl (status|show|cat|help|get-default|show-environment)(\s|$)'
       - "^systemctl (list-|is-)"
+  # sudo -n true: passwordless-sudo probe runs without confirmation (last match wins)
+  - allow:
+      - '^sudo -n true(\s|$)'
   # power/session control, incl. via systemctl, is denied outright
   - deny:
       - '^systemctl (reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit)(\s|$)'
