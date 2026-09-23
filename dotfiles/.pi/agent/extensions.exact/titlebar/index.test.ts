@@ -54,16 +54,16 @@ function captureTitleExtension(
 }
 
 describe("スピナー", () => {
-  it("0.5 秒ごとに点字スピナーのフレームが順に切り替わる", () => {
+  it("80 ミリ秒ごとに点字スピナーのフレームが順に切り替わる", () => {
     assert.equal(spinnerFrame(0), "⠋");
-    assert.equal(spinnerFrame(500), "⠙");
-    assert.equal(spinnerFrame(1000), "⠹");
-    assert.equal(spinnerFrame(1500), "⠸");
+    assert.equal(spinnerFrame(80), "⠙");
+    assert.equal(spinnerFrame(160), "⠹");
+    assert.equal(spinnerFrame(240), "⠸");
   });
 
   it("10 フレーム目で先頭のフレームへ循環する", () => {
-    assert.equal(spinnerFrame(5000), "⠋");
-    assert.equal(spinnerFrame(5500), "⠙");
+    assert.equal(spinnerFrame(800), "⠋");
+    assert.equal(spinnerFrame(880), "⠙");
   });
 
   it("すべてのフレームは点字ブロックの1文字で横幅が等しい", () => {
@@ -112,15 +112,15 @@ describe("状態遷移", () => {
 
     invoke("agent_start", 200);
 
-    assert.equal(titleCalls.at(-1), "⠋ π - session-a");
+    assert.equal(titleCalls.at(-1), "⠹ π - session-a");
   });
 
-  it("agent_start は 0.5 秒間隔のタイマーを起動する", () => {
+  it("agent_start は 80 ミリ秒間隔のタイマーを起動する", () => {
     const { invoke } = captureTitleExtension("session-a");
 
     invoke("agent_start", 0);
 
-    assert.equal(startedTimers.at(-1)?.intervalMs, 500);
+    assert.equal(startedTimers.at(-1)?.intervalMs, 80);
   });
 
   it("タイマーの起動ごとにスピナーフレームが進む", () => {
@@ -128,7 +128,7 @@ describe("状態遷移", () => {
     invoke("agent_start", 0);
     const spinnerTimer = startedTimers.at(-1)!;
 
-    fakeNowMs = 500;
+    fakeNowMs = 80;
     spinnerTimer.callback();
 
     assert.equal(titleCalls.at(-1), "⠙ π");
@@ -194,7 +194,7 @@ describe("入力待ち", () => {
     invoke("agent_start", 0);
     invoke("ui_prompt_start", 0);
 
-    invoke("ui_prompt_end", 3500);
+    invoke("ui_prompt_end", 560);
 
     assert.equal(titleCalls.at(-1), "⠧ π");
   });

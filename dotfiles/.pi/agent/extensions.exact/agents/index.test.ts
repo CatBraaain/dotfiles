@@ -776,8 +776,8 @@ describe("システムプロンプト", () => {
 });
 
 describe("待機スピナー", () => {
-  it("titlebar と同じ10フレームを 0.5 秒間隔で循環させる", () => {
-    const displayedFrames = SPINNER_FRAMES.map((_, frameIndex) => spinnerFrame(frameIndex * 500));
+  it("titlebar と同じ10フレームを 80 ミリ秒間隔で循環させる", () => {
+    const displayedFrames = SPINNER_FRAMES.map((_, frameIndex) => spinnerFrame(frameIndex * 80));
 
     assert.deepEqual(displayedFrames, SPINNER_FRAMES);
   });
@@ -2511,7 +2511,7 @@ describe("subagent", () => {
     }
   });
 
-  it("実行中は 0.5 秒ごとに TUI の再描画を要求する", async () => {
+  it("実行中は 80 ミリ秒ごとに TUI の再描画を要求する", async () => {
     const extension = captureAgentsExtension();
     const originalTimers = { ...__spinnerTimers };
     let spinnerCallback: (() => void) | undefined;
@@ -2530,7 +2530,7 @@ describe("subagent", () => {
 
       assert.deepEqual(
         { spinnerIntervalMs, requestedRenderCount: extension.requestedRenderCount() },
-        { spinnerIntervalMs: 500, requestedRenderCount: 1 },
+        { spinnerIntervalMs: 80, requestedRenderCount: 1 },
       );
 
       extension.children[0]?.emit("close", 0);
@@ -3342,7 +3342,7 @@ describe("subagent の表示", () => {
       ) as Container;
       const initialLines = rendered.render(200);
 
-      __spinnerTimers.now = () => 500;
+      __spinnerTimers.now = () => 80;
       const nextLines = rendered.render(200);
 
       assert.deepEqual(

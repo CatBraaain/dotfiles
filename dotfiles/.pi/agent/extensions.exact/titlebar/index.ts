@@ -11,10 +11,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-// agents 拡張の待機スピナーもこの間隔を使う。巨大セッションでは再描画のたびに
-// 画面の全コンポーネント行を再構築するため、高速な切替はメインスレッドを占有する
-// （SUBAGENT_TUI_STALL の調査: 2026-09-23）。0.5 秒でも「動作中」は十分伝わる。
-export const SPINNER_INTERVAL_MS = 500;
+// agents 拡張の待機スピナーもこの間隔を使う。pi-tui の Loader の既定間隔（80 ミリ秒）に揃える。
+export const SPINNER_INTERVAL_MS = 80;
 const WAITING_FRAME = "⏸";
 
 export const __timers: {
