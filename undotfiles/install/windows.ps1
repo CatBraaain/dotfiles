@@ -51,6 +51,7 @@ $managedDevPackages = @(
     "Casey.Just"
     "RussellBanks.Komac"
     "OpenJS.NodeJS.LTS"
+    "protobuf"
     "Microsoft.PowerShell" # windows
     "Canonical.Ubuntu" # windows
     "GitHub.cli"
