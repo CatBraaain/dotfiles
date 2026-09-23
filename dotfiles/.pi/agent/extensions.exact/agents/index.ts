@@ -20,7 +20,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { spinnerFrame } from "../titlebar/index.ts";
+import { SPINNER_INTERVAL_MS, spinnerFrame } from "../titlebar/index.ts";
 import { parse as parseYaml } from "yaml";
 import {
   bashExecFrom,
@@ -248,9 +248,14 @@ export function __resetRoutingState(): void {
   delete (globalThis as Record<string, unknown>)[ROUTING_STATE_KEY];
 }
 
-const SPINNER_INTERVAL_MS = 100;
 const EXIT_STDIO_GRACE_MS = 100;
 const UPDATE_THROTTLE_MS = 150;
+
+// SPEC「停止」の無進捗タイムアウト。エージェント側ターン（tool 実行中でない区間）で
+// 子から意味のある stdout イベントが来ないままこの時間が経過したら、子の停止と
+// 判定して kill する。tool 実行中は bash timeout 等ツール側の時間管理に任せ、
+// このタイマーを止める（静かな長時間コマンドの誤発火を防ぐ）。
+const STALL_TIMEOUT_MS = 15 * 60_000;
 
 // 添付画像を vision 子セッションへ渡すための一時ファイル。親セッションのモデルへ
 // 画像を送らず、子が read で読める形にする。子の起動が終わったら削除する。
@@ -463,6 +468,7 @@ function isFailedResult(result: ChildRun): boolean {
     result.exitCode !== 0 ||
     result.stopReason === "error" ||
     result.stopReason === "aborted" ||
+    result.stopReason === "stalled" ||
     getFinalOutput(result.messages) === ""
   );
 }
@@ -565,6 +571,8 @@ async function runChild(
     stderr: "",
   };
   let wasAborted = false;
+  let wasStalled = false;
+  let activeToolExecutions = 0;
 
   const emitUpdate = () => {
     onUpdate?.({
@@ -592,11 +600,30 @@ async function runChild(
     let processExitCode: number | null | undefined;
     let abortTimer: ReturnType<typeof setTimeout> | undefined;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
     const clearIdleTimer = () => {
       if (idleTimer !== undefined) {
         __abortTimer.clear(idleTimer);
         idleTimer = undefined;
       }
+    };
+    const clearStallTimer = () => {
+      if (stallTimer !== undefined) {
+        __abortTimer.clear(stallTimer);
+        stallTimer = undefined;
+      }
+    };
+    const armStallTimer = () => {
+      stallTimer = __abortTimer.set(() => {
+        stallTimer = undefined;
+        if (settled) return;
+        wasStalled = true;
+        childResult.stopReason = "stalled";
+        childResult.errorMessage = `Child stalled: no child events for ${Math.round(
+          STALL_TIMEOUT_MS / 60000,
+        )} min`;
+        terminateChild();
+      }, STALL_TIMEOUT_MS);
     };
     const cleanup = () => {
       signal?.removeEventListener("abort", killChild);
@@ -605,6 +632,7 @@ async function runChild(
         abortTimer = undefined;
       }
       clearIdleTimer();
+      clearStallTimer();
       processHandle.stdout?.destroy();
       processHandle.stderr?.destroy();
     };
@@ -622,22 +650,28 @@ async function runChild(
         const message = event.message as Message;
         childResult.messages.push(message);
         if (message.role === "assistant") {
-          if (message.stopReason) childResult.stopReason = message.stopReason;
-          if (message.errorMessage) childResult.errorMessage = message.errorMessage;
+          if (!wasStalled) {
+            if (message.stopReason) childResult.stopReason = message.stopReason;
+            if (message.errorMessage) childResult.errorMessage = message.errorMessage;
+          }
         }
         throttledEmit.call();
       }
-      if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
-        childResult.actions.push({
-          toolCallId: typeof event.toolCallId === "string" ? event.toolCallId : undefined,
-          name: event.toolName,
-          args: isRecord(event.args) ? event.args : {},
-          startedAt: Date.now(),
-        });
+      if (event.type === "tool_execution_start") {
+        activeToolExecutions += 1;
+        if (typeof event.toolName === "string") {
+          childResult.actions.push({
+            toolCallId: typeof event.toolCallId === "string" ? event.toolCallId : undefined,
+            name: event.toolName,
+            args: isRecord(event.args) ? event.args : {},
+            startedAt: Date.now(),
+          });
+        }
         throttledEmit.call();
       }
       if (event.type === "tool_execution_update") throttledEmit.call();
       if (event.type === "tool_execution_end") {
+        activeToolExecutions = Math.max(0, activeToolExecutions - 1);
         const action = childResult.actions.find(
           (candidate) =>
             candidate.toolCallId !== undefined && candidate.toolCallId === event.toolCallId,
@@ -654,6 +688,12 @@ async function runChild(
         childResult.messages.push(event.message as Message);
         throttledEmit.call();
       }
+      // SPEC「停止」の無進捗タイムアウト: 子から意味のある stdout イベントを受け取る
+      // たびに計測をやり直す。tool 実行中はツール側の時間管理に任せるため計測しない。
+      if (!settled) {
+        clearStallTimer();
+        if (activeToolExecutions === 0) armStallTimer();
+      }
     };
 
     // A grandchild holding stdout's fd would otherwise prevent close indefinitely.
@@ -663,7 +703,7 @@ async function runChild(
       settled = true;
       cleanup();
       if (buffer.trim()) processLine(buffer);
-      if (code === null && !wasAborted) {
+      if (code === null && !wasAborted && !wasStalled) {
         childResult.stopReason = "killed";
         childResult.errorMessage = "Child process was killed by a signal";
       }
@@ -678,13 +718,20 @@ async function runChild(
       }, EXIT_STDIO_GRACE_MS);
     };
 
+    const terminateChild = () => {
+      processHandle.kill("SIGTERM");
+      if (abortTimer === undefined) {
+        abortTimer = __abortTimer.set(() => {
+          abortTimer = undefined;
+          if (!settled) processHandle.kill("SIGKILL");
+        }, 5000);
+      }
+    };
+
     const killChild = () => {
       if (wasAborted) return;
       wasAborted = true;
-      processHandle.kill("SIGTERM");
-      abortTimer = __abortTimer.set(() => {
-        if (!settled) processHandle.kill("SIGKILL");
-      }, 5000);
+      terminateChild();
     };
 
     processHandle.stdout.on("data", (data) => {
@@ -709,6 +756,9 @@ async function runChild(
       childResult.errorMessage = error.message;
       finalize(1);
     });
+
+    // 起動〜最初のイベントの間も無進捗計測対象にする。
+    armStallTimer();
 
     if (signal?.aborted) killChild();
     else signal?.addEventListener("abort", killChild, { once: true });

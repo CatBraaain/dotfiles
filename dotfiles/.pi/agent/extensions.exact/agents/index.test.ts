@@ -776,8 +776,8 @@ describe("システムプロンプト", () => {
 });
 
 describe("待機スピナー", () => {
-  it("titlebar と同じ10フレームを 0.1 秒間隔で循環させる", () => {
-    const displayedFrames = SPINNER_FRAMES.map((_, frameIndex) => spinnerFrame(frameIndex * 100));
+  it("titlebar と同じ10フレームを 0.5 秒間隔で循環させる", () => {
+    const displayedFrames = SPINNER_FRAMES.map((_, frameIndex) => spinnerFrame(frameIndex * 500));
 
     assert.deepEqual(displayedFrames, SPINNER_FRAMES);
   });
@@ -2511,7 +2511,7 @@ describe("subagent", () => {
     }
   });
 
-  it("実行中は 0.1 秒ごとに TUI の再描画を要求する", async () => {
+  it("実行中は 0.5 秒ごとに TUI の再描画を要求する", async () => {
     const extension = captureAgentsExtension();
     const originalTimers = { ...__spinnerTimers };
     let spinnerCallback: (() => void) | undefined;
@@ -2530,7 +2530,7 @@ describe("subagent", () => {
 
       assert.deepEqual(
         { spinnerIntervalMs, requestedRenderCount: extension.requestedRenderCount() },
-        { spinnerIntervalMs: 100, requestedRenderCount: 1 },
+        { spinnerIntervalMs: 500, requestedRenderCount: 1 },
       );
 
       extension.children[0]?.emit("close", 0);
@@ -2896,6 +2896,131 @@ describe("subagent", () => {
     }
   });
 
+  it("エージェント側ターンで 15 分無音の子を stalled として停止する", async () => {
+    const extension = captureAgentsExtension();
+    let fireStallTimer: (() => void) | undefined;
+    const originalSet = __abortTimer.set;
+    const originalClear = __abortTimer.clear;
+    let clearedTimers = 0;
+    __abortTimer.set = (callback) => {
+      fireStallTimer = callback;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    __abortTimer.clear = () => {
+      clearedTimers += 1;
+    };
+    extension.respondToChild((child) => {
+      // 子は assistant の確定だけを返し、それ以降エージェント側ターンで無音になる。
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } })}\n`,
+        ),
+      );
+    });
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(fireStallTimer !== undefined, true);
+      fireStallTimer?.();
+      await new Promise((resolve) => setImmediate(resolve));
+      const result = await execution;
+      assert.equal(result.isError, true);
+      assert.equal(result.details.results[0].stopReason, "stalled");
+      assert.match(result.content[0].text, /Child stalled: no child events for 15 min/);
+      assert.deepEqual(extension.children[0]?.killHistory, ["SIGTERM"]);
+      assert.ok(clearedTimers >= 1, "停止時に無進捗タイマーが解除される");
+    } finally {
+      __abortTimer.set = originalSet;
+      __abortTimer.clear = originalClear;
+      extension.restore();
+    }
+  });
+
+  it("stall 後に遅れて届いた message_end で停止理由とエラーを上書きしない", async () => {
+    const extension = captureAgentsExtension();
+    let fireStallTimer: (() => void) | undefined;
+    const originalSet = __abortTimer.set;
+    const originalClear = __abortTimer.clear;
+    __abortTimer.set = (callback, delayMs) => {
+      if (delayMs === 15 * 60_000) fireStallTimer = callback;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    __abortTimer.clear = () => {};
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "initial" }] } })}\n`,
+        ),
+      );
+    });
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
+      await new Promise((resolve) => setImmediate(resolve));
+      fireStallTimer?.();
+      // SIGTERM 後、子が close する前に遅れて assistant error を流す。
+      extension.children[0]?.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "late child error", content: [] } })}\n`,
+        ),
+      );
+      const result = await execution;
+      assert.equal(result.details.results[0].stopReason, "stalled");
+      assert.match(result.content[0].text, /Child stalled: no child events for 15 min/);
+      assert.doesNotMatch(result.content[0].text, /late child error/);
+    } finally {
+      __abortTimer.set = originalSet;
+      __abortTimer.clear = originalClear;
+      extension.restore();
+    }
+  });
+
+  it("tool 実行中は無進捗タイマーを止めて誤発火を防ぐ", async () => {
+    const extension = captureAgentsExtension();
+    let setCalls = 0;
+    let clearCalls = 0;
+    const originalSet = __abortTimer.set;
+    const originalClear = __abortTimer.clear;
+    __abortTimer.set = (callback) => {
+      setCalls += 1;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    __abortTimer.clear = () => {
+      clearCalls += 1;
+    };
+    extension.respondToChild((child) => {
+      // tool 実行を開始したまま応答が来ない（静かな長時間 bash 相当）。
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "tool_execution_start", toolCallId: "t1", args: { command: "sleep 3600", timeout: 3600 } })}\n`,
+        ),
+      );
+    });
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
+      await new Promise((resolve) => setImmediate(resolve));
+      // 起動直後の初回 arm だけがスケジュールされ、start イベント受信で解除される。
+      // tool 実行中は再 arm されないため、これ以上 set が呼ばれない。
+      assert.equal(setCalls, 1);
+      assert.ok(clearCalls >= 1, "start イベント受信で初回 arm が解除される");
+      assert.equal(extension.children[0]?.killHistory.length ?? 0, 0);
+      extension.children[0]?.emit("close", 1);
+      const result = await execution;
+      assert.equal(result.isError, true);
+      assert.notEqual(result.details.results[0].stopReason, "stalled");
+    } finally {
+      __abortTimer.set = originalSet;
+      __abortTimer.clear = originalClear;
+      extension.restore();
+    }
+  });
+
   it("非0終了した子をエラーとして stderr を親へ返す", async () => {
     const extension = captureAgentsExtension();
     extension.respondToChild((child) => {
@@ -3217,7 +3342,7 @@ describe("subagent の表示", () => {
       ) as Container;
       const initialLines = rendered.render(200);
 
-      __spinnerTimers.now = () => 100;
+      __spinnerTimers.now = () => 500;
       const nextLines = rendered.render(200);
 
       assert.deepEqual(
