@@ -67,6 +67,16 @@ winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
 winget install $managedDevPackages --source winget
 
+# Mozc: no winget package nor GitHub release exists; the official CI (CI for
+# Windows workflow) publishes an MSI as a run artifact instead, which needs
+# GitHub authentication. Requires gh from $managedDevPackages and `gh auth login`.
+$mozcRun = gh run list --repo google/mozc --workflow=windows.yaml --status=success --limit 1 --json databaseId --jq '.[0].databaseId'
+$mozcDir = Join-Path $env:TEMP "mozc-install"
+New-Item -ItemType Directory -Path $mozcDir -Force | Out-Null
+gh run download $mozcRun --repo google/mozc --name Mozc64_x64.msi --dir $mozcDir
+Start-Process msiexec -ArgumentList "/i", "`"$mozcDir\Mozc64_x64.msi`"", "/qn" -Wait
+Remove-Item $mozcDir -Recurse -Force
+
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 
 $packagesDir = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
