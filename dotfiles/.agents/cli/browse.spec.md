@@ -1,14 +1,14 @@
 # browse CLI spec
 
-コマンド `browse` の仕様。サブコマンド `search` / `fetch` / `start` / `restart` / `display` を持ち、人間とコーディングエージェントが、Web 検索と URL フェッチと camoufox server の管理をコマンドラインから実行するための CLI。
+コマンド `browse` の仕様。サブコマンド `search` / `fetch` / `server` / `display` を持ち、人間とコーディングエージェントが、Web 検索と URL フェッチと camoufox server の管理をコマンドラインから実行するための CLI。
 
 usage:
 
 ```
 usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
-       browse start
-       browse restart
+       browse server start
+       browse server restart
        browse display show
        browse display hide
 ```
@@ -18,11 +18,11 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - SERP 解析は openserp（既定 `http://127.0.0.1:7000`）に依存し、ブラウザ描画は camoufox（既定 `ws://127.0.0.1:9378/camoufox`）に依存する
 - `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` 環境変数で接続先を変更できる
 - openserp が未起動のときは `openserp serve` をバックグラウンド起動し、`/ready` 応答を 250ms 間隔で待ち、15 秒で断念する
-- camoufox server は `browse` 自身の内部サーバーモード（`browse __server`。usage には出ない）として起動する。server が未接続のときは `browse start` をバックグラウンド起動し、websocket 接続（1 接続 1 秒上限）で healthy を判定し、250ms 間隔で再プローブして 15 秒で断念する
-- camoufox server と `browse start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
+- camoufox server は `browse` 自身の内部サーバーモード（`browse __server`。usage には出ない）として起動する。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket 接続（1 接続 1 秒上限）で healthy を判定し、250ms 間隔で再プローブして 15 秒で断念する
+- camoufox server と `browse server start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
 - camoufox server は起動してポートの待受を確立した時点で、自身の PID を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/camoufox-server.pid` へ書く
 - playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search`、フェッチが `web-fetch` で、各実行の冒頭と終了時にセッションを閉じる
-- `search`・`fetch`・`start`・`restart` のCamoufox操作は共有ロックで直列化する。ロックは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する
+- `search`・`fetch`・`server start`・`server restart` のCamoufox操作は共有ロックで直列化する。ロックは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。ロックの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで `flock(1)` の下へ再実行することで行う。`__locked` が直接渡された実行はロックを取得せずにコマンド本体を実行する。この再入は、ロック保持中の search / fetch が detached で server 起動を依頼するときに使う
 
 ## 共通の振る舞い
 
@@ -31,7 +31,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | `--json` がある | 成功時 | 単一の JSON を stdout へ出力する（jq でパース可能） |
 | `--json` がない | 成功時 | markdown を stdout へ出力する |
 | すべての backend が失敗した | 実行 | `All <operation> backends failed: <backend>: <error>; ...`（`<operation>` は `web search` または `web fetch`）を 1 行 stderr へ出力し、終了コード 1 で終わる |
-| render が abort される | 実行 | ページopen・closeによる機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で手動の `browse restart` を案内する |
+| render が abort される | 実行 | ページopen・closeによる機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で手動の `browse server restart` を案内する |
 | challenge / captcha を検出した | 実行 | 同一 backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
 | Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを1回だけ再起動してから新しいsessionで同じbackendを再試行する。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
 | `search` または `fetch` が同時に起動された | 実行 | Camoufoxを使う処理を共有ロックで直列化し、先に開始した実行の完了を待つ。Reddit / StackOverflowの専用経路もコマンド単位では待ち合わせる |
@@ -42,13 +42,13 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | 値を要求するフラグが引数の末尾にあり、値を取れない | 実行 | 対象サブコマンドの usage 行を stderr へ出力し、終了コード 1 で終わる |
 | 値を要求するフラグの直後の引数 | 扱い | `--` 始まりかどうかを検査せず、そのまま値として使う |
 | 単一ダッシュで始まる引数（`-` を含む） | 扱い | フラグではなく位置引数として扱う |
-| `start` / `restart` に余分な引数を渡した | 実行 | usage を stderr へ出力し、終了コード 1 で終わる |
+| `server` の action がない・未知の action を渡した・余分な引数を渡した | 実行 | `browse server` の usage を stderr へ出力し、終了コード 1 で終わる |
 | `display` の action がない・未知の action を渡した・余分な引数を渡した | 実行 | `browse display` の usage を stderr へ出力し、終了コード 1 で終わる |
 
 | 対象 | タイムアウト |
 |---|---|
 | server 起動待ち・セッション close | 15 秒 |
-| `browse restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10 秒 |
+| `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10 秒 |
 | ページ open・ナビゲーション・DOM 取得 | 30 秒 |
 | openserp パース・trafilatura 変換・Reddit の各要求・StackOverflow の各要求 | 15 秒 |
 | challenge 検出待ち | networkidle 待ち 5 秒・上限 5 秒（250ms 間隔で DOM ポーリング） |
@@ -86,7 +86,7 @@ flowchart TD
 
 server の復旧を伴う再試行は1コマンド全体で1回までとする。詳細な timeout、stderr、JSON 出力は各コマンドの表に従う。
 
-## `browse start`
+## `browse server start`
 
 camoufox server の起動を保証する冪等なサブコマンド。CLI 内部（search / fetch の server 確保）と共通 startup script の priming の両方が、このサブコマンドを detached に起動する。
 
@@ -97,15 +97,15 @@ camoufox server の起動を保証する冪等なサブコマンド。CLI 内部
 | 待ちが 15 秒に達した | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
 | 起動に失敗した server がポートを占有している | 実行 | 2 番目以降の server はポート衝突で終了する（先の server が serve を続けるため無害） |
 
-## `browse restart`
+## `browse server restart`
 
 hang した camoufox server の復旧用に、実行中の server を停止して起動し直す。
 
 | 条件・状態 | 操作 | 結果 |
 |---|---|---|
 | 実行 | 停止 | 停止対象は常に「PID ファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である。対象へ SIGTERM を送り、10 秒以内に終了しなければ SIGKILL する |
-| 停止後 | 実行 | `browse start` と同じ手順で起動し直し、ready を待つ |
-| 実行中の server が無い | 実行 | 停止を飛ばして `browse start` の手順で起動する |
+| 停止後 | 実行 | `browse server start` と同じ手順で起動し直し、ready を待つ |
+| 実行中の server が無い | 実行 | 停止を飛ばして `browse server start` の手順で起動する |
 
 ## `browse display show` / `browse display hide`
 

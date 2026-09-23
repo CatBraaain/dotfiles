@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 const browsePath = join(import.meta.dir, "browse.executable");
 const displayUsage = "usage: browse display show\n       browse display hide\n";
+const serverUsage = "usage: browse server start\n       browse server restart\n";
 
 type CommandResult = {
   status: number | null;
@@ -35,12 +36,24 @@ esac
   chmodSync(executable, 0o755);
 }
 
-// A stand-in browser process that browse's own restart machinery can see:
-// argv[0] carries "<browse script> __server", so the pgrep sweep and the
-// /proc/<pid>/cmdline validation behind `browse restart` both match it.
-// If display show/hide ever stopped or restarted the server, this dies.
+// A stand-in browser process that browse's own restart machinery can see. The
+// machinery validates /proc/<pid>/cmdline: args[1] must name the browse script
+// and args[2] must be "__server", so we exec tail with exactly that argv (tail
+// keeps following browse's source even though the "__server" file is missing,
+// and the trailing -f survives GNU option permutation). Both the pgrep sweep
+// and the cmdline validation behind `browse server restart` match it, and the
+// process dies if display show/hide ever stopped or restarted the server.
+// Requires python3 (any POSIX install with it); skipped on Windows together
+// with the rest of the display suite.
 function startBrowserProcess(): ChildProcess {
-  return spawn("bash", ["-c", `exec -a '${browsePath} __server' sleep 30`], { stdio: "ignore" });
+  return spawn(
+    "python3",
+    [
+      "-c",
+      `import os; os.execvp("tail", ["browse-fake-server", ${JSON.stringify(browsePath)}, "__server", "-f"])`,
+    ],
+    { stdio: "ignore" },
+  );
 }
 
 function isProcessAlive(pid: number | undefined): boolean {
@@ -98,6 +111,78 @@ function runBrowse(
     stderr: result.stderr,
   };
 }
+
+// Async variant for tests whose child needs the test process's event loop to
+// keep running (spawnSync blocks it, starving servers served from this process).
+function runBrowseAsync(
+  args: string[],
+  binDir: string,
+  logPath: string,
+  extraEnv: Record<string, string> = {},
+): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [browsePath, ...args],
+      {
+        env: {
+          ...process.env,
+          ...extraEnv,
+          PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
+          X11VNC_LOG: logPath,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => { stdout += chunk; });
+    child.stderr?.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("exit", (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+describe("browse server", () => {
+  it("rejects missing, unknown, and extra server actions", () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-server-"));
+    try {
+      for (const args of [["server"], ["server", "toggle"], ["server", "start", "extra"]]) {
+        const result = runBrowse(args, root, join(root, "requests"));
+        assert.equal(result.status, 1);
+        assert.equal(result.stderr, serverUsage);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 0 idempotently when the websocket endpoint answers", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request, server) {
+        if (server.upgrade(request)) return;
+        return new Response(null, { status: 426 });
+      },
+      websocket: {
+        message() {},
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "browse-server-start-"));
+    try {
+      const result = await runBrowseAsync(["server", "start"], root, join(root, "requests"), {
+        CAMOUFOX_BASE_URL: `ws://127.0.0.1:${server.port}/camoufox`,
+        XDG_CACHE_HOME: root,
+      });
+      assert.equal(result.status, 0);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "");
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("browse display", () => {
   if (process.platform === "win32") {

@@ -52,7 +52,7 @@ backend の順序とフォールバック、challenge / captcha 再試行、タ�
 
 ## camoufox server の配置
 
-camoufox server は `browse` CLI（`~/.agents/cli/browse`）に内蔵され、`browse start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI 自身が `browse start` をバックグラウンド起動し、共通の startup script（`~/.agents/scripts/startup`）も先行起動する。この拡張は server 本体を同梱しない。
+camoufox server は `browse` CLI（`~/.agents/cli/browse`）に内蔵され、`browse server start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI 自身が `browse server start` をバックグラウンド起動し、共通の startup script（`~/.agents/scripts/startup`）も先行起動する。この拡張は server 本体を同梱しない。
 
 ### camoufox の表示モード（Xvfb headed と x11vnc）
 
@@ -84,7 +84,7 @@ CLI スクリプト（`browse`）は、この拡張のディレクトリから4�
 | 成功（web_fetch、タイトルなし） | `✓ <backend> (1.2s)`                     |
 | 失敗                            | `✗ <CLI名> - "<エラーメッセージ>"`       |
 
-失敗行のエラーメッセージは CLI の stderr（全 backend 失敗の理由に camoufox server の復旧ヒント `browse restart` が含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
+失敗行のエラーメッセージは CLI の stderr（全 backend 失敗の理由に camoufox server の復旧ヒント `browse server restart` が含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
 
 ## 環境変数
 

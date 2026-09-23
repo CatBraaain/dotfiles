@@ -70,12 +70,12 @@ externalSkills:
         - 用が済んだら close してよい（開き直しはすぐ。cookie は close で消える）
         - セッション名 `web-search` と `web-fetch` は browse CLI が各リクエストで close
           して使うため使わない。新しい名前（例: `browse-docs`）を使う
-        - 接続を拒否されたら server が起動していない。`browse start`
+        - 接続を拒否されたら server が起動していない。`browse server start`
           で起動する（ready を待って終わる。ログは
           `~/.cache/pi/web-search/camoufox-server.log` に追記される）
         - 生きているセッションが突然死んだら、server が hung している可能性がある。
-          `browse restart` で server を再起動してセッションを開き直す
-        - server の起動は browse CLI 経由に限る（`browse start` / `browse restart`）。
+          `browse server restart` で server を再起動してセッションを開き直す
+        - server の起動は browse CLI 経由に限る（`browse server start` / `browse server restart`）。
           server は起動時に MOZ_DISABLE_*_SANDBOX=1 をブラウザプロセスへ自動設定し、
           sandboxed 環境で Firefox のプロセスサンドボックスが無反応で固まる問題
           （Chrome の --no-sandbox と同根）を回避している。browse CLI を介さず

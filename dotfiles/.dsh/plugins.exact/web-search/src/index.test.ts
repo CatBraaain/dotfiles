@@ -481,7 +481,7 @@ describe("エラー伝播（cliErrorMessage・toWebError・provider 経由）", 
       return Promise.reject(
         Object.assign(new Error("Command failed: bun browse search --json"), {
           stderr:
-            "All web search backends failed: camoufox+openserp(google): render: aborted\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Run `browse restart` to recover (it stops and respawns the server).\n",
+            "All web search backends failed: camoufox+openserp(google): render: aborted\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Run `browse server restart` to recover (it stops and respawns the server).\n",
         }),
       );
     };
@@ -492,7 +492,7 @@ describe("エラー伝播（cliErrorMessage・toWebError・provider 経由）", 
       assert.equal(error.code, "WEB_PROVIDER_ERROR");
       assert.equal(
         error.message,
-        "All web search backends failed: camoufox+openserp(google): render: aborted\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Run `browse restart` to recover (it stops and respawns the server).",
+        "All web search backends failed: camoufox+openserp(google): render: aborted\nHint: renders aborted while the servers looked healthy, so the camoufox server is likely hung. Run `browse server restart` to recover (it stops and respawns the server).",
       );
       return true;
     });

@@ -5,12 +5,12 @@
 // Subcommands:
 //   browse search "<query>" [--lang <code>] [--json]
 //   browse fetch <url> [--json]
-//   browse start      ensure the camoufox server is running (idempotent)
-//   browse restart    stop and respawn the camoufox server (hang recovery)
+//   browse server start     ensure the camoufox server is running (idempotent)
+//   browse server restart   stop and respawn the camoufox server (hang recovery)
 //   browse display show|hide  toggle VNC display access
 //
 // The `__server` subcommand is internal: it is the camoufox server process
-// itself, spawned detached by `browse start` (and by search/fetch when they
+// itself, spawned detached by `browse server start` (and by search/fetch when they
 // find the server down). It stays running until the machine shuts down or the
 // process is killed.
 
@@ -154,7 +154,7 @@ function renderAbortHint(attempts: readonly Attempt[]): string {
       /aborted/i.test(attempt.error),
   );
   return renderAborted
-    ? `\nHint: automatic render recovery did not resolve the failure. Run \`browse restart\` to recover the camoufox server.`
+    ? `\nHint: automatic render recovery did not resolve the failure. Run \`browse server restart\` to recover the camoufox server.`
     : "";
 }
 
@@ -335,8 +335,8 @@ function stateDir(): string {
 
 const USAGE = `usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
-       browse start
-       browse restart
+       browse server start
+       browse server restart
        browse display show
        browse display hide`;
 
@@ -344,6 +344,8 @@ const SEARCH_USAGE = `usage: browse search "<query>" [--lang <code>] [--json]`;
 const FETCH_USAGE = `usage: browse fetch <url> [--json]`;
 const DISPLAY_USAGE = `usage: browse display show
        browse display hide`;
+const SERVER_USAGE = `usage: browse server start
+       browse server restart`;
 
 interface SearchArgs {
   query: string;
@@ -406,13 +408,8 @@ async function main(): Promise<void> {
     case "fetch":
       await fetchCommand(rest);
       break;
-    case "start":
-      if (rest.length > 0) usageFail(USAGE);
-      await runSerialized(startCamoufoxServer);
-      break;
-    case "restart":
-      if (rest.length > 0) usageFail(USAGE);
-      await runSerialized(restartCamoufoxServer);
+    case "server":
+      await serverCommand(rest);
       break;
     case "display":
       displayCommand(rest);
@@ -444,7 +441,7 @@ async function fetchCommand(argv: string[]): Promise<void> {
   });
 }
 
-// Spec: `browse start` は冪等。起動済みなら何もせず終了コード 0。
+// Spec: `browse server start` は冪等。起動済みなら何もせず終了コード 0。
 async function startCamoufoxServer(): Promise<void> {
   const baseUrl = camoufoxBaseUrl();
   const signal = AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS);
@@ -453,7 +450,7 @@ async function startCamoufoxServer(): Promise<void> {
   await waitForServerHealthy(baseUrl, signal);
 }
 
-// Spec: `browse restart` は実行中の server を停止してから起動し直す。
+// Spec: `browse server restart` は実行中の server を停止してから起動し直す。
 async function restartCamoufoxServer(): Promise<void> {
   await stopCamoufoxServers();
   await startCamoufoxServer();
@@ -466,6 +463,15 @@ function displayCommand(argv: string[]): void {
   }
   const requests = action === "show" ? ["nodeny"] : ["deny", "disconnect:all"];
   for (const request of requests) runX11vncRequest(request, action);
+}
+
+// Spec: `server` の action がない・未知の action・余分な引数 → `browse server` の usage。
+function serverCommand(argv: string[]): Promise<void> {
+  const [action, ...extra] = argv;
+  if (extra.length > 0) usageFail(SERVER_USAGE);
+  if (action === "start") return runSerialized(startCamoufoxServer);
+  if (action === "restart") return runSerialized(restartCamoufoxServer);
+  usageFail(SERVER_USAGE);
 }
 
 // --- search pipeline ---
@@ -1035,7 +1041,7 @@ async function ensureCamoufoxServer(signal: AbortSignal): Promise<void> {
   if (await camoufoxServerHealthy(baseUrl, signal)) return;
   // The start subcommand owns the server launch recipe; wait here for the
   // server it brings up.
-  spawnBrowseDetached([LOCKED_SUBCOMMAND, "start"]);
+  spawnBrowseDetached([LOCKED_SUBCOMMAND, "server", "start"]);
   await waitForServerHealthy(baseUrl, signal);
 }
 

@@ -43,7 +43,7 @@ port_open() {
 }
 
 # --- camoufox server: rendering backend shared by pi and dsh web-search -----
-# `browse start` is idempotent: it no-ops when the server is healthy and
+# `browse server start` is idempotent: it no-ops when the server is healthy and
 # otherwise spawns it (maintaining Xvfb/x11vnc on Linux, appending to the
 # log) and waits for readiness. This script only gates the spawn on the port
 # check so a healthy server costs nothing.
@@ -57,7 +57,7 @@ if [ -n "$camoufox_authority" ]; then
 		log_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pi/web-search"
 		if [ -f "$camoufox_cli" ] && command -v bun >/dev/null 2>&1; then
 			mkdir -p "$log_dir"
-			nohup bun "$camoufox_cli" start >>"$log_dir/camoufox-server.log" 2>&1 &
+			nohup bun "$camoufox_cli" server start >>"$log_dir/camoufox-server.log" 2>&1 &
 		fi
 	fi
 fi

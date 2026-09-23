@@ -11,7 +11,7 @@
  *
  * `run_after_build.sh` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external. The shared
- * machine-scoped camoufox server lives inside the CLI; `browse start` (spawned
+ * machine-scoped camoufox server lives inside the CLI; `browse server start` (spawned
  * by the CLI itself and by the shared startup script) brings it up.
  */
 import z from "@deepseek-ai/schemastery";

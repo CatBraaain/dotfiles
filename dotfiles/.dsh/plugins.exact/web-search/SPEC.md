@@ -26,7 +26,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 | 条件 | 結果 |
 |---|---|
 | CLI が終了コード 0 で JSON を返した | `sources`（下記の写像）と `truncated: false` を返す |
-| CLI が終了コード 1 で失敗した（全エンジン失敗等） | `WEB_PROVIDER_ERROR` の `WebError`。メッセージは CLI の stderr 出力を逐語で持つ（各エンジンの失敗行と、描画 abort を含む失敗時の camoufox server 復旧ヒント `browse restart` を含む） |
+| CLI が終了コード 1 で失敗した（全エンジン失敗等） | `WEB_PROVIDER_ERROR` の `WebError`。メッセージは CLI の stderr 出力を逐語で持つ（各エンジンの失敗行と、描画 abort を含む失敗時の camoufox server 復旧ヒント `browse server restart` を含む） |
 | signal が abort された | 子プロセスを殺し、`WEB_PROVIDER_ERROR` の `WebError` で失敗する |
 | stdout が JSON としてパースできない | `WEB_PROVIDER_ERROR` の `WebError` で失敗する |
 
@@ -64,8 +64,8 @@ CLI スクリプトは `~/.agents/cli/browse` で解決する。本 plugin の b
 
 サーバーの起動・ヘルスチェック・待ち（15 秒上限）は CLI の受け持ちである。本 plugin はサーバーを起動しない。
 
-- camoufox server 本体は `browse` CLI に内蔵され、`browse start` サブコマンドが起動する。本 plugin は server を起動せず、server 本体も同梱しない。pi 拡張と同じ単一の server を共有する
-- サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts/startup.spec.md`）が `bun ~/.agents/cli/browse start` の detached spawn で行うのが受け持ちであり、本 plugin も CLI も起動時にこれを行わない
+- camoufox server 本体は `browse` CLI に内蔵され、`browse server start` サブコマンドが起動する。本 plugin は server を起動せず、server 本体も同梱しない。pi 拡張と同じ単一の server を共有する
+- サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts/startup.spec.md`）が `bun ~/.agents/cli/browse server start` の detached spawn で行うのが受け持ちであり、本 plugin も CLI も起動時にこれを行わない
 - camoufox server のログは `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記される（CLI が行う）
 
 ## 同種リクエストの直列化
