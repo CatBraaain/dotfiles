@@ -1,9 +1,10 @@
 // Loads the shared declarative romaji table (../roma-table.yaml), compiles it
 // into the Mozc custom roman table TSV, and applies it together with
-// keymap.tsv and config.textproto as `%USERPROFILE%\AppData\LocalLow\Mozc\config1.db`.
+// keymap.tsv as `%USERPROFILE%\AppData\LocalLow\Mozc\config1.db`.
 //
-// Requires `protoc` on the PATH. `protocol/config.proto` in this directory is
-// the `mozc.config.Config` definition vendored from google/mozc.
+// config1.db is a proto2 wire-format `mozc.config.Config` message. The
+// managed fields are written directly as wire records and every other field
+// is preserved byte for byte, so no protoc binary is needed.
 //
 // CLI: no arguments prints the difference against the currently installed
 // config1.db and applies it. `--dry-run` prints the same without writing.
@@ -143,123 +144,167 @@ export function diffRecordSets(current: readonly string[], next: readonly string
 	return { added, removed };
 }
 
-// ---------- text proto fields ----------
+// ---------- proto2 wire fields ----------
 
-const KEYMAP_PLACEHOLDER = "__KEYMAP_TABLE__";
-const ROMAN_PLACEHOLDER = "__ROMAN_TABLE__";
-const CONFIG_FIELDS = ["session_keymap", "custom_keymap_table", "custom_roman_table"] as const;
+// Managed top-level field numbers in `mozc.config.Config`.
+const SESSION_KEYMAP_FIELD = 41;
+const KEYMAP_TABLE_FIELD = 42;
+const ROMAN_TABLE_FIELD = 43;
+// `SessionKeymap` enum value that selects the custom keymap table.
+const SESSION_KEYMAP_CUSTOM = 0;
 
-// Escapes a UTF-8 string as the quoted value of a bytes field in the text
-// proto format: printable ASCII stays, everything else becomes `\xNN`.
-export function escapeTextprotoString(value: string): string {
-	let escaped = "";
-	for (const byte of new TextEncoder().encode(value)) {
-		const ch = String.fromCharCode(byte);
-		if (ch === '"' || ch === "\\") escaped += `\\${ch}`;
-		else if (ch === "\n") escaped += "\\n";
-		else if (ch === "\t") escaped += "\\t";
-		else if (ch === "\r") escaped += "\\r";
-		else if (byte < 0x20 || byte >= 0x7f) escaped += `\\x${byte.toString(16).padStart(2, "0")}`;
-		else escaped += ch;
-	}
-	return escaped;
-}
+// Wire types of the proto2 encoding. Group types (3/4) are legacy and are
+// rejected as a parse error.
+const WIRE_VARINT = 0;
+const WIRE_FIXED64 = 1;
+const WIRE_BYTES = 2;
+const WIRE_FIXED32 = 5;
 
-// Reverses escapeTextprotoString and the escapes `protoc --decode` emits
-// (`\xNN`, `\NNN` octal, and the C-style shorthand).
-export function unescapeTextprotoString(value: string): string {
+// A parsed top-level field of config1.db: the field number and wire type
+// from its tag, and the byte range of the whole record including the tag.
+export type WireField = { field: number; type: number; start: number; end: number };
+
+function encodeVarint(value: number): number[] {
 	const bytes: number[] = [];
-	const pushUtf8 = (text: string): void => {
-		bytes.push(...new TextEncoder().encode(text));
-	};
-	for (let i = 0; i < value.length; i += 1) {
-		const ch = value[i];
-		if (ch !== "\\") {
-			pushUtf8(ch);
-			continue;
+	let rest = value;
+	while (rest > 0x7f) {
+		bytes.push((rest & 0x7f) | 0x80);
+		rest >>>= 7;
+	}
+	bytes.push(rest);
+	return bytes;
+}
+
+// Returns the varint at `offset`. Values are decoded with Number math so
+// malformed input beyond 32 bits is caught by the callers' range checks.
+function decodeVarint(bytes: Uint8Array, offset: number): { value: number; end: number } {
+	let value = 0;
+	let shift = 1;
+	for (let i = offset; i < bytes.length; i += 1) {
+		const byte = bytes[i];
+		value += (byte & 0x7f) * shift;
+		if ((byte & 0x80) === 0) return { value, end: i + 1 };
+		shift *= 128;
+		if (shift > 2 ** 63) throw new Error("config1.db: varint is too long");
+	}
+	throw new Error("config1.db: truncated varint");
+}
+
+// Splits config1.db bytes into top-level wire records. Throws on any
+// structural error so a damaged db never gets overwritten.
+export function parseWireFields(bytes: Uint8Array): WireField[] {
+	const fields: WireField[] = [];
+	let offset = 0;
+	while (offset < bytes.length) {
+		const key = decodeVarint(bytes, offset);
+		if (key.value > 0xffffffff) throw new Error("config1.db: field tag is out of range");
+		const type = key.value % 8;
+		const field = (key.value - type) / 8;
+		if (field === 0) throw new Error("config1.db: field number 0 is invalid");
+		if (type !== WIRE_VARINT && type !== WIRE_FIXED64 && type !== WIRE_BYTES && type !== WIRE_FIXED32) {
+			throw new Error(`config1.db: unsupported wire type ${type} on field ${field}`);
 		}
-		const next = value[i + 1];
-		if (next === "x" || next === "X") {
-			bytes.push(Number.parseInt(value.slice(i + 2, i + 4), 16));
-			i += 3;
-		} else if (next >= "0" && next <= "7") {
-			let octal = "";
-			while (octal.length < 3 && value[i + 1 + octal.length] >= "0" && value[i + 1 + octal.length] <= "7") {
-				octal += value[i + 1 + octal.length];
-			}
-			bytes.push(Number.parseInt(octal, 8));
-			i += octal.length;
+		let end: number;
+		if (type === WIRE_VARINT) {
+			end = decodeVarint(bytes, key.end).end;
+		} else if (type === WIRE_FIXED64) {
+			end = key.end + 8;
+		} else if (type === WIRE_FIXED32) {
+			end = key.end + 4;
 		} else {
-			pushUtf8(SHORT_ESCAPES[next] ?? next);
-			i += 1;
+			const length = decodeVarint(bytes, key.end);
+			end = length.end + length.value;
+		}
+		if (end > bytes.length) throw new Error("config1.db: truncated field");
+		fields.push({ field, type, start: offset, end });
+		offset = end;
+	}
+	return fields;
+}
+
+function bytesField(field: number, value: string): Uint8Array {
+	const data = new TextEncoder().encode(value);
+	return new Uint8Array([...encodeVarint(field * 8 + WIRE_BYTES), ...encodeVarint(data.length), ...data]);
+}
+
+function sessionKeymapField(): Uint8Array {
+	return new Uint8Array([...encodeVarint(SESSION_KEYMAP_FIELD * 8 + WIRE_VARINT), SESSION_KEYMAP_CUSTOM]);
+}
+
+// Managed top-level fields read from config1.db, or null when the field is
+// absent.
+export type ManagedConfig = { sessionKeymap: number | null; keymapTable: string | null; romanTable: string | null };
+
+function recordBytes(db: Uint8Array, record: WireField): string {
+	const length = decodeVarint(db, decodeVarint(db, record.start).end);
+	return new TextDecoder().decode(db.subarray(length.end, record.end));
+}
+
+export function readManagedConfig(db: Uint8Array): ManagedConfig {
+	const managed: ManagedConfig = { sessionKeymap: null, keymapTable: null, romanTable: null };
+	for (const record of parseWireFields(db)) {
+		if (record.field === SESSION_KEYMAP_FIELD && record.type === WIRE_VARINT) {
+			managed.sessionKeymap = decodeVarint(db, decodeVarint(db, record.start).end).value;
+		} else if (record.field === KEYMAP_TABLE_FIELD && record.type === WIRE_BYTES) {
+			managed.keymapTable = recordBytes(db, record);
+		} else if (record.field === ROMAN_TABLE_FIELD && record.type === WIRE_BYTES) {
+			managed.romanTable = recordBytes(db, record);
 		}
 	}
-	return new TextDecoder().decode(new Uint8Array(bytes));
+	return managed;
 }
 
-const SHORT_ESCAPES: Record<string, string> = {
-	n: "\n",
-	t: "\t",
-	r: "\r",
-	a: "\x07",
-	b: "\b",
-	f: "\f",
-	v: "\v",
-};
-
-// Returns the value of a top-level `field: value` line, unescaped for bytes
-// fields, or null when the field is absent. `protoc --decode` prints each
-// bytes value on a single line.
-export function extractConfigField(textproto: string, field: string): string | null {
-	for (const line of textproto.split("\n")) {
-		if (!line.startsWith(`${field}:`)) continue;
-		const value = line.slice(field.length + 1).trim();
-		return value.startsWith('"') ? unescapeTextprotoString(value.slice(1, -1)) : value;
+// Rebuilds config1.db: every non-managed top-level field is preserved byte
+// for byte in its original order, and the managed fields are appended.
+export function replaceManagedFields(db: Uint8Array, keymapRecords: readonly string[], romanRecords: readonly string[]): Uint8Array {
+	const parts: Uint8Array[] = [];
+	for (const record of parseWireFields(db)) {
+		if (record.field === SESSION_KEYMAP_FIELD || record.field === KEYMAP_TABLE_FIELD || record.field === ROMAN_TABLE_FIELD) continue;
+		parts.push(db.subarray(record.start, record.end));
 	}
-	return null;
-}
-
-// Drops every top-level line of the managed config fields.
-export function removeConfigFields(textproto: string): string {
-	return textproto
-		.split("\n")
-		.filter((line) => !CONFIG_FIELDS.some((field) => line.startsWith(`${field}:`)))
-		.join("\n");
-}
-
-export function injectConfigFields(textproto: string, keymapRecords: readonly string[], romanRecords: readonly string[]): string {
-	const managed = [
-		"session_keymap: CUSTOM",
-		`custom_keymap_table: "${escapeTextprotoString(keymapRecords.join("\n"))}"`,
-		`custom_roman_table: "${escapeTextprotoString(romanRecords.join("\n"))}"`,
-	];
-	const base = textproto.endsWith("\n") ? textproto : `${textproto}\n`;
-	return `${base}${managed.join("\n")}\n`;
-}
-
-// Fills the placeholders of config.textproto, used when no config1.db exists
-// yet.
-export function replacePlaceholders(template: string, keymapRecords: readonly string[], romanRecords: readonly string[]): string {
-	return template
-		.replaceAll(KEYMAP_PLACEHOLDER, escapeTextprotoString(keymapRecords.join("\n")))
-		.replaceAll(ROMAN_PLACEHOLDER, escapeTextprotoString(romanRecords.join("\n")));
+	parts.push(
+		sessionKeymapField(),
+		bytesField(KEYMAP_TABLE_FIELD, keymapRecords.join("\n")),
+		bytesField(ROMAN_TABLE_FIELD, romanRecords.join("\n")),
+	);
+	const total = parts.reduce((sum, part) => sum + part.length, 0);
+	const result = new Uint8Array(total);
+	let offset = 0;
+	for (const part of parts) {
+		result.set(part, offset);
+		offset += part.length;
+	}
+	return result;
 }
 
 // ---------- diff ----------
 
+function splitTableRecords(table: string | null): string[] | null {
+	if (table === null) return null;
+	return table.split("\n").filter((line) => line !== "");
+}
+
+function sessionKeymapLabel(value: number): string {
+	return value === SESSION_KEYMAP_CUSTOM ? "CUSTOM" : String(value);
+}
+
 // Difference view of the managed config fields: the current session_keymap
 // and per-field `+`/`-` record lines, or a notice plus every mapping when no
 // config1.db is installed. Pure.
-export function buildConfigDiffView(current: string | null, keymapRecords: readonly string[], romanRecords: readonly string[]): string {
+export function buildConfigDiffView(
+	current: ManagedConfig | null,
+	keymapRecords: readonly string[],
+	romanRecords: readonly string[],
+): string {
 	if (current === null) {
 		return ["no config1.db is installed; the keymap and every romaji mapping would be added", ...romanRecords.map((record) => `+ ${record.replace("\t", "=")}`)].join("\n");
 	}
 	const lines: string[] = [];
-	const currentKeymap = currentKeymapRecords(current);
-	const currentRoman = currentRomanRecords(current);
+	const currentKeymap = splitTableRecords(current.keymapTable);
+	const currentRoman = splitTableRecords(current.romanTable);
 	const keymapDiff = diffRecordSets(currentKeymap ?? [], keymapRecords);
 	const romanDiff = diffRecordSets(currentRoman ?? [], romanRecords);
-	lines.push(`session_keymap: ${extractConfigField(current, "session_keymap") ?? "(unset)"} -> CUSTOM`);
+	lines.push(`session_keymap: ${current.sessionKeymap === null ? "(unset)" : sessionKeymapLabel(current.sessionKeymap)} -> CUSTOM`);
 	for (const [label, diff, present] of [
 		["keymap", keymapDiff, currentKeymap !== null],
 		["romaji table", romanDiff, currentRoman !== null],
@@ -278,29 +323,7 @@ export function buildConfigDiffView(current: string | null, keymapRecords: reado
 	return lines.join("\n");
 }
 
-function currentKeymapRecords(current: string): string[] | null {
-	const value = extractConfigField(current, "custom_keymap_table");
-	if (value === null) return null;
-	return value.split("\n").filter((line) => line !== "");
-}
-
-function currentRomanRecords(current: string): string[] | null {
-	const value = extractConfigField(current, "custom_roman_table");
-	if (value === null) return null;
-	return value.split("\n").filter((line) => line !== "");
-}
-
 // ---------- OS access ----------
-
-type SpawnSync = (
-	command: string,
-	args: readonly string[],
-	options?: { input?: Uint8Array },
-) => { status: number | null; stdout: Uint8Array; stderr: Uint8Array; error?: unknown };
-
-async function loadSpawnSync(): Promise<SpawnSync> {
-	return (await loadModule<{ spawnSync: SpawnSync }>("node:child_process")).spawnSync;
-}
 
 type PathModule = {
 	join: (...segments: readonly string[]) => string;
@@ -315,12 +338,6 @@ type FsModule = {
 };
 
 const keymapTsvPath = `${(import.meta as { dir?: string }).dir}/keymap.tsv`;
-const configTextprotoPath = `${(import.meta as { dir?: string }).dir}/config.textproto`;
-// protoc resolves file arguments against --proto_path, so the vendored
-// protocol/config.proto is addressed as `protocol/config.proto` under the
-// script directory.
-const protoDir = (import.meta as { dir?: string }).dir;
-const protoFile = "protocol/config.proto";
 
 function userDataDir(): string {
 	const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
@@ -334,33 +351,18 @@ function configDbPath(path: PathModule): string {
 	return path.join(userDataDir(), "config1.db");
 }
 
-// Decodes the installed config1.db into its text proto form, or null when it
-// does not exist. Anything other than a missing file (unreadable file,
-// protoc failure, corrupted db) throws so nothing gets overwritten.
-async function readCurrentConfigTextproto(fs: FsModule, path: PathModule): Promise<string | null> {
+// Reads the installed config1.db, or null when it does not exist. Anything
+// other than a missing file (unreadable file, corrupted db) throws so nothing
+// gets overwritten.
+async function readInstalledDb(path: PathModule): Promise<Uint8Array | null> {
 	const dbPath = configDbPath(path);
-	let bytes: Uint8Array;
 	try {
-		const data = (await loadModule<{ readFile: (path: string) => Promise<Uint8Array> }>("node:fs/promises")).readFile;
-		bytes = new Uint8Array(await data(dbPath));
+		const readFile = (await loadModule<{ readFile: (path: string) => Promise<Uint8Array> }>("node:fs/promises")).readFile;
+		return new Uint8Array(await readFile(dbPath));
 	} catch (error) {
 		if ((error as { code?: string }).code === "ENOENT") return null;
 		throw new Error(`cannot read ${dbPath}: ${String(error)}`);
 	}
-	return new TextDecoder().decode(await runProtoc("decode", bytes));
-}
-
-// `protoc --decode` turns config1.db bytes into a text proto; `--encode`
-// turns a text proto back into config1.db bytes.
-async function runProtoc(mode: "decode" | "encode", input: Uint8Array): Promise<Uint8Array> {
-	const spawnSync = await loadSpawnSync();
-	const proc = spawnSync("protoc", [`--${mode}=mozc.config.Config`, `--proto_path=${protoDir}`, protoFile], { input });
-	if (proc.error !== undefined) throw new Error(`cannot run protoc: ${String(proc.error)}`);
-	if (proc.status !== 0) {
-		const stderr = new TextDecoder().decode(proc.stderr).trim();
-		throw new Error(`protoc --${mode} failed with status ${proc.status}${stderr === "" ? "" : `: ${stderr}`}`);
-	}
-	return proc.stdout;
 }
 
 // Copies the installed config1.db to a timestamped file in the OS temp
@@ -375,36 +377,33 @@ async function backupCurrentDb(fs: FsModule, path: PathModule): Promise<string> 
 
 // ---------- apply ----------
 
-async function loadInputs(fs: FsModule): Promise<{ keymap: readonly string[]; roman: readonly string[]; template: string }> {
-	const keymap = await readKeymapRecords((path) => fs.readFile(path, "utf8"));
+async function loadInputs(fs: FsModule): Promise<{ keymap: readonly string[]; roman: readonly string[] }> {
+	const keymap = await readKeymapRecords((p) => fs.readFile(p, "utf8"));
 	const roman = buildRomanRecords(await loadDeclaration());
-	const template = await fs.readFile(configTextprotoPath, "utf8");
-	return { keymap, roman, template };
+	return { keymap, roman };
 }
 
 async function printDiff(): Promise<void> {
 	const fs = await loadModule<FsModule>("node:fs/promises");
 	const path = await loadModule<PathModule>("node:path");
 	const { keymap, roman } = await loadInputs(fs);
-	const current = await readCurrentConfigTextproto(fs, path);
-	console.log(buildConfigDiffView(current, keymap, roman));
+	const db = await readInstalledDb(path);
+	console.log(buildConfigDiffView(db === null ? null : readManagedConfig(db), keymap, roman));
 }
 
 async function apply(): Promise<void> {
 	const fs = await loadModule<FsModule>("node:fs/promises");
 	const path = await loadModule<PathModule>("node:path");
-	const { keymap, roman, template } = await loadInputs(fs);
-	const current = await readCurrentConfigTextproto(fs, path);
-	console.log(buildConfigDiffView(current, keymap, roman));
+	const { keymap, roman } = await loadInputs(fs);
+	const db = await readInstalledDb(path);
+	console.log(buildConfigDiffView(db === null ? null : readManagedConfig(db), keymap, roman));
 
-	const textproto =
-		current === null ? replacePlaceholders(template, keymap, roman) : injectConfigFields(removeConfigFields(current), keymap, roman);
-	const bytes = await runProtoc("encode", new TextEncoder().encode(textproto));
+	const next = replaceManagedFields(db ?? new Uint8Array(0), keymap, roman);
 
 	const dbPath = configDbPath(path);
-	if (current !== null) console.log(`backed up the current config1.db to ${await backupCurrentDb(fs, path)}`);
+	if (db !== null) console.log(`backed up the current config1.db to ${await backupCurrentDb(fs, path)}`);
 	await fs.mkdir(path.dirname(dbPath), { recursive: true });
-	await fs.writeFile(dbPath, bytes);
+	await fs.writeFile(dbPath, next);
 	console.log(`applied ${roman.length} romaji mappings and ${keymap.length} keymap records to ${dbPath}`);
 }
 
