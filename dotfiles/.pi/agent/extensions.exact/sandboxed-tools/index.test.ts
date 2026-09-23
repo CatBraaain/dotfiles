@@ -586,16 +586,10 @@ describe("§2.1 画像ファイル", () => {
 
       const result = await captureRegisteredTools()
         .get("read")
-        .execute(
-          "t",
-          { path: imagePath, offset: 1, limit: 2 },
-          undefined,
-          undefined,
-          {
-            hasUI: false,
-            model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
-          },
-        );
+        .execute("t", { path: imagePath, offset: 1, limit: 2 }, undefined, undefined, {
+          hasUI: false,
+          model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
+        });
 
       assert.equal(result.isError, undefined);
       const imagePart = result.content.find((part: { type: string }) => part.type === "image");
@@ -870,7 +864,10 @@ describe("§3.a パス文字列の解決", () => {
     ]) {
       assert.equal(resolveCommandAction(commandEntries, command), "ask", command);
     }
-    assert.equal(resolveCommandAction(commandEntries, "PowerShell.EXE -NoProfile -Command Get-Date"), "allow");
+    assert.equal(
+      resolveCommandAction(commandEntries, "PowerShell.EXE -NoProfile -Command Get-Date"),
+      "allow",
+    );
     assert.equal(resolveCommandAction(commandEntries, "printf '%s\\n' ok"), "allow");
   });
 
@@ -1676,10 +1673,7 @@ describe("§2.3 承認ノート", () => {
       const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-approval-"));
       try {
         const configPath = join(dir, "config.yaml");
-        writeFileSync(
-          configPath,
-          typeof configYaml === "function" ? configYaml(dir) : configYaml,
-        );
+        writeFileSync(configPath, typeof configYaml === "function" ? configYaml(dir) : configYaml);
         await test(dir, new Sandbox(dir, configPath));
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -1853,7 +1847,10 @@ describe("§2.3 承認ノート", () => {
         {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[1] },
+          ui: {
+            confirm: async () => false,
+            select: async (_title: string, options: string[]) => options[1],
+          },
         },
       );
       assert.deepEqual(resultTexts(first), [
@@ -1887,7 +1884,10 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { path: filePath, content: "x" }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[1] },
+          ui: {
+            confirm: async () => false,
+            select: async (_title: string, options: string[]) => options[1],
+          },
         });
       assert.deepEqual(resultTexts(result), [
         `Successfully wrote 10 bytes to ${filePath}`,
@@ -1907,7 +1907,10 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { path: filePath, edits: [] }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[1] },
+          ui: {
+            confirm: async () => false,
+            select: async (_title: string, options: string[]) => options[1],
+          },
         });
       assert.deepEqual(resultTexts(result), [
         `Successfully replaced 1 block(s) in ${filePath}.`,
@@ -1926,7 +1929,10 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { command: "git push origin main" }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[0] },
+          ui: {
+            confirm: async () => false,
+            select: async (_title: string, options: string[]) => options[0],
+          },
         });
       assert.deepEqual(resultTexts(result), [
         "1 file changed, 2 insertions(+)",
@@ -1945,7 +1951,10 @@ describe("§2.3 承認ノート", () => {
         .execute("t", { command: "git push origin main" }, undefined, undefined, {
           cwd: process.cwd(),
           hasUI: true,
-          ui: { confirm: async () => false, select: async (_title: string, options: string[]) => options[0] },
+          ui: {
+            confirm: async () => false,
+            select: async (_title: string, options: string[]) => options[0],
+          },
         });
       assert.deepEqual(resultTexts(result), [
         "touch: cannot touch '/outside/x': Read-only file system",
@@ -2211,7 +2220,9 @@ describe("§3 許可要求ツール", () => {
   };
   const denyUi = {
     confirm: async () => false,
-    select: async (_title: string, options: string[]) => options[1],
+    // Deny is the last option in every dialog (2-option paths and 3-option
+    // commands), so selecting the last one always denies.
+    select: async (_title: string, options: string[]) => options[options.length - 1],
     input: async () => "",
   };
   const noDialogUi = {
@@ -2469,11 +2480,7 @@ describe("§3 許可要求ツール", () => {
         await sandbox.authorizePath("write", join(dir, "any", "file.txt"), { cwd: dir });
         const args = sandbox.buildArgs("bash");
         const bindAt = args.indexOf(dir, args.indexOf(dir) + 2);
-        assert.deepEqual(args.slice(bindAt - 1, bindAt + 2), [
-          "--bind-try",
-          dir,
-          dir,
-        ]);
+        assert.deepEqual(args.slice(bindAt - 1, bindAt + 2), ["--bind-try", dir, dir]);
       },
     ),
   );
@@ -2878,6 +2885,60 @@ commands:
     ),
   );
 
+  it(
+    "ask_permission の Allow in this session はパターン単位のセッション承認を返す",
+    withAskPermissionSandbox(
+      () => `
+commands:
+  - {allow: ".*"}
+  - {ask_with_reason: ['^sudo\\b']}
+`,
+      async (_dir, sandbox) => {
+        const sessionUi = {
+          confirm: async () => false,
+          select: async (_title: string, options: string[]) => options[1],
+          input: async () => "",
+        };
+        const outcome = await sandbox.requestCommandPermission(
+          "sudo reboot",
+          "to restart the hung service",
+          { cwd: "/cwd", hasUI: true, ui: sessionUi },
+        );
+        assert.deepEqual(outcome, {
+          status: "granted",
+          command: "sudo reboot",
+          grant: "session",
+          approvedPattern: "^sudo\\b",
+        });
+        // Same-pattern commands other than the approved one pass unconfirmed.
+        const approved = await sandbox.authorizeCommand("sudo rm /tmp/f", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: noDialogUi,
+        });
+        assert.equal(approved, true);
+        // Session grants are never consumed.
+        const approvedAgain = await sandbox.authorizeCommand("sudo reboot", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: noDialogUi,
+        });
+        assert.equal(approvedAgain, true);
+        // A later ask_permission resolves without a dialog.
+        const outcomeAgain = await sandbox.requestCommandPermission(
+          "sudo shutdown -h now",
+          "to shut down",
+          { cwd: "/cwd", hasUI: true, ui: noDialogUi },
+        );
+        assert.deepEqual(outcomeAgain, {
+          status: "already granted",
+          command: "sudo shutdown -h now",
+          approvedPattern: "^sudo\\b",
+        });
+      },
+    ),
+  );
+
   it("ask_permission ツールのコマンド承認は1回限りの実行承認を返す", async () => {
     const result = await captureRegisteredTools()
       .get("ask_permission")
@@ -2898,7 +2959,11 @@ commands:
         text: "User approved this command via ask_permission; re-send the same bash call to run it (one-shot).",
       },
     ]);
-    assert.deepEqual(result.details, { status: "granted", command: "sudo reboot" });
+    assert.deepEqual(result.details, {
+      status: "granted",
+      command: "sudo reboot",
+      grant: "once",
+    });
   });
 
   it("ask_permission ツールのコマンド拒否は拒否と理由を結果として返す", async () => {
@@ -2922,6 +2987,72 @@ commands:
       status: "denied",
       command: "sudo reboot",
       reason: "not now",
+    });
+  });
+
+  it("ask_permission ツールのセッション承認はパターン単位の許可テキストを返す", async () => {
+    const result = await captureRegisteredTools()
+      .get("ask_permission")
+      .execute(
+        "t",
+        { command: "sudo reboot", reason: "to restart the hung service" },
+        undefined,
+        undefined,
+        {
+          cwd: process.cwd(),
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async (_title: string, options: string[]) => options[1],
+            input: async () => "",
+          },
+        },
+      );
+    assert.deepEqual(result.content, [
+      {
+        type: "text",
+        text: "User approved this command via ask_permission (in this session). Every command matching the pattern ^sudo(\\s|$) now runs via bash without further confirmation for the rest of the session.",
+      },
+    ]);
+    assert.deepEqual(result.details, {
+      status: "granted",
+      command: "sudo reboot",
+      grant: "session",
+      approvedPattern: "^sudo(\\s|$)",
+    });
+  });
+
+  it("ask_permission ツールはセッション承認済みパターンの再リクエストを許可済みで返す", async () => {
+    const execute = captureRegisteredTools().get("ask_permission").execute;
+    const sessionUi = {
+      confirm: async () => false,
+      select: async (_title: string, options: string[]) => options[1],
+      input: async () => "",
+    };
+    await execute(
+      "t",
+      { command: "sudo reboot", reason: "to restart the hung service" },
+      undefined,
+      undefined,
+      { cwd: process.cwd(), hasUI: true, ui: sessionUi },
+    );
+    const result = await execute(
+      "t",
+      { command: "sudo shutdown -h now", reason: "to shut down" },
+      undefined,
+      undefined,
+      { cwd: process.cwd(), hasUI: true, ui: noDialogUi },
+    );
+    assert.deepEqual(result.content, [
+      {
+        type: "text",
+        text: "No approval needed: every command matching the session-approved pattern ^sudo(\\s|$) runs via bash without confirmation.",
+      },
+    ]);
+    assert.deepEqual(result.details, {
+      status: "already granted",
+      command: "sudo shutdown -h now",
+      approvedPattern: "^sudo(\\s|$)",
     });
   });
 
@@ -3215,7 +3346,9 @@ commands:
             },
           },
         });
-        assert.deepEqual(selectionOptions, [["Yes, allow", "No, deny (reason next)"]]);
+        assert.deepEqual(selectionOptions, [
+          ["Allow once", "Allow in this session", "No, deny (reason next)"],
+        ]);
       },
     ),
   );
@@ -3235,11 +3368,47 @@ commands:
             hasUI: true,
             ui: {
               confirm: async () => false,
-              select: async (_title, options) => options[1],
+              select: async (_title, options) => options[options.length - 1],
               input: async () => "force push は禁止",
             },
           });
         }, /Command denied by user: git push origin main\nUser reason: force push は禁止$/);
+      },
+    ),
+  );
+
+  it(
+    "ask コマンドで Allow in this session を選ぶと同一パターン以降は無確認で通る",
+    withSandbox(
+      `
+commands:
+  - {ask: ['^git push\\b']}
+`,
+      "/cwd",
+      async (sandbox) => {
+        const approved = await sandbox.authorizeCommand("git push origin main", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async (_title, options) => options[1],
+          },
+        });
+        assert.equal(approved, true);
+        // A same-pattern command passes without any dialog.
+        const approvedAgain = await sandbox.authorizeCommand("git push origin develop", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => {
+              throw new Error("unexpected dialog");
+            },
+            select: async () => {
+              throw new Error("unexpected dialog");
+            },
+          },
+        });
+        assert.equal(approvedAgain, true);
       },
     ),
   );
@@ -3440,7 +3609,11 @@ commands:
           "to restart the hung service",
           { cwd: "/cwd", hasUI: true, ui: approvingUi },
         );
-        assert.deepEqual(outcome, { status: "granted", command: "sudo reboot" });
+        assert.deepEqual(outcome, {
+          status: "granted",
+          command: "sudo reboot",
+          grant: "once",
+        });
         const approved = await sandbox.authorizeCommand("sudo reboot", {
           cwd: "/cwd",
           hasUI: true,
@@ -3711,10 +3884,7 @@ commands:
     );
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.level, "warning");
-    assert.ok(
-      notifications[0]!.message.includes(JSON.stringify("*")),
-      notifications[0]!.message,
-    );
+    assert.ok(notifications[0]!.message.includes(JSON.stringify("*")), notifications[0]!.message);
   });
 
   it("無効パターンがなければ session_start で通知しない", () => {
@@ -3936,10 +4106,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir((dir, configPath) => {
       const protectedFile = join(dir, "protected.txt");
       writeFileSync(protectedFile, "config");
-      writeFileSync(
-        configPath,
-        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
-      );
+      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`);
       const args = new Sandbox("/cwd", configPath).buildArgs("bash");
       const writableBindAt = args.indexOf(dir);
       assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 2), [
@@ -3948,10 +4115,7 @@ describe("§6.1 bind とパスの実在保証", () => {
         dir,
       ]);
       const roBindAt = args.indexOf(protectedFile);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
-        "--ro-bind-try",
-        protectedFile,
-      ]);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", protectedFile]);
       assert.ok(roBindAt > writableBindAt, "deny re-bind must mount after the writable bind");
     }),
   );
@@ -3961,10 +4125,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir((dir, configPath) => {
       const protectedFile = join(dir, "protected.txt");
       writeFileSync(protectedFile, "config");
-      writeFileSync(
-        configPath,
-        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
-      );
+      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`);
       const args = new Sandbox("/cwd", configPath).buildArgs("fs");
       assert.equal(args.includes(protectedFile), false);
     }),
@@ -3981,7 +4142,11 @@ describe("§6.1 bind とパスの実在保証", () => {
       );
       const args = new Sandbox("/cwd", configPath).buildArgs("bash");
       const bindAt = args.indexOf(allowedFile);
-      assert.deepEqual(args.slice(bindAt - 1, bindAt + 2), ["--bind-try", allowedFile, allowedFile]);
+      assert.deepEqual(args.slice(bindAt - 1, bindAt + 2), [
+        "--bind-try",
+        allowedFile,
+        allowedFile,
+      ]);
       assert.equal(args.indexOf(allowedFile, bindAt + 2), -1, "no read-only re-bind after allow");
     }),
   );
@@ -4053,10 +4218,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir(async (dir, configPath) => {
       const askedFile = join(dir, "asked.txt");
       writeFileSync(askedFile, "x");
-      writeFileSync(
-        configPath,
-        `write:\n  - {allow: "${dir}"}\n  - {ask: "${askedFile}"}\n`,
-      );
+      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n  - {ask: "${askedFile}"}\n`);
       const sandbox = new Sandbox("/cwd", configPath);
       // fs tools ask before the child write (no UI here, so confirmation
       // throws) …
@@ -4073,10 +4235,7 @@ describe("§6.1 bind とパスの実在保証", () => {
         dir,
       ]);
       const roBindAt = args.indexOf(askedFile);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
-        "--ro-bind-try",
-        askedFile,
-      ]);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", askedFile]);
       assert.ok(roBindAt > writableBindAt, "ask re-bind must mount after the writable bind");
     }),
   );
@@ -4107,10 +4266,7 @@ describe("§6.1 bind とパスの実在保証", () => {
         askedFile,
       ]);
       const roBindAt = args.indexOf(askedFile, grantBindAt + 2);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
-        "--ro-bind-try",
-        askedFile,
-      ]);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", askedFile]);
       assert.ok(roBindAt > grantBindAt, "ask re-bind must win over the dynamic grant bind");
     }),
   );
@@ -4120,7 +4276,10 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir(async (dir, configPath) => {
       const protectedFile = join(dir, "protected.txt");
       writeFileSync(protectedFile, "x");
-      writeFileSync(configPath, `read:\n  - {allow: "*"}\nwrite:\n  - {deny: "${protectedFile}"}\n`);
+      writeFileSync(
+        configPath,
+        `read:\n  - {allow: "*"}\nwrite:\n  - {deny: "${protectedFile}"}\n`,
+      );
       const sandbox = new Sandbox(dir, configPath);
       await sandbox.authorizePath("write", join(dir, "note.txt"), {
         cwd: dir,
@@ -4204,31 +4363,28 @@ describe("§6.1 bind とパスの実在保証", () => {
     }),
   );
 
-  it(
-    "cwd の read-only bind は write の動的許可より前に出る",
-    async () => {
-      const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-bind-"));
-      try {
-        const configPath = join(dir, "config.yaml");
-        writeFileSync(configPath, "write: []\n");
-        const sandbox = new Sandbox(dir, configPath);
-        await sandbox.authorizePath("write", join(dir, "note.txt"), {
-          cwd: dir,
-          hasUI: true,
-          ui: { confirm: async () => true },
-        });
-        const args = sandbox.buildArgs("fs");
-        const roBindAt = args.indexOf(dir);
-        assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", dir]);
-        const notePath = join(dir, "note.txt");
-        const grantBindAt = args.indexOf(notePath);
-        assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 1), ["--bind-try", notePath]);
-        assert.ok(grantBindAt > roBindAt, "dynamic grant must mount after the cwd read-only bind");
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    },
-  );
+  it("cwd の read-only bind は write の動的許可より前に出る", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-bind-"));
+    try {
+      const configPath = join(dir, "config.yaml");
+      writeFileSync(configPath, "write: []\n");
+      const sandbox = new Sandbox(dir, configPath);
+      await sandbox.authorizePath("write", join(dir, "note.txt"), {
+        cwd: dir,
+        hasUI: true,
+        ui: { confirm: async () => true },
+      });
+      const args = sandbox.buildArgs("fs");
+      const roBindAt = args.indexOf(dir);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", dir]);
+      const notePath = join(dir, "note.txt");
+      const grantBindAt = args.indexOf(notePath);
+      assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 1), ["--bind-try", notePath]);
+      assert.ok(grantBindAt > roBindAt, "dynamic grant must mount after the cwd read-only bind");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("§7 bash の stderr 逐次表示", () => {
@@ -4451,9 +4607,7 @@ describe("§7 WSL の子プロセス PATH", () => {
 
     assert.equal(
       sanitized.PATH,
-      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(
-        delimiter,
-      ),
+      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(delimiter),
     );
     assert.equal(environment.PATH, originalPath);
   });
@@ -4462,10 +4616,7 @@ describe("§7 WSL の子プロセス PATH", () => {
     const environment = { PATH: ["/mnt/c/tools", "/mnt/data/bin", "/usr/bin"].join(delimiter) };
 
     assert.equal(isWslEnvironment(environment, "6.8.0-generic"), false);
-    assert.equal(
-      sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH,
-      environment.PATH,
-    );
+    assert.equal(sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH, environment.PATH);
   });
 
   it("WSL kernel marker でも Windows PATH を除外する", () => {

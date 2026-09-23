@@ -129,8 +129,7 @@ export function imageReadErrorMessage(
   imagePath: string,
   model?: { provider?: string; id?: string },
 ): string {
-  const modelName =
-    model?.provider && model?.id ? ` (${model.provider}/${model.id})` : "";
+  const modelName = model?.provider && model?.id ? ` (${model.provider}/${model.id})` : "";
   return (
     `The current model${modelName} does not support image input; the image was not sent to the model. ` +
     `Delegate image reading to the vision agent via subagent: have the child read the image ` +
@@ -285,7 +284,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
       if (!isVisionImageFile(imagePath)) {
         return sandbox.runTool("read", normalized, { mode: "fs", signal });
       }
-      const model = context?.model as { input?: readonly string[]; provider?: string; id?: string } | undefined;
+      const model = context?.model as
+        | { input?: readonly string[]; provider?: string; id?: string }
+        | undefined;
       if (!modelSupportsImages(model ?? {})) {
         return {
           content: [{ type: "text", text: imageReadErrorMessage(imagePath, model) }],
@@ -393,7 +394,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     name: "ask_permission",
     label: "ask_permission",
     description:
-      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory); once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; once approved, re-sending the same bash call runs it once without another dialog.",
+      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory); once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for the rest of the session.",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
       "Before starting edit-heavy work in a directory that is not yet writable (e.g. a worktree outside the allowed paths), call ask_permission on the worktree directory or its parent so the user can approve it up front.",
@@ -411,7 +412,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
       command: Type.Optional(
         Type.String({
           description:
-            'Exact command string that bash rejected with "Command requires a reason". Pass it verbatim; the approval lets this same command run once via bash.',
+            'Exact command string that bash rejected with "Command requires a reason". Pass it verbatim; the user can approve it once, or approve its matched config pattern for the rest of the session.',
         }),
       ),
       reason: Type.String({
@@ -436,9 +437,13 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
         );
         const text =
           outcome.status === "granted"
-            ? "User approved this command via ask_permission; re-send the same bash call to run it (one-shot)."
+            ? outcome.grant === "session"
+              ? `User approved this command via ask_permission (in this session). Every command matching the pattern ${outcome.approvedPattern} now runs via bash without further confirmation for the rest of the session.`
+              : "User approved this command via ask_permission; re-send the same bash call to run it (one-shot)."
             : outcome.status === "already granted"
-              ? `No approval needed: ${outcome.command} is allowed by config.`
+              ? outcome.approvedPattern !== undefined
+                ? `No approval needed: every command matching the session-approved pattern ${outcome.approvedPattern} runs via bash without confirmation.`
+                : `No approval needed: ${outcome.command} is allowed by config.`
               : `User denied this command.` +
                 (outcome.reason === undefined ? "" : `\nUser reason: ${outcome.reason}`);
         return {
@@ -446,6 +451,17 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
           details: {
             status: outcome.status,
             command: outcome.command,
+            ...(outcome.status === "granted"
+              ? {
+                  grant: outcome.grant,
+                  ...(outcome.approvedPattern !== undefined
+                    ? { approvedPattern: outcome.approvedPattern }
+                    : {}),
+                }
+              : {}),
+            ...(outcome.status === "already granted" && outcome.approvedPattern !== undefined
+              ? { approvedPattern: outcome.approvedPattern }
+              : {}),
             ...(outcome.status === "denied" && outcome.reason !== undefined
               ? { reason: outcome.reason }
               : {}),
