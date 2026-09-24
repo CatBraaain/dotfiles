@@ -57,7 +57,7 @@ const defaultMirrorRoot = join(homedir(), "mirrors", "github.com");
 export function defaultContext(): SyncContext {
   return {
     mirrorRoot: defaultMirrorRoot,
-    forcePull: process.env.PRE_CHEZMOI_FORCE_PULL === "1",
+    forcePull: process.env.BUILD_FORCE_PULL === "1",
     repoUrl: (repo) => `https://github.com/${repo}.git`,
     runGit: (args) => runProcess(["git", ...args]),
     runCommand: (args, cwd) => runProcess(args, cwd),
@@ -91,7 +91,7 @@ export async function loadExternalConfig(configPath: string): Promise<ExternalCo
   const doc: unknown = yaml.parse(await readFile(configPath, "utf-8"));
   const externalSkills = (doc as { externalSkills?: unknown })?.externalSkills;
   if (!isPlainObject(externalSkills))
-    throw new Error(`.pre-chezmoi.external.yaml must have an externalSkills mapping: ${configPath}`);
+    throw new Error(`.build-external.yaml must have an externalSkills mapping: ${configPath}`);
   const repos = Object.entries(externalSkills).map(([repo, raw]) =>
     normalizeRepo(`externalSkills.${repo}`, repo, raw),
   );

@@ -105,8 +105,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const result = await collectDifferences(options.distRoot, options.homeRoot);
   if (options.managed) {
     // Managed entries: every dist-mapped home entry regardless of difference,
-    // in tree order. Surplus removals (removedExact) are not listed, matching
-    // `chezmoi managed`.
+    // in tree order. Surplus removals (removedExact) are not listed.
     const managedPaths = [
       ...result.unchanged,
       ...result.changed,
@@ -151,7 +150,7 @@ export function parseArgs(
 
 // ------------------------------------------------------------ path mapping
 
-const excludedEntryPrefixes = [".pre-chezmoi", ".pre-apply", ".post-apply"];
+const excludedEntryPrefixes = [".pre-build", ".build", ".pre-apply", ".post-apply"];
 // Files only: run_ scripts run at the post-apply point and are never placed
 // into home.
 const excludedFilePrefixes = ["run_"];
@@ -281,8 +280,8 @@ async function walk(
     });
   }
 
-  // Surplus scan: only below dist-managed directories (never at the home root,
-  // matching chezmoi, which ignores unmanaged top-level home entries).
+  // Surplus scan: only below dist-managed directories (never at the home
+  // root). Unmanaged top-level home entries are ignored.
   if (!scanForSurplus) return;
   for (const homeEntry of await readdir(homeDir, { withFileTypes: true }) as unknown as DirentLike[]) {
     if (knownHomeNames.has(homeEntry.name)) continue;
@@ -363,7 +362,7 @@ async function lstatOrNull(path: string): Promise<StatsLike | null> {
 
 // spec §差分検知: strip CR before comparing (CRLF == LF), then ignore one
 // trailing newline; for .json/.jsonc also ignore whitespace/trailing commas
-// before closing braces (same rules as scripts/chezmoi-diff.ts).
+// before closing braces (same rules as scripts/render-diff.ts).
 function normalizeText(text: string, jsonAware: boolean): string {
   const withoutCarriageReturns = text.replaceAll("\r", "");
   const withoutTrailingNewline = withoutCarriageReturns.endsWith("\n")
@@ -392,7 +391,7 @@ async function renderDiffs(
   result: DiffResult,
   options: { distRoot: string; homeRoot: string },
 ): Promise<void> {
-  const chezmoiDiffScript = join(import.meta.dir, "chezmoi-diff.ts");
+  const renderDiffScript = join(import.meta.dir, "render-diff.ts");
   const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
   const renderTargets: Array<{ destination: string; target: string }> = [];
   for (const entry of result.changed)
@@ -417,9 +416,9 @@ async function renderDiffs(
     });
 
   for (const { destination, target } of renderTargets) {
-    // Display-only: exit code belongs to chezmoi-diff.ts, not this engine.
+    // Display-only: exit code belongs to render-diff.ts, not this engine.
     const diff = Bun.spawn(
-      [process.execPath, chezmoiDiffScript, destination, target],
+      [process.execPath, renderDiffScript, destination, target],
       { stdout: "inherit", stderr: "inherit" },
     );
     await diff.exited;

@@ -1,7 +1,6 @@
 // Home-relative path resolution shared by the build stages that read the
-// current home (merge composition, replace sidecars). Maps a dist-relative
-// path through the segment mapping of spec §差分検知, including the
-// transitional chezmoi naming of the current pipeline.
+// current home (merge composition, replace sidecars), using the segment
+// mapping of home-diff.ts (spec §差分検知).
 import { mapSegment } from "./home-diff.ts";
 
 export function homeRelPath(distRelPath: string): string {

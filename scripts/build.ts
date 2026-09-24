@@ -59,9 +59,9 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const hookFileName = ".pre-chezmoi.ts";
+const hookFileName = ".pre-build.ts";
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
-const externalFileName = ".pre-chezmoi.external.yaml";
+const externalFileName = ".build-external.yaml";
 
 const fileFormats = {
   json: {
@@ -115,8 +115,8 @@ async function copyDir(sourceDir: string, destinationDir: string): Promise<void>
   }
 }
 
-// .pre-chezmoi-map.md lists one source path per row and a destination or removal per platform.
-const mapFileName = ".pre-chezmoi-map.md";
+// .build-map.md lists one source path per row and a destination or removal per platform.
+const mapFileName = ".build-map.md";
 const removeDestination = "-";
 const mapColumns = ["key", "linux", "windows", "macos"] as const;
 const platformNames = ["windows", "linux", "darwin"] as const;
@@ -646,7 +646,7 @@ async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
       const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
-      throw new Error(`local pre-chezmoi hook failed: ${relativePath} (${reason})`);
+      throw new Error(`local pre-build hook failed: ${relativePath} (${reason})`);
     }
   }
 }

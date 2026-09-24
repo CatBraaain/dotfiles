@@ -275,7 +275,7 @@ describe("path mapping", () => {
   });
 });
 
-describe("path mapping (plain names without chezmoi prefixes)", () => {
+describe("path mapping (plain names without legacy prefixes)", () => {
   it("treats dot_ names as plain entries, not hidden files", async () => {
     await put(distRoot, "dot_bashrc", "content\n");
     await put(homeRoot, "dot_bashrc", "content\n");
@@ -309,9 +309,9 @@ describe("path mapping (plain names without chezmoi prefixes)", () => {
 });
 
 describe("exclusions", () => {
-  it("skips entries starting with .pre-chezmoi, .pre-apply or .post-apply", async () => {
-    await put(distRoot, ".pre-chezmoi.ts", "hook\n");
-    await put(distRoot, ".pre-chezmoi-map.md", "map\n");
+  it("skips entries starting with .pre-build, .build, .pre-apply or .post-apply", async () => {
+    await put(distRoot, ".pre-build.ts", "hook\n");
+    await put(distRoot, ".build-map.md", "map\n");
     await put(distRoot, ".pre-apply.ts", "hook\n");
     await put(distRoot, ".post-apply.ts", "hook\n");
 
@@ -322,7 +322,7 @@ describe("exclusions", () => {
   });
 
   it("skips nested entries under an excluded directory", async () => {
-    await put(distRoot, "x/.pre-chezmoi.data/generated.txt", "content\n");
+    await put(distRoot, "x/.pre-build.data/generated.txt", "content\n");
     await put(distRoot, "x/keep.txt", "content\n");
     await put(homeRoot, "x/keep.txt", "content\n");
 
@@ -333,8 +333,8 @@ describe("exclusions", () => {
   });
 
   it("does not count the home-side counterpart of an excluded entry as surplus", async () => {
-    await put(distRoot, "x/.pre-chezmoi.ts", "hook\n");
-    await put(homeRoot, "x/.pre-chezmoi.ts", "hook\n");
+    await put(distRoot, "x/.pre-build.ts", "hook\n");
+    await put(homeRoot, "x/.pre-build.ts", "hook\n");
     await put(distRoot, "x/keep.txt", "content\n");
     await put(homeRoot, "x/keep.txt", "content\n");
 

@@ -28,7 +28,7 @@ declare const process: {
 const [, , destination, target] = process.argv;
 
 if (!destination || !target) {
-  throw new Error("chezmoi-diff requires destination and target paths");
+  throw new Error("render-diff requires destination and target paths");
 }
 
 if (await filesDifferOnlyByIgnorableDifferences(destination, target)) {
@@ -36,8 +36,8 @@ if (await filesDifferOnlyByIgnorableDifferences(destination, target)) {
 } else {
   const hasDirectoryInput =
     isDirectoryPath(destination) || isDirectoryPath(target);
-  // chezmoi invokes the custom diff command for directory entries too, while
-  // difftastic accepts files only.
+  // The caller also passes directory entries, while difftastic accepts files
+  // only.
   const useDifftastic = !hasDirectoryInput && Bun.which("difft") !== null;
   const diffInputs = hasDirectoryInput
     ? await prepareDirectoryInputs(destination, target)
@@ -106,7 +106,7 @@ async function prepareDirectoryInputs(
   const inputPaths = await Promise.all(
     [firstPath, secondPath].map(async (path) => {
       if (isDirectoryPath(path) || !isNullDevice(path)) return path;
-      const emptyDirectory = await mkdtemp(join(tmpdir(), "chezmoi-diff-"));
+      const emptyDirectory = await mkdtemp(join(tmpdir(), "render-diff-"));
       temporaryDirectories.push(emptyDirectory);
       return emptyDirectory;
     }),

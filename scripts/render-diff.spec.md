@@ -1,6 +1,6 @@
-# chezmoi diff script spec
+# render-diff script spec
 
-`scripts/chezmoi-diff.ts` は `chezmoi.yaml` の `diff.command` に指定されたカスタム diff コマンドであり、`just diff`(chezmoi diff)が各エントリを比較するときに呼ばれる。この spec はその入出力のふるまいを定める。
+`scripts/render-diff.ts` は `scripts/home-diff.ts` が差分ありエントリごとに呼び出す 2 入力比較表示コマンドである。この spec はその入出力のふるまいを定める。
 
 ## 入力
 

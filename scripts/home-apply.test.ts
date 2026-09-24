@@ -268,7 +268,7 @@ describe("apply classification matrix", () => {
     assert.equal(existsSync(join(homeRoot, "c.txt")), false, "later entry not applied");
   });
 
-  it("treats chezmoi-prefix names as plain entries during apply", async () => {
+  it("treats legacy-prefix names as plain entries during apply", async () => {
     await put(distRoot, "dot_config/tool", "new\n");
     await put(homeRoot, "dot_config/tool", "old\n");
 
@@ -402,7 +402,7 @@ describe("lifecycle hooks", () => {
   it("collects declarations skipping node_modules and excluded folders", async () => {
     await putRecordingHook(distRoot, "ok/.pre-apply.ts");
     await putRecordingHook(distRoot, join("node_modules", "pkg", ".pre-apply.ts"));
-    await put(distRoot, ".pre-chezmoi.d/hidden/.pre-apply.ts", "hook\n");
+    await put(distRoot, ".pre-build.d/hidden/.pre-apply.ts", "hook\n");
     await putRunScript(distRoot, join("node_modules", "pkg", "run_x.sh"));
     await putRunScript(distRoot, "ok/run_y.sh");
 

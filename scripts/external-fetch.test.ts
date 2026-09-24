@@ -86,8 +86,8 @@ function testContext(originPath: string, overrides: Partial<SyncContext> = {}): 
 
 describe("loadExternalConfig", () => {
   it("parses repos with destination, entries, ttlHours, run_after and edit", async () => {
-    const configPath = join(root, ".pre-chezmoi.external.yaml");
-    await put(root, ".pre-chezmoi.external.yaml", `
+    const configPath = join(root, ".build-external.yaml");
+    await put(root, ".build-external.yaml", `
 externalSkills:
   test/repo:
     destination: .agents/skills.exact
@@ -118,8 +118,8 @@ externalSkills:
   });
 
   it("defaults ttlHours and rejects a missing destination or entries", async () => {
-    const configPath = join(root, ".pre-chezmoi.external.yaml");
-    await put(root, ".pre-chezmoi.external.yaml", `
+    const configPath = join(root, ".build-external.yaml");
+    await put(root, ".build-external.yaml", `
 externalSkills:
   test/repo:
     destination: .agents/skills.exact
@@ -128,7 +128,7 @@ externalSkills:
 `);
     assert.equal((await loadExternalConfig(configPath)).repos[0]!.ttlMs, defaultTtlHours * 60 * 60 * 1000);
 
-    await put(root, ".pre-chezmoi.external.yaml", `
+    await put(root, ".build-external.yaml", `
 externalSkills:
   test/repo:
     entries:
@@ -136,7 +136,7 @@ externalSkills:
 `);
     await assert.rejects(loadExternalConfig(configPath), /\.destination/);
 
-    await put(root, ".pre-chezmoi.external.yaml", `
+    await put(root, ".build-external.yaml", `
 externalSkills:
   test/repo:
     destination: .agents/skills.exact
@@ -325,8 +325,8 @@ describe("fetchExternals", () => {
   it("syncs the mirror, materializes entries, and runs run_after only on changes", async () => {
     const originPath = join(root, "origin", "test", "repo");
     const gitInOrigin = await initRepo(originPath, "skills/hi/greeting/SKILL.md", "hello\n");
-    const configPath = join(root, ".pre-chezmoi.external.yaml");
-    await put(root, ".pre-chezmoi.external.yaml", `
+    const configPath = join(root, ".build-external.yaml");
+    await put(root, ".build-external.yaml", `
 externalSkills:
   test/repo:
     destination: .agents/skills.exact
