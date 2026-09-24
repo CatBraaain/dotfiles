@@ -28,8 +28,6 @@
     "openrouter/**/*:free"
   ],
   "packages": [
-    "npm:pi-commandcode-provider",
-    "npm:pi-cursor-sdk",
     "npm:@narumitw/pi-stamp",
     "npm:@narumitw/pi-usage"
   ]
