@@ -4,17 +4,25 @@
 // Reads both trees only; never writes to either.
 
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { lstat, readdir, readFile, readlink } from "node:fs/promises";
+import { statSync } from "node:fs";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { homedir } from "node:os";
+import { lstat, mkdtemp, readdir, readFile, readlink, rm } from "node:fs/promises";
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+import { homedir, tmpdir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { join } from "node:path";
 
 declare const Bun: {
+  which(command: string): string | null;
+  file(path: string): { text(): Promise<string> };
   spawn(
     command: string[],
     options: { stdout: "inherit"; stderr: "inherit" },
   ): { exited: Promise<number> };
+  spawn(
+    command: string[],
+    options: { stdout: "pipe"; stderr: "inherit" },
+  ): { exited: Promise<number>; stdout: unknown };
 };
 declare const process: {
   argv: string[];
@@ -24,6 +32,7 @@ declare const process: {
   stdout: { write(data: string): void };
 };
 declare const console: { error(...data: unknown[]): void };
+declare const Response: { new (body: unknown): { text(): Promise<string> } };
 declare global {
   interface ImportMeta {
     readonly main: boolean;
@@ -59,7 +68,7 @@ type StatsLike = {
 type DirentLike = { name: string; isDirectory(): boolean };
 
 const usage =
-  "usage: bun scripts/home-diff.ts [--managed] [--json] [distRoot] [homeRoot] (defaults: dist, ~)";
+  "usage: bun scripts/diff.ts [--managed] [--json] [distRoot] [homeRoot] (defaults: dist, ~)";
 
 // ---------------------------------------------------------------- public API
 
@@ -370,7 +379,7 @@ async function lstatOrNull(path: string): Promise<StatsLike | null> {
 
 // spec §差分検知: strip CR before comparing (CRLF == LF), then ignore one
 // trailing newline; for .json/.jsonc also ignore whitespace/trailing commas
-// before closing braces (same rules as scripts/render-diff.ts).
+// before closing braces (same rules as the diff rendering below).
 function normalizeText(text: string, jsonAware: boolean): string {
   const withoutCarriageReturns = text.replaceAll("\r", "");
   const withoutTrailingNewline = withoutCarriageReturns.endsWith("\n")
@@ -399,7 +408,6 @@ async function renderDiffs(
   result: DiffResult,
   options: { distRoot: string; homeRoot: string },
 ): Promise<void> {
-  const renderDiffScript = join(import.meta.dir, "render-diff.ts");
   const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
   const renderTargets: Array<{ destination: string; target: string }> = [];
   for (const entry of result.changed)
@@ -424,12 +432,134 @@ async function renderDiffs(
     });
 
   for (const { destination, target } of renderTargets) {
-    // Display-only: exit code belongs to render-diff.ts, not this engine.
+    // Display-only: exit codes of difft / git diff never affect this engine.
+    await renderDiff(destination, target);
+  }
+}
+
+// Render a two-input comparison for one entry with difftastic or git diff
+// (spec: 差分表示). Ignores line-ending-only and trailing-comma-only
+// differences; writes the colored diff to stdout. The exit codes of the
+// diff tools (including the "differences found" code 1) never propagate.
+async function renderDiff(destination: string, target: string): Promise<void> {
+  if (await filesDifferOnlyByIgnorableDifferences(destination, target)) return;
+  const hasDirectoryInput =
+    isDirectoryPath(destination) || isDirectoryPath(target);
+  // difftastic accepts files only, while the caller also passes directory
+  // entries.
+  const useDifftastic = !hasDirectoryInput && Bun.which("difft") !== null;
+  const diffInputs = hasDirectoryInput
+    ? await prepareDirectoryInputs(destination, target)
+    : {
+        firstPath: destination,
+        secondPath: target,
+        cleanup: async () => {},
+      };
+  try {
     const diff = Bun.spawn(
-      [process.execPath, renderDiffScript, destination, target],
-      { stdout: "inherit", stderr: "inherit" },
+      useDifftastic
+        ? [
+            "difft",
+            "--color=always",
+            "--display=inline",
+            "--skip-unchanged",
+            "--strip-cr=on",
+            "--syntax-highlight=on",
+            diffInputs.firstPath,
+            diffInputs.secondPath,
+          ]
+        : [
+            "git",
+            "-c",
+            "core.safecrlf=false",
+            "-c",
+            "core.autocrlf=false",
+            "diff",
+            "--no-index",
+            "--ignore-cr-at-eol",
+            "--color=always",
+            "--",
+            diffInputs.firstPath,
+            diffInputs.secondPath,
+          ],
+      { stdout: "pipe", stderr: "inherit" },
     );
+
+    const output = await new Response(diff.stdout).text();
+    const filteredOutput = useDifftastic
+      ? output
+      : output
+          .split(/\r?\n/)
+          .filter((line) => line !== "\\ No newline at end of file")
+          .join("\n");
+
+    process.stdout.write(filteredOutput);
     await diff.exited;
+  } finally {
+    await diffInputs.cleanup();
+  }
+}
+
+async function prepareDirectoryInputs(
+  firstPath: string,
+  secondPath: string,
+): Promise<{
+  firstPath: string;
+  secondPath: string;
+  cleanup: () => Promise<void>;
+}> {
+  const temporaryDirectories: string[] = [];
+  const inputPaths = await Promise.all(
+    [firstPath, secondPath].map(async (path) => {
+      if (isDirectoryPath(path) || !isNullDevice(path)) return path;
+      const emptyDirectory = await mkdtemp(join(tmpdir(), "diff-render-"));
+      temporaryDirectories.push(emptyDirectory);
+      return emptyDirectory;
+    }),
+  );
+
+  return {
+    firstPath: inputPaths[0],
+    secondPath: inputPaths[1],
+    cleanup: async () => {
+      await Promise.all(
+        temporaryDirectories.map((path) =>
+          rm(path, { recursive: true, force: true }),
+        ),
+      );
+    },
+  };
+}
+
+function isNullDevice(path: string): boolean {
+  return path === "/dev/null" || path.toUpperCase() === "NUL";
+}
+
+function isDirectoryPath(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function filesDifferOnlyByIgnorableDifferences(
+  firstPath: string,
+  secondPath: string,
+): Promise<boolean> {
+  try {
+    const [first, second] = await Promise.all([
+      Bun.file(firstPath).text(),
+      Bun.file(secondPath).text(),
+    ]);
+    const ignoreTrailingCommas =
+      isJsonName(firstPath) && isJsonName(secondPath);
+    return (
+      normalizeText(first, ignoreTrailingCommas) ===
+      normalizeText(second, ignoreTrailingCommas)
+    );
+  } catch {
+    return false;
   }
 }
 

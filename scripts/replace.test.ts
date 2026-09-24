@@ -12,14 +12,14 @@ import {
   applyReplacements,
   applyReplaceSidecars,
   parseReplaceSidecar,
-} from "./replace-sidecar.ts";
+} from "./build.ts";
 
 let root: string;
 let distRoot: string;
 let homeRoot: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "replace-sidecar-test-"));
+  root = await mkdtemp(join(tmpdir(), "replace-test-"));
   distRoot = join(root, "dist");
   homeRoot = join(root, "home");
   await mkdir(distRoot);

@@ -15,7 +15,7 @@
 └── justfile                  # apply / diff / managed 等のタスク
 ```
 
-データフロー: `dotfiles/` --(scripts/build.ts)--> `dist/` --(scripts/home-apply.ts)--> `~/`
+データフロー: `dotfiles/` --(scripts/build.ts)--> `dist/` --(scripts/apply.ts)--> `~/`
 
 編集はこのワークスペース内のみ。`~/xxx`（ホームディレクトリ配下）をユーザーの許可なく直接書き込み・変更してはいけない。
 

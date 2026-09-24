@@ -18,12 +18,12 @@ import {
   resolveSkillDir,
   syncMirror,
   type SyncContext,
-} from "./external-fetch.ts";
+} from "./build.ts";
 
 let root: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "external-fetch-test-"));
+  root = await mkdtemp(join(tmpdir(), "external-test-"));
 });
 
 afterEach(async () => {

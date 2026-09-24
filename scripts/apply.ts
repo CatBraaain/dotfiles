@@ -1,6 +1,6 @@
 // Apply engine between a dist tree and a home tree (spec:
 // dotfiles-manager.spec.md §適用, §フックシステム, §run スクリプト).
-// Consumes the classification produced by home-diff.ts, writes the home tree,
+// Consumes the classification produced by diff.ts, writes the home tree,
 // and runs pre/post-apply hooks and run scripts. The build stage (dist
 // generation) is a separate stage and not part of this file.
 
@@ -17,7 +17,7 @@ import {
   mapSegment,
   type DiffEntry,
   type DiffResult,
-} from "./home-diff.ts";
+} from "./diff.ts";
 
 declare const Bun: {
   spawn(
@@ -67,7 +67,7 @@ export type Declarations = {
 
 type DirentLike = { name: string; isDirectory(): boolean; isFile(): boolean };
 
-const usage = "usage: bun scripts/home-apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
+const usage = "usage: bun scripts/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
 
 // ---------------------------------------------------------------- public API
 

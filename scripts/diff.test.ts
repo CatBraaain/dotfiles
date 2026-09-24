@@ -11,14 +11,14 @@ import {
   toDiffJson,
   type Classification,
   type DiffResult,
-} from "./home-diff.ts";
+} from "./diff.ts";
 
 let root: string;
 let distRoot: string;
 let homeRoot: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "home-diff-test-"));
+  root = await mkdtemp(join(tmpdir(), "diff-test-"));
   distRoot = join(root, "dist");
   homeRoot = join(root, "home");
   await mkdir(distRoot);
@@ -411,7 +411,7 @@ describe("cli", () => {
     await put(distRoot, "added.txt", "content\n");
 
     const cli = Bun.spawn(
-      [process.execPath, join(import.meta.dir, "home-diff.ts"), "--json", distRoot, homeRoot],
+      [process.execPath, join(import.meta.dir, "diff.ts"), "--json", distRoot, homeRoot],
       { stdout: "pipe", stderr: "pipe" },
     );
     const [stdout, exitCode] = await Promise.all([

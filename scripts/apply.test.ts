@@ -19,7 +19,7 @@ import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { join } from "node:path";
-import { collectDifferences, type DiffResult } from "./home-diff.ts";
+import { collectDifferences, type DiffResult } from "./diff.ts";
 import {
   applyDifferences,
   collectDeclarations,
@@ -29,14 +29,14 @@ import {
   runLifecycleHooks,
   runRunScripts,
   type ApplyResult,
-} from "./home-apply.ts";
+} from "./apply.ts";
 
 let root: string;
 let distRoot: string;
 let homeRoot: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "home-apply-test-"));
+  root = await mkdtemp(join(tmpdir(), "apply-test-"));
   distRoot = join(root, "dist");
   homeRoot = join(root, "home");
   await mkdir(distRoot);

@@ -21,15 +21,15 @@ install:
 
 apply:
   bun scripts/build.ts
-  bun scripts/home-apply.ts dist ~
+  bun scripts/apply.ts dist ~
 
 diff:
   bun scripts/build.ts
-  bun scripts/home-diff.ts dist ~
+  bun scripts/diff.ts dist ~
 
 managed:
   bun scripts/build.ts
-  bun scripts/home-diff.ts --managed dist ~
+  bun scripts/diff.ts --managed dist ~
 
 [windows]
 winconfig:
