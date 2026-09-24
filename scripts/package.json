@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "smol-toml": "^1.4.2",
     "yaml": "^2.8.1"
   }
 }

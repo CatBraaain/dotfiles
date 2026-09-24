@@ -20,15 +20,15 @@ install:
   gsudo pwsh undotfiles/install/windows.ps1
 
 apply:
-  bun pre-chezmoi.ts
+  bun scripts/pre-chezmoi.ts
   bun scripts/home-apply.ts dist ~
 
 diff:
-  bun pre-chezmoi.ts
+  bun scripts/pre-chezmoi.ts
   bun scripts/home-diff.ts dist ~
 
 managed:
-  bun pre-chezmoi.ts
+  bun scripts/pre-chezmoi.ts
   bun scripts/home-diff.ts --managed dist ~
 
 [windows]

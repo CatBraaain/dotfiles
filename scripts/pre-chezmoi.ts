@@ -1,13 +1,49 @@
+// Build stage of the dotfiles manager (spec: dotfiles-manager.spec.md
+// §ライフサイクル): regenerates dist from dotfiles/ — map removals, external
+// fetch, local hooks, map moves, merge composition, replace sidecars.
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { existsSync } from "node:fs";
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir } from "node:os";
+// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { basename, dirname, join, relative, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
-import { fetchExternals } from "./scripts/external-fetch.ts";
-import { homeRelPath } from "./scripts/home-paths.ts";
-import { applyReplaceSidecars } from "./scripts/replace-sidecar.ts";
+import { fetchExternals } from "./external-fetch.ts";
+import { homeRelPath } from "./home-paths.ts";
+import { applyReplaceSidecars } from "./replace-sidecar.ts";
+
+declare const Bun: {
+  spawn(
+    command: string[],
+    options: {
+      cwd: string;
+      env: Record<string, string | undefined>;
+      stdin: "ignore";
+      stdout: "inherit";
+      stderr: "inherit";
+    },
+  ): { exited: Promise<number>; signalCode: string | null };
+  deepEquals(left: unknown, right: unknown): boolean;
+  Glob: {
+    new (pattern: string): { match(path: string): boolean };
+  };
+};
+declare const process: {
+  cwd(): string;
+  platform: string;
+  env: Record<string, string | undefined>;
+  exitCode: number;
+};
+declare const console: { error(...data: unknown[]): void };
+declare global {
+  interface ImportMeta {
+    readonly main: boolean;
+  }
+}
 
 export type Platform = "windows" | "linux" | "darwin";
 
@@ -125,7 +161,8 @@ async function loadPathMap(sourceDir: string, platform: Platform): Promise<PathM
 function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
   const lines = content.split(/\r?\n/);
   const headerIndex = lines.findIndex((line) => line.trim().startsWith("|"));
-  if (headerIndex < 0 || !sameCells(parseTableRow(lines[headerIndex]), mapColumns)) {
+  const headerLine = headerIndex < 0 ? undefined : lines[headerIndex];
+  if (!headerLine || !sameCells(parseTableRow(headerLine), mapColumns)) {
     throw new Error(
       `${mapFileName} must have columns: ${mapColumns.join(" | ")}: ${mapFilePath}`,
     );
@@ -138,7 +175,7 @@ function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
   )
     throw new Error(`${mapFileName} has an invalid Markdown table separator: ${mapFilePath}`);
 
-  const rows: string[][] = [];
+  const rows: PathMapRow[] = [];
   const keys = new Set<string>();
   for (const line of lines.slice(headerIndex + 2)) {
     if (!line.trim().startsWith("|")) {
@@ -162,7 +199,7 @@ function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
       if (globPatternCharacters.test(key))
         throw new Error(`${mapFileName} cannot map the glob key ${key} to ${destination}`);
     }
-    rows.push(cells as PathMapRow);
+    rows.push(cells as unknown as PathMapRow);
   }
   return rows;
 }
@@ -263,7 +300,11 @@ async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
       dirname(entry.path),
       basename(entry.path).replace(sidecarPattern, `.${format}`),
     );
-    const target = targets.get(outputPath) ?? { outputPath, format, sidecarPaths: [] };
+    const target = targets.get(outputPath) ?? {
+      outputPath,
+      format,
+      sidecarPaths: [] as string[],
+    };
     target.sidecarPaths.push(entry.path);
     targets.set(outputPath, target);
   }
@@ -386,8 +427,8 @@ function parseTomlPairs(value: unknown, prefix: string, operations: Operations):
 }
 
 function matchOperationKey(key: string): { path: string; op: MergeOp } | undefined {
-  const match = key.match(operationKeyPattern);
-  if (!match || match[1].includes("[")) return undefined;
+  const match = operationKeyPattern.exec(key);
+  if (!match || !match[1] || !match[2] || match[1].includes("[")) return undefined;
   return { path: match[1], op: match[2] as MergeOp };
 }
 
@@ -559,8 +600,9 @@ function compareHookParents(left: string, right: string): number {
   const leftParts = left === "" ? [] : left.split("/");
   const rightParts = right === "" ? [] : right.split("/");
   for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
-    if (leftParts[index] !== rightParts[index])
-      return leftParts[index] < rightParts[index] ? -1 : 1;
+    const leftPart = leftParts[index]!;
+    const rightPart = rightParts[index]!;
+    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
   }
   return leftParts.length - rightParts.length;
 }
