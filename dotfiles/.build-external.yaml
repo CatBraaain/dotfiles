@@ -1,5 +1,5 @@
 # External fetch stage: syncs GitHub mirrors under ~/.mirrors/github.com and
-# materializes entries into dist (spec: dotfiles-manager.spec.md §build:
+# materializes entries into dist (spec: scripts/SPEC.md §build:
 # external fetch). destination is dist-relative.
 externalSkills:
   DreambigOu/ELI5:

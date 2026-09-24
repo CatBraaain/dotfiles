@@ -1,4 +1,4 @@
-// Build stage of the dotfiles manager (spec: dotfiles-manager.spec.md
+// Build stage of the dotfiles manager (spec: SPEC.md
 // §ライフサイクル): regenerates dist from dotfiles/ — map removals, external
 // fetch, local hooks, map moves, merge composition, replace sidecars.
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
@@ -596,7 +596,7 @@ function arrayElementsMatch(left: unknown, right: unknown): boolean {
   return Bun.deepEquals(left, right);
 }
 
-// Replace sidecar stage of the build (spec: dotfiles-manager.spec.md
+// Replace sidecar stage of the build (spec: SPEC.md
 // §build: 置換 sidecar): for each <name>.replace.yaml, writes dist/<name>
 // from home's current <name> content with regex replacements applied.
 
@@ -677,7 +677,7 @@ async function collectReplaceSidecars(dirAbs: string, dirRel: string): Promise<s
   return sidecars.sort();
 }
 
-// External fetch stage of the build (spec: dotfiles-manager.spec.md
+// External fetch stage of the build (spec: SPEC.md
 // §build: external fetch): syncs GitHub repository mirrors under
 // ~/mirrors/github.com and materializes their entries into dist. Moved from
 // the retired skills.exact hook; the externalSkills config format is kept.

@@ -21,7 +21,7 @@
 
 ## `dotfiles/` 内の命名規則
 
-`dotfiles/` は人間が読みやすい素の記法で書き、`scripts/build.ts` が `dist/` を生成する。命名規則と変換仕様の正本は `~/.pi/agent/work/dotfiles/20260923-233728-dotfiles-manager.spec.md` とし、`dotfiles/` を編集するときは同仕様を参照する。
+`dotfiles/` は人間が読みやすい素の記法で書き、`scripts/build.ts` が `dist/` を生成する。命名規則と変換仕様の正本は `scripts/SPEC.md` とし、`dotfiles/` を編集するときは同仕様を参照する。
 
 > **skills.exact の場所**: `dotfiles/.agents/skills.exact` は `~/projects/dotfiles/dotfiles/.agents/skills.exact` を指す。これは共有 skill の編集元であり、プロジェクト専用 skill の読み込み先ではない。ルート直下（`~/projects/dotfiles/.agents/...`）とは別の場所である。
 

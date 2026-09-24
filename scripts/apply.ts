@@ -1,5 +1,5 @@
 // Apply engine between a dist tree and a home tree (spec:
-// dotfiles-manager.spec.md §適用, §フックシステム, §run スクリプト).
+// SPEC.md §適用, §フックシステム, §run スクリプト).
 // Consumes the classification produced by diff.ts, writes the home tree,
 // and runs pre/post-apply hooks and run scripts. The build stage (dist
 // generation) is a separate stage and not part of this file.

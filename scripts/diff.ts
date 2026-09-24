@@ -1,6 +1,6 @@
 // Dry-run difference engine between a dist tree and a home tree.
 // Walks dist, maps every entry to its home-relative path (spec:
-// dotfiles-manager.spec.md §差分検知), classifies it, and reports the result.
+// SPEC.md §差分検知), classifies it, and reports the result.
 // Reads both trees only; never writes to either.
 
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
