@@ -1,9 +1,13 @@
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
+import { fetchExternals } from "./scripts/external-fetch.ts";
+import { homeRelPath } from "./scripts/home-paths.ts";
+import { applyReplaceSidecars } from "./scripts/replace-sidecar.ts";
 
 export type Platform = "windows" | "linux" | "darwin";
 
@@ -16,12 +20,12 @@ type Entry = { path: string; isDirectory: boolean };
 type Hook = { absolutePath: string; relativeParent: string };
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
-type TargetPathResolver = (root: string, sourcePath: string) => Promise<string>;
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const hookFileName = ".pre-chezmoi.ts";
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
+const externalFileName = ".pre-chezmoi.external.yaml";
 
 const fileFormats = {
   json: {
@@ -41,7 +45,7 @@ const fileFormats = {
 export async function run(
   root = process.cwd(),
   platform: Platform = currentPlatform(),
-  resolveTargetPath: TargetPathResolver = chezmoiTargetPath,
+  homeRoot = homedir(),
 ): Promise<void> {
   assertPlatform(platform);
   const sourceDir = join(root, "dotfiles");
@@ -52,6 +56,7 @@ export async function run(
   await rm(distDir, { recursive: true, force: true });
   await copyDir(sourceDir, distDir);
   await removeMappedEntries(distDir, "", pathMap.removals);
+  await fetchExternals(join(sourceDir, externalFileName), distDir);
   await runHooks(
     hooks.filter((hook) => !isIgnoredTarget(hook.relativeParent, pathMap.removals)),
     distDir,
@@ -62,7 +67,8 @@ export async function run(
   await convertExactDirectories(distDir);
   await convertExecutableFiles(distDir);
   await convertSymlinkFiles(distDir);
-  await composeMergeTargets(root, distDir, resolveTargetPath);
+  await composeMergeTargets(distDir, homeRoot);
+  await applyReplaceSidecars(distDir, homeRoot);
 }
 
 async function copyDir(sourceDir: string, destinationDir: string): Promise<void> {
@@ -271,36 +277,14 @@ async function convertSymlinkFiles(distDir: string): Promise<void> {
   }
 }
 
-async function composeMergeTargets(
-  root: string,
-  distDir: string,
-  resolveTargetPath: TargetPathResolver,
-): Promise<void> {
+async function composeMergeTargets(distDir: string, homeRoot: string): Promise<void> {
   const targets = await collectMergeTargets(distDir);
-  if (resolveTargetPath !== chezmoiTargetPath) {
-    for (const target of targets) {
-      const hasBase = existsSync(target.outputPath);
-      if (!hasBase) await writeFile(target.outputPath, "");
-      const sourcePath = relative(distDir, target.outputPath).split(sep).join("/");
-      const homePath = (await resolveTargetPath(root, sourcePath)).replace(/[\r\n]+$/, "");
-      await composeMergeTarget(target, hasBase, homePath);
-    }
-    return;
-  }
-
-  const hasBases: boolean[] = [];
   for (const target of targets) {
     const hasBase = existsSync(target.outputPath);
-    hasBases.push(hasBase);
     if (!hasBase) await writeFile(target.outputPath, "");
-  }
-
-  const sourcePaths = targets.map((target) =>
-    relative(distDir, target.outputPath).split(sep).join("/"),
-  );
-  const homePaths = await resolveHomePaths(root, sourcePaths);
-  for (const [index, target] of targets.entries()) {
-    await composeMergeTarget(target, hasBases[index], homePaths[index]);
+    const sourcePath = relative(distDir, target.outputPath).split(sep).join("/");
+    const homePath = join(homeRoot, homeRelPath(sourcePath));
+    await composeMergeTarget(target, hasBase, homePath);
   }
 }
 
@@ -309,9 +293,8 @@ async function composeMergeTarget(
   hasBase: boolean,
   homePath: string,
 ): Promise<void> {
-  const normalizedHomePath = homePath.replace(/[\r\n]+$/, "");
   const stem = target.outputPath.slice(0, -(target.format.length + 1));
-  const layers: Layer[] = [await readLayer(normalizedHomePath, target.format)];
+  const layers: Layer[] = [await readLayer(homePath, target.format)];
   if (hasBase) layers.push(await readLayer(target.outputPath, target.format));
   for (const suffix of ["merge", "machine"]) {
     const sidecar = `${stem}.${suffix}.${target.format}`;
@@ -325,11 +308,6 @@ async function composeMergeTarget(
 
   await writeFile(target.outputPath, fileFormats[target.format].stringify(value));
   for (const sidecar of target.sidecarPaths) await rm(sidecar);
-}
-
-async function resolveHomePaths(root: string, sourcePaths: string[]): Promise<string[]> {
-  if (sourcePaths.length === 0) return [];
-  return chezmoiTargetPaths(root, sourcePaths);
 }
 
 async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
@@ -626,45 +604,6 @@ function removeAtPath(root: PlainObject, path: string, operation: Operation): vo
 
 function arrayElementsMatch(left: unknown, right: unknown): boolean {
   return Bun.deepEquals(left, right);
-}
-
-async function chezmoiTargetPath(root: string, sourcePath: string): Promise<string> {
-  const [homePath] = await chezmoiTargetPaths(root, [sourcePath]);
-  return homePath;
-}
-
-async function chezmoiTargetPaths(root: string, sourcePaths: string[]): Promise<string[]> {
-  const proc = Bun.spawn(
-    [
-      "chezmoi",
-      "target-path",
-      "-c",
-      "chezmoi.yaml",
-      ...sourcePaths.map((sourcePath) => join("dist", sourcePath)),
-    ],
-    {
-      cwd: root,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (exitCode !== 0)
-    throw new Error(
-      stderr.trim() || `chezmoi target-path failed: dist/${sourcePaths.join(", dist/")}`,
-    );
-
-  const homePaths = stdout.replace(/[\r\n]+$/, "").split(/\r?\n/);
-  if (homePaths.length !== sourcePaths.length) {
-    throw new Error(
-      `chezmoi target-path returned ${homePaths.length} paths for ${sourcePaths.length} sources`,
-    );
-  }
-  return homePaths;
 }
 
 async function collectHooks(sourceDir: string): Promise<Hook[]> {

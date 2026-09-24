@@ -1,0 +1,8 @@
+{
+  "name": "dotfiles-scripts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "yaml": "^2.8.1"
+  }
+}

@@ -1,14 +1,20 @@
+# External fetch stage: syncs GitHub mirrors under ~/.mirrors/github.com and
+# materializes entries into dist (spec: dotfiles-manager.spec.md §build:
+# external fetch). destination is dist-relative.
 externalSkills:
   DreambigOu/ELI5:
+    destination: .agents/skills.exact
     entries:
       - skills/eli5
 
   anthropics/skills:
+    destination: .agents/skills.exact
     entries:
       - skills/doc-coauthoring
       - skills/skill-creator
 
   mattpocock/skills:
+    destination: .agents/skills.exact
     entries:
       # - skills/*/grill-me
       - skills/*/grilling
@@ -19,22 +25,27 @@ externalSkills:
       # - skills/*/tdd
 
   vercel-labs/skills:
+    destination: .agents/skills.exact
     entries:
       - skills/find-skills
 
   # github/awesome-copilot:
+  #   destination: .agents/skills.exact
   #   entries:
   #     - skills/make-repo-contribution
 
   iOfficeAI/OfficeCLI:
+    destination: .agents/skills.exact
     entries:
       - skills/officecli
 
   mattnowdev/thinking-partner:
+    destination: .agents/skills.exact
     entries:
       - skills/thinking-partner
 
   leonxlnx/taste-skill:
+    destination: .agents/skills.exact
     entries:
       - skills/taste-skill
       # - skills/redesign-skill
@@ -43,10 +54,12 @@ externalSkills:
       # - skills/brutalist-skill
 
   vshulcz/deja-vu:
+    destination: .agents/skills.exact
     entries:
       - skills/deja-search
 
   microsoft/playwright-cli:
+    destination: .agents/skills.exact
     entries:
       - skills/playwright-cli
     edit:
@@ -54,7 +67,7 @@ externalSkills:
         ## ローカル camoufox server への接続
 
         単純な取得を超えた対話的な Web ブラウジング（フォーム入力・ログイン・SPA の
-        操作・snapshot ベースの遷移、プレーンなヘッドレスブラウザを弾くサイト）では、
+        操作・snapshot ベースの遷移、プレーンヘッドレスブラウザを弾くサイト）では、
         pi / dsh 拡張経由で動く browse CLI が使うローカル camoufox server（アンチ検出
         Firefox）に接続する。
         config は `open` のときだけ渡せばよく、以後のコマンドはセッション名だけでよい:
@@ -101,6 +114,7 @@ externalSkills:
           触らない
 
   code-yeongyu/oh-my-openagent:
+    destination: .agents/skills.exact
     entries:
       - packages/shared-skills/skills/frontend
     run_after:
