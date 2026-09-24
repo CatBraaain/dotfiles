@@ -105,4 +105,5 @@ externalSkills:
     entries:
       - packages/shared-skills/skills/frontend
     run_after:
+      - [bun, install]
       - [node, packages/omo-codex/plugin/scripts/materialize-shared-upstreams.mjs, --strict]
