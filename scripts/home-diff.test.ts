@@ -296,6 +296,19 @@ describe("path mapping (plain names without legacy prefixes)", () => {
     assert.deepEqual(pathsOf(result, "removedExact"), []);
   });
 
+  it("does not manage surplus below a child directory of an exact scope", async () => {
+    await put(distRoot, "dir.exact/sub/keep.txt", "content\n");
+    await put(homeRoot, "dir/sub/keep.txt", "content\n");
+    await put(homeRoot, "dir/sub/node_modules", "generated\n");
+
+    const result = await diff();
+
+    // Exact scope covers only the direct children of dir.exact; the interior
+    // of a managed child directory is left alone (spec §.exact の解釈).
+    assert.deepEqual(pathsOf(result, "removedExact"), []);
+    assert.deepEqual(pathsOf(result, "removedIgnored"), ["dir/sub/node_modules"]);
+  });
+
   it("treats executable_ and symlink_ names as plain files", async () => {
     await put(distRoot, "executable_tool", "#!/bin/sh\n");
     await put(homeRoot, "executable_tool", "#!/bin/sh\n");

@@ -258,10 +258,13 @@ async function walk(
     }
 
     if (mapping.kind === "directory") {
+      // Exact scope covers only the direct children of a .exact directory
+      // (spec §.exact の解釈); it does not propagate into child directories.
+      const childIsExactScope = mapping.isExactManaged && !isExactScope;
       await walk(
         childDistRel,
         childHomeRel,
-        isExactScope || mapping.isExactManaged,
+        childIsExactScope,
         true,
         ctx,
       );
