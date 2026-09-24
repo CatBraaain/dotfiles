@@ -1,6 +1,6 @@
 # pre-chezmoi spec
 
-`pre-chezmoi.ts` の観測可能な振る舞いの仕様。対象は、リポジトリルートで Bun ランタイムにより `bun pre-chezmoi.ts` を実行したときの、入力（`dotfiles/` ツリーと実行プラットフォーム）から出力（`dist/` ツリーと終了コード）への変換。`dist/` は chezmoi の sourceDir として扱われる。読者は、この spec だけを読んで要件を承認するオーナーと、実装・テストの担当者。
+`pre-chezmoi.ts` の観測可能な振る舞いの仕様。対象は、リポジトリルートで Bun ランタイムにより `bun pre-chezmoi.ts` を実行したときの、入力（`dotfiles/` ツリーと実行プラットフォーム）から出力（`dist/` ツリーと終了コード）への変換。`dist/` は chezmoi の sourceDir として扱われる。読者は、この spec だけを読んで要件を承認するユーザーと、実装・テストの担当者。
 
 - プラットフォーム: Windows / Linux / macOS の3種。`process.platform` の `win32` / `linux` / `darwin` に対応し、それ以外は異常終了する。
 - 経路表記: 本文のパスはリポジトリルートからの相対パス。

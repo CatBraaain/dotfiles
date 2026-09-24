@@ -1,6 +1,6 @@
 # ローマ字表の宣言
 
-対象は、MS-IMEとMozcの両方の日本語入力で共有するローマ字表の宣言データ（`roma-table.yaml`）である。宣言データはMS-IME用コンパイラ（`msime/SPEC.md`）とMozc用コンパイラ（`mozc/SPEC.md`）がそれぞれ読み込み、集約 engine（`roma-table.ts`）でマッピング集合を構成してから、各自の形式へ反映する。利用者は、このリポジトリでWindows環境のIME設定を管理するオーナーである。
+対象は、MS-IMEとMozcの両方の日本語入力で共有するローマ字表の宣言データ（`roma-table.yaml`）である。宣言データはMS-IME用コンパイラ（`msime/SPEC.md`）とMozc用コンパイラ（`mozc/SPEC.md`）がそれぞれ読み込み、集約 engine（`roma-table.ts`）でマッピング集合を構成してから、各自の形式へ反映する。利用者は、このリポジトリでWindows環境のIME設定を管理するユーザーである。
 
 ## 用語
 

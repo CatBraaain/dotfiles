@@ -396,20 +396,20 @@ subagent 完了時に親エージェントへ渡すのは、最終結果・作�
 
 ```mermaid
 sequenceDiagram
-    participant Owner as オーナー
+    participant User as ユーザー
     participant Parent as 親エージェント
     participant Child as 子エージェント
 
-    Owner->>Parent: タスク依頼
+    User->>Parent: タスク依頼
     Parent->>Child: agent を指定して subagent ツールを実行
-    Child-->>Owner: 上記フォーマットで進行状況・ツール実行を表示
+    Child-->>User: 上記フォーマットで進行状況・ツール実行を表示
     Child-->>Parent: 最終結果・作業要点・成果物情報
-    Parent-->>Owner: 結果を報告
+    Parent-->>User: 結果を報告
 ```
 
 ## 実行できない場合の報告
 
-エージェントがタスクを遂行できない場合は、理由（権限不足、力量・情報不足など）を添えて報告する。報告先（subagent 実行中は依頼元エージェント、直接実行時はオーナー）の指定は拡張コードで強制せず、各 agent の systemPrompt の規範に委ねる。
+エージェントがタスクを遂行できない場合は、理由（権限不足、力量・情報不足など）を添えて報告する。報告先（subagent 実行中は依頼元エージェント、直接実行時はユーザー）の指定は拡張コードで強制せず、各 agent の systemPrompt の規範に委ねる。
 
 ## 停止
 

@@ -1,6 +1,6 @@
 # handoff-session 拡張機能 Spec
 
-この拡張は、作業phaseを終えたagentが次のagentへの自然言語プロンプトを用意し、オーナーの確認後に完全な新セッションへ移るための `handoff_session` ツールを提供する。対象読者は、phase境界でコンテキストを切り替えるオーナーとagentである。
+この拡張は、作業phaseを終えたagentが次のagentへの自然言語プロンプトを用意し、ユーザーの確認後に完全な新セッションへ移るための `handoff_session` ツールを提供する。対象読者は、phase境界でコンテキストを切り替えるユーザーとagentである。
 
 ## 入力
 
@@ -17,9 +17,9 @@
 
 `handoff_session` はmain agentだけが使う。コンテキストをリセットして長い次の作業phaseへ移る場合に限り、収束ループ開始前、またはseniorによるレビュー・実装の完了後に次の長いphaseがある場合に呼び出す。レビュー・実装の完了だけでは呼び出さない。
 
-`finish wt`・`discard` の承認待ち、ownerの判断待ち、単なる作業完了報告では呼び出さず、main agentは`Ready`または`Waiting`として通常の質問で終了する。オーナーが承認すると、新しいmain agentが次のphaseを別のseniorへ委譲する。
+`finish wt`・`discard` の承認待ち、userの判断待ち、単なる作業完了報告では呼び出さず、main agentは`Ready`または`Waiting`として通常の質問で終了する。ユーザーが承認すると、新しいmain agentが次のphaseを別のseniorへ委譲する。
 
-収束条件を満たしたmain agentは、`handoff_session`を呼び出さずオーナーへ結果を報告する。
+収束条件を満たしたmain agentは、`handoff_session`を呼び出さずユーザーへ結果を報告する。
 
 ## セッション移行
 
@@ -47,4 +47,4 @@
 
 ## 既存の新セッション操作
 
-`/new-session`、`/ns`、Pi組み込みの `/new` は変更しない。これらはオーナーが任意に空の新セッションを開始する操作として維持する。
+`/new-session`、`/ns`、Pi組み込みの `/new` は変更しない。これらはユーザーが任意に空の新セッションを開始する操作として維持する。

@@ -1,6 +1,6 @@
 # Linux install spec
 
-`undotfiles/install/linux.ts` の観測可能な振る舞いの仕様。対象は、BunでCLIを実行するときの、`undotfiles/install/linux.config.yaml` に書かれた環境構成から、ホストのグローバルパッケージと指定コマンドの実行結果への同期である。読者は、このspecだけを読んで要件を承認するオーナーと、実装・テストの担当者。
+`undotfiles/install/linux.ts` の観測可能な振る舞いの仕様。対象は、BunでCLIを実行するときの、`undotfiles/install/linux.config.yaml` に書かれた環境構成から、ホストのグローバルパッケージと指定コマンドの実行結果への同期である。読者は、このspecだけを読んで要件を承認するユーザーと、実装・テストの担当者。
 
 - 対応プラットフォーム: Linux。
 - 実行形式: `bun undotfiles/install/linux.ts <sync|diff>`。引数は`sync`または`diff`の1つだけを受け付ける。

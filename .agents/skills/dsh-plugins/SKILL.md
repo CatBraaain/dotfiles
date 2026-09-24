@@ -35,7 +35,7 @@ git -C ~/mirrors/github.com/deepseek-ai/deepseek-harness ls-remote --tags origin
 - 判断材料: CLI のバージョン（`dsh --version`）と、plugin が import する bundle 実体のバージョン（`~/.dsh/profiles/web/bun.lock` の `"@deepseek-ai/dsh-*"`）。両者はずれていることがある
 - 完全一致するタグがあればそれを使う。無ければ実行環境に最も近いタグを選ぶ。実行環境より大幅に先のバージョンは避ける
 - 選んだタグを `git fetch --depth=1 origin tag <tag> --no-tags` して checkout する。ミラーは shallow clone のため `--depth=1` が必須
-- 適切なタグを判断できないときはオーナーに確認する
+- 適切なタグを判断できないときはユーザーに確認する
 
 ## 参照マップ（ミラー）
 

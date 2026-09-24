@@ -1,6 +1,6 @@
 # Mozc 設定管理
 
-対象は、TypeScriptで宣言したローマ字表をMozc用のローマ字テーブルTSVへコンパイルし、キーマップTSVとともに `config1.db` へ合成して適用する機能である。利用者は、このリポジトリでWindows環境のMozc設定を管理するオーナーである。宣言の記法と集約の規則は `../SPEC.md` の「ローマ字表の宣言」に従い、このspecでは記述しない。
+対象は、TypeScriptで宣言したローマ字表をMozc用のローマ字テーブルTSVへコンパイルし、キーマップTSVとともに `config1.db` へ合成して適用する機能である。利用者は、このリポジトリでWindows環境のMozc設定を管理するユーザーである。宣言の記法と集約の規則は `../SPEC.md` の「ローマ字表の宣言」に従い、このspecでは記述しない。
 
 `just mozc` は、設定の適用（`mozc/roma-def.ts` を引数なしで実行）である。`just mozc diff` は、設定の差分（`mozc/roma-def.ts` に `--dry-run` を付けて実行）を表示する。
 

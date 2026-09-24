@@ -87,7 +87,7 @@ git reset --hard backup/split-<timestamp>
 ### コミット作成の境界
 
 - コミットメッセージはリポジトリの規約に従う。規約がない場合は Conventional Commits に従い、`feat`、`fix`、`refactor`、`chore`、`docs`、`style`、`test`、`build`、`ci`、`perf` などから変更の意味に合う `type` を選ぶ。言語は `git log` で確認した履歴で優勢なものを使う。
-- 機密情報、生成物、意図しない変更を commit しない。owner が明示していない既存の変更を編集・削除・破棄しない。
+- 機密情報、生成物、意図しない変更を commit しない。user が明示していない既存の変更を編集・削除・破棄しない。
 - `git add .` と `git add -A` で無関係な変更をまとめて stage しない。既存 commit の amend、rebase、squash、またはこの節の分割手順以外の reset はしない。
 - 変更がない場合は、バックアップ branch も commit も作成せず、その旨を報告する。
 - 安全に判断できる場合は commit 作成前に確認を求めない。判断できない変更または危険な変更がある場合は、commit せずに停止して確認を求める。
@@ -110,11 +110,11 @@ branch 名・分岐元は、リポジトリの branch strategy に従う。文�
 
 ## 実行の境界
 
-- coding agent の変更は、owner が staged/unstaged の状態で管理・レビューする。`git add`・`git reset`・`git restore`・`git stash` 等の index または worktree の状態を変更する操作は、owner が staging、commit の作成・分割など staging を必要とする操作を明示的に指示（承認を含む）した場合のほか実行しない。owner が staged にした変更の解除や、owner の未コミット変更の破棄も指示がない限り行わない。
-- owner が commit を指示したときは、その時点で staged にある変更もコミットに含めてよい。コミットから除外するのは、owner が除外を指示したとき、またはその変更がコミットの意味単位（1 commit = 1 論理的変更）に属さないと判断できるときだけにする。判断に迷うときは確認する。
-- index の状態が予期しないものに見えても、勝手に正さず owner に確認する。owner または前段の操作が staged にした可能性があり、index の状態自体が owner の管理領域である。
+- coding agent の変更は、user が staged/unstaged の状態で管理・レビューする。`git add`・`git reset`・`git restore`・`git stash` 等の index または worktree の状態を変更する操作は、user が staging、commit の作成・分割など staging を必要とする操作を明示的に指示（承認を含む）した場合のほか実行しない。user が staged にした変更の解除や、user の未コミット変更の破棄も指示がない限り行わない。
+- user が commit を指示したときは、その時点で staged にある変更もコミットに含めてよい。コミットから除外するのは、user が除外を指示したとき、またはその変更がコミットの意味単位（1 commit = 1 論理的変更）に属さないと判断できるときだけにする。判断に迷うときは確認する。
+- index の状態が予期しないものに見えても、勝手に正さず user に確認する。user または前段の操作が staged にした可能性があり、index の状態自体が user の管理領域である。
 - remote への push と PR の作成は、明示的な指示があるときだけ行う。
-- 共有 branch への force push・履歴の書き換えは、owner の承認があるまで行わない。
+- 共有 branch への force push・履歴の書き換えは、user の承認があるまで行わない。
 
 ## PR の適切性
 
@@ -129,7 +129,7 @@ PR を作る前に、次を評価する。
 
 ## 外部リポジトリへの PR での AI 利用の開示
 
-owner が所属しないリポジトリへの PR でのみ適用する。所属リポジトリへの PR には付けない。
+user が所属しないリポジトリへの PR でのみ適用する。所属リポジトリへの PR には付けない。
 
 - PR 本文の末尾に、次の形式の trailer を付ける:
 
