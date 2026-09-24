@@ -129,7 +129,7 @@ externalSkills:
 | pull が失敗した | pull を無視する | 既存ミラーの内容が配置され、警告が出る |
 | clone が失敗した | — | 異常終了する |
 
-- ミラーは `~/.mirrors/github.com/<owner>/<repo>` に保持する。
+- ミラーは `~/mirrors/github.com/<owner>/<repo>` に保持する。
 - TTL の既定は 6 時間で、`ttlHours` で上書きする。時間原点は、ミラーの `.git/build-pull-time` に記録した前回取得時刻であり、clone 成功時と pull 成功時に更新する。環境変数 `BUILD_FORCE_PULL=1` のときは TTL を無視して pull する。
 - `entries` の各パスは、Bun Glob 方言でミラー内のディレクトリへ解決する。0 件または複数のディレクトリに一致したときは異常終了する。
 - 配置先は `destination`（dist 相対パス）の直下である。既存ファイルは上書きせず、`.git` はコピーしない。
