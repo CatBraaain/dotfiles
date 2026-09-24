@@ -25,7 +25,7 @@ if command -v pi >/dev/null 2>&1 && command -v flock >/dev/null 2>&1 \
 	if [ "$((update_now - update_last))" -ge $((12 * 60 * 60)) ]; then
 		printf '%s\n' "$update_now" >"$update_stamp"
 		# Close fd 9 so pi update does not inherit and hold the lock.
-		nohup pi update --extensions >/dev/null 2>&1 9>&- &
+		nohup pi update --all >/dev/null 2>&1 9>&- &
 	fi
 fi
 
