@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "bun:test";
 import { join } from "node:path";
 
-// The build keeps bare specifiers external (run_after_build.sh passes
+// The build keeps bare specifiers external (build.run.sh passes
 // `--external '@deepseek-ai/*'` etc.), so runtime imports must be resolvable
 // where the deployed plugin lands: libraries from dependencies install into
 // the profile tree, while dsh framework packages resolve as peerDependencies

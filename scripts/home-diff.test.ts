@@ -356,12 +356,20 @@ describe("exclusions", () => {
     assert.deepEqual(pathsOf(result, "removedIgnored"), []);
   });
 
-  it("skips run_ scripts, which run at the post-apply point instead", async () => {
-    await put(distRoot, "run_after_setup.sh", "#!/bin/sh\n");
+  it("skips run scripts, which run at the post-apply point instead", async () => {
+    await put(distRoot, "setup.run.sh", "#!/bin/sh\n");
 
     const result = await diff();
 
     assert.deepEqual(result.added, []);
+  });
+
+  it("diffs run_-prefixed files as normal entries", async () => {
+    await put(distRoot, "run_eval.py", "print()\n");
+
+    const result = await diff();
+
+    assert.deepEqual(pathsOf(result, "added"), ["run_eval.py"]);
   });
 
   it("skips node_modules anywhere in dist", async () => {

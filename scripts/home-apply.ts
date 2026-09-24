@@ -1,7 +1,7 @@
 // Apply engine between a dist tree and a home tree (spec:
-// dotfiles-manager.spec.md §適用, §フックシステム, §run_ スクリプト).
+// dotfiles-manager.spec.md §適用, §フックシステム, §run スクリプト).
 // Consumes the classification produced by home-diff.ts, writes the home tree,
-// and runs pre/post-apply hooks and run_ scripts. The build stage (dist
+// and runs pre/post-apply hooks and run scripts. The build stage (dist
 // generation) is a separate stage and not part of this file.
 
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
@@ -9,9 +9,10 @@ import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink }
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   collectDifferences,
+  isRunScriptName,
   main as diffMain,
   mapSegment,
   type DiffEntry,
@@ -108,8 +109,8 @@ export async function applyDifferences(
   return applied;
 }
 
-// Finds .pre-apply.ts / .post-apply.ts hooks and run_ scripts in a built dist
-// tree (spec §フックシステム, §run_ スクリプト). node_modules and folders whose
+// Finds .pre-apply.ts / .post-apply.ts hooks and run scripts in a built dist
+// tree (spec §フックシステム, §run スクリプト). node_modules and folders whose
 // names are excluded from diffing are skipped; ordering is folder-relative
 // path first (parents before children), then file name.
 export async function collectDeclarations(distRoot: string): Promise<Declarations> {
@@ -149,7 +150,7 @@ export async function runLifecycleHooks(
   }
 }
 
-// Runs run_ scripts (spec §run_ スクリプト) after the post-apply hooks: each
+// Runs run scripts (spec §run スクリプト) after the post-apply hooks: each
 // script runs with its cwd at the script folder's home directory (created if
 // missing), via its shebang interpreter or pwsh for .ps1. A non-zero exit
 // aborts the remaining scripts.
@@ -203,7 +204,10 @@ export function parseArgs(argv: readonly string[]): {
 export async function main(argv: readonly string[]): Promise<number> {
   const options = parseArgs(argv);
   if (options.dryRun) return diffMain(options.rest);
-  const { distRoot, homeRoot } = options;
+  // Absolute so script paths handed to child interpreters resolve against
+  // dist, not against the child cwd at the home-side folder.
+  const distRoot = resolve(options.distRoot);
+  const { homeRoot } = options;
 
   const result = await collectDifferences(distRoot, homeRoot);
   writeLine(
@@ -343,7 +347,7 @@ async function walkDeclarations(
         folderRel: dirRel,
         homeFolderRel: homeFolderOf(dirRel),
       });
-    else if (entry.name.startsWith("run_"))
+    else if (isRunScriptName(entry.name))
       out.runScripts.push({
         distPath: childRel,
         fileName: entry.name,

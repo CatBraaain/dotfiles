@@ -9,7 +9,7 @@
  * bootstrap, timeouts) is owned by the CLI — its behavior contract is
  * `dotfiles/.agents/cli/browse.spec.md`; this plugin's contract is SPEC.md.
  *
- * `run_after_build.sh` bundles this entry: relative imports are inlined and only
+ * `build.run.sh` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external. The shared
  * machine-scoped camoufox server lives inside the CLI; `browse server start` (spawned
  * by the CLI itself and by the shared startup script) brings it up.

@@ -87,7 +87,7 @@ docs は網羅的でない。正確な契約が必要なときは docs より先
 
 - dsh は **web プロファイルのみ**使用する。plugin の追加先も web プロファイル
 - plugin ソースは `dotfiles/.dsh/plugins.exact/`。追加・更新は README の「プラグインの追加・更新」
-- エントリは TS で書き `dist/index.js` に build。ビルドは `run_after_build.sh` が apply の全ターゲット適用後に一括実行
+- エントリは TS で書き `dist/index.js` に build。ビルドは `build.run.sh` が apply の全ターゲット適用後に一括実行
 - client half（`src/client/`）を持つ plugin の browser bundle は `lib/client.js` をリポジトリにコミットする。`src/client/` を編集したら README 記載の `bun build` コマンドで再ビルド
 - 依存解決には bun 固有の罠がある（transitive 依存の hoist 遮蔽、pnpm の `.gitignore` 除外）。依存構成を変えるときは README の該当節を読む
 - テスト: `dotfiles/.dsh/plugins.exact/<plugin>/` で `bun test`。TS 変更には隣接 `.test.ts` を置く（グローバル AGENTS.md の規約）

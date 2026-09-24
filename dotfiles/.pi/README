@@ -11,8 +11,8 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
     ├── AGENTS.md.symlink        # ~/.agents/AGENTS.md への symlink（正本は dotfiles/.agents/AGENTS.md）
     ├── settings.merge.json      # pi 設定（settings.json へ深くマージ）
     ├── package.json            # 拡張のランタイム依存（yaml 等）
-    ├── run_after_bun_install.sh       # post-apply run script（manifest/lockfile変更時だけ ~/.pi/agent/ で bun install）
-    ├── run_after_bun_install.spec.md  # run_after_bun_install.sh の振る舞い仕様
+    ├── bun_install.run.sh             # post-apply run script（manifest/lockfile変更時だけ ~/.pi/agent/ で bun install）
+    ├── bun_install.spec.md            # bun_install.run.sh の振る舞い仕様
     ├── config.exact/                  # ~/.agents/config/ への symlink
     ├── extensions.exact/       # 自作拡張機能
     ├── prompts.exact/          # プロンプトテンプレート

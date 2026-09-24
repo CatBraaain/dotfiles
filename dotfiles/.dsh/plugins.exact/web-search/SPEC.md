@@ -88,5 +88,5 @@ multi-query の web_search（`queries` 2 件以上）も、各 query の CLI 起
 | `export const name` | `"dsh-web-search"` |
 | `export const inject` | `["web"]` |
 | 登録 | `ctx.web.registerSearchProvider`（id `camoufox-openserp`）と `ctx.web.registerFetchProvider`（id `camoufox-trafilatura`） |
-| エントリポイント構成 | `run_after_build.sh` が 1 エントリとして bundle する（相対 import は inline、script に明示された bare-specifier external のみ外部解決） |
+| エントリポイント構成 | `build.run.sh` が 1 エントリとして bundle する（相対 import は inline、script に明示された bare-specifier external のみ外部解決） |
 | 依存 | 探索ロジックの依存を持たない（ロジックは browse CLI 側が持つ） |

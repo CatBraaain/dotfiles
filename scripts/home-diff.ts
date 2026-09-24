@@ -151,9 +151,14 @@ export function parseArgs(
 // ------------------------------------------------------------ path mapping
 
 const excludedEntryPrefixes = [".pre-build", ".build", ".pre-apply", ".post-apply"];
-// Files only: run_ scripts run at the post-apply point and are never placed
-// into home.
-const excludedFilePrefixes = ["run_"];
+
+// Files only: run scripts (names ending in .run.<ext>) run at the post-apply
+// point and are never placed into home (spec §run スクリプト).
+const runScriptNamePattern = /\.run\.[^.]+$/;
+
+export function isRunScriptName(name: string): boolean {
+  return runScriptNamePattern.test(name);
+}
 
 export type SegmentMapping = {
   homeName: string;
@@ -166,7 +171,7 @@ export type SegmentMapping = {
 export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
   const isExcluded =
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
-    (!isDirectory && excludedFilePrefixes.some((prefix) => name.startsWith(prefix)));
+    (!isDirectory && isRunScriptName(name));
   if (isExcluded)
     return {
       homeName: name,

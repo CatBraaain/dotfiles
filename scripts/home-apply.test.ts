@@ -403,19 +403,19 @@ describe("lifecycle hooks", () => {
     await putRecordingHook(distRoot, "ok/.pre-apply.ts");
     await putRecordingHook(distRoot, join("node_modules", "pkg", ".pre-apply.ts"));
     await put(distRoot, ".pre-build.d/hidden/.pre-apply.ts", "hook\n");
-    await putRunScript(distRoot, join("node_modules", "pkg", "run_x.sh"));
-    await putRunScript(distRoot, "ok/run_y.sh");
+    await putRunScript(distRoot, join("node_modules", "pkg", "x.run.sh"));
+    await putRunScript(distRoot, "ok/y.run.sh");
 
     const declarations = await collectDeclarations(distRoot);
 
     assert.deepEqual(declarations.preApply.map((hook) => hook.distPath), ["ok/.pre-apply.ts"]);
-    assert.deepEqual(declarations.runScripts.map((run) => run.distPath), ["ok/run_y.sh"]);
+    assert.deepEqual(declarations.runScripts.map((run) => run.distPath), ["ok/y.run.sh"]);
   });
 });
 
 describe("run scripts", () => {
   it("runs a shebang script via its interpreter in the mapped home folder", async () => {
-    await putRunScript(distRoot, "tools/run_setup.sh");
+    await putRunScript(distRoot, "tools/setup.run.sh");
     const declarations = await collectDeclarations(distRoot);
 
     await runRunScripts(declarations.runScripts, distRoot, homeRoot);
@@ -426,9 +426,9 @@ describe("run scripts", () => {
 
   it("runs scripts in folder then filename order", async () => {
     const orderFile = join(root, "run-order.txt");
-    await putRunScript(distRoot, "pkg/run_second.sh", `echo b >> ${JSON.stringify(orderFile)}`);
-    await putRunScript(distRoot, "pkg/run_first.sh", `echo a >> ${JSON.stringify(orderFile)}`);
-    await putRunScript(distRoot, "aaa/run_early.sh", `echo c >> ${JSON.stringify(orderFile)}`);
+    await putRunScript(distRoot, "pkg/second.run.sh", `echo b >> ${JSON.stringify(orderFile)}`);
+    await putRunScript(distRoot, "pkg/first.run.sh", `echo a >> ${JSON.stringify(orderFile)}`);
+    await putRunScript(distRoot, "aaa/early.run.sh", `echo c >> ${JSON.stringify(orderFile)}`);
     const declarations = await collectDeclarations(distRoot);
 
     await runRunScripts(declarations.runScripts, distRoot, homeRoot);
@@ -440,25 +440,25 @@ describe("run scripts", () => {
   });
 
   it("errors on a script without shebang or .ps1 extension and stops the queue", async () => {
-    await put(distRoot, "pkg/run_bad.sh", "pwd > never.txt\n");
-    await putRunScript(distRoot, "pkg/run_good.sh");
+    await put(distRoot, "pkg/bad.run.sh", "pwd > never.txt\n");
+    await putRunScript(distRoot, "pkg/good.run.sh");
     const declarations = await collectDeclarations(distRoot);
 
     await assert.rejects(
       runRunScripts(declarations.runScripts, distRoot, homeRoot),
-      /run script has neither a shebang nor a \.ps1 extension: pkg\/run_bad\.sh/,
+      /run script has neither a shebang nor a \.ps1 extension: pkg\/bad\.run\.sh/,
     );
     assert.equal(existsSync(join(homeRoot, "pkg", "run-out.txt")), false);
   });
 
   it("stops remaining scripts on a non-zero exit", async () => {
-    await putRunScript(distRoot, "run_fail.sh", "exit 3");
-    await putRunScript(distRoot, "run_late.sh");
+    await putRunScript(distRoot, "fail.run.sh", "exit 3");
+    await putRunScript(distRoot, "late.run.sh");
     const declarations = await collectDeclarations(distRoot);
 
     await assert.rejects(
       runRunScripts(declarations.runScripts, distRoot, homeRoot),
-      /run script failed: run_fail\.sh \(exit code 3\)/,
+      /run script failed: fail\.run\.sh \(exit code 3\)/,
     );
     assert.equal(existsSync(join(homeRoot, "run-out.txt")), false);
   });
@@ -468,7 +468,7 @@ const pwshPath = Bun.which("pwsh");
 
 describe("run scripts on windows shell", () => {
   it.skipIf(pwshPath === null)("runs a .ps1 script via pwsh", async () => {
-    await put(distRoot, "ps/run_task.ps1", 'Set-Content -Path "ps-out.txt" -Value "done"\n');
+    await put(distRoot, "ps/task.run.ps1", 'Set-Content -Path "ps-out.txt" -Value "done"\n');
     const declarations = await collectDeclarations(distRoot);
 
     await runRunScripts(declarations.runScripts, distRoot, homeRoot);
@@ -511,7 +511,7 @@ describe("planned payload and CLI", () => {
 
   it("applies, hooks, and runs end to end", async () => {
     await put(distRoot, "a.txt", "new\n");
-    await putRunScript(distRoot, "run_final.sh");
+    await putRunScript(distRoot, "final.run.sh");
     const declarations = await collectDeclarations(distRoot);
     assert.equal(declarations.runScripts.length, 1);
 
@@ -519,6 +519,25 @@ describe("planned payload and CLI", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
+    assert.equal(existsSync(join(homeRoot, "run-out.txt")), true);
+  });
+
+  it("runs hooks and run scripts when the dist root is relative", async () => {
+    await put(distRoot, "a.txt", "new\n");
+    await putRecordingHook(distRoot, ".post-apply.ts");
+    await putRunScript(distRoot, "final.run.sh");
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      const exitCode = await main(["dist", homeRoot]);
+      assert.equal(exitCode, 0);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
+    const hookOutput = await readHookOutput(homeRoot, "hook-out.json");
+    assert.equal(hookOutput.cwd, homeRoot);
     assert.equal(existsSync(join(homeRoot, "run-out.txt")), true);
   });
 
@@ -534,7 +553,7 @@ describe("planned payload and CLI", () => {
   it("skips run scripts when a post-apply hook fails", async () => {
     await put(distRoot, "a.txt", "new\n");
     await put(distRoot, ".post-apply.ts", "process.exit(1);\n");
-    await putRunScript(distRoot, "run_final.sh");
+    await putRunScript(distRoot, "final.run.sh");
 
     await assert.rejects(main([distRoot, homeRoot]), /post-apply hook failed/);
 

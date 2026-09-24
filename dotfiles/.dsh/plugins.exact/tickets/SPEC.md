@@ -49,7 +49,7 @@ CLI の cwd には、呼び出し元 agent の session header の `cwd`（`exec.
 
 ## ビルド
 
-`plugins.exact/run_after_build.sh` の共通コマンドで `src/index.ts` を `dist/index.js` に bundle する。相対 import（`@dotfiles/agent-lib/ticket` は node_modules の symlink 経由で lib の TS ソース）は inline され、`@deepseek-ai/*` は external（実行時に profile closure から解決）。本 plugin 固有の build 設定はなし。
+`plugins.exact/build.run.sh` の共通コマンドで `src/index.ts` を `dist/index.js` に bundle する。相対 import（`@dotfiles/agent-lib/ticket` は node_modules の symlink 経由で lib の TS ソース）は inline され、`@deepseek-ai/*` は external（実行時に profile closure から解決）。本 plugin 固有の build 設定はなし。
 
 ## profile 登録
 
