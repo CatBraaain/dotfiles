@@ -55,6 +55,7 @@ $managedDevPackages = @(
     "Canonical.Ubuntu" # windows
     "GitHub.cli"
     "Microsoft.coreutils"
+    "Wilfred.difftastic"
     "gerardog.gsudo" # windows
     "CatBraaain.runx" # windows
     "CatBraaain.winconfig" # windows
