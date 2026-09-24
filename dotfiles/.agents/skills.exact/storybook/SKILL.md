@@ -24,6 +24,15 @@ npx storybook@latest remove @storybook/addon-onboarding
 
 実行後、`.storybook/main.ts` の `addons` 配列を確認し、`@storybook/addon-onboarding` が残っていれば手動で取り除く。
 
+addon とは別に、SB10 には内蔵の onboarding（sidebar の checklist widget とメニューの guide タブ）がある。`.storybook/main.ts` に `features` を追加して無効化する:
+
+```ts
+features: {
+  sidebarOnboardingChecklist: false,
+  menuOnboardingChecklist: false,
+},
+```
+
 ## manager.ts で UI を非表示にする
 
 `.storybook/manager.ts` を作り、`addons.setConfig` で UI を設定する:
@@ -39,12 +48,13 @@ addons.setConfig({
 });
 ```
 
-addon panel に加えて、次の2項目も常に非表示にする。同じ `setConfig` に追加する:
+addon panel に加えて、sidebar の root 見出しも常に非表示にする。同じ `setConfig` に追加する:
 
 | 目的 | 設定 |
 | --- | --- |
-| toolbar の Storybook タイトルを隠す | `toolbar: { title: { hidden: true } }` |
 | sidebar の root 見出しを隠す | `sidebar: { showRoots: false }` |
+
+sidebar の Storybook ブランドは設定から隠せない。`toolbar: { title: { hidden: true } }` は Storybook 10.6 では反映されず（manager runtime に消費箇所がない）、sidebar のブランドはテーマの `brand`（`brandTitle` / `brandImage` から構築される）から無条件に描画される。
 
 ## main.ts で telemetry と通知を無効化する
 
