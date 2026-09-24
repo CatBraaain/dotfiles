@@ -70,16 +70,21 @@ winget install $managedDevPackages --source winget
 # Mozc: no winget package nor GitHub release exists; the official CI (CI for
 # Windows workflow) publishes an MSI as a run artifact instead, which needs
 # GitHub authentication. Requires gh from $managedDevPackages and `gh auth login`.
-$mozcRun = gh run list --repo google/mozc --workflow=windows.yaml --status=success --limit 1 --json databaseId --jq '.[0].databaseId'
-$mozcDir = Join-Path $env:TEMP "mozc-install"
-New-Item -ItemType Directory -Path $mozcDir -Force | Out-Null
-gh run download $mozcRun --repo google/mozc --name Mozc64_x64.msi --dir $mozcDir
-# The artifact name and the MSI file name inside it differ (Mozc64.msi), so
-# resolve the extracted .msi instead of assuming the artifact name.
-$mozcMsi = (Get-ChildItem $mozcDir -Filter *.msi | Select-Object -First 1).FullName
-if (!($mozcMsi)) { throw "no MSI found in $mozcDir" }
-Start-Process msiexec -ArgumentList "/i", "`"$mozcMsi`"", "/qn" -Wait
-Remove-Item $mozcDir -Recurse -Force
+$mozcServerExe = Join-Path ${env:ProgramFiles(x86)} "Mozc\mozc_server.exe"
+if (Test-Path $mozcServerExe) {
+    Write-Output "Mozc is already installed at $(Split-Path $mozcServerExe); skipping the Mozc install"
+} else {
+    $mozcRun = gh run list --repo google/mozc --workflow=windows.yaml --status=success --limit 1 --json databaseId --jq '.[0].databaseId'
+    $mozcDir = Join-Path $env:TEMP "mozc-install"
+    New-Item -ItemType Directory -Path $mozcDir -Force | Out-Null
+    gh run download $mozcRun --repo google/mozc --name Mozc64_x64.msi --dir $mozcDir
+    # The artifact name and the MSI file name inside it differ (Mozc64.msi), so
+    # resolve the extracted .msi instead of assuming the artifact name.
+    $mozcMsi = (Get-ChildItem $mozcDir -Filter *.msi | Select-Object -First 1).FullName
+    if (!($mozcMsi)) { throw "no MSI found in $mozcDir" }
+    Start-Process msiexec -ArgumentList "/i", "`"$mozcMsi`"", "/qn" -Wait
+    Remove-Item $mozcDir -Recurse -Force
+}
 
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
 
