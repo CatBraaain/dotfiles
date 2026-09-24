@@ -10,7 +10,13 @@ Storybook 10 系を対象に、開発に不要な UI 要素と通信を抑えた
 
 ## 導入時
 
-`npx storybook@latest init` をプロジェクトルートで実行する。対話プロンプト "New to Storybook?" には No を選ぶ。Yes を選ぶと onboarding ツアーとデモ stories 付きで初期化され、No は onboarding なしの minimal setup になる。
+`npx storybook@latest init` をプロジェクトルートで実行する。対話プロンプト "New to Storybook?" には No を選ぶ。No は onboarding addon なしの minimal setup になる。デモ stories は No を選んでも `src/stories/**` に生成されるため、「デモ stories の除去」を必ず適用する。
+
+非対話実行（エージェント等）では対話プロンプトへのパイプ入力に頼らず、`--agent` と onboarding を含まない `--features` を指定する:
+
+```bash
+npx storybook@latest init --agent --features docs test a11y ai
+```
 
 導入後に onboarding・addon panel・telemetry 等の設定は後述の節に従って適用する。
 
@@ -48,11 +54,13 @@ addons.setConfig({
 });
 ```
 
-addon panel に加えて、sidebar の root 見出しも常に非表示にする。同じ `setConfig` に追加する:
+addon panel に加えて、sidebar の root を見出しとして表示しない。同じ `setConfig` に追加する:
 
 | 目的 | 設定 |
 | --- | --- |
-| sidebar の root 見出しを隠す | `sidebar: { showRoots: false }` |
+| sidebar の root 見出しスタイルを解除する | `sidebar: { showRoots: false }` |
+
+`showRoots: false` は root の行そのものを消さない。大文字の見出しスタイル（`TEST`）が通常の行スタイル（`Test`）に変わるだけである。
 
 sidebar の Storybook ブランドは設定から隠せない。`toolbar: { title: { hidden: true } }` は Storybook 10.6 では反映されず（manager runtime に消費箇所がない）、sidebar のブランドはテーマの `brand`（`brandTitle` / `brandImage` から構築される）から無条件に描画される。
 
