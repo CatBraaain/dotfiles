@@ -88,7 +88,6 @@
 - apt: btop
 - brew: act
 - brew: cargo-binstall
-- brew: chezmoi
 - brew: erdtree
 - brew: eza
 - brew: fd

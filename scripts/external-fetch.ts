@@ -51,7 +51,7 @@ export type SyncContext = {
 type MirrorSyncResult = { mirrorDir: string; changed: boolean };
 
 export const defaultTtlHours = 6;
-const pullTimeFileName = "pre-chezmoi-pull-time";
+const pullTimeFileName = "build-pull-time";
 const defaultMirrorRoot = join(homedir(), "mirrors", "github.com");
 
 export function defaultContext(): SyncContext {

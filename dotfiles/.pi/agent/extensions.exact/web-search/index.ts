@@ -25,7 +25,7 @@ export function browseCliDir(env: Record<string, string | undefined> = process.e
   return env.BROWSE_CLI_DIR ?? join(EXTENSION_DIR, "..", "..", "..", "..", ".agents", "cli");
 }
 
-// The source tree keeps the chezmoi ".executable" suffix; the deployed copy
+// The source tree keeps the ".executable" suffix; the deployed copy
 // is a plain "browse" with the exec bit set. The CLI is spawned through
 // `bun <script>`, so only the file has to exist.
 export function browseScript(env: Record<string, string | undefined> = process.env): string {

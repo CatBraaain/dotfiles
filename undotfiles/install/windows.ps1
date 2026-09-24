@@ -62,7 +62,6 @@ $managedDevPackages = @(
 )
 
 winget install "AutoHotkey.AutoHotkey" --silent --version 1.1.37.02 --no-upgrade --source winget
-winget install "twpayne.chezmoi" --scope machine --source winget
 winget install $unmanagedPackages --no-upgrade --source winget
 winget install $managedPackages --source winget
 winget install $managedDevPackages --source winget

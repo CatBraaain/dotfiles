@@ -38,7 +38,7 @@ if [[ ! -x "$BREW_BIN" ]]; then
 fi
 eval "$("$BREW_BIN" shellenv)"
 
-# bun runs install/linux.ts and pre-chezmoi.ts. Also kept as a brew
+# bun runs undotfiles/install/linux.ts. Also kept as a brew
 # formula in linux.config.yaml; install keeps both paths in sync idempotently.
 command -v bun >/dev/null 2>&1 || brew install bun
 

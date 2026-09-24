@@ -62,7 +62,7 @@ camoufox server の表示モード（Linux 既定の Xvfb `:99` 上の headed �
 
 CLI スクリプト（`browse`）は、この拡張のディレクトリから4階層上の `.agents/cli/` ディレクトリで解決する。source tree（`dotfiles/.pi/agent/extensions.exact/web-search/` → `dotfiles/.agents/cli/`）と展開後（`~/.pi/agent/extensions/web-search/` → `~/.agents/cli/`）のどちらも同じ相対位置で解決できるためである。
 
-スクリプト名は `browse.executable`（source tree の chezmoi 記法）を優先し、無ければ `browse`（展開後の名前）を使う。`bun <script>` で起動するため実行ビットには依存しない。
+スクリプト名は `browse.executable`（source tree 名）を優先し、無ければ `browse`（展開後の名前）を使う。`bun <script>` で起動するため実行ビットには依存しない。
 
 環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `.agents/cli` の代わりに使う（テスト・開発用）。
 

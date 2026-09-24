@@ -1,6 +1,6 @@
 # run_after_build spec
 
-`run_after_build.sh` が dsh plugin の dependency install と bundle build を必要な場合だけ実行するための観測可能な振る舞いを定める。script は chezmoi により `~/.dsh/plugins/` を current directory として実行される。
+`run_after_build.sh` が dsh plugin の dependency install と bundle build を必要な場合だけ実行するための観測可能な振る舞いを定める。script は home apply の post-apply ライフサイクルにより `~/.dsh/plugins/` を current directory として実行される。
 
 ## dependency install
 
@@ -34,4 +34,4 @@ install の判定と build の判定は独立する。依存変更で install �
 - pi agent の dependency install
 - dsh web profile の dependency install
 - VS Code 拡張同期
-- `run_after_` を別の chezmoi attribute へ変更
+- `run_after_` を別の run script プレフィックスへ変更

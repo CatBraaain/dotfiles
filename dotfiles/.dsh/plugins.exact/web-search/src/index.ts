@@ -162,7 +162,7 @@ export class CamoufoxTrafilaturaFetchProvider implements WebFetchProvider {
 export type BrowseSubcommand = "search" | "fetch";
 
 // SPEC §"提供する plugin": the browse CLI lives in ~/.agents/cli (deployed
-// from dotfiles/.agents/cli by chezmoi). BROWSE_CLI_DIR overrides the
+// from dotfiles/.agents/cli by home apply). BROWSE_CLI_DIR overrides the
 // directory for tests and manual development (same convention as the pi
 // wrapper). Unlike the pi extension, the bundle always runs from the deployed
 // plugin directory, so the default resolves from the home directory rather
@@ -171,7 +171,7 @@ export function browseCliDir(env: Record<string, string | undefined> = process.e
   return env.BROWSE_CLI_DIR ?? join(homedir(), ".agents", "cli");
 }
 
-// The source tree keeps the chezmoi ".executable" suffix; the deployed copy
+// The source tree keeps the ".executable" suffix; the deployed copy
 // is a plain "browse" with the exec bit set. The CLI is spawned through
 // `bun <script>`, so only the file has to exist.
 export function browseScript(env: Record<string, string | undefined> = process.env): string {

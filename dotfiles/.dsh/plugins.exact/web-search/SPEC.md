@@ -58,7 +58,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 
 CLI スクリプトは `~/.agents/cli/browse` で解決する。本 plugin の bundle は常に展開先（`~/.dsh/plugins/web-search/`）で動くため、ホームディレクトリ基準の解決を使う（pi 拡張と違い、source tree からの相対位置には依存しない）。
 
-環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `~/.agents/cli` の代わりに使う（テスト・開発用。pi 拡張のラッパーと同じ規則）。ディレクトリ内に `browse.executable`（chezmoi の source tree 名）があればそれを、無ければ `browse` を使う。いずれも `bun <script>` として起動するため、スクリプトの実行ビットには依存しない。
+環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `~/.agents/cli` の代わりに使う（テスト・開発用。pi 拡張のラッパーと同じ規則）。ディレクトリ内に `browse.executable`（source tree 名）があればそれを、無ければ `browse` を使う。いずれも `bun <script>` として起動するため、スクリプトの実行ビットには依存しない。
 
 ## 常駐サーバー
 
