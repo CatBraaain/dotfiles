@@ -73,7 +73,11 @@ $mozcRun = gh run list --repo google/mozc --workflow=windows.yaml --status=succe
 $mozcDir = Join-Path $env:TEMP "mozc-install"
 New-Item -ItemType Directory -Path $mozcDir -Force | Out-Null
 gh run download $mozcRun --repo google/mozc --name Mozc64_x64.msi --dir $mozcDir
-Start-Process msiexec -ArgumentList "/i", "`"$mozcDir\Mozc64_x64.msi`"", "/qn" -Wait
+# The artifact name and the MSI file name inside it differ (Mozc64.msi), so
+# resolve the extracted .msi instead of assuming the artifact name.
+$mozcMsi = (Get-ChildItem $mozcDir -Filter *.msi | Select-Object -First 1).FullName
+if (!($mozcMsi)) { throw "no MSI found in $mozcDir" }
+Start-Process msiexec -ArgumentList "/i", "`"$mozcMsi`"", "/qn" -Wait
 Remove-Item $mozcDir -Recurse -Force
 
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
