@@ -1,6 +1,6 @@
 // External fetch stage of the build (spec: dotfiles-manager.spec.md
 // §build: external fetch): syncs GitHub repository mirrors under
-// ~/.mirrors/github.com and materializes their entries into dist. Moved from
+// ~/mirrors/github.com and materializes their entries into dist. Moved from
 // the retired skills.exact hook; the externalSkills config format is kept.
 
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
@@ -53,14 +53,6 @@ type MirrorSyncResult = { mirrorDir: string; changed: boolean };
 export const defaultTtlHours = 6;
 const pullTimeFileName = "pre-chezmoi-pull-time";
 const defaultMirrorRoot = join(homedir(), "mirrors", "github.com");
-
-// Prefixes chezmoi parses as source-state attributes (scripts, removals, ...).
-// Synced assets must land verbatim, so names using them are wrapped in
-// literal_, which stops chezmoi's attribute parsing. This wrapper exists only
-// while the build still renames dist into chezmoi naming; once the rename is
-// gone it becomes a no-op for plain names.
-const chezmoiAttributePrefix =
-  /^(after|before|create|dot|empty|encrypted|exact|executable|external|literal|modify|once|onchange|private|readonly|remove|run|symlink)_/;
 
 export function defaultContext(): SyncContext {
   return {
@@ -175,14 +167,10 @@ export async function copySkillTree(
     if (entry.name === ".git") continue;
 
     const sourcePath = join(sourceDir, entry.name);
-    const targetPath = join(targetDir, safeName(entry.name));
+    const targetPath = join(targetDir, entry.name);
     if (entry.isDirectory()) await copySkillTree(sourcePath, targetPath);
     else if (!existsSync(targetPath)) await copyFile(sourcePath, targetPath);
   }
-}
-
-function safeName(name: string): string {
-  return chezmoiAttributePrefix.test(name) ? `literal_${name}` : name;
 }
 
 export async function readLastPullAt(

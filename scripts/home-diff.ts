@@ -59,7 +59,7 @@ type StatsLike = {
 type DirentLike = { name: string; isDirectory(): boolean };
 
 const usage =
-  "usage: bun scripts/home-diff.ts [--json] [distRoot] [homeRoot] (defaults: dist, ~)";
+  "usage: bun scripts/home-diff.ts [--managed] [--json] [distRoot] [homeRoot] (defaults: dist, ~)";
 
 // ---------------------------------------------------------------- public API
 
@@ -103,6 +103,28 @@ export function toDiffJson(result: DiffResult): DiffJson {
 export async function main(argv: readonly string[]): Promise<number> {
   const options = parseArgs(argv);
   const result = await collectDifferences(options.distRoot, options.homeRoot);
+  if (options.managed) {
+    // Managed entries: every dist-mapped home entry regardless of difference,
+    // in tree order. Surplus removals (removedExact) are not listed, matching
+    // `chezmoi managed`.
+    const managedPaths = [
+      ...result.unchanged,
+      ...result.changed,
+      ...result.typeMismatches,
+      ...result.added,
+    ]
+      .map(paths)
+      .sort(compareCodeUnits);
+    for (const homePath of managedPaths) {
+      // A closed pipe (e.g. `| head`) must not turn into a stack trace.
+      try {
+        process.stdout.write(`${homePath}\n`);
+      } catch {
+        break;
+      }
+    }
+    return 0;
+  }
   if (options.json) {
     process.stdout.write(`${JSON.stringify(toDiffJson(result), null, 2)}\n`);
   } else {
@@ -113,20 +135,26 @@ export async function main(argv: readonly string[]): Promise<number> {
 
 export function parseArgs(
   argv: readonly string[],
-): { json: boolean; distRoot: string; homeRoot: string } {
+): { managed: boolean; json: boolean; distRoot: string; homeRoot: string } {
+  const managed = argv.includes("--managed");
   const json = argv.includes("--json");
-  const positional = argv.filter((arg) => arg !== "--json");
+  const positional = argv.filter((arg) => arg !== "--json" && arg !== "--managed");
   if (positional.length > 2) throw new Error(usage);
   const [distRoot = "dist", homeRootArgument = "~"] = positional;
-  return { json, distRoot, homeRoot: homeRootArgument === "~" ? homedir() : homeRootArgument };
+  return {
+    managed,
+    json,
+    distRoot,
+    homeRoot: homeRootArgument === "~" ? homedir() : homeRootArgument,
+  };
 }
 
 // ------------------------------------------------------------ path mapping
 
 const excludedEntryPrefixes = [".pre-chezmoi", ".pre-apply", ".post-apply"];
-// Files only: run_ scripts are never placed into home, and .chezmoi* files are
-// chezmoi's own configuration, not managed entries.
-const excludedFilePrefixes = ["run_", ".chezmoi"];
+// Files only: run_ scripts run at the post-apply point and are never placed
+// into home.
+const excludedFilePrefixes = ["run_"];
 
 export type SegmentMapping = {
   homeName: string;
@@ -174,43 +202,11 @@ export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
       isExcluded: false,
     };
 
-  // Transitional: the current pipeline (pre-chezmoi.ts) renames entries into
-  // chezmoi source naming (dot_/exact_/executable_/symlink_) before diff
-  // detection runs, so digest those prefixes to work against today's dist.
-  // Once the rename step is gone this block only ever sees plain names.
-  let rest = name;
-  let homeNamePrefix = "";
-  let isExactManaged = false;
-  let isExecutable = false;
-  let isSymlink = false;
-  for (;;) {
-    if (isDirectory && rest.startsWith("exact_")) {
-      isExactManaged = true;
-      rest = rest.slice("exact_".length);
-      continue;
-    }
-    if (rest.startsWith("executable_")) {
-      isExecutable = true;
-      rest = rest.slice("executable_".length);
-      continue;
-    }
-    if (rest.startsWith("symlink_")) {
-      isSymlink = true;
-      rest = rest.slice("symlink_".length);
-      continue;
-    }
-    if (rest.startsWith("dot_")) {
-      homeNamePrefix += ".";
-      rest = rest.slice("dot_".length);
-      continue;
-    }
-    break;
-  }
   return {
-    homeName: homeNamePrefix + rest,
-    kind: isDirectory ? "directory" : isSymlink ? "symlink" : "file",
-    isExactManaged,
-    isExecutable,
+    homeName: name,
+    kind: isDirectory ? "directory" : "file",
+    isExactManaged: false,
+    isExecutable: false,
     isExcluded: false,
   };
 }

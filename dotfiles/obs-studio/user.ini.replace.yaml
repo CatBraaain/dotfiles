@@ -1,0 +1,3 @@
+replacements:
+  - pattern: "(SysTrayMinimizeToTray)=.*"
+    replacement: "${1}=true"

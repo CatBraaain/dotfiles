@@ -242,10 +242,10 @@ describe("resolveSkillDir", () => {
 });
 
 describe("copySkillTree", () => {
-  it("wraps attribute-prefixed names in literal_, skips .git, and keeps existing files", async () => {
+  it("copies names verbatim, skips .git, and keeps existing files", async () => {
     const sourceDir = join(root, "mirror");
     const targetDir = join(root, "destination");
-    await put(sourceDir, "dot_special/file.txt", "wrapped\n");
+    await put(sourceDir, "dot_special/file.txt", "verbatim\n");
     await put(sourceDir, ".git/HEAD", "ref\n");
     await put(sourceDir, "plain.txt", "new\n");
     await put(targetDir, "plain.txt", "existing\n");
@@ -253,11 +253,11 @@ describe("copySkillTree", () => {
     await copySkillTree(sourceDir, targetDir);
 
     assert.equal(
-      await readFile(join(targetDir, "literal_dot_special/file.txt"), "utf8"),
-      "wrapped\n",
+      await readFile(join(targetDir, "dot_special/file.txt"), "utf8"),
+      "verbatim\n",
     );
     assert.equal(existsSync(join(targetDir, ".git")), false);
-    assert.equal(existsSync(join(targetDir, "literal_.git")), false);
+    assert.equal(existsSync(join(targetDir, "literal_dot_special")), false);
     assert.equal(await readFile(join(targetDir, "plain.txt"), "utf8"), "existing\n");
   });
 });

@@ -1,4 +1,0 @@
-.gitconfig.alias:
-  type: "file"
-  url: "https://raw.githubusercontent.com/GitAlias/gitalias/main/gitalias.txt"
-  refreshPeriod: "24h"

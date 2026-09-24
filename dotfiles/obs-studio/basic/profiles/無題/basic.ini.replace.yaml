@@ -1,0 +1,11 @@
+replacements:
+  - pattern: "(RecFormat2)=.*"
+    replacement: "${1}=hybrid_mp4"
+  - pattern: "(RecRB)=.*"
+    replacement: "${1}=true"
+  - pattern: "(RecRBTime)=.*"
+    replacement: "${1}=1800"
+  - pattern: "(RecRBSize)=.*"
+    replacement: "${1}=1024"
+  - pattern: "(StreamEncoder|RecEncoder)=.*"
+    replacement: "${1}=x264"

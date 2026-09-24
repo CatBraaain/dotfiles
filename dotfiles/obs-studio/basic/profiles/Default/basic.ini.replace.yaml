@@ -1,0 +1,11 @@
+replacements:
+  - pattern: "(FilePath|FFFilePath)=.*"
+    replacement: "${1}=D:/Videos/OBS"
+  - pattern: "(RecFormat2)=.*"
+    replacement: "${1}=mp4"
+  - pattern: "(RecRB)=.*"
+    replacement: "${1}=true"
+  - pattern: "(RecRBTime)=.*"
+    replacement: "${1}=1800"
+  - pattern: "(StreamEncoder|FFFilePath|RecEncoder)=.*"
+    replacement: "${1}=x264"

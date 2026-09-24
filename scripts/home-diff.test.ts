@@ -275,52 +275,36 @@ describe("path mapping", () => {
   });
 });
 
-describe("path mapping (transitional chezmoi naming)", () => {
-  it("maps dot_ to a leading dot", async () => {
+describe("path mapping (plain names without chezmoi prefixes)", () => {
+  it("treats dot_ names as plain entries, not hidden files", async () => {
     await put(distRoot, "dot_bashrc", "content\n");
-    await put(homeRoot, ".bashrc", "content\n");
+    await put(homeRoot, "dot_bashrc", "content\n");
 
     const result = await diff();
 
-    assertOnly(result, "unchanged", [".bashrc"]);
+    assertOnly(result, "unchanged", ["dot_bashrc"]);
   });
 
-  it("maps an exact_ directory and treats its surplus as removedExact", async () => {
+  it("treats exact_ directories as plain directories without exact scope", async () => {
     await put(distRoot, "exact_cfg/keep.txt", "content\n");
-    await put(homeRoot, "cfg/keep.txt", "content\n");
-    await put(homeRoot, "cfg/extra.txt", "content\n");
+    await put(homeRoot, "exact_cfg/keep.txt", "content\n");
+    await put(homeRoot, "exact_cfg/extra.txt", "content\n");
 
     const result = await diff();
 
-    assert.deepEqual(pathsOf(result, "removedExact"), ["cfg/extra.txt"]);
+    assert.deepEqual(pathsOf(result, "removedIgnored"), ["exact_cfg/extra.txt"]);
+    assert.deepEqual(pathsOf(result, "removedExact"), []);
   });
 
-  it("maps executable_ to a plain executable file", async () => {
-    await putExecutable(distRoot, "executable_tool", "#!/bin/sh\n");
-    await putExecutable(homeRoot, "tool", "#!/bin/sh\n");
-
-    const result = await diff();
-
-    assertOnly(result, "unchanged", ["tool"]);
-  });
-
-  it("maps symlink_ to a home symlink", async () => {
+  it("treats executable_ and symlink_ names as plain files", async () => {
+    await put(distRoot, "executable_tool", "#!/bin/sh\n");
+    await put(homeRoot, "executable_tool", "#!/bin/sh\n");
     await put(distRoot, "symlink_l", "dest\n");
-    await putSymlink(homeRoot, "l", "dest");
+    await put(homeRoot, "symlink_l", "dest\n");
 
     const result = await diff();
 
-    assertOnly(result, "unchanged", ["l"]);
-  });
-
-  it("digests combined prefixes such as exact_dot_", async () => {
-    await put(distRoot, "exact_dot_dir/keep.txt", "content\n");
-    await put(homeRoot, ".dir/keep.txt", "content\n");
-    await put(homeRoot, ".dir/extra.txt", "content\n");
-
-    const result = await diff();
-
-    assert.deepEqual(pathsOf(result, "removedExact"), [".dir/extra.txt"]);
+    assertOnly(result, "unchanged", ["executable_tool", "symlink_l"]);
   });
 });
 
@@ -359,9 +343,8 @@ describe("exclusions", () => {
     assert.deepEqual(pathsOf(result, "removedIgnored"), []);
   });
 
-  it("skips run_ scripts and .chezmoi configuration files", async () => {
+  it("skips run_ scripts, which run at the post-apply point instead", async () => {
     await put(distRoot, "run_after_setup.sh", "#!/bin/sh\n");
-    await put(distRoot, ".chezmoiexternal.yaml", "externals: {}\n");
 
     const result = await diff();
 

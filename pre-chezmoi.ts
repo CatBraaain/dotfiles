@@ -63,10 +63,6 @@ export async function run(
   );
   await removeMappedEntries(distDir, "", pathMap.removals);
   await moveMappedEntries(distDir, pathMap.moves);
-  await convertDotEntries(distDir);
-  await convertExactDirectories(distDir);
-  await convertExecutableFiles(distDir);
-  await convertSymlinkFiles(distDir);
   await composeMergeTargets(distDir, homeRoot);
   await applyReplaceSidecars(distDir, homeRoot);
 }
@@ -220,63 +216,6 @@ async function moveMappedEntries(
   }
 }
 
-async function convertDotEntries(distDir: string): Promise<void> {
-  const dotEntries = (await collectEntries(distDir))
-    .filter(
-      (entry) =>
-        basename(entry.path).startsWith(".") &&
-        !isExcludedFromDotConversion(basename(entry.path)) &&
-        !relative(distDir, entry.path).includes(".chezmoi"),
-    )
-    .sort(deepestFirst);
-  for (const entry of dotEntries) {
-    await rename(entry.path, join(dirname(entry.path), `dot_${basename(entry.path).slice(1)}`));
-  }
-}
-
-function isExcludedFromDotConversion(name: string): boolean {
-  return name.startsWith(".pre-chezmoi");
-}
-
-async function convertExactDirectories(distDir: string): Promise<void> {
-  const exactDirectories = (await collectEntries(distDir))
-    .filter((entry) => entry.isDirectory && entry.path.endsWith(".exact"))
-    .sort(deepestFirst);
-  for (const entry of exactDirectories) {
-    await rename(
-      entry.path,
-      join(dirname(entry.path), `exact_${basename(entry.path).replace(/\.exact$/, "")}`),
-    );
-  }
-}
-
-async function convertExecutableFiles(distDir: string): Promise<void> {
-  const executableFiles = (await collectEntries(distDir)).filter(
-    (entry) => !entry.isDirectory && entry.path.endsWith(".executable"),
-  );
-  for (const entry of executableFiles) {
-    await rename(
-      entry.path,
-      join(dirname(entry.path), `executable_${basename(entry.path).replace(/\.executable$/, "")}`),
-    );
-  }
-}
-
-async function convertSymlinkFiles(distDir: string): Promise<void> {
-  const symlinkFiles = (await collectEntries(distDir)).filter(
-    (entry) =>
-      !entry.isDirectory &&
-      entry.path.endsWith(".symlink") &&
-      !relative(distDir, entry.path).includes(".chezmoi"),
-  );
-  for (const entry of symlinkFiles) {
-    await rename(
-      entry.path,
-      join(dirname(entry.path), `symlink_${basename(entry.path).replace(/\.symlink$/, "")}`),
-    );
-  }
-}
-
 async function composeMergeTargets(distDir: string, homeRoot: string): Promise<void> {
   const targets = await collectMergeTargets(distDir);
   for (const target of targets) {
@@ -365,15 +304,9 @@ function parseLayer(content: string, format: FileFormat): Layer {
   return { normal, operations };
 }
 
-// Apply one parsed layer to a base value following pre-chezmoi.spec.md §9.
+// Apply one parsed layer to a base value following the spec §パッチ適用.
 function applyLayer(base: unknown, layer: Layer): unknown {
   return applyOperations(deepMerge(base, layer.normal), layer.operations);
-}
-
-// Apply a YAML patch layer (pre-chezmoi.spec.md §9) to a base value. Exported
-// for local hooks that merge machine-specific config layers.
-export function applyYamlPatch(base: unknown, yamlContent: string): unknown {
-  return applyLayer(base, parseLayer(yamlContent, "yaml"));
 }
 
 type ParsedPairs = { normal: PlainObject; hasOperations: boolean };
@@ -685,14 +618,6 @@ async function collectEntries(directory: string): Promise<Entry[]> {
     if (isDirectory) entries.push(...(await collectEntries(path)));
   }
   return entries;
-}
-
-function deepestFirst(left: Entry, right: Entry): number {
-  return pathDepth(right.path) - pathDepth(left.path);
-}
-
-function pathDepth(path: string): number {
-  return path.split(sep).length;
 }
 
 if (import.meta.main) {

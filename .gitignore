@@ -1,6 +1,5 @@
 dist
 node_modules
-chezmoi-collate.jsonl
 
 dotfiles/.gitconfig.local
 dotfiles/.secrets.sh

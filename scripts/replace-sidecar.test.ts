@@ -67,8 +67,8 @@ replacements:
     assert.equal(await readFile(join(distRoot, "generated.conf"), "utf8"), "seeded");
   });
 
-  it("resolves the home path through the mapping with transitional chezmoi naming", async () => {
-    await put(homeRoot, ".config/kit/settings.conf", "mode=demo\n");
+  it("resolves the rendered home path verbatim for plain names", async () => {
+    await put(homeRoot, "dot_config/exact_kit/settings.conf", "mode=demo\n");
     await put(distRoot, "dot_config/exact_kit/settings.conf.replace.yaml", `
 replacements:
   - pattern: "mode=demo"

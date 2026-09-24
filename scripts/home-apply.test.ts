@@ -268,18 +268,14 @@ describe("apply classification matrix", () => {
     assert.equal(existsSync(join(homeRoot, "c.txt")), false, "later entry not applied");
   });
 
-  it("applies transitional chezmoi-named dist entries to mapped home paths", async () => {
-    await put(distRoot, "dot_config/executable_tool", "#!/bin/sh\n");
-    await put(distRoot, "exact_kit/keep.txt", "same\n");
-    await put(homeRoot, ".config/tool", "#!/bin/sh\n");
-    await put(homeRoot, "kit/keep.txt", "same\n");
-    await put(homeRoot, "kit/stale.txt", "old\n");
+  it("treats chezmoi-prefix names as plain entries during apply", async () => {
+    await put(distRoot, "dot_config/tool", "new\n");
+    await put(homeRoot, "dot_config/tool", "old\n");
 
     await diffAndApply();
 
-    assert.ok(((await stat(join(homeRoot, ".config/tool"))).mode & 0o100) !== 0);
-    assert.equal(existsSync(join(homeRoot, "kit/stale.txt")), false);
-    assert.equal(existsSync(join(homeRoot, "kit/keep.txt")), true);
+    assert.equal(await readFile(join(homeRoot, "dot_config/tool"), "utf8"), "new\n");
+    assert.equal(existsSync(join(homeRoot, ".config")), false);
   });
 
   it("does not touch executable bits on windows", async () => {

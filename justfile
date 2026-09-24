@@ -19,35 +19,17 @@ install:
 install:
   gsudo pwsh undotfiles/install/windows.ps1
 
-[linux]
 apply:
   bun pre-chezmoi.ts
-  chezmoi apply -c chezmoi.yaml --force
+  bun scripts/home-apply.ts dist ~
 
-[windows]
-apply:
-  bun pre-chezmoi.ts
-  chezmoi apply -c chezmoi.yaml --force
-
-[linux]
 diff:
   bun pre-chezmoi.ts
-  chezmoi diff -c chezmoi.yaml
+  bun scripts/home-diff.ts dist ~
 
-[windows]
-diff:
-  bun pre-chezmoi.ts
-  chezmoi diff -c chezmoi.yaml
-
-[linux]
 managed:
   bun pre-chezmoi.ts
-  chezmoi managed -c chezmoi.yaml
-
-[windows]
-managed:
-  bun pre-chezmoi.ts
-  chezmoi managed -c chezmoi.yaml
+  bun scripts/home-diff.ts --managed dist ~
 
 [windows]
 winconfig:
