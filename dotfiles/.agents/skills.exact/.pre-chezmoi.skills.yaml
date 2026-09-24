@@ -76,10 +76,9 @@ externalSkills:
         - 生きているセッションが突然死んだら、server が hung している可能性がある。
           `browse server restart` で server を再起動してセッションを開き直す
         - server の起動は browse CLI 経由に限る（`browse server start` / `browse server restart`）。
-          server は起動時に MOZ_DISABLE_*_SANDBOX=1 をブラウザプロセスへ自動設定し、
-          sandboxed 環境で Firefox のプロセスサンドボックスが無反応で固まる問題
-          （Chrome の --no-sandbox と同根）を回避している。browse CLI を介さず
-          camoufox を直接起動した場合、この設定がなく無反応で固まる
+          Firefox の process sandbox は有効なまま起動する。sandboxed-tools は全 filesystem
+          を read-only bind する場合も新しい `/proc` mount を後から適用し、Firefox と
+          GTK の nested `bwrap` helper が必要な user namespace を作れるようにする
 
         ## CAPTCHA・ログインを人間へ引き継ぐ
 

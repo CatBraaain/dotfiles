@@ -972,9 +972,9 @@ export class Sandbox {
   }
 
   buildArgs(mode: "fs" | "bash", commandCwd = this.cwd): string[] {
-    const args = ["--die-with-parent", "--proc", "/proc"];
+    const args = ["--die-with-parent"];
     if (this.readAllPaths()) args.push("--ro-bind", "/", "/");
-    args.push("--dev", "/dev");
+    args.push("--proc", "/proc", "--dev", "/dev");
     if (mode === "bash") {
       // Keep GPU device binds optional across native Linux and WSL environments.
       for (const devicePath of ["/dev/dxg", "/dev/dri"])

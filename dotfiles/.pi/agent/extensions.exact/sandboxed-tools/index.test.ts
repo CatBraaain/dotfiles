@@ -4319,6 +4319,12 @@ describe("§6.1 bind とパスの実在保証", () => {
       const args = new Sandbox("/cwd", configPath).buildArgs("fs");
       const rootBindAt = args.indexOf("/");
       assert.deepEqual(args.slice(rootBindAt - 1, rootBindAt + 2), ["--ro-bind", "/", "/"]);
+      const procMountAt = args.indexOf("--proc");
+      assert.ok(
+        procMountAt > rootBindAt,
+        "the fresh proc mount must remain visible over the root bind",
+      );
+      assert.deepEqual(args.slice(procMountAt, procMountAt + 2), ["--proc", "/proc"]);
     }),
   );
 

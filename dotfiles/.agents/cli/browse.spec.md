@@ -129,7 +129,7 @@ Xvfb `:99` 上の headed browser を VNC で人間へ引き継ぐための接続
 | `CAMOUFOX_HEADLESS=0` | headed |
 | それ以外（未指定・1 と 0 以外の値） | Windows は headless、Windows 以外の OS は headed |
 
-headless のときは Xvfb も x11vnc も起動しない。headed のとき、server は起動時に次のとおり補助プロセスを整える:
+headless のときは Xvfb も x11vnc も起動しない。headless と headed の両方で Firefox の content・GMP・RDD・socket process sandbox を有効に保つ。headed のとき、server は起動時に次のとおり補助プロセスを整える:
 
 - ディスプレイの socket（`/tmp/.X11-unix/X99`。ファイルシステム socket または Linux abstract socket）が存在しなければ `Xvfb :99` をバックグラウンドで起動し、socket が出現するのを待ってからブラウザを起動する。10 秒以内に出現しなければ起動を断念し、server はエラーメッセージを出力して終了コード 1 で終わる
 - ブラウザは起動時に `DISPLAY=:99` と Wayland の無効化（`MOZ_ENABLE_WAYLAND=0`）を与えられ、ウィンドウは Xvfb の :99 へ出る。`WAYLAND_DISPLAY` がある環境（WSLg など）でも、実画面（Wayland・XWayland を含む）にはウィンドウを表示しない

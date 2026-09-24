@@ -13,7 +13,6 @@ const piPackageDir = resolve(
   "..",
 );
 
-
 function runToolsCli(toolName: string, request: unknown) {
   return spawnSync("bun", [runToolsPath, toolName], {
     input: JSON.stringify(request),
@@ -197,6 +196,48 @@ describe("Sandbox.runTool（bwrap 統合）", () => {
         content: { type: string; text: string }[];
       };
       assert.equal(readResult.content[0]?.text, "through bwrap");
+    }),
+  );
+
+  it(
+    'read.allow "*" keeps nested user namespaces usable inside bwrap',
+    withTempDir(async (dir) => {
+      const nestedArgs = [
+        "--unshare-user",
+        "--uid",
+        "0",
+        "--gid",
+        "0",
+        "--ro-bind",
+        "/",
+        "/",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--",
+        "sh",
+        "-c",
+        "cat /proc/self/uid_map",
+      ];
+      const nestedProbe = spawnSync("bwrap", nestedArgs, { encoding: "utf8" });
+      if (nestedProbe.status !== 0) {
+        console.log("nested user namespaces unavailable, skipping nested bwrap integration test");
+        return;
+      }
+
+      const configPath = join(dir, "config.yaml");
+      writeFileSync(configPath, 'read:\n  - {allow: "*"}\n');
+      const sandbox = new Sandbox(dir, configPath);
+      const nestedCommand = `bwrap ${nestedArgs.slice(0, -1).join(" ")} '${nestedArgs.at(-1)}'`;
+      const result = (await sandbox.runTool(
+        "bash",
+        { command: nestedCommand },
+        { mode: "bash" },
+      )) as { isError?: boolean; content: { type: string; text: string }[] };
+
+      assert.equal(result.isError, undefined);
+      assert.match(result.content[0]?.text ?? "", /^\s*0\s+\d+\s+\d+/m);
     }),
   );
 });
