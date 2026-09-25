@@ -1,8 +1,8 @@
 // Apply engine between a dist tree and a home tree (spec:
-// SPEC.md §適用, §フックシステム, §run スクリプト).
+// SPEC.md §適用, §フックシステム, §apply スクリプト).
 // Consumes the classification produced by diff.ts, writes the home tree,
-// and runs pre/post-apply hooks and run scripts. The build stage (dist
-// generation) is a separate stage and not part of this file.
+// and runs apply scripts. The build stage (dist generation) is a separate
+// stage and not part of this file.
 
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } from "node:fs/promises";
@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   collectDifferences,
-  isRunScriptName,
+  isApplyScriptName,
   main as diffMain,
   mapSegment,
   type DiffEntry,
@@ -51,18 +51,14 @@ declare global {
 }
 
 export type ApplyResult = { added: string[]; changed: string[]; removed: string[] };
-export type HookPayload = { added: string[]; changed: string[]; removed: string[] };
-export type LifecycleHook = { distPath: string; folderRel: string; homeFolderRel: string };
-export type RunScript = {
+export type ApplyScript = {
   distPath: string;
   fileName: string;
   folderRel: string;
   homeFolderRel: string;
 };
 export type Declarations = {
-  preApply: LifecycleHook[];
-  postApply: LifecycleHook[];
-  runScripts: RunScript[];
+  applyScripts: ApplyScript[];
 };
 
 type DirentLike = { name: string; isDirectory(): boolean; isFile(): boolean };
@@ -109,16 +105,14 @@ export async function applyDifferences(
   return applied;
 }
 
-// Finds .pre-apply.ts / .post-apply.ts hooks and run scripts in a built dist
-// tree (spec §フックシステム, §run スクリプト). node_modules and folders whose
-// names are excluded from diffing are skipped; ordering is folder-relative
-// path first (parents before children), then file name.
+// Finds apply scripts in a built dist tree (spec §apply スクリプト).
+// node_modules and folders whose names are excluded from diffing are skipped;
+// ordering is folder-relative path first (parents before children), then file
+// name.
 export async function collectDeclarations(distRoot: string): Promise<Declarations> {
-  const declarations: Declarations = { preApply: [], postApply: [], runScripts: [] };
+  const declarations: Declarations = { applyScripts: [] };
   await walkDeclarations(distRoot, "", declarations);
-  declarations.preApply.sort((left, right) => compareFolderRel(left.folderRel, right.folderRel));
-  declarations.postApply.sort((left, right) => compareFolderRel(left.folderRel, right.folderRel));
-  declarations.runScripts.sort(
+  declarations.applyScripts.sort(
     (left, right) =>
       compareFolderRel(left.folderRel, right.folderRel) ||
       compareCodeUnits(left.fileName, right.fileName),
@@ -126,57 +120,22 @@ export async function collectDeclarations(distRoot: string): Promise<Declaration
   return declarations;
 }
 
-// Runs pre/post-apply hooks (spec §フックシステム): each hook is a separate
-// bun child process with its cwd at the hook folder's home directory (created
-// if missing), receiving the payload scoped to its folder as JSON on stdin.
-// A non-zero exit aborts the remaining hooks.
-export async function runLifecycleHooks(
-  hooks: LifecycleHook[],
-  distRoot: string,
-  homeRoot: string,
-  payload: HookPayload,
-  label: string,
-): Promise<void> {
-  for (const hook of hooks) {
-    const cwd = join(homeRoot, hook.homeFolderRel);
-    await mkdir(cwd, { recursive: true });
-    const stdinText = JSON.stringify(scopedPayload(payload, hook.homeFolderRel));
-    await spawnChild(
-      [process.execPath, join(distRoot, hook.distPath)],
-      cwd,
-      stdinText,
-      `${label} failed: ${hook.distPath}`,
-    );
-  }
-}
-
-// Runs run scripts (spec §run スクリプト) after the post-apply hooks: each
-// script runs with its cwd at the script folder's home directory (created if
+// Runs apply scripts (spec §apply スクリプト) after applying: each script
+// runs with its cwd at the script folder's home directory (created if
 // missing), via its shebang interpreter or pwsh for .ps1. A non-zero exit
 // aborts the remaining scripts.
-export async function runRunScripts(
-  runs: RunScript[],
+export async function runApplyScripts(
+  scripts: ApplyScript[],
   distRoot: string,
   homeRoot: string,
 ): Promise<void> {
-  for (const run of runs) {
-    const cwd = join(homeRoot, run.homeFolderRel);
+  for (const script of scripts) {
+    const cwd = join(homeRoot, script.homeFolderRel);
     await mkdir(cwd, { recursive: true });
-    const command = await resolveRunCommand(run, join(distRoot, run.distPath));
-    command.push(join(distRoot, run.distPath));
-    await spawnChild(command, cwd, "ignore", `run script failed: ${run.distPath}`);
+    const command = await resolveApplyCommand(script, join(distRoot, script.distPath));
+    command.push(join(distRoot, script.distPath));
+    await spawnChild(command, cwd, "ignore", `apply script failed: ${script.distPath}`);
   }
-}
-
-// Hook payload of the planned apply (spec §フックシステム): additions and
-// changes, plus removals from removal propagation. Type mismatches appear
-// both as a removal (the old entry) and an addition (the new one).
-export function plannedPayload(result: DiffResult): HookPayload {
-  return {
-    added: pathsOf([...result.added, ...result.typeMismatches]),
-    changed: pathsOf(result.changed),
-    removed: pathsOf([...result.removedExact, ...result.typeMismatches]),
-  };
 }
 
 export function parseArgs(argv: readonly string[]): {
@@ -198,9 +157,8 @@ export function parseArgs(argv: readonly string[]): {
   };
 }
 
-// Lifecycle without the build stage: diff detection → pre-apply hooks →
-// apply → post-apply hooks → run_ scripts. --dry-run renders the diff only
-// (no writes, no hooks, no run scripts).
+// Lifecycle without the build stage: diff detection → apply → apply
+// scripts. --dry-run renders the diff only (no writes, no apply scripts).
 export async function main(argv: readonly string[]): Promise<number> {
   const options = parseArgs(argv);
   if (options.dryRun) return diffMain(options.rest);
@@ -217,14 +175,6 @@ export async function main(argv: readonly string[]): Promise<number> {
   );
 
   const declarations = await collectDeclarations(distRoot);
-  await runLifecycleHooks(
-    declarations.preApply,
-    distRoot,
-    homeRoot,
-    plannedPayload(result),
-    "pre-apply hook",
-  );
-  writeLine(`pre-apply: ${declarations.preApply.length} hooks`);
 
   const applied = await applyDifferences(distRoot, homeRoot, result);
   writeLine(
@@ -232,17 +182,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       `${applied.removed.length} removed`,
   );
 
-  await runLifecycleHooks(
-    declarations.postApply,
-    distRoot,
-    homeRoot,
-    applied,
-    "post-apply hook",
-  );
-  writeLine(`post-apply: ${declarations.postApply.length} hooks`);
-
-  await runRunScripts(declarations.runScripts, distRoot, homeRoot);
-  writeLine(`run: ${declarations.runScripts.length} scripts`);
+  await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+  writeLine(`apply scripts: ${declarations.applyScripts.length} scripts`);
   return 0;
 }
 
@@ -341,14 +282,8 @@ async function walkDeclarations(
       continue;
     }
     if (!entry.isFile()) continue;
-    if (entry.name === ".pre-apply.ts" || entry.name === ".post-apply.ts")
-      out[entry.name === ".pre-apply.ts" ? "preApply" : "postApply"].push({
-        distPath: childRel,
-        folderRel: dirRel,
-        homeFolderRel: homeFolderOf(dirRel),
-      });
-    else if (isRunScriptName(entry.name))
-      out.runScripts.push({
+    if (isApplyScriptName(entry.name))
+      out.applyScripts.push({
         distPath: childRel,
         fileName: entry.name,
         folderRel: dirRel,
@@ -405,35 +340,19 @@ async function spawnChild(
   }
 }
 
-async function resolveRunCommand(run: RunScript, runAbs: string): Promise<string[]> {
-  const content = await readFile(runAbs, "utf8");
+async function resolveApplyCommand(script: ApplyScript, scriptAbs: string): Promise<string[]> {
+  const content = await readFile(scriptAbs, "utf8");
   const firstLine = content.split("\n", 1)[0] ?? "";
   if (firstLine.startsWith("#!")) {
     const parts = firstLine.slice(2).trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) throw new Error(`run script has an empty shebang: ${run.distPath}`);
+    if (parts.length === 0) throw new Error(`apply script has an empty shebang: ${script.distPath}`);
     return parts;
   }
-  if (run.fileName.toLowerCase().endsWith(".ps1")) return ["pwsh"];
-  throw new Error(`run script has neither a shebang nor a .ps1 extension: ${run.distPath}`);
+  if (script.fileName.toLowerCase().endsWith(".ps1")) return ["pwsh"];
+  throw new Error(`apply script has neither a shebang nor a .ps1 extension: ${script.distPath}`);
 }
 
 // -------------------------------------------------------------------- helpers
-
-function scopedPayload(payload: HookPayload, folder: string): HookPayload {
-  return {
-    added: payload.added.filter((homePath) => isInFolder(homePath, folder)),
-    changed: payload.changed.filter((homePath) => isInFolder(homePath, folder)),
-    removed: payload.removed.filter((homePath) => isInFolder(homePath, folder)),
-  };
-}
-
-function isInFolder(homePath: string, folder: string): boolean {
-  return folder === "" || homePath === folder || homePath.startsWith(`${folder}/`);
-}
-
-function pathsOf(entries: DiffEntry[]): string[] {
-  return entries.map((entry) => entry.homePath).sort(compareCodeUnits);
-}
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;

@@ -25,9 +25,7 @@ import {
   collectDeclarations,
   main,
   parseArgs,
-  plannedPayload,
-  runLifecycleHooks,
-  runRunScripts,
+  runApplyScripts,
   type ApplyResult,
 } from "./apply.ts";
 
@@ -69,38 +67,11 @@ async function diffAndApply(platform = process.platform): Promise<ApplyResult> {
   return applyDifferences(distRoot, homeRoot, result, platform);
 }
 
-// A hook script that records its cwd and the stdin payload in its cwd.
-async function putRecordingHook(rootDir: string, path: string): Promise<void> {
-  await put(
-    rootDir,
-    path,
-    'const payload = JSON.parse(await Bun.stdin.text());\n' +
-      'await Bun.write("hook-out.json", JSON.stringify({ cwd: process.cwd(), payload }));\n',
-  );
-}
-
-type HookOutput = { cwd: string; payload: { added: string[]; changed: string[]; removed: string[] } };
-
-async function readHookOutput(rootDir: string, path: string): Promise<HookOutput> {
-  return JSON.parse(await readFile(join(rootDir, path), "utf8"));
-}
-
-// A hook script that appends "tag:cwd" lines to a shared file.
-async function putOrderHook(
+async function putApplyScript(
   rootDir: string,
   path: string,
-  tag: string,
-  orderFile: string,
+  body = "pwd > apply-out.txt",
 ): Promise<void> {
-  await put(
-    rootDir,
-    path,
-    `const fs = await import("node:fs/promises");\n` +
-      `await fs.appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(tag)} + ":" + process.cwd() + "\\n");\n`,
-  );
-}
-
-async function putRunScript(rootDir: string, path: string, body = "pwd > run-out.txt"): Promise<void> {
   await put(rootDir, path, `#!/bin/sh\n${body}\n`);
 }
 
@@ -287,151 +258,37 @@ describe("apply classification matrix", () => {
   });
 });
 
-describe("lifecycle hooks", () => {
-  it("passes the planned payload as JSON on stdin to a root hook", async () => {
-    await put(distRoot, "new.txt", "x\n");
-    await putRecordingHook(distRoot, ".pre-apply.ts");
-    const result = await collectDifferences(distRoot, homeRoot, "linux");
-
-    await runLifecycleHooks(
-      (await collectDeclarations(distRoot)).preApply,
-      distRoot,
-      homeRoot,
-      plannedPayload(result),
-      "pre-apply hook",
-    );
-
-    const output = await readHookOutput(homeRoot, "hook-out.json");
-    assert.equal(output.cwd, homeRoot);
-    assert.deepEqual(output.payload.added, ["new.txt"]);
-    assert.deepEqual(output.payload.changed, []);
-    assert.deepEqual(output.payload.removed, []);
-  });
-
-  it("scopes the payload to the hook folder", async () => {
-    await put(distRoot, "pkg/in.txt", "x\n");
-    await put(distRoot, "other/out.txt", "y\n");
-    await putRecordingHook(distRoot, "pkg/.pre-apply.ts");
-    const result = await collectDifferences(distRoot, homeRoot, "linux");
-
-    await runLifecycleHooks(
-      (await collectDeclarations(distRoot)).preApply,
-      distRoot,
-      homeRoot,
-      plannedPayload(result),
-      "pre-apply hook",
-    );
-
-    const output = await readHookOutput(homeRoot, join("pkg", "hook-out.json"));
-    // The parent directory counts as an addition too; other/out.txt must not appear.
-    assert.deepEqual(output.payload.added, ["pkg", "pkg/in.txt"]);
-  });
-
-  it("runs each hook in its folder's home directory with the .exact suffix stripped", async () => {
-    await put(distRoot, "cfg.exact/new.txt", "x\n");
-    await putRecordingHook(distRoot, "cfg.exact/.pre-apply.ts");
-    const result = await collectDifferences(distRoot, homeRoot, "linux");
-
-    await runLifecycleHooks(
-      (await collectDeclarations(distRoot)).preApply,
-      distRoot,
-      homeRoot,
-      plannedPayload(result),
-      "pre-apply hook",
-    );
-
-    const output = await readHookOutput(homeRoot, join("cfg", "hook-out.json"));
-    assert.equal(output.cwd, join(homeRoot, "cfg"));
-  });
-
-  it("runs hooks parent-first in folder order", async () => {
-    const orderFile = join(root, "order.txt");
-    await putOrderHook(distRoot, "z/.pre-apply.ts", "z", orderFile);
-    await putOrderHook(distRoot, "a/b/.pre-apply.ts", "a/b", orderFile);
-    await putOrderHook(distRoot, "a/.pre-apply.ts", "a", orderFile);
-    const declarations = await collectDeclarations(distRoot);
-
-    await runLifecycleHooks(declarations.preApply, distRoot, homeRoot, {
-      added: [],
-      changed: [],
-      removed: [],
-    }, "pre-apply hook");
-
-    const order = await readFile(orderFile, "utf8");
-    assert.deepEqual(
-      order.trim().split("\n").map((line) => line.split(":")[0]),
-      ["a", "a/b", "z"],
-    );
-  });
-
-  it("passes the applied result to a post-apply hook", async () => {
-    await put(distRoot, "dir.exact/keep.txt", "same\n");
-    await put(homeRoot, "dir/keep.txt", "same\n");
-    await put(homeRoot, "dir/stale.txt", "old\n");
-    await putRecordingHook(distRoot, "dir.exact/.post-apply.ts");
-    const result = await collectDifferences(distRoot, homeRoot, "linux");
-    const applied = await applyDifferences(distRoot, homeRoot, result, "linux");
-
-    await runLifecycleHooks(
-      (await collectDeclarations(distRoot)).postApply,
-      distRoot,
-      homeRoot,
-      applied,
-      "post-apply hook",
-    );
-
-    const output = await readHookOutput(homeRoot, join("dir", "hook-out.json"));
-    assert.deepEqual(output.payload.removed, ["dir/stale.txt"]);
-    assert.deepEqual(output.payload.added, []);
-  });
-
-  it("creates a missing home folder for a hook cwd", async () => {
-    await putRecordingHook(distRoot, "brand/new/.post-apply.ts");
-    const declarations = await collectDeclarations(distRoot);
-
-    await runLifecycleHooks(declarations.postApply, distRoot, homeRoot, {
-      added: [],
-      changed: [],
-      removed: [],
-    }, "post-apply hook");
-
-    const output = await readHookOutput(homeRoot, join("brand", "new", "hook-out.json"));
-    assert.equal(output.cwd, join(homeRoot, "brand", "new"));
-  });
-
+describe("apply scripts", () => {
   it("collects declarations skipping node_modules and excluded folders", async () => {
-    await putRecordingHook(distRoot, "ok/.pre-apply.ts");
-    await putRecordingHook(distRoot, join("node_modules", "pkg", ".pre-apply.ts"));
-    await put(distRoot, ".build.d/hidden/.pre-apply.ts", "hook\n");
-    await putRunScript(distRoot, join("node_modules", "pkg", "x.run.sh"));
-    await putRunScript(distRoot, "ok/y.run.sh");
+    await putApplyScript(distRoot, join("node_modules", "pkg", "x.apply.sh"));
+    await put(distRoot, ".build.d/hidden/x.apply.sh", "script\n");
+    await putApplyScript(distRoot, "ok/y.apply.sh");
 
     const declarations = await collectDeclarations(distRoot);
 
-    assert.deepEqual(declarations.preApply.map((hook) => hook.distPath), ["ok/.pre-apply.ts"]);
-    assert.deepEqual(declarations.runScripts.map((run) => run.distPath), ["ok/y.run.sh"]);
+    assert.deepEqual(declarations.applyScripts.map((script) => script.distPath), [
+      "ok/y.apply.sh",
+    ]);
   });
-});
 
-describe("run scripts", () => {
   it("runs a shebang script via its interpreter in the mapped home folder", async () => {
-    await putRunScript(distRoot, "tools/setup.run.sh");
+    await putApplyScript(distRoot, "tools/setup.apply.sh");
     const declarations = await collectDeclarations(distRoot);
 
-    await runRunScripts(declarations.runScripts, distRoot, homeRoot);
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    const output = await readFile(join(homeRoot, "tools", "run-out.txt"), "utf8");
+    const output = await readFile(join(homeRoot, "tools", "apply-out.txt"), "utf8");
     assert.equal(output.trim(), join(homeRoot, "tools"));
   });
 
   it("runs scripts in folder then filename order", async () => {
-    const orderFile = join(root, "run-order.txt");
-    await putRunScript(distRoot, "pkg/second.run.sh", `echo b >> ${JSON.stringify(orderFile)}`);
-    await putRunScript(distRoot, "pkg/first.run.sh", `echo a >> ${JSON.stringify(orderFile)}`);
-    await putRunScript(distRoot, "aaa/early.run.sh", `echo c >> ${JSON.stringify(orderFile)}`);
+    const orderFile = join(root, "apply-order.txt");
+    await putApplyScript(distRoot, "pkg/second.apply.sh", `echo b >> ${JSON.stringify(orderFile)}`);
+    await putApplyScript(distRoot, "pkg/first.apply.sh", `echo a >> ${JSON.stringify(orderFile)}`);
+    await putApplyScript(distRoot, "aaa/early.apply.sh", `echo c >> ${JSON.stringify(orderFile)}`);
     const declarations = await collectDeclarations(distRoot);
 
-    await runRunScripts(declarations.runScripts, distRoot, homeRoot);
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
     assert.deepEqual(
       (await readFile(orderFile, "utf8")).trim().split("\n"),
@@ -440,61 +297,45 @@ describe("run scripts", () => {
   });
 
   it("errors on a script without shebang or .ps1 extension and stops the queue", async () => {
-    await put(distRoot, "pkg/bad.run.sh", "pwd > never.txt\n");
-    await putRunScript(distRoot, "pkg/good.run.sh");
+    await put(distRoot, "pkg/bad.apply.sh", "pwd > never.txt\n");
+    await putApplyScript(distRoot, "pkg/good.apply.sh");
     const declarations = await collectDeclarations(distRoot);
 
     await assert.rejects(
-      runRunScripts(declarations.runScripts, distRoot, homeRoot),
-      /run script has neither a shebang nor a \.ps1 extension: pkg\/bad\.run\.sh/,
+      runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
+      /apply script has neither a shebang nor a \.ps1 extension: pkg\/bad\.apply\.sh/,
     );
-    assert.equal(existsSync(join(homeRoot, "pkg", "run-out.txt")), false);
+    assert.equal(existsSync(join(homeRoot, "pkg", "apply-out.txt")), false);
   });
 
   it("stops remaining scripts on a non-zero exit", async () => {
-    await putRunScript(distRoot, "fail.run.sh", "exit 3");
-    await putRunScript(distRoot, "late.run.sh");
+    await putApplyScript(distRoot, "fail.apply.sh", "exit 3");
+    await putApplyScript(distRoot, "late.apply.sh");
     const declarations = await collectDeclarations(distRoot);
 
     await assert.rejects(
-      runRunScripts(declarations.runScripts, distRoot, homeRoot),
-      /run script failed: fail\.run\.sh \(exit code 3\)/,
+      runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
+      /apply script failed: fail\.apply\.sh \(exit code 3\)/,
     );
-    assert.equal(existsSync(join(homeRoot, "run-out.txt")), false);
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
   });
 });
 
 const pwshPath = Bun.which("pwsh");
 
-describe("run scripts on windows shell", () => {
+describe("apply scripts on windows shell", () => {
   it.skipIf(pwshPath === null)("runs a .ps1 script via pwsh", async () => {
-    await put(distRoot, "ps/task.run.ps1", 'Set-Content -Path "ps-out.txt" -Value "done"\n');
+    await put(distRoot, "ps/task.apply.ps1", 'Set-Content -Path "ps-out.txt" -Value "done"\n');
     const declarations = await collectDeclarations(distRoot);
 
-    await runRunScripts(declarations.runScripts, distRoot, homeRoot);
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
     const output = await readFile(join(homeRoot, "ps", "ps-out.txt"), "utf8");
     assert.equal(output.trim(), "done");
   });
 });
 
-describe("planned payload and CLI", () => {
-  it("merges type mismatches into added and removed of the planned payload", async () => {
-    await put(distRoot, "entry/inner.txt", "x\n");
-    await put(homeRoot, "entry", "i was a file\n");
-    await put(homeRoot, "stale.exact-scope", "old\n");
-    await put(distRoot, "keep.txt", "same\n");
-    await put(homeRoot, "keep.txt", "same\n");
-    const result = await collectDifferences(distRoot, homeRoot, "linux");
-    // Simulate an exact-scope surplus to exercise the removed list.
-    result.removedExact.push({ homePath: "stale.exact-scope", distPath: null });
-
-    const payload = plannedPayload(result);
-
-    assert.deepEqual(payload.added, ["entry"]);
-    assert.deepEqual(payload.removed, ["entry", "stale.exact-scope"]);
-  });
-
+describe("CLI", () => {
   it("parses --dry-run separately, requires the home root, and expands ~", async () => {
     const parsed = parseArgs(["--dry-run", "dist", "~", "--json"]);
     assert.equal(parsed.dryRun, true);
@@ -509,23 +350,22 @@ describe("planned payload and CLI", () => {
     assert.throws(() => parseArgs(["only-dist"]), /usage:/);
   });
 
-  it("applies, hooks, and runs end to end", async () => {
+  it("applies and runs an apply script end to end", async () => {
     await put(distRoot, "a.txt", "new\n");
-    await putRunScript(distRoot, "final.run.sh");
+    await putApplyScript(distRoot, "final.apply.sh");
     const declarations = await collectDeclarations(distRoot);
-    assert.equal(declarations.runScripts.length, 1);
+    assert.equal(declarations.applyScripts.length, 1);
 
     const exitCode = await main([distRoot, homeRoot]);
 
     assert.equal(exitCode, 0);
     assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
-    assert.equal(existsSync(join(homeRoot, "run-out.txt")), true);
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), true);
   });
 
-  it("runs hooks and run scripts when the dist root is relative", async () => {
+  it("runs an apply script when the dist root is relative", async () => {
     await put(distRoot, "a.txt", "new\n");
-    await putRecordingHook(distRoot, ".post-apply.ts");
-    await putRunScript(distRoot, "final.run.sh");
+    await putApplyScript(distRoot, "final.apply.sh");
     const previousCwd = process.cwd();
     process.chdir(root);
     try {
@@ -536,28 +376,6 @@ describe("planned payload and CLI", () => {
     }
 
     assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
-    const hookOutput = await readHookOutput(homeRoot, "hook-out.json");
-    assert.equal(hookOutput.cwd, homeRoot);
-    assert.equal(existsSync(join(homeRoot, "run-out.txt")), true);
-  });
-
-  it("skips the apply when a pre-apply hook fails", async () => {
-    await put(distRoot, "a.txt", "new\n");
-    await put(distRoot, ".pre-apply.ts", "process.exit(1);\n");
-
-    await assert.rejects(main([distRoot, homeRoot]), /pre-apply hook failed/);
-
-    assert.equal(existsSync(join(homeRoot, "a.txt")), false);
-  });
-
-  it("skips run scripts when a post-apply hook fails", async () => {
-    await put(distRoot, "a.txt", "new\n");
-    await put(distRoot, ".post-apply.ts", "process.exit(1);\n");
-    await putRunScript(distRoot, "final.run.sh");
-
-    await assert.rejects(main([distRoot, homeRoot]), /post-apply hook failed/);
-
-    assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
-    assert.equal(existsSync(join(homeRoot, "run-out.txt")), false);
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), true);
   });
 });

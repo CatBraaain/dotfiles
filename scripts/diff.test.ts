@@ -322,11 +322,10 @@ describe("path mapping (plain names without legacy prefixes)", () => {
 });
 
 describe("exclusions", () => {
-  it("skips entries starting with .build, .pre-apply or .post-apply and files ending in .build.ts", async () => {
+  it("skips entries starting with .build and files ending in .build.ts or .apply.<ext>", async () => {
     await put(distRoot, "setup.build.ts", "hook\n");
     await put(distRoot, ".build-map.md", "map\n");
-    await put(distRoot, ".pre-apply.ts", "hook\n");
-    await put(distRoot, ".post-apply.ts", "hook\n");
+    await put(distRoot, "task.apply.sh", "script\n");
 
     const result = await diff();
 
@@ -356,8 +355,8 @@ describe("exclusions", () => {
     assert.deepEqual(pathsOf(result, "removedIgnored"), []);
   });
 
-  it("skips run scripts, which run at the post-apply point instead", async () => {
-    await put(distRoot, "setup.run.sh", "#!/bin/sh\n");
+  it("skips apply scripts, which run after applying instead", async () => {
+    await put(distRoot, "setup.apply.sh", "#!/bin/sh\n");
 
     const result = await diff();
 

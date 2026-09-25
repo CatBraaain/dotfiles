@@ -159,18 +159,18 @@ export function parseArgs(
 
 // ------------------------------------------------------------ path mapping
 
-const excludedEntryPrefixes = [".build", ".pre-apply", ".post-apply"];
+const excludedEntryPrefixes = [".build"];
 
 // Files only: build hooks (names ending in .build.ts) stay in dist and are
 // never diffed or applied (spec §build: ローカルフック).
 const buildHookNamePattern = /\.build\.ts$/;
 
-// Files only: run scripts (names ending in .run.<ext>) run at the post-apply
-// point and are never placed into home (spec §run スクリプト).
-const runScriptNamePattern = /\.run\.[^.]+$/;
+// Files only: apply scripts (names ending in .apply.<ext>) run after applying
+// and are never placed into home (spec §apply スクリプト).
+const applyScriptNamePattern = /\.apply\.[^.]+$/;
 
-export function isRunScriptName(name: string): boolean {
-  return runScriptNamePattern.test(name);
+export function isApplyScriptName(name: string): boolean {
+  return applyScriptNamePattern.test(name);
 }
 
 export type SegmentMapping = {
@@ -184,7 +184,7 @@ export type SegmentMapping = {
 export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
   const isExcluded =
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
-    (!isDirectory && (isRunScriptName(name) || buildHookNamePattern.test(name)));
+    (!isDirectory && (isApplyScriptName(name) || buildHookNamePattern.test(name)));
   if (isExcluded)
     return {
       homeName: name,

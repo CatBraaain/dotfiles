@@ -1,6 +1,6 @@
 # build spec
 
-`build.run.sh` が dsh plugin の dependency install と bundle build を必要な場合だけ実行するための観測可能な振る舞いを定める。script は home apply の post-apply ライフサイクルにより `~/.dsh/plugins/` を current directory として実行される。
+`build.apply.sh` が dsh plugin の dependency install と bundle build を必要な場合だけ実行するための観測可能な振る舞いを定める。script は home apply の apply ライフサイクルにより `~/.dsh/plugins/` を current directory として実行される。
 
 ## dependency install
 
