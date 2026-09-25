@@ -13,6 +13,7 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 import { mapSegment } from "./diff.ts";
+import { resolveHookCommand } from "./shebang.ts";
 
 declare const Bun: {
   spawn(
@@ -65,7 +66,7 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const hookNamePattern = /\.build\.ts$/;
+const hookNamePattern = /\.build\.[^.]+$/;
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
 const externalFileName = ".build-external.yaml";
 const externalMachineFileName = ".build-external.machine.yaml";
@@ -101,7 +102,11 @@ export async function run(
   await removeMappedEntries(distDir, "", pathMap.removals);
   await fetchExternals(join(sourceDir, externalFileName), distDir);
   await runHooks(
-    hooks.filter((hook) => !isIgnoredTarget(hook.relativeParent, pathMap.removals)),
+    hooks.filter(
+      (hook) =>
+        !isIgnoredTarget(hook.relativeParent, pathMap.removals) &&
+        !isIgnoredTarget(hookRelativePath(hook), pathMap.removals, true),
+    ),
     distDir,
   );
   await removeMappedEntries(distDir, "", pathMap.removals);
@@ -1078,6 +1083,10 @@ async function collectHooks(sourceDir: string): Promise<Hook[]> {
   });
 }
 
+function hookRelativePath(hook: Hook): string {
+  return hook.relativeParent === "" ? hook.name : `${hook.relativeParent}/${hook.name}`;
+}
+
 function compareHookParents(left: string, right: string): number {
   const leftParts = left === "" ? [] : left.split("/");
   const rightParts = right === "" ? [] : right.split("/");
@@ -1112,13 +1121,18 @@ function isIgnoredTarget(relativeParent: string, patterns: string[], isFile = fa
   );
 }
 
-async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
+// Local build hooks (spec: SPEC.md §build: ローカルフック): each hook is a
+// shebang-scripted child process (bun, sh, ...); a hook without a shebang is
+// a spec violation and aborts the build.
+export async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
   for (const hook of hooks) {
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
-    const relativePath =
-      hook.relativeParent === "" ? hook.name : `${hook.relativeParent}/${hook.name}`;
-    const proc = Bun.spawn(["bun", hook.absolutePath], {
+    const relativePath = hookRelativePath(hook);
+    const command = await resolveHookCommand(hook.absolutePath, relativePath);
+    if (!command) throw new Error(`build hook has no shebang: ${relativePath}`);
+    command.push(hook.absolutePath);
+    const proc = Bun.spawn(command, {
       cwd: hookDistDir,
       env: process.env,
       stdin: "ignore",

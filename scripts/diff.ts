@@ -161,9 +161,9 @@ export function parseArgs(
 
 const excludedEntryPrefixes = [".build"];
 
-// Files only: build hooks (names ending in .build.ts) stay in dist and are
+// Files only: build hooks (names ending in .build.<ext>) stay in dist and are
 // never diffed or applied (spec §build: ローカルフック).
-const buildHookNamePattern = /\.build\.ts$/;
+const buildHookNamePattern = /\.build\.[^.]+$/;
 
 // Files only: apply scripts (names ending in .apply.<ext>) run after applying
 // and are never placed into home (spec §apply スクリプト).

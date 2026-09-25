@@ -18,6 +18,7 @@ import {
   type DiffEntry,
   type DiffResult,
 } from "./diff.ts";
+import { resolveHookCommand } from "./shebang.ts";
 
 declare const Bun: {
   spawn(
@@ -341,13 +342,8 @@ async function spawnChild(
 }
 
 async function resolveApplyCommand(script: ApplyScript, scriptAbs: string): Promise<string[]> {
-  const content = await readFile(scriptAbs, "utf8");
-  const firstLine = content.split("\n", 1)[0] ?? "";
-  if (firstLine.startsWith("#!")) {
-    const parts = firstLine.slice(2).trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) throw new Error(`apply script has an empty shebang: ${script.distPath}`);
-    return parts;
-  }
+  const shebang = await resolveHookCommand(scriptAbs, script.distPath);
+  if (shebang) return shebang;
   if (script.fileName.toLowerCase().endsWith(".ps1")) return ["pwsh"];
   throw new Error(`apply script has neither a shebang nor a .ps1 extension: ${script.distPath}`);
 }

@@ -20,6 +20,8 @@ import {
   parseReplaceSidecar,
   readLastPullAt,
   resolveEntryPath,
+  run,
+  runHooks,
   syncMirror,
   type SyncContext,
 } from "./build.ts";
@@ -527,5 +529,57 @@ describe("applyReplacements", () => {
   it("keeps input without any match unchanged and resolves capture references", () => {
     assert.equal(applyReplacements("keep me\n", autoUpdateReplacements), "keep me\n");
     assert.equal(applyReplacements("EnableAutoUpdates=true\n", autoUpdateReplacements), "EnableAutoUpdates=false\n");
+  });
+});
+
+describe("local build hooks", () => {
+  const emptyMap = "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n";
+
+  async function putSource(path: string, content: string): Promise<void> {
+    const absolute = join(root, "dotfiles", path);
+    await mkdir(join(absolute, ".."), { recursive: true });
+    await writeFile(absolute, content);
+  }
+
+  async function putSourceBase(): Promise<void> {
+    await putSource(".build-map.md", emptyMap);
+    await putSource(".build-external.yaml", "externalSkills: {}\n");
+  }
+
+  it("runs a shebang hook as a child process in the dist folder it belongs to", async () => {
+    await putSourceBase();
+    await putSource("vscode/format-settings.build.sh", "#!/bin/sh\npwd > hook-cwd.txt\n");
+    await run(root, "linux", homeRoot);
+    const hookCwd = (await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8")).trim();
+    assert.equal(hookCwd, join(distRoot, "vscode"));
+  });
+
+  it("skips a hook whose own path is mapped for removal and removes it from dist", async () => {
+    await putSource(
+      ".build-map.md",
+      `${emptyMap}| vscode/format-settings.build.sh | - |  |  |\n`,
+    );
+    await putSource(".build-external.yaml", "externalSkills: {}\n");
+    await putSource("vscode/format-settings.build.sh", "#!/bin/sh\ntouch hook-ran.txt\n");
+    await run(root, "linux", homeRoot);
+    assert.ok(!existsSync(join(distRoot, "vscode/hook-ran.txt")));
+    assert.ok(!existsSync(join(distRoot, "vscode/format-settings.build.sh")));
+  });
+
+  it("aborts on a hook without a shebang", async () => {
+    await put(distRoot, "vscode/format-settings.build.sh", "echo hook output\n");
+    await assert.rejects(
+      runHooks(
+        [
+          {
+            absolutePath: join(distRoot, "vscode/format-settings.build.sh"),
+            relativeParent: "vscode",
+            name: "format-settings.build.sh",
+          },
+        ],
+        distRoot,
+      ),
+      /build hook has no shebang: vscode\/format-settings\.build\.sh/,
+    );
   });
 });
