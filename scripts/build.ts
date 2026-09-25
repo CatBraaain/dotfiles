@@ -40,6 +40,7 @@ declare const console: { error(...data: unknown[]): void };
 declare global {
   interface ImportMeta {
     readonly main: boolean;
+    readonly dir: string;
   }
 }
 
@@ -58,6 +59,8 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const hookNamePattern = /\.build\.[^.]+$/;
+const editHookNamePattern = /\.edit\.ts$/;
+const editHookSuffix = ".edit.ts";
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
 
 const fileFormats = {
@@ -89,7 +92,7 @@ export async function run(
   // Hooks are collected from dist once, after the copy. Removals and moves
   // that earlier hooks apply leave later hook files missing in dist; those
   // do not run.
-  await runHooks(await collectHooks(distDir), distDir);
+  await runHooks(await collectHooks(distDir), distDir, homeRoot);
   await composeMergeTargets(distDir, homeRoot);
   await applyReplaceSidecars(distDir, homeRoot);
 }
@@ -127,8 +130,8 @@ function assertPlatform(platform: string): asserts platform is Platform {
 }
 
 // Home-relative path resolution shared by the build stages that read the
-// current home (merge composition, replace sidecars), using the segment
-// mapping of diff.ts (spec §差分検知).
+// current home (merge composition, replace sidecars, edit hooks), using the
+// segment mapping of diff.ts (spec §差分検知).
 function homeRelPath(distRelPath: string): string {
   const segments = distRelPath.split("/");
   return segments
@@ -552,7 +555,7 @@ async function collectHooks(distDir: string): Promise<Hook[]> {
       const entryPath = join(directory, entry.name);
       const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
       if (entry.isDirectory()) await walk(entryPath, childParent);
-      else if (entry.isFile() && hookNamePattern.test(entry.name))
+      else if (entry.isFile() && (hookNamePattern.test(entry.name) || editHookNamePattern.test(entry.name)))
         hooks.push({ absolutePath: entryPath, relativeParent, name: entry.name });
     }
   }
@@ -579,8 +582,13 @@ function compareHookParents(left: string, right: string): number {
   return leftParts.length - rightParts.length;
 }
 
-// Local build hooks (spec: SPEC.md §build: ローカルフック) run as Bun processes.
-export async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
+// Local build hooks (spec: SPEC.md §build: ローカルフック) and edit hooks
+// (spec: SPEC.md §build: edit フック) run as Bun processes.
+export async function runHooks(
+  hooks: Hook[],
+  distDir: string,
+  homeRoot: string,
+): Promise<void> {
   for (const hook of hooks) {
     // Earlier hooks (e.g. the path map) may have removed or moved the files
     // of later hooks in dist; those hooks no longer exist and do not run.
@@ -589,19 +597,59 @@ export async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
     const relativePath = hookRelativePath(hook);
-    const command = resolveHookCommand(hook.absolutePath, relativePath, "build");
-    const proc = Bun.spawn(command, {
-      cwd: hookDistDir,
-      env: process.env,
-      stdin: "ignore",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) {
-      const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
-      throw new Error(`local build hook failed: ${relativePath} (${reason})`);
+
+    if (editHookNamePattern.test(hook.name)) {
+      await runEditHook(hook, hookDistDir, homeRoot);
+      continue;
     }
+
+    const command = resolveHookCommand(hook.absolutePath, relativePath, "build");
+    await runChildProcess(command, hookDistDir, relativePath, "local build hook");
+  }
+}
+
+// Edit hooks receive the target file path in dist and its home counterpart.
+// Reading and writing is left to the hook (spec: SPEC.md §build: edit フック).
+async function runEditHook(hook: Hook, hookDistDir: string, homeRoot: string): Promise<void> {
+  const relativePath = hookRelativePath(hook);
+  const targetRelPath = editTargetRelPath(hook);
+  const targetPath = join(hookDistDir, hook.name.slice(0, -editHookSuffix.length));
+  if (!existsSync(targetPath)) throw new Error(`edit hook target not found: ${relativePath}`);
+  const homePath = join(homeRoot, homeRelPath(targetRelPath));
+  const command = [
+    process.execPath,
+    join(import.meta.dir, "edit-hook-runner.ts"),
+    hook.absolutePath,
+    targetPath,
+    homePath,
+  ];
+  await runChildProcess(command, hookDistDir, relativePath, "edit hook");
+}
+
+function editTargetRelPath(hook: Hook): string {
+  const targetName = hook.name.slice(0, -editHookSuffix.length);
+  if (targetName === "")
+    throw new Error(`edit hook has no target file: ${hookRelativePath(hook)}`);
+  return hook.relativeParent === "" ? targetName : `${hook.relativeParent}/${targetName}`;
+}
+
+async function runChildProcess(
+  command: string[],
+  cwd: string,
+  relativePath: string,
+  kind: string,
+): Promise<void> {
+  const proc = Bun.spawn(command, {
+    cwd,
+    env: process.env,
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
+    throw new Error(`${kind} failed: ${relativePath} (${reason})`);
   }
 }
 

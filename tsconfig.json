@@ -10,6 +10,6 @@
     "noUncheckedIndexedAccess": true,
     "types": []
   },
-  "include": ["scripts/**/*.ts", "dotfiles/**/*.build.ts"],
+  "include": ["scripts/**/*.ts", "dotfiles/**/*.build.ts", "dotfiles/**/*.edit.ts"],
   "exclude": ["scripts/**/*.test.ts"]
 }

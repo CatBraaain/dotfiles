@@ -170,6 +170,22 @@ replacements:
     assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "EnableAutoUpdates=false\n");
     assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
+
+  it("appends the machine layer written in the gitconfig edit hook", async () => {
+    const hook = await readFile(
+      join(import.meta.dir, "../dotfiles/.gitconfig.edit.ts.sample"),
+      "utf-8",
+    );
+    await put(root, "dotfiles/.gitconfig.edit.ts", hook);
+    await put(root, "dotfiles/.gitconfig", "[core]\neditor = code --wait\n");
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(
+      await readFile(join(distRoot, ".gitconfig"), "utf8"),
+      "[core]\neditor = code --wait\n\n[user]\nname = USERNAME\nemail = xxxxxxxxxx+USERNAME@users.noreply.github.com # https://github.com/settings/emails\n",
+    );
+  });
 });
 
 describe("applyReplaceSidecars", () => {
@@ -261,6 +277,57 @@ describe("local build hooks", () => {
     assert.equal(hookCwd, join(distRoot, "vscode"));
   });
 
+  it("runs edit hooks with the dist and home file paths", async () => {
+    await put(
+      root,
+      "dotfiles/app.conf.edit.ts",
+      [
+        `import { readFile, writeFile } from "node:fs/promises";`,
+        `export default async function (distPath: string, homePath: string): Promise<void> {`,
+        `  const base = await readFile(distPath, "utf8");`,
+        `  const home = await readFile(homePath, "utf8");`,
+        `  await writeFile(distPath, base + home);`,
+        `}`,
+      ].join("\n"),
+    );
+    await put(root, "dotfiles/app.conf", "dist:");
+    await put(homeRoot, "app.conf", "home");
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "dist:home");
+  });
+
+  it("runs edit hooks when the home counterpart is missing", async () => {
+    await put(
+      root,
+      "dotfiles/app.conf.edit.ts",
+      [
+        `import { existsSync } from "node:fs";`,
+        `import { readFile, writeFile } from "node:fs/promises";`,
+        `export default async function (distPath: string, homePath: string): Promise<void> {`,
+        `  const base = await readFile(distPath, "utf8");`,
+        `  const home = existsSync(homePath) ? await readFile(homePath, "utf8") : "none";`,
+        `  await writeFile(distPath, base + home);`,
+        `}`,
+      ].join("\n"),
+    );
+    await put(root, "dotfiles/app.conf", "x:");
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "x:none");
+  });
+
+  it("fails when an edit hook target is missing from dist", async () => {
+    await put(root, "dotfiles/missing.edit.ts", `export default function (): void {};`);
+
+    await assert.rejects(
+      run(root, "linux", homeRoot),
+      /edit hook target not found: missing\.edit\.ts/,
+    );
+  });
+
   it("does not run a hook the path-map standard hook removed from dist", async () => {
     const standardHook = await readFile(
       join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
@@ -296,6 +363,7 @@ describe("local build hooks", () => {
           },
         ],
         distRoot,
+        homeRoot,
       ),
       /build hook has unsupported extension: vscode\/format-settings\.build\.sh/,
     );
