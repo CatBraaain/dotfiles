@@ -19,7 +19,7 @@ import {
   loadExternalConfig,
   parseReplaceSidecar,
   readLastPullAt,
-  resolveSkillDir,
+  resolveEntryPath,
   syncMirror,
   type SyncContext,
 } from "./build.ts";
@@ -157,6 +157,52 @@ externalSkills:
 `);
     await assert.rejects(loadExternalConfig(configPath), /\.entries/);
   });
+
+  it("merges the machine layer and lets it override shared repos by key", async () => {
+    const configPath = join(root, ".build-external.yaml");
+    await put(root, ".build-external.yaml", `
+externalSkills:
+  test/shared:
+    destination: a
+    entries:
+      - one
+  test/other:
+    destination: b
+    entries:
+      - two
+`);
+    await put(root, ".build-external.machine.yaml", `
+externalSkills:
+  test/shared:
+    destination: c
+    entries:
+      - three
+`);
+
+    const config = await loadExternalConfig(configPath);
+
+    assert.deepEqual(
+      config.repos.map((repo) => [repo.repo, repo.destination, repo.entries]),
+      [
+        ["test/shared", "c", ["three"]],
+        ["test/other", "b", ["two"]],
+      ],
+    );
+  });
+
+  it("rejects a machine file without an externalSkills mapping", async () => {
+    const configPath = join(root, ".build-external.yaml");
+    await put(root, ".build-external.yaml", `
+externalSkills:
+  test/repo:
+    destination: a
+    entries:
+      - one
+`);
+    await put(root, ".build-external.machine.yaml", "externalSkills: []\n");
+
+    await assert.rejects(loadExternalConfig(configPath), /\.build-external\.machine\.yaml/);
+  });
 });
 
 describe("isPullDue", () => {
@@ -243,15 +289,22 @@ describe("syncMirror", () => {
   });
 });
 
-describe("resolveSkillDir", () => {
+describe("resolveEntryPath", () => {
   it("resolves a single match and rejects zero or multiple matches", async () => {
     const mirrorDir = join(root, "mirror");
     await put(mirrorDir, "skills/eli5/SKILL.md", "x\n");
     await put(mirrorDir, "skills/other/SKILL.md", "y\n");
 
-    assert.equal(await resolveSkillDir(mirrorDir, "skills/eli5"), join(mirrorDir, "skills/eli5"));
-    await assert.rejects(resolveSkillDir(mirrorDir, "skills/missing"), /matched nothing/);
-    await assert.rejects(resolveSkillDir(mirrorDir, "skills/*"), /matched multiple/);
+    assert.equal(await resolveEntryPath(mirrorDir, "skills/eli5"), join(mirrorDir, "skills/eli5"));
+    await assert.rejects(resolveEntryPath(mirrorDir, "skills/missing"), /matched nothing/);
+    await assert.rejects(resolveEntryPath(mirrorDir, "skills/*"), /matched multiple/);
+  });
+
+  it("resolves a file entry", async () => {
+    const mirrorDir = join(root, "mirror");
+    await put(mirrorDir, "gitalias.txt", "alias\n");
+
+    assert.equal(await resolveEntryPath(mirrorDir, "gitalias.txt"), join(mirrorDir, "gitalias.txt"));
   });
 });
 
@@ -287,6 +340,31 @@ describe("copyRepoEntries", () => {
 
     assert.equal(await readFile(join(destinationDir, "greeting/SKILL.md"), "utf8"), "hi\n");
     assert.equal(await readFile(join(destinationDir, "farewell/SKILL.md"), "utf8"), "bye\n");
+  });
+
+  it("copies a file entry directly under the destination", async () => {
+    const mirrorDir = join(root, "mirror");
+    const destinationDir = join(root, "nested", "destination");
+    await put(mirrorDir, "gitalias.txt", "alias\n");
+    await put(mirrorDir, "skills/hi/greeting/SKILL.md", "hi\n");
+
+    await copyRepoEntries(mirrorDir, destinationDir, ["gitalias.txt", "skills/hi/greeting"], []);
+
+    assert.equal(await readFile(join(destinationDir, "gitalias.txt"), "utf8"), "alias\n");
+    assert.equal(await readFile(join(destinationDir, "greeting/SKILL.md"), "utf8"), "hi\n");
+  });
+
+  it("rejects an edit that targets a file entry", async () => {
+    const mirrorDir = join(root, "mirror");
+    const destinationDir = join(root, "destination");
+    await put(mirrorDir, "gitalias.txt", "alias\n");
+
+    await assert.rejects(
+      copyRepoEntries(mirrorDir, destinationDir, ["gitalias.txt"], [
+        { path: "gitalias.txt", text: "extra" },
+      ]),
+      /edit path is not included in entries/,
+    );
   });
 
   it("applies $append edits to the staged tree before copying", async () => {

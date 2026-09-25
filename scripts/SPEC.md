@@ -103,7 +103,7 @@ glob は Bun の `Glob` と同じ方言で、`*` はセパレート 1 階層内�
 
 ## build: external fetch
 
-設定ファイル `dotfiles/.build-external.yaml`（git 管理）に、Git リポジトリから取得して dist へ配置する外部エントリを定める。
+設定ファイル `dotfiles/.build-external.yaml`（git 管理）に、Git リポジトリから取得して dist へ配置する外部エントリを定める。同一ディレクトリの `dotfiles/.build-external.machine.yaml`（git 管理外、任意）は、マシン固有の外部エントリを定める machine レイヤーとして読む。形式は共有側と同じであり、repo キー単位で共有側と統合し、同キーは machine 側の定義で完全に置換する。machine 側は共有側のキーの一部だけを持ってよい。machine ファイルが存在しなくてもよく、存在するのに `externalSkills` マップを持たないときは異常終了する。
 
 ```yaml
 externalSkills:
@@ -131,7 +131,7 @@ externalSkills:
 
 - ミラーは `~/mirrors/github.com/<owner>/<repo>` に保持する。
 - TTL の既定は 6 時間で、`ttlHours` で上書きする。時間原点は、ミラーの `.git/build-pull-time` に記録した前回取得時刻であり、clone 成功時と pull 成功時に更新する。環境変数 `BUILD_FORCE_PULL=1` のときは TTL を無視して pull する。
-- `entries` の各パスは、Bun Glob 方言でミラー内のディレクトリへ解決する。0 件または複数のディレクトリに一致したときは異常終了する。
+- `entries` の各パスは、Bun Glob 方言でミラー内のディレクトリまたはファイルへ解決する。0 件または複数件に一致したときは異常終了する。ファイルに一致したときは、`destination` の直下へファイル名のまま配置し、`edit` の対象にならない。
 - 配置先は `destination`（dist 相対パス）の直下である。既存ファイルは上書きせず、`.git` はコピーしない。
 - `edit` の `<path>.$append` は、コピーする前に対応ファイルの末尾へテキストを追記する。`<path>` が `entries` のどのパスにも含まれないときは異常終了する。
 - `run_after` は、ミラーの内容が更新されたときだけ、`git clean -fdX` の後に各コマンドをミラーを cwd として実行する。非 0 で終了したときは異常終了する。

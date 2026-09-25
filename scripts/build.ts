@@ -68,6 +68,7 @@ const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$
 const hookNamePattern = /\.build\.ts$/;
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
 const externalFileName = ".build-external.yaml";
+const externalMachineFileName = ".build-external.machine.yaml";
 
 const fileFormats = {
   json: {
@@ -741,14 +742,27 @@ export async function fetchExternals(
 }
 
 export async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
+  const repos = await readExternalRepos(configPath);
+  // Machine-specific layer (gitignored) merged over the shared config by repo
+  // key; a machine definition fully replaces the shared one (spec: SPEC.md
+  // §build: external fetch).
+  const machinePath = join(dirname(configPath), externalMachineFileName);
+  if (!existsSync(machinePath)) return { repos };
+  const byRepo = new Map(repos.map((repo) => [repo.repo, repo]));
+  for (const repo of await readExternalRepos(machinePath)) byRepo.set(repo.repo, repo);
+  return { repos: [...byRepo.values()] };
+}
+
+async function readExternalRepos(configPath: string): Promise<ExternalRepo[]> {
   const doc: unknown = parseYaml(await readFile(configPath, "utf-8"));
   const externalSkills = (doc as { externalSkills?: unknown })?.externalSkills;
   if (!isPlainObject(externalSkills))
-    throw new Error(`.build-external.yaml must have an externalSkills mapping: ${configPath}`);
-  const repos = Object.entries(externalSkills).map(([repo, raw]) =>
+    throw new Error(
+      `${basename(configPath)} must have an externalSkills mapping: ${configPath}`,
+    );
+  return Object.entries(externalSkills).map(([repo, raw]) =>
     normalizeRepo(`externalSkills.${repo}`, repo, raw),
   );
-  return { repos };
 }
 
 export async function syncMirror(
@@ -795,19 +809,17 @@ export function isPullDue(
   return nowMs - lastPullAt >= ttlMs;
 }
 
-export async function resolveSkillDir(
+export async function resolveEntryPath(
   mirrorDir: string,
   path: string,
 ): Promise<string> {
   const matches = [
     ...new Bun.Glob(path).scanSync({ cwd: mirrorDir, onlyFiles: false }),
-  ]
-    .map((relativePath) => join(mirrorDir, relativePath))
-    .filter((absolute) => statSync(absolute).isDirectory());
+  ].map((relativePath) => join(mirrorDir, relativePath));
   if (matches.length === 0)
-    throw new Error(`skill path matched nothing: ${path}`);
+    throw new Error(`entry path matched nothing: ${path}`);
   if (matches.length > 1)
-    throw new Error(`skill path matched multiple directories: ${path}`);
+    throw new Error(`entry path matched multiple entries: ${path}`);
   return matches[0]!;
 }
 
@@ -858,7 +870,15 @@ export async function copyRepoEntries(
   const appliedEditIndexes = new Set<number>();
 
   for (const entry of entries) {
-    const skillDir = await resolveSkillDir(mirrorDir, entry);
+    const entryPath = await resolveEntryPath(mirrorDir, entry);
+    // A file entry lands under the destination as-is and is never an edit
+    // target (spec: SPEC.md §build: external fetch).
+    if (statSync(entryPath).isFile()) {
+      await mkdir(destinationDir, { recursive: true });
+      await copyFile(entryPath, join(destinationDir, basename(entryPath)));
+      continue;
+    }
+    const skillDir = entryPath;
     const entryEdits = resolvedEdits.filter(({ filePath }) =>
       isPathInside(skillDir, filePath),
     );

@@ -2,6 +2,13 @@
 # materializes entries into dist (spec: scripts/SPEC.md §build:
 # external fetch). destination is dist-relative.
 externalSkills:
+  # gitalias.txt is materialized at dist root and renamed to .gitconfig.alias
+  # by .build-map.md, which dotfiles/.gitconfig includes.
+  GitAlias/gitalias:
+    destination: .
+    entries:
+      - gitalias.txt
+
   DreambigOu/ELI5:
     destination: .agents/skills.exact
     entries:
