@@ -322,9 +322,10 @@ describe("path mapping (plain names without legacy prefixes)", () => {
 });
 
 describe("exclusions", () => {
-  it("skips entries starting with .build and files ending in .build.ts or .apply.<ext>", async () => {
+  it("skips .data. entries and files ending in .build.ts or .apply.<ext>", async () => {
     await put(distRoot, "setup.build.ts", "hook\n");
-    await put(distRoot, ".build-map.md", "map\n");
+    await put(distRoot, "remap.data.md", "map\n");
+    await put(distRoot, "external.data.yaml", "config\n");
     await put(distRoot, "task.apply.sh", "script\n");
 
     const result = await diff();

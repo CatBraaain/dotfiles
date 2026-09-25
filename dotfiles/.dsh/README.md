@@ -17,7 +17,7 @@ dsh（DeepSeek Harness）関係のファイル。
 - `profiles/web/dsh_plugin_install.apply.ts` — dsh CLI による依存のインストール（Bun の apply hook。profile dir を CWD として `dsh plugin --profile web install --ignore-scripts` を実行する。stamp（`node_modules/.dsh-plugin-install-stamp`）が無い、または `package.json` / `pnpm-lock.yaml` が stamp より新しいときだけ実行して stamp を更新し、変更が無い apply ではインストールをスキップする。dsh CLI は profile dir で pnpm を実行し、成功後に `dsh.profile.bundles` を依存状態へ同期する）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）、`dsh.profile.bundles`（読み込み順）、`trustedDependencies`（lifecycle script を許可する依存）の3つを管理する
 - `profiles/web/pnpm-workspace.yaml` — dsh CLI の profile 依存解決設定。`nodeLinker: hoisted` と `autoInstallPeers: false` により、framework の peer import を shared fallback へ解決する
-- `test/` — dsh 本体を起動せずに plugin の web UI の見た目を検証する fixture（`.build-map.md` で展開対象外）。詳しくは `test/README.md`
+- `test/` — dsh 本体を起動せずに plugin の web UI の見た目を検証する fixture（`remap.data.md` で展開対象外）。詳しくは `test/README.md`
 
 apply hook は全ターゲットの適用後に実行される。ビルド（`build.apply.ts`）は適用後のため、plugin の `src/` が全て展開されてから bundle される。profile の `dsh_plugin_install.apply.ts` による依存インストールはビルドに後続する。`file:` 依存はビルド後の plugin package を pnpm が profile の package tree に配置するため、順序は問題にならない。
 

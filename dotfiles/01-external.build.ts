@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Standard build hook (spec: SPEC.md §build: external fetch): fetches the
-// repos of .build-external.yaml into dist. Runs as 01-, ahead of the
+// repos of external.data.yaml into dist. Runs as 01-, ahead of the
 // path-map hook, because external entries (e.g. gitalias.txt) are map move
 // targets and the map only sees entries that are already placed. The hook
 // runner executes it with cwd at the dist root, and import.meta.dir resolves
@@ -43,7 +43,7 @@ declare global {
   }
 }
 
-const externalFileName = ".build-external.yaml";
+const externalFileName = "external.data.yaml";
 
 type ProcessResult = { ok: boolean; stdout: string; stderr: string };
 type TextEdit = { path: string; text: string };
@@ -66,7 +66,7 @@ type SyncContext = {
 
 type MirrorSyncResult = { mirrorDir: string; changed: boolean };
 
-const externalMachineFileName = ".build-external.machine.yaml";
+const externalMachineFileName = "external.data.machine.yaml";
 
 const defaultTtlHours = 6;
 const pullTimeFileName = "build-pull-time";

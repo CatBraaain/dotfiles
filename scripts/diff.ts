@@ -182,8 +182,11 @@ export type SegmentMapping = {
 };
 
 export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
+  // .data. marks build-time data files (path map, external config, machine
+  // layer), excluded like the .build prefix (spec §差分検知).
   const isExcluded =
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
+    name.includes(".data.") ||
     (!isDirectory && (isApplyScriptName(name) || buildHookNamePattern.test(name)));
   if (isExcluded)
     return {

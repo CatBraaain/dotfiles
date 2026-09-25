@@ -269,7 +269,7 @@ describe("local build hooks", () => {
     await put(root, "dotfiles/02-path-map.build.ts", standardHook);
     await put(
       root,
-      "dotfiles/.build-map.md",
+      "dotfiles/remap.data.md",
       "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode/format-settings.build.ts | - | - | - |\n",
     );
     await put(

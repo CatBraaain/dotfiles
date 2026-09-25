@@ -41,9 +41,9 @@ build が完了した dist が、差分検知の入力になる。
 
 dist を削除し、`dotfiles/` の完全なコピーとして作り直す。任意の階層の `node_modules/` はコピーしない。前回実行で dist にあった内容は残らない。
 
-## build: マップ（.build-map.md）
+## build: マップ（remap.data.md）
 
-`dotfiles/.build-map.md`（git 管理）は、dist 内のエントリの行き先を OS ごとに定める。標準フック `dotfiles/02-path-map.build.ts` がこのファイルを読み、external fetch 標準フックの後の全エントリへ 1 回だけ適用する。
+`dotfiles/remap.data.md`（git 管理）は、dist 内のエントリの行き先を OS ごとに定める。標準フック `dotfiles/02-path-map.build.ts` がこのファイルを読み、external fetch 標準フックの後の全エントリへ 1 回だけ適用する。
 
 先頭の Markdown table は `key`、`linux`、`windows`、`macos` の列をこの順で持ち、各行は一意なエントリのパスと 3 OS の値を表す。セルの前後の空白は無視する。`process.platform` が `win32` / `linux` / `darwin` のとき `windows` / `linux` / `macos` の対応する列を使い、それ以外では異常終了する。選択した列の値が空欄ならその OS ではマップせず元の階層に置き、`-` なら dist から除外し、それ以外の値なら dist 相対の移動先へ移動する。別 OS 列の値との合成は行わない。
 
@@ -87,7 +87,7 @@ dist を削除し、`dotfiles/` の完全なコピーとして作り直す。任
 
 ## build: external fetch
 
-標準フック `dotfiles/01-external.build.ts` が、設定ファイル `dotfiles/.build-external.yaml`（git 管理）に定義した Git リポジトリの外部エントリを取得して dist へ配置する。同一ディレクトリの `dotfiles/.build-external.machine.yaml`（git 管理外、任意）は、マシン固有の外部エントリを定める machine レイヤーとして読む。形式は共有側と同じであり、repo キー単位で共有側と統合し、同キーは machine 側の定義で完全に置換する。machine 側は共有側のキーの一部だけを持ってよい。machine ファイルが存在しなくてもよく、存在するのに `externalSkills` マップを持たないときは異常終了する。
+標準フック `dotfiles/01-external.build.ts` が、設定ファイル `dotfiles/external.data.yaml`（git 管理）に定義した Git リポジトリの外部エントリを取得して dist へ配置する。同一ディレクトリの `dotfiles/external.data.machine.yaml`（git 管理外、任意）は、マシン固有の外部エントリを定める machine レイヤーとして読む。形式は共有側と同じであり、repo キー単位で共有側と統合し、同キーは machine 側の定義で完全に置換する。machine 側は共有側のキーの一部だけを持ってよい。machine ファイルが存在しなくてもよく、存在するのに `externalSkills` マップを持たないときは異常終了する。
 
 ```yaml
 externalSkills:
@@ -389,7 +389,7 @@ dist を再帰走査し、home の対応するエントリと対照する。エ�
 - symlink は、リンク先（末尾改行 1 つを除いた内容）を比較する。
 - 実行権は、linux と darwin で owner 実行権の有無を比較する。windows では実行権を比較しない。
 
-dist の相対パスの各要素が `.build` で始まるエントリ、および名前が `.build.<拡張子>` で終わるファイルまたは `.apply.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`.build` 接頭辞は build ステージの設定ファイル（マップ・external 設定）のための予約名である。
+dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、および名前が `.build.<拡張子>` で終わるファイルまたは `.apply.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`.data.` は build ステージのデータファイル（マップ・external 設定・machine レイヤー）のための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。
 
 | dist | home | 分類 |
 | --- | --- | --- |
