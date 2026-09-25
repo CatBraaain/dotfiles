@@ -1,0 +1,74 @@
+incognito_mode: false
+check_default: true
+presentation_mode: false
+preedit_method: ROMAN
+punctuation_method: TOUTEN_KUTEN
+symbol_method: CORNER_BRACKET_MIDDLE_DOT
+space_character_form: FUNDAMENTAL_INPUT_MODE
+use_keyboard_to_change_preedit_method: false
+history_learning_level: DEFAULT_HISTORY
+selection_shortcut: SHORTCUT_123456789
+character_form_rules:
+  - group: ア
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: FULL_WIDTH
+  - group: A
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: "0"
+    preedit_character_form: HALF_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: (){}[]
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: .,
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: 。、
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: FULL_WIDTH
+  - group: ・「」
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: FULL_WIDTH
+  - group: "\"'"
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: :;
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: "#%&@$^_|`\\"
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: "~"
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: <>=+-/*
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+  - group: ?!
+    preedit_character_form: FULL_WIDTH
+    conversion_character_form: LAST_FORM
+auto_switch_composition_mode: true
+shift_key_mode_switch: ASCII_INPUT_MODE
+numpad_character_form: NUMPAD_HALF_WIDTH
+use_auto_conversion: false
+auto_conversion_key: 13
+yen_sign_character: YEN_SIGN
+use_japanese_layout: false
+use_date_conversion: true
+use_single_kanji_conversion: true
+use_symbol_conversion: true
+use_number_conversion: true
+use_emoticon_conversion: true
+use_calculator: true
+use_t13n_conversion: true
+use_zip_code_conversion: true
+use_spelling_correction: true
+use_emoji_conversion: true
+information_list_config:
+  use_local_usage_dictionary: true
+use_history_suggest: false
+use_dictionary_suggest: false
+use_realtime_conversion: false
+suggestions_size: 3
+use_mode_indicator: false

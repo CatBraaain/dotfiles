@@ -48,7 +48,7 @@ msime mode="apply":
 
 [windows]
 mozc mode="apply":
-  $mode = "{{ mode }}"; if ($mode -eq "diff") { bun undotfiles/ime/mozc/roma-def.ts --dry-run } elseif ($mode -eq "apply") { bun undotfiles/ime/mozc/roma-def.ts } else { throw "mode must be apply or diff: $mode" }
+  $mode = "{{ mode }}"; if ($mode -eq "diff") { bun undotfiles/ime/mozc/roma-def.ts --dry-run } elseif ($mode -eq "export") { bun undotfiles/ime/mozc/roma-def.ts --export } elseif ($mode -eq "apply") { bun undotfiles/ime/mozc/roma-def.ts } else { throw "mode must be apply, diff or export: $mode" }
 
 [windows]
 autologon:
