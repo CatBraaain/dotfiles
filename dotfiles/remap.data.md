@@ -31,7 +31,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | powershell | - | Documents/PowerShell | - |
 | rtk | .config/rtk | - | - |
 | sharex | - | Documents/ShareX | - |
-| vscode/format-settings.build.ts |  | - |  |
+| vscode/format-settings.build.ts |  |  | - |
 | vscode/sync_vscode_extensions.apply.ts |  | - |  |
 | vscode |  | AppData/Roaming/Code/User | - |
 | windows-terminal | - | AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState | - |
