@@ -1,14 +1,15 @@
 // Build stage of the dotfiles manager (spec: SPEC.md
-// §ライフサイクル): regenerates dist from dotfiles/ — map removals, external
-// fetch, local hooks, map moves, merge composition, replace sidecars.
+// §ライフサイクル): regenerates dist from dotfiles/ — local hooks
+// (including the standard path-map and external fetch hooks), merge
+// composition, replace sidecars.
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
@@ -26,17 +27,7 @@ declare const Bun: {
       stderr: "inherit";
     },
   ): { exited: Promise<number>; signalCode: string | null };
-  spawn(
-    args: string[],
-    options: { cwd?: string; stdout: "pipe"; stderr: "pipe" },
-  ): { exited: Promise<number>; stdout: unknown; stderr: unknown };
   deepEquals(left: unknown, right: unknown): boolean;
-  Glob: {
-    new (pattern: string): {
-      match(path: string): boolean;
-      scanSync(options: { cwd: string; onlyFiles: boolean }): Iterable<string>;
-    };
-  };
 };
 declare const process: {
   cwd(): string;
@@ -45,7 +36,6 @@ declare const process: {
   exitCode: number;
 };
 declare const console: { error(...data: unknown[]): void };
-declare const Response: { new (body: unknown): { text(): Promise<string> } };
 declare global {
   interface ImportMeta {
     readonly main: boolean;
@@ -68,8 +58,6 @@ const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const hookNamePattern = /\.build\.[^.]+$/;
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
-const externalFileName = ".build-external.yaml";
-const externalMachineFileName = ".build-external.machine.yaml";
 
 const fileFormats = {
   json: {
@@ -95,22 +83,12 @@ export async function run(
   const sourceDir = join(root, "dotfiles");
   const distDir = join(root, "dist");
 
-  const pathMap = await loadPathMap(sourceDir, platform);
-  const hooks = await collectHooks(sourceDir);
   await rm(distDir, { recursive: true, force: true });
   await copyDir(sourceDir, distDir);
-  await removeMappedEntries(distDir, "", pathMap.removals);
-  await fetchExternals(join(sourceDir, externalFileName), distDir);
-  await runHooks(
-    hooks.filter(
-      (hook) =>
-        !isIgnoredTarget(hook.relativeParent, pathMap.removals) &&
-        !isIgnoredTarget(hookRelativePath(hook), pathMap.removals, true),
-    ),
-    distDir,
-  );
-  await removeMappedEntries(distDir, "", pathMap.removals);
-  await moveMappedEntries(distDir, pathMap.moves);
+  // Hooks are collected from dist once, after the copy. Removals and moves
+  // that earlier hooks apply leave later hook files missing in dist; those
+  // do not run.
+  await runHooks(await collectHooks(distDir), distDir);
   await composeMergeTargets(distDir, homeRoot);
   await applyReplaceSidecars(distDir, homeRoot);
 }
@@ -127,13 +105,7 @@ async function copyDir(sourceDir: string, destinationDir: string): Promise<void>
   }
 }
 
-// .build-map.md lists one source path per row and a destination or removal per platform.
-const mapFileName = ".build-map.md";
-const removeDestination = "-";
-const mapColumns = ["key", "linux", "windows", "macos"] as const;
 const platformNames = ["windows", "linux", "darwin"] as const;
-type PathMap = { removals: string[]; moves: Array<{ source: string; destination: string }> };
-type PathMapRow = [key: string, linux: string, windows: string, macos: string];
 
 function currentPlatform(): Platform {
   switch (process.platform) {
@@ -151,118 +123,6 @@ function currentPlatform(): Platform {
 function assertPlatform(platform: string): asserts platform is Platform {
   if (!platformNames.includes(platform as Platform))
     throw new Error(`Unsupported platform: ${platform}`);
-}
-
-async function loadPathMap(sourceDir: string, platform: Platform): Promise<PathMap> {
-  const mapFilePath = join(sourceDir, mapFileName);
-  if (!existsSync(mapFilePath)) throw new Error(`${mapFileName} not found: ${mapFilePath}`);
-  const rows = parsePathMap(await readFile(mapFilePath, "utf-8"), mapFilePath);
-  const columnIndex = platform === "linux" ? 1 : platform === "windows" ? 2 : 3;
-  const removals: string[] = [];
-  const moves: Array<{ source: string; destination: string }> = [];
-
-  for (const row of rows) {
-    const destination = row[columnIndex];
-    if (destination === "") continue;
-    if (destination === removeDestination) removals.push(row[0]);
-    else moves.push({ source: row[0], destination });
-  }
-  return { removals, moves };
-}
-
-function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
-  const lines = content.split(/\r?\n/);
-  const headerIndex = lines.findIndex((line) => line.trim().startsWith("|"));
-  const headerLine = headerIndex < 0 ? undefined : lines[headerIndex];
-  if (!headerLine || !sameCells(parseTableRow(headerLine), mapColumns)) {
-    throw new Error(
-      `${mapFileName} must have columns: ${mapColumns.join(" | ")}: ${mapFilePath}`,
-    );
-  }
-
-  const separator = parseTableRow(lines[headerIndex + 1] ?? "");
-  if (
-    separator.length !== mapColumns.length ||
-    separator.some((cell) => !/^:?-{3,}:?$/.test(cell))
-  )
-    throw new Error(`${mapFileName} has an invalid Markdown table separator: ${mapFilePath}`);
-
-  const rows: PathMapRow[] = [];
-  const keys = new Set<string>();
-  for (const line of lines.slice(headerIndex + 2)) {
-    if (!line.trim().startsWith("|")) {
-      if (line.trim() === "") continue;
-      break;
-    }
-    const cells = parseTableRow(line);
-    if (cells.length !== mapColumns.length)
-      throw new Error(`${mapFileName} has an invalid table row: ${line}`);
-    const [key, ...destinations] = cells;
-    if (!key) throw new Error(`${mapFileName} contains an empty key`);
-    if (keys.has(key)) throw new Error(`${mapFileName} contains a duplicate key: ${key}`);
-    keys.add(key);
-
-    for (const destination of destinations) {
-      if (destination === "" || destination === removeDestination) continue;
-      if (destination.startsWith("/"))
-        throw new Error(
-          `${mapFileName} has an unsupported destination for ${key}: ${destination}`,
-        );
-      if (globPatternCharacters.test(key))
-        throw new Error(`${mapFileName} cannot map the glob key ${key} to ${destination}`);
-    }
-    rows.push(cells as unknown as PathMapRow);
-  }
-  return rows;
-}
-
-function parseTableRow(line: string): string[] {
-  const trimmed = line.trim();
-  const withoutEdges = trimmed.replace(/^\|/, "").replace(/\|$/, "");
-  return withoutEdges.split("|").map((cell) =>
-    cell
-      .trim()
-      .replace(/\\([*?])/g, "$1")
-      .replaceAll("\\[", "[")
-      .replaceAll("\\]", "]"),
-  );
-}
-
-function sameCells(actual: string[], expected: readonly string[]): boolean {
-  return (
-    actual.length === expected.length && actual.every((cell, index) => cell === expected[index])
-  );
-}
-
-async function removeMappedEntries(
-  distDir: string,
-  relativeParent: string,
-  removals: string[],
-): Promise<void> {
-  for (const entry of await readdir(distDir, { withFileTypes: true })) {
-    const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
-    const entryPath = join(distDir, entry.name);
-    if (isIgnoredTarget(childParent, removals, !entry.isDirectory())) {
-      await rm(entryPath, { recursive: true, force: true });
-      continue;
-    }
-    if (entry.isDirectory()) await removeMappedEntries(entryPath, childParent, removals);
-  }
-}
-
-async function moveMappedEntries(
-  distDir: string,
-  moves: Array<{ source: string; destination: string }>,
-): Promise<void> {
-  for (const { source, destination } of moves) {
-    const sourcePath = join(distDir, source);
-    if (!existsSync(sourcePath)) continue;
-
-    const destinationPath = join(distDir, destination);
-    await mkdir(dirname(destinationPath), { recursive: true });
-    await rm(destinationPath, { recursive: true, force: true });
-    await rename(sourcePath, destinationPath);
-  }
 }
 
 // Home-relative path resolution shared by the build stages that read the
@@ -683,387 +543,7 @@ async function collectReplaceSidecars(dirAbs: string, dirRel: string): Promise<s
   return sidecars.sort();
 }
 
-// External fetch stage of the build (spec: SPEC.md
-// §build: external fetch): syncs GitHub repository mirrors under
-// ~/mirrors/github.com and materializes their entries into dist. Moved from
-// the retired skills.exact hook; the externalSkills config format is kept.
-
-export type ProcessResult = { ok: boolean; stdout: string; stderr: string };
-export type TextEdit = { path: string; text: string };
-export type ExternalRepo = {
-  repo: string;
-  destination: string;
-  entries: string[];
-  ttlMs: number;
-  runAfter: string[][];
-  edits: TextEdit[];
-};
-export type ExternalConfig = { repos: ExternalRepo[] };
-export type SyncContext = {
-  mirrorRoot: string;
-  forcePull: boolean;
-  repoUrl: (repo: string) => string;
-  runGit: (args: string[]) => Promise<ProcessResult>;
-  runCommand: (args: string[], cwd: string) => Promise<ProcessResult>;
-};
-
-type MirrorSyncResult = { mirrorDir: string; changed: boolean };
-
-export const defaultTtlHours = 6;
-const pullTimeFileName = "build-pull-time";
-const defaultMirrorRoot = join(homedir(), "mirrors", "github.com");
-
-export function defaultContext(): SyncContext {
-  return {
-    mirrorRoot: defaultMirrorRoot,
-    forcePull: process.env.BUILD_FORCE_PULL === "1",
-    repoUrl: (repo) => `https://github.com/${repo}.git`,
-    runGit: (args) => runProcess(["git", ...args]),
-    runCommand: (args, cwd) => runProcess(args, cwd),
-  };
-}
-
-// ---------------------------------------------------------------- public API
-
-export async function fetchExternals(
-  configPath: string,
-  distDir: string,
-  context: SyncContext = defaultContext(),
-): Promise<void> {
-  const config = await loadExternalConfig(configPath);
-  await Promise.all(
-    config.repos.map(async (repo) => {
-      const sync = await syncMirror(repo.repo, repo.ttlMs, context);
-      if (sync.changed && repo.runAfter.length > 0)
-        await runAfterCommands(repo.repo, sync.mirrorDir, repo.runAfter, context);
-      await copyRepoEntries(
-        sync.mirrorDir,
-        join(distDir, repo.destination),
-        repo.entries,
-        repo.edits,
-      );
-    }),
-  );
-}
-
-export async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
-  const repos = await readExternalRepos(configPath);
-  // Machine-specific layer (gitignored) merged over the shared config by repo
-  // key; a machine definition fully replaces the shared one (spec: SPEC.md
-  // §build: external fetch).
-  const machinePath = join(dirname(configPath), externalMachineFileName);
-  if (!existsSync(machinePath)) return { repos };
-  const byRepo = new Map(repos.map((repo) => [repo.repo, repo]));
-  for (const repo of await readExternalRepos(machinePath)) byRepo.set(repo.repo, repo);
-  return { repos: [...byRepo.values()] };
-}
-
-async function readExternalRepos(configPath: string): Promise<ExternalRepo[]> {
-  const doc: unknown = parseYaml(await readFile(configPath, "utf-8"));
-  const externalSkills = (doc as { externalSkills?: unknown })?.externalSkills;
-  if (!isPlainObject(externalSkills))
-    throw new Error(
-      `${basename(configPath)} must have an externalSkills mapping: ${configPath}`,
-    );
-  return Object.entries(externalSkills).map(([repo, raw]) =>
-    normalizeRepo(`externalSkills.${repo}`, repo, raw),
-  );
-}
-
-export async function syncMirror(
-  repo: string,
-  ttlMs: number,
-  context: SyncContext = defaultContext(),
-): Promise<MirrorSyncResult> {
-  const { mirrorRoot: root, forcePull, repoUrl, runGit: run } = context;
-  const mirrorDir = join(root, ...repo.split("/"));
-  await mkdir(dirname(mirrorDir), { recursive: true });
-
-  if (!existsSync(mirrorDir)) {
-    const url = repoUrl(repo);
-    const result = await run(["clone", "--depth", "1", "--quiet", url, mirrorDir]);
-    if (!result.ok)
-      throw new Error(`git clone failed for ${url}: ${singleLine(result.stderr)}`);
-    await markPullAt(mirrorDir);
-    return { mirrorDir, changed: true };
-  }
-
-  const lastPullAt = await readLastPullAt(mirrorDir);
-  if (!isPullDue(lastPullAt, Date.now(), ttlMs, forcePull))
-    return { mirrorDir, changed: false };
-
-  const before = await readRevision(repo, mirrorDir, context);
-  const result = await run(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
-  if (!result.ok) {
-    console.error(`warning: git pull failed for ${repo}: ${singleLine(result.stderr)}`);
-    return { mirrorDir, changed: false };
-  }
-  const after = await readRevision(repo, mirrorDir, context);
-  await markPullAt(mirrorDir);
-  return { mirrorDir, changed: before !== after };
-}
-
-export function isPullDue(
-  lastPullAt: number | undefined,
-  nowMs: number,
-  ttlMs: number,
-  forcePull = false,
-): boolean {
-  if (forcePull) return true;
-  if (lastPullAt === undefined) return true;
-  return nowMs - lastPullAt >= ttlMs;
-}
-
-export async function resolveEntryPath(
-  mirrorDir: string,
-  path: string,
-): Promise<string> {
-  const matches = [
-    ...new Bun.Glob(path).scanSync({ cwd: mirrorDir, onlyFiles: false }),
-  ].map((relativePath) => join(mirrorDir, relativePath));
-  if (matches.length === 0)
-    throw new Error(`entry path matched nothing: ${path}`);
-  if (matches.length > 1)
-    throw new Error(`entry path matched multiple entries: ${path}`);
-  return matches[0]!;
-}
-
-export async function copySkillTree(
-  sourceDir: string,
-  targetDir: string,
-): Promise<void> {
-  await mkdir(targetDir, { recursive: true });
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (entry.name === ".git") continue;
-
-    const sourcePath = join(sourceDir, entry.name);
-    const targetPath = join(targetDir, entry.name);
-    if (entry.isDirectory()) await copySkillTree(sourcePath, targetPath);
-    else if (!existsSync(targetPath)) await copyFile(sourcePath, targetPath);
-  }
-}
-
-export async function readLastPullAt(
-  mirrorDir: string,
-): Promise<number | undefined> {
-  const pullTimePath = join(mirrorDir, ".git", pullTimeFileName);
-  if (!existsSync(pullTimePath)) return undefined;
-  const raw = await readFile(pullTimePath, "utf-8").catch(() => undefined);
-  const pullAt = Number(raw?.trim());
-  return Number.isFinite(pullAt) ? pullAt : undefined;
-}
-
-export async function markPullAt(mirrorDir: string): Promise<void> {
-  const gitDir = join(mirrorDir, ".git");
-  await mkdir(gitDir, { recursive: true });
-  await writeFile(join(gitDir, pullTimeFileName), `${Date.now()}\n`);
-}
-
-// ------------------------------------------------------------- entry copying
-
-export async function copyRepoEntries(
-  mirrorDir: string,
-  destinationDir: string,
-  entries: string[],
-  edits: TextEdit[],
-): Promise<void> {
-  const resolvedEdits = edits.map((edit, index) => ({
-    ...edit,
-    filePath: resolveEditFile(mirrorDir, edit.path),
-    index,
-  }));
-  const appliedEditIndexes = new Set<number>();
-
-  for (const entry of entries) {
-    const entryPath = await resolveEntryPath(mirrorDir, entry);
-    // A file entry lands under the destination as-is and is never an edit
-    // target (spec: SPEC.md §build: external fetch).
-    if (statSync(entryPath).isFile()) {
-      await mkdir(destinationDir, { recursive: true });
-      await copyFile(entryPath, join(destinationDir, basename(entryPath)));
-      continue;
-    }
-    const skillDir = entryPath;
-    const entryEdits = resolvedEdits.filter(({ filePath }) =>
-      isPathInside(skillDir, filePath),
-    );
-    if (entryEdits.length === 0) {
-      await copySkillTree(skillDir, join(destinationDir, basename(skillDir)));
-      continue;
-    }
-
-    const stagingDir = await mkdtemp(join(dirname(destinationDir), "external-edit-"));
-    try {
-      await copyRawTree(skillDir, stagingDir);
-      for (const edit of entryEdits) {
-        try {
-          await appendEditedFile(
-            join(stagingDir, relative(skillDir, edit.filePath)),
-            edit.text,
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`edit failed for ${edit.path}: ${singleLine(message)}`);
-        }
-        appliedEditIndexes.add(edit.index);
-      }
-      await copySkillTree(stagingDir, join(destinationDir, basename(skillDir)));
-    } finally {
-      await rm(stagingDir, { recursive: true, force: true });
-    }
-  }
-
-  for (const edit of resolvedEdits) {
-    if (!appliedEditIndexes.has(edit.index)) {
-      throw new Error(`edit path is not included in entries: ${edit.path}`);
-    }
-  }
-}
-
-function resolveEditFile(mirrorDir: string, path: string): string {
-  const filePath = join(mirrorDir, path);
-  const parentDir = dirname(filePath);
-  if (!existsSync(parentDir) || !statSync(parentDir).isDirectory()) {
-    throw new Error(`edit path matched nothing: ${path}`);
-  }
-  return filePath;
-}
-
-function isPathInside(parentDir: string, candidatePath: string): boolean {
-  const childPath = relative(parentDir, candidatePath);
-  return childPath !== "" && !childPath.startsWith("..") && !isAbsolute(childPath);
-}
-
-async function copyRawTree(sourceDir: string, targetDir: string): Promise<void> {
-  await mkdir(targetDir, { recursive: true });
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    const sourcePath = join(sourceDir, entry.name);
-    const targetPath = join(targetDir, entry.name);
-    if (entry.isDirectory()) await copyRawTree(sourcePath, targetPath);
-    else await copyFile(sourcePath, targetPath);
-  }
-}
-
-async function appendEditedFile(filePath: string, text: string): Promise<void> {
-  const current = existsSync(filePath) ? await readFile(filePath, "utf8") : "";
-  const separator = current === "" || current.endsWith("\n") ? "" : "\n";
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, current + separator + text);
-}
-
-async function runAfterCommands(
-  repo: string,
-  mirrorDir: string,
-  commands: string[][],
-  context: SyncContext,
-): Promise<void> {
-  const clean = await context.runGit(["-C", mirrorDir, "clean", "-fdX"]);
-  if (!clean.ok) {
-    throw new Error(`git clean failed for ${repo}: ${singleLine(clean.stderr)}`);
-  }
-  for (const command of commands) {
-    const result = await context.runCommand(command, mirrorDir);
-    if (!result.ok) {
-      throw new Error(`run_after failed for ${repo}: ${singleLine(result.stderr)}`);
-    }
-  }
-}
-
-async function readRevision(
-  repo: string,
-  mirrorDir: string,
-  context: SyncContext,
-): Promise<string> {
-  const result = await context.runGit(["-C", mirrorDir, "rev-parse", "HEAD"]);
-  if (!result.ok) {
-    throw new Error(
-      `git revision lookup failed for ${repo}: ${singleLine(result.stderr)}`,
-    );
-  }
-  return result.stdout.trim();
-}
-
-// ------------------------------------------------------------- config format
-
-function normalizeRepo(prefix: string, repo: string, raw: unknown): ExternalRepo {
-  if (!isPlainObject(raw)) throw new Error(`${prefix} must be a mapping`);
-  if (
-    typeof raw.destination !== "string" ||
-    raw.destination === "" ||
-    raw.destination.startsWith("/")
-  )
-    throw new Error(`${prefix}.destination must be a relative dist path`);
-  if (
-    typeof raw.ttlHours !== "undefined" &&
-    (typeof raw.ttlHours !== "number" || !Number.isFinite(raw.ttlHours) || raw.ttlHours <= 0)
-  )
-    throw new Error(`${prefix}.ttlHours must be a positive number`);
-  return {
-    repo,
-    destination: raw.destination,
-    entries: normalizePathEntries(`${prefix}.entries`, raw.entries),
-    ttlMs:
-      (typeof raw.ttlHours === "number" ? raw.ttlHours : defaultTtlHours) * 60 * 60 * 1000,
-    runAfter: normalizeCommands(`${prefix}.run_after`, raw.run_after ?? []),
-    edits: normalizeEdits(`${prefix}.edit`, raw.edit === undefined ? {} : raw.edit),
-  };
-}
-
-function normalizePathEntries(prefix: string, raw: unknown): string[] {
-  if (!Array.isArray(raw)) throw new Error(`${prefix} must be an array`);
-  return raw.map((entry, index) => {
-    if (typeof entry !== "string")
-      throw new Error(`${prefix}[${index}] must be a path string`);
-    return entry;
-  });
-}
-
-function normalizeCommands(prefix: string, raw: unknown): string[][] {
-  if (!Array.isArray(raw)) throw new Error(`${prefix} must be an array`);
-  return raw.map((command, index) => {
-    if (
-      !Array.isArray(command) ||
-      command.length === 0 ||
-      command.some((argument) => typeof argument !== "string")
-    ) {
-      throw new Error(`${prefix}[${index}] must be a non-empty string array`);
-    }
-    return command;
-  });
-}
-
-function normalizeEdits(prefix: string, raw: unknown): TextEdit[] {
-  if (!isPlainObject(raw)) throw new Error(`${prefix} must be a mapping`);
-  return Object.entries(raw).map(([key, text]) => {
-    const match = /^(.*)\.\$append$/.exec(key);
-    if (!match || typeof text !== "string") {
-      throw new Error(`${prefix}[${key}] must be a .$append text edit`);
-    }
-    return { path: match[1]!, text };
-  });
-}
-
-// ------------------------------------------------------------ child process
-
-async function runProcess(args: string[], cwd?: string): Promise<ProcessResult> {
-  const proc = Bun.spawn(args, {
-    ...(cwd === undefined ? {} : { cwd }),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const ok = (await proc.exited) === 0;
-  return { ok, stdout: stdout.trim(), stderr: stderr.trim() };
-}
-
-function singleLine(message: string): string {
-  return message.replace(/\r?\n/g, "\\n").trim();
-}
-
-async function collectHooks(sourceDir: string): Promise<Hook[]> {
+async function collectHooks(distDir: string): Promise<Hook[]> {
   const hooks: Hook[] = [];
   async function walk(directory: string, relativeParent: string): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -1075,7 +555,7 @@ async function collectHooks(sourceDir: string): Promise<Hook[]> {
         hooks.push({ absolutePath: entryPath, relativeParent, name: entry.name });
     }
   }
-  await walk(sourceDir, "");
+  await walk(distDir, "");
   return hooks.sort((left, right) => {
     const byParent = compareHookParents(left.relativeParent, right.relativeParent);
     if (byParent !== 0) return byParent;
@@ -1098,34 +578,15 @@ function compareHookParents(left: string, right: string): number {
   return leftParts.length - rightParts.length;
 }
 
-const globPatternCharacters = /[*?[]/;
-
-function isIgnoredTarget(relativeParent: string, patterns: string[], isFile = false): boolean {
-  if (relativeParent === "") return false;
-  // Source folder names use human-readable .exact suffixes; target paths do not.
-  // Files keep their suffix because exact conversion only rewrites directories.
-  const segments = relativeParent.split("/");
-  const targetSegments = segments.map((name, index) =>
-    isFile && index === segments.length - 1 ? name : name.replace(/\.exact$/, ""),
-  );
-  const targetPath = targetSegments.join("/");
-  const targetPrefixes: string[] = [];
-  for (let index = 1; index <= targetSegments.length; index++)
-    targetPrefixes.push(targetSegments.slice(0, index).join("/"));
-  return targetPrefixes.some((prefix) =>
-    patterns.some((pattern) =>
-      globPatternCharacters.test(pattern)
-        ? new Bun.Glob(pattern).match(prefix)
-        : pattern === prefix,
-    ),
-  );
-}
-
 // Local build hooks (spec: SPEC.md §build: ローカルフック): each hook is a
 // shebang-scripted child process (bun, sh, ...); a hook without a shebang is
 // a spec violation and aborts the build.
 export async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
   for (const hook of hooks) {
+    // Earlier hooks (e.g. the path map) may have removed or moved the files
+    // of later hooks in dist; those hooks no longer exist and do not run.
+    if (!existsSync(hook.absolutePath)) continue;
+
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
     const relativePath = hookRelativePath(hook);

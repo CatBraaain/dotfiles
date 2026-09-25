@@ -11,19 +11,9 @@ import { join } from "node:path";
 import {
   applyReplacements,
   applyReplaceSidecars,
-  copyRepoEntries,
-  copySkillTree,
-  defaultTtlHours,
-  fetchExternals,
-  isPullDue,
-  loadExternalConfig,
   parseReplaceSidecar,
-  readLastPullAt,
-  resolveEntryPath,
   run,
   runHooks,
-  syncMirror,
-  type SyncContext,
 } from "./build.ts";
 
 let root: string;
@@ -34,7 +24,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "build-test-"));
   distRoot = join(root, "dist");
   homeRoot = join(root, "home");
-  await mkdir(distRoot);
+  await mkdir(join(root, "dotfiles"));
   await mkdir(homeRoot);
 });
 
@@ -48,410 +38,137 @@ async function put(baseDir: string, path: string, content: string): Promise<void
   await writeFile(absolute, content);
 }
 
-async function runProcess(
-  args: string[],
-  cwd?: string,
-): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(args, {
-    ...(cwd === undefined ? {} : { cwd }),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  return { ok: (await proc.exited) === 0, stdout: stdout.trim(), stderr: stderr.trim() };
-}
-
-// Creates a real git repository at the given path with one committed file.
-async function initRepo(
-  path: string,
-  fileName: string,
-  content: string,
-): Promise<(...args: string[]) => Promise<string>> {
-  await mkdir(path, { recursive: true });
-  const git = async (...args: string[]): Promise<string> => {
-    const result = await runProcess(["git", "-C", path, ...args]);
-    if (!result.ok) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-    return result.stdout;
-  };
-  await git("init", "-q");
-  await git("config", "user.email", "test@example.com");
-  await git("config", "user.name", "test");
-  await put(path, fileName, content);
-  await git("add", ".");
-  await git("commit", "-q", "-m", "first");
-  return git;
-}
-
-function testContext(originPath: string, overrides: Partial<SyncContext> = {}): SyncContext {
-  return {
-    mirrorRoot: join(root, "mirrors", "github.com"),
-    forcePull: false,
-    repoUrl: () => originPath,
-    runGit: (args) => runProcess(["git", ...args]),
-    runCommand: (args, cwd) => runProcess(args, cwd),
-    ...overrides,
-  };
-}
-
 const autoUpdateReplacements = [
   { pattern: "(EnableAutoUpdates)=.*", replacement: "${1}=false" },
 ];
 
-describe("loadExternalConfig", () => {
-  it("parses repos with destination, entries, ttlHours, run_after and edit", async () => {
-    const configPath = join(root, ".build-external.yaml");
-    await put(root, ".build-external.yaml", `
-externalSkills:
-  test/repo:
-    destination: .agents/skills.exact
-    entries:
-      - skills/eli5
-    ttlHours: 24
-    run_after:
-      - [node, build.mjs]
-    edit:
-      "skills/eli5/SKILL.md.$append": "extra"
-`);
+describe("run", () => {
+  it("rebuilds dist as a copy of dotfiles without node_modules", async () => {
+    await put(root, "dotfiles/plain.txt", "plain\n");
+    await put(root, "dotfiles/nested/dir/file.txt", "nested\n");
+    await put(root, "dotfiles/node_modules/pkg/index.js", "skipped\n");
+    await put(distRoot, "stale-from-previous-build.txt", "stale\n");
 
-    const config = await loadExternalConfig(configPath);
+    await run(root, "linux", homeRoot);
 
-    assert.equal(config.repos.length, 1);
-    const repo = config.repos[0]!;
-    assert.deepEqual(
-      { ...repo, ttlMs: repo.ttlMs },
-      {
-        repo: "test/repo",
-        destination: ".agents/skills.exact",
-        entries: ["skills/eli5"],
-        ttlMs: 24 * 60 * 60 * 1000,
-        runAfter: [["node", "build.mjs"]],
-        edits: [{ path: "skills/eli5/SKILL.md", text: "extra" }],
-      },
+    assert.equal(await readFile(join(distRoot, "plain.txt"), "utf8"), "plain\n");
+    assert.equal(await readFile(join(distRoot, "nested/dir/file.txt"), "utf8"), "nested\n");
+    assert.equal(existsSync(join(distRoot, "node_modules")), false);
+    assert.equal(existsSync(join(distRoot, "stale-from-previous-build.txt")), false);
+  });
+
+  it("runs local hooks from dist in name order with their dist folder as cwd", async () => {
+    await put(
+      root,
+      "dotfiles/10-late.build.ts",
+      `#!/usr/bin/env bun
+import { appendFile } from "node:fs/promises";
+await appendFile("log.txt", "late\\n");
+`,
     );
-  });
-
-  it("defaults ttlHours and rejects a missing destination or entries", async () => {
-    const configPath = join(root, ".build-external.yaml");
-    await put(root, ".build-external.yaml", `
-externalSkills:
-  test/repo:
-    destination: .agents/skills.exact
-    entries:
-      - skills/eli5
-`);
-    assert.equal((await loadExternalConfig(configPath)).repos[0]!.ttlMs, defaultTtlHours * 60 * 60 * 1000);
-
-    await put(root, ".build-external.yaml", `
-externalSkills:
-  test/repo:
-    entries:
-      - skills/eli5
-`);
-    await assert.rejects(loadExternalConfig(configPath), /\.destination/);
-
-    await put(root, ".build-external.yaml", `
-externalSkills:
-  test/repo:
-    destination: .agents/skills.exact
-`);
-    await assert.rejects(loadExternalConfig(configPath), /\.entries/);
-  });
-
-  it("merges the machine layer and lets it override shared repos by key", async () => {
-    const configPath = join(root, ".build-external.yaml");
-    await put(root, ".build-external.yaml", `
-externalSkills:
-  test/shared:
-    destination: a
-    entries:
-      - one
-  test/other:
-    destination: b
-    entries:
-      - two
-`);
-    await put(root, ".build-external.machine.yaml", `
-externalSkills:
-  test/shared:
-    destination: c
-    entries:
-      - three
-`);
-
-    const config = await loadExternalConfig(configPath);
-
-    assert.deepEqual(
-      config.repos.map((repo) => [repo.repo, repo.destination, repo.entries]),
-      [
-        ["test/shared", "c", ["three"]],
-        ["test/other", "b", ["two"]],
-      ],
+    await put(
+      root,
+      "dotfiles/02-early.build.ts",
+      `#!/usr/bin/env bun
+import { appendFile } from "node:fs/promises";
+await appendFile("log.txt", "early\\n");
+`,
     );
-  });
-
-  it("rejects a machine file without an externalSkills mapping", async () => {
-    const configPath = join(root, ".build-external.yaml");
-    await put(root, ".build-external.yaml", `
-externalSkills:
-  test/repo:
-    destination: a
-    entries:
-      - one
-`);
-    await put(root, ".build-external.machine.yaml", "externalSkills: []\n");
-
-    await assert.rejects(loadExternalConfig(configPath), /\.build-external\.machine\.yaml/);
-  });
-});
-
-describe("isPullDue", () => {
-  it("pulls on force, without a record, and only after the TTL elapses", () => {
-    assert.equal(isPullDue(undefined, 1000, 500, false), true);
-    assert.equal(isPullDue(500, 1000, 500, false), true);
-    assert.equal(isPullDue(500, 1000, 500, true), true);
-    assert.equal(isPullDue(501, 1000, 500, false), false);
-  });
-});
-
-describe("syncMirror", () => {
-  let originPath: string;
-  let gitInOrigin: (...args: string[]) => Promise<string>;
-
-  beforeEach(async () => {
-    originPath = join(root, "origin", "test", "repo");
-    gitInOrigin = await initRepo(originPath, "README.md", "first\n");
-  });
-
-  it("clones a missing mirror and records the pull time", async () => {
-    const context = testContext(originPath);
-
-    const sync = await syncMirror("test/repo", defaultTtlHours * 60 * 60 * 1000, context);
-
-    assert.equal(sync.changed, true);
-    assert.equal(
-      await readFile(join(sync.mirrorDir, "README.md"), "utf8"),
-      "first\n",
+    await put(
+      root,
+      "dotfiles/sub/marker.build.ts",
+      `#!/usr/bin/env bun
+import { writeFile } from "node:fs/promises";
+await writeFile("marker.txt", "ran\\n");
+`,
     );
-    assert.notEqual(await readLastPullAt(sync.mirrorDir), undefined);
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "log.txt"), "utf8"), "early\nlate\n");
+    assert.equal(await readFile(join(distRoot, "sub/marker.txt"), "utf8"), "ran\n");
+    assert.equal(existsSync(join(distRoot, "marker.txt")), false);
   });
 
-  it("skips the pull within the TTL", async () => {
-    const context = testContext(originPath);
-    await syncMirror("test/repo", defaultTtlHours * 60 * 60 * 1000, context);
-    await gitInOrigin("commit", "-q", "--allow-empty", "-m", "second");
+  it("does not run hooks that earlier hooks removed from dist", async () => {
+    await put(
+      root,
+      "dotfiles/01-prune.build.ts",
+      `#!/usr/bin/env bun
+import { rm } from "node:fs/promises";
+await rm("doomed", { recursive: true, force: true });
+`,
+    );
+    await put(
+      root,
+      "dotfiles/doomed/boom.build.ts",
+      `#!/usr/bin/env bun
+process.exit(1);
+`,
+    );
+    await put(root, "dotfiles/doomed/keep.txt", "x\n");
 
-    const sync = await syncMirror("test/repo", defaultTtlHours * 60 * 60 * 1000, context);
+    await run(root, "linux", homeRoot);
 
-    assert.equal(sync.changed, false);
-    assert.equal(await readFile(join(sync.mirrorDir, "README.md"), "utf8"), "first\n");
+    assert.equal(existsSync(join(distRoot, "doomed")), false);
   });
 
-  it("pulls when due, detects changes, and updates the pull time", async () => {
-    const context = testContext(originPath);
-    await syncMirror("test/repo", defaultTtlHours * 60 * 60 * 1000, context);
-    const pullTimeAfterClone = await readLastPullAt(join(context.mirrorRoot, "test", "repo"));
-    await gitInOrigin("commit", "-q", "--allow-empty", "-m", "second");
-    await put(originPath, "docs/new.md", "added\n");
-    await gitInOrigin("add", ".");
-    await gitInOrigin("commit", "-q", "-m", "third");
+  it("fails when a hook exits non-zero", async () => {
+    await put(
+      root,
+      "dotfiles/fail.build.ts",
+      `#!/usr/bin/env bun
+throw new Error("boom");
+`,
+    );
 
-    const sync = await syncMirror("test/repo", 0, context);
-
-    assert.equal(sync.changed, true);
-    assert.equal(await readFile(join(sync.mirrorDir, "docs/new.md"), "utf8"), "added\n");
-    assert.ok((await readLastPullAt(sync.mirrorDir))! >= pullTimeAfterClone!);
+    await assert.rejects(run(root, "linux", homeRoot), /local build hook failed: fail\.build\.ts/);
   });
 
-  it("keeps the existing mirror with a warning when the pull fails", async () => {
-    const context = testContext(originPath, {
-      runGit: async (args) =>
-        args.includes("pull")
-          ? { ok: false, stdout: "", stderr: "forced pull failure" }
-          : runProcess(["git", ...args]),
+  it("composes merge sidecars over the current home content", async () => {
+    await put(
+      homeRoot,
+      "kit/settings.json",
+      JSON.stringify({ mode: "home", keep: true, extra: ["home"] }),
+    );
+    await put(
+      root,
+      "dotfiles/kit/settings.json",
+      JSON.stringify({ mode: "plain", plainOnly: true }),
+    );
+    await put(
+      root,
+      "dotfiles/kit/settings.merge.json",
+      JSON.stringify({ "extra.$append": ["merged"] }),
+    );
+
+    await run(root, "linux", homeRoot);
+
+    assert.deepEqual(JSON.parse(await readFile(join(distRoot, "kit/settings.json"), "utf8")), {
+      mode: "plain",
+      keep: true,
+      plainOnly: true,
+      extra: ["home", "merged"],
     });
-    await syncMirror("test/repo", defaultTtlHours * 60 * 60 * 1000, context);
-    await gitInOrigin("commit", "-q", "--allow-empty", "-m", "second");
-
-    const sync = await syncMirror("test/repo", 0, context);
-
-    assert.equal(sync.changed, false);
-    assert.equal(await readFile(join(sync.mirrorDir, "README.md"), "utf8"), "first\n");
+    assert.equal(existsSync(join(distRoot, "kit/settings.merge.json")), false);
   });
 
-  it("rejects when the clone fails", async () => {
-    const context = testContext(join(root, "origin", "missing"));
-
-    await assert.rejects(
-      syncMirror("test/repo", defaultTtlHours * 60 * 60 * 1000, context),
-      /git clone failed/,
+  it("renders replace sidecars from the current home content", async () => {
+    await put(homeRoot, "app.conf", "EnableAutoUpdates=true\n");
+    await put(
+      root,
+      "dotfiles/app.conf.replace.yaml",
+      `
+replacements:
+  - pattern: "(EnableAutoUpdates)=.*"
+    replacement: "\${1}=false"
+`,
     );
-  });
-});
 
-describe("resolveEntryPath", () => {
-  it("resolves a single match and rejects zero or multiple matches", async () => {
-    const mirrorDir = join(root, "mirror");
-    await put(mirrorDir, "skills/eli5/SKILL.md", "x\n");
-    await put(mirrorDir, "skills/other/SKILL.md", "y\n");
+    await run(root, "linux", homeRoot);
 
-    assert.equal(await resolveEntryPath(mirrorDir, "skills/eli5"), join(mirrorDir, "skills/eli5"));
-    await assert.rejects(resolveEntryPath(mirrorDir, "skills/missing"), /matched nothing/);
-    await assert.rejects(resolveEntryPath(mirrorDir, "skills/*"), /matched multiple/);
-  });
-
-  it("resolves a file entry", async () => {
-    const mirrorDir = join(root, "mirror");
-    await put(mirrorDir, "gitalias.txt", "alias\n");
-
-    assert.equal(await resolveEntryPath(mirrorDir, "gitalias.txt"), join(mirrorDir, "gitalias.txt"));
-  });
-});
-
-describe("copySkillTree", () => {
-  it("copies names verbatim, skips .git, and keeps existing files", async () => {
-    const sourceDir = join(root, "mirror");
-    const targetDir = join(root, "destination");
-    await put(sourceDir, "dot_special/file.txt", "verbatim\n");
-    await put(sourceDir, ".git/HEAD", "ref\n");
-    await put(sourceDir, "plain.txt", "new\n");
-    await put(targetDir, "plain.txt", "existing\n");
-
-    await copySkillTree(sourceDir, targetDir);
-
-    assert.equal(
-      await readFile(join(targetDir, "dot_special/file.txt"), "utf8"),
-      "verbatim\n",
-    );
-    assert.equal(existsSync(join(targetDir, ".git")), false);
-    assert.equal(existsSync(join(targetDir, "literal_dot_special")), false);
-    assert.equal(await readFile(join(targetDir, "plain.txt"), "utf8"), "existing\n");
-  });
-});
-
-describe("copyRepoEntries", () => {
-  it("copies glob and literal entries into the destination", async () => {
-    const mirrorDir = join(root, "mirror");
-    const destinationDir = join(root, "destination");
-    await put(mirrorDir, "skills/hi/greeting/SKILL.md", "hi\n");
-    await put(mirrorDir, "skills/lo/farewell/SKILL.md", "bye\n");
-
-    await copyRepoEntries(mirrorDir, destinationDir, ["skills/*/greeting", "skills/lo/farewell"], []);
-
-    assert.equal(await readFile(join(destinationDir, "greeting/SKILL.md"), "utf8"), "hi\n");
-    assert.equal(await readFile(join(destinationDir, "farewell/SKILL.md"), "utf8"), "bye\n");
-  });
-
-  it("copies a file entry directly under the destination", async () => {
-    const mirrorDir = join(root, "mirror");
-    const destinationDir = join(root, "nested", "destination");
-    await put(mirrorDir, "gitalias.txt", "alias\n");
-    await put(mirrorDir, "skills/hi/greeting/SKILL.md", "hi\n");
-
-    await copyRepoEntries(mirrorDir, destinationDir, ["gitalias.txt", "skills/hi/greeting"], []);
-
-    assert.equal(await readFile(join(destinationDir, "gitalias.txt"), "utf8"), "alias\n");
-    assert.equal(await readFile(join(destinationDir, "greeting/SKILL.md"), "utf8"), "hi\n");
-  });
-
-  it("rejects an edit that targets a file entry", async () => {
-    const mirrorDir = join(root, "mirror");
-    const destinationDir = join(root, "destination");
-    await put(mirrorDir, "gitalias.txt", "alias\n");
-
-    await assert.rejects(
-      copyRepoEntries(mirrorDir, destinationDir, ["gitalias.txt"], [
-        { path: "gitalias.txt", text: "extra" },
-      ]),
-      /edit path is not included in entries/,
-    );
-  });
-
-  it("applies $append edits to the staged tree before copying", async () => {
-    const mirrorDir = join(root, "mirror");
-    const destinationDir = join(root, "destination");
-    await put(mirrorDir, "skills/hi/greeting/SKILL.md", "base\n");
-
-    await copyRepoEntries(mirrorDir, destinationDir, ["skills/hi/greeting"], [
-      { path: "skills/hi/greeting/SKILL.md", text: "extra" },
-    ]);
-
-    assert.equal(
-      await readFile(join(destinationDir, "greeting/SKILL.md"), "utf8"),
-      "base\nextra",
-    );
-  });
-
-  it("rejects an edit path outside of the entries", async () => {
-    const mirrorDir = join(root, "mirror");
-    const destinationDir = join(root, "destination");
-    await put(mirrorDir, "skills/hi/greeting/SKILL.md", "base\n");
-    await put(mirrorDir, "skills/other/SKILL.md", "other\n");
-
-    await assert.rejects(
-      copyRepoEntries(mirrorDir, destinationDir, ["skills/hi/greeting"], [
-        { path: "skills/other/SKILL.md", text: "extra" },
-      ]),
-      /edit path is not included in entries/,
-    );
-  });
-
-  it("appends the edit text to the mirrored file", async () => {
-    const mirrorDir = join(root, "mirror");
-    const destinationDir = join(root, "destination");
-    await put(mirrorDir, "skills/hi/greeting/SKILL.md", "base\n");
-    await put(mirrorDir, "skills/hi/greeting/EXTRA.md", "tail");
-
-    await copyRepoEntries(mirrorDir, destinationDir, ["skills/hi/greeting"], [
-      { path: "skills/hi/greeting/EXTRA.md", text: "appended" },
-    ]);
-
-    assert.equal(
-      await readFile(join(destinationDir, "greeting/EXTRA.md"), "utf8"),
-      "tail\nappended",
-    );
-  });
-});
-
-describe("fetchExternals", () => {
-  it("syncs the mirror, materializes entries, and runs run_after only on changes", async () => {
-    const originPath = join(root, "origin", "test", "repo");
-    const gitInOrigin = await initRepo(originPath, "skills/hi/greeting/SKILL.md", "hello\n");
-    const configPath = join(root, ".build-external.yaml");
-    await put(root, ".build-external.yaml", `
-externalSkills:
-  test/repo:
-    destination: .agents/skills.exact
-    entries:
-      - skills/*/greeting
-    ttlHours: 1
-    run_after:
-      - [touch, after.txt]
-`);
-    const commands: Array<{ args: string[]; cwd: string }> = [];
-    const context = testContext(originPath, {
-      runCommand: async (args, cwd) => {
-        commands.push({ args, cwd });
-        return { ok: true, stdout: "", stderr: "" };
-      },
-    });
-
-    await fetchExternals(configPath, distRoot, context);
-
-    assert.equal(
-      await readFile(join(distRoot, ".agents/skills.exact/greeting/SKILL.md"), "utf8"),
-      "hello\n",
-    );
-    assert.equal(commands.length, 1);
-    assert.deepEqual(commands[0]!.args, ["touch", "after.txt"]);
-    assert.equal(commands[0]!.cwd, join(root, "mirrors", "github.com", "test", "repo"));
-    assert.equal(existsSync(join(distRoot, ".agents/skills.exact/greeting/SKILL.md")), true);
-
-    // Within the TTL the mirror is unchanged, so run_after does not run again.
-    await fetchExternals(configPath, distRoot, context);
-    assert.equal(commands.length, 1);
+    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "EnableAutoUpdates=false\n");
+    assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
 });
 
@@ -533,35 +250,28 @@ describe("applyReplacements", () => {
 });
 
 describe("local build hooks", () => {
-  const emptyMap = "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n";
-
-  async function putSource(path: string, content: string): Promise<void> {
-    const absolute = join(root, "dotfiles", path);
-    await mkdir(join(absolute, ".."), { recursive: true });
-    await writeFile(absolute, content);
-  }
-
-  async function putSourceBase(): Promise<void> {
-    await putSource(".build-map.md", emptyMap);
-    await putSource(".build-external.yaml", "externalSkills: {}\n");
-  }
-
   it("runs a shebang hook as a child process in the dist folder it belongs to", async () => {
-    await putSourceBase();
-    await putSource("vscode/format-settings.build.sh", "#!/bin/sh\npwd > hook-cwd.txt\n");
+    await put(root, "dotfiles/vscode/format-settings.build.sh", "#!/bin/sh\npwd > hook-cwd.txt\n");
     await run(root, "linux", homeRoot);
     const hookCwd = (await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8")).trim();
     assert.equal(hookCwd, join(distRoot, "vscode"));
   });
 
-  it("skips a hook whose own path is mapped for removal and removes it from dist", async () => {
-    await putSource(
-      ".build-map.md",
-      `${emptyMap}| vscode/format-settings.build.sh | - |  |  |\n`,
+  it("does not run a hook the path-map standard hook removed from dist", async () => {
+    const standardHook = await readFile(
+      join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
+      "utf-8",
     );
-    await putSource(".build-external.yaml", "externalSkills: {}\n");
-    await putSource("vscode/format-settings.build.sh", "#!/bin/sh\ntouch hook-ran.txt\n");
+    await put(root, "dotfiles/02-path-map.build.ts", standardHook);
+    await put(
+      root,
+      "dotfiles/.build-map.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode/format-settings.build.sh | - | - | - |\n",
+    );
+    await put(root, "dotfiles/vscode/format-settings.build.sh", "#!/bin/sh\ntouch hook-ran.txt\n");
+
     await run(root, "linux", homeRoot);
+
     assert.ok(!existsSync(join(distRoot, "vscode/hook-ran.txt")));
     assert.ok(!existsSync(join(distRoot, "vscode/format-settings.build.sh")));
   });
