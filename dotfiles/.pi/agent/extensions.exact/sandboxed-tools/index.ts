@@ -73,9 +73,29 @@ function sessionFromContext(context: any): ToolSession {
 }
 
 const EROFS_HINT =
-  "Sandbox blocked this write. Do not retry with bash; call ask_permission to approve the directory subtree.";
+  "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. If the result says bash writes are unavailable, use fs tools instead.";
 
 const COMMAND_APPROVAL_NOTE = "User approved this command via confirmation.";
+
+function writePermissionGuideline(paths: {
+  allow: string[];
+  ask: string[];
+  deny: string[];
+}): string {
+  const listPaths = (action: string, paths: string[]) => [
+    `${action}:`,
+    ...(paths.length > 0 ? paths.map((path) => `- ${JSON.stringify(path)}`) : ["- (none)"]),
+  ];
+  return [
+    "Effective write paths grouped by final action in sandbox.yaml:",
+    ...listPaths("allow", paths.allow),
+    ...listPaths("ask", paths.ask),
+    ...listPaths("deny", paths.deny),
+    "The last matching rule determines each action, not path specificity. Credentials override listed ancestors and are never listed.",
+    "allow needs no permission request; ask can be requested but remains read-only through bash; deny cannot be granted. A path with no matching write rule can be requested unless it is a credential path.",
+    'Before edit-heavy work on a requestable path, call ask_permission on the target subtree; for a worktree, use its creation path or parent. After bash reports "Read-only file system", request access only for a requestable path, respect whether the result permits bash writes, and do not rewrite the command to retry.',
+  ].join("\n");
+}
 
 /** §2.3 approval note for a write grant approved via a confirmation dialog.
  * Unset paths become writable including via bash; ask-final paths stay
@@ -197,7 +217,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
 
   pi.registerTool({
     ...bashTool,
-    description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash; call ask_permission to approve the working directory subtree. Commands rejected with "Command requires a reason" must be re-requested via ask_permission with the same command and a reason; do not rewrite them to bypass the gate.`,
+    description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash. Request access with ask_permission only for paths whose effective write action is ask or unset; explicit deny and credentials paths cannot be granted. Respect whether the permission result allows bash writes. Commands rejected with "Command requires a reason" must be re-requested via ask_permission with the same command and a reason; do not rewrite them to bypass the gate.`,
     async execute(id, params, signal, onUpdate, context) {
       const approved = await sandbox.authorizeCommand(params.command, context);
       const result = await sandbox.runTool("bash", params, {
@@ -305,7 +325,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
   );
   pi.registerTool({
     ...writeTool,
-    description: `${writeTool.description} Writing to an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session. Paths resolving to ask in the config stay read-only in the bash sandbox.`,
+    description: `${writeTool.description} Writing to a path whose effective action is ask or unset prompts the user for permission. Explicit deny and credentials paths are rejected without a prompt. Once approved, the path becomes writable for the rest of the session. Paths resolving to ask in the config stay read-only in the bash sandbox.`,
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
       const approval = await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
@@ -327,7 +347,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
   });
   pi.registerTool({
     ...editTool,
-    description: `${editTool.description} Editing an unapproved path prompts the user for permission; once approved, the path becomes writable for the rest of the session. Paths resolving to ask in the config stay read-only in the bash sandbox.`,
+    description: `${editTool.description} Editing a path whose effective action is ask or unset prompts the user for permission. Explicit deny and credentials paths are rejected without a prompt. Once approved, the path becomes writable for the rest of the session. Paths resolving to ask in the config stay read-only in the bash sandbox.`,
     renderShell: "default",
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
@@ -394,10 +414,10 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     name: "ask_permission",
     label: "ask_permission",
     description:
-      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: use it before starting edit-heavy work in a directory not yet writable (a worktree to create, or its parent directory); once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for the rest of the session.",
+      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: request access only when the effective write action is ask or unset and the path is not credentials; explicit deny and credentials cannot be granted. Use it before edit-heavy work on such a path; for a worktree, request its creation path or parent. Once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for the rest of the session.",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
-      "Before starting edit-heavy work in a directory that is not yet writable (e.g. a worktree outside the allowed paths), call ask_permission on the worktree directory or its parent so the user can approve it up front.",
+      writePermissionGuideline(sandbox.getWritePathsByFinalAction()),
       'When bash rejects a command with "Command requires a reason", call ask_permission with that exact command and a reason instead of rewriting the command.',
     ],
     // No Type.Union/anyOf here: some models (e.g. GLM-5.3-Flash) fail to generate

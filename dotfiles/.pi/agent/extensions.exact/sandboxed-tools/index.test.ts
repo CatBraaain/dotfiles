@@ -124,12 +124,15 @@ const compiled = (
 ) => compileCommandRuleEntries(entries).entries;
 
 // 拡張 factory を stub API で読み込み、registerTool されたツールを取り出す
-const captureRegisteredTools = (): Map<string, any> => {
+const captureRegisteredTools = (configPath?: string): Map<string, any> => {
   const registered = new Map<string, any>();
-  sandboxedToolsExtension({
-    registerTool: (tool: any) => registered.set(tool.name, tool),
-    on: () => {},
-  } as any);
+  sandboxedToolsExtension(
+    {
+      registerTool: (tool: any) => registered.set(tool.name, tool),
+      on: () => {},
+    } as any,
+    configPath,
+  );
   return registered;
 };
 
@@ -1958,7 +1961,7 @@ describe("§2.3 承認ノート", () => {
         });
       assert.deepEqual(resultTexts(result), [
         "touch: cannot touch '/outside/x': Read-only file system",
-        "Sandbox blocked this write. Do not retry with bash; call ask_permission to approve the directory subtree.",
+        "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. If the result says bash writes are unavailable, use fs tools instead.",
         "User approved this command via confirmation.",
       ]);
     } finally {
@@ -3097,16 +3100,108 @@ commands:
     );
   });
 
-  it("説明文と promptGuidelines は作業着手前と理由必須ゲートの利用を誘導する", () => {
-    const tool = captureRegisteredTools().get("ask_permission");
-    assert.match(tool.description, /before starting edit-heavy work/i);
-    assert.match(tool.description, /worktree/i);
-    assert.match(tool.description, /exact rejected command/i);
-    assert.equal(tool.promptGuidelines?.length, 2);
-    assert.match(tool.promptGuidelines[0], /before starting edit-heavy work/i);
-    assert.match(tool.promptGuidelines[0], /worktree/i);
-    assert.match(tool.promptGuidelines[1], /Command requires a reason/);
+  it("ツール説明と promptGuidelines は書き込み許可の境界を示す", () => {
+    const tools = captureRegisteredTools();
+    const permissionTool = tools.get("ask_permission");
+    assert.match(permissionTool.description, /effective write action is ask or unset/i);
+    assert.match(permissionTool.description, /explicit deny and credentials cannot be granted/i);
+    assert.match(permissionTool.description, /before edit-heavy work/i);
+    assert.match(permissionTool.description, /worktree/i);
+    assert.match(permissionTool.description, /exact rejected command/i);
+    assert.equal(permissionTool.promptGuidelines?.length, 2);
+    assert.match(
+      permissionTool.promptGuidelines[0],
+      /Effective write paths grouped by final action/,
+    );
+    assert.match(permissionTool.promptGuidelines[0], /allow needs no permission request/);
+    assert.match(
+      permissionTool.promptGuidelines[0],
+      /ask can be requested but remains read-only through bash/,
+    );
+    assert.match(permissionTool.promptGuidelines[0], /deny cannot be granted/);
+    assert.match(permissionTool.promptGuidelines[0], /no matching write rule can be requested/);
+    assert.match(permissionTool.promptGuidelines[0], /worktree/i);
+    assert.match(permissionTool.promptGuidelines[0], /creation path or parent/);
+    assert.match(permissionTool.promptGuidelines[0], /Credentials override listed ancestors/);
+    assert.match(permissionTool.promptGuidelines[0], /last matching rule determines each action/);
+    assert.match(permissionTool.promptGuidelines[1], /Command requires a reason/);
+    for (const toolName of ["write", "edit"]) {
+      const description = tools.get(toolName).description;
+      assert.match(description, /effective action is ask or unset/);
+      assert.match(
+        description,
+        /explicit deny and credentials paths are rejected without a prompt/i,
+      );
+    }
   });
+
+  it(
+    "promptGuidelines は write の実効 allow/ask/deny を示し credentials と commands を除く",
+    withTempDirectory((directory) => {
+      const allowedPath = join(directory, "allowed");
+      const secondAllowedPath = join(directory, "second-allowed");
+      const overriddenPath = join(directory, "overridden");
+      const restrictedPath = join(allowedPath, "restricted");
+      const deniedPath = join(directory, "denied");
+      const credentialPath = join(allowedPath, "credential");
+      const askCredentialPath = join(directory, "ask-credential");
+      const denyCredentialPath = join(directory, "deny-credential");
+      const credentialRoot = join(directory, "credential-root");
+      const credentialDescendants = {
+        allow: join(credentialRoot, "allow"),
+        ask: join(credentialRoot, "ask"),
+        deny: join(credentialRoot, "deny"),
+      };
+      const configPath = join(directory, "sandbox.yaml");
+      writeFileSync(
+        configPath,
+        [
+          "write:",
+          `  - {allow: ${JSON.stringify(allowedPath)}}`,
+          `  - {allow: ${JSON.stringify(secondAllowedPath)}}`,
+          `  - {allow: ${JSON.stringify(credentialPath)}}`,
+          `  - {allow: ${JSON.stringify(credentialDescendants.allow)}}`,
+          `  - {ask: ${JSON.stringify(restrictedPath)}}`,
+          `  - {ask: ${JSON.stringify(askCredentialPath)}}`,
+          `  - {ask: ${JSON.stringify(credentialDescendants.ask)}}`,
+          `  - {deny: ${JSON.stringify(deniedPath)}}`,
+          `  - {deny: ${JSON.stringify(denyCredentialPath)}}`,
+          `  - {deny: ${JSON.stringify(credentialDescendants.deny)}}`,
+          `  - {ask: ${JSON.stringify(overriddenPath)}}`,
+          `  - {allow: ${JSON.stringify(overriddenPath)}}`,
+          `credentials: [${[credentialPath, askCredentialPath, denyCredentialPath, credentialRoot]
+            .map((path) => JSON.stringify(path))
+            .join(", ")}]`,
+          'commands: [{ask_with_reason: "^sudo"}]',
+          "",
+        ].join("\n"),
+      );
+
+      const guidance = captureRegisteredTools(configPath).get("ask_permission").promptGuidelines[0];
+      const allowSection = guidance.split("\nask:\n")[0] ?? "";
+      const askSection = guidance.split("\nask:\n")[1]?.split("\ndeny:\n")[0] ?? "";
+      const denySection = guidance.split("\ndeny:\n")[1] ?? "";
+      assert.ok(allowSection.includes(JSON.stringify(allowedPath)));
+      assert.ok(allowSection.includes(JSON.stringify(secondAllowedPath)));
+      assert.ok(allowSection.includes(JSON.stringify(overriddenPath)));
+      assert.ok(askSection.includes(JSON.stringify(restrictedPath)));
+      assert.ok(!askSection.includes(JSON.stringify(overriddenPath)));
+      assert.ok(denySection.includes(JSON.stringify(deniedPath)));
+      for (const path of [
+        credentialPath,
+        askCredentialPath,
+        denyCredentialPath,
+        ...Object.values(credentialDescendants),
+      ]) {
+        assert.ok(!guidance.includes(JSON.stringify(path)), `credential path leaked: ${path}`);
+      }
+      assert.ok(!guidance.includes("sudo"));
+      assert.ok(guidance.includes("The last matching rule determines each action"));
+      assert.ok(guidance.includes("Credentials override listed ancestors"));
+      assert.ok(guidance.includes("no matching write rule can be requested"));
+      assert.match(guidance, /ask can be requested but remains read-only through bash/);
+    }),
+  );
 
   it("ask_permission のコール行とサマリー表示", () => {
     const tool = captureRegisteredTools().get("ask_permission");
@@ -3726,8 +3821,10 @@ commands:
     ),
   );
 
-  it("bash の説明文は理由必須ゲートの誘導を含む", () => {
+  it("bash の説明文は許可要求の境界と理由必須ゲートを示す", () => {
     const tool = captureRegisteredTools().get("bash");
+    assert.match(tool.description, /effective write action is ask or unset/);
+    assert.match(tool.description, /explicit deny and credentials paths cannot be granted/);
     assert.match(tool.description, /Command requires a reason/);
     assert.match(tool.description, /do not rewrite them to bypass the gate/);
   });

@@ -837,22 +837,51 @@ export class Sandbox {
 
   /**
    * Expanded write-section paths split by their final resolved action (§3
-   * last-match-wins). `allow` holds the paths fs tools would allow per call —
-   * the only configured paths the bash sandbox may writable-bind. `restricted`
-   * holds the deny- and ask-final paths, which must stay non-writable in bash
-   * (§6.1) exactly as fs tools deny or ask about them per call.
+   * last-match-wins). `allow`, `ask`, and `deny` expose the same path classes
+   * used by fs authorization. `restricted` preserves deny/ask bind ordering
+   * for the bash sandbox (§6.1).
    */
-  private writePathsByFinalAction(): { allow: string[]; restricted: string[] } {
+  private writePathsByFinalAction(): {
+    allow: string[];
+    ask: string[];
+    deny: string[];
+    restricted: string[];
+  } {
     const section = this.writePaths();
-    const allow = new Set<string>();
+    const pathsByAction = {
+      allow: new Set<string>(),
+      ask: new Set<string>(),
+      deny: new Set<string>(),
+    };
     const restricted = new Set<string>();
+    const seen = new Set<string>();
     for (const entry of section)
       for (const path of entry.paths) {
-        if (allow.has(path) || restricted.has(path)) continue;
-        if (resolvePathActionMatch(section, path).action === "allow") allow.add(path);
-        else restricted.add(path);
+        if (seen.has(path)) continue;
+        seen.add(path);
+        const action = resolvePathActionMatch(section, path).action;
+        pathsByAction[action].add(path);
+        if (action !== "allow") restricted.add(path);
       }
-    return { allow: [...allow], restricted: [...restricted] };
+    return {
+      allow: [...pathsByAction.allow],
+      ask: [...pathsByAction.ask],
+      deny: [...pathsByAction.deny],
+      restricted: [...restricted],
+    };
+  }
+
+  /** Effective write paths, excluding paths covered by the credentials deny list. */
+  getWritePathsByFinalAction(): { allow: string[]; ask: string[]; deny: string[] } {
+    const { allow, ask, deny } = this.writePathsByFinalAction();
+    const credentialPaths = this.credentialPaths();
+    const excludeCredentials = (paths: string[]) =>
+      paths.filter((path) => !pathsMatchCandidate(credentialPaths, path));
+    return {
+      allow: excludeCredentials(allow),
+      ask: excludeCredentials(ask),
+      deny: excludeCredentials(deny),
+    };
   }
 
   /**
