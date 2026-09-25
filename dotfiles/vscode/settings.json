@@ -188,7 +188,11 @@
     "footer-max-line-length": [2, "always", 100],
     // "header-max-length": [2, "always", 50],
     "scope-case": [2, "always", "lower-case"],
-    "subject-case": [2, "never", ["sentence-case", "start-case", "pascal-case", "upper-case"]],
+    "subject-case": [
+      2,
+      "never",
+      ["sentence-case", "start-case", "pascal-case", "upper-case"]
+    ],
     "subject-empty": [2, "never"],
     "subject-full-stop": [2, "never", "."],
     "type-case": [2, "always", "lower-case"],
@@ -196,7 +200,18 @@
     "type-enum": [
       2,
       "always",
-      ["feat", "fix", "docs", "perf", "refactor", "build", "ci", "style", "test", "chore"]
+      [
+        "feat",
+        "fix",
+        "docs",
+        "perf",
+        "refactor",
+        "build",
+        "ci",
+        "style",
+        "test",
+        "chore"
+      ]
     ]
   },
   "csharp.suppressWarnings": true,
@@ -562,7 +577,15 @@
   ],
   "settingsSync.keybindingsPerPlatform": false,
   "svelte.enable-ts-plugin": true,
-  "tailwindCSS.classFunctions": ["clsx", "cva", "tw", "cx", "cn", "tv", "cnMerge"],
+  "tailwindCSS.classFunctions": [
+    "clsx",
+    "cva",
+    "tw",
+    "cx",
+    "cn",
+    "tv",
+    "cnMerge"
+  ],
   "task.allowAutomaticTasks": "on",
   "terminal.integrated.defaultLocation": "editor",
   // "terminal.integrated.defaultProfile.windows": "Command Prompt",
