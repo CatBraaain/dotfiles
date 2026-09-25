@@ -1,0 +1,2 @@
+patch:
+  "engine/processors/@3": lua_processor@*kagiroi/kagiroi_n_kana_speller

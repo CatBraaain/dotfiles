@@ -35,6 +35,7 @@ $managedPackages = @(
     "Microsoft.Sysinternals.Autologon"
     "Devolutions.UniGetUI"
     "Microsoft.VisualStudioCode"
+    "Rime.Weasel"
     "WinDirStat.WinDirStat"
     "Microsoft.WindowsTerminal"
     "ZedIndustries.Zed"

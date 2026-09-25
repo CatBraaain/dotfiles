@@ -1,0 +1,9 @@
+# Rime dictionary
+# encoding: utf-8
+---
+name: kagiroi.custom
+version: 20260925
+sort: by_weight
+use_preset_vocabulary: false
+...
+かんな|1922 1851	かんな	1

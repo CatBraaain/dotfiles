@@ -9,6 +9,10 @@
 - apt: xvfb
 # x11vnc publishes the headed camoufox display for human handoff (CAPTCHA, login).
 - apt: x11vnc
+# Rime Japanese input: Fcitx 5 frontend and Kagiroi's Lua translator support.
+- apt: fcitx5
+- apt: fcitx5-rime
+- apt: librime-plugin-lua
 
 # Tauri Linux prerequisites.
 - apt: libwebkit2gtk-4.1-dev
