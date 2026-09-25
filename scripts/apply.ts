@@ -5,7 +5,8 @@
 // stage and not part of this file.
 
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+const { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } = fsPromises;
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
@@ -18,7 +19,7 @@ import {
   type DiffEntry,
   type DiffResult,
 } from "./diff.ts";
-import { resolveHookCommand } from "./shebang.ts";
+import { resolveHookCommand } from "./hook-runner.ts";
 
 declare const Bun: {
   spawn(
@@ -121,10 +122,9 @@ export async function collectDeclarations(distRoot: string): Promise<Declaration
   return declarations;
 }
 
-// Runs apply scripts (spec §apply スクリプト) after applying: each script
-// runs with its cwd at the script folder's home directory (created if
-// missing), via its shebang interpreter or pwsh for .ps1. A non-zero exit
-// aborts the remaining scripts.
+// Runs TypeScript apply hooks (spec §apply スクリプト) after applying. Each
+// runs with its cwd at the script folder's home directory (created if missing).
+// A non-zero exit aborts the remaining hooks.
 export async function runApplyScripts(
   scripts: ApplyScript[],
   distRoot: string,
@@ -133,8 +133,8 @@ export async function runApplyScripts(
   for (const script of scripts) {
     const cwd = join(homeRoot, script.homeFolderRel);
     await mkdir(cwd, { recursive: true });
-    const command = await resolveApplyCommand(script, join(distRoot, script.distPath));
-    command.push(join(distRoot, script.distPath));
+    const command = resolveHookCommand(join(distRoot, script.distPath), script.distPath, "apply");
+
     await spawnChild(command, cwd, "ignore", `apply script failed: ${script.distPath}`);
   }
 }
@@ -339,13 +339,6 @@ async function spawnChild(
     const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
     throw new Error(`${label} (${reason})`);
   }
-}
-
-async function resolveApplyCommand(script: ApplyScript, scriptAbs: string): Promise<string[]> {
-  const shebang = await resolveHookCommand(scriptAbs, script.distPath);
-  if (shebang) return shebang;
-  if (script.fileName.toLowerCase().endsWith(".ps1")) return ["pwsh"];
-  throw new Error(`apply script has neither a shebang nor a .ps1 extension: ${script.distPath}`);
 }
 
 // -------------------------------------------------------------------- helpers

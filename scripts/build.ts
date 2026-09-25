@@ -14,7 +14,7 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 import { mapSegment } from "./diff.ts";
-import { resolveHookCommand } from "./shebang.ts";
+import { resolveHookCommand } from "./hook-runner.ts";
 
 declare const Bun: {
   spawn(
@@ -33,6 +33,7 @@ declare const process: {
   cwd(): string;
   platform: string;
   env: Record<string, string | undefined>;
+  execPath: string;
   exitCode: number;
 };
 declare const console: { error(...data: unknown[]): void };
@@ -578,9 +579,7 @@ function compareHookParents(left: string, right: string): number {
   return leftParts.length - rightParts.length;
 }
 
-// Local build hooks (spec: SPEC.md §build: ローカルフック): each hook is a
-// shebang-scripted child process (bun, sh, ...); a hook without a shebang is
-// a spec violation and aborts the build.
+// Local build hooks (spec: SPEC.md §build: ローカルフック) run as Bun processes.
 export async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
   for (const hook of hooks) {
     // Earlier hooks (e.g. the path map) may have removed or moved the files
@@ -590,9 +589,7 @@ export async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
     const relativePath = hookRelativePath(hook);
-    const command = await resolveHookCommand(hook.absolutePath, relativePath);
-    if (!command) throw new Error(`build hook has no shebang: ${relativePath}`);
-    command.push(hook.absolutePath);
+    const command = resolveHookCommand(hook.absolutePath, relativePath, "build");
     const proc = Bun.spawn(command, {
       cwd: hookDistDir,
       env: process.env,

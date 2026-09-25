@@ -250,10 +250,14 @@ describe("applyReplacements", () => {
 });
 
 describe("local build hooks", () => {
-  it("runs a shebang hook as a child process in the dist folder it belongs to", async () => {
-    await put(root, "dotfiles/vscode/format-settings.build.sh", "#!/bin/sh\npwd > hook-cwd.txt\n");
+  it("runs a TypeScript hook in its dist folder without requiring a shebang", async () => {
+    await put(
+      root,
+      "dotfiles/vscode/format-settings.build.ts",
+      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-cwd.txt", process.cwd());\n`,
+    );
     await run(root, "linux", homeRoot);
-    const hookCwd = (await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8")).trim();
+    const hookCwd = await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8");
     assert.equal(hookCwd, join(distRoot, "vscode"));
   });
 
@@ -266,17 +270,21 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/.build-map.md",
-      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode/format-settings.build.sh | - | - | - |\n",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode/format-settings.build.ts | - | - | - |\n",
     );
-    await put(root, "dotfiles/vscode/format-settings.build.sh", "#!/bin/sh\ntouch hook-ran.txt\n");
+    await put(
+      root,
+      "dotfiles/vscode/format-settings.build.ts",
+      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-ran.txt", "ran");\n`,
+    );
 
     await run(root, "linux", homeRoot);
 
     assert.ok(!existsSync(join(distRoot, "vscode/hook-ran.txt")));
-    assert.ok(!existsSync(join(distRoot, "vscode/format-settings.build.sh")));
+    assert.ok(!existsSync(join(distRoot, "vscode/format-settings.build.ts")));
   });
 
-  it("aborts on a hook without a shebang", async () => {
+  it("rejects a hook with an unsupported extension", async () => {
     await put(distRoot, "vscode/format-settings.build.sh", "echo hook output\n");
     await assert.rejects(
       runHooks(
@@ -289,7 +297,7 @@ describe("local build hooks", () => {
         ],
         distRoot,
       ),
-      /build hook has no shebang: vscode\/format-settings\.build\.sh/,
+      /build hook has unsupported extension: vscode\/format-settings\.build\.sh/,
     );
   });
 });

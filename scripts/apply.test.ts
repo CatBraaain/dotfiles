@@ -70,9 +70,9 @@ async function diffAndApply(platform = process.platform): Promise<ApplyResult> {
 async function putApplyScript(
   rootDir: string,
   path: string,
-  body = "pwd > apply-out.txt",
+  body = `import { writeFile } from "node:fs/promises";\nawait writeFile("apply-out.txt", process.cwd());`,
 ): Promise<void> {
-  await put(rootDir, path, `#!/bin/sh\n${body}\n`);
+  await put(rootDir, path, `${body}\n`);
 }
 
 const emptyResult: DiffResult = {
@@ -271,67 +271,64 @@ describe("apply scripts", () => {
     ]);
   });
 
-  it("runs a shebang script via its interpreter in the mapped home folder", async () => {
-    await putApplyScript(distRoot, "tools/setup.apply.sh");
+  it("runs a TypeScript hook in the mapped home folder without requiring a shebang", async () => {
+    await putApplyScript(distRoot, "tools/setup.apply.ts");
     const declarations = await collectDeclarations(distRoot);
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
     const output = await readFile(join(homeRoot, "tools", "apply-out.txt"), "utf8");
-    assert.equal(output.trim(), join(homeRoot, "tools"));
+    assert.equal(output, join(homeRoot, "tools"));
   });
 
   it("runs scripts in folder then filename order", async () => {
     const orderFile = join(root, "apply-order.txt");
-    await putApplyScript(distRoot, "pkg/second.apply.sh", `echo b >> ${JSON.stringify(orderFile)}`);
-    await putApplyScript(distRoot, "pkg/first.apply.sh", `echo a >> ${JSON.stringify(orderFile)}`);
-    await putApplyScript(distRoot, "aaa/early.apply.sh", `echo c >> ${JSON.stringify(orderFile)}`);
+    const appendOrder = (value: string) =>
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(`${value}\n`)});`;
+    await putApplyScript(distRoot, "pkg/second.apply.ts", appendOrder("b"));
+    await putApplyScript(distRoot, "pkg/first.apply.ts", appendOrder("a"));
+    await putApplyScript(distRoot, "aaa/early.apply.ts", appendOrder("c"));
     const declarations = await collectDeclarations(distRoot);
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.deepEqual(
-      (await readFile(orderFile, "utf8")).trim().split("\n"),
-      ["c", "a", "b"],
-    );
+    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n"), ["c", "a", "b"]);
   });
 
-  it("errors on a script without shebang or .ps1 extension and stops the queue", async () => {
-    await put(distRoot, "pkg/bad.apply.sh", "pwd > never.txt\n");
-    await putApplyScript(distRoot, "pkg/good.apply.sh");
+  it("rejects unsupported extensions and stops the queue", async () => {
+    await put(distRoot, "pkg/bad.apply.sh", "not a TypeScript hook\n");
+    await putApplyScript(distRoot, "pkg/good.apply.ts");
     const declarations = await collectDeclarations(distRoot);
 
     await assert.rejects(
       runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
-      /apply script has neither a shebang nor a \.ps1 extension: pkg\/bad\.apply\.sh/,
+      /apply hook has unsupported extension: pkg\/bad\.apply\.sh/,
     );
     assert.equal(existsSync(join(homeRoot, "pkg", "apply-out.txt")), false);
   });
 
   it("stops remaining scripts on a non-zero exit", async () => {
-    await putApplyScript(distRoot, "fail.apply.sh", "exit 3");
-    await putApplyScript(distRoot, "late.apply.sh");
+    await putApplyScript(distRoot, "fail.apply.ts", "process.exit(3);");
+    await putApplyScript(distRoot, "late.apply.ts");
     const declarations = await collectDeclarations(distRoot);
 
     await assert.rejects(
       runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
-      /apply script failed: fail\.apply\.sh \(exit code 3\)/,
+      /apply script failed: fail\.apply\.ts \(exit code 3\)/,
     );
     assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
   });
 });
 
-const pwshPath = Bun.which("pwsh");
-
-describe("apply scripts on windows shell", () => {
-  it.skipIf(pwshPath === null)("runs a .ps1 script via pwsh", async () => {
-    await put(distRoot, "ps/task.apply.ps1", 'Set-Content -Path "ps-out.txt" -Value "done"\n');
+describe("unsupported apply scripts", () => {
+  it("rejects PowerShell hooks", async () => {
+    await put(distRoot, "ps/task.apply.ps1", "Set-Content -Value done\n");
     const declarations = await collectDeclarations(distRoot);
 
-    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
-
-    const output = await readFile(join(homeRoot, "ps", "ps-out.txt"), "utf8");
-    assert.equal(output.trim(), "done");
+    await assert.rejects(
+      runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
+      /apply hook has unsupported extension: ps\/task\.apply\.ps1/,
+    );
   });
 });
 
@@ -352,7 +349,7 @@ describe("CLI", () => {
 
   it("applies and runs an apply script end to end", async () => {
     await put(distRoot, "a.txt", "new\n");
-    await putApplyScript(distRoot, "final.apply.sh");
+    await putApplyScript(distRoot, "final.apply.ts");
     const declarations = await collectDeclarations(distRoot);
     assert.equal(declarations.applyScripts.length, 1);
 
@@ -365,7 +362,7 @@ describe("CLI", () => {
 
   it("runs an apply script when the dist root is relative", async () => {
     await put(distRoot, "a.txt", "new\n");
-    await putApplyScript(distRoot, "final.apply.sh");
+    await putApplyScript(distRoot, "final.apply.ts");
     const previousCwd = process.cwd();
     process.chdir(root);
     try {

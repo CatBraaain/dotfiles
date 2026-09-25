@@ -1,6 +1,6 @@
 # bun_install spec
 
-`bun_install.apply.sh` が pi agent の dependency install を必要な場合だけ実行するための観測可能な振る舞いを定める。script は home apply の apply ライフサイクルにより `~/.pi/agent/` を current directory として実行される。
+`bun_install.apply.ts` が pi agent の dependency install を必要な場合だけ実行するための観測可能な振る舞いを定める。hook は home apply の apply ライフサイクルにより `~/.pi/agent/` を current directory として実行される。
 
 ## 振る舞い
 

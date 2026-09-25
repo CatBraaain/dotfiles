@@ -15,7 +15,7 @@
  * through `apply`, so the published names cover events outside the client's
  * paged event window (see SPEC.md).
  *
- * `build.apply.sh` bundles this entry: relative imports are inlined and only
+ * `build.apply.ts` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external (see
  * dotfiles/.dsh/README.md). Shared literals live in `src/shared.ts`.
  */
