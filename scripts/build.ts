@@ -59,13 +59,13 @@ type PlainObject = Record<string, unknown>;
 type Operation = { key: string; value: unknown };
 type Operations = Map<string, Partial<Record<MergeOp, Operation>>>;
 type Entry = { path: string; isDirectory: boolean };
-type Hook = { absolutePath: string; relativeParent: string };
+type Hook = { absolutePath: string; relativeParent: string; name: string };
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const hookFileName = ".pre-build.ts";
+const hookNamePattern = /\.build\.ts$/;
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
 const externalFileName = ".build-external.yaml";
 
@@ -1046,12 +1046,16 @@ async function collectHooks(sourceDir: string): Promise<Hook[]> {
       const entryPath = join(directory, entry.name);
       const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
       if (entry.isDirectory()) await walk(entryPath, childParent);
-      else if (entry.isFile() && entry.name === hookFileName)
-        hooks.push({ absolutePath: entryPath, relativeParent });
+      else if (entry.isFile() && hookNamePattern.test(entry.name))
+        hooks.push({ absolutePath: entryPath, relativeParent, name: entry.name });
     }
   }
   await walk(sourceDir, "");
-  return hooks.sort((left, right) => compareHookParents(left.relativeParent, right.relativeParent));
+  return hooks.sort((left, right) => {
+    const byParent = compareHookParents(left.relativeParent, right.relativeParent);
+    if (byParent !== 0) return byParent;
+    return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+  });
 }
 
 function compareHookParents(left: string, right: string): number {
@@ -1093,7 +1097,7 @@ async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
     const relativePath =
-      hook.relativeParent === "" ? hookFileName : `${hook.relativeParent}/${hookFileName}`;
+      hook.relativeParent === "" ? hook.name : `${hook.relativeParent}/${hook.name}`;
     const proc = Bun.spawn(["bun", hook.absolutePath], {
       cwd: hookDistDir,
       env: process.env,
@@ -1104,7 +1108,7 @@ async function runHooks(hooks: Hook[], distDir: string): Promise<void> {
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
       const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
-      throw new Error(`local pre-build hook failed: ${relativePath} (${reason})`);
+      throw new Error(`local build hook failed: ${relativePath} (${reason})`);
     }
   }
 }

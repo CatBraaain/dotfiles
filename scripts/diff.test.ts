@@ -322,8 +322,8 @@ describe("path mapping (plain names without legacy prefixes)", () => {
 });
 
 describe("exclusions", () => {
-  it("skips entries starting with .pre-build, .build, .pre-apply or .post-apply", async () => {
-    await put(distRoot, ".pre-build.ts", "hook\n");
+  it("skips entries starting with .build, .pre-apply or .post-apply and files ending in .build.ts", async () => {
+    await put(distRoot, "setup.build.ts", "hook\n");
     await put(distRoot, ".build-map.md", "map\n");
     await put(distRoot, ".pre-apply.ts", "hook\n");
     await put(distRoot, ".post-apply.ts", "hook\n");
@@ -335,7 +335,7 @@ describe("exclusions", () => {
   });
 
   it("skips nested entries under an excluded directory", async () => {
-    await put(distRoot, "x/.pre-build.data/generated.txt", "content\n");
+    await put(distRoot, "x/.build.data/generated.txt", "content\n");
     await put(distRoot, "x/keep.txt", "content\n");
     await put(homeRoot, "x/keep.txt", "content\n");
 
@@ -346,8 +346,8 @@ describe("exclusions", () => {
   });
 
   it("does not count the home-side counterpart of an excluded entry as surplus", async () => {
-    await put(distRoot, "x/.pre-build.ts", "hook\n");
-    await put(homeRoot, "x/.pre-build.ts", "hook\n");
+    await put(distRoot, "x/setup.build.ts", "hook\n");
+    await put(homeRoot, "x/setup.build.ts", "hook\n");
     await put(distRoot, "x/keep.txt", "content\n");
     await put(homeRoot, "x/keep.txt", "content\n");
 

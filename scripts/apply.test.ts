@@ -402,7 +402,7 @@ describe("lifecycle hooks", () => {
   it("collects declarations skipping node_modules and excluded folders", async () => {
     await putRecordingHook(distRoot, "ok/.pre-apply.ts");
     await putRecordingHook(distRoot, join("node_modules", "pkg", ".pre-apply.ts"));
-    await put(distRoot, ".pre-build.d/hidden/.pre-apply.ts", "hook\n");
+    await put(distRoot, ".build.d/hidden/.pre-apply.ts", "hook\n");
     await putRunScript(distRoot, join("node_modules", "pkg", "x.run.sh"));
     await putRunScript(distRoot, "ok/y.run.sh");
 
