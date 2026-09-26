@@ -13,6 +13,10 @@
 - apt: fcitx5
 - apt: fcitx5-rime
 - apt: librime-plugin-lua
+# Rime behavior tests: Lua interpreter for the managed Lua unit tests and
+# librime headers for the headless integration harness (just test-rime).
+- apt: lua5.4
+- apt: librime-dev
 
 # Tauri Linux prerequisites.
 - apt: libwebkit2gtk-4.1-dev

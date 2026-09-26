@@ -22,6 +22,17 @@ install:
 apply:
   bun dotfiles-manager/cli.ts apply
 
+[linux]
+test-rime:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd dotfiles/ime/rime
+    lua5.4 tests/rime_controls.test.lua lua/kagiroi/rime_controls.lua
+    lua5.4 tests/rime_ascii_toggle.test.lua lua/kagiroi/rime_ascii_toggle.lua
+    lua5.4 tests/rime_henkan_filter.test.lua lua/kagiroi/rime_henkan_filter.lua
+    lua5.4 tests/kagiroi_n_kana_speller.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua
+    bash tests/rime/run.sh
+
 diff:
   bun dotfiles-manager/cli.ts diff
 
