@@ -2,3 +2,4 @@ patch:
   "engine/processors/@3": lua_processor@*kagiroi/rime_controls
   "engine/processors/@before 0": lua_processor@*kagiroi/rime_ascii_toggle
   "engine/filters/@next": lua_filter@*kagiroi/rime_henkan_filter
+  "engine/filters/@before 0": lua_filter@*kagiroi/candidate_gate

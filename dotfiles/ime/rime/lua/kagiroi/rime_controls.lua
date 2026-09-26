@@ -12,8 +12,17 @@ function Top.func(key_event, env)
     end
 
     local keycode = key_event.keycode
-    if keycode == kHenkan and context.input ~= "" and context:has_menu()
+    if keycode == kHenkan and context.input ~= ""
         and not context:get_option("ascii_mode") then
+        if context:get_option("_kagiroi_hide_candidates") then
+            -- The gate filter keeps the menu empty while typing; reveal the
+            -- candidates so the katakana promotion becomes visible.
+            context:set_option("_kagiroi_hide_candidates", false)
+        end
+        if not context:has_menu() then
+            context:set_option("_kagiroi_hide_candidates", true)
+            return kana_speller.func(key_event, env)
+        end
         if env.previous_katakana == nil then
             env.previous_katakana = context:get_option("katakana")
             env.previous_hw_katakana = context:get_option("hw_katakana")
@@ -34,17 +43,24 @@ function Top.func(key_event, env)
             env.previous_katakana = nil
             env.previous_hw_katakana = nil
         end
-        context:set_option("_hide_candidate", true)
+        context:set_option("_kagiroi_hide_candidates", true)
     end
 
     if context.input ~= "" and not context:get_option("ascii_mode") then
         if keycode == kSpace then
-            if context:get_option("_hide_candidate") then
+            if context:get_option("_kagiroi_hide_candidates") then
                 local result = kana_speller.func(key_event, env)
-                if context:has_menu() then
-                    context:set_option("_hide_candidate", false)
-                    context:highlight(0)
-                    return kAccepted
+                if context.input ~= "" then
+                    -- While _kagiroi_hide_candidates is on, the gate filter
+                    -- keeps the menu empty on every engine, so reveal by
+                    -- flipping the option: the option update makes the engine
+                    -- re-compose the unconfirmed input and rebuild the menu.
+                    -- The first candidate is already selected by default.
+                    context:set_option("_kagiroi_hide_candidates", false)
+                    if context:has_menu() then
+                        return kAccepted
+                    end
+                    context:set_option("_kagiroi_hide_candidates", true)
                 end
                 return result
             end
@@ -54,10 +70,18 @@ function Top.func(key_event, env)
                 if not segment:get_candidate_at(next_index) then
                     next_index = 0
                 end
-                context:highlight(next_index)
+                if type(context.highlight) == "function" then
+                    context:highlight(next_index)
+                else
+                    -- Windows rime.dll has no context.highlight; move the
+                    -- selection through the segment property instead. The
+                    -- setter is unverified on Windows, so let errors surface
+                    -- rather than hiding them behind pcall.
+                    segment.selected_index = next_index
+                end
                 return kAccepted
             end
-        elseif keycode == kReturn and not context:get_option("_hide_candidate") and context:has_menu() then
+        elseif keycode == kReturn and not context:get_option("_kagiroi_hide_candidates") and context:has_menu() then
             context:commit()
             return kAccepted
         end

@@ -104,6 +104,29 @@ static void fresh_session(void) {
 }
 
 /*
+ * SPEC: typing must not expose any candidates before the first Space.
+ *
+ * The managed config hides candidates through a Lua gate filter driven by a
+ * custom option no librime core handles, so this check exercises the same
+ * code path the Windows front-end (librime 1.13.1) runs.
+ */
+static void test_typing_hides_candidates(void) {
+    fresh_session();
+    type_text("kanji");
+    check(composing(), "typing must start a composition");
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) {
+        check(False, "typing must keep a queryable context");
+        return;
+    }
+    check(context.menu.num_candidates == 0,
+          "typing must report zero candidates before the first Space");
+    rime->free_context(&context);
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "typing must not commit");
+}
+
+/*
  * SPEC: the first Space reveals the candidate menu and selects the first
  * candidate without committing.
  */
@@ -292,6 +315,7 @@ int main(int argc, char* argv[]) {
     rime->join_maintenance_thread();
 
     static void (*const tests[])(void) = {
+        test_typing_hides_candidates,
         test_first_space_reveals_candidates,
         test_space_cycles_candidates,
         test_enter_commits_highlighted_candidate,

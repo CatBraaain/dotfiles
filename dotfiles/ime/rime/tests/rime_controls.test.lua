@@ -25,8 +25,10 @@ local function new_environment(candidates)
         return self.menu.candidates[index + 1]
     end
     local context = { input = "", options = {}, composition = { back = function() return segment end }, commits = {} }
+    -- Mirrors the gate filter: while _kagiroi_hide_candidates is on the menu is empty.
     function context:has_menu()
-        return self.input ~= "" and #segment.menu.candidates > 0
+        return self.input ~= "" and not self.options._kagiroi_hide_candidates
+            and #segment.menu.candidates > 0
     end
     function context:get_option(name)
         return self.options[name] or false
@@ -62,11 +64,11 @@ end
 
 local env, context, segment = new_environment()
 press(env, string.byte("k"))
-assert(context:get_option("_hide_candidate"), "typing must hide candidates")
+assert(context:get_option("_kagiroi_hide_candidates"), "typing must hide candidates")
 context.input = "か"
 local first_space = press(env, 0x20)
 assert(first_space == kAccepted, "first Space must be consumed")
-assert(not context:get_option("_hide_candidate"), "first Space must reveal candidates")
+assert(not context:get_option("_kagiroi_hide_candidates"), "first Space must reveal candidates")
 assert(segment.selected_index == 0, "first Space must select the first candidate")
 local before_selection = calls
 local second_space = press(env, 0x20)
@@ -85,11 +87,37 @@ assert(enter == kAccepted, "Enter must not reach the raw-script editor binding")
 assert(context.commits[1] == "仮名", "Enter must commit the highlighted candidate")
 assert(context.input == "", "Enter must end composition")
 press(env, string.byte("k"))
-assert(context:get_option("_hide_candidate"), "the next input must start with candidates hidden")
+assert(context:get_option("_kagiroi_hide_candidates"), "the next input must start with candidates hidden")
+
+env, context, segment = new_environment()
+context.highlight = nil
+press(env, string.byte("k"))
+context.input = "か"
+local windows_first_ok, windows_first_space = pcall(press, env, 0x20)
+assert(windows_first_ok, "first Space must not raise without the highlight API: " .. tostring(windows_first_space))
+assert(windows_first_space == kAccepted, "first Space must be consumed without the highlight API")
+assert(not context:get_option("_kagiroi_hide_candidates"), "first Space must reveal candidates without the highlight API")
+assert(segment.selected_index == 0, "the default first candidate must stay selected without the highlight API")
+assert(#context.commits == 0 and context.input == "か", "first Space must not commit without the highlight API")
+local windows_second_ok, windows_second_space = pcall(press, env, 0x20)
+assert(windows_second_ok, "subsequent Space must not raise without the highlight API: " .. tostring(windows_second_space))
+assert(windows_second_space == kAccepted, "subsequent Space must be consumed without the highlight API")
+assert(segment.selected_index == 1, "subsequent Space must move the selection via selected_index")
+assert(#context.commits == 0 and context.input == "か", "Space cycling must not commit without the highlight API")
+press(env, 0x20)
+assert(segment.selected_index == 2, "Space must reach the last candidate via selected_index")
+press(env, 0x20)
+assert(segment.selected_index == 0, "Space must wrap to the first candidate via selected_index")
+press(env, 0x20)
+assert(segment.selected_index == 1, "Space must advance again after wrapping via selected_index")
+local windows_enter = press(env, 0xff0d)
+assert(windows_enter == kAccepted, "Enter must be consumed without the highlight API")
+assert(context.commits[1] == "仮名", "Enter must commit the candidate selected via selected_index")
+assert(context.input == "", "Enter must end composition without the highlight API")
 
 env, context, segment = new_environment({ "かな" })
 context.input = "か"
-context:set_option("_hide_candidate", true)
+context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 press(env, 0x20)
 assert(segment.selected_index == 0 and #context.commits == 0, "a single candidate must stay highlighted without committing")
@@ -101,22 +129,22 @@ assert(calls == before_empty_enter + 1, "Enter without a menu must reach the kan
 
 env, context = new_environment()
 context.input = "か"
-context:set_option("_hide_candidate", true)
+context:set_option("_kagiroi_hide_candidates", true)
 assert(press(env, 0xff0d) == kNoop, "Enter before Space must retain the standard binding")
 assert(#context.commits == 0, "Enter before Space must not use candidate commit")
 
 env, context = new_environment()
 context.input = "か"
-context:set_option("_hide_candidate", true)
+context:set_option("_kagiroi_hide_candidates", true)
 function context:has_menu() return false end
 local no_menu_space = press(env, 0x20)
 assert(no_menu_space == kNoop, "Space without a candidate menu must reach standard processors")
-assert(context:get_option("_hide_candidate"), "Space without candidates must not reveal a menu")
+assert(context:get_option("_kagiroi_hide_candidates"), "Space without candidates must not reveal a menu")
 
 env, context = new_environment()
 context.input = ""
 press(env, string.byte("n"))
-assert(context:get_option("_hide_candidate"), "next input must hide candidates again")
+assert(context:get_option("_kagiroi_hide_candidates"), "next input must hide candidates again")
 
 local before_henkan = calls
 context.input = "かな"
@@ -133,7 +161,7 @@ context.input = ""
 press(env, string.byte("k"))
 assert(not context:get_option("katakana"), "next input must restore the prior kana mode after repeated Henkan")
 assert(not context:get_option("_rime_henkan"), "next input must stop candidate promotion")
-assert(context:get_option("_hide_candidate"), "next input must start hidden")
+assert(context:get_option("_kagiroi_hide_candidates"), "next input must start hidden")
 
 env, context = new_environment()
 context.input = "かな"
@@ -145,6 +173,18 @@ context.input = ""
 press(env, string.byte("k"))
 assert(context:get_option("hw_katakana"), "next input must restore the prior kana mode")
 
+env, context, segment = new_environment({})
+context.input = "k"
+context:set_option("_kagiroi_hide_candidates", true)
+local candidate_less_space = press(env, 0x20)
+assert(candidate_less_space == kNoop, "Space on a candidate-less input must reach standard processors")
+assert(context:get_option("_kagiroi_hide_candidates"), "a candidate-less input must stay hidden for later Spaces")
+
+local henkan_candidate_less = press(env, 0xff23)
+assert(henkan_candidate_less == kNoop, "Henkan on a candidate-less input must reach standard processors")
+assert(context:get_option("_kagiroi_hide_candidates"), "Henkan on a candidate-less input must keep the menu hidden")
+assert(not context:get_option("katakana"), "Henkan on a candidate-less input must not change kana mode")
+
 env, context = new_environment()
 context:set_option("ascii_mode", true)
 local empty_henkan = press(env, 0xff23)
@@ -154,7 +194,7 @@ local ascii_henkan = press(env, 0xff23)
 assert(ascii_henkan == kNoop, "Henkan in ascii mode must pass through")
 local modified_space = press(env, 0x20, { ctrl = true })
 assert(modified_space == kNoop, "modified Space must pass through")
-context:set_option("_hide_candidate", false)
+context:set_option("_kagiroi_hide_candidates", false)
 assert(press(env, 0x20) == kNoop, "Space in ascii mode must pass through")
 assert(press(env, 0xff0d) == kNoop, "Enter in ascii mode must pass through")
 
