@@ -24,6 +24,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | erdtree | .config/erdtree | AppData/Roaming/erdtree | - |
 | git-cliff | .config/git-cliff | AppData/Roaming/git-cliff | - |
 | gsudo | - |  | - |
+| ime/rime/tests | - | - | - |
 | ime/rime | .local/share/fcitx5/rime | AppData/Roaming/Rime | - |
 | localsend/settings.merge.json | .local/share/org.localsend.localsend_app/shared_preferences.merge.json | AppData/Roaming/LocalSend/settings.merge.json | - |
 | obs-studio | - | AppData/Roaming/obs-studio | - |
