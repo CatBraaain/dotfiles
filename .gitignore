@@ -8,9 +8,6 @@ dotfiles/**/*.apply-machine.ts
 dotfiles/external.data-machine.yaml
 dotfiles/.secrets.sh
 dotfiles/.wslconfig
-dotfiles/**/*.machine.json
-dotfiles/**/*.machine.yaml
-dotfiles/**/*.machine.toml
 dotfiles/**/*.merge-machine.json
 dotfiles/**/*.merge-machine.yaml
 dotfiles/**/*.merge-machine.toml
