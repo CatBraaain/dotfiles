@@ -1,13 +1,14 @@
 local kAccepted = 1
 local kNoop = 2
 local romaji_to_kana = {
-    nn = "ん",
     ko = "こ",
     ka = "か",
     na = "な",
     ni = "に",
     ji = "じ",
     chi = "ち",
+    ti = "ち",
+    da = "だ",
     ha = "は",
     nya = "にゃ",
 }
@@ -103,10 +104,14 @@ local cases = {
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんじ" },
-    { input = "konnichiha", expected = "こんにちは" },
-    { input = "konnnichiha", expected = "こんにちは" },
     { input = "kana", expected = "かな" },
     { input = "kanna", expected = "かんな" },
+    { input = "kannna", expected = "かんな" },
+    { input = "kannnna", expected = "かんな" },
+    { input = "konitiha", expected = "こにちは" },
+    { input = "konnnitiha", expected = "こんにちは" },
+    { input = "kanda", expected = "かんだ" },
+    { input = "kannnda", expected = "かんだ" },
     { input = "nya", expected = "にゃ" },
 }
 

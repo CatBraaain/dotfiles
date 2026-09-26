@@ -6,6 +6,10 @@
  * dictionaries and lua/) plus the stock Kagiroi schema, dictionaries and lua/
  * from the local mirror. run.sh assembles it and compiles this file.
  *
+ * Scenario order follows dotfiles/ime/rime/SPEC.md: input and conversion
+ * (schema, n-run correction, first candidate), then common key handling
+ * (Zenkaku_Hankaku, Henkan, candidate gate).
+ *
  * Usage: harness <user_data_dir> [-v]
  * Exit status is 0 when every check passes.
  */
@@ -100,6 +104,196 @@ static void fresh_session(void) {
     if (strcmp(schema, "kagiroi") != 0) {
         fprintf(stderr, "FAIL: expected the kagiroi schema, got '%s'\n", schema);
         ++g_failures;
+    }
+}
+
+/* SPEC: the default schema is kagiroi before any explicit selection. */
+static void test_default_schema_is_kagiroi(void) {
+    if (session) rime->destroy_session(session);
+    session = rime->create_session();
+    char schema[64] = {0};
+    rime->get_current_schema(session, schema, sizeof(schema));
+    check(strcmp(schema, "kagiroi") == 0,
+          "the default schema must be kagiroi without explicit selection");
+}
+
+/* SPEC: accepted n-run forms expose a candidate containing the reading's
+ * dictionary word. Readings without a matching dictionary word (こにちは,
+ * かんだ, にゃ) are checked as preedit in test_n_run_preedit. */
+static void test_n_run_correction(void) {
+    static const struct {
+        const char* input;
+        const char* expected;
+    } cases[] = {
+        {"kanji", "漢字"},
+        {"kannji", "漢字"},
+        {"kannnji", "漢字"},
+        {"kana", "かな"},
+        {"kanna", "かんな"},
+        {"kannna", "かんな"},
+        {"kannnna", "かんな"},
+        {"konnnitiha", "こんにちは"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        press(kSpace);
+        RIME_STRUCT(RimeContext, context);
+        Bool found = False;
+        if (rime->get_context(session, &context)) {
+            found = menu_has_candidate(&context, cases[i].expected);
+            if (g_verbose) {
+                printf("  %s:\n", cases[i].input);
+                print_context();
+            }
+            rime->free_context(&context);
+        }
+        check(found, cases[i].input);
+        if (!found) {
+            fprintf(stderr, "      expected a candidate containing %s\n", cases[i].expected);
+        }
+    }
+}
+
+/* SPEC: accepted n-run forms read exactly as the SPEC table says while
+ * composing. */
+static void test_n_run_preedit(void) {
+    static const struct {
+        const char* input;
+        const char* expected;
+    } cases[] = {
+        {"kanji", "かんじ"},
+        {"kannji", "かんじ"},
+        {"kannnji", "かんじ"},
+        {"kana", "かな"},
+        {"kanna", "かんな"},
+        {"kannna", "かんな"},
+        {"kannnna", "かんな"},
+        {"konitiha", "こにちは"},
+        {"konnnitiha", "こんにちは"},
+        {"kanda", "かんだ"},
+        {"kannnda", "かんだ"},
+        {"nya", "にゃ"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        RIME_STRUCT(RimeContext, context);
+        if (!rime->get_context(session, &context)) {
+            check(False, "typing must keep a queryable context");
+            continue;
+        }
+        char description[128];
+        snprintf(description, sizeof(description), "%s must read %s while composing",
+                 cases[i].input, cases[i].expected);
+        check(context.composition.preedit &&
+                  strcmp(context.composition.preedit, cases[i].expected) == 0,
+              description);
+        rime->free_context(&context);
+    }
+}
+
+/* SPEC: n followed by Space resolves to ん and starts the conversion. */
+static void test_kan_space_starts_conversion(void) {
+    fresh_session();
+    type_text("kan");
+    press(kSpace);
+    check(composing(), "Space must start the conversion of the pending n");
+    RIME_STRUCT(RimeContext, context);
+    if (!rime->get_context(session, &context)) {
+        check(False, "Space must keep a queryable context");
+        return;
+    }
+    check(context.menu.num_candidates > 0,
+          "Space must expose candidates for the reading かん");
+    check(context.composition.preedit && strcmp(context.composition.preedit, "かん") == 0,
+          "the reading after n + Space must be かん");
+    rime->free_context(&context);
+}
+
+/* SPEC: Zenkaku_Hankaku toggles between Japanese and ASCII input. */
+static void test_zenkaku_hankaku_toggles_ascii(void) {
+    fresh_session();
+    press(kZenkakuHankaku);
+    check(option("ascii_mode"), "Zenkaku_Hankaku must enable ascii mode");
+    press(kZenkakuHankaku);
+    check(!option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese mode");
+    /* The toggle must also work outside a composition. */
+    RIME_STRUCT(RimeStatus, status);
+    Bool composing_before = rime->get_status(session, &status) && status.is_composing;
+    rime->free_status(&status);
+    check(!composing_before, "the session must stay idle outside a composition");
+}
+
+/* SPEC: Henkan turns the first candidate into full-width katakana without
+ * committing; the selection is highlighted from the start. */
+static void test_henkan_promotes_katakana(void) {
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kHenkan);
+    check(composing(), "Henkan must keep the composition open");
+    check(option("katakana"), "Henkan must enable the katakana option");
+    RIME_STRUCT(RimeContext, context);
+    Bool promoted = False;
+    if (rime->get_context(session, &context)) {
+        promoted = context.menu.num_candidates > 0 &&
+                   context.menu.candidates[0].text &&
+                   menu_has_candidate(&context, "カンジ") &&
+                   context.menu.highlighted_candidate_index == 0;
+        if (g_verbose) print_context();
+        rime->free_context(&context);
+    }
+    check(promoted, "Henkan must put full-width katakana first");
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "Henkan must not commit");
+}
+
+/* SPEC: after Henkan, Space still cycles, Enter commits the selection, and
+ * the next typing hides candidates again. */
+static void test_henkan_space_enter_chain(void) {
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kHenkan);
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) {
+        check(False, "the katakana menu must exist after Henkan");
+        return;
+    }
+    check(context.menu.num_candidates > 1,
+          "the katakana menu must hold more than one candidate for cycling");
+    rime->free_context(&context);
+    press(kSpace);
+    char expected[256] = "";
+    if (rime->get_context(session, &context)) {
+        check(composing(), "Space after Henkan must keep the composition open");
+        check(context.menu.highlighted_candidate_index == 1,
+              "Space after Henkan must move the selection to the next candidate");
+        if (context.menu.highlighted_candidate_index < context.menu.num_candidates &&
+            context.menu.candidates[context.menu.highlighted_candidate_index].text) {
+            snprintf(expected, sizeof(expected), "%s",
+                     context.menu.candidates[context.menu.highlighted_candidate_index].text);
+        }
+        rime->free_context(&context);
+    } else {
+        check(False, "the menu must survive Space after Henkan");
+    }
+    check(expected[0] != '\0', "the selected candidate must have text");
+    press(kReturn);
+    check(composing() == False, "Enter after Henkan cycling must end the composition");
+    char commit[256];
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
+          "Enter must commit the candidate selected after Henkan");
+    type_text("kanji");
+    RIME_STRUCT(RimeContext, next);
+    if (rime->get_context(session, &next)) {
+        check(composing(), "next typing must start a new composition");
+        check(next.menu.num_candidates == 0,
+              "next typing must hide candidates until Space again");
+        rime->free_context(&next);
+    } else {
+        check(False, "next typing must keep a queryable context");
     }
 }
 
@@ -200,76 +394,6 @@ static void test_enter_commits_highlighted_candidate(void) {
           "Enter must commit the highlighted candidate");
 }
 
-/* SPEC: n runs fold into one ん for every accepted input form. */
-static void test_n_run_correction(void) {
-    static const struct {
-        const char* input;
-        const char* expected;
-    } cases[] = {
-        {"kanji", "漢字"},
-        {"kannji", "漢字"},
-        {"kannnji", "漢字"},
-        {"konnnichiha", "こんにちは"},
-    };
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        fresh_session();
-        type_text(cases[i].input);
-        press(kSpace);
-        RIME_STRUCT(RimeContext, context);
-        Bool found = False;
-        if (rime->get_context(session, &context)) {
-            found = menu_has_candidate(&context, cases[i].expected);
-            if (g_verbose) {
-                printf("  %s:\n", cases[i].input);
-                print_context();
-            }
-            rime->free_context(&context);
-        }
-        check(found, cases[i].input);
-        if (!found) {
-            fprintf(stderr, "      expected a candidate containing %s\n", cases[i].expected);
-        }
-    }
-}
-
-/* SPEC: Zenkaku_Hankaku toggles between Japanese and ASCII input. */
-static void test_zenkaku_hankaku_toggles_ascii(void) {
-    fresh_session();
-    press(kZenkakuHankaku);
-    check(option("ascii_mode"), "Zenkaku_Hankaku must enable ascii mode");
-    press(kZenkakuHankaku);
-    check(!option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese mode");
-    /* The toggle must also work outside a composition. */
-    RIME_STRUCT(RimeStatus, status);
-    Bool composing_before = rime->get_status(session, &status) && status.is_composing;
-    rime->free_status(&status);
-    check(!composing_before, "the session must stay idle outside a composition");
-}
-
-/* SPEC: Henkan turns the first candidate into full-width katakana without
- * committing; the selection is highlighted from the start. */
-static void test_henkan_promotes_katakana(void) {
-    fresh_session();
-    type_text("kanji");
-    press(kSpace);
-    press(kHenkan);
-    check(composing(), "Henkan must keep the composition open");
-    check(option("katakana"), "Henkan must enable the katakana option");
-    RIME_STRUCT(RimeContext, context);
-    Bool promoted = False;
-    if (rime->get_context(session, &context)) {
-        promoted = context.menu.num_candidates > 0 &&
-                   context.menu.candidates[0].text &&
-                   menu_has_candidate(&context, "カンジ") &&
-                   context.menu.highlighted_candidate_index == 0;
-        if (g_verbose) print_context();
-        rime->free_context(&context);
-    }
-    check(promoted, "Henkan must put full-width katakana first");
-    char commit[256];
-    check(!take_commit(commit, sizeof(commit)), "Henkan must not commit");
-}
-
 static void on_message(void* context_object, RimeSessionId session_id, const char* message_type, const char* message_value) {
     (void)context_object;
     (void)session_id;
@@ -315,13 +439,17 @@ int main(int argc, char* argv[]) {
     rime->join_maintenance_thread();
 
     static void (*const tests[])(void) = {
+        test_default_schema_is_kagiroi,
+        test_n_run_correction,
+        test_n_run_preedit,
+        test_kan_space_starts_conversion,
+        test_zenkaku_hankaku_toggles_ascii,
+        test_henkan_promotes_katakana,
+        test_henkan_space_enter_chain,
         test_typing_hides_candidates,
         test_first_space_reveals_candidates,
         test_space_cycles_candidates,
         test_enter_commits_highlighted_candidate,
-        test_n_run_correction,
-        test_zenkaku_hankaku_toggles_ascii,
-        test_henkan_promotes_katakana,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         tests[i]();
