@@ -9,16 +9,15 @@ import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
-import { mapSegment } from "./diff.ts";
+import { homeRelPath } from "./home-path.ts";
 import {
   ensureHookDirectory,
   removeEmptyHookDirectories,
   removeHookSnapshot,
-  resolveHookCommand,
   writeHookSnapshot,
 } from "./hook-runner.ts";
 
@@ -65,8 +64,6 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const hookNamePattern = /\.build\.[^.]+$/;
-const editHookNamePattern = /\.edit\.ts$/;
-const editHookSuffix = ".edit.ts";
 const sidecarPattern = /\.(merge|machine)\.(json|yaml|toml)$/;
 
 const fileFormats = {
@@ -131,16 +128,6 @@ function currentPlatform(): Platform {
 function assertPlatform(platform: string): asserts platform is Platform {
   if (!platformNames.includes(platform as Platform))
     throw new Error(`Unsupported platform: ${platform}`);
-}
-
-// Home-relative path resolution shared by the build stages that read the
-// current home (merge composition, replace sidecars, edit hooks), using the
-// segment mapping of diff.ts (spec §差分検知).
-function homeRelPath(distRelPath: string): string {
-  const segments = distRelPath.split("/");
-  return segments
-    .map((segment, index) => mapSegment(segment, index < segments.length - 1).homeName)
-    .join("/");
 }
 
 async function composeMergeTargets(distDir: string, homeRoot: string): Promise<void> {
@@ -559,10 +546,7 @@ async function collectHooks(distDir: string): Promise<Hook[]> {
       const entryPath = join(directory, entry.name);
       const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
       if (entry.isDirectory()) await walk(entryPath, childParent);
-      else if (
-        entry.isFile() &&
-        (hookNamePattern.test(entry.name) || editHookNamePattern.test(entry.name))
-      )
+      else if (entry.isFile() && hookNamePattern.test(entry.name))
         hooks.push({
           absolutePath: entryPath,
           relativeParent,
@@ -585,56 +569,38 @@ function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-// Local build hooks (spec: SPEC.md §build: ローカルフック) and edit hooks
-// (spec: SPEC.md §build: edit フック) run as Bun processes.
-export async function runHooks(hooks: Hook[], distDir: string, homeRoot: string): Promise<void> {
+// Local build hooks (spec: SPEC.md §build: ローカルフック) run as Bun processes.
+export async function runHooks(
+  hooks: Hook[],
+  distDir: string,
+  homeRoot: string,
+): Promise<void> {
   for (const hook of hooks) {
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
     const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
     const relativePath = hookRelativePath(hook);
     try {
-      if (editHookNamePattern.test(hook.name)) {
-        const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
-        try {
-          await runEditHook({ ...hook, absolutePath: snapshotPath }, hookDistDir, homeRoot);
-        } finally {
-          await removeHookSnapshot(snapshotPath, distDir);
-        }
-        continue;
-      }
+      if (!relativePath.endsWith(".ts"))
+        throw new Error(`build hook has unsupported extension: ${relativePath}`);
 
-      const command = resolveHookCommand(hook.contents, relativePath, "build");
-      await runChildProcess(command, hookDistDir, relativePath, "local build hook");
+      const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
+      try {
+        const command = [
+          process.execPath,
+          join(import.meta.dir, "build-hook-runner.ts"),
+          resolve(snapshotPath),
+          resolve(distDir),
+          resolve(homeRoot),
+        ];
+        await runChildProcess(command, hookDistDir, relativePath, "local build hook");
+      } finally {
+        await removeHookSnapshot(snapshotPath, distDir);
+      }
     } finally {
       await removeEmptyHookDirectories(createdDirectories);
     }
   }
-}
-
-// Edit hooks receive the target file path in dist and its home counterpart.
-// Reading and writing is left to the hook (spec: SPEC.md §build: edit フック).
-async function runEditHook(hook: Hook, hookDistDir: string, homeRoot: string): Promise<void> {
-  const relativePath = hookRelativePath(hook);
-  const targetRelPath = editTargetRelPath(hook);
-  const targetPath = join(hookDistDir, hook.name.slice(0, -editHookSuffix.length));
-  if (!existsSync(targetPath)) throw new Error(`edit hook target not found: ${relativePath}`);
-  const homePath = join(homeRoot, homeRelPath(targetRelPath));
-  const command = [
-    process.execPath,
-    join(import.meta.dir, "edit-hook-runner.ts"),
-    hook.absolutePath,
-    targetPath,
-    homePath,
-  ];
-  await runChildProcess(command, hookDistDir, relativePath, "edit hook");
-}
-
-function editTargetRelPath(hook: Hook): string {
-  const targetName = hook.name.slice(0, -editHookSuffix.length);
-  if (targetName === "")
-    throw new Error(`edit hook has no target file: ${hookRelativePath(hook)}`);
-  return hook.relativeParent === "" ? targetName : `${hook.relativeParent}/${targetName}`;
 }
 
 async function runChildProcess(

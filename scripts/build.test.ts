@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { tmpdir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   applyReplacements,
   applyReplaceSidecars,
@@ -63,7 +63,9 @@ describe("run", () => {
       "dotfiles/10-late.build.ts",
       `#!/usr/bin/env bun
 import { appendFile } from "node:fs/promises";
-await appendFile("log.txt", "late\\n");
+export default async function () {
+  await appendFile("log.txt", "late\\n");
+}
 `,
     );
     await put(
@@ -71,7 +73,9 @@ await appendFile("log.txt", "late\\n");
       "dotfiles/02-early.build.ts",
       `#!/usr/bin/env bun
 import { appendFile } from "node:fs/promises";
-await appendFile("log.txt", "early\\n");
+export default async function () {
+  await appendFile("log.txt", "early\\n");
+}
 `,
     );
     await put(
@@ -79,23 +83,25 @@ await appendFile("log.txt", "early\\n");
       "dotfiles/sub/marker.build.ts",
       `#!/usr/bin/env bun
 import { writeFile } from "node:fs/promises";
-await writeFile("marker.txt", "ran\\n");
+export default async function () {
+  await writeFile("marker.txt", "ran\\n");
+}
 `,
     );
     await put(
       root,
       "dotfiles/a/child.build.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "nested\\n");`,
+      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "nested\\n");\n}`,
     );
     await put(
       root,
       "dotfiles/a.build.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "root\\n");`,
+      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "root\\n");\n}`,
     );
     await put(
       root,
       "dotfiles/a-/before.build.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "before\\n");`,
+      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "before\\n");\n}`,
     );
 
     await run(root, "linux", homeRoot);
@@ -111,12 +117,12 @@ await writeFile("marker.txt", "ran\\n");
     await put(
       root,
       "dotfiles/01-prune.build.ts",
-      `import { rm, appendFile } from "node:fs/promises";\nawait rm("doomed", { recursive: true, force: true });\nawait appendFile(${JSON.stringify(orderFile)}, "prune\\n");`,
+      `import { rm, appendFile } from "node:fs/promises";\nexport default async function () {\n  await rm("doomed", { recursive: true, force: true });\n  await appendFile(${JSON.stringify(orderFile)}, "prune\\n");\n}`,
     );
     await put(
       root,
       "dotfiles/doomed/boom.build.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
+      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(orderFile)}, "collected\\n");\n}`,
     );
     await put(root, "dotfiles/doomed/keep.txt", "x\n");
 
@@ -131,12 +137,12 @@ await writeFile("marker.txt", "ran\\n");
     await put(
       root,
       "dotfiles/01-prune.build.ts",
-      `import { rm } from "node:fs/promises";\nawait rm("doomed/sub", { recursive: true, force: true });`,
+      `import { rm } from "node:fs/promises";\nexport default async function () {\n  await rm("doomed/sub", { recursive: true, force: true });\n}`,
     );
     await put(
       root,
       "dotfiles/doomed/sub/late.build.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "ran\\n");`,
+      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(orderFile)}, "ran\\n");\n}`,
     );
     await put(root, "dotfiles/doomed/keep.txt", "keep\n");
 
@@ -152,7 +158,10 @@ await writeFile("marker.txt", "ran\\n");
       root,
       "dotfiles/fail.build.ts",
       `#!/usr/bin/env bun
-throw new Error("boom");
+export default async function () {
+  await Promise.resolve();
+  throw new Error("boom");
+}
 `,
     );
 
@@ -205,12 +214,12 @@ replacements:
     assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
 
-  it("appends the machine layer written in the gitconfig edit hook", async () => {
+  it("appends the machine layer with a generic build hook", async () => {
     const hook = await readFile(
-      join(import.meta.dir, "../dotfiles/.gitconfig.edit.ts.sample"),
+      join(import.meta.dir, "../dotfiles/.gitconfig.build.ts.sample"),
       "utf-8",
     );
-    await put(root, "dotfiles/.gitconfig.edit.ts", hook);
+    await put(root, "dotfiles/.gitconfig.build.ts", hook);
     await put(root, "dotfiles/.gitconfig", "[core]\neditor = code --wait\n");
 
     await run(root, "linux", homeRoot);
@@ -304,63 +313,92 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-cwd.txt", JSON.stringify([process.cwd(), import.meta.dir]));\n`,
+      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-cwd.txt", JSON.stringify([process.cwd(), import.meta.dir]));\n}\n`,
     );
     await run(root, "linux", homeRoot);
     const hookCwd = JSON.parse(await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8"));
     assert.deepEqual(hookCwd, [join(distRoot, "vscode"), join(distRoot, "vscode")]);
   });
 
-  it("runs edit hooks with the dist and home file paths", async () => {
+  it("resolves root hook paths using file segment mapping without checking home files", async () => {
     await put(
       root,
-      "dotfiles/app.conf.edit.ts",
+      "dotfiles/paths.build.ts",
       [
-        `import { readFile, writeFile } from "node:fs/promises";`,
-        `export default async function (distPath: string, homePath: string): Promise<void> {`,
-        `  const base = await readFile(distPath, "utf8");`,
-        `  const home = await readFile(homePath, "utf8");`,
-        `  await writeFile(distPath, base + home);`,
+        `import { writeFile } from "node:fs/promises";`,
+        `export default async function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {`,
+        `  const paths = [`,
+        `    "missing.txt",`,
+        `    ".agents/config.exact/agents.yaml",`,
+        `    "bin/tool.executable",`,
+        `    "links/current.symlink",`,
+        `  ];`,
+        `  const resolvedPaths = paths.map((path) => context.resolvePaths(path));`,
+        `  await writeFile("paths.json", JSON.stringify(resolvedPaths));`,
         `}`,
       ].join("\n"),
     );
-    await put(root, "dotfiles/app.conf", "dist:");
-    await put(homeRoot, "app.conf", "home");
 
-    await run(root, "linux", homeRoot);
+    await run(root, "linux", relative(process.cwd(), homeRoot));
 
-    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "dist:home");
+    const paths = JSON.parse(await readFile(join(distRoot, "paths.json"), "utf8"));
+    assert.deepEqual(paths, [
+      { distPath: join(distRoot, "missing.txt"), homePath: join(homeRoot, "missing.txt") },
+      {
+        distPath: join(distRoot, ".agents/config.exact/agents.yaml"),
+        homePath: join(homeRoot, ".agents/config/agents.yaml"),
+      },
+      { distPath: join(distRoot, "bin/tool.executable"), homePath: join(homeRoot, "bin/tool") },
+      {
+        distPath: join(distRoot, "links/current.symlink"),
+        homePath: join(homeRoot, "links/current"),
+      },
+    ]);
+    assert.equal(existsSync(join(homeRoot, "missing.txt")), false);
   });
 
-  it("runs edit hooks when the home counterpart is missing", async () => {
+  it("resolves nested hook paths from their dist cwd, including dist siblings", async () => {
     await put(
       root,
-      "dotfiles/app.conf.edit.ts",
+      "dotfiles/vscode/paths.build.ts",
       [
-        `import { existsSync } from "node:fs";`,
-        `import { readFile, writeFile } from "node:fs/promises";`,
-        `export default async function (distPath: string, homePath: string): Promise<void> {`,
-        `  const base = await readFile(distPath, "utf8");`,
-        `  const home = existsSync(homePath) ? await readFile(homePath, "utf8") : "none";`,
-        `  await writeFile(distPath, base + home);`,
+        `import { writeFile } from "node:fs/promises";`,
+        `export default async function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {`,
+        `  const paths = ["settings.json", "../sibling.txt"].map((path) => context.resolvePaths(path));`,
+        `  await writeFile("paths.json", JSON.stringify(paths));`,
         `}`,
       ].join("\n"),
     );
-    await put(root, "dotfiles/app.conf", "x:");
 
     await run(root, "linux", homeRoot);
 
-    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "x:none");
+    assert.deepEqual(JSON.parse(await readFile(join(distRoot, "vscode/paths.json"), "utf8")), [
+      {
+        distPath: join(distRoot, "vscode/settings.json"),
+        homePath: join(homeRoot, "vscode/settings.json"),
+      },
+      { distPath: join(distRoot, "sibling.txt"), homePath: join(homeRoot, "sibling.txt") },
+    ]);
   });
 
-  it("fails when an edit hook target is missing from dist", async () => {
-    await put(root, "dotfiles/missing.edit.ts", `export default function (): void {};`);
+  for (const path of ["/outside.txt", "../../outside.txt"]) {
+    it(`rejects a build hook path outside dist: ${path}`, async () => {
+      await put(
+        root,
+        "dotfiles/vscode/invalid.build.ts",
+        [
+          `export default function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {`,
+          `  context.resolvePaths(${JSON.stringify(path)});`,
+          `}`,
+        ].join("\n"),
+      );
 
-    await assert.rejects(
-      run(root, "linux", homeRoot),
-      /edit hook target not found: missing\.edit\.ts/,
-    );
-  });
+      await assert.rejects(
+        run(root, "linux", homeRoot),
+        /local build hook failed: vscode\/invalid\.build\.ts/,
+      );
+    });
+  }
 
   it("runs a hook after the path-map standard hook moves its folder", async () => {
     const standardHook = await readFile(
@@ -376,7 +414,7 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-ran.txt", process.cwd());\n`,
+      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-ran.txt", process.cwd());\n}\n`
     );
 
     await run(root, "linux", homeRoot);

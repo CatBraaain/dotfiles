@@ -334,6 +334,14 @@ describe("exclusions", () => {
     assert.deepEqual(result.added, []);
   });
 
+  it("treats .edit.ts files as ordinary entries", async () => {
+    await put(distRoot, "legacy.edit.ts", "managed file\n");
+
+    const result = await diff();
+
+    assert.deepEqual(pathsOf(result, "added"), ["legacy.edit.ts"]);
+  });
+
   it("skips nested entries under an excluded directory", async () => {
     await put(distRoot, "x/.build.data/generated.txt", "content\n");
     await put(distRoot, "x/keep.txt", "content\n");

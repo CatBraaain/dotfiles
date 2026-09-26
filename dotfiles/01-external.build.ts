@@ -424,6 +424,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// The top-level await sits after every declaration so no constant is read
-// before initialization.
-await fetchExternals(join(import.meta.dir, externalFileName), process.cwd());
+export default async function build(): Promise<void> {
+  await fetchExternals(join(import.meta.dir, externalFileName), process.cwd());
+}

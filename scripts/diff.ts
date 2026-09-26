@@ -165,10 +165,6 @@ const excludedEntryPrefixes = [".build"];
 // never diffed or applied (spec §build: ローカルフック).
 const buildHookNamePattern = /\.build\.[^.]+$/;
 
-// Files only: edit hooks (names ending in .edit.ts) run during build and are
-// never placed into home (spec §build: edit フック).
-const editHookNamePattern = /\.edit\.ts$/;
-
 // Files only: apply scripts (names ending in .apply.<ext>) run after applying
 // and are never placed into home (spec §apply スクリプト).
 const applyScriptNamePattern = /\.apply\.[^.]+$/;
@@ -192,9 +188,7 @@ export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
     name.includes(".data.") ||
     (!isDirectory &&
-      (isApplyScriptName(name) ||
-        buildHookNamePattern.test(name) ||
-        editHookNamePattern.test(name)));
+      (isApplyScriptName(name) || buildHookNamePattern.test(name)));
   if (isExcluded)
     return {
       homeName: name,

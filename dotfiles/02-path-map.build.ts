@@ -198,6 +198,6 @@ function isIgnoredTarget(relativeParent: string, patterns: string[], isFile = fa
   );
 }
 
-// The top-level await sits after every declaration so no constant is read
-// before initialization.
-await applyPathMap(join(import.meta.dir, mapFileName), process.cwd(), currentPlatform());
+export default async function build(): Promise<void> {
+  await applyPathMap(join(import.meta.dir, mapFileName), process.cwd(), currentPlatform());
+}
