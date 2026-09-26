@@ -1,9 +1,9 @@
 ---
-name: e2e-recording
+name: playwright-recording
 description: Playwright Test の E2E スクリプトを作成・調整・検証するときに使う。録画または録画を使ったレビューを明示的に依頼された場合に限り、テストごとの MP4 にテストタイトル・経過時間・滑らかに移動する疑似カーソル・クリック波紋・画面下部の入力テキスト帯を付ける。録画の指示がない E2E 作業では録画を開始しない。
 ---
 
-# E2E Recording
+# Playwright Recording
 
 ## 録画の境界
 

@@ -42,10 +42,10 @@ function installOverlay(): void {
   if (window !== window.top) return;
 
   const mount = () => {
-    if (!document.documentElement || document.querySelector("[data-e2e-recording-overlay]")) return;
+    if (!document.documentElement || document.querySelector("[data-playwright-recording-overlay]")) return;
 
     const host = document.createElement("div");
-    host.setAttribute("data-e2e-recording-overlay", "");
+    host.setAttribute("data-playwright-recording-overlay", "");
     host.setAttribute("aria-hidden", "true");
     const shadow = host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");

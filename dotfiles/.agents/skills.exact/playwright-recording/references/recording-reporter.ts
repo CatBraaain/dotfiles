@@ -29,18 +29,18 @@ export default class RecordingReporter implements Reporter {
     for (const { title, input, output } of this.recordings.values()) {
       try {
         await convertVideo(input, output, title);
-        console.log(`[e2e-recording] ${title}: ${output}`);
+        console.log(`[playwright-recording] ${title}: ${output}`);
       } catch (error) {
         await unlink(output).catch(() => {});
         // Conversion failures must not alter the test result. Surface the missing artifact.
-        console.error(`[e2e-recording] Could not convert ${input}:`, error);
+        console.error(`[playwright-recording] Could not convert ${input}:`, error);
       }
     }
   }
 }
 
 async function convertVideo(input: string, output: string, title: string): Promise<void> {
-  const directory = await mkdtemp(join(tmpdir(), "e2e-recording-"));
+  const directory = await mkdtemp(join(tmpdir(), "playwright-recording-"));
   try {
     const titleLines = title.replace(/\s+/g, " ").match(/.{1,36}(?=\s|$)|\S{1,36}/gu) ?? [title];
     const headerHeight = titleLines.length * 24 + 36;
