@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-// Standard build hook (spec: SPEC.md §build: external fetch): fetches the
-// repos of external.data.yaml into dist. Runs as 01-, ahead of the
+// Standard build hook: fetches the repos of external.data.yaml into dist. Runs as 01-, ahead of the
 // path-map hook, because external entries (e.g. gitalias.txt) are map move
 // targets and the map only sees entries that are already placed. The hook
 // runner executes it with cwd at the dist root, and import.meta.dir resolves
@@ -13,8 +12,8 @@ import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node
 import { homedir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-// The yaml dependency lives under dotfiles-manager/ (the only package.json); the
-// dist-side copy of this hook resolves it through the same relative path.
+// The yaml dependency lives under dotfiles-manager/ (the only package.json);
+// the dist-side copy of this hook resolves it through the same relative path.
 // @ts-ignore Resolves to dotfiles-manager/node_modules/yaml without a type package.
 import { parse as parseYaml } from "../dotfiles-manager/node_modules/yaml";
 
@@ -106,8 +105,7 @@ async function fetchExternals(
 async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
   const repos = await readExternalRepos(configPath);
   // Machine-specific layer (gitignored) merged over the shared config by repo
-  // key; a machine definition fully replaces the shared one (spec: SPEC.md
-  // §build: external fetch).
+  // key; a machine definition fully replaces the shared one.
   const machinePath = join(dirname(configPath), externalMachineFileName);
   if (!existsSync(machinePath)) return { repos };
   const byRepo = new Map(repos.map((repo) => [repo.repo, repo]));
@@ -234,7 +232,7 @@ async function copyRepoEntries(
   for (const entry of entries) {
     const entryPath = await resolveEntryPath(mirrorDir, entry);
     // A file entry lands under the destination as-is and is never an edit
-    // target (spec: SPEC.md §build: external fetch).
+    // target.
     if (statSync(entryPath).isFile()) {
       await mkdir(destinationDir, { recursive: true });
       await copyFile(entryPath, join(destinationDir, basename(entryPath)));

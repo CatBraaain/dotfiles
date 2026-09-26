@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-// Standard build hook (spec: SPEC.md §build: マップ): applies the removals
-// and moves of remap.data.md to dist once, resolving the OS column from
+// Standard build hook: applies the removals and moves of remap.data.md
+// to dist once, resolving the OS column from
 // process.platform. Runs as 02-, after the external fetch hook, because
 // fetched entries are map move targets and must be placed before the map
 // applies. The hook runner executes it with cwd at the dist root, and
