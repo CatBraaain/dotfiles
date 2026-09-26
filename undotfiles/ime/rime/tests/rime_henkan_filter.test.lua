@@ -44,7 +44,7 @@ end
 local normal = filter_candidates({ custom, kanji, katakana })
 assert(normal[1] == custom and normal[2] == kanji and normal[3] == katakana,
     "without Henkan the merged menu order must remain unchanged")
-context:set_option("_weasel_henkan", true)
+context:set_option("_rime_henkan", true)
 local promoted = filter_candidates({ custom, kanji, katakana })
 assert(promoted[1].text == "カナ" and promoted[2] == custom and promoted[3] == kanji,
     "Henkan must put full-width katakana ahead of the custom phrase")
@@ -54,9 +54,9 @@ assert(uniquified[1] == duplicate and uniquified[2] == custom and uniquified[3] 
 local missing = filter_candidates({ custom, kanji })
 assert(missing[1] == custom and missing[2] == kanji,
     "a menu without katakana must keep all original candidates")
-context:set_option("_weasel_henkan", false)
+context:set_option("_rime_henkan", false)
 local restored = filter_candidates({ custom, kanji, katakana })
 assert(restored[1] == custom and restored[2] == kanji and restored[3] == katakana,
     "the next input must restore the original candidate order")
 
-print("Weasel Henkan filter tests passed")
+print("Rime Henkan filter tests passed")

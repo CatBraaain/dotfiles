@@ -19,11 +19,13 @@ Rime の選択スキーマは Kagiroi とする。入力中の連続する `n` �
 
 `kana` の第一候補は `かな`、`kanna` の第一候補は `かんな` とする。`konichiha` はこの規則では `こんにちは` の受入例に含めない。
 
-## Windows / Weasel の操作と表示
+## Windows / Linux 共通の操作と候補表示
 
-Windows の Weasel で Kagiroi を使用するとき、`Zenkaku_Hankaku` は Rime の日本語入力と英字入力を切り替える。入力中の `Henkan` は編集中の文字列の第一候補をカタカナにし、そのキーでは確定しない。
+Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき、`Zenkaku_Hankaku` は Rime の日本語入力と英字入力を切り替える。入力中の `Henkan` は編集中の文字列の第一候補をカタカナにし、そのキーでは確定しない。
 
-日本語入力中は、入力開始から候補一覧を表示しない。候補のある入力で最初に `Space` を押すと、入力を確定せず候補一覧を表示する。以後の候補選択・確定は通常どおり行い、次の入力では再び `Space` を押すまで候補一覧を表示しない。Weasel の入力状態の通知とトレイアイコンは表示しない。これらの操作・表示の変更は Linux の fcitx5-rime には適用しない。
+日本語入力中は、入力開始から候補一覧を表示しない。候補のある入力で最初に `Space` を押すと、入力を確定せず候補一覧を表示する。以後の候補選択・確定は通常どおり行い、次の入力では再び `Space` を押すまで候補一覧を表示しない。
+
+Windows の Weasel では、入力状態の通知とトレイアイコンを表示しない。
 
 ## 配置
 
@@ -32,4 +34,4 @@ Windows の Weasel で Kagiroi を使用するとき、`Zenkaku_Hankaku` は Rim
 - Windows / Weasel: `%APPDATA%/Rime`
 - Linux / fcitx5-rime: `~/.local/share/fcitx5/rime`
 
-dotfiles は `default.custom.yaml`、`kagiroi.custom.yaml`、n 入力を保留する Lua processor を管理する。Kagiroi の標準ローマ字 processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
+dotfiles は共通の `default.custom.yaml`、`kagiroi.custom.yaml`、n 入力の補正と共通キー・候補操作の Lua、Weasel 固有の `weasel.custom.yaml` を管理する。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字 processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。

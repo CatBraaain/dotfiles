@@ -32,4 +32,4 @@ for _, modifiers in ipairs({
     assert(not context:get_option("ascii_mode"), "other key events must leave ascii mode unchanged")
 end
 
-print("Weasel ascii mode toggle tests passed")
+print("Rime ascii mode toggle tests passed")

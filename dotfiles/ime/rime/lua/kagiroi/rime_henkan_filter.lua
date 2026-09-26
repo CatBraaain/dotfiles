@@ -8,7 +8,7 @@ local function is_fullwidth_katakana(candidate)
 end
 
 local function promote_henkan_candidate(input, env)
-    if not env.engine.context:get_option("_weasel_henkan") then
+    if not env.engine.context:get_option("_rime_henkan") then
         for candidate in input:iter() do
             yield(candidate)
         end

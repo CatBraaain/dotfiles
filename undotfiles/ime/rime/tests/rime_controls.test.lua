@@ -56,6 +56,16 @@ assert(first_space == kAccepted, "first Space must be consumed")
 assert(not context:get_option("_hide_candidate"), "first Space must reveal candidates")
 local second_space = press(env, 0x20)
 assert(second_space == kNoop, "subsequent Space must reach standard processors")
+
+env, context = new_environment()
+context.input = "か"
+context:set_option("_hide_candidate", true)
+function context:has_menu() return false end
+local no_menu_space = press(env, 0x20)
+assert(no_menu_space == kNoop, "Space without a candidate menu must reach standard processors")
+assert(context:get_option("_hide_candidate"), "Space without candidates must not reveal a menu")
+
+env, context = new_environment()
 context.input = ""
 press(env, string.byte("n"))
 assert(context:get_option("_hide_candidate"), "next input must hide candidates again")
@@ -67,14 +77,14 @@ assert(henkan == kAccepted, "Henkan must be consumed without committing")
 assert(calls == before_henkan, "Henkan must not reach the kana speller")
 assert(context.input == "かな", "Henkan must leave composition intact")
 assert(context:get_option("katakana"), "Henkan must enable full-width katakana")
-assert(context:get_option("_weasel_henkan"), "Henkan must enable candidate promotion")
+assert(context:get_option("_rime_henkan"), "Henkan must enable candidate promotion")
 assert(context.selected_index == 0, "Henkan must highlight the first candidate")
 press(env, 0xff23)
-assert(context:get_option("_weasel_henkan"), "repeated Henkan must keep candidate promotion")
+assert(context:get_option("_rime_henkan"), "repeated Henkan must keep candidate promotion")
 context.input = ""
 press(env, string.byte("k"))
 assert(not context:get_option("katakana"), "next input must restore the prior kana mode after repeated Henkan")
-assert(not context:get_option("_weasel_henkan"), "next input must stop candidate promotion")
+assert(not context:get_option("_rime_henkan"), "next input must stop candidate promotion")
 assert(context:get_option("_hide_candidate"), "next input must start hidden")
 
 env, context = new_environment()
@@ -97,4 +107,4 @@ assert(ascii_henkan == kNoop, "Henkan in ascii mode must pass through")
 local modified_space = press(env, 0x20, { ctrl = true })
 assert(modified_space == kNoop, "modified Space must pass through")
 
-print("Weasel candidate visibility and Henkan tests passed")
+print("Rime candidate visibility and Henkan tests passed")

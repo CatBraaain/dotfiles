@@ -19,7 +19,7 @@ function Top.func(key_event, env)
         end
         context:set_option("hw_katakana", false)
         context:set_option("katakana", true)
-        context:set_option("_weasel_henkan", true)
+        context:set_option("_rime_henkan", true)
         context:highlight(0)
         return kAccepted
     end
@@ -27,7 +27,7 @@ function Top.func(key_event, env)
     if context.input == "" and keycode >= 0x21 and keycode <= 0x7e
         and env.alphabet:find(string.char(keycode), 1, true) then
         if env.previous_katakana ~= nil then
-            context:set_option("_weasel_henkan", false)
+            context:set_option("_rime_henkan", false)
             context:set_option("katakana", env.previous_katakana)
             context:set_option("hw_katakana", env.previous_hw_katakana)
             env.previous_katakana = nil

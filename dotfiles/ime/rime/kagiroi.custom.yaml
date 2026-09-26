@@ -1,2 +1,4 @@
 patch:
-  "engine/processors/@3": lua_processor@*kagiroi/kagiroi_n_kana_speller
+  "engine/processors/@3": lua_processor@*kagiroi/rime_controls
+  "engine/processors/@before 0": lua_processor@*kagiroi/rime_ascii_toggle
+  "engine/filters/@next": lua_filter@*kagiroi/rime_henkan_filter

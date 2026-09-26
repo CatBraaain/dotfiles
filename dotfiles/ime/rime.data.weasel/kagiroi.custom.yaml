@@ -1,4 +1,0 @@
-patch:
-  "engine/processors/@3": lua_processor@*kagiroi/weasel_controls
-  "engine/processors/@before 0": lua_processor@*kagiroi/weasel_ascii_toggle
-  "engine/filters/@next": lua_filter@*kagiroi/weasel_henkan_filter

@@ -25,13 +25,6 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | git-cliff | .config/git-cliff | AppData/Roaming/git-cliff | - |
 | gsudo | - |  | - |
 | ime/rime | .local/share/fcitx5/rime | AppData/Roaming/Rime | - |
-| ime/rime.data.weasel | - |  | - |
-| ime/rime.data.weasel/default.custom.yaml |  | AppData/Roaming/Rime/default.custom.yaml |  |
-| ime/rime.data.weasel/kagiroi.custom.yaml |  | AppData/Roaming/Rime/kagiroi.custom.yaml |  |
-| ime/rime.data.weasel/weasel.custom.yaml |  | AppData/Roaming/Rime/weasel.custom.yaml |  |
-| ime/rime.data.weasel/lua/kagiroi/weasel_ascii_toggle.lua |  | AppData/Roaming/Rime/lua/kagiroi/weasel_ascii_toggle.lua |  |
-| ime/rime.data.weasel/lua/kagiroi/weasel_controls.lua |  | AppData/Roaming/Rime/lua/kagiroi/weasel_controls.lua |  |
-| ime/rime.data.weasel/lua/kagiroi/weasel_henkan_filter.lua |  | AppData/Roaming/Rime/lua/kagiroi/weasel_henkan_filter.lua |  |
 | localsend/settings.merge.json | .local/share/org.localsend.localsend_app/shared_preferences.merge.json | AppData/Roaming/LocalSend/settings.merge.json | - |
 | obs-studio | - | AppData/Roaming/obs-studio | - |
 | open-whispr |  | AppData/Roaming/open-whispr | - |
