@@ -13,10 +13,10 @@ import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node
 import { homedir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-// The yaml dependency lives under scripts/ (the only package.json); the
+// The yaml dependency lives under dotfiles-manager/ (the only package.json); the
 // dist-side copy of this hook resolves it through the same relative path.
-// @ts-ignore Resolves to scripts/node_modules/yaml without a type package.
-import { parse as parseYaml } from "../scripts/node_modules/yaml";
+// @ts-ignore Resolves to dotfiles-manager/node_modules/yaml without a type package.
+import { parse as parseYaml } from "../dotfiles-manager/node_modules/yaml";
 
 declare const Bun: {
   spawn(

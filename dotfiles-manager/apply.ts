@@ -70,7 +70,7 @@ export type Declarations = {
 
 type DirentLike = { name: string; isDirectory(): boolean; isFile(): boolean };
 
-const usage = "usage: bun scripts/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
+const usage = "usage: bun dotfiles-manager/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
 
 // ---------------------------------------------------------------- public API
 

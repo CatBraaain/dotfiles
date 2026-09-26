@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "dotfiles-scripts",
+      "name": "dotfiles-manager",
       "dependencies": {
         "smol-toml": "^1.4.2",
         "yaml": "^2.8.1",

@@ -68,7 +68,7 @@ type StatsLike = {
 type DirentLike = { name: string; isDirectory(): boolean };
 
 const usage =
-  "usage: bun scripts/diff.ts [--managed] [--json] [distRoot] [homeRoot] (defaults: dist, ~)";
+  "usage: bun dotfiles-manager/diff.ts [--managed] [--json] [distRoot] [homeRoot] (defaults: dist, ~)";
 
 // ---------------------------------------------------------------- public API
 

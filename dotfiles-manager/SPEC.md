@@ -35,7 +35,9 @@ build が完了した dist が、差分検知の入力になる。
 | `just diff` | build と差分検知までを実行し、差分を表示する。home へ書き込まず、apply スクリプトを実行しない |
 | `just managed` | build を実行し、適用対象エントリの home 相対パス一覧を表示する。home を変更しない |
 
-差分の表示は `scripts/diff.ts` が差分ありエントリごとに difftastic または git diff による 2 入力比較を表示する形式を維持する（§差分表示）。
+これらのコマンドは内部 CLI `bun dotfiles-manager/cli.ts <apply|diff|managed>` の対応するサブコマンドを呼ぶ。各サブコマンドは後続の操作より前に build を実行し、build が失敗すれば後続の操作を実行せず終了コード非 0 で終了する。サブコマンドがない場合、不明な場合、または余分な引数がある場合は使用方法を表示して終了コード非 0 で終了し、build は実行しない。
+
+差分の表示は `dotfiles-manager/diff.ts` が差分ありエントリごとに difftastic または git diff による 2 入力比較を表示する形式を維持する（§差分表示）。
 
 ## build: dist 再構築
 

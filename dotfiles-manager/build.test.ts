@@ -350,10 +350,10 @@ replacements:
     await put(homeRoot, "mirrors/github.com/example/repo/machine.txt", "machine\n");
     await put(homeRoot, "mirrors/github.com/example/repo/old.txt", "old\n");
     await put(homeRoot, "mirrors/github.com/example/repo/.git/build-pull-time", `${Date.now()}\n`);
-    await mkdir(join(root, "scripts/node_modules"), { recursive: true });
+    await mkdir(join(root, "dotfiles-manager/node_modules"), { recursive: true });
     await symlink(
       join(import.meta.dir, "node_modules/yaml"),
-      join(root, "scripts/node_modules/yaml"),
+      join(root, "dotfiles-manager/node_modules/yaml"),
       "dir",
     );
 
@@ -639,5 +639,84 @@ describe("local build hooks", () => {
       ),
       /build hook has unsupported extension: vscode\/format-settings\.build\.sh/,
     );
+  });
+});
+
+async function runManager(command: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  const script = `import { main } from ${JSON.stringify(join(import.meta.dir, "cli.ts"))};
+try { process.exitCode = await main([${JSON.stringify(command)}], ${JSON.stringify(root)}, ${JSON.stringify(homeRoot)}); }
+catch (error) { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; }`;
+  const child = Bun.spawn([process.execPath, "-e", script], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { code, stdout, stderr };
+}
+
+describe("manager CLI", () => {
+  it("builds before applying and runs apply scripts", async () => {
+    await put(root, "dotfiles/file.txt", "new\n");
+    await put(root, "dotfiles/done.apply.ts", 'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran\\n");');
+    await put(distRoot, "old.txt", "stale\n");
+
+    const result = await runManager("apply");
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "new\n");
+    assert.equal(await readFile(join(homeRoot, "done.txt"), "utf8"), "ran\n");
+    assert.equal(existsSync(join(distRoot, "old.txt")), false);
+  });
+
+  it("builds before diff without writing to home or running apply scripts", async () => {
+    await put(root, "dotfiles/file.txt", "new\n");
+    await put(root, "dotfiles/done.apply.ts", 'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran");');
+    await put(homeRoot, "file.txt", "old\n");
+
+    const result = await runManager("diff");
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /file\.txt/);
+    assert.equal(await readFile(join(distRoot, "file.txt"), "utf8"), "new\n");
+    assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "old\n");
+    assert.equal(existsSync(join(homeRoot, "done.txt")), false);
+  });
+
+  it("builds before listing managed paths without writing to home", async () => {
+    await put(root, "dotfiles/new.txt", "content\n");
+
+    const result = await runManager("managed");
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "new.txt\n");
+    assert.equal(existsSync(join(homeRoot, "new.txt")), false);
+  });
+
+  it("stops after a failed build without applying", async () => {
+    await put(root, "dotfiles/file.txt", "new\n");
+    await put(root, "dotfiles/fail.build.ts", 'export default function () { throw new Error("failed"); }');
+
+    const result = await runManager("apply");
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /local build hook failed: fail\.build\.ts/);
+    assert.equal(existsSync(join(homeRoot, "file.txt")), false);
+  });
+
+  it("rejects unknown commands before rebuilding dist", async () => {
+    await put(distRoot, "sentinel.txt", "keep\n");
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "cli.ts"), "unknown"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+
+    assert.equal(code, 1);
+    assert.match(stderr, /usage: bun dotfiles-manager\/cli\.ts/);
+    assert.equal(await readFile(join(distRoot, "sentinel.txt"), "utf8"), "keep\n");
   });
 });

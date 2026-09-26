@@ -20,16 +20,13 @@ install:
   gsudo pwsh undotfiles/install/windows.ps1
 
 apply:
-  bun scripts/build.ts
-  bun scripts/apply.ts dist ~
+  bun dotfiles-manager/cli.ts apply
 
 diff:
-  bun scripts/build.ts
-  bun scripts/diff.ts dist ~
+  bun dotfiles-manager/cli.ts diff
 
 managed:
-  bun scripts/build.ts
-  bun scripts/diff.ts --managed dist ~
+  bun dotfiles-manager/cli.ts managed
 
 [windows]
 winconfig:
