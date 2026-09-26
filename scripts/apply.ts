@@ -19,7 +19,11 @@ import {
   type DiffEntry,
   type DiffResult,
 } from "./diff.ts";
-import { resolveHookCommand } from "./hook-runner.ts";
+import {
+  ensureHookDirectory,
+  removeEmptyHookDirectories,
+  resolveHookCommand,
+} from "./hook-runner.ts";
 
 declare const Bun: {
   spawn(
@@ -58,6 +62,7 @@ export type ApplyScript = {
   fileName: string;
   folderRel: string;
   homeFolderRel: string;
+  contents: string;
 };
 export type Declarations = {
   applyScripts: ApplyScript[];
@@ -109,16 +114,11 @@ export async function applyDifferences(
 
 // Finds apply scripts in a built dist tree (spec §apply スクリプト).
 // node_modules and folders whose names are excluded from diffing are skipped;
-// ordering is folder-relative path first (parents before children), then file
-// name.
+// ordering is the full dist-relative path in UTF-16 code-unit order.
 export async function collectDeclarations(distRoot: string): Promise<Declarations> {
   const declarations: Declarations = { applyScripts: [] };
   await walkDeclarations(distRoot, "", declarations);
-  declarations.applyScripts.sort(
-    (left, right) =>
-      compareFolderRel(left.folderRel, right.folderRel) ||
-      compareCodeUnits(left.fileName, right.fileName),
-  );
+  declarations.applyScripts.sort((left, right) => compareCodeUnits(left.distPath, right.distPath));
   return declarations;
 }
 
@@ -132,10 +132,21 @@ export async function runApplyScripts(
 ): Promise<void> {
   for (const script of scripts) {
     const cwd = join(homeRoot, script.homeFolderRel);
+    const scriptDirectory = dirname(join(distRoot, script.distPath));
+    const createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
     await mkdir(cwd, { recursive: true });
-    const command = resolveHookCommand(join(distRoot, script.distPath), script.distPath, "apply");
 
-    await spawnChild(command, cwd, "ignore", `apply script failed: ${script.distPath}`);
+    try {
+      const command = resolveHookCommand(script.contents, script.distPath, "apply", cwd);
+      await spawnChild(
+        command,
+        scriptDirectory,
+        "ignore",
+        `apply script failed: ${script.distPath}`,
+      );
+    } finally {
+      await removeEmptyHookDirectories(createdDirectories);
+    }
   }
 }
 
@@ -289,6 +300,7 @@ async function walkDeclarations(
         fileName: entry.name,
         folderRel: dirRel,
         homeFolderRel: homeFolderOf(dirRel),
+        contents: await readFile(join(dirAbs, entry.name), "utf8"),
       });
   }
 }
@@ -302,18 +314,6 @@ function homeFolderOf(folderRel: string): string {
     .split("/")
     .map((name) => mapSegment(name, true).homeName)
     .join("/");
-}
-
-// Folder sort: parent folders before children, siblings by UTF-16 code units.
-function compareFolderRel(left: string, right: string): number {
-  const leftParts = left === "" ? [] : left.split("/");
-  const rightParts = right === "" ? [] : right.split("/");
-  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
-    const leftPart = leftParts[index]!;
-    const rightPart = rightParts[index]!;
-    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
-  }
-  return leftParts.length - rightParts.length;
 }
 
 // ------------------------------------------------------------------ spawning

@@ -14,7 +14,13 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 import { mapSegment } from "./diff.ts";
-import { resolveHookCommand } from "./hook-runner.ts";
+import {
+  ensureHookDirectory,
+  removeEmptyHookDirectories,
+  removeHookSnapshot,
+  resolveHookCommand,
+  writeHookSnapshot,
+} from "./hook-runner.ts";
 
 declare const Bun: {
   spawn(
@@ -52,7 +58,7 @@ type PlainObject = Record<string, unknown>;
 type Operation = { key: string; value: unknown };
 type Operations = Map<string, Partial<Record<MergeOp, Operation>>>;
 type Entry = { path: string; isDirectory: boolean };
-type Hook = { absolutePath: string; relativeParent: string; name: string };
+type Hook = { absolutePath: string; relativeParent: string; name: string; contents: string };
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
 
@@ -89,9 +95,7 @@ export async function run(
 
   await rm(distDir, { recursive: true, force: true });
   await copyDir(sourceDir, distDir);
-  // Hooks are collected from dist once, after the copy. Removals and moves
-  // that earlier hooks apply leave later hook files missing in dist; those
-  // do not run.
+  // Capture hooks once so earlier hooks cannot remove later scripts from the event queue.
   await runHooks(await collectHooks(distDir), distDir, homeRoot);
   await composeMergeTargets(distDir, homeRoot);
   await applyReplaceSidecars(distDir, homeRoot);
@@ -555,56 +559,56 @@ async function collectHooks(distDir: string): Promise<Hook[]> {
       const entryPath = join(directory, entry.name);
       const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
       if (entry.isDirectory()) await walk(entryPath, childParent);
-      else if (entry.isFile() && (hookNamePattern.test(entry.name) || editHookNamePattern.test(entry.name)))
-        hooks.push({ absolutePath: entryPath, relativeParent, name: entry.name });
+      else if (
+        entry.isFile() &&
+        (hookNamePattern.test(entry.name) || editHookNamePattern.test(entry.name))
+      )
+        hooks.push({
+          absolutePath: entryPath,
+          relativeParent,
+          name: entry.name,
+          contents: await readFile(entryPath, "utf8"),
+        });
     }
   }
   await walk(distDir, "");
-  return hooks.sort((left, right) => {
-    const byParent = compareHookParents(left.relativeParent, right.relativeParent);
-    if (byParent !== 0) return byParent;
-    return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
-  });
+  return hooks.sort((left, right) =>
+    compareCodeUnits(hookRelativePath(left), hookRelativePath(right)),
+  );
 }
 
 function hookRelativePath(hook: Hook): string {
   return hook.relativeParent === "" ? hook.name : `${hook.relativeParent}/${hook.name}`;
 }
 
-function compareHookParents(left: string, right: string): number {
-  const leftParts = left === "" ? [] : left.split("/");
-  const rightParts = right === "" ? [] : right.split("/");
-  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
-    const leftPart = leftParts[index]!;
-    const rightPart = rightParts[index]!;
-    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
-  }
-  return leftParts.length - rightParts.length;
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 // Local build hooks (spec: SPEC.md §build: ローカルフック) and edit hooks
 // (spec: SPEC.md §build: edit フック) run as Bun processes.
-export async function runHooks(
-  hooks: Hook[],
-  distDir: string,
-  homeRoot: string,
-): Promise<void> {
+export async function runHooks(hooks: Hook[], distDir: string, homeRoot: string): Promise<void> {
   for (const hook of hooks) {
-    // Earlier hooks (e.g. the path map) may have removed or moved the files
-    // of later hooks in dist; those hooks no longer exist and do not run.
-    if (!existsSync(hook.absolutePath)) continue;
-
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
+    const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
     const relativePath = hookRelativePath(hook);
+    try {
+      if (editHookNamePattern.test(hook.name)) {
+        const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
+        try {
+          await runEditHook({ ...hook, absolutePath: snapshotPath }, hookDistDir, homeRoot);
+        } finally {
+          await removeHookSnapshot(snapshotPath, distDir);
+        }
+        continue;
+      }
 
-    if (editHookNamePattern.test(hook.name)) {
-      await runEditHook(hook, hookDistDir, homeRoot);
-      continue;
+      const command = resolveHookCommand(hook.contents, relativePath, "build");
+      await runChildProcess(command, hookDistDir, relativePath, "local build hook");
+    } finally {
+      await removeEmptyHookDirectories(createdDirectories);
     }
-
-    const command = resolveHookCommand(hook.absolutePath, relativePath, "build");
-    await runChildProcess(command, hookDistDir, relativePath, "local build hook");
   }
 }
 

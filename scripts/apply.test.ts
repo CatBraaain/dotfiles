@@ -272,27 +272,110 @@ describe("apply scripts", () => {
   });
 
   it("runs a TypeScript hook in the mapped home folder without requiring a shebang", async () => {
-    await putApplyScript(distRoot, "tools/setup.apply.ts");
+    await putApplyScript(
+      distRoot,
+      "tools/setup.apply.ts",
+      `import { writeFile } from "node:fs/promises";\nawait writeFile("apply-out.txt", JSON.stringify([process.cwd(), import.meta.dir]));`,
+    );
     const declarations = await collectDeclarations(distRoot);
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    const output = await readFile(join(homeRoot, "tools", "apply-out.txt"), "utf8");
-    assert.equal(output, join(homeRoot, "tools"));
+    const output = JSON.parse(await readFile(join(homeRoot, "tools", "apply-out.txt"), "utf8"));
+    assert.deepEqual(output, [join(homeRoot, "tools"), join(distRoot, "tools")]);
   });
 
-  it("runs scripts in folder then filename order", async () => {
+  it("runs a shebang hook with the home cwd and dist import directory", async () => {
+    await putApplyScript(
+      distRoot,
+      "tools/setup.apply.ts",
+      `#!/usr/bin/env bun\nimport { writeFile } from "node:fs/promises";\nawait writeFile("apply-out.txt", JSON.stringify([process.cwd(), import.meta.dir]));`,
+    );
+    const declarations = await collectDeclarations(distRoot);
+
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    const output = JSON.parse(await readFile(join(homeRoot, "tools", "apply-out.txt"), "utf8"));
+    assert.deepEqual(output, [join(homeRoot, "tools"), join(distRoot, "tools")]);
+  });
+
+  it("runs scripts in full-path alphabetical order", async () => {
     const orderFile = join(root, "apply-order.txt");
     const appendOrder = (value: string) =>
       `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(`${value}\n`)});`;
     await putApplyScript(distRoot, "pkg/second.apply.ts", appendOrder("b"));
     await putApplyScript(distRoot, "pkg/first.apply.ts", appendOrder("a"));
     await putApplyScript(distRoot, "aaa/early.apply.ts", appendOrder("c"));
+    await putApplyScript(distRoot, "pkg-/before.apply.ts", appendOrder("before"));
     const declarations = await collectDeclarations(distRoot);
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n"), ["c", "a", "b"]);
+    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n"), [
+      "c",
+      "before",
+      "a",
+      "b",
+    ]);
+  });
+
+  it("runs a collected script after an earlier script moves it in dist", async () => {
+    const orderFile = join(root, "apply-order.txt");
+    const movedPath = join(distRoot, "moved/z-late.apply.ts");
+    await putApplyScript(
+      distRoot,
+      "a-move.apply.ts",
+      `import { appendFile, mkdir, rename } from "node:fs/promises";\nawait mkdir(${JSON.stringify(join(distRoot, "moved"))}, { recursive: true });\nawait rename(${JSON.stringify(join(distRoot, "z-late.apply.ts"))}, ${JSON.stringify(movedPath)});\nawait appendFile(${JSON.stringify(orderFile)}, "move\\n");`,
+    );
+    await putApplyScript(
+      distRoot,
+      "z-late.apply.ts",
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
+    );
+    const declarations = await collectDeclarations(distRoot);
+
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.equal(await readFile(orderFile, "utf8"), "move\ncollected\n");
+    assert.equal(existsSync(movedPath), true);
+  });
+
+  it("runs a collected script after removal and preserves existing ancestors", async () => {
+    const orderFile = join(root, "apply-order.txt");
+    await putApplyScript(
+      distRoot,
+      "a-prune.apply.ts",
+      `import { appendFile, rm } from "node:fs/promises";\nawait rm(${JSON.stringify(join(distRoot, "pkg/sub"))}, { recursive: true, force: true });\nawait appendFile(${JSON.stringify(orderFile)}, "prune\\n");`,
+    );
+    await putApplyScript(
+      distRoot,
+      "pkg/sub/z-late.apply.ts",
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
+    );
+    await put(distRoot, "pkg/keep.txt", "keep\n");
+    const declarations = await collectDeclarations(distRoot);
+
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.equal(await readFile(orderFile, "utf8"), "prune\ncollected\n");
+    assert.equal(await readFile(join(distRoot, "pkg/keep.txt"), "utf8"), "keep\n");
+    assert.equal(existsSync(join(distRoot, "pkg/sub")), false);
+  });
+
+  it("removes a script snapshot after its hook moves its directory", async () => {
+    const sourceDirectory = join(distRoot, "self");
+    const movedDirectory = join(distRoot, "moved");
+    await putApplyScript(
+      distRoot,
+      "self/move.apply.ts",
+      `import { rename } from "node:fs/promises";\nawait rename(${JSON.stringify(sourceDirectory)}, ${JSON.stringify(movedDirectory)});`,
+    );
+    const declarations = await collectDeclarations(distRoot);
+
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.equal(existsSync(join(movedDirectory, "move.apply.ts")), true);
+    assert.deepEqual(await readdir(movedDirectory), ["move.apply.ts"]);
   });
 
   it("rejects unsupported extensions and stops the queue", async () => {

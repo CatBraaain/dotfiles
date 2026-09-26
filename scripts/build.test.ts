@@ -57,7 +57,7 @@ describe("run", () => {
     assert.equal(existsSync(join(distRoot, "stale-from-previous-build.txt")), false);
   });
 
-  it("runs local hooks from dist in name order with their dist folder as cwd", async () => {
+  it("runs local hooks in full-path alphabetical order with their dist folder as cwd", async () => {
     await put(
       root,
       "dotfiles/10-late.build.ts",
@@ -82,35 +82,69 @@ import { writeFile } from "node:fs/promises";
 await writeFile("marker.txt", "ran\\n");
 `,
     );
+    await put(
+      root,
+      "dotfiles/a/child.build.ts",
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "nested\\n");`,
+    );
+    await put(
+      root,
+      "dotfiles/a.build.ts",
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "root\\n");`,
+    );
+    await put(
+      root,
+      "dotfiles/a-/before.build.ts",
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "before\\n");`,
+    );
 
     await run(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "log.txt"), "utf8"), "early\nlate\n");
     assert.equal(await readFile(join(distRoot, "sub/marker.txt"), "utf8"), "ran\n");
     assert.equal(existsSync(join(distRoot, "marker.txt")), false);
+    assert.equal(await readFile(join(root, "path-order.txt"), "utf8"), "before\nroot\nnested\n");
   });
 
-  it("does not run hooks that earlier hooks removed from dist", async () => {
+  it("runs a collected hook even after an earlier hook removes it", async () => {
+    const orderFile = join(root, "hook-order.txt");
     await put(
       root,
       "dotfiles/01-prune.build.ts",
-      `#!/usr/bin/env bun
-import { rm } from "node:fs/promises";
-await rm("doomed", { recursive: true, force: true });
-`,
+      `import { rm, appendFile } from "node:fs/promises";\nawait rm("doomed", { recursive: true, force: true });\nawait appendFile(${JSON.stringify(orderFile)}, "prune\\n");`,
     );
     await put(
       root,
       "dotfiles/doomed/boom.build.ts",
-      `#!/usr/bin/env bun
-process.exit(1);
-`,
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
     );
     await put(root, "dotfiles/doomed/keep.txt", "x\n");
 
     await run(root, "linux", homeRoot);
 
-    assert.equal(existsSync(join(distRoot, "doomed")), false);
+    assert.equal(existsSync(join(distRoot, "doomed/keep.txt")), false);
+    assert.equal(await readFile(orderFile, "utf8"), "prune\ncollected\n");
+  });
+
+  it("preserves existing empty ancestors after executing a removed nested hook", async () => {
+    const orderFile = join(root, "hook-order.txt");
+    await put(
+      root,
+      "dotfiles/01-prune.build.ts",
+      `import { rm } from "node:fs/promises";\nawait rm("doomed/sub", { recursive: true, force: true });`,
+    );
+    await put(
+      root,
+      "dotfiles/doomed/sub/late.build.ts",
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "ran\\n");`,
+    );
+    await put(root, "dotfiles/doomed/keep.txt", "keep\n");
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "doomed/keep.txt"), "utf8"), "keep\n");
+    assert.equal(existsSync(join(distRoot, "doomed/sub")), false);
+    assert.equal(await readFile(orderFile, "utf8"), "ran\n");
   });
 
   it("fails when a hook exits non-zero", async () => {
@@ -270,11 +304,11 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-cwd.txt", process.cwd());\n`,
+      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-cwd.txt", JSON.stringify([process.cwd(), import.meta.dir]));\n`,
     );
     await run(root, "linux", homeRoot);
-    const hookCwd = await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8");
-    assert.equal(hookCwd, join(distRoot, "vscode"));
+    const hookCwd = JSON.parse(await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8"));
+    assert.deepEqual(hookCwd, [join(distRoot, "vscode"), join(distRoot, "vscode")]);
   });
 
   it("runs edit hooks with the dist and home file paths", async () => {
@@ -328,7 +362,7 @@ describe("local build hooks", () => {
     );
   });
 
-  it("does not run a hook the path-map standard hook removed from dist", async () => {
+  it("runs a hook after the path-map standard hook moves its folder", async () => {
     const standardHook = await readFile(
       join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
       "utf-8",
@@ -337,18 +371,43 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/remap.data.md",
-      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode/format-settings.build.ts | - | - | - |\n",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode | mapped-vscode | - | - |\n",
     );
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-ran.txt", "ran");\n`,
+      `import { writeFile } from "node:fs/promises";\nawait writeFile("hook-ran.txt", process.cwd());\n`,
     );
 
     await run(root, "linux", homeRoot);
 
-    assert.ok(!existsSync(join(distRoot, "vscode/hook-ran.txt")));
+    assert.equal(
+      await readFile(join(distRoot, "vscode/hook-ran.txt"), "utf8"),
+      join(distRoot, "vscode"),
+    );
     assert.ok(!existsSync(join(distRoot, "vscode/format-settings.build.ts")));
+  });
+
+  it("runs a collected formatter hook after its mapped folder is removed", async () => {
+    const standardHook = await readFile(
+      join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
+      "utf-8",
+    );
+    const formatHook = await readFile(
+      join(import.meta.dir, "../dotfiles/vscode/format-settings.build.ts"),
+      "utf-8",
+    );
+    await put(root, "dotfiles/02-path-map.build.ts", standardHook);
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode | - | - | - |\n",
+    );
+    await put(root, "dotfiles/vscode/format-settings.build.ts", formatHook);
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(existsSync(join(distRoot, "vscode")), false);
   });
 
   it("rejects a hook with an unsupported extension", async () => {
@@ -360,6 +419,7 @@ describe("local build hooks", () => {
             absolutePath: join(distRoot, "vscode/format-settings.build.sh"),
             relativeParent: "vscode",
             name: "format-settings.build.sh",
+            contents: "echo hook output\n",
           },
         ],
         distRoot,
