@@ -541,24 +541,26 @@ async function collectReplaceSidecars(dirAbs: string, dirRel: string): Promise<s
 async function collectHooks(distDir: string): Promise<Hook[]> {
   const hooks: Hook[] = [];
   async function walk(directory: string, relativeParent: string): Promise<void> {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (entry.name === "node_modules") continue;
-      const entryPath = join(directory, entry.name);
-      const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
-      if (entry.isDirectory()) await walk(entryPath, childParent);
-      else if (entry.isFile() && hookNamePattern.test(entry.name))
+    const entries = (await readdir(directory, { withFileTypes: true })).sort(
+      (left: { name: string }, right: { name: string }) => compareCodeUnits(left.name, right.name),
+    );
+    for (const entry of entries) {
+      if (entry.isFile() && hookNamePattern.test(entry.name))
         hooks.push({
-          absolutePath: entryPath,
+          absolutePath: join(directory, entry.name),
           relativeParent,
           name: entry.name,
-          contents: await readFile(entryPath, "utf8"),
+          contents: await readFile(join(directory, entry.name), "utf8"),
         });
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === "node_modules") continue;
+      const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
+      await walk(join(directory, entry.name), childParent);
     }
   }
   await walk(distDir, "");
-  return hooks.sort((left, right) =>
-    compareCodeUnits(hookRelativePath(left), hookRelativePath(right)),
-  );
+  return hooks;
 }
 
 function hookRelativePath(hook: Hook): string {

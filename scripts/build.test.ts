@@ -59,7 +59,7 @@ describe("run", () => {
     assert.equal(existsSync(join(distRoot, "stale-from-previous-build.txt")), false);
   });
 
-  it("runs local hooks in full-path alphabetical order with their dist folder as cwd", async () => {
+  it("runs parent hooks before child folders in UTF-16 name order with their dist folder as cwd", async () => {
     await put(
       root,
       "dotfiles/10-late.build.ts",
@@ -90,31 +90,38 @@ export default async function () {
 }
 `,
     );
-    await put(
-      root,
-      "dotfiles/a/child.build.ts",
-      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "nested\\n");\n}`,
-    );
-    await put(
-      root,
-      "dotfiles/a.build.ts",
-      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "root\\n");\n}`,
-    );
-    await put(
-      root,
-      "dotfiles/a-/before.build.ts",
-      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(join(root, "path-order.txt"))}, "before\\n");\n}`,
-    );
+    const orderFile = join(root, "path-order.txt");
+    for (const [path, label] of [
+      ["z.build.ts", "root-z"],
+      ["\uE000.build.ts", "root-bmp"],
+      ["\u{10000}.build.ts", "root-astral"],
+      ["\uE000/child.build.ts", "bmp-child"],
+      ["\u{10000}/child.build.ts", "astral-child"],
+      ["a-/before.build.ts", "a-before"],
+      ["a/deep/grandchild.build.ts", "a-grandchild"],
+      ["a/z-parent.build.ts", "a-parent"],
+      ["a/child.build.ts", "a-child"],
+      ["a.build.ts", "root-a"],
+    ]) {
+      await put(
+        root,
+        `dotfiles/${path}`,
+        `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(`${label}\n`)});\n}`,
+      );
+    }
 
     await run(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "log.txt"), "utf8"), "early\nlate\n");
     assert.equal(await readFile(join(distRoot, "sub/marker.txt"), "utf8"), "ran\n");
     assert.equal(existsSync(join(distRoot, "marker.txt")), false);
-    assert.equal(await readFile(join(root, "path-order.txt"), "utf8"), "before\nroot\nnested\n");
+    assert.equal(
+      await readFile(orderFile, "utf8"),
+      "root-a\nroot-z\nroot-astral\nroot-bmp\na-child\na-parent\na-grandchild\na-before\nastral-child\nbmp-child\n",
+    );
   });
 
-  it("runs machine and shared build hooks in full-path order from their dist folder", async () => {
+  it("runs machine and shared build hooks in filename order from their dist folder", async () => {
     await put(
       root,
       "dotfiles/nested/02-shared.build.ts",
