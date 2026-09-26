@@ -702,23 +702,184 @@ describe("local build hooks", () => {
   });
 });
 
-async function runManager(command: string): Promise<{ code: number; stdout: string; stderr: string }> {
+async function runManager(
+  args: string | string[],
+  captureLogTimes = false,
+): Promise<{
+  code: number;
+  stdout: string;
+  stderr: string;
+  logTimes: { line: string; time: number }[];
+}> {
+  const commands = typeof args === "string" ? [args] : args;
+  const instrumentation = captureLogTimes
+    ? `const logTimes: { line: string; time: number }[] = [];
+const originalLog = console.log;
+console.log = (...data) => {
+  const line = String(data[0] ?? "");
+  logTimes.push({ line, time: performance.now() });
+  if (line.startsWith("stage managed start "))
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
+  originalLog(...data);
+};
+`
+    : "const logTimes: { line: string; time: number }[] = [];\n";
   const script = `import { main } from ${JSON.stringify(join(import.meta.dir, "cli.ts"))};
-try { process.exitCode = await main([${JSON.stringify(command)}], ${JSON.stringify(root)}, ${JSON.stringify(homeRoot)}); }
-catch (error) { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; }`;
+${instrumentation}
+try { process.exitCode = await main(${JSON.stringify(commands)}, ${JSON.stringify(root)}, ${JSON.stringify(homeRoot)}); }
+catch (error) { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; }
+process.stderr.write("\\n__LOG_TIMES__" + JSON.stringify(logTimes));`;
   const child = Bun.spawn([process.execPath, "-e", script], {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [code, stdout, stderr] = await Promise.all([
+  const [code, stdout, stderrOutput] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]);
-  return { code, stdout, stderr };
+  const marker = stderrOutput.lastIndexOf("\n__LOG_TIMES__");
+  const logTimes = marker === -1 ? [] : JSON.parse(stderrOutput.slice(marker + 14));
+  const stderr = marker === -1 ? stderrOutput : stderrOutput.slice(0, marker);
+  return { code, stdout, stderr, logTimes };
 }
 
 describe("manager CLI", () => {
+  for (const command of ["apply", "diff", "managed"]) {
+    it(`logs each stage and build hook in order for ${command}`, async () => {
+      await put(
+        root,
+        "dotfiles/nested/01-local.build-machine.ts",
+        "export default function () {};",
+      );
+      await put(root, "dotfiles/nested/02-shared.build.ts", "export default function () {};");
+      await put(root, "dotfiles/new.txt", "content\n");
+
+      const result = await runManager(command);
+
+      assert.equal(result.code, 0, result.stderr);
+      const logs = result.stdout
+        .split("\n")
+        .filter((line) => /^(stage |hook |command )/.test(line))
+        .map((line) => line.replace(/\(\d+\.\d{2}s\)$/, "(TIME)"));
+      assert.deepEqual(logs, [
+        "stage build start (TIME)",
+        "hook nested/01-local.build-machine.ts start (TIME)",
+        "hook nested/01-local.build-machine.ts success (TIME)",
+        "hook nested/02-shared.build.ts start (TIME)",
+        "hook nested/02-shared.build.ts success (TIME)",
+        "stage build success (TIME)",
+        `stage ${command} start (TIME)`,
+        `stage ${command} success (TIME)`,
+        `command ${command} success (TIME)`,
+      ]);
+      assert.match(result.stdout, /^stage build start \(0\.00s\)$/m);
+      assert.match(result.stdout, new RegExp(`^stage ${command} start \\(0\\.00s\\)$`, "m"));
+    });
+  }
+
+  it("does not add a blank line when a hook writes no stdout", async () => {
+    await put(root, "dotfiles/quiet.build.ts", "export default function () {};");
+
+    const result = await runManager("managed");
+
+    assert.equal(result.code, 0, result.stderr);
+    const lines = result.stdout.split("\n");
+    assert.equal(
+      lines.slice(0, -1).some((line) => line === ""),
+      false,
+      result.stdout,
+    );
+  });
+
+  it("logs hook success immediately after newline-terminated stdout", async () => {
+    await put(
+      root,
+      "dotfiles/output.build.ts",
+      'export default function () { process.stdout.write("hook-output\\n"); }',
+    );
+
+    const result = await runManager("managed");
+
+    assert.equal(result.code, 0, result.stderr);
+    const lines = result.stdout.split("\n");
+    const outputLine = lines.indexOf("hook-output");
+    assert.ok(outputLine >= 0, result.stdout);
+    assert.equal(lines[outputLine + 1].startsWith("hook output.build.ts success "), true);
+    assert.deepEqual(lines.slice(outputLine, outputLine + 2), [
+      "hook-output",
+      lines[outputLine + 1],
+    ]);
+    assert.match(lines[outputLine + 1], /^hook output\.build\.ts success \(\d+\.\d{2}s\)$/);
+  });
+
+  for (const fails of [false, true]) {
+    it(`logs a hook ${fails ? "failure" : "success"} on its own line after unterminated stdout`, async () => {
+      await put(
+        root,
+        "dotfiles/output.build.ts",
+        `export default function () { process.stdout.write("hook-output"); ${fails ? 'throw new Error("failed");' : ""} }`,
+      );
+
+      const result = await runManager("managed");
+
+      assert.equal(result.code, fails ? 1 : 0, result.stderr);
+      const lines = result.stdout.split("\n");
+      const outputLine = lines.indexOf("hook-output");
+      assert.equal(outputLine >= 0, true, result.stdout);
+      assert.match(
+        lines[outputLine + 1],
+        new RegExp(
+          `^hook output\\.build\\.ts ${fails ? "failure" : "success"} \\(\\d+\\.\\d{2}s\\)$`,
+        ),
+      );
+    });
+  }
+
+  it("reports a managed stage duration matching its measured log interval", async () => {
+    await put(root, "dotfiles/new.txt", "content\n");
+
+    const result = await runManager("managed", true);
+
+    assert.equal(result.code, 0, result.stderr);
+    const stageStart = result.logTimes.find(({ line }) => line.startsWith("stage managed start "));
+    const stageSuccess = result.logTimes.find(({ line }) =>
+      line.startsWith("stage managed success "),
+    );
+    assert.ok(stageStart, "missing managed stage start timestamp");
+    assert.ok(stageSuccess, "missing managed stage success timestamp");
+    const reported = result.stdout.match(/^stage managed success \((\d+\.\d{2})s\)$/m);
+    assert.ok(reported, `missing managed stage success log: ${result.stdout}`);
+    const reportedSeconds = Number(reported[1]);
+    const measuredSeconds = (stageSuccess.time - stageStart.time) / 1000;
+    assert.ok(measuredSeconds >= 0.08, `managed stage measured only ${measuredSeconds}s`);
+    assert.ok(reportedSeconds >= 0.08, `managed stage reported only ${reportedSeconds}s`);
+    assert.ok(
+      Math.abs(reportedSeconds - measuredSeconds) <= 0.03,
+      `managed stage reports ${reportedSeconds}s for a measured ${measuredSeconds.toFixed(3)}s interval`,
+    );
+  });
+
+  it("reports nonzero elapsed seconds for a delayed hook, build, and command", async () => {
+    await put(
+      root,
+      "dotfiles/delayed.build.ts",
+      "export default async function () { await new Promise((resolve) => setTimeout(resolve, 150)); }",
+    );
+
+    const result = await runManager("managed");
+
+    assert.equal(result.code, 0, result.stderr);
+    for (const label of ["hook delayed.build.ts", "stage build", "command managed"]) {
+      const elapsed = result.stdout.match(
+        new RegExp(`^${label} success \\((\\d+\\.\\d{2})s\\)$`, "m"),
+      );
+      assert.ok(elapsed, `missing success log for ${label}: ${result.stdout}`);
+      const seconds = Number(elapsed[1]);
+      assert.ok(seconds >= 0.1, `${label} elapsed ${seconds}s is below 0.10s`);
+    }
+  });
+
   it("builds before applying and runs apply scripts", async () => {
     await put(root, "dotfiles/file.txt", "new\n");
     await put(root, "dotfiles/done.apply.ts", 'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran\\n");');
@@ -752,7 +913,8 @@ describe("manager CLI", () => {
     const result = await runManager("managed");
 
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "new.txt\n");
+    assert.match(result.stdout, /^new\.txt$/m);
+    assert.match(result.stdout, /^command managed success \(\d+\.\d{2}s\)$/m);
     assert.equal(existsSync(join(homeRoot, "new.txt")), false);
   });
 
@@ -764,19 +926,36 @@ describe("manager CLI", () => {
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /local build hook failed: fail\.build\.ts/);
+    assert.match(result.stdout, /^hook fail\.build\.ts start \(0\.00s\)$/m);
+    assert.match(result.stdout, /^hook fail\.build\.ts failure \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^stage build failure \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^command apply failure \(\d+\.\d{2}s\)$/m);
+    assert.doesNotMatch(result.stdout, /^stage apply start /m);
     assert.equal(existsSync(join(homeRoot, "file.txt")), false);
   });
 
-  it("rejects unknown commands before rebuilding dist", async () => {
-    await put(distRoot, "sentinel.txt", "keep\n");
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "cli.ts"), "unknown"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  it("logs a later stage failure and the command failure", async () => {
+    await put(root, "dotfiles/new.txt", "content\n");
+    await rm(homeRoot, { recursive: true });
+    await writeFile(homeRoot, "not a directory");
 
-    assert.equal(code, 1);
-    assert.match(stderr, /usage: bun dotfiles-manager\/cli\.ts/);
-    assert.equal(await readFile(join(distRoot, "sentinel.txt"), "utf8"), "keep\n");
+    const result = await runManager("diff");
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /home root is not a directory:/);
+    assert.match(result.stdout, /^stage build success \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^stage diff failure \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^command diff failure \(\d+\.\d{2}s\)$/m);
+  });
+
+  it("rejects invalid arguments without logs or rebuilding dist", async () => {
+    await put(distRoot, "sentinel.txt", "keep\n");
+    for (const args of [[], ["unknown"], ["apply", "extra"]]) {
+      const result = await runManager(args);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /usage: bun dotfiles-manager\/cli\.ts/);
+      assert.equal(result.stdout, "");
+      assert.equal(await readFile(join(distRoot, "sentinel.txt"), "utf8"), "keep\n");
+    }
   });
 });

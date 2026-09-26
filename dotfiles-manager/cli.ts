@@ -8,7 +8,7 @@ import { run as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
 
 declare const process: { argv: string[]; exitCode: number };
-declare const console: { error(...data: unknown[]): void };
+declare const console: { error(...data: unknown[]): void; log(...data: unknown[]): void };
 declare global {
   interface ImportMeta {
     readonly main: boolean;
@@ -24,13 +24,48 @@ export async function main(
   homeRoot = homedir(),
 ): Promise<number> {
   const [command] = args;
-  if (args.length !== 1 || !["apply", "diff", "managed"].includes(command ?? ""))
+  if (args.length !== 1 || (command !== "apply" && command !== "diff" && command !== "managed"))
     throw new Error(usage);
 
-  await build(root, undefined, homeRoot);
-  const distRoot = join(root, "dist");
-  if (command === "apply") return apply([distRoot, homeRoot]);
-  return diff(command === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]);
+  const started = performance.now();
+  try {
+    await logStage("build", async () => {
+      await build(root, undefined, homeRoot, (path, status, elapsedSeconds, stdoutNeedsNewline) => {
+        if (stdoutNeedsNewline) console.log();
+        console.log(`hook ${path} ${status} (${elapsedSeconds.toFixed(2)}s)`);
+      });
+      return 0;
+    });
+
+    const distRoot = join(root, "dist");
+    const code = await logStage(command, () =>
+      command === "apply"
+        ? apply([distRoot, homeRoot])
+        : diff(command === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]),
+    );
+    logElapsed(`command ${command}`, code === 0 ? "success" : "failure", started);
+    return code;
+  } catch (error) {
+    logElapsed(`command ${command}`, "failure", started);
+    throw error;
+  }
+}
+
+async function logStage(name: string, action: () => Promise<number>): Promise<number> {
+  const started = performance.now();
+  console.log(`stage ${name} start (0.00s)`);
+  try {
+    const code = await action();
+    logElapsed(`stage ${name}`, code === 0 ? "success" : "failure", started);
+    return code;
+  } catch (error) {
+    logElapsed(`stage ${name}`, "failure", started);
+    throw error;
+  }
+}
+
+function logElapsed(label: string, status: "success" | "failure", started: number): void {
+  console.log(`${label} ${status} (${((performance.now() - started) / 1000).toFixed(2)}s)`);
 }
 
 if (import.meta.main) {

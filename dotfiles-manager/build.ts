@@ -28,10 +28,16 @@ declare const Bun: {
       cwd: string;
       env: Record<string, string | undefined>;
       stdin: "ignore";
-      stdout: "inherit";
+      stdout: "inherit" | "pipe";
       stderr: "inherit";
     },
-  ): { exited: Promise<number>; signalCode: string | null };
+  ): {
+    exited: Promise<number>;
+    signalCode: string | null;
+    stdout: ReadableStream<Uint8Array> | null;
+  };
+  stdout: unknown;
+  write(destination: unknown, content: Uint8Array): Promise<number>;
   deepEquals(left: unknown, right: unknown): boolean;
 };
 declare const process: {
@@ -58,6 +64,12 @@ type Operation = { key: string; value: unknown };
 type Operations = Map<string, Partial<Record<MergeOp, Operation>>>;
 type Entry = { path: string; isDirectory: boolean };
 type Hook = { absolutePath: string; relativeParent: string; name: string; contents: string };
+export type HookEvent = (
+  path: string,
+  status: "start" | "success" | "failure",
+  elapsedSeconds: number,
+  stdoutNeedsNewline?: boolean,
+) => void;
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
 
@@ -85,6 +97,7 @@ export async function run(
   root = process.cwd(),
   platform: Platform = currentPlatform(),
   homeRoot = homedir(),
+  onHookEvent?: HookEvent,
 ): Promise<void> {
   assertPlatform(platform);
   const sourceDir = join(root, "dotfiles");
@@ -93,7 +106,7 @@ export async function run(
   await rm(distDir, { recursive: true, force: true });
   await copyDir(sourceDir, distDir);
   // Capture hooks once so earlier hooks cannot remove later scripts from the event queue.
-  await runHooks(await collectHooks(distDir), distDir, homeRoot);
+  await runHooks(await collectHooks(distDir), distDir, homeRoot, onHookEvent);
   await composeMergeTargets(distDir, homeRoot);
   await applyReplaceSidecars(distDir, homeRoot);
 }
@@ -587,31 +600,61 @@ function compareCodeUnits(left: string, right: string): number {
 }
 
 // Local build hooks (spec: SPEC.md §build: ローカルフック) run as Bun processes.
-export async function runHooks(hooks: Hook[], distDir: string, homeRoot: string): Promise<void> {
+export async function runHooks(
+  hooks: Hook[],
+  distDir: string,
+  homeRoot: string,
+  onHookEvent?: HookEvent,
+): Promise<void> {
   for (const hook of hooks) {
-    const hookDistDir =
-      hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
-    const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
     const relativePath = hookRelativePath(hook);
+    const started = performance.now();
+    const stdoutState = { needsNewline: false };
+    onHookEvent?.(relativePath, "start", 0);
     try {
-      if (!relativePath.endsWith(".ts"))
-        throw new Error(`build hook has unsupported extension: ${relativePath}`);
-
-      const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
+      const hookDistDir =
+        hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
+      const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
       try {
-        const command = [
-          process.execPath,
-          join(import.meta.dir, "build-hook-runner.ts"),
-          resolve(snapshotPath),
-          resolve(distDir),
-          resolve(homeRoot),
-        ];
-        await runChildProcess(command, hookDistDir, relativePath, "local build hook");
+        if (!relativePath.endsWith(".ts"))
+          throw new Error(`build hook has unsupported extension: ${relativePath}`);
+
+        const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
+        try {
+          const command = [
+            process.execPath,
+            join(import.meta.dir, "build-hook-runner.ts"),
+            resolve(snapshotPath),
+            resolve(distDir),
+            resolve(homeRoot),
+          ];
+          await runChildProcess(
+            command,
+            hookDistDir,
+            relativePath,
+            "local build hook",
+            onHookEvent ? stdoutState : undefined,
+          );
+        } finally {
+          await removeHookSnapshot(snapshotPath, distDir);
+        }
       } finally {
-        await removeHookSnapshot(snapshotPath, distDir);
+        await removeEmptyHookDirectories(createdDirectories);
       }
-    } finally {
-      await removeEmptyHookDirectories(createdDirectories);
+      onHookEvent?.(
+        relativePath,
+        "success",
+        (performance.now() - started) / 1000,
+        stdoutState.needsNewline,
+      );
+    } catch (error) {
+      onHookEvent?.(
+        relativePath,
+        "failure",
+        (performance.now() - started) / 1000,
+        stdoutState.needsNewline,
+      );
+      throw error;
     }
   }
 }
@@ -621,15 +664,23 @@ async function runChildProcess(
   cwd: string,
   relativePath: string,
   kind: string,
+  stdoutState?: { needsNewline: boolean },
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd,
     env: process.env,
     stdin: "ignore",
-    stdout: "inherit",
+    stdout: stdoutState ? "pipe" : "inherit",
     stderr: "inherit",
   });
-  const exitCode = await proc.exited;
+  const forwardStdout = async () => {
+    if (!stdoutState || !proc.stdout) return;
+    for await (const chunk of proc.stdout) {
+      await Bun.write(Bun.stdout, chunk);
+      if (chunk.length > 0) stdoutState.needsNewline = chunk[chunk.length - 1] !== 10;
+    }
+  };
+  const [exitCode] = await Promise.all([proc.exited, forwardStdout()]);
   if (exitCode !== 0) {
     const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
     throw new Error(`${kind} failed: ${relativePath} (${reason})`);

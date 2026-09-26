@@ -37,6 +37,20 @@ build が完了した dist が、差分検知の入力になる。
 
 `just apply` / `just diff` / `just managed` はそれぞれ `bun dotfiles-manager/cli.ts <apply|diff|managed>` を呼ぶ。内部 CLI は各サブコマンドで後続操作より先に build を実行し、build に失敗すると後続操作を実行せず非 0 で終了する。引数なし、不明なサブコマンド、余分な引数の場合は使用方法を表示して非 0 で終了し、build は実行しない。
 
+内部 CLI の有効なコマンドでは、build とその後のコマンド別処理（apply / diff / managed）、個々の build フックについて、開始時と成功または失敗時に経過時間を秒単位で stdout に表示する。各行はステージ名またはフックの dist 相対パスを示し、フックの経過時間は各フックの開始から、ステージの経過時間は各ステージの開始から数える。最後にコマンド全体の成功または失敗と、コマンド開始からの経過秒数を stdout に表示する。ログは差分表示や `managed` のパス一覧と同じ stdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build 前に終了し、経過時間ログを出さない。
+
+例えば `diff` が成功した場合のログは次の形式になる（差分表示は省略）。
+
+```text
+stage build start (0.00s)
+hook .config/foo.build.ts start (0.00s)
+hook .config/foo.build.ts success (0.42s)
+stage build success (1.20s)
+stage diff start (0.00s)
+stage diff success (0.08s)
+command diff success (1.28s)
+```
+
 `bun dotfiles-manager/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わず、指定した dist と home を比較する。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の home 相対パスを 1 行ずつ表示し、`--json` より優先する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類について home 相対パスの配列を 2 スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
 
 `bun dotfiles-manager/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]` は build を行わず、指定した dist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と apply スクリプトの実行を行わない。`--dry-run --json` は `diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分・適用結果・実行した apply スクリプト数を表示する。
