@@ -12,9 +12,9 @@ dsh（DeepSeek Harness）関係のファイル。
 - `AGENTS.md.symlink` — `~/.dsh/AGENTS.md` への symlink。正本は `dotfiles/.agents/AGENTS.md`（pi の global 指示 `~/.pi/agent/AGENTS.md` と同一内容）。dsh 組み込みの `dsh-agent-instructions`（default 有効）が user-global 指示として各セッションの最初の request に注入する
 - `config/` — `~/.agents/config/` にある共有 agent / sandbox 設定への symlink
 - `plugins.exact/` — 自作プラグイン（dsh bundle）のソース。`~/.dsh/plugins/` へ展開される。`exact` 属性付きのため plugins dir 直下の source 管理外エントリ（旧 `run_build.sh` など）は apply 時に削除される。展開先は手動編集しない。エントリは TS で書き、`exports` はビルド済みの `./dist/index.js` を指す（Node は `node_modules` 内の `.ts` を実行できないため）
-- `plugins.exact/build.apply.ts` — 全プラグインの build と依存 install（Bun の apply hook。plugins dir を CWD として実行される。各 plugin の `node_modules/.bun-install-stamp` がない、または `package.json`・`bun.lock`（または `bun.lockb`）が stamp より新しい場合だけ plugin dir 内で `bun install` し、成功後に stamp を更新する。`dist/index.js` がないか、`src/` 配下のファイル（`*.test.ts` を除く）や symlink された共有 lib `node_modules/@dotfiles/agent-lib` 配下の file が出力より新しい plugin だけ `bun build` する。plugin dir 内の `dist/`・`node_modules/` は exact の掃除対象外である）
+- `plugins.exact/build.apply.ts` — 全プラグインの build と依存 install（dotfiles の apply hook。plugins dir を CWD として実行される。各 plugin の `node_modules/.bun-install-stamp` がない、または `package.json`・`bun.lock`（または `bun.lockb`）が stamp より新しい場合だけ plugin dir 内で `bun install` し、成功後に stamp を更新する。`dist/index.js` がないか、`src/` 配下のファイル（`*.test.ts` を除く）や symlink された共有 lib `node_modules/@dotfiles/agent-lib` 配下の file が出力より新しい plugin だけ `bun build` する。plugin dir 内の `dist/`・`node_modules/` は exact の掃除対象外である）
 - `plugins.exact/build.spec.md` — `build.apply.ts` の install と bundle build の振る舞い仕様
-- `profiles/web/dsh_plugin_install.apply.ts` — dsh CLI による依存のインストール（Bun の apply hook。profile dir を CWD として `dsh plugin --profile web install --ignore-scripts` を実行する。stamp（`node_modules/.dsh-plugin-install-stamp`）が無い、または `package.json` / `pnpm-lock.yaml` が stamp より新しいときだけ実行して stamp を更新し、変更が無い apply ではインストールをスキップする。dsh CLI は profile dir で pnpm を実行し、成功後に `dsh.profile.bundles` を依存状態へ同期する）
+- `profiles/web/dsh_plugin_install.apply.ts` — dsh CLI による依存のインストール（dotfiles の apply hook。profile dir を CWD として `dsh plugin --profile web install --ignore-scripts` を実行する。stamp（`node_modules/.dsh-plugin-install-stamp`）が無い、または `package.json` / `pnpm-lock.yaml` が stamp より新しいときだけ実行して stamp を更新し、変更が無い apply ではインストールをスキップする。dsh CLI は profile dir で pnpm を実行し、成功後に `dsh.profile.bundles` を依存状態へ同期する）
 - `profiles/web/package.json` — プラグイン一覧。`dependencies`（取得元）、`dsh.profile.bundles`（読み込み順）、`trustedDependencies`（lifecycle script を許可する依存）の3つを管理する
 - `profiles/web/pnpm-workspace.yaml` — dsh CLI の profile 依存解決設定。`nodeLinker: hoisted` と `autoInstallPeers: false` により、framework の peer import を shared fallback へ解決する
 - `test/` — dsh 本体を起動せずに plugin の web UI の見た目を検証する fixture（`remap.data.md` で展開対象外）。詳しくは `test/README.md`
@@ -44,7 +44,7 @@ lifecycle script はデフォルトで実行しない。実行が必要な依存
 
 1. 自作なら `plugins.exact/` にソースを置く。プラグイン自身の依存のうち、dsh の framework package（service を提供する `@deepseek-ai/*`）は `peerDependencies` に書き、typecheck・build 用に同じ範囲指定を `devDependencies` にも書く。それ以外の通常 library（`yaml`、`schemastery` 等）は `dependencies` に書く。リモート依存は `dependencies` に spec を書く（npm: `^1.2.3`、git: `github:user/repo#main`）
 2. dotfiles で管理する plugin は `profiles/web/package.json` の `dependencies` と `dsh.profile.bundles` に追記する
-3. `just apply` が Bun の apply hook で plugin をビルドし、`dsh plugin --profile web install --ignore-scripts` で profile の依存をインストールする（全 plugin 一括。1 plugin ずつは不要）
+3. `just apply` が dotfiles の apply hook で plugin をビルドし、`dsh plugin --profile web install --ignore-scripts` で profile の依存をインストールする（全 plugin 一括。1 plugin ずつは不要）
 
 - `file:` 依存は profile の package tree に配置される。`build.apply.ts` が plugin dir の build と依存 install を apply 時に行うので手動工程はない
 - リモート依存を dsh CLI で一時的に追加・更新する場合は `dsh plugin --profile web add <package>` / `dsh plugin --profile web update <package>` を使う。ただし dotfiles の `package.json` が正本なので、永続化する変更は source に反映する
