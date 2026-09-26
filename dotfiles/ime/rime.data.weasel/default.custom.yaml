@@ -1,0 +1,4 @@
+patch:
+  schema_list:
+    - schema: kagiroi
+  "ascii_composer/switch_key/Zenkaku_Hankaku": clear
