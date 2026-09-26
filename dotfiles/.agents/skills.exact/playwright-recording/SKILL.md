@@ -16,7 +16,7 @@ Playwright Test の E2E テストを対象にする。E2E テストの作成・�
 まず対象プロジェクトの Playwright Test 設定、既存 fixture、reporter、動画の保存先、選択したテストを調べる。録画時にだけ、次の参考モジュールを対象プロジェクトへコピーし、そのプロジェクトの構成に合わせて調整する。これらは skill 内で実行するツールではない。
 
 - [references/recording-fixture.ts](references/recording-fixture.ts): `page` に疑似カーソル、クリック波紋、文字入力とショートカットを示す固定幅の暗いテキスト帯を重ねる。`clickWithMotion(page, locator)` でクリック前のカーソル移動を録画する。
-- [references/recording-reporter.ts](references/recording-reporter.ts): Playwright が保存した WebM を `ffmpeg` で無音の H.264 MP4 に変換し、ページ画面を隠さない上部余白にテストタイトルと経過時間を表示する。最後の試行の最初のページを各テスト1本として選ぶ。
+- [references/recording-reporter.ts](references/recording-reporter.ts): Playwright が保存した WebM を `ffmpeg` で無音の H.264 MP4 に変換し、実行時のカレントディレクトリ配下の `./recordings/` へテストタイトル由来のファイル名で保存する。ページ画面を隠さない上部余白にテストタイトルと経過時間を表示する。最後の試行の最初のページを各テスト1本として選ぶ。
 
 Playwright Test が既に提供する `video: 'on'` を対象 spec のトップレベル、または録画専用 project の設定に置き、ファイルや `--grep` 等で依頼されたテストだけを実行する。`video` は worker scope の設定なので describe 内の `test.use()` には置かない。対象テストが fixture の `test` を使うようにし、既存の `expect` やカスタム fixture は維持する。カスタム fixture を使うプロジェクトでは、無条件に import を置き換えず、既存 `test` に録画用の `page` fixture を統合する。既存 reporter は残し、録画 reporter を追加する。例（パスはコピー先に合わせる）:
 
@@ -31,7 +31,7 @@ test.use({ video: "on" });
 // In the recorded test: await clickWithMotion(page, page.getByRole("button", { name: "Submit" }));
 ```
 
-`ffmpeg` の `libx264` と `drawtext` が利用できることを確認する。既存の package manager、Playwright バージョン、プロジェクト・ブラウザ設定で選択した spec を実行する。録画を有効にした spec は、後続の通常実行でも録画されるため、依頼が一時的な録画なら組み込みの変更を残さない。報告する MP4 は録画 reporter の出力パスから確認する。変換エラーはテスト合否とは別に報告し、MP4 が欠けた場合は録画完了としない。
+`ffmpeg` の `libx264` と `drawtext` が利用できることを確認する。既存の package manager、Playwright バージョン、プロジェクト・ブラウザ設定で選択した spec を実行する。録画を有効にした spec は、後続の通常実行でも録画されるため、依頼が一時的な録画なら組み込みの変更を残さない。報告する MP4 は `./recordings/` に出力されたパスから確認する。変換エラーはテスト合否とは別に報告し、MP4 が欠けた場合は録画完了としない。
 
 ## 操作を読みやすくする
 

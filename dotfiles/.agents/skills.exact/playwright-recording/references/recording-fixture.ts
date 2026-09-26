@@ -20,12 +20,12 @@ export async function clickWithMotion(page: Page, locator: Locator): Promise<voi
 
   const start = lastClickPositions.get(page) ?? { x: 0, y: 0 };
   const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  const durationMs = 420;
+  const durationMs = 200;
   const frames = 24;
   const startedAt = performance.now();
   for (let frame = 1; frame <= frames; frame++) {
     const progress = frame / frames;
-    const eased = progress * progress * (3 - 2 * progress);
+    const eased = 1 - (1 - progress) * (1 - progress);
     const waitMs = Math.max(0, durationMs * progress - (performance.now() - startedAt));
     await new Promise((resolve) => setTimeout(resolve, waitMs));
     await page.mouse.move(
