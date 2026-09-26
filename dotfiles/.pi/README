@@ -19,7 +19,7 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
     └── skills.exact/           # pi 固有の skill 用（通常は空。.keep で空を維持）
 ```
 
-設定ファイルの正本は `dotfiles/.agents/config.exact/` に置き、`agents.machine.yaml`（gitignore 対象）を含めて `config.exact/` から `~/.agents/config/` へ symlink する。`skills.exact/` は通常空（`.keep` のみ）。自作 skill は `dotfiles/.agents/skills.exact/` に置く（展開先 `~/.agents/skills/` は pi を含む複数 harness の共通位置）。
+設定ファイルの正本は `dotfiles/.agents/config.exact/` に置き、`agents.merge-machine.yaml`（gitignore 対象）をマシン固有の merge レイヤーとして合成する。`config.exact/` から `~/.agents/config/` へ symlink する。`skills.exact/` は通常空（`.keep` のみ）。自作 skill は `dotfiles/.agents/skills.exact/` に置く（展開先 `~/.agents/skills/` は pi を含む複数 harness の共通位置）。
 
 ## agent/package.json
 

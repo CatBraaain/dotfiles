@@ -161,13 +161,11 @@ export function parseArgs(
 
 const excludedEntryPrefixes = [".build"];
 
-// Files only: build hooks (names ending in .build.<ext>) stay in dist and are
-// never diffed or applied (spec §build: ローカルフック).
-const buildHookNamePattern = /\.build\.[^.]+$/;
+// Build hooks stay in dist and are never diffed or applied.
+const buildHookNamePattern = /\.build(?:-machine)?\.[^.]+$/;
 
-// Files only: apply scripts (names ending in .apply.<ext>) run after applying
-// and are never placed into home (spec §apply スクリプト).
-const applyScriptNamePattern = /\.apply\.[^.]+$/;
+// Apply scripts run after applying and are never placed into home.
+const applyScriptNamePattern = /\.apply(?:-machine)?\.[^.]+$/;
 
 export function isApplyScriptName(name: string): boolean {
   return applyScriptNamePattern.test(name);
@@ -182,13 +180,11 @@ export type SegmentMapping = {
 };
 
 export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
-  // .data. marks build-time data files (path map, external config, machine
-  // layer), excluded like the .build prefix (spec §差分検知).
   const isExcluded =
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
     name.includes(".data.") ||
-    (!isDirectory &&
-      (isApplyScriptName(name) || buildHookNamePattern.test(name)));
+    name === "external.data-machine.yaml" ||
+    (!isDirectory && (isApplyScriptName(name) || buildHookNamePattern.test(name)));
   if (isExcluded)
     return {
       homeName: name,

@@ -93,6 +93,14 @@ describe("apply classification matrix", () => {
     assert.equal(await readFile(join(homeRoot, "nested/dir/a.txt"), "utf8"), "content\n");
   });
 
+  it("applies a retired machine sidecar as an ordinary file", async () => {
+    await put(distRoot, "settings.machine.json", "{\"mode\":\"old\"}\n");
+
+    await diffAndApply();
+
+    assert.equal(await readFile(join(homeRoot, "settings.machine.json"), "utf8"), "{\"mode\":\"old\"}\n");
+  });
+
   it("adds a directory with nested entries", async () => {
     await put(distRoot, "pkg/nested/file.txt", "x\n");
 
@@ -269,6 +277,23 @@ describe("apply scripts", () => {
     assert.deepEqual(declarations.applyScripts.map((script) => script.distPath), [
       "ok/y.apply.sh",
     ]);
+  });
+
+  it("runs machine-specific scripts after applying without placing them in home", async () => {
+    await put(distRoot, "tools/keep.txt", "same\n");
+    await put(homeRoot, "tools/keep.txt", "same\n");
+    await putApplyScript(distRoot, "tools/setup.apply-machine.ts");
+    const declarations = await collectDeclarations(distRoot);
+    const result = await diffAndApply();
+
+    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(declarations.applyScripts.map((script) => script.distPath), [
+      "tools/setup.apply-machine.ts",
+    ]);
+    assert.deepEqual(result.added, []);
+    assert.equal(existsSync(join(homeRoot, "tools/setup.apply-machine.ts")), false);
+    assert.equal(await readFile(join(homeRoot, "tools/apply-out.txt"), "utf8"), join(homeRoot, "tools"));
   });
 
   it("runs a TypeScript hook in the mapped home folder without requiring a shebang", async () => {

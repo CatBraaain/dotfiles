@@ -66,7 +66,7 @@ type SyncContext = {
 
 type MirrorSyncResult = { mirrorDir: string; changed: boolean };
 
-const externalMachineFileName = "external.data.machine.yaml";
+const externalMachineFileName = "external.data-machine.yaml";
 
 const defaultTtlHours = 6;
 const pullTimeFileName = "build-pull-time";

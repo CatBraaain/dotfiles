@@ -322,16 +322,27 @@ describe("path mapping (plain names without legacy prefixes)", () => {
 });
 
 describe("exclusions", () => {
-  it("skips .data. entries and files ending in .build.ts or .apply.<ext>", async () => {
+  it("skips build data, build hooks, and apply scripts including machine-specific names", async () => {
     await put(distRoot, "setup.build.ts", "hook\n");
+    await put(distRoot, "setup.build-machine.ts", "machine hook\n");
     await put(distRoot, "remap.data.md", "map\n");
     await put(distRoot, "external.data.yaml", "config\n");
+    await put(distRoot, "external.data-machine.yaml", "machine config\n");
     await put(distRoot, "task.apply.sh", "script\n");
+    await put(distRoot, "task.apply-machine.ts", "machine script\n");
 
     const result = await diff();
 
     assert.deepEqual(result.unchanged, []);
     assert.deepEqual(result.added, []);
+  });
+
+  it("treats the retired machine sidecar name as an ordinary entry", async () => {
+    await put(distRoot, "settings.machine.json", "{}\n");
+
+    const result = await diff();
+
+    assert.deepEqual(pathsOf(result, "added"), ["settings.machine.json"]);
   });
 
   it("treats .edit.ts files as ordinary entries", async () => {

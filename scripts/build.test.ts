@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { existsSync } from "node:fs";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { tmpdir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { join, relative } from "node:path";
+import { parse as parseToml } from "smol-toml";
+import { parse as parseYaml } from "yaml";
 import {
   applyReplacements,
   applyReplaceSidecars,
@@ -112,6 +114,30 @@ export default async function () {
     assert.equal(await readFile(join(root, "path-order.txt"), "utf8"), "before\nroot\nnested\n");
   });
 
+  it("runs machine and shared build hooks in full-path order from their dist folder", async () => {
+    await put(
+      root,
+      "dotfiles/nested/02-shared.build.ts",
+      `import { appendFile } from "node:fs/promises";
+export default async function () {
+  await appendFile("order.txt", "shared\\n");
+}`,
+    );
+    await put(
+      root,
+      "dotfiles/nested/01-local.build-machine.ts",
+      `import { appendFile } from "node:fs/promises";
+export default async function () {
+  await appendFile("order.txt", "machine\\n");
+}`,
+    );
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "nested/order.txt"), "utf8"), "machine\nshared\n");
+    assert.equal(existsSync(join(distRoot, "order.txt")), false);
+  });
+
   it("runs a collected hook even after an earlier hook removes it", async () => {
     const orderFile = join(root, "hook-order.txt");
     await put(
@@ -196,6 +222,87 @@ export default async function () {
     assert.equal(existsSync(join(distRoot, "kit/settings.merge.json")), false);
   });
 
+  for (const { format, serialize, parse } of [
+    {
+      format: "json",
+      serialize: (values: Record<string, string>) => JSON.stringify(values),
+      parse: JSON.parse,
+    },
+    {
+      format: "yaml",
+      serialize: (values: Record<string, string>) =>
+        Object.entries(values).map(([key, value]) => `${key}: ${JSON.stringify(value)}\n`).join(""),
+      parse: parseYaml,
+    },
+    {
+      format: "toml",
+      serialize: (values: Record<string, string>) =>
+        Object.entries(values).map(([key, value]) => `${key} = ${JSON.stringify(value)}\n`).join(""),
+      parse: parseToml,
+    },
+  ]) {
+    it(`composes a standalone ${format} machine merge layer over home`, async () => {
+      await put(homeRoot, `kit/settings.${format}`, serialize({ mode: "home" }));
+      await put(root, `dotfiles/kit/settings.merge-machine.${format}`, serialize({ mode: "machine" }));
+
+      await run(root, "linux", homeRoot);
+
+      assert.equal(parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8")).mode, "machine");
+      assert.equal(existsSync(join(distRoot, `kit/settings.merge-machine.${format}`)), false);
+    });
+
+    it(`applies ${format} home, plain base, shared merge, then machine merge`, async () => {
+      await put(homeRoot, `kit/settings.${format}`, serialize({ home: "present", homeVsPlain: "home" }));
+      await put(root, `dotfiles/kit/settings.${format}`, serialize({
+        plain: "present", homeVsPlain: "plain", plainVsShared: "plain",
+      }));
+      await put(root, `dotfiles/kit/settings.merge.${format}`, serialize({
+        shared: "present", plainVsShared: "shared", sharedVsMachine: "shared",
+      }));
+      await put(root, `dotfiles/kit/settings.merge-machine.${format}`, serialize({
+        machine: "present", sharedVsMachine: "machine",
+      }));
+
+      await run(root, "linux", homeRoot);
+
+      const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
+      assert.deepEqual({ ...output }, {
+        home: "present",
+        plain: "present",
+        shared: "present",
+        machine: "present",
+        homeVsPlain: "plain",
+        plainVsShared: "shared",
+        sharedVsMachine: "machine",
+      });
+      assert.equal(existsSync(join(distRoot, `kit/settings.merge.${format}`)), false);
+      assert.equal(existsSync(join(distRoot, `kit/settings.merge-machine.${format}`)), false);
+    });
+
+    it(`does not recognize ${format} .machine as a merge sidecar`, async () => {
+      const oldSidecar = `kit/settings.machine.${format}`;
+      const content = serialize({ mode: "old" });
+      await put(root, `dotfiles/${oldSidecar}`, content);
+
+      await run(root, "linux", homeRoot);
+
+      assert.equal(existsSync(join(distRoot, `kit/settings.${format}`)), false);
+      assert.equal(await readFile(join(distRoot, oldSidecar), "utf8"), content);
+    });
+  }
+
+  it("ignores an old machine sidecar even when a shared merge sidecar exists", async () => {
+    await put(root, "dotfiles/settings.merge.json", '{"mode":"shared"}');
+    await put(root, "dotfiles/settings.machine.json", '{"mode":"old"}');
+
+    await run(root, "linux", homeRoot);
+
+    assert.deepEqual(JSON.parse(await readFile(join(distRoot, "settings.json"), "utf8")), {
+      mode: "shared",
+    });
+    assert.equal(await readFile(join(distRoot, "settings.machine.json"), "utf8"), '{"mode":"old"}');
+  });
+
   it("renders replace sidecars from the current home content", async () => {
     await put(homeRoot, "app.conf", "EnableAutoUpdates=true\n");
     await put(
@@ -214,12 +321,64 @@ replacements:
     assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
 
-  it("appends the machine layer with a generic build hook", async () => {
+  it("loads external.data-machine.yaml instead of the old name and replaces the shared repo", async () => {
+    const hook = await readFile(join(import.meta.dir, "../dotfiles/01-external.build.ts"), "utf8");
+    await put(root, "dotfiles/01-external.build.ts", hook);
+    await put(root, "dotfiles/external.data.yaml", `externalSkills:
+  example/repo:
+    destination: shared
+    entries: [shared.txt]
+`);
+    await put(root, "dotfiles/external.data-machine.yaml", `externalSkills:
+  example/repo:
+    destination: machine
+    entries: [machine.txt]
+`);
+    await put(root, "dotfiles/external.data.machine.yaml", `externalSkills:
+  example/repo:
+    destination: old
+    entries: [old.txt]
+`);
+    await put(homeRoot, "mirrors/github.com/example/repo/shared.txt", "shared\n");
+    await put(homeRoot, "mirrors/github.com/example/repo/machine.txt", "machine\n");
+    await put(homeRoot, "mirrors/github.com/example/repo/old.txt", "old\n");
+    await put(homeRoot, "mirrors/github.com/example/repo/.git/build-pull-time", `${Date.now()}\n`);
+    await mkdir(join(root, "scripts/node_modules"), { recursive: true });
+    await symlink(
+      join(import.meta.dir, "node_modules/yaml"),
+      join(root, "scripts/node_modules/yaml"),
+      "dir",
+    );
+
+    // Keep HOME and PATH scoped to the subprocess: the real hook uses HOME for its mirror.
+    const build = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+      ],
+      {
+        env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stderr] = await Promise.all([
+      build.exited,
+      new Response(build.stderr).text(),
+    ]);
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(await readFile(join(distRoot, "machine/machine.txt"), "utf8"), "machine\n");
+    assert.equal(existsSync(join(distRoot, "shared/shared.txt")), false);
+    assert.equal(existsSync(join(distRoot, "old/old.txt")), false);
+  });
+
+  it("appends the machine layer with the sample machine build hook", async () => {
     const hook = await readFile(
-      join(import.meta.dir, "../dotfiles/.gitconfig.build.ts.sample"),
+      join(import.meta.dir, "../dotfiles/.gitconfig.build-machine.ts.sample"),
       "utf-8",
     );
-    await put(root, "dotfiles/.gitconfig.build.ts", hook);
+    await put(root, "dotfiles/.gitconfig.build-machine.ts", hook);
     await put(root, "dotfiles/.gitconfig", "[core]\neditor = code --wait\n");
 
     await run(root, "linux", homeRoot);
@@ -446,6 +605,14 @@ describe("local build hooks", () => {
     await run(root, "linux", homeRoot);
 
     assert.equal(existsSync(join(distRoot, "vscode")), false);
+  });
+
+  it("rejects a machine hook with an unsupported extension during discovery", async () => {
+    await put(root, "dotfiles/vscode/local.build-machine.sh", "echo hook output\n");
+    await assert.rejects(
+      run(root, "linux", homeRoot),
+      /build hook has unsupported extension: vscode\/local\.build-machine\.sh/,
+    );
   });
 
   it("rejects a hook with an unsupported extension", async () => {

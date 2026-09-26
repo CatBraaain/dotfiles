@@ -4,7 +4,7 @@
 
 - 経路表記: 本文のパスは、build 側はリポジトリルートからの相対パス、差分検知と適用側は home 相対パスとする。
 - 用語: home は展開先ディレクトリ（既定は `~`）。適用は dist の内容に home を一致させる処理。差分は dist と home の不一致。フックはライフサイクルの特定のポイントで実行されるリポジトリ内スクリプト。
-- dist は home と同じ相対構造を持ち、人間向け記法（`.exact`・`.executable`・`.symlink`・`.apply.<拡張子>`・置換 sidecar）は dist 上の名前のまま残る。これらの記法の解釈は適用処理が行う。
+- dist は home と同じ相対構造を持ち、人間向け記法（`.exact`・`.executable`・`.symlink`・`.apply.<拡張子>`・`.apply-machine.<拡張子>`・置換 sidecar）は dist 上の名前のまま残る。これらの記法の解釈は適用処理が行う。
 - chezmoi 命名（`dot_`・`exact_`・`executable_`・`symlink_` の source 名変換）は存在せず、dist に chezmoi の設定ファイル・state も現れない。
 
 ## ライフサイクル
@@ -65,7 +65,7 @@ dist を削除し、`dotfiles/` の完全なコピーとして作り直す。任
 
 ## build: ローカルフック
 
-`dotfiles/` 以下に、名前が `.build.<拡張子>` で終わる通常ファイルを置くと、ローカルフックとして扱う。1 フォルダに複数置ける。ローカルフックは、フォルダ固有のファイルを dist へ生成するためのものである。
+`dotfiles/` 以下に、名前が `.build.<拡張子>` または `.build-machine.<拡張子>` で終わる通常ファイルを置くと、同じ build ローカルフックとして扱う。1 フォルダに複数置ける。ローカルフックは、フォルダ固有のファイルを dist へ生成するためのものである。
 
 各フックを独立した子プロセスとして実行する。拡張子と runner の規則は §フックシステムに従う。フックは default export した関数として呼び出され、引数に `context` を受け取る。非同期関数の完了を待ってから次のフックへ進む。
 
@@ -74,11 +74,11 @@ dist を削除し、`dotfiles/` の完全なコピーとして作り直す。任
 - フックは `cwd` のフォルダを生成物の出力先として使う。Bun 実行時の `process.cwd()` はそのフォルダに解決され、`import.meta.dir` から自身の dist 内コピーを参照できる
 - `context.resolvePaths(path)`: `path` に `cwd` 相対のファイルパスを渡すと、対応する dist と home の絶対パスを `{ distPath, homePath }` で返す。home 側は §差分検知 の対応関係を使い、親ディレクトリの `.exact`、末尾ファイルの `.executable` / `.symlink` を変換する。現在のファイルの有無にかかわらず解決し、ファイル内容の読み書きや symlink の実体追跡は行わない。`..` を含むパスは dist 内に解決される場合に使える。絶対パス、dist 外に解決されるパス、ファイルを指定しない空パスや末尾が `/`・`.`・`..` のパスはエラーになる
 
-フックは対応する dist フォルダ以下へファイルを生成する。この出力範囲はフック作者が守る契約であり、システムは生成先のパス検証やサンドボックスを行わない。フック自身は dist へそのまま残るが、名前が `.build.<拡張子>` で終わるファイルは差分検知と適用の対象外である。
+フックは対応する dist フォルダ以下へファイルを生成する。この出力範囲はフック作者が守る契約であり、システムは生成先のパス検証やサンドボックスを行わない。フック自身は dist へそのまま残るが、build フックは差分検知と適用の対象外である。
 
 検出と順序:
 
-1. dist 再構築の直後に、`node_modules/` 以下を除き dist を再帰走査し、名前が `.build.<拡張子>` で終わる通常ファイルを検出する。この 1 回だけ検出し、以降に生成された `.build.<拡張子>` は実行しない。検出時のスクリプト内容を実行する。
+1. dist 再構築の直後に、`node_modules/` 以下を除き dist を再帰走査し、名前が `.build.<拡張子>` または `.build-machine.<拡張子>` で終わる通常ファイルを検出する。この 1 回だけ検出し、以降に生成された build フックは実行しない。検出時のスクリプト内容を実行する。
 2. 実行順は dist 相対パス全体の UTF-16 コード単位の昇順とする。先頭に来たい処理は、パス名の prefix（`01-` など）で制御する。
 3. 先行フックが検出済みフックを移動または削除しても、そのフックを検出時の順序で実行する。スクリプトは元の dist 相対パスのフォルダで実行し、先行フックがそのフォルダを削除していた場合は実行後に空の新設フォルダを取り除く。
 
@@ -88,7 +88,7 @@ dist を削除し、`dotfiles/` の完全なコピーとして作り直す。任
 
 ## build: external fetch
 
-標準フック `dotfiles/01-external.build.ts` が、設定ファイル `dotfiles/external.data.yaml`（git 管理）に定義した Git リポジトリの外部エントリを取得して dist へ配置する。同一ディレクトリの `dotfiles/external.data.machine.yaml`（git 管理外、任意）は、マシン固有の外部エントリを定める machine レイヤーとして読む。形式は共有側と同じであり、repo キー単位で共有側と統合し、同キーは machine 側の定義で完全に置換する。machine 側は共有側のキーの一部だけを持ってよい。machine ファイルが存在しなくてもよく、存在するのに `externalSkills` マップを持たないときは異常終了する。
+標準フック `dotfiles/01-external.build.ts` が、設定ファイル `dotfiles/external.data.yaml`（git 管理）に定義した Git リポジトリの外部エントリを取得して dist へ配置する。同一ディレクトリの `dotfiles/external.data-machine.yaml`（git 管理外、任意）は、マシン固有の外部エントリを定める machine レイヤーとして読む。形式は共有側と同じであり、repo キー単位で共有側と統合し、同キーは machine 側の定義で完全に置換する。machine 側は共有側のキーの一部だけを持ってよい。machine ファイルが存在しなくてもよく、存在するのに `externalSkills` マップを持たないときは異常終了する。
 
 ```yaml
 externalSkills:
@@ -134,9 +134,9 @@ JSON/YAML/TOML の設定ファイルを、home 現状とリポジトリ側レイ
 | --- | --- | --- |
 | `<name>.{json,yaml,toml}` | git | plain base（リポジトリのベース本体。任意） |
 | `<name>.merge.{json,yaml,toml}` | git | 共有 merge レイヤー（任意） |
-| `<name>.machine.{json,yaml,toml}` | gitignore | マシン固有 merge レイヤー（任意） |
+| `<name>.merge-machine.{json,yaml,toml}` | gitignore | マシン固有 merge レイヤー（任意） |
 
-`<name>.merge.*` または `<name>.machine.*` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は merge ターゲットとなる。merge ターゲットでないファイルは、dist へそのまま残す。
+`<name>.merge.{json,yaml,toml}` または `<name>.merge-machine.{json,yaml,toml}` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は merge ターゲットとなる。`<name>.machine.{json,yaml,toml}` は merge sidecar として認識しない。merge ターゲットでないファイルは、dist へそのまま残す。
 
 ### ターゲット解決
 
@@ -150,9 +150,9 @@ sidecar 名から `<name>` への対応:
 | sidecar | `<name>` |
 | --- | --- |
 | `foo.merge.json` | `foo.json` |
-| `foo.machine.yaml` | `foo.yaml` |
+| `foo.merge-machine.yaml` | `foo.yaml` |
 | `foo.merge.toml` | `foo.toml` |
-| `foo.machine.toml` | `foo.toml` |
+| `foo.merge-machine.toml` | `foo.toml` |
 
 同一 `<name>` に sidecar が複数あるときは 1 ターゲットにまとめる。
 
@@ -163,9 +163,9 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 | 順 | レイヤー | ソース |
 | --- | --- | --- |
 | 1 | home | 上記の home パス。ファイルが存在しない・空のとき `{}` |
-| 2 | plain base | 同ディレクトリの `<name>.{json,yaml,toml}`（merge / machine ではないファイル） |
+| 2 | plain base | 同ディレクトリの `<name>.{json,yaml,toml}`（sidecar ではない本体） |
 | 3 | merge | `<name>.merge.{json,yaml,toml}` |
-| 4 | machine | `<name>.machine.{json,yaml,toml}` |
+| 4 | machine | `<name>.merge-machine.{json,yaml,toml}` |
 
 後段レイヤーほど優先される。各レイヤーへの適用は §パッチ適用 に従う。
 
@@ -174,7 +174,7 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 merge ターゲットごとに:
 
 1. 合成結果を canonical 形式（§パッチ適用）で `<name>.{json,yaml,toml}` に書き出す。
-2. 入力として使った sidecar（`*.merge.*`、`*.machine.*`）を dist から削除する。
+2. 入力として使った sidecar（`<name>.merge.{json,yaml,toml}`、`<name>.merge-machine.{json,yaml,toml}`）を dist から削除する。
 3. plain base の `<name>.{json,yaml,toml}` が存在したとき、それも dist から削除する（完成形のみ残す）。
 
 手書きの設定ファイルにも一般則が適用される。sidecar を置いたファイルは merge ターゲットとなり、その内容が plain base レイヤーとして合成され、完成形が dist に書き出される。sidecar を持たない plain ファイルは対象外で、dist にそのまま残る。
@@ -189,14 +189,14 @@ merge ターゲットごとに:
 4. 合成: home → merge レイヤー
 5. 出力: `dist/.config/rtk/config.toml`。`config.merge.toml` は削除
 
-`.agents/config.exact/agents.yaml` + `agents.machine.yaml`（merge なし）:
+`.agents/config.exact/agents.yaml` + `agents.merge-machine.yaml`（共有 merge なし）:
 
 1. 合成: home → plain base（`agents.yaml`）→ machine
 2. 出力: `dist/.agents/config.exact/agents.yaml`。sidecar と plain base 生ファイルは削除
 
 全レイヤー:
 
-`foo.json` + `foo.merge.json` + `foo.machine.json` → 合成順 home → plain base → merge → machine → 出力 `foo.json`
+`foo.json` + `foo.merge.json` + `foo.merge-machine.json` → 合成順 home → plain base → merge → machine → 出力 `foo.json`
 
 ## build: 置換 sidecar
 
@@ -312,7 +312,7 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | YAML | YAML 形式、改行コード LF |
 | TOML | TOML 形式、末尾改行 1 つ、改行コード LF |
 
-JSON の merge / machine ファイルおよび plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の merge / machine ファイルおよび plain base の TOML 入力にはコメントを書ける。
+JSON の共有 merge / machine merge ファイルおよび plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の共有 merge / machine merge ファイルおよび plain base の TOML 入力にはコメントを書ける。
 
 ### 記述例
 
@@ -336,7 +336,7 @@ JSON の merge / machine ファイルおよび plain base の JSON 入力には�
 マシン固有で tiers を上書き:
 
 ```yaml
-# config.machine.yaml
+# config.merge-machine.yaml
 tiers:
   high:
     - provider: cursor
@@ -346,7 +346,7 @@ tiers:
 ネストで操作キーを書く。次の 2 つは等価である:
 
 ```yaml
-# config.machine.yaml
+# config.merge-machine.yaml
 dsh:
   profile:
     "bundles.$replace":
@@ -354,7 +354,7 @@ dsh:
 ```
 
 ```yaml
-# config.machine.yaml
+# config.merge-machine.yaml
 "dsh.profile.bundles.$replace":
   - provider: cursor
 ```
@@ -362,13 +362,13 @@ dsh:
 TOML では `$` を含むキー名を quoted key で書く。次の 2 つは等価である:
 
 ```toml
-# config.machine.toml
+# config.merge-machine.toml
 [dsh.profile]
 "bundles.$replace" = [{ provider = "cursor" }]
 ```
 
 ```toml
-# config.machine.toml
+# config.merge-machine.toml
 dsh.profile."bundles.$replace" = [{ provider = "cursor" }]
 ```
 
@@ -390,7 +390,7 @@ dist を再帰走査し、home の対応するエントリと対照する。エ�
 - symlink は、リンク先（末尾改行 1 つを除いた内容）を比較する。
 - 実行権は、linux と darwin で owner 実行権の有無を比較する。windows では実行権を比較しない。
 
-dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、および名前が `.build.<拡張子>`、`.apply.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`.data.` は build ステージのデータファイル（マップ・external 設定・machine レイヤー）のための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。
+dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、名前が `external.data-machine.yaml` のエントリ、および名前が `.build.<拡張子>`、`.build-machine.<拡張子>`、`.apply.<拡張子>`、`.apply-machine.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`.data.` は build ステージのデータファイル（マップ・共有 external 設定）のための予約名であり、`external.data-machine.yaml` はマシン固有の external 設定である。`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。
 
 | dist | home | 分類 |
 | --- | --- | --- |
@@ -451,8 +451,8 @@ dist の `<name>.executable` ファイルは、home の `<name>` に owner 実�
 
 | ポイント | 宣言ファイル | 実行タイミング | 標準入力 | 失敗時の結果 |
 | --- | --- | --- | --- | --- |
-| build | `*.build.<拡張子>` | dist 生成中（§build: ローカルフック のとおり） | なし | dist 生成を中断する |
-| apply | `*.apply.<拡張子>` | 適用の後（§apply スクリプト のとおり） | なし | 後続の apply スクリプトを実行せず、非 0 で終了する |
+| build | `*.build.<拡張子>`、`*.build-machine.<拡張子>` | dist 生成中（§build: ローカルフック のとおり） | なし | dist 生成を中断する |
+| apply | `*.apply.<拡張子>`、`*.apply-machine.<拡張子>` | 適用の後（§apply スクリプト のとおり） | なし | 後続の apply スクリプトを実行せず、非 0 で終了する |
 
 build / apply のフックは `.ts` ファイルだけをサポートし、Bun で実行する。`.sh`、`.bash`、`.ps1` を含むその他の拡張子は未対応である。shebang の有無や内容は runner の選択に影響しない。未対応拡張子はエラーにし、build では `dotfiles/` 相対パス、apply では dist 相対パスをエラーメッセージに含める。
 
@@ -460,7 +460,7 @@ build / apply のフックは `.ts` ファイルだけをサポートし、Bun �
 
 | 条件 | 操作 | 結果 |
 | --- | --- | --- |
-| dist に `.apply.<拡張子>` で終わるファイルがある | home へ配置せず、適用の後で実行する | スクリプトの副作用が生じる |
+| dist に `.apply.<拡張子>` または `.apply-machine.<拡張子>` で終わるファイルがある | home へ配置せず、適用の後で実行する | スクリプトの副作用が生じる |
 | 実行のたび | 実行ディレクトリは、そのファイルの位置（`.exact` を除いた名前）に対応する home ディレクトリである | 対応する home ディレクトリを cwd としてスクリプトが動く |
 | 実行が非 0 で終了する | 後続の apply スクリプトを実行せず、非 0 で終了する | |
 

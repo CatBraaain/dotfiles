@@ -1,6 +1,6 @@
 // Appends the machine-specific layer to .gitconfig (spec: SPEC.md
 // §build: ローカルフック). Machine values are written directly in this hook
-// file; copy the .sample to dotfiles/.gitconfig.build.ts (gitignored) and
+// file; copy the .sample to dotfiles/.gitconfig.build-machine.ts (gitignored) and
 // edit per machine.
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { readFile, writeFile } from "node:fs/promises";

@@ -98,9 +98,9 @@ describe("validateAgentsConfig — acceptance", () => {
     );
     const base = parseYaml(readFileSync(basePath, "utf8")) as Record<string, unknown>;
     const machinePath = new URL(
-      existsSync(new URL("agents.machine.yaml", basePath))
-        ? "agents.machine.yaml"
-        : "agents.machine.yaml.sample",
+      existsSync(new URL("agents.merge-machine.yaml", basePath))
+        ? "agents.merge-machine.yaml"
+        : "agents.merge-machine.yaml.sample",
       basePath,
     );
     const machine = parseYaml(readFileSync(machinePath, "utf8")) as Record<string, unknown>;
