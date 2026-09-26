@@ -76,7 +76,7 @@ const fileFormats = {
   toml: {
     stringify: (value: unknown) => {
       const serialized = stringifyToml(value);
-      return serialized === "" ? serialized : `${serialized}\n`;
+      return serialized === "" ? "\n" : serialized.endsWith("\n") ? serialized : `${serialized}\n`;
     },
   },
 } as const;
@@ -101,7 +101,7 @@ export async function run(
 async function copyDir(sourceDir: string, destinationDir: string): Promise<void> {
   await mkdir(destinationDir, { recursive: true });
   for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (entry.name === "node_modules") continue;
+    if (entry.name === "node_modules" && entry.isDirectory()) continue;
 
     const sourcePath = join(sourceDir, entry.name);
     const destinationPath = join(destinationDir, entry.name);
@@ -134,10 +134,16 @@ async function composeMergeTargets(distDir: string, homeRoot: string): Promise<v
   const targets = await collectMergeTargets(distDir);
   for (const target of targets) {
     const hasBase = existsSync(target.outputPath);
-    if (!hasBase) await writeFile(target.outputPath, "");
     const sourcePath = relative(distDir, target.outputPath).split(sep).join("/");
-    const homePath = join(homeRoot, homeRelPath(sourcePath));
-    await composeMergeTarget(target, hasBase, homePath);
+    const homeRelativePath = homeRelPath(sourcePath);
+    try {
+      await composeMergeTarget(target, hasBase, join(homeRoot, homeRelativePath));
+    } catch (error) {
+      throw new Error(
+        `merge target failed: ${homeRelativePath}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
   }
 }
 
@@ -515,14 +521,22 @@ export async function applyReplaceSidecars(
   for (const sidecarRel of await collectReplaceSidecars(distDir, "")) {
     // <dir>/<name>.replace.yaml renders <dir>/<name>.
     const nameRel = sidecarRel.slice(0, -sidecarSuffix.length);
-    const homeAbs = join(homeRoot, homeRelPath(nameRel));
-    const current = existsSync(homeAbs) ? await readFile(homeAbs, "utf8") : "";
-    const replacements = parseReplaceSidecar(
-      await readFile(join(distDir, sidecarRel), "utf8"),
-      sidecarRel,
-    );
-    await writeFile(join(distDir, nameRel), applyReplacements(current, replacements));
-    await rm(join(distDir, sidecarRel));
+    const homeRelativePath = homeRelPath(nameRel);
+    try {
+      const homeAbs = join(homeRoot, homeRelativePath);
+      const current = existsSync(homeAbs) ? await readFile(homeAbs, "utf8") : "";
+      const replacements = parseReplaceSidecar(
+        await readFile(join(distDir, sidecarRel), "utf8"),
+        sidecarRel,
+      );
+      await writeFile(join(distDir, nameRel), applyReplacements(current, replacements));
+      await rm(join(distDir, sidecarRel));
+    } catch (error) {
+      throw new Error(
+        `replace target failed: ${homeRelativePath}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
   }
 }
 
@@ -545,13 +559,14 @@ async function collectHooks(distDir: string): Promise<Hook[]> {
       (left: { name: string }, right: { name: string }) => compareCodeUnits(left.name, right.name),
     );
     for (const entry of entries) {
-      if (entry.isFile() && hookNamePattern.test(entry.name))
-        hooks.push({
-          absolutePath: join(directory, entry.name),
-          relativeParent,
-          name: entry.name,
-          contents: await readFile(join(directory, entry.name), "utf8"),
-        });
+      if (!entry.isFile() || !hookNamePattern.test(entry.name)) continue;
+      const entryPath = join(directory, entry.name);
+      hooks.push({
+        absolutePath: entryPath,
+        relativeParent,
+        name: entry.name,
+        contents: await readFile(entryPath, "utf8"),
+      });
     }
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name === "node_modules") continue;
@@ -572,11 +587,7 @@ function compareCodeUnits(left: string, right: string): number {
 }
 
 // Local build hooks (spec: SPEC.md §build: ローカルフック) run as Bun processes.
-export async function runHooks(
-  hooks: Hook[],
-  distDir: string,
-  homeRoot: string,
-): Promise<void> {
+export async function runHooks(hooks: Hook[], distDir: string, homeRoot: string): Promise<void> {
   for (const hook of hooks) {
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));

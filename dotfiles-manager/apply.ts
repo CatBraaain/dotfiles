@@ -69,6 +69,7 @@ export type Declarations = {
 };
 
 type DirentLike = { name: string; isDirectory(): boolean; isFile(): boolean };
+type RenameFile = (source: string, destination: string) => Promise<void>;
 
 const usage = "usage: bun dotfiles-manager/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
 
@@ -83,6 +84,7 @@ export async function applyDifferences(
   homeRoot: string,
   result: DiffResult,
   platform: string = process.platform,
+  renameFile: RenameFile = rename,
 ): Promise<ApplyResult> {
   const applied: ApplyResult = { added: [], changed: [], removed: [] };
 
@@ -98,13 +100,22 @@ export async function applyDifferences(
     applied.removed.push(entry.homePath);
   }
 
-  const entries: Array<{ entry: DiffEntry; isChange: boolean }> = [
-    ...result.added.map((entry) => ({ entry, isChange: false })),
-    ...result.typeMismatches.map((entry) => ({ entry, isChange: false })),
-    ...result.changed.map((entry) => ({ entry, isChange: true })),
+  const entries: Array<{ entry: DiffEntry; isChange: boolean; recurseDirectory: boolean }> = [
+    ...result.added.map((entry) => ({ entry, isChange: false, recurseDirectory: false })),
+    ...result.typeMismatches.map((entry) => ({ entry, isChange: false, recurseDirectory: true })),
+    ...result.changed.map((entry) => ({ entry, isChange: true, recurseDirectory: false })),
   ].sort((left, right) => compareCodeUnits(left.entry.homePath, right.entry.homePath));
-  for (const { entry, isChange } of entries)
-    await applyEntry(distRoot, homeRoot, entry, isChange, platform, applied);
+  for (const { entry, isChange, recurseDirectory } of entries)
+    await applyEntry(
+      distRoot,
+      homeRoot,
+      entry,
+      isChange,
+      recurseDirectory,
+      platform,
+      applied,
+      renameFile,
+    );
 
   applied.added.sort(compareCodeUnits);
   applied.changed.sort(compareCodeUnits);
@@ -113,8 +124,8 @@ export async function applyDifferences(
 }
 
 // Finds apply scripts in a built dist tree (spec §apply スクリプト).
-// node_modules and folders whose names are excluded from diffing are skipped;
-// ordering is the full dist-relative path in UTF-16 code-unit order.
+// Folders excluded from diffing are skipped; ordering is the full
+// dist-relative path in UTF-16 code-unit order.
 export async function collectDeclarations(distRoot: string): Promise<Declarations> {
   const declarations: Declarations = { applyScripts: [] };
   await walkDeclarations(distRoot, "", declarations);
@@ -208,8 +219,10 @@ async function applyEntry(
   homeRoot: string,
   entry: DiffEntry,
   isChange: boolean,
+  recurseDirectory: boolean,
   platform: string,
   applied: ApplyResult,
+  renameFile: RenameFile,
 ): Promise<void> {
   if (entry.distPath === null) throw new Error(`entry has no dist path: ${entry.homePath}`);
   const distAbs = join(distRoot, entry.distPath);
@@ -220,9 +233,17 @@ async function applyEntry(
     const mapping = mapSegment(entry.distPath.split("/").pop() ?? "", stat.isDirectory());
     if (mapping.kind === "directory") {
       await mkdir(homeAbs, { recursive: true });
-      // A type-mismatch directory's contents are not part of the diff result,
-      // so the whole dist subtree is placed here.
-      await applyTree(distRoot, homeRoot, entry.distPath, entry.homePath, platform, applied);
+      // Added directory children are listed separately; type-mismatch children are not.
+      if (recurseDirectory)
+        await applyTree(
+          distRoot,
+          homeRoot,
+          entry.distPath,
+          entry.homePath,
+          platform,
+          applied,
+          renameFile,
+        );
     } else if (mapping.kind === "symlink") {
       // A .symlink entry is a plain file in dist; the target is its content
       // with one trailing newline stripped (spec §.symlink の解釈).
@@ -238,8 +259,13 @@ async function applyEntry(
       if (comparesExecutableBits(platform)) {
         const mode = stat.mode & 0o7777;
         await chmod(tempPath, mapping.isExecutable ? mode | 0o100 : mode & ~0o100);
+      } else if (isChange) {
+        // Preserve the existing mode when replacing content on Windows;
+        // copyFile otherwise carries the dist file's executable bit over.
+        const previous = await lstat(homeAbs);
+        await chmod(tempPath, previous.mode & 0o7777);
       }
-      await rename(tempPath, homeAbs);
+      await renameFile(tempPath, homeAbs);
     }
   } catch (error) {
     throw new Error(`apply failed: ${entry.homePath}: ${messageOf(error)}`);
@@ -254,11 +280,11 @@ async function applyTree(
   homeRel: string,
   platform: string,
   applied: ApplyResult,
+  renameFile: RenameFile,
 ): Promise<void> {
   for (const dirent of (await readdir(join(distRoot, distRel), {
     withFileTypes: true,
   })) as unknown as DirentLike[]) {
-    if (dirent.name === "node_modules") continue;
     const mapping = mapSegment(dirent.name, dirent.isDirectory());
     if (mapping.isExcluded) continue;
     await applyEntry(
@@ -266,8 +292,10 @@ async function applyTree(
       homeRoot,
       { homePath: `${homeRel}/${mapping.homeName}`, distPath: `${distRel}/${dirent.name}` },
       false,
+      true,
       platform,
       applied,
+      renameFile,
     );
   }
 }
@@ -278,15 +306,10 @@ function comparesExecutableBits(platform: string): boolean {
 
 // ------------------------------------------------------- declarations lookup
 
-async function walkDeclarations(
-  dirAbs: string,
-  dirRel: string,
-  out: Declarations,
-): Promise<void> {
+async function walkDeclarations(dirAbs: string, dirRel: string, out: Declarations): Promise<void> {
   for (const entry of (await readdir(dirAbs, {
     withFileTypes: true,
   })) as unknown as DirentLike[]) {
-    if (entry.name === "node_modules") continue;
     const childRel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
     if (entry.isDirectory()) {
       if (mapSegment(entry.name, true).isExcluded) continue;
@@ -305,9 +328,7 @@ async function walkDeclarations(
   }
 }
 
-// The home-relative folder for a dist folder: every path segment is mapped
-// like a diff entry (exact suffix stripped, transitional dot_ prefix turned
-// into a leading dot), matching spec §差分検知 mapping.
+// Map each dist directory segment to its home name, including .exact suffixes.
 function homeFolderOf(folderRel: string): string {
   if (folderRel === "") return "";
   return folderRel

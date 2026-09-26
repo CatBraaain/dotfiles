@@ -49,6 +49,7 @@ describe("run", () => {
     await put(root, "dotfiles/plain.txt", "plain\n");
     await put(root, "dotfiles/nested/dir/file.txt", "nested\n");
     await put(root, "dotfiles/node_modules/pkg/index.js", "skipped\n");
+    await put(root, "dotfiles/nested/node_modules/pkg/index.js", "skipped\n");
     await put(distRoot, "stale-from-previous-build.txt", "stale\n");
 
     await run(root, "linux", homeRoot);
@@ -56,7 +57,16 @@ describe("run", () => {
     assert.equal(await readFile(join(distRoot, "plain.txt"), "utf8"), "plain\n");
     assert.equal(await readFile(join(distRoot, "nested/dir/file.txt"), "utf8"), "nested\n");
     assert.equal(existsSync(join(distRoot, "node_modules")), false);
+    assert.equal(existsSync(join(distRoot, "nested/node_modules")), false);
     assert.equal(existsSync(join(distRoot, "stale-from-previous-build.txt")), false);
+  });
+
+  it("copies a plain file named node_modules", async () => {
+    await put(root, "dotfiles/node_modules", "ordinary file\n");
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "node_modules"), "utf8"), "ordinary file\n");
   });
 
   it("runs parent hooks before child folders in UTF-16 name order with their dist folder as cwd", async () => {
@@ -121,6 +131,18 @@ export default async function () {
     );
   });
 
+  it("does not execute hooks generated after the initial detection", async () => {
+    await put(
+      root,
+      "dotfiles/01-generate.build.ts",
+      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("02-late.build.ts", 'export default () => Bun.write("ran.txt", "ran");');\n}`,
+    );
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(existsSync(join(distRoot, "02-late.build.ts")), true);
+    assert.equal(existsSync(join(distRoot, "ran.txt")), false);
+  });
   it("runs machine and shared build hooks in filename order from their dist folder", async () => {
     await put(
       root,
@@ -191,8 +213,7 @@ export default async function () {
       root,
       "dotfiles/fail.build.ts",
       `#!/usr/bin/env bun
-export default async function () {
-  await Promise.resolve();
+export default function () {
   throw new Error("boom");
 }
 `,
@@ -298,6 +319,44 @@ export default async function () {
     });
   }
 
+
+  it("writes an empty TOML merge result with one trailing newline", async () => {
+    await put(root, "dotfiles/empty.merge.toml", "");
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "empty.toml"), "utf8"), "\n");
+    assert.equal(existsSync(join(distRoot, "empty.merge.toml")), false);
+  });
+
+  it("writes a nonempty TOML merge result with one trailing newline", async () => {
+    await put(root, "dotfiles/settings.toml", 'mode = "plain"\n');
+    await put(root, "dotfiles/settings.merge.toml", 'mode = "merged"\n');
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "settings.toml"), "utf8"), 'mode = "merged"\n');
+    assert.equal(existsSync(join(distRoot, "settings.merge.toml")), false);
+  });
+
+  it("reports the home-relative target for an invalid merge operation", async () => {
+    await put(root, "dotfiles/config.exact/agents.merge.json", '{"missing.$append": [1]}');
+
+    await assert.rejects(
+      run(root, "linux", homeRoot),
+      /merge target failed: config\/agents\.json: merge append path not found: missing/,
+    );
+  });
+
+  it("reports the home-relative target for a malformed merge layer", async () => {
+    await put(root, "dotfiles/config.exact/agents.merge.json", "{ invalid json");
+
+    await assert.rejects(
+      run(root, "linux", homeRoot),
+      /merge target failed: config\/agents\.json:/,
+    );
+  });
+
   it("ignores an old machine sidecar even when a shared merge sidecar exists", async () => {
     await put(root, "dotfiles/settings.merge.json", '{"mode":"shared"}');
     await put(root, "dotfiles/settings.machine.json", '{"mode":"old"}');
@@ -309,7 +368,6 @@ export default async function () {
     });
     assert.equal(await readFile(join(distRoot, "settings.machine.json"), "utf8"), '{"mode":"old"}');
   });
-
   it("renders replace sidecars from the current home content", async () => {
     await put(homeRoot, "app.conf", "EnableAutoUpdates=true\n");
     await put(
@@ -327,7 +385,6 @@ replacements:
     assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "EnableAutoUpdates=false\n");
     assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
-
   it("loads external.data-machine.yaml instead of the old name and replaces the shared repo", async () => {
     const hook = await readFile(join(import.meta.dir, "../dotfiles/01-external.build.ts"), "utf8");
     await put(root, "dotfiles/01-external.build.ts", hook);
@@ -440,12 +497,12 @@ replacements:
     );
   });
 
-  it("rejects a sidecar without a replacements array", async () => {
-    await put(distRoot, "bad.conf.replace.yaml", "replacements: {}");
+  it("reports the home-relative target for an invalid replacement", async () => {
+    await put(distRoot, "config.exact/bad.conf.replace.yaml", "replacements: {}");
 
     await assert.rejects(
       applyReplaceSidecars(distRoot, homeRoot),
-      /must have a replacements array: bad\.conf\.replace\.yaml/,
+      /replace target failed: config\/bad\.conf: replace sidecar must have a replacements array: config\.exact\/bad\.conf\.replace\.yaml/,
     );
   });
 });
@@ -486,29 +543,22 @@ describe("local build hooks", () => {
     assert.deepEqual(hookCwd, [join(distRoot, "vscode"), join(distRoot, "vscode")]);
   });
 
-  it("resolves root hook paths using file segment mapping without checking home files", async () => {
+  it("resolves absent root hook files and maps exact, executable, and symlink names", async () => {
     await put(
       root,
       "dotfiles/paths.build.ts",
       [
         `import { writeFile } from "node:fs/promises";`,
         `export default async function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {`,
-        `  const paths = [`,
-        `    "missing.txt",`,
-        `    ".agents/config.exact/agents.yaml",`,
-        `    "bin/tool.executable",`,
-        `    "links/current.symlink",`,
-        `  ];`,
-        `  const resolvedPaths = paths.map((path) => context.resolvePaths(path));`,
-        `  await writeFile("paths.json", JSON.stringify(resolvedPaths));`,
+        `  const paths = ["missing.txt", ".agents/config.exact/agents.yaml", "bin/tool.executable", "links/current.symlink"];`,
+        `  await writeFile("paths.json", JSON.stringify(paths.map((path) => context.resolvePaths(path))));`,
         `}`,
       ].join("\n"),
     );
 
     await run(root, "linux", relative(process.cwd(), homeRoot));
 
-    const paths = JSON.parse(await readFile(join(distRoot, "paths.json"), "utf8"));
-    assert.deepEqual(paths, [
+    assert.deepEqual(JSON.parse(await readFile(join(distRoot, "paths.json"), "utf8")), [
       { distPath: join(distRoot, "missing.txt"), homePath: join(homeRoot, "missing.txt") },
       {
         distPath: join(distRoot, ".agents/config.exact/agents.yaml"),
@@ -523,7 +573,7 @@ describe("local build hooks", () => {
     assert.equal(existsSync(join(homeRoot, "missing.txt")), false);
   });
 
-  it("resolves nested hook paths from their dist cwd, including dist siblings", async () => {
+  it("resolves a sibling in dist without writing outside the hook cwd", async () => {
     await put(
       root,
       "dotfiles/vscode/paths.build.ts",
@@ -545,10 +595,11 @@ describe("local build hooks", () => {
       },
       { distPath: join(distRoot, "sibling.txt"), homePath: join(homeRoot, "sibling.txt") },
     ]);
+    assert.equal(existsSync(join(distRoot, "sibling.txt")), false);
   });
 
-  for (const path of ["/outside.txt", "../../outside.txt"]) {
-    it(`rejects a build hook path outside dist: ${path}`, async () => {
+  for (const path of ["", ".", "..", "file/", "/outside.txt", "../../outside.txt"]) {
+    it(`rejects invalid hook file path ${JSON.stringify(path)}`, async () => {
       await put(
         root,
         "dotfiles/vscode/invalid.build.ts",
@@ -566,6 +617,17 @@ describe("local build hooks", () => {
     });
   }
 
+  it("copies .edit.ts as an ordinary file even without a target", async () => {
+    await put(root, "dotfiles/missing.edit.ts", `throw new Error("must not execute");`);
+
+    await run(root, "linux", homeRoot);
+
+    assert.equal(
+      await readFile(join(distRoot, "missing.edit.ts"), "utf8"),
+      `throw new Error("must not execute");`,
+    );
+  });
+
   it("runs a hook after the path-map standard hook moves its folder", async () => {
     const standardHook = await readFile(
       join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
@@ -580,7 +642,7 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-ran.txt", process.cwd());\n}\n`
+      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-ran.txt", process.cwd());\n}\n`,
     );
 
     await run(root, "linux", homeRoot);
@@ -591,7 +653,6 @@ describe("local build hooks", () => {
     );
     assert.ok(!existsSync(join(distRoot, "vscode/format-settings.build.ts")));
   });
-
   it("runs a collected formatter hook after its mapped folder is removed", async () => {
     const standardHook = await readFile(
       join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
@@ -613,7 +674,6 @@ describe("local build hooks", () => {
 
     assert.equal(existsSync(join(distRoot, "vscode")), false);
   });
-
   it("rejects a machine hook with an unsupported extension during discovery", async () => {
     await put(root, "dotfiles/vscode/local.build-machine.sh", "echo hook output\n");
     await assert.rejects(

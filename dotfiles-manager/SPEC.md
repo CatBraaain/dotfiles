@@ -4,7 +4,7 @@
 
 - 経路表記: 本文のパスは、build 側はリポジトリルートからの相対パス、差分検知と適用側は home 相対パスとする。
 - 用語: home は展開先ディレクトリ（既定は `~`）。適用は dist の内容に home を一致させる処理。差分は dist と home の不一致。フックはライフサイクルの特定のポイントで実行されるリポジトリ内スクリプト。
-- dist は home と同じ相対構造を持ち、人間向け記法（`.exact`・`.executable`・`.symlink`・`.apply.<拡張子>`・`.apply-machine.<拡張子>`・置換 sidecar）は dist 上の名前のまま残る。これらの記法の解釈は適用処理が行う。
+- dist は home と同じ相対構造を持つ。`.exact`・`.executable`・`.symlink`・`.apply.<拡張子>`・`.apply-machine.<拡張子>` は dist 上の名前のまま残り、差分検知・適用時に解釈される。置換 sidecar は build 時に完成形へ変換され、dist から取り除かれる。
 - chezmoi 命名（`dot_`・`exact_`・`executable_`・`symlink_` の source 名変換）は存在せず、dist に chezmoi の設定ファイル・state も現れない。
 
 ## ライフサイクル
@@ -21,7 +21,7 @@ flowchart LR
 build ステージは、内部で次の順に処理する。
 
 1. dist 再構築
-2. ローカルフック実行（標準フックとして external fetch とマップ適用を含む）
+2. ローカルフック実行
 3. merge 変換
 4. 置換 sidecar
 
@@ -35,94 +35,38 @@ build が完了した dist が、差分検知の入力になる。
 | `just diff` | build と差分検知までを実行し、差分を表示する。home へ書き込まず、apply スクリプトを実行しない |
 | `just managed` | build を実行し、適用対象エントリの home 相対パス一覧を表示する。home を変更しない |
 
-これらのコマンドは内部 CLI `bun dotfiles-manager/cli.ts <apply|diff|managed>` の対応するサブコマンドを呼ぶ。各サブコマンドは後続の操作より前に build を実行し、build が失敗すれば後続の操作を実行せず終了コード非 0 で終了する。サブコマンドがない場合、不明な場合、または余分な引数がある場合は使用方法を表示して終了コード非 0 で終了し、build は実行しない。
+`just apply` / `just diff` / `just managed` はそれぞれ `bun dotfiles-manager/cli.ts <apply|diff|managed>` を呼ぶ。内部 CLI は各サブコマンドで後続操作より先に build を実行し、build に失敗すると後続操作を実行せず非 0 で終了する。引数なし、不明なサブコマンド、余分な引数の場合は使用方法を表示して非 0 で終了し、build は実行しない。
 
-差分の表示は `dotfiles-manager/diff.ts` が差分ありエントリごとに difftastic または git diff による 2 入力比較を表示する形式を維持する（§差分表示）。
+`bun dotfiles-manager/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わず、指定した dist と home を比較する。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の home 相対パスを 1 行ずつ表示し、`--json` より優先する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類について home 相対パスの配列を 2 スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
+
+`bun dotfiles-manager/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]` は build を行わず、指定した dist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と apply スクリプトの実行を行わない。`--dry-run --json` は `diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分・適用結果・実行した apply スクリプト数を表示する。
+
+`diff.ts` と `apply.ts` の直接 CLI は成功時に終了コード 0 を返す。必須引数がないとき、位置引数が多すぎるとき（`diff.ts`）、dist または home がディレクトリでないとき、または処理に失敗したときは、エラーを stderr に表示して非 0 で終了する。
 
 ## build: dist 再構築
 
 dist を削除し、`dotfiles/` の完全なコピーとして作り直す。任意の階層の `node_modules/` はコピーしない。前回実行で dist にあった内容は残らない。
 
-## build: マップ（remap.data.md）
-
-`dotfiles/remap.data.md`（git 管理）は、dist 内のエントリの行き先を OS ごとに定める。標準フック `dotfiles/02-path-map.build.ts` がこのファイルを読み、external fetch 標準フックの後の全エントリへ 1 回だけ適用する。
-
-先頭の Markdown table は `key`、`linux`、`windows`、`macos` の列をこの順で持ち、各行は一意なエントリのパスと 3 OS の値を表す。セルの前後の空白は無視する。`process.platform` が `win32` / `linux` / `darwin` のとき `windows` / `linux` / `macos` の対応する列を使い、それ以外では異常終了する。選択した列の値が空欄ならその OS ではマップせず元の階層に置き、`-` なら dist から除外し、それ以外の値なら dist 相対の移動先へ移動する。別 OS 列の値との合成は行わない。
-
-```md
-| key | linux | windows | macos |
-| --- | --- | --- | --- |
-| docker | .docker/desktop | AppData/Roaming/Docker | - |
-| **/*.sample | - | - | - |
-```
-
-列名、列順、区切り行が不正なとき、行の列数が合わないとき、キーが空または重複するとき、移動先が `/` で始まるとき、glob 文字（`*` `?` `[`）を含むキーに移動先を指定したときは異常終了する。これらの検査は実行 OS にかかわらず全セルへ行う。テーブルがない、または設定ファイルが存在しない場合も異常終了する。
-
-適用:
-
-- 除去は、実行 OS の列で値が `-` のキーに一致するエントリを dist から取り除く。一致したディレクトリは配下ごと削除する。
-- 移動は、値が空欄でも `-` でもないキーについて移動元エントリ（ファイルまたはディレクトリ）を行き先へ移動する。配置先が既に存在するときは置き換え、移動元が dist に存在しないときは何もしない。
-- キーの一致は、dist 内のパスを home 相対パスに見立てて判定する。末尾が `.exact` のディレクトリ名は `.exact` を取り除いた名前に、それ以外（ファイル名を含む）はそのまま照合する。glob 文字を含むキーは Bun の `Glob` と同じ方言（`*` は 1 階層内、`**` は階層をまたぐ）でパスと配下に一致する。
-- 適用はこの 1 回だけである。external fetch 標準フックがこの前に実行されるため取得エントリも適用対象になり、この後に実行されるローカルフックが生成したエントリには適用しない。
-
 ## build: ローカルフック
 
-`dotfiles/` 以下に、名前が `.build.<拡張子>` または `.build-machine.<拡張子>` で終わる通常ファイルを置くと、同じ build ローカルフックとして扱う。1 フォルダに複数置ける。ローカルフックは、フォルダ固有のファイルを dist へ生成するためのものである。
+`dotfiles/` 以下に、名前が `.build.<拡張子>` または `.build-machine.<拡張子>` で終わる通常ファイルを置くと、同じローカルフックとして扱う。1 フォルダに複数置ける。ローカルフックは、対応する dist フォルダ以下のエントリを生成・変更・移動・削除できる。
 
 各フックを独立した子プロセスとして実行する。拡張子と runner の規則は §フックシステムに従う。フックは default export した関数として呼び出され、引数に `context` を受け取る。非同期関数の完了を待ってから次のフックへ進む。
 
 - `cwd`: フックを置いたフォルダに対応する dist 内のフォルダ
 - 環境変数: 通常の親プロセス環境をそのまま継承する。追加の環境変数や設定ファイルは提供しない
-- フックは `cwd` のフォルダを生成物の出力先として使う。Bun 実行時の `process.cwd()` はそのフォルダに解決され、`import.meta.dir` から自身の dist 内コピーを参照できる
-- `context.resolvePaths(path)`: `path` に `cwd` 相対のファイルパスを渡すと、対応する dist と home の絶対パスを `{ distPath, homePath }` で返す。home 側は §差分検知 の対応関係を使い、親ディレクトリの `.exact`、末尾ファイルの `.executable` / `.symlink` を変換する。現在のファイルの有無にかかわらず解決し、ファイル内容の読み書きや symlink の実体追跡は行わない。`..` を含むパスは dist 内に解決される場合に使える。絶対パス、dist 外に解決されるパス、ファイルを指定しない空パスや末尾が `/`・`.`・`..` のパスはエラーになる
+- フックは `cwd` のフォルダ以下を生成・変更・移動・削除の対象として使う。Bun 実行時の `process.cwd()` はそのフォルダに解決され、`import.meta.dir` から自身の dist 内コピーを参照できる
+- `context.resolvePaths(path)`: `path` に `cwd` 相対のファイルパスを渡すと、対応する dist と home の絶対パスを `{ distPath, homePath }` で返す。home 側は §差分検知 の対応関係を使い、親ディレクトリの `.exact`、末尾ファイルの `.executable` / `.symlink` を変換する。現在のファイルの有無にかかわらず解決し、ファイル内容の読み書きや symlink の実体追跡は行わない。`..` を含むパスは dist 内に解決される場合に使える。絶対パス、dist 外に解決されるパス、ファイルを指定しない空パスや末尾が `/`・`.`・`..` のパスはエラーになる。パスの解決はフックの生成・変更・移動・削除の対象範囲を広げない
 
-フックは対応する dist フォルダ以下へファイルを生成する。この出力範囲はフック作者が守る契約であり、システムは生成先のパス検証やサンドボックスを行わない。フック自身は dist へそのまま残るが、build フックは差分検知と適用の対象外である。
+対応する dist フォルダ以下という生成・変更・移動・削除の範囲はフック作者が守る契約であり、システムはフックの操作先を検証したりサンドボックスで制限したりしない。フック自身は dist へそのまま残り、差分検知と適用の対象外である。
 
 検出と順序:
 
-1. dist 再構築の直後に、`node_modules/` 以下を除き dist を再帰走査し、名前が `.build.<拡張子>` または `.build-machine.<拡張子>` で終わる通常ファイルを検出する。この 1 回だけ検出し、以降に生成された build フックは実行しない。検出時のスクリプト内容を実行する。
-2. ルートフォルダから順に、各フォルダ直下のフックをファイル名の UTF-16 コード単位の昇順で実行してから、その子フォルダをフォルダ名の UTF-16 コード単位の昇順で同様に処理する。親フォルダのフックは子孫フォルダのフックより先に実行する。同じフォルダ内で先頭に来たい処理は、ファイル名の prefix（`01-` など）で制御する。
+1. dist 再構築の直後に、`node_modules/` 以下を除き dist を再帰走査し、上記の名前で終わる通常ファイルを検出する。この 1 回だけ検出し、以降に生成された build フックは実行しない。検出時のスクリプト内容を実行する。
+2. ルートから順に各フォルダ直下のフックをファイル名の UTF-16 コード単位の昇順で実行し、その後で子フォルダをフォルダ名の UTF-16 コード単位の昇順にたどる。親フォルダのフックは子孫のフックより先に実行する。先頭に来たい処理は、ファイル名の prefix（`01-` など）で制御する。
 3. 先行フックが検出済みフックを移動または削除しても、そのフックを検出時の順序で実行する。スクリプトは元の dist 相対パスのフォルダで実行し、先行フックがそのフォルダを削除していた場合は実行後に空の新設フォルダを取り除く。
 
 フックが終了コード非 0 で終了した、シグナルで終了した、またはエラーが発生したとき、エラーメッセージにフックの `dotfiles/` からの相対パスを含めて異常終了する。フックの stdout と stderr は親プロセスの同じ出力へ転送する。エラー発生後は後続のフックを実行しない。dist の rollback、build 間の lock、staging による原子的な置換は行わない。
-
-リポジトリは、ルートに標準フックとして `dotfiles/01-external.build.ts`（external fetch）と `dotfiles/02-path-map.build.ts`（マップ適用）を持つ。いずれも一般のローカルフックと同じ仕様で動き、prefix により外部エントリ取得 → マップ適用の順に先頭で実行される。この順序は、外部エントリがマップの移動対象になり得るためである。
-
-## build: external fetch
-
-標準フック `dotfiles/01-external.build.ts` が、設定ファイル `dotfiles/external.data.yaml`（git 管理）に定義した Git リポジトリの外部エントリを取得して dist へ配置する。同一ディレクトリの `dotfiles/external.data-machine.yaml`（git 管理外、任意）は、マシン固有の外部エントリを定める machine レイヤーとして読む。形式は共有側と同じであり、repo キー単位で共有側と統合し、同キーは machine 側の定義で完全に置換する。machine 側は共有側のキーの一部だけを持ってよい。machine ファイルが存在しなくてもよく、存在するのに `externalSkills` マップを持たないときは異常終了する。
-
-```yaml
-externalSkills:
-  microsoft/playwright-cli:
-    destination: .agents/skills.exact
-    entries:
-      - skills/playwright-cli
-    ttlHours: 6
-    run_after:
-      - [node, build.mjs]
-    edit:
-      "skills/playwright-cli/SKILL.md.$append": |
-        追記するテキスト
-```
-
-キーは `<owner>/<repo>` 形式の GitHub リポジトリである。各 repo についてミラーを同期し、その内容を配置する。配置はマップ適用の前に行われるため、取得したエントリも §build: マップの適用対象になる。
-
-| 条件 | 操作 | 結果 |
-| --- | --- | --- |
-| ミラーが存在しない | リポジトリを shallow clone する | ミラーの内容が配置される |
-| ミラーがあり、TTL 内 | 取得しない | ミラーの内容が配置される |
-| ミラーがあり、TTL 超過 | pull する | 更新後の内容が配置される |
-| pull が失敗した | pull を無視する | 既存ミラーの内容が配置され、警告が出る |
-| clone が失敗した | — | 異常終了する |
-
-- ミラーは `~/mirrors/github.com/<owner>/<repo>` に保持する。
-- TTL の既定は 6 時間で、`ttlHours` で上書きする。時間原点は、ミラーの `.git/build-pull-time` に記録した前回取得時刻であり、clone 成功時と pull 成功時に更新する。環境変数 `BUILD_FORCE_PULL=1` のときは TTL を無視して pull する。
-- `entries` の各パスは、Bun Glob 方言でミラー内のディレクトリまたはファイルへ解決する。0 件または複数件に一致したときは異常終了する。ファイルに一致したときは、`destination` の直下へファイル名のまま配置し、`edit` の対象にならない。
-- 配置先は `destination`（dist 相対パス）の直下である。既存ファイルは上書きせず、`.git` はコピーしない。
-- `edit` の `<path>.$append` は、コピーする前に対応ファイルの末尾へテキストを追記する。`<path>` が `entries` のどのパスにも含まれないときは異常終了する。
-- `run_after` は、ミラーの内容が更新されたときだけ、`git clean -fdX` の後に各コマンドをミラーを cwd として実行する。非 0 で終了したときは異常終了する。
-- 配置されたエントリは、以後は通常のエントリとして差分検知・適用される。
 
 ## build: merge 変換
 
@@ -138,7 +82,7 @@ JSON/YAML/TOML の設定ファイルを、home 現状とリポジトリ側レイ
 | `<name>.merge.{json,yaml,toml}` | git | 共有 merge レイヤー（任意） |
 | `<name>.merge-machine.{json,yaml,toml}` | gitignore | マシン固有 merge レイヤー（任意） |
 
-`<name>.merge.{json,yaml,toml}` または `<name>.merge-machine.{json,yaml,toml}` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は merge ターゲットとなる。`<name>.machine.{json,yaml,toml}` は merge sidecar として認識しない。merge ターゲットでないファイルは、dist へそのまま残す。
+`<name>.merge.{json,yaml,toml}` または `<name>.merge-machine.{json,yaml,toml}` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は merge ターゲットとなる。`<name>.machine.{json,yaml,toml}` は sidecar として認識せず、通常のファイルとして dist に残る。merge ターゲットでないファイルも dist へそのまま残す。
 
 ### ターゲット解決
 
@@ -175,26 +119,17 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 
 merge ターゲットごとに:
 
-1. 合成結果を canonical 形式（§パッチ適用）で `<name>.{json,yaml,toml}` に書き出す。
+1. 合成結果を canonical 形式（§パッチ適用）で `<name>.{json,yaml,toml}` に書き出す。plain base が存在したときは完成形で上書きする。
 2. 入力として使った sidecar（`<name>.merge.{json,yaml,toml}`、`<name>.merge-machine.{json,yaml,toml}`）を dist から削除する。
-3. plain base の `<name>.{json,yaml,toml}` が存在したとき、それも dist から削除する（完成形のみ残す）。
 
-手書きの設定ファイルにも一般則が適用される。sidecar を置いたファイルは merge ターゲットとなり、その内容が plain base レイヤーとして合成され、完成形が dist に書き出される。sidecar を持たない plain ファイルは対象外で、dist にそのまま残る。
+手書きの設定ファイルにも一般則が適用される。sidecar を置いたファイルは merge ターゲットとなり、その内容が plain base レイヤーとして合成され、完成形で上書きされる。sidecar を持たない plain ファイルは対象外で、dist にそのまま残る。
 
 ### 例
-
-`rtk/config.merge.toml` のみ（plain base なし、マップ移動と組合せ）:
-
-1. dist 再構築後: `dist/rtk/config.merge.toml`
-2. マップ移動後: `dist/.config/rtk/config.merge.toml`
-3. home パス: `~/.config/rtk/config.toml`
-4. 合成: home → merge レイヤー
-5. 出力: `dist/.config/rtk/config.toml`。`config.merge.toml` は削除
 
 `.agents/config.exact/agents.yaml` + `agents.merge-machine.yaml`（共有 merge なし）:
 
 1. 合成: home → plain base（`agents.yaml`）→ machine
-2. 出力: `dist/.agents/config.exact/agents.yaml`。sidecar と plain base 生ファイルは削除
+2. 出力: `dist/.agents/config.exact/agents.yaml`。sidecar は削除され、plain base は完成形で上書きされる
 
 全レイヤー:
 
@@ -222,7 +157,6 @@ merge 変換の後、`<name>.replace.yaml` があるとき次を処理する。
 - `<name>` の home パスは、§差分検知 の対応関係規則で完成形の dist 相対パスから解決する。
 - どの pattern も一致しない入力は、変化せずそのまま出力になる。
 - sidecar 自体は dist から削除され、dist には完成形 `<name>` だけが残る。
-- 既存の `modify_` テンプレート 5 件（obs-studio 4、sharex 1）はこの形式へ書き替える。
 
 ## パッチ適用
 
@@ -314,7 +248,7 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | YAML | YAML 形式、改行コード LF |
 | TOML | TOML 形式、末尾改行 1 つ、改行コード LF |
 
-JSON の共有 merge / machine merge ファイルおよび plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の共有 merge / machine merge ファイルおよび plain base の TOML 入力にはコメントを書ける。
+JSON の共有・マシン固有 merge sidecar および plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の共有・マシン固有 merge sidecar および plain base の TOML 入力にはコメントを書ける。
 
 ### 記述例
 
@@ -385,14 +319,14 @@ dist を再帰走査し、home の対応するエントリと対照する。エ�
 | `<name>.executable` | `<name>` |
 | `<name>.symlink` | `<name>` |
 
-内容の比較は次の正規化を行う。
+内容の比較は次の規則に従う。通常ファイルは、両方の内容が厳密に UTF-8 として復号でき、NUL を含まないときにテキストとして扱う。それ以外はバイナリとして扱う。
 
-- テキスト比較のとき、CR を除去した上で比較する（CRLF と LF を同一視する）。
-- `.json` と `.jsonc` は、末尾カンマと空白の有無を無視して比較する。
+- テキスト比較のとき、CR を除去し、末尾の LF を 1 個除去して比較する。CRLF と LF、末尾改行 1 個の有無は同一視する。JSON/JSONC の空白・末尾カンマは通常の内容差として扱う。
+- バイナリ比較のとき、バイト列が一致するかを比較する。
 - symlink は、リンク先（末尾改行 1 つを除いた内容）を比較する。
 - 実行権は、linux と darwin で owner 実行権の有無を比較する。windows では実行権を比較しない。
 
-dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、名前が `external.data-machine.yaml` のエントリ、および名前が `.build.<拡張子>`、`.build-machine.<拡張子>`、`.apply.<拡張子>`、`.apply-machine.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`.data.` は build ステージのデータファイル（マップ・共有 external 設定）のための予約名であり、`external.data-machine.yaml` はマシン固有の external 設定である。`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。
+dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、名前が `external.data-machine.yaml` のエントリ、および名前が `.build.<拡張子>`、`.build-machine.<拡張子>`、`.apply.<拡張子>`、`.apply-machine.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`external.data.machine.yaml` は `.data.` を含むため同じく対象外となる。`.data.` は build ステージのデータファイルのための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。フックが生成した `node_modules/` は通常のエントリと同じく差分検知・適用の対象になる。`<name>.machine.{json,yaml,toml}` と `.edit.ts` は、上記の除外条件に当たらなければ通常のエントリとして差分検知・適用される。`.edit.ts` は build フックとして実行されない。
 
 | dist | home | 分類 |
 | --- | --- | --- |
@@ -404,20 +338,17 @@ dist の相対パスの各要素が `.build` で始まるエントリ、名前�
 
 ## 差分表示
 
-`just diff` は、変更・種別不一致・追加・余剰（exact 対象）の各エントリごとに、difftastic または git diff による色付きの 2 入力比較を表示する。
+`just diff` と直接 CLI の通常表示は、変更・種別不一致・追加・余剰（exact 対象）の各エントリごとに、色付きの 2 入力比較を表示する。
 
 | 条件（両ファイルの内容） | 表示 |
 | --- | --- |
-| 行末の違いのみが異なる | 出力しない |
-| 両方が `.json` / `.jsonc` で、閉じ括弧直前の空白・末尾カンマの有無と行末の違いのみが異なる | 出力しない |
+| テキストの行末の違いのみが異なる | 出力しない |
 | それ以外の内容差分がある | diff を表示する |
 
-- 行末の正規化: CR を除去し、末尾の `\n` を 1 個除去して比較する。CRLF と LF、末尾改行の有無の差分は表示しない
-- 末尾カンマの正規化: 閉じ括弧（`}` と `]`）の直前に連続する空白・カンマを取り除いて比較する。文字列リテラル（`"..."`）の中は変更しない。JSONC コメントは解析せず、文字列外のテキストとして扱う
-- `difft` が PATH にあり、両入力がファイルのときは `difft --color=always --display=inline --skip-unchanged --strip-cr=on --syntax-highlight=on` で、それ以外のときは `git diff --no-index --ignore-cr-at-eol --color=always` で表示する
+- 通常ファイルの表示要否は §差分検知 と同じテキスト・バイナリ判定で決める。テキストでは CR を除去し、末尾の `\n` を 1 個除去して比較する。行末だけが異なる場合は表示しない。他の内容差がある場合は元の入力を比較して表示するため、行末差も diff に現れ得る。バイナリではバイト列が異なれば表示する
+- 両入力がテキストファイルで、JSON/JSONC 以外かつ `difft` が PATH にあるときは `difft --color=always --display=inline --skip-unchanged --strip-cr=on --syntax-highlight=on` で表示する。テキストでそれ以外の場合は `git diff --no-index --ignore-cr-at-eol --color=always`、バイナリの場合は `git diff --no-index --color=always` で表示する
 - 追加エントリは dist 側を、削除エントリは home 側を、それぞれ空の入力として比較する
 - diff ツールの終了コード（差分ありを表す 1 を含む）は `just diff` の終了コードに影響しない
-- difftastic は構文木ベースで差分を取るため、JSON・JSONC の空白・コメント・カンマの差分は difftastic 使用時には表示されない
 
 ## 適用
 
@@ -430,14 +361,14 @@ dist の相対パスの各要素が `.build` で始まるエントリ、名前�
 | 変更（実行権） | 実行権を設定する | home の実行権が dist の規則と一致する |
 | 変更（symlink のリンク先） | 既存リンクを削除し、改めて symlink を作成する | リンク先が一致する |
 | 種別不一致 | home 側エントリを削除し、追加として処理する | home に dist と同種のエントリが現れる |
-| 余剰（`.exact` ディレクトリ配下） | 削除する | home から消える |
+| 余剰（各 `.exact` ディレクトリに対応する home ディレクトリの直下） | 削除する | home から消える |
 | 余剰（それ以外） | 何もしない | home に残る |
 
 適用処理の間、エラーが発生したときは後続のエントリを適用せず、終了コード非 0 で終了する。既に適用したエントリを元に戻さない。
 
 ### `.exact` の解釈
 
-dist の `<name>.exact` ディレクトリは、home の `<name>` ディレクトリに対応し、直下の余剰エントリを常に削除する。余剰がディレクトリのときはその配下ごと消える。`.exact` ディレクトリの子ディレクトリの内部は余剰管理の対象外であり、home 側だけのファイルは残る。
+dist の `<name>.exact` ディレクトリは、home の `<name>` ディレクトリに対応し、直下の余剰エントリを常に削除する。余剰がディレクトリのときはその配下ごと消える。通常の子ディレクトリの内部は余剰管理の対象外であり、home 側だけのファイルは残る。子ディレクトリも `.exact` なら、その直下の余剰エントリも削除する。
 
 ### `.symlink` の解釈
 
@@ -472,7 +403,7 @@ build / apply のフックは `.ts` ファイルだけをサポートし、Bun �
 
 | ステージ | 失敗時の結果 |
 | --- | --- |
-| build（external fetch・ローカルフック・merge・置換 sidecar を含む） | 非 0 で終了する。後続ステージを実行しない |
+| build（ローカルフック・merge・置換 sidecar を含む） | 非 0 で終了する。後続ステージを実行しない |
 | 差分検知 | 非 0 で終了する。適用しない |
 | 適用 | 後続のエントリを適用せず非 0 で終了する。既に適用した分を戻さない |
 | apply スクリプト | 後続を実行せず非 0 で終了する |

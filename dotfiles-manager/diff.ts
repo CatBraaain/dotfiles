@@ -14,7 +14,6 @@ import { join } from "node:path";
 
 declare const Bun: {
   which(command: string): string | null;
-  file(path: string): { text(): Promise<string> };
   spawn(
     command: string[],
     options: { stdout: "inherit"; stderr: "inherit" },
@@ -141,9 +140,12 @@ export async function main(argv: readonly string[]): Promise<number> {
   return 0;
 }
 
-export function parseArgs(
-  argv: readonly string[],
-): { managed: boolean; json: boolean; distRoot: string; homeRoot: string } {
+export function parseArgs(argv: readonly string[]): {
+  managed: boolean;
+  json: boolean;
+  distRoot: string;
+  homeRoot: string;
+} {
   const managed = argv.includes("--managed");
   const json = argv.includes("--json");
   const positional = argv.filter((arg) => arg !== "--json" && arg !== "--managed");
@@ -161,10 +163,8 @@ export function parseArgs(
 
 const excludedEntryPrefixes = [".build"];
 
-// Build hooks stay in dist and are never diffed or applied.
+// Build and apply hooks stay in dist and are not copied to home.
 const buildHookNamePattern = /\.build(?:-machine)?\.[^.]+$/;
-
-// Apply scripts run after applying and are never placed into home.
 const applyScriptNamePattern = /\.apply(?:-machine)?\.[^.]+$/;
 
 export function isApplyScriptName(name: string): boolean {
@@ -180,6 +180,8 @@ export type SegmentMapping = {
 };
 
 export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
+  // .data. marks build-time data files (path map, external config, machine
+  // layer), excluded like the .build prefix (spec §差分検知).
   const isExcluded =
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
     name.includes(".data.") ||
@@ -248,8 +250,9 @@ async function walk(
   const homeDir = join(ctx.homeRoot, homeRel);
   const knownHomeNames = new Set<string>();
 
-  for (const entry of await readdir(distDir, { withFileTypes: true }) as unknown as DirentLike[]) {
-    if (entry.name === "node_modules") continue;
+  for (const entry of (await readdir(distDir, {
+    withFileTypes: true,
+  })) as unknown as DirentLike[]) {
     const mapping = mapSegment(entry.name, entry.isDirectory());
     // Track every dist entry's home name (excluded ones included) so the
     // surplus scan below never counts a mapped counterpart as surplus.
@@ -264,8 +267,7 @@ async function walk(
 
     if (!homeStat) {
       ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
-      if (entry.isDirectory())
-        await collectAddedTree(childDistRel, childHomeRel, ctx);
+      if (entry.isDirectory()) await collectAddedTree(childDistRel, childHomeRel, ctx);
       continue;
     }
 
@@ -276,23 +278,18 @@ async function walk(
     }
 
     if (mapping.kind === "directory") {
+      ctx.result.unchanged.push({ homePath: childHomeRel, distPath: childDistRel });
       // Exact scope covers only the direct children of a .exact directory
       // (spec §.exact の解釈); it does not propagate into child directories.
-      const childIsExactScope = mapping.isExactManaged && !isExactScope;
-      await walk(
-        childDistRel,
-        childHomeRel,
-        childIsExactScope,
-        true,
-        ctx,
-      );
+      const childIsExactScope = mapping.isExactManaged;
+      await walk(childDistRel, childHomeRel, childIsExactScope, true, ctx);
       continue;
     }
 
     const differs =
       mapping.kind === "symlink"
         ? await symlinkDiffers(distAbs, homeAbs)
-        : (await fileDiffers(distAbs, homeAbs, mapping.homeName)) ||
+        : (await fileDiffers(distAbs, homeAbs)) ||
           (comparesExecutableBits(ctx.platform) &&
             executableDiffers(mapping.isExecutable, homeStat));
     ctx.result[differs ? "changed" : "unchanged"].push({
@@ -304,7 +301,9 @@ async function walk(
   // Surplus scan: only below dist-managed directories (never at the home
   // root). Unmanaged top-level home entries are ignored.
   if (!scanForSurplus) return;
-  for (const homeEntry of await readdir(homeDir, { withFileTypes: true }) as unknown as DirentLike[]) {
+  for (const homeEntry of (await readdir(homeDir, {
+    withFileTypes: true,
+  })) as unknown as DirentLike[]) {
     if (knownHomeNames.has(homeEntry.name)) continue;
     const surplusRel = homeRel === "" ? homeEntry.name : `${homeRel}/${homeEntry.name}`;
     // A surplus directory is reported as one entry (removed with its subtree
@@ -316,15 +315,10 @@ async function walk(
   }
 }
 
-async function collectAddedTree(
-  distRel: string,
-  homeRel: string,
-  ctx: WalkContext,
-): Promise<void> {
-  for (const entry of await readdir(join(ctx.distRoot, distRel), {
+async function collectAddedTree(distRel: string, homeRel: string, ctx: WalkContext): Promise<void> {
+  for (const entry of (await readdir(join(ctx.distRoot, distRel), {
     withFileTypes: true,
-  }) as unknown as DirentLike[]) {
-    if (entry.name === "node_modules") continue;
+  })) as unknown as DirentLike[]) {
     const mapping = mapSegment(entry.name, entry.isDirectory());
     if (mapping.isExcluded) continue;
     const childDistRel = `${distRel}/${entry.name}`;
@@ -334,19 +328,8 @@ async function collectAddedTree(
   }
 }
 
-async function fileDiffers(
-  distAbs: string,
-  homeAbs: string,
-  homeName: string,
-): Promise<boolean> {
-  const [distText, homeText] = await Promise.all([
-    readFile(distAbs, "utf8"),
-    readFile(homeAbs, "utf8"),
-  ]);
-  const jsonAware = isJsonName(homeName);
-  return (
-    normalizeText(distText, jsonAware) !== normalizeText(homeText, jsonAware)
-  );
+async function fileDiffers(distAbs: string, homeAbs: string): Promise<boolean> {
+  return (await compareFiles(distAbs, homeAbs)).differs;
 }
 
 async function symlinkDiffers(distAbs: string, homeAbs: string): Promise<boolean> {
@@ -381,24 +364,40 @@ async function lstatOrNull(path: string): Promise<StatsLike | null> {
 
 // ------------------------------------------------------------- normalizing
 
-// spec §差分検知: strip CR before comparing (CRLF == LF), then ignore one
-// trailing newline; for .json/.jsonc also ignore whitespace/trailing commas
-// before closing braces (same rules as the diff rendering below).
-function normalizeText(text: string, jsonAware: boolean): string {
-  const withoutCarriageReturns = text.replaceAll("\r", "");
-  const withoutTrailingNewline = withoutCarriageReturns.endsWith("\n")
-    ? withoutCarriageReturns.slice(0, -1)
-    : withoutCarriageReturns;
-  return jsonAware ? stripTrailingCommas(withoutTrailingNewline) : withoutTrailingNewline;
+async function compareFiles(
+  firstPath: string,
+  secondPath: string,
+): Promise<{ differs: boolean; isText: boolean }> {
+  const [first, second]: [Uint8Array, Uint8Array] = await Promise.all([
+    readFile(firstPath),
+    readFile(secondPath),
+  ]);
+  const firstText = decodeText(first);
+  const secondText = decodeText(second);
+  if (firstText !== null && secondText !== null)
+    return { differs: normalizeText(firstText) !== normalizeText(secondText), isText: true };
+  return {
+    differs: first.length !== second.length || first.some((byte, index) => byte !== second[index]),
+    isText: false,
+  };
 }
 
-function stripTrailingCommas(text: string): string {
-  return text
-    .split(/("(?:[^"\\]|\\.)*")/)
-    .map((part, index) =>
-      index % 2 === 0 ? part.replace(/[\s,]*(?=[}\]])/g, "") : part,
-    )
-    .join("");
+function decodeText(bytes: Uint8Array): string | null {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return text.includes("\0") ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+// spec §差分検知: strip CR before comparing (CRLF == LF), then ignore one
+// trailing newline for text files.
+function normalizeText(text: string): string {
+  const withoutCarriageReturns = text.replaceAll("\r", "");
+  return withoutCarriageReturns.endsWith("\n")
+    ? withoutCarriageReturns.slice(0, -1)
+    : withoutCarriageReturns;
 }
 
 function isJsonName(name: string): boolean {
@@ -413,45 +412,65 @@ async function renderDiffs(
   options: { distRoot: string; homeRoot: string },
 ): Promise<void> {
   const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
-  const renderTargets: Array<{ destination: string; target: string }> = [];
+  const renderTargets: Array<{ destination: string; target: string; isJson: boolean }> = [];
   for (const entry of result.changed)
     renderTargets.push({
       destination: join(options.homeRoot, entry.homePath),
       target: distAbsolutePath(entry, options.distRoot),
+      isJson: isJsonName(entry.homePath),
     });
   for (const entry of result.typeMismatches)
     renderTargets.push({
       destination: join(options.homeRoot, entry.homePath),
       target: distAbsolutePath(entry, options.distRoot),
+      isJson: isJsonName(entry.homePath),
     });
-  for (const entry of result.added)
+  for (const entry of result.added) {
+    const target = distAbsolutePath(entry, options.distRoot);
+    // Children are already classified individually; rendering the directory
+    // recursively would expose excluded entries and display children twice.
+    if (isDirectoryPath(target)) continue;
     renderTargets.push({
       destination: nullDevice,
-      target: distAbsolutePath(entry, options.distRoot),
+      target,
+      isJson: isJsonName(entry.homePath),
     });
+  }
   for (const entry of result.removedExact)
     renderTargets.push({
       destination: join(options.homeRoot, entry.homePath),
       target: nullDevice,
+      isJson: isJsonName(entry.homePath),
     });
 
-  for (const { destination, target } of renderTargets) {
+  for (const { destination, target, isJson } of renderTargets) {
     // Display-only: exit codes of difft / git diff never affect this engine.
-    await renderDiff(destination, target);
+    await renderDiff(destination, target, isJson);
   }
 }
 
 // Render a two-input comparison for one entry with difftastic or git diff
-// (spec: 差分表示). Ignores line-ending-only and trailing-comma-only
-// differences; writes the colored diff to stdout. The exit codes of the
-// diff tools (including the "differences found" code 1) never propagate.
-async function renderDiff(destination: string, target: string): Promise<void> {
-  if (await filesDifferOnlyByIgnorableDifferences(destination, target)) return;
-  const hasDirectoryInput =
-    isDirectoryPath(destination) || isDirectoryPath(target);
-  // difftastic accepts files only, while the caller also passes directory
-  // entries.
-  const useDifftastic = !hasDirectoryInput && Bun.which("difft") !== null;
+// (spec: 差分表示). Skips line-ending-only differences and displays the raw
+// diff otherwise. The diff tools' exit codes (including 1) never propagate.
+async function renderDiff(destination: string, target: string, isJson: boolean): Promise<void> {
+  const hasSymlinkInput =
+    (await lstatOrNull(destination))?.isSymbolicLink() ||
+    (await lstatOrNull(target))?.isSymbolicLink();
+  const hasDirectoryInput = isDirectoryPath(destination) || isDirectoryPath(target);
+  let isBinary = false;
+  if (!hasSymlinkInput && !hasDirectoryInput) {
+    try {
+      const comparison = await compareFiles(destination, target);
+      if (!comparison.differs) return;
+      isBinary = !comparison.isText;
+    } catch {
+      // Type mismatches may not have two readable file inputs.
+    }
+  }
+  // difftastic accepts text files only, while the caller also passes directory
+  // entries and symlinks (including broken ones).
+  const useDifftastic =
+    !hasDirectoryInput && !hasSymlinkInput && !isBinary && !isJson && Bun.which("difft") !== null;
   const diffInputs = hasDirectoryInput
     ? await prepareDirectoryInputs(destination, target)
     : {
@@ -480,7 +499,7 @@ async function renderDiff(destination: string, target: string): Promise<void> {
             "core.autocrlf=false",
             "diff",
             "--no-index",
-            "--ignore-cr-at-eol",
+            ...(!isBinary ? ["--ignore-cr-at-eol"] : []),
             "--color=always",
             "--",
             diffInputs.firstPath,
@@ -489,15 +508,7 @@ async function renderDiff(destination: string, target: string): Promise<void> {
       { stdout: "pipe", stderr: "inherit" },
     );
 
-    const output = await new Response(diff.stdout).text();
-    const filteredOutput = useDifftastic
-      ? output
-      : output
-          .split(/\r?\n/)
-          .filter((line) => line !== "\\ No newline at end of file")
-          .join("\n");
-
-    process.stdout.write(filteredOutput);
+    process.stdout.write(await new Response(diff.stdout).text());
     await diff.exited;
   } finally {
     await diffInputs.cleanup();
@@ -527,9 +538,7 @@ async function prepareDirectoryInputs(
     secondPath: inputPaths[1],
     cleanup: async () => {
       await Promise.all(
-        temporaryDirectories.map((path) =>
-          rm(path, { recursive: true, force: true }),
-        ),
+        temporaryDirectories.map((path) => rm(path, { recursive: true, force: true })),
       );
     },
   };
@@ -542,26 +551,6 @@ function isNullDevice(path: string): boolean {
 function isDirectoryPath(path: string): boolean {
   try {
     return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-async function filesDifferOnlyByIgnorableDifferences(
-  firstPath: string,
-  secondPath: string,
-): Promise<boolean> {
-  try {
-    const [first, second] = await Promise.all([
-      Bun.file(firstPath).text(),
-      Bun.file(secondPath).text(),
-    ]);
-    const ignoreTrailingCommas =
-      isJsonName(firstPath) && isJsonName(secondPath);
-    return (
-      normalizeText(first, ignoreTrailingCommas) ===
-      normalizeText(second, ignoreTrailingCommas)
-    );
   } catch {
     return false;
   }

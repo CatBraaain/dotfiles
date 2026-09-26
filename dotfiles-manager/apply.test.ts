@@ -8,6 +8,7 @@ import {
   readdir,
   readFile,
   readlink,
+  rename,
   rm,
   stat,
   symlink,
@@ -18,7 +19,7 @@ import { existsSync } from "node:fs";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir, tmpdir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { collectDifferences, type DiffResult } from "./diff.ts";
 import {
   applyDifferences,
@@ -93,22 +94,32 @@ describe("apply classification matrix", () => {
     assert.equal(await readFile(join(homeRoot, "nested/dir/a.txt"), "utf8"), "content\n");
   });
 
+  it("adds each listed directory child once and reports each entry once", async () => {
+    await put(distRoot, "pkg/nested/file.txt", "x\n");
+    const result = await collectDifferences(distRoot, homeRoot, "linux");
+    const renamedPaths: string[] = [];
+
+    const applied = await applyDifferences(
+      distRoot,
+      homeRoot,
+      result,
+      "linux",
+      async (from, to) => {
+        renamedPaths.push(to);
+        await rename(from, to);
+      },
+    );
+
+    assert.deepEqual(applied.added, ["pkg", "pkg/nested", "pkg/nested/file.txt"]);
+    assert.deepEqual(renamedPaths, [join(homeRoot, "pkg/nested/file.txt")]);
+    assert.equal(await readFile(join(homeRoot, "pkg/nested/file.txt"), "utf8"), "x\n");
+  });
   it("applies a retired machine sidecar as an ordinary file", async () => {
     await put(distRoot, "settings.machine.json", "{\"mode\":\"old\"}\n");
 
     await diffAndApply();
 
     assert.equal(await readFile(join(homeRoot, "settings.machine.json"), "utf8"), "{\"mode\":\"old\"}\n");
-  });
-
-  it("adds a directory with nested entries", async () => {
-    await put(distRoot, "pkg/nested/file.txt", "x\n");
-
-    await diffAndApply();
-
-    const statHome = await stat(join(homeRoot, "pkg"));
-    assert.ok(statHome.isDirectory());
-    assert.equal(await readFile(join(homeRoot, "pkg/nested/file.txt"), "utf8"), "x\n");
   });
 
   it("adds a symlink whose target is the file content without the trailing newline", async () => {
@@ -139,15 +150,22 @@ describe("apply classification matrix", () => {
     assert.equal(statHome.mode & 0o100, 0, "owner execute bit should be cleared");
   });
 
-  it("replaces file content atomically so the file gets a new inode", async () => {
+  it("keeps the old home contents until a complete adjacent file is renamed into place", async () => {
     await put(distRoot, "a.txt", "new\n");
     const homeAbs = await put(homeRoot, "a.txt", "old\n");
-    const before = await stat(homeAbs);
+    const result = await collectDifferences(distRoot, homeRoot, "linux");
+    let renames = 0;
 
-    await diffAndApply();
+    await applyDifferences(distRoot, homeRoot, result, "linux", async (from, to) => {
+      renames++;
+      assert.equal(to, homeAbs);
+      assert.equal(dirname(from), dirname(homeAbs));
+      assert.equal(await readFile(homeAbs, "utf8"), "old\n");
+      assert.equal(await readFile(from, "utf8"), "new\n");
+      await rename(from, to);
+    });
 
-    const after = await stat(homeAbs);
-    assert.notEqual(after.ino, before.ino, "rename should replace the inode");
+    assert.equal(renames, 1);
     assert.equal(await readFile(homeAbs, "utf8"), "new\n");
     assert.equal((await readdir(homeRoot)).filter((name) => name.includes("apply-tmp")).length, 0);
   });
@@ -214,16 +232,32 @@ describe("apply classification matrix", () => {
     assert.equal(existsSync(join(homeRoot, "dir/untracked.txt")), true);
   });
 
-  it("reports type mismatch as a removal of the old entry and an addition of the new one", async () => {
+  it("recursively applies children omitted beneath a type-mismatch directory", async () => {
     await put(distRoot, "entry/inner.txt", "x\n");
     await put(homeRoot, "entry", "i was a file\n");
 
     const result = await collectDifferences(distRoot, homeRoot, "linux");
-    const applied = await applyDifferences(distRoot, homeRoot, result, "linux");
+    const renamedPaths: string[] = [];
+    const applied = await applyDifferences(
+      distRoot,
+      homeRoot,
+      result,
+      "linux",
+      async (from, to) => {
+        renamedPaths.push(to);
+        await rename(from, to);
+      },
+    );
 
+    assert.deepEqual(
+      result.typeMismatches.map((entry) => entry.homePath),
+      ["entry"],
+    );
+    assert.deepEqual(result.added, []);
     assert.deepEqual(applied.removed, ["entry"]);
     assert.deepEqual(applied.added, ["entry", "entry/inner.txt"]);
-    assert.deepEqual(applied.changed, []);
+    assert.deepEqual(renamedPaths, [join(homeRoot, "entry/inner.txt")]);
+    assert.equal(await readFile(join(homeRoot, "entry/inner.txt"), "utf8"), "x\n");
   });
 
   it("stops on error and keeps already applied entries", async () => {
@@ -257,26 +291,65 @@ describe("apply classification matrix", () => {
     assert.equal(existsSync(join(homeRoot, ".config")), false);
   });
 
-  it("does not touch executable bits on windows", async () => {
-    await put(distRoot, "tool.executable", "#!/bin/sh\n");
+  it("preserves the existing file mode on windows when content changes", async () => {
+    const distAbs = await put(distRoot, "tool.executable", "new\n");
+    const homeAbs = await put(homeRoot, "tool", "old\n");
+    await chmod(distAbs, 0o755);
+    await chmod(homeAbs, 0o600);
+    const beforeMode = (await stat(homeAbs)).mode & 0o777;
 
     await diffAndApply("win32");
 
-    assert.equal(existsSync(join(homeRoot, "tool")), true);
+    assert.equal(await readFile(homeAbs, "utf8"), "new\n");
+    assert.equal((await stat(homeAbs)).mode & 0o777, beforeMode);
+  });
+
+  it("applies a node_modules subtree produced in dist", async () => {
+    await put(distRoot, "generated/node_modules/pkg/index.js", "new\n");
+
+    await diffAndApply();
+
+    assert.equal(
+      await readFile(join(homeRoot, "generated/node_modules/pkg/index.js"), "utf8"),
+      "new\n",
+    );
+  });
+
+  it("applies changes inside an existing node_modules directory", async () => {
+    await put(distRoot, "node_modules/pkg/index.js", "new\n");
+    await put(homeRoot, "node_modules/pkg/index.js", "old\n");
+
+    await diffAndApply();
+
+    assert.equal(await readFile(join(homeRoot, "node_modules/pkg/index.js"), "utf8"), "new\n");
   });
 });
 
 describe("apply scripts", () => {
-  it("collects declarations skipping node_modules and excluded folders", async () => {
-    await putApplyScript(distRoot, join("node_modules", "pkg", "x.apply.sh"));
+  it("collects scripts in node_modules but skips excluded folders", async () => {
+    await putApplyScript(distRoot, "node_modules/pkg/x.apply.ts");
     await put(distRoot, ".build.d/hidden/x.apply.sh", "script\n");
-    await putApplyScript(distRoot, "ok/y.apply.sh");
+    await putApplyScript(distRoot, "ok/y.apply.ts");
 
     const declarations = await collectDeclarations(distRoot);
 
-    assert.deepEqual(declarations.applyScripts.map((script) => script.distPath), [
-      "ok/y.apply.sh",
-    ]);
+    assert.deepEqual(
+      declarations.applyScripts.map((script) => script.distPath),
+      ["node_modules/pkg/x.apply.ts", "ok/y.apply.ts"],
+    );
+  });
+
+  it("runs an apply script produced inside node_modules", async () => {
+    await putApplyScript(distRoot, "node_modules/pkg/setup.apply.ts");
+
+    const exitCode = await main([distRoot, homeRoot]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(
+      await readFile(join(homeRoot, "node_modules/pkg/apply-out.txt"), "utf8"),
+      join(homeRoot, "node_modules/pkg"),
+    );
+    assert.equal(existsSync(join(homeRoot, "node_modules/pkg/setup.apply.ts")), false);
   });
 
   it("runs machine-specific scripts after applying without placing them in home", async () => {
@@ -295,7 +368,6 @@ describe("apply scripts", () => {
     assert.equal(existsSync(join(homeRoot, "tools/setup.apply-machine.ts")), false);
     assert.equal(await readFile(join(homeRoot, "tools/apply-out.txt"), "utf8"), join(homeRoot, "tools"));
   });
-
   it("runs a TypeScript hook in the mapped home folder without requiring a shebang", async () => {
     await putApplyScript(
       distRoot,
@@ -482,5 +554,139 @@ describe("CLI", () => {
 
     assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
     assert.equal(existsSync(join(homeRoot, "apply-out.txt")), true);
+  });
+
+  it("direct --dry-run --json reports differences without home writes or apply scripts", async () => {
+    await put(distRoot, "changed.txt", "new\n");
+    await put(homeRoot, "changed.txt", "old\n");
+    await put(distRoot, "added.txt", "added\n");
+    await put(distRoot, "exact.exact/keep.txt", "keep\n");
+    await put(homeRoot, "exact/keep.txt", "keep\n");
+    await put(homeRoot, "exact/stale.txt", "stale\n");
+    await putApplyScript(distRoot, "final.apply.ts");
+
+    const cli = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "apply.ts"),
+        "--dry-run",
+        distRoot,
+        homeRoot,
+        "--json",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.equal(
+      stdout,
+      `${JSON.stringify(
+        {
+          changed: ["changed.txt"],
+          typeMismatches: [],
+          added: ["added.txt"],
+          removedExact: ["exact/stale.txt"],
+          removedIgnored: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    assert.equal(await readFile(join(homeRoot, "changed.txt"), "utf8"), "old\n");
+    assert.equal(existsSync(join(homeRoot, "added.txt")), false);
+    assert.equal(existsSync(join(homeRoot, "exact/stale.txt")), true);
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
+  });
+
+  it("direct --dry-run displays a diff without changing home or running scripts", async () => {
+    await put(distRoot, "settings.json", '{"value":2}\n');
+    await put(homeRoot, "settings.json", '{"value":1}\n');
+    await putApplyScript(distRoot, "final.apply.ts");
+
+    const cli = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "apply.ts"), "--dry-run", distRoot, homeRoot],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /diff --git/);
+    assert.match(stdout, /"value":2/);
+    assert.equal(await readFile(join(homeRoot, "settings.json"), "utf8"), '{"value":1}\n');
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
+  });
+
+  it("direct CLI reports one application per added directory entry", async () => {
+    await put(distRoot, "pkg/nested/file.txt", "x\n");
+
+    const cli = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "apply.ts"), distRoot, homeRoot],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^diff: 0 changed, 0 type mismatches, 3 added,/);
+    assert.match(stdout, /apply: 3 added, 0 changed, 0 removed\napply scripts: 0 scripts\n$/);
+    assert.equal(await readFile(join(homeRoot, "pkg/nested/file.txt"), "utf8"), "x\n");
+  });
+
+  it("direct --json still applies and prints the normal summary", async () => {
+    await put(distRoot, "added.txt", "added\n");
+    await putApplyScript(distRoot, "final.apply.ts");
+
+    const cli = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "apply.ts"), distRoot, homeRoot, "--json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^diff: 0 changed, 0 type mismatches, 1 added,/);
+    assert.match(stdout, /apply: 1 added, 0 changed, 0 removed\napply scripts: 1 scripts\n$/);
+    assert.equal(await readFile(join(homeRoot, "added.txt"), "utf8"), "added\n");
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), true);
+  });
+
+  it("direct CLI reports missing arguments and invalid roots on stderr", async () => {
+    for (const args of [[distRoot], [distRoot, join(root, "missing")]]) {
+      const cli = Bun.spawn([process.execPath, join(import.meta.dir, "apply.ts"), ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(cli.stdout).text(),
+        new Response(cli.stderr).text(),
+        cli.exited,
+      ]);
+
+      assert.notEqual(exitCode, 0);
+      assert.equal(stdout, "");
+      assert.notEqual(stderr, "");
+    }
   });
 });
