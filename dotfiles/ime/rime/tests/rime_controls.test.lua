@@ -16,10 +16,17 @@ end
 
 local processor = dofile(arg[1])
 
-local function new_environment()
-    local context = { input = "", options = {}, selected_index = 1 }
+local function new_environment(candidates)
+    local segment = { selected_index = 0, menu = { candidates = candidates or { "かな", "仮名", "カナ" } } }
+    function segment.menu:candidate_count()
+        return math.min(#self.candidates, 2)
+    end
+    function segment:get_candidate_at(index)
+        return self.menu.candidates[index + 1]
+    end
+    local context = { input = "", options = {}, composition = { back = function() return segment end }, commits = {} }
     function context:has_menu()
-        return self.input ~= ""
+        return self.input ~= "" and #segment.menu.candidates > 0
     end
     function context:get_option(name)
         return self.options[name] or false
@@ -28,11 +35,17 @@ local function new_environment()
         self.options[name] = value
     end
     function context:highlight(index)
-        self.selected_index = index
+        if segment:get_candidate_at(index) then
+            segment.selected_index = index
+        end
+    end
+    function context:commit()
+        table.insert(self.commits, segment:get_candidate_at(segment.selected_index))
+        self.input = ""
     end
     local env = { engine = { context = context } }
     processor.init(env)
-    return env, context
+    return env, context, segment
 end
 
 local function press(env, keycode, modifiers)
@@ -47,15 +60,50 @@ local function press(env, keycode, modifiers)
     }, env)
 end
 
-local env, context = new_environment()
+local env, context, segment = new_environment()
 press(env, string.byte("k"))
 assert(context:get_option("_hide_candidate"), "typing must hide candidates")
 context.input = "か"
 local first_space = press(env, 0x20)
 assert(first_space == kAccepted, "first Space must be consumed")
 assert(not context:get_option("_hide_candidate"), "first Space must reveal candidates")
+assert(segment.selected_index == 0, "first Space must select the first candidate")
+local before_selection = calls
 local second_space = press(env, 0x20)
-assert(second_space == kNoop, "subsequent Space must reach standard processors")
+assert(second_space == kAccepted, "subsequent Space must not reach standard processors")
+assert(segment.selected_index == 1, "second Space must highlight the next candidate")
+assert(#context.commits == 0 and context.input == "か", "Space must leave composition uncommitted")
+press(env, 0x20)
+assert(segment.selected_index == 2, "Space must reach candidates beyond the prepared page")
+press(env, 0x20)
+assert(segment.selected_index == 0, "Space must wrap from the final candidate to the first")
+press(env, 0x20)
+assert(segment.selected_index == 1, "Space must advance after wrapping")
+assert(calls == before_selection, "candidate cycling must bypass the kana speller")
+local enter = press(env, 0xff0d)
+assert(enter == kAccepted, "Enter must not reach the raw-script editor binding")
+assert(context.commits[1] == "仮名", "Enter must commit the highlighted candidate")
+assert(context.input == "", "Enter must end composition")
+press(env, string.byte("k"))
+assert(context:get_option("_hide_candidate"), "the next input must start with candidates hidden")
+
+env, context, segment = new_environment({ "かな" })
+context.input = "か"
+context:set_option("_hide_candidate", true)
+press(env, 0x20)
+press(env, 0x20)
+assert(segment.selected_index == 0 and #context.commits == 0, "a single candidate must stay highlighted without committing")
+
+local before_empty_enter = calls
+env, context = new_environment()
+assert(press(env, 0xff0d) == kNoop, "Enter outside composition must pass through")
+assert(calls == before_empty_enter + 1, "Enter without a menu must reach the kana speller")
+
+env, context = new_environment()
+context.input = "か"
+context:set_option("_hide_candidate", true)
+assert(press(env, 0xff0d) == kNoop, "Enter before Space must retain the standard binding")
+assert(#context.commits == 0, "Enter before Space must not use candidate commit")
 
 env, context = new_environment()
 context.input = "か"
@@ -78,7 +126,7 @@ assert(calls == before_henkan, "Henkan must not reach the kana speller")
 assert(context.input == "かな", "Henkan must leave composition intact")
 assert(context:get_option("katakana"), "Henkan must enable full-width katakana")
 assert(context:get_option("_rime_henkan"), "Henkan must enable candidate promotion")
-assert(context.selected_index == 0, "Henkan must highlight the first candidate")
+assert(context.composition:back().selected_index == 0, "Henkan must highlight the first candidate")
 press(env, 0xff23)
 assert(context:get_option("_rime_henkan"), "repeated Henkan must keep candidate promotion")
 context.input = ""
@@ -106,5 +154,8 @@ local ascii_henkan = press(env, 0xff23)
 assert(ascii_henkan == kNoop, "Henkan in ascii mode must pass through")
 local modified_space = press(env, 0x20, { ctrl = true })
 assert(modified_space == kNoop, "modified Space must pass through")
+context:set_option("_hide_candidate", false)
+assert(press(env, 0x20) == kNoop, "Space in ascii mode must pass through")
+assert(press(env, 0xff0d) == kNoop, "Enter in ascii mode must pass through")
 
 print("Rime candidate visibility and Henkan tests passed")

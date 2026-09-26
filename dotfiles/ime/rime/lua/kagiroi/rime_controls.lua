@@ -2,6 +2,7 @@ local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local kAccepted = 1
 local kHenkan = 0xff23
 local kSpace = 0x20
+local kReturn = 0xff0d
 local Top = { init = kana_speller.init, fini = kana_speller.fini }
 
 function Top.func(key_event, env)
@@ -36,13 +37,30 @@ function Top.func(key_event, env)
         context:set_option("_hide_candidate", true)
     end
 
-    if keycode == kSpace and context.input ~= "" and context:get_option("_hide_candidate") then
-        local result = kana_speller.func(key_event, env)
-        if context:has_menu() then
-            context:set_option("_hide_candidate", false)
+    if context.input ~= "" and not context:get_option("ascii_mode") then
+        if keycode == kSpace then
+            if context:get_option("_hide_candidate") then
+                local result = kana_speller.func(key_event, env)
+                if context:has_menu() then
+                    context:set_option("_hide_candidate", false)
+                    context:highlight(0)
+                    return kAccepted
+                end
+                return result
+            end
+            if context:has_menu() then
+                local segment = context.composition:back()
+                local next_index = segment.selected_index + 1
+                if not segment:get_candidate_at(next_index) then
+                    next_index = 0
+                end
+                context:highlight(next_index)
+                return kAccepted
+            end
+        elseif keycode == kReturn and not context:get_option("_hide_candidate") and context:has_menu() then
+            context:commit()
             return kAccepted
         end
-        return result
     end
 
     return kana_speller.func(key_event, env)
