@@ -26,7 +26,7 @@ apply:
 test-rime:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd dotfiles/ime/rime
+    cd dotfiles/rime
     lua5.4 tests/candidate_gate.test.lua lua/kagiroi/candidate_gate.lua
     lua5.4 tests/rime_controls.test.lua lua/kagiroi/rime_controls.lua
     lua5.4 tests/rime_ascii_toggle.test.lua lua/kagiroi/rime_ascii_toggle.lua

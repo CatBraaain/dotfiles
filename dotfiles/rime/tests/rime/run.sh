@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and run the headless librime behavior harness for the managed Kagiroi
 # config. The workspace under /tmp mirrors the deployed layout: managed files
-# from dotfiles/ime/rime and stock Kagiroi files from the local mirror. The
+# from dotfiles/rime and stock Kagiroi files from the local mirror. The
 # deploy cache is reused across runs; pass --clean to rebuild it.
 # Options: --clean  rebuild the workspace from scratch
 #          --verbose print compositions and candidate menus

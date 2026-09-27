@@ -9,7 +9,7 @@ externalSkills:
       - gitalias.txt
 
   rimeinn/rime-kagiroi:
-    destination: ime/rime
+    destination: rime
     entries:
       - kagiroi.manual.dict.yaml
       - kagiroi.mozc.dict.yaml

@@ -2,11 +2,11 @@
  * Headless behavior harness for the managed Kagiroi Rime config.
  *
  * The workspace argument must contain the deployed layout: the managed files
- * from dotfiles/ime/rime (default.custom.yaml, kagiroi.custom.yaml, the custom
+ * from dotfiles/rime (default.custom.yaml, kagiroi.custom.yaml, the custom
  * dictionaries and lua/) plus the stock Kagiroi schema, dictionaries and lua/
  * from the local mirror. run.sh assembles it and compiles this file.
  *
- * Scenario order follows dotfiles/ime/rime/SPEC.md: input and conversion
+ * Scenario order follows dotfiles/rime/SPEC.md: input and conversion
  * (schema, n-run correction, first candidate), then common key handling
  * (Zenkaku_Hankaku, Henkan, candidate gate).
  *
