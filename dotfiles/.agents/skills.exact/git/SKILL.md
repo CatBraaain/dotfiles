@@ -13,17 +13,17 @@ git の commit・branch・push・PR に関する判断規則を所有する。
 リポジトリ固有の規約が、常に本標準の一般規則より優先する。
 
 - 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
-- 適用しない: コード変更そのものの品質（coding-standard 等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（AGENTS.md の「Git worktree 運用」が所有）。
+- 適用しない: コード変更そのものの品質（coding-standard 等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（`~/.pi/agent/AGENTS.md` の「Git Worktree Strategy」が所有）。
 
 ## Decision Ladder: リポジトリ規約の確認
 
-PR を作成する前に、このラダーで対象リポジトリの規約を特定する。通常の commit・branch・merge の操作ではこのラダーを実行せず、既に特定済みの規約と本標準の一般規則で進める。
+PR の作成前、および commit・branch・merge の操作前に対象リポジトリの必要な規約が未確認なら、このラダーで特定する。既に確認済みの規約は再調査せず、本標準の一般規則と併せて適用する。
 
 目標: branch 運用・commit 規約・PR 手順を、観測可能な根拠（ドキュメントの該当箇所・履歴）で特定する。
 
 最初に成立する段で止まる。
 
-1. 条件: ローカルのリポジトリに規約を述べたドキュメントがあり、branch・commit・PR の必要な規約が特定できるか？
+1. 条件: ローカルのリポジトリに規約を述べたドキュメントがあり、今回の操作に必要な規約が特定できるか？
    行動: CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit 規約・PR 手順を読む。
 2. 条件: ドキュメントに規約がなく、同一形式のコミット・branch 名が履歴に繰り返し現れ、慣習が一貫して観測できるか？
    行動: `git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch 命名・PR 運用の実績を読む。
@@ -52,8 +52,12 @@ add/reset によって分割する場合、確認済みの分割対象を一時 
 
 **1. 分割前 — バックアップの作成**
 
+WIP commit 前に index 全体を確認する。既に staged の変更に承認済みの分割対象以外が含まれる場合は、index を変更せず停止して user に確認する。`git add` 後も index 全体が承認済みの分割対象だけであることを確認し、一致した場合のみ WIP commit を作成する。
+
 ```sh
+git diff --cached                  # 既存の staged 変更を全件確認する
 git add <確認済みの分割対象>
+git diff --cached                  # WIP commit 直前に index 全体を再確認する
 git commit -m "WIP: backup before split"
 git branch backup/split-$(date +%Y%m%d-%H%M%S)
 ```
@@ -69,20 +73,16 @@ git reset --soft <commit>^      # 既存 commit を分割し直すとき（分�
 
 ```sh
 git diff backup/split-<timestamp> HEAD   # 差分が空であること
-git status                               # 分割対象の変更が残っていないこと
+git status                               # 未コミット変更を確認する
 ```
 
-- 差分が空なら変更を失っていない。バックアップ branch を削除する:
+- 差分が空で、分割対象の未コミット変更や分割中に加わった編集がなければ、バックアップ branch を削除する:
 
 ```sh
 git branch -D backup/split-<timestamp>
 ```
 
-- 差分が出たらコミット漏れか誤削除である。バックアップへ戻して分割をやり直す:
-
-```sh
-git reset --hard backup/split-<timestamp>
-```
+- 差分がある、または分割中に加わった編集がある場合は、バックアップ branch・worktree・index を保持して停止する。差分と `git status` を提示し、復旧方法は user に確認する。
 
 ### コミット作成の境界
 
@@ -120,12 +120,12 @@ branch 名・分岐元は、リポジトリの branch strategy に従う。文�
 
 PR を作る前に、次を評価する。
 
-| 観点 | 確認すること | 根拠の例 |
-| --- | --- | --- |
-| 受付可否 | PR・issue を受け付けているか | archive 状態、contributing guide、maintainer の発言 |
-| 手順 | 要求される手順を満たすか | issue 先行、discussion、CLA/DCO 署名 |
-| スコープ | 変更が1目的にまとまっているか | コミット分割と同じ論理単位で分割できるか |
-| 既存案 | 同一変更の PR・issue が既にないか | issue・PR 検索 |
+| 観点     | 確認すること                      | 根拠の例                                            |
+| -------- | --------------------------------- | --------------------------------------------------- |
+| 受付可否 | PR・issue を受け付けているか      | archive 状態、contributing guide、maintainer の発言 |
+| 手順     | 要求される手順を満たすか          | issue 先行、discussion、CLA/DCO 署名                |
+| スコープ | 変更が1目的にまとまっているか     | コミット分割と同じ論理単位で分割できるか            |
+| 既存案   | 同一変更の PR・issue が既にないか | issue・PR 検索                                      |
 
 ## 外部リポジトリへの PR での AI 利用の開示
 
@@ -134,10 +134,10 @@ user が所属しないリポジトリへの PR でのみ適用する。所属�
 - PR 本文の末尾に、次の形式の trailer を付ける:
 
   ```
-  Assisted-by: pi:glm-5.3
+  Assisted-by: pi:<PI_MODEL>
   ```
 
-  モデル名は `PI_MODEL` 環境変数の値を使う。pi 以外のツールなら `<tool>:<model>` の形式で実態を書く。
+  PR 本文を作成する時点で `<PI_MODEL>` を `PI_MODEL` 環境変数の値に置き換える。pi 以外のツールなら `<tool>:<model>` の形式で実態を書く。
 
 ## 出力
 

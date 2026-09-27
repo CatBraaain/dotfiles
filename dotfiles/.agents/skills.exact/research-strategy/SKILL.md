@@ -35,7 +35,7 @@ Starsだけで成熟度を断定せず、複数の採用シグナルで評価す
 
 ## ローカルミラー
 
-OSS の実装・挙動は、ドキュメントとソースを横断して実ファイルから確認する。ウェブのドキュメントサイトでは定義、呼び出し元、テスト、CHANGELOG、ドキュメントを一意に往復できない。
+OSS の実装・挙動は、同じ ref のドキュメントとソースをローカルミラーの Git オブジェクトから確認する。ウェブのドキュメントサイトでは定義、呼び出し元、テスト、CHANGELOG、ドキュメントを一意に往復できない。
 
 ミラーは URL から `~/mirrors/<host>/<owner>/<repo>` に配置する。ホストで分けることで同名リポジトリの衝突を防ぐ。
 
@@ -56,53 +56,56 @@ flowchart TD
   Q -->|"サイトからの大量取得"| D["D · ブラウザでキャプチャ → API を fetch/curl 再生<br/>web 可"]
 ```
 
-| 目的 | 手段 | web | 欲しいもの |
-|---|---|---|---|
-| OSS の実装・挙動 | ローカルミラーの実ファイル | 禁 | 正確な挙動・根拠 |
-| 公式情報（仕様・非OSS） | 公式ドキュメント | 可 | 仕様・API・保証 |
-| 人々の実感・トラブル | reddit・技術記事・issue | 可 | 落とし穴・比較・実感 |
-| サイトからの大量取得 | ブラウザでキャプチャ → API を fetch/curl 再生 | 可 | 構造化データの安定取得 |
+| 目的                    | 手段                                          | web | 欲しいもの             |
+| ----------------------- | --------------------------------------------- | --- | ---------------------- |
+| OSS の実装・挙動        | ローカルミラーの実ファイル                    | 禁  | 正確な挙動・根拠       |
+| 公式情報（仕様・非OSS） | 公式ドキュメント                              | 可  | 仕様・API・保証        |
+| 人々の実感・トラブル    | reddit・技術記事・issue                       | 可  | 落とし穴・比較・実感   |
+| サイトからの大量取得    | ブラウザでキャプチャ → API を fetch/curl 再生 | 可  | 構造化データの安定取得 |
 
 ## OSS の実装・挙動
 
-実リポジトリを `~/mirrors` にクローン（既存なら fetch）し、**ドキュメントもソースも実ファイルとして**追う。web_fetch / web_search は一切使わない。
+実リポジトリを `~/mirrors` にクローン（既存なら fetch）し、選んだ ref のドキュメントもソースも Git に記録された実ファイルの内容を追う。web_fetch / web_search は一切使わない。
 
 ### 作業フロー
 
 ```mermaid
 flowchart LR
-  CL["クローン / 最新化<br/>~/mirrors/host/owner/repo"] --> DOC["ドキュメント<br/>README · CHANGELOG · docs/"]
-  DOC --> SRC["ソース<br/>grep → read（定義→呼び出し→テスト）"]
-  SRC --> OUT["出力<br/>ファイル:行 で根拠"]
+  CL["クローン / fetch<br/>~/mirrors/host/owner/repo"] --> REF["ref を選び commit を確定"]
+  REF --> DOC["同じ commit の文書<br/>README · CHANGELOG · docs/"]
+  DOC --> SRC["同じ commit のソース<br/>定義→呼び出し→テスト"]
+  SRC --> OUT["出力<br/>commit · ファイル:行 で根拠"]
 ```
 
-### クローンまたは最新化
+### クローンと ref の選択
+
+`~/mirrors/<host>/<owner>/<repo>` にクローンし、既存なら `origin` の URL が対象リポジトリと一致することを確認してから fetch する。取得に失敗したら、古い内容を最新として扱わず停止する。
 
 ```bash
 DEST=~/mirrors/github.com/owner/repo
+URL=https://github.com/owner/repo.git
 
 if [ -d "$DEST/.git" ]; then
-  git -C "$DEST" fetch --all --prune      # 既存なら最新化
+  if [ "$(git -C "$DEST" remote get-url origin)" != "$URL" ]; then
+    echo "Mirror origin does not match the requested repository" >&2
+    exit 1
+  fi
+  git -C "$DEST" fetch origin --prune --tags
 else
   mkdir -p "$(dirname "$DEST")"
-  git clone https://github.com/owner/repo.git "$DEST"
+  git clone "$URL" "$DEST"
 fi
 ```
 
-特定バージョンを見たい場合は最新化のうえチェックアウトする:
-
-```bash
-git -C "$DEST" checkout <tag-or-branch>
-```
+依頼に版・branch・commit の指定があればその tag（`refs/tags/<tag>`）、取得済みの remote branch（`refs/remotes/origin/<branch>`）、または commit ID を `REF` とする。指定がなければ `git -C "$DEST" ls-remote --symref origin HEAD` で現行のデフォルト branch を確認し、対応する `refs/remotes/origin/<branch>` を選ぶ。remote HEAD を特定できない場合や ref を取得できない場合は停止する。`COMMIT=$(git -C "$DEST" rev-parse --verify "$REF^{commit}")` で commit ID を確定し、以下はその commit を使う。`fetch` は作業ツリーを更新しないため、作業ツリーの `HEAD` やファイルを選んだ ref の内容とみなさない。checkout・reset で既存の変更を上書きしない。
 
 ### ドキュメント
 
-クローン先の実ファイルだけを読む。web は使わない。
+選んだ commit の記録済みファイルを読む。web は使わない。
 
-```
-read $DEST/README.md
-read $DEST/CHANGELOG.md
-ls  $DEST/docs          # docs/, doc/, wiki 等の配置を確認
+```bash
+git -C "$DEST" ls-tree -r --name-only "$COMMIT"  # README, CHANGELOG, docs/ 等を探す
+git -C "$DEST" show "$COMMIT:README.md" | nl -ba
 ```
 
 確認する:
@@ -113,12 +116,14 @@ ls  $DEST/docs          # docs/, doc/, wiki 等の配置を確認
 
 ### ソース
 
-grep で入り口を特定し、read で実装を追う。
+同じ commit のファイルを検索し、内容と行番号を確認して実装を追う。
 
 ```bash
-rg -n "<function-or-symbol>" "$DEST"
-rg -n "class <Name>"        "$DEST/src"
+git -C "$DEST" grep -n "<function-or-symbol>" "$COMMIT" --
+git -C "$DEST" show "$COMMIT:path/to/source" | nl -ba
 ```
+
+作業ツリーを使うツールしか利用できない場合は、`git -C "$DEST" status --porcelain --untracked-files=all` が空で、`git -C "$DEST" rev-parse HEAD` が選んだ commit と一致するときだけ読む。どちらかを確認できない、または条件を満たさない場合は停止し、checkout・reset・clean でユーザーの変更を消さない。
 
 - 定義 → 呼び出し元 → テスト を往復して挙動を確定する。
 - テスト（`test/`, `tests/`, `*_test.*`）は期待挙動の仕様書として使う。
@@ -136,12 +141,12 @@ OSS の実装ではなく仕様・公式の挙動を知りたいとき、また�
 
 公式情報では分からない「実際どうなのか」を知りたいときは、コミュニティの声を当たる。実装の正確性は出ない代わり、運用上の落とし穴・比較・実感が手に入る。
 
-| 情報源 | 得られるもの |
-|---|---|
-| reddit（r/&lt;lang&gt;, r/&lt;framework&gt;） | 生の感想・比較・不満 |
-| 技術ブログ（Zenn・Qiita・dev.to・Medium） | ハマりどころ・工夫 |
-| GitHub Issues / Discussions | 同じ問題に遭った人・公式回答 |
-| Stack Overflow | Q&A・解決策 |
+| 情報源                                        | 得られるもの                 |
+| --------------------------------------------- | ---------------------------- |
+| reddit（r/&lt;lang&gt;, r/&lt;framework&gt;） | 生の感想・比較・不満         |
+| 技術ブログ（Zenn・Qiita・dev.to・Medium）     | ハマりどころ・工夫           |
+| GitHub Issues / Discussions                   | 同じ問題に遭った人・公式回答 |
+| Stack Overflow                                | Q&A・解決策                  |
 
 - 一次情報で確定できることは OSS の実装・挙動または公式情報で終わらせ、この節は補完に使う。
 - 口コミ単体で結論を出さず、複数ソースの傾向として読む。
@@ -163,4 +168,6 @@ Access Denied 等でブロックされたら、順に試す。
 
 ## 出力
 
-確認したファイルパス・シンボルを行番号付きで明示し、実コードを根拠に結論を述べる。「たぶん」でなく、実リポジトリの実ファイルを根拠にする。
+- OSS の実装・挙動: 確認した commit ID、リポジトリ相対のファイルパス・行番号、該当するシンボルを示し、選んだ commit の実コードとドキュメントを根拠に結論を述べる。作業ツリーのパスを、そこに存在しない版の内容へのリンクとして扱わない。
+- 公式仕様・プロプライエタリ・SaaS: 一次情報の URL、確認日、分かる場合は対象バージョンと公開・更新日を示す。ソースを読んでいない場合はコードのパス・シンボルを要求しない。
+- コミュニティの実感・トラブル: 証言ごとの URL、確認日、分かる場合は投稿日時と対象バージョンを示し、公式仕様や実装の根拠とは区別する。ソースを読んでいない場合はコードのパス・シンボルを要求しない。

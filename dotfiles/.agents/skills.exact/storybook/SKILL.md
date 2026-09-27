@@ -10,22 +10,22 @@ Storybook 10 系を対象に、開発に不要な UI 要素と通信を抑えた
 
 ## 導入時
 
-`npx storybook@latest init` をプロジェクトルートで実行する。対話プロンプト "New to Storybook?" には No を選ぶ。No は onboarding addon なしの minimal setup になる。デモ stories は No を選んでも `src/stories/**` に生成されるため、「デモ stories の除去」を必ず適用する。
+プロジェクトルートで、既に Storybook 10 系がインストールされていればそのローカル CLI を使う。未導入なら `npx storybook@10 init` を使い、10 系に限定する。既存の Storybook が 10 系以外なら init を実行しない。対話プロンプト "New to Storybook?" には No を選ぶ。No は onboarding addon なしの minimal setup になる。デモ stories は No を選んでも生成されるため、「デモ stories の除去」を適用する。
 
-非対話実行（エージェント等）では対話プロンプトへのパイプ入力に頼らず、`--agent` と onboarding を含まない `--features` を指定する:
+非対話実行（エージェント等）ではパイプ入力や全機能を有効にする `--yes` に頼らず、`--agent` と onboarding を含まない `--features` を使う。必要な機能だけを、対象の 10 系 CLI が受け付ける feature 名で追加する。機能が不要なら空の `--features` 指定を使う（対象 CLI が空指定を受け付けない場合は実行せず、非対話で無機能を選べる手順を確認する）:
 
 ```bash
-npx storybook@latest init --agent --features docs test a11y ai
+npx storybook@10 init --agent --features
 ```
 
-導入後に onboarding・addon panel・telemetry 等の設定は後述の節に従って適用する。
+既存の 10 系を使う場合は上記の `npx storybook@10` を `npx --no-install storybook` に置き換える。導入後に onboarding・addon panel・telemetry 等の設定は後述の節に従って適用する。
 
 ## onboarding の無効化
 
-既存プロジェクトで `@storybook/addon-onboarding` が有効なときは、次のコマンドでパッケージを削除する:
+既存の Storybook 10 系プロジェクトで `@storybook/addon-onboarding` が有効なときは、そのローカル CLI でパッケージを削除する:
 
 ```bash
-npx storybook@latest remove @storybook/addon-onboarding
+npx --no-install storybook remove @storybook/addon-onboarding
 ```
 
 実行後、`.storybook/main.ts` の `addons` 配列を確認し、`@storybook/addon-onboarding` が残っていれば手動で取り除く。
@@ -56,8 +56,8 @@ addons.setConfig({
 
 addon panel に加えて、sidebar の root を見出しとして表示しない。同じ `setConfig` に追加する:
 
-| 目的 | 設定 |
-| --- | --- |
+| 目的                                     | 設定                            |
+| ---------------------------------------- | ------------------------------- |
 | sidebar の root 見出しスタイルを解除する | `sidebar: { showRoots: false }` |
 
 `showRoots: false` は root の行そのものを消さない。大文字の見出しスタイル（`TEST`）が通常の行スタイル（`Test`）に変わるだけである。
@@ -80,4 +80,4 @@ core: {
 
 ## デモ stories の除去
 
-`init` が `src/stories/**` を生成したときは、学習用サンプルであるため導入直後に残さない。ディレクトリごと削除し、`main.ts` の `stories` 配列から `src/stories` のみにマッチする専用エントリ (`./src/stories/**/*.stories.ts` 等) を取り除く。汎用の glob (`../src/**/*.stories.*` 等) は実際のコンポーネントの stories をカバーするため残す。取り除いた後に実際のコンポーネントの stories が `stories` 配列でカバーされていることを確認する。ユーザーが学習用に残すことを明示した場合は削除しない。
+`init` の前後でファイルを比較し、生成された学習用サンプルだけを特定して削除する。`src/stories/**` に既存の実 stories があっても、ディレクトリごと削除しない。`main.ts` の `stories` 配列では、削除したデモ stories だけにマッチする専用エントリ (`./src/stories/**/*.stories.ts` 等) を取り除く。既存の実 stories にもマッチするエントリと汎用の glob (`../src/**/*.stories.*` 等) は残す。実 stories が引き続き `stories` 配列でカバーされていることを確認する。ユーザーが学習用に残すことを明示した場合はデモ stories も削除しない。

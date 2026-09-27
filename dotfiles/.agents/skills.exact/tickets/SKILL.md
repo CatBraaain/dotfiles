@@ -12,18 +12,16 @@ description: >-
 
 - 1 ticket = 1 markdown ファイル。`~/.agents/tickets/<project>/` 配下に置く。`<project>` は対象リポジトリのルートディレクトリ名。リポジトリ外の問題ならカレントディレクトリ名
 - ticket 操作の対象ストアは、user が対象 project（全 project 横断を含む）を明示しない限り、現在のプロジェクト（セッション cwd のリポジトリ名、リポジトリ外ならカレントディレクトリ名）の 1 つに限る。着手対象の選定（例: 「次の ticket」「open ticket を処理して」）もこの範囲から行い、他 project の ticket を候補に含めない
-- ファイル名は `<YYYYMMDD-HHMMSS>_<slug>.md`。ID と slug の境界は `_`、フィールド内の区切りは `-` にする。`<slug>` は原則、問題を表す日本語（例: `workerのメモリリーク`）。英語で書くときは kebab-case にする（例: `memory-leak-in-worker`）。いずれもスペースを含めない。ID は ticket tool / CLI がローカル時刻とタイトルから採番する。fs tools で直接起票するときは `date +%Y%m%d-%H%M%S` で日時部分を採番し（ローカル時刻）、同一 ID のファイルが既にあるときは衝突しなくなるまで +1 秒ずらす
-- ticket の ID はファイル名から拡張子を除いたもの
+- ファイル名は `<YYYYMMDD-HHMMSS>.md`。ID はファイル名から拡張子を除いた文字列で、ticket tool / CLI がローカル時刻から採番する。fs tools で直接起票するときは `date +%Y%m%d-%H%M%S` で採番し（ローカル時刻）、同一 ID のファイルが既にあるときは衝突しなくなるまで +1 秒ずらす
 
 ## ファイル形式
 
-各Ticketは1つのMarkdownファイルとして保存する。
+各 ticket は1つの Markdown ファイルとして保存する。
 
 ```md
 ---
-status: open
-depends_on:
-  - 20250214-103000_memory-leak-in-worker
+status: blocked
+after: 20260918-125653
 ---
 
 # Ticket title
@@ -31,10 +29,9 @@ depends_on:
 Ticket body
 ```
 
-* `status` はfrontmatterで管理する。project はディレクトリで表現するため、frontmatter には書かない
-* `depends_on` は、着手の前に完了しているべき ticket の ID を配列で書く。同じ `<project>/` 配下の ticket を指定し、依存がなければ省略する。書く・編集するときは、指定した ID が存在することを確認する
-* Ticketの内容はMarkdown本文で管理する。タイトルは H1 とし、日本語で書いてよい。本文には必要な見出しだけを足す
-* ファイル名やIDの規則は、既存のTicketに合わせる
+- `status` は frontmatter で管理する。project はディレクトリで表現するため、frontmatter には書かない
+- `after` は着手前に完了を待つ同一 `<project>/` 内の ticket の ID を単一の文字列で指定する。依存がなければ省略する。新たに指定できるのは存在する未完了の ticket（`closed`・`cancelled` を除く）だけで、複数の依存は表現できない。`after` だけを指定すると未解決の間 `blocked` になり、解除すると `blocked` から `open` に戻る。status を同時に明示した場合はその値が優先される
+- ticket の内容は Markdown 本文で管理する。タイトルは H1 とし、日本語で書いてよい。本文には必要な見出しだけを足す
 
 ### fs tools で直接起票するときのファイルテンプレート
 
@@ -56,7 +53,7 @@ status: open
 （対処内容。後で対処する人が着手・完了を判断できる観測可能な形で）
 ```
 
-着手して対処したチケットは、`closed` への書き換えとともに、本文へグローバル AGENTS.md の Report Format を流用した対処記録を追記する。実施要約の本文数行、変更表、検証表、commit 参照を書く。報告見出し（`## <絵文字> <ラベル> — <要約>`）と `worktree:` 行・`ticket:` 行はチャット報告の仪式のため含めない。チケットには H1 タイトルと status frontmatter が既にあるためである。
+着手して対処したチケットを `closed` にするときは、本文へグローバル AGENTS.md の Report Format を流用した対処記録を追記する。実施要約の本文数行、変更表、検証表、commit 参照を書く。本文追記と status 変更は別操作であり、追記してから `closed` にする。報告見出し（`## <絵文字> <ラベル> — <要約>`）と `worktree:` 行・`ticket:` 行はチャット報告の形式のため含めない。チケットには H1 タイトルと status frontmatter が既にあるためである。
 
 ```md
 ## 実施
@@ -65,14 +62,14 @@ status: open
 
 ## 変更
 
-| ファイル | 変更内容 |
-| --- | --- |
+| ファイル       | 変更内容       |
+| -------------- | -------------- |
 | `path/to/file` | 変更内容の要約 |
 
 ## 検証
 
-| 種別 | 実行内容 | 結果 |
-| --- | --- | --- |
+| 種別 | 実行内容   | 結果      |
+| ---- | ---------- | --------- |
 | test | `bun test` | ✅ passed |
 
 ## 参照
@@ -82,11 +79,11 @@ status: open
 
 チケット種別ごとの使い分け:
 
-| チケット種別 | 起票時 | 対処完了時 |
-| --- | --- | --- |
-| 作業着手の自動起票（「着手前に自動起票する」） | `ticket_create` の `title` と `body` を分けて渡す。fs tools で直接起票するときはファイルテンプレートを適用する | 追記を必ず入れる |
-| 後回し記録（「発見時に記録する」） | 「背景」に観測事実（場所・内容・出力）を書く。「要件」は対処方針が決まっているときだけ書く | 対処するセッションが追記を入れる |
-| user 指示起票（「明示依頼で操作する」） | user の指示内容を優先し、`ticket_create` の `title` と `body` を分けて渡す。fs tools で直接起票するときはファイルテンプレートを適用する | 対処した場合は追記を入れる |
+| チケット種別                                   | 起票時                                                                                                                                  | 対処完了時                       |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| 作業着手の自動起票（「着手前に自動起票する」） | `ticket_create` の `title` と `body` を分けて渡す。fs tools で直接起票するときはファイルテンプレートを適用する                          | 追記を必ず入れる                 |
+| 後回し記録（「発見時に記録する」）             | 「背景」に観測事実（場所・内容・出力）を書く。「要件」は対処方針が決まっているときだけ書く                                              | 対処するセッションが追記を入れる |
+| user 指示起票（「明示依頼で操作する」）        | user の指示内容を優先し、`ticket_create` の `title` と `body` を分けて渡す。fs tools で直接起票するときはファイルテンプレートを適用する | 対処した場合は追記を入れる       |
 
 ## いつ使うか
 
@@ -96,27 +93,27 @@ status: open
 
 成果物を伴う作業（コード・ドキュメント・設定の変更、ファイル作成・削除、worktree 作業など）に着手するときは、対処の内容を ticket として起票してから着手する。起票の判断は agent が行い、起票のための追加確認はしない。ticket が作業ログの役割を兼ねる。起票時は `ticket_create` の `title` と `body` を分け、fs tools で直接起票するときはファイルテンプレートに従う。対処完了時の追記は「テンプレート」（ファイル形式）に従う。
 
-* 適用する: 成果物を伴う作業の着手。軽微な修正を含む。ticket は着手までの間 `open`、作業を始めた時点で `locked` にする
-* 適用しない: 読み取り専用の調査・検索・検証、質問・相談への回答
-* 適用しない: user による起票指示。「明示依頼で操作する」に従い、調査・レビューなどファイル編集を伴わない対象も起票してよい
-* 適用しない: 作業中に見つけた依頼外課題。「発見時に記録する」に従い、その場で直さない問題だけを起票する
+- 適用する: 成果物を伴う作業の着手。軽微な修正を含む。ticket は着手までの間 `open`、作業を始めた時点で `locked` にする
+- 適用しない: 読み取り専用の調査・検索・検証、質問・相談への回答
+- 適用しない: user による起票指示。「明示依頼で操作する」に従い、調査・レビューなどファイル編集を伴わない対象も起票してよい
+- 適用しない: 作業中に見つけた依頼外課題。「発見時に記録する」に従い、その場で直さない問題だけを起票する
 
 ### 発見時に記録する
 
-作業・レビュー・検証中に問題を見つけたときは、依頼の変更を完了するために必要か、依頼対象の挙動に直接関係するかで扱いを決める。
+コード・文書等の変更依頼で問題を見つけたときは、依頼達成に必要か、依頼対象の挙動に直接関係するかで扱いを決める。
 
-* 依頼達成に必要、または依頼対象の挙動に直接関係する問題は、現在のセッションの変更範囲に含め、その場で修正する
-* 依頼と無関係に偶然発見した問題、または現在の依頼の目的・契約に影響しない独立した問題は、その場では修正せず別チケットにする
-* user が後回しを判断した問題（「あとで直して」「今回は置いといて」）は、関連性にかかわらず別チケットにする
-* 現タスクの外で対処すべき懸念（spec 乖離、性能懸念、設計上の疑問）は、別チケットにする
+- 依頼達成に必要、または依頼対象の挙動に直接関係する問題は、明示された変更範囲内ならその場で修正する
+- 依頼と無関係に偶然発見した問題、または現在の依頼の目的・契約に影響しない独立した問題は、その場では修正せず別チケットにする
+- user が後回しを判断した問題（「あとで直して」「今回は置いといて」）は、関連性にかかわらず別チケットにする
+- 現タスクの外で対処すべき懸念（spec 乖離、性能懸念、設計上の疑問）は、別チケットにする
 
 関連性や変更範囲の判断が曖昧なときは、user に確認してから決める。起票しないのは、その場で修正する問題、user が対処不要と判断した問題である。
 
-review の指摘を扱うときは、review skill の重要度（高・中・低）と依頼への関連性で起票と対処を切り分ける。
+レビューのみの依頼では対象を修正せず、依頼対象の指摘を評価・報告する。後続の修正依頼があった場合だけ、変更範囲内の指摘を修正する。レビュー中に偶然見つけた依頼対象外の課題や user が後回しを決めた課題は、review skill の重要度（高・中・低）で起票を切り分ける。
 
-* 高（放置すると目的または契約の達成を妨げる）: 依頼・変更スコープ内の指摘はその場で修正するため起票しない。スコープ外の指摘はその場では修正せず、起票する
-* 中（放置しても目的または契約は達成されるが対処する価値がある）: 依頼の変更に直接関係する指摘はその場で修正する。無関係な指摘は起票して別途対応する
-* 低（対処しなくてもよい参考指摘）: 起票しない。報告や review ワークファイルに参考として残す
+- 高（放置すると目的または契約の達成を妨げる）: レビュー対象の指摘は修正せず報告する。依頼対象外または user が後回しを決めた課題は起票する。変更依頼の範囲内なら修正するため起票せず、範囲外なら起票する
+- 中（放置しても目的または契約は達成されるが対処する価値がある）: レビュー対象の指摘は修正せず報告する。依頼対象外または user が後回しを決めた課題は起票する。変更依頼に直接関係し範囲内なら修正し、無関係なら起票する
+- 低（対処しなくてもよい参考指摘）: 起票しない。報告や review ワークファイルに参考として残す
 
 起票前に同じ `<project>/` 配下の `open` または `draft` ticket を読み、重複があれば新規に起票せず既存 ticket の本文に補足を追記する。
 
@@ -132,43 +129,46 @@ review の指摘を扱うときは、review skill の重要度（高・中・低
 
 使用できるstatusは以下の6つ。
 
-* `draft`: アイデアなどを溜めている途中段階。open ではないため即座に取り掛からない
-* `open`: 未着手
-* `blocked`: 外部要因（依存 ticket の未完了を含む）の解消を待っており、着手条件が満たされていない。着手しない
-* `locked`: 別のセッションが対処を保持している（排他）。着手しない
-* `closed`: 完了
-* `cancelled`: 中止
+- `draft`: アイデアなどを溜めている途中段階。open ではないため即座に取り掛からない
+- `open`: 未着手
+- `blocked`: 外部要因（依存 ticket の未完了を含む）の解消を待っており、着手条件が満たされていない。着手しない
+- `locked`: 別のセッションが対処を保持している（排他）。着手しない
+- `closed`: 完了
+- `cancelled`: 中止
 
 遷移のタイミング:
 
-| タイミング | status |
-| --- | --- |
-| 起票時 | `open`。user の明示依頼でアイデア等を溜めるときのみ `draft` で起票する |
-| user の明示依頼で draft を昇格させるとき | `open` |
-| ticket の対処に着手したとき（調査を含む） | `locked` |
-| 外部要因の解消を待つことになったとき | `blocked`。待つ理由と解除条件を本文に書く |
-| 起票・更新で `depends_on` に `closed` 以外の ticket があるとき | `blocked`。待つ理由（依存先 ID）と解除条件を本文に書く |
-| blocked の解除条件が満たったとき | `open` |
-| 依存先の `closed` により `depends_on` が全て解決したとき | `open` |
-| 対処が完了し問題が解消したとき | `closed`。対処したチケットは「テンプレート」の対処完了時の追記を本文へ入れる |
-| 対処しないことになったとき（重複、意図した挙動、user 判断） | `cancelled`。理由を本文に追記する |
+| タイミング                                                  | status                                                                            |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 起票時                                                      | `open`。user の明示依頼でアイデア等を溜めるときのみ `draft` で起票する            |
+| user の明示依頼で draft を昇格させるとき                    | `open`                                                                            |
+| ticket の対処に着手したとき（調査を含む）                   | `locked`                                                                          |
+| 外部要因の解消を待つことになったとき                        | `blocked`。待つ理由と解除条件を本文に書く                                         |
+| 起票・更新で未解決の `after` を指定したとき                 | `blocked`（status を明示しない場合）。待つ理由（依存先 ID）と解除条件を本文に書く |
+| blocked の外部要因が解消したとき                            | `open`                                                                            |
+| `after` を解除したとき                                      | `blocked` なら `open`（status を明示しない場合）                                  |
+| 依存先を `closed` にしたとき                                | 同一 project の `after` に持つ `blocked` ticket は自動で `open`                   |
+| 対処が完了し問題が解消したとき                              | `closed`。対処したチケットは「テンプレート」の対処完了時の追記を本文へ入れる      |
+| 対処しないことになったとき（重複、意図した挙動、user 判断） | `cancelled`。理由を本文に追記する                                                 |
 
-`open` から `locked` を経由せず直接 `closed` にしてよい（外部要因で解消した場合など）。status の書き換えで本文を書き換えない。
+`open` から `locked` を経由せず直接 `closed` にしてよい（外部要因で解消した場合など）。単なる status 変更（例: `draft` から `open`、`open` から `locked`）では本文を編集しない。理由や対処記録が必要な遷移（外部要因による `blocked`、依存待ち、対処後の `closed`、`cancelled`）では、必要な本文を追記してから status を変更する。本文を編集せずに済む自動解放や、対処を伴わず解消した ticket の `closed` には不要な追記をしない。
 
-対処に着手するときは、まず user の承認を得る。agent が自ら選んだ ticket では、ticket ID、タイトル、内容の要約、考えている進め方を示して承認を求める。user が特定の ticket を明示した依頼なら、依頼自体が承認にあたる。着手してよいのは `status: open` かつ `depends_on` の全 ID が `closed` の ticket のみで、`draft`・`blocked`・`locked` には着手しない。draft に着手するときは、user の明示依頼で `open` へ昇格させてから行う。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `locked` に書き換えて着手する。同じ ticket への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
+対処に着手するときは、まず user の承認を得る。agent が自ら選んだ ticket では、ticket ID、タイトル、内容の要約、考えている進め方を示して承認を求める。user が特定の ticket を明示した依頼なら、依頼自体が承認にあたる。着手してよいのは `status: open` かつ `after` が未設定か依存先が `closed` の ticket のみで、`draft`・`blocked`・`locked` には着手しない。draft に着手するときは、user の明示依頼で `open` へ昇格させてから行う。承認を得たら、ファイル編集の開始を待たず、調査など対処に向けた作業を始めた時点で `status` を `locked` に書き換えて着手する。同じ ticket への重複着手（バッティング）を防ぐため。コード修正を伴う対処は、グローバル AGENTS.md の worktree 規約に従い worktree と branch を作って行う。
 
 `locked` は着手したセッションが対処を完了（`closed`）または取り下げ（`cancelled`）した時点で外れる。異常終了などで `locked` が残ったときは、user の指示で `open` に戻す。
 
-ticket を `closed` にするときは、依存されている ticket を探して解放する。`ticket_list`（CLI: `ticket list --all`）で `depends_on` を持つ ticket を見つけ、その `depends_on` が全て `closed` になっていれば `status` を `blocked` から `open` に戻す。tool / CLI が使えない環境では `grep -l 'depends_on' ~/.agents/tickets/<project>/*.md` で代用する。
+`ticket_set`（CLI: `ticket set`）で依存先を `closed` にすると、同一 project 内でその ID を `after` に持つ `blocked` ticket は自動で `open` に解放される。手動で解放しない。解放を確認する必要があるときは、同じ project の `ticket_list`（CLI: `ticket list --status blocked,open`）で候補を絞り、`ticket_show`（CLI: `ticket show <id>`）で各候補の `after` と status を読み取る。通常の一覧には `after` が表示されない。
 
 ## 操作
 
-Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_create` / `ticket_update`）を使う。tool が無い harness では `ticket` CLI（`ticket list` / `ticket show` / `ticket create` / `ticket update`）を bash で実行する。いずれも使えない環境では fs tools でストアを直接読み書きする。
+Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_create` / `ticket_set` / `ticket_edit`）を使う。tool が無い harness では `ticket` CLI（`ticket list` / `ticket show` / `ticket create` / `ticket set` / `ticket edit`）を bash で実行する。いずれも使えない環境では fs tools でストアを直接読み書きする。
 
-* 起票は `ticket_create`（CLI: `ticket create`）。ID は採番されるため、`title`・`body`・status・依存関係の引数を分けて渡す。`body` には frontmatter と H1 を含めず、H1 の直後に置く本文だけを渡す。上記のファイルテンプレートは fs tools で直接起票するときだけ使う
-* status 変更・`depends_on` 変更・本文の更新は `ticket_update`（CLI: `ticket update`）。frontmatter は `metadata` でキー指定し、本文は `body` で全文置換する。`closed` への変更と対処記録の追記は、`ticket_show` で本文を読み、対処記録を足した本文全文を `body` に渡して 1 回の呼び出しで行う
-* `locked` への重複変更、存在しない `depends_on`、`open` かつ依存未解決は tool・CLI が検証して失敗する。失敗したら ticket を読み直して判断する
-* CLI と tool の振る舞いの正本は `~/.agents/cli/ticket.spec.md`（CLI）と `~/.agents/cli/ticket-tools.spec.md`（tool）である
+- 起票は `ticket_create`（CLI: `ticket create '{"title":"Ticket title","body":"Ticket body"}'`）。ID は採番されるため、`title`・`body`・`status`・`after` の引数を分けて渡す。`body` には frontmatter と H1 を含めず、H1 の直後に置く本文だけを渡す。上記のファイルテンプレートは fs tools で直接起票するときだけ使う
+- status・`after` の変更は `ticket_set`（CLI: `ticket set <id> '{"status":"locked"}'`、依存設定なら `ticket set <id> '{"after":"20260918-125653"}'`、解除なら `ticket set <id> '{"after":null}'`）。変更対象を指定したフィールドだけを frontmatter で更新する。未解決の `after` の設定と解除は、status を明示しなければ status と連動する
+- 本文の更新は `ticket_edit`（CLI: `ticket edit <id> '<old>' '<new>'`）。先に `ticket_show` で最新の本文を読み、frontmatter を除く本文（H1 を含む）から一度だけ現れる文字列を `old` として指定する。`new` は置換後の文字列。0回または複数回の一致なら失敗する
+- 本文追記を要する `closed`・`blocked`・`cancelled` 等の遷移では、`ticket_edit` で必要な記録を追加してから `ticket_set` で status・`after` を変更する。両操作を原子的にまとめる tool / CLI はない。片方が失敗したら再実行を重ねず `ticket_show` で現状を確認してから対処する
+- `after` の不存在・`closed`・`cancelled` 指定や循環は tool・CLI が検証して失敗する。一方、`open` かつ依存未解決は `next` の対象外になるだけで、`set` 自体は許される。着手前には `ticket_show` で status と `after` を確認する
+- CLI と tool の振る舞いの正本は `~/.agents/cli/ticket.spec.md`（CLI）と `~/.agents/cli/ticket-tools.spec.md`（tool）である
 
 fs tools で直接読み書きするときは、本文は必要な箇所だけ編集し、可能な限り既存の内容を維持する。frontmatter も必要に応じて編集してよいが、完全な保護や構造の維持は保証しない。壊れた場合は内容を確認し、修正する。
 
@@ -178,6 +178,6 @@ Ticket の一覧は `ticket_list` を使う。status 絞り込みは `status` �
 
 ## 対象外
 
-* GitHub Issues 等の外部トラッカーの操作はしない
+- GitHub Issues 等の外部トラッカーの操作はしない
 
-fs tools で直接読み書きするのは、ticket tools と CLI がどちらも使えない環境のときだけである。tool・CLI が使える環境でストアの md ファイルを直接書き換えない（status 変更は `ticket_update`、起票は `ticket_create` を使う）。
+fs tools で直接読み書きするのは、ticket tools と CLI がどちらも使えない環境のときだけである。tool・CLI が使える環境でストアの md ファイルを直接書き換えない（status・`after` の変更は `ticket_set`、本文の変更は `ticket_edit`、起票は `ticket_create` を使う）。
