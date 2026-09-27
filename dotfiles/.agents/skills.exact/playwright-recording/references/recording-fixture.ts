@@ -18,23 +18,31 @@ export async function clickWithMotion(page: Page, locator: Locator): Promise<voi
   const box = await locator.boundingBox();
   if (!box) throw new Error("Cannot move to a locator without a visible bounding box");
 
-  const start = lastClickPositions.get(page) ?? { x: 0, y: 0 };
+  const previousClick = lastClickPositions.get(page);
+  const start =
+    previousClick ??
+    (await page.evaluate(() => ({
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    })));
+  await page.mouse.move(start.x, start.y);
   const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const durationMs = 200;
   const frames = 24;
   const startedAt = performance.now();
   for (let frame = 1; frame <= frames; frame++) {
-    const progress = frame / frames;
-    const eased = 1 - (1 - progress) * (1 - progress);
-    const waitMs = Math.max(0, durationMs * progress - (performance.now() - startedAt));
+    const waitMs = Math.max(0, (durationMs * frame) / frames - (performance.now() - startedAt));
     await new Promise((resolve) => setTimeout(resolve, waitMs));
+    const progress = Math.min(1, (performance.now() - startedAt) / durationMs);
+    const eased = progress * progress * (3 - 2 * progress);
     await page.mouse.move(
       start.x + (target.x - start.x) * eased,
       start.y + (target.y - start.y) * eased,
     );
+    if (progress >= 1) break;
   }
-  lastClickPositions.set(page, target);
   await locator.click();
+  lastClickPositions.set(page, target);
 }
 
 function installOverlay(): void {
