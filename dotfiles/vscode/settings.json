@@ -222,7 +222,7 @@
     // stdin->stdout formatters. prettier resolves bare plugin names from the CWD's node_modules,
     // so pass the absolute path of prettier-markdown-table installed in the global bun install.
     {
-      "command": "~/.bun/bin/prettier --parser markdown --plugin=~/.bun/install/global/node_modules/prettier-markdown-table/index.js",
+      "command": "~/.bun/bin/prettier --parser markdown --plugin=$HOME/.bun/install/global/node_modules/prettier-markdown-table/index.js",
       "languages": ["markdown"]
     },
     {
