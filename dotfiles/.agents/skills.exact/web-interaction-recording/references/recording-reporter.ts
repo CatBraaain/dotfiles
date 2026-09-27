@@ -32,11 +32,11 @@ export default class RecordingReporter implements Reporter {
       const output = join(outputDir, `${sanitizeFilename(title)}.mp4`);
       try {
         await convertVideo(input, output, title);
-        console.log(`[playwright-recording] ${title}: ${output}`);
+        console.log(`[web-interaction-recording] ${title}: ${output}`);
       } catch (error) {
         await unlink(output).catch(() => {});
         // Conversion failures must not alter the test result. Surface the missing artifact.
-        console.error(`[playwright-recording] Could not convert ${input}:`, error);
+        console.error(`[web-interaction-recording] Could not convert ${input}:`, error);
       }
     }
   }
@@ -48,7 +48,7 @@ function sanitizeFilename(title: string): string {
 }
 
 async function convertVideo(input: string, output: string, title: string): Promise<void> {
-  const directory = await mkdtemp(join(tmpdir(), "playwright-recording-"));
+  const directory = await mkdtemp(join(tmpdir(), "web-interaction-recording-"));
   try {
     const titleLines = title.replace(/\s+/g, " ").match(/.{1,36}(?=\s|$)|\S{1,36}/gu) ?? [title];
     const headerHeight = titleLines.length * 24 + 36;
