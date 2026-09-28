@@ -1186,7 +1186,7 @@ describe("manager CLI", () => {
     for (const args of [[], ["unknown"], ["apply", "extra"]]) {
       const result = await runManager(args);
       assert.equal(result.code, 1);
-      assert.match(result.stderr, /usage: bun dotfiles-manager\/cli\.ts/);
+      assert.match(result.stderr, /usage: bun dotfiles-manager/);
       assert.equal(result.stdout, "");
       assert.equal(await readFile(join(distRoot, "sentinel.txt"), "utf8"), "keep\n");
     }

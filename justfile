@@ -20,7 +20,7 @@ install:
   bun undotfiles/install/windows.ts
 
 apply:
-  bun dotfiles-manager/cli.ts apply
+  bun dotfiles-manager apply
 
 [linux]
 test-rime:
@@ -35,10 +35,10 @@ test-rime:
     bash tests/rime/run.sh
 
 diff:
-  bun dotfiles-manager/cli.ts diff
+  bun dotfiles-manager diff
 
 managed:
-  bun dotfiles-manager/cli.ts managed
+  bun dotfiles-manager managed
 
 [windows]
 winconfig:

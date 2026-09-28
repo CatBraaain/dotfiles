@@ -35,7 +35,7 @@ build が完了した dist が、差分検知の入力になる。
 | `just diff` | build と差分検知までを実行し、差分を表示する。home へ書き込まず、apply スクリプトを実行しない |
 | `just managed` | build を実行し、適用対象エントリの home 相対パス一覧を表示する。home を変更しない |
 
-`just apply` / `just diff` / `just managed` はそれぞれ `bun dotfiles-manager/cli.ts <apply|diff|managed>` を呼ぶ。内部 CLI は各サブコマンドで後続操作より先に build を実行し、build に失敗すると後続操作を実行せず非 0 で終了する。引数なし、不明なサブコマンド、余分な引数の場合は使用方法を表示して非 0 で終了し、build は実行しない。
+`just apply` / `just diff` / `just managed` はそれぞれ `bun dotfiles-manager <apply|diff|managed>` を呼ぶ。`bun` はディレクトリパスを package.json の `main` で解決するため、エントリファイル名を明示せずに呼べる。内部 CLI は各サブコマンドで後続操作より先に build を実行し、build に失敗すると後続操作を実行せず非 0 で終了する。引数なし、不明なサブコマンド、余分な引数の場合は使用方法を表示して非 0 で終了し、build は実行しない。
 
 内部 CLI の有効なコマンドでは、build とその後のコマンド別処理（apply / diff / managed）、個々の build フックについて、開始時と成功または失敗時に経過時間を秒単位で stdout に表示する。各行はステージ名またはフックの dist 相対パスを示し、フックの経過時間は各フックの開始から、ステージの経過時間は各ステージの開始から数える。最後にコマンド全体の成功または失敗と、コマンド開始からの経過秒数を stdout に表示する。ログは差分表示や `managed` のパス一覧と同じ stdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build 前に終了し、経過時間ログを出さない。
 

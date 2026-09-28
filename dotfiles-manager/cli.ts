@@ -16,7 +16,7 @@ declare global {
   }
 }
 
-const usage = "usage: bun dotfiles-manager/cli.ts <apply|diff|managed>";
+const usage = "usage: bun dotfiles-manager <apply|diff|managed>";
 
 export async function main(
   args: readonly string[],
