@@ -4,7 +4,6 @@ import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { FINISH_ERROR_PREFIX, RETRYABLE_PREFIX, handleFinishErrorMessage } from "./index";
 
-
 function assistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
     role: "assistant",

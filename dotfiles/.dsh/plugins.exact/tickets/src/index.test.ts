@@ -367,7 +367,10 @@ describe("tool descriptions", () => {
 
   it("describes the cwd-derived project default for every tool", () => {
     for (const tool of createTicketTools()) {
-      assert.match(tool.description, /project.*defaults to the project resolved from the session cwd/i);
+      assert.match(
+        tool.description,
+        /project.*defaults to the project resolved from the session cwd/i,
+      );
     }
   });
 
@@ -442,10 +445,10 @@ describe("parameter schemas", () => {
       "status",
     ]);
     assert.equal(Object.hasOwn(schema, "required"), false);
-    assert.deepEqual(schema.properties?.after?.oneOf?.map((variant) => variant.type), [
-      "string",
-      "null",
-    ]);
+    assert.deepEqual(
+      schema.properties?.after?.oneOf?.map((variant) => variant.type),
+      ["string", "null"],
+    );
     assert.equal(schema.properties?.status?.type, "string");
   });
 
@@ -511,35 +514,52 @@ describe("result rendering", () => {
       [
         {
           type: "text",
-          text:
-            "demo\t20260918-010000\topen\tFirst ticket\ndemo\t20260918-020000\tblocked\tSecond ticket",
+          text: "demo\t20260918-010000\topen\tFirst ticket\ndemo\t20260918-020000\tblocked\tSecond ticket",
         },
       ],
     );
-    assert.deepEqual(toolByName(createTicketTools(), "ticket_show").output.render({ selector: "x" }, SHOW_JSON), [
-      {
-        type: "text",
-        text: "id: 20260918-010000\nstatus: open\nafter: -\ntitle: First ticket\n\nbody:\n# First ticket\n\nSome body text.",
-      },
-    ]);
-    assert.deepEqual(toolByName(createTicketTools(), "ticket_create").output.render({ title: "T" }, CREATED_JSON), [
-      {
-        type: "text",
-        text: "created 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
-      },
-    ]);
-    assert.deepEqual(toolByName(createTicketTools(), "ticket_set").output.render({ status: "closed" }, CREATED_JSON), [
-      {
-        type: "text",
-        text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
-      },
-    ]);
-    assert.deepEqual(toolByName(createTicketTools(), "ticket_edit").output.render({ old: "a", new: "b" }, CREATED_JSON), [
-      {
-        type: "text",
-        text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
-      },
-    ]);
+    assert.deepEqual(
+      toolByName(createTicketTools(), "ticket_show").output.render({ selector: "x" }, SHOW_JSON),
+      [
+        {
+          type: "text",
+          text: "id: 20260918-010000\nstatus: open\nafter: -\ntitle: First ticket\n\nbody:\n# First ticket\n\nSome body text.",
+        },
+      ],
+    );
+    assert.deepEqual(
+      toolByName(createTicketTools(), "ticket_create").output.render({ title: "T" }, CREATED_JSON),
+      [
+        {
+          type: "text",
+          text: "created 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
+        },
+      ],
+    );
+    assert.deepEqual(
+      toolByName(createTicketTools(), "ticket_set").output.render(
+        { status: "closed" },
+        CREATED_JSON,
+      ),
+      [
+        {
+          type: "text",
+          text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
+        },
+      ],
+    );
+    assert.deepEqual(
+      toolByName(createTicketTools(), "ticket_edit").output.render(
+        { old: "a", new: "b" },
+        CREATED_JSON,
+      ),
+      [
+        {
+          type: "text",
+          text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
+        },
+      ],
+    );
   });
 
   it("presentationMeta persists the CLI JSON as the result details", () => {

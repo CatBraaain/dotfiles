@@ -5,14 +5,14 @@ pi のセッション開始時に、共通 priming スクリプト `~/.agents/sc
 ## 起動条件
 
 | イベント | `event.reason` | 動作 |
-| -------- | -------------- | ---- |
+| --- | --- | --- |
 | `session_start` | `startup` | `~/.agents/scripts/startup` を spawn する |
 | `session_start` | `startup` 以外（`new` / `resume` / `fork` / `reload`） | 何もしない |
 
 ## spawn の条件
 
 | 項目 | 値 |
-| ---- | -- |
+| --- | --- |
 | コマンド | `startupScriptPath()` = `~/.agents/scripts/startup`（実行ビット付きで直接実行） |
 | 引数 | なし |
 | `detached` | `true`（pi 終了後も子プロセスが生きる） |

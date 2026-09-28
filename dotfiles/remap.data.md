@@ -9,7 +9,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | .dsh |  | - | - |
 | .dsh/test | - | - | - |
 | .dsh/plugins.exact/build.apply.test.ts | - | - | - |
-| .gitconfig.local.sample | - | -  | - |
+| .gitconfig.local.sample | - | - | - |
 | gitalias.txt | .gitconfig.alias | .gitconfig.alias | - |
 | .pi |  | - | - |
 | .pi/agent/bun_install.apply.test.ts | - | - | - |

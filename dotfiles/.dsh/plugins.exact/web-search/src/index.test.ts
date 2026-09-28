@@ -321,12 +321,14 @@ describe("CLI JSON の fetch result 変換（toFetchResult）", () => {
   });
 
   it("fallback履歴を成功本文の先頭行へ表示する", () => {
-    const json = JSON.parse(fetchJson({
-      backend: "camoufox+trafilatura",
-      title: "Example",
-      tookMs: 1200,
-      fallbacks: [{ backend: "camoufox+trafilatura", error: "render: challenge detected" }],
-    }));
+    const json = JSON.parse(
+      fetchJson({
+        backend: "camoufox+trafilatura",
+        title: "Example",
+        tookMs: 1200,
+        fallbacks: [{ backend: "camoufox+trafilatura", error: "render: challenge detected" }],
+      }),
+    );
     assert.equal(
       formatFetchFallbackLine(json),
       '✓ camoufox+trafilatura - "Example" (fallback: camoufox+trafilatura: render: challenge detected) (1.2s)',
@@ -389,7 +391,7 @@ describe("fetch provider（CamoufoxTrafilaturaFetchProvider）", () => {
 
     assert.equal(
       result.body.content,
-      '✓ camoufox+trafilatura (fallback: camoufox+trafilatura: render: challenge detected) (0.0s)\n\n# Example\n\ntext',
+      "✓ camoufox+trafilatura (fallback: camoufox+trafilatura: render: challenge detected) (0.0s)\n\n# Example\n\ntext",
     );
   });
 

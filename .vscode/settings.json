@@ -10,6 +10,6 @@
     "editor.formatOnSave": false,
     "editor.formatOnType": false,
     "files.insertFinalNewline": false,
-    "files.trimTrailingWhitespace": false,
-  },
+    "files.trimTrailingWhitespace": false
+  }
 }

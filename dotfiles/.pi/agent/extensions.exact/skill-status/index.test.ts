@@ -1,4 +1,3 @@
-
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -11,7 +10,6 @@ import skillStatusExtension, {
   skillNameForReadPath,
   SKILL_STATUS_WIDGET_KEY,
 } from "./index";
-
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -486,7 +484,12 @@ describe("UI", () => {
     const { handlers } = captureExtension();
     const { context, widgetCalls } = widgetContext(true, availableWidth);
 
-    for (const skillName of ["coding-standard", "diagnosing-bugs", "sdd", "instruction-authoring"]) {
+    for (const skillName of [
+      "coding-standard",
+      "diagnosing-bugs",
+      "sdd",
+      "instruction-authoring",
+    ]) {
       recordSkill(handlers, context, skillName);
     }
 

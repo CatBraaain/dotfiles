@@ -11,7 +11,14 @@ import { homedir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import { isMap, parse as parseYaml, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
+import {
+  isMap,
+  parse as parseYaml,
+  parseDocument,
+  stringify as stringifyYaml,
+  type Pair,
+  type ParsedNode,
+} from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 import { homeRelPath } from "./home-path.ts";
 import {
@@ -484,10 +491,7 @@ export type Replacement = { pattern: string; replacement: string };
 
 const sidecarSuffix = ".replace.yaml";
 
-export function parseReplaceSidecar(
-  content: string,
-  sidecarPath: string,
-): Replacement[] {
+export function parseReplaceSidecar(content: string, sidecarPath: string): Replacement[] {
   const doc: unknown = parseYaml(content);
   const replacements = (doc as { replacements?: unknown })?.replacements;
   if (!Array.isArray(replacements))
@@ -518,19 +522,16 @@ export function applyReplacements(content: string, replacements: Replacement[]):
   for (const { pattern, replacement } of replacements) {
     result = result.replace(new RegExp(pattern, "g"), (...args) => {
       // match, capture groups..., offset, string
-      const groups = args.slice(0, args.length - 2).map((group) =>
-        typeof group === "string" ? group : "",
-      );
+      const groups = args
+        .slice(0, args.length - 2)
+        .map((group) => (typeof group === "string" ? group : ""));
       return replacement.replace(/\$\{(\d+)\}/g, (_, index) => groups[Number(index)] ?? "");
     });
   }
   return result;
 }
 
-export async function applyReplaceSidecars(
-  distDir: string,
-  homeRoot: string,
-): Promise<void> {
+export async function applyReplaceSidecars(distDir: string, homeRoot: string): Promise<void> {
   for (const sidecarRel of await collectReplaceSidecars(distDir, "")) {
     // <dir>/<name>.replace.yaml renders <dir>/<name>.
     const nameRel = sidecarRel.slice(0, -sidecarSuffix.length);
@@ -559,8 +560,7 @@ async function collectReplaceSidecars(dirAbs: string, dirRel: string): Promise<s
     const childRel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
     if (entry.isDirectory())
       sidecars.push(...(await collectReplaceSidecars(join(dirAbs, entry.name), childRel)));
-    else if (entry.isFile() && entry.name.endsWith(sidecarSuffix))
-      sidecars.push(childRel);
+    else if (entry.isFile() && entry.name.endsWith(sidecarSuffix)) sidecars.push(childRel);
   }
   return sidecars.sort();
 }

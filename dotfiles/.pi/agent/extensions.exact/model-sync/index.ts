@@ -149,7 +149,11 @@ function runSync(pi: ExtensionAPI, ctx: ExtensionContext, force: boolean): Promi
   return inFlightSync;
 }
 
-async function synchronize(pi: ExtensionAPI, ctx: ExtensionContext, force: boolean): Promise<SyncReport> {
+async function synchronize(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  force: boolean,
+): Promise<SyncReport> {
   const customModelIds = await readCustomModelIds();
   const warnings = customModelIds.warning ? [customModelIds.warning] : [];
   const resolvedProviders = await resolveProviders(ctx);
@@ -164,13 +168,11 @@ async function synchronize(pi: ExtensionAPI, ctx: ExtensionContext, force: boole
       (result): result is { provider: SyncProvider; status: "failed"; error: string } =>
         "status" in result && result.status === "failed",
     )
-    .map(
-      (result): ProviderSyncResult => ({
-        provider: result.provider.id,
-        status: "failed",
-        error: result.error,
-      }),
-    );
+    .map((result): ProviderSyncResult => ({
+      provider: result.provider.id,
+      status: "failed",
+      error: result.error,
+    }));
   const authenticatedProviders = resolvedProviders.filter(
     (result): result is ResolvedProvider => "apiKey" in result,
   );

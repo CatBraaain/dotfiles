@@ -11,9 +11,5 @@
 
 - name: SyncTime
   trigger: { type: boot, value: "00:00" }
-  action:
-    {
-      command: "%windir%\\system32\\sc.exe",
-      args: "start w32time task_started",
-    }
+  action: { command: "%windir%\\system32\\sc.exe", args: "start w32time task_started" }
   setting: { run_as: true, logon_type: s4u }

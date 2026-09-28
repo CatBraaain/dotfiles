@@ -35,9 +35,11 @@ function assistantEntry(id: string, parentId: string | null): SessionEntry {
 }
 
 // factory をモック pi と ctx で起動し、/undo の handler と各 API 呼び出しを捕捉する。
-function captureUndoExtension(
-  options?: { idle?: boolean; navigateCancelled?: boolean; branchEntries?: SessionEntry[] },
-): CapturedCalls {
+function captureUndoExtension(options?: {
+  idle?: boolean;
+  navigateCancelled?: boolean;
+  branchEntries?: SessionEntry[];
+}): CapturedCalls {
   const registeredCommands = new Map<string, (args: string, ctx: unknown) => Promise<void>>();
   const navigateTreeCalls: Array<{ entryId: string; options: unknown }> = [];
   const editorTexts: string[] = [];
@@ -48,7 +50,10 @@ function captureUndoExtension(
   let waitForIdleCount = 0;
 
   undoExtension({
-    registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => Promise<void> }) => {
+    registerCommand: (
+      name: string,
+      def: { handler: (args: string, ctx: unknown) => Promise<void> },
+    ) => {
       registeredCommands.set(name, def.handler);
     },
   } as never);
@@ -121,7 +126,11 @@ describe("コマンドの登録", () => {
 describe("巻き戻し", () => {
   it("最後の user 発言の entry を summarize:false で navigateTree し、確認ダイアログを表示せず即座に戻す", async () => {
     const capture = captureUndoExtension({
-      branchEntries: [assistantEntry("a2", "u2"), userEntry("u2", "a1", "やり直したい"), userEntry("u1", null, "はじめ")],
+      branchEntries: [
+        assistantEntry("a2", "u2"),
+        userEntry("u2", "a1", "やり直したい"),
+        userEntry("u1", null, "はじめ"),
+      ],
     });
 
     await capture.runUndo();

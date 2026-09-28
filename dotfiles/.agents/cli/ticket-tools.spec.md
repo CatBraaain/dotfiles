@@ -3,7 +3,7 @@
 pi と dsh は、同じ 5 tool で `ticket` CLI をラップする。ストア形式、状態遷移、排他、エラーは [ticket.spec.md](ticket.spec.md) が正本であり、tool はストアへ直接アクセスしない。
 
 | tool | CLI |
-|---|---|
+| --- | --- |
 | `ticket_list` | `list` |
 | `ticket_show` | `show` |
 | `ticket_create` | `create` |

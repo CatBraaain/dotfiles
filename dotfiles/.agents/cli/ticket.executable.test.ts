@@ -77,7 +77,13 @@ describe("ticket CLI", () => {
   it("normalizes a unique after prefix to the complete ID", async () => {
     const home = await ticketHome();
     const dependency = create(home, "dependency");
-    const result = run(home, ["create", JSON.stringify({ title: "dependent", after: dependency.slice(0, -2) }), "--project", "demo", "--json"]);
+    const result = run(home, [
+      "create",
+      JSON.stringify({ title: "dependent", after: dependency.slice(0, -2) }),
+      "--project",
+      "demo",
+      "--json",
+    ]);
     assert.equal(result.code, 0, result.stderr);
     assert.equal((JSON.parse(result.stdout) as { after: string }).after, dependency);
   });
@@ -85,11 +91,23 @@ describe("ticket CLI", () => {
   it("releases every current blocked dependent when closing a ticket", async () => {
     const home = await ticketHome();
     const dependency = create(home, "dependency");
-    const dependent = run(home, ["create", JSON.stringify({ title: "dependent", after: dependency }), "--project", "demo", "--json"]);
+    const dependent = run(home, [
+      "create",
+      JSON.stringify({ title: "dependent", after: dependency }),
+      "--project",
+      "demo",
+      "--json",
+    ]);
     assert.equal(dependent.code, 0, dependent.stderr);
     const dependentId = (JSON.parse(dependent.stdout) as { id: string }).id;
-    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code, 0);
-    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code, 0);
+    assert.equal(
+      run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code,
+      0,
+    );
+    assert.equal(
+      run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code,
+      0,
+    );
     const reopened = run(home, ["show", dependentId, "--project", "demo", "--json"]);
     assert.equal((JSON.parse(reopened.stdout) as { status: string }).status, "open");
   });
@@ -167,17 +185,18 @@ describe("ticket CLI", () => {
     const dependency = create(home, "dependency");
     const dependentOne = createAfter(home, "dependent one", dependency);
     const dependentTwo = createAfter(home, "dependent two", dependency);
-    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code, 0);
+    assert.equal(
+      run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code,
+      0,
+    );
     const before = await Promise.all([
       readFile(ticketPath(home, "demo", dependency), "utf8"),
       readFile(ticketPath(home, "demo", dependentOne), "utf8"),
       readFile(ticketPath(home, "demo", dependentTwo), "utf8"),
     ]);
-    const failed = run(
-      home,
-      ["set", dependency, '{"status":"closed"}', "--project", "demo"],
-      { TICKET_TEST_FAIL_STEP: "rename:1" },
-    );
+    const failed = run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"], {
+      TICKET_TEST_FAIL_STEP: "rename:1",
+    });
     assert.equal(failed.code, 1);
     assert.deepEqual(
       await Promise.all([
@@ -187,25 +206,60 @@ describe("ticket CLI", () => {
       ]),
       before,
     );
-    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code, 0);
-    assert.equal((JSON.parse(run(home, ["show", dependentOne, "--project", "demo", "--json"]).stdout) as { status: string }).status, "open");
-    assert.equal((JSON.parse(run(home, ["show", dependentTwo, "--project", "demo", "--json"]).stdout) as { status: string }).status, "open");
+    assert.equal(
+      run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code,
+      0,
+    );
+    assert.equal(
+      (
+        JSON.parse(run(home, ["show", dependentOne, "--project", "demo", "--json"]).stdout) as {
+          status: string;
+        }
+      ).status,
+      "open",
+    );
+    assert.equal(
+      (
+        JSON.parse(run(home, ["show", dependentTwo, "--project", "demo", "--json"]).stdout) as {
+          status: string;
+        }
+      ).status,
+      "open",
+    );
   });
 
   it("recovers a transaction when rollback itself fails before the next write", async () => {
     const home = await ticketHome();
     const dependency = create(home, "dependency");
     const dependent = createAfter(home, "dependent", dependency);
-    assert.equal(run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code, 0);
-    const failed = run(
-      home,
-      ["set", dependency, '{"status":"closed"}', "--project", "demo"],
-      { TICKET_TEST_FAIL_STEP: "rename:1,rollback:0" },
+    assert.equal(
+      run(home, ["set", dependency, '{"status":"locked"}', "--project", "demo"]).code,
+      0,
     );
+    const failed = run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"], {
+      TICKET_TEST_FAIL_STEP: "rename:1,rollback:0",
+    });
     assert.equal(failed.code, 1);
-    assert.equal((JSON.parse(run(home, ["show", dependency, "--project", "demo", "--json"]).stdout) as { status: string }).status, "closed");
-    assert.equal(run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code, 0);
-    assert.equal((JSON.parse(run(home, ["show", dependent, "--project", "demo", "--json"]).stdout) as { status: string }).status, "open");
+    assert.equal(
+      (
+        JSON.parse(run(home, ["show", dependency, "--project", "demo", "--json"]).stdout) as {
+          status: string;
+        }
+      ).status,
+      "closed",
+    );
+    assert.equal(
+      run(home, ["set", dependency, '{"status":"closed"}', "--project", "demo"]).code,
+      0,
+    );
+    assert.equal(
+      (
+        JSON.parse(run(home, ["show", dependent, "--project", "demo", "--json"]).stdout) as {
+          status: string;
+        }
+      ).status,
+      "open",
+    );
   });
 
   it("uses the main worktree basename from a subworktree cwd", async () => {
@@ -251,11 +305,18 @@ describe("ticket CLI", () => {
     assert.ok((await readdir(join(home, ".agents", "tickets"))).includes(project));
     const locked = create(home, "locked");
     assert.equal(run(home, ["set", locked, '{"status":"locked"}', "--project", "demo"]).code, 0);
-    const show = JSON.parse(run(home, ["show", locked, "--project", "demo", "--json"]).stdout) as Record<string, unknown>;
-    const list = JSON.parse(run(home, ["list", "--status", "locked", "--project", "demo", "--json"]).stdout) as Array<Record<string, unknown>>;
+    const show = JSON.parse(
+      run(home, ["show", locked, "--project", "demo", "--json"]).stdout,
+    ) as Record<string, unknown>;
+    const list = JSON.parse(
+      run(home, ["list", "--status", "locked", "--project", "demo", "--json"]).stdout,
+    ) as Array<Record<string, unknown>>;
     assert.equal(show.id, locked);
     assert.equal(list.find((ticket) => ticket.id === locked)?.id, locked);
-    assert.equal((JSON.parse(run(home, ["show", ticketId, "--json"]).stdout) as { id: string }).id, ticketId);
+    assert.equal(
+      (JSON.parse(run(home, ["show", ticketId, "--json"]).stdout) as { id: string }).id,
+      ticketId,
+    );
   });
 
   it("resolves exact, unique-prefix, ambiguous, and next selectors", async () => {
@@ -270,12 +331,18 @@ describe("ticket CLI", () => {
     const ambiguous = run(home, ["show", ambiguousPrefix, "--project", "demo"]);
     assert.equal(ambiguous.code, 1);
     assert.match(ambiguous.stderr, /ambiguous id/);
-    assert.equal((JSON.parse(run(home, ["show", "--project", "demo", "--json"]).stdout) as { id: string }).id, first);
+    assert.equal(
+      (JSON.parse(run(home, ["show", "--project", "demo", "--json"]).stdout) as { id: string }).id,
+      first,
+    );
   });
 
   it("rejects unknown create fields and null after values", async () => {
     const home = await ticketHome();
-    for (const input of [{ title: "unknown", unexpected: true }, { title: "null-after", after: null }]) {
+    for (const input of [
+      { title: "unknown", unexpected: true },
+      { title: "null-after", after: null },
+    ]) {
       const result = run(home, ["create", JSON.stringify(input), "--project", "demo", "--json"]);
       assert.equal(result.code, 2);
       assert.equal(typeof (JSON.parse(result.stdout) as { error: string }).error, "string");
@@ -286,21 +353,53 @@ describe("ticket CLI", () => {
   it("applies after linkage rules and rejects unavailable dependencies", async () => {
     const home = await ticketHome();
     const dependency = create(home, "dependency");
-    const explicit = run(home, ["create", JSON.stringify({ title: "explicit", after: dependency, status: "open" }), "--project", "demo", "--json"]);
+    const explicit = run(home, [
+      "create",
+      JSON.stringify({ title: "explicit", after: dependency, status: "open" }),
+      "--project",
+      "demo",
+      "--json",
+    ]);
     assert.equal((JSON.parse(explicit.stdout) as { status: string }).status, "open");
     const target = create(home, "target");
-    const blocked = run(home, ["set", target, JSON.stringify({ after: dependency }), "--project", "demo", "--json"]);
-    assert.equal((JSON.parse(blocked.stdout) as { status: string; after: string }).status, "blocked");
+    const blocked = run(home, [
+      "set",
+      target,
+      JSON.stringify({ after: dependency }),
+      "--project",
+      "demo",
+      "--json",
+    ]);
+    assert.equal(
+      (JSON.parse(blocked.stdout) as { status: string; after: string }).status,
+      "blocked",
+    );
     assert.equal((JSON.parse(blocked.stdout) as { after: string }).after, dependency);
     const reopened = run(home, ["set", target, '{"after":null}', "--project", "demo", "--json"]);
-    assert.equal((JSON.parse(reopened.stdout) as { status: string; after: string | null }).status, "open");
+    assert.equal(
+      (JSON.parse(reopened.stdout) as { status: string; after: string | null }).status,
+      "open",
+    );
     const closed = create(home, "closed");
     assert.equal(run(home, ["set", closed, '{"status":"closed"}', "--project", "demo"]).code, 0);
-    const closedAfter = run(home, ["create", JSON.stringify({ title: "bad", after: closed }), "--project", "demo"]);
+    const closedAfter = run(home, [
+      "create",
+      JSON.stringify({ title: "bad", after: closed }),
+      "--project",
+      "demo",
+    ]);
     assert.equal(closedAfter.code, 1);
     const cancelled = create(home, "cancelled");
-    assert.equal(run(home, ["set", cancelled, '{"status":"cancelled"}', "--project", "demo"]).code, 0);
-    const cancelledAfter = run(home, ["create", JSON.stringify({ title: "bad", after: cancelled }), "--project", "demo"]);
+    assert.equal(
+      run(home, ["set", cancelled, '{"status":"cancelled"}', "--project", "demo"]).code,
+      0,
+    );
+    const cancelledAfter = run(home, [
+      "create",
+      JSON.stringify({ title: "bad", after: cancelled }),
+      "--project",
+      "demo",
+    ]);
     assert.equal(cancelledAfter.code, 1);
   });
 
@@ -308,24 +407,55 @@ describe("ticket CLI", () => {
     const home = await ticketHome();
     const first = create(home, "first");
     const second = create(home, "second");
-    assert.equal(run(home, ["set", first, JSON.stringify({ after: second }), "--project", "demo"]).code, 0);
-    const failed = run(home, ["set", second, JSON.stringify({ after: first }), "--project", "demo"]);
+    assert.equal(
+      run(home, ["set", first, JSON.stringify({ after: second }), "--project", "demo"]).code,
+      0,
+    );
+    const failed = run(home, [
+      "set",
+      second,
+      JSON.stringify({ after: first }),
+      "--project",
+      "demo",
+    ]);
     assert.equal(failed.code, 1);
     assert.match(failed.stderr, /cycle/);
-    assert.equal((JSON.parse(run(home, ["show", second, "--project", "demo", "--json"]).stdout) as { status: string; after: string | null }).after, null);
+    assert.equal(
+      (
+        JSON.parse(run(home, ["show", second, "--project", "demo", "--json"]).stdout) as {
+          status: string;
+          after: string | null;
+        }
+      ).after,
+      null,
+    );
   });
 
   it("checks missing after, cycles, and duplicate frontmatter fields", async () => {
     const home = await ticketHome();
     const projectDir = join(home, ".agents", "tickets", "demo");
     await mkdir(projectDir, { recursive: true });
-    await writeFile(join(projectDir, "missing.md"), "---\nstatus: open\nafter: absent\n---\n# missing\n");
-    await writeFile(join(projectDir, "cycle-a.md"), "---\nstatus: open\nafter: cycle-b\n---\n# a\n");
-    await writeFile(join(projectDir, "cycle-b.md"), "---\nstatus: open\nafter: cycle-a\n---\n# b\n");
-    await writeFile(join(projectDir, "duplicate-after.md"), "---\nstatus: open\nafter: a\nafter: b\n---\n# duplicate\n");
+    await writeFile(
+      join(projectDir, "missing.md"),
+      "---\nstatus: open\nafter: absent\n---\n# missing\n",
+    );
+    await writeFile(
+      join(projectDir, "cycle-a.md"),
+      "---\nstatus: open\nafter: cycle-b\n---\n# a\n",
+    );
+    await writeFile(
+      join(projectDir, "cycle-b.md"),
+      "---\nstatus: open\nafter: cycle-a\n---\n# b\n",
+    );
+    await writeFile(
+      join(projectDir, "duplicate-after.md"),
+      "---\nstatus: open\nafter: a\nafter: b\n---\n# duplicate\n",
+    );
     const result = run(home, ["check", "--project", "demo", "--json"]);
     assert.equal(result.code, 1);
-    const kinds = new Set((JSON.parse(result.stdout) as Array<{ kind: string }>).map((issue) => issue.kind));
+    const kinds = new Set(
+      (JSON.parse(result.stdout) as Array<{ kind: string }>).map((issue) => issue.kind),
+    );
     assert.deepEqual([...kinds].sort(), ["after-cycle", "invalid-frontmatter", "missing-after"]);
     const cleanHome = await ticketHome();
     create(cleanHome, "clean");

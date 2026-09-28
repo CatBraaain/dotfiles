@@ -14,7 +14,7 @@
 ## 共通の振る舞い
 
 | 条件 | 結果 |
-|---|---|
+| --- | --- |
 | `-p/--project <name>` | 指定 project を使う |
 | project 未指定 | Git リポジトリ内では main worktree の basename、それ以外では cwd の basename を使う |
 | `-a/--all` | `list` / `check` で全 project を横断する。`-p` は無視する |

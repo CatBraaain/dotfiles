@@ -40,11 +40,7 @@ export function ticketCliPath(): string {
 export function ticketCliArgs(args: string[]): string[] {
   const optionTerminator = args.indexOf("--");
   if (optionTerminator === -1) return [...args, "--json"];
-  return [
-    ...args.slice(0, optionTerminator),
-    "--json",
-    ...args.slice(optionTerminator),
-  ];
+  return [...args.slice(0, optionTerminator), "--json", ...args.slice(optionTerminator)];
 }
 
 // Injectable overrides for tests: the pi suite runs the real spawn against a
@@ -75,7 +71,9 @@ export function runTicketCli(
         if (error) {
           const stderrText = typeof stderr === "string" ? stderr.replace(/\n$/, "") : "";
           if (typeof error.code === "number") {
-            reject(new TicketCliError(stderrText, stderrText || `ticket exited with code ${error.code}`));
+            reject(
+              new TicketCliError(stderrText, stderrText || `ticket exited with code ${error.code}`),
+            );
           } else {
             reject(new TicketCliError(stderrText, `ticket CLI is not available: ${error.message}`));
           }

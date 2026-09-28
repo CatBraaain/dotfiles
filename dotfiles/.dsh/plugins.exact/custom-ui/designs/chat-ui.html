@@ -25,9 +25,14 @@
         --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
       }
 
-      * { box-sizing: border-box; }
+      * {
+        box-sizing: border-box;
+      }
 
-      html, body { min-height: 100%; }
+      html,
+      body {
+        min-height: 100%;
+      }
 
       body {
         margin: 0;
@@ -95,7 +100,10 @@
         font-size: 11px;
       }
 
-      .new-workspace-button svg { width: 14px; height: 14px; }
+      .new-workspace-button svg {
+        width: 14px;
+        height: 14px;
+      }
 
       .chat-pane {
         display: grid;
@@ -158,7 +166,9 @@
         max-width: min(680px, 86%);
       }
 
-      .message-body { min-width: 0; }
+      .message-body {
+        min-width: 0;
+      }
 
       .message-time {
         display: block;
@@ -168,7 +178,9 @@
         font-size: 9px;
       }
 
-      .message.is-user .message-time { text-align: right; }
+      .message.is-user .message-time {
+        text-align: right;
+      }
 
       .message-copy {
         margin: 0;
@@ -222,7 +234,9 @@
         font-size: 12px;
       }
 
-      .chat-input::placeholder { color: var(--subtle); }
+      .chat-input::placeholder {
+        color: var(--subtle);
+      }
 
       .composer-footer {
         display: flex;
@@ -249,12 +263,21 @@
         color: oklch(18% 0.018 250);
         background: var(--accent);
         cursor: pointer;
-        transition: background 140ms ease-out, transform 140ms ease-out;
+        transition:
+          background 140ms ease-out,
+          transform 140ms ease-out;
       }
 
-      .send-button:hover { background: oklch(84% 0.105 236); }
-      .send-button:active { transform: translateY(1px); }
-      .send-button svg { width: 15px; height: 15px; }
+      .send-button:hover {
+        background: oklch(84% 0.105 236);
+      }
+      .send-button:active {
+        transform: translateY(1px);
+      }
+      .send-button svg {
+        width: 15px;
+        height: 15px;
+      }
 
       .workspace-header-actions,
       .row-actions {
@@ -262,7 +285,9 @@
         align-items: center;
       }
 
-      .workspace-header-actions { gap: 8px; }
+      .workspace-header-actions {
+        gap: 8px;
+      }
 
       .button {
         min-height: 34px;
@@ -270,7 +295,10 @@
         border-radius: 6px;
         background: var(--surface-raised);
         cursor: pointer;
-        transition: background 140ms ease-out, border-color 140ms ease-out, transform 140ms ease-out;
+        transition:
+          background 140ms ease-out,
+          border-color 140ms ease-out,
+          transform 140ms ease-out;
       }
 
       .button:hover {
@@ -278,7 +306,9 @@
         background: var(--surface-hover);
       }
 
-      .button:active { transform: translateY(1px); }
+      .button:active {
+        transform: translateY(1px);
+      }
 
       .button-icon {
         display: inline-flex;
@@ -289,7 +319,10 @@
       }
 
       .button-icon svg,
-      .row-action svg { width: 15px; height: 15px; }
+      .row-action svg {
+        width: 15px;
+        height: 15px;
+      }
 
       .workspace-new-session,
       .workspace-refresh {
@@ -297,7 +330,10 @@
         min-height: 30px;
       }
 
-      .workspace-list { display: grid; gap: 12px; }
+      .workspace-list {
+        display: grid;
+        gap: 12px;
+      }
 
       .workspace {
         overflow: hidden;
@@ -348,19 +384,32 @@
         text-align: left;
       }
 
-      .workspace-collapse-trigger:hover { color: var(--accent); }
+      .workspace-collapse-trigger:hover {
+        color: var(--accent);
+      }
 
       .workspace-collapse-icon {
         display: inline-flex;
         flex: none;
         color: var(--muted);
-        transition: transform 140ms ease-out, color 140ms ease-out;
+        transition:
+          transform 140ms ease-out,
+          color 140ms ease-out;
       }
 
-      .workspace-collapse-icon svg { width: 13px; height: 13px; }
-      .workspace-collapse-trigger:hover .workspace-collapse-icon { color: currentColor; }
-      .workspace.is-collapsed .workspace-collapse-icon { transform: rotate(-90deg); }
-      .workspace.is-collapsed .session-row { display: none; }
+      .workspace-collapse-icon svg {
+        width: 13px;
+        height: 13px;
+      }
+      .workspace-collapse-trigger:hover .workspace-collapse-icon {
+        color: currentColor;
+      }
+      .workspace.is-collapsed .workspace-collapse-icon {
+        transform: rotate(-90deg);
+      }
+      .workspace.is-collapsed .session-row {
+        display: none;
+      }
 
       .workspace-summary {
         flex: none;
@@ -375,7 +424,9 @@
         color: var(--fg);
       }
 
-      .workspace-mode-toggle:hover { color: var(--fg); }
+      .workspace-mode-toggle:hover {
+        color: var(--fg);
+      }
 
       .session-row {
         position: relative;
@@ -388,9 +439,15 @@
         transition: background 140ms ease-out;
       }
 
-      .session-row:first-of-type { border-top: 0; }
-      .session-row:hover { background: var(--surface-hover); }
-      .session-row.is-selected { background: var(--accent-soft); }
+      .session-row:first-of-type {
+        border-top: 0;
+      }
+      .session-row:hover {
+        background: var(--surface-hover);
+      }
+      .session-row.is-selected {
+        background: var(--accent-soft);
+      }
 
       .session-main {
         display: flex;
@@ -419,7 +476,9 @@
         box-shadow: 0 0 0 3px oklch(76% 0.13 150 / 0.1);
       }
 
-      .session-copy { min-width: 0; }
+      .session-copy {
+        min-width: 0;
+      }
 
       .session-name {
         display: block;
@@ -444,7 +503,9 @@
         white-space: nowrap;
       }
 
-      .row-actions { gap: 2px; }
+      .row-actions {
+        gap: 2px;
+      }
 
       .row-action {
         display: inline-flex;
@@ -460,9 +521,16 @@
         cursor: pointer;
       }
 
-      .row-action:hover { color: var(--fg); background: var(--border); }
-      .row-action.is-copied { color: var(--success); }
-      .row-action.archive:hover { color: var(--danger); }
+      .row-action:hover {
+        color: var(--fg);
+        background: var(--border);
+      }
+      .row-action.is-copied {
+        color: var(--success);
+      }
+      .row-action.archive:hover {
+        color: var(--danger);
+      }
 
       .empty-state {
         padding: 46px 18px 50px;
@@ -487,23 +555,48 @@
         font-size: 11px;
       }
 
-      .status-message.is-error { color: var(--danger); }
+      .status-message.is-error {
+        color: var(--danger);
+      }
 
       @media (max-width: 860px) {
-        .app-grid { grid-template-columns: 1fr; }
-        .session-pane { position: static; }
-        .chat-pane { min-height: 680px; }
+        .app-grid {
+          grid-template-columns: 1fr;
+        }
+        .session-pane {
+          position: static;
+        }
+        .chat-pane {
+          min-height: 680px;
+        }
       }
 
       @media (max-width: 520px) {
-        .app { padding: 14px 10px 22px; }
-        .chat-header { padding: 14px; }
-        .chat-thread { padding: 20px 14px 24px; }
-        .chat-composer { margin: 0 14px 14px; }
-        .workspace-header { align-items: flex-start; }
-        .session-row { padding-right: 7px; }
-        .session-meta { gap: 3px; margin-left: 8px; }
-        .session-time { display: none; }
+        .app {
+          padding: 14px 10px 22px;
+        }
+        .chat-header {
+          padding: 14px;
+        }
+        .chat-thread {
+          padding: 20px 14px 24px;
+        }
+        .chat-composer {
+          margin: 0 14px 14px;
+        }
+        .workspace-header {
+          align-items: flex-start;
+        }
+        .session-row {
+          padding-right: 7px;
+        }
+        .session-meta {
+          gap: 3px;
+          margin-left: 8px;
+        }
+        .session-time {
+          display: none;
+        }
       }
     </style>
   </head>
@@ -513,51 +606,100 @@
         <section class="session-pane">
           <header class="workspace-list-header">
             <h1 class="workspace-list-title">Workspaces</h1>
-            <button class="button new-workspace-button" type="button" data-action="new-workspace" aria-label="New Workspace" title="New Workspace" data-od-id="new-workspace">
+            <button
+              class="button new-workspace-button"
+              type="button"
+              data-action="new-workspace"
+              aria-label="New Workspace"
+              title="New Workspace"
+              data-od-id="new-workspace"
+            >
               <span class="new-workspace-icon" aria-hidden="true"></span>
               <span>New Workspace</span>
             </button>
           </header>
-          <section id="workspace-list" class="workspace-list" aria-live="polite" data-od-id="workspace-list"></section>
-          <p id="status" class="status-message" role="status" aria-live="polite" data-od-id="session-status"></p>
+          <section
+            id="workspace-list"
+            class="workspace-list"
+            aria-live="polite"
+            data-od-id="workspace-list"
+          ></section>
+          <p
+            id="status"
+            class="status-message"
+            role="status"
+            aria-live="polite"
+            data-od-id="session-status"
+          ></p>
         </section>
 
         <section class="chat-pane" aria-labelledby="chat-title">
           <header class="chat-header">
             <div>
               <h2 id="chat-title" class="chat-title">Polish the session list</h2>
-              <p id="chat-context" class="chat-context">atlas-dashboard · /Users/aya/Projects/atlas-dashboard</p>
+              <p id="chat-context" class="chat-context">
+                atlas-dashboard · /Users/aya/Projects/atlas-dashboard
+              </p>
             </div>
-            <button class="button button-icon chat-header-action" type="button" aria-label="More session actions" title="More session actions"><span class="chat-header-icon" aria-hidden="true"></span></button>
+            <button
+              class="button button-icon chat-header-action"
+              type="button"
+              aria-label="More session actions"
+              title="More session actions"
+            >
+              <span class="chat-header-icon" aria-hidden="true"></span>
+            </button>
           </header>
 
           <div id="chat-thread" class="chat-thread" aria-live="polite">
             <article class="message">
               <div class="message-body">
-                <p class="message-copy">The session list is ready for a visual pass. I kept the workspace compact and made the active state easier to scan.</p>
+                <p class="message-copy">
+                  The session list is ready for a visual pass. I kept the workspace compact and made
+                  the active state easier to scan.
+                </p>
                 <pre class="message-code"><code>designs/chat-ui.html</code></pre>
                 <time class="message-time" datetime="2026-09-21T10:42">2026/09/21 10:42</time>
               </div>
             </article>
             <article class="message is-user">
               <div class="message-body">
-                <p class="message-copy">Place the chat beside the session list so I can move between context and conversation.</p>
+                <p class="message-copy">
+                  Place the chat beside the session list so I can move between context and
+                  conversation.
+                </p>
                 <time class="message-time" datetime="2026-09-21T10:44">2026/09/21 10:44</time>
               </div>
             </article>
             <article class="message">
               <div class="message-body">
-                <p class="message-copy">Done. The split view keeps the list available while giving the active session room for a full conversation.</p>
+                <p class="message-copy">
+                  Done. The split view keeps the list available while giving the active session room
+                  for a full conversation.
+                </p>
                 <time class="message-time" datetime="2026-09-21T10:45">2026/09/21 10:45</time>
               </div>
             </article>
           </div>
 
           <form id="chat-form" class="chat-composer">
-            <textarea id="chat-input" class="chat-input" rows="1" placeholder="Message this session…" aria-label="Message this session"></textarea>
+            <textarea
+              id="chat-input"
+              class="chat-input"
+              rows="1"
+              placeholder="Message this session…"
+              aria-label="Message this session"
+            ></textarea>
             <div class="composer-footer">
               <span class="composer-hint">Enter to send · Shift + Enter for a new line</span>
-              <button class="send-button" type="submit" aria-label="Send message" title="Send message"><span class="send-icon" aria-hidden="true"></span></button>
+              <button
+                class="send-button"
+                type="submit"
+                aria-label="Send message"
+                title="Send message"
+              >
+                <span class="send-icon" aria-hidden="true"></span>
+              </button>
             </div>
           </form>
         </section>
@@ -570,17 +712,37 @@
           cwd: "/Users/aya/Projects/atlas-dashboard",
           label: "atlas-dashboard",
           sessions: [
-            { id: "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", name: "Polish the session list", time: "2026/09/19 18:42", active: true },
-            { id: "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", name: "Check keyboard navigation", time: "2026/09/19 17:16", active: false }
-          ]
+            {
+              id: "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
+              name: "Polish the session list",
+              time: "2026/09/19 18:42",
+              active: true,
+            },
+            {
+              id: "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61",
+              name: "Check keyboard navigation",
+              time: "2026/09/19 17:16",
+              active: false,
+            },
+          ],
         },
         {
           cwd: "/Users/aya/Projects/website-redesign",
           label: "website-redesign",
           sessions: [
-            { id: "3d8e2f6a-7b1c-4a9d-8e5f-2c6b1a4d7f90", name: "Review landing page copy", time: "2026/09/18 16:08", active: true },
-            { id: "4a7c1e9b-2d5f-4b8a-9c3e-6f1a2d5b8e70", name: "Archive old experiments", time: "2026/09/17 11:34", active: false }
-          ]
+            {
+              id: "3d8e2f6a-7b1c-4a9d-8e5f-2c6b1a4d7f90",
+              name: "Review landing page copy",
+              time: "2026/09/18 16:08",
+              active: true,
+            },
+            {
+              id: "4a7c1e9b-2d5f-4b8a-9c3e-6f1a2d5b8e70",
+              name: "Archive old experiments",
+              time: "2026/09/17 11:34",
+              active: false,
+            },
+          ],
         },
       ];
 
@@ -591,7 +753,7 @@
         copiedId: null,
         copiedTimer: null,
         statusTimer: null,
-        collapsedWorkspaces: new Set()
+        collapsedWorkspaces: new Set(),
       };
 
       const list = document.querySelector("#workspace-list");
@@ -608,13 +770,15 @@
           check: '<path d="m3.3 8.2 3 3 6.4-6.4"/>',
           plus: '<path d="M8 3v10M3 8h10"/>',
           refresh: '<path d="M13.5 5.2A5.5 5.5 0 1 0 14 8"/><path d="M10.8 2.6h3v3"/>',
-          archive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="M6.5 8.5h3"/> ',
-          unarchive: '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="m6 9 2-2 2 2M8 7v4"/>',
+          archive:
+            '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="M6.5 8.5h3"/> ',
+          unarchive:
+            '<path d="M3 5.5h10M4 5.5v6.2A1.3 1.3 0 0 0 5.3 13h5.4a1.3 1.3 0 0 0 1.3-1.3V5.5M5.3 3h5.4l.8 2.5H4.5L5.3 3Z"/><path d="m6 9 2-2 2 2M8 7v4"/>',
           modeCollapse: '<path d="M3 5h8m-8 7h8m-8 7h8m4-14 3 3 3-3m-6 14 3-3 3 3"/>',
           modeExpand: '<path d="M3 5h8m-8 7h8m-8 7h8m4-11 3-3 3 3m-6 8 3 3 3-3"/>',
           chevron: '<path d="m4.5 6 3.5 3.5L11.5 6"/>',
           more: '<circle cx="4" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r=".7" fill="currentColor" stroke="none"/>',
-          send: '<path d="m3 8 10-5-2.5 10-2.4-4.2L3 8Z"/><path d="m8.1 8.8 2.1-1.5"/>'
+          send: '<path d="m3 8 10-5-2.5 10-2.4-4.2L3 8Z"/><path d="m8.1 8.8 2.1-1.5"/>',
         };
         const viewBox = name.startsWith("mode") ? "0 0 24 24" : "0 0 16 16";
         const strokeWidth = name.startsWith("mode") ? "1.5" : "1.25";
@@ -622,7 +786,11 @@
       }
 
       function escapeHtml(value) {
-        return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+        return String(value).replace(
+          /[&<>'"]/g,
+          (character) =>
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character],
+        );
       }
 
       function groupVisibleSessions(group) {
@@ -631,22 +799,27 @@
       }
 
       function render() {
-        const visibleGroups = state.groups.filter((group) => groupVisibleSessions(group).length > 0);
+        const visibleGroups = state.groups.filter(
+          (group) => groupVisibleSessions(group).length > 0,
+        );
         if (visibleGroups.length === 0) {
-          list.innerHTML = '<div class="empty-state" data-od-id="empty-state"><strong>No active sessions</strong><span>Create a new session to see it here</span></div>';
+          list.innerHTML =
+            '<div class="empty-state" data-od-id="empty-state"><strong>No active sessions</strong><span>Create a new session to see it here</span></div>';
           return;
         }
 
-        list.innerHTML = visibleGroups.map((group, groupIndex) => {
-          const mode = state.modes.get(group.cwd) || "active";
-          const sessions = groupVisibleSessions(group);
-          const isCollapsible = groupIndex === 0 || groupIndex === 1;
-          const isCollapsed = isCollapsible && state.collapsedWorkspaces.has(group.cwd);
-          const modeLabel = mode === "all" ? "All" : "Active";
-          const sessionLabel = sessions.length === 1 ? "session" : "sessions";
-          const nextMode = mode === "all" ? "active" : "all";
-          const modeActionLabel = nextMode === "all" ? "Show all sessions" : "Show active sessions";
-          return `
+        list.innerHTML = visibleGroups
+          .map((group, groupIndex) => {
+            const mode = state.modes.get(group.cwd) || "active";
+            const sessions = groupVisibleSessions(group);
+            const isCollapsible = groupIndex === 0 || groupIndex === 1;
+            const isCollapsed = isCollapsible && state.collapsedWorkspaces.has(group.cwd);
+            const modeLabel = mode === "all" ? "All" : "Active";
+            const sessionLabel = sessions.length === 1 ? "session" : "sessions";
+            const nextMode = mode === "all" ? "active" : "all";
+            const modeActionLabel =
+              nextMode === "all" ? "Show all sessions" : "Show active sessions";
+            return `
             <section class="workspace ${isCollapsed ? "is-collapsed" : ""}" data-cwd="${escapeHtml(group.cwd)}" data-od-id="workspace-${groupIndex}">
               <header class="workspace-header" ${isCollapsible ? 'data-action="collapse"' : ""}>
                 ${isCollapsible ? `<button class="workspace-name workspace-collapse-trigger" type="button" data-action="collapse" aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? "Expand" : "Collapse"} ${escapeHtml(group.label)}" title="~/projects/${escapeHtml(group.label)}" data-od-id="collapse-workspace-${groupIndex}"><span class="workspace-collapse-icon">${icon("chevron")}</span><span>${escapeHtml(group.label)}</span></button>` : `<div class="workspace-name" title="${escapeHtml(group.cwd)}" data-od-id="workspace-name-${groupIndex}">${escapeHtml(group.label)}</div>`}
@@ -656,7 +829,9 @@
                   <button class="button button-icon workspace-refresh" type="button" data-action="refresh" data-od-id="refresh-workspace-${groupIndex}" aria-label="Refresh ${escapeHtml(group.label)}" title="Refresh">${icon("refresh")}</button>
                 </div>
               </header>
-              ${sessions.map((session, sessionIndex) => `
+              ${sessions
+                .map(
+                  (session, sessionIndex) => `
                 <div class="session-row ${state.selectedId === session.id ? "is-selected" : ""}" data-session-row="${escapeHtml(session.id)}" data-od-id="session-row-${groupIndex}-${sessionIndex}">
                   <button class="session-main" type="button" data-action="open" data-session-id="${escapeHtml(session.id)}" data-od-id="open-session-${escapeHtml(session.id)}">
                     <span class="status-dot ${session.active ? "is-active" : ""}" aria-hidden="true"></span>
@@ -672,10 +847,13 @@
                     </div>
                   </div>
                 </div>
-              `).join("")}
+              `,
+                )
+                .join("")}
             </section>
           `;
-        }).join("");
+          })
+          .join("");
         updateChat(findSession(state.selectedId));
       }
 
@@ -721,7 +899,7 @@
           day: "2-digit",
           hour: "2-digit",
           minute: "2-digit",
-          hour12: false
+          hour12: false,
         }).format(sentAt);
         message.innerHTML = `<div class="message-body"><p class="message-copy"></p><time class="message-time" datetime="${sentAt.toISOString()}">${timestamp}</time></div>`;
         message.querySelector(".message-copy").textContent = copy;
@@ -748,7 +926,12 @@
         const group = state.groups.find((item) => item.cwd === cwd);
         if (!group) return;
         const newId = crypto.randomUUID();
-        group.sessions.unshift({ id: newId, name: "New Pi session", time: "Just now", active: true });
+        group.sessions.unshift({
+          id: newId,
+          name: "New Pi session",
+          time: "Just now",
+          active: true,
+        });
         state.modes.set(group.cwd, "active");
         state.selectedId = newId;
         render();
@@ -763,7 +946,7 @@
         state.groups.push({
           cwd,
           label,
-          sessions: [{ id: sessionId, name: "New Pi session", time: "Just now", active: true }]
+          sessions: [{ id: sessionId, name: "New Pi session", time: "Just now", active: true }],
         });
         state.modes.set(cwd, "active");
         state.selectedId = sessionId;
@@ -781,7 +964,10 @@
         if (!message) return;
         appendMessage("user", message);
         chatInput.value = "";
-        window.setTimeout(() => appendMessage("assistant", "Message queued for this session."), 360);
+        window.setTimeout(
+          () => appendMessage("assistant", "Message queued for this session."),
+          360,
+        );
       });
 
       chatInput.addEventListener("keydown", (event) => {

@@ -230,10 +230,11 @@ describe("resolveStartSelection", () => {
 
 describe("parseSelectRequest", () => {
   it("accepts a well-formed agent pick", () => {
-    assert.deepEqual(
-      parseSelectRequest({ sessionId: "s-main", kind: "agent", name: "senior" }),
-      { sessionId: "s-main", kind: "agent", name: "senior" },
-    );
+    assert.deepEqual(parseSelectRequest({ sessionId: "s-main", kind: "agent", name: "senior" }), {
+      sessionId: "s-main",
+      kind: "agent",
+      name: "senior",
+    });
   });
 
   it("accepts a well-formed class pick without a session id", () => {

@@ -21,7 +21,7 @@ bun run shot:all
 生成物は `dist/` に置かれる。
 
 | 生成物 | 内容 |
-|---|---|
+| --- | --- |
 | `fixture.html` | 部品別ケースを並べた dark テーマの静的レビュー画面 |
 | `fixture-<case>.png` | 各ケースのスクリーンショット |
 | `fixture.png` | 全部品を並べた一覧 |

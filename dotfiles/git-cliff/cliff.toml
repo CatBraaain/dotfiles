@@ -18,27 +18,27 @@ body = """
 """
 trim = true
 render_always = true
-postprocessors = [  ]
+postprocessors = []
 
 [git]
 conventional_commits = true
 require_conventional = true
-commit_preprocessors = [ { pattern = "^$", replace = "chore: empty commit" } ]
+commit_preprocessors = [{ pattern = "^$", replace = "chore: empty commit" }]
 commit_parsers = [
-    { message = "^\\w+!", group = "<!-- 0 -->💥 BREAKING CHANGE" },
-    { message = "^feat", group = "<!-- 1 -->🚀 Features" },
-    { message = "^fix", group = "<!-- 2 -->🐛 Bug Fixes" },
-    { message = "^refactor", group = "<!-- 3 -->🚜 Refactor" },
-    { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
-    { message = "^style", group = "<!-- 5 -->🎨 Styling" },
-    { message = "^doc", group = "<!-- 6 -->📚 Documentation" },
-    { message = "^test", group = "<!-- 7 -->🧪 Testing" },
-    { message = "^chore|^ci|^build", group = "<!-- 8 -->⚙️ Miscellaneous Tasks" },
-    { message = "^revert", group = "<!-- 9 -->◀️ Revert" },
-    { message = ".*", group = "<!-- 10 -->💼 Other" },
+  { message = "^\\w+!", group = "<!-- 0 -->💥 BREAKING CHANGE" },
+  { message = "^feat", group = "<!-- 1 -->🚀 Features" },
+  { message = "^fix", group = "<!-- 2 -->🐛 Bug Fixes" },
+  { message = "^refactor", group = "<!-- 3 -->🚜 Refactor" },
+  { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
+  { message = "^style", group = "<!-- 5 -->🎨 Styling" },
+  { message = "^doc", group = "<!-- 6 -->📚 Documentation" },
+  { message = "^test", group = "<!-- 7 -->🧪 Testing" },
+  { message = "^chore|^ci|^build", group = "<!-- 8 -->⚙️ Miscellaneous Tasks" },
+  { message = "^revert", group = "<!-- 9 -->◀️ Revert" },
+  { message = ".*", group = "<!-- 10 -->💼 Other" },
 ]
 filter_commits = false
-link_parsers = [  ]
+link_parsers = []
 use_branch_tags = false
 topo_order = false
 topo_order_commits = true

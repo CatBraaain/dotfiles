@@ -121,23 +121,23 @@ function runBrowseAsync(
   extraEnv: Record<string, string> = {},
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [browsePath, ...args],
-      {
-        env: {
-          ...process.env,
-          ...extraEnv,
-          PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
-          X11VNC_LOG: logPath,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+    const child = spawn(process.execPath, [browsePath, ...args], {
+      env: {
+        ...process.env,
+        ...extraEnv,
+        PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
+        X11VNC_LOG: logPath,
       },
-    );
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk) => { stdout += chunk; });
-    child.stderr?.on("data", (chunk) => { stderr += chunk; });
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
     child.on("error", reject);
     child.on("exit", (status) => resolve({ status, stdout, stderr }));
   });

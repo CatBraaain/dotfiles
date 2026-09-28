@@ -56,16 +56,11 @@ function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
   const headerIndex = lines.findIndex((line) => line.trim().startsWith("|"));
   const headerLine = headerIndex < 0 ? undefined : lines[headerIndex];
   if (!headerLine || !sameCells(parseTableRow(headerLine), mapColumns)) {
-    throw new Error(
-      `${mapFileName} must have columns: ${mapColumns.join(" | ")}: ${mapFilePath}`,
-    );
+    throw new Error(`${mapFileName} must have columns: ${mapColumns.join(" | ")}: ${mapFilePath}`);
   }
 
   const separator = parseTableRow(lines[headerIndex + 1] ?? "");
-  if (
-    separator.length !== mapColumns.length ||
-    separator.some((cell) => !/^:?-{3,}:?$/.test(cell))
-  )
+  if (separator.length !== mapColumns.length || separator.some((cell) => !/^:?-{3,}:?$/.test(cell)))
     throw new Error(`${mapFileName} has an invalid Markdown table separator: ${mapFilePath}`);
 
   const rows: PathMapRow[] = [];
@@ -86,9 +81,7 @@ function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
     for (const destination of destinations) {
       if (destination === "" || destination === removeDestination) continue;
       if (destination.startsWith("/"))
-        throw new Error(
-          `${mapFileName} has an unsupported destination for ${key}: ${destination}`,
-        );
+        throw new Error(`${mapFileName} has an unsupported destination for ${key}: ${destination}`);
       if (globPatternCharacters.test(key))
         throw new Error(`${mapFileName} cannot map the glob key ${key} to ${destination}`);
     }

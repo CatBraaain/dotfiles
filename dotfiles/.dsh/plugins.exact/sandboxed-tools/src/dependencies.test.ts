@@ -43,6 +43,10 @@ describe("§ dependencies 宣言", () => {
         ])
         .filter(([, list]) => (list as string[]).length > 0),
     );
-    assert.deepEqual(missing, {}, "runtime imports missing from package.json dependencies/peerDependencies");
+    assert.deepEqual(
+      missing,
+      {},
+      "runtime imports missing from package.json dependencies/peerDependencies",
+    );
   });
 });

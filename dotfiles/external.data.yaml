@@ -150,8 +150,4 @@ externalSkills:
     run_after:
       # Only the frontend skill is copied; the next command builds its required assets.
       - [bun, install, --ignore-scripts]
-      - [
-          node,
-          packages/omo-codex/plugin/scripts/materialize-shared-upstreams.mjs,
-          --strict,
-        ]
+      - [node, packages/omo-codex/plugin/scripts/materialize-shared-upstreams.mjs, --strict]

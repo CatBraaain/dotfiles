@@ -53,7 +53,9 @@ async function runPlaywright(command: readonly string[], cwd: string): Promise<s
 async function waitForTokenUrl(logPath: string, serverExited: () => boolean): Promise<string> {
   const deadline = Date.now() + readinessTimeoutMs;
   while (Date.now() < deadline) {
-    const log = await Bun.file(logPath).text().catch(() => "");
+    const log = await Bun.file(logPath)
+      .text()
+      .catch(() => "");
     const tokenUrl = log.match(tokenUrlPattern)?.[0];
     if (tokenUrl) return tokenUrl;
     if (serverExited()) throw new Error("dsh web exited before its token URL was ready");

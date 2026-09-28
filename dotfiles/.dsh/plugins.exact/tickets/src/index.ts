@@ -101,7 +101,11 @@ export function buildListArgs(args: TicketListArgs): string[] {
 }
 
 export function buildShowArgs(args: TicketShowArgs): string[] {
-  return ["show", ...(args.selector !== undefined ? [args.selector] : []), ...projectFlag(args.project)];
+  return [
+    "show",
+    ...(args.selector !== undefined ? [args.selector] : []),
+    ...projectFlag(args.project),
+  ];
 }
 
 // The CLI takes a single JSON object argument; only the given keys are sent.
@@ -162,8 +166,8 @@ const PROJECT_DESCRIPTION =
   "Read ~/.agents/tickets/<project> instead of the session cwd's project.";
 
 const SELECTOR_DESCRIPTION =
-  "Ticket selector: a ticket id, a prefix unique to one ticket, or \"next\" " +
-  "(the oldest actionable ticket). Omitted means \"next\".";
+  'Ticket selector: a ticket id, a prefix unique to one ticket, or "next" ' +
+  '(the oldest actionable ticket). Omitted means "next".';
 
 const LIST_DESCRIPTION =
   "List tickets (wraps `ticket list`): one line per ticket with id, status, and title — " +
@@ -173,7 +177,7 @@ const LIST_DESCRIPTION =
 
 const SHOW_DESCRIPTION =
   "Show one ticket (wraps `ticket show`): id, status, after, title, and body. " +
-  "selector is a ticket id, a prefix unique to one ticket, or \"next\" (default). " +
+  'selector is a ticket id, a prefix unique to one ticket, or "next" (default). ' +
   "project picks the ticket store (defaults to the project resolved from the session cwd).";
 
 const CREATE_DESCRIPTION =
@@ -186,7 +190,7 @@ const CREATE_DESCRIPTION =
 const SET_DESCRIPTION =
   "Update one ticket's frontmatter (wraps `ticket set`): returns the updated id, status, after, " +
   "and path. Only status and/or after can be set; selector is a ticket id, a unique prefix, or " +
-  "\"next\" (default). The linkage auto-switches the status unless an explicit status wins: " +
+  '"next" (default). The linkage auto-switches the status unless an explicit status wins: ' +
   "setting an unresolved after blocks the ticket, clearing after (null) reopens a blocked one, " +
   "and status closed releases dependent blocked tickets back to open. The CLI validates the " +
   "update: after must exist and must not be closed or cancelled, and cycles fail without rewriting. " +
@@ -197,7 +201,7 @@ const EDIT_DESCRIPTION =
   "Call ticket_show first and copy old exactly from its body, including line breaks. " +
   "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the " +
   "body, so it can be replaced. Zero or multiple occurrences of old fail without rewriting. " +
-  "selector is a ticket id, a unique prefix, or \"next\" (default); project picks the store " +
+  'selector is a ticket id, a unique prefix, or "next" (default); project picks the store ' +
   "(defaults to the project resolved from the session cwd).";
 
 export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {

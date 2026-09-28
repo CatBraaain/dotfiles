@@ -15,15 +15,7 @@ export type Key =
   | "custom"
   | "run";
 type DeclarativeKey = "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask";
-type BatchableKey =
-  | "apt"
-  | "flatpak"
-  | "uv"
-  | "bun"
-  | "cargo"
-  | "go"
-  | "brew"
-  | "brew-cask";
+type BatchableKey = "apt" | "flatpak" | "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
 export type InstallBatch = { key: BatchableKey; values: readonly string[] } | Entry;
 type State = Map<DeclarativeKey, Map<string, string>>;
@@ -384,8 +376,12 @@ export class Bootstrap {
     ]);
     const version = tag.replace(/^v/, "");
     if (
-      this.runtime.outputAllowFailure(["dpkg-query", "-W", "-f=${Version}", openWhisprPackageName]) ===
-      version
+      this.runtime.outputAllowFailure([
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        openWhisprPackageName,
+      ]) === version
     )
       return;
 

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import newSessionExtension, { NEW_SESSION_ALIAS, NEW_SESSION_COMMAND_NAME } from "./index";
 
-
 interface CommandContext {
   newSession: (options: {
     parentSession?: string;

@@ -129,10 +129,7 @@ describe("ticket_show args", () => {
   });
 
   it("builds show args with the selector", () => {
-    assert.deepEqual(buildShowArgs({ selector: "20260101-000000" }), [
-      "show",
-      "20260101-000000",
-    ]);
+    assert.deepEqual(buildShowArgs({ selector: "20260101-000000" }), ["show", "20260101-000000"]);
   });
 
   it("appends --project when given", () => {
@@ -147,7 +144,10 @@ describe("ticket_show args", () => {
 
 describe("ticket_create args", () => {
   it("builds create args with a title-only JSON object", () => {
-    assert.deepEqual(buildCreateArgs({ title: "Fix the bug" }), ["create", '{"title":"Fix the bug"}']);
+    assert.deepEqual(buildCreateArgs({ title: "Fix the bug" }), [
+      "create",
+      '{"title":"Fix the bug"}',
+    ]);
   });
 
   it("serializes every given key into the JSON object", () => {
@@ -158,12 +158,17 @@ describe("ticket_create args", () => {
       body: "detail",
       project: "proj",
     });
-    assert.deepEqual(args, ["create", JSON.stringify({
-      title: "Fix the bug",
-      status: "blocked",
-      after: "20260101-000000",
-      body: "detail",
-    }), "--project", "proj"]);
+    assert.deepEqual(args, [
+      "create",
+      JSON.stringify({
+        title: "Fix the bug",
+        status: "blocked",
+        after: "20260101-000000",
+        body: "detail",
+      }),
+      "--project",
+      "proj",
+    ]);
   });
 
   it("omits absent optional keys from the JSON object", () => {
@@ -420,7 +425,12 @@ describe("tool parameter schemas (SPEC: ticket-tools.spec.md per-tool args)", ()
     const schema = schemaOf("ticket_create");
     assert.equal(schema.properties?.title?.type, "string");
     assert.deepEqual(schema.required, ["title"]);
-    assertOptionalProps(schema, { body: "string", status: "string", after: "string", project: "string" });
+    assertOptionalProps(schema, {
+      body: "string",
+      status: "string",
+      after: "string",
+      project: "string",
+    });
   });
 
   it("ticket_set: selector, status, after (string or null), project optional", () => {
@@ -504,7 +514,9 @@ describe("tool execute", () => {
       path: "/p/a.md",
       body: "ticket body\n",
     };
-    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), { selector: "a" });
+    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), {
+      selector: "a",
+    });
     assert.deepEqual(result.details, json);
     assert.deepEqual(result.content, [{ type: "text", text: formatTicketShow(json) }]);
   });
@@ -543,28 +555,28 @@ describe("tool execute", () => {
   });
 
   it("ticket_create formats the runner JSON into content and returns it as details", async () => {
-    const result = await exec(
-      findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_create"),
-      { title: "A" },
-    );
+    const result = await exec(findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_create"), {
+      title: "A",
+    });
     assert.deepEqual(result.details, TICKET_JSON);
     assert.deepEqual(result.content, [{ type: "text", text: formatTicketCreated(TICKET_JSON) }]);
   });
 
   it("ticket_set formats the runner JSON into content and returns it as details", async () => {
-    const result = await exec(
-      findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_set"),
-      { selector: "a", status: "closed" },
-    );
+    const result = await exec(findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_set"), {
+      selector: "a",
+      status: "closed",
+    });
     assert.deepEqual(result.details, TICKET_JSON);
     assert.deepEqual(result.content, [{ type: "text", text: formatTicketUpdated(TICKET_JSON) }]);
   });
 
   it("ticket_edit formats the runner JSON into content and returns it as details", async () => {
-    const result = await exec(
-      findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_edit"),
-      { selector: "a", old: "a", new: "b" },
-    );
+    const result = await exec(findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_edit"), {
+      selector: "a",
+      old: "a",
+      new: "b",
+    });
     assert.deepEqual(result.details, TICKET_JSON);
     assert.deepEqual(result.content, [{ type: "text", text: formatTicketUpdated(TICKET_JSON) }]);
   });
@@ -586,7 +598,10 @@ describe("tool execute", () => {
   it("rejects with the CLI stderr when the runner throws TicketCliError with stderr", async () => {
     const tool = findTool(
       captureTools({
-        runCli: () => Promise.reject(new TicketCliError("error: unknown id prefix", "error: unknown id prefix")),
+        runCli: () =>
+          Promise.reject(
+            new TicketCliError("error: unknown id prefix", "error: unknown id prefix"),
+          ),
       }),
       "ticket_show",
     );
@@ -597,7 +612,9 @@ describe("tool execute", () => {
     const tool = findTool(
       captureTools({
         runCli: () =>
-          Promise.reject(new TicketCliError("", "ticket CLI is not available: spawn ticket ENOENT")),
+          Promise.reject(
+            new TicketCliError("", "ticket CLI is not available: spawn ticket ENOENT"),
+          ),
       }),
       "ticket_show",
     );
@@ -619,13 +636,22 @@ describe("tool execute", () => {
       const fake = fakeRunner(resolved);
       const tool = findTool(captureTools(fake), name);
       await exec(tool, params);
-      assert.deepEqual(fake.calls.map((call) => call.cwd), [SESSION_CWD]);
+      assert.deepEqual(
+        fake.calls.map((call) => call.cwd),
+        [SESSION_CWD],
+      );
     }
   });
 
   // SPEC-pinned formatter output (not self-referencing the lib call result).
   it("renders the spec-pinned text for list, show, create, and set", async () => {
-    const ticket = { id: "20260101-000000", status: "blocked", title: "A", after: null, path: "/p/a.md" };
+    const ticket = {
+      id: "20260101-000000",
+      status: "blocked",
+      title: "A",
+      after: null,
+      path: "/p/a.md",
+    };
     const listed = await exec(findTool(captureTools(fakeRunner([ticket])), "ticket_list"), {});
     assert.deepEqual(listed.content, [{ type: "text", text: "20260101-000000\tblocked\tA" }]);
 
@@ -633,7 +659,9 @@ describe("tool execute", () => {
       findTool(captureTools(fakeRunner([{ ...ticket, project: "proj" }])), "ticket_list"),
       { all: true },
     );
-    assert.deepEqual(listedAll.content, [{ type: "text", text: "proj\t20260101-000000\tblocked\tA" }]);
+    assert.deepEqual(listedAll.content, [
+      { type: "text", text: "proj\t20260101-000000\tblocked\tA" },
+    ]);
     const show = await exec(
       findTool(
         captureTools(
@@ -657,15 +685,16 @@ describe("tool execute", () => {
       },
     ]);
 
-    const created = await exec(findTool(captureTools(fakeRunner(ticket)), "ticket_create"), { title: "A" });
+    const created = await exec(findTool(captureTools(fakeRunner(ticket)), "ticket_create"), {
+      title: "A",
+    });
     assert.deepEqual(created.content, [
       { type: "text", text: "created 20260101-000000\nstatus: blocked\nafter: -\npath: /p/a.md" },
     ]);
 
-    const updated = await exec(
-      findTool(captureTools(fakeRunner(ticket)), "ticket_set"),
-      { status: "blocked" },
-    );
+    const updated = await exec(findTool(captureTools(fakeRunner(ticket)), "ticket_set"), {
+      status: "blocked",
+    });
     assert.deepEqual(updated.content, [
       { type: "text", text: "updated 20260101-000000\nstatus: blocked\nafter: -\npath: /p/a.md" },
     ]);
@@ -695,7 +724,7 @@ describe("lib runTicketCli real spawn (SPEC: common behavior)", () => {
 
   it("spawns the CLI with --json and the given cwd, resolving its JSON", async () => {
     const cliPath = await installStub(
-      '#!/usr/bin/env bun\nconsole.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n',
+      "#!/usr/bin/env bun\nconsole.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n",
       true,
     );
     const result = (await runTicketCli(["list"], "/tmp", undefined, { cliPath })) as {
@@ -737,7 +766,10 @@ describe("lib runTicketCli real spawn (SPEC: common behavior)", () => {
   });
 
   it("rejects when the CLI outputs non-JSON on a zero exit", async () => {
-    const cliPath = await installStub('#!/usr/bin/env bun\nconsole.log("not json at all");\n', true);
+    const cliPath = await installStub(
+      '#!/usr/bin/env bun\nconsole.log("not json at all");\n',
+      true,
+    );
     await assert.rejects(
       () => runTicketCli(["list"], "/tmp", undefined, { cliPath }),
       /non-JSON output/,

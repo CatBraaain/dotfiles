@@ -107,7 +107,10 @@ describe("isConcurrencyError", () => {
   it("matches the plain Z.AI message wording", () => {
     assert.equal(isConcurrencyError("zai", "Rate limit reached for requests"), true);
     assert.equal(
-      isConcurrencyError("zai", "The service may be temporarily overloaded, please try again later"),
+      isConcurrencyError(
+        "zai",
+        "The service may be temporarily overloaded, please try again later",
+      ),
       true,
     );
     assert.equal(isConcurrencyError("zai-coding-cn", "Rate limit reached for requests"), true);
@@ -140,7 +143,10 @@ describe("isConcurrencyError", () => {
     assert.equal(isConcurrencyError("openai-codex", "Connection refused"), false);
     assert.equal(isConcurrencyError("openai-codex", "429 Too Many Requests"), false);
     assert.equal(isConcurrencyError("openai-codex", "rate limit exceeded"), false);
-    assert.equal(isConcurrencyError("openrouter", "insufficient_quota: usage window exhausted"), false);
+    assert.equal(
+      isConcurrencyError("openrouter", "insufficient_quota: usage window exhausted"),
+      false,
+    );
   });
 
   it("returns false without an error message", () => {
@@ -241,7 +247,11 @@ describe("ターン内リトライ", () => {
     const harness = createHarness();
     const replacement = await messageEnd(
       harness,
-      concurrencyError({ provider: "openai-codex", model: "gpt-5.6", errorMessage: "Connection refused" }),
+      concurrencyError({
+        provider: "openai-codex",
+        model: "gpt-5.6",
+        errorMessage: "Connection refused",
+      }),
     );
 
     assert.equal(replacement, undefined);

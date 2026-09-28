@@ -67,24 +67,13 @@
     "thumb": "always"
   },
   "hover_popover_delay": 10000,
-  "buffer_font_fallbacks": [
-    "Courier New",
-    "monospace"
-  ],
+  "buffer_font_fallbacks": ["Courier New", "monospace"],
   "buffer_font_family": "Consolas",
   "file_types": {
-    "dotenv": [
-      ".env.*"
-    ],
-    "yaml": [
-      "*.yml.*"
-    ],
-    "jsonc": [
-      "*.json"
-    ],
-    "ahk2": [
-      "*.ahk"
-    ]
+    "dotenv": [".env.*"],
+    "yaml": ["*.yml.*"],
+    "jsonc": ["*.json"],
+    "ahk2": ["*.ahk"]
   },
   "show_completions_on_input": true,
   "auto_indent_on_paste": false,
@@ -108,14 +97,10 @@
       "user": null,
       "projects": [
         {
-          "paths": [
-            "/home/username/projects/dotfiles"
-          ]
+          "paths": ["/home/username/projects/dotfiles"]
         },
         {
-          "paths": [
-            "/home/username/projects/use-zed/./"
-          ]
+          "paths": ["/home/username/projects/use-zed/./"]
         }
       ]
     }

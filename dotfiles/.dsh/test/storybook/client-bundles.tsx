@@ -1,7 +1,13 @@
 import * as React from "react";
 import * as primitives from "./primitives-stub";
 
-type PluginName = "agents" | "concurrency-retry" | "custom-ui" | "quota-line" | "session-list" | "skill-status";
+type PluginName =
+  | "agents"
+  | "concurrency-retry"
+  | "custom-ui"
+  | "quota-line"
+  | "session-list"
+  | "skill-status";
 
 type BundleRegistration = {
   readonly id: string;
@@ -75,7 +81,8 @@ type BrowserFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Re
 
 function hostFetch(originalFetch: BrowserFetch): BrowserFetch {
   return async (input, init) => {
-    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const requestUrl =
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const url = new URL(requestUrl, window.location.origin);
     if (url.pathname === "/plugins/quota-line/quota.json") {
       return new Response(
@@ -106,10 +113,13 @@ function hostFetch(originalFetch: BrowserFetch): BrowserFetch {
 
 function fakeContext(entries: SlotEntry[], cleanups: (() => void)[]): Record<string, unknown> {
   const context: Record<string, unknown> = {
-    inject: (_services: unknown, callback: (scope: Record<string, unknown>) => void) => callback(context),
+    inject: (_services: unknown, callback: (scope: Record<string, unknown>) => void) =>
+      callback(context),
     slots: {
-      inject: (_name: unknown, callback: (scope: Record<string, unknown>) => void) => callback(context),
-      register: (spec: SlotEntry["spec"], component: SlotEntry["component"]) => entries.push({ spec, component }),
+      inject: (_name: unknown, callback: (scope: Record<string, unknown>) => void) =>
+        callback(context),
+      register: (spec: SlotEntry["spec"], component: SlotEntry["component"]) =>
+        entries.push({ spec, component }),
       entries: () => [],
       subscribe: () => () => {},
     },
@@ -126,7 +136,10 @@ function fakeContext(entries: SlotEntry[], cleanups: (() => void)[]): Record<str
         store: { getSnapshot: () => ({ current: { provider: "zai" } }), subscribe: () => () => {} },
       }),
     },
-    workspaces: { archiveSession: async () => {}, create: async () => ({ workspaceId: "storybook" }) },
+    workspaces: {
+      archiveSession: async () => {},
+      create: async () => ({ workspaceId: "storybook" }),
+    },
     uiWorkspace: { startSession: () => {} },
     layout: { selectPanel: () => {} },
     locale: { register: () => () => {} },
@@ -135,7 +148,10 @@ function fakeContext(entries: SlotEntry[], cleanups: (() => void)[]): Record<str
   return context;
 }
 
-export function useClientBundle(plugin: PluginName, options: { readonly fakeHostFetch?: boolean } = {}): SlotEntry[] | undefined {
+export function useClientBundle(
+  plugin: PluginName,
+  options: { readonly fakeHostFetch?: boolean } = {},
+): SlotEntry[] | undefined {
   const [entries, setEntries] = React.useState<SlotEntry[]>();
 
   React.useEffect(() => {
@@ -161,6 +177,10 @@ export function useClientBundle(plugin: PluginName, options: { readonly fakeHost
   return entries;
 }
 
-export function entry(entries: SlotEntry[] | undefined, id: string): React.ComponentType<Record<string, unknown>> | undefined {
-  return entries?.find((candidate) => candidate.spec.id === id || candidate.spec.name === id)?.component;
+export function entry(
+  entries: SlotEntry[] | undefined,
+  id: string,
+): React.ComponentType<Record<string, unknown>> | undefined {
+  return entries?.find((candidate) => candidate.spec.id === id || candidate.spec.name === id)
+    ?.component;
 }

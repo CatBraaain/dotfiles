@@ -9,9 +9,7 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@deepseek-ai/*": [
-        "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"
-      ],
+      "@deepseek-ai/*": ["/home/username/.bun/install/global/node_modules/@deepseek-ai/*"],
       "@deepseek-ai/dsh-session/types": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-session/lib/types/types.d.ts"
       ],
@@ -27,9 +25,7 @@
       "@deepseek-ai/dsh-client-connection/client": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-connection/lib/types/client/index.d.ts"
       ],
-      "yaml": [
-        "/home/username/.bun/install/global/node_modules/yaml"
-      ]
+      "yaml": ["/home/username/.bun/install/global/node_modules/yaml"]
     }
   },
   "include": ["src"]

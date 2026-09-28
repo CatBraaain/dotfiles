@@ -101,7 +101,11 @@ function CustomUiStory(): ReactNode {
 
 function QuotaLineStory(): ReactNode {
   const component = entry(useClientBundle("quota-line", { fakeHostFetch: true }), "quota-line");
-  return createElement(ComposerDock, null, component === undefined ? null : createElement(component));
+  return createElement(
+    ComposerDock,
+    null,
+    component === undefined ? null : createElement(component),
+  );
 }
 
 function SessionListStory(): ReactNode {
@@ -116,12 +120,25 @@ function SessionListStory(): ReactNode {
     wide: true,
     expandSidebar: () => {},
     useSessions: (selector: (snapshot: unknown) => unknown) =>
-      selector({ ids: sessions.map(({ id }) => id), byId: Object.fromEntries(sessions.map(({ id, summary }) => [id, summary])), current: "s1" }),
+      selector({
+        ids: sessions.map(({ id }) => id),
+        byId: Object.fromEntries(sessions.map(({ id, summary }) => [id, summary])),
+        current: "s1",
+      }),
     useSessionPendingInteraction: (selector: (snapshot: unknown) => unknown) => selector(new Map()),
     useWorkspaces: (selector: (snapshot: unknown) => unknown) =>
       selector({
         archivedSessionIds: [],
-        items: [{ workspaceId: "w1", title: "dotfiles", path: "/home/user/dotfiles", sessionIds: sessions.map(({ id }) => id), createdAt: new Date(now - 86_400_000).toISOString(), updatedAt: new Date(now).toISOString() }],
+        items: [
+          {
+            workspaceId: "w1",
+            title: "dotfiles",
+            path: "/home/user/dotfiles",
+            sessionIds: sessions.map(({ id }) => id),
+            createdAt: new Date(now - 86_400_000).toISOString(),
+            updatedAt: new Date(now).toISOString(),
+          },
+        ],
       }),
     useDirectoryFlow: (selector: (snapshot: unknown) => unknown) => selector(false),
     t: translate,
@@ -141,15 +158,29 @@ function SkillStatusStory(): ReactNode {
     component === undefined
       ? null
       : createElement(component, {
-          useProjection: (key: string) => (key === "skillStatus" ? ["commit", "review", "write-docs"] : undefined),
+          useProjection: (key: string) =>
+            key === "skillStatus" ? ["commit", "review", "write-docs"] : undefined,
         }),
   );
 }
 
-function session(id: string, title: string, overrides: Record<string, unknown> = {}): { id: string; summary: Record<string, unknown> } {
+function session(
+  id: string,
+  title: string,
+  overrides: Record<string, unknown> = {},
+): { id: string; summary: Record<string, unknown> } {
   return {
     id,
-    summary: { id, title, displayTitle: title, blank: false, running: false, completed: false, updatedAt: Date.now(), ...overrides },
+    summary: {
+      id,
+      title,
+      displayTitle: title,
+      blank: false,
+      running: false,
+      completed: false,
+      updatedAt: Date.now(),
+      ...overrides,
+    },
   };
 }
 

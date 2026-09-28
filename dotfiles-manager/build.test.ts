@@ -40,9 +40,7 @@ async function put(baseDir: string, path: string, content: string): Promise<void
   await writeFile(absolute, content);
 }
 
-const autoUpdateReplacements = [
-  { pattern: "(EnableAutoUpdates)=.*", replacement: "${1}=false" },
-];
+const autoUpdateReplacements = [{ pattern: "(EnableAutoUpdates)=.*", replacement: "${1}=false" }];
 
 describe("run", () => {
   it("rebuilds dist as a copy of dotfiles without node_modules", async () => {
@@ -259,50 +257,85 @@ export default function () {
     {
       format: "yaml",
       serialize: (values: Record<string, string>) =>
-        Object.entries(values).map(([key, value]) => `${key}: ${JSON.stringify(value)}\n`).join(""),
+        Object.entries(values)
+          .map(([key, value]) => `${key}: ${JSON.stringify(value)}\n`)
+          .join(""),
       parse: parseYaml,
     },
     {
       format: "toml",
       serialize: (values: Record<string, string>) =>
-        Object.entries(values).map(([key, value]) => `${key} = ${JSON.stringify(value)}\n`).join(""),
+        Object.entries(values)
+          .map(([key, value]) => `${key} = ${JSON.stringify(value)}\n`)
+          .join(""),
       parse: parseToml,
     },
   ]) {
     it(`composes a standalone ${format} machine merge layer over home`, async () => {
       await put(homeRoot, `kit/settings.${format}`, serialize({ mode: "home" }));
-      await put(root, `dotfiles/kit/settings.merge-machine.${format}`, serialize({ mode: "machine" }));
+      await put(
+        root,
+        `dotfiles/kit/settings.merge-machine.${format}`,
+        serialize({ mode: "machine" }),
+      );
 
       await run(root, "linux", homeRoot);
 
-      assert.equal(parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8")).mode, "machine");
+      assert.equal(
+        parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8")).mode,
+        "machine",
+      );
       assert.equal(existsSync(join(distRoot, `kit/settings.merge-machine.${format}`)), false);
     });
 
     it(`applies ${format} home, plain base, shared merge, then machine merge`, async () => {
-      await put(homeRoot, `kit/settings.${format}`, serialize({ home: "present", homeVsPlain: "home" }));
-      await put(root, `dotfiles/kit/settings.${format}`, serialize({
-        plain: "present", homeVsPlain: "plain", plainVsShared: "plain",
-      }));
-      await put(root, `dotfiles/kit/settings.merge.${format}`, serialize({
-        shared: "present", plainVsShared: "shared", sharedVsMachine: "shared",
-      }));
-      await put(root, `dotfiles/kit/settings.merge-machine.${format}`, serialize({
-        machine: "present", sharedVsMachine: "machine",
-      }));
+      await put(
+        homeRoot,
+        `kit/settings.${format}`,
+        serialize({ home: "present", homeVsPlain: "home" }),
+      );
+      await put(
+        root,
+        `dotfiles/kit/settings.${format}`,
+        serialize({
+          plain: "present",
+          homeVsPlain: "plain",
+          plainVsShared: "plain",
+        }),
+      );
+      await put(
+        root,
+        `dotfiles/kit/settings.merge.${format}`,
+        serialize({
+          shared: "present",
+          plainVsShared: "shared",
+          sharedVsMachine: "shared",
+        }),
+      );
+      await put(
+        root,
+        `dotfiles/kit/settings.merge-machine.${format}`,
+        serialize({
+          machine: "present",
+          sharedVsMachine: "machine",
+        }),
+      );
 
       await run(root, "linux", homeRoot);
 
       const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
-      assert.deepEqual({ ...output }, {
-        home: "present",
-        plain: "present",
-        shared: "present",
-        machine: "present",
-        homeVsPlain: "plain",
-        plainVsShared: "shared",
-        sharedVsMachine: "machine",
-      });
+      assert.deepEqual(
+        { ...output },
+        {
+          home: "present",
+          plain: "present",
+          shared: "present",
+          machine: "present",
+          homeVsPlain: "plain",
+          plainVsShared: "shared",
+          sharedVsMachine: "machine",
+        },
+      );
       assert.equal(existsSync(join(distRoot, `kit/settings.merge.${format}`)), false);
       assert.equal(existsSync(join(distRoot, `kit/settings.merge-machine.${format}`)), false);
     });
@@ -318,7 +351,6 @@ export default function () {
       assert.equal(await readFile(join(distRoot, oldSidecar), "utf8"), content);
     });
   }
-
 
   it("writes an empty TOML merge result with one trailing newline", async () => {
     await put(root, "dotfiles/empty.merge.toml", "");
@@ -388,21 +420,33 @@ replacements:
   it("loads external.data-machine.yaml instead of the old name and replaces the shared repo", async () => {
     const hook = await readFile(join(import.meta.dir, "../dotfiles/01-external.build.ts"), "utf8");
     await put(root, "dotfiles/01-external.build.ts", hook);
-    await put(root, "dotfiles/external.data.yaml", `externalSkills:
+    await put(
+      root,
+      "dotfiles/external.data.yaml",
+      `externalSkills:
   example/repo:
     destination: shared
     entries: [shared.txt]
-`);
-    await put(root, "dotfiles/external.data-machine.yaml", `externalSkills:
+`,
+    );
+    await put(
+      root,
+      "dotfiles/external.data-machine.yaml",
+      `externalSkills:
   example/repo:
     destination: machine
     entries: [machine.txt]
-`);
-    await put(root, "dotfiles/external.data.machine.yaml", `externalSkills:
+`,
+    );
+    await put(
+      root,
+      "dotfiles/external.data.machine.yaml",
+      `externalSkills:
   example/repo:
     destination: old
     entries: [old.txt]
-`);
+`,
+    );
     await put(homeRoot, "mirrors/github.com/example/repo/shared.txt", "shared\n");
     await put(homeRoot, "mirrors/github.com/example/repo/machine.txt", "machine\n");
     await put(homeRoot, "mirrors/github.com/example/repo/old.txt", "old\n");
@@ -427,10 +471,7 @@ replacements:
         stderr: "pipe",
       },
     );
-    const [exitCode, stderr] = await Promise.all([
-      build.exited,
-      new Response(build.stderr).text(),
-    ]);
+    const [exitCode, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
     assert.equal(exitCode, 0, stderr);
     assert.equal(await readFile(join(distRoot, "machine/machine.txt"), "utf8"), "machine\n");
     assert.equal(existsSync(join(distRoot, "shared/shared.txt")), false);
@@ -457,24 +498,35 @@ replacements:
 describe("applyReplaceSidecars", () => {
   it("renders the rendered file from home's current content and removes the sidecar", async () => {
     await put(homeRoot, "obs/config.ini", "EnableAutoUpdates=true\nOther=keep\n");
-    await put(distRoot, "obs/config.ini.replace.yaml", `
+    await put(
+      distRoot,
+      "obs/config.ini.replace.yaml",
+      `
 replacements:
   - pattern: "(EnableAutoUpdates)=.*"
     replacement: "\${1}=false"
-`);
+`,
+    );
 
     await applyReplaceSidecars(distRoot, homeRoot);
 
-    assert.equal(await readFile(join(distRoot, "obs/config.ini"), "utf8"), "EnableAutoUpdates=false\nOther=keep\n");
+    assert.equal(
+      await readFile(join(distRoot, "obs/config.ini"), "utf8"),
+      "EnableAutoUpdates=false\nOther=keep\n",
+    );
     assert.equal(existsSync(join(distRoot, "obs/config.ini.replace.yaml")), false);
   });
 
   it("uses an empty input when home has no matching file", async () => {
-    await put(distRoot, "generated.conf.replace.yaml", `
+    await put(
+      distRoot,
+      "generated.conf.replace.yaml",
+      `
 replacements:
   - pattern: "^"
     replacement: "seeded"
-`);
+`,
+    );
 
     await applyReplaceSidecars(distRoot, homeRoot);
 
@@ -483,11 +535,15 @@ replacements:
 
   it("resolves the rendered home path verbatim for plain names", async () => {
     await put(homeRoot, "dot_config/exact_kit/settings.conf", "mode=demo\n");
-    await put(distRoot, "dot_config/exact_kit/settings.conf.replace.yaml", `
+    await put(
+      distRoot,
+      "dot_config/exact_kit/settings.conf.replace.yaml",
+      `
 replacements:
   - pattern: "mode=demo"
     replacement: "mode=live"
-`);
+`,
+    );
 
     await applyReplaceSidecars(distRoot, homeRoot);
 
@@ -527,7 +583,10 @@ describe("applyReplacements", () => {
 
   it("keeps input without any match unchanged and resolves capture references", () => {
     assert.equal(applyReplacements("keep me\n", autoUpdateReplacements), "keep me\n");
-    assert.equal(applyReplacements("EnableAutoUpdates=true\n", autoUpdateReplacements), "EnableAutoUpdates=false\n");
+    assert.equal(
+      applyReplacements("EnableAutoUpdates=true\n", autoUpdateReplacements),
+      "EnableAutoUpdates=false\n",
+    );
   });
 });
 
@@ -882,7 +941,11 @@ describe("manager CLI", () => {
 
   it("builds before applying and runs apply scripts", async () => {
     await put(root, "dotfiles/file.txt", "new\n");
-    await put(root, "dotfiles/done.apply.ts", 'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran\\n");');
+    await put(
+      root,
+      "dotfiles/done.apply.ts",
+      'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran\\n");',
+    );
     await put(distRoot, "old.txt", "stale\n");
 
     const result = await runManager("apply");
@@ -895,7 +958,11 @@ describe("manager CLI", () => {
 
   it("builds before diff without writing to home or running apply scripts", async () => {
     await put(root, "dotfiles/file.txt", "new\n");
-    await put(root, "dotfiles/done.apply.ts", 'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran");');
+    await put(
+      root,
+      "dotfiles/done.apply.ts",
+      'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran");',
+    );
     await put(homeRoot, "file.txt", "old\n");
 
     const result = await runManager("diff");
@@ -920,7 +987,11 @@ describe("manager CLI", () => {
 
   it("stops after a failed build without applying", async () => {
     await put(root, "dotfiles/file.txt", "new\n");
-    await put(root, "dotfiles/fail.build.ts", 'export default function () { throw new Error("failed"); }');
+    await put(
+      root,
+      "dotfiles/fail.build.ts",
+      'export default function () { throw new Error("failed"); }',
+    );
 
     const result = await runManager("apply");
 

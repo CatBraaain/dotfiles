@@ -6,13 +6,13 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 
 ## 1. ツールごとの扱い
 
-| pi ツール                                | 本拡張での扱い     | fs 読み書き制限 | network |
-| ---------------------------------------- | ------------------ | --------------- | ------- |
-| `read` `write` `edit` `grep` `find` `ls` | 置き換え           | あり            | —       |
-| `bash`                                   | 置き換え           | あり            | 開放    |
-| `web_fetch` `web_search`                 | 対象外（そのまま） | —               | 開放    |
-| LLM API / pi プロセス本体                | 対象外             | —               | 開放    |
-| `ask_permission`                         | 追加               | あり            | —       |
+| pi ツール | 本拡張での扱い | fs 読み書き制限 | network |
+| --- | --- | --- | --- |
+| `read` `write` `edit` `grep` `find` `ls` | 置き換え | あり | — |
+| `bash` | 置き換え | あり | 開放 |
+| `web_fetch` `web_search` | 対象外（そのまま） | — | 開放 |
+| LLM API / pi プロセス本体 | 対象外 | — | 開放 |
+| `ask_permission` | 追加 | あり | — |
 
 置き換え対象は pi の **全 built-in fs ツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。`read` は画像ファイルを Vision 入力として返す（§2.1）。
 
@@ -22,12 +22,12 @@ pi の全 built-in fs ツール（read / write / edit / grep / find / ls / bash�
 
 read / write の各操作ごとに、対応する設定セクションからパスのアクション（`allow` / `deny` / `ask`）を解決し（§3）、結果が決まる。edit は対象パスに対して read と write の両方を確認する。許可された画像ファイルの `read` は §2.1 に従う。`credentials` に指定されたパスは §2.2 の例外に従う。
 
-| パスのアクション   | 結果                                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------------ |
-| `allow`            | 成功                                                                                             |
-| `ask`              | ユーザー確認（§2.3 のダイアログ）。承認で成功（`write`・`edit` の承認ノートは §2.3）、拒否で失敗 |
-| `deny`（明示）     | 拒否。許可要求も不可                                                                             |
-| 未設定（= `deny`） | 拒否。ただし agent は許可要求を出せる（§3）                                                      |
+| パスのアクション | 結果 |
+| --- | --- |
+| `allow` | 成功 |
+| `ask` | ユーザー確認（§2.3 のダイアログ）。承認で成功（`write`・`edit` の承認ノートは §2.3）、拒否で失敗 |
+| `deny`（明示） | 拒否。許可要求も不可 |
+| 未設定（= `deny`） | 拒否。ただし agent は許可要求を出せる（§3） |
 
 - 秘密ファイル（`~/.ssh`, `~/.aws`, `~/.gnupg` 等）は `allow` に入れないことで読み出しを制限する。
 - `web_fetch` / `web_search` は fs 制限の対象外。
@@ -63,14 +63,14 @@ Vision 入力として扱う画像ファイルは、MIMEタイプが `image/*` �
 
 ユーザー確認（§2 の `ask`、§3 の許可要求、§4 の `ask`）は、まず選択ダイアログを表示する。選択肢は次の通り。選択ダイアログのキャンセルも拒否として扱う。
 
-| 確認対象                               | 選択肢                                                         |
-| -------------------------------------- | -------------------------------------------------------------- |
-| read                                   | `Yes, allow` / `No, deny (reason next)`                        |
-| write                                  | `File only` / `Directory (subtree)` / `No, deny (reason next)` |
-| commands（`ask`・設定パターンなし）    | `Allow once` / `No, deny (reason next)`                        |
-| commands（`ask`・設定パターンあり）    | `Allow once` / `Allow in this session` / `No, deny (reason next)`   |
-| ask_permission（§3・path）             | `Yes, allow` / `No, deny (reason next)`                        |
-| ask_permission（§3・command）          | `Allow once` / `Allow in this session` / `No, deny (reason next)`   |
+| 確認対象 | 選択肢 |
+| --- | --- |
+| read | `Yes, allow` / `No, deny (reason next)` |
+| write | `File only` / `Directory (subtree)` / `No, deny (reason next)` |
+| commands（`ask`・設定パターンなし） | `Allow once` / `No, deny (reason next)` |
+| commands（`ask`・設定パターンあり） | `Allow once` / `Allow in this session` / `No, deny (reason next)` |
+| ask_permission（§3・path） | `Yes, allow` / `No, deny (reason next)` |
+| ask_permission（§3・command） | `Allow once` / `Allow in this session` / `No, deny (reason next)` |
 
 コマンドの確認で `Allow in this session` を選ぶと、確認対象のコマンドが一致した設定パターンがセッション内で承認される。承認されたパターンに一致するコマンド（`ask` と `ask_with_reason` の双方）は、セッションの残りの間、確認なしで実行され、実行時に承認ノート（§2.3）を伴う。セッション承認は消費されず、セッション終了で破棄される。設定パターンがない確認（`no matching pattern (default ask)`）では承認対象のパターンがないため、`Allow in this session` を提示しない。選択ダイアログを提供できない UI での `confirm` による代替では、コマンドの承認は `Allow once` 相当として扱う。
 
@@ -88,14 +88,14 @@ Vision 入力として扱う画像ファイルは、MIMEタイプが `image/*` �
 
 承認を選択したときは、承認の事実を agent へ伝える。承認された確認ダイアログごとに、そのツール呼び出しの最終結果の最終行へ承認ノートを1行追記して返す。ノートを付けるのは `write` / `edit` / `bash` の呼び出しに限り、`read` / `grep` / `find` / `ls` の呼び出しと read の許可の承認にはノートを付けない。ノートは最終結果のみに付き、bash の逐次表示（§7）には含まれない。ヒント文（§7）など他の追記文があるときは、その後に追記する。ノートの形式は確認対象ごとに次のとおり（`<path>` は許可されたパス）。write の許可では、許可されたパスの確定アクション（§3）が未設定のときは bash 経由の書き込みも可、`ask` のときは fs ツール経由のみ可（§6.1）と区別する。
 
-| 確認対象                                             | 承認ノート                                                                                                                                        |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| write の許可（未設定パス・ファイル単体）            | `User approved write access via confirmation (scope: file <path>); writable for the rest of the session, including via bash.`                     |
-| write の許可（未設定パス・ディレクトリ配下）        | `User approved write access via confirmation (scope: directory <path>); the subtree is writable for the rest of the session, including via bash.` |
-| write の許可（`ask` に確定したパス・ファイル単体）  | `User approved write access via confirmation (scope: file <path>); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).` |
+| 確認対象 | 承認ノート |
+| --- | --- |
+| write の許可（未設定パス・ファイル単体） | `User approved write access via confirmation (scope: file <path>); writable for the rest of the session, including via bash.` |
+| write の許可（未設定パス・ディレクトリ配下） | `User approved write access via confirmation (scope: directory <path>); the subtree is writable for the rest of the session, including via bash.` |
+| write の許可（`ask` に確定したパス・ファイル単体） | `User approved write access via confirmation (scope: file <path>); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).` |
 | write の許可（`ask` に確定したパス・ディレクトリ配下） | `User approved write access via confirmation (scope: directory <path>); the subtree is writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).` |
-| コマンドの実行                                       | `User approved this command via confirmation.`                                                                                                    |
-| read の許可                                          | なし                                                                                                                                              |
+| コマンドの実行 | `User approved this command via confirmation.` |
+| read の許可 | なし |
 
 選択ダイアログを提供できない UI では確認ダイアログ（`confirm`）に置き換え、拒否時の理由入力はテキスト入力ダイアログを提供できる場合のみ行う。理由は agent への伝達のみに使い、以降のアクセス判定には影響しない。確認・理由入力のダイアログは §2 の直列化に従う。
 
@@ -107,23 +107,23 @@ Vision 入力として扱う画像ファイルは、MIMEタイプが `image/*` �
 
 fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission` が引数に受け取るパスは、アクション判定（authorize）の前に共有ヘルパーで正規化する。fs 系ツールでは、承認（§2.3 のダイアログ・許可要求）と実行（§7 の run-tools へ渡すパス）は同一の正規化結果を用い、審査したパスと実行するパスを一致させる。
 
-| 引数の記述                  | 正規化                       |
-| --------------------------- | ---------------------------- |
-| `@` 接頭（`@/abs/path` 等） | 接頭 `@` を取り除く          |
-| `~`・`~/...`                | ホームディレクトリへ展開する |
+| 引数の記述 | 正規化 |
+| --- | --- |
+| `@` 接頭（`@/abs/path` 等） | 接頭 `@` を取り除く |
+| `~`・`~/...` | ホームディレクトリへ展開する |
 
 ### パス文字列の解決
 
 `sandbox.yaml` の `read` / `write` の要素のパターンと `credentials` のエントリは以下の規則で絶対パスに解決する。`read` / `write` はそれぞれの設定でアクション判定を行い、`read` / `write` と `credentials` は bwrap の bind 対象（§6.1）とする。
 
-| 記述                             | 解決先                                                                               |
-| -------------------------------- | ------------------------------------------------------------------------------------ |
-| `${GIT_MAIN_WORKTREE_PATH}`              | cwd を含む Git repository の main worktree の絶対パス                                      |
-| `${REPOSITORY_NAME}`                     | cwd を含む Git repository のリポジトリ名。main worktree の basename              |
-| `${XDG_RUNTIME_DIR}`             | ユーザーのランタイムディレクトリ（`$XDG_RUNTIME_DIR`、未設定なら `/run/user/<uid>`） |
-| 相対パス（`.` `./...` `../...`） | セッションの cwd を起点                                                              |
-| `~`                              | ホームディレクトリ                                                                   |
-| それ以外                         | 絶対パス（そのまま）                                                                 |
+| 記述 | 解決先 |
+| --- | --- |
+| `${GIT_MAIN_WORKTREE_PATH}` | cwd を含む Git repository の main worktree の絶対パス |
+| `${REPOSITORY_NAME}` | cwd を含む Git repository のリポジトリ名。main worktree の basename |
+| `${XDG_RUNTIME_DIR}` | ユーザーのランタイムディレクトリ（`$XDG_RUNTIME_DIR`、未設定なら `/run/user/<uid>`） |
+| 相対パス（`.` `./...` `../...`） | セッションの cwd を起点 |
+| `~` | ホームディレクトリ |
+| それ以外 | 絶対パス（そのまま） |
 
 `${GIT_MAIN_WORKTREE_PATH}` はパスエントリ内の任意の位置に記述できる。セッション cwd が linked worktree でも main worktree（`git worktree list` の最初のエントリ）基準で解決し、アクション判定と bind のそれぞれの機会に解決し直す。Git repository 外では、この変数を含むエントリはパスを許可・bind・作成しない。
 
@@ -135,13 +135,13 @@ fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission
 
 `read` / `write` と `credentials` のエントリに glob（`*` `?` `**` `[...]`）を含められる。パターンは変数展開と絶対パス解決（上記）の後に展開する。`read` / `write` はマッチした実パスそれぞれを対応する操作のアクション判定・bind 対象とし、`credentials` は bind 対象とする。
 
-| パターン                             | 意味                                                                                               |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `*`                                  | パス区切り（`/`）以外の任意文字列                                                                  |
-| `**`                                 | パス区切りを含む任意文字列（再帰）                                                                 |
-| `?`                                  | 任意1文字                                                                                          |
-| `[...]`                              | 文字クラス                                                                                         |
-| `{a,b}`                              | カンマ区切りの選択肢のいずれかに展開（ブレース展開）                                               |
+| パターン | 意味 |
+| --- | --- |
+| `*` | パス区切り（`/`）以外の任意文字列 |
+| `**` | パス区切りを含む任意文字列（再帰） |
+| `?` | 任意1文字 |
+| `[...]` | 文字クラス |
+| `{a,b}` | カンマ区切りの選択肢のいずれかに展開（ブレース展開） |
 | `"*"` 単体（`read` の `allow` のみ） | すべてのパスにマッチする。全パスの read を許可し、ルート全体を read-only bind の対象とする（§6.1） |
 
 例: `~/.cache/*` → `~/.cache/uv` `~/.cache/pip` `~/.cache/go-build` ... に展開される。`~/.config/{git,npm}` → `~/.config/git` `~/.config/npm` に展開される。
@@ -183,13 +183,13 @@ flowchart TD
 
 パラメータ `reason` は必須で、`path` 配下への書き込みが必要な理由をユーザーが承認・拒否を判断するためのヒントとして指定する。確認ダイアログでは §2.3 のとおり `reason: <理由>` の行として表示される。
 
-| `ask_permission` 呼び出し時の状態                        | 結果                                       |
-| -------------------------------------------------------- | ------------------------------------------ |
-| `write` の解決結果が `deny`（明示 deny）                 | エラー。要求不可                           |
-| `credentials` に一致（§2.2 の対象外）                    | エラー。要求不可                           |
+| `ask_permission` 呼び出し時の状態 | 結果 |
+| --- | --- |
+| `write` の解決結果が `deny`（明示 deny） | エラー。要求不可 |
+| `credentials` に一致（§2.2 の対象外） | エラー。要求不可 |
 | `write` の解決結果が `allow`、または動的許可で書き込み可 | ダイアログなし。ツール結果に許可済みを返す |
-| `write` の解決結果が `ask`、または未設定                 | 確認ダイアログ（§2.3）                     |
-| 確認ダイアログを提供できない UI                          | エラー                                     |
+| `write` の解決結果が `ask`、または未設定 | 確認ダイアログ（§2.3） |
+| 確認ダイアログを提供できない UI | エラー |
 
 ダイアログでの承認は `write` の動的許可（ディレクトリスコープ）と同じ効果を持つ: `path` 配下がセッション内で書き込み可になり、bind 対象に追加され、実在保証は §6.1 に従う。bash 経由で書き込み可能になるのは `path` の確定アクション（§3）が未設定のときだけで、`ask` に確定したパスは fs ツールでのみ書き込み可になり、bash からは書けない（§6.1）。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは `path` 配下がセッション内で書き込み可能になったことと、bash 経由で書けるかどうか（§2.3 の承認ノートと同じ区分）を伝える。拒否はエラーではなく、以降の `write` / `edit` は従来どおり個別に確認される。
 
@@ -197,13 +197,13 @@ flowchart TD
 
 `command` の確認ダイアログでは、選択肢 `Allow once` と `Allow in this session`（§2.3）のいずれかを選ぶ。`Allow once` の承認は1回限りの実行承認で、コマンドはその場では実行されない。承認後、エージェントが `bash` で同じコマンド（引用の付け方の違いを除く）を再送すると、確認なしで実行され、承認は消費される。コマンドの一部分だけが一致する別のコマンドには使えない。`Allow in this session` の承認は、確認対象が一致した設定パターンに対するセッション内の承認で、以降そのパターンに一致するコマンドは確認なしで実行され、`ask_permission` の再リクエストも確認ダイアログなしで許可済みを返す。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは承認の単位を区別して伝える: `Allow once` では同じコマンドを bash で再送すれば実行できること、`Allow in this session` では承認されたパターンに一致するコマンドがセッション中以降確認なしで実行されることを示す。拒否はエラーではなく、以降の当該コマンドの `bash` は `ask_with_reason` の差し戻し（§4）を引き続き受ける。
 
-| `ask_permission`（`command`）呼び出し時の状態       | 結果                                                            |
-| --------------------------------------------------- | --------------------------------------------------------------- |
-| `commands` の解決結果が `deny`（明示 deny・未設定） | エラー。要求不可                                                |
-| `commands` の解決結果が `allow`                     | ダイアログなし。ツール結果に許可済みを返す                      |
-| `commands` の解決結果が `ask`                       | エラー。bash 実行時に確認されるコマンドのため、事前承認の対象外 |
-| `commands` の解決結果が `ask_with_reason`           | 確認ダイアログ（§2.3）                                          |
-| 確認ダイアログを提供できない UI                     | エラー                                                          |
+| `ask_permission`（`command`）呼び出し時の状態 | 結果 |
+| --- | --- |
+| `commands` の解決結果が `deny`（明示 deny・未設定） | エラー。要求不可 |
+| `commands` の解決結果が `allow` | ダイアログなし。ツール結果に許可済みを返す |
+| `commands` の解決結果が `ask` | エラー。bash 実行時に確認されるコマンドのため、事前承認の対象外 |
+| `commands` の解決結果が `ask_with_reason` | 確認ダイアログ（§2.3） |
+| 確認ダイアログを提供できない UI | エラー |
 
 ---
 
@@ -213,12 +213,12 @@ flowchart TD
 
 複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。
 
-| コマンドのアクション | 結果                                                                                                                                                                                                                                                                                                                                    |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `allow`              | そのまま実行                                                                                                                                                                                                                                                                                                                            |
-| `ask`                | 実行前のユーザー確認（§2.3 のダイアログ）。承認で実行（承認ノートは §2.3）、拒否でブロック。確認対象がセッション承認済みパターン（§2.3）に一致するときは確認なしで実行される（承認ノートは §2.3）                                                                                                                                                                                                                                              |
-| `ask_with_reason`    | 実行を差し戻す。エラーとして、このコマンドには理由が必要なこと、`ask_permission` にこのコマンドと理由を渡して承認を求めること、ゲートを回避するためのコマンドの書き換えをしないことを伝える。`ask_permission` での事前承認（§3）と同じコマンド（引用の付け方の違いを除く）のときは確認なしで実行し（承認ノートは §2.3）、承認を消費する。セッション承認済みパターン（§2.3）に一致するときも確認なしで実行される |
-| `deny` / 未設定      | ブロック（実行されない）                                                                                                                                                                                                                                                                                                                |
+| コマンドのアクション | 結果 |
+| --- | --- |
+| `allow` | そのまま実行 |
+| `ask` | 実行前のユーザー確認（§2.3 のダイアログ）。承認で実行（承認ノートは §2.3）、拒否でブロック。確認対象がセッション承認済みパターン（§2.3）に一致するときは確認なしで実行される（承認ノートは §2.3） |
+| `ask_with_reason` | 実行を差し戻す。エラーとして、このコマンドには理由が必要なこと、`ask_permission` にこのコマンドと理由を渡して承認を求めること、ゲートを回避するためのコマンドの書き換えをしないことを伝える。`ask_permission` での事前承認（§3）と同じコマンド（引用の付け方の違いを除く）のときは確認なしで実行し（承認ノートは §2.3）、承認を消費する。セッション承認済みパターン（§2.3）に一致するときも確認なしで実行される |
+| `deny` / 未設定 | ブロック（実行されない） |
 
 `ask` の確認も一度に1つずつ表示する（§2 と同じ直列化）。事前承認（`Allow once`）の照合はコマンド全体の同一性で判定し、コマンドの一部分だけの一致では使えない。once の承認は1回の実行で消費される。セッション承認（`Allow in this session`、§2.3）はパターン単位で消費されず、セッション終了で破棄される。
 
@@ -228,11 +228,11 @@ flowchart TD
 
 network は開放。fs 制限の対象外。
 
-| 経路                        | network |
-| --------------------------- | ------- |
-| `bash` 内のネットワーク操作 | 開放    |
-| `web_fetch` / `web_search`  | 開放    |
-| LLM API / pi プロセス本体   | 開放    |
+| 経路 | network |
+| --- | --- |
+| `bash` 内のネットワーク操作 | 開放 |
+| `web_fetch` / `web_search` | 開放 |
+| LLM API / pi プロセス本体 | 開放 |
 
 ---
 
@@ -240,12 +240,12 @@ network は開放。fs 制限の対象外。
 
 ユーザーが `dotfiles/.agents/config.exact/sandbox.yaml` で制御する（実行時は pi の設定ディレクトリから symlink する）。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash 専用パスは `credentials` で指定する。
 
-| 項目          | 意味                                                                                                                                                                            |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`        | read / grep / find / ls のパスアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決）                                                                              |
-| `write`       | write / edit のパスアクション（§2・§3）。後勝ちで `allow` に確定する固定パスは起動時に作成される（§6.1）                                                                      |
+| 項目 | 意味 |
+| --- | --- |
+| `read` | read / grep / find / ls のパスアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決） |
+| `write` | write / edit のパスアクション（§2・§3）。後勝ちで `allow` に確定する固定パスは起動時に作成される（§6.1） |
 | `credentials` | bash の sandbox に read-only で bind するパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
-| `commands`    | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する                                          |
+| `commands` | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する |
 
 - `read` / `write` / `commands` は、アクション別の3リストではなく `{action: pattern}` または `{action: [patterns...]}` の要素からなるフラットなリストで書く。`action` は read・write では `allow` / `ask` / `deny` のいずれか、commands では `ask_with_reason` も使える4値のいずれかで、要素ごとに1つだけ宣言する。パターンの記法は read / write が glob（§3）、commands が正規表現である。
 - 各リストは要素を上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
@@ -261,8 +261,8 @@ commands:
   - { ask: ['^git push\b', '^gh pr create\b'] }
   - { ask_with_reason: ['^sudo\b', '^chmod -R\b'] }
   - { ask: '^systemctl\b' }
-  - { allow: '^systemctl (status|show)' }
-  - { deny: '^systemctl (reboot|poweroff|halt|shutdown)' }
+  - { allow: "^systemctl (status|show)" }
+  - { deny: "^systemctl (reboot|poweroff|halt|shutdown)" }
 ```
 
 > パスの glob 照合ルール（§3）とコマンド正規表現の評価対象（セグメントの切り方等）は実装で決定する。本 spec は「何が設定可能か」のみを規定する。
@@ -281,10 +281,10 @@ bash の sandbox の書き込み可能 bind は、`write` の宣言パスのう�
 
 fs 系ツール（`read` `write` `edit` `grep` `find` `ls`）用の sandbox では、`read` で `deny` アクションを宣言した要素のパターンに展開される実在パスと、`credentials` のパス（glob 展開後・実在するもののみ）は実体が見えないようマスクされる。マスクは宣言ベースであり、後勝ちの走査で最終的に `allow` へ確定したパスでも、`deny` 宣言要素のパターンに展開される実在パスには適用される。
 
-| 対象パスの種類 | fs sandbox 内での見え方                       |
-| -------------- | --------------------------------------------- |
-| ディレクトリ   | 空のディレクトリ（tmpfs マウント）            |
-| ファイル       | 空のファイル（`/dev/null` を read-only bind） |
+| 対象パスの種類 | fs sandbox 内での見え方 |
+| --- | --- |
+| ディレクトリ | 空のディレクトリ（tmpfs マウント） |
+| ファイル | 空のファイル（`/dev/null` を read-only bind） |
 
 bash コマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.2 のとおり read-only で bind される。`write` の deny・ask に確定したパスは、書き込み可能 bind の配下にあるとき §6.1 のとおり read-only で bind し直される。
 
@@ -294,10 +294,10 @@ bash コマンドの sandbox ではこのマスクを行わない。`credentials
 
 本拡張は pi の標準 tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision 入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時、対象の最終アクションが `ask` または未設定の場合だけ `ask_permission` で許可要求できること、明示 `deny` と credentials は要求不可であること、許可結果が bash 書き込み不可を示す場合は fs ツールを使うことを、理由必須ゲート（`ask_with_reason`）で差し戻されたときは元のコマンドと理由で `ask_permission` に要求することを追記する。`write` / `edit` には、最終アクションが `ask` または未設定のパスは許可確認の対象になり、承認後にセッション内で書き込み可能になること、明示 `deny` と credentials は許可ダイアログを出さず拒否すること（`ask` に確定したパスは bash からは書けない。§6.1）を追記する。認可（§2〜§4）を通った fs ツール呼び出しは、ツールごとに 1 回の bwrap 起動で execute 全体を実行する。sandbox 内では `bun run-tools.ts <tool-name>` が pi 標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
-| ツール                                          | 実行 |
-| ----------------------------------------------- | ---- |
+| ツール | 実行 |
+| --- | --- |
 | `read` `write` `edit` `grep` `find` `ls` `bash` | sandbox 内で `bun run-tools.ts <tool-name>` → pi 標準 tool definition の execute |
-| `ask_permission`                                | 許可要求（§3・§4） |
+| `ask_permission` | 許可要求（§3・§4） |
 
 bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾にヒント文を追記する。ヒント文はコマンドを書き換えて再試行しないことを伝え、対象の最終アクションが `ask` または未設定で credentials に遮断されない場合にだけ `ask_permission` で許可要求できることを示す。明示 `deny` は許可できない。許可結果が bash 書き込み不可を示した場合は fs ツールを使う。
 
@@ -337,15 +337,15 @@ WSL 上で bwrap を起動するとき、sandboxed child process に渡す `PATH
 
 全ツールの実行中表示は `Running...`、エラー表示はエラーメッセージの先頭3行とする。4行目以降がある場合は、3行目の後に `…` を表示する。成功時の折りたたみ表示は次のサマリーとする。展開時は結果本体を表示する。
 
-| ツール           | コール行                                                                                         | 折りたたみ時の成功サマリー                                                                                         | 展開時                         |
-| ---------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
-| `bash`           | `$ <command>`（300文字で切り詰め）                                                               | 実行秒数（例: `1.2s`）                                                                                             | stdout/stderr                  |
-| `write`          | `write <path>`                                                                                   | `wrote <size>`                                                                                                     | 書き込んだ内容                 |
-| `edit`           | `edit <path>`                                                                                    | `edited N block(s)`                                                                                                | diff                           |
-| `read`           | `read <path>`（SKILL.md のとき `[skill] <name>`）                                                | `N lines`。画像ファイルのときは `image input`（画像入力非対応モデルのときはエラー）                                | ファイル内容、画像、またはエラー |
-| `grep`           | `grep <pattern>`                                                                                 | `N matches`（context 行を含まない純マッチ数）                                                                      | マッチ結果（context 行を含む） |
-| `find`           | `find <pattern>`                                                                                 | `N files`                                                                                                          | パス一覧                       |
-| `ls`             | `ls <path>`（未指定は `.`）                                                                      | `N entries`                                                                                                        | エントリ一覧                   |
-| `ask_permission` | `ask_permission <path>`（`command` のとき `ask_permission <command>`。いずれも80文字で切り詰め） | `granted` / `already granted`。`denied`（理由入力があれば `denied — <理由>` の形式で理由を80文字に切り詰めて併記） | 結果テキスト                   |
+| ツール | コール行 | 折りたたみ時の成功サマリー | 展開時 |
+| --- | --- | --- | --- |
+| `bash` | `$ <command>`（300文字で切り詰め） | 実行秒数（例: `1.2s`） | stdout/stderr |
+| `write` | `write <path>` | `wrote <size>` | 書き込んだ内容 |
+| `edit` | `edit <path>` | `edited N block(s)` | diff |
+| `read` | `read <path>`（SKILL.md のとき `[skill] <name>`） | `N lines`。画像ファイルのときは `image input`（画像入力非対応モデルのときはエラー） | ファイル内容、画像、またはエラー |
+| `grep` | `grep <pattern>` | `N matches`（context 行を含まない純マッチ数） | マッチ結果（context 行を含む） |
+| `find` | `find <pattern>` | `N files` | パス一覧 |
+| `ls` | `ls <path>`（未指定は `.`） | `N entries` | エントリ一覧 |
+| `ask_permission` | `ask_permission <path>`（`command` のとき `ask_permission <command>`。いずれも80文字で切り詰め） | `granted` / `already granted`。`denied`（理由入力があれば `denied — <理由>` の形式で理由を80文字に切り詰めて併記） | 結果テキスト |
 
 表示はツールの実行結果を変更せず、pi TUI の renderer だけを置き換える。

@@ -115,9 +115,7 @@ async function readExternalRepos(configPath: string): Promise<ExternalRepo[]> {
   const doc: unknown = parseYaml(await readFile(configPath, "utf-8"));
   const externalSkills = (doc as { externalSkills?: unknown })?.externalSkills;
   if (!isPlainObject(externalSkills))
-    throw new Error(
-      `${basename(configPath)} must have an externalSkills mapping: ${configPath}`,
-    );
+    throw new Error(`${basename(configPath)} must have an externalSkills mapping: ${configPath}`);
   return Object.entries(externalSkills).map(([repo, raw]) =>
     normalizeRepo(`externalSkills.${repo}`, repo, raw),
   );
@@ -135,15 +133,13 @@ async function syncMirror(
   if (!existsSync(mirrorDir)) {
     const url = repoUrl(repo);
     const result = await run(["clone", "--depth", "1", "--quiet", url, mirrorDir]);
-    if (!result.ok)
-      throw new Error(`git clone failed for ${url}: ${singleLine(result.stderr)}`);
+    if (!result.ok) throw new Error(`git clone failed for ${url}: ${singleLine(result.stderr)}`);
     await markPullAt(mirrorDir);
     return { mirrorDir, changed: true };
   }
 
   const lastPullAt = await readLastPullAt(mirrorDir);
-  if (!isPullDue(lastPullAt, Date.now(), ttlMs, forcePull))
-    return { mirrorDir, changed: false };
+  if (!isPullDue(lastPullAt, Date.now(), ttlMs, forcePull)) return { mirrorDir, changed: false };
 
   const before = await readRevision(repo, mirrorDir, context);
   const result = await run(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
@@ -167,24 +163,16 @@ function isPullDue(
   return nowMs - lastPullAt >= ttlMs;
 }
 
-async function resolveEntryPath(
-  mirrorDir: string,
-  path: string,
-): Promise<string> {
-  const matches = [
-    ...new Bun.Glob(path).scanSync({ cwd: mirrorDir, onlyFiles: false }),
-  ].map((relativePath) => join(mirrorDir, relativePath));
-  if (matches.length === 0)
-    throw new Error(`entry path matched nothing: ${path}`);
-  if (matches.length > 1)
-    throw new Error(`entry path matched multiple entries: ${path}`);
+async function resolveEntryPath(mirrorDir: string, path: string): Promise<string> {
+  const matches = [...new Bun.Glob(path).scanSync({ cwd: mirrorDir, onlyFiles: false })].map(
+    (relativePath) => join(mirrorDir, relativePath),
+  );
+  if (matches.length === 0) throw new Error(`entry path matched nothing: ${path}`);
+  if (matches.length > 1) throw new Error(`entry path matched multiple entries: ${path}`);
   return matches[0]!;
 }
 
-async function copySkillTree(
-  sourceDir: string,
-  targetDir: string,
-): Promise<void> {
+async function copySkillTree(sourceDir: string, targetDir: string): Promise<void> {
   await mkdir(targetDir, { recursive: true });
   for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
     if (entry.name === ".git") continue;
@@ -196,9 +184,7 @@ async function copySkillTree(
   }
 }
 
-async function readLastPullAt(
-  mirrorDir: string,
-): Promise<number | undefined> {
+async function readLastPullAt(mirrorDir: string): Promise<number | undefined> {
   const pullTimePath = join(mirrorDir, ".git", pullTimeFileName);
   if (!existsSync(pullTimePath)) return undefined;
   const raw = await readFile(pullTimePath, "utf-8").catch(() => undefined);
@@ -237,9 +223,7 @@ async function copyRepoEntries(
       continue;
     }
     const skillDir = entryPath;
-    const entryEdits = resolvedEdits.filter(({ filePath }) =>
-      isPathInside(skillDir, filePath),
-    );
+    const entryEdits = resolvedEdits.filter(({ filePath }) => isPathInside(skillDir, filePath));
     if (entryEdits.length === 0) {
       await copySkillTree(skillDir, join(destinationDir, basename(skillDir)));
       continue;
@@ -250,10 +234,7 @@ async function copyRepoEntries(
       await copyRawTree(skillDir, stagingDir);
       for (const edit of entryEdits) {
         try {
-          await appendEditedFile(
-            join(stagingDir, relative(skillDir, edit.filePath)),
-            edit.text,
-          );
+          await appendEditedFile(join(stagingDir, relative(skillDir, edit.filePath)), edit.text);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`edit failed for ${edit.path}: ${singleLine(message)}`);
@@ -329,9 +310,7 @@ async function readRevision(
 ): Promise<string> {
   const result = await context.runGit(["-C", mirrorDir, "rev-parse", "HEAD"]);
   if (!result.ok) {
-    throw new Error(
-      `git revision lookup failed for ${repo}: ${singleLine(result.stderr)}`,
-    );
+    throw new Error(`git revision lookup failed for ${repo}: ${singleLine(result.stderr)}`);
   }
   return result.stdout.trim();
 }
@@ -355,8 +334,7 @@ function normalizeRepo(prefix: string, repo: string, raw: unknown): ExternalRepo
     repo,
     destination: raw.destination,
     entries: normalizePathEntries(`${prefix}.entries`, raw.entries),
-    ttlMs:
-      (typeof raw.ttlHours === "number" ? raw.ttlHours : defaultTtlHours) * 60 * 60 * 1000,
+    ttlMs: (typeof raw.ttlHours === "number" ? raw.ttlHours : defaultTtlHours) * 60 * 60 * 1000,
     runAfter: normalizeCommands(`${prefix}.run_after`, raw.run_after ?? []),
     edits: normalizeEdits(`${prefix}.edit`, raw.edit === undefined ? {} : raw.edit),
   };
@@ -365,8 +343,7 @@ function normalizeRepo(prefix: string, repo: string, raw: unknown): ExternalRepo
 function normalizePathEntries(prefix: string, raw: unknown): string[] {
   if (!Array.isArray(raw)) throw new Error(`${prefix} must be an array`);
   return raw.map((entry, index) => {
-    if (typeof entry !== "string")
-      throw new Error(`${prefix}[${index}] must be a path string`);
+    if (typeof entry !== "string") throw new Error(`${prefix}[${index}] must be a path string`);
     return entry;
   });
 }

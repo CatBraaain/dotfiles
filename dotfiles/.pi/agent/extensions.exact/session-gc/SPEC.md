@@ -11,12 +11,12 @@ pi 起動時に、古いセッションファイルを各プロジェクトの `
 `session_start` イベントの `reason` によって、GC を実行するかどうかが決まる。
 
 | `session_start.reason` | GC を実行するか |
-| ---------------------- | --------------- |
-| `startup`              | する            |
-| `reload`               | しない          |
-| `new`                  | しない          |
-| `resume`               | しない          |
-| `fork`                 | しない          |
+| --- | --- |
+| `startup` | する |
+| `reload` | しない |
+| `new` | しない |
+| `resume` | しない |
+| `fork` | しない |
 
 `reload` / `new` / `resume` / `fork` では何もせず、実行時刻も記録しない。
 

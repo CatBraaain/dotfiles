@@ -60,9 +60,7 @@ async function runPlaywright(command: readonly string[], cwd: string): Promise<s
     cwd,
   );
   if (result.exitCode !== 0) {
-    throw new Error(
-      `playwright-cli ${command[0]} failed:\n${result.stderr || result.stdout}`,
-    );
+    throw new Error(`playwright-cli ${command[0]} failed:\n${result.stderr || result.stdout}`);
   }
   return parsePlaywrightResult(result.stdout);
 }

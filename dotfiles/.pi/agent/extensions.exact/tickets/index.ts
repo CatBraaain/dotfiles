@@ -26,8 +26,8 @@ import { type Static, Type } from "typebox";
 // --- tool parameter schemas (argument names match ticket-tools.spec.md) ---
 
 const SELECTOR_DESCRIPTION =
-  "Ticket selector: a ticket ID, a prefix unique to one ticket, or \"next\" for the " +
-  "oldest actionable ticket. Omitted means \"next\".";
+  'Ticket selector: a ticket ID, a prefix unique to one ticket, or "next" for the ' +
+  'oldest actionable ticket. Omitted means "next".';
 
 export const ticketListParameters = Type.Object({
   status: Type.Optional(
@@ -38,7 +38,8 @@ export const ticketListParameters = Type.Object({
   ),
   project: Type.Optional(
     Type.String({
-      description: "Ticket store (project) to list. Defaults to the project resolved from the session cwd.",
+      description:
+        "Ticket store (project) to list. Defaults to the project resolved from the session cwd.",
     }),
   ),
   all: Type.Optional(
@@ -56,7 +57,8 @@ export const ticketShowParameters = Type.Object({
   ),
   project: Type.Optional(
     Type.String({
-      description: "Ticket store (project) to look in. Defaults to the project resolved from the session cwd.",
+      description:
+        "Ticket store (project) to look in. Defaults to the project resolved from the session cwd.",
     }),
   ),
 });
@@ -85,7 +87,8 @@ export const ticketCreateParameters = Type.Object({
   ),
   project: Type.Optional(
     Type.String({
-      description: "Ticket store (project) to create the ticket in. Defaults to the project resolved from the session cwd.",
+      description:
+        "Ticket store (project) to create the ticket in. Defaults to the project resolved from the session cwd.",
     }),
   ),
 });
@@ -111,7 +114,8 @@ export const ticketSetParameters = Type.Object({
   ),
   project: Type.Optional(
     Type.String({
-      description: "Ticket store (project) to update in. Defaults to the project resolved from the session cwd.",
+      description:
+        "Ticket store (project) to update in. Defaults to the project resolved from the session cwd.",
     }),
   ),
 });
@@ -132,7 +136,8 @@ export const ticketEditParameters = Type.Object({
   }),
   project: Type.Optional(
     Type.String({
-      description: "Ticket store (project) to update in. Defaults to the project resolved from the session cwd.",
+      description:
+        "Ticket store (project) to update in. Defaults to the project resolved from the session cwd.",
     }),
   ),
 });
@@ -157,7 +162,11 @@ export function buildListArgs(params: TicketListParams): string[] {
 }
 
 export function buildShowArgs(params: TicketShowParams): string[] {
-  return ["show", ...(params.selector !== undefined ? [params.selector] : []), ...projectFlag(params.project)];
+  return [
+    "show",
+    ...(params.selector !== undefined ? [params.selector] : []),
+    ...projectFlag(params.project),
+  ];
 }
 
 // The CLI takes a single JSON object argument; only the given keys are sent.
@@ -199,7 +208,7 @@ export const ticketToolDescriptions = {
   ticket_show:
     "Show one ticket via the `ticket show` CLI subcommand. " +
     "Returns id, status, after, title, and body. " +
-    "selector is a ticket ID, a prefix unique to one ticket, or \"next\" for the oldest actionable ticket (open with its after resolved); omitted means \"next\". " +
+    'selector is a ticket ID, a prefix unique to one ticket, or "next" for the oldest actionable ticket (open with its after resolved); omitted means "next". ' +
     "project selects the ticket store (defaults to the project resolved from the session cwd).",
   ticket_create:
     "Create a ticket via the `ticket create` CLI subcommand and return the created id, status, after, and path. " +
@@ -210,7 +219,7 @@ export const ticketToolDescriptions = {
     "The CLI validates the fields, so creation can fail with the CLI's error text.",
   ticket_set:
     "Update a ticket's frontmatter via the `ticket set` CLI subcommand and return the updated id, status, after, and path. " +
-    "Only status and/or after can be set; selector is a ticket ID, a unique prefix, or \"next\" (default). " +
+    'Only status and/or after can be set; selector is a ticket ID, a unique prefix, or "next" (default). ' +
     "The linkage auto-switches the status unless an explicit status is given: setting an unresolved after blocks the ticket, " +
     "clearing after (null) reopens a blocked ticket. Setting status to closed releases dependent blocked tickets back to open. " +
     "The CLI validates the update: after must exist and must not be closed or cancelled, and cycles fail without rewriting. " +
@@ -220,12 +229,15 @@ export const ticketToolDescriptions = {
     "Call ticket_show first and copy old exactly from its body, including line breaks. " +
     "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the body, so it can be replaced. " +
     "Zero or multiple occurrences of old fail without rewriting. " +
-    "selector is a ticket ID, a unique prefix, or \"next\" (default); project selects the ticket store " +
+    'selector is a ticket ID, a unique prefix, or "next" (default); project selects the ticket store ' +
     "and defaults to the project resolved from the session cwd.",
 } as const;
 
 function truncateTicketOutput(text: string, recoveryHint: string): string {
-  const truncation = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
+  const truncation = truncateHead(text, {
+    maxBytes: DEFAULT_MAX_BYTES,
+    maxLines: DEFAULT_MAX_LINES,
+  });
   if (!truncation.truncated) return text;
 
   let content = truncation.content;
@@ -233,7 +245,10 @@ function truncateTicketOutput(text: string, recoveryHint: string): string {
     const marker = `[Output truncated: ${content.split("\n").length} of ${truncation.totalLines} lines (${formatSize(Buffer.byteLength(content, "utf8"))} of ${formatSize(truncation.totalBytes)}). ${recoveryHint}]`;
     const suffix = content === "" ? marker : `\n\n${marker}`;
     const result = `${content}${suffix}`;
-    if (Buffer.byteLength(result, "utf8") <= DEFAULT_MAX_BYTES && result.split("\n").length <= DEFAULT_MAX_LINES) {
+    if (
+      Buffer.byteLength(result, "utf8") <= DEFAULT_MAX_BYTES &&
+      result.split("\n").length <= DEFAULT_MAX_LINES
+    ) {
       return result;
     }
 
@@ -303,13 +318,15 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const json = (await runTicket(buildListArgs(params), ctx, signal)) as TicketFields[];
       return {
-        content: [{
-          type: "text",
-          text: truncateTicketOutput(
-            formatTicketList(json, params.all === true),
-            "Use ticket list with the same filters to read the complete list.",
-          ),
-        }],
+        content: [
+          {
+            type: "text",
+            text: truncateTicketOutput(
+              formatTicketList(json, params.all === true),
+              "Use ticket list with the same filters to read the complete list.",
+            ),
+          },
+        ],
         details: json,
       };
     },

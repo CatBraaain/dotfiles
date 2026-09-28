@@ -1,7 +1,7 @@
 # ADR: sandboxed-tools — サンドボックス方針
 
-| | |
-|---|---|
+|  |  |
+| --- | --- |
 | **Status** | Proposed |
 | **Date** | 2026-08-12 |
 | **Subject** | pi のデフォルト fs アクセスツールをリプレイスし、ファイルパスの読み書きアクセス制御を行う拡張機能 |
@@ -13,7 +13,7 @@
 pi の bash / read / write / edit を安全に回しつつ、network 系は自由に使う。スコープは自分のマシン・自分のリポジトリ（信頼できないコードは今は扱わない）。
 
 | 区分 | 要件 |
-|---|---|
+| --- | --- |
 | **守る** | workspace 外への **読み書き** を機械的に制限（bash も read/write/edit も） |
 | **守る** | push / publish 等の破壊的・外部公開操作に確認ゲート |
 | **守る** | fs 系ツール（read / write / edit / grep / find / ls）経由の秘密ファイル（`~/.ssh`, `~/.aws` 等）の読み出しを、`read.deny` と `credentials` のマスクで制限 |
@@ -32,7 +32,7 @@ pi の bash / read / write / edit を安全に回しつつ、network 系は自�
 欲しいのは「fs 制限あり ＋ network 開放」。**srt だけが network 強制隔離(allow-only・全許可なし)で外れる。** 他は network 開放でき、軽量・標準・NixOS 標準の点で bwrap を選ぶ。
 
 | 手法 | fs 制限 | network | 重さ | 備考 | 判定 |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | **bwrap** | ✓ | 開放(`--unshare-net` 省略) | 軽 | NixOS 標準 | **✓ 採用** |
 | firejail | ✓ | 開放(デフォルト) | 軽 | bwrap と同質・勝点なし | ✗ |
 | landlock(LSM) | ✓ | 無干渉(fs のみの概念) | 最軽 | ツール整備が未成熟 | ✗ |
@@ -47,7 +47,7 @@ pi の bash / read / write / edit を安全に回しつつ、network 系は自�
 壁打ち(2026-08-11〜12)で検討した 4 案。比較軸は「動的許可」「許可リスト管理」「網羅性」「読み書き両方の制限」。
 
 | # | アプローチ | 判定 | 実現できる | 実現できない / 課題 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | A | pi全体を sandbox で包む | **✗** | 全 fs 経路（読み書き）を1つの境界でフェンス、許可リスト1箇所、網羅性は自動 | 動的許可不可（bwrap は起動時に namespace 固定・再起動 + resume が必要）。pi 内部パス(`~/.pi`, sessions, 拡張の `node_modules`, provider endpoint)の列挙が必要 |
 | B | bash のみ srt で包む | **✗** | bash 経路（読み書き）を隔離 | srt は network 強制隔離で開放不可。read/write/edit 等は制限なし（bash と別管理） |
 | C | ハイブリッド(bash=bwrap / read・write・edit=パスチェック) | **△** | bash=bwrap で確実、read/write/edit=パスチェックで動的許可・読み書き制限とも ○、network 開放 | 許可リストが2系統（bwrap 用 ＋ パスチェック用）で二重管理、実現手段も2種類。網羅性は手動担保。bash のパス制限は文字列マッチでは原理的に無理（cd / 変数展開 / サブシェルで抜かれる）→ 結局 bash は bwrap 必須 |
@@ -91,10 +91,10 @@ flowchart TD
 
 ## トレードオフ / 既知のギャップ
 
-| | 項目 |
-|---|---|
+|  | 項目 |
+| --- | --- |
 | ✓ | fetch が自由 |
-| ✓ | workspace 外の読み書きを機械的に弾く（bash も read/write/edit も）|
+| ✓ | workspace 外の読み書きを機械的に弾く（bash も read/write/edit も） |
 | ✓ | push/publish に承認を挟む |
 | ✓ | fs 系ツール経由の秘密ファイル読み出しを制限（`read.deny`・`credentials` のマスク） |
 | ✗ | bash 経由の秘密ファイル読み出しは制限しない（bash モードは `read.deny` のマスクなし・`credentials` 空）。bash での読み出し制限の機能追加は別検討 |

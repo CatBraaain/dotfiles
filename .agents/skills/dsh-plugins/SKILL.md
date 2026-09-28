@@ -17,7 +17,7 @@ API 仕様や型の詳細はこのファイルに書かない。正本はミラ�
 ## 正本
 
 | 正本 | 場所 | 役割 |
-|---|---|---|
+| --- | --- | --- |
 | dsh 本体の仕様・型・実装 | `~/mirrors/github.com/deepseek-ai/deepseek-harness/` | API・docs の一次情報 |
 | リポジトリ運用の契約 | `dotfiles/.dsh/README.md` | ビルド・依存解決・plugin 追加手順。着手前に必ず読む |
 | 各 plugin の振る舞い | `dotfiles/.dsh/plugins.exact/*/SPEC.md` | 観測可能な振る舞いの契約。変更時は乖離照合する |
@@ -44,7 +44,7 @@ git -C ~/mirrors/github.com/deepseek-ai/deepseek-harness ls-remote --tags origin
 ### plugin 開発の学習路径
 
 | 目的 | パス |
-|---|---|
+| --- | --- |
 | 最小 plugin を作る | `M/docs/user/develop/basic/index.md` |
 | cordis.yml からの設定受取 | `M/docs/user/develop/basic/config.md` |
 | tool を作る（defineTool） | `M/docs/user/develop/basic/tool.md` |
@@ -55,7 +55,7 @@ git -C ~/mirrors/github.com/deepseek-ai/deepseek-harness ls-remote --tags origin
 ### 調べ物の索引
 
 | 調べたいこと | パス |
-|---|---|
+| --- | --- |
 | `ctx` の service・event・lifecycle API | `M/docs/cordis-api/`（生成物。`context.md` が入口） |
 | Cordis の概念のハンズオン | `M/docs/cordis-tutorial/`（01〜07 の runnable 例） |
 | サブシステムの語彙・wiring | `M/docs/subsystems/`（50 ページ超。該当サブシステム名のファイル） |
@@ -70,7 +70,7 @@ git -C ~/mirrors/github.com/deepseek-ai/deepseek-harness ls-remote --tags origin
 ### 主要パッケージ
 
 | パッケージ | パス | 役割 |
-|---|---|---|
+| --- | --- | --- |
 | `@deepseek-ai/dsh-tools` | `M/packages/core/tools/` | tool registry・実行パイプライン。`defineTool` の提供元 |
 | `@deepseek-ai/dsh-agent-loop` | `M/packages/core/agent-loop/` | agent loop plugin の本体 |
 | `@deepseek-ai/dsh-client-ui-renderer` | `M/packages/client/ui-renderer/` | client plugin が inject する中心。React slot bindings |

@@ -5,7 +5,7 @@ fixture の合否は、各 plugin の SPEC.md と個別スクリーンショッ�
 ## スクショ
 
 | ファイル | 内容 |
-|---|---|
+| --- | --- |
 | `dist/fixture.png` | 全ケース一覧（dark） |
 | `dist/fixture-hover.png` | session-list の行を hover した一覧（dark） |
 | `dist/fixture-<case>.png` | 各ケース（dark） |
@@ -14,7 +14,7 @@ fixture の合否は、各 plugin の SPEC.md と個別スクリーンショッ�
 ## 判定基準
 
 | case | 主な対応 SPEC | 確認ポイント |
-|---|---|---|
+| --- | --- | --- |
 | 1〜3. skill-status | `skill-status/SPEC.md` | skill 名の順序、空表示、長文の省略、gray 表示 |
 | 4〜6. session-list | `session-list/SPEC.md` | workspace、status dot、時刻、blank、empty、hover actions |
 | 7〜9. agents | `agents/SPEC.md` | auto/manual/idle の agent・class 表記、gray 表示 |

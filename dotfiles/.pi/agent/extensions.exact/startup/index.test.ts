@@ -45,9 +45,7 @@ function recordingSpawn(
 
 type SessionStartHandler = (event: { reason: string }) => Promise<void>;
 
-function loadExtension(
-  spawnProcess: SpawnFn,
-): { sessionStart: SessionStartHandler | undefined } {
+function loadExtension(spawnProcess: SpawnFn): { sessionStart: SessionStartHandler | undefined } {
   let sessionStart: SessionStartHandler | undefined;
   startupExtension(
     {

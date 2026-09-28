@@ -30,7 +30,7 @@ character_form_rules:
   - group: ・「」
     preedit_character_form: FULL_WIDTH
     conversion_character_form: FULL_WIDTH
-  - group: "\"'"
+  - group: '"'''
     preedit_character_form: FULL_WIDTH
     conversion_character_form: LAST_FORM
   - group: :;

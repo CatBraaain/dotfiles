@@ -13,7 +13,7 @@ provider の選択は dsh 本家契約（`ctx.web`、`@deepseek-ai/dsh-web`）�
 cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位は config 値 > 環境変数 > 既定値。
 
 | 項目 | 既定（config 未指定時） | 意味 |
-|---|---|---|
+| --- | --- | --- |
 | `camoufoxBaseUrl` | 環境変数 `CAMOUFOX_BASE_URL`、それも無ければ `ws://127.0.0.1:9378/camoufox` | camoufox server の待ち受け・接続先 |
 | `openserpBaseUrl` | 環境変数 `OPENSERP_BASE_URL`、それも無ければ `http://127.0.0.1:7000` | openserp の待ち受け・接続先 |
 
@@ -24,7 +24,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 モデル向け `web_search`（引数は tool-web 契約の `{ queries: string[] }`）の実行時に、query ごとに `bun <browse CLI スクリプト> search "<query>" --json` を起動し、stdout の JSON を契約の `WebSearchResult` へ写像する。
 
 | 条件 | 結果 |
-|---|---|
+| --- | --- |
 | CLI が終了コード 0 で JSON を返した | `sources`（下記の写像）と `truncated: false` を返す |
 | CLI が終了コード 1 で失敗した（全エンジン失敗等） | `WEB_PROVIDER_ERROR` の `WebError`。メッセージは CLI の stderr 出力を逐語で持つ（各エンジンの失敗行と、描画 abort を含む失敗時の camoufox server 復旧ヒント `browse server restart` を含む） |
 | signal が abort された | 子プロセスを殺し、`WEB_PROVIDER_ERROR` の `WebError` で失敗する |
@@ -40,7 +40,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 モデル向け `web_fetch`（引数は tool-web 契約の `{ url: string }`）の実行時に、`bun <browse CLI スクリプト> fetch <url> --json` を起動し、stdout の JSON を契約の `WebFetchResult` へ写像する。
 
 | 項目 | 値 |
-|---|---|
+| --- | --- |
 | `url` | CLI JSON の `url`（Reddit / StackOverflow は permalink へ正規化済み） |
 | `statusCode` | `200` 固定（CLI はフェッチ失敗をエラーとして報告するため、非 2xx を結果として表現しない） |
 | `body` | `{ kind: "text", content: <CLI JSON の body（markdown）> }`。`fallbacks` がある場合は、本文の先頭に `✓ <backend> [- "<title>"] (fallback: <backend>: <error>; ...) (1.2s)` の1行を追加する |
@@ -73,7 +73,7 @@ CLI スクリプトは `~/.agents/cli/browse` で解決する。本 plugin の b
 直列化は CLI の横断プロセスロック（`flock`）の受け持ちである。本 plugin はプロセス内キューを持たない。
 
 | リクエストの組 | 実行 |
-|---|---|
+| --- | --- |
 | web_search 同士 | CLI のロックにより先行の実行完了まで後続は開始しない（pi など他プロセスからの同一 CLI 起動とも直列化する） |
 | web_fetch 同士 | 同上 |
 | web_search と web_fetch | 互いに並行で実行できる（ロックファイルが別） |
@@ -83,7 +83,7 @@ multi-query の web_search（`queries` 2 件以上）も、各 query の CLI 起
 ## 提供する plugin
 
 | 項目 | 値 |
-|---|---|
+| --- | --- |
 | パッケージ / cordis 行 id | `dotfiles-dsh-web-search` / `dsh-web-search` |
 | `export const name` | `"dsh-web-search"` |
 | `export const inject` | `["web"]` |

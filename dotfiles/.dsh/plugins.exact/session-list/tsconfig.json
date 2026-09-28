@@ -26,9 +26,7 @@
       "@deepseek-ai/dsh-client-locale/client": [
         "/home/username/.bun/install/global/node_modules/@deepseek-ai/dsh-client-locale/lib/types/client/index.d.ts"
       ],
-      "@deepseek-ai/*": [
-        "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"
-      ]
+      "@deepseek-ai/*": ["/home/username/.bun/install/global/node_modules/@deepseek-ai/*"]
     }
   },
   "include": ["src"]

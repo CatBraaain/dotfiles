@@ -3,9 +3,16 @@ import { describe, it } from "bun:test";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { extractMessageText, findUndoTarget } from "./core.ts";
 
-type UserContent = string | Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+type UserContent =
+  | string
+  | Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
 
-function entry(id: string, parentId: string | null, role: "user" | "assistant", content: UserContent | Array<{ type: "text"; text: string }>): SessionEntry {
+function entry(
+  id: string,
+  parentId: string | null,
+  role: "user" | "assistant",
+  content: UserContent | Array<{ type: "text"; text: string }>,
+): SessionEntry {
   return {
     type: "message",
     id,
@@ -35,7 +42,10 @@ describe("extractMessageText", () => {
   });
 
   it("text パートがない配列は空文字を返す", () => {
-    assert.equal(extractMessageText([{ type: "image", data: "base64", mimeType: "image/png" }]), "");
+    assert.equal(
+      extractMessageText([{ type: "image", data: "base64", mimeType: "image/png" }]),
+      "",
+    );
   });
 });
 

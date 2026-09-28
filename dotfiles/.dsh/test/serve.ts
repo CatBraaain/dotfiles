@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 const requestedPort = Number(process.env.PORT ?? 4173);
 const server = Bun.serve({
-    port: requestedPort,
-    fetch: () => new Response(Bun.file(join(import.meta.dir, "dist", "fixture.html"))),
+  port: requestedPort,
+  fetch: () => new Response(Bun.file(join(import.meta.dir, "dist", "fixture.html"))),
 });
 console.log(`serving dist/fixture.html on http://localhost:${server.port}/`);

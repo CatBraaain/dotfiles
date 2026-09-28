@@ -6,20 +6,20 @@
   "exports": {
     ".": "./dist/index.js"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
     "@earendil-works/pi-ai": "^0.85.1"
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-credentials": "^0.1.5-rc.2"
-  },
   "devDependencies": {
     "@deepseek-ai/dsh-credentials": "^0.1.5-rc.2",
     "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-credentials": "^0.1.5-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

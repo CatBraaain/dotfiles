@@ -115,11 +115,14 @@ describe("apply classification matrix", () => {
     assert.equal(await readFile(join(homeRoot, "pkg/nested/file.txt"), "utf8"), "x\n");
   });
   it("applies a retired machine sidecar as an ordinary file", async () => {
-    await put(distRoot, "settings.machine.json", "{\"mode\":\"old\"}\n");
+    await put(distRoot, "settings.machine.json", '{"mode":"old"}\n');
 
     await diffAndApply();
 
-    assert.equal(await readFile(join(homeRoot, "settings.machine.json"), "utf8"), "{\"mode\":\"old\"}\n");
+    assert.equal(
+      await readFile(join(homeRoot, "settings.machine.json"), "utf8"),
+      '{"mode":"old"}\n',
+    );
   });
 
   it("adds a symlink whose target is the file content without the trailing newline", async () => {
@@ -361,12 +364,16 @@ describe("apply scripts", () => {
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.deepEqual(declarations.applyScripts.map((script) => script.distPath), [
-      "tools/setup.apply-machine.ts",
-    ]);
+    assert.deepEqual(
+      declarations.applyScripts.map((script) => script.distPath),
+      ["tools/setup.apply-machine.ts"],
+    );
     assert.deepEqual(result.added, []);
     assert.equal(existsSync(join(homeRoot, "tools/setup.apply-machine.ts")), false);
-    assert.equal(await readFile(join(homeRoot, "tools/apply-out.txt"), "utf8"), join(homeRoot, "tools"));
+    assert.equal(
+      await readFile(join(homeRoot, "tools/apply-out.txt"), "utf8"),
+      join(homeRoot, "tools"),
+    );
   });
   it("runs a TypeScript hook in the mapped home folder without requiring a shebang", async () => {
     await putApplyScript(

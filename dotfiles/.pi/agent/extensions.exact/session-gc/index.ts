@@ -1,6 +1,10 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 
 /**
  * Keeps only the most recent sessions per project so that `pi -r` (which parses
@@ -28,7 +32,10 @@ export interface SessionGcEvent {
   reason: SessionStartEvent["reason"];
 }
 
-export function collectArchiveTargets(sessionsDir: string, keepCount: number = KEEP_COUNT): MoveTarget[] {
+export function collectArchiveTargets(
+  sessionsDir: string,
+  keepCount: number = KEEP_COUNT,
+): MoveTarget[] {
   const targets: MoveTarget[] = [];
   let projectDirNames: string[];
   try {
@@ -56,7 +63,8 @@ function archiveTargetsInProject(projectDir: string, keepCount: number): MoveTar
   const needsArchiving = files.length > keepCount;
   if (!needsArchiving) return [];
 
-  const byModifiedDesc = (a: string, b: string): number => statSync(b).mtimeMs - statSync(a).mtimeMs;
+  const byModifiedDesc = (a: string, b: string): number =>
+    statSync(b).mtimeMs - statSync(a).mtimeMs;
   const archiveDir = join(projectDir, "archive");
   return [...files]
     .sort(byModifiedDesc)

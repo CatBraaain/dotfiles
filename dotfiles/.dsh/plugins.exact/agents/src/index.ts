@@ -78,7 +78,15 @@ export const name = "dsh-agents";
 // exposes services listed in `inject`.
 // `sessionQuery` feeds the idle-session fallback below: dsh resumes an agent
 // lazily, so the display must answer for sessions with no live agent yet.
-export const inject = ["commands", "tools", "llm", "systemPrompt", "subagents", "connection", "sessionQuery"];
+export const inject = [
+  "commands",
+  "tools",
+  "llm",
+  "systemPrompt",
+  "subagents",
+  "connection",
+  "sessionQuery",
+];
 
 /** Prompt-section order: after the deployment persona suffix (10200). */
 const PERSONA_SECTION_ORDER = 10250;
@@ -239,7 +247,12 @@ export function apply(ctx: Context) {
       initialAgent,
       initialClass,
     );
-    const model = await predictDisplayModel(`idle:${start.className}`, start.className, new Map(), 0);
+    const model = await predictDisplayModel(
+      `idle:${start.className}`,
+      start.className,
+      new Map(),
+      0,
+    );
     return {
       agent: start.agentName,
       className: start.className,
@@ -293,11 +306,13 @@ export function apply(ctx: Context) {
   // announce — the only window in which a child-scoped tool reaches the
   // child's first request. The lock serializes start calls so concurrent
   // spawns pair with the right booking.
-  let bookedChild: {
-    parentSessionId: string;
-    definition: AgentDefinition;
-    state: AgentState;
-  } | undefined;
+  let bookedChild:
+    | {
+        parentSessionId: string;
+        definition: AgentDefinition;
+        state: AgentState;
+      }
+    | undefined;
   let creationTail: Promise<void> = Promise.resolve();
   const enterChildCreationWindow = async (): Promise<() => void> => {
     const prior = creationTail;
@@ -891,7 +906,9 @@ export function apply(ctx: Context) {
       const selection = parseSelectRequest(payload);
       if (!selection) {
         return Response.json(
-          { error: "payload must be { sessionId?: string, kind: 'agent' | 'class', name: string }" },
+          {
+            error: "payload must be { sessionId?: string, kind: 'agent' | 'class', name: string }",
+          },
           { status: 400 },
         );
       }

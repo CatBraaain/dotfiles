@@ -53,7 +53,7 @@ lifecycle script はデフォルトで実行しない。実行が必要な依存
 ## 設定の当て先
 
 | ファイル | 役割 |
-|---|---|
+| --- | --- |
 | `~/.dsh/profiles/web/cordis.patch.yml` | web プロファイルでの個人の上書きレイヤー。全バンドル層の後に適用される |
 
 注意: プロファイル側の `cordis.yml`・`cordis.patch.yml` は `.yml` 固定。`.yaml` にリネームしても読まれず、空ファイルが自動再生成される。バンドル側 `package.json` の `dsh.bundle.patch` はパス宣言なので拡張子は自由。

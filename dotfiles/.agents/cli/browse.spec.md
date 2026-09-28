@@ -27,7 +27,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 ## 共通の振る舞い
 
 | 条件・状態 | 操作 | 結果 |
-|---|---|---|
+| --- | --- | --- |
 | `--json` がある | 成功時 | 単一の JSON を stdout へ出力する（jq でパース可能） |
 | `--json` がない | 成功時 | markdown を stdout へ出力する |
 | すべての backend が失敗した | 実行 | `All <operation> backends failed: <backend>: <error>; ...`（`<operation>` は `web search` または `web fetch`）を 1 行 stderr へ出力し、終了コード 1 で終わる |
@@ -46,7 +46,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | `display` の action がない・未知の action を渡した・余分な引数を渡した | 実行 | `browse display` の usage を stderr へ出力し、終了コード 1 で終わる |
 
 | 対象 | タイムアウト |
-|---|---|
+| --- | --- |
 | server 起動待ち・セッション close | 15 秒 |
 | `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10 秒 |
 | ページ open・ナビゲーション・DOM 取得 | 30 秒 |
@@ -62,7 +62,7 @@ challenge / captcha の検出は、Cloudflare 系シグナルと Google 固定�
 Camoufox の render failure には自動復旧を適用する。Reddit / StackOverflow の専用経路には適用しない。challenge / captcha の再試行は共通の振る舞い表に従う。
 
 | 経路 | 取得方法 | render failure 時の扱い |
-|---|---|---|
+| --- | --- | --- |
 | `search` | Google → DuckDuckGo → Bing | 同じ engine の再試行後、次の engine へ進む |
 | `fetch` の Reddit | 専用経路（RSS → embed → oEmbed） | Camoufox を使わない |
 | `fetch` の StackOverflow | 専用経路（StackExchange API → 質問フィード） | Camoufox を使わない |
@@ -91,7 +91,7 @@ server の復旧を伴う再試行は1コマンド全体で1回までとする�
 camoufox server の起動を保証する冪等なサブコマンド。CLI 内部（search / fetch の server 確保）と共通 startup script の priming の両方が、このサブコマンドを detached に起動する。
 
 | 条件・状態 | 操作 | 結果 |
-|---|---|---|
+| --- | --- | --- |
 | camoufox server が起動済み（websocket 接続が成功する） | 実行 | 何もせず終了コード 0 で終わる |
 | camoufox server が未起動 | 実行 | 内部サーバーモードをバックグラウンド起動し、websocket 接続が成功するまで 250ms 間隔で待ち、終了コード 0 で終わる |
 | 待ちが 15 秒に達した | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
@@ -102,7 +102,7 @@ camoufox server の起動を保証する冪等なサブコマンド。CLI 内部
 hang した camoufox server の復旧用に、実行中の server を停止して起動し直す。
 
 | 条件・状態 | 操作 | 結果 |
-|---|---|---|
+| --- | --- | --- |
 | 実行 | 停止 | 停止対象は常に「PID ファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である。対象へ SIGTERM を送り、10 秒以内に終了しなければ SIGKILL する |
 | 停止後 | 実行 | `browse server start` と同じ手順で起動し直し、ready を待つ |
 | 実行中の server が無い | 実行 | 停止を飛ばして `browse server start` の手順で起動する |
@@ -112,7 +112,7 @@ hang した camoufox server の復旧用に、実行中の server を停止し�
 Xvfb `:99` 上の headed browser を VNC で人間へ引き継ぐための接続受付を切り替える。ブラウザ、ページ、cookie、playwright-cli セッションは再起動しない。headless browser そのものを headed に変更する操作ではない。
 
 | 条件・状態 | 操作 | 結果 |
-|---|---|---|
+| --- | --- | --- |
 | `browse display show` を実行し、稼働中の x11vnc を制御できる | `:99` の VNC 接続受付を開く | 新しい VNC 接続を受け付け、終了コード 0 で終わる |
 | `browse display hide` を実行し、稼働中の x11vnc を制御できる | 新しい VNC 接続を拒否し、接続中のクライアントを切断する | 画面を非公開にし、終了コード 0 で終わる |
 | x11vnc が未導入、VNC server が未起動、または `:99` を制御できない | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
@@ -124,7 +124,7 @@ Xvfb `:99` 上の headed browser を VNC で人間へ引き継ぐための接続
 表示モードは次の条件で決まる:
 
 | 条件 | 表示モード |
-|---|---|
+| --- | --- |
 | `CAMOUFOX_HEADLESS=1` | headless |
 | `CAMOUFOX_HEADLESS=0` | headed |
 | それ以外（未指定・1 と 0 以外の値） | Windows は headless、Windows 以外の OS は headed |
@@ -141,7 +141,7 @@ headless のときは Xvfb も x11vnc も起動しない。headless と headed �
 server の実行環境は環境変数で上書きできる:
 
 | 変数 | 上書き対象 | 未指定時の解決 |
-|---|---|---|
+| --- | --- | --- |
 | `CAMOUFOX_EXECUTABLE_PATH` | camoufox ブラウザの実行ファイル | `~/.cache/camoufox/camoufox-bin` |
 | `CAMOUFOX_PLAYWRIGHT_CORE` | server が使う playwright-core | playwright-cli 内蔵の playwright-core（PATH 上の `playwright-cli` の場所から解決） |
 
@@ -152,7 +152,7 @@ server は SIGINT / SIGTERM を受け取ったとき、PID ファイルから自
 ## `browse search "<query>"`
 
 | 条件・状態 | 操作 | 結果 |
-|---|---|---|
+| --- | --- | --- |
 | 引数あり | 検索実行 | engine を google → duckduckgo → bing の順で試行し、最初に成功した engine の結果上位 10 件を出力する |
 | `--lang <code>` がある | 検索実行 | `<code>` を小文字へ正規化する。google は `hl` へ常に設定し、`gl` は対応表にある lang のみ設定する。bing の `mkt`・duckduckgo の `kl` も対応表にある lang のみ設定する。対応表にない lang では `gl`・`mkt`・`kl` を付与せず、google の `hl` のみ設定される |
 | engine が空結果・captcha・challenge で失敗した | 検索実行 | 次の engine へ進む |
@@ -168,7 +168,7 @@ markdown 出力の構造: 1 行目に `**Query:** "<query>" - **Engines:** <engi
 ## `browse fetch <url>`
 
 | 条件・状態 | 操作 | 結果 |
-|---|---|---|
+| --- | --- | --- |
 | 引数が絶対 URL でない | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
 | Reddit 投稿パーマリンク | フェッチ | RSS（コメント上限 500）→ embed → oEmbed の順で取得し、投稿本文とコメントを markdown で出力する（camoufox を使わない） |
 | StackOverflow 質問パーマリンク | フェッチ | StackExchange API（投票順・1 ページ 100 件で最大 500 件・`backoff` 指定時は指定秒待機）→ 質問フィードの順で取得し、質問と回答を markdown で出力する（camoufox を使わない） |

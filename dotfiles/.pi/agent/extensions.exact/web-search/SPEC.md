@@ -4,29 +4,29 @@ pi に **Web検索** と **URL取得** の2つのツールを追加する。実�
 
 ## ツール一覧
 
-| ツール     | 入力                          | 出力                                                                                                |
-| ---------- | ----------------------------- | --------------------------------------------------------------------------------------------------- |
-| web_search | 検索クエリ1つ ＋ lang（任意） | 検索結果（最大10件・Markdown）                                                                      |
-| web_fetch  | URL1つ                        | ページ本文（Markdown）＋タイトル（タイトルはTUIの結果行表示のみに使い、ツール出力本文には含めない） |
+| ツール | 入力 | 出力 |
+| --- | --- | --- |
+| web_search | 検索クエリ1つ ＋ lang（任意） | 検索結果（最大10件・Markdown） |
+| web_fetch | URL1つ | ページ本文（Markdown）＋タイトル（タイトルはTUIの結果行表示のみに使い、ツール出力本文には含めない） |
 
 ## 実行
 
 各ツールの execute は、対応するサブコマンドを `bun <browse スクリプト>` で子プロセス起動し、完了を待つ。
 
-| ツール     | CLI 引数                                                |
-| ---------- | ------------------------------------------------------- |
+| ツール | CLI 引数 |
+| --- | --- |
 | web_search | `search` `<query>`（`--lang <lang>` は lang 指定時のみ）`--json` |
-| web_fetch  | `fetch` `<url>` `--json`                                 |
+| web_fetch | `fetch` `<url>` `--json` |
 
 tool 呼び出しの中断（abort signal）は子プロセスの kill に伝える。
 
-| CLI の終了        | tool の結果                                                                       |
-| ----------------- | --------------------------------------------------------------------------------- |
-| 終了コード 0      | stdout を JSON として解釈し、本文と details へ変換する（§出力変換）                |
-| 終了コード 0 以外 | tool エラー。stderr を1行目からそのままエラーメッセージとする                       |
-| stderr 空         | tool エラー。`<CLI名> exited with code <code>`（シグナル終了時は `terminated by signal`） |
-| spawn 失敗        | tool エラー。`<CLI名>: <原因>`                                                    |
-| stdout が JSON でない | tool エラー。`<CLI名>: CLI stdout is not JSON`                                 |
+| CLI の終了 | tool の結果 |
+| --- | --- |
+| 終了コード 0 | stdout を JSON として解釈し、本文と details へ変換する（§出力変換） |
+| 終了コード 0 以外 | tool エラー。stderr を1行目からそのままエラーメッセージとする |
+| stderr 空 | tool エラー。`<CLI名> exited with code <code>`（シグナル終了時は `terminated by signal`） |
+| spawn 失敗 | tool エラー。`<CLI名>: <原因>` |
+| stdout が JSON でない | tool エラー。`<CLI名>: CLI stdout is not JSON` |
 
 エラー時も TUI の結果行に失敗を表示するため、throw の前に `onUpdate` でエラー details を通知する。
 
@@ -76,20 +76,20 @@ CLI スクリプト（`browse`）は、この拡張のディレクトリから4�
 
 成功時は `✓` に続けて成功した engine または backend 名を置く。web_fetch 成功時はタイトルがあるとき ` - "<タイトル>"` を続ける。行末に CLI の実測所要時間を ` (1.2s)` 形式で付ける。
 
-| 状態                            | 出力                                     |
-| ------------------------------- | ---------------------------------------- |
-| 成功（web_search）              | `✓ <engine> (1.2s)`                      |
-| 成功（web_fetch、タイトルあり） | `✓ <backend> - "<タイトル>" (1.2s)`      |
+| 状態 | 出力 |
+| --- | --- |
+| 成功（web_search） | `✓ <engine> (1.2s)` |
+| 成功（web_fetch、タイトルあり） | `✓ <backend> - "<タイトル>" (1.2s)` |
 | 成功（web_fetch、fallbackあり） | `✓ <backend> [- "<タイトル>"] (fallback: <backend>: <error>; ...) (1.2s)` |
-| 成功（web_fetch、タイトルなし） | `✓ <backend> (1.2s)`                     |
-| 失敗                            | `✗ <CLI名> - "<エラーメッセージ>"`       |
+| 成功（web_fetch、タイトルなし） | `✓ <backend> (1.2s)` |
+| 失敗 | `✗ <CLI名> - "<エラーメッセージ>"` |
 
 失敗行のエラーメッセージは CLI の stderr（全 backend 失敗の理由に camoufox server の復旧ヒント `browse server restart` が含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
 
 ## 環境変数
 
-| 変数                | 影響                                                                    |
-| ------------------- | ----------------------------------------------------------------------- |
-| `BROWSE_CLI_DIR`    | CLI スクリプトのディレクトリ（既定は拡張から4階層上の `.agents/cli`）   |
-| `CAMOUFOX_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される                                   |
-| `OPENSERP_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される                                   |
+| 変数 | 影響 |
+| --- | --- |
+| `BROWSE_CLI_DIR` | CLI スクリプトのディレクトリ（既定は拡張から4階層上の `.agents/cli`） |
+| `CAMOUFOX_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される |
+| `OPENSERP_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される |

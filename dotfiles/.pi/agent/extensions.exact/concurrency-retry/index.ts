@@ -78,8 +78,7 @@ function extractCodes(errorMessage: string): Set<string> {
 
 function hasQuotaEvidence(errorMessage: string, codes: Set<string>): boolean {
   return (
-    [...codes].some((code) => ZAI_QUOTA_CODES.has(code)) ||
-    QUOTA_WORDING_PATTERN.test(errorMessage)
+    [...codes].some((code) => ZAI_QUOTA_CODES.has(code)) || QUOTA_WORDING_PATTERN.test(errorMessage)
   );
 }
 
@@ -105,10 +104,7 @@ const PROVIDER_DETECTORS = new Map<string, ConcurrencyDetector>([
  * first; a provider with a dedicated rule never falls through to the generic
  * matcher, so wording-specific guarantees stay per-provider.
  */
-export function isConcurrencyError(
-  provider: string,
-  errorMessage: string | undefined,
-): boolean {
+export function isConcurrencyError(provider: string, errorMessage: string | undefined): boolean {
   if (errorMessage === undefined || errorMessage === "") return false;
   const codes = extractCodes(errorMessage);
   if (hasQuotaEvidence(errorMessage, codes)) return false;

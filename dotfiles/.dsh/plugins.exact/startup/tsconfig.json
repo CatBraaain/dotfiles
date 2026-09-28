@@ -9,9 +9,7 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@deepseek-ai/*": [
-        "/home/username/.bun/install/global/node_modules/@deepseek-ai/*"
-      ]
+      "@deepseek-ai/*": ["/home/username/.bun/install/global/node_modules/@deepseek-ai/*"]
     }
   },
   "include": ["src"]

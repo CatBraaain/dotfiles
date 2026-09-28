@@ -27,8 +27,5 @@
     "commandcode/**",
     "openrouter/**/*:free"
   ],
-  "packages": [
-    "npm:@narumitw/pi-stamp",
-    "npm:@narumitw/pi-usage"
-  ]
+  "packages": ["npm:@narumitw/pi-stamp", "npm:@narumitw/pi-usage"]
 }

@@ -12,7 +12,7 @@
 | その以外 | 何もしない |
 
 | 項目 | 値 |
-| ---- | -- |
+| --- | --- |
 | コマンド | `startupScriptPath()` = `~/.agents/scripts/startup`（実行ビット付きで直接実行） |
 | 引数 | なし |
 | `detached` | `true`（dsh 終了後も子プロセスが生きる） |

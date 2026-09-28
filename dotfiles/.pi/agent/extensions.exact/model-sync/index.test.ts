@@ -14,7 +14,6 @@ import {
   type SyncProvider,
 } from "./core.ts";
 
-
 const openRouter = provider("openrouter");
 const openai = provider("openai");
 const anthropic = provider("anthropic");

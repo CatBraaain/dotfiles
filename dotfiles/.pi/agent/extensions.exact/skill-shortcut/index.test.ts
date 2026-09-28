@@ -1,167 +1,176 @@
-
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import skillShortcut, { resolveSlashInput, rewriteCompletionItems } from "./index";
-import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
-
+import type {
+  AutocompleteItem,
+  AutocompleteProvider,
+  AutocompleteSuggestions,
+} from "@earendil-works/pi-tui";
 
 type CommandRef = { name: string; source: "extension" | "prompt" | "skill" };
 
 function skillCommand(skillName: string): CommandRef {
-	return { name: `skill:${skillName}`, source: "skill" };
+  return { name: `skill:${skillName}`, source: "skill" };
 }
 
 function extensionCommand(name: string): CommandRef {
-	return { name, source: "extension" };
+  return { name, source: "extension" };
 }
 
 function promptCommand(name: string): CommandRef {
-	return { name, source: "prompt" };
+  return { name, source: "prompt" };
 }
 
 function completionItem(value: string): AutocompleteItem {
-	return { value, label: value };
+  return { value, label: value };
 }
 
 describe("補完の表示", () => {
-	it("/ の入力では全候補の skill: を剥がして裸名で返す", () => {
-		const allCommandItems: AutocompleteItem[] = [
-			completionItem("skill:foo"),
-			completionItem("skill:bar"),
-			completionItem("model"),
-		];
+  it("/ の入力では全候補の skill: を剥がして裸名で返す", () => {
+    const allCommandItems: AutocompleteItem[] = [
+      completionItem("skill:foo"),
+      completionItem("skill:bar"),
+      completionItem("model"),
+    ];
 
-		const displayedItems = rewriteCompletionItems(allCommandItems, "");
+    const displayedItems = rewriteCompletionItems(allCommandItems, "");
 
-		assert.deepEqual(displayedItems, [
-			{ value: "foo", label: "foo" },
-			{ value: "bar", label: "bar" },
-			{ value: "model", label: "model" },
-		]);
-	});
+    assert.deepEqual(displayedItems, [
+      { value: "foo", label: "foo" },
+      { value: "bar", label: "bar" },
+      { value: "model", label: "model" },
+    ]);
+  });
 
-	it("/fo の入力では fo に一致する裸名だけ残る", () => {
-		const allCommandItems: AutocompleteItem[] = [
-			completionItem("skill:foo"),
-			completionItem("skill:bar"),
-			completionItem("model"),
-		];
+  it("/fo の入力では fo に一致する裸名だけ残る", () => {
+    const allCommandItems: AutocompleteItem[] = [
+      completionItem("skill:foo"),
+      completionItem("skill:bar"),
+      completionItem("model"),
+    ];
 
-		const displayedItems = rewriteCompletionItems(allCommandItems, "fo");
+    const displayedItems = rewriteCompletionItems(allCommandItems, "fo");
 
-		assert.deepEqual(displayedItems, [{ value: "foo", label: "foo" }]);
-	});
+    assert.deepEqual(displayedItems, [{ value: "foo", label: "foo" }]);
+  });
 
-	it("/sht の入力では文字が順番に現れる裸名が残る", () => {
-		const skillPrefixedItems: AutocompleteItem[] = [completionItem("skill:skill-shortcut")];
+  it("/sht の入力では文字が順番に現れる裸名が残る", () => {
+    const skillPrefixedItems: AutocompleteItem[] = [completionItem("skill:skill-shortcut")];
 
-		const displayedItems = rewriteCompletionItems(skillPrefixedItems, "sht");
+    const displayedItems = rewriteCompletionItems(skillPrefixedItems, "sht");
 
-		assert.deepEqual(displayedItems, [{ value: "skill-shortcut", label: "skill-shortcut" }]);
-	});
+    assert.deepEqual(displayedItems, [{ value: "skill-shortcut", label: "skill-shortcut" }]);
+  });
 
-	it("/z の入力では一致する候補がないため空になる", () => {
-		const skillPrefixedItems: AutocompleteItem[] = [completionItem("skill:foo"), completionItem("skill:bar")];
+  it("/z の入力では一致する候補がないため空になる", () => {
+    const skillPrefixedItems: AutocompleteItem[] = [
+      completionItem("skill:foo"),
+      completionItem("skill:bar"),
+    ];
 
-		const displayedItems = rewriteCompletionItems(skillPrefixedItems, "z");
+    const displayedItems = rewriteCompletionItems(skillPrefixedItems, "z");
 
-		assert.deepEqual(displayedItems, []);
-	});
+    assert.deepEqual(displayedItems, []);
+  });
 });
 
 describe("コマンドの実行", () => {
-	it("/foo が skill に存在するとき /skill:foo へ変換する", () => {
-		const commands = [skillCommand("foo")];
+  it("/foo が skill に存在するとき /skill:foo へ変換する", () => {
+    const commands = [skillCommand("foo")];
 
-		const result = resolveSlashInput("/foo", commands);
+    const result = resolveSlashInput("/foo", commands);
 
-		assert.deepEqual(result, { action: "transform", text: "/skill:foo" });
-	});
+    assert.deepEqual(result, { action: "transform", text: "/skill:foo" });
+  });
 
-	it("/foo <args> が skill に存在するとき args を保ったまま /skill:foo へ変換する", () => {
-		const commands = [skillCommand("foo")];
+  it("/foo <args> が skill に存在するとき args を保ったまま /skill:foo へ変換する", () => {
+    const commands = [skillCommand("foo")];
 
-		const result = resolveSlashInput("/foo some args", commands);
+    const result = resolveSlashInput("/foo some args", commands);
 
-		assert.deepEqual(result, { action: "transform", text: "/skill:foo some args" });
-	});
+    assert.deepEqual(result, { action: "transform", text: "/skill:foo some args" });
+  });
 
-	it("/foo が skill にも prompt にも拡張コマンドにも無いときは変換せず通常処理へ渡す", () => {
-		const result = resolveSlashInput("/foo", []);
+  it("/foo が skill にも prompt にも拡張コマンドにも無いときは変換せず通常処理へ渡す", () => {
+    const result = resolveSlashInput("/foo", []);
 
-		assert.deepEqual(result, { action: "continue" });
-	});
+    assert.deepEqual(result, { action: "continue" });
+  });
 
-	it("/skill:foo の直接入力はそのまま通し変換しない", () => {
-		const commands = [skillCommand("foo")];
+  it("/skill:foo の直接入力はそのまま通し変換しない", () => {
+    const commands = [skillCommand("foo")];
 
-		const result = resolveSlashInput("/skill:foo", commands);
+    const result = resolveSlashInput("/skill:foo", commands);
 
-		assert.deepEqual(result, { action: "continue" });
-	});
+    assert.deepEqual(result, { action: "continue" });
+  });
 });
 
 describe("名前の衝突", () => {
-	it("拡張コマンドと同名の skill では拡張コマンドが優先され skill へ変換しない", () => {
-		const commands = [extensionCommand("foo"), skillCommand("foo")];
+  it("拡張コマンドと同名の skill では拡張コマンドが優先され skill へ変換しない", () => {
+    const commands = [extensionCommand("foo"), skillCommand("foo")];
 
-		const result = resolveSlashInput("/foo", commands);
+    const result = resolveSlashInput("/foo", commands);
 
-		assert.deepEqual(result, { action: "continue" });
-	});
+    assert.deepEqual(result, { action: "continue" });
+  });
 
-	it("prompt テンプレートと同名の skill では prompt テンプレートが優先され skill へ変換しない", () => {
-		const commands = [promptCommand("foo"), skillCommand("foo")];
+  it("prompt テンプレートと同名の skill では prompt テンプレートが優先され skill へ変換しない", () => {
+    const commands = [promptCommand("foo"), skillCommand("foo")];
 
-		const result = resolveSlashInput("/foo", commands);
+    const result = resolveSlashInput("/foo", commands);
 
-		assert.deepEqual(result, { action: "continue" });
-	});
+    assert.deepEqual(result, { action: "continue" });
+  });
 
-	it("skill のみのとき skill へ変換する", () => {
-		const commands = [skillCommand("foo")];
+  it("skill のみのとき skill へ変換する", () => {
+    const commands = [skillCommand("foo")];
 
-		const result = resolveSlashInput("/foo", commands);
+    const result = resolveSlashInput("/foo", commands);
 
-		assert.deepEqual(result, { action: "transform", text: "/skill:foo" });
-	});
+    assert.deepEqual(result, { action: "transform", text: "/skill:foo" });
+  });
 });
 
 describe("起動直後の補完", () => {
-	it("session_start のタイミングで登録した provider が /foo 入力に裸名の候補を返す", async () => {
-		const currentProvider: AutocompleteProvider = {
-			triggerCharacters: ["/"],
-			async getSuggestions(): Promise<AutocompleteSuggestions | null> {
-				return { items: [completionItem("skill:foo"), completionItem("model")], prefix: "/" };
-			},
-			applyCompletion(_lines, cursorLine, cursorCol, item) {
-				return { lines: [item.value], cursorLine, cursorCol };
-			},
-		};
-		let registeredProviderFactory: ((current: AutocompleteProvider) => AutocompleteProvider) | undefined;
-		const fakePi = {
-			on(event: string, handler: unknown) {
-				if (event !== "session_start") return;
-				const ctx = {
-					ui: {
-						addAutocompleteProvider(factory: (current: AutocompleteProvider) => AutocompleteProvider) {
-							registeredProviderFactory = factory;
-						},
-					},
-				};
-				(handler as (event: unknown, ctx: unknown) => void)(undefined, ctx);
-			},
-			getCommands() {
-				return [];
-			},
-		};
+  it("session_start のタイミングで登録した provider が /foo 入力に裸名の候補を返す", async () => {
+    const currentProvider: AutocompleteProvider = {
+      triggerCharacters: ["/"],
+      async getSuggestions(): Promise<AutocompleteSuggestions | null> {
+        return { items: [completionItem("skill:foo"), completionItem("model")], prefix: "/" };
+      },
+      applyCompletion(_lines, cursorLine, cursorCol, item) {
+        return { lines: [item.value], cursorLine, cursorCol };
+      },
+    };
+    let registeredProviderFactory:
+      | ((current: AutocompleteProvider) => AutocompleteProvider)
+      | undefined;
+    const fakePi = {
+      on(event: string, handler: unknown) {
+        if (event !== "session_start") return;
+        const ctx = {
+          ui: {
+            addAutocompleteProvider(
+              factory: (current: AutocompleteProvider) => AutocompleteProvider,
+            ) {
+              registeredProviderFactory = factory;
+            },
+          },
+        };
+        (handler as (event: unknown, ctx: unknown) => void)(undefined, ctx);
+      },
+      getCommands() {
+        return [];
+      },
+    };
 
-		skillShortcut(fakePi as never);
+    skillShortcut(fakePi as never);
 
-		assert.ok(registeredProviderFactory, "provider factory is registered at session_start");
-		const wrappedProvider = registeredProviderFactory(currentProvider);
-		const fooSuggestions = await wrappedProvider.getSuggestions(["/foo"], 0, 4, undefined as never);
+    assert.ok(registeredProviderFactory, "provider factory is registered at session_start");
+    const wrappedProvider = registeredProviderFactory(currentProvider);
+    const fooSuggestions = await wrappedProvider.getSuggestions(["/foo"], 0, 4, undefined as never);
 
-		assert.deepEqual(fooSuggestions, { items: [{ value: "foo", label: "foo" }], prefix: "/" });
-	});
+    assert.deepEqual(fooSuggestions, { items: [{ value: "foo", label: "foo" }], prefix: "/" });
+  });
 });

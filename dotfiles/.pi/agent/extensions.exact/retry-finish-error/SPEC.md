@@ -8,12 +8,12 @@ OpenAI 互換プロバイダの中には、標準外の `finish_reason`（`error
 
 assistant メッセージが `stopReason: "error"` で終了したとき、`errorMessage` の内容に応じて次のように振る舞う。
 
-| `errorMessage` の内容                                             | 本拡張の動作                                                        | その後の再試行                                |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------- |
+| `errorMessage` の内容 | 本拡張の動作 | その後の再試行 |
+| --- | --- | --- |
 | `Provider finish_reason: ${reason}` で始まり、`${reason}` が `content_filter` / `network_error` 以外の文字列 | `errorMessage` を `provider returned error: ${元のerrorMessage}` に置き換える | pi 内蔵の auto-retry による同一モデルの再試行が行われる |
-| `Provider finish_reason: content_filter`                           | 何もしない                                                          | 再試行されない（同じ入力では失敗が繰り返されるため） |
-| `Provider finish_reason: network_error`                            | 何もしない                                                          | 本拡張なしでも内蔵 auto-retry が発火する       |
-| 上記以外のエラーメッセージ（HTTP エラー文言等）                     | 何もしない                                                          | pi 本来のリトライ分類に従う                    |
+| `Provider finish_reason: content_filter` | 何もしない | 再試行されない（同じ入力では失敗が繰り返されるため） |
+| `Provider finish_reason: network_error` | 何もしない | 本拡張なしでも内蔵 auto-retry が発火する |
+| 上記以外のエラーメッセージ（HTTP エラー文言等） | 何もしない | pi 本来のリトライ分類に従う |
 
 role が `assistant` 以外、`stopReason` が `"error"` 以外、または `errorMessage` がないメッセージは対象外とし、何もしない。
 

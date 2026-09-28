@@ -333,7 +333,10 @@ describe("dsh agents nested subagent delegation", () => {
 
     const childDisposers: Array<() => void> = [];
     const startedRequests: FakeStartRequest[] = [];
-    const seniorResult = deferred<{ stopReason: string; output: Array<{ type: string; text?: string }> }>();
+    const seniorResult = deferred<{
+      stopReason: string;
+      output: Array<{ type: string; text?: string }>;
+    }>();
     let startCount = 0;
     let seniorAgent: { ctx: Context; session: { id: string } } | undefined;
     let seniorTool: CapturedSubagentTool | undefined;
@@ -397,7 +400,10 @@ describe("dsh agents nested subagent delegation", () => {
           result: Promise.resolve({
             stopReason: "completed",
             output: [
-              { type: "text", text: leafId === "session-junior" ? "junior report" : "vision report" },
+              {
+                type: "text",
+                text: leafId === "session-junior" ? "junior report" : "vision report",
+              },
             ],
           }),
           dispose: async () => {},
@@ -421,8 +427,14 @@ describe("dsh agents nested subagent delegation", () => {
       assert.ok(rootTool);
       assert.deepEqual(rootTool.parameters.properties?.agent?.enum, ["senior", "junior", "vision"]);
 
-      const exec = (agent: unknown): FakeToolExec => ({ agent, signal: new AbortController().signal });
-      const mainRun = rootTool.execute({ task: "Investigate the design", agent: "senior" }, exec(rootAgent));
+      const exec = (agent: unknown): FakeToolExec => ({
+        agent,
+        signal: new AbortController().signal,
+      });
+      const mainRun = rootTool.execute(
+        { task: "Investigate the design", agent: "senior" },
+        exec(rootAgent),
+      );
       // The senior child is composed inside start: its tool must already exist.
       for (let i = 0; i < 100 && !seniorTool; i++) {
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -460,7 +472,10 @@ describe("dsh agents nested subagent delegation", () => {
         "junior report",
       );
       assert.equal(
-        await delegateTool.execute({ task: "Describe the diagram", agent: "vision" }, exec(seniorAgent)),
+        await delegateTool.execute(
+          { task: "Describe the diagram", agent: "vision" },
+          exec(seniorAgent),
+        ),
         "vision report",
       );
       // Delegation gate: outside the child's subagents list it refuses.
