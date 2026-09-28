@@ -17,7 +17,7 @@ install:
 
 [windows]
 install:
-  gsudo pwsh undotfiles/install/windows.ps1
+  bun undotfiles/install/windows.ts
 
 apply:
   bun dotfiles-manager/cli.ts apply
