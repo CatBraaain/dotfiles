@@ -5,3 +5,7 @@
 
 # style(dsh-plugins): apply vp fmt defaults to all plugin sources
 34e90f91a54a92f367115fde1ce799516d3ea49f
+
+# style: apply oxfmt and prettier defaults to all sources
+a4a558aca28df9cb8f1b7e23f8917c1f8666d474
+
