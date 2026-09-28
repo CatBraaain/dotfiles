@@ -18,13 +18,7 @@ export async function main(
 
   const started = performance.now();
   try {
-    await logStage("build", async () => {
-      await build(root, undefined, homeRoot, (path, status, elapsedSeconds, stdoutNeedsNewline) => {
-        if (stdoutNeedsNewline) console.log();
-        console.log(`hook ${path} ${status} (${elapsedSeconds.toFixed(2)}s)`);
-      });
-      return 0;
-    });
+    await logBuild(root, homeRoot);
 
     const distRoot = join(root, "dist");
     const code = await logStage(command, () =>
@@ -36,6 +30,25 @@ export async function main(
     return code;
   } catch (error) {
     logElapsed(`command ${command}`, "failure", started);
+    throw error;
+  }
+}
+
+async function logBuild(root: string, homeRoot: string): Promise<void> {
+  const started = performance.now();
+  console.log("Build started");
+  try {
+    await build(root, undefined, homeRoot, (path, status, elapsedSeconds, stdoutNeedsNewline) => {
+      if (status === "start") {
+        console.log(`  Running ${path}`);
+        return;
+      }
+      if (stdoutNeedsNewline) console.log();
+      console.log(`  ${status === "success" ? "✓" : "✗"} ${path} (${elapsedSeconds.toFixed(2)}s)`);
+    });
+    console.log(`Build complete (${elapsedSeconds(started)}s)`);
+  } catch (error) {
+    console.log(`Build failed (${elapsedSeconds(started)}s)`);
     throw error;
   }
 }
@@ -54,7 +67,11 @@ async function logStage(name: string, action: () => Promise<number>): Promise<nu
 }
 
 function logElapsed(label: string, status: "success" | "failure", started: number): void {
-  console.log(`${label} ${status} (${((performance.now() - started) / 1000).toFixed(2)}s)`);
+  console.log(`${label} ${status} (${elapsedSeconds(started)}s)`);
+}
+
+function elapsedSeconds(started: number): string {
+  return ((performance.now() - started) / 1000).toFixed(2);
 }
 
 if (import.meta.main) {

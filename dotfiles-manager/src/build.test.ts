@@ -976,23 +976,30 @@ describe("manager CLI", () => {
       assert.equal(result.code, 0, result.stderr);
       const logs = result.stdout
         .split("\n")
-        .filter((line) => /^(stage |hook |command )/.test(line))
+        .filter((line) => /^(Build |  Running |  [✓✗] |stage |command )/.test(line))
         .map((line) => line.replace(/\(\d+\.\d{2}s\)$/, "(TIME)"));
       assert.deepEqual(logs, [
-        "stage build start (TIME)",
-        "hook nested/01-local.build-machine.ts start (TIME)",
-        "hook nested/01-local.build-machine.ts success (TIME)",
-        "hook nested/02-shared.build.ts start (TIME)",
-        "hook nested/02-shared.build.ts success (TIME)",
-        "stage build success (TIME)",
+        "Build started",
+        "  Running nested/01-local.build-machine.ts",
+        "  ✓ nested/01-local.build-machine.ts (TIME)",
+        "  Running nested/02-shared.build.ts",
+        "  ✓ nested/02-shared.build.ts (TIME)",
+        "Build complete (TIME)",
         `stage ${command} start (TIME)`,
         `stage ${command} success (TIME)`,
         `command ${command} success (TIME)`,
       ]);
-      assert.match(result.stdout, /^stage build start \(0\.00s\)$/m);
       assert.match(result.stdout, new RegExp(`^stage ${command} start \\(0\\.00s\\)$`, "m"));
     });
   }
+
+  it("logs build completion without hook lines when there are no hooks", async () => {
+    const result = await runManager("managed");
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /^Build started\nBuild complete \(\d+\.\d{2}s\)$/m);
+    assert.doesNotMatch(result.stdout, /^  (?:Running|[✓✗]) /m);
+  });
 
   it("does not add a blank line when a hook writes no stdout", async () => {
     await put(root, "dotfiles/quiet.build.ts", "export default function () {};");
@@ -1021,12 +1028,7 @@ describe("manager CLI", () => {
     const lines = result.stdout.split("\n");
     const outputLine = lines.indexOf("hook-output");
     assert.ok(outputLine >= 0, result.stdout);
-    assert.equal(lines[outputLine + 1].startsWith("hook output.build.ts success "), true);
-    assert.deepEqual(lines.slice(outputLine, outputLine + 2), [
-      "hook-output",
-      lines[outputLine + 1],
-    ]);
-    assert.match(lines[outputLine + 1], /^hook output\.build\.ts success \(\d+\.\d{2}s\)$/);
+    assert.match(lines[outputLine + 1], /^  ✓ output\.build\.ts \(\d+\.\d{2}s\)$/);
   });
 
   for (const fails of [false, true]) {
@@ -1045,9 +1047,7 @@ describe("manager CLI", () => {
       assert.equal(outputLine >= 0, true, result.stdout);
       assert.match(
         lines[outputLine + 1],
-        new RegExp(
-          `^hook output\\.build\\.ts ${fails ? "failure" : "success"} \\(\\d+\\.\\d{2}s\\)$`,
-        ),
+        new RegExp(`^  ${fails ? "✗" : "✓"} output\\.build\\.ts \\(\\d+\\.\\d{2}s\\)$`),
       );
     });
   }
@@ -1086,13 +1086,15 @@ describe("manager CLI", () => {
     const result = await runManager("managed");
 
     assert.equal(result.code, 0, result.stderr);
-    for (const label of ["hook delayed.build.ts", "stage build", "command managed"]) {
-      const elapsed = result.stdout.match(
-        new RegExp(`^${label} success \\((\\d+\\.\\d{2})s\\)$`, "m"),
-      );
-      assert.ok(elapsed, `missing success log for ${label}: ${result.stdout}`);
+    for (const pattern of [
+      /^  ✓ delayed\.build\.ts \((\d+\.\d{2})s\)$/m,
+      /^Build complete \((\d+\.\d{2})s\)$/m,
+      /^command managed success \((\d+\.\d{2})s\)$/m,
+    ]) {
+      const elapsed = result.stdout.match(pattern);
+      assert.ok(elapsed, `missing success log matching ${pattern}: ${result.stdout}`);
       const seconds = Number(elapsed[1]);
-      assert.ok(seconds >= 0.1, `${label} elapsed ${seconds}s is below 0.10s`);
+      assert.ok(seconds >= 0.1, `${pattern} elapsed ${seconds}s is below 0.10s`);
     }
   });
 
@@ -1126,6 +1128,8 @@ describe("manager CLI", () => {
 
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /file\.txt/);
+    assert.match(result.stdout, /old/);
+    assert.match(result.stdout, /new/);
     assert.equal(await readFile(join(distRoot, "file.txt"), "utf8"), "new\n");
     assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "old\n");
     assert.equal(existsSync(join(homeRoot, "done.txt")), false);
@@ -1147,16 +1151,18 @@ describe("manager CLI", () => {
     await put(
       root,
       "dotfiles/fail.build.ts",
-      'export default function () { throw new Error("failed"); }',
+      'export default function () { process.stderr.write("hook-error\\n"); throw new Error("failed"); }',
     );
 
     const result = await runManager("apply");
 
     assert.equal(result.code, 1);
+    assert.match(result.stderr, /hook-error\n/);
     assert.match(result.stderr, /local build hook failed: fail\.build\.ts/);
-    assert.match(result.stdout, /^hook fail\.build\.ts start \(0\.00s\)$/m);
-    assert.match(result.stdout, /^hook fail\.build\.ts failure \(\d+\.\d{2}s\)$/m);
-    assert.match(result.stdout, /^stage build failure \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^Build started$/m);
+    assert.match(result.stdout, /^  Running fail\.build\.ts$/m);
+    assert.match(result.stdout, /^  ✗ fail\.build\.ts \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^Build failed \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^command apply failure \(\d+\.\d{2}s\)$/m);
     assert.doesNotMatch(result.stdout, /^stage apply start /m);
     assert.equal(existsSync(join(homeRoot, "file.txt")), false);
@@ -1171,7 +1177,7 @@ describe("manager CLI", () => {
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /home root is not a directory:/);
-    assert.match(result.stdout, /^stage build success \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^Build complete \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^stage diff failure \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^command diff failure \(\d+\.\d{2}s\)$/m);
   });
