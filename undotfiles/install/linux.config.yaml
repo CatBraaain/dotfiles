@@ -3,6 +3,8 @@
 # OpenDesign's Linux native folder picker.
 - apt: zenity
 - apt: fonts-noto-cjk
+# Headless Chromium (Playwright E2E recordings) resolves emoji glyphs via fontconfig.
+- apt: fonts-noto-color-emoji
 # Camoufox/Playwright's Firefox runtime needs libasound.so.2 (ALSA), even headless.
 - apt: libasound2t64
 # Camoufox uses Xvfb for a virtual X display and software-rendered WebGL in headless mode.
