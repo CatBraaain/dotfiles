@@ -30,7 +30,7 @@ export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
 # Prefer Bun's global CLIs over stale npm globals in the Homebrew prefix.
 export PATH="$HOME/.bun/bin:$PATH"
 
-# Agent CLIs (e.g. ticket).
+# Agent CLIs (e.g. browse).
 export PATH="$HOME/.agents/cli:$PATH"
 
 # keep-sorted start
@@ -48,6 +48,7 @@ alias dc="docker compose"
 alias j="just"
 alias ksorted="keep-sorted"
 alias runp="bun run --parallel"
+alias ticket="bun ~/.agents/cli/ticket"
 alias uv-python-update="uv python install --reinstall 3.11 3.12 3.13"
 alias win="powershell.exe"
 alias wt="wt.exe"

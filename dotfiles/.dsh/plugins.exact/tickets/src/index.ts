@@ -1,7 +1,8 @@
 /**
  * dotfiles-dsh-tickets — dsh port of the pi `tickets` extension.
  *
- * Registers five tools wrapping the ticket CLI (`~/.agents/cli/ticket`):
+ * Registers five tools wrapping the ticket CLI (`~/.agents/cli/ticket`, the
+ * dotfiles/.agents/cli/ticket project spawned as `bun <dir>`):
  * ticket_list, ticket_show, ticket_create, ticket_set, ticket_edit. The
  * behavior contract is dotfiles/.agents/cli/ticket-tools.spec.md
  * (harness-neutral oracle; the CLI itself is specified by ticket.spec.md).
@@ -125,7 +126,9 @@ export function sessionCwd(exec: Pick<ToolRunContext, "agent">): string {
   return exec.agent?.session.header.cwd ?? process.cwd();
 }
 
-function ticketCliPath(): string {
+// The CLI project directory; bun resolves its package.json main field, so
+// spawning needs no exec bit (`bun <script>` pattern of the web-search plugin).
+function ticketCliDir(): string {
   return join(homedir(), ".agents", "cli", "ticket");
 }
 
@@ -145,8 +148,8 @@ function spawnTicketCli(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
-      ticketCliPath(),
-      args,
+      "bun",
+      [ticketCliDir(), ...args],
       { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {

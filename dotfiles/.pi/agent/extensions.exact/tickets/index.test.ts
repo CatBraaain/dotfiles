@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import ticketsExtension, {
@@ -607,20 +608,20 @@ describe("tool execute (SPEC: content is the CLI text output; truncation refetch
 });
 
 // The wrapper tools above mock the runner; these cases run the extension's
-// real spawnTicketCli against a stub executable (injected via deps.cliPath) so
-// the spawn path (cwd, exit-code classification, stderr trimming, spawn
+// real spawnTicketCli against a stub CLI project dir (injected via deps.cliDir)
+// so the spawn path (cwd, exit-code classification, stderr trimming, spawn
 // failure) is covered without depending on the caller's HOME.
 describe("ticket CLI real spawn (SPEC: common behavior)", () => {
   const stubDirs: string[] = [];
 
-  // Writes the stub script to a temp dir and returns its path.
-  async function installStub(script: string, executable: boolean): Promise<string> {
+  // Writes a stub CLI project (package.json + main.ts) to a temp dir and
+  // returns its dir; bun resolves the main field when spawned with the dir.
+  async function installStub(script: string): Promise<string> {
     const dir = await mkdtemp("/tmp/ticket-cli-stub-");
     stubDirs.push(dir);
-    const path = join(dir, "ticket");
-    await writeFile(path, script);
-    if (executable) await chmod(path, 0o755);
-    return path;
+    await writeFile(join(dir, "package.json"), JSON.stringify({ main: "./main.ts" }));
+    await writeFile(join(dir, "main.ts"), script);
+    return dir;
   }
 
   afterEach(async () => {
@@ -628,34 +629,31 @@ describe("ticket CLI real spawn (SPEC: common behavior)", () => {
   });
 
   it("resolves the CLI stdout for the given args and cwd", async () => {
-    const cliPath = await installStub(
-      "#!/usr/bin/env bun\nconsole.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n",
-      true,
+    const cliDir = await installStub(
+      "console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n",
     );
-    const stdout = await spawnTicketCli(["list"], "/tmp", undefined, { cliPath });
+    const stdout = await spawnTicketCli(["list"], "/tmp", undefined, { cliDir });
     const result = JSON.parse(stdout) as { argv: string[]; cwd: string };
     assert.deepEqual(result.argv, ["list"]);
     assert.equal(result.cwd, "/tmp");
   });
 
   it("rejects with the CLI stderr when it exits non-zero", async () => {
-    const cliPath = await installStub(
-      '#!/usr/bin/env bun\nif (process.argv.includes("--fail")) { console.error("stub error: boom"); process.exit(1); }\nconsole.log("{}");\n',
-      true,
+    const cliDir = await installStub(
+      'if (process.argv.includes("--fail")) { console.error("stub error: boom"); process.exit(1); }\nconsole.log("{}");\n',
     );
     await assert.rejects(
-      () => spawnTicketCli(["show", "--fail"], "/tmp", undefined, { cliPath }),
+      () => spawnTicketCli(["show", "--fail"], "/tmp", undefined, { cliDir }),
       /stub error: boom/,
     );
   });
 
   it("trims one trailing newline from the CLI stderr", async () => {
-    const cliPath = await installStub(
-      '#!/usr/bin/env bun\nprocess.stderr.write("error: body  \\n\\n"); process.exit(1);\n',
-      true,
+    const cliDir = await installStub(
+      'process.stderr.write("error: body  \\n\\n"); process.exit(1);\n',
     );
     await assert.rejects(
-      () => spawnTicketCli(["edit"], "/tmp", undefined, { cliPath }),
+      () => spawnTicketCli(["edit"], "/tmp", undefined, { cliDir }),
       (error: unknown) => {
         assert.equal((error as Error).message, "error: body  \n");
         return true;
@@ -663,10 +661,19 @@ describe("ticket CLI real spawn (SPEC: common behavior)", () => {
     );
   });
 
-  it("reports the CLI as unavailable when it is not executable", async () => {
-    const cliPath = await installStub("#!/usr/bin/env bun\nconsole.log('{}');\n", false); // no exec bit -> spawn failure
+  it("reports the CLI as unavailable when the bun spawn itself fails", async () => {
+    // Simulates bun missing from PATH: execFile fails with a string code
+    // (ENOENT), which the spawn path classifies as "not available".
+    const spawnFails = ((
+      _file: string,
+      _args: string[],
+      _options: never,
+      callback: (error: Error) => void,
+    ) => {
+      callback(Object.assign(new Error("spawn bun ENOENT"), { code: "ENOENT" }));
+    }) as unknown as typeof execFile;
     await assert.rejects(
-      () => spawnTicketCli(["list"], "/tmp", undefined, { cliPath }),
+      () => spawnTicketCli(["list"], "/tmp", undefined, { exec: spawnFails }),
       /not available/,
     );
   });

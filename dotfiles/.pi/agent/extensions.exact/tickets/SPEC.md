@@ -2,7 +2,7 @@
 
 ## 対象と目的
 
-tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli/ticket.executable` の展開先 `~/.agents/cli/ticket`）の操作手段を tool として提供する pi extension である。5 つの tool を `pi.registerTool` で登録する。
+tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli/ticket/` の展開先 `~/.agents/cli/ticket/`。`bun ~/.agents/cli/ticket` として起動し、bun が package.json の `main` を解決する）の操作手段を tool として提供する pi extension である。5 つの tool を `pi.registerTool` で登録する。
 
 tool 群の振る舞いの正本は `dotfiles/.agents/cli/ticket-tools.spec.md`、CLI とストアの振る舞いの正本は `dotfiles/.agents/cli/ticket.spec.md` である。この仕様は本 extension の構成・登録 tool・依存のみを定め、振る舞いを再定義しない。
 
@@ -16,7 +16,7 @@ extensions.exact/tickets/
 ```
 
 - `index.ts` は、tool 登録、tool 引数から CLI 引数へのマッピング（`buildListArgs` / `buildShowArgs` / `buildCreateArgs` / `buildSetArgs` / `buildEditArgs`）、CLI spawn（`spawnTicketCli`、`appendJsonFlag`、runner 型 `TicketCliRunner`）、description と promptSnippet の組み立て（`ticketToolDescriptions` / `ticketToolPromptSnippets`）を export する
-- `index.test.ts` は上記 export の検証に限定する。CLI spawn は stub 実行ファイル（`deps.cliPath` 注入）でのみ検証し、実際の ticket CLI は呼ばない
+- `index.test.ts` は上記 export の検証に限定する。CLI spawn は stub CLI project ディレクトリ（`deps.cliDir` 注入）でのみ検証し、実際の ticket CLI は呼ばない
 - dsh 側（`dotfiles/.dsh/plugins.exact/tickets/`）が同名・同引数・同振る舞いの tool を登録する（`ticket-tools.spec.md` の「構成」）
 
 ## 登録 tool

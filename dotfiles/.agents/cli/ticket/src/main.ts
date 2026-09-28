@@ -1,6 +1,7 @@
-#!/usr/bin/env bun
 // ticket CLI — human/agent interface for the markdown ticket store.
 // Spec: dotfiles/.agents/cli/ticket.spec.md
+// Started as `bun ~/.agents/cli/ticket` (bun resolves package.json's main
+// field to this file), so no exec bit or dependencies are required.
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -129,7 +130,13 @@ function validateStatus(status: string): Status {
 }
 
 function validateProject(project: string): string {
-  if (!project || project === "." || project === ".." || project.includes("/") || project.includes("\\")) {
+  if (
+    !project ||
+    project === "." ||
+    project === ".." ||
+    project.includes("/") ||
+    project.includes("\\")
+  ) {
     fail(`invalid project: ${project}`);
   }
   return project;
@@ -155,7 +162,11 @@ function frontmatterIssue(content: string): string | null {
   return null;
 }
 
-function splitFrontmatter(content: string): { frontmatter: string; fields: Map<string, string>; rest: string } {
+function splitFrontmatter(content: string): {
+  frontmatter: string;
+  fields: Map<string, string>;
+  rest: string;
+} {
   const closing = content.indexOf("\n---\n", 4);
   const frontmatter = content.slice(0, closing);
   const fields = new Map<string, string>();
@@ -217,15 +228,22 @@ async function loadTickets(project: string, collect?: Issue[]): Promise<Ticket[]
 async function allProjects(): Promise<string[]> {
   try {
     const entries = await readdir(storeRoot(), { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") fail(`ticket store not found: ${storeRoot()}`);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      fail(`ticket store not found: ${storeRoot()}`);
     throw error;
   }
 }
 
 function isActionable(ticket: Ticket, byId: Map<string, Ticket>): boolean {
-  return ticket.status === "open" && (ticket.after === null || byId.get(ticket.after)?.status === "closed");
+  return (
+    ticket.status === "open" &&
+    (ticket.after === null || byId.get(ticket.after)?.status === "closed")
+  );
 }
 
 function resolveSelector(tickets: Ticket[], selector: string | undefined): Ticket {
@@ -240,7 +258,8 @@ function resolveSelector(tickets: Ticket[], selector: string | undefined): Ticke
   if (exact) return exact;
   const matches = tickets.filter((ticket) => ticket.id.startsWith(selector));
   if (matches.length === 1) return matches[0]!;
-  if (matches.length > 1) fail(`ambiguous id "${selector}": ${matches.map((ticket) => ticket.id).join(", ")}`);
+  if (matches.length > 1)
+    fail(`ambiguous id "${selector}": ${matches.map((ticket) => ticket.id).join(", ")}`);
   fail(`ticket not found: ${selector}`);
 }
 
@@ -390,7 +409,10 @@ async function applyChanges(dir: string, changes: TransactionChange[]): Promise<
       await rename(tempPaths[index]!, change.path);
       renamed.push(change);
     }
-    await writeFile(journalPath, JSON.stringify({ ...journal, state: "committed" } satisfies TransactionJournal));
+    await writeFile(
+      journalPath,
+      JSON.stringify({ ...journal, state: "committed" } satisfies TransactionJournal),
+    );
     await rm(journalPath);
   } catch (error) {
     for (const [index, change] of renamed.reverse().entries()) {
@@ -431,12 +453,16 @@ async function listCommand(flags: Flags): Promise<void> {
   for (const status of flags.statuses) validateStatus(status);
   const projects = flags.all ? await allProjects() : [resolveProject(flags)];
   const tickets = (await Promise.all(projects.map((project) => loadTickets(project)))).flat();
-  const filtered = flags.statuses.length > 0
-    ? tickets.filter((ticket) => flags.statuses.includes(ticket.status))
-    : tickets.filter((ticket) => ticket.status === "open");
+  const filtered =
+    flags.statuses.length > 0
+      ? tickets.filter((ticket) => flags.statuses.includes(ticket.status))
+      : tickets.filter((ticket) => ticket.status === "open");
   if (flags.json) return output(filtered.map((ticket) => ticketJson(ticket, flags.all)));
   if (filtered.length === 0) return console.log("no tickets");
-  for (const ticket of filtered) console.log(`${flags.all ? `${ticket.project}\t` : ""}${ticket.id}\t${ticket.status}\t${ticket.title}`);
+  for (const ticket of filtered)
+    console.log(
+      `${flags.all ? `${ticket.project}\t` : ""}${ticket.id}\t${ticket.status}\t${ticket.title}`,
+    );
 }
 
 async function showCommand(positional: string[], flags: Flags): Promise<void> {
@@ -445,7 +471,9 @@ async function showCommand(positional: string[], flags: Flags): Promise<void> {
   if (flags.json) return output({ ...ticketJson(ticket, false), body: ticket.body });
   // write (not console.log) so the body keeps its exact trailing whitespace,
   // which ticket_edit's literal matching depends on.
-  process.stdout.write(`id: ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\ntitle: ${ticket.title}\n\nbody:\n${ticket.body}`);
+  process.stdout.write(
+    `id: ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\ntitle: ${ticket.title}\n\nbody:\n${ticket.body}`,
+  );
 }
 
 interface CreateInput {
@@ -458,7 +486,8 @@ interface CreateInput {
 function parseCreateInput(raw: string | undefined): CreateInput {
   if (raw === undefined) usageFail();
   const parsed = parseJsonObject(raw);
-  if (Object.keys(parsed).some((key) => !["title", "status", "after", "body"].includes(key))) usageFail();
+  if (Object.keys(parsed).some((key) => !["title", "status", "after", "body"].includes(key)))
+    usageFail();
   if (typeof parsed.title !== "string") usageFail();
   const input: CreateInput = { title: parsed.title };
   if (parsed.status !== undefined) {
@@ -480,39 +509,60 @@ async function createCommand(positional: string[], flags: Flags): Promise<void> 
   if (positional.length !== 1) usageFail();
   const input = parseCreateInput(positional[0]);
   const project = resolveProject(flags);
-  const ticket = await withProjectWrite(project, async (dir) => {
-    const tickets = await loadTickets(project);
-    let after: string | null = null;
-    if (input.after !== undefined && input.after !== null) {
-      const dependency = resolveAfter(tickets, input.after);
-      if (dependency.status === "closed" || dependency.status === "cancelled") {
-        fail(`after references unavailable ticket: ${dependency.id}`);
+  const ticket = await withProjectWrite(
+    project,
+    async (dir) => {
+      const tickets = await loadTickets(project);
+      let after: string | null = null;
+      if (input.after !== undefined && input.after !== null) {
+        const dependency = resolveAfter(tickets, input.after);
+        if (dependency.status === "closed" || dependency.status === "cancelled") {
+          fail(`after references unavailable ticket: ${dependency.id}`);
+        }
+        after = dependency.id;
       }
-      after = dependency.id;
-    }
-    const status = input.status ?? (after === null ? "open" : "blocked");
-    const frontmatter = ["---", `status: ${status}`, ...(after ? [`after: ${after}`] : []), "---"].join("\n");
-    const body = input.body === undefined ? `# ${input.title}\n` : `# ${input.title}\n\n${input.body}\n`;
-    let date = new Date();
-    while (true) {
-      const id = timestamp(date);
-      const path = join(dir, `${id}.md`);
-      const temporaryPath = join(dir, `.ticket-new-${process.pid}-${randomUUID()}`);
-      try {
-        const content = `${frontmatter}\n${body}`;
-        await writeFile(temporaryPath, content, { flag: "wx" });
-        await link(temporaryPath, path);
-        return { id, status, after, title: input.title, path, project, body, content } satisfies Ticket;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        date = new Date(date.getTime() + 1_000);
-      } finally {
-        await rm(temporaryPath, { force: true });
+      const status = input.status ?? (after === null ? "open" : "blocked");
+      const frontmatter = [
+        "---",
+        `status: ${status}`,
+        ...(after ? [`after: ${after}`] : []),
+        "---",
+      ].join("\n");
+      const body =
+        input.body === undefined ? `# ${input.title}\n` : `# ${input.title}\n\n${input.body}\n`;
+      let date = new Date();
+      while (true) {
+        const id = timestamp(date);
+        const path = join(dir, `${id}.md`);
+        const temporaryPath = join(dir, `.ticket-new-${process.pid}-${randomUUID()}`);
+        try {
+          const content = `${frontmatter}\n${body}`;
+          await writeFile(temporaryPath, content, { flag: "wx" });
+          await link(temporaryPath, path);
+          return {
+            id,
+            status,
+            after,
+            title: input.title,
+            path,
+            project,
+            body,
+            content,
+          } satisfies Ticket;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          date = new Date(date.getTime() + 1_000);
+        } finally {
+          await rm(temporaryPath, { force: true });
+        }
       }
-    }
-  }, true);
+    },
+    true,
+  );
   if (flags.json) return output(ticketJson(ticket, false));
-  console.log(`created ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\npath: ${ticket.path}`);
+  console.log(
+    `created ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\npath: ${ticket.path}`,
+  );
 }
 
 function parseSetInput(raw: string | undefined): FrontmatterPatch {
@@ -537,7 +587,8 @@ function parseSetInput(raw: string | undefined): FrontmatterPatch {
 
 async function setCommand(positional: string[], flags: Flags): Promise<void> {
   if (positional.length < 1 || positional.length > 2) usageFail();
-  const [selector, jsonArg] = positional.length === 1 ? [undefined, positional[0]!] : [positional[0]!, positional[1]!];
+  const [selector, jsonArg] =
+    positional.length === 1 ? [undefined, positional[0]!] : [positional[0]!, positional[1]!];
   const patch = parseSetInput(jsonArg);
   const project = resolveProject(flags);
   const updated = await withProjectWrite(project, async (dir) => {
@@ -547,14 +598,18 @@ async function setCommand(positional: string[], flags: Flags): Promise<void> {
     let after = patch.after;
     if (after !== undefined && after !== null) {
       const dependency = resolveAfter(tickets, after);
-      if (dependency.status === "closed" || dependency.status === "cancelled") fail(`after references unavailable ticket: ${dependency.id}`);
-      if (createsCycle(target.id, dependency.id, byId)) fail(`setting after would create a cycle: ${target.id} -> ${dependency.id}`);
+      if (dependency.status === "closed" || dependency.status === "cancelled")
+        fail(`after references unavailable ticket: ${dependency.id}`);
+      if (createsCycle(target.id, dependency.id, byId))
+        fail(`setting after would create a cycle: ${target.id} -> ${dependency.id}`);
       after = dependency.id;
     }
     const nextStatus = linkedStatus(target, { ...patch, after });
     const targetParts = splitFrontmatter(target.content);
     const targetContent = `${mergeFrontmatter(targetParts.frontmatter, { status: nextStatus, after })}${targetParts.rest}`;
-    const changes: TransactionChange[] = [{ path: target.path, oldContent: target.content, newContent: targetContent }];
+    const changes: TransactionChange[] = [
+      { path: target.path, oldContent: target.content, newContent: targetContent },
+    ];
     if (patch.status === "closed") {
       for (const dependent of tickets) {
         if (dependent.status !== "blocked" || dependent.after !== target.id) continue;
@@ -567,17 +622,25 @@ async function setCommand(positional: string[], flags: Flags): Promise<void> {
       }
     }
     await applyChanges(dir, changes);
-    return { ...target, status: nextStatus, after: after === undefined ? target.after : after, content: targetContent };
+    return {
+      ...target,
+      status: nextStatus,
+      after: after === undefined ? target.after : after,
+      content: targetContent,
+    };
   });
   if (flags.json) return output(ticketJson(updated, false));
-  console.log(`updated ${updated.id}\nstatus: ${updated.status}\nafter: ${updated.after ?? "-"}\npath: ${updated.path}`);
+  console.log(
+    `updated ${updated.id}\nstatus: ${updated.status}\nafter: ${updated.after ?? "-"}\npath: ${updated.path}`,
+  );
 }
 
 async function editCommand(positional: string[], flags: Flags): Promise<void> {
   if (positional.length < 2 || positional.length > 3) usageFail();
-  const [selector, old, replacement] = positional.length === 2
-    ? [undefined, positional[0]!, positional[1]!]
-    : [positional[0]!, positional[1]!, positional[2]!];
+  const [selector, old, replacement] =
+    positional.length === 2
+      ? [undefined, positional[0]!, positional[1]!]
+      : [positional[0]!, positional[1]!, positional[2]!];
   if (!old || replacement === undefined) usageFail();
   const project = resolveProject(flags);
   const updated = await withProjectWrite(project, async (dir) => {
@@ -588,15 +651,23 @@ async function editCommand(positional: string[], flags: Flags): Promise<void> {
       matches++;
       cursor = target.body.indexOf(old, cursor + old.length);
     }
-    if (matches !== 1) fail(`${target.id}: "${old}" appears ${matches} times in the body\nCurrent body:\n${target.body}`);
+    if (matches !== 1)
+      fail(
+        `${target.id}: "${old}" appears ${matches} times in the body\nCurrent body:\n${target.body}`,
+      );
     const body = target.body.replace(old, replacement);
     const { frontmatter } = splitFrontmatter(target.content);
     const content = `${frontmatter}\n---\n${body}`;
-    await applyChanges(dir, [{ path: target.path, oldContent: target.content, newContent: content }]);
+    await applyChanges(dir, [
+      { path: target.path, oldContent: target.content, newContent: content },
+    ]);
     return { ...target, body, content, title: body.match(/^# (.+)$/m)?.[1]?.trim() ?? target.id };
   });
   if (flags.json) output(ticketJson(updated, false));
-  else console.log(`updated ${updated.id}\nstatus: ${updated.status}\nafter: ${updated.after ?? "-"}\npath: ${updated.path}`);
+  else
+    console.log(
+      `updated ${updated.id}\nstatus: ${updated.status}\nafter: ${updated.after ?? "-"}\npath: ${updated.path}`,
+    );
 }
 
 function findCycles(tickets: Ticket[]): string[][] {
@@ -636,12 +707,20 @@ async function checkCommand(flags: Flags): Promise<void> {
     const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
     for (const ticket of tickets) {
       if (ticket.after !== null && !byId.has(ticket.after)) {
-        issues.push({ file: relative(storeRoot(), ticket.path), kind: "missing-after", detail: `after references missing ticket: ${ticket.after}` });
+        issues.push({
+          file: relative(storeRoot(), ticket.path),
+          kind: "missing-after",
+          detail: `after references missing ticket: ${ticket.after}`,
+        });
       }
     }
     for (const cycle of findCycles(tickets)) {
       const head = byId.get(cycle[0]!)!;
-      issues.push({ file: relative(storeRoot(), head.path), kind: "after-cycle", detail: `after cycle: ${cycle.join(" -> ")}` });
+      issues.push({
+        file: relative(storeRoot(), head.path),
+        kind: "after-cycle",
+        detail: `after cycle: ${cycle.join(" -> ")}`,
+      });
     }
   }
   if (flags.json) output(issues);
@@ -662,20 +741,30 @@ async function main(): Promise<void> {
   const [command = "", ...argv] = process.argv.slice(2);
   const { flags, positional } = parseArgs(argv, command);
   switch (command) {
-    case "list": return listCommand(flags);
-    case "show": return showCommand(positional, flags);
-    case "create": return createCommand(positional, flags);
-    case "set": return setCommand(positional, flags);
-    case "edit": return editCommand(positional, flags);
-    case "check": return checkCommand(flags);
-    default: return usageFail();
+    case "list":
+      return listCommand(flags);
+    case "show":
+      return showCommand(positional, flags);
+    case "create":
+      return createCommand(positional, flags);
+    case "set":
+      return setCommand(positional, flags);
+    case "edit":
+      return editCommand(positional, flags);
+    case "check":
+      return checkCommand(flags);
+    default:
+      return usageFail();
   }
 }
 
 try {
   await main();
 } catch (error) {
-  const failure = error instanceof TicketError ? error : new TicketError(1, `I/O error: ${(error as Error).message}`);
+  const failure =
+    error instanceof TicketError
+      ? error
+      : new TicketError(1, `I/O error: ${(error as Error).message}`);
   const jsonMode = hasJsonFlag(process.argv.slice(2));
   const errorMessage = jsonMode ? failure.message.replace(/\r?\n/g, "\\n") : failure.message;
   if (jsonMode) output({ error: errorMessage });

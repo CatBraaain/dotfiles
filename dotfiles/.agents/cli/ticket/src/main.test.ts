@@ -3,7 +3,9 @@ import { afterEach, describe, it } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-const CLI = join(import.meta.dir, "ticket.executable");
+// The CLI project dir; bun resolves package.json's main field inside it (the
+// same entry the deployed `bun ~/.agents/cli/ticket` uses).
+const CLI_DIR = join(import.meta.dir, "..");
 const homes: string[] = [];
 
 async function ticketHome(): Promise<string> {
@@ -13,7 +15,7 @@ async function ticketHome(): Promise<string> {
 }
 
 function runAt(home: string, cwd: string, args: string[], extraEnv: Record<string, string> = {}) {
-  const result = Bun.spawnSync([CLI, ...args], {
+  const result = Bun.spawnSync([process.execPath, CLI_DIR, ...args], {
     cwd,
     env: { ...process.env, HOME: home, ...extraEnv },
     stdout: "pipe",
@@ -481,7 +483,10 @@ describe("ticket CLI", () => {
     assert.deepEqual(created.stdout, `created ${id}\nstatus: open\nafter: -\npath: ${path}\n`);
 
     const shown = run(home, ["show", id, "--project", "demo"]);
-    assert.deepEqual(shown.stdout, `id: ${id}\nstatus: open\nafter: -\ntitle: First\n\nbody:\n# First\n`);
+    assert.deepEqual(
+      shown.stdout,
+      `id: ${id}\nstatus: open\nafter: -\ntitle: First\n\nbody:\n# First\n`,
+    );
 
     const listed = run(home, ["list", "--project", "demo"]);
     assert.deepEqual(listed.stdout, `${id}\topen\tFirst\n`);
