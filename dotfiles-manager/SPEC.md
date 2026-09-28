@@ -39,16 +39,21 @@ build が完了した dist が、差分検知の入力になる。
 
 `just apply` / `just diff` / `just managed` はそれぞれ `bun dotfiles-manager <apply|diff|managed>` を呼ぶ。`bun` はディレクトリパスを package.json の `main` で解決するため、エントリファイル名を明示せずに呼べる。内部 CLI は各サブコマンドで後続操作より先に build を実行し、build に失敗すると後続操作を実行せず非 0 で終了する。引数なし、不明なサブコマンド、余分な引数の場合は使用方法を表示して非 0 で終了し、build は実行しない。
 
-内部 CLI の `apply` / `diff` / `managed` では、build の開始に `Build started`、成功時に `Build complete (<秒>s)`、失敗時に `Build failed (<秒>s)` を stdout に表示する。実行する各 build フックの開始には `  Running <path>`、成功時には `  ✓ <path> (<秒>s)`、失敗時には `  ✗ <path> (<秒>s)` を表示する。`<path>` はフックの dist 相対パスであり、フック行の先頭には半角スペースを 2 個置く。フック自身の stdout / stderr は加工せずに転送し、stdout が改行で終わらない場合は、後続の完了行または失敗行を新しい行に表示する。
+内部 CLI の `apply` / `diff` / `managed` では、build の開始に `Build started`、成功時に `Build complete (<秒>s)`、失敗時に `Build failed (<秒>s)` を stdout に表示する。実行する各 build フックの開始には `  Running <path>`、成功時には `  ✓ <path> (<秒>s)`、失敗時には `  ✗ <path> (<秒>s)` を表示する。`<path>` はフックの dist 相対パスであり、フック行の先頭には半角スペースを 2 個置く。build の各フェーズの完了時には `  <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist 再構築の `rebuild dist`、パス対応表の `path map`、外部取得の `externals`、merge 変換の `merge`、置換 sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は加工せずに転送し、stdout が改行で終わらない場合は、後続の完了行または失敗行を新しい行に表示する。
 
-build とフックの秒数はそれぞれの開始から数え、小数第 2 位まで表示する。後続のコマンド別ステージ（apply / diff / managed）は開始時に `stage <name> start (0.00s)`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じ stdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build 前に終了し、経過時間ログを出さない。
+build、フック、フェーズの秒数はそれぞれの開始から数え、小数第 2 位まで表示する。後続のコマンド別ステージ（apply / diff / managed）は開始時に `stage <name> start (0.00s)`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じ stdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build 前に終了し、経過時間ログを出さない。
 
 例えば `diff` が成功した場合のログは次の形式になる（差分表示は省略）。
 
 ```text
 Build started
+  rebuild dist (0.31s)
   Running .config/foo.build.ts
   ✓ .config/foo.build.ts (0.42s)
+  path map (0.01s)
+  externals (0.02s)
+  merge (0.00s)
+  replace (0.00s)
 Build complete (1.20s)
 stage diff start (0.00s)
 stage diff success (0.08s)
@@ -57,13 +62,13 @@ command diff success (1.28s)
 
 `bun dotfiles-manager/src/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わず、指定した dist と home を比較する。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の home 相対パスを 1 行ずつ表示し、`--json` より優先する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類について home 相対パスの配列を 2 スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
 
-`bun dotfiles-manager/src/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]` は build を行わず、指定した dist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と apply スクリプトの実行を行わない。`--dry-run --json` は `src/diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分・適用結果・実行した apply スクリプト数を表示する。
+`bun dotfiles-manager/src/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]` は build を行わず、指定した dist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と apply スクリプトの実行を行わない。`--dry-run --json` は `src/diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分検知に `diff: <内訳> (<秒>s)`、適用に `apply: <内訳> (<秒>s)`、apply スクリプトの実行に `apply scripts: <数> scripts (<秒>s)` を表示し、`<秒>s` は各処理の開始からの経過秒数である。
 
 `src/diff.ts` と `src/apply.ts` の直接 CLI は成功時に終了コード 0 を返す。必須引数がないとき、位置引数が多すぎるとき（`src/diff.ts`）、dist または home がディレクトリでないとき、または処理に失敗したときは、エラーを stderr に表示して非 0 で終了する。
 
 ## build: dist 再構築
 
-dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ignore` で終わるエントリ（ディレクトリと通常ファイル）、および名前が `node_modules` のディレクトリは、その配下ごと dist へコピーしない。前回実行で dist にあった内容は残らない。
+dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ignore` で終わるエントリ（ディレクトリと通常ファイル）、および名前が `node_modules` のディレクトリは、その配下ごと dist へコピーしない。前回実行で dist にあった内容は残らない。コピーは各フォルダの `remap.data.md` を読みながら行い、現行 OS の `-` の key は配下ごとコピーせず、移動先が定まった key は移動先へ直接配置する（§build: パス対応表）。
 
 ## build: ローカルフック
 
@@ -80,7 +85,7 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 検出と順序:
 
-1. dist 再構築の直後に、`node_modules/` 以下を除き dist を再帰走査し、上記の名前で終わる通常ファイルを検出する。この 1 回だけ検出し、以降に生成された build フックは実行しない。検出時のスクリプト内容を実行する。
+1. dist 再構築の直後に、`node_modules/` 以下を除き dist を再帰走査し、上記の名前で終わる通常ファイルを検出する。この 1 回だけ検出し、以降に生成された build フックは実行しない。検出時のスクリプト内容を実行する。現行 OS の対応表で削除される配下のフックは dist に存在しないため検出されない。
 2. ルートから順に各フォルダ直下のフックをファイル名の UTF-16 コード単位の昇順で実行し、その後で子フォルダをフォルダ名の UTF-16 コード単位の昇順にたどる。親フォルダのフックは子孫のフックより先に実行する。先頭に来たい処理は、ファイル名の prefix（`01-` など）で制御する。
 3. 先行フックが検出済みフックの配置フォルダを移動または削除していた場合、そのフックは実行しない。実行時点で配置フォルダが dist 上に残っているフックだけを検出時の順序で実行し、実行の要否はフックを置く場所の選択でフック作者が決める。
 
@@ -88,19 +93,19 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 ## build: パス対応表
 
-`dotfiles/` 以下の各フォルダに `remap.data.md` を置ける。すべてのローカルフック完了後、dist のルートから親フォルダを子フォルダより先に処理し、各フォルダの `remap.data.md` の OS 列をそのフォルダ以下へ適用する。親の対応表がフォルダを移動したときは、移動後のフォルダで子の対応表を処理する。対応表のないフォルダは変更しない。すべてのパス対応表を終えてから外部取得、merge 変換、置換 sidecar を行う。パス対応自体はローカルフックではなく、フックの実行ログにも現れない。
+`dotfiles/` 以下の各フォルダに `remap.data.md` を置ける。各フォルダの `remap.data.md` の OS 列は2度適用される。1回目は dist 再構築のコピー時で、dist のルートから親フォルダを子フォルダより先に処理し、`-` の key はコピーせず、移動先が定まった key は移動先へ直接配置する。2回目はすべてのローカルフック完了後に全表を再適用し、glob key とフックが生成したエントリへ対応を反映する。すでに反映済みの key は2回目で変化しない。親の対応表がフォルダを移動したときは、移動後のフォルダで子の対応表を処理する。対応表のないフォルダは変更しない。すべてのパス対応表を終えてから外部取得、merge 変換、置換 sidecar を行う。パス対応自体はローカルフックではなく、フックの実行ログにも現れない。
 
 表の列は `key | linux | windows | macos` の順とし、各行の `key` はその表を置いたフォルダからの相対パス、各 OS 列は次の結果を表す。
 
 | セル | dist での結果 |
 | --- | --- |
 | 空欄 | 元のパスのまま残す |
-| `-` | key に一致するエントリを配下ごと削除する。`*`・`?`・`[]` を含む key は glob として扱う |
-| 相対パス | key のエントリを表の設置フォルダからの相対パスへ移動する。移動先が存在するときは置き換える。key が存在しないときは何もしない |
+| `-` | key に一致するエントリを配下ごと対象外にする。コピー時は配下ごとコピーせず、フック後の再適用では配下ごと削除する。`*`・`?`・`[]` を含む key は glob として扱う |
+| 相対パス | key のエントリを表の設置フォルダからの相対パスへ配置する。コピー時は移動先へ直接コピーし、フック後の再適用では移動先が存在するときに置き換える。key が存在しないときは何もしない |
 
 削除を表の行順に行ってから移動を表の行順に行う。削除の照合では `.exact` ディレクトリの末尾を取り除いたパスと祖先の各パスを照合し、ファイル名の末尾は変換しない。移動先は絶対パスを指定できず、glob key に移動先を指定できない。列・区切り・行が不正な場合、key が空欄または重複する場合は build を異常終了する。`remap.data.md` は dist に残るが、差分検知と適用の対象外である。
 
-たとえば Windows の `vscode` を `AppData/Roaming/Code/User` へ移す場合、`vscode/format-settings.build.ts` は移動前の `dist/vscode` で実行され、整形済みの `settings.json` が移動先に現れる。macOS で `vscode` を削除する場合も、フックは削除前に実行される。先行フックが別のフックの配置フォルダを削除・移動した場合のスキップ規則は §build: ローカルフック に従う。
+たとえば Windows の `vscode` を `AppData/Roaming/Code/User` へ移す場合、`vscode/format-settings.build.ts` は移動先の `dist/AppData/Roaming/Code/User` で実行され、整形済みの `settings.json` が同じフォルダに現れる。macOS で `vscode` を削除する場合、その配下のフックは dist に存在しないため実行されない。先行フックが別のフックの配置フォルダを削除・移動した場合のスキップ規則は §build: ローカルフック に従う。
 
 ## build: 外部取得
 

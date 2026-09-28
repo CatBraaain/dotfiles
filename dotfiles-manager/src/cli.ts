@@ -38,14 +38,20 @@ async function logBuild(root: string, homeRoot: string): Promise<void> {
   const started = performance.now();
   console.log("Build started");
   try {
-    await build(root, undefined, homeRoot, (path, status, elapsedSeconds, stdoutNeedsNewline) => {
-      if (status === "start") {
-        console.log(`  Running ${path}`);
-        return;
-      }
-      if (stdoutNeedsNewline) console.log();
-      console.log(`  ${status === "success" ? "✓" : "✗"} ${path} (${elapsedSeconds.toFixed(2)}s)`);
-    });
+    await build(
+      root,
+      undefined,
+      homeRoot,
+      (path, status, elapsedSeconds, stdoutNeedsNewline) => {
+        if (status === "start") {
+          console.log(`  Running ${path}`);
+          return;
+        }
+        if (stdoutNeedsNewline) console.log();
+        console.log(`  ${status === "success" ? "✓" : "✗"} ${path} (${elapsedSeconds.toFixed(2)}s)`);
+      },
+      (phase, elapsedSeconds) => console.log(`  ${phase} (${elapsedSeconds.toFixed(2)}s)`),
+    );
     console.log(`Build complete (${elapsedSeconds(started)}s)`);
   } catch (error) {
     console.log(`Build failed (${elapsedSeconds(started)}s)`);

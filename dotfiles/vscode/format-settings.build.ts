@@ -3,7 +3,8 @@ import { $ } from "bun";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { existsSync } from "node:fs";
 
-// Runs in the original dist/vscode folder before the path map moves or removes it.
+// Runs in the hook's dist folder at its final remapped location
+// (spec: SPEC.md §build: ローカルフック).
 export default async function build(): Promise<void> {
   if (!existsSync("settings.json")) return;
   await $`bunx @biomejs/biome@2.5.14 format --write settings.json \

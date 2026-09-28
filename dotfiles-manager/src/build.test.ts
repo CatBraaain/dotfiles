@@ -1098,7 +1098,7 @@ describe("local build hooks", () => {
     );
   });
 
-  it("runs a hook in its original folder before moving that folder", async () => {
+  it("runs a hook in the remapped destination folder", async () => {
     await put(
       root,
       "dotfiles/remap.data.md",
@@ -1115,11 +1115,11 @@ describe("local build hooks", () => {
     assert.equal(existsSync(join(distRoot, "vscode")), false);
     assert.equal(
       await readFile(join(distRoot, "mapped-vscode/hook-ran.txt"), "utf8"),
-      join(distRoot, "vscode"),
+      join(distRoot, "mapped-vscode"),
     );
   });
 
-  it("runs the real vscode formatter before moving vscode on Windows", async () => {
+  it("runs the real vscode formatter in the remapped folder on Windows", async () => {
     const hook = await readFile(
       join(import.meta.dir, "../../dotfiles/vscode/format-settings.build.ts"),
       "utf8",
@@ -1135,30 +1135,34 @@ describe("local build hooks", () => {
     });
 
     const movedPath = join(distRoot, "AppData/Roaming/Code/User");
-    assert.deepEqual(hookEvents, ["vscode/format-settings.build.ts"]);
+    assert.deepEqual(hookEvents, ["AppData/Roaming/Code/User/format-settings.build.ts"]);
     assert.equal(existsSync(join(distRoot, "vscode")), false);
+    // Nested exact removal inside the moved folder is applied at copy time.
+    assert.equal(existsSync(join(movedPath, "sync_vscode_extensions.apply.ts")), false);
     assert.equal(
       await readFile(join(movedPath, "settings.json"), "utf8"),
       '{ "editor.fontSize": 12 }\n',
     );
   });
 
-  it("removes a mapped folder after running its hook on macOS", async () => {
+  it("does not copy or run hooks of a mapped folder removed on macOS", async () => {
     await put(
       root,
       "dotfiles/remap.data.md",
       "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode |  | mapped-vscode | - |\n",
     );
-    const marker = join(root, "hook-ran.txt");
+    const hookEvents: string[] = [];
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () { await writeFile(${JSON.stringify(marker)}, "ran\\n"); }`,
+      `import { writeFile } from "node:fs/promises";\nexport default async function () { await writeFile("hook-ran.txt", "ran\\n"); }`,
     );
 
-    await main(root, "darwin", homeRoot);
+    await main(root, "darwin", homeRoot, (path, status) => {
+      if (status === "start") hookEvents.push(path);
+    });
 
-    assert.equal(await readFile(marker, "utf8"), "ran\n");
+    assert.deepEqual(hookEvents, []);
     assert.equal(existsSync(join(distRoot, "vscode")), false);
   });
   it("rejects a machine hook with an unsupported extension during discovery", async () => {
@@ -1268,7 +1272,10 @@ describe("manager CLI", () => {
     const result = await runManager("managed");
 
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /^Build started\nBuild complete \(\d+\.\d{2}s\)$/m);
+    assert.match(
+      result.stdout,
+      /^Build started\n  rebuild dist \(\d+\.\d{2}s\)\n  path map \(\d+\.\d{2}s\)\n  externals \(\d+\.\d{2}s\)\n  merge \(\d+\.\d{2}s\)\n  replace \(\d+\.\d{2}s\)\nBuild complete \(\d+\.\d{2}s\)$/m,
+    );
     assert.doesNotMatch(result.stdout, /^  (?:Running|[✓✗]) /m);
   });
 

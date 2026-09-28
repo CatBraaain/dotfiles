@@ -1,7 +1,8 @@
-// Build runtime path map: remove and move dist entries after local hooks.
+// Build runtime path map: apply remap tables at copy time and again after
+// local hooks.
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { Platform } from "./build.ts";
 
 // remap.data.md lists one source path per row and a destination or removal per platform.
@@ -131,6 +132,63 @@ async function moveMappedEntries(
     await rm(destinationPath, { recursive: true, force: true });
     await rename(sourcePath, destinationPath);
   }
+}
+
+// Copy-time application of the remap tables (spec: SPEC.md §build: パス対応表):
+// platform removals are not copied at all and moved entries land directly at
+// their destination. Mirrors the copyDir recursion — enter() with the folder
+// pair being copied, route() per entry, exit() when leaving it.
+export type CopyRoute =
+  | { kind: "copy" }
+  | { kind: "copy-to"; destination: string }
+  | { kind: "skip" };
+
+export type CopyRouter = {
+  enter(sourceDir: string, destinationDir: string): Promise<void>;
+  route(name: string, isFile: boolean): Promise<CopyRoute>;
+  exit(): void;
+};
+
+type CopyMapContext = {
+  sourceDir: string;
+  destinationDir: string;
+  removals: string[];
+  moves: Array<{ source: string; destination: string }>;
+};
+
+export async function createCopyRouter(platform: Platform): Promise<CopyRouter> {
+  const sourceDirs: string[] = [];
+  const contexts: Array<CopyMapContext | undefined> = [];
+  return {
+    async enter(sourceDir: string, destinationDir: string): Promise<void> {
+      sourceDirs.push(sourceDir);
+      const mapFilePath = join(sourceDir, mapFileName);
+      contexts.push(
+        existsSync(mapFilePath)
+          ? { sourceDir, destinationDir, ...(await loadPathMap(mapFilePath, platform)) }
+          : undefined,
+      );
+    },
+    exit(): void {
+      sourceDirs.pop();
+      contexts.pop();
+    },
+    async route(name: string, isFile: boolean): Promise<CopyRoute> {
+      const sourcePath = join(sourceDirs[sourceDirs.length - 1]!, name);
+      // Parent tables apply before child ones (same walk order as
+      // applyPathMap), and within a table removals apply before moves.
+      for (let index = 0; index < contexts.length; index++) {
+        const context = contexts[index];
+        if (!context) continue;
+        const relativePath = relative(context.sourceDir, sourcePath);
+        if (isIgnoredTarget(relativePath, context.removals, isFile)) return { kind: "skip" };
+        const move = context.moves.find(({ source }) => source === relativePath);
+        if (move)
+          return { kind: "copy-to", destination: join(context.destinationDir, move.destination) };
+      }
+      return { kind: "copy" };
+    },
+  };
 }
 
 const globPatternCharacters = /[*?[]/;

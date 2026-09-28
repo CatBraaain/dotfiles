@@ -148,23 +148,27 @@ export async function main(argv: readonly string[]): Promise<number> {
   const distRoot = resolve(options.distRoot);
   const { homeRoot } = options;
 
+  const diffStarted = performance.now();
   const result = await collectDifferences(distRoot, homeRoot);
   writeLine(
     `diff: ${result.changed.length} changed, ${result.typeMismatches.length} type mismatches, ` +
       `${result.added.length} added, ${result.removedExact.length} surplus (exact), ` +
-      `${result.removedIgnored.length} surplus (ignored)`,
+      `${result.removedIgnored.length} surplus (ignored) (${elapsedSeconds(diffStarted)}s)`,
   );
 
-  const declarations = await collectDeclarations(distRoot);
-
+  const applyStarted = performance.now();
   const applied = await applyDifferences(distRoot, homeRoot, result);
   writeLine(
     `apply: ${applied.added.length} added, ${applied.changed.length} changed, ` +
-      `${applied.removed.length} removed`,
+      `${applied.removed.length} removed (${elapsedSeconds(applyStarted)}s)`,
   );
 
+  const scriptsStarted = performance.now();
+  const declarations = await collectDeclarations(distRoot);
   await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
-  writeLine(`apply scripts: ${declarations.applyScripts.length} scripts`);
+  writeLine(
+    `apply scripts: ${declarations.applyScripts.length} scripts (${elapsedSeconds(scriptsStarted)}s)`,
+  );
   return 0;
 }
 
@@ -323,6 +327,10 @@ function messageOf(error: unknown): string {
 
 function writeLine(text: string): void {
   process.stdout.write(`${text}\n`);
+}
+
+function elapsedSeconds(started: number): string {
+  return ((performance.now() - started) / 1000).toFixed(2);
 }
 
 if (import.meta.main) {

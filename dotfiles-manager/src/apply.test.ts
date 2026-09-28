@@ -649,7 +649,7 @@ describe("CLI", () => {
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
     assert.match(stdout, /^diff: 0 changed, 0 type mismatches, 3 added,/);
-    assert.match(stdout, /apply: 3 added, 0 changed, 0 removed\napply scripts: 0 scripts\n$/);
+    assert.match(stdout, /apply: 3 added, 0 changed, 0 removed \(\d+\.\d{2}s\)\napply scripts: 0 scripts \(\d+\.\d{2}s\)\n$/);
     assert.equal(await readFile(join(homeRoot, "pkg/nested/file.txt"), "utf8"), "x\n");
   });
 
@@ -670,7 +670,7 @@ describe("CLI", () => {
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
     assert.match(stdout, /^diff: 0 changed, 0 type mismatches, 1 added,/);
-    assert.match(stdout, /apply: 1 added, 0 changed, 0 removed\napply scripts: 1 scripts\n$/);
+    assert.match(stdout, /apply: 1 added, 0 changed, 0 removed \(\d+\.\d{2}s\)\napply scripts: 1 scripts \(\d+\.\d{2}s\)\n$/);
     assert.equal(await readFile(join(homeRoot, "added.txt"), "utf8"), "added\n");
     assert.equal(existsSync(join(homeRoot, "apply-out.txt")), true);
   });
