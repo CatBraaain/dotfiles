@@ -61,7 +61,7 @@ async function logBuild(root: string, homeRoot: string): Promise<void> {
 
 async function logStage(name: string, action: () => Promise<number>): Promise<number> {
   const started = performance.now();
-  console.log(`stage ${name} start (0.00s)`);
+  console.log(`stage ${name} start`);
   try {
     const code = await action();
     logElapsed(`stage ${name}`, code === 0 ? "success" : "failure", started);

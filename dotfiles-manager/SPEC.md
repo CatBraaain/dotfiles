@@ -41,7 +41,7 @@ build が完了した dist が、差分検知の入力になる。
 
 内部 CLI の `apply` / `diff` / `managed` では、build の開始に `Build started`、成功時に `Build complete (<秒>s)`、失敗時に `Build failed (<秒>s)` を stdout に表示する。実行する各 build フックの開始には `  Running <path>`、成功時には `  ✓ <path> (<秒>s)`、失敗時には `  ✗ <path> (<秒>s)` を表示する。`<path>` はフックの dist 相対パスであり、フック行の先頭には半角スペースを 2 個置く。build の各フェーズの完了時には `  <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist 再構築の `rebuild dist`、パス対応表の `path map`、外部取得の `externals`、merge 変換の `merge`、置換 sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は加工せずに転送し、stdout が改行で終わらない場合は、後続の完了行または失敗行を新しい行に表示する。
 
-build、フック、フェーズの秒数はそれぞれの開始から数え、小数第 2 位まで表示する。後続のコマンド別ステージ（apply / diff / managed）は開始時に `stage <name> start (0.00s)`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じ stdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build 前に終了し、経過時間ログを出さない。
+build、フック、フェーズの秒数はそれぞれの開始から数え、小数第 2 位まで表示する。後続のコマンド別ステージ（apply / diff / managed）は開始時に `stage <name> start`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じ stdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build 前に終了し、経過時間ログを出さない。
 
 例えば `diff` が成功した場合のログは次の形式になる（差分表示は省略）。
 
@@ -55,7 +55,7 @@ Build started
   merge (0.00s)
   replace (0.00s)
 Build complete (1.20s)
-stage diff start (0.00s)
+stage diff start
 stage diff success (0.08s)
 command diff success (1.28s)
 ```

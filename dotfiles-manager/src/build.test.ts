@@ -1209,7 +1209,7 @@ const originalLog = console.log;
 console.log = (...data) => {
   const line = String(data[0] ?? "");
   logTimes.push({ line, time: performance.now() });
-  if (line.startsWith("stage managed start "))
+  if (line.startsWith("stage managed start"))
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
   originalLog(...data);
 };
@@ -1260,11 +1260,11 @@ describe("manager CLI", () => {
         "  Running nested/02-shared.build.ts",
         "  ✓ nested/02-shared.build.ts (TIME)",
         "Build complete (TIME)",
-        `stage ${command} start (TIME)`,
+        `stage ${command} start`,
         `stage ${command} success (TIME)`,
         `command ${command} success (TIME)`,
       ]);
-      assert.match(result.stdout, new RegExp(`^stage ${command} start \\(0\\.00s\\)$`, "m"));
+      assert.doesNotMatch(result.stdout, new RegExp(`^stage ${command} start \\(`, "m"));
     });
   }
 
@@ -1336,7 +1336,7 @@ describe("manager CLI", () => {
     const result = await runManager("managed", true);
 
     assert.equal(result.code, 0, result.stderr);
-    const stageStart = result.logTimes.find(({ line }) => line.startsWith("stage managed start "));
+    const stageStart = result.logTimes.find(({ line }) => line.startsWith("stage managed start"));
     const stageSuccess = result.logTimes.find(({ line }) =>
       line.startsWith("stage managed success "),
     );
@@ -1442,7 +1442,7 @@ describe("manager CLI", () => {
     assert.match(result.stdout, /^  ✗ fail\.build\.ts \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^Build failed \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^command apply failure \(\d+\.\d{2}s\)$/m);
-    assert.doesNotMatch(result.stdout, /^stage apply start /m);
+    assert.doesNotMatch(result.stdout, /^stage apply start$/m);
     assert.equal(existsSync(join(homeRoot, "file.txt")), false);
   });
 
