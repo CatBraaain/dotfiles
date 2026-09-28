@@ -1,18 +1,6 @@
-# dotfiles/external.build.ts syncs GitHub mirrors under ~/mirrors/github.com
-# and materializes entries into dist. destination is dist-relative.
-# Skill externals live in .agents/skills.exact/external.data.yaml; that hook
-# sits inside .agents/, which remap.data.md removes on windows/macos, so those
-# fetches only run on linux.
 externalSkills:
-  # gitalias.txt is materialized at dist root and renamed to .gitconfig.alias
-  # by remap.data.md, which dotfiles/.gitconfig includes.
-  GitAlias/gitalias:
-    destination: .
-    entries:
-      - gitalias.txt
-
   rimeinn/rime-kagiroi:
-    destination: rime
+    destination: .
     entries:
       - kagiroi.manual.dict.yaml
       - kagiroi.mozc.dict.yaml

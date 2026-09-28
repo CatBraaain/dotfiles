@@ -1,21 +1,19 @@
-# Skill externals synced by .agents/skills.exact/external.build.ts. The hook
-# lives inside .agents/, which remap.data.md removes on windows/macos; the
-# hook runner skips hooks whose folder is gone, so these fetches (and
-# run_after) only run on linux. destination is dist-relative.
+# Destinations are relative to this folder. Remap removes it off Linux,
+# so external processing (including run_after) runs on Linux only.
 externalSkills:
   DreambigOu/ELI5:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/eli5
 
   anthropics/skills:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/doc-coauthoring
       - skills/skill-creator
 
   mattpocock/skills:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       # - skills/*/grill-me
       - skills/*/grilling
@@ -26,27 +24,27 @@ externalSkills:
       # - skills/*/tdd
 
   vercel-labs/skills:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/find-skills
 
   # github/awesome-copilot:
-  #   destination: .agents/skills.exact
+  #   destination: .
   #   entries:
   #     - skills/make-repo-contribution
 
   iOfficeAI/OfficeCLI:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/officecli
 
   mattnowdev/thinking-partner:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/thinking-partner
 
   leonxlnx/taste-skill:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/taste-skill
       # - skills/redesign-skill
@@ -55,12 +53,12 @@ externalSkills:
       # - skills/brutalist-skill
 
   vshulcz/deja-vu:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/deja-search
 
   microsoft/playwright-cli:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - skills/playwright-cli
     edit:
@@ -115,7 +113,7 @@ externalSkills:
           触らない
 
   code-yeongyu/oh-my-openagent:
-    destination: .agents/skills.exact
+    destination: .
     entries:
       - packages/shared-skills/skills/frontend
     run_after:

@@ -1,5 +1,4 @@
 [include]
-path = .gitconfig.alias
 path = .gitconfig.local
 [filter "lfs"]
 process = git-lfs filter-process

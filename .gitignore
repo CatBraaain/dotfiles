@@ -2,10 +2,9 @@ dist
 node_modules
 
 dotfiles/.gitconfig.local
-dotfiles/.gitconfig.build.ts
 dotfiles/**/*.build-machine.ts
 dotfiles/**/*.apply-machine.ts
-dotfiles/external.data-machine.yaml
+dotfiles/**/external.data-machine.yaml
 dotfiles/.secrets.sh
 dotfiles/.wslconfig
 dotfiles/**/*.merge-machine.json

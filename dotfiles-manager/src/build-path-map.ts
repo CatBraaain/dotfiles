@@ -1,55 +1,15 @@
-#!/usr/bin/env bun
-// Standard build hook: applies the removals and moves of remap.data.md
-// to dist once, resolving the OS column from process.platform. The
-// file-name order runs it after the root external fetch hook, because
-// fetched entries are map move targets and must be placed before the map
-// applies. The hook runner executes it with cwd at the dist root, and
-// import.meta.dir resolves to the copied hook in dist.
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+// Build runtime path map: remove and move dist entries after local hooks.
 import { existsSync } from "node:fs";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { dirname, join } from "node:path";
-
-declare const Bun: {
-  Glob: {
-    new (pattern: string): {
-      match(path: string): boolean;
-      scanSync(options: { cwd: string; onlyFiles: boolean }): Iterable<string>;
-    };
-  };
-};
-declare const process: {
-  cwd(): string;
-  platform: string;
-};
-declare global {
-  interface ImportMeta {
-    readonly dir: string;
-  }
-}
+import type { Platform } from "./build.ts";
 
 // remap.data.md lists one source path per row and a destination or removal per platform.
 const mapFileName = "remap.data.md";
 const removeDestination = "-";
 const mapColumns = ["key", "linux", "windows", "macos"] as const;
-type Platform = "windows" | "linux" | "darwin";
 type PathMap = { removals: string[]; moves: Array<{ source: string; destination: string }> };
 type PathMapRow = [key: string, linux: string, windows: string, macos: string];
-
-function currentPlatform(): Platform {
-  switch (process.platform) {
-    case "win32":
-      return "windows";
-    case "linux":
-      return "linux";
-    case "darwin":
-      return "darwin";
-    default:
-      throw new Error(`Unsupported platform: ${process.platform}`);
-  }
-}
 
 function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
   const lines = content.split(/\r?\n/);
@@ -109,7 +69,6 @@ function sameCells(actual: string[], expected: readonly string[]): boolean {
 }
 
 async function loadPathMap(mapFilePath: string, platform: Platform): Promise<PathMap> {
-  if (!existsSync(mapFilePath)) throw new Error(`${mapFileName} not found: ${mapFilePath}`);
   const rows = parsePathMap(await readFile(mapFilePath, "utf-8"), mapFilePath);
   const columnIndex = platform === "linux" ? 1 : platform === "windows" ? 2 : 3;
   const removals: string[] = [];
@@ -124,17 +83,23 @@ async function loadPathMap(mapFilePath: string, platform: Platform): Promise<Pat
   return { removals, moves };
 }
 
-// Applies the platform column of the map to dist once: removals first, then
-// moves. Entries created after this point (later local hooks) keep their
-// place as generated.
-async function applyPathMap(
-  mapFilePath: string,
-  distDir: string,
-  platform: Platform,
-): Promise<void> {
-  const { removals, moves } = await loadPathMap(mapFilePath, platform);
-  await removeMappedEntries(distDir, "", removals);
-  await moveMappedEntries(distDir, moves);
+export async function applyPathMap(distDir: string, platform: Platform): Promise<void> {
+  async function walk(directory: string): Promise<void> {
+    const mapFilePath = join(directory, mapFileName);
+    if (existsSync(mapFilePath)) {
+      const { removals, moves } = await loadPathMap(mapFilePath, platform);
+      await removeMappedEntries(directory, "", removals);
+      await moveMappedEntries(directory, moves);
+    }
+    const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    );
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== "node_modules")
+        await walk(join(directory, entry.name));
+    }
+  }
+  await walk(distDir);
 }
 
 async function removeMappedEntries(
@@ -178,7 +143,6 @@ function isIgnoredTarget(relativeParent: string, patterns: string[], isFile = fa
   const targetSegments = segments.map((name, index) =>
     isFile && index === segments.length - 1 ? name : name.replace(/\.exact$/, ""),
   );
-  const targetPath = targetSegments.join("/");
   const targetPrefixes: string[] = [];
   for (let index = 1; index <= targetSegments.length; index++)
     targetPrefixes.push(targetSegments.slice(0, index).join("/"));
@@ -189,8 +153,4 @@ function isIgnoredTarget(relativeParent: string, patterns: string[], isFile = fa
         : pattern === prefix,
     ),
   );
-}
-
-export default async function build(): Promise<void> {
-  await applyPathMap(join(import.meta.dir, mapFileName), process.cwd(), currentPlatform());
 }

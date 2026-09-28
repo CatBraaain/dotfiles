@@ -13,7 +13,7 @@
 
 ```mermaid
 flowchart LR
-  A[build: dist 生成<br>ローカルフック・merge・置換 sidecar] --> B[差分検知]
+  A[build: dist 生成<br>ローカルフック・パス対応・外部取得・merge・置換 sidecar] --> B[差分検知]
   B --> D[適用]
   D --> E[apply スクリプト]
 ```
@@ -22,8 +22,10 @@ build ステージは、内部で次の順に処理する。
 
 1. dist 再構築
 2. ローカルフック実行
-3. merge 変換
-4. 置換 sidecar
+3. パス対応表の適用
+4. 外部取得
+5. merge 変換
+6. 置換 sidecar
 
 build が完了した dist が、差分検知の入力になる。
 
@@ -83,6 +85,30 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 3. 先行フックが検出済みフックの配置フォルダを移動または削除していた場合、そのフックは実行しない。実行時点で配置フォルダが dist 上に残っているフックだけを検出時の順序で実行し、実行の要否はフックを置く場所の選択でフック作者が決める。
 
 フックが終了コード非 0 で終了した、シグナルで終了した、またはエラーが発生したとき、エラーメッセージにフックの `dotfiles/` からの相対パスを含めて異常終了する。フックの stdout と stderr は親プロセスの同じ出力へ転送する。エラー発生後は後続のフックを実行しない。dist の rollback、build 間の lock、staging による原子的な置換は行わない。
+
+## build: パス対応表
+
+`dotfiles/` 以下の各フォルダに `remap.data.md` を置ける。すべてのローカルフック完了後、dist のルートから親フォルダを子フォルダより先に処理し、各フォルダの `remap.data.md` の OS 列をそのフォルダ以下へ適用する。親の対応表がフォルダを移動したときは、移動後のフォルダで子の対応表を処理する。対応表のないフォルダは変更しない。すべてのパス対応表を終えてから外部取得、merge 変換、置換 sidecar を行う。パス対応自体はローカルフックではなく、フックの実行ログにも現れない。
+
+表の列は `key | linux | windows | macos` の順とし、各行の `key` はその表を置いたフォルダからの相対パス、各 OS 列は次の結果を表す。
+
+| セル | dist での結果 |
+| --- | --- |
+| 空欄 | 元のパスのまま残す |
+| `-` | key に一致するエントリを配下ごと削除する。`*`・`?`・`[]` を含む key は glob として扱う |
+| 相対パス | key のエントリを表の設置フォルダからの相対パスへ移動する。移動先が存在するときは置き換える。key が存在しないときは何もしない |
+
+削除を表の行順に行ってから移動を表の行順に行う。削除の照合では `.exact` ディレクトリの末尾を取り除いたパスと祖先の各パスを照合し、ファイル名の末尾は変換しない。移動先は絶対パスを指定できず、glob key に移動先を指定できない。列・区切り・行が不正な場合、key が空欄または重複する場合は build を異常終了する。`remap.data.md` は dist に残るが、差分検知と適用の対象外である。
+
+たとえば Windows の `vscode` を `AppData/Roaming/Code/User` へ移す場合、`vscode/format-settings.build.ts` は移動前の `dist/vscode` で実行され、整形済みの `settings.json` が移動先に現れる。macOS で `vscode` を削除する場合も、フックは削除前に実行される。先行フックが別のフックの配置フォルダを削除・移動した場合のスキップ規則は §build: ローカルフック に従う。
+
+## build: 外部取得
+
+すべてのパス対応表の適用後、残っている `external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rime フォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。`.agents` が削除される Windows と macOS では skills の外部取得および `run_after` を行わない。
+
+`externalSkills` の各リポジトリは GitHub mirror（既定 `~/mirrors/github.com/<owner>/<repo>`）を使う。mirror がなければ shallow clone し、存在するときは前回の取得から `ttlHours`（既定 6 時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。pull に失敗したときは警告を表示し、手元の mirror を利用する。`entries` のファイルやフォルダを `destination` にコピーし、更新に変更があった場合だけ `run_after` を実行する。`edit` の `.$append` は取得したフォルダ内の対象ファイルに指定テキストを追記する。同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらず gitignore の対象となる。失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
+
+ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じ GitHub mirror・既定 6 時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を include しない。
 
 ## build: merge 変換
 
@@ -419,7 +445,7 @@ build / apply のフックは `.ts` ファイルだけをサポートし、Bun �
 
 | ステージ | 失敗時の結果 |
 | --- | --- |
-| build（ローカルフック・merge・置換 sidecar を含む） | 非 0 で終了する。後続ステージを実行しない |
+| build（ローカルフック・パス対応表・外部取得・merge・置換 sidecar を含む） | 非 0 で終了する。後続ステージを実行しない |
 | 差分検知 | 非 0 で終了する。適用しない |
 | 適用 | 後続のエントリを適用せず非 0 で終了する。既に適用した分を戻さない |
 | apply スクリプト | 後続を実行せず非 0 で終了する |

@@ -1,6 +1,6 @@
 # Dist path map
 
-Each row maps an entry from `dotfiles/` to an optional destination for each OS.
+Each row maps an entry relative to this folder to an optional destination for each OS.
 An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 
 | key | linux | windows | macos |
@@ -10,7 +10,6 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | .dsh/test | - | - | - |
 | .dsh/plugins.exact/build.apply.test.ts | - | - | - |
 | .gitconfig.local.sample | - | - | - |
-| gitalias.txt | .gitconfig.alias | .gitconfig.alias | - |
 | .pi |  | - | - |
 | .pi/agent/bun_install.apply.test.ts | - | - | - |
 | .pi/agent/extensions/*/index.test.ts | - | - | - |

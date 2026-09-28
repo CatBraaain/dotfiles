@@ -66,8 +66,7 @@ export async function runHooks(
     const relativePath = hookRelativePath(hook);
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
-    // A hook whose folder an earlier hook removed is no longer part of dist;
-    // skipping is how removals (e.g. the path map) opt hooks out (spec:
+    // Skip hooks whose folder an earlier hook removed or moved (spec:
     // SPEC.md §build: ローカルフック 検出と順序).
     if (!existsSync(hookDistDir)) continue;
     const started = performance.now();

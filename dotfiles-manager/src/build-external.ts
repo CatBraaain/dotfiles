@@ -1,45 +1,9 @@
-#!/usr/bin/env bun
-// Standard build hook: fetches the repos of external.data.yaml (this folder's
-// own copy) into dist. Lives at the dist root, where the file-name order runs
-// it before the path-map hook, because external entries (e.g. gitalias.txt)
-// are map move targets and the map only sees entries that are already placed.
-// Skill-side externals live in .agents/skills.exact/external.build.ts; their
-// folder is a path-map removal on windows/macos, which opts those fetches out.
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+// Materialize external.data.yaml entries from GitHub mirrors after all path maps.
 import { existsSync, statSync } from "node:fs";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir } from "node:os";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-// @ts-ignore Bun auto-installs yaml when node_modules is absent; TypeScript cannot resolve it then.
 import { parse as parseYaml } from "yaml";
-
-declare const Bun: {
-  spawn(
-    args: string[],
-    options: { cwd?: string; stdout: "pipe"; stderr: "pipe" },
-  ): { exited: Promise<number>; stdout: unknown; stderr: unknown };
-  Glob: {
-    new (pattern: string): {
-      match(path: string): boolean;
-      scanSync(options: { cwd: string; onlyFiles: boolean }): Iterable<string>;
-    };
-  };
-};
-declare const process: {
-  cwd(): string;
-  platform: string;
-  env: Record<string, string | undefined>;
-};
-declare const console: { error(...data: unknown[]): void };
-declare const Response: { new (body: unknown): { text(): Promise<string> } };
-declare global {
-  interface ImportMeta {
-    readonly dir: string;
-  }
-}
 
 const externalFileName = "external.data.yaml";
 
@@ -80,25 +44,40 @@ function defaultContext(): SyncContext {
   };
 }
 
-async function fetchExternals(
-  configPath: string,
-  distDir: string,
-  context: SyncContext = defaultContext(),
-): Promise<void> {
-  const config = await loadExternalConfig(configPath);
-  await Promise.all(
-    config.repos.map(async (repo) => {
-      const sync = await syncMirror(repo.repo, repo.ttlMs, context);
-      if (sync.changed && repo.runAfter.length > 0)
-        await runAfterCommands(repo.repo, sync.mirrorDir, repo.runAfter, context);
-      await copyRepoEntries(
-        sync.mirrorDir,
-        join(distDir, repo.destination),
-        repo.entries,
-        repo.edits,
-      );
-    }),
-  );
+export async function applyExternals(distDir: string): Promise<void> {
+  const configPaths: string[] = [];
+  async function collect(directory: string): Promise<void> {
+    const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    );
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name === externalFileName)
+        configPaths.push(join(directory, entry.name));
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== "node_modules")
+        await collect(join(directory, entry.name));
+    }
+  }
+  await collect(distDir);
+  const context = defaultContext();
+  for (const configPath of configPaths) {
+    if (!existsSync(configPath)) continue;
+    const config = await loadExternalConfig(configPath);
+    await Promise.all(
+      config.repos.map(async (repo) => {
+        const sync = await syncMirror(repo.repo, repo.ttlMs, context);
+        if (sync.changed && repo.runAfter.length > 0)
+          await runAfterCommands(repo.repo, sync.mirrorDir, repo.runAfter, context);
+        await copyRepoEntries(
+          sync.mirrorDir,
+          join(dirname(configPath), repo.destination),
+          repo.entries,
+          repo.edits,
+        );
+      }),
+    );
+  }
 }
 
 async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
@@ -230,7 +209,11 @@ async function copyRepoEntries(
       continue;
     }
 
-    const stagingDir = await mkdtemp(join(dirname(destinationDir), "external-edit-"));
+    // mkdtemp does not create parent directories, and a nested destination
+    // (e.g. out/nested) may not have them yet when no earlier entry ran mkdir.
+    const stagingParent = dirname(destinationDir);
+    await mkdir(stagingParent, { recursive: true });
+    const stagingDir = await mkdtemp(join(stagingParent, "external-edit-"));
     try {
       await copyRawTree(skillDir, stagingDir);
       for (const edit of entryEdits) {
@@ -396,13 +379,4 @@ function singleLine(message: string): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-type BuildContext = { distDir?: string };
-
-export default async function build(context?: BuildContext): Promise<void> {
-  await fetchExternals(
-    join(import.meta.dir, externalFileName),
-    context?.distDir ?? process.cwd(),
-  );
 }
