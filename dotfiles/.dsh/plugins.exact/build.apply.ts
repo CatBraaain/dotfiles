@@ -65,9 +65,7 @@ export async function needsBuild(pluginDirectory: string, output: string): Promi
   const sourceFiles = (await filesIn(join(pluginDirectory, "src"), false)).filter(
     (path) => !path.endsWith(".test.ts"),
   );
-  const sharedLibrary = join(pluginDirectory, "node_modules/@dotfiles/agent-lib");
-  const libraryFiles = existsSync(sharedLibrary) ? await filesIn(sharedLibrary, true) : [];
-  for (const path of [...sourceFiles, ...libraryFiles]) {
+  for (const path of sourceFiles) {
     if (((await stat(path)) as FileStat).mtimeMs > outputTime) return true;
   }
   return false;

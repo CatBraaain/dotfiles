@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "bun:test";
 import assert from "node:assert/strict";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { tmpdir } from "node:os";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
@@ -52,19 +52,6 @@ describe("dsh build apply hook", () => {
     assert.equal(await needsBuild(plugin, output), false);
 
     await putFile(join(plugin, "src/runner.ts"), newer);
-    assert.equal(await needsBuild(plugin, output), true);
-  });
-
-  it("rebuilds when a shared library source behind the dependency symlink is newer", async () => {
-    const plugin = await createRoot();
-    const output = join(plugin, "dist/index.js");
-    const sharedLibrary = join(root, "shared-lib");
-    await putFile(output, older);
-    await putFile(join(plugin, "src/index.ts"), older);
-    await putFile(join(sharedLibrary, "src/helper.ts"), newer);
-    await mkdir(join(plugin, "node_modules/@dotfiles"), { recursive: true });
-    await symlink(sharedLibrary, join(plugin, "node_modules/@dotfiles/agent-lib"));
-
     assert.equal(await needsBuild(plugin, output), true);
   });
 });

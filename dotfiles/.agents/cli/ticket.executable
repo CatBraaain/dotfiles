@@ -435,6 +435,7 @@ async function listCommand(flags: Flags): Promise<void> {
     ? tickets.filter((ticket) => flags.statuses.includes(ticket.status))
     : tickets.filter((ticket) => ticket.status === "open");
   if (flags.json) return output(filtered.map((ticket) => ticketJson(ticket, flags.all)));
+  if (filtered.length === 0) return console.log("no tickets");
   for (const ticket of filtered) console.log(`${flags.all ? `${ticket.project}\t` : ""}${ticket.id}\t${ticket.status}\t${ticket.title}`);
 }
 
@@ -442,8 +443,9 @@ async function showCommand(positional: string[], flags: Flags): Promise<void> {
   if (positional.length > 1) usageFail();
   const ticket = resolveSelector(await loadTickets(resolveProject(flags)), positional[0]);
   if (flags.json) return output({ ...ticketJson(ticket, false), body: ticket.body });
-  console.log(`${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\n`);
-  console.log(ticket.body.trimEnd());
+  // write (not console.log) so the body keeps its exact trailing whitespace,
+  // which ticket_edit's literal matching depends on.
+  process.stdout.write(`id: ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\ntitle: ${ticket.title}\n\nbody:\n${ticket.body}`);
 }
 
 interface CreateInput {
@@ -510,7 +512,7 @@ async function createCommand(positional: string[], flags: Flags): Promise<void> 
     }
   }, true);
   if (flags.json) return output(ticketJson(ticket, false));
-  console.log(ticket.id);
+  console.log(`created ${ticket.id}\nstatus: ${ticket.status}\nafter: ${ticket.after ?? "-"}\npath: ${ticket.path}`);
 }
 
 function parseSetInput(raw: string | undefined): FrontmatterPatch {
@@ -568,8 +570,7 @@ async function setCommand(positional: string[], flags: Flags): Promise<void> {
     return { ...target, status: nextStatus, after: after === undefined ? target.after : after, content: targetContent };
   });
   if (flags.json) return output(ticketJson(updated, false));
-  if (patch.status !== undefined) console.log(updated.status);
-  else if (patch.after !== undefined && (patch.after !== null || updated.status === "open")) console.log(updated.status);
+  console.log(`updated ${updated.id}\nstatus: ${updated.status}\nafter: ${updated.after ?? "-"}\npath: ${updated.path}`);
 }
 
 async function editCommand(positional: string[], flags: Flags): Promise<void> {
@@ -595,6 +596,7 @@ async function editCommand(positional: string[], flags: Flags): Promise<void> {
     return { ...target, body, content, title: body.match(/^# (.+)$/m)?.[1]?.trim() ?? target.id };
   });
   if (flags.json) output(ticketJson(updated, false));
+  else console.log(`updated ${updated.id}\nstatus: ${updated.status}\nafter: ${updated.after ?? "-"}\npath: ${updated.path}`);
 }
 
 function findCycles(tickets: Ticket[]): string[][] {

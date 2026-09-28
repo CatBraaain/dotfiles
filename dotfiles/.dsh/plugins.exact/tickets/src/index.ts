@@ -6,42 +6,22 @@
  * behavior contract is dotfiles/.agents/cli/ticket-tools.spec.md
  * (harness-neutral oracle; the CLI itself is specified by ticket.spec.md).
  * The tools never touch the ticket store directly — every read and write
- * goes through the CLI with `--json` via the shared lib
- * (`@dotfiles/agent-lib/ticket`).
+ * spawns the CLI and its text output becomes the model-facing content
+ * (SPEC: ticket-tools.spec.md common behavior).
  *
- * Result shape: `execute` returns the CLI's parsed JSON as the canonical
- * value, `output.render` turns it into the LLM text with the shared
- * formatTicket* helpers, and `output.presentationMeta` persists the same JSON
- * on `tool/result` — the dsh equivalent of the pi extension's `details`
- * field. CLI failures (non-zero exit, spawn error, non-JSON output) surface
- * as tool-call errors carrying the CLI's stderr text.
+ * Result shape: `execute` returns the CLI's stdout text and `output.render`
+ * passes it through as the LLM text. CLI failures (non-zero exit, spawn
+ * error) surface as tool-call errors carrying the CLI's stderr text.
  */
+import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import {
   defineTool,
-  type InferValue,
   type ToolDefinition,
   type ToolRunContext,
 } from "@deepseek-ai/dsh-tools";
-import {
-  TicketCliError,
-  formatTicketCreated,
-  formatTicketList,
-  formatTicketShow,
-  formatTicketUpdated,
-  runTicketCli,
-  type TicketFields,
-  type TicketWithBody,
-} from "@dotfiles/agent-lib/ticket";
-
-/** The CLI's parsed `--json` output, as declared by the tools' output schema. */
-type CliJson = InferValue<{ type: "json" }>;
-
-// The CLI's --json contract (ticket.spec.md) fixes these shapes; the cast goes
-// through `unknown` because lib interfaces carry no JSON index signature.
-function asTicketJson<T>(value: CliJson): T {
-  return value as unknown as T;
-}
 
 export const name = "dsh-tickets";
 export const inject = ["tools"];
@@ -82,8 +62,8 @@ export interface TicketEditArgs {
 }
 
 // --- tool args -> CLI args (ticket-tools.spec.md 共通の振る舞い) ---
-// runTicketCli appends `--json`; these builders carry only the subcommand
-// and the flags derived from the tool arguments.
+// These builders carry only the subcommand and the flags derived from the
+// tool arguments; the CLI's text output is the tool result as-is.
 
 function projectFlag(project: string | undefined): string[] {
   return project === undefined ? [] : ["--project", project];
@@ -145,21 +125,50 @@ export function sessionCwd(exec: Pick<ToolRunContext, "agent">): string {
   return exec.agent?.session.header.cwd ?? process.cwd();
 }
 
-// TicketCliError -> tool failure: the CLI's stderr text is the error the
-// model sees (ticket-tools.spec.md 共通の振る舞い); other errors pass
-// through unchanged.
-export function toToolError(error: unknown): unknown {
-  if (error instanceof TicketCliError) {
-    return new Error(error.stderr || error.message);
-  }
-  return error;
+function ticketCliPath(): string {
+  return join(homedir(), ".agents", "cli", "ticket");
+}
+
+export type TicketCliRunner = (
+  args: string[],
+  cwd: string,
+  signal?: AbortSignal,
+) => Promise<string>;
+
+// Spawns the ticket CLI and resolves its stdout text. Non-zero exits and
+// spawn failures reject with the CLI's stderr text (or a spawn-failure
+// message when stderr is empty) — the model-facing error per SPEC.
+function spawnTicketCli(
+  args: string[],
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ticketCliPath(),
+      args,
+      { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const stderrText = typeof stderr === "string" ? stderr.replace(/\n$/, "") : "";
+          if (typeof error.code === "number") {
+            reject(new Error(stderrText || `ticket exited with code ${error.code}`));
+          } else {
+            reject(new Error(`ticket CLI is not available: ${error.message}`));
+          }
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+  });
 }
 
 // --- tool definitions ---
 
 export interface TicketToolDeps {
-  /** CLI runner override for tests; defaults to the shared lib runner. */
-  runCli?: typeof runTicketCli;
+  /** CLI runner override for tests; defaults to the real spawn. */
+  runCli?: TicketCliRunner;
 }
 
 const PROJECT_DESCRIPTION =
@@ -205,15 +214,11 @@ const EDIT_DESCRIPTION =
   "(defaults to the project resolved from the session cwd).";
 
 export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
-  const runCli = deps.runCli ?? runTicketCli;
+  const runCli: TicketCliRunner =
+    deps.runCli ?? ((args, cwd, signal) => spawnTicketCli(args, cwd, signal));
 
-  const run = async (cliArgs: string[], exec: ToolRunContext): Promise<CliJson> => {
-    try {
-      return (await runCli(cliArgs, sessionCwd(exec), exec.signal)) as CliJson;
-    } catch (error) {
-      throw toToolError(error);
-    }
-  };
+  const run = (cliArgs: string[], exec: ToolRunContext): Promise<string> =>
+    runCli(cliArgs, sessionCwd(exec), exec.signal);
 
   return [
     defineTool({
@@ -232,14 +237,8 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         },
       },
       output: {
-        schema: { type: "json" },
-        render: (args, value) => [
-          {
-            type: "text",
-            text: formatTicketList(asTicketJson<TicketFields[]>(value), args.all === true),
-          },
-        ],
-        presentationMeta: (_args, value) => value,
+        schema: { type: "string" },
+        render: (_args, text) => [{ type: "text", text }],
       },
       execute: (args, exec) => run(buildListArgs(args), exec),
     }),
@@ -251,11 +250,8 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         project: { type: "string", description: PROJECT_DESCRIPTION },
       },
       output: {
-        schema: { type: "json" },
-        render: (_args, value) => [
-          { type: "text", text: formatTicketShow(asTicketJson<TicketWithBody>(value)) },
-        ],
-        presentationMeta: (_args, value) => value,
+        schema: { type: "string" },
+        render: (_args, text) => [{ type: "text", text }],
       },
       execute: (args, exec) => run(buildShowArgs(args), exec),
     }),
@@ -278,11 +274,8 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         project: { type: "string", description: PROJECT_DESCRIPTION },
       },
       output: {
-        schema: { type: "json" },
-        render: (_args, value) => [
-          { type: "text", text: formatTicketCreated(asTicketJson<TicketFields>(value)) },
-        ],
-        presentationMeta: (_args, value) => value,
+        schema: { type: "string" },
+        render: (_args, text) => [{ type: "text", text }],
       },
       execute: (args, exec) => run(buildCreateArgs(args), exec),
     }),
@@ -303,11 +296,8 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         project: { type: "string", description: PROJECT_DESCRIPTION },
       },
       output: {
-        schema: { type: "json" },
-        render: (_args, value) => [
-          { type: "text", text: formatTicketUpdated(asTicketJson<TicketFields>(value)) },
-        ],
-        presentationMeta: (_args, value) => value,
+        schema: { type: "string" },
+        render: (_args, text) => [{ type: "text", text }],
       },
       execute: (args, exec) => run(buildSetArgs(args), exec),
     }),
@@ -330,11 +320,8 @@ export function createTicketTools(deps: TicketToolDeps = {}): ToolDefinition[] {
         project: { type: "string", description: PROJECT_DESCRIPTION },
       },
       output: {
-        schema: { type: "json" },
-        render: (_args, value) => [
-          { type: "text", text: formatTicketUpdated(asTicketJson<TicketFields>(value)) },
-        ],
-        presentationMeta: (_args, value) => value,
+        schema: { type: "string" },
+        render: (_args, text) => [{ type: "text", text }],
       },
       execute: (args, exec) => run(buildEditArgs(args), exec),
     }),

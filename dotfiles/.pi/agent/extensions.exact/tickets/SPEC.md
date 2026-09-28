@@ -15,8 +15,8 @@ extensions.exact/tickets/
 └── SPEC.md         # 本ファイル
 ```
 
-- `index.ts` は、tool 登録、tool 引数から CLI 引数へのマッピング（`buildListArgs` / `buildShowArgs` / `buildCreateArgs` / `buildSetArgs` / `buildEditArgs`）、description と promptSnippet の組み立て（`ticketToolDescriptions` / `ticketToolPromptSnippets`）を export する
-- `index.test.ts` は上記 export の検証に限定し、CLI の実 spawn は対象外とする
+- `index.ts` は、tool 登録、tool 引数から CLI 引数へのマッピング（`buildListArgs` / `buildShowArgs` / `buildCreateArgs` / `buildSetArgs` / `buildEditArgs`）、CLI spawn（`spawnTicketCli`、`appendJsonFlag`、runner 型 `TicketCliRunner`）、description と promptSnippet の組み立て（`ticketToolDescriptions` / `ticketToolPromptSnippets`）を export する
+- `index.test.ts` は上記 export の検証に限定する。CLI spawn は stub 実行ファイル（`deps.cliPath` 注入）でのみ検証し、実際の ticket CLI は呼ばない
 - dsh 側（`dotfiles/.dsh/plugins.exact/tickets/`）が同名・同引数・同振る舞いの tool を登録する（`ticket-tools.spec.md` の「構成」）
 
 ## 登録 tool
@@ -31,13 +31,12 @@ extensions.exact/tickets/
 | `ticket_set` | `set` | `selector`（string、任意。省略時は `next`）/ `status`（string、任意）/ `after`（string または null、任意）/ `project`（string、任意） |
 | `ticket_edit` | `edit` | `selector`（string、任意。省略時は `next`）/ `old`（string、必須・空でない）/ `new`（string、必須）/ `project`（string、任意） |
 
-CLI の実行は `@dotfiles/agent-lib/ticket` の `runTicketCli(args, ctx.cwd, signal)` に委ね、セッション cwd を CLI の cwd として渡す。成功時の tool 結果は `content` に `formatTicket*` のテキスト、`details` に CLI の JSON を格納する。CLI 失敗時（終了コード非ゼロ・spawn 失敗・非 JSON）は `TicketCliError.stderr` のテキストを `Error` として throw し、pi が tool 呼び出しを失敗として報告する。
+CLI の実行は `spawnTicketCli(args, ctx.cwd, signal)`（extension 内の runner。tests は `deps.runCli` で置換）に委ね、セッション cwd を CLI の cwd として渡す。成功時の tool 結果は `content` に CLI の stdout テキスト（`ticket.spec.md` の非 `--json` 出力）をそのまま格納する。`ticket_list` と `ticket_show` は pi の上限（50 KiB / 2,000 行）を超えたとき先頭を返し、同じ引数に `--json` を付けて CLI を再実行し、`details` に完全 JSON を格納する。CLI 失敗時（終了コード非ゼロ・spawn 失敗）は CLI の stderr テキストを `Error` として throw し、pi が tool 呼び出しを失敗として報告する。
 
 ## 依存
 
 | 依存 | 用途 | 場所 |
 | --- | --- | --- |
-| `@dotfiles/agent-lib/ticket` | CLI 実行と結果の整形 | `agent/package.json` の dependencies（`file:../../.agents/lib`） |
 | `typebox` | tool 引数の schema | pi 本体が拡張向けに提供（`web-search` と同様、`agent/package.json` 未記載） |
-| `@earendil-works/pi-coding-agent` | `ExtensionAPI` 等の型 | `agent/package.json` の devDependencies |
+| `@earendil-works/pi-coding-agent` | `ExtensionAPI`・`truncateHead` 等の型と関数 | `agent/package.json` の devDependencies |
 | `bun:test` / `node:assert/strict` | テスト | `@types/bun`（devDependencies）、Bun 組み込み |

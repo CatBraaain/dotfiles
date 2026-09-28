@@ -31,9 +31,9 @@ function run(home: string, args: string[], extraEnv: Record<string, string> = {}
 }
 
 function create(home: string, title: string, project = "demo"): string {
-  const result = run(home, ["create", JSON.stringify({ title }), "--project", project]);
+  const result = run(home, ["create", JSON.stringify({ title }), "--project", project, "--json"]);
   assert.equal(result.code, 0, result.stderr);
-  return result.stdout.trim();
+  return (JSON.parse(result.stdout) as { id: string }).id;
 }
 
 function ticketPath(home: string, project: string, id: string): string {
@@ -470,5 +470,36 @@ describe("ticket CLI", () => {
     const result = run(home, ["edit", id, "replace", "", "--project", "demo"]);
     assert.equal(result.code, 0, result.stderr);
     assert.doesNotMatch(await readFile(ticketPath(home, "demo", id), "utf8"), /replace/);
+  });
+
+  it("renders the spec text output for create, show, list, edit, and set", async () => {
+    const home = await ticketHome();
+    const created = run(home, ["create", '{"title":"First"}', "--project", "demo"]);
+    assert.equal(created.code, 0, created.stderr);
+    const id = created.stdout.match(/^created (\S+)/)?.[1]!;
+    const path = ticketPath(home, "demo", id);
+    assert.deepEqual(created.stdout, `created ${id}\nstatus: open\nafter: -\npath: ${path}\n`);
+
+    const shown = run(home, ["show", id, "--project", "demo"]);
+    assert.deepEqual(shown.stdout, `id: ${id}\nstatus: open\nafter: -\ntitle: First\n\nbody:\n# First\n`);
+
+    const listed = run(home, ["list", "--project", "demo"]);
+    assert.deepEqual(listed.stdout, `${id}\topen\tFirst\n`);
+
+    const edited = run(home, ["edit", id, "First", "Renamed", "--project", "demo"]);
+    assert.equal(edited.code, 0, edited.stderr);
+    assert.deepEqual(edited.stdout, `updated ${id}\nstatus: open\nafter: -\npath: ${path}\n`);
+
+    const set = run(home, ["set", id, '{"status":"locked"}', "--project", "demo"]);
+    assert.deepEqual(set.stdout, `updated ${id}\nstatus: locked\nafter: -\npath: ${path}\n`);
+  });
+
+  it("lists no tickets when the store is empty and prefixes the project with --all", async () => {
+    const home = await ticketHome();
+    await mkdir(join(home, ".agents", "tickets", "demo"), { recursive: true });
+    assert.deepEqual(run(home, ["list", "--project", "demo"]).stdout, "no tickets\n");
+    const id = create(home, "First");
+    const all = run(home, ["list", "--all"]);
+    assert.deepEqual(all.stdout, `demo\t${id}\topen\tFirst\n`);
   });
 });

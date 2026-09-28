@@ -12,11 +12,11 @@ pi と dsh は、同じ 5 tool で `ticket` CLI をラップする。ストア�
 
 ## 共通
 
-- tool は CLI に `--json` を付け、session cwd を渡す。`project` があれば `--project` に渡す
+- tool は CLI を `--json` なしで実行し、stdout のテキスト（ticket.spec.md のテキスト出力）を tool content にそのまま返す。session cwd を渡し、`project` があれば `--project` に渡す
 - read tool の dsh agent-less call は process cwd を CLI cwd にする
-- CLI の非 0 exit、実行不能、成功 exit の非 JSON stdout は tool failure として返す。非 JSON stdout の error は `ticket CLI returned non-JSON output:` で始める
+- CLI の非 0 exit と実行不能は tool failure として返す。エラーテキストは CLI の stderr（空ならエラーメッセージ）
 - pi は `ticket_create`、`ticket_set`、`ticket_edit` を sequential に dispatch する。dsh の default exclusive dispatch と合わせ、同じ assistant response 内の write call は model order で実行する
-- pi の tool content は最大 50 KiB または 2,000 行。`ticket_show` が超過すると先頭を返し、上限・全体量・完全本文を CLI `ticket show` で得る旨を marker に含める。`details` には CLI の完全 JSON を保持する
+- pi の tool content は最大 50 KiB または 2,000 行。超過すると先頭を返し、上限・全体量・完全本文を CLI で得る旨を marker に含める。truncation 時は同じ引数に `--json` を付けて read tool だけ再実行し、`details` に CLI の完全 JSON を保持する
 - 各 description は対応 CLI、引数、selector の完全 ID / 一意 prefix / `next`、省略時の `next`、project の選択と cwd 既定を説明する
 
 ## `ticket_list`
@@ -25,7 +25,7 @@ pi と dsh は、同じ 5 tool で `ticket` CLI をラップする。ストア�
 
 ## `ticket_show`
 
-引数は任意の `selector: string`、`project: string`。成功時は id、status、after、title、`body:` 区切り、H1 を含む本文を返す。上限時は共通の truncation を適用する。
+引数は任意の `selector: string`、`project: string`。成功時は CLI テキスト出力（`id:`、`status:`、`after:`、`title:` フィールド行、`body:` 区切り、H1 を含む本文）をそのまま返す。上限時は共通の truncation を適用する。
 
 ## `ticket_create`
 

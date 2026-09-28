@@ -1,24 +1,16 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  formatTicketCreated,
-  formatTicketList,
-  formatTicketShow,
-  formatTicketUpdated,
-  runTicketCli,
-  ticketCliArgs,
-  ticketCliPath,
-  TicketCliError,
-} from "@dotfiles/agent-lib/ticket";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import ticketsExtension, {
+  appendJsonFlag,
   buildCreateArgs,
   buildEditArgs,
   buildListArgs,
   buildSetArgs,
   buildShowArgs,
+  spawnTicketCli,
   ticketToolDescriptions,
   ticketToolPromptSnippets,
   type TicketsExtensionDeps,
@@ -71,8 +63,14 @@ function exec(tool: CapturedTool, params: Record<string, unknown>): Promise<Tool
   } as never);
 }
 
-// Fake CLI runner resolving with `resolved` and recording every call.
-function fakeRunner(resolved: unknown): TicketsExtensionDeps & {
+// Fake CLI runner resolving with `resolved` and recording every call. A
+// function form answers per call, keyed by the CLI args — used to branch the
+// truncation refetch (--json) from the ordinary text run.
+function fakeRunner(
+  resolved:
+    | string
+    | ((args: string[]) => string),
+): TicketsExtensionDeps & {
   calls: Array<{ args: string[]; cwd: string }>;
 } {
   const calls: Array<{ args: string[]; cwd: string }> = [];
@@ -80,7 +78,7 @@ function fakeRunner(resolved: unknown): TicketsExtensionDeps & {
     calls,
     runCli: (args, cwd) => {
       calls.push({ args, cwd });
-      return Promise.resolve(resolved);
+      return Promise.resolve(typeof resolved === "function" ? resolved(args) : resolved);
     },
   };
 }
@@ -247,13 +245,13 @@ describe("ticket_edit args", () => {
   });
 });
 
-describe("CLI invocation (SPEC: the CLI is spawned with --json)", () => {
+describe("CLI invocation (SPEC: tools run the CLI without --json; the details refetch adds it)", () => {
   it("appends --json to ordinary tool args", () => {
-    assert.deepEqual(ticketCliArgs(["list"]), ["list", "--json"]);
+    assert.deepEqual(appendJsonFlag(["list"]), ["list", "--json"]);
   });
 
   it("places --json before an option terminator", () => {
-    assert.deepEqual(ticketCliArgs(["edit", "--", "- old", "- new"]), [
+    assert.deepEqual(appendJsonFlag(["edit", "--", "- old", "- new"]), [
       "edit",
       "--json",
       "--",
@@ -455,182 +453,146 @@ describe("tool parameter schemas (SPEC: ticket-tools.spec.md per-tool args)", ()
   });
 });
 
-describe("tool execute", () => {
-  const TICKET_JSON = {
-    id: "20260101-000000",
-    status: "open",
-    title: "A",
-    after: null,
-    path: "/p/a.md",
-    body: "", // formatTicketShow reads it (ticket_show only)
-  };
+describe("tool execute (SPEC: content is the CLI text output; truncation refetches --json)", () => {
+  const LIST_TEXT = "20260101-000000\topen\tA";
+  const SHOW_TEXT = "id: 20260101-000000\nstatus: open\nafter: -\ntitle: A\n\nbody:\n# A\n";
+  const CREATED_TEXT = "created 20260101-000000\nstatus: open\nafter: -\npath: /p/a.md";
+  const UPDATED_TEXT = "updated 20260101-000000\nstatus: open\nafter: -\npath: /p/a.md";
 
-  it("ticket_list formats the runner JSON into content and returns it as details", async () => {
-    const json = [
-      { id: "20260101-000000", status: "open", title: "A", after: null, path: "/p/a.md" },
-    ];
-    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_list"), {});
-    assert.deepEqual(result.details, json);
-    assert.deepEqual(result.content, [{ type: "text", text: formatTicketList(json, false) }]);
-
-    const allJson = [
-      {
-        id: "20260101-000000",
-        status: "open",
-        title: "A",
-        after: "20260101-000001",
-        path: "/p/a.md",
-        project: "proj",
-      },
-    ];
-    const allResult = await exec(findTool(captureTools(fakeRunner(allJson)), "ticket_list"), {
-      all: true,
-    });
-    assert.deepEqual(allResult.content, [{ type: "text", text: formatTicketList(allJson, true) }]);
+  it("ticket_list returns the CLI stdout as content without details", async () => {
+    const fake = fakeRunner(LIST_TEXT);
+    const result = await exec(findTool(captureTools(fake), "ticket_list"), {});
+    assert.deepEqual(fake.calls.map((call) => call.args), [["list"]]);
+    assert.deepEqual(result.content, [{ type: "text", text: LIST_TEXT }]);
+    assert.equal(result.details, undefined);
   });
 
-  it("truncates oversized ticket_list content but preserves its full details", async () => {
-    const json = Array.from({ length: 2_100 }, (_, index) => ({
+  it("ticket_list forwards --all and the CLI text keeps the project column", async () => {
+    const fake = fakeRunner("proj\t20260101-000000\topen\tA");
+    const result = await exec(findTool(captureTools(fake), "ticket_list"), { all: true });
+    assert.deepEqual(fake.calls[0]?.args, ["list", "--all"]);
+    assert.deepEqual(result.content, [{ type: "text", text: "proj\t20260101-000000\topen\tA" }]);
+  });
+
+  it("ticket_show returns the CLI stdout as content without details", async () => {
+    const fake = fakeRunner(SHOW_TEXT);
+    const result = await exec(findTool(captureTools(fake), "ticket_show"), { selector: "a" });
+    assert.deepEqual(fake.calls.map((call) => call.args), [["show", "a"]]);
+    assert.deepEqual(result.content, [{ type: "text", text: SHOW_TEXT }]);
+    assert.equal(result.details, undefined);
+  });
+
+  it("truncates oversized ticket_list content and refetches the complete JSON as details", async () => {
+    const listJson = Array.from({ length: 2_100 }, (_, index) => ({
       id: `20260101-${String(index).padStart(6, "0")}`,
       status: "open",
       title: "ticket",
       after: null,
       path: `/p/${index}.md`,
     }));
-    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_list"), {});
+    const fake = fakeRunner((args) =>
+      args.includes("--json")
+        ? JSON.stringify(listJson)
+        : listJson.map((ticket) => `${ticket.id}\t${ticket.status}\t${ticket.title}`).join("\n"),
+    );
+    const result = await exec(findTool(captureTools(fake), "ticket_list"), {});
     const text = result.content[0]!.text;
     assert.match(text, /Output truncated/);
     assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
     assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
-    assert.deepEqual(result.details, json);
+    assert.deepEqual(result.details, listJson);
+    assert.deepEqual(fake.calls[1]?.args, ["list", "--json"]);
   });
 
-  it("ticket_show formats the runner JSON into content and returns it as details", async () => {
-    const json = {
-      id: "20260101-000000",
-      status: "open",
-      title: "A",
-      after: "20260101-000001",
-      path: "/p/a.md",
-      body: "ticket body\n",
-    };
-    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), {
-      selector: "a",
-    });
-    assert.deepEqual(result.details, json);
-    assert.deepEqual(result.content, [{ type: "text", text: formatTicketShow(json) }]);
-  });
-
-  it("ticket_show preserves trailing body whitespace for exact edits", () => {
-    const text = formatTicketShow({
+  it("truncates oversized ticket_show content and refetches the complete JSON as details", async () => {
+    const body = "line\n".repeat(2_100);
+    const showJson = {
       id: "20260101-000000",
       status: "open",
       title: "A",
       after: null,
       path: "/p/a.md",
-      body: "# A\n\nticket body  \n\n",
-    });
-    assert.match(text, /ticket body  \n\n$/);
-  });
-
-  it("truncates oversized ticket_show content but preserves its full details", async () => {
-    const body = "line\n".repeat(2_100);
-    const json = { ...TICKET_JSON, body };
-    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), {});
+      body,
+    };
+    const fake = fakeRunner((args) =>
+      args.includes("--json")
+        ? JSON.stringify(showJson)
+        : `id: 20260101-000000\nstatus: open\nafter: -\ntitle: A\n\nbody:\n${body}`,
+    );
+    const result = await exec(findTool(captureTools(fake), "ticket_show"), {});
     const text = result.content[0]!.text;
     assert.match(text, /Output truncated/);
     assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
     assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
-    assert.deepEqual(result.details, json);
+    assert.deepEqual(result.details, showJson);
+    assert.deepEqual(fake.calls[1]?.args, ["show", "--json"]);
   });
 
   it("keeps the byte limit when ticket_show truncates a large body", async () => {
     const body = `${"x".repeat(200)}\n`.repeat(400);
-    const json = { ...TICKET_JSON, body };
-    const result = await exec(findTool(captureTools(fakeRunner(json)), "ticket_show"), {});
+    const fake = fakeRunner((args) =>
+      args.includes("--json")
+        ? JSON.stringify({ body })
+        : `id: 20260101-000000\nstatus: open\nafter: -\ntitle: A\n\nbody:\n${body}`,
+    );
+    const result = await exec(findTool(captureTools(fake), "ticket_show"), {});
     const text = result.content[0]!.text;
     assert.match(text, /Output truncated/);
     assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
     assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
   });
 
-  it("ticket_create formats the runner JSON into content and returns it as details", async () => {
-    const result = await exec(findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_create"), {
+  it("write tools return the CLI stdout as content without refetching", async () => {
+    const cases: Array<[string, Record<string, unknown>, string[]]> = [
+      ["ticket_create", { title: "t" }, ["create", '{"title":"t"}']],
+      ["ticket_set", { status: "closed" }, ["set", '{"status":"closed"}']],
+      ["ticket_edit", { old: "a", new: "b" }, ["edit", "--", "a", "b"]],
+    ];
+    for (const [name, params, args] of cases) {
+      const fake = fakeRunner(UPDATED_TEXT);
+      const result = await exec(findTool(captureTools(fake), name), params);
+      assert.deepEqual(fake.calls.map((call) => call.args), [args]);
+      assert.deepEqual(result.content, [{ type: "text", text: UPDATED_TEXT }]);
+      assert.equal(result.details, undefined);
+    }
+  });
+
+  it("ticket_create returns the created text from the CLI", async () => {
+    const result = await exec(findTool(captureTools(fakeRunner(CREATED_TEXT)), "ticket_create"), {
       title: "A",
     });
-    assert.deepEqual(result.details, TICKET_JSON);
-    assert.deepEqual(result.content, [{ type: "text", text: formatTicketCreated(TICKET_JSON) }]);
-  });
-
-  it("ticket_set formats the runner JSON into content and returns it as details", async () => {
-    const result = await exec(findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_set"), {
-      selector: "a",
-      status: "closed",
-    });
-    assert.deepEqual(result.details, TICKET_JSON);
-    assert.deepEqual(result.content, [{ type: "text", text: formatTicketUpdated(TICKET_JSON) }]);
-  });
-
-  it("ticket_edit formats the runner JSON into content and returns it as details", async () => {
-    const result = await exec(findTool(captureTools(fakeRunner(TICKET_JSON)), "ticket_edit"), {
-      selector: "a",
-      old: "a",
-      new: "b",
-    });
-    assert.deepEqual(result.details, TICKET_JSON);
-    assert.deepEqual(result.content, [{ type: "text", text: formatTicketUpdated(TICKET_JSON) }]);
+    assert.deepEqual(result.content, [{ type: "text", text: CREATED_TEXT }]);
   });
 
   it("ticket_set rejects without calling the runner when status and after are both absent", async () => {
-    const fake = fakeRunner({});
+    const fake = fakeRunner(UPDATED_TEXT);
     const tool = findTool(captureTools(fake), "ticket_set");
     await assert.rejects(() => exec(tool, { selector: "a" }), /nothing to set/);
     assert.equal(fake.calls.length, 0);
   });
 
   it("ticket_edit rejects without calling the runner when old is empty", async () => {
-    const fake = fakeRunner({});
+    const fake = fakeRunner(UPDATED_TEXT);
     const tool = findTool(captureTools(fake), "ticket_edit");
     await assert.rejects(() => exec(tool, { old: "", new: "b" }), /old must be a non-empty string/);
     assert.equal(fake.calls.length, 0);
   });
 
-  it("rejects with the CLI stderr when the runner throws TicketCliError with stderr", async () => {
+  it("propagates the runner error text as the tool failure", async () => {
     const tool = findTool(
-      captureTools({
-        runCli: () =>
-          Promise.reject(
-            new TicketCliError("error: unknown id prefix", "error: unknown id prefix"),
-          ),
-      }),
+      captureTools({ runCli: () => Promise.reject(new Error("error: unknown id prefix")) }),
       "ticket_show",
     );
     await assert.rejects(() => exec(tool, { selector: "nope" }), /error: unknown id prefix/);
   });
 
-  it("falls back to the TicketCliError message when stderr is empty (CLI not executable)", async () => {
-    const tool = findTool(
-      captureTools({
-        runCli: () =>
-          Promise.reject(
-            new TicketCliError("", "ticket CLI is not available: spawn ticket ENOENT"),
-          ),
-      }),
-      "ticket_show",
-    );
-    await assert.rejects(
-      () => exec(tool, { selector: "a" }),
-      /ticket CLI is not available: spawn ticket ENOENT/,
-    );
-  });
-
   it("passes ctx.cwd to the runner", async () => {
-    const cases: Array<[string, Record<string, unknown>, unknown]> = [
-      ["ticket_list", {}, []],
-      ["ticket_show", { selector: "a" }, TICKET_JSON],
-      ["ticket_create", { title: "t" }, TICKET_JSON],
-      ["ticket_set", { status: "closed" }, TICKET_JSON],
-      ["ticket_edit", { old: "a", new: "b" }, TICKET_JSON],
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ["ticket_list", {}, LIST_TEXT],
+      ["ticket_show", { selector: "a" }, SHOW_TEXT],
+      ["ticket_create", { title: "t" }, CREATED_TEXT],
+      ["ticket_set", { status: "closed" }, UPDATED_TEXT],
+      ["ticket_edit", { old: "a", new: "b" }, UPDATED_TEXT],
     ];
     for (const [name, params, resolved] of cases) {
       const fake = fakeRunner(resolved);
@@ -642,70 +604,13 @@ describe("tool execute", () => {
       );
     }
   });
-
-  // SPEC-pinned formatter output (not self-referencing the lib call result).
-  it("renders the spec-pinned text for list, show, create, and set", async () => {
-    const ticket = {
-      id: "20260101-000000",
-      status: "blocked",
-      title: "A",
-      after: null,
-      path: "/p/a.md",
-    };
-    const listed = await exec(findTool(captureTools(fakeRunner([ticket])), "ticket_list"), {});
-    assert.deepEqual(listed.content, [{ type: "text", text: "20260101-000000\tblocked\tA" }]);
-
-    const listedAll = await exec(
-      findTool(captureTools(fakeRunner([{ ...ticket, project: "proj" }])), "ticket_list"),
-      { all: true },
-    );
-    assert.deepEqual(listedAll.content, [
-      { type: "text", text: "proj\t20260101-000000\tblocked\tA" },
-    ]);
-    const show = await exec(
-      findTool(
-        captureTools(
-          fakeRunner({
-            id: "20260101-000000",
-            status: "open",
-            title: "A",
-            after: "20260101-000001",
-            path: "/p/a.md",
-            body: "# A\n\nbody line\n",
-          }),
-        ),
-        "ticket_show",
-      ),
-      {},
-    );
-    assert.deepEqual(show.content, [
-      {
-        type: "text",
-        text: "id: 20260101-000000\nstatus: open\nafter: 20260101-000001\ntitle: A\n\nbody:\n# A\n\nbody line\n",
-      },
-    ]);
-
-    const created = await exec(findTool(captureTools(fakeRunner(ticket)), "ticket_create"), {
-      title: "A",
-    });
-    assert.deepEqual(created.content, [
-      { type: "text", text: "created 20260101-000000\nstatus: blocked\nafter: -\npath: /p/a.md" },
-    ]);
-
-    const updated = await exec(findTool(captureTools(fakeRunner(ticket)), "ticket_set"), {
-      status: "blocked",
-    });
-    assert.deepEqual(updated.content, [
-      { type: "text", text: "updated 20260101-000000\nstatus: blocked\nafter: -\npath: /p/a.md" },
-    ]);
-  });
 });
 
-// The wrapper tools above mock the runner; these cases run the lib's real
-// runTicketCli against a stub executable (injected via deps.cliPath) so the
-// spawn path (--json, cwd, exit-code classification, non-JSON output, spawn
+// The wrapper tools above mock the runner; these cases run the extension's
+// real spawnTicketCli against a stub executable (injected via deps.cliPath) so
+// the spawn path (cwd, exit-code classification, stderr trimming, spawn
 // failure) is covered without depending on the caller's HOME.
-describe("lib runTicketCli real spawn (SPEC: common behavior)", () => {
+describe("ticket CLI real spawn (SPEC: common behavior)", () => {
   const stubDirs: string[] = [];
 
   // Writes the stub script to a temp dir and returns its path.
@@ -722,16 +627,14 @@ describe("lib runTicketCli real spawn (SPEC: common behavior)", () => {
     for (const dir of stubDirs.splice(0)) await rm(dir, { recursive: true, force: true });
   });
 
-  it("spawns the CLI with --json and the given cwd, resolving its JSON", async () => {
+  it("resolves the CLI stdout for the given args and cwd", async () => {
     const cliPath = await installStub(
       "#!/usr/bin/env bun\nconsole.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n",
       true,
     );
-    const result = (await runTicketCli(["list"], "/tmp", undefined, { cliPath })) as {
-      argv: string[];
-      cwd: string;
-    };
-    assert.deepEqual(result.argv, ["list", "--json"]);
+    const stdout = await spawnTicketCli(["list"], "/tmp", undefined, { cliPath });
+    const result = JSON.parse(stdout) as { argv: string[]; cwd: string };
+    assert.deepEqual(result.argv, ["list"]);
     assert.equal(result.cwd, "/tmp");
   });
 
@@ -741,45 +644,29 @@ describe("lib runTicketCli real spawn (SPEC: common behavior)", () => {
       true,
     );
     await assert.rejects(
-      () => runTicketCli(["show", "--fail"], "/tmp", undefined, { cliPath }),
-      (error: unknown) => {
-        assert.ok(error instanceof TicketCliError);
-        assert.equal(error.stderr, "stub error: boom");
-        return true;
-      },
+      () => spawnTicketCli(["show", "--fail"], "/tmp", undefined, { cliPath }),
+      /stub error: boom/,
     );
   });
 
-  it("preserves trailing body whitespace in CLI stderr", async () => {
+  it("trims one trailing newline from the CLI stderr", async () => {
     const cliPath = await installStub(
       '#!/usr/bin/env bun\nprocess.stderr.write("error: body  \\n\\n"); process.exit(1);\n',
       true,
     );
     await assert.rejects(
-      () => runTicketCli(["edit"], "/tmp", undefined, { cliPath }),
+      () => spawnTicketCli(["edit"], "/tmp", undefined, { cliPath }),
       (error: unknown) => {
-        assert.ok(error instanceof TicketCliError);
-        assert.equal(error.stderr, "error: body  \n");
+        assert.equal((error as Error).message, "error: body  \n");
         return true;
       },
-    );
-  });
-
-  it("rejects when the CLI outputs non-JSON on a zero exit", async () => {
-    const cliPath = await installStub(
-      '#!/usr/bin/env bun\nconsole.log("not json at all");\n',
-      true,
-    );
-    await assert.rejects(
-      () => runTicketCli(["list"], "/tmp", undefined, { cliPath }),
-      /non-JSON output/,
     );
   });
 
   it("reports the CLI as unavailable when it is not executable", async () => {
     const cliPath = await installStub("#!/usr/bin/env bun\nconsole.log('{}');\n", false); // no exec bit -> spawn failure
     await assert.rejects(
-      () => runTicketCli(["list"], "/tmp", undefined, { cliPath }),
+      () => spawnTicketCli(["list"], "/tmp", undefined, { cliPath }),
       /not available/,
     );
   });

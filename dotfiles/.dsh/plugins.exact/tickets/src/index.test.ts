@@ -1,19 +1,11 @@
 // Tests for dotfiles-dsh-tickets. Cases follow the oracle spec
 // (dotfiles/.agents/cli/ticket-tools.spec.md): argument mapping, session cwd,
-// TicketCliError conversion, tool descriptions (wrapped CLI subcommand,
-// argument meanings, next-default selector, ticket_set / ticket_edit
-// pre-CLI validation), compiled parameter schemas, and result formatting
-// through the shared lib helpers (used as-is, never mocked). The CLI itself
-// is never spawned.
+// tool descriptions (wrapped CLI subcommand, argument meanings, next-default
+// selector, ticket_set / ticket_edit pre-CLI validation), compiled parameter
+// schemas, and result rendering (the CLI's text output passed through). The
+// CLI itself is never spawned.
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import {
-  TicketCliError,
-  formatTicketCreated,
-  formatTicketList,
-  formatTicketShow,
-  formatTicketUpdated,
-} from "@dotfiles/agent-lib/ticket";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import {
   apply,
@@ -26,45 +18,17 @@ import {
   inject,
   name,
   sessionCwd,
-  toToolError,
 } from "./index.ts";
 
-// CLI-shaped --json fixtures (ticket.spec.md `--json` の共通フィールド).
-const LIST_JSON = [
-  {
-    id: "20260918-010000",
-    status: "open",
-    title: "First ticket",
-    after: null,
-    path: "/home/x/.agents/tickets/demo/20260918-010000.md",
-    project: "demo",
-  },
-  {
-    id: "20260918-020000",
-    status: "blocked",
-    title: "Second ticket",
-    after: "20260918-010000",
-    path: "/home/x/.agents/tickets/demo/20260918-020000.md",
-    project: "demo",
-  },
-];
-
-const SHOW_JSON = {
-  id: "20260918-010000",
-  status: "open",
-  title: "First ticket",
-  after: null,
-  path: "/home/x/.agents/tickets/demo/20260918-010000.md",
-  body: "# First ticket\n\nSome body text.",
-};
-
-const CREATED_JSON = {
-  id: "20260918-030000",
-  status: "blocked",
-  title: "New ticket",
-  after: "20260918-010000",
-  path: "/home/x/.agents/tickets/demo/20260918-030000.md",
-};
+// CLI text-output fixtures (ticket.spec.md テキスト出力).
+const LIST_TEXT =
+  "demo\t20260918-010000\topen\tFirst ticket\ndemo\t20260918-020000\tblocked\tSecond ticket";
+const SHOW_TEXT =
+  "id: 20260918-010000\nstatus: open\nafter: -\ntitle: First ticket\n\nbody:\n# First ticket\n\nSome body text.";
+const CREATED_TEXT =
+  "created 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md";
+const UPDATED_TEXT =
+  "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md";
 
 // Minimal exec fixtures: session cwd comes from the agent's session header.
 function fakeExec(cwd?: string): ToolRunContext {
@@ -74,13 +38,13 @@ function fakeExec(cwd?: string): ToolRunContext {
   } as unknown as ToolRunContext;
 }
 
-type RunCli = (args: string[], cwd: string, signal?: AbortSignal) => Promise<unknown>;
+type RunCli = (args: string[], cwd: string, signal?: AbortSignal) => Promise<string>;
 
-function fakeRunner(result: unknown = LIST_JSON): { runCli: RunCli; calls: unknown[][] } {
+function fakeRunner(stdout: string = LIST_TEXT): { runCli: RunCli; calls: unknown[][] } {
   const calls: unknown[][] = [];
   const runCli: RunCli = async (args, cwd, signal) => {
     calls.push([args, cwd, signal]);
-    return result;
+    return stdout;
   };
   return { runCli, calls };
 }
@@ -232,7 +196,7 @@ describe("argument mapping", () => {
   });
 });
 
-// --- session cwd and error conversion ---
+// --- session cwd ---
 
 describe("execution helpers", () => {
   it("sessionCwd: the agent's session header cwd, else the process cwd", () => {
@@ -242,23 +206,6 @@ describe("execution helpers", () => {
       sessionCwd({ agent: { session: { header: {} } } } as unknown as ToolRunContext),
       process.cwd(),
     );
-  });
-
-  it("toToolError: TicketCliError becomes an Error carrying stderr", () => {
-    const converted = toToolError(new TicketCliError("candidate ids: a, b", "exited 1"));
-    assert.ok(converted instanceof Error);
-    assert.equal((converted as Error).message, "candidate ids: a, b");
-  });
-
-  it("toToolError: empty stderr falls back to the error message", () => {
-    const converted = toToolError(new TicketCliError("", "ticket CLI is not available: ENOENT"));
-    assert.ok(converted instanceof Error);
-    assert.equal((converted as Error).message, "ticket CLI is not available: ENOENT");
-  });
-
-  it("toToolError: other errors pass through unchanged", () => {
-    const original = new Error("unrelated");
-    assert.equal(toToolError(original), original);
   });
 });
 
@@ -274,27 +221,27 @@ describe("tool execution", () => {
   });
 
   it("execute runs the CLI with the mapped args, the session cwd, and the signal", async () => {
-    const { runCli, calls } = fakeRunner(LIST_JSON);
+    const { runCli, calls } = fakeRunner(LIST_TEXT);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_list");
     const exec = fakeExec("/work/repo");
 
     const value = await tool.execute({ all: true, project: "demo" }, exec);
 
-    assert.equal(value, LIST_JSON);
+    assert.equal(value, LIST_TEXT);
     assert.deepEqual(calls, [[["list", "--all", "--project", "demo"], "/work/repo", exec.signal]]);
   });
 
   it("read tools fall back to the process cwd without an agent", async () => {
-    const { runCli, calls } = fakeRunner(LIST_JSON);
+    const { runCli, calls } = fakeRunner(LIST_TEXT);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_list");
     const exec = fakeExec(undefined);
     await tool.execute({}, exec);
     assert.deepEqual(calls, [[["list"], process.cwd(), exec.signal]]);
   });
 
-  it("execute converts TicketCliError into a tool failure with the CLI stderr", async () => {
+  it("execute surfaces the runner error text as the tool failure", async () => {
     const runCli: RunCli = async () => {
-      throw new TicketCliError("no such ticket", "exited 1");
+      throw new Error("no such ticket");
     };
     const tool = toolByName(createTicketTools({ runCli }), "ticket_show");
     await assert.rejects(tool.execute({ selector: "missing" }, fakeExec("/w")), /no such ticket/);
@@ -311,14 +258,14 @@ describe("tool execution", () => {
   });
 
   it("ticket_set maps selector, status, and after to the CLI JSON argument", async () => {
-    const { runCli, calls } = fakeRunner(CREATED_JSON);
+    const { runCli, calls } = fakeRunner(UPDATED_TEXT);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_set");
     await tool.execute({ selector: "x", status: "open", after: null }, fakeExec("/w"));
     assert.deepEqual(calls[0]?.[0], ["set", "x", '{"status":"open","after":null}']);
   });
 
   it("ticket_edit maps selector, old, and new to the CLI args", async () => {
-    const { runCli, calls } = fakeRunner(CREATED_JSON);
+    const { runCli, calls } = fakeRunner(UPDATED_TEXT);
     const tool = toolByName(createTicketTools({ runCli }), "ticket_edit");
     await tool.execute({ selector: "x", old: "a", new: "b" }, fakeExec("/w"));
     assert.deepEqual(calls[0]?.[0], ["edit", "x", "--", "a", "b"]);
@@ -466,107 +413,42 @@ describe("parameter schemas", () => {
   });
 });
 
-// --- render / presentationMeta: formatTicket* wiring with the real lib ---
+// --- render: the CLI's text output passed through as the LLM text ---
 
 describe("result rendering", () => {
-  it("ticket_list renders through formatTicketList with the all flag", () => {
-    const tool = toolByName(createTicketTools(), "ticket_list");
-    const [first] = tool.output.render({ all: true }, LIST_JSON);
-    assert.deepEqual([first], [{ type: "text", text: formatTicketList(LIST_JSON, true) }]);
-    assert.ok(first.type === "text");
-    assert.match(first.text, /^demo\t/);
-
-    const singleProject = tool.output.render({}, LIST_JSON);
-    assert.deepEqual(singleProject, [{ type: "text", text: formatTicketList(LIST_JSON, false) }]);
-
-    const empty = tool.output.render({}, []);
-    assert.deepEqual(empty, [{ type: "text", text: "no tickets" }]);
+  it("every tool renders its string value as one text block", () => {
+    for (const tool of createTicketTools()) {
+      assert.deepEqual(tool.output.render({}, LIST_TEXT), [{ type: "text", text: LIST_TEXT }]);
+    }
   });
 
-  it("ticket_show renders through formatTicketShow", () => {
-    const tool = toolByName(createTicketTools(), "ticket_show");
-    assert.deepEqual(tool.output.render({ selector: "x" }, SHOW_JSON), [
-      { type: "text", text: formatTicketShow(SHOW_JSON) },
-    ]);
-  });
-
-  it("ticket_create renders through formatTicketCreated", () => {
-    const tool = toolByName(createTicketTools(), "ticket_create");
-    assert.deepEqual(tool.output.render({ title: "T" }, CREATED_JSON), [
-      { type: "text", text: formatTicketCreated(CREATED_JSON) },
-    ]);
-  });
-
-  it("ticket_set and ticket_edit render through formatTicketUpdated", () => {
-    const set = toolByName(createTicketTools(), "ticket_set");
-    const edit = toolByName(createTicketTools(), "ticket_edit");
-    assert.deepEqual(set.output.render({ status: "closed" }, CREATED_JSON), [
-      { type: "text", text: formatTicketUpdated(CREATED_JSON) },
-    ]);
-    assert.deepEqual(edit.output.render({ old: "a", new: "b" }, CREATED_JSON), [
-      { type: "text", text: formatTicketUpdated(CREATED_JSON) },
-    ]);
-  });
-
-  it("pins the spec-required text for list, show, create, set, and edit (not self-referential)", () => {
+  it("pins the spec-required text passthrough for list, show, create, set, and edit (not self-referential)", () => {
     assert.deepEqual(
-      toolByName(createTicketTools(), "ticket_list").output.render({ all: true }, LIST_JSON),
-      [
-        {
-          type: "text",
-          text: "demo\t20260918-010000\topen\tFirst ticket\ndemo\t20260918-020000\tblocked\tSecond ticket",
-        },
-      ],
+      toolByName(createTicketTools(), "ticket_list").output.render({ all: true }, LIST_TEXT),
+      [{ type: "text", text: LIST_TEXT }],
     );
     assert.deepEqual(
-      toolByName(createTicketTools(), "ticket_show").output.render({ selector: "x" }, SHOW_JSON),
-      [
-        {
-          type: "text",
-          text: "id: 20260918-010000\nstatus: open\nafter: -\ntitle: First ticket\n\nbody:\n# First ticket\n\nSome body text.",
-        },
-      ],
+      toolByName(createTicketTools(), "ticket_show").output.render({ selector: "x" }, SHOW_TEXT),
+      [{ type: "text", text: SHOW_TEXT }],
     );
     assert.deepEqual(
-      toolByName(createTicketTools(), "ticket_create").output.render({ title: "T" }, CREATED_JSON),
-      [
-        {
-          type: "text",
-          text: "created 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
-        },
-      ],
+      toolByName(createTicketTools(), "ticket_create").output.render({ title: "T" }, CREATED_TEXT),
+      [{ type: "text", text: CREATED_TEXT }],
     );
     assert.deepEqual(
       toolByName(createTicketTools(), "ticket_set").output.render(
         { status: "closed" },
-        CREATED_JSON,
+        UPDATED_TEXT,
       ),
-      [
-        {
-          type: "text",
-          text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
-        },
-      ],
+      [{ type: "text", text: UPDATED_TEXT }],
     );
     assert.deepEqual(
       toolByName(createTicketTools(), "ticket_edit").output.render(
         { old: "a", new: "b" },
-        CREATED_JSON,
+        UPDATED_TEXT,
       ),
-      [
-        {
-          type: "text",
-          text: "updated 20260918-030000\nstatus: blocked\nafter: 20260918-010000\npath: /home/x/.agents/tickets/demo/20260918-030000.md",
-        },
-      ],
+      [{ type: "text", text: UPDATED_TEXT }],
     );
-  });
-
-  it("presentationMeta persists the CLI JSON as the result details", () => {
-    for (const tool of createTicketTools()) {
-      assert.ok(tool.output.presentationMeta);
-      assert.equal(tool.output.presentationMeta?.({}, LIST_JSON), LIST_JSON);
-    }
   });
 });
 

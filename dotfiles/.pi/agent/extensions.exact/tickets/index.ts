@@ -3,16 +3,9 @@
 // Behavior spec: dotfiles/.agents/cli/ticket-tools.spec.md (tools) and
 // dotfiles/.agents/cli/ticket.spec.md (CLI / store).
 
-import {
-  formatTicketCreated,
-  formatTicketList,
-  formatTicketShow,
-  formatTicketUpdated,
-  runTicketCli,
-  TicketCliError,
-  type TicketFields,
-  type TicketWithBody,
-} from "@dotfiles/agent-lib/ticket";
+import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -233,12 +226,12 @@ export const ticketToolDescriptions = {
     "and defaults to the project resolved from the session cwd.",
 } as const;
 
-function truncateTicketOutput(text: string, recoveryHint: string): string {
+function truncateTicketOutput(text: string, recoveryHint: string): { text: string; truncated: boolean } {
   const truncation = truncateHead(text, {
     maxBytes: DEFAULT_MAX_BYTES,
     maxLines: DEFAULT_MAX_LINES,
   });
-  if (!truncation.truncated) return text;
+  if (!truncation.truncated) return { text, truncated: false };
 
   let content = truncation.content;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -249,7 +242,7 @@ function truncateTicketOutput(text: string, recoveryHint: string): string {
       Buffer.byteLength(result, "utf8") <= DEFAULT_MAX_BYTES &&
       result.split("\n").length <= DEFAULT_MAX_LINES
     ) {
-      return result;
+      return { text: result, truncated: true };
     }
 
     const suffixBytes = Buffer.byteLength(suffix, "utf8");
@@ -260,14 +253,10 @@ function truncateTicketOutput(text: string, recoveryHint: string): string {
     }).content;
   }
 
-  return `[Output truncated: ${truncation.totalLines} lines (${formatSize(truncation.totalBytes)}). ${recoveryHint}]`;
-}
-
-function truncateTicketShow(ticket: TicketWithBody): string {
-  return truncateTicketOutput(
-    formatTicketShow(ticket),
-    "Use ticket show with this selector to read the complete body.",
-  );
+  return {
+    text: `[Output truncated: ${truncation.totalLines} lines (${formatSize(truncation.totalBytes)}). ${recoveryHint}]`,
+    truncated: true,
+  };
 }
 
 export const ticketToolPromptSnippets = {
@@ -278,35 +267,94 @@ export const ticketToolPromptSnippets = {
   ticket_edit: "Edit a ticket's body text",
 } as const;
 
+// --- CLI spawn (SPEC: ticket-tools.spec.md common behavior) ---
+
+export type TicketCliRunner = (
+  args: string[],
+  cwd: string,
+  signal?: AbortSignal,
+) => Promise<string>;
+
+function ticketCliPath(): string {
+  return join(homedir(), ".agents", "cli", "ticket");
+}
+
+// Injectable overrides so the real-spawn tests run a stub executable without
+// depending on the caller's HOME.
+export interface SpawnTicketCliDeps {
+  /** Overrides the CLI executable path; defaults to ticketCliPath(). */
+  cliPath?: string;
+  /** Replaces node:child_process.execFile; defaults to the real one. */
+  exec?: typeof execFile;
+}
+
+// Adds --json before the option terminator so the terminator's positional
+// arguments stay literal (SPEC: the -- rule in ticket.spec.md).
+export function appendJsonFlag(args: string[]): string[] {
+  const terminator = args.indexOf("--");
+  if (terminator === -1) return [...args, "--json"];
+  return [...args.slice(0, terminator), "--json", ...args.slice(terminator)];
+}
+
+// Spawns the ticket CLI and resolves its stdout text. Non-zero exits and
+// spawn failures reject with the CLI's stderr text (or a spawn-failure
+// message when stderr is empty).
+export function spawnTicketCli(
+  args: string[],
+  cwd: string,
+  signal: AbortSignal | undefined,
+  deps: SpawnTicketCliDeps = {},
+): Promise<string> {
+  const spawn = deps.exec ?? execFile;
+  return new Promise((resolve, reject) => {
+    spawn(
+      deps.cliPath ?? ticketCliPath(),
+      args,
+      { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const stderrText = typeof stderr === "string" ? stderr.replace(/\n$/, "") : "";
+          if (typeof error.code === "number") {
+            reject(new Error(stderrText || `ticket exited with code ${error.code}`));
+          } else {
+            reject(new Error(`ticket CLI is not available: ${error.message}`));
+          }
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+  });
+}
+
 // --- extension ---
 
-// Runner signature of the lib's runTicketCli. Injectable via deps so tests can
-// execute the tools without spawning the real CLI.
-export type TicketCliRunner = typeof runTicketCli;
-
 export interface TicketsExtensionDeps {
-  /** Replaces the CLI runner; defaults to the lib's runTicketCli. */
+  /** Replaces the CLI runner; defaults to the real spawn of ~/.agents/cli/ticket. */
   runCli?: TicketCliRunner;
 }
 
 export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensionDeps = {}): void {
-  const runCli = deps.runCli ?? runTicketCli;
+  const runCli: TicketCliRunner =
+    deps.runCli ?? ((args, cwd, signal) => spawnTicketCli(args, cwd, signal));
 
-  // Runs the CLI for the given tool args, converting TicketCliError into a
-  // plain Error so pi reports the tool call as failed. Prefers the CLI's
-  // stderr text; falls back to the error message when stderr is empty
-  // (e.g. spawn failure: the CLI is not installed or not executable).
+  // Runs the CLI for the tool args; the resolved stdout is the tool text.
   async function runTicket(
     args: string[],
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
+  ): Promise<string> {
+    return runCli(args, ctx.cwd, signal);
+  }
+
+  // Re-runs a read-only tool's CLI with --json for the result details
+  // (SPEC: pi keeps the complete JSON in details when truncating).
+  async function runTicketJson(
+    args: string[],
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
   ): Promise<unknown> {
-    try {
-      return await runCli(args, ctx.cwd, signal);
-    } catch (error) {
-      if (error instanceof TicketCliError) throw new Error(error.stderr || error.message);
-      throw error;
-    }
+    return JSON.parse(await runCli(appendJsonFlag(args), ctx.cwd, signal)) as unknown;
   }
 
   pi.registerTool({
@@ -316,18 +364,14 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     promptSnippet: ticketToolPromptSnippets.ticket_list,
     parameters: ticketListParameters,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const json = (await runTicket(buildListArgs(params), ctx, signal)) as TicketFields[];
+      const args = buildListArgs(params);
+      const result = truncateTicketOutput(
+        await runTicket(args, ctx, signal),
+        "Use ticket list with the same filters to read the complete list.",
+      );
       return {
-        content: [
-          {
-            type: "text",
-            text: truncateTicketOutput(
-              formatTicketList(json, params.all === true),
-              "Use ticket list with the same filters to read the complete list.",
-            ),
-          },
-        ],
-        details: json,
+        content: [{ type: "text", text: result.text }],
+        details: result.truncated ? await runTicketJson(args, ctx, signal) : undefined,
       };
     },
   });
@@ -339,10 +383,14 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     promptSnippet: ticketToolPromptSnippets.ticket_show,
     parameters: ticketShowParameters,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const json = (await runTicket(buildShowArgs(params), ctx, signal)) as TicketWithBody;
+      const args = buildShowArgs(params);
+      const result = truncateTicketOutput(
+        await runTicket(args, ctx, signal),
+        "Use ticket show with this selector to read the complete body.",
+      );
       return {
-        content: [{ type: "text", text: truncateTicketShow(json) }],
-        details: json,
+        content: [{ type: "text", text: result.text }],
+        details: result.truncated ? await runTicketJson(args, ctx, signal) : undefined,
       };
     },
   });
@@ -355,10 +403,9 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     parameters: ticketCreateParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const json = (await runTicket(buildCreateArgs(params), ctx, signal)) as TicketFields;
       return {
-        content: [{ type: "text", text: formatTicketCreated(json) }],
-        details: json,
+        content: [{ type: "text", text: await runTicket(buildCreateArgs(params), ctx, signal) }],
+        details: undefined,
       };
     },
   });
@@ -371,10 +418,9 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     parameters: ticketSetParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const json = (await runTicket(buildSetArgs(params), ctx, signal)) as TicketFields;
       return {
-        content: [{ type: "text", text: formatTicketUpdated(json) }],
-        details: json,
+        content: [{ type: "text", text: await runTicket(buildSetArgs(params), ctx, signal) }],
+        details: undefined,
       };
     },
   });
@@ -387,10 +433,9 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     parameters: ticketEditParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const json = (await runTicket(buildEditArgs(params), ctx, signal)) as TicketFields;
       return {
-        content: [{ type: "text", text: formatTicketUpdated(json) }],
-        details: json,
+        content: [{ type: "text", text: await runTicket(buildEditArgs(params), ctx, signal) }],
+        details: undefined,
       };
     },
   });

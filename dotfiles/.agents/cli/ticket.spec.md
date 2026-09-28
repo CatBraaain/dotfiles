@@ -19,7 +19,7 @@
 | project 未指定 | Git リポジトリ内では main worktree の basename、それ以外では cwd の basename を使う |
 | `-a/--all` | `list` / `check` で全 project を横断する。`-p` は無視する |
 | 不存在 project | `create` は作成し、その他は終了コード 1 |
-| `--json` | 成功時 stdout は単一 JSON。失敗時 stdout は `{ "error": "..." }`、stderr は同じ 1 行、終了コードは失敗種別に従う |
+| `--json` | 成功時 stdout は単一 JSON。失敗時 stdout は `{ "error": "..." }`、stderr は同じ 1 行、終了コードは失敗種別に従う。省略時はテキスト出力になり、`check` は `ok` または `file: kind: detail` 行、`list` は 1 ticket = 1 行の tab 区切り、`show` はフィールド行と本文、`create` / `set` / `edit` は `created` / `updated` 行に共通フィールドを続ける |
 | `--` | 後続を位置引数として扱う |
 | I/O 例外 | stderr に 1 行を出し終了コード 1。書込みトランザクションは復元し、復元不能なら次の書込み前に journal から復元する |
 
@@ -44,23 +44,23 @@
 
 ### `ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]`
 
-既定では open ticket を出力する。`-s` は指定 status だけを出力する。`--all` のテキスト出力は project、ID、status、title を tab 区切りにする。JSON 共通フィールドは `id`、`status`、`after`（未設定は `null`）、`title`、`path`、`--all` 時だけ `project`。
+既定では open ticket を出力する。`-s` は指定 status だけを出力する。テキスト出力は `[project<TAB>]ID<TAB>status<TAB>title` 形式の 1 ticket 1 行で、0 件のときは `no tickets` を出す。`--all` 時だけ `project` を前置する。JSON 共通フィールドは `id`、`status`、`after`（未設定は `null`）、`title`、`path`、`--all` 時だけ `project`。
 
 ### `ticket show [<selector>] [-p <project>] [--json]`
 
-ID、status、after、本文全体を返す。JSON は共通フィールドと末尾空白・改行を保持した `body` を返す。
+ID、status、after、title、本文全体を返す。テキスト出力は `id:`、`status:`、`after:`、`title:` の各フィールド行、空行、`body:` 行、本文の順で、本文の末尾空白・改行を保持する。JSON は共通フィールドと末尾空白・改行を保持した `body` を返す。
 
 ### `ticket create <json> [-p <project>] [--json]
 
-JSON は必須の `title` と任意の `status`、`after`、`body` を持つ。body は H1 の後の空行を挟んで置く。after が未解決で status 未指定なら blocked で作る。成功時は ID または JSON 共通フィールドを返す。
+JSON は必須の `title` と任意の `status`、`after`、`body` を持つ。body は H1 の後の空行を挟んで置く。after が未解決で status 未指定なら blocked で作る。成功時は `created <id>` に status、after、path を続けるテキスト、または JSON 共通フィールドを返す。
 
 ### `ticket set [<selector>] <json> [-p <project>] [--json]
 
-JSON の許可 key は `status` と `after` だけであり、少なくとも一方を含む。frontmatter と status 連動を更新する。`status: closed` は上記の原子操作で依存 ticket を解放する。成功時は status または JSON 共通フィールドを返す。
+JSON の許可 key は `status` と `after` だけであり、少なくとも一方を含む。frontmatter と status 連動を更新する。`status: closed` は上記の原子操作で依存 ticket を解放する。成功時は `updated <id>` に status、after、path を続けるテキスト、または JSON 共通フィールドを返す。
 
 ### `ticket edit [<selector>] <old> <new> [-p <project>] [--json]
 
-frontmatter を除く本文全体（H1 を含む）の literal な `<old>` を検索する。正確に 1 回なら `<new>` へ置換する。0 回または複数回なら出現数と現在本文を stderr に出し、変更しない。空の old は usage error、空の new は削除である。
+frontmatter を除く本文全体（H1 を含む）の literal な `<old>` を検索する。正確に 1 回なら `<new>` へ置換する。0 回または複数回なら出現数と現在本文を stderr に出し、変更しない。空の old は usage error、空の new は削除である。成功時は `updated <id>` に status、after、path を続けるテキスト、または JSON 共通フィールドを返す。
 
 ### `ticket check [-p <project>] [-a] [--json]`
 
