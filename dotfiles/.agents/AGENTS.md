@@ -73,6 +73,7 @@
 
 - **Python**: `ruff format`, `ruff check`, `ty`, `pytest`
 - **JavaScript/TypeScript**: (`vp format` or `oxfmt`), (`vp check` or `oxlint`), `vitest`
+- **Markdown**: `~/.bun/bin/prettier --parser markdown --plugin="$HOME/.bun/install/global/node_modules/prettier-markdown-table/index.js" --write <file.md>`
 
 ## Out-of-Scope Tickets
 
