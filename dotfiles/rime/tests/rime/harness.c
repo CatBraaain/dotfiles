@@ -515,6 +515,164 @@ static void test_henkan_typing_key_starts_next_input(void) {
     }
 }
 
+/* The preedit a typed sequence leaves while composing. */
+static Bool preedit_equals(const char* expected) {
+    RIME_STRUCT(RimeContext, context);
+    Bool result = False;
+    if (rime->get_context(session, &context)) {
+        result = context.composition.preedit &&
+                 strcmp(context.composition.preedit, expected) == 0;
+        if (g_verbose) print_context();
+        rime->free_context(&context);
+    }
+    return result;
+}
+
+/*
+ * SPEC: in the Japanese mode comma and period commit ，and 。directly, and
+ * the half/full width table keeps committing them (dotfiles/rime/SPEC.md).
+ */
+static void test_punctuation_commits_directly(void) {
+    static const struct {
+        int key;
+        const char* name;
+        const char* expected;
+    } cases[] = {
+        {',', "comma", "、"},
+        {'.', "period", "。"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        press(cases[i].key);
+        char commit[256];
+        char description[128];
+        snprintf(description, sizeof(description),
+                 "%s must commit %s directly while typing is idle",
+                 cases[i].name, cases[i].expected);
+        Bool committed = take_commit(commit, sizeof(commit));
+        check(committed && strcmp(commit, cases[i].expected) == 0, description);
+        snprintf(description, sizeof(description),
+                 "%s must not keep composing after the commit", cases[i].name);
+        check(!composing(), description);
+    }
+    /* The half/full width table already commits the same kana. */
+    fresh_session();
+    rime->set_option(session, "full_shape", 1);
+    press(',');
+    char commit[256];
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "、") == 0,
+          "the full-width mode must keep committing comma as 、");
+    rime->set_option(session, "full_shape", 0);
+}
+
+/*
+ * SPEC: the romaji table matches the shared declaration exactly, including
+ * the rows and derivations the stock Kagiroi table lacks and the collisions
+ * it spells differently (dotfiles/rime/SPEC.md).
+ */
+static void test_romanization_matches_declaration(void) {
+    static const struct {
+        const char* input;
+        const char* expected;
+    } cases[] = {
+        /* base rows */
+        {"a", "あ"}, {"ka", "か"}, {"si", "し"}, {"tu", "つ"}, {"nu", "ぬ"},
+        {"he", "へ"}, {"yu", "ゆ"}, {"ra", "ら"}, {"wa", "わ"}, {"wo", "を"},
+        /* rows the stock table lacks: c, q, j, f from the declaration */
+        {"ca", "か"}, {"ci", "き"}, {"cu", "く"}, {"ce", "け"}, {"co", "こ"},
+        {"qa", "くぁ"}, {"qi", "くぃ"}, {"qe", "くぇ"}, {"qo", "くぉ"},
+        {"ja", "じゃ"}, {"ji", "じ"}, {"ju", "じゅ"}, {"je", "じぇ"}, {"jo", "じょ"},
+        {"fa", "ふぁ"}, {"fi", "ふぃ"}, {"fu", "ふ"}, {"fe", "ふぇ"}, {"fo", "ふぉ"},
+        /* ha/hu/ho yoon spellings (kha=kya, cha is the c row's きゃ) */
+        {"kha", "きゃ"}, {"khu", "きゅ"}, {"kho", "きょ"},
+        {"sha", "しゃ"}, {"shu", "しゅ"}, {"sho", "しょ"},
+        {"cha", "きゃ"}, {"chu", "きゅ"}, {"cho", "きょ"},
+        {"zha", "じゃ"}, {"zhu", "じゅ"}, {"zho", "じょ"},
+        {"bha", "びゃ"}, {"pha", "ぴゃ"}, {"rhu", "りゅ"},
+        /* u-column + small a/i/e/o and o-column + small u families */
+        {"kwa", "くぁ"}, {"kwi", "くぃ"}, {"kwe", "くぇ"}, {"kwo", "くぉ"},
+        {"hwa", "ふぁ"}, {"cwa", "くぁ"}, {"nwa", "ぬぁ"}, {"bwa", "ぶぁ"},
+        {"rwo", "るぉ"},
+        {"twu", "とぅ"}, {"dwu", "どぅ"}, {"kwu", "こぅ"}, {"gwu", "ごぅ"},
+        {"swu", "そぅ"}, {"rwu", "ろぅ"},
+        /* collision spellings resolved to the declaration's kana */
+        {"wi", "うぃ"}, {"we", "うぇ"}, {"wyi", "ゐ"}, {"wye", "ゑ"},
+        {"va", "ヴぁ"}, {"vu", "ヴ"}, {"vo", "ヴぉ"},
+        {"tha", "ちゃ"}, {"thu", "ちゅ"}, {"the", "ちぇ"}, {"tho", "ちょ"},
+        {"dha", "ぢゃ"}, {"dhu", "でゅ"}, {"dho", "ぢょ"},
+        {"twa", "つぁ"}, {"twi", "つぃ"}, {"twe", "つぇ"}, {"two", "つぉ"},
+        {"dwa", "づぁ"}, {"dwe", "づぇ"}, {"dwo", "づぉ"},
+        {"khe", "きぇ"}, {"che", "きぇ"}, {"ghe", "ぎぇ"}, {"she", "しぇ"},
+        {"thi", "てぃ"}, {"dhi", "でぃ"},
+        /* small kana and the katakana row singletons */
+        {"la", "ぁ"}, {"lya", "ゃ"}, {"ltu", "っ"}, {"lwa", "ゎ"},
+        {"lka", "ヵ"}, {"lke", "ヶ"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        char description[128];
+        snprintf(description, sizeof(description),
+                 "%s must read %s while composing", cases[i].input, cases[i].expected);
+        check(preedit_equals(cases[i].expected), description);
+    }
+}
+
+/*
+ * SPEC: the lone nn stays pending while typing and reads ん when Space
+ * resolves the n run (dotfiles/rime/SPEC.md, n の過不足補完).
+ */
+static void test_nn_resolves_to_n_with_space(void) {
+    fresh_session();
+    type_text("nn");
+    check(preedit_equals("nn"), "the lone nn must stay pending while typing");
+    press(kSpace);
+    check(preedit_equals("ん"), "nn + Space must read ん");
+}
+
+/*
+ * SPEC: spellings outside the declaration stay raw; neither the stock
+ * kagiroi_romaji table nor its speller/algebra derives are imported
+ * (dotfiles/rime/SPEC.md).
+ */
+static void test_non_declaration_spellings_stay_raw(void) {
+    static const char* const cases[] = {
+        "chi", "shi", "tsu", "ltsu", "kyi", "kye", "wha", "tsa", "dhe", "fya",
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i]);
+        char description[128];
+        snprintf(description, sizeof(description),
+                 "%s must stay raw because it is not a declaration spelling",
+                 cases[i]);
+        check(preedit_equals(cases[i]), description);
+    }
+}
+
+/*
+ * SPEC: the sokuon syllables (kk, tt, ...) stay in the dictionary as the
+ * input infrastructure outside the declaration; the hatsuon ones do not
+ * because the n-run correction pushes ん itself; the long vowel binds to the
+ * - key, and the stock q binding is gone (dotfiles/rime/SPEC.md).
+ */
+static void test_sokuon_hatsuon_and_long_vowel(void) {
+    fresh_session();
+    type_text("kkanji");
+    check(preedit_equals("っかんじ"),
+          "kkanji must read っかんじ while composing");
+    /* a lone n before a consonant still becomes ん without the nk entries */
+    fresh_session();
+    type_text("nka");
+    check(preedit_equals("んか"), "nka must read んか while composing");
+    fresh_session();
+    press('-');
+    check(preedit_equals("ー"), "- must read ー while composing");
+    fresh_session();
+    type_text("q");
+    check(preedit_equals("q"), "q must stay raw while composing");
+}
+
 /*
  * SPEC: typing must not expose any candidates before the first Space.
  *
@@ -672,6 +830,11 @@ int main(int argc, char* argv[]) {
         test_first_space_reveals_candidates,
         test_space_cycles_candidates,
         test_enter_commits_highlighted_candidate,
+        test_punctuation_commits_directly,
+        test_romanization_matches_declaration,
+        test_nn_resolves_to_n_with_space,
+        test_non_declaration_spellings_stay_raw,
+        test_sokuon_hatsuon_and_long_vowel,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         tests[i]();

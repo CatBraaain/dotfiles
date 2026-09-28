@@ -53,6 +53,7 @@ install -m 644 "$mirror"/kagiroi.schema.yaml "$mirror"/kagiroi.yaml \
     "$mirror"/kagiroi.dict.yaml "$mirror"/kagiroi.manual.dict.yaml \
     "$mirror"/kagiroi.mozc.dict.yaml "$mirror"/kagiroi.nico.dict.yaml \
     "$mirror"/kagiroi_kanji.dict.yaml "$mirror"/kagiroi_kanji.schema.yaml \
+    "$mirror"/kagiroi_kaomoji.dict.yaml "$mirror"/kagiroi_symbols.dict.yaml \
     "$mirror"/kagiroi_romaji.dict.yaml "$mirror"/kagiroi_romaji.schema.yaml \
     "$mirror"/kagiroi_ansikana.dict.yaml "$mirror"/kagiroi_ansikana.schema.yaml \
     "$mirror"/kagiroi_szromaji.dict.yaml "$mirror"/kagiroi_szromaji.schema.yaml \
@@ -64,7 +65,8 @@ cp -r "$mirror"/opencc "$workspace/"
 
 # Managed files under test, in the same relative layout as the deployment.
 install -m 644 "$root"/default.custom.yaml "$root"/kagiroi.custom.yaml \
-    "$root"/kagiroi.custom.dict.yaml "$workspace/"
+    "$root"/kagiroi.custom.dict.yaml "$root"/kagiroi_romaji.custom.yaml \
+    "$root"/kagiroi_dotfiles_romaji.dict.yaml "$workspace/"
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
 
 cc -std=c11 -O2 -o "$cache/harness/harness" "$root/tests/rime/harness.c" $rime_cflags $rime_libs

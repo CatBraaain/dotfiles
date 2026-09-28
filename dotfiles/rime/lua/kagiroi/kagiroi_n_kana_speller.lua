@@ -68,7 +68,12 @@ end
 
 -- A consonant or a conversion key after the run: fold the run into pairs and
 -- complete a leftover single n as ん (kanji -> かんじ, kannnji -> かんんじ).
-local function n_run_before_consonant(count)
+-- A lone n followed by w keeps its place as the consonant of the
+-- declaration's nw spellings (nwa -> ぬぁ); ん + わ is nnwa.
+local function n_run_before_consonant(count, character)
+    if count == 1 and character == "w" then
+        return "n"
+    end
     return ("ん"):rep(math.ceil(count / 2))
 end
 
@@ -176,7 +181,10 @@ function Top.func(key_event, env)
             replace_pending_n(context, pending_n, replacement)
         end
     else
-        replace_pending_n(context, pending_n, n_run_before_consonant(#pending_n))
+        local replacement = n_run_before_consonant(#pending_n, character)
+        if replacement ~= pending_n then
+            replace_pending_n(context, pending_n, replacement)
+        end
     end
 
     return base.func(key_event, env)

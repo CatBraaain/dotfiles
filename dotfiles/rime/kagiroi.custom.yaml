@@ -2,3 +2,11 @@ patch:
   "engine/processors/@3": lua_processor@*kagiroi/rime_controls
   "engine/processors/@before 0": lua_processor@*kagiroi/rime_ascii_toggle
   "engine/filters/@before 0": lua_filter@*kagiroi/candidate_gate
+  # Comma and period commit , and . directly in the Japanese mode (the
+  # stock list entries would leave the menu open instead). The half/full
+  # width table already commits them, so it needs no patch.
+  "punctuator/half_shape/,": { commit: 、 }
+  "punctuator/half_shape/.": { commit: 。 }
+  # Start every session in the full-width punctuation mode so the two
+  # punctuator entries above are always in effect.
+  "switches/@3/reset": 0

@@ -15,6 +15,8 @@ local romaji_to_kana = {
     ne = "ね",
     e = "え",
     a = "あ",
+    nwa = "ぬぁ",
+    wa = "わ",
 }
 
 local base = {}
@@ -134,6 +136,8 @@ local typing_cases = {
     { input = "kannnen", expected = "かんねn" },
     { input = "kannnnen", expected = "かんんえn" },
     { input = "nya", expected = "にゃ" },
+    { input = "nwa", expected = "ぬぁ" },
+    { input = "nnwa", expected = "んわ" },
 }
 
 for _, case in ipairs(typing_cases) do
