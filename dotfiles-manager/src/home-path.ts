@@ -1,6 +1,8 @@
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+// Dist-to-home path resolution for build hooks (spec: SPEC.md
+// §build: ローカルフック context.resolvePaths). Reuses the same segment
+// mapping as diff detection so paths stay consistent across stages.
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { mapSegment } from "./diff.ts";
+import { mapSegment } from "./path-mapping.ts";
 
 export function homeRelPath(distRelPath: string): string {
   const segments = distRelPath.split("/");

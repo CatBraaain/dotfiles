@@ -3,58 +3,18 @@
 // Consumes the classification produced by diff.ts, writes the home tree,
 // and runs apply scripts. The build stage (dist generation) is a separate
 // stage and not part of this file.
-
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import * as fsPromises from "node:fs/promises";
 const { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } = fsPromises;
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { homedir } from "node:os";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { dirname, join, resolve } from "node:path";
-import {
-  collectDifferences,
-  isApplyScriptName,
-  main as diffMain,
-  mapSegment,
-  type DiffEntry,
-  type DiffResult,
-} from "./diff.ts";
+import { expandHomeRoot, positionalArguments } from "./args.ts";
+import { comparesExecutableBits, readSymlinkTarget } from "./compare.ts";
+import { collectDifferences, main as diffMain, type DiffEntry, type DiffResult } from "./diff.ts";
 import {
   ensureHookDirectory,
   removeEmptyHookDirectories,
   resolveHookCommand,
 } from "./hook-runner.ts";
-
-declare const Bun: {
-  spawn(
-    command: string[],
-    options: {
-      cwd: string;
-      stdin: "ignore" | "pipe";
-      stdout: "inherit";
-      stderr: "inherit";
-    },
-  ): {
-    exited: Promise<number>;
-    signalCode: string | null;
-    stdin: { write(data: string): void; end(): void };
-  };
-};
-declare const process: {
-  argv: string[];
-  platform: string;
-  pid: number;
-  execPath: string;
-  exitCode: number;
-  stdout: { write(data: string): void };
-};
-declare const console: { error(...data: unknown[]): void };
-declare global {
-  interface ImportMeta {
-    readonly main: boolean;
-    readonly dir: string;
-  }
-}
+import { isApplyScriptName, mapSegment } from "./path-mapping.ts";
 
 export type ApplyResult = { added: string[]; changed: string[]; removed: string[] };
 export type ApplyScript = {
@@ -68,10 +28,9 @@ export type Declarations = {
   applyScripts: ApplyScript[];
 };
 
-type DirentLike = { name: string; isDirectory(): boolean; isFile(): boolean };
 type RenameFile = (source: string, destination: string) => Promise<void>;
 
-const usage = "usage: bun dotfiles-manager/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
+const usage = "usage: bun dotfiles-manager/src/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
 
 // ---------------------------------------------------------------- public API
 
@@ -169,13 +128,12 @@ export function parseArgs(argv: readonly string[]): {
 } {
   const rest = argv.filter((argument) => argument !== "--dry-run");
   const dryRun = rest.length !== argv.length;
-  const positional = rest.filter((argument) => argument !== "--json");
+  const positional = positionalArguments(rest, ["--json"]);
   if (positional.length < 2) throw new Error(usage);
-  const homeRoot = positional[1]!;
   return {
     dryRun,
     distRoot: positional[0]!,
-    homeRoot: homeRoot === "~" ? homedir() : homeRoot,
+    homeRoot: expandHomeRoot(positional[1]!),
     rest,
   };
 }
@@ -247,10 +205,8 @@ async function applyEntry(
     } else if (mapping.kind === "symlink") {
       // A .symlink entry is a plain file in dist; the target is its content
       // with one trailing newline stripped (spec §.symlink の解釈).
-      const rawTarget = await readFile(distAbs, "utf8");
-      const target = rawTarget.endsWith("\n") ? rawTarget.slice(0, -1) : rawTarget;
       await rm(homeAbs, { force: true });
-      await symlink(target, homeAbs);
+      await symlink(await readSymlinkTarget(distAbs), homeAbs);
     } else {
       // Atomic write: build the new file beside the target, then rename it in,
       // so no half-written state ever appears at the home path.
@@ -282,9 +238,7 @@ async function applyTree(
   applied: ApplyResult,
   renameFile: RenameFile,
 ): Promise<void> {
-  for (const dirent of (await readdir(join(distRoot, distRel), {
-    withFileTypes: true,
-  })) as unknown as DirentLike[]) {
+  for (const dirent of await readdir(join(distRoot, distRel), { withFileTypes: true })) {
     const mapping = mapSegment(dirent.name, dirent.isDirectory());
     if (mapping.isExcluded) continue;
     await applyEntry(
@@ -300,16 +254,10 @@ async function applyTree(
   }
 }
 
-function comparesExecutableBits(platform: string): boolean {
-  return platform === "linux" || platform === "darwin";
-}
-
 // ------------------------------------------------------- declarations lookup
 
 async function walkDeclarations(dirAbs: string, dirRel: string, out: Declarations): Promise<void> {
-  for (const entry of (await readdir(dirAbs, {
-    withFileTypes: true,
-  })) as unknown as DirentLike[]) {
+  for (const entry of await readdir(dirAbs, { withFileTypes: true })) {
     const childRel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
     if (entry.isDirectory()) {
       if (mapSegment(entry.name, true).isExcluded) continue;
@@ -352,8 +300,9 @@ async function spawnChild(
     stderr: "inherit",
   });
   if (stdin !== "ignore") {
-    proc.stdin.write(stdin);
-    proc.stdin.end();
+    // stdin: "pipe" is requested for this spawn, so the stream always exists.
+    proc.stdin!.write(stdin);
+    proc.stdin!.end();
   }
   const exitCode = await proc.exited;
   if (exitCode !== 0) {

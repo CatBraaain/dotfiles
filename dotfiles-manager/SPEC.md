@@ -51,11 +51,11 @@ stage diff success (0.08s)
 command diff success (1.28s)
 ```
 
-`bun dotfiles-manager/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わず、指定した dist と home を比較する。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の home 相対パスを 1 行ずつ表示し、`--json` より優先する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類について home 相対パスの配列を 2 スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
+`bun dotfiles-manager/src/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わず、指定した dist と home を比較する。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の home 相対パスを 1 行ずつ表示し、`--json` より優先する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類について home 相対パスの配列を 2 スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
 
-`bun dotfiles-manager/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]` は build を行わず、指定した dist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と apply スクリプトの実行を行わない。`--dry-run --json` は `diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分・適用結果・実行した apply スクリプト数を表示する。
+`bun dotfiles-manager/src/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]` は build を行わず、指定した dist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と apply スクリプトの実行を行わない。`--dry-run --json` は `src/diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分・適用結果・実行した apply スクリプト数を表示する。
 
-`diff.ts` と `apply.ts` の直接 CLI は成功時に終了コード 0 を返す。必須引数がないとき、位置引数が多すぎるとき（`diff.ts`）、dist または home がディレクトリでないとき、または処理に失敗したときは、エラーを stderr に表示して非 0 で終了する。
+`src/diff.ts` と `src/apply.ts` の直接 CLI は成功時に終了コード 0 を返す。必須引数がないとき、位置引数が多すぎるとき（`src/diff.ts`）、dist または home がディレクトリでないとき、または処理に失敗したときは、エラーを stderr に表示して非 0 で終了する。
 
 ## build: dist 再構築
 

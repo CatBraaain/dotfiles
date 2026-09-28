@@ -1,6 +1,5 @@
 import { describe, it, beforeEach, afterEach } from "bun:test";
 import assert from "node:assert/strict";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import {
   chmod,
   mkdir,
@@ -14,11 +13,8 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { existsSync } from "node:fs";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir, tmpdir } from "node:os";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { dirname, join } from "node:path";
 import { collectDifferences, type DiffResult } from "./diff.ts";
 import {

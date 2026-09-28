@@ -9,19 +9,19 @@
 ```
 ~/projects/dotfiles/          （ワークスペースルート）
 ├── dotfiles/                 # ~ へ展開する dotfile 群の実体
-├── dist/                     # dotfiles-manager/build.ts が生成（gitignore、編集不可）
-├── dotfiles-manager/         # CLI と build・差分検知・適用・フックのエンジン
+├── dist/                     # dotfiles-manager/src/build.ts が生成（gitignore、編集不可）
+├── dotfiles-manager/         # CLI と build・差分検知・適用・フックのエンジン（実装は src/ 配下）
 ├── undotfiles/               # 管理外（Nix、VSCode 拡張、winconfig 等）
 └── justfile                  # apply / diff / managed 等のタスク
 ```
 
-データフロー: `dotfiles/` --(dotfiles-manager/build.ts)--> `dist/` --(dotfiles-manager/apply.ts)--> `~/`
+データフロー: `dotfiles/` --(dotfiles-manager/src/build.ts)--> `dist/` --(dotfiles-manager/src/apply.ts)--> `~/`
 
 編集はこのワークスペース内のみ。`~/xxx`（ホームディレクトリ配下）をユーザーの許可なく直接書き込み・変更してはいけない。
 
 ## `dotfiles/` 内の命名規則
 
-`dotfiles/` は人間が読みやすい素の記法で書き、`dotfiles-manager/build.ts` が `dist/` を生成する。命名規則と変換仕様の正本は `dotfiles-manager/SPEC.md` とし、`dotfiles/` を編集するときは同仕様を参照する。
+`dotfiles/` は人間が読みやすい素の記法で書き、`dotfiles-manager/src/build.ts` が `dist/` を生成する。命名規則と変換仕様の正本は `dotfiles-manager/SPEC.md` とし、`dotfiles/` を編集するときは同仕様を参照する。
 
 > **skills.exact の場所**: `dotfiles/.agents/skills.exact` は `~/projects/dotfiles/dotfiles/.agents/skills.exact` を指す。これは共有 skill の編集元であり、プロジェクト専用 skill の読み込み先ではない。ルート直下（`~/projects/dotfiles/.agents/...`）とは別の場所である。
 
@@ -40,7 +40,7 @@
 
 ## TypeScript のテスト
 
-`dotfiles/.pi/` と `dotfiles/.dsh/plugins.exact/` 配下の TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。この2つ以外の TS スクリプト（`dotfiles-manager/build.ts` 等のエンジン本体）にはテストファイルを作成しないこと。テストを書かないこれらのスクリプトの検証は `bunx tsc --noEmit` で代用する。
+`dotfiles/.pi/` と `dotfiles/.dsh/plugins.exact/` 配下の TS スクリプトを追加・変更する場合は、原則として隣に `.test.ts` を置き、自動テストできるようにすること。この2つ以外の TS スクリプト（`dotfiles-manager/src/` 配下のエンジン本体）にはテストファイルを作成しないこと。テストを書かないこれらのスクリプトの検証は `bunx tsc --noEmit` で代用する。
 
 テストは `bun:test` で書く: `import { describe, it } from "bun:test"`。実行は `cd dotfiles/.pi/agent && bun test`、dsh plugin は plugin ディレクトリごとに `cd dotfiles/.dsh/plugins.exact/<plugin> && bun test`。`bun test` は Bun の auto-install 対象外のため、テストが import する依存は配置先パッケージの `package.json` に明示し、インストールで解決しておくこと。
 assertion は自作 helper を作らず、`node:assert/strict` を使うこと。読みやすさは説明変数やテスト名で担保し、assertion の再発明では担保しない。

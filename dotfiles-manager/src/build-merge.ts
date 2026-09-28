@@ -1,68 +1,13 @@
-// Build stage of the dotfiles manager (spec: SPEC.md
-// §ライフサイクル): regenerates dist from dotfiles/ — local hooks
-// (including the standard path-map and external fetch hooks), merge
-// composition, replace sidecars.
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+// Merge composition stage of the build (spec: SPEC.md §build: merge 変換,
+// §パッチ適用): composes JSON/YAML/TOML targets from the home tree, plain
+// bases, and merge sidecars, then writes the finished value to dist.
 import { existsSync } from "node:fs";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { homedir } from "node:os";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import {
-  isMap,
-  parse as parseYaml,
-  parseDocument,
-  stringify as stringifyYaml,
-  type Pair,
-  type ParsedNode,
-} from "yaml";
-import { toJS, type ToJSContext } from "yaml/util";
+import { readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
-import {
-  ensureHookDirectory,
-  removeEmptyHookDirectories,
-  removeHookSnapshot,
-  writeHookSnapshot,
-} from "./hook-runner.ts";
-
-declare const Bun: {
-  spawn(
-    command: string[],
-    options: {
-      cwd: string;
-      env: Record<string, string | undefined>;
-      stdin: "ignore";
-      stdout: "inherit" | "pipe";
-      stderr: "inherit";
-    },
-  ): {
-    exited: Promise<number>;
-    signalCode: string | null;
-    stdout: ReadableStream<Uint8Array> | null;
-  };
-  stdout: unknown;
-  write(destination: unknown, content: Uint8Array): Promise<number>;
-  deepEquals(left: unknown, right: unknown): boolean;
-};
-declare const process: {
-  cwd(): string;
-  platform: string;
-  env: Record<string, string | undefined>;
-  execPath: string;
-  exitCode: number;
-};
-declare const console: { error(...data: unknown[]): void };
-declare global {
-  interface ImportMeta {
-    readonly main: boolean;
-    readonly dir: string;
-  }
-}
-
-export type Platform = "windows" | "linux" | "darwin";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { isMap, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
+import { toJS, type ToJSContext } from "yaml/util";
 
 type FileFormat = "json" | "toml" | "yaml";
 type MergeOp = "append" | "remove" | "replace" | "unset";
@@ -70,19 +15,11 @@ type PlainObject = Record<string, unknown>;
 type Operation = { key: string; value: unknown };
 type Operations = Map<string, Partial<Record<MergeOp, Operation>>>;
 type Entry = { path: string; isDirectory: boolean };
-type Hook = { absolutePath: string; relativeParent: string; name: string; contents: string };
-export type HookEvent = (
-  path: string,
-  status: "start" | "success" | "failure",
-  elapsedSeconds: number,
-  stdoutNeedsNewline?: boolean,
-) => void;
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const hookNamePattern = /\.build(?:-machine)?\.[^.]+$/;
 const sidecarPattern = /\.(merge|merge-machine)\.(json|yaml|toml)$/;
 
 const fileFormats = {
@@ -100,57 +37,7 @@ const fileFormats = {
   },
 } as const;
 
-export async function run(
-  root = process.cwd(),
-  platform: Platform = currentPlatform(),
-  homeRoot = homedir(),
-  onHookEvent?: HookEvent,
-): Promise<void> {
-  assertPlatform(platform);
-  const sourceDir = join(root, "dotfiles");
-  const distDir = join(root, "dist");
-
-  await rm(distDir, { recursive: true, force: true });
-  await copyDir(sourceDir, distDir);
-  // Capture hooks once so earlier hooks cannot remove later scripts from the event queue.
-  await runHooks(await collectHooks(distDir), distDir, homeRoot, onHookEvent);
-  await composeMergeTargets(distDir, homeRoot);
-  await applyReplaceSidecars(distDir, homeRoot);
-}
-
-async function copyDir(sourceDir: string, destinationDir: string): Promise<void> {
-  await mkdir(destinationDir, { recursive: true });
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" && entry.isDirectory()) continue;
-
-    const sourcePath = join(sourceDir, entry.name);
-    const destinationPath = join(destinationDir, entry.name);
-    if (entry.isDirectory()) await copyDir(sourcePath, destinationPath);
-    else await cp(sourcePath, destinationPath);
-  }
-}
-
-const platformNames = ["windows", "linux", "darwin"] as const;
-
-function currentPlatform(): Platform {
-  switch (process.platform) {
-    case "win32":
-      return "windows";
-    case "linux":
-      return "linux";
-    case "darwin":
-      return "darwin";
-    default:
-      throw new Error(`Unsupported platform: ${process.platform}`);
-  }
-}
-
-function assertPlatform(platform: string): asserts platform is Platform {
-  if (!platformNames.includes(platform as Platform))
-    throw new Error(`Unsupported platform: ${platform}`);
-}
-
-async function composeMergeTargets(distDir: string, homeRoot: string): Promise<void> {
+export async function composeMergeTargets(distDir: string, homeRoot: string): Promise<void> {
   const targets = await collectMergeTargets(distDir);
   for (const target of targets) {
     const hasBase = existsSync(target.outputPath);
@@ -483,214 +370,6 @@ function arrayElementsMatch(left: unknown, right: unknown): boolean {
   return Bun.deepEquals(left, right);
 }
 
-// Replace sidecar stage of the build (spec: SPEC.md
-// §build: 置換 sidecar): for each <name>.replace.yaml, writes dist/<name>
-// from home's current <name> content with regex replacements applied.
-
-export type Replacement = { pattern: string; replacement: string };
-
-const sidecarSuffix = ".replace.yaml";
-
-export function parseReplaceSidecar(content: string, sidecarPath: string): Replacement[] {
-  const doc: unknown = parseYaml(content);
-  const replacements = (doc as { replacements?: unknown })?.replacements;
-  if (!Array.isArray(replacements))
-    throw new Error(`replace sidecar must have a replacements array: ${sidecarPath}`);
-  return replacements.map((raw, index) => {
-    if (
-      typeof raw !== "object" ||
-      raw === null ||
-      Array.isArray(raw) ||
-      typeof (raw as { pattern?: unknown }).pattern !== "string" ||
-      typeof (raw as { replacement?: unknown }).replacement !== "string"
-    ) {
-      throw new Error(
-        `replace sidecar entry ${index} must map pattern and replacement to strings: ${sidecarPath}`,
-      );
-    }
-    return {
-      pattern: (raw as { pattern: string }).pattern,
-      replacement: (raw as { replacement: string }).replacement,
-    };
-  });
-}
-
-// Replacements apply top to bottom; every match of each pattern is replaced
-// and ${1}-style capture references resolve to the matched groups.
-export function applyReplacements(content: string, replacements: Replacement[]): string {
-  let result = content;
-  for (const { pattern, replacement } of replacements) {
-    result = result.replace(new RegExp(pattern, "g"), (...args) => {
-      // match, capture groups..., offset, string
-      const groups = args
-        .slice(0, args.length - 2)
-        .map((group) => (typeof group === "string" ? group : ""));
-      return replacement.replace(/\$\{(\d+)\}/g, (_, index) => groups[Number(index)] ?? "");
-    });
-  }
-  return result;
-}
-
-export async function applyReplaceSidecars(distDir: string, homeRoot: string): Promise<void> {
-  for (const sidecarRel of await collectReplaceSidecars(distDir, "")) {
-    // <dir>/<name>.replace.yaml renders <dir>/<name>.
-    const nameRel = sidecarRel.slice(0, -sidecarSuffix.length);
-    const homeRelativePath = homeRelPath(nameRel);
-    try {
-      const homeAbs = join(homeRoot, homeRelativePath);
-      const current = existsSync(homeAbs) ? await readFile(homeAbs, "utf8") : "";
-      const replacements = parseReplaceSidecar(
-        await readFile(join(distDir, sidecarRel), "utf8"),
-        sidecarRel,
-      );
-      await writeFile(join(distDir, nameRel), applyReplacements(current, replacements));
-      await rm(join(distDir, sidecarRel));
-    } catch (error) {
-      throw new Error(
-        `replace target failed: ${homeRelativePath}: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
-    }
-  }
-}
-
-async function collectReplaceSidecars(dirAbs: string, dirRel: string): Promise<string[]> {
-  const sidecars: string[] = [];
-  for (const entry of await readdir(dirAbs, { withFileTypes: true })) {
-    const childRel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
-    if (entry.isDirectory())
-      sidecars.push(...(await collectReplaceSidecars(join(dirAbs, entry.name), childRel)));
-    else if (entry.isFile() && entry.name.endsWith(sidecarSuffix)) sidecars.push(childRel);
-  }
-  return sidecars.sort();
-}
-
-async function collectHooks(distDir: string): Promise<Hook[]> {
-  const hooks: Hook[] = [];
-  async function walk(directory: string, relativeParent: string): Promise<void> {
-    const entries = (await readdir(directory, { withFileTypes: true })).sort(
-      (left: { name: string }, right: { name: string }) => compareCodeUnits(left.name, right.name),
-    );
-    for (const entry of entries) {
-      if (!entry.isFile() || !hookNamePattern.test(entry.name)) continue;
-      const entryPath = join(directory, entry.name);
-      hooks.push({
-        absolutePath: entryPath,
-        relativeParent,
-        name: entry.name,
-        contents: await readFile(entryPath, "utf8"),
-      });
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === "node_modules") continue;
-      const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
-      await walk(join(directory, entry.name), childParent);
-    }
-  }
-  await walk(distDir, "");
-  return hooks;
-}
-
-function hookRelativePath(hook: Hook): string {
-  return hook.relativeParent === "" ? hook.name : `${hook.relativeParent}/${hook.name}`;
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-// Local build hooks (spec: SPEC.md §build: ローカルフック) run as Bun processes.
-export async function runHooks(
-  hooks: Hook[],
-  distDir: string,
-  homeRoot: string,
-  onHookEvent?: HookEvent,
-): Promise<void> {
-  for (const hook of hooks) {
-    const relativePath = hookRelativePath(hook);
-    const hookDistDir =
-      hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
-    // A hook whose folder an earlier hook removed is no longer part of dist;
-    // skipping is how removals (e.g. the path map) opt hooks out (spec:
-    // SPEC.md §build: ローカルフック 検出と順序).
-    if (!existsSync(hookDistDir)) continue;
-    const started = performance.now();
-    const stdoutState = { needsNewline: false };
-    onHookEvent?.(relativePath, "start", 0);
-    try {
-      const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
-      try {
-        if (!relativePath.endsWith(".ts"))
-          throw new Error(`build hook has unsupported extension: ${relativePath}`);
-
-        const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
-        try {
-          const command = [
-            process.execPath,
-            join(import.meta.dir, "build-hook-runner.ts"),
-            resolve(snapshotPath),
-            resolve(distDir),
-            resolve(homeRoot),
-          ];
-          await runChildProcess(
-            command,
-            hookDistDir,
-            relativePath,
-            "local build hook",
-            onHookEvent ? stdoutState : undefined,
-          );
-        } finally {
-          await removeHookSnapshot(snapshotPath, distDir);
-        }
-      } finally {
-        await removeEmptyHookDirectories(createdDirectories);
-      }
-      onHookEvent?.(
-        relativePath,
-        "success",
-        (performance.now() - started) / 1000,
-        stdoutState.needsNewline,
-      );
-    } catch (error) {
-      onHookEvent?.(
-        relativePath,
-        "failure",
-        (performance.now() - started) / 1000,
-        stdoutState.needsNewline,
-      );
-      throw error;
-    }
-  }
-}
-
-async function runChildProcess(
-  command: string[],
-  cwd: string,
-  relativePath: string,
-  kind: string,
-  stdoutState?: { needsNewline: boolean },
-): Promise<void> {
-  const proc = Bun.spawn(command, {
-    cwd,
-    env: process.env,
-    stdin: "ignore",
-    stdout: stdoutState ? "pipe" : "inherit",
-    stderr: "inherit",
-  });
-  const forwardStdout = async () => {
-    if (!stdoutState || !proc.stdout) return;
-    for await (const chunk of proc.stdout) {
-      await Bun.write(Bun.stdout, chunk);
-      if (chunk.length > 0) stdoutState.needsNewline = chunk[chunk.length - 1] !== 10;
-    }
-  };
-  const [exitCode] = await Promise.all([proc.exited, forwardStdout()]);
-  if (exitCode !== 0) {
-    const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
-    throw new Error(`${kind} failed: ${relativePath} (${reason})`);
-  }
-}
-
 async function collectEntries(directory: string): Promise<Entry[]> {
   const entries: Entry[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -700,13 +379,4 @@ async function collectEntries(directory: string): Promise<Entry[]> {
     if (isDirectory) entries.push(...(await collectEntries(path)));
   }
   return entries;
-}
-
-if (import.meta.main) {
-  try {
-    await run();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  }
 }

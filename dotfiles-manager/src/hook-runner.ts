@@ -1,13 +1,9 @@
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
+// Shared hook execution helpers for build and apply hooks: command
+// resolution for child processes and snapshot file management.
 import { existsSync } from "node:fs";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { basename, dirname, join } from "node:path";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { randomUUID } from "node:crypto";
-
-declare const process: { execPath: string };
 
 export function resolveHookCommand(
   source: string,

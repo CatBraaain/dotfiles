@@ -1,26 +1,15 @@
 // Internal command entry point for the dotfiles manager.
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { homedir } from "node:os";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { join, resolve } from "node:path";
 import { main as apply } from "./apply.ts";
-import { run as build } from "./build.ts";
+import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
-
-declare const process: { argv: string[]; exitCode: number };
-declare const console: { error(...data: unknown[]): void; log(...data: unknown[]): void };
-declare global {
-  interface ImportMeta {
-    readonly main: boolean;
-    readonly dir: string;
-  }
-}
 
 const usage = "usage: bun dotfiles-manager <apply|diff|managed>";
 
 export async function main(
   args: readonly string[],
-  root = resolve(import.meta.dir, ".."),
+  root = resolve(import.meta.dir, "../.."),
   homeRoot = homedir(),
 ): Promise<number> {
   const [command] = args;

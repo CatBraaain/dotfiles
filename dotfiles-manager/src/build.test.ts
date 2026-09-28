@@ -1,22 +1,14 @@
 import { describe, it, beforeEach, afterEach } from "bun:test";
 import assert from "node:assert/strict";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { existsSync } from "node:fs";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { tmpdir } from "node:os";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { join, relative } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import {
-  applyReplacements,
-  applyReplaceSidecars,
-  parseReplaceSidecar,
-  run,
-  runHooks,
-} from "./build.ts";
+import { applyReplacements, applyReplaceSidecars, parseReplaceSidecar } from "./build-replace.ts";
+import { runHooks } from "./build-hooks.ts";
+import { main } from "./build.ts";
 
 let root: string;
 let distRoot: string;
@@ -50,7 +42,7 @@ describe("run", () => {
     await put(root, "dotfiles/nested/node_modules/pkg/index.js", "skipped\n");
     await put(distRoot, "stale-from-previous-build.txt", "stale\n");
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "plain.txt"), "utf8"), "plain\n");
     assert.equal(await readFile(join(distRoot, "nested/dir/file.txt"), "utf8"), "nested\n");
@@ -62,7 +54,7 @@ describe("run", () => {
   it("copies a plain file named node_modules", async () => {
     await put(root, "dotfiles/node_modules", "ordinary file\n");
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "node_modules"), "utf8"), "ordinary file\n");
   });
@@ -118,7 +110,7 @@ export default async function () {
       );
     }
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "log.txt"), "utf8"), "early\nlate\n");
     assert.equal(await readFile(join(distRoot, "sub/marker.txt"), "utf8"), "ran\n");
@@ -136,7 +128,7 @@ export default async function () {
       `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("02-late.build.ts", 'export default () => Bun.write("ran.txt", "ran");');\n}`,
     );
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(existsSync(join(distRoot, "02-late.build.ts")), true);
     assert.equal(existsSync(join(distRoot, "ran.txt")), false);
@@ -159,7 +151,7 @@ export default async function () {
 }`,
     );
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "nested/order.txt"), "utf8"), "machine\nshared\n");
     assert.equal(existsSync(join(distRoot, "order.txt")), false);
@@ -179,7 +171,7 @@ export default async function () {
     );
     await put(root, "dotfiles/doomed/keep.txt", "x\n");
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(existsSync(join(distRoot, "doomed/keep.txt")), false);
     assert.equal(await readFile(orderFile, "utf8"), "prune\n");
@@ -199,7 +191,7 @@ export default async function () {
     );
     await put(root, "dotfiles/doomed/keep.txt", "keep\n");
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "doomed/keep.txt"), "utf8"), "keep\n");
     assert.equal(existsSync(join(distRoot, "doomed/sub")), false);
@@ -217,7 +209,7 @@ export default function () {
 `,
     );
 
-    await assert.rejects(run(root, "linux", homeRoot), /local build hook failed: fail\.build\.ts/);
+    await assert.rejects(main(root, "linux", homeRoot), /local build hook failed: fail\.build\.ts/);
   });
 
   it("composes merge sidecars over the current home content", async () => {
@@ -237,7 +229,7 @@ export default function () {
       JSON.stringify({ "extra.$append": ["merged"] }),
     );
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.deepEqual(JSON.parse(await readFile(join(distRoot, "kit/settings.json"), "utf8")), {
       mode: "plain",
@@ -279,7 +271,7 @@ export default function () {
         serialize({ mode: "machine" }),
       );
 
-      await run(root, "linux", homeRoot);
+      await main(root, "linux", homeRoot);
 
       assert.equal(
         parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8")).mode,
@@ -321,7 +313,7 @@ export default function () {
         }),
       );
 
-      await run(root, "linux", homeRoot);
+      await main(root, "linux", homeRoot);
 
       const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
       assert.deepEqual(
@@ -345,7 +337,7 @@ export default function () {
       const content = serialize({ mode: "old" });
       await put(root, `dotfiles/${oldSidecar}`, content);
 
-      await run(root, "linux", homeRoot);
+      await main(root, "linux", homeRoot);
 
       assert.equal(existsSync(join(distRoot, `kit/settings.${format}`)), false);
       assert.equal(await readFile(join(distRoot, oldSidecar), "utf8"), content);
@@ -355,7 +347,7 @@ export default function () {
   it("writes an empty TOML merge result with one trailing newline", async () => {
     await put(root, "dotfiles/empty.merge.toml", "");
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "empty.toml"), "utf8"), "\n");
     assert.equal(existsSync(join(distRoot, "empty.merge.toml")), false);
@@ -365,7 +357,7 @@ export default function () {
     await put(root, "dotfiles/settings.toml", 'mode = "plain"\n');
     await put(root, "dotfiles/settings.merge.toml", 'mode = "merged"\n');
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "settings.toml"), "utf8"), 'mode = "merged"\n');
     assert.equal(existsSync(join(distRoot, "settings.merge.toml")), false);
@@ -375,7 +367,7 @@ export default function () {
     await put(root, "dotfiles/config.exact/agents.merge.json", '{"missing.$append": [1]}');
 
     await assert.rejects(
-      run(root, "linux", homeRoot),
+      main(root, "linux", homeRoot),
       /merge target failed: config\/agents\.json: merge append path not found: missing/,
     );
   });
@@ -384,7 +376,7 @@ export default function () {
     await put(root, "dotfiles/config.exact/agents.merge.json", "{ invalid json");
 
     await assert.rejects(
-      run(root, "linux", homeRoot),
+      main(root, "linux", homeRoot),
       /merge target failed: config\/agents\.json:/,
     );
   });
@@ -393,7 +385,7 @@ export default function () {
     await put(root, "dotfiles/settings.merge.json", '{"mode":"shared"}');
     await put(root, "dotfiles/settings.machine.json", '{"mode":"old"}');
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.deepEqual(JSON.parse(await readFile(join(distRoot, "settings.json"), "utf8")), {
       mode: "shared",
@@ -412,13 +404,13 @@ replacements:
 `,
     );
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "EnableAutoUpdates=false\n");
     assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
   it("loads external.data-machine.yaml instead of the old name and replaces the shared repo", async () => {
-    const hook = await readFile(join(import.meta.dir, "../dotfiles/external.build.ts"), "utf8");
+    const hook = await readFile(join(import.meta.dir, "../../dotfiles/external.build.ts"), "utf8");
     await put(root, "dotfiles/external.build.ts", hook);
     await put(
       root,
@@ -453,7 +445,7 @@ replacements:
     await put(homeRoot, "mirrors/github.com/example/repo/.git/build-pull-time", `${Date.now()}\n`);
     await mkdir(join(root, "dotfiles-manager/node_modules"), { recursive: true });
     await symlink(
-      join(import.meta.dir, "node_modules/yaml"),
+      join(import.meta.dir, "../node_modules/yaml"),
       join(root, "dotfiles-manager/node_modules/yaml"),
       "dir",
     );
@@ -463,7 +455,7 @@ replacements:
       [
         process.execPath,
         "-e",
-        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+        `import { main } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await main(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
       ],
       {
         env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
@@ -479,9 +471,9 @@ replacements:
   });
 
   it("runs the root external hook before the path map so fetched entries are moved", async () => {
-    const hook = await readFile(join(import.meta.dir, "../dotfiles/external.build.ts"), "utf8");
+    const hook = await readFile(join(import.meta.dir, "../../dotfiles/external.build.ts"), "utf8");
     const standardHook = await readFile(
-      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      join(import.meta.dir, "../../dotfiles/path-map.build.ts"),
       "utf-8",
     );
     await put(root, "dotfiles/external.build.ts", hook);
@@ -512,7 +504,7 @@ replacements:
     );
     await mkdir(join(root, "dotfiles-manager/node_modules"), { recursive: true });
     await symlink(
-      join(import.meta.dir, "node_modules/yaml"),
+      join(import.meta.dir, "../node_modules/yaml"),
       join(root, "dotfiles-manager/node_modules/yaml"),
       "dir",
     );
@@ -522,7 +514,7 @@ replacements:
       [
         process.execPath,
         "-e",
-        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+        `import { main } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await main(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
       ],
       {
         env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
@@ -540,11 +532,11 @@ replacements:
   });
   it("skips the skill external hook whose folder the path map removes", async () => {
     const hook = await readFile(
-      join(import.meta.dir, "../dotfiles/.agents/skills.exact/external.build.ts"),
+      join(import.meta.dir, "../../dotfiles/.agents/skills.exact/external.build.ts"),
       "utf8",
     );
     const standardHook = await readFile(
-      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      join(import.meta.dir, "../../dotfiles/path-map.build.ts"),
       "utf-8",
     );
     await put(root, "dotfiles/.agents/skills.exact/external.build.ts", hook);
@@ -569,7 +561,7 @@ replacements:
       [
         process.execPath,
         "-e",
-        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+        `import { main } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await main(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
       ],
       {
         env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
@@ -583,11 +575,11 @@ replacements:
   });
   it("runs the skill external hook on linux where the path map keeps .agents", async () => {
     const hook = await readFile(
-      join(import.meta.dir, "../dotfiles/.agents/skills.exact/external.build.ts"),
+      join(import.meta.dir, "../../dotfiles/.agents/skills.exact/external.build.ts"),
       "utf8",
     );
     const standardHook = await readFile(
-      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      join(import.meta.dir, "../../dotfiles/path-map.build.ts"),
       "utf-8",
     );
     await put(root, "dotfiles/.agents/skills.exact/external.build.ts", hook);
@@ -606,19 +598,11 @@ replacements:
       "dotfiles/remap.data.md",
       "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n",
     );
-    await put(
-      homeRoot,
-      "mirrors/github.com/example/skill/skills/demo/SKILL.md",
-      "demo\n",
-    );
-    await put(
-      homeRoot,
-      "mirrors/github.com/example/skill/.git/build-pull-time",
-      `${Date.now()}\n`,
-    );
+    await put(homeRoot, "mirrors/github.com/example/skill/skills/demo/SKILL.md", "demo\n");
+    await put(homeRoot, "mirrors/github.com/example/skill/.git/build-pull-time", `${Date.now()}\n`);
     await mkdir(join(root, "dotfiles-manager/node_modules"), { recursive: true });
     await symlink(
-      join(import.meta.dir, "node_modules/yaml"),
+      join(import.meta.dir, "../node_modules/yaml"),
       join(root, "dotfiles-manager/node_modules/yaml"),
       "dir",
     );
@@ -628,7 +612,7 @@ replacements:
       [
         process.execPath,
         "-e",
-        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+        `import { main } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await main(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
       ],
       {
         env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
@@ -645,13 +629,13 @@ replacements:
   });
   it("appends the machine layer with the sample machine build hook", async () => {
     const hook = await readFile(
-      join(import.meta.dir, "../dotfiles/.gitconfig.build-machine.ts.sample"),
+      join(import.meta.dir, "../../dotfiles/.gitconfig.build-machine.ts.sample"),
       "utf-8",
     );
     await put(root, "dotfiles/.gitconfig.build-machine.ts", hook);
     await put(root, "dotfiles/.gitconfig", "[core]\neditor = code --wait\n");
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(
       await readFile(join(distRoot, ".gitconfig"), "utf8"),
@@ -762,7 +746,7 @@ describe("local build hooks", () => {
       "dotfiles/vscode/format-settings.build.ts",
       `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-cwd.txt", JSON.stringify([process.cwd(), import.meta.dir]));\n}\n`,
     );
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
     const hookCwd = JSON.parse(await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8"));
     assert.deepEqual(hookCwd, [join(distRoot, "vscode"), join(distRoot, "vscode")]);
   });
@@ -780,7 +764,7 @@ describe("local build hooks", () => {
       ].join("\n"),
     );
 
-    await run(root, "linux", relative(process.cwd(), homeRoot));
+    await main(root, "linux", relative(process.cwd(), homeRoot));
 
     assert.deepEqual(JSON.parse(await readFile(join(distRoot, "paths.json"), "utf8")), [
       { distPath: join(distRoot, "missing.txt"), homePath: join(homeRoot, "missing.txt") },
@@ -810,7 +794,7 @@ describe("local build hooks", () => {
       ].join("\n"),
     );
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.deepEqual(JSON.parse(await readFile(join(distRoot, "vscode/paths.json"), "utf8")), [
       {
@@ -835,7 +819,7 @@ describe("local build hooks", () => {
       );
 
       await assert.rejects(
-        run(root, "linux", homeRoot),
+        main(root, "linux", homeRoot),
         /local build hook failed: vscode\/invalid\.build\.ts/,
       );
     });
@@ -844,7 +828,7 @@ describe("local build hooks", () => {
   it("copies .edit.ts as an ordinary file even without a target", async () => {
     await put(root, "dotfiles/missing.edit.ts", `throw new Error("must not execute");`);
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.equal(
       await readFile(join(distRoot, "missing.edit.ts"), "utf8"),
@@ -854,7 +838,7 @@ describe("local build hooks", () => {
 
   it("skips a hook whose folder the path-map standard hook moved", async () => {
     const standardHook = await readFile(
-      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      join(import.meta.dir, "../../dotfiles/path-map.build.ts"),
       "utf-8",
     );
     await put(root, "dotfiles/path-map.build.ts", standardHook);
@@ -869,14 +853,14 @@ describe("local build hooks", () => {
       `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-ran.txt", process.cwd());\n}\n`,
     );
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.ok(!existsSync(join(distRoot, "vscode/hook-ran.txt")));
     assert.ok(!existsSync(join(distRoot, "mapped-vscode/hook-ran.txt")));
   });
   it("skips a hook whose mapped folder is removed", async () => {
     const standardHook = await readFile(
-      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      join(import.meta.dir, "../../dotfiles/path-map.build.ts"),
       "utf-8",
     );
     await put(root, "dotfiles/path-map.build.ts", standardHook);
@@ -891,14 +875,14 @@ describe("local build hooks", () => {
       `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-ran.txt", process.cwd());\n}\n`,
     );
 
-    await run(root, "linux", homeRoot);
+    await main(root, "linux", homeRoot);
 
     assert.ok(!existsSync(join(distRoot, "vscode")));
   });
   it("rejects a machine hook with an unsupported extension during discovery", async () => {
     await put(root, "dotfiles/vscode/local.build-machine.sh", "echo hook output\n");
     await assert.rejects(
-      run(root, "linux", homeRoot),
+      main(root, "linux", homeRoot),
       /build hook has unsupported extension: vscode\/local\.build-machine\.sh/,
     );
   });
