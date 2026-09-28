@@ -35,28 +35,39 @@ async function put(baseDir: string, path: string, content: string): Promise<void
 const autoUpdateReplacements = [{ pattern: "(EnableAutoUpdates)=.*", replacement: "${1}=false" }];
 
 describe("run", () => {
-  it("rebuilds dist as a copy of dotfiles without node_modules", async () => {
+  it("rebuilds dist as a copy of dotfiles", async () => {
     await put(root, "dotfiles/plain.txt", "plain\n");
     await put(root, "dotfiles/nested/dir/file.txt", "nested\n");
-    await put(root, "dotfiles/node_modules/pkg/index.js", "skipped\n");
-    await put(root, "dotfiles/nested/node_modules/pkg/index.js", "skipped\n");
+    await put(root, "dotfiles/node_modules/pkg/index.js", "copied\n");
+    await put(root, "dotfiles/nested/node_modules/pkg/index.js", "copied\n");
     await put(distRoot, "stale-from-previous-build.txt", "stale\n");
 
     await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "plain.txt"), "utf8"), "plain\n");
     assert.equal(await readFile(join(distRoot, "nested/dir/file.txt"), "utf8"), "nested\n");
-    assert.equal(existsSync(join(distRoot, "node_modules")), false);
-    assert.equal(existsSync(join(distRoot, "nested/node_modules")), false);
+    assert.equal(await readFile(join(distRoot, "node_modules/pkg/index.js"), "utf8"), "copied\n");
+    assert.equal(
+      await readFile(join(distRoot, "nested/node_modules/pkg/index.js"), "utf8"),
+      "copied\n",
+    );
     assert.equal(existsSync(join(distRoot, "stale-from-previous-build.txt")), false);
   });
 
-  it("copies a plain file named node_modules", async () => {
-    await put(root, "dotfiles/node_modules", "ordinary file\n");
+  it("skips entries ending in .ignore", async () => {
+    await put(root, "dotfiles/plain.txt", "plain\n");
+    await put(root, "dotfiles/zed.ignore/settings.json", "archived\n");
+    await put(root, "dotfiles/nested/skip.ignore/inside.txt", "archived\n");
+    await put(root, "dotfiles/note.ignore", "archived\n");
+    await put(root, "dotfiles/note.ignore.txt", "kept\n");
 
     await main(root, "linux", homeRoot);
 
-    assert.equal(await readFile(join(distRoot, "node_modules"), "utf8"), "ordinary file\n");
+    assert.equal(await readFile(join(distRoot, "plain.txt"), "utf8"), "plain\n");
+    assert.equal(existsSync(join(distRoot, "zed.ignore")), false);
+    assert.equal(existsSync(join(distRoot, "nested/skip.ignore")), false);
+    assert.equal(existsSync(join(distRoot, "note.ignore")), false);
+    assert.equal(await readFile(join(distRoot, "note.ignore.txt"), "utf8"), "kept\n");
   });
 
   it("runs parent hooks before child folders in UTF-16 name order with their dist folder as cwd", async () => {
