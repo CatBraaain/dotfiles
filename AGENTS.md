@@ -52,7 +52,7 @@ skill はスコープごとに正本を分ける。この規則は skill 本文�
 - プロジェクト専用 skill は、現在の作業対象リポジトリのルート（worktree 使用時はその worktree）の `.agents/skills/` に置く。`dsh-plugins` の読み込み先は `.agents/skills/dsh-plugins/SKILL.md` に限る。`dotfiles/.agents/skills.exact/` や `~/.agents/skills/` を候補にしない。
 - 共有 skill は `dotfiles/.agents/skills.exact/` に置き、build で `~/.agents/skills/` へ展開する。展開先は Agent Skills 標準の共通位置であり、pi を含む複数の harness から読める。
 
-- 外部リポジトリの skill の取り込みは `dotfiles/external.data.yaml` に定義し、`dotfiles/01-external.build.ts` が処理する
+- 外部リポジトリの取り込みは external hook（`dotfiles/external.build.ts` とその隣の `external.data.yaml`）が処理する。skill の取り込みは `dotfiles/.agents/skills.exact/external.data.yaml` に定義し、配置先の `.agents` が `remap.data.md` で削除される OS では fetch も走らない
 - `dotfiles/.pi/agent/skills.exact/` は pi 固有の skill 用の予備。通常は空に保ち、`.keep` で空ディレクトリを維持する（`exact` 属性により、展開先でも `.keep` 以外のファイルが無い状態が保たれる）
 
 skill を読む指示は、ファイルパスではなく skill 名（例: `dsh-plugins` または `/skill:dsh-plugins`）で書く。ファイルを直接読む必要があるときは、現在のリポジトリまたは worktree のルートから `./.agents/skills/dsh-plugins/SKILL.md` を解決する。`~/.agents/skills/...` や `dotfiles/.agents/skills.exact/...` を読み込み先にしない。

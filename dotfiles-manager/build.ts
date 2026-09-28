@@ -608,12 +608,16 @@ export async function runHooks(
 ): Promise<void> {
   for (const hook of hooks) {
     const relativePath = hookRelativePath(hook);
+    const hookDistDir =
+      hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
+    // A hook whose folder an earlier hook removed is no longer part of dist;
+    // skipping is how removals (e.g. the path map) opt hooks out (spec:
+    // SPEC.md §build: ローカルフック 検出と順序).
+    if (!existsSync(hookDistDir)) continue;
     const started = performance.now();
     const stdoutState = { needsNewline: false };
     onHookEvent?.(relativePath, "start", 0);
     try {
-      const hookDistDir =
-        hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
       const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
       try {
         if (!relativePath.endsWith(".ts"))

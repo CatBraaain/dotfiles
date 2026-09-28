@@ -165,7 +165,7 @@ export default async function () {
     assert.equal(existsSync(join(distRoot, "order.txt")), false);
   });
 
-  it("runs a collected hook even after an earlier hook removes it", async () => {
+  it("skips a collected hook after an earlier hook removes it", async () => {
     const orderFile = join(root, "hook-order.txt");
     await put(
       root,
@@ -182,10 +182,10 @@ export default async function () {
     await run(root, "linux", homeRoot);
 
     assert.equal(existsSync(join(distRoot, "doomed/keep.txt")), false);
-    assert.equal(await readFile(orderFile, "utf8"), "prune\ncollected\n");
+    assert.equal(await readFile(orderFile, "utf8"), "prune\n");
   });
 
-  it("preserves existing empty ancestors after executing a removed nested hook", async () => {
+  it("keeps ancestors and skips a nested hook whose folder an earlier hook removed", async () => {
     const orderFile = join(root, "hook-order.txt");
     await put(
       root,
@@ -203,7 +203,7 @@ export default async function () {
 
     assert.equal(await readFile(join(distRoot, "doomed/keep.txt"), "utf8"), "keep\n");
     assert.equal(existsSync(join(distRoot, "doomed/sub")), false);
-    assert.equal(await readFile(orderFile, "utf8"), "ran\n");
+    assert.equal(existsSync(orderFile), false);
   });
 
   it("fails when a hook exits non-zero", async () => {
@@ -418,8 +418,8 @@ replacements:
     assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
   it("loads external.data-machine.yaml instead of the old name and replaces the shared repo", async () => {
-    const hook = await readFile(join(import.meta.dir, "../dotfiles/01-external.build.ts"), "utf8");
-    await put(root, "dotfiles/01-external.build.ts", hook);
+    const hook = await readFile(join(import.meta.dir, "../dotfiles/external.build.ts"), "utf8");
+    await put(root, "dotfiles/external.build.ts", hook);
     await put(
       root,
       "dotfiles/external.data.yaml",
@@ -478,6 +478,171 @@ replacements:
     assert.equal(existsSync(join(distRoot, "old/old.txt")), false);
   });
 
+  it("runs the root external hook before the path map so fetched entries are moved", async () => {
+    const hook = await readFile(join(import.meta.dir, "../dotfiles/external.build.ts"), "utf8");
+    const standardHook = await readFile(
+      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      "utf-8",
+    );
+    await put(root, "dotfiles/external.build.ts", hook);
+    await put(
+      root,
+      "dotfiles/external.data.yaml",
+      `externalSkills:
+  GitAlias/gitalias:
+    destination: .
+    entries: [gitalias.txt]
+`,
+    );
+    await put(root, "dotfiles/path-map.build.ts", standardHook);
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| gitalias.txt | .gitconfig.alias | - | - |\n",
+    );
+    await put(
+      homeRoot,
+      "mirrors/github.com/GitAlias/gitalias/gitalias.txt",
+      "[alias]\nco = checkout\n",
+    );
+    await put(
+      homeRoot,
+      "mirrors/github.com/GitAlias/gitalias/.git/build-pull-time",
+      `${Date.now()}\n`,
+    );
+    await mkdir(join(root, "dotfiles-manager/node_modules"), { recursive: true });
+    await symlink(
+      join(import.meta.dir, "node_modules/yaml"),
+      join(root, "dotfiles-manager/node_modules/yaml"),
+      "dir",
+    );
+
+    // Keep HOME and PATH scoped to the subprocess: the real hook uses HOME for its mirror.
+    const build = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+      ],
+      {
+        env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(
+      await readFile(join(distRoot, ".gitconfig.alias"), "utf8"),
+      "[alias]\nco = checkout\n",
+    );
+    assert.ok(!existsSync(join(distRoot, "gitalias.txt")));
+  });
+  it("skips the skill external hook whose folder the path map removes", async () => {
+    const hook = await readFile(
+      join(import.meta.dir, "../dotfiles/.agents/skills.exact/external.build.ts"),
+      "utf8",
+    );
+    const standardHook = await readFile(
+      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      "utf-8",
+    );
+    await put(root, "dotfiles/.agents/skills.exact/external.build.ts", hook);
+    await put(
+      root,
+      "dotfiles/.agents/skills.exact/external.data.yaml",
+      `externalSkills:
+  example/skill:
+    destination: .agents/skills.exact
+    entries: [skills/demo]
+`,
+    );
+    await put(root, "dotfiles/path-map.build.ts", standardHook);
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| .agents | - |  |  |\n",
+    );
+
+    // Keep HOME and PATH scoped to the subprocess: a fetch would use HOME for its mirror.
+    const build = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+      ],
+      {
+        env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
+    assert.equal(exitCode, 0, stderr);
+    assert.ok(!existsSync(join(homeRoot, "mirrors")));
+  });
+  it("runs the skill external hook on linux where the path map keeps .agents", async () => {
+    const hook = await readFile(
+      join(import.meta.dir, "../dotfiles/.agents/skills.exact/external.build.ts"),
+      "utf8",
+    );
+    const standardHook = await readFile(
+      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
+      "utf-8",
+    );
+    await put(root, "dotfiles/.agents/skills.exact/external.build.ts", hook);
+    await put(
+      root,
+      "dotfiles/.agents/skills.exact/external.data.yaml",
+      `externalSkills:
+  example/skill:
+    destination: .agents/skills.exact
+    entries: [skills/demo]
+`,
+    );
+    await put(root, "dotfiles/path-map.build.ts", standardHook);
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n",
+    );
+    await put(
+      homeRoot,
+      "mirrors/github.com/example/skill/skills/demo/SKILL.md",
+      "demo\n",
+    );
+    await put(
+      homeRoot,
+      "mirrors/github.com/example/skill/.git/build-pull-time",
+      `${Date.now()}\n`,
+    );
+    await mkdir(join(root, "dotfiles-manager/node_modules"), { recursive: true });
+    await symlink(
+      join(import.meta.dir, "node_modules/yaml"),
+      join(root, "dotfiles-manager/node_modules/yaml"),
+      "dir",
+    );
+
+    // Keep HOME and PATH scoped to the subprocess: the real hook uses HOME for its mirror.
+    const build = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { run } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await run(${JSON.stringify(root)}, "linux", ${JSON.stringify(homeRoot)});`,
+      ],
+      {
+        env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(
+      await readFile(join(distRoot, ".agents/skills.exact/demo/SKILL.md"), "utf8"),
+      "demo\n",
+    );
+  });
   it("appends the machine layer with the sample machine build hook", async () => {
     const hook = await readFile(
       join(import.meta.dir, "../dotfiles/.gitconfig.build-machine.ts.sample"),
@@ -687,12 +852,12 @@ describe("local build hooks", () => {
     );
   });
 
-  it("runs a hook after the path-map standard hook moves its folder", async () => {
+  it("skips a hook whose folder the path-map standard hook moved", async () => {
     const standardHook = await readFile(
-      join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
+      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
       "utf-8",
     );
-    await put(root, "dotfiles/02-path-map.build.ts", standardHook);
+    await put(root, "dotfiles/path-map.build.ts", standardHook);
     await put(
       root,
       "dotfiles/remap.data.md",
@@ -706,32 +871,29 @@ describe("local build hooks", () => {
 
     await run(root, "linux", homeRoot);
 
-    assert.equal(
-      await readFile(join(distRoot, "vscode/hook-ran.txt"), "utf8"),
-      join(distRoot, "vscode"),
-    );
-    assert.ok(!existsSync(join(distRoot, "vscode/format-settings.build.ts")));
+    assert.ok(!existsSync(join(distRoot, "vscode/hook-ran.txt")));
+    assert.ok(!existsSync(join(distRoot, "mapped-vscode/hook-ran.txt")));
   });
-  it("runs a collected formatter hook after its mapped folder is removed", async () => {
+  it("skips a hook whose mapped folder is removed", async () => {
     const standardHook = await readFile(
-      join(import.meta.dir, "../dotfiles/02-path-map.build.ts"),
+      join(import.meta.dir, "../dotfiles/path-map.build.ts"),
       "utf-8",
     );
-    const formatHook = await readFile(
-      join(import.meta.dir, "../dotfiles/vscode/format-settings.build.ts"),
-      "utf-8",
-    );
-    await put(root, "dotfiles/02-path-map.build.ts", standardHook);
+    await put(root, "dotfiles/path-map.build.ts", standardHook);
     await put(
       root,
       "dotfiles/remap.data.md",
       "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode | - | - | - |\n",
     );
-    await put(root, "dotfiles/vscode/format-settings.build.ts", formatHook);
+    await put(
+      root,
+      "dotfiles/vscode/format-settings.build.ts",
+      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-ran.txt", process.cwd());\n}\n`,
+    );
 
     await run(root, "linux", homeRoot);
 
-    assert.equal(existsSync(join(distRoot, "vscode")), false);
+    assert.ok(!existsSync(join(distRoot, "vscode")));
   });
   it("rejects a machine hook with an unsupported extension during discovery", async () => {
     await put(root, "dotfiles/vscode/local.build-machine.sh", "echo hook output\n");

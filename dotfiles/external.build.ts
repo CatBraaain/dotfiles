@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-// Standard build hook: fetches the repos of external.data.yaml into dist. Runs as 01-, ahead of the
-// path-map hook, because external entries (e.g. gitalias.txt) are map move
-// targets and the map only sees entries that are already placed. The hook
-// runner executes it with cwd at the dist root, and import.meta.dir resolves
-// to the copied hook in dist.
+// Standard build hook: fetches the repos of external.data.yaml (this folder's
+// own copy) into dist. Lives at the dist root, where the file-name order runs
+// it before the path-map hook, because external entries (e.g. gitalias.txt)
+// are map move targets and the map only sees entries that are already placed.
+// Skill-side externals live in .agents/skills.exact/external.build.ts; their
+// folder is a path-map removal on windows/macos, which opts those fetches out.
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { existsSync, statSync } from "node:fs";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
@@ -397,6 +398,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export default async function build(): Promise<void> {
-  await fetchExternals(join(import.meta.dir, externalFileName), process.cwd());
+type BuildContext = { distDir?: string };
+
+export default async function build(context?: BuildContext): Promise<void> {
+  await fetchExternals(
+    join(import.meta.dir, externalFileName),
+    context?.distDir ?? process.cwd(),
+  );
 }

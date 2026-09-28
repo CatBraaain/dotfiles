@@ -2,20 +2,16 @@
 import { $ } from "bun";
 // @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { existsSync } from "node:fs";
-// @ts-ignore Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { join } from "node:path";
 
+// Lives inside vscode/, so it only runs where the path map keeps the folder
+// (linux). The hook runner skips hooks whose folder the map moved (windows)
+// or removed (macos); the formatter only knows this folder's settings.json.
 export default async function build(): Promise<void> {
-  const settingsPath = existsSync("settings.json")
-    ? "settings.json"
-    : join("..", "AppData", "Roaming", "Code", "User", "settings.json");
-
-  if (existsSync(settingsPath)) {
-    await $`bunx @biomejs/biome@2.5.14 format --write ${settingsPath} \
-      --json-formatter-trailing-commas=all \
-      --json-parse-allow-comments=true \
-      --json-parse-allow-trailing-commas=true \
-      --indent-style=space \
-      --indent-width=2`;
-  }
+  if (!existsSync("settings.json")) return;
+  await $`bunx @biomejs/biome@2.5.14 format --write settings.json \
+    --json-formatter-trailing-commas=all \
+    --json-parse-allow-comments=true \
+    --json-parse-allow-trailing-commas=true \
+    --indent-style=space \
+    --indent-width=2`;
 }
