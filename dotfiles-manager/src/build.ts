@@ -32,7 +32,8 @@ export async function main(
 async function copyDir(sourceDir: string, destinationDir: string): Promise<void> {
   await mkdir(destinationDir, { recursive: true });
   for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (entry.name.endsWith(".ignore")) continue;
+    if (entry.name.endsWith(".ignore") || (entry.isDirectory() && entry.name === "node_modules"))
+      continue;
 
     const sourcePath = join(sourceDir, entry.name);
     const destinationPath = join(destinationDir, entry.name);

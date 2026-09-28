@@ -4,7 +4,7 @@
 
 - 経路表記: 本文のパスは、build 側はリポジトリルートからの相対パス、差分検知と適用側は home 相対パスとする。
 - 用語: home は展開先ディレクトリ（既定は `~`）。適用は dist の内容に home を一致させる処理。差分は dist と home の不一致。フックはライフサイクルの特定のポイントで実行されるリポジトリ内スクリプト。
-- dist は home と同じ相対構造を持つ。`.exact`・`.executable`・`.symlink`・`.apply.<拡張子>`・`.apply-machine.<拡張子>` は dist 上の名前のまま残り、差分検知・適用時に解釈される。置換 sidecar は build 時に完成形へ変換され、dist から取り除かれる。`.ignore` で終わるエントリは build 時に dist へコピーされない。
+- dist は home と同じ相対構造を持つ。`.exact`・`.executable`・`.symlink`・`.apply.<拡張子>`・`.apply-machine.<拡張子>` は dist 上の名前のまま残り、差分検知・適用時に解釈される。置換 sidecar は build 時に完成形へ変換され、dist から取り除かれる。`.ignore` で終わるエントリと `node_modules` ディレクトリは build 時に dist へコピーされない。
 - chezmoi 命名（`dot_`・`exact_`・`executable_`・`symlink_` の source 名変換）は存在せず、dist に chezmoi の設定ファイル・state も現れない。
 
 ## ライフサイクル
@@ -61,7 +61,7 @@ command diff success (1.28s)
 
 ## build: dist 再構築
 
-dist を削除し、`dotfiles/` の完全なコピーとして作り直す。名前が `.ignore` で終わるエントリ（ディレクトリと通常ファイル。ディレクトリは配下ごと）は dist へコピーしない。前回実行で dist にあった内容は残らない。
+dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ignore` で終わるエントリ（ディレクトリと通常ファイル）、および名前が `node_modules` のディレクトリは、その配下ごと dist へコピーしない。前回実行で dist にあった内容は残らない。
 
 ## build: ローカルフック
 

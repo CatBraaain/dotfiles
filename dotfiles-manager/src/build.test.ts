@@ -38,20 +38,25 @@ describe("run", () => {
   it("rebuilds dist as a copy of dotfiles", async () => {
     await put(root, "dotfiles/plain.txt", "plain\n");
     await put(root, "dotfiles/nested/dir/file.txt", "nested\n");
-    await put(root, "dotfiles/node_modules/pkg/index.js", "copied\n");
-    await put(root, "dotfiles/nested/node_modules/pkg/index.js", "copied\n");
     await put(distRoot, "stale-from-previous-build.txt", "stale\n");
 
     await main(root, "linux", homeRoot);
 
     assert.equal(await readFile(join(distRoot, "plain.txt"), "utf8"), "plain\n");
     assert.equal(await readFile(join(distRoot, "nested/dir/file.txt"), "utf8"), "nested\n");
-    assert.equal(await readFile(join(distRoot, "node_modules/pkg/index.js"), "utf8"), "copied\n");
-    assert.equal(
-      await readFile(join(distRoot, "nested/node_modules/pkg/index.js"), "utf8"),
-      "copied\n",
-    );
     assert.equal(existsSync(join(distRoot, "stale-from-previous-build.txt")), false);
+  });
+
+  it("skips node_modules directories without excluding files of the same name", async () => {
+    await put(root, "dotfiles/node_modules/pkg/index.js", "excluded\n");
+    await put(root, "dotfiles/nested/node_modules/pkg/index.js", "excluded\n");
+    await put(root, "dotfiles/other/node_modules", "kept\n");
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(existsSync(join(distRoot, "node_modules")), false);
+    assert.equal(existsSync(join(distRoot, "nested/node_modules")), false);
+    assert.equal(await readFile(join(distRoot, "other/node_modules"), "utf8"), "kept\n");
   });
 
   it("skips entries ending in .ignore", async () => {
