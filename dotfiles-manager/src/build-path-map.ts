@@ -180,7 +180,8 @@ export async function createCopyRouter(platform: Platform): Promise<CopyRouter> 
       for (let index = 0; index < contexts.length; index++) {
         const context = contexts[index];
         if (!context) continue;
-        const relativePath = relative(context.sourceDir, sourcePath);
+        // Remap keys are "/"-separated; win32 path.relative returns "\\"-separated paths.
+        const relativePath = relative(context.sourceDir, sourcePath).replaceAll("\\", "/");
         if (isIgnoredTarget(relativePath, context.removals, isFile)) return { kind: "skip" };
         const move = context.moves.find(({ source }) => source === relativePath);
         if (move)
