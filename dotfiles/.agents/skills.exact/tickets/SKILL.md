@@ -168,7 +168,7 @@ Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_creat
 - 本文の更新は `ticket_edit`（CLI: `ticket edit <id> '<old>' '<new>'`）。先に `ticket_show` で最新の本文を読み、frontmatter を除く本文（H1 を含む）から一度だけ現れる文字列を `old` として指定する。`new` は置換後の文字列。0回または複数回の一致なら失敗する
 - 本文追記を要する `closed`・`blocked`・`cancelled` 等の遷移では、`ticket_edit` で必要な記録を追加してから `ticket_set` で status・`after` を変更する。両操作を原子的にまとめる tool / CLI はない。片方が失敗したら再実行を重ねず `ticket_show` で現状を確認してから対処する
 - `after` の不存在・`closed`・`cancelled` 指定や循環は tool・CLI が検証して失敗する。一方、`open` かつ依存未解決は `next` の対象外になるだけで、`set` 自体は許される。着手前には `ticket_show` で status と `after` を確認する
-- CLI と tool の振る舞いの正本は `~/.agents/cli/ticket.spec.md`（CLI）と `~/.agents/cli/ticket-tools.spec.md`（tool）である
+- CLI と tool の振る舞いの正本は `~/.agents/cli/ticket/ticket.spec.md`（CLI）と `~/.agents/cli/ticket/ticket-tools.spec.md`（tool）である
 
 fs tools で直接読み書きするときは、本文は必要な箇所だけ編集し、可能な限り既存の内容を維持する。frontmatter も必要に応じて編集してよいが、完全な保護や構造の維持は保証しない。壊れた場合は内容を確認し、修正する。
 

@@ -1,15 +1,14 @@
-// Thin pi extension wrapping the `browse` CLI (dotfiles/.agents/cli/, spec:
-// browse.spec.md). The tools spawn the CLI's search / fetch subcommands as a
-// child process, turn its --json stdout into tool text + details, and
-// propagate non-zero exits as tool errors. All search/fetch behavior
-// (backends, challenge handling, server bootstrap, flock serialization)
-// lives in the CLI.
+// Thin pi extension wrapping the `browse` CLI (the dotfiles/.agents/cli/
+// browse project deployed to ~/.agents/cli/browse, spec: browse.spec.md). The
+// tools spawn the CLI's search / fetch subcommands as a child process, turn
+// its --json stdout into tool text + details, and propagate non-zero exits as
+// tool errors. All search/fetch behavior (backends, challenge handling,
+// server bootstrap, flock serialization) lives in the CLI.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,12 +24,10 @@ export function browseCliDir(env: Record<string, string | undefined> = process.e
   return env.BROWSE_CLI_DIR ?? join(EXTENSION_DIR, "..", "..", "..", "..", ".agents", "cli");
 }
 
-// The source tree keeps the ".executable" suffix; the deployed copy
-// is a plain "browse" with the exec bit set. The CLI is spawned through
-// `bun <script>`, so only the file has to exist.
+// The CLI project directory (bun resolves its package.json main field, so
+// spawning needs no exec bit and only `bun` on PATH).
 export function browseScript(env: Record<string, string | undefined> = process.env): string {
-  const sourceName = join(browseCliDir(env), "browse.executable");
-  return existsSync(sourceName) ? sourceName : join(browseCliDir(env), "browse");
+  return join(browseCliDir(env), "browse");
 }
 
 // --- child process execution ---

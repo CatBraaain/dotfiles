@@ -282,17 +282,17 @@ describe("CLI path resolution", () => {
     assert.equal(browseScript({ BROWSE_CLI_DIR: "/opt/cli" }), "/opt/cli/browse");
   });
 
-  it("prefers the source-tree .executable suffix", () => {
+  it("always returns the CLI project directory name", () => {
     const dir = mkdtempSync(join(tmpdir(), "web-cli-"));
     try {
       writeFileSync(join(dir, "browse.executable"), "");
-      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, "browse.executable"));
+      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, "browse"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("falls back to the plain deployed file name", () => {
+  it("resolves the deployed project directory name", () => {
     const dir = mkdtempSync(join(tmpdir(), "web-cli-"));
     try {
       writeFileSync(join(dir, "browse"), "");

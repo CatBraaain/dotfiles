@@ -2,7 +2,7 @@
 // order: 設定 -> CLI 子プロセス wiring -> search provider -> fetch provider ->
 // available() -> エラー伝播 -> 提供する plugin. The CLI itself (engine chain,
 // servers, Reddit / StackOverflow routes) has its own contract in
-// dotfiles/.agents/cli/browse.spec.md and is not exercised here: the CLI
+// dotfiles/.agents/cli/browse/browse.spec.md and is not exercised here: the CLI
 // spawn is mocked at the exec seam.
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
@@ -134,16 +134,12 @@ describe("CLI の起動引数と環境（browseScript・buildCliEnv・execCli �
     assert.equal(browseCliDir({ BROWSE_CLI_DIR: "/opt/web-cli" }), "/opt/web-cli");
   });
 
-  it("browseScript は <dir>/browse を返し、source tree の browse.executable を優先する", () => {
+  it("browseScript は <dir>/browse を返す（bun が package.json の main を解決する）", () => {
     const directory = mkdtempSync(join(tmpdir(), "web-search-cli-"));
     try {
       const plain = join(directory, "browse");
       writeFileSync(plain, "");
       assert.equal(browseScript({ BROWSE_CLI_DIR: directory }), plain);
-
-      const source = join(directory, "browse.executable");
-      writeFileSync(source, "");
-      assert.equal(browseScript({ BROWSE_CLI_DIR: directory }), source);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

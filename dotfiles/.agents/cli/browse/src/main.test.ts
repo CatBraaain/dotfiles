@@ -5,7 +5,9 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const browsePath = join(import.meta.dir, "browse.executable");
+// The CLI project directory: spawned as `bun <projectDir>` so bun resolves
+// package.json's main field, exactly like the deployed `~/.agents/cli/browse`.
+const browseProjectDir = join(import.meta.dir, "..");
 const displayUsage = "usage: browse display show\n       browse display hide\n";
 const serverUsage = "usage: browse server start\n       browse server restart\n";
 
@@ -37,12 +39,14 @@ esac
 }
 
 // A stand-in browser process that browse's own restart machinery can see. The
-// machinery validates /proc/<pid>/cmdline: args[1] must name the browse script
-// and args[2] must be "__server", so we exec tail with exactly that argv (tail
-// keeps following browse's source even though the "__server" file is missing,
-// and the trailing -f survives GNU option permutation). Both the pgrep sweep
-// and the cmdline validation behind `browse server restart` match it, and the
-// process dies if display show/hide ever stopped or restarted the server.
+// machinery validates /proc/<pid>/cmdline: args[1] must name the CLI project
+// directory and args[2] must be "__server", so we exec tail with exactly that
+// argv (tail keeps following the project's package.json — a real file — even
+// though the "__server" file is missing, and the trailing -f survives GNU
+// option permutation; a directory alone would make tail give up). Both the
+// pgrep sweep and the cmdline validation behind `browse server restart` match
+// it, and the process dies if display show/hide ever stopped or restarted the
+// server.
 // Requires python3 (any POSIX install with it); skipped on Windows together
 // with the rest of the display suite.
 function startBrowserProcess(): ChildProcess {
@@ -50,7 +54,7 @@ function startBrowserProcess(): ChildProcess {
     "python3",
     [
       "-c",
-      `import os; os.execvp("tail", ["browse-fake-server", ${JSON.stringify(browsePath)}, "__server", "-f"])`,
+      `import os; os.execvp("tail", ["browse-fake-server", ${JSON.stringify(browseProjectDir)}, "__server", ${JSON.stringify(join(browseProjectDir, "package.json"))}, "-f"])`,
     ],
     { stdio: "ignore" },
   );
@@ -96,7 +100,7 @@ function runBrowse(
   logPath: string,
   extraEnv: Record<string, string> = {},
 ): CommandResult {
-  const result = spawnSync(process.execPath, [browsePath, ...args], {
+  const result = spawnSync(process.execPath, [browseProjectDir, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -121,7 +125,7 @@ function runBrowseAsync(
   extraEnv: Record<string, string> = {},
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [browsePath, ...args], {
+    const child = spawn(process.execPath, [browseProjectDir, ...args], {
       env: {
         ...process.env,
         ...extraEnv,
@@ -186,7 +190,7 @@ describe("browse server", () => {
 
 describe("browse display", () => {
   if (process.platform === "win32") {
-    it.skip("requires a POSIX x11vnc test double");
+    it.skip("requires a POSIX x11vnc test double", () => {});
     return;
   }
 
@@ -261,7 +265,7 @@ describe("browse display", () => {
       for (const [action, failedRequest] of [
         ["show", "-display :99 -R nodeny"],
         ["hide", "-display :99 -R disconnect:all"],
-      ]) {
+      ] as const) {
         const result = runBrowse(["display", action], root, logPath, {
           X11VNC_ERROR: "first error\nsecond error",
           X11VNC_EXIT: "7",

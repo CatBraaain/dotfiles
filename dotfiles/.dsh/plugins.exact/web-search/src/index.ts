@@ -7,7 +7,7 @@
  * JSON, and propagates CLI failures as `WebError`. The exploration chain
  * (engine order, challenge detection, Reddit / StackOverflow routes, server
  * bootstrap, timeouts) is owned by the CLI — its behavior contract is
- * `dotfiles/.agents/cli/browse.spec.md`; this plugin's contract is SPEC.md.
+ * `dotfiles/.agents/cli/browse/browse.spec.md`; this plugin's contract is SPEC.md.
  *
  * `build.apply.ts` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external. The shared
@@ -171,12 +171,10 @@ export function browseCliDir(env: Record<string, string | undefined> = process.e
   return env.BROWSE_CLI_DIR ?? join(homedir(), ".agents", "cli");
 }
 
-// The source tree keeps the ".executable" suffix; the deployed copy
-// is a plain "browse" with the exec bit set. The CLI is spawned through
-// `bun <script>`, so only the file has to exist.
+// The CLI project directory; bun resolves its package.json main field, so
+// spawning needs no exec bit (`bun <script>` pattern of the web-search plugin).
 export function browseScript(env: Record<string, string | undefined> = process.env): string {
-  const sourceName = join(browseCliDir(env), "browse.executable");
-  return existsSync(sourceName) ? sourceName : join(browseCliDir(env), "browse");
+  return join(browseCliDir(env), "browse");
 }
 
 // The CLI reads its connect targets from these env vars; the plugin's resolved

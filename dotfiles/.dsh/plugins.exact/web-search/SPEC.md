@@ -4,7 +4,7 @@
 
 本 plugin は、dsh web profile の `web_search` / `web_fetch` ツール（`@deepseek-ai/dsh-tool-web`）に対し、search provider（id `camoufox-openserp`）と fetch provider（id `camoufox-trafilatura`）を host 側で提供する。client 側のコードは持たない。
 
-各 provider は共有 CLI コマンド `browse`（`dotfiles/.agents/cli`、展開先 `~/.agents/cli/`。振る舞いの正本は `dotfiles/.agents/cli/browse.spec.md`）の薄いラッパーである: 呼び出しごとに `bun <browse スクリプト> search|fetch <引数> --json` を子プロセス起動し、stdout の JSON から契約型（`WebSearchResult` / `WebFetchResult`）を組み立てる。エンジン試行順・challenge 検出・Reddit / StackOverflow 経路・常駐サーバーの起動・タイムアウトは CLI の受け持ちであり、本 plugin は再実装しない。
+各 provider は共有 CLI コマンド `browse`（`dotfiles/.agents/cli/browse`、展開先 `~/.agents/cli/browse/`。振る舞いの正本は `dotfiles/.agents/cli/browse/browse.spec.md`）の薄いラッパーである: 呼び出しごとに `bun <browse プロジェクトディレクトリ> search|fetch <引数> --json` を子プロセス起動し、stdout の JSON から契約型（`WebSearchResult` / `WebFetchResult`）を組み立てる。エンジン試行順・challenge 検出・Reddit / StackOverflow 経路・常駐サーバーの起動・タイムアウトは CLI の受け持ちであり、本 plugin は再実装しない。
 
 provider の選択は dsh 本家契約（`ctx.web`、`@deepseek-ai/dsh-web`）に従う。設定未指定のとき usable な provider が 1 つだけなので、本 plugin を追加しただけで本家 tool-web の既定経路になる（`WEB_PROVIDER_AMBIGUOUS` は本 plugin 単独では起きない）。
 
@@ -58,7 +58,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 
 CLI スクリプトは `~/.agents/cli/browse` で解決する。本 plugin の bundle は常に展開先（`~/.dsh/plugins/web-search/`）で動くため、ホームディレクトリ基準の解決を使う（pi 拡張と違い、source tree からの相対位置には依存しない）。
 
-環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `~/.agents/cli` の代わりに使う（テスト・開発用。pi 拡張のラッパーと同じ規則）。ディレクトリ内に `browse.executable`（source tree 名）があればそれを、無ければ `browse` を使う。いずれも `bun <script>` として起動するため、スクリプトの実行ビットには依存しない。
+環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `~/.agents/cli` の代わりに使う（テスト・開発用。pi 拡張のラッパーと同じ規則）。CLI プロジェクトは `bun <script>` として起動し、bun が `browse` ディレクトリの package.json `main` を解決するため、実行ビットには依存しない。
 
 ## 常駐サーバー
 

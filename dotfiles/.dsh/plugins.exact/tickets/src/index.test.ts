@@ -1,5 +1,5 @@
 // Tests for dotfiles-dsh-tickets. Cases follow the oracle spec
-// (dotfiles/.agents/cli/ticket-tools.spec.md): argument mapping, session cwd,
+// (dotfiles/.agents/cli/ticket/ticket-tools.spec.md): argument mapping, session cwd,
 // tool descriptions (wrapped CLI subcommand, argument meanings, next-default
 // selector, ticket_set / ticket_edit pre-CLI validation), compiled parameter
 // schemas, and result rendering (the CLI's text output passed through). The

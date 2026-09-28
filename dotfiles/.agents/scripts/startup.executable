@@ -44,9 +44,9 @@ if [ -n "$camoufox_authority" ]; then
 	camoufox_port="${camoufox_authority##*:}"
 	if ! port_open "$camoufox_host" "$camoufox_port"; then
 		camoufox_cli="$HOME/.agents/cli/browse"
-		[ -f "$camoufox_cli" ] || camoufox_cli="$camoufox_cli.executable"
 		log_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pi/web-search"
-		if [ -f "$camoufox_cli" ] && command -v bun >/dev/null 2>&1; then
+		# The CLI is a bun project: `bun <dir>` resolves package.json's main field.
+		if [ -f "$camoufox_cli/package.json" ] && command -v bun >/dev/null 2>&1; then
 			mkdir -p "$log_dir"
 			nohup bun "$camoufox_cli" server start >>"$log_dir/camoufox-server.log" 2>&1 &
 		fi
