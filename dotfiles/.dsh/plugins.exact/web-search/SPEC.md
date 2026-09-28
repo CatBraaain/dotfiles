@@ -4,7 +4,7 @@
 
 本 plugin は、dsh web profile の `web_search` / `web_fetch` ツール（`@deepseek-ai/dsh-tool-web`）に対し、search provider（id `camoufox-openserp`）と fetch provider（id `camoufox-trafilatura`）を host 側で提供する。client 側のコードは持たない。
 
-各 provider は共有 CLI コマンド `browse`（`dotfiles/.agents/cli/browse`、展開先 `~/.agents/cli/browse/`。振る舞いの正本は `dotfiles/.agents/cli/browse/browse.spec.md`）の薄いラッパーである: 呼び出しごとに `bun <browse プロジェクトディレクトリ> search|fetch <引数> --json` を子プロセス起動し、stdout の JSON から契約型（`WebSearchResult` / `WebFetchResult`）を組み立てる。エンジン試行順・challenge 検出・Reddit / StackOverflow 経路・常駐サーバーの起動・タイムアウトは CLI の受け持ちであり、本 plugin は再実装しない。
+各 provider は共有 CLI コマンド `browse`（`dotfiles/.agents/cli.exact/browse`、展開先 `~/.agents/cli/browse/`。振る舞いの正本は `dotfiles/.agents/cli.exact/browse/browse.spec.md`）の薄いラッパーである: 呼び出しごとに `bun <browse プロジェクトディレクトリ> search|fetch <引数> --json` を子プロセス起動し、stdout の JSON から契約型（`WebSearchResult` / `WebFetchResult`）を組み立てる。エンジン試行順・challenge 検出・Reddit / StackOverflow 経路・常駐サーバーの起動・タイムアウトは CLI の受け持ちであり、本 plugin は再実装しない。
 
 provider の選択は dsh 本家契約（`ctx.web`、`@deepseek-ai/dsh-web`）に従う。設定未指定のとき usable な provider が 1 つだけなので、本 plugin を追加しただけで本家 tool-web の既定経路になる（`WEB_PROVIDER_AMBIGUOUS` は本 plugin 単独では起きない）。
 
@@ -65,7 +65,7 @@ CLI スクリプトは `~/.agents/cli/browse` で解決する。本 plugin の b
 サーバーの起動・ヘルスチェック・待ち（15 秒上限）は CLI の受け持ちである。本 plugin はサーバーを起動しない。
 
 - camoufox server 本体は `browse` CLI に内蔵され、`browse server start` サブコマンドが起動する。本 plugin は server を起動せず、server 本体も同梱しない。pi 拡張と同じ単一の server を共有する
-- サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts/startup.spec.md`）が `bun ~/.agents/cli/browse server start` の detached spawn で行うのが受け持ちであり、本 plugin も CLI も起動時にこれを行わない
+- サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts.exact/startup.spec.md`）が `bun ~/.agents/cli/browse server start` の detached spawn で行うのが受け持ちであり、本 plugin も CLI も起動時にこれを行わない
 - camoufox server のログは `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記される（CLI が行う）
 
 ## 同種リクエストの直列化

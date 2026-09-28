@@ -1,6 +1,6 @@
 # web-search 拡張機能 Spec
 
-pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli/` の `browse` CLI コマンド（spec: `dotfiles/.agents/cli/browse/browse.spec.md`。以下 **CLI spec**）が持つ。この拡張は CLI の search / fetch サブコマンドを子プロセスで起動し、tool の入出力への変換のみを行う薄いラッパーである。
+pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli.exact/` の `browse` CLI コマンド（spec: `dotfiles/.agents/cli.exact/browse/browse.spec.md`。以下 **CLI spec**）が持つ。この拡張は CLI の search / fetch サブコマンドを子プロセスで起動し、tool の入出力への変換のみを行う薄いラッパーである。
 
 ## ツール一覧
 
@@ -60,11 +60,11 @@ camoufox server の表示モード（Linux 既定の Xvfb `:99` 上の headed �
 
 ## CLI プロジェクトディレクトリのパス解決
 
-CLI プロジェクトディレクトリ（`browse/`）は、この拡張のディレクトリから4階層上の `.agents/cli/` ディレクトリで解決する。source tree（`dotfiles/.pi/agent/extensions.exact/web-search/` → `dotfiles/.agents/cli/`）と展開後（`~/.pi/agent/extensions/web-search/` → `~/.agents/cli/`）のどちらも同じ相対位置で解決できるためである。
+CLI プロジェクトディレクトリ（`browse/`）は、この拡張のディレクトリから4階層上の `.agents/` 配下で解決する。source tree の `dotfiles/.pi/agent/extensions.exact/web-search/` からは `dotfiles/.agents/cli.exact/`、展開後の `~/.pi/agent/extensions/web-search/` からは `~/.agents/cli/` を使う。
 
 `bun <dir>` で起動し、bun が `browse` ディレクトリの package.json `main` を解決するため、実行ビットには依存しない。
 
-環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `.agents/cli` の代わりに使う（テスト・開発用）。
+環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを配置ごとの既定ディレクトリの代わりに使う（テスト・開発用）。
 
 ## 表示（TUI）
 
@@ -90,6 +90,6 @@ CLI プロジェクトディレクトリ（`browse/`）は、この拡張のデ�
 
 | 変数 | 影響 |
 | --- | --- |
-| `BROWSE_CLI_DIR` | CLI スクリプトのディレクトリ（既定は拡張から4階層上の `.agents/cli`） |
+| `BROWSE_CLI_DIR` | CLI スクリプトのディレクトリ（既定は source tree で `.agents/cli.exact`、展開後は `.agents/cli`） |
 | `CAMOUFOX_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される |
 | `OPENSERP_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される |

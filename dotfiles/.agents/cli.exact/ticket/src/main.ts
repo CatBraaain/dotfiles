@@ -1,5 +1,5 @@
 // ticket CLI — human/agent interface for the markdown ticket store.
-// Spec: dotfiles/.agents/cli/ticket/ticket.spec.md
+// Spec: dotfiles/.agents/cli.exact/ticket/ticket.spec.md
 // Started as `bun ~/.agents/cli/ticket` (bun resolves package.json's main
 // field to this file), so no exec bit or dependencies are required.
 

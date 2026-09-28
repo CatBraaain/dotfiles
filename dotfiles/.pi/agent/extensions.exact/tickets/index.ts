@@ -1,8 +1,8 @@
 // pi extension registering five ticket tools that wrap the `ticket` CLI
-// (the dotfiles/.agents/cli/ticket project, deployed to ~/.agents/cli/ticket
+// (the dotfiles/.agents/cli.exact/ticket project, deployed to ~/.agents/cli/ticket
 // and spawned as `bun <dir>` so bun resolves package.json's main field).
-// Behavior spec: dotfiles/.agents/cli/ticket/ticket-tools.spec.md (tools) and
-// dotfiles/.agents/cli/ticket/ticket.spec.md (CLI / store).
+// Behavior spec: dotfiles/.agents/cli.exact/ticket/ticket-tools.spec.md (tools) and
+// dotfiles/.agents/cli.exact/ticket/ticket.spec.md (CLI / store).
 
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";

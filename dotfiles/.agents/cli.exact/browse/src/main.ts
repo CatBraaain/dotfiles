@@ -1,7 +1,7 @@
 // browse CLI — one CLI for web search, web fetch and the shared camoufox
 // server. Started as `bun ~/.agents/cli/browse` (bun resolves package.json's
 // main field to this file), so no exec bit or dependencies are required.
-// Spec: dotfiles/.agents/cli/browse/browse.spec.md
+// Spec: dotfiles/.agents/cli.exact/browse/browse.spec.md
 //
 // Subcommands:
 //   browse search "<query>" [--lang <code>] [--json]

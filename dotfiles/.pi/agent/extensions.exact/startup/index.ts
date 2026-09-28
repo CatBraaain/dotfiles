@@ -11,8 +11,8 @@ export type SpawnFn = (
 ) => ChildProcess;
 
 // Shared priming script deployed from
-// dotfiles/.agents/scripts/startup.executable (behavior contract:
-// dotfiles/.agents/scripts/startup.spec.md).
+// dotfiles/.agents/scripts.exact/startup.executable (behavior contract:
+// dotfiles/.agents/scripts.exact/startup.spec.md).
 export function startupScriptPath(home: string = homedir()): string {
   return join(home, ".agents", "scripts", "startup");
 }

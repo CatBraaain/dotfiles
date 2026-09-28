@@ -1,6 +1,6 @@
 # startup 拡張機能 Spec
 
-pi のセッション開始時に、共通 priming スクリプト `~/.agents/scripts/startup`（振る舞い契約は `dotfiles/.agents/scripts/startup.spec.md`）を detached 実行する。エージェント向けツール、コマンド、UI 表示は提供しない。スクリプトの中身（何を priming するか）はこの拡張の関知外であり、スクリプト側の spec が正本である。
+pi のセッション開始時に、共通 priming スクリプト `~/.agents/scripts/startup`（振る舞い契約は `dotfiles/.agents/scripts.exact/startup.spec.md`）を detached 実行する。エージェント向けツール、コマンド、UI 表示は提供しない。スクリプトの中身（何を priming するか）はこの拡張の関知外であり、スクリプト側の spec が正本である。
 
 ## 起動条件
 

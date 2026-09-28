@@ -1,4 +1,4 @@
-// Thin pi extension wrapping the `browse` CLI (the dotfiles/.agents/cli/
+// Thin pi extension wrapping the `browse` CLI (the dotfiles/.agents/cli.exact/
 // browse project deployed to ~/.agents/cli/browse, spec: browse.spec.md). The
 // tools spawn the CLI's search / fetch subcommands as a child process, turn
 // its --json stdout into tool text + details, and propagate non-zero exits as
@@ -9,19 +9,21 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
 // --- CLI path resolution ---
 
-// Four levels up reaches .agents/cli in both layouts: the source tree has
-// .pi/agent/extensions.exact/web-search -> dotfiles/.agents/cli, the deployed
-// tree has .pi/agent/extensions/web-search -> ~/.agents/cli. BROWSE_CLI_DIR
-// overrides both for tests and manual development.
-export function browseCliDir(env: Record<string, string | undefined> = process.env): string {
-  return env.BROWSE_CLI_DIR ?? join(EXTENSION_DIR, "..", "..", "..", "..", ".agents", "cli");
+// Four levels up reaches .agents in both layouts. The source tree uses
+// cli.exact, while the deployed tree uses cli. BROWSE_CLI_DIR overrides both.
+export function browseCliDir(
+  env: Record<string, string | undefined> = process.env,
+  extensionDir = EXTENSION_DIR,
+): string {
+  const cliName = basename(dirname(extensionDir)) === "extensions.exact" ? "cli.exact" : "cli";
+  return env.BROWSE_CLI_DIR ?? join(extensionDir, "..", "..", "..", "..", ".agents", cliName);
 }
 
 // The CLI project directory (bun resolves its package.json main field, so

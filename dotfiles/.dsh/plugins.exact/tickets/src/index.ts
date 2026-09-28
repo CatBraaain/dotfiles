@@ -2,9 +2,9 @@
  * dotfiles-dsh-tickets — dsh port of the pi `tickets` extension.
  *
  * Registers five tools wrapping the ticket CLI (`~/.agents/cli/ticket`, the
- * dotfiles/.agents/cli/ticket project spawned as `bun <dir>`):
+ * dotfiles/.agents/cli.exact/ticket project spawned as `bun <dir>`):
  * ticket_list, ticket_show, ticket_create, ticket_set, ticket_edit. The
- * behavior contract is dotfiles/.agents/cli/ticket/ticket-tools.spec.md
+ * behavior contract is dotfiles/.agents/cli.exact/ticket/ticket-tools.spec.md
  * (harness-neutral oracle; the CLI itself is specified by ticket.spec.md).
  * The tools never touch the ticket store directly — every read and write
  * spawns the CLI and its text output becomes the model-facing content

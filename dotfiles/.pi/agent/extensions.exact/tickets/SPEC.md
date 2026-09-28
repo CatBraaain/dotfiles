@@ -2,9 +2,9 @@
 
 ## 対象と目的
 
-tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli/ticket/` の展開先 `~/.agents/cli/ticket/`。`bun ~/.agents/cli/ticket` として起動し、bun が package.json の `main` を解決する）の操作手段を tool として提供する pi extension である。5 つの tool を `pi.registerTool` で登録する。
+tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli.exact/ticket/` の展開先 `~/.agents/cli/ticket/`。`bun ~/.agents/cli/ticket` として起動し、bun が package.json の `main` を解決する）の操作手段を tool として提供する pi extension である。5 つの tool を `pi.registerTool` で登録する。
 
-tool 群の振る舞いの正本は `dotfiles/.agents/cli/ticket/ticket-tools.spec.md`、CLI とストアの振る舞いの正本は `dotfiles/.agents/cli/ticket/ticket.spec.md` である。この仕様は本 extension の構成・登録 tool・依存のみを定め、振る舞いを再定義しない。
+tool 群の振る舞いの正本は `dotfiles/.agents/cli.exact/ticket/ticket-tools.spec.md`、CLI とストアの振る舞いの正本は `dotfiles/.agents/cli.exact/ticket/ticket.spec.md` である。この仕様は本 extension の構成・登録 tool・依存のみを定め、振る舞いを再定義しない。
 
 ## 構成
 

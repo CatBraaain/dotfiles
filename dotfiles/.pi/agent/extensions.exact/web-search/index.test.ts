@@ -278,7 +278,9 @@ describe("CLI error propagation", () => {
 
 describe("CLI path resolution", () => {
   it("resolves the script under BROWSE_CLI_DIR when set", () => {
+    const deployedExtensionDir = "/home/example/.pi/agent/extensions/web-search";
     assert.equal(browseCliDir({ BROWSE_CLI_DIR: "/opt/cli" }), "/opt/cli");
+    assert.equal(browseCliDir({ BROWSE_CLI_DIR: "/opt/cli" }, deployedExtensionDir), "/opt/cli");
     assert.equal(browseScript({ BROWSE_CLI_DIR: "/opt/cli" }), "/opt/cli/browse");
   });
 
@@ -302,9 +304,21 @@ describe("CLI path resolution", () => {
     }
   });
 
-  it("defaults to .agents/cli four levels above this extension", () => {
+  it("defaults to source-tree .agents/cli.exact four levels above this extension", () => {
     const extensionDir = dirname(fileURLToPath(import.meta.url));
-    assert.equal(browseCliDir({}), join(extensionDir, "..", "..", "..", "..", ".agents", "cli"));
+    assert.equal(
+      browseCliDir({}),
+      join(extensionDir, "..", "..", "..", "..", ".agents", "cli.exact"),
+    );
+    assert.equal(browseScript({}), join(browseCliDir({}), "browse"));
+  });
+
+  it("defaults to deployed .agents/cli four levels above the deployed extension", () => {
+    const extensionDir = "/home/example/.pi/agent/extensions/web-search";
+    assert.equal(
+      browseCliDir({}, extensionDir),
+      join(extensionDir, "..", "..", "..", "..", ".agents", "cli"),
+    );
   });
 });
 

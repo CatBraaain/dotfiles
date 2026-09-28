@@ -1,13 +1,13 @@
 /**
  * dotfiles-dsh-web-search — host providers for the dsh web seam (`ctx.web`).
  *
- * Thin wrapper over the `browse` CLI (`dotfiles/.agents/cli`, deployed to
+ * Thin wrapper over the `browse` CLI (`dotfiles/.agents/cli.exact`, deployed to
  * `~/.agents/cli/`): each provider call spawns the CLI's search / fetch
  * subcommand with `--json`, assembles the contract result from the stdout
  * JSON, and propagates CLI failures as `WebError`. The exploration chain
  * (engine order, challenge detection, Reddit / StackOverflow routes, server
  * bootstrap, timeouts) is owned by the CLI — its behavior contract is
- * `dotfiles/.agents/cli/browse/browse.spec.md`; this plugin's contract is SPEC.md.
+ * `dotfiles/.agents/cli.exact/browse/browse.spec.md`; this plugin's contract is SPEC.md.
  *
  * `build.apply.ts` bundles this entry: relative imports are inlined and only
  * the script's explicit bare-specifier externals stay external. The shared
@@ -67,7 +67,7 @@ export function resolveEndpoints(
 
 // SPEC §"提供する plugin": register both providers. Server priming moved to the
 // shared `~/.agents/scripts/startup` script
-// (dotfiles/.agents/scripts/startup.spec.md).
+// (dotfiles/.agents/scripts.exact/startup.spec.md).
 export function apply(ctx: Context): void {
   const endpoints = resolveEndpoints();
   ctx.web.registerSearchProvider(new CamoufoxOpenserpSearchProvider(endpoints));
@@ -162,7 +162,7 @@ export class CamoufoxTrafilaturaFetchProvider implements WebFetchProvider {
 export type BrowseSubcommand = "search" | "fetch";
 
 // SPEC §"提供する plugin": the browse CLI lives in ~/.agents/cli (deployed
-// from dotfiles/.agents/cli by home apply). BROWSE_CLI_DIR overrides the
+// from dotfiles/.agents/cli.exact by home apply). BROWSE_CLI_DIR overrides the
 // directory for tests and manual development (same convention as the pi
 // wrapper). Unlike the pi extension, the bundle always runs from the deployed
 // plugin directory, so the default resolves from the home directory rather
