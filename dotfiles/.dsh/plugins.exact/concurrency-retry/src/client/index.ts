@@ -1,8 +1,5 @@
 /**
- * Browser client half: render each retry wait as one transcript row.
- *
- * The durable event is folded into a chat-target node so current and historic
- * waits render identically after a reload.
+ * Current and earlier waits render in the transcript after reload.
  */
 import { createElement, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";

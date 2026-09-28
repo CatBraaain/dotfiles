@@ -1,30 +1,7 @@
-/**
- * quota-line — host half (main process, Node ESM).
- *
- * Queries the two provider quota endpoints the profile uses and serves the
- * normalized result over one exact web route the browser half polls:
- *
- * - zai: GLM Coding Plan quota from `{origin}/api/monitor/usage/quota/limit`,
- *   key resolved through the harness credentials service (`apiKeyEnv` ref of
- *   the configured zai/bigmodel provider, then well-known refs, then the
- *   process environment).
- * - codex: ChatGPT subscription usage from
- *   `chatgpt.com/backend-api/wham/usage`, authenticated with the OAuth grant
- *   stored in the harness credential records under `llm-pi-ai/openai-codex`
- *   (written by dsh's sign-in flow). The grant is rotated inside the
- *   credential store's exclusive lock when it nears expiry; grant logic is
- *   ported from dsh-provider-usage (github.com/lizhouai/dsh-provider-usage,
- *   `src/openai-codex.ts`, MIT).
- *
- * API keys and tokens never leave this process: the route answers quota
- * numbers only. A TTL cache plus in-flight dedup keeps the endpoints' rate
- * limits happy under UI polling.
- */
-
 export const name = "quota-line";
 export const inject = ["webServer"];
 
-/** Quota rows cached this long; the UI polls at the same cadence. */
+/** Cache quota results across UI polls to limit upstream requests. */
 const CACHE_TTL_MS = 120_000;
 /** HTTPS request budget shared by the quota and token endpoints. */
 const REQUEST_TIMEOUT_MS = 12_000;
@@ -44,7 +21,6 @@ const CODEX_REFRESH_MARGIN_MS = 30_000;
  */
 const CODEX_REAUTH_CODES = new Set(["refresh_token_reused", "invalid_grant", "invalid_token"]);
 
-/** Cache plus in-flight dedup shared by every route hit. */
 const cache = { at: 0, value: null as unknown };
 let inFlight: Promise<WirePayload> | null = null;
 
@@ -352,8 +328,9 @@ async function refreshCodexGrant(refreshToken: string): Promise<CodexGrant> {
  * exclusive lock when it is near expiry. The network round trip happens
  * inside `mutate` on purpose: the refresh token is single-use upstream, so
  * deciding under the lock means a concurrent rotation is observed instead of
- * overwritten, and no token is ever spent twice (pattern ported from
- * dsh-provider-usage). A grant that is missing or unparseable returns
+ * overwritten, and no token is ever spent twice. Grant rotation is ported
+ * from dsh-provider-usage (https://github.com/lizhouai/dsh-provider-usage,
+ * `src/openai-codex.ts`, MIT). A grant that is missing or unparseable returns
  * `undefined` — the row simply stays hidden until a dsh sign-in exists.
  */
 async function resolveCodexGrant(ctx: PluginContext): Promise<CodexGrant | undefined> {

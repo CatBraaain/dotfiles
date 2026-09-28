@@ -1,12 +1,4 @@
-/**
- * Titlebar Spinner Extension
- *
- * Shows a spinner animation in the terminal title while the agent is working,
- * and a static pause symbol while a blocking extension UI prompt is waiting
- * for user input. Uses `ctx.ui.setTitle()` to update the terminal title via
- * the extension API. Title control runs only in TUI mode; other modes never
- * receive setTitle notifications, and the spinner timer does not run either.
- */
+/** Keeps the terminal title in sync with the agent's activity. */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 

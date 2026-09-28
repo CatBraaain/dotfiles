@@ -1,11 +1,6 @@
 /**
- * dotfiles-dsh-startup — run the shared priming script once per harness boot.
- *
- * Spawns `~/.agents/scripts/startup` detached (behavior contract: SPEC.md;
- * the script's own tasks are contracted in
- * dotfiles/.agents/scripts.exact/startup.spec.md).
- * The script tolerates concurrent runs, so pi and dsh may both call it.
- * Priming must never break harness startup: spawn errors are swallowed.
+ * dotfiles-dsh-startup runs the shared priming script at dsh startup.
+ * The script is safe under concurrent invocations from pi and dsh.
  */
 import { spawn } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";

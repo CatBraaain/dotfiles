@@ -1,19 +1,3 @@
-/**
- * dotfiles-dsh-tickets — dsh port of the pi `tickets` extension.
- *
- * Registers five tools wrapping the ticket CLI (`~/.agents/cli/ticket`, the
- * dotfiles/.agents/cli.exact/ticket project spawned as `bun <dir>`):
- * ticket_list, ticket_show, ticket_create, ticket_set, ticket_edit. The
- * behavior contract is dotfiles/.agents/cli.exact/ticket/ticket-tools.spec.md
- * (harness-neutral oracle; the CLI itself is specified by ticket.spec.md).
- * The tools never touch the ticket store directly — every read and write
- * spawns the CLI and its text output becomes the model-facing content
- * (SPEC: ticket-tools.spec.md common behavior).
- *
- * Result shape: `execute` returns the CLI's stdout text and `output.render`
- * passes it through as the LLM text. CLI failures (non-zero exit, spawn
- * error) surface as tool-call errors carrying the CLI's stderr text.
- */
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";

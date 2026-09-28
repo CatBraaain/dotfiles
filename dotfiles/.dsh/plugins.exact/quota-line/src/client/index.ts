@@ -1,15 +1,3 @@
-/**
- * Browser client half: render the active provider's quota line above the
- * composer card.
- *
- * Polls the host route `/plugins/quota-line/quota.json` (same-origin, served
- * by the host half's exact route) and draws ONE dim text line — the one for
- * the provider of the model the focused session currently has selected
- * (composer model seat, read live via the client `sessions` +
- * `modelDirectories` services; contract ported from dsh-provider-usage).
- * Nothing renders when the selection is unmapped/unknown or that provider's
- * quota is unavailable — the line's presence itself signals availability.
- */
 import { createElement, useEffect, useState, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 // Context augmentation: the `ctx.slots` registry service.

@@ -1,14 +1,3 @@
-/**
- * Browser client half: keep the used-skill names visible above the composer.
- *
- * Registers one `conversation.input.dock` entry rendering the host-computed
- * `skillStatus` session projection as `🎯 skills: ...` in gray, clipped with
- * an ellipsis. The row always renders; before any skill completes it shows
- * the bare `🎯 skills: ` label. The projection arrives through the
- * standard `useProjection` seat (whole value seeded by the follow opening and
- * pushed by projection frames), so the display restores from the host's
- * whole-log fold and never depends on the loaded event window.
- */
 import { createElement, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 // Context augmentation: the `ctx.slots` registry service.
@@ -44,6 +33,7 @@ const STATUS_STYLE: Readonly<Record<string, string>> = {
 
 /** The dock row: the label-only line before any skill completes, names after. */
 function SkillStatusRow({ useProjection }: { readonly useProjection: UseProjection }): ReactNode {
+  // The follow opening seeds the whole projection; later frames update it without reading the event window.
   const names = useProjection(SKILL_STATUS_PROJECTION_KEY);
   return createElement("div", { style: STATUS_STYLE }, buildSkillStatusLine(names ?? []));
 }

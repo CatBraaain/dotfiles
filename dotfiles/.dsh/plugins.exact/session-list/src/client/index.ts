@@ -1,7 +1,3 @@
-/** Browser client half: replace the sidebar's stock session browser with our
- * grouped list whose row actions archive the session or copy its id in one
- * click, and whose header adds workspaces through the sidebar's directory
- * flow. */
 import { createElement, type ComponentType, type ReactNode } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 // Slot registry service (`ctx.slots`) and the session-scope standard props

@@ -1,19 +1,3 @@
-/**
- * dotfiles-dsh-web-search — host providers for the dsh web seam (`ctx.web`).
- *
- * Thin wrapper over the `browse` CLI (`dotfiles/.agents/cli.exact`, deployed to
- * `~/.agents/cli/`): each provider call spawns the CLI's search / fetch
- * subcommand with `--json`, assembles the contract result from the stdout
- * JSON, and propagates CLI failures as `WebError`. The exploration chain
- * (engine order, challenge detection, Reddit / StackOverflow routes, server
- * bootstrap, timeouts) is owned by the CLI — its behavior contract is
- * `dotfiles/.agents/cli.exact/browse/browse.spec.md`; this plugin's contract is SPEC.md.
- *
- * `build.apply.ts` bundles this entry: relative imports are inlined and only
- * the script's explicit bare-specifier externals stay external. The shared
- * machine-scoped camoufox server lives inside the CLI; `browse server start` (spawned
- * by the CLI itself and by the shared startup script) brings it up.
- */
 import z from "@deepseek-ai/schemastery";
 import { WebError } from "@deepseek-ai/dsh-web";
 import type {

@@ -1,15 +1,3 @@
-/**
- * Abort the agent turn when the LLM stream goes silent.
- *
- * pi's httpIdleTimeoutMs only covers request start → response headers (the
- * OpenAI SDK clears that timeout once headers arrive), so a stream that opens
- * successfully and then never sends a chunk stalls the session forever. This
- * extension arms a fixed 5-minute timer at every provider request and resets
- * it on each streaming delta; when it fires, the turn is aborted via
- * ctx.abort().
- * 詳細は ./SPEC.md。
- */
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** Silence threshold since the last stream activity. Owner-fixed at 5 minutes. */
@@ -43,8 +31,8 @@ function restartTimer(abort: () => void): void {
 }
 
 export default function streamIdleTimeoutExtension(pi: ExtensionAPI): void {
-  // Arm at request start, so a stall before the first delta (headers arrived,
-  // no chunks yet) is also covered.
+  // The OpenAI SDK clears httpIdleTimeoutMs when response headers arrive, so
+  // arm here to cover a stall before the first delta.
   pi.on("before_provider_request", (_event, ctx) => restartTimer(() => ctx.abort()));
   // message_update fires only for assistant streaming deltas.
   pi.on("message_update", (_event, ctx) => restartTimer(() => ctx.abort()));

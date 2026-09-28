@@ -1,12 +1,3 @@
-// dotfiles-model-sync — host-side port of the pi model-sync extension.
-//
-// Fetches the current model lineup of every configured pi-ai catalog route
-// (models.dev metadata + the provider's own model-listing endpoint) and writes
-// the composed entries into settings `llm-pi-ai.providers.<id>.models`, so new
-// provider models become usable without waiting for a pi-ai catalog update.
-// User-owned entries are preserved; ownership is tracked via the cache's
-// `written` section. Pure logic lives in core.ts (unit-tested there).
-//
 // Types come from the global @deepseek-ai/* install via tsconfig paths; the
 // runtime resolves values from the profile closure (everything is
 // externalized by the build).

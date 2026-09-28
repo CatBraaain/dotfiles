@@ -1,9 +1,4 @@
-// Thin pi extension wrapping the `browse` CLI (the dotfiles/.agents/cli.exact/
-// browse project deployed to ~/.agents/cli/browse, spec: browse.spec.md). The
-// tools spawn the CLI's search / fetch subcommands as a child process, turn
-// its --json stdout into tool text + details, and propagate non-zero exits as
-// tool errors. All search/fetch behavior (backends, challenge handling,
-// server bootstrap, flock serialization) lives in the CLI.
+// Thin pi wrapper that adapts tool input and output to the `browse` CLI.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";

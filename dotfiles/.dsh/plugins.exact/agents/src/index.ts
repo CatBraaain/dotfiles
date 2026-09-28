@@ -1,22 +1,9 @@
-// dotfiles-dsh-agents — host-side port of the pi agents extension.
-//
-// Reads ~/.dsh/config/agents.yaml (same schema as pi's agents.yaml), then per
-// live root agent: applies the persona system-prompt section and tool
-// restrictions, routes model requests through class candidate lists (`when`
-// guards evaluated via the shell contract), falls back to the next candidate
-// on 429/QUOTA failures with cooldowns, exposes a pi-compatible `subagent`
-// tool backed by the in-process one-shot subagent seam, and delegates image
-// reads from image-incapable routes to a vision-class one-shot child.
-//
-// Glue only: pure logic lives in config.ts / routing.ts / tool-allowlist.ts /
-// subagent-slots.ts (unit-tested there). Types come from the global
-// @deepseek-ai/* install via tsconfig paths; the runtime resolves them from
-// the profile closure (the build bundles the relative imports and keeps
-// package imports external).
-
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+// tsconfig paths supply @deepseek-ai/* types from the global install; at runtime
+// the profile closure resolves external package imports, while relative imports
+// are bundled.
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 // Type-only imports also pull in the `declare module '@deepseek-ai/cordis'`
@@ -132,6 +119,8 @@ export function apply(ctx: Context) {
   const logger = ctx.logger("dsh-agents");
 
   // ---- configuration -------------------------------------------------------
+  // This config is intended to use the same schema as pi's agents.yaml;
+  // compatibility has not been independently verified.
   const configPath = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "config", "agents.yaml");
   // Load and validate agents.yaml. Returns the config, or the failure reason.
   const loadConfig = (): AgentsConfig | string => {
@@ -394,6 +383,7 @@ export function apply(ctx: Context) {
     }
   };
 
+  // Intended pi-compatible `subagent` interface; compatibility is unverified.
   const registerSubagentTool = (agent: Agent, state: AgentState): (() => void) => {
     const definition = config.agents[state.agentName];
     return agent.ctx.tools.register(

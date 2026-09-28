@@ -1,13 +1,3 @@
-/**
- * dotfiles-dsh-concurrency-retry — retry provider-specific concurrency
- * failures without an attempt bound.
- *
- * The detector is fail-closed: an active provider route is retried only when
- * its provider rule or the provider-neutral matcher sees explicit concurrency
- * evidence. HTTP 429, RATE_LIMIT, Retry-After, quota, billing, and usage-window
- * facts alone never establish concurrency.
- */
-
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 // Type-only import loads the llm service augmentation for ctx.llm.

@@ -1,7 +1,4 @@
-/**
- * Browser client half: hide stock composer controls and usage/feedback chrome,
- * keep the turn run time as a plain re-implemented tail, add the Ctrl+K → Ctrl+M chord.
- */
+/** Client-side UI adjustments for the dsh web profile. */
 import { createElement, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 // Service augmentations this half reads: the slot registry, the composer slot

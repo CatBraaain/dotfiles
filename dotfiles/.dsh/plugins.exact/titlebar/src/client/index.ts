@@ -1,12 +1,3 @@
-/**
- * Browser client half: keep the document title in step with agent state.
- *
- * Registers a {@link TitlebarController} over the sessions list and pending
- * interactions observables. No React, no slots: the titlebar is the browser
- * tab title, written directly (the stock `DocumentTitle` component keeps
- * ownership of the unmarked title and re-asserts it on its own changes;
- * the controller re-marks within one spinner tick).
- */
 import type { Context } from "@deepseek-ai/cordis";
 // Context augmentation: `ctx.sessions` (list snapshot with current + running).
 import type {} from "@deepseek-ai/dsh-api-session-controller/client";

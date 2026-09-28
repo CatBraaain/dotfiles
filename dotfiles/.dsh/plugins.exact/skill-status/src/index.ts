@@ -1,24 +1,3 @@
-/**
- * dotfiles-dsh-skill-status — host half.
- *
- * Registers the `skillStatus` session projection, folded purely from the
- * stock `tool/call` / `tool/result` session events: a `skill` call pairs with
- * its result by callId, and each skill's first successful completion adds its
- * name in log order. The plugin appends no session events of its own — the
- * persistence layer refuses to interpret logs carrying event types outside
- * its generated vocabulary unless they carry the `ignorable` marker, which
- * `Session.append` does not expose (see SPEC.md) — so the projection folds
- * only event types every harness build knows.
- *
- * The projection is the client's window-independent read model: the framework
- * folds `init` over the whole in-memory log and drives every committed event
- * through `apply`, so the published names cover events outside the client's
- * paged event window (see SPEC.md).
- *
- * `build.apply.ts` bundles this entry: relative imports are inlined and only
- * the script's explicit bare-specifier externals stay external (see
- * dotfiles/.dsh/README.md). Shared literals live in `src/shared.ts`.
- */
 import { z } from "zod";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ProjectionDefinition } from "@deepseek-ai/dsh-session-projection";
@@ -101,9 +80,12 @@ export function isSuccessfulToolResult(data: ToolResultData): boolean {
 }
 
 /**
- * Fold the skill usage display state from the stock tool events. Unrelated
- * events and malformed payloads return the same state reference, and a name
- * already recorded is a no-op — the drive keys all downstream work on that.
+ * Fold the skill usage display state from the stock tool events. Plugin-only
+ * events cannot be used here: `Session.append` does not expose the `ignorable`
+ * marker needed to replay unknown event types after a host restart.
+ * Unrelated events and malformed payloads return the same state reference,
+ * and a name already recorded is a no-op — the drive keys all downstream work
+ * on that.
  */
 export const skillStatusProjectionDefinition = {
   key: SKILL_STATUS_PROJECTION_KEY,

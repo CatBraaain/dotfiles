@@ -1,15 +1,3 @@
-// dotfiles-sandboxed-tools — host-side port of the pi sandboxed-tools
-// extension (see SPEC.md, the oracle). This plugin replaces the stock
-// dsh-tool-fs / dsh-tool-fs-search / dsh-tool-bash model-facing tools (their
-// rows are disabled via cordis.patch.yml) and registers read / write / edit /
-// glob / grep / ls / bash / ask_permission itself (§1・§3).
-// Every authorized call runs its IO inside one bwrap invocation per tool
-// call (§7) through the in-sandbox runner (dist/runner.js). sandbox.yaml (§6)
-// is reloaded at load time and at every session start. `ask` resolutions and
-// permission requests pause on the userQuestions seam dialogs (§2.3), whose
-// approvals become session-scoped dynamic grants (§3). Without the seam an
-// `ask` resolution denies (§2.3).
-
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -111,5 +99,6 @@ export function apply(ctx: Context) {
   };
   warnInvalidPatterns(agentlessSandbox, "startup");
 
+  // Stock tool rows are disabled in cordis.patch.yml to avoid duplicate names.
   registerSandboxedTools(ctx, toolDeps());
 }

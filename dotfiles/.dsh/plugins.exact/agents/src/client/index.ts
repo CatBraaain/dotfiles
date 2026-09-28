@@ -1,5 +1,3 @@
-/** Browser client half: show the live agents.yaml agent and class above the
- * composer, each row a button opening a primitives Menu selector. */
 import { createElement, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { Menu } from "@deepseek-ai/dsh-client-ui-primitives";

@@ -1,14 +1,7 @@
 /**
  * Pi Notify Extension
  *
- * Sends a native terminal notification when the agent settles (stops running
- * on its own and waits for input). Only active in TUI mode, so RPC/JSON/print
- * sessions never write notification sequences to stdout.
- *
- * Supported protocols (chosen by environment variables, in this order):
- * - Windows toast: WT_SESSION is set (Windows Terminal on WSL)
- * - OSC 99: KITTY_WINDOW_ID is set or TERM_PROGRAM is "vscode" (Kitty, VSCode)
- * - OSC 777: fallback (Ghostty, iTerm2, WezTerm, rxvt-unicode)
+ * Sends a terminal notification when the agent is ready for input.
  */
 
 import { execFile } from "node:child_process";

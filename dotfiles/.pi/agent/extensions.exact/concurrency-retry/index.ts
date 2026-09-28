@@ -1,28 +1,3 @@
-/**
- * Unbounded wait-and-retry for provider concurrency errors.
- *
- * pi's built-in agent retry already retries these errors, but its budget is
- * finite (settings.retry.maxRetries) and its backoff starts near zero, so
- * concurrent runs keep hammering the provider until every session fails. This
- * extension makes the retry loop unbounded and paced:
- *
- *   turn path    — message_end waits out the backoff, then rewrites the error
- *                  into a retryable message so pi's agent retry replays it.
- *                  Budget-limited (typically settings.retry.maxRetries tries).
- *   settled path — once the turn has fully settled on a concurrency error,
- *                  wait, then re-trigger the turn via pi.sendMessage. This
- *                  resets pi's retry budget, making the overall loop unbounded.
- *
- * Detection is fail-closed, mirroring the dsh concurrency-retry plugin: an
- * error is retried only on explicit concurrency evidence — provider-specific
- * evidence for zai / zai-coding-cn (codes 1302/1305) or generic concurrency
- * wording for any other provider. Quota/billing/usage-window evidence is
- * always excluded first. HTTP 429 on non-Z.AI providers is still handled by
- * the agents extension's immediate fallback; this extension only reacts to
- * the assistant error text.
- * 詳細は ./SPEC.md。
- */
-
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
@@ -225,6 +200,8 @@ export default function concurrencyRetryExtension(pi: ExtensionAPI): void {
         `${message.provider} concurrency limit; retrying in ${Math.ceil(delayMs / 1000)}s (attempt ${consecutiveConcurrencyErrors})`,
       );
     }
+    // Pi's built-in retry starts with a shorter delay; wait here before
+    // making this error retryable to pace concurrent requests.
     const waitCompleted = await __sleep.current(delayMs, ctx.signal);
     if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
     // Aborted mid-wait: let the turn end with the original error, the user
@@ -262,6 +239,7 @@ export default function concurrencyRetryExtension(pi: ExtensionAPI): void {
     // types during the wait.
     await __sleep.current(delayMs, undefined);
     if (!ctx.isIdle()) return;
+    // A fresh turn resets Pi's bounded agent retry budget after it runs out.
     pi.sendMessage(
       { customType: STATUS_KEY, content: RETRY_TRIGGER_CONTENT, display: false },
       { triggerTurn: true },

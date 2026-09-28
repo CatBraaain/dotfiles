@@ -1,25 +1,3 @@
-/**
- * dotfiles-handoff-session — port of the pi `handoff-session` extension to a
- * dsh host plugin.
- *
- * Registers the `handoff_session` tool. The agent calls it with `reason` (why
- * the current session ends) and `handoff` (the prompt auto-sent to the next
- * session). The tool asks the owner to confirm in the browser question UI; on
- * approval it creates a brand-new session (conversation history is NOT
- * carried over) and sends `handoff` as its first user message. On denial it
- * queues `no(<reason>)` as a follow-up user message in the current session.
- *
- * Framework types are structural subsets of the dsh interfaces
- * (`@deepseek-ai/dsh-tools` `ToolDefinition`, `@deepseek-ai/dsh-llm`
- * `UserMessage`, `@deepseek-ai/dsh-agent` `Agent`/`AgentRegistry`,
- * `@deepseek-ai/dsh-user-questions` `UserQuestionService`,
- * `@deepseek-ai/dsh-agent-presets` `AgentPresets`) so this package needs no
- * dependency installs; the loader resolves the framework from the profile
- * closure at runtime. The tool definition is a raw JSON Schema object instead
- * of a `defineTool` call for the same reason — `defineTool` only compiles the
- * author DSL into this shape and adds argument validation, which `execute`
- * performs itself.
- */
 // tsconfig keeps `types: []` (zero-dependency build); declare the one global
 // surface this plugin uses. Web Crypto's `randomUUID` is a global in every
 // runtime dsh targets (Bun, Node >= 19).
@@ -46,6 +24,8 @@ const DESCRIPTION =
   "確認UIで拒否された場合は、入力された理由を no(<理由>) として現在のagentへ返す。" +
   "収束条件を満たしたときは handoff_session を使わず、オーナーへ結果を報告する。";
 
+// Local structural subsets avoid framework package installs; the loader
+// resolves framework services from the profile closure at runtime.
 /** Structural subset of a dsh text content block. */
 interface TextBlock {
   type: "text";
@@ -151,6 +131,7 @@ export function apply(ctx: HandoffContext): void {
     yield ctx.tools.register({
       name: TOOL_NAME,
       description: DESCRIPTION,
+      // Raw JSON Schema avoids importing defineTool; executeHandoff validates arguments.
       parameters: {
         type: "object",
         properties: {

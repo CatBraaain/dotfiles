@@ -1,11 +1,4 @@
 // dotfiles-dsh-custom-ui — host half.
-//
-// Stamps the spec's default reasoning effort onto every model request whose
-// selection carries no explicit effort: the highest advertised non-off level
-// for the resolved route (see ./default-effort.ts and SPEC.md). Runs on the
-// `agent/request` waterfall AFTER route resolution (this bundle loads before
-// dotfiles-dsh-agents, whose route rewrite we observe through `next()`), so
-// the effort always matches the route that actually serves the request.
 
 import type { Context } from "@deepseek-ai/cordis";
 // Type-only import pulls in the `declare module '@deepseek-ai/cordis'`
@@ -19,6 +12,7 @@ export const inject = ["llm"];
 
 export function apply(ctx: Context): void {
   ctx.on("agent/request", async (_payload, next) => {
+    // This bundle loads before dotfiles-dsh-agents; next() returns its rewritten route.
     const base = await next();
     const info = await ctx.llm.resolveModelInfo(base.provider, base.model).catch(() => undefined);
     return withDefaultEffort(
