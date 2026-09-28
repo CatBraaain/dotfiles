@@ -13,7 +13,7 @@ git の commit・branch・push・PR に関する判断規則を所有する。
 リポジトリ固有の規約が、常に本標準の一般規則より優先する。
 
 - 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
-- 適用しない: コード変更そのものの品質（coding-standard 等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（`~/.pi/agent/AGENTS.md` の「Git Worktree Strategy」が所有）。
+- 適用しない: コード変更そのものの品質（coding-standard 等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（共有 `~/.agents/AGENTS.md` の「Git Worktree Strategy」が所有）。
 
 ## Decision Ladder: リポジトリ規約の確認
 
@@ -134,10 +134,10 @@ user が所属しないリポジトリへの PR でのみ適用する。所属�
 - PR 本文の末尾に、次の形式の trailer を付ける:
 
   ```
-  Assisted-by: pi:<PI_MODEL>
+  Assisted-by: <provider_name>:<model_name>
   ```
 
-  PR 本文を作成する時点で `<PI_MODEL>` を `PI_MODEL` 環境変数の値に置き換える。pi 以外のツールなら `<tool>:<model>` の形式で実態を書く。
+  PR 本文を作成する時点で、`<provider_name>` をモデルの開発・提供元、`<model_name>` を実際に使用したモデルの識別子に置き換える。API の経由先やコーディングエージェントの名前は含めない。
 
 ## 出力
 
