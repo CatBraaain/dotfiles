@@ -22,6 +22,8 @@
 #define kReturn 0xff0d
 #define kHenkan 0xff23
 #define kZenkakuHankaku 0xff2a
+#define kBackSpace 0xff08
+#define kEscape 0xff1b
 
 static RimeApi* rime = NULL;
 static RimeSessionId session = 0;
@@ -119,7 +121,8 @@ static void test_default_schema_is_kagiroi(void) {
 
 /* SPEC: accepted n-run forms expose a candidate containing the reading's
  * dictionary word. Readings without a matching dictionary word (こにちは,
- * かんだ, にゃ) are checked as preedit in test_n_run_preedit. */
+ * かんだ, にゃ) are checked as preedit in test_n_run_preedit and
+ * test_n_run_conversion_reading. */
 static void test_n_run_correction(void) {
     static const struct {
         const char* input;
@@ -133,6 +136,8 @@ static void test_n_run_correction(void) {
         {"kannna", "かんな"},
         {"kannnna", "かんな"},
         {"konnnitiha", "こんにちは"},
+        {"kannnen", "観念"},
+        {"kannnnen", "観念"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
@@ -156,24 +161,28 @@ static void test_n_run_correction(void) {
 }
 
 /* SPEC: accepted n-run forms read exactly as the SPEC table says while
- * composing. */
+ * composing; excessive n runs are not corrected while typing. */
 static void test_n_run_preedit(void) {
     static const struct {
         const char* input;
         const char* expected;
     } cases[] = {
+        {"kan", "かn"},
         {"kanji", "かんじ"},
         {"kannji", "かんじ"},
-        {"kannnji", "かんじ"},
+        {"kannnji", "かんんじ"},
         {"kana", "かな"},
         {"kanna", "かんな"},
         {"kannna", "かんな"},
-        {"kannnna", "かんな"},
+        {"kannnna", "かんんあ"},
         {"konitiha", "こにちは"},
         {"konnnitiha", "こんにちは"},
         {"kanda", "かんだ"},
-        {"kannnda", "かんだ"},
+        {"kannda", "かんだ"},
+        {"kannnda", "かんんだ"},
         {"nya", "にゃ"},
+        {"kannnen", "かんねn"},
+        {"kannnnen", "かんんえn"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
@@ -211,6 +220,48 @@ static void test_kan_space_starts_conversion(void) {
     rime->free_context(&context);
 }
 
+/* SPEC: Space converts with the corrected reading: consecutive ん fold into
+ * one and a leftover ん binds with a following vowel. */
+static void test_n_run_conversion_reading(void) {
+    static const struct {
+        const char* input;
+        const char* expected;
+    } cases[] = {
+        {"kan", "かん"},
+        {"kanji", "かんじ"},
+        {"kannji", "かんじ"},
+        {"kannnji", "かんじ"},
+        {"kanda", "かんだ"},
+        {"kannda", "かんだ"},
+        {"kannnda", "かんだ"},
+        {"kana", "かな"},
+        {"nya", "にゃ"},
+        {"kanna", "かんな"},
+        {"kannna", "かんな"},
+        {"kannnna", "かんな"},
+        {"konnnitiha", "こんにちは"},
+        {"kannnen", "かんねん"},
+        {"kannnnen", "かんねん"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        press(kSpace);
+        RIME_STRUCT(RimeContext, context);
+        if (!rime->get_context(session, &context)) {
+            check(False, "conversion must keep a queryable context");
+            continue;
+        }
+        char description[128];
+        snprintf(description, sizeof(description), "%s must convert with the reading %s",
+                 cases[i].input, cases[i].expected);
+        check(context.composition.preedit &&
+                  strcmp(context.composition.preedit, cases[i].expected) == 0,
+              description);
+        rime->free_context(&context);
+    }
+}
+
 /* SPEC: Zenkaku_Hankaku toggles between Japanese and ASCII input. */
 static void test_zenkaku_hankaku_toggles_ascii(void) {
     fresh_session();
@@ -225,32 +276,30 @@ static void test_zenkaku_hankaku_toggles_ascii(void) {
     check(!composing_before, "the session must stay idle outside a composition");
 }
 
-/* SPEC: Henkan turns the first candidate into full-width katakana without
- * committing; the selection is highlighted from the start. */
+/* SPEC: Henkan keeps the composition unconfirmed, shows the first candidate
+ * as katakana in the preedit, and keeps the candidate list hidden. */
 static void test_henkan_promotes_katakana(void) {
     fresh_session();
     type_text("kanji");
-    press(kSpace);
     press(kHenkan);
     check(composing(), "Henkan must keep the composition open");
-    check(option("katakana"), "Henkan must enable the katakana option");
     RIME_STRUCT(RimeContext, context);
     Bool promoted = False;
     if (rime->get_context(session, &context)) {
-        promoted = context.menu.num_candidates > 0 &&
-                   context.menu.candidates[0].text &&
-                   menu_has_candidate(&context, "カンジ") &&
-                   context.menu.highlighted_candidate_index == 0;
+        promoted = context.menu.num_candidates == 0 &&
+                   context.composition.preedit &&
+                   strcmp(context.composition.preedit, "カンジ") == 0;
         if (g_verbose) print_context();
         rime->free_context(&context);
     }
-    check(promoted, "Henkan must put full-width katakana first");
+    check(promoted, "Henkan must show the katakana first candidate with the list hidden");
     char commit[256];
     check(!take_commit(commit, sizeof(commit)), "Henkan must not commit");
 }
 
-/* SPEC: after Henkan, Space still cycles, Enter commits the selection, and
- * the next typing hides candidates again. */
+/* SPEC: after Henkan, Space reveals the menu with the katakana first
+ * candidate selected, Enter commits it, and the next typing hides candidates
+ * again. */
 static void test_henkan_space_enter_chain(void) {
     fresh_session();
     type_text("kanji");
@@ -258,33 +307,30 @@ static void test_henkan_space_enter_chain(void) {
     press(kHenkan);
     RIME_STRUCT(RimeContext, context);
     if (!current_menu(&context)) {
-        check(False, "the katakana menu must exist after Henkan");
+        check(False, "the context must exist after Henkan");
         return;
     }
-    check(context.menu.num_candidates > 1,
-          "the katakana menu must hold more than one candidate for cycling");
+    check(context.menu.num_candidates == 0, "Henkan must keep the menu hidden after Space");
     rime->free_context(&context);
     press(kSpace);
-    char expected[256] = "";
-    if (rime->get_context(session, &context)) {
-        check(composing(), "Space after Henkan must keep the composition open");
-        check(context.menu.highlighted_candidate_index == 1,
-              "Space after Henkan must move the selection to the next candidate");
-        if (context.menu.highlighted_candidate_index < context.menu.num_candidates &&
-            context.menu.candidates[context.menu.highlighted_candidate_index].text) {
-            snprintf(expected, sizeof(expected), "%s",
-                     context.menu.candidates[context.menu.highlighted_candidate_index].text);
-        }
-        rime->free_context(&context);
-    } else {
+    if (!rime->get_context(session, &context)) {
         check(False, "the menu must survive Space after Henkan");
+        return;
     }
-    check(expected[0] != '\0', "the selected candidate must have text");
+    check(composing(), "Space after Henkan must keep the composition open");
+    check(context.menu.num_candidates > 0,
+          "Space after Henkan must reveal the candidate menu");
+    check(context.menu.highlighted_candidate_index == 0,
+          "Space after Henkan must select the first candidate");
+    check(context.menu.candidates[0].text &&
+              strcmp(context.menu.candidates[0].text, "カンジ") == 0,
+          "the first candidate after Henkan must be the katakana reading");
+    rime->free_context(&context);
     press(kReturn);
-    check(composing() == False, "Enter after Henkan cycling must end the composition");
+    check(composing() == False, "Enter after Henkan must end the composition");
     char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
-          "Enter must commit the candidate selected after Henkan");
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "カンジ") == 0,
+          "Enter must commit the katakana selected after Henkan");
     type_text("kanji");
     RIME_STRUCT(RimeContext, next);
     if (rime->get_context(session, &next)) {
@@ -294,6 +340,178 @@ static void test_henkan_space_enter_chain(void) {
         rime->free_context(&next);
     } else {
         check(False, "next typing must keep a queryable context");
+    }
+}
+
+/* SPEC: Backspace and Esc keep the string unconfirmed, return it to the
+ * hiragana reading and hide the list; Backspace while typing deletes the
+ * previous character and Esc while typing keeps the reading. */
+static void test_backspace_escape_return_to_reading(void) {
+    /* Backspace with the menu visible. */
+    fresh_session();
+    type_text("kana");
+    press(kSpace);
+    press(kBackSpace);
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) {
+        check(False, "Backspace must keep a queryable context");
+        return;
+    }
+    check(composing(), "Backspace must keep the composition open");
+    check(context.menu.num_candidates == 0, "Backspace must hide the candidate list");
+    check(context.composition.preedit && strcmp(context.composition.preedit, "かな") == 0,
+          "Backspace must return to the full hiragana reading");
+    rime->free_context(&context);
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "Backspace must not commit");
+    /* Backspace while typing deletes the previous character. */
+    press(kBackSpace);
+    if (!current_menu(&context)) {
+        check(False, "the second Backspace must keep a queryable context");
+        return;
+    }
+    check(composing(), "Backspace while typing must keep composing");
+    check(context.composition.preedit && strcmp(context.composition.preedit, "か") == 0,
+          "Backspace while typing must delete the previous character");
+    rime->free_context(&context);
+
+    /* Esc while typing keeps the reading. */
+    fresh_session();
+    type_text("kana");
+    press(kEscape);
+    if (!current_menu(&context)) {
+        check(False, "Esc must keep a queryable context");
+        return;
+    }
+    check(composing(), "Esc while typing must keep composing");
+    check(context.composition.preedit && strcmp(context.composition.preedit, "かな") == 0,
+          "Esc while typing must keep the hiragana reading");
+    check(context.menu.num_candidates == 0, "Esc while typing must keep the list hidden");
+    rime->free_context(&context);
+    check(!take_commit(commit, sizeof(commit)), "Esc while typing must not commit");
+
+    /* Esc with the menu visible. */
+    fresh_session();
+    type_text("kana");
+    press(kSpace);
+    press(kEscape);
+    if (!current_menu(&context)) {
+        check(False, "Esc with the menu visible must keep a queryable context");
+        return;
+    }
+    check(composing(), "Esc with the menu visible must keep composing");
+    check(context.menu.num_candidates == 0, "Esc with the menu visible must hide the list");
+    check(context.composition.preedit && strcmp(context.composition.preedit, "かな") == 0,
+          "Esc with the menu visible must return to the reading");
+    rime->free_context(&context);
+    check(!take_commit(commit, sizeof(commit)), "Esc with the menu visible must not commit");
+}
+
+/* SPEC: a regular typing key with the menu visible commits the selected
+ * candidate and starts the next input; digits never pick candidates. */
+static void test_typing_key_commits_selection(void) {
+    /* A letter key commits the selection and starts a new input. */
+    fresh_session();
+    type_text("kana");
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    char expected[256] = "";
+    if (current_menu(&context)) {
+        int highlighted = context.menu.highlighted_candidate_index;
+        if (highlighted < context.menu.num_candidates &&
+            context.menu.candidates[highlighted].text) {
+            snprintf(expected, sizeof(expected), "%s",
+                     context.menu.candidates[highlighted].text);
+        }
+        rime->free_context(&context);
+    } else {
+        check(False, "the menu must exist before the typing key");
+    }
+    check(expected[0] != '\0', "the highlighted candidate must have text");
+    press('k');
+    char commit[256];
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
+          "a typing key must commit the selected candidate");
+    if (!current_menu(&context)) {
+        check(False, "the restarted input must keep a queryable context");
+        return;
+    }
+    check(composing(), "the restarted key must start a new composition");
+    check(context.menu.num_candidates == 0,
+          "the restarted input must hide candidates until Space");
+    rime->free_context(&context);
+
+    /* A digit key commits the highlighted candidate, not candidate number one. */
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the menu must exist before the digit key");
+        return;
+    }
+    check(context.menu.highlighted_candidate_index == 1,
+          "cycling must select the second candidate before the digit key");
+    snprintf(expected, sizeof(expected), "%s",
+             context.menu.candidates[context.menu.highlighted_candidate_index].text
+                 ? context.menu.candidates[context.menu.highlighted_candidate_index].text
+                 : "");
+    rime->free_context(&context);
+    check(expected[0] != '\0', "the cycled candidate must have text");
+    press('1');
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
+          "a digit must commit the highlighted candidate instead of selecting by number");
+    if (!current_menu(&context)) {
+        check(False, "the digit must leave a queryable next input");
+        return;
+    }
+    check(composing(), "the digit must start the next composition");
+    check(context.composition.preedit && strcmp(context.composition.preedit, "1") == 0,
+          "the digit must be the next input reading");
+    check(context.menu.num_candidates == 0, "the digit must keep the next menu hidden");
+    if (g_verbose) print_context();
+    rime->free_context(&context);
+}
+
+/* SPEC: an ordinary key after Henkan commits katakana and starts the next
+ * full-width reading without opening the candidate list. */
+static void test_henkan_typing_key_starts_next_input(void) {
+    static const struct {
+        int key;
+        const char* reading;
+        const char* description;
+    } cases[] = {
+        {'k', "k", "letter"},
+        {'1', "1", "digit"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text("kanji");
+        press(kHenkan);
+        press(cases[i].key);
+        char commit[256];
+        char description[128];
+        snprintf(description, sizeof(description), "Henkan then %s must commit katakana",
+                 cases[i].description);
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, "カンジ") == 0,
+              description);
+        RIME_STRUCT(RimeContext, context);
+        if (!current_menu(&context)) {
+            check(False, "Henkan then typing must leave a queryable next input");
+            continue;
+        }
+        snprintf(description, sizeof(description), "Henkan then %s must start composing",
+                 cases[i].description);
+        check(composing(), description);
+        snprintf(description, sizeof(description), "Henkan then %s must start the next reading",
+                 cases[i].description);
+        check(context.composition.preedit &&
+                  strcmp(context.composition.preedit, cases[i].reading) == 0,
+              description);
+        check(context.menu.num_candidates == 0,
+              "Henkan then typing must keep the next menu hidden");
+        if (g_verbose) print_context();
+        rime->free_context(&context);
     }
 }
 
@@ -442,10 +660,14 @@ int main(int argc, char* argv[]) {
         test_default_schema_is_kagiroi,
         test_n_run_correction,
         test_n_run_preedit,
+        test_n_run_conversion_reading,
         test_kan_space_starts_conversion,
         test_zenkaku_hankaku_toggles_ascii,
         test_henkan_promotes_katakana,
         test_henkan_space_enter_chain,
+        test_backspace_escape_return_to_reading,
+        test_typing_key_commits_selection,
+        test_henkan_typing_key_starts_next_input,
         test_typing_hides_candidates,
         test_first_space_reveals_candidates,
         test_space_cycles_candidates,

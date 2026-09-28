@@ -9,8 +9,12 @@ local romaji_to_kana = {
     chi = "ち",
     ti = "ち",
     da = "だ",
+    de = "で",
     ha = "は",
     nya = "にゃ",
+    ne = "ね",
+    e = "え",
+    a = "あ",
 }
 
 local base = {}
@@ -61,13 +65,24 @@ local function new_environment()
     end
     function context:pop_input(length)
         self.caret_pos = self.caret_pos - length
-        self.input = self.input:sub(1, self.caret_pos) .. self.input:sub(self.caret_pos + length + 1)
+        rawset(self, "input",
+            self.input:sub(1, self.caret_pos) .. self.input:sub(self.caret_pos + length + 1))
     end
     function context:push_input(text)
-        self.input = self.input:sub(1, self.caret_pos) .. text .. self.input:sub(self.caret_pos + 1)
+        rawset(self, "input",
+            self.input:sub(1, self.caret_pos) .. text .. self.input:sub(self.caret_pos + 1))
         self.caret_pos = self.caret_pos + #text
     end
     context.composition = composition
+    -- Mirror librime's set_input: assigning input moves the caret to the end.
+    setmetatable(context, {
+        __newindex = function(table, key, value)
+            rawset(table, key, value)
+            if key == "input" then
+                rawset(table, "caret_pos", #value)
+            end
+        end,
+    })
 
     return {
         engine = { context = context },
@@ -89,6 +104,7 @@ local function press(env, character)
     if result == kNoop and character ~= " " then
         env.context:push_input(character)
     end
+    return result
 end
 
 local function type_text(text)
@@ -100,24 +116,60 @@ local function type_text(text)
     return env.context.input
 end
 
-local cases = {
+-- SPEC: the reading shown while typing.
+local typing_cases = {
+    { input = "kan", expected = "かn" },
+    { input = "kanji", expected = "かんじ" },
+    { input = "kannji", expected = "かんじ" },
+    { input = "kannnji", expected = "かんんじ" },
+    { input = "kana", expected = "かな" },
+    { input = "kanna", expected = "かんな" },
+    { input = "kannna", expected = "かんな" },
+    { input = "kannnna", expected = "かんんあ" },
+    { input = "konitiha", expected = "こにちは" },
+    { input = "konnnitiha", expected = "こんにちは" },
+    { input = "kanda", expected = "かんだ" },
+    { input = "kannda", expected = "かんだ" },
+    { input = "kannnda", expected = "かんんだ" },
+    { input = "kannnen", expected = "かんねn" },
+    { input = "kannnnen", expected = "かんんえn" },
+    { input = "nya", expected = "にゃ" },
+}
+
+for _, case in ipairs(typing_cases) do
+    local actual = type_text(case.input)
+    assert(actual == case.expected, case.input .. ": expected " .. case.expected .. ", got " .. actual)
+end
+
+-- SPEC: the reading used when Space converts.
+local conversion_cases = {
+    { input = "kan", expected = "かん" },
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんじ" },
     { input = "kana", expected = "かな" },
+    { input = "nya", expected = "にゃ" },
     { input = "kanna", expected = "かんな" },
     { input = "kannna", expected = "かんな" },
     { input = "kannnna", expected = "かんな" },
-    { input = "konitiha", expected = "こにちは" },
     { input = "konnnitiha", expected = "こんにちは" },
     { input = "kanda", expected = "かんだ" },
+    { input = "kannda", expected = "かんだ" },
     { input = "kannnda", expected = "かんだ" },
-    { input = "nya", expected = "にゃ" },
+    { input = "kannnen", expected = "かんねん" },
+    { input = "kannnnen", expected = "かんねん" },
 }
 
-for _, case in ipairs(cases) do
-    local actual = type_text(case.input)
-    assert(actual == case.expected, case.input .. ": expected " .. case.expected .. ", got " .. actual)
+for _, case in ipairs(conversion_cases) do
+    local env = new_environment()
+    processor.init(env)
+    for character in case.input:gmatch(".") do
+        press(env, character)
+    end
+    press(env, " ")
+    local actual = env.context.input
+    assert(actual == case.expected,
+        case.input .. " + Space: expected " .. case.expected .. ", got " .. actual)
 end
 
 local env = new_environment()
