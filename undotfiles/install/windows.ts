@@ -31,6 +31,7 @@ const managedPackages: readonly string[] = [
   "GIMP.GIMP.3",
   "DuongDieuPhap.ImageGlass",
   // "mulaRahul.Keyviz"
+  "LocalSend.LocalSend",
   "ch.LosslessCut",
   "MPC-BE.MPC-BE",
   "Mojang.MinecraftLauncher",
