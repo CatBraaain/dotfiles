@@ -1,14 +1,17 @@
--- Candidate visibility, the Space conversion flow, digits and the Henkan
+-- Candidate visibility, the Space conversion flow, direct input and the Henkan
 -- katakana promotion for the managed Kagiroi setup (dotfiles/rime/SPEC.md).
 -- Key handling wraps the n-run kana speller, which owns the reading
 -- corrections.
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local kAccepted = 1
+local kNoop = 2
 local kHenkan = 0xff23
 local kBackSpace = 0xff08
 local kEscape = 0xff1b
 local kSpace = 0x20
 local kTab = 0xff09
+local kUp = 0xff52
+local kDown = 0xff54
 local kReturn = 0xff0d
 local kKeypadDecimal = 0xffae
 local kKeypadEnter = 0xff8b
@@ -46,11 +49,17 @@ local function end_conversion(context, env, restore_reading)
     env.conversion = nil
 end
 
-local function select_next_candidate(context)
+local function select_candidate(context, direction)
     local segment = context.composition:back()
-    local next_index = segment.selected_index + 1
-    if not segment:get_candidate_at(next_index) then
+    local max_index = context:get_option("_kagiroi_expand_candidates") and math.huge or 9
+    local next_index = segment.selected_index + direction
+    if direction > 0 and (next_index > max_index or not segment:get_candidate_at(next_index)) then
         next_index = 0
+    elseif next_index < 0 then
+        next_index = 0
+        while next_index < max_index and segment:get_candidate_at(next_index + 1) do
+            next_index = next_index + 1
+        end
     end
     if type(context.highlight) == "function" then
         context:highlight(next_index)
@@ -144,7 +153,7 @@ local function reveal_conversion(context, env)
         return nil
     end
     if conversion.advance_on_reveal then
-        select_next_candidate(context)
+        select_candidate(context, 1)
         conversion.advance_on_reveal = false
     end
     return kAccepted
@@ -174,22 +183,50 @@ end
 
 function Top.func(key_event, env)
     local context = env.engine.context
+    if context:get_option("ascii_mode") then
+        return kNoop
+    end
     if key_event:release() or key_event:ctrl() or key_event:alt() or key_event:super() then
         return kana_speller.func(key_event, env)
     end
 
     local keycode = key_event.keycode
-    -- The keypad digits and Enter act as their main-keyboard keys
-    -- (dotfiles/rime/SPEC.md). KP_Decimal is handled apart below because its
-    -- main-keyboard twin is the punctuation key instead.
-    if keycode >= kKeypadZero and keycode <= kKeypadZero + 9 then
-        keycode = 0x30 + keycode - kKeypadZero
-    elseif keycode == kKeypadEnter then
+    if keycode == kKeypadEnter then
         keycode = kReturn
     end
-
-    local composing = context.input ~= "" and not context:get_option("ascii_mode")
+    local composing = context.input ~= ""
     local menu_visible = composing and not context:get_option("_kagiroi_hide_candidates")
+
+    local main_digit = keycode >= 0x30 and keycode <= 0x39
+    local keypad_digit = keycode >= kKeypadZero and keycode <= kKeypadZero + 9
+    local shifted_letter = key_event:shift()
+        and (keycode >= 0x41 and keycode <= 0x5a or keycode >= 0x61 and keycode <= 0x7a)
+    if main_digit or keypad_digit or keycode == kKeypadDecimal or shifted_letter
+        or keycode == string.byte(";") then
+        if composing then
+            commit_unconfirmed(context, env)
+        end
+        context:set_option("_kagiroi_hide_candidates", true)
+        local text
+        if main_digit then
+            text = utf8.char(0xff10 + keycode - 0x30)
+        elseif keypad_digit then
+            text = string.char(0x30 + keycode - kKeypadZero)
+        elseif keycode == kKeypadDecimal then
+            text = "．"
+        elseif keycode == string.byte(";") then
+            text = "；"
+        else
+            text = string.char(keycode):upper()
+        end
+        env.engine:commit_text(text)
+        return kAccepted
+    end
+
+    if not composing and keycode == kSpace then
+        env.engine:commit_text("　")
+        return kAccepted
+    end
 
     if composing and keycode == kHenkan then
         return start_henkan(context, env)
@@ -211,6 +248,7 @@ function Top.func(key_event, env)
         local text = candidate and candidate.text or env.conversion and env.conversion.display or context.input
         local last_character = utf8.offset(text, -1)
         end_conversion(context, env, false)
+        reset_expansion(context)
         context:set_option("_kagiroi_hide_candidates", true)
         context.input = last_character and text:sub(1, last_character - 1) or ""
         return kAccepted
@@ -222,21 +260,20 @@ function Top.func(key_event, env)
     end
 
     if not composing then
-        if keycode >= 0x21 and keycode <= 0x7e
-            and env.alphabet:find(string.char(keycode), 1, true) then
-            end_conversion(context, env, false)
-            reset_expansion(context)
-            context:set_option("_kagiroi_hide_candidates", true)
+        if keycode >= 0x21 and keycode <= 0x7e then
+            if env.alphabet:find(string.char(keycode), 1, true) then
+                end_conversion(context, env, false)
+                reset_expansion(context)
+                context:set_option("_kagiroi_hide_candidates", true)
+            else
+                context:set_option("_kagiroi_hide_candidates", false)
+            end
         end
         return kana_speller.func(key_event, env)
     end
 
-    -- Digits and the keypad decimal commit whatever is unconfirmed and
-    -- become the next reading; they never pick candidates by number.
-    if keycode >= 0x30 and keycode <= 0x39 or keycode == kKeypadDecimal then
-        commit_unconfirmed(context, env)
-        context:set_option("_kagiroi_hide_candidates", true)
-        context:push_input(keycode == kKeypadDecimal and "." or string.char(keycode))
+    if menu_visible and (keycode == kUp or keycode == kDown) and context:has_menu() then
+        select_candidate(context, keycode == kUp and -1 or 1)
         return kAccepted
     end
 
@@ -261,7 +298,7 @@ function Top.func(key_event, env)
     if keycode == kSpace then
         if menu_visible then
             if context:has_menu() then
-                select_next_candidate(context)
+                select_candidate(context, 1)
                 return kAccepted
             end
         elseif env.conversion then
@@ -290,17 +327,16 @@ function Top.func(key_event, env)
     elseif keycode == kReturn then
         commit_unconfirmed(context, env)
         return kAccepted
-    elseif (menu_visible and context:has_menu() or env.conversion)
-        and keycode >= 0x21 and keycode <= 0x7e then
-        -- A regular typing key commits the selection before starting the
-        -- next full-width input, even while a conversion keeps the menu
-        -- hidden.
+    elseif keycode >= 0x21 and keycode <= 0x7e
+        and (menu_visible and context:has_menu() or env.conversion
+            or keycode ~= string.byte("-") and not string.char(keycode):match("%a")) then
+        -- Symbols commit even a hidden reading; letters commit only when a
+        -- conversion has selected a candidate. Minus extends the reading.
         commit_unconfirmed(context, env)
         local character = string.char(keycode)
-        if character == "," or character == "." then
-            -- Open the gate so the downstream punctuator can build its own
-            -- candidate and commit the full-width punctuation; the next
-            -- typing key re-hides the menu.
+        if character ~= "-" and not character:match("%a") then
+            -- Open the gate for the next symbol's candidate or direct commit;
+            -- a new kana reading keeps its candidate list hidden.
             context:set_option("_kagiroi_hide_candidates", false)
             return kana_speller.func(key_event, env)
         end

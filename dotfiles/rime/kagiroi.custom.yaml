@@ -1,6 +1,16 @@
 patch:
-  "engine/processors/@3": lua_processor@*kagiroi/rime_controls
-  "engine/processors/@before 0": lua_processor@*kagiroi/rime_ascii_toggle
+  # Handle direct input before the stock ascii composer and key binder.
+  "engine/processors":
+    - lua_processor@*kagiroi/rime_ascii_toggle
+    - lua_processor@*kagiroi/rime_controls
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
   "engine/filters/@after 1": lua_filter@*kagiroi/candidate_gate
   # The gate shows ten candidates before Tab; the expanded page holds 30.
   "menu/page_size": 30
@@ -39,11 +49,39 @@ patch:
     ISO_Left_Tab: previous_candidate
     Shift+Tab: previous_candidate
     Tab: next_candidate
-  # Comma and period commit , and . directly in the Japanese mode (the
-  # stock list entries would leave the menu open instead). The half/full
-  # width table already commits them, so it needs no patch.
-  "punctuator/half_shape/,": { commit: 、 }
-  "punctuator/half_shape/.": { commit: 。 }
-  # Start every session in the full-width punctuation mode so the two
-  # punctuator entries above are always in effect.
+  # Match the Japanese/full-width symbol choices even while full_shape is off.
+  "punctuator/half_shape":
+    ',': { commit: 、 }
+    '.': { commit: 。 }
+    '<': [ ＜, 〈, 《 ]
+    '>': [ ＞, 〉, 》 ]
+    '/': [ ・, /, ／ ]
+    '?': { commit: ？ }
+    ';': { commit: ； }
+    ':': { commit: ： }
+    "'": { pair: [ '‘', '’' ] }
+    '"': { pair: [ '“', '”' ] }
+    '\': [ ￥, '\', ＼ ]
+    '|': [ ·, ・, '|', ｜, '§', '¦', '‖', ︴ ]
+    '`': ｀
+    '~': [ 〜, '~', ˜, ˷, ⸯ, ≈, ≋, ≃, ≅, ≇, ∽, ⋍, ≌, ﹏, ﹋, ﹌, ︴ ]
+    '!': { commit: ！ }
+    '@': [ ＠, ☯ ]
+    '#': [ ＃, № ]
+    '%': [ ％, '°', '℃', ‰, ‱, ℉, ℅, ℆, ℀, ℁, ⅍ ]
+    '$': [ ＄, '€', '£', '¥', '¢', '¤', ₩ ]
+    '^': { commit: ＾ }
+    '&': ＆
+    '*': [ ＊, ·, ・, ×, ※, ❂, ⁂, ☮, ☯, ☣ ]
+    '(': （
+    ')': ）
+    '_': ＿
+    '+': ＋
+    '=': [ ＝, 々, 〃 ]
+    '[': [ 「, 【, 〔, ［, 〚, 〘 ]
+    ']': [ 」, 】, 〕, ］, 〛, 〙 ]
+    '{': [ 『, 〖, ｛ ]
+    '}': [ 』, 〗, ｝ ]
+  "punctuator/full_shape/$": [ ＄, '€', '£', '¥', '¢', '¤', ₩ ]
+  # Disable the half-width punctuation mode at the start of every session.
   "switches/@3/reset": 0
