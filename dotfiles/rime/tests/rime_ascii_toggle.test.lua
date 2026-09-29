@@ -68,9 +68,9 @@ assert(press() == kAccepted and not context:get_option("ascii_mode"),
 assert(context.input == "" and #context.commits == 0,
     "the return must stay idle without a stash")
 
--- Hiragana_Katakana always selects Japanese input and Muhenkan always
--- selects ascii input (dotfiles/rime/SPEC.md); both keep the composition
--- unconfirmed like Zenkaku_Hankaku.
+-- Muhenkan always selects ascii input and keeps the composition unconfirmed
+-- like Zenkaku_Hankaku. Hiragana_Katakana is unbound: the key passes through
+-- without touching the mode or the stash (dotfiles/rime/SPEC.md).
 local kHiraganaKatakana = 0xff27
 local kMuhenkan = 0xff22
 context.input = "にほんご"
@@ -80,11 +80,9 @@ assert(context.input == "" and controls.kept.input == "にほんご" and #contex
     "Muhenkan must stash the composition unconfirmed")
 press({ keycode = kMuhenkan })
 assert(context:get_option("ascii_mode"), "a second Muhenkan must stay in ascii mode")
-press({ keycode = kHiraganaKatakana })
-assert(not context:get_option("ascii_mode"), "Hiragana_Katakana must always select Japanese mode")
-assert(context.input == "にほんご" and controls.kept.input == nil and #context.commits == 0,
-    "Hiragana_Katakana must restore the stashed composition")
-press({ keycode = kHiraganaKatakana })
-assert(not context:get_option("ascii_mode"), "a second Hiragana_Katakana must stay in Japanese mode")
+assert(press({ keycode = kHiraganaKatakana }) == kNoop,
+    "Hiragana_Katakana must pass through unbound")
+assert(context:get_option("ascii_mode") and context.input == "" and controls.kept.input == "にほんご",
+    "Hiragana_Katakana must leave the ascii mode and the stash unchanged")
 
 print("Rime ascii mode toggle tests passed")

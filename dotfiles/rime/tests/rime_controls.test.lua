@@ -281,6 +281,32 @@ press(env, 0xff52)
 press(env, 0xff54)
 assert(segment.selected_index == 0 and #context.commits == 0, "a single candidate must stay highlighted without committing")
 
+-- Left and Right select the conversion blocks only with the open list:
+-- they pass through to the navigator then, and do nothing while typing and
+-- during the hidden conversion (dotfiles/rime/SPEC.md).
+env, context, segment = new_environment()
+context.input = "かな"
+context:set_option("_kagiroi_hide_candidates", true)
+assert(press(env, 0xff51) == kAccepted and press(env, 0xff53) == kAccepted,
+    "Left and Right while typing must be consumed")
+assert(context.input == "かな" and #context.commits == 0,
+    "the arrows while typing must leave the composition alone")
+press(env, 0x20)
+assert(press(env, 0xff51) == kAccepted,
+    "Left during the hidden conversion must be consumed")
+assert(context.input == "かな" and #context.commits == 0 and env.conversion.reading == "かな",
+    "the arrow during the hidden conversion must leave the conversion alone")
+press(env, 0x20)
+assert(press(env, 0xff51) == kNoop and press(env, 0xff53) == kNoop,
+    "Left and Right with the open list must reach the navigator")
+assert(context.input == "か" and #context.commits == 0,
+    "the block navigation must not commit")
+assert(not context:get_option("_kagiroi_hide_candidates"), "the list must stay open")
+press(env, 0xff1b)
+assert(press(env, 0xff53) == kAccepted, "Right without the list must be consumed again")
+env, context = new_environment()
+assert(press(env, 0xff51) == kNoop, "Left without a composition must pass through")
+
 -- Enter outside a composition passes through to the speller chain.
 local before_empty_enter = calls
 env, context = new_environment()
@@ -477,18 +503,19 @@ press(env, 0xff08)
 assert(context.input == "" and env.conversion == nil, "Backspace must remove the last character")
 assert(#context.commits == 0, "deleting the last character must not commit")
 
--- A letter key with the first candidate shown appends its raw form.
+-- A letter key with the first candidate shown confirms it and starts the
+-- next reading with the pressed key.
 env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 local before_restart = calls
-local typing_key = press(env, string.byte("k"))
-assert(typing_key == kAccepted, "the appended key must be consumed")
-assert(context.input == "かなk", "a typing key must append the raw letter to the display")
-assert(#context.commits == 0, "a typing key must not commit")
-assert(context:get_option("_kagiroi_hide_candidates"), "the appended input must keep the list hidden")
-assert(calls == before_restart, "the appended key must bypass the kana speller")
+press(env, string.byte("k"))
+assert(context.commits[1] == "かな", "a typing key must confirm the first candidate")
+assert(calls == before_restart + 1, "the pressed key must start the next reading through the speller")
+assert(context.input == "" and #context.commits == 1,
+    "the confirmation must leave the input to the speller")
+assert(context:get_option("_kagiroi_hide_candidates"), "the next reading must keep the list hidden")
 
 -- Idle Space appends a full-width space unconfirmed, and further Spaces
 -- keep appending while the input holds only full-width spaces.
@@ -548,8 +575,8 @@ context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0xff8b)
 assert(context.commits[1] == "かんな" and context.input == "", "KP_Enter must commit like Enter")
 
--- A digit with the menu visible appends to the highlighted candidate
--- instead of selecting by number.
+-- A digit with the menu visible confirms the highlighted candidate and
+-- starts a fresh unconfirmed input instead of selecting by number.
 env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
@@ -558,17 +585,20 @@ press(env, 0x20)
 assert(segment.selected_index == 1, "the reveal must highlight the second candidate")
 local menu_digit = press(env, string.byte("1"))
 assert(menu_digit == kAccepted, "a digit must be consumed without selecting by number")
-assert(context.input == "仮名１" and #context.commits == 0,
-    "a menu digit must append to the highlighted candidate")
+assert(context.commits[1] == "仮名", "a menu digit must confirm the highlighted candidate")
+assert(context.input == "１" and #context.commits == 1,
+    "a menu digit must start a fresh input with the full-width digit")
 
--- A digit after Henkan appends to the katakana without committing.
+-- A digit after Henkan confirms the katakana and starts a fresh input.
 env, context, segment = new_environment()
 context.input = "かな"
 press(env, 0xff23)
 press(env, string.byte("2"))
-assert(context.input == "カナ２" and #context.commits == 0,
-    "a digit after Henkan must append unconfirmed")
-assert(env.conversion == nil, "appending must end the Henkan state")
+assert(context.commits[1] == "カナ", "a digit after Henkan must confirm the katakana")
+assert(context.input == "２" and #context.commits == 1,
+    "a digit after Henkan must start a fresh input")
+assert(env.conversion == nil, "confirming must end the Henkan state")
+assert(not context:get_option("katakana"), "confirming must restore the kana mode")
 
 -- Symbols after a hidden reading append to it and keep the gate closed.
 env, context, segment = new_environment()
@@ -579,7 +609,7 @@ assert(context.input == "かな＄" and #context.commits == 0, "dollar must appe
 assert(context:get_option("_kagiroi_hide_candidates"), "dollar must keep the list hidden")
 
 -- Minus extends the reading while typing; after a selection, minus and
--- equal append their symbol to the selected candidate.
+-- equal confirm it and start a fresh input with their symbol.
 env, context, segment = new_environment()
 context.input = "かな"
 context:set_option("_kagiroi_hide_candidates", true)
@@ -592,8 +622,9 @@ for _, case in ipairs({ { key = "-", symbol = "ー" }, { key = "=", symbol = "�
     press(env, 0x20)
     press(env, 0x20)
     assert(press(env, string.byte(case.key)) == kAccepted, "the symbol must be consumed")
-    assert(context.input == "仮名" .. case.symbol and #context.commits == 0,
-        "the symbol must append to the highlighted candidate")
+    assert(context.commits[1] == "仮名", "the symbol must confirm the highlighted candidate")
+    assert(context.input == case.symbol and #context.commits == 1,
+        "the symbol must start a fresh input")
     assert(context:get_option("_kagiroi_hide_candidates"),
         "the append must keep the list hidden")
 end
@@ -606,16 +637,19 @@ assert(press(env, string.byte(";")) == kAccepted, "semicolon must be consumed")
 assert(context.input == "かな；" and #context.commits == 0,
     "semicolon must append the full-width symbol")
 
--- Shift+letter appends the half-width letter to the conversion.
+-- Shift+letter confirms the conversion and starts a fresh input with the
+-- half-width letter.
 env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 assert(press(env, string.byte("A"), { shift = true }) == kAccepted, "Shift+A must be consumed")
-assert(context.input == "かなA" and #context.commits == 0,
-    "Shift+A must append the ASCII letter to the conversion")
+assert(context.commits[1] == "かな", "Shift+A must confirm the conversion")
+assert(context.input == "A" and #context.commits == 1,
+    "Shift+A must start a fresh input with the ASCII letter")
 
--- Comma and period append their punctuation to the selected candidate.
+-- Comma and period confirm the selection and start a fresh input with the
+-- punctuation.
 for _, case in ipairs({ { key = ",", punct = "、" }, { key = ".", punct = "。" } }) do
     env, context, segment = new_environment()
     context.input = "か"
@@ -625,20 +659,22 @@ for _, case in ipairs({ { key = ",", punct = "、" }, { key = ".", punct = "。"
     assert(segment.selected_index == 1, "cycling must select the second candidate first")
     local result = press(env, string.byte(case.key))
     assert(result == kAccepted, "the " .. case.key .. " key must be consumed")
-    assert(context.input == "仮名" .. case.punct and #context.commits == 0,
-        "a " .. case.key .. " key must append the punctuation to the selection")
+    assert(context.commits[1] == "仮名", "a " .. case.key .. " key must confirm the selection")
+    assert(context.input == case.punct and #context.commits == 1,
+        "a " .. case.key .. " key must start a fresh input with the punctuation")
     assert(context:get_option("_kagiroi_hide_candidates"),
         "the append must keep the gate closed")
 
     -- From the hidden conversion after the first Space, the punctuation
-    -- appends to the inline display.
+    -- confirms the inline display and starts a fresh input.
     env, context, segment = new_environment()
     context.input = "か"
     context:set_option("_kagiroi_hide_candidates", true)
     press(env, 0x20)
     press(env, string.byte(case.key))
-    assert(context.input == "かな" .. case.punct and #context.commits == 0,
-        "a " .. case.key .. " key after the first Space must append to the display")
+    assert(context.commits[1] == "かな", "a " .. case.key .. " key after the first Space must confirm the display")
+    assert(context.input == case.punct and #context.commits == 1,
+        "a " .. case.key .. " key after the first Space must start a fresh input")
     assert(context:get_option("_kagiroi_hide_candidates"),
         "the append must keep the gate closed")
 end

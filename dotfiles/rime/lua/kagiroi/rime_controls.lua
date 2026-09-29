@@ -1,7 +1,7 @@
 -- Candidate visibility, the Space conversion flow, unconfirmed appends and
--- the Henkan katakana promotion for the managed Kagiroi setup
--- (dotfiles/rime/SPEC.md). Key handling wraps the n-run kana speller, which
--- owns the reading corrections.
+-- conversion confirmations, and the Henkan katakana promotion for the managed
+-- Kagiroi setup (dotfiles/rime/SPEC.md). Key handling wraps the n-run kana
+-- speller, which owns the reading corrections.
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local kAccepted = 1
 local kNoop = 2
@@ -13,6 +13,8 @@ local kTab = 0xff09
 local kISOLeftTab = 0xfe20
 local kUp = 0xff52
 local kDown = 0xff54
+local kLeft = 0xff51
+local kRight = 0xff53
 local kReturn = 0xff0d
 local kKeypadDecimal = 0xffae
 local kKeypadEnter = 0xff8b
@@ -252,6 +254,13 @@ function Top.fini(env)
     kana_speller.fini(env)
 end
 
+-- Whether the keycode is a plain letter, shared by appended_text and the
+-- conversion confirmation.
+local function is_plain_letter(keycode)
+    return keycode >= 0x41 and keycode <= 0x5a
+        or keycode >= 0x61 and keycode <= 0x7a
+end
+
 -- The text a direct-append key adds to the unconfirmed input, or nil when the
 -- key is not one. Digits, symbols and the punctuation extend the unconfirmed
 -- text instead of committing it; plain letters append only during conversion
@@ -259,7 +268,6 @@ end
 local function appended_text(keycode, key_event, in_conversion)
     local main_digit = keycode >= 0x30 and keycode <= 0x39
     local keypad_digit = keycode >= kKeypadZero and keycode <= kKeypadZero + 9
-    local letter = keycode >= 0x41 and keycode <= 0x5a or keycode >= 0x61 and keycode <= 0x7a
     if main_digit then
         return utf8.char(0xff10 + keycode - 0x30)
     end
@@ -275,7 +283,7 @@ local function appended_text(keycode, key_event, in_conversion)
     if keycode == string.byte(".") then
         return "。"
     end
-    if letter then
+    if is_plain_letter(keycode) then
         if key_event:shift() then
             return string.char(keycode):upper()
         end
@@ -310,9 +318,19 @@ function Top.func(key_event, env)
 
     local append = appended_text(keycode, key_event, in_conversion)
     if append then
-        if composing then
-            pin_selection(context, env)
+        if in_conversion then
+            -- A character key during conversion confirms the selected
+            -- candidate first (dotfiles/rime/SPEC.md). A plain letter starts
+            -- the next reading; the rest append to a fresh input.
+            commit_unconfirmed(context, env)
+            if is_plain_letter(keycode) and not key_event:shift() then
+                context:set_option("_kagiroi_hide_candidates", true)
+                return kana_speller.func(key_event, env)
+            end
         else
+            if composing then
+                pin_selection(context, env)
+            end
             context:set_option("_kagiroi_hide_candidates", true)
         end
         context:push_input(append)
@@ -372,6 +390,16 @@ function Top.func(key_event, env)
             context:set_option("_kagiroi_hide_candidates", true)
         end
         return kana_speller.func(key_event, env)
+    end
+
+    if composing and (keycode == kLeft or keycode == kRight) then
+        -- The open candidate list moves the selection across the conversion
+        -- blocks through the navigator behind the selector
+        -- (dotfiles/rime/SPEC.md). Elsewhere the arrows do nothing.
+        if menu_visible and context:has_menu() then
+            return kNoop
+        end
+        return kAccepted
     end
 
     if menu_visible and (keycode == kUp or keycode == kDown) and context:has_menu() then

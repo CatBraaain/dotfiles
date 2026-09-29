@@ -1,7 +1,6 @@
 local kAccepted = 1
 local kNoop = 2
 local kZenkakuHankaku = 0xff2a
-local kHiraganaKatakana = 0xff27
 local kMuhenkan = 0xff22
 local controls = require("kagiroi/rime_controls")
 
@@ -29,17 +28,14 @@ local function toggle_ascii_mode(key_event, env)
     local keycode = key_event.keycode
     if key_event:release()
         or key_event:shift() or key_event:ctrl() or key_event:alt() or key_event:super()
-        or (keycode ~= kZenkakuHankaku and keycode ~= kHiraganaKatakana and keycode ~= kMuhenkan) then
+        or (keycode ~= kZenkakuHankaku and keycode ~= kMuhenkan) then
         return kNoop
     end
 
     local context = env.engine.context
-    -- Zenkaku_Hankaku toggles. Hiragana_Katakana and Muhenkan are one-way
-    -- switches: they always select Japanese and ascii input respectively
-    -- (dotfiles/rime/SPEC.md).
-    if keycode == kHiraganaKatakana then
-        switch_ascii_mode(context, false)
-    elseif keycode == kMuhenkan then
+    -- Zenkaku_Hankaku toggles. Muhenkan is a one-way switch that always
+    -- selects ascii input (dotfiles/rime/SPEC.md).
+    if keycode == kMuhenkan then
         switch_ascii_mode(context, true)
     else
         switch_ascii_mode(context, not context:get_option("ascii_mode"))

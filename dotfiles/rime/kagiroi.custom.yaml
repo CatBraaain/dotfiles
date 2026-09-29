@@ -49,3 +49,16 @@ patch:
   # punctuator and its shape tables stay unused.
   # Disable the half-width punctuation mode at the start of every session.
   "switches/@3/reset": 0
+  # The candidate menu pages with PageUp and PageDown only: Left and Right
+  # select the conversion blocks through the navigator instead of paging
+  # (dotfiles/rime/SPEC.md). The noop bindings erase the stock selector
+  # bindings so the keys reach the navigator.
+  "selector/bindings":
+    Left: noop
+    Right: noop
+  "selector/linear/bindings":
+    Left: noop
+    Right: noop
+  "navigator/bindings":
+    Left: left_by_syllable
+    Right: right_by_syllable
