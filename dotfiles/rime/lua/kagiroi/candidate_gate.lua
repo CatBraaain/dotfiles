@@ -6,8 +6,22 @@ local function hide_or_pass(translation, env)
     if env.engine.context:get_option("_kagiroi_hide_candidates") then
         return
     end
+    local expanded = env.engine.context:get_option("_kagiroi_expand_candidates")
+    local count = 0
     for candidate in translation:iter() do
+        if count % 30 == 0 then
+            local page_comment = "Page " .. (math.floor(count / 30) + 1)
+            local comment = candidate.comment or ""
+            if comment ~= "" then
+                page_comment = comment .. " " .. page_comment
+            end
+            candidate = candidate:to_shadow_candidate(candidate.type, candidate.text, page_comment)
+        end
         yield(candidate)
+        count = count + 1
+        if not expanded and count == 10 then
+            return
+        end
     end
 end
 

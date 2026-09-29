@@ -8,11 +8,16 @@ local kHenkan = 0xff23
 local kBackSpace = 0xff08
 local kEscape = 0xff1b
 local kSpace = 0x20
+local kTab = 0xff09
 local kReturn = 0xff0d
 local kKeypadDecimal = 0xffae
 local kKeypadEnter = 0xff8b
 local kKeypadZero = 0xffb0
 local Top = {}
+
+local function reset_expansion(context)
+    context:set_option("_kagiroi_expand_candidates", false)
+end
 
 -- env.conversion is the unconfirmed inline conversion state, started by the
 -- first Space (the first dictionary candidate) and by Henkan (katakana):
@@ -63,6 +68,7 @@ end
 local function commit_unconfirmed(context, env)
     context:commit()
     end_conversion(context, env, false)
+    reset_expansion(context)
 end
 
 -- Henkan (the SPEC's own rule): keep the composition unconfirmed, show the
@@ -127,6 +133,7 @@ end
 -- shown inline. Returns nil when no menu builds, leaving the Space to the
 -- stock processors.
 local function reveal_conversion(context, env)
+    reset_expansion(context)
     local conversion = env.conversion
     if context.input ~= conversion.query then
         context.input = conversion.query
@@ -153,6 +160,7 @@ function Top.init(env)
     if context.commit_notifier then
         env.commit_connection = context.commit_notifier:connect(function()
             end_conversion(context, env, false)
+            reset_expansion(context)
         end)
     end
 end
@@ -191,6 +199,7 @@ function Top.func(key_event, env)
     -- Unicode character of the selected candidate and ends conversion.
     if composing and (menu_visible or env.conversion) and keycode == kEscape then
         end_conversion(context, env, true)
+        reset_expansion(context)
         context:set_option("_kagiroi_hide_candidates", true)
         return kAccepted
     end
@@ -216,6 +225,7 @@ function Top.func(key_event, env)
         if keycode >= 0x21 and keycode <= 0x7e
             and env.alphabet:find(string.char(keycode), 1, true) then
             end_conversion(context, env, false)
+            reset_expansion(context)
             context:set_option("_kagiroi_hide_candidates", true)
         end
         return kana_speller.func(key_event, env)
@@ -227,6 +237,24 @@ function Top.func(key_event, env)
         commit_unconfirmed(context, env)
         context:set_option("_kagiroi_hide_candidates", true)
         context:push_input(keycode == kKeypadDecimal and "." or string.char(keycode))
+        return kAccepted
+    end
+
+    if keycode == kTab and menu_visible and context:has_menu()
+        and not key_event:shift() and not context:get_option("_kagiroi_expand_candidates") then
+        local selected_index = context.composition:back().selected_index
+        context:set_option("_kagiroi_expand_candidates", true)
+        context:refresh_non_confirmed_composition()
+        if context:has_menu() then
+            local segment = context.composition:back()
+            if segment.selected_index ~= selected_index then
+                if type(context.highlight) == "function" then
+                    context:highlight(selected_index)
+                else
+                    segment.selected_index = selected_index
+                end
+            end
+        end
         return kAccepted
     end
 

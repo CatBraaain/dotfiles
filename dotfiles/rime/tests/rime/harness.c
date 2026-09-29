@@ -877,17 +877,23 @@ static void test_comma_period_commit_selection(void) {
     }
 }
 
-/* SPEC: Tab moves the selection to the next candidate without committing. */
-static void test_tab_moves_to_next_candidate(void) {
+/* SPEC: the first visible Tab expands ten candidates to thirty without
+ * changing the selection; later Tab steps to the next candidate. */
+static void test_tab_expands_candidates(void) {
     fresh_session();
     type_text("kanji");
+    press(kTab);
+    check(!option("_kagiroi_expand_candidates"), "Tab while typing must not expand");
     press(kSpace);
+    press(kTab);
+    check(!option("_kagiroi_expand_candidates"), "Tab after the first Space must not expand");
     press(kSpace);
     RIME_STRUCT(RimeContext, context);
     if (!current_menu(&context)) {
         check(False, "the menu must exist before Tab");
         return;
     }
+    check(context.menu.num_candidates <= 10, "the initial menu must have at most ten candidates");
     check(context.menu.highlighted_candidate_index == 1,
           "the reveal must select the second candidate before Tab");
     rime->free_context(&context);
@@ -897,20 +903,48 @@ static void test_tab_moves_to_next_candidate(void) {
         return;
     }
     check(composing(), "Tab must keep the composition open");
+    check(option("_kagiroi_expand_candidates"), "the first visible Tab must expand the menu");
+    check(context.menu.highlighted_candidate_index == 1,
+          "the first visible Tab must keep the selection");
+    rime->free_context(&context);
+    press(kTab);
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive the second Tab");
+        return;
+    }
     check(context.menu.highlighted_candidate_index == 2,
-          "Tab must move the selection to the next candidate");
+          "the second Tab must move the selection to the next candidate");
+    rime->free_context(&context);
+    rime->process_key(session, kTab, 1);
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive Shift+Tab");
+        return;
+    }
+    check(context.menu.highlighted_candidate_index == 1,
+          "Shift+Tab must select the previous candidate");
     rime->free_context(&context);
     char commit[256];
     check(!take_commit(commit, sizeof(commit)), "Tab must not commit");
+    press(kBackSpace);
+    check(!option("_kagiroi_expand_candidates"), "Backspace must reset expansion");
+    press(kSpace);
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the menu must reopen after Backspace");
+        return;
+    }
+    check(context.menu.num_candidates <= 10, "the next menu must begin collapsed");
+    rime->free_context(&context);
+    press(kTab);
+    press(kEscape);
+    check(!option("_kagiroi_expand_candidates"), "Esc must reset expansion");
 }
 
-/*
- * SPEC: one page holds up to 30 candidates, standing in for the MS-IME
- * expanded list (dotfiles/rime/SPEC.md).
- */
+/* SPEC: every expanded page has labels 1-30 and its first candidate shows
+ * the page number in the final displayed order. */
 static void test_page_size_is_30(void) {
     fresh_session();
-    type_text("kanji");
+    type_text("ka");
     press(kSpace);
     press(kSpace);
     RIME_STRUCT(RimeContext, context);
@@ -918,10 +952,64 @@ static void test_page_size_is_30(void) {
         check(False, "the menu must exist for the page size check");
         return;
     }
-    check(context.menu.num_candidates > 5,
-          "the menu must hold more than the stock page size of five");
-    check(context.menu.num_candidates <= 30,
-          "the menu must hold at most one page of 30 candidates");
+    if (g_verbose) print_context();
+    check(context.menu.num_candidates == 10,
+          "a reading with many candidates must initially show exactly ten");
+    check(context.menu.candidates[0].comment &&
+              strstr(context.menu.candidates[0].comment, "Page 1"),
+          "the first collapsed candidate must show Page 1");
+    rime->free_context(&context);
+    press(kTab);
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive expansion");
+        return;
+    }
+    if (g_verbose) print_context();
+    check(context.menu.num_candidates == 30,
+          "a reading with many candidates must show thirty after Tab");
+    check(context.select_labels && strcmp(context.select_labels[0], "1") == 0 &&
+              strcmp(context.select_labels[29], "30") == 0,
+          "the first page must expose labels 1 through 30");
+    check(context.menu.candidates[0].comment &&
+              strstr(context.menu.candidates[0].comment, "Page 1"),
+          "the expanded first page must show Page 1 on its first candidate");
+    rime->free_context(&context);
+    press('=');
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive paging");
+        return;
+    }
+    if (g_verbose) print_context();
+    check(context.menu.page_no == 1, "equal must move to the next page");
+    check(context.select_labels && strcmp(context.select_labels[0], "1") == 0 &&
+              strcmp(context.select_labels[29], "30") == 0,
+          "the next page must restart labels at 1 through 30");
+    check(context.menu.candidates[0].comment &&
+              strstr(context.menu.candidates[0].comment, "Page 2"),
+          "the first candidate on the next page must show Page 2");
+    rime->free_context(&context);
+    press('-');
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive paging back");
+        return;
+    }
+    check(context.menu.page_no == 0 && context.select_labels &&
+              strcmp(context.select_labels[0], "1") == 0,
+          "minus must return to the first page and its labels");
+    rime->free_context(&context);
+    press('1');
+    char commit[256];
+    check(take_commit(commit, sizeof(commit)), "a digit must commit the selected candidate");
+    check(!option("_kagiroi_expand_candidates"), "a digit must reset expansion");
+    type_text("ka");
+    press(kSpace);
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the next reading must have a menu");
+        return;
+    }
+    check(context.menu.num_candidates > 0 && context.menu.num_candidates <= 10,
+          "the next reading must begin with a nonempty collapsed menu");
     rime->free_context(&context);
 }
 
@@ -1343,7 +1431,7 @@ int main(int argc, char* argv[]) {
         test_backspace_escape_return_to_reading,
         test_typing_key_commits_selection,
         test_comma_period_commit_selection,
-        test_tab_moves_to_next_candidate,
+        test_tab_expands_candidates,
         test_page_size_is_30,
         test_henkan_typing_key_starts_next_input,
         test_typing_hides_candidates,

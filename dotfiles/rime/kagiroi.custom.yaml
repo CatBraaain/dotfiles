@@ -1,10 +1,40 @@
 patch:
   "engine/processors/@3": lua_processor@*kagiroi/rime_controls
   "engine/processors/@before 0": lua_processor@*kagiroi/rime_ascii_toggle
-  "engine/filters/@before 0": lua_filter@*kagiroi/candidate_gate
-  # One page holds (nearly) the whole menu as the MS-IME expanded list, and
-  # Tab / Shift+Tab step the selection through the candidates.
+  "engine/filters/@after 1": lua_filter@*kagiroi/candidate_gate
+  # The gate shows ten candidates before Tab; the expanded page holds 30.
   "menu/page_size": 30
+  "menu/alternative_select_labels":
+    - "1"
+    - "2"
+    - "3"
+    - "4"
+    - "5"
+    - "6"
+    - "7"
+    - "8"
+    - "9"
+    - "10"
+    - "11"
+    - "12"
+    - "13"
+    - "14"
+    - "15"
+    - "16"
+    - "17"
+    - "18"
+    - "19"
+    - "20"
+    - "21"
+    - "22"
+    - "23"
+    - "24"
+    - "25"
+    - "26"
+    - "27"
+    - "28"
+    - "29"
+    - "30"
   "selector/bindings":
     ISO_Left_Tab: previous_candidate
     Shift+Tab: previous_candidate

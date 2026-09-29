@@ -76,6 +76,10 @@ local function new_environment(candidates)
             segment.selected_index = index
         end
     end
+    function context:refresh_non_confirmed_composition()
+        segment.selected_index = 0
+        self.refreshed = true
+    end
     function context:push_input(text)
         self.input = self.input .. text
     end
@@ -148,6 +152,37 @@ assert(context.input == "", "Enter must end composition")
 press(env, string.byte("k"))
 assert(context:get_option("_kagiroi_hide_candidates"), "the next input must start with candidates hidden")
 
+-- Tab expands without moving the selection, then the stock selector handles
+-- later Tab and Shift+Tab without mutating the schema labels.
+local many_candidates = {}
+for index = 1, 65 do many_candidates[index] = tostring(index) end
+env, context, segment = new_environment(many_candidates)
+context.input = "か"
+context:set_option("_kagiroi_hide_candidates", true)
+assert(press(env, 0xff09) == kNoop, "Tab while the list is hidden must pass through")
+press(env, 0x20)
+assert(press(env, 0xff09) == kNoop, "Tab after the first Space must not expand")
+press(env, 0x20)
+assert(segment.selected_index == 1, "the reveal must select candidate two")
+assert(press(env, 0xff09) == kAccepted, "the first visible Tab must be consumed")
+assert(context:get_option("_kagiroi_expand_candidates") and context.refreshed,
+    "the first visible Tab must refresh the expanded translation")
+assert(segment.selected_index == 1, "expansion must preserve the selected candidate")
+assert(press(env, 0xff09) == kNoop, "later Tab must reach the stock selector")
+assert(press(env, 0xff09, { shift = true }) == kNoop,
+    "Shift+Tab must reach the stock selector")
+context:highlight(32)
+assert(segment.selected_index == 32, "selection must reach the next page without changing labels")
+context:highlight(0)
+assert(segment.selected_index == 0, "selection must return to the first page")
+press(env, 0xff08)
+assert(not context:get_option("_kagiroi_expand_candidates"), "Backspace must collapse the next list")
+press(env, 0x20)
+press(env, 0x20)
+assert(press(env, 0xff09) == kAccepted, "the next conversion must expand anew")
+press(env, string.byte("1"))
+assert(not context:get_option("_kagiroi_expand_candidates"), "digit commit must reset expansion")
+
 -- The same Space cycle without the highlight API (Windows rime.dll).
 env, context, segment = new_environment()
 context.highlight = nil
@@ -161,6 +196,8 @@ press(env, 0x20)
 assert(segment.selected_index == 2, "Space must reach the last candidate via selected_index")
 press(env, 0x20)
 assert(segment.selected_index == 0, "Space must wrap to the first candidate via selected_index")
+assert(press(env, 0xff09) == kAccepted, "Tab must expand without context.highlight")
+assert(segment.selected_index == 0, "Tab must keep selection without context.highlight")
 local windows_enter = press(env, 0xff0d)
 assert(windows_enter == kAccepted, "Enter must be consumed without the highlight API")
 assert(context.commits[1] == "かな", "Enter must commit the candidate selected via selected_index")
