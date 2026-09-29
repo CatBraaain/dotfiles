@@ -2,3 +2,36 @@ patch:
   schema_list:
     - schema: kagiroi
   "ascii_composer/switch_key/Zenkaku_Hankaku": clear
+  # Replace the shared key_binder preset so comma and period stop paging the
+  # candidate menu: the stock default.yaml pulls in the shared
+  # paging_with_comma_period preset and the kagiroi schema imports it through
+  # import_preset. The replacement keeps every other stock binding
+  # (emacs_editing, paging_with_minus_equal, numbered_mode_switch) so only
+  # the comma/period paging is dropped.
+  "key_binder/bindings":
+    - { when: composing, accept: Control+p, send: Up }
+    - { when: composing, accept: Control+n, send: Down }
+    - { when: composing, accept: Control+b, send: Left }
+    - { when: composing, accept: Control+f, send: Right }
+    - { when: composing, accept: Control+a, send: Home }
+    - { when: composing, accept: Control+e, send: End }
+    - { when: composing, accept: Control+d, send: Delete }
+    - { when: composing, accept: Control+k, send: Shift+Delete }
+    - { when: composing, accept: Control+h, send: BackSpace }
+    - { when: composing, accept: Control+g, send: Escape }
+    - { when: composing, accept: Control+bracketleft, send: Escape }
+    - { when: composing, accept: Control+y, send: Page_Up }
+    - { when: composing, accept: Alt+v, send: Page_Up }
+    - { when: composing, accept: Control+v, send: Page_Down }
+    - { when: paging, accept: minus, send: Page_Up }
+    - { when: has_menu, accept: equal, send: Page_Down }
+    - { when: always, accept: Control+Shift+1, select: .next }
+    - { when: always, accept: Control+Shift+2, toggle: ascii_mode }
+    - { when: always, accept: Control+Shift+3, toggle: full_shape }
+    - { when: always, accept: Control+Shift+4, toggle: simplification }
+    - { when: always, accept: Control+Shift+5, toggle: extended_charset }
+    - { when: always, accept: Control+Shift+exclam, select: .next }
+    - { when: always, accept: Control+Shift+at, toggle: ascii_mode }
+    - { when: always, accept: Control+Shift+numbersign, toggle: full_shape }
+    - { when: always, accept: Control+Shift+dollar, toggle: simplification }
+    - { when: always, accept: Control+Shift+percent, toggle: extended_charset }

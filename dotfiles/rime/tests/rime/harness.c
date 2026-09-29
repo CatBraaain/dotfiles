@@ -24,6 +24,7 @@
 #define kZenkakuHankaku 0xff2a
 #define kBackSpace 0xff08
 #define kEscape 0xff1b
+#define kTab 0xff09
 
 static RimeApi* rime = NULL;
 static RimeSessionId session = 0;
@@ -345,7 +346,7 @@ static void test_henkan_space_enter_chain(void) {
 
 /* SPEC: Backspace and Esc keep the string unconfirmed, return it to the
  * hiragana reading and hide the list; Backspace while typing deletes the
- * previous character and Esc while typing keeps the reading. */
+ * previous character and Esc while typing clears the whole composition. */
 static void test_backspace_escape_return_to_reading(void) {
     /* Backspace with the menu visible. */
     fresh_session();
@@ -375,19 +376,11 @@ static void test_backspace_escape_return_to_reading(void) {
           "Backspace while typing must delete the previous character");
     rime->free_context(&context);
 
-    /* Esc while typing keeps the reading. */
+    /* Esc while typing clears the whole composition. */
     fresh_session();
     type_text("kana");
     press(kEscape);
-    if (!current_menu(&context)) {
-        check(False, "Esc must keep a queryable context");
-        return;
-    }
-    check(composing(), "Esc while typing must keep composing");
-    check(context.composition.preedit && strcmp(context.composition.preedit, "かな") == 0,
-          "Esc while typing must keep the hiragana reading");
-    check(context.menu.num_candidates == 0, "Esc while typing must keep the list hidden");
-    rime->free_context(&context);
+    check(!composing(), "Esc while typing must clear the composition");
     check(!take_commit(commit, sizeof(commit)), "Esc while typing must not commit");
 
     /* Esc with the menu visible. */
@@ -470,6 +463,96 @@ static void test_typing_key_commits_selection(void) {
           "the digit must be the next input reading");
     check(context.menu.num_candidates == 0, "the digit must keep the next menu hidden");
     if (g_verbose) print_context();
+    rime->free_context(&context);
+}
+
+/*
+ * SPEC: comma and period with the menu visible commit the selected candidate
+ * and append the full-width punctuation (dotfiles/rime/SPEC.md).
+ */
+static void test_comma_period_commit_selection(void) {
+    static const struct {
+        int key;
+        const char* name;
+        const char* punct;
+    } cases[] = {
+        {',', "comma", "、"},
+        {'.', "period", "。"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text("kanji");
+        press(kSpace);
+        press(kSpace);
+        RIME_STRUCT(RimeContext, context);
+        char expected[256] = "";
+        if (current_menu(&context)) {
+            int highlighted = context.menu.highlighted_candidate_index;
+            if (highlighted < context.menu.num_candidates &&
+                context.menu.candidates[highlighted].text) {
+                snprintf(expected, sizeof(expected), "%s%s",
+                         context.menu.candidates[highlighted].text, cases[i].punct);
+            }
+            rime->free_context(&context);
+        } else {
+            check(False, "the menu must exist before the punctuation key");
+        }
+        check(expected[0] != '\0', "the highlighted candidate must have text");
+        press(cases[i].key);
+        char commit[256];
+        char description[128];
+        snprintf(description, sizeof(description),
+                 "%s with the menu visible must commit the selection and %s",
+                 cases[i].name, cases[i].punct);
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
+              description);
+        check(!composing(), "the punctuation key must end the composition");
+    }
+}
+
+/* SPEC: Tab moves the selection to the next candidate without committing. */
+static void test_tab_moves_to_next_candidate(void) {
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) {
+        check(False, "the menu must exist before Tab");
+        return;
+    }
+    check(context.menu.highlighted_candidate_index == 0,
+          "the first candidate must be selected before Tab");
+    rime->free_context(&context);
+    press(kTab);
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive Tab");
+        return;
+    }
+    check(composing(), "Tab must keep the composition open");
+    check(context.menu.highlighted_candidate_index == 1,
+          "Tab must move the selection to the next candidate");
+    rime->free_context(&context);
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "Tab must not commit");
+}
+
+/*
+ * SPEC: one page holds up to 30 candidates, standing in for the MS-IME
+ * expanded list (dotfiles/rime/SPEC.md).
+ */
+static void test_page_size_is_30(void) {
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) {
+        check(False, "the menu must exist for the page size check");
+        return;
+    }
+    check(context.menu.num_candidates > 5,
+          "the menu must hold more than the stock page size of five");
+    check(context.menu.num_candidates <= 30,
+          "the menu must hold at most one page of 30 candidates");
     rime->free_context(&context);
 }
 
@@ -825,6 +908,9 @@ int main(int argc, char* argv[]) {
         test_henkan_space_enter_chain,
         test_backspace_escape_return_to_reading,
         test_typing_key_commits_selection,
+        test_comma_period_commit_selection,
+        test_tab_moves_to_next_candidate,
+        test_page_size_is_30,
         test_henkan_typing_key_starts_next_input,
         test_typing_hides_candidates,
         test_first_space_reveals_candidates,

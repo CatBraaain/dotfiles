@@ -80,15 +80,18 @@ function Top.func(key_event, env)
     end
 
     -- Backspace and Esc return the unconfirmed string to the hiragana
-    -- reading with the list hidden. Backspace only does so while converting
-    -- (the menu is visible or Henkan is active); plain typing keeps the stock
-    -- delete-previous-character. Esc also keeps the reading while typing,
-    -- where the stock editor would clear the composition.
-    if composing
-        and (keycode == kEscape
-            or (keycode == kBackSpace and (menu_visible or env.henkan_reading))) then
+    -- reading with the list hidden while converting (the menu is visible or
+    -- Henkan is active). While typing, Backspace keeps the stock
+    -- delete-previous-character and Esc clears the whole composition.
+    if composing and (menu_visible or env.henkan_reading)
+        and (keycode == kEscape or keycode == kBackSpace) then
         end_henkan(context, env, true)
         context:set_option("_kagiroi_hide_candidates", true)
+        return kAccepted
+    end
+
+    if composing and keycode == kEscape then
+        context.input = ""
         return kAccepted
     end
 
@@ -132,6 +135,13 @@ function Top.func(key_event, env)
         -- next full-width input, even while Henkan keeps the menu hidden.
         context:commit()
         end_henkan(context, env, false)
+        local character = string.char(keycode)
+        if character == "," or character == "." then
+            -- Keep the gate open so the downstream punctuator can build its
+            -- own candidate and commit the full-width punctuation; the next
+            -- typing key re-hides the menu.
+            return kana_speller.func(key_event, env)
+        end
         context:set_option("_kagiroi_hide_candidates", true)
         if keycode >= 0x30 and keycode <= 0x39 then
             -- Kagiroi's alphabet excludes digits, so stock processors would

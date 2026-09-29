@@ -2,3 +2,4 @@ patch:
   show_notifications: false
   "style/display_tray_icon": false
   "style/inline_preedit": true
+  "style/paging_on_scroll": true

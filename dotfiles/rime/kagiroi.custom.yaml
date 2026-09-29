@@ -2,6 +2,13 @@ patch:
   "engine/processors/@3": lua_processor@*kagiroi/rime_controls
   "engine/processors/@before 0": lua_processor@*kagiroi/rime_ascii_toggle
   "engine/filters/@before 0": lua_filter@*kagiroi/candidate_gate
+  # One page holds (nearly) the whole menu as the MS-IME expanded list, and
+  # Tab / Shift+Tab step the selection through the candidates.
+  "menu/page_size": 30
+  "selector/bindings":
+    ISO_Left_Tab: previous_candidate
+    Shift+Tab: previous_candidate
+    Tab: next_candidate
   # Comma and period commit , and . directly in the Japanese mode (the
   # stock list entries would leave the menu open instead). The half/full
   # width table already commits them, so it needs no patch.

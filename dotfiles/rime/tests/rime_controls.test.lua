@@ -267,19 +267,27 @@ assert(#context.commits == 0, "Backspace must not commit")
 local typing_backspace = press(env, 0xff08)
 assert(typing_backspace == kNoop, "Backspace while typing must reach standard processors")
 
--- Esc keeps the hiragana reading, both while typing and while converting.
+-- Esc clears the composition while typing, and returns to the reading
+-- while converting (the second Esc after a conversion clears it).
 env, context, segment = new_environment()
 context.input = "かな"
+context:set_option("_kagiroi_hide_candidates", true)
 local typing_esc = press(env, 0xff1b)
 assert(typing_esc == kAccepted, "Esc while typing must be consumed")
-assert(context.input == "かな", "Esc must keep the reading while typing")
+assert(context.input == "", "Esc must clear the composition while typing")
 assert(#context.commits == 0, "Esc must not commit while typing")
+context.input = "かな"
+context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 local converting_esc = press(env, 0xff1b)
 assert(converting_esc == kAccepted, "Esc while converting must be consumed")
 assert(context.input == "かな", "Esc must keep the reading while converting")
 assert(context:get_option("_kagiroi_hide_candidates"), "Esc must hide the list")
 assert(#context.commits == 0, "Esc must not commit while converting")
+local second_esc = press(env, 0xff1b)
+assert(second_esc == kAccepted, "the second Esc must be consumed")
+assert(context.input == "", "the second Esc must clear the composition")
+assert(#context.commits == 0, "the second Esc must not commit")
 
 -- A letter key with the menu visible commits the selection and restarts.
 env, context, segment = new_environment()
@@ -292,6 +300,25 @@ assert(typing_key == kNoop, "the restarted key must reach the speller chain")
 assert(context.commits[1] == "かな", "a typing key must commit the selected candidate")
 assert(context:get_option("_kagiroi_hide_candidates"), "the next input must start hidden")
 assert(calls == before_restart + 1, "the restarted key must be processed by the kana speller")
+
+-- Comma and period commit the selection like other typing keys; the
+-- punctuation itself comes from the downstream punctuator.
+for _, key in ipairs({ ",", "." }) do
+    env, context, segment = new_environment()
+    context.input = "か"
+    context:set_option("_kagiroi_hide_candidates", true)
+    press(env, 0x20)
+    press(env, 0x20)
+    assert(segment.selected_index == 1, "cycling must select the second candidate first")
+    local before_punct = calls
+    local result = press(env, string.byte(key))
+    assert(result == kNoop, "the " .. key .. " key must pass through to the punctuation chain")
+    assert(context.commits[1] == "仮名", "a " .. key .. " key must commit the selected candidate")
+    assert(context.input == "", "a " .. key .. " key must end the composition input")
+    assert(not context:get_option("_kagiroi_hide_candidates"),
+        "a " .. key .. " key must keep the gate open for the punctuator")
+    assert(calls == before_punct + 1, "the " .. key .. " key must reach the kana speller")
+end
 
 -- Henkan followed by a letter or digit commits katakana and starts a new input.
 for _, key in ipairs({ "k", "1" }) do
