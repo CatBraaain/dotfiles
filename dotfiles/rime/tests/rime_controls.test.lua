@@ -41,9 +41,19 @@ local function new_environment(candidates)
         return math.min(#self.candidates, 2)
     end
     function segment:get_candidate_at(index)
-        return self.menu.candidates[index + 1]
+        local text = self.menu.candidates[index + 1]
+        return text and { text = text } or nil
     end
-    local context = { input = "", options = {}, commits = {} }
+    function segment:has_tag(tag)
+        return tag == "kagiroi"
+    end
+    local context = { input = "", options = {}, commits = {}, commit_slots = {} }
+    context.commit_notifier = {
+        connect = function(_, handler)
+            table.insert(context.commit_slots, handler)
+            return { disconnect = function() end }
+        end,
+    }
     context.composition = { back = function() return segment end }
     -- Mirrors the gate filter: while _kagiroi_hide_candidates is on the menu
     -- is empty, and a commit then falls back to the raw input.
@@ -68,12 +78,15 @@ local function new_environment(candidates)
     function context:commit()
         local text
         if self:has_menu() then
-            text = segment:get_candidate_at(segment.selected_index)
+            text = segment:get_candidate_at(segment.selected_index).text
         else
             text = self.input
         end
         table.insert(self.commits, text)
         rawset(self, "input", "")
+        for _, handler in ipairs(self.commit_slots) do
+            handler()
+        end
     end
     setmetatable(context, {
         __newindex = function(table, key, value)
@@ -100,26 +113,30 @@ local function press(env, keycode, modifiers)
     }, env)
 end
 
--- Typing hides the candidate list until Space reveals it, and Space cycles.
+-- The first Space converts to the first candidate with the list hidden, the
+-- second Space reveals the list at the second candidate, later Spaces cycle.
 local env, context, segment = new_environment()
 press(env, string.byte("k"))
-assert(context:get_option("_kagiroi_hide_candidates"), "typing must hide candidates")
 context.input = "か"
 local first_space = press(env, 0x20)
 assert(first_space == kAccepted, "first Space must be consumed")
-assert(not context:get_option("_kagiroi_hide_candidates"), "first Space must reveal candidates")
-assert(segment.selected_index == 0, "first Space must select the first candidate")
+assert(context:get_option("_kagiroi_hide_candidates"), "first Space must keep the list hidden")
+assert(context.input == "かな", "first Space must convert to the first candidate")
+assert(env.conversion and env.conversion.reading == "か", "first Space must remember the reading")
+local second_space = press(env, 0x20)
+assert(second_space == kAccepted, "second Space must be consumed")
+assert(not context:get_option("_kagiroi_hide_candidates"), "second Space must reveal candidates")
+assert(context.input == "か", "second Space must restore the reading for the menu")
+assert(segment.selected_index == 1, "second Space must highlight the second candidate")
 local before_selection = calls
 press(env, 0x20)
-assert(segment.selected_index == 1, "second Space must highlight the next candidate")
-assert(#context.commits == 0 and context.input == "か", "Space must leave composition uncommitted")
-press(env, 0x20)
-assert(segment.selected_index == 2, "Space must reach candidates beyond the prepared page")
+assert(segment.selected_index == 2, "third Space must reach candidates beyond the prepared page")
 press(env, 0x20)
 assert(segment.selected_index == 0, "Space must wrap from the final candidate to the first")
 press(env, 0x20)
 assert(segment.selected_index == 1, "Space must advance after wrapping")
 assert(calls == before_selection, "candidate cycling must bypass the kana speller")
+assert(#context.commits == 0 and context.input == "か", "Space must leave composition uncommitted")
 local enter = press(env, 0xff0d)
 assert(enter == kAccepted, "Enter must not reach the raw-script editor binding")
 assert(context.commits[1] == "仮名", "Enter must commit the highlighted candidate")
@@ -133,18 +150,16 @@ context.highlight = nil
 press(env, string.byte("k"))
 context.input = "か"
 assert(press(env, 0x20) == kAccepted, "first Space must be consumed without the highlight API")
-assert(segment.selected_index == 0, "the default first candidate must stay selected")
+assert(context.input == "かな", "the conversion must work without the highlight API")
 press(env, 0x20)
-assert(segment.selected_index == 1, "subsequent Space must move the selection via selected_index")
+assert(segment.selected_index == 1, "second Space must move the selection via selected_index")
 press(env, 0x20)
 assert(segment.selected_index == 2, "Space must reach the last candidate via selected_index")
 press(env, 0x20)
 assert(segment.selected_index == 0, "Space must wrap to the first candidate via selected_index")
-press(env, 0x20)
-assert(segment.selected_index == 1, "Space must advance again after wrapping via selected_index")
 local windows_enter = press(env, 0xff0d)
 assert(windows_enter == kAccepted, "Enter must be consumed without the highlight API")
-assert(context.commits[1] == "仮名", "Enter must commit the candidate selected via selected_index")
+assert(context.commits[1] == "かな", "Enter must commit the candidate selected via selected_index")
 
 -- A single candidate stays highlighted without committing.
 env, context, segment = new_environment({ "かな" })
@@ -160,15 +175,20 @@ env, context = new_environment()
 assert(press(env, 0xff0d) == kNoop, "Enter outside composition must pass through")
 assert(calls == before_empty_enter + 1, "Enter without a menu must reach the kana speller")
 
--- Enter before the first Space keeps the standard binding.
-env, context = new_environment()
-context.input = "か"
+-- Enter while typing commits the raw reading; the n-run correction
+-- belongs to conversion only (dotfiles/rime/SPEC.md).
+env, context, segment = new_environment()
+context.input = "かn"
 context:set_option("_kagiroi_hide_candidates", true)
-assert(press(env, 0xff0d) == kNoop, "Enter before Space must retain the standard binding")
-assert(#context.commits == 0, "Enter before Space must not use candidate commit")
+local before_typing_enter = conversions_resolved
+local typing_enter = press(env, 0xff0d)
+assert(typing_enter == kAccepted, "Enter while typing must be consumed")
+assert(context.commits[1] == "かn", "Enter while typing must commit the raw reading")
+assert(context.input == "", "Enter while typing must end the composition")
+assert(conversions_resolved == before_typing_enter, "Enter must not resolve the n run")
 
 -- Space without a candidate menu reaches the standard processors.
-env, context = new_environment()
+env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
 function context:has_menu() return false end
@@ -194,11 +214,11 @@ assert(context.input == "カナ", "Henkan must rewrite the input to katakana")
 assert(context:get_option("katakana"), "Henkan must enable the katakana option")
 assert(context:get_option("_kagiroi_hide_candidates"), "Henkan must keep the candidate list hidden")
 assert(#context.commits == 0, "Henkan must not commit")
-assert(env.henkan_reading == "かな", "Henkan must remember the hiragana reading")
+assert(env.conversion.reading == "かな", "Henkan must remember the hiragana reading")
 
 -- Repeated Henkan stays idempotent.
 press(env, 0xff23)
-assert(context.input == "カナ" and env.henkan_reading == "かな", "repeated Henkan must stay idempotent")
+assert(context.input == "カナ" and env.conversion.reading == "かな", "repeated Henkan must stay idempotent")
 
 -- Esc after Henkan restores the hiragana reading with the list hidden.
 local esc = press(env, 0xff1b)
@@ -227,20 +247,33 @@ assert(henkan_enter == kAccepted, "Enter after Henkan must be consumed")
 assert(context.commits[1] == "カナ", "Enter after Henkan must commit the katakana input")
 assert(context.input == "", "Enter after Henkan must end composition")
 assert(not context:get_option("katakana"), "Enter after Henkan must restore the kana mode")
-assert(env.henkan_reading == nil, "Enter after Henkan must end the Henkan state")
+assert(env.conversion == nil, "Enter after Henkan must end the Henkan state")
 
--- Henkan then Space reveals the menu with the katakana first candidate.
+-- Henkan then Space reveals the menu with the first candidate selected.
 env, context, segment = new_environment()
 context.input = "かな"
 press(env, 0xff23)
 press(env, 0x20)
 assert(not context:get_option("_kagiroi_hide_candidates"), "Space after Henkan must reveal candidates")
 assert(context:has_menu(), "Space after Henkan must build a menu")
-assert(segment.selected_index == 0, "Space after Henkan must select the first candidate")
+assert(context.input == "カナ", "Space after Henkan must keep the katakana input")
+assert(segment.selected_index == 0, "Space after Henkan must keep the first candidate selected")
 local henkan_space_enter = press(env, 0xff0d)
 assert(henkan_space_enter == kAccepted, "Enter after Henkan and Space must be consumed")
 assert(context.commits[1] == "かな", "Enter must commit the highlighted candidate after Henkan")
 assert(not context:get_option("katakana"), "the commit must restore the kana mode")
+
+-- Henkan from the first-candidate conversion converts the reading, not the
+-- displayed candidate.
+env, context, segment = new_environment({ "感", "カン", "かん" })
+context.input = "かん"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
+assert(context.input == "感", "the first Space must convert to the first candidate")
+local converted_henkan = press(env, 0xff23)
+assert(converted_henkan == kAccepted, "Henkan after the first Space must be consumed")
+assert(context.input == "カン", "Henkan must convert the reading, not the displayed candidate")
+assert(env.conversion.reading == "かん", "Henkan must keep the hiragana reading")
 
 -- Henkan with half-width katakana enabled restores the prior mode.
 env, context, segment = new_environment()
@@ -257,6 +290,8 @@ assert(context:get_option("hw_katakana") and not context:get_option("katakana"),
 -- Backspace with the menu visible returns to the reading without deleting.
 env, context, segment = new_environment()
 context.input = "かんな"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
 press(env, 0x20)
 local revert = press(env, 0xff08)
 assert(revert == kAccepted, "Backspace with the menu visible must be consumed")
@@ -267,8 +302,8 @@ assert(#context.commits == 0, "Backspace must not commit")
 local typing_backspace = press(env, 0xff08)
 assert(typing_backspace == kNoop, "Backspace while typing must reach standard processors")
 
--- Esc clears the composition while typing, and returns to the reading
--- while converting (the second Esc after a conversion clears it).
+-- Esc clears the composition while typing, and returns to the reading while
+-- converting (the second Esc after a conversion clears it).
 env, context, segment = new_environment()
 context.input = "かな"
 context:set_option("_kagiroi_hide_candidates", true)
@@ -289,7 +324,28 @@ assert(second_esc == kAccepted, "the second Esc must be consumed")
 assert(context.input == "", "the second Esc must clear the composition")
 assert(#context.commits == 0, "the second Esc must not commit")
 
--- A letter key with the menu visible commits the selection and restarts.
+-- Enter after the first Space commits the first candidate shown inline.
+env, context, segment = new_environment()
+context.input = "か"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
+local converted_enter = press(env, 0xff0d)
+assert(converted_enter == kAccepted, "Enter after the first Space must be consumed")
+assert(context.commits[1] == "かな", "Enter must commit the first candidate shown inline")
+assert(env.conversion == nil, "the commit must end the conversion state")
+
+-- Backspace after the first Space returns to the reading.
+env, context, segment = new_environment()
+context.input = "か"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
+local converted_backspace = press(env, 0xff08)
+assert(converted_backspace == kAccepted, "Backspace after the first Space must be consumed")
+assert(context.input == "か", "Backspace after the first Space must restore the reading")
+assert(context:get_option("_kagiroi_hide_candidates"), "Backspace must hide the list")
+assert(#context.commits == 0, "Backspace after the first Space must not commit")
+
+-- A letter key with the first candidate shown commits it and restarts.
 env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
@@ -297,9 +353,68 @@ press(env, 0x20)
 local before_restart = calls
 local typing_key = press(env, string.byte("k"))
 assert(typing_key == kNoop, "the restarted key must reach the speller chain")
-assert(context.commits[1] == "かな", "a typing key must commit the selected candidate")
+assert(context.commits[1] == "かな", "a typing key must commit the first candidate")
 assert(context:get_option("_kagiroi_hide_candidates"), "the next input must start hidden")
 assert(calls == before_restart + 1, "the restarted key must be processed by the kana speller")
+
+-- A digit while typing commits the reading and becomes the next reading.
+env, context, segment = new_environment()
+context.input = "かんな"
+context:set_option("_kagiroi_hide_candidates", true)
+local digit = press(env, string.byte("1"))
+assert(digit == kAccepted, "a digit while typing must be consumed")
+assert(context.commits[1] == "かんな", "a digit while typing must commit the reading")
+assert(context.input == "1", "a digit must start the next reading")
+assert(context:get_option("_kagiroi_hide_candidates"), "a digit must keep the next menu hidden")
+
+-- A digit while typing commits the raw reading without the n correction.
+env, context, segment = new_environment()
+context.input = "かn"
+context:set_option("_kagiroi_hide_candidates", true)
+local raw_digit = press(env, string.byte("2"))
+assert(raw_digit == kAccepted, "a digit on a pending n must be consumed")
+assert(context.commits[1] == "かn", "a digit must commit the raw reading without the n correction")
+assert(context.input == "2", "the digit must start the next reading")
+
+-- Keypad digits, decimal and Enter act as their main-keyboard twins.
+env, context, segment = new_environment()
+context.input = "か"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0xffb1)
+assert(context.commits[1] == "か" and context.input == "1", "KP_1 must act as the digit 1")
+env, context, segment = new_environment()
+context.input = "か"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0xffae)
+assert(context.commits[1] == "か" and context.input == ".", "KP_Decimal must act as the period")
+env, context, segment = new_environment()
+context.input = "かんな"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0xff8b)
+assert(context.commits[1] == "かんな" and context.input == "", "KP_Enter must commit like Enter")
+
+-- A digit with the menu visible commits the highlighted candidate instead
+-- of selecting by number.
+env, context, segment = new_environment()
+context.input = "か"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
+press(env, 0x20)
+assert(segment.selected_index == 1, "the reveal must highlight the second candidate")
+local menu_digit = press(env, string.byte("1"))
+assert(menu_digit == kAccepted, "a digit must start the next input without selecting by number")
+assert(context.commits[1] == "仮名", "a digit must commit the highlighted candidate, not candidate one")
+assert(context.input == "1", "a digit must start the next reading")
+assert(context:get_option("_kagiroi_hide_candidates"), "the digit must keep the next menu hidden")
+
+-- A digit after Henkan commits the katakana and starts the next reading.
+env, context, segment = new_environment()
+context.input = "かな"
+press(env, 0xff23)
+press(env, string.byte("2"))
+assert(context.commits[1] == "カナ", "a digit after Henkan must commit the katakana")
+assert(context.input == "2", "a digit after Henkan must start the next reading")
+assert(not context:get_option("katakana"), "the commit must restore the original mode")
 
 -- Comma and period commit the selection like other typing keys; the
 -- punctuation itself comes from the downstream punctuator.
@@ -316,45 +431,30 @@ for _, key in ipairs({ ",", "." }) do
     assert(context.commits[1] == "仮名", "a " .. key .. " key must commit the selected candidate")
     assert(context.input == "", "a " .. key .. " key must end the composition input")
     assert(not context:get_option("_kagiroi_hide_candidates"),
-        "a " .. key .. " key must keep the gate open for the punctuator")
+        "a " .. key .. " key must open the gate for the punctuator")
     assert(calls == before_punct + 1, "the " .. key .. " key must reach the kana speller")
+
+    -- From the hidden conversion after the first Space, the gate must open
+    -- for the punctuator as well.
+    env, context, segment = new_environment()
+    context.input = "か"
+    context:set_option("_kagiroi_hide_candidates", true)
+    press(env, 0x20)
+    assert(context:get_option("_kagiroi_hide_candidates"), "the first Space must keep the gate closed")
+    press(env, string.byte(key))
+    assert(context.commits[1] == "かな", "a " .. key .. " key after the first Space must commit the first candidate")
+    assert(not context:get_option("_kagiroi_hide_candidates"),
+        "a " .. key .. " key after the first Space must open the gate for the punctuator")
 end
 
--- Henkan followed by a letter or digit commits katakana and starts a new input.
-for _, key in ipairs({ "k", "1" }) do
-    env, context = new_environment()
-    context.input = "かな"
-    press(env, 0xff23)
-    local before_henkan_key = calls
-    local result = press(env, string.byte(key))
-    assert(context.commits[1] == "カナ", "Henkan then " .. key .. " must commit katakana")
-    assert(not context:get_option("katakana") and env.henkan_reading == nil,
-        "Henkan then " .. key .. " must restore the original mode")
-    assert(context:get_option("_kagiroi_hide_candidates"),
-        "Henkan then " .. key .. " must hide candidates for the next input")
-    if key == "1" then
-        assert(result == kAccepted and context.input == "1",
-            "Henkan then digit must start the next reading")
-        assert(calls == before_henkan_key, "the inserted digit must bypass the speller")
-    else
-        assert(result == kNoop and context.input == "",
-            "Henkan then letter must pass the key to standard input")
-        assert(calls == before_henkan_key + 1, "the letter must reach the speller")
-    end
-end
-
--- A digit key commits the highlighted candidate instead of selecting by number.
+-- An external commit (the ascii mode toggle) cleans the Henkan state.
 env, context, segment = new_environment()
-context.input = "か"
-context:set_option("_kagiroi_hide_candidates", true)
-press(env, 0x20)
-press(env, 0x20)
-assert(segment.selected_index == 1, "cycling must select the second candidate")
-local digit = press(env, string.byte("1"))
-assert(digit == kAccepted, "a digit must start the next input without selecting by number")
-assert(context.commits[1] == "仮名", "a digit must commit the highlighted candidate, not candidate one")
-assert(digit == kAccepted and context.input == "1", "a digit must start the next reading")
-assert(context:get_option("_kagiroi_hide_candidates"), "the digit must keep the next menu hidden")
+context.input = "かな"
+press(env, 0xff23)
+context:commit()
+assert(context.commits[1] == "カナ", "the external commit must commit the katakana input")
+assert(not context:get_option("katakana"), "an external commit must restore the kana mode")
+assert(env.conversion == nil, "an external commit must end the conversion state")
 
 -- Ascii mode and modifier combinations pass through.
 env, context, segment = new_environment()
@@ -364,8 +464,9 @@ assert(press(env, 0xff23) == kNoop, "Henkan in ascii mode must pass through")
 assert(press(env, 0x20) == kNoop, "Space in ascii mode must pass through")
 assert(press(env, 0xff0d) == kNoop, "Enter in ascii mode must pass through")
 assert(press(env, 0xff1b) == kNoop, "Esc in ascii mode must pass through")
+assert(press(env, 0xffb1) == kNoop, "keypad digits in ascii mode must pass through")
 assert(press(env, 0x20, { ctrl = true }) == kNoop, "modified Space must pass through")
 assert(press(env, 0xff23, { shift = true }) == kNoop, "modified Henkan must pass through")
 assert(#context.commits == 0 and context.input == "かな", "ascii mode must leave the composition alone")
 
-print("Rime candidate visibility, Henkan and revert tests passed")
+print("Rime candidate visibility, conversion and revert tests passed")
