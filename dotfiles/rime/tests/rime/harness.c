@@ -971,22 +971,28 @@ static void test_nn_pair_and_rebind(void) {
 }
 
 /*
- * SPEC: spellings outside the declaration stay raw; neither the stock
- * kagiroi_romaji table nor its speller/algebra derives are imported
- * (dotfiles/rime/SPEC.md).
+ * SPEC: the longest declared suffix converts while an undeclared prefix stays
+ * raw; stock Kagiroi and speller/algebra spellings are not imported.
  */
-static void test_non_declaration_spellings_stay_raw(void) {
-    static const char* const cases[] = {
-        "chi", "shi", "tsu", "ltsu", "kyi", "kye", "wha", "tsa", "dhe", "fya",
+static void test_longest_declared_suffix_preserves_raw_prefix(void) {
+    static const struct {
+        const char* input;
+        const char* expected;
+    } cases[] = {
+        {"fdsa", "fdさ"}, {"shi", "sひ"}, {"fdsha", "fdしゃ"},
+        {"fdnn", "fdん"}, {"fdnka", "fdんか"},
+        {"chi", "cひ"}, {"tsu", "tす"}, {"ltsu", "ltす"},
+        {"kyi", "kyい"}, {"kye", "kいぇ"}, {"wha", "wは"},
+        {"tsa", "tさ"}, {"dhe", "dへ"}, {"fya", "fや"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
-        type_text(cases[i]);
+        type_text(cases[i].input);
         char description[128];
         snprintf(description, sizeof(description),
-                 "%s must stay raw because it is not a declaration spelling",
-                 cases[i]);
-        check(preedit_equals(cases[i]), description);
+                 "%s must preserve its raw prefix and convert the longest suffix to %s",
+                 cases[i].input, cases[i].expected);
+        check(preedit_equals(cases[i].expected), description);
     }
 }
 
@@ -1209,7 +1215,7 @@ int main(int argc, char* argv[]) {
         test_punctuation_commits_directly,
         test_romanization_matches_declaration,
         test_nn_pair_and_rebind,
-        test_non_declaration_spellings_stay_raw,
+        test_longest_declared_suffix_preserves_raw_prefix,
         test_sokuon_hatsuon_and_long_vowel,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

@@ -137,7 +137,7 @@ function Top.resolve_conversion(env)
     if not context then
         return
     end
-    local pending_n = remaining_alphabet:match("^n+$")
+    local pending_n = remaining_alphabet:match("n+$")
     if pending_n then
         replace_pending_n(context, pending_n, n_run_before_consonant(#pending_n))
     end
@@ -145,6 +145,34 @@ function Top.resolve_conversion(env)
     if folded ~= context.input then
         context.input = folded
     end
+end
+
+local function spell_with_suffix(key_event, env)
+    local result = base.func(key_event, env)
+    if result ~= kNoop then
+        return result
+    end
+
+    local character = string.char(key_event.keycode)
+    if not env.alphabet:find(character, 1, true) then
+        return result
+    end
+    local context, remaining_alphabet = get_context(env)
+    if not context or not env.roma2hira_xlator then
+        return result
+    end
+
+    local spelling = remaining_alphabet .. character
+    for start = 2, #spelling do
+        local suffix = spelling:sub(start)
+        local candidate = base.query_roma2hira_xlator(suffix, env)
+        if candidate and candidate._end == #suffix then
+            context:pop_input(#suffix - 1)
+            context:push_input(candidate.text)
+            return kAccepted
+        end
+    end
+    return result
 end
 
 function Top.func(key_event, env)
@@ -175,10 +203,10 @@ function Top.func(key_event, env)
 
     if character == "n" then
         -- A trailing pending n turns this key into the declaration's nn
-        -- spelling: let the base speller convert the pair to ん now. A run
-        -- never holds more than one raw n, so no other case exists.
+        -- spelling: convert the pair to ん now, including after a raw prefix.
+        -- A run never holds more than one raw n, so no other case exists.
         if remaining_alphabet:sub(-1) == "n" then
-            local result = base.func(key_event, env)
+            local result = spell_with_suffix(key_event, env)
             if result == kAccepted then
                 env.nn_pair_pending = true
             end
@@ -187,7 +215,7 @@ function Top.func(key_event, env)
         return kNoop
     end
 
-    local pending_n = remaining_alphabet:match("^n+$")
+    local pending_n = remaining_alphabet:match("n+$")
     if not pending_n then
         -- A vowel directly after a fresh nn pair rebinds its ん as ん+n so
         -- the base speller can bind the vowel (kanna -> かんな). んん from a
@@ -199,7 +227,7 @@ function Top.func(key_event, env)
         then
             context:push_input("n")
         end
-        return base.func(key_event, env)
+        return spell_with_suffix(key_event, env)
     end
 
     if not env.alphabet:find(character, 1, true) then
@@ -218,7 +246,7 @@ function Top.func(key_event, env)
         end
     end
 
-    return base.func(key_event, env)
+    return spell_with_suffix(key_event, env)
 end
 
 return Top

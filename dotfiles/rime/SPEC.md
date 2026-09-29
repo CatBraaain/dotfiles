@@ -60,7 +60,9 @@ Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき�
 
 ## ローマ字表
 
-ローマ字からかなへの対応の正本は `dotfiles/rime/roma.data.yaml` の宣言である。`dotfiles/rime/roma.build.ts` が build 時に宣言から `kagiroi_dotfiles_romaji.dict.yaml` を生成し、辞書そのものをリポジトリに置かない。宣言は MS-IME 用の宣言（`undotfiles/ime/roma-table.yaml`）から独立しており、両者の一致は保証しない。Kagiroi 標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。したがって宣言にない綴りは、Kagiroi 標準で有効だった `shi` `chi` `tsu` `kyi` `wha` `tsa` `dhe` `fya` `ltsu` なども含めて、かなに変換されない。宣言と Kagiroi 標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
+ローマ字からかなへの対応の正本は `dotfiles/rime/roma.data.yaml` の宣言である。`dotfiles/rime/roma.build.ts` が build 時に宣言から `kagiroi_dotfiles_romaji.dict.yaml` を生成し、辞書そのものをリポジトリに置かない。宣言は MS-IME 用の宣言（`undotfiles/ime/roma-table.yaml`）から独立しており、両者の一致は保証しない。Kagiroi 標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。宣言と Kagiroi 標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
+
+入力中は宣言に一致する綴りをかなへ変換する。入力中の未変換英字列全体が宣言に一致しないときも、末尾に一致する綴りがあれば最長のものをかなへ変換し、その前の英字を原文のまま残す。末尾にも一致する綴りがなければ英字列をそのまま表示する。たとえば `fdsa` は `fdさ`、宣言にない `shi` は `sひ`、宣言にある `sha` は `しゃ` と表示される。
 
 宣言は入力インフラとして、次の対応も持つ。
 
