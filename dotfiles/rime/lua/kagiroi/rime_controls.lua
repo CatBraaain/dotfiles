@@ -75,6 +75,15 @@ end
 -- while typing. The n-run correction belongs to conversion only, so the
 -- reading is committed as-is (dotfiles/rime/SPEC.md, "n の過不足補完").
 local function commit_unconfirmed(context, env)
+    -- The MS-IME style selection moves the highlight directly and never
+    -- confirms the segment, while librime records the selected candidate
+    -- into the user dictionary only when the committing segment is
+    -- confirmed. Builds without a Segment.status setter ignore the
+    -- assignment silently (learning stays off, commit keeps working).
+    local segment = context.composition:back()
+    if segment then
+        segment.status = "kConfirmed"
+    end
     context:commit()
     end_conversion(context, env, false)
     reset_expansion(context)

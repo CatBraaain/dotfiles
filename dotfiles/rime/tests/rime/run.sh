@@ -71,4 +71,7 @@ bun "$root/roma.build.ts" --output "$workspace/kagiroi_dotfiles_romaji.dict.yaml
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
 
 cc -std=c11 -O2 -o "$cache/harness/harness" "$root/tests/rime/harness.c" $rime_cflags $rime_libs
+# Learning tests write userdb entries that shift candidate order; start every
+# run from a clean slate so the baseline menu is stable.
+rm -rf "$workspace"/*.userdb
 exec "$cache/harness/harness" "$workspace" "${harness_args[@]}"

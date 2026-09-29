@@ -1738,6 +1738,60 @@ static void test_enter_commits_highlighted_candidate(void) {
           "Enter must commit the highlighted candidate");
 }
 
+/* SPEC: committing a lower-ranked candidate records it in the user dictionary
+ * and promotes it in the menu for the same reading. */
+static void test_learning_promotes_committed_candidate(void) {
+    RIME_STRUCT(RimeContext, context);
+    char baseline_first[128] = "";
+
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    if (current_menu(&context) && context.menu.num_candidates > 0
+        && context.menu.candidates[0].text) {
+        snprintf(baseline_first, sizeof(baseline_first), "%s",
+                 context.menu.candidates[0].text);
+        rime->free_context(&context);
+    } else {
+        rime->free_context(&context);
+        check(False, "the menu must exist before learning");
+        return;
+    }
+
+    /* Commit the second candidate repeatedly. Which word the second rank
+     * holds may shift once learning kicks in, but every commit feeds the
+     * user dictionary. */
+    char commit[256];
+    for (int i = 0; i < 5; ++i) {
+        fresh_session();
+        type_text("kanji");
+        press(kSpace);
+        press(kSpace);
+        press(kDown);
+        press(kReturn);
+        take_commit(commit, sizeof(commit));
+    }
+
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    char after_first[128] = "";
+    if (current_menu(&context) && context.menu.num_candidates > 0
+        && context.menu.candidates[0].text) {
+        snprintf(after_first, sizeof(after_first), "%s",
+                 context.menu.candidates[0].text);
+        rime->free_context(&context);
+    } else {
+        rime->free_context(&context);
+        check(False, "the menu must exist after learning");
+        return;
+    }
+    check(strcmp(baseline_first, after_first) != 0,
+          "repeated commits must promote a learned candidate above the baseline first");
+}
+
 static void on_message(void* context_object, RimeSessionId session_id, const char* message_type, const char* message_value) {
     (void)context_object;
     (void)session_id;
@@ -1818,6 +1872,7 @@ int main(int argc, char* argv[]) {
         test_nn_pair_and_rebind,
         test_longest_declared_suffix_preserves_raw_prefix,
         test_sokuon_hatsuon_and_long_vowel,
+        test_learning_promotes_committed_candidate,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         tests[i]();
