@@ -8,8 +8,12 @@ package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
             env.alphabet = "abcdefghijklmnopqrstuvwxyz-;"
         end,
         fini = function() end,
-        func = function()
+        func = function(key_event, env)
             calls = calls + 1
+            if key_event.keycode == 0xff08 and env.engine.context.input ~= "" then
+                local context = env.engine.context
+                context.input = context.input:sub(1, utf8.offset(context.input, -1) - 1)
+            end
             return kNoop
         end,
         resolve_conversion = function()
@@ -228,15 +232,19 @@ assert(not context:get_option("katakana"), "Esc after Henkan must restore the ka
 assert(context:get_option("_kagiroi_hide_candidates"), "Esc after Henkan must keep the list hidden")
 assert(#context.commits == 0, "Esc after Henkan must not commit")
 
--- Backspace after Henkan behaves like Esc.
+-- Backspace after Henkan deletes from the katakana candidate, not the reading.
 env, context, segment = new_environment()
 context.input = "かな"
 press(env, 0xff23)
 local backspace = press(env, 0xff08)
 assert(backspace == kAccepted, "Backspace after Henkan must be consumed")
-assert(context.input == "かな", "Backspace after Henkan must restore the hiragana reading")
+assert(context.input == "カ", "Backspace after Henkan must remove one katakana character")
+assert(env.conversion == nil and not context:get_option("katakana"),
+    "Backspace after Henkan must end conversion and restore the kana mode")
 assert(context:get_option("_kagiroi_hide_candidates"), "Backspace after Henkan must keep the list hidden")
 assert(#context.commits == 0, "Backspace after Henkan must not commit")
+press(env, 0xff1b)
+assert(context.input == "", "Esc after Backspace must clear the remaining katakana")
 
 -- Enter after Henkan commits the katakana first candidate.
 env, context, segment = new_environment()
@@ -287,20 +295,21 @@ press(env, string.byte("k"))
 assert(context:get_option("hw_katakana") and not context:get_option("katakana"),
     "the next input must restore the prior kana mode")
 
--- Backspace with the menu visible returns to the reading without deleting.
+-- Backspace with the menu visible deletes from the selected candidate.
 env, context, segment = new_environment()
 context.input = "かんな"
 context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 press(env, 0x20)
-local revert = press(env, 0xff08)
-assert(revert == kAccepted, "Backspace with the menu visible must be consumed")
-assert(context.input == "かんな", "Backspace must not delete a character while converting")
+assert(segment.selected_index == 1, "the reveal must select the second candidate")
+local shortened_selection = press(env, 0xff08)
+assert(shortened_selection == kAccepted, "Backspace with the menu visible must be consumed")
+assert(context.input == "仮", "Backspace must delete from the selected candidate")
+assert(env.conversion == nil, "Backspace must leave conversion mode")
 assert(context:get_option("_kagiroi_hide_candidates"), "Backspace must hide the list")
 assert(#context.commits == 0, "Backspace must not commit")
--- While typing, Backspace keeps the stock delete-previous-character.
 local typing_backspace = press(env, 0xff08)
-assert(typing_backspace == kNoop, "Backspace while typing must reach standard processors")
+assert(typing_backspace == kNoop and context.input == "", "a later Backspace must delete the remaining character")
 
 -- Esc clears the composition while typing, and returns to the reading while
 -- converting (the second Esc after a conversion clears it).
@@ -334,16 +343,31 @@ assert(converted_enter == kAccepted, "Enter after the first Space must be consum
 assert(context.commits[1] == "かな", "Enter must commit the first candidate shown inline")
 assert(env.conversion == nil, "the commit must end the conversion state")
 
--- Backspace after the first Space returns to the reading.
+-- Backspace after the first Space shortens the inline candidate, then
+-- Space converts the remaining text anew rather than revealing the old menu.
 env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 local converted_backspace = press(env, 0xff08)
 assert(converted_backspace == kAccepted, "Backspace after the first Space must be consumed")
-assert(context.input == "か", "Backspace after the first Space must restore the reading")
+assert(context.input == "か", "Backspace after the first Space must delete from the inline candidate")
+assert(env.conversion == nil, "Backspace must leave the inline conversion")
 assert(context:get_option("_kagiroi_hide_candidates"), "Backspace must hide the list")
 assert(#context.commits == 0, "Backspace after the first Space must not commit")
+press(env, 0x20)
+assert(context.input == "かな" and env.conversion.reading == "か",
+    "Space after Backspace must convert the remaining text anew")
+assert(context:get_option("_kagiroi_hide_candidates"), "the new conversion must keep the list hidden")
+
+-- Deleting the only character of an inline conversion empties the composition.
+env, context = new_environment({ "字" })
+context.input = "か"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
+press(env, 0xff08)
+assert(context.input == "" and env.conversion == nil, "Backspace must remove the last character")
+assert(#context.commits == 0, "deleting the last character must not commit")
 
 -- A letter key with the first candidate shown commits it and restarts.
 env, context, segment = new_environment()

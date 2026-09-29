@@ -114,6 +114,19 @@ static Bool preedit_equals(const char* expected) {
     return result;
 }
 
+static Bool without_last_utf8_character(const char* text, char* result, size_t size) {
+    size_t length = strlen(text);
+    if (length == 0 || size <= length) return False;
+    size_t prefix_length = length - 1;
+    while (prefix_length > 0 &&
+           ((unsigned char)text[prefix_length] & 0xc0) == 0x80) {
+        --prefix_length;
+    }
+    memcpy(result, text, prefix_length);
+    result[prefix_length] = '\0';
+    return True;
+}
+
 static void fresh_session(void) {
     if (session) rime->destroy_session(session);
     session = rime->create_session();
@@ -225,7 +238,7 @@ static void test_n_run_preedit(void) {
 }
 
 /* SPEC: n followed by Space resolves to ん and starts the conversion; the
- * list stays hidden and Backspace returns the corrected reading. */
+ * list stays hidden and Esc restores the corrected reading. */
 static void test_kan_space_starts_conversion(void) {
     fresh_session();
     type_text("kan");
@@ -239,15 +252,15 @@ static void test_kan_space_starts_conversion(void) {
     check(context.menu.num_candidates == 0,
           "the first Space must keep the candidate list hidden");
     rime->free_context(&context);
-    press(kBackSpace);
+    press(kEscape);
     if (!rime->get_context(session, &context)) {
-        check(False, "Backspace must keep a queryable context");
+        check(False, "Esc must keep a queryable context");
         return;
     }
-    check(composing(), "Backspace must keep the composition open");
-    check(context.menu.num_candidates == 0, "Backspace must hide the candidate list");
+    check(composing(), "Esc must keep the composition open");
+    check(context.menu.num_candidates == 0, "Esc must hide the candidate list");
     check(context.composition.preedit && strcmp(context.composition.preedit, "かん") == 0,
-          "the reading after n + Space must resolve to かん");
+          "Esc after n + Space must restore the resolved reading かん");
     rime->free_context(&context);
     press(kReturn);
     char commit[256];
@@ -266,7 +279,7 @@ static void test_kan_space_starts_conversion(void) {
 }
 
 /* SPEC: Space converts with the corrected reading: consecutive ん fold into
- * one and a leftover ん binds with a following vowel. Backspace returns the
+ * one and a leftover ん binds with a following vowel. Esc restores the
  * unconfirmed conversion to the corrected hiragana reading. */
 static void test_n_run_conversion_reading(void) {
     static const struct {
@@ -297,7 +310,7 @@ static void test_n_run_conversion_reading(void) {
         fresh_session();
         type_text(cases[i].input);
         press(kSpace);
-        press(kBackSpace);
+        press(kEscape);
         char description[128];
         snprintf(description, sizeof(description), "%s must convert with the reading %s",
                  cases[i].input, cases[i].expected);
@@ -366,7 +379,7 @@ static void test_zenkaku_hankaku_commits_composition(void) {
         check(False, "the reveal must expose the menu");
     }
     check(first[0] != '\0', "the first candidate must have text");
-    press(kBackSpace);
+    press(kEscape);
     press(kSpace);
     press(kZenkakuHankaku);
     check(option("ascii_mode"), "the toggle must enable ascii mode from the conversion");
@@ -540,60 +553,185 @@ static void test_henkan_space_enter_chain(void) {
     }
 }
 
-/* SPEC: Backspace and Esc keep the string unconfirmed, return it to the
- * hiragana reading and hide the list; Backspace while typing deletes the
- * previous character and Esc while typing clears the whole composition. */
+/* SPEC: Backspace removes the last Unicode character from a converted
+ * candidate without committing; Esc restores the reading before Backspace
+ * and clears the composition after Backspace. */
 static void test_backspace_escape_return_to_reading(void) {
-    /* Backspace with the menu visible. */
-    fresh_session();
-    type_text("kana");
-    press(kSpace);
-    press(kBackSpace);
     RIME_STRUCT(RimeContext, context);
+    char commit[256];
+
+    /* Backspace with the candidate menu visible deletes the selected candidate's
+     * final Unicode character and hides the menu. */
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    char selected[256] = "";
+    if (current_menu(&context)) {
+        int highlighted = context.menu.highlighted_candidate_index;
+        if (highlighted >= 0 && highlighted < context.menu.num_candidates &&
+            context.menu.candidates[highlighted].text) {
+            snprintf(selected, sizeof(selected), "%s",
+                     context.menu.candidates[highlighted].text);
+        }
+        rime->free_context(&context);
+    } else {
+        check(False, "the visible candidate menu must keep a queryable context");
+    }
+    char after_backspace[256] = "";
+    check(selected[0] != '\0', "the selected candidate must have text");
+    check(without_last_utf8_character(selected, after_backspace,
+                                       sizeof(after_backspace)),
+          "the selected candidate must contain a Unicode character to delete");
+    press(kBackSpace);
     if (!current_menu(&context)) {
         check(False, "Backspace must keep a queryable context");
         return;
     }
     check(composing(), "Backspace must keep the composition open");
     check(context.menu.num_candidates == 0, "Backspace must hide the candidate list");
-    check(context.composition.preedit && strcmp(context.composition.preedit, "かな") == 0,
-          "Backspace must return to the full hiragana reading");
+    check(context.composition.preedit &&
+              strcmp(context.composition.preedit, after_backspace) == 0,
+          "Backspace must delete the selected candidate's last Unicode character");
     rime->free_context(&context);
-    char commit[256];
     check(!take_commit(commit, sizeof(commit)), "Backspace must not commit");
-    /* Backspace while typing deletes the previous character. */
+
+    /* A subsequent Backspace deletes one more Unicode character. */
+    char after_second_backspace[256] = "";
+    check(without_last_utf8_character(after_backspace, after_second_backspace,
+                                      sizeof(after_second_backspace)),
+          "the remaining candidate text must contain another character");
     press(kBackSpace);
-    if (!current_menu(&context)) {
-        check(False, "the second Backspace must keep a queryable context");
-        return;
-    }
-    check(composing(), "Backspace while typing must keep composing");
-    check(context.composition.preedit && strcmp(context.composition.preedit, "か") == 0,
-          "Backspace while typing must delete the previous character");
-    rime->free_context(&context);
+    check(after_second_backspace[0] ? preedit_equals(after_second_backspace) : !composing(),
+          "a subsequent Backspace must delete one more Unicode character");
+    check(!take_commit(commit, sizeof(commit)),
+          "a subsequent Backspace must not commit");
 
-    /* Esc while typing clears the whole composition. */
-    fresh_session();
-    type_text("kana");
-    press(kEscape);
-    check(!composing(), "Esc while typing must clear the composition");
-    check(!take_commit(commit, sizeof(commit)), "Esc while typing must not commit");
-
-    /* Esc with the menu visible. */
+    /* Esc before Backspace restores the reading; Backspace then edits it. */
     fresh_session();
     type_text("kana");
     press(kSpace);
     press(kEscape);
-    if (!current_menu(&context)) {
-        check(False, "Esc with the menu visible must keep a queryable context");
-        return;
+    check(preedit_equals("かな"), "Esc before Backspace must restore the reading");
+    press(kBackSpace);
+    check(preedit_equals("か"),
+          "Backspace after Esc must delete the reading's last character");
+
+    /* Backspace from the hidden first-Space conversion, then Space reconverts. */
+    fresh_session();
+    type_text("kana");
+    press(kSpace);
+    char inline_candidate[256] = "";
+    if (current_menu(&context)) {
+        if (context.composition.preedit) {
+            snprintf(inline_candidate, sizeof(inline_candidate), "%s",
+                     context.composition.preedit);
+        }
+        check(context.menu.num_candidates == 0,
+              "the first Space must keep the candidate list hidden");
+        rime->free_context(&context);
+    } else {
+        check(False, "the hidden conversion must keep a queryable context");
     }
-    check(composing(), "Esc with the menu visible must keep composing");
-    check(context.menu.num_candidates == 0, "Esc with the menu visible must hide the list");
-    check(context.composition.preedit && strcmp(context.composition.preedit, "かな") == 0,
-          "Esc with the menu visible must return to the reading");
-    rime->free_context(&context);
-    check(!take_commit(commit, sizeof(commit)), "Esc with the menu visible must not commit");
+    char hidden_remainder[256] = "";
+    check(without_last_utf8_character(inline_candidate, hidden_remainder,
+                                      sizeof(hidden_remainder)),
+          "the inline candidate must contain a Unicode character to delete");
+    press(kBackSpace);
+    check(preedit_equals(hidden_remainder),
+          "Backspace in the hidden conversion must delete its last character");
+    press(kSpace);
+    check(composing(), "Space after Backspace must reconvert the remainder");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "Space after Backspace must keep the candidate list hidden");
+        rime->free_context(&context);
+    } else {
+        check(False, "Space after Backspace must keep a queryable context");
+    }
+    check(!take_commit(commit, sizeof(commit)),
+          "Space after Backspace must not commit the reconverted remainder");
+
+    /* Henkan's inline katakana candidate follows the same Backspace rule. */
+    fresh_session();
+    type_text("kana");
+    press(kHenkan);
+    char henkan_candidate[256] = "";
+    if (current_menu(&context)) {
+        if (context.composition.preedit) {
+            snprintf(henkan_candidate, sizeof(henkan_candidate), "%s",
+                     context.composition.preedit);
+        }
+        rime->free_context(&context);
+    }
+    char henkan_remainder[256] = "";
+    check(without_last_utf8_character(henkan_candidate, henkan_remainder,
+                                      sizeof(henkan_remainder)),
+          "the Henkan candidate must contain a Unicode character to delete");
+    press(kBackSpace);
+    check(preedit_equals(henkan_remainder),
+          "Backspace after Henkan must delete the candidate's last character");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "Backspace after Henkan must hide the candidate list");
+        rime->free_context(&context);
+    } else {
+        check(False, "Backspace after Henkan must keep a queryable context");
+    }
+    check(!take_commit(commit, sizeof(commit)), "Backspace after Henkan must not commit");
+    press(kEscape);
+    check(!composing(), "Esc after Backspace must clear the remaining composition");
+    check(!take_commit(commit, sizeof(commit)), "Esc after Backspace must not commit");
+
+    /* Deleting Henkan's one-character candidate leaves nothing to compose. */
+    fresh_session();
+    type_text("a");
+    press(kHenkan);
+    if (current_menu(&context)) {
+        check(context.composition.preedit &&
+                  strcmp(context.composition.preedit, "ア") == 0,
+              "Henkan must show the one-character katakana candidate");
+        check(context.menu.num_candidates == 0,
+              "Henkan must keep the one-character candidate menu hidden");
+        rime->free_context(&context);
+    } else {
+        check(False, "the one-character Henkan candidate must keep a queryable context");
+    }
+    press(kBackSpace);
+    check(!composing(), "Backspace must clear a one-character converted candidate");
+    Bool has_context = current_menu(&context);
+    check(!has_context || context.menu.num_candidates == 0,
+          "Backspace must leave no candidates or menu after deleting the only character");
+    if (has_context) rime->free_context(&context);
+    check(!take_commit(commit, sizeof(commit)),
+          "Backspace must not commit a deleted one-character candidate");
+
+    /* Backspace also deletes the selected katakana with Henkan's menu visible. */
+    fresh_session();
+    type_text("kanji");
+    press(kHenkan);
+    press(kSpace);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates > 0 &&
+                  context.menu.candidates[context.menu.highlighted_candidate_index].text &&
+                  strcmp(context.menu.candidates[context.menu.highlighted_candidate_index].text,
+                         "カンジ") == 0,
+              "Space after Henkan must select the katakana candidate");
+        rime->free_context(&context);
+    } else {
+        check(False, "Henkan's revealed menu must keep a queryable context");
+    }
+    press(kBackSpace);
+    check(preedit_equals("カン"),
+          "Backspace with Henkan's menu visible must remove the last katakana character");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "Backspace with Henkan's menu visible must hide candidates");
+        rime->free_context(&context);
+    } else {
+        check(False, "Backspace after revealed Henkan must keep a queryable context");
+    }
+    check(!take_commit(commit, sizeof(commit)), "Backspace after revealed Henkan must not commit");
 }
 
 /* SPEC: a regular typing key with the menu visible commits the selected
@@ -723,7 +861,7 @@ static void test_comma_period_commit_selection(void) {
             check(False, "the reveal must expose the menu");
         }
         check(first[0] != '\0', "the first candidate must have text");
-        press(kBackSpace);
+        press(kEscape);
         press(kSpace);
         press(cases[i].key);
         char commit[256];
@@ -960,14 +1098,14 @@ static void test_nn_pair_and_rebind(void) {
     type_text("kannnna");
     check(preedit_equals("かんんあ"), "kannnna must read かんんあ");
     /* a lone pending n keeps the pending display; the first Space resolves
-     * it into the inline conversion and Backspace returns the corrected
-     * reading (dotfiles/rime/SPEC.md) */
+     * it into the inline conversion and Esc restores the corrected reading
+     * (dotfiles/rime/SPEC.md) */
     fresh_session();
     type_text("kan");
     check(preedit_equals("かn"), "kan must keep the pending かn display");
     press(kSpace);
-    press(kBackSpace);
-    check(preedit_equals("かん"), "kan + Space must resolve to かん");
+    press(kEscape);
+    check(preedit_equals("かん"), "kan + Space then Esc must restore かん");
 }
 
 /*
@@ -1045,7 +1183,7 @@ static void test_typing_hides_candidates(void) {
 /*
  * SPEC: the first Space converts to the first candidate with the list
  * hidden, the second Space reveals the list with the second candidate
- * selected, and Backspace returns to the reading (dotfiles/rime/SPEC.md).
+ * selected, and Esc returns to the reading (dotfiles/rime/SPEC.md).
  */
 static void test_first_space_converts_to_first_candidate(void) {
     fresh_session();
@@ -1078,9 +1216,9 @@ static void test_first_space_converts_to_first_candidate(void) {
     rime->free_context(&context);
     check(first[0] != '\0', "the menu must hold a first candidate");
 
-    press(kBackSpace);
+    press(kEscape);
     check(preedit_equals("かんじ"),
-          "Backspace after the reveal must return to the hiragana reading");
+          "Esc after the reveal must return to the hiragana reading");
     press(kSpace);
     check(preedit_equals(first),
           "the first Space must show the first candidate inline");

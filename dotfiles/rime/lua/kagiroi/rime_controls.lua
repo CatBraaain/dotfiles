@@ -16,7 +16,7 @@ local Top = {}
 
 -- env.conversion is the unconfirmed inline conversion state, started by the
 -- first Space (the first dictionary candidate) and by Henkan (katakana):
---   reading            what Backspace and Esc restore the input to
+--   reading            what Esc restores the input to
 --   display            the text the input was rewritten to
 --   query              the input the menu is rebuilt from when Space reveals it
 --   advance_on_reveal  move the highlight to the second candidate on reveal;
@@ -25,8 +25,7 @@ local Top = {}
 --   restore_katakana   the kana options Henkan flips (nil otherwise)
 
 -- End the inline conversion state. With restore_reading, put the hiragana
--- reading back into the input (Backspace/Esc); after commits the committed
--- input is kept.
+-- reading back into the input (Esc); after commits the committed input is kept.
 local function end_conversion(context, env, restore_reading)
     local conversion = env.conversion
     if not conversion then
@@ -70,7 +69,7 @@ end
 -- first candidate as katakana, and keep the candidate list hidden. The input
 -- is rewritten to its katakana form because the hidden gate leaves no
 -- candidates to drive the preedit; the hiragana reading is kept in the
--- conversion state so Backspace/Esc can restore it.
+-- conversion state so Esc can restore it.
 local function start_henkan(context, env)
     -- From another conversion, return to the reading first so the katakana
     -- is built from the reading, not from the displayed candidate.
@@ -188,14 +187,23 @@ function Top.func(key_event, env)
         return start_henkan(context, env)
     end
 
-    -- Backspace and Esc return the unconfirmed string to the hiragana
-    -- reading with the list hidden while converting (the menu is visible or
-    -- an inline conversion is active). While typing, Backspace keeps the
-    -- stock delete-previous-character and Esc clears the whole composition.
-    if composing and (menu_visible or env.conversion)
-        and (keycode == kEscape or keycode == kBackSpace) then
+    -- Esc restores the reading during conversion. Backspace removes the last
+    -- Unicode character of the selected candidate and ends conversion.
+    if composing and (menu_visible or env.conversion) and keycode == kEscape then
         end_conversion(context, env, true)
         context:set_option("_kagiroi_hide_candidates", true)
+        return kAccepted
+    end
+
+    if composing and (menu_visible or env.conversion) and keycode == kBackSpace then
+        local segment = context.composition:back()
+        local candidate = menu_visible and context:has_menu()
+            and segment and segment:get_candidate_at(segment.selected_index)
+        local text = candidate and candidate.text or env.conversion and env.conversion.display or context.input
+        local last_character = utf8.offset(text, -1)
+        end_conversion(context, env, false)
+        context:set_option("_kagiroi_hide_candidates", true)
+        context.input = last_character and text:sub(1, last_character - 1) or ""
         return kAccepted
     end
 
