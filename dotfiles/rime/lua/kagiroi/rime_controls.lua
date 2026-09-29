@@ -1,7 +1,7 @@
--- Candidate visibility, the Space conversion flow, direct input and the Henkan
--- katakana promotion for the managed Kagiroi setup (dotfiles/rime/SPEC.md).
--- Key handling wraps the n-run kana speller, which owns the reading
--- corrections.
+-- Candidate visibility, the Space conversion flow, unconfirmed appends and
+-- the Henkan katakana promotion for the managed Kagiroi setup
+-- (dotfiles/rime/SPEC.md). Key handling wraps the n-run kana speller, which
+-- owns the reading corrections.
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local kAccepted = 1
 local kNoop = 2
@@ -10,6 +10,7 @@ local kBackSpace = 0xff08
 local kEscape = 0xff1b
 local kSpace = 0x20
 local kTab = 0xff09
+local kISOLeftTab = 0xfe20
 local kUp = 0xff52
 local kDown = 0xff54
 local kReturn = 0xff0d
@@ -17,6 +18,28 @@ local kKeypadDecimal = 0xffae
 local kKeypadEnter = 0xff8b
 local kKeypadZero = 0xffb0
 local Top = {}
+
+-- The composition stashed while the ascii mode is on
+-- (dotfiles/rime/SPEC.md): rime_ascii_toggle moves the input here on the way
+-- out so the stock ascii composer treats every key as plain ascii, and puts
+-- it back on the way in.
+Top.kept = { input = nil }
+
+-- First-choice symbols for the Japanese mode (dotfiles/rime/SPEC.md, "記号").
+-- ASCII symbols without an entry map to their full-width form.
+local symbol_text = {
+    [string.byte("-")] = "ー",
+    [string.byte("/")] = "・",
+    [string.byte("\\")] = "￥",
+    [string.byte("~")] = "〜",
+    [string.byte("|")] = "·",
+    [string.byte("[")] = "「",
+    [string.byte("]")] = "」",
+    [string.byte("{")] = "『",
+    [string.byte("}")] = "』",
+    [string.byte("'")] = "‘’",
+    [string.byte('"')] = "“”",
+}
 
 local function reset_expansion(context)
     context:set_option("_kagiroi_expand_candidates", false)
@@ -68,6 +91,25 @@ local function select_candidate(context, direction)
         -- through the segment property instead.
         segment.selected_index = next_index
     end
+end
+
+-- Pin the unconfirmed composition to the text of the selected candidate (menu
+-- open) or the inline display, so appends extend the candidate text itself
+-- instead of committing it (dotfiles/rime/SPEC.md).
+local function pin_selection(context, env)
+    local segment = context.composition:back()
+    local menu_open = not context:get_option("_kagiroi_hide_candidates")
+        and context:has_menu()
+    if menu_open and segment then
+        local candidate = segment:get_candidate_at(segment.selected_index)
+        if candidate then
+            end_conversion(context, env, false)
+            context.input = candidate.text
+        end
+    elseif env.conversion then
+        end_conversion(context, env, false)
+    end
+    context:set_option("_kagiroi_hide_candidates", true)
 end
 
 -- Commit whatever is unconfirmed: the selected candidate while the menu is
@@ -168,17 +210,37 @@ local function reveal_conversion(context, env)
     return kAccepted
 end
 
+-- Switch the candidate page size between ten and thirty, keeping the selected
+-- candidate in place across the composition rebuild.
+local function set_candidate_page(context, expanded)
+    local segment = context.composition:back()
+    local selected_index = segment and segment.selected_index
+    context:set_option("_kagiroi_expand_candidates", expanded)
+    context:refresh_non_confirmed_composition()
+    if context:has_menu() then
+        segment = context.composition:back()
+        if segment and segment.selected_index ~= selected_index then
+            if type(context.highlight) == "function" then
+                context:highlight(selected_index)
+            else
+                segment.selected_index = selected_index
+            end
+        end
+    end
+end
+
 function Top.init(env)
     kana_speller.init(env)
     local context = env.engine.context
-    -- The ascii mode toggle commits the composition directly, so the
-    -- conversion state is cleaned up on every commit, not only on the keys
-    -- handled here. Older librime-lua builds (Windows Weasel) may not expose
-    -- the notifier; the next typing key then cleans the state instead.
+    -- Commits end the conversion state wherever they come from (the ascii
+    -- toggle used to commit directly; menu selection commits through the
+    -- selector). Older librime-lua builds (Windows Weasel) may not expose the
+    -- notifier; the next typing key then cleans the state instead.
     if context.commit_notifier then
         env.commit_connection = context.commit_notifier:connect(function()
             end_conversion(context, env, false)
             reset_expansion(context)
+            Top.kept.input = nil
         end)
     end
 end
@@ -188,6 +250,45 @@ function Top.fini(env)
         env.commit_connection:disconnect()
     end
     kana_speller.fini(env)
+end
+
+-- The text a direct-append key adds to the unconfirmed input, or nil when the
+-- key is not one. Digits, symbols and the punctuation extend the unconfirmed
+-- text instead of committing it; plain letters append only during conversion
+-- because while typing they spell the reading (dotfiles/rime/SPEC.md).
+local function appended_text(keycode, key_event, in_conversion)
+    local main_digit = keycode >= 0x30 and keycode <= 0x39
+    local keypad_digit = keycode >= kKeypadZero and keycode <= kKeypadZero + 9
+    local letter = keycode >= 0x41 and keycode <= 0x5a or keycode >= 0x61 and keycode <= 0x7a
+    if main_digit then
+        return utf8.char(0xff10 + keycode - 0x30)
+    end
+    if keypad_digit then
+        return string.char(0x30 + keycode - kKeypadZero)
+    end
+    if keycode == kKeypadDecimal then
+        return "．"
+    end
+    if keycode == string.byte(",") then
+        return "、"
+    end
+    if keycode == string.byte(".") then
+        return "。"
+    end
+    if letter then
+        if key_event:shift() then
+            return string.char(keycode):upper()
+        end
+        return in_conversion and string.char(keycode) or nil
+    end
+    if keycode >= 0x21 and keycode <= 0x7e then
+        if keycode == string.byte("-") and not in_conversion then
+            -- While typing, the hyphen spells a long vowel in the reading.
+            return nil
+        end
+        return symbol_text[keycode] or utf8.char(0xff00 + keycode - 0x20)
+    end
+    return nil
 end
 
 function Top.func(key_event, env)
@@ -205,35 +306,26 @@ function Top.func(key_event, env)
     end
     local composing = context.input ~= ""
     local menu_visible = composing and not context:get_option("_kagiroi_hide_candidates")
+    local in_conversion = composing and (menu_visible or env.conversion)
 
-    local main_digit = keycode >= 0x30 and keycode <= 0x39
-    local keypad_digit = keycode >= kKeypadZero and keycode <= kKeypadZero + 9
-    local shifted_letter = key_event:shift()
-        and (keycode >= 0x41 and keycode <= 0x5a or keycode >= 0x61 and keycode <= 0x7a)
-    if main_digit or keypad_digit or keycode == kKeypadDecimal or shifted_letter
-        or keycode == string.byte(";") then
+    local append = appended_text(keycode, key_event, in_conversion)
+    if append then
         if composing then
-            commit_unconfirmed(context, env)
-        end
-        context:set_option("_kagiroi_hide_candidates", true)
-        local text
-        if main_digit then
-            text = utf8.char(0xff10 + keycode - 0x30)
-        elseif keypad_digit then
-            text = string.char(0x30 + keycode - kKeypadZero)
-        elseif keycode == kKeypadDecimal then
-            text = "．"
-        elseif keycode == string.byte(";") then
-            text = "；"
+            pin_selection(context, env)
         else
-            text = string.char(keycode):upper()
+            context:set_option("_kagiroi_hide_candidates", true)
         end
-        env.engine:commit_text(text)
+        context:push_input(append)
         return kAccepted
     end
 
-    if not composing and keycode == kSpace then
-        env.engine:commit_text("　")
+    -- The full-width space is an unconfirmed append while idle and while the
+    -- input holds only full-width spaces; a reading keeps the conversion flow.
+    if keycode == kSpace
+        and (not composing
+            or (not in_conversion and context.input:gsub("　", "") == "")) then
+        context:set_option("_kagiroi_hide_candidates", true)
+        context:push_input("　")
         return kAccepted
     end
 
@@ -269,14 +361,15 @@ function Top.func(key_event, env)
     end
 
     if not composing then
+        -- Reading keys start fresh: drop any leftover conversion state so
+        -- the kana mode options return to their saved values.
+        if env.conversion and keycode >= 0x21 and keycode <= 0x7e then
+            end_conversion(context, env, false)
+        end
+        -- Only reading keys (letters and the hyphen) reach the speller from
+        -- here; keep the candidate list hidden for the fresh reading.
         if keycode >= 0x21 and keycode <= 0x7e then
-            if env.alphabet:find(string.char(keycode), 1, true) then
-                end_conversion(context, env, false)
-                reset_expansion(context)
-                context:set_option("_kagiroi_hide_candidates", true)
-            else
-                context:set_option("_kagiroi_hide_candidates", false)
-            end
+            context:set_option("_kagiroi_hide_candidates", true)
         end
         return kana_speller.func(key_event, env)
     end
@@ -286,19 +379,16 @@ function Top.func(key_event, env)
         return kAccepted
     end
 
-    if keycode == kTab and menu_visible and context:has_menu()
-        and not key_event:shift() and not context:get_option("_kagiroi_expand_candidates") then
-        local selected_index = context.composition:back().selected_index
-        context:set_option("_kagiroi_expand_candidates", true)
-        context:refresh_non_confirmed_composition()
-        if context:has_menu() then
-            local segment = context.composition:back()
-            if segment.selected_index ~= selected_index then
-                if type(context.highlight) == "function" then
-                    context:highlight(selected_index)
-                else
-                    segment.selected_index = selected_index
-                end
+    -- Tab only switches the page size: the first Tab expands to thirty, a
+    -- second one does nothing, Shift+Tab collapses back to ten and does
+    -- nothing before the expand (dotfiles/rime/SPEC.md).
+    if keycode == kTab or keycode == kISOLeftTab then
+        if menu_visible and context:has_menu() then
+            local expanded = context:get_option("_kagiroi_expand_candidates")
+            if not key_event:shift() and not expanded then
+                set_candidate_page(context, true)
+            elseif key_event:shift() and expanded then
+                set_candidate_page(context, false)
             end
         end
         return kAccepted
@@ -336,21 +426,6 @@ function Top.func(key_event, env)
     elseif keycode == kReturn then
         commit_unconfirmed(context, env)
         return kAccepted
-    elseif keycode >= 0x21 and keycode <= 0x7e
-        and (menu_visible and context:has_menu() or env.conversion
-            or keycode ~= string.byte("-") and not string.char(keycode):match("%a")) then
-        -- Symbols commit even a hidden reading; letters commit only when a
-        -- conversion has selected a candidate. Minus extends the reading.
-        commit_unconfirmed(context, env)
-        local character = string.char(keycode)
-        if character ~= "-" and not character:match("%a") then
-            -- Open the gate for the next symbol's candidate or direct commit;
-            -- a new kana reading keeps its candidate list hidden.
-            context:set_option("_kagiroi_hide_candidates", false)
-            return kana_speller.func(key_event, env)
-        end
-        context:set_option("_kagiroi_hide_candidates", true)
-        return kana_speller.func(key_event, env)
     end
 
     return kana_speller.func(key_event, env)

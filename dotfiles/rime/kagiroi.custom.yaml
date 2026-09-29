@@ -45,43 +45,7 @@ patch:
     - "28"
     - "29"
     - "30"
-  "selector/bindings":
-    ISO_Left_Tab: previous_candidate
-    Shift+Tab: previous_candidate
-    Tab: next_candidate
-  # Match the Japanese/full-width symbol choices even while full_shape is off.
-  "punctuator/half_shape":
-    ',': { commit: 、 }
-    '.': { commit: 。 }
-    '<': [ ＜, 〈, 《 ]
-    '>': [ ＞, 〉, 》 ]
-    '/': [ ・, /, ／ ]
-    '?': { commit: ？ }
-    ';': { commit: ； }
-    ':': { commit: ： }
-    "'": { pair: [ '‘', '’' ] }
-    '"': { pair: [ '“', '”' ] }
-    '\': [ ￥, '\', ＼ ]
-    '|': [ ·, ・, '|', ｜, '§', '¦', '‖', ︴ ]
-    '`': ｀
-    '~': [ 〜, '~', ˜, ˷, ⸯ, ≈, ≋, ≃, ≅, ≇, ∽, ⋍, ≌, ﹏, ﹋, ﹌, ︴ ]
-    '!': { commit: ！ }
-    '@': [ ＠, ☯ ]
-    '#': [ ＃, № ]
-    '%': [ ％, '°', '℃', ‰, ‱, ℉, ℅, ℆, ℀, ℁, ⅍ ]
-    '$': [ ＄, '€', '£', '¥', '¢', '¤', ₩ ]
-    '^': { commit: ＾ }
-    '&': ＆
-    '*': [ ＊, ·, ・, ×, ※, ❂, ⁂, ☮, ☯, ☣ ]
-    '(': （
-    ')': ）
-    '_': ＿
-    '+': ＋
-    '=': [ ＝, 々, 〃 ]
-    '[': [ 「, 【, 〔, ［, 〚, 〘 ]
-    ']': [ 」, 】, 〕, ］, 〛, 〙 ]
-    '{': [ 『, 〖, ｛ ]
-    '}': [ 』, 〗, ｝ ]
-  "punctuator/full_shape/$": [ ＄, '€', '£', '¥', '¢', '¤', ₩ ]
+  # Symbols and punctuation are appended unconfirmed by rime_controls; the
+  # punctuator and its shape tables stay unused.
   # Disable the half-width punctuation mode at the start of every session.
   "switches/@3/reset": 0

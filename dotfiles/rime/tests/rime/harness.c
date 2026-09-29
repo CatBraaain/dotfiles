@@ -349,75 +349,73 @@ static void test_zenkaku_hankaku_toggles_ascii(void) {
  * first, and switching back returns to a clean full-width input
  * (dotfiles/rime/SPEC.md).
  */
-static void test_zenkaku_hankaku_commits_composition(void) {
-    /* Typing state: the hiragana reading is committed as-is. */
+/*
+ * SPEC: switching to ascii mode keeps the composition unconfirmed; the input
+ * returns with the Japanese mode and ascii typing never pollutes it
+ * (dotfiles/rime/SPEC.md).
+ */
+static void test_zenkaku_hankaku_keeps_composition(void) {
+    /* Typing state: the reading is stashed and comes back untouched. */
     fresh_session();
     type_text("kanji");
     press(kZenkakuHankaku);
     check(option("ascii_mode"), "Zenkaku_Hankaku must enable ascii mode");
-    check(!composing(), "the toggle must end the composition");
+    check(!composing(), "the toggle must hide the composition while in ascii mode");
     char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かんじ") == 0,
-          "the toggle must commit the hiragana reading");
+    check(!take_commit(commit, sizeof(commit)), "the toggle must not commit the reading");
     type_text("abc");
     check(!composing(), "ascii typing must not start a composition");
     press(kZenkakuHankaku);
     check(!option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese mode");
-    RIME_STRUCT(RimeContext, context);
-    type_text("kanji");
-    if (rime->get_context(session, &context)) {
-        check(composing(), "Japanese typing must start a composition again");
-        check(context.composition.preedit &&
-                  strcmp(context.composition.preedit, "かんじ") == 0,
-              "the reading must stay clean after switching back");
-        check(context.menu.num_candidates == 0, "the new input must hide candidates");
-        rime->free_context(&context);
-    } else {
-        check(False, "the resumed typing must keep a queryable context");
-    }
+    check(preedit_equals("かんじ"), "the stashed reading must return with the Japanese mode");
+    check(composing(), "the restored reading must keep composing");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かんじ") == 0,
+          "the restored reading must still commit as-is");
 
-    /* Converted state: the first candidate shown inline is committed. */
+    /* Converted state: the inline display is stashed and Esc restores the
+     * reading after the round trip. */
     fresh_session();
     type_text("kanji");
     press(kSpace);
-    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
     char first[256] = "";
     if (current_menu(&context)) {
-        if (context.menu.num_candidates > 0 && context.menu.candidates[0].text) {
-            snprintf(first, sizeof(first), "%s", context.menu.candidates[0].text);
+        if (context.menu.num_candidates == 0 && context.composition.preedit) {
+            snprintf(first, sizeof(first), "%s", context.composition.preedit);
         }
         rime->free_context(&context);
-    } else {
-        check(False, "the reveal must expose the menu");
     }
-    check(first[0] != '\0', "the first candidate must have text");
-    press(kEscape);
-    press(kSpace);
+    check(first[0] != '\0', "the inline conversion must show its text");
     press(kZenkakuHankaku);
     check(option("ascii_mode"), "the toggle must enable ascii mode from the conversion");
-    check(!composing(), "the toggle must end the converted composition");
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, first) == 0,
-          "the toggle must commit the first candidate shown inline");
+    check(!take_commit(commit, sizeof(commit)), "the toggle must not commit the conversion");
+    press(kZenkakuHankaku);
+    check(!option("ascii_mode"), "the toggle must restore Japanese mode");
+    check(preedit_equals(first), "the stashed conversion must return with the Japanese mode");
+    press(kEscape);
+    check(preedit_equals("かんじ"), "Esc after the round trip must restore the reading");
 
-    /* Henkan state: the katakana is committed and the kana mode restored. */
+    /* Henkan state: the katakana is stashed and returns with the mode. */
     fresh_session();
     type_text("kana");
     press(kHenkan);
     press(kZenkakuHankaku);
-    check(option("ascii_mode"), "the toggle must enable ascii mode from Henkan");
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "カナ") == 0,
-          "the toggle must commit the Henkan katakana");
+    check(!take_commit(commit, sizeof(commit)), "the toggle must not commit the Henkan katakana");
     press(kZenkakuHankaku);
     check(!option("ascii_mode"), "the toggle must restore Japanese mode");
-    check(!option("katakana"), "the kana mode must return to hiragana after the round trip");
+    check(preedit_equals("カナ"), "the stashed katakana must return");
+    press(kEscape);
+    check(!option("katakana"), "Esc must restore hiragana after the round trip");
 }
 
-/* SPEC: main-row digits are full-width; keypad digits stay half-width and
- * KP_Decimal commits ．, independently of the composition state. */
-static void test_digits_commit_directly(void) {
+/* SPEC: main-row digits append their full-width form, keypad digits and
+ * KP_Decimal append their own form, and none of them commits the unconfirmed
+ * composition (dotfiles/rime/SPEC.md). */
+static void test_digits_append_unconfirmed(void) {
     static const struct {
         int key;
-        const char* expected;
+        const char* appended;
     } cases[] = {
         {'0', "０"}, {'1', "１"}, {'2', "２"}, {'3', "３"}, {'4', "４"},
         {'5', "５"}, {'6', "６"}, {'7', "７"}, {'8', "８"}, {'9', "９"},
@@ -447,33 +445,31 @@ static void test_digits_commit_directly(void) {
                 snprintf(prefix, sizeof(prefix), "%s", "かんじ");
             }
             press(cases[i].key);
-            char commit[256];
             char expected[288];
-            snprintf(expected, sizeof(expected), "%s%s", prefix, cases[i].expected);
+            snprintf(expected, sizeof(expected), "%s%s", prefix, cases[i].appended);
             char description[128];
-            snprintf(description, sizeof(description), "key %x in state %d must commit its width", cases[i].key, state);
-            check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
-                  description);
-            check(!composing(), "a digit or decimal must leave no composition");
+            snprintf(description, sizeof(description), "key %x in state %d must append its width", cases[i].key, state);
+            check(preedit_equals(expected), description);
+            char commit[256];
+            snprintf(description, sizeof(description), "key %x in state %d must not commit", cases[i].key, state);
+            check(!take_commit(commit, sizeof(commit)), description);
         }
     }
 
+    /* A pending n stays as-is ahead of the appended digit. */
     fresh_session();
     type_text("kan");
     press(kKeypad1);
-    char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かn1") == 0,
-          "a keypad digit must commit a pending n as-is before the digit");
+    check(preedit_equals("かn1"), "a keypad digit must keep a pending n as-is before the digit");
 
     fresh_session();
     type_text("kanji");
     press(kKeypadEnter);
+    char commit[256];
     check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かんじ") == 0,
           "KP_Enter must commit like Enter");
 }
 
-/* SPEC: Henkan keeps the composition unconfirmed, shows the first candidate
- * as katakana in the preedit, and keeps the candidate list hidden. */
 static void test_henkan_promotes_katakana(void) {
     fresh_session();
     type_text("kanji");
@@ -722,8 +718,11 @@ static void test_backspace_escape_return_to_reading(void) {
 
 /* SPEC: a regular typing key with the menu visible commits the selected
  * candidate and starts the next input; digits never pick candidates. */
-static void test_typing_key_commits_selection(void) {
-    /* A letter key commits the selection and starts a new input. */
+/* SPEC: while a menu is open, letters and digits append to the selected
+ * candidate without committing; letters keep their raw form
+ * (dotfiles/rime/SPEC.md). */
+static void test_typing_key_appends_to_selection(void) {
+    /* A letter key appends the raw letter to the selection. */
     fresh_session();
     type_text("kana");
     press(kSpace);
@@ -743,19 +742,20 @@ static void test_typing_key_commits_selection(void) {
     }
     check(expected[0] != '\0', "the highlighted candidate must have text");
     press('k');
+    char appended[288];
+    snprintf(appended, sizeof(appended), "%sk", expected);
+    check(preedit_equals(appended), "a typing key must append the raw letter to the selection");
     char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
-          "a typing key must commit the selected candidate");
+    check(!take_commit(commit, sizeof(commit)), "a typing key must not commit the selection");
     if (!current_menu(&context)) {
-        check(False, "the restarted input must keep a queryable context");
+        check(False, "the appended input must keep a queryable context");
         return;
     }
-    check(composing(), "the restarted key must start a new composition");
     check(context.menu.num_candidates == 0,
-          "the restarted input must hide candidates until Space");
+          "the appended input must hide the candidate list");
     rime->free_context(&context);
 
-    /* A digit key commits the highlighted candidate, not candidate number one. */
+    /* A digit appends its full-width form to the highlighted candidate. */
     fresh_session();
     type_text("kanji");
     press(kSpace);
@@ -775,16 +775,16 @@ static void test_typing_key_commits_selection(void) {
     press('1');
     char expected_digit[288];
     snprintf(expected_digit, sizeof(expected_digit), "%s１", expected);
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected_digit) == 0,
-          "a digit must commit the highlighted candidate and full-width digit");
-    check(!composing(), "the digit must not start another composition");
+    check(preedit_equals(expected_digit),
+          "a digit must append the full-width digit to the highlighted candidate");
+    check(!take_commit(commit, sizeof(commit)), "the digit must not commit the selection");
 }
 
 /*
- * SPEC: comma and period with the menu visible commit the selected candidate
- * and append the full-width punctuation (dotfiles/rime/SPEC.md).
+ * SPEC: comma and period with a selection append the punctuation to the
+ * selected candidate instead of committing it (dotfiles/rime/SPEC.md).
  */
-static void test_comma_period_commit_selection(void) {
+static void test_comma_period_append_to_selection(void) {
     static const struct {
         int key;
         const char* name;
@@ -816,11 +816,12 @@ static void test_comma_period_commit_selection(void) {
         char commit[256];
         char description[128];
         snprintf(description, sizeof(description),
-                 "%s with the menu visible must commit the selection and %s",
+                 "%s with the menu visible must append %s to the selection",
                  cases[i].name, cases[i].punct);
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
-              description);
-        check(!composing(), "the punctuation key must end the composition");
+        check(preedit_equals(expected), description);
+        snprintf(description, sizeof(description),
+                 "%s with the menu visible must not commit", cases[i].name);
+        check(!take_commit(commit, sizeof(commit)), description);
     }
 
     /* The same from the hidden conversion after the first Space. */
@@ -828,36 +829,32 @@ static void test_comma_period_commit_selection(void) {
         fresh_session();
         type_text("kanji");
         press(kSpace);
-        press(kSpace);
         RIME_STRUCT(RimeContext, context);
         char first[256] = "";
         if (current_menu(&context)) {
-            if (context.menu.num_candidates > 0 && context.menu.candidates[0].text) {
-                snprintf(first, sizeof(first), "%s", context.menu.candidates[0].text);
+            if (context.menu.num_candidates == 0 && context.composition.preedit) {
+                snprintf(first, sizeof(first), "%s", context.composition.preedit);
             }
             rime->free_context(&context);
-        } else {
-            check(False, "the reveal must expose the menu");
         }
-        check(first[0] != '\0', "the first candidate must have text");
-        press(kEscape);
-        press(kSpace);
+        check(first[0] != '\0', "the inline conversion must show its text");
         press(cases[i].key);
-        char commit[256];
         char expected[288];
         snprintf(expected, sizeof(expected), "%s%s", first, cases[i].punct);
         char description[128];
         snprintf(description, sizeof(description),
-                 "%s after the first Space must commit the first candidate and %s",
+                 "%s after the first Space must append %s to the display",
                  cases[i].name, cases[i].punct);
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
-              description);
-        check(!composing(), "the punctuation key must end the composition");
+        check(preedit_equals(expected), description);
+        char commit[256];
+        check(!take_commit(commit, sizeof(commit)),
+              "the punctuation key must not commit the conversion");
     }
 }
 
 /* SPEC: the first visible Tab expands ten candidates to thirty without
- * changing the selection; later Tab steps to the next candidate. */
+ * changing the selection; a second Tab does nothing; Shift+Tab collapses the
+ * expanded list back to ten and does nothing before the expand. */
 static void test_tab_expands_candidates(void) {
     fresh_session();
     type_text("kanji");
@@ -866,6 +863,8 @@ static void test_tab_expands_candidates(void) {
     press(kSpace);
     press(kTab);
     check(!option("_kagiroi_expand_candidates"), "Tab after the first Space must not expand");
+    rime->process_key(session, kTab, 1);
+    check(!option("_kagiroi_expand_candidates"), "Shift+Tab before the reveal must do nothing");
     press(kSpace);
     RIME_STRUCT(RimeContext, context);
     if (!current_menu(&context)) {
@@ -876,6 +875,15 @@ static void test_tab_expands_candidates(void) {
     check(context.menu.highlighted_candidate_index == 1,
           "the reveal must select the second candidate before Tab");
     rime->free_context(&context);
+    rime->process_key(session, kTab, 1);
+    check(!option("_kagiroi_expand_candidates"), "Shift+Tab before the expand must do nothing");
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive the pre-expand Shift+Tab");
+        return;
+    }
+    check(context.menu.highlighted_candidate_index == 1,
+          "the pre-expand Shift+Tab must keep the selection");
+    rime->free_context(&context);
     press(kTab);
     if (!current_menu(&context)) {
         check(False, "the menu must survive Tab");
@@ -883,6 +891,7 @@ static void test_tab_expands_candidates(void) {
     }
     check(composing(), "Tab must keep the composition open");
     check(option("_kagiroi_expand_candidates"), "the first visible Tab must expand the menu");
+    check(context.menu.num_candidates == 30, "the expanded menu must hold thirty candidates");
     check(context.menu.highlighted_candidate_index == 1,
           "the first visible Tab must keep the selection");
     rime->free_context(&context);
@@ -891,16 +900,35 @@ static void test_tab_expands_candidates(void) {
         check(False, "the menu must survive the second Tab");
         return;
     }
-    check(context.menu.highlighted_candidate_index == 2,
-          "the second Tab must move the selection to the next candidate");
+    check(context.menu.highlighted_candidate_index == 1,
+          "the second Tab must not move the selection");
+    check(context.menu.num_candidates == 30, "the second Tab must keep the expansion");
     rime->free_context(&context);
     rime->process_key(session, kTab, 1);
     if (!current_menu(&context)) {
         check(False, "the menu must survive Shift+Tab");
         return;
     }
+    check(context.menu.num_candidates <= 10, "Shift+Tab must collapse back to ten");
     check(context.menu.highlighted_candidate_index == 1,
-          "Shift+Tab must select the previous candidate");
+          "Shift+Tab must keep the selection while collapsing");
+    rime->free_context(&context);
+    rime->process_key(session, kTab, 1);
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive the collapsed Shift+Tab");
+        return;
+    }
+    check(context.menu.num_candidates <= 10, "a collapsed Shift+Tab must keep ten");
+    check(context.menu.highlighted_candidate_index == 1,
+          "a collapsed Shift+Tab must keep the selection");
+    rime->free_context(&context);
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the menu must survive Space after the collapse");
+        return;
+    }
+    check(context.menu.highlighted_candidate_index == 2,
+          "Space must cycle the selection after the collapse");
     rime->free_context(&context);
     char commit[256];
     check(!take_commit(commit, sizeof(commit)), "Tab must not commit");
@@ -919,8 +947,6 @@ static void test_tab_expands_candidates(void) {
     check(!option("_kagiroi_expand_candidates"), "Esc must reset expansion");
 }
 
-/* SPEC: every expanded page has labels 1-30 and its first candidate shows
- * the page number in the final displayed order. */
 static void test_page_size_is_30(void) {
     fresh_session();
     type_text("ka");
@@ -976,10 +1002,10 @@ static void test_page_size_is_30(void) {
               strcmp(context.select_labels[0], "1") == 0,
           "PageUp must return to the first page and its labels");
     rime->free_context(&context);
-    press('1');
+    press(kReturn);
     char commit[256];
-    check(take_commit(commit, sizeof(commit)), "a digit must commit the selected candidate");
-    check(!option("_kagiroi_expand_candidates"), "a digit must reset expansion");
+    check(take_commit(commit, sizeof(commit)), "Enter must commit the selection");
+    check(!option("_kagiroi_expand_candidates"), "a commit must reset expansion");
     type_text("ka");
     press(kSpace);
     press(kSpace);
@@ -994,51 +1020,40 @@ static void test_page_size_is_30(void) {
 
 /* SPEC: an ordinary key after Henkan commits katakana and starts the next
  * full-width reading without opening the candidate list. */
-static void test_henkan_typing_key_starts_next_input(void) {
+/* SPEC: keys after Henkan append to the katakana composition instead of
+ * committing it (dotfiles/rime/SPEC.md). */
+static void test_henkan_typing_key_appends(void) {
     static const struct {
         int key;
-        const char* reading;
+        const char* appended;
         const char* description;
     } cases[] = {
         {'k', "k", "letter"},
-        {'1', NULL, "digit"},
+        {'1', "１", "digit"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         type_text("kanji");
         press(kHenkan);
         press(cases[i].key);
-        char commit[256];
+        char expected[256];
+        snprintf(expected, sizeof(expected), "カンジ%s", cases[i].appended);
         char description[128];
-        snprintf(description, sizeof(description), "Henkan then %s must commit katakana",
+        snprintf(description, sizeof(description), "Henkan then %s must append without committing",
                  cases[i].description);
-        const char* expected = cases[i].reading ? "カンジ" : "カンジ１";
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
-              description);
-        if (!cases[i].reading) {
-            check(!composing(), "Henkan then digit must leave no composition");
-            continue;
-        }
-        RIME_STRUCT(RimeContext, context);
-        if (!current_menu(&context)) {
-            check(False, "Henkan then typing must leave a queryable next input");
-            continue;
-        }
-        check(composing(), "Henkan then letter must start composing");
-        check(context.composition.preedit &&
-                  strcmp(context.composition.preedit, cases[i].reading) == 0,
-              "Henkan then letter must start the next reading");
-        check(context.menu.num_candidates == 0,
-              "Henkan then letter must keep the next menu hidden");
-        rime->free_context(&context);
+        check(preedit_equals(expected), description);
+        char commit[256];
+        snprintf(description, sizeof(description), "Henkan then %s must not commit",
+                 cases[i].description);
+        check(!take_commit(commit, sizeof(commit)), description);
     }
 }
 
 /*
- * SPEC: in the Japanese mode comma and period commit ，and 。directly, and
- * the half/full width table keeps committing them (dotfiles/rime/SPEC.md).
+ * SPEC: in the Japanese mode comma and period append 、 and 。to the
+ * unconfirmed composition while idle (dotfiles/rime/SPEC.md).
  */
-static void test_punctuation_commits_directly(void) {
+static void test_punctuation_appends_unconfirmed(void) {
     static const struct {
         int key;
         const char* name;
@@ -1050,41 +1065,41 @@ static void test_punctuation_commits_directly(void) {
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         press(cases[i].key);
-        char commit[256];
         char description[128];
         snprintf(description, sizeof(description),
-                 "%s must commit %s directly while typing is idle",
+                 "%s while idle must append %s unconfirmed",
                  cases[i].name, cases[i].expected);
-        Bool committed = take_commit(commit, sizeof(commit));
-        check(committed && strcmp(commit, cases[i].expected) == 0, description);
+        check(preedit_equals(cases[i].expected), description);
+        char commit[256];
         snprintf(description, sizeof(description),
-                 "%s must not keep composing after the commit", cases[i].name);
-        check(!composing(), description);
+                 "%s while idle must not commit", cases[i].name);
+        check(!take_commit(commit, sizeof(commit)), description);
     }
-    /* The half/full width table already commits the same kana. */
+    /* full_shape keeps the same appended character. */
     fresh_session();
     rime->set_option(session, "full_shape", 1);
     press(',');
-    char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "、") == 0,
-          "the full-width mode must keep committing comma as 、");
+    check(preedit_equals("、"), "full_width mode must keep appending comma as 、");
     rime->set_option(session, "full_shape", 0);
 }
 
-/* SPEC: idle Space commits a full-width space; converted Space still cycles. */
-static void test_idle_space_is_full_width(void) {
+static void test_idle_space_appends_full_width(void) {
     fresh_session();
     press(kSpace);
+    check(preedit_equals("　"), "idle Space must append a full-width space");
     char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "　") == 0,
-          "idle Space must commit a full-width space");
-    check(!composing(), "idle Space must leave no composition");
+    check(!take_commit(commit, sizeof(commit)), "idle Space must not commit");
+    press(kSpace);
+    check(preedit_equals("　　"), "a Space on full-width spaces must append another");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "　　") == 0,
+          "Enter must commit the appended spaces");
 }
 
-/* SPEC: direct symbols use the Japanese/full-width table, including the
- * first choice of a multi-candidate symbol. */
-static void test_symbol_first_choices(void) {
-    static const struct { int key; const char* expected; } cases[] = {
+/* SPEC: symbol keys append the table character to the unconfirmed
+ * composition without opening a candidate list or committing. */
+static void test_symbols_append_unconfirmed(void) {
+    static const struct { int key; const char* appended; } cases[] = {
         {'!', "！"}, {'@', "＠"}, {'#', "＃"}, {'$', "＄"},
         {'%', "％"}, {'^', "＾"}, {'&', "＆"}, {'*', "＊"},
         {'(', "（"}, {')', "）"}, {'_', "＿"}, {'+', "＋"},
@@ -1096,116 +1111,93 @@ static void test_symbol_first_choices(void) {
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         press(cases[i].key);
-        char commit[256] = "";
-        Bool committed = take_commit(commit, sizeof(commit));
-        if (!committed) {
-            RIME_STRUCT(RimeContext, context);
-            if (current_menu(&context)) {
-                if (context.menu.num_candidates > 0 && context.menu.candidates[0].text)
-                    snprintf(commit, sizeof(commit), "%s", context.menu.candidates[0].text);
-                rime->free_context(&context);
-            }
-        }
         char description[128];
-        snprintf(description, sizeof(description), "symbol %x must offer %s first", cases[i].key, cases[i].expected);
-        check(strcmp(commit, cases[i].expected) == 0, description);
+        snprintf(description, sizeof(description), "symbol %x must append %s", cases[i].key, cases[i].appended);
+        check(preedit_equals(cases[i].appended), description);
+        char commit[256];
+        snprintf(description, sizeof(description), "symbol %x must not commit", cases[i].key);
+        check(!take_commit(commit, sizeof(commit)), description);
     }
-    /* A symbol following a reading commits it before offering the symbol. */
+    /* A symbol following a reading keeps it unconfirmed. */
     fresh_session();
     type_text("kana");
     press('$');
-    char reading_commit[256];
-    check(take_commit(reading_commit, sizeof(reading_commit)) &&
-              strcmp(reading_commit, "かな") == 0,
-          "dollar after a reading must commit that reading");
-    RIME_STRUCT(RimeContext, reading_symbol);
-    Bool reading_dollar = False;
-    if (current_menu(&reading_symbol)) {
-        reading_dollar = reading_symbol.menu.num_candidates > 0 &&
-            strcmp(reading_symbol.menu.candidates[0].text, "＄") == 0;
-        rime->free_context(&reading_symbol);
-    }
-    check(reading_dollar, "dollar after a reading must offer ＄ first");
+    check(preedit_equals("かな＄"), "dollar after a reading must append ＄ unconfirmed");
 
+    /* full_shape does not change the appended symbol. */
     fresh_session();
     rime->set_option(session, "full_shape", 1);
     press('$');
-    RIME_STRUCT(RimeContext, dollar);
-    Bool full_shape_dollar = False;
-    if (current_menu(&dollar)) {
-        full_shape_dollar = dollar.menu.num_candidates > 0 &&
-            strcmp(dollar.menu.candidates[0].text, "＄") == 0;
-        rime->free_context(&dollar);
-    }
-    check(full_shape_dollar, "full_shape dollar must offer ＄ first");
+    check(preedit_equals("＄"), "full_shape dollar must append ＄");
+    rime->set_option(session, "full_shape", 0);
 }
 
-/* SPEC: a direct commit must not hide the next symbol or punctuation. */
-static void test_direct_commit_followed_by_symbol(void) {
-    static const struct {
-        int first_key;
-        Bool shifted;
-        const char* first_commit;
-        int next_key;
-        const char* next_text;
-    } cases[] = {
-        {'1', False, "１", '$', "＄"},
-        {'1', False, "１", ',', "、"},
-        {'A', True, "A", '=', "＝"},
-    };
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        fresh_session();
-        if (cases[i].shifted) press_shift(cases[i].first_key);
-        else press(cases[i].first_key);
-        char commit[256];
-        char description[128];
-        snprintf(description, sizeof(description), "%s before %c must commit directly",
-                 cases[i].first_commit, cases[i].next_key);
-        check(take_commit(commit, sizeof(commit)) &&
-                  strcmp(commit, cases[i].first_commit) == 0, description);
-        press(cases[i].next_key);
-        if (cases[i].next_key == ',') {
-            check(take_commit(commit, sizeof(commit)) &&
-                      strcmp(commit, cases[i].next_text) == 0,
-                  "comma after a direct digit commit must commit 、");
-            check(!composing(), "comma after a direct digit commit must end composition");
-        } else {
-            RIME_STRUCT(RimeContext, context);
-            Bool symbol_first = False;
-            if (current_menu(&context)) {
-                symbol_first = context.menu.num_candidates > 0 &&
-                    context.menu.candidates[0].text &&
-                    strcmp(context.menu.candidates[0].text, cases[i].next_text) == 0;
-                rime->free_context(&context);
-            }
-            snprintf(description, sizeof(description), "%s followed by %c must offer %s first",
-                     cases[i].first_commit, cases[i].next_key, cases[i].next_text);
-            check(symbol_first, description);
-        }
-    }
+/* SPEC: consecutive appends accumulate in one unconfirmed composition. */
+static void test_appends_accumulate(void) {
+    fresh_session();
+    press('1');
+    press('$');
+    check(preedit_equals("１＄"), "a digit then a symbol must accumulate");
+    press(',');
+    check(preedit_equals("１＄、"), "punctuation must keep accumulating");
+    fresh_session();
+    press_shift('A');
+    press('=');
+    check(preedit_equals("A＝"), "Shift+letter then a symbol must accumulate");
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "appends must not commit on their own");
 }
 
-/* SPEC: quotes alternate opening and closing marks as a pair. */
+/* SPEC: a Space on an appended string without a convertible reading
+ * commits it as-is (dotfiles/rime/SPEC.md). */
+static void test_space_after_append_commits_raw(void) {
+    fresh_session();
+    type_text("kanji");
+    press(kKeypad1);
+    press(kSpace);
+    char commit[256];
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かんじ1") == 0,
+          "Space on an appended string must commit it as-is");
+    check(!composing(), "the commit must end the composition");
+}
+
+/* SPEC: romaji typed after an append keeps its raw form instead of being
+ * converted to kana. */
+static void test_romaji_after_append_stays_raw(void) {
+    fresh_session();
+    type_text("kanji");
+    press(kKeypad1);
+    type_text("a");
+    check(preedit_equals("かんじ1a"), "romaji after an append must stay raw");
+}
+
+/* SPEC: quote keys append the opening and closing marks as a pair. */
 static void test_quote_pairs(void) {
-    static const struct { int key; const char* open; const char* close; } cases[] = {
-        {'\'', "‘", "’"}, {'"', "“", "”"},
+    static const struct { int key; const char* pair; } cases[] = {
+        {'\'', "‘’"}, {'"', "“”"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         press(cases[i].key);
-        char commit[256];
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, cases[i].open) == 0,
-              "first quote must commit the opening mark");
+        char description[128];
+        snprintf(description, sizeof(description), "quote %x must append the pair", cases[i].key);
+        check(preedit_equals(cases[i].pair), description);
         press(cases[i].key);
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, cases[i].close) == 0,
-              "second quote must commit the closing mark");
+        char doubled[16];
+        snprintf(doubled, sizeof(doubled), "%s%s", cases[i].pair, cases[i].pair);
+        snprintf(description, sizeof(description), "a second quote %x must append another pair", cases[i].key);
+        check(preedit_equals(doubled), description);
     }
 }
 
-/* SPEC: - and = never page a visible menu; their first symbol follows the
- * highlighted candidate. A minus while reading still appends the long vowel. */
+/* SPEC: - and = never page a visible menu; with a conversion they append
+ * their symbol to the selected candidate without committing it. A minus
+ * while reading still appends the long vowel to the reading. */
 static void test_minus_equal_do_not_page(void) {
-    for (int key = '-'; key <= '='; key += '=' - '-') {
+    static const struct { int key; const char* symbol; } cases[] = {
+        {'-', "ー"}, {'=', "＝"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         type_text("kanji");
         press(kSpace);
@@ -1219,21 +1211,12 @@ static void test_minus_equal_do_not_page(void) {
             rime->free_context(&context);
         }
         check(selected[0] != '\0', "the highlighted candidate must exist");
-        press(key);
+        press(cases[i].key);
+        char expected[288];
+        snprintf(expected, sizeof(expected), "%s%s", selected, cases[i].symbol);
+        check(preedit_equals(expected), "minus/equal must append to the selection rather than page");
         char commit[256];
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
-              "minus/equal must commit the highlighted candidate rather than page");
-        if (key == '-') check(preedit_equals("ー"), "minus after conversion must input ー");
-        else {
-            RIME_STRUCT(RimeContext, symbol);
-            Bool equals_first = False;
-            if (current_menu(&symbol)) {
-                equals_first = symbol.menu.num_candidates > 0 &&
-                    strcmp(symbol.menu.candidates[0].text, "＝") == 0;
-                rime->free_context(&symbol);
-            }
-            check(equals_first, "equal after conversion must offer ＝ first");
-        }
+        check(!take_commit(commit, sizeof(commit)), "minus/equal must not commit the selection");
     }
     fresh_session();
     type_text("kana");
@@ -1241,7 +1224,6 @@ static void test_minus_equal_do_not_page(void) {
     check(preedit_equals("かなー"), "minus during reading must append ー");
 }
 
-/* SPEC: ascii mode passes typing through unchanged to the frontend. */
 static void test_ascii_mode_passes_half_width_keys(void) {
     fresh_session();
     press(kZenkakuHankaku);
@@ -1256,18 +1238,17 @@ static void test_ascii_mode_passes_half_width_keys(void) {
 }
 
 /* SPEC: Shift+letter commits ASCII even with a selected conversion. */
-static void test_shift_letter_is_half_width(void) {
+/* SPEC: Shift+letter appends the half-width letter to the unconfirmed
+ * composition, the selected candidate included (dotfiles/rime/SPEC.md). */
+static void test_shift_letter_appends(void) {
     fresh_session();
     press_shift('A');
-    char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "A") == 0,
-          "Shift+A must commit ASCII A while idle");
+    check(preedit_equals("A"), "Shift+A must append A while idle");
     fresh_session();
     type_text("kana");
     press(kSpace);
     press_shift('A');
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かなA") == 0,
-          "Shift+A must commit the selected conversion and ASCII A");
+    check(preedit_equals("かなA"), "Shift+A must append A to the inline conversion");
 
     fresh_session();
     type_text("kana");
@@ -1285,15 +1266,11 @@ static void test_shift_letter_is_half_width(void) {
     press_shift('A');
     char expected[288];
     snprintf(expected, sizeof(expected), "%sA", selected);
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
-          "Shift+A must commit the highlighted candidate and ASCII A");
+    check(preedit_equals(expected), "Shift+A must append A to the highlighted candidate");
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "Shift+A must not commit the selection");
 }
 
-/*
- * SPEC: the romaji table matches the shared declaration exactly, including
- * the rows and derivations the stock Kagiroi table lacks and the collisions
- * it spells differently (dotfiles/rime/SPEC.md).
- */
 static void test_romanization_matches_declaration(void) {
     static const struct {
         const char* input;
@@ -1673,9 +1650,13 @@ static void test_modifier_shortcuts_do_not_page(void) {
 }
 
 /* SPEC: - and = on a second page commit the selected candidate, not page. */
+/* SPEC: - and = on a second page append their symbol to the selected
+ * candidate without paging or committing it. */
 static void test_minus_equal_on_second_page(void) {
-    static const int keys[] = {'-', '='};
-    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+    static const struct { int key; const char* symbol; } cases[] = {
+        {'-', "ー"}, {'=', "＝"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         type_text("ka");
         press(kSpace);
@@ -1695,25 +1676,17 @@ static void test_minus_equal_on_second_page(void) {
             check(False, "the second page must expose a menu");
         }
         check(selected[0] != '\0', "the second page must contain a selected candidate");
-        press(keys[i]);
+        press(cases[i].key);
+        char expected[288];
+        snprintf(expected, sizeof(expected), "%s%s", selected, cases[i].symbol);
+        check(preedit_equals(expected),
+              "minus/equal on page two must append to the selection rather than page");
         char commit[256];
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
-              "minus/equal on page two must commit the selected candidate rather than page");
-        if (keys[i] == '-') check(preedit_equals("ー"), "minus after page two must input ー");
-        else {
-            if (current_menu(&context)) {
-                check(context.menu.num_candidates > 0 &&
-                          strcmp(context.menu.candidates[0].text, "＝") == 0,
-                      "equal after page two must offer ＝ first");
-                rime->free_context(&context);
-            } else {
-                check(False, "equal after page two must expose the symbol menu");
-            }
-        }
+        check(!take_commit(commit, sizeof(commit)),
+              "minus/equal on page two must not commit the selection");
     }
 }
 
-/* SPEC: Enter commits the highlighted candidate. */
 static void test_enter_commits_highlighted_candidate(void) {
     fresh_session();
     type_text("kanji");
@@ -1843,23 +1816,25 @@ int main(int argc, char* argv[]) {
         test_n_run_conversion_reading,
         test_kan_space_starts_conversion,
         test_zenkaku_hankaku_toggles_ascii,
-        test_zenkaku_hankaku_commits_composition,
-        test_idle_space_is_full_width,
-        test_digits_commit_directly,
-        test_symbol_first_choices,
-        test_direct_commit_followed_by_symbol,
+        test_zenkaku_hankaku_keeps_composition,
+        test_idle_space_appends_full_width,
+        test_digits_append_unconfirmed,
+        test_symbols_append_unconfirmed,
+        test_appends_accumulate,
+        test_space_after_append_commits_raw,
+        test_romaji_after_append_stays_raw,
         test_quote_pairs,
         test_minus_equal_do_not_page,
-        test_shift_letter_is_half_width,
+        test_shift_letter_appends,
         test_ascii_mode_passes_half_width_keys,
         test_henkan_promotes_katakana,
         test_henkan_space_enter_chain,
         test_backspace_escape_return_to_reading,
-        test_typing_key_commits_selection,
-        test_comma_period_commit_selection,
+        test_typing_key_appends_to_selection,
+        test_comma_period_append_to_selection,
         test_tab_expands_candidates,
         test_page_size_is_30,
-        test_henkan_typing_key_starts_next_input,
+        test_henkan_typing_key_appends,
         test_typing_hides_candidates,
         test_first_space_converts_to_first_candidate,
         test_space_cycles_candidates,
@@ -1867,7 +1842,7 @@ int main(int argc, char* argv[]) {
         test_modifier_shortcuts_do_not_page,
         test_minus_equal_on_second_page,
         test_enter_commits_highlighted_candidate,
-        test_punctuation_commits_directly,
+        test_punctuation_appends_unconfirmed,
         test_romanization_matches_declaration,
         test_nn_pair_and_rebind,
         test_longest_declared_suffix_preserves_raw_prefix,

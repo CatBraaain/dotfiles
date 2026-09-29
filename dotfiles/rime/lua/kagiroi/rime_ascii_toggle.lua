@@ -1,6 +1,7 @@
 local kAccepted = 1
 local kNoop = 2
 local kZenkakuHankaku = 0xff2a
+local controls = require("kagiroi/rime_controls")
 
 local function toggle_ascii_mode(key_event, env)
     if key_event.keycode ~= kZenkakuHankaku or key_event:release()
@@ -9,16 +10,21 @@ local function toggle_ascii_mode(key_event, env)
     end
 
     local context = env.engine.context
-    -- Leaving the Japanese mode confirms the composition instead of leaving
-    -- it unconfirmed (dotfiles/rime/SPEC.md); the rime_controls processor
-    -- cleans its conversion state on the commit. A composition that survived
-    -- the switch used to collect the romaji typed in ascii mode and pollute
-    -- the reading after switching back.
-    if context.input ~= "" then
-        context:commit()
-        context:set_option("_kagiroi_hide_candidates", true)
+    local entering_ascii = not context:get_option("ascii_mode")
+    if entering_ascii then
+        -- Stash the composition instead of committing it
+        -- (dotfiles/rime/SPEC.md): the stock ascii composer then treats every
+        -- key as plain ascii, and the input returns with the Japanese mode.
+        controls.kept.input = context.input ~= "" and context.input or nil
+        if controls.kept.input then
+            context:set_option("_kagiroi_hide_candidates", true)
+        end
+        context.input = ""
+    elseif controls.kept.input then
+        context.input = controls.kept.input
+        controls.kept.input = nil
     end
-    context:set_option("ascii_mode", not context:get_option("ascii_mode"))
+    context:set_option("ascii_mode", entering_ascii)
     return kAccepted
 end
 
