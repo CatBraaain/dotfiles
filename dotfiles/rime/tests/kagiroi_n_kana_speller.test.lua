@@ -1,5 +1,6 @@
 local kAccepted = 1
 local kNoop = 2
+local kBackSpace = 0xff08
 local romaji_to_kana = {
     ko = "こ",
     ka = "か",
@@ -12,9 +13,11 @@ local romaji_to_kana = {
     de = "で",
     ha = "は",
     nya = "にゃ",
+    nyo = "にょ",
     ne = "ね",
     e = "え",
     a = "あ",
+    nn = "ん",
     nwa = "ぬぁ",
     wa = "わ",
 }
@@ -26,7 +29,7 @@ function base.init(env)
 end
 function base.fini() end
 function base.func(key_event, env)
-    if key_event.keycode == 0x20 then
+    if key_event.keycode == 0x20 or key_event.keycode > 0x7E then
         return kNoop
     end
 
@@ -94,15 +97,19 @@ local function new_environment()
     }
 end
 
-local function press(env, character)
+local function press_key(env, keycode)
     local key_event = {
-        keycode = character:byte(),
+        keycode = keycode,
         release = function() return false end,
         ctrl = function() return false end,
         alt = function() return false end,
         super = function() return false end,
     }
-    local result = processor.func(key_event, env)
+    return processor.func(key_event, env)
+end
+
+local function press(env, character)
+    local result = press_key(env, character:byte())
     if result == kNoop and character ~= " " then
         env.context:push_input(character)
     end
@@ -120,7 +127,11 @@ end
 
 -- SPEC: the reading shown while typing.
 local typing_cases = {
+    { input = "nn", expected = "ん" },
     { input = "kan", expected = "かn" },
+    { input = "kann", expected = "かん" },
+    { input = "nna", expected = "んな" },
+    { input = "nnyo", expected = "んにょ" },
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんんじ" },
@@ -188,5 +199,31 @@ env.context:push_input("かn")
 env.context.caret_pos = #"か"
 press(env, "j")
 assert(env.context.input == "かjn", "middle-of-input typing must not delete text before the caret")
+
+-- SPEC: a vowel right after the nn pair rebinds the fresh ん as ん+n
+-- (kanna -> かんな), but only while no other key intervened.
+env = new_environment()
+processor.init(env)
+press(env, "n")
+press(env, "n")
+assert(env.context.input == "ん", "nn must become ん on the second keypress")
+press(env, "a")
+assert(env.context.input == "んな", "a right after the nn pair should rebind to んな")
+
+-- Backspace between the pair and the vowel drops the rebind (ん stays).
+env = new_environment()
+processor.init(env)
+press(env, "n")
+press(env, "n")
+press_key(env, kBackSpace)
+press(env, "a")
+assert(env.context.input == "んあ", "a vowel after Backspace must not rebind the ん")
+
+-- A lone ん that did not come from an nn pair does not rebind either.
+env = new_environment()
+processor.init(env)
+env.context:push_input("ん")
+press(env, "a")
+assert(env.context.input == "んあ", "a vowel after a foreign ん must not rebind")
 
 print("Kagiroi n kana-speller transition tests passed")

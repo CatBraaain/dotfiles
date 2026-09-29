@@ -702,15 +702,51 @@ static void test_romanization_matches_declaration(void) {
 }
 
 /*
- * SPEC: the lone nn stays pending while typing and reads ん when Space
- * resolves the n run (dotfiles/rime/SPEC.md, n の過不足補完).
+ * SPEC: the nn pair converts to ん on the second keypress, a vowel right
+ * after the pair rebinds it (kanna -> かんな), and Enter commits the
+ * converted reading (dotfiles/rime/SPEC.md, n の過不足補完).
  */
-static void test_nn_resolves_to_n_with_space(void) {
+static void test_nn_pair_and_rebind(void) {
+    char commit[256];
+    fresh_session();
+    type_text("n");
+    check(preedit_equals("n"), "a lone n must stay pending while typing");
+    type_text("n");
+    check(preedit_equals("ん"), "nn must read ん on the second keypress");
+    press(kSpace);
+    check(preedit_equals("ん"), "nn + Space must keep reading ん");
     fresh_session();
     type_text("nn");
-    check(preedit_equals("nn"), "the lone nn must stay pending while typing");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "ん") == 0,
+          "nn + Enter must commit ん");
+    fresh_session();
+    type_text("honn");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "ほん") == 0,
+          "honn + Enter must commit ほん");
+    /* the vowel after the pair rebinds ん as ん+n */
+    fresh_session();
+    type_text("kann");
+    check(preedit_equals("かん"), "kann must read かん while typing");
+    type_text("a");
+    check(preedit_equals("かんな"), "kanna must rebind the pair ん as んな");
+    fresh_session();
+    type_text("minna");
+    check(preedit_equals("みんな"), "minna must read みんな");
+    fresh_session();
+    type_text("nnyo");
+    check(preedit_equals("んにょ"), "nnyo must read んにょ");
+    /* a four-n run keeps both ん (no rebind) */
+    fresh_session();
+    type_text("kannnna");
+    check(preedit_equals("かんんあ"), "kannnna must read かんんあ");
+    /* a lone pending n keeps the current pending display and Space resolve */
+    fresh_session();
+    type_text("kan");
+    check(preedit_equals("かn"), "kan must keep the pending かn display");
     press(kSpace);
-    check(preedit_equals("ん"), "nn + Space must read ん");
+    check(preedit_equals("かん"), "kan + Space must read かん");
 }
 
 /*
@@ -918,7 +954,7 @@ int main(int argc, char* argv[]) {
         test_enter_commits_highlighted_candidate,
         test_punctuation_commits_directly,
         test_romanization_matches_declaration,
-        test_nn_resolves_to_n_with_space,
+        test_nn_pair_and_rebind,
         test_non_declaration_spellings_stay_raw,
         test_sokuon_hatsuon_and_long_vowel,
     };
