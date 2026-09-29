@@ -64,9 +64,10 @@ cp -r "$mirror"/lua/kagiroi/. "$workspace/lua/kagiroi/"
 cp -r "$mirror"/opencc "$workspace/"
 
 # Managed files under test, in the same relative layout as the deployment.
+# The romaji dictionary is generated from the declaration, as in dist/.
 install -m 644 "$root"/default.custom.yaml "$root"/kagiroi.custom.yaml \
-    "$root"/kagiroi.custom.dict.yaml "$root"/kagiroi_romaji.custom.yaml \
-    "$root"/kagiroi_dotfiles_romaji.dict.yaml "$workspace/"
+    "$root"/kagiroi.custom.dict.yaml "$root"/kagiroi_romaji.custom.yaml "$workspace/"
+bun "$root/roma.build.ts" --output "$workspace/kagiroi_dotfiles_romaji.dict.yaml"
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
 
 cc -std=c11 -O2 -o "$cache/harness/harness" "$root/tests/rime/harness.c" $rime_cflags $rime_libs

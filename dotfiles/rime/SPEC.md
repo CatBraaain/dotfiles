@@ -55,9 +55,9 @@ Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき�
 
 ## ローマ字表
 
-ローマ字からかなへの対応は、`undotfiles/ime/roma-table.yaml` の宣言が対応付けたマッピング集合と完全一致する。正本は宣言であり、対応は宣言のみから決まる。Kagiroi 標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。したがって宣言にない綴りは、Kagiroi 標準で有効だった `shi` `chi` `tsu` `kyi` `wha` `tsa` `dhe` `fya` `ltsu` なども含めて、かなに変換されない。宣言と Kagiroi 標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
+ローマ字からかなへの対応の正本は `dotfiles/rime/roma.data.yaml` の宣言である。`dotfiles/rime/roma.build.ts` が build 時に宣言から `kagiroi_dotfiles_romaji.dict.yaml` を生成し、辞書そのものをリポジトリに置かない。宣言は MS-IME 用の宣言（`undotfiles/ime/roma-table.yaml`）から独立しており、両者の一致は保証しない。Kagiroi 標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。したがって宣言にない綴りは、Kagiroi 標準で有効だった `shi` `chi` `tsu` `kyi` `wha` `tsa` `dhe` `fya` `ltsu` なども含めて、かなに変換されない。宣言と Kagiroi 標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
 
-宣言の対象外である入力インフラとして、次の対応を保持する。
+宣言は入力インフラとして、次の対応も持つ。
 
 | 綴り | かな | 目的 |
 | --- | --- | --- |
@@ -77,8 +77,8 @@ Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき�
 - Windows / Weasel: `%APPDATA%/Rime`
 - Linux / fcitx5-rime: `~/.local/share/fcitx5/rime`
 
-dotfiles は共通の `default.custom.yaml`、`kagiroi.custom.yaml`、`kagiroi_romaji.custom.yaml`、`kagiroi_dotfiles_romaji.dict.yaml`、n の過不足補完と共通キー・候補操作の Lua、Weasel 固有の `weasel.custom.yaml` を管理する。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字 processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
+dotfiles は共通の `default.custom.yaml`、`kagiroi.custom.yaml`、`kagiroi_romaji.custom.yaml`、ローマ字表の宣言 `roma.data.yaml` と辞書生成スクリプト `roma.build.ts`、n の過不足補完と共通キー・候補操作の Lua、Weasel 固有の `weasel.custom.yaml` を管理する。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字 processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
 
 ## 開発と検証
 
-変更はこの SPEC、対応する自動テスト、実装の順に同期する。完了判定は `just test-rime` の成功とし、Windows の Weasel と Linux の fcitx5-rime での実機確認を要しない。
+変更はこの SPEC、対応する自動テスト、実装の順に同期する。ローマ字表の変更は `roma.data.yaml` の宣言に対して行い、辞書は `roma.build.ts` が build 時に生成する。完了判定は `just test-rime` の成功とし、Windows の Weasel と Linux の fcitx5-rime での実機確認を要しない。
