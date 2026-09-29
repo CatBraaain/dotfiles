@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="An exploratory, axis-by-axis catalog of in-video recording annotations."
+    />
+    <title>In-frame annotation study</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Arial, Helvetica, sans-serif;
+        background: #11161c;
+        color: #edf0f0;
+        --muted: #b0bac2;
+        --rule: #39434c;
+        --signal: #ffe36a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-inline-size: 280px;
+      }
+      .page {
+        max-inline-size: 1560px;
+        margin-inline: auto;
+        padding: clamp(20px, 4vw, 64px);
+      }
+      header {
+        border-bottom: 1px solid var(--rule);
+        padding-block: 8px 32px;
+      }
+      .kicker {
+        color: var(--signal);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+      }
+      h1 {
+        max-inline-size: 760px;
+        margin: 14px 0 18px;
+        font-size: clamp(32px, 4.8vw, 64px);
+        line-height: 1.02;
+        letter-spacing: -0.045em;
+        font-weight: 500;
+      }
+      .intro {
+        max-inline-size: 67ch;
+        color: var(--muted);
+        line-height: 1.6;
+        margin: 0;
+      }
+      .conditions {
+        margin-block-start: 24px;
+        color: #dce4e6;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      main {
+        padding-block: 8px 60px;
+      }
+      .axis {
+        padding-block: 40px 48px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .axis-heading {
+        margin-block-end: 24px;
+      }
+      .axis-heading h2 {
+        font-size: clamp(23px, 2.5vw, 34px);
+        font-weight: 500;
+        letter-spacing: -0.03em;
+        margin: 0 0 8px;
+      }
+      .axis-heading p {
+        margin: 0;
+        max-inline-size: 70ch;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .options {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: clamp(14px, 2vw, 26px);
+      }
+      .option {
+        min-inline-size: 0;
+      }
+      .option-header {
+        min-block-size: 72px;
+        display: flex;
+        align-items: start;
+        gap: 12px;
+      }
+      .letter {
+        display: grid;
+        place-items: center;
+        flex: none;
+        inline-size: 32px;
+        block-size: 32px;
+        background: #e9edf0;
+        color: #10171c;
+        font-family: ui-monospace, monospace;
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .option h3 {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .option-id {
+        color: var(--muted);
+        font:
+          12px ui-monospace,
+          monospace;
+      }
+      .frame {
+        position: relative;
+        isolation: isolate;
+        aspect-ratio: 16 / 9;
+        overflow: hidden;
+        background: #dce5ea;
+        color: #1d2b32;
+        font-size: clamp(8px, 0.78vw, 12px);
+        container-type: inline-size;
+      }
+      .video-title {
+        position: absolute;
+        inset: 0 0 auto;
+        block-size: 15%;
+        background: #07090b;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        padding-inline: 4%;
+        font-size: 1.05em;
+        font-weight: 700;
+        letter-spacing: 0.015em;
+        z-index: 4;
+      }
+      .scene {
+        position: absolute;
+        inset: 15% 0 0;
+        background: linear-gradient(135deg, #e5edf1, #c9d9e0);
+      }
+      .app-header {
+        position: absolute;
+        inset: 0 0 auto;
+        block-size: 20%;
+        display: flex;
+        align-items: center;
+        gap: 3%;
+        padding-inline: 5%;
+        border-bottom: 1px solid #9aaeb9;
+        background: #f4f7f7;
+        font-weight: 700;
+      }
+      .app-header small {
+        margin-inline-start: auto;
+        color: #52636a;
+        font-size: 0.8em;
+        font-weight: 500;
+      }
+      .search {
+        position: absolute;
+        inset: 42% auto auto 25%;
+        inline-size: 43%;
+        block-size: 15%;
+        display: flex;
+        align-items: center;
+        padding-inline: 2%;
+        background: #fff;
+        border: 1px solid #8ea4ae;
+        color: #1c333c;
+      }
+      .result {
+        position: absolute;
+        inset: 67% auto auto 25%;
+        inline-size: 62%;
+        block-size: 13%;
+        padding: 0 3%;
+        background: #fff;
+        border: 1px solid #9eafb7;
+        display: flex;
+        align-items: center;
+        gap: 3%;
+        white-space: nowrap;
+      }
+      .result span {
+        color: #4d6972;
+      }
+      .overlay {
+        position: absolute;
+        inset: 15% 0 0;
+        z-index: 3;
+        pointer-events: none;
+        --panel: #111a20ed;
+        --panel-text: #f4f6f6;
+        --panel-border: #95a5ae;
+        --marker: #ffe36a;
+      }
+      .step {
+        position: absolute;
+        inset: 3% auto auto 4%;
+        inline-size: 58%;
+        padding: 2% 2.5%;
+        background: var(--panel);
+        color: var(--panel-text);
+        border: 1px solid var(--panel-border);
+        line-height: 1.25;
+        font-weight: 700;
+      }
+      .state {
+        display: block;
+        margin-block-start: 0.4em;
+        font-weight: 500;
+        opacity: 0.88;
+      }
+      .source {
+        position: absolute;
+        inset: 4% 3% auto auto;
+        padding: 1% 2%;
+        background: var(--panel);
+        color: var(--panel-text);
+        font-family: ui-monospace, monospace;
+        font-size: 0.88em;
+      }
+      .focus {
+        position: absolute;
+        border: 2px solid var(--marker);
+        box-shadow: 0 0 0 1px #16202799;
+      }
+      .focus.target {
+        inset: 41% auto auto 24%;
+        inline-size: 45%;
+        block-size: 17%;
+      }
+      .focus.outcome {
+        inset: 66% auto auto 24%;
+        inline-size: 64%;
+        block-size: 14%;
+      }
+      .focus-label {
+        position: absolute;
+        inset: auto auto calc(100% + 2px) 0;
+        padding: 1px 5px;
+        background: var(--marker);
+        color: #11170e;
+        font-size: 0.84em;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .pointer-path {
+        position: absolute;
+        inset: 50% auto auto 12%;
+        inline-size: 38%;
+        block-size: 18%;
+        border-top: 2px dashed #17232cb8;
+        border-right: 2px dashed #17232cb8;
+        border-radius: 0 28px 0 0;
+        transform: rotate(-14deg);
+      }
+      .cursor {
+        position: absolute;
+        inset: 50% auto auto 49%;
+        inline-size: 0;
+        block-size: 0;
+        border-inline-start: 10px solid #121a20;
+        border-block-end: 15px solid transparent;
+        filter: drop-shadow(1px 1px 0 white);
+        transform: rotate(-24deg);
+      }
+      .ripple {
+        position: absolute;
+        inset: 47% auto auto 48%;
+        inline-size: 12%;
+        aspect-ratio: 1;
+        border: 2px solid #132630;
+        border-radius: 50%;
+        opacity: 0.65;
+      }
+      .input-band {
+        position: absolute;
+        inset: auto auto 1% 50%;
+        transform: translateX(-50%);
+        inline-size: 52%;
+        min-block-size: 10%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4%;
+        padding-inline: 3%;
+        background: #101920f2;
+        color: #fff;
+        border: 1px solid #677782;
+        white-space: nowrap;
+      }
+      .input-band span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .input-band kbd {
+        flex: none;
+        font: inherit;
+        font-weight: 700;
+        padding: 0.15em 0.4em;
+        border: 1px solid #cad4d9;
+      }
+      .surface-slate {
+        --panel: #293841f2;
+        --panel-text: #eef9fa;
+        --panel-border: #d2e2e8;
+      }
+      .surface-paper {
+        --panel: #f2f0e8f5;
+        --panel-text: #15232c;
+        --panel-border: #15232c;
+      }
+      .surface-paper .source {
+        border: 1px solid var(--panel-border);
+      }
+      .layout-right .step {
+        inset: 3% 3% auto auto;
+        inline-size: 58%;
+      }
+      .layout-right .source {
+        inset: 31% 3% auto auto;
+      }
+      .layout-rail .step {
+        inset: 29% auto auto 3%;
+        inline-size: 19%;
+        padding: 2%;
+      }
+      .layout-rail .source {
+        inset: 3% auto auto 3%;
+        inline-size: 19%;
+      }
+      .labels-bottom .focus-label {
+        inset: calc(100% + 2px) auto auto 0;
+      }
+      .labels-end .focus-label {
+        inset: 0 0 auto auto;
+      }
+      .option-desc {
+        margin: 14px 0 0;
+        color: #cad4d9;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      footer {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+        padding-block: 22px 42px;
+      }
+      @media (max-width: 1080px) {
+        .options {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .frame {
+          font-size: 1.15vw;
+        }
+        .layout-right .step {
+          inline-size: 75%;
+        }
+      }
+      @media (max-width: 690px) {
+        .options {
+          grid-template-columns: 1fr;
+        }
+        .option-header {
+          min-block-size: 62px;
+        }
+        .frame {
+          font-size: clamp(8px, 2.2vw, 12px);
+        }
+        .axis {
+          padding-block: 30px 38px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div class="kicker">Exploratory catalog / In-video annotation</div>
+        <h1>Make the action legible without taking over the frame.</h1>
+        <p class="intro">
+          Choose each axis independently. Every still uses the same sample page,
+          16:9 crop, action, result, title, yellow target and result outlines,
+          cursor path and ripple, bottom-center input strip with key, page
+          identifier, and result state.
+        </p>
+        <p class="conditions">
+          Fixed scenario: click the search field, type “April invoices”, press
+          Enter, then show the updated result. For spatial comparison, each
+          still composites annotations from those successive moments; it is not
+          a literal video frame, timing specification, test outcome, or approved
+          design.
+        </p>
+      </header>
+      <main id="catalog"></main>
+      <footer>
+        Selection guide: use the letter and stable ID shown above each frame.
+        Combine one choice per axis; an unselected axis stays at its provisional
+        baseline (a). No chapter index or clock is proposed.
+      </footer>
+    </div>
+    <script>
+      const axes = [
+        {
+          name: "Overlay surface",
+          description:
+            "How the annotations separate from the underlying page. Position and label attachment stay at baseline.",
+          options: [
+            {
+              id: "surface-ink",
+              name: "Ink on image",
+              difference:
+                "Baseline: opaque dark annotations preserve contrast over changing pages.",
+              className: "",
+            },
+            {
+              id: "surface-slate",
+              name: "Cool studio",
+              difference:
+                "Lighter slate panels distinguish the recording layer without a new accent.",
+              className: "surface-slate",
+            },
+            {
+              id: "surface-paper",
+              name: "Paper proof",
+              difference:
+                "Pale annotation panels read as a deliberate review layer, not page UI.",
+              className: "surface-paper",
+            },
+          ],
+        },
+        {
+          name: "Information placement",
+          description:
+            "Where the step, state and page identifier live. Panel surface and focus-label attachment stay at baseline.",
+          options: [
+            {
+              id: "placement-corner",
+              name: "Single reading corner",
+              difference:
+                "Baseline: step and state lead at upper left; page ID sits opposite.",
+              className: "",
+            },
+            {
+              id: "placement-right",
+              name: "Right-hand stack",
+              difference:
+                "Step and page ID gather on the right, leaving the left side of the page open.",
+              className: "layout-right",
+            },
+            {
+              id: "placement-rail",
+              name: "Margin rail",
+              difference:
+                "A narrow left rail reserves one consistent area for guidance and page ID.",
+              className: "layout-rail",
+            },
+          ],
+        },
+        {
+          name: "Focus captions",
+          description:
+            "Where target and result names attach to the required yellow outlines. All other annotation choices stay at baseline.",
+          options: [
+            {
+              id: "caption-above",
+              name: "Lead-in",
+              difference:
+                "Baseline: names appear just above the target and the changed area.",
+              className: "",
+            },
+            {
+              id: "caption-below",
+              name: "Follow-through",
+              difference:
+                "Names sit beneath each outline to keep the upper edge unobstructed.",
+              className: "labels-bottom",
+            },
+            {
+              id: "caption-inside",
+              name: "Inside corner",
+              difference:
+                "Names nest inside the upper-right edge for a compact annotation footprint.",
+              className: "labels-end",
+            },
+          ],
+        },
+      ];
+
+      function frame(className) {
+        return `<div class="frame" role="img" aria-label="Illustrative video still: black test title, search for April invoices, yellow outlines around the input and updated result, cursor path and ripple, step and result label, page ID, and bottom-center input strip with Enter key">
+          <div class="video-title">Billing / Search invoices / Find April invoices</div>
+          <div class="scene" aria-hidden="true">
+            <div class="app-header">Ledger <small>Invoices &nbsp; Settings</small></div>
+            <div class="search">April invoices</div>
+            <div class="result"><strong>April invoices</strong><span>3 matching invoices</span></div>
+          </div>
+          <div class="overlay ${className}" aria-hidden="true">
+            <div class="step">Search invoices → Updated results <span class="state">Result shown</span></div>
+            <div class="source">Page: Billing / main frame</div>
+            <div class="focus target"><span class="focus-label">Target: Search</span></div>
+            <div class="focus outcome"><span class="focus-label">Result: 3 matches</span></div>
+            <div class="pointer-path"></div><div class="ripple"></div><div class="cursor"></div>
+            <div class="input-band"><span>April invoices</span><kbd>Enter</kbd></div>
+          </div>
+        </div>`;
+      }
+
+      document.querySelector("#catalog").innerHTML = axes
+        .map(
+          (axis, axisIndex) => `
+        <section class="axis" aria-labelledby="axis-${axisIndex}">
+          <div class="axis-heading"><h2 id="axis-${axisIndex}">${axis.name}</h2><p>${axis.description}</p></div>
+          <div class="options">${axis.options
+            .map(
+              (option, index) => `
+            <article class="option" aria-labelledby="${option.id}">
+              <div class="option-header"><span class="letter" aria-label="Option ${String.fromCharCode(97 + index)}">${String.fromCharCode(97 + index)}</span><div><h3 id="${option.id}">${option.name}</h3><span class="option-id">${option.id}</span></div></div>
+              ${frame(option.className)}
+              <p class="option-desc">${option.difference}</p>
+            </article>`,
+            )
+            .join("")}</div>
+        </section>`,
+        )
+        .join("");
+    </script>
+  </body>
+</html>
