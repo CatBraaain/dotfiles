@@ -199,6 +199,10 @@ static void test_n_run_preedit(void) {
         {"kannda", "かんだ"},
         {"kannnda", "かんんだ"},
         {"nya", "にゃ"},
+        {"nwa", "んわ"},
+        {"nwi", "んうぃ"},
+        {"nwe", "んうぇ"},
+        {"nwo", "んを"},
         {"kannnen", "かんねn"},
         {"kannnnen", "かんんえn"},
     };
@@ -282,6 +286,10 @@ static void test_n_run_conversion_reading(void) {
         {"kannna", "かんな"},
         {"kannnna", "かんな"},
         {"konnnitiha", "こんにちは"},
+        {"nwa", "んわ"},
+        {"nwi", "んうぃ"},
+        {"nwe", "んうぇ"},
+        {"nwo", "んを"},
         {"kannnen", "かんねん"},
         {"kannnnen", "かんねん"},
     };
@@ -884,7 +892,7 @@ static void test_romanization_matches_declaration(void) {
         {"bha", "びゃ"}, {"pha", "ぴゃ"}, {"rhu", "りゅ"},
         /* u-column + small a/i/e/o and o-column + small u families */
         {"kwa", "くぁ"}, {"kwi", "くぃ"}, {"kwe", "くぇ"}, {"kwo", "くぉ"},
-        {"hwa", "ふぁ"}, {"cwa", "くぁ"}, {"nwa", "ぬぁ"}, {"bwa", "ぶぁ"},
+        {"hwa", "ふぁ"}, {"cwa", "くぁ"}, {"bwa", "ぶぁ"},
         {"rwo", "るぉ"},
         {"twu", "とぅ"}, {"dwu", "どぅ"}, {"kwu", "こぅ"}, {"gwu", "ごぅ"},
         {"swu", "そぅ"}, {"rwu", "ろぅ"},

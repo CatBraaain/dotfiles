@@ -18,8 +18,10 @@ local romaji_to_kana = {
     e = "え",
     a = "あ",
     nn = "ん",
-    nwa = "ぬぁ",
     wa = "わ",
+    wi = "うぃ",
+    we = "うぇ",
+    wo = "を",
 }
 
 local base = {}
@@ -147,7 +149,10 @@ local typing_cases = {
     { input = "kannnen", expected = "かんねn" },
     { input = "kannnnen", expected = "かんんえn" },
     { input = "nya", expected = "にゃ" },
-    { input = "nwa", expected = "ぬぁ" },
+    { input = "nwa", expected = "んわ" },
+    { input = "nwi", expected = "んうぃ" },
+    { input = "nwe", expected = "んうぇ" },
+    { input = "nwo", expected = "んを" },
     { input = "nnwa", expected = "んわ" },
 }
 
@@ -173,6 +178,10 @@ local conversion_cases = {
     { input = "kannnda", expected = "かんだ" },
     { input = "kannnen", expected = "かんねん" },
     { input = "kannnnen", expected = "かんねん" },
+    { input = "nwa", expected = "んわ" },
+    { input = "nwi", expected = "んうぃ" },
+    { input = "nwe", expected = "んうぇ" },
+    { input = "nwo", expected = "んを" },
 }
 
 for _, case in ipairs(conversion_cases) do

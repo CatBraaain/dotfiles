@@ -60,7 +60,7 @@ families:
     column: i
     suffixes: { he: ぇ }
   # kwa=くぁ, swi=すぃ...: u-column + small a/i/e/o
-  - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, p, m, r]
     column: u
     suffixes: { wa: ぁ, wi: ぃ, we: ぇ, wo: ぉ }
   # twu=とぅ, dwu=どぅ: o-column + small u
