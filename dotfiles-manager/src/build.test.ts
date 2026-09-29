@@ -540,7 +540,7 @@ replacements:
     await put(
       root,
       "dotfiles/external.data.yaml",
-      `externalSkills:
+      `repos:
   example/repo:
     destination: shared
     entries: [shared.txt]
@@ -549,7 +549,7 @@ replacements:
     await put(
       root,
       "dotfiles/external.data-machine.yaml",
-      `externalSkills:
+      `repos:
   example/repo:
     destination: machine
     entries: [machine.txt]
@@ -558,7 +558,7 @@ replacements:
     await put(
       root,
       "dotfiles/external.data.machine.yaml",
-      `externalSkills:
+      `repos:
   example/repo:
     destination: old
     entries: [old.txt]
@@ -591,7 +591,7 @@ replacements:
     await put(
       root,
       "dotfiles/parent/external.data.yaml",
-      `externalSkills:
+      `repos:
   example/nested:
     destination: downloads
     entries: [payload.txt]
@@ -624,7 +624,7 @@ replacements:
     await put(
       root,
       "dotfiles/nested/generate.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () { await writeFile("external.data.yaml", "externalSkills:\\n  example/generated:\\n    destination: output\\n    entries: [file.txt]\\n"); }`,
+      `import { writeFile } from "node:fs/promises";\nexport default async function () { await writeFile("external.data.yaml", "repos:\\n  example/generated:\\n    destination: output\\n    entries: [file.txt]\\n"); }`,
     );
     await put(homeRoot, "mirrors/github.com/example/generated/file.txt", "generated\n");
     await put(
@@ -643,7 +643,7 @@ replacements:
     await put(
       root,
       "dotfiles/parent/external.data.yaml",
-      `externalSkills:
+      `repos:
   example/edited:
     destination: out/nested
     entries: [skills/demo]
@@ -670,7 +670,7 @@ replacements:
     await put(
       root,
       "dotfiles/.agents/skills.exact/external.data.yaml",
-      `externalSkills:
+      `repos:
   example/skill:
     destination: .
     entries: [skills/demo]
@@ -723,7 +723,7 @@ replacements:
     await put(
       root,
       "dotfiles/rime/external.data.yaml",
-      `externalSkills:
+      `repos:
   rimeinn/rime-kagiroi:
     destination: .
     entries: [dictionary.txt]

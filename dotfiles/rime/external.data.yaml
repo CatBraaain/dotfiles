@@ -1,4 +1,4 @@
-externalSkills:
+repos:
   rimeinn/rime-kagiroi:
     destination: .
     entries:

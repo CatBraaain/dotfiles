@@ -111,7 +111,7 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 すべてのパス対応表の適用後、残っている `external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rime フォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。`.agents` が削除される Windows と macOS では skills の外部取得および `run_after` を行わない。
 
-`externalSkills` の各リポジトリは GitHub mirror（既定 `~/mirrors/github.com/<owner>/<repo>`）を使う。mirror がなければ shallow clone し、存在するときは前回の取得から `ttlHours`（既定 6 時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。pull に失敗したときは警告を表示し、手元の mirror を利用する。`entries` のファイルやフォルダを `destination` にコピーし、更新に変更があった場合だけ `run_after` を実行する。`edit` の `.$append` は取得したフォルダ内の対象ファイルに指定テキストを追記する。同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらず gitignore の対象となる。失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
+`repos` の各リポジトリは GitHub mirror（既定 `~/mirrors/github.com/<owner>/<repo>`）を使う。mirror がなければ shallow clone し、存在するときは前回の取得から `ttlHours`（既定 6 時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。pull に失敗したときは警告を表示し、手元の mirror を利用する。`entries` のファイルやフォルダを `destination` にコピーし、更新に変更があった場合だけ `run_after` を実行する。`edit` の `.$append` は取得したフォルダ内の対象ファイルに指定テキストを追記する。同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらず gitignore の対象となる。失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
 
 ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じ GitHub mirror・既定 6 時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を include しない。
 

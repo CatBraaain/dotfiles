@@ -93,12 +93,10 @@ async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
 
 async function readExternalRepos(configPath: string): Promise<ExternalRepo[]> {
   const doc: unknown = parseYaml(await readFile(configPath, "utf-8"));
-  const externalSkills = (doc as { externalSkills?: unknown })?.externalSkills;
-  if (!isPlainObject(externalSkills))
-    throw new Error(`${basename(configPath)} must have an externalSkills mapping: ${configPath}`);
-  return Object.entries(externalSkills).map(([repo, raw]) =>
-    normalizeRepo(`externalSkills.${repo}`, repo, raw),
-  );
+  const repos = (doc as { repos?: unknown })?.repos;
+  if (!isPlainObject(repos))
+    throw new Error(`${basename(configPath)} must have a repos mapping: ${configPath}`);
+  return Object.entries(repos).map(([repo, raw]) => normalizeRepo(`repos.${repo}`, repo, raw));
 }
 
 async function syncMirror(

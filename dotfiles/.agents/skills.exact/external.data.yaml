@@ -1,6 +1,6 @@
 # Destinations are relative to this folder. Remap removes it off Linux,
 # so external processing (including run_after) runs on Linux only.
-externalSkills:
+repos:
   DreambigOu/ELI5:
     destination: .
     entries:
