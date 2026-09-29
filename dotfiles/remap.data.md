@@ -21,6 +21,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | **/node_modules | - | - | - |
 | docker | .docker/desktop | AppData/Roaming/Docker | - |
 | erdtree | .config/erdtree | AppData/Roaming/erdtree | - |
+| fcitx5 | .config/fcitx5 | - | - |
 | git-cliff | .config/git-cliff | AppData/Roaming/git-cliff | - |
 | gsudo | - |  | - |
 | rime/tests | - | - | - |

@@ -1,0 +1,5 @@
+[Behavior]
+# One-way IME keys (dotfiles/rime/SPEC.md): the kana key enables the input
+# method and Muhenkan disables it, matching the Rime-side ascii_mode switches.
+ActivateKeys=Hiragana_Katakana
+DeactivateKeys=Muhenkan

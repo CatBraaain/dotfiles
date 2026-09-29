@@ -21,7 +21,9 @@
 #define kSpace 0x20
 #define kReturn 0xff0d
 #define kHenkan 0xff23
+#define kMuhenkan 0xff22
 #define kZenkakuHankaku 0xff2a
+#define kHiraganaKatakana 0xff27
 #define kBackSpace 0xff08
 #define kEscape 0xff1b
 #define kKeypadDecimal 0xffae
@@ -407,6 +409,37 @@ static void test_zenkaku_hankaku_keeps_composition(void) {
     check(preedit_equals("カナ"), "the stashed katakana must return");
     press(kEscape);
     check(!option("katakana"), "Esc must restore hiragana after the round trip");
+}
+
+/* SPEC: Hiragana_Katakana always selects Japanese input and Muhenkan always
+ * selects ascii input; the one-way keys keep the composition unconfirmed
+ * (dotfiles/rime/SPEC.md). */
+static void test_kana_muhenkan_one_way_switches(void) {
+    fresh_session();
+    press(kMuhenkan);
+    check(option("ascii_mode"), "Muhenkan must always select ascii mode");
+    press(kMuhenkan);
+    check(option("ascii_mode"), "a second Muhenkan must stay in ascii mode");
+    type_text("abc");
+    check(!composing(), "ascii typing must not start a composition");
+    press(kHiraganaKatakana);
+    check(!option("ascii_mode"), "Hiragana_Katakana must always select Japanese mode");
+    press(kHiraganaKatakana);
+    check(!option("ascii_mode"), "a second Hiragana_Katakana must stay in Japanese mode");
+
+    /* The one-way keys stash and restore the composition like the toggle. */
+    fresh_session();
+    type_text("kana");
+    press(kMuhenkan);
+    check(option("ascii_mode"), "Muhenkan must select ascii mode from a composition");
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "Muhenkan must not commit the composition");
+    press(kMuhenkan);
+    check(option("ascii_mode"), "a repeated Muhenkan must stay in ascii mode");
+    press(kHiraganaKatakana);
+    check(!option("ascii_mode"), "Hiragana_Katakana must select Japanese mode");
+    check(preedit_equals("かな"), "a repeated Muhenkan must keep the stash for the return");
+    check(composing(), "the restored reading must keep composing");
 }
 
 /* SPEC: main-row digits append their full-width form, keypad digits and
@@ -1817,6 +1850,7 @@ int main(int argc, char* argv[]) {
         test_kan_space_starts_conversion,
         test_zenkaku_hankaku_toggles_ascii,
         test_zenkaku_hankaku_keeps_composition,
+        test_kana_muhenkan_one_way_switches,
         test_idle_space_appends_full_width,
         test_digits_append_unconfirmed,
         test_symbols_append_unconfirmed,

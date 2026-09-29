@@ -40,7 +40,7 @@ Rime の選択スキーマは Kagiroi とする。ローマ字からかなへの
 
 ## Windows / Linux 共通の操作と候補表示
 
-Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき、`Zenkaku_Hankaku` は Rime の日本語入力と英字入力を切り替える。切り替えで未確定の文字列を確定しない。未確定の文字列は英字入力中も保持され、日本語入力へ戻るとそのまま再開できる。英字入力中の入力は、保持された未確定の文字列に影響しない。英字入力中は英数字・記号・空白を半角で入力する。Windows の Weasel では、入力状態の通知とトレイアイコンを表示しない。候補一覧の表示中、マウスホイールでページを前後に送る。
+Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき、`Zenkaku_Hankaku` は Rime の日本語入力と英字入力を切り替える。`Hiragana_Katakana`（かなキー）は現在の状態にかかわらず日本語入力へ、`Muhenkan`（無変換キー）は現在の状態にかかわらず英字入力へ切り替える。どのキーでも、切り替えで未確定の文字列を確定しない。未確定の文字列は英字入力中も保持され、日本語入力へ戻るとそのまま再開できる。英字入力中の入力は、保持された未確定の文字列に影響しない。英字入力中は英数字・記号・空白を半角で入力する。Windows の Weasel では、入力状態の通知とトレイアイコンを表示しない。候補一覧の表示中、マウスホイールでページを前後に送る。
 
 日本語入力中は、`Enter` による確定指示以外で、未確定の文字列を確定しない。数字キー・記号キー・句読点・半角英字は、未確定の文字列の末尾にそのまま加える。変換モードで押したときは、選択中の候補の文字列に続けて加える。未確定の文字列がないとき、または全角空白のみからなるときに `Space` を押すと、全角空白 `　` を加える。英字キーはローマ字からかなへの入力に使う。ただし未確定の文字列に数字・記号・句読点・半角英字を加えた後は、続くローマ字入力をかなに変換せず、そのまま加える。入力開始から候補一覧を表示しない。1回目の `Space` も候補一覧を表示せず第一候補へ変換し、候補一覧は2回目の `Space` から表示する。`Space` または `Henkan` で候補へ変換した未確定状態を変換モードと呼ぶ。確定して次の入力を始めると、再び候補一覧を表示しない。編集中の文字列があるときのキー操作は次のとおりである。MS-IME の挙動は標準設定を基準とし、数字キーだけは表中のオプションをオフにした場合と比較する。Rime 列の「同じ」は、対応する MS-IME 列の挙動を指す。
 
@@ -101,7 +101,7 @@ Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき�
 - Windows / Weasel: `%APPDATA%/Rime`
 - Linux / fcitx5-rime: `~/.local/share/fcitx5/rime`
 
-dotfiles は共通の `default.custom.yaml`、`kagiroi.custom.yaml`、`kagiroi_romaji.custom.yaml`、ローマ字表の宣言 `roma.data.yaml` と辞書生成スクリプト `roma.build.ts`、n の過不足補完と共通キー・候補操作の Lua、Weasel 固有の `weasel.custom.yaml` を管理する。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字 processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
+dotfiles は共通の `default.custom.yaml`、`kagiroi.custom.yaml`、`kagiroi_romaji.custom.yaml`、ローマ字表の宣言 `roma.data.yaml` と辞書生成スクリプト `roma.build.ts`、n の過不足補完と共通キー・候補操作の Lua、Weasel 固有の `weasel.custom.yaml`、Linux 固有の fcitx5 設定 `fcitx5/config` を管理する。Linux の fcitx5 では、`fcitx5/config` が `Hiragana_Katakana` を入力メソッドの有効化、`Muhenkan` を入力メソッドの無効化に割り当てる。fcitx5 が入力メソッドを無効化している間はキーが Rime に渡らず、有効化のキーで戻る。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字 processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
 
 ## 開発と検証
 
