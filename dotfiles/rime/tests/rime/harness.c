@@ -1843,6 +1843,9 @@ int main(int argc, char* argv[]) {
     rime->join_maintenance_thread();
 
     static void (*const tests[])(void) = {
+        /* Runs first: later tests feed the user dictionary and can saturate
+         * the learned order the baseline comparison depends on. */
+        test_learning_promotes_committed_candidate,
         test_default_schema_is_kagiroi,
         test_n_run_correction,
         test_n_run_preedit,
@@ -1881,7 +1884,6 @@ int main(int argc, char* argv[]) {
         test_nn_pair_and_rebind,
         test_longest_declared_suffix_preserves_raw_prefix,
         test_sokuon_hatsuon_and_long_vowel,
-        test_learning_promotes_committed_candidate,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         tests[i]();
