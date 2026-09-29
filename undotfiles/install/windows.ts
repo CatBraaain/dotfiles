@@ -1,13 +1,13 @@
-// Windows bootstrap installer: installs apps with winget, sets up Mozc, and
-// cleans up desktop shortcuts and WinGet package links.
+// Windows bootstrap installer: installs apps with winget and cleans up
+// desktop shortcuts and WinGet package links.
 //
 // Requires Administrator. When not elevated, the script relaunches itself via
 // gsudo (one UAC prompt); `gsudo status IsElevated` exits with 0 once
 // elevated, so the relaunch happens at most once.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { readdirSync, rmSync, symlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 
 const unmanagedPackages: readonly string[] = [
   // keep-sorted start by_regex=\..+ sticky_comments=no
@@ -78,7 +78,6 @@ const managedDevPackages: readonly string[] = [
 async function main(): Promise<void> {
   if (!isElevated()) await selfElevate();
   installWingetPackages();
-  installMozc();
   removeDesktopShortcuts();
   linkWingetPackageExes();
 }
@@ -100,35 +99,6 @@ function installWingetPackages(): void {
   runAllowingFailure(["winget", "install", ...unmanagedPackages, "--no-upgrade", "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managedPackages, "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managedDevPackages, "--source", "winget"]);
-}
-
-function installMozc(): void {
-  const mozcServerExe = join(programFilesX86(), "Mozc", "mozc_server.exe");
-  if (existsSync(mozcServerExe)) {
-    console.log(`Mozc is already installed at ${dirname(mozcServerExe)}; skipping the Mozc install`);
-    return;
-  }
-
-  // No winget package nor GitHub release exists; the official CI publishes an
-  // MSI as a run artifact, which needs GitHub authentication (gh from
-  // managedDevPackages and `gh auth login`).
-  const mozcRun = output([
-    "gh", "run", "list", "--repo", "google/mozc",
-    "--workflow=windows.yaml", "--status=success", "--limit", "1",
-    "--json", "databaseId", "--jq", ".[0].databaseId",
-  ]).trim();
-  const mozcDir = join(tmpdir(), "mozc-install");
-  mkdirSync(mozcDir, { recursive: true });
-  run([
-    "gh", "run", "download", mozcRun, "--repo", "google/mozc",
-    "--name", "Mozc64_x64.msi", "--dir", mozcDir,
-  ]);
-  // The artifact name and the MSI file name inside it differ (Mozc64.msi), so
-  // resolve the extracted .msi instead of assuming the artifact name.
-  const mozcMsi = readdirSync(mozcDir).find((name) => name.endsWith(".msi"));
-  if (!mozcMsi) throw new Error(`no MSI found in ${mozcDir}`);
-  run(["msiexec", "/i", mozcMsi, "/qn"]);
-  rmSync(mozcDir, { recursive: true, force: true });
 }
 
 function removeDesktopShortcuts(): void {
@@ -166,22 +136,8 @@ function runAllowingFailure(command: readonly string[]): void {
   if (exitCode !== 0) console.error(`command failed with exit code ${exitCode}: ${command.join(" ")}`);
 }
 
-function output(command: readonly string[]): string {
-  const result = Bun.spawnSync([...command], { stdout: "pipe", stderr: "inherit" });
-  if (result.exitCode !== 0) {
-    throw new Error(`command failed with exit code ${result.exitCode}: ${command.join(" ")}`);
-  }
-  return new TextDecoder().decode(result.stdout);
-}
-
 function runInheritingIO(command: readonly string[]): number | null {
   return Bun.spawnSync([...command], { stdout: "inherit", stderr: "inherit" }).exitCode;
-}
-
-function programFilesX86(): string {
-  const value = process.env["ProgramFiles(x86)"];
-  if (!value) throw new Error("environment variable ProgramFiles(x86) is not set");
-  return value;
 }
 
 function localAppData(): string {
