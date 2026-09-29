@@ -1,13 +1,13 @@
-// The aggregation engine shared by the MS-IME and Mozc compilers
-// (undotfiles/ime/msime/roma-def.ts and undotfiles/ime/mozc/roma-def.ts).
+// The aggregation engine used by the MS-IME compiler
+// (undotfiles/ime/msime/roma-def.ts).
 // The declarative romaji table itself is the data file
-// undotfiles/ime/roma-table.yaml; each compiler loads and reflects it into
+// undotfiles/ime/roma-table.yaml; the compiler loads and reflects it into
 // its own format.
 //
 // Aggregation rule: individual mappings (singles) always win over generated
 // ones, regular rows generate their vowel slots, and derivation families
 // generate suffixed mappings. Everything IME-specific (record formats,
-// limits, encodings, writing to the OS) lives in the individual compilers.
+// limits, encodings, writing to the OS) lives in the compiler.
 
 // ---------- declaration types ----------
 

@@ -1,6 +1,6 @@
-# The declarative romaji table shared by the MS-IME and Mozc compilers
-# (undotfiles/ime/msime/roma-def.ts and undotfiles/ime/mozc/roma-def.ts).
-# Each compiler loads this file and reflects it into its own format.
+# The declarative romaji table used by the MS-IME compiler
+# (undotfiles/ime/msime/roma-def.ts).
+# The compiler loads this file and reflects it into its own format.
 rows:
   "": [あ, い, う, え, お]
   l: [ぁ, ぃ, ぅ, ぇ, ぉ]

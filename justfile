@@ -55,9 +55,5 @@ msime mode="apply":
   $mode = "{{mode}}"; $romaFlag = if ($mode -eq "diff") { @("--dry-run") } elseif ($mode -eq "apply") { @() } else { throw "mode must be apply or diff: $mode" }; $keyFlag = if ($mode -eq "diff") { @("--diff") } else { @() }; bun undotfiles/ime/msime/roma-def.ts @romaFlag && bun undotfiles/ime/msime/key-settings.ts @keyFlag
 
 [windows]
-mozc mode="apply":
-  $mode = "{{ mode }}"; if ($mode -eq "diff") { bun undotfiles/ime/mozc/roma-def.ts --dry-run } elseif ($mode -eq "export") { bun undotfiles/ime/mozc/roma-def.ts --export } elseif ($mode -eq "apply") { bun undotfiles/ime/mozc/roma-def.ts } else { throw "mode must be apply, diff or export: $mode" }
-
-[windows]
 autologon:
   autologon64
