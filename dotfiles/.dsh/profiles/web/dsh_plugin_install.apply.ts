@@ -19,10 +19,20 @@ function needsInstall(directory: string): boolean {
   });
 }
 
+function needsCleanInstall(directory: string): boolean {
+  const stamp = join(directory, "node_modules/.dsh-plugin-install-stamp");
+  if (!existsSync(stamp)) return true;
+
+  const stampTime = (statSync(stamp) as FileStat).mtimeMs;
+  const manifest = join(directory, "package.json");
+  return existsSync(manifest) && (statSync(manifest) as FileStat).mtimeMs > stampTime;
+}
+
 async function main(): Promise<void> {
   const directory = process.cwd();
   if (!needsInstall(directory)) return;
 
+  if (needsCleanInstall(directory)) await $`rm -rf node_modules`;
   await $`dsh plugin --profile web install --ignore-scripts`;
   await $`touch node_modules/.dsh-plugin-install-stamp`;
 }
