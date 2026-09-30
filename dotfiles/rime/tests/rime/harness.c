@@ -332,13 +332,14 @@ static void test_n_run_conversion_reading(void) {
     }
 }
 
-/* SPEC: Zenkaku_Hankaku toggles between Japanese and ASCII input. */
+/* SPEC: Zenkaku_Hankaku toggles between Japanese input and the unconfirmed
+ * ascii input mode. */
 static void test_zenkaku_hankaku_toggles_ascii(void) {
     fresh_session();
     press(kZenkakuHankaku);
-    check(option("ascii_mode"), "Zenkaku_Hankaku must enable ascii mode");
+    check(option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must enter the ascii input mode");
     press(kZenkakuHankaku);
-    check(!option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese mode");
+    check(!option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must restore the Japanese mode");
     /* The toggle must also work outside a composition. */
     RIME_STRUCT(RimeStatus, status);
     Bool composing_before = rime->get_status(session, &status) && status.is_composing;
@@ -346,99 +347,90 @@ static void test_zenkaku_hankaku_toggles_ascii(void) {
     check(!composing_before, "the session must stay idle outside a composition");
 }
 
-/*
- * SPEC: switching to ascii mode confirms the unconfirmed composition
- * first, and switching back returns to a clean full-width input
- * (dotfiles/rime/SPEC.md).
- */
-/*
- * SPEC: switching to ascii mode keeps the composition unconfirmed; the input
- * returns with the Japanese mode and ascii typing never pollutes it
- * (dotfiles/rime/SPEC.md).
- */
+/* SPEC: switching to the ascii input mode keeps the composition unconfirmed;
+ * half-width typing extends it in place, and the Japanese mode resumes the
+ * composition as it is (dotfiles/rime/SPEC.md). */
 static void test_zenkaku_hankaku_keeps_composition(void) {
-    /* Typing state: the reading is stashed and comes back untouched. */
+    char commit[256];
+
+    /* Typing state: the reading stays and half-width typing extends it. */
     fresh_session();
     type_text("kanji");
     press(kZenkakuHankaku);
-    check(option("ascii_mode"), "Zenkaku_Hankaku must enable ascii mode");
-    check(!composing(), "the toggle must hide the composition while in ascii mode");
-    char commit[256];
+    check(option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must enter the ascii input mode");
+    check(composing(), "the toggle must keep the composition");
+    check(preedit_equals("かんじ"), "the toggle must keep the reading");
     check(!take_commit(commit, sizeof(commit)), "the toggle must not commit the reading");
     type_text("abc");
-    check(!composing(), "ascii typing must not start a composition");
+    check(option("_kagiroi_ascii_input"), "ascii typing must keep the ascii input mode");
+    check(preedit_equals("かんじabc"), "ascii typing must extend the composition in half-width");
+    check(!take_commit(commit, sizeof(commit)), "ascii typing must not commit");
     press(kZenkakuHankaku);
-    check(!option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese mode");
-    check(preedit_equals("かんじ"), "the stashed reading must return with the Japanese mode");
-    check(composing(), "the restored reading must keep composing");
+    check(!option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must restore the Japanese mode");
+    check(preedit_equals("かんじabc"), "the composition must stay for the Japanese mode");
+    check(composing(), "the restored composition must keep composing");
+    /* The Japanese mode resumes conversion behind the fixed half-width text. */
+    press('k');
+    press('a');
+    check(preedit_equals("かんじabcか"), "typing behind the fixed text must convert");
     press(kReturn);
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かんじ") == 0,
-          "the restored reading must still commit as-is");
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かんじabcか") == 0,
+          "the composition must commit as a whole");
 
-    /* Converted state: the inline display is stashed and Esc restores the
-     * reading after the round trip. */
+    /* Converted state: the inline display returns to the reading for the
+     * ascii input mode. */
     fresh_session();
     type_text("kanji");
     press(kSpace);
-    RIME_STRUCT(RimeContext, context);
-    char first[256] = "";
-    if (current_menu(&context)) {
-        if (context.menu.num_candidates == 0 && context.composition.preedit) {
-            snprintf(first, sizeof(first), "%s", context.composition.preedit);
-        }
-        rime->free_context(&context);
-    }
-    check(first[0] != '\0', "the inline conversion must show its text");
     press(kZenkakuHankaku);
-    check(option("ascii_mode"), "the toggle must enable ascii mode from the conversion");
+    check(option("_kagiroi_ascii_input"), "the toggle must enter the ascii input mode from the conversion");
     check(!take_commit(commit, sizeof(commit)), "the toggle must not commit the conversion");
+    check(preedit_equals("かんじ"), "the toggle must return to the reading for the ascii input mode");
     press(kZenkakuHankaku);
-    check(!option("ascii_mode"), "the toggle must restore Japanese mode");
-    check(preedit_equals(first), "the stashed conversion must return with the Japanese mode");
+    check(!option("_kagiroi_ascii_input"), "the toggle must restore the Japanese mode");
     press(kEscape);
-    check(preedit_equals("かんじ"), "Esc after the round trip must restore the reading");
+    check(!composing(), "Esc must clear the composition after the round trip");
 
-    /* Henkan state: the katakana is stashed and returns with the mode. */
+    /* Henkan state: the katakana display returns to the reading for the
+     * ascii input mode. */
     fresh_session();
     type_text("kana");
     press(kHenkan);
     press(kZenkakuHankaku);
+    check(option("_kagiroi_ascii_input"), "the toggle must enter the ascii input mode from Henkan");
     check(!take_commit(commit, sizeof(commit)), "the toggle must not commit the Henkan katakana");
+    check(preedit_equals("かな"), "the toggle must return to the reading from Henkan");
+    check(!option("katakana"), "the toggle must restore the kana mode from Henkan");
     press(kZenkakuHankaku);
-    check(!option("ascii_mode"), "the toggle must restore Japanese mode");
-    check(preedit_equals("カナ"), "the stashed katakana must return");
-    press(kEscape);
-    check(!option("katakana"), "Esc must restore hiragana after the round trip");
+    check(!option("_kagiroi_ascii_input"), "the toggle must restore the Japanese mode");
+    type_text("moji");
+    check(preedit_equals("かなもじ"), "typing after the round trip must convert behind the tail");
 }
 
-/* SPEC: Hiragana_Katakana always selects Japanese input and Muhenkan always
- * selects ascii input; the one-way keys keep the composition unconfirmed
- * (dotfiles/rime/SPEC.md). */
+/* SPEC: Muhenkan always enters the ascii input mode; the one-way key keeps
+ * the composition unconfirmed (dotfiles/rime/SPEC.md). */
 static void test_kana_muhenkan_one_way_switches(void) {
+    char commit[256];
     fresh_session();
     press(kMuhenkan);
-    check(option("ascii_mode"), "Muhenkan must always select ascii mode");
+    check(option("_kagiroi_ascii_input"), "Muhenkan must enter the ascii input mode");
     press(kMuhenkan);
-    check(option("ascii_mode"), "a second Muhenkan must stay in ascii mode");
+    check(option("_kagiroi_ascii_input"), "a second Muhenkan must stay in the ascii input mode");
     type_text("abc");
-    check(!composing(), "ascii typing must not start a composition");
-    press(kHiraganaKatakana);
-    check(!option("ascii_mode"), "Hiragana_Katakana must always select Japanese mode");
-    press(kHiraganaKatakana);
-    check(!option("ascii_mode"), "a second Hiragana_Katakana must stay in Japanese mode");
+    check(preedit_equals("abc"), "ascii typing must extend the composition in half-width");
 
-    /* The one-way keys stash and restore the composition like the toggle. */
+    /* Muhenkan keeps the composition unconfirmed like the toggle. */
     fresh_session();
     type_text("kana");
     press(kMuhenkan);
-    check(option("ascii_mode"), "Muhenkan must select ascii mode from a composition");
-    char commit[256];
+    check(option("_kagiroi_ascii_input"), "Muhenkan must enter the ascii input mode from a composition");
     check(!take_commit(commit, sizeof(commit)), "Muhenkan must not commit the composition");
+    check(preedit_equals("かな"), "Muhenkan must keep the composition");
     press(kMuhenkan);
-    check(option("ascii_mode"), "a repeated Muhenkan must stay in ascii mode");
-    press(kHiraganaKatakana);
-    check(!option("ascii_mode"), "Hiragana_Katakana must select Japanese mode");
-    check(preedit_equals("かな"), "a repeated Muhenkan must keep the stash for the return");
+    check(option("_kagiroi_ascii_input"), "a repeated Muhenkan must stay in the ascii input mode");
+    press(kZenkakuHankaku);
+    check(!option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must restore the Japanese mode");
+    check(preedit_equals("かな"), "the Japanese mode must keep the composition");
     check(composing(), "the restored reading must keep composing");
 }
 
@@ -1116,17 +1108,16 @@ static void test_punctuation_appends_unconfirmed(void) {
     rime->set_option(session, "full_shape", 0);
 }
 
-static void test_idle_space_appends_full_width(void) {
+static void test_idle_space_commits_full_width(void) {
     fresh_session();
     press(kSpace);
-    check(preedit_equals("　"), "idle Space must append a full-width space");
+    check(!composing(), "idle Space must keep the composition empty");
     char commit[256];
-    check(!take_commit(commit, sizeof(commit)), "idle Space must not commit");
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "　") == 0,
+          "idle Space must commit the full-width space immediately");
     press(kSpace);
-    check(preedit_equals("　　"), "a Space on full-width spaces must append another");
-    press(kReturn);
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "　　") == 0,
-          "Enter must commit the appended spaces");
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "　") == 0,
+          "a later idle Space must commit another full-width space");
 }
 
 /* SPEC: symbol keys append the table character to the unconfirmed
@@ -1257,17 +1248,23 @@ static void test_minus_equal_do_not_page(void) {
     check(preedit_equals("かなー"), "minus during reading must append ー");
 }
 
+/* SPEC: the ascii input mode appends half-width letters, digits, symbols and
+ * the space to the unconfirmed composition (dotfiles/rime/SPEC.md). */
 static void test_ascii_mode_passes_half_width_keys(void) {
     fresh_session();
     press(kZenkakuHankaku);
     const int keys[] = {'a', '1', '$', kSpace, kKeypad1, kKeypadDecimal};
+    static const char* const texts[] = {"a", "1", "$", " ", "1", "."};
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
-        check(!rime->process_key(session, keys[i], 0),
-              "ascii mode must pass through half-width typing to the frontend");
+        check(rime->process_key(session, keys[i], 0),
+              "the ascii input mode must consume half-width typing");
         char commit[256];
-        check(!take_commit(commit, sizeof(commit)) && !composing(),
-              "ascii mode must not commit a full-width character");
+        check(!take_commit(commit, sizeof(commit)),
+              "the ascii input mode must not commit a half-width character");
     }
+    check(preedit_equals("a1$ 1."),
+          "the ascii input mode must accumulate the half-width text");
+    check(composing(), "the ascii input mode must keep the composition open");
 }
 
 /* SPEC: Shift+letter commits ASCII even with a selected conversion. */
@@ -1854,7 +1851,7 @@ int main(int argc, char* argv[]) {
         test_zenkaku_hankaku_toggles_ascii,
         test_zenkaku_hankaku_keeps_composition,
         test_kana_muhenkan_one_way_switches,
-        test_idle_space_appends_full_width,
+        test_idle_space_commits_full_width,
         test_digits_append_unconfirmed,
         test_symbols_append_unconfirmed,
         test_appends_accumulate,

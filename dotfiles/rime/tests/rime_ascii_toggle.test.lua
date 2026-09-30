@@ -1,12 +1,13 @@
 local kAccepted = 1
 local kNoop = 2
 package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
-    return { init = function() end, fini = function() end, func = function() return kNoop end }
+    return { init = function() end, fini = function() end, func = function() return kNoop end, ascii_tail = nil }
 end
 package.preload["kagiroi/rime_controls"] = function()
     return dofile(arg[2])
 end
 local controls = require("kagiroi/rime_controls")
+local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local processor = dofile(arg[1])
 local context = { options = {}, input = "", commits = {} }
 function context:get_option(name)
@@ -16,6 +17,7 @@ function context:set_option(name, value)
     self.options[name] = value
 end
 local env = { engine = { context = context } }
+controls.init(env)
 
 local function press(modifiers)
     modifiers = modifiers or {}
@@ -29,60 +31,60 @@ local function press(modifiers)
     }, env)
 end
 
-assert(press() == kAccepted and context:get_option("ascii_mode"), "first Zenkaku_Hankaku must enable ascii mode")
-assert(press() == kAccepted and not context:get_option("ascii_mode"), "second Zenkaku_Hankaku must restore Japanese mode")
+-- Zenkaku_Hankaku toggles the unconfirmed ascii input mode.
+assert(press() == kAccepted and context:get_option("_kagiroi_ascii_input"),
+    "first Zenkaku_Hankaku must enter the ascii input mode")
+assert(press() == kAccepted and not context:get_option("_kagiroi_ascii_input"),
+    "second Zenkaku_Hankaku must restore the Japanese mode")
 for _, modifiers in ipairs({
     { release = true }, { shift = true }, { ctrl = true }, { alt = true }, { super = true },
     { keycode = string.byte("a") },
 }) do
-    assert(press(modifiers) == kNoop, "other key events must pass to ascii_composer")
-    assert(not context:get_option("ascii_mode"), "other key events must leave ascii mode unchanged")
+    assert(press(modifiers) == kNoop, "other key events must pass to the Japanese mode")
+    assert(not context:get_option("_kagiroi_ascii_input"),
+        "other key events must leave the ascii input mode unchanged")
 end
 
--- Switching to ascii mode stashes the composition unconfirmed instead of
--- committing it (dotfiles/rime/SPEC.md).
+-- Entering the ascii input mode keeps the composition unconfirmed and
+-- records the tail position (dotfiles/rime/SPEC.md).
 context.input = "かんじ"
 context:set_option("_kagiroi_hide_candidates", false)
 assert(press() == kAccepted, "Zenkaku_Hankaku with a composition must be consumed")
-assert(#context.commits == 0, "switching to ascii mode must not commit the composition")
-assert(context.input == "", "switching to ascii mode must hide the composition")
-assert(controls.kept.input == "かんじ", "switching to ascii mode must stash the composition")
+assert(#context.commits == 0, "entering the ascii input mode must not commit")
+assert(context.input == "かんじ", "entering the ascii input mode must keep the composition")
 assert(context:get_option("_kagiroi_hide_candidates"),
-    "switching to ascii mode must hide candidates for the return")
-assert(context:get_option("ascii_mode"), "Zenkaku_Hankaku must enable ascii mode after the stash")
+    "entering the ascii input mode must hide the candidate list")
+assert(context:get_option("_kagiroi_ascii_input"),
+    "Zenkaku_Hankaku must enter the ascii input mode")
+assert(kana_speller.ascii_tail == #context.input,
+    "entering the ascii input mode must record the tail position")
 
--- Switching back restores the stashed composition.
-assert(press() == kAccepted and not context:get_option("ascii_mode"),
-    "Zenkaku_Hankaku must restore Japanese mode")
-assert(context.input == "かんじ", "switching back must restore the stashed composition")
-assert(controls.kept.input == nil, "switching back must drop the stash")
+-- Returning to the Japanese mode keeps the composition and the tail.
+assert(press() == kAccepted and not context:get_option("_kagiroi_ascii_input"),
+    "Zenkaku_Hankaku must restore the Japanese mode")
+assert(context.input == "かんじ", "the return must keep the composition")
+assert(kana_speller.ascii_tail == #context.input, "the return must keep the tail position")
 assert(#context.commits == 0, "the round trip must not commit")
 
--- A stash cleared elsewhere (a commit) leaves the return clean.
-context.input = "かな"
-assert(press() == kAccepted and context:get_option("ascii_mode"),
-    "the second stash must enable ascii mode")
-controls.kept.input = nil
-assert(press() == kAccepted and not context:get_option("ascii_mode"),
-    "Zenkaku_Hankaku must restore Japanese mode without a stash")
-assert(context.input == "" and #context.commits == 0,
-    "the return must stay idle without a stash")
-
--- Muhenkan always selects ascii input and keeps the composition unconfirmed
--- like Zenkaku_Hankaku. Hiragana_Katakana is unbound: the key passes through
--- without touching the mode or the stash (dotfiles/rime/SPEC.md).
+-- Muhenkan always enters the ascii input mode and keeps the composition
+-- unconfirmed like Zenkaku_Hankaku. Hiragana_Katakana is unbound: the key
+-- passes through without touching the mode or the tail
+-- (dotfiles/rime/SPEC.md).
 local kHiraganaKatakana = 0xff27
 local kMuhenkan = 0xff22
 context.input = "にほんご"
 press({ keycode = kMuhenkan })
-assert(context:get_option("ascii_mode"), "Muhenkan must always select ascii mode")
-assert(context.input == "" and controls.kept.input == "にほんご" and #context.commits == 0,
-    "Muhenkan must stash the composition unconfirmed")
+assert(context:get_option("_kagiroi_ascii_input"),
+    "Muhenkan must always enter the ascii input mode")
+assert(context.input == "にほんご" and #context.commits == 0,
+    "Muhenkan must keep the composition unconfirmed")
+assert(kana_speller.ascii_tail == #context.input, "Muhenkan must record the tail position")
 press({ keycode = kMuhenkan })
-assert(context:get_option("ascii_mode"), "a second Muhenkan must stay in ascii mode")
+assert(context:get_option("_kagiroi_ascii_input"),
+    "a second Muhenkan must stay in the ascii input mode")
 assert(press({ keycode = kHiraganaKatakana }) == kNoop,
     "Hiragana_Katakana must pass through unbound")
-assert(context:get_option("ascii_mode") and context.input == "" and controls.kept.input == "にほんご",
-    "Hiragana_Katakana must leave the ascii mode and the stash unchanged")
+assert(context:get_option("_kagiroi_ascii_input") and context.input == "にほんご",
+    "Hiragana_Katakana must leave the ascii input mode and the composition unchanged")
 
-print("Rime ascii mode toggle tests passed")
+print("Rime ascii input mode toggle tests passed")

@@ -10,6 +10,11 @@ local kAccepted = 1
 local kNoop = 2
 local base = require("kagiroi/kagiroi_kana_speller")
 local Top = { init = base.init, fini = base.fini }
+-- The input byte position where the half-width text appended in the ascii
+-- input mode starts. rime_controls records and clears it, and the reading
+-- continues only from the trailing run behind the tail
+-- (dotfiles/rime/SPEC.md).
+Top.ascii_tail = nil
 
 local n_kana = "ん"
 local vowels = { a = true, e = true, i = true, o = true, u = true, y = true }
@@ -62,7 +67,25 @@ local function get_context(env)
     end
 
     local segment_text = context.input:sub(last_segment.start + 1, last_segment._end)
-    return context, get_alphabet_suffix(segment_text, env.alphabet)
+    local suffix = get_alphabet_suffix(segment_text, env.alphabet)
+    local tail = Top.ascii_tail
+    if tail then
+        -- The tail is the end position of the fixed half-width text: the
+        -- reading continues from the trailing run behind it. A commit or
+        -- deletes elsewhere may have shortened the input past the tail; the
+        -- fixed text is gone then.
+        if tail > #context.input then
+            Top.ascii_tail = nil
+        else
+            local cut = tail - (#context.input - #suffix)
+            if cut >= #suffix then
+                suffix = ""
+            elseif cut > 0 then
+                suffix = suffix:sub(cut + 1)
+            end
+        end
+    end
+    return context, suffix
 end
 
 local function replace_pending_n(context, pending_n, replacement)
@@ -147,7 +170,37 @@ function Top.resolve_conversion(env)
     end
 end
 
+-- Typing with the fixed ascii tail: the stock speller must not see the
+-- input, because its trailing run would join the tail characters to the
+-- reading. The key is pushed here, and only the suffix after the tail is
+-- converted to kana.
+local function spell_after_tail(key_event, env)
+    local context, remaining_alphabet = get_context(env)
+    if not context then
+        return kNoop
+    end
+    local character = string.char(key_event.keycode)
+    context:push_input(character)
+    local spelling = remaining_alphabet .. character
+    -- The longest suffix, the whole run included, wins: the stock speller is
+    -- not consulted while the tail is fixed. The key is already pushed, so
+    -- the whole matched suffix is replaced.
+    for start = 1, #spelling do
+        local suffix = spelling:sub(start)
+        local candidate = base.query_roma2hira_xlator(suffix, env)
+        if candidate and candidate._end == #suffix then
+            context:pop_input(#suffix)
+            context:push_input(candidate.text)
+            break
+        end
+    end
+    return kAccepted
+end
+
 local function spell_with_suffix(key_event, env)
+    if Top.ascii_tail then
+        return spell_after_tail(key_event, env)
+    end
     local result = base.func(key_event, env)
     if result ~= kNoop then
         return result

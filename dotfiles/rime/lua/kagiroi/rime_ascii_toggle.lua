@@ -4,26 +4,10 @@ local kZenkakuHankaku = 0xff2a
 local kMuhenkan = 0xff22
 local controls = require("kagiroi/rime_controls")
 
--- Switch ascii_mode to entering_ascii. The composition is stashed instead of
--- being committed (dotfiles/rime/SPEC.md): the stock ascii composer then
--- treats every key as plain ascii, and the input returns with the Japanese
--- mode.
-local function switch_ascii_mode(context, entering_ascii)
-    if entering_ascii then
-        -- An empty input keeps an earlier stash: the one-way ascii key can
-        -- repeat while a stash is already held.
-        if context.input ~= "" then
-            controls.kept.input = context.input
-            context:set_option("_kagiroi_hide_candidates", true)
-        end
-        context.input = ""
-    elseif controls.kept.input then
-        context.input = controls.kept.input
-        controls.kept.input = nil
-    end
-    context:set_option("ascii_mode", entering_ascii)
-end
-
+-- Zenkaku_Hankaku toggles the unconfirmed ascii input mode; Muhenkan is a
+-- one-way switch into it (dotfiles/rime/SPEC.md). The composition is never
+-- stashed or committed: half-width characters are appended to it while the
+-- mode is on, and the Japanese mode resumes the reading as it is.
 local function toggle_ascii_mode(key_event, env)
     local keycode = key_event.keycode
     if key_event:release()
@@ -33,12 +17,12 @@ local function toggle_ascii_mode(key_event, env)
     end
 
     local context = env.engine.context
-    -- Zenkaku_Hankaku toggles. Muhenkan is a one-way switch that always
-    -- selects ascii input (dotfiles/rime/SPEC.md).
-    if keycode == kMuhenkan then
-        switch_ascii_mode(context, true)
+    local entering = keycode == kMuhenkan
+        or not context:get_option("_kagiroi_ascii_input")
+    if entering then
+        controls.start_ascii_input(context)
     else
-        switch_ascii_mode(context, not context:get_option("ascii_mode"))
+        context:set_option("_kagiroi_ascii_input", false)
     end
     return kAccepted
 end

@@ -1,7 +1,8 @@
 -- Candidate visibility, the Space conversion flow, unconfirmed appends and
--- conversion confirmations, and the Henkan katakana promotion for the managed
--- Kagiroi setup (dotfiles/rime/SPEC.md). Key handling wraps the n-run kana
--- speller, which owns the reading corrections.
+-- conversion confirmations, the Henkan katakana promotion, and the
+-- unconfirmed ascii input mode for the managed Kagiroi setup
+-- (dotfiles/rime/SPEC.md). Key handling wraps the n-run kana speller, which
+-- owns the reading corrections.
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local kAccepted = 1
 local kNoop = 2
@@ -20,12 +21,6 @@ local kKeypadDecimal = 0xffae
 local kKeypadEnter = 0xff8b
 local kKeypadZero = 0xffb0
 local Top = {}
-
--- The composition stashed while the ascii mode is on
--- (dotfiles/rime/SPEC.md): rime_ascii_toggle moves the input here on the way
--- out so the stock ascii composer treats every key as plain ascii, and puts
--- it back on the way in.
-Top.kept = { input = nil }
 
 -- First-choice symbols for the Japanese mode (dotfiles/rime/SPEC.md, "記号").
 -- ASCII symbols without an entry map to their full-width form.
@@ -131,6 +126,10 @@ local function commit_unconfirmed(context, env)
     context:commit()
     end_conversion(context, env, false)
     reset_expansion(context)
+    -- A committed composition restarts with the list hidden
+    -- (dotfiles/rime/SPEC.md).
+    context:set_option("_kagiroi_hide_candidates", true)
+    kana_speller.ascii_tail = nil
 end
 
 -- Henkan (the SPEC's own rule): keep the composition unconfirmed, show the
@@ -233,6 +232,9 @@ end
 
 function Top.init(env)
     kana_speller.init(env)
+    -- The ascii toggle enters the mode through this module and reaches the
+    -- conversion state via the recorded env.
+    Top.env = env
     local context = env.engine.context
     -- Commits end the conversion state wherever they come from (the ascii
     -- toggle used to commit directly; menu selection commits through the
@@ -242,7 +244,7 @@ function Top.init(env)
         env.commit_connection = context.commit_notifier:connect(function()
             end_conversion(context, env, false)
             reset_expansion(context)
-            Top.kept.input = nil
+            kana_speller.ascii_tail = nil
         end)
     end
 end
@@ -299,10 +301,104 @@ local function appended_text(keycode, key_event, in_conversion)
     return nil
 end
 
+-- Enter the unconfirmed ascii input mode (dotfiles/rime/SPEC.md): the
+-- conversion state returns to the reading, the candidate list hides, and
+-- the tail position is remembered so the kana speller keeps the half-width
+-- text fixed while typing continues after it.
+function Top.start_ascii_input(context)
+    end_conversion(context, Top.env, true)
+    reset_expansion(context)
+    context:set_option("_kagiroi_hide_candidates", true)
+    kana_speller.ascii_tail = #context.input
+    context:set_option("_kagiroi_ascii_input", true)
+end
+
+-- The half-width text an ascii input mode key appends to the unconfirmed
+-- input, or nil when the key is not one: letters, digits, symbols and the
+-- space stay half-width (dotfiles/rime/SPEC.md).
+local function ascii_appended_text(keycode, key_event)
+    if keycode >= 0x30 and keycode <= 0x39 then
+        return string.char(keycode)
+    end
+    if keycode >= kKeypadZero and keycode <= kKeypadZero + 9 then
+        return string.char(0x30 + keycode - kKeypadZero)
+    end
+    if keycode == kKeypadDecimal then
+        return "."
+    end
+    if is_plain_letter(keycode) then
+        if key_event:shift() then
+            return string.char(keycode):upper()
+        end
+        return string.char(keycode)
+    end
+    if keycode == kSpace or (keycode >= 0x21 and keycode <= 0x7e) then
+        return string.char(keycode)
+    end
+    return nil
+end
+
+-- Key handling while the unconfirmed ascii input mode is on
+-- (dotfiles/rime/SPEC.md): half-width characters extend the unconfirmed
+-- input, editing keys keep working, and the mode ends when the composition
+-- commits, clears or empties.
+function Top.ascii_func(key_event, env)
+    local context = env.engine.context
+    if key_event:release() or key_event:ctrl() or key_event:alt() or key_event:super() then
+        return kNoop
+    end
+    local keycode = key_event.keycode
+    if keycode == kKeypadEnter then
+        keycode = kReturn
+    end
+
+    local text = ascii_appended_text(keycode, key_event)
+    if text then
+        context:push_input(text)
+        -- Every appended character belongs to the fixed tail.
+        kana_speller.ascii_tail = #context.input
+        context:set_option("_kagiroi_hide_candidates", true)
+        return kAccepted
+    end
+
+    if keycode == kReturn then
+        commit_unconfirmed(context, env)
+        context:set_option("_kagiroi_ascii_input", false)
+        return kAccepted
+    end
+
+    if keycode == kBackSpace then
+        local last_character = utf8.offset(context.input, -1)
+        context.input = last_character and context.input:sub(1, last_character - 1) or ""
+        if kana_speller.ascii_tail and kana_speller.ascii_tail > #context.input then
+            kana_speller.ascii_tail = #context.input
+        end
+        if context.input == "" then
+            kana_speller.ascii_tail = nil
+            context:set_option("_kagiroi_ascii_input", false)
+        end
+        return kAccepted
+    end
+
+    if keycode == kEscape then
+        context.input = ""
+        end_conversion(context, env, false)
+        reset_expansion(context)
+        kana_speller.ascii_tail = nil
+        context:set_option("_kagiroi_ascii_input", false)
+        return kAccepted
+    end
+
+    return kNoop
+end
+
 function Top.func(key_event, env)
     local context = env.engine.context
     if context:get_option("ascii_mode") then
         return kNoop
+    end
+    if context:get_option("_kagiroi_ascii_input") then
+        return Top.ascii_func(key_event, env)
     end
     if key_event:release() or key_event:ctrl() or key_event:alt() or key_event:super() then
         return kana_speller.func(key_event, env)
@@ -337,13 +433,10 @@ function Top.func(key_event, env)
         return kAccepted
     end
 
-    -- The full-width space is an unconfirmed append while idle and while the
-    -- input holds only full-width spaces; a reading keeps the conversion flow.
-    if keycode == kSpace
-        and (not composing
-            or (not in_conversion and context.input:gsub("　", "") == "")) then
-        context:set_option("_kagiroi_hide_candidates", true)
-        context:push_input("　")
+    -- The full-width space commits immediately while nothing is unconfirmed
+    -- (dotfiles/rime/SPEC.md).
+    if keycode == kSpace and not composing then
+        env.engine:commit_text("　")
         return kAccepted
     end
 

@@ -49,6 +49,11 @@ function base.func(key_event, env)
     return kAccepted
 end
 
+function base.query_roma2hira_xlator(suffix, env)
+    local kana = romaji_to_kana[suffix]
+    return kana and { text = kana, _end = #suffix } or nil
+end
+
 package.preload["kagiroi/kagiroi_kana_speller"] = function()
     return base
 end
@@ -234,5 +239,34 @@ processor.init(env)
 env.context:push_input("ん")
 press(env, "a")
 assert(env.context.input == "んあ", "a vowel after a foreign ん must not rebind")
+
+-- The fixed ascii tail: characters appended in the ascii input mode stay
+-- half-width and fixed, while typing after them converts as usual
+-- (dotfiles/rime/SPEC.md).
+env = new_environment()
+processor.init(env)
+env.context:push_input("こんにちは")
+processor.ascii_tail = #env.context.input
+press(env, "k")
+assert(env.context.input == "こんにちはk", "a letter after the tail must be appended unconverted")
+-- The tail follows the appended half-width text, as rime_controls does.
+processor.ascii_tail = #env.context.input
+press(env, "a")
+assert(env.context.input == "こんにちはkあ", "typing after the tail must convert behind it")
+press(env, "n")
+assert(env.context.input == "こんにちはkあn", "a pending n behind the tail stays raw")
+press(env, "a")
+assert(env.context.input == "こんにちはkあな", "the n correction must work behind the tail")
+
+-- A tail ending with n must not be picked up by the n correction.
+env = new_environment()
+processor.init(env)
+env.context:push_input("こんにちはn")
+processor.ascii_tail = #env.context.input
+press(env, "a")
+assert(env.context.input == "こんにちはnあ", "the tail n must stay fixed while the vowel converts")
+press(env, "k")
+press(env, "a")
+assert(env.context.input == "こんにちはnあか", "typing must keep converting after the tail")
 
 print("Kagiroi n kana-speller transition tests passed")

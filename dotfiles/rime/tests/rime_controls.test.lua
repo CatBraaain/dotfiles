@@ -19,6 +19,7 @@ package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
         resolve_conversion = function()
             conversions_resolved = conversions_resolved + 1
         end,
+        ascii_tail = nil,
     }
 end
 
@@ -299,7 +300,7 @@ assert(context.input == "かな" and #context.commits == 0 and env.conversion.re
 press(env, 0x20)
 assert(press(env, 0xff51) == kNoop and press(env, 0xff53) == kNoop,
     "Left and Right with the open list must reach the navigator")
-assert(context.input == "か" and #context.commits == 0,
+assert(context.input == "かな" and #context.commits == 0,
     "the block navigation must not commit")
 assert(not context:get_option("_kagiroi_hide_candidates"), "the list must stay open")
 press(env, 0xff1b)
@@ -517,13 +518,13 @@ assert(context.input == "" and #context.commits == 1,
     "the confirmation must leave the input to the speller")
 assert(context:get_option("_kagiroi_hide_candidates"), "the next reading must keep the list hidden")
 
--- Idle Space appends a full-width space unconfirmed, and further Spaces
--- keep appending while the input holds only full-width spaces.
+-- Idle Space commits a full-width space immediately.
 env, context, segment = new_environment()
 assert(press(env, 0x20) == kAccepted, "idle Space must be consumed")
-assert(context.input == "　" and #context.commits == 0, "idle Space must append full-width space")
-assert(press(env, 0x20) == kAccepted, "a Space on full-width spaces must be consumed")
-assert(context.input == "　　" and #context.commits == 0, "repeated Spaces must keep appending")
+assert(context.commits[1] == "　" and context.input == "",
+    "idle Space must commit the full-width space immediately")
+assert(press(env, 0x20) == kAccepted, "a later idle Space must be consumed")
+assert(context.commits[2] == "　", "repeated idle Spaces must keep committing")
 
 -- Main-row digits append full-width text; keypad digits stay half-width.
 for _, case in ipairs({
@@ -688,11 +689,12 @@ assert(context.commits[1] == "カナ", "the external commit must commit the kata
 assert(not context:get_option("katakana"), "an external commit must restore the kana mode")
 assert(env.conversion == nil, "an external commit must end the conversion state")
 
--- A commit also drops a stashed composition kept for the ascii mode.
+-- A commit also drops the ascii tail recorded for the ascii input mode.
 env, context, segment = new_environment()
-processor.kept.input = "かんじ"
+local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
+kana_speller.ascii_tail = 6
 context:commit()
-assert(processor.kept.input == nil, "a commit must drop the stashed composition")
+assert(kana_speller.ascii_tail == nil, "a commit must drop the ascii tail")
 
 -- Ascii mode and modifier combinations pass through.
 env, context, segment = new_environment()
@@ -708,5 +710,68 @@ assert(press(env, 0xffae) == kNoop, "KP_Decimal in ascii mode must pass through"
 assert(press(env, 0x20, { ctrl = true }) == kNoop, "modified Space must pass through")
 assert(press(env, 0xff23, { shift = true }) == kNoop, "modified Henkan must pass through")
 assert(#context.commits == 0 and context.input == "かな", "ascii mode must leave the composition alone")
+
+-- The unconfirmed ascii input mode appends half-width characters to the
+-- unconfirmed input (dotfiles/rime/SPEC.md).
+env, context, segment = new_environment()
+context.input = "かんじ"
+context:set_option("_kagiroi_ascii_input", true)
+assert(press(env, string.byte("a")) == kAccepted, "an ascii letter must be consumed")
+assert(context.input == "かんじa" and #context.commits == 0,
+    "an ascii letter must append half-width")
+assert(press(env, string.byte("A"), { shift = true }) == kAccepted,
+    "Shift+letter must be consumed")
+assert(context.input == "かんじaA", "Shift+letter must append the uppercase letter")
+assert(press(env, string.byte("1")) == kAccepted and context.input == "かんじaA1",
+    "a digit must append half-width")
+assert(press(env, 0xffb1) == kAccepted and context.input == "かんじaA11",
+    "a keypad digit must append half-width")
+assert(press(env, string.byte("!")) == kAccepted and context.input == "かんじaA11!",
+    "a symbol must append half-width")
+assert(press(env, 0x20) == kAccepted and context.input == "かんじaA11! ",
+    "a Space must append a half-width space")
+assert(context:get_option("_kagiroi_hide_candidates"), "the append must keep the list hidden")
+
+-- Backspace removes the last character and ends the mode when empty.
+env, context, segment = new_environment()
+context.input = "かa"
+context:set_option("_kagiroi_ascii_input", true)
+assert(press(env, 0xff08) == kAccepted, "Backspace must be consumed")
+assert(context.input == "か", "Backspace must remove the appended character")
+assert(context:get_option("_kagiroi_ascii_input"),
+    "Backspace must keep the mode while the text remains")
+assert(press(env, 0xff08) == kAccepted and context.input == "",
+    "Backspace must remove the last character")
+assert(not context:get_option("_kagiroi_ascii_input"),
+    "Backspace must end the mode when the input empties")
+
+-- Esc clears the composition and ends the mode without committing.
+env, context, segment = new_environment()
+context.input = "かa"
+context:set_option("_kagiroi_ascii_input", true)
+assert(press(env, 0xff1b) == kAccepted, "Esc must be consumed")
+assert(context.input == "" and not context:get_option("_kagiroi_ascii_input"),
+    "Esc must clear the composition and end the mode")
+assert(#context.commits == 0, "Esc must not commit")
+
+-- Enter commits the mixed composition and ends the mode.
+env, context, segment = new_environment()
+context.input = "かんじabc"
+context:set_option("_kagiroi_ascii_input", true)
+context:set_option("_kagiroi_hide_candidates", true)
+assert(press(env, 0xff0d) == kAccepted, "Enter must be consumed")
+assert(context.commits[1] == "かんじabc", "Enter must commit the mixed composition")
+assert(context.input == "" and not context:get_option("_kagiroi_ascii_input"),
+    "Enter must end the mode")
+assert(kana_speller.ascii_tail == nil, "the commit must drop the ascii tail")
+
+-- Editing and conversion keys pass through while the mode is on.
+env, context, segment = new_environment()
+context.input = "かa"
+context:set_option("_kagiroi_ascii_input", true)
+assert(press(env, 0xff23) == kNoop, "Henkan must pass through")
+assert(press(env, 0xff52) == kNoop, "Up must pass through")
+assert(press(env, string.byte("a"), { ctrl = true }) == kNoop, "modified letters must pass through")
+assert(context.input == "かa", "passing-through keys must leave the composition alone")
 
 print("Rime candidate visibility, conversion and revert tests passed")
