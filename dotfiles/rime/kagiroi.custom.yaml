@@ -12,6 +12,13 @@ patch:
     - navigator
     - express_editor
   "engine/filters/@after 1": lua_filter@*kagiroi/candidate_gate
+  # Character-type candidates for segments without a reading: the original
+  # text plus its width and case forms (dotfiles/rime/SPEC.md, "変換").
+  "engine/translators/@next": lua_translator@*kagiroi/char_variants
+  # The full-width alphanumerics and appended symbols join the alphabet so the
+  # abc segmentor keeps each appended run in one segment instead of raw
+  # byte fragments (dotfiles/rime/SPEC.md, "変換").
+  "speller/alphabet/+": "０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ！＂＃＄％＆＇（）＊＋，－．／：；＜＝＞？＠［＼］＾＿｀｛｜｝～・￥〜·「」『』‘’“”ー、。，．"
   # The gate shows ten candidates before Tab; the expanded page holds 30.
   "menu/page_size": 30
   "menu/alternative_select_labels":

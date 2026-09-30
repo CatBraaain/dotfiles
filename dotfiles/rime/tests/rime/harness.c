@@ -32,6 +32,8 @@
 #define kTab 0xff09
 #define kUp 0xff52
 #define kDown 0xff54
+#define kLeft 0xff51
+#define kRight 0xff53
 #define kPageUp 0xff55
 #define kPageDown 0xff56
 
@@ -332,19 +334,30 @@ static void test_n_run_conversion_reading(void) {
     }
 }
 
-/* SPEC: Zenkaku_Hankaku toggles between Japanese input and the unconfirmed
- * ascii input mode. */
+/* SPEC: Zenkaku_Hankaku and Muhenkan with nothing unconfirmed switch IME
+ * OFF through the ascii_mode option; Zenkaku_Hankaku toggles the unconfirmed
+ * ascii input mode while a composition is open. */
 static void test_zenkaku_hankaku_toggles_ascii(void) {
     fresh_session();
     press(kZenkakuHankaku);
-    check(option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must enter the ascii input mode");
+    check(option("ascii_mode"), "idle Zenkaku_Hankaku must switch IME OFF");
+    check(!option("_kagiroi_ascii_input"),
+          "idle Zenkaku_Hankaku must not enter the ascii input mode");
+    rime->set_option(session, "ascii_mode", 0);
+    type_text("kanji");
     press(kZenkakuHankaku);
-    check(!option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must restore the Japanese mode");
+    check(option("_kagiroi_ascii_input"),
+          "Zenkaku_Hankaku with a composition must enter the ascii input mode");
+    press(kZenkakuHankaku);
+    check(!option("_kagiroi_ascii_input"),
+          "a second Zenkaku_Hankaku must restore the Japanese mode");
     /* The toggle must also work outside a composition. */
     RIME_STRUCT(RimeStatus, status);
     Bool composing_before = rime->get_status(session, &status) && status.is_composing;
     rime->free_status(&status);
-    check(!composing_before, "the session must stay idle outside a composition");
+    check(composing_before, "the composition must stay open through the round trip");
+    press(kEscape);
+    check(!composing(), "Esc must clear the composition after the round trip");
 }
 
 /* SPEC: switching to the ascii input mode keeps the composition unconfirmed;
@@ -407,17 +420,16 @@ static void test_zenkaku_hankaku_keeps_composition(void) {
     check(preedit_equals("かなもじ"), "typing after the round trip must convert behind the tail");
 }
 
-/* SPEC: Muhenkan always enters the ascii input mode; the one-way key keeps
- * the composition unconfirmed (dotfiles/rime/SPEC.md). */
+/* SPEC: Muhenkan switches IME OFF with nothing unconfirmed and enters the
+ * unconfirmed ascii input mode from a composition, keeping it unconfirmed. */
 static void test_kana_muhenkan_one_way_switches(void) {
     char commit[256];
     fresh_session();
     press(kMuhenkan);
-    check(option("_kagiroi_ascii_input"), "Muhenkan must enter the ascii input mode");
-    press(kMuhenkan);
-    check(option("_kagiroi_ascii_input"), "a second Muhenkan must stay in the ascii input mode");
-    type_text("abc");
-    check(preedit_equals("abc"), "ascii typing must extend the composition in half-width");
+    check(option("ascii_mode"), "idle Muhenkan must switch IME OFF");
+    check(!option("_kagiroi_ascii_input"),
+          "idle Muhenkan must not enter the ascii input mode");
+    rime->set_option(session, "ascii_mode", 0);
 
     /* Muhenkan keeps the composition unconfirmed like the toggle. */
     fresh_session();
@@ -426,17 +438,23 @@ static void test_kana_muhenkan_one_way_switches(void) {
     check(option("_kagiroi_ascii_input"), "Muhenkan must enter the ascii input mode from a composition");
     check(!take_commit(commit, sizeof(commit)), "Muhenkan must not commit the composition");
     check(preedit_equals("かな"), "Muhenkan must keep the composition");
+    type_text("abc");
+    check(preedit_equals("かなabc"), "ascii typing must extend the composition in half-width");
     press(kMuhenkan);
-    check(option("_kagiroi_ascii_input"), "a repeated Muhenkan must stay in the ascii input mode");
+    check(option("_kagiroi_ascii_input"),
+          "Muhenkan inside the mode must leave the mode untouched");
+    check(preedit_equals("かなabc"),
+          "Muhenkan inside the mode must keep the composition");
     press(kZenkakuHankaku);
     check(!option("_kagiroi_ascii_input"), "Zenkaku_Hankaku must restore the Japanese mode");
-    check(preedit_equals("かな"), "the Japanese mode must keep the composition");
+    check(preedit_equals("かなabc"), "the Japanese mode must keep the composition");
     check(composing(), "the restored reading must keep composing");
 }
 
-/* SPEC: main-row digits append their full-width form, keypad digits and
- * KP_Decimal append their own form, and none of them commits the unconfirmed
- * composition (dotfiles/rime/SPEC.md). */
+/* SPEC: main-row digits append their full-width form and keypad digits and
+ * KP_Decimal append their own form while idle or typing; during conversion
+ * and with the menu visible the keys confirm the unconfirmed string and
+ * start a fresh input (dotfiles/rime/SPEC.md). */
 static void test_digits_append_unconfirmed(void) {
     static const struct {
         int key;
@@ -456,28 +474,41 @@ static void test_digits_append_unconfirmed(void) {
                 press(kSpace);
                 press(kSpace);
             }
-            char prefix[256] = "";
+            char expected[288] = "";
+            char selected[256] = "";
             if (state == 2) {
                 RIME_STRUCT(RimeContext, context);
                 if (current_menu(&context)) {
-                    int selected = context.menu.highlighted_candidate_index;
-                    if (selected < context.menu.num_candidates && context.menu.candidates[selected].text)
-                        snprintf(prefix, sizeof(prefix), "%s", context.menu.candidates[selected].text);
+                    int index = context.menu.highlighted_candidate_index;
+                    if (index < context.menu.num_candidates && context.menu.candidates[index].text)
+                        snprintf(selected, sizeof(selected), "%s", context.menu.candidates[index].text);
                     rime->free_context(&context);
                 }
-                check(prefix[0] != '\0', "the selection must exist before the digit");
+                check(selected[0] != '\0', "the selection must exist before the digit");
             } else if (state == 1) {
-                snprintf(prefix, sizeof(prefix), "%s", "かんじ");
+                snprintf(expected, sizeof(expected), "%s", "かんじ");
             }
             press(cases[i].key);
-            char expected[288];
-            snprintf(expected, sizeof(expected), "%s%s", prefix, cases[i].appended);
-            char description[128];
-            snprintf(description, sizeof(description), "key %x in state %d must append its width", cases[i].key, state);
-            check(preedit_equals(expected), description);
             char commit[256];
-            snprintf(description, sizeof(description), "key %x in state %d must not commit", cases[i].key, state);
-            check(!take_commit(commit, sizeof(commit)), description);
+            char description[128];
+            if (state == 2) {
+                /* The key confirms the selection and starts a fresh input. */
+                snprintf(expected, sizeof(expected), "%s", cases[i].appended);
+                snprintf(description, sizeof(description), "key %x in state %d must start a fresh input with its width",
+                         cases[i].key, state);
+                check(preedit_equals(expected), description);
+                check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
+                      "key during conversion must commit the selected candidate");
+            } else {
+                size_t used = strlen(expected);
+                snprintf(expected + used, sizeof(expected) - used, "%s", cases[i].appended);
+                snprintf(description, sizeof(description), "key %x in state %d must append its width",
+                         cases[i].key, state);
+                check(preedit_equals(expected), description);
+                snprintf(description, sizeof(description), "key %x in state %d must not commit",
+                         cases[i].key, state);
+                check(!take_commit(commit, sizeof(commit)), description);
+            }
         }
     }
 
@@ -514,9 +545,9 @@ static void test_henkan_promotes_katakana(void) {
     check(!take_commit(commit, sizeof(commit)), "Henkan must not commit");
 }
 
-/* SPEC: after Henkan, Space reveals the menu with the katakana first
- * candidate selected, Enter commits it, and the next typing hides candidates
- * again. */
+/* SPEC: after Henkan, Space keeps the first candidate selected with the
+ * list hidden, Enter commits the katakana, and the next typing hides
+ * candidates again. */
 static void test_henkan_space_enter_chain(void) {
     fresh_session();
     type_text("kanji");
@@ -531,23 +562,21 @@ static void test_henkan_space_enter_chain(void) {
     rime->free_context(&context);
     press(kSpace);
     if (!rime->get_context(session, &context)) {
-        check(False, "the menu must survive Space after Henkan");
+        check(False, "the conversion must survive Space after Henkan");
         return;
     }
     check(composing(), "Space after Henkan must keep the composition open");
-    check(context.menu.num_candidates > 0,
-          "Space after Henkan must reveal the candidate menu");
-    check(context.menu.highlighted_candidate_index == 0,
-          "Space after Henkan must select the first candidate");
-    check(context.menu.candidates[0].text &&
-              strcmp(context.menu.candidates[0].text, "カンジ") == 0,
-          "the first candidate after Henkan must be the katakana reading");
+    check(context.menu.num_candidates == 0,
+          "Space after Henkan must keep the candidate list hidden");
+    check(context.composition.preedit &&
+              strcmp(context.composition.preedit, "カンジ") == 0,
+          "Space after Henkan must keep the katakana first candidate selected");
     rime->free_context(&context);
     press(kReturn);
     check(composing() == False, "Enter after Henkan must end the composition");
     char commit[256];
     check(take_commit(commit, sizeof(commit)) && strcmp(commit, "カンジ") == 0,
-          "Enter must commit the katakana selected after Henkan");
+          "Enter must commit the katakana kept after Henkan");
     type_text("kanji");
     RIME_STRUCT(RimeContext, next);
     if (rime->get_context(session, &next)) {
@@ -713,74 +742,71 @@ static void test_backspace_escape_return_to_reading(void) {
     check(!take_commit(commit, sizeof(commit)),
           "Backspace must not commit a deleted one-character candidate");
 
-    /* Backspace also deletes the selected katakana with Henkan's menu visible. */
+    /* Backspace also deletes the kept katakana after Space leaves Henkan's
+     * conversion hidden. */
     fresh_session();
     type_text("kanji");
     press(kHenkan);
     press(kSpace);
     if (current_menu(&context)) {
-        check(context.menu.num_candidates > 0 &&
-                  context.menu.candidates[context.menu.highlighted_candidate_index].text &&
-                  strcmp(context.menu.candidates[context.menu.highlighted_candidate_index].text,
-                         "カンジ") == 0,
-              "Space after Henkan must select the katakana candidate");
+        check(context.menu.num_candidates == 0 &&
+                  context.composition.preedit &&
+                  strcmp(context.composition.preedit, "カンジ") == 0,
+              "Space after Henkan must keep the katakana conversion hidden");
         rime->free_context(&context);
     } else {
-        check(False, "Henkan's revealed menu must keep a queryable context");
+        check(False, "the kept Henkan conversion must keep a queryable context");
     }
     press(kBackSpace);
     check(preedit_equals("カン"),
-          "Backspace with Henkan's menu visible must remove the last katakana character");
+          "Backspace in the kept Henkan conversion must remove the last katakana character");
     if (current_menu(&context)) {
         check(context.menu.num_candidates == 0,
-              "Backspace with Henkan's menu visible must hide candidates");
+              "Backspace after the kept conversion must hide candidates");
         rime->free_context(&context);
     } else {
-        check(False, "Backspace after revealed Henkan must keep a queryable context");
+        check(False, "Backspace after the kept conversion must keep a queryable context");
     }
-    check(!take_commit(commit, sizeof(commit)), "Backspace after revealed Henkan must not commit");
+    check(!take_commit(commit, sizeof(commit)), "Backspace after the kept conversion must not commit");
 }
 
-/* SPEC: a regular typing key with the menu visible commits the selected
+/* SPEC: a letter or digit key during conversion confirms the selected
  * candidate and starts the next input; digits never pick candidates. */
-/* SPEC: while a menu is open, letters and digits append to the selected
- * candidate without committing; letters keep their raw form
- * (dotfiles/rime/SPEC.md). */
-static void test_typing_key_appends_to_selection(void) {
-    /* A letter key appends the raw letter to the selection. */
+static void test_typing_key_confirms_selection(void) {
+    /* A letter key confirms the selection and starts the next reading. */
     fresh_session();
     type_text("kana");
     press(kSpace);
     press(kSpace);
     RIME_STRUCT(RimeContext, context);
-    char expected[256] = "";
+    char selected[256] = "";
     if (current_menu(&context)) {
         int highlighted = context.menu.highlighted_candidate_index;
         if (highlighted < context.menu.num_candidates &&
             context.menu.candidates[highlighted].text) {
-            snprintf(expected, sizeof(expected), "%s",
+            snprintf(selected, sizeof(selected), "%s",
                      context.menu.candidates[highlighted].text);
         }
         rime->free_context(&context);
     } else {
         check(False, "the menu must exist before the typing key");
     }
-    check(expected[0] != '\0', "the highlighted candidate must have text");
+    check(selected[0] != '\0', "the highlighted candidate must have text");
     press('k');
-    char appended[288];
-    snprintf(appended, sizeof(appended), "%sk", expected);
-    check(preedit_equals(appended), "a typing key must append the raw letter to the selection");
     char commit[256];
-    check(!take_commit(commit, sizeof(commit)), "a typing key must not commit the selection");
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
+          "a typing key must confirm the selected candidate");
+    check(preedit_equals("k"), "the typing key must start the next reading");
     if (!current_menu(&context)) {
-        check(False, "the appended input must keep a queryable context");
+        check(False, "the next reading must keep a queryable context");
         return;
     }
     check(context.menu.num_candidates == 0,
-          "the appended input must hide the candidate list");
+          "the next reading must hide the candidate list");
     rime->free_context(&context);
 
-    /* A digit appends its full-width form to the highlighted candidate. */
+    /* A digit confirms the highlighted candidate and appends its full-width
+     * form to a fresh input. */
     fresh_session();
     type_text("kanji");
     press(kSpace);
@@ -791,23 +817,23 @@ static void test_typing_key_appends_to_selection(void) {
     }
     check(context.menu.highlighted_candidate_index == 1,
           "cycling must select the second candidate before the digit key");
-    snprintf(expected, sizeof(expected), "%s",
+    snprintf(selected, sizeof(selected), "%s",
              context.menu.candidates[context.menu.highlighted_candidate_index].text
                  ? context.menu.candidates[context.menu.highlighted_candidate_index].text
                  : "");
     rime->free_context(&context);
-    check(expected[0] != '\0', "the cycled candidate must have text");
+    check(selected[0] != '\0', "the cycled candidate must have text");
     press('1');
-    char expected_digit[288];
-    snprintf(expected_digit, sizeof(expected_digit), "%s１", expected);
-    check(preedit_equals(expected_digit),
-          "a digit must append the full-width digit to the highlighted candidate");
-    check(!take_commit(commit, sizeof(commit)), "the digit must not commit the selection");
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
+          "a digit must confirm the highlighted candidate");
+    check(preedit_equals("１"),
+          "a digit must start a fresh input with the full-width digit");
 }
 
 /*
  * SPEC: comma and period with a selection append the punctuation to the
- * selected candidate instead of committing it (dotfiles/rime/SPEC.md).
+ * converted text without committing it and end the conversion mode
+ * (dotfiles/rime/SPEC.md, "句読点").
  */
 static void test_comma_period_append_to_selection(void) {
     static const struct {
@@ -847,6 +873,13 @@ static void test_comma_period_append_to_selection(void) {
         snprintf(description, sizeof(description),
                  "%s with the menu visible must not commit", cases[i].name);
         check(!take_commit(commit, sizeof(commit)), description);
+        if (!current_menu(&context)) {
+            check(False, "the append must keep a queryable context");
+            return;
+        }
+        check(context.menu.num_candidates == 0,
+              "the append must end the conversion mode and hide the list");
+        rime->free_context(&context);
     }
 
     /* The same from the hidden conversion after the first Space. */
@@ -1043,11 +1076,9 @@ static void test_page_size_is_30(void) {
     rime->free_context(&context);
 }
 
-/* SPEC: an ordinary key after Henkan commits katakana and starts the next
- * full-width reading without opening the candidate list. */
-/* SPEC: keys after Henkan append to the katakana composition instead of
- * committing it (dotfiles/rime/SPEC.md). */
-static void test_henkan_typing_key_appends(void) {
+/* SPEC: an ordinary key after Henkan confirms the katakana and starts the
+ * next input without opening the candidate list. */
+static void test_henkan_typing_key_confirms(void) {
     static const struct {
         int key;
         const char* appended;
@@ -1062,15 +1093,16 @@ static void test_henkan_typing_key_appends(void) {
         press(kHenkan);
         press(cases[i].key);
         char expected[256];
-        snprintf(expected, sizeof(expected), "カンジ%s", cases[i].appended);
+        snprintf(expected, sizeof(expected), "%s", cases[i].appended);
         char description[128];
-        snprintf(description, sizeof(description), "Henkan then %s must append without committing",
+        snprintf(description, sizeof(description), "Henkan then %s must start a fresh input",
                  cases[i].description);
         check(preedit_equals(expected), description);
         char commit[256];
-        snprintf(description, sizeof(description), "Henkan then %s must not commit",
+        snprintf(description, sizeof(description), "Henkan then %s must commit the katakana",
                  cases[i].description);
-        check(!take_commit(commit, sizeof(commit)), description);
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, "カンジ") == 0,
+              description);
     }
 }
 
@@ -1156,7 +1188,9 @@ static void test_symbols_append_unconfirmed(void) {
     rime->set_option(session, "full_shape", 0);
 }
 
-/* SPEC: consecutive appends accumulate in one unconfirmed composition. */
+/* SPEC: consecutive appends accumulate in one unconfirmed composition. The
+ * Shift+letter entry starts the unconfirmed ascii input mode, so the
+ * following symbol stays half-width (dotfiles/rime/SPEC.md). */
 static void test_appends_accumulate(void) {
     fresh_session();
     press('1');
@@ -1167,22 +1201,40 @@ static void test_appends_accumulate(void) {
     fresh_session();
     press_shift('A');
     press('=');
-    check(preedit_equals("A＝"), "Shift+letter then a symbol must accumulate");
+    check(preedit_equals("A="), "Shift+letter then a symbol must accumulate in half-width");
     char commit[256];
     check(!take_commit(commit, sizeof(commit)), "appends must not commit on their own");
 }
 
 /* SPEC: a Space on an appended string without a convertible reading
- * commits it as-is (dotfiles/rime/SPEC.md). */
-static void test_space_after_append_commits_raw(void) {
+ * converts it to itself without committing (dotfiles/rime/SPEC.md). */
+static void test_space_after_append_converts_uncommitted(void) {
     fresh_session();
     type_text("kanji");
     press(kKeypad1);
     press(kSpace);
     char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かんじ1") == 0,
-          "Space on an appended string must commit it as-is");
-    check(!composing(), "the commit must end the composition");
+    check(!take_commit(commit, sizeof(commit)),
+          "Space on an appended string must not commit it");
+    check(composing(), "the appended string must stay unconfirmed");
+    RIME_STRUCT(RimeContext, context);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "the first Space on an appended string must keep the list hidden");
+        rime->free_context(&context);
+    }
+    /* The second Space reveals the character-type candidates of the digit. */
+    press(kSpace);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates > 0,
+              "the second Space must reveal the appended string's candidates");
+        check(menu_has_candidate(&context, "1") && menu_has_candidate(&context, "１"),
+              "the revealed menu must contain the digit's width forms");
+        rime->free_context(&context);
+    } else {
+        check(False, "the second Space must keep a queryable context");
+    }
+    check(!take_commit(commit, sizeof(commit)), "the reveal must not commit");
 }
 
 /* SPEC: romaji typed after an append keeps its raw form instead of being
@@ -1214,9 +1266,9 @@ static void test_quote_pairs(void) {
     }
 }
 
-/* SPEC: - and = never page a visible menu; with a conversion they append
- * their symbol to the selected candidate without committing it. A minus
- * while reading still appends the long vowel to the reading. */
+/* SPEC: - and = never page a visible menu; during conversion they confirm
+ * the selection and start a fresh input with their symbol. A minus while
+ * reading still appends the long vowel to the reading. */
 static void test_minus_equal_do_not_page(void) {
     static const struct { int key; const char* symbol; } cases[] = {
         {'-', "ー"}, {'=', "＝"},
@@ -1236,11 +1288,11 @@ static void test_minus_equal_do_not_page(void) {
         }
         check(selected[0] != '\0', "the highlighted candidate must exist");
         press(cases[i].key);
-        char expected[288];
-        snprintf(expected, sizeof(expected), "%s%s", selected, cases[i].symbol);
-        check(preedit_equals(expected), "minus/equal must append to the selection rather than page");
         char commit[256];
-        check(!take_commit(commit, sizeof(commit)), "minus/equal must not commit the selection");
+        check(preedit_equals(cases[i].symbol),
+              "minus/equal must start a fresh input with its symbol rather than page");
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
+              "minus/equal must commit the selection");
     }
     fresh_session();
     type_text("kana");
@@ -1252,7 +1304,9 @@ static void test_minus_equal_do_not_page(void) {
  * the space to the unconfirmed composition (dotfiles/rime/SPEC.md). */
 static void test_ascii_mode_passes_half_width_keys(void) {
     fresh_session();
-    press(kZenkakuHankaku);
+    press_shift('A');
+    check(option("_kagiroi_ascii_input"),
+          "the test must enter the ascii input mode before typing");
     const int keys[] = {'a', '1', '$', kSpace, kKeypad1, kKeypadDecimal};
     static const char* const texts[] = {"a", "1", "$", " ", "1", "."};
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
@@ -1262,43 +1316,55 @@ static void test_ascii_mode_passes_half_width_keys(void) {
         check(!take_commit(commit, sizeof(commit)),
               "the ascii input mode must not commit a half-width character");
     }
-    check(preedit_equals("a1$ 1."),
+    check(preedit_equals("Aa1$ 1."),
           "the ascii input mode must accumulate the half-width text");
     check(composing(), "the ascii input mode must keep the composition open");
 }
 
-/* SPEC: Shift+letter commits ASCII even with a selected conversion. */
-/* SPEC: Shift+letter appends the half-width letter to the unconfirmed
- * composition, the selected candidate included (dotfiles/rime/SPEC.md). */
-static void test_shift_letter_appends(void) {
+/* SPEC: Shift+letter switches to the unconfirmed ascii input mode from
+ * every Japanese state, restoring the reading first during conversion and
+ * appending the half-width uppercase letter to it (dotfiles/rime/SPEC.md). */
+static void test_shift_letter_switches_ascii_mode(void) {
     fresh_session();
     press_shift('A');
-    check(preedit_equals("A"), "Shift+A must append A while idle");
+    check(option("_kagiroi_ascii_input"), "Shift+A while idle must enter the ascii input mode");
+    check(preedit_equals("A"), "Shift+A while idle must append A");
     fresh_session();
     type_text("kana");
-    press(kSpace);
     press_shift('A');
-    check(preedit_equals("かなA"), "Shift+A must append A to the inline conversion");
+    check(option("_kagiroi_ascii_input"), "Shift+A while typing must enter the ascii input mode");
+    check(preedit_equals("かなA"), "Shift+A while typing must append A to the reading");
 
+    /* From the hidden conversion the reading is restored and kept. */
+    fresh_session();
+    type_text("kana");
+    press(kSpace);
+    press_shift('A');
+    check(option("_kagiroi_ascii_input"),
+          "Shift+A from the hidden conversion must enter the ascii input mode");
+    check(preedit_equals("かなA"),
+          "Shift+A from the hidden conversion must restore the reading and append A");
+
+    /* From the open menu the reading is restored and kept. */
     fresh_session();
     type_text("kana");
     press(kSpace);
     press(kSpace);
-    RIME_STRUCT(RimeContext, context);
-    char selected[256] = "";
-    if (current_menu(&context)) {
-        int index = context.menu.highlighted_candidate_index;
-        if (index < context.menu.num_candidates && context.menu.candidates[index].text)
-            snprintf(selected, sizeof(selected), "%s", context.menu.candidates[index].text);
-        rime->free_context(&context);
-    }
-    check(selected[0] != '\0', "Shift+A must have a selected candidate");
     press_shift('A');
-    char expected[288];
-    snprintf(expected, sizeof(expected), "%sA", selected);
-    check(preedit_equals(expected), "Shift+A must append A to the highlighted candidate");
+    check(option("_kagiroi_ascii_input"),
+          "Shift+A from the open menu must enter the ascii input mode");
+    check(preedit_equals("かなA"),
+          "Shift+A from the open menu must restore the reading and append A");
+
+    /* Half-width typing continues behind the fixed tail in the mode. */
+    press('1');
+    check(preedit_equals("かなA1"), "typing in the mode must append half-width digits");
     char commit[256];
-    check(!take_commit(commit, sizeof(commit)), "Shift+A must not commit the selection");
+    check(!take_commit(commit, sizeof(commit)), "the mode switch must not commit");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かなA1") == 0,
+          "Enter in the mode must commit the whole unconfirmed string");
+    check(!option("_kagiroi_ascii_input"), "the commit must leave the mode");
 }
 
 static void test_romanization_matches_declaration(void) {
@@ -1347,6 +1413,315 @@ static void test_romanization_matches_declaration(void) {
                  "%s must read %s while composing", cases[i].input, cases[i].expected);
         check(preedit_equals(cases[i].expected), description);
     }
+}
+
+/* SPEC: strings of ASCII alphanumerics convert without committing and their
+ * candidate list holds the original, full-width, half-width and letter-case
+ * forms (dotfiles/rime/SPEC.md). */
+static void test_ascii_variants_candidates(void) {
+    char commit[256];
+
+    /* Half-width letters typed in the ascii input mode, returned to the
+     * Japanese input before converting. */
+    fresh_session();
+    press_shift('A');
+    type_text("bc");
+    press(kZenkakuHankaku);
+    check(!option("_kagiroi_ascii_input"), "the test must return to the Japanese mode");
+    press(kSpace);
+    check(!take_commit(commit, sizeof(commit)), "the first Space must not commit the letters");
+    check(composing(), "the letters must stay unconfirmed through the conversion");
+    RIME_STRUCT(RimeContext, context);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "the first Space on the letters must keep the list hidden");
+        rime->free_context(&context);
+    }
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the second Space must keep a queryable context");
+        return;
+    }
+    check(context.menu.num_candidates >= 3,
+          "the letters must expose their character-type candidates");
+    check(menu_has_candidate(&context, "Abc")
+              && menu_has_candidate(&context, "Ａｂｃ")
+              && menu_has_candidate(&context, "ABC")
+              && menu_has_candidate(&context, "abc"),
+          "the menu must contain the original, full-width and case forms");
+    rime->free_context(&context);
+    check(!take_commit(commit, sizeof(commit)), "the reveal must not commit");
+
+    /* Main-row digits convert to themselves and offer the half-width form. */
+    fresh_session();
+    type_text("123");
+    press(kSpace);
+    check(!take_commit(commit, sizeof(commit)), "the first Space must not commit the digits");
+    check(preedit_equals("１２３"), "the digits must convert to themselves");
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the digit menu must keep a queryable context");
+        return;
+    }
+    check(menu_has_candidate(&context, "１２３") && menu_has_candidate(&context, "123"),
+          "the digit menu must contain both width forms");
+    rime->free_context(&context);
+}
+
+/* SPEC: the keypad separator appends the full-width comma while idle and
+ * typing, confirms the conversion with the menu open or hidden, and stays
+ * half-width inside the ascii input mode (dotfiles/rime/SPEC.md). */
+static void test_kp_separator_appends(void) {
+    static const int kKeypadSeparator = 0xffac;
+    char commit[256];
+
+    fresh_session();
+    press(kKeypadSeparator);
+    check(preedit_equals("，"), "the keypad separator while idle must append ，");
+    check(!take_commit(commit, sizeof(commit)), "the idle keypad separator must not commit");
+
+    fresh_session();
+    type_text("kanji");
+    press(kKeypadSeparator);
+    check(preedit_equals("かんじ，"), "the keypad separator while typing must append ，");
+    check(!take_commit(commit, sizeof(commit)), "the keypad separator must not commit the reading");
+
+    /* From the hidden conversion the key confirms and starts a fresh input. */
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kKeypadSeparator);
+    check(take_commit(commit, sizeof(commit)),
+          "the keypad separator from the hidden conversion must confirm it");
+    check(preedit_equals("，"), "the confirmation must start a fresh input with ，");
+
+    /* With the menu visible the key confirms the selection likewise. */
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    char selected[256] = "";
+    if (current_menu(&context)) {
+        int index = context.menu.highlighted_candidate_index;
+        if (index < context.menu.num_candidates && context.menu.candidates[index].text)
+            snprintf(selected, sizeof(selected), "%s", context.menu.candidates[index].text);
+        rime->free_context(&context);
+    }
+    check(selected[0] != '\0', "the menu must hold a selection for the separator");
+    press(kKeypadSeparator);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
+          "the keypad separator with the menu visible must confirm the selection");
+    check(preedit_equals("，"), "the separator must start a fresh input with ，");
+
+    /* Inside the ascii input mode the separator stays half-width. */
+    fresh_session();
+    press_shift('A');
+    press(kKeypadSeparator);
+    check(preedit_equals("A,"), "the keypad separator in the mode must append a half-width comma");
+}
+
+/* SPEC: Left and Right move the caret while typing and select the conversion
+ * blocks during conversion and with the menu open; Shift+Left/Shift+Right
+ * make the selected conversion segment shorter or longer
+ * (dotfiles/rime/SPEC.md). */
+static void test_arrow_caret_and_segments(void) {
+    RIME_STRUCT(RimeContext, context);
+
+    /* While typing the caret moves away from the end and back. */
+    fresh_session();
+    type_text("kanjimoji");
+    if (!current_menu(&context)) {
+        check(False, "the typing state must keep a queryable context");
+        return;
+    }
+    size_t end_caret = context.composition.cursor_pos;
+    check(end_caret > 0, "the caret must start at the end of the reading");
+    press(kLeft);
+    if (!current_menu(&context)) {
+        check(False, "Left while typing must keep a queryable context");
+        return;
+    }
+    check(context.composition.cursor_pos < end_caret,
+          "Left while typing must move the caret leftwards");
+    press(kRight);
+    if (!current_menu(&context)) {
+        check(False, "Right while typing must keep a queryable context");
+        return;
+    }
+    check(context.composition.cursor_pos == end_caret,
+          "Right while typing must move the caret back to the end");
+    rime->free_context(&context);
+
+    /* During the hidden conversion Left selects the previous segment and
+     * Right returns; Shift+Left and Shift+Right resize the selection. */
+    fresh_session();
+    type_text("kanjimoji");
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the hidden conversion must keep a queryable context");
+        return;
+    }
+    check(context.menu.num_candidates == 0,
+          "the conversion under the arrow test must keep the list hidden");
+    size_t caret = context.composition.cursor_pos;
+    int sel_start = context.composition.sel_start;
+    int sel_end = context.composition.sel_end;
+    rime->free_context(&context);
+    press(kLeft);
+    if (!current_menu(&context)) {
+        check(False, "Left during conversion must keep a queryable context");
+        return;
+    }
+    check(context.composition.cursor_pos < caret
+              && context.composition.sel_end <= sel_end,
+          "Left during conversion must select the previous conversion segment");
+    size_t moved_caret = context.composition.cursor_pos;
+    int moved_sel_end = context.composition.sel_end;
+    rime->free_context(&context);
+    rime->process_key(session, kLeft, 1);
+    if (!current_menu(&context)) {
+        check(False, "Shift+Left during conversion must keep a queryable context");
+        return;
+    }
+    check(context.composition.cursor_pos < moved_caret
+              && context.composition.sel_end < moved_sel_end,
+          "Shift+Left during conversion must shorten the selected segment");
+    rime->free_context(&context);
+    rime->process_key(session, kRight, 1);
+    if (!current_menu(&context)) {
+        check(False, "Shift+Right during conversion must keep a queryable context");
+        return;
+    }
+    check(context.composition.cursor_pos == moved_caret
+              && context.composition.sel_end == moved_sel_end,
+          "Shift+Right during conversion must extend the segment back");
+    rime->free_context(&context);
+    press(kRight);
+    if (!current_menu(&context)) {
+        check(False, "Right during conversion must keep a queryable context");
+        return;
+    }
+    check(context.composition.cursor_pos == caret,
+          "Right during conversion must return to the last segment");
+    rime->free_context(&context);
+
+    /* With the menu open Left moves the block selection backwards. */
+    fresh_session();
+    type_text("kanjimoji");
+    press(kSpace);
+    press(kSpace);
+    if (!current_menu(&context)) {
+        check(False, "the open menu must keep a queryable context");
+        return;
+    }
+    size_t menu_caret = context.composition.cursor_pos;
+    check(context.menu.num_candidates > 0, "the menu must be open for the arrow test");
+    rime->free_context(&context);
+    press(kLeft);
+    if (!current_menu(&context)) {
+        check(False, "Left with the menu open must keep a queryable context");
+        return;
+    }
+    check(context.composition.cursor_pos < menu_caret,
+          "Left with the menu open must select the previous block");
+    rime->free_context(&context);
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "the arrow keys must not commit");
+}
+
+/* SPEC: Esc with the candidate list visible closes the list and keeps the
+ * conversion; the next Esc restores the reading
+ * (dotfiles/rime/SPEC.md). */
+static void test_menu_esc_keeps_conversion(void) {
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    char selected[256] = "";
+    if (current_menu(&context)) {
+        int index = context.menu.highlighted_candidate_index;
+        if (index < context.menu.num_candidates && context.menu.candidates[index].text)
+            snprintf(selected, sizeof(selected), "%s", context.menu.candidates[index].text);
+        rime->free_context(&context);
+    }
+    check(selected[0] != '\0', "the menu must hold a selection before Esc");
+    press(kEscape);
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)), "Esc with the menu open must not commit");
+    check(composing(), "Esc with the menu open must keep the composition");
+    if (!current_menu(&context)) {
+        check(False, "Esc with the menu open must keep a queryable context");
+        return;
+    }
+    check(context.menu.num_candidates == 0,
+          "Esc with the menu open must close the candidate list");
+    check(!option("_kagiroi_expand_candidates"),
+          "Esc with the menu open must release the expansion");
+    rime->free_context(&context);
+    check(preedit_equals(selected),
+          "Esc with the menu open must keep the conversion to the selected candidate");
+    press(kEscape);
+    check(preedit_equals("かんじ"),
+          "the second Esc must restore the hiragana reading");
+    check(composing(), "the second Esc must keep the composition open");
+}
+
+/* SPEC: the way into the ascii input mode decides where an emptied string
+ * continues: the toggle keys lead to IME OFF and Shift+letter back to the
+ * Japanese input; Enter commits and returns to the Japanese input either
+ * way (dotfiles/rime/SPEC.md). */
+static void test_ascii_mode_origin_exits(void) {
+    /* Toggle origin: Backspace down to empty switches IME OFF. */
+    fresh_session();
+    type_text("kana");
+    press(kZenkakuHankaku);
+    check(option("_kagiroi_ascii_input"), "the toggle entry must start in the mode");
+    press(kBackSpace);
+    press(kBackSpace);
+    press(kBackSpace);
+    check(!option("_kagiroi_ascii_input"),
+          "the emptied toggle-origin string must leave the mode");
+    check(option("ascii_mode"),
+          "the emptied toggle-origin string must switch IME OFF");
+    check(!composing(), "IME OFF must leave nothing unconfirmed");
+    rime->set_option(session, "ascii_mode", 0);
+
+    /* Shift origin: Backspace down to empty returns to the Japanese input. */
+    fresh_session();
+    press_shift('A');
+    check(option("_kagiroi_ascii_input"), "the shift entry must start in the mode");
+    press(kBackSpace);
+    check(!option("_kagiroi_ascii_input"),
+          "the emptied shift-origin string must leave the mode");
+    check(!option("ascii_mode"),
+          "the emptied shift-origin string must return to the Japanese input");
+
+    /* Enter commits and returns to the Japanese input from the toggle
+     * origin as well. */
+    fresh_session();
+    type_text("kana");
+    press(kZenkakuHankaku);
+    type_text("ab");
+    press(kReturn);
+    char commit[256];
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "かなab") == 0,
+          "Enter from the mode must commit the whole unconfirmed string");
+    check(!option("_kagiroi_ascii_input"), "Enter must leave the mode");
+    check(!option("ascii_mode"), "Enter must return to the Japanese input");
+}
+
+/* SPEC: ascii_punct is disabled at the start of every session
+ * (dotfiles/rime/SPEC.md). */
+static void test_ascii_punct_disabled_at_session_start(void) {
+    fresh_session();
+    check(!option("ascii_punct"),
+          "a fresh session must start with ascii_punct disabled");
+    rime->set_option(session, "ascii_punct", 1);
+    fresh_session();
+    check(!option("ascii_punct"),
+          "the next fresh session must also start with ascii_punct disabled");
 }
 
 /*
@@ -1502,15 +1877,25 @@ static void test_first_space_converts_to_first_candidate(void) {
     check(context.menu.num_candidates > 0, "second Space must reveal the menu");
     check(context.menu.highlighted_candidate_index == 1,
           "second Space must select the second candidate");
+    char selected[256] = "";
     if (context.menu.num_candidates > 1 && context.menu.candidates[0].text) {
         snprintf(first, sizeof(first), "%s", context.menu.candidates[0].text);
     }
+    if (context.menu.num_candidates > context.menu.highlighted_candidate_index
+        && context.menu.candidates[context.menu.highlighted_candidate_index].text) {
+        snprintf(selected, sizeof(selected), "%s",
+                 context.menu.candidates[context.menu.highlighted_candidate_index].text);
+    }
     rime->free_context(&context);
     check(first[0] != '\0', "the menu must hold a first candidate");
+    check(selected[0] != '\0', "the menu must hold the selected candidate");
 
     press(kEscape);
+    check(preedit_equals(selected),
+          "Esc after the reveal must keep the conversion to the selected candidate");
+    press(kEscape);
     check(preedit_equals("かんじ"),
-          "Esc after the reveal must return to the hiragana reading");
+          "the second Esc must return to the hiragana reading");
     press(kSpace);
     check(preedit_equals(first),
           "the first Space must show the first candidate inline");
@@ -1679,9 +2064,8 @@ static void test_modifier_shortcuts_do_not_page(void) {
     }
 }
 
-/* SPEC: - and = on a second page commit the selected candidate, not page. */
-/* SPEC: - and = on a second page append their symbol to the selected
- * candidate without paging or committing it. */
+/* SPEC: - and = on a second page confirm the selected candidate and start a
+ * fresh input with their symbol instead of paging. */
 static void test_minus_equal_on_second_page(void) {
     static const struct { int key; const char* symbol; } cases[] = {
         {'-', "ー"}, {'=', "＝"},
@@ -1707,13 +2091,11 @@ static void test_minus_equal_on_second_page(void) {
         }
         check(selected[0] != '\0', "the second page must contain a selected candidate");
         press(cases[i].key);
-        char expected[288];
-        snprintf(expected, sizeof(expected), "%s%s", selected, cases[i].symbol);
-        check(preedit_equals(expected),
-              "minus/equal on page two must append to the selection rather than page");
         char commit[256];
-        check(!take_commit(commit, sizeof(commit)),
-              "minus/equal on page two must not commit the selection");
+        check(preedit_equals(cases[i].symbol),
+              "minus/equal on page two must start a fresh input rather than page");
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
+              "minus/equal on page two must commit the selection");
     }
 }
 
@@ -1844,6 +2226,7 @@ int main(int argc, char* argv[]) {
          * the learned order the baseline comparison depends on. */
         test_learning_promotes_committed_candidate,
         test_default_schema_is_kagiroi,
+        test_ascii_punct_disabled_at_session_start,
         test_n_run_correction,
         test_n_run_preedit,
         test_n_run_conversion_reading,
@@ -1851,28 +2234,33 @@ int main(int argc, char* argv[]) {
         test_zenkaku_hankaku_toggles_ascii,
         test_zenkaku_hankaku_keeps_composition,
         test_kana_muhenkan_one_way_switches,
+        test_ascii_mode_origin_exits,
         test_idle_space_commits_full_width,
         test_digits_append_unconfirmed,
         test_symbols_append_unconfirmed,
         test_appends_accumulate,
-        test_space_after_append_commits_raw,
+        test_kp_separator_appends,
+        test_space_after_append_converts_uncommitted,
         test_romaji_after_append_stays_raw,
         test_quote_pairs,
         test_minus_equal_do_not_page,
-        test_shift_letter_appends,
+        test_shift_letter_switches_ascii_mode,
         test_ascii_mode_passes_half_width_keys,
+        test_ascii_variants_candidates,
         test_henkan_promotes_katakana,
         test_henkan_space_enter_chain,
         test_backspace_escape_return_to_reading,
-        test_typing_key_appends_to_selection,
+        test_typing_key_confirms_selection,
         test_comma_period_append_to_selection,
+        test_menu_esc_keeps_conversion,
         test_tab_expands_candidates,
         test_page_size_is_30,
-        test_henkan_typing_key_appends,
+        test_henkan_typing_key_confirms,
         test_typing_hides_candidates,
         test_first_space_converts_to_first_candidate,
         test_space_cycles_candidates,
         test_arrow_navigation_across_pages,
+        test_arrow_caret_and_segments,
         test_modifier_shortcuts_do_not_page,
         test_minus_equal_on_second_page,
         test_enter_commits_highlighted_candidate,

@@ -1,13 +1,15 @@
+-- Zenkaku_Hankaku and Muhenkan switch between the Japanese input, the
+-- unconfirmed ascii input mode and IME OFF (dotfiles/rime/SPEC.md). With an
+-- unconfirmed string the keys enter the mode without committing or stashing
+-- the composition; with nothing unconfirmed they turn IME OFF through the
+-- ascii_mode option. Keys pressed while IME is already OFF stay with the
+-- frontend (dotfiles/rime/SPEC.md).
 local kAccepted = 1
 local kNoop = 2
 local kZenkakuHankaku = 0xff2a
 local kMuhenkan = 0xff22
 local controls = require("kagiroi/rime_controls")
 
--- Zenkaku_Hankaku toggles the unconfirmed ascii input mode; Muhenkan is a
--- one-way switch into it (dotfiles/rime/SPEC.md). The composition is never
--- stashed or committed: half-width characters are appended to it while the
--- mode is on, and the Japanese mode resumes the reading as it is.
 local function toggle_ascii_mode(key_event, env)
     local keycode = key_event.keycode
     if key_event:release()
@@ -17,13 +19,26 @@ local function toggle_ascii_mode(key_event, env)
     end
 
     local context = env.engine.context
-    local entering = keycode == kMuhenkan
-        or not context:get_option("_kagiroi_ascii_input")
-    if entering then
-        controls.start_ascii_input(context)
-    else
-        context:set_option("_kagiroi_ascii_input", false)
+    if context:get_option("ascii_mode") then
+        -- IME OFF is left to the frontend's own triggers.
+        return kNoop
     end
+    if context:get_option("_kagiroi_ascii_input") then
+        -- Zenkaku_Hankaku returns to the Japanese mode with the composition
+        -- kept; Muhenkan inside the mode passes through untouched.
+        if keycode == kZenkakuHankaku then
+            controls.stop_ascii_input(context)
+            return kAccepted
+        end
+        return kNoop
+    end
+    if context.input == "" then
+        -- Nothing unconfirmed: the keys switch IME OFF
+        -- (dotfiles/rime/SPEC.md).
+        context:set_option("ascii_mode", true)
+        return kAccepted
+    end
+    controls.start_ascii_input(context, "toggle")
     return kAccepted
 end
 

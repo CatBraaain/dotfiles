@@ -31,11 +31,27 @@ local function press(modifiers)
     }, env)
 end
 
--- Zenkaku_Hankaku toggles the unconfirmed ascii input mode.
-assert(press() == kAccepted and context:get_option("_kagiroi_ascii_input"),
-    "first Zenkaku_Hankaku must enter the ascii input mode")
-assert(press() == kAccepted and not context:get_option("_kagiroi_ascii_input"),
-    "second Zenkaku_Hankaku must restore the Japanese mode")
+-- Zenkaku_Hankaku and Muhenkan with nothing unconfirmed switch IME OFF
+-- through the ascii_mode option instead of entering the mode
+-- (dotfiles/rime/SPEC.md).
+assert(press() == kAccepted, "idle Zenkaku_Hankaku must be consumed")
+assert(context:get_option("ascii_mode"), "idle Zenkaku_Hankaku must switch IME OFF")
+assert(not context:get_option("_kagiroi_ascii_input"),
+    "idle Zenkaku_Hankaku must not enter the ascii input mode")
+context:set_option("ascii_mode", false)
+assert(press({ keycode = 0xff22 }) == kAccepted, "idle Muhenkan must be consumed")
+assert(context:get_option("ascii_mode"), "idle Muhenkan must switch IME OFF")
+assert(not context:get_option("_kagiroi_ascii_input"),
+    "idle Muhenkan must not enter the ascii input mode")
+context:set_option("ascii_mode", false)
+
+-- While IME is OFF the keys stay with the frontend and change nothing.
+context:set_option("ascii_mode", true)
+assert(press() == kNoop, "Zenkaku_Hankaku in IME OFF must pass through")
+assert(press({ keycode = 0xff22 }) == kNoop, "Muhenkan in IME OFF must pass through")
+assert(context:get_option("ascii_mode"), "the pass-through must keep IME OFF")
+context:set_option("ascii_mode", false)
+
 for _, modifiers in ipairs({
     { release = true }, { shift = true }, { ctrl = true }, { alt = true }, { super = true },
     { keycode = string.byte("a") },
@@ -46,7 +62,8 @@ for _, modifiers in ipairs({
 end
 
 -- Entering the ascii input mode keeps the composition unconfirmed and
--- records the tail position (dotfiles/rime/SPEC.md).
+-- records the tail position and the toggle origin
+-- (dotfiles/rime/SPEC.md).
 context.input = "かんじ"
 context:set_option("_kagiroi_hide_candidates", false)
 assert(press() == kAccepted, "Zenkaku_Hankaku with a composition must be consumed")
@@ -58,33 +75,43 @@ assert(context:get_option("_kagiroi_ascii_input"),
     "Zenkaku_Hankaku must enter the ascii input mode")
 assert(kana_speller.ascii_tail == #context.input,
     "entering the ascii input mode must record the tail position")
+assert(controls.ascii_input_origin == "toggle",
+    "entering by Zenkaku_Hankaku must record the toggle origin")
 
--- Returning to the Japanese mode keeps the composition and the tail.
+-- Returning to the Japanese mode keeps the composition and the tail, and
+-- clears the origin record.
 assert(press() == kAccepted and not context:get_option("_kagiroi_ascii_input"),
     "Zenkaku_Hankaku must restore the Japanese mode")
 assert(context.input == "かんじ", "the return must keep the composition")
 assert(kana_speller.ascii_tail == #context.input, "the return must keep the tail position")
 assert(#context.commits == 0, "the round trip must not commit")
+assert(controls.ascii_input_origin == nil,
+    "returning to the Japanese mode must clear the origin record")
 
--- Muhenkan always enters the ascii input mode and keeps the composition
--- unconfirmed like Zenkaku_Hankaku. Hiragana_Katakana is unbound: the key
--- passes through without touching the mode or the tail
+-- Muhenkan enters the mode from the Japanese input like Zenkaku_Hankaku and
+-- records the toggle origin. Hiragana_Katakana is unbound: the key passes
+-- through without touching the mode or the tail
 -- (dotfiles/rime/SPEC.md).
 local kHiraganaKatakana = 0xff27
 local kMuhenkan = 0xff22
 context.input = "にほんご"
 press({ keycode = kMuhenkan })
 assert(context:get_option("_kagiroi_ascii_input"),
-    "Muhenkan must always enter the ascii input mode")
+    "Muhenkan must enter the ascii input mode from a composition")
 assert(context.input == "にほんご" and #context.commits == 0,
     "Muhenkan must keep the composition unconfirmed")
 assert(kana_speller.ascii_tail == #context.input, "Muhenkan must record the tail position")
-press({ keycode = kMuhenkan })
-assert(context:get_option("_kagiroi_ascii_input"),
-    "a second Muhenkan must stay in the ascii input mode")
+assert(controls.ascii_input_origin == "toggle", "Muhenkan must record the toggle origin")
+assert(press({ keycode = kMuhenkan }) == kNoop,
+    "Muhenkan inside the mode must pass through untouched")
+assert(context:get_option("_kagiroi_ascii_input") and context.input == "にほんご",
+    "the in-mode Muhenkan must leave the mode and the composition unchanged")
 assert(press({ keycode = kHiraganaKatakana }) == kNoop,
     "Hiragana_Katakana must pass through unbound")
 assert(context:get_option("_kagiroi_ascii_input") and context.input == "にほんご",
     "Hiragana_Katakana must leave the ascii input mode and the composition unchanged")
+press()
+assert(not context:get_option("_kagiroi_ascii_input"),
+    "Zenkaku_Hankaku must restore the Japanese mode from Muhenkan's entry")
 
 print("Rime ascii input mode toggle tests passed")

@@ -32,6 +32,8 @@ test-rime:
     lua5.4 tests/rime_ascii_toggle.test.lua lua/kagiroi/rime_ascii_toggle.lua lua/kagiroi/rime_controls.lua
     lua5.4 tests/kagiroi_n_kana_speller.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua
     lua5.4 tests/kagiroi_suffix.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua
+    lua5.4 tests/char_variants.test.lua lua/kagiroi/char_variants.lua
+    lua5.4 tests/weasel_config.test.lua weasel.custom.yaml
     bash tests/rime/run.sh
 
 diff:

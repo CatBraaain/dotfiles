@@ -174,6 +174,8 @@ local conversion_cases = {
     { input = "kannnji", expected = "かんじ" },
     { input = "kana", expected = "かな" },
     { input = "nya", expected = "にゃ" },
+    { input = "nna", expected = "んな" },
+    { input = "nnyo", expected = "んにょ" },
     { input = "kanna", expected = "かんな" },
     { input = "kannna", expected = "かんな" },
     { input = "kannnna", expected = "かんな" },
