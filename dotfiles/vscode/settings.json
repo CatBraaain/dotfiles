@@ -114,6 +114,7 @@
     // "editor.defaultFormatter": "adpyke.vscode-sql-formatter"
   },
   "[todo]": {
+    "editor.defaultFormatter": "todo-lsp.todo",
     "editor.stickyScroll.enabled": false,
     "editor.tabSize": 4,
     "files.trimTrailingWhitespace": false
