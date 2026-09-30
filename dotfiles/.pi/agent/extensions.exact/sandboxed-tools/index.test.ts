@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import {
   existsSync,
@@ -4654,35 +4654,38 @@ describe("§7 bash の stderr 逐次表示", () => {
     }
   });
 
-  it("レシーバへの接続が拒否されてもフォールバックし、コマンド結果は従来どおり返る", async () => {
-    // Connection-refused fallback (review F5): take the receiver's real
-    // commandPrefix, then close the receiver so its port is closed before the
-    // command's /dev/tcp connect. The command must behave exactly like the
-    // plain (no-prefix) definition that executeToolRequest falls back to.
+  it("falls back after a refused receiver connection and preserves the command result", async () => {
+    // Close the receiver before the command's /dev/tcp connection attempt.
     const tee = await startStderrTeeReceiver();
     await tee.close();
     const pi = await import("@earendil-works/pi-coding-agent");
-    const runBash = async (options: { commandPrefix: string } | undefined): Promise<Error> => {
-      try {
-        await pi
-          .createBashToolDefinition(process.cwd(), options)
-          .execute(
-            "t",
-            { command: "echo out; echo err >&2; exit 7" },
-            undefined,
-            undefined,
-            undefined as unknown as ExtensionContext,
-          );
-      } catch (error) {
-        return error as Error;
-      }
-      throw new Error("expected the exit code 7 command to reject");
-    };
-    const fallbackError = await runBash({ commandPrefix: tee.commandPrefix });
-    const plainError = await runBash(undefined);
-    assert.match(fallbackError.message, /out/);
-    assert.match(fallbackError.message, /err/);
-    assert.match(fallbackError.message, /Command exited with code 7/);
+    const runBash = (options: { commandPrefix: string } | undefined) =>
+      pi
+        .createBashToolDefinition(process.cwd(), options)
+        .execute(
+          "t",
+          { command: "echo out; echo err >&2; exit 7" },
+          undefined,
+          undefined,
+          undefined as unknown as ExtensionToolContext,
+        );
+    const fallbackResult = await runBash({ commandPrefix: tee.commandPrefix });
+    const plainResult = await runBash(undefined);
+    assert.equal(fallbackResult.isError, true);
+    assert.equal((fallbackResult.structuredContent as { exit_code: number }).exit_code, 7);
+    assert.equal(plainResult.isError, true);
+    assert.equal((plainResult.structuredContent as { exit_code: number }).exit_code, 7);
+    const fallbackTextContent = fallbackResult.content.find((content) => content.type === "text");
+    const plainTextContent = plainResult.content.find((content) => content.type === "text");
+    assert.ok(fallbackTextContent);
+    assert.ok(plainTextContent);
+    const fallbackText = fallbackTextContent.text;
+    const plainText = plainTextContent.text;
+    for (const resultText of [fallbackText, plainText]) {
+      assert.ok(resultText.includes("out"), `stdout missing from result: ${resultText}`);
+      assert.ok(resultText.includes("err"), `stderr missing from result: ${resultText}`);
+      assert.ok(resultText.includes("Command exited with code 7"), resultText);
+    }
     // pi's accumulator interleaves stdout and stderr in arrival order, so
     // compare the output as an unordered set of lines.
     const messageLines = (message: string) =>
@@ -4690,7 +4693,7 @@ describe("§7 bash の stderr 逐次表示", () => {
         .split("\n")
         .filter((line) => line !== "")
         .sort();
-    assert.deepEqual(messageLines(fallbackError.message), messageLines(plainError.message));
+    assert.deepEqual(messageLines(fallbackText), messageLines(plainText));
   });
 });
 
