@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { main as apply } from "./apply.ts";
 import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
+import { acquireHomeLock } from "./lock.ts";
 
 const usage = "usage: bun dotfiles-manager <apply|diff|managed>";
 
@@ -17,6 +18,13 @@ export async function main(
     throw new Error(usage);
 
   const started = performance.now();
+  const lock = acquireHomeLock(homeRoot, (holder) =>
+    console.log(
+      holder === null
+        ? "Lock held by another session, waiting..."
+        : `Lock held by PID ${holder}, waiting...`,
+    ),
+  );
   try {
     await logBuild(root, homeRoot);
 
@@ -31,6 +39,8 @@ export async function main(
   } catch (error) {
     logElapsed(`command ${command}`, "failure", started);
     throw error;
+  } finally {
+    lock.release();
   }
 }
 
@@ -48,7 +58,9 @@ async function logBuild(root: string, homeRoot: string): Promise<void> {
           return;
         }
         if (stdoutNeedsNewline) console.log();
-        console.log(`  ${status === "success" ? "✓" : "✗"} ${path} (${elapsedSeconds.toFixed(2)}s)`);
+        console.log(
+          `  ${status === "success" ? "✓" : "✗"} ${path} (${elapsedSeconds.toFixed(2)}s)`,
+        );
       },
       (phase, elapsedSeconds) => console.log(`  ${phase} (${elapsedSeconds.toFixed(2)}s)`),
     );
