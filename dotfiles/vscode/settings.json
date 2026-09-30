@@ -582,6 +582,7 @@
   "ty.inlayHints.callArgumentNames": false,
   "ty.inlayHints.variableTypes": false,
   "update.mode": "start",
+  "vscode-just.lspPath": "/home/linuxbrew/.linuxbrew/bin/just-lsp",
   "window.commandCenter": false,
   "window.confirmSaveUntitledWorkspace": false,
   "window.customMenuBarAltFocus": false,
