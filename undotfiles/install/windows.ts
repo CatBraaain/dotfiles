@@ -1,6 +1,9 @@
 // Windows bootstrap installer: installs apps with winget and cleans up
 // desktop shortcuts and WinGet package links.
 //
+// Usage: bun windows.ts [personal|work] (defaults to "personal"). The "work"
+// profile skips personal-only apps such as Discord, Steam, and games.
+//
 // Requires Administrator. When not elevated, the script relaunches itself via
 // gsudo (one UAC prompt); `gsudo status IsElevated` exits with 0 once
 // elevated, so the relaunch happens at most once.
@@ -9,47 +12,57 @@ import { readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
+type Profile = "personal" | "work";
+
 const unmanagedPackages: readonly string[] = [
   // keep-sorted start by_regex=\..+ sticky_comments=no
   "Google.Chrome",
-  "Discord.Discord",
   "Docker.DockerDesktop",
   "Mozilla.Firefox",
   // keep-sorted end
 ];
 
+// Installed only with the "personal" profile.
+const unmanagedPersonalPackages: readonly string[] = ["Discord.Discord"];
+
 const managedPackages: readonly string[] = [
   // keep-sorted start by_regex=\..+ sticky_comments=no
-  "Guru3D.Afterburner",
   // "Microsoft.AppInstaller"
-  "CPUID.CPU-Z",
   "BluePointLilac.ContextMenuManager",
   "sordum.EasyContextMenu",
   "w4po.ExplorerTabUtility",
-  "Rem0o.FanControl",
   "AdrienAllard.FileConverter",
-  "GIMP.GIMP.3",
   "DuongDieuPhap.ImageGlass",
   // "mulaRahul.Keyviz"
   "LocalSend.LocalSend",
-  "ch.LosslessCut",
   "MPC-BE.MPC-BE",
-  "Mojang.MinecraftLauncher",
   "M2Team.NanaZip",
-  "OBSProject.OBSStudio",
   "OpenWhispr.OpenWhispr",
-  "Guru3D.RTSS",
   "ShareX.ShareX",
-  "Meltytech.Shotcut",
-  "Valve.Steam",
   // "StirlingTools.StirlingPDF"
   "Microsoft.Sysinternals.Autologon",
-  "Devolutions.UniGetUI",
   "Microsoft.VisualStudioCode",
   "Rime.Weasel",
   "WinDirStat.WinDirStat",
   "Microsoft.WindowsTerminal",
   "ZedIndustries.Zed",
+  // keep-sorted end
+];
+
+// Installed only with the "personal" profile.
+const managedPersonalPackages: readonly string[] = [
+  // keep-sorted start by_regex=\..+ sticky_comments=no
+  "Guru3D.Afterburner",
+  "CPUID.CPU-Z",
+  "Rem0o.FanControl",
+  "GIMP.GIMP.3",
+  "ch.LosslessCut",
+  "Mojang.MinecraftLauncher",
+  "OBSProject.OBSStudio",
+  "Guru3D.RTSS",
+  "Meltytech.Shotcut",
+  "Valve.Steam",
+  "Devolutions.UniGetUI",
   "HaraldBoegeholz.h2testw",
   // keep-sorted end
 ];
@@ -76,28 +89,36 @@ const managedDevPackages: readonly string[] = [
 ];
 
 async function main(): Promise<void> {
-  if (!isElevated()) await selfElevate();
-  installWingetPackages();
+  const profile = parseProfile();
+  if (!isElevated()) await selfElevate(profile);
+  installWingetPackages(profile);
   removeDesktopShortcuts();
   linkWingetPackageExes();
 }
 
-function selfElevate(): Promise<never> {
-  const proc = Bun.spawn(["gsudo", "-d", process.execPath, import.meta.path], {
+function selfElevate(profile: Profile): Promise<never> {
+  const proc = Bun.spawn(["gsudo", "-d", process.execPath, import.meta.path, profile], {
     stdio: ["inherit", "inherit", "inherit"],
   });
   return proc.exited.then((code) => process.exit(code ?? 1));
 }
 
-function installWingetPackages(): void {
+function installWingetPackages(profile: Profile): void {
+  const isPersonal = profile === "personal";
+  const unmanaged = isPersonal
+    ? [...unmanagedPackages, ...unmanagedPersonalPackages]
+    : unmanagedPackages;
+  const managed = isPersonal
+    ? [...managedPackages, ...managedPersonalPackages]
+    : managedPackages;
   // Individual winget failures are logged but do not abort the rest of the
   // bootstrap, matching the previous PowerShell behavior.
   runAllowingFailure([
     "winget", "install", "AutoHotkey.AutoHotkey",
     "--silent", "--version", "1.1.37.02", "--no-upgrade", "--source", "winget",
   ]);
-  runAllowingFailure(["winget", "install", ...unmanagedPackages, "--no-upgrade", "--source", "winget"]);
-  runAllowingFailure(["winget", "install", ...managedPackages, "--source", "winget"]);
+  runAllowingFailure(["winget", "install", ...unmanaged, "--no-upgrade", "--source", "winget"]);
+  runAllowingFailure(["winget", "install", ...managed, "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managedDevPackages, "--source", "winget"]);
 }
 
@@ -118,6 +139,14 @@ function linkWingetPackageExes(): void {
     rmSync(linkPath, { force: true }); // Replace existing links (New-Item -Force).
     symlinkSync(exePath, linkPath, "file");
   }
+}
+
+function parseProfile(): Profile {
+  const value = process.argv[2] ?? "personal";
+  if (value !== "personal" && value !== "work") {
+    throw new Error(`unknown profile "${value}" (expected "personal" or "work")`);
+  }
+  return value;
 }
 
 function isElevated(): boolean {

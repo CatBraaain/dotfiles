@@ -16,8 +16,8 @@ install:
   bun undotfiles/install/linux.ts sync
 
 [windows]
-install:
-  bun undotfiles/install/windows.ts
+install *args:
+  bun undotfiles/install/windows.ts {{args}}
 
 apply:
   bun dotfiles-manager apply
