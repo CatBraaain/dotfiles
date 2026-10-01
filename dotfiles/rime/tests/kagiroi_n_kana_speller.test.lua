@@ -1,7 +1,9 @@
 local kAccepted = 1
 local kNoop = 2
-local kBackSpace = 0xff08
 local romaji_to_kana = {
+    ge = "げ",
+    i = "い",
+    yo = "よ",
     ko = "こ",
     ka = "か",
     na = "な",
@@ -135,15 +137,19 @@ end
 -- SPEC: the reading shown while typing.
 local typing_cases = {
     { input = "nn", expected = "ん" },
+    { input = "gennin", expected = "げんいn" },
+    { input = "nnin", expected = "んいn" },
+    { input = "ni", expected = "に" },
+    { input = "i", expected = "い" },
     { input = "kan", expected = "かn" },
     { input = "kann", expected = "かん" },
-    { input = "nna", expected = "んな" },
-    { input = "nnyo", expected = "んにょ" },
+    { input = "nna", expected = "んあ" },
+    { input = "nnyo", expected = "んよ" },
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんんじ" },
     { input = "kana", expected = "かな" },
-    { input = "kanna", expected = "かんな" },
+    { input = "kanna", expected = "かんあ" },
     { input = "kannna", expected = "かんな" },
     { input = "kannnna", expected = "かんんあ" },
     { input = "konitiha", expected = "こにちは" },
@@ -168,15 +174,19 @@ end
 
 -- SPEC: the reading used when Space converts.
 local conversion_cases = {
+    { input = "nn", expected = "ん" },
+    { input = "gennin", expected = "げんいん" },
+    { input = "nnin", expected = "んいん" },
+    { input = "kann", expected = "かん" },
     { input = "kan", expected = "かん" },
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんじ" },
     { input = "kana", expected = "かな" },
     { input = "nya", expected = "にゃ" },
-    { input = "nna", expected = "んな" },
-    { input = "nnyo", expected = "んにょ" },
-    { input = "kanna", expected = "かんな" },
+    { input = "nna", expected = "んあ" },
+    { input = "nnyo", expected = "んよ" },
+    { input = "kanna", expected = "かんあ" },
     { input = "kannna", expected = "かんな" },
     { input = "kannnna", expected = "かんな" },
     { input = "konnnitiha", expected = "こんにちは" },
@@ -216,26 +226,20 @@ env.context.caret_pos = #"か"
 press(env, "j")
 assert(env.context.input == "かjn", "middle-of-input typing must not delete text before the caret")
 
--- SPEC: a vowel right after the nn pair rebinds the fresh ん as ん+n
--- (kanna -> かんな), but only while no other key intervened.
+-- SPEC: nn is consumed on the second keypress; the following vowel
+-- receives no implicit n, and a new final n stays pending.
 env = new_environment()
 processor.init(env)
 press(env, "n")
+assert(env.context.input == "n", "a lone n must stay pending while typing")
 press(env, "n")
 assert(env.context.input == "ん", "nn must become ん on the second keypress")
-press(env, "a")
-assert(env.context.input == "んな", "a right after the nn pair should rebind to んな")
-
--- Backspace between the pair and the vowel drops the rebind (ん stays).
-env = new_environment()
-processor.init(env)
+press(env, "i")
+assert(env.context.input == "んい", "i after the consumed nn must stay い")
 press(env, "n")
-press(env, "n")
-press_key(env, kBackSpace)
-press(env, "a")
-assert(env.context.input == "んあ", "a vowel after Backspace must not rebind the ん")
+assert(env.context.input == "んいn", "a new final n must stay pending")
 
--- A lone ん that did not come from an nn pair does not rebind either.
+-- A lone ん that did not come from an nn pair stays unchanged too.
 env = new_environment()
 processor.init(env)
 env.context:push_input("ん")

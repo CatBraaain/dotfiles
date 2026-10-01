@@ -1,9 +1,8 @@
 -- Typing-time and conversion-time correction of n runs, wrapping the stock
 -- Kagiroi kana speller (dotfiles/rime/SPEC.md, "n の過不足補完").
--- Pair: the second n of a run converts to ん immediately through the
--- declaration's nn spelling; a vowel on the very next key rebinds that ん
--- as ん+n (kanna -> かんな). Insufficient n: a lone pending n becomes ん
--- when a consonant key or a conversion key follows. Excessive n: not
+-- Pair: the second n consumes nn as ん through the declaration's spelling;
+-- no n is added to a following vowel or y. Insufficient n: a lone pending n
+-- becomes ん when a consonant key or a conversion key follows. Excessive n: not
 -- corrected while typing; at conversion, consecutive ん fold into one and
 -- one leftover ん binds with a following vowel as the next syllable's n.
 local kAccepted = 1
@@ -16,7 +15,6 @@ local Top = { init = base.init, fini = base.fini }
 -- (dotfiles/rime/SPEC.md).
 Top.ascii_tail = nil
 
-local n_kana = "ん"
 local vowels = { a = true, e = true, i = true, o = true, u = true, y = true }
 
 -- Kana a leftover ん can bind with: the kana spelled with a leading n plus a
@@ -93,26 +91,17 @@ local function replace_pending_n(context, pending_n, replacement)
     context:push_input(replacement)
 end
 
--- True when the input ends with a ん that is not preceded by another ん:
--- the reading a fresh nn pair leaves behind, and the only one a vowel may
--- rebind (a んん run from nnnn stays put).
-local function ends_with_lone_pair_n(input)
-    return input:sub(-3) == n_kana and input:sub(-6, -4) ~= n_kana
-end
-
 -- A consonant or a conversion key after the run: fold the run into pairs and
 -- complete a leftover single n as ん (kanji -> かんじ, nwa -> んわ).
 local function n_run_before_consonant(count)
     return ("ん"):rep(math.ceil(count / 2))
 end
 
--- A vowel key after the run: short runs keep one ん and let the last n
--- bind with the vowel (kanna and kannna -> かんな), while runs of four or
--- more n's fold pairwise without binding (kannnna -> かんんあ). An odd count
--- always leaves the last n free for the binding.
+-- A vowel key after the run: consume pairs as ん and let only an odd
+-- leftover n bind with the vowel (kannna -> かんな).
 local function n_run_before_vowel(count)
     local replacement = ("ん"):rep(math.floor(count / 2))
-    if count == 2 or count % 2 == 1 then
+    if count % 2 == 1 then
         return replacement .. "n"
     end
     return replacement
@@ -233,11 +222,6 @@ function Top.func(key_event, env)
         return base.func(key_event, env)
     end
 
-    -- The pair marker survives only until the next key press; releases and
-    -- modifier combos keep it.
-    local pair_rebindable = env.nn_pair_pending
-    env.nn_pair_pending = false
-
     local keycode = key_event.keycode
     if keycode < 0x20 or keycode > 0x7E then
         return base.func(key_event, env)
@@ -259,27 +243,13 @@ function Top.func(key_event, env)
         -- spelling: convert the pair to ん now, including after a raw prefix.
         -- A run never holds more than one raw n, so no other case exists.
         if remaining_alphabet:sub(-1) == "n" then
-            local result = spell_with_suffix(key_event, env)
-            if result == kAccepted then
-                env.nn_pair_pending = true
-            end
-            return result
+            return spell_with_suffix(key_event, env)
         end
         return kNoop
     end
 
     local pending_n = remaining_alphabet:match("n+$")
     if not pending_n then
-        -- A vowel directly after a fresh nn pair rebinds its ん as ん+n so
-        -- the base speller can bind the vowel (kanna -> かんな). んん from a
-        -- longer run and ん without the pair marker stay as they are.
-        if vowels[character]
-            and pair_rebindable
-            and ends_with_lone_pair_n(context.input)
-            and env.alphabet:find(character, 1, true)
-        then
-            context:push_input("n")
-        end
         return spell_with_suffix(key_event, env)
     end
 

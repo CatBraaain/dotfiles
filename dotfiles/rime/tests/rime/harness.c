@@ -167,7 +167,7 @@ static void test_default_schema_is_kagiroi(void) {
 
 /* SPEC: accepted n-run forms expose a candidate containing the reading's
  * dictionary word. Readings without a matching dictionary word (こにちは,
- * かんだ, にゃ) are checked as preedit in test_n_run_preedit and
+ * かんあ, かんだ, にゃ) are checked as preedit in test_n_run_preedit and
  * test_n_run_conversion_reading. */
 static void test_n_run_correction(void) {
     static const struct {
@@ -178,7 +178,6 @@ static void test_n_run_correction(void) {
         {"kannji", "漢字"},
         {"kannnji", "漢字"},
         {"kana", "かな"},
-        {"kanna", "かんな"},
         {"kannna", "かんな"},
         {"kannnna", "かんな"},
         {"konnnitiha", "こんにちは"},
@@ -214,12 +213,20 @@ static void test_n_run_preedit(void) {
         const char* input;
         const char* expected;
     } cases[] = {
+        {"nn", "ん"},
+        {"gennin", "げんいn"},
+        {"nnin", "んいn"},
+        {"ni", "に"},
+        {"i", "い"},
+        {"kann", "かん"},
+        {"nna", "んあ"},
+        {"nnyo", "んよ"},
         {"kan", "かn"},
         {"kanji", "かんじ"},
         {"kannji", "かんじ"},
         {"kannnji", "かんんじ"},
         {"kana", "かな"},
-        {"kanna", "かんな"},
+        {"kanna", "かんあ"},
         {"kannna", "かんな"},
         {"kannnna", "かんんあ"},
         {"konitiha", "こにちは"},
@@ -302,6 +309,12 @@ static void test_n_run_conversion_reading(void) {
         const char* input;
         const char* expected;
     } cases[] = {
+        {"nn", "ん"},
+        {"gennin", "げんいん"},
+        {"nnin", "んいん"},
+        {"kann", "かん"},
+        {"nna", "んあ"},
+        {"nnyo", "んよ"},
         {"kan", "かん"},
         {"kanji", "かんじ"},
         {"kannji", "かんじ"},
@@ -311,7 +324,7 @@ static void test_n_run_conversion_reading(void) {
         {"kannnda", "かんだ"},
         {"kana", "かな"},
         {"nya", "にゃ"},
-        {"kanna", "かんな"},
+        {"kanna", "かんあ"},
         {"kannna", "かんな"},
         {"kannnna", "かんな"},
         {"konnnitiha", "こんにちは"},
@@ -1763,11 +1776,11 @@ static void test_ascii_punct_disabled_at_session_start(void) {
 }
 
 /*
- * SPEC: the nn pair converts to ん on the second keypress, a vowel right
- * after the pair rebinds it (kanna -> かんな), and Enter commits the
- * converted reading (dotfiles/rime/SPEC.md, n の過不足補完).
+ * SPEC: the nn pair is consumed as ん on the second keypress, without
+ * adding n to the next vowel or y. Enter commits the converted reading
+ * (dotfiles/rime/SPEC.md, n の過不足補完).
  */
-static void test_nn_pair_and_rebind(void) {
+static void test_nn_pair_consumption(void) {
     char commit[256];
     fresh_session();
     type_text("n");
@@ -1786,18 +1799,18 @@ static void test_nn_pair_and_rebind(void) {
     press(kReturn);
     check(take_commit(commit, sizeof(commit)) && strcmp(commit, "ほん") == 0,
           "honn + Enter must commit ほん");
-    /* the vowel after the pair rebinds ん as ん+n */
+    /* The consumed pair does not add n to the next vowel or y. */
     fresh_session();
     type_text("kann");
     check(preedit_equals("かん"), "kann must read かん while typing");
     type_text("a");
-    check(preedit_equals("かんな"), "kanna must rebind the pair ん as んな");
+    check(preedit_equals("かんあ"), "kanna must keep the consumed pair separate from あ");
     fresh_session();
     type_text("minna");
-    check(preedit_equals("みんな"), "minna must read みんな");
+    check(preedit_equals("みんあ"), "minna must read みんあ");
     fresh_session();
     type_text("nnyo");
-    check(preedit_equals("んにょ"), "nnyo must read んにょ");
+    check(preedit_equals("んよ"), "nnyo must read んよ");
     /* a four-n run keeps both ん (no rebind) */
     fresh_session();
     type_text("kannnna");
@@ -2304,7 +2317,7 @@ int main(int argc, char* argv[]) {
         test_enter_commits_highlighted_candidate,
         test_punctuation_appends_unconfirmed,
         test_romanization_matches_declaration,
-        test_nn_pair_and_rebind,
+        test_nn_pair_consumption,
         test_longest_declared_suffix_preserves_raw_prefix,
         test_sokuon_hatsuon_and_long_vowel,
     };
