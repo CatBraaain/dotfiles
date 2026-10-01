@@ -185,6 +185,7 @@ describe("§1 ツールごとの扱い", () => {
     assert.deepEqual(toolNames, [
       "ask_permission",
       "bash",
+      "codemode",
       "edit",
       "find",
       "grep",

@@ -14,6 +14,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Sandbox, type PathApproval, type ToolSession } from "./sandbox";
+import { registerCodemode } from "./codemode.ts";
 import { normalizeToolPath } from "../shared/normalize-path.ts";
 import { modelSupportsImages } from "../shared/image-input.ts";
 import {
@@ -205,6 +206,7 @@ function stderrLineUpdater(
 }
 
 export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: string): void {
+  registerCodemode(pi);
   const cwd = process.cwd();
   const sandbox = new Sandbox(cwd, configPath);
   const readTool = createReadTool(cwd);
