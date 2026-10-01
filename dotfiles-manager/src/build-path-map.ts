@@ -1,5 +1,5 @@
-// Build runtime path map: apply remap tables at copy time and again after
-// local hooks.
+// Build runtime path map: apply remap tables at copy time and again before
+// collecting local hooks.
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";

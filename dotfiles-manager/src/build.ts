@@ -1,6 +1,6 @@
 // Build stage of the dotfiles manager (spec: SPEC.md
-// §ライフサイクル): regenerates dist from dotfiles/ — local hooks,
-// path maps, externals, merge composition, replace sidecars.
+// §ライフサイクル): regenerates dist from dotfiles/ — path maps,
+// externals, merge composition, replace sidecars, local hooks.
 import { cp, mkdir, readdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -30,12 +30,12 @@ export async function main(
     await rm(distDir, { recursive: true, force: true });
     await copyDir(sourceDir, distDir, await createCopyRouter(platform));
   });
-  // Capture hooks once so earlier hooks cannot remove later scripts from the event queue.
-  await runHooks(await collectHooks(distDir), distDir, homeRoot, onHookEvent);
   await timed("path map", onPhase, () => applyPathMap(distDir, platform));
+  const hooks = await collectHooks(distDir);
   await timed("externals", onPhase, () => applyExternals(distDir));
   await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
+  await runHooks(hooks, distDir, homeRoot, onHookEvent);
 }
 
 async function copyDir(

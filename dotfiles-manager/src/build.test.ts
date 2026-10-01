@@ -308,6 +308,156 @@ export default function () {
     await assert.rejects(main(root, "linux", homeRoot), /local build hook failed: fail\.build\.ts/);
   });
 
+  it("preserves the hook's final formatting of completed merge layers", async () => {
+    await put(homeRoot, "settings.json", '{"home":true,"value":"home"}');
+    await put(root, "dotfiles/settings.json", '{"plain":true,"value":"plain"}');
+    await put(root, "dotfiles/settings.merge.json", '{"shared":true,"value":"shared"}');
+    await put(root, "dotfiles/settings.merge-machine.json", '{"machine":true,"value":"machine"}');
+    await put(
+      root,
+      "dotfiles/format.build.ts",
+      `import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+export default async function () {
+  assert.equal(existsSync("settings.merge.json"), false);
+  assert.equal(existsSync("settings.merge-machine.json"), false);
+  const completed = await Bun.file("settings.json").json();
+  await Bun.write("settings.json", JSON.stringify(completed));
+}`,
+    );
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(
+      await readFile(join(distRoot, "settings.json"), "utf8"),
+      '{"home":true,"value":"machine","plain":true,"shared":true,"machine":true}',
+    );
+    assert.equal(
+      await readFile(join(homeRoot, "settings.json"), "utf8"),
+      '{"home":true,"value":"home"}',
+    );
+  });
+
+  it("preserves the hook's final formatting of completed replacements", async () => {
+    const homeContent = " mode = home \n keep = yes \n";
+    await put(homeRoot, "app.conf", homeContent);
+    await put(root, "dotfiles/app.conf", "plain content must not win\n");
+    await put(
+      root,
+      "dotfiles/app.conf.replace.yaml",
+      "replacements:\n  - pattern: home\n    replacement: replaced\n",
+    );
+    await put(
+      root,
+      "dotfiles/format.build.ts",
+      `import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+export default async function () {
+  assert.equal(existsSync("app.conf.replace.yaml"), false);
+  const completed = await Bun.file("app.conf").text();
+  await Bun.write("app.conf", completed.trim().replaceAll(" ", ""));
+}`,
+    );
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "mode=replaced\nkeep=yes");
+    assert.equal(await readFile(join(homeRoot, "app.conf"), "utf8"), homeContent);
+  });
+
+  for (const { phase, path, content, error, completedPhases } of [
+    {
+      phase: "copy-time path map",
+      path: "remap.data.md",
+      content: "invalid table",
+      error: /remap\.data\.md must have columns:/,
+      completedPhases: [],
+    },
+    {
+      phase: "second path map",
+      path: "bad-map.txt",
+      content: "invalid table",
+      error: /remap\.data\.md must have columns:/,
+      completedPhases: ["rebuild dist"],
+    },
+    {
+      phase: "externals",
+      path: "external.data.yaml",
+      content: "repos: []",
+      error: /external\.data\.yaml must have a repos mapping:/,
+      completedPhases: ["rebuild dist", "path map"],
+    },
+    {
+      phase: "merge",
+      path: "settings.merge.json",
+      content: "{ invalid json",
+      error: /merge target failed: settings\.json:/,
+      completedPhases: ["rebuild dist", "path map", "externals"],
+    },
+    {
+      phase: "replace",
+      path: "app.conf.replace.yaml",
+      content: "replacements: {}",
+      error: /replace target failed: app\.conf:/,
+      completedPhases: ["rebuild dist", "path map", "externals", "merge"],
+    },
+  ]) {
+    it(`does not run hooks or later phases after ${phase} fails`, async () => {
+      await put(root, `dotfiles/${path}`, content);
+      if (phase === "second path map") {
+        await put(
+          root,
+          "dotfiles/remap.data.md",
+          "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| bad-map.txt | nested/remap.data.md |  |  |\n",
+        );
+      }
+      await put(
+        root,
+        "dotfiles/marker.build.ts",
+        'export default () => Bun.write("ran.txt", "ran");',
+      );
+      const phases: string[] = [];
+      const hookEvents: string[] = [];
+
+      await assert.rejects(
+        main(
+          root,
+          "linux",
+          homeRoot,
+          (path, status) => hookEvents.push(`${path}:${status}`),
+          (phase) => phases.push(phase),
+        ),
+        error,
+      );
+
+      assert.deepEqual(phases, completedPhases);
+      assert.deepEqual(hookEvents, []);
+      assert.equal(existsSync(join(distRoot, "ran.txt")), false);
+    });
+  }
+
+  for (const generatesMap of [false, true]) {
+    it(`does not remap hook-generated entries with a ${generatesMap ? "hook-generated" : "source"} map`, async () => {
+      const map =
+        "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| generated.txt | moved.txt |  |  |\n";
+      if (!generatesMap) await put(root, "dotfiles/remap.data.md", map);
+      await put(
+        root,
+        "dotfiles/generate.build.ts",
+        `export default async function () {
+  await Bun.write("generated.txt", "generated");
+  ${generatesMap ? `await Bun.write("remap.data.md", ${JSON.stringify(map)});` : ""}
+}`,
+      );
+
+      await main(root, "linux", homeRoot);
+
+      assert.equal(await readFile(join(distRoot, "generated.txt"), "utf8"), "generated");
+      assert.equal(await readFile(join(distRoot, "remap.data.md"), "utf8"), map);
+      assert.equal(existsSync(join(distRoot, "moved.txt")), false);
+    });
+  }
+
   it("composes merge sidecars over the current home content", async () => {
     await put(
       homeRoot,
@@ -615,7 +765,7 @@ replacements:
     assert.equal(existsSync(join(distRoot, "parent")), false);
   });
 
-  it("processes external configuration created by a local hook after remapping", async () => {
+  it("leaves hook-generated external, merge, and replace sidecars unprocessed after remapping", async () => {
     await put(
       root,
       "dotfiles/remap.data.md",
@@ -624,7 +774,19 @@ replacements:
     await put(
       root,
       "dotfiles/nested/generate.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () { await writeFile("external.data.yaml", "repos:\\n  example/generated:\\n    destination: output\\n    entries: [file.txt]\\n"); }`,
+      `export default async function () {
+  await Bun.write("external.data.yaml", "repos:\\n  example/generated:\\n    destination: output\\n    entries: [file.txt]\\n");
+  await Bun.write("settings.merge.json", '{"late":true}');
+  await Bun.write("app.conf.replace.yaml", 'replacements:\\n  - pattern: home\\n    replacement: late\\n');
+}`,
+    );
+    await put(homeRoot, "moved/settings.json", '{"home":true}');
+    await put(root, "dotfiles/nested/settings.merge.json", '{"early":true}');
+    await put(homeRoot, "moved/app.conf", "mode=home\n");
+    await put(
+      root,
+      "dotfiles/nested/app.conf.replace.yaml",
+      "replacements:\n  - pattern: home\n    replacement: early\n",
     );
     await put(homeRoot, "mirrors/github.com/example/generated/file.txt", "generated\n");
     await put(
@@ -635,8 +797,80 @@ replacements:
 
     await runBuildInSubprocess("linux");
 
-    assert.equal(await readFile(join(distRoot, "moved/output/file.txt"), "utf8"), "generated\n");
+    assert.equal(existsSync(join(distRoot, "moved/output/file.txt")), false);
+    assert.equal(
+      await readFile(join(distRoot, "moved/external.data.yaml"), "utf8"),
+      "repos:\n  example/generated:\n    destination: output\n    entries: [file.txt]\n",
+    );
+    assert.equal(
+      await readFile(join(distRoot, "moved/settings.merge.json"), "utf8"),
+      '{"late":true}',
+    );
+    assert.equal(
+      await readFile(join(distRoot, "moved/settings.json"), "utf8"),
+      '{\n  "home": true,\n  "early": true\n}\n',
+    );
+    assert.equal(
+      await readFile(join(distRoot, "moved/app.conf.replace.yaml"), "utf8"),
+      "replacements:\n  - pattern: home\n    replacement: late\n",
+    );
+    assert.equal(await readFile(join(distRoot, "moved/app.conf"), "utf8"), "mode=early\n");
     assert.equal(existsSync(join(distRoot, "nested")), false);
+  });
+
+  it("executes only source hook snapshots despite external additions and overwrites", async () => {
+    const sourceHook = `import { appendFile } from "node:fs/promises";
+export default async function () {
+  const payload = await Bun.file("payload.txt").text();
+  await appendFile("snapshot.txt", "source:" + payload);
+  await Bun.write("settings.json", JSON.stringify(await Bun.file("settings.json").json()));
+  await Bun.write("app.conf", (await Bun.file("app.conf").text()).trim());
+}`;
+    const replacementHook = 'export default () => Bun.write("overwritten-ran.txt", "external");';
+    await put(root, "dotfiles/source.build.ts", sourceHook);
+    await put(
+      root,
+      "dotfiles/external.data.yaml",
+      "repos:\n  example/hooks:\n    destination: .\n    entries: [source.build.ts, added.build.ts, payload.txt, settings.merge.json, app.conf.replace.yaml]\n",
+    );
+    await put(homeRoot, "mirrors/github.com/example/hooks/source.build.ts", replacementHook);
+    await put(
+      homeRoot,
+      "mirrors/github.com/example/hooks/added.build.ts",
+      'export default () => Bun.write("added-ran.txt", "external");',
+    );
+    await put(homeRoot, "mirrors/github.com/example/hooks/payload.txt", "external payload\n");
+    await put(
+      homeRoot,
+      "mirrors/github.com/example/hooks/settings.merge.json",
+      '{"external":true}',
+    );
+    await put(
+      homeRoot,
+      "mirrors/github.com/example/hooks/app.conf.replace.yaml",
+      "replacements:\n  - pattern: home\n    replacement: external\n",
+    );
+    await put(homeRoot, "settings.json", '{"home":true}');
+    await put(homeRoot, "app.conf", "mode=home\n");
+    await put(homeRoot, "mirrors/github.com/example/hooks/.git/build-pull-time", `${Date.now()}\n`);
+
+    await runBuildInSubprocess("linux");
+
+    assert.equal(await readFile(join(distRoot, "source.build.ts"), "utf8"), replacementHook);
+    assert.equal(existsSync(join(distRoot, "added.build.ts")), true);
+    assert.equal(
+      await readFile(join(distRoot, "snapshot.txt"), "utf8"),
+      "source:external payload\n",
+    );
+    assert.equal(existsSync(join(distRoot, "overwritten-ran.txt")), false);
+    assert.equal(existsSync(join(distRoot, "added-ran.txt")), false);
+    assert.equal(
+      await readFile(join(distRoot, "settings.json"), "utf8"),
+      '{"home":true,"external":true}',
+    );
+    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "mode=external");
+    assert.equal(existsSync(join(distRoot, "settings.merge.json")), false);
+    assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
 
   it("places edited directory entries under a nested destination", async () => {
@@ -1120,25 +1354,78 @@ describe("local build hooks", () => {
     );
   });
 
-  it("runs a hook in the remapped destination folder", async () => {
+  it("resolves home and cwd from the final folder after both path maps", async () => {
     await put(
       root,
       "dotfiles/remap.data.md",
-      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode | mapped-vscode | - | - |\n",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode | staged-vscode | - | - |\n| staged-vscode | mapped-vscode.exact | - | - |\n",
     );
+    await put(homeRoot, "vscode/settings.json", '{"location":"source"}');
+    await put(homeRoot, "staged-vscode/settings.json", '{"location":"staged"}');
+    await put(homeRoot, "mapped-vscode/settings.json", '{"location":"final"}');
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-ran.txt", process.cwd());\n}\n`,
+      `export default async function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {
+  const paths = context.resolvePaths("settings.json");
+  const homeContent = await Bun.file(paths.homePath).text();
+  await Bun.write("hook-ran.txt", JSON.stringify({ cwd: process.cwd(), paths, homeContent }));
+}`,
+    );
+    const hookEvents: string[] = [];
+
+    await main(root, "linux", homeRoot, (path, status) => hookEvents.push(`${path}:${status}`));
+
+    assert.equal(existsSync(join(distRoot, "vscode")), false);
+    assert.equal(existsSync(join(distRoot, "staged-vscode")), false);
+    assert.deepEqual(hookEvents, [
+      "mapped-vscode.exact/format-settings.build.ts:start",
+      "mapped-vscode.exact/format-settings.build.ts:success",
+    ]);
+    assert.deepEqual(
+      JSON.parse(await readFile(join(distRoot, "mapped-vscode.exact/hook-ran.txt"), "utf8")),
+      {
+        cwd: join(distRoot, "mapped-vscode.exact"),
+        paths: {
+          distPath: join(distRoot, "mapped-vscode.exact/settings.json"),
+          homePath: join(homeRoot, "mapped-vscode/settings.json"),
+        },
+        homeContent: '{"location":"final"}',
+      },
+    );
+  });
+
+  it("isolates cwd, environment, and memory mutations between hooks", async () => {
+    await put(
+      root,
+      "dotfiles/01-mutate.build.ts",
+      `export default async function () {
+  await Bun.write("mutated.txt", "ran");
+  process.chdir("..");
+  process.env.BUILD_HOOK_ISOLATION = "changed";
+  (globalThis as Record<string, unknown>).buildHookMemory = "changed";
+}`,
+    );
+    await put(
+      root,
+      "dotfiles/nested/02-observe.build.ts",
+      `export default async function () {
+  await Bun.write("state.json", JSON.stringify({
+    cwd: process.cwd(),
+    environment: process.env.BUILD_HOOK_ISOLATION ?? null,
+    memory: (globalThis as Record<string, unknown>).buildHookMemory ?? null,
+  }));
+}`,
     );
 
     await main(root, "linux", homeRoot);
 
-    assert.equal(existsSync(join(distRoot, "vscode")), false);
-    assert.equal(
-      await readFile(join(distRoot, "mapped-vscode/hook-ran.txt"), "utf8"),
-      join(distRoot, "mapped-vscode"),
-    );
+    assert.equal(await readFile(join(distRoot, "mutated.txt"), "utf8"), "ran");
+    assert.deepEqual(JSON.parse(await readFile(join(distRoot, "nested/state.json"), "utf8")), {
+      cwd: join(distRoot, "nested"),
+      environment: process.env.BUILD_HOOK_ISOLATION ?? null,
+      memory: null,
+    });
   });
 
   it("runs the real vscode formatter in the remapped folder on Windows", async () => {
@@ -1273,10 +1560,19 @@ describe("manager CLI", () => {
       assert.equal(result.code, 0, result.stderr);
       const logs = result.stdout
         .split("\n")
-        .filter((line) => /^(Build |  Running |  [✓✗] |stage |command )/.test(line))
+        .filter((line) =>
+          /^(Build |  (?:rebuild dist |path map |externals |merge |replace |Running |[✓✗] )|stage |command )/.test(
+            line,
+          ),
+        )
         .map((line) => line.replace(/\(\d+\.\d{2}s\)$/, "(TIME)"));
       assert.deepEqual(logs, [
         "Build started",
+        "  rebuild dist (TIME)",
+        "  path map (TIME)",
+        "  externals (TIME)",
+        "  merge (TIME)",
+        "  replace (TIME)",
         "  Running nested/01-local.build-machine.ts",
         "  ✓ nested/01-local.build-machine.ts (TIME)",
         "  Running nested/02-shared.build.ts",
@@ -1446,26 +1742,35 @@ describe("manager CLI", () => {
     assert.equal(existsSync(join(homeRoot, "new.txt")), false);
   });
 
-  it("stops after a failed build without applying", async () => {
+  it("stops later hooks and command processing after a failed hook", async () => {
     await put(root, "dotfiles/file.txt", "new\n");
     await put(
       root,
-      "dotfiles/fail.build.ts",
+      "dotfiles/01-fail.build.ts",
       'export default function () { process.stderr.write("hook-error\\n"); throw new Error("failed"); }',
     );
+    await put(
+      root,
+      "dotfiles/02-late.build.ts",
+      'export default () => Bun.write("late.txt", "ran");',
+    );
+    await put(root, "dotfiles/done.apply.ts", 'await Bun.write("done.txt", "ran");');
 
     const result = await runManager("apply");
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /hook-error\n/);
-    assert.match(result.stderr, /local build hook failed: fail\.build\.ts/);
+    assert.match(result.stderr, /local build hook failed: 01-fail\.build\.ts/);
     assert.match(result.stdout, /^Build started$/m);
-    assert.match(result.stdout, /^  Running fail\.build\.ts$/m);
-    assert.match(result.stdout, /^  ✗ fail\.build\.ts \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^  Running 01-fail\.build\.ts$/m);
+    assert.match(result.stdout, /^  ✗ 01-fail\.build\.ts \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^Build failed \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^command apply failure \(\d+\.\d{2}s\)$/m);
+    assert.doesNotMatch(result.stdout, /^  Running 02-late\.build\.ts$/m);
     assert.doesNotMatch(result.stdout, /^stage apply start$/m);
+    assert.equal(existsSync(join(distRoot, "late.txt")), false);
     assert.equal(existsSync(join(homeRoot, "file.txt")), false);
+    assert.equal(existsSync(join(homeRoot, "done.txt")), false);
   });
 
   it("logs a later stage failure and the command failure", async () => {
