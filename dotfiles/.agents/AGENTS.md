@@ -42,6 +42,7 @@
 - `python`は直接使わずに `uv` 経由で使う。独立した単一スクリプトは先頭に PEP 723 インラインメタデータを入れ、`pyproject.toml` 不要で `uv run script.py` だけで実行できるようにする。
 - タスクランナーは基本的に `just` を使う。ただし JS プロジェクトの場合は `package.json` の npm-scripts を使う。
 - JS/TS のパッケージマネージャーは基本的に `bun` を使う。既存プロジェクトに `packageManager` フィールドやロックファイルがある場合はそれを優先する。
+- JS/TS の新規構築では Vite+（`vp`）を使い、format・lint・test は `vp fmt`・`vp lint`・`vp test` 経由で実行する。設定は `vite.config.ts` にまとめる。既存プロジェクトでは既存の設定・依存を優先し、互換性のない依存がある場合は構成を確認する。
 - 上記で規定されていない事項は都度確認。
 
 ## Build
@@ -72,7 +73,7 @@
 編集後は必ず該当するリンター、フォーマッター、タイプチェック、テストを実行すること。完了報告では、実行した検証はコマンドと結果を根拠として示し、未実行の検証は理由を示す。プロジェクトに既存の設定・依存があればそれを優先し、なければ以下のデフォルトを使う。
 
 - **Python**: `ruff format`, `ruff check`, `ty`, `pytest`
-- **JavaScript/TypeScript**: (`vp format` or `oxfmt`), (`vp check` or `oxlint`), `vitest`
+- **JavaScript/TypeScript**: `vp fmt`, `vp lint`, `vp test`
 - **Markdown**: `~/.bun/bin/prettier --parser markdown --plugin="$HOME/.bun/install/global/node_modules/prettier-markdown-table/index.js" --write <file.md>`
 
 ## Out-of-Scope Tickets
