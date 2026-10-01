@@ -343,7 +343,43 @@ static void test_zenkaku_hankaku_toggles_ascii(void) {
     check(option("ascii_mode"), "idle Zenkaku_Hankaku must switch IME OFF");
     check(!option("_kagiroi_ascii_input"),
           "idle Zenkaku_Hankaku must not enter the ascii input mode");
-    rime->set_option(session, "ascii_mode", 0);
+    check(!composing(), "idle Zenkaku_Hankaku must not create a composition");
+    static const struct {
+        int modifier;
+        const char* description;
+    } ignored_toggles[] = {
+        {1 << 30, "released Zenkaku_Hankaku must keep IME OFF"},
+        {1, "Shift+Zenkaku_Hankaku must keep IME OFF"},
+        {1 << 2, "Control+Zenkaku_Hankaku must keep IME OFF"},
+        {1 << 3, "Alt+Zenkaku_Hankaku must keep IME OFF"},
+        {1 << 26, "Super+Zenkaku_Hankaku must keep IME OFF"},
+    };
+    for (size_t i = 0; i < sizeof(ignored_toggles) / sizeof(ignored_toggles[0]); ++i) {
+        press_modifier(kZenkakuHankaku, ignored_toggles[i].modifier);
+        check(option("ascii_mode"), ignored_toggles[i].description);
+    }
+    check(!rime->process_key(session, kMuhenkan, 0),
+          "Muhenkan in IME OFF must pass through to the frontend");
+    check(option("ascii_mode"), "Muhenkan in IME OFF must keep IME OFF");
+    const char* off_text = "a1. ";
+    for (const char* p = off_text; *p; ++p) {
+        check(!rime->process_key(session, *p, 0),
+              "ordinary text in IME OFF must pass through to the frontend");
+        check(option("ascii_mode"), "ordinary text must keep IME OFF");
+    }
+    char commit[256];
+    check(!composing(), "other key events in IME OFF must not create a composition");
+    check(!take_commit(commit, sizeof(commit)), "other key events in IME OFF must not commit");
+    check(rime->process_key(session, kZenkakuHankaku, 0),
+          "a second idle Zenkaku_Hankaku must be handled");
+    check(!option("ascii_mode"), "a second idle Zenkaku_Hankaku must restore Japanese input");
+    check(!option("_kagiroi_ascii_input"), "the idle round trip must not enter the ascii input mode");
+    check(!composing(), "the idle round trip must not create a composition");
+    press_modifier(kZenkakuHankaku, 1 << 30);
+    check(!option("ascii_mode"), "the restored toggle's release must keep Japanese input");
+    type_text("kana");
+    check(preedit_equals("かな"), "kana after the idle round trip must display Japanese preedit");
+    press(kEscape);
     type_text("kanji");
     press(kZenkakuHankaku);
     check(option("_kagiroi_ascii_input"),
@@ -429,7 +465,9 @@ static void test_kana_muhenkan_one_way_switches(void) {
     check(option("ascii_mode"), "idle Muhenkan must switch IME OFF");
     check(!option("_kagiroi_ascii_input"),
           "idle Muhenkan must not enter the ascii input mode");
-    rime->set_option(session, "ascii_mode", 0);
+    check(rime->process_key(session, kZenkakuHankaku, 0),
+          "Zenkaku_Hankaku must handle the return from Muhenkan's IME OFF");
+    check(!option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese input after idle Muhenkan");
 
     /* Muhenkan keeps the composition unconfirmed like the toggle. */
     fresh_session();

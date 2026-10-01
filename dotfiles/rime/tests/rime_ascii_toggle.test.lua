@@ -38,19 +38,31 @@ assert(press() == kAccepted, "idle Zenkaku_Hankaku must be consumed")
 assert(context:get_option("ascii_mode"), "idle Zenkaku_Hankaku must switch IME OFF")
 assert(not context:get_option("_kagiroi_ascii_input"),
     "idle Zenkaku_Hankaku must not enter the ascii input mode")
-context:set_option("ascii_mode", false)
+for _, modifiers in ipairs({
+    { release = true }, { shift = true }, { ctrl = true }, { alt = true }, { super = true },
+    { keycode = 0xff22 }, { keycode = string.byte("a") }, { keycode = string.byte("1") },
+    { keycode = string.byte(".") }, { keycode = string.byte(" ") },
+}) do
+    assert(press(modifiers) == kNoop, "other key events in IME OFF must pass through")
+    assert(context:get_option("ascii_mode"), "other key events must keep IME OFF")
+    assert(not context:get_option("_kagiroi_ascii_input") and context.input == "",
+        "other key events in IME OFF must not create a composition")
+    assert(#context.commits == 0, "other key events in IME OFF must not commit")
+end
+assert(press() == kAccepted, "a second idle Zenkaku_Hankaku must be consumed")
+assert(not context:get_option("ascii_mode"), "a second idle Zenkaku_Hankaku must restore Japanese input")
+assert(not context:get_option("_kagiroi_ascii_input") and context.input == "",
+    "the idle round trip must not enter the ascii input mode or create a composition")
+assert(#context.commits == 0, "the idle round trip must not commit")
+
 assert(press({ keycode = 0xff22 }) == kAccepted, "idle Muhenkan must be consumed")
 assert(context:get_option("ascii_mode"), "idle Muhenkan must switch IME OFF")
 assert(not context:get_option("_kagiroi_ascii_input"),
     "idle Muhenkan must not enter the ascii input mode")
-context:set_option("ascii_mode", false)
-
--- While IME is OFF the keys stay with the frontend and change nothing.
-context:set_option("ascii_mode", true)
-assert(press() == kNoop, "Zenkaku_Hankaku in IME OFF must pass through")
 assert(press({ keycode = 0xff22 }) == kNoop, "Muhenkan in IME OFF must pass through")
-assert(context:get_option("ascii_mode"), "the pass-through must keep IME OFF")
-context:set_option("ascii_mode", false)
+assert(context:get_option("ascii_mode"), "Muhenkan in IME OFF must keep IME OFF")
+assert(press() == kAccepted, "Zenkaku_Hankaku must return from Muhenkan's IME OFF")
+assert(not context:get_option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese input")
 
 for _, modifiers in ipairs({
     { release = true }, { shift = true }, { ctrl = true }, { alt = true }, { super = true },

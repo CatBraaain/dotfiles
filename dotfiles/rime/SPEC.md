@@ -62,7 +62,7 @@ Windows の Weasel と Linux の fcitx5-rime で Kagiroi を使用するとき�
 | `Backspace` | 末尾の1文字を削る。空になったときは、入り方に応じて IME OFF または日本語入力へ移る |
 | `Esc` | 未確定の文字列をすべて削除する。空になったときは `Backspace` と同じ |
 
-IME OFF のキーは Rime で処理せず、半角文字としてアプリへ直接入力する。
+IME OFF 中は、非修飾キー押下の `Zenkaku_Hankaku` で日本語入力へ戻る。キー release と修飾キー付きの `Zenkaku_Hankaku` は切り替えない。それ以外のキー（`Muhenkan` を含む）は、従来どおり半角文字をアプリへ直接入力するか、通常の frontend 動作に従う。
 
 ### 日本語入力の状態
 
