@@ -6,12 +6,20 @@ import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import { isMap, parseDocument, stringify as stringifyYaml, type Pair, type ParsedNode } from "yaml";
+import {
+  isMap,
+  parseDocument,
+  stringify as stringifyYaml,
+  visit,
+  type Pair,
+  type ParsedNode,
+} from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 
 type FileFormat = "json" | "toml" | "yaml";
 type MergeOp = "append" | "remove" | "replace" | "unset";
 type PlainObject = Record<string, unknown>;
+type RawJsonNumber = { readonly rawJSON: string };
 type Operation = { key: string; value: unknown };
 type Operations = Map<string, Partial<Record<MergeOp, Operation>>>;
 type Entry = { path: string; isDirectory: boolean };
@@ -21,6 +29,11 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const sidecarPattern = /\.(merge|merge-machine)\.(json|yaml|toml)$/;
+const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+const rawJson = JSON as typeof JSON & {
+  rawJSON(source: string): RawJsonNumber;
+  isRawJSON(value: unknown): value is RawJsonNumber;
+};
 
 const fileFormats = {
   json: {
@@ -118,6 +131,20 @@ function parseLayer(content: string, format: FileFormat): Layer {
     uniqueKeys: false,
   });
   if (document.errors.length > 0) throw document.errors[0];
+  if (format === "json") {
+    visit(document, {
+      Scalar(key, node) {
+        if (
+          key !== "key" &&
+          typeof node.value === "number" &&
+          node.source !== undefined &&
+          jsonNumberPattern.test(node.source)
+        ) {
+          node.value = rawJson.rawJSON(node.source);
+        }
+      },
+    });
+  }
   if (!isMap(document.contents)) return { normal: document.toJSON() ?? {}, operations: new Map() };
 
   const operations: Operations = new Map();
@@ -176,11 +203,11 @@ function parsePairs(
         hasOperations = true;
         continue;
       }
-      normal[key] = child.normal;
+      setOwnProperty(normal, key, child.normal);
       hasOperations ||= child.hasOperations;
       continue;
     }
-    normal[key] = pair.value ? toJS(pair.value, null, context) : undefined;
+    setOwnProperty(normal, key, pair.value ? toJS(pair.value, null, context) : undefined);
   }
   return { normal, hasOperations };
 }
@@ -275,7 +302,12 @@ function readString(content: string, start: number): number {
 }
 
 function isPlainObject(value: unknown): value is PlainObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !rawJson.isRawJSON(value)
+  );
 }
 
 function deepMerge(base: unknown, layer: unknown): unknown {
@@ -283,7 +315,8 @@ function deepMerge(base: unknown, layer: unknown): unknown {
 
   const merged: PlainObject = { ...base };
   for (const [key, layerValue] of Object.entries(layer)) {
-    merged[key] = deepMerge(merged[key], layerValue);
+    const baseValue = Object.hasOwn(merged, key) ? merged[key] : undefined;
+    setOwnProperty(merged, key, deepMerge(baseValue, layerValue));
   }
   return merged;
 }
@@ -367,7 +400,31 @@ function removeAtPath(root: PlainObject, path: string, operation: Operation): vo
 }
 
 function arrayElementsMatch(left: unknown, right: unknown): boolean {
-  return Bun.deepEquals(left, right);
+  return Bun.deepEquals(numericValues(left), numericValues(right));
+}
+
+function numericValues(value: unknown, seen = new Map<object, unknown>()): unknown {
+  if (rawJson.isRawJSON(value)) return Number(value.rawJSON);
+  if (typeof value !== "object" || value === null) return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
+  if (seen.has(value)) return seen.get(value);
+
+  const result = Array.isArray(value) ? [] : Object.create(prototype);
+  seen.set(value, result);
+  for (const [key, child] of Object.entries(value)) {
+    setOwnProperty(result, key, numericValues(child, seen));
+  }
+  return result;
+}
+
+function setOwnProperty(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
 }
 
 async function collectEntries(directory: string): Promise<Entry[]> {

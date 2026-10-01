@@ -297,6 +297,8 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | YAML | YAML 形式、改行コード LF |
 | TOML | TOML 形式、末尾改行 1 つ、改行コード LF |
 
+JSON 数値は、home・plain base・共有 merge・マシン固有 merge の採用元にある有効な JSON 数値トークンを保持する。ネストしたオブジェクト・配列要素・`$replace` / `$append` の値も同様とし、小数末尾のゼロ・指数表記・負のゼロ・整数表記を維持する。後段で上書きした値は後段の表記を採用し、`$remove` の一致は表記によらず従来の値で判定する。
+
 JSON の共有・マシン固有 merge sidecar および plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の共有・マシン固有 merge sidecar および plain base の TOML 入力にはコメントを書ける。
 
 ### 記述例
