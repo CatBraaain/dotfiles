@@ -120,25 +120,25 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 ## build: merge 変換
 
-JSON/YAML/TOML の設定ファイルを、home 現状とリポジトリ側レイヤーから build 時に合成し、dist へ完成形を書き出す。
+JSON/YAML/TOML/INI の設定ファイルを、home 現状とリポジトリ側レイヤーから build 時に合成し、dist へ完成形を書き出す。
 
 ### 入力ファイルの種類
 
-同一ディレクトリ内で、出力ファイル名 `<name>.{json,yaml,toml}` に対し、次の sidecar を使う。
+同一ディレクトリ内で、出力ファイル名 `<name>.{json,yaml,toml,ini}` に対し、次の sidecar を使う。
 
 | ファイル | 管理 | 役割 |
 | --- | --- | --- |
-| `<name>.{json,yaml,toml}` | git | plain base（リポジトリのベース本体。任意） |
-| `<name>.merge.{json,yaml,toml}` | git | 共有 merge レイヤー（任意） |
-| `<name>.merge-machine.{json,yaml,toml}` | gitignore | マシン固有 merge レイヤー（任意） |
+| `<name>.{json,yaml,toml,ini}` | git | plain base（リポジトリのベース本体。任意） |
+| `<name>.merge.{json,yaml,toml,ini}` | git | 共有 merge レイヤー（任意） |
+| `<name>.merge-machine.{json,yaml,toml,ini}` | gitignore | マシン固有 merge レイヤー（任意） |
 
-`<name>.merge.{json,yaml,toml}` または `<name>.merge-machine.{json,yaml,toml}` のどちらかが存在するとき、その `<name>.{json,yaml,toml}` は merge ターゲットとなる。`<name>.machine.{json,yaml,toml}` は sidecar として認識せず、通常のファイルとして dist に残る。merge ターゲットでないファイルも dist へそのまま残す。
+`<name>.merge.{json,yaml,toml,ini}` または `<name>.merge-machine.{json,yaml,toml,ini}` のどちらかが存在するとき、その `<name>.{json,yaml,toml,ini}` は merge ターゲットとなる。`<name>.machine.{json,yaml,toml,ini}` は sidecar として認識せず、通常のファイルとして dist に残る。merge ターゲットでないファイルも dist へそのまま残す。
 
 ### ターゲット解決
 
 merge ターゲットごとに、次を決める。
 
-- 出力パス: sidecar と同じディレクトリの `<name>.{json,yaml,toml}`
+- 出力パス: sidecar と同じディレクトリの `<name>.{json,yaml,toml,ini}`
 - home パス: 出力パスを、差分検知の対応関係（§差分検知）と同じ規則で home 相対パスへ変換したもの
 
 sidecar 名から `<name>` への対応:
@@ -149,19 +149,21 @@ sidecar 名から `<name>` への対応:
 | `foo.merge-machine.yaml` | `foo.yaml` |
 | `foo.merge.toml` | `foo.toml` |
 | `foo.merge-machine.toml` | `foo.toml` |
+| `foo.merge.ini` | `foo.ini` |
+| `foo.merge-machine.ini` | `foo.ini` |
 
 同一 `<name>` に sidecar が複数あるときは 1 ターゲットにまとめる。
 
 ### レイヤーと適用順
 
-merge ターゲットごとに、存在するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON・TOML。YAML パース結果が null/undefined のときも `{}` 扱い）。
+merge ターゲットごとに、存在するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON・TOML・INI。YAML パース結果が null/undefined のときも `{}` 扱い）。
 
 | 順 | レイヤー | ソース |
 | --- | --- | --- |
 | 1 | home | 上記の home パス。ファイルが存在しない・空のとき `{}` |
-| 2 | plain base | 同ディレクトリの `<name>.{json,yaml,toml}`（sidecar ではない本体） |
-| 3 | merge | `<name>.merge.{json,yaml,toml}` |
-| 4 | machine | `<name>.merge-machine.{json,yaml,toml}` |
+| 2 | plain base | 同ディレクトリの `<name>.{json,yaml,toml,ini}`（sidecar ではない本体） |
+| 3 | merge | `<name>.merge.{json,yaml,toml,ini}` |
+| 4 | machine | `<name>.merge-machine.{json,yaml,toml,ini}` |
 
 後段レイヤーほど優先される。各レイヤーへの適用は §パッチ適用 に従う。
 
@@ -169,8 +171,8 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 
 merge ターゲットごとに:
 
-1. 合成結果を canonical 形式（§パッチ適用）で `<name>.{json,yaml,toml}` に書き出す。plain base が存在したときは完成形で上書きする。
-2. 入力として使った sidecar（`<name>.merge.{json,yaml,toml}`、`<name>.merge-machine.{json,yaml,toml}`）を dist から削除する。
+1. 合成結果を canonical 形式（§パッチ適用）で `<name>.{json,yaml,toml,ini}` に書き出す。plain base が存在したときは完成形で上書きする。
+2. 入力として使った sidecar（`<name>.merge.{json,yaml,toml,ini}`、`<name>.merge-machine.{json,yaml,toml,ini}`）を dist から削除する。
 
 手書きの設定ファイルにも一般則が適用される。sidecar を置いたファイルは merge ターゲットとなり、その内容が plain base レイヤーとして合成され、完成形で上書きされる。sidecar を持たない plain ファイルは対象外で、dist にそのまま残る。
 
@@ -210,7 +212,7 @@ merge 変換の後、`<name>.replace.yaml` があるとき次を処理する。
 
 ## パッチ適用
 
-merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/TOML）は、ここで定義する 1 回分のパッチ適用に従う。
+merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/TOML/INI）は、ここで定義する 1 回分のパッチ適用に従う。
 
 ### 1 レイヤー内の処理順
 
@@ -297,10 +299,59 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | JSON | 2 スペースインデント、末尾改行 1 つ、改行コード LF |
 | YAML | YAML 形式、改行コード LF |
 | TOML | TOML 形式、末尾改行 1 つ、改行コード LF |
+| INI | UTF-8 / BOM なし、末尾改行 1つ、改行コード LF。値の規則は §INI の操作と出力 |
 
 JSON 数値は、home・plain base・共有 merge・マシン固有 merge の採用元にある有効な JSON 数値トークンを保持する。ネストしたオブジェクト・配列要素・`$replace` / `$append` の値も同様とし、小数末尾のゼロ・指数表記・負のゼロ・整数表記を維持する。後段で上書きした値は後段の表記を採用し、`$remove` の一致は表記によらず従来の値で判定する。
 
 JSON の共有・マシン固有 merge sidecar および plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の共有・マシン固有 merge sidecar および plain base の TOML 入力にはコメントを書ける。
+
+### INI の入力と値
+
+INI はルートのキーと1段のセクションを持ち、値をすべて文字列として扱う。各レイヤーに同じ読み書き規則を適用する。
+
+| 入力 | 読み取り結果 |
+| --- | --- |
+| UTF-8、先頭の UTF-8 BOM、LF / CRLF | BOM・物理改行を値に含めず受理する |
+| 空行、行頭空白後の `#` 行 | 読み飛ばす |
+| `[Section]` | 大小文字を区別した単一セクション。名前内の点は文字通り扱う |
+| `Key=Value` | 最初の `=` を区切りとし、残りを値とする。行頭のスペース・タブは装飾として扱う |
+| 値の前後空白、引用符、`=` / `#` / `;`、数値・真偽値・`null` の表記 | 型変換・引用符除去・コメント除去をせず文字列として保持する |
+| 値の `\\` / `\r` / `\n` | それぞれバックスラッシュ1文字・CR・LFへ復号する。それ以外のバックスラッシュ列と末尾バックスラッシュは保持する |
+| `Key=` | 空文字列 |
+
+受理する名前は空でなく、前後空白と NUL / CR / LF を含まない。セクション名は角括弧を含まず、ヘッダーの後にはスペース・タブだけを置ける。キー名は `=` を含まず、先頭が `[` / `#` ではない。キー名の点・`[]`・引用符・`;` は通常文字として扱う。
+
+名前と操作対象の各名前について、`Object.prototype` が持つプロパティ名（`__proto__` / `constructor` / `toString` など）と `prototype` は予約名として異常終了する。
+
+同一入力内の通常キー重複・セクション重複は異常終了する。ルート通常キーとセクションが同じ名前になる入力、およびレイヤー間の通常マージで同じルート名が文字列とセクションの両方になる場合も異常終了する。明示的な操作によるセクションの置換・削除は操作規則に従う。
+
+不正 UTF-8、NUL、裸の CR、正しくないヘッダー、通常の裸キー（`=` なし）、上記の名前違反は異常終了する。入力エラーは対象の home 相対パスと、行番号または名前を含む。物理的な多行値は使わず、値内の改行を `\r` / `\n` で記述する。
+
+### INI の操作と出力
+
+INI でも一般の操作キー認識条件・操作順・対象がない場合の規則を適用する。ルートでは単一名を対象とし、セクション内ではそのセクションの単一キーを対象にする。認識された操作の対象名、または操作を置くセクション名に点がある場合は、通常名とパスの区切りが曖昧になるため異常終了する。通常キーとセクション名の点は保持する。
+
+| 記述 | 操作値と結果 |
+| --- | --- |
+| `Key.$replace=Value` | 文字列で既存の値を置換する |
+| `Key.$unset=true` / `Key.$unset=` / 裸の `Key.$unset` | 対象を削除する。実行対象の unset が他の値を持つ場合は異常終了する |
+| `Key.$append=...` / `Key.$remove=...` | 値は文字列なので、実行時に既存の配列値必須エラーになる |
+
+新規キーは操作キーではなく通常代入で作成する。replace により無視される unset の値は検証しない。空セクションは保持する。
+
+出力はルートのキーを全セクションより前に置き、それぞれのマップ内では JavaScript のプロパティ列挙順に書く（整数インデックス名は昇順）。セクションを `[Section]`、値を `Key=Value` と書き、値のバックスラッシュ・CR・LFを入力規則の逆にエスケープする。値の引用符・空白は値の一部として保持し、追加の引用符を付けない。コメント・インデント・装飾空白・空行は保持しない。空の合成結果は LF 1つとする。
+
+例: `basic.merge.ini`
+
+```ini
+[Output]
+Mode=Advanced
+[AdvOut]
+RecFormat2=mp4
+RecRB=true
+RecRBTime=1800
+OldSetting.$unset=true
+```
 
 ### 記述例
 
@@ -378,7 +429,7 @@ dist を再帰走査し、home の対応するエントリと対照する。エ�
 - symlink は、リンク先（末尾改行 1 つを除いた内容）を比較する。
 - 実行権は、linux と darwin で owner 実行権の有無を比較する。windows では実行権を比較しない。
 
-dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、名前が `external.data-machine.yaml` のエントリ、および名前が `.build.<拡張子>`、`.build-machine.<拡張子>`、`.apply.<拡張子>`、`.apply-machine.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`external.data.machine.yaml` は `.data.` を含むため同じく対象外となる。`.data.` は build ステージのデータファイルのための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。フックが生成した `node_modules/` は通常のエントリと同じく差分検知・適用の対象になる。`<name>.machine.{json,yaml,toml}` と `.edit.ts` は、上記の除外条件に当たらなければ通常のエントリとして差分検知・適用される。`.edit.ts` は build フックとして実行されない。
+dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、名前が `external.data-machine.yaml` のエントリ、および名前が `.build.<拡張子>`、`.build-machine.<拡張子>`、`.apply.<拡張子>`、`.apply-machine.<拡張子>` で終わるファイルは、差分検知と適用の対象外である。`external.data.machine.yaml` は `.data.` を含むため同じく対象外となる。`.data.` は build ステージのデータファイルのための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。フックが生成した `node_modules/` は通常のエントリと同じく差分検知・適用の対象になる。`<name>.machine.{json,yaml,toml,ini}` と `.edit.ts` は、上記の除外条件に当たらなければ通常のエントリとして差分検知・適用される。`.edit.ts` は build フックとして実行されない。
 
 | dist | home | 分類 |
 | --- | --- | --- |

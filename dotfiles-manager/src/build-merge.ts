@@ -1,10 +1,11 @@
 // Merge composition stage of the build (spec: SPEC.md §build: merge 変換,
-// §パッチ適用): composes JSON/YAML/TOML targets from the home tree, plain
+// §パッチ適用): composes JSON/YAML/TOML/INI targets from the home tree, plain
 // bases, and merge sidecars, then writes the finished value to dist.
 import { existsSync } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
+import { parse as parseIni, stringify as stringifyIni } from "js-ini";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   isMap,
@@ -16,7 +17,7 @@ import {
 } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 
-type FileFormat = "json" | "toml" | "yaml";
+type FileFormat = "json" | "toml" | "yaml" | "ini";
 type MergeOp = "append" | "remove" | "replace" | "unset";
 type PlainObject = Record<string, unknown>;
 type RawJsonNumber = { readonly rawJSON: string };
@@ -28,7 +29,8 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const sidecarPattern = /\.(merge|merge-machine)\.(json|yaml|toml)$/;
+const sidecarPattern = /\.(merge|merge-machine)\.(json|yaml|toml|ini)$/;
+const iniReservedNames = new Set([...Object.getOwnPropertyNames(Object.prototype), "prototype"]);
 const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 const rawJson = JSON as typeof JSON & {
   rawJSON(source: string): RawJsonNumber;
@@ -36,6 +38,7 @@ const rawJson = JSON as typeof JSON & {
 };
 
 const fileFormats = {
+  ini: { stringify: stringifyIniMerge },
   json: {
     stringify: (value: unknown) => `${JSON.stringify(value, null, 2)}\n`,
   },
@@ -82,6 +85,7 @@ async function composeMergeTarget(
 
   let value: unknown = {};
   for (const layer of layers) {
+    if (target.format === "ini") validateIniMerge(value, layer.normal);
     value = applyLayer(value, layer);
   }
 
@@ -94,11 +98,7 @@ async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
   for (const entry of await collectEntries(distDir)) {
     if (entry.isDirectory || !basename(entry.path).match(sidecarPattern)) continue;
 
-    const format: FileFormat = entry.path.endsWith(".yaml")
-      ? "yaml"
-      : entry.path.endsWith(".toml")
-        ? "toml"
-        : "json";
+    const format = basename(entry.path).match(sidecarPattern)![2] as FileFormat;
     const outputPath = join(
       dirname(entry.path),
       basename(entry.path).replace(sidecarPattern, `.${format}`),
@@ -116,6 +116,16 @@ async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
 
 async function readLayer(path: string, format: FileFormat): Promise<Layer> {
   if (!existsSync(path)) return { normal: {}, operations: new Map() };
+  if (format === "ini") {
+    const bytes = await readFile(path);
+    let content: string;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      throw new Error(`invalid INI UTF-8: ${basename(path)}`, { cause: error });
+    }
+    return parseIniLayer(content);
+  }
   const content = await readFile(path, "utf-8");
   if (content.trim() === "") return { normal: {}, operations: new Map() };
   return parseLayer(content, format);
@@ -160,6 +170,139 @@ function parseLayer(content: string, format: FileFormat): Layer {
   };
   const { normal } = parsePairs(document.contents.items, "", operations, yamlContext);
   return { normal, operations };
+}
+
+function parseIniLayer(content: string): Layer {
+  const operations: Operations = new Map();
+  const operationSections = new Set<string>();
+  const normal = parseIni(prepareIniLines(content), {
+    comment: "#",
+    delimiter: "=",
+    nothrow: false,
+    autoTyping: (guarded, section, key) => {
+      if (typeof section !== "string") throw new Error("INI section name must be a string");
+      const value = guarded.slice(1, -1).replace(/\\([\\rn])/g, (_, escaped: string) => {
+        if (escaped === "r") return "\r";
+        if (escaped === "n") return "\n";
+        return "\\";
+      });
+      const operation = matchOperationKey(key);
+      if (operation) {
+        const path = section ? `${section}.${operation.path}` : operation.path;
+        registerOperation(operations, path, operation.op, `${path}.$${operation.op}`, value);
+        if (section) operationSections.add(section);
+      }
+      return value;
+    },
+    keyMergeStrategy: (section, key, value: unknown) => {
+      if (matchOperationKey(key)) return;
+      if (Object.hasOwn(section, key)) throw new Error(`duplicate INI key: ${key}`);
+      setOwnProperty(section, key, value);
+    },
+  });
+  for (const section of operationSections) {
+    const values = normal[section];
+    if (isPlainObject(values) && Object.keys(values).length === 0) delete normal[section];
+  }
+  for (const [path, pathOperations] of operations) {
+    const unset = pathOperations.unset;
+    if (!pathOperations.replace && unset && unset.value !== "true" && unset.value !== "") {
+      throw new Error(`merge unset value must be true or empty: ${path}.$unset`);
+    }
+  }
+  return { normal, operations };
+}
+
+function prepareIniLines(content: string): string {
+  const sections = new Set<string>();
+  const rootKeys = new Set<string>();
+  let section = "";
+  return content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((rawLine, index) => {
+      const lineNumber = index + 1;
+      if (/[\0\r]/.test(rawLine)) throw new Error(`invalid INI character at line ${lineNumber}`);
+      const line = rawLine.replace(/^[ \t]+/, "");
+      if (line.trim() === "" || line.startsWith("#")) return "";
+      if (line.startsWith("[")) {
+        const header = /^\[([^[\]]+)\][ \t]*$/.exec(line);
+        if (!header) throw new Error(`invalid INI header at line ${lineNumber}`);
+        section = header[1]!;
+        validateIniName(section);
+        if (sections.has(section)) throw new Error(`duplicate INI section: ${section}`);
+        if (rootKeys.has(section)) throw new Error(`INI root/section collision: ${section}`);
+        sections.add(section);
+        return `[${section}]`;
+      }
+      const delimiter = line.indexOf("=");
+      const key = delimiter === -1 ? line : line.slice(0, delimiter);
+      validateIniName(key);
+      if (key.startsWith("[") || key.startsWith("#")) throw new Error(`invalid INI key: ${key}`);
+      const operation = matchOperationKey(key);
+      if (operation) {
+        validateIniName(operation.path);
+        if (operation.path.includes(".") || section.includes(".")) {
+          throw new Error(`ambiguous INI operation: ${section ? `${section}.` : ""}${key}`);
+        }
+      }
+      if (delimiter === -1 && operation?.op !== "unset") {
+        throw new Error(`INI key requires '=' at line ${lineNumber}: ${key}`);
+      }
+      if (!section && !operation) {
+        if (sections.has(key)) throw new Error(`INI root/section collision: ${key}`);
+        rootKeys.add(key);
+      }
+      const value = delimiter === -1 ? "" : line.slice(delimiter + 1);
+      // js-ini trims values; guards protect their edges without replacing the real value.
+      return `${key}=~${value}~`;
+    })
+    .join("\n");
+}
+
+function validateIniName(name: string): void {
+  if (name === "" || name.trim() !== name || /[\0\r\n]/.test(name)) {
+    throw new Error(`invalid INI name: ${JSON.stringify(name)}`);
+  }
+  if (iniReservedNames.has(name)) throw new Error(`reserved INI name: ${name}`);
+}
+
+function validateIniMerge(base: unknown, normal: unknown): void {
+  if (!isPlainObject(base) || !isPlainObject(normal)) throw new Error("INI root must be a map");
+  for (const [key, value] of Object.entries(normal)) {
+    if (Object.hasOwn(base, key) && isPlainObject(base[key]) !== isPlainObject(value)) {
+      throw new Error(`INI root/section collision: ${key}`);
+    }
+  }
+}
+
+function stringifyIniMerge(value: unknown): string {
+  if (!isPlainObject(value)) throw new Error("INI root must be a map");
+  const rootValues: Record<string, string> = {};
+  const sections: Record<string, Record<string, string>> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (typeof child === "string") {
+      rootValues[key] = escapeIniValue(child);
+      continue;
+    }
+    if (!isPlainObject(child)) throw new Error(`INI section must be a map: ${key}`);
+    const values: Record<string, string> = {};
+    for (const [name, text] of Object.entries(child)) {
+      if (typeof text !== "string") throw new Error(`INI value must be a string: ${key}.${name}`);
+      values[name] = escapeIniValue(text);
+    }
+    sections[key] = values;
+  }
+  const options = { blankLine: false, spaceBefore: false, spaceAfter: false };
+  return (
+    [stringifyIni(rootValues, options), stringifyIni(sections, options)]
+      .filter((block) => block !== "")
+      .join("\n") + "\n"
+  );
+}
+
+function escapeIniValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
 }
 
 // Apply one parsed layer to a base value following the spec §パッチ適用.

@@ -4,6 +4,7 @@
   "type": "module",
   "main": "./src/cli.ts",
   "dependencies": {
+    "js-ini": "1.6.0",
     "smol-toml": "^1.4.2",
     "yaml": "^2.8.1"
   },

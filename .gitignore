@@ -10,5 +10,6 @@ dotfiles/.wslconfig
 dotfiles/**/*.merge-machine.json
 dotfiles/**/*.merge-machine.yaml
 dotfiles/**/*.merge-machine.toml
+dotfiles/**/*.merge-machine.ini
 dotfiles/.agents/skills.exact/local/
 undotfiles/nix/flake.lock
