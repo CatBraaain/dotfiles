@@ -502,10 +502,9 @@ static void test_kana_muhenkan_one_way_switches(void) {
     check(composing(), "the restored reading must keep composing");
 }
 
-/* SPEC: main-row digits append their full-width form and keypad digits and
- * KP_Decimal append their own form while idle or typing; during conversion
- * and with the menu visible the keys confirm the unconfirmed string and
- * start a fresh input (dotfiles/rime/SPEC.md). */
+/* SPEC: digits append while idle or typing. During conversion, digits
+ * confirm the selection and start fresh input; KP_Decimal instead appends
+ * to the unconfirmed conversion (dotfiles/rime/SPEC.md). */
 static void test_digits_append_unconfirmed(void) {
     static const struct {
         int key;
@@ -542,7 +541,22 @@ static void test_digits_append_unconfirmed(void) {
             press(cases[i].key);
             char commit[256];
             char description[128];
-            if (state == 2) {
+            if (state == 2 && cases[i].key == kKeypadDecimal) {
+                snprintf(expected, sizeof(expected), "%s%s", selected,
+                         cases[i].appended);
+                check(preedit_equals(expected),
+                      "KP_Decimal during conversion must append ． to the selection");
+                check(!take_commit(commit, sizeof(commit)),
+                      "KP_Decimal during conversion must not commit");
+                RIME_STRUCT(RimeContext, context);
+                if (current_menu(&context)) {
+                    check(context.menu.num_candidates == 0,
+                          "KP_Decimal must close the candidate list");
+                    rime->free_context(&context);
+                } else {
+                    check(False, "KP_Decimal must keep a queryable context");
+                }
+            } else if (state == 2) {
                 /* The key confirms the selection and starts a fresh input. */
                 snprintf(expected, sizeof(expected), "%s", cases[i].appended);
                 snprintf(description, sizeof(description), "key %x in state %d must start a fresh input with its width",
@@ -596,15 +610,28 @@ static void test_henkan_promotes_katakana(void) {
     check(!take_commit(commit, sizeof(commit)), "Henkan must not commit");
 }
 
-/* SPEC: after Henkan, Space keeps the first candidate selected with the
- * list hidden, Enter commits the katakana, and the next typing hides
- * candidates again. */
+/* SPEC: Space after Henkan selects the ordinary first candidate with the
+ * list hidden; Enter commits it and the next typing hides candidates again. */
 static void test_henkan_space_enter_chain(void) {
+    char ordinary_first[256] = "";
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    if (current_menu(&context) && context.composition.preedit) {
+        snprintf(ordinary_first, sizeof(ordinary_first), "%s",
+                 context.composition.preedit);
+        rime->free_context(&context);
+    } else {
+        rime->free_context(&context);
+    }
+    check(ordinary_first[0] != '\0',
+          "a fresh kanji conversion must show its ordinary first candidate");
+
     fresh_session();
     type_text("kanji");
     press(kSpace);
     press(kHenkan);
-    RIME_STRUCT(RimeContext, context);
     if (!current_menu(&context)) {
         check(False, "the context must exist after Henkan");
         return;
@@ -620,14 +647,32 @@ static void test_henkan_space_enter_chain(void) {
     check(context.menu.num_candidates == 0,
           "Space after Henkan must keep the candidate list hidden");
     check(context.composition.preedit &&
-              strcmp(context.composition.preedit, "カンジ") == 0,
-          "Space after Henkan must keep the katakana first candidate selected");
+              strcmp(context.composition.preedit, ordinary_first) == 0,
+          "Space after Henkan must select the ordinary first candidate");
     rime->free_context(&context);
+    char commit[256];
+    check(!take_commit(commit, sizeof(commit)),
+          "Space after Henkan must not commit the candidate");
     press(kReturn);
     check(composing() == False, "Enter after Henkan must end the composition");
-    char commit[256];
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "カンジ") == 0,
-          "Enter must commit the katakana kept after Henkan");
+    check(take_commit(commit, sizeof(commit)) &&
+              strcmp(commit, ordinary_first) == 0,
+          "Enter must commit the ordinary first candidate kept after Henkan");
+
+    fresh_session();
+    type_text("kanji");
+    press(kHenkan);
+    press(kSpace);
+    press(kSpace);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates > 0,
+              "a repeated Space after Henkan must open the candidate list");
+        rime->free_context(&context);
+    } else {
+        check(False, "a repeated Space after Henkan must keep a queryable context");
+    }
+    check(!take_commit(commit, sizeof(commit)),
+          "repeated Space after Henkan must not commit");
     type_text("kanji");
     RIME_STRUCT(RimeContext, next);
     if (rime->get_context(session, &next)) {
@@ -793,8 +838,24 @@ static void test_backspace_escape_return_to_reading(void) {
     check(!take_commit(commit, sizeof(commit)),
           "Backspace must not commit a deleted one-character candidate");
 
-    /* Backspace also deletes the kept katakana after Space leaves Henkan's
-     * conversion hidden. */
+    /* Backspace edits the ordinary first candidate selected by Space after
+     * Henkan. */
+    char ordinary_first[256] = "";
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    if (current_menu(&context) && context.composition.preedit) {
+        snprintf(ordinary_first, sizeof(ordinary_first), "%s",
+                 context.composition.preedit);
+        rime->free_context(&context);
+    } else {
+        rime->free_context(&context);
+    }
+    char ordinary_remainder[256] = "";
+    check(ordinary_first[0] != '\0' &&
+              without_last_utf8_character(ordinary_first, ordinary_remainder,
+                                          sizeof(ordinary_remainder)),
+          "the ordinary first candidate must contain a character to delete");
     fresh_session();
     type_text("kanji");
     press(kHenkan);
@@ -802,15 +863,15 @@ static void test_backspace_escape_return_to_reading(void) {
     if (current_menu(&context)) {
         check(context.menu.num_candidates == 0 &&
                   context.composition.preedit &&
-                  strcmp(context.composition.preedit, "カンジ") == 0,
-              "Space after Henkan must keep the katakana conversion hidden");
+                  strcmp(context.composition.preedit, ordinary_first) == 0,
+              "Space after Henkan must select the ordinary first candidate hidden");
         rime->free_context(&context);
     } else {
         check(False, "the kept Henkan conversion must keep a queryable context");
     }
     press(kBackSpace);
-    check(preedit_equals("カン"),
-          "Backspace in the kept Henkan conversion must remove the last katakana character");
+    check(preedit_equals(ordinary_remainder),
+          "Backspace after Henkan and Space must delete the first candidate's last character");
     if (current_menu(&context)) {
         check(context.menu.num_candidates == 0,
               "Backspace after the kept conversion must hide candidates");
@@ -1274,7 +1335,8 @@ static void test_space_after_append_converts_uncommitted(void) {
               "the first Space on an appended string must keep the list hidden");
         rime->free_context(&context);
     }
-    /* The second Space reveals the character-type candidates of the digit. */
+    /* Right selects the appended digit clause before Space opens its menu. */
+    press(kRight);
     press(kSpace);
     if (current_menu(&context)) {
         check(context.menu.num_candidates > 0,
@@ -1317,9 +1379,8 @@ static void test_quote_pairs(void) {
     }
 }
 
-/* SPEC: - and = never page a visible menu; during conversion they confirm
- * the selection and start a fresh input with their symbol. A minus while
- * reading still appends the long vowel to the reading. */
+/* SPEC: - and = append to the converted display without committing, close
+ * the menu, and release expansion. A minus while reading appends ー. */
 static void test_minus_equal_do_not_page(void) {
     static const struct { int key; const char* symbol; } cases[] = {
         {'-', "ー"}, {'=', "＝"},
@@ -1338,12 +1399,25 @@ static void test_minus_equal_do_not_page(void) {
             rime->free_context(&context);
         }
         check(selected[0] != '\0', "the highlighted candidate must exist");
+        char expected[288];
+        snprintf(expected, sizeof(expected), "%s%s", selected,
+                 cases[i].symbol);
         press(cases[i].key);
         char commit[256];
-        check(preedit_equals(cases[i].symbol),
-              "minus/equal must start a fresh input with its symbol rather than page");
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
-              "minus/equal must commit the selection");
+        check(preedit_equals(expected),
+              "minus/equal must append its symbol to the selected candidate");
+        check(!take_commit(commit, sizeof(commit)),
+              "minus/equal during conversion must not commit");
+        check(composing(), "minus/equal must keep the composition open");
+        if (current_menu(&context)) {
+            check(context.menu.num_candidates == 0,
+                  "minus/equal must close the candidate list");
+            rime->free_context(&context);
+        } else {
+            check(False, "minus/equal must keep a queryable context");
+        }
+        check(!option("_kagiroi_expand_candidates"),
+              "minus/equal must release candidate expansion");
     }
     fresh_session();
     type_text("kana");
@@ -1519,9 +1593,8 @@ static void test_ascii_variants_candidates(void) {
     rime->free_context(&context);
 }
 
-/* SPEC: the keypad separator appends the full-width comma while idle and
- * typing, confirms the conversion with the menu open or hidden, and stays
- * half-width inside the ascii input mode (dotfiles/rime/SPEC.md). */
+/* SPEC: the keypad separator appends the full-width comma while idle,
+ * typing, or converting, without committing (dotfiles/rime/SPEC.md). */
 static void test_kp_separator_appends(void) {
     static const int kKeypadSeparator = 0xffac;
     char commit[256];
@@ -1537,33 +1610,72 @@ static void test_kp_separator_appends(void) {
     check(preedit_equals("かんじ，"), "the keypad separator while typing must append ，");
     check(!take_commit(commit, sizeof(commit)), "the keypad separator must not commit the reading");
 
-    /* From the hidden conversion the key confirms and starts a fresh input. */
+    /* The hidden conversion appends to its current full display. */
     fresh_session();
     type_text("kanji");
-    press(kSpace);
-    press(kKeypadSeparator);
-    check(take_commit(commit, sizeof(commit)),
-          "the keypad separator from the hidden conversion must confirm it");
-    check(preedit_equals("，"), "the confirmation must start a fresh input with ，");
-
-    /* With the menu visible the key confirms the selection likewise. */
-    fresh_session();
-    type_text("kanji");
-    press(kSpace);
     press(kSpace);
     RIME_STRUCT(RimeContext, context);
-    char selected[256] = "";
+    char hidden_display[256] = "";
     if (current_menu(&context)) {
-        int index = context.menu.highlighted_candidate_index;
-        if (index < context.menu.num_candidates && context.menu.candidates[index].text)
-            snprintf(selected, sizeof(selected), "%s", context.menu.candidates[index].text);
+        if (context.menu.num_candidates == 0 && context.composition.preedit)
+            snprintf(hidden_display, sizeof(hidden_display), "%s",
+                     context.composition.preedit);
         rime->free_context(&context);
+    } else {
+        check(False, "the hidden conversion must keep a queryable context");
     }
-    check(selected[0] != '\0', "the menu must hold a selection for the separator");
+    check(hidden_display[0] != '\0',
+          "the hidden conversion must expose its display immediately after Space");
     press(kKeypadSeparator);
-    check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
-          "the keypad separator with the menu visible must confirm the selection");
-    check(preedit_equals("，"), "the separator must start a fresh input with ，");
+    char expected[288];
+    snprintf(expected, sizeof(expected), "%s，", hidden_display);
+    check(preedit_equals(expected),
+          "the hidden conversion must append ， to its current display");
+    check(!take_commit(commit, sizeof(commit)),
+          "the keypad separator in the hidden conversion must not commit");
+    check(composing(), "the keypad separator must keep the composition open");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "the hidden conversion must remain without a candidate list");
+        rime->free_context(&context);
+    } else {
+        check(False, "the appended hidden conversion must keep a queryable context");
+    }
+    check(!option("_kagiroi_expand_candidates"),
+          "the keypad separator must release candidate expansion");
+
+    /* The visible menu appends to the full current display and closes. */
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    char visible_display[256] = "";
+    if (current_menu(&context)) {
+        if (context.menu.num_candidates > 0 && context.commit_text_preview)
+            snprintf(visible_display, sizeof(visible_display), "%s",
+                     context.commit_text_preview);
+        rime->free_context(&context);
+    } else {
+        check(False, "the visible conversion must keep a queryable context");
+    }
+    check(visible_display[0] != '\0',
+          "the visible conversion must expose its full current display");
+    press(kKeypadSeparator);
+    snprintf(expected, sizeof(expected), "%s，", visible_display);
+    check(preedit_equals(expected),
+          "the visible conversion must append ， to its full current display");
+    check(!take_commit(commit, sizeof(commit)),
+          "the keypad separator with the menu visible must not commit");
+    check(composing(), "the keypad separator must keep the composition open");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "the keypad separator must close the visible candidate list");
+        rime->free_context(&context);
+    } else {
+        check(False, "the appended visible conversion must keep a queryable context");
+    }
+    check(!option("_kagiroi_expand_candidates"),
+          "the keypad separator must release candidate expansion");
 
     /* Inside the ascii input mode the separator stays half-width. */
     fresh_session();
@@ -1604,81 +1716,7 @@ static void test_arrow_caret_and_segments(void) {
           "Right while typing must move the caret back to the end");
     rime->free_context(&context);
 
-    /* During the hidden conversion Left selects the previous segment and
-     * Right returns; Shift+Left and Shift+Right resize the selection. */
-    fresh_session();
-    type_text("kanjimoji");
-    press(kSpace);
-    if (!current_menu(&context)) {
-        check(False, "the hidden conversion must keep a queryable context");
-        return;
-    }
-    check(context.menu.num_candidates == 0,
-          "the conversion under the arrow test must keep the list hidden");
-    size_t caret = context.composition.cursor_pos;
-    int sel_start = context.composition.sel_start;
-    int sel_end = context.composition.sel_end;
-    rime->free_context(&context);
-    press(kLeft);
-    if (!current_menu(&context)) {
-        check(False, "Left during conversion must keep a queryable context");
-        return;
-    }
-    check(context.composition.cursor_pos < caret
-              && context.composition.sel_end <= sel_end,
-          "Left during conversion must select the previous conversion segment");
-    size_t moved_caret = context.composition.cursor_pos;
-    int moved_sel_end = context.composition.sel_end;
-    rime->free_context(&context);
-    rime->process_key(session, kLeft, 1);
-    if (!current_menu(&context)) {
-        check(False, "Shift+Left during conversion must keep a queryable context");
-        return;
-    }
-    check(context.composition.cursor_pos < moved_caret
-              && context.composition.sel_end < moved_sel_end,
-          "Shift+Left during conversion must shorten the selected segment");
-    rime->free_context(&context);
-    rime->process_key(session, kRight, 1);
-    if (!current_menu(&context)) {
-        check(False, "Shift+Right during conversion must keep a queryable context");
-        return;
-    }
-    check(context.composition.cursor_pos == moved_caret
-              && context.composition.sel_end == moved_sel_end,
-          "Shift+Right during conversion must extend the segment back");
-    rime->free_context(&context);
-    press(kRight);
-    if (!current_menu(&context)) {
-        check(False, "Right during conversion must keep a queryable context");
-        return;
-    }
-    check(context.composition.cursor_pos == caret,
-          "Right during conversion must return to the last segment");
-    rime->free_context(&context);
 
-    /* With the menu open Left moves the block selection backwards. */
-    fresh_session();
-    type_text("kanjimoji");
-    press(kSpace);
-    press(kSpace);
-    if (!current_menu(&context)) {
-        check(False, "the open menu must keep a queryable context");
-        return;
-    }
-    size_t menu_caret = context.composition.cursor_pos;
-    check(context.menu.num_candidates > 0, "the menu must be open for the arrow test");
-    rime->free_context(&context);
-    press(kLeft);
-    if (!current_menu(&context)) {
-        check(False, "Left with the menu open must keep a queryable context");
-        return;
-    }
-    check(context.composition.cursor_pos < menu_caret,
-          "Left with the menu open must select the previous block");
-    rime->free_context(&context);
-    char commit[256];
-    check(!take_commit(commit, sizeof(commit)), "the arrow keys must not commit");
 }
 
 /* SPEC: Esc with the candidate list visible closes the list and keeps the
@@ -2115,8 +2153,8 @@ static void test_modifier_shortcuts_do_not_page(void) {
     }
 }
 
-/* SPEC: - and = on a second page confirm the selected candidate and start a
- * fresh input with their symbol instead of paging. */
+/* SPEC: - and = on a second page append to the selected candidate without
+ * committing, close the list, and release expansion. */
 static void test_minus_equal_on_second_page(void) {
     static const struct { int key; const char* symbol; } cases[] = {
         {'-', "ー"}, {'=', "＝"},
@@ -2141,12 +2179,25 @@ static void test_minus_equal_on_second_page(void) {
             check(False, "the second page must expose a menu");
         }
         check(selected[0] != '\0', "the second page must contain a selected candidate");
+        char expected[288];
+        snprintf(expected, sizeof(expected), "%s%s", selected,
+                 cases[i].symbol);
         press(cases[i].key);
         char commit[256];
-        check(preedit_equals(cases[i].symbol),
-              "minus/equal on page two must start a fresh input rather than page");
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, selected) == 0,
-              "minus/equal on page two must commit the selection");
+        check(preedit_equals(expected),
+              "minus/equal on page two must append to the selected candidate");
+        check(!take_commit(commit, sizeof(commit)),
+              "minus/equal on page two must not commit");
+        check(composing(), "minus/equal on page two must keep composing");
+        if (current_menu(&context)) {
+            check(context.menu.num_candidates == 0,
+                  "minus/equal on page two must close the candidate list");
+            rime->free_context(&context);
+        } else {
+            check(False, "minus/equal on page two must keep a queryable context");
+        }
+        check(!option("_kagiroi_expand_candidates"),
+              "minus/equal on page two must release expansion");
     }
 }
 
@@ -2226,6 +2277,590 @@ static void test_learning_promotes_committed_candidate(void) {
     }
     check(strcmp(baseline_first, after_first) != 0,
           "repeated commits must promote a learned candidate above the baseline first");
+}
+
+static void preview_text(char* buffer, size_t size) {
+    RIME_STRUCT(RimeContext, context);
+    buffer[0] = '\0';
+    if (current_menu(&context)) {
+        if (context.commit_text_preview)
+            snprintf(buffer, size, "%s", context.commit_text_preview);
+        rime->free_context(&context);
+    }
+}
+
+static Bool preview_equals(const char* expected) {
+    char actual[1024];
+    preview_text(actual, sizeof(actual));
+    if (strcmp(actual, expected) != 0)
+        fprintf(stderr, "      preview expected '%s', got '%s'\n", expected, actual);
+    return strcmp(actual, expected) == 0;
+}
+
+static void selected_text(char* buffer, size_t size) {
+    RIME_STRUCT(RimeContext, context);
+    buffer[0] = '\0';
+    if (current_menu(&context)) {
+        int index = context.menu.highlighted_candidate_index;
+        if (index >= 0 && index < context.menu.num_candidates)
+            snprintf(buffer, size, "%s", context.menu.candidates[index].text);
+        rime->free_context(&context);
+    }
+}
+
+static Bool active_reading_equals(const char* expected) {
+    RIME_STRUCT(RimeContext, context);
+    Bool equal = False;
+    if (current_menu(&context)) {
+        const char* preedit = context.composition.preedit;
+        int start = context.composition.sel_start;
+        int end = context.composition.sel_end;
+        equal = preedit && end >= start && (size_t)(end - start) == strlen(expected)
+            && strncmp(preedit + start, expected, end - start) == 0;
+        if (!equal)
+            fprintf(stderr, "      active reading expected '%s', preedit '%s' [%d,%d]\n",
+                    expected, preedit ? preedit : "", start, end);
+        rime->free_context(&context);
+    }
+    return equal;
+}
+
+static Bool menu_hidden(void) {
+    RIME_STRUCT(RimeContext, context);
+    Bool hidden = True;
+    if (current_menu(&context)) {
+        hidden = context.menu.num_candidates == 0;
+        rime->free_context(&context);
+    }
+    return hidden;
+}
+
+static void normal_first(const char* reading, char* result, size_t size) {
+    fresh_session();
+    rime->set_input(session, reading);
+    press(kHenkan);
+    press(kSpace);
+    preview_text(result, size);
+}
+
+static void test_typing_preview_is_reading(void) {
+    static const struct { const char* input; const char* reading; } cases[] = {
+        { "kyouhakare-", "きょうはかれー" },
+        { "kan", "かn" },
+        { "ka1q.", "か１q。" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        check(preview_equals(cases[i].reading), "typing preview must contain the reading, including pending n and mixed text");
+        check(menu_hidden(), "typing preview must not expose a candidate menu");
+    }
+}
+
+static Bool select_curry_emoji(char* expected, size_t size) {
+    fresh_session();
+    type_text("kyouhakare-");
+    press(kSpace);
+    press(kSpace);
+    char prefix[256];
+    selected_text(prefix, sizeof(prefix));
+    press(kRight);
+    if (option("emoji")) press_modifier('q', 1 << 2);
+    press_modifier('q', 1 << 2);
+    check(option("emoji"), "stock Control+q must enable the emoji filter");
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) {
+        check(False, "the emoji clause must expose a menu");
+        return False;
+    }
+    int emoji_index = -1, emoji_count = 0;
+    for (int i = 0; i < context.menu.num_candidates; ++i) {
+        if (strcmp(context.menu.candidates[i].text, "🍛") == 0) {
+            emoji_index = i;
+            ++emoji_count;
+        }
+    }
+    check(emoji_count == 1, "stock uniquifier semantics must remove duplicate filtered emoji text");
+    int count = context.menu.num_candidates;
+    int initial = context.menu.highlighted_candidate_index;
+    check(count == 10, "the filtered clause must expose ten final candidates before Tab");
+    rime->free_context(&context);
+    check(emoji_index >= 0, "the stock one-to-many filter must offer 🍛");
+    if (emoji_index < 0) return False;
+    int steps = (emoji_index - initial + count) % count;
+    for (int i = 0; i < steps; ++i) press(kDown);
+    char selected[256];
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "🍛") == 0, "Down must select the actual filtered emoji");
+    snprintf(expected, size, "%s🍛", prefix);
+    check(preview_equals(expected), "emoji selection must update only the active clause in the full preview");
+    return True;
+}
+
+static void test_bunsetsu_filtered_identity(void) {
+    char expected[1024], selected[256], commit[1024];
+    if (!select_curry_emoji(expected, sizeof(expected))) return;
+    press(kTab);
+    press(kLeft);
+    press(kRight);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "🍛") == 0 && preview_equals(expected),
+          "expanded Left/Right must retain the filtered emoji and every other clause");
+    press_shift(kTab);
+    check(preview_equals(expected), "collapsing must retain the filtered selection");
+    press(kEscape);
+    check(menu_hidden() && preview_equals(expected), "closing the list must retain the filtered emoji preview");
+    press(kLeft);
+    press(kRight);
+    check(preview_equals(expected), "hidden Left/Right must retain the filtered emoji");
+    press(kSpace);
+    press(kUp);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "🍛") == 0 && preview_equals(expected),
+          "reopening and navigating back must use the retained final-filter position");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
+          "Enter with the menu open must commit the full preview containing the emoji");
+
+    if (!select_curry_emoji(expected, sizeof(expected))) return;
+    press(kEscape);
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
+          "Enter after closing the menu must commit the same filtered full preview");
+
+    if (!select_curry_emoji(expected, sizeof(expected))) return;
+    char prefix[1024], ordinary[1100];
+    check(without_last_utf8_character(expected, prefix, sizeof(prefix)),
+          "the selected emoji must have a removable codepoint");
+    snprintf(ordinary, sizeof(ordinary), "%sカレー", prefix);
+    press(kLeft);
+    press_modifier('q', 1 << 2);
+    check(!option("emoji") && preview_equals(ordinary),
+          "disabling emoji must refilter the inactive clause using its genuine source");
+    press(kRight);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "カレー") == 0, "the refiltered source choice must remain selectable");
+    press_modifier('q', 1 << 2);
+    check(option("emoji") && preview_equals(ordinary),
+          "reenabling the filter must retain a still-present source selection");
+    press(kEscape);
+    press(kEscape);
+    press(kSpace);
+    check(menu_hidden(), "first conversion with emoji already enabled must keep the menu hidden");
+    press(kRight);
+    press(kSpace);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "🍛") == 0, "first conversion must collect filtered choices for every clause before reveal");
+    preview_text(expected, sizeof(expected));
+    press(kKeypadEnter);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, expected) == 0,
+          "KP_Enter must also commit the filtered whole preview");
+
+    static const struct { int key; const char* append; } edits[] = {
+        { kBackSpace, NULL }, { '-', "ー" }, { '.', "。" }, { ',', "、" }, { '\'', "‘’" },
+        { kKeypadDecimal, "．" }, { 0xffac, "，" },
+    };
+    for (int hidden = 0; hidden <= 1; ++hidden) {
+        for (size_t i = 0; i < sizeof(edits) / sizeof(edits[0]); ++i) {
+            if (!select_curry_emoji(expected, sizeof(expected))) return;
+            if (hidden) press(kEscape);
+            char edited[1100];
+            if (edits[i].append) snprintf(edited, sizeof(edited), "%s%s", expected, edits[i].append);
+            else check(without_last_utf8_character(expected, edited, sizeof(edited)),
+                       "the filtered preview must contain a last Unicode character to remove");
+            press(edits[i].key);
+            check(preview_equals(edited) && menu_hidden() && composing(),
+                  "whole-text editing must use the filtered preview and return to hidden unconfirmed typing");
+            check(!take_commit(commit, sizeof(commit)), "editing the filtered display must not commit");
+            press(kReturn);
+            check(take_commit(commit, sizeof(commit)) && strcmp(commit, edited) == 0,
+                  "the edited filtered preview must commit unchanged");
+        }
+    }
+}
+
+static void test_filtered_candidate_count_and_pages(void) {
+    fresh_session();
+    type_text("ka");
+    press(kSpace);
+    press(kSpace);
+    if (option("emoji")) press_modifier('q', 1 << 2);
+    press_modifier('q', 1 << 2);
+    press(kTab);
+    check(option("emoji"), "the expanded count test must keep stock emoji enabled");
+    char choices[512][256];
+    int total = 0;
+    RimeCandidateListIterator iterator = {0};
+    if (!rime->candidate_list_begin(session, &iterator)) {
+        check(False, "the final filtered candidate iterator must be available");
+        return;
+    }
+    while (total < 512 && rime->candidate_list_next(&iterator)) {
+        snprintf(choices[total++], sizeof(choices[0]), "%s", iterator.candidate.text);
+    }
+    rime->candidate_list_end(&iterator);
+    check(total > 30 && total < 512, "the filtered menu must have multiple pages within the test buffer");
+    if (total <= 30 || total >= 512) return;
+    Bool unique = True;
+    for (int i = 0; i < total; ++i)
+        for (int j = 0; j < i; ++j)
+            if (strcmp(choices[i], choices[j]) == 0) unique = False;
+    check(unique, "the complete filtered set must retain stock text-uniquifying behavior");
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) { check(False, "the expanded menu must remain available"); return; }
+    int initial = context.menu.highlighted_candidate_index;
+    rime->free_context(&context);
+    for (int i = 0; i < initial; ++i) press(kUp);
+    char selected[256];
+    for (int i = 0; i < total; ++i) {
+        selected_text(selected, sizeof(selected));
+        check(strcmp(selected, choices[i]) == 0 && preview_equals(choices[i]),
+              "expanded arrows must visit every final-filter candidate in actual menu order");
+        press(kDown);
+    }
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, choices[0]) == 0, "Down must wrap at the actual filtered candidate count");
+    press(kUp);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, choices[total - 1]) == 0, "Up must wrap to the final filtered candidate");
+    press(kSpace);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, choices[0]) == 0, "Space must wrap at the actual final-filter count");
+    int last_page = (total - 1) / 30;
+    for (int page = 0; page <= last_page + 1; ++page) {
+        if (page) press(kPageDown);
+        if (!current_menu(&context)) { check(False, "paging must retain the filtered menu"); return; }
+        int actual_page = page > last_page ? last_page : page;
+        int remaining = total - actual_page * 30;
+        int page_count = remaining < 30 ? remaining : 30;
+        check(context.menu.page_no == actual_page && context.menu.num_candidates == page_count
+              && context.menu.is_last_page == (actual_page == last_page),
+              "page count and last-page status must match the complete final-filter set");
+        char label[32];
+        snprintf(label, sizeof(label), "Page %d", actual_page + 1);
+        check(context.menu.candidates[0].comment && strstr(context.menu.candidates[0].comment, label),
+              "page comments must count the final-filter order");
+        check(strcmp(context.menu.candidates[0].text, choices[actual_page * 30]) == 0,
+              "PageDown must start at the actual filtered page boundary");
+        rime->free_context(&context);
+    }
+    char preview[1024];
+    preview_text(preview, sizeof(preview));
+    press_shift(kTab);
+    check(preview_equals(preview), "collapsing a filtered later page must retain its selection");
+    if (current_menu(&context)) {
+        int remaining = total - last_page * 30;
+        check(context.menu.num_candidates == (remaining < 10 ? remaining : 10) && context.menu.is_last_page,
+              "the collapsed window must contain at most ten actual final-filter candidates");
+        rime->free_context(&context);
+    }
+    press(kTab);
+    check(preview_equals(preview), "reexpanding must restore the same filtered later-page choice");
+    for (int i = 0; i < last_page; ++i) press(kPageUp);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, choices[0]) == 0, "PageUp must return to the first final-filter page");
+}
+
+static void test_bunsetsu_selection_and_preview(void) {
+    fresh_session();
+    type_text("kyouhakare-");
+    press(kSpace);
+    check(preedit_equals("今日はカレー") && preview_equals("今日はカレー"),
+          "first Space must display all clauses' first candidates");
+    check(menu_hidden(), "automatic conversion must keep the list hidden");
+    press(kLeft);
+    RIME_STRUCT(RimeContext, context);
+    if (current_menu(&context)) {
+        check(context.composition.sel_start == 0 && context.composition.sel_end == 9,
+              "Left at the first clause must retain the first display interval");
+        rime->free_context(&context);
+    }
+    press(kRight);
+    press(kRight);
+    if (current_menu(&context)) {
+        check(context.composition.sel_start == 9 && context.composition.sel_end == 18,
+              "Right must select the last clause and stop at the end");
+        rime->free_context(&context);
+    }
+    check(preview_equals("今日はカレー"), "clause selection must preserve every candidate");
+    press(kLeft);
+    press(kSpace);
+    check(active_reading_equals("きょうは"), "the first clause must read きょうは");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates > 0 && !menu_has_candidate(&context, "カレー"),
+              "the first clause's list must exclude the other clause's candidates");
+        rime->free_context(&context);
+    }
+    char left[256], right[256], selected[256], expected[1024], commit[1024];
+    selected_text(left, sizeof(left));
+    snprintf(expected, sizeof(expected), "%sカレー", left);
+    check(preview_equals(expected), "candidate movement must update only the active clause's preview");
+    press(kRight);
+    check(active_reading_equals("かれー"), "Right with the list open must select かれー");
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "カレー") == 0, "the second clause must retain its first choice");
+    press(kDown);
+    selected_text(right, sizeof(right));
+    snprintf(expected, sizeof(expected), "%s%s", left, right);
+    check(preview_equals(expected), "Down must leave the first clause's choice unchanged");
+    press(kTab);
+    press(kLeft);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, left) == 0 && option("_kagiroi_expand_candidates"),
+          "moving left must retain that clause's choice and expansion");
+    press(kRight);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, right) == 0 && !menu_hidden(),
+          "moving back must restore the right choice and keep the list open");
+    press(kEscape);
+    check(menu_hidden() && preview_equals(expected), "Esc must close the list without changing either choice");
+    press(kSpace);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, right) != 0,
+          "Space after closing the list must advance from the kept choice, not restart");
+    press(kEscape);
+    press(kEscape);
+    check(preedit_equals("きょうはかれー") && menu_hidden(), "the next Esc must restore the entire reading");
+    check(!take_commit(commit, sizeof(commit)), "selection and Esc must keep all clauses uncommitted");
+}
+
+static void test_bunsetsu_resize_and_retained_choices(void) {
+    char left_first[256], right_first[256], expected[1024], selected[256], commit[1024];
+    normal_first("きょうはか", left_first, sizeof(left_first));
+    normal_first("れー", right_first, sizeof(right_first));
+    fresh_session();
+    type_text("kyouhakare-12");
+    press(kSpace);
+    press(kSpace);
+    press(kRight);
+    press(kDown);
+    press(kRight);
+    press(kDown);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "12") == 0, "the third clause must select its half-width digits");
+    press(kTab);
+    press(kLeft);
+    press(kLeft);
+    press_shift(kRight);
+    check(active_reading_equals("きょうはか"), "Shift+Right must take one reading codepoint from the next clause");
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, left_first) == 0, "resizing must reset the active clause to its normal first choice");
+    snprintf(expected, sizeof(expected), "%s%s12", left_first, right_first);
+    check(preview_equals(expected), "resizing must reset both affected clauses and preserve the unrelated choice");
+    check(option("_kagiroi_expand_candidates") && !menu_hidden(),
+          "resizing must preserve list expansion and visibility");
+    press(kRight);
+    check(active_reading_equals("れー"), "the other side's reading must lose precisely its first codepoint");
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, right_first) == 0, "the neighboring clause must also select its first candidate");
+    press(kRight);
+    check(active_reading_equals("１２"), "the unrelated clause must retain its reading boundary");
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "12") == 0, "the unrelated clause must retain its selected candidate");
+    press(kLeft);
+    press(kLeft);
+    press_shift(kLeft);
+    check(active_reading_equals("きょうは"), "Shift+Left must return exactly one codepoint to the next clause");
+    check(preview_equals("今日はカレー12"), "both resized sides must return to first choices without losing the third");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "今日はカレー12") == 0,
+          "Enter must commit all three choices in order");
+}
+
+static void test_bunsetsu_codepoint_limits_and_fallback(void) {
+    static const char* const readings[] = {
+        "きゃーＡ1☆", "きゃーＡ1", "きゃーＡ", "きゃー", "きゃ", "き",
+    };
+    fresh_session();
+    rime->set_input(session, "きゃーＡ1☆𠮷");
+    press(kHenkan);
+    press_shift(kLeft);
+    press(kSpace);
+    check(active_reading_equals(readings[0]), "shortening the final clause must cut the astral codepoint into a new clause");
+    for (size_t i = 1; i < sizeof(readings) / sizeof(readings[0]); ++i) {
+        press_shift(kLeft);
+        check(active_reading_equals(readings[i]), "shortening must count symbols, digits, letters, long marks and small kana separately");
+    }
+    press_shift(kLeft);
+    check(active_reading_equals("き"), "a one-codepoint clause must not shorten");
+    press(kRight);
+    check(active_reading_equals("ゃーＡ1☆𠮷"), "all transferred codepoints must join the next clause in order");
+    press_shift(kRight);
+    check(active_reading_equals("ゃーＡ1☆𠮷"), "the last clause must not extend without a following clause");
+    press(kLeft);
+    for (int i = 0; i < 6; ++i) press_shift(kRight);
+    check(active_reading_equals("きゃーＡ1☆𠮷"), "extension must absorb and remove an emptied neighboring clause");
+    press(kRight);
+    check(active_reading_equals("きゃーＡ1☆𠮷"), "the removed clause must not remain selectable");
+    char commit[1024];
+    check(!take_commit(commit, sizeof(commit)), "every boundary edit must remain uncommitted");
+
+    fresh_session();
+    rime->set_input(session, "ぁゃ𠮷");
+    press(kSpace);
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 1 && menu_has_candidate(&context, "ぁゃ"),
+              "a dictionary-less kana clause must expose only its reading");
+        rime->free_context(&context);
+    }
+    press(kRight);
+    check(active_reading_equals("𠮷"), "a dictionary-less astral clause must remain independently selectable");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "ぁゃ𠮷") == 0,
+          "Enter must include all dictionary-less readings");
+}
+
+static void test_bunsetsu_whole_edit_and_commit(void) {
+    char display[1024], expected[1100], commit[1100];
+    static const struct { int key; const char* suffix; } appends[] = {
+        {',', "、"}, {'.', "。"}, {'-', "ー"}, {'=', "＝"}, {'$', "＄"},
+        {'\'', "‘’"}, {'"', "“”"}, {kKeypadDecimal, "．"}, {0xffac, "，"},
+    };
+    for (int visible = 0; visible <= 1; ++visible) {
+        for (size_t i = 0; i < sizeof(appends) / sizeof(appends[0]); ++i) {
+            fresh_session();
+            type_text("kyouhakare-");
+            press(kSpace);
+            if (visible) { press(kSpace); press(kTab); }
+            preview_text(display, sizeof(display));
+            press(appends[i].key);
+            snprintf(expected, sizeof(expected), "%s%s", display, appends[i].suffix);
+            check(preedit_equals(expected) && menu_hidden(), "symbols must append to the whole displayed conversion and return to editing");
+            check(!option("_kagiroi_expand_candidates") && !take_commit(commit, sizeof(commit)),
+                  "symbol appends must collapse without committing any clause");
+        }
+        fresh_session();
+        type_text("kyouhakare-");
+        press(kSpace);
+        if (visible) press(kSpace);
+        preview_text(display, sizeof(display));
+        without_last_utf8_character(display, expected, sizeof(expected));
+        press(kBackSpace);
+        check(preedit_equals(expected) && menu_hidden(), "Backspace must delete the whole display's final codepoint");
+        check(!take_commit(commit, sizeof(commit)), "Backspace must not commit a preceding clause");
+
+        fresh_session();
+        type_text("kyouhakare-");
+        press(kSpace);
+        if (visible) press(kSpace);
+        press_shift('A');
+        check(preedit_equals("きょうはかれーA") && option("_kagiroi_ascii_input"),
+              "Shift+letter must restore the entire reading and enter the half-width mode");
+        check(!take_commit(commit, sizeof(commit)), "Shift+letter must not commit any clause");
+
+        static const int restart[] = { 'a', '2', kKeypad1, kReturn, kKeypadEnter };
+        static const char* const restarted[] = { "あ", "２", "1", "", "" };
+        for (size_t i = 0; i < sizeof(restart) / sizeof(restart[0]); ++i) {
+            fresh_session();
+            type_text("kyouhakare-");
+            press(kSpace);
+            if (visible) { press(kSpace); press(kRight); press(kDown); }
+            preview_text(display, sizeof(display));
+            press(restart[i]);
+            check(take_commit(commit, sizeof(commit)) && strcmp(commit, display) == 0,
+                  "confirmation keys must commit all clauses' current choices together");
+            check(preedit_equals(restarted[i]) || (restarted[i][0] == '\0' && !composing()),
+                  "typing confirmation must restart the pressed key, while Enter must leave no composition");
+        }
+    }
+}
+
+static void test_bunsetsu_henkan_exception_and_expansion(void) {
+    fresh_session();
+    type_text("kyouhakare-");
+    press(kHenkan);
+    check(preedit_equals("キョウハカレー") && menu_hidden(), "Henkan must initially display the complete katakana reading");
+    press(kSpace);
+    char first[1024];
+    preview_text(first, sizeof(first));
+    check(first[0] != '\0' && strcmp(first, "キョウハカレー") != 0 && menu_hidden(),
+          "Space after Henkan must show a normal candidate without opening the list");
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates > 0 && strcmp(context.menu.candidates[0].text, first) == 0,
+              "the hidden normal conversion must have selected the whole reading\'s first candidate");
+        rime->free_context(&context);
+    }
+    check(active_reading_equals("きょうはかれー"), "Henkan conversion must remain a single whole-reading clause");
+    press(kRight);
+    check(active_reading_equals("きょうはかれー"), "Right must stop at the only Henkan clause");
+
+    fresh_session();
+    type_text("ka12");
+    press(kSpace);
+    press(kSpace);
+    press(kTab);
+    press(kPageDown);
+    char before[1024];
+    preview_text(before, sizeof(before));
+    press_shift(kTab);
+    check(preview_equals(before), "collapsing a later page must preserve the selected candidate");
+    press(kTab);
+    press(kRight);
+    press(kLeft);
+    check(preview_equals(before) && option("_kagiroi_expand_candidates"),
+          "expanded clause navigation must preserve a later-page candidate");
+    press(kPageUp);
+    char selected[256], expected[1024];
+    selected_text(selected, sizeof(selected));
+    snprintf(expected, sizeof(expected), "%s１２", selected);
+    check(preview_equals(expected), "paging must update only the target clause's preview");
+}
+
+static void test_bunsetsu_hidden_resize_and_hiragana(void) {
+    char first[256], next[256], expected[1024], commit[1024];
+    normal_first("きょうはか", first, sizeof(first));
+    normal_first("れー", next, sizeof(next));
+    fresh_session();
+    type_text("kyouhakare-12");
+    press(kSpace);
+    press(kRight);
+    press(kRight);
+    press(kSpace);
+    press(kEscape);
+    press(kLeft);
+    press(kLeft);
+    press_shift(kRight);
+    snprintf(expected, sizeof(expected), "%s%s12", first, next);
+    check(menu_hidden() && preview_equals(expected),
+          "hidden resizing must reset both sides and retain the third clause's choice");
+    press(kSpace);
+    check(active_reading_equals("きょうはか"),
+          "the reopened hidden resize must expose the extended reading boundary");
+    check(!take_commit(commit, sizeof(commit)), "hidden resizing must not commit any clause");
+
+    fresh_session();
+    rime->set_input(session, "ヴぁＡ1☆");
+    press(kSpace);
+    press(kEscape);
+    check(preedit_equals("ゔぁＡ1☆"),
+          "Esc must restore hiragana while preserving mixed letters, digits and symbols");
+}
+
+static void test_bunsetsu_contexts_keep_separate_choices(void) {
+    fresh_session();
+    type_text("kyouhakare-");
+    press(kSpace);
+    RimeSessionId first = session;
+    session = 0;
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    char second_display[256], commit[256];
+    preview_text(second_display, sizeof(second_display));
+    RimeSessionId second = session;
+    session = first;
+    press(kZenkakuHankaku);
+    check(preedit_equals("きょうはかれー") && option("_kagiroi_ascii_input"),
+          "the ascii toggle must restore its own context's complete reading");
+    session = second;
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, second_display) == 0,
+          "restoring another context must not change this context's conversion");
+    rime->destroy_session(first);
 }
 
 static void on_message(void* context_object, RimeSessionId session_id, const char* message_type, const char* message_value) {
@@ -2320,6 +2955,16 @@ int main(int argc, char* argv[]) {
         test_nn_pair_consumption,
         test_longest_declared_suffix_preserves_raw_prefix,
         test_sokuon_hatsuon_and_long_vowel,
+        test_typing_preview_is_reading,
+        test_bunsetsu_selection_and_preview,
+        test_bunsetsu_resize_and_retained_choices,
+        test_bunsetsu_codepoint_limits_and_fallback,
+        test_bunsetsu_whole_edit_and_commit,
+        test_bunsetsu_henkan_exception_and_expansion,
+        test_bunsetsu_hidden_resize_and_hiragana,
+        test_bunsetsu_contexts_keep_separate_choices,
+        test_bunsetsu_filtered_identity,
+        test_filtered_candidate_count_and_pages,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         tests[i]();

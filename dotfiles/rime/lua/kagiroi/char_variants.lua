@@ -78,6 +78,9 @@ local function map_characters(text, mapper)
 end
 
 function Top.func(input, seg, env)
+    if type(seg.has_tag) == "function" and (seg:has_tag("bunsetsu_fixed") or seg:has_tag("bunsetsu_active")) then
+        return
+    end
     if type(seg.start) ~= "number" or type(seg._end) ~= "number" then
         return
     end

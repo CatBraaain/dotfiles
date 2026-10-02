@@ -11,7 +11,10 @@ patch:
     - selector
     - navigator
     - express_editor
-  "engine/filters/@after 1": lua_filter@*kagiroi/candidate_gate
+  "engine/segmentors/@before 0": lua_segmentor@*kagiroi/bunsetsu_segmentor
+  "engine/translators/@2": lua_translator@*kagiroi/bunsetsu
+  "engine/filters/@after 1": lua_filter@*kagiroi/bunsetsu*filter
+  "engine/filters/@next": lua_filter@*kagiroi/candidate_gate
   # Character-type candidates for segments without a reading: the original
   # text plus its width and case forms (dotfiles/rime/SPEC.md, "変換").
   "engine/translators/@next": lua_translator@*kagiroi/char_variants

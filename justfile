@@ -34,6 +34,7 @@ test-rime:
     lua5.4 tests/kagiroi_suffix.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua
     lua5.4 tests/char_variants.test.lua lua/kagiroi/char_variants.lua
     lua5.4 tests/weasel_config.test.lua weasel.custom.yaml
+    lua5.4 tests/fcitx5_config.test.lua ../fcitx5/conf/rime.conf ../remap.data.md
     bash tests/rime/run.sh
 
 diff:

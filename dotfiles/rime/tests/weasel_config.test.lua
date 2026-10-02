@@ -22,6 +22,7 @@ local function assert_value(key, expected)
 end
 
 assert_value("style/paging_on_scroll", "true")
+assert_value("style/preedit_type", "preview")
 assert_value("show_notifications", "false")
 assert_value("style/display_tray_icon", "false")
 

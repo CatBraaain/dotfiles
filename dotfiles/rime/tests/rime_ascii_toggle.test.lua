@@ -1,3 +1,4 @@
+package.path = arg[2]:match("^(.*)/kagiroi/") .. "/?.lua;" .. package.path
 local kAccepted = 1
 local kNoop = 2
 package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
@@ -10,6 +11,7 @@ local controls = require("kagiroi/rime_controls")
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local processor = dofile(arg[1])
 local context = { options = {}, input = "", commits = {} }
+function context:get_property() return "" end
 function context:get_option(name)
     return self.options[name] or false
 end
