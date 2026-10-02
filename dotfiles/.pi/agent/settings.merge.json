@@ -6,7 +6,13 @@
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
   "quietStartup": false,
+  "enableInstallTelemetry": false,
+  "steeringMode": "all",
+  "followUpMode": "all",
   "treeFilterMode": "user-only",
+  "branchSummary": {
+    "skipPrompt": true
+  },
   "compaction": {
     "keepRecentTokens": 50000 // default: 20000
   },
