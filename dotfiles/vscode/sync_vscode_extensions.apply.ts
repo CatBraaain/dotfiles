@@ -175,7 +175,7 @@ async function buildLocalExtensionVsix(extension: string) {
     ).replace(/\n+$/, "");
     vsixPath = join(todoLspRepo, "vscode-todo/dist", `todo-${version}.vsix`);
     rmSync(vsixPath, { force: true });
-    await $`npm ci 1>&2`.cwd(todoLspRepo);
+    await $`bun install --frozen-lockfile 1>&2`.cwd(todoLspRepo);
     await $`just package 1>&2`.cwd(todoLspRepo);
   } else {
     throw new Error(`error: unknown local extension '${extension}'`);
