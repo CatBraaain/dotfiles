@@ -1,6 +1,6 @@
 // Merge composition stage of the build (spec: SPEC.md §build: merge 変換,
 // §パッチ適用): composes JSON/YAML/TOML/INI targets from the home tree, plain
-// bases, and merge sidecars, then writes the finished value to dist.
+// bases, and merge/update sidecars, then writes the finished value to dist.
 import { existsSync } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -18,7 +18,7 @@ import {
 import { toJS, type ToJSContext } from "yaml/util";
 
 type FileFormat = "json" | "toml" | "yaml" | "ini";
-type MergeOp = "append" | "remove" | "replace" | "unset";
+type MergeOp = "append" | "remove" | "merge" | "replace" | "unset";
 type PlainObject = Record<string, unknown>;
 type RawJsonNumber = { readonly rawJSON: string };
 type Operation = { key: string; value: unknown };
@@ -27,9 +27,9 @@ type Entry = { path: string; isDirectory: boolean };
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
 
-const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
+const mergeOps = new Set<MergeOp>(["append", "remove", "merge", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const sidecarPattern = /\.(merge|merge-machine)\.(json|yaml|toml|ini)$/;
+const sidecarPattern = /\.(merge|update)(?:-machine)?\.(json|yaml|toml|ini)$/;
 const iniReservedNames = new Set([...Object.getOwnPropertyNames(Object.prototype), "prototype"]);
 const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 const rawJson = JSON as typeof JSON & {
@@ -76,20 +76,25 @@ async function composeMergeTarget(
   homePath: string,
 ): Promise<void> {
   const stem = target.outputPath.slice(0, -(target.format.length + 1));
-  const layers: Layer[] = [await readLayer(homePath, target.format)];
-  if (hasBase) layers.push(await readLayer(target.outputPath, target.format));
-  for (const suffix of ["merge", "merge-machine"]) {
-    const sidecar = `${stem}.${suffix}.${target.format}`;
-    if (existsSync(sidecar)) layers.push(await readLayer(sidecar, target.format));
-  }
+  const hasHome = existsSync(homePath);
+  const sidecars = ["merge", "update", "merge-machine", "update-machine"]
+    .filter((suffix) => hasHome || !suffix.startsWith("update"))
+    .map((suffix) => `${stem}.${suffix}.${target.format}`)
+    .filter((path) => existsSync(path));
 
-  let value: unknown = {};
-  for (const layer of layers) {
-    if (target.format === "ini") validateIniMerge(value, layer.normal);
-    value = applyLayer(value, layer);
-  }
+  if (sidecars.length > 0) {
+    const layers: Layer[] = [await readLayer(homePath, target.format)];
+    if (hasBase) layers.push(await readLayer(target.outputPath, target.format));
+    for (const sidecar of sidecars) layers.push(await readLayer(sidecar, target.format));
 
-  await writeFile(target.outputPath, fileFormats[target.format].stringify(value));
+    let value: unknown = {};
+    for (const layer of layers) {
+      if (target.format === "ini") validateIniMerge(value, layer.normal);
+      value = applyLayer(value, layer);
+    }
+
+    await writeFile(target.outputPath, fileFormats[target.format].stringify(value));
+  }
   for (const sidecar of target.sidecarPaths) await rm(sidecar);
 }
 
@@ -467,8 +472,9 @@ function deepMerge(base: unknown, layer: unknown): unknown {
 function applyOperations(base: unknown, operations: Operations): unknown {
   if (!isPlainObject(base)) {
     for (const [path, pathOperations] of operations) {
-      if (pathOperations.append && !pathOperations.replace)
-        throw new Error(`merge append path not found: ${path}`);
+      if (pathOperations.replace) continue;
+      if (pathOperations.merge) mergeAtPath(base, path, pathOperations.merge);
+      if (pathOperations.append) throw new Error(`merge append path not found: ${path}`);
     }
     return base;
   }
@@ -480,6 +486,7 @@ function applyOperations(base: unknown, operations: Operations): unknown {
     }
     if (pathOperations.unset) unsetPath(base, path);
     if (pathOperations.remove) removeAtPath(base, path, pathOperations.remove);
+    if (pathOperations.merge) mergeAtPath(base, path, pathOperations.merge);
     if (pathOperations.append) appendAtPath(base, path, pathOperations.append);
   }
   return base;
@@ -540,6 +547,95 @@ function removeAtPath(root: PlainObject, path: string, operation: Operation): vo
     throw new Error(`merge remove object keys must be strings: ${operation.key}`);
   }
   for (const key of values) delete target.value[key];
+}
+
+type MergeRule = { match: PlainObject; merge: PlainObject };
+
+function mergeAtPath(root: unknown, path: string, operation: Operation): void {
+  const rules = validateMergeRules(operation);
+  if (rules.length === 0) return;
+  const target = findOwnPath(root, path);
+  if (!target) return;
+  if (!Array.isArray(target.value)) throw new Error(`merge merge requires array at path: ${path}`);
+
+  for (const rule of rules) {
+    for (let index = 0; index < target.value.length; index++) {
+      const element = target.value[index];
+      if (matchesMergeCondition(element, rule.match)) {
+        target.value[index] = deepMerge(element, rule.merge);
+      }
+    }
+  }
+}
+
+function validateMergeRules(operation: Operation): MergeRule[] {
+  if (!Array.isArray(operation.value)) {
+    throw new Error(`merge merge value must be array: ${operation.key}`);
+  }
+  for (const rule of operation.value) {
+    if (
+      !isDataObject(rule) ||
+      Object.keys(rule).length !== 2 ||
+      !Object.hasOwn(rule, "match") ||
+      !Object.hasOwn(rule, "merge") ||
+      !isDataObject(rule.match) ||
+      !isDataObject(rule.merge) ||
+      Object.keys(rule.merge).length === 0 ||
+      !isMergeRuleData(rule.match, true) ||
+      !isMergeRuleData(rule.merge, false)
+    ) {
+      throw new Error(`merge merge invalid rule: ${operation.key}`);
+    }
+  }
+  return operation.value as MergeRule[];
+}
+
+function isDataObject(value: unknown): value is PlainObject {
+  if (!isPlainObject(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isMergeRuleData(
+  value: unknown,
+  isCondition: boolean,
+  ancestors = new Set<object>(),
+): boolean {
+  if (rawJson.isRawJSON(value)) return true;
+  if (value === null || ["string", "boolean", "number"].includes(typeof value)) return true;
+  if (!isDataObject(value) && !(Array.isArray(value) && !isCondition)) return false;
+  if (ancestors.has(value)) return false;
+  if (isCondition && Object.keys(value).length === 0) return false;
+
+  ancestors.add(value);
+  const valid = Object.entries(value).every(
+    ([key, child]) =>
+      (isCondition || !matchOperationKey(key)) && isMergeRuleData(child, isCondition, ancestors),
+  );
+  ancestors.delete(value);
+  return valid;
+}
+
+function findOwnPath(root: unknown, path: string): PathTarget | undefined {
+  const parts = path.split(".");
+  const key = parts.pop()!;
+  let parent = root;
+  for (const part of parts) {
+    if (!isPlainObject(parent) || !Object.hasOwn(parent, part)) return undefined;
+    parent = parent[part];
+  }
+  if (!isPlainObject(parent) || !Object.hasOwn(parent, key)) return undefined;
+  return { parent, key, value: parent[key] };
+}
+
+function matchesMergeCondition(element: unknown, condition: PlainObject): boolean {
+  if (!isPlainObject(element)) return false;
+  return Object.entries(condition).every(([key, expected]) => {
+    if (!Object.hasOwn(element, key)) return false;
+    return isDataObject(expected)
+      ? matchesMergeCondition(element[key], expected)
+      : arrayElementsMatch(element[key], expected);
+  });
 }
 
 function arrayElementsMatch(left: unknown, right: unknown): boolean {

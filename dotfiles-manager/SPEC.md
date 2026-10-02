@@ -187,6 +187,12 @@ merge ターゲットごとに:
 
 `foo.json` + `foo.merge.json` + `foo.merge-machine.json` → 合成順 home → plain base → merge → machine → 出力 `foo.json`
 
+## build: update 変換
+
+`<name>.update.{json,yaml,toml,ini}` と `<name>.update-machine.{json,yaml,toml,ini}` は、それぞれ共有・マシン固有の merge レイヤー（§build: merge 変換）と同じ規則で合成する。ただし、解決後の home 対象ファイルが存在するときだけ合成し、不存在なら update による完成形を出力しない。コピー済みの plain base はそのまま残る。update sidecar は、合成の有無によらず dist から削除する。
+
+merge と update を同じターゲットに置いた場合、共有レイヤーは merge → update、マシン固有レイヤーは merge-machine → update-machine の順で合成する。
+
 ## build: 置換 sidecar
 
 `<name>.replace.yaml` で、home 現状への正規表現置換の列を宣言する。
@@ -226,7 +232,7 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 
 同じキーが両方でプレーンオブジェクトのときだけ再帰し、それ以外（スカラー・配列・オブジェクトと非オブジェクトの組合せ）はレイヤー側の値で丸ごと置き換える。片側にだけあるキーの値は維持する。
 
-### 操作キー（`$append` / `$remove` / `$replace` / `$unset`）
+### 操作キー（`$append` / `$remove` / `$merge` / `$replace` / `$unset`）
 
 操作キーはレイヤー内の任意のオブジェクトに置ける。キー名が次の形式で、かつ認識条件を満たすものだけが操作キーになる。
 
@@ -237,11 +243,11 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 | 部分 | 内容 |
 | --- | --- |
 | `<local>` | そのオブジェクト内での操作対象の相対パス（例: `bundles`, `provider`） |
-| `<op>` | `append` / `remove` / `replace` / `unset` のいずれか |
+| `<op>` | `append` / `remove` / `merge` / `replace` / `unset` のいずれか |
 
 認識条件:
 
-- `<op>` が上表の 4 種のいずれかである。
+- `<op>` が上表の 5 種のいずれかである。
 - `<local>` が空でない。
 - `<local>` に `[` を含まない。
 
@@ -260,6 +266,7 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 | `<path>.$append` | 配列 | 要素の配列 | 末尾に追加する。重複していても追加する |
 | `<path>.$remove` | 配列 | マッチャの配列 | 一致する要素をすべて削除する（§配列要素の一致） |
 | `<path>.$remove` | オブジェクト | キー名の配列 | 列挙されたキーを削除する |
+| `<path>.$merge` | 配列 | `{match: {...}, merge: {...}}` の規則配列 | 条件に一致する既存オブジェクト要素を深くマージする（§配列要素の部分マージ） |
 | `<path>.$unset` | 任意 | `true` または値なし | `<path>` が指す値を親から削除する |
 | `<path>.$replace` | 任意 | 任意 | `<path>` の値を値で丸ごと置き換える |
 
@@ -269,10 +276,11 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 
 同じ `<path>` に対して複数の操作キーがあるとき、次の順で適用し、先に適用した結果を次の操作の入力とする。
 
-1. `<path>.$replace` — 存在するとき、`<path>.$unset` / `<path>.$remove` / `<path>.$append` は無視する
+1. `<path>.$replace` — 存在するとき、`<path>.$unset` / `<path>.$remove` / `<path>.$merge` / `<path>.$append` は無視する
 2. `<path>.$unset`
 3. `<path>.$remove`
-4. `<path>.$append`
+4. `<path>.$merge`
+5. `<path>.$append`
 
 同じ `<path>.$<op>` のキーが複数あるとき（同一レイヤー内）、値は配列なら要素を連結し、それ以外は後勝ちで上書きする。
 
@@ -290,6 +298,38 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 | 配列 | 長さが等しく、同じ位置の要素が一致する |
 | オブジェクト | キー集合が等しく、各キーの値が一致する（キーの並びは問わない） |
 
+### 配列要素の部分マージ（`$merge`）
+
+merge と update の共有・マシン固有レイヤーで同じ操作として使う。
+
+| 条件・入力 | 結果 |
+| --- | --- |
+| 規則 | キーが `match` と `merge` だけのオブジェクト。両方必須で、それぞれ非空のプレーンデータオブジェクト |
+| `match` | 指定した own key がすべて存在し、値が一致する AND 条件。入れ子オブジェクトは再帰的な部分一致とし、余分なキーは問わない。各条件オブジェクトは非空 |
+| 条件の葉 | 文字列・真偽・null・数値。数値は `$remove` と同じ値比較を使い、表記差は問わない。欠落キーは null と一致しない。配列条件はエラー |
+| 一致対象 | 一致したオブジェクト要素を全件更新する。重複要素も対象とし、非オブジェクト・不一致要素の位置と値は保持する |
+| `merge` | §深いマージ（通常キー）を要素へ適用する。欠落キーを追加し、非オブジェクトとの衝突と入れ子配列は丸ごと置換する。内部の操作キーはエラーとし、削除操作は提供しない |
+| 規則の順序 | 宣言順に適用し、後続の `match` は先行規則の更新結果を判定する。配列の長さと要素順は保持する |
+| 対象探索 | パスの各成分を own key だけでたどり、継承プロパティは対象にしない |
+| 対象欠落・一致0件 | 新規配列・要素を作らず何もしない |
+| 既存対象が非配列 | `merge merge requires array at path: <path>` で異常終了する |
+| 操作値が非配列 | `merge merge value must be array: <path>.$merge` で異常終了する |
+| 不正規則 | 必須キー欠落・余分なキー・型違反・空の条件または merge・条件内配列・循環参照・merge 内操作キーは、操作キーを含むエラーで異常終了する |
+| 検証時点 | 実行する全規則を対象探索より先に検証する。空規則配列は no-op。replace に隠れた操作と home 不存在で skip した update は評価しない |
+
+例: `profiles.merge.json`
+
+```json
+{
+  "profiles.$merge": [
+    {
+      "match": { "settings": { "mode": "legacy" }, "enabled": true },
+      "merge": { "settings": { "mode": "current" } }
+    }
+  ]
+}
+```
+
 ### 出力形式（canonical）
 
 merge ターゲットの完成形は、毎回同一形式で書き出す。
@@ -301,7 +341,7 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | TOML | TOML 形式、末尾改行 1 つ、改行コード LF |
 | INI | UTF-8 / BOM なし、末尾改行 1つ、改行コード LF。値の規則は §INI の操作と出力 |
 
-JSON 数値は、home・plain base・共有 merge・マシン固有 merge の採用元にある有効な JSON 数値トークンを保持する。ネストしたオブジェクト・配列要素・`$replace` / `$append` の値も同様とし、小数末尾のゼロ・指数表記・負のゼロ・整数表記を維持する。後段で上書きした値は後段の表記を採用し、`$remove` の一致は表記によらず従来の値で判定する。
+JSON 数値は、home・plain base・共有 merge・マシン固有 merge の採用元にある有効な JSON 数値トークンを保持する。ネストしたオブジェクト・配列要素・`$replace` / `$append` / `$merge` の更新値も同様とし、小数末尾のゼロ・指数表記・負のゼロ・整数表記を維持する。後段で上書きした値は後段の表記を採用し、`$remove` の一致は表記によらず従来の値で判定する。
 
 JSON の共有・マシン固有 merge sidecar および plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の共有・マシン固有 merge sidecar および plain base の TOML 入力にはコメントを書ける。
 
@@ -335,7 +375,7 @@ INI でも一般の操作キー認識条件・操作順・対象がない場合�
 | --- | --- |
 | `Key.$replace=Value` | 文字列で既存の値を置換する |
 | `Key.$unset=true` / `Key.$unset=` / 裸の `Key.$unset` | 対象を削除する。実行対象の unset が他の値を持つ場合は異常終了する |
-| `Key.$append=...` / `Key.$remove=...` | 値は文字列なので、実行時に既存の配列値必須エラーになる |
+| `Key.$append=...` / `Key.$remove=...` / `Key.$merge=...` | 値は文字列なので、実行時に配列値必須エラーになる |
 
 新規キーは操作キーではなく通常代入で作成する。replace により無視される unset の値は検証しない。空セクションは保持する。
 

@@ -8,9 +8,16 @@
     "strict": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
-    "typeRoots": ["./node_modules/@types", "./dotfiles-manager/node_modules/@types"],
+    "typeRoots": [
+      "./node_modules/@types",
+      "./dotfiles-manager/node_modules/@types"
+    ],
     "types": ["bun", "node"]
   },
-  "include": ["dotfiles-manager/**/*.ts", "dotfiles/**/*.build.ts", "dotfiles/**/*.edit.ts"],
+  "include": [
+    "dotfiles-manager/**/*.ts",
+    "dotfiles/**/*.build.ts",
+    "dotfiles/**/*.edit.ts"
+  ],
   "exclude": ["dotfiles-manager/**/*.test.ts"]
 }
