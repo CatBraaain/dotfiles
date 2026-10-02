@@ -23,6 +23,7 @@
 #define kHenkan 0xff23
 #define kMuhenkan 0xff22
 #define kZenkakuHankaku 0xff2a
+#define kShiftL 0xffe1
 #define kHiraganaKatakana 0xff27
 #define kBackSpace 0xff08
 #define kEscape 0xff1b
@@ -344,6 +345,68 @@ static void test_n_run_conversion_reading(void) {
         snprintf(description, sizeof(description), "%s must convert with the reading %s",
                  cases[i].input, cases[i].expected);
         check(preedit_equals(cases[i].expected), description);
+    }
+}
+
+static void test_left_shift_keeps_mode_and_composition(void) {
+    static const struct {
+        const char* input;
+        int mode_key;
+        Bool ascii_mode;
+        Bool ascii_input;
+        const char* preedit;
+    } cases[] = {
+        {"", 0, False, False, ""},
+        {"kana", 0, False, False, "かな"},
+        {"kana", kZenkakuHankaku, False, True, "かな"},
+        {"", kZenkakuHankaku, True, False, ""},
+    };
+    const int modifiers[] = {1, 1 << 30};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        if (cases[i].mode_key) press(cases[i].mode_key);
+        for (size_t j = 0; j < sizeof(modifiers) / sizeof(modifiers[0]); ++j) {
+            press_modifier(kShiftL, modifiers[j]);
+            char description[256];
+            snprintf(description, sizeof(description),
+                     "left Shift %s in case %zu must keep the mode and unconfirmed text",
+                     j == 0 ? "press" : "release", i);
+            check(option("ascii_mode") == cases[i].ascii_mode &&
+                  option("_kagiroi_ascii_input") == cases[i].ascii_input,
+                  description);
+            check(*cases[i].preedit ? preedit_equals(cases[i].preedit) : !composing(),
+                  description);
+            char commit[256];
+            check(!take_commit(commit, sizeof(commit)),
+                  "left Shift must not commit unconfirmed text");
+        }
+    }
+}
+
+static void test_ahk_shift_l_equal_sequence_stays_japanese(void) {
+    const char* inputs[] = {"", "kana"};
+    const char* preedits[] = {"＝", "かな＝"};
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+        fresh_session();
+        type_text(inputs[i]);
+        press_modifier(kShiftL, 1);
+        press_modifier(kShiftL, 1 << 30);
+        check(!option("ascii_mode") && !option("_kagiroi_ascii_input"),
+              "AHK's injected left Shift release must keep Japanese input");
+        press('=');
+        press_modifier('=', 1 << 30);
+        check(preedit_equals(preedits[i]),
+              "AHK's injected equal must append an unconfirmed full-width ＝");
+        press_modifier(kShiftL, 1);
+        press_modifier('l', 1 | (1 << 30));
+        check(!option("ascii_mode") && !option("_kagiroi_ascii_input"),
+              "AHK's restored left Shift and physical l release must keep Japanese input");
+        check(preedit_equals(preedits[i]),
+              "AHK's remaining key events must keep the full-width equal preedit");
+        char commit[256];
+        check(!take_commit(commit, sizeof(commit)),
+              "AHK's Shift+l sequence must keep the text unconfirmed");
     }
 }
 
@@ -2917,6 +2980,8 @@ int main(int argc, char* argv[]) {
         test_n_run_preedit,
         test_n_run_conversion_reading,
         test_kan_space_starts_conversion,
+        test_left_shift_keeps_mode_and_composition,
+        test_ahk_shift_l_equal_sequence_stays_japanese,
         test_zenkaku_hankaku_toggles_ascii,
         test_zenkaku_hankaku_keeps_composition,
         test_kana_muhenkan_one_way_switches,

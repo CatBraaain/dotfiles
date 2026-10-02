@@ -1,6 +1,7 @@
 patch:
   schema_list:
     - schema: kagiroi
+  "ascii_composer/switch_key/Shift_L": noop
   "ascii_composer/switch_key/Zenkaku_Hankaku": clear
   # Replace the shared key_binder preset so punctuation does not page the
   # candidate menu. Keep the editing and numbered mode switch bindings.
