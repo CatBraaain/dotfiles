@@ -1,0 +1,435 @@
+:host {
+  all: initial;
+  pointer-events: none;
+}
+.overlay {
+  --unit: 1px;
+  --title-surface: #f7f8fc;
+  --panel-surface: rgba(247, 248, 252, 0.85);
+  --surface: rgba(247, 248, 252, 0.96);
+  --text: #171922;
+  --secondary: #495162;
+  --line: #d0d5df;
+  --shadow-ink: rgba(23, 25, 34, 0.12);
+  --accent: #5145cd;
+  --active-fill: #5145cd;
+  --caption-surface: rgba(81, 69, 205, 0.85);
+  --frame-stroke: rgba(81, 69, 205, 0.85);
+  --on-active: #f7f8fc;
+  --done: #116742;
+  --done-surface: #e2f3ea;
+  --pending-ink: #5e6878;
+  --pending-surface: #e7ebf3;
+  --frame-fill: rgba(81, 69, 205, 0.06);
+  --frame-inner-guard: rgba(247, 248, 252, 0.85);
+  --frame-outer-guard: rgba(17, 19, 24, 0.85);
+  --ripple-inner-guard: #f7f8fc;
+  --ripple-outer-guard: #111318;
+  --edge-guard: #f7f8fc;
+  --cursor-fill: #171922;
+  --sans:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK JP",
+    sans-serif;
+  --mono:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK JP",
+    monospace;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--sans);
+  font-size: calc(15 * var(--unit));
+  line-height: calc(24 * var(--unit));
+  color: var(--text);
+}
+.overlay[data-theme="dark"] {
+  --title-surface: #111318;
+  --panel-surface: rgba(17, 19, 24, 0.85);
+  --surface: rgba(17, 19, 24, 0.96);
+  --text: #f7f8fc;
+  --secondary: #b6bdc9;
+  --line: #414957;
+  --shadow-ink: rgba(17, 19, 24, 0.24);
+  --accent: #b7afff;
+  --frame-stroke: rgba(183, 175, 255, 0.85);
+  --done: #6ee7b7;
+  --done-surface: #162d25;
+  --pending-ink: #a1abbb;
+  --pending-surface: #22262f;
+  --frame-fill: rgba(183, 175, 255, 0.06);
+  --edge-guard: #111318;
+  --cursor-fill: #f7f8fc;
+}
+* {
+  box-sizing: border-box;
+  pointer-events: none;
+}
+[hidden] {
+  display: none !important;
+}
+div,
+section,
+header,
+span,
+svg {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+  text-shadow: none;
+}
+.test-title,
+.label-text,
+.step-name,
+.caption-text,
+.input-text,
+.key-name {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.title {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: calc(24 * var(--unit));
+  padding: calc(16 * var(--unit)) calc(24 * var(--unit));
+  background: var(--title-surface);
+  z-index: 5;
+}
+.test-title {
+  flex: 1;
+  font-size: calc(16 * var(--unit));
+  line-height: calc(24 * var(--unit));
+  font-weight: 600;
+}
+.title.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(12 * var(--unit));
+}
+.progress {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--unit));
+  flex: none;
+}
+.progress.stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(8 * var(--unit));
+}
+.step-count {
+  font-family: var(--mono);
+  font-size: calc(14 * var(--unit));
+  line-height: calc(20 * var(--unit));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.segments {
+  display: flex;
+  gap: calc(4 * var(--unit));
+  height: calc(6 * var(--unit));
+  flex: none;
+}
+.segment {
+  flex: 1;
+  min-width: calc(4 * var(--unit));
+  border-radius: calc(2 * var(--unit));
+  background: var(--pending-surface);
+}
+.segment.current {
+  background: var(--active-fill);
+}
+.segment.done {
+  background: var(--done-surface);
+  box-shadow: inset 0 0 0 calc(1 * var(--unit)) var(--done);
+}
+.surface {
+  position: absolute;
+  background: var(--surface);
+  border: calc(1 * var(--unit)) solid var(--line);
+  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--shadow-ink);
+  border-radius: calc(12 * var(--unit));
+  z-index: 2;
+}
+.panel {
+  padding: calc(20 * var(--unit));
+  background: var(--panel-surface);
+}
+.label {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(12 * var(--unit));
+}
+.label-text {
+  font-size: calc(17 * var(--unit));
+  line-height: calc(26 * var(--unit));
+  font-weight: 600;
+}
+.divider {
+  height: calc(1 * var(--unit));
+  background: var(--line);
+  margin: calc(12 * var(--unit)) 0;
+}
+.steps {
+  display: grid;
+  gap: calc(8 * var(--unit)) calc(24 * var(--unit));
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--unit));
+  padding: calc(8 * var(--unit));
+}
+.step-name {
+  color: var(--secondary);
+}
+.row.current .step-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.badge {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: calc(44 * var(--unit));
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: calc(32 * var(--unit));
+  border-radius: calc(16 * var(--unit));
+  font-family: var(--mono);
+  font-size: calc(14 * var(--unit));
+  line-height: calc(14 * var(--unit));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--pending-ink);
+  background: var(--pending-surface);
+  box-shadow: inset 0 0 0 calc(1.5 * var(--unit)) var(--pending-ink);
+}
+.current .chip {
+  color: var(--on-active);
+  background: var(--active-fill);
+  box-shadow: none;
+}
+.done .chip {
+  color: var(--done);
+  background: var(--done-surface);
+  box-shadow: inset 0 0 0 calc(1.5 * var(--unit)) var(--done);
+}
+.decoration {
+  position: absolute;
+  display: none;
+}
+.badge[data-phase="acting"] .spinner {
+  display: block;
+  right: 0;
+  top: 0;
+  width: calc(14 * var(--unit));
+  height: calc(14 * var(--unit));
+  border: calc(2 * var(--unit)) solid var(--accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  animation: spin 900ms linear infinite;
+}
+.badge[data-phase="checking"] .ring {
+  display: block;
+  inset: calc(1 * var(--unit));
+  border: calc(2 * var(--unit)) solid var(--accent);
+  border-right-color: transparent;
+  border-radius: calc(21 * var(--unit));
+  animation: spin 2000ms linear infinite;
+}
+.badge[data-phase="result"] .check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  right: 0;
+  bottom: 0;
+  width: calc(16 * var(--unit));
+  height: calc(16 * var(--unit));
+  border-radius: 50%;
+  background: var(--done);
+  box-shadow: 0 0 0 calc(2 * var(--unit)) var(--title-surface);
+}
+.check svg {
+  width: calc(11 * var(--unit));
+  height: calc(11 * var(--unit));
+  fill: none;
+  stroke: var(--done-surface);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.primary:empty {
+  display: none;
+}
+.primary .badge {
+  height: calc(44 * var(--unit));
+}
+.primary .chip {
+  height: calc(24 * var(--unit));
+  border-radius: calc(12 * var(--unit));
+  line-height: calc(20 * var(--unit));
+  background: var(--active-fill);
+  color: var(--on-active);
+  box-shadow: none;
+}
+.caption .primary .chip {
+  background: var(--on-active);
+  color: var(--active-fill);
+}
+.panel,
+.caption,
+.input,
+.key {
+  transform-origin: center;
+}
+.caption {
+  position: absolute;
+  display: flex;
+  align-items: flex-start;
+  gap: calc(8 * var(--unit));
+  padding: calc(8 * var(--unit)) calc(12 * var(--unit));
+  border-radius: calc(8 * var(--unit));
+  background: var(--caption-surface);
+  color: var(--on-active);
+  font-size: calc(14 * var(--unit));
+  line-height: calc(20 * var(--unit));
+  font-weight: 600;
+  z-index: 3;
+}
+.caption .primary .badge {
+  height: calc(24 * var(--unit));
+}
+.caption-text {
+  font-size: calc(14 * var(--unit));
+  line-height: calc(20 * var(--unit));
+  font-weight: 600;
+}
+.target-caption .icon {
+  margin-top: calc((24 - 20) / 2 * var(--unit));
+}
+.icon {
+  width: calc(20 * var(--unit));
+  height: calc(20 * var(--unit));
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: calc(2 * var(--unit));
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon > * {
+  vector-effect: non-scaling-stroke;
+}
+.frames {
+  position: absolute;
+  overflow: hidden;
+  z-index: 1;
+}
+.frame {
+  position: absolute;
+  border: calc(2 * var(--unit)) solid var(--frame-stroke);
+  background: var(--frame-fill);
+  box-shadow:
+    inset 0 0 0 calc(1 * var(--unit)) var(--frame-inner-guard),
+    0 0 0 calc(1 * var(--unit)) var(--frame-outer-guard);
+}
+.input,
+.key {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(12 * var(--unit));
+  padding: calc(12 * var(--unit)) calc(20 * var(--unit));
+}
+.input {
+  border-radius: 9999px;
+}
+.input-text,
+.key-body {
+  flex: 1;
+  text-align: center;
+}
+.input .primary .badge,
+.key .primary .badge,
+.label .primary .badge {
+  height: calc(24 * var(--unit));
+}
+
+.key .primary {
+  padding-top: calc((30 - 24) / 2 * var(--unit));
+}
+.label .primary {
+  padding-top: calc((26 - 24) / 2 * var(--unit));
+}
+.input-text {
+  min-height: calc(24 * var(--unit));
+}
+.key-name {
+  font-size: calc(21 * var(--unit));
+  line-height: calc(30 * var(--unit));
+  font-weight: 600;
+}
+.api-note {
+  margin-top: calc(8 * var(--unit));
+  font-size: calc(14 * var(--unit));
+  line-height: calc(20 * var(--unit));
+  color: var(--secondary);
+}
+.cursor {
+  position: absolute;
+  width: calc(16 * var(--unit));
+  height: calc(24 * var(--unit));
+  fill: var(--cursor-fill);
+  stroke: var(--edge-guard);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  z-index: 3;
+}
+.effects {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.effects .cursor {
+  z-index: auto;
+}
+.ripple {
+  position: absolute;
+  width: calc(48 * var(--unit));
+  height: calc(48 * var(--unit));
+  --ripple-scale: 1;
+  border: calc(2 * var(--unit) / var(--ripple-scale)) solid var(--accent);
+  border-radius: 50%;
+  transform: scale(var(--ripple-scale));
+  box-shadow:
+    inset 0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-inner-guard),
+    0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-outer-guard);
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.overlay[data-reduced="true"] .spinner,
+.overlay[data-reduced="true"] .ring {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .overlay:not([data-reduced="false"]) .spinner,
+  .overlay:not([data-reduced="false"]) .ring {
+    animation: none;
+  }
+}
