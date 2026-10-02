@@ -97,6 +97,7 @@
 # General CLI tools
 - apt: btop
 - brew: act
+- brew: awscli
 - brew: cargo-binstall
 - brew: erdtree
 - brew: eza
