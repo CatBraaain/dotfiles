@@ -1,6 +1,7 @@
 // https://pi.dev/docs/latest/settings
 {
   "theme": "dark",
+  "fullscreenWheelScrollLines": 3,
   "defaultThinkingLevel": "high",
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
