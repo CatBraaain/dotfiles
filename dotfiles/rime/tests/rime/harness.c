@@ -29,6 +29,7 @@
 #define kEscape 0xff1b
 #define kKeypadDecimal 0xffae
 #define kKeypadEnter 0xff8b
+#define kKeypad0 0xffb0
 #define kKeypad1 0xffb1
 #define kTab 0xff09
 #define kUp 0xff52
@@ -1413,14 +1414,82 @@ static void test_space_after_append_converts_uncommitted(void) {
     check(!take_commit(commit, sizeof(commit)), "the reveal must not commit");
 }
 
-/* SPEC: romaji typed after an append keeps its raw form instead of being
- * converted to kana. */
-static void test_romaji_after_append_stays_raw(void) {
-    fresh_session();
-    type_text("kanji");
-    press(kKeypad1);
-    type_text("a");
-    check(preedit_equals("かんじ1a"), "romaji after an append must stay raw");
+/* SPEC: romaji after keypad digits resumes kana input while preserving the
+ * appended half-width digits unconfirmed (dotfiles/rime/SPEC.md). */
+static void test_romaji_after_keypad_digits_resumes_kana(void) {
+    static const struct { const char* input; const char* kana; } syllables[] = {
+        {"a", "あ"}, {"i", "い"}, {"u", "う"}, {"e", "え"}, {"o", "お"},
+        {"ka", "か"},
+    };
+    static const struct { const char* input; const char* kana; } prefixes[] = {
+        {"", ""}, {"kanji", "かんじ"},
+    };
+    for (size_t p = 0; p < sizeof(prefixes) / sizeof(prefixes[0]); ++p) {
+        for (int digit = 0; digit <= 9; ++digit) {
+            for (int count = 1; count <= 2; ++count) {
+                for (size_t s = 0; s < sizeof(syllables) / sizeof(syllables[0]); ++s) {
+                    fresh_session();
+                    type_text(prefixes[p].input);
+                    char digits[3] = {0};
+                    for (int d = 0; d < count; ++d) {
+                        press(kKeypad0 + digit);
+                        digits[d] = '0' + digit;
+                    }
+                    type_text(syllables[s].input);
+                    char expected[64], description[256], commit[256];
+                    snprintf(expected, sizeof(expected), "%s%s%s",
+                             prefixes[p].kana, digits, syllables[s].kana);
+                    snprintf(description, sizeof(description),
+                             "%s + KP digits %s + %s must read %s; input is %s",
+                             prefixes[p].input, digits, syllables[s].input,
+                             expected, rime->get_input(session));
+                    check(preedit_equals(expected), description);
+                    snprintf(description, sizeof(description),
+                             "%s + KP digits %s + %s must keep composing",
+                             prefixes[p].input, digits, syllables[s].input);
+                    check(composing(), description);
+                    snprintf(description, sizeof(description),
+                             "%s + KP digits %s + %s must not commit",
+                             prefixes[p].input, digits, syllables[s].input);
+                    check(!take_commit(commit, sizeof(commit)), description);
+                }
+            }
+        }
+    }
+}
+
+/* SPEC: returning from ascii input preserves its raw tail and converts only
+ * newly typed romaji to kana (dotfiles/rime/SPEC.md). */
+static void test_ascii_keypad_vowels_preserved_on_kana_resumption(void) {
+    static const struct { int key; const char* kana; } vowels[] = {
+        {'a', "あ"}, {'i', "い"}, {'u', "う"}, {'e', "え"}, {'o', "お"},
+    };
+    for (size_t i = 0; i < sizeof(vowels) / sizeof(vowels[0]); ++i) {
+        fresh_session();
+        type_text("kanji");
+        press(kZenkakuHankaku);
+        check(option("_kagiroi_ascii_input"), "the test must enter ascii input");
+        press(kKeypad1);
+        press(vowels[i].key);
+        char expected[64], description[256], commit[256];
+        snprintf(expected, sizeof(expected), "かんじ1%c", vowels[i].key);
+        snprintf(description, sizeof(description),
+                 "ascii KP_1 + %c must stay raw as %s; input is %s",
+                 vowels[i].key, expected, rime->get_input(session));
+        check(preedit_equals(expected), description);
+        check(composing(), "ascii keypad/vowel input must keep composing");
+        check(!take_commit(commit, sizeof(commit)), "ascii keypad/vowel input must not commit");
+        press(kZenkakuHankaku);
+        check(!option("_kagiroi_ascii_input"), "the test must return to Japanese input");
+        press(vowels[i].key);
+        snprintf(expected, sizeof(expected), "かんじ1%c%s", vowels[i].key, vowels[i].kana);
+        snprintf(description, sizeof(description),
+                 "new %c must resume kana with the raw tail intact as %s; input is %s",
+                 vowels[i].key, expected, rime->get_input(session));
+        check(preedit_equals(expected), description);
+        check(composing(), "kana resumption must keep composing");
+        check(!take_commit(commit, sizeof(commit)), "kana resumption must not commit");
+    }
 }
 
 /* SPEC: quote keys append the opening and closing marks as a pair. */
@@ -2992,7 +3061,8 @@ int main(int argc, char* argv[]) {
         test_appends_accumulate,
         test_kp_separator_appends,
         test_space_after_append_converts_uncommitted,
-        test_romaji_after_append_stays_raw,
+        test_romaji_after_keypad_digits_resumes_kana,
+        test_ascii_keypad_vowels_preserved_on_kana_resumption,
         test_quote_pairs,
         test_minus_equal_do_not_page,
         test_shift_letter_switches_ascii_mode,
