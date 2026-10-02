@@ -11,5 +11,9 @@ dotfiles/**/*.merge-machine.json
 dotfiles/**/*.merge-machine.yaml
 dotfiles/**/*.merge-machine.toml
 dotfiles/**/*.merge-machine.ini
+dotfiles/**/*.merge-existing-machine.json
+dotfiles/**/*.merge-existing-machine.yaml
+dotfiles/**/*.merge-existing-machine.toml
+dotfiles/**/*.merge-existing-machine.ini
 dotfiles/.agents/skills.exact/local/
 undotfiles/nix/flake.lock

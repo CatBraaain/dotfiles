@@ -130,9 +130,11 @@ JSON/YAML/TOML/INI の設定ファイルを、home 現状とリポジトリ側�
 | --- | --- | --- |
 | `<name>.{json,yaml,toml,ini}` | git | plain base（リポジトリのベース本体。任意） |
 | `<name>.merge.{json,yaml,toml,ini}` | git | 共有 merge レイヤー（任意） |
+| `<name>.merge-existing.{json,yaml,toml,ini}` | git | 共有の条件付きレイヤー（任意） |
 | `<name>.merge-machine.{json,yaml,toml,ini}` | gitignore | マシン固有 merge レイヤー（任意） |
+| `<name>.merge-existing-machine.{json,yaml,toml,ini}` | gitignore | マシン固有の条件付きレイヤー（任意） |
 
-`<name>.merge.{json,yaml,toml,ini}` または `<name>.merge-machine.{json,yaml,toml,ini}` のどちらかが存在するとき、その `<name>.{json,yaml,toml,ini}` は merge ターゲットとなる。`<name>.machine.{json,yaml,toml,ini}` は sidecar として認識せず、通常のファイルとして dist に残る。merge ターゲットでないファイルも dist へそのまま残す。
+上表の sidecar が1つ以上存在するとき、その `<name>.{json,yaml,toml,ini}` は merge ターゲットとなる。上表以外のファイルは sidecar として認識せず、merge ターゲットでないファイルは dist へそのまま残す。
 
 ### ターゲット解決
 
@@ -141,29 +143,36 @@ merge ターゲットごとに、次を決める。
 - 出力パス: sidecar と同じディレクトリの `<name>.{json,yaml,toml,ini}`
 - home パス: 出力パスを、差分検知の対応関係（§差分検知）と同じ規則で home 相対パスへ変換したもの
 
-sidecar 名から `<name>` への対応:
+sidecar 名から出力ファイル名への対応（4形式共通）:
 
-| sidecar | `<name>` |
+| sidecar | 出力ファイル名 |
 | --- | --- |
-| `foo.merge.json` | `foo.json` |
-| `foo.merge-machine.yaml` | `foo.yaml` |
-| `foo.merge.toml` | `foo.toml` |
-| `foo.merge-machine.toml` | `foo.toml` |
-| `foo.merge.ini` | `foo.ini` |
-| `foo.merge-machine.ini` | `foo.ini` |
+| `foo.merge.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.merge-existing.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.merge-machine.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.merge-existing-machine.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
 
-同一 `<name>` に sidecar が複数あるときは 1 ターゲットにまとめる。
+入力と出力は同じ拡張子になる。同一出力パスに sidecar が複数あるときは 1 ターゲットにまとめる。
 
 ### レイヤーと適用順
 
-merge ターゲットごとに、存在するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON・TOML・INI。YAML パース結果が null/undefined のときも `{}` 扱い）。
+`merge-existing` と `merge-existing-machine` を条件付きレイヤーと呼び、解決後の home パスを基準に次の条件で採用する。通常の `merge` と `merge-machine` は home の有無によらず採用する。
+
+| home 対象ファイル | 条件付きレイヤーの扱い |
+| --- | --- |
+| 存在する（空ファイルを含む） | 存在する条件付き sidecar をパースし、合成に採用する |
+| 存在しない | 条件付き sidecar をパースせず、合成に採用しない。不正な内容でもエラーにしない |
+
+合成するターゲットでは、存在し、採用するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON・TOML・INI。YAML パース結果が null/undefined のときも `{}` 扱い）。
 
 | 順 | レイヤー | ソース |
 | --- | --- | --- |
 | 1 | home | 上記の home パス。ファイルが存在しない・空のとき `{}` |
 | 2 | plain base | 同ディレクトリの `<name>.{json,yaml,toml,ini}`（sidecar ではない本体） |
 | 3 | merge | `<name>.merge.{json,yaml,toml,ini}` |
-| 4 | machine | `<name>.merge-machine.{json,yaml,toml,ini}` |
+| 4 | merge-existing | `<name>.merge-existing.{json,yaml,toml,ini}` |
+| 5 | merge-machine | `<name>.merge-machine.{json,yaml,toml,ini}` |
+| 6 | merge-existing-machine | `<name>.merge-existing-machine.{json,yaml,toml,ini}` |
 
 後段レイヤーほど優先される。各レイヤーへの適用は §パッチ適用 に従う。
 
@@ -171,27 +180,20 @@ merge ターゲットごとに、存在するレイヤーだけを次の順で�
 
 merge ターゲットごとに:
 
-1. 合成結果を canonical 形式（§パッチ適用）で `<name>.{json,yaml,toml,ini}` に書き出す。plain base が存在したときは完成形で上書きする。
-2. 入力として使った sidecar（`<name>.merge.{json,yaml,toml,ini}`、`<name>.merge-machine.{json,yaml,toml,ini}`）を dist から削除する。
-
-手書きの設定ファイルにも一般則が適用される。sidecar を置いたファイルは merge ターゲットとなり、その内容が plain base レイヤーとして合成され、完成形で上書きされる。sidecar を持たない plain ファイルは対象外で、dist にそのまま残る。
+1. 採用する sidecar が1つ以上あるとき、合成結果を canonical 形式（§パッチ適用）で `<name>.{json,yaml,toml,ini}` に書き出す。plain base が存在したときは完成形で上書きする。採用する sidecar がないときは合成せず、コピー済みの plain base があれば内容をそのまま残し、なければ出力ファイルを生成しない。
+2. ターゲットの全 sidecar を、採用の有無によらず dist から削除する。
 
 ### 例
 
 `.agents/config.exact/agents.yaml` + `agents.merge-machine.yaml`（共有 merge なし）:
 
-1. 合成: home → plain base（`agents.yaml`）→ machine
+1. 合成: home → plain base（`agents.yaml`）→ merge-machine
 2. 出力: `dist/.agents/config.exact/agents.yaml`。sidecar は削除され、plain base は完成形で上書きされる
 
-全レイヤー:
+`foo.json` と4種類の sidecar が揃い、home に `foo.json` が存在する場合:
 
-`foo.json` + `foo.merge.json` + `foo.merge-machine.json` → 合成順 home → plain base → merge → machine → 出力 `foo.json`
-
-## build: update 変換
-
-`<name>.update.{json,yaml,toml,ini}` と `<name>.update-machine.{json,yaml,toml,ini}` は、それぞれ共有・マシン固有の merge レイヤー（§build: merge 変換）と同じ規則で合成する。ただし、解決後の home 対象ファイルが存在するときだけ合成し、不存在なら update による完成形を出力しない。コピー済みの plain base はそのまま残る。update sidecar は、合成の有無によらず dist から削除する。
-
-merge と update を同じターゲットに置いた場合、共有レイヤーは merge → update、マシン固有レイヤーは merge-machine → update-machine の順で合成する。
+1. 合成: home → plain base → merge → merge-existing → merge-machine → merge-existing-machine
+2. 出力: `foo.json`。全 sidecar は削除され、plain base は完成形で上書きされる
 
 ## build: 置換 sidecar
 
@@ -232,7 +234,7 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 
 同じキーが両方でプレーンオブジェクトのときだけ再帰し、それ以外（スカラー・配列・オブジェクトと非オブジェクトの組合せ）はレイヤー側の値で丸ごと置き換える。片側にだけあるキーの値は維持する。
 
-### 操作キー（`$append` / `$remove` / `$merge` / `$replace` / `$unset`）
+### 操作キー（`$append` / `$remove` / `$replace` / `$unset`）
 
 操作キーはレイヤー内の任意のオブジェクトに置ける。キー名が次の形式で、かつ認識条件を満たすものだけが操作キーになる。
 
@@ -243,11 +245,11 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 | 部分 | 内容 |
 | --- | --- |
 | `<local>` | そのオブジェクト内での操作対象の相対パス（例: `bundles`, `provider`） |
-| `<op>` | `append` / `remove` / `merge` / `replace` / `unset` のいずれか |
+| `<op>` | `append` / `remove` / `replace` / `unset` のいずれか |
 
 認識条件:
 
-- `<op>` が上表の 5 種のいずれかである。
+- `<op>` が上表の 4 種のいずれかである。
 - `<local>` が空でない。
 - `<local>` に `[` を含まない。
 
@@ -266,7 +268,6 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 | `<path>.$append` | 配列 | 要素の配列 | 末尾に追加する。重複していても追加する |
 | `<path>.$remove` | 配列 | マッチャの配列 | 一致する要素をすべて削除する（§配列要素の一致） |
 | `<path>.$remove` | オブジェクト | キー名の配列 | 列挙されたキーを削除する |
-| `<path>.$merge` | 配列 | `{match: {...}, merge: {...}}` の規則配列 | 条件に一致する既存オブジェクト要素を深くマージする（§配列要素の部分マージ） |
 | `<path>.$unset` | 任意 | `true` または値なし | `<path>` が指す値を親から削除する |
 | `<path>.$replace` | 任意 | 任意 | `<path>` の値を値で丸ごと置き換える |
 
@@ -276,11 +277,10 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 
 同じ `<path>` に対して複数の操作キーがあるとき、次の順で適用し、先に適用した結果を次の操作の入力とする。
 
-1. `<path>.$replace` — 存在するとき、`<path>.$unset` / `<path>.$remove` / `<path>.$merge` / `<path>.$append` は無視する
+1. `<path>.$replace` — 存在するとき、`<path>.$unset` / `<path>.$remove` / `<path>.$append` は無視する
 2. `<path>.$unset`
 3. `<path>.$remove`
-4. `<path>.$merge`
-5. `<path>.$append`
+4. `<path>.$append`
 
 同じ `<path>.$<op>` のキーが複数あるとき（同一レイヤー内）、値は配列なら要素を連結し、それ以外は後勝ちで上書きする。
 
@@ -298,38 +298,6 @@ merge 変換と置換 sidecar の入力となる構造化データ（JSON/YAML/T
 | 配列 | 長さが等しく、同じ位置の要素が一致する |
 | オブジェクト | キー集合が等しく、各キーの値が一致する（キーの並びは問わない） |
 
-### 配列要素の部分マージ（`$merge`）
-
-merge と update の共有・マシン固有レイヤーで同じ操作として使う。
-
-| 条件・入力 | 結果 |
-| --- | --- |
-| 規則 | キーが `match` と `merge` だけのオブジェクト。両方必須で、それぞれ非空のプレーンデータオブジェクト |
-| `match` | 指定した own key がすべて存在し、値が一致する AND 条件。入れ子オブジェクトは再帰的な部分一致とし、余分なキーは問わない。各条件オブジェクトは非空 |
-| 条件の葉 | 文字列・真偽・null・数値。数値は `$remove` と同じ値比較を使い、表記差は問わない。欠落キーは null と一致しない。配列条件はエラー |
-| 一致対象 | 一致したオブジェクト要素を全件更新する。重複要素も対象とし、非オブジェクト・不一致要素の位置と値は保持する |
-| `merge` | §深いマージ（通常キー）を要素へ適用する。欠落キーを追加し、非オブジェクトとの衝突と入れ子配列は丸ごと置換する。内部の操作キーはエラーとし、削除操作は提供しない |
-| 規則の順序 | 宣言順に適用し、後続の `match` は先行規則の更新結果を判定する。配列の長さと要素順は保持する |
-| 対象探索 | パスの各成分を own key だけでたどり、継承プロパティは対象にしない |
-| 対象欠落・一致0件 | 新規配列・要素を作らず何もしない |
-| 既存対象が非配列 | `merge merge requires array at path: <path>` で異常終了する |
-| 操作値が非配列 | `merge merge value must be array: <path>.$merge` で異常終了する |
-| 不正規則 | 必須キー欠落・余分なキー・型違反・空の条件または merge・条件内配列・循環参照・merge 内操作キーは、操作キーを含むエラーで異常終了する |
-| 検証時点 | 実行する全規則を対象探索より先に検証する。空規則配列は no-op。replace に隠れた操作と home 不存在で skip した update は評価しない |
-
-例: `profiles.merge.json`
-
-```json
-{
-  "profiles.$merge": [
-    {
-      "match": { "settings": { "mode": "legacy" }, "enabled": true },
-      "merge": { "settings": { "mode": "current" } }
-    }
-  ]
-}
-```
-
 ### 出力形式（canonical）
 
 merge ターゲットの完成形は、毎回同一形式で書き出す。
@@ -341,9 +309,9 @@ merge ターゲットの完成形は、毎回同一形式で書き出す。
 | TOML | TOML 形式、末尾改行 1 つ、改行コード LF |
 | INI | UTF-8 / BOM なし、末尾改行 1つ、改行コード LF。値の規則は §INI の操作と出力 |
 
-JSON 数値は、home・plain base・共有 merge・マシン固有 merge の採用元にある有効な JSON 数値トークンを保持する。ネストしたオブジェクト・配列要素・`$replace` / `$append` / `$merge` の更新値も同様とし、小数末尾のゼロ・指数表記・負のゼロ・整数表記を維持する。後段で上書きした値は後段の表記を採用し、`$remove` の一致は表記によらず従来の値で判定する。
+JSON 数値は、採用する各レイヤーにある有効な JSON 数値トークンを保持する。ネストしたオブジェクト・配列要素・`$replace` / `$append` の更新値も同様とし、小数末尾のゼロ・指数表記・負のゼロ・整数表記を維持する。後段で上書きした値は後段の表記を採用し、`$remove` の一致は表記によらず従来の値で判定する。
 
-JSON の共有・マシン固有 merge sidecar および plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の共有・マシン固有 merge sidecar および plain base の TOML 入力にはコメントを書ける。
+JSON の各 merge sidecar および plain base の JSON 入力にはコメント（JSONC）を書ける。TOML の各 merge sidecar および plain base の TOML 入力にはコメントを書ける。
 
 ### INI の入力と値
 
@@ -375,7 +343,7 @@ INI でも一般の操作キー認識条件・操作順・対象がない場合�
 | --- | --- |
 | `Key.$replace=Value` | 文字列で既存の値を置換する |
 | `Key.$unset=true` / `Key.$unset=` / 裸の `Key.$unset` | 対象を削除する。実行対象の unset が他の値を持つ場合は異常終了する |
-| `Key.$append=...` / `Key.$remove=...` / `Key.$merge=...` | 値は文字列なので、実行時に配列値必須エラーになる |
+| `Key.$append=...` / `Key.$remove=...` | 値は文字列なので、実行時に配列値必須エラーになる |
 
 新規キーは操作キーではなく通常代入で作成する。replace により無視される unset の値は検証しない。空セクションは保持する。
 

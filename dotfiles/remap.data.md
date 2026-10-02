@@ -26,7 +26,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | gsudo | - |  | - |
 | rime/tests | - | - | - |
 | rime | .local/share/fcitx5/rime | AppData/Roaming/Rime | - |
-| localsend/settings.update.json | .local/share/org.localsend.localsend_app/shared_preferences.update.json | AppData/Roaming/LocalSend/settings.update.json | - |
+| localsend/settings.merge-existing.json | .local/share/org.localsend.localsend_app/shared_preferences.merge-existing.json | AppData/Roaming/LocalSend/settings.merge-existing.json | - |
 | obs-studio | - | AppData/Roaming/obs-studio | - |
 | open-whispr |  | AppData/Roaming/open-whispr | - |
 | powershell | - | Documents/PowerShell | - |
