@@ -1,16 +1,8 @@
 // Search pipeline: render each engine's SERP through camoufox, parse it with
 // openserp and pick the first engine that returns results (google →
 // duckduckgo → bing, empty / challenge results advance to the next engine).
-import {
-  recoveryAttemptDuration,
-  tryRecoveryBackends,
-  type BackendEntry,
-} from "./backends";
-import {
-  camoufoxRender,
-  recoverCamoufoxBeforeRetry,
-  shouldRetryCamoufox,
-} from "./camoufox";
+import { recoveryAttemptDuration, tryRecoveryBackends, type BackendEntry } from "./backends";
+import { camoufoxRender, recoverCamoufoxBeforeRetry, shouldRetryCamoufox } from "./camoufox";
 import {
   CAMOUFOX_SEARCH_SESSION_KEY,
   openserpBaseUrl,
@@ -55,13 +47,21 @@ export async function searchOne(query: string, lang?: string): Promise<SearchOut
   const backends: BackendEntry<{ engine: SearchEngine; results: OpenserpSearchResult[] }>[] =
     SEARCH_ENGINES.map((engine) => [
       `camoufox+openserp(${engine})`,
-      async () => ({
-        engine,
-        results: await openserpParse(
+      async () => {
+        const searchUrl = serpUrl(engine, query, lang);
+        const results = await openserpParse(
           engine,
-          await camoufoxRender(serpUrl(engine, query, lang), CAMOUFOX_SEARCH_SESSION_KEY),
-        ),
-      }),
+          await camoufoxRender(searchUrl, CAMOUFOX_SEARCH_SESSION_KEY),
+        );
+        if (engine === "google") {
+          for (const result of results) {
+            if (result.url && !URL.canParse(result.url)) {
+              result.url = URL.parse(result.url, searchUrl)?.href ?? result.url;
+            }
+          }
+        }
+        return { engine, results };
+      },
     ]);
   const { payload, attempts } = await tryRecoveryBackends(
     "web search",
@@ -76,5 +76,3 @@ export async function searchOne(query: string, lang?: string): Promise<SearchOut
     tookMs: recoveryAttemptDuration(attempts),
   };
 }
-
-

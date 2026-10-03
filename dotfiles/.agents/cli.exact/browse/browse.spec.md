@@ -154,6 +154,8 @@ server は SIGINT / SIGTERM を受け取ったとき、PID ファイルから自
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
 | 引数あり | 検索実行 | engine を google → duckduckgo → bing の順で試行し、最初に成功した engine の結果上位 10 件を出力する |
+| google の結果の `url` が相対参照（ルート相対・パス相対・query・fragment・protocol-relative） | 検索結果を出力 | 検索ページの URL を基準に絶対 URL へ補完する。例: `/goto?url=…` は `https://www.google.com/goto?url=…`。転送先確認を含め、補完のための追加リクエストは行わない |
+| 結果の `url` が絶対 URL・空文字列・欠損、または engine が google 以外 | 検索結果を出力 | URL の補完を行わず、前後の空白を除いた URL を出力する。空文字列・欠損の URL は出力を省略する |
 | `--lang <code>` がある | 検索実行 | `<code>` を小文字へ正規化する。google は `hl` へ常に設定し、`gl` は対応表にある lang のみ設定する。bing の `mkt`・duckduckgo の `kl` も対応表にある lang のみ設定する。対応表にない lang では `gl`・`mkt`・`kl` を付与せず、google の `hl` のみ設定される |
 | engine が空結果・captcha・challenge で失敗した | 検索実行 | 次の engine へ進む |
 | engine のrenderがabort・timeout・切断した | 検索実行 | 同一engineを新しいsessionで再試行する。server復旧再試行を既に消費している場合は再試行せず、次のengineへ進む |
