@@ -1,65 +1,90 @@
-#!/usr/bin/env bash
-# Background tasks primed once at harness startup. pi and dsh both run this
-# script detached, so every task must tolerate running twice: deja serializes
-# index builds with its own cross-process lock, pi update deduplicates
-# overlapping runs with flock, and the resident servers are spawned only when
-# their health check fails (a second spawn loses a port race and exits, which
-# is harmless).
+#!/usr/bin/env bun
+import { $ } from "bun";
+import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
+import { connect } from "node:net";
 
-# deja index: fresh -> no-op, stale -> incremental build.
-command -v deja >/dev/null 2>&1 && deja index >/dev/null 2>&1 &
+await Promise.allSettled([indexDeja(), updatePi(), startCamoufox(), startOpenserp()]);
+process.exit(0);
 
-# --- pi update: refresh pi / extensions, one run at a time -------------------
-# pi update has no throttle of its own, so every launch offers to run it; the
-# lock file (in ${TMPDIR:-/tmp}) deduplicates overlapping runs. flock -n
-# skips a launch while another update is in flight, and the detached pi
-# update inherits fd 9 so the lock is held until that update exits.
-update_lock="${TMPDIR:-/tmp}/pi-update.lock"
-if command -v pi >/dev/null 2>&1 && command -v flock >/dev/null 2>&1 \
-	&& exec 9>"$update_lock" && flock -n 9; then
-	nohup pi update --all >/dev/null 2>&1 &
-fi
-
-# url_authority URL -> the host:port authority (scheme and path stripped).
-url_authority() {
-	local rest="$1"
-	rest="${rest#*://}"
-	rest="${rest%%/*}"
-	printf '%s\n' "$rest"
+async function indexDeja() {
+  const deja = Bun.which("deja");
+  if (deja) startDetached(deja, ["index"]);
 }
 
-# port_open HOST PORT: succeed when a TCP connection is accepted.
-port_open() {
-	(exec 3<>"/dev/tcp/$1/$2") 2>/dev/null
+async function updatePi() {
+  const pi = Bun.which("pi");
+  const flock = Bun.which("flock");
+  if (!pi || !flock) return;
+
+  const lock = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
+  // flock owns the lock until pi exits, independently of this startup process.
+  startDetached(flock, ["-n", lock, pi, "update", "--all"]);
 }
 
-# --- camoufox server: rendering backend shared by pi and dsh web-search -----
-# `browse server start` is idempotent: it no-ops when the server is healthy and
-# otherwise spawns it (maintaining Xvfb/x11vnc on Linux, appending to the
-# log) and waits for readiness. This script only gates the spawn on the port
-# check so a healthy server costs nothing.
-camoufox_authority="$(url_authority "${CAMOUFOX_BASE_URL:-ws://127.0.0.1:9378/camoufox}")"
-if [ -n "$camoufox_authority" ]; then
-	camoufox_host="${camoufox_authority%:*}"
-	camoufox_port="${camoufox_authority##*:}"
-	if ! port_open "$camoufox_host" "$camoufox_port"; then
-		camoufox_cli="$HOME/.agents/cli/browse"
-		log_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pi/web-search"
-		# The CLI is a bun project: `bun <dir>` resolves package.json's main field.
-		if [ -f "$camoufox_cli/package.json" ] && command -v bun >/dev/null 2>&1; then
-			mkdir -p "$log_dir"
-			nohup bun "$camoufox_cli" server start >>"$log_dir/camoufox-server.log" 2>&1 &
-		fi
-	fi
-fi
+async function startCamoufox() {
+  const cli = `${process.env.HOME}/.agents/cli/browse`;
+  const bun = Bun.which("bun");
+  if (!bun || !(await Bun.file(`${cli}/package.json`).exists())) return;
 
-# --- openserp: SERP parsing backend -----------------------------------------
-openserp_url="${OPENSERP_BASE_URL:-http://127.0.0.1:7000}"
-if command -v openserp >/dev/null 2>&1; then
-	if ! curl -fsS --max-time 1 "$openserp_url/ready" >/dev/null 2>&1; then
-		openserp_authority="$(url_authority "$openserp_url")"
-		nohup openserp serve -a "${openserp_authority%:*}" -p "${openserp_authority##*:}" --quiet >/dev/null 2>&1 &
-	fi
-fi
+  const url = new URL(process.env.CAMOUFOX_BASE_URL || "ws://127.0.0.1:9378/camoufox");
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const port = Number(url.port || (url.protocol === "wss:" ? "443" : "80"));
+  if (await portOpen(host, port)) return;
 
-exit 0
+  const logDir = `${process.env.XDG_CACHE_HOME || `${process.env.HOME}/.cache`}/pi/web-search`;
+  await $`mkdir -p ${logDir}`.quiet();
+  const log = openSync(`${logDir}/camoufox-server.log`, "a");
+  try {
+    startDetached(bun, [cli, "server", "start"], log);
+  } finally {
+    closeSync(log);
+  }
+}
+
+async function startOpenserp() {
+  const openserp = Bun.which("openserp");
+  if (!openserp) return;
+
+  const baseUrl = process.env.OPENSERP_BASE_URL || "http://127.0.0.1:7000";
+  if (await httpHealthy(`${baseUrl}/ready`)) return;
+
+  const url = new URL(baseUrl);
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const port = url.port || (url.protocol === "https:" ? "443" : "80");
+  startDetached(openserp, ["serve", "-a", host, "-p", port, "--quiet"]);
+}
+
+function startDetached(command: string, args: string[], output: number | "ignore" = "ignore") {
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: ["ignore", output, output],
+  });
+  child.on("error", () => {});
+  child.unref();
+}
+
+function portOpen(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect(port, host);
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+  });
+}
+
+async function httpHealthy(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(1000),
+    });
+    await response.arrayBuffer();
+    // curl -fsS accepts redirects without following them, but fails on 4xx/5xx.
+    return response.status < 400;
+  } catch {
+    return false;
+  }
+}
