@@ -56,8 +56,8 @@ addons.setConfig({
 
 addon panel に加えて、sidebar の root を見出しとして表示しない。同じ `setConfig` に追加する:
 
-| 目的                                     | 設定                            |
-| ---------------------------------------- | ------------------------------- |
+| 目的 | 設定 |
+| --- | --- |
 | sidebar の root 見出しスタイルを解除する | `sidebar: { showRoots: false }` |
 
 `showRoots: false` は root の行そのものを消さない。大文字の見出しスタイル（`TEST`）が通常の行スタイル（`Test`）に変わるだけである。
