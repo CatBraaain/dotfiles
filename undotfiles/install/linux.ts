@@ -67,6 +67,8 @@ export const openDesignDir = join(homedir(), "mirrors", "open-design");
 export const openDesignRepoUrl = "https://github.com/nexu-io/open-design.git";
 const openWhisprRepo = "OpenWhispr/openwhispr";
 const openWhisprPackageName = "open-whispr";
+const rustDeskRepo = "rustdesk/rustdesk";
+const rustDeskPackageName = "rustdesk";
 export const openDesignDaemonEntry = join(openDesignDir, "apps", "daemon", "dist", "cli.js");
 export const openDesignWebEntry = join(openDesignDir, "apps", "web", "out", "index.html");
 const openDesignBinDir = join(homedir(), ".local", "bin");
@@ -291,6 +293,7 @@ export class Bootstrap {
       ["android-sdk", () => this.installAndroidSdk()],
       ["drawio", () => this.installDrawio()],
       ["openwhispr", () => this.installOpenWhispr()],
+      ["rustdesk", () => this.installRustDesk()],
       ["opendesign", () => this.installOpenDesign()],
     ]);
   }
@@ -401,6 +404,54 @@ export class Bootstrap {
       ]);
       const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
       if (!file) throw new Error("OpenWhispr release archive is missing a deb package");
+      this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  private async installRustDesk(): Promise<void> {
+    if (this.runtime.output(["uname", "-m"]) !== "x86_64")
+      throw new Error("RustDesk Linux release supports x86_64 only");
+
+    const tag = this.runtime.output([
+      "gh",
+      "release",
+      "view",
+      "--repo",
+      rustDeskRepo,
+      "--json",
+      "tagName",
+      "--jq",
+      ".tagName",
+    ]);
+    const version = tag.replace(/^v/, "");
+    if (
+      this.runtime.outputAllowFailure([
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        rustDeskPackageName,
+      ]) === version
+    )
+      return;
+
+    const directory = await mkdtemp(join(tmpdir(), "bootstrap-rustdesk-"));
+    try {
+      this.runtime.execute([
+        "gh",
+        "release",
+        "download",
+        tag,
+        "--repo",
+        rustDeskRepo,
+        "--pattern",
+        `rustdesk-${version}-x86_64.deb`,
+        "--dir",
+        directory,
+      ]);
+      const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
+      if (!file) throw new Error("RustDesk release archive is missing a deb package");
       this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
     } finally {
       await rm(directory, { recursive: true, force: true });

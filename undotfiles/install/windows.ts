@@ -8,8 +8,9 @@
 // gsudo (one UAC prompt); `gsudo status IsElevated` exits with 0 once
 // elevated, so the relaunch happens at most once.
 
+import { mkdtemp } from "node:fs/promises";
 import { readdirSync, rmSync, symlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 type Profile = "personal" | "work";
@@ -92,6 +93,9 @@ async function main(): Promise<void> {
   const profile = parseProfile();
   if (!isElevated()) await selfElevate(profile);
   installWingetPackages(profile);
+  await installRustDesk().catch((error: unknown) =>
+    console.error(`rustdesk install failed: ${message(error)}`),
+  );
   removeDesktopShortcuts();
   linkWingetPackageExes();
 }
@@ -120,6 +124,65 @@ function installWingetPackages(profile: Profile): void {
   runAllowingFailure(["winget", "install", ...unmanaged, "--no-upgrade", "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managed, "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managedDevPackages, "--source", "winget"]);
+}
+
+const rustDeskRepo = "rustdesk/rustdesk";
+
+// RustDesk is not on winget (removed from the community repository), so it is
+// installed from the GitHub release msi instead. The installed version is
+// looked up from the registry so upgrades replace the previous msi install.
+async function installRustDesk(): Promise<void> {
+  if (process.arch !== "x64")
+    throw new Error("the RustDesk Windows installer supports x64 only");
+  const tag = output([
+    "gh",
+    "release",
+    "view",
+    "--repo",
+    rustDeskRepo,
+    "--json",
+    "tagName",
+    "--jq",
+    ".tagName",
+  ]);
+  if (rustDeskRegistryVersion() === tag) return;
+
+  const directory = await mkdtemp(join(tmpdir(), "bootstrap-rustdesk-"));
+  try {
+    run([
+      "gh",
+      "release",
+      "download",
+      tag,
+      "--repo",
+      rustDeskRepo,
+      "--pattern",
+      `rustdesk-${tag}-x86_64.msi`,
+      "--dir",
+      directory,
+    ]);
+    const file = readdirSync(directory).find((name) => name.endsWith(".msi"));
+    if (!file) throw new Error("RustDesk release archive is missing an msi package");
+    run(["msiexec", "/i", join(directory, file), "/qn"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function rustDeskRegistryVersion(): string {
+  return output([
+    "powershell",
+    "-NoProfile",
+    "-Command",
+    [
+      "Get-ItemProperty",
+      "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\*',",
+      "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\*'",
+      "-ErrorAction SilentlyContinue",
+      "| Where-Object DisplayName -eq 'RustDesk'",
+      "| Select-Object -First 1 -ExpandProperty DisplayVersion",
+    ].join(" "),
+  ]);
 }
 
 function removeDesktopShortcuts(): void {
@@ -173,6 +236,17 @@ function localAppData(): string {
   const value = process.env["LOCALAPPDATA"];
   if (!value) throw new Error("environment variable LOCALAPPDATA is not set");
   return value;
+}
+
+function output(command: readonly string[]): string {
+  const result = Bun.spawnSync([...command], { stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0)
+    throw new Error(result.stderr.toString().trim() || command.join(" "));
+  return result.stdout.toString().trim();
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 if (import.meta.main) await main();
