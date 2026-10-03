@@ -165,12 +165,22 @@ Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_creat
 
 - 起票は `ticket_create`（CLI: `ticket create '{"title":"Ticket title","body":"Ticket body"}'`）。ID は採番されるため、`title`・`body`・`status`・`after` の引数を分けて渡す。`body` には frontmatter と H1 を含めず、H1 の直後に置く本文だけを渡す。上記のファイルテンプレートは fs tools で直接起票するときだけ使う
 - status・`after` の変更は `ticket_set`（CLI: `ticket set <id> '{"status":"locked"}'`、依存設定なら `ticket set <id> '{"after":"20260918-125653"}'`、解除なら `ticket set <id> '{"after":null}'`）。変更対象を指定したフィールドだけを frontmatter で更新する。未解決の `after` の設定と解除は、status を明示しなければ status と連動する
-- 本文の更新は `ticket_edit`（CLI: `ticket edit <id> '<old>' '<new>'`）。先に `ticket_show` で最新の本文を読み、frontmatter を除く本文（H1 を含む）から一度だけ現れる文字列を `old` として指定する。`new` は置換後の文字列。0回または複数回の一致なら失敗する
+- 本文の更新は `ticket_edit`（CLI: `ticket edit <id> '<old>' '<new>'`）。先に `ticket_show` で最新の本文を読み、取得した本文（frontmatter を除き H1 を含む）から短く一度だけ現れる文字列を `old` へ正確にコピーする。一意でなければ周辺文を含める。チャットや別ファイルの文章から `old` を推測しない。`new` は置換後の文字列。0回または複数回の一致なら失敗する
 - 本文追記を要する `closed`・`blocked`・`cancelled` 等の遷移では、`ticket_edit` で必要な記録を追加してから `ticket_set` で status・`after` を変更する。両操作を原子的にまとめる tool / CLI はない。片方が失敗したら再実行を重ねず `ticket_show` で現状を確認してから対処する
 - `after` の不存在・`closed`・`cancelled` 指定や循環は tool・CLI が検証して失敗する。一方、`open` かつ依存未解決は `next` の対象外になるだけで、`set` 自体は許される。着手前には `ticket_show` で status と `after` を確認する
 - CLI と tool の振る舞いの正本は `~/.agents/cli/ticket/ticket.spec.md`（CLI）と `~/.agents/cli/ticket/ticket-tools.spec.md`（tool）である
 
 fs tools で直接読み書きするときは、本文は必要な箇所だけ編集し、可能な限り既存の内容を維持する。frontmatter も必要に応じて編集してよいが、完全な保護や構造の維持は保証しない。壊れた場合は内容を確認し、修正する。
+
+## 引継ぎ
+
+委譲・再開の引継ぎでは、対象 project・ticket ID を明記し、更新を次の3つに分けて渡す。
+
+- 保存済み: 成功を確認した更新
+- 未反映: まだ実行していない本文・status・`after` の差分
+- 結果不明: 送信したが応答を確認できず、成否が分からない更新
+
+結果不明を未保存と決めつけない。再開時は `ticket_show` で現在の本文と、必要なら status・`after` を確認し、残る更新だけを実行する。
 
 ## 一覧
 
