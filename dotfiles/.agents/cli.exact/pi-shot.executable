@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec pi -p --no-session --no-tools --agent junior -- "$@"

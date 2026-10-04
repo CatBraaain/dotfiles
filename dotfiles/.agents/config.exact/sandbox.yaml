@@ -117,3 +117,5 @@ commands:
       - '^/mnt(?:/|\s|$)'
   - allow:
       - '(?i:^/mnt/c/WINDOWS/system32/wsl\.exe(\s|$))'
+  - ask:
+      - '(^|\|\s*)pi(\s|$)'
