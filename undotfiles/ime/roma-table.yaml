@@ -1,6 +1,3 @@
-# The declarative romaji table used by the MS-IME compiler
-# (undotfiles/ime/msime/roma-def.ts).
-# The compiler loads this file and reflects it into its own format.
 rows:
   "": [あ, い, う, え, お]
   l: [ぁ, ぃ, ぅ, ぇ, ぉ]
@@ -25,7 +22,6 @@ rows:
   f: [ふぁ, ふぃ, ふ, ふぇ, ふぉ]
   v: [ヴぁ, ヴぃ, ヴ, ヴぇ, ヴぉ]
 singles:
-  # dhu beats the standard yoon "ぢゅ" that the d row would generate
   dhu: でゅ
   who: うぉ
   nn: ん
@@ -40,21 +36,16 @@ families:
   - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
     column: i
     suffixes: { ya: ゃ, yu: ゅ, yo: ょ, ha: ゃ, hu: ゅ, ho: ょ }
-    # keep the non-standard spellings nh.* (= にゃ...) and hh.* (= ひゃ...) out
-    exclude: ["nh.*", "hh.*"]
-  # thi=てぃ, dhi=でぃ: e-column + small i
+    exclude: ["nh.*", "hh.*", "dhu"]
   - rows: [t, d]
     column: e
     suffixes: { hi: ぃ }
-  # khe=きぇ, she=しぇ, che=ちぇ...: i-column + small e
   - rows: [k, c, g, s, t]
     column: i
     suffixes: { he: ぇ }
-  # kwa=くぁ, swi=すぃ...: u-column + small a/i/e/o
-  - rows: [k, c, g, s, z, t, d, h, b, p, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, m, r]
     column: u
     suffixes: { wa: ぁ, wi: ぃ, we: ぇ, wo: ぉ }
-  # twu=とぅ, dwu=どぅ: o-column + small u
-  - rows: [k, c, g, s, z, t, d, h, b, p, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, m, r]
     column: o
     suffixes: { wu: ぅ }

@@ -1,15 +1,4 @@
-# The declarative romaji table for the managed Kagiroi Rime dictionary
-# (dotfiles/rime/SPEC.md). Independent from the MS-IME declaration
-# (undotfiles/ime/roma-table.yaml): this table owns every mapping the Rime
-# dictionary needs, including the geminate consonants and the long vowel, so
-# the two tables may drift apart. roma.build.ts compiles it into
-# kagiroi_dotfiles_romaji.dict.yaml at build time.
-#
-# Aggregation rule: individual mappings (singles) always win over generated
-# ones, regular rows generate their vowel slots, and derivation families
-# generate suffixed mappings.
 name: kagiroi_dotfiles_romaji
-version: "20260928"
 rows:
   "": [あ, い, う, え, お]
   l: [ぁ, ぃ, ぅ, ぇ, ぉ]
@@ -34,7 +23,6 @@ rows:
   f: [ふぁ, ふぃ, ふ, ふぇ, ふぉ]
   v: [ヴぁ, ヴぃ, ヴ, ヴぇ, ヴぉ]
 singles:
-  # dhu beats the standard yoon "ぢゅ" that the d row would generate
   dhu: でゅ
   who: うぉ
   nn: ん
@@ -49,25 +37,18 @@ families:
   - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
     column: i
     suffixes: { ya: ゃ, yu: ゅ, yo: ょ, ha: ゃ, hu: ゅ, ho: ょ }
-    # keep the non-standard spellings nh.* (= にゃ...) and hh.* (= ひゃ...) out
-    exclude: ["nh.*", "hh.*"]
-  # thi=てぃ, dhi=でぃ: e-column + small i
+    exclude: ["nh.*", "hh.*", "dhu"]
   - rows: [t, d]
     column: e
     suffixes: { hi: ぃ }
-  # khe=きぇ, she=しぇ, che=ちぇ...: i-column + small e
   - rows: [k, c, g, s, t]
     column: i
     suffixes: { he: ぇ }
-  # kwa=くぁ, swi=すぃ...: u-column + small a/i/e/o
-  - rows: [k, c, g, s, z, t, d, h, b, p, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, m, r]
     column: u
     suffixes: { wa: ぁ, wi: ぃ, we: ぇ, wo: ぉ }
-  # twu=とぅ, dwu=どぅ: o-column + small u
-  - rows: [k, c, g, s, z, t, d, h, b, p, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, m, r]
     column: o
     suffixes: { wu: ぅ }
-# Doubling these consonants types っ + the consonant (kka = っか).
-sokuon_consonants: [k, c, g, h, j, t, f, w, r, z, s, v, l, d, b, p, m, y]
-# The key that types the long vowel ー.
+sokuon_consonants: [l, k, c, g, s, z, t, d, h, b, p, m, y, r, w, q, f, j, v]
 long_vowel: "-"

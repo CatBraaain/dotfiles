@@ -27,7 +27,6 @@ type Family = {
 
 type Declaration = {
   name: string;
-  version: string;
   rows: Record<string, string[]>;
   singles: Record<string, string>;
   families: Family[];
@@ -40,6 +39,8 @@ const COLUMN_INDEX: Record<Column, number> = { a: 0, i: 1, u: 2, e: 3, o: 4 };
 const hookDir = (import.meta as { dir?: string }).dir as string;
 const DECLARATION_PATH = `${hookDir}/roma.data.yaml`;
 const DICTIONARY_NAME = "kagiroi_dotfiles_romaji.dict.yaml";
+// librime rejects a dict.yaml without a version, so the builder owns one.
+const DICTIONARY_VERSION = "20260928";
 
 // Imported through a variable so type checking does not try to resolve the
 // package from this file's location (the hook runs from a dist snapshot).
@@ -89,7 +90,6 @@ function validateDeclaration(data: unknown): Declaration {
 
   return {
     name: requireString("name"),
-    version: requireString("version"),
     rows,
     singles,
     families: data.families as Family[],
@@ -171,7 +171,7 @@ function renderDictionary(decl: Declaration): string {
     "",
     "---",
     `name: ${decl.name}`,
-    `version: ${JSON.stringify(decl.version)}`,
+    `version: ${JSON.stringify(DICTIONARY_VERSION)}`,
     "sort: by_weight",
     "columns:",
     "  - text",

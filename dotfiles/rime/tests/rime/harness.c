@@ -1949,12 +1949,11 @@ static void test_romanization_matches_declaration(void) {
         {"dwa", "づぁ"}, {"dwi", "づぃ"}, {"dwe", "づぇ"}, {"dwo", "づぉ"},
         {"hwa", "ふぁ"}, {"hwi", "ふぃ"}, {"hwe", "ふぇ"}, {"hwo", "ふぉ"},
         {"bwa", "ぶぁ"}, {"bwi", "ぶぃ"}, {"bwe", "ぶぇ"}, {"bwo", "ぶぉ"},
-        {"pwa", "ぷぁ"}, {"pwi", "ぷぃ"}, {"pwe", "ぷぇ"}, {"pwo", "ぷぉ"},
         {"mwa", "むぁ"}, {"mwi", "むぃ"}, {"mwe", "むぇ"}, {"mwo", "むぉ"},
         {"rwa", "るぁ"}, {"rwi", "るぃ"}, {"rwe", "るぇ"}, {"rwo", "るぉ"},
         {"kwu", "こぅ"}, {"cwu", "こぅ"}, {"gwu", "ごぅ"}, {"swu", "そぅ"},
         {"zwu", "ぞぅ"}, {"twu", "とぅ"}, {"dwu", "どぅ"},
-        {"hwu", "ほぅ"}, {"bwu", "ぼぅ"}, {"pwu", "ぽぅ"}, {"mwu", "もぅ"},
+        {"hwu", "ほぅ"}, {"bwu", "ぼぅ"}, {"mwu", "もぅ"},
         {"rwu", "ろぅ"},
         /* dhu beats the stock yoon spelling (ぢゅ) with the single */
         {"dhu", "でゅ"},
@@ -2454,6 +2453,11 @@ static void test_longest_declared_suffix_preserves_raw_prefix(void) {
          * but typing still forms it: w completes the pending n, and the
          * empty-slot wu then leaves w raw before u */
         {"nwu", "んwう"},
+        /* pw* is not declared either (the p row left the u/o-column w
+         * families): wa/wi/we/wo still complete through the declared w
+         * row, while the empty-slot wu leaves pw raw before u */
+        {"pwa", "pわ"}, {"pwi", "pうぃ"}, {"pwe", "pうぇ"},
+        {"pwo", "pを"}, {"pwu", "pwう"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
@@ -2483,7 +2487,7 @@ static void test_sokuon_hatsuon_and_long_vowel(void) {
         {"jja", "っじゃ"}, {"tta", "った"}, {"ffa", "っふぁ"}, {"wwa", "っわ"},
         {"rra", "っら"}, {"zza", "っざ"}, {"ssa", "っさ"}, {"vva", "っヴぁ"},
         {"lla", "っぁ"}, {"dda", "っだ"}, {"bba", "っば"}, {"ppa", "っぱ"},
-        {"mma", "っま"}, {"yya", "っや"},
+        {"mma", "っま"}, {"yya", "っや"}, {"qqa", "っくぁ"},
     };
     for (size_t i = 0; i < sizeof(sokuon) / sizeof(sokuon[0]); ++i) {
         fresh_session();
