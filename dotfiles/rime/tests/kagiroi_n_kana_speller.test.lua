@@ -19,17 +19,21 @@ local romaji_to_kana = {
     ne = "ね",
     e = "え",
     a = "あ",
+    u = "う",
+    o = "お",
     nn = "ん",
     wa = "わ",
     wi = "うぃ",
     we = "うぇ",
     wo = "を",
+    ["-"] = "ー",
 }
 
 local base = {}
 function base.init(env)
     env.alphabet = "abcdefghijklmnopqrstuvwxyz-;"
     env.prefix = ""
+    env.roma2hira_xlator = true
 end
 function base.fini() end
 function base.func(key_event, env)
@@ -148,6 +152,9 @@ local typing_cases = {
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんんじ" },
+    { input = "kannnnji", expected = "かんんじ" },
+    { input = "kannnnu", expected = "かんんう" },
+    { input = "kannnnyo", expected = "かんんよ" },
     { input = "kana", expected = "かな" },
     { input = "kanna", expected = "かんあ" },
     { input = "kannna", expected = "かんな" },
@@ -165,6 +172,7 @@ local typing_cases = {
     { input = "nwe", expected = "んうぇ" },
     { input = "nwo", expected = "んを" },
     { input = "nnwa", expected = "んわ" },
+    { input = "kan-", expected = "かnー" },
 }
 
 for _, case in ipairs(typing_cases) do
@@ -182,6 +190,7 @@ local conversion_cases = {
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんじ" },
+    { input = "kannnnji", expected = "かんじ" },
     { input = "kana", expected = "かな" },
     { input = "nya", expected = "にゃ" },
     { input = "nna", expected = "んあ" },
@@ -189,6 +198,11 @@ local conversion_cases = {
     { input = "kanna", expected = "かんあ" },
     { input = "kannna", expected = "かんな" },
     { input = "kannnna", expected = "かんな" },
+    { input = "kannnni", expected = "かんに" },
+    { input = "kannnnu", expected = "かんぬ" },
+    { input = "kannnne", expected = "かんね" },
+    { input = "kannnno", expected = "かんの" },
+    { input = "kannnnyo", expected = "かんにょ" },
     { input = "konnnitiha", expected = "こんにちは" },
     { input = "kanda", expected = "かんだ" },
     { input = "kannda", expected = "かんだ" },
@@ -218,6 +232,33 @@ processor.init(env)
 press(env, "n")
 press(env, " ")
 assert(env.context.input == "ん", "n followed by Space should become ん")
+
+-- SPEC: the conversion-time correction treats the whole reading, whatever
+-- the caret position (Left may move it away from the end).
+env = new_environment()
+processor.init(env)
+for character in ("kan"):gmatch(".") do press(env, character) end
+env.context.caret_pos = #"か"
+press(env, " ")
+assert(env.context.input == "かん",
+    "Space with a mid-input caret must still resolve the trailing n")
+
+env = new_environment()
+processor.init(env)
+for character in ("kannnna"):gmatch(".") do press(env, character) end
+env.context.caret_pos = #"かん"
+press(env, " ")
+assert(env.context.input == "かんな",
+    "Space with a mid-input caret must fold the whole reading")
+
+-- The long-vowel key is not a consonant: the n ahead of it stays pending and
+-- the conversion does not complete an n that is no longer trailing.
+env = new_environment()
+processor.init(env)
+for character in ("kan-"):gmatch(".") do press(env, character) end
+assert(env.context.input == "かnー", "kan- must keep the pending n raw")
+press(env, " ")
+assert(env.context.input == "かnー", "Space must not complete a non-trailing n")
 
 env = new_environment()
 processor.init(env)

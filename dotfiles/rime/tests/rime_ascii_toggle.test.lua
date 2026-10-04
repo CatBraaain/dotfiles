@@ -76,34 +76,34 @@ for _, modifiers in ipairs({
 end
 
 -- Entering the ascii input mode keeps the composition unconfirmed and
--- records the tail position and the toggle origin
+-- records the tail position and an independent OFF reservation
 -- (dotfiles/rime/SPEC.md).
 context.input = "かんじ"
 context:set_option("_kagiroi_hide_candidates", false)
 assert(press() == kAccepted, "Zenkaku_Hankaku with a composition must be consumed")
 assert(#context.commits == 0, "entering the ascii input mode must not commit")
 assert(context.input == "かんじ", "entering the ascii input mode must keep the composition")
-assert(context:get_option("_kagiroi_hide_candidates"),
-    "entering the ascii input mode must hide the candidate list")
+assert(not context:get_option("_kagiroi_hide_candidates"),
+    "entering the ascii input mode must preserve candidate visibility")
 assert(context:get_option("_kagiroi_ascii_input"),
     "Zenkaku_Hankaku must enter the ascii input mode")
 assert(kana_speller.ascii_tail == #context.input,
     "entering the ascii input mode must record the tail position")
-assert(controls.ascii_input_origin == "toggle",
-    "entering by Zenkaku_Hankaku must record the toggle origin")
+assert(context:get_option("_kagiroi_off_pending"),
+    "entering by Zenkaku_Hankaku must reserve IME OFF")
 
 -- Returning to the Japanese mode keeps the composition and the tail, and
--- clears the origin record.
+-- preserves the OFF reservation.
 assert(press() == kAccepted and not context:get_option("_kagiroi_ascii_input"),
     "Zenkaku_Hankaku must restore the Japanese mode")
 assert(context.input == "かんじ", "the return must keep the composition")
 assert(kana_speller.ascii_tail == #context.input, "the return must keep the tail position")
 assert(#context.commits == 0, "the round trip must not commit")
-assert(controls.ascii_input_origin == nil,
-    "returning to the Japanese mode must clear the origin record")
+assert(context:get_option("_kagiroi_off_pending"),
+    "returning to Japanese input must preserve the OFF reservation")
 
 -- Muhenkan enters the mode from the Japanese input like Zenkaku_Hankaku and
--- records the toggle origin. Hiragana_Katakana is unbound: the key passes
+-- reserves IME OFF. Hiragana_Katakana is unbound: the key passes
 -- through without touching the mode or the tail
 -- (dotfiles/rime/SPEC.md).
 local kHiraganaKatakana = 0xff27
@@ -115,9 +115,9 @@ assert(context:get_option("_kagiroi_ascii_input"),
 assert(context.input == "にほんご" and #context.commits == 0,
     "Muhenkan must keep the composition unconfirmed")
 assert(kana_speller.ascii_tail == #context.input, "Muhenkan must record the tail position")
-assert(controls.ascii_input_origin == "toggle", "Muhenkan must record the toggle origin")
-assert(press({ keycode = kMuhenkan }) == kNoop,
-    "Muhenkan inside the mode must pass through untouched")
+assert(context:get_option("_kagiroi_off_pending"), "Muhenkan must reserve IME OFF")
+assert(press({ keycode = kMuhenkan }) == kAccepted,
+    "Muhenkan inside the mode must reserve IME OFF")
 assert(context:get_option("_kagiroi_ascii_input") and context.input == "にほんご",
     "the in-mode Muhenkan must leave the mode and the composition unchanged")
 assert(press({ keycode = kHiraganaKatakana }) == kNoop,

@@ -46,11 +46,11 @@ workspace="$cache/user"
 mkdir -p "$cache/harness" "$workspace/lua/kagiroi"
 
 # Stock Kagiroi files first, so the managed files always win.
-# The main kagiroi dictionary imports the mozc, nico and manual tables, and
 # kagiroi.yaml carries the alphabet/key_bindings/punct nodes the schema includes.
+# Common punctuation/key binding presets come from shared data, as in deployment.
 # The dependency schemas are needed so their dictionaries get prism/reverse tables.
 install -m 644 "$mirror"/kagiroi.schema.yaml "$mirror"/kagiroi.yaml \
-    "$mirror"/kagiroi.dict.yaml "$mirror"/kagiroi.manual.dict.yaml \
+    "$mirror"/kagiroi.manual.dict.yaml \
     "$mirror"/kagiroi.mozc.dict.yaml "$mirror"/kagiroi.nico.dict.yaml \
     "$mirror"/kagiroi_kanji.dict.yaml "$mirror"/kagiroi_kanji.schema.yaml \
     "$mirror"/kagiroi_kaomoji.dict.yaml "$mirror"/kagiroi_symbols.dict.yaml \
@@ -58,15 +58,15 @@ install -m 644 "$mirror"/kagiroi.schema.yaml "$mirror"/kagiroi.yaml \
     "$mirror"/kagiroi_ansikana.dict.yaml "$mirror"/kagiroi_ansikana.schema.yaml \
     "$mirror"/kagiroi_szromaji.dict.yaml "$mirror"/kagiroi_szromaji.schema.yaml \
     "$mirror"/kagiroi_matrix.dict.yaml "$mirror"/kagiroi_matrix.schema.yaml \
-    "$mirror"/punctuation.yaml \
-    "$mirror"/key_bindings.yaml "$mirror"/kagiroi_custom_phrases.txt "$workspace/"
+    "$mirror"/kagiroi_custom_phrases.txt "$workspace/"
 cp -r "$mirror"/lua/kagiroi/. "$workspace/lua/kagiroi/"
 cp -r "$mirror"/opencc "$workspace/"
 
 # Managed files under test, in the same relative layout as the deployment.
 # The romaji dictionary is generated from the declaration, as in dist/.
 install -m 644 "$root"/default.custom.yaml "$root"/kagiroi.custom.yaml \
-    "$root"/kagiroi.custom.dict.yaml "$root"/kagiroi_romaji.custom.yaml "$workspace/"
+    "$root"/kagiroi.dict.yaml "$root"/kagiroi.custom.dict.yaml \
+    "$root"/kagiroi_romaji.custom.yaml "$workspace/"
 bun "$root/roma.build.ts" --output "$workspace/kagiroi_dotfiles_romaji.dict.yaml"
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
 

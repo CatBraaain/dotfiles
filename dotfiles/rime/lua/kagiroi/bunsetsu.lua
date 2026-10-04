@@ -202,6 +202,9 @@ function Top.render(context)
     state.layout = table.concat(prefix) .. active .. table.concat(suffix)
     state.window_start = context:get_option("_kagiroi_expand_candidates") and 0
         or math.floor((clause.selected - 1) / 10) * 10
+    -- The candidate gate numbers pages over the final display order, so it
+    -- must know how many candidates this window skipped.
+    context:set_property("_kagiroi_page_offset", tostring(state.window_start))
     context.input = ""
     context.input = state.layout
     local segment = context.composition:back()
@@ -215,7 +218,18 @@ end
 function Top.move(context, direction)
     Top.sync(context)
     local state = Top.state(context)
-    state.active = math.max(1, math.min(#state.clauses, state.active + direction))
+    local target = math.max(1, math.min(#state.clauses, state.active + direction))
+    if target ~= state.active then
+        state.active = target
+        -- A successful move with the list open closes it, clears the
+        -- expansion and returns to the hidden conversion; a move blocked at
+        -- an end keeps the list, expansion, selection and state
+        -- (dotfiles/rime/SPEC.md, "文節移動").
+        if not context:get_option("_kagiroi_hide_candidates") then
+            context:set_option("_kagiroi_expand_candidates", false)
+            context:set_option("_kagiroi_hide_candidates", true)
+        end
+    end
     Top.render(context)
 end
 
@@ -242,6 +256,14 @@ function Top.resize(context, direction)
     elseif right then state.clauses[index + 1] = new_clause(right_reading, env)
     else table.insert(state.clauses, index + 1, new_clause(right_reading, env)) end
     state.henkan = false
+    -- A boundary that actually moved closes a visible list and clears its
+    -- expansion; the hidden conversion keeps its visibility, and an
+    -- unchanged boundary keeps everything (dotfiles/rime/SPEC.md,
+    -- "境界変更").
+    if not context:get_option("_kagiroi_hide_candidates") then
+        context:set_option("_kagiroi_expand_candidates", false)
+        context:set_option("_kagiroi_hide_candidates", true)
+    end
     Top.render(context)
 end
 
@@ -262,12 +284,18 @@ end
 function Top.page(context, direction)
     Top.sync(context)
     local state = Top.state(context)
-    if not context:get_option("_kagiroi_expand_candidates") then return end
     local clause = state.clauses[state.active]
-    local page = math.floor((clause.selected - 1) / 30) + direction
-    local last_page = math.floor((#clause.candidates - 1) / 30)
-    clause.selected = math.min(#clause.candidates,
-        math.max(0, math.min(last_page, page)) * 30 + (clause.selected - 1) % 30 + 1)
+    -- Pages follow the whole candidate count at the display width: ten per
+    -- page while collapsed, thirty while expanded. The destination page's
+    -- first candidate is selected and the pages wrap at both ends, so a
+    -- single page still selects its own head
+    -- (dotfiles/rime/SPEC.md, "候補選択の循環").
+    local width = context:get_option("_kagiroi_expand_candidates") and 30 or 10
+    local page = math.floor((clause.selected - 1) / width) + direction
+    local last_page = math.floor(math.max(0, #clause.candidates - 1) / width)
+    if page < 0 then page = last_page elseif page > last_page then page = 0 end
+    clause.selected = page * width + 1
+    clause.override = nil
     Top.render(context)
 end
 

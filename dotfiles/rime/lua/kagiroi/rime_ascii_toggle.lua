@@ -27,13 +27,18 @@ local function toggle_ascii_mode(key_event, env)
         return kNoop
     end
     if context:get_option("_kagiroi_ascii_input") then
-        -- Zenkaku_Hankaku returns to the Japanese mode with the composition
-        -- kept; Muhenkan inside the mode passes through untouched.
         if keycode == kZenkakuHankaku then
             controls.stop_ascii_input(context)
             return kAccepted
         end
-        return kNoop
+        if context.input ~= "" then
+            context:set_option("_kagiroi_off_pending", true)
+            return kAccepted
+        end
+        context:set_option("_kagiroi_ascii_input", false)
+        context:set_option("_kagiroi_off_pending", false)
+        context:set_option("ascii_mode", true)
+        return kAccepted
     end
     if context.input == "" then
         -- Nothing unconfirmed: the keys switch IME OFF
@@ -41,7 +46,7 @@ local function toggle_ascii_mode(key_event, env)
         context:set_option("ascii_mode", true)
         return kAccepted
     end
-    controls.start_ascii_input(context, "toggle")
+    controls.start_ascii_input(context, true)
     return kAccepted
 end
 

@@ -12,15 +12,19 @@ local function candidate(text, comment)
     }
 end
 
-local function run_filter(hidden, candidates, expanded)
+local function run_filter(hidden, candidates, expanded, offset)
     local produced = {}
     _G.yield = function(item)
         table.insert(produced, item)
     end
-    local context = { get_option = function(_, name)
+    local context = { options = {}, properties = { _kagiroi_page_offset = offset or "0" } }
+    function context:get_option(name)
         if name == "_kagiroi_hide_candidates" then return hidden end
         return expanded or false
-    end }
+    end
+    function context:get_property(name)
+        return self.properties[name] or ""
+    end
     local translation = {
         iter = function(_)
             local index = 0
@@ -64,5 +68,24 @@ assert(candidates[1].comment == "first note" and candidates[31].comment == "seco
 local short = run_filter(false, { candidate("かな"), candidate("仮名") })
 assert(#short == 2 and short[1].comment == "Page 1" and short[2].text == "仮名",
     "a short translation must show only the candidates that exist")
+
+-- A collapsed window that skipped earlier candidates numbers its pages over
+-- the whole final display order, not over the visible slice
+-- (dotfiles/rime/SPEC.md, "候補一覧の見た目"). The stream emulates the
+-- bunsetsu window: it yields only the eleventh through twentieth candidates.
+local second_window = {}
+for index = 11, 20 do second_window[#second_window + 1] = candidates[index] end
+local crossed = run_filter(false, second_window, false, "10")
+assert(#crossed == 10 and crossed[1].comment == "Page 2" and crossed[1].original == candidates[11],
+    "the second collapsed window must show Page 2 on its first candidate")
+assert(crossed[2] == candidates[12], "later candidates of a crossed window must stay unannotated")
+local fourth_window = {}
+for index = 31, 40 do fourth_window[#fourth_window + 1] = candidates[index] end
+local late = run_filter(false, fourth_window, false, "30")
+assert(late[1].comment == "second note Page 4",
+    "the fourth collapsed window must show its final-order page number after the existing comment")
+local crossed_note = run_filter(false, { candidate("かな", "既存") }, false, "10")
+assert(crossed_note[1].comment == "既存 Page 2",
+    "a crossed window must keep the candidate's existing comment before Page 2")
 
 print("candidate gate filter tests passed")

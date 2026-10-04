@@ -2,8 +2,9 @@
 -- Kagiroi kana speller (dotfiles/rime/SPEC.md, "n の過不足補完").
 -- Pair: the second n consumes nn as ん through the declaration's spelling;
 -- no n is added to a following vowel or y. Insufficient n: a lone pending n
--- becomes ん when a consonant key or a conversion key follows. Excessive n: not
--- corrected while typing; at conversion, consecutive ん fold into one and
+-- becomes ん when a consonant key or a conversion key follows; the long-vowel
+-- key is not a consonant, so the n stays raw in front of it. Excessive n:
+-- not corrected while typing; at conversion, consecutive ん fold into one and
 -- one leftover ん binds with a following vowel as the next syllable's n.
 local kAccepted = 1
 local kNoop = 2
@@ -16,6 +17,16 @@ local Top = { init = base.init, fini = base.fini }
 Top.ascii_tail = nil
 
 local vowels = { a = true, e = true, i = true, o = true, u = true, y = true }
+
+-- The letters that complete a pending n while typing. The non-letter
+-- members of the alphabet, such as the long-vowel key "-", are not
+-- consonants: the pending n stays raw in front of them
+-- (dotfiles/rime/SPEC.md, "n の過不足補完").
+local consonants = {
+    b = true, c = true, d = true, f = true, g = true, h = true, j = true,
+    k = true, l = true, m = true, n = true, p = true, q = true, r = true,
+    s = true, t = true, v = true, w = true, x = true, z = true,
+}
 
 -- Kana a leftover ん can bind with: the kana spelled with a leading n plus a
 -- vowel (a i u e o y in the SPEC).
@@ -43,10 +54,30 @@ local function get_alphabet_suffix(text, alphabet)
     return suffix
 end
 
-local function get_context(env)
+-- The trailing alphabet run the n correction works on: the run behind the
+-- fixed ascii tail, or the run inside the last kagiroi segment. Independent
+-- of the caret, so the conversion-time correction can treat the whole
+-- reading.
+local function trailing_alphabet(env)
     local context = env.engine.context
-    if context.caret_pos ~= #context.input then
-        return nil
+
+    -- The fixed half-width tail spans segment boundaries (uppercase letters
+    -- and digits are not reading alphabet), so the resumed run is taken from
+    -- the whole input instead of the last segment.
+    local tail = Top.ascii_tail
+    if tail then
+        if tail > #context.input then
+            Top.ascii_tail = nil
+            return context, ""
+        end
+        local suffix = get_alphabet_suffix(context.input, env.alphabet)
+        local cut = tail - (#context.input - #suffix)
+        if cut >= #suffix then
+            suffix = ""
+        elseif cut > 0 then
+            suffix = suffix:sub(cut + 1)
+        end
+        return context, suffix
     end
 
     local last_segment = context.composition:back()
@@ -66,24 +97,15 @@ local function get_context(env)
 
     local segment_text = context.input:sub(last_segment.start + 1, last_segment._end)
     local suffix = get_alphabet_suffix(segment_text, env.alphabet)
-    local tail = Top.ascii_tail
-    if tail then
-        -- The tail is the end position of the fixed half-width text: the
-        -- reading continues from the trailing run behind it. A commit or
-        -- deletes elsewhere may have shortened the input past the tail; the
-        -- fixed text is gone then.
-        if tail > #context.input then
-            Top.ascii_tail = nil
-        else
-            local cut = tail - (#context.input - #suffix)
-            if cut >= #suffix then
-                suffix = ""
-            elseif cut > 0 then
-                suffix = suffix:sub(cut + 1)
-            end
-        end
-    end
     return context, suffix
+end
+
+local function get_context(env)
+    local context = env.engine.context
+    if context.caret_pos ~= #context.input then
+        return nil
+    end
+    return trailing_alphabet(env)
 end
 
 local function replace_pending_n(context, pending_n, replacement)
@@ -142,18 +164,21 @@ local function fold_n_runs(text)
 end
 
 -- Resolve the trailing pending n and fold consecutive ん across the whole
--- input for conversion (Space / Henkan). No-op unless the caret sits at the
--- end of the kagiroi input.
+-- input for conversion (Space / Henkan). The reading is corrected as a
+-- whole no matter where the caret sits, so the replacement is written as a
+-- whole-input assignment instead of a caret-relative pop/push.
 function Top.resolve_conversion(env)
-    local context, remaining_alphabet = get_context(env)
+    local context, remaining_alphabet = trailing_alphabet(env)
     if not context then
         return
     end
+    local resolved = context.input
     local pending_n = remaining_alphabet:match("n+$")
     if pending_n then
-        replace_pending_n(context, pending_n, n_run_before_consonant(#pending_n))
+        resolved = resolved:sub(1, #resolved - #pending_n)
+            .. n_run_before_consonant(#pending_n)
     end
-    local folded = fold_n_runs(context.input)
+    local folded = fold_n_runs(resolved)
     if folded ~= context.input then
         context.input = folded
     end
@@ -262,7 +287,7 @@ function Top.func(key_event, env)
         if replacement ~= pending_n then
             replace_pending_n(context, pending_n, replacement)
         end
-    else
+    elseif consonants[character] then
         local replacement = n_run_before_consonant(#pending_n)
         if replacement ~= pending_n then
             replace_pending_n(context, pending_n, replacement)

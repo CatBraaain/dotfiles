@@ -7,6 +7,7 @@ local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local bunsetsu = require("kagiroi/bunsetsu")
 local kAccepted = 1
 local kNoop = 2
+local kRejected = 0
 local kHenkan = 0xff23
 local kBackSpace = 0xff08
 local kEscape = 0xff1b
@@ -25,13 +26,52 @@ local kKeypadDecimal = 0xffae
 local kKeypadSeparator = 0xffac
 local kKeypadEnter = 0xff8b
 local kKeypadZero = 0xffb0
+local kKeypadEqual = 0xffbd
+local kKeypadDivide = 0xffaf
+local kKeypadMultiply = 0xffaa
+local kKeypadSubtract = 0xffad
+local kKeypadAdd = 0xffab
 local Top = {}
 
--- How the unconfirmed ascii input mode was entered: "toggle" through
--- Zenkaku_Hankaku or Muhenkan, "shift" through a Shift+letter key. An empty
--- string afterwards continues to IME OFF for the toggle keys and back to the
--- Japanese mode for Shift (dotfiles/rime/SPEC.md).
-Top.ascii_input_origin = nil
+-- Keypad symbols add their half-width character in both the Japanese and
+-- the half-width input mode; the ordinary symbol keys keep their separate
+-- Japanese mappings (dotfiles/rime/SPEC.md, "共通の文字対応").
+local keypad_symbol_text = {
+    [kKeypadDecimal] = ".",
+    [kKeypadSeparator] = ",",
+    [kKeypadAdd] = "+",
+    [kKeypadSubtract] = "-",
+    [kKeypadMultiply] = "*",
+    [kKeypadDivide] = "/",
+    [kKeypadEqual] = "=",
+}
+
+-- The editing, mode and emoji shortcuts the SPEC lists must reach the
+-- application unassigned in every IME ON state
+-- (dotfiles/rime/SPEC.md, "ショートカット"). The processor chain is stopped
+-- for them so stock components cannot consume them either: the selector's
+-- digit-key fallback ignores modifiers and would otherwise eat
+-- Control+Shift+<digit> while composing.
+local shortcut_letters = {}
+for _, letter in ipairs({ "p", "n", "b", "f", "a", "e", "d", "k", "h", "g", "q", "[" }) do
+    shortcut_letters[string.byte(letter)] = true
+end
+local shortcut_shift_keys = {}
+for _, key in ipairs({ "1", "2", "3", "4", "5", "!", "@", "#", "$", "%" }) do
+    shortcut_shift_keys[string.byte(key)] = true
+end
+
+local function listed_shortcut(key_event)
+    if key_event:release() or not key_event:ctrl()
+        or key_event:alt() or key_event:super() then
+        return false
+    end
+    local keycode = key_event.keycode
+    if key_event:shift() then
+        return shortcut_shift_keys[keycode] == true
+    end
+    return shortcut_letters[keycode] == true
+end
 
 -- First-choice symbols for the Japanese mode (dotfiles/rime/SPEC.md, "記号").
 -- ASCII symbols without an entry map to their full-width form.
@@ -73,10 +113,6 @@ local function end_conversion(context, env, restore_reading)
     if restore_reading then context.input = hiragana_reading(conversion.reading) end
 end
 
-local function conversion_display(context, env)
-    return env.conversion and bunsetsu.display(context) or context.input
-end
-
 local function commit_unconfirmed(context, env)
     if env.conversion then
         local display = bunsetsu.display(context)
@@ -90,6 +126,7 @@ local function commit_unconfirmed(context, env)
     reset_expansion(context)
     context:set_option("_kagiroi_hide_candidates", true)
     kana_speller.ascii_tail = nil
+    context:set_option("_kagiroi_off_pending", false)
 end
 
 local function start_henkan(context, env)
@@ -105,12 +142,14 @@ end
 
 local function start_first_candidate_conversion(context, env)
     context:set_option("_kagiroi_hide_candidates", true)
+    context:set_option("_kagiroi_off_pending", false)
     reset_expansion(context)
     env.conversion = bunsetsu.start(context, context.input)
     return kAccepted
 end
 
 local function reveal_conversion(context, env)
+    context:set_option("_kagiroi_off_pending", false)
     if env.conversion.henkan then
         env.conversion.henkan = false
         env.conversion.clauses[1].override = nil
@@ -149,7 +188,7 @@ function Top.init(env)
             end_conversion(context, env, false)
             reset_expansion(context)
             kana_speller.ascii_tail = nil
-            Top.ascii_input_origin = nil
+            context:set_option("_kagiroi_off_pending", false)
         end)
     end
 end
@@ -169,10 +208,11 @@ local function is_plain_letter(keycode)
 end
 
 -- The text a direct-append key adds to the unconfirmed input, or nil when the
--- key is not one. Digits, symbols and the punctuation extend the unconfirmed
--- text instead of committing it; letters are excluded because while typing
--- they spell the reading and during conversion they confirm it
--- (dotfiles/rime/SPEC.md).
+-- key is not one. Digits, symbols, punctuation and keypad character keys
+-- extend the unconfirmed text while typing and commit the whole display
+-- during conversion; letters are excluded because while typing they spell
+-- the reading and during conversion they confirm it
+-- (dotfiles/rime/SPEC.md). Enter belongs to the separate commit contract.
 local function appended_text(keycode, in_conversion)
     local main_digit = keycode >= 0x30 and keycode <= 0x39
     local keypad_digit = keycode >= kKeypadZero and keycode <= kKeypadZero + 9
@@ -182,11 +222,9 @@ local function appended_text(keycode, in_conversion)
     if keypad_digit then
         return string.char(0x30 + keycode - kKeypadZero)
     end
-    if keycode == kKeypadDecimal then
-        return "．"
-    end
-    if keycode == kKeypadSeparator then
-        return "，"
+    local keypad_symbol = keypad_symbol_text[keycode]
+    if keypad_symbol then
+        return keypad_symbol
     end
     if keycode == kComma then
         return "、"
@@ -210,26 +248,53 @@ local function appended_text(keycode, in_conversion)
     return nil
 end
 
--- Enter the unconfirmed ascii input mode (dotfiles/rime/SPEC.md): the
--- conversion state returns to the reading, the candidate list hides, and
--- the tail position is remembered so the kana speller keeps the half-width
--- text fixed while typing continues after it. The origin records how the
--- mode was entered and decides where an emptied string continues.
-function Top.start_ascii_input(context, origin)
-    end_conversion(context, nil, true)
+local function keep_display_for_editing(context, env)
+    local conversion = bunsetsu.state(context)
+    if conversion then
+        local display = bunsetsu.display(context)
+        bunsetsu.clear(context)
+        context.input = display
+        if env then env.conversion = nil end
+    end
     reset_expansion(context)
     context:set_option("_kagiroi_hide_candidates", true)
-    kana_speller.ascii_tail = #context.input
-    context:set_option("_kagiroi_ascii_input", true)
-    Top.ascii_input_origin = origin
 end
 
--- Leave the unconfirmed ascii input mode back to the Japanese mode, keeping
--- the composition and the recorded tail (dotfiles/rime/SPEC.md). The origin
--- record is cleared: the exits after this point no longer depend on it.
+local function prepare_append(context)
+    context.caret_pos = #context.input
+    context:set_option("_kagiroi_off_pending", false)
+    context:set_option("_kagiroi_hide_candidates", true)
+    reset_expansion(context)
+end
+
+function Top.start_ascii_input(context, reserve_off)
+    -- Sync the selection from the live segment before any option write:
+    -- librime rebuilds the menu on an option change and drops the highlight.
+    if bunsetsu.state(context) then bunsetsu.sync(context) end
+    if reserve_off then context:set_option("_kagiroi_off_pending", true) end
+    local context_input = context.input
+    -- The recorded tail survives only inside the same composition: entering
+    -- the mode from one composition to another starts a fresh tail.
+    local current_tail = context:get_option("_kagiroi_ascii_input")
+        and kana_speller.ascii_tail or nil
+    if current_tail == nil or current_tail > #context_input then
+        current_tail = #context_input
+    end
+    if current_tail < #context_input
+        and context_input:sub(current_tail + 1):find("^[^\\128-\\191]", 1) == nil then
+        -- The tail boundary fell inside a multibyte character: refuse to
+        -- overwrite half of it, and lose the tail instead.
+        current_tail = 0
+    end
+    kana_speller.ascii_tail = current_tail
+    context:set_option("_kagiroi_ascii_input", true)
+    if bunsetsu.state(context) then bunsetsu.render(context) end
+end
+
 function Top.stop_ascii_input(context)
+    keep_display_for_editing(context)
+    kana_speller.ascii_tail = #context.input
     context:set_option("_kagiroi_ascii_input", false)
-    Top.ascii_input_origin = nil
 end
 
 -- The half-width text an ascii input mode key appends to the unconfirmed
@@ -242,11 +307,9 @@ local function ascii_appended_text(keycode, key_event)
     if keycode >= kKeypadZero and keycode <= kKeypadZero + 9 then
         return string.char(0x30 + keycode - kKeypadZero)
     end
-    if keycode == kKeypadDecimal then
-        return "."
-    end
-    if keycode == kKeypadSeparator then
-        return ","
+    local keypad_symbol = keypad_symbol_text[keycode]
+    if keypad_symbol then
+        return keypad_symbol
     end
     if is_plain_letter(keycode) then
         if key_event:shift() then
@@ -260,16 +323,23 @@ local function ascii_appended_text(keycode, key_event)
     return nil
 end
 
--- Leave the emptied ascii input mode: the toggle-origin entry continues to
--- IME OFF, the Shift-origin entry returns to the Japanese input
--- (dotfiles/rime/SPEC.md).
-local function leave_emptied_ascii_mode(context)
-    kana_speller.ascii_tail = nil
-    local origin = Top.ascii_input_origin
-    Top.stop_ascii_input(context)
-    if origin == "toggle" then
-        context:set_option("ascii_mode", true)
+local function finish_deletion(context)
+    if kana_speller.ascii_tail then
+        kana_speller.ascii_tail = math.min(kana_speller.ascii_tail, #context.input)
     end
+    if context.input ~= "" then return end
+    kana_speller.ascii_tail = nil
+    local pending = context:get_option("_kagiroi_off_pending")
+    context:set_option("_kagiroi_ascii_input", false)
+    context:set_option("_kagiroi_off_pending", false)
+    context:set_option("ascii_mode", pending)
+end
+
+local function delete_last_character(context, env)
+    keep_display_for_editing(context, env)
+    local last_character = utf8.offset(context.input, -1)
+    context.input = last_character and context.input:sub(1, last_character - 1) or ""
+    finish_deletion(context)
 end
 
 -- Key handling while the unconfirmed ascii input mode is on
@@ -288,36 +358,39 @@ function Top.ascii_func(key_event, env)
 
     local text = ascii_appended_text(keycode, key_event)
     if text then
+        keep_display_for_editing(context, env)
+        prepare_append(context)
         context:push_input(text)
         -- Every appended character belongs to the fixed tail.
         kana_speller.ascii_tail = #context.input
-        context:set_option("_kagiroi_hide_candidates", true)
         return kAccepted
     end
 
     if keycode == kReturn then
         commit_unconfirmed(context, env)
-        Top.stop_ascii_input(context)
+        context:set_option("_kagiroi_ascii_input", false)
         return kAccepted
     end
 
     if keycode == kBackSpace then
-        local last_character = utf8.offset(context.input, -1)
-        context.input = last_character and context.input:sub(1, last_character - 1) or ""
-        if kana_speller.ascii_tail and kana_speller.ascii_tail > #context.input then
-            kana_speller.ascii_tail = #context.input
-        end
-        if context.input == "" then
-            leave_emptied_ascii_mode(context)
-        end
+        delete_last_character(context, env)
         return kAccepted
     end
 
     if keycode == kEscape then
+        keep_display_for_editing(context, env)
         context.input = ""
-        end_conversion(context, env, false)
-        reset_expansion(context)
-        leave_emptied_ascii_mode(context)
+        finish_deletion(context)
+        return kAccepted
+    end
+
+    if env.conversion and not context:get_option("_kagiroi_hide_candidates")
+        and (keycode == kUp or keycode == kDown) then
+        bunsetsu.select(context, keycode == kUp and -1 or 1, true)
+        context:set_option("_kagiroi_ascii_input", false)
+        context:set_option("_kagiroi_off_pending", false)
+        kana_speller.ascii_tail = nil
+        bunsetsu.render(context)
         return kAccepted
     end
 
@@ -327,8 +400,12 @@ end
 function Top.func(key_event, env)
     local context = env.engine.context
     env.conversion = bunsetsu.state(context)
+    if key_event.keycode == 0xffe1 then return kNoop end
     if context:get_option("ascii_mode") then
         return kNoop
+    end
+    if listed_shortcut(key_event) then
+        return kRejected
     end
     if context:get_option("_kagiroi_ascii_input") then
         return Top.ascii_func(key_event, env)
@@ -353,28 +430,14 @@ function Top.func(key_event, env)
         and not context:get_option("_kagiroi_hide_candidates")
     local in_conversion = composing and env.conversion ~= nil
 
-    -- Shift+letter switches to the unconfirmed ascii input mode from every
-    -- Japanese state (dotfiles/rime/SPEC.md). A conversion returns to its
-    -- reading first; the pressed half-width uppercase letter is appended to
-    -- the kept string.
     if is_plain_letter(keycode) and key_event:shift() then
-        Top.start_ascii_input(context, "shift")
-        context:push_input(string.char(keycode):upper())
-        kana_speller.ascii_tail = #context.input
-        return kAccepted
+        keep_display_for_editing(context, env)
+        Top.start_ascii_input(context)
+        return Top.ascii_func(key_event, env)
     end
 
-    -- Punctuation during conversion extends the converted text by the
-    -- punctuation without committing it and ends the conversion mode
-    -- (dotfiles/rime/SPEC.md, "句読点").
-    if in_conversion and (keycode == kComma or keycode == kPeriod) then
-        local text = conversion_display(context, env)
-        local punctuation = keycode == kComma and "、" or "。"
-        end_conversion(context, env, false)
-        reset_expansion(context)
-        context:set_option("_kagiroi_hide_candidates", true)
-        context.input = text .. punctuation
-        return kAccepted
+    if not in_conversion and (is_plain_letter(keycode) or keycode == kMinus) then
+        prepare_append(context)
     end
 
     -- A letter during conversion confirms the unconfirmed string and the
@@ -384,20 +447,16 @@ function Top.func(key_event, env)
         return kana_speller.func(key_event, env)
     end
 
+    -- Digits, symbols, punctuation and keypad character keys during
+    -- conversion follow the same contract: commit the whole displayed
+    -- composition, then start the next input with the pressed key's
+    -- character (dotfiles/rime/SPEC.md, "確定と次入力").
     local append = appended_text(keycode, in_conversion)
     if append then
         if in_conversion then
-            local digit = keycode >= 0x30 and keycode <= 0x39
-                or keycode >= kKeypadZero and keycode <= kKeypadZero + 9
-            if digit then commit_unconfirmed(context, env)
-            else
-                local text = conversion_display(context, env)
-                end_conversion(context, env, false)
-                reset_expansion(context)
-                context.input = text
-            end
+            commit_unconfirmed(context, env)
         end
-        context:set_option("_kagiroi_hide_candidates", true)
+        prepare_append(context)
         context:push_input(append)
         return kAccepted
     end
@@ -410,6 +469,7 @@ function Top.func(key_event, env)
     end
 
     if composing and keycode == kHenkan then
+        context:set_option("_kagiroi_off_pending", false)
         return start_henkan(context, env)
     end
 
@@ -428,23 +488,12 @@ function Top.func(key_event, env)
             return kAccepted
         end
         context.input = ""
+        finish_deletion(context)
         return kAccepted
     end
 
-    -- Backspace removes the last Unicode character of the converted candidate
-    -- and ends conversion.
-    if in_conversion and keycode == kBackSpace then
-        local text = conversion_display(context, env)
-        local last_character = utf8.offset(text, -1)
-        end_conversion(context, env, false)
-        reset_expansion(context)
-        context:set_option("_kagiroi_hide_candidates", true)
-        context.input = last_character and text:sub(1, last_character - 1) or ""
-        return kAccepted
-    end
-
-    if composing and keycode == kEscape then
-        context.input = ""
+    if composing and keycode == kBackSpace then
+        delete_last_character(context, env)
         return kAccepted
     end
 
@@ -501,6 +550,8 @@ function Top.func(key_event, env)
         if menu_visible then
             if context:has_menu() then
                 bunsetsu.select(context, 1)
+                context:set_option("_kagiroi_off_pending", false)
+                bunsetsu.render(context)
             end
             return kAccepted
         elseif env.conversion then

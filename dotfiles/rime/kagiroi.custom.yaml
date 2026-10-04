@@ -72,3 +72,16 @@ patch:
   "navigator/bindings":
     Left: left_by_syllable
     Right: right_by_syllable
+  # The stock schema binds Control+u/i/o/q through its own key_binder patch
+  # (upstream kagiroi.yaml, key_bindings/kagiroi_switches). Replace the
+  # merged list to keep every entry except Control+q: the emoji toggle is a
+  # listed shortcut that must stay unassigned in Rime and pass through to
+  # the application in every IME ON state (dotfiles/rime/SPEC.md,
+  # "ショートカット"). The emoji filter itself stays available through the
+  # saved option.
+  "key_binder/bindings":
+    - { when: paging, accept: minus, send: Page_Up }
+    - { when: has_menu, accept: equal, send: Page_Down }
+    - { when: composing, accept: Control+u, set_option: hiragana }
+    - { when: composing, accept: Control+i, set_option: katakana }
+    - { when: composing, accept: Control+o, set_option: hw_katakana }

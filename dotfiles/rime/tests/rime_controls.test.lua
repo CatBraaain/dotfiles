@@ -39,6 +39,7 @@ end
 local bunsetsu = require("kagiroi/bunsetsu")
 local kAccepted = 1
 local kNoop = 2
+local kRejected = 0
 local calls = 0
 local conversions_resolved = 0
 package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
@@ -133,7 +134,8 @@ local function new_environment(candidates)
         self.refreshed = true
     end
     function context:push_input(text)
-        self.input = self.input .. text
+        local caret = self.caret_pos
+        self.input = self.input:sub(1, caret) .. text .. self.input:sub(caret + 1)
     end
     function context:get_commit_text()
         if self:has_menu() then
@@ -323,6 +325,18 @@ for _ = 1, 9 do press(env, 0xff54) end
 assert(segment.selected_index == 9, "Down before expansion must reach the tenth candidate")
 assert(press(env, 0xff54) == kAccepted and segment.selected_index == 0,
     "Down before expansion must not select a hidden candidate")
+assert(press(env, 0xff56) == kAccepted and segment.selected_index == 0 and
+    segment:get_candidate_at(0).text == "candidate 11",
+    "collapsed PageDown must select the second window's first candidate")
+assert(press(env, 0xff55) == kAccepted and segment.selected_index == 0 and
+    segment:get_candidate_at(0).text == "candidate 1",
+    "collapsed PageUp must return to the first window's first candidate")
+assert(press(env, 0xff55) == kAccepted and segment.selected_index == 0 and
+    segment:get_candidate_at(0).text == "candidate 31",
+    "collapsed PageUp before the first window must wrap to the last window's head")
+assert(press(env, 0xff56) == kAccepted and segment.selected_index == 0 and
+    segment:get_candidate_at(0).text == "candidate 1",
+    "collapsed PageDown past the last window must wrap to the first window's head")
 press(env, 0xff09)
 assert(segment.selected_index == 0, "Tab expansion must keep the arrow selection")
 assert(press(env, 0xff52) == kAccepted and segment.selected_index == 32,
@@ -336,13 +350,14 @@ assert(press(env, 0xff54) == kAccepted and segment.selected_index == 30,
 assert(press(env, 0xff52) == kAccepted and segment.selected_index == 29,
     "Up must cross from the second page to the first")
 assert(#context.commits == 0, "arrow navigation must not commit")
-assert(press(env, 0xff55) == kAccepted and press(env, 0xff56) == kAccepted,
-    "PageUp and PageDown must be handled for the active clause")
+assert(press(env, 0xff55) == kAccepted and segment.selected_index == 30,
+    "expanded PageUp before the first page must wrap to the last page's head")
 assert(press(env, string.byte("y"), { ctrl = true }) == kNoop and
     press(env, string.byte("v"), { ctrl = true }) == kNoop and
     press(env, string.byte("v"), { alt = true }) == kNoop,
     "modified keys must not navigate in the controls processor")
-assert(segment.selected_index == 32, "paging must clamp to the last candidate")
+assert(press(env, 0xff56) == kAccepted and segment.selected_index == 0,
+    "expanded PageDown past the last page must wrap to the first page's head")
 
 -- Arrow selection also works without context.highlight on Windows.
 env, context, segment = new_environment(long_candidates)
@@ -392,6 +407,54 @@ assert(press(env, 0xff51) == kAccepted and press(env, 0xff53) == kAccepted,
 assert(#context.commits == 0 and not context:get_option("_kagiroi_hide_candidates"),
     "clause navigation must retain the open list without committing")
 
+-- A successful clause move with the list open closes it and clears the
+-- expansion; a move blocked at an end keeps everything, and each clause
+-- keeps its own selection (dotfiles/rime/SPEC.md, "文節移動").
+env, context, segment = new_environment()
+context.input = "か1"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
+press(env, 0x20)
+press(env, 0xff09)
+assert(context:get_option("_kagiroi_expand_candidates") and
+    not context:get_option("_kagiroi_hide_candidates"),
+    "the two-clause move test must start with an expanded open list")
+assert(press(env, 0xff51) == kAccepted and env.conversion.active == 1 and
+    not context:get_option("_kagiroi_hide_candidates") and
+    context:get_option("_kagiroi_expand_candidates"),
+    "Left blocked at the first clause must keep the list, expansion and state")
+assert(press(env, 0xff53) == kAccepted and env.conversion.active == 2,
+    "Right must move the target to the second clause")
+assert(context:get_option("_kagiroi_hide_candidates") and
+    not context:get_option("_kagiroi_expand_candidates"),
+    "a successful move must close the list, clear the expansion and convert")
+assert(env.conversion.clauses[1].selected == 2 and env.conversion.clauses[2].selected == 1,
+    "a successful move must keep every clause's own selection")
+assert(#context.commits == 0, "clause moves must not commit")
+assert(press(env, 0xff53) == kAccepted and env.conversion.active == 2 and
+    context:get_option("_kagiroi_hide_candidates"),
+    "Right blocked at the last clause must keep the hidden conversion")
+
+-- Resize: a boundary that actually moves closes an open list; a blocked
+-- one keeps everything, and the hidden conversion keeps its list closed
+-- (dotfiles/rime/SPEC.md, "境界変更").
+env, context, segment = new_environment()
+context.input = "かな"
+context:set_option("_kagiroi_hide_candidates", true)
+press(env, 0x20)
+press(env, 0xff51, { shift = true })
+assert(context:get_option("_kagiroi_hide_candidates") and #env.conversion.clauses == 2,
+    "a hidden resize must keep the list closed while moving the boundary")
+press(env, 0x20)
+press(env, 0xff09)
+assert(press(env, 0xff53, { shift = true }) == kAccepted and #env.conversion.clauses == 1,
+    "Shift+Right must absorb the one-character clause")
+assert(context:get_option("_kagiroi_hide_candidates") and
+    not context:get_option("_kagiroi_expand_candidates"),
+    "a successful resize must close the list and clear the expansion")
+assert(env.conversion.clauses[1].selected == 1,
+    "a moved boundary must reset the active clause to its first candidate")
+
 -- Enter outside a composition passes through to the speller chain.
 local before_empty_enter = calls
 env, context = new_environment()
@@ -409,6 +472,18 @@ assert(typing_enter == kAccepted, "Enter while typing must be consumed")
 assert(context.commits[1] == "かn", "Enter while typing must commit the raw reading")
 assert(context.input == "", "Enter while typing must end the composition")
 assert(conversions_resolved == before_typing_enter, "Enter must not resolve the n run")
+
+-- Enter does not fold an excessive n run either: the displayed reading
+-- commits as-is (dotfiles/rime/SPEC.md, "確定と次入力").
+env, context, segment = new_environment()
+context.input = "かんんあ"
+context:set_option("_kagiroi_hide_candidates", true)
+local before_excess_enter = conversions_resolved
+assert(press(env, 0xff0d) == kAccepted, "Enter on an excessive-n reading must be consumed")
+assert(context.commits[#context.commits] == "かんんあ",
+    "Enter must commit the excessive-n reading without folding")
+assert(conversions_resolved == before_excess_enter,
+    "Enter must not resolve the excessive n run")
 
 -- Space converts even when the composition holds no candidate menu: the
 -- unconfirmed string becomes its own first candidate
@@ -530,13 +605,12 @@ press(env, 0x20)
 assert(segment.selected_index == 1, "the reveal must select the second candidate")
 local shortened_selection = press(env, 0xff08)
 assert(shortened_selection == kAccepted, "Backspace with the menu visible must be consumed")
-assert(context.input == "仮", "Backspace must delete from the selected candidate")
-assert(env.conversion == nil, "Backspace must leave conversion mode")
+
 assert(context:get_option("_kagiroi_hide_candidates"), "Backspace must hide the list")
 assert(#context.commits == 0, "Backspace must not commit")
 local typing_backspace = press(env, 0xff08)
-assert(typing_backspace == kNoop,
-    "a later Backspace must reach the kana speller chain (the deletion is its job)")
+assert(typing_backspace == kAccepted and context.input == "",
+    "a later Backspace must remove the final character in preconversion input")
 
 -- Esc clears the composition while typing, and returns to the reading while
 -- converting (the second Esc after a conversion clears it).
@@ -618,7 +692,8 @@ assert(context.commits[1] == "　" and context.input == "",
 assert(press(env, 0x20) == kAccepted, "a later idle Space must be consumed")
 assert(context.commits[2] == "　", "repeated idle Spaces must keep committing")
 
--- Main-row digits append full-width text; keypad digits stay half-width.
+-- Main-row digits append full-width text; keypad digits and every keypad
+-- symbol stay half-width (dotfiles/rime/SPEC.md, "共通の文字対応").
 for _, case in ipairs({
     { key = string.byte("0"), expected = "０" },
     { key = string.byte("1"), expected = "１" },
@@ -626,12 +701,17 @@ for _, case in ipairs({
     { key = 0xffb0, expected = "0" },
     { key = 0xffb1, expected = "1" },
     { key = 0xffb9, expected = "9" },
-    { key = 0xffae, expected = "．" },
-    { key = 0xffac, expected = "，" },
+    { key = 0xffae, expected = "." },
+    { key = 0xffac, expected = "," },
+    { key = 0xffaa, expected = "*" },
+    { key = 0xffab, expected = "+" },
+    { key = 0xffad, expected = "-" },
+    { key = 0xffaf, expected = "/" },
+    { key = 0xffbd, expected = "=" },
 }) do
     env, context, segment = new_environment()
     assert(press(env, case.key) == kAccepted, "idle digit/decimal must be consumed")
-    assert(context.input == case.expected and #context.commits == 0, "idle digit/decimal must append its width")
+    assert(context.input == case.expected and #context.commits == 0, "idle digit/decimal must append its character")
 end
 
 -- A digit while typing appends the full-width digit to the reading.
@@ -652,12 +732,14 @@ assert(raw_digit == kAccepted, "a digit on a pending n must be consumed")
 assert(context.input == "かn２" and #context.commits == 0,
     "a digit must append without the n correction")
 
--- Punctuation and the keypad separator append to the reading's end while
--- typing (dotfiles/rime/SPEC.md).
+-- Punctuation, the keypad separator and the keypad operators append to
+-- the reading's end while typing (dotfiles/rime/SPEC.md).
 for _, case in ipairs({
     { key = string.byte(","), expected = "かな、" },
     { key = string.byte("."), expected = "かな。" },
-    { key = 0xffac, expected = "かな，" },
+    { key = 0xffac, expected = "かな," },
+    { key = 0xffab, expected = "かな+" },
+    { key = 0xffbd, expected = "かな=" },
 }) do
     env, context, segment = new_environment()
     context.input = "かな"
@@ -677,7 +759,7 @@ env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0xffae)
-assert(context.input == "か．" and #context.commits == 0, "KP_Decimal must append the full-width period")
+assert(context.input == "か." and #context.commits == 0, "KP_Decimal must append the half-width period")
 env, context, segment = new_environment()
 context.input = "かんな"
 context:set_option("_kagiroi_hide_candidates", true)
@@ -718,7 +800,8 @@ assert(context.input == "かな＄" and #context.commits == 0, "dollar must appe
 assert(context:get_option("_kagiroi_hide_candidates"), "dollar must keep the list hidden")
 
 -- Minus extends the reading while typing; during conversion, minus and
--- equal append their symbols to the whole display without committing.
+-- equal commit the whole display and restart the input with their
+-- character (dotfiles/rime/SPEC.md, "確定と次入力").
 env, context, segment = new_environment()
 context.input = "かな"
 context:set_option("_kagiroi_hide_candidates", true)
@@ -731,11 +814,11 @@ for _, case in ipairs({ { key = "-", symbol = "ー" }, { key = "=", symbol = "�
     press(env, 0x20)
     press(env, 0x20)
     assert(press(env, string.byte(case.key)) == kAccepted, "the symbol must be consumed")
-    assert(#context.commits == 0, "the symbol must not commit the highlighted candidate")
-    assert(context.input == "仮名" .. case.symbol,
-        "the symbol must append to the whole display")
+    assert(context.commits[1] == "仮名", "the symbol must commit the whole displayed selection")
+    assert(context.input == case.symbol,
+        "the symbol must restart the input with its character")
     assert(context:get_option("_kagiroi_hide_candidates"),
-        "the append must keep the list hidden")
+        "the restart must keep the gate closed")
 end
 
 -- Semicolon is full-width even though Kagiroi accepts it in the alphabet.
@@ -753,7 +836,7 @@ env, context, segment = new_environment()
 assert(press(env, string.byte("A"), { shift = true }) == kAccepted, "idle Shift+A must be consumed")
 assert(context:get_option("_kagiroi_ascii_input") and context.input == "A",
     "idle Shift+A must enter the ascii input mode with A")
-assert(processor.ascii_input_origin == "shift", "Shift+A must record the shift origin")
+assert(not context:get_option("_kagiroi_off_pending"), "Shift+A must clear the OFF reservation")
 
 env, context, segment = new_environment()
 context.input = "か"
@@ -762,13 +845,13 @@ press(env, 0x20)
 assert(press(env, string.byte("A"), { shift = true }) == kAccepted, "Shift+A must be consumed")
 assert(context:get_option("_kagiroi_ascii_input"), "Shift+A must enter the ascii input mode")
 assert(#context.commits == 0, "Shift+A must not commit the conversion")
-assert(context.input == "かA",
-    "Shift+A must restore the reading and append A")
+assert(context.input == "かなA",
+    "Shift+A must keep the display and append A")
 assert(env.conversion == nil, "Shift+A must end the conversion state")
+assert(not context:has_menu(), "Shift+A must close the list")
 
--- Comma and period during conversion append the punctuation to the
--- converted text without committing it and end the conversion mode
--- (dotfiles/rime/SPEC.md, "句読点").
+-- Comma and period during conversion commit the whole display and restart
+-- the input with the punctuation (dotfiles/rime/SPEC.md, "確定と次入力").
 for _, case in ipairs({ { key = ",", punct = "、" }, { key = ".", punct = "。" } }) do
     env, context, segment = new_environment()
     context.input = "か"
@@ -778,27 +861,25 @@ for _, case in ipairs({ { key = ",", punct = "、" }, { key = ".", punct = "。"
     assert(segment.selected_index == 1, "cycling must select the second candidate first")
     local result = press(env, string.byte(case.key))
     assert(result == kAccepted, "the " .. case.key .. " key must be consumed")
-    assert(#context.commits == 0, "a " .. case.key .. " key must not commit the selection")
-    assert(context.input == "仮名" .. case.punct,
-        "a " .. case.key .. " key must append " .. case.punct .. " to the selection")
-    assert(env.conversion == nil, "the append must end the conversion mode")
+    assert(context.commits[1] == "仮名",
+        "a " .. case.key .. " key must commit the whole displayed selection")
+    assert(context.input == case.punct,
+        "a " .. case.key .. " key must restart the input with " .. case.punct)
     assert(context:get_option("_kagiroi_hide_candidates"),
-        "the append must keep the gate closed")
+        "the restart must keep the gate closed")
 
-    -- From the hidden conversion after the first Space, the punctuation
-    -- appends to the inline display.
+    -- From the hidden conversion after the first Space.
     env, context, segment = new_environment()
     context.input = "か"
     context:set_option("_kagiroi_hide_candidates", true)
     press(env, 0x20)
     press(env, string.byte(case.key))
-    assert(#context.commits == 0, "a " .. case.key .. " key after the first Space must not commit")
-    assert(context.input == "かな" .. case.punct,
-        "a " .. case.key .. " key after the first Space must append to the display")
-    assert(env.conversion == nil,
-        "a " .. case.key .. " key after the first Space must end the conversion")
+    assert(context.commits[1] == "かな",
+        "a " .. case.key .. " key after the first Space must commit the inline display")
+    assert(context.input == case.punct,
+        "a " .. case.key .. " key after the first Space must restart with " .. case.punct)
     assert(context:get_option("_kagiroi_hide_candidates"),
-        "the append must keep the gate closed")
+        "the restart must keep the gate closed")
 end
 
 -- Esc with the menu visible closes the list and keeps the conversion to
@@ -821,16 +902,18 @@ assert(press(env, 0xff1b) == kAccepted, "the second Esc must be consumed")
 assert(context.input == "か", "the second Esc must restore the reading")
 assert(env.conversion == nil, "the second Esc must end the conversion")
 
--- The keypad separator appends a full-width comma to the whole display
--- without committing (dotfiles/rime/SPEC.md).
+-- The keypad separator commits the whole display and restarts the input
+-- with a half-width comma (dotfiles/rime/SPEC.md, "確定と次入力").
 env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 assert(press(env, 0xffac) == kAccepted,
     "the keypad separator during conversion must be consumed")
-assert(#context.commits == 0, "the keypad separator must not commit the conversion")
-assert(context.input == "かな，", "the keypad separator must append to the display")
+assert(context.commits[1] == "かな", "the keypad separator must commit the whole display")
+assert(context.input == ",", "the keypad separator must restart with a half-width comma")
+assert(context:get_option("_kagiroi_hide_candidates"),
+    "the restart must keep the gate closed")
 
 -- An external commit (the ascii mode toggle) cleans the Henkan state.
 env, context, segment = new_environment()
@@ -888,6 +971,16 @@ assert(press(env, string.byte(".")) == kAccepted and context.input == "かんじ
     "a period must append a half-width period")
 assert(press(env, 0xffac) == kAccepted and context.input == "かんじaA11! ,.,",
     "the keypad separator must append a half-width comma")
+for _, case in ipairs({
+    { key = 0xffaa, char = "*" }, { key = 0xffab, char = "+" },
+    { key = 0xffad, char = "-" }, { key = 0xffaf, char = "/" },
+    { key = 0xffbd, char = "=" },
+}) do
+    assert(press(env, case.key) == kAccepted,
+        "the keypad operator " .. case.char .. " must be consumed")
+end
+assert(context.input == "かんじaA11! ,.,*+-/=" and #context.commits == 0,
+    "the keypad operators must append their half-width characters")
 assert(context:get_option("_kagiroi_hide_candidates"), "the append must keep the list hidden")
 
 -- Backspace removes the last character and ends the mode when empty.
@@ -903,45 +996,44 @@ assert(press(env, 0xff08) == kAccepted and context.input == "",
 assert(not context:get_option("_kagiroi_ascii_input"),
     "Backspace must end the mode when the input empties")
 
--- The toggle origin continues into IME OFF once the string empties; the
--- shift origin returns to the Japanese input (dotfiles/rime/SPEC.md).
+-- Only a pending OFF reservation determines the mode after deletion.
 env, context, segment = new_environment()
 context.input = "かa"
 context:set_option("_kagiroi_ascii_input", true)
-processor.ascii_input_origin = "toggle"
+context:set_option("_kagiroi_off_pending", true)
 press(env, 0xff08)
 press(env, 0xff08)
 assert(context.input == "" and not context:get_option("_kagiroi_ascii_input"),
     "Backspace must empty the string and leave the mode")
 assert(context:get_option("ascii_mode"),
-    "an emptied toggle-origin string must switch IME OFF")
-assert(processor.ascii_input_origin == nil, "the exit must clear the origin record")
+    "an emptied reserved string must switch IME OFF")
+assert(not context:get_option("_kagiroi_off_pending"), "the exit must clear the OFF reservation")
 context:set_option("ascii_mode", false)
 
 env, context, segment = new_environment()
 context.input = "かa"
 context:set_option("_kagiroi_ascii_input", true)
-processor.ascii_input_origin = "shift"
+context:set_option("_kagiroi_off_pending", false)
 press(env, 0xff1b)
 assert(context.input == "" and not context:get_option("_kagiroi_ascii_input"),
     "Esc must empty the string and leave the mode")
 assert(not context:get_option("ascii_mode"),
-    "an emptied shift-origin string must return to the Japanese input")
-assert(processor.ascii_input_origin == nil, "the exit must clear the origin record")
+    "an emptied unreserved string must return to the Japanese input")
+assert(not context:get_option("_kagiroi_off_pending"), "the exit must clear the OFF reservation")
 
--- Enter commits and returns to the Japanese input regardless of the origin.
+-- Enter clears the reservation and returns to Japanese input.
 env, context, segment = new_environment()
 context.input = "かa"
 context:set_option("_kagiroi_ascii_input", true)
 context:set_option("_kagiroi_hide_candidates", true)
-processor.ascii_input_origin = "toggle"
+context:set_option("_kagiroi_off_pending", true)
 assert(press(env, 0xff0d) == kAccepted, "Enter must be consumed")
 assert(context.commits[1] == "かa" and context.input == "",
     "Enter must commit the unconfirmed string")
 assert(not context:get_option("_kagiroi_ascii_input")
     and not context:get_option("ascii_mode"),
     "Enter must return to the Japanese input")
-assert(processor.ascii_input_origin == nil, "Enter must clear the origin record")
+assert(not context:get_option("_kagiroi_off_pending"), "Enter must clear the OFF reservation")
 
 -- Esc clears the composition and ends the mode without committing.
 env, context, segment = new_environment()
@@ -969,7 +1061,133 @@ context.input = "かa"
 context:set_option("_kagiroi_ascii_input", true)
 assert(press(env, 0xff23) == kNoop, "Henkan must pass through")
 assert(press(env, 0xff52) == kNoop, "Up must pass through")
-assert(press(env, string.byte("a"), { ctrl = true }) == kNoop, "modified letters must pass through")
+assert(press(env, string.byte("z"), { ctrl = true }) == kNoop,
+    "unlisted modified letters must pass through")
+assert(press(env, string.byte("a"), { ctrl = true }) == kRejected,
+    "the listed Control+a must be rejected to the application")
 assert(context.input == "かa", "passing-through keys must leave the composition alone")
+
+-- Retained lists keep the displayed choice, expansion and candidate identity.
+for _, expanded in ipairs({ false, true }) do
+    for _, direction in ipairs({ 0xff52, 0xff54 }) do
+        env, context, segment = new_environment({ "今日", "京", "凶" })
+        context.input = "きょう"
+        press(env, 0x20)
+        press(env, 0x20)
+        if expanded then press(env, 0xff09) end
+        processor.start_ascii_input(context)
+        context:set_option("_kagiroi_off_pending", true)
+        assert(bunsetsu.display(context) == "京", "halfwidth entry must retain the chosen display")
+        assert(context:has_menu() and segment.selected_index == 1,
+            "halfwidth entry must retain the list and selection")
+        assert(context:get_option("_kagiroi_expand_candidates") == expanded,
+            "halfwidth entry must retain expansion")
+        press(env, direction)
+        assert(not context:get_option("_kagiroi_ascii_input")
+            and not context:get_option("_kagiroi_off_pending"),
+            "retained-list arrows must return to Japanese and clear the reservation")
+        assert(bunsetsu.display(context) == (direction == 0xff52 and "今日" or "凶"),
+            "retained-list arrows must select the previous or next candidate")
+        assert(context:has_menu() and context:get_option("_kagiroi_expand_candidates") == expanded,
+            "retained-list arrows must keep the list and expansion")
+    end
+end
+
+for _, case in ipairs({
+    { key = 0x20, text = "京 ", ascii = true, pending = false },
+    { key = string.byte("b"), text = "京b", ascii = true, pending = false },
+    { key = string.byte("-"), text = "京-", ascii = true, pending = false },
+    { key = 0xff08, text = "", ascii = false, pending = false, off = true },
+    { key = 0xff1b, text = "", ascii = false, pending = false, off = true },
+    { key = 0xff0d, text = "", ascii = false, pending = false, commit = "京" },
+}) do
+    env, context, segment = new_environment({ "今日", "京", "凶" })
+    context.input = "きょう"
+    press(env, 0x20)
+    press(env, 0x20)
+    press(env, 0xff09)
+    processor.start_ascii_input(context)
+    context:set_option("_kagiroi_off_pending", true)
+    press(env, case.key)
+    assert(context.input == case.text, "retained-list edit must act on the displayed text")
+    assert(context:get_option("_kagiroi_ascii_input") == case.ascii,
+        "retained-list edit must enter the specified mode")
+    assert(context:get_option("_kagiroi_off_pending") == case.pending,
+        "retained-list edit must update the reservation")
+    assert(context:get_option("ascii_mode") == (case.off or false),
+        "retained-list deletion must obey the reservation")
+    assert(not context:has_menu() and not context:get_option("_kagiroi_expand_candidates"),
+        "retained-list edit must close and collapse the list")
+    assert(context.commits[1] == case.commit, "only Enter must commit the retained display")
+end
+
+for _, ascii in ipairs({ false, true }) do
+    for _, pending in ipairs({ false, true }) do
+        env, context = new_environment()
+        context.input = "かA"
+        context:set_option("_kagiroi_ascii_input", ascii)
+        context:set_option("_kagiroi_off_pending", pending)
+        context.caret_pos = 0
+        press(env, 0xff08)
+        assert(context.input == "か", "Backspace must delete at the end, not at the caret")
+        assert(context:get_option("_kagiroi_off_pending") == pending,
+            "partial deletion must preserve the reservation")
+        assert(context:get_option("_kagiroi_ascii_input") == ascii,
+            "partial deletion must preserve Japanese or halfwidth input")
+        press(env, 0xff08)
+        assert(context.input == "" and context:get_option("ascii_mode") == pending,
+            "deletion to empty must obey the reservation in both input modes")
+        assert(not context:get_option("_kagiroi_ascii_input")
+            and not context:get_option("_kagiroi_off_pending"),
+            "deletion to empty must finish the halfwidth mode and reservation")
+    end
+end
+
+for _, ascii in ipairs({ false, true }) do
+    env, context = new_environment()
+    context.input = "かな"
+    context.caret_pos = 0
+    context:set_option("_kagiroi_ascii_input", ascii)
+    context:set_option("_kagiroi_off_pending", true)
+    press(env, string.byte("1"))
+    assert(context.input == (ascii and "かな1" or "かな１"),
+        "direct additions must append at the end even after caret movement")
+    assert(not context:get_option("_kagiroi_off_pending"), "additions must clear the reservation")
+end
+
+-- The listed editing, mode and emoji shortcuts stay unassigned in Rime:
+-- the processor rejects them so the rest of the chain cannot consume them
+-- either, and every IME ON state keeps the state untouched
+-- (dotfiles/rime/SPEC.md, "ショートカット"). The application-level
+-- pass-through is verified by the C harness.
+local shortcut_cases = {}
+for _, letter in ipairs({ "p", "n", "b", "f", "a", "e", "d", "k", "h", "g", "q" }) do
+    table.insert(shortcut_cases, { string.byte(letter), { ctrl = true } })
+end
+for _, digit in ipairs({ "1", "2", "3", "4", "5", "!", "@", "#", "$", "%" }) do
+    table.insert(shortcut_cases, { string.byte(digit), { ctrl = true, shift = true } })
+end
+table.insert(shortcut_cases, { string.byte("["), { ctrl = true } })
+for state = 1, 4 do
+    env, context, segment = new_environment({ "今日", "京", "凶" })
+    context.input = "きょう"
+    context:set_option("_kagiroi_hide_candidates", true)
+    if state >= 2 then press(env, 0x20) end
+    if state >= 3 then press(env, 0x20) end
+    if state == 4 then context:set_option("_kagiroi_ascii_input", true) end
+    local input = context.input
+    local hide = context:get_option("_kagiroi_hide_candidates")
+    local selected = segment.selected_index
+    for _, case in ipairs(shortcut_cases) do
+        assert(press(env, case[1], case[2]) == kRejected,
+            "a listed shortcut must be rejected to the application")
+        assert(context.input == input and #context.commits == 0
+            and segment.selected_index == selected
+            and context:get_option("_kagiroi_hide_candidates") == hide
+            and not context:get_option("_kagiroi_off_pending")
+            and not context:get_option("_kagiroi_expand_candidates"),
+            "a listed shortcut must leave the whole state untouched")
+    end
+end
 
 print("Rime candidate visibility, conversion and revert tests passed")
