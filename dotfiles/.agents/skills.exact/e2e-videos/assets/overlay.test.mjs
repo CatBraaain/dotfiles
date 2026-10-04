@@ -40,7 +40,6 @@ function baseState(overrides = {}) {
 /** @typedef {{char:number,line:number}} RoleMetric */
 /** @type {Record<string, RoleMetric>} */
 const ROLE_METRICS = {
-  "step-count": { char: 8, line: 20 },
   "test-title": { char: 8.8, line: 24 },
   "label-text": { char: 9, line: 26 },
   "result-text": { char: 8, line: 20 },
@@ -556,8 +555,6 @@ test("rejects malformed state", () => {
       baseState({ phase: "done" }),
       baseState({ theme: "blue" }),
       baseState({ layer: "outside" }),
-      baseState({ read: 4 }),
-      baseState({ current: 1, read: 3 }),
       baseState({ pageArea: undefined }),
       baseState({
         target: { rect: { x: 0, y: 0, width: 0, height: 10 }, name: "x", kind: "click" },
@@ -566,53 +563,6 @@ test("rejects malformed state", () => {
     ];
     for (const state of cases)
       assert.throws(() => world.install(state), Error, `expected rejection for ${state.title}`);
-  } finally {
-    world.restore();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// READ progress
-// ---------------------------------------------------------------------------
-test("step-count shows READ progress and finishes with COMPLETE", () => {
-  const world = new ShimWorld();
-  try {
-    const { overlay } = installAt(world, baseState());
-    assert.equal(text(".step-count"), "READ 0 / 3");
-    overlay.update({ read: 1 });
-    assert.equal(text(".step-count"), "READ 1 / 3");
-    overlay.update({ current: 3, phase: "result", target: null, read: 2 });
-    assert.equal(text(".step-count"), "READ 2 / 3");
-    overlay.update({ read: 3 });
-    assert.equal(text(".step-count"), "COMPLETE 3 / 3");
-  } finally {
-    world.restore();
-  }
-});
-
-test("readTotal generalizes READ beyond the step count", () => {
-  const world = new ShimWorld();
-  try {
-    const { overlay } = installAt(world, baseState({ readTotal: 5 }));
-    assert.equal(text(".step-count"), "READ 0 / 5");
-    overlay.update({ current: 3, phase: "result", target: null, read: 4 });
-    assert.equal(text(".step-count"), "READ 4 / 5");
-    overlay.update({ read: 5 });
-    assert.equal(text(".step-count"), "COMPLETE 5 / 5");
-  } finally {
-    world.restore();
-  }
-});
-
-test("segments follow current steps and completion", () => {
-  const world = new ShimWorld();
-  try {
-    const { overlay } = installAt(world, baseState({ current: 2, read: 1 }));
-    const classes = () =>
-      currentShadow.querySelectorAll(".segment").map((segment) => segment.className);
-    assert.deepEqual(classes(), ["segment done", "segment current", "segment pending"]);
-    overlay.update({ current: 3, phase: "result", target: null, read: 3 });
-    assert.deepEqual(classes(), ["segment done", "segment done", "segment done"]);
   } finally {
     world.restore();
   }
@@ -1029,7 +979,7 @@ test("layer page skips the title band and its constraints", () => {
   }
 });
 
-test("long titles require a taller title area and narrow pages stack the progress", () => {
+test("long titles require a taller title area and narrow pages wrap the title", () => {
   const world = new ShimWorld();
   try {
     const long =
@@ -1040,16 +990,14 @@ test("long titles require a taller title area and narrow pages stack the progres
     const narrow = installAt(
       world,
       baseState({
-        title: "Confirm",
+        title: long,
         pageArea: { x: 0, y: 64, width: 600, height: 720 },
         titleArea: { x: 0, y: 0, width: 600, height: 64 },
       }),
     );
-    const title = currentShadow.querySelector(".title");
-    assert.ok(title instanceof ShimElement && title.classList.contains("stacked"));
     assert.ok(
-      narrow.layout.requiredTitleHeight > 64,
-      "stacked progress raises the required height",
+      narrow.layout.requiredTitleHeight > wide.layout.requiredTitleHeight,
+      "narrow pages wrap the title into more lines",
     );
     assert.ok(narrow.layout.constraints.some((entry) => entry.element === "title"));
   } finally {
@@ -1112,7 +1060,7 @@ test("setVisible hides the host without disposing and reports layouts", async ()
   }
 });
 
-test("full scenario walks phases, read progress and the completion state", () => {
+test("full scenario walks phases, step numbers and check resets", () => {
   const world = new ShimWorld();
   try {
     const { overlay } = installAt(world, baseState());
@@ -1128,14 +1076,18 @@ test("full scenario walks phases, read progress and the completion state", () =>
     });
     assert.equal(text(".chip"), "1");
     world.advance(3000);
-    overlay.update({ read: 1, result: null });
+    overlay.update({ result: null });
     world.advance(600);
     overlay.update({ current: 2, phase: "waiting", result: null, checkAt: null });
     assert.equal(text(".chip"), "2");
     assert.equal(hidden(".check"), true, "check resets on the next step");
-    assert.equal(text(".step-count"), "READ 1 / 3");
-    overlay.update({ current: 3, phase: "result", target: null, read: 3 });
-    assert.equal(text(".step-count"), "COMPLETE 3 / 3");
+    overlay.update({
+      current: 3,
+      phase: "result",
+      target: null,
+      result: { rect: { x: 100, y: 200, width: 400, height: 66 }, name: "Name", expected: "ok" },
+    });
+    assert.equal(text(".chip"), "3");
   } finally {
     world.restore();
   }

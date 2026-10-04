@@ -17,8 +17,6 @@
   --on-active: #f7f8fc;
   --done: #116742;
   --done-surface: #e2f3ea;
-  --pending-ink: #5e6878;
-  --pending-surface: #e7ebf3;
   --frame-fill: rgba(81, 69, 205, 0.06);
   --frame-inner-guard: rgba(247, 248, 252, 0.85);
   --frame-outer-guard: rgba(17, 19, 24, 0.85);
@@ -57,8 +55,6 @@
   --frame-stroke: rgba(183, 175, 255, 0.85);
   --done: #6ee7b7;
   --done-surface: #162d25;
-  --pending-ink: #a1abbb;
-  --pending-surface: #22262f;
   --frame-fill: rgba(183, 175, 255, 0.06);
   --edge-guard: #111318;
   --cursor-fill: #f7f8fc;
@@ -103,7 +99,6 @@ svg {
   position: absolute;
   display: flex;
   align-items: center;
-  gap: calc(24 * var(--unit));
   padding: calc(16 * var(--unit)) calc(24 * var(--unit));
   background: var(--title-surface);
   z-index: 5;
@@ -113,49 +108,6 @@ svg {
   font-size: calc(16 * var(--unit));
   line-height: calc(24 * var(--unit));
   font-weight: 600;
-}
-.title.stacked {
-  flex-direction: column;
-  align-items: stretch;
-  gap: calc(12 * var(--unit));
-}
-.progress {
-  display: flex;
-  align-items: center;
-  gap: calc(12 * var(--unit));
-  flex: none;
-}
-.progress.stacked {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: calc(8 * var(--unit));
-}
-.step-count {
-  font-family: var(--mono);
-  font-size: calc(14 * var(--unit));
-  line-height: calc(20 * var(--unit));
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.segments {
-  display: flex;
-  gap: calc(4 * var(--unit));
-  height: calc(6 * var(--unit));
-  flex: none;
-}
-.segment {
-  flex: 1;
-  min-width: calc(4 * var(--unit));
-  border-radius: calc(2 * var(--unit));
-  background: var(--pending-surface);
-}
-.segment.current {
-  background: var(--active-fill);
-}
-.segment.done {
-  background: var(--done-surface);
-  box-shadow: inset 0 0 0 calc(1 * var(--unit)) var(--done);
 }
 .surface {
   position: absolute;

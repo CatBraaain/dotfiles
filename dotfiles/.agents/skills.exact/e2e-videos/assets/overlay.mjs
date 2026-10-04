@@ -6,7 +6,7 @@
  * @typedef {{text:string,at:number,firstAt?:number,hold?:boolean}} Input
  * @typedef {{name:string,at:number,firstAt?:number,api?:boolean,hold?:boolean}} Key
  * @typedef {{x:number,y:number,at:number,click?:boolean}} Pointer
- * @typedef {{title:string,steps:Step[],current:number,read?:number,readTotal?:number,phase:'waiting'|'acting'|'checking'|'result',theme:'light'|'dark',pageArea:Rect,titleArea:Rect,layer?:'both'|'title'|'page',taskAnchor?:Rect|null,checkAt?:number|null,target?:Target|null,result?:Result|null,input?:Input|null,key?:Key|null,pointer?:Pointer|null,reducedMotion?:boolean|null}} OverlayState
+ * @typedef {{title:string,steps:Step[],current:number,phase:'waiting'|'acting'|'checking'|'result',theme:'light'|'dark',pageArea:Rect,titleArea:Rect,layer?:'both'|'title'|'page',taskAnchor?:Rect|null,checkAt?:number|null,target?:Target|null,result?:Result|null,input?:Input|null,key?:Key|null,pointer?:Pointer|null,reducedMotion?:boolean|null}} OverlayState
  * @typedef {{element:string,reason:string,rect:Rect,step:number,total:number,pageArea:Rect,value:string}} Constraint
  * @typedef {{constraints:Constraint[],placements:Record<string,Rect>,requiredTitleHeight:number,at:number}} Layout
  * @typedef {{update:(patch:Partial<OverlayState>)=>Layout,inspect:()=>Layout,painted:()=>Promise<Layout>,setVisible:(visible:boolean)=>Promise<void>,dispose:()=>void}} Overlay
@@ -193,7 +193,6 @@ export function installRecordingOverlay(
       }
       value.firstAt = firstAt;
     }
-    if (next.read == null) next.read = 0;
     return next;
   }
 
@@ -223,14 +222,6 @@ export function installRecordingOverlay(
       candidate.current > candidate.steps.length
     )
       throw new Error("current must be a 1-based step number");
-    const total = candidate.readTotal ?? candidate.steps.length;
-    if (!Number.isInteger(total) || total < 1)
-      throw new Error("readTotal must be a positive integer");
-    for (const count of [candidate.read ?? 0, candidate.readTotal ?? candidate.steps.length])
-      if (!Number.isInteger(count) || count < 0 || count > total)
-        throw new Error("read must stay between 0 and readTotal");
-    if ((candidate.read ?? 0) === total && candidate.current !== candidate.steps.length)
-      throw new Error("read reaches readTotal only on the last step");
     if (!["waiting", "acting", "checking", "result"].includes(candidate.phase))
       throw new Error("Unknown overlay phase");
     if (!["light", "dark"].includes(candidate.theme))
@@ -305,18 +296,13 @@ export function installRecordingOverlay(
   function scale() {
     return Math.max(1, state.pageArea.width / 1280);
   }
-  function readTotal() {
-    return state.readTotal ?? state.steps.length;
-  }
 
   function render() {
     const area = state.pageArea;
     const s = scale();
     root.style.setProperty("--unit", `${s}px`);
     layout = { constraints: [], placements: {}, requiredTitleHeight: 0, at: performance.now() };
-    const n = state.steps.length;
     const step = state.steps[state.current - 1];
-    const complete = (state.read ?? 0) >= readTotal();
     const showPage = state.layer !== "title";
     const showTitle = state.layer !== "page";
     /** @type {Rect[]} */
@@ -327,7 +313,7 @@ export function installRecordingOverlay(
     ]
       .filter((rect) => rect != null)
       .map((rect) => expand(/** @type {Rect} */ (rect), 8 * s));
-    if (showTitle) renderTitle(s, n, complete);
+    if (showTitle) renderTitle(s);
     else {
       element(".title").hidden = true;
       layout.requiredTitleHeight = 0;
@@ -360,49 +346,16 @@ export function installRecordingOverlay(
     }
   }
 
-  function renderTitle(
-    /** @type {number} */ s,
-    /** @type {number} */ n,
-    /** @type {boolean} */ complete,
-  ) {
+  function renderTitle(/** @type {number} */ s) {
     const title = element(".title");
     title.hidden = false;
-    const total = readTotal();
-    const widest = `COMPLETE ${total} / ${total}`;
-    const count = element(".step-count");
-    count.textContent = complete ? widest : `READ ${state.read} / ${total}`;
-    const countWidth = measure(widest, "step-count");
-    count.style.width = `${countWidth}px`;
-    const progressWidth = Math.max(160, 8 * n - 4) * s;
-    const segments = element(".segments");
-    segments.replaceChildren();
-    segments.style.width = `${progressWidth}px`;
-    for (let number = 1; number <= n; number++) {
-      const segment = document.createElement("div");
-      segment.className = `segment ${segmentStatus(number, complete)}`;
-      segments.append(segment);
-    }
     element(".test-title").textContent = state.title;
-    const stacked = state.pageArea.width < 720 * s;
-    title.classList.toggle("stacked", stacked);
-    const progress = element(".progress");
-    progress.classList.remove("stacked");
     const inner = state.titleArea.width - 48 * s;
-    if (stacked && countWidth + 12 * s + progressWidth > inner) progress.classList.add("stacked");
-    const titleLines = wrapLines(
-      state.title,
-      "test-title",
-      stacked ? inner : inner - 24 * s - countWidth - 12 * s - progressWidth,
-      24 * s,
-    );
-    const progressExtra = stacked
-      ? 12 * s + 20 * s + (progress.classList.contains("stacked") ? 8 * s : 0)
-      : 0;
-    layout.requiredTitleHeight = Math.max(64 * s, 32 * s + 24 * s * titleLines + progressExtra);
+    const titleLines = wrapLines(state.title, "test-title", inner, 24 * s);
+    layout.requiredTitleHeight = Math.max(64 * s, 32 * s + 24 * s * titleLines);
     place(title, state.titleArea);
     if (
       state.titleArea.height < layout.requiredTitleHeight ||
-      progressWidth > inner ||
       intersects(state.titleArea, state.pageArea) ||
       state.titleArea.width !== state.pageArea.width ||
       state.titleArea.x !== state.pageArea.x ||
@@ -417,11 +370,6 @@ export function installRecordingOverlay(
       );
     }
   }
-  function segmentStatus(/** @type {number} */ number, /** @type {boolean} */ complete) {
-    if (complete || number < state.current) return "done";
-    return number === state.current ? "current" : "pending";
-  }
-
   function renderFrame(
     /** @type {'target'|'result'} */ kind,
     /** @type {Target|Result|null} */ annotation,

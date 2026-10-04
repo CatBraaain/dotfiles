@@ -121,7 +121,6 @@
       </p>
       <p class="note">
         タイトル帯・task label はサイトと同じ明暗、入力帯・キー表示（dock）はサイトと逆の明暗。
-        進行は READ 表示で、結果の閲覧が済むごとに進む。
       </p>
       <p class="note">表示値はデザイン検査用の見本。実際の録画やテストの合格を表さない。</p>
       <p class="note">
@@ -336,7 +335,6 @@
               }
               value.firstAt = firstAt;
             }
-            if (next.read == null) next.read = 0;
             return next;
           }
 
@@ -367,17 +365,6 @@
               candidate.current > candidate.steps.length
             )
               throw new Error("current must be a 1-based step number");
-            const total = candidate.readTotal ?? candidate.steps.length;
-            if (!Number.isInteger(total) || total < 1)
-              throw new Error("readTotal must be a positive integer");
-            for (const count of [
-              candidate.read ?? 0,
-              candidate.readTotal ?? candidate.steps.length,
-            ])
-              if (!Number.isInteger(count) || count < 0 || count > total)
-                throw new Error("read must stay between 0 and readTotal");
-            if ((candidate.read ?? 0) === total && candidate.current !== candidate.steps.length)
-              throw new Error("read reaches readTotal only on the last step");
             if (!["waiting", "acting", "checking", "result"].includes(candidate.phase))
               throw new Error("Unknown overlay phase");
             if (!["light", "dark"].includes(candidate.theme))
@@ -462,9 +449,6 @@
           function scale() {
             return Math.max(1, state.pageArea.width / 1280);
           }
-          function readTotal() {
-            return state.readTotal ?? state.steps.length;
-          }
 
           function render() {
             const area = state.pageArea;
@@ -476,9 +460,7 @@
               requiredTitleHeight: 0,
               at: performance.now(),
             };
-            const n = state.steps.length;
             const step = state.steps[state.current - 1];
-            const complete = (state.read ?? 0) >= readTotal();
             const showPage = state.layer !== "title";
             const showTitle = state.layer !== "page";
             /** @type {Rect[]} */
@@ -489,7 +471,7 @@
             ]
               .filter((rect) => rect != null)
               .map((rect) => expand(/** @type {Rect} */ (rect), 8 * s));
-            if (showTitle) renderTitle(s, n, complete);
+            if (showTitle) renderTitle(s);
             else {
               element(".title").hidden = true;
               layout.requiredTitleHeight = 0;
@@ -532,53 +514,16 @@
             }
           }
 
-          function renderTitle(
-            /** @type {number} */ s,
-            /** @type {number} */ n,
-            /** @type {boolean} */ complete,
-          ) {
+          function renderTitle(/** @type {number} */ s) {
             const title = element(".title");
             title.hidden = false;
-            const total = readTotal();
-            const widest = `COMPLETE ${total} / ${total}`;
-            const count = element(".step-count");
-            count.textContent = complete ? widest : `READ ${state.read} / ${total}`;
-            const countWidth = measure(widest, "step-count");
-            count.style.width = `${countWidth}px`;
-            const progressWidth = Math.max(160, 8 * n - 4) * s;
-            const segments = element(".segments");
-            segments.replaceChildren();
-            segments.style.width = `${progressWidth}px`;
-            for (let number = 1; number <= n; number++) {
-              const segment = document.createElement("div");
-              segment.className = `segment ${segmentStatus(number, complete)}`;
-              segments.append(segment);
-            }
             element(".test-title").textContent = state.title;
-            const stacked = state.pageArea.width < 720 * s;
-            title.classList.toggle("stacked", stacked);
-            const progress = element(".progress");
-            progress.classList.remove("stacked");
             const inner = state.titleArea.width - 48 * s;
-            if (stacked && countWidth + 12 * s + progressWidth > inner)
-              progress.classList.add("stacked");
-            const titleLines = wrapLines(
-              state.title,
-              "test-title",
-              stacked ? inner : inner - 24 * s - countWidth - 12 * s - progressWidth,
-              24 * s,
-            );
-            const progressExtra = stacked
-              ? 12 * s + 20 * s + (progress.classList.contains("stacked") ? 8 * s : 0)
-              : 0;
-            layout.requiredTitleHeight = Math.max(
-              64 * s,
-              32 * s + 24 * s * titleLines + progressExtra,
-            );
+            const titleLines = wrapLines(state.title, "test-title", inner, 24 * s);
+            layout.requiredTitleHeight = Math.max(64 * s, 32 * s + 24 * s * titleLines);
             place(title, state.titleArea);
             if (
               state.titleArea.height < layout.requiredTitleHeight ||
-              progressWidth > inner ||
               intersects(state.titleArea, state.pageArea) ||
               state.titleArea.width !== state.pageArea.width ||
               state.titleArea.x !== state.pageArea.x ||
@@ -593,11 +538,6 @@
               );
             }
           }
-          function segmentStatus(/** @type {number} */ number, /** @type {boolean} */ complete) {
-            if (complete || number < state.current) return "done";
-            return number === state.current ? "current" : "pending";
-          }
-
           function renderFrame(
             /** @type {'target'|'result'} */ kind,
             /** @type {Target|Result|null} */ annotation,
@@ -1167,18 +1107,14 @@
         const supplemental = requiredElement(document, "#supplemental");
         const extraGallery = requiredElement(document, "#extra-gallery");
         const phases = [
-          ["waiting", "操作前", "対象上のtask label、番号badge、対象枠。進行は READ 0 / 3。"],
+          ["waiting", "操作前", "対象上のtask label、番号badge、対象枠。"],
           [
             "acting",
             "操作中",
             "実操作中。badgeは非回転のまま、入力帯がページ下中央に出る。dockはサイトと逆の明暗。",
           ],
           ["checking", "確認待ち", "操作が終わった証のcheckがbadgeへ360msでフェードインした状態。"],
-          [
-            "result",
-            "結果表示",
-            "結果枠と『Total === ¥3,300』ラベル1組。閲覧が済みREADが1へ進む。",
-          ],
+          ["result", "結果表示", "結果枠と『Total === ¥3,300』ラベル1組。"],
         ];
         for (const [phase, name, description] of phases)
           await pair(gallery, phase, name, description);
@@ -1200,7 +1136,6 @@
               "対象枠を使わない操作のtask labelは、ページ上端の代替anchorに置く。",
             ],
             ["long", "長い日本語と長い値", "task labelと結果ラベルの全文折返し。省略しない。"],
-            ["many", "8ステップ", "多いステップのREAD進行とセグメント。"],
             [
               "collision",
               "配置制約",
@@ -1324,13 +1259,6 @@
               action: "配送先の氏名と郵便番号と建物名と部屋番号を確認してから入力する",
               expected: longValue,
             };
-          if (scenario === "many")
-            for (let index = 4; index <= 8; index++)
-              steps.push({
-                name: `click sample ${index}`,
-                action: `Click sample ${index}`,
-                expected: "Sample is shown",
-              });
           const nameRect = rectOf(requiredElement(doc, "#name"));
           const confirmRect = rectOf(requiredElement(doc, "#confirm"));
           const resultRect = rectOf(requiredElement(doc, "#result"));
@@ -1340,8 +1268,7 @@
           const state = {
             title: "Checkout › delivery details › preserves values",
             steps,
-            current: scenario === "many" ? 5 : 3,
-            read: phase === "result" ? 1 : 0,
+            current: 3,
             phase,
             theme,
             layer: titleOnly ? "title" : "both",
@@ -1433,8 +1360,8 @@
         }
       })({
         ...{
-          html: /* overlay-asset:html */ '\u003cdiv class="overlay" data-theme="light">\n  \u003cheader class="title">\n    \u003cdiv class="test-title">\u003c/div>\n    \u003cdiv class="progress">\n      \u003cspan class="step-count">\u003c/span>\n      \u003cdiv class="segments">\u003c/div>\n    \u003c/div>\n  \u003c/header>\n  \u003cdiv class="frames">\n    \u003cdiv class="target-frame frame">\u003c/div>\n    \u003cdiv class="result-frame frame">\u003c/div>\n  \u003c/div>\n  \u003cdiv class="task-label surface" hidden>\n    \u003cspan class="badge"\n      >\u003cspan class="chip">\u003c/span\n      >\u003cspan class="check" hidden\n        >\u003csvg viewBox="0 0 12 12">\u003cpath pathLength="1" d="m2 6 2.5 2.5L10 3" />\u003c/svg>\u003c/span\n    >\u003c/span>\n    \u003cdiv class="task-copy">\u003cspan class="label-text">\u003c/span>\u003c/div>\n  \u003c/div>\n  \u003cdiv class="result-label" hidden>\n    \u003csvg class="eye" viewBox="0 0 24 24">\n      \u003cpath d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />\n      \u003ccircle cx="12" cy="12" r="3" />\u003c/svg\n    >\u003cspan class="result-text">\u003c/span>\n  \u003c/div>\n  \u003csvg class="cursor" viewBox="0 0 16 24">\u003cpath d="M1 1V20L5 16L9 23L12 21L8 14H15Z" />\u003c/svg>\n  \u003cdiv class="input dock" hidden>\u003cspan class="input-text">\u003c/span>\u003c/div>\n  \u003cdiv class="key dock" hidden>\n    \u003cdiv class="key-body">\n      \u003cdiv class="key-name">\u003c/div>\n      \u003cdiv class="api-note" hidden>\u003c/div>\n    \u003c/div>\n  \u003c/div>\n  \u003cdiv class="effects">\u003c/div>\n\u003c/div>\n',
-          css: /* overlay-asset:css */ ':host {\n  all: initial;\n  pointer-events: none;\n}\n.overlay {\n  --unit: 1px;\n  --title-surface: #f7f8fc;\n  --surface: rgba(247, 248, 252, 0.96);\n  --text: #171922;\n  --secondary: #495162;\n  --line: #d0d5df;\n  --shadow-ink: rgba(23, 25, 34, 0.12);\n  --accent: #5145cd;\n  --active-fill: #5145cd;\n  --caption-surface: rgba(81, 69, 205, 0.85);\n  --frame-stroke: rgba(81, 69, 205, 0.85);\n  --on-active: #f7f8fc;\n  --done: #116742;\n  --done-surface: #e2f3ea;\n  --pending-ink: #5e6878;\n  --pending-surface: #e7ebf3;\n  --frame-fill: rgba(81, 69, 205, 0.06);\n  --frame-inner-guard: rgba(247, 248, 252, 0.85);\n  --frame-outer-guard: rgba(17, 19, 24, 0.85);\n  --ripple-inner-guard: #f7f8fc;\n  --ripple-outer-guard: #111318;\n  --edge-guard: #f7f8fc;\n  --cursor-fill: #171922;\n  --dock-surface: #111318;\n  --dock-text: #f7f8fc;\n  --dock-line: #414957;\n  --dock-secondary: #b6bdc9;\n  --dock-shadow: rgba(17, 19, 24, 0.24);\n  --key-sheen: rgba(247, 248, 252, 0.18);\n  --sans:\n    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK JP",\n    sans-serif;\n  --mono:\n    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK JP",\n    monospace;\n  position: fixed;\n  inset: 0;\n  pointer-events: none;\n  font-family: var(--sans);\n  font-size: calc(15 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  color: var(--text);\n}\n.overlay[data-theme="dark"] {\n  --title-surface: #111318;\n  --surface: rgba(17, 19, 24, 0.96);\n  --text: #f7f8fc;\n  --secondary: #b6bdc9;\n  --line: #414957;\n  --shadow-ink: rgba(17, 19, 24, 0.24);\n  --accent: #b7afff;\n  --frame-stroke: rgba(183, 175, 255, 0.85);\n  --done: #6ee7b7;\n  --done-surface: #162d25;\n  --pending-ink: #a1abbb;\n  --pending-surface: #22262f;\n  --frame-fill: rgba(183, 175, 255, 0.06);\n  --edge-guard: #111318;\n  --cursor-fill: #f7f8fc;\n  --dock-surface: #f7f8fc;\n  --dock-text: #171922;\n  --dock-line: #d0d5df;\n  --dock-secondary: #495162;\n  --dock-shadow: rgba(23, 25, 34, 0.12);\n  --key-sheen: rgba(23, 25, 34, 0.12);\n}\n* {\n  box-sizing: border-box;\n  pointer-events: none;\n}\n[hidden] {\n  display: none !important;\n}\ndiv,\nsection,\nheader,\nspan,\nsvg {\n  margin: 0;\n  padding: 0;\n  border: 0;\n  font: inherit;\n  color: inherit;\n  letter-spacing: 0;\n  text-transform: none;\n  text-shadow: none;\n}\n.test-title,\n.label-text,\n.result-text,\n.input-text,\n.key-name {\n  min-width: 0;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n}\n.title {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  gap: calc(24 * var(--unit));\n  padding: calc(16 * var(--unit)) calc(24 * var(--unit));\n  background: var(--title-surface);\n  z-index: 5;\n}\n.test-title {\n  flex: 1;\n  font-size: calc(16 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  font-weight: 600;\n}\n.title.stacked {\n  flex-direction: column;\n  align-items: stretch;\n  gap: calc(12 * var(--unit));\n}\n.progress {\n  display: flex;\n  align-items: center;\n  gap: calc(12 * var(--unit));\n  flex: none;\n}\n.progress.stacked {\n  flex-direction: column;\n  align-items: flex-start;\n  gap: calc(8 * var(--unit));\n}\n.step-count {\n  font-family: var(--mono);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n}\n.segments {\n  display: flex;\n  gap: calc(4 * var(--unit));\n  height: calc(6 * var(--unit));\n  flex: none;\n}\n.segment {\n  flex: 1;\n  min-width: calc(4 * var(--unit));\n  border-radius: calc(2 * var(--unit));\n  background: var(--pending-surface);\n}\n.segment.current {\n  background: var(--active-fill);\n}\n.segment.done {\n  background: var(--done-surface);\n  box-shadow: inset 0 0 0 calc(1 * var(--unit)) var(--done);\n}\n.surface {\n  position: absolute;\n  background: var(--surface);\n  border: calc(1 * var(--unit)) solid var(--line);\n  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--shadow-ink);\n  border-radius: calc(12 * var(--unit));\n  z-index: 2;\n}\n.task-label {\n  display: flex;\n  align-items: center;\n  gap: calc(12 * var(--unit));\n  padding: 0 calc(12 * var(--unit));\n  transform-origin: center;\n}\n.task-copy {\n  flex: 1;\n  min-width: 0;\n}\n.label-text {\n  font-size: calc(17 * var(--unit));\n  line-height: calc(26 * var(--unit));\n  font-weight: 600;\n}\n.badge {\n  position: relative;\n  display: inline-flex;\n  flex: none;\n  align-items: center;\n  justify-content: center;\n  height: calc(44 * var(--unit));\n}\n.chip {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: none;\n  width: calc(32 * var(--unit));\n  height: calc(32 * var(--unit));\n  border-radius: calc(16 * var(--unit));\n  font-family: var(--mono);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(14 * var(--unit));\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  color: var(--on-active);\n  background: var(--active-fill);\n}\n.check {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  right: 0;\n  bottom: 0;\n  width: calc(16 * var(--unit));\n  height: calc(16 * var(--unit));\n  border-radius: 50%;\n  background: var(--done);\n  box-shadow: 0 0 0 calc(2 * var(--unit)) var(--surface);\n  transform-origin: center;\n}\n.check svg {\n  width: calc(11 * var(--unit));\n  height: calc(11 * var(--unit));\n  fill: none;\n  stroke: var(--done-surface);\n  stroke-width: 1.7;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.result-label {\n  position: absolute;\n  display: flex;\n  align-items: flex-start;\n  gap: calc(8 * var(--unit));\n  padding: calc(8 * var(--unit)) calc(12 * var(--unit));\n  border-radius: calc(8 * var(--unit));\n  background: var(--caption-surface);\n  color: var(--on-active);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n  z-index: 3;\n  transform-origin: center;\n}\n.eye {\n  width: calc(20 * var(--unit));\n  height: calc(20 * var(--unit));\n  flex: none;\n  fill: none;\n  stroke: currentColor;\n  stroke-width: calc(2 * var(--unit));\n  stroke-linecap: round;\n  stroke-linejoin: round;\n  margin-top: calc((24 - 20) / 2 * var(--unit));\n}\n.eye > * {\n  vector-effect: non-scaling-stroke;\n}\n.frames {\n  position: absolute;\n  overflow: hidden;\n  z-index: 1;\n}\n.frame {\n  position: absolute;\n  border: calc(2 * var(--unit)) solid var(--frame-stroke);\n  background: var(--frame-fill);\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit)) var(--frame-inner-guard),\n    0 0 0 calc(1 * var(--unit)) var(--frame-outer-guard);\n}\n.dock {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--dock-surface);\n  color: var(--dock-text);\n  border: calc(1 * var(--unit)) solid var(--dock-line);\n  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--dock-shadow);\n  z-index: 2;\n  transform-origin: center;\n}\n.input {\n  border-radius: 9999px;\n  padding: calc(12 * var(--unit)) calc(20 * var(--unit));\n}\n.input-text {\n  font-family: var(--mono);\n  font-size: calc(21 * var(--unit));\n  line-height: calc(30 * var(--unit));\n  text-align: center;\n}\n.key {\n  border-radius: calc(8 * var(--unit));\n  padding: calc(12 * var(--unit)) calc(20 * var(--unit));\n  box-shadow:\n    inset 0 calc(-4 * var(--unit)) 0 var(--key-sheen),\n    0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--dock-shadow);\n}\n.key-body {\n  min-width: 0;\n}\n.key-name {\n  font-size: calc(21 * var(--unit));\n  line-height: calc(30 * var(--unit));\n  font-weight: 600;\n  text-align: center;\n}\n.api-note {\n  margin-top: calc(8 * var(--unit));\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  color: var(--dock-secondary);\n  text-align: center;\n}\n.cursor {\n  position: absolute;\n  width: calc(16 * var(--unit));\n  height: calc(24 * var(--unit));\n  fill: var(--cursor-fill);\n  stroke: var(--edge-guard);\n  stroke-width: 1.5;\n  stroke-linejoin: round;\n  z-index: 3;\n}\n.effects {\n  position: absolute;\n  inset: 0;\n  z-index: 1;\n}\n.effects .cursor {\n  z-index: auto;\n}\n.ripple {\n  position: absolute;\n  width: calc(48 * var(--unit));\n  height: calc(48 * var(--unit));\n  --ripple-scale: 1;\n  border: calc(2 * var(--unit) / var(--ripple-scale)) solid var(--accent);\n  border-radius: 50%;\n  transform: scale(var(--ripple-scale));\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-inner-guard),\n    0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-outer-guard);\n}\n',
+          html: /* overlay-asset:html */ '\u003cdiv class="overlay" data-theme="light">\n  \u003cheader class="title">\n    \u003cdiv class="test-title">\u003c/div>\n  \u003c/header>\n  \u003cdiv class="frames">\n    \u003cdiv class="target-frame frame">\u003c/div>\n    \u003cdiv class="result-frame frame">\u003c/div>\n  \u003c/div>\n  \u003cdiv class="task-label surface" hidden>\n    \u003cspan class="badge"\n      >\u003cspan class="chip">\u003c/span\n      >\u003cspan class="check" hidden\n        >\u003csvg viewBox="0 0 12 12">\u003cpath pathLength="1" d="m2 6 2.5 2.5L10 3" />\u003c/svg>\u003c/span\n    >\u003c/span>\n    \u003cdiv class="task-copy">\u003cspan class="label-text">\u003c/span>\u003c/div>\n  \u003c/div>\n  \u003cdiv class="result-label" hidden>\n    \u003csvg class="eye" viewBox="0 0 24 24">\n      \u003cpath d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />\n      \u003ccircle cx="12" cy="12" r="3" />\u003c/svg\n    >\u003cspan class="result-text">\u003c/span>\n  \u003c/div>\n  \u003csvg class="cursor" viewBox="0 0 16 24">\u003cpath d="M1 1V20L5 16L9 23L12 21L8 14H15Z" />\u003c/svg>\n  \u003cdiv class="input dock" hidden>\u003cspan class="input-text">\u003c/span>\u003c/div>\n  \u003cdiv class="key dock" hidden>\n    \u003cdiv class="key-body">\n      \u003cdiv class="key-name">\u003c/div>\n      \u003cdiv class="api-note" hidden>\u003c/div>\n    \u003c/div>\n  \u003c/div>\n  \u003cdiv class="effects">\u003c/div>\n\u003c/div>\n',
+          css: /* overlay-asset:css */ ':host {\n  all: initial;\n  pointer-events: none;\n}\n.overlay {\n  --unit: 1px;\n  --title-surface: #f7f8fc;\n  --surface: rgba(247, 248, 252, 0.96);\n  --text: #171922;\n  --secondary: #495162;\n  --line: #d0d5df;\n  --shadow-ink: rgba(23, 25, 34, 0.12);\n  --accent: #5145cd;\n  --active-fill: #5145cd;\n  --caption-surface: rgba(81, 69, 205, 0.85);\n  --frame-stroke: rgba(81, 69, 205, 0.85);\n  --on-active: #f7f8fc;\n  --done: #116742;\n  --done-surface: #e2f3ea;\n  --frame-fill: rgba(81, 69, 205, 0.06);\n  --frame-inner-guard: rgba(247, 248, 252, 0.85);\n  --frame-outer-guard: rgba(17, 19, 24, 0.85);\n  --ripple-inner-guard: #f7f8fc;\n  --ripple-outer-guard: #111318;\n  --edge-guard: #f7f8fc;\n  --cursor-fill: #171922;\n  --dock-surface: #111318;\n  --dock-text: #f7f8fc;\n  --dock-line: #414957;\n  --dock-secondary: #b6bdc9;\n  --dock-shadow: rgba(17, 19, 24, 0.24);\n  --key-sheen: rgba(247, 248, 252, 0.18);\n  --sans:\n    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK JP",\n    sans-serif;\n  --mono:\n    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK JP",\n    monospace;\n  position: fixed;\n  inset: 0;\n  pointer-events: none;\n  font-family: var(--sans);\n  font-size: calc(15 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  color: var(--text);\n}\n.overlay[data-theme="dark"] {\n  --title-surface: #111318;\n  --surface: rgba(17, 19, 24, 0.96);\n  --text: #f7f8fc;\n  --secondary: #b6bdc9;\n  --line: #414957;\n  --shadow-ink: rgba(17, 19, 24, 0.24);\n  --accent: #b7afff;\n  --frame-stroke: rgba(183, 175, 255, 0.85);\n  --done: #6ee7b7;\n  --done-surface: #162d25;\n  --frame-fill: rgba(183, 175, 255, 0.06);\n  --edge-guard: #111318;\n  --cursor-fill: #f7f8fc;\n  --dock-surface: #f7f8fc;\n  --dock-text: #171922;\n  --dock-line: #d0d5df;\n  --dock-secondary: #495162;\n  --dock-shadow: rgba(23, 25, 34, 0.12);\n  --key-sheen: rgba(23, 25, 34, 0.12);\n}\n* {\n  box-sizing: border-box;\n  pointer-events: none;\n}\n[hidden] {\n  display: none !important;\n}\ndiv,\nsection,\nheader,\nspan,\nsvg {\n  margin: 0;\n  padding: 0;\n  border: 0;\n  font: inherit;\n  color: inherit;\n  letter-spacing: 0;\n  text-transform: none;\n  text-shadow: none;\n}\n.test-title,\n.label-text,\n.result-text,\n.input-text,\n.key-name {\n  min-width: 0;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n}\n.title {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  padding: calc(16 * var(--unit)) calc(24 * var(--unit));\n  background: var(--title-surface);\n  z-index: 5;\n}\n.test-title {\n  flex: 1;\n  font-size: calc(16 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  font-weight: 600;\n}\n.surface {\n  position: absolute;\n  background: var(--surface);\n  border: calc(1 * var(--unit)) solid var(--line);\n  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--shadow-ink);\n  border-radius: calc(12 * var(--unit));\n  z-index: 2;\n}\n.task-label {\n  display: flex;\n  align-items: center;\n  gap: calc(12 * var(--unit));\n  padding: 0 calc(12 * var(--unit));\n  transform-origin: center;\n}\n.task-copy {\n  flex: 1;\n  min-width: 0;\n}\n.label-text {\n  font-size: calc(17 * var(--unit));\n  line-height: calc(26 * var(--unit));\n  font-weight: 600;\n}\n.badge {\n  position: relative;\n  display: inline-flex;\n  flex: none;\n  align-items: center;\n  justify-content: center;\n  height: calc(44 * var(--unit));\n}\n.chip {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: none;\n  width: calc(32 * var(--unit));\n  height: calc(32 * var(--unit));\n  border-radius: calc(16 * var(--unit));\n  font-family: var(--mono);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(14 * var(--unit));\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  color: var(--on-active);\n  background: var(--active-fill);\n}\n.check {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  right: 0;\n  bottom: 0;\n  width: calc(16 * var(--unit));\n  height: calc(16 * var(--unit));\n  border-radius: 50%;\n  background: var(--done);\n  box-shadow: 0 0 0 calc(2 * var(--unit)) var(--surface);\n  transform-origin: center;\n}\n.check svg {\n  width: calc(11 * var(--unit));\n  height: calc(11 * var(--unit));\n  fill: none;\n  stroke: var(--done-surface);\n  stroke-width: 1.7;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.result-label {\n  position: absolute;\n  display: flex;\n  align-items: flex-start;\n  gap: calc(8 * var(--unit));\n  padding: calc(8 * var(--unit)) calc(12 * var(--unit));\n  border-radius: calc(8 * var(--unit));\n  background: var(--caption-surface);\n  color: var(--on-active);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n  z-index: 3;\n  transform-origin: center;\n}\n.eye {\n  width: calc(20 * var(--unit));\n  height: calc(20 * var(--unit));\n  flex: none;\n  fill: none;\n  stroke: currentColor;\n  stroke-width: calc(2 * var(--unit));\n  stroke-linecap: round;\n  stroke-linejoin: round;\n  margin-top: calc((24 - 20) / 2 * var(--unit));\n}\n.eye > * {\n  vector-effect: non-scaling-stroke;\n}\n.frames {\n  position: absolute;\n  overflow: hidden;\n  z-index: 1;\n}\n.frame {\n  position: absolute;\n  border: calc(2 * var(--unit)) solid var(--frame-stroke);\n  background: var(--frame-fill);\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit)) var(--frame-inner-guard),\n    0 0 0 calc(1 * var(--unit)) var(--frame-outer-guard);\n}\n.dock {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--dock-surface);\n  color: var(--dock-text);\n  border: calc(1 * var(--unit)) solid var(--dock-line);\n  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--dock-shadow);\n  z-index: 2;\n  transform-origin: center;\n}\n.input {\n  border-radius: 9999px;\n  padding: calc(12 * var(--unit)) calc(20 * var(--unit));\n}\n.input-text {\n  font-family: var(--mono);\n  font-size: calc(21 * var(--unit));\n  line-height: calc(30 * var(--unit));\n  text-align: center;\n}\n.key {\n  border-radius: calc(8 * var(--unit));\n  padding: calc(12 * var(--unit)) calc(20 * var(--unit));\n  box-shadow:\n    inset 0 calc(-4 * var(--unit)) 0 var(--key-sheen),\n    0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--dock-shadow);\n}\n.key-body {\n  min-width: 0;\n}\n.key-name {\n  font-size: calc(21 * var(--unit));\n  line-height: calc(30 * var(--unit));\n  font-weight: 600;\n  text-align: center;\n}\n.api-note {\n  margin-top: calc(8 * var(--unit));\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  color: var(--dock-secondary);\n  text-align: center;\n}\n.cursor {\n  position: absolute;\n  width: calc(16 * var(--unit));\n  height: calc(24 * var(--unit));\n  fill: var(--cursor-fill);\n  stroke: var(--edge-guard);\n  stroke-width: 1.5;\n  stroke-linejoin: round;\n  z-index: 3;\n}\n.effects {\n  position: absolute;\n  inset: 0;\n  z-index: 1;\n}\n.effects .cursor {\n  z-index: auto;\n}\n.ripple {\n  position: absolute;\n  width: calc(48 * var(--unit));\n  height: calc(48 * var(--unit));\n  --ripple-scale: 1;\n  border: calc(2 * var(--unit) / var(--ripple-scale)) solid var(--accent);\n  border-radius: 50%;\n  transform: scale(var(--ripple-scale));\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-inner-guard),\n    0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-outer-guard);\n}\n',
         },
         installer,
       });
