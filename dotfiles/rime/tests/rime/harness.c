@@ -2057,12 +2057,12 @@ static void test_romaji_dictionary_is_declaration_only(void) {
         for (size_t v = 0; v < sizeof(kVowels) / sizeof(kVowels[0]); ++v) {
             int written = snprintf(code, sizeof(code), "n%s%s", kConsonants[c], kVowels[v]);
             if (written <= 0 || (size_t)written >= sizeof(code)) continue;
-            /* nya/nyu/nyo and nwu are legitimate generated spellings of
-             * the n row (nwu stays unreachable while typing because w
-             * completes the pending n); only the remaining n-plus-consonant
-             * codes are hatsuon */
+            /* nya/nyu/nyo are the legitimate generated spellings of the
+             * n row (nwu is not declared: the n row left the o-column+wu
+             * family); only the remaining n-plus-consonant codes are
+             * hatsuon */
             if (strcmp(code, "nya") == 0 || strcmp(code, "nyu") == 0
-                || strcmp(code, "nyo") == 0 || strcmp(code, "nwu") == 0) {
+                || strcmp(code, "nyo") == 0) {
                 continue;
             }
             snprintf(description, sizeof(description),
@@ -2450,8 +2450,9 @@ static void test_longest_declared_suffix_preserves_raw_prefix(void) {
          * (dotfiles/rime/SPEC.md, "ローマ字表") */
         {"qu", "qう"}, {"wu", "wう"}, {"yi", "yい"},
         {"lyi", "lyい"}, {"lye", "lいぇ"},
-        /* nwu is declared but unreachable while typing: w completes the
-         * pending n, and the empty-slot wu then leaves w raw before u */
+        /* nwu is not declared (the n row left the o-column+wu family)
+         * but typing still forms it: w completes the pending n, and the
+         * empty-slot wu then leaves w raw before u */
         {"nwu", "んwう"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {

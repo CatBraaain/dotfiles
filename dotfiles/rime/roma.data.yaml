@@ -64,7 +64,7 @@ families:
     column: u
     suffixes: { wa: ぁ, wi: ぃ, we: ぇ, wo: ぉ }
   # twu=とぅ, dwu=どぅ: o-column + small u
-  - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, p, m, r]
     column: o
     suffixes: { wu: ぅ }
 # Doubling these consonants types っ + the consonant (kka = っか).
