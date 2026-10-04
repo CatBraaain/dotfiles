@@ -10,28 +10,27 @@
     <div class="target-frame frame"></div>
     <div class="result-frame frame"></div>
   </div>
-  <div class="target-caption caption" hidden>
-    <span class="primary"></span><svg class="icon" viewBox="0 0 24 24"></svg
-    ><span class="caption-text"></span>
+  <div class="task-label surface" hidden>
+    <span class="badge"
+      ><span class="chip"></span
+      ><span class="check" hidden
+        ><svg viewBox="0 0 12 12"><path pathLength="1" d="m2 6 2.5 2.5L10 3" /></svg></span
+    ></span>
+    <div class="task-copy"><span class="label-text"></span></div>
   </div>
-  <div class="result-caption caption" hidden>
-    <svg class="icon" viewBox="0 0 24 24"></svg><span class="caption-text"></span>
+  <div class="result-label" hidden>
+    <svg class="eye" viewBox="0 0 24 24">
+      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" /></svg
+    ><span class="result-text"></span>
   </div>
-  <section class="panel surface" hidden>
-    <div class="label"><span class="primary"></span><span class="label-text"></span></div>
-    <div class="divider"></div>
-    <div class="steps"></div>
-  </section>
-  <div class="input surface" hidden>
-    <span class="primary"></span><span class="input-text"></span>
-  </div>
-  <div class="key surface" hidden>
-    <span class="primary"></span>
+  <svg class="cursor" viewBox="0 0 16 24"><path d="M1 1V20L5 16L9 23L12 21L8 14H15Z" /></svg>
+  <div class="input dock" hidden><span class="input-text"></span></div>
+  <div class="key dock" hidden>
     <div class="key-body">
       <div class="key-name"></div>
-      <div class="api-note"></div>
+      <div class="api-note" hidden></div>
     </div>
   </div>
   <div class="effects"></div>
-  <svg class="cursor" viewBox="0 0 16 24"><path d="M1 1V20L5 16L9 23L12 21L8 14H15Z" /></svg>
 </div>

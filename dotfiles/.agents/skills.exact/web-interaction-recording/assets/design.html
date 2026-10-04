@@ -83,8 +83,6 @@
       .viewport iframe {
         display: block;
         border: 0;
-        width: 1280px;
-        height: 720px;
         transform-origin: top left;
       }
       .viewport.full-size {
@@ -118,15 +116,20 @@
       <h1>録画注釈のデザイン確認ギャラリー</h1>
       <p>
         上から「操作前 → 操作中 → 確認待ち →
-        結果表示」の順に読む。同じ状態の明るい注釈と暗い注釈を見比べる。設定操作は不要。
+        結果表示」の順に読む。左が明るいサイト、右が暗いサイトで、それぞれ同じ注釈を当てた例。
+        設定操作は不要。
+      </p>
+      <p class="note">
+        タイトル帯・task label はサイトと同じ明暗、入力帯・キー表示（dock）はサイトと逆の明暗。
+        進行は READ 表示で、結果の閲覧が済むごとに進む。
       </p>
       <p class="note">表示値はデザイン検査用の見本。実際の録画やテストの合格を表さない。</p>
       <p class="note">
-        映像領域は1280×720で固定。外側だけ縮小表示する。「1:1で見る」で原寸に切り替えられる。
+        映像領域は1280×720（タイトル帯以外）で固定。外側だけ縮小表示する。「1:1で見る」で原寸に切り替えられる。
       </p>
       <div id="gallery" aria-label="明暗と4状態の8例"></div>
       <details id="supplemental">
-        <summary>補助例を見る — 入力・キー・長文・配置制約など</summary>
+        <summary>補助例を見る — 入力・キー・長文・配置制約・外タイトルなど</summary>
         <p>
           主8例と同じ描画実装による追加の見本。配置制約の例は、収まらない注釈を省略せず表示する。
         </p>
@@ -136,315 +139,474 @@
       <noscript>見本の表示にはJavaScriptを有効にする。</noscript>
     </main>
     <script>
-      const installer = function installRecordingOverlay(
-        /** @type {{html:string,css:string,state:OverlayState}} */ {
-          html,
-          css,
-          state: initialState,
-        },
-      ) {
-        validate(initialState);
-        const owner = /** @type {OverlayWindow} */ (window);
-        owner.recordingOverlay?.dispose();
-        const host = document.createElement("recording-annotation-overlay");
-        host.setAttribute("aria-hidden", "true");
-        host.setAttribute("inert", "");
-        const hostStyle = {
-          all: "initial",
-          position: "fixed",
-          inset: "0",
-          width: "100%",
-          height: "100%",
-          "pointer-events": "none",
-          "z-index": "2147483647",
-          margin: "0",
-          padding: "0",
-          border: "0",
-          transform: "none",
-          opacity: "1",
-          display: "block",
-          visibility: "visible",
-          isolation: "isolate",
-          "color-scheme": "normal",
-        };
-        for (const [name, value] of Object.entries(hostStyle))
-          host.style.setProperty(name, value, "important");
-        const shadow = host.attachShadow({ mode: "open" });
-        const stylesheet = new CSSStyleSheet();
-        stylesheet.replaceSync(css);
-        shadow.adoptedStyleSheets = [stylesheet];
-        const template = document.createElement("template");
-        template.innerHTML = html;
-        shadow.append(template.content.cloneNode(true));
-        document.documentElement.append(host);
-        const root = element(".overlay");
-        const motion = matchMedia("(prefers-reduced-motion: reduce)");
-        let state = structuredClone(initialState);
-        let disposed = false;
-        let frame = 0;
-        /** @type {Map<number, () => void>} */
-        const paintFrames = new Map();
-        /** @type {Layout} */
-        let layout = { constraints: [], placements: {}, requiredTitleHeight: 0, at: 0 };
-        /** @type {{node:HTMLElement|SVGElement,at:number,kind:'trail'|'ripple',x:number,y:number}[]} */
-        let effects = [];
-        /** @type {Rect[]} */
-        let protectedRects = [];
-        let lastInputAt = -Infinity;
-        let pendingInput = /** @type {Input|null} */ (null);
-        let inputRevealAt = 0;
-        let visible = true;
-        let visibilityRequest = 0;
-        /** @type {Map<HTMLElement, {visible:boolean,animation:Animation|null,fadeAt?:number}>} */
-        const presentations = new Map();
-        for (const selector of [".panel", ".target-caption", ".result-caption", ".input", ".key"])
-          presentations.set(element(selector), { visible: false, animation: null });
+      /* overlay-asset:installer:start */
+      const installer =
+        /** Self-contained for Page.evaluate; assets and state are the only inputs. */
+        function installRecordingOverlay(
+          /** @type {{html:string,css:string,state:OverlayState}} */ {
+            html,
+            css,
+            state: initialState,
+          },
+        ) {
+          const owner = /** @type {OverlayWindow} */ (window);
+          owner.recordingOverlay?.dispose();
+          const host = document.createElement("recording-annotation-overlay");
+          host.setAttribute("aria-hidden", "true");
+          host.setAttribute("inert", "");
+          const hostStyle = {
+            all: "initial",
+            position: "fixed",
+            inset: "0",
+            width: "100%",
+            height: "100%",
+            "pointer-events": "none",
+            "z-index": "2147483647",
+            margin: "0",
+            padding: "0",
+            border: "0",
+            transform: "none",
+            opacity: "1",
+            display: "block",
+            visibility: "visible",
+            isolation: "isolate",
+            "color-scheme": "normal",
+          };
+          for (const [name, value] of Object.entries(hostStyle))
+            host.style.setProperty(name, value, "important");
+          const shadow = host.attachShadow({ mode: "open" });
+          const stylesheet = new CSSStyleSheet();
+          stylesheet.replaceSync(css);
+          shadow.adoptedStyleSheets = [stylesheet];
+          shadow.innerHTML = html;
+          document.documentElement.append(host);
+          const root = element(".overlay");
+          const motion = matchMedia("(prefers-reduced-motion: reduce)");
+          let state = structuredClone(initialState);
+          let disposed = false;
+          let frame = 0;
+          /** @type {Map<number, () => void>} */
+          const paintFrames = new Map();
+          /** @type {Layout} */
+          let layout = { constraints: [], placements: {}, requiredTitleHeight: 0, at: 0 };
+          /** @type {{node:HTMLElement|SVGElement,at:number,kind:'trail'|'ripple',x:number,y:number}[]} */
+          let effects = [];
+          /** @type {Rect[]} */
+          let protectedRects = [];
+          let lastInputAt = -Infinity;
+          let pendingInput = /** @type {Input|null} */ (null);
+          let inputRevealAt = 0;
+          let visible = true;
+          let visibilityRequest = 0;
+          let checkStartedAt = /** @type {number|null} */ (null);
+          let checkStep = 0;
+          /** Dock sessions keep the first-appearance time and the widest width seen. */
+          const firstAts = {
+            input: /** @type {number|null} */ (null),
+            key: /** @type {number|null} */ (null),
+          };
+          const dockWidths = { input: 0, key: 0 };
+          /** @type {Map<HTMLElement, {visible:boolean,animation:Animation|null,fadeAt?:number}>} */
+          const presentations = new Map();
+          for (const selector of [".task-label", ".result-label", ".input", ".key"])
+            presentations.set(element(selector), { visible: false, animation: null });
 
-        const api = {
-          update,
-          inspect: () => structuredClone(layout),
-          painted: () =>
-            new Promise((resolve, reject) => {
-              if (disposed) {
-                reject(new Error("Recording overlay has been disposed"));
-                return;
-              }
-              const rejectDisposed = () => reject(new Error("Recording overlay has been disposed"));
-              const animations = activePresentations();
-              const first = requestAnimationFrame(() => {
-                paintFrames.delete(first);
-                const second = requestAnimationFrame(async () => {
-                  paintFrames.delete(second);
-                  await Promise.all(
-                    animations.map((animation) => animation.finished.catch(() => {})),
-                  );
-                  if (disposed) rejectDisposed();
-                  else resolve(structuredClone(layout));
+          const ENTER_MS = 200;
+          const HOLD_MS = 1200;
+          const EXIT_MS = 250;
+          const CHECK_FADE_MS = 360;
+          const REVEAL_MS = 160;
+
+          const api = {
+            update,
+            inspect: () => structuredClone(layout),
+            painted: () =>
+              new Promise((resolve, reject) => {
+                if (disposed) {
+                  reject(new Error("Recording overlay has been disposed"));
+                  return;
+                }
+                const rejectDisposed = () =>
+                  reject(new Error("Recording overlay has been disposed"));
+                const animations = activePresentations();
+                const first = requestAnimationFrame(() => {
+                  paintFrames.delete(first);
+                  const second = requestAnimationFrame(async () => {
+                    paintFrames.delete(second);
+                    await Promise.all(
+                      animations.map((animation) => animation.finished.catch(() => {})),
+                    );
+                    if (disposed) rejectDisposed();
+                    else resolve(structuredClone(layout));
+                  });
+                  paintFrames.set(second, rejectDisposed);
                 });
-                paintFrames.set(second, rejectDisposed);
-              });
-              paintFrames.set(first, rejectDisposed);
-            }),
-          async setVisible(/** @type {boolean} */ nextVisible) {
-            if (disposed) throw new Error("Recording overlay has been disposed");
-            const request = ++visibilityRequest;
-            visible = nextVisible;
-            if (visible) host.style.setProperty("visibility", "visible", "important");
-            render();
-            await Promise.all(activePresentations().map((animation) => animation.finished));
-            if (disposed) throw new Error("Recording overlay has been disposed");
-            if (request !== visibilityRequest)
-              throw new DOMException(
-                "Recording overlay visibility request was superseded",
-                "AbortError",
-              );
-            if (!nextVisible) host.style.setProperty("visibility", "hidden", "important");
-          },
-          dispose() {
-            if (disposed) return;
-            disposed = true;
-            cancelAnimationFrame(frame);
-            for (const [id, reject] of paintFrames) {
-              cancelAnimationFrame(id);
-              reject();
-            }
-            paintFrames.clear();
-            for (const { animation } of presentations.values()) animation?.cancel();
-            presentations.clear();
-            motion.removeEventListener("change", onMotion);
-            effects = [];
-            host.remove();
-            if (owner.recordingOverlay === api) delete owner.recordingOverlay;
-          },
-        };
-        owner.recordingOverlay = api;
-        motion.addEventListener("change", onMotion);
-        update(initialState);
-        return layout;
+                paintFrames.set(first, rejectDisposed);
+              }),
+            async setVisible(/** @type {boolean} */ nextVisible) {
+              if (disposed) throw new Error("Recording overlay has been disposed");
+              const request = ++visibilityRequest;
+              visible = nextVisible;
+              if (visible) host.style.setProperty("visibility", "visible", "important");
+              render();
+              await Promise.all(activePresentations().map((animation) => animation.finished));
+              if (disposed) throw new Error("Recording overlay has been disposed");
+              if (request !== visibilityRequest)
+                throw new DOMException(
+                  "Recording overlay visibility request was superseded",
+                  "AbortError",
+                );
+              if (!nextVisible) host.style.setProperty("visibility", "hidden", "important");
+            },
+            dispose() {
+              if (disposed) return;
+              disposed = true;
+              cancelAnimationFrame(frame);
+              for (const [id, reject] of paintFrames) {
+                cancelAnimationFrame(id);
+                reject();
+              }
+              paintFrames.clear();
+              for (const { animation } of presentations.values()) animation?.cancel();
+              presentations.clear();
+              motion.removeEventListener("change", onMotion);
+              effects = [];
+              host.remove();
+              if (owner.recordingOverlay === api) delete owner.recordingOverlay;
+            },
+          };
+          owner.recordingOverlay = api;
+          motion.addEventListener("change", onMotion);
+          update(initialState);
+          return layout;
 
-        function update(/** @type {Partial<OverlayState>} */ patch) {
-          if (disposed) throw new Error("Recording overlay has been disposed");
-          const next = { ...state, ...structuredClone(patch) };
-          validate(next);
-          const onlyThemeOrPointer = Object.keys(patch).every((name) =>
-            ["theme", "reducedMotion", "pointer"].includes(name),
-          );
-          const input = patch.input;
-          if (
-            input &&
-            state.key?.name === "Backspace" &&
-            input.at - lastInputAt < 160 &&
-            input.text.length > (state.input?.text.length ?? 0)
-          ) {
-            pendingInput = input;
-            inputRevealAt = lastInputAt + 160;
-            next.input = state.input;
-          } else if ("input" in patch) {
-            pendingInput = null;
-            if (input) lastInputAt = input.at;
-          }
-          state = next;
-          applyTheme();
-          if (!onlyThemeOrPointer || layout.at === 0) render();
-          if ("pointer" in patch) pointer(patch.pointer);
-          tick();
-          return structuredClone(layout);
-        }
-
-        function validate(/** @type {OverlayState} */ candidate) {
-          if (!candidate.steps.length)
-            throw new Error("No recording steps; supply a non-empty scenario");
-          if (
-            !Number.isInteger(candidate.current) ||
-            candidate.current < 1 ||
-            candidate.current > candidate.steps.length
-          )
-            throw new Error("current must be a 1-based step number");
-          if (!["waiting", "acting", "checking", "result"].includes(candidate.phase))
-            throw new Error("Unknown overlay phase");
-          if (!["light", "dark"].includes(candidate.theme))
-            throw new Error("Pass the caller-selected annotation theme");
-          if (!candidate.pageArea || !candidate.titleArea)
-            throw new Error("Pass the reserved page and title rectangles");
-          if (
-            typeof candidate.title !== "string" ||
-            candidate.steps.some((step) =>
-              [step.name, step.action, step.expected].some((text) => typeof text !== "string"),
-            )
-          )
-            throw new Error("Title and step text must be strings");
-          if (
-            candidate.target &&
-            !["click", "input", "key", "scroll", "hover", "drag", "open"].includes(
-              candidate.target.kind,
-            )
-          )
-            throw new Error("Unknown target operation kind");
-          if (
-            candidate.pointer &&
-            ![candidate.pointer.x, candidate.pointer.y, candidate.pointer.at].every(Number.isFinite)
-          )
-            throw new Error("Pointer samples require finite viewport coordinates and event times");
-          for (const value of [candidate.input, candidate.key].filter((value) => value != null)) {
-            if (!Number.isFinite(value.at))
-              throw new Error("Input and key timestamps use the document performance clock");
-          }
-          for (const rect of [
-            candidate.pageArea,
-            candidate.titleArea,
-            candidate.target?.rect,
-            candidate.result?.rect,
-          ].filter(Boolean)) {
+          function update(/** @type {Partial<OverlayState>} */ patch) {
+            if (disposed) throw new Error("Recording overlay has been disposed");
+            const raw = { ...state, ...structuredClone(patch) };
+            const adopted = normalize(raw, state);
+            validate(adopted);
+            const onlyThemeOrPointer = Object.keys(patch).every((name) =>
+              ["theme", "reducedMotion", "pointer"].includes(name),
+            );
+            const input = /** @type {Input|undefined|null} */ (patch.input);
             if (
-              !rect ||
-              ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
-              rect.width <= 0 ||
-              rect.height <= 0
-            )
-              throw new Error("Rects require finite viewport coordinates and positive dimensions");
+              input &&
+              state.key?.name === "Backspace" &&
+              input.at - lastInputAt < REVEAL_MS &&
+              input.text.length > (state.input?.text.length ?? 0)
+            ) {
+              pendingInput = input;
+              inputRevealAt = lastInputAt + REVEAL_MS;
+              adopted.input = state.input;
+            } else if ("input" in patch) {
+              pendingInput = null;
+              if (input) lastInputAt = input.at;
+            }
+            state = adopted;
+            adoptCheckClock(patch);
+            applyTheme();
+            if (!onlyThemeOrPointer || layout.at === 0) render();
+            if ("pointer" in patch) pointer(patch.pointer);
+            tick();
+            return structuredClone(layout);
           }
-        }
 
-        function applyTheme() {
-          root.dataset.theme = state.theme;
-          root.dataset.reduced = String(reduced());
-          if (reduced()) {
-            for (const { animation } of presentations.values()) {
-              if (animation?.effect instanceof KeyframeEffect)
-                animation.effect.setKeyframes(
-                  animation.effect
-                    .getKeyframes()
-                    .map((keyframe) => ({ ...keyframe, transform: "scale(1)" })),
+          /** Fill transient firstAt sessions so repeated typing never restarts the enter fade. */
+          function normalize(
+            /** @type {OverlayState} */ next,
+            /** @type {OverlayState|null} */ previous,
+          ) {
+            for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+              const value = next[kind];
+              if (!value) {
+                firstAts[kind] = null;
+                dockWidths[kind] = 0;
+                continue;
+              }
+              const earlier = previous?.[kind] ?? null;
+              const continues =
+                earlier != null &&
+                performance.now() <
+                  transientTimes(earlier.firstAt ?? earlier.at, earlier.at).exitEnd;
+              const firstAt =
+                value.firstAt ?? (continues ? (earlier?.firstAt ?? earlier.at) : value.at);
+              if (firstAt !== firstAts[kind]) {
+                firstAts[kind] = firstAt;
+                dockWidths[kind] = 0;
+              }
+              value.firstAt = firstAt;
+            }
+            if (next.read == null) next.read = 0;
+            return next;
+          }
+
+          /** Track when the current step's operation ended, for the check fade. */
+          function adoptCheckClock(/** @type {Partial<OverlayState>} */ patch) {
+            const explicit = "checkAt" in patch;
+            if (
+              state.phase === "waiting" ||
+              state.phase === "acting" ||
+              (explicit && patch.checkAt == null)
+            ) {
+              checkStartedAt = null;
+              checkStep = 0;
+              return;
+            }
+            if (state.current !== checkStep || (explicit && patch.checkAt != null)) {
+              checkStep = state.current;
+              checkStartedAt = /** @type {number} */ (explicit ? patch.checkAt : performance.now());
+            }
+          }
+
+          function validate(/** @type {OverlayState} */ candidate) {
+            if (!candidate.steps.length)
+              throw new Error("No recording steps; supply a non-empty scenario");
+            if (
+              !Number.isInteger(candidate.current) ||
+              candidate.current < 1 ||
+              candidate.current > candidate.steps.length
+            )
+              throw new Error("current must be a 1-based step number");
+            const total = candidate.readTotal ?? candidate.steps.length;
+            if (!Number.isInteger(total) || total < 1)
+              throw new Error("readTotal must be a positive integer");
+            for (const count of [
+              candidate.read ?? 0,
+              candidate.readTotal ?? candidate.steps.length,
+            ])
+              if (!Number.isInteger(count) || count < 0 || count > total)
+                throw new Error("read must stay between 0 and readTotal");
+            if ((candidate.read ?? 0) === total && candidate.current !== candidate.steps.length)
+              throw new Error("read reaches readTotal only on the last step");
+            if (!["waiting", "acting", "checking", "result"].includes(candidate.phase))
+              throw new Error("Unknown overlay phase");
+            if (!["light", "dark"].includes(candidate.theme))
+              throw new Error("Pass the observed site theme; docks invert it automatically");
+            if (!["both", "title", "page"].includes(candidate.layer ?? "both"))
+              throw new Error("Unknown overlay layer");
+            if (!candidate.pageArea || !candidate.titleArea)
+              throw new Error("Pass the reserved page and title rectangles");
+            if (
+              typeof candidate.title !== "string" ||
+              candidate.steps.some((step) =>
+                [step.name, step.action, step.expected].some((text) => typeof text !== "string"),
+              )
+            )
+              throw new Error("Title and step text must be strings");
+            if (
+              candidate.target &&
+              !["click", "input", "key", "scroll", "hover", "drag", "open"].includes(
+                candidate.target.kind,
+              )
+            )
+              throw new Error("Unknown target operation kind");
+            if (
+              candidate.pointer &&
+              ![candidate.pointer.x, candidate.pointer.y, candidate.pointer.at].every(
+                Number.isFinite,
+              )
+            )
+              throw new Error(
+                "Pointer samples require finite viewport coordinates and event times",
+              );
+            for (const value of [candidate.input, candidate.key].filter((value) => value != null)) {
+              if (![value.at, value.firstAt].every((time) => time == null || Number.isFinite(time)))
+                throw new Error("Input and key timestamps use the document performance clock");
+            }
+            if (candidate.checkAt != null && !Number.isFinite(candidate.checkAt))
+              throw new Error("checkAt uses the document performance clock");
+            for (const rect of [
+              candidate.pageArea,
+              candidate.titleArea,
+              candidate.taskAnchor ?? null,
+              candidate.target?.rect,
+              candidate.result?.rect,
+            ].filter(Boolean)) {
+              if (
+                !rect ||
+                ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
+                rect.width <= 0 ||
+                rect.height <= 0
+              )
+                throw new Error(
+                  "Rects require finite viewport coordinates and positive dimensions",
                 );
             }
-            effects
-              .filter((effect) => effect.kind === "trail")
-              .forEach((effect) => effect.node.remove());
-            effects = effects.filter((effect) => effect.kind !== "trail");
           }
-        }
-        function reduced() {
-          return state.reducedMotion ?? motion.matches;
-        }
-        function onMotion() {
-          applyTheme();
-          tick();
-        }
 
-        function render() {
-          const area = state.pageArea;
-          element(".panel").hidden = false;
-          const s = Math.max(1, area.width / 1280);
-          root.style.setProperty("--unit", `${s}px`);
-          layout = {
-            constraints: [],
-            placements: {},
-            requiredTitleHeight: 0,
-            at: performance.now(),
-          };
-          protectedRects = [
-            state.target?.rect,
-            state.phase === "result" ? state.result?.rect : null,
-          ]
-            .filter((rect) => rect != null)
-            .map((rect) => expand(rect, 8 * s));
-          const n = state.steps.length;
-          const step = state.steps[state.current - 1];
-          element(".test-title").textContent = state.title;
-          element(".step-count").textContent = `STEP ${state.current} / ${n}`;
-          element(".step-count").style.width = `${measureText(`STEP ${n} / ${n}`, "step-count")}px`;
-          const segments = element(".segments");
-          segments.replaceChildren();
-          segments.style.width = `${Math.max(160, 8 * n - 4) * s}px`;
-          for (let i = 1; i <= n; i++) {
-            const segment = document.createElement("div");
-            segment.className = `segment ${status(i)}`;
-            segments.append(segment);
+          function applyTheme() {
+            root.dataset.theme = state.theme;
+            root.dataset.reduced = String(reduced());
+            if (reduced()) {
+              for (const { animation } of presentations.values()) {
+                if (animation?.effect instanceof KeyframeEffect)
+                  animation.effect.setKeyframes(
+                    animation.effect
+                      .getKeyframes()
+                      .map((keyframe) => ({ ...keyframe, transform: "scale(1)" })),
+                  );
+              }
+              effects
+                .filter((effect) => effect.kind === "trail")
+                .forEach((effect) => effect.node.remove());
+              effects = effects.filter((effect) => effect.kind !== "trail");
+            }
           }
-          const title = element(".title");
-          title.classList.toggle("stacked", area.width < 720 * s);
-          const progress = element(".progress");
-          progress.classList.remove("stacked");
-          title.style.width = `${state.titleArea.width}px`;
-          title.style.height = "auto";
-          const titleInner = state.titleArea.width - 48 * s;
-          if (
-            area.width < 720 * s &&
-            measureText(`STEP ${n} / ${n}`, "step-count") +
-              12 * s +
-              segments.getBoundingClientRect().width >
-              titleInner
-          )
-            progress.classList.add("stacked");
-          layout.requiredTitleHeight = Math.max(64 * s, title.getBoundingClientRect().height);
-          place(title, state.titleArea);
-          title.style.height = `${state.titleArea.height}px`;
-          if (
-            state.titleArea.height < layout.requiredTitleHeight ||
-            segments.getBoundingClientRect().width > titleInner ||
-            intersects(state.titleArea, area) ||
-            state.titleArea.width !== area.width ||
-            state.titleArea.x !== area.x ||
-            state.titleArea.y !== 0 ||
-            !contains({ x: 0, y: 0, width: innerWidth, height: innerHeight }, area) ||
-            !contains({ x: 0, y: 0, width: innerWidth, height: innerHeight }, state.titleArea)
-          ) {
-            constraint(
-              "title",
-              "Reserve a non-overlapping, full-width title area with the required height",
-              state.titleArea,
+          function reduced() {
+            return state.reducedMotion ?? motion.matches;
+          }
+          function onMotion() {
+            applyTheme();
+            tick();
+          }
+          function scale() {
+            return Math.max(1, state.pageArea.width / 1280);
+          }
+          function readTotal() {
+            return state.readTotal ?? state.steps.length;
+          }
+
+          function render() {
+            const area = state.pageArea;
+            const s = scale();
+            root.style.setProperty("--unit", `${s}px`);
+            layout = {
+              constraints: [],
+              placements: {},
+              requiredTitleHeight: 0,
+              at: performance.now(),
+            };
+            const n = state.steps.length;
+            const step = state.steps[state.current - 1];
+            const complete = (state.read ?? 0) >= readTotal();
+            const showPage = state.layer !== "title";
+            const showTitle = state.layer !== "page";
+            /** @type {Rect[]} */
+            const occupied = [];
+            protectedRects = [
+              showPage && state.phase !== "result" ? (state.target?.rect ?? null) : null,
+              showPage && state.phase === "result" ? (state.result?.rect ?? null) : null,
+            ]
+              .filter((rect) => rect != null)
+              .map((rect) => expand(/** @type {Rect} */ (rect), 8 * s));
+            if (showTitle) renderTitle(s, n, complete);
+            else {
+              element(".title").hidden = true;
+              layout.requiredTitleHeight = 0;
+            }
+            const frames = element(".frames");
+            frames.hidden = !showPage;
+            if (showPage) {
+              place(frames, area);
+              renderFrame(
+                "target",
+                state.phase !== "result" ? (state.target ?? null) : null,
+                area,
+                s,
+              );
+              renderFrame(
+                "result",
+                state.phase === "result" ? (state.result ?? null) : null,
+                area,
+                s,
+              );
+              renderTaskLabel(step, s, occupied);
+              renderResultLabel(s, occupied);
+              renderInput(s, occupied);
+              renderKey(s, occupied);
+              element(".cursor").hidden = !state.pointer;
+            } else {
+              for (const selector of [".task-label", ".result-label", ".input", ".key", ".cursor"])
+                element(selector).hidden = true;
+            }
+            layout.at = performance.now();
+            present(element(".task-label"), visible && showPage);
+            present(
+              element(".result-label"),
+              visible && showPage && state.phase === "result" && !!state.result,
             );
+            for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+              const value = state[kind];
+              const transient = showPage ? value : null;
+              presentTransient(element("." + kind), transient, performance.now());
+            }
           }
-          const frames = element(".frames");
-          place(frames, area);
-          for (const kind of ["target", "result"]) {
-            const annotation =
-              kind === "target" ? state.target : state.phase === "result" ? state.result : null;
+
+          function renderTitle(
+            /** @type {number} */ s,
+            /** @type {number} */ n,
+            /** @type {boolean} */ complete,
+          ) {
+            const title = element(".title");
+            title.hidden = false;
+            const total = readTotal();
+            const widest = `COMPLETE ${total} / ${total}`;
+            const count = element(".step-count");
+            count.textContent = complete ? widest : `READ ${state.read} / ${total}`;
+            const countWidth = measure(widest, "step-count");
+            count.style.width = `${countWidth}px`;
+            const progressWidth = Math.max(160, 8 * n - 4) * s;
+            const segments = element(".segments");
+            segments.replaceChildren();
+            segments.style.width = `${progressWidth}px`;
+            for (let number = 1; number <= n; number++) {
+              const segment = document.createElement("div");
+              segment.className = `segment ${segmentStatus(number, complete)}`;
+              segments.append(segment);
+            }
+            element(".test-title").textContent = state.title;
+            const stacked = state.pageArea.width < 720 * s;
+            title.classList.toggle("stacked", stacked);
+            const progress = element(".progress");
+            progress.classList.remove("stacked");
+            const inner = state.titleArea.width - 48 * s;
+            if (stacked && countWidth + 12 * s + progressWidth > inner)
+              progress.classList.add("stacked");
+            const titleLines = wrapLines(
+              state.title,
+              "test-title",
+              stacked ? inner : inner - 24 * s - countWidth - 12 * s - progressWidth,
+              24 * s,
+            );
+            const progressExtra = stacked
+              ? 12 * s + 20 * s + (progress.classList.contains("stacked") ? 8 * s : 0)
+              : 0;
+            layout.requiredTitleHeight = Math.max(
+              64 * s,
+              32 * s + 24 * s * titleLines + progressExtra,
+            );
+            place(title, state.titleArea);
+            if (
+              state.titleArea.height < layout.requiredTitleHeight ||
+              progressWidth > inner ||
+              intersects(state.titleArea, state.pageArea) ||
+              state.titleArea.width !== state.pageArea.width ||
+              state.titleArea.x !== state.pageArea.x ||
+              state.titleArea.y !== 0 ||
+              !contains({ x: 0, y: 0, width: innerWidth, height: innerHeight }, state.pageArea) ||
+              !contains({ x: 0, y: 0, width: innerWidth, height: innerHeight }, state.titleArea)
+            ) {
+              constraint(
+                "title",
+                "Reserve a non-overlapping, full-width title area with the required height",
+                state.titleArea,
+              );
+            }
+          }
+          function segmentStatus(/** @type {number} */ number, /** @type {boolean} */ complete) {
+            if (complete || number < state.current) return "done";
+            return number === state.current ? "current" : "pending";
+          }
+
+          function renderFrame(
+            /** @type {'target'|'result'} */ kind,
+            /** @type {Target|Result|null} */ annotation,
+            /** @type {Rect} */ area,
+            /** @type {number} */ s,
+          ) {
             const box = element(`.${kind}-frame`);
-            const caption = element(`.${kind}-caption`);
             box.hidden = !annotation;
-            if (annotation) caption.hidden = false;
-            if (!annotation) continue;
+            if (!annotation) return;
             const r = annotation.rect;
             const frameRect = {
               x: r.x - area.x - 2 * s,
@@ -454,623 +616,572 @@
             };
             place(box, frameRect);
             box.style.borderRadius = `${Math.min(10 * s, frameRect.width / 2, frameRect.height / 2)}px`;
-            const target = state.target;
-            const result = state.result;
-            if (kind === "target" && target) {
-              element(".target-caption .caption-text").textContent = target.name;
-              element(".target-caption .icon").innerHTML = icon(target.kind);
-            } else if (result) {
-              element(".result-caption .caption-text").textContent =
-                `${result.name} === ${result.expected}`;
-              element(".result-caption .icon").innerHTML = icon("result");
-            }
-          }
-          const primary = state.target
-            ? ".target-caption"
-            : state.input
-              ? ".input"
-              : state.key
-                ? ".key"
-                : ".label";
-          for (const slot of shadow.querySelectorAll(".primary")) {
-            slot.replaceChildren();
-            if (slot.parentElement?.matches(primary)) slot.append(badge(state.current, true));
-          }
-          element(".label-text").textContent = `${step.action} → ${step.expected}`;
-          if (state.input) {
-            element(".input").hidden = false;
-            element(".input-text").textContent = state.input.text;
-          }
-          if (state.key) {
-            element(".key").hidden = false;
-            element(".key-name").textContent = state.key.name;
-            element(".api-note").textContent = state.key.api ? "操作案内" : "";
-            element(".api-note").hidden = !state.key.api;
           }
 
-          const occupied = /** @type {Rect[]} */ ([]);
-          const annotations = [
-            { kind: "target", annotation: state.target },
-            { kind: "result", annotation: state.phase === "result" ? state.result : null },
-          ]
-            .filter((entry) => entry.annotation != null)
-            .map((entry) => ({
-              kind: entry.kind,
-              annotation: /** @type {Target|Result} */ (entry.annotation),
-            }))
-            .sort(
-              (a, b) =>
-                a.annotation.rect.y - b.annotation.rect.y ||
-                a.annotation.rect.x - b.annotation.rect.x,
-            );
-          for (const { kind, annotation } of annotations) {
-            const caption = element(`.${kind}-caption`);
-            caption.style.width = `${Math.min(area.width - 48 * s, captionWidth(caption, n, kind === "target", s))}px`;
-            const size = dimensions(caption);
-            const r = annotation.rect;
-            const safe = inset(area, 24 * s);
-            const clampX = (/** @type {number} */ x) =>
-              Math.max(safe.x, Math.min(x, safe.x + safe.width - size.width));
-            const clampY = (/** @type {number} */ y) =>
-              Math.max(safe.y, Math.min(y, safe.y + safe.height - size.height));
-            const candidates = [
-              { x: clampX(r.x + 8 * s), y: r.y - 8 * s - size.height },
-              { x: clampX(r.x + 8 * s), y: r.y + r.height + 8 * s },
-              { x: r.x + r.width + 8 * s, y: clampY(r.y) },
-              { x: r.x - 8 * s - size.width, y: clampY(r.y) },
-            ];
-            selectPosition(kind + "-caption", caption, candidates, occupied, s);
+          function taskAnchorRect() {
+            const fallback = state.taskAnchor ?? state.target?.rect ?? state.result?.rect;
+            if (fallback) return fallback;
+            const safe = inset(state.pageArea, 24);
+            return { x: safe.x, y: safe.y, width: safe.width, height: 1 };
           }
-          const panel = element(".panel");
-          const seen = new Set();
-          let panelPlaced = false;
-          for (const [width, columns] of [
-            [420, 1],
-            [360, 1],
-            [560, 1],
-            [720, 1],
-            [720, 2],
-          ]) {
-            const outerWidth = Math.min(width * s, area.width - 48 * s);
-            if (columns === 2 && (n <= 5 || outerWidth - 42 * s < 600 * s)) continue;
-            const key = `${outerWidth}/${columns}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            panel.style.width = `${outerWidth}px`;
-            if (!renderRows(columns, outerWidth, s)) continue;
-            const size = dimensions(panel);
-            const safe = inset(area, 24 * s);
-            const candidates = [
-              { x: safe.x, y: safe.y },
-              { x: safe.x + safe.width - size.width, y: safe.y },
-              { x: safe.x, y: safe.y + safe.height - size.height },
-              { x: safe.x + safe.width - size.width, y: safe.y + safe.height - size.height },
-            ];
-            const found = candidates
-              .map((point) => ({ ...point, width: size.width, height: size.height }))
-              .find((rect) => fits(rect, occupied, s));
-            if (found) {
-              recordPlacement("panel", panel, found, occupied);
-              panelPlaced = true;
-              break;
-            }
-          }
-          if (!panelPlaced) {
-            panel.style.width = `${Math.min(420 * s, area.width - 48 * s)}px`;
-            renderRows(1, dimensions(panel).width, s);
-            const rect = sized(panel, area.x + 24 * s, area.y + 24 * s);
-            recordPlacement("panel", panel, rect, occupied);
-            constraint(
-              "panel",
-              "No panel candidate preserves all steps and protected targets",
-              rect,
-            );
-          }
-          if (state.input) {
-            const input = element(".input");
-            input.style.width = `${Math.min(0.52 * area.width, area.width - 48 * s)}px`;
-            input.style.borderRadius = `${dimensions(input).height / 2}px`;
-            selectPosition("input", input, positions(input, false, s), occupied, s);
-          }
-          if (state.key) {
-            const key = element(".key");
-            const numberWidth =
-              primary === ".key"
-                ? Math.max(24 * s, 8 * s + measureText(String(n), "step-count")) + 12 * s
-                : 0;
-            key.style.width = `${Math.min(area.width - 48 * s, Math.max(160 * s, 42 * s + numberWidth + measureText(state.key.name, "key-name")))}px`;
-            selectPosition("key", key, positions(key, true, s), occupied, s);
-          }
-          element(".overlay > .cursor").hidden = !state.pointer;
-          layout.at = performance.now();
-          present(element(".panel"), visible);
-          present(element(".target-caption"), visible && !!state.target);
-          present(
-            element(".result-caption"),
-            visible && state.phase === "result" && !!state.result,
-          );
-          for (const kind of ["input", "key"]) {
-            const value = state[/** @type {'input'|'key'} */ (kind)];
-            presentTransient(element("." + kind), value, performance.now());
-          }
-        }
 
-        function dimensions(/** @type {HTMLElement} */ node) {
-          const style = getComputedStyle(node);
-          return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
-        }
-        function activePresentations() {
-          return Array.from(presentations.values())
-            .map((entry) => entry.animation)
-            .filter((animation) => animation != null)
-            .filter((animation) => animation.playState !== "finished");
-        }
-        function present(
-          /** @type {HTMLElement} */ node,
-          /** @type {boolean} */ nextVisible,
-          duration = nextVisible ? 150 : 300,
-          immediate = false,
-        ) {
-          const entry = presentations.get(node);
-          if (!entry) return;
-          if (immediate) {
+          function renderTaskLabel(
+            /** @type {Step} */ step,
+            /** @type {number} */ s,
+            /** @type {Rect[]} */ occupied,
+          ) {
+            const label = element(".task-label");
+            label.hidden = false;
+            element(".label-text").textContent = step.action;
+            element(".chip").textContent = String(state.current);
+            applyCheckPaint(performance.now());
+            const area = state.pageArea;
+            const safe = inset(area, 24 * s);
+            const anchor = taskAnchorRect();
+            const width = Math.min(anchor.width, safe.width);
+            const textWidth = width - 26 * s - 44 * s;
+            const lines = wrapLines(step.action, "label-text", textWidth, 26 * s);
+            const height = Math.max(48 * s, 22 * s + 26 * s * lines);
+            label.style.width = `${width}px`;
+            label.style.height = `${height}px`;
+            const x = Math.max(safe.x, Math.min(anchor.x, safe.x + safe.width - width));
+            const above = { x, y: anchor.y - 12 * s - height, width, height };
+            const below = { x, y: anchor.y + anchor.height + 12 * s, width, height };
+            const found = [above, below].find((rect) => fits(rect, occupied, s));
+            const fallbackY =
+              above.y >= safe.y ? above.y : Math.min(below.y, safe.y + safe.height - height);
+            const rect =
+              found ??
+              /** @type {Rect} */ ({
+                x,
+                y: Math.max(safe.y, fallbackY),
+                width,
+                height,
+              });
+            recordPlacement("task-label", label, rect, occupied);
+            if (!found || textWidth <= 0)
+              constraint(
+                "task-label",
+                "No task-label placement preserves full text, safe edges and protected targets",
+                rect,
+              );
+          }
+
+          function applyCheckPaint(/** @type {number} */ now) {
+            const check = element(".check");
+            check.hidden = checkStartedAt == null;
+            if (checkStartedAt == null) return;
+            const age = Math.max(0, now - checkStartedAt);
+            check.style.opacity = String(checkOpacity(age));
+          }
+          function checkOpacity(/** @type {number} */ ageMs) {
+            const fraction = Math.min(1, ageMs / CHECK_FADE_MS);
+            return cssEase(fraction, 0, 0.58);
+          }
+
+          function renderResultLabel(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+            const label = element(".result-label");
+            const result = state.phase === "result" ? state.result : null;
+            if (!result) return;
+            label.hidden = false;
+            const text = `${result.name} === ${result.expected}`;
+            element(".result-text").textContent = text;
+            const area = state.pageArea;
+            const safe = inset(area, 24 * s);
+            const maxTextWidth = Math.max(1, safe.width - 52 * s);
+            const textWidth = Math.min(measure(text, "result-text"), maxTextWidth);
+            const lines = wrapLines(text, "result-text", Math.max(textWidth, 1), 20 * s);
+            const width = Math.min(safe.width, 52 * s + textWidth);
+            const height = 16 * s + 20 * s * lines;
+            label.style.width = `${width}px`;
+            label.style.height = `${height}px`;
+            const frame = expand(result.rect, 2 * s);
+            const x = Math.max(safe.x, Math.min(frame.x + 8 * s, safe.x + safe.width - width));
+            const above = { x, y: frame.y - 8 * s - height, width, height };
+            const below = { x, y: frame.y + frame.height + 8 * s, width, height };
+            const taskRect = layout.placements["task-label"];
+            /** @type {(rect: Rect) => boolean} */
+            const overlapsTask = (rect) =>
+              !!(taskRect && intersects(rect, expand(taskRect, 16 * s)));
+            const found = [above, below].find(
+              (rect) => fits(rect, occupied, s) && !overlapsTask(rect),
+            );
+            const rect = found ?? above;
+            recordPlacement("result-label", label, rect, occupied);
+            if (!found)
+              constraint(
+                "result-label",
+                "No result-label placement preserves full text, safe edges, the task label and protected targets",
+                rect,
+              );
+          }
+
+          function renderInput(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+            const value = state.input;
+            if (!value) return;
+            const dock = element(".input");
+            dock.hidden = false;
+            element(".input-text").textContent = value.text;
+            const area = state.pageArea;
+            const safe = inset(area, 24 * s);
+            const natural = Math.max(360 * s, 42 * s + measure(value.text, "input-text"));
+            const width = Math.min(safe.width, Math.max(dockWidths.input, natural));
+            dockWidths.input = width;
+            const lines = wrapLines(value.text, "input-text", width - 42 * s, 30 * s);
+            const height = Math.max(56 * s, 26 * s + 30 * s * lines);
+            dock.style.width = `${width}px`;
+            dock.style.height = `${height}px`;
+            dock.style.borderRadius = `${height / 2}px`;
+            const rect = {
+              x: area.x + (area.width - width) / 2,
+              y: area.y + area.height - 24 * s - height,
+              width,
+              height,
+            };
+            const placed = fits(rect, occupied, s);
+            recordPlacement("input", dock, rect, occupied);
+            if (!placed)
+              constraint(
+                "input",
+                "The bottom-centre input band collides with protected targets",
+                rect,
+              );
+          }
+
+          function renderKey(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+            const value = state.key;
+            if (!value) return;
+            const dock = element(".key");
+            dock.hidden = false;
+            element(".key-name").textContent = value.name;
+            element(".api-note").textContent = value.api ? "操作案内" : "";
+            element(".api-note").hidden = !value.api;
+            const noteHeight = value.api ? 8 * s + 20 * s : 0;
+            const width = Math.max(120 * s, 42 * s + measure(value.name, "key-name"));
+            dockWidths.key = Math.max(dockWidths.key, width);
+            const lines = wrapLines(value.name, "key-name", width - 42 * s, 30 * s);
+            const height = Math.max(56 * s, 26 * s + 30 * s * lines) + noteHeight;
+            dock.style.width = `${width}px`;
+            dock.style.height = `${height}px`;
+            selectPosition(
+              "key",
+              dock,
+              positions(inset(state.pageArea, 24 * s), dock, true),
+              occupied,
+              s,
+            );
+          }
+
+          function measure(/** @type {string} */ text, /** @type {string} */ role) {
+            const probe = document.createElement("span");
+            probe.className = role;
+            probe.textContent = text;
+            Object.assign(probe.style, {
+              position: "absolute",
+              width: "max-content",
+              whiteSpace: "pre",
+              visibility: "hidden",
+            });
+            root.append(probe);
+            const width = probe.getBoundingClientRect().width;
+            probe.remove();
+            return width;
+          }
+          function wrapLines(
+            /** @type {string} */ text,
+            /** @type {string} */ role,
+            /** @type {number} */ width,
+            /** @type {number} */ lineHeight,
+          ) {
+            if (!(width > 0)) return 1;
+            const probe = document.createElement("span");
+            probe.className = role;
+            probe.textContent = text;
+            Object.assign(probe.style, {
+              position: "absolute",
+              width: `${width}px`,
+              visibility: "hidden",
+            });
+            root.append(probe);
+            const height = probe.getBoundingClientRect().height;
+            probe.remove();
+            return Math.max(1, Math.ceil(height / lineHeight - 0.01));
+          }
+
+          function transientTimes(/** @type {number} */ firstAt, /** @type {number} */ lastAt) {
+            const enterEnd = firstAt + ENTER_MS;
+            const holdEnd = Math.max(enterEnd, lastAt) + HOLD_MS;
+            return { enterEnd, holdEnd, exitEnd: holdEnd + EXIT_MS };
+          }
+          function activePresentations() {
+            return Array.from(presentations.values())
+              .map((entry) => entry.animation)
+              .filter((animation) => animation != null)
+              .filter((animation) => animation.playState !== "finished");
+          }
+          function present(
+            /** @type {HTMLElement} */ node,
+            /** @type {boolean} */ nextVisible,
+            duration = nextVisible ? 150 : 300,
+            immediate = false,
+          ) {
+            const entry = presentations.get(node);
+            if (!entry) return;
+            if (immediate) {
+              entry.animation?.cancel();
+              entry.animation = null;
+              entry.fadeAt = undefined;
+              entry.visible = nextVisible;
+              node.hidden = !nextVisible;
+              return;
+            }
+            if (entry.visible === nextVisible) {
+              if (!entry.animation) node.hidden = !nextVisible;
+              return;
+            }
+            const style = getComputedStyle(node);
+            const from = entry.animation
+              ? { opacity: style.opacity, transform: style.transform }
+              : {
+                  opacity: nextVisible ? 0 : 1,
+                  transform: `scale(${reduced() ? 1 : nextVisible ? 0.96 : 1})`,
+                };
             entry.animation?.cancel();
-            entry.animation = null;
             entry.fadeAt = undefined;
             entry.visible = nextVisible;
-            node.hidden = !nextVisible;
-            return;
-          }
-          if (entry.visible === nextVisible) {
-            if (!entry.animation) node.hidden = !nextVisible;
-            return;
-          }
-          const style = getComputedStyle(node);
-          const from = entry.animation
-            ? { opacity: style.opacity, transform: style.transform }
-            : {
-                opacity: nextVisible ? 0 : 1,
-                transform: `scale(${reduced() ? 1 : nextVisible ? 0.96 : 1})`,
-              };
-          entry.animation?.cancel();
-          entry.fadeAt = undefined;
-          entry.visible = nextVisible;
-          node.hidden = false;
-          const animation = node.animate(
-            [
-              from,
-              {
-                opacity: nextVisible ? 1 : 0,
-                transform: `scale(${reduced() ? 1 : nextVisible ? 1 : 0.96})`,
-              },
-            ],
-            { duration, easing: "linear", fill: "both" },
-          );
-          entry.animation = animation;
-          animation.finished
-            .then(() => {
-              if (entry.animation !== animation || disposed) return;
-              node.hidden = !entry.visible;
-              animation.cancel();
-              entry.animation = null;
-            })
-            .catch(() => {});
-        }
-
-        function presentTransient(
-          /** @type {HTMLElement} */ node,
-          /** @type {Input|Key|null|undefined} */ value,
-          /** @type {number} */ now,
-        ) {
-          const age = value ? now - value.at : Infinity;
-          if (!value) {
-            present(node, false);
-            return;
-          }
-          if (!value.hold && age >= 900) {
-            present(node, false, 0, true);
-            return;
-          }
-          if (!visible || value.hold || age < 600) {
-            present(node, visible);
-            return;
-          }
-          const entry = presentations.get(node);
-          if (!entry) return;
-          if (entry.fadeAt === value.at) {
             node.hidden = false;
-            return;
-          }
-          entry.animation?.cancel();
-          entry.visible = false;
-          entry.fadeAt = value.at;
-          node.hidden = false;
-          const animation = node.animate(
-            [
-              { opacity: 1, transform: "scale(1)" },
-              { opacity: 0, transform: `scale(${reduced() ? 1 : 0.96})` },
-            ],
-            { duration: 300, easing: "linear", fill: "both" },
-          );
-          animation.startTime = value.at + 600;
-          entry.animation = animation;
-          animation.finished
-            .then(() => {
-              if (entry.animation !== animation || disposed) return;
-              node.hidden = true;
-              animation.cancel();
-              entry.animation = null;
-            })
-            .catch(() => {});
-        }
-
-        function renderRows(
-          /** @type {number} */ columns,
-          /** @type {number} */ width,
-          /** @type {number} */ s,
-        ) {
-          const list = element(".steps");
-          list.replaceChildren();
-          list.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
-          const contentWidth = (width - 42 * s - (columns - 1) * 24 * s) / columns;
-          const chipWidth = Math.max(
-            32 * s,
-            12 * s + measureText(String(state.steps.length), "chip"),
-          );
-          const nameWidth = contentWidth - 16 * s - chipWidth - 12 * s - 10 * s;
-          let maxNameHeight = 0;
-          const rows = state.steps.map((step, index) => {
-            const row = document.createElement("div");
-            row.className = `row ${status(index + 1)}`;
-            row.append(badge(index + 1));
-            const name = document.createElement("span");
-            name.className = "step-name";
-            name.textContent = step.name;
-            name.style.fontWeight = "600";
-            name.style.width = `${Math.max(0, nameWidth)}px`;
-            row.append(name);
-            list.append(row);
-            maxNameHeight = Math.max(maxNameHeight, dimensions(name).height);
-            name.style.removeProperty("font-weight");
-            return row;
-          });
-          const height = Math.max(76 * s, 16 * s + Math.max(44 * s, maxNameHeight));
-          for (const row of rows) row.style.height = `${height}px`;
-          return (
-            nameWidth > 0 &&
-            rows.every((row) => {
-              const name = row.querySelector(".step-name");
-              return (
-                name != null &&
-                row.scrollWidth <= row.clientWidth + 1 &&
-                name.scrollWidth <= name.clientWidth + 1
-              );
-            })
-          );
-        }
-
-        function status(/** @type {number} */ number) {
-          return number < state.current || (number === state.current && state.phase === "result")
-            ? "done"
-            : number === state.current
-              ? "current"
-              : "pending";
-        }
-        function badge(/** @type {number} */ number, primary = false) {
-          const s = Math.max(1, state.pageArea.width / 1280);
-          const width = Math.max(
-            (primary ? 24 : 32) * s,
-            (primary ? 8 : 12) * s +
-              measureText(String(state.steps.length), primary ? "step-count" : "chip"),
-          );
-          const badge = document.createElement("span");
-          badge.className = `badge ${status(number)}`;
-          badge.style.width = `${width + (primary ? 0 : 12 * s)}px`;
-          badge.dataset.phase =
-            status(number) === "done"
-              ? "result"
-              : number === state.current
-                ? state.phase
-                : "waiting";
-          badge.innerHTML = '<span class="chip"></span>';
-          if (!primary)
-            badge.insertAdjacentHTML(
-              "beforeend",
-              '<span class="decoration spinner"></span><span class="decoration ring"></span><span class="decoration check"><svg viewBox="0 0 12 12"><path d="m2 6 2.5 2.5L10 3"/></svg></span>',
+            const animation = node.animate(
+              [
+                from,
+                {
+                  opacity: nextVisible ? 1 : 0,
+                  transform: `scale(${reduced() ? 1 : nextVisible ? 1 : 0.96})`,
+                },
+              ],
+              { duration, easing: "linear", fill: "both" },
             );
-          const chip = /** @type {HTMLElement} */ (badge.firstElementChild);
-          chip.textContent = String(number);
-          chip.style.width = `${width}px`;
-          return badge;
-        }
-
-        function captionWidth(
-          /** @type {HTMLElement} */ caption,
-          /** @type {number} */ n,
-          /** @type {boolean} */ primary,
-          /** @type {number} */ s,
-        ) {
-          const numberWidth = primary
-            ? Math.max(24 * s, 8 * s + measureText(String(n), "step-count")) + 8 * s
-            : 0;
-          return (
-            24 * s +
-            numberWidth +
-            20 * s +
-            8 * s +
-            measureText(caption.querySelector(".caption-text")?.textContent ?? "", "caption-text")
-          );
-        }
-        function measureText(/** @type {string} */ text, /** @type {string} */ role) {
-          const probe = document.createElement("span");
-          probe.className = role;
-          probe.textContent = text;
-          Object.assign(probe.style, {
-            position: "absolute",
-            width: "max-content",
-            whiteSpace: "pre",
-            visibility: "hidden",
-          });
-          root.append(probe);
-          const width = probe.getBoundingClientRect().width;
-          probe.remove();
-          return width;
-        }
-        function positions(
-          /** @type {HTMLElement} */ node,
-          /** @type {boolean} */ centered,
-          /** @type {number} */ s,
-        ) {
-          const safe = inset(state.pageArea, 24 * s);
-          const size = dimensions(node);
-          const center = {
-            x: safe.x + (safe.width - size.width) / 2,
-            y: safe.y + (safe.height - size.height) / 2,
-          };
-          return [
-            ...(centered ? [center] : []),
-            { x: center.x, y: safe.y + safe.height - size.height },
-            { x: center.x, y: safe.y },
-            { x: safe.x, y: center.y },
-            { x: safe.x + safe.width - size.width, y: center.y },
-          ];
-        }
-        function selectPosition(
-          /** @type {string} */ name,
-          /** @type {HTMLElement} */ node,
-          /** @type {{x:number,y:number}[]} */ candidates,
-          /** @type {Rect[]} */ occupied,
-          /** @type {number} */ s,
-        ) {
-          const rects = candidates.map((point) => sized(node, point.x, point.y));
-          const hasContentWidth =
-            node.scrollWidth <= node.clientWidth + 1 &&
-            Array.from(node.querySelectorAll(".caption-text,.input-text,.key-name")).every(
-              (text) => text.clientWidth > 0 && text.scrollWidth <= text.clientWidth + 1,
-            );
-          const found = hasContentWidth ? rects.find((rect) => fits(rect, occupied, s)) : undefined;
-          const rect = found ?? rects[0];
-          recordPlacement(name, node, rect, occupied);
-          if (!found)
-            constraint(
-              name,
-              "No candidate preserves full text, safe edges and protected targets",
-              rect,
-            );
-        }
-        function fits(
-          /** @type {Rect} */ rect,
-          /** @type {Rect[]} */ occupied,
-          /** @type {number} */ s,
-        ) {
-          const safe = inset(state.pageArea, 24 * s);
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            contains(safe, rect) &&
-            !protectedRects.some((protectedRect) => intersects(rect, protectedRect)) &&
-            !occupied.some((other) => intersects(rect, expand(other, 16 * s)))
-          );
-        }
-        function recordPlacement(
-          /** @type {string} */ name,
-          /** @type {HTMLElement} */ node,
-          /** @type {Rect} */ rect,
-          /** @type {Rect[]} */ occupied,
-        ) {
-          place(node, rect);
-          layout.placements[name] = rect;
-          occupied.push(rect);
-        }
-        function constraint(
-          /** @type {string} */ name,
-          /** @type {string} */ reason,
-          /** @type {Rect} */ rect,
-        ) {
-          /** @type {Record<string, string>} */
-          const values = {
-            title: state.title,
-            panel:
-              state.steps.map((step) => step.name).join("\n") +
-              "\n" +
-              element(".label-text").textContent,
-            input: state.input?.text ?? "",
-            key: state.key?.name ?? "",
-            "target-caption": state.target?.name ?? "",
-            "result-caption": state.result
-              ? state.result.name + " === " + state.result.expected
-              : "",
-          };
-          layout.constraints.push({
-            element: name,
-            reason,
-            rect,
-            step: state.current,
-            total: state.steps.length,
-            pageArea: state.pageArea,
-            value: values[name] ?? "",
-          });
-        }
-        function element(/** @type {string} */ selector) {
-          const found = shadow.querySelector(selector);
-          if (!(found instanceof HTMLElement || found instanceof SVGElement))
-            throw new Error(`Missing overlay asset element: ${selector}`);
-          return /** @type {HTMLElement} */ (found);
-        }
-        function place(/** @type {HTMLElement} */ node, /** @type {Rect} */ rect) {
-          Object.assign(node.style, {
-            left: `${rect.x}px`,
-            top: `${rect.y}px`,
-            width: `${rect.width}px`,
-          });
-          if (node.classList.contains("frame") || node.classList.contains("frames"))
-            node.style.height = `${rect.height}px`;
-        }
-        function sized(
-          /** @type {HTMLElement} */ node,
-          /** @type {number} */ x,
-          /** @type {number} */ y,
-        ) {
-          const { width, height } = dimensions(node);
-          return { x, y, width, height };
-        }
-        function expand(/** @type {Rect} */ r, /** @type {number} */ gap) {
-          return {
-            x: r.x - gap,
-            y: r.y - gap,
-            width: r.width + gap * 2,
-            height: r.height + gap * 2,
-          };
-        }
-        function inset(/** @type {Rect} */ r, /** @type {number} */ gap) {
-          return expand(r, -gap);
-        }
-        function contains(/** @type {Rect} */ outer, /** @type {Rect} */ inner) {
-          return (
-            inner.x >= outer.x &&
-            inner.y >= outer.y &&
-            inner.x + inner.width <= outer.x + outer.width &&
-            inner.y + inner.height <= outer.y + outer.height
-          );
-        }
-        function intersects(/** @type {Rect} */ a, /** @type {Rect} */ b) {
-          return (
-            a.x < b.x + b.width &&
-            a.x + a.width > b.x &&
-            a.y < b.y + b.height &&
-            a.y + a.height > b.y
-          );
-        }
-
-        function pointer(/** @type {Pointer|null|undefined} */ sample) {
-          element(".overlay > .cursor").hidden = !sample;
-          if (!sample) return;
-          const cursor = element(".overlay > .cursor");
-          cursor.style.left = `${sample.x}px`;
-          cursor.style.top = `${sample.y}px`;
-          if (sample.click) {
-            const ripple = document.createElement("div");
-            ripple.className = "ripple";
-            element(".effects").append(ripple);
-            effects.push({ node: ripple, kind: "ripple", at: sample.at, x: sample.x, y: sample.y });
-          } else if (!reduced()) {
-            const trail = /** @type {SVGElement} */ (cursor.cloneNode(true));
-            element(".effects").append(trail);
-            effects.push({ node: trail, kind: "trail", at: sample.at, x: sample.x, y: sample.y });
+            entry.animation = animation;
+            animation.finished
+              .then(() => {
+                if (entry.animation !== animation || disposed) return;
+                node.hidden = !entry.visible;
+                animation.cancel();
+                entry.animation = null;
+              })
+              .catch(() => {});
           }
-        }
-        function tick() {
-          cancelAnimationFrame(frame);
-          if (disposed) return;
-          const now = performance.now();
-          if (pendingInput && now >= inputRevealAt) {
-            state.input = pendingInput;
-            lastInputAt = pendingInput.at;
-            pendingInput = null;
-            render();
-          }
-          const s = Math.max(1, state.pageArea.width / 1280);
-          effects = effects.filter((effect) => {
-            const age = Math.max(0, now - effect.at);
-            const duration = effect.kind === "trail" ? 200 : 450;
-            if (age >= duration) {
-              effect.node.remove();
-              return false;
+          function presentTransient(
+            /** @type {HTMLElement} */ node,
+            /** @type {Input|Key|null|undefined} */ value,
+            /** @type {number} */ now,
+          ) {
+            if (!value) {
+              present(node, false);
+              return;
             }
-            const fraction = age / duration;
-            if (effect.kind === "trail") {
-              const ghost = { x: effect.x, y: effect.y, width: 16 * s, height: 24 * s };
-              const overText =
-                Object.values(layout.placements).some((rect) => intersects(ghost, rect)) ||
-                intersects(ghost, state.titleArea);
-              effect.node.style.opacity = String(overText ? 0 : 0.25 * (1 - fraction));
-            } else {
-              const diameter = reduced() ? 24 : 12 + fraction * 36;
-              effect.node.style.left = `${effect.x - 24 * s}px`;
-              effect.node.style.top = `${effect.y - 24 * s}px`;
-              effect.node.style.setProperty("--ripple-scale", String(diameter / 48));
-              effect.node.style.opacity = String(0.75 * (1 - fraction));
-            }
-            return true;
-          });
-          let fading = false;
-          let expired = false;
-          /** @type {[string, Input|Key|null|undefined, "input"|"key"][]} */
-          const fadingAnnotations = [
-            [".input", state.input, "input"],
-            [".key", state.key, "key"],
-          ];
-          for (const [selector, value, kind] of fadingAnnotations) {
-            const node = element(selector);
-            if (!value) continue;
-            const age = now - value.at;
-            fading ||= !value.hold && age < 900;
-            presentTransient(node, value, now);
-            if (!value.hold && age >= 900) {
+            const times = transientTimes(value.firstAt ?? value.at, value.at);
+            if (!value.hold && now >= times.exitEnd) {
               present(node, false, 0, true);
-              state[kind] = null;
-              expired = true;
+              return;
+            }
+            if (visible && (value.hold || now < times.holdEnd)) {
+              present(node, visible, ENTER_MS);
+              return;
+            }
+            const entry = presentations.get(node);
+            if (!entry) return;
+            if (entry.fadeAt === times.holdEnd) {
+              node.hidden = false;
+              return;
+            }
+            entry.animation?.cancel();
+            entry.visible = false;
+            entry.fadeAt = times.holdEnd;
+            node.hidden = false;
+            const animation = node.animate(
+              [
+                { opacity: 1, transform: "scale(1)" },
+                { opacity: 0, transform: `scale(${reduced() ? 1 : 0.96})` },
+              ],
+              { duration: EXIT_MS, easing: "linear", fill: "both" },
+            );
+            animation.startTime = times.holdEnd;
+            entry.animation = animation;
+            animation.finished
+              .then(() => {
+                if (entry.animation !== animation || disposed) return;
+                node.hidden = true;
+                animation.cancel();
+                entry.animation = null;
+              })
+              .catch(() => {});
+          }
+
+          function positions(
+            /** @type {Rect} */ safe,
+            /** @type {HTMLElement} */ node,
+            /** @type {boolean} */ centered,
+          ) {
+            const size = sized(node, 0, 0);
+            const centre = {
+              x: safe.x + (safe.width - size.width) / 2,
+              y: safe.y + (safe.height - size.height) / 2,
+            };
+            return [
+              ...(centered ? [centre] : []),
+              { x: centre.x, y: safe.y + safe.height - size.height },
+              { x: centre.x, y: safe.y },
+              { x: safe.x, y: centre.y },
+              { x: safe.x + safe.width - size.width, y: centre.y },
+            ];
+          }
+          function selectPosition(
+            /** @type {string} */ name,
+            /** @type {HTMLElement} */ node,
+            /** @type {{x:number,y:number}[]} */ candidates,
+            /** @type {Rect[]} */ occupied,
+            /** @type {number} */ s,
+          ) {
+            const rects = candidates.map((point) => sized(node, point.x, point.y));
+            const found = rects.find((rect) => fits(rect, occupied, s));
+            const rect = found ?? rects[0];
+            recordPlacement(name, node, rect, occupied);
+            if (!found)
+              constraint(
+                name,
+                "No candidate preserves full text, safe edges and protected targets",
+                rect,
+              );
+          }
+          function fits(
+            /** @type {Rect} */ rect,
+            /** @type {Rect[]} */ occupied,
+            /** @type {number} */ s,
+          ) {
+            const safe = inset(state.pageArea, 24 * s);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              contains(safe, rect) &&
+              !protectedRects.some((protectedRect) => intersects(rect, protectedRect)) &&
+              !occupied.some((other) => intersects(rect, expand(other, 16 * s)))
+            );
+          }
+          function recordPlacement(
+            /** @type {string} */ name,
+            /** @type {HTMLElement} */ node,
+            /** @type {Rect} */ rect,
+            /** @type {Rect[]} */ occupied,
+          ) {
+            place(node, rect);
+            layout.placements[name] = rect;
+            occupied.push(rect);
+          }
+          function constraint(
+            /** @type {string} */ name,
+            /** @type {string} */ reason,
+            /** @type {Rect} */ rect,
+          ) {
+            /** @type {Record<string, string>} */
+            const values = {
+              title: state.title,
+              "task-label": state.steps[state.current - 1]?.action ?? "",
+              "result-label": state.result
+                ? `${state.result.name} === ${state.result.expected}`
+                : "",
+              input: state.input?.text ?? "",
+              key: state.key?.name ?? "",
+            };
+            layout.constraints.push({
+              element: name,
+              reason,
+              rect,
+              step: state.current,
+              total: state.steps.length,
+              pageArea: state.pageArea,
+              value: values[name] ?? "",
+            });
+          }
+          function element(/** @type {string} */ selector) {
+            const found = shadow.querySelector(selector);
+            if (!(found instanceof HTMLElement || found instanceof SVGElement))
+              throw new Error(`Missing overlay asset element: ${selector}`);
+            return /** @type {HTMLElement} */ (found);
+          }
+          function place(/** @type {HTMLElement} */ node, /** @type {Rect} */ rect) {
+            Object.assign(node.style, {
+              left: `${rect.x}px`,
+              top: `${rect.y}px`,
+              width: `${rect.width}px`,
+              height: `${rect.height}px`,
+            });
+          }
+          function sized(
+            /** @type {HTMLElement} */ node,
+            /** @type {number} */ x,
+            /** @type {number} */ y,
+          ) {
+            return {
+              x,
+              y,
+              width: Number.parseFloat(node.style.width) || 0,
+              height: Number.parseFloat(node.style.height) || 0,
+            };
+          }
+          function expand(/** @type {Rect} */ r, /** @type {number} */ gap) {
+            return {
+              x: r.x - gap,
+              y: r.y - gap,
+              width: r.width + gap * 2,
+              height: r.height + gap * 2,
+            };
+          }
+          function inset(/** @type {Rect} */ r, /** @type {number} */ gap) {
+            return expand(r, -gap);
+          }
+          function contains(/** @type {Rect} */ outer, /** @type {Rect} */ inner) {
+            return (
+              inner.x >= outer.x &&
+              inner.y >= outer.y &&
+              inner.x + inner.width <= outer.x + outer.width &&
+              inner.y + inner.height <= outer.y + outer.height
+            );
+          }
+          function intersects(/** @type {Rect} */ a, /** @type {Rect} */ b) {
+            return (
+              a.x < b.x + b.width &&
+              a.x + a.width > b.x &&
+              a.y < b.y + b.height &&
+              a.y + a.height > b.y
+            );
+          }
+
+          function pointer(/** @type {Pointer|null|undefined} */ sample) {
+            element(".cursor").hidden = !sample;
+            if (!sample) return;
+            const cursor = element(".cursor");
+            cursor.style.left = `${sample.x}px`;
+            cursor.style.top = `${sample.y}px`;
+            if (sample.click) {
+              const ripple = document.createElement("div");
+              ripple.className = "ripple";
+              element(".effects").append(ripple);
+              effects.push({
+                node: ripple,
+                kind: "ripple",
+                at: sample.at,
+                x: sample.x,
+                y: sample.y,
+              });
+            } else if (!reduced()) {
+              const trail = /** @type {SVGElement} */ (cursor.cloneNode(true));
+              element(".effects").append(trail);
+              effects.push({ node: trail, kind: "trail", at: sample.at, x: sample.x, y: sample.y });
             }
           }
-          if (expired) render();
-          if (effects.length || fading || pendingInput) frame = requestAnimationFrame(tick);
-        }
-        function icon(/** @type {string} */ kind) {
-          /** @type {Record<string, string>} */
-          const paths = {
-            click: '<path d="M5 3v16l4-4 4 6 3-2-4-6h7Z"/>',
-            hover: '<path d="M5 3v16l4-4 4 6 3-2-4-6h7Z"/>',
-            input: '<path d="m4 16 12-12 4 4L8 20H4Z M13 7l4 4"/>',
-            key: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 10h2m3 0h2m3 0h1M7 14h10"/>',
-            scroll: '<path d="M8 20V4L4 8m4-4 4 4m4-4v16l-4-4m4 4 4-4"/>',
-            drag: '<path d="M8 12V5a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v5-2a2 2 0 0 1 4 0v7l-4 5H9l-6-8a2 2 0 0 1 3-2l2 2Z"/>',
-            open: '<path d="M14 3h7v7m0-7L10 14M10 3H3v18h18v-7"/>',
-            result:
-              '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
-          };
-          return paths[kind] ?? paths.click;
-        }
-      };
+
+          function tick() {
+            cancelAnimationFrame(frame);
+            if (disposed) return;
+            const now = performance.now();
+            if (pendingInput && now >= inputRevealAt) {
+              state.input = pendingInput;
+              lastInputAt = pendingInput.at;
+              pendingInput = null;
+              render();
+            }
+            const s = scale();
+            effects = effects.filter((effect) => {
+              const age = Math.max(0, now - effect.at);
+              const duration = effect.kind === "trail" ? 200 : 450;
+              if (age >= duration) {
+                effect.node.remove();
+                return false;
+              }
+              const fraction = age / duration;
+              if (effect.kind === "trail") {
+                const ghost = { x: effect.x, y: effect.y, width: 16 * s, height: 24 * s };
+                const overText =
+                  Object.values(layout.placements).some((rect) => intersects(ghost, rect)) ||
+                  intersects(ghost, state.titleArea);
+                effect.node.style.opacity = String(overText ? 0 : 0.25 * (1 - fraction));
+              } else {
+                const diameter = reduced() ? 24 : 12 + fraction * 36;
+                effect.node.style.left = `${effect.x - 24 * s}px`;
+                effect.node.style.top = `${effect.y - 24 * s}px`;
+                effect.node.style.setProperty("--ripple-scale", String(diameter / 48));
+                effect.node.style.opacity = String(0.75 * (1 - fraction));
+              }
+              return true;
+            });
+            let fading = false;
+            let expired = false;
+            for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+              const value = state[kind];
+              if (!value) continue;
+              const times = transientTimes(value.firstAt ?? value.at, value.at);
+              fading ||= !value.hold && now < times.exitEnd;
+              presentTransient(element("." + kind), value, now);
+              if (!value.hold && now >= times.exitEnd) {
+                present(element("." + kind), false, 0, true);
+                state[kind] = null;
+                firstAts[kind] = null;
+                dockWidths[kind] = 0;
+                expired = true;
+              }
+            }
+            const checkFading = checkStartedAt != null && now - checkStartedAt <= CHECK_FADE_MS;
+            if (checkFading) applyCheckPaint(now);
+            if (expired) render();
+            if (effects.length || fading || pendingInput || checkFading)
+              frame = requestAnimationFrame(tick);
+          }
+
+          /** cubic-bezier(0, 0, x2, 1)-shaped progress used by the adopted fades. */
+          function cssEase(
+            /** @type {number} */ progress,
+            /** @type {number} */ x1,
+            /** @type {number} */ x2,
+          ) {
+            if (progress <= 0 || progress >= 1) return progress;
+            const bezier = (
+              /** @type {number} */ t,
+              /** @type {number} */ a,
+              /** @type {number} */ b,
+            ) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+            let low = 0;
+            let high = 1;
+            for (let index = 0; index < 24; index++) {
+              const mid = (low + high) / 2;
+              if (bezier(mid, x1, x2) < progress) low = mid;
+              else high = mid;
+            }
+            return bezier((low + high) / 2, 0, 1);
+          }
+        };
+      /* overlay-asset:installer:end */
       (async function mountGallery(
-        /** @type {{html:string,css:string,installer:typeof installRecordingOverlay}} */ {
-          html,
-          css,
-          installer,
-        },
+        /** @type {{html:string,css:string,installer:Function}} */ { html, css, installer },
       ) {
         const gallery = requiredElement(document, "#gallery");
         const supplemental = requiredElement(document, "#supplemental");
         const extraGallery = requiredElement(document, "#extra-gallery");
-        /** @type {[import('./overlay.mjs').OverlayState['phase'],string,string][]} */
         const phases = [
-          ["waiting", "操作前", "現在の操作対象と、これから行う操作を確認する。"],
-          ["acting", "操作中", "現在の番号と操作中の装飾を確認する。"],
-          ["checking", "確認待ち", "操作を終え、結果の確認を待つ状態を見る。"],
-          ["result", "結果表示", "確認枠・期待値と、完了した番号の装飾を見る。"],
+          ["waiting", "操作前", "対象上のtask label、番号badge、対象枠。進行は READ 0 / 3。"],
+          [
+            "acting",
+            "操作中",
+            "実操作中。badgeは非回転のまま、入力帯がページ下中央に出る。dockはサイトと逆の明暗。",
+          ],
+          ["checking", "確認待ち", "操作が終わった証のcheckがbadgeへ360msでフェードインした状態。"],
+          [
+            "result",
+            "結果表示",
+            "結果枠と『Total === ¥3,300』ラベル1組。閲覧が済みREADが1へ進む。",
+          ],
         ];
-        await Promise.all(
-          phases.map(([phase, name, description]) => pair(gallery, phase, name, description)),
-        );
+        for (const [phase, name, description] of phases)
+          await pair(gallery, phase, name, description);
         requiredElement(document, "#loading").textContent =
           "主8例を表示済み。下へスクロールして比較できる。";
         gallery.setAttribute("data-ready", "true");
@@ -1080,27 +1191,33 @@
             return;
           extrasMounted = true;
           const examples = [
-            ["input", "入力帯", "対象枠を使わず、連続した入力文字列を全文表示する。"],
-            ["key", "実キー", "Tabキーの表示を確認する。"],
+            ["input", "入力帯", "連続した入力文字列を全文表示する。空行・長文も折り返す。"],
+            ["key", "実キー", "Tabキーを画面中央基準で表示する。"],
             ["api", "API代行", "実キーと区別する「操作案内」の表示を確認する。"],
-            ["label", "ラベルのみ", "対象枠・入力帯・キーを使わない番号表示を見る。"],
-            ["long", "長い日本語とURL", "長文の折り返しと、省略されない全文を見る。"],
-            ["many", "8ステップ", "多いステップの一覧と配置候補を見る。"],
-            ["collision", "配置制約", "保護対象が画面を占有し、注釈が収まらない例を見る。"],
-            ["reduced", "動きを減らす", "同じ状態の動きを減らした装飾を見る。"],
+            [
+              "label",
+              "anchorなし",
+              "対象枠を使わない操作のtask labelは、ページ上端の代替anchorに置く。",
+            ],
+            ["long", "長い日本語と長い値", "task labelと結果ラベルの全文折返し。省略しない。"],
+            ["many", "8ステップ", "多いステップのREAD進行とセグメント。"],
+            [
+              "collision",
+              "配置制約",
+              "保護対象が画面を占有し、注釈が収まらない例。制約を報告する。",
+            ],
+            ["reduced", "動きを減らす", "同じ状態で動きを減らした表示。check・dockはopacityのみ。"],
             ["hostile", "サイトCSSとの分離", "強いサイト側CSSがあっても注釈の描画は共通。"],
+            ["title", "外タイトルのみ", "title layerだけを描画した例。外タイトル合成に使う。"],
           ];
-          await Promise.all(
-            examples.map(([scenario, name, description]) =>
-              pair(extraGallery, "result", name, description, scenario),
-            ),
-          );
+          for (const [scenario, name, description] of examples)
+            await pair(extraGallery, "result", name, description, scenario);
           extraGallery.setAttribute("data-ready", "true");
         });
 
         async function pair(
           /** @type {Element} */ container,
-          /** @type {import('./overlay.mjs').OverlayState['phase']} */ phase,
+          /** @type {string} */ phase,
           /** @type {string} */ name,
           /** @type {string} */ description,
           scenario = "target",
@@ -1114,21 +1231,24 @@
           samples.className = "pair";
           section.append(heading, explanation, samples);
           container.append(section);
-          await Promise.all([
-            sample(samples, "light", phase, name, scenario),
-            sample(samples, "dark", phase, name, scenario),
-          ]);
+          if (scenario === "title") await sample(samples, "light", phase, name, scenario);
+          else
+            await Promise.all([
+              sample(samples, "light", phase, name, scenario),
+              sample(samples, "dark", phase, name, scenario),
+            ]);
         }
 
         async function sample(
           /** @type {Element} */ container,
           /** @type {'light'|'dark'} */ theme,
-          /** @type {import('./overlay.mjs').OverlayState['phase']} */ phase,
+          /** @type {string} */ phase,
           /** @type {string} */ name,
           /** @type {string} */ scenario,
         ) {
+          const titleOnly = scenario === "title";
           const width = 1280;
-          const height = 720;
+          const height = titleOnly ? 80 : 720;
           const card = document.createElement("article");
           card.className = "sample";
           card.dataset.theme = theme;
@@ -1136,7 +1256,7 @@
           card.dataset.scenario = scenario;
           const header = document.createElement("header");
           const heading = document.createElement("h3");
-          const themeName = theme === "light" ? "明るい注釈（light）" : "暗い注釈（dark）";
+          const themeName = theme === "light" ? "明るいサイト（light）" : "暗いサイト（dark）";
           heading.textContent = `${themeName} — ${name}`;
           const button = document.createElement("button");
           button.type = "button";
@@ -1183,64 +1303,95 @@
           );
           doc.close();
           const fixtureStyle = doc.createElement("style");
-          fixtureStyle.textContent = `body { margin:0; font:15px/24px system-ui; background:${theme === "light" ? "#111318" : "#f7f8fc"}; color:${theme === "light" ? "#f7f8fc" : "#171922"}; } main { position:absolute; top:280px; left:820px; width:220px; } input,button { display:block; margin:16px 0; } #result { margin-top:80px; }`;
+          fixtureStyle.textContent = `body { margin:0; font:15px/24px system-ui; background:${theme === "light" ? "#f7f8fc" : "#111318"}; color:${theme === "light" ? "#171922" : "#f7f8fc"}; } main { position:absolute; top:160px; left:720px; width:400px; } input { display:block; width:100%; margin:0 0 24px; } button { display:block; margin:0 0 120px; } #result { margin:0; }`;
           doc.head.append(fixtureStyle);
+          const now = () => win.performance.now();
           const longValue =
             "配送先の郵便番号と住所を入力し、注文確認画面の合計金額を確認する。https://example.invalid/" +
-            "1234567890".repeat(12);
+            "1234567890".repeat(6);
           const steps = [
             {
               name: "input name",
-              action: "Input the delivery name",
+              action: "Type the delivery name",
               expected: "Name is preserved",
             },
             { name: "press tab", action: "Press Tab", expected: "Confirm receives focus" },
             { name: "click confirm", action: "Click Confirm", expected: "Total === ¥3,300" },
           ];
           if (scenario === "long")
-            steps[2] = {
-              name: "confirm delivery address",
-              action: "配送先の住所を確認",
+            steps[0] = {
+              name: "confirm address",
+              action: "配送先の氏名と郵便番号と建物名と部屋番号を確認してから入力する",
               expected: longValue,
             };
           if (scenario === "many")
-            for (let i = 4; i <= 8; i++)
+            for (let index = 4; index <= 8; index++)
               steps.push({
-                name: `click sample ${i}`,
-                action: `Click sample ${i}`,
+                name: `click sample ${index}`,
+                action: `Click sample ${index}`,
                 expected: "Sample is shown",
               });
-          const targetRect = rect(requiredElement(doc, "#confirm"));
-          const resultRect = rect(requiredElement(doc, "#result"));
-          /** @type {import('./overlay.mjs').OverlayState} */
+          const nameRect = rectOf(requiredElement(doc, "#name"));
+          const confirmRect = rectOf(requiredElement(doc, "#confirm"));
+          const resultRect = rectOf(requiredElement(doc, "#result"));
+          const docksOnly = ["input", "key", "api"].includes(scenario);
+          const anchorless = scenario === "label";
+          /** @type {Record<string, unknown>} */
           const state = {
             title: "Checkout › delivery details › preserves values",
             steps,
-            current: 3,
+            current: scenario === "many" ? 5 : 3,
+            read: phase === "result" ? 1 : 0,
             phase,
             theme,
-            pageArea: { x: 0, y: 112, width, height: height - 112 },
-            titleArea: { x: 0, y: 0, width, height: 112 },
+            layer: titleOnly ? "title" : "both",
+            pageArea: { x: 0, y: 64, width, height: height - 64 },
+            titleArea: { x: 0, y: 0, width, height: 64 },
             reducedMotion: scenario === "reduced" ? true : null,
-            pointer: { x: targetRect.x + 30, y: targetRect.y + 10, at: win.performance.now() },
-            target: ["input", "key", "api", "label"].includes(scenario)
-              ? null
-              : { rect: targetRect, name: "Confirm", kind: "click" },
-            result: {
-              rect: resultRect,
-              name: "Total",
-              expected: scenario === "long" ? longValue : "¥3,300",
-            },
+            checkAt: phase === "checking" || phase === "result" ? Math.max(0, now() - 400) : null,
+            taskAnchor: titleOnly || anchorless ? null : nameRect,
+            target:
+              phase !== "result" && !docksOnly && !titleOnly
+                ? { rect: nameRect, name: "Name", kind: "input" }
+                : null,
+            result:
+              phase === "result" && !titleOnly
+                ? {
+                    rect: resultRect,
+                    name: "Total",
+                    expected: scenario === "long" ? longValue : "¥3,300",
+                  }
+                : null,
             input:
-              scenario === "input"
-                ? { text: "Sample delivery name", at: win.performance.now(), hold: true }
+              scenario === "input" || (phase === "acting" && scenario === "target")
+                ? {
+                    text:
+                      scenario === "input"
+                        ? "山田 太郎 - Building East 1204"
+                        : "Sample delivery name",
+                    at: now(),
+                    hold: true,
+                  }
                 : null,
             key: ["key", "api"].includes(scenario)
-              ? { name: "Tab", api: scenario === "api", at: win.performance.now(), hold: true }
+              ? {
+                  name: scenario === "api" ? "Reload" : "Tab",
+                  api: scenario === "api",
+                  at: now(),
+                  hold: true,
+                }
               : null,
+            pointer:
+              phase === "acting" && !titleOnly
+                ? { x: confirmRect.x + 30, y: confirmRect.y + 10, at: now() }
+                : null,
           };
-          if (scenario === "collision" && state.target)
-            state.target.rect = { x: 24, y: 136, width: width - 48, height: height - 160 };
+          if (scenario === "collision" && state.result)
+            state.result = {
+              rect: { x: 24, y: 88, width: width - 48, height: height - 88 },
+              name: "Full-width protector",
+              expected: "Total === ¥3,300",
+            };
           if (scenario === "hostile") {
             const hostile = doc.createElement("style");
             hostile.textContent =
@@ -1250,8 +1401,7 @@
           const script = doc.createElement("script");
           script.textContent = `(${installer.toString()})(${JSON.stringify({ html, css, state }).replaceAll("<", "\\u003c")});`;
           doc.head.append(script);
-          const overlay = /** @type {import('./overlay.mjs').OverlayWindow} */ (win)
-            .recordingOverlay;
+          const overlay = win.recordingOverlay;
           if (!overlay) throw new Error("Shared installer did not create an overlay");
           replay.addEventListener("click", async () => {
             replay.disabled = true;
@@ -1273,18 +1423,18 @@
           card.dataset.ready = "true";
         }
         function requiredElement(/** @type {ParentNode} */ root, /** @type {string} */ selector) {
-          const element = root.querySelector(selector);
-          if (!element) throw new Error(`Required element not found: ${selector}`);
-          return element;
+          const found = root.querySelector(selector);
+          if (!found) throw new Error(`Required element not found: ${selector}`);
+          return found;
         }
-        function rect(/** @type {Element} */ element) {
+        function rectOf(/** @type {Element} */ element) {
           const { x, y, width, height } = element.getBoundingClientRect();
           return { x, y, width, height };
         }
       })({
         ...{
-          html: '\u003cdiv class="overlay" data-theme="light">\n  \u003cheader class="title">\n    \u003cdiv class="test-title">\u003c/div>\n    \u003cdiv class="progress">\n      \u003cspan class="step-count">\u003c/span>\n      \u003cdiv class="segments">\u003c/div>\n    \u003c/div>\n  \u003c/header>\n  \u003cdiv class="frames">\n    \u003cdiv class="target-frame frame">\u003c/div>\n    \u003cdiv class="result-frame frame">\u003c/div>\n  \u003c/div>\n  \u003cdiv class="target-caption caption" hidden>\n    \u003cspan class="primary">\u003c/span>\u003csvg class="icon" viewBox="0 0 24 24">\u003c/svg\n    >\u003cspan class="caption-text">\u003c/span>\n  \u003c/div>\n  \u003cdiv class="result-caption caption" hidden>\n    \u003csvg class="icon" viewBox="0 0 24 24">\u003c/svg>\u003cspan class="caption-text">\u003c/span>\n  \u003c/div>\n  \u003csection class="panel surface" hidden>\n    \u003cdiv class="label">\u003cspan class="primary">\u003c/span>\u003cspan class="label-text">\u003c/span>\u003c/div>\n    \u003cdiv class="divider">\u003c/div>\n    \u003cdiv class="steps">\u003c/div>\n  \u003c/section>\n  \u003cdiv class="input surface" hidden>\n    \u003cspan class="primary">\u003c/span>\u003cspan class="input-text">\u003c/span>\n  \u003c/div>\n  \u003cdiv class="key surface" hidden>\n    \u003cspan class="primary">\u003c/span>\n    \u003cdiv class="key-body">\n      \u003cdiv class="key-name">\u003c/div>\n      \u003cdiv class="api-note">\u003c/div>\n    \u003c/div>\n  \u003c/div>\n  \u003cdiv class="effects">\u003c/div>\n  \u003csvg class="cursor" viewBox="0 0 16 24">\u003cpath d="M1 1V20L5 16L9 23L12 21L8 14H15Z" />\u003c/svg>\n\u003c/div>\n',
-          css: ':host {\n  all: initial;\n  pointer-events: none;\n}\n.overlay {\n  --unit: 1px;\n  --title-surface: #f7f8fc;\n  --panel-surface: rgba(247, 248, 252, 0.85);\n  --surface: rgba(247, 248, 252, 0.96);\n  --text: #171922;\n  --secondary: #495162;\n  --line: #d0d5df;\n  --shadow-ink: rgba(23, 25, 34, 0.12);\n  --accent: #5145cd;\n  --active-fill: #5145cd;\n  --caption-surface: rgba(81, 69, 205, 0.85);\n  --frame-stroke: rgba(81, 69, 205, 0.85);\n  --on-active: #f7f8fc;\n  --done: #116742;\n  --done-surface: #e2f3ea;\n  --pending-ink: #5e6878;\n  --pending-surface: #e7ebf3;\n  --frame-fill: rgba(81, 69, 205, 0.06);\n  --frame-inner-guard: rgba(247, 248, 252, 0.85);\n  --frame-outer-guard: rgba(17, 19, 24, 0.85);\n  --ripple-inner-guard: #f7f8fc;\n  --ripple-outer-guard: #111318;\n  --edge-guard: #f7f8fc;\n  --cursor-fill: #171922;\n  --sans:\n    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK JP",\n    sans-serif;\n  --mono:\n    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK JP",\n    monospace;\n  position: fixed;\n  inset: 0;\n  pointer-events: none;\n  font-family: var(--sans);\n  font-size: calc(15 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  color: var(--text);\n}\n.overlay[data-theme="dark"] {\n  --title-surface: #111318;\n  --panel-surface: rgba(17, 19, 24, 0.85);\n  --surface: rgba(17, 19, 24, 0.96);\n  --text: #f7f8fc;\n  --secondary: #b6bdc9;\n  --line: #414957;\n  --shadow-ink: rgba(17, 19, 24, 0.24);\n  --accent: #b7afff;\n  --frame-stroke: rgba(183, 175, 255, 0.85);\n  --done: #6ee7b7;\n  --done-surface: #162d25;\n  --pending-ink: #a1abbb;\n  --pending-surface: #22262f;\n  --frame-fill: rgba(183, 175, 255, 0.06);\n  --edge-guard: #111318;\n  --cursor-fill: #f7f8fc;\n}\n* {\n  box-sizing: border-box;\n  pointer-events: none;\n}\n[hidden] {\n  display: none !important;\n}\ndiv,\nsection,\nheader,\nspan,\nsvg {\n  margin: 0;\n  padding: 0;\n  border: 0;\n  font: inherit;\n  color: inherit;\n  letter-spacing: 0;\n  text-transform: none;\n  text-shadow: none;\n}\n.test-title,\n.label-text,\n.step-name,\n.caption-text,\n.input-text,\n.key-name {\n  min-width: 0;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n}\n.title {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  gap: calc(24 * var(--unit));\n  padding: calc(16 * var(--unit)) calc(24 * var(--unit));\n  background: var(--title-surface);\n  z-index: 5;\n}\n.test-title {\n  flex: 1;\n  font-size: calc(16 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  font-weight: 600;\n}\n.title.stacked {\n  flex-direction: column;\n  align-items: stretch;\n  gap: calc(12 * var(--unit));\n}\n.progress {\n  display: flex;\n  align-items: center;\n  gap: calc(12 * var(--unit));\n  flex: none;\n}\n.progress.stacked {\n  flex-direction: column;\n  align-items: flex-start;\n  gap: calc(8 * var(--unit));\n}\n.step-count {\n  font-family: var(--mono);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n}\n.segments {\n  display: flex;\n  gap: calc(4 * var(--unit));\n  height: calc(6 * var(--unit));\n  flex: none;\n}\n.segment {\n  flex: 1;\n  min-width: calc(4 * var(--unit));\n  border-radius: calc(2 * var(--unit));\n  background: var(--pending-surface);\n}\n.segment.current {\n  background: var(--active-fill);\n}\n.segment.done {\n  background: var(--done-surface);\n  box-shadow: inset 0 0 0 calc(1 * var(--unit)) var(--done);\n}\n.surface {\n  position: absolute;\n  background: var(--surface);\n  border: calc(1 * var(--unit)) solid var(--line);\n  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--shadow-ink);\n  border-radius: calc(12 * var(--unit));\n  z-index: 2;\n}\n.panel {\n  padding: calc(20 * var(--unit));\n  background: var(--panel-surface);\n}\n.label {\n  display: flex;\n  align-items: flex-start;\n  gap: calc(12 * var(--unit));\n}\n.label-text {\n  font-size: calc(17 * var(--unit));\n  line-height: calc(26 * var(--unit));\n  font-weight: 600;\n}\n.divider {\n  height: calc(1 * var(--unit));\n  background: var(--line);\n  margin: calc(12 * var(--unit)) 0;\n}\n.steps {\n  display: grid;\n  gap: calc(8 * var(--unit)) calc(24 * var(--unit));\n}\n.row {\n  display: flex;\n  align-items: center;\n  gap: calc(10 * var(--unit));\n  padding: calc(8 * var(--unit));\n}\n.step-name {\n  color: var(--secondary);\n}\n.row.current .step-name {\n  font-weight: 600;\n  color: var(--text);\n}\n.badge {\n  position: relative;\n  display: inline-flex;\n  flex: none;\n  align-items: center;\n  justify-content: center;\n  height: calc(44 * var(--unit));\n}\n.chip {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: none;\n  height: calc(32 * var(--unit));\n  border-radius: calc(16 * var(--unit));\n  font-family: var(--mono);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(14 * var(--unit));\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  color: var(--pending-ink);\n  background: var(--pending-surface);\n  box-shadow: inset 0 0 0 calc(1.5 * var(--unit)) var(--pending-ink);\n}\n.current .chip {\n  color: var(--on-active);\n  background: var(--active-fill);\n  box-shadow: none;\n}\n.done .chip {\n  color: var(--done);\n  background: var(--done-surface);\n  box-shadow: inset 0 0 0 calc(1.5 * var(--unit)) var(--done);\n}\n.decoration {\n  position: absolute;\n  display: none;\n}\n.badge[data-phase="acting"] .spinner {\n  display: block;\n  right: 0;\n  top: 0;\n  width: calc(14 * var(--unit));\n  height: calc(14 * var(--unit));\n  border: calc(2 * var(--unit)) solid var(--accent);\n  border-right-color: transparent;\n  border-radius: 50%;\n  background: transparent;\n  box-shadow: none;\n  animation: spin 900ms linear infinite;\n}\n.badge[data-phase="checking"] .ring {\n  display: block;\n  inset: calc(1 * var(--unit));\n  border: calc(2 * var(--unit)) solid var(--accent);\n  border-right-color: transparent;\n  border-radius: calc(21 * var(--unit));\n  animation: spin 2000ms linear infinite;\n}\n.badge[data-phase="result"] .check {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  right: 0;\n  bottom: 0;\n  width: calc(16 * var(--unit));\n  height: calc(16 * var(--unit));\n  border-radius: 50%;\n  background: var(--done);\n  box-shadow: 0 0 0 calc(2 * var(--unit)) var(--title-surface);\n}\n.check svg {\n  width: calc(11 * var(--unit));\n  height: calc(11 * var(--unit));\n  fill: none;\n  stroke: var(--done-surface);\n  stroke-width: 1.7;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.primary:empty {\n  display: none;\n}\n.primary .badge {\n  height: calc(44 * var(--unit));\n}\n.primary .chip {\n  height: calc(24 * var(--unit));\n  border-radius: calc(12 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  background: var(--active-fill);\n  color: var(--on-active);\n  box-shadow: none;\n}\n.caption .primary .chip {\n  background: var(--on-active);\n  color: var(--active-fill);\n}\n.panel,\n.caption,\n.input,\n.key {\n  transform-origin: center;\n}\n.caption {\n  position: absolute;\n  display: flex;\n  align-items: flex-start;\n  gap: calc(8 * var(--unit));\n  padding: calc(8 * var(--unit)) calc(12 * var(--unit));\n  border-radius: calc(8 * var(--unit));\n  background: var(--caption-surface);\n  color: var(--on-active);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n  z-index: 3;\n}\n.caption .primary .badge {\n  height: calc(24 * var(--unit));\n}\n.caption-text {\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n}\n.target-caption .icon {\n  margin-top: calc((24 - 20) / 2 * var(--unit));\n}\n.icon {\n  width: calc(20 * var(--unit));\n  height: calc(20 * var(--unit));\n  flex: none;\n  fill: none;\n  stroke: currentColor;\n  stroke-width: calc(2 * var(--unit));\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.icon > * {\n  vector-effect: non-scaling-stroke;\n}\n.frames {\n  position: absolute;\n  overflow: hidden;\n  z-index: 1;\n}\n.frame {\n  position: absolute;\n  border: calc(2 * var(--unit)) solid var(--frame-stroke);\n  background: var(--frame-fill);\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit)) var(--frame-inner-guard),\n    0 0 0 calc(1 * var(--unit)) var(--frame-outer-guard);\n}\n.input,\n.key {\n  display: flex;\n  align-items: flex-start;\n  gap: calc(12 * var(--unit));\n  padding: calc(12 * var(--unit)) calc(20 * var(--unit));\n}\n.input {\n  border-radius: 9999px;\n}\n.input-text,\n.key-body {\n  flex: 1;\n  text-align: center;\n}\n.input .primary .badge,\n.key .primary .badge,\n.label .primary .badge {\n  height: calc(24 * var(--unit));\n}\n\n.key .primary {\n  padding-top: calc((30 - 24) / 2 * var(--unit));\n}\n.label .primary {\n  padding-top: calc((26 - 24) / 2 * var(--unit));\n}\n.input-text {\n  min-height: calc(24 * var(--unit));\n}\n.key-name {\n  font-size: calc(21 * var(--unit));\n  line-height: calc(30 * var(--unit));\n  font-weight: 600;\n}\n.api-note {\n  margin-top: calc(8 * var(--unit));\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  color: var(--secondary);\n}\n.cursor {\n  position: absolute;\n  width: calc(16 * var(--unit));\n  height: calc(24 * var(--unit));\n  fill: var(--cursor-fill);\n  stroke: var(--edge-guard);\n  stroke-width: 1.5;\n  stroke-linejoin: round;\n  z-index: 3;\n}\n.effects {\n  position: absolute;\n  inset: 0;\n  z-index: 1;\n}\n.effects .cursor {\n  z-index: auto;\n}\n.ripple {\n  position: absolute;\n  width: calc(48 * var(--unit));\n  height: calc(48 * var(--unit));\n  --ripple-scale: 1;\n  border: calc(2 * var(--unit) / var(--ripple-scale)) solid var(--accent);\n  border-radius: 50%;\n  transform: scale(var(--ripple-scale));\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-inner-guard),\n    0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-outer-guard);\n}\n@keyframes spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n.overlay[data-reduced="true"] .spinner,\n.overlay[data-reduced="true"] .ring {\n  animation: none;\n}\n@media (prefers-reduced-motion: reduce) {\n  .overlay:not([data-reduced="false"]) .spinner,\n  .overlay:not([data-reduced="false"]) .ring {\n    animation: none;\n  }\n}\n',
+          html: /* overlay-asset:html */ '\u003cdiv class="overlay" data-theme="light">\n  \u003cheader class="title">\n    \u003cdiv class="test-title">\u003c/div>\n    \u003cdiv class="progress">\n      \u003cspan class="step-count">\u003c/span>\n      \u003cdiv class="segments">\u003c/div>\n    \u003c/div>\n  \u003c/header>\n  \u003cdiv class="frames">\n    \u003cdiv class="target-frame frame">\u003c/div>\n    \u003cdiv class="result-frame frame">\u003c/div>\n  \u003c/div>\n  \u003cdiv class="task-label surface" hidden>\n    \u003cspan class="badge"\n      >\u003cspan class="chip">\u003c/span\n      >\u003cspan class="check" hidden\n        >\u003csvg viewBox="0 0 12 12">\u003cpath pathLength="1" d="m2 6 2.5 2.5L10 3" />\u003c/svg>\u003c/span\n    >\u003c/span>\n    \u003cdiv class="task-copy">\u003cspan class="label-text">\u003c/span>\u003c/div>\n  \u003c/div>\n  \u003cdiv class="result-label" hidden>\n    \u003csvg class="eye" viewBox="0 0 24 24">\n      \u003cpath d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />\n      \u003ccircle cx="12" cy="12" r="3" />\u003c/svg\n    >\u003cspan class="result-text">\u003c/span>\n  \u003c/div>\n  \u003csvg class="cursor" viewBox="0 0 16 24">\u003cpath d="M1 1V20L5 16L9 23L12 21L8 14H15Z" />\u003c/svg>\n  \u003cdiv class="input dock" hidden>\u003cspan class="input-text">\u003c/span>\u003c/div>\n  \u003cdiv class="key dock" hidden>\n    \u003cdiv class="key-body">\n      \u003cdiv class="key-name">\u003c/div>\n      \u003cdiv class="api-note" hidden>\u003c/div>\n    \u003c/div>\n  \u003c/div>\n  \u003cdiv class="effects">\u003c/div>\n\u003c/div>\n',
+          css: /* overlay-asset:css */ ':host {\n  all: initial;\n  pointer-events: none;\n}\n.overlay {\n  --unit: 1px;\n  --title-surface: #f7f8fc;\n  --surface: rgba(247, 248, 252, 0.96);\n  --text: #171922;\n  --secondary: #495162;\n  --line: #d0d5df;\n  --shadow-ink: rgba(23, 25, 34, 0.12);\n  --accent: #5145cd;\n  --active-fill: #5145cd;\n  --caption-surface: rgba(81, 69, 205, 0.85);\n  --frame-stroke: rgba(81, 69, 205, 0.85);\n  --on-active: #f7f8fc;\n  --done: #116742;\n  --done-surface: #e2f3ea;\n  --pending-ink: #5e6878;\n  --pending-surface: #e7ebf3;\n  --frame-fill: rgba(81, 69, 205, 0.06);\n  --frame-inner-guard: rgba(247, 248, 252, 0.85);\n  --frame-outer-guard: rgba(17, 19, 24, 0.85);\n  --ripple-inner-guard: #f7f8fc;\n  --ripple-outer-guard: #111318;\n  --edge-guard: #f7f8fc;\n  --cursor-fill: #171922;\n  --dock-surface: #111318;\n  --dock-text: #f7f8fc;\n  --dock-line: #414957;\n  --dock-secondary: #b6bdc9;\n  --dock-shadow: rgba(17, 19, 24, 0.24);\n  --key-sheen: rgba(247, 248, 252, 0.18);\n  --sans:\n    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK JP",\n    sans-serif;\n  --mono:\n    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK JP",\n    monospace;\n  position: fixed;\n  inset: 0;\n  pointer-events: none;\n  font-family: var(--sans);\n  font-size: calc(15 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  color: var(--text);\n}\n.overlay[data-theme="dark"] {\n  --title-surface: #111318;\n  --surface: rgba(17, 19, 24, 0.96);\n  --text: #f7f8fc;\n  --secondary: #b6bdc9;\n  --line: #414957;\n  --shadow-ink: rgba(17, 19, 24, 0.24);\n  --accent: #b7afff;\n  --frame-stroke: rgba(183, 175, 255, 0.85);\n  --done: #6ee7b7;\n  --done-surface: #162d25;\n  --pending-ink: #a1abbb;\n  --pending-surface: #22262f;\n  --frame-fill: rgba(183, 175, 255, 0.06);\n  --edge-guard: #111318;\n  --cursor-fill: #f7f8fc;\n  --dock-surface: #f7f8fc;\n  --dock-text: #171922;\n  --dock-line: #d0d5df;\n  --dock-secondary: #495162;\n  --dock-shadow: rgba(23, 25, 34, 0.12);\n  --key-sheen: rgba(23, 25, 34, 0.12);\n}\n* {\n  box-sizing: border-box;\n  pointer-events: none;\n}\n[hidden] {\n  display: none !important;\n}\ndiv,\nsection,\nheader,\nspan,\nsvg {\n  margin: 0;\n  padding: 0;\n  border: 0;\n  font: inherit;\n  color: inherit;\n  letter-spacing: 0;\n  text-transform: none;\n  text-shadow: none;\n}\n.test-title,\n.label-text,\n.result-text,\n.input-text,\n.key-name {\n  min-width: 0;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n}\n.title {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  gap: calc(24 * var(--unit));\n  padding: calc(16 * var(--unit)) calc(24 * var(--unit));\n  background: var(--title-surface);\n  z-index: 5;\n}\n.test-title {\n  flex: 1;\n  font-size: calc(16 * var(--unit));\n  line-height: calc(24 * var(--unit));\n  font-weight: 600;\n}\n.title.stacked {\n  flex-direction: column;\n  align-items: stretch;\n  gap: calc(12 * var(--unit));\n}\n.progress {\n  display: flex;\n  align-items: center;\n  gap: calc(12 * var(--unit));\n  flex: none;\n}\n.progress.stacked {\n  flex-direction: column;\n  align-items: flex-start;\n  gap: calc(8 * var(--unit));\n}\n.step-count {\n  font-family: var(--mono);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n}\n.segments {\n  display: flex;\n  gap: calc(4 * var(--unit));\n  height: calc(6 * var(--unit));\n  flex: none;\n}\n.segment {\n  flex: 1;\n  min-width: calc(4 * var(--unit));\n  border-radius: calc(2 * var(--unit));\n  background: var(--pending-surface);\n}\n.segment.current {\n  background: var(--active-fill);\n}\n.segment.done {\n  background: var(--done-surface);\n  box-shadow: inset 0 0 0 calc(1 * var(--unit)) var(--done);\n}\n.surface {\n  position: absolute;\n  background: var(--surface);\n  border: calc(1 * var(--unit)) solid var(--line);\n  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--shadow-ink);\n  border-radius: calc(12 * var(--unit));\n  z-index: 2;\n}\n.task-label {\n  display: flex;\n  align-items: center;\n  gap: calc(12 * var(--unit));\n  padding: 0 calc(12 * var(--unit));\n  transform-origin: center;\n}\n.task-copy {\n  flex: 1;\n  min-width: 0;\n}\n.label-text {\n  font-size: calc(17 * var(--unit));\n  line-height: calc(26 * var(--unit));\n  font-weight: 600;\n}\n.badge {\n  position: relative;\n  display: inline-flex;\n  flex: none;\n  align-items: center;\n  justify-content: center;\n  height: calc(44 * var(--unit));\n}\n.chip {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: none;\n  width: calc(32 * var(--unit));\n  height: calc(32 * var(--unit));\n  border-radius: calc(16 * var(--unit));\n  font-family: var(--mono);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(14 * var(--unit));\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  color: var(--on-active);\n  background: var(--active-fill);\n}\n.check {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  right: 0;\n  bottom: 0;\n  width: calc(16 * var(--unit));\n  height: calc(16 * var(--unit));\n  border-radius: 50%;\n  background: var(--done);\n  box-shadow: 0 0 0 calc(2 * var(--unit)) var(--surface);\n  transform-origin: center;\n}\n.check svg {\n  width: calc(11 * var(--unit));\n  height: calc(11 * var(--unit));\n  fill: none;\n  stroke: var(--done-surface);\n  stroke-width: 1.7;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.result-label {\n  position: absolute;\n  display: flex;\n  align-items: flex-start;\n  gap: calc(8 * var(--unit));\n  padding: calc(8 * var(--unit)) calc(12 * var(--unit));\n  border-radius: calc(8 * var(--unit));\n  background: var(--caption-surface);\n  color: var(--on-active);\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  font-weight: 600;\n  z-index: 3;\n  transform-origin: center;\n}\n.eye {\n  width: calc(20 * var(--unit));\n  height: calc(20 * var(--unit));\n  flex: none;\n  fill: none;\n  stroke: currentColor;\n  stroke-width: calc(2 * var(--unit));\n  stroke-linecap: round;\n  stroke-linejoin: round;\n  margin-top: calc((24 - 20) / 2 * var(--unit));\n}\n.eye > * {\n  vector-effect: non-scaling-stroke;\n}\n.frames {\n  position: absolute;\n  overflow: hidden;\n  z-index: 1;\n}\n.frame {\n  position: absolute;\n  border: calc(2 * var(--unit)) solid var(--frame-stroke);\n  background: var(--frame-fill);\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit)) var(--frame-inner-guard),\n    0 0 0 calc(1 * var(--unit)) var(--frame-outer-guard);\n}\n.dock {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--dock-surface);\n  color: var(--dock-text);\n  border: calc(1 * var(--unit)) solid var(--dock-line);\n  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--dock-shadow);\n  z-index: 2;\n  transform-origin: center;\n}\n.input {\n  border-radius: 9999px;\n  padding: calc(12 * var(--unit)) calc(20 * var(--unit));\n}\n.input-text {\n  font-family: var(--mono);\n  font-size: calc(21 * var(--unit));\n  line-height: calc(30 * var(--unit));\n  text-align: center;\n}\n.key {\n  border-radius: calc(8 * var(--unit));\n  padding: calc(12 * var(--unit)) calc(20 * var(--unit));\n  box-shadow:\n    inset 0 calc(-4 * var(--unit)) 0 var(--key-sheen),\n    0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--dock-shadow);\n}\n.key-body {\n  min-width: 0;\n}\n.key-name {\n  font-size: calc(21 * var(--unit));\n  line-height: calc(30 * var(--unit));\n  font-weight: 600;\n  text-align: center;\n}\n.api-note {\n  margin-top: calc(8 * var(--unit));\n  font-size: calc(14 * var(--unit));\n  line-height: calc(20 * var(--unit));\n  color: var(--dock-secondary);\n  text-align: center;\n}\n.cursor {\n  position: absolute;\n  width: calc(16 * var(--unit));\n  height: calc(24 * var(--unit));\n  fill: var(--cursor-fill);\n  stroke: var(--edge-guard);\n  stroke-width: 1.5;\n  stroke-linejoin: round;\n  z-index: 3;\n}\n.effects {\n  position: absolute;\n  inset: 0;\n  z-index: 1;\n}\n.effects .cursor {\n  z-index: auto;\n}\n.ripple {\n  position: absolute;\n  width: calc(48 * var(--unit));\n  height: calc(48 * var(--unit));\n  --ripple-scale: 1;\n  border: calc(2 * var(--unit) / var(--ripple-scale)) solid var(--accent);\n  border-radius: 50%;\n  transform: scale(var(--ripple-scale));\n  box-shadow:\n    inset 0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-inner-guard),\n    0 0 0 calc(1 * var(--unit) / var(--ripple-scale)) var(--ripple-outer-guard);\n}\n',
         },
         installer,
       });

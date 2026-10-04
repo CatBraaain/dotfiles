@@ -3,10 +3,10 @@
  * @typedef {{name:string,action:string,expected:string}} Step
  * @typedef {{rect:Rect,name:string,kind:'click'|'input'|'key'|'scroll'|'hover'|'drag'|'open'}} Target
  * @typedef {{rect:Rect,name:string,expected:string}} Result
- * @typedef {{text:string,at:number,hold?:boolean}} Input
- * @typedef {{name:string,at:number,api?:boolean,hold?:boolean}} Key
+ * @typedef {{text:string,at:number,firstAt?:number,hold?:boolean}} Input
+ * @typedef {{name:string,at:number,firstAt?:number,api?:boolean,hold?:boolean}} Key
  * @typedef {{x:number,y:number,at:number,click?:boolean}} Pointer
- * @typedef {{title:string,steps:Step[],current:number,phase:'waiting'|'acting'|'checking'|'result',theme:'light'|'dark',pageArea:Rect,titleArea:Rect,reducedMotion?:boolean|null,target?:Target|null,result?:Result|null,input?:Input|null,key?:Key|null,pointer?:Pointer|null}} OverlayState
+ * @typedef {{title:string,steps:Step[],current:number,read?:number,readTotal?:number,phase:'waiting'|'acting'|'checking'|'result',theme:'light'|'dark',pageArea:Rect,titleArea:Rect,layer?:'both'|'title'|'page',taskAnchor?:Rect|null,checkAt?:number|null,target?:Target|null,result?:Result|null,input?:Input|null,key?:Key|null,pointer?:Pointer|null,reducedMotion?:boolean|null}} OverlayState
  * @typedef {{element:string,reason:string,rect:Rect,step:number,total:number,pageArea:Rect,value:string}} Constraint
  * @typedef {{constraints:Constraint[],placements:Record<string,Rect>,requiredTitleHeight:number,at:number}} Layout
  * @typedef {{update:(patch:Partial<OverlayState>)=>Layout,inspect:()=>Layout,painted:()=>Promise<Layout>,setVisible:(visible:boolean)=>Promise<void>,dispose:()=>void}} Overlay
@@ -17,7 +17,6 @@
 export function installRecordingOverlay(
   /** @type {{html:string,css:string,state:OverlayState}} */ { html, css, state: initialState },
 ) {
-  validate(initialState);
   const owner = /** @type {OverlayWindow} */ (window);
   owner.recordingOverlay?.dispose();
   const host = document.createElement("recording-annotation-overlay");
@@ -47,9 +46,7 @@ export function installRecordingOverlay(
   const stylesheet = new CSSStyleSheet();
   stylesheet.replaceSync(css);
   shadow.adoptedStyleSheets = [stylesheet];
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  shadow.append(template.content.cloneNode(true));
+  shadow.innerHTML = html;
   document.documentElement.append(host);
   const root = element(".overlay");
   const motion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -69,10 +66,24 @@ export function installRecordingOverlay(
   let inputRevealAt = 0;
   let visible = true;
   let visibilityRequest = 0;
+  let checkStartedAt = /** @type {number|null} */ (null);
+  let checkStep = 0;
+  /** Dock sessions keep the first-appearance time and the widest width seen. */
+  const firstAts = {
+    input: /** @type {number|null} */ (null),
+    key: /** @type {number|null} */ (null),
+  };
+  const dockWidths = { input: 0, key: 0 };
   /** @type {Map<HTMLElement, {visible:boolean,animation:Animation|null,fadeAt?:number}>} */
   const presentations = new Map();
-  for (const selector of [".panel", ".target-caption", ".result-caption", ".input", ".key"])
+  for (const selector of [".task-label", ".result-label", ".input", ".key"])
     presentations.set(element(selector), { visible: false, animation: null });
+
+  const ENTER_MS = 200;
+  const HOLD_MS = 1200;
+  const EXIT_MS = 250;
+  const CHECK_FADE_MS = 360;
+  const REVEAL_MS = 160;
 
   const api = {
     update,
@@ -133,31 +144,75 @@ export function installRecordingOverlay(
 
   function update(/** @type {Partial<OverlayState>} */ patch) {
     if (disposed) throw new Error("Recording overlay has been disposed");
-    const next = { ...state, ...structuredClone(patch) };
-    validate(next);
+    const raw = { ...state, ...structuredClone(patch) };
+    const adopted = normalize(raw, state);
+    validate(adopted);
     const onlyThemeOrPointer = Object.keys(patch).every((name) =>
       ["theme", "reducedMotion", "pointer"].includes(name),
     );
-    const input = patch.input;
+    const input = /** @type {Input|undefined|null} */ (patch.input);
     if (
       input &&
       state.key?.name === "Backspace" &&
-      input.at - lastInputAt < 160 &&
+      input.at - lastInputAt < REVEAL_MS &&
       input.text.length > (state.input?.text.length ?? 0)
     ) {
       pendingInput = input;
-      inputRevealAt = lastInputAt + 160;
-      next.input = state.input;
+      inputRevealAt = lastInputAt + REVEAL_MS;
+      adopted.input = state.input;
     } else if ("input" in patch) {
       pendingInput = null;
       if (input) lastInputAt = input.at;
     }
-    state = next;
+    state = adopted;
+    adoptCheckClock(patch);
     applyTheme();
     if (!onlyThemeOrPointer || layout.at === 0) render();
     if ("pointer" in patch) pointer(patch.pointer);
     tick();
     return structuredClone(layout);
+  }
+
+  /** Fill transient firstAt sessions so repeated typing never restarts the enter fade. */
+  function normalize(/** @type {OverlayState} */ next, /** @type {OverlayState|null} */ previous) {
+    for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+      const value = next[kind];
+      if (!value) {
+        firstAts[kind] = null;
+        dockWidths[kind] = 0;
+        continue;
+      }
+      const earlier = previous?.[kind] ?? null;
+      const continues =
+        earlier != null &&
+        performance.now() < transientTimes(earlier.firstAt ?? earlier.at, earlier.at).exitEnd;
+      const firstAt = value.firstAt ?? (continues ? (earlier?.firstAt ?? earlier.at) : value.at);
+      if (firstAt !== firstAts[kind]) {
+        firstAts[kind] = firstAt;
+        dockWidths[kind] = 0;
+      }
+      value.firstAt = firstAt;
+    }
+    if (next.read == null) next.read = 0;
+    return next;
+  }
+
+  /** Track when the current step's operation ended, for the check fade. */
+  function adoptCheckClock(/** @type {Partial<OverlayState>} */ patch) {
+    const explicit = "checkAt" in patch;
+    if (
+      state.phase === "waiting" ||
+      state.phase === "acting" ||
+      (explicit && patch.checkAt == null)
+    ) {
+      checkStartedAt = null;
+      checkStep = 0;
+      return;
+    }
+    if (state.current !== checkStep || (explicit && patch.checkAt != null)) {
+      checkStep = state.current;
+      checkStartedAt = /** @type {number} */ (explicit ? patch.checkAt : performance.now());
+    }
   }
 
   function validate(/** @type {OverlayState} */ candidate) {
@@ -168,10 +223,20 @@ export function installRecordingOverlay(
       candidate.current > candidate.steps.length
     )
       throw new Error("current must be a 1-based step number");
+    const total = candidate.readTotal ?? candidate.steps.length;
+    if (!Number.isInteger(total) || total < 1)
+      throw new Error("readTotal must be a positive integer");
+    for (const count of [candidate.read ?? 0, candidate.readTotal ?? candidate.steps.length])
+      if (!Number.isInteger(count) || count < 0 || count > total)
+        throw new Error("read must stay between 0 and readTotal");
+    if ((candidate.read ?? 0) === total && candidate.current !== candidate.steps.length)
+      throw new Error("read reaches readTotal only on the last step");
     if (!["waiting", "acting", "checking", "result"].includes(candidate.phase))
       throw new Error("Unknown overlay phase");
     if (!["light", "dark"].includes(candidate.theme))
-      throw new Error("Pass the caller-selected annotation theme");
+      throw new Error("Pass the observed site theme; docks invert it automatically");
+    if (!["both", "title", "page"].includes(candidate.layer ?? "both"))
+      throw new Error("Unknown overlay layer");
     if (!candidate.pageArea || !candidate.titleArea)
       throw new Error("Pass the reserved page and title rectangles");
     if (
@@ -192,12 +257,15 @@ export function installRecordingOverlay(
     )
       throw new Error("Pointer samples require finite viewport coordinates and event times");
     for (const value of [candidate.input, candidate.key].filter((value) => value != null)) {
-      if (!Number.isFinite(value.at))
+      if (![value.at, value.firstAt].every((time) => time == null || Number.isFinite(time)))
         throw new Error("Input and key timestamps use the document performance clock");
     }
+    if (candidate.checkAt != null && !Number.isFinite(candidate.checkAt))
+      throw new Error("checkAt uses the document performance clock");
     for (const rect of [
       candidate.pageArea,
       candidate.titleArea,
+      candidate.taskAnchor ?? null,
       candidate.target?.rect,
       candidate.result?.rect,
     ].filter(Boolean)) {
@@ -234,55 +302,112 @@ export function installRecordingOverlay(
     applyTheme();
     tick();
   }
+  function scale() {
+    return Math.max(1, state.pageArea.width / 1280);
+  }
+  function readTotal() {
+    return state.readTotal ?? state.steps.length;
+  }
 
   function render() {
     const area = state.pageArea;
-    element(".panel").hidden = false;
-    const s = Math.max(1, area.width / 1280);
+    const s = scale();
     root.style.setProperty("--unit", `${s}px`);
     layout = { constraints: [], placements: {}, requiredTitleHeight: 0, at: performance.now() };
-    protectedRects = [state.target?.rect, state.phase === "result" ? state.result?.rect : null]
-      .filter((rect) => rect != null)
-      .map((rect) => expand(rect, 8 * s));
     const n = state.steps.length;
     const step = state.steps[state.current - 1];
-    element(".test-title").textContent = state.title;
-    element(".step-count").textContent = `STEP ${state.current} / ${n}`;
-    element(".step-count").style.width = `${measureText(`STEP ${n} / ${n}`, "step-count")}px`;
+    const complete = (state.read ?? 0) >= readTotal();
+    const showPage = state.layer !== "title";
+    const showTitle = state.layer !== "page";
+    /** @type {Rect[]} */
+    const occupied = [];
+    protectedRects = [
+      showPage && state.phase !== "result" ? (state.target?.rect ?? null) : null,
+      showPage && state.phase === "result" ? (state.result?.rect ?? null) : null,
+    ]
+      .filter((rect) => rect != null)
+      .map((rect) => expand(/** @type {Rect} */ (rect), 8 * s));
+    if (showTitle) renderTitle(s, n, complete);
+    else {
+      element(".title").hidden = true;
+      layout.requiredTitleHeight = 0;
+    }
+    const frames = element(".frames");
+    frames.hidden = !showPage;
+    if (showPage) {
+      place(frames, area);
+      renderFrame("target", state.phase !== "result" ? (state.target ?? null) : null, area, s);
+      renderFrame("result", state.phase === "result" ? (state.result ?? null) : null, area, s);
+      renderTaskLabel(step, s, occupied);
+      renderResultLabel(s, occupied);
+      renderInput(s, occupied);
+      renderKey(s, occupied);
+      element(".cursor").hidden = !state.pointer;
+    } else {
+      for (const selector of [".task-label", ".result-label", ".input", ".key", ".cursor"])
+        element(selector).hidden = true;
+    }
+    layout.at = performance.now();
+    present(element(".task-label"), visible && showPage);
+    present(
+      element(".result-label"),
+      visible && showPage && state.phase === "result" && !!state.result,
+    );
+    for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+      const value = state[kind];
+      const transient = showPage ? value : null;
+      presentTransient(element("." + kind), transient, performance.now());
+    }
+  }
+
+  function renderTitle(
+    /** @type {number} */ s,
+    /** @type {number} */ n,
+    /** @type {boolean} */ complete,
+  ) {
+    const title = element(".title");
+    title.hidden = false;
+    const total = readTotal();
+    const widest = `COMPLETE ${total} / ${total}`;
+    const count = element(".step-count");
+    count.textContent = complete ? widest : `READ ${state.read} / ${total}`;
+    const countWidth = measure(widest, "step-count");
+    count.style.width = `${countWidth}px`;
+    const progressWidth = Math.max(160, 8 * n - 4) * s;
     const segments = element(".segments");
     segments.replaceChildren();
-    segments.style.width = `${Math.max(160, 8 * n - 4) * s}px`;
-    for (let i = 1; i <= n; i++) {
+    segments.style.width = `${progressWidth}px`;
+    for (let number = 1; number <= n; number++) {
       const segment = document.createElement("div");
-      segment.className = `segment ${status(i)}`;
+      segment.className = `segment ${segmentStatus(number, complete)}`;
       segments.append(segment);
     }
-    const title = element(".title");
-    title.classList.toggle("stacked", area.width < 720 * s);
+    element(".test-title").textContent = state.title;
+    const stacked = state.pageArea.width < 720 * s;
+    title.classList.toggle("stacked", stacked);
     const progress = element(".progress");
     progress.classList.remove("stacked");
-    title.style.width = `${state.titleArea.width}px`;
-    title.style.height = "auto";
-    const titleInner = state.titleArea.width - 48 * s;
-    if (
-      area.width < 720 * s &&
-      measureText(`STEP ${n} / ${n}`, "step-count") +
-        12 * s +
-        segments.getBoundingClientRect().width >
-        titleInner
-    )
-      progress.classList.add("stacked");
-    layout.requiredTitleHeight = Math.max(64 * s, title.getBoundingClientRect().height);
+    const inner = state.titleArea.width - 48 * s;
+    if (stacked && countWidth + 12 * s + progressWidth > inner) progress.classList.add("stacked");
+    const titleLines = wrapLines(
+      state.title,
+      "test-title",
+      stacked ? inner : inner - 24 * s - countWidth - 12 * s - progressWidth,
+      24 * s,
+    );
+    const progressExtra = stacked
+      ? 12 * s + 20 * s + (progress.classList.contains("stacked") ? 8 * s : 0)
+      : 0;
+    layout.requiredTitleHeight = Math.max(64 * s, 32 * s + 24 * s * titleLines + progressExtra);
     place(title, state.titleArea);
-    title.style.height = `${state.titleArea.height}px`;
     if (
       state.titleArea.height < layout.requiredTitleHeight ||
-      segments.getBoundingClientRect().width > titleInner ||
-      intersects(state.titleArea, area) ||
-      state.titleArea.width !== area.width ||
-      state.titleArea.x !== area.x ||
+      progressWidth > inner ||
+      intersects(state.titleArea, state.pageArea) ||
+      state.titleArea.width !== state.pageArea.width ||
+      state.titleArea.x !== state.pageArea.x ||
       state.titleArea.y !== 0 ||
-      !contains({ x: 0, y: 0, width: innerWidth, height: innerHeight }, area) ||
+      !contains({ x: 0, y: 0, width: innerWidth, height: innerHeight }, state.pageArea) ||
       !contains({ x: 0, y: 0, width: innerWidth, height: innerHeight }, state.titleArea)
     ) {
       constraint(
@@ -291,161 +416,211 @@ export function installRecordingOverlay(
         state.titleArea,
       );
     }
-    const frames = element(".frames");
-    place(frames, area);
-    for (const kind of ["target", "result"]) {
-      const annotation =
-        kind === "target" ? state.target : state.phase === "result" ? state.result : null;
-      const box = element(`.${kind}-frame`);
-      const caption = element(`.${kind}-caption`);
-      box.hidden = !annotation;
-      if (annotation) caption.hidden = false;
-      if (!annotation) continue;
-      const r = annotation.rect;
-      const frameRect = {
-        x: r.x - area.x - 2 * s,
-        y: r.y - area.y - 2 * s,
-        width: r.width + 4 * s,
-        height: r.height + 4 * s,
-      };
-      place(box, frameRect);
-      box.style.borderRadius = `${Math.min(10 * s, frameRect.width / 2, frameRect.height / 2)}px`;
-      const target = state.target;
-      const result = state.result;
-      if (kind === "target" && target) {
-        element(".target-caption .caption-text").textContent = target.name;
-        element(".target-caption .icon").innerHTML = icon(target.kind);
-      } else if (result) {
-        element(".result-caption .caption-text").textContent =
-          `${result.name} === ${result.expected}`;
-        element(".result-caption .icon").innerHTML = icon("result");
-      }
-    }
-    const primary = state.target
-      ? ".target-caption"
-      : state.input
-        ? ".input"
-        : state.key
-          ? ".key"
-          : ".label";
-    for (const slot of shadow.querySelectorAll(".primary")) {
-      slot.replaceChildren();
-      if (slot.parentElement?.matches(primary)) slot.append(badge(state.current, true));
-    }
-    element(".label-text").textContent = `${step.action} → ${step.expected}`;
-    if (state.input) {
-      element(".input").hidden = false;
-      element(".input-text").textContent = state.input.text;
-    }
-    if (state.key) {
-      element(".key").hidden = false;
-      element(".key-name").textContent = state.key.name;
-      element(".api-note").textContent = state.key.api ? "操作案内" : "";
-      element(".api-note").hidden = !state.key.api;
-    }
-
-    const occupied = /** @type {Rect[]} */ ([]);
-    const annotations = [
-      { kind: "target", annotation: state.target },
-      { kind: "result", annotation: state.phase === "result" ? state.result : null },
-    ]
-      .filter((entry) => entry.annotation != null)
-      .map((entry) => ({
-        kind: entry.kind,
-        annotation: /** @type {Target|Result} */ (entry.annotation),
-      }))
-      .sort(
-        (a, b) =>
-          a.annotation.rect.y - b.annotation.rect.y || a.annotation.rect.x - b.annotation.rect.x,
-      );
-    for (const { kind, annotation } of annotations) {
-      const caption = element(`.${kind}-caption`);
-      caption.style.width = `${Math.min(area.width - 48 * s, captionWidth(caption, n, kind === "target", s))}px`;
-      const size = dimensions(caption);
-      const r = annotation.rect;
-      const safe = inset(area, 24 * s);
-      const clampX = (/** @type {number} */ x) =>
-        Math.max(safe.x, Math.min(x, safe.x + safe.width - size.width));
-      const clampY = (/** @type {number} */ y) =>
-        Math.max(safe.y, Math.min(y, safe.y + safe.height - size.height));
-      const candidates = [
-        { x: clampX(r.x + 8 * s), y: r.y - 8 * s - size.height },
-        { x: clampX(r.x + 8 * s), y: r.y + r.height + 8 * s },
-        { x: r.x + r.width + 8 * s, y: clampY(r.y) },
-        { x: r.x - 8 * s - size.width, y: clampY(r.y) },
-      ];
-      selectPosition(kind + "-caption", caption, candidates, occupied, s);
-    }
-    const panel = element(".panel");
-    const seen = new Set();
-    let panelPlaced = false;
-    for (const [width, columns] of [
-      [420, 1],
-      [360, 1],
-      [560, 1],
-      [720, 1],
-      [720, 2],
-    ]) {
-      const outerWidth = Math.min(width * s, area.width - 48 * s);
-      if (columns === 2 && (n <= 5 || outerWidth - 42 * s < 600 * s)) continue;
-      const key = `${outerWidth}/${columns}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      panel.style.width = `${outerWidth}px`;
-      if (!renderRows(columns, outerWidth, s)) continue;
-      const size = dimensions(panel);
-      const safe = inset(area, 24 * s);
-      const candidates = [
-        { x: safe.x, y: safe.y },
-        { x: safe.x + safe.width - size.width, y: safe.y },
-        { x: safe.x, y: safe.y + safe.height - size.height },
-        { x: safe.x + safe.width - size.width, y: safe.y + safe.height - size.height },
-      ];
-      const found = candidates
-        .map((point) => ({ ...point, width: size.width, height: size.height }))
-        .find((rect) => fits(rect, occupied, s));
-      if (found) {
-        recordPlacement("panel", panel, found, occupied);
-        panelPlaced = true;
-        break;
-      }
-    }
-    if (!panelPlaced) {
-      panel.style.width = `${Math.min(420 * s, area.width - 48 * s)}px`;
-      renderRows(1, dimensions(panel).width, s);
-      const rect = sized(panel, area.x + 24 * s, area.y + 24 * s);
-      recordPlacement("panel", panel, rect, occupied);
-      constraint("panel", "No panel candidate preserves all steps and protected targets", rect);
-    }
-    if (state.input) {
-      const input = element(".input");
-      input.style.width = `${Math.min(0.52 * area.width, area.width - 48 * s)}px`;
-      input.style.borderRadius = `${dimensions(input).height / 2}px`;
-      selectPosition("input", input, positions(input, false, s), occupied, s);
-    }
-    if (state.key) {
-      const key = element(".key");
-      const numberWidth =
-        primary === ".key"
-          ? Math.max(24 * s, 8 * s + measureText(String(n), "step-count")) + 12 * s
-          : 0;
-      key.style.width = `${Math.min(area.width - 48 * s, Math.max(160 * s, 42 * s + numberWidth + measureText(state.key.name, "key-name")))}px`;
-      selectPosition("key", key, positions(key, true, s), occupied, s);
-    }
-    element(".overlay > .cursor").hidden = !state.pointer;
-    layout.at = performance.now();
-    present(element(".panel"), visible);
-    present(element(".target-caption"), visible && !!state.target);
-    present(element(".result-caption"), visible && state.phase === "result" && !!state.result);
-    for (const kind of ["input", "key"]) {
-      const value = state[/** @type {'input'|'key'} */ (kind)];
-      presentTransient(element("." + kind), value, performance.now());
-    }
+  }
+  function segmentStatus(/** @type {number} */ number, /** @type {boolean} */ complete) {
+    if (complete || number < state.current) return "done";
+    return number === state.current ? "current" : "pending";
   }
 
-  function dimensions(/** @type {HTMLElement} */ node) {
-    const style = getComputedStyle(node);
-    return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
+  function renderFrame(
+    /** @type {'target'|'result'} */ kind,
+    /** @type {Target|Result|null} */ annotation,
+    /** @type {Rect} */ area,
+    /** @type {number} */ s,
+  ) {
+    const box = element(`.${kind}-frame`);
+    box.hidden = !annotation;
+    if (!annotation) return;
+    const r = annotation.rect;
+    const frameRect = {
+      x: r.x - area.x - 2 * s,
+      y: r.y - area.y - 2 * s,
+      width: r.width + 4 * s,
+      height: r.height + 4 * s,
+    };
+    place(box, frameRect);
+    box.style.borderRadius = `${Math.min(10 * s, frameRect.width / 2, frameRect.height / 2)}px`;
+  }
+
+  function taskAnchorRect() {
+    const fallback = state.taskAnchor ?? state.target?.rect ?? state.result?.rect;
+    if (fallback) return fallback;
+    const safe = inset(state.pageArea, 24);
+    return { x: safe.x, y: safe.y, width: safe.width, height: 1 };
+  }
+
+  function renderTaskLabel(
+    /** @type {Step} */ step,
+    /** @type {number} */ s,
+    /** @type {Rect[]} */ occupied,
+  ) {
+    const label = element(".task-label");
+    label.hidden = false;
+    element(".label-text").textContent = step.action;
+    element(".chip").textContent = String(state.current);
+    applyCheckPaint(performance.now());
+    const area = state.pageArea;
+    const safe = inset(area, 24 * s);
+    const anchor = taskAnchorRect();
+    const width = Math.min(anchor.width, safe.width);
+    const textWidth = width - 26 * s - 44 * s;
+    const lines = wrapLines(step.action, "label-text", textWidth, 26 * s);
+    const height = Math.max(48 * s, 22 * s + 26 * s * lines);
+    label.style.width = `${width}px`;
+    label.style.height = `${height}px`;
+    const x = Math.max(safe.x, Math.min(anchor.x, safe.x + safe.width - width));
+    const above = { x, y: anchor.y - 12 * s - height, width, height };
+    const below = { x, y: anchor.y + anchor.height + 12 * s, width, height };
+    const found = [above, below].find((rect) => fits(rect, occupied, s));
+    const fallbackY =
+      above.y >= safe.y ? above.y : Math.min(below.y, safe.y + safe.height - height);
+    const rect = found ?? /** @type {Rect} */ ({
+      x,
+      y: Math.max(safe.y, fallbackY),
+      width,
+      height,
+    });
+    recordPlacement("task-label", label, rect, occupied);
+    if (!found || textWidth <= 0)
+      constraint(
+        "task-label",
+        "No task-label placement preserves full text, safe edges and protected targets",
+        rect,
+      );
+  }
+
+  function applyCheckPaint(/** @type {number} */ now) {
+    const check = element(".check");
+    check.hidden = checkStartedAt == null;
+    if (checkStartedAt == null) return;
+    const age = Math.max(0, now - checkStartedAt);
+    check.style.opacity = String(checkOpacity(age));
+  }
+  function checkOpacity(/** @type {number} */ ageMs) {
+    const fraction = Math.min(1, ageMs / CHECK_FADE_MS);
+    return cssEase(fraction, 0, 0.58);
+  }
+
+  function renderResultLabel(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+    const label = element(".result-label");
+    const result = state.phase === "result" ? state.result : null;
+    if (!result) return;
+    label.hidden = false;
+    const text = `${result.name} === ${result.expected}`;
+    element(".result-text").textContent = text;
+    const area = state.pageArea;
+    const safe = inset(area, 24 * s);
+    const maxTextWidth = Math.max(1, safe.width - 52 * s);
+    const textWidth = Math.min(measure(text, "result-text"), maxTextWidth);
+    const lines = wrapLines(text, "result-text", Math.max(textWidth, 1), 20 * s);
+    const width = Math.min(safe.width, 52 * s + textWidth);
+    const height = 16 * s + 20 * s * lines;
+    label.style.width = `${width}px`;
+    label.style.height = `${height}px`;
+    const frame = expand(result.rect, 2 * s);
+    const x = Math.max(safe.x, Math.min(frame.x + 8 * s, safe.x + safe.width - width));
+    const above = { x, y: frame.y - 8 * s - height, width, height };
+    const below = { x, y: frame.y + frame.height + 8 * s, width, height };
+    const taskRect = layout.placements["task-label"];
+    /** @type {(rect: Rect) => boolean} */
+    const overlapsTask = (rect) => !!(taskRect && intersects(rect, expand(taskRect, 16 * s)));
+    const found = [above, below].find((rect) => fits(rect, occupied, s) && !overlapsTask(rect));
+    const rect = found ?? above;
+    recordPlacement("result-label", label, rect, occupied);
+    if (!found)
+      constraint(
+        "result-label",
+        "No result-label placement preserves full text, safe edges, the task label and protected targets",
+        rect,
+      );
+  }
+
+  function renderInput(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+    const value = state.input;
+    if (!value) return;
+    const dock = element(".input");
+    dock.hidden = false;
+    element(".input-text").textContent = value.text;
+    const area = state.pageArea;
+    const safe = inset(area, 24 * s);
+    const natural = Math.max(360 * s, 42 * s + measure(value.text, "input-text"));
+    const width = Math.min(safe.width, Math.max(dockWidths.input, natural));
+    dockWidths.input = width;
+    const lines = wrapLines(value.text, "input-text", width - 42 * s, 30 * s);
+    const height = Math.max(56 * s, 26 * s + 30 * s * lines);
+    dock.style.width = `${width}px`;
+    dock.style.height = `${height}px`;
+    dock.style.borderRadius = `${height / 2}px`;
+    const rect = {
+      x: area.x + (area.width - width) / 2,
+      y: area.y + area.height - 24 * s - height,
+      width,
+      height,
+    };
+    const placed = fits(rect, occupied, s);
+    recordPlacement("input", dock, rect, occupied);
+    if (!placed)
+      constraint("input", "The bottom-centre input band collides with protected targets", rect);
+  }
+
+  function renderKey(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+    const value = state.key;
+    if (!value) return;
+    const dock = element(".key");
+    dock.hidden = false;
+    element(".key-name").textContent = value.name;
+    element(".api-note").textContent = value.api ? "操作案内" : "";
+    element(".api-note").hidden = !value.api;
+    const noteHeight = value.api ? 8 * s + 20 * s : 0;
+    const width = Math.max(120 * s, 42 * s + measure(value.name, "key-name"));
+    dockWidths.key = Math.max(dockWidths.key, width);
+    const lines = wrapLines(value.name, "key-name", width - 42 * s, 30 * s);
+    const height = Math.max(56 * s, 26 * s + 30 * s * lines) + noteHeight;
+    dock.style.width = `${width}px`;
+    dock.style.height = `${height}px`;
+    selectPosition("key", dock, positions(inset(state.pageArea, 24 * s), dock, true), occupied, s);
+  }
+
+  function measure(/** @type {string} */ text, /** @type {string} */ role) {
+    const probe = document.createElement("span");
+    probe.className = role;
+    probe.textContent = text;
+    Object.assign(probe.style, {
+      position: "absolute",
+      width: "max-content",
+      whiteSpace: "pre",
+      visibility: "hidden",
+    });
+    root.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  }
+  function wrapLines(
+    /** @type {string} */ text,
+    /** @type {string} */ role,
+    /** @type {number} */ width,
+    /** @type {number} */ lineHeight,
+  ) {
+    if (!(width > 0)) return 1;
+    const probe = document.createElement("span");
+    probe.className = role;
+    probe.textContent = text;
+    Object.assign(probe.style, {
+      position: "absolute",
+      width: `${width}px`,
+      visibility: "hidden",
+    });
+    root.append(probe);
+    const height = probe.getBoundingClientRect().height;
+    probe.remove();
+    return Math.max(1, Math.ceil(height / lineHeight - 0.01));
+  }
+
+  function transientTimes(/** @type {number} */ firstAt, /** @type {number} */ lastAt) {
+    const enterEnd = firstAt + ENTER_MS;
+    const holdEnd = Math.max(enterEnd, lastAt) + HOLD_MS;
+    return { enterEnd, holdEnd, exitEnd: holdEnd + EXIT_MS };
   }
   function activePresentations() {
     return Array.from(presentations.values())
@@ -504,43 +679,42 @@ export function installRecordingOverlay(
       })
       .catch(() => {});
   }
-
   function presentTransient(
     /** @type {HTMLElement} */ node,
     /** @type {Input|Key|null|undefined} */ value,
     /** @type {number} */ now,
   ) {
-    const age = value ? now - value.at : Infinity;
     if (!value) {
       present(node, false);
       return;
     }
-    if (!value.hold && age >= 900) {
+    const times = transientTimes(value.firstAt ?? value.at, value.at);
+    if (!value.hold && now >= times.exitEnd) {
       present(node, false, 0, true);
       return;
     }
-    if (!visible || value.hold || age < 600) {
-      present(node, visible);
+    if (visible && (value.hold || now < times.holdEnd)) {
+      present(node, visible, ENTER_MS);
       return;
     }
     const entry = presentations.get(node);
     if (!entry) return;
-    if (entry.fadeAt === value.at) {
+    if (entry.fadeAt === times.holdEnd) {
       node.hidden = false;
       return;
     }
     entry.animation?.cancel();
     entry.visible = false;
-    entry.fadeAt = value.at;
+    entry.fadeAt = times.holdEnd;
     node.hidden = false;
     const animation = node.animate(
       [
         { opacity: 1, transform: "scale(1)" },
         { opacity: 0, transform: `scale(${reduced() ? 1 : 0.96})` },
       ],
-      { duration: 300, easing: "linear", fill: "both" },
+      { duration: EXIT_MS, easing: "linear", fill: "both" },
     );
-    animation.startTime = value.at + 600;
+    animation.startTime = times.holdEnd;
     entry.animation = animation;
     animation.finished
       .then(() => {
@@ -552,128 +726,22 @@ export function installRecordingOverlay(
       .catch(() => {});
   }
 
-  function renderRows(
-    /** @type {number} */ columns,
-    /** @type {number} */ width,
-    /** @type {number} */ s,
-  ) {
-    const list = element(".steps");
-    list.replaceChildren();
-    list.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
-    const contentWidth = (width - 42 * s - (columns - 1) * 24 * s) / columns;
-    const chipWidth = Math.max(32 * s, 12 * s + measureText(String(state.steps.length), "chip"));
-    const nameWidth = contentWidth - 16 * s - chipWidth - 12 * s - 10 * s;
-    let maxNameHeight = 0;
-    const rows = state.steps.map((step, index) => {
-      const row = document.createElement("div");
-      row.className = `row ${status(index + 1)}`;
-      row.append(badge(index + 1));
-      const name = document.createElement("span");
-      name.className = "step-name";
-      name.textContent = step.name;
-      name.style.fontWeight = "600";
-      name.style.width = `${Math.max(0, nameWidth)}px`;
-      row.append(name);
-      list.append(row);
-      maxNameHeight = Math.max(maxNameHeight, dimensions(name).height);
-      name.style.removeProperty("font-weight");
-      return row;
-    });
-    const height = Math.max(76 * s, 16 * s + Math.max(44 * s, maxNameHeight));
-    for (const row of rows) row.style.height = `${height}px`;
-    return (
-      nameWidth > 0 &&
-      rows.every((row) => {
-        const name = row.querySelector(".step-name");
-        return (
-          name != null &&
-          row.scrollWidth <= row.clientWidth + 1 &&
-          name.scrollWidth <= name.clientWidth + 1
-        );
-      })
-    );
-  }
-
-  function status(/** @type {number} */ number) {
-    return number < state.current || (number === state.current && state.phase === "result")
-      ? "done"
-      : number === state.current
-        ? "current"
-        : "pending";
-  }
-  function badge(/** @type {number} */ number, primary = false) {
-    const s = Math.max(1, state.pageArea.width / 1280);
-    const width = Math.max(
-      (primary ? 24 : 32) * s,
-      (primary ? 8 : 12) * s +
-        measureText(String(state.steps.length), primary ? "step-count" : "chip"),
-    );
-    const badge = document.createElement("span");
-    badge.className = `badge ${status(number)}`;
-    badge.style.width = `${width + (primary ? 0 : 12 * s)}px`;
-    badge.dataset.phase =
-      status(number) === "done" ? "result" : number === state.current ? state.phase : "waiting";
-    badge.innerHTML = '<span class="chip"></span>';
-    if (!primary)
-      badge.insertAdjacentHTML(
-        "beforeend",
-        '<span class="decoration spinner"></span><span class="decoration ring"></span><span class="decoration check"><svg viewBox="0 0 12 12"><path d="m2 6 2.5 2.5L10 3"/></svg></span>',
-      );
-    const chip = /** @type {HTMLElement} */ (badge.firstElementChild);
-    chip.textContent = String(number);
-    chip.style.width = `${width}px`;
-    return badge;
-  }
-
-  function captionWidth(
-    /** @type {HTMLElement} */ caption,
-    /** @type {number} */ n,
-    /** @type {boolean} */ primary,
-    /** @type {number} */ s,
-  ) {
-    const numberWidth = primary
-      ? Math.max(24 * s, 8 * s + measureText(String(n), "step-count")) + 8 * s
-      : 0;
-    return (
-      24 * s +
-      numberWidth +
-      20 * s +
-      8 * s +
-      measureText(caption.querySelector(".caption-text")?.textContent ?? "", "caption-text")
-    );
-  }
-  function measureText(/** @type {string} */ text, /** @type {string} */ role) {
-    const probe = document.createElement("span");
-    probe.className = role;
-    probe.textContent = text;
-    Object.assign(probe.style, {
-      position: "absolute",
-      width: "max-content",
-      whiteSpace: "pre",
-      visibility: "hidden",
-    });
-    root.append(probe);
-    const width = probe.getBoundingClientRect().width;
-    probe.remove();
-    return width;
-  }
   function positions(
+    /** @type {Rect} */ safe,
     /** @type {HTMLElement} */ node,
     /** @type {boolean} */ centered,
-    /** @type {number} */ s,
   ) {
-    const safe = inset(state.pageArea, 24 * s);
-    const size = dimensions(node);
-    const center = {
+    const size = sized(node, 0, 0);
+    const centre = {
       x: safe.x + (safe.width - size.width) / 2,
       y: safe.y + (safe.height - size.height) / 2,
     };
     return [
-      ...(centered ? [center] : []),
-      { x: center.x, y: safe.y + safe.height - size.height },
-      { x: center.x, y: safe.y },
-      { x: safe.x, y: center.y },
-      { x: safe.x + safe.width - size.width, y: center.y },
+      ...(centered ? [centre] : []),
+      { x: centre.x, y: safe.y + safe.height - size.height },
+      { x: centre.x, y: safe.y },
+      { x: safe.x, y: centre.y },
+      { x: safe.x + safe.width - size.width, y: centre.y },
     ];
   }
   function selectPosition(
@@ -684,12 +752,7 @@ export function installRecordingOverlay(
     /** @type {number} */ s,
   ) {
     const rects = candidates.map((point) => sized(node, point.x, point.y));
-    const hasContentWidth =
-      node.scrollWidth <= node.clientWidth + 1 &&
-      Array.from(node.querySelectorAll(".caption-text,.input-text,.key-name")).every(
-        (text) => text.clientWidth > 0 && text.scrollWidth <= text.clientWidth + 1,
-      );
-    const found = hasContentWidth ? rects.find((rect) => fits(rect, occupied, s)) : undefined;
+    const found = rects.find((rect) => fits(rect, occupied, s));
     const rect = found ?? rects[0];
     recordPlacement(name, node, rect, occupied);
     if (!found)
@@ -723,12 +786,10 @@ export function installRecordingOverlay(
     /** @type {Record<string, string>} */
     const values = {
       title: state.title,
-      panel:
-        state.steps.map((step) => step.name).join("\n") + "\n" + element(".label-text").textContent,
+      "task-label": state.steps[state.current - 1]?.action ?? "",
+      "result-label": state.result ? `${state.result.name} === ${state.result.expected}` : "",
       input: state.input?.text ?? "",
       key: state.key?.name ?? "",
-      "target-caption": state.target?.name ?? "",
-      "result-caption": state.result ? state.result.name + " === " + state.result.expected : "",
     };
     layout.constraints.push({
       element: name,
@@ -751,17 +812,20 @@ export function installRecordingOverlay(
       left: `${rect.x}px`,
       top: `${rect.y}px`,
       width: `${rect.width}px`,
+      height: `${rect.height}px`,
     });
-    if (node.classList.contains("frame") || node.classList.contains("frames"))
-      node.style.height = `${rect.height}px`;
   }
   function sized(
     /** @type {HTMLElement} */ node,
     /** @type {number} */ x,
     /** @type {number} */ y,
   ) {
-    const { width, height } = dimensions(node);
-    return { x, y, width, height };
+    return {
+      x,
+      y,
+      width: Number.parseFloat(node.style.width) || 0,
+      height: Number.parseFloat(node.style.height) || 0,
+    };
   }
   function expand(/** @type {Rect} */ r, /** @type {number} */ gap) {
     return { x: r.x - gap, y: r.y - gap, width: r.width + gap * 2, height: r.height + gap * 2 };
@@ -784,9 +848,9 @@ export function installRecordingOverlay(
   }
 
   function pointer(/** @type {Pointer|null|undefined} */ sample) {
-    element(".overlay > .cursor").hidden = !sample;
+    element(".cursor").hidden = !sample;
     if (!sample) return;
-    const cursor = element(".overlay > .cursor");
+    const cursor = element(".cursor");
     cursor.style.left = `${sample.x}px`;
     cursor.style.top = `${sample.y}px`;
     if (sample.click) {
@@ -800,6 +864,7 @@ export function installRecordingOverlay(
       effects.push({ node: trail, kind: "trail", at: sample.at, x: sample.x, y: sample.y });
     }
   }
+
   function tick() {
     cancelAnimationFrame(frame);
     if (disposed) return;
@@ -810,7 +875,7 @@ export function installRecordingOverlay(
       pendingInput = null;
       render();
     }
-    const s = Math.max(1, state.pageArea.width / 1280);
+    const s = scale();
     effects = effects.filter((effect) => {
       const age = Math.max(0, now - effect.at);
       const duration = effect.kind === "trail" ? 200 : 450;
@@ -836,39 +901,43 @@ export function installRecordingOverlay(
     });
     let fading = false;
     let expired = false;
-    /** @type {[string, Input|Key|null|undefined, "input"|"key"][]} */
-    const fadingAnnotations = [
-      [".input", state.input, "input"],
-      [".key", state.key, "key"],
-    ];
-    for (const [selector, value, kind] of fadingAnnotations) {
-      const node = element(selector);
+    for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+      const value = state[kind];
       if (!value) continue;
-      const age = now - value.at;
-      fading ||= !value.hold && age < 900;
-      presentTransient(node, value, now);
-      if (!value.hold && age >= 900) {
-        present(node, false, 0, true);
+      const times = transientTimes(value.firstAt ?? value.at, value.at);
+      fading ||= !value.hold && now < times.exitEnd;
+      presentTransient(element("." + kind), value, now);
+      if (!value.hold && now >= times.exitEnd) {
+        present(element("." + kind), false, 0, true);
         state[kind] = null;
+        firstAts[kind] = null;
+        dockWidths[kind] = 0;
         expired = true;
       }
     }
+    const checkFading = checkStartedAt != null && now - checkStartedAt <= CHECK_FADE_MS;
+    if (checkFading) applyCheckPaint(now);
     if (expired) render();
-    if (effects.length || fading || pendingInput) frame = requestAnimationFrame(tick);
+    if (effects.length || fading || pendingInput || checkFading)
+      frame = requestAnimationFrame(tick);
   }
-  function icon(/** @type {string} */ kind) {
-    /** @type {Record<string, string>} */
-    const paths = {
-      click: '<path d="M5 3v16l4-4 4 6 3-2-4-6h7Z"/>',
-      hover: '<path d="M5 3v16l4-4 4 6 3-2-4-6h7Z"/>',
-      input: '<path d="m4 16 12-12 4 4L8 20H4Z M13 7l4 4"/>',
-      key: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 10h2m3 0h2m3 0h1M7 14h10"/>',
-      scroll: '<path d="M8 20V4L4 8m4-4 4 4m4-4v16l-4-4m4 4 4-4"/>',
-      drag: '<path d="M8 12V5a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v5-2a2 2 0 0 1 4 0v7l-4 5H9l-6-8a2 2 0 0 1 3-2l2 2Z"/>',
-      open: '<path d="M14 3h7v7m0-7L10 14M10 3H3v18h18v-7"/>',
-      result:
-        '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
-    };
-    return paths[kind] ?? paths.click;
+
+  /** cubic-bezier(0, 0, x2, 1)-shaped progress used by the adopted fades. */
+  function cssEase(
+    /** @type {number} */ progress,
+    /** @type {number} */ x1,
+    /** @type {number} */ x2,
+  ) {
+    if (progress <= 0 || progress >= 1) return progress;
+    const bezier = (/** @type {number} */ t, /** @type {number} */ a, /** @type {number} */ b) =>
+      3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+    let low = 0;
+    let high = 1;
+    for (let index = 0; index < 24; index++) {
+      const mid = (low + high) / 2;
+      if (bezier(mid, x1, x2) < progress) low = mid;
+      else high = mid;
+    }
+    return bezier((low + high) / 2, 0, 1);
   }
 }
