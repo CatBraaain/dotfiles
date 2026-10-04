@@ -23,29 +23,94 @@ function item(partial: Partial<ListItem>): ListItem {
 
 const RUNTIME_VARIABLES = buildRuntimeVariables({ codingAgent: "pi", fileReadTool: "read" });
 
+/** Every required section, defined as plain strings. */
+const DEFAULT_SECTION_LINES = [
+  '  preamble: "Hello {{CODING_AGENT}}"',
+  "  tools: T",
+  "  rules: R",
+  "  docs: D",
+  "  cwd: C",
+  "  project_context: PC",
+  "  skills:",
+  '    each: "- {{name}}"',
+];
+
+/** A minimal valid canonical file: every required section defined. */
+function fullYaml(sectionLines: string[] = DEFAULT_SECTION_LINES, header: string[] = []): string {
+  return [...header, "sections:", ...sectionLines].join("\n");
+}
+
 describe("parseSystemPromptTemplate", () => {
   it("parses variables, string sections, and list sections", () => {
-    const raw = [
-      "variables:",
-      "  LANGUAGE: ja",
-      "sections:",
-      "  preamble: |",
-      "    Hello {{CODING_AGENT}}",
-      "  skills:",
-      '    each: "- {{name}}"',
-    ].join("\n");
-    const parsed = parseSystemPromptTemplate(raw);
+    const parsed = parseSystemPromptTemplate(
+      fullYaml(
+        [...DEFAULT_SECTION_LINES, '  extra: "X {{LANGUAGE}}"'],
+        ["variables:", "  LANGUAGE: ja"],
+      ),
+    );
     assert.deepEqual(parsed.variables, { LANGUAGE: "ja" });
-    assert.deepEqual(parsed.sections.preamble, "Hello {{CODING_AGENT}}\n");
+    assert.deepEqual(parsed.sections.preamble, "Hello {{CODING_AGENT}}");
     assert.deepEqual(parsed.sections.skills, { each: "- {{name}}" });
+    assert.deepEqual(parsed.sections.extra, "X {{LANGUAGE}}");
   });
 
-  it("treats an empty or comment-only document as no definitions", () => {
-    assert.deepEqual(parseSystemPromptTemplate(""), { variables: {}, sections: {} });
-    assert.deepEqual(parseSystemPromptTemplate("# comments only\n"), {
-      variables: {},
-      sections: {},
+  it("accepts list sections on tools, rules, and project_context", () => {
+    const parsed = parseSystemPromptTemplate(
+      fullYaml([
+        "  preamble: P",
+        "  tools:",
+        '    each: "- {{name}}: {{description}}"',
+        '    empty: "(none)"',
+        "  rules:",
+        '    each: "- {{rule}}"',
+        "  docs: D",
+        "  cwd: C",
+        "  project_context:",
+        '    pre: "Head"',
+        '    each: "b {{path}}"',
+        '    join: "\\n\\n"',
+        "  skills:",
+        '    each: "- {{name}}"',
+      ]),
+    );
+    assert.deepEqual(parsed.sections.tools, {
+      each: "- {{name}}: {{description}}",
+      empty: "(none)",
     });
+    assert.deepEqual(parsed.sections.rules, { each: "- {{rule}}" });
+    assert.deepEqual(parsed.sections.project_context, {
+      pre: "Head",
+      each: "b {{path}}",
+      join: "\n\n",
+    });
+  });
+
+  it("rejects a list section on a name without runtime data", () => {
+    assert.throws(
+      () =>
+        parseSystemPromptTemplate(
+          fullYaml([...DEFAULT_SECTION_LINES, "  gadgets:", '    each: "- {{x}}"']),
+        ),
+      /list sections support skills, tools, rules, and project_context only/,
+    );
+  });
+
+  it("rejects a missing required section and names it", () => {
+    const withoutDocs = DEFAULT_SECTION_LINES.filter((line) => !line.startsWith("  docs:"));
+    assert.throws(
+      () => parseSystemPromptTemplate(fullYaml(withoutDocs)),
+      /missing required section: docs/,
+    );
+    const withoutPreamble = DEFAULT_SECTION_LINES.filter((line) => !line.startsWith("  preamble:"));
+    assert.throws(
+      () => parseSystemPromptTemplate(fullYaml(withoutPreamble)),
+      /missing required section: preamble/,
+    );
+  });
+
+  it("rejects an empty or comment-only document as missing sections", () => {
+    assert.throws(() => parseSystemPromptTemplate(""), /missing required section: preamble/);
+    assert.throws(() => parseSystemPromptTemplate("# comments only\n"), /missing required section/);
   });
 
   it("rejects a non-mapping top level", () => {
@@ -60,13 +125,6 @@ describe("parseSystemPromptTemplate", () => {
     assert.throws(
       () => parseSystemPromptTemplate("variables:\n  HAS-DASH: x\n"),
       /invalid variable name/,
-    );
-  });
-
-  it("rejects a list section outside skills", () => {
-    assert.throws(
-      () => parseSystemPromptTemplate('sections:\n  tools:\n    each: "- {{name}}"\n'),
-      /support "skills" only/,
     );
   });
 
@@ -129,6 +187,28 @@ describe("buildRuntimeVariables", () => {
     assert.equal(variables.MODEL, "gpt-x");
     assert.equal(variables.PROVIDER, "openai");
   });
+
+  it("includes cwd and the pi doc paths when provided", () => {
+    const variables = buildRuntimeVariables({
+      codingAgent: "pi",
+      cwd: "/home/user/project",
+      readmePath: "/pi/README.md",
+      docsPath: "/pi/docs",
+      examplesPath: "/pi/examples",
+    });
+    assert.equal(variables.CWD, "/home/user/project");
+    assert.equal(variables.README_PATH, "/pi/README.md");
+    assert.equal(variables.DOCS_PATH, "/pi/docs");
+    assert.equal(variables.EXAMPLES_PATH, "/pi/examples");
+  });
+
+  it("omits cwd and the doc paths when unknown", () => {
+    const variables = buildRuntimeVariables({ codingAgent: "pi", fileReadTool: "read" });
+    assert.equal("CWD" in variables, false);
+    assert.equal("README_PATH" in variables, false);
+    assert.equal("DOCS_PATH" in variables, false);
+    assert.equal("EXAMPLES_PATH" in variables, false);
+  });
 });
 
 describe("renderListSection", () => {
@@ -156,9 +236,41 @@ describe("renderListSection", () => {
     assert.equal(rendered, "- a\n---\n- b");
   });
 
+  it("joins pre, body, and post with the custom join", () => {
+    const rendered = renderListSection(
+      { pre: "Head", each: "<{{name}}>", join: "\n\n" },
+      [item({ name: "a" }), item({ name: "b" })],
+      {},
+    );
+    assert.equal(rendered, "Head\n\n<a>\n\n<b>");
+  });
+
   it("escapes XML-special characters in item fields only", () => {
-    const rendered = renderListSection({ each: "{{description}}" }, [item({ description: "a & b <c>" })], {});
+    const rendered = renderListSection(
+      { each: "{{description}}" },
+      [item({ description: "a & b <c>" })],
+      {},
+    );
     assert.equal(rendered, "a &amp; b &lt;c&gt;");
+  });
+
+  it("leaves item fields raw with escapeItems: false", () => {
+    const rendered = renderListSection(
+      { each: "{{description}}" },
+      [item({ description: "a & b <c>" })],
+      {},
+      { escapeItems: false },
+    );
+    assert.equal(rendered, "a & b <c>");
+  });
+
+  it("renders empty as the body when there are no items", () => {
+    const rendered = renderListSection(
+      { each: "- {{name}}", empty: "(none)", post: "\nEpilogue" },
+      [],
+      {},
+    );
+    assert.equal(rendered, "(none)\n\nEpilogue");
   });
 
   it("drops empty pre and post parts", () => {
@@ -167,7 +279,10 @@ describe("renderListSection", () => {
   });
 
   it("throws when an item template references an unknown variable", () => {
-    assert.throws(() => renderListSection({ each: "{{NAME}}" }, [item({})], {}), /Undefined template variable/);
+    assert.throws(
+      () => renderListSection({ each: "{{NAME}}" }, [item({})], {}),
+      /Undefined template variable/,
+    );
   });
 });
 

@@ -1,17 +1,22 @@
 // Template rendering for the canonical SYSTEM_PROMPT.yaml: {{VAR}}
 // substitution and each-style list sections. The DSL has no loops or
 // conditionals; a list section declares an `each` template and the extension
-// applies it to runtime data (v1: skills only). The canonical file contract
-// lives in SPEC.md.
+// applies it to runtime data (skills, tools, rules, project_context). The
+// canonical file must define every required section; the contract lives in
+// SPEC.md.
 
 import YAML from "yaml";
 
-/** A list section: `pre` + items rendered with `each`, joined, + `post`. */
+/**
+ * A list section: `pre` + items rendered with `each` + `post`, all joined
+ * with `join`. `empty` replaces the item body when the list is empty.
+ */
 export interface ListSectionDefinition {
   pre?: string;
   each: string;
   join?: string;
   post?: string;
+  empty?: string;
 }
 
 /** A `sections` entry: plain text with variable references, or a list section. */
@@ -23,12 +28,8 @@ export interface SystemPromptTemplate {
   sections: Readonly<Record<string, SectionDefinition>>;
 }
 
-/** Item fields a list section can reference; exposed from Pi's Skill type. */
-export interface ListItem {
-  name: string;
-  description: string;
-  filePath: string;
-}
+/** One runtime item of a list section: fields the `each` template can reference. */
+export type ListItem = Record<string, string>;
 
 export interface RuntimeVariableInput {
   /** Harness rendering the prompt; pi here, dsh for the future dsh plugin. */
@@ -39,15 +40,37 @@ export interface RuntimeVariableInput {
   model?: string;
   /** Provider id captured at run start; omitted when unknown. */
   provider?: string;
+  /** Run working directory, backslashes normalized; omitted when unknown. */
+  cwd?: string;
+  /** Installed pi's readme/docs/examples paths; omitted when unknown. */
+  readmePath?: string;
+  docsPath?: string;
+  examplesPath?: string;
 }
 
 const VARIABLE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 const SECTION_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 
+/** Section names a list definition may own; other names have no runtime data. */
+export const LIST_SECTION_NAMES = new Set(["tools", "rules", "project_context", "skills"]);
+
+/** Sections the canonical file must define; a missing one invalidates the file. */
+export const REQUIRED_SECTION_NAMES = [
+  "preamble",
+  "tools",
+  "rules",
+  "docs",
+  "skills",
+  "cwd",
+  "project_context",
+] as const;
+
 /**
  * Default skills section: byte-identical to Pi's formatSkillsForPrompt output
  * once trimmed upstream. SKILL_READ_PHRASE absorbs Pi's different sentence
- * wording for read ("the read tool to load") and bash ("bash to load").
+ * wording for read ("the read tool to load") and bash ("bash to load"). It
+ * mirrors the canonical file's skills section and item fields are rendered
+ * XML-escaped (renderListSection escapes by default).
  */
 export const DEFAULT_SKILLS_LIST: ListSectionDefinition = {
   pre: [
@@ -75,15 +98,21 @@ const SKILL_READ_PHRASES: Record<"read" | "bash", string> = {
 /** Parse and validate the canonical template file content. */
 export function parseSystemPromptTemplate(raw: string): SystemPromptTemplate {
   const parsed: unknown = YAML.parse(raw);
-  if (parsed === null || parsed === undefined) return { variables: {}, sections: {} };
-  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+  // An empty document defines nothing, which strict mode treats like any
+  // other missing-section file: ignored with a warning.
+  const root: unknown = parsed === null || parsed === undefined ? {} : parsed;
+  if (typeof root !== "object" || Array.isArray(root)) {
     throw new Error("top level must be a mapping of variables and sections");
   }
-  const root = parsed as Record<string, unknown>;
-  return {
-    variables: parseVariables(root.variables),
-    sections: parseSections(root.sections),
+  const mapping = root as Record<string, unknown>;
+  const template = {
+    variables: parseVariables(mapping.variables),
+    sections: parseSections(mapping.sections),
   };
+  for (const name of REQUIRED_SECTION_NAMES) {
+    if (!(name in template.sections)) throw new Error(`missing required section: ${name}`);
+  }
+  return template;
 }
 
 /** Variables every rendered section can reference; runtime wins over file ones. */
@@ -95,6 +124,10 @@ export function buildRuntimeVariables(input: RuntimeVariableInput): Record<strin
   }
   if (input.model !== undefined) variables.MODEL = input.model;
   if (input.provider !== undefined) variables.PROVIDER = input.provider;
+  if (input.cwd !== undefined) variables.CWD = input.cwd;
+  if (input.readmePath !== undefined) variables.README_PATH = input.readmePath;
+  if (input.docsPath !== undefined) variables.DOCS_PATH = input.docsPath;
+  if (input.examplesPath !== undefined) variables.EXAMPLES_PATH = input.examplesPath;
   return variables;
 }
 
@@ -111,29 +144,43 @@ export function renderTemplate(
   });
 }
 
+export interface RenderListOptions {
+  /** XML-escape item fields; on by default, matching the skills section. */
+  escapeItems?: boolean;
+}
+
 /**
- * Render a list section: pre + each item template (fields XML-escaped),
- * joined, + post. Non-empty parts join with a single newline, matching how
- * Pi joins the fixed lines around the skill list.
+ * Render a list section: pre + each item template + post, plus `empty` as
+ * the body when there are no items. `join` separates both the rendered
+ * items and the pre/body/post parts. Item fields are XML-escaped unless
+ * `escapeItems: false`; raw sections interpolate Pi's unescaped data.
  */
 export function renderListSection(
   definition: ListSectionDefinition,
   items: readonly ListItem[],
   variables: Readonly<Record<string, string>>,
+  options: RenderListOptions = {},
 ): string {
-  const body = items
-    .map((item) => {
-      const itemVariables: Record<string, string> = { ...variables };
-      for (const [key, value] of Object.entries(item)) itemVariables[key] = escapeXmlValue(value);
-      return renderTemplate(definition.each, itemVariables);
-    })
-    .join(definition.join ?? "\n");
+  const join = definition.join ?? "\n";
+  const body =
+    items.length > 0
+      ? items
+          .map((item) => {
+            const itemVariables: Record<string, string> = { ...variables };
+            const escape = options.escapeItems ?? true;
+            for (const [key, value] of Object.entries(item)) {
+              itemVariables[key] = escape ? escapeXmlValue(value) : value;
+            }
+            return renderTemplate(definition.each, itemVariables);
+          })
+          .join(join)
+      : renderTemplate(definition.empty ?? "", variables);
   const parts = [
     definition.pre !== undefined ? renderTemplate(definition.pre, variables) : undefined,
     body,
     definition.post !== undefined ? renderTemplate(definition.post, variables) : undefined,
   ].filter((part): part is string => part !== undefined && part.length > 0);
-  return parts.join("\n");
+  return parts.join(join);
 }
 
 function parseVariables(value: unknown): Record<string, string> {
@@ -158,8 +205,7 @@ function parseSections(value: unknown): Record<string, SectionDefinition> {
   const sections: Record<string, SectionDefinition> = {};
   for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
     if (!SECTION_NAME_PATTERN.test(name)) throw new Error(`invalid section name: ${name}`);
-    sections[name] =
-      typeof entry === "string" ? entry : parseListSection(name, entry);
+    sections[name] = typeof entry === "string" ? entry : parseListSection(name, entry);
   }
   return sections;
 }
@@ -172,10 +218,14 @@ function parseListSection(name: string, value: unknown): ListSectionDefinition {
   if (typeof mapping.each !== "string" || mapping.each.length === 0) {
     throw new Error(`section ${name} must define a non-empty "each" template`);
   }
-  // v1 renders skills data only; other section names have no runtime data to
-  // iterate, so defining them would silently produce wrong output.
-  if (name !== "skills") throw new Error(`section ${name}: list sections support "skills" only`);
-  for (const key of ["pre", "join", "post"] as const) {
+  // Only sections with runtime data can be list sections; a list definition
+  // on any other name would silently produce wrong output.
+  if (!LIST_SECTION_NAMES.has(name)) {
+    throw new Error(
+      `section ${name}: list sections support skills, tools, rules, and project_context only`,
+    );
+  }
+  for (const key of ["pre", "join", "post", "empty"] as const) {
     const entry = mapping[key];
     if (entry !== undefined && typeof entry !== "string") {
       throw new Error(`section ${name}: ${key} must be a string`);
@@ -186,6 +236,7 @@ function parseListSection(name: string, value: unknown): ListSectionDefinition {
     each: mapping.each,
     ...(mapping.join !== undefined && { join: mapping.join as string }),
     ...(mapping.post !== undefined && { post: mapping.post as string }),
+    ...(mapping.empty !== undefined && { empty: mapping.empty as string }),
   };
 }
 

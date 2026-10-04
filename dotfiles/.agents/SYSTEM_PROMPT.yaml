@@ -1,41 +1,82 @@
 # Canonical system prompt template (deployed to ~/.agents/SYSTEM_PROMPT.yaml).
 #
-# Sections defined below replace the matching part of Pi's standard system
-# prompt. Sections left out keep Pi's wording byte-identical. Delete this file
-# (or every definition in it) to run on Pi's standard build entirely.
+# This file is the single source of the standard system prompt: every
+# required section is defined here and nothing falls back to hidden
+# defaults. The definitions below reproduce Pi's standard build
+# byte-identically, so customizing starts by editing this file.
+#
+# A missing required section (preamble, tools, rules, docs, skills, cwd,
+# project_context), a schema error, or an unknown {{VAR}} disables the whole
+# file: pi warns and runs its standard build.
 #
 # Syntax:
-#   {{VAR}}            variable substitution. Referencing an unknown variable
-#                      disables the whole file: pi falls back to its standard
-#                      build and shows a warning.
+#   {{VAR}}            variable substitution.
 #   sections.<name>    string: replaces the section text. `preamble` is the
 #                      untagged opening line; other names get
 #                      `<name>...</name>` wrapping. Unknown names append a new
 #                      section at the end.
-#   sections.skills    object with `each` (and optional `pre`, `join`, `post`):
-#                      rendered once per visible skill. Item fields are name,
-#                      description, filePath (XML-escaped). The default `each`
-#                      (omit `sections.skills`) reproduces Pi's wording
-#                      byte-identically.
+#   sections.<name>    list: { pre, each, join, post, empty } rendered per
+#                      runtime item. Supported on `tools` (fields: name,
+#                      description), `rules` (rule), `project_context` (path,
+#                      content), and `skills` (name, description, filePath;
+#                      XML-escaped). `join` separates both items and the
+#                      pre/body/post parts. `empty` replaces the item body
+#                      when the list is empty. `skills` and `project_context`
+#                      drop out when their list is empty.
 #
-# Runtime variables (frozen at run start, overriding variables below):
+# Runtime variables (frozen at run start):
 #   CODING_AGENT        harness name, always "pi" here
 #   FILE_READ_TOOL      "read" or "bash" — the tool that reads skill files
 #   SKILL_READ_PHRASE   "the read tool to load" / "bash to load"
 #   MODEL, PROVIDER     run's model id and provider, when known
+#   CWD                 run's working directory (backslashes normalized)
+#   README_PATH         installed pi's README path
+#   DOCS_PATH           installed pi's docs directory
+#   EXAMPLES_PATH       installed pi's examples directory
+#
+# `addendum` is intentionally not defined: pi fills it from
+# --append-system-prompt. Defining it here would pin that text.
 #
 # Spec: dotfiles/.pi/agent/extensions.exact/system-prompt/SPEC.md
 
 # variables:
 #   LANGUAGE: ja
 
-# sections:
-#   preamble: |
-#     You are an expert coding assistant operating inside {{CODING_AGENT}}.
-#   docs: |
-#     Pi documentation (read only when the user asks about pi itself).
-#   rules: |
-#     - Answer in {{LANGUAGE}}.
-#   skills:
-#     each: "- {{name}}: {{description}}"
-#     join: "\n"
+sections:
+  preamble: |-
+    You are an expert coding assistant operating inside {{CODING_AGENT}}, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+
+  tools:
+    each: "- {{name}}: {{description}}"
+    post: "\nIn addition to the tools above, you may have access to other custom tools depending on the project."
+    empty: "(none)"
+
+  rules:
+    each: "- {{rule}}"
+
+  docs: |-
+    Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
+    - Main documentation: {{README_PATH}}
+    - Additional docs: {{DOCS_PATH}}
+    - Examples: {{EXAMPLES_PATH}} (extensions, custom tools, SDK)
+    - When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
+    - When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)
+    - When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
+    - Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)
+
+  project_context:
+    pre: "Project-specific instructions and guidelines:"
+    each: "<project_instructions path=\"{{path}}\">\n{{content}}\n</project_instructions>"
+    join: "\n\n"
+
+  skills:
+    pre: |-
+      The following skills provide specialized instructions for specific tasks.
+      Use {{SKILL_READ_PHRASE}} a skill's file when the task matches its description.
+      When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.
+
+      <available_skills>
+    each: "  <skill>\n    <name>{{name}}</name>\n    <description>{{description}}</description>\n    <location>{{filePath}}</location>\n  </skill>"
+    post: "</available_skills>"
+
+  cwd: "{{CWD}}"

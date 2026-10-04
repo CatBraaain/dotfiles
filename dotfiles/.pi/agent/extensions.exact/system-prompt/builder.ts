@@ -56,11 +56,12 @@ function buildProjectContext(contextFiles: ReadonlyArray<{ path: string; content
   ].join("\n\n");
 }
 
-function buildRules(
+/** Compose the deduplicated rule lines Pi's rules section lists. */
+export function buildRuleLines(
   selectedTools: readonly string[],
   toolGuidelines: Readonly<Record<string, readonly string[]>>,
   promptGuidelines: readonly string[],
-) {
+): string[] {
   const rules: string[] = [];
   const seen = new Set<string>();
   const addRule = (rule: string) => {
@@ -91,7 +92,17 @@ function buildRules(
   for (const rule of promptGuidelines) addRule(rule);
   addRule("Be concise in your responses");
   addRule("Show file paths clearly when working with files");
-  return rules.map((rule) => `- ${rule}`).join("\n");
+  return rules;
+}
+
+function buildRules(
+  selectedTools: readonly string[],
+  toolGuidelines: Readonly<Record<string, readonly string[]>>,
+  promptGuidelines: readonly string[],
+) {
+  return buildRuleLines(selectedTools, toolGuidelines, promptGuidelines)
+    .map((rule) => `- ${rule}`)
+    .join("\n");
 }
 
 /** Build the ordered, independently replaceable sections of the structured system prompt. */

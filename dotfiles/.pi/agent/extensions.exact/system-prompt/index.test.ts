@@ -11,6 +11,9 @@
 //   nothing.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "bun:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SystemMessage, Tool } from "@earendil-works/pi-ai";
@@ -27,8 +30,12 @@ import systemPromptExtension, {
   type FoldedSystemState,
   type TemplateRunState,
 } from "./index.ts";
-import { buildSystemPrompt, buildSystemPromptSections } from "./builder.ts";
-import type { SystemPromptTemplate } from "./template.ts";
+import {
+  buildSystemPrompt,
+  buildSystemPromptSections,
+  normalizeBuildSystemPromptOptions,
+} from "./builder.ts";
+import { parseSystemPromptTemplate, type SystemPromptTemplate } from "./template.ts";
 
 const piPackageRootUrl = new URL("../", import.meta.resolve("@earendil-works/pi-coding-agent"));
 const oracle = await import(new URL("dist/core/system-prompt.js", piPackageRootUrl).href);
@@ -696,6 +703,87 @@ describe("intentional viewer triggers", () => {
       await commands[0]!.options.handler("", commandCtx.ctx);
       assert.equal(commandCtx.customCalls.length, 0);
     }
+  });
+});
+
+describe("canonical template file", () => {
+  /** The repo's canonical SYSTEM_PROMPT.yaml: four levels up is dotfiles/. */
+  function canonicalTemplate(): SystemPromptTemplate {
+    const canonicalPath = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../../.agents/SYSTEM_PROMPT.yaml",
+    );
+    return parseSystemPromptTemplate(readFileSync(canonicalPath, "utf8"));
+  }
+
+  it("reproduces the installed Pi's build byte-identically", () => {
+    const template = canonicalTemplate();
+    const optionSets: BuildSystemPromptOptions[] = [
+      richOptions(),
+      { cwd: "/w" },
+      { cwd: "/w", selectedTools: ["bash", "powershell"] },
+      { cwd: "C:\\Users\\user\\project" },
+      {
+        ...richOptions(),
+        selectedTools: ["bash"],
+        toolSnippets: { ...richOptions().toolSnippets, bash: "Execute commands" },
+      },
+      {
+        ...richOptions(),
+        appendSystemPrompt: "",
+        contextFiles: [
+          { path: "a.md", content: "a & b < c > \"d\" 'e'" },
+          { path: "sub/b.md", content: "line1\n\nline2" },
+        ],
+        skills: [
+          {
+            name: "code & review",
+            description: "Standards <tags> \"quoted\" 'apos'",
+            filePath: "/skills/code & review/SKILL.md",
+            baseDir: "/skills/code & review",
+            sourceInfo: {} as never,
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    ];
+    for (const raw of optionSets) {
+      const options = normalizeBuildSystemPromptOptions(raw);
+      const assembled = assembleHeadContent(
+        foldSystemMessages(transcriptFor(options)),
+        "",
+        options,
+        { template },
+      );
+      assert.equal(assembled, oracle.buildSystemPrompt(options));
+    }
+  });
+
+  it("keeps template list sections fresh across a mid-run tool change", () => {
+    const options = richOptions();
+    const grownOptions = {
+      ...options,
+      selectedTools: ["read", "edit", "bash"],
+      toolSnippets: { ...options.toolSnippets, bash: "Execute commands" },
+    };
+    const changed: FoldedSystemState = {
+      ...foldSystemMessages(transcriptFor(options)),
+      activeToolNames: grownOptions.selectedTools,
+    };
+    const assembled = assembleHeadContent(changed, "", grownOptions, {
+      template: canonicalTemplate(),
+    });
+    assert.match(
+      assembled,
+      /<tools>\n- read: Read files\n- edit: Edit files\n- bash: Execute commands\n\nIn addition to the tools above/,
+    );
+  });
+
+  it("drops template-owned project_context when no context files exist", () => {
+    const options = { ...richOptions(), contextFiles: [] };
+    const folded = foldSystemMessages(transcriptFor(options));
+    const assembled = assembleHeadContent(folded, "", options, { template: canonicalTemplate() });
+    assert.equal(assembled.includes("<project_context>"), false);
   });
 });
 

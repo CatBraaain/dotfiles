@@ -3,8 +3,8 @@
 pi がモデルへ送る system prompt の標準部分を、この拡張が保持する文面と組み立てから生成し、送信時に置き換える拡張の観測可能な振る舞いを定める。読者はこの spec だけを読んで内容を go/no-go するユーザーと、実装・検証の担当者。
 
 - 用語: run は 1 回のユーザー入力から応答完了までの処理単位。force run は、いずれかの拡張が run 開始時に system prompt 全文を指定した run。それ以外を通常 run と呼ぶ。標準部分は pi 本体が生成する system prompt 本文（固定文と tools・rules・docs・AGENTS・skills・cwd 等のセクション）。標準部分の後ろに他拡張が付けた文は追記と呼ぶ。
-- 正本テンプレート: `~/.agents/SYSTEM_PROMPT.yaml`（正本は `dotfiles/.agents/SYSTEM_PROMPT.yaml`）。セクションごとの文面を `{{VAR}}` テンプレートで置き換える正本ファイル。スキーマと DSL 仕様は下記「正本テンプレートの DSL」のとおり
-- 基準版: 現在インストールされている pi 本体の標準生成。初期状態のこの拡張は基準版と同一の文字列を生成する。正本テンプレートが存在しない、または正本にセクションを定義しない場合も基準版と同一になる
+- 正本テンプレート: `~/.agents/SYSTEM_PROMPT.yaml`（正本は `dotfiles/.agents/SYSTEM_PROMPT.yaml`）。標準部分の全必須セクションの文面を `{{VAR}}` テンプレートで定義する正本ファイル。スキーマと DSL 仕様は下記「正本テンプレートの DSL」のとおり
+- 基準版: 現在インストールされている pi 本体の標準生成。初期状態のこの拡張は基準版と同一の文字列を生成する。正本テンプレートが存在しない場合のみ基準版と同一になる。正本が存在するときは必須セクションの全定義が要件で、正本の文面が標準部分を全面的に決める
 
 ## 振る舞い
 
@@ -23,11 +23,11 @@ pi がモデルへ送る system prompt の標準部分を、この拡張が保�
 | UIなしモード（RPC・JSON・print）でセッション開始 | 何もしない | インジケータも全文表示も発生しない |
 | 閲覧表示中・インジケータ表示中 | prompt・tools・transcript を変更しない | 表示は読み取りのみ。閲覧の開閉によって送信内容や履歴は変わらない |
 | 拡張の文面・組み立て定義を編集 | 以降のリクエストへ反映する | 編集後の文面で生成される。pi 本体の更新では拡張の文面は変わらない |
-| セッション開始 / `~/.agents/SYSTEM_PROMPT.yaml` が存在 | 正本を読み込み、`sections` に定義したセクションを拡張の組み立てへ差し替える | 定義したセクションだけが正本文面になり、無定義のセクションは基準版と同一のまま |
-| 正本で YAML・スキーマ不正、または未定義変数を参照 | 正本全体を無視する | 基準版のまま動作し、UI があるモードでは警告を表示する（UI がないモードでは stderr へ警告する） |
+| セッション開始 / `~/.agents/SYSTEM_PROMPT.yaml` が存在 | 正本を読み込み、必須セクション（`preamble`・`tools`・`rules`・`docs`・`skills`・`cwd`・`project_context`）の全定義を検証した上で、`sections` の定義を拡張の組み立てへ差し替える | 定義したセクションが正本文面になり、無定義のセクション（`addendum` 等）は基準版と同一のまま |
+| 正本で YAML・スキーマ不正・必須セクション未定義、または未定義変数を参照 | 正本全体を無視する | 基準版のまま動作し、UI があるモードでは警告を表示する（UI がないモードでは stderr へ警告する） |
 | 正本でセクションを定義 / run 中に有効ツールが増減 | 定義セクションは正本文面を維持する | tools・rules の新鮮性ルールより正本を優先する |
 | 正本に無いセクション名（`[a-z][a-z0-9_-]*`）を定義 | 新規セクションとして末尾へ追加する | `<name>\n本文\n</name>` 形式。既存セクションの順序・内容は変わらない |
-| 正本で skills を定義 / モデルリクエストの送信直前 | `each` テンプレートを可視 skills へ反復適用する | 未定義なら基準版と同一。項目フィールドは `name`・`description`・`filePath` で、XML エスケープされる |
+| 正本でリストセクション（`tools`・`rules`・`project_context`・`skills`）を定義 / モデルリクエストの送信直前 | `each` テンプレートを run の対応データへ反復適用する。対応データは `tools` が有効ツール（`name`・`description`、生値、空なら `empty`）、`rules` が組み立て済みルール行（`rule`、生値）、`project_context` が context files（`path`・`content`、生値、空で脱落）、`skills` が可視 skills（`name`・`description`・`filePath`、XML エスケープ、空または read ツール不在で脱落） | `pre`・`join`・`post`・`empty` は任意。`join` は項目間と `pre`/本文/`post` 間の双方に効く。未定義なら基準版と同一 |
 | 正本で preamble を定義 | 冒頭文を正本文面へ置き換える | preamble は pi と同様にタグなしで出力される |
 
 run 開始後に skills の読み出しツールが read から bash へ切り替わる場合のみ、skills セクションの案内文が run 開始時の文言になる。
@@ -36,9 +36,10 @@ run 開始後に skills の読み出しツールが read から bash へ切り�
 
 ## 正本テンプレートの DSL
 
-- 構文は `{{VAR}}`（変数名は `[A-Za-z][A-Za-z0-9_]*`。ランタイム変数は慣習として大文字、skills 項目フィールドは `name`・`description`・`filePath`）のみ。ループ・条件分岐はない。反復は `sections.skills` を `each` 持ちオブジェクトにしたときだけ、拡張がランタイムデータへ `each` を適用する（`pre`・`join`・`post` は任意）
-- `sections` の値が文字列なら `{{VAR}}` 置換のみ。preamble はタグなし、他は `<name>` タグで囲まれる。反復対象データは v1 では skills のみ
-- ランタイム変数は run 開始時に凍結する: `CODING_AGENT`（pi 固定）、`FILE_READ_TOOL`（`read` または `bash`。skill ファイルを読める選択ツールがないときは未提供）、`SKILL_READ_PHRASE`（read なら `the read tool to load`、bash なら `bash to load`。pi の案内文の言い回し差異を吸収する）、`MODEL`・`PROVIDER`（run のコンテキストから取得できるときのみ）
+- 必須セクションは `preamble`・`tools`・`rules`・`docs`・`skills`・`cwd`・`project_context` の7つ。1つでも欠けると正本全体が無効になる（警告 + 基準版）。`addendum` は pi が `--append-system-prompt` から注入するため必須外で、正本で定義するとその文に固定される
+- 構文は `{{VAR}}`（変数名は `[A-Za-z][A-Za-z0-9_]*`。ランタイム変数は慣習として大文字、リスト項目フィールドは `name`・`description`・`filePath`・`rule`・`path`・`content`）のみ。ループ・条件分岐はない。反復は `sections.<name>` を `each` 持ちオブジェクトにしたときだけ、拡張がランタイムデータへ `each` を適用する。リストセクションは `tools`・`rules`・`project_context`・`skills` の4名のみ（`pre`・`join`・`post`・`empty` は任意）
+- `sections` の値が文字列なら `{{VAR}}` 置換のみ。preamble はタグなし、他は `<name>` タグで囲まれる
+- ランタイム変数は run 開始時に凍結する: `CODING_AGENT`（pi 固定）、`FILE_READ_TOOL`（`read` または `bash`。skill ファイルを読める選択ツールがないときは未提供）、`SKILL_READ_PHRASE`（read なら `the read tool to load`、bash なら `bash to load`。pi の案内文の言い回し差異を吸収する）、`MODEL`・`PROVIDER`（run のコンテキストから取得できるときのみ）、`CWD`（run の cwd、バックスラッシュをスラッシュへ正規化）、`README_PATH`・`DOCS_PATH`・`EXAMPLES_PATH`（実行中 pi の README・docs・examples のパス）
 - 正本ファイルの `variables` と同名のランタイム変数があるときはランタイム値を優先する
-- 正本の skills の `each` 初期値は基準版と同一出力になる。`builder.test.ts` がインストール済み pi との突き合わせを検証する。正本を編集したときだけ基準版から乖離する
+- 正本の既定文面（このリポジトリの `dotfiles/.agents/SYSTEM_PROMPT.yaml`）は基準版とバイト一致する。`builder.test.ts` が移植ビルダーを、`index.test.ts` が正本ファイルからの生成を、それぞれインストール済み pi との突き合わせで検証する。正本を編集したときだけ基準版から乖離する
 - 正本テンプレートの反映は送信時置換と同様に transcript を書き換えない。閲覧オーバーレイは pi 本体の実効プロンプト（ctx.getSystemPrompt()）を開くため、正本の反映は含まない

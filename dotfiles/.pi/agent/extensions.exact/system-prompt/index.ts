@@ -22,10 +22,12 @@
 // fallback when the order differs.
 //
 // On top of Pi's options, a canonical template file (`~/.agents/`
-// `SYSTEM_PROMPT.yaml`, see SPEC.md) can replace any section's text with
-// `{{VAR}}` templates. Template-owned sections always keep their template
-// build (even on mid-run tool changes), and template sections the transcript
-// does not carry yet are appended.
+// `SYSTEM_PROMPT.yaml`, see SPEC.md) owns the standard prompt's wording: it
+// must define every required section, and each definition (a `{{VAR}}`
+// template, or a list section over skills, tools, rules, or project_context
+// runtime data) replaces that section's build. Template-owned sections
+// always keep their template build (even on mid-run tool changes), and
+// template sections the transcript does not carry yet are appended.
 //
 // Separately from both request paths, every `session_start` shows a
 // collapsed indicator above the editor that summarizes the effective
@@ -47,7 +49,8 @@ import type {
   ExtensionContext,
   NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
-import { buildSystemPromptSections } from "./builder.ts";
+import { getDocsPath, getExamplesPath, getReadmePath } from "@earendil-works/pi-coding-agent";
+import { buildRuleLines, buildSystemPromptSections } from "./builder.ts";
 import { PROMPT_VIEW_SHORTCUT, setPromptIndicator, showSystemPromptViewer } from "./renderer.ts";
 import {
   buildRuntimeVariables,
@@ -166,7 +169,12 @@ async function onContextWithSystem(
   const head = event.messages[0];
   if (head?.role !== "system") return undefined;
   const folded = foldSystemMessages(event.messages);
-  const content = assembleHeadContent(folded, systemContentText(head.content), state.options, state);
+  const content = assembleHeadContent(
+    folded,
+    systemContentText(head.content),
+    state.options,
+    state,
+  );
   const messages = event.messages.map((message, index) =>
     index === 0 ? { ...head, content, sections: undefined } : message,
   );
@@ -204,7 +212,9 @@ export function assembleHeadContent(
   run?: TemplateRunState,
 ): string {
   const own = buildOwnSections(options, run);
-  const templateNames = new Set(run?.template === undefined ? [] : Object.keys(run.template.sections));
+  const templateNames = new Set(
+    run?.template === undefined ? [] : Object.keys(run.template.sections),
+  );
   const toolsUnchanged = sameToolList(folded.activeToolNames, options.selectedTools);
   const parts = [headContentText];
   for (const [name, piText] of folded.sections) {
@@ -247,10 +257,73 @@ function isOwnedByOtherExtension(
 }
 
 /**
+ * Runtime items of a template list section, with the per-section render
+ * rules that mirror Pi's own build of that section.
+ */
+interface ListSectionData {
+  items: readonly Record<string, string>[];
+  /** Skills fields are XML-escaped like Pi's; other sections interpolate raw. */
+  escapeItems: boolean;
+  /** Pi omits these sections entirely when their list is empty. */
+  dropWhenEmpty: boolean;
+}
+
+/** Build the runtime items a template list section renders. */
+function buildListSectionData(
+  name: string,
+  options: NormalizedBuildSystemPromptOptions,
+  fileReadTool: "read" | "bash" | undefined,
+): ListSectionData | undefined {
+  switch (name) {
+    case "skills":
+      // Like Pi's build, skills vanish when no selected tool can read files.
+      if (fileReadTool === undefined) return undefined;
+      return {
+        items: options.skills
+          .filter((skill) => !skill.disableModelInvocation)
+          .map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            filePath: skill.filePath,
+          })),
+        escapeItems: true,
+        dropWhenEmpty: true,
+      };
+    case "tools":
+      return {
+        items: options.selectedTools
+          .filter((tool) => !!options.toolSnippets[tool])
+          .map((tool) => ({ name: tool, description: options.toolSnippets[tool] ?? "" })),
+        escapeItems: false,
+        dropWhenEmpty: false,
+      };
+    case "rules":
+      return {
+        items: buildRuleLines(
+          options.selectedTools,
+          options.toolGuidelines,
+          options.promptGuidelines,
+        ).map((rule) => ({ rule })),
+        escapeItems: false,
+        dropWhenEmpty: false,
+      };
+    case "project_context":
+      return {
+        items: options.contextFiles.map(({ path, content }) => ({ path, content })),
+        escapeItems: false,
+        dropWhenEmpty: true,
+      };
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Build the extension's sections from the run options, replacing entries the
- * canonical template owns. A template skills section renders from the run's
- * visible skills and drops out when no selected tool can read skill files or
- * no skill is visible, like Pi's build does.
+ * canonical template owns. String definitions render with the run variables;
+ * list definitions render from the run's matching runtime data. A template
+ * skills or project_context section drops out when its list is empty, like
+ * Pi's build does.
  */
 function buildOwnSections(
   options: NormalizedBuildSystemPromptOptions,
@@ -269,6 +342,10 @@ function buildOwnSections(
     fileReadTool,
     model: run?.model,
     provider: run?.provider,
+    cwd: options.cwd !== undefined ? options.cwd.replace(/\\/g, "/") : undefined,
+    readmePath: getReadmePath(),
+    docsPath: getDocsPath(),
+    examplesPath: getExamplesPath(),
   });
   const mergedVariables = { ...template.variables, ...variables };
   for (const [name, definition] of Object.entries(template.sections)) {
@@ -277,22 +354,15 @@ function buildOwnSections(
       sections[name] = name === "preamble" ? rendered : `<${name}>\n${rendered}\n</${name}>`;
       continue;
     }
-    // The only list section is skills (enforced at parse time); like Pi's
-    // build it drops out when no selected tool can read skill files or no
-    // skill is visible.
-    if (name !== "skills" || fileReadTool === undefined) continue;
-    const items = options.skills
-      .filter((skill) => !skill.disableModelInvocation)
-      .map((skill) => ({
-        name: skill.name,
-        description: skill.description,
-        filePath: skill.filePath,
-      }));
-    if (items.length === 0) {
-      delete sections.skills;
+    const data = buildListSectionData(name, options, fileReadTool);
+    if (data === undefined) continue;
+    if (data.dropWhenEmpty && data.items.length === 0) {
+      delete sections[name];
       continue;
     }
-    const rendered = renderListSection(definition, items, mergedVariables);
+    const rendered = renderListSection(definition, data.items, mergedVariables, {
+      escapeItems: data.escapeItems,
+    });
     sections[name] = `<${name}>\n${rendered}\n</${name}>`;
   }
   return sections;
@@ -324,7 +394,10 @@ function loadSystemPromptTemplate(ctx: ExtensionContext): SystemPromptTemplate |
   try {
     return parseSystemPromptTemplate(raw);
   } catch (error) {
-    warn(ctx, `Ignoring ${TEMPLATE_PATH}: ${error instanceof Error ? error.message : String(error)}`);
+    warn(
+      ctx,
+      `Ignoring ${TEMPLATE_PATH}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return undefined;
   }
 }
