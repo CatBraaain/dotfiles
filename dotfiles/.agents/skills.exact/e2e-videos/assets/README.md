@@ -143,3 +143,9 @@ Capture-precision limits (variable frame rate, ~60fps output not equal to the so
 Styles use an adopted stylesheet inside Shadow DOM, with an inline-important reset on the non-focusable, inert host. The shared implementation supports strict CSP without injecting a network script into the target page. Annotation elements are aria-hidden and pointer-transparent. Visibility hiding does not preserve site-wide element counts; remove the overlay for those assertions.
 
 Site JavaScript can still remove the host. Top-layer dialogs, root transforms/stacking contexts, non-Chromium engines and project-specific cross-origin frame policies require integration verification. This template does not assert universal compatibility. Navigation and new documents require caller-owned reinstall and state restoration.
+
+## Viewer template
+
+`viewer.html` is the dependency-free template for the step viewer saved as `recordings/index.html`. Replace the contents of `script#e2e-viewer-data` with the recording data as JSON and save the file next to the step videos. The JSON has the shape `{ title, steps: [{ number, action, expected, video }] }`; `video` paths are relative to `index.html`, and `number` follows the canonical step numbering in the project `SPEC.md`.
+
+The viewer lists the steps (number, action, expected), moves to the previous or next step, and replays the current step. Selecting a step stops the previous video and starts the selected one; ended videos do not advance automatically. All texts are in English. Colors inherit the annotation tokens, and the viewer follows `prefers-color-scheme` for dark display. Opening the template without injected data shows a notice instead of the viewer; `viewer.test.mjs` checks the placeholder, the absence of external references and the required controls.

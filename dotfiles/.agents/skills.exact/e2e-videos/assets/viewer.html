@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Recording viewer</title>
+    <style>
+      :root {
+        --bg: #f7f8fc;
+        --card: #ffffff;
+        --text: #171922;
+        --secondary: #495162;
+        --line: #d0d5df;
+        --chip: #5145cd;
+        --chip-ink: #f7f8fc;
+        --accent: #5145cd;
+        --accent-ink: #f7f8fc;
+        --shadow: rgba(23, 25, 34, 0.12);
+        --sans:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "Noto Sans CJK JP", sans-serif;
+        --mono:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          "Noto Sans Mono CJK JP", monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111318;
+          --card: #171a21;
+          --text: #f7f8fc;
+          --secondary: #b6bdc9;
+          --line: #414957;
+          --chip: #5145cd;
+          --chip-ink: #f7f8fc;
+          --accent: #b7afff;
+          --accent-ink: #171922;
+          --shadow: rgba(0, 0, 0, 0.4);
+        }
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 24px;
+        padding: 40px 24px 64px;
+      }
+      .wrap {
+        max-width: 1160px;
+        margin: 0 auto;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 8px 16px;
+      }
+      h1 {
+        font-size: 20px;
+        line-height: 28px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        overflow-wrap: anywhere;
+      }
+      .meta {
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--secondary);
+        font-variant-numeric: tabular-nums;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: 24px;
+        margin-top: 24px;
+        align-items: start;
+      }
+      @media (max-width: 920px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      ol {
+        list-style: none;
+        display: grid;
+        gap: 8px;
+      }
+      li button {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 12px;
+        text-align: left;
+        padding: 12px 14px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        cursor: pointer;
+        font: inherit;
+        color: inherit;
+        transition:
+          border-color 150ms,
+          box-shadow 150ms;
+      }
+      li button[aria-current="true"] {
+        border-color: var(--chip);
+        box-shadow: 0 0 0 1px var(--chip);
+      }
+      li button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 13px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        border: 1px solid var(--line);
+        color: var(--secondary);
+      }
+      li button[aria-current="true"] .num {
+        background: var(--chip);
+        border-color: var(--chip);
+        color: var(--chip-ink);
+      }
+      .step-body {
+        min-width: 0;
+      }
+      .action {
+        display: block;
+        font-weight: 600;
+        font-size: 14px;
+        line-height: 20px;
+        overflow-wrap: anywhere;
+      }
+      .expected {
+        display: block;
+        margin-top: 4px;
+        font-size: 13px;
+        line-height: 18px;
+        color: var(--secondary);
+        overflow-wrap: anywhere;
+      }
+
+      .stage {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        background: #000;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 4px 16px var(--shadow);
+      }
+      video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      .notice {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        text-align: center;
+        font-size: 14px;
+        line-height: 20px;
+        color: var(--secondary);
+        background: var(--card);
+      }
+      .detail {
+        margin-top: 16px;
+        display: grid;
+        gap: 6px;
+      }
+      .detail .row {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 12px;
+      }
+      .detail .row > span:first-child {
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 20px;
+        color: var(--secondary);
+      }
+      .detail .row > span:last-child {
+        font-size: 14px;
+        line-height: 20px;
+        overflow-wrap: anywhere;
+      }
+      .detail .row.expected > span:last-child {
+        font-weight: 600;
+      }
+      .controls {
+        margin-top: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .ctl {
+        font: inherit;
+        font-weight: 600;
+        font-size: 14px;
+        line-height: 20px;
+        padding: 10px 18px;
+        border-radius: 10px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        color: var(--text);
+        cursor: pointer;
+        transition:
+          border-color 150ms,
+          box-shadow 150ms;
+      }
+      .ctl:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .ctl:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .ctl.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+      }
+      .ctl.primary:disabled {
+        background: var(--card);
+        color: var(--text);
+      }
+      .footnote {
+        margin-top: 24px;
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--secondary);
+      }
+
+      .empty {
+        max-width: 560px;
+        margin: 64px auto 0;
+        padding: 24px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+      .empty h2 {
+        font-size: 16px;
+        line-height: 24px;
+        font-weight: 600;
+      }
+      .empty p {
+        margin-top: 8px;
+        font-size: 14px;
+        line-height: 22px;
+        color: var(--secondary);
+        overflow-wrap: anywhere;
+      }
+      .empty code {
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <script type="application/json" id="e2e-viewer-data">
+      __E2E_VIEWER_DATA__
+    </script>
+    <div class="wrap">
+      <header id="viewer-header" hidden>
+        <h1 id="viewer-title"></h1>
+        <p class="meta" id="viewer-meta"></p>
+      </header>
+      <main id="viewer-main" hidden>
+        <nav aria-label="Step list">
+          <ol id="step-list"></ol>
+        </nav>
+        <section aria-label="Current step">
+          <div class="stage">
+            <video id="video" controls preload="metadata"></video>
+            <div class="notice" id="stage-notice" hidden></div>
+          </div>
+          <div class="detail" id="step-detail"></div>
+          <div class="controls">
+            <button class="ctl" type="button" id="prev">Previous step</button>
+            <button class="ctl primary" type="button" id="replay">
+              Replay
+            </button>
+            <button class="ctl" type="button" id="next">Next step</button>
+          </div>
+          <p class="footnote">
+            This viewer is for reviewing recordings only. Read the automated
+            test outcome from the runner results; do not infer it from in-video
+            annotations.
+          </p>
+        </section>
+      </main>
+      <div class="empty" id="viewer-empty" hidden>
+        <h2>Recording data not found</h2>
+        <p id="empty-message"></p>
+      </div>
+    </div>
+    <script>
+      (() => {
+        const rawEl = document.getElementById("e2e-viewer-data");
+        const raw = rawEl ? rawEl.textContent.trim() : "";
+        let data = null;
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          data = null;
+        }
+        const valid = Boolean(
+          data && Array.isArray(data.steps) && data.steps.length > 0,
+        );
+
+        const header = document.getElementById("viewer-header");
+        const main = document.getElementById("viewer-main");
+        const empty = document.getElementById("viewer-empty");
+        const emptyMessage = document.getElementById("empty-message");
+
+        if (!valid) {
+          empty.hidden = false;
+          emptyMessage.textContent =
+            "The contents of script#e2e-viewer-data could not be read. Embed the recording data as JSON shaped { title, steps: [{ number, action, expected, video }] }.";
+          return;
+        }
+
+        empty.hidden = true;
+        header.hidden = false;
+        main.hidden = false;
+
+        const video = document.getElementById("video");
+        const stageNotice = document.getElementById("stage-notice");
+        const list = document.getElementById("step-list");
+        const detail = document.getElementById("step-detail");
+        const prev = document.getElementById("prev");
+        const replay = document.getElementById("replay");
+        const next = document.getElementById("next");
+        let current = 0;
+
+        function el(tag, className, textContent) {
+          const node = document.createElement(tag);
+          if (className) node.className = className;
+          if (textContent !== undefined) node.textContent = textContent;
+          return node;
+        }
+
+        function renderHeader() {
+          document.getElementById("viewer-title").textContent =
+            data.title || "Recording viewer";
+          document.getElementById("viewer-meta").textContent =
+            `${data.steps.length} steps`;
+        }
+
+        function renderList() {
+          list.textContent = "";
+          data.steps.forEach((step, index) => {
+            const li = el("li");
+            const button = el("button");
+            button.type = "button";
+            button.setAttribute("aria-current", String(index === current));
+            button.append(
+              el("span", "num", String(step.number ?? index + 1)),
+              (() => {
+                const body = el("span", "step-body");
+                body.append(
+                  el("span", "action", step.action ?? ""),
+                  el("span", "expected", step.expected ?? ""),
+                );
+                return body;
+              })(),
+            );
+            button.addEventListener("click", () =>
+              select(index, { autoplay: true }),
+            );
+            li.append(button);
+            list.append(li);
+          });
+        }
+
+        function renderDetail(step) {
+          detail.textContent = "";
+          const action = el("div", "row");
+          action.append(
+            el("span", "", "Action"),
+            el("span", "", step.action ?? ""),
+          );
+          const expected = el("div", "row expected");
+          expected.append(
+            el("span", "", "Expected"),
+            el("span", "", step.expected ?? ""),
+          );
+          detail.append(action, expected);
+        }
+
+        function updateButtons() {
+          prev.disabled = current === 0;
+          next.disabled = current === data.steps.length - 1;
+        }
+
+        function showStageNotice(message) {
+          video.hidden = true;
+          stageNotice.textContent = message;
+          stageNotice.hidden = false;
+        }
+
+        function showVideo() {
+          stageNotice.hidden = true;
+          video.hidden = false;
+        }
+
+        function startPlayback() {
+          const playing = video.play();
+          if (playing) playing.catch(() => {});
+        }
+
+        function select(index, { autoplay = false } = {}) {
+          if (index < 0 || index >= data.steps.length) return;
+          current = index;
+          const step = data.steps[index];
+          video.pause();
+          video.currentTime = 0;
+          if (step.video) {
+            showVideo();
+            video.src = step.video;
+            video.load();
+            if (autoplay) startPlayback();
+          } else {
+            video.removeAttribute("src");
+            showStageNotice(
+              "No video is set for this step. Check the video path in the recording data.",
+            );
+          }
+          renderList();
+          renderDetail(step);
+          updateButtons();
+        }
+
+        video.addEventListener("error", () => {
+          showStageNotice(
+            "Could not load the video. Check that the video exists relative to index.html.",
+          );
+        });
+
+        prev.addEventListener("click", () =>
+          select(current - 1, { autoplay: true }),
+        );
+        next.addEventListener("click", () =>
+          select(current + 1, { autoplay: true }),
+        );
+        replay.addEventListener("click", () => {
+          if (!video.getAttribute("src")) return;
+          showVideo();
+          video.currentTime = 0;
+          startPlayback();
+        });
+
+        window.addEventListener("keydown", (event) => {
+          if (event.key === "ArrowLeft")
+            select(current - 1, { autoplay: true });
+          else if (event.key === "ArrowRight")
+            select(current + 1, { autoplay: true });
+          else if (event.key === "r" || event.key === "R") replay.click();
+        });
+
+        renderHeader();
+        select(0);
+      })();
+    </script>
+  </body>
+</html>
