@@ -161,6 +161,9 @@ function renderDictionary(decl: Declaration): string {
   const mappings = [...buildEntries(decl)].map(([roma, kana]) => `${kana}\t${roma}\t1`);
   const sokuon = decl.sokuon_consonants.map((c) => `っ${c}\t${c}${c}\t1`);
   const longVowel = `ー\t${decl.long_vowel}\t1`;
+  // Sorted so the output order is deterministic and declaration edits do not
+  // shuffle line order (which would show up as block-sized diff hunks).
+  const records = [...mappings, ...sokuon, longVowel].sort();
   return [
     "# Rime dictionary",
     "# encoding: utf-8",
@@ -178,9 +181,7 @@ function renderDictionary(decl: Declaration): string {
     "  - code",
     "  - weight",
     "...",
-    ...mappings,
-    ...sokuon,
-    longVowel,
+    ...records,
     "",
   ].join("\n");
 }

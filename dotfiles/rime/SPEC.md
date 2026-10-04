@@ -277,7 +277,7 @@ Rime の選択スキーマは Kagiroi とする。ローマ字入力は Kagiroi 
 
 ## ローマ字表
 
-ローマ字からかなへの対応の正本は `dotfiles/rime/roma.data.yaml` の宣言である。`dotfiles/rime/roma.build.ts` が build 時に宣言から `kagiroi_dotfiles_romaji.dict.yaml` を生成し、辞書そのものをリポジトリに置かない。宣言は MS-IME 用の宣言（`undotfiles/ime/roma-table.yaml`）から独立しており、両者の一致は保証しない。Kagiroi 標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。宣言と Kagiroi 標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
+ローマ字からかなへの対応の正本は `dotfiles/rime/roma.data.yaml` の宣言である。`dotfiles/rime/roma.build.ts` が build 時に宣言から `kagiroi_dotfiles_romaji.dict.yaml` を生成し、辞書そのものをリポジトリに置かない。辞書本体のレコード行（`かな\tローマ字\t1` の行）は Unicode コードポイント順にソートして出力する。宣言の編集の仕方によらず出力行順を決定的に保つためであり、宣言の並び順は出力に反映されない。宣言は MS-IME 用の宣言（`undotfiles/ime/roma-table.yaml`）から独立しており、両者の一致は保証しない。Kagiroi 標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。宣言と Kagiroi 標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
 
 入力中は宣言に一致する綴りをかなへ変換する。入力中の未変換英字列全体が宣言に一致しないときも、末尾に一致する綴りがあれば最長のものをかなへ変換し、その前の英字を原文のまま残す。末尾にも一致する綴りがなければ英字列をそのまま表示する。たとえば `ka` は `か`、`fdsa` は `fdさ`、宣言にない `shi` は `sひ`、宣言にある `sha` は `しゃ` と表示される。
 
