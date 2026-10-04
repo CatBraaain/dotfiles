@@ -21,6 +21,12 @@
 // after it. See the implementation report for the load-order basis and the
 // fallback when the order differs.
 //
+// On top of Pi's options, a canonical template file (`~/.agents/`
+// `SYSTEM_PROMPT.yaml`, see SPEC.md) can replace any section's text with
+// `{{VAR}}` templates. Template-owned sections always keep their template
+// build (even on mid-run tool changes), and template sections the transcript
+// does not carry yet are appended.
+//
 // Separately from both request paths, every `session_start` shows a
 // collapsed indicator above the editor that summarizes the effective
 // prompt (size in characters and lines). The full viewer opens only through
@@ -29,16 +35,27 @@
 // renderer.ts. Both are display-only and leave the prompt, tools, and
 // transcript untouched.
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SystemMessage } from "@earendil-works/pi-ai";
 import type {
   BeforeAgentStartEvent,
   ContextWithSystemEvent,
   ExtensionAPI,
+  ExtensionContext,
   NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
-import { buildSystemPrompt, buildSystemPromptSections } from "./builder.ts";
+import { buildSystemPromptSections } from "./builder.ts";
 import { PROMPT_VIEW_SHORTCUT, setPromptIndicator, showSystemPromptViewer } from "./renderer.ts";
+import {
+  buildRuntimeVariables,
+  parseSystemPromptTemplate,
+  renderListSection,
+  renderTemplate,
+  type SystemPromptTemplate,
+} from "./template.ts";
 
 /** Prompt state of the current run, captured at `before_agent_start`. */
 interface RunPromptState {
@@ -46,9 +63,23 @@ interface RunPromptState {
   options: NormalizedBuildSystemPromptOptions;
   /** True when an earlier handler already forced the prompt for this run. */
   forced: boolean;
+  /** Canonical template captured for this run; undefined when unused. */
+  template?: SystemPromptTemplate;
+  /** Model id and provider captured from the run's context; may be unknown. */
+  model?: string;
+  provider?: string;
 }
 
+/** The parts of a run's state the section assembly needs. */
+export type TemplateRunState = Pick<RunPromptState, "template" | "model" | "provider">;
+
 let runState: RunPromptState | undefined;
+
+/** Canonical template loaded at `session_start`; undefined when unused. */
+let customTemplate: SystemPromptTemplate | undefined;
+
+/** Canonical template file location in the deployed home. */
+const TEMPLATE_PATH = join(homedir(), ".agents", "SYSTEM_PROMPT.yaml");
 
 /** Sections this extension builds from the run's structured prompt options. */
 const KNOWN_SECTIONS = new Set([
@@ -82,6 +113,8 @@ export default function systemPromptExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     // A new session invalidates the previous run's prompt options.
     runState = undefined;
+    // Reload the canonical template so edits land on the next session.
+    customTemplate = loadSystemPromptTemplate(ctx);
     // Show the collapsed prompt indicator; the full viewer never opens
     // automatically, only through the triggers registered below.
     setPromptIndicator(ctx);
@@ -104,12 +137,21 @@ export default function systemPromptExtension(pi: ExtensionAPI): void {
   pi.on("context_with_system", onContextWithSystem);
 }
 
-function onBeforeAgentStart(event: BeforeAgentStartEvent): { systemPrompt: string } | undefined {
+function onBeforeAgentStart(
+  event: BeforeAgentStartEvent,
+  ctx?: ExtensionContext,
+): { systemPrompt: string } | undefined {
   const options = event.systemPromptOptions;
   const forced = options.forceSystemPrompt;
-  runState = { options, forced: forced !== undefined };
+  runState = {
+    options,
+    forced: forced !== undefined,
+    template: customTemplate,
+    model: ctx?.model?.id,
+    provider: ctx?.model?.provider,
+  };
   if (forced === undefined) return undefined;
-  const own = buildSystemPrompt({ ...options, forceSystemPrompt: undefined });
+  const own = buildOwnPrompt({ ...options, forceSystemPrompt: undefined }, runState);
   return forced.startsWith(own) ? { systemPrompt: own + forced.slice(own.length) } : undefined;
 }
 
@@ -124,7 +166,7 @@ async function onContextWithSystem(
   const head = event.messages[0];
   if (head?.role !== "system") return undefined;
   const folded = foldSystemMessages(event.messages);
-  const content = assembleHeadContent(folded, systemContentText(head.content), state.options);
+  const content = assembleHeadContent(folded, systemContentText(head.content), state.options, state);
   const messages = event.messages.map((message, index) =>
     index === 0 ? { ...head, content, sections: undefined } : message,
   );
@@ -149,19 +191,30 @@ export function foldSystemMessages(messages: readonly AgentMessage[]): FoldedSys
 
 /**
  * Assemble the leading system message text from the folded sections and this
- * extension's build of the run options. Sections other extensions own
- * (custom sections, mid-run patches with unknown structure) keep Pi-built
- * text; known sections keep this extension's build.
+ * extension's build of the run options. Sections the canonical template owns
+ * always keep the template build; sections other extensions own (custom
+ * sections, mid-run patches with unknown structure) keep Pi-built text; the
+ * remaining known sections keep this extension's build, falling back to
+ * Pi-built text when the tool structure changed mid-run.
  */
 export function assembleHeadContent(
   folded: FoldedSystemState,
   headContentText: string,
   options: NormalizedBuildSystemPromptOptions,
+  run?: TemplateRunState,
 ): string {
-  const own = buildSystemPromptSections(options);
+  const own = buildOwnSections(options, run);
+  const templateNames = new Set(run?.template === undefined ? [] : Object.keys(run.template.sections));
   const toolsUnchanged = sameToolList(folded.activeToolNames, options.selectedTools);
   const parts = [headContentText];
   for (const [name, piText] of folded.sections) {
+    if (templateNames.has(name)) {
+      // The canonical text is the user's explicit intent, so it wins over
+      // both Pi's freshness rule and other extensions' ownership.
+      const ownText = own[name];
+      parts.push(ownText ?? piText);
+      continue;
+    }
     if (isOwnedByOtherExtension(name, options) || !KNOWN_SECTIONS.has(name)) {
       parts.push(piText);
       continue;
@@ -174,6 +227,14 @@ export function assembleHeadContent(
     const keepOwnBuild = !TOOL_DEPENDENT_SECTIONS.has(name) || toolsUnchanged;
     parts.push(keepOwnBuild ? ownText : piText);
   }
+  // Template sections the transcript does not carry yet (new names) append.
+  if (run?.template !== undefined) {
+    for (const [name, text] of Object.entries(own)) {
+      if (templateNames.has(name) && !folded.sections.has(name) && text.length > 0) {
+        parts.push(text);
+      }
+    }
+  }
   return parts.filter((part) => part.length > 0).join("\n\n");
 }
 
@@ -183,6 +244,94 @@ function isOwnedByOtherExtension(
   options: NormalizedBuildSystemPromptOptions,
 ): boolean {
   return options.sections[name] !== undefined;
+}
+
+/**
+ * Build the extension's sections from the run options, replacing entries the
+ * canonical template owns. A template skills section renders from the run's
+ * visible skills and drops out when no selected tool can read skill files or
+ * no skill is visible, like Pi's build does.
+ */
+function buildOwnSections(
+  options: NormalizedBuildSystemPromptOptions,
+  run?: TemplateRunState,
+): Record<string, string> {
+  const sections = buildSystemPromptSections(options);
+  const template = run?.template;
+  if (template === undefined) return sections;
+  const fileReadTool = options.selectedTools.includes("read")
+    ? ("read" as const)
+    : options.selectedTools.includes("bash")
+      ? ("bash" as const)
+      : undefined;
+  const variables = buildRuntimeVariables({
+    codingAgent: "pi",
+    fileReadTool,
+    model: run?.model,
+    provider: run?.provider,
+  });
+  const mergedVariables = { ...template.variables, ...variables };
+  for (const [name, definition] of Object.entries(template.sections)) {
+    if (typeof definition === "string") {
+      const rendered = renderTemplate(definition, mergedVariables);
+      sections[name] = name === "preamble" ? rendered : `<${name}>\n${rendered}\n</${name}>`;
+      continue;
+    }
+    // The only list section is skills (enforced at parse time); like Pi's
+    // build it drops out when no selected tool can read skill files or no
+    // skill is visible.
+    if (name !== "skills" || fileReadTool === undefined) continue;
+    const items = options.skills
+      .filter((skill) => !skill.disableModelInvocation)
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        filePath: skill.filePath,
+      }));
+    if (items.length === 0) {
+      delete sections.skills;
+      continue;
+    }
+    const rendered = renderListSection(definition, items, mergedVariables);
+    sections[name] = `<${name}>\n${rendered}\n</${name}>`;
+  }
+  return sections;
+}
+
+/** Join the extension's sections the way buildSystemPrompt joins Pi's. */
+function buildOwnPrompt(
+  options: NormalizedBuildSystemPromptOptions,
+  run?: TemplateRunState,
+): string {
+  const sections = buildOwnSections(options, run);
+  return Object.values(sections)
+    .filter((text) => text.length > 0)
+    .join("\n\n");
+}
+
+/**
+ * Load the canonical template file. A missing file means the feature is off;
+ * any parse or schema error ignores the whole file with a warning, keeping
+ * the session on Pi's standard build.
+ */
+function loadSystemPromptTemplate(ctx: ExtensionContext): SystemPromptTemplate | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(TEMPLATE_PATH, "utf8");
+  } catch {
+    return undefined;
+  }
+  try {
+    return parseSystemPromptTemplate(raw);
+  } catch (error) {
+    warn(ctx, `Ignoring ${TEMPLATE_PATH}: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+function warn(ctx: ExtensionContext, message: string): void {
+  if (ctx.hasUI) ctx.ui.notify(message, "warning");
+  else console.error(`[system-prompt] ${message}`);
 }
 
 function sameToolList(active: readonly string[], selected: readonly string[]): boolean {

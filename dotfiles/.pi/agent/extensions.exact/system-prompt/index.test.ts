@@ -25,8 +25,10 @@ import systemPromptExtension, {
   assembleHeadContent,
   foldSystemMessages,
   type FoldedSystemState,
+  type TemplateRunState,
 } from "./index.ts";
 import { buildSystemPrompt, buildSystemPromptSections } from "./builder.ts";
+import type { SystemPromptTemplate } from "./template.ts";
 
 const piPackageRootUrl = new URL("../", import.meta.resolve("@earendil-works/pi-coding-agent"));
 const oracle = await import(new URL("dist/core/system-prompt.js", piPackageRootUrl).href);
@@ -504,6 +506,49 @@ describe("foldSystemMessages and assembleHeadContent", () => {
     const folded = foldSystemMessages(transcriptFor(options));
     const assembled = assembleHeadContent(folded, "existing head text", options);
     assert.match(assembled, /^existing head text\n\n/);
+  });
+});
+
+describe("canonical template sections in assembleHeadContent", () => {
+  const template: SystemPromptTemplate = {
+    variables: { LANGUAGE: "ja" },
+    sections: {
+      preamble: "Custom preamble for {{CODING_AGENT}}.",
+      "extra-guidance": "Always answer in {{LANGUAGE}}.",
+    },
+  };
+
+  it("replaces template-owned sections and appends new ones", () => {
+    const options = richOptions();
+    const folded = foldSystemMessages(transcriptFor(options));
+    const assembled = assembleHeadContent(folded, "", options, { template });
+    assert.match(assembled, /^Custom preamble for pi\./);
+    assert.match(assembled, /\n\n<extra-guidance>\nAlways answer in ja\.\n<\/extra-guidance>$/);
+  });
+
+  it("keeps template-owned rules even when the tool list changed mid-run", () => {
+    const options = richOptions();
+    const folded = foldSystemMessages(transcriptFor(options));
+    // A mid-run tool change normally falls back to Pi-built text; the
+    // template's explicit text must survive it.
+    const changed: FoldedSystemState = { ...folded, activeToolNames: ["bash"] };
+    const assembled = assembleHeadContent(changed, "", options, {
+      template: { variables: {}, sections: { rules: "- canonical rule" } },
+    });
+    assert.match(assembled, /<rules>\n- canonical rule\n<\/rules>/);
+  });
+
+  it("renders a template skills section from the run's visible skills", () => {
+    const options = richOptions();
+    const folded = foldSystemMessages(transcriptFor(options));
+    const assembled = assembleHeadContent(folded, "", options, {
+      template: {
+        variables: {},
+        sections: { skills: { each: "- {{name}}: {{description}}" } },
+      },
+    });
+    assert.match(assembled, /<skills>\n- coding: Coding standards\n<\/skills>/);
+    assert.doesNotMatch(assembled, /<available_skills>/);
   });
 });
 

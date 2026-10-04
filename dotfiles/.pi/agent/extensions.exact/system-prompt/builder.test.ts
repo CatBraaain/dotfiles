@@ -13,9 +13,15 @@ import {
   formatSkillsForPrompt,
   normalizeBuildSystemPromptOptions,
 } from "./builder.ts";
+import {
+  DEFAULT_SKILLS_LIST,
+  buildRuntimeVariables,
+  renderListSection,
+} from "./template.ts";
 
 const piPackageRootUrl = new URL("../", import.meta.resolve("@earendil-works/pi-coding-agent"));
 const oracle = await import(new URL("dist/core/system-prompt.js", piPackageRootUrl).href);
+const skillsOracle = await import(new URL("dist/core/skills.js", piPackageRootUrl).href);
 
 function skill(partial: Partial<Skill>): Skill {
   return {
@@ -232,5 +238,36 @@ describe("normalizeBuildSystemPromptOptions port", () => {
       "edit",
       "write",
     ]);
+  });
+});
+
+describe("default skills template", () => {
+  const skills = [
+    skill({ name: "coding", description: "Coding standards for this repo" }),
+    skill({ name: "review", description: 'a & b "c" <d> \'e\'' }),
+  ];
+
+  function renderItem(s: Skill) {
+    return { name: s.name, description: s.description, filePath: s.filePath };
+  }
+
+  it("renders byte-identical to the installed Pi for the read tool", () => {
+    const rendered = renderListSection(
+      DEFAULT_SKILLS_LIST,
+      skills.map(renderItem),
+      buildRuntimeVariables({ codingAgent: "pi", fileReadTool: "read" }),
+    );
+    assert.equal(rendered, formatSkillsForPrompt(skills, "read").trim());
+    assert.equal(rendered, skillsOracle.formatSkillsForPrompt(skills, "read").trim());
+  });
+
+  it("renders byte-identical to the installed Pi for the bash tool", () => {
+    const rendered = renderListSection(
+      DEFAULT_SKILLS_LIST,
+      skills.map(renderItem),
+      buildRuntimeVariables({ codingAgent: "pi", fileReadTool: "bash" }),
+    );
+    assert.equal(rendered, formatSkillsForPrompt(skills, "bash").trim());
+    assert.equal(rendered, skillsOracle.formatSkillsForPrompt(skills, "bash").trim());
   });
 });

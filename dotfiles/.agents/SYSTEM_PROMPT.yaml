@@ -1,0 +1,41 @@
+# Canonical system prompt template (deployed to ~/.agents/SYSTEM_PROMPT.yaml).
+#
+# Sections defined below replace the matching part of Pi's standard system
+# prompt. Sections left out keep Pi's wording byte-identical. Delete this file
+# (or every definition in it) to run on Pi's standard build entirely.
+#
+# Syntax:
+#   {{VAR}}            variable substitution. Referencing an unknown variable
+#                      disables the whole file: pi falls back to its standard
+#                      build and shows a warning.
+#   sections.<name>    string: replaces the section text. `preamble` is the
+#                      untagged opening line; other names get
+#                      `<name>...</name>` wrapping. Unknown names append a new
+#                      section at the end.
+#   sections.skills    object with `each` (and optional `pre`, `join`, `post`):
+#                      rendered once per visible skill. Item fields are name,
+#                      description, filePath (XML-escaped). The default `each`
+#                      (omit `sections.skills`) reproduces Pi's wording
+#                      byte-identically.
+#
+# Runtime variables (frozen at run start, overriding variables below):
+#   CODING_AGENT        harness name, always "pi" here
+#   FILE_READ_TOOL      "read" or "bash" — the tool that reads skill files
+#   SKILL_READ_PHRASE   "the read tool to load" / "bash to load"
+#   MODEL, PROVIDER     run's model id and provider, when known
+#
+# Spec: dotfiles/.pi/agent/extensions.exact/system-prompt/SPEC.md
+
+# variables:
+#   LANGUAGE: ja
+
+# sections:
+#   preamble: |
+#     You are an expert coding assistant operating inside {{CODING_AGENT}}.
+#   docs: |
+#     Pi documentation (read only when the user asks about pi itself).
+#   rules: |
+#     - Answer in {{LANGUAGE}}.
+#   skills:
+#     each: "- {{name}}: {{description}}"
+#     join: "\n"
