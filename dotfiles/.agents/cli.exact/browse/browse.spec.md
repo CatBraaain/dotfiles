@@ -21,8 +21,11 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - camoufox server は `browse` 自身の内部サーバーモード（`browse __server`。usage には出ない）として起動する。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket 接続（1 接続 1 秒上限）で healthy を判定し、250ms 間隔で再プローブして 15 秒で断念する
 - camoufox server と `browse server start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
 - camoufox server は起動してポートの待受を確立した時点で、自身の PID を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/camoufox-server.pid` へ書く
-- playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search`、フェッチが `web-fetch` で、各実行の冒頭と終了時にセッションを閉じる
-- `search`・`fetch`・`server start`・`server restart` のCamoufox操作は共有ロックで直列化する。ロックは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。ロックの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで `flock(1)` の下へ再実行することで行う。`__locked` が直接渡された実行はロックを取得せずにコマンド本体を実行する。この再入は、ロック保持中の search / fetch が detached で server 起動を依頼するときに使う
+- playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search-<n>`、フェッチが `web-fetch-<n>`（`<n>` は render スロット番号。`flock(1)` が無い環境ではプロセスの PID）、server の機能ヘルスチェックが `web-health`（固定）で、各実行の冒頭と終了時にセッションを閉じる
+- camoufox を使う `search` と `fetch` は、render スロットセマフォ（既定 4 スロット）で並列実行する。スロットは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4 スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restart ロックの保持を探知し、server 再起動（`browse server restart`・render 復旧のいずれか）が進行していれば、まだ render を開始していない分はその完了まで让位する。これにより再起動はスロット待ちの先頭に割り込み、完了後、让位した待機がスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server 起動を依頼するときにも使う
+- `browse server restart` は restart ロックと 4 つすべての render スロットを `flock(1)` で獲得してから再起動する。実行中の render は完了まで、新規の render は再起動完了まで待たされる。`flock(1)` が無い環境では獲得せずに再起動する
+- render 復旧に伴う server 再起動は restart ロックで仲裁する。restart ロックを獲得した側は、自分の render スロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4 スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15 秒まで待つ
+- Reddit / StackOverflow の専用経路と `server start` は render スロットを取得しない
 
 ## 共通の振る舞い
 
@@ -33,8 +36,8 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | すべての backend が失敗した | 実行 | `All <operation> backends failed: <backend>: <error>; ...`（`<operation>` は `web search` または `web fetch`）を 1 行 stderr へ出力し、終了コード 1 で終わる |
 | render が abort される | 実行 | ページopen・closeによる機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で手動の `browse server restart` を案内する |
 | challenge / captcha を検出した | 実行 | 同一 backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
-| Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを1回だけ再起動してから新しいsessionで同じbackendを再試行する。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
-| `search` または `fetch` が同時に起動された | 実行 | Camoufoxを使う処理を共有ロックで直列化し、先に開始した実行の完了を待つ。Reddit / StackOverflowの専用経路もコマンド単位では待ち合わせる |
+| Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動はrestartロックで仲裁し、自分以外のrenderスロットの完了を待って再起動する。仲裁に負けた側は再起動を申請せず、再起動の完了を15秒まで待つ。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
+| `search` または camoufox 経路の `fetch` が同時に起動された | 実行 | 空いている render スロットで並列実行する（上限 4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server 再起動が進行を始めたら、未開始の待機は再起動に让位する（再起動が待ち行列の先頭に割り込む。render 開始済みの分は完了を待つだけ）。Reddit / StackOverflow の専用経路はスロットを取得せず待ち合わせない |
 | サブコマンドがない・未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード 1 で終わる |
 | 未知のフラグを渡した | 実行 | 対象サブコマンドの usage 行を stderr へ出力し、終了コード 1 で終わる |
 | 必須引数が不足している（位置引数 0 個） | 実行 | 対象サブコマンドの usage 行を stderr へ出力し、終了コード 1 で終わる |
@@ -47,7 +50,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 
 | 対象 | タイムアウト |
 | --- | --- |
-| server 起動待ち・セッション close | 15 秒 |
+| server 起動待ち・セッション close・restart ロック競合時の再起動完了待ち | 15 秒 |
 | `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10 秒 |
 | ページ open・ナビゲーション・DOM 取得 | 30 秒 |
 | openserp パース・trafilatura 変換・Reddit の各要求・StackOverflow の各要求 | 15 秒 |
@@ -103,6 +106,7 @@ hang した camoufox server の復旧用に、実行中の server を停止し�
 
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
+| 実行 | 排他 | restart ロックと 4 つすべての render スロットを `flock(1)` で獲得してから再起動する。`flock(1)` が無い環境では獲得せずに再起動する |
 | 実行 | 停止 | 停止対象は常に「PID ファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である。対象へ SIGTERM を送り、10 秒以内に終了しなければ SIGKILL する |
 | 停止後 | 実行 | `browse server start` と同じ手順で起動し直し、ready を待つ |
 | 実行中の server が無い | 実行 | 停止を飛ばして `browse server start` の手順で起動する |
@@ -172,8 +176,8 @@ markdown 出力の構造: 1 行目に `**Query:** "<query>" - **Engines:** <engi
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
 | 引数が絶対 URL でない | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
-| Reddit 投稿パーマリンク | フェッチ | RSS（コメント上限 500）→ embed → oEmbed の順で取得し、投稿本文とコメントを markdown で出力する（camoufox を使わない） |
-| StackOverflow 質問パーマリンク | フェッチ | StackExchange API（投票順・1 ページ 100 件で最大 500 件・`backoff` 指定時は指定秒待機）→ 質問フィードの順で取得し、質問と回答を markdown で出力する（camoufox を使わない） |
+| Reddit 投稿パーマリンク | フェッチ | RSS（コメント上限 500）→ embed → oEmbed の順で取得し、投稿本文とコメントを markdown で出力する（camoufox を使わないため render スロットも取得しない） |
+| StackOverflow 質問パーマリンク | フェッチ | StackExchange API（投票順・1 ページ 100 件で最大 500 件・`backoff` 指定時は指定秒待機）→ 質問フィードの順で取得し、質問と回答を markdown で出力する（camoufox を使わないため render スロットも取得しない） |
 | その他の URL | フェッチ | camoufox で描画し、trafilatura で markdown 化して出力する。renderがabort・timeout・切断した場合は、機能ヘルスチェックと必要なserver再起動を行った後、新しいsessionで同じURLを1回だけ再試行する |
 | Reddit / StackOverflow で全取得経路が失敗した | フェッチ | 共通の全 backend 失敗の振る舞いに従う。`<error>` は Reddit では `Unable to fetch Reddit post <postId> (RSS <status>)`（`<status>` は RSS 要求の HTTP status 番号。要求自体が失敗したときはそのエラー文言）、StackOverflow では `Unable to fetch StackOverflow question <questionId>` |
 

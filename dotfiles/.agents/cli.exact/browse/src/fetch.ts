@@ -15,6 +15,7 @@ import {
 } from "./camoufox";
 import {
   CAMOUFOX_FETCH_SESSION_KEY,
+  camoufoxSessionKey,
   REDDIT_TIMEOUT_MS,
   STACKOVERFLOW_TIMEOUT_MS,
 } from "./config";
@@ -42,11 +43,26 @@ import { delay, runWithStdin } from "./util";
 const SE_API_BASE_URL = "https://api.stackexchange.com/2.3";
 const STACKOVERFLOW_MAX_ANSWERS = 500;
 
+type FetchRoute = "reddit" | "stackoverflow" | "camoufox";
+
+// Single source of the fetch routing so main.ts can skip the render slot for
+// the camoufox-free dedicated paths (spec: Reddit / StackOverflow は render
+// スロットを取得しない).
+export function fetchRoute(url: string): FetchRoute {
+  if (parseRedditPostUrl(url)) return "reddit";
+  if (parseStackOverflowQuestionUrl(url)) return "stackoverflow";
+  return "camoufox";
+}
+
 function defaultFetchBackends(url: string): BackendEntry<string>[] {
-  if (parseRedditPostUrl(url)) return [["Reddit", () => fetchRedditMarkdown(url)]];
-  if (parseStackOverflowQuestionUrl(url))
-    return [["StackOverflow", () => fetchStackOverflowMarkdown(url)]];
-  return [["camoufox+trafilatura", () => camoufoxFetch(url)]];
+  switch (fetchRoute(url)) {
+    case "reddit":
+      return [["Reddit", () => fetchRedditMarkdown(url)]];
+    case "stackoverflow":
+      return [["StackOverflow", () => fetchStackOverflowMarkdown(url)]];
+    case "camoufox":
+      return [["camoufox+trafilatura", () => camoufoxFetch(url)]];
+  }
 }
 
 interface FetchFallback {
@@ -82,7 +98,7 @@ export async function fetchOne(url: string): Promise<FetchOutcome> {
 
 
 async function camoufoxFetch(url: string): Promise<string> {
-  const html = await camoufoxRender(url, CAMOUFOX_FETCH_SESSION_KEY);
+  const html = await camoufoxRender(url, camoufoxSessionKey(CAMOUFOX_FETCH_SESSION_KEY));
   return runWithStdin("trafilatura", ["--markdown"], html);
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import assert from "node:assert/strict";
 import * as camoufox from "./camoufox";
-import { CAMOUFOX_SEARCH_SESSION_KEY, openserpBaseUrl } from "./config";
+import { CAMOUFOX_SEARCH_SESSION_KEY, camoufoxSessionKey, openserpBaseUrl } from "./config";
 import { searchOne } from "./search";
 import * as server from "./server";
 
@@ -49,7 +49,9 @@ describe("searchOne result URLs", () => {
         url: relativeUrls[index]?.[1],
       })),
     );
-    assert.deepEqual(renderRequest.mock.calls, [[googleSearchUrl, CAMOUFOX_SEARCH_SESSION_KEY]]);
+    assert.deepEqual(renderRequest.mock.calls, [
+      [googleSearchUrl, camoufoxSessionKey(CAMOUFOX_SEARCH_SESSION_KEY)],
+    ]);
     assert.equal(parseRequest.mock.calls.length, 1);
     const [endpoint, request] = parseRequest.mock.calls[0]!;
     assert.equal(endpoint, `${openserpBaseUrl()}/google/parse?format=json`);

@@ -4,6 +4,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { RESTART_LOCK_FILE } from "./config";
+import { restartInFlight } from "./main";
 
 // The CLI project directory: spawned as `bun <projectDir>` so bun resolves
 // package.json's main field, exactly like the deployed `~/.agents/cli/browse`.
@@ -277,6 +279,53 @@ describe("browse display", () => {
         assert.equal(result.stderr.trim().split("\n").length, 1);
       }
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// The render queue yields to an in-flight restart (spec: 待機中と獲得の直後に
+// restart ロックの保持を探知し…让位する). The probe must report exactly the
+// restart lock's holder state: held → yield, free → proceed.
+describe("restart yield probing", () => {
+  if (process.platform === "win32") {
+    it.skip("requires flock(1)", () => {});
+    return;
+  }
+
+  it("reports an in-flight restart while the restart lock is held", async () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
+    const stateDir = join(root, "pi", "web-search");
+    mkdirSync(stateDir, { recursive: true });
+    const holder = spawn("flock", [join(stateDir, RESTART_LOCK_FILE), "sleep", "5"], {
+      stdio: "ignore",
+    });
+    const savedCacheHome = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = root;
+    try {
+      const deadline = Date.now() + 5_000;
+      while (!restartInFlight() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(restartInFlight(), true);
+    } finally {
+      holder.kill("SIGTERM");
+      if (savedCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = savedCacheHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports no restart when the restart lock is free", () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
+    mkdirSync(join(root, "pi", "web-search"), { recursive: true });
+    const savedCacheHome = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = root;
+    try {
+      assert.equal(restartInFlight(), false);
+    } finally {
+      if (savedCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = savedCacheHome;
       rmSync(root, { recursive: true, force: true });
     }
   });

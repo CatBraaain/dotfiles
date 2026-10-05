@@ -25,13 +25,18 @@ import { isCamoufoxServerCommand } from "./backends";
 import {
   CAMOUFOX_DEFAULT_BASE_URL,
   camoufoxBaseUrl,
+  currentSlotNumber,
+  FLOCK_CONFLICT_EXIT_CODE,
   LOCKED_SUBCOMMAND,
   OPENSERP_DEFAULT_BASE_URL,
   openserpBaseUrl,
+  RESTART_LOCK_FILE,
   SERVER_HEALTH_POLL_INTERVAL_MS,
   SERVER_STOP_TIMEOUT_MS,
   SERVER_SUBCOMMAND,
   SERVER_WAIT_TIMEOUT_MS,
+  slotLockFile,
+  SLOT_COUNT,
   stateDir,
   WEBSOCKET_HEALTH_TIMEOUT_MS,
 } from "./config";
@@ -76,9 +81,54 @@ export async function startCamoufoxServer(): Promise<void> {
 }
 
 // Spec: `browse server restart` は実行中の server を停止してから起動し直す。
+// 呼び出し元が排他を担う（`browse server restart` は restart ロック + 全スロット
+// の drain chain、render 復旧は recoverCamoufoxServer の仲裁 chain の下で本体と
+// して呼ぶ）。
 export async function restartCamoufoxServer(): Promise<void> {
   await stopCamoufoxServers();
   await startCamoufoxServer();
+}
+
+// --- render-recovery restart arbitration ---
+
+// Spec: render 復旧に伴う server 再起動は restart ロックで仲裁する。restart ロック
+// を獲得した側は、自分の render スロット以外を獲得してから再起動する（自身の
+// スロットは呼び出し元が保持中のため、4 スロットすべてが再起動中に排除される）。
+// 獲得できなかった側は再起動を申請せず、healthy を待つ。restart ロックは
+// 非ブロッキングでしか取らないため、複数の復旧や drain restart と循環待ちに
+// ならない。
+type RecoveryRestartOutcome = "won" | "lost" | "no-flock";
+
+function tryRunRecoveryRestart(): RecoveryRestartOutcome {
+  const stateDirPath = stateDir();
+  // flock(1) does not create the lock file's parent directory.
+  mkdirSync(stateDirPath, { recursive: true });
+  const mySlot = currentSlotNumber();
+  const args = [
+    "-n",
+    "-E",
+    String(FLOCK_CONFLICT_EXIT_CODE),
+    join(stateDirPath, RESTART_LOCK_FILE),
+  ];
+  for (let slot = 0; slot < SLOT_COUNT; slot++) {
+    if (slot === mySlot) continue;
+    args.push("flock", join(stateDirPath, slotLockFile(slot)));
+  }
+  // The re-entered `__locked server restart` runs the restart body directly.
+  args.push(process.execPath, projectDir, LOCKED_SUBCOMMAND, "server", "restart");
+  const result = spawnSync("flock", args, { stdio: "inherit", env: process.env });
+  if (result.error) return "no-flock"; // no flock(1): no parallelism to arbitrate
+  return result.status === FLOCK_CONFLICT_EXIT_CODE ? "lost" : "won";
+}
+
+// Recovery entry for the camoufox retry hook (the caller holds a render slot).
+export async function recoverCamoufoxServer(): Promise<void> {
+  const outcome = tryRunRecoveryRestart();
+  if (outcome === "won") return;
+  if (outcome === "no-flock") return restartCamoufoxServer();
+  // Another restart holds the lock: wait for the restarted server instead of
+  // queueing a second restart (spec: healthy を 15 秒まで待つ).
+  await waitForServerHealthy(camoufoxBaseUrl(), AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
 }
 
 // --- server bootstrap (health check -> spawn -> wait) ---

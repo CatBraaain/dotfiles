@@ -5,6 +5,7 @@ import { recoveryAttemptDuration, tryRecoveryBackends, type BackendEntry } from 
 import { camoufoxRender, recoverCamoufoxBeforeRetry, shouldRetryCamoufox } from "./camoufox";
 import {
   CAMOUFOX_SEARCH_SESSION_KEY,
+  camoufoxSessionKey,
   openserpBaseUrl,
   PARSE_TIMEOUT_MS,
   SERVER_WAIT_TIMEOUT_MS,
@@ -51,7 +52,7 @@ export async function searchOne(query: string, lang?: string): Promise<SearchOut
         const searchUrl = serpUrl(engine, query, lang);
         const results = await openserpParse(
           engine,
-          await camoufoxRender(searchUrl, CAMOUFOX_SEARCH_SESSION_KEY),
+          await camoufoxRender(searchUrl, camoufoxSessionKey(CAMOUFOX_SEARCH_SESSION_KEY)),
         );
         if (engine === "google") {
           for (const result of results) {
