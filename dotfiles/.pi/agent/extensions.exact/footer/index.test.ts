@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import type { SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import footerExtension, {
+  buildFooterLayout,
   buildFooterLines,
   collectUsageSummary,
+  createFooterComponent,
   formatCwdForFooter,
   formatTokens,
   type FooterRenderData,
 } from "./index";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 
 const plainTheme: Pick<Theme, "fg"> = {
   fg: (_color, text) => text,
@@ -228,5 +230,155 @@ describe("footer", () => {
       const withoutDim = line.replaceAll("\x1B[2m", "").replaceAll("\x1B[0m", "");
       assert.ok(!withoutDim.includes("\x1B"), `non-dim color used in: ${JSON.stringify(line)}`);
     }
+  });
+});
+
+const SESSION_ID = "12345678-1234-1234-1234-abcdefabcdef";
+
+function clickEvent(x: number, y = 0): TuiMouseEvent {
+  return {
+    type: "click",
+    button: "left",
+    x,
+    y,
+    screenX: x,
+    screenY: y,
+    width: 140,
+    height: 3,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+}
+
+describe("buildFooterLayout", () => {
+  it("session セグメントの表示範囲とコピー対象を返す", () => {
+    const layout = buildFooterLayout(140, renderData(), plainTheme);
+    const segment = layout.sessionSegment;
+
+    assert.ok(segment);
+    assert.equal(segment.line, 0);
+    assert.equal(segment.text, SESSION_ID);
+    assert.equal(layout.lines[0]!.slice(segment.startX, segment.endX), `session: ${SESSION_ID}`);
+    const locationWidth = visibleWidth("/workspace/project (main)");
+    assert.ok(segment.startX >= locationWidth + 2);
+    assert.ok(segment.endX <= 140);
+  });
+
+  it("session 表示が切り詰められた場合は表示範囲だけがヒット範囲になる", () => {
+    const layout = buildFooterLayout(36, renderData(), plainTheme);
+    const segment = layout.sessionSegment;
+
+    assert.ok(segment);
+    assert.equal(layout.lines[0]!.slice(segment.startX, segment.endX), "session: ");
+    assert.equal(segment.text, SESSION_ID);
+  });
+});
+
+describe("session ID click to copy", () => {
+  function createComponent(options: {
+    notify: (message: string, type?: "info" | "warning" | "error") => void;
+    copyText?: (text: string) => Promise<void>;
+  }) {
+    const ctx = {
+      model: undefined,
+      thinkingLevel: "off",
+      getContextUsage: () => undefined,
+      sessionManager: {
+        getCwd: () => "/workspace/project",
+        getSessionName: () => undefined,
+        getSessionId: () => SESSION_ID,
+        getEntries: () => [],
+      },
+      ui: { notify: options.notify },
+    } as never;
+    const footerData = {
+      getGitBranch: () => "main",
+      getAvailableProviderCount: () => 1,
+      getExtensionStatuses: () => new Map(),
+      onBranchChange: () => () => {},
+    } as never;
+    const component = createFooterComponent(ctx, plainTheme, footerData, {
+      copyText: options.copyText ?? (async () => {}),
+    });
+    component.render(140);
+    return component;
+  }
+
+  it("セグメント内クリックで session ID をコピーし handled を返す", async () => {
+    let copied: string | undefined;
+    let notified: { message: string; type?: string } | undefined;
+    const copied$ = new Promise<void>((resolve) => {
+      const component = createComponent({
+        notify: (message, type) => {
+          notified = { message, type };
+          resolve();
+        },
+        copyText: async (text) => {
+          copied = text;
+        },
+      });
+      const segment = buildFooterLayout(140, renderData(), plainTheme).sessionSegment!;
+      const result = component.handleMouse(clickEvent(segment.startX));
+
+      assert.deepEqual(result, { handled: true });
+    });
+
+    await copied$;
+    assert.equal(copied, SESSION_ID);
+    assert.deepEqual(notified, { message: "Session ID copied to clipboard", type: undefined });
+  });
+
+  it("セグメント外クリックではコピーせず handled も返さない", () => {
+    const notifications: string[] = [];
+    let copyCalls = 0;
+    const component = createComponent({
+      notify: (message) => notifications.push(message),
+      copyText: async () => {
+        copyCalls += 1;
+      },
+    });
+    const segment = buildFooterLayout(140, renderData(), plainTheme).sessionSegment!;
+
+    assert.equal(component.handleMouse(clickEvent(segment.startX - 1)), undefined);
+    assert.equal(component.handleMouse(clickEvent(segment.endX)), undefined);
+    assert.equal(component.handleMouse(clickEvent(segment.startX, 1)), undefined);
+    assert.equal(copyCalls, 0);
+    assert.deepEqual(notifications, []);
+  });
+
+  it("右ボタンクリックではコピーしない", () => {
+    let copyCalls = 0;
+    const component = createComponent({
+      notify: () => {},
+      copyText: async () => {
+        copyCalls += 1;
+      },
+    });
+    const segment = buildFooterLayout(140, renderData(), plainTheme).sessionSegment!;
+    const rightClick = { ...clickEvent(segment.startX), button: "right" as const };
+
+    assert.equal(component.handleMouse(rightClick), undefined);
+    assert.equal(copyCalls, 0);
+  });
+
+  it("コピー失敗時はエラー通知する", async () => {
+    const notified: Array<{ message: string; type?: string }> = [];
+    const notified$ = new Promise<void>((resolve) => {
+      const component = createComponent({
+        notify: (message, type) => {
+          notified.push({ message, type });
+          resolve();
+        },
+        copyText: async () => {
+          throw new Error("no clipboard");
+        },
+      });
+      const segment = buildFooterLayout(140, renderData(), plainTheme).sessionSegment!;
+      component.handleMouse(clickEvent(segment.startX));
+    });
+
+    await notified$;
+    assert.deepEqual(notified, [{ message: "Copy failed: no clipboard", type: "error" }]);
   });
 });

@@ -6,7 +6,9 @@ import type {
   SessionEntry,
   Theme,
 } from "@earendil-works/pi-coding-agent";
+import { copyToClipboard } from "@earendil-works/pi-coding-agent";
 import { relative, resolve, sep, isAbsolute } from "node:path";
+import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Usage } from "@earendil-works/pi-ai";
 
@@ -120,7 +122,20 @@ function sanitizeStatusText(text: string): string {
     .trim();
 }
 
-function rightAlignedLine(left: string, right: string, width: number): string {
+interface RightSegmentRange {
+  /** Inclusive visible start column of the right-aligned segment. */
+  startX: number;
+  /** Exclusive visible end column of the right-aligned segment. */
+  endX: number;
+}
+
+interface AlignedLine {
+  line: string;
+  /** Visible column range of the right-aligned segment, absent when it did not fit. */
+  rightRange?: RightSegmentRange;
+}
+
+function rightAlignedLine(left: string, right: string, width: number): AlignedLine {
   let availableLeft = left;
   if (visibleWidth(availableLeft) > width) {
     availableLeft = truncateToWidth(availableLeft, width, "...");
@@ -128,13 +143,15 @@ function rightAlignedLine(left: string, right: string, width: number): string {
 
   const leftWidth = visibleWidth(availableLeft);
   const availableForRight = width - leftWidth - MIN_LINE_PADDING;
-  if (availableForRight <= 0) return availableLeft;
+  if (availableForRight <= 0) return { line: availableLeft };
 
   const availableRight = truncateToWidth(right, availableForRight, "");
-  const padding = " ".repeat(
-    Math.max(MIN_LINE_PADDING, width - leftWidth - visibleWidth(availableRight)),
-  );
-  return availableLeft + padding + availableRight;
+  const rightWidth = visibleWidth(availableRight);
+  const padding = " ".repeat(Math.max(MIN_LINE_PADDING, width - leftWidth - rightWidth));
+  return {
+    line: availableLeft + padding + availableRight,
+    rightRange: { startX: leftWidth + visibleWidth(padding), endX: leftWidth + visibleWidth(padding) + rightWidth },
+  };
 }
 
 function contextDisplay(
@@ -194,21 +211,39 @@ function buildStatsLine(width: number, data: FooterRenderData, theme: FooterThem
       width,
     ),
   );
-  return rightAlignedLine(left, right, width);
+  return rightAlignedLine(left, right, width).line;
 }
 
-export function buildFooterLines(
+export interface ClickableSegment {
+  /** Zero-based line index within the footer lines. */
+  line: number;
+  /** Inclusive visible start column. */
+  startX: number;
+  /** Exclusive visible end column. */
+  endX: number;
+  /** Text to copy when the segment is clicked. */
+  text: string;
+}
+
+export interface FooterLayout {
+  lines: string[];
+  /** Clickable session ID region, absent when the session text did not fit. */
+  sessionSegment?: ClickableSegment;
+}
+
+export function buildFooterLayout(
   width: number,
   data: FooterRenderData,
   theme: FooterTheme,
-): string[] {
+): FooterLayout {
   const cwd = formatCwdForFooter(data.cwd, data.home);
   const branch = data.branch ? ` (${data.branch})` : "";
   const sessionName = data.sessionName ? ` • ${data.sessionName}` : "";
   const location = theme.fg("dim", `${cwd}${branch}${sessionName}`);
   const session = theme.fg("dim", `session: ${data.sessionId}`);
 
-  const lines = [rightAlignedLine(location, session, width), buildStatsLine(width, data, theme)];
+  const first = rightAlignedLine(location, session, width);
+  const lines = [first.line, buildStatsLine(width, data, theme)];
   const statuses = [...data.extensionStatuses.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([, text]) => sanitizeStatusText(text))
@@ -216,7 +251,68 @@ export function buildFooterLines(
   if (data.extensionStatuses.size > 0) {
     lines.push(theme.fg("dim", truncateToWidth(statuses, width, "...")));
   }
-  return lines;
+
+  const sessionSegment: ClickableSegment | undefined = first.rightRange
+    ? {
+        line: 0,
+        startX: first.rightRange.startX,
+        endX: first.rightRange.endX,
+        text: data.sessionId,
+      }
+    : undefined;
+  return sessionSegment ? { lines, sessionSegment } : { lines };
+}
+
+export function buildFooterLines(
+  width: number,
+  data: FooterRenderData,
+  theme: FooterTheme,
+): string[] {
+  return buildFooterLayout(width, data, theme).lines;
+}
+
+export interface FooterCopyDeps {
+  /** Copy implementation, injectable for tests. Defaults to the system clipboard. */
+  copyText?: (text: string) => Promise<void>;
+}
+
+/** Footer component that copies the session ID when the right-aligned segment is clicked. */
+export function createFooterComponent(
+  ctx: ExtensionContext,
+  theme: FooterTheme,
+  footerData: ReadonlyFooterDataProvider,
+  deps: FooterCopyDeps = {},
+): Component & {
+  dispose(): void;
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+} {
+  const copyText = deps.copyText ?? copyToClipboard;
+  let sessionSegment: ClickableSegment | undefined;
+
+  return {
+    dispose() {},
+    invalidate() {},
+    render(width) {
+      const layout = buildFooterLayout(width, getFooterRenderData(ctx, footerData), theme);
+      sessionSegment = layout.sessionSegment;
+      return layout.lines;
+    },
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+      if (event.type !== "click" || event.button !== "left" || !sessionSegment) return undefined;
+      const { line, startX, endX, text } = sessionSegment;
+      if (event.y !== line || event.x < startX || event.x >= endX) return undefined;
+
+      void copyText(text)
+        .then(() => ctx.ui.notify("Session ID copied to clipboard"))
+        .catch((error: unknown) =>
+          ctx.ui.notify(
+            `Copy failed: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          ),
+        );
+      return { handled: true };
+    },
+  };
 }
 
 function getFooterRenderData(
@@ -253,11 +349,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
     ctx.ui.setFooter((tui, theme, footerData) => {
       const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
       return {
+        ...createFooterComponent(ctx, theme, footerData),
         dispose: unsubscribe,
-        invalidate() {},
-        render(width) {
-          return buildFooterLines(width, getFooterRenderData(ctx, footerData), theme);
-        },
       };
     });
   });
