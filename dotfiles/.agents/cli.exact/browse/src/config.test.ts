@@ -1,6 +1,7 @@
 import { describe, it } from "bun:test";
 import { strict as assert } from "node:assert";
 import {
+  CAMOUFOX_HEALTH_SESSION_KEY,
   camoufoxSessionKey,
   currentSlotNumber,
   SLOT_COUNT,
@@ -25,12 +26,14 @@ describe("camoufoxSessionKey", () => {
     withSlotEnv("2", () => {
       assert.equal(camoufoxSessionKey("web-search"), "web-search-2");
       assert.equal(camoufoxSessionKey("web-fetch"), "web-fetch-2");
+      assert.equal(camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY), "web-health-2");
     });
   });
 
   it("falls back to the pid so concurrent runs never share a session without flock(1)", () => {
     withSlotEnv(undefined, () => {
       assert.equal(camoufoxSessionKey("web-fetch"), `web-fetch-${process.pid}`);
+      assert.equal(camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY), `web-health-${process.pid}`);
     });
   });
 

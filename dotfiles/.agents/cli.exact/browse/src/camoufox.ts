@@ -13,6 +13,7 @@ import {
 import {
   CAMOUFOX_HEALTH_SESSION_KEY,
   camoufoxBaseUrl,
+  camoufoxSessionKey,
   FUNCTIONAL_HEALTH_TIMEOUT_MS,
   RENDER_TIMEOUT_MS,
   SERVER_WAIT_TIMEOUT_MS,
@@ -109,14 +110,17 @@ export async function camoufoxServerResponsive(): Promise<boolean> {
   const baseUrl = camoufoxBaseUrl();
   if (!(await camoufoxServerHealthy(baseUrl, remainingSignal()))) return false;
   syncPlaywrightCliConfig();
+  // Spec: 機能ヘルスチェックのセッションキーにも render スロット番号が付き、
+  // 同時に走るヘルスチェックが同じセッションを共有しない。
+  const healthSessionKey = camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY);
   try {
     await runPlaywrightCli(
-      CAMOUFOX_HEALTH_SESSION_KEY,
+      healthSessionKey,
       ["close"],
       remainingSignal(),
     ).catch(() => {});
     await runPlaywrightCli(
-      CAMOUFOX_HEALTH_SESSION_KEY,
+      healthSessionKey,
       ["open", "about:blank"],
       remainingSignal(),
     );
@@ -125,7 +129,7 @@ export async function camoufoxServerResponsive(): Promise<boolean> {
     return false;
   } finally {
     await runPlaywrightCli(
-      CAMOUFOX_HEALTH_SESSION_KEY,
+      healthSessionKey,
       ["close"],
       remainingSignal(),
     ).catch(() => {});

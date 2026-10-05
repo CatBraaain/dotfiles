@@ -29,11 +29,10 @@ export const FUNCTIONAL_HEALTH_TIMEOUT_MS = 5_000;
 export const CAMOUFOX_DEFAULT_BASE_URL = "ws://127.0.0.1:9378/camoufox";
 export const OPENSERP_DEFAULT_BASE_URL = "http://127.0.0.1:7000";
 // Base names of the playwright-cli sessions; the render slot number (or the
-// pid when flock(1) is unavailable) is appended per run (camoufoxSessionKey).
+// pid when flock(1) is unavailable) is appended per run (camoufoxSessionKey),
+// so concurrent renders and functional health checks never share a session.
 export const CAMOUFOX_SEARCH_SESSION_KEY = "web-search";
 export const CAMOUFOX_FETCH_SESSION_KEY = "web-fetch";
-// Fixed key: the functional health check is coordinated by the restart lock
-// and never runs concurrently with renders.
 export const CAMOUFOX_HEALTH_SESSION_KEY = "web-health";
 // Internal subcommand that re-executes the whole CLI under a slot flock(1).
 export const LOCKED_SUBCOMMAND = "__locked";
