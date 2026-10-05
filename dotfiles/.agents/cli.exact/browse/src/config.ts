@@ -11,6 +11,16 @@ export const CONVERT_TIMEOUT_MS = 15_000;
 export const REDDIT_TIMEOUT_MS = 15_000;
 export const STACKOVERFLOW_TIMEOUT_MS = 15_000;
 export const SERVER_STOP_TIMEOUT_MS = 10_000;
+// Spec: yt-dlp による YouTube メタデータ・字幕の取得は 60 秒。
+export const YTDLP_TIMEOUT_MS = 60_000;
+// Spec: twikit_client.py の実行（login・ツイート・タイムライン・検索）は 120 秒。
+export const TWIKIT_TIMEOUT_MS = 120_000;
+// Spec: login の待ち合わせは poll 間隔 5 秒・上限 10 分。
+export const LOGIN_POLL_INTERVAL_MS = 5_000;
+export const LOGIN_WAIT_TIMEOUT_MS = 600_000;
+// Twitter 取得用の cookie と login 専用 session。
+export const TWITTER_COOKIE_FILE = "twitter-cookies.json";
+export const TWITTER_LOGIN_SESSION_KEY = "twitter-login";
 
 export const SERVER_HEALTH_POLL_INTERVAL_MS = 250;
 export const WEBSOCKET_HEALTH_TIMEOUT_MS = 1_000;

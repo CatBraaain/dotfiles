@@ -62,7 +62,7 @@ export async function camoufoxRender(url: string, sessionKey: string): Promise<s
   }
 }
 
-function runPlaywrightCli(
+export function runPlaywrightCli(
   sessionKey: string,
   args: string[],
   signal: AbortSignal,
@@ -90,8 +90,8 @@ function playwrightCliConfigPath(): string {
 
 // Spec: playwright-cli のブラウザは firefox で remote endpoint に camoufox を
 // 使う。CAMOUFOX_BASE_URL に合わせて config を最新化する（失敗時は既存 config
-// で続行）。
-function syncPlaywrightCliConfig(): void {
+// で続行）。login 経路（camoufoxRender を通らない）でも使うため export する。
+export function syncPlaywrightCliConfig(): void {
   try {
     writeFileSync(playwrightCliConfigPath(), playwrightCliConfigJson(camoufoxBaseUrl()));
   } catch {
@@ -165,18 +165,24 @@ function challengeWaitSnippet(): string {
 }
 
 function parseRenderedPage(output: string): string {
+  const { mode, html } = parseRunCodeResult<{ mode?: string; html?: string }>(output);
+  if (mode === "challenge") throw new Error("challenge detected");
+  if (typeof html !== "string" || !html) {
+    throw new Error("playwright-cli run-code returned no HTML");
+  }
+  return html;
+}
+
+// playwright-cli run-code prints the JSON literal of the snippet's return
+// value after a `### Result` heading; parse that literal.
+export function parseRunCodeResult<T>(output: string): T {
   const lines = output.split("\n");
   const resultIndex = lines.indexOf("### Result");
   const literal = resultIndex === -1 ? undefined : lines[resultIndex + 1];
   if (!literal || (!literal.startsWith('"') && !literal.startsWith("{"))) {
     throw new Error("playwright-cli run-code output has no result");
   }
-  const { mode, html } = JSON.parse(literal) as { mode?: string; html?: string };
-  if (mode === "challenge") throw new Error("challenge detected");
-  if (typeof html !== "string" || !html) {
-    throw new Error("playwright-cli run-code returned no HTML");
-  }
-  return html;
+  return JSON.parse(literal) as T;
 }
 
 function playwrightCliConfigJson(baseUrl: string): string {

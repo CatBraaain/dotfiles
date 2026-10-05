@@ -1,10 +1,16 @@
 // Output shaping: rank search results and shape the Markdown / JSON payloads
 // for the search and fetch commands.
 import type { FetchOutcome } from "./fetch";
+import { parseArxivUrl } from "./arxiv";
+import { parseGitHubUrl } from "./github";
+import { parseHackerNewsUrl } from "./hackernews";
 import { parseRedditPostUrl } from "./reddit";
 import type { SearchOutcome } from "./search";
 import type { OpenserpSearchResult } from "./serp";
 import { parseStackOverflowQuestionUrl } from "./stackoverflow";
+import { parseTweetUrl } from "./twitter";
+import { parseWikipediaUrl } from "./wikipedia";
+import { parseYouTubeUrl } from "./youtube";
 
 const SEARCH_RESULT_LIMIT = 10;
 
@@ -70,11 +76,17 @@ function titleFromMarkdown(markdown: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
-// Spec: `--json` の url は Reddit / StackOverflow の permalink に正規化。
+// Spec: `--json` の url は専用 backend の permalink に正規化。
 function normalizedFetchUrl(rawUrl: string): string {
   return (
     parseRedditPostUrl(rawUrl)?.permalink ??
     parseStackOverflowQuestionUrl(rawUrl)?.permalink ??
+    parseYouTubeUrl(rawUrl)?.permalink ??
+    parseTweetUrl(rawUrl)?.permalink ??
+    parseGitHubUrl(rawUrl)?.permalink ??
+    parseHackerNewsUrl(rawUrl)?.permalink ??
+    parseWikipediaUrl(rawUrl)?.permalink ??
+    parseArxivUrl(rawUrl)?.permalink ??
     rawUrl
   );
 }

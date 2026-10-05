@@ -60,6 +60,16 @@ export function runX11vncRequest(request: string, action: "show" | "hide"): void
   fail(`display ${action} failed: ${detail}`);
 }
 
+// Best-effort VNC open for `browse login twitter`: unlike `display show`, a
+// failure (no x11vnc, not controllable) must not abort the login flow.
+export function openVncQuietly(): boolean {
+  const result = spawnSync("x11vnc", ["-display", `:${DISPLAY_NUMBER}`, "-R", "nodeny"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return result.status === 0;
+}
+
 // Detached helper processes (Xvfb, x11vnc) outlive the server; a restart just
 // re-checks them instead of assuming they are gone.
 function spawnDetachedLog(command: string, args: readonly string[], logPath: string): void {

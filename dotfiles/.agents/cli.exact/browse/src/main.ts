@@ -6,6 +6,7 @@
 // Subcommands:
 //   browse search "<query>" [--lang <code>] [--json]
 //   browse fetch <url> [--json]
+//   browse login twitter   open x.com/login in camoufox and save cookies
 //   browse server start     ensure the camoufox server is running (idempotent)
 //   browse server restart   stop and respawn the camoufox server (hang recovery)
 //   browse display show|hide  toggle VNC display access
@@ -30,6 +31,7 @@ import {
 } from "./config";
 import { runX11vncRequest } from "./display";
 import { fetchOne, fetchRoute } from "./fetch";
+import { loginTwitter } from "./twitter-auth";
 import { fetchJson, formatSearchMarkdown, searchJson } from "./output";
 import { searchOne } from "./search";
 import {
@@ -135,6 +137,7 @@ function waitForRestartToFinish(): void {
 
 const USAGE = `usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
+       browse login twitter
        browse server start
        browse server restart
        browse display show
@@ -142,6 +145,7 @@ const USAGE = `usage: browse search "<query>" [--lang <code>] [--json]
 
 const SEARCH_USAGE = `usage: browse search "<query>" [--lang <code>] [--json]`;
 const FETCH_USAGE = `usage: browse fetch <url> [--json]`;
+const LOGIN_USAGE = `usage: browse login twitter`;
 const DISPLAY_USAGE = `usage: browse display show
        browse display hide`;
 const SERVER_USAGE = `usage: browse server start
@@ -208,6 +212,9 @@ async function main(): Promise<void> {
     case "fetch":
       await fetchCommand(rest);
       break;
+    case "login":
+      await loginCommand(rest);
+      break;
     case "server":
       await serverCommand(rest);
       break;
@@ -220,6 +227,15 @@ async function main(): Promise<void> {
     default:
       usageFail(USAGE);
   }
+}
+
+// Spec: login は camoufox を使うため、search / fetch と共有ロックで直列化する。
+async function loginCommand(argv: string[]): Promise<void> {
+  const [target, ...extra] = argv;
+  if (extra.length > 0 || target !== "twitter") usageFail(LOGIN_USAGE);
+  // Spec: login は camoufox を使うため、search / fetch と render スロットで
+  // 待ち合わせる。
+  await runInSlot(loginTwitter);
 }
 
 async function searchCommand(argv: string[]): Promise<void> {
@@ -239,9 +255,12 @@ async function fetchCommand(argv: string[]): Promise<void> {
     if (args.json) emitJson(fetchJson(args.url, outcome));
     else console.log(outcome.markdown);
   };
-  // Spec: Reddit / StackOverflow の専用経路は camoufox を使わないため render
-  // スロットを取得せず待ち合わせない。
-  if (fetchRoute(args.url) === "camoufox") await runInSlot(emit);
+  // Spec: Reddit / StackOverflow / YouTube / Twitter / Hacker News /
+  // Wikipedia / arXiv の専用経路は camoufox を使わないため render スロットを
+  // 取得せず待ち合わせない。GitHub は camoufox へのフォールバックを持つため
+  // 取得する。
+  const route = fetchRoute(args.url);
+  if (route === "camoufox" || route === "github") await runInSlot(emit);
   else await emit();
 }
 

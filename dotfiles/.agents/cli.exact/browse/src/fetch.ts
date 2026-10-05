@@ -1,4 +1,5 @@
-// Fetch pipeline: pick backends by URL (Reddit / StackOverflow / camoufox +
+// Fetch pipeline: pick backends by URL (YouTube / Twitter / GitHub / Hacker
+// News / Wikipedia / arXiv / Reddit / StackOverflow / RSS / camoufox +
 // trafilatura), fetch with retry and return the best Markdown payload.
 import {
   camoufoxFailureKind,
@@ -19,7 +20,20 @@ import {
   REDDIT_TIMEOUT_MS,
   STACKOVERFLOW_TIMEOUT_MS,
 } from "./config";
+import {
+  fetchArxivMarkdown,
+  parseArxivUrl,
+} from "./arxiv";
+import {
+  fetchGitHubMarkdown,
+  parseGitHubUrl,
+} from "./github";
 import { htmlFragmentToMarkdown, unescapeEntities } from "./html";
+import {
+  fetchHackerNewsMarkdown,
+  parseHackerNewsUrl,
+} from "./hackernews";
+import { fetchFeedMarkdown } from "./rss";
 import {
   parseRedditAtom,
   parseRedditEmbed,
@@ -38,19 +52,51 @@ import {
   type StackOverflowQuestion,
   type StackOverflowQuestionUrl,
 } from "./stackoverflow";
+import {
+  fetchTweetViaFxTwitter,
+  parseTweetUrl,
+  parseTwitterListUrl,
+} from "./twitter";
+import {
+  fetchTweetViaTwikit,
+  fetchTwitterListViaTwikit,
+} from "./twitter-auth";
+import {
+  fetchWikipediaMarkdown,
+  parseWikipediaUrl,
+} from "./wikipedia";
+import { fetchYouTubeMarkdown, parseYouTubeUrl } from "./youtube";
 import { delay, runWithStdin } from "./util";
 
 const SE_API_BASE_URL = "https://api.stackexchange.com/2.3";
 const STACKOVERFLOW_MAX_ANSWERS = 500;
 
-type FetchRoute = "reddit" | "stackoverflow" | "camoufox";
+type FetchRoute =
+  | "reddit"
+  | "stackoverflow"
+  | "youtube"
+  | "twitter"
+  | "twitter-list"
+  | "github"
+  | "hackernews"
+  | "wikipedia"
+  | "arxiv"
+  | "camoufox";
 
 // Single source of the fetch routing so main.ts can skip the render slot for
-// the camoufox-free dedicated paths (spec: Reddit / StackOverflow は render
-// スロットを取得しない).
+// the camoufox-free dedicated paths (spec: Reddit / StackOverflow / YouTube /
+// Twitter / Hacker News / Wikipedia / arXiv は render スロットを取得しない。
+// GitHub は camoufox へのフォールバックを持つため取得する).
 export function fetchRoute(url: string): FetchRoute {
   if (parseRedditPostUrl(url)) return "reddit";
   if (parseStackOverflowQuestionUrl(url)) return "stackoverflow";
+  if (parseYouTubeUrl(url)) return "youtube";
+  if (parseTweetUrl(url)) return "twitter";
+  if (parseTwitterListUrl(url)) return "twitter-list";
+  if (parseGitHubUrl(url)) return "github";
+  if (parseHackerNewsUrl(url)) return "hackernews";
+  if (parseWikipediaUrl(url)) return "wikipedia";
+  if (parseArxivUrl(url)) return "arxiv";
   return "camoufox";
 }
 
@@ -60,8 +106,32 @@ function defaultFetchBackends(url: string): BackendEntry<string>[] {
       return [["Reddit", () => fetchRedditMarkdown(url)]];
     case "stackoverflow":
       return [["StackOverflow", () => fetchStackOverflowMarkdown(url)]];
+    case "youtube":
+      return [["YouTube", () => fetchYouTubeMarkdown(url)]];
+    case "twitter":
+      return [
+        ["Twitter", () => fetchTweetViaFxTwitter(url)],
+        ["Twitter-twikit", () => fetchTweetViaTwikit(url)],
+      ];
+    case "twitter-list":
+      return [["Twitter-twikit", () => fetchTwitterListViaTwikit(url)]];
+    case "github":
+      return [
+        ["GitHub", () => fetchGitHubMarkdown(url)],
+        ["camoufox+trafilatura", () => camoufoxFetch(url)],
+      ];
+    case "hackernews":
+      return [["HackerNews", () => fetchHackerNewsMarkdown(url)]];
+    case "wikipedia":
+      return [["Wikipedia", () => fetchWikipediaMarkdown(url)]];
+    case "arxiv":
+      return [["arXiv", () => fetchArxivMarkdown(url)]];
     case "camoufox":
-      return [["camoufox+trafilatura", () => camoufoxFetch(url)]];
+      // Spec: 未知の URL は RSS → camoufox の順に試す。
+      return [
+        ["RSS", () => fetchFeedMarkdown(url)],
+        ["camoufox+trafilatura", () => camoufoxFetch(url)],
+      ];
   }
 }
 

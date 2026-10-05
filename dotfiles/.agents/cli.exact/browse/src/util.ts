@@ -32,12 +32,17 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export function runWithStdin(command: string, args: string[], input: string): Promise<string> {
+export function runWithStdin(
+  command: string,
+  args: string[],
+  input: string,
+  timeoutMs: number = CONVERT_TIMEOUT_MS,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(
       command,
       args,
-      { timeout: CONVERT_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+      { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout) => {
         if (error) reject(error);
         else resolve(stdout.trim());

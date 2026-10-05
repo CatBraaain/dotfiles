@@ -7,6 +7,7 @@ usage:
 ```
 usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
+       browse login twitter
        browse server start
        browse server restart
        browse display show
@@ -16,6 +17,9 @@ usage: browse search "<query>" [--lang <code>] [--json]
 ## 前提と依存
 
 - SERP 解析は openserp（既定 `http://127.0.0.1:7000`）に依存し、ブラウザ描画は camoufox（既定 `ws://127.0.0.1:9378/camoufox`）に依存する
+- YouTube のメタデータ・字幕取得は yt-dlp に依存する。PATH 上の yt-dlp を使い、無いときは `uvx yt-dlp@latest` で実行する。uv も無いときは YouTube backend が失敗し、後続の backend へ進む
+- Twitter のタイムライン・検索・リプライ取得は同梱の Python スクリプト `scripts/twikit_client.py`（twifork パッケージ）に依存し、`uv run --no-project` で起動する。cookie は `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/twitter-cookies.json` に保存する
+- GitHub API は `GITHUB_TOKEN` または `GH_TOKEN` 環境変数があれば認証付きで呼ぶ。discussions の GraphQL は token が必須で、無いときは GitHub backend が失敗する
 - `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` 環境変数で接続先を変更できる
 - openserp が未起動のときは `openserp serve` をバックグラウンド起動し、`/ready` 応答を 250ms 間隔で待ち、15 秒で断念する
 - camoufox server は `browse` 自身の内部サーバーモード（`browse __server`。usage には出ない）として起動する。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket 接続（1 接続 1 秒上限）で healthy を判定し、250ms 間隔で再プローブして 15 秒で断念する
@@ -25,7 +29,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - camoufox を使う `search` と `fetch` は、render スロットセマフォ（既定 4 スロット）で並列実行する。スロットは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4 スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restart ロックの保持を探知し、server 再起動（`browse server restart`・render 復旧のいずれか）が進行していれば、まだ render を開始していない分はその完了まで让位する。これにより再起動はスロット待ちの先頭に割り込み、完了後、让位した待機がスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server 起動を依頼するときにも使う
 - `browse server restart` は restart ロックと 4 つすべての render スロットを `flock(1)` で獲得してから再起動する。実行中の render は完了まで、新規の render は再起動完了まで待たされる。`flock(1)` が無い環境では獲得せずに再起動する
 - render 復旧に伴う server 再起動は restart ロックで仲裁する。restart ロックを獲得した側は、自分の render スロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4 スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15 秒まで待つ
-- Reddit / StackOverflow の専用経路と `server start` は render スロットを取得しない
+- Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路と `server start` は render スロットを取得しない。GitHub は camoufox へのフォールバックを持つため取得する
 
 ## 共通の振る舞い
 
@@ -37,7 +41,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | render が abort される | 実行 | ページopen・closeによる機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で手動の `browse server restart` を案内する |
 | challenge / captcha を検出した | 実行 | 同一 backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
 | Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動はrestartロックで仲裁し、自分以外のrenderスロットの完了を待って再起動する。仲裁に負けた側は再起動を申請せず、再起動の完了を15秒まで待つ。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
-| `search` または camoufox 経路の `fetch` が同時に起動された | 実行 | 空いている render スロットで並列実行する（上限 4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server 再起動が進行を始めたら、未開始の待機は再起動に让位する（再起動が待ち行列の先頭に割り込む。render 開始済みの分は完了を待つだけ）。Reddit / StackOverflow の専用経路はスロットを取得せず待ち合わせない |
+| `search` または camoufox 経路の `fetch` が同時に起動された | 実行 | 空いている render スロットで並列実行する（上限 4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server 再起動が進行を始めたら、未開始の待機は再起動に让位する（再起動が待ち行列の先頭に割り込む。render 開始済みの分は完了を待つだけ）。Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路はスロットを取得せず待ち合わせない。`login` は camoufox を使うためスロットを取得する |
 | サブコマンドがない・未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード 1 で終わる |
 | 未知のフラグを渡した | 実行 | 対象サブコマンドの usage 行を stderr へ出力し、終了コード 1 で終わる |
 | 必須引数が不足している（位置引数 0 個） | 実行 | 対象サブコマンドの usage 行を stderr へ出力し、終了コード 1 で終わる |
@@ -53,7 +57,9 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | server 起動待ち・セッション close・restart ロック競合時の再起動完了待ち | 15 秒 |
 | `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10 秒 |
 | ページ open・ナビゲーション・DOM 取得 | 30 秒 |
-| openserp パース・trafilatura 変換・Reddit の各要求・StackOverflow の各要求 | 15 秒 |
+| openserp パース・trafilatura 変換・Reddit の各要求・StackOverflow の各要求・GitHub API の各要求・Hacker News / Wikipedia / arXiv / RSS / fxtwitter の各要求 | 15 秒 |
+| yt-dlp による YouTube メタデータ・字幕の取得 | 60 秒 |
+| `twikit_client.py` の実行（login・ツイート・タイムライン・検索） | 120 秒 |
 | challenge 検出待ち | networkidle 待ち 5 秒・上限 5 秒（250ms 間隔で DOM ポーリング） |
 | server機能ヘルスチェック | ページopen・closeを含めて5秒 |
 | 再試行 | 1コマンドあたりserver復旧を伴う再試行は1回。challengeの再試行はbackendごとに1回 |
@@ -110,6 +116,19 @@ hang した camoufox server の復旧用に、実行中の server を停止し�
 | 実行 | 停止 | 停止対象は常に「PID ファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である。対象へ SIGTERM を送り、10 秒以内に終了しなければ SIGKILL する |
 | 停止後 | 実行 | `browse server start` と同じ手順で起動し直し、ready を待つ |
 | 実行中の server が無い | 実行 | 停止を飛ばして `browse server start` の手順で起動する |
+
+## `browse login twitter`
+
+共有 camoufox ブラウザで X (Twitter) に人間がログインし、後続の Twitter 取得用に cookie を保存するサブコマンド。X がパスワードログイン flow を廃止したため、CLI は認証情報を受け取らず人間のブラウザ操作に頼る。利用には X アカウントが必要で、スクレイピングはアカウント凍結リスクを伴うため捨てアカウントの使用を推奨する。
+
+| 条件・状態 | 操作 | 結果 |
+| --- | --- | --- |
+| 実行 | 準備 | render スロットを取得した上で camoufox server を確保し、session `twitter-login` で `https://x.com/login` を開く。x11vnc が利用可能なら VNC 接続受付を開く（`display show` と同じ要求。失敗時は無視して続行する） |
+| 準備後 | 待ち合わせ | 「ログイン待ち」である旨と `browse display show` の案内を stderr へ出力し、x.com / twitter.com の cookie に `auth_token` が現れるまで poll する。poll 間隔 5 秒、上限 10 分 |
+| `auth_token` を確認したら | 保存 | x.com / twitter.com の cookie を `twifork` の `load_cookies` が受け付ける `{name: value}` の flat JSON に変換し、`<XDG_CACHE_HOME または ~/.cache>/pi/web-search/twitter-cookies.json` に保存する |
+| 保存成功 | 終了 | `Logged in. Cookies saved to <path>` を1行 stdout へ出力し、終了コード 0 で終わる |
+| 上限の 10 分を過ぎた | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
+| 実行の冒頭と終了 | 実行 | `twitter-login` session を閉じる（cookie / ページ状態の持ち越し防止。冒頭の閉鎖失敗は無視） |
 
 ## `browse display show` / `browse display hide`
 
@@ -178,11 +197,42 @@ markdown 出力の構造: 1 行目に `**Query:** "<query>" - **Engines:** <engi
 | 引数が絶対 URL でない | 実行 | エラー 1 行を stderr へ出力し、終了コード 1 で終わる |
 | Reddit 投稿パーマリンク | フェッチ | RSS（コメント上限 500）→ embed → oEmbed の順で取得し、投稿本文とコメントを markdown で出力する（camoufox を使わないため render スロットも取得しない） |
 | StackOverflow 質問パーマリンク | フェッチ | StackExchange API（投票順・1 ページ 100 件で最大 500 件・`backoff` 指定時は指定秒待機）→ 質問フィードの順で取得し、質問と回答を markdown で出力する（camoufox を使わないため render スロットも取得しない） |
-| その他の URL | フェッチ | camoufox で描画し、trafilatura で markdown 化して出力する。renderがabort・timeout・切断した場合は、機能ヘルスチェックと必要なserver再起動を行った後、新しいsessionで同じURLを1回だけ再試行する |
+| YouTube 動画 URL（`youtube.com/watch`・`youtu.be/<id>`・`/shorts/<id>`） | フェッチ | yt-dlp でメタデータと字幕 URL（手動字幕を優先し自動字幕にフォールバック。ja → en の順で利用可能なもの）を取得し、字幕 VTT を plain text 化して description とともに markdown で出力する（camoufox を使わないため render スロットも取得しない） |
+| ツイート URL（`x.com/<user>/status/<id>` と twitter.com 同等形） | フェッチ | fxtwitter API（`api.fxtwitter.com/status/<id>`、ログイン不要）で本文・統計・メディア・引用ツイートを markdown で出力する。失敗したら twikit backend（cookie があればリプライも含む）を試す（render スロットを取得しない） |
+| ツイート URL で fxtwitter が失敗し cookie がある | フェッチ | twikit backend が `scripts/twikit_client.py tweet <id>` を実行し、本文とリプライを markdown で出力する |
+| Twitter ユーザーページ（`x.com/<user>`）・検索 URL（`x.com/search?q=<query>`） | フェッチ | twikit backend が `scripts/twikit_client.py user` / `search` を実行し、ツイート一覧を markdown で出力する。cookie が無いときはエラーになり後続 backend へ進む |
+| GitHub リポジトリ（`<owner>/<repo>`） | フェッチ | GitHub API でメタデータと README（base64 デコード）を markdown で出力する（camoufox へのフォールバックを持つため render スロットを取得する） |
+| GitHub issues / pull request URL | フェッチ | GitHub API で本文（issue comments、PR は review comments も含む）を markdown で出力する |
+| GitHub discussions URL | フェッチ | `GITHUB_TOKEN` / `GH_TOKEN` があれば GraphQL で本文とコメントを markdown で出力する。token が無いときは GitHub backend が失敗する |
+| GitHub 以外の GitHub URL（コード・リリース等） | フェッチ | GitHub backend は判別せず失敗し、camoufox 経路へ進む |
+| Hacker News アイテム URL | フェッチ | Algolia API（`hn.algolia.com/api/v1/items/<id>`）でタイトル・ポイント・コメントツリーを markdown で出力する（camoufox を使わないため render スロットも取得しない） |
+| Wikipedia 記事 URL（`<lang>.wikipedia.org/wiki/<title>`） | フェッチ | MediaWiki action API で plain text の本文を markdown で出力する（camoufox を使わないため render スロットも取得しない） |
+| arXiv abs URL（`arxiv.org/abs/<id>`） | フェッチ | arXiv API でタイトル・著者・カテゴリ・abstract を markdown で出力する（camoufox を使わないため render スロットも取得しない） |
+| その他の URL | フェッチ | render スロットを取得した上で、まず RSS backend が直接 fetch して RSS / Atom / RDF としてパースできるか試し、フィードとして成立すれば記事情報を markdown で出力する。成立しなければ camoufox で描画し、trafilatura で markdown 化して出力する。renderがabort・timeout・切断した場合は、機能ヘルスチェックと必要なserver再起動を行った後、新しいsessionで同じURLを1回だけ再試行する |
 | Reddit / StackOverflow で全取得経路が失敗した | フェッチ | 共通の全 backend 失敗の振る舞いに従う。`<error>` は Reddit では `Unable to fetch Reddit post <postId> (RSS <status>)`（`<status>` は RSS 要求の HTTP status 番号。要求自体が失敗したときはそのエラー文言）、StackOverflow では `Unable to fetch StackOverflow question <questionId>` |
 
 markdown 出力の構造（Reddit）: `# <title>`、`- Author:`、`- Permalink:`、`- Updated:`（feed の更新日時を取得できたときのみ出力）、`- Comments:`（常に出力。feed を取得できたときは `<n> fetched` または `<n> fetched / <m> displayed`、取得できなかったときは `unavailable`（embed から表示コメント数が取れるときは `unavailable (Reddit displays <m>)`））、`## Post`、`## Comments (<n> retrieved)`（feed を取得できたときのみ）、コメントは `### <番号>. <author>`。コメントのスコアと返信階層は RSS に無い旨の注記を入れる。
 
 markdown 出力の構造（StackOverflow）: `# <title>`、`- Author:` `- Permalink:`（API 成功時は `- Score:` `- Answers: <n> retrieved / <total> total` `- Tags:`）、`## Question`、`## Answers (<n> retrieved)`、回答は `### <番号>. <author> (accepted, score <n>)`。フィードのみで取得したときは、score・accepted・投票順が取れない旨の注記を入れる。
 
-`--json` のフィールド: `url`（Reddit / StackOverflow は permalink に正規化）、`backend`、`title`、`body`（markdown）、`tookMs`、`fallbacks`（先行試行が失敗したときだけ、`backend` と `error` の配列）。`title` は `body` の markdown 見出しから抽出する: 最初の `# <text>` 見出し、なければ最初の `## <数字>. <text>` / `### <数字>. <text>` 見出しのテキスト（前後の空白を除去）を使い、該当する見出しが無ければ `title` を省略する。`fallbacks` は同一 backend の再試行失敗と後続 backend の失敗を試行順に含み、成功した最終試行は含めない。
+markdown 出力の構造（StackOverflow）: `# <title>`、`- Author:` `- Permalink:`（API 成功時は `- Score:` `- Answers: <n> retrieved / <total> total` `- Tags:`）、`## Question`、`## Answers (<n> retrieved)`、回答は `### <番号>. <author> (accepted, score <n>)`。フィードのみで取得したときは、score・accepted・投票順が取れない旨の注記を入れる。
+
+markdown 出力の構造（YouTube）: `# <title>`、`- Channel:`、`- URL:`、`- Published:`（upload_date が取れたときのみ）、`- Duration:`、`- Views:`（取れたときのみ）、`## Description`、`## Transcript`（字幕がないときは `No subtitles available`）。
+
+markdown 出力の構造（ツイート）: `# <author name> (@<screen_name>)`、`- Posted:`（ISO 8601、取れたときのみ）、`- URL:`、`- Stats:`（likes・retweets・replies のうち取れたものを `, ` で連結）、`## Tweet`、メディアがあるときは本文の後に `- Media: <url>` を1行ずつ、投票があるときは `## Poll` に選択肢と票数、引用ツイートがあるときは `## Quoted tweet` に著者と本文。twikit backend のときは `## Replies (<n> retrieved)` と `### <番号>. <author> (@<screen_name>)` が続く。
+
+markdown 出力の構造（Twitter ユーザーページ・検索）: `# <header>`（ユーザーは `<name> (@<screen_name>)`、検索は `Twitter search: <query>`）、`- URL:`、cookie から取得した情報があれば補足、`## Tweets (<n> retrieved)`、ツイートは `### <番号>. <author> (@<screen_name>)` と本文、メディア URL があるときは `- Media: <url>`。
+
+markdown 出力の構造（GitHub リポジトリ）: `# <owner>/<repo>`、`- Author:`（owner login）、`- URL:`、`- Description:`（あれば）、`- Stars: <n>`、`- Language:`（あれば）、`## README`（raw README。無いときは `No README found`）。
+
+markdown 出力の構造（GitHub issues / pull request）: `# <title>`、`- Author:`、`- URL:`、`- State:`（PR は `open` / `closed` / `merged`）、`- Labels:`（あれば）、`## Body`、`## Comments (<n> retrieved)`、コメントは `### <番号>. <author>`。コメントは issue comments が先で、PR はその後に review comments が続く。discussions は `## Body` と `## Comments (<n> retrieved)` の構造を共通にする。
+
+markdown 出力の構造（Hacker News）: `# <title>`、`- Author:`、`- URL:`（リンク投稿のみ）、`- Points: <n>`、`- Comments: <n>`、`## Comments (<n> retrieved)`、コメントは `### <番号>. <author>` と本文。返信は `> ` の前置で1段ごとにインデントする。
+
+markdown 出力の構造（Wikipedia）: `# <title>`、`- URL:`、`- Summary:`（最初の段落、extract が取れたときのみ）、`## Article`（plain text 本文）。
+
+markdown 出力の構造（arXiv）: `# <title>`、`- Authors:`、`- URL:`、`- Published:`、`- Updated:`、`- Categories:`、`- Comments:`（あれば）、`## Abstract`。
+
+markdown 出力の構造（RSS）: `# <feed title>`、`- URL:`、`- Entries: <n> retrieved`、`## Entries (<n> retrieved)`、エントリは `### <番号>. <title>`、`- Author:`（あれば）、`- Published:`（あれば）、`- Link:`、本文（summary / content）。エントリは最大 20 件とする。
+
+`--json` のフィールド: `url`（Reddit / StackOverflow / ツイート / GitHub issues・pull / Hacker News / Wikipedia / arXiv は permalink に正規化）、`backend`、`title`、`body`（markdown）、`tookMs`、`fallbacks`（先行試行が失敗したときだけ、`backend` と `error` の配列）。`title` は `body` の markdown 見出しから抽出する: 最初の `# <text>` 見出し、なければ最初の `## <数字>. <text>` / `### <数字>. <text>` 見出しのテキスト（前後の空白を除去）を使い、該当する見出しが無ければ `title` を省略する。`fallbacks` は同一 backend の再試行失敗と後続 backend の失敗を試行順に含み、成功した最終試行は含めない。
