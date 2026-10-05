@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 const viewerSource = readFileSync(new URL("./viewer.html", import.meta.url), "utf8");
 const skillSource = readFileSync(new URL("../SKILL.md", import.meta.url), "utf8");
-const specSource = readFileSync(new URL("../SPEC.md", import.meta.url), "utf8");
+const specSource = readFileSync(new URL("./SPEC.md", import.meta.url), "utf8");
 
 const PLACEHOLDER = "__E2E_VIEWER_DATA__";
 const REQUIRED_IDS = [

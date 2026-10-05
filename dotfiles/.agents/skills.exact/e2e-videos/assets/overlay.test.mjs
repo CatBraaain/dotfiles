@@ -367,8 +367,17 @@ class ShimWorld {
   globals;
   /** @type {Record<string, unknown>} */
   previous;
-  /** @param {{reducedMotion?:boolean, viewport?:{width:number, height:number}}} options */
-  constructor({ reducedMotion = false, viewport = { width: 1920, height: 1080 } } = {}) {
+  /** @type {boolean} */
+  trustedTypesEnforced;
+  /** @type {string | null} */
+  shadowMarkup = null;
+  /** @param {{reducedMotion?:boolean, viewport?:{width:number, height:number}, trustedTypesEnforced?:boolean}} options */
+  constructor({
+    reducedMotion = false,
+    viewport = { width: 1920, height: 1080 },
+    trustedTypesEnforced = false,
+  } = {}) {
+    this.trustedTypesEnforced = trustedTypesEnforced;
     this.matchMedia = () => ({
       matches: reducedMotion,
       addEventListener() {},
@@ -450,6 +459,14 @@ class ShimWorld {
       querySelectorAll: (/** @type {string} */ selector) =>
         all().filter((node) => node.matchesClass(selector)),
     };
+    if (this.trustedTypesEnforced)
+      Object.defineProperty(shadow, "innerHTML", {
+        set: (/** @type {unknown} */ value) => {
+          if (typeof value === "string")
+            throw new TypeError("This document requires 'TrustedHTML' assignment.");
+          this.shadowMarkup = /** @type {{markup: string}} */ (value).markup;
+        },
+      });
     this.preparedShadow = shadow;
     const typedState = /** @type {import("./overlay.mjs").OverlayState} */ (state);
     const layout = installRecordingOverlay({
@@ -1146,6 +1163,50 @@ test("full scenario walks phases, step numbers and check resets", () => {
       },
     });
     assert.equal(text(".chip"), "3");
+  } finally {
+    world.restore();
+  }
+});
+
+test("Trusted Types enforcement installs markup through one reusable named policy", () => {
+  const world = new ShimWorld({ trustedTypesEnforced: true });
+  try {
+    const created = [];
+    world.window.trustedTypes = {
+      createPolicy: (/** @type {string} */ name) => {
+        created.push(name);
+        return { createHTML: (/** @type {string} */ value) => ({ markup: value }) };
+      },
+    };
+    installAt(world, baseState());
+    const reinstalled = world.install(baseState());
+    assert.deepEqual(created, ["recording-annotation-overlay"]);
+    assert.equal(world.shadowMarkup, overlayHtml);
+    assert.ok(reinstalled.overlay);
+  } finally {
+    world.restore();
+  }
+});
+
+test("absent enforcement keeps the direct string assignment", () => {
+  const world = new ShimWorld();
+  try {
+    const created = [];
+    world.window.trustedTypes = {
+      createPolicy: (/** @type {string} */ name) => created.push(name),
+    };
+    installAt(world, baseState());
+    assert.deepEqual(created, []);
+    assert.equal(currentShadow.innerHTML, overlayHtml);
+  } finally {
+    world.restore();
+  }
+});
+
+test("enforcement without the Trusted Types API surfaces the assignment error", () => {
+  const world = new ShimWorld({ trustedTypesEnforced: true });
+  try {
+    assert.throws(() => installAt(world, baseState()), /TrustedHTML/);
   } finally {
     world.restore();
   }

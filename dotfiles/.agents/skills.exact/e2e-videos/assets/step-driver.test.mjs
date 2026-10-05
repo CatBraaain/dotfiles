@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createStepDriver, recordingMetadata, TIMING } from "./step-driver.mjs";
 
-const spec = readFileSync(new URL("../SPEC.md", import.meta.url), "utf8");
+const spec = readFileSync(new URL("./SPEC.md", import.meta.url), "utf8");
 const driverSection = spec.split("## 録画ドライバ")[1].split("## ビューアと生成スクリプト")[0];
 const intervalSection = spec.split("### 時間の間隔")[1].split(/\n### /)[0];
 

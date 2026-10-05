@@ -28,7 +28,19 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
   const stylesheet = new CSSStyleSheet();
   stylesheet.replaceSync(css);
   shadow.adoptedStyleSheets = [stylesheet];
-  shadow.innerHTML = html;
+  // Sites enforcing Trusted Types (for example YouTube) reject string markup,
+  // so retry through one reusable named policy. Keep the direct assignment on
+  // everything else and never register a default policy.
+  const policyName = "recording-annotation-overlay";
+  try {
+    shadow.innerHTML = html;
+  } catch (error) {
+    if (!owner.trustedTypes) throw error;
+    const policy = (owner[policyName] ??= owner.trustedTypes.createPolicy(policyName, {
+      createHTML: (value) => value,
+    }));
+    shadow.innerHTML = policy.createHTML(html);
+  }
   document.documentElement.append(host);
   const root = element(".overlay");
   const motion = matchMedia("(prefers-reduced-motion: reduce)");

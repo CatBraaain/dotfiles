@@ -2,7 +2,11 @@
 
 このファイルは、e2e-videos skill の同梱 assets を保守するための正本であり、録画注釈とビューア・生成スクリプトについて、ユーザーが観測できる見た目・振る舞いを定義する。通常の録画に必要な入力・手順・利用側の責務は `SKILL.md` にあり、本書の読取を前提としない。対象プロジェクトの `SPEC.md` に置く録画シナリオとは別の正本である。
 
-同梱 assets（`overlay.html`・`overlay.css`・`overlay.mjs`）を編集したら、`design.html` の埋め込みも同じ内容に差し替えてから `assets/overlay.test.mjs` の同一性検査を通す。
+同梱 assets（`overlay.html`・`overlay.css`・`overlay.mjs`）を編集したら、`design.html` の埋め込みも同じ内容に差し替えてから `overlay.test.mjs` の同一性検査を通す。
+
+## 注釈の設置と Trusted Types
+
+注釈の設置は、録画する document への DOM オーバーレイ追加と `adoptedStyleSheets` のスタイル適用で行う。Trusted Types を強制するサイト（例: YouTube）でも設置でき、注釈の見た目・表示タイミングは強制のないサイトと変わらない。markup の代入は、強制のない document では文字列をそのまま行う。強制がある document では、渡した値をそのまま返す `createHTML` を持つ名前付き policy（`recording-annotation-overlay`）だけを通し、default policy は登録しない。policy は同一 document で 1 度だけ生成し、同一 document での設置し直しでも再生成しない。別 document への再設置では、その document で生成する。強制がある document で policy の生成が許されないときは、設置の失敗として制約を報告する。
 
 ## 操作と変化を見せる
 
@@ -220,7 +224,7 @@ label の位置は同一画面内では固定し、対象や注釈の変化で�
 
 ## 録画ドライバ
 
-録画ケースは、ステップの実行と注釈の更新を同梱の録画ドライバ（`assets/step-driver.mjs`）へ任せられる。ドライバは、単一 document 内のクリック・文字入力・キー操作・hover・スクロールの実操作を吸収し、ステップごとに「task anchor の実測採寸 → 注釈の予告 → 実操作の実値転送 → check の開始 → 結果枠の表示 → 視聴時間の待機」の順で実行する。ページ遷移・リロード・別タブ・iframe 内の操作・dialog・Playwright のキー送出で代行が必要なキー操作は録画ケース側の責務であり、ドライバへ含めない。録画ケースが直接行う操作も、この spec の注釈・時間・同期の規定に従う。
+録画ケースは、ステップの実行と注釈の更新を同梱の録画ドライバ（`step-driver.mjs`）へ任せられる。ドライバは、単一 document 内のクリック・文字入力・キー操作・hover・スクロールの実操作を吸収し、ステップごとに「task anchor の実測採寸 → 注釈の予告 → 実操作の実値転送 → check の開始 → 結果枠の表示 → 視聴時間の待機」の順で実行する。ページ遷移・リロード・別タブ・iframe 内の操作・dialog・Playwright のキー送出で代行が必要なキー操作は録画ケース側の責務であり、ドライバへ含めない。録画ケースが直接行う操作も、この spec の注釈・時間・同期の規定に従う。
 
 ドライバは録画セットのタイトルとステップの操作文・動画パスを 1 箇所の宣言（`{ title, steps }`）から読む。その宣言から、「ビューアと生成スクリプト」節の入力と同じ形状の `metadata.json` データ（`{ title, steps: [{ number, action, video }] }`、`number` は宣言順に 1 から採番）を生成できる。
 
@@ -242,7 +246,7 @@ label の位置は同一画面内では固定し、対象や注釈の変化で�
 
 ## ビューアと生成スクリプト
 
-`recordings` フォルダ直下の各 `<flow>` フォルダの録画データから、フロー切替つきステップビューアの単一 HTML（`recordings/index.html`）を生成する。ビューアはサーバーなしの `file://` で開ける。生成には同梱テンプレート `assets/viewer.html` を使い、ビューアの見た目・振る舞いの正本はこの節である。
+`recordings` フォルダ直下の各 `<flow>` フォルダの録画データから、フロー切替つきステップビューアの単一 HTML（`recordings/index.html`）を生成する。ビューアはサーバーなしの `file://` で開ける。生成には同梱テンプレート `viewer.html` を使い、ビューアの見た目・振る舞いの正本はこの節である。
 
 ### 入力: <flow>/metadata.json
 
@@ -254,7 +258,7 @@ label の位置は同一画面内では固定し、対象や注釈の変化で�
 
 ### 生成: index.html
 
-`node assets/build-viewer.mjs <recordings フォルダのパス>` を実行すると、`<recordings フォルダ>/index.html` を書き出す。
+`node build-viewer.mjs <recordings フォルダのパス>` を実行すると、`<recordings フォルダ>/index.html` を書き出す。
 
 - 埋め込む録画データは `{ flows: [{ id, title, steps: [{ number, action, video }] }] }` の形状である。`id` はフロー識別子、`number` はフロー内で配列順に 1 から採番する
 - ステップ動画は `index.html` からの相対パス（`<flow>/<metadata.json の video>`）で参照する
