@@ -119,6 +119,7 @@
 - bun: prettier
 - bun: prettier-markdown-table
 - uv: harlequin
+- uv: yt-dlp
 
 # Apps and SDKs
 - apt: chromium
