@@ -194,10 +194,9 @@ static void test_main_dictionary_imports_managed_custom_table(void) {
     rime->config_close(&dictionary);
 }
 
-/* SPEC: accepted n-run forms expose a candidate containing the reading's
- * dictionary word. Readings without a matching dictionary word (こにちは,
- * かんあ, かんだ, にゃ) are checked as preedit in test_n_run_preedit and
- * test_n_run_conversion_reading. */
+/* SPEC: readings with matching dictionary words expose those candidates.
+ * Revised literal substitutions are asserted as readings in
+ * test_n_run_preedit and test_n_run_conversion_reading, not as folded words. */
 static void test_n_run_correction(void) {
     static const struct {
         const char* input;
@@ -205,8 +204,6 @@ static void test_n_run_correction(void) {
     } cases[] = {
         {"kanji", "漢字"},
         {"kannji", "漢字"},
-        {"kannnji", "漢字"},
-        {"kannnnji", "漢字"},
         {"kana", "かな"},
         {"kannna", "かんな"},
         {"kannnna", "かんな"},
@@ -236,8 +233,8 @@ static void test_n_run_correction(void) {
     }
 }
 
-/* SPEC: accepted n-run forms read exactly as the SPEC table says while
- * composing; excessive n runs are not corrected while typing. */
+/* SPEC: n-run forms and literal substitutions have their specified readings
+ * while composing; trailing pending n/m remains raw until conversion. */
 static void test_n_run_preedit(void) {
     static const struct {
         const char* input;
@@ -256,12 +253,21 @@ static void test_n_run_preedit(void) {
         {"kannji", "かんじ"},
         {"kannnji", "かんんじ"},
         {"kannnnji", "かんんじ"},
-        {"kannnnu", "かんんう"},
+        {"kannnnu", "かんぬ"},
         {"kannnnyo", "かんんよ"},
+        {"kannnni", "かんに"},
+        {"kannnne", "かんね"},
+        {"kannnno", "かんの"},
+        {"nnnn", "んん"},
+        {"nt", "んt"},
+        {"mt", "んt"},
+        {"nm", "んm"},
+        {"mn", "んn"},
+        {"mm", "ん"},
         {"kana", "かな"},
         {"kanna", "かんあ"},
         {"kannna", "かんな"},
-        {"kannnna", "かんんあ"},
+        {"kannnna", "かんな"},
         {"konitiha", "こにちは"},
         {"konnnitiha", "こんにちは"},
         {"kanda", "かんだ"},
@@ -273,7 +279,7 @@ static void test_n_run_preedit(void) {
         {"nwe", "んうぇ"},
         {"nwo", "んを"},
         {"kannnen", "かんねn"},
-        {"kannnnen", "かんんえn"},
+        {"kannnnen", "かんねn"},
         {"kan-", "かnー"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
@@ -294,8 +300,7 @@ static void test_n_run_preedit(void) {
     }
 }
 
-/* SPEC: n followed by Space resolves to ん and starts the conversion; the
- * list stays hidden and Esc restores the corrected reading. */
+/* SPEC: Space resolves a trailing pending n/m and Esc restores that reading. */
 static void test_kan_space_starts_conversion(void) {
     fresh_session();
     type_text("kan");
@@ -325,14 +330,13 @@ static void test_kan_space_starts_conversion(void) {
           "Enter after n + Space must commit the reading resolved by the conversion");
     check(!composing(), "the commit must end the composition");
 
-    /* SPEC: the n-run correction happens at conversion only; Enter while
-     * typing commits the raw reading, without completing the trailing n or
-     * folding an excessive run (dotfiles/rime/SPEC.md). */
+    /* Enter commits the displayed reading unchanged; Space/Henkan only resolve
+     * a trailing pending n or m (dotfiles/rime/SPEC.md). */
     static const struct {
         const char* input;
         const char* commit_text;
     } raw_commits[] = {
-        {"kan", "かn"}, {"kannnna", "かんんあ"}, {"kannnnji", "かんんじ"},
+        {"kan", "かn"}, {"kannnna", "かんな"}, {"kannnnji", "かんんじ"},
     };
     for (size_t i = 0; i < sizeof(raw_commits) / sizeof(raw_commits[0]); ++i) {
         fresh_session();
@@ -350,8 +354,8 @@ static void test_kan_space_starts_conversion(void) {
     }
 }
 
-/* SPEC: conversion keys correct the whole reading even when the caret moved
- * away from the end while typing (dotfiles/rime/SPEC.md, "n の過不足補完"). */
+/* SPEC: conversion keys resolve only a trailing pending n or m, even when
+ * the caret moved away from the end while typing. */
 static void test_conversion_correction_after_caret_move(void) {
     /* Space still resolves a trailing pending n. */
     fresh_session();
@@ -373,21 +377,21 @@ static void test_conversion_correction_after_caret_move(void) {
     press(kEscape);
     check(preedit_equals("かん"), "Esc must restore the resolved reading");
 
-    /* The excessive-n folding also applies to the whole reading. */
+    /* Conversion preserves the already-substituted reading across the whole
+     * composition instead of applying postroma again. */
     fresh_session();
-    type_text("kannnna");
-    press(kLeft);
+    type_text("kannnji");
     press(kLeft);
     press(kSpace);
-    check(composing(), "Space after caret moves must keep the conversion open");
+    check(composing(), "Space after a caret move must keep the conversion open");
     press(kEscape);
-    check(preedit_equals("かんな"),
-          "Space after a caret move must fold the excessive n of the whole reading");
+    check(preedit_equals("かんんじ"),
+          "Space after a caret move must preserve the input-time reading");
 }
 
-/* SPEC: Space converts with the corrected reading: consecutive ん fold into
- * one and a leftover ん binds with a following vowel. Esc restores the
- * unconfirmed conversion to the corrected hiragana reading. */
+/* SPEC: Space resolves only trailing pending n/m. Input-time literal
+ * substitutions are preserved, with no folding or postroma at conversion.
+ * Esc restores that reading. */
 static void test_n_run_conversion_reading(void) {
     static const struct {
         const char* input;
@@ -402,16 +406,17 @@ static void test_n_run_conversion_reading(void) {
         {"kan", "かん"},
         {"kanji", "かんじ"},
         {"kannji", "かんじ"},
-        {"kannnji", "かんじ"},
-        {"kannnnji", "かんじ"},
+        {"kannnji", "かんんじ"},
+        {"kannnnji", "かんんじ"},
         {"kannnni", "かんに"},
         {"kannnnu", "かんぬ"},
         {"kannnne", "かんね"},
         {"kannnno", "かんの"},
-        {"kannnnyo", "かんにょ"},
+        {"kannnnyo", "かんんよ"},
+        {"nnnn", "んん"},
         {"kanda", "かんだ"},
         {"kannda", "かんだ"},
-        {"kannnda", "かんだ"},
+        {"kannnda", "かんんだ"},
         {"kana", "かな"},
         {"nya", "にゃ"},
         {"kanna", "かんあ"},
@@ -424,6 +429,8 @@ static void test_n_run_conversion_reading(void) {
         {"nwo", "んを"},
         {"kannnen", "かんねん"},
         {"kannnnen", "かんねん"},
+        {"kam", "かん"},
+        {"man", "まん"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
@@ -757,9 +764,8 @@ static void test_henkan_promotes_katakana(void) {
     char commit[256];
     check(!take_commit(commit, sizeof(commit)), "Henkan must not commit");
 
-    /* SPEC: Henkan converts with the same n corrections as Space: a trailing
-     * pending n resolves and consecutive ん fold before the katakana
-     * promotion (dotfiles/rime/SPEC.md, "n の過不足補完"). */
+    /* Henkan resolves trailing pending n/m without folding input-time
+     * readings or reapplying literal substitutions. */
     static const struct {
         const char* input;
         const char* katakana;
@@ -768,7 +774,8 @@ static void test_henkan_promotes_katakana(void) {
         {"kan", "カン", "かん"},
         {"kannnna", "カンナ", "かんな"},
         {"kannnnen", "カンネン", "かんねん"},
-        {"kannnnji", "カンジ", "かんじ"},
+        {"kannnnji", "カンンジ", "かんんじ"},
+        {"kam", "カン", "かん"},
         {"nnyo", "ンヨ", "んよ"},
     };
     for (size_t i = 0; i < sizeof(n_cases) / sizeof(n_cases[0]); ++i) {
@@ -1839,6 +1846,12 @@ static void test_ascii_mode_passes_half_width_keys(void) {
     check(preedit_equals("Aa1$ 1.*+-/="),
           "the ascii input mode must accumulate the half-width text");
     check(composing(), "the ascii input mode must keep the composition open");
+
+    fresh_session();
+    press_shift('A');
+    type_text("kannnna");
+    check(preedit_equals("Akannnna"),
+          "ASCII input must preserve romaji-like text without Japanese substitutions");
 }
 
 /* SPEC: Shift+letter switches to the unconfirmed ascii input mode from
@@ -1949,11 +1962,12 @@ static void test_romanization_matches_declaration(void) {
         {"dwa", "づぁ"}, {"dwi", "づぃ"}, {"dwe", "づぇ"}, {"dwo", "づぉ"},
         {"hwa", "ふぁ"}, {"hwi", "ふぃ"}, {"hwe", "ふぇ"}, {"hwo", "ふぉ"},
         {"bwa", "ぶぁ"}, {"bwi", "ぶぃ"}, {"bwe", "ぶぇ"}, {"bwo", "ぶぉ"},
-        {"mwa", "むぁ"}, {"mwi", "むぃ"}, {"mwe", "むぇ"}, {"mwo", "むぉ"},
+        /* m is a hatsuon consonant and left the w families: mwa/mwo read the
+         * hatsuon んわ/んを instead (dotfiles/rime/SPEC.md, "撥音の過不足補完") */
         {"rwa", "るぁ"}, {"rwi", "るぃ"}, {"rwe", "るぇ"}, {"rwo", "るぉ"},
         {"kwu", "こぅ"}, {"cwu", "こぅ"}, {"gwu", "ごぅ"}, {"swu", "そぅ"},
         {"zwu", "ぞぅ"}, {"twu", "とぅ"}, {"dwu", "どぅ"},
-        {"hwu", "ほぅ"}, {"bwu", "ぼぅ"}, {"mwu", "もぅ"},
+        {"hwu", "ほぅ"}, {"bwu", "ぼぅ"},
         {"rwu", "ろぅ"},
         /* dhu beats the stock yoon spelling (ぢゅ) with the single */
         {"dhu", "でゅ"},
@@ -2003,6 +2017,29 @@ static Bool text_contains(const char* haystack, const char* needle) {
 
 /* Whether the generated dictionary holds a mapping with this code (the
  * second tab-separated field of a mapping line). */
+/* The record lines are `kana\tcode\tweight`; the kana lookup mirrors
+ * dict_has_code over the text column. */
+static Bool code_text_is(const char* dictionary, const char* code, const char* text) {
+    const char* line = dictionary;
+    while (line && *line) {
+        const char* end = strchr(line, '\n');
+        size_t length = end ? (size_t)(end - line) : strlen(line);
+        const char* first_tab = memchr(line, '\t', length);
+        if (first_tab) {
+            const char* code_start = first_tab + 1;
+            size_t rest = (size_t)(line + length - code_start);
+            const char* second_tab = memchr(code_start, '\t', rest);
+            if (second_tab && (size_t)(second_tab - code_start) == strlen(code)
+                && memcmp(code_start, code, strlen(code)) == 0) {
+                return (size_t)(first_tab - line) == strlen(text)
+                    && memcmp(line, text, strlen(text)) == 0;
+            }
+        }
+        line = end ? end + 1 : NULL;
+    }
+    return False;
+}
+
 static Bool dict_has_code(const char* dictionary, const char* code) {
     const char* line = dictionary;
     while (line && *line) {
@@ -2037,7 +2074,18 @@ static void test_romaji_dictionary_is_declaration_only(void) {
     static const char* const kEmptySlots[] = {"qu", "wu", "yi", "lyi", "lye"};
     static const char* const kExcluded[] = {
         "nha", "nhi", "nhe", "nhu", "nho",
-        "hha", "hhi", "hhe", "hhu", "hho",
+    };
+    /* Prefix pairs are records; completed-syllable cross-products are not. */
+    static const struct {
+        const char* code;
+        const char* text;
+    } kPrefixes[] = {
+        {"hh", "っh"}, {"tt", "っt"}, {"kk", "っk"},
+        {"kc", "っc"}, {"ck", "っk"}, {"nt", "んt"}, {"mt", "んt"},
+        {"nm", "んm"}, {"mn", "んn"},
+    };
+    static const char* const kCompletedPrefixes[] = {
+        "hha", "hhi", "hhe", "hhu", "hho", "kka", "kkha", "tta", "kca", "cka",
     };
 
     char path[512];
@@ -2085,6 +2133,20 @@ static void test_romaji_dictionary_is_declaration_only(void) {
                  "the dictionary must not hold the excluded family spelling %s", kExcluded[i]);
         check(!dict_has_code(dictionary, kExcluded[i]), description);
     }
+    for (size_t i = 0; i < sizeof(kPrefixes) / sizeof(kPrefixes[0]); ++i) {
+        snprintf(description, sizeof(description),
+                 "the dictionary must read prefix %s as %s", kPrefixes[i].code, kPrefixes[i].text);
+        check(code_text_is(dictionary, kPrefixes[i].code, kPrefixes[i].text), description);
+    }
+    for (size_t i = 0; i < sizeof(kCompletedPrefixes) / sizeof(kCompletedPrefixes[0]); ++i) {
+        snprintf(description, sizeof(description),
+                 "the dictionary must not generate completed prefix %s", kCompletedPrefixes[i]);
+        check(!dict_has_code(dictionary, kCompletedPrefixes[i]), description);
+    }
+    /* The doubled consonants read ん through the ordinary singles
+     * (dotfiles/rime/SPEC.md, "撥音の過不足補完"). */
+    check(code_text_is(dictionary, "nn", "ん"), "the dictionary must read nn as ん");
+    check(code_text_is(dictionary, "mm", "ん"), "the dictionary must read mm as ん");
     free(dictionary);
 
     snprintf(path, sizeof(path), "%s/kagiroi_romaji.custom.yaml", g_user_data_dir);
@@ -2380,9 +2442,8 @@ static void test_emoji_option_defaults_off(void) {
 }
 
 /*
- * SPEC: the nn pair is consumed as ん on the second keypress, without
- * adding n to the next vowel or y. Enter commits the converted reading
- * (dotfiles/rime/SPEC.md, n の過不足補完).
+ * SPEC: nn/mm pairs become ん on the second keypress. Space/Henkan resolve
+ * only trailing pending n/m, and Enter commits the displayed reading.
  */
 static void test_nn_pair_consumption(void) {
     char commit[256];
@@ -2391,6 +2452,13 @@ static void test_nn_pair_consumption(void) {
     check(preedit_equals("n"), "a lone n must stay pending while typing");
     type_text("n");
     check(preedit_equals("ん"), "nn must read ん on the second keypress");
+    fresh_session();
+    type_text("m");
+    check(preedit_equals("m"), "a lone m must stay pending while typing");
+    type_text("m");
+    check(preedit_equals("ん"), "mm must read ん on the second keypress");
+    fresh_session();
+    type_text("nn");
     press(kSpace);
     check(preedit_equals("ん"), "nn + Space must keep reading ん");
     fresh_session();
@@ -2398,6 +2466,11 @@ static void test_nn_pair_consumption(void) {
     press(kReturn);
     check(take_commit(commit, sizeof(commit)) && strcmp(commit, "ん") == 0,
           "nn + Enter must commit ん");
+    fresh_session();
+    type_text("mm");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, "ん") == 0,
+          "mm + Enter must commit ん");
     fresh_session();
     type_text("honn");
     press(kReturn);
@@ -2415,10 +2488,10 @@ static void test_nn_pair_consumption(void) {
     fresh_session();
     type_text("nnyo");
     check(preedit_equals("んよ"), "nnyo must read んよ");
-    /* a four-n run keeps both ん (no rebind) */
+    /* The input-time literal substitution runs before any conversion. */
     fresh_session();
     type_text("kannnna");
-    check(preedit_equals("かんんあ"), "kannnna must read かんんあ");
+    check(preedit_equals("かんな"), "kannnna must read かんな while typing");
     /* a lone pending n keeps the pending display; the first Space resolves
      * it into the inline conversion and Esc restores the corrected reading
      * (dotfiles/rime/SPEC.md) */
@@ -2471,23 +2544,27 @@ static void test_longest_declared_suffix_preserves_raw_prefix(void) {
 }
 
 /*
- * SPEC: the sokuon syllables (kk, tt, ...) stay in the dictionary as the
- * input infrastructure outside the declaration; the hatsuon ones do not
- * because the n-run correction pushes ん itself; the long vowel binds to the
- * - key, and the stock q binding is gone (dotfiles/rime/SPEC.md).
+ * SPEC: doubled consonant prefixes eagerly replace their first letter with
+ * っ, while n/m consonant prefixes eagerly replace it with ん. The long
+ * vowel binds to the - key, and the stock q binding is gone.
  */
 static void test_sokuon_hatsuon_and_long_vowel(void) {
-    /* Every declared sokuon consonant types っ before the consonant's own
-     * syllable (roma.data.yaml, sokuon_consonants). */
+    /* Completed doubled-consonant spellings retain their expected readings. */
     static const struct {
         const char* input;
         const char* expected;
     } sokuon[] = {
-        {"kka", "っか"}, {"cca", "っか"}, {"gga", "っが"}, {"hha", "っは"},
+        {"kka", "っか"}, {"cca", "っか"}, {"kca", "っか"}, {"cka", "っか"},
+        {"gga", "っが"}, {"hha", "っは"},
         {"jja", "っじゃ"}, {"tta", "った"}, {"ffa", "っふぁ"}, {"wwa", "っわ"},
         {"rra", "っら"}, {"zza", "っざ"}, {"ssa", "っさ"}, {"vva", "っヴぁ"},
         {"lla", "っぁ"}, {"dda", "っだ"}, {"bba", "っば"}, {"ppa", "っぱ"},
-        {"mma", "っま"}, {"yya", "っや"}, {"qqa", "っくぁ"},
+        {"yya", "っや"}, {"qqa", "っくぁ"},
+        /* family spellings and other vowels behind the doubled consonant */
+        {"tte", "って"}, {"ssha", "っしゃ"}, {"ttya", "っちゃ"},
+        {"kkha", "っきゃ"},
+        {"kkka", "っっか"},
+        {"tt", "っt"}, {"kk", "っk"}, {"kc", "っc"}, {"ck", "っk"},
     };
     for (size_t i = 0; i < sizeof(sokuon) / sizeof(sokuon[0]); ++i) {
         fresh_session();
@@ -2501,13 +2578,27 @@ static void test_sokuon_hatsuon_and_long_vowel(void) {
     type_text("kkanji");
     check(preedit_equals("っかんじ"),
           "kkanji must read っかんじ while composing");
-    /* a lone n before a consonant still becomes ん without the hatsuon
-     * entries: the n completion, not a dictionary spelling, places the ん */
+    /* Prefixes show their eager replacement before the syllable completes. */
+    fresh_session();
+    type_text("tt");
+    check(preedit_equals("っt"), "tt must eagerly read っt");
+    press('a');
+    check(preedit_equals("った"), "tta must complete into the sokuon reading");
+    fresh_session();
+    type_text("kk");
+    check(preedit_equals("っk"), "kk must eagerly read っk");
+    press('a');
+    check(preedit_equals("っか"), "kka must complete into the sokuon reading");
+    fresh_session();
+    type_text("kkka");
+    check(preedit_equals("っっか"), "kkka must read っっか");
     static const struct {
         const char* input;
         const char* expected;
     } hatsuon[] = {
         {"nka", "んか"}, {"nta", "んた"}, {"nja", "んじゃ"}, {"nha", "んは"},
+        {"mka", "んか"}, {"mta", "んた"}, {"mk", "んk"}, {"mma", "んあ"},
+        {"samba", "さんば"}, {"samma", "さんあ"}, {"mann", "まん"},
     };
     for (size_t i = 0; i < sizeof(hatsuon) / sizeof(hatsuon[0]); ++i) {
         fresh_session();
@@ -2517,6 +2608,12 @@ static void test_sokuon_hatsuon_and_long_vowel(void) {
                  "%s must read %s while composing", hatsuon[i].input, hatsuon[i].expected);
         check(preedit_equals(hatsuon[i].expected), description);
     }
+    /* The final んんあ substitution is visible as soon as it is typed. */
+    fresh_session();
+    type_text("sammmma");
+    check(preedit_equals("さんな"), "sammmma must read さんな while typing");
+    press(kSpace);
+    check(preedit_equals("さんな"), "Space must preserve sammmma's input-time reading");
     fresh_session();
     press('-');
     check(preedit_equals("ー"), "- must read ー while composing");

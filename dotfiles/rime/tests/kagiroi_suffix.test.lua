@@ -36,10 +36,13 @@ package.preload["kagiroi/kagiroi_kana_speller"] = function()
     return base
 end
 
+package.preload["kagiroi/romaji_rules"] = function() return dofile(arg[2]) end
+
 local processor = dofile(arg[1])
 
 local function new_environment()
     local context = { input = "", caret_pos = 0 }
+    function context:get_option() return false end
     function context:pop_input(length)
         self.input = self.input:sub(1, self.caret_pos - length) .. self.input:sub(self.caret_pos + 1)
         self.caret_pos = self.caret_pos - length

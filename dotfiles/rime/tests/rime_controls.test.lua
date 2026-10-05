@@ -461,8 +461,6 @@ env, context = new_environment()
 assert(press(env, 0xff0d) == kNoop, "Enter outside composition must pass through")
 assert(calls == before_empty_enter + 1, "Enter without a menu must reach the kana speller")
 
--- Enter while typing commits the raw reading; the n-run correction
--- belongs to conversion only (dotfiles/rime/SPEC.md).
 env, context, segment = new_environment()
 context.input = "かn"
 context:set_option("_kagiroi_hide_candidates", true)

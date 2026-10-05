@@ -1,33 +1,13 @@
 local kAccepted = 1
 local kNoop = 2
-local romaji_to_kana = {
-    ge = "げ",
-    i = "い",
-    yo = "よ",
-    ko = "こ",
-    ka = "か",
-    na = "な",
-    ni = "に",
-    ji = "じ",
-    chi = "ち",
-    ti = "ち",
-    da = "だ",
-    de = "で",
-    ha = "は",
-    nya = "にゃ",
-    nyo = "にょ",
-    ne = "ね",
-    e = "え",
-    a = "あ",
-    u = "う",
-    o = "お",
-    nn = "ん",
-    wa = "わ",
-    wi = "うぃ",
-    we = "うぇ",
-    wo = "を",
-    ["-"] = "ー",
-}
+local romaji_to_kana = {}
+for line in io.lines(arg[3]) do
+    local kana, roma = line:match("^([^\t]+)\t([^\t]+)\t1$")
+    if roma then romaji_to_kana[roma] = kana end
+end
+assert(romaji_to_kana.nn == "ん" and romaji_to_kana.tt == "っt", "use the generated dictionary")
+local rules = dofile(arg[2])
+package.preload["kagiroi/romaji_rules"] = function() return rules end
 
 local base = {}
 function base.init(env)
@@ -68,6 +48,8 @@ local processor = dofile(arg[1])
 
 local function new_environment()
     local context = { input = "", caret_pos = 0 }
+    context.options = {}
+    function context:get_option(name) return self.options[name] or false end
     local composition = {}
     function composition:back()
         if context.input == "" then
@@ -131,6 +113,7 @@ end
 
 local function type_text(text)
     local env = new_environment()
+    processor.ascii_tail = nil
     processor.init(env)
     for character in text:gmatch(".") do
         press(env, character)
@@ -140,6 +123,25 @@ end
 
 -- SPEC: the reading shown while typing.
 local typing_cases = {
+    { input = "kannnni", expected = "かんに" },
+    { input = "kannnne", expected = "かんね" },
+    { input = "kannnno", expected = "かんの" },
+    { input = "nnnn", expected = "んん" },
+    { input = "sammmma", expected = "さんな" },
+    { input = "nt", expected = "んt" },
+    { input = "mt", expected = "んt" },
+    { input = "nm", expected = "んm" },
+    { input = "mn", expected = "んn" },
+    { input = "nma", expected = "んま" },
+    { input = "mna", expected = "んな" },
+    { input = "kk", expected = "っk" },
+    { input = "kc", expected = "っc" },
+    { input = "ck", expected = "っk" },
+    { input = "cka", expected = "っか" },
+    { input = "kca", expected = "っか" },
+    { input = "mm", expected = "ん" },
+    { input = "ma", expected = "ま" },
+    { input = "mya", expected = "みゃ" },
     { input = "nn", expected = "ん" },
     { input = "gennin", expected = "げんいn" },
     { input = "nnin", expected = "んいn" },
@@ -153,19 +155,19 @@ local typing_cases = {
     { input = "kannji", expected = "かんじ" },
     { input = "kannnji", expected = "かんんじ" },
     { input = "kannnnji", expected = "かんんじ" },
-    { input = "kannnnu", expected = "かんんう" },
+    { input = "kannnnu", expected = "かんぬ" },
     { input = "kannnnyo", expected = "かんんよ" },
     { input = "kana", expected = "かな" },
     { input = "kanna", expected = "かんあ" },
     { input = "kannna", expected = "かんな" },
-    { input = "kannnna", expected = "かんんあ" },
+    { input = "kannnna", expected = "かんな" },
     { input = "konitiha", expected = "こにちは" },
     { input = "konnnitiha", expected = "こんにちは" },
     { input = "kanda", expected = "かんだ" },
     { input = "kannda", expected = "かんだ" },
     { input = "kannnda", expected = "かんんだ" },
     { input = "kannnen", expected = "かんねn" },
-    { input = "kannnnen", expected = "かんんえn" },
+    { input = "kannnnen", expected = "かんねn" },
     { input = "nya", expected = "にゃ" },
     { input = "nwa", expected = "んわ" },
     { input = "nwi", expected = "んうぃ" },
@@ -173,6 +175,17 @@ local typing_cases = {
     { input = "nwo", expected = "んを" },
     { input = "nnwa", expected = "んわ" },
     { input = "kan-", expected = "かnー" },
+    { input = "tt", expected = "っt" },
+    { input = "tta", expected = "った" },
+    { input = "kkha", expected = "っきゃ" },
+    { input = "kkka", expected = "っっか" },
+    -- m behaves exactly like n: a consonant or the doubled pair reads ん,
+    -- a lone letter before a vowel keeps its own row
+    { input = "samba", expected = "さんば" },
+    { input = "samma", expected = "さんあ" },
+    { input = "mma", expected = "んあ" },
+    { input = "mk", expected = "んk" },
+    { input = "mann", expected = "まん" },
 }
 
 for _, case in ipairs(typing_cases) do
@@ -182,6 +195,8 @@ end
 
 -- SPEC: the reading used when Space converts.
 local conversion_cases = {
+    { input = "kam", expected = "かん" },
+    { input = "nnnn", expected = "んん" },
     { input = "nn", expected = "ん" },
     { input = "gennin", expected = "げんいん" },
     { input = "nnin", expected = "んいん" },
@@ -189,8 +204,8 @@ local conversion_cases = {
     { input = "kan", expected = "かん" },
     { input = "kanji", expected = "かんじ" },
     { input = "kannji", expected = "かんじ" },
-    { input = "kannnji", expected = "かんじ" },
-    { input = "kannnnji", expected = "かんじ" },
+    { input = "kannnji", expected = "かんんじ" },
+    { input = "kannnnji", expected = "かんんじ" },
     { input = "kana", expected = "かな" },
     { input = "nya", expected = "にゃ" },
     { input = "nna", expected = "んあ" },
@@ -202,17 +217,23 @@ local conversion_cases = {
     { input = "kannnnu", expected = "かんぬ" },
     { input = "kannnne", expected = "かんね" },
     { input = "kannnno", expected = "かんの" },
-    { input = "kannnnyo", expected = "かんにょ" },
+    { input = "kannnnyo", expected = "かんんよ" },
     { input = "konnnitiha", expected = "こんにちは" },
     { input = "kanda", expected = "かんだ" },
     { input = "kannda", expected = "かんだ" },
-    { input = "kannnda", expected = "かんだ" },
+    { input = "kannnda", expected = "かんんだ" },
     { input = "kannnen", expected = "かんねん" },
     { input = "kannnnen", expected = "かんねん" },
     { input = "nwa", expected = "んわ" },
     { input = "nwi", expected = "んうぃ" },
     { input = "nwe", expected = "んうぇ" },
     { input = "nwo", expected = "んを" },
+    -- Space resolves only pending n/m; eager prefixes are already displayed.
+    { input = "tt", expected = "っt" },
+    { input = "samba", expected = "さんば" },
+    { input = "samma", expected = "さんあ" },
+    { input = "mann", expected = "まん" },
+    { input = "sammmma", expected = "さんな" },
 }
 
 for _, case in ipairs(conversion_cases) do
@@ -249,7 +270,7 @@ for character in ("kannnna"):gmatch(".") do press(env, character) end
 env.context.caret_pos = #"かん"
 press(env, " ")
 assert(env.context.input == "かんな",
-    "Space with a mid-input caret must fold the whole reading")
+    "Space with a mid-input caret must preserve the input-time replacement")
 
 -- The long-vowel key is not a consonant: the n ahead of it stays pending and
 -- the conversion does not complete an n that is no longer trailing.
@@ -316,4 +337,71 @@ press(env, "k")
 press(env, "a")
 assert(env.context.input == "こんにちはnあか", "typing must keep converting after the tail")
 
-print("Kagiroi n kana-speller transition tests passed")
+-- Bare んん survives until the declared full literal is completed.
+env = new_environment()
+processor.ascii_tail = nil
+processor.init(env)
+for character in ("nnnn"):gmatch(".") do press(env, character) end
+assert(env.context.input == "んん", "bare んん must not collapse")
+press(env, "a")
+assert(env.context.input == "んな", "the following vowel completes the literal")
+
+for _, option in ipairs({ "ascii_mode", "_kagiroi_ascii_input" }) do
+    env = new_environment()
+    processor.ascii_tail = nil
+    processor.init(env)
+    env.context:push_input("んん")
+    env.context.options[option] = true
+    press(env, "a")
+    assert(env.context.input == "んんa", option .. " must bypass romaji and postroma")
+    processor.resolve_conversion(env)
+    assert(env.context.input == "んんa", option .. " must bypass the finalizer")
+end
+
+-- The frozen display and its boundary cannot participate in a replacement.
+env = new_environment()
+processor.init(env)
+env.context:push_input("んん")
+processor.ascii_tail = #env.context.input
+press(env, "a")
+assert(env.context.input == "んんあ", "postroma must not cross the frozen boundary")
+for character in ("nnnna"):gmatch(".") do press(env, character) end
+assert(env.context.input == "んんあんな", "postroma must still process resumed reading")
+
+-- Seed unmatched history directly: conversion/Enter must not run postroma.
+processor.ascii_tail = nil
+for _, keycode in ipairs({ 0x20, 0xff23, 0xff0d }) do
+    env = new_environment()
+    processor.init(env)
+    env.context:push_input("んんあ")
+    press_key(env, keycode)
+    assert(env.context.input == "んんあ", "control keys must not run postroma")
+end
+
+-- Synthetic declaration-ordered processors exercise literal/global/bounded passes.
+local declared = rules.postroma
+rules.postroma = {
+    { replace = { { "んんあ", "あ.%" } } },
+    { replace = { { "あ.%", "い" } } },
+}
+env = new_environment()
+processor.init(env)
+env.context:push_input("んんあんん")
+press(env, "a")
+assert(env.context.input == "いい", "all literal matches must run in processor order")
+rules.postroma = { { replace = { { "あ", "ああ" } } } }
+env = new_environment()
+processor.init(env)
+press(env, "a")
+assert(env.context.input == "ああ", "replacement output must not feed a fixed-point loop")
+-- A raw pending key after the frozen boundary is handled, but not converted.
+env = new_environment()
+processor.init(env)
+processor.ascii_tail = 0
+press(env, "a")
+press(env, "k")
+assert(env.context.input == "ああk", "pending romaji must not reprocess prior kana")
+processor.ascii_tail = nil
+rules.postroma = declared
+
+print("Kagiroi declaration-driven kana-speller transition tests passed")

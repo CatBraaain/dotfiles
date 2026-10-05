@@ -11,8 +11,8 @@
 // across trees would be fragile, and the Rime table is meant to evolve
 // independently anyway.
 
-import { readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 type Column = "a" | "i" | "u" | "e" | "o";
 
@@ -30,7 +30,8 @@ type Declaration = {
   rows: Record<string, string[]>;
   singles: Record<string, string>;
   families: Family[];
-  sokuon_consonants: string[];
+  prefixes: Record<string, string[]>;
+  postroma: { replace: Record<string, string> }[];
   long_vowel: string;
 };
 
@@ -40,7 +41,7 @@ const hookDir = (import.meta as { dir?: string }).dir as string;
 const DECLARATION_PATH = `${hookDir}/roma.data.yaml`;
 const DICTIONARY_NAME = "kagiroi_dotfiles_romaji.dict.yaml";
 // librime rejects a dict.yaml without a version, so the builder owns one.
-const DICTIONARY_VERSION = "20260928";
+const DICTIONARY_VERSION = "20261005";
 
 // Imported through a variable so type checking does not try to resolve the
 // package from this file's location (the hook runs from a dist snapshot).
@@ -61,11 +62,6 @@ function validateDeclaration(data: unknown): Declaration {
     if (typeof data[key] !== "string") throw new Error(`roma.data.yaml: ${key} must be a string`);
     return data[key] as string;
   };
-  const toStringArray = (key: string): string[] => {
-    if (!Array.isArray(data[key]) || data[key].some((v) => typeof v !== "string"))
-      throw new Error(`roma.data.yaml: ${key} must be a list of strings`);
-    return data[key] as string[];
-  };
 
   const rows: Declaration["rows"] = {};
   if (!isRecord(data.rows)) throw new Error("roma.data.yaml: rows must be a mapping");
@@ -82,18 +78,48 @@ function validateDeclaration(data: unknown): Declaration {
   const singles: Declaration["singles"] = {};
   if (!isRecord(data.singles)) throw new Error("roma.data.yaml: singles must be a mapping");
   for (const [key, kana] of Object.entries(data.singles)) {
-    if (typeof kana !== "string") throw new Error(`roma.data.yaml: singles.${key} must be a string`);
+    if (typeof kana !== "string")
+      throw new Error(`roma.data.yaml: singles.${key} must be a string`);
     singles[key] = kana;
   }
 
   if (!Array.isArray(data.families)) throw new Error("roma.data.yaml: families must be a list");
+
+  const prefixes: Declaration["prefixes"] = {};
+  if (!isRecord(data.prefixes)) throw new Error("roma.data.yaml: prefixes must be a mapping");
+  for (const [kana, pairs] of Object.entries(data.prefixes)) {
+    if (
+      !kana ||
+      !Array.isArray(pairs) ||
+      pairs.some((pair) => typeof pair !== "string" || !/^[a-z]{2}$/.test(pair))
+    )
+      throw new Error("roma.data.yaml: prefixes must map kana to two-letter lowercase spellings");
+    prefixes[kana] = pairs as string[];
+  }
+
+  const postroma: Declaration["postroma"] = [];
+  if (!Array.isArray(data.postroma)) throw new Error("roma.data.yaml: postroma must be a list");
+  for (const processor of data.postroma) {
+    if (!isRecord(processor) || Object.keys(processor).length !== 1 || !isRecord(processor.replace))
+      throw new Error("roma.data.yaml: postroma processors must contain only a replace mapping");
+    const replace: Record<string, string> = {};
+    for (const [from, to] of Object.entries(processor.replace)) {
+      if (!from || typeof to !== "string")
+        throw new Error(
+          "roma.data.yaml: replacements require nonempty literals and string outputs",
+        );
+      replace[from] = to;
+    }
+    postroma.push({ replace });
+  }
 
   return {
     name: requireString("name"),
     rows,
     singles,
     families: data.families as Family[],
-    sokuon_consonants: toStringArray("sokuon_consonants"),
+    prefixes,
+    postroma,
     long_vowel: requireString("long_vowel"),
   };
 }
@@ -152,6 +178,10 @@ function buildEntries(decl: Declaration): Map<string, string> {
     }
   }
 
+  for (const [kana, pairs] of Object.entries(decl.prefixes)) {
+    for (const pair of pairs) addGenerated(pair, kana + pair.slice(1));
+  }
+
   return entries;
 }
 
@@ -159,11 +189,10 @@ function buildEntries(decl: Declaration): Map<string, string> {
 
 function renderDictionary(decl: Declaration): string {
   const mappings = [...buildEntries(decl)].map(([roma, kana]) => `${kana}\t${roma}\t1`);
-  const sokuon = decl.sokuon_consonants.map((c) => `っ${c}\t${c}${c}\t1`);
   const longVowel = `ー\t${decl.long_vowel}\t1`;
   // Sorted so the output order is deterministic and declaration edits do not
   // shuffle line order (which would show up as block-sized diff hunks).
-  const records = [...mappings, ...sokuon, longVowel].sort();
+  const records = [...mappings, longVowel].sort();
   return [
     "# Rime dictionary",
     "# encoding: utf-8",
@@ -186,10 +215,47 @@ function renderDictionary(decl: Declaration): string {
   ].join("\n");
 }
 
+function luaString(value: string): string {
+  const escaped = [...value]
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      if (character === '"' || character === "\\" || code < 32 || code === 127)
+        return "\\" + code.toString().padStart(3, "0");
+      return character;
+    })
+    .join("");
+  return '"' + escaped + '"';
+}
+
+function renderRuntime(decl: Declaration): string {
+  const pending = Object.entries(decl.singles).filter(
+    ([roma, kana]) => /^([a-z])\1$/.test(roma) && kana === "ん",
+  );
+  const lines = [
+    "-- Generated from roma.data.yaml by roma.build.ts.",
+    "return {",
+    "    pending = {",
+  ];
+  for (const [roma, kana] of pending)
+    lines.push("        [" + luaString(roma.slice(0, 1)) + "] = " + luaString(kana) + ",");
+  lines.push("    },", "    postroma = {");
+  for (const processor of decl.postroma) {
+    lines.push("        { replace = {");
+    for (const [from, to] of Object.entries(processor.replace))
+      lines.push("            { " + luaString(from) + ", " + luaString(to) + " },");
+    lines.push("        } },");
+  }
+  lines.push("    },", "}", "");
+  return lines.join("\n");
+}
+
 async function compile(outputPath: string): Promise<void> {
   const yaml = await loadModule<{ parse: (text: string) => unknown }>("yaml");
   const declaration = validateDeclaration(yaml.parse(await readFile(DECLARATION_PATH, "utf8")));
+  const runtimeDir = join(dirname(outputPath), "lua/kagiroi");
+  await mkdir(runtimeDir, { recursive: true });
   await writeFile(outputPath, renderDictionary(declaration));
+  await writeFile(join(runtimeDir, "romaji_rules.lua"), renderRuntime(declaration));
 }
 
 export default async function build(): Promise<void> {

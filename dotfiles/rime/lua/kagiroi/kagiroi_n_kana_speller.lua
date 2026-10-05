@@ -1,45 +1,15 @@
--- Typing-time and conversion-time correction of n runs, wrapping the stock
--- Kagiroi kana speller (dotfiles/rime/SPEC.md, "n の過不足補完").
--- Pair: the second n consumes nn as ん through the declaration's spelling;
--- no n is added to a following vowel or y. Insufficient n: a lone pending n
--- becomes ん when a consonant key or a conversion key follows; the long-vowel
--- key is not a consonant, so the n stays raw in front of it. Excessive n:
--- not corrected while typing; at conversion, consecutive ん fold into one and
--- one leftover ん binds with a following vowel as the next syllable's n.
+-- Declaration-driven romaji conversion and input-time literal replacements.
 local kAccepted = 1
 local kNoop = 2
 local base = require("kagiroi/kagiroi_kana_speller")
+local rules = require("kagiroi/romaji_rules")
 local Top = { init = base.init, fini = base.fini }
--- The input byte position where the half-width text appended in the ascii
--- input mode starts. rime_controls records and clears it, and the reading
--- continues only from the trailing run behind the tail
--- (dotfiles/rime/SPEC.md).
+-- Byte boundary of the frozen display; only resumed input after it is read.
 Top.ascii_tail = nil
 
-local vowels = { a = true, e = true, i = true, o = true, u = true, y = true }
-
--- The letters that complete a pending n while typing. The non-letter
--- members of the alphabet, such as the long-vowel key "-", are not
--- consonants: the pending n stays raw in front of them
--- (dotfiles/rime/SPEC.md, "n の過不足補完").
-local consonants = {
-    b = true, c = true, d = true, f = true, g = true, h = true, j = true,
-    k = true, l = true, m = true, n = true, p = true, q = true, r = true,
-    s = true, t = true, v = true, w = true, x = true, z = true,
-}
-
--- Kana a leftover ん can bind with: the kana spelled with a leading n plus a
--- vowel (a i u e o y in the SPEC).
-local n_bindable_vowels = {
-    ["あ"] = "な",
-    ["い"] = "に",
-    ["う"] = "ぬ",
-    ["え"] = "ね",
-    ["お"] = "の",
-    ["や"] = "にゃ",
-    ["ゆ"] = "にゅ",
-    ["よ"] = "にょ",
-}
+local function is_ascii(context)
+    return context:get_option("ascii_mode") or context:get_option("_kagiroi_ascii_input")
+end
 
 local function get_alphabet_suffix(text, alphabet)
     local suffix = ""
@@ -54,10 +24,10 @@ local function get_alphabet_suffix(text, alphabet)
     return suffix
 end
 
--- The trailing alphabet run the n correction works on: the run behind the
--- fixed ascii tail, or the run inside the last kagiroi segment. Independent
--- of the caret, so the conversion-time correction can treat the whole
--- reading.
+-- The trailing alphabet run the pending finalizer works on: the run behind
+-- the fixed ascii tail, or the run inside the last kagiroi segment.
+-- Independent of the caret, so the conversion-time correction can treat the
+-- whole reading.
 local function trailing_alphabet(env)
     local context = env.engine.context
 
@@ -108,79 +78,44 @@ local function get_context(env)
     return trailing_alphabet(env)
 end
 
-local function replace_pending_n(context, pending_n, replacement)
-    context:pop_input(#pending_n)
-    context:push_input(replacement)
-end
-
--- A consonant or a conversion key after the run: fold the run into pairs and
--- complete a leftover single n as ん (kanji -> かんじ, nwa -> んわ).
-local function n_run_before_consonant(count)
-    return ("ん"):rep(math.ceil(count / 2))
-end
-
--- A vowel key after the run: consume pairs as ん and let only an odd
--- leftover n bind with the vowel (kannna -> かんな).
-local function n_run_before_vowel(count)
-    local replacement = ("ん"):rep(math.floor(count / 2))
-    if count % 2 == 1 then
-        return replacement .. "n"
+-- Space/Henkan complete only the final pending consonant, independently
+-- of postroma. The build derives these letters from doubled singles -> ん.
+function Top.resolve_conversion(env)
+    if is_ascii(env.engine.context) then return end
+    local context, remaining_alphabet = trailing_alphabet(env)
+    if not context then return end
+    local replacement = rules.pending[remaining_alphabet:sub(-1)]
+    if replacement then
+        context.input = context.input:sub(1, -2) .. replacement
     end
-    return replacement
 end
 
--- Conversion-time reading: collapse every run of consecutive ん into a single
--- ん, and when a bindable vowel kana follows the run, consume one leftover ん
--- as the next syllable's n (かんんあ -> かんな, かんんえ -> かんね).
-local function fold_n_runs(text)
-    local characters = {}
-    for _, codepoint in utf8.codes(text) do
-        characters[#characters + 1] = utf8.char(codepoint)
+local function replace_literal(text, from, to)
+    local parts = {}
+    local cursor = 1
+    while true do
+        local first, last = text:find(from, cursor, true)
+        if not first then break end
+        parts[#parts + 1] = text:sub(cursor, first - 1)
+        parts[#parts + 1] = to
+        cursor = last + 1
     end
+    parts[#parts + 1] = text:sub(cursor)
+    return table.concat(parts)
+end
 
-    local folded = {}
-    local index = 1
-    while index <= #characters do
-        local character = characters[index]
-        if character ~= "ん" then
-            folded[#folded + 1] = character
-            index = index + 1
-        else
-            local run_end = index
-            while characters[run_end + 1] == "ん" do
-                run_end = run_end + 1
-            end
-            folded[#folded + 1] = "ん"
-            local bound = run_end > index and n_bindable_vowels[characters[run_end + 1]]
-            if bound then
-                folded[#folded + 1] = bound
-                index = run_end + 2
-            else
-                index = run_end + 1
-            end
+local function postroma(context)
+    local boundary = Top.ascii_tail or 0
+    local reading = context.input:sub(boundary + 1)
+    local replaced = reading
+    for _, processor in ipairs(rules.postroma) do
+        for _, substitution in ipairs(processor.replace) do
+            replaced = replace_literal(replaced, substitution[1], substitution[2])
         end
     end
-    return table.concat(folded)
-end
-
--- Resolve the trailing pending n and fold consecutive ん across the whole
--- input for conversion (Space / Henkan). The reading is corrected as a
--- whole no matter where the caret sits, so the replacement is written as a
--- whole-input assignment instead of a caret-relative pop/push.
-function Top.resolve_conversion(env)
-    local context, remaining_alphabet = trailing_alphabet(env)
-    if not context then
-        return
-    end
-    local resolved = context.input
-    local pending_n = remaining_alphabet:match("n+$")
-    if pending_n then
-        resolved = resolved:sub(1, #resolved - #pending_n)
-            .. n_run_before_consonant(#pending_n)
-    end
-    local folded = fold_n_runs(resolved)
-    if folded ~= context.input then
-        context.input = folded
+    if replaced ~= reading then
+        context:pop_input(#reading)
+        context:push_input(replaced)
     end
 end
 
@@ -205,10 +140,10 @@ local function spell_after_tail(key_event, env)
         if candidate and candidate._end == #suffix then
             context:pop_input(#suffix)
             context:push_input(candidate.text)
-            break
+            return kAccepted, true
         end
     end
-    return kAccepted
+    return kAccepted, false
 end
 
 local function spell_with_suffix(key_event, env)
@@ -217,7 +152,7 @@ local function spell_with_suffix(key_event, env)
     end
     local result = base.func(key_event, env)
     if result ~= kNoop then
-        return result
+        return result, result == kAccepted
     end
 
     local character = string.char(key_event.keycode)
@@ -236,65 +171,34 @@ local function spell_with_suffix(key_event, env)
         if candidate and candidate._end == #suffix then
             context:pop_input(#suffix - 1)
             context:push_input(candidate.text)
-            return kAccepted
+            return kAccepted, true
         end
     end
     return result
 end
 
 function Top.func(key_event, env)
+    local context = env.engine.context
+    if is_ascii(context) then return kNoop end
     if key_event:release() or key_event:ctrl() or key_event:alt() or key_event:super() then
         return base.func(key_event, env)
     end
-
     local keycode = key_event.keycode
     if keycode < 0x20 or keycode > 0x7E then
         return base.func(key_event, env)
     end
-
     local character = string.char(keycode)
     if character == " " then
         Top.resolve_conversion(env)
-        return base.func(key_event, env)
-    end
-
-    local context, remaining_alphabet = get_context(env)
-    if not context then
-        return base.func(key_event, env)
-    end
-
-    if character == "n" then
-        -- A trailing pending n turns this key into the declaration's nn
-        -- spelling: convert the pair to ん now, including after a raw prefix.
-        -- A run never holds more than one raw n, so no other case exists.
-        if remaining_alphabet:sub(-1) == "n" then
-            return spell_with_suffix(key_event, env)
-        end
         return kNoop
     end
-
-    local pending_n = remaining_alphabet:match("n+$")
-    if not pending_n then
-        return spell_with_suffix(key_event, env)
-    end
-
     if not env.alphabet:find(character, 1, true) then
         return base.func(key_event, env)
     end
-
-    if vowels[character] then
-        local replacement = n_run_before_vowel(#pending_n)
-        if replacement ~= pending_n then
-            replace_pending_n(context, pending_n, replacement)
-        end
-    elseif consonants[character] then
-        local replacement = n_run_before_consonant(#pending_n)
-        if replacement ~= pending_n then
-            replace_pending_n(context, pending_n, replacement)
-        end
-    end
-
-    return spell_with_suffix(key_event, env)
+    if not get_context(env) then return kNoop end
+    local result, converted = spell_with_suffix(key_event, env)
+    if converted then postroma(context) end
+    return result
 end
 
 return Top

@@ -23,9 +23,10 @@ rows:
   f: [ふぁ, ふぃ, ふ, ふぇ, ふぉ]
   v: [ヴぁ, ヴぃ, ヴ, ヴぇ, ヴぉ]
 singles:
+  nn: ん
+  mm: ん
   dhu: でゅ
   who: うぉ
-  nn: ん
   wyi: ゐ
   wye: ゑ
   ltu: っ
@@ -33,7 +34,6 @@ singles:
   lka: ヵ
   lke: ヶ
 families:
-  # きゃ/きゅ/きょ, spelled also with h (kha = きゃ): i-column + small ya/yu/yo
   - rows: [k, c, g, s, z, t, d, n, h, b, p, m, r]
     column: i
     suffixes: { ya: ゃ, yu: ゅ, yo: ょ, ha: ゃ, hu: ゅ, ho: ょ }
@@ -44,11 +44,60 @@ families:
   - rows: [k, c, g, s, t]
     column: i
     suffixes: { he: ぇ }
-  - rows: [k, c, g, s, z, t, d, h, b, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, r]
     column: u
     suffixes: { wa: ぁ, wi: ぃ, we: ぇ, wo: ぉ }
-  - rows: [k, c, g, s, z, t, d, h, b, m, r]
+  - rows: [k, c, g, s, z, t, d, h, b, r]
     column: o
     suffixes: { wu: ぅ }
-sokuon_consonants: [l, k, c, g, s, z, t, d, h, b, p, m, y, r, w, q, f, j, v]
+prefixes:
+  っ: [ll, kk, cc, gg, ss, zz, tt, dd, hh, bb, pp, yy, rr, ww, qq, ff, jj, vv, kc, ck]
+  ん:
+    [
+      nb,
+      nc,
+      nd,
+      nf,
+      ng,
+      nh,
+      nj,
+      nk,
+      nl,
+      nm,
+      np,
+      nq,
+      nr,
+      ns,
+      nt,
+      nv,
+      nw,
+      nx,
+      nz,
+      mb,
+      mc,
+      md,
+      mf,
+      mg,
+      mh,
+      mj,
+      mk,
+      ml,
+      mn,
+      mp,
+      mq,
+      mr,
+      ms,
+      mt,
+      mv,
+      mw,
+      mx,
+      mz,
+    ]
+postroma:
+  - replace:
+      んんあ: んな
+      んんい: んに
+      んんう: んぬ
+      んんえ: んね
+      んんお: んの
 long_vowel: "-"

@@ -27,11 +27,14 @@ test-rime:
     #!/usr/bin/env bash
     set -euo pipefail
     cd dotfiles/rime
+    generated="$(mktemp -d /tmp/dotfiles-rime-unit.XXXXXX)"
+    trap 'rm -rf "$generated"' EXIT
+    bun roma.build.ts --output "$generated/kagiroi_dotfiles_romaji.dict.yaml"
     lua5.4 tests/candidate_gate.test.lua lua/kagiroi/candidate_gate.lua
     lua5.4 tests/rime_controls.test.lua lua/kagiroi/rime_controls.lua
     lua5.4 tests/rime_ascii_toggle.test.lua lua/kagiroi/rime_ascii_toggle.lua lua/kagiroi/rime_controls.lua
-    lua5.4 tests/kagiroi_n_kana_speller.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua
-    lua5.4 tests/kagiroi_suffix.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua
+    lua5.4 tests/kagiroi_n_kana_speller.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua "$generated/lua/kagiroi/romaji_rules.lua" "$generated/kagiroi_dotfiles_romaji.dict.yaml"
+    lua5.4 tests/kagiroi_suffix.test.lua lua/kagiroi/kagiroi_n_kana_speller.lua "$generated/lua/kagiroi/romaji_rules.lua"
     lua5.4 tests/char_variants.test.lua lua/kagiroi/char_variants.lua
     lua5.4 tests/weasel_config.test.lua weasel.custom.yaml
     lua5.4 tests/fcitx5_config.test.lua ../fcitx5/conf/rime.conf ../remap.data.md
