@@ -3,40 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadRecordingOverlay } from "./load-overlay.mjs";
 
-/**
- * @typedef {import('./overlay.mjs').OverlayState} OverlayState
- * @typedef {import('./overlay.mjs').Layout} Layout
- * @typedef {import('./overlay.mjs').Step} Step
- * @typedef {{width:number, height:number}} Size
- * @typedef {{x:number, y:number, width:number, height:number}} Clip
- * @typedef {{start:(options:Record<string, unknown>)=>Promise<void>, stop:()=>Promise<void>}} ScreencastLike
- * @typedef {{evaluate:(fn:(...args:unknown[])=>unknown, arg?:unknown)=>Promise<unknown>, setViewportSize:(size:Size)=>Promise<void>, screenshot:(options:{path:string, clip?:Clip})=>Promise<Buffer>, close:()=>Promise<void>}} StripPage
- * @typedef {{newPage:()=>Promise<StripPage>}} ContextLike
- * @typedef {{evaluate:(fn:(...args:unknown[])=>unknown, arg?:unknown)=>Promise<unknown>, viewportSize:()=>Size|null, setViewportSize:(size:Size)=>Promise<void>, screencast:ScreencastLike, context:()=>ContextLike}} PageLike
- * @typedef {{update:(patch:Partial<OverlayState>)=>Promise<Layout>, inspect:()=>Promise<Layout>, painted:()=>Promise<Layout>, setVisible:(visible:boolean)=>Promise<void>, dispose:()=>Promise<void>}} OverlayHandle
- * @typedef {{title:string, steps:Step[], theme:'light'|'dark', outputDir:string, run:(overlay:OverlayHandle)=>Promise<void>, titleHeight?:number, current?:number, read?:number, ffmpegPath?:string, frameClockOffsetMs?:number, screencastQuality?:number}} Scenario
- * @typedef {{mp4:string, frames:number, titleStates:number, durationSeconds:number}} RecordingResult
- */
-
-/**
- * Minimal runner-neutral example that connects a caller-owned Playwright Page
- * to the shared annotation renderer and produces one silent H.264 MP4 with an
- * externally composed title strip. Requires `page.screencast` (Playwright
- * build 1.64.0-alpha-1790635538000 is the recorded known-good build) and an
- * `ffmpeg` executable. The caller owns real operations and assertions inside
- * `run`; this module never navigates, selects, or asserts.
- * @param {PageLike} page
- * @param {Scenario} scenario
- * @returns {Promise<RecordingResult>}
- */
 export async function recordWithExternalTitle(page, scenario) {
   const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
   const titleHeight = scenario.titleHeight ?? 64;
   const outputDir = scenario.outputDir;
   await mkdir(outputDir, { recursive: true });
-  /** @type {{at:number, current:number, read:number}[]} */
   const timeline = [{ at: Date.now(), current: scenario.current ?? 1, read: scenario.read ?? 0 }];
-  /** @type {{data:Buffer, timestamp:number}[]} */
   const frames = [];
   const overlay = await loadRecordingOverlay(page, {
     title: scenario.title,
@@ -49,7 +21,6 @@ export async function recordWithExternalTitle(page, scenario) {
     pageArea: { x: 0, y: 0, width: viewport.width, height: viewport.height },
     titleArea: { x: 0, y: 0, width: viewport.width, height: titleHeight },
   });
-  /** @type {OverlayHandle} */
   const handle = {
     update: async (patch) => {
       const layout = await overlay.update(patch);
@@ -69,7 +40,7 @@ export async function recordWithExternalTitle(page, scenario) {
   let captureError = "";
   await page.screencast.start({
     quality: scenario.screencastQuality ?? 95,
-    onFrame: (/** @type {{data:Buffer, timestamp:number}} */ frame) => {
+    onFrame: (frame) => {
       frames.push({ data: frame.data, timestamp: frame.timestamp });
     },
   });
@@ -157,8 +128,8 @@ export async function recordWithExternalTitle(page, scenario) {
 }
 
 async function renderTitleStrip(
-  /** @type {ContextLike} */ context,
-  /** @type {Scenario & {output:string, titleHeight:number, width:number, current:number, read:number}} */ scenario,
+  context,
+  scenario,
 ) {
   const page = await context.newPage();
   try {
@@ -184,9 +155,9 @@ async function renderTitleStrip(
 }
 
 function runFFmpeg(
-  /** @type {string} */ executable,
-  /** @type {string} */ cwd,
-  /** @type {number} */ durationSeconds,
+  executable,
+  cwd,
+  durationSeconds,
 ) {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -225,7 +196,7 @@ function runFFmpeg(
       { cwd, stdio: ["ignore", "ignore", "pipe"] },
     );
     let text = "";
-    child.stderr.on("data", (/** @type {Buffer} */ chunk) => {
+    child.stderr.on("data", (chunk) => {
       text += chunk.toString("utf8");
     });
     child.on("error", reject);

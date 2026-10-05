@@ -513,7 +513,7 @@ test("design.html embeds the installer from overlay.mjs", () => {
   assert.ok(inline, "design.html lacks the installer markers");
   const inlineSource = inline[1].replace(/^\s*const installer =/, "").replace(/;\s*$/, "");
   const assetInstaller = overlaySource
-    .slice(overlaySource.indexOf("/** Self-contained"))
+    .slice(overlaySource.indexOf("export function"))
     .replace("export function", "function");
   // Whitespace and commas differ between the standalone module and the
   // oxfmt-formatted inline copy; every other byte must match.

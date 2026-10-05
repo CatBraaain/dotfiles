@@ -10,8 +10,8 @@ const skillSource = readFileSync(
   new URL("../SKILL.md", import.meta.url),
   "utf8",
 );
-const readmeSource = readFileSync(
-  new URL("./README.md", import.meta.url),
+const specSource = readFileSync(
+  new URL("../SPEC.md", import.meta.url),
   "utf8",
 );
 
@@ -104,21 +104,31 @@ test("template texts are English only", () => {
   assert.equal(cjk, null, `no Japanese characters, found: ${cjk?.[0]}`);
 });
 
-test("skill and README keep referencing the viewer template", () => {
+test("skill and spec keep referencing the integrated spec", () => {
   assert.ok(
-    skillSource.includes("`assets/viewer.html`"),
-    "SKILL.md points at the template",
+    skillSource.includes("`SPEC.md`"),
+    "SKILL.md points at the integrated spec",
+  );
+  assert.equal(
+    skillSource.includes("## 操作と変化を見せる"),
+    false,
+    "SKILL.md no longer embeds the recording spec",
+  );
+  assert.equal(
+    skillSource.includes("assets/README.md"),
+    false,
+    "SKILL.md no longer references the removed assets README",
   );
   assert.ok(
-    skillSource.includes("script#e2e-viewer-data"),
-    "SKILL.md documents the data script",
+    specSource.includes("metadata.json") && specSource.includes("index.html"),
+    "spec documents the metadata and the generated file",
   );
   assert.ok(
-    readmeSource.includes("## Viewer template"),
-    "README documents the viewer",
+    specSource.includes("## 操作と変化を見せる"),
+    "spec owns the recording annotation specification",
   );
   assert.ok(
-    readmeSource.includes("viewer.test.mjs"),
-    "README mentions this test",
+    specSource.includes("### ビューアの見た目"),
+    "spec owns the viewer appearance",
   );
 });

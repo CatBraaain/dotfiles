@@ -1,23 +1,8 @@
-/**
- * @typedef {{x:number,y:number,width:number,height:number}} Rect
- * @typedef {{name:string,action:string,expected:string}} Step
- * @typedef {{rect:Rect,name:string,kind:'click'|'input'|'key'|'scroll'|'hover'|'drag'|'open'}} Target
- * @typedef {{rect:Rect,name:string,expected:string}} Result
- * @typedef {{text:string,at:number,firstAt?:number,hold?:boolean}} Input
- * @typedef {{name:string,at:number,firstAt?:number,api?:boolean,hold?:boolean}} Key
- * @typedef {{x:number,y:number,at:number,click?:boolean}} Pointer
- * @typedef {{title:string,steps:Step[],current:number,phase:'waiting'|'acting'|'checking'|'result',theme:'light'|'dark',pageArea:Rect,titleArea:Rect,layer?:'both'|'title'|'page',taskAnchor?:Rect|null,checkAt?:number|null,target?:Target|null,result?:Result|null,input?:Input|null,key?:Key|null,pointer?:Pointer|null,reducedMotion?:boolean|null}} OverlayState
- * @typedef {{element:string,reason:string,rect:Rect,step:number,total:number,pageArea:Rect,value:string}} Constraint
- * @typedef {{constraints:Constraint[],placements:Record<string,Rect>,requiredTitleHeight:number,at:number}} Layout
- * @typedef {{update:(patch:Partial<OverlayState>)=>Layout,inspect:()=>Layout,painted:()=>Promise<Layout>,setVisible:(visible:boolean)=>Promise<void>,dispose:()=>void}} Overlay
- * @typedef {Window & {recordingOverlay?:Overlay}} OverlayWindow
- */
 
-/** Self-contained for Page.evaluate; assets and state are the only inputs. */
 export function installRecordingOverlay(
-  /** @type {{html:string,css:string,state:OverlayState}} */ { html, css, state: initialState },
+  { html, css, state: initialState },
 ) {
-  const owner = /** @type {OverlayWindow} */ (window);
+  const owner = (window);
   owner.recordingOverlay?.dispose();
   const host = document.createElement("recording-annotation-overlay");
   host.setAttribute("aria-hidden", "true");
@@ -53,28 +38,22 @@ export function installRecordingOverlay(
   let state = structuredClone(initialState);
   let disposed = false;
   let frame = 0;
-  /** @type {Map<number, () => void>} */
   const paintFrames = new Map();
-  /** @type {Layout} */
   let layout = { constraints: [], placements: {}, requiredTitleHeight: 0, at: 0 };
-  /** @type {{node:HTMLElement|SVGElement,at:number,kind:'trail'|'ripple',x:number,y:number}[]} */
   let effects = [];
-  /** @type {Rect[]} */
   let protectedRects = [];
   let lastInputAt = -Infinity;
-  let pendingInput = /** @type {Input|null} */ (null);
+  let pendingInput = (null);
   let inputRevealAt = 0;
   let visible = true;
   let visibilityRequest = 0;
-  let checkStartedAt = /** @type {number|null} */ (null);
+  let checkStartedAt = (null);
   let checkStep = 0;
-  /** Dock sessions keep the first-appearance time and the widest width seen. */
   const firstAts = {
-    input: /** @type {number|null} */ (null),
-    key: /** @type {number|null} */ (null),
+    input: (null),
+    key: (null),
   };
   const dockWidths = { input: 0, key: 0 };
-  /** @type {Map<HTMLElement, {visible:boolean,animation:Animation|null,fadeAt?:number}>} */
   const presentations = new Map();
   for (const selector of [".task-label", ".result-label", ".input", ".key"])
     presentations.set(element(selector), { visible: false, animation: null });
@@ -108,7 +87,7 @@ export function installRecordingOverlay(
         });
         paintFrames.set(first, rejectDisposed);
       }),
-    async setVisible(/** @type {boolean} */ nextVisible) {
+    async setVisible(nextVisible) {
       if (disposed) throw new Error("Recording overlay has been disposed");
       const request = ++visibilityRequest;
       visible = nextVisible;
@@ -142,7 +121,7 @@ export function installRecordingOverlay(
   update(initialState);
   return layout;
 
-  function update(/** @type {Partial<OverlayState>} */ patch) {
+  function update(patch) {
     if (disposed) throw new Error("Recording overlay has been disposed");
     const raw = { ...state, ...structuredClone(patch) };
     const adopted = normalize(raw, state);
@@ -150,7 +129,7 @@ export function installRecordingOverlay(
     const onlyThemeOrPointer = Object.keys(patch).every((name) =>
       ["theme", "reducedMotion", "pointer"].includes(name),
     );
-    const input = /** @type {Input|undefined|null} */ (patch.input);
+    const input = (patch.input);
     if (
       input &&
       state.key?.name === "Backspace" &&
@@ -173,9 +152,8 @@ export function installRecordingOverlay(
     return structuredClone(layout);
   }
 
-  /** Fill transient firstAt sessions so repeated typing never restarts the enter fade. */
-  function normalize(/** @type {OverlayState} */ next, /** @type {OverlayState|null} */ previous) {
-    for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+  function normalize(next, previous) {
+    for (const kind of (["input", "key"])) {
       const value = next[kind];
       if (!value) {
         firstAts[kind] = null;
@@ -196,8 +174,7 @@ export function installRecordingOverlay(
     return next;
   }
 
-  /** Track when the current step's operation ended, for the check fade. */
-  function adoptCheckClock(/** @type {Partial<OverlayState>} */ patch) {
+  function adoptCheckClock(patch) {
     const explicit = "checkAt" in patch;
     if (
       state.phase === "waiting" ||
@@ -210,11 +187,11 @@ export function installRecordingOverlay(
     }
     if (state.current !== checkStep || (explicit && patch.checkAt != null)) {
       checkStep = state.current;
-      checkStartedAt = /** @type {number} */ (explicit ? patch.checkAt : performance.now());
+      checkStartedAt = (explicit ? patch.checkAt : performance.now());
     }
   }
 
-  function validate(/** @type {OverlayState} */ candidate) {
+  function validate(candidate) {
     if (!candidate.steps.length) throw new Error("No recording steps; supply a non-empty scenario");
     if (
       !Number.isInteger(candidate.current) ||
@@ -305,14 +282,13 @@ export function installRecordingOverlay(
     const step = state.steps[state.current - 1];
     const showPage = state.layer !== "title";
     const showTitle = state.layer !== "page";
-    /** @type {Rect[]} */
     const occupied = [];
     protectedRects = [
       showPage && state.phase !== "result" ? (state.target?.rect ?? null) : null,
       showPage && state.phase === "result" ? (state.result?.rect ?? null) : null,
     ]
       .filter((rect) => rect != null)
-      .map((rect) => expand(/** @type {Rect} */ (rect), 8 * s));
+      .map((rect) => expand((rect), 8 * s));
     if (showTitle) renderTitle(s);
     else {
       element(".title").hidden = true;
@@ -339,14 +315,14 @@ export function installRecordingOverlay(
       element(".result-label"),
       visible && showPage && state.phase === "result" && !!state.result,
     );
-    for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+    for (const kind of (["input", "key"])) {
       const value = state[kind];
       const transient = showPage ? value : null;
       presentTransient(element("." + kind), transient, performance.now());
     }
   }
 
-  function renderTitle(/** @type {number} */ s) {
+  function renderTitle(s) {
     const title = element(".title");
     title.hidden = false;
     element(".test-title").textContent = state.title;
@@ -371,10 +347,10 @@ export function installRecordingOverlay(
     }
   }
   function renderFrame(
-    /** @type {'target'|'result'} */ kind,
-    /** @type {Target|Result|null} */ annotation,
-    /** @type {Rect} */ area,
-    /** @type {number} */ s,
+    kind,
+    annotation,
+    area,
+    s,
   ) {
     const box = element(`.${kind}-frame`);
     box.hidden = !annotation;
@@ -398,9 +374,9 @@ export function installRecordingOverlay(
   }
 
   function renderTaskLabel(
-    /** @type {Step} */ step,
-    /** @type {number} */ s,
-    /** @type {Rect[]} */ occupied,
+    step,
+    s,
+    occupied,
   ) {
     const label = element(".task-label");
     label.hidden = false;
@@ -422,7 +398,7 @@ export function installRecordingOverlay(
     const found = [above, below].find((rect) => fits(rect, occupied, s));
     const fallbackY =
       above.y >= safe.y ? above.y : Math.min(below.y, safe.y + safe.height - height);
-    const rect = found ?? /** @type {Rect} */ ({
+    const rect = found ?? ({
       x,
       y: Math.max(safe.y, fallbackY),
       width,
@@ -437,19 +413,19 @@ export function installRecordingOverlay(
       );
   }
 
-  function applyCheckPaint(/** @type {number} */ now) {
+  function applyCheckPaint(now) {
     const check = element(".check");
     check.hidden = checkStartedAt == null;
     if (checkStartedAt == null) return;
     const age = Math.max(0, now - checkStartedAt);
     check.style.opacity = String(checkOpacity(age));
   }
-  function checkOpacity(/** @type {number} */ ageMs) {
+  function checkOpacity(ageMs) {
     const fraction = Math.min(1, ageMs / CHECK_FADE_MS);
     return cssEase(fraction, 0, 0.58);
   }
 
-  function renderResultLabel(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+  function renderResultLabel(s, occupied) {
     const label = element(".result-label");
     const result = state.phase === "result" ? state.result : null;
     if (!result) return;
@@ -470,7 +446,6 @@ export function installRecordingOverlay(
     const above = { x, y: frame.y - 8 * s - height, width, height };
     const below = { x, y: frame.y + frame.height + 8 * s, width, height };
     const taskRect = layout.placements["task-label"];
-    /** @type {(rect: Rect) => boolean} */
     const overlapsTask = (rect) => !!(taskRect && intersects(rect, expand(taskRect, 16 * s)));
     const found = [above, below].find((rect) => fits(rect, occupied, s) && !overlapsTask(rect));
     const rect = found ?? above;
@@ -483,7 +458,7 @@ export function installRecordingOverlay(
       );
   }
 
-  function renderInput(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+  function renderInput(s, occupied) {
     const value = state.input;
     if (!value) return;
     const dock = element(".input");
@@ -511,7 +486,7 @@ export function installRecordingOverlay(
       constraint("input", "The bottom-centre input band collides with protected targets", rect);
   }
 
-  function renderKey(/** @type {number} */ s, /** @type {Rect[]} */ occupied) {
+  function renderKey(s, occupied) {
     const value = state.key;
     if (!value) return;
     const dock = element(".key");
@@ -529,7 +504,7 @@ export function installRecordingOverlay(
     selectPosition("key", dock, positions(inset(state.pageArea, 24 * s), dock, true), occupied, s);
   }
 
-  function measure(/** @type {string} */ text, /** @type {string} */ role) {
+  function measure(text, role) {
     const probe = document.createElement("span");
     probe.className = role;
     probe.textContent = text;
@@ -545,10 +520,10 @@ export function installRecordingOverlay(
     return width;
   }
   function wrapLines(
-    /** @type {string} */ text,
-    /** @type {string} */ role,
-    /** @type {number} */ width,
-    /** @type {number} */ lineHeight,
+    text,
+    role,
+    width,
+    lineHeight,
   ) {
     if (!(width > 0)) return 1;
     const probe = document.createElement("span");
@@ -565,7 +540,7 @@ export function installRecordingOverlay(
     return Math.max(1, Math.ceil(height / lineHeight - 0.01));
   }
 
-  function transientTimes(/** @type {number} */ firstAt, /** @type {number} */ lastAt) {
+  function transientTimes(firstAt, lastAt) {
     const enterEnd = firstAt + ENTER_MS;
     const holdEnd = Math.max(enterEnd, lastAt) + HOLD_MS;
     return { enterEnd, holdEnd, exitEnd: holdEnd + EXIT_MS };
@@ -577,8 +552,8 @@ export function installRecordingOverlay(
       .filter((animation) => animation.playState !== "finished");
   }
   function present(
-    /** @type {HTMLElement} */ node,
-    /** @type {boolean} */ nextVisible,
+    node,
+    nextVisible,
     duration = nextVisible ? 150 : 300,
     immediate = false,
   ) {
@@ -628,9 +603,9 @@ export function installRecordingOverlay(
       .catch(() => {});
   }
   function presentTransient(
-    /** @type {HTMLElement} */ node,
-    /** @type {Input|Key|null|undefined} */ value,
-    /** @type {number} */ now,
+    node,
+    value,
+    now,
   ) {
     if (!value) {
       present(node, false);
@@ -675,9 +650,9 @@ export function installRecordingOverlay(
   }
 
   function positions(
-    /** @type {Rect} */ safe,
-    /** @type {HTMLElement} */ node,
-    /** @type {boolean} */ centered,
+    safe,
+    node,
+    centered,
   ) {
     const size = sized(node, 0, 0);
     const centre = {
@@ -693,11 +668,11 @@ export function installRecordingOverlay(
     ];
   }
   function selectPosition(
-    /** @type {string} */ name,
-    /** @type {HTMLElement} */ node,
-    /** @type {{x:number,y:number}[]} */ candidates,
-    /** @type {Rect[]} */ occupied,
-    /** @type {number} */ s,
+    name,
+    node,
+    candidates,
+    occupied,
+    s,
   ) {
     const rects = candidates.map((point) => sized(node, point.x, point.y));
     const found = rects.find((rect) => fits(rect, occupied, s));
@@ -706,7 +681,7 @@ export function installRecordingOverlay(
     if (!found)
       constraint(name, "No candidate preserves full text, safe edges and protected targets", rect);
   }
-  function fits(/** @type {Rect} */ rect, /** @type {Rect[]} */ occupied, /** @type {number} */ s) {
+  function fits(rect, occupied, s) {
     const safe = inset(state.pageArea, 24 * s);
     return (
       rect.width > 0 &&
@@ -717,21 +692,20 @@ export function installRecordingOverlay(
     );
   }
   function recordPlacement(
-    /** @type {string} */ name,
-    /** @type {HTMLElement} */ node,
-    /** @type {Rect} */ rect,
-    /** @type {Rect[]} */ occupied,
+    name,
+    node,
+    rect,
+    occupied,
   ) {
     place(node, rect);
     layout.placements[name] = rect;
     occupied.push(rect);
   }
   function constraint(
-    /** @type {string} */ name,
-    /** @type {string} */ reason,
-    /** @type {Rect} */ rect,
+    name,
+    reason,
+    rect,
   ) {
-    /** @type {Record<string, string>} */
     const values = {
       title: state.title,
       "task-label": state.steps[state.current - 1]?.action ?? "",
@@ -749,13 +723,13 @@ export function installRecordingOverlay(
       value: values[name] ?? "",
     });
   }
-  function element(/** @type {string} */ selector) {
+  function element(selector) {
     const found = shadow.querySelector(selector);
     if (!(found instanceof HTMLElement || found instanceof SVGElement))
       throw new Error(`Missing overlay asset element: ${selector}`);
-    return /** @type {HTMLElement} */ (found);
+    return (found);
   }
-  function place(/** @type {HTMLElement} */ node, /** @type {Rect} */ rect) {
+  function place(node, rect) {
     Object.assign(node.style, {
       left: `${rect.x}px`,
       top: `${rect.y}px`,
@@ -764,9 +738,9 @@ export function installRecordingOverlay(
     });
   }
   function sized(
-    /** @type {HTMLElement} */ node,
-    /** @type {number} */ x,
-    /** @type {number} */ y,
+    node,
+    x,
+    y,
   ) {
     return {
       x,
@@ -775,13 +749,13 @@ export function installRecordingOverlay(
       height: Number.parseFloat(node.style.height) || 0,
     };
   }
-  function expand(/** @type {Rect} */ r, /** @type {number} */ gap) {
+  function expand(r, gap) {
     return { x: r.x - gap, y: r.y - gap, width: r.width + gap * 2, height: r.height + gap * 2 };
   }
-  function inset(/** @type {Rect} */ r, /** @type {number} */ gap) {
+  function inset(r, gap) {
     return expand(r, -gap);
   }
-  function contains(/** @type {Rect} */ outer, /** @type {Rect} */ inner) {
+  function contains(outer, inner) {
     return (
       inner.x >= outer.x &&
       inner.y >= outer.y &&
@@ -789,13 +763,13 @@ export function installRecordingOverlay(
       inner.y + inner.height <= outer.y + outer.height
     );
   }
-  function intersects(/** @type {Rect} */ a, /** @type {Rect} */ b) {
+  function intersects(a, b) {
     return (
       a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
     );
   }
 
-  function pointer(/** @type {Pointer|null|undefined} */ sample) {
+  function pointer(sample) {
     element(".cursor").hidden = !sample;
     if (!sample) return;
     const cursor = element(".cursor");
@@ -807,7 +781,7 @@ export function installRecordingOverlay(
       element(".effects").append(ripple);
       effects.push({ node: ripple, kind: "ripple", at: sample.at, x: sample.x, y: sample.y });
     } else if (!reduced()) {
-      const trail = /** @type {SVGElement} */ (cursor.cloneNode(true));
+      const trail = (cursor.cloneNode(true));
       element(".effects").append(trail);
       effects.push({ node: trail, kind: "trail", at: sample.at, x: sample.x, y: sample.y });
     }
@@ -849,7 +823,7 @@ export function installRecordingOverlay(
     });
     let fading = false;
     let expired = false;
-    for (const kind of /** @type {('input'|'key')[]} */ (["input", "key"])) {
+    for (const kind of (["input", "key"])) {
       const value = state[kind];
       if (!value) continue;
       const times = transientTimes(value.firstAt ?? value.at, value.at);
@@ -870,14 +844,13 @@ export function installRecordingOverlay(
       frame = requestAnimationFrame(tick);
   }
 
-  /** cubic-bezier(0, 0, x2, 1)-shaped progress used by the adopted fades. */
   function cssEase(
-    /** @type {number} */ progress,
-    /** @type {number} */ x1,
-    /** @type {number} */ x2,
+    progress,
+    x1,
+    x2,
   ) {
     if (progress <= 0 || progress >= 1) return progress;
-    const bezier = (/** @type {number} */ t, /** @type {number} */ a, /** @type {number} */ b) =>
+    const bezier = (t, a, b) =>
       3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
     let low = 0;
     let high = 1;
