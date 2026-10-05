@@ -1962,8 +1962,8 @@ static void test_romanization_matches_declaration(void) {
         {"dwa", "づぁ"}, {"dwi", "づぃ"}, {"dwe", "づぇ"}, {"dwo", "づぉ"},
         {"hwa", "ふぁ"}, {"hwi", "ふぃ"}, {"hwe", "ふぇ"}, {"hwo", "ふぉ"},
         {"bwa", "ぶぁ"}, {"bwi", "ぶぃ"}, {"bwe", "ぶぇ"}, {"bwo", "ぶぉ"},
-        /* m is a hatsuon consonant and left the w families: mwa/mwo read the
-         * hatsuon んわ/んを instead (dotfiles/rime/SPEC.md, "撥音の過不足補完") */
+        /* Character conditions map m before w to ん, so mwa/mwo read んわ/んを
+         * (dotfiles/rime/SPEC.md, "ローマ字表"). */
         {"rwa", "るぁ"}, {"rwi", "るぃ"}, {"rwe", "るぇ"}, {"rwo", "るぉ"},
         {"kwu", "こぅ"}, {"cwu", "こぅ"}, {"gwu", "ごぅ"}, {"swu", "そぅ"},
         {"zwu", "ぞぅ"}, {"twu", "とぅ"}, {"dwu", "どぅ"},
@@ -2143,8 +2143,8 @@ static void test_romaji_dictionary_is_declaration_only(void) {
                  "the dictionary must not generate completed prefix %s", kCompletedPrefixes[i]);
         check(!dict_has_code(dictionary, kCompletedPrefixes[i]), description);
     }
-    /* The doubled consonants read ん through the ordinary singles
-     * (dotfiles/rime/SPEC.md, "撥音の過不足補完"). */
+    /* The singles mappings for nn/mm take priority over generated mappings
+     * (dotfiles/rime/SPEC.md, "ローマ字表"). */
     check(code_text_is(dictionary, "nn", "ん"), "the dictionary must read nn as ん");
     check(code_text_is(dictionary, "mm", "ん"), "the dictionary must read mm as ん");
     free(dictionary);
@@ -2544,9 +2544,9 @@ static void test_longest_declared_suffix_preserves_raw_prefix(void) {
 }
 
 /*
- * SPEC: doubled consonant prefixes eagerly replace their first letter with
- * っ, while n/m consonant prefixes eagerly replace it with ん. The long
- * vowel binds to the - key, and the stock q binding is gone.
+ * SPEC: character conditions replace the first letter of doubled consonants
+ * with っ, and replace n/m before another consonant with ん. The long vowel
+ * binds to the - key, and the stock q binding is gone.
  */
 static void test_sokuon_hatsuon_and_long_vowel(void) {
     /* Completed doubled-consonant spellings retain their expected readings. */

@@ -50,49 +50,18 @@ families:
   - rows: [k, c, g, s, z, t, d, h, b, r]
     column: o
     suffixes: { wu: ぅ }
-prefixes:
-  っ: [ll, kk, cc, gg, ss, zz, tt, dd, hh, bb, pp, yy, rr, ww, qq, ff, jj, vv, kc, ck]
-  ん:
-    [
-      nb,
-      nc,
-      nd,
-      nf,
-      ng,
-      nh,
-      nj,
-      nk,
-      nl,
-      nm,
-      np,
-      nq,
-      nr,
-      ns,
-      nt,
-      nv,
-      nw,
-      nx,
-      nz,
-      mb,
-      mc,
-      md,
-      mf,
-      mg,
-      mh,
-      mj,
-      mk,
-      ml,
-      mn,
-      mp,
-      mq,
-      mr,
-      ms,
-      mt,
-      mv,
-      mw,
-      mx,
-      mz,
-    ]
+conditionals:
+  - from: [l, k, c, g, s, z, t, d, h, b, p, y, r, w, q, f, j, v]
+    when_before: [$same]
+    to: っ
+  - { from: [k], when_before: [c], to: っ }
+  - { from: [c], when_before: [k], to: っ }
+  - from: [n, m]
+    when_before: [b, c, d, f, g, h, j, k, l, m, n, p, q, r, s, t, v, w, x, z]
+    to: ん
+  - from: [n, m]
+    when_before: [$convert]
+    to: ん
 postroma:
   - replace:
       んんあ: んな

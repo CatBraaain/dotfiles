@@ -25,17 +25,28 @@ type Family = {
   exclude?: string[];
 };
 
+// A conditional mapping: when a letter from `from` is followed by one more
+// letter matching `when_before`, only the `from` letter turns into `to` and
+// the following letter stays. `$same` stands for the paired `from` letter
+// itself, `$convert` marks the Space/Henkan conversion-start boundary.
+type Conditional = {
+  from: string[];
+  when_before: string[];
+  to: string;
+};
+
 type Declaration = {
   name: string;
   rows: Record<string, string[]>;
   singles: Record<string, string>;
   families: Family[];
-  prefixes: Record<string, string[]>;
+  conditionals: Conditional[];
   postroma: { replace: Record<string, string> }[];
   long_vowel: string;
 };
 
 const VOWELS = ["a", "i", "u", "e", "o"] as const;
+const SINGLE_LETTER = /^[a-z]$/;
 const COLUMN_INDEX: Record<Column, number> = { a: 0, i: 1, u: 2, e: 3, o: 4 };
 const hookDir = (import.meta as { dir?: string }).dir as string;
 const DECLARATION_PATH = `${hookDir}/roma.data.yaml`;
@@ -85,16 +96,45 @@ function validateDeclaration(data: unknown): Declaration {
 
   if (!Array.isArray(data.families)) throw new Error("roma.data.yaml: families must be a list");
 
-  const prefixes: Declaration["prefixes"] = {};
-  if (!isRecord(data.prefixes)) throw new Error("roma.data.yaml: prefixes must be a mapping");
-  for (const [kana, pairs] of Object.entries(data.prefixes)) {
+  if (data.prefixes !== undefined)
+    throw new Error("roma.data.yaml: prefixes is not supported; use conditionals");
+  const conditionals: Declaration["conditionals"] = [];
+  if (!Array.isArray(data.conditionals))
+    throw new Error("roma.data.yaml: conditionals must be a list");
+  for (const item of data.conditionals) {
     if (
-      !kana ||
-      !Array.isArray(pairs) ||
-      pairs.some((pair) => typeof pair !== "string" || !/^[a-z]{2}$/.test(pair))
+      !isRecord(item) ||
+      Object.keys(item).some((key) => key !== "from" && key !== "when_before" && key !== "to")
     )
-      throw new Error("roma.data.yaml: prefixes must map kana to two-letter lowercase spellings");
-    prefixes[kana] = pairs as string[];
+      throw new Error(
+        "roma.data.yaml: conditionals entries must be mappings of from, when_before, to",
+      );
+    const from = item.from;
+    const when = item.when_before;
+    const to = item.to;
+    if (
+      !Array.isArray(from) ||
+      from.length === 0 ||
+      from.some((letter) => typeof letter !== "string" || !SINGLE_LETTER.test(letter))
+    )
+      throw new Error(
+        "roma.data.yaml: conditionals.from must be a nonempty list of single lowercase letters",
+      );
+    if (
+      !Array.isArray(when) ||
+      when.length === 0 ||
+      when.some(
+        (condition) =>
+          typeof condition !== "string" ||
+          !(condition === "$same" || condition === "$convert" || SINGLE_LETTER.test(condition)),
+      )
+    )
+      throw new Error(
+        "roma.data.yaml: conditionals.when_before must be a nonempty list of single lowercase letters, $same, or $convert",
+      );
+    if (typeof to !== "string" || !to)
+      throw new Error("roma.data.yaml: conditionals.to must be a nonempty string");
+    conditionals.push({ from: from as string[], when_before: when as string[], to });
   }
 
   const postroma: Declaration["postroma"] = [];
@@ -118,7 +158,7 @@ function validateDeclaration(data: unknown): Declaration {
     rows,
     singles,
     families: data.families as Family[],
-    prefixes,
+    conditionals,
     postroma,
     long_vowel: requireString("long_vowel"),
   };
@@ -178,8 +218,15 @@ function buildEntries(decl: Declaration): Map<string, string> {
     }
   }
 
-  for (const [kana, pairs] of Object.entries(decl.prefixes)) {
-    for (const pair of pairs) addGenerated(pair, kana + pair.slice(1));
+  for (const { from, when_before, to } of decl.conditionals) {
+    for (const letter of from) {
+      for (const when of when_before) {
+        // $convert feeds the conversion-start mapping, not the dictionary.
+        if (when === "$convert") continue;
+        const next = when === "$same" ? letter : when;
+        addGenerated(letter + next, to + next);
+      }
+    }
   }
 
   return entries;
@@ -227,17 +274,35 @@ function luaString(value: string): string {
   return '"' + escaped + '"';
 }
 
+// Conversion-start replacements: letters declared with $convert turn into
+// their `to` when Space/Henkan starts the conversion. Kept apart from the
+// dictionary: equal duplicates collapse, a different `to` on the same letter
+// is a declaration error.
+function buildPending(decl: Declaration): Map<string, string> {
+  const pending = new Map<string, string>();
+  for (const { from, when_before, to } of decl.conditionals) {
+    if (!when_before.includes("$convert")) continue;
+    for (const letter of from) {
+      const existing = pending.get(letter);
+      if (existing !== undefined && existing !== to)
+        throw new Error(
+          `conflicting convert mapping: "${letter}" is "${existing}" and also "${to}"`,
+        );
+      pending.set(letter, to);
+    }
+  }
+  return pending;
+}
+
 function renderRuntime(decl: Declaration): string {
-  const pending = Object.entries(decl.singles).filter(
-    ([roma, kana]) => /^([a-z])\1$/.test(roma) && kana === "ん",
-  );
+  const pending = buildPending(decl);
   const lines = [
     "-- Generated from roma.data.yaml by roma.build.ts.",
     "return {",
     "    pending = {",
   ];
-  for (const [roma, kana] of pending)
-    lines.push("        [" + luaString(roma.slice(0, 1)) + "] = " + luaString(kana) + ",");
+  for (const [letter, kana] of pending)
+    lines.push("        [" + luaString(letter) + "] = " + luaString(kana) + ",");
   lines.push("    },", "    postroma = {");
   for (const processor of decl.postroma) {
     lines.push("        { replace = {");

@@ -79,7 +79,8 @@ local function get_context(env)
 end
 
 -- Space/Henkan complete only the final pending consonant, independently
--- of postroma. The build derives these letters from doubled singles -> ん.
+-- of postroma. The build derives these pending replacements from conditionals
+-- containing `$convert`.
 function Top.resolve_conversion(env)
     if is_ascii(env.engine.context) then return end
     local context, remaining_alphabet = trailing_alphabet(env)

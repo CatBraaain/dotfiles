@@ -228,7 +228,7 @@ local conversion_cases = {
     { input = "nwi", expected = "んうぃ" },
     { input = "nwe", expected = "んうぇ" },
     { input = "nwo", expected = "んを" },
-    -- Space resolves only pending n/m; eager prefixes are already displayed.
+    -- Space resolves only pending n/m; conditional substitutions are already displayed.
     { input = "tt", expected = "っt" },
     { input = "samba", expected = "さんば" },
     { input = "samma", expected = "さんあ" },
