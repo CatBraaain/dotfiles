@@ -1,3 +1,6 @@
+# Force UTF-8 console output; the logon conhost defaults to CP932 on Japanese Windows.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $ahkExe = "C:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe"
 $codeExe = "C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\Code.exe"
 
