@@ -12,12 +12,18 @@ function tempRecordings() {
   return { dir, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function writeMetadata(recordingsDir, meta) {
-  writeFileSync(join(recordingsDir, "metadata.json"), JSON.stringify(meta));
+function writeFlow(recordings, flowId, meta, videoNames = []) {
+  const flowDir = join(recordings.dir, flowId);
+  mkdirSync(flowDir, { recursive: true });
+  for (const name of videoNames) {
+    mkdirSync(join(flowDir, name, ".."), { recursive: true });
+    writeFileSync(join(flowDir, name), "");
+  }
+  writeFileSync(join(flowDir, "metadata.json"), JSON.stringify(meta));
 }
 
-function writeVideo(recordingsDir, name) {
-  writeFileSync(join(recordingsDir, name), "");
+function writeFlowFolder(recordings, flowId) {
+  mkdirSync(join(recordings.dir, flowId), { recursive: true });
 }
 
 function extractData(html) {
@@ -28,34 +34,35 @@ function extractData(html) {
   return JSON.parse(html.slice(openEnd, close).trim());
 }
 
-test("builds the viewer data from metadata.json", () => {
+test("merges flow folders ordered by folder name", () => {
   const recordings = tempRecordings();
   try {
-    writeVideo(recordings.dir, "01-type-delivery-name.mp4");
-    writeVideo(recordings.dir, "02-click-confirm.mp4");
-    writeMetadata(recordings.dir, {
-      title: "Checkout flow",
+    writeFlow(recordings, "search", {
+      title: "Search flow",
       steps: [
-        {
-          action: "Type the delivery name",
-          video: "01-type-delivery-name.mp4",
-        },
-        { action: "Click Confirm", video: "02-click-confirm.mp4" },
+        { action: "Open the page", video: "01-open.mp4" },
+        { action: "Type a query", video: "02-type.mp4" },
       ],
-    });
+    }, ["01-open.mp4", "02-type.mp4"]);
+    writeFlow(recordings, "checkout", {
+      title: "Checkout flow",
+      steps: [{ action: "Add item to cart", video: "add-to-cart.mp4" }],
+    }, ["add-to-cart.mp4"]);
     const data = extractData(buildViewerHtml(recordings.dir));
     assert.deepEqual(data, {
-      title: "Checkout flow",
-      steps: [
+      flows: [
         {
-          number: 1,
-          action: "Type the delivery name",
-          video: "01-type-delivery-name.mp4",
+          id: "checkout",
+          title: "Checkout flow",
+          steps: [{ number: 1, action: "Add item to cart", video: "checkout/add-to-cart.mp4" }],
         },
         {
-          number: 2,
-          action: "Click Confirm",
-          video: "02-click-confirm.mp4",
+          id: "search",
+          title: "Search flow",
+          steps: [
+            { number: 1, action: "Open the page", video: "search/01-open.mp4" },
+            { number: 2, action: "Type a query", video: "search/02-type.mp4" },
+          ],
         },
       ],
     });
@@ -64,20 +71,37 @@ test("builds the viewer data from metadata.json", () => {
   }
 });
 
-test("resolves video paths inside subfolders", () => {
+test("resolves a video path inside a flow subfolder", () => {
   const recordings = tempRecordings();
   try {
-    mkdirSync(join(recordings.dir, "videos"));
-    writeVideo(join(recordings.dir, "videos"), "step.mp4");
-    writeMetadata(recordings.dir, {
+    writeFlow(recordings, "search", {
       title: "t",
       steps: [{ action: "a", video: "videos/step.mp4" }],
-    });
+    }, ["videos/step.mp4"]);
     const data = extractData(buildViewerHtml(recordings.dir));
     assert.deepEqual(
-      data.steps.map((step) => step.video),
-      ["videos/step.mp4"],
+      data.flows[0].steps.map((step) => step.video),
+      ["search/videos/step.mp4"],
     );
+  } finally {
+    recordings.dispose();
+  }
+});
+
+test("rejects a recordings folder without flow folders", () => {
+  const recordings = tempRecordings();
+  try {
+    assert.throws(() => buildViewerHtml(recordings.dir), /no flow folders with metadata\.json/);
+  } finally {
+    recordings.dispose();
+  }
+});
+
+test("rejects a flow folder without metadata.json", () => {
+  const recordings = tempRecordings();
+  try {
+    writeFlowFolder(recordings, "broken");
+    assert.throws(() => buildViewerHtml(recordings.dir), /metadata\.json not found/);
   } finally {
     recordings.dispose();
   }
@@ -86,11 +110,9 @@ test("resolves video paths inside subfolders", () => {
 test("rejects missing or empty title and steps", () => {
   const recordings = tempRecordings();
   try {
-    writeMetadata(recordings.dir, {
-      steps: [{ action: "a", video: "x.mp4" }],
-    });
+    writeFlow(recordings, "search", { steps: [{ action: "a", video: "x.mp4" }] });
     assert.throws(() => buildViewerHtml(recordings.dir), /"title" must be a non-empty string/);
-    writeMetadata(recordings.dir, { title: "t" });
+    writeFlow(recordings, "search", { title: "t" });
     assert.throws(() => buildViewerHtml(recordings.dir), /"steps" must be a non-empty array/);
   } finally {
     recordings.dispose();
@@ -100,11 +122,7 @@ test("rejects missing or empty title and steps", () => {
 test("rejects a step missing action", () => {
   const recordings = tempRecordings();
   try {
-    writeVideo(recordings.dir, "v.mp4");
-    writeMetadata(recordings.dir, {
-      title: "t",
-      steps: [{ video: "v.mp4" }],
-    });
+    writeFlow(recordings, "search", { title: "t", steps: [{ video: "v.mp4" }] }, ["v.mp4"]);
     assert.throws(
       () => buildViewerHtml(recordings.dir),
       /step 1 "action" must be a non-empty string/,
@@ -117,19 +135,12 @@ test("rejects a step missing action", () => {
 test("rejects an absolute or parent video path", () => {
   const recordings = tempRecordings();
   try {
-    writeVideo(recordings.dir, "v.mp4");
-    writeMetadata(recordings.dir, {
-      title: "t",
-      steps: [{ action: "a", video: "/tmp/v.mp4" }],
-    });
+    writeFlow(recordings, "search", { title: "t", steps: [{ action: "a", video: "/tmp/v.mp4" }] });
     assert.throws(
       () => buildViewerHtml(recordings.dir),
       /must be a relative path inside the recordings folder/,
     );
-    writeMetadata(recordings.dir, {
-      title: "t",
-      steps: [{ action: "a", video: "../outside.mp4" }],
-    });
+    writeFlow(recordings, "search", { title: "t", steps: [{ action: "a", video: "../outside.mp4" }] });
     assert.throws(
       () => buildViewerHtml(recordings.dir),
       /must be a relative path inside the recordings folder/,
@@ -142,10 +153,7 @@ test("rejects an absolute or parent video path", () => {
 test("rejects a video that does not exist", () => {
   const recordings = tempRecordings();
   try {
-    writeMetadata(recordings.dir, {
-      title: "t",
-      steps: [{ action: "a", video: "missing.mp4" }],
-    });
+    writeFlow(recordings, "search", { title: "t", steps: [{ action: "a", video: "missing.mp4" }] });
     assert.throws(() => buildViewerHtml(recordings.dir), /video "missing\.mp4" does not exist/);
   } finally {
     recordings.dispose();
@@ -155,9 +163,10 @@ test("rejects a video that does not exist", () => {
 test("rejects invalid or non-object metadata.json", () => {
   const recordings = tempRecordings();
   try {
-    writeFileSync(join(recordings.dir, "metadata.json"), "{ nope");
+    writeFlowFolder(recordings, "search");
+    writeFileSync(join(recordings.dir, "search", "metadata.json"), "{ nope");
     assert.throws(() => buildViewerHtml(recordings.dir), /invalid JSON/);
-    writeFileSync(join(recordings.dir, "metadata.json"), '"text"');
+    writeFileSync(join(recordings.dir, "search", "metadata.json"), '"text"');
     assert.throws(() => buildViewerHtml(recordings.dir), /expected a JSON object/);
   } finally {
     recordings.dispose();
@@ -167,13 +176,12 @@ test("rejects invalid or non-object metadata.json", () => {
 test("escapes </script> inside the embedded JSON", () => {
   const recordings = tempRecordings();
   try {
-    writeVideo(recordings.dir, "v.mp4");
-    writeMetadata(recordings.dir, {
+    writeFlow(recordings, "search", {
       title: "</script><b>injected</b>",
       steps: [{ action: "a", video: "v.mp4" }],
-    });
+    }, ["v.mp4"]);
     const data = extractData(buildViewerHtml(recordings.dir));
-    assert.equal(data.title, "</script><b>injected</b>");
+    assert.equal(data.flows[0].title, "</script><b>injected</b>");
   } finally {
     recordings.dispose();
   }
@@ -182,17 +190,21 @@ test("escapes </script> inside the embedded JSON", () => {
 test("main writes index.html and reports failures via exit code", () => {
   const recordings = tempRecordings();
   try {
-    writeVideo(recordings.dir, "v.mp4");
-    writeMetadata(recordings.dir, {
+    writeFlow(recordings, "search", {
       title: "t",
       steps: [{ action: "a", video: "v.mp4" }],
-    });
+    }, ["v.mp4"]);
     const argv = ["node", "build-viewer.mjs"];
     assert.equal(main([...argv, recordings.dir]), 0);
     const html = readFileSync(join(recordings.dir, "index.html"), "utf8");
     assert.ok(html.includes(DATA_MARKER));
     assert.equal(main([...argv, join(recordings.dir, "missing")]), 1);
     assert.equal(main(["node"]), 1);
+    writeFlow(recordings, "broken", {
+      title: "t",
+      steps: [{ action: "a", video: "gone.mp4" }],
+    });
+    assert.equal(main([...argv, recordings.dir]), 1);
   } finally {
     recordings.dispose();
   }

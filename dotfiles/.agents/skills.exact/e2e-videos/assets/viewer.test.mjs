@@ -12,6 +12,7 @@ const REQUIRED_IDS = [
   "viewer-header",
   "viewer-title",
   "viewer-meta",
+  "flow-list",
   "viewer-main",
   "step-list",
   "video",
@@ -70,6 +71,23 @@ test("step selection autoplays and ended videos do not advance on their own", ()
     "no automatic continuous playback",
   );
   assert.ok(viewerSource.includes("select(0)"), "initial selection does not autoplay");
+});
+
+test("flow switcher restores the remembered step and plays it", () => {
+  assert.ok(viewerSource.includes('aria-label="Flows"'), "flow list nav exists");
+  assert.ok(viewerSource.includes("switchFlow(index)"), "flow buttons call switchFlow");
+  assert.ok(
+    viewerSource.includes("select(stepByFlow[flowIndex], { autoplay: true })"),
+    "switching a flow plays its remembered step",
+  );
+  assert.ok(
+    viewerSource.includes("stepByFlow[flowIndex] = index"),
+    "select remembers the position per flow",
+  );
+  assert.ok(
+    viewerSource.includes("if (index === flowIndex) return;"),
+    "re-clicking the current flow is a no-op",
+  );
 });
 
 test("template texts are English only", () => {

@@ -79,6 +79,16 @@
         color: var(--secondary);
         font-variant-numeric: tabular-nums;
       }
+      .flows {
+        margin-top: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .ctl[aria-current="true"] {
+        border-color: var(--chip);
+        box-shadow: 0 0 0 1px var(--chip);
+      }
       main {
         display: grid;
         grid-template-columns: 300px minmax(0, 1fr);
@@ -284,6 +294,7 @@
         <h1 id="viewer-title"></h1>
         <p class="meta" id="viewer-meta"></p>
       </header>
+      <nav class="flows" id="flow-list" aria-label="Flows" hidden></nav>
       <main id="viewer-main" hidden>
         <nav aria-label="Step list">
           <ol id="step-list"></ol>
@@ -320,9 +331,19 @@
         } catch {
           data = null;
         }
-        const valid = Boolean(data && Array.isArray(data.steps) && data.steps.length > 0);
+        const flows = data && Array.isArray(data.flows) ? data.flows : [];
+        const valid =
+          flows.length > 0 &&
+          flows.every(
+            (item) =>
+              item &&
+              typeof item.title === "string" &&
+              Array.isArray(item.steps) &&
+              item.steps.length > 0,
+          );
 
         const header = document.getElementById("viewer-header");
+        const flowList = document.getElementById("flow-list");
         const main = document.getElementById("viewer-main");
         const empty = document.getElementById("viewer-empty");
         const emptyMessage = document.getElementById("empty-message");
@@ -330,12 +351,13 @@
         if (!valid) {
           empty.hidden = false;
           emptyMessage.textContent =
-            "The contents of script#e2e-viewer-data could not be read. Embed the recording data as JSON shaped { title, steps: [{ number, action, video }] }.";
+            "The contents of script#e2e-viewer-data could not be read. Embed the recording data as JSON shaped { flows: [{ id, title, steps: [{ number, action, video }] }] }.";
           return;
         }
 
         empty.hidden = true;
         header.hidden = false;
+        flowList.hidden = false;
         main.hidden = false;
 
         const video = document.getElementById("video");
@@ -345,7 +367,10 @@
         const prev = document.getElementById("prev");
         const replay = document.getElementById("replay");
         const next = document.getElementById("next");
+        let flowIndex = 0;
         let current = 0;
+        const stepByFlow = flows.map(() => 0);
+        const flow = () => flows[flowIndex];
 
         function el(tag, className, textContent) {
           const node = document.createElement(tag);
@@ -355,13 +380,25 @@
         }
 
         function renderHeader() {
-          document.getElementById("viewer-title").textContent = data.title || "Recording viewer";
-          document.getElementById("viewer-meta").textContent = `${data.steps.length} steps`;
+          document.getElementById("viewer-title").textContent = flow().title || "Recording viewer";
+          document.getElementById("viewer-meta").textContent = `${flow().steps.length} steps`;
+        }
+
+        function renderFlowList() {
+          flowList.textContent = "";
+          flows.forEach((item, index) => {
+            const button = el("button", "ctl");
+            button.type = "button";
+            button.setAttribute("aria-current", String(index === flowIndex));
+            button.textContent = item.title;
+            button.addEventListener("click", () => switchFlow(index));
+            flowList.append(button);
+          });
         }
 
         function renderList() {
           list.textContent = "";
-          data.steps.forEach((step, index) => {
+          flow().steps.forEach((step, index) => {
             const li = el("li");
             const button = el("button");
             button.type = "button";
@@ -385,7 +422,7 @@
 
         function updateButtons() {
           prev.disabled = current === 0;
-          next.disabled = current === data.steps.length - 1;
+          next.disabled = current === flow().steps.length - 1;
         }
 
         function showStageNotice(message) {
@@ -405,9 +442,10 @@
         }
 
         function select(index, { autoplay = false } = {}) {
-          if (index < 0 || index >= data.steps.length) return;
+          if (index < 0 || index >= flow().steps.length) return;
           current = index;
-          const step = data.steps[index];
+          stepByFlow[flowIndex] = index;
+          const step = flow().steps[index];
           video.pause();
           video.currentTime = 0;
           if (step.video) {
@@ -424,6 +462,14 @@
           renderList();
           renderDetail(step);
           updateButtons();
+        }
+
+        function switchFlow(index) {
+          if (index === flowIndex) return;
+          flowIndex = index;
+          renderHeader();
+          renderFlowList();
+          select(stepByFlow[flowIndex], { autoplay: true });
         }
 
         video.addEventListener("error", () => {
@@ -448,6 +494,7 @@
         });
 
         renderHeader();
+        renderFlowList();
         select(0);
       })();
     </script>
