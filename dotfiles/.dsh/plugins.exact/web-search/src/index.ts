@@ -251,7 +251,7 @@ export async function runWebCli(
 
 // --- CLI JSON -> seam result mapping ---
 
-// `browse search --json` output (browse.spec.md §`browse search`): query,
+// `browse search --json` output (browse/SPEC.md §`browse search`): query,
 // engine, tookMs, results[] whose entries omit missing fields. urls arrive
 // raw from openserp.
 export interface CliSearchResult {
@@ -270,7 +270,7 @@ export interface CliSearchJson {
   readonly results: readonly CliSearchResult[];
 }
 
-// `browse fetch --json` output (browse.spec.md §`browse fetch`): url is
+// `browse fetch --json` output (browse/SPEC.md §`browse fetch`): url is
 // already normalized (Reddit / StackOverflow permalinks), body is markdown,
 // and fallbacks records failed attempts before the successful backend.
 export interface CliFetchJson {

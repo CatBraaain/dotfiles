@@ -4,7 +4,7 @@
 
 本 plugin は、dsh web profile の `web_search` / `web_fetch` ツール（`@deepseek-ai/dsh-tool-web`）に対し、search provider（id `camoufox-openserp`）と fetch provider（id `camoufox-trafilatura`）を host 側で提供する。client 側のコードは持たない。
 
-各 provider は共有 CLI コマンド `browse`（`dotfiles/.agents/cli.exact/browse`、展開先 `~/.agents/cli/browse/`。振る舞いの正本は `dotfiles/.agents/cli.exact/browse/browse.spec.md`）の薄いラッパーである: 呼び出しごとに `bun <browse プロジェクトディレクトリ> search|fetch <引数> --json` を子プロセス起動し、stdout の JSON から契約型（`WebSearchResult` / `WebFetchResult`）を組み立てる。エンジン試行順・challenge 検出・Reddit / StackOverflow 経路・常駐サーバーの起動・タイムアウトは CLI の受け持ちであり、本 plugin は再実装しない。
+各 provider は共有 CLI コマンド `browse`（`dotfiles/.agents/cli.exact/browse`、展開先 `~/.agents/cli/browse/`。振る舞いの正本は `dotfiles/.agents/cli.exact/browse/SPEC.md`）の薄いラッパーである: 呼び出しごとに `bun <browse プロジェクトディレクトリ> search|fetch <引数> --json` を子プロセス起動し、stdout の JSON から契約型（`WebSearchResult` / `WebFetchResult`）を組み立てる。エンジン試行順・challenge 検出・Reddit / StackOverflow 経路・常駐サーバーの起動・タイムアウトは CLI の受け持ちであり、本 plugin は再実装しない。
 
 provider の選択は dsh 本家契約（`ctx.web`、`@deepseek-ai/dsh-web`）に従う。設定未指定のとき usable な provider が 1 つだけなので、本 plugin を追加しただけで本家 tool-web の既定経路になる（`WEB_PROVIDER_AMBIGUOUS` は本 plugin 単独では起きない）。
 
@@ -33,7 +33,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 - CLI JSON の `results[]` は `WebSearchSource` へ射影して返す。`url` の無いエントリは捨て、`title`・`snippet` は空白時に省略する。CLI の JSON は openserp の生の href をそのまま含むため、engine origin からの相対 URL（google の `/goto?url=...` など。プロトコル相対も含む）は engine origin で絶対化して返す。不正な URL（解決できないもの）のエントリは `url` 無しと同様に捨てる。CLI の `type`・`display_url`・`rank`・`tookMs` と、検索のメタデータ行は契約型に置き場がなく出力しない
 - 検索結果は CLI が上位 10 件に限定して返す。それ以上の件数上限（`maxResults` cap）と `truncated` は dsh-web seam の受け持ちで、cap により行が減ったときは seam が `truncated: true` を設定する（本家 `dsh-web-search-deepseek` と同じ構造）
 - 言語ヒントは対応しない。dsh 契約の `WebSearchRequest` に lang フィールドが存在せず、CLI を言語指定なしで起動する
-- エンジンの試行順（google → duckduckgo → bing）、challenge / captcha 検出時の同一エンジン 1 回再試行、空結果の失敗扱いは CLI の振る舞い（`browse.spec.md`）に従う
+- エンジンの試行順（google → duckduckgo → bing）、challenge / captcha 検出時の同一エンジン 1 回再試行、空結果の失敗扱いは CLI の振る舞い（`browse/SPEC.md`）に従う
 
 ## fetch provider（id: `camoufox-trafilatura`）
 
@@ -46,7 +46,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 | `body` | `{ kind: "text", content: <CLI JSON の body（markdown）> }`。`fallbacks` がある場合は、本文の先頭に `✓ <backend> [- "<title>"] (fallback: <backend>: <error>; ...) (1.2s)` の1行を追加する |
 | `truncated` | `false` |
 
-- URL による経路の選択（Reddit 投稿 → RSS / embed / oEmbed、StackOverflow 質問 → StackExchange API / 質問フィード、その他 → camoufox 描画 + `trafilatura --markdown`）と各経路のフォールバックは CLI の振る舞い（`browse.spec.md`）に従う
+- URL による経路の選択（Reddit 投稿 → RSS / embed / oEmbed、StackOverflow 質問 → StackExchange API / 質問フィード、その他 → camoufox 描画 + `trafilatura --markdown`）と各経路のフォールバックは CLI の振る舞い（`browse/SPEC.md`）に従う
 - 失敗時のエラー伝播は search provider と同じ（CLI stderr を逐語で持つ `WEB_PROVIDER_ERROR` の `WebError`）
 - CLI が返した `fallbacks` は、標準 dsh UI の成功行へ渡せないため、成功本文の先頭1行へ表示する。タイトル抽出は本家 tool-web 側の責務だが、fallback 行のタイトルは CLI JSON の `title` を使う
 

@@ -65,7 +65,7 @@ export type WebCliDeps = {
   env?: Record<string, string | undefined>;
 };
 
-// Spec (browse.spec.md "--json のフィールド"): search returns query, engine,
+// Spec (browse/SPEC.md "--json のフィールド"): search returns query, engine,
 // tookMs and results; fetch returns url, backend, title (optional), body,
 // tookMs and fallbacks (optional). Fields absent from the CLI output stay
 // undefined.
@@ -127,7 +127,7 @@ async function runCliJson<T>(
 
 // --- tool output shaping ---
 
-// Spec (browse.spec.md "markdown 出力の構造"): a meta line, then one block per
+// Spec (browse/SPEC.md "markdown 出力の構造"): a meta line, then one block per
 // result. Missing fields drop their line; a missing title falls back to the
 // URL, then "(no title)". The CLI already ranks and limits results to 10.
 export function formatSearchText(json: SearchCliJson): string {

@@ -2,7 +2,7 @@
 
 ## 概要
 
-本 plugin は、ticket CLI（`~/.agents/cli/ticket/`。`bun ~/.agents/cli/ticket` として起動し、bun が package.json の `main` を解決する）のラッパー tool 5 つを dsh に登録する、pi `tickets` extension の host 移植。tool 群の振る舞いの正本は `dotfiles/.agents/cli.exact/ticket/ticket-tools.spec.md`（harness 中立）であり、本 SPEC.md はそれを再定義せず、dsh での実現形（構成・依存・ビルド・結果形式）だけを定める。CLI とストアの仕様は `dotfiles/.agents/cli.exact/ticket/ticket.spec.md` が正本。
+本 plugin は、ticket CLI（`~/.agents/cli/ticket/`。`bun ~/.agents/cli/ticket` として起動し、bun が package.json の `main` を解決する）のラッパー tool 5 つを dsh に登録する、pi `tickets` extension の host 移植。tool 群と CLI・ストアの振る舞いの正本は `dotfiles/.agents/cli.exact/ticket/SPEC.md`（harness 中立）であり、本 SPEC.md はそれを再定義せず、dsh での実現形（構成・依存・ビルド・結果形式）だけを定める。
 
 ## 登録する tool
 
@@ -22,7 +22,7 @@
 
 | 層 | 内容 |
 | --- | --- |
-| canonical value（`execute` の戻り値） | CLI のテキスト出力（`ticket.spec.md` の非 `--json` stdout）そのもの |
+| canonical value（`execute` の戻り値） | CLI のテキスト出力（`ticket/SPEC.md` の非 `--json` stdout）そのもの |
 | model-facing text（`output.render`） | canonical value を 1 個の text content block として渡す |
 
 pi extension が truncation 時に保持する `details`（完全 JSON）は dsh 側では持たない。dsh の tool result truncation は harness 側の責務である。

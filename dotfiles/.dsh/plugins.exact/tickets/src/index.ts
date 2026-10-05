@@ -46,7 +46,7 @@ export interface TicketEditArgs {
   project?: string;
 }
 
-// --- tool args -> CLI args (ticket-tools.spec.md 共通の振る舞い) ---
+// --- tool args -> CLI args (ticket/SPEC.md tool ラッパーの共通) ---
 // These builders carry only the subcommand and the flags derived from the
 // tool arguments; the CLI's text output is the tool result as-is.
 

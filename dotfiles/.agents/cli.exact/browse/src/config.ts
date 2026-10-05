@@ -1,5 +1,5 @@
 // Shared configuration: environment-resolved endpoints, the machine-local
-// state directory and stage timeouts (spec: browse.spec.md "タイムアウト").
+// state directory and stage timeouts (spec: browse/SPEC.md "タイムアウト").
 
 import { homedir } from "node:os";
 import { join } from "node:path";

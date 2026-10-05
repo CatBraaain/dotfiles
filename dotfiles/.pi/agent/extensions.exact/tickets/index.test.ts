@@ -380,7 +380,7 @@ describe("registration", () => {
   });
 });
 
-describe("tool parameter schemas (SPEC: ticket-tools.spec.md per-tool args)", () => {
+describe("tool parameter schemas (SPEC: ticket/SPEC.md per-tool args)", () => {
   interface SchemaNode {
     type?: string;
     minLength?: number;

@@ -2,7 +2,7 @@
 // order: 設定 -> CLI 子プロセス wiring -> search provider -> fetch provider ->
 // available() -> エラー伝播 -> 提供する plugin. The CLI itself (engine chain,
 // servers, Reddit / StackOverflow routes) has its own contract in
-// dotfiles/.agents/cli.exact/browse/browse.spec.md and is not exercised here: the CLI
+// dotfiles/.agents/cli.exact/browse/SPEC.md and is not exercised here: the CLI
 // spawn is mocked at the exec seam.
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";

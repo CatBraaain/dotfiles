@@ -1,5 +1,5 @@
 // Tests for dotfiles-dsh-tickets. Cases follow the oracle spec
-// (dotfiles/.agents/cli.exact/ticket/ticket-tools.spec.md): argument mapping, session cwd,
+// (dotfiles/.agents/cli.exact/ticket/SPEC.md): argument mapping, session cwd,
 // tool descriptions (wrapped CLI subcommand, argument meanings, next-default
 // selector, ticket_set / ticket_edit pre-CLI validation), compiled parameter
 // schemas, and result rendering (the CLI's text output passed through). The
@@ -20,7 +20,7 @@ import {
   sessionCwd,
 } from "./index.ts";
 
-// CLI text-output fixtures (ticket.spec.md テキスト出力).
+// CLI text-output fixtures (ticket/SPEC.md テキスト出力).
 const LIST_TEXT =
   "demo\t20260918-010000\topen\tFirst ticket\ndemo\t20260918-020000\tblocked\tSecond ticket";
 const SHOW_TEXT =

@@ -1,6 +1,6 @@
 # web-search 拡張機能 Spec
 
-pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli.exact/` の `browse` CLI コマンド（spec: `dotfiles/.agents/cli.exact/browse/browse.spec.md`。以下 **CLI spec**）が持つ。この拡張は CLI の search / fetch サブコマンドを子プロセスで起動し、tool の入出力への変換のみを行う薄いラッパーである。
+pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli.exact/` の `browse` CLI コマンド（spec: `dotfiles/.agents/cli.exact/browse/SPEC.md`。以下 **CLI spec**）が持つ。この拡張は CLI の search / fetch サブコマンドを子プロセスで起動し、tool の入出力への変換のみを行う薄いラッパーである。
 
 ## ツール一覧
 

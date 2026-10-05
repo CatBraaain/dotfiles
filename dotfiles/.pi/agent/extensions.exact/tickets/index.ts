@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
-// --- tool parameter schemas (argument names match ticket-tools.spec.md) ---
+// --- tool parameter schemas (argument names match ticket/SPEC.md) ---
 
 const SELECTOR_DESCRIPTION =
   'Ticket selector: a ticket ID, a prefix unique to one ticket, or "next" for the ' +
@@ -136,7 +136,7 @@ export type TicketCreateParams = Static<typeof ticketCreateParameters>;
 export type TicketSetParams = Static<typeof ticketSetParameters>;
 export type TicketEditParams = Static<typeof ticketEditParameters>;
 
-// --- tool args -> CLI args (SPEC: ticket-tools.spec.md, per-tool sections) ---
+// --- tool args -> CLI args (SPEC: ticket/SPEC.md, per-tool sections) ---
 
 function projectFlag(project: string | undefined): string[] {
   return project === undefined ? [] : ["--project", project];
@@ -262,7 +262,7 @@ export const ticketToolPromptSnippets = {
   ticket_edit: "Edit a ticket's body text",
 } as const;
 
-// --- CLI spawn (SPEC: ticket-tools.spec.md common behavior) ---
+// --- CLI spawn (SPEC: ticket/SPEC.md common behavior) ---
 
 export type TicketCliRunner = (
   args: string[],
@@ -287,7 +287,7 @@ export interface SpawnTicketCliDeps {
 }
 
 // Adds --json before the option terminator so the terminator's positional
-// arguments stay literal (SPEC: the -- rule in ticket.spec.md).
+// arguments stay literal (SPEC: the -- rule in ticket/SPEC.md).
 export function appendJsonFlag(args: string[]): string[] {
   const terminator = args.indexOf("--");
   if (terminator === -1) return [...args, "--json"];
