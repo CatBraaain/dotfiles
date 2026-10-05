@@ -1,8 +1,5 @@
-
-export function installRecordingOverlay(
-  { html, css, state: initialState },
-) {
-  const owner = (window);
+export function installRecordingOverlay({ html, css, state: initialState }) {
+  const owner = window;
   owner.recordingOverlay?.dispose();
   const host = document.createElement("recording-annotation-overlay");
   host.setAttribute("aria-hidden", "true");
@@ -39,19 +36,24 @@ export function installRecordingOverlay(
   let disposed = false;
   let frame = 0;
   const paintFrames = new Map();
-  let layout = { constraints: [], placements: {}, requiredTitleHeight: 0, at: 0 };
+  let layout = {
+    constraints: [],
+    placements: {},
+    requiredTitleHeight: 0,
+    at: 0,
+  };
   let effects = [];
   let protectedRects = [];
   let lastInputAt = -Infinity;
-  let pendingInput = (null);
+  let pendingInput = null;
   let inputRevealAt = 0;
   let visible = true;
   let visibilityRequest = 0;
-  let checkStartedAt = (null);
+  let checkStartedAt = null;
   let checkStep = 0;
   const firstAts = {
-    input: (null),
-    key: (null),
+    input: null,
+    key: null,
   };
   const dockWidths = { input: 0, key: 0 };
   const presentations = new Map();
@@ -129,7 +131,7 @@ export function installRecordingOverlay(
     const onlyThemeOrPointer = Object.keys(patch).every((name) =>
       ["theme", "reducedMotion", "pointer"].includes(name),
     );
-    const input = (patch.input);
+    const input = patch.input;
     if (
       input &&
       state.key?.name === "Backspace" &&
@@ -153,7 +155,7 @@ export function installRecordingOverlay(
   }
 
   function normalize(next, previous) {
-    for (const kind of (["input", "key"])) {
+    for (const kind of ["input", "key"]) {
       const value = next[kind];
       if (!value) {
         firstAts[kind] = null;
@@ -187,7 +189,7 @@ export function installRecordingOverlay(
     }
     if (state.current !== checkStep || (explicit && patch.checkAt != null)) {
       checkStep = state.current;
-      checkStartedAt = (explicit ? patch.checkAt : performance.now());
+      checkStartedAt = explicit ? patch.checkAt : performance.now();
     }
   }
 
@@ -278,7 +280,12 @@ export function installRecordingOverlay(
     const area = state.pageArea;
     const s = scale();
     root.style.setProperty("--unit", `${s}px`);
-    layout = { constraints: [], placements: {}, requiredTitleHeight: 0, at: performance.now() };
+    layout = {
+      constraints: [],
+      placements: {},
+      requiredTitleHeight: 0,
+      at: performance.now(),
+    };
     const step = state.steps[state.current - 1];
     const showPage = state.layer !== "title";
     const showTitle = state.layer !== "page";
@@ -288,7 +295,7 @@ export function installRecordingOverlay(
       showPage && state.phase === "result" ? (state.result?.rect ?? null) : null,
     ]
       .filter((rect) => rect != null)
-      .map((rect) => expand((rect), 8 * s));
+      .map((rect) => expand(rect, 8 * s));
     if (showTitle) renderTitle(s);
     else {
       element(".title").hidden = true;
@@ -315,7 +322,7 @@ export function installRecordingOverlay(
       element(".result-label"),
       visible && showPage && state.phase === "result" && !!state.result,
     );
-    for (const kind of (["input", "key"])) {
+    for (const kind of ["input", "key"]) {
       const value = state[kind];
       const transient = showPage ? value : null;
       presentTransient(element("." + kind), transient, performance.now());
@@ -346,12 +353,7 @@ export function installRecordingOverlay(
       );
     }
   }
-  function renderFrame(
-    kind,
-    annotation,
-    area,
-    s,
-  ) {
+  function renderFrame(kind, annotation, area, s) {
     const box = element(`.${kind}-frame`);
     box.hidden = !annotation;
     if (!annotation) return;
@@ -373,11 +375,7 @@ export function installRecordingOverlay(
     return { x: safe.x, y: safe.y, width: safe.width, height: 1 };
   }
 
-  function renderTaskLabel(
-    step,
-    s,
-    occupied,
-  ) {
+  function renderTaskLabel(step, s, occupied) {
     const label = element(".task-label");
     label.hidden = false;
     element(".label-text").textContent = step.action;
@@ -398,12 +396,12 @@ export function installRecordingOverlay(
     const found = [above, below].find((rect) => fits(rect, occupied, s));
     const fallbackY =
       above.y >= safe.y ? above.y : Math.min(below.y, safe.y + safe.height - height);
-    const rect = found ?? ({
+    const rect = found ?? {
       x,
       y: Math.max(safe.y, fallbackY),
       width,
       height,
-    });
+    };
     recordPlacement("task-label", label, rect, occupied);
     if (!found || textWidth <= 0)
       constraint(
@@ -519,12 +517,7 @@ export function installRecordingOverlay(
     probe.remove();
     return width;
   }
-  function wrapLines(
-    text,
-    role,
-    width,
-    lineHeight,
-  ) {
+  function wrapLines(text, role, width, lineHeight) {
     if (!(width > 0)) return 1;
     const probe = document.createElement("span");
     probe.className = role;
@@ -551,12 +544,7 @@ export function installRecordingOverlay(
       .filter((animation) => animation != null)
       .filter((animation) => animation.playState !== "finished");
   }
-  function present(
-    node,
-    nextVisible,
-    duration = nextVisible ? 150 : 300,
-    immediate = false,
-  ) {
+  function present(node, nextVisible, duration = nextVisible ? 150 : 300, immediate = false) {
     const entry = presentations.get(node);
     if (!entry) return;
     if (immediate) {
@@ -602,11 +590,7 @@ export function installRecordingOverlay(
       })
       .catch(() => {});
   }
-  function presentTransient(
-    node,
-    value,
-    now,
-  ) {
+  function presentTransient(node, value, now) {
     if (!value) {
       present(node, false);
       return;
@@ -649,11 +633,7 @@ export function installRecordingOverlay(
       .catch(() => {});
   }
 
-  function positions(
-    safe,
-    node,
-    centered,
-  ) {
+  function positions(safe, node, centered) {
     const size = sized(node, 0, 0);
     const centre = {
       x: safe.x + (safe.width - size.width) / 2,
@@ -667,13 +647,7 @@ export function installRecordingOverlay(
       { x: safe.x + safe.width - size.width, y: centre.y },
     ];
   }
-  function selectPosition(
-    name,
-    node,
-    candidates,
-    occupied,
-    s,
-  ) {
+  function selectPosition(name, node, candidates, occupied, s) {
     const rects = candidates.map((point) => sized(node, point.x, point.y));
     const found = rects.find((rect) => fits(rect, occupied, s));
     const rect = found ?? rects[0];
@@ -691,21 +665,12 @@ export function installRecordingOverlay(
       !occupied.some((other) => intersects(rect, expand(other, 16 * s)))
     );
   }
-  function recordPlacement(
-    name,
-    node,
-    rect,
-    occupied,
-  ) {
+  function recordPlacement(name, node, rect, occupied) {
     place(node, rect);
     layout.placements[name] = rect;
     occupied.push(rect);
   }
-  function constraint(
-    name,
-    reason,
-    rect,
-  ) {
+  function constraint(name, reason, rect) {
     const values = {
       title: state.title,
       "task-label": state.steps[state.current - 1]?.action ?? "",
@@ -727,7 +692,7 @@ export function installRecordingOverlay(
     const found = shadow.querySelector(selector);
     if (!(found instanceof HTMLElement || found instanceof SVGElement))
       throw new Error(`Missing overlay asset element: ${selector}`);
-    return (found);
+    return found;
   }
   function place(node, rect) {
     Object.assign(node.style, {
@@ -737,11 +702,7 @@ export function installRecordingOverlay(
       height: `${rect.height}px`,
     });
   }
-  function sized(
-    node,
-    x,
-    y,
-  ) {
+  function sized(node, x, y) {
     return {
       x,
       y,
@@ -750,7 +711,12 @@ export function installRecordingOverlay(
     };
   }
   function expand(r, gap) {
-    return { x: r.x - gap, y: r.y - gap, width: r.width + gap * 2, height: r.height + gap * 2 };
+    return {
+      x: r.x - gap,
+      y: r.y - gap,
+      width: r.width + gap * 2,
+      height: r.height + gap * 2,
+    };
   }
   function inset(r, gap) {
     return expand(r, -gap);
@@ -779,11 +745,23 @@ export function installRecordingOverlay(
       const ripple = document.createElement("div");
       ripple.className = "ripple";
       element(".effects").append(ripple);
-      effects.push({ node: ripple, kind: "ripple", at: sample.at, x: sample.x, y: sample.y });
+      effects.push({
+        node: ripple,
+        kind: "ripple",
+        at: sample.at,
+        x: sample.x,
+        y: sample.y,
+      });
     } else if (!reduced()) {
-      const trail = (cursor.cloneNode(true));
+      const trail = cursor.cloneNode(true);
       element(".effects").append(trail);
-      effects.push({ node: trail, kind: "trail", at: sample.at, x: sample.x, y: sample.y });
+      effects.push({
+        node: trail,
+        kind: "trail",
+        at: sample.at,
+        x: sample.x,
+        y: sample.y,
+      });
     }
   }
 
@@ -807,7 +785,12 @@ export function installRecordingOverlay(
       }
       const fraction = age / duration;
       if (effect.kind === "trail") {
-        const ghost = { x: effect.x, y: effect.y, width: 16 * s, height: 24 * s };
+        const ghost = {
+          x: effect.x,
+          y: effect.y,
+          width: 16 * s,
+          height: 24 * s,
+        };
         const overText =
           Object.values(layout.placements).some((rect) => intersects(ghost, rect)) ||
           intersects(ghost, state.titleArea);
@@ -823,7 +806,7 @@ export function installRecordingOverlay(
     });
     let fading = false;
     let expired = false;
-    for (const kind of (["input", "key"])) {
+    for (const kind of ["input", "key"]) {
       const value = state[kind];
       if (!value) continue;
       const times = transientTimes(value.firstAt ?? value.at, value.at);
@@ -844,14 +827,9 @@ export function installRecordingOverlay(
       frame = requestAnimationFrame(tick);
   }
 
-  function cssEase(
-    progress,
-    x1,
-    x2,
-  ) {
+  function cssEase(progress, x1, x2) {
     if (progress <= 0 || progress >= 1) return progress;
-    const bezier = (t, a, b) =>
-      3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+    const bezier = (t, a, b) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
     let low = 0;
     let high = 1;
     for (let index = 0; index < 24; index++) {

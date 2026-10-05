@@ -18,11 +18,11 @@
         --accent-ink: #f7f8fc;
         --shadow: rgba(23, 25, 34, 0.12);
         --sans:
-          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-          "Segoe UI", "Noto Sans CJK JP", sans-serif;
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "Noto Sans CJK JP", sans-serif;
         --mono:
-          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
-          "Noto Sans Mono CJK JP", monospace;
+          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK JP",
+          monospace;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -142,22 +142,11 @@
         border-color: var(--chip);
         color: var(--chip-ink);
       }
-      .step-body {
-        min-width: 0;
-      }
       .action {
         display: block;
         font-weight: 600;
         font-size: 14px;
         line-height: 20px;
-        overflow-wrap: anywhere;
-      }
-      .expected {
-        display: block;
-        margin-top: 4px;
-        font-size: 13px;
-        line-height: 18px;
-        color: var(--secondary);
         overflow-wrap: anywhere;
       }
 
@@ -209,9 +198,6 @@
         font-size: 14px;
         line-height: 20px;
         overflow-wrap: anywhere;
-      }
-      .detail .row.expected > span:last-child {
-        font-weight: 600;
       }
       .controls {
         margin-top: 16px;
@@ -310,15 +296,12 @@
           <div class="detail" id="step-detail"></div>
           <div class="controls">
             <button class="ctl" type="button" id="prev">Previous step</button>
-            <button class="ctl primary" type="button" id="replay">
-              Replay
-            </button>
+            <button class="ctl primary" type="button" id="replay">Replay</button>
             <button class="ctl" type="button" id="next">Next step</button>
           </div>
           <p class="footnote">
-            This viewer is for reviewing recordings only. Read the automated
-            test outcome from the runner results; do not infer it from in-video
-            annotations.
+            This viewer is for reviewing recordings only. Read the automated test outcome from the
+            runner results; do not infer it from in-video annotations.
           </p>
         </section>
       </main>
@@ -337,9 +320,7 @@
         } catch {
           data = null;
         }
-        const valid = Boolean(
-          data && Array.isArray(data.steps) && data.steps.length > 0,
-        );
+        const valid = Boolean(data && Array.isArray(data.steps) && data.steps.length > 0);
 
         const header = document.getElementById("viewer-header");
         const main = document.getElementById("viewer-main");
@@ -349,7 +330,7 @@
         if (!valid) {
           empty.hidden = false;
           emptyMessage.textContent =
-            "The contents of script#e2e-viewer-data could not be read. Embed the recording data as JSON shaped { title, steps: [{ number, action, expected, video }] }.";
+            "The contents of script#e2e-viewer-data could not be read. Embed the recording data as JSON shaped { title, steps: [{ number, action, video }] }.";
           return;
         }
 
@@ -374,10 +355,8 @@
         }
 
         function renderHeader() {
-          document.getElementById("viewer-title").textContent =
-            data.title || "Recording viewer";
-          document.getElementById("viewer-meta").textContent =
-            `${data.steps.length} steps`;
+          document.getElementById("viewer-title").textContent = data.title || "Recording viewer";
+          document.getElementById("viewer-meta").textContent = `${data.steps.length} steps`;
         }
 
         function renderList() {
@@ -389,18 +368,9 @@
             button.setAttribute("aria-current", String(index === current));
             button.append(
               el("span", "num", String(step.number ?? index + 1)),
-              (() => {
-                const body = el("span", "step-body");
-                body.append(
-                  el("span", "action", step.action ?? ""),
-                  el("span", "expected", step.expected ?? ""),
-                );
-                return body;
-              })(),
+              el("span", "action", step.action ?? ""),
             );
-            button.addEventListener("click", () =>
-              select(index, { autoplay: true }),
-            );
+            button.addEventListener("click", () => select(index, { autoplay: true }));
             li.append(button);
             list.append(li);
           });
@@ -409,16 +379,8 @@
         function renderDetail(step) {
           detail.textContent = "";
           const action = el("div", "row");
-          action.append(
-            el("span", "", "Action"),
-            el("span", "", step.action ?? ""),
-          );
-          const expected = el("div", "row expected");
-          expected.append(
-            el("span", "", "Expected"),
-            el("span", "", step.expected ?? ""),
-          );
-          detail.append(action, expected);
+          action.append(el("span", "", "Action"), el("span", "", step.action ?? ""));
+          detail.append(action);
         }
 
         function updateButtons() {
@@ -470,12 +432,8 @@
           );
         });
 
-        prev.addEventListener("click", () =>
-          select(current - 1, { autoplay: true }),
-        );
-        next.addEventListener("click", () =>
-          select(current + 1, { autoplay: true }),
-        );
+        prev.addEventListener("click", () => select(current - 1, { autoplay: true }));
+        next.addEventListener("click", () => select(current + 1, { autoplay: true }));
         replay.addEventListener("click", () => {
           if (!video.getAttribute("src")) return;
           showVideo();
@@ -484,10 +442,8 @@
         });
 
         window.addEventListener("keydown", (event) => {
-          if (event.key === "ArrowLeft")
-            select(current - 1, { autoplay: true });
-          else if (event.key === "ArrowRight")
-            select(current + 1, { autoplay: true });
+          if (event.key === "ArrowLeft") select(current - 1, { autoplay: true });
+          else if (event.key === "ArrowRight") select(current + 1, { autoplay: true });
           else if (event.key === "r" || event.key === "R") replay.click();
         });
 

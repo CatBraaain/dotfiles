@@ -6,7 +6,7 @@
 //   └── <step videos>.mp4
 //
 // metadata.json has the shape
-// { "title": "...", "steps": [{ "action": "...", "expected": "...", "video": "..." }] }
+// { "title": "...", "steps": [{ "action": "...", "video": "..." }] }
 // where "video" resolves relative to the recordings folder. Steps play in
 // array order and receive the viewer numbers 1..N.
 // Usage: node build-viewer.mjs <recordings-dir>
@@ -20,14 +20,9 @@ const TEMPLATE = "viewer.html";
 const PLACEHOLDER = "__E2E_VIEWER_DATA__";
 
 export function buildViewerHtml(recordingsDir) {
-  const template = readFileSync(
-    new URL(`./${TEMPLATE}`, import.meta.url),
-    "utf8",
-  );
+  const template = readFileSync(new URL(`./${TEMPLATE}`, import.meta.url), "utf8");
   if (!template.includes(PLACEHOLDER)) {
-    throw new Error(
-      `Template ${TEMPLATE} lost its ${PLACEHOLDER} placeholder.`,
-    );
+    throw new Error(`Template ${TEMPLATE} lost its ${PLACEHOLDER} placeholder.`);
   }
   return template.replace(PLACEHOLDER, embed(readMetadata(recordingsDir)));
 }
@@ -63,9 +58,7 @@ function readMetadata(recordingsDir) {
   }
   return {
     title,
-    steps: steps.map((step, index) =>
-      readStep(recordingsDir, file, step, index + 1),
-    ),
+    steps: steps.map((step, index) => readStep(recordingsDir, file, step, index + 1)),
   };
 }
 
@@ -73,33 +66,19 @@ function readStep(recordingsDir, metadataFile, step, number) {
   if (typeof step !== "object" || step === null || Array.isArray(step)) {
     throw new Error(`${metadataFile}: step ${number} must be an object.`);
   }
-  const { action, expected, video } = step;
+  const { action, video } = step;
   if (typeof action !== "string" || !action.trim()) {
-    throw new Error(
-      `${metadataFile}: step ${number} "action" must be a non-empty string.`,
-    );
+    throw new Error(`${metadataFile}: step ${number} "action" must be a non-empty string.`);
   }
-  if (typeof expected !== "string" || !expected.trim()) {
-    throw new Error(
-      `${metadataFile}: step ${number} "expected" must be a non-empty string.`,
-    );
-  }
-  if (
-    typeof video !== "string" ||
-    !video.trim() ||
-    isAbsolute(video) ||
-    video.startsWith("..")
-  ) {
+  if (typeof video !== "string" || !video.trim() || isAbsolute(video) || video.startsWith("..")) {
     throw new Error(
       `${metadataFile}: step ${number} "video" must be a relative path inside the recordings folder.`,
     );
   }
   if (!existsSync(join(recordingsDir, video))) {
-    throw new Error(
-      `${metadataFile}: step ${number} video "${video}" does not exist.`,
-    );
+    throw new Error(`${metadataFile}: step ${number} video "${video}" does not exist.`);
   }
-  return { number, action, expected, video };
+  return { number, action, video };
 }
 
 function readJson(file) {

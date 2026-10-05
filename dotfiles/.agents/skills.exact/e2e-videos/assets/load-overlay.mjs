@@ -1,15 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { installRecordingOverlay } from "./overlay.mjs";
 
-export async function loadRecordingOverlay(
-  page,
-  state,
-) {
+export async function loadRecordingOverlay(page, state) {
   const [html, css] = await Promise.all([
     readFile(new URL("./overlay.html", import.meta.url), "utf8"),
     readFile(new URL("./overlay.css", import.meta.url), "utf8"),
   ]);
-  const installed = await page.evaluate(installRecordingOverlay, { html, css, state });
+  const installed = await page.evaluate(installRecordingOverlay, {
+    html,
+    css,
+    state,
+  });
   return {
     installed,
     update: (patch) => invoke("update", patch),
@@ -19,13 +20,10 @@ export async function loadRecordingOverlay(
     dispose: () => invoke("dispose"),
   };
 
-  function invoke(
-    operation,
-    argument = undefined,
-  ) {
+  function invoke(operation, argument = undefined) {
     return page.evaluate(
       ({ operation, argument }) => {
-        const overlay = (window).recordingOverlay;
+        const overlay = window.recordingOverlay;
         if (!overlay) {
           if (operation === "dispose") return;
           throw new Error("Recording overlay is not installed in this document");

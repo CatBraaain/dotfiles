@@ -1,11 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -44,14 +38,9 @@ test("builds the viewer data from metadata.json", () => {
       steps: [
         {
           action: "Type the delivery name",
-          expected: "Name is preserved",
           video: "01-type-delivery-name.mp4",
         },
-        {
-          action: "Click Confirm",
-          expected: "Total === ¥3,300",
-          video: "02-click-confirm.mp4",
-        },
+        { action: "Click Confirm", video: "02-click-confirm.mp4" },
       ],
     });
     const data = extractData(buildViewerHtml(recordings.dir));
@@ -61,13 +50,11 @@ test("builds the viewer data from metadata.json", () => {
         {
           number: 1,
           action: "Type the delivery name",
-          expected: "Name is preserved",
           video: "01-type-delivery-name.mp4",
         },
         {
           number: 2,
           action: "Click Confirm",
-          expected: "Total === ¥3,300",
           video: "02-click-confirm.mp4",
         },
       ],
@@ -84,7 +71,7 @@ test("resolves video paths inside subfolders", () => {
     writeVideo(join(recordings.dir, "videos"), "step.mp4");
     writeMetadata(recordings.dir, {
       title: "t",
-      steps: [{ action: "a", expected: "e", video: "videos/step.mp4" }],
+      steps: [{ action: "a", video: "videos/step.mp4" }],
     });
     const data = extractData(buildViewerHtml(recordings.dir));
     assert.deepEqual(
@@ -100,29 +87,23 @@ test("rejects missing or empty title and steps", () => {
   const recordings = tempRecordings();
   try {
     writeMetadata(recordings.dir, {
-      steps: [{ action: "a", expected: "e", video: "x.mp4" }],
+      steps: [{ action: "a", video: "x.mp4" }],
     });
-    assert.throws(
-      () => buildViewerHtml(recordings.dir),
-      /"title" must be a non-empty string/,
-    );
+    assert.throws(() => buildViewerHtml(recordings.dir), /"title" must be a non-empty string/);
     writeMetadata(recordings.dir, { title: "t" });
-    assert.throws(
-      () => buildViewerHtml(recordings.dir),
-      /"steps" must be a non-empty array/,
-    );
+    assert.throws(() => buildViewerHtml(recordings.dir), /"steps" must be a non-empty array/);
   } finally {
     recordings.dispose();
   }
 });
 
-test("rejects a step missing action or expected", () => {
+test("rejects a step missing action", () => {
   const recordings = tempRecordings();
   try {
     writeVideo(recordings.dir, "v.mp4");
     writeMetadata(recordings.dir, {
       title: "t",
-      steps: [{ expected: "e", video: "v.mp4" }],
+      steps: [{ video: "v.mp4" }],
     });
     assert.throws(
       () => buildViewerHtml(recordings.dir),
@@ -139,7 +120,7 @@ test("rejects an absolute or parent video path", () => {
     writeVideo(recordings.dir, "v.mp4");
     writeMetadata(recordings.dir, {
       title: "t",
-      steps: [{ action: "a", expected: "e", video: "/tmp/v.mp4" }],
+      steps: [{ action: "a", video: "/tmp/v.mp4" }],
     });
     assert.throws(
       () => buildViewerHtml(recordings.dir),
@@ -147,7 +128,7 @@ test("rejects an absolute or parent video path", () => {
     );
     writeMetadata(recordings.dir, {
       title: "t",
-      steps: [{ action: "a", expected: "e", video: "../outside.mp4" }],
+      steps: [{ action: "a", video: "../outside.mp4" }],
     });
     assert.throws(
       () => buildViewerHtml(recordings.dir),
@@ -163,12 +144,9 @@ test("rejects a video that does not exist", () => {
   try {
     writeMetadata(recordings.dir, {
       title: "t",
-      steps: [{ action: "a", expected: "e", video: "missing.mp4" }],
+      steps: [{ action: "a", video: "missing.mp4" }],
     });
-    assert.throws(
-      () => buildViewerHtml(recordings.dir),
-      /video "missing\.mp4" does not exist/,
-    );
+    assert.throws(() => buildViewerHtml(recordings.dir), /video "missing\.mp4" does not exist/);
   } finally {
     recordings.dispose();
   }
@@ -180,10 +158,7 @@ test("rejects invalid or non-object metadata.json", () => {
     writeFileSync(join(recordings.dir, "metadata.json"), "{ nope");
     assert.throws(() => buildViewerHtml(recordings.dir), /invalid JSON/);
     writeFileSync(join(recordings.dir, "metadata.json"), '"text"');
-    assert.throws(
-      () => buildViewerHtml(recordings.dir),
-      /expected a JSON object/,
-    );
+    assert.throws(() => buildViewerHtml(recordings.dir), /expected a JSON object/);
   } finally {
     recordings.dispose();
   }
@@ -195,7 +170,7 @@ test("escapes </script> inside the embedded JSON", () => {
     writeVideo(recordings.dir, "v.mp4");
     writeMetadata(recordings.dir, {
       title: "</script><b>injected</b>",
-      steps: [{ action: "a", expected: "e", video: "v.mp4" }],
+      steps: [{ action: "a", video: "v.mp4" }],
     });
     const data = extractData(buildViewerHtml(recordings.dir));
     assert.equal(data.title, "</script><b>injected</b>");
@@ -210,7 +185,7 @@ test("main writes index.html and reports failures via exit code", () => {
     writeVideo(recordings.dir, "v.mp4");
     writeMetadata(recordings.dir, {
       title: "t",
-      steps: [{ action: "a", expected: "e", video: "v.mp4" }],
+      steps: [{ action: "a", video: "v.mp4" }],
     });
     const argv = ["node", "build-viewer.mjs"];
     assert.equal(main([...argv, recordings.dir]), 0);

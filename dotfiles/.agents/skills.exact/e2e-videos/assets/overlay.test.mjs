@@ -15,9 +15,17 @@ function baseState(overrides = {}) {
   return {
     title: "Checkout › confirm the order",
     steps: [
-      { name: "input name", action: "Type the delivery name", expected: "Name is preserved" },
+      {
+        name: "input name",
+        action: "Type the delivery name",
+        expected: "Name is preserved",
+      },
       { name: "press enter", action: "Press Enter", expected: "Row is added" },
-      { name: "click checkbox", action: "Click the checkbox", expected: "Row is completed" },
+      {
+        name: "click checkbox",
+        action: "Click the checkbox",
+        expected: "Row is completed",
+      },
     ],
     current: 1,
     phase: "waiting",
@@ -557,7 +565,11 @@ test("rejects malformed state", () => {
       baseState({ layer: "outside" }),
       baseState({ pageArea: undefined }),
       baseState({
-        target: { rect: { x: 0, y: 0, width: 0, height: 10 }, name: "x", kind: "click" },
+        target: {
+          rect: { x: 0, y: 0, width: 0, height: 10 },
+          name: "x",
+          kind: "click",
+        },
       }),
       baseState({ checkAt: Number.NaN }),
     ];
@@ -617,7 +629,10 @@ test("task label falls below the anchor when above does not fit", () => {
     const rect = { x: 100, y: 80, width: 400, height: 66 };
     const { layout } = installAt(
       world,
-      baseState({ target: { rect, name: "Name", kind: "input" }, taskAnchor: rect }),
+      baseState({
+        target: { rect, name: "Name", kind: "input" },
+        taskAnchor: rect,
+      }),
     );
     assert.equal(layout.placements["task-label"].y, 80 + 66 + 12);
   } finally {
@@ -631,7 +646,10 @@ test("task label reports a constraint when neither side fits", () => {
     const rect = { x: 100, y: 88, width: 200, height: 620 };
     const { layout } = installAt(
       world,
-      baseState({ target: { rect, name: "Panel", kind: "click" }, taskAnchor: rect }),
+      baseState({
+        target: { rect, name: "Panel", kind: "click" },
+        taskAnchor: rect,
+      }),
     );
     const constraint = layout.constraints.find((entry) => entry.element === "task-label");
     assert.ok(constraint, "expected a task-label constraint");
@@ -650,7 +668,11 @@ test("task label stays fixed on its anchor while the target moves", () => {
     const before = layout.placements["task-label"];
     overlay.update({
       phase: "acting",
-      target: { rect: { x: 100, y: 520, width: 400, height: 66 }, name: "Name", kind: "input" },
+      target: {
+        rect: { x: 100, y: 520, width: 400, height: 66 },
+        name: "Name",
+        kind: "input",
+      },
     });
     assert.deepEqual(overlay.inspect().placements["task-label"], before);
   } finally {
@@ -759,7 +781,11 @@ test("input band sits at the bottom centre with 200/1200/250 timing", () => {
     world.now = 10_000;
     const { overlay, layout } = installAt(
       world,
-      baseState({ phase: "acting", target: null, input: { text: "Buy milk", at: world.now } }),
+      baseState({
+        phase: "acting",
+        target: null,
+        input: { text: "Buy milk", at: world.now },
+      }),
     );
     const placed = layout.placements.input;
     assert.equal(placed.width, 360);
@@ -790,7 +816,11 @@ test("typing extends the hold from the first appearance without restarting the e
     world.now = 5000;
     installAt(
       world,
-      baseState({ phase: "acting", target: null, input: { text: "Buy", at: 5000 } }),
+      baseState({
+        phase: "acting",
+        target: null,
+        input: { text: "Buy", at: 5000 },
+      }),
     );
     const enter = [...world.animations].at(-1);
     assert.ok(enter, "enter animation recorded");
@@ -856,7 +886,12 @@ test("key display is centred, widens for long names and notes API substitution",
     assert.equal(placed.x, (1280 - 120) / 2);
     assert.equal(placed.y, 64 + (720 - 56) / 2);
     overlayHandle().update({
-      key: { name: "Ctrl+Shift+Backspace", at: world.now, api: true, hold: true },
+      key: {
+        name: "Ctrl+Shift+Backspace",
+        at: world.now,
+        api: true,
+        hold: true,
+      },
     });
     assert.equal(hidden(".api-note"), false);
     assert.equal(text(".api-note"), "操作案内");
@@ -876,7 +911,11 @@ test("key display skips a protected centre and takes the next candidate", () => 
       world,
       baseState({
         phase: "acting",
-        target: { rect: { x: 400, y: 300, width: 480, height: 200 }, name: "Hero", kind: "click" },
+        target: {
+          rect: { x: 400, y: 300, width: 480, height: 200 },
+          name: "Hero",
+          kind: "click",
+        },
         key: { name: "Enter", at: world.now, hold: true },
       }),
     );
@@ -895,10 +934,16 @@ test("backspace deletion reveal is delayed by 160ms", () => {
     world.now = 2000;
     installAt(
       world,
-      baseState({ phase: "acting", target: null, input: { text: "Buy mil", at: 2000 } }),
+      baseState({
+        phase: "acting",
+        target: null,
+        input: { text: "Buy mil", at: 2000 },
+      }),
     );
     world.advance(50);
-    overlayHandle().update({ key: { name: "Backspace", at: world.now, hold: true } });
+    overlayHandle().update({
+      key: { name: "Backspace", at: world.now, hold: true },
+    });
     world.advance(50);
     overlayHandle().update({ input: { text: "Buy milk", at: world.now } });
     assert.equal(text(".input-text"), "Buy mil");
@@ -1072,20 +1117,33 @@ test("full scenario walks phases, step numbers and check resets", () => {
     overlay.update({
       phase: "result",
       target: null,
-      result: { rect: { x: 100, y: 200, width: 400, height: 66 }, name: "Name", expected: "ok" },
+      result: {
+        rect: { x: 100, y: 200, width: 400, height: 66 },
+        name: "Name",
+        expected: "ok",
+      },
     });
     assert.equal(text(".chip"), "1");
     world.advance(3000);
     overlay.update({ result: null });
     world.advance(600);
-    overlay.update({ current: 2, phase: "waiting", result: null, checkAt: null });
+    overlay.update({
+      current: 2,
+      phase: "waiting",
+      result: null,
+      checkAt: null,
+    });
     assert.equal(text(".chip"), "2");
     assert.equal(hidden(".check"), true, "check resets on the next step");
     overlay.update({
       current: 3,
       phase: "result",
       target: null,
-      result: { rect: { x: 100, y: 200, width: 400, height: 66 }, name: "Name", expected: "ok" },
+      result: {
+        rect: { x: 100, y: 200, width: 400, height: 66 },
+        name: "Name",
+        expected: "ok",
+      },
     });
     assert.equal(text(".chip"), "3");
   } finally {

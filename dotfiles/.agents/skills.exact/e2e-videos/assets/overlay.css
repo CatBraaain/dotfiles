@@ -5,7 +5,7 @@
 .overlay {
   --unit: 1px;
   --title-surface: #f7f8fc;
-  --surface: rgba(247, 248, 252, 0.96);
+  --surface: rgba(17, 19, 24, 0.85);
   --text: #171922;
   --secondary: #495162;
   --line: #d0d5df;
@@ -46,7 +46,7 @@
 }
 .overlay[data-theme="dark"] {
   --title-surface: #111318;
-  --surface: rgba(17, 19, 24, 0.96);
+  --surface: rgba(247, 248, 252, 0.85);
   --text: #f7f8fc;
   --secondary: #b6bdc9;
   --line: #414957;
@@ -112,8 +112,9 @@ svg {
 .surface {
   position: absolute;
   background: var(--surface);
-  border: calc(1 * var(--unit)) solid var(--line);
-  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--shadow-ink);
+  color: var(--dock-text);
+  border: calc(1 * var(--unit)) solid var(--dock-line);
+  box-shadow: 0 calc(4 * var(--unit)) calc(16 * var(--unit)) var(--dock-shadow);
   border-radius: calc(12 * var(--unit));
   z-index: 2;
 }

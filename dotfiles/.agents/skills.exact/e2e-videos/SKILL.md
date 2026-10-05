@@ -23,7 +23,9 @@ description: ユーザーが Playwright Test または Vitest から Playwright 
 
 Playwright Test と Vitest から Playwright を使う録画ケースは、`assets/load-overlay.mjs` の `loadRecordingOverlay(page, state)` を共通入口とする。テスト側はタイトル・ステップ・task anchor・対象矩形・表示値・観測したサイトテーマ・実イベントを渡す。矩形はすべて null でないことを確認した実測値を、注釈を受けた document の viewport 座標で渡し、frame 内の座標は録画ケース側で変換する。実操作・アサーション・時間の間隔・背景取得とテーマ判定・ページ切替・動画保存と変換は録画ケース側で行う。設置・更新時に返る配置制約を確認し、表示できない内容を省略して録画完了としない。ステップ途中で別 document へ再設置するときは、操作終了時刻を `checkAt` として渡して check の360ms フェードを最初からやり直さない。`painted()` で描画を待つ場合は環境によって完了しないことがあるため（`~/.agents/tickets/dotfiles/20261002-235342.md`）、タイムアウトを付けて待ち、完了しない場合を握りつぶさず報告する。
 
-タイトル帯は2通りで置ける。ページ映像と同じ viewport 内に予約するか、`layer: "page"` でページ注釈だけを描画し、外タイトルを `layer: "title"` の同じ renderer で別途描いて合成するかである。`page.screencast` のフレーム取得と `ffmpeg` 変換の接続は `assets/recording-example.mjs` を接続例として使う。ステップごとの `start()` / `stop()` とフレーム収集の呼び出しは録画ケース側で行う。これは runner 所有の Page と出力先だけを受け取り、操作・アサーション・URL・セレクターを持たない。接続には `page.screencast` を備えた Playwright ビルド（動作確認済み: 1.64.0-alpha-1790635538000）と `ffmpeg` が必要である。screencast のタイムスタンプと `Date.now()` のエポックが一致しないランナーでは、例の `frameClockOffsetMs` で時刻基準を揃える。screencast の取得は可変フレームレートで、約60fps への変換は元の取得間隔と一致しないため、フェード境界の正確な時刻を合否基準にしない（`~/.agents/tickets/dotfiles/20261003-205058.md`）。
+単一 document 内のクリック・文字入力・キー操作・hover・スクロールのステップ実行と注釈更新は、`assets/step-driver.mjs` の録画ドライバへ任せられる。録画ケースは録画セットのタイトルとステップの操作文・動画パスを 1 箇所の宣言（`{ title, steps }`）で `createStepDriver(page, overlay, plan, options)` へ渡し、ステップごとに `click()`・`type()`・`fill()`・`press()`・`hover()`・`scroll()` を呼ぶ。ドライバは task anchor の実測採寸から予告・実値転送・check・結果枠・待機までを `SPEC.md` の「録画ドライバ」節どおりに行い、操作対象より意味のある広さの行を anchor にするときは操作の `anchor` で locator を渡す。ドライバは採寸できない対象（frame 内の要素など）や document をまたぐ操作を吸収しないため、ナビゲーション・別タブ・iframe 内の操作・dialog は録画ケースが直接行い、前段の `loadRecordingOverlay` の扱いに従う。アサーションはドライバへ含まれないため、録画ケースは各ステップの結果を従来どおり自動テストで検証する。宣言した `plan` から `recordingMetadata(plan)` で `metadata.json` のデータを生成でき、録画データを二重管理しない。
+
+タイトル帯は2通りで置ける。ページ映像と同じ viewport 内に予約するか、`layer: "page"` でページ注釈だけを描画し、外タイトルを `layer: "title"` の同じ renderer で別途描いて合成するかである。`page.screencast` のフレーム取得と `ffmpeg` 変換の接続は `assets/recording-example.mjs` を接続例として使う。`recordWithExternalTitle(page, scenario)` は外タイトル合成つきの 1 ステップ動画を書き出し、`scenario.run(handle)` の中で録画ドライバの 1 ステップを実行するのが接続の形である。ステップごとの `start()` / `stop()` とフレーム収集の呼び出しは録画ケース側で行う。これは runner 所有の Page と出力先だけを受け取り、操作・アサーション・URL・セレクターを持たない。接続には `page.screencast` を備えた Playwright ビルド（動作確認済み: 1.64.0-alpha-1790635538000）と `ffmpeg` が必要である。screencast のタイムスタンプと `Date.now()` のエポックが一致しないランナーでは、例の `frameClockOffsetMs` で時刻基準を揃える。screencast の取得は可変フレームレートで、約60fps への変換は元の取得間隔と一致しないため、フェード境界の正確な時刻を合否基準にしない（`~/.agents/tickets/dotfiles/20261003-205058.md`）。
 
 見た目の確認には、この skill のディレクトリを基点とする `assets/design.html` を開く。明暗と各表示状態を比較できる日本語ギャラリーを同梱した単一 HTML であり、`file://` でサーバーなしに閲覧できる。ギャラリーは録画・アサーションの合否を表さない。同梱 assets（`overlay.html`・`overlay.css`・`overlay.mjs`）を編集したら、`design.html` の埋め込みも同じ内容に差し替えてから `assets/overlay.test.mjs` の同一性検査を通す。
 
@@ -41,7 +43,7 @@ Playwright Test と Vitest から Playwright を使う録画ケースは、`asse
 
 録画したステップ動画の保存先フォルダ名は `recordings` とする。`recordings` フォルダにはステップごとの MP4 と、`recordings/metadata.json`、生成した単一の `index.html` を置く。テスト結果の中間ファイルを `recordings` に混在させない。
 
-`recordings/metadata.json` に録画データを書く。`title` と `steps`（`action`・`expected`・`video` の配列）を持ち、`steps` の配列順が再生順であり、正本（対象プロジェクトの SPEC.md の録画シナリオのセクション）のステップ番号と 1 対 1 に対応させる。`video` は `recordings` フォルダからの相対パスとする。
+`recordings/metadata.json` に録画データを書く。`title` と `steps`（`action`・`video` の配列）を持ち、`steps` の配列順が再生順であり、正本（対象プロジェクトの SPEC.md の録画シナリオのセクション）のステップ番号と 1 対 1 に対応させる。`video` は `recordings` フォルダからの相対パスとする。
 
 ビューアは `node assets/build-viewer.mjs <recordings フォルダのパス>` で生成し、`recordings/index.html` のパスを報告に含める。生成スクリプトとビューアの振る舞い・見た目の正本は `SPEC.md` である。
 

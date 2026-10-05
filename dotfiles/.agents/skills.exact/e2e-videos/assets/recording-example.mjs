@@ -8,7 +8,13 @@ export async function recordWithExternalTitle(page, scenario) {
   const titleHeight = scenario.titleHeight ?? 64;
   const outputDir = scenario.outputDir;
   await mkdir(outputDir, { recursive: true });
-  const timeline = [{ at: Date.now(), current: scenario.current ?? 1, read: scenario.read ?? 0 }];
+  const timeline = [
+    {
+      at: Date.now(),
+      current: scenario.current ?? 1,
+      read: scenario.read ?? 0,
+    },
+  ];
   const frames = [];
   const overlay = await loadRecordingOverlay(page, {
     title: scenario.title,
@@ -38,13 +44,16 @@ export async function recordWithExternalTitle(page, scenario) {
     dispose: () => overlay.dispose(),
   };
   let captureError = "";
+  const captureStartedAt = Date.now();
   await page.screencast.start({
     quality: scenario.screencastQuality ?? 95,
+    size: { width: viewport.width, height: viewport.height },
     onFrame: (frame) => {
       frames.push({ data: frame.data, timestamp: frame.timestamp });
     },
   });
   let failure = "";
+  let captureStoppedAt = captureStartedAt;
   try {
     await scenario.run(handle);
   } catch (error) {
@@ -55,6 +64,7 @@ export async function recordWithExternalTitle(page, scenario) {
     } catch (error) {
       captureError = String(error);
     }
+    captureStoppedAt = Date.now();
   }
   if (!frames.length) throw new Error(`No screencast frames were captured. ${captureError}`);
   if (failure) throw new Error(failure);
@@ -82,15 +92,17 @@ export async function recordWithExternalTitle(page, scenario) {
     titleFiles.push({ name, state });
   }
   const firstAt = ordered[0].timestamp;
+  // The screencast only delivers frames on change, so hold the last frame (and
+  // its title state) until the capture actually stopped.
+  const lastFrameHoldMs = Math.max(captureStoppedAt - ordered.at(-1).timestamp, 1000 / 60);
   const durations = ordered.map((frame, index) =>
-    index + 1 < ordered.length ? ordered[index + 1].timestamp - frame.timestamp : 1000 / 60,
+    index + 1 < ordered.length ? ordered[index + 1].timestamp - frame.timestamp : lastFrameHoldMs,
   );
   if (durations.some((duration) => duration <= 0))
     throw new Error("Screencast timestamps are not monotonic; adjust frameClockOffsetMs");
   const lastFrame = ordered.at(-1);
-  const lastDuration = durations.at(-1);
-  if (!lastFrame || !lastDuration) throw new Error("Screencast produced no usable frames");
-  const durationSeconds = (lastFrame.timestamp - firstAt + lastDuration) / 1000;
+  if (!lastFrame) throw new Error("Screencast produced no usable frames");
+  const durationSeconds = Math.max((captureStoppedAt - firstAt) / 1000, 0);
   const sourceConcat = ["ffconcat version 1.0"];
   const titleConcat = ["ffconcat version 1.0"];
   const mapping = ordered.map((frame, index) => {
@@ -127,13 +139,13 @@ export async function recordWithExternalTitle(page, scenario) {
   };
 }
 
-async function renderTitleStrip(
-  context,
-  scenario,
-) {
+async function renderTitleStrip(context, scenario) {
   const page = await context.newPage();
   try {
-    await page.setViewportSize({ width: scenario.width, height: scenario.titleHeight + 2 });
+    await page.setViewportSize({
+      width: scenario.width,
+      height: scenario.titleHeight + 2,
+    });
     await loadRecordingOverlay(page, {
       title: scenario.title,
       steps: scenario.steps,
@@ -142,8 +154,18 @@ async function renderTitleStrip(
       phase: "waiting",
       theme: scenario.theme,
       layer: "title",
-      pageArea: { x: 0, y: scenario.titleHeight, width: scenario.width, height: 2 },
-      titleArea: { x: 0, y: 0, width: scenario.width, height: scenario.titleHeight },
+      pageArea: {
+        x: 0,
+        y: scenario.titleHeight,
+        width: scenario.width,
+        height: 2,
+      },
+      titleArea: {
+        x: 0,
+        y: 0,
+        width: scenario.width,
+        height: scenario.titleHeight,
+      },
     });
     await page.screenshot({
       path: scenario.output,
@@ -154,11 +176,7 @@ async function renderTitleStrip(
   }
 }
 
-function runFFmpeg(
-  executable,
-  cwd,
-  durationSeconds,
-) {
+function runFFmpeg(executable, cwd, durationSeconds) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       executable,
