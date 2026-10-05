@@ -89,6 +89,10 @@ export const openDesignOdWriteCommand = [
   `chmod +x ${openDesignBinPath}`,
 ].join("\n");
 
+const tmpMountOverridePath = "/etc/systemd/system/tmp.mount";
+const tmpfilesConfigPath = "/etc/tmpfiles.d/tmp.conf";
+const tmpfilesConfig = "q /tmp 1777 root root 2d";
+
 export class Bootstrap {
   private readonly failures: string[] = [];
   private readonly customHandlers: ReadonlyMap<string, CustomHandler>;
@@ -295,6 +299,7 @@ export class Bootstrap {
       ["openwhispr", () => this.installOpenWhispr()],
       ["rustdesk", () => this.installRustDesk()],
       ["opendesign", () => this.installOpenDesign()],
+      ["tmp-disk", () => this.ensureTmpDisk()],
     ]);
   }
 
@@ -479,6 +484,19 @@ export class Bootstrap {
 
     if (this.runtime.outputAllowFailure(["cat", openDesignBinPath]) === openDesignOdWrapper) return;
     this.runtime.execute(["bash", "-c", openDesignOdWriteCommand]);
+  }
+
+  private ensureTmpDisk(): void {
+    // Masked tmp.mount resolves to /dev/null; anything else means /tmp is still tmpfs-backed.
+    if (this.runtime.outputAllowFailure(["readlink", "-f", tmpMountOverridePath]) !== "/dev/null")
+      this.runtime.execute(["sudo", "systemctl", "mask", "tmp.mount"]);
+
+    if (this.runtime.outputAllowFailure(["cat", tmpfilesConfigPath]) !== tmpfilesConfig)
+      this.runtime.execute([
+        "bash",
+        "-c",
+        `printf '${tmpfilesConfig}\n' | sudo tee ${tmpfilesConfigPath} > /dev/null`,
+      ]);
   }
 
   private attempt(label: string, action: () => void): void {

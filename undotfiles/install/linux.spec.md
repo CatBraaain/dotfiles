@@ -61,6 +61,11 @@
 
 既存のcloneの更新は対象外とする。
 
+`tmp-disk`の目的状態は、次の2つを保証することとする。
+
+- `tmp.mount` unitがmaskedであり、`/tmp`がtmpfsとしてマウントされないこと。
+- `/etc/tmpfiles.d/tmp.conf`が`q /tmp 1777 root root 2d`であり、systemd-tmpfilesの定期掃除で、2日以上更新のない`/tmp`直下のエントリが削除されること。
+
 ## sync
 
 `sync` は、Install / Ensure Phase、状態取得、Uninstall Phaseの順で環境を同期する。
