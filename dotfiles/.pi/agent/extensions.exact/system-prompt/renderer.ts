@@ -1,6 +1,8 @@
 // Collapsed indicator and scrollable TUI viewer for the effective system prompt.
 //
-// The indicator is a small gray widget above the editor, set once per session
+// The indicator is a small gray widget below the editor (above the footer,
+// kept clear of the other extensions' above-editor widgets), set once per
+// session
 // start (see index.ts): it summarizes the prompt (character and line counts)
 // and hints at how to expand it. The full viewer opens only through
 // intentional actions — the ctrl+shift+p shortcut, the /system-prompt
@@ -28,7 +30,7 @@ import {
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 
-/** Widget key for the collapsed prompt indicator shown above the editor. */
+/** Widget key for the collapsed prompt indicator shown below the editor. */
 export const PROMPT_WIDGET_KEY = "system-prompt";
 /** Keyboard shortcut that expands the indicator into the full viewer. */
 export const PROMPT_VIEW_SHORTCUT = Key.ctrlShift("p");
@@ -76,7 +78,7 @@ function countLines(text: string): number {
 
 /** One-line summary of a prompt: total size in characters and lines. */
 export function formatPromptSummary(promptText: string): string {
-  return `system prompt: ${promptText.length} chars · ${countLines(promptText)} lines`;
+  return `📜 system prompt: ${promptText.length} chars / ${countLines(promptText)} lines`;
 }
 
 export interface PromptIndicatorOptions {
@@ -91,7 +93,7 @@ export interface PromptIndicatorOptions {
 /** Build the collapsed prompt indicator widget component. */
 export function createPromptIndicator(options: PromptIndicatorOptions): Component {
   const { promptText, theme, onActivate } = options;
-  const line = `${formatPromptSummary(promptText)} · ${PROMPT_VIEW_SHORTCUT} or click to view`;
+  const line = `${formatPromptSummary(promptText)} / click to view`;
   return {
     render(width: number): string[] {
       return [truncateToWidth(theme.fg("dim", line), width)];
@@ -110,7 +112,7 @@ export function createPromptIndicator(options: PromptIndicatorOptions): Componen
 }
 
 /**
- * Show the collapsed prompt indicator above the editor. No-op outside TUI
+ * Show the collapsed prompt indicator below the editor. No-op outside TUI
  * mode (RPC cannot forward component widgets; JSON and print have no UI)
  * and when the prompt is empty. Activating the indicator expands it into
  * the full viewer.
@@ -130,7 +132,7 @@ export function setPromptIndicator(ctx: ExtensionContext): void {
           void showSystemPromptViewer(ctx).catch(() => {});
         },
       }),
-    { placement: "aboveEditor" },
+    { placement: "belowEditor" },
   );
 }
 

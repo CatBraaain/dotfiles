@@ -597,12 +597,14 @@ describe("session_start indicator", () => {
     assert.equal(customCalls.length, 0);
     assert.equal(widgetCalls.length, 1);
     assert.equal(widgetCalls[0]!.key, "system-prompt");
-    assert.equal(widgetCalls[0]!.options?.placement, "aboveEditor");
+    assert.equal(widgetCalls[0]!.options?.placement, "belowEditor");
 
     const rendered = widgetComponent(widgetCalls[0]!).render(80) as string[];
     assert.equal(rendered.length, 1);
-    assert.match(rendered[0]!, /system prompt: \d+ chars · \d+ lines/);
-    assert.match(rendered[0]!, /ctrl\+shift\+p or click to view/);
+    assert.equal(
+      rendered[0],
+      `📜 system prompt: ${prompt.length} chars / ${prompt.split("\n").length} lines / click to view`,
+    );
     // The collapsed line carries a summary, never the prompt itself.
     assert.equal(rendered[0]!.includes(prompt), false);
   });

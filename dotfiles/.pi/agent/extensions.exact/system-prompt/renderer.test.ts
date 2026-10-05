@@ -138,11 +138,11 @@ function mouseEvent(
 describe("formatPromptSummary", () => {
   it("summarizes the prompt size in characters and lines", () => {
     const prompt = "You are an expert.\n\n<tools>\n- bash\n</tools>";
-    assert.equal(formatPromptSummary(prompt), `system prompt: ${prompt.length} chars · 5 lines`);
+    assert.equal(formatPromptSummary(prompt), `📜 system prompt: ${prompt.length} chars / 5 lines`);
   });
 
   it("counts a single line without newlines as one line", () => {
-    assert.equal(formatPromptSummary("abc"), "system prompt: 3 chars · 1 lines");
+    assert.equal(formatPromptSummary("abc"), "📜 system prompt: 3 chars / 1 lines");
   });
 });
 
@@ -159,7 +159,7 @@ describe("createPromptIndicator", () => {
     });
     const rendered = component.render(WIDTH);
     assert.equal(rendered.length, 1);
-    assert.equal(rendered[0], `${formatPromptSummary(prompt)} · ctrl+shift+p or click to view`);
+    assert.equal(rendered[0], "📜 system prompt: 17 chars / 2 lines / click to view");
     assert.equal(activations, 0);
   });
 
@@ -447,7 +447,7 @@ describe("setPromptIndicator", () => {
     return call.content(fakeTui(40), plainTheme);
   }
 
-  it("sets a one-line aboveEditor widget summarizing the prompt in tui mode", () => {
+  it("sets a one-line belowEditor widget summarizing the prompt in tui mode", () => {
     const prompt = "effective prompt\nwith two lines";
     const { ctx, widgetCalls, customCalls } = mockIndicatorCtx("tui", () => prompt);
 
@@ -455,11 +455,11 @@ describe("setPromptIndicator", () => {
     assert.equal(customCalls.length, 0);
     assert.equal(widgetCalls.length, 1);
     assert.equal(widgetCalls[0]!.key, PROMPT_WIDGET_KEY);
-    assert.equal(widgetCalls[0]!.options?.placement, "aboveEditor");
+    assert.equal(widgetCalls[0]!.options?.placement, "belowEditor");
 
     const rendered = indicatorComponent(widgetCalls[0]!).render(WIDTH);
     assert.equal(rendered.length, 1);
-    assert.equal(rendered[0], `${formatPromptSummary(prompt)} · ctrl+shift+p or click to view`);
+    assert.equal(rendered[0], "📜 system prompt: 31 chars / 2 lines / click to view");
     // The collapsed indicator never carries the prompt itself.
     assert.equal(rendered[0]!.includes("effective prompt"), false);
   });

@@ -30,7 +30,7 @@
 // template sections the transcript does not carry yet are appended.
 //
 // Separately from both request paths, every `session_start` shows a
-// collapsed indicator above the editor that summarizes the effective
+// collapsed indicator below the editor that summarizes the effective
 // prompt (size in characters and lines). The full viewer opens only through
 // intentional actions — the ctrl+shift+p shortcut, the /system-prompt
 // command, or clicking the indicator (fullscreen mode only) — see
