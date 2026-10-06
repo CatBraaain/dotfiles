@@ -1062,6 +1062,83 @@ assert(context.input == "かんじaA11! ,.,*+-/=" and #context.commits == 0,
     "the keypad operators must append their half-width characters")
 assert(context:get_option("_kagiroi_hide_candidates"), "the append must keep the list hidden")
 
+-- Two or more trailing capitals plus an unmodified letter end the ascii
+-- input mode and restart the romaji input
+-- (dotfiles/rime/SPEC.md, "大文字連続後のローマ字入力への切替").
+env, context, segment = new_environment()
+context.input = "かAB"
+context:set_option("_kagiroi_ascii_input", true)
+local before_switch = calls
+local switching_letter = press(env, string.byte("c"))
+assert(switching_letter == kNoop, "the switching letter must return the speller's result")
+assert(not context:get_option("_kagiroi_ascii_input"),
+    "the switching letter must end the ascii input mode")
+assert(calls == before_switch + 1,
+    "the switching letter must restart the romaji input through the speller")
+assert(context.input == "かAB" and #context.commits == 0,
+    "the switch must keep the appended capitals as they are")
+assert(not context:get_option("_kagiroi_off_pending"),
+    "the switch must clear the OFF reservation")
+assert(context:get_option("_kagiroi_hide_candidates"),
+    "the switch must keep the list hidden")
+
+-- Shift+letter, digits and the space keep appending half-width without
+-- switching: only an unmodified letter starts the romaji input.
+env, context, segment = new_environment()
+context.input = "かAB"
+context:set_option("_kagiroi_ascii_input", true)
+assert(press(env, string.byte("C"), { shift = true }) == kAccepted,
+    "Shift+letter must be consumed without switching")
+assert(context.input == "かABC" and context:get_option("_kagiroi_ascii_input"),
+    "Shift+letter must keep appending the capital and the mode")
+assert(press(env, string.byte("1")) == kAccepted
+    and context.input == "かABC1" and context:get_option("_kagiroi_ascii_input"),
+    "a digit must keep appending half-width and the mode")
+assert(press(env, 0x20) == kAccepted
+    and context.input == "かABC1 " and context:get_option("_kagiroi_ascii_input"),
+    "a space must keep appending half-width and the mode")
+
+-- A single trailing capital never switches.
+env, context, segment = new_environment()
+context.input = "かA"
+context:set_option("_kagiroi_ascii_input", true)
+local single_capital = press(env, string.byte("b"))
+assert(single_capital == kAccepted and context.input == "かAb"
+    and context:get_option("_kagiroi_ascii_input"),
+    "a single trailing capital must not switch to the romaji input")
+
+-- Deletion re-evaluates the switching condition on the current tail.
+env, context, segment = new_environment()
+context.input = "かABC"
+context:set_option("_kagiroi_ascii_input", true)
+press(env, 0xff08)
+assert(context.input == "かAB" and context:get_option("_kagiroi_ascii_input"),
+    "Backspace must keep the ascii input mode while capitals remain")
+local reevaluated = press(env, string.byte("c"))
+assert(reevaluated == kNoop and not context:get_option("_kagiroi_ascii_input"),
+    "the switching condition must be re-evaluated after deletion")
+
+-- The switch also works from a retained list: the kept display turns into
+-- the edited text and the list closes.
+env, context, segment = new_environment({ "今日", "京", "凶" })
+context.input = "きょう"
+press(env, 0x20)
+press(env, 0x20)
+processor.start_ascii_input(context)
+context:set_option("_kagiroi_off_pending", true)
+press(env, string.byte("A"), { shift = true })
+press(env, string.byte("B"), { shift = true })
+assert(context.input == "京AB" and context:get_option("_kagiroi_ascii_input"),
+    "the capitals must extend the run on the retained display")
+local retained_switch = press(env, string.byte("c"))
+assert(retained_switch == kNoop and not context:get_option("_kagiroi_ascii_input"),
+    "the switching letter must end the mode from the retained list")
+assert(context.input == "京AB" and not context:has_menu()
+    and not context:get_option("_kagiroi_expand_candidates"),
+    "the switch must keep the displayed capitals and close the list")
+assert(not context:get_option("_kagiroi_off_pending"),
+    "the switch from a retained list must clear the OFF reservation")
+
 -- Backspace removes the last character and ends the mode when empty.
 env, context, segment = new_environment()
 context.input = "かa"

@@ -293,6 +293,18 @@ function Top.ascii_func(key_event, env)
         keycode = kReturn
     end
 
+    -- Two or more trailing capitals plus an unmodified letter end the
+    -- ascii input mode: the capitals stay fixed and the key restarts the
+    -- romaji input (dotfiles/rime/SPEC.md, "大文字連続後のローマ字入力への切替").
+    if is_plain_letter(keycode) and not key_event:shift()
+        and context.input:find("[A-Z][A-Z]+$") then
+        keep_display_for_editing(context, env)
+        prepare_append(context)
+        kana_speller.ascii_tail = #context.input
+        context:set_option("_kagiroi_ascii_input", false)
+        return kana_speller.func(key_event, env)
+    end
+
     local text = ascii_appended_text(keycode, key_event)
     if text then
         keep_display_for_editing(context, env)
