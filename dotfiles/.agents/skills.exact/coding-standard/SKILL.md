@@ -105,17 +105,40 @@ if (canAccessPremium) {
 
 ### コメント
 
-コメントは原則書かない。最終手段であり、書きたくなったら順に他の置き場を試す:
+コメントは原則禁止。最終手段であり、1 行でも書きたくなったら順に他の置き場を試す:
 
-1. 名前・構造・型 — 意図を語れる形にコード側を直す。
+1. 名前・構造・型 — 意図を語れる形にコード側を直す。1 つの名前で足りなければ式を分解し、説明変数を増やす。
 2. 設計記録 — リポジトリ内でコードとともに保守される文書（README・SPEC・ADR 等）。選択の理由はまずここに書く。
 3. コミットメッセージ — その変更で入った理由は変更のコミットに書く。
 
-コメントを書いてよいのは、読み手がその行を見ている場所でなければ伝わらない情報だけ:
+「公式サンプルにもコメントがある」「読み手が仕様を知らないかもしれない」は書く理由にならない。サンプルや docs に書かれた情報も、名前・構造で語せるならコメントには置かない。
+
+コメントを書いてよいのは、名前・構造で語った後に残る、その行を見ている場所でなければ伝わらない情報だけ:
 
 - 外部仕様・回避策・非自明な制約など、コードをどれだけ読んでも復元できない理由で、設計記録に置けないもの。
 - コードから読み取れない公開 API の利用契約。
 - `TODO` / `FIXME` / `HACK` / `XXX`（意図が一意）。
+
+意図説明のコメントは、説明変数に置き換える:
+
+Before:
+
+```ahk
+; Relaunch self as admin when not elevated; keep running unelevated if UAC
+; is declined. /restart match prevents an endless loop when UAC is disabled
+; (*RunAs then relaunches without elevating).
+isRestartLaunch := RegExMatch(DllCall("GetCommandLine", "str"), " /restart(?!\S)")
+if not (A_IsAdmin or isRestartLaunch)
+```
+
+After:
+
+```ahk
+fullCommandLine := DllCall("GetCommandLine", "str")
+hasRestartSwitch := RegExMatch(fullCommandLine, " /restart(?!\S)")
+shouldRelaunchAsAdmin := not (A_IsAdmin or hasRestartSwitch)
+if shouldRelaunchAsAdmin
+```
 
 ### 変数を減らす・狭める
 
