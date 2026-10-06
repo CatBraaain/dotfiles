@@ -107,7 +107,11 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       visible = nextVisible;
       if (visible) host.style.setProperty("visibility", "visible", "important");
       render();
-      await Promise.all(activePresentations().map((animation) => animation.finished));
+      // A superseded request cancels the captured animations, whose finished
+      // promise then rejects; only the request counter decides the outcome.
+      await Promise.all(
+        activePresentations().map((animation) => animation.finished.catch(() => {})),
+      );
       if (disposed) throw new Error("Recording overlay has been disposed");
       if (request !== visibilityRequest)
         throw new DOMException("Recording overlay visibility request was superseded", "AbortError");
