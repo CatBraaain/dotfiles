@@ -16,9 +16,6 @@ import { compareFiles, comparesExecutableBits, lstatOrNull, readSymlinkTarget } 
 import { mapSegment } from "./path-mapping.ts";
 import type { DiffEntry, DiffResult } from "./diff.ts";
 
-const NON_TTY_WIDTH = 80;
-const MINIMUM_RIGHT_RULE = "──";
-
 type Section = { label: string; paths: string[]; body: string[] };
 
 export async function renderDiffs(
@@ -212,28 +209,25 @@ async function gitDiff(
 
 function renderSections(sections: Section[]): string {
   const tty = process.stdout.isTTY === true;
-  const columns = (process.stdout as { columns?: number }).columns;
-  const width = tty && typeof columns === "number" && columns > 0 ? columns : NON_TTY_WIDTH;
-  return sections.map((section) => renderSection(section, width, tty)).join("\n\n\n") + "\n";
+  return sections.map((section) => renderSection(section, tty)).join("\n\n\n") + "\n";
 }
 
-function renderSection(section: Section, width: number, tty: boolean): string {
-  const heading = renderHeading(section.label, section.paths, width, tty);
+function renderSection(section: Section, tty: boolean): string {
+  const heading = renderHeading(section.label, section.paths, tty);
   const lines = [heading];
   if (section.body.length > 0) lines.push("");
   for (const line of section.body) lines.push(colorizeBodyLine(line, tty));
   return lines.join("\n");
 }
 
-function renderHeading(label: string, paths: string[], width: number, tty: boolean): string {
+// The heading text is fenced above and below with ─ rules as wide as the text
+// itself (spec §見出し).
+function renderHeading(label: string, paths: string[], tty: boolean): string {
   const arrow = " → ";
+  const text = `${label}: ${paths.join(arrow)}`;
+  const fence = gray("─".repeat(displayWidth(text)), tty);
   const decoratedPaths = paths.map((path) => decorateHeadingPath(path, tty)).join(arrow);
-  const prefix = `── ${label} · ${paths.join(arrow)} `;
-  const ruleLength = Math.max(width - displayWidth(prefix), MINIMUM_RIGHT_RULE.length);
-  const right = "─".repeat(ruleLength);
-  return (
-    gray("──", tty) + ` ${label} ` + gray("·", tty) + " " + decoratedPaths + " " + gray(right, tty)
-  );
+  return `${fence}\n${label}: ${decoratedPaths}\n${fence}`;
 }
 
 // File name in bold; the directory part including its "/" separator in gray.

@@ -643,7 +643,7 @@ describe("cli", () => {
     assert.equal(stderr, "");
     assert.match(stdout, /keep\.jsonc/);
     assert.match(stdout, /child\.jsonc/);
-    assert.equal((stdout.match(/── Added · new\//g) ?? []).length, 2);
+    assert.equal((stdout.match(/^Added: new\//gm) ?? []).length, 2);
   });
 
   it("does not display CR and single trailing LF differences alone", async () => {
@@ -702,7 +702,7 @@ describe("cli", () => {
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
     assert.equal(exitCode, 0);
-    assert.match(stdout, /── Modified · asset\.bin ──/);
+    assert.match(stdout, /^Modified: asset\.bin$/m);
     assert.match(stdout, /@@ -1 \+1 @@/);
     assert.equal(stdout.includes("\uFFFD"), true);
     assert.doesNotMatch(stdout, /fake-delta-used/);
@@ -736,7 +736,7 @@ describe("cli", () => {
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
     assert.equal(exitCode, 0);
-    assert.match(stdout, /── Modified · a\.json ──/);
+    assert.match(stdout, /^Modified: a\.json$/m);
     assert.match(stdout, /No newline at end of file/);
   });
 
@@ -783,9 +783,9 @@ describe("cli", () => {
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
     assert.equal(exitCode, 0);
-    assert.equal((stdout.match(/── Added · /g) ?? []).length, 2);
-    assert.match(stdout, /── Added · a\.jsonc ──/);
-    assert.match(stdout, /── Added · b\.txt ──/);
+    assert.equal((stdout.match(/^Added: /gm) ?? []).length, 2);
+    assert.match(stdout, /^Added: a\.jsonc$/m);
+    assert.match(stdout, /^Added: b\.txt$/m);
     assert.match(stdout, /\+\{"value": 1\}/);
     assert.doesNotMatch(stdout, /fake-delta-used/);
   });
@@ -825,7 +825,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Renamed · conf\/old\.txt → conf\/new\.txt ──/);
+    assert.match(stdout, /^Renamed: conf\/old\.txt → conf\/new\.txt$/m);
     assert.match(stdout, /old mode 100644/);
     assert.match(stdout, /new mode 100755/);
     assert.doesNotMatch(stdout, /@@|\.exact|\.executable|diff-render-|[ab]\/(old|new)\/conf/);
@@ -839,7 +839,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Renamed · conf\/old\.txt → conf\/new\.txt ──/);
+    assert.match(stdout, /^Renamed: conf\/old\.txt → conf\/new\.txt$/m);
     assert.match(stdout, /@@/);
     assert.match(stdout, /CHANGED/);
     assert.equal(stripVTControlCharacters(stdout).includes("first\r"), true);
@@ -853,7 +853,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Renamed · conf\/old\.txt → conf\/new\.txt ──/);
+    assert.match(stdout, /^Renamed: conf\/old\.txt → conf\/new\.txt$/m);
     assert.doesNotMatch(stdout, /@@|No newline|first/);
   });
 
@@ -866,8 +866,8 @@ describe("Git rename display", () => {
     assert.equal(stderr, "");
     assert.doesNotMatch(stdout, /Renamed/);
     assert.doesNotMatch(stdout, /new file mode|deleted file mode/);
-    assert.match(stdout, /── Added · conf\/new\.txt ──/);
-    assert.match(stdout, /── Deleted · conf\/old\.txt ──/);
+    assert.match(stdout, /^Added: conf\/new\.txt$/m);
+    assert.match(stdout, /^Deleted: conf\/old\.txt$/m);
   });
 
   it("does not use ignored surplus, excluded counterparts, or unmanaged home files as candidates", async () => {
@@ -883,7 +883,7 @@ describe("Git rename display", () => {
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
     assert.doesNotMatch(stdout, /Renamed|ignored\.txt|unmanaged\.txt|private\.data/);
-    assert.match(stdout, /── Added · conf\/new\.txt ──/);
+    assert.match(stdout, /^Added: conf\/new\.txt$/m);
   });
 
   it("does not pair a changed entry with an addition", async () => {
@@ -893,8 +893,8 @@ describe("Git rename display", () => {
     const { stdout } = await runGitOnlyDiff();
 
     assert.doesNotMatch(stdout, /Renamed/);
-    assert.match(stdout, /── Modified · conf\/changed\.txt ──/);
-    assert.match(stdout, /── Added · conf\/new\.txt ──/);
+    assert.match(stdout, /^Modified: conf\/changed\.txt$/m);
+    assert.match(stdout, /^Added: conf\/new\.txt$/m);
   });
 
   it("keeps the five JSON categories and applies additions and exact deletions unchanged", async () => {
@@ -927,7 +927,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Renamed · conf\/old\/nested\.txt → conf\/new\.txt ──/);
+    assert.match(stdout, /^Renamed: conf\/old\/nested\.txt → conf\/new\.txt$/m);
     assert.doesNotMatch(stdout, /secret\.txt|do-not-follow/);
   });
 
@@ -950,7 +950,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Renamed · conf\/old name\tfile\.txt → conf\/new name\tfile\.txt ──/);
+    assert.match(stdout, /^Renamed: conf\/old name\tfile\.txt → conf\/new name\tfile\.txt$/m);
     assert.doesNotMatch(stdout, /@@/);
   });
 
@@ -967,7 +967,7 @@ describe("Git rename display", () => {
 
       assert.equal(exitCode, 0);
       assert.equal(stderr, "");
-      assert.match(stdout, /── Renamed · conf\/old/);
+      assert.match(stdout, /^Renamed: conf\/old/m);
       assert.equal((stdout.match(/é日本\.txt/g) ?? []).length, 2);
       assert.equal(stdout.includes("@@"), scenario === "edited");
     });
@@ -980,7 +980,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Renamed · conf\/旧é\.txt → conf\/新é\.txt ──/);
+    assert.match(stdout, /^Renamed: conf\/旧é\.txt → conf\/新é\.txt$/m);
     assert.doesNotMatch(stdout, /@@/);
   });
 
@@ -996,7 +996,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Modified · a\.txt ──/);
+    assert.match(stdout, /^Modified: a\.txt$/m);
     assert.match(stdout, /\+new/);
     assert.match(stdout, /-old/);
   });
@@ -1019,17 +1019,18 @@ describe("Git rename display", () => {
 });
 
 describe("diff display contract", () => {
-  it("renders the SPEC Modified example byte-for-byte at width 80", async () => {
+  it("renders the SPEC Modified example byte-for-byte", async () => {
     await put(homeRoot, ".agents/config/agents.yaml", "agents:\n  model: old-model\n  enabled: true\n");
     await put(distRoot, ".agents/config/agents.yaml", "agents:\n  model: new-model\n  enabled: true\n");
     const { stdout, stderr, exitCode } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    const rule = "─".repeat(80 - "── Modified · .agents/config/agents.yaml ".length);
+    const heading = "Modified: .agents/config/agents.yaml";
+    const fence = "─".repeat(heading.length);
     assert.equal(
       stdout,
-      `── Modified · .agents/config/agents.yaml ${rule}\n` +
+      `${fence}\n${heading}\n${fence}\n` +
         "\n" +
         "@@ -1,3 +1,3 @@\n" +
         " agents:\n" +
@@ -1039,7 +1040,7 @@ describe("diff display contract", () => {
     );
   });
 
-  it("keeps a long path untruncated with the minimum right rule", async () => {
+  it("fences a long path untruncated with rules as wide as the heading", async () => {
     const longPath = `${"d".repeat(30)}/${"x".repeat(70)}.txt`;
     await put(homeRoot, longPath, "old\n");
     await put(distRoot, longPath, "new\n");
@@ -1047,7 +1048,11 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.equal(stdout.split("\n")[0], `── Modified · ${longPath} ──`);
+    const lines = stdout.split("\n");
+    const heading = `Modified: ${longPath}`;
+    assert.equal(lines[1], heading);
+    assert.equal(lines[0], lines[2]);
+    assert.equal(lines[0], "─".repeat(heading.length));
   });
 
   it("separates headings and bodies with one blank line and sections with two", async () => {
@@ -1062,12 +1067,14 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    const modifiedRule = "─".repeat(80 - "── Modified · a.txt ".length);
-    const renamedRule = "─".repeat(80 - "── Renamed · conf/old.txt → conf/new.txt ".length);
+    const modifiedHeading = "Modified: a.txt";
+    const renamedHeading = "Renamed: conf/old.txt → conf/new.txt";
+    const modifiedFence = "─".repeat(modifiedHeading.length);
+    const renamedFence = "─".repeat(renamedHeading.length);
     assert.equal(
       stdout,
-      `── Modified · a.txt ${modifiedRule}\n\n@@ -1 +1 @@\n-one\n+two\n\n\n` +
-        `── Renamed · conf/old.txt → conf/new.txt ${renamedRule}\n`,
+      `${modifiedFence}\n${modifiedHeading}\n${modifiedFence}\n\n@@ -1 +1 @@\n-one\n+two\n\n\n` +
+        `${renamedFence}\n${renamedHeading}\n${renamedFence}\n`,
     );
   });
 
@@ -1079,7 +1086,7 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Deleted · dir\/legacy\.txt ──/);
+    assert.match(stdout, /^Deleted: dir\/legacy\.txt$/m);
     assert.match(stdout, /@@ -1,2 \+0,0 @@/);
     assert.match(stdout, /^-mode=legacy$/m);
     assert.match(stdout, /^-enabled=true$/m);
@@ -1092,7 +1099,7 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Modified · tool ──/);
+    assert.match(stdout, /^Modified: tool$/m);
     assert.match(stdout, /^old mode 100644$/m);
     assert.match(stdout, /^new mode 100755$/m);
     assert.doesNotMatch(stdout, /@@/);
@@ -1105,7 +1112,7 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Modified · meta\.txt ──/);
+    assert.match(stdout, /^Modified: meta\.txt$/m);
     assert.match(stdout, /^---- old$/m);
     assert.match(stdout, /^\+\+\+\+ new$/m);
     assert.match(stdout, /^ plain$/m);
@@ -1120,8 +1127,9 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    const rule = "─".repeat(80 - "── Added · empty.txt ".length);
-    assert.equal(stdout, `── Added · empty.txt ${rule}\n`);
+    const heading = "Added: empty.txt";
+    const fence = "─".repeat(heading.length);
+    assert.equal(stdout, `${fence}\n${heading}\n${fence}\n`);
   });
 
   it("renders a directory type mismatch as Deleted and Added sections", async () => {
@@ -1132,11 +1140,11 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Deleted · entry ──/);
+    assert.match(stdout, /^Deleted: entry$/m);
     assert.match(stdout, /^-old-file$/m);
-    assert.match(stdout, /── Added · entry\/keep\.txt ──/);
+    assert.match(stdout, /^Added: entry\/keep\.txt$/m);
     assert.match(stdout, /^\+visible$/m);
-    assert.doesNotMatch(stdout, /── Modified · entry ──/);
+    assert.doesNotMatch(stdout, /^Modified: entry$/m);
     assert.doesNotMatch(stdout, /private\.data|secret/);
   });
 
@@ -1147,10 +1155,10 @@ describe("diff display contract", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /── Deleted · slink ──/);
+    assert.match(stdout, /^Deleted: slink$/m);
     assert.match(stdout, /^-old-target$/m);
-    assert.match(stdout, /── Added · slink ──/);
+    assert.match(stdout, /^Added: slink$/m);
     assert.match(stdout, /^\+file-content$/m);
-    assert.doesNotMatch(stdout, /── Modified · slink ──/);
+    assert.doesNotMatch(stdout, /^Modified: slink$/m);
   });
 });
