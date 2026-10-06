@@ -1,6 +1,6 @@
-# e2e-videos の正本
+# review-kit の正本
 
-このファイルは、e2e-videos skill の同梱 assets を保守するための正本であり、録画注釈とビューア・生成スクリプトについて、ユーザーが観測できる見た目・振る舞いを定義する。通常の録画に必要な入力・手順・利用側の責務は `SKILL.md` にあり、本書の読取を前提としない。対象プロジェクトの `SPEC.md` に置く録画シナリオとは別の正本である。
+このファイルは、review-kit skill の同梱 assets を保守するための正本であり、録画注釈とビューア・生成スクリプトについて、ユーザーが観測できる見た目・振る舞いを定義する。通常の録画に必要な入力・手順・利用側の責務は `SKILL.md` にあり、本書の読取を前提としない。対象プロジェクトの `SPEC.md` に置く録画シナリオとは別の正本である。
 
 同梱 assets（`overlay.html`・`overlay.css`・`overlay.mjs`）を編集したら、`design.html` の埋め込みも同じ内容に差し替えてから `overlay.test.mjs` の同一性検査を通す。
 
@@ -246,11 +246,11 @@ label の位置は同一画面内では固定し、対象や注釈の変化で�
 
 ## ビューアと生成スクリプト
 
-`recordings` フォルダ直下の各 `<flow>` フォルダの録画データから、フロー切替つきステップビューアの単一 HTML（`recordings/index.html`）を生成する。ビューアはサーバーなしの `file://` で開ける。生成には同梱テンプレート `viewer.html` を使い、ビューアの見た目・振る舞いの正本はこの節である。
+`review-kit` フォルダ直下の各 `<flow>` フォルダの録画データから、フロー切替つきステップビューアの単一 HTML（`review-kit/index.html`）を生成する。ビューアはサーバーなしの `file://` で開ける。生成には同梱テンプレート `viewer.html` を使い、ビューアの見た目・振る舞いの正本はこの節である。
 
 ### 入力: <flow>/metadata.json
 
-`recordings` フォルダ直下の各サブディレクトリをフローとみなし、そのフォルダ名をフロー識別子とする。フローの並びはフォルダ名の昇順である。`<flow>/metadata.json` は `title` と `steps` を持つ JSON オブジェクトである。
+`review-kit` フォルダ直下の各サブディレクトリをフローとみなし、そのフォルダ名をフロー識別子とする。フローの並びはフォルダ名の昇順である。`<flow>/metadata.json` は `title` と `steps` を持つ JSON オブジェクトである。
 
 - `title`: 非空の文字列。フローのタイトル
 - `steps`: 非空の配列。配列順が再生順であり、その `<flow>` の正本（プロジェクト SPEC.md のセクション）のステップ番号と 1 対 1 に対応する
@@ -258,7 +258,7 @@ label の位置は同一画面内では固定し、対象や注釈の変化で�
 
 ### 生成: index.html
 
-`node build-viewer.mjs <recordings フォルダのパス>` を実行すると、`<recordings フォルダ>/index.html` を書き出す。
+`node build-viewer.mjs <review-kit フォルダのパス>` を実行すると、`<review-kit フォルダ>/index.html` を書き出す。
 
 - 埋め込む録画データは `{ flows: [{ id, title, steps: [{ number, action, video }] }] }` の形状である。`id` はフロー識別子、`number` はフロー内で配列順に 1 から採番する
 - ステップ動画は `index.html` からの相対パス（`<flow>/<metadata.json の video>`）で参照する

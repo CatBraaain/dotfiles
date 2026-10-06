@@ -1,7 +1,7 @@
-// Builds the standalone step viewer `recordings/index.html` from a
-// recordings folder of per-flow recording sets:
+// Builds the standalone step viewer `review-kit/index.html` from a
+// review-kit folder of per-flow recording sets:
 //
-//   recordings/
+//   review-kit/
 //   ├── <flow>/
 //   │   ├── metadata.json
 //   │   └── <step videos>.mp4
@@ -12,7 +12,7 @@
 // where "video" resolves relative to the flow folder. Flows are ordered by
 // folder name and steps play in array order, receiving the viewer numbers
 // 1..N within their flow.
-// Usage: node build-viewer.mjs <recordings-dir>
+// Usage: node build-viewer.mjs <review-kit-dir>
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -33,7 +33,7 @@ export function buildViewerHtml(recordingsDir) {
 export function main(argv) {
   const recordingsDir = argv[2];
   if (!recordingsDir) {
-    console.error("Usage: node build-viewer.mjs <recordings-dir>");
+    console.error("Usage: node build-viewer.mjs <review-kit-dir>");
     return 1;
   }
   try {
