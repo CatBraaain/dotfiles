@@ -213,7 +213,7 @@ function renderSections(sections: Section[]): string {
 }
 
 function renderSection(section: Section, tty: boolean): string {
-  const heading = renderHeading(section.label, section.paths, tty);
+  const heading = renderHeading(section.label, section.paths);
   const lines = [heading];
   if (section.body.length > 0) lines.push("");
   for (const line of section.body) lines.push(colorizeBodyLine(line, tty));
@@ -221,20 +221,12 @@ function renderSection(section: Section, tty: boolean): string {
 }
 
 // The heading text is fenced above and below with ─ rules as wide as the text
-// itself (spec §見出し).
-function renderHeading(label: string, paths: string[], tty: boolean): string {
+// itself (spec §見出し). Headings use the terminal default color and weight.
+function renderHeading(label: string, paths: string[]): string {
   const arrow = " → ";
   const text = `${label}: ${paths.join(arrow)}`;
-  const fence = gray("─".repeat(displayWidth(text)), tty);
-  const decoratedPaths = paths.map((path) => decorateHeadingPath(path, tty)).join(arrow);
-  return `${fence}\n${label}: ${decoratedPaths}\n${fence}`;
-}
-
-// File name in bold; the directory part including its "/" separator in gray.
-function decorateHeadingPath(path: string, tty: boolean): string {
-  const separator = path.lastIndexOf("/");
-  if (separator === -1) return bold(path, tty);
-  return gray(path.slice(0, separator + 1), tty) + bold(path.slice(separator + 1), tty);
+  const fence = "─".repeat(displayWidth(text));
+  return `${fence}\n${text}\n${fence}`;
 }
 
 function colorizeBodyLine(line: string, tty: boolean): string {
@@ -243,10 +235,6 @@ function colorizeBodyLine(line: string, tty: boolean): string {
   if (line.startsWith("+")) return green(line, true);
   if (line.startsWith("-")) return red(line, true);
   return line;
-}
-
-function bold(text: string, tty: boolean): string {
-  return tty ? `\x1b[1m${text}\x1b[m` : text;
 }
 
 function gray(text: string, tty: boolean): string {
