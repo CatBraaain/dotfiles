@@ -643,7 +643,7 @@ describe("cli", () => {
     assert.equal(stderr, "");
     assert.match(stdout, /keep\.jsonc/);
     assert.match(stdout, /child\.jsonc/);
-    assert.equal((stdout.match(/diff --git /g) ?? []).length, 2);
+    assert.equal((stdout.match(/── Added · new\//g) ?? []).length, 2);
   });
 
   it("does not display CR and single trailing LF differences alone", async () => {
@@ -679,7 +679,7 @@ describe("cli", () => {
     assert.match(stdout, /Binary files .* differ/);
   });
 
-  it("sends malformed UTF-8 patches to delta and ignores its exit code", async () => {
+  it("renders malformed UTF-8 patches directly without invoking delta", async () => {
     const binDir = join(root, "bin");
     await mkdir(binDir);
     const fakeDelta = await put(
@@ -702,8 +702,10 @@ describe("cli", () => {
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
     assert.equal(exitCode, 0);
-    assert.match(stdout, /diff --git/);
-    assert.match(stdout, /fake-delta-used/);
+    assert.match(stdout, /── Modified · asset\.bin ──/);
+    assert.match(stdout, /@@ -1 \+1 @@/);
+    assert.equal(stdout.includes("\uFFFD"), true);
+    assert.doesNotMatch(stdout, /fake-delta-used/);
   });
 
   it("renders added and exact-removed binary entries against empty inputs", async () => {
@@ -734,7 +736,7 @@ describe("cli", () => {
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
     assert.equal(exitCode, 0);
-    assert.match(stdout, /diff --git/);
+    assert.match(stdout, /── Modified · a\.json ──/);
     assert.match(stdout, /No newline at end of file/);
   });
 
@@ -758,7 +760,7 @@ describe("cli", () => {
     assert.match(stdout, /new-target/);
   });
 
-  it("sends both JSONC and ordinary text patches through delta", async () => {
+  it("renders both JSONC and ordinary text patches without invoking delta", async () => {
     const binDir = join(root, "bin");
     await mkdir(binDir);
     const fakeDelta = await put(
@@ -781,10 +783,11 @@ describe("cli", () => {
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
     assert.equal(exitCode, 0);
-    assert.match(stdout, /diff --git/);
-    assert.match(stdout, /fake-delta-used --paging=never/);
-    assert.match(stdout, /a\.jsonc/);
-    assert.match(stdout, /b\.txt/);
+    assert.equal((stdout.match(/── Added · /g) ?? []).length, 2);
+    assert.match(stdout, /── Added · a\.jsonc ──/);
+    assert.match(stdout, /── Added · b\.txt ──/);
+    assert.match(stdout, /\+\{"value": 1\}/);
+    assert.doesNotMatch(stdout, /fake-delta-used/);
   });
 });
 
@@ -815,17 +818,18 @@ async function runGitOnlyDiff(extraEnv: Record<string, string> = {}) {
 describe("Git rename display", () => {
   const original = "first\nsecond\nthird\nfourth\nfifth\n";
 
-  it("shows pure rename metadata with mapped home paths and no hunks", async () => {
+  it("shows a rename with mapped home paths and its mode-only change", async () => {
     await put(homeRoot, "conf/old.txt", original);
     await put(distRoot, "conf.exact/new.txt.executable", original);
     const { stdout, stderr, exitCode } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /rename from conf\/old.txt/);
-    assert.match(stdout, /rename to conf\/new.txt/);
+    assert.match(stdout, /── Renamed · conf\/old\.txt → conf\/new\.txt ──/);
+    assert.match(stdout, /old mode 100644/);
+    assert.match(stdout, /new mode 100755/);
     assert.doesNotMatch(stdout, /@@|\.exact|\.executable|diff-render-|[ab]\/(old|new)\/conf/);
-    assert.equal(stdout.includes("\x1b["), true);
+    assert.equal(stdout.includes("\x1b["), false);
   });
 
   it("shows edited rename metadata and the original inputs' line-ending changes", async () => {
@@ -835,23 +839,21 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /rename from conf\/old.txt/);
-    assert.match(stdout, /rename to conf\/new.txt/);
+    assert.match(stdout, /── Renamed · conf\/old\.txt → conf\/new\.txt ──/);
     assert.match(stdout, /@@/);
     assert.match(stdout, /CHANGED/);
     assert.equal(stripVTControlCharacters(stdout).includes("first\r"), true);
-    assert.equal((stdout.match(/diff --git /g) ?? []).length, 1);
+    assert.doesNotMatch(stdout, /diff --git|rename from|rename to|^index /m);
   });
 
-  it("retains rename metadata but suppresses normalized-equal content hunks", async () => {
+  it("shows a normalized-equal rename as a pure rename heading without hunks", async () => {
     await put(homeRoot, "conf/old.txt", original);
     await put(distRoot, "conf.exact/new.txt", "first\r\nsecond\nthird\nfourth\nfifth");
     const { stdout, stderr, exitCode } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /rename from conf\/old.txt/);
-    assert.match(stdout, /rename to conf\/new.txt/);
+    assert.match(stdout, /── Renamed · conf\/old\.txt → conf\/new\.txt ──/);
     assert.doesNotMatch(stdout, /@@|No newline|first/);
   });
 
@@ -862,11 +864,10 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.doesNotMatch(stdout, /rename from|rename to/);
-    assert.match(stdout, /new file mode/);
-    assert.match(stdout, /deleted file mode/);
-    assert.match(stdout, /conf\/old.txt/);
-    assert.match(stdout, /conf\/new.txt/);
+    assert.doesNotMatch(stdout, /Renamed/);
+    assert.doesNotMatch(stdout, /new file mode|deleted file mode/);
+    assert.match(stdout, /── Added · conf\/new\.txt ──/);
+    assert.match(stdout, /── Deleted · conf\/old\.txt ──/);
   });
 
   it("does not use ignored surplus, excluded counterparts, or unmanaged home files as candidates", async () => {
@@ -881,8 +882,8 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.doesNotMatch(stdout, /rename from|ignored\.txt|unmanaged\.txt|private\.data/);
-    assert.match(stdout, /new file mode/);
+    assert.doesNotMatch(stdout, /Renamed|ignored\.txt|unmanaged\.txt|private\.data/);
+    assert.match(stdout, /── Added · conf\/new\.txt ──/);
   });
 
   it("does not pair a changed entry with an addition", async () => {
@@ -891,9 +892,9 @@ describe("Git rename display", () => {
     await put(distRoot, "conf.exact/new.txt", original);
     const { stdout } = await runGitOnlyDiff();
 
-    assert.doesNotMatch(stdout, /rename from|rename to/);
-    assert.match(stdout, /conf\/changed.txt/);
-    assert.match(stdout, /conf\/new.txt/);
+    assert.doesNotMatch(stdout, /Renamed/);
+    assert.match(stdout, /── Modified · conf\/changed\.txt ──/);
+    assert.match(stdout, /── Added · conf\/new\.txt ──/);
   });
 
   it("keeps the five JSON categories and applies additions and exact deletions unchanged", async () => {
@@ -926,7 +927,7 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /rename from conf\/old\/nested.txt/);
+    assert.match(stdout, /── Renamed · conf\/old\/nested\.txt → conf\/new\.txt ──/);
     assert.doesNotMatch(stdout, /secret\.txt|do-not-follow/);
   });
 
@@ -949,8 +950,8 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /rename from "conf\/old name\\tfile.txt"/);
-    assert.match(stdout, /rename to "conf\/new name\\tfile.txt"/);
+    assert.match(stdout, /── Renamed · conf\/old name\tfile\.txt → conf\/new name\tfile\.txt ──/);
+    assert.doesNotMatch(stdout, /@@/);
   });
 
   for (const [scenario, content] of [
@@ -958,56 +959,17 @@ describe("Git rename display", () => {
     ["edited", original.replace("third", "CHANGED")],
     ["normalized-equal", original.trimEnd()],
   ] as const) {
-    it(`uses Git C quoting for special rename paths (${scenario})`, async () => {
+    it(`renders special rename paths raw in the heading (${scenario})`, async () => {
       const suffix = ' \x1b[2J\x07\x01\x1f\x7f\b\t\n\v\f\r"\\é日本.txt';
-      const quotedSuffix = ' \\033[2J\\a\\001\\037\\177\\b\\t\\n\\v\\f\\r\\"\\\\é日本.txt';
       await put(homeRoot, `conf/old${suffix}`, original);
       await put(distRoot, `conf.exact/new${suffix}`, content);
       const { stdout, stderr, exitCode } = await runGitOnlyDiff();
-      // oxlint-disable-next-line no-control-regex -- Remove only SGR, not unsafe filename bytes.
-      const patch = stdout.replace(/\x1b\[[0-9;]*m/g, "");
 
       assert.equal(exitCode, 0);
       assert.equal(stderr, "");
-      assert.equal(
-        patch.includes(`diff --git "a/conf/old${quotedSuffix}" "b/conf/new${quotedSuffix}"\n`),
-        true,
-      );
-      assert.equal(patch.includes(`rename from "conf/old${quotedSuffix}"\n`), true);
-      assert.equal(patch.includes(`rename to "conf/new${quotedSuffix}"\n`), true);
-      const metadataBytes = Buffer.from(patch.split("\n").slice(0, 4).join("\n"));
-      assert.equal(
-        metadataBytes.some((byte) => (byte < 32 && byte !== 10) || byte === 127),
-        false,
-      );
-      const patchBytes = Buffer.from(patch);
-      assert.equal(
-        patchBytes.some((byte) => (byte < 32 && byte !== 9 && byte !== 10) || byte === 127),
-        false,
-      );
-      assert.equal(patch.includes("@@"), scenario === "edited");
-
-      for (const reverse of [false, true]) {
-        const parsed = Bun.spawn(
-          [Bun.which("git")!, "apply", "--numstat", "-z", ...(reverse ? ["--reverse"] : [])],
-          {
-            cwd: root,
-            stdin: new Blob([patch]),
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-        );
-        const [numstat, parseError, parseExit] = await Promise.all([
-          new Response(parsed.stdout).text(),
-          new Response(parsed.stderr).text(),
-          parsed.exited,
-        ]);
-        assert.equal(parseExit, 0);
-        assert.equal(parseError, "");
-        const lineCount = scenario === "edited" ? 1 : 0;
-        const expectedPath = `conf/${reverse ? "old" : "new"}${suffix}`;
-        assert.equal(numstat, `${lineCount}\t${lineCount}\t${expectedPath}\0`);
-      }
+      assert.match(stdout, /── Renamed · conf\/old/);
+      assert.equal((stdout.match(/é日本\.txt/g) ?? []).length, 2);
+      assert.equal(stdout.includes("@@"), scenario === "edited");
     });
   }
 
@@ -1018,8 +980,8 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /rename from conf\/旧é.txt/);
-    assert.match(stdout, /rename to conf\/新é.txt/);
+    assert.match(stdout, /── Renamed · conf\/旧é\.txt → conf\/新é\.txt ──/);
+    assert.doesNotMatch(stdout, /@@/);
   });
 
   it("disables external diff commands even when user Git configuration enables them", async () => {
@@ -1034,7 +996,9 @@ describe("Git rename display", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /diff --git/);
+    assert.match(stdout, /── Modified · a\.txt ──/);
+    assert.match(stdout, /\+new/);
+    assert.match(stdout, /-old/);
   });
 
   it("does not propagate Git error exit codes", async () => {
@@ -1051,5 +1015,142 @@ describe("Git rename display", () => {
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
     assert.match(stdout, /git-output-before-error/);
+  });
+});
+
+describe("diff display contract", () => {
+  it("renders the SPEC Modified example byte-for-byte at width 80", async () => {
+    await put(homeRoot, ".agents/config/agents.yaml", "agents:\n  model: old-model\n  enabled: true\n");
+    await put(distRoot, ".agents/config/agents.yaml", "agents:\n  model: new-model\n  enabled: true\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const rule = "─".repeat(80 - "── Modified · .agents/config/agents.yaml ".length);
+    assert.equal(
+      stdout,
+      `── Modified · .agents/config/agents.yaml ${rule}\n` +
+        "\n" +
+        "@@ -1,3 +1,3 @@\n" +
+        " agents:\n" +
+        "-  model: old-model\n" +
+        "+  model: new-model\n" +
+        "   enabled: true\n",
+    );
+  });
+
+  it("keeps a long path untruncated with the minimum right rule", async () => {
+    const longPath = `${"d".repeat(30)}/${"x".repeat(70)}.txt`;
+    await put(homeRoot, longPath, "old\n");
+    await put(distRoot, longPath, "new\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.equal(stdout.split("\n")[0], `── Modified · ${longPath} ──`);
+  });
+
+  it("separates headings and bodies with one blank line and sections with two", async () => {
+    const original = "first\nsecond\nthird\n";
+    await put(homeRoot, "a.txt", "one\n");
+    await put(distRoot, "a.txt", "two\n");
+    await put(distRoot, "conf.exact/keep.txt", "same\n");
+    await put(homeRoot, "conf/keep.txt", "same\n");
+    await put(homeRoot, "conf/old.txt", original);
+    await put(distRoot, "conf.exact/new.txt", original);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const modifiedRule = "─".repeat(80 - "── Modified · a.txt ".length);
+    const renamedRule = "─".repeat(80 - "── Renamed · conf/old.txt → conf/new.txt ".length);
+    assert.equal(
+      stdout,
+      `── Modified · a.txt ${modifiedRule}\n\n@@ -1 +1 @@\n-one\n+two\n\n\n` +
+        `── Renamed · conf/old.txt → conf/new.txt ${renamedRule}\n`,
+    );
+  });
+
+  it("renders the deleted content in the Deleted section body", async () => {
+    await put(distRoot, "dir.exact/keep.txt", "same\n");
+    await put(homeRoot, "dir/keep.txt", "same\n");
+    await put(homeRoot, "dir/legacy.txt", "mode=legacy\nenabled=true\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /── Deleted · dir\/legacy\.txt ──/);
+    assert.match(stdout, /@@ -1,2 \+0,0 @@/);
+    assert.match(stdout, /^-mode=legacy$/m);
+    assert.match(stdout, /^-enabled=true$/m);
+  });
+
+  it("renders a non-rename mode-only change with old mode and new mode lines", async () => {
+    await putExecutable(distRoot, "tool.executable", "#!/bin/sh\n");
+    await put(homeRoot, "tool", "#!/bin/sh\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /── Modified · tool ──/);
+    assert.match(stdout, /^old mode 100644$/m);
+    assert.match(stdout, /^new mode 100755$/m);
+    assert.doesNotMatch(stdout, /@@/);
+  });
+
+  it("drops index and file headers while keeping body lines starting like them", async () => {
+    await put(homeRoot, "meta.txt", "--- old\nplain\n");
+    await put(distRoot, "meta.txt", "+++ new\nplain\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /── Modified · meta\.txt ──/);
+    assert.match(stdout, /^---- old$/m);
+    assert.match(stdout, /^\+\+\+\+ new$/m);
+    assert.match(stdout, /^ plain$/m);
+    assert.doesNotMatch(stdout, /^index /m);
+    assert.doesNotMatch(stdout, /^--- meta\.txt$/m);
+    assert.doesNotMatch(stdout, /^\+\+\+ meta\.txt$/m);
+  });
+
+  it("renders an empty added file as a heading-only Added section", async () => {
+    await put(distRoot, "empty.txt", "");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const rule = "─".repeat(80 - "── Added · empty.txt ".length);
+    assert.equal(stdout, `── Added · empty.txt ${rule}\n`);
+  });
+
+  it("renders a directory type mismatch as Deleted and Added sections", async () => {
+    await put(homeRoot, "entry", "old-file\n");
+    await put(distRoot, "entry.exact/keep.txt", "visible\n");
+    await put(distRoot, "entry.exact/private.data.txt", "secret\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /── Deleted · entry ──/);
+    assert.match(stdout, /^-old-file$/m);
+    assert.match(stdout, /── Added · entry\/keep\.txt ──/);
+    assert.match(stdout, /^\+visible$/m);
+    assert.doesNotMatch(stdout, /── Modified · entry ──/);
+    assert.doesNotMatch(stdout, /private\.data|secret/);
+  });
+
+  it("renders a symlink type mismatch as Deleted and Added sections", async () => {
+    await put(distRoot, "slink", "file-content\n");
+    await putSymlink(homeRoot, "slink", "old-target");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /── Deleted · slink ──/);
+    assert.match(stdout, /^-old-target$/m);
+    assert.match(stdout, /── Added · slink ──/);
+    assert.match(stdout, /^\+file-content$/m);
+    assert.doesNotMatch(stdout, /── Modified · slink ──/);
   });
 });
