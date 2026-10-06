@@ -322,10 +322,11 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       renderResultLabel(s, occupied);
       renderInput(s, occupied);
       renderKey(s, occupied);
-      element(".cursor").hidden = !state.pointer;
+      element(".cursor").toggleAttribute("hidden", !state.pointer);
     } else {
-      for (const selector of [".task-label", ".result-label", ".input", ".key", ".cursor"])
+      for (const selector of [".task-label", ".result-label", ".input", ".key"])
         element(selector).hidden = true;
+      element(".cursor").toggleAttribute("hidden", true);
     }
     layout.at = performance.now();
     present(element(".task-label"), visible && showPage);
@@ -748,7 +749,9 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
 
   function pointer(sample, appeared) {
     const cursor = element(".cursor");
-    cursor.hidden = !sample;
+    // SVGElement has no hidden IDL property, so assignment would only create
+    // an expando; the [hidden] CSS rule needs the attribute instead.
+    cursor.toggleAttribute("hidden", !sample);
     cursor.classList.remove("pop");
     if (!sample) return;
     cursor.style.left = `${sample.x}px`;

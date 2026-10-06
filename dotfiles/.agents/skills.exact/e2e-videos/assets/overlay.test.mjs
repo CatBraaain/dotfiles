@@ -200,8 +200,6 @@ class ShimElement {
   children = [];
   /** @type {ShimElement | null} */
   parentNode = null;
-  /** @type {boolean} */
-  hidden;
   /** @type {Record<string, string>} */
   dataset = {};
   /** @type {StyleLike} */
@@ -235,7 +233,37 @@ class ShimElement {
   setAttribute(name, value) {
     this.attributes[name] = String(value);
     if (name === "class") this.className = String(value);
-    if (name === "hidden") this.hidden = true;
+  }
+  /** @param {string} name */
+  hasAttribute(name) {
+    return this.attributes[name] !== undefined;
+  }
+  /** @param {string} name */
+  removeAttribute(name) {
+    delete this.attributes[name];
+  }
+  /**
+   * @param {string} name
+   * @param {boolean} [force]
+   */
+  toggleAttribute(name, force) {
+    const next = force ?? !this.hasAttribute(name);
+    if (next) this.setAttribute(name, "");
+    else this.removeAttribute(name);
+  }
+  /**
+   * Mirrors the DOM: the property reflects the attribute on HTML elements,
+   * while SVG elements have no hidden IDL attribute, so assignment only
+   * creates an expando and never hides anything.
+   * @returns {boolean}
+   */
+  get hidden() {
+    return this.hasAttribute("hidden");
+  }
+  /** @param {boolean} value */
+  set hidden(value) {
+    if (this.tagName === "svg") return;
+    this.toggleAttribute("hidden", Boolean(value));
   }
   /** @param {...ShimElement} nodes */
   append(...nodes) {
@@ -520,7 +548,7 @@ function style(selector) {
 
 /** @param {string} selector */
 function hidden(selector) {
-  return elementOrThrow(selector).hidden;
+  return elementOrThrow(selector).hasAttribute("hidden");
 }
 
 function overlayHandle() {
@@ -980,9 +1008,9 @@ test("the cursor pops in on appearance, hides after the operation and clicks lea
     world.now = 3000;
     const { overlay } = installAt(world, baseState({ pointer: null }));
     const cursor = currentShadow.querySelector(".cursor");
-    assert.ok(cursor.hidden, "the cursor is hidden before it appears");
+    assert.ok(cursor.hasAttribute("hidden"), "the cursor is hidden before it appears");
     overlay.update({ pointer: { x: 150, y: 120, at: world.now } });
-    assert.equal(cursor.hidden, false);
+    assert.equal(cursor.hasAttribute("hidden"), false);
     assert.ok(cursor.classList.contains("pop"), "the cursor pops in when it appears");
     assert.equal(currentShadow.querySelectorAll(".cursor").length, 1);
     overlay.update({ pointer: { x: 150, y: 120, at: world.now, click: true } });
@@ -991,7 +1019,7 @@ test("the cursor pops in on appearance, hides after the operation and clicks lea
     world.advance(500);
     assert.equal(currentShadow.querySelectorAll(".ripple").length, 0, "ripple dies after 450ms");
     overlay.update({ pointer: null });
-    assert.equal(cursor.hidden, true, "the cursor hides after the operation");
+    assert.equal(cursor.hasAttribute("hidden"), true, "the cursor hides after the operation");
     assert.ok(!cursor.classList.contains("pop"), "the pop class is removed");
     overlay.update({ pointer: { x: 200, y: 150, at: world.now } });
     assert.ok(cursor.classList.contains("pop"), "the cursor pops again on re-appearance");
@@ -1027,6 +1055,7 @@ test("layer title renders only the title band", () => {
     assert.equal(hidden(".title"), false);
     assert.equal(hidden(".frames"), true);
     assert.equal(hidden(".task-label"), true);
+    assert.equal(hidden(".cursor"), true);
     assert.equal(layout.placements["task-label"], undefined);
     assert.ok(layout.requiredTitleHeight >= 64);
   } finally {
