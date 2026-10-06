@@ -144,7 +144,11 @@ class ShimClassList {
   constructor(element) {
     this.element = element;
   }
-  /** @returns {Set<string>} */
+  /**
+   * Goes through setAttribute so SVG elements keep working: classList stays
+   * writable there, while the className property itself is readonly.
+   * @returns {Set<string>}
+   */
   tokenSet() {
     return new Set(this.element.className.split(/\s+/).filter(Boolean));
   }
@@ -152,13 +156,13 @@ class ShimClassList {
   add(name) {
     const tokens = this.tokenSet();
     tokens.add(name);
-    this.element.className = [...tokens].join(" ");
+    this.element.setAttribute("class", [...tokens].join(" "));
   }
   /** @param {string} name */
   remove(name) {
     const tokens = this.tokenSet();
     tokens.delete(name);
-    this.element.className = [...tokens].join(" ");
+    this.element.setAttribute("class", [...tokens].join(" "));
   }
   /** @param {string} name */
   contains(name) {
@@ -173,8 +177,17 @@ class ShimClassList {
     const next = force ?? !tokens.has(name);
     if (next) tokens.add(name);
     else tokens.delete(name);
-    this.element.className = [...tokens].join(" ");
+    this.element.setAttribute("class", [...tokens].join(" "));
   }
+}
+
+// Tag names of the SVG elements used by overlay.html. Real SVG elements expose
+// a readonly SVGAnimatedString className and have no hidden IDL property.
+const SVG_TAG_NAMES = new Set(["svg", "path", "circle"]);
+
+/** @param {string} tagName */
+function isSvgTag(tagName) {
+  return SVG_TAG_NAMES.has(tagName);
 }
 
 function makeStyle() {
@@ -194,8 +207,6 @@ class ShimElement {
   tagName;
   /** @type {Record<string, string>} */
   attributes;
-  /** @type {string} */
-  className;
   /** @type {ShimElement[]} */
   children = [];
   /** @type {ShimElement | null} */
@@ -215,9 +226,8 @@ class ShimElement {
   /** @param {string} tagName @param {Record<string, string>} attributes */
   constructor(tagName, attributes = {}) {
     this.tagName = tagName.toLowerCase();
+    // className and hidden derive from attributes, so no field setup is needed.
     this.attributes = { ...attributes };
-    this.className = typeof attributes.class === "string" ? attributes.class : "";
-    this.hidden = attributes.hidden !== undefined;
     this.style = makeStyle();
     this.classList = new ShimClassList(this);
     this.ownerWorld = /** @type {ShimWorld} */ (/** @type {unknown} */ (null));
@@ -229,10 +239,22 @@ class ShimElement {
   set textContent(value) {
     this._text = String(value);
   }
+  /**
+   * Mirrors the DOM: HTML elements reflect the class attribute, while SVG
+   * elements expose a readonly SVGAnimatedString, so assignment throws.
+   * @returns {string}
+   */
+  get className() {
+    return typeof this.attributes.class === "string" ? this.attributes.class : "";
+  }
+  /** @param {string} value */
+  set className(value) {
+    if (isSvgTag(this.tagName)) throw new TypeError("className is readonly on SVG elements");
+    this.setAttribute("class", String(value));
+  }
   /** @param {string} name @param {string} value */
   setAttribute(name, value) {
     this.attributes[name] = String(value);
-    if (name === "class") this.className = String(value);
   }
   /** @param {string} name */
   hasAttribute(name) {
@@ -253,16 +275,17 @@ class ShimElement {
   }
   /**
    * Mirrors the DOM: the property reflects the attribute on HTML elements,
-   * while SVG elements have no hidden IDL attribute, so assignment only
-   * creates an expando and never hides anything.
-   * @returns {boolean}
+   * while SVG elements have no hidden IDL attribute, so the property reads
+   * as undefined and assignment only creates an expando and never hides.
+   * @returns {boolean | undefined}
    */
   get hidden() {
+    if (isSvgTag(this.tagName)) return undefined;
     return this.hasAttribute("hidden");
   }
   /** @param {boolean} value */
   set hidden(value) {
-    if (this.tagName === "svg") return;
+    if (isSvgTag(this.tagName)) return;
     this.toggleAttribute("hidden", Boolean(value));
   }
   /** @param {...ShimElement} nodes */
@@ -287,9 +310,8 @@ class ShimElement {
   }
   /** @param {boolean} deep */
   cloneNode(deep) {
+    // className and hidden derive from attributes, which the constructor copies.
     const copy = new ShimElement(this.tagName, this.attributes);
-    copy.className = this.className;
-    copy.hidden = this.hidden;
     copy.dataset = { ...this.dataset };
     Object.assign(copy.style, this.style);
     copy._text = this._text;
@@ -997,6 +1019,36 @@ test("backspace deletion reveal is delayed by 160ms", () => {
   } finally {
     world.restore();
   }
+});
+
+// ---------------------------------------------------------------------------
+// SVG element semantics in the DOM shim
+// ---------------------------------------------------------------------------
+test("the shim mirrors SVG semantics: readonly className and no hidden property", () => {
+  const svg = new ShimElement("svg", { class: "cursor" });
+  assert.equal(svg.className, "cursor", "reading className reflects the class attribute");
+  assert.throws(
+    () => {
+      svg.className = "cursor moved";
+    },
+    undefined,
+    "assigning className on SVG elements throws like the real SVGAnimatedString",
+  );
+  svg.classList.add("moved");
+  assert.equal(svg.className, "cursor moved", "classList keeps the class attribute writable");
+  svg.classList.toggle("pop");
+  assert.equal(svg.className, "cursor moved pop");
+  svg.classList.remove("moved");
+  assert.equal(svg.className, "cursor pop");
+  assert.equal(svg.hidden, undefined, "SVG elements have no hidden IDL property");
+  svg.hidden = true;
+  assert.equal(svg.hasAttribute("hidden"), false, "hidden assignment stays an expando");
+  const html = new ShimElement("div", { class: "dock", hidden: "" });
+  assert.equal(html.hidden, true, "HTML elements still reflect the hidden attribute");
+  html.hidden = false;
+  assert.equal(html.hidden, false);
+  html.className = "dock moved";
+  assert.equal(html.className, "dock moved");
 });
 
 // ---------------------------------------------------------------------------
