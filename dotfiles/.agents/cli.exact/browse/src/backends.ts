@@ -120,7 +120,7 @@ function renderAbortHint(attempts: readonly Attempt[]): string {
       /aborted/i.test(attempt.error),
   );
   return renderAborted
-    ? `\nHint: automatic render recovery did not resolve the failure. Run \`browse server restart\` to recover the camoufox server.`
+    ? `\nHint: automatic render recovery did not resolve the failure. Render aborts are often transient, so retry the same call before concluding the service is down. If it fails again, run \`bun ~/.agents/cli/browse server restart\` and retry.`
     : "";
 }
 

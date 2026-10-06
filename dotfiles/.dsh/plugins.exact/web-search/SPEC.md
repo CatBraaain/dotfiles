@@ -26,7 +26,7 @@ cordis patch 行の `config` で次の 2 項目を受け付ける。優先順位
 | 条件 | 結果 |
 | --- | --- |
 | CLI が終了コード 0 で JSON を返した | `sources`（下記の写像）と `truncated: false` を返す |
-| CLI が終了コード 1 で失敗した（全エンジン失敗等） | `WEB_PROVIDER_ERROR` の `WebError`。メッセージは CLI の stderr 出力を逐語で持つ（各エンジンの失敗行と、描画 abort を含む失敗時の camoufox server 復旧ヒント `browse server restart` を含む） |
+| CLI が終了コード 1 で失敗した（全エンジン失敗等） | `WEB_PROVIDER_ERROR` の `WebError`。メッセージは CLI の stderr 出力を逐語で持つ（各エンジンの失敗行と、描画 abort を含む失敗時の camoufox server 復旧ヒントを含む） |
 | signal が abort された | 子プロセスを殺し、`WEB_PROVIDER_ERROR` の `WebError` で失敗する |
 | stdout が JSON としてパースできない | `WEB_PROVIDER_ERROR` の `WebError` で失敗する |
 

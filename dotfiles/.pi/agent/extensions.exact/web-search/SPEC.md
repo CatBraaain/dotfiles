@@ -84,7 +84,7 @@ CLI プロジェクトディレクトリ（`browse/`）は、この拡張のデ�
 | 成功（web_fetch、タイトルなし） | `✓ <backend> (1.2s)` |
 | 失敗 | `✗ <CLI名> - "<エラーメッセージ>"` |
 
-失敗行のエラーメッセージは CLI の stderr（全 backend 失敗の理由に camoufox server の復旧ヒント `browse server restart` が含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
+失敗行のエラーメッセージは CLI の stderr（全 backend 失敗の理由に、再試行と camoufox server 手動復旧のヒントが含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
 
 ## 環境変数
 

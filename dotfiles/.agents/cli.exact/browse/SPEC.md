@@ -38,7 +38,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | `--json` がある | 成功時 | 単一の JSON を stdout へ出力する（jq でパース可能） |
 | `--json` がない | 成功時 | markdown を stdout へ出力する |
 | すべての backend が失敗した | 実行 | `All <operation> backends failed: <backend>: <error>; ...`（`<operation>` は `web search` または `web fetch`）を 1 行 stderr へ出力し、終了コード 1 で終わる |
-| render が abort される | 実行 | ページopen・closeによる機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で手動の `browse server restart` を案内する |
+| render が abort される | 実行 | ページopen・closeによる機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で、失敗が過渡的な可能性を示した再試行と、手動再起動 `bun ~/.agents/cli/browse server restart` を案内する |
 | challenge / captcha を検出した | 実行 | 同一 backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
 | Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動はrestartロックで仲裁し、自分以外のrenderスロットの完了を待って再起動する。仲裁に負けた側は再起動を申請せず、再起動の完了を15秒まで待つ。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
 | `search` または camoufox 経路の `fetch` が同時に起動された | 実行 | 空いている render スロットで並列実行する（上限 4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server 再起動が進行を始めたら、未開始の待機は再起動に让位する（再起動が待ち行列の先頭に割り込む。render 開始済みの分は完了を待つだけ）。Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路はスロットを取得せず待ち合わせない。`login` は camoufox を使うためスロットを取得する |
