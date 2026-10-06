@@ -3148,6 +3148,73 @@ static void test_learning_promotes_committed_candidate(void) {
           "the learned word must not have been the baseline first candidate");
 }
 
+static void test_learning_promotes_committed_sentences(void) {
+    RIME_STRUCT(RimeContext, context);
+    char baseline[256] = "", target[256] = "", clause_target[256] = "", commit[256];
+
+    /* The first Space converts hidden to the first sentence, the second one
+     * reveals the list at the second candidate; committing the revealed
+     * display writes the joined whole-reading entry. */
+    fresh_session();
+    type_text("shuuseigo");
+    press(kSpace);
+    preview_text(baseline, sizeof(baseline));
+    press(kSpace);
+    selected_text(clause_target, sizeof(clause_target));
+    preview_text(target, sizeof(target));
+    check(target[0] != '\0' && clause_target[0] != '\0' && strcmp(target, baseline) != 0,
+          "the revealed sentence choice must exist and differ from the baseline first candidate");
+    if (target[0] == '\0' || clause_target[0] == '\0' || strcmp(target, baseline) == 0) return;
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) && strcmp(commit, target) == 0,
+          "the first sentence round must commit the revealed choice");
+
+    /* Keep committing the same revealed sentence: its joined entry must
+     * eventually lead the hidden conversion of the same reading. */
+    int promoted = 0;
+    for (int round = 1; round < 6 && !promoted; ++round) {
+        fresh_session();
+        type_text("shuuseigo");
+        press(kSpace);
+        char current[256];
+        preview_text(current, sizeof(current));
+        if (strcmp(current, target) == 0) {
+            promoted = 1;
+            break;
+        }
+        press(kSpace);
+        selected_text(current, sizeof(current));
+        if (strcmp(current, clause_target) != 0) {
+            /* Learning shifted the clause's order: walk the visible window
+             * back to the committed clause choice. */
+            int found = -1;
+            if (current_menu(&context)) {
+                for (int i = 0; i < context.menu.num_candidates; ++i) {
+                    const char* text = context.menu.candidates[i].text;
+                    if (text && strcmp(text, clause_target) == 0) found = i;
+                }
+                rime->free_context(&context);
+            }
+            check(found >= 0, "every round must keep the committed clause choice visible");
+            if (found < 0) return;
+            int highlighted = current_menu(&context)
+                ? context.menu.highlighted_candidate_index : 0;
+            if (current_menu(&context)) rime->free_context(&context);
+            int steps = (found - highlighted + 10) % 10;
+            for (int i = 0; i < steps; ++i) press(kDown);
+            selected_text(current, sizeof(current));
+        }
+        check(strcmp(current, clause_target) == 0,
+              "every round must select the committed clause choice");
+        preview_text(current, sizeof(current));
+        check(strcmp(current, target) == 0, "every round must reveal the committed sentence");
+        press(kReturn);
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, target) == 0,
+              "every round must commit the revealed sentence");
+    }
+    check(promoted, "the committed sentence must lead the hidden conversion after learning");
+}
+
 static void preview_text(char* buffer, size_t size) {
     RIME_STRUCT(RimeContext, context);
     buffer[0] = '\0';
@@ -3494,7 +3561,9 @@ static void test_typing_preview_is_reading(void) {
 
 static Bool select_curry_emoji(char* expected, size_t size) {
     fresh_session();
-    type_text("kyouhakare-");
+    /* A reading that no other test commits: the joined sentence entry this
+     * test writes must not shift any other test's baseline order. */
+    type_text("atatakakare-");
     press(kSpace);
     press(kSpace);
     char prefix[256];
@@ -4194,6 +4263,13 @@ int main(int argc, char* argv[]) {
         /* Runs first: later tests feed the user dictionary and can saturate
          * the learned order the baseline comparison depends on. */
         test_learning_promotes_committed_candidate,
+        test_learning_promotes_committed_sentences,
+        /* These must also run before any test commits a kyouhakare- sentence:
+         * the committed reading's joined entry leads the same reading in a
+         * fresh conversion and would shift the baselines below. */
+        test_bunsetsu_hidden_resize_and_hiragana,
+        test_bunsetsu_contexts_keep_separate_choices,
+        test_bunsetsu_filtered_identity,
         test_default_schema_is_kagiroi,
         test_main_dictionary_imports_managed_custom_table,
         test_ascii_punct_disabled_at_session_start,
@@ -4256,9 +4332,6 @@ int main(int argc, char* argv[]) {
         test_bunsetsu_codepoint_limits_and_fallback,
         test_bunsetsu_whole_edit_and_commit,
         test_bunsetsu_henkan_exception_and_expansion,
-        test_bunsetsu_hidden_resize_and_hiragana,
-        test_bunsetsu_contexts_keep_separate_choices,
-        test_bunsetsu_filtered_identity,
         test_filtered_candidate_count_and_pages,
         test_tail_editing_after_caret_movement,
         test_off_reservation_and_fixed_text,

@@ -13,8 +13,31 @@ end
 _G.Candidate = function(kind, start, finish, text, comment)
     local candidate = { type = kind, start = start, _end = finish, text = text, comment = comment }
     function candidate:get_genuine() return self end
-    function candidate:to_phrase() return nil end
+    -- A candidate carrying an entry (set by the stock mock or Phrase below)
+    -- stands for a genuine dictionary phrase, the learning input.
+    function candidate:to_phrase()
+        return self.phrase and { entry = self.phrase } or nil
+    end
     return candidate
+end
+_G.ShadowCandidate = function(candidate, kind, text, comment)
+    local shadow = { type = kind, text = text, comment = comment, start = candidate.start, _end = candidate._end }
+    function shadow:get_genuine() return candidate end
+    function shadow:to_phrase() return candidate:to_phrase() end
+    return shadow
+end
+_G.DictEntry = function(copy)
+    return copy and { text = copy.text, custom_code = copy.custom_code }
+        or { text = "", custom_code = "" }
+end
+_G.Phrase = function(mem, tag, start, finish, entry)
+    return {
+        toCandidate = function()
+            local candidate = Candidate("kagiroi", start, finish, entry.text, "")
+            candidate.phrase = entry
+            return candidate
+        end,
+    }
 end
 package.preload["kagiroi/kagiroi_translator"] = function()
     return {
@@ -33,8 +56,13 @@ package.preload["kagiroi/kagiroi_translator"] = function()
         end,
         fini = function() end,
         func = function(input, seg, env)
-            for _, text in ipairs(env.engine.context.mock_candidates) do
-                yield(Candidate("kagiroi", seg.start, seg._end, text, ""))
+            for _, item in ipairs(env.engine.context.mock_candidates) do
+                local offered = type(item) == "table" and item or { text = item }
+                if not offered.readings or offered.readings[input] then
+                    local candidate = Candidate("kagiroi", seg.start, seg._end, offered.text, "")
+                    candidate.phrase = offered.phrase
+                    yield(candidate)
+                end
             end
         end,
     }
@@ -250,6 +278,56 @@ assert(context.commits[1] == "仮名", "Enter must commit the highlighted candid
 assert(context.input == "", "Enter must end composition")
 press(env, string.byte("k"))
 assert(context:get_option("_kagiroi_hide_candidates"), "the next input must start with candidates hidden")
+
+-- Enter learns every dictionary clause and, when all clauses carry
+-- entries, the whole reading as one joined entry (dotfiles/rime/SPEC.md,
+-- "確定と次入力").
+env, context = new_environment({
+    { text = "下", readings = { ["か"] = true }, phrase = { text = "下|2820 2820", custom_code = "か " } },
+    { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
+})
+local learned = {}
+env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+context.input = "か1"
+context:set_option("_kagiroi_hide_candidates", true)
+assert(press(env, 0x20) == kAccepted, "the learning test must start with a hidden conversion")
+assert(press(env, 0xff0d) == kAccepted, "Enter must commit the conversion")
+assert(context.commits[1] == "下ネ", "Enter must commit the displayed clauses")
+assert(#learned == 3, "Enter must learn both clauses and their join")
+assert(learned[1].text == "下|2820 2820" and learned[1].custom_code == "か ",
+    "each clause must learn its own entry first")
+assert(learned[2].text == "ネ|2830 2830" and learned[2].custom_code == "1 ",
+    "the second clause must follow the first")
+assert(learned[3].text == "下ネ|2820 2830" and learned[3].custom_code == "か1 ",
+    "the join must carry the whole reading with the boundary ids")
+
+-- A single clause learns only its own entry: the join would duplicate it.
+env, context = new_environment({
+    { text = "下", phrase = { text = "下|2820 2820", custom_code = "かな " } },
+})
+learned = {}
+env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+context.input = "かな"
+context:set_option("_kagiroi_hide_candidates", true)
+assert(press(env, 0x20) == kAccepted and press(env, 0xff0d) == kAccepted,
+    "the single-clause test must convert and commit")
+assert(#learned == 1 and learned[1].text == "下|2820 2820",
+    "a single clause must learn only its own entry")
+
+-- A clause without a dictionary entry keeps the whole reading unlearned:
+-- the join would not match what the display shows for that clause.
+env, context = new_environment({
+    { text = "下", readings = { ["か"] = true } },
+    { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
+})
+learned = {}
+env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+context.input = "か1"
+context:set_option("_kagiroi_hide_candidates", true)
+assert(press(env, 0x20) == kAccepted and press(env, 0xff0d) == kAccepted,
+    "the unlearned-clause test must convert and commit")
+assert(#learned == 1 and learned[1].text == "ネ|2830 2830",
+    "the clause without an entry must leave the join out and learn the rest only")
 
 -- Tab expands without moving the selection; a second Tab does nothing and
 -- Shift+Tab collapses the expansion back to the collapsed page.

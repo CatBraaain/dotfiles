@@ -299,6 +299,34 @@ function Top.page(context, direction)
     Top.render(context)
 end
 
+-- The joined entry records the whole reading so the next conversion can
+-- find it directly: stock kagiroi writes one through its memorize
+-- callback, which the commit here (engine:commit_text) never reaches
+-- (dotfiles/rime/SPEC.md, "確定と次入力"). A clause without a dictionary
+-- entry keeps the reading out of the join, since the join would not match
+-- what the display shows for that clause.
+local function joined_sentence_entry(clauses)
+    local text, reading = {}, {}
+    local first_left_id, last_right_id
+    for index, clause in ipairs(clauses) do
+        local entry = not clause.override and clause.candidates[clause.selected].entry
+        local candidate, left_id, right_id
+        if entry then
+            candidate, left_id, right_id = string.match(entry.text, "(.+)|(-?%d+) (-?%d+)")
+            reading[index] = string.match(entry.custom_code or "", "^(.-) $")
+        end
+        if not candidate or reading[index] == "" then return nil end
+        text[index] = candidate
+        first_left_id = first_left_id or left_id
+        last_right_id = right_id
+    end
+    if #text < 2 then return nil end
+    local sentence = DictEntry()
+    sentence.text = table.concat(text) .. "|" .. first_left_id .. " " .. last_right_id
+    sentence.custom_code = table.concat(reading) .. " "
+    return sentence
+end
+
 function Top.learn(context)
     Top.sync(context)
     local env = session(context)
@@ -306,6 +334,8 @@ function Top.learn(context)
         local entry = not clause.override and clause.candidates[clause.selected].entry
         if entry then env.mem:update_userdict(entry, 1, "") end
     end
+    local sentence = joined_sentence_entry(env.conversion.clauses)
+    if sentence then env.mem:update_userdict(sentence, 1, "") end
     env.viterbi:clear()
 end
 
