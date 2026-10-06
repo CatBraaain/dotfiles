@@ -592,7 +592,9 @@
     const maxTextWidth = Math.max(1, safe.width - 52 * s);
     const textWidth = Math.min(measure(text, "result-text"), maxTextWidth);
     const lines = wrapLines(text, "result-text", Math.max(textWidth, 1), 20 * s);
-    const width = Math.min(safe.width, 52 * s + textWidth);
+    // One extra pixel of slack so subpixel rounding in real rendering cannot
+    // wrap a one-line label.
+    const width = Math.min(safe.width, 53 * s + textWidth);
     const height = 16 * s + 20 * s * lines;
     label.style.width = `${width}px`;
     label.style.height = `${height}px`;

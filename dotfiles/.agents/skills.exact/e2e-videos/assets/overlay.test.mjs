@@ -811,6 +811,8 @@ test("result label shows name === expected above the result frame", () => {
     );
     assert.equal(text(".result-text"), "Total === ¥3,300");
     const placed = layout.placements["result-label"];
+    // 53px padding including 1px of subpixel slack plus 17 units × 8px text.
+    assert.equal(placed.width, 53 + 17 * 8);
     assert.equal(placed.x, 300 - 2 + 8);
     assert.equal(placed.y, 400 - 2 - 8 - placed.height);
     assert.equal(placed.height, 16 + 20);
