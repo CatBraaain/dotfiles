@@ -2,8 +2,7 @@
 // checked against that section by step-driver.test.mjs.
 export const TIMING = {
   announceMs: 1800,
-  moveMs: 400,
-  holdMs: 250,
+  holdMs: 500,
   typeIntervalMs: 120,
   fillHoldMs: 600,
   resultViewMs: 3000,
@@ -13,8 +12,6 @@ export const TIMING = {
 const PAINT_TIMEOUT_MS = 500;
 const ACTION_WAIT_TIMEOUT_MS = 10_000;
 const RESULT_WAIT_TIMEOUT_MS = 10_000;
-const CURSOR_HOME_BELOW_VIEWPORT = 60;
-const GLIDE_SEGMENT_MS = 25;
 const SCROLL_WHEEL_STEPS = 4;
 const SCROLL_WHEEL_GAP_MS = 120;
 
@@ -44,10 +41,6 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
     y: 0,
     width: viewport.width,
     height: titleHeight,
-  };
-  let cursor = {
-    x: pageArea.x + pageArea.width / 2,
-    y: pageArea.y + pageArea.height + CURSOR_HOME_BELOW_VIEWPORT,
   };
   let consumed = false;
 
@@ -80,11 +73,13 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
         act: async (rect) => {
           await overlay.update({ phase: "acting" });
           const center = rectCenter(rect);
-          cursor = await glide(cursor, center, timing.moveMs);
-          await clock.sleep(timing.holdMs);
           const at = await pageNow();
+          await overlay.update({ pointer: { x: center.x, y: center.y, at } });
+          await page.mouse.move(center.x, center.y);
+          await clock.sleep(timing.holdMs);
+          const clickAt = await pageNow();
           await overlay.update({
-            pointer: { x: center.x, y: center.y, at, click: true },
+            pointer: { x: center.x, y: center.y, at: clickAt, click: true },
           });
           await page.mouse.down();
           await page.mouse.up();
@@ -101,7 +96,10 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
         results,
         act: async (rect) => {
           await overlay.update({ phase: "acting" });
-          cursor = await glide(cursor, rectCenter(rect), timing.moveMs);
+          const center = rectCenter(rect);
+          const at = await pageNow();
+          await overlay.update({ pointer: { x: center.x, y: center.y, at } });
+          await page.mouse.move(center.x, center.y);
           await clock.sleep(timing.holdMs);
         },
       });
@@ -159,7 +157,10 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
           await overlay.update({ phase: "acting" });
           if (locator) {
             await locator.focus();
-            cursor = await glide(cursor, rectCenter(rect), timing.moveMs);
+            const center = rectCenter(rect);
+            const at = await pageNow();
+            await overlay.update({ pointer: { x: center.x, y: center.y, at } });
+            await page.mouse.move(center.x, center.y);
             await clock.sleep(timing.holdMs);
           }
           await pressKey(operation.key);
@@ -182,7 +183,9 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
                 x: pageArea.x + pageArea.width / 2,
                 y: pageArea.y + pageArea.height / 2,
               };
-          cursor = await glide(cursor, center, timing.moveMs);
+          const at = await pageNow();
+          await overlay.update({ pointer: { x: center.x, y: center.y, at } });
+          await page.mouse.move(center.x, center.y);
           const name = operation.deltaY >= 0 ? "ScrollDown" : "ScrollUp";
           const perWheel = operation.deltaY / SCROLL_WHEEL_STEPS;
           for (let wheel = 0; wheel < SCROLL_WHEEL_STEPS; wheel++) {
@@ -236,23 +239,9 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
     await clock.sleep(timing.announceMs);
     await act(targetRect);
     const endAt = await pageNow();
-    await overlay.update({ phase: "checking", checkAt: endAt });
+    await overlay.update({ phase: "checking", checkAt: endAt, pointer: null });
     await showResults(results);
     return driver.metadata();
-  }
-
-  async function glide(from, to, durationMs) {
-    const segments = Math.max(2, Math.ceil(durationMs / GLIDE_SEGMENT_MS));
-    let position = from;
-    for (let segment = 1; segment <= segments; segment++) {
-      const progress = cubicBezier(0.42, 0.58, segment / segments);
-      position = lerp(from, to, progress);
-      const at = await pageNow();
-      await overlay.update({ pointer: { x: position.x, y: position.y, at } });
-      await page.mouse.move(position.x, position.y);
-      await clock.sleep(durationMs / segments);
-    }
-    return to;
   }
 
   async function showResults(results) {
@@ -354,24 +343,4 @@ function requireResults(operation, name) {
 
 function rectCenter(rect) {
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-}
-
-function lerp(from, to, progress) {
-  return {
-    x: from.x + (to.x - from.x) * progress,
-    y: from.y + (to.y - from.y) * progress,
-  };
-}
-
-function cubicBezier(x1, x2, progress) {
-  if (progress <= 0 || progress >= 1) return progress;
-  const bezier = (t, a, b) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
-  let low = 0;
-  let high = 1;
-  for (let index = 0; index < 24; index++) {
-    const mid = (low + high) / 2;
-    if (bezier(mid, x1, x2) < progress) low = mid;
-    else high = mid;
-  }
-  return bezier((low + high) / 2, 0, 1);
 }

@@ -157,11 +157,12 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       pendingInput = null;
       if (input) lastInputAt = input.at;
     }
+    const pointerAppeared = "pointer" in patch && !!patch.pointer && !state.pointer;
     state = adopted;
     adoptCheckClock(patch);
     applyTheme();
     if (!onlyThemeOrPointer || layout.at === 0) render();
-    if ("pointer" in patch) pointer(patch.pointer);
+    if ("pointer" in patch) pointer(patch.pointer, pointerAppeared);
     tick();
     return structuredClone(layout);
   }
@@ -273,8 +274,6 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
               .map((keyframe) => ({ ...keyframe, transform: "scale(1)" })),
           );
       }
-      effects.filter((effect) => effect.kind === "trail").forEach((effect) => effect.node.remove());
-      effects = effects.filter((effect) => effect.kind !== "trail");
     }
   }
   function reduced() {
@@ -747,12 +746,14 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     );
   }
 
-  function pointer(sample) {
-    element(".cursor").hidden = !sample;
-    if (!sample) return;
+  function pointer(sample, appeared) {
     const cursor = element(".cursor");
+    cursor.hidden = !sample;
+    cursor.classList.remove("pop");
+    if (!sample) return;
     cursor.style.left = `${sample.x}px`;
     cursor.style.top = `${sample.y}px`;
+    if (appeared && !reduced()) cursor.classList.add("pop");
     if (sample.click) {
       const ripple = document.createElement("div");
       ripple.className = "ripple";
@@ -760,16 +761,6 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       effects.push({
         node: ripple,
         kind: "ripple",
-        at: sample.at,
-        x: sample.x,
-        y: sample.y,
-      });
-    } else if (!reduced()) {
-      const trail = cursor.cloneNode(true);
-      element(".effects").append(trail);
-      effects.push({
-        node: trail,
-        kind: "trail",
         at: sample.at,
         x: sample.x,
         y: sample.y,
@@ -790,30 +781,16 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     const s = scale();
     effects = effects.filter((effect) => {
       const age = Math.max(0, now - effect.at);
-      const duration = effect.kind === "trail" ? 200 : 450;
-      if (age >= duration) {
+      if (age >= 450) {
         effect.node.remove();
         return false;
       }
-      const fraction = age / duration;
-      if (effect.kind === "trail") {
-        const ghost = {
-          x: effect.x,
-          y: effect.y,
-          width: 16 * s,
-          height: 24 * s,
-        };
-        const overText =
-          Object.values(layout.placements).some((rect) => intersects(ghost, rect)) ||
-          intersects(ghost, state.titleArea);
-        effect.node.style.opacity = String(overText ? 0 : 0.25 * (1 - fraction));
-      } else {
-        const diameter = reduced() ? 24 : 12 + fraction * 36;
-        effect.node.style.left = `${effect.x - 24 * s}px`;
-        effect.node.style.top = `${effect.y - 24 * s}px`;
-        effect.node.style.setProperty("--ripple-scale", String(diameter / 48));
-        effect.node.style.opacity = String(0.75 * (1 - fraction));
-      }
+      const fraction = age / 450;
+      const diameter = reduced() ? 24 : 12 + fraction * 36;
+      effect.node.style.left = `${effect.x - 24 * s}px`;
+      effect.node.style.top = `${effect.y - 24 * s}px`;
+      effect.node.style.setProperty("--ripple-scale", String(diameter / 48));
+      effect.node.style.opacity = String(0.75 * (1 - fraction));
       return true;
     });
     let fading = false;

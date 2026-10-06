@@ -113,8 +113,7 @@ function specTimingRow(label) {
 
 test("driver timing matches the SPEC.md 録画ドライバ table", () => {
   assert.equal(TIMING.announceMs, specTimingRow("予告"));
-  assert.equal(TIMING.moveMs, specTimingRow("カーソル移動 1 回"));
-  assert.equal(TIMING.holdMs, specTimingRow("クリック・hover 前の対象上の停止"));
+  assert.equal(TIMING.holdMs, specTimingRow("出現後の操作までの停止"));
   assert.equal(TIMING.typeIntervalMs, specTimingRow("1 文字ごとの入力間隔"));
   assert.equal(TIMING.fillHoldMs, specTimingRow("一括設定後の入力帯と対象枠の表示"));
   assert.equal(TIMING.resultViewMs, specTimingRow("結果の視聴"));
@@ -128,8 +127,7 @@ test("driver timing satisfies the SPEC.md 時間の間隔 minimums", () => {
     return Number(match[1]);
   };
   const seconds = (pattern) => minimum(pattern) * 1000;
-  assert.ok(TIMING.moveMs >= minimum(/最低 (\d+)ms かけ/));
-  assert.ok(TIMING.holdMs >= minimum(/最低 (\d+)ms 止めてからクリック/));
+  assert.ok(TIMING.holdMs >= minimum(/最低 (\d+)ms 止める/));
   assert.ok(TIMING.typeIntervalMs >= minimum(/1 文字ごとに (\d+)ms 以上空ける/));
   assert.ok(TIMING.fillHoldMs >= minimum(/最低 (\d+)ms 表示してから結果の確認へ移る/));
   assert.ok(TIMING.resultViewMs >= seconds(/最低 (\d+) 秒維持/));
@@ -223,18 +221,23 @@ test("click runs the announce → act → check → result sequence with real va
   assert.ok(overlay.patches.some((patch) => patch.phase === "acting"));
 
   const pointers = overlay.patches.filter((patch) => patch.pointer).map((patch) => patch.pointer);
-  assert.ok(pointers.length >= 2, "cursor glides through multiple pointer samples");
-  assert.ok(pointers[0].y > 720, "the first glide enters from below the page area");
+  assert.ok(pointers.length >= 2, "the cursor appears at the target and then clicks");
+  assert.deepEqual(
+    { x: pointers[0].x, y: pointers[0].y },
+    { x: 250, y: 220 },
+    "the cursor appears at the target center",
+  );
   const clicked = pointers.find((pointer) => pointer.click);
   assert.deepEqual({ x: clicked.x, y: clicked.y }, { x: 250, y: 220 });
   assert.ok(pointers.every((pointer) => Number.isFinite(pointer.at)));
   assert.equal(page.calls.downs, 1);
   assert.equal(page.calls.ups, 1);
-  assert.ok(page.calls.mouseMoves.length >= 2);
+  assert.deepEqual(page.calls.mouseMoves, [{ x: 250, y: 220 }]);
 
   const checking = overlay.patches.find((patch) => patch.phase === "checking");
   assert.ok(Number.isFinite(checking.checkAt));
   assert.ok(checking.checkAt >= clicked.at);
+  assert.equal(checking.pointer, null, "the cursor hides after the operation");
 
   const shown = overlay.patches.find((patch) => patch.result);
   assert.equal(shown.phase, "result");
@@ -249,7 +252,7 @@ test("click runs the announce → act → check → result sequence with real va
   assert.ok(clock.waits.includes(TIMING.resultViewMs));
   assert.ok(
     clock.waits.reduce((total, wait) => total + wait, 0) >=
-      TIMING.announceMs + TIMING.moveMs + TIMING.holdMs + TIMING.resultViewMs,
+      TIMING.announceMs + TIMING.holdMs + TIMING.resultViewMs,
   );
 });
 

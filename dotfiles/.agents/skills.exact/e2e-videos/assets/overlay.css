@@ -276,15 +276,27 @@ svg {
   stroke: var(--edge-guard);
   stroke-width: 1.5;
   stroke-linejoin: round;
+  transform-origin: 1px 1px;
   z-index: 3;
+}
+.cursor.pop {
+  animation: cursor-pop 150ms ease-out;
+}
+@keyframes cursor-pop {
+  0% {
+    transform: scale(0);
+  }
+  70% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 .effects {
   position: absolute;
   inset: 0;
   z-index: 1;
-}
-.effects .cursor {
-  z-index: auto;
 }
 .ripple {
   position: absolute;

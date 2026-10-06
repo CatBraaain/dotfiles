@@ -972,37 +972,43 @@ test("backspace deletion reveal is delayed by 160ms", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cursor, trail and ripple
+// Cursor appearance and ripple
 // ---------------------------------------------------------------------------
-test("pointer moves leave a trail and clicks leave a ripple", () => {
+test("the cursor pops in on appearance, hides after the operation and clicks leave a ripple", () => {
   const world = new ShimWorld();
   try {
     world.now = 3000;
     const { overlay } = installAt(world, baseState({ pointer: null }));
+    const cursor = currentShadow.querySelector(".cursor");
+    assert.ok(cursor.hidden, "the cursor is hidden before it appears");
     overlay.update({ pointer: { x: 150, y: 120, at: world.now } });
-    assert.equal(currentShadow.querySelectorAll(".cursor").length, 2, "main cursor plus one trail");
+    assert.equal(cursor.hidden, false);
+    assert.ok(cursor.classList.contains("pop"), "the cursor pops in when it appears");
+    assert.equal(currentShadow.querySelectorAll(".cursor").length, 1);
     overlay.update({ pointer: { x: 150, y: 120, at: world.now, click: true } });
     assert.equal(currentShadow.querySelectorAll(".ripple").length, 1);
+    assert.equal(currentShadow.querySelectorAll(".cursor").length, 1, "no trail");
     world.advance(500);
     assert.equal(currentShadow.querySelectorAll(".ripple").length, 0, "ripple dies after 450ms");
-    assert.equal(currentShadow.querySelectorAll(".cursor").length, 1, "trail dies after 200ms");
+    overlay.update({ pointer: null });
+    assert.equal(cursor.hidden, true, "the cursor hides after the operation");
+    assert.ok(!cursor.classList.contains("pop"), "the pop class is removed");
+    overlay.update({ pointer: { x: 200, y: 150, at: world.now } });
+    assert.ok(cursor.classList.contains("pop"), "the cursor pops again on re-appearance");
   } finally {
     world.restore();
   }
 });
 
-test("reduced motion drops the trail and keeps the ripple small", () => {
+test("reduced motion skips the pop and keeps the ripple small", () => {
   const world = new ShimWorld({ reducedMotion: true });
   try {
     world.now = 3000;
     const { overlay } = installAt(world, baseState({ reducedMotion: true, pointer: null }));
     overlay.update({ pointer: { x: 150, y: 120, at: world.now } });
+    const cursor = currentShadow.querySelector(".cursor");
+    assert.ok(!cursor.classList.contains("pop"), "no pop under reduced motion");
     overlay.update({ pointer: { x: 150, y: 120, at: world.now, click: true } });
-    assert.equal(
-      currentShadow.querySelectorAll(".cursor").length,
-      1,
-      "no trail under reduced motion",
-    );
     const ripple = currentShadow.querySelector(".ripple");
     assert.ok(ripple instanceof ShimElement);
     assert.equal(ripple.style.getPropertyValue("--ripple-scale"), String(24 / 48));
