@@ -1,6 +1,9 @@
 package.path = arg[2]:match("^(.*)/kagiroi/") .. "/?.lua;" .. package.path
 local kAccepted = 1
 local kNoop = 2
+-- The generated key → text mappings are a build artifact (arg[3],
+-- lua/kagiroi/zenkaku_text.lua), not a repository file.
+package.preload["kagiroi/zenkaku_text"] = function() return dofile(arg[3]) end
 package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
     return { init = function() end, fini = function() end, func = function() return kNoop end, ascii_tail = nil }
 end

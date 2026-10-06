@@ -3,7 +3,7 @@
 # The auto-patch config plugin applies this file to the schema config.
 patch:
   # The declaration-matched dictionary managed by this repository.
-  translator/dictionary: kagiroi_dotfiles_romaji
+  translator/dictionary: kagiroi_dotfiles_zenkaku
   # The stock derives (ti->chi, si->shi, hu->fu, l->x, ...) generate spellings
   # the declaration does not define; drop them to keep the table exact.
   speller/algebra: null

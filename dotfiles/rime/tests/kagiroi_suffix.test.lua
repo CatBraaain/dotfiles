@@ -36,7 +36,7 @@ package.preload["kagiroi/kagiroi_kana_speller"] = function()
     return base
 end
 
-package.preload["kagiroi/romaji_rules"] = function() return dofile(arg[2]) end
+package.preload["kagiroi/zenkaku_rules"] = function() return dofile(arg[2]) end
 
 local processor = dofile(arg[1])
 

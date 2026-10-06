@@ -1,4 +1,7 @@
 package.path = arg[1]:match("^(.*)/kagiroi/") .. "/?.lua;" .. package.path
+-- The generated key → text mappings are a build artifact (arg[2],
+-- lua/kagiroi/zenkaku_text.lua), not a repository file.
+package.preload["kagiroi/zenkaku_text"] = function() return dofile(arg[2]) end
 _G.yield = coroutine.yield
 _G.Translation = function(func)
     return { iter = function() return coroutine.wrap(func) end }

@@ -7,7 +7,7 @@ for line in io.lines(arg[3]) do
 end
 assert(romaji_to_kana.nn == "ん" and romaji_to_kana.tt == "っt", "use the generated dictionary")
 local rules = dofile(arg[2])
-package.preload["kagiroi/romaji_rules"] = function() return rules end
+package.preload["kagiroi/zenkaku_rules"] = function() return rules end
 
 local base = {}
 function base.init(env)

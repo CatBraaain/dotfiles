@@ -1895,7 +1895,7 @@ static void test_romanization_matches_declaration(void) {
         const char* input;
         const char* expected;
     } cases[] = {
-        /* base rows: every row of roma.data.yaml, all five columns */
+        /* base rows: every row of zenkaku.data.yaml, all five columns */
         {"a", "あ"}, {"i", "い"}, {"u", "う"}, {"e", "え"}, {"o", "お"},
         {"la", "ぁ"}, {"li", "ぃ"}, {"lu", "ぅ"}, {"le", "ぇ"}, {"lo", "ぉ"},
         {"ka", "か"}, {"ki", "き"}, {"ku", "く"}, {"ke", "け"}, {"ko", "こ"},
@@ -1963,7 +1963,7 @@ static void test_romanization_matches_declaration(void) {
         {"hwa", "ふぁ"}, {"hwi", "ふぃ"}, {"hwe", "ふぇ"}, {"hwo", "ふぉ"},
         {"bwa", "ぶぁ"}, {"bwi", "ぶぃ"}, {"bwe", "ぶぇ"}, {"bwo", "ぶぉ"},
         /* Character conditions map m before w to ん, so mwa/mwo read んわ/んを
-         * (dotfiles/rime/SPEC.md, "ローマ字表"). */
+         * (dotfiles/rime/SPEC.md, "ローマ字の対応"). */
         {"rwa", "るぁ"}, {"rwi", "るぃ"}, {"rwe", "るぇ"}, {"rwo", "るぉ"},
         {"kwu", "こぅ"}, {"cwu", "こぅ"}, {"gwu", "ごぅ"}, {"swu", "そぅ"},
         {"zwu", "ぞぅ"}, {"twu", "とぅ"}, {"dwu", "どぅ"},
@@ -2063,8 +2063,8 @@ static Bool dict_has_code(const char* dictionary, const char* code) {
 /* SPEC: the romaji dictionary is generated from the declaration only: the
  * managed patch points the layout schema at it and disables the stock
  * algebra, no stock table is imported, and the hatsuon spellings, empty
- * slots and excluded families of roma.data.yaml generate no entries
- * (dotfiles/rime/SPEC.md, "ローマ字表"). */
+ * slots and excluded families of zenkaku.data.yaml generate no entries
+ * (dotfiles/rime/SPEC.md, "ローマ字の対応"). */
 static void test_romaji_dictionary_is_declaration_only(void) {
     static const char* const kConsonants[] = {
         "b", "c", "d", "f", "g", "h", "j", "k", "l", "m",
@@ -2089,11 +2089,11 @@ static void test_romaji_dictionary_is_declaration_only(void) {
     };
 
     char path[512];
-    snprintf(path, sizeof(path), "%s/kagiroi_dotfiles_romaji.dict.yaml", g_user_data_dir);
+    snprintf(path, sizeof(path), "%s/kagiroi_dotfiles_zenkaku.dict.yaml", g_user_data_dir);
     char* dictionary = read_small_file(path);
     check(dictionary != NULL, "the generated romaji dictionary must exist in the workspace");
     if (!dictionary) return;
-    check(text_contains(dictionary, "name: kagiroi_dotfiles_romaji"),
+    check(text_contains(dictionary, "name: kagiroi_dotfiles_zenkaku"),
           "the generated dictionary must carry the declaration's name");
     check(!text_contains(dictionary, "import_tables"),
           "the generated dictionary must not import any stock table");
@@ -2144,7 +2144,7 @@ static void test_romaji_dictionary_is_declaration_only(void) {
         check(!dict_has_code(dictionary, kCompletedPrefixes[i]), description);
     }
     /* The singles mappings for nn/mm take priority over generated mappings
-     * (dotfiles/rime/SPEC.md, "ローマ字表"). */
+     * (dotfiles/rime/SPEC.md, "ローマ字の対応"). */
     check(code_text_is(dictionary, "nn", "ん"), "the dictionary must read nn as ん");
     check(code_text_is(dictionary, "mm", "ん"), "the dictionary must read mm as ん");
     free(dictionary);
@@ -2153,7 +2153,7 @@ static void test_romaji_dictionary_is_declaration_only(void) {
     char* patch = read_small_file(path);
     check(patch != NULL, "the managed romaji patch must exist in the workspace");
     if (patch) {
-        check(text_contains(patch, "translator/dictionary: kagiroi_dotfiles_romaji"),
+        check(text_contains(patch, "translator/dictionary: kagiroi_dotfiles_zenkaku"),
               "the managed patch must point the layout at the generated dictionary");
         check(text_contains(patch, "speller/algebra: null"),
               "the managed patch must disable the stock algebra");
@@ -2166,7 +2166,7 @@ static void test_romaji_dictionary_is_declaration_only(void) {
     if (schema) {
         check(!text_contains(schema, "algebra"),
               "the compiled romaji schema must not derive any spellings");
-        check(text_contains(schema, "dictionary: kagiroi_dotfiles_romaji"),
+        check(text_contains(schema, "dictionary: kagiroi_dotfiles_zenkaku"),
               "the compiled romaji schema must use the generated dictionary");
         check(!text_contains(schema, "import_tables"),
               "the compiled romaji schema must not import a stock table");
@@ -2517,9 +2517,9 @@ static void test_longest_declared_suffix_preserves_raw_prefix(void) {
         {"chi", "cひ"}, {"tsu", "tす"}, {"ltsu", "ltす"},
         {"kyi", "kyい"}, {"kye", "kいぇ"}, {"wha", "wは"},
         {"tsa", "tさ"}, {"dhe", "dへ"}, {"fya", "fや"},
-        /* empty slots of roma.data.yaml fall back to the longest declared
+        /* empty slots of zenkaku.data.yaml fall back to the longest declared
          * suffix instead of a mapping of their own
-         * (dotfiles/rime/SPEC.md, "ローマ字表") */
+         * (dotfiles/rime/SPEC.md, "ローマ字の対応") */
         {"qu", "qう"}, {"wu", "wう"}, {"yi", "yい"},
         {"lyi", "lyい"}, {"lye", "lいぇ"},
         /* nwu is not declared (the n row left the o-column+wu family)

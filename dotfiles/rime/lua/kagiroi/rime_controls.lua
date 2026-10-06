@@ -5,6 +5,8 @@
 -- speller, which owns the reading corrections.
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local bunsetsu = require("kagiroi/bunsetsu")
+-- Generated key → text mappings (dotfiles/rime/zenkaku.data.yaml).
+local zenkaku_text = require("kagiroi/zenkaku_text")
 local kAccepted = 1
 local kNoop = 2
 local kRejected = 0
@@ -12,8 +14,6 @@ local kHenkan = 0xff23
 local kBackSpace = 0xff08
 local kEscape = 0xff1b
 local kSpace = 0x20
-local kComma = string.byte(",")
-local kPeriod = string.byte(".")
 local kMinus = string.byte("-")
 local kTab = 0xff09
 local kISOLeftTab = 0xfe20
@@ -22,29 +22,8 @@ local kDown = 0xff54
 local kLeft = 0xff51
 local kRight = 0xff53
 local kReturn = 0xff0d
-local kKeypadDecimal = 0xffae
-local kKeypadSeparator = 0xffac
 local kKeypadEnter = 0xff8b
-local kKeypadZero = 0xffb0
-local kKeypadEqual = 0xffbd
-local kKeypadDivide = 0xffaf
-local kKeypadMultiply = 0xffaa
-local kKeypadSubtract = 0xffad
-local kKeypadAdd = 0xffab
 local Top = {}
-
--- Keypad symbols add their half-width character in both the Japanese and
--- the half-width input mode; the ordinary symbol keys keep their separate
--- Japanese mappings (dotfiles/rime/SPEC.md, "共通の文字対応").
-local keypad_symbol_text = {
-    [kKeypadDecimal] = ".",
-    [kKeypadSeparator] = ",",
-    [kKeypadAdd] = "+",
-    [kKeypadSubtract] = "-",
-    [kKeypadMultiply] = "*",
-    [kKeypadDivide] = "/",
-    [kKeypadEqual] = "=",
-}
 
 -- The editing, mode and emoji shortcuts the SPEC lists must reach the
 -- application unassigned in every IME ON state
@@ -72,22 +51,6 @@ local function listed_shortcut(key_event)
     end
     return shortcut_letters[keycode] == true
 end
-
--- First-choice symbols for the Japanese mode (dotfiles/rime/SPEC.md, "記号").
--- ASCII symbols without an entry map to their full-width form.
-local symbol_text = {
-    [string.byte("-")] = "ー",
-    [string.byte("/")] = "・",
-    [string.byte("\\")] = "￥",
-    [string.byte("~")] = "〜",
-    [string.byte("|")] = "·",
-    [string.byte("[")] = "「",
-    [string.byte("]")] = "」",
-    [string.byte("{")] = "『",
-    [string.byte("}")] = "』",
-    [string.byte("'")] = "‘’",
-    [string.byte('"')] = "“”",
-}
 
 local function reset_expansion(context)
     context:set_option("_kagiroi_expand_candidates", false)
@@ -213,39 +176,19 @@ end
 -- during conversion; letters are excluded because while typing they spell
 -- the reading and during conversion they confirm it
 -- (dotfiles/rime/SPEC.md). Enter belongs to the separate commit contract.
+-- The mappings come from the generated zenkaku_text module.
 local function appended_text(keycode, in_conversion)
-    local main_digit = keycode >= 0x30 and keycode <= 0x39
-    local keypad_digit = keycode >= kKeypadZero and keycode <= kKeypadZero + 9
-    if main_digit then
-        return utf8.char(0xff10 + keycode - 0x30)
-    end
-    if keypad_digit then
-        return string.char(0x30 + keycode - kKeypadZero)
-    end
-    local keypad_symbol = keypad_symbol_text[keycode]
-    if keypad_symbol then
-        return keypad_symbol
-    end
-    if keycode == kComma then
-        return "、"
-    end
-    if keycode == kPeriod then
-        return "。"
-    end
     if is_plain_letter(keycode) then
         -- Letters spell the reading while typing and confirm the conversion
         -- during conversion; they never append directly
         -- (dotfiles/rime/SPEC.md).
         return nil
     end
-    if keycode >= 0x21 and keycode <= 0x7e then
-        if keycode == kMinus and not in_conversion then
-            -- While typing, the hyphen spells a long vowel in the reading.
-            return nil
-        end
-        return symbol_text[keycode] or utf8.char(0xff00 + keycode - 0x20)
+    if keycode == kMinus and not in_conversion then
+        -- While typing, the hyphen spells a long vowel in the reading.
+        return nil
     end
-    return nil
+    return zenkaku_text.keys[keycode]
 end
 
 local function keep_display_for_editing(context, env)
@@ -299,17 +242,11 @@ end
 
 -- The half-width text an ascii input mode key appends to the unconfirmed
 -- input, or nil when the key is not one: letters, digits, symbols and the
--- space stay half-width (dotfiles/rime/SPEC.md).
+-- space stay half-width, while the keypad keys add the characters declared
+-- for them in both modes (dotfiles/rime/SPEC.md).
 local function ascii_appended_text(keycode, key_event)
-    if keycode >= 0x30 and keycode <= 0x39 then
-        return string.char(keycode)
-    end
-    if keycode >= kKeypadZero and keycode <= kKeypadZero + 9 then
-        return string.char(0x30 + keycode - kKeypadZero)
-    end
-    local keypad_symbol = keypad_symbol_text[keycode]
-    if keypad_symbol then
-        return keypad_symbol
+    if zenkaku_text.keypad_keys[keycode] then
+        return zenkaku_text.keys[keycode]
     end
     if is_plain_letter(keycode) then
         if key_event:shift() then

@@ -2,7 +2,7 @@
 local kAccepted = 1
 local kNoop = 2
 local base = require("kagiroi/kagiroi_kana_speller")
-local rules = require("kagiroi/romaji_rules")
+local rules = require("kagiroi/zenkaku_rules")
 local Top = { init = base.init, fini = base.fini }
 -- Byte boundary of the frozen display; only resumed input after it is read.
 Top.ascii_tail = nil

@@ -67,7 +67,7 @@ cp -r "$mirror"/opencc "$workspace/"
 install -m 644 "$root"/default.custom.yaml "$root"/kagiroi.custom.yaml \
     "$root"/kagiroi.dict.yaml "$root"/kagiroi.custom.dict.yaml \
     "$root"/kagiroi_romaji.custom.yaml "$workspace/"
-bun "$root/roma.build.ts" --output "$workspace/kagiroi_dotfiles_romaji.dict.yaml"
+bun "$root/zenkaku.build.ts" --output "$workspace/kagiroi_dotfiles_zenkaku.dict.yaml"
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
 
 cc -std=c11 -O2 -o "$cache/harness/harness" "$root/tests/rime/harness.c" $rime_cflags $rime_libs
