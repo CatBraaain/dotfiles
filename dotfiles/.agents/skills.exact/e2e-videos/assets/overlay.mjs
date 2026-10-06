@@ -757,10 +757,11 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     // an expando; the [hidden] CSS rule needs the attribute instead.
     cursor.toggleAttribute("hidden", !sample);
     cursor.classList.remove("pop");
+    cursor.classList.remove("fade");
     if (!sample) return;
     cursor.style.left = `${sample.x}px`;
     cursor.style.top = `${sample.y}px`;
-    if (appeared && !reduced()) cursor.classList.add("pop");
+    if (appeared) cursor.classList.add(reduced() ? "fade" : "pop");
     if (sample.click) {
       const ripple = document.createElement("div");
       ripple.className = "ripple";

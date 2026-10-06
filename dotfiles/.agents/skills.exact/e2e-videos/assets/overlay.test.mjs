@@ -1080,7 +1080,7 @@ test("the cursor pops in on appearance, hides after the operation and clicks lea
   }
 });
 
-test("reduced motion skips the pop and keeps the ripple small", () => {
+test("reduced motion fades the cursor in with opacity only and keeps the ripple small", () => {
   const world = new ShimWorld({ reducedMotion: true });
   try {
     world.now = 3000;
@@ -1088,10 +1088,13 @@ test("reduced motion skips the pop and keeps the ripple small", () => {
     overlay.update({ pointer: { x: 150, y: 120, at: world.now } });
     const cursor = currentShadow.querySelector(".cursor");
     assert.ok(!cursor.classList.contains("pop"), "no pop under reduced motion");
+    assert.ok(cursor.classList.contains("fade"), "the cursor fades in with opacity only");
     overlay.update({ pointer: { x: 150, y: 120, at: world.now, click: true } });
     const ripple = currentShadow.querySelector(".ripple");
     assert.ok(ripple instanceof ShimElement);
     assert.equal(ripple.style.getPropertyValue("--ripple-scale"), String(24 / 48));
+    overlay.update({ pointer: null });
+    assert.ok(!cursor.classList.contains("fade"), "the fade is removed when the cursor hides");
   } finally {
     world.restore();
   }

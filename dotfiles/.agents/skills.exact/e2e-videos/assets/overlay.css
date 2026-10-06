@@ -282,6 +282,9 @@ svg {
 .cursor.pop {
   animation: cursor-pop 150ms ease-out;
 }
+.cursor.fade {
+  animation: cursor-fade 150ms ease-out;
+}
 @keyframes cursor-pop {
   0% {
     transform: scale(0);
@@ -291,6 +294,14 @@ svg {
   }
   100% {
     transform: scale(1);
+  }
+}
+@keyframes cursor-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 .effects {
