@@ -487,6 +487,7 @@
       }
     }
   ],
+  "livePreview.notifyOnOpenLooseFile": false,
   "markdown-mermaid.languages": ["mermaid"],
   "markdown-preview-enhanced.plantumlServer": "http://www.plantuml.com/plantuml",
   "markdown-preview-enhanced.previewTheme": "github-dark.css",
