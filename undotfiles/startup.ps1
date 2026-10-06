@@ -4,7 +4,7 @@
 $ahkExe = "C:\Program Files\AutoHotkey\UX\AutoHotkeyUX.exe"
 $codeExe = "C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\Code.exe"
 
-& runx $ahkExe --arg-line "\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\ScreenLock\ScreenLock.ahk"
+& runx $ahkExe --arg-line "\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\ScreenLock\ScreenLock.ahk" --run-as
 
 Invoke-Expression "bun \\wsl.localhost\Ubuntu\home\username\projects\dotfiles\undotfiles\install\windows.ts"
 Remove-Item "$env:USERPROFILE\Desktop\*.lnk" -Force
