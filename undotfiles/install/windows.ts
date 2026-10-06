@@ -82,7 +82,7 @@ const managedDevPackages: readonly string[] = [
   "Canonical.Ubuntu", // windows
   "GitHub.cli",
   "Microsoft.coreutils",
-  "Wilfred.difftastic",
+  "dandavison.delta",
   "gerardog.gsudo", // windows
   "CatBraaain.runx", // windows
   "CatBraaain.winconfig", // windows

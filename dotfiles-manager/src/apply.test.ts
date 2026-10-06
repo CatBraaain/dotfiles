@@ -16,6 +16,7 @@ import {
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { collectDifferences, type DiffResult } from "./diff.ts";
 import {
   applyDifferences,
@@ -624,8 +625,8 @@ describe("CLI", () => {
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /diff --git/);
-    assert.match(stdout, /"value":2/);
+    assert.match(stdout, /settings\.json/);
+    assert.match(stripVTControlCharacters(stdout), /"value":2/);
     assert.equal(await readFile(join(homeRoot, "settings.json"), "utf8"), '{"value":1}\n');
     assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
   });

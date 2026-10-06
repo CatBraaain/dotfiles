@@ -71,7 +71,7 @@
 - brew: ast-grep
 - brew: code2prompt
 - brew: dasel
-- brew: difftastic
+- brew: git-delta
 - brew: hyperfine
 - brew: jq
 - brew: keep-sorted

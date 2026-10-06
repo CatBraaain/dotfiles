@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { applyDifferences } from "./apply.ts";
 import { collectDifferences, toDiffJson, type Classification, type DiffResult } from "./diff.ts";
 
@@ -517,7 +518,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), "--json", distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
@@ -544,7 +545,7 @@ describe("cli", () => {
     const managed = async () => {
       const cli = Bun.spawn(
         [process.execPath, join(import.meta.dir, "diff.ts"), "--managed", distRoot, homeRoot],
-        { stdout: "pipe", stderr: "pipe" },
+        { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
       );
       const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
       assert.equal(exitCode, 0);
@@ -570,7 +571,7 @@ describe("cli", () => {
         distRoot,
         homeRoot,
       ],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
@@ -607,7 +608,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(cli.stdout).text(),
@@ -630,7 +631,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(cli.stdout).text(),
@@ -651,7 +652,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
@@ -665,7 +666,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(cli.stdout).text(),
@@ -678,11 +679,15 @@ describe("cli", () => {
     assert.match(stdout, /Binary files .* differ/);
   });
 
-  it("uses git for malformed UTF-8 even when difft is available", async () => {
+  it("sends malformed UTF-8 patches to delta and ignores its exit code", async () => {
     const binDir = join(root, "bin");
     await mkdir(binDir);
-    const fakeDifft = await put(binDir, "difft", "#!/bin/sh\nprintf 'fake-difft-used\\n'\n");
-    await chmod(fakeDifft, 0o755);
+    const fakeDelta = await put(
+      binDir,
+      "delta",
+      `#!${process.execPath}\nconsole.log("fake-delta-used");\nconsole.log(await Bun.stdin.text());\nprocess.exit(9);\n`,
+    );
+    await chmod(fakeDelta, 0o755);
     await put(distRoot, "asset.bin", new Uint8Array([0x80, 0x0d, 0x0a]));
     await put(homeRoot, "asset.bin", new Uint8Array([0x81, 0x0a]));
 
@@ -698,7 +703,7 @@ describe("cli", () => {
 
     assert.equal(exitCode, 0);
     assert.match(stdout, /diff --git/);
-    assert.doesNotMatch(stdout, /fake-difft-used/);
+    assert.match(stdout, /fake-delta-used/);
   });
 
   it("renders added and exact-removed binary entries against empty inputs", async () => {
@@ -709,7 +714,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
@@ -724,7 +729,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, exitCode] = await Promise.all([new Response(cli.stdout).text(), cli.exited]);
 
@@ -739,7 +744,7 @@ describe("cli", () => {
 
     const cli = Bun.spawn(
       [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: await gitOnlyEnvironment() },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(cli.stdout).text(),
@@ -753,11 +758,15 @@ describe("cli", () => {
     assert.match(stdout, /new-target/);
   });
 
-  it("uses git for JSONC when an executable difft is on PATH", async () => {
+  it("sends both JSONC and ordinary text patches through delta", async () => {
     const binDir = join(root, "bin");
     await mkdir(binDir);
-    const fakeDifft = await put(binDir, "difft", "#!/bin/sh\nprintf 'fake-difft-used\\n'\n");
-    await chmod(fakeDifft, 0o755);
+    const fakeDelta = await put(
+      binDir,
+      "delta",
+      `#!${process.execPath}\nconsole.log("fake-delta-used", process.argv.slice(2).join(" "));\nconsole.log(await Bun.stdin.text());\n`,
+    );
+    await chmod(fakeDelta, 0o755);
     await put(distRoot, "a.jsonc", '{"value": 1}\n');
     await put(distRoot, "b.txt", "text\n");
 
@@ -773,6 +782,274 @@ describe("cli", () => {
 
     assert.equal(exitCode, 0);
     assert.match(stdout, /diff --git/);
-    assert.match(stdout, /fake-difft-used/);
+    assert.match(stdout, /fake-delta-used --paging=never/);
+    assert.match(stdout, /a\.jsonc/);
+    assert.match(stdout, /b\.txt/);
+  });
+});
+
+async function gitOnlyEnvironment() {
+  const binDir = join(root, "git-only");
+  await mkdir(binDir, { recursive: true });
+  if (!(await Bun.file(join(binDir, "git")).exists())) {
+    await symlink(Bun.which("git")!, join(binDir, "git"));
+  }
+  return { ...process.env, PATH: binDir };
+}
+
+async function runGitOnlyDiff(extraEnv: Record<string, string> = {}) {
+  const environment = await gitOnlyEnvironment();
+  const cli = Bun.spawn([process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...environment, ...extraEnv },
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(cli.stdout).text(),
+    new Response(cli.stderr).text(),
+    cli.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+describe("Git rename display", () => {
+  const original = "first\nsecond\nthird\nfourth\nfifth\n";
+
+  it("shows pure rename metadata with mapped home paths and no hunks", async () => {
+    await put(homeRoot, "conf/old.txt", original);
+    await put(distRoot, "conf.exact/new.txt.executable", original);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /rename from conf\/old.txt/);
+    assert.match(stdout, /rename to conf\/new.txt/);
+    assert.doesNotMatch(stdout, /@@|\.exact|\.executable|diff-render-|[ab]\/(old|new)\/conf/);
+    assert.equal(stdout.includes("\x1b["), true);
+  });
+
+  it("shows edited rename metadata and the original inputs' line-ending changes", async () => {
+    await put(homeRoot, "conf/old.txt", original);
+    await put(distRoot, "conf.exact/new.txt", "first\r\nsecond\nCHANGED\nfourth\nfifth\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /rename from conf\/old.txt/);
+    assert.match(stdout, /rename to conf\/new.txt/);
+    assert.match(stdout, /@@/);
+    assert.match(stdout, /CHANGED/);
+    assert.equal(stripVTControlCharacters(stdout).includes("first\r"), true);
+    assert.equal((stdout.match(/diff --git /g) ?? []).length, 1);
+  });
+
+  it("retains rename metadata but suppresses normalized-equal content hunks", async () => {
+    await put(homeRoot, "conf/old.txt", original);
+    await put(distRoot, "conf.exact/new.txt", "first\r\nsecond\nthird\nfourth\nfifth");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /rename from conf\/old.txt/);
+    assert.match(stdout, /rename to conf\/new.txt/);
+    assert.doesNotMatch(stdout, /@@|No newline|first/);
+  });
+
+  it("shows unmatched candidates as ordinary additions and deletions", async () => {
+    await put(homeRoot, "conf/old.txt", original);
+    await put(distRoot, "conf.exact/new.txt", "completely different replacement\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.doesNotMatch(stdout, /rename from|rename to/);
+    assert.match(stdout, /new file mode/);
+    assert.match(stdout, /deleted file mode/);
+    assert.match(stdout, /conf\/old.txt/);
+    assert.match(stdout, /conf\/new.txt/);
+  });
+
+  it("does not use ignored surplus, excluded counterparts, or unmanaged home files as candidates", async () => {
+    await put(distRoot, "conf.exact/sub/keep.txt", "same\n");
+    await put(homeRoot, "conf/sub/keep.txt", "same\n");
+    await put(homeRoot, "conf/sub/ignored.txt", original);
+    await put(homeRoot, "unmanaged.txt", original);
+    await put(distRoot, "conf.exact/private.data.txt", original);
+    await put(homeRoot, "conf/private.data.txt", original);
+    await put(distRoot, "conf.exact/new.txt", original);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.doesNotMatch(stdout, /rename from|ignored\.txt|unmanaged\.txt|private\.data/);
+    assert.match(stdout, /new file mode/);
+  });
+
+  it("does not pair a changed entry with an addition", async () => {
+    await put(homeRoot, "conf/changed.txt", original);
+    await put(distRoot, "conf.exact/changed.txt", "unrelated replacement\n");
+    await put(distRoot, "conf.exact/new.txt", original);
+    const { stdout } = await runGitOnlyDiff();
+
+    assert.doesNotMatch(stdout, /rename from|rename to/);
+    assert.match(stdout, /conf\/changed.txt/);
+    assert.match(stdout, /conf\/new.txt/);
+  });
+
+  it("keeps the five JSON categories and applies additions and exact deletions unchanged", async () => {
+    await put(homeRoot, "conf/old.txt", original);
+    await put(distRoot, "conf.exact/new.txt", original);
+    const result = await diff();
+    const json = toDiffJson(result);
+    await runGitOnlyDiff();
+
+    assert.deepEqual(json, {
+      changed: [],
+      typeMismatches: [],
+      added: ["conf/new.txt"],
+      removedExact: ["conf/old.txt"],
+      removedIgnored: [],
+    });
+    assert.deepEqual(toDiffJson(result), json);
+    assert.equal(await readFile(join(homeRoot, "conf/old.txt"), "utf8"), original);
+    await applyDifferences(distRoot, homeRoot, result);
+    assert.equal(await readFile(join(homeRoot, "conf/new.txt"), "utf8"), original);
+    assert.equal(await Bun.file(join(homeRoot, "conf/old.txt")).exists(), false);
+  });
+
+  it("includes managed removed subtrees without following their symlinks", async () => {
+    await put(homeRoot, "conf/old/nested.txt", original);
+    await put(homeRoot, "outside/secret.txt", "do-not-follow\n");
+    await putSymlink(homeRoot, "conf/old/link", "../../outside");
+    await put(distRoot, "conf.exact/new.txt", original);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /rename from conf\/old\/nested.txt/);
+    assert.doesNotMatch(stdout, /secret\.txt|do-not-follow/);
+  });
+
+  it("filters excluded entries when rendering directory type mismatches", async () => {
+    await put(homeRoot, "entry", "old-file\n");
+    await put(distRoot, "entry.exact/keep.txt", "visible\n");
+    await put(distRoot, "entry.exact/private.data.txt", "secret\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /keep\.txt|visible/);
+    assert.doesNotMatch(stdout, /private\.data|secret|\.exact|diff-render-/);
+  });
+
+  it("keeps control characters and spaces in rename paths without parsing whitespace", async () => {
+    await put(homeRoot, "conf/old name\tfile.txt", original);
+    await put(distRoot, "conf.exact/new name\tfile.txt", original);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /rename from "conf\/old name\\tfile.txt"/);
+    assert.match(stdout, /rename to "conf\/new name\\tfile.txt"/);
+  });
+
+  for (const [scenario, content] of [
+    ["pure", original],
+    ["edited", original.replace("third", "CHANGED")],
+    ["normalized-equal", original.trimEnd()],
+  ] as const) {
+    it(`uses Git C quoting for special rename paths (${scenario})`, async () => {
+      const suffix = ' \x1b[2J\x07\x01\x1f\x7f\b\t\n\v\f\r"\\é日本.txt';
+      const quotedSuffix = ' \\033[2J\\a\\001\\037\\177\\b\\t\\n\\v\\f\\r\\"\\\\é日本.txt';
+      await put(homeRoot, `conf/old${suffix}`, original);
+      await put(distRoot, `conf.exact/new${suffix}`, content);
+      const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+      // oxlint-disable-next-line no-control-regex -- Remove only SGR, not unsafe filename bytes.
+      const patch = stdout.replace(/\x1b\[[0-9;]*m/g, "");
+
+      assert.equal(exitCode, 0);
+      assert.equal(stderr, "");
+      assert.equal(
+        patch.includes(`diff --git "a/conf/old${quotedSuffix}" "b/conf/new${quotedSuffix}"\n`),
+        true,
+      );
+      assert.equal(patch.includes(`rename from "conf/old${quotedSuffix}"\n`), true);
+      assert.equal(patch.includes(`rename to "conf/new${quotedSuffix}"\n`), true);
+      const metadataBytes = Buffer.from(patch.split("\n").slice(0, 4).join("\n"));
+      assert.equal(
+        metadataBytes.some((byte) => (byte < 32 && byte !== 10) || byte === 127),
+        false,
+      );
+      const patchBytes = Buffer.from(patch);
+      assert.equal(
+        patchBytes.some((byte) => (byte < 32 && byte !== 9 && byte !== 10) || byte === 127),
+        false,
+      );
+      assert.equal(patch.includes("@@"), scenario === "edited");
+
+      for (const reverse of [false, true]) {
+        const parsed = Bun.spawn(
+          [Bun.which("git")!, "apply", "--numstat", "-z", ...(reverse ? ["--reverse"] : [])],
+          {
+            cwd: root,
+            stdin: new Blob([patch]),
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        const [numstat, parseError, parseExit] = await Promise.all([
+          new Response(parsed.stdout).text(),
+          new Response(parsed.stderr).text(),
+          parsed.exited,
+        ]);
+        assert.equal(parseExit, 0);
+        assert.equal(parseError, "");
+        const lineCount = scenario === "edited" ? 1 : 0;
+        const expectedPath = `conf/${reverse ? "old" : "new"}${suffix}`;
+        assert.equal(numstat, `${lineCount}\t${lineCount}\t${expectedPath}\0`);
+      }
+    });
+  }
+
+  it("leaves ordinary UTF-8 rename paths readable", async () => {
+    await put(homeRoot, "conf/旧é.txt", original);
+    await put(distRoot, "conf.exact/新é.txt", original);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /rename from conf\/旧é.txt/);
+    assert.match(stdout, /rename to conf\/新é.txt/);
+  });
+
+  it("disables external diff commands even when user Git configuration enables them", async () => {
+    await put(homeRoot, "a.txt", "old\n");
+    await put(distRoot, "a.txt", "new\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff({
+      GIT_EXTERNAL_DIFF: "/does/not/exist",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "diff.external",
+      GIT_CONFIG_VALUE_0: "/does/not/exist",
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /diff --git/);
+  });
+
+  it("does not propagate Git error exit codes", async () => {
+    await put(distRoot, "a.txt", "content\n");
+    const binDir = join(root, "failed-git");
+    const fakeGit = await put(
+      binDir,
+      "git",
+      `#!${process.execPath}\nif (!process.argv.includes("--name-status")) console.log("git-output-before-error");\nprocess.exit(42);\n`,
+    );
+    await chmod(fakeGit, 0o755);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff({ PATH: binDir });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /git-output-before-error/);
   });
 });
