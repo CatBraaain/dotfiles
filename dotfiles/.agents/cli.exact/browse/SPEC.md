@@ -29,6 +29,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - camoufox を使う `search` と `fetch` は、render スロットセマフォ（既定 4 スロット）で並列実行する。スロットは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4 スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restart ロックの保持を探知し、server 再起動（`browse server restart`・render 復旧のいずれか）が進行していれば、まだ render を開始していない分はその完了まで让位する。これにより再起動はスロット待ちの先頭に割り込み、完了後、让位した待機がスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server 起動を依頼するときにも使う
 - `browse server restart` は restart ロックと 4 つすべての render スロットを `flock(1)` で獲得してから再起動する。実行中の render は完了まで、新規の render は再起動完了まで待たされる。`flock(1)` が無い環境では獲得せずに再起動する
 - render 復旧に伴う server 再起動は restart ロックで仲裁する。restart ロックを獲得した側は、自分の render スロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4 スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15 秒まで待つ
+- server が起動してから 30 秒以内の render 復旧による再起動申請は、再起動せず server の healthy を 15 秒まで待つ。server の起動時刻は PID ファイルの書き込み時刻とする。PID ファイルが読めないときはクールダウンを適用せず従来通り再起動する
 - Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路と `server start` は render スロットを取得しない。GitHub は camoufox へのフォールバックを持つため取得する
 
 ## 共通の振る舞い
@@ -55,6 +56,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | 対象 | タイムアウト |
 | --- | --- |
 | server 起動待ち・セッション close・restart ロック競合時の再起動完了待ち | 15 秒 |
+| server 起動からの render 復旧再起動の申請抑制期間 | 30 秒 |
 | `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10 秒 |
 | ページ open・ナビゲーション・DOM 取得 | 30 秒 |
 | render 中に他の実行の server 再起動が始まったとき | 再起動の完了待ちを前述の 30 秒に算入せず、完了後に残り時間で続行する |

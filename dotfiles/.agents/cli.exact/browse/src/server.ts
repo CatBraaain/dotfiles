@@ -15,6 +15,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -30,6 +31,7 @@ import {
   LOCKED_SUBCOMMAND,
   OPENSERP_DEFAULT_BASE_URL,
   openserpBaseUrl,
+  RESTART_COOLDOWN_MS,
   RESTART_LOCK_FILE,
   SERVER_HEALTH_POLL_INTERVAL_MS,
   SERVER_STOP_TIMEOUT_MS,
@@ -123,12 +125,36 @@ function tryRunRecoveryRestart(): RecoveryRestartOutcome {
 
 // Recovery entry for the camoufox retry hook (the caller holds a render slot).
 export async function recoverCamoufoxServer(): Promise<void> {
+  // Spec: server が起動してから 30 秒以内の再起動申請は、再起動せず healthy を
+  // 15 秒まで待つ（起動直後の server の立て続けな再起動を避ける）。
+  if (restartInCooldown(serverStartedAtMs(), Date.now())) {
+    await waitForServerHealthy(camoufoxBaseUrl(), AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
+    return;
+  }
   const outcome = tryRunRecoveryRestart();
   if (outcome === "won") return;
   if (outcome === "no-flock") return restartCamoufoxServer();
   // Another restart holds the lock: wait for the restarted server instead of
   // queueing a second restart (spec: healthy を 15 秒まで待つ).
   await waitForServerHealthy(camoufoxBaseUrl(), AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
+}
+
+// The server writes its pid file once its port is listening, so the file's
+// mtime stands in for the server start time (spec: 起動時刻は PID ファイルの
+// 書き込み時刻)。Unknown (unreadable / missing) means no cooldown.
+export function serverStartedAtMs(): number | undefined {
+  try {
+    return statSync(join(stateDir(), "camoufox-server.pid")).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+export function restartInCooldown(
+  startedAtMs: number | undefined,
+  nowMs: number,
+): boolean {
+  return startedAtMs !== undefined && nowMs - startedAtMs < RESTART_COOLDOWN_MS;
 }
 
 // --- restart-lock observation (render slots and render timers) ---

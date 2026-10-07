@@ -18,6 +18,9 @@ export const TWIKIT_TIMEOUT_MS = 120_000;
 // Spec: login の待ち合わせは poll 間隔 5 秒・上限 10 分。
 export const LOGIN_POLL_INTERVAL_MS = 5_000;
 export const LOGIN_WAIT_TIMEOUT_MS = 600_000;
+// Spec: server 起動からこの期間内の render 復旧再起動申請は让位する
+// （起動直後の server の立て続けな再起動を避ける）。
+export const RESTART_COOLDOWN_MS = 30_000;
 // Twitter 取得用の cookie と login 専用 session。
 export const TWITTER_COOKIE_FILE = "twitter-cookies.json";
 export const TWITTER_LOGIN_SESSION_KEY = "twitter-login";
