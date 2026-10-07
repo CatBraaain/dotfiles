@@ -5,7 +5,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RESTART_LOCK_FILE } from "./config";
-import { restartInFlight } from "./server";
+import { restartInFlight, waitForRestartToFinish } from "./server";
 
 // The CLI project directory: spawned as `bun <projectDir>` so bun resolves
 // package.json's main field, exactly like the deployed `~/.agents/cli/browse`.
@@ -323,6 +323,51 @@ describe("restart yield probing", () => {
     process.env.XDG_CACHE_HOME = root;
     try {
       assert.equal(restartInFlight(), false);
+    } finally {
+      if (savedCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = savedCacheHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns from the lock wait after the timeout while a restart holds the lock", async () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
+    const stateDir = join(root, "pi", "web-search");
+    mkdirSync(stateDir, { recursive: true });
+    // Keep the lock longer than the wait timeout below: a timed-out return
+    // must come before the holder releases. The old unbounded wait (flock
+    // without -w) would block until the holder exits and break the assertion.
+    const holder = spawn("flock", [join(stateDir, RESTART_LOCK_FILE), "sleep", "1.5"], {
+      stdio: "ignore",
+    });
+    const savedCacheHome = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = root;
+    try {
+      const deadline = Date.now() + 5_000;
+      while (!restartInFlight() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(restartInFlight(), true);
+      const startedAt = Date.now();
+      waitForRestartToFinish(300);
+      assert.ok(Date.now() - startedAt < 1_200);
+    } finally {
+      holder.kill("SIGTERM");
+      if (savedCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = savedCacheHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the no-op immediately when the restart lock is free", () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
+    mkdirSync(join(root, "pi", "web-search"), { recursive: true });
+    const savedCacheHome = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = root;
+    try {
+      const startedAt = Date.now();
+      waitForRestartToFinish(5_000);
+      assert.ok(Date.now() - startedAt < 2_000);
     } finally {
       if (savedCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
       else process.env.XDG_CACHE_HOME = savedCacheHome;

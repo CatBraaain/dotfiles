@@ -157,7 +157,7 @@ export function restartInCooldown(
   return startedAtMs !== undefined && nowMs - startedAtMs < RESTART_COOLDOWN_MS;
 }
 
-// --- restart-lock observation (render slots and render timers) ---
+// --- restart-lock observation (queued render slots) ---
 
 // Spec: restart ロックの保持を探知する。Acquiring it for a no-op (and letting
 // go right away) means no restart is in flight; a lost probe means `browse
@@ -172,10 +172,15 @@ export function restartInFlight(): boolean {
   return probe.status === FLOCK_CONFLICT_EXIT_CODE;
 }
 
-// Block until the in-flight restart releases the restart lock (running a
-// no-op under it, then letting go right away).
-export function waitForRestartToFinish(): void {
-  const result = spawnSync("flock", [join(stateDir(), RESTART_LOCK_FILE), "true"]);
+// Wait up to the timeout for the in-flight restart to release the restart lock
+// (running a no-op under it, then letting go right away). Returning without the
+// lock on timeout is fine: the caller re-probes restartInFlight() and yields
+// again while a restart is still in flight.
+export function waitForRestartToFinish(timeoutMs = SERVER_WAIT_TIMEOUT_MS): void {
+  const result = spawnSync(
+    "flock",
+    ["-w", String(Math.ceil(timeoutMs / 1000)), join(stateDir(), RESTART_LOCK_FILE), "true"],
+  );
   if (result.error) return; // no flock(1): nothing to wait for
 }
 

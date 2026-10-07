@@ -8,6 +8,7 @@ import webSearchExtension, {
   browseCliDir,
   browseScript,
   formatSearchText,
+  runWebCli,
   type WebCliDeps,
   type WebCliResult,
 } from "./index";
@@ -151,6 +152,49 @@ describe("tool spawning", () => {
       "https://example.com/",
       "--json",
     ]);
+  });
+});
+
+describe("runWebCli child execution", () => {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("collects stdout, stderr and the exit code", async () => {
+    const result = await runWebCli(process.execPath, [
+      "-e",
+      'process.stdout.write("out"); process.stderr.write("err"); process.exit(3);',
+    ]);
+    assert.deepEqual(result, { stdout: "out", stderr: "err", code: 3 });
+  });
+
+  it("resolves after the child's exit even when a grandchild keeps the stdio pipes open", async () => {
+    const script = `
+      const { spawn } = await import("node:child_process");
+      spawn(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], { stdio: "inherit" });
+      process.exit(0);`;
+    const result = await runWebCli(process.execPath, ["-e", script]);
+    assert.equal(result.code, 0);
+  });
+
+  it("rejects as soon as the abort signal fires", async () => {
+    const controller = new AbortController();
+    const run = runWebCli(
+      process.execPath,
+      ["-e", 'setTimeout(() => {}, 60_000)'],
+      controller.signal,
+    );
+    await sleep(100);
+    controller.abort();
+    await assert.rejects(run, /aborted/);
+  });
+
+  it("escalates SIGTERM to SIGKILL and rejects when the deadline passes", async () => {
+    const run = runWebCli(
+      process.execPath,
+      ["-e", 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 60_000);'],
+      undefined,
+      { timeoutMs: 100, killGraceMs: 200 },
+    );
+    await assert.rejects(run, /timed out after 100ms/);
   });
 });
 

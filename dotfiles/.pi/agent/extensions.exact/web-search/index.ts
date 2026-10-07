@@ -37,26 +37,77 @@ export type RunWebCli = (
   signal?: AbortSignal,
 ) => Promise<WebCliResult>;
 
+// Hard ceiling for one browse run. The CLI bounds its own stages, but a wedged
+// stage must not hang the tool call forever. After the deadline (or an abort)
+// the child gets SIGTERM, then SIGKILL: a SIGTERM-ignoring child holding the
+// stdio pipes must not leave this promise unresolved.
+export const WEB_CLI_TIMEOUT_MS = 300_000;
+
+// Output cap per stream in UTF-16 code units (64 MiB worth of chars).
+const MAX_OUTPUT_LENGTH = 64 * 1024 * 1024;
+
+export type WebCliRunOptions = {
+  /** Overrides WEB_CLI_TIMEOUT_MS (tests use a shorter deadline). */
+  readonly timeoutMs?: number;
+  /** SIGTERM-to-SIGKILL escalation delay (tests use a shorter delay). */
+  readonly killGraceMs?: number;
+};
+
 export async function runWebCli(
   command: string,
   args: readonly string[],
   signal?: AbortSignal,
+  options: WebCliRunOptions = {},
 ): Promise<WebCliResult> {
+  if (signal?.aborted) {
+    return Promise.reject(new Error(`${command} aborted`));
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk) => (stdout += chunk));
-    child.stderr?.on("data", (chunk) => (stderr += chunk));
+    // Cap the accumulation: a wedged child spamming the pipes must not grow
+    // the heap without bound (browse's own output is far below this cap).
+    const capped = (current: string, chunk: Buffer): string =>
+      current.length >= MAX_OUTPUT_LENGTH ? current : current + chunk;
+    child.stdout?.on("data", (chunk) => (stdout = capped(stdout, chunk)));
+    child.stderr?.on("data", (chunk) => (stderr = capped(stderr, chunk)));
+
     const killChild = (): void => {
       child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), options.killGraceMs ?? 5_000).unref();
     };
-    signal?.addEventListener("abort", killChild, { once: true });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", killChild);
-      resolve({ stdout, stderr, code });
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const finish = (settle: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadlineTimer);
+      signal?.removeEventListener("abort", onAbort);
+      settle();
+    };
+
+    child.on("error", (error) => finish(() => reject(error)));
+    child.on("close", (code) => finish(() => resolve({ stdout, stderr, code })));
+    // Grandchildren inheriting the stdio pipes keep 'close' from firing after
+    // the CLI itself is gone; resolve with the collected output after a short
+    // grace period instead of waiting on them.
+    child.on("exit", (code) => {
+      setTimeout(() => finish(() => resolve({ stdout, stderr, code })), 500).unref();
     });
+
+    const onAbort = (): void => {
+      killChild();
+      finish(() => reject(new Error(`${command} aborted`)));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    deadlineTimer = setTimeout(() => {
+      killChild();
+      finish(() =>
+        reject(new Error(`${command} timed out after ${options.timeoutMs ?? WEB_CLI_TIMEOUT_MS}ms`)),
+      );
+    }, options.timeoutMs ?? WEB_CLI_TIMEOUT_MS);
+    deadlineTimer.unref();
   });
 }
 

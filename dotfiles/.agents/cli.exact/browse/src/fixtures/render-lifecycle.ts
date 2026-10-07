@@ -37,8 +37,6 @@ mock.module(join(import.meta.dir, "../server.ts"), () => ({
   ensureCamoufoxServer: async () => {},
   camoufoxServerHealthy: async () => true,
   recoverCamoufoxServer: async () => {},
-  restartInFlight: () => false,
-  waitForRestartToFinish: () => {},
 }));
 mock.module("node:child_process", () => ({
   ...childProcess,
