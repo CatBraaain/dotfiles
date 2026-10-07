@@ -1056,7 +1056,7 @@ test("the shim mirrors SVG semantics: readonly className and no hidden property"
 // ---------------------------------------------------------------------------
 // Cursor appearance and ripple
 // ---------------------------------------------------------------------------
-test("the cursor pops in on appearance, hides after the operation and clicks leave a ripple", () => {
+test("legacy pointer appears without pop or fade, hides and clicks leave a release ripple", () => {
   const world = new ShimWorld();
   try {
     world.now = 3000;
@@ -1065,24 +1065,29 @@ test("the cursor pops in on appearance, hides after the operation and clicks lea
     assert.ok(cursor.hasAttribute("hidden"), "the cursor is hidden before it appears");
     overlay.update({ pointer: { x: 150, y: 120, at: world.now } });
     assert.equal(cursor.hasAttribute("hidden"), false);
-    assert.ok(cursor.classList.contains("pop"), "the cursor pops in when it appears");
+    assert.ok(!cursor.classList.contains("pop"));
+    assert.ok(!cursor.classList.contains("fade"));
     assert.equal(currentShadow.querySelectorAll(".cursor").length, 1);
     overlay.update({ pointer: { x: 150, y: 120, at: world.now, click: true } });
     assert.equal(currentShadow.querySelectorAll(".ripple").length, 1);
     assert.equal(currentShadow.querySelectorAll(".cursor").length, 1, "no trail");
     world.advance(500);
-    assert.equal(currentShadow.querySelectorAll(".ripple").length, 0, "ripple dies after 450ms");
+    assert.equal(
+      currentShadow.querySelectorAll(".ripple").length,
+      0,
+      "ripple dies after 450ms",
+    );
     overlay.update({ pointer: null });
     assert.equal(cursor.hasAttribute("hidden"), true, "the cursor hides after the operation");
     assert.ok(!cursor.classList.contains("pop"), "the pop class is removed");
     overlay.update({ pointer: { x: 200, y: 150, at: world.now } });
-    assert.ok(cursor.classList.contains("pop"), "the cursor pops again on re-appearance");
+    assert.ok(!cursor.classList.contains("pop"));
   } finally {
     world.restore();
   }
 });
 
-test("reduced motion fades the cursor in with opacity only and keeps the ripple small", () => {
+test("reduced motion has no cursor pop or fade and keeps the release ripple small", () => {
   const world = new ShimWorld({ reducedMotion: true });
   try {
     world.now = 3000;
@@ -1090,7 +1095,7 @@ test("reduced motion fades the cursor in with opacity only and keeps the ripple 
     overlay.update({ pointer: { x: 150, y: 120, at: world.now } });
     const cursor = currentShadow.querySelector(".cursor");
     assert.ok(!cursor.classList.contains("pop"), "no pop under reduced motion");
-    assert.ok(cursor.classList.contains("fade"), "the cursor fades in with opacity only");
+    assert.ok(!cursor.classList.contains("fade"), "no fade under reduced motion");
     overlay.update({ pointer: { x: 150, y: 120, at: world.now, click: true } });
     const ripple = currentShadow.querySelector(".ripple");
     assert.ok(ripple instanceof ShimElement);
@@ -1267,7 +1272,9 @@ test("Trusted Types enforcement installs markup through one reusable named polic
     world.window.trustedTypes = {
       createPolicy: (/** @type {string} */ name) => {
         created.push(name);
-        return { createHTML: (/** @type {string} */ value) => ({ markup: value }) };
+        return {
+          createHTML: (/** @type {string} */ value) => ({ markup: value }),
+        };
       },
     };
     installAt(world, baseState());
@@ -1299,6 +1306,110 @@ test("enforcement without the Trusted Types API surfaces the assignment error", 
   const world = new ShimWorld({ trustedTypesEnforced: true });
   try {
     assert.throws(() => installAt(world, baseState()), /TrustedHTML/);
+  } finally {
+    world.restore();
+  }
+});
+
+test("CSS movement has no appearance effect and pressed or theme updates keep its animation", () => {
+  const world = new ShimWorld();
+  try {
+    world.now = 3000;
+    const { overlay } = installAt(world, baseState({ pointer: null }));
+    const sample = {
+      x: 500,
+      y: 300,
+      at: world.now,
+      move: { from: { x: 24, y: 88 }, durationMs: 400 },
+    };
+    overlay.update({ pointer: sample });
+    const pointer = currentShadow.querySelector(".pointer");
+    const animation = pointer.style.animation;
+    assert.match(animation, /400ms cubic-bezier\(0.42,0,0.58,1\)/);
+    assert.equal(pointer.style.getPropertyValue("--from-x"), "24px");
+    assert.equal(pointer.style.getPropertyValue("--to-x"), "500px");
+    world.advance(100);
+    overlay.update({ theme: "dark", reducedMotion: true });
+    overlay.update({ pointer: { ...sample, pressed: true } });
+    assert.equal(pointer.style.animation, animation);
+    assert.equal(hidden(".hold-circle"), false);
+    assert.equal(currentShadow.querySelectorAll(".ripple").length, 0);
+    assert.equal(hidden(".cursor"), false);
+    assert.doesNotMatch(overlayCss, /cursor-pop|cursor-fade/);
+    overlay.update({ pointer: null });
+    assert.equal(pointer.style.animation, "none");
+    assert.equal(hidden(".hold-circle"), true);
+    assert.equal(overlay.inspect().pointer, null);
+  } finally {
+    world.restore();
+  }
+});
+
+test("up removes the cursor and hold and expands one release circle from 24 to 48 linearly", () => {
+  const world = new ShimWorld();
+  try {
+    world.now = 3000;
+    const { overlay } = installAt(
+      world,
+      baseState({ pointer: { x: 150, y: 120, at: world.now, pressed: true } }),
+    );
+    assert.equal(hidden(".hold-circle"), false);
+    assert.equal(currentShadow.querySelectorAll(".ripple").length, 0);
+    overlay.update({ pointer: { x: 150, y: 120, at: world.now, released: true } });
+    const ripple = currentShadow.querySelector(".ripple");
+    assert.equal(hidden(".cursor"), true);
+    assert.equal(hidden(".hold-circle"), true);
+    assert.equal(ripple.style.getPropertyValue("--ripple-scale"), "0.5");
+    world.advance(225);
+    assert.equal(ripple.style.getPropertyValue("--ripple-scale"), "0.75");
+    assert.equal(ripple.style.opacity, "0.375");
+    overlay.update({ pointer: null, theme: "dark" });
+    assert.equal(ripple.style.left, "126px");
+    world.advance(225);
+    assert.equal(currentShadow.querySelectorAll(".ripple").length, 0);
+  } finally {
+    world.restore();
+  }
+});
+
+test("dispose keeps an existing release ripple until expiry and removes all held movement", () => {
+  const world = new ShimWorld();
+  try {
+    world.now = 3000;
+    const { overlay } = installAt(
+      world,
+      baseState({ pointer: { x: 150, y: 120, at: world.now, released: true } }),
+    );
+    overlay.dispose();
+    assert.equal(hidden(".pointer"), true);
+    assert.equal(currentShadow.querySelectorAll(".ripple").length, 1);
+    assert.equal(world.document.documentElement.children.length, 1);
+    world.advance(450);
+    assert.equal(world.document.documentElement.children.length, 0);
+    assert.equal(world.frames.size, 0);
+  } finally {
+    world.restore();
+  }
+});
+
+test("invalid movement samples are rejected before changing the pointer", () => {
+  const world = new ShimWorld();
+  try {
+    const { overlay } = installAt(world, baseState({ pointer: null }));
+    for (const move of [
+      { from: { x: NaN, y: 0 }, durationMs: 400 },
+      { from: { x: 0, y: 0 }, durationMs: 0 },
+    ]) {
+      assert.throws(
+        () => overlay.update({ pointer: { x: 150, y: 120, at: 0, move } }),
+        /Pointer movement/,
+      );
+    }
+    assert.throws(
+      () => overlay.update({ pointer: { x: 150, y: 120, at: 0, pressed: "yes" } }),
+      /must be boolean/,
+    );
+    assert.equal(hidden(".cursor"), true);
   } finally {
     world.restore();
   }

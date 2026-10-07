@@ -55,6 +55,7 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     at: 0,
   };
   let effects = [];
+  let movement = null;
   let protectedRects = [];
   let lastInputAt = -Infinity;
   let pendingInput = null;
@@ -80,7 +81,7 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
 
   const api = {
     update,
-    inspect: () => structuredClone(layout),
+    inspect: () => ({ ...structuredClone(layout), pointer: inspectPointer() }),
     painted: () =>
       new Promise((resolve, reject) => {
         if (disposed) {
@@ -93,7 +94,9 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
           paintFrames.delete(first);
           const second = requestAnimationFrame(async () => {
             paintFrames.delete(second);
-            await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
+            await Promise.all(
+              animations.map((animation) => animation.finished.catch(() => {})),
+            );
             if (disposed) rejectDisposed();
             else resolve(structuredClone(layout));
           });
@@ -114,7 +117,10 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       );
       if (disposed) throw new Error("Recording overlay has been disposed");
       if (request !== visibilityRequest)
-        throw new DOMException("Recording overlay visibility request was superseded", "AbortError");
+        throw new DOMException(
+          "Recording overlay visibility request was superseded",
+          "AbortError",
+        );
       if (!nextVisible) host.style.setProperty("visibility", "hidden", "important");
     },
     dispose() {
@@ -129,8 +135,12 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       for (const { animation } of presentations.values()) animation?.cancel();
       presentations.clear();
       motion.removeEventListener("change", onMotion);
-      effects = [];
-      host.remove();
+      pointer(null);
+      for (const child of root.children) {
+        if (child !== element(".effects")) child.toggleAttribute("hidden", true);
+      }
+      if (effects.length) tick();
+      else host.remove();
       if (owner.recordingOverlay === api) delete owner.recordingOverlay;
     },
   };
@@ -161,12 +171,11 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       pendingInput = null;
       if (input) lastInputAt = input.at;
     }
-    const pointerAppeared = "pointer" in patch && !!patch.pointer && !state.pointer;
     state = adopted;
     adoptCheckClock(patch);
     applyTheme();
     if (!onlyThemeOrPointer || layout.at === 0) render();
-    if ("pointer" in patch) pointer(patch.pointer, pointerAppeared);
+    if ("pointer" in patch) pointer(patch.pointer);
     tick();
     return structuredClone(layout);
   }
@@ -183,7 +192,8 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       const continues =
         earlier != null &&
         performance.now() < transientTimes(earlier.firstAt ?? earlier.at, earlier.at).exitEnd;
-      const firstAt = value.firstAt ?? (continues ? (earlier?.firstAt ?? earlier.at) : value.at);
+      const firstAt =
+        value.firstAt ?? (continues ? (earlier?.firstAt ?? earlier.at) : value.at);
       if (firstAt !== firstAts[kind]) {
         firstAts[kind] = firstAt;
         dockWidths[kind] = 0;
@@ -211,7 +221,8 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
   }
 
   function validate(candidate) {
-    if (!candidate.steps.length) throw new Error("No recording steps; supply a non-empty scenario");
+    if (!candidate.steps.length)
+      throw new Error("No recording steps; supply a non-empty scenario");
     if (
       !Number.isInteger(candidate.current) ||
       candidate.current < 1 ||
@@ -235,7 +246,9 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       throw new Error("Title and step text must be strings");
     if (
       candidate.target &&
-      !["click", "input", "key", "scroll", "hover", "drag", "open"].includes(candidate.target.kind)
+      !["click", "input", "key", "scroll", "hover", "drag", "open"].includes(
+        candidate.target.kind,
+      )
     )
       throw new Error("Unknown target operation kind");
     if (
@@ -243,6 +256,17 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       ![candidate.pointer.x, candidate.pointer.y, candidate.pointer.at].every(Number.isFinite)
     )
       throw new Error("Pointer samples require finite viewport coordinates and event times");
+    if (candidate.pointer?.move) {
+      const { from, durationMs } = candidate.pointer.move;
+      if (![from?.x, from?.y, durationMs].every(Number.isFinite) || durationMs !== 400)
+        throw new Error(
+          "Pointer movement requires finite starting coordinates and a 400ms duration",
+        );
+    }
+    for (const name of ["pressed", "released", "click"]) {
+      if (candidate.pointer?.[name] != null && typeof candidate.pointer[name] !== "boolean")
+        throw new Error(`Pointer ${name} must be boolean`);
+    }
     for (const value of [candidate.input, candidate.key].filter((value) => value != null)) {
       if (![value.at, value.firstAt].every((time) => time == null || Number.isFinite(time)))
         throw new Error("Input and key timestamps use the document performance clock");
@@ -326,12 +350,20 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
       renderResultLabel(s, occupied);
       renderInput(s, occupied);
       renderKey(s, occupied);
-      element(".cursor").toggleAttribute("hidden", !state.pointer);
+      element(".cursor").toggleAttribute("hidden", !state.pointer || !!state.pointer.released);
     } else {
       for (const selector of [".task-label", ".result-label", ".input", ".key"])
         element(selector).hidden = true;
       element(".cursor").toggleAttribute("hidden", true);
     }
+    element(".pointer").toggleAttribute(
+      "hidden",
+      !showPage || !state.pointer || !!state.pointer.released,
+    );
+    element(".hold-circle").toggleAttribute(
+      "hidden",
+      !showPage || !state.pointer?.pressed || !!state.pointer.released,
+    );
     layout.at = performance.now();
     present(element(".task-label"), visible && showPage);
     present(
@@ -517,7 +549,13 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     const height = Math.max(56 * s, 26 * s + 30 * s * lines) + noteHeight;
     dock.style.width = `${width}px`;
     dock.style.height = `${height}px`;
-    selectPosition("key", dock, positions(inset(state.pageArea, 24 * s), dock, true), occupied, s);
+    selectPosition(
+      "key",
+      dock,
+      positions(inset(state.pageArea, 24 * s), dock, true),
+      occupied,
+      s,
+    );
   }
 
   function measure(text, role) {
@@ -671,7 +709,11 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     const rect = found ?? rects[0];
     recordPlacement(name, node, rect, occupied);
     if (!found)
-      constraint(name, "No candidate preserves full text, safe edges and protected targets", rect);
+      constraint(
+        name,
+        "No candidate preserves full text, safe edges and protected targets",
+        rect,
+      );
   }
   function fits(rect, occupied, s) {
     const safe = inset(state.pageArea, 24 * s);
@@ -753,18 +795,43 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     );
   }
 
-  function pointer(sample, appeared) {
+  function pointer(sample) {
+    const node = element(".pointer");
     const cursor = element(".cursor");
-    // SVGElement has no hidden IDL property, so assignment would only create
-    // an expando; the [hidden] CSS rule needs the attribute instead.
-    cursor.toggleAttribute("hidden", !sample);
-    cursor.classList.remove("pop");
-    cursor.classList.remove("fade");
+    const hold = element(".hold-circle");
+    const shown = !!sample && !sample.released && state.layer !== "title";
+    node.toggleAttribute("hidden", !shown);
+    cursor.toggleAttribute("hidden", !shown);
+    hold.toggleAttribute("hidden", !shown || !sample.pressed);
+    if (!sample || sample.released) {
+      node.style.animation = "none";
+      movement = null;
+    }
     if (!sample) return;
-    cursor.style.left = `${sample.x}px`;
-    cursor.style.top = `${sample.y}px`;
-    if (appeared) cursor.classList.add(reduced() ? "fade" : "pop");
-    if (sample.click) {
+    if (!sample.released && sample.move) {
+      const signature = JSON.stringify([sample.x, sample.y, sample.at, sample.move]);
+      if (movement?.signature !== signature) {
+        node.style.animation = "none";
+        node.getBoundingClientRect();
+        const { from, durationMs } = sample.move;
+        for (const [name, value] of Object.entries({
+          "--from-x": from.x,
+          "--from-y": from.y,
+          "--to-x": sample.x,
+          "--to-y": sample.y,
+        }))
+          node.style.setProperty(name, `${value}px`);
+        node.style.animation = `pointer-move ${durationMs}ms cubic-bezier(0.42,0,0.58,1) both`;
+        const animation = node.getAnimations?.()[0];
+        if (animation) animation.startTime = sample.at;
+        movement = { signature, at: sample.at, durationMs };
+      }
+    } else if (!sample.released) {
+      node.style.animation = "none";
+      node.style.transform = `translate(${sample.x}px, ${sample.y}px)`;
+      movement = null;
+    }
+    if (sample.released || sample.click) {
       const ripple = document.createElement("div");
       ripple.className = "ripple";
       element(".effects").append(ripple);
@@ -778,11 +845,26 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     }
   }
 
+  function inspectPointer() {
+    if (!state.pointer || state.pointer.released || disposed) return null;
+    const node = element(".pointer");
+    const { x, y } = node.getBoundingClientRect();
+    const animation = node.getAnimations?.()[0];
+    const at = performance.now();
+    const moving =
+      movement != null &&
+      (animation ? animation.playState !== "finished" : at < movement.at + movement.durationMs);
+    return { x, y, at, moving };
+  }
+
   function tick() {
     cancelAnimationFrame(frame);
-    if (disposed) return;
+    if (disposed && !effects.length) {
+      host.remove();
+      return;
+    }
     const now = performance.now();
-    if (pendingInput && now >= inputRevealAt) {
+    if (!disposed && pendingInput && now >= inputRevealAt) {
       state.input = pendingInput;
       lastInputAt = pendingInput.at;
       pendingInput = null;
@@ -796,13 +878,18 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
         return false;
       }
       const fraction = age / 450;
-      const diameter = reduced() ? 24 : 12 + fraction * 36;
+      const diameter = reduced() ? 24 : 24 + fraction * 24;
       effect.node.style.left = `${effect.x - 24 * s}px`;
       effect.node.style.top = `${effect.y - 24 * s}px`;
       effect.node.style.setProperty("--ripple-scale", String(diameter / 48));
       effect.node.style.opacity = String(0.75 * (1 - fraction));
       return true;
     });
+    if (disposed) {
+      if (effects.length) frame = requestAnimationFrame(tick);
+      else host.remove();
+      return;
+    }
     let fading = false;
     let expired = false;
     for (const kind of ["input", "key"]) {

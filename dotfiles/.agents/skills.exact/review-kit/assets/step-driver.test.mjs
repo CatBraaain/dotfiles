@@ -36,6 +36,7 @@ function fakeClock() {
 function fakePage(clock) {
   const calls = {
     mouseMoves: [],
+    events: [],
     downs: 0,
     ups: 0,
     wheels: [],
@@ -67,12 +68,21 @@ function fakePage(clock) {
     mouse: {
       move: async (x, y) => {
         calls.mouseMoves.push({ x, y });
+        calls.events.push({
+          kind: "move",
+          at: clock.now,
+          x,
+          y,
+          pressed: calls.downs > calls.ups,
+        });
       },
       down: async () => {
         calls.downs += 1;
+        calls.events.push({ kind: "down", at: clock.now });
       },
       up: async () => {
         calls.ups += 1;
+        calls.events.push({ kind: "up", at: clock.now });
       },
       wheel: async (dx, dy) => {
         calls.wheels.push({ dx, dy });
@@ -89,13 +99,27 @@ function fakePage(clock) {
   };
 }
 
-function fakeOverlay() {
+function fakeOverlay(clock) {
   const patches = [];
   return {
     patches,
     update: async (patch) => {
       patches.push(patch);
       return {};
+    },
+    inspect: async () => {
+      const pointer = patches.findLast((patch) => "pointer" in patch)?.pointer;
+      if (!pointer) return { pointer: null };
+      const fraction = Math.min(1, (clock.now - pointer.at) / pointer.move.durationMs);
+      const from = pointer.move.from;
+      return {
+        pointer: {
+          x: from.x + (pointer.x - from.x) * fraction,
+          y: from.y + (pointer.y - from.y) * fraction,
+          at: clock.now,
+          moving: fraction < 1,
+        },
+      };
     },
     painted: async () => {},
   };
@@ -113,7 +137,8 @@ function specTimingRow(label) {
 
 test("driver timing matches the SPEC.md 録画ドライバ table", () => {
   assert.equal(TIMING.announceMs, specTimingRow("予告"));
-  assert.equal(TIMING.holdMs, specTimingRow("出現後の操作までの停止"));
+  assert.equal(TIMING.moveMs, specTimingRow("カーソルの接近・保持移動"));
+  assert.equal(TIMING.holdMs, specTimingRow("到着後の操作までの停止"));
   assert.equal(TIMING.typeIntervalMs, specTimingRow("1 文字ごとの入力間隔"));
   assert.equal(TIMING.fillHoldMs, specTimingRow("一括設定後の入力帯と対象枠の表示"));
   assert.equal(TIMING.resultViewMs, specTimingRow("結果の視聴"));
@@ -151,7 +176,7 @@ test("builds metadata.json data from the plan declaration", () => {
 test("rejects an invalid plan", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   await assert.rejects(
     () => createStepDriver(page, overlay, { title: " ", steps: PLAN.steps }, { clock }),
     /non-empty title/,
@@ -179,14 +204,14 @@ test("rejects an invalid plan", async () => {
 test("rejects a step number outside the declared steps", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   await assert.rejects(() => driverFor(clock, page, overlay, { step: 3 }), /outside/);
 });
 
 test("click runs the announce → act → check → result sequence with real values", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await driver.click({
     locator: page.locator({ x: 100, y: 200, width: 300, height: 40 }),
@@ -220,19 +245,26 @@ test("click runs the announce → act → check → result sequence with real va
 
   assert.ok(overlay.patches.some((patch) => patch.phase === "acting"));
 
-  const pointers = overlay.patches.filter((patch) => patch.pointer).map((patch) => patch.pointer);
+  const pointers = overlay.patches
+    .filter((patch) => patch.pointer)
+    .map((patch) => patch.pointer);
   assert.ok(pointers.length >= 2, "the cursor appears at the target and then clicks");
   assert.deepEqual(
     { x: pointers[0].x, y: pointers[0].y },
     { x: 250, y: 220 },
     "the cursor appears at the target center",
   );
-  const clicked = pointers.find((pointer) => pointer.click);
+  const clicked = pointers.find((pointer) => pointer.released);
   assert.deepEqual({ x: clicked.x, y: clicked.y }, { x: 250, y: 220 });
   assert.ok(pointers.every((pointer) => Number.isFinite(pointer.at)));
   assert.equal(page.calls.downs, 1);
   assert.equal(page.calls.ups, 1);
-  assert.deepEqual(page.calls.mouseMoves, [{ x: 250, y: 220 }]);
+  assert.deepEqual(page.calls.mouseMoves[0], { x: 24, y: 88 });
+  assert.deepEqual(page.calls.mouseMoves.at(-1), { x: 250, y: 220 });
+  assert.ok(page.calls.mouseMoves.length > 3);
+  assert.equal(pointers.length, 3, "one approach patch, down and up; no frame updates");
+  assert.equal(pointers[1].pressed, true);
+  assert.ok(clicked.at - pointers[0].at >= TIMING.moveMs + TIMING.holdMs);
 
   const checking = overlay.patches.find((patch) => patch.phase === "checking");
   assert.ok(Number.isFinite(checking.checkAt));
@@ -259,7 +291,7 @@ test("click runs the announce → act → check → result sequence with real va
 test("type transfers the accumulating text one character at a time and presses Enter", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await driver.type({
     locator: page.locator({ x: 100, y: 200, width: 400, height: 40 }),
@@ -294,7 +326,7 @@ test("type transfers the accumulating text one character at a time and presses E
 test("fill transfers the whole value and keeps the dock and target frame for its hold", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await driver.fill({
     locator: page.locator({ x: 100, y: 200, width: 400, height: 40 }),
@@ -315,7 +347,7 @@ test("fill transfers the whole value and keeps the dock and target frame for its
 test("press without a locator shows the key and relies on the fallback anchor", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await driver.press({
     key: "Enter",
@@ -337,7 +369,7 @@ test("press without a locator shows the key and relies on the fallback anchor", 
 test("scroll splits the wheel into small steps and names the direction", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await driver.scroll({
     deltaY: 400,
@@ -359,7 +391,7 @@ test("scroll splits the wheel into small steps and names the direction", async (
 
   const upClock = fakeClock();
   const upPage = fakePage(upClock);
-  const upOverlay = fakeOverlay();
+  const upOverlay = fakeOverlay(upClock);
   const upDriver = await driverFor(upClock, upPage, upOverlay);
   await upDriver.scroll({
     deltaY: -200,
@@ -375,7 +407,7 @@ test("scroll splits the wheel into small steps and names the direction", async (
 test("lets the recording case widen the task anchor", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   const rowRect = { x: 40, y: 180, width: 560, height: 60 };
   await driver.click({
@@ -400,7 +432,7 @@ test("lets the recording case widen the task anchor", async () => {
 test("shows multiple results one pair at a time with the switch gap", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await driver.click({
     locator: page.locator({ x: 100, y: 200, width: 300, height: 40 }),
@@ -442,7 +474,7 @@ test("shows multiple results one pair at a time with the switch gap", async () =
 test("throws when the target cannot be measured in viewport coordinates", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await assert.rejects(
     () =>
@@ -461,7 +493,7 @@ test("throws when the target cannot be measured in viewport coordinates", async 
 test("each driver runs exactly one step", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await driver.hover({
     locator: page.locator({ x: 100, y: 200, width: 100, height: 30 }),
@@ -488,7 +520,7 @@ test("each driver runs exactly one step", async () => {
 test("requires a target locator and at least one result", async () => {
   const clock = fakeClock();
   const page = fakePage(clock);
-  const overlay = fakeOverlay();
+  const overlay = fakeOverlay(clock);
   const driver = await driverFor(clock, page, overlay);
   await assert.rejects(
     () =>
@@ -527,4 +559,113 @@ test("requires a target locator and at least one result", async () => {
       }),
     /name and expected/,
   );
+});
+
+test("drag approaches from the margin, holds a pressed circle through the straight move and checks at up", async () => {
+  const clock = fakeClock();
+  const page = fakePage(clock);
+  const overlay = fakeOverlay(clock);
+  const driver = await driverFor(clock, page, overlay);
+  const source = page.locator({ x: 100, y: 200, width: 100, height: 40 });
+  const target = page.locator({ x: 500, y: 300, width: 100, height: 40 });
+  await driver.drag({
+    source,
+    target,
+    result: { locator: target, name: "row", expected: "moved" },
+  });
+  const pointers = overlay.patches
+    .filter((patch) => patch.pointer)
+    .map((patch) => patch.pointer);
+  assert.equal(pointers.length, 4);
+  assert.deepEqual(pointers[0].move.from, { x: 24, y: 88 });
+  assert.deepEqual(pointers[2].move.from, { x: 150, y: 220 });
+  assert.equal(pointers[2].pressed, true);
+  assert.equal(pointers[3].released, true);
+  assert.equal(
+    pointers.some((pointer) => pointer.click),
+    false,
+  );
+  const down = page.calls.events.find((event) => event.kind === "down");
+  const up = page.calls.events.find((event) => event.kind === "up");
+  assert.equal(down.at - pointers[0].at, 800);
+  assert.equal(up.at - down.at, 800);
+  const heldMoves = page.calls.events.filter((event) => event.kind === "move" && event.pressed);
+  assert.ok(heldMoves.length > 3);
+  assert.ok(
+    heldMoves.every((event) => Math.abs((event.x - 150) / 400 - (event.y - 220) / 100) < 1e-9),
+  );
+  assert.equal(
+    overlay.patches.find((patch) => patch.phase === "checking").checkAt,
+    pointers[3].at,
+  );
+  assert.deepEqual(page.calls.mouseMoves.at(-1), { x: 550, y: 320 });
+});
+
+test("drag failure releases pressed input and preserves the original error even if cleanup fails", async () => {
+  const clock = fakeClock();
+  const page = fakePage(clock);
+  const overlay = fakeOverlay(clock);
+  const inspect = overlay.inspect;
+  const original = new Error("drag movement failed");
+  overlay.inspect = async () => {
+    if (page.calls.downs) throw original;
+    return inspect();
+  };
+  page.mouse.up = async () => {
+    page.calls.ups++;
+    throw new Error("cleanup failed");
+  };
+  const driver = await driverFor(clock, page, overlay);
+  const locator = page.locator({ x: 100, y: 200, width: 100, height: 40 });
+  await assert.rejects(
+    driver.drag({
+      source: locator,
+      target: locator,
+      result: { locator, name: "row", expected: "moved" },
+    }),
+    (error) => error === original,
+  );
+  assert.equal(page.calls.ups, 1);
+  assert.equal(overlay.patches.at(-1).pointer, null);
+});
+
+test("all pointer operations approach from the scaled margin without per-frame overlay updates", async () => {
+  for (const kind of ["hover", "press", "scroll"]) {
+    const clock = fakeClock();
+    const page = fakePage(clock);
+    const overlay = fakeOverlay(clock);
+    const driver = await driverFor(clock, page, overlay, {
+      pageArea: { x: 12, y: 90, width: 2560, height: 1440 },
+    });
+    const locator = page.locator({ x: 100, y: 200, width: 100, height: 40 });
+    await driver[kind]({
+      locator,
+      key: "Enter",
+      deltaY: 400,
+      result: { locator, name: "row", expected: "changed" },
+    });
+    assert.deepEqual(page.calls.mouseMoves[0], { x: 60, y: 138 });
+    assert.ok(page.calls.mouseMoves.length > 3);
+    assert.equal(overlay.patches.filter((patch) => patch.pointer).length, 1);
+    assert.ok(clock.waits.includes(400));
+  }
+});
+
+test("pointer timing stays fixed and targets from another document are rejected", async () => {
+  const clock = fakeClock();
+  const page = fakePage(clock);
+  const overlay = fakeOverlay(clock);
+  await assert.rejects(driverFor(clock, page, overlay, { timing: { moveMs: 0 } }), /400ms/);
+  const driver = await driverFor(clock, page, overlay);
+  const locator = page.locator({ x: 100, y: 200, width: 100, height: 40 });
+  locator.evaluate = async () => false;
+  await assert.rejects(
+    driver.drag({
+      source: locator,
+      target: locator,
+      result: { locator, name: "row", expected: "changed" },
+    }),
+    /same main document/,
+  );
+  assert.equal(page.calls.downs, 0);
 });

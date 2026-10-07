@@ -1,8 +1,7 @@
-// Annotation waits declared by SPEC.md ("録画ドライバ" section). Values are
-// checked against that section by step-driver.test.mjs.
 export const TIMING = {
   announceMs: 1800,
-  holdMs: 500,
+  moveMs: 400,
+  holdMs: 400,
   typeIntervalMs: 120,
   fillHoldMs: 600,
   resultViewMs: 3000,
@@ -25,6 +24,8 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
   if (!Number.isInteger(step) || step < 1 || step > steps.length)
     throw new Error(`Step ${step} is outside the declared steps 1..${steps.length}`);
   const timing = { ...TIMING, ...options.timing };
+  if (timing.moveMs !== 400 || timing.holdMs !== 400)
+    throw new Error("Recording pointer movement and arrival hold must each be 400ms");
   const clock = options.clock ?? DEFAULT_CLOCK;
   const theme = options.theme ?? "light";
   const layer = options.layer ?? "page";
@@ -43,6 +44,9 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
     height: titleHeight,
   };
   let consumed = false;
+  let pressed = false;
+  let pointerSample = null;
+  let releasedAt = null;
 
   await overlay.update({
     title: plan.title,
@@ -73,16 +77,9 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
         act: async (rect) => {
           await overlay.update({ phase: "acting" });
           const center = rectCenter(rect);
-          const at = await pageNow();
-          await overlay.update({ pointer: { x: center.x, y: center.y, at } });
-          await page.mouse.move(center.x, center.y);
-          await clock.sleep(timing.holdMs);
-          const clickAt = await pageNow();
-          await overlay.update({
-            pointer: { x: center.x, y: center.y, at: clickAt, click: true },
-          });
-          await page.mouse.down();
-          await page.mouse.up();
+          await approach(center);
+          await pressPointer();
+          await releasePointer(center);
         },
       });
     },
@@ -96,11 +93,32 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
         results,
         act: async (rect) => {
           await overlay.update({ phase: "acting" });
-          const center = rectCenter(rect);
-          const at = await pageNow();
-          await overlay.update({ pointer: { x: center.x, y: center.y, at } });
-          await page.mouse.move(center.x, center.y);
+          await approach(rectCenter(rect));
+        },
+      });
+    },
+    async drag(operation) {
+      const source = requireLocator({ locator: operation?.source }, "drag source");
+      const target = requireLocator({ locator: operation?.target }, "drag target");
+      const results = requireResults(operation, "drag");
+      return runStep({
+        kind: "drag",
+        locator: source,
+        anchor: operation.anchor ?? null,
+        results,
+        act: async (rect) => {
+          await target.waitFor({
+            state: "visible",
+            timeout: ACTION_WAIT_TIMEOUT_MS,
+          });
+          const destination = rectCenter(await measure(target));
+          await overlay.update({ phase: "acting" });
+          const origin = rectCenter(rect);
+          await approach(origin);
+          await pressPointer();
+          await movePointer(origin, destination);
           await clock.sleep(timing.holdMs);
+          await releasePointer(destination);
         },
       });
     },
@@ -157,11 +175,7 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
           await overlay.update({ phase: "acting" });
           if (locator) {
             await locator.focus();
-            const center = rectCenter(rect);
-            const at = await pageNow();
-            await overlay.update({ pointer: { x: center.x, y: center.y, at } });
-            await page.mouse.move(center.x, center.y);
-            await clock.sleep(timing.holdMs);
+            await approach(rectCenter(rect));
           }
           await pressKey(operation.key);
         },
@@ -183,9 +197,7 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
                 x: pageArea.x + pageArea.width / 2,
                 y: pageArea.y + pageArea.height / 2,
               };
-          const at = await pageNow();
-          await overlay.update({ pointer: { x: center.x, y: center.y, at } });
-          await page.mouse.move(center.x, center.y);
+          await approach(center);
           const name = operation.deltaY >= 0 ? "ScrollDown" : "ScrollUp";
           const perWheel = operation.deltaY / SCROLL_WHEEL_STEPS;
           for (let wheel = 0; wheel < SCROLL_WHEEL_STEPS; wheel++) {
@@ -204,6 +216,53 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
     return page.evaluate(() => performance.now());
   }
 
+  async function approach(destination) {
+    const s = Math.max(1, pageArea.width / 1280);
+    const origin = { x: pageArea.x + 24 * s, y: pageArea.y + 24 * s };
+    await page.mouse.move(origin.x, origin.y);
+    await movePointer(origin, destination);
+    await clock.sleep(timing.holdMs);
+  }
+
+  async function movePointer(origin, destination) {
+    const at = await pageNow();
+    pointerSample = {
+      ...destination,
+      at,
+      move: { from: origin, durationMs: timing.moveMs },
+      pressed,
+    };
+    await overlay.update({ pointer: pointerSample });
+    const deadline = at + timing.moveMs + 1000;
+    while (true) {
+      const sample = (await overlay.inspect()).pointer;
+      if (!sample) throw new Error("Recording pointer movement was cancelled");
+      if (!sample.moving) {
+        await page.mouse.move(destination.x, destination.y);
+        return;
+      }
+      await page.mouse.move(sample.x, sample.y);
+      if (sample.at > deadline) throw new Error("Recording pointer movement did not finish");
+      await clock.sleep(1);
+    }
+  }
+
+  async function pressPointer() {
+    pressed = true;
+    await page.mouse.down();
+    pointerSample = { ...pointerSample, pressed: true };
+    await overlay.update({ pointer: pointerSample });
+  }
+
+  async function releasePointer(destination) {
+    await page.mouse.up();
+    pressed = false;
+    releasedAt = await pageNow();
+    await overlay.update({
+      pointer: { ...destination, at: releasedAt, released: true },
+    });
+  }
+
   async function pressKey(key) {
     const at = await pageNow();
     await overlay.update({ key: { name: key, at } });
@@ -212,7 +271,9 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
 
   async function runStep({ kind, locator, anchor, results, act }) {
     if (consumed)
-      throw new Error("This driver already ran its single step; create one driver per step video");
+      throw new Error(
+        "This driver already ran its single step; create one driver per step video",
+      );
     consumed = true;
     let targetRect = null;
     let anchorRect = null;
@@ -237,8 +298,21 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
     });
     await settlePainted();
     await clock.sleep(timing.announceMs);
-    await act(targetRect);
-    const endAt = await pageNow();
+    try {
+      await act(targetRect);
+    } catch (error) {
+      if (pressed) {
+        try {
+          await page.mouse.up();
+        } catch {}
+        pressed = false;
+      }
+      try {
+        await overlay.update({ pointer: null });
+      } catch {}
+      throw error;
+    }
+    const endAt = releasedAt ?? (await pageNow());
     await overlay.update({ phase: "checking", checkAt: endAt, pointer: null });
     await showResults(results);
     return driver.metadata();
@@ -277,6 +351,12 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
   }
 
   async function measure(locator) {
+    if (
+      (locator.page && locator.page() !== page) ||
+      (locator.evaluate &&
+        !(await locator.evaluate((node) => node.ownerDocument.defaultView === window.top)))
+    )
+      throw new Error("Recording pointer targets must belong to the same main document");
     const rect = await locator.boundingBox();
     if (!rect)
       throw new Error(
@@ -319,7 +399,8 @@ function requireLocator(operation, name) {
 
 function requireResults(operation, name) {
   const provided = operation?.result ?? operation?.results;
-  if (provided == null) throw new Error(`The ${name} step requires at least one result to show`);
+  if (provided == null)
+    throw new Error(`The ${name} step requires at least one result to show`);
   const entries = Array.isArray(provided) ? provided : [provided];
   for (const entry of entries) {
     if (!entry?.locator)

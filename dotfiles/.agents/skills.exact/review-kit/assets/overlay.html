@@ -21,9 +21,12 @@
       <circle cx="12" cy="12" r="3" /></svg
     ><span class="result-text"></span>
   </div>
-  <svg class="cursor" viewBox="0 0 16 24">
-    <path d="M1 1V20L5 16L9 23L12 21L8 14H15Z" />
-  </svg>
+  <div class="pointer" hidden>
+    <div class="hold-circle" hidden></div>
+    <svg class="cursor" viewBox="0 0 16 24" hidden>
+      <path d="M1 1V20L5 16L9 23L12 21L8 14H15Z" />
+    </svg>
+  </div>
   <div class="input dock" hidden><span class="input-text"></span></div>
   <div class="key dock" hidden>
     <div class="key-body">
