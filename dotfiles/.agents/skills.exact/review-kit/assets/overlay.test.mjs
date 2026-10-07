@@ -997,6 +997,67 @@ test("key display skips a protected centre and takes the next candidate", () => 
   }
 });
 
+test("a single-character key is shown as band text, not the key dock", () => {
+  const world = new ShimWorld();
+  try {
+    world.now = 1000;
+    const { layout } = installAt(
+      world,
+      baseState({
+        phase: "acting",
+        target: null,
+        key: { name: "j", at: world.now, hold: true },
+      }),
+    );
+    assert.equal(layout.placements.key, undefined);
+    assert.equal(layout.placements.input.width, 360);
+    assert.equal(text(".input-text"), "j");
+  } finally {
+    world.restore();
+  }
+});
+
+test("a single-character key appends to the string still shown in the band", () => {
+  const world = new ShimWorld();
+  try {
+    world.now = 5000;
+    installAt(
+      world,
+      baseState({
+        phase: "acting",
+        target: null,
+        input: { text: "Buy", at: 5000 },
+      }),
+    );
+    world.advance(300);
+    overlayHandle().update({ key: { name: "m", at: world.now } });
+    assert.equal(text(".input-text"), "Buym");
+    assert.equal(overlayHandle().inspect().placements.key, undefined);
+  } finally {
+    world.restore();
+  }
+});
+
+test("a single-character key starts a new string after the band expired", () => {
+  const world = new ShimWorld();
+  try {
+    world.now = 5000;
+    installAt(
+      world,
+      baseState({
+        phase: "acting",
+        target: null,
+        input: { text: "Buy", at: 5000 },
+      }),
+    );
+    world.advance(5_000);
+    overlayHandle().update({ key: { name: "j", at: world.now } });
+    assert.equal(text(".input-text"), "j");
+  } finally {
+    world.restore();
+  }
+});
+
 test("backspace deletion reveal is delayed by 160ms", () => {
   const world = new ShimWorld();
   try {

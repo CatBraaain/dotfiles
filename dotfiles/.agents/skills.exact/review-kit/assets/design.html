@@ -229,8 +229,7 @@
                 reject(new Error("Recording overlay has been disposed"));
                 return;
               }
-              const rejectDisposed = () =>
-                reject(new Error("Recording overlay has been disposed"));
+              const rejectDisposed = () => reject(new Error("Recording overlay has been disposed"));
               const animations = activePresentations();
               const first = requestAnimationFrame(() => {
                 paintFrames.delete(first);
@@ -293,6 +292,7 @@
 
         function update(patch) {
           if (disposed) throw new Error("Recording overlay has been disposed");
+          patch = routeTextKey(patch);
           const raw = { ...state, ...structuredClone(patch) };
           const adopted = normalize(raw, state);
           validate(adopted);
@@ -322,6 +322,26 @@
           return structuredClone(layout);
         }
 
+        function routeTextKey(patch) {
+          const key = patch.key;
+          if (!key || typeof key.name !== "string" || Array.from(key.name).length !== 1) return patch;
+          const earlier = state.input;
+          const continues =
+            earlier != null &&
+            performance.now() < transientTimes(earlier.firstAt ?? earlier.at, earlier.at).exitEnd;
+          const { key: textKey, ...rest } = patch;
+          return {
+            ...rest,
+            key: null,
+            input: {
+              text: (continues ? earlier.text : "") + textKey.name,
+              at: textKey.at,
+              firstAt: textKey.firstAt,
+              hold: textKey.hold,
+            },
+          };
+        }
+
         function normalize(next, previous) {
           for (const kind of ["input", "key"]) {
             const value = next[kind];
@@ -333,8 +353,7 @@
             const earlier = previous?.[kind] ?? null;
             const continues =
               earlier != null &&
-              performance.now() <
-                transientTimes(earlier.firstAt ?? earlier.at, earlier.at).exitEnd;
+              performance.now() < transientTimes(earlier.firstAt ?? earlier.at, earlier.at).exitEnd;
             const firstAt =
               value.firstAt ?? (continues ? (earlier?.firstAt ?? earlier.at) : value.at);
             if (firstAt !== firstAts[kind]) {
@@ -396,13 +415,9 @@
             throw new Error("Unknown target operation kind");
           if (
             candidate.pointer &&
-            ![candidate.pointer.x, candidate.pointer.y, candidate.pointer.at].every(
-              Number.isFinite,
-            )
+            ![candidate.pointer.x, candidate.pointer.y, candidate.pointer.at].every(Number.isFinite)
           )
-            throw new Error(
-              "Pointer samples require finite viewport coordinates and event times",
-            );
+            throw new Error("Pointer samples require finite viewport coordinates and event times");
           if (candidate.pointer?.move) {
             const { from, durationMs } = candidate.pointer.move;
             if (![from?.x, from?.y, durationMs].every(Number.isFinite) || durationMs !== 400)
@@ -411,18 +426,11 @@
               );
           }
           for (const name of ["pressed", "released", "click"]) {
-            if (
-              candidate.pointer?.[name] != null &&
-              typeof candidate.pointer[name] !== "boolean"
-            )
+            if (candidate.pointer?.[name] != null && typeof candidate.pointer[name] !== "boolean")
               throw new Error(`Pointer ${name} must be boolean`);
           }
-          for (const value of [candidate.input, candidate.key].filter(
-            (value) => value != null,
-          )) {
-            if (
-              ![value.at, value.firstAt].every((time) => time == null || Number.isFinite(time))
-            )
+          for (const value of [candidate.input, candidate.key].filter((value) => value != null)) {
+            if (![value.at, value.firstAt].every((time) => time == null || Number.isFinite(time)))
               throw new Error("Input and key timestamps use the document performance clock");
           }
           if (candidate.checkAt != null && !Number.isFinite(candidate.checkAt))
@@ -440,9 +448,7 @@
               rect.width <= 0 ||
               rect.height <= 0
             )
-              throw new Error(
-                "Rects require finite viewport coordinates and positive dimensions",
-              );
+              throw new Error("Rects require finite viewport coordinates and positive dimensions");
           }
         }
 
@@ -500,26 +506,13 @@
           frames.hidden = !showPage;
           if (showPage) {
             place(frames, area);
-            renderFrame(
-              "target",
-              state.phase !== "result" ? (state.target ?? null) : null,
-              area,
-              s,
-            );
-            renderFrame(
-              "result",
-              state.phase === "result" ? (state.result ?? null) : null,
-              area,
-              s,
-            );
+            renderFrame("target", state.phase !== "result" ? (state.target ?? null) : null, area, s);
+            renderFrame("result", state.phase === "result" ? (state.result ?? null) : null, area, s);
             renderTaskLabel(step, s, occupied);
             renderResultLabel(s, occupied);
             renderInput(s, occupied);
             renderKey(s, occupied);
-            element(".cursor").toggleAttribute(
-              "hidden",
-              !state.pointer || !!state.pointer.released,
-            );
+            element(".cursor").toggleAttribute("hidden", !state.pointer || !!state.pointer.released);
           } else {
             for (const selector of [".task-label", ".result-label", ".input", ".key"])
               element(selector).hidden = true;
@@ -663,11 +656,8 @@
           const above = { x, y: frame.y - 8 * s - height, width, height };
           const below = { x, y: frame.y + frame.height + 8 * s, width, height };
           const taskRect = layout.placements["task-label"];
-          const overlapsTask = (rect) =>
-            !!(taskRect && intersects(rect, expand(taskRect, 16 * s)));
-          const found = [above, below].find(
-            (rect) => fits(rect, occupied, s) && !overlapsTask(rect),
-          );
+          const overlapsTask = (rect) => !!(taskRect && intersects(rect, expand(taskRect, 16 * s)));
+          const found = [above, below].find((rect) => fits(rect, occupied, s) && !overlapsTask(rect));
           const rect = found ?? above;
           recordPlacement("result-label", label, rect, occupied);
           if (!found)
@@ -703,11 +693,7 @@
           const placed = fits(rect, occupied, s);
           recordPlacement("input", dock, rect, occupied);
           if (!placed)
-            constraint(
-              "input",
-              "The bottom-centre input band collides with protected targets",
-              rect,
-            );
+            constraint("input", "The bottom-centre input band collides with protected targets", rect);
         }
 
         function renderKey(s, occupied) {
@@ -776,12 +762,7 @@
             .filter((animation) => animation != null)
             .filter((animation) => animation.playState !== "finished");
         }
-        function present(
-          node,
-          nextVisible,
-          duration = nextVisible ? 150 : 300,
-          immediate = false,
-        ) {
+        function present(node, nextVisible, duration = nextVisible ? 150 : 300, immediate = false) {
           const entry = presentations.get(node);
           if (!entry) return;
           if (immediate) {
@@ -915,9 +896,7 @@
           const values = {
             title: state.title,
             "task-label": state.steps[state.current - 1]?.action ?? "",
-            "result-label": state.result
-              ? `${state.result.name} === ${state.result.expected}`
-              : "",
+            "result-label": state.result ? `${state.result.name} === ${state.result.expected}` : "",
             input: state.input?.text ?? "",
             key: state.key?.name ?? "",
           };
@@ -974,10 +953,7 @@
         }
         function intersects(a, b) {
           return (
-            a.x < b.x + b.width &&
-            a.x + a.width > b.x &&
-            a.y < b.y + b.height &&
-            a.y + a.height > b.y
+            a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
           );
         }
 
@@ -1039,9 +1015,7 @@
           const at = performance.now();
           const moving =
             movement != null &&
-            (animation
-              ? animation.playState !== "finished"
-              : at < movement.at + movement.durationMs);
+            (animation ? animation.playState !== "finished" : at < movement.at + movement.durationMs);
           return { x, y, at, moving };
         }
 
@@ -1103,8 +1077,7 @@
 
         function cssEase(progress, x1, x2) {
           if (progress <= 0 || progress >= 1) return progress;
-          const bezier = (t, a, b) =>
-            3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+          const bezier = (t, a, b) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
           let low = 0;
           let high = 1;
           for (let index = 0; index < 24; index++) {
@@ -1167,7 +1140,7 @@
               "必要な空間移動は通常ease-in-out、解放円は24px固定でフェード。",
             ],
             ["input", "入力帯", "連続した入力文字列を全文表示する。空行・長文も折り返す。"],
-            ["key", "実キー", "Tabキーを画面中央基準で表示する。"],
+            ["key", "実キー", "Tabなどの特殊キーを画面中央基準で表示する。1文字のキーは入力帯の文字列として示す。"],
             ["api", "API代行", "実キーと区別する「操作案内」の表示を確認する。"],
             [
               "label",

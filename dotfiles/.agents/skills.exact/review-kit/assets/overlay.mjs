@@ -151,6 +151,7 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
 
   function update(patch) {
     if (disposed) throw new Error("Recording overlay has been disposed");
+    patch = routeTextKey(patch);
     const raw = { ...state, ...structuredClone(patch) };
     const adopted = normalize(raw, state);
     validate(adopted);
@@ -178,6 +179,26 @@ export function installRecordingOverlay({ html, css, state: initialState }) {
     if ("pointer" in patch) pointer(patch.pointer);
     tick();
     return structuredClone(layout);
+  }
+
+  function routeTextKey(patch) {
+    const key = patch.key;
+    if (!key || typeof key.name !== "string" || Array.from(key.name).length !== 1) return patch;
+    const earlier = state.input;
+    const continues =
+      earlier != null &&
+      performance.now() < transientTimes(earlier.firstAt ?? earlier.at, earlier.at).exitEnd;
+    const { key: textKey, ...rest } = patch;
+    return {
+      ...rest,
+      key: null,
+      input: {
+        text: (continues ? earlier.text : "") + textKey.name,
+        at: textKey.at,
+        firstAt: textKey.firstAt,
+        hold: textKey.hold,
+      },
+    };
   }
 
   function normalize(next, previous) {

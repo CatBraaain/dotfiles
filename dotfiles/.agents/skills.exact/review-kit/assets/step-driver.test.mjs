@@ -388,6 +388,7 @@ test("scroll splits the wheel into small steps and names the direction", async (
     { dx: 0, dy: 100 },
     { dx: 0, dy: 100 },
   ]);
+  assert.ok(!clock.waits.includes(120), "wheel steps run without an inter-step wait");
 
   const upClock = fakeClock();
   const upPage = fakePage(upClock);

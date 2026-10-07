@@ -12,7 +12,6 @@ const PAINT_TIMEOUT_MS = 500;
 const ACTION_WAIT_TIMEOUT_MS = 10_000;
 const RESULT_WAIT_TIMEOUT_MS = 10_000;
 const SCROLL_WHEEL_STEPS = 4;
-const SCROLL_WHEEL_GAP_MS = 120;
 
 const DEFAULT_CLOCK = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -204,7 +203,6 @@ export async function createStepDriver(page, overlay, plan, options = {}) {
             const at = await pageNow();
             await overlay.update({ key: { name, at } });
             await page.mouse.wheel(0, perWheel);
-            await clock.sleep(SCROLL_WHEEL_GAP_MS);
           }
         },
       });
