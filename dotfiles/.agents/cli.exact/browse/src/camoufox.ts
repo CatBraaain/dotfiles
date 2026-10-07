@@ -4,6 +4,8 @@
 // by the search and fetch backends.
 import { execFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import {
   camoufoxFailureKind,
@@ -113,8 +115,8 @@ export function syncPlaywrightCliConfig(): void {
 }
 
 // Functional health check: a websocket answer alone is not enough (the server
-// may accept connections while playwright-cli is wedged), so actually open a
-// throwaway page through playwright-cli.
+// may accept connections while playwright-cli is wedged), so open a local HTTP
+// probe through playwright-cli (spec: server の機能ヘルスチェック).
 export async function camoufoxServerResponsive(): Promise<boolean> {
   const deadline = Date.now() + FUNCTIONAL_HEALTH_TIMEOUT_MS;
   const remainingSignal = (): AbortSignal =>
@@ -125,6 +127,7 @@ export async function camoufoxServerResponsive(): Promise<boolean> {
   // Spec: 機能ヘルスチェックのセッションキーにも render スロット番号が付き、
   // 同時に走るヘルスチェックが同じセッションを共有しない。
   const healthSessionKey = camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY);
+  const probe = await startLocalHttpProbe();
   try {
     await runPlaywrightCli(
       healthSessionKey,
@@ -133,7 +136,7 @@ export async function camoufoxServerResponsive(): Promise<boolean> {
     ).catch(() => {});
     await runPlaywrightCli(
       healthSessionKey,
-      ["open", "about:blank"],
+      ["open", probe.url],
       remainingSignal(),
     );
     return true;
@@ -145,7 +148,29 @@ export async function camoufoxServerResponsive(): Promise<boolean> {
       ["close"],
       remainingSignal(),
     ).catch(() => {});
+    await probe.close();
   }
+}
+
+interface HttpProbe {
+  url: string;
+  close: () => Promise<void>;
+}
+
+export async function startLocalHttpProbe(): Promise<HttpProbe> {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<html><body>ok</body></html>");
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/`,
+    close: () => new Promise((resolve) => server.close(() => resolve())),
+  };
 }
 
 const CHALLENGE_SIGNALS: readonly RegExp[] = [

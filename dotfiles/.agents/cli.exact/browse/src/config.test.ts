@@ -23,10 +23,10 @@ function withSlotEnv(value: string | undefined, run: () => void): void {
 
 describe("camoufoxSessionKey", () => {
   it("names the session after the acquired render slot", () => {
-    withSlotEnv("2", () => {
-      assert.equal(camoufoxSessionKey("web-search"), "web-search-2");
-      assert.equal(camoufoxSessionKey("web-fetch"), "web-fetch-2");
-      assert.equal(camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY), "web-health-2");
+    withSlotEnv("1", () => {
+      assert.equal(camoufoxSessionKey("web-search"), "web-search-1");
+      assert.equal(camoufoxSessionKey("web-fetch"), "web-fetch-1");
+      assert.equal(camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY), "web-health-1");
     });
   });
 
@@ -67,8 +67,6 @@ describe("slotLockFile", () => {
       [
         "browse-slot-0.lock",
         "browse-slot-1.lock",
-        "browse-slot-2.lock",
-        "browse-slot-3.lock",
       ],
     );
   });

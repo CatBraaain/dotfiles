@@ -1,6 +1,6 @@
 import { describe, it } from "bun:test";
 import { strict as assert } from "node:assert";
-import { RenderClock } from "./camoufox";
+import { RenderClock, startLocalHttpProbe } from "./camoufox";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,5 +35,15 @@ describe("RenderClock", () => {
     clock.awaitTurn(); // pauses, blocks 250ms for the restart, resumes
     await sleep(30);
     assert.equal(clock.signal.aborted, false);
+  });
+});
+
+describe("startLocalHttpProbe", () => {
+  it("serves its url until closed", async () => {
+    const probe = await startLocalHttpProbe();
+    const response = await fetch(probe.url);
+    assert.equal(response.ok, true);
+    await probe.close();
+    await assert.rejects(() => fetch(probe.url));
   });
 });
