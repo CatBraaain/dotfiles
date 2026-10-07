@@ -291,7 +291,7 @@ async function restartCommand(): Promise<void> {
   const stateDirPath = stateDir();
   // flock(1) does not create the lock file's parent directory.
   mkdirSync(stateDirPath, { recursive: true });
-  const chain = ["flock", join(stateDirPath, RESTART_LOCK_FILE)];
+  const chain = [join(stateDirPath, RESTART_LOCK_FILE)];
   for (let slot = 0; slot < SLOT_COUNT; slot++) {
     chain.push("flock", join(stateDirPath, slotLockFile(slot)));
   }
