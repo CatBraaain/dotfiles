@@ -7,11 +7,7 @@ import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import {
-  camoufoxFailureKind,
-  prepareCamoufoxRetry,
-  type RetryPreparation,
-} from "./backends";
+import { camoufoxFailureKind, prepareCamoufoxRetry, type RetryPreparation } from "./backends";
 import {
   CAMOUFOX_HEALTH_SESSION_KEY,
   camoufoxBaseUrl,
@@ -73,6 +69,7 @@ export async function camoufoxRender(url: string, sessionKey: string): Promise<s
       throw renderError(error);
     }
   } finally {
+    clock.dispose();
     await closePage();
   }
 }
@@ -129,25 +126,13 @@ export async function camoufoxServerResponsive(): Promise<boolean> {
   const healthSessionKey = camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY);
   const probe = await startLocalHttpProbe();
   try {
-    await runPlaywrightCli(
-      healthSessionKey,
-      ["close"],
-      remainingSignal(),
-    ).catch(() => {});
-    await runPlaywrightCli(
-      healthSessionKey,
-      ["open", probe.url],
-      remainingSignal(),
-    );
+    await runPlaywrightCli(healthSessionKey, ["close"], remainingSignal()).catch(() => {});
+    await runPlaywrightCli(healthSessionKey, ["open", probe.url], remainingSignal());
     return true;
   } catch {
     return false;
   } finally {
-    await runPlaywrightCli(
-      healthSessionKey,
-      ["close"],
-      remainingSignal(),
-    ).catch(() => {});
+    await runPlaywrightCli(healthSessionKey, ["close"], remainingSignal()).catch(() => {});
     await probe.close();
   }
 }
@@ -252,6 +237,7 @@ export class RenderClock {
   private readonly restartInFlight: () => boolean;
   private readonly awaitRestartFinish: () => void;
   private remainingMs: number;
+  private disposed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private segmentStartedAt: number | undefined;
 
@@ -270,12 +256,19 @@ export class RenderClock {
   // Pauses the clock while a restart holds the lock, blocks until it finishes,
   // then resumes the remaining budget. Call between playwright-cli steps.
   awaitTurn(): void {
-    if (!this.restartInFlight()) return;
+    if (this.disposed || !this.restartInFlight()) return;
     this.pause();
     while (this.restartInFlight()) {
       this.awaitRestartFinish();
     }
     this.resume();
+  }
+
+  dispose(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.segmentStartedAt = undefined;
+    this.disposed = true;
   }
 
   private pause(): void {
@@ -310,4 +303,3 @@ export function recoverCamoufoxBeforeRetry(
     restartServer: recoverCamoufoxServer,
   });
 }
-
