@@ -2,9 +2,9 @@
 name: design-catalog-kit
 description: >-
   HTMLデザイン案を独立した軸ごとのディレクトリに作り、同梱generatorからindex.html viewerを生成して
-  ブラウザーで閲覧・比較する。ページ・コンポーネント・CSSアニメーションのHTML案カタログ、
-  各軸の全案を1行に並べるiframe比較viewer、案ごとのReplayを作成・更新する依頼で使う。
-  比較閲覧までを扱い、選択案の採用・記録・統合は行わない。テキスト案や統合まで含む汎用の案比較はproposal-catalogを使う。
+  ブラウザーで閲覧・比較する。デザイン比較の見せ方の正本であり、ページ・コンポーネント・CSSアニメーションの
+  HTML案カタログ、各軸の全案を1行に並べるiframe比較viewer、案ごとのReplayを作成・更新する依頼で使う。
+  比較閲覧までを扱い、選択案の採用・記録・統合は行わない。
 compatibility: Node.js and a browser. No external runtime dependencies.
 ---
 
