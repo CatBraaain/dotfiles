@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Browse all local design options by axis."
+    />
+    <title>Design catalog</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --canvas: #f4f4f6;
+        --surface: #fcfcfd;
+        --stage: #e9eaee;
+        --ink: #40424a;
+        --muted: #6f727a;
+        --line: #e4e5ea;
+        --control-line: #cfd2da;
+        --hover: #ececf1;
+        --pressed: #e2e3ea;
+        --current: #e9eaef;
+        --focus: #2563eb;
+        --soft-ring: rgba(64, 66, 74, 0.1);
+        --shadow-card:
+          0 1px 2px rgba(64, 66, 74, 0.05), 0 10px 28px rgba(64, 66, 74, 0.08);
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --space-5: 20px;
+        --space-6: 24px;
+        --space-8: 32px;
+        --space-10: 40px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --canvas: #1c1d20;
+          --surface: #26282c;
+          --stage: #16171a;
+          --ink: #e9eaee;
+          --muted: #a3a7ae;
+          --line: #36383d;
+          --control-line: #474b52;
+          --hover: #2e3035;
+          --pressed: #383b41;
+          --current: #303338;
+          --focus: #93c5fd;
+          --soft-ring: rgba(0, 0, 0, 0.32);
+          --shadow-card:
+            0 1px 2px rgba(0, 0, 0, 0.26), 0 12px 32px rgba(0, 0, 0, 0.36);
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--ink);
+        font:
+          400 17px/26px system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        overflow-wrap: anywhere;
+      }
+      main {
+        max-width: 1600px;
+        margin-inline: auto;
+        padding: var(--space-6);
+        display: grid;
+        gap: var(--space-8);
+      }
+      h1 {
+        font-size: 26px;
+        line-height: 34px;
+        font-weight: 600;
+      }
+      h2 {
+        font-size: 21px;
+        line-height: 29px;
+        font-weight: 600;
+      }
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+      p {
+        max-width: 80ch;
+      }
+      button {
+        min-height: 44px;
+        max-width: 100%;
+        padding: var(--space-2) var(--space-4);
+        border: 1px solid var(--control-line);
+        border-radius: 999px;
+        background: var(--current);
+        color: var(--ink);
+        font:
+          600 13px/20px system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        cursor: pointer;
+        overflow-wrap: anywhere;
+      }
+      button:not(:disabled):hover {
+        background: var(--hover);
+      }
+      button:not(:disabled):active {
+        background: var(--pressed);
+      }
+      :focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 2px;
+      }
+      .option-description,
+      .axis-description {
+        color: var(--muted);
+      }
+      #axes {
+        display: grid;
+      }
+      .axis {
+        display: grid;
+        gap: var(--space-5);
+      }
+      .axis + .axis {
+        margin-top: var(--space-10);
+      }
+      .axis-info {
+        display: grid;
+        gap: var(--space-2);
+      }
+      .axis-heading {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+      }
+      .axis-index {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 26px;
+        height: 32px;
+        border: 0;
+        border-radius: 11px;
+        background: var(--current);
+        color: var(--ink);
+        font-size: 17px;
+        font-weight: 600;
+        line-height: 1;
+      }
+      .options {
+        display: flex;
+        gap: var(--space-4);
+        overflow-x: auto;
+      }
+      .option {
+        flex: none;
+        width: clamp(320px, 30vw, 480px);
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-3);
+        background: var(--surface);
+        border: 0;
+        border-radius: 18px;
+        padding: var(--space-5);
+        box-shadow: var(--shadow-card);
+      }
+      .preview-shell {
+        margin-top: auto;
+        border: 0;
+        border-radius: 12px;
+        background: var(--stage);
+        box-shadow: inset 0 0 0 1px var(--soft-ring);
+        overflow: hidden;
+      }
+      iframe {
+        display: block;
+        border: 0;
+        margin: 0;
+        width: 100%;
+        height: 640px;
+      }
+      .caption {
+        display: grid;
+        gap: var(--space-2);
+      }
+      .option-label-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: var(--space-1) var(--space-2);
+      }
+      .option-heading {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: var(--space-2);
+        min-width: 0;
+      }
+      .option-key {
+        flex: none;
+        display: grid;
+        place-items: center;
+        min-width: 26px;
+        height: 26px;
+        padding: 0 var(--space-1);
+        border: 0;
+        border-radius: 9px;
+        background: var(--current);
+        color: var(--ink);
+        font-size: 15px;
+        font-weight: 600;
+        line-height: 1;
+      }
+      .option-label {
+        font-size: 17px;
+        line-height: 25px;
+        font-weight: 600;
+      }
+      button.replay {
+        min-height: 34px;
+        padding: var(--space-1) var(--space-4);
+        font-size: 15px;
+        line-height: 22px;
+      }
+      @media (width < 768px) {
+        main {
+          padding: var(--space-5);
+          gap: var(--space-6);
+        }
+        .axis + .axis {
+          margin-top: var(--space-6);
+        }
+        .axis {
+          gap: var(--space-4);
+        }
+        .options {
+          gap: var(--space-3);
+        }
+        .option {
+          padding: var(--space-4);
+          border-radius: 16px;
+        }
+        .preview-shell {
+          border-radius: 10px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1 id="catalog-title"></h1>
+      </header>
+      <div id="axes"></div>
+    </main>
+    <script id="catalog-data" type="application/json">
+      __DESIGN_CATALOG_DATA__
+    </script>
+    <script>
+      "use strict";
+      const catalog = JSON.parse(
+        document.getElementById("catalog-data").textContent,
+      );
+      const byId = (id) => document.getElementById(id);
+
+      document.title = catalog.title;
+      byId("catalog-title").textContent = catalog.title;
+      catalog.axes.forEach((axis, axisIndex) => {
+        const headingId = `axis-${axis.id}`;
+        const section = element("section", "axis");
+        section.setAttribute("aria-labelledby", headingId);
+        const info = element("div", "axis-info");
+        const heading = element("h2", "axis-heading");
+        heading.id = headingId;
+        const headingText = element("span", "", axis.label);
+        heading.append(
+          element("span", "axis-index", String(axisIndex + 1)),
+          headingText,
+        );
+        info.append(
+          heading,
+          element("p", "axis-description", axis.description),
+        );
+        const options = element("div", "options");
+        options.tabIndex = 0;
+        options.setAttribute("role", "group");
+        options.setAttribute("aria-label", `${axis.label} options`);
+        options.addEventListener("keydown", (event) => {
+          const paging = Math.round(options.clientWidth * 0.8);
+          if (event.key === "ArrowRight") options.scrollBy({ left: paging });
+          else if (event.key === "ArrowLeft")
+            options.scrollBy({ left: -paging });
+          else if (event.key === "Home") options.scrollTo({ left: 0 });
+          else if (event.key === "End")
+            options.scrollTo({ left: options.scrollWidth });
+          else return;
+          event.preventDefault();
+        });
+        axis.options.forEach((option, optionIndex) => {
+          const key = optionKey(optionIndex);
+          const name = `${axis.label} · ${option.label}`;
+          const figure = element("figure", "option");
+          const caption = element("figcaption", "caption");
+          const labelRow = element("div", "option-label-row");
+          const optionHeading = element("div", "option-heading");
+          const replay = element("button", "replay", "Replay");
+          replay.type = "button";
+          replay.setAttribute("aria-label", `Replay ${name}`);
+          const shell = element("div", "preview-shell");
+          replay.addEventListener("click", () => {
+            shell.replaceChildren(createFrame(option, name));
+          });
+          optionHeading.append(
+            element("span", "option-key", key),
+            element("span", "option-label", option.label),
+          );
+          labelRow.append(optionHeading, replay);
+          caption.append(
+            labelRow,
+            element("p", "option-description", option.description),
+          );
+          shell.append(createFrame(option, name));
+          figure.append(caption, shell);
+          options.append(figure);
+        });
+        section.append(info, options);
+        byId("axes").append(section);
+      });
+
+      function optionKey(index) {
+        let n = index;
+        let key = "";
+        do {
+          key = String.fromCharCode(97 + (n % 26)) + key;
+          n = Math.floor(n / 26) - 1;
+        } while (n >= 0);
+        return key;
+      }
+
+      function createFrame(option, name) {
+        const frame = element("iframe");
+        frame.title = name;
+        frame.src = option.path;
+        return frame;
+      }
+
+      function element(tag, className = "", text = "") {
+        const node = document.createElement(tag);
+        node.className = className;
+        node.textContent = text;
+        return node;
+      }
+    </script>
+  </body>
+</html>
