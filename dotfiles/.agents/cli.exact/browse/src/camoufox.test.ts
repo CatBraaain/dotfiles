@@ -182,7 +182,7 @@ describe("camoufoxRender deadline lifecycle", () => {
     async () => {
       const root = mkdtempSync(join(tmpdir(), "browse-slots-"));
       try {
-        assert.equal(SLOT_COUNT, 2);
+        assert.equal(SLOT_COUNT, 4);
         const first = launchRender(root, "success", 0, true);
         const second = launchRender(root, "success", 1, true);
         await Promise.all([first.ready, second.ready]);

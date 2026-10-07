@@ -62,12 +62,11 @@ describe("slotLockFile", () => {
   it("names a distinct lock file per slot", () => {
     const names = [...Array(SLOT_COUNT).keys()].map(slotLockFile);
     assert.equal(new Set(names).size, SLOT_COUNT);
-    assert.deepEqual(
-      names.sort(),
-      [
-        "browse-slot-0.lock",
-        "browse-slot-1.lock",
-      ],
-    );
+    assert.deepEqual(names.sort(), [
+      "browse-slot-0.lock",
+      "browse-slot-1.lock",
+      "browse-slot-2.lock",
+      "browse-slot-3.lock",
+    ]);
   });
 });
