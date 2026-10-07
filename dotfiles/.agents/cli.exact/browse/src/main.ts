@@ -1,20 +1,3 @@
-// browse CLI — one CLI for web search, web fetch and the shared camoufox
-// server. Started as `bun ~/.agents/cli/browse` (bun resolves package.json's
-// main field to this file), so no exec bit or dependencies are required.
-// Spec: dotfiles/.agents/cli.exact/browse/SPEC.md
-//
-// Subcommands:
-//   browse search "<query>" [--lang <code>] [--json]
-//   browse fetch <url> [--json]
-//   browse login twitter   open x.com/login in camoufox and save cookies
-//   browse server start     ensure the camoufox server is running (idempotent)
-//   browse server restart   stop and respawn the camoufox server (hang recovery)
-//   browse display show|hide  toggle VNC display access
-//
-// The `__server` subcommand is internal: it is the camoufox server process
-// itself, spawned detached by `browse server start` (and by search/fetch when
-// they find the server down). It stays running until the machine shuts down or
-// the process is killed.
 import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

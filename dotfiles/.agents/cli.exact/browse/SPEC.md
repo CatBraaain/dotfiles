@@ -1,6 +1,6 @@
 # browse CLI spec
 
-コマンド `browse` の仕様。サブコマンド `search` / `fetch` / `server` / `display` を持ち、人間とコーディングエージェントが、Web 検索と URL フェッチと camoufox server の管理をコマンドラインから実行するための CLI。
+コマンド `browse` の仕様。サブコマンド `search` / `fetch` / `server` / `display` を持ち、人間とコーディングエージェントが、Web 検索と URL フェッチと camoufox server の管理をコマンドラインから実行するための CLI。実行は `bun ~/.agents/cli/browse` で行い、bun が package.json の main field を解決するため exec bit も依存のインストールも不要である。
 
 usage:
 
@@ -22,7 +22,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - GitHub API は `GITHUB_TOKEN` または `GH_TOKEN` 環境変数があれば認証付きで呼ぶ。discussions の GraphQL は token が必須で、無いときは GitHub backend が失敗する
 - `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` 環境変数で接続先を変更できる
 - openserp が未起動のときは `openserp serve` をバックグラウンド起動し、`/ready` 応答を 250ms 間隔で待ち、15 秒で断念する
-- camoufox server は `browse` 自身の内部サーバーモード（`browse __server`。usage には出ない）として起動する。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket 接続（1 接続 1 秒上限）で healthy を判定し、250ms 間隔で再プローブして 15 秒で断念する
+- camoufox server は `browse` 自身の内部サーバーモード（`browse __server`。usage には出ない）として起動し、machine の shutdown かプロセスの kill まで動き続ける。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket 接続（1 接続 1 秒上限）で healthy を判定し、250ms 間隔で再プローブして 15 秒で断念する
 - camoufox server と `browse server start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
 - camoufox server は起動してポートの待受を確立した時点で、自身の PID を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/camoufox-server.pid` へ書く
 - playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、server の機能ヘルスチェックが `web-health-<n>`（`<n>` は render スロット番号。`flock(1)` が無い環境ではプロセスの PID）で、同時に走る render と機能ヘルスチェックが同じセッションを共有しない。各実行の冒頭と終了時にセッションを閉じる
