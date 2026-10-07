@@ -19,13 +19,22 @@ import {
   SERVER_WAIT_TIMEOUT_MS,
   stateDir,
 } from "./config";
-import { ensureCamoufoxServer, camoufoxServerHealthy, recoverCamoufoxServer } from "./server";
+import {
+  ensureCamoufoxServer,
+  camoufoxServerHealthy,
+  recoverCamoufoxServer,
+  restartInFlight as restartLockInFlight,
+  waitForRestartToFinish,
+} from "./server";
 
 export async function camoufoxRender(url: string, sessionKey: string): Promise<string> {
   await ensureCamoufoxServer(AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
   syncPlaywrightCliConfig();
 
-  const renderSignal = AbortSignal.timeout(RENDER_TIMEOUT_MS);
+  // Spec: レンダーのタイムアウトは実働のみで計る。ステップの合間に他ジョブの
+  // server 再起動を検知したら計時を止め、再起動の完了後に残り時間で続行する
+  // （再起動待ちでタイマーを消耗し、自分も復旧再起動を発火する連鎖を防ぐ）。
+  const clock = new RenderClock(RENDER_TIMEOUT_MS);
   const renderError = (error: unknown): Error =>
     new Error(`render: ${error instanceof Error ? error.message : String(error)}`);
 
@@ -40,16 +49,19 @@ export async function camoufoxRender(url: string, sessionKey: string): Promise<s
   try {
     // Spec: 各実行の冒頭と終了時にセッションを閉じる（cookie / ページ状態の
     // 持ち越し防止。冒頭の閉鎖失敗は無視）。
+    clock.awaitTurn();
     await closePage();
-    await runPlaywrightCli(sessionKey, ["open", url], renderSignal).catch((error: unknown) => {
+    clock.awaitTurn();
+    await runPlaywrightCli(sessionKey, ["open", url], clock.signal).catch((error: unknown) => {
       throw renderError(error);
     });
     // Spec: networkidle 待ち（5 秒）と並行して 250ms 間隔で DOM をポーリングし、
     // challenge を検出したら早い方で待ちを切り上げる（challengeWaitSnippet）。
+    clock.awaitTurn();
     const codeOutput = await runPlaywrightCli(
       sessionKey,
       ["run-code", challengeWaitSnippet()],
-      renderSignal,
+      clock.signal,
     ).catch((error: unknown) => {
       throw renderError(error);
     });
@@ -202,6 +214,62 @@ function buildPlaywrightCliEnv(
 
 function buildPlaywrightCliArgs(sessionKey: string, args: readonly string[]): string[] {
   return [`-s=${sessionKey}`, ...args];
+}
+
+// Render deadline that counts only actual render time: while another job holds
+// the restart lock (a server restart is in flight), the clock pauses so the
+// wait does not consume the render budget (spec: 再起動検知中はレンダータイマーを
+// 進めない).
+export class RenderClock {
+  readonly signal: AbortSignal;
+
+  private readonly controller = new AbortController();
+  private readonly restartInFlight: () => boolean;
+  private readonly awaitRestartFinish: () => void;
+  private remainingMs: number;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private segmentStartedAt: number | undefined;
+
+  constructor(
+    budgetMs: number,
+    restartInFlight: () => boolean = restartLockInFlight,
+    awaitRestartFinish: () => void = waitForRestartToFinish,
+  ) {
+    this.remainingMs = budgetMs;
+    this.restartInFlight = restartInFlight;
+    this.awaitRestartFinish = awaitRestartFinish;
+    this.signal = this.controller.signal;
+    this.resume();
+  }
+
+  // Pauses the clock while a restart holds the lock, blocks until it finishes,
+  // then resumes the remaining budget. Call between playwright-cli steps.
+  awaitTurn(): void {
+    if (!this.restartInFlight()) return;
+    this.pause();
+    while (this.restartInFlight()) {
+      this.awaitRestartFinish();
+    }
+    this.resume();
+  }
+
+  private pause(): void {
+    if (this.segmentStartedAt === undefined || this.signal.aborted) return;
+    clearTimeout(this.timer);
+    const elapsed = Date.now() - this.segmentStartedAt;
+    this.remainingMs = Math.max(0, this.remainingMs - elapsed);
+    this.segmentStartedAt = undefined;
+  }
+
+  private resume(): void {
+    if (this.signal.aborted) return;
+    if (this.remainingMs <= 0) {
+      this.controller.abort();
+      return;
+    }
+    this.segmentStartedAt = Date.now();
+    this.timer = setTimeout(() => this.controller.abort(), this.remainingMs);
+  }
 }
 
 export function shouldRetryCamoufox(error: unknown): boolean {

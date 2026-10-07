@@ -5,7 +5,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RESTART_LOCK_FILE } from "./config";
-import { restartInFlight } from "./main";
+import { restartInFlight } from "./server";
 
 // The CLI project directory: spawned as `bun <projectDir>` so bun resolves
 // package.json's main field, exactly like the deployed `~/.agents/cli/browse`.

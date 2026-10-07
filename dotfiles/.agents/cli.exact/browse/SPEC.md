@@ -57,6 +57,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | server 起動待ち・セッション close・restart ロック競合時の再起動完了待ち | 15 秒 |
 | `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10 秒 |
 | ページ open・ナビゲーション・DOM 取得 | 30 秒 |
+| render 中に他の実行の server 再起動が始まったとき | 再起動の完了待ちを前述の 30 秒に算入せず、完了後に残り時間で続行する |
 | openserp パース・trafilatura 変換・Reddit の各要求・StackOverflow の各要求・GitHub API の各要求・Hacker News / Wikipedia / arXiv / RSS / fxtwitter の各要求 | 15 秒 |
 | yt-dlp による YouTube メタデータ・字幕の取得 | 60 秒 |
 | `twikit_client.py` の実行（login・ツイート・タイムライン・検索） | 120 秒 |

@@ -19,8 +19,10 @@ import { fetchJson, formatSearchMarkdown, searchJson } from "./output";
 import { searchOne } from "./search";
 import {
   restartCamoufoxServer,
+  restartInFlight,
   runCamoufoxServer,
   startCamoufoxServer,
+  waitForRestartToFinish,
 } from "./server";
 import { emitJson, fail, usageFail } from "./util";
 
@@ -94,26 +96,6 @@ function runUnderSlotFlock(
   if (result.error) return "flock-unavailable";
   if (result.status === FLOCK_CONFLICT_EXIT_CODE) return "busy";
   process.exit(result.status ?? 1);
-}
-
-// Spec: restart ロックの保持を探知する。Acquiring it for a no-op (and letting
-// go right away) means no restart is in flight; a lost probe means `browse
-// server restart` or a render-recovery restart holds the lock. Crashes cannot
-// wedge this: the kernel releases the flock, unlike a flag file.
-export function restartInFlight(): boolean {
-  const probe = spawnSync(
-    "flock",
-    ["-n", "-E", String(FLOCK_CONFLICT_EXIT_CODE), join(stateDir(), RESTART_LOCK_FILE), "true"],
-  );
-  if (probe.error) return false; // no flock(1): no restart queue to yield to
-  return probe.status === FLOCK_CONFLICT_EXIT_CODE;
-}
-
-// Block until the in-flight restart releases the restart lock (running a
-// no-op under it, then letting go again right away).
-function waitForRestartToFinish(): void {
-  const result = spawnSync("flock", [join(stateDir(), RESTART_LOCK_FILE), "true"]);
-  if (result.error) return; // no flock(1): nothing to wait for
 }
 
 // --- argument parsing ---

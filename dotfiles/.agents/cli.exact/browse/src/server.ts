@@ -131,6 +131,28 @@ export async function recoverCamoufoxServer(): Promise<void> {
   await waitForServerHealthy(camoufoxBaseUrl(), AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
 }
 
+// --- restart-lock observation (render slots and render timers) ---
+
+// Spec: restart ロックの保持を探知する。Acquiring it for a no-op (and letting
+// go right away) means no restart is in flight; a lost probe means `browse
+// server restart` or a render-recovery restart holds the lock. Crashes cannot
+// wedge this: the kernel releases the flock, unlike a flag file.
+export function restartInFlight(): boolean {
+  const probe = spawnSync(
+    "flock",
+    ["-n", "-E", String(FLOCK_CONFLICT_EXIT_CODE), join(stateDir(), RESTART_LOCK_FILE), "true"],
+  );
+  if (probe.error) return false; // no flock(1): no restart queue to yield to
+  return probe.status === FLOCK_CONFLICT_EXIT_CODE;
+}
+
+// Block until the in-flight restart releases the restart lock (running a
+// no-op under it, then letting go right away).
+export function waitForRestartToFinish(): void {
+  const result = spawnSync("flock", [join(stateDir(), RESTART_LOCK_FILE), "true"]);
+  if (result.error) return; // no flock(1): nothing to wait for
+}
+
 // --- server bootstrap (health check -> spawn -> wait) ---
 
 export async function ensureCamoufoxServer(signal: AbortSignal): Promise<void> {
