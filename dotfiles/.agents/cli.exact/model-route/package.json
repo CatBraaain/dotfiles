@@ -1,5 +1,0 @@
-{
-  "name": "model-route-cli",
-  "private": true,
-  "main": "./src/main.ts"
-}
