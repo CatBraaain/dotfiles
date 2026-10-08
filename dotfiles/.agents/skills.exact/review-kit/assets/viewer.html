@@ -79,59 +79,6 @@
         color: var(--secondary);
         font-variant-numeric: tabular-nums;
       }
-      .flows {
-        margin-top: 16px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-      .ctl[aria-current="true"] {
-        border-color: var(--chip);
-        box-shadow: 0 0 0 1px var(--chip);
-      }
-      main {
-        display: grid;
-        grid-template-columns: 300px minmax(0, 1fr);
-        gap: 24px;
-        margin-top: 24px;
-        align-items: start;
-      }
-      @media (max-width: 920px) {
-        main {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      ol {
-        list-style: none;
-        display: grid;
-        gap: 8px;
-      }
-      li button {
-        width: 100%;
-        display: grid;
-        grid-template-columns: 28px minmax(0, 1fr);
-        gap: 12px;
-        text-align: left;
-        padding: 12px 14px;
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        cursor: pointer;
-        font: inherit;
-        color: inherit;
-        transition:
-          border-color 150ms,
-          box-shadow 150ms;
-      }
-      li button[aria-current="true"] {
-        border-color: var(--chip);
-        box-shadow: 0 0 0 1px var(--chip);
-      }
-      li button:focus-visible {
-        outline: 2px solid var(--accent);
-        outline-offset: 2px;
-      }
       .num {
         display: inline-flex;
         align-items: center;
@@ -147,74 +94,7 @@
         border: 1px solid var(--line);
         color: var(--secondary);
       }
-      li button[aria-current="true"] .num {
-        background: var(--chip);
-        border-color: var(--chip);
-        color: var(--chip-ink);
-      }
-      .action {
-        display: block;
-        font-weight: 600;
-        font-size: 14px;
-        line-height: 20px;
-        overflow-wrap: anywhere;
-      }
 
-      .stage {
-        position: relative;
-        aspect-ratio: 16 / 9;
-        background: #000;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        overflow: hidden;
-        box-shadow: 0 4px 16px var(--shadow);
-      }
-      video {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-      }
-      .notice {
-        position: absolute;
-        inset: 0;
-        display: grid;
-        place-items: center;
-        padding: 24px;
-        text-align: center;
-        font-size: 14px;
-        line-height: 20px;
-        color: var(--secondary);
-        background: var(--card);
-      }
-      .detail {
-        margin-top: 16px;
-        display: grid;
-        gap: 6px;
-      }
-      .detail .row {
-        display: grid;
-        grid-template-columns: max-content minmax(0, 1fr);
-        gap: 12px;
-      }
-      .detail .row > span:first-child {
-        font-family: var(--mono);
-        font-size: 12px;
-        line-height: 20px;
-        color: var(--secondary);
-      }
-      .detail .row > span:last-child {
-        font-size: 14px;
-        line-height: 20px;
-        overflow-wrap: anywhere;
-      }
-      .controls {
-        margin-top: 16px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
       .ctl {
         font: inherit;
         font-weight: 600;
@@ -237,15 +117,6 @@
       .ctl:focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 2px;
-      }
-      .ctl.primary {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: var(--accent-ink);
-      }
-      .ctl.primary:disabled {
-        background: var(--card);
-        color: var(--text);
       }
       .footnote {
         margin-top: 24px;
@@ -278,6 +149,133 @@
         font-family: var(--mono);
         font-size: 13px;
       }
+
+      .strip-flow {
+        margin-top: 24px;
+        display: grid;
+        gap: 10px;
+      }
+      .strip-flow h2 {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 12px;
+        font-size: 16px;
+        line-height: 24px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .strip-row {
+        display: flex;
+        gap: 16px;
+        overflow-x: auto;
+        padding: 4px 4px 12px;
+      }
+      .strip-item {
+        flex: none;
+        display: grid;
+        gap: 6px;
+        align-content: start;
+        width: 240px;
+      }
+      .caption {
+        display: grid;
+        gap: 2px;
+        font-size: 13px;
+        line-height: 18px;
+        overflow-wrap: anywhere;
+      }
+      .caption .action {
+        color: var(--text);
+      }
+      .caption .expected {
+        color: var(--secondary);
+      }
+      .thumb {
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--card);
+        cursor: pointer;
+        overflow: hidden;
+        transition:
+          border-color 150ms,
+          box-shadow 150ms;
+      }
+      .thumb[aria-current="true"] {
+        border-color: var(--chip);
+        box-shadow: 0 0 0 1px var(--chip);
+      }
+      .thumb:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .thumb img,
+      .thumb video {
+        display: block;
+        width: 238px;
+        height: 134px;
+        object-fit: contain;
+      }
+      .thumb video {
+        background: #000;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        background: rgba(10, 11, 15, 0.82);
+      }
+      .lightbox-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 16px;
+        padding: 12px 16px;
+        background: var(--card);
+        border-bottom: 1px solid var(--line);
+      }
+      .lightbox-caption {
+        flex: 1 1 320px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        line-height: 20px;
+        overflow-wrap: anywhere;
+      }
+      .lightbox-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .lightbox-body {
+        overflow: auto;
+        display: grid;
+        padding: 16px;
+      }
+      .lightbox-body img,
+      .lightbox-body video {
+        margin: auto;
+        width: auto;
+        height: auto;
+      }
+      .lightbox-body img {
+        background: #fff;
+      }
+      .lightbox-body video {
+        background: #000;
+      }
+      .lightbox-notice {
+        margin: auto;
+        padding: 24px;
+        text-align: center;
+        font-size: 14px;
+        line-height: 20px;
+        color: var(--secondary);
+      }
       @media (prefers-reduced-motion: reduce) {
         * {
           transition: none !important;
@@ -294,31 +292,32 @@
         <h1 id="viewer-title"></h1>
         <p class="meta" id="viewer-meta"></p>
       </header>
-      <nav class="flows" id="flow-list" aria-label="Flows" hidden></nav>
-      <main id="viewer-main" hidden>
-        <nav aria-label="Step list">
-          <ol id="step-list"></ol>
-        </nav>
-        <section aria-label="Current step">
-          <div class="stage">
-            <video id="video" controls preload="metadata"></video>
-            <div class="notice" id="stage-notice" hidden></div>
-          </div>
-          <div class="detail" id="step-detail"></div>
-          <div class="controls">
-            <button class="ctl" type="button" id="prev">Previous step</button>
-            <button class="ctl primary" type="button" id="replay">Replay</button>
-            <button class="ctl" type="button" id="next">Next step</button>
-          </div>
-          <p class="footnote">
-            This viewer is for reviewing recordings only. Read the automated test outcome from the
-            runner results; do not infer it from in-video annotations.
-          </p>
-        </section>
-      </main>
+      <div id="strip-view" hidden></div>
+      <p class="footnote" id="viewer-footnote" hidden>
+        This viewer is for reviewing recordings only. Read the automated test outcome from the runner
+        results; do not infer it from the recordings.
+      </p>
       <div class="empty" id="viewer-empty" hidden>
         <h2>Recording data not found</h2>
         <p id="empty-message"></p>
+      </div>
+    </div>
+    <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Step media" hidden>
+      <div class="lightbox-bar">
+        <p class="lightbox-caption">
+          <span class="num" id="lightbox-num"></span>
+          <span id="lightbox-text"></span>
+        </p>
+        <div class="lightbox-actions">
+          <button class="ctl" type="button" id="lightbox-prev">Previous</button>
+          <button class="ctl" type="button" id="lightbox-next">Next</button>
+          <button class="ctl" type="button" id="lightbox-close">Close</button>
+        </div>
+      </div>
+      <div class="lightbox-body">
+        <img id="lightbox-image" alt="" />
+        <video id="lightbox-video" controls hidden></video>
+        <div class="lightbox-notice" id="lightbox-notice" hidden></div>
       </div>
     </div>
     <script>
@@ -333,6 +332,7 @@
         }
         const flows = data && Array.isArray(data.flows) ? data.flows : [];
         const valid =
+          typeof data?.title === "string" &&
           flows.length > 0 &&
           flows.every(
             (item) =>
@@ -343,34 +343,35 @@
           );
 
         const header = document.getElementById("viewer-header");
-        const flowList = document.getElementById("flow-list");
-        const main = document.getElementById("viewer-main");
+        const stripView = document.getElementById("strip-view");
+        const footnote = document.getElementById("viewer-footnote");
         const empty = document.getElementById("viewer-empty");
         const emptyMessage = document.getElementById("empty-message");
+        const lightbox = document.getElementById("lightbox");
+        const lightboxImage = document.getElementById("lightbox-image");
+        const lightboxVideo = document.getElementById("lightbox-video");
+        const lightboxNum = document.getElementById("lightbox-num");
+        const lightboxText = document.getElementById("lightbox-text");
+        const lightboxPrev = document.getElementById("lightbox-prev");
+        const lightboxNext = document.getElementById("lightbox-next");
+        const lightboxClose = document.getElementById("lightbox-close");
+        const lightboxNotice = document.getElementById("lightbox-notice");
 
         if (!valid) {
           empty.hidden = false;
           emptyMessage.textContent =
-            "The contents of script#e2e-viewer-data could not be read. Embed the recording data as JSON shaped { flows: [{ id, title, steps: [{ number, action, video }] }] }.";
+            "The contents of script#e2e-viewer-data could not be read. Embed the recording data as JSON shaped { title, flows: [{ id, title, steps: [{ number, action, video or image, expected }] }] }.";
           return;
         }
 
-        empty.hidden = true;
         header.hidden = false;
-        flowList.hidden = false;
-        main.hidden = false;
+        stripView.hidden = false;
+        footnote.hidden = false;
 
-        const video = document.getElementById("video");
-        const stageNotice = document.getElementById("stage-notice");
-        const list = document.getElementById("step-list");
-        const detail = document.getElementById("step-detail");
-        const prev = document.getElementById("prev");
-        const replay = document.getElementById("replay");
-        const next = document.getElementById("next");
-        let flowIndex = 0;
-        let current = 0;
-        const stepByFlow = flows.map(() => 0);
-        const flow = () => flows[flowIndex];
+        const FIRST_FRAME_FRAGMENT = "#t=0.001";
+        let lightboxStep = null;
+        let lastThumb = null;
+        const stripRows = [];
 
         function el(tag, className, textContent) {
           const node = document.createElement(tag);
@@ -380,123 +381,165 @@
         }
 
         function renderHeader() {
-          document.getElementById("viewer-title").textContent = flow().title || "Recording viewer";
-          document.getElementById("viewer-meta").textContent = `${flow().steps.length} steps`;
+          const totalSteps = flows.reduce((sum, item) => sum + item.steps.length, 0);
+          document.getElementById("viewer-title").textContent = data.title || "Recording viewer";
+          document.getElementById("viewer-meta").textContent =
+            `${flows.length} flows · ${totalSteps} steps`;
         }
 
-        function renderFlowList() {
-          flowList.textContent = "";
-          flows.forEach((item, index) => {
-            const button = el("button", "ctl");
-            button.type = "button";
-            button.setAttribute("aria-current", String(index === flowIndex));
-            button.textContent = item.title;
-            button.addEventListener("click", () => switchFlow(index));
-            flowList.append(button);
-          });
-        }
-
-        function renderList() {
-          list.textContent = "";
-          flow().steps.forEach((step, index) => {
-            const li = el("li");
-            const button = el("button");
-            button.type = "button";
-            button.setAttribute("aria-current", String(index === current));
-            button.append(
-              el("span", "num", String(step.number ?? index + 1)),
-              el("span", "action", step.action ?? ""),
-            );
-            button.addEventListener("click", () => select(index, { autoplay: true }));
-            li.append(button);
-            list.append(li);
-          });
-        }
-
-        function renderDetail(step) {
-          detail.textContent = "";
-          const action = el("div", "row");
-          action.append(el("span", "", "Action"), el("span", "", step.action ?? ""));
-          detail.append(action);
-        }
-
-        function updateButtons() {
-          prev.disabled = current === 0;
-          next.disabled = current === flow().steps.length - 1;
-        }
-
-        function showStageNotice(message) {
-          video.hidden = true;
-          stageNotice.textContent = message;
-          stageNotice.hidden = false;
-        }
-
-        function showVideo() {
-          stageNotice.hidden = true;
-          video.hidden = false;
-        }
-
-        function startPlayback() {
-          const playing = video.play();
-          if (playing) playing.catch(() => {});
-        }
-
-        function select(index, { autoplay = false } = {}) {
-          if (index < 0 || index >= flow().steps.length) return;
-          current = index;
-          stepByFlow[flowIndex] = index;
-          const step = flow().steps[index];
-          video.pause();
-          video.currentTime = 0;
-          if (step.video) {
-            showVideo();
-            video.src = step.video;
-            video.load();
-            if (autoplay) startPlayback();
+        function buildStepItem(step, flowIndex, index) {
+          const itemEl = el("figure", "strip-item");
+          const caption = el("figcaption", "caption");
+          caption.append(el("span", "action", step.action ?? ""));
+          if (step.expected) caption.append(el("span", "expected", step.expected));
+          const thumb = el("button", "thumb");
+          thumb.type = "button";
+          const label = `Step ${step.number ?? index + 1}: ${step.action}`;
+          if (step.video !== undefined) {
+            const video = el("video");
+            video.preload = "metadata";
+            video.src = `${step.video}${FIRST_FRAME_FRAGMENT}`;
+            thumb.setAttribute("aria-label", label);
+            thumb.append(video);
           } else {
-            video.removeAttribute("src");
-            showStageNotice(
-              "No video is set for this step. Check the video path in the recording data.",
-            );
+            const img = el("img");
+            img.src = step.image ?? "";
+            img.alt = label;
+            img.loading = "lazy";
+            thumb.append(img);
           }
-          renderList();
-          renderDetail(step);
-          updateButtons();
+          thumb.addEventListener("click", () => openLightbox(flowIndex, index));
+          itemEl.append(caption, thumb);
+          return itemEl;
         }
 
-        function switchFlow(index) {
-          if (index === flowIndex) return;
-          flowIndex = index;
-          renderHeader();
-          renderFlowList();
-          select(stepByFlow[flowIndex], { autoplay: true });
+        function renderStrips() {
+          stripView.textContent = "";
+          flows.forEach((item, flowIndex) => {
+            const section = el("section", "strip-flow");
+            const heading = el("h2");
+            heading.append(
+              el("span", "", item.title),
+              el("span", "meta", `${item.steps.length} steps`),
+            );
+            const row = el("div", "strip-row");
+            const thumbs = item.steps.map((step, index) => {
+              const itemEl = buildStepItem(step, flowIndex, index);
+              row.append(itemEl);
+              return itemEl.querySelector(".thumb");
+            });
+            section.append(heading, row);
+            stripView.append(section);
+            stripRows.push(thumbs);
+          });
         }
 
-        video.addEventListener("error", () => {
-          showStageNotice(
-            "Could not load the video. Check that the video exists relative to index.html.",
+        function setLightboxStep(flowIndex, index) {
+          lightboxStep = { flowIndex, index };
+          const step = flows[flowIndex].steps[index];
+          lightboxVideo.pause();
+          lightboxNotice.hidden = true;
+          const isVideo = step.video !== undefined;
+          lightboxImage.hidden = isVideo;
+          lightboxVideo.hidden = !isVideo;
+          if (isVideo) {
+            lightboxVideo.src = step.video;
+            lightboxImage.removeAttribute("src");
+          } else {
+            lightboxImage.src = step.image ?? "";
+            lightboxImage.alt = `Step ${step.number ?? index + 1}: ${step.action}`;
+            lightboxVideo.removeAttribute("src");
+            lightboxVideo.load();
+          }
+          lightboxNum.textContent = String(step.number ?? index + 1);
+          lightboxText.textContent = step.expected
+            ? `${step.action} — ${step.expected}`
+            : (step.action ?? "");
+          lightboxPrev.disabled = index === 0;
+          lightboxNext.disabled = index === flows[flowIndex].steps.length - 1;
+          markCurrentThumb(flowIndex, index);
+        }
+
+        function markCurrentThumb(flowIndex, index) {
+          stripRows.forEach((thumbs, rowIndex) => {
+            thumbs.forEach((thumb, thumbIndex) => {
+              thumb.setAttribute(
+                "aria-current",
+                String(rowIndex === flowIndex && thumbIndex === index),
+              );
+            });
+          });
+          const thumb = stripRows[flowIndex]?.[index];
+          if (!thumb) return;
+          lastThumb = thumb;
+          thumb.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }
+
+        function moveLightbox(delta) {
+          if (!lightboxStep) return;
+          const index = lightboxStep.index + delta;
+          if (index < 0 || index >= flows[lightboxStep.flowIndex].steps.length) return;
+          setLightboxStep(lightboxStep.flowIndex, index);
+        }
+
+        function openLightbox(flowIndex, index) {
+          setLightboxStep(flowIndex, index);
+          lightbox.hidden = false;
+          lightboxClose.focus();
+        }
+
+        function closeLightbox() {
+          lightbox.hidden = true;
+          lightboxVideo.pause();
+          if (lastThumb) lastThumb.focus();
+        }
+
+        function trapLightboxFocus(event) {
+          const focusables = [...lightbox.querySelectorAll("button, video")].filter(
+            (node) => !node.disabled && !node.hidden,
           );
-        });
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+          if (!lightbox.contains(document.activeElement)) {
+            event.preventDefault();
+            first.focus();
+          } else if (document.activeElement === last && !event.shiftKey) {
+            event.preventDefault();
+            first.focus();
+          } else if (document.activeElement === first && event.shiftKey) {
+            event.preventDefault();
+            last.focus();
+          }
+        }
 
-        prev.addEventListener("click", () => select(current - 1, { autoplay: true }));
-        next.addEventListener("click", () => select(current + 1, { autoplay: true }));
-        replay.addEventListener("click", () => {
-          if (!video.getAttribute("src")) return;
-          showVideo();
-          video.currentTime = 0;
-          startPlayback();
-        });
+        function showLightboxNotice() {
+          lightboxImage.hidden = true;
+          lightboxVideo.hidden = true;
+          lightboxNotice.textContent =
+            "Could not load the media. Check that the file exists relative to index.html.";
+          lightboxNotice.hidden = false;
+        }
 
         window.addEventListener("keydown", (event) => {
-          if (event.key === "ArrowLeft") select(current - 1, { autoplay: true });
-          else if (event.key === "ArrowRight") select(current + 1, { autoplay: true });
-          else if (event.key === "r" || event.key === "R") replay.click();
+          if (lightbox.hidden) return;
+          const onVideo = document.activeElement === lightboxVideo;
+          if (onVideo && (event.key === "ArrowLeft" || event.key === "ArrowRight")) return;
+          if (event.key === "ArrowLeft") moveLightbox(-1);
+          else if (event.key === "ArrowRight") moveLightbox(1);
+          else if (event.key === "Escape") closeLightbox();
+          else if (event.key === "Tab") trapLightboxFocus(event);
         });
 
+        lightboxPrev.addEventListener("click", () => moveLightbox(-1));
+        lightboxNext.addEventListener("click", () => moveLightbox(1));
+        lightboxClose.addEventListener("click", closeLightbox);
+        lightboxImage.addEventListener("error", showLightboxNotice);
+        lightboxVideo.addEventListener("error", showLightboxNotice);
+
         renderHeader();
-        renderFlowList();
-        select(0);
+        renderStrips();
       })();
+
     </script>
   </body>
 </html>

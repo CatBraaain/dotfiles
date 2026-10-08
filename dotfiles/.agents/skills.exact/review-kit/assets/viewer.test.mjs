@@ -12,17 +12,20 @@ const REQUIRED_IDS = [
   "viewer-header",
   "viewer-title",
   "viewer-meta",
-  "flow-list",
-  "viewer-main",
-  "step-list",
-  "video",
-  "stage-notice",
-  "step-detail",
-  "prev",
-  "replay",
-  "next",
+  "strip-view",
+  "viewer-footnote",
+  "lightbox",
+  "lightbox-image",
+  "lightbox-video",
+  "lightbox-num",
+  "lightbox-text",
+  "lightbox-prev",
+  "lightbox-next",
+  "lightbox-close",
+  "lightbox-notice",
   "viewer-empty",
 ];
+const REPLACED_IDS = ["flow-list", "viewer-main", "step-list", "stage-notice", "step-detail", "replay"];
 
 test("template embeds exactly one data placeholder inside the data script", () => {
   const scriptStart = viewerSource.indexOf('<script type="application/json" id="e2e-viewer-data">');
@@ -40,54 +43,77 @@ test("template has no external references", () => {
   assert.equal(/url\(\s*["']?(https?:)?\/\//i.test(viewerSource), false);
 });
 
-test("template carries the required viewer elements and controls", () => {
+test("the film strip replaces the stage viewer and stacks every flow", () => {
   for (const id of REQUIRED_IDS) {
     assert.ok(viewerSource.includes(`id="${id}"`), `#${id} exists`);
   }
-  for (const label of ["Previous step", "Replay", "Next step"]) {
-    assert.ok(
-      new RegExp(`>\\s*${label}\\s*</button>`).test(viewerSource),
-      `button label "${label}" exists`,
-    );
+  for (const id of REPLACED_IDS) {
+    assert.equal(viewerSource.includes(`id="${id}"`), false, `#${id} is gone`);
   }
-  for (const behavior of ["video.pause()", "video.currentTime = 0", "startPlayback()"]) {
-    assert.ok(viewerSource.includes(behavior), `behavior "${behavior}" exists`);
-  }
+  assert.match(viewerSource, /renderHeader\(\);\s*renderStrips\(\);/, "only the strip view renders");
+  assert.ok(viewerSource.includes("itemEl.append(caption, thumb)"), "caption is placed before the thumbnail");
+  assert.ok(viewerSource.includes('img.loading = "lazy"'), "image thumbnails load lazily");
+  assert.match(viewerSource, /FIRST_FRAME_FRAGMENT = "#t=0\.001"/, "video thumbnails show the first frame");
+  assert.ok(viewerSource.includes('video.preload = "metadata"'), "video thumbnails preload metadata only");
+  assert.ok(viewerSource.includes('thumb.setAttribute("aria-label", label)'), "video thumbnails are labelled");
+  assert.ok(viewerSource.includes('id="lightbox-video" controls'), "the lightbox video has controls");
 });
 
-test("step selection autoplays and ended videos do not advance on their own", () => {
-  const selectAutoplays =
-    /select\(index, \{ autoplay: true \}\)/.test(viewerSource) &&
-    /select\(current - 1, \{ autoplay: true \}\)/.test(viewerSource) &&
-    /select\(current \+ 1, \{ autoplay: true \}\)/.test(viewerSource);
-  assert.ok(selectAutoplays, "list click, prev and next pass autoplay");
+test("lightbox shows media at natural size and moves and closes with the keyboard", () => {
+  assert.match(
+    viewerSource,
+    /\.lightbox-body img,\s*\.lightbox-body video \{[^}]*width: auto;[^}]*height: auto;/s,
+    "lightbox keeps images and videos at natural size",
+  );
+  assert.match(viewerSource, /id="lightbox"[^>]*hidden/, "lightbox is hidden until a thumbnail is clicked");
+  assert.ok(viewerSource.includes('aria-label="Step media"'), "lightbox is a labelled dialog");
+  assert.match(
+    viewerSource,
+    /lightboxText\.textContent = step\.expected\s*\?\s*`\$\{step\.action\} — \$\{step\.expected\}`\s*:\s*\(step\.action \?\? ""\);/,
+    "the lightbox caption carries the action and the optional expectation",
+  );
+  assert.ok(viewerSource.includes("lightboxPrev.disabled = index === 0"), "previous clamps at start");
   assert.ok(
-    /if \(autoplay\) startPlayback\(\)/.test(viewerSource),
-    "select starts playback when autoplay is set",
+    viewerSource.includes("lightboxNext.disabled = index === flows[flowIndex].steps.length - 1"),
+    "next clamps at the last step",
   );
-  assert.equal(
-    viewerSource.includes('addEventListener("ended"'),
-    false,
-    "no automatic continuous playback",
+  assert.ok(viewerSource.includes('if (event.key === "Escape") closeLightbox();'), "Escape closes the lightbox");
+  assert.ok(
+    viewerSource.includes('if (event.key === "ArrowLeft") moveLightbox(-1);') &&
+      viewerSource.includes('if (event.key === "ArrowRight") moveLightbox(1);'),
+    "arrow keys move between steps",
   );
-  assert.ok(viewerSource.includes("select(0)"), "initial selection does not autoplay");
+  assert.ok(
+    viewerSource.includes('if (event.key === "Tab") trapLightboxFocus(event);') &&
+      viewerSource.includes("function trapLightboxFocus(event)"),
+    "Tab cycles inside the modal lightbox",
+  );
+  assert.ok(
+    viewerSource.includes("if (lastThumb) lastThumb.focus();"),
+    "closing the lightbox returns focus to the thumbnail",
+  );
+  for (const wiring of [
+    'lightboxPrev.addEventListener("click", () => moveLightbox(-1));',
+    'lightboxNext.addEventListener("click", () => moveLightbox(1));',
+    'lightboxClose.addEventListener("click", closeLightbox);',
+    'thumb.addEventListener("click", () => openLightbox(flowIndex, index));',
+  ]) {
+    assert.ok(viewerSource.includes(wiring), `button click is wired: ${wiring}`);
+  }
+  assert.ok(viewerSource.includes('thumb.scrollIntoView({ block: "nearest", inline: "nearest" })'), "the strip keeps the current thumbnail in view");
+  assert.ok(
+    viewerSource.includes('lightboxImage.addEventListener("error", showLightboxNotice)') &&
+      viewerSource.includes('lightboxVideo.addEventListener("error", showLightboxNotice)'),
+    "an unreadable image or video shows a notice in the lightbox",
+  );
 });
 
-test("flow switcher restores the remembered step and plays it", () => {
-  assert.ok(viewerSource.includes('aria-label="Flows"'), "flow list nav exists");
-  assert.ok(viewerSource.includes("switchFlow(index)"), "flow buttons call switchFlow");
-  assert.ok(
-    viewerSource.includes("select(stepByFlow[flowIndex], { autoplay: true })"),
-    "switching a flow plays its remembered step",
-  );
-  assert.ok(
-    viewerSource.includes("stepByFlow[flowIndex] = index"),
-    "select remembers the position per flow",
-  );
-  assert.ok(
-    viewerSource.includes("if (index === flowIndex) return;"),
-    "re-clicking the current flow is a no-op",
-  );
+test("playback never starts on its own and stops on step moves", () => {
+  assert.equal(viewerSource.includes("autoplay"), false, "no autoplay anywhere");
+  assert.equal(viewerSource.includes(".play()"), false, "the viewer never calls play()");
+  assert.equal(viewerSource.includes('addEventListener("ended"'), false, "no automatic continuous playback");
+  const pauseCalls = viewerSource.split("lightboxVideo.pause()").length - 1;
+  assert.ok(pauseCalls >= 2, "playback stops on step moves and when the lightbox closes");
 });
 
 test("template texts are English only", () => {
@@ -115,5 +141,12 @@ test("skill and spec keep referencing the integrated spec", () => {
     specSource.includes("## 操作と変化を見せる"),
     "spec owns the recording annotation specification",
   );
-  assert.ok(specSource.includes("### ビューアの見た目"), "spec owns the viewer appearance");
+  assert.ok(
+    specSource.includes("### ビューアの振る舞い") && specSource.includes("### ビューアの見た目"),
+    "spec owns the unified viewer behavior and appearance",
+  );
+  assert.ok(
+    specSource.includes("`expected`") && specSource.includes("`image`") && specSource.includes("`video`"),
+    "spec documents the step media contract",
+  );
 });

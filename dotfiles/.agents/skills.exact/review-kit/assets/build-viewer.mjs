@@ -1,20 +1,19 @@
 // Builds the standalone step viewer `review-kit/index.html` from a
-// review-kit folder of per-flow recording sets:
+// review-kit folder:
 //
 //   review-kit/
-//   ├── <flow>/
-//   │   ├── metadata.json
-//   │   └── <step videos>.mp4
-//   └── index.html  (generated)
+//   ├── metadata.json  (scenario source of truth: title + flows + steps)
+//   ├── <flow>/<step media>.mp4|.png
+//   └── index.html     (generated)
 //
-// Each flow's metadata.json has the shape
-// { "title": "...", "steps": [{ "action": "...", "video": "..." }] }
-// where "video" resolves relative to the flow folder. Flows are ordered by
-// folder name and steps play in array order, receiving the viewer numbers
+// metadata.json holds the authored scenario: each step declares exactly one
+// of "video" or "image" (a path relative to the review-kit folder) plus an
+// optional "expected" description. Images and videos mix freely within a
+// flow. Flows and steps render in array order, receiving the viewer numbers
 // 1..N within their flow.
 // Usage: node build-viewer.mjs <review-kit-dir>
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,7 +26,7 @@ export function buildViewerHtml(recordingsDir) {
   if (!template.includes(PLACEHOLDER)) {
     throw new Error(`Template ${TEMPLATE} lost its ${PLACEHOLDER} placeholder.`);
   }
-  return template.replace(PLACEHOLDER, embed(readFlows(recordingsDir)));
+  return template.replace(PLACEHOLDER, embed(readSet(recordingsDir)));
 }
 
 export function main(argv) {
@@ -50,66 +49,96 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.exit(main(process.argv));
 }
 
-function readFlows(recordingsDir) {
-  const flowIds = readdirSync(recordingsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  if (flowIds.length === 0) {
-    throw new Error(`${recordingsDir}: no flow folders with metadata.json.`);
-  }
-  return { flows: flowIds.map((flowId) => readFlow(recordingsDir, flowId)) };
-}
-
-function readFlow(recordingsDir, flowId) {
-  const flowDir = join(recordingsDir, flowId);
-  const { title, steps } = readMetadata(flowDir);
-  return {
-    id: flowId,
-    title,
-    steps: steps.map(({ number, action, video }) => ({
-      number,
-      action,
-      video: `${flowId}/${video}`,
-    })),
-  };
-}
-
-function readMetadata(flowDir) {
-  const file = join(flowDir, METADATA);
+function readSet(recordingsDir) {
+  const file = join(recordingsDir, METADATA);
   if (!existsSync(file)) {
     throw new Error(`${file}: metadata.json not found.`);
   }
-  const { title, steps } = readJson(file);
+  const { title, flows } = readJson(file);
   if (typeof title !== "string" || !title.trim()) {
     throw new Error(`${file}: "title" must be a non-empty string.`);
   }
-  if (!Array.isArray(steps) || steps.length === 0) {
-    throw new Error(`${file}: "steps" must be a non-empty array.`);
+  if (!Array.isArray(flows) || flows.length === 0) {
+    throw new Error(`${file}: "flows" must be a non-empty array.`);
   }
+  const seenIds = new Set();
   return {
     title,
-    steps: steps.map((step, index) => readStep(flowDir, file, step, index + 1)),
+    flows: flows.map((flow, index) => readFlow(recordingsDir, file, flow, index + 1, seenIds)),
   };
 }
 
-function readStep(flowDir, metadataFile, step, number) {
+function readFlow(recordingsDir, metadataFile, flow, index, seenIds) {
+  if (typeof flow !== "object" || flow === null || Array.isArray(flow)) {
+    throw new Error(`${metadataFile}: flow ${index} must be an object.`);
+  }
+  const { id, title, steps } = flow;
+  if (typeof id !== "string" || !id.trim()) {
+    throw new Error(`${metadataFile}: flow ${index} "id" must be a non-empty string.`);
+  }
+  if (seenIds.has(id)) {
+    throw new Error(`${metadataFile}: flow id "${id}" is duplicated.`);
+  }
+  seenIds.add(id);
+  if (typeof title !== "string" || !title.trim()) {
+    throw new Error(`${metadataFile}: flow ${index} "title" must be a non-empty string.`);
+  }
+  if (!Array.isArray(steps) || steps.length === 0) {
+    throw new Error(`${metadataFile}: flow ${index} "steps" must be a non-empty array.`);
+  }
+  return {
+    id,
+    title,
+    steps: steps.map((step, stepIndex) =>
+      readStep(recordingsDir, metadataFile, id, step, stepIndex + 1),
+    ),
+  };
+}
+
+function readStep(recordingsDir, metadataFile, flowId, step, number) {
   if (typeof step !== "object" || step === null || Array.isArray(step)) {
-    throw new Error(`${metadataFile}: step ${number} must be an object.`);
+    throw new Error(`${metadataFile}: flow "${flowId}" step ${number} must be an object.`);
   }
-  const { action, video } = step;
+  const { action, video, image, expected } = step;
   if (typeof action !== "string" || !action.trim()) {
-    throw new Error(`${metadataFile}: step ${number} "action" must be a non-empty string.`);
-  }
-  if (typeof video !== "string" || !video.trim() || isAbsolute(video) || video.startsWith("..")) {
     throw new Error(
-      `${metadataFile}: step ${number} "video" must be a relative path inside the recordings folder.`,
+      `${metadataFile}: flow "${flowId}" step ${number} "action" must be a non-empty string.`,
     );
   }
-  if (!existsSync(join(flowDir, video))) {
-    throw new Error(`${metadataFile}: step ${number} video "${video}" does not exist.`);
+  if ((video !== undefined) === (image !== undefined)) {
+    throw new Error(
+      `${metadataFile}: flow "${flowId}" step ${number} must hold exactly one of "video" or "image".`,
+    );
   }
-  return { number, action, video };
+  if (expected !== undefined && (typeof expected !== "string" || !expected.trim())) {
+    throw new Error(
+      `${metadataFile}: flow "${flowId}" step ${number} "expected" must be a non-empty string when present.`,
+    );
+  }
+  const field = video !== undefined ? "video" : "image";
+  const media = readMedia(recordingsDir, metadataFile, flowId, number, step[field], field);
+  const entry = { number, action, [field]: media };
+  if (expected !== undefined) entry.expected = expected;
+  return entry;
+}
+
+function readMedia(recordingsDir, metadataFile, flowId, number, path, field) {
+  const outsideSet =
+    typeof path !== "string" ||
+    !path.trim() ||
+    isAbsolute(path) ||
+    path.split(/[\\/]/).includes("..");
+  if (outsideSet) {
+    throw new Error(
+      `${metadataFile}: flow "${flowId}" step ${number} "${field}" must be a relative path inside the recordings folder.`,
+    );
+  }
+  if (!existsSync(join(recordingsDir, path))) {
+    throw new Error(
+      `${metadataFile}: flow "${flowId}" step ${number} ${field} "${path}" does not exist.`,
+    );
+  }
+  return path;
 }
 
 function readJson(file) {
