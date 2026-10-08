@@ -2,7 +2,16 @@ patch:
   schema_list:
     - schema: kagiroi
   "ascii_composer/switch_key/Shift_L": noop
+  "ascii_composer/switch_key/Shift_R": noop
+  "ascii_composer/switch_key/Caps_Lock": noop
+  "ascii_composer/switch_key/Eisu_toggle": noop
   "ascii_composer/switch_key/Zenkaku_Hankaku": clear
+  # The switch key table carries these assignments only
+  # (dotfiles/rime/SPEC.md, "切替キー"): librime skips noop entries when
+  # loading the bindings, so the listed keys never reach the ascii mode
+  # switch and pass Rime through untouched (Caps_Lock stays an
+  # application-level uppercase lock); Zenkaku_Hankaku alone clears
+  # ascii_mode.
   # The managed key_binder carries no bindings: the listed editing, mode
   # and emoji shortcuts stay unassigned in Rime so the key events pass
   # through to the application in every IME ON state
