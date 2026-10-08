@@ -9,10 +9,6 @@ description: >-
 
 # Research Strategy
 
-## 目的と手段の整合
-
-目的ごとに手段と web の可否を切り分ける。実リポジトリで追うべきものをウェブ検索の「たぶん」で済ませず、口コミが必要なものを公式ドキュメントだけで済ませない。
-
 ## 既存アプリ・OSSの選定
 
 既存アプリやOSSを提案するときは、要件適合と併せて、採用実績・成熟度・継続性を評価する。同一カテゴリ・用途の候補との相対比較を基本とし、次の項目は比較上のマイナス要素として扱う。固定閾値による足切りは行わず、該当したことだけで候補を除外しない。
@@ -47,14 +43,7 @@ OSS の実装・挙動は、同じ ref のドキュメントとソースをロ�
 
 ## 手段の選択
 
-```mermaid
-flowchart TD
-  Q{"何を知りたい？"}
-  Q -->|"OSS の実装・挙動の正確性"| A["A · ローカルミラーの実ファイル<br/>web 禁"]
-  Q -->|"公式の仕様 / 非 OSS"| B["B · 公式ドキュメント<br/>web 可"]
-  Q -->|"人々の実感・トラブル"| C["C · reddit · 技術記事<br/>web 可"]
-  Q -->|"サイトからの大量取得"| D["D · ブラウザでキャプチャ → API を fetch/curl 再生<br/>web 可"]
-```
+実リポジトリで追うべきものをウェブ検索の「たぶん」で済ませず、口コミが必要なものを公式ドキュメントだけで済ませない。
 
 | 目的 | 手段 | web | 欲しいもの |
 | --- | --- | --- | --- |
@@ -79,25 +68,18 @@ flowchart LR
 
 ### クローンと ref の選択
 
-`~/mirrors/<host>/<owner>/<repo>` にクローンし、既存なら `origin` の URL が対象リポジトリと一致することを確認してから fetch する。取得に失敗したら、古い内容を最新として扱わず停止する。
+`~/mirrors/<host>/<owner>/<repo>` にクローンし、既存なら `origin` の URL が対象リポジトリと一致することを確認してから fetch する。origin が一致しない場合や fetch に失敗した場合は停止し、古い内容を最新として扱わない。
 
 ```bash
 DEST=~/mirrors/github.com/owner/repo
 URL=https://github.com/owner/repo.git
-
-if [ -d "$DEST/.git" ]; then
-  if [ "$(git -C "$DEST" remote get-url origin)" != "$URL" ]; then
-    echo "Mirror origin does not match the requested repository" >&2
-    exit 1
-  fi
-  git -C "$DEST" fetch origin --prune --tags
-else
-  mkdir -p "$(dirname "$DEST")"
-  git clone "$URL" "$DEST"
-fi
+git clone "$URL" "$DEST"  # まだ無いとき
+git -C "$DEST" remote get-url origin  # 既存なら $URL に一致するか
+git -C "$DEST" fetch origin --prune --tags
+COMMIT=$(git -C "$DEST" rev-parse --verify "$REF^{commit}")
 ```
 
-依頼に版・branch・commit の指定があればその tag（`refs/tags/<tag>`）、取得済みの remote branch（`refs/remotes/origin/<branch>`）、または commit ID を `REF` とする。指定がなければ `git -C "$DEST" ls-remote --symref origin HEAD` で現行のデフォルト branch を確認し、対応する `refs/remotes/origin/<branch>` を選ぶ。remote HEAD を特定できない場合や ref を取得できない場合は停止する。`COMMIT=$(git -C "$DEST" rev-parse --verify "$REF^{commit}")` で commit ID を確定し、以下はその commit を使う。`fetch` は作業ツリーを更新しないため、作業ツリーの `HEAD` やファイルを選んだ ref の内容とみなさない。checkout・reset で既存の変更を上書きしない。
+依頼に版・branch・commit の指定があればその tag（`refs/tags/<tag>`）、取得済みの remote branch（`refs/remotes/origin/<branch>`）、または commit ID を `REF` とする。指定がなければ `git -C "$DEST" ls-remote --symref origin HEAD` で現行のデフォルト branch を確認し、対応する `refs/remotes/origin/<branch>` を選ぶ。remote HEAD を特定できない場合や ref を取得できない場合は停止する。`COMMIT` に確定した commit ID を以下で使う。`fetch` は作業ツリーを更新しないため、作業ツリーの `HEAD` やファイルを選んだ ref の内容とみなさない。checkout・reset で既存の変更を上書きしない。
 
 ### ドキュメント
 
@@ -169,5 +151,7 @@ Access Denied 等でブロックされたら、順に試す。
 ## 出力
 
 - OSS の実装・挙動: 確認した commit ID、リポジトリ相対のファイルパス・行番号、該当するシンボルを示し、選んだ commit の実コードとドキュメントを根拠に結論を述べる。作業ツリーのパスを、そこに存在しない版の内容へのリンクとして扱わない。
-- 公式仕様・プロプライエタリ・SaaS: 一次情報の URL、確認日、分かる場合は対象バージョンと公開・更新日を示す。ソースを読んでいない場合はコードのパス・シンボルを要求しない。
-- コミュニティの実感・トラブル: 証言ごとの URL、確認日、分かる場合は投稿日時と対象バージョンを示し、公式仕様や実装の根拠とは区別する。ソースを読んでいない場合はコードのパス・シンボルを要求しない。
+- 公式仕様・プロプライエタリ・SaaS: 一次情報の URL、確認日、分かる場合は対象バージョンと公開・更新日を示す。
+- コミュニティの実感・トラブル: 証言ごとの URL、確認日、分かる場合は投稿日時と対象バージョンを示し、公式仕様や実装の根拠とは区別する。
+
+いずれも、ソースを読んでいない場合はコードのパス・シンボルを要求しない。

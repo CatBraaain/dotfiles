@@ -60,11 +60,8 @@ description: >-
 
 ソースファイルは新聞記事のように読めること（newspaper metaphor。Robert C. Martin『Clean Code』）。
 
-- 冒頭に高抽象度の概要 — そのファイルが何を提供するか（公開 API、エントリポイント、主要な流れ）。
-- 下へ行くほど抽象度を下げる。末尾に低レベルな細部（下請け関数、定数）を置く。
-- 読み手は冒頭だけ読んで大意を掴み、詳細は必要になったら下へ読み進める。
-
-配置を変える際は依存関係と初期化順を保つ。トップレベルで参照する値を初期化前の位置へ移さない。
+- 冒頭に高抽象度の概要（公開 API、エントリポイント、主要な流れ）を置き、下へ行くほど抽象度を下げ、末尾に低レベルな細部（下請け関数、定数）を置く。
+- 配置を変える際は依存関係と初期化順を保つ。トップレベルで参照する値を初期化前の位置へ移さない。
 
 ### 名前
 
@@ -82,27 +79,8 @@ description: >-
 
 ### 式に名前を付ける
 
-複雑な条件をそのまま `if` に書かず、一度変数で受ける（explaining variable / summary variable）:
-
-Before:
-
-```js
-if (user.age > 18 && user.hasSubscription && !user.isBanned) {
-  grantPremiumAccess(user);
-}
-```
-
-After:
-
-```js
-const canAccessPremium =
-  user.age > 18 && user.hasSubscription && !user.isBanned;
-if (canAccessPremium) {
-  grantPremiumAccess(user);
-}
-```
-
-真偽の意味を名前が語る。条件が込み入っているなら De Morgan の法則で整理してから。
+- 複雑な条件はそのまま `if` に書かず、一度変数で受ける（explaining variable / summary variable）。真偽の意味を名前が語る。
+- 条件が込み入っているなら De Morgan の法則で整理してから。
 
 ### 制御フロー
 
