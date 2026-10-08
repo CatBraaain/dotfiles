@@ -119,3 +119,5 @@ commands:
       - '(?i:^/mnt/c/WINDOWS/system32/wsl\.exe(\s|$))'
   - ask:
       - '(^|\|\s*)pi(\s|$)'
+  - allow:
+      - '^pi (--help|--version|-h|-v)(\s|$)'
