@@ -120,8 +120,8 @@ local function new_environment(candidates)
     function segment:has_tag(tag)
         return tag == "kagiroi"
     end
-    local context = { options = {}, commits = {}, commit_slots = {}, properties = {},
-        mock_candidates = segment.menu.candidates }
+    local context = { options = {}, option_writes = {}, caret_writes = 0,
+        commits = {}, commit_slots = {}, properties = {}, mock_candidates = segment.menu.candidates }
     function context:get_property(name) return self.properties[name] or "" end
     function context:set_property(name, value) self.properties[name] = value end
     function segment:get_candidate_at(index)
@@ -153,6 +153,7 @@ local function new_environment(candidates)
         return self.options[name] or false
     end
     function context:set_option(name, value)
+        self.option_writes[name] = (self.option_writes[name] or 0) + 1
         self.options[name] = value
     end
     function context:highlight(index)
@@ -198,13 +199,15 @@ local function new_environment(candidates)
         __index = function(table, key)
             if key == "input" then
                 return rawget(table, "_input") or ""
+            elseif key == "caret_pos" then
+                return rawget(table, "_caret_pos")
             end
             return nil
         end,
         __newindex = function(table, key, value)
             if key == "input" then
                 rawset(table, "_input", value)
-                rawset(table, "caret_pos", #value)
+                rawset(table, "_caret_pos", #value)
                 segment.selected_index = 0
                 table.refreshed = true
                 local state = bunsetsu.state(table)
@@ -219,6 +222,9 @@ local function new_environment(candidates)
                         bunsetsu.filter.func(translation, filter_env)
                     end) do end
                 end
+            elseif key == "caret_pos" then
+                rawset(table, "_caret_pos", value)
+                table.caret_writes = table.caret_writes + 1
             else
                 rawset(table, key, value)
             end
@@ -246,6 +252,75 @@ local function press(env, keycode, modifiers)
         super = function() return modifiers.super or false end,
         shift = function() return modifiers.shift or false end,
     }, env)
+end
+
+do
+    local append_cases = {
+        { key = string.byte("k"), expected = "かな", result = kNoop },
+        { key = string.byte("-"), expected = "かな", result = kNoop },
+        { key = string.byte("1"), expected = "かな１", result = kAccepted },
+        { key = string.byte("."), expected = "かな。", result = kAccepted },
+        { key = 0xffb1, expected = "かな1", result = kAccepted },
+    }
+    for _, case in ipairs(append_cases) do
+        for _, pending in ipairs({ false, true }) do
+            for _, hidden in ipairs({ false, true }) do
+                for _, expanded in ipairs({ false, true }) do
+                    for _, at_end in ipairs({ false, true }) do
+                        local env, context = new_environment()
+                        context.input = "かな"
+                        context.options._kagiroi_off_pending = pending
+                        context.options._kagiroi_hide_candidates = hidden
+                        context.options._kagiroi_expand_candidates = expanded
+                        context.caret_pos = at_end and #context.input or 0
+                        context.caret_writes = 0
+                        local result = press(env, case.key)
+                        assert(result == case.result and context.input == case.expected,
+                            "typing key " .. case.key .. " must preserve the input path and result")
+                        for _, option in ipairs({
+                            { name = "_kagiroi_off_pending", expected = false, writes = pending and 1 or 0 },
+                            { name = "_kagiroi_hide_candidates", expected = true, writes = hidden and 0 or 1 },
+                            { name = "_kagiroi_expand_candidates", expected = false, writes = expanded and 1 or 0 },
+                        }) do
+                            local writes = context.option_writes[option.name] or 0
+                            assert(writes == option.writes,
+                                option.name .. " writes: actual=" .. writes .. " expected=" .. option.writes)
+                            assert(context:get_option(option.name) == option.expected,
+                                option.name .. " must reach the required typing value")
+                        end
+                        local expected_caret_writes = at_end and 0 or 1
+                        assert(context.caret_writes == expected_caret_writes,
+                            "caret writes: actual=" .. context.caret_writes .. " expected=" .. expected_caret_writes)
+                        assert(context.caret_pos == #context.input and #context.commits == 0,
+                            "typing must leave the caret at the end without committing")
+                    end
+                end
+            end
+        end
+    end
+
+    for _, key in ipairs({ string.byte("k"), string.byte("-") }) do
+        for _, hidden in ipairs({ false, true }) do
+            local env, context = new_environment()
+            context.options._kagiroi_hide_candidates = hidden
+            assert(press(env, key) == kNoop, "fresh reading must reach the speller")
+            local writes = context.option_writes._kagiroi_hide_candidates or 0
+            local expected_writes = hidden and 0 or 1
+            assert(writes == expected_writes,
+                "fresh hide writes: actual=" .. writes .. " expected=" .. expected_writes)
+            assert(context.caret_writes == 0, "fresh reading must not reset the end caret")
+            assert(context:get_option("_kagiroi_hide_candidates"), "fresh reading must hide candidates")
+        end
+    end
+
+    local env, context = new_environment()
+    context.input = "かな"
+    press(env, 0xff23)
+    context.option_writes = {}
+    press(env, 0xff23)
+    assert(context.option_writes._kagiroi_hide_candidates == 1
+        and context.option_writes._kagiroi_expand_candidates == 1,
+        "repeated Henkan must retain its intentional option refreshes")
 end
 
 -- The first Space converts to the first candidate with the list hidden, the

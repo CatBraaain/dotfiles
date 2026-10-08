@@ -204,10 +204,18 @@ local function keep_display_for_editing(context, env)
 end
 
 local function prepare_append(context)
-    context.caret_pos = #context.input
-    context:set_option("_kagiroi_off_pending", false)
-    context:set_option("_kagiroi_hide_candidates", true)
-    reset_expansion(context)
+    if context.caret_pos ~= #context.input then
+        context.caret_pos = #context.input
+    end
+    if context:get_option("_kagiroi_off_pending") then
+        context:set_option("_kagiroi_off_pending", false)
+    end
+    if not context:get_option("_kagiroi_hide_candidates") then
+        context:set_option("_kagiroi_hide_candidates", true)
+    end
+    if context:get_option("_kagiroi_expand_candidates") then
+        reset_expansion(context)
+    end
 end
 
 function Top.start_ascii_input(context, reserve_off)
@@ -454,7 +462,8 @@ function Top.func(key_event, env)
         end
         -- Only reading keys (letters and the hyphen) reach the speller from
         -- here; keep the candidate list hidden for the fresh reading.
-        if keycode >= 0x21 and keycode <= 0x7e then
+        if keycode >= 0x21 and keycode <= 0x7e
+            and not context:get_option("_kagiroi_hide_candidates") then
             context:set_option("_kagiroi_hide_candidates", true)
         end
         return kana_speller.func(key_event, env)
