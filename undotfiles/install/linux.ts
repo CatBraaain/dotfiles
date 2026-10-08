@@ -691,6 +691,14 @@ export async function run(
   try {
     const profile = await readInstallProfile(() => Bun.file(markingPath).text());
     runtime.log(`install profile: ${profile}`);
+    if (command === "sync") {
+      const auth = Bun.spawnSync(["sudo", "-v"], {
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      if (auth.exitCode !== 0) return 1;
+    }
     const bootstrap = new Bootstrap(parseConfig(await readConfig()), runtime);
     return command === "sync" ? await bootstrap.sync() : await bootstrap.diff();
   } catch (error) {
