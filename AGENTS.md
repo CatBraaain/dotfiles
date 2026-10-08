@@ -57,6 +57,8 @@ skill はスコープごとに正本を分ける。この規則は skill 本文�
 
 skill を読む指示は、ファイルパスではなく skill 名（例: `dsh-plugins` または `/skill:dsh-plugins`）で書く。ファイルを直接読む必要があるときは、現在のリポジトリまたは worktree のルートから `./.agents/skills/dsh-plugins/SKILL.md` を解決する。`~/.agents/skills/...` や `dotfiles/.agents/skills.exact/...` を読み込み先にしない。
 
+skill フォルダ内の spec ファイルは skill と同梱のスクリプトの開発・保守用であり、利用者には提示せず、利用手順から参照させない。`SKILL.md` の利用手順は、配布される文書と assets だけで完結させる。
+
 ## dotfiles/.pi
 
 dotfiles/.piを編集するときは必ずdotfiles/.pi/READMEを読む
