@@ -166,21 +166,25 @@
         overflow-wrap: anywhere;
       }
       .strip-row {
-        display: flex;
-        gap: 16px;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 240px;
+        grid-template-rows: auto auto auto;
+        column-gap: 16px;
         overflow-x: auto;
         padding: 4px 4px 12px;
       }
       .strip-item {
-        flex: none;
         display: grid;
-        gap: 6px;
-        align-content: start;
-        width: 240px;
+        grid-row: span 3;
+        grid-template-rows: subgrid;
+        row-gap: 6px;
       }
       .caption {
         display: grid;
-        gap: 2px;
+        grid-row: span 2;
+        grid-template-rows: subgrid;
+        row-gap: 2px;
         font-size: 13px;
         line-height: 18px;
         overflow-wrap: anywhere;
@@ -409,7 +413,7 @@
             thumb.append(img);
           }
           thumb.addEventListener("click", () => openLightbox(flowIndex, index));
-          itemEl.append(caption, thumb);
+          itemEl.append(thumb, caption);
           return itemEl;
         }
 

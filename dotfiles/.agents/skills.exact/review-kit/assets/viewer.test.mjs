@@ -51,7 +51,22 @@ test("the film strip replaces the stage viewer and stacks every flow", () => {
     assert.equal(viewerSource.includes(`id="${id}"`), false, `#${id} is gone`);
   }
   assert.match(viewerSource, /renderHeader\(\);\s*renderStrips\(\);/, "only the strip view renders");
-  assert.ok(viewerSource.includes("itemEl.append(caption, thumb)"), "caption is placed before the thumbnail");
+  assert.ok(viewerSource.includes("itemEl.append(thumb, caption)"), "the thumbnail is placed before the caption");
+  assert.match(
+    viewerSource,
+    /\.strip-row \{[^}]*display: grid;[^}]*grid-auto-flow: column;[^}]*overflow-x: auto;/s,
+    "the strip is a column-flow grid that scrolls horizontally",
+  );
+  assert.match(
+    viewerSource,
+    /\.strip-item \{[^}]*grid-row: span 3;[^}]*grid-template-rows: subgrid;/s,
+    "each step spans the shared thumb, action, and expectation rows",
+  );
+  assert.match(
+    viewerSource,
+    /\.caption \{[^}]*grid-row: span 2;[^}]*grid-template-rows: subgrid;/s,
+    "the caption shares the action and expectation rows so their heights match across a row",
+  );
   assert.ok(viewerSource.includes('img.loading = "lazy"'), "image thumbnails load lazily");
   assert.match(viewerSource, /FIRST_FRAME_FRAGMENT = "#t=0\.001"/, "video thumbnails show the first frame");
   assert.ok(viewerSource.includes('video.preload = "metadata"'), "video thumbnails preload metadata only");
