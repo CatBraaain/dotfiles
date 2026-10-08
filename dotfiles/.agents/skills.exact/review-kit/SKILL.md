@@ -162,7 +162,7 @@ check は操作終了時刻から360ms でフェードインし、ステップ�
 
 ## 録画の成果物とビューア
 
-録画したステップ動画とステップ静止画の保存先は、`review-kit` フォルダの下の、正本（`review-kit/metadata.json`）のフロー識別子ごとのフォルダ `review-kit/<flow>/` とする。`<flow>` はフロー識別子であり、フローが1つでも `review-kit/<flow>/` に置く。メディアのパスは `metadata.json` に `review-kit` フォルダからの相対パスで書き、実際に保存する場所と一致させる。ビューアの単一の `index.html` は `review-kit` フォルダの直下に置く。テスト結果の中間ファイルを録画セットのフォルダに混在させない。
+録画したステップ動画とステップ静止画の保存先は、`review-kit` フォルダの下の、正本（`review-kit/metadata.json`）のフロー識別子ごとのフォルダ `review-kit/<flow>/` とする。`<flow>` はフロー識別子であり、フローが1つでも `review-kit/<flow>/` に置く。メディアのパスは `metadata.json` に `review-kit` フォルダからの相対パスで書き、実際に保存する場所と一致させる。ビューアの単一の `index.html` は `review-kit` フォルダの直下に置く。テスト結果の中間ファイルを録画セットのフォルダに混在させない。正本の `metadata.json` はプロジェクトの git 管理に含める。生成物（`review-kit/<flow>/` 以下のメディアと `index.html`）は version 管理から除外し、除外は `review-kit/.gitignore` に `*` と `!metadata.json` を置くのが例である。媒体を除外した状態ではビューアを再生成できず、ビューアの生成は録画時点でのみ成立する。
 
 `metadata.json` の書式と、ビューアの見た目・振る舞いの正本は、この skill のディレクトリを基点とする `assets/SPEC.md` の「ビューアと生成スクリプト」である。フローとステップの並びは `metadata.json` の配列順であり、フロー内のステップ番号は 1 から採番される。
 
