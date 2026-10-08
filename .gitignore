@@ -1,5 +1,6 @@
 dist
 node_modules
+/.env
 
 dotfiles/.gitconfig.local
 dotfiles/**/*.build-machine.ts

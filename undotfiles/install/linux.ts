@@ -2,6 +2,7 @@ import { readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { markingPath, readInstallProfile } from "./marking.ts";
 
 export type Key =
   | "apt"
@@ -688,6 +689,8 @@ export async function run(
   }
 
   try {
+    const profile = await readInstallProfile(() => Bun.file(markingPath).text());
+    runtime.log(`install profile: ${profile}`);
     const bootstrap = new Bootstrap(parseConfig(await readConfig()), runtime);
     return command === "sync" ? await bootstrap.sync() : await bootstrap.diff();
   } catch (error) {

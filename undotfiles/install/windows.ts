@@ -1,8 +1,10 @@
 // Windows bootstrap installer: installs apps with winget and cleans up
 // desktop shortcuts and WinGet package links.
 //
-// Usage: bun windows.ts [personal|work] (defaults to "personal"). The "work"
-// profile skips personal-only apps such as Discord, Steam, and games.
+// Usage: bun windows.ts [personal|work]. The argument must match the
+// INSTALL_PROFILE marking in the repository root .env; without the argument
+// the marking value is used. The "work" profile skips personal-only apps
+// such as Discord, Steam, and games.
 //
 // Requires Administrator. When not elevated, the script relaunches itself via
 // gsudo (one UAC prompt); `gsudo status IsElevated` exits with 0 once
@@ -12,8 +14,14 @@ import { mkdtemp } from "node:fs/promises";
 import { readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import {
+  isInstallProfile,
+  markingPath,
+  readInstallProfile,
+  type InstallProfile,
+} from "./marking.ts";
 
-type Profile = "personal" | "work";
+type Profile = InstallProfile;
 
 const unmanagedPackages: readonly string[] = [
   // keep-sorted start by_regex=\..+ sticky_comments=no
@@ -90,7 +98,7 @@ const managedDevPackages: readonly string[] = [
 ];
 
 async function main(): Promise<void> {
-  const profile = parseProfile();
+  const profile = await resolveProfile(process.argv.slice(2));
   if (!isElevated()) await selfElevate(profile);
   installWingetPackages(profile);
   await installRustDesk().catch((error: unknown) =>
@@ -204,12 +212,18 @@ function linkWingetPackageExes(): void {
   }
 }
 
-function parseProfile(): Profile {
-  const value = process.argv[2] ?? "personal";
-  if (value !== "personal" && value !== "work") {
-    throw new Error(`unknown profile "${value}" (expected "personal" or "work")`);
-  }
-  return value;
+async function resolveProfile(arguments_: readonly string[]): Promise<Profile> {
+  const marking = await readInstallProfile(() => Bun.file(markingPath).text());
+  const requested = arguments_[0];
+  if (requested === undefined) return marking;
+  if (!isInstallProfile(requested))
+    throw new Error(`unknown profile "${requested}" (expected "personal" or "work")`);
+  if (requested !== marking)
+    throw new Error(
+      `this machine is marked as "${marking}" in ${markingPath}, but "${requested}" was requested\n` +
+        `fix the argument, or update the marking file if the machine type changed`,
+    );
+  return requested;
 }
 
 function isElevated(): boolean {

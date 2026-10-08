@@ -5,6 +5,7 @@
 - 対応プラットフォーム: Linux。
 - 実行形式: `bun undotfiles/install/linux.ts <sync|diff>`。引数は`sync`または`diff`の1つだけを受け付ける。
 - 引数の省略または追加、`sync`・`diff`以外の引数は、使用法を出力して終了コード0以外で終了する。
+- 実行には、リポジトリルートの`.env`に`INSTALL_PROFILE=personal|work`で宣言したマシン種別のマーキングを必須とする。`.env`が存在しない、`INSTALL_PROFILE`が未定義、値が`personal`・`work`以外のときは、マーキングエラーを出力して異常終了し、パッケージ操作と`run`の実行を行わない。マーキングの値は`sync`と`diff`の振る舞いを変えない。
 - `just install` は `sync` を実行する入口とする。`setup.sh`はBootstrapの外部呼び出し元であり、このspecの対象外とする。
 - パッケージ値はバージョン指定を含められる。Install / Ensure Phaseでは、宣言的Managerの各パッケージ値を、導入済みかどうかにかかわらずバックエンドのinstall操作へ渡す。`apt`と`flatpak`は未導入のパッケージだけをinstallする。バージョン指定がない値の最新化と、指定がある値への同期は、対象Managerの管理方式に従いバックエンドに委譲する。
 - `sync` と `diff` は、状態取得、パッケージ操作、Custom Handler、`run`の失敗を記録して後続処理を続ける。すべての処理後、失敗が1件以上あれば終了コード0以外で終了する。
