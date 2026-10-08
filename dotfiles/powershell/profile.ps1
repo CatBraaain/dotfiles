@@ -37,6 +37,12 @@ function eza-tree {
     eza --git-ignore --group-directories-first --tree $args
 }
 
+function restart-ime {
+    Get-CimInstance Win32_Process |
+        Where-Object { $_.Name -match 'IME|InputApp' } |
+        Select-Object ProcessId, Name, ExecutablePath
+}
+
 # DO NOT MODIFY -- coreutils -- 60b36fc6-2d59-49df-be51-28dd2f4c3c9a
 # vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 # Inlining the template into the profile shaves off ~10ms (25%).
