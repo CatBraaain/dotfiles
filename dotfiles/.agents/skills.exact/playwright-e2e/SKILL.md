@@ -21,8 +21,27 @@ E2E テストは、網羅性を確認するためのものと、人が操作を�
 
 ## レビューの見せ方
 
-1. `trace: "on"` で実行する
-2. `npx playwright show-report` を開く
+レビューの実行と閲覧は package.json の scripts 経由で行う。`@review` のテストや
+レビューの仕組みを用意するとき、次の scripts を package.json に登録する。対象
+プロジェクトに E2E の script 命名規約があれば、名前はそれに合わせる。
+
+```json
+{
+  "scripts": {
+    "review:test": "playwright test --grep @review --trace on",
+    "review:open": "playwright show-report"
+  }
+}
+```
+
+trace は config に入れず `review:test` のフラグで on にする。網羅性のための
+テストで trace が常時生成される副作用を避けるためである。網羅性のためのテストは
+通常どおり実行する。
+
+手順:
+
+1. `review:test` を実行し、trace 付きの実行結果を作る
+2. `review:open` で report を開く
 3. 見る人には検索ワード付き URL を渡す: `http://localhost:9323/#?q=%40review`。
    開くと `@review` のテストだけが一覧に残る。動かないときは report の検索
    ボックスに `@review` と入力する
