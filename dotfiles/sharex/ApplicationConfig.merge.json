@@ -1,16 +1,25 @@
 {
-  "AfterCaptureJob": "CopyImageToClipboard, SaveImageToFile",
-  "AfterUploadJob": "None",
-  "PlaySoundAfterCapture": false,
-  "PlaySoundAfterUpload": false,
-  "ShowToastNotificationAfterTaskCompleted": false,
-  "ShowMagnifier": false,
-  "ShowEditorPanTip": false,
-  "ShowCursor": false,
-  "EditorNewImageTransparent": true,
-  "NameFormatPattern": "%y-%mo-%d %h %mi %s",
-  "NameFormatPatternActiveWindow": "%y-%mo-%d %h %mi %s",
-  "AutoFillBackground": false,
+  "DefaultTaskSettings": {
+    "AfterCaptureJob": "CopyImageToClipboard, SaveImageToFile",
+    "AfterUploadJob": "None",
+    "GeneralSettings": {
+      "PlaySoundAfterCapture": false,
+      "PlaySoundAfterUpload": false,
+      "ShowToastNotificationAfterTaskCompleted": false
+    },
+    "CaptureSettings": {
+      "ShowCursor": false,
+      "SurfaceOptions": {
+        "ShowMagnifier": false,
+        "ShowEditorPanTip": false,
+        "EditorNewImageTransparent": true
+      }
+    },
+    "UploadSettings": {
+      "NameFormatPattern": "%y-%mo-%d %h %mi %s",
+      "NameFormatPatternActiveWindow": "%y-%mo-%d %h %mi %s"
+    }
+  },
   "Language": "English",
   "SilentRun": true,
   "TrayLeftClickAction": "None",
@@ -18,7 +27,5 @@
   "AutoCheckUpdate": false,
   "UseCustomScreenshotsPath": true,
   "CustomScreenshotsPath": "%userprofile%\\Downloads",
-  "SaveImageSubFolderPattern": "",
-  "AcceptInvalidSSLCertificates": false,
-  "ShowUploadWarning": false
+  "SaveImageSubFolderPattern": ""
 }
