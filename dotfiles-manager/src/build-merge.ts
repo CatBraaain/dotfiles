@@ -7,22 +7,24 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
 import { parse as parseIni, stringify as stringifyIni } from "js-ini";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import {
-  isMap,
-  parseDocument,
-  stringify as stringifyYaml,
-  visit,
-  type Pair,
-  type ParsedNode,
-} from "yaml";
+import { isMap, isNode, isScalar, parseDocument, visit, type YAMLMap } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
+import {
+  copyYamlNotation,
+  ownEntries,
+  readYamlValue,
+  rememberYamlNotation,
+  stringifyYamlValue,
+  yamlKey,
+} from "./yaml-notation.ts";
 
 type FileFormat = "json" | "toml" | "yaml" | "ini";
 type MergeOp = "append" | "remove" | "replace" | "unset";
-type PlainObject = Record<string, unknown>;
+type PlainObject = Record<string | symbol, unknown>;
+type MergePath = string | (string | symbol)[];
 type RawJsonNumber = { readonly rawJSON: string };
 type Operation = { key: string; value: unknown };
-type Operations = Map<string, Partial<Record<MergeOp, Operation>>>;
+type Operations = Map<MergePath, Partial<Record<MergeOp, Operation>>>;
 type Entry = { path: string; isDirectory: boolean };
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
@@ -43,7 +45,7 @@ const fileFormats = {
     stringify: (value: unknown) => `${JSON.stringify(value, null, 2)}\n`,
   },
   yaml: {
-    stringify: (value: unknown) => stringifyYaml(value),
+    stringify: stringifyYamlValue,
   },
   toml: {
     stringify: (value: unknown) => {
@@ -160,12 +162,13 @@ function parseLayer(content: string, format: FileFormat): Layer {
       },
     });
   }
-  if (!isMap(document.contents)) return { normal: document.toJSON() ?? {}, operations: new Map() };
+  if (!isMap(document.contents)) {
+    const normal = format === "yaml" ? readYamlValue(document.contents) : document.toJSON();
+    return { normal: normal ?? {}, operations: new Map() };
+  }
 
   const operations: Operations = new Map();
-  // Keep one conversion context so aliases resolve against this document while
-  // duplicate operation keys continue to be processed individually.
-  const yamlContext: ToJSContext = {
+  const jsonContext: ToJSContext = {
     anchors: new Map(),
     doc: document,
     keep: false,
@@ -173,7 +176,12 @@ function parseLayer(content: string, format: FileFormat): Layer {
     mapKeyWarned: false,
     maxAliasCount: 100,
   };
-  const { normal } = parsePairs(document.contents.items, "", operations, yamlContext);
+  const { normal } = parsePairs(
+    document.contents,
+    "",
+    operations,
+    format === "yaml" ? undefined : jsonContext,
+  );
   return { normal, operations };
 }
 
@@ -323,31 +331,41 @@ type ParsedPairs = { normal: PlainObject; hasOperations: boolean };
 // Objects holding only operation keys are dropped from the normal result so
 // they do not take part in the deep merge.
 function parsePairs(
-  items: readonly Pair<ParsedNode, ParsedNode | null>[],
-  prefix: string,
+  map: YAMLMap.Parsed,
+  prefix: MergePath,
   operations: Operations,
-  context: ToJSContext,
+  context: ToJSContext | undefined,
 ): ParsedPairs {
   const normal: PlainObject = {};
   let hasOperations = false;
-  for (const pair of items) {
-    const key = String(pair.key?.toJSON());
-    const operation = matchOperationKey(key);
+  for (const pair of map.items) {
+    const key = context ? String(pair.key?.toJSON()) : yamlKey(pair.key);
+    const operation = typeof key === "string" ? matchOperationKey(key) : undefined;
     if (operation) {
-      const path = prefix + operation.path;
+      const path = extendMergePath(prefix, operation.path);
       registerOperation(
         operations,
         path,
         operation.op,
-        `${path}.$${operation.op}`,
-        pair.value ? toJS(pair.value, null, context) : undefined,
+        `${mergePathText(path)}.$${operation.op}`,
+        context
+          ? pair.value
+            ? toJS(pair.value, null, context)
+            : undefined
+          : readYamlValue(pair.value),
       );
       hasOperations = true;
       continue;
     }
     if (isMap(pair.value)) {
-      const child = parsePairs(pair.value.items, `${prefix}${key}.`, operations, context);
-      if (child.hasOperations && Object.keys(child.normal).length === 0) {
+      const path = extendMergePath(prefix, key);
+      const child = parsePairs(
+        pair.value,
+        typeof path === "string" ? `${path}.` : path,
+        operations,
+        context,
+      );
+      if (child.hasOperations && ownEntries(child.normal).length === 0) {
         hasOperations = true;
         continue;
       }
@@ -355,8 +373,17 @@ function parsePairs(
       hasOperations ||= child.hasOperations;
       continue;
     }
-    setOwnProperty(normal, key, pair.value ? toJS(pair.value, null, context) : undefined);
+    setOwnProperty(
+      normal,
+      key,
+      context
+        ? pair.value
+          ? toJS(pair.value, null, context)
+          : undefined
+        : readYamlValue(pair.value),
+    );
   }
+  if (!context) rememberYamlNotation(map, normal);
   return { normal, hasOperations };
 }
 
@@ -397,20 +424,40 @@ function matchOperationKey(key: string): { path: string; op: MergeOp } | undefin
   return { path: match[1], op: match[2] as MergeOp };
 }
 
+function extendMergePath(prefix: MergePath, key: string | symbol): MergePath {
+  if (typeof prefix === "string" && typeof key === "string") return prefix + key;
+  const ancestors = typeof prefix === "string" ? prefix.split(".").slice(0, -1) : prefix;
+  return [...ancestors, ...(typeof key === "string" ? key.split(".") : [key])];
+}
+
+function mergePathText(path: MergePath): string {
+  return typeof path === "string" ? path : path.map(String).join(".");
+}
+
 function registerOperation(
   operations: Operations,
-  path: string,
+  path: MergePath,
   op: MergeOp,
   key: string,
   value: unknown,
 ): void {
+  if (Array.isArray(path)) {
+    const parts = path;
+    path =
+      [...operations.keys()].find(
+        (existing) =>
+          Array.isArray(existing) &&
+          existing.length === parts.length &&
+          existing.every((part, index) => part === parts[index]),
+      ) ?? path;
+  }
   const pathOperations = operations.get(path) ?? {};
   const previous = pathOperations[op];
   pathOperations[op] = {
     key,
     value:
       Array.isArray(previous?.value) && Array.isArray(value)
-        ? [...previous.value, ...value]
+        ? copyYamlNotation([...previous.value, ...value], previous.value, value)
         : value,
   };
   operations.set(path, pathOperations);
@@ -454,6 +501,7 @@ function isPlainObject(value: unknown): value is PlainObject {
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
+    !isNode(value) &&
     !rawJson.isRawJSON(value)
   );
 }
@@ -461,8 +509,8 @@ function isPlainObject(value: unknown): value is PlainObject {
 function deepMerge(base: unknown, layer: unknown): unknown {
   if (!isPlainObject(base) || !isPlainObject(layer)) return layer;
 
-  const merged: PlainObject = { ...base };
-  for (const [key, layerValue] of Object.entries(layer)) {
+  const merged: PlainObject = copyYamlNotation({ ...base }, base, layer);
+  for (const [key, layerValue] of ownEntries(layer)) {
     const baseValue = Object.hasOwn(merged, key) ? merged[key] : undefined;
     setOwnProperty(merged, key, deepMerge(baseValue, layerValue));
   }
@@ -473,7 +521,8 @@ function applyOperations(base: unknown, operations: Operations): unknown {
   if (!isPlainObject(base)) {
     for (const [path, pathOperations] of operations) {
       if (pathOperations.replace) continue;
-      if (pathOperations.append) throw new Error(`merge append path not found: ${path}`);
+      if (pathOperations.append)
+        throw new Error(`merge append path not found: ${mergePathText(path)}`);
     }
     return base;
   }
@@ -490,10 +539,10 @@ function applyOperations(base: unknown, operations: Operations): unknown {
   return base;
 }
 
-type PathTarget = { parent: PlainObject; key: string; value: unknown };
+type PathTarget = { parent: PlainObject; key: string | symbol; value: unknown };
 
-function findPath(root: PlainObject, path: string): PathTarget | undefined {
-  const parts = path.split(".");
+function findPath(root: PlainObject, path: MergePath): PathTarget | undefined {
+  const parts = typeof path === "string" ? path.split(".") : [...path];
   const key = parts.pop()!;
   let parent = root;
   for (const part of parts) {
@@ -505,46 +554,49 @@ function findPath(root: PlainObject, path: string): PathTarget | undefined {
   return { parent, key, value: parent[key] };
 }
 
-function replacePath(root: PlainObject, path: string, value: unknown): void {
+function replacePath(root: PlainObject, path: MergePath, value: unknown): void {
   const target = findPath(root, path);
   if (target) target.parent[target.key] = value;
 }
 
-function unsetPath(root: PlainObject, path: string): void {
+function unsetPath(root: PlainObject, path: MergePath): void {
   const target = findPath(root, path);
   if (target) delete target.parent[target.key];
 }
 
-function appendAtPath(root: PlainObject, path: string, operation: Operation): void {
+function appendAtPath(root: PlainObject, path: MergePath, operation: Operation): void {
   const values = operation.value;
   if (!Array.isArray(values)) throw new Error(`merge append value must be array: ${operation.key}`);
 
   const target = findPath(root, path);
-  if (!target) throw new Error(`merge append path not found: ${path}`);
-  if (!Array.isArray(target.value)) throw new Error(`merge append requires array at path: ${path}`);
+  if (!target) throw new Error(`merge append path not found: ${mergePathText(path)}`);
+  if (!Array.isArray(target.value))
+    throw new Error(`merge append requires array at path: ${mergePathText(path)}`);
 
   target.value.push(...values);
 }
 
-function removeAtPath(root: PlainObject, path: string, operation: Operation): void {
+function removeAtPath(root: PlainObject, path: MergePath, operation: Operation): void {
   const values = operation.value;
   if (!Array.isArray(values)) throw new Error(`merge remove value must be array: ${operation.key}`);
 
   const target = findPath(root, path);
   if (!target) return;
   if (Array.isArray(target.value)) {
-    target.parent[target.key] = target.value.filter(
-      (value) => !values.some((matcher) => arrayElementsMatch(value, matcher)),
+    target.parent[target.key] = copyYamlNotation(
+      target.value.filter((value) => !values.some((matcher) => arrayElementsMatch(value, matcher))),
+      target.value,
     );
     return;
   }
   if (!isPlainObject(target.value)) {
-    throw new Error(`merge remove requires array or object at path: ${path}`);
+    throw new Error(`merge remove requires array or object at path: ${mergePathText(path)}`);
   }
-  if (!values.every((value) => typeof value === "string")) {
+  const keys = values.map((value) => (isScalar(value) ? value.value : value));
+  if (!keys.every((value) => typeof value === "string")) {
     throw new Error(`merge remove object keys must be strings: ${operation.key}`);
   }
-  for (const key of values) delete target.value[key];
+  for (const key of keys) delete target.value[key];
 }
 
 function arrayElementsMatch(left: unknown, right: unknown): boolean {
@@ -553,6 +605,7 @@ function arrayElementsMatch(left: unknown, right: unknown): boolean {
 
 function numericValues(value: unknown, seen = new Map<object, unknown>()): unknown {
   if (rawJson.isRawJSON(value)) return Number(value.rawJSON);
+  if (isScalar(value)) return value.value;
   if (typeof value !== "object" || value === null) return value;
   const prototype = Object.getPrototypeOf(value);
   if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
@@ -560,13 +613,13 @@ function numericValues(value: unknown, seen = new Map<object, unknown>()): unkno
 
   const result = Array.isArray(value) ? [] : Object.create(prototype);
   seen.set(value, result);
-  for (const [key, child] of Object.entries(value)) {
+  for (const [key, child] of ownEntries(value)) {
     setOwnProperty(result, key, numericValues(child, seen));
   }
   return result;
 }
 
-function setOwnProperty(target: object, key: string, value: unknown): void {
+function setOwnProperty(target: object, key: string | symbol, value: unknown): void {
   Object.defineProperty(target, key, {
     value,
     enumerable: true,
