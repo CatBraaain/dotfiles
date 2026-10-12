@@ -308,7 +308,7 @@ Rime の選択スキーマは Kagiroi とする。ローマ字入力は Kagiroi 
 
 dotfiles は共通の `default.custom.yaml`、`kagiroi.custom.yaml`、`kagiroi_romaji.custom.yaml`、宣言 `zenkaku.data.yaml` と生成スクリプト `zenkaku.build.ts`、条件付き変換・入力後補正と共通キー・候補操作の Lua、Weasel 固有の `weasel.custom.yaml`、Linux 固有の fcitx5 設定 `fcitx5/config` と `fcitx5/conf/rime.conf` を管理する。条件付き変換（`conditionals`）と入力後補正（`postroma`）の対応は `zenkaku.data.yaml` に宣言し、実行時の対応データも build 時に生成する。`fcitx5/conf/rime.conf` は、Linux の fcitx5-rime のアプリ内未確定表示を制御する設定として `~/.config/fcitx5/conf/rime.conf` へ配置する。Linux の fcitx5 では、`fcitx5/config` が `Muhenkan` を入力メソッドの無効化に割り当てる。fcitx5 が入力メソッドを無効化している間はキーが Rime に渡らず、fcitx5 の標準トリガーで戻る。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字 processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
 
-Windows の Weasel では入力状態の通知とトレイアイコンを表示しない。
+Windows の Weasel では入力状態の通知とトレイアイコンを表示しない。候補パネルは日本語字形の `Yu Gothic UI` で描画する。CJK 統合漢字の字形はフォントが決めるため、中国語フォントのままだと確定テキストと候補で字形がずれる。fcitx5 の候補ウィンドウも同じ理由で `fcitx5/conf/classicui.conf` が日本語字形の `Noto Sans CJK JP` を使う。
 
 ## 開発と検証
 

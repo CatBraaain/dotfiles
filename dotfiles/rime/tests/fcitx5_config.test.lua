@@ -31,6 +31,25 @@ assert(deactivate_keys == "Muhenkan",
     "fcitx5/config must assign Muhenkan to input method deactivation, got "
     .. tostring(deactivate_keys))
 
+-- The candidate window font lives next to conf/rime.conf in the same
+-- entry: the classic UI draws candidates, and a Chinese glyph source
+-- would shift CJK unified ideographs away from the committed text
+-- (dotfiles/rime/SPEC.md, "配置").
+local font
+local in_appearance = false
+for line in io.lines(entry_root .. "/conf/classicui.conf") do
+    local heading = line:match("^%s*%[([^%]]+)%]%s*$")
+    if heading then
+        in_appearance = heading == "Appearance"
+    elseif in_appearance then
+        local key, value = line:match("^%s*([%w]+)%s*=%s*(%S.*)$")
+        if key == "Font" then font = value end
+    end
+end
+assert(font == "Noto Sans CJK JP 10",
+    "fcitx5/conf/classicui.conf must draw candidates with Noto Sans CJK JP, got "
+    .. tostring(font))
+
 local remap_rows = {}
 for line in io.lines(remap_path) do
     local cells = {}

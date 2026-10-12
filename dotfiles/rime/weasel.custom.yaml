@@ -4,3 +4,6 @@ patch:
   "style/inline_preedit": true
   "style/preedit_type": preview
   "style/paging_on_scroll": true
+  "style/font_face": "Yu Gothic UI"
+  "style/label_font_face": "Yu Gothic UI"
+  "style/comment_font_face": "Yu Gothic UI"
