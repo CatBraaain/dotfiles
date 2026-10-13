@@ -329,6 +329,10 @@ export function buildDiffView(applied: readonly string[] | null, next: readonly 
 const REGISTRY_KEY = "HKCU\\SOFTWARE\\Microsoft\\IME\\15.0\\IMEJP\\RomaDef\\CustomRoma";
 const REGISTRY_VALUE = "table";
 
+// .reg import sources spell the hive out, like reg.exe exports do.
+const IMPORT_ROOT_KEY =
+  "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\IME\\15.0\\IMEJP\\RomaDef\\CustomRoma";
+
 // `reg.exe query` (read-only) fetches the currently applied table; this never
 // writes the registry. Returns null when no table can be read (non-Windows,
 // reg failure, missing value).
@@ -350,6 +354,26 @@ async function loadSpawnSync(): Promise<SpawnSync> {
   return ((await import(moduleSpec)) as { spawnSync: SpawnSync }).spawnSync;
 }
 
+type Fs = { writeFileSync: (path: string, data: Uint8Array) => void };
+
+async function loadFs(): Promise<Fs> {
+  return (await import("node:fs" as string)) as Fs;
+}
+
+// Temp path for the .reg file that carries the table into `reg import`.
+async function tempImportPath(): Promise<string> {
+  const env =
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
+  const fromEnv = env.TEMP ?? env.TMP ?? env.TMPDIR;
+  const dir =
+    fromEnv !== undefined && fromEnv !== ""
+      ? fromEnv
+      : ((await import("node:os" as string)) as { tmpdir: () => string }).tmpdir();
+  const sep = dir.includes("\\") ? "\\" : "/";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${dir}${sep}roma-def-table-${stamp}.reg`;
+}
+
 async function readAppliedTable(): Promise<string[] | null> {
   const proc = (await loadSpawnSync())("reg.exe", REG_QUERY, { windowsHide: true });
   if (proc.error !== undefined || proc.status !== 0) return null;
@@ -369,21 +393,57 @@ async function printDryRun(): Promise<void> {
   console.log((await loadDiffView()).view);
 }
 
+// reg import sources are UTF-16LE with a BOM (the format reg.exe itself
+// exports). The content here is ASCII, so 2-byte LE encoding is direct.
+function encodeRegFile(text: string): Uint8Array {
+  const bytes = new Uint8Array(2 + text.length * 2);
+  bytes[0] = 0xff;
+  bytes[1] = 0xfe;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    bytes[2 + i * 2] = code & 0xff;
+    bytes[3 + i * 2] = code >> 8;
+  }
+  return bytes;
+}
+
+// Builds the .reg import source carrying `bytes` as the CustomRoma `table`
+// value: the 5.00 header, the full-hive key line, and the value as a `hex:`
+// list wrapped at 25 bytes with regedit-style `,` + `\` continuations.
+// `reg add /d` rejects a table this large, so the write goes through a file.
+export function buildRegImportFile(bytes: Uint8Array): Uint8Array {
+  const tokens = [...bytes].map((byte) => byte.toString(16).padStart(2, "0"));
+  const lines: string[] = [
+    "Windows Registry Editor Version 5.00",
+    "",
+    `[${IMPORT_ROOT_KEY}]`,
+    `"${REGISTRY_VALUE}"=hex:${tokens.slice(0, 25).join(",")}`,
+  ];
+  for (let offset = 25; offset < tokens.length; offset += 25) {
+    lines[lines.length - 1] += ",\\";
+    lines.push(`  ${tokens.slice(offset, offset + 25).join(",")}`);
+  }
+  return encodeRegFile(`${lines.join("\r\n")}\r\n`);
+}
+
+// reg.exe prints diagnostics in the ANSI codepage (CP932 on ja-JP Windows);
+// decode accordingly so surfaced error text stays readable.
+function decodeDiagnostics(output: string | Uint8Array): string {
+  if (typeof output === "string") return output;
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+  return new TextDecoder(locale.startsWith("ja") ? "shift_jis" : "utf-8").decode(output);
+}
+
 async function applyTable(records: readonly string[]): Promise<void> {
   const bytes = buildRegistryTable(records);
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(",");
-  const proc = (await loadSpawnSync())(
-    "reg",
-    ["add", REGISTRY_KEY, "/v", REGISTRY_VALUE, "/t", "REG_BINARY", "/d", hex, "/f"],
-    { windowsHide: true },
-  );
+  const importPath = await tempImportPath();
+  (await loadFs()).writeFileSync(importPath, buildRegImportFile(bytes));
+  const proc = (await loadSpawnSync())("reg.exe", ["import", importPath], { windowsHide: true });
   if (proc.error !== undefined) throw new Error(`cannot run reg: ${String(proc.error)}`);
-  const stderr =
-    typeof proc.stderr === "string" ? proc.stderr : new TextDecoder().decode(proc.stderr);
-  const detail = stderr.trim();
+  const detail = decodeDiagnostics(proc.stderr).trim();
   if (proc.status !== 0)
     throw new Error(
-      `reg add failed with status ${proc.status}${detail === "" ? "" : `: ${detail}`}`,
+      `reg import failed with status ${proc.status}${detail === "" ? "" : `: ${detail}`}`,
     );
   console.log(`registered ${records.length} mappings`);
 }
