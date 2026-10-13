@@ -86,7 +86,8 @@ end
 
 local function new_clause(reading, env)
     local seg = Segment(0, #reading)
-    seg.tags = Set({ env.tag })
+    -- The kagiroi_kanji script_translator only queries segments carrying the kagiroi tag (librime script_translator.cc)
+    seg.tags = Set({ env.tag, "kagiroi" })
     local candidates, seen = {}, {}
     env.viterbi:analyze(reading)
     local has_dictionary_path = env.viterbi:best_n()() ~= nil
