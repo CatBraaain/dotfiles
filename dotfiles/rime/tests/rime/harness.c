@@ -4214,6 +4214,60 @@ static void test_bunsetsu_contexts_keep_separate_choices(void) {
     rime->destroy_session(first);
 }
 
+/* SPEC: the kanji fallback translator (kagiroi_kanji) lists single-kanji
+ * candidates after the word candidates. It only queries segments carrying its
+ * kagiroi tag, so a regression in the tag setup silently wipes the whole
+ * kanji list without any visible failure. */
+static void test_reading_candidates_include_kanji(void) {
+    const int kMaxPages = 40;
+    int kanji_found = 0;
+
+    fresh_session();
+    type_text("ka");
+    press(kSpace);
+    press(kSpace);
+    press(kTab);
+
+    char head[256] = {0};
+    char next_head[256] = {0};
+    for (int page = 0; page < kMaxPages; ++page) {
+        RIME_STRUCT(RimeContext, context);
+        if (!current_menu(&context)) {
+            check(False, "the ka conversion must keep a queryable menu");
+            rime->free_context(&context);
+            return;
+        }
+        int count = context.menu.num_candidates;
+        if (count == 0) {
+            rime->free_context(&context);
+            break;
+        }
+        snprintf(head, sizeof(head), "%s", context.menu.candidates[0].text);
+        for (int i = 0; i < count; ++i) {
+            const char* candidate = context.menu.candidates[i].text;
+            /* 果 exists only in the kanji dictionary, so its presence proves
+             * the fallback translator ran. */
+            if (candidate && strcmp(candidate, "果") == 0) kanji_found = 1;
+        }
+        rime->free_context(&context);
+
+        press(kPageDown);
+        if (!current_menu(&context)) {
+            check(False, "Page_Down must keep a queryable menu");
+            rime->free_context(&context);
+            return;
+        }
+        int next_count = context.menu.num_candidates;
+        snprintf(next_head, sizeof(next_head), "%s",
+                 next_count > 0 ? context.menu.candidates[0].text : "");
+        rime->free_context(&context);
+        if (next_count == 0 || strcmp(head, next_head) == 0) break;
+    }
+
+    check(kanji_found,
+          "the ka conversion must include the kanji-dictionary candidate 果");
+}
+
 static void on_message(void* context_object, RimeSessionId session_id, const char* message_type, const char* message_value) {
     (void)context_object;
     (void)session_id;
@@ -4336,6 +4390,7 @@ int main(int argc, char* argv[]) {
         test_tail_editing_after_caret_movement,
         test_off_reservation_and_fixed_text,
         test_retained_list_transitions,
+        test_reading_candidates_include_kanji,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         tests[i]();
