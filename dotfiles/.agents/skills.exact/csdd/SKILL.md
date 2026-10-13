@@ -1,7 +1,7 @@
 ---
 name: csdd
 description: >-
-  観測対象とその上流の課題・目的・制約を正本（canonical source）として定め、実装を正本へ適合させるcsdd（Canonical Source-Driven Development）の規則。正本は根拠正本（`INTENT.md`等）・振る舞い正本（`SPEC.md`・`GRAMMAR.md`等）・デザイン正本（`DESIGN.md`・html・テーマファイル等）の3種別があり、根拠正本が振る舞い正本の上流正本である。spec・intent形式の要否・配置・作成・修正はskill `specs`が所有する。観測対象を変更するロジック・設定・スタイルの実装、正本の作成・修正、CSDD適合性レビュー、差分の乖離検知、またはcsdd・sddの明示依頼に適用する。振る舞いも見た目も変えないリファクタ・静的設定値の変更、正本以外の文書・設計判断、調査・計画・相談、手続き的なファイル操作・整理・移動・改名・分類・カタログ化には、CSDDの明示依頼がない限り適用しない。適用対象か判定できない場合は正本を作成せず、変更の有無を確認する。
+  観測対象とその上流の課題・目的・制約を正本（canonical source）として定め、実装を正本へ適合させるcsdd（Canonical Source-Driven Development）の規則。正本は根拠正本（`REQUIREMENTS.md`等）・振る舞い正本（`SPEC.md`・`GRAMMAR.md`等）・デザイン正本（`DESIGN.md`・html・テーマファイル等）の3種別があり、根拠正本が振る舞い正本の上流正本である。spec・requirements形式の要否・配置・作成・修正はskill `specs`が所有する。観測対象を変更するロジック・設定・スタイルの実装、正本の作成・修正、CSDD適合性レビュー、差分の乖離検知、またはcsdd・sddの明示依頼に適用する。振る舞いも見た目も変えないリファクタ・静的設定値の変更、正本以外の文書・設計判断、調査・計画・相談、手続き的なファイル操作・整理・移動・改名・分類・カタログ化には、CSDDの明示依頼がない限り適用しない。適用対象か判定できない場合は正本を作成せず、変更の有無を確認する。
 ---
 
 # CSDD
@@ -15,7 +15,7 @@ description: >-
 
 | 種別 | 定める内容 | 例 |
 | --- | --- | --- |
-| 根拠正本 | 課題、目的、期待する成果、重要な制約（振る舞い正本の根拠） | `INTENT.md`、`specs/<feature-name>.intent.md` |
+| 根拠正本 | 課題、目的、期待する成果、重要な制約（振る舞い正本の根拠） | `REQUIREMENTS.md`、`specs/<feature-name>.requirements.md` |
 | 振る舞い正本 | 振る舞い（入出力、状態、エラー、結果、パフォーマンス特性） | `SPEC.md`、`specs/<feature-name>.spec.md`、`GRAMMAR.md` |
 | デザイン正本 | 見た目（色、タイポグラフィ、間隔、レイアウト、コンポーネント構造） | `DESIGN.md`、html、テーマファイル |
 
@@ -27,7 +27,7 @@ description: >-
 ## 責務境界
 
 - `csdd/SKILL.md`はCSDDを適用する条件、正本の確定・整備、CSDD適合性レビュー、乖離検知、CSDD収束時の引継ぎを所有する。
-- `../specs/SKILL.md`はspec・intent形式（`SPEC.md`・`INTENT.md`・`specs/<feature-name>.spec.md`等）の要否、配置、作成、修正を所有する。spec・intent形式の正本の作成・修正を行うときはspecsを適用し、4軸の照合規則をspecsへ複製しない。
+- `../specs/SKILL.md`はspec・requirements形式（`SPEC.md`・`REQUIREMENTS.md`・`specs/<feature-name>.spec.md`等）の要否、配置、作成、修正を所有する。spec・requirements形式の正本の作成・修正を行うときはspecsを適用し、4軸の照合規則をspecsへ複製しない。
 - `../review/SKILL.md`は一般の契約・原則の評価、`../converge/SKILL.md`は一般の修正・検証・再評価の反復を所有する。CSDDの4軸をreviewへ移さず、反復ループをCSDDへ複製しない。
 - デザイン正本の内容の作成・更新は、skill `frontend`と`design-taste-frontend`を適用する。CSDDは、正本の確定、go/no-go、照合の枠組みを所有する。
 - CSDDを適用する依頼では、共有AGENTS.mdの作業計画ルールに従い、正本の整備、実装、CSDD適合性レビュー、必要時のconvergeをどこまで自律して進めるか、どこでユーザーの承認を待つかを計画に定める。新たに定める観測対象が未確定の場合は、ユーザーの承認点を実装前に置く。根拠正本を整備する場合は、そこで確認してもらう。振る舞い正本は第二級レビュー対象であり、整備後のユーザー確認を要求しない。既に合意済みの正本に沿う作業では、その内容の再承認を重ねて要求しない。
@@ -45,8 +45,8 @@ description: >-
 
 ## 正本の確定
 
-- 着手時に既存正本を確認する。観測対象の種別に正本があれば、それをoracleにする。根拠正本があれば、coverage第1段の基準にする。正本がない場合、spec・intent形式の要否・配置は`../specs/SKILL.md`に従い、デザイン正本は整備する。
-- spec・intent形式（`SPEC.md`・`INTENT.md`・`specs/<feature-name>.spec.md`等）で正本を作成・修正する場合は、その要否・配置・記載とも`../specs/SKILL.md`に従う。既存の正本が別形式（`GRAMMAR.md`等）の場合は、その形式を維持し、spec・intent形式への変換はしない。デザイン正本の整備は、内容をskill `frontend`と`design-taste-frontend`に従って作り、ユーザーのgo/no-goを受けて正本にする。
+- 着手時に既存正本を確認する。観測対象の種別に正本があれば、それをoracleにする。根拠正本があれば、coverage第1段の基準にする。正本がない場合、spec・requirements形式の要否・配置は`../specs/SKILL.md`に従い、デザイン正本は整備する。
+- spec・requirements形式（`SPEC.md`・`REQUIREMENTS.md`・`specs/<feature-name>.spec.md`等）で正本を作成・修正する場合は、その要否・配置・記載とも`../specs/SKILL.md`に従う。既存の正本が別形式（`GRAMMAR.md`等）の場合は、その形式を維持し、spec・requirements形式への変換はしない。デザイン正本の整備は、内容をskill `frontend`と`design-taste-frontend`に従って作り、ユーザーのgo/no-goを受けて正本にする。
 - 合意済み内容から観測対象だけを抽出する。観測可能な具体値が未確定なら推測せず質問して止まる。
 
 ## 照合単位
