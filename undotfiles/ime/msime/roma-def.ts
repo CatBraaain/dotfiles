@@ -341,6 +341,7 @@ type SpawnSync = (
 ) => {
   status: number | null;
   stdout: string | Uint8Array;
+  stderr: string | Uint8Array;
   error?: unknown;
 };
 
@@ -377,7 +378,13 @@ async function applyTable(records: readonly string[]): Promise<void> {
     { windowsHide: true },
   );
   if (proc.error !== undefined) throw new Error(`cannot run reg: ${String(proc.error)}`);
-  if (proc.status !== 0) throw new Error(`reg add failed with status ${proc.status}`);
+  const stderr =
+    typeof proc.stderr === "string" ? proc.stderr : new TextDecoder().decode(proc.stderr);
+  const detail = stderr.trim();
+  if (proc.status !== 0)
+    throw new Error(
+      `reg add failed with status ${proc.status}${detail === "" ? "" : `: ${detail}`}`,
+    );
   console.log(`registered ${records.length} mappings`);
 }
 
