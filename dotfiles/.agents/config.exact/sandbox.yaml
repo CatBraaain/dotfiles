@@ -117,7 +117,9 @@ commands:
       - '^/mnt(?:/|\s|$)'
   - allow:
       - '(?i:^/mnt/c/WINDOWS/system32/wsl\.exe(\s|$))'
+  # pi CLI runs gated; segments are trimmed by sandboxed-tools, so a plain
+  # `^pi` anchor matches pi at the head of any compound command
   - ask:
-      - '(^|\|\s*)pi(\s|$)'
+      - '^pi(\s|$)'
   - allow:
       - '^pi (--help|--version|-h|-v)(\s|$)'

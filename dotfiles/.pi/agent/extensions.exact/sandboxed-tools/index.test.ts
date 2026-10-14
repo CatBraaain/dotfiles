@@ -35,6 +35,7 @@ import {
   resolveCommandActionMatch,
   resolvePathAction,
   resolvePathActionMatch,
+  splitCommandSegments,
   isWslEnvironment,
   sanitizeSandboxEnvironment,
 } from "./sandbox";
@@ -3941,6 +3942,22 @@ describe("§6 commands パターンの正規表現評価", () => {
     assert.equal(resolveCommandAction(section, "aa"), "allow");
     assert.equal(resolveCommandAction(section, "a{2}"), "deny");
     assert.equal(resolveCommandAction(section, "a2"), "deny");
+  });
+
+  it("splitCommandSegments はセグメントの両端の連続空白を削除する", () => {
+    assert.deepEqual(splitCommandSegments("  pi chat  "), ["pi chat"]);
+    // head skip（env）のあとに先頭 word が空白で始まるケースでも trim される
+    assert.deepEqual(splitCommandSegments("env '  pi chat  '"), ["pi chat"]);
+  });
+
+  it("セグメント先頭アンカーは引用符内のパイプ+コマンド名に誤マッチしない", () => {
+    const section = compiled([
+      { action: "allow", patterns: [".*"] },
+      { action: "ask", patterns: ["^pi(\\s|$)"] },
+    ]);
+    assert.equal(resolveCommandAction(section, "rtk grep -n 'a\\|pi b' x.md"), "allow");
+    assert.equal(resolveCommandAction(section, "cat x | pi 'sum'"), "ask");
+    assert.equal(resolveCommandAction(section, "cat x|pi 'sum'"), "ask");
   });
 
   it("無効な正規表現パターンだけが無視され、無効パターンとして報告される", () => {

@@ -338,7 +338,9 @@ const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * also open a segment: subshells, command substitutions, and process
  * substitutions all execute their contents. Heredoc bodies, comments, and
  * empty expansion words are skipped; leading `{`, `}`, `env`, and `VAR=value`
- * words are stripped so patterns match the actual command head.
+ * words are stripped so patterns match the actual command head. Each segment
+ * is trimmed so anchored patterns (`^cmd ...`) never need to account for
+ * leading/trailing whitespace.
  *
  * Known blind spots (ADR): backtick substitution, `bash -c`/`eval`/script
  * indirection, and other wrapper prefixes (`nohup`, `timeout`, ...).
@@ -358,7 +360,7 @@ export function splitCommandSegments(command: string): string[] {
       else break;
     }
     if (words.length > 0) {
-      segments.push(words.join(" "));
+      segments.push(words.join(" ").trim());
       words = [];
     }
   };
@@ -460,9 +462,10 @@ export function resolveCommandActionMatch(
     return resolved;
   };
   // Parse fallback: a command that yields no segments (empty or unparsable)
-  // is checked as the raw string, preserving the pre-split behavior.
+  // is checked as the raw string, preserving the pre-split behavior. Trimmed
+  // for the same reason as segments above.
   const candidates = splitCommandSegments(command);
-  if (candidates.length === 0) candidates.push(command);
+  if (candidates.length === 0) candidates.push(command.trim());
   const results = candidates.map(actionFor);
   return (
     results.find((result) => result.action === "deny") ??
