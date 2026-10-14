@@ -18,6 +18,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | **/\*.sample | - | - | - |
 | **/\*.spec.md | - | - | - |
 | **/SPEC.md | - | - | - |
+| **/REQUIREMENTS.md | - | - | - |
 | **/node_modules | - | - | - |
 | docker | .docker/desktop | AppData/Roaming/Docker | - |
 | erdtree | .config/erdtree | AppData/Roaming/erdtree | - |
@@ -29,6 +30,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | localsend/settings.merge-existing.json | .local/share/org.localsend.localsend_app/shared_preferences.merge-existing.json | AppData/Roaming/LocalSend/settings.merge-existing.json | - |
 | obs-studio | - | AppData/Roaming/obs-studio | - |
 | open-whispr |  | AppData/Roaming/open-whispr | - |
+| open-whispr/cleanup-prompt.txt | .config/open-whispr/cleanup-prompt.txt |  | - |
 | powershell | - | Documents/PowerShell | - |
 | rtk | .config/rtk | - | - |
 | sharex | - | Documents/ShareX | - |
