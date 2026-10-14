@@ -9,6 +9,7 @@ import { applyExternals } from "./build-external.ts";
 import { composeMergeTargets } from "./build-merge.ts";
 import { applyReplaceSidecars } from "./build-replace.ts";
 import { collectHooks, runHooks, type HookEvent } from "./build-hooks.ts";
+import { resolveWsl, type WslConnection } from "./wsl.ts";
 
 export type Platform = "windows" | "linux" | "darwin";
 
@@ -21,8 +22,10 @@ export async function main(
   homeRoot = homedir(),
   onHookEvent?: HookEvent,
   onPhase?: PhaseEvent,
+  connection?: WslConnection,
 ): Promise<void> {
   assertPlatform(platform);
+  const wsl = connection ?? (await resolveWsl(root));
   const sourceDir = join(root, "dotfiles");
   const distDir = join(root, "dist");
 
@@ -32,10 +35,10 @@ export async function main(
   });
   await timed("path map", onPhase, () => applyPathMap(distDir, platform));
   const hooks = await collectHooks(distDir);
-  await timed("externals", onPhase, () => applyExternals(distDir));
+  await timed("externals", onPhase, () => applyExternals(distDir, wsl));
   await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
-  await runHooks(hooks, distDir, homeRoot, onHookEvent);
+  await runHooks(hooks, distDir, homeRoot, onHookEvent, wsl);
 }
 
 async function copyDir(

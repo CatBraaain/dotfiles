@@ -2,7 +2,15 @@
 import { existsSync, statSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  guestMirrorPath,
+  mirrorRoot,
+  resolveWsl,
+  runWsl,
+  runProcess,
+  type WslConnection,
+} from "./wsl.ts";
 import { parse as parseYaml } from "yaml";
 
 const externalFileName = "external.data.yaml";
@@ -34,7 +42,23 @@ const defaultTtlHours = 6;
 const pullTimeFileName = "build-pull-time";
 const defaultMirrorRoot = join(homedir(), "mirrors", "github.com");
 
-function defaultContext(): SyncContext {
+async function defaultContext(connection?: WslConnection): Promise<SyncContext> {
+  const wsl = connection ?? (await resolveWsl(resolve(import.meta.dir, "../..")));
+  if (wsl) {
+    return {
+      mirrorRoot: mirrorRoot(wsl),
+      forcePull: process.env.BUILD_FORCE_PULL === "1",
+      repoUrl: (repo) => `https://github.com/${repo}.git`,
+      runGit: (args) => {
+        const guestArgs = [...args];
+        if (guestArgs[0] === "-C") guestArgs[1] = guestMirrorPath(wsl, guestArgs[1]!);
+        if (guestArgs[0] === "clone")
+          guestArgs[guestArgs.length - 1] = guestMirrorPath(wsl, guestArgs.at(-1)!);
+        return runWsl(wsl, ["git", ...guestArgs]);
+      },
+      runCommand: (args, cwd) => runWsl(wsl, args, guestMirrorPath(wsl, cwd)),
+    };
+  }
   return {
     mirrorRoot: defaultMirrorRoot,
     forcePull: process.env.BUILD_FORCE_PULL === "1",
@@ -44,7 +68,16 @@ function defaultContext(): SyncContext {
   };
 }
 
-export async function applyExternals(distDir: string): Promise<void> {
+export async function syncGithubMirror(repo: string, connection?: WslConnection): Promise<string> {
+  const sync = await syncMirror(
+    repo,
+    defaultTtlHours * 60 * 60 * 1000,
+    await defaultContext(connection),
+  );
+  return sync.mirrorDir;
+}
+
+export async function applyExternals(distDir: string, connection?: WslConnection): Promise<void> {
   const configPaths: string[] = [];
   async function collect(directory: string): Promise<void> {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
@@ -60,7 +93,7 @@ export async function applyExternals(distDir: string): Promise<void> {
     }
   }
   await collect(distDir);
-  const context = defaultContext();
+  const context = await defaultContext(connection);
   for (const configPath of configPaths) {
     if (!existsSync(configPath)) continue;
     const config = await loadExternalConfig(configPath);
@@ -122,6 +155,7 @@ async function syncMirror(
   const before = await readRevision(repo, mirrorDir, context);
   const result = await run(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
   if (!result.ok) {
+    await readdir(mirrorDir);
     console.error(`warning: git pull failed for ${repo}: ${singleLine(result.stderr)}`);
     return { mirrorDir, changed: false };
   }
@@ -356,20 +390,6 @@ function normalizeEdits(prefix: string, raw: unknown): TextEdit[] {
 }
 
 // ------------------------------------------------------------ child process
-
-async function runProcess(args: string[], cwd?: string): Promise<ProcessResult> {
-  const proc = Bun.spawn(args, {
-    ...(cwd === undefined ? {} : { cwd }),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const ok = (await proc.exited) === 0;
-  return { ok, stdout: stdout.trim(), stderr: stderr.trim() };
-}
 
 function singleLine(message: string): string {
   return message.replace(/\r?\n/g, "\\n").trim();

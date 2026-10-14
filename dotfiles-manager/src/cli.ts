@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { main as apply } from "./apply.ts";
 import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
-import { acquireHomeLock } from "./lock.ts";
+import { resolveWsl, type WslConnection } from "./wsl.ts";
 
 const usage = "usage: bun dotfiles-manager <apply|diff|managed>";
 
@@ -18,15 +18,11 @@ export async function main(
     throw new Error(usage);
 
   const started = performance.now();
-  const lock = acquireHomeLock(homeRoot, (holder) =>
-    console.log(
-      holder === null
-        ? "Lock held by another session, waiting..."
-        : `Lock held by PID ${holder}, waiting...`,
-    ),
-  );
+  // Resolved once here and shared with build, externals and the GitAlias hook
+  // (spec: §Windows の WSL 接続); Linux/macOS resolve no connection.
+  const connection = await resolveWsl(root);
   try {
-    await logBuild(root, homeRoot);
+    await logBuild(root, homeRoot, connection);
 
     const distRoot = join(root, "dist");
     const code = await logStage(command, () =>
@@ -39,12 +35,10 @@ export async function main(
   } catch (error) {
     logElapsed(`command ${command}`, "failure", started);
     throw error;
-  } finally {
-    lock.release();
   }
 }
 
-async function logBuild(root: string, homeRoot: string): Promise<void> {
+async function logBuild(root: string, homeRoot: string, wsl?: WslConnection): Promise<void> {
   const started = performance.now();
   console.log("Build started");
   try {
@@ -63,6 +57,7 @@ async function logBuild(root: string, homeRoot: string): Promise<void> {
         );
       },
       (phase, elapsedSeconds) => console.log(`  ${phase} (${elapsedSeconds.toFixed(2)}s)`),
+      wsl,
     );
     console.log(`Build complete (${elapsedSeconds(started)}s)`);
   } catch (error) {

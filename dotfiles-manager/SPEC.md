@@ -44,7 +44,7 @@ build ステージは、内部で次の順に処理する。
 
 build、フック、フェーズの秒数はそれぞれの開始から数え、小数第 2 位まで表示する。後続のコマンド別ステージ（apply / diff / managed）は開始時に `stage <name> start`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じ stdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build 前に終了し、経過時間ログを出さない。
 
-内部 CLI は、引数検査の後、build より前に home 単位の排他ロックを取得し、コマンドの終了時に解放する。ロック対象は `<home>/.cache/dotfiles-manager.lock` であり、lockf（fcntl レコードロック）で保持するため、保持プロセスの正常終了・クラッシュ・シグナル終了のいずれでも OS が自動で解放する。別の内部 CLI がロックを保持している間、後続の実行は待機して直列化される。待機の開始時には `Lock held by PID <pid>, waiting...`（保持者の PID をロックファイルから読み取れないときは `Lock held by another session, waiting...`）を stdout に表示し、待機時間に上限を設けず解放を待つ。ロックの競合がなければ待機に関する追加の表示は行わない。待機したコマンドの経過時間ログには待機時間も含まれる。`src/diff.ts` と `src/apply.ts` の直接 CLI はロックを取得しない。Windows では lockf を使えないためロックを取得せず、ロックなしで実行する。
+内部 CLI はロックを取得せず、同一 workspace・home の同時実行を排他しない。`src/build.ts`、export 関数、`src/diff.ts` と `src/apply.ts` の直接 CLI、単独フック、手動 Git も同様に排他しない。
 
 例えば `diff` が成功した場合のログは次の形式になる（差分表示は省略）。
 
@@ -82,6 +82,7 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 - `cwd`: パス変換後のフック配置に対応する dist 内のフォルダ
 - 環境変数: 通常の親プロセス環境をそのまま継承する。追加の環境変数や設定ファイルは提供しない
 - フックは `cwd` のフォルダ以下を生成・変更・移動・削除の対象として使う。Bun 実行時の `process.cwd()` はそのフォルダに解決され、`import.meta.dir` から自身の dist 内コピーを参照できる
+- `context.syncGithubMirror(repo)`: GitHub の `<owner>/<repo>` mirror を §build: 外部取得 の既定 6 時間・強制更新・pull 失敗規則で同期し、読み取り用の絶対パスを返す。Windows では build と同じ mirror 同期方法（§build: 外部取得）を使う。GitAlias フックは Windows でこの context を使う
 - `context.resolvePaths(path)`: `path` に `cwd` 相対のファイルパスを渡すと、対応する dist と home の絶対パスを `{ distPath, homePath }` で返す。home 側は §差分検知 の対応関係を使い、親ディレクトリの `.exact`、末尾ファイルの `.executable` / `.symlink` を変換する。現在のファイルの有無にかかわらず解決し、ファイル内容の読み書きや symlink の実体追跡は行わない。`..` を含むパスは dist 内に解決される場合に使える。絶対パス、dist 外に解決されるパス、ファイルを指定しない空パスや末尾が `/`・`.`・`..` のパスはエラーになる。パスの解決はフックの生成・変更・移動・削除の対象範囲を広げない
 
 対応する dist フォルダ以下という生成・変更・移動・削除の範囲はフック作者が守る契約であり、システムはフックの操作先を検証したりサンドボックスで制限したりしない。フック自身は dist へそのまま残り、差分検知と適用の対象外である。
@@ -110,13 +111,25 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 たとえば Windows の `vscode` を `AppData/Roaming/Code/User` へ移す場合、`vscode/format-settings.build.ts` は移動先の `dist/AppData/Roaming/Code/User` で実行され、整形済みの `settings.json` が同じフォルダに現れる。macOS で `vscode` を削除する場合、その配下のフックは dist に存在しないため実行されない。先行フックが別のフックの配置フォルダを削除・移動した場合のスキップ規則は §build: ローカルフック に従う。
 
+## Windows の WSL 接続
+
+Windows で実行する build と内部 CLI は、外部取得と GitAlias のために WSL 接続を解決する。ソース workspace が `\\wsl.localhost\<distro>\...` または `\\wsl$\<distro>\...` 上ならその distro、それ以外なら WSL の既定 distro を使う。選択した distro の既定ユーザー名・HOME と既存 Bun の実行パスを取得し、以降の Git、`run_after`、mirror 読み取りへ同じ distro/user/HOME を固定して渡す。接続の解決と Bun bridge の確認は dist 再構築より前に行う。
+
+`wsl.exe` が実行環境に存在せず起動できないとき、Windows は WSL 接続を使わず、§build: 外部取得 の Windows ローカル mirror で外部取得と GitAlias を行う。`wsl.exe` が存在しても distro・ユーザー・HOME・Bun・bridge のいずれかの解決や確認に失敗した場合は、Windows ローカル mirror へ切り替えず異常終了する。
+
 ## build: 外部取得
 
 すべてのパス対応表の適用後、残っている `external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rime フォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。`.agents` が削除される Windows と macOS では skills の外部取得および `run_after` を行わない。
 
-`repos` の各リポジトリは GitHub mirror（既定 `~/mirrors/github.com/<owner>/<repo>`）を使う。mirror がなければ shallow clone し、存在するときは前回の取得から `ttlHours`（既定 6 時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。pull に失敗したときは警告を表示し、手元の mirror を利用する。`entries` のファイルやフォルダを `destination` にコピーし、更新に変更があった場合だけ `run_after` を実行する。`edit` の `.$append` は取得したフォルダ内の対象ファイルに指定テキストを追記する。同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらず gitignore の対象となる。失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
+`repos` の各リポジトリは GitHub mirror を使う。mirror の場所と更新方法は、Windows では `wsl.exe` が存在するかどうかで決まる。Linux/macOS と、`wsl.exe` が存在しない Windows は、実行環境の home 直下の `mirrors/github.com/<owner>/<repo>`（Windows は Windows 側 home）をローカル Git で使う。それ以外の Windows は選択済み WSL ユーザーの `<HOME>/mirrors/github.com/<owner>/<repo>` を使い、Git を WSL 内で実行し、その完了後に同じ mirror を UNC 経由で読み取って Windows dist へコピーする。いずれの経路でも既存 mirror の移動・削除は行わない。
 
-ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じ GitHub mirror・既定 6 時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を include しない。
+mirror がなければ shallow clone し、存在するときは前回の取得から `ttlHours`（既定 6 時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。Git pull が非 0 を返したときは、mirror にアクセスできれば警告を表示して既存 mirror を利用する。WSL/bridge の失敗は pull の警告として扱わず異常終了する。`entries` のファイルやフォルダを `destination` にコピーし、`run_after` が空でなく、clone または更新前後の HEAD に変更があった場合だけ、mirror cwd で `git clean -fdX` の後に `run_after` の argv 配列を記載順に実行してからコピーする。WSL mirror を使う Windows ではこれらを同じ WSL 内で実行し、Windows ローカル mirror では Windows の mirror cwd で実行する。mirror の `.git/build-pull-time` に epoch ミリ秒を保存し、clone / 成功した pull（HEAD 不変を含む）の後、`run_after` より前に更新する。TTL 内の省略と失敗した pull では stamp を保持する。
+
+`edit` の `.$append` は取得したフォルダ内の対象ファイルに指定テキストを追記する。同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらず gitignore の対象となる。
+
+同じ設定の repo は並列に処理し、失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
+
+ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じ GitHub mirror・既定 6 時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。Windows では manager runner から `context.syncGithubMirror` を使う。この context は WSL が使えるなら §Windows の WSL 接続 の mirror を、`wsl.exe` が存在しなければ Windows ローカル mirror を使う。context なしで単独実行した場合は、Windows・Linux ともローカル Git で home 直下の mirror を同じ規則で同期する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を include しない。
 
 ## build: merge 変換
 

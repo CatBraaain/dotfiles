@@ -37,13 +37,20 @@ async function syncMirror(): Promise<void> {
   await writeFile(pullTimeFile, `${Date.now()}\n`);
 }
 
-export default async function build(): Promise<void> {
+type BuildContext = { syncGithubMirror?: (repo: string) => Promise<string> };
+
+export default async function build(context: BuildContext = {}): Promise<void> {
   if (process.platform === "darwin") return;
-  await syncMirror();
+  let sourceMirror = mirrorDir;
+  if (process.platform === "win32" && context.syncGithubMirror) {
+    sourceMirror = await context.syncGithubMirror(repo);
+  } else {
+    await syncMirror();
+  }
   const configPath = join(import.meta.dir, ".gitconfig");
   const [config, aliases] = await Promise.all([
     readFile(configPath, "utf8"),
-    readFile(join(mirrorDir, "gitalias.txt"), "utf8"),
+    readFile(join(sourceMirror, "gitalias.txt"), "utf8"),
   ]);
   // Git uses the last definition of an alias. Replay the hand-written sections
   // after the upstream append so existing overrides keep their effective value.

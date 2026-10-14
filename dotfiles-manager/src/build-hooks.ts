@@ -4,6 +4,7 @@
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { WslConnection } from "./wsl.ts";
 import {
   ensureHookDirectory,
   removeEmptyHookDirectories,
@@ -61,6 +62,7 @@ export async function runHooks(
   distDir: string,
   homeRoot: string,
   onHookEvent?: HookEvent,
+  wsl?: WslConnection,
 ): Promise<void> {
   for (const hook of hooks) {
     const relativePath = hookRelativePath(hook);
@@ -86,6 +88,7 @@ export async function runHooks(
             resolve(snapshotPath),
             resolve(distDir),
             resolve(homeRoot),
+            JSON.stringify(wsl ?? null),
           ];
           await runChildProcess(
             command,
