@@ -45,7 +45,7 @@ describe("cli", () => {
     const dir = mkdtempSync(join(tmpdir(), "htmlshot-cli-"));
     try {
       const html = "<h1>round-trip 🎨</h1>\n";
-      const pngPath = join(dir, "a.htmlshot.png");
+      const pngPath = join(dir, "a.html.png");
       writeFileSync(pngPath, bound(html));
       const result = runCli(["extract", pngPath]);
       assert.equal(result.exitCode, 0, result.stderr.toString());
@@ -61,7 +61,7 @@ describe("cli", () => {
     try {
       const envelope = buildEnvelope("<p>x</p>", { width: 1200, height: 800, scale: 1 });
       envelope.format = "htmlshot/v0";
-      const pngPath = join(dir, "old.htmlshot.png");
+      const pngPath = join(dir, "old.html.png");
       writeFileSync(pngPath, insertMetadata(syntheticPng(), envelope));
       const result = runCli(["extract", pngPath]);
       assert.equal(result.exitCode, 1);
@@ -98,10 +98,10 @@ describe("cli", () => {
       writeFileSync(htmlPath, html);
       const bind = runCli(["shot", htmlPath, "--width", "320", "--height", "200"]);
       assert.equal(bind.exitCode, 0, bind.stderr.toString());
-      assert.match(bind.stdout.toString(), /shot: .*sample\.htmlshot\.png \(320x200@1x, html \d+ bytes\)/);
-      const boundPng = readFileSync(join(dir, "sample.htmlshot.png"));
+      assert.match(bind.stdout.toString(), /shot: .*sample\.html\.png \(320x200@1x, html \d+ bytes\)/);
+      const boundPng = readFileSync(join(dir, "sample.html.png"));
       assert.ok(boundPng.subarray(0, 8).equals(PNG_SIGNATURE));
-      const extract = runCli(["extract", join(dir, "sample.htmlshot.png")]);
+      const extract = runCli(["extract", join(dir, "sample.html.png")]);
       assert.equal(extract.exitCode, 0, extract.stderr.toString());
       assert.equal(readFileSync(join(dir, "sample.html"), "utf8"), html);
     } finally {

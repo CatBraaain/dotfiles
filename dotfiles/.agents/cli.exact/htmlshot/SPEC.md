@@ -17,7 +17,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 ## 製本フォーマット
 
-製本ファイルは拡張子 `.htmlshot.png` を推奨する通常の PNG 画像であり、一般の画像ビューアと GitHub は通常の PNG として表示する。正本 HTML は PNG の `iTXt` チャンク 1 つに格納する。
+製本ファイルは拡張子 `.html.png` を推奨する通常の PNG 画像であり、一般の画像ビューアと GitHub は通常の PNG として表示する。正本 HTML は PNG の `iTXt` チャンク 1 つに格納する。
 
 | 項目 | 値 |
 | --- | --- |
@@ -67,7 +67,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 | タイムアウト | レンダ開始から 30 秒でプロセスを終了し、非 0 で終了する |
 
 - レンダで得た PNG の `IEND` 直前に `iTXt` を挿入し、出力先へ書き出す。他の chunk は変更しない。
-- 出力先の既定は正本名から拡張子 `.html` を除いた名前に `.htmlshot.png` を付けたパス（`a.html` → `a.htmlshot.png`）。`-o` で変更できる。既存ファイルの上書きは確認せずに行う。
+- 出力先の既定は正本名から拡張子 `.html` を除いた名前に `.html.png` を付けたパス（`a.html` → `a.html.png`）。`-o` で変更できる。既存ファイルの上書きは確認せずに行う。
 - 成功時は stdout に `shot: <output> (<width>x<height>@<scale>x, html <bytes> bytes)` と出す。
 - ブラウザが決定できないとき、レンダが失敗したとき、出力 PNG が妥当な PNG でないときはエラーを stderr へ出し、終了コード非 0 で終了する。
 
@@ -79,7 +79,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 2. deflate を展開し JSON を解釈する。展開または解釈に失敗したときは非 0 で終了する。
 3. `format` が `htmlshot/v1` でないときは `unsupported format: <value>` を stderr へ出し非 0 で終了する。
 4. `html` の UTF-8 バイト列の sha256 が `checksum` と一致しないときは `checksum mismatch` を stderr へ出し非 0 で終了する。
-5. `html` を出力先へ書き出す。出力先の既定は入力名が `.htmlshot.png` で終わるときはそれを除いた名前に `.html` を付けたパス、それ以外は最終拡張子を除いた名前に `.html` を付けたパス（`a.htmlshot.png` → `a.html`）。`-o` で変更できる。既存ファイルの上書きは確認せずに行う。
+5. `html` を出力先へ書き出す。出力先の既定は入力名が `.html.png` で終わるときはそれを除いた名前に `.html` を付けたパス、それ以外は最終拡張子を除いた名前に `.html` を付けたパス（`a.html.png` → `a.html`）。`-o` で変更できる。既存ファイルの上書きは確認せずに行う。
 
 成功時は stdout に `extract: <output> (<bytes> bytes)` と出す。
 

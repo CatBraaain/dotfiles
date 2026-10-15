@@ -98,5 +98,5 @@ function renderPng(browserPath: string, htmlPath: string, render: RenderSettings
 }
 
 function defaultBindOutput(inputPath: string): string {
-  return `${inputPath.replace(/\.html$/i, "")}.htmlshot.png`;
+  return `${inputPath.replace(/\.html$/i, "")}.html.png`;
 }

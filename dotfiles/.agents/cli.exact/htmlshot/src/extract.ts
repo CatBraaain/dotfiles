@@ -21,8 +21,8 @@ export function verifyFile(inputPath: string): string {
 }
 
 function defaultExtractOutput(inputPath: string): string {
-  if (inputPath.endsWith(".htmlshot.png")) {
-    return `${inputPath.slice(0, -".htmlshot.png".length)}.html`;
+  if (inputPath.endsWith(".html.png")) {
+    return `${inputPath.slice(0, -".html.png".length)}.html`;
   }
   return `${inputPath.replace(/\.[^.]+$/, "")}.html`;
 }
