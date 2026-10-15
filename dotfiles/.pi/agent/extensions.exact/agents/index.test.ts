@@ -2005,6 +2005,111 @@ describe("レート制限（429）時のフォールバック", () => {
     }
   });
 
+  describe("same-turn later HTTP 429 suppression", () => {
+    const http429Config: AgentConfig = {
+      default: "main",
+      classes: {
+        middle: [
+          { provider: "amazon-bedrock", model: "global.anthropic.claude-opus-4-6-v1" },
+          { provider: "cursor", model: "composer-2.5:slow" },
+          { provider: "openai-codex", model: "gpt-6-luna" },
+        ],
+      },
+      agents: { main: { class: "middle", tools: [], subagents: [], systemPrompt: [] } },
+    };
+    const cursorModel = { provider: "cursor", id: "composer-2.5:slow" };
+    const codexModel = { provider: "openai-codex", id: "gpt-6-luna" };
+
+    it("ignores later HTTP 429s without cooling down the fallback model", async () => {
+      const extension = captureAgentsExtension({ config: http429Config });
+      try {
+        await extension.sessionStart("startup");
+        await extension.providerResponse(429);
+        assert.deepEqual(extension.selectedModels.at(-1), cursorModel);
+        assert.equal(
+          extension.notificationEvents.filter(
+            (event) => event.level === "warning" && event.message.includes("switched to"),
+          ).length,
+          1,
+        );
+        extension.context.model = cursorModel;
+        await extension.providerResponse(429);
+        assert.deepEqual(extension.selectedModels.at(-1), cursorModel);
+        assert.equal(
+          extension.notificationEvents.filter(
+            (event) => event.level === "warning" && event.message.includes("switched to"),
+          ).length,
+          1,
+        );
+        await extension.input("again");
+        assert.deepEqual(extension.context.model, cursorModel);
+        assert.ok(
+          !extension.notifications.some((message) => message.includes("no available model")),
+        );
+      } finally {
+        extension.restore();
+      }
+    });
+
+    it("preserves suppression across non-429 responses and extension input until user input", async () => {
+      const extension = captureAgentsExtension({ config: http429Config });
+      try {
+        await extension.sessionStart("startup");
+        await extension.providerResponse(429);
+        await extension.providerResponse(200);
+        await extension.input("continue", "extension");
+        await extension.providerResponse(429);
+        assert.deepEqual(extension.context.model, cursorModel);
+        assert.equal(extension.selectedModels.length, 2);
+        await extension.input("again");
+        await extension.providerResponse(429);
+        assert.deepEqual(extension.context.model, codexModel);
+        assert.equal(extension.selectedModels.length, 3);
+      } finally {
+        extension.restore();
+      }
+    });
+
+    it("resets suppression when a session starts", async () => {
+      const extension = captureAgentsExtension({ config: http429Config });
+      try {
+        await extension.sessionStart("startup");
+        await extension.providerResponse(429);
+        await extension.sessionStart("new");
+        await extension.providerResponse(429);
+        assert.deepEqual(extension.context.model, cursorModel);
+        assert.equal(
+          extension.notifications.filter((message) => message.includes("switched to")).length,
+          2,
+        );
+      } finally {
+        extension.restore();
+      }
+    });
+
+    it("allows another HTTP 429 fallback after an unsuccessful attempt", async () => {
+      let fallbackAvailable = false;
+      const extension = captureAgentsExtension(
+        { config: http429Config },
+        {
+          findModel: (provider, id) =>
+            provider === "amazon-bedrock" || fallbackAvailable ? { provider, id } : undefined,
+        },
+      );
+      try {
+        await extension.sessionStart("startup");
+        await extension.providerResponse(429);
+        assert.equal(extension.selectedModels.length, 1);
+        fallbackAvailable = true;
+        await extension.providerResponse(429);
+        assert.deepEqual(extension.context.model, cursorModel);
+        assert.equal(extension.selectedModels.length, 2);
+      } finally {
+        extension.restore();
+      }
+    });
+  });
+
   it("HTTP 429 の後の同一最終エラーでは二重に fallback しない", async () => {
     const extension = captureAgentsExtension();
     try {
