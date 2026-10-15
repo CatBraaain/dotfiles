@@ -526,7 +526,7 @@ describe("registration with an uninitialized profile", () => {
     });
   }
 
-  it("returns CLI exit 0 with a skipped status and actionable detail", async () => {
+  it("returns CLI exit 0 with plain stdout detail and empty stderr", async () => {
     const fixture = createFixture();
     const before = snapshot(fixture.root);
     const runtimesBefore = runtimeEntries();
@@ -546,9 +546,33 @@ describe("registration with an uninitialized profile", () => {
       code: "OK",
       promptSha256: sha256Hex(promptText),
     });
-    assert.match(stderr, /launch and quit OpenWhispr, then run apply again/);
+    assert.match(stdout, /launch and quit OpenWhispr, then run apply again/);
+    assert.ok(stdout.includes(fixture.profileDir));
+    assert.equal(stdout.includes("\u001b"), false);
+    assert.equal(stderr, "");
     assert.deepEqual(snapshot(fixture.root), before);
     assert.deepEqual(runtimeEntries(), runtimesBefore);
+  });
+
+  it("keeps CLI input errors on stderr with exit 2", async () => {
+    const fixture = createFixture();
+    rmSync(fixture.promptPath);
+    const before = snapshot(fixture.root);
+    const child = Bun.spawn([process.execPath, hookScriptPath], {
+      env: fixture.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    assert.equal(exitCode, 2);
+    assert.equal(stdout, "status=error code=INVALID_INPUT prompt_sha256=-\n");
+    assert.match(stderr, /prompt file is missing/);
+    assert.ok(stderr.includes(fixture.promptPath));
+    assert.deepEqual(snapshot(fixture.root), before);
   });
 });
 

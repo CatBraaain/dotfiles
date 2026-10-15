@@ -954,8 +954,10 @@ async function main(): Promise<void> {
     process.exit(exitCodeByError.INVALID_INPUT);
   }
   const outcome = await registerCleanup({ platform, env: process.env });
+  if (outcome.detail && outcome.status !== "error") console.log(outcome.detail);
   console.log(formatStatusLine(outcome));
-  if (outcome.detail) console.error(outcome.detail);
+  if (outcome.detail && outcome.status === "error")
+    console.error(outcome.detail);
   if (outcome.status === "error")
     process.exit(exitCodeByError[outcome.code as HookErrorCode]);
 }

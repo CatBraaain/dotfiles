@@ -12,7 +12,7 @@ apply の実行で、フィラーのみを除去するクリーンアッププ�
 
 - 対象OSは Linux と Windows。macOS は対象外
 - `Preferences` または `Local Storage` が存在するディレクトリを認識済みの userData とする
-- 未認識の userData では、プロンプトとインストール済みアプリの識別を検証した後、`status=skipped code=OK` とプロンプトの SHA-256 を返し、終了コード 0 で終わる。英語の detail で OpenWhispr の起動・終了後に再実行するよう案内する。hook lock の取得、harness の起動、shadow runtime の生成、登録・storage・既存ファイルへの書き込みは行わない
+- 未認識の userData では、プロンプトとインストール済みアプリの識別を検証した後、`status=skipped code=OK` とプロンプトの SHA-256 を返し、終了コード 0 で終わる。英語の detail で OpenWhispr の起動・終了後に再実行するよう案内する。CLI はこの案内を色指定なしの stdout に表示し、stderr は空にする。エラー時の detail は stderr に表示する。hook lock の取得、harness の起動、shadow runtime の生成、登録・storage・既存ファイルへの書き込みは行わない
 - プロンプトの欠損・不正、アプリの未インストール・識別失敗は、userData の認識状態によらず `INVALID_INPUT` エラーとする。認識済み userData での hook lock と入力検証の優先順位は維持する
 - 認識済みの userData で OpenWhispr が起動中のときはフックは何も書き換えず明確なエラー（LOCKED）で終わり、起動状態を変更しない。owner は必要に応じてアプリを終了してから apply する
 - 登録済みの内容が一致する場合は何も変更しない
