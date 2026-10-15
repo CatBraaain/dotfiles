@@ -19,7 +19,7 @@ export async function resolveWsl(sourceRoot: string): Promise<WslConnection | un
       "wsl.exe",
       ...selection,
       "--exec",
-      "sh",
+      "bash",
       "-lc",
       'printf "%s\\n%s\\n%s\\n%s\\n" "$WSL_DISTRO_NAME" "$(id -un)" "$HOME" "$(command -v bun)"',
     ]);
