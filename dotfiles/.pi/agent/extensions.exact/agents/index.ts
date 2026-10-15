@@ -1270,7 +1270,15 @@ export default function agentsExtension(
   }
 
   pi.on("after_provider_response", async (event, ctx) => {
-    if (event.status !== 429 || !ctx.model) return;
+    // SPEC「フォールバック済みターンのエラー判定」: 抑止の有効期間は「429 受信から
+    // 次の HTTPレスポンスまで」。フォールバック先で別のリクエストが飛んだあとは、
+    // 最終 assistant エラーの provider/model はそのリクエストのモデルを表すため、
+    // 抑止を解除して通常判定へ戻す。
+    if (event.status !== 429) {
+      httpRateLimitAwaitingMessage = undefined;
+      return;
+    }
+    if (!ctx.model) return;
 
     // Z.AI は 429 の body に同時実行系（1302/1305）と quota 系（1113, 1308-1321）の
     // 両方を返し、HTTP レスポンスだけでは区別できない。z-ai モデルはここで fallback
@@ -1288,21 +1296,32 @@ export default function agentsExtension(
     const message = event.message;
     if (message.role !== "assistant" || message.stopReason !== "error") return;
 
-    const rateLimitedModelKey = modelKey({ provider: message.provider, id: message.model });
-
     // z-ai の同時実行系エラー（1302/1305）は別モデルに切り替えても解決しないため
     // fallback 対象外。concurrency-retry 拡張が待機リトライする。
     if (isZaiProvider(message.provider) && isZaiConcurrencyLimited(message.errorMessage)) return;
 
-    if (httpRateLimitAwaitingMessage?.modelKey === rateLimitedModelKey) {
-      const { fallbackSucceeded } = httpRateLimitAwaitingMessage;
-      httpRateLimitAwaitingMessage = undefined;
-      if (!fallbackSucceeded) {
-        notifyNoFallback(rateLimitedModelKey, message.errorMessage, ctx);
-        return;
+    // SPEC「フォールバック済みターンのエラー判定」: HTTP 429 でフォールバック済みの
+    // ターンでは、pi 本体（handleRunFailure）が失敗メッセージの provider/model を
+    // 失敗処理時点のセッションモデルで記録することがある。そのため文言だけ throttle
+    // 系のメッセージは、429 を受けたモデルの失敗が provider だけ付け替わって届いた
+    // 可能性があり、provider で fallback 対象を同定できない。cooldown を行わず、
+    // 429 を受けたモデル（httpRateLimitAwaitingMessage.modelKey）を正として扱う。
+    if (httpRateLimitAwaitingMessage) {
+      const { modelKey: rateLimitedModelKey, fallbackSucceeded } = httpRateLimitAwaitingMessage;
+      const messageModelKey = modelKey({ provider: message.provider, id: message.model });
+      if (messageModelKey === rateLimitedModelKey || isRateLimitedError(message.errorMessage)) {
+        httpRateLimitAwaitingMessage = undefined;
+        if (!fallbackSucceeded) {
+          notifyNoFallback(rateLimitedModelKey, message.errorMessage, ctx);
+          return;
+        }
+        return { message: makeFallbackAppliedMessage(message) };
       }
-      return { message: makeFallbackAppliedMessage(message) };
+      // レート制限と無関係なエラー（context overflow 等）: 抑止は次の HTTPレスポンスまで維持する。
+      return;
     }
+
+    const rateLimitedModelKey = modelKey({ provider: message.provider, id: message.model });
     if (!isRateLimitedError(message.errorMessage)) return;
 
     const fallbackSucceeded = await fallbackAfterRateLimit(

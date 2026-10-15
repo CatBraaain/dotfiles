@@ -2031,6 +2031,105 @@ describe("レート制限（429）時のフォールバック", () => {
     }
   });
 
+  it("429 フォールバック後の失敗メッセージが切替先の provider を名乗っても誤 fallback しない", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      // HTTP 429 の主体: commandcode。経路 A で cooldown され、切替先 zai へ setModel される
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await extension.providerResponse(429);
+      assert.deepEqual(extension.selectedModels.at(-1), { provider: "zai", id: "glm-5.2" });
+      const switchedModelCount = extension.selectedModels.length;
+      // pi 本体は失敗メッセージの provider/model を失敗処理時点のセッションモデルで
+      // 記録するため、429 を受けた commandcode の失敗が切替先 zai を名乗って届く
+      const replacement = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage: "Provider error: ThrottlingException: Too many tokens per day",
+      });
+      // 切替先を cooldown せず、fallback 済みの置換文言へ差み替える
+      assert.equal(
+        replacement.message.errorMessage,
+        "429 rate limit error; already switched to a fallback model",
+      );
+      assert.equal(extension.selectedModels.length, switchedModelCount);
+      assert.equal(extension.sentMessages.length, 0);
+      assert.ok(
+        !extension.notifications.some((message) => message.includes("rate limited on zai/glm-5.2")),
+      );
+      // 次のプロンプトでも切替先 zai を cooldown せずに使い続ける
+      await extension.input("again");
+      assert.equal(extension.selectedModels.length, switchedModelCount);
+      assert.ok(!extension.notifications.some((message) => message.includes("no available model")));
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("429 フォールバック後に別の HTTP レスポンスが来たら抑止を解除する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await extension.providerResponse(429);
+      // 切替先 zai で次のリクエストが飛んだ（HTTP は成功）→ 抑止を解除
+      extension.context.model = { provider: "zai", id: "glm-5.2" };
+      await extension.providerResponse(200);
+      // 解除後は provider ベースの通常判定: zai 自身の in-band throttle は fallback 対象。
+      // class middle の次候補 commandcode は cooldown 中のため fallback できず no fallback 通知
+      const replacement = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage: "usage limit reached",
+      });
+      assert.equal(replacement, undefined);
+      const noFallback = extension.notificationEvents.at(-1);
+      assert.ok(noFallback);
+      assert.equal(noFallback.level, "error");
+      assert.match(noFallback.message, /^rate limited on zai\/glm-5\.2; no fallback available/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("フォールバック済みターンでレート制限以外のエラーが来ても抑止を維持する", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await extension.providerResponse(429);
+      const switchedModelCount = extension.selectedModels.length;
+      // レート制限と無関係なエラーは抑止を消費しない
+      const nonRateLimited = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage: "prompt is too long: context overflow",
+      });
+      assert.equal(nonRateLimited, undefined);
+      assert.equal(extension.selectedModels.length, switchedModelCount);
+      // 抑止が維持されるため、後続の throttle 文言も誤 fallback しない
+      const replacement = await extension.messageEnd({
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage: "Error: 429: too many requests",
+      });
+      assert.equal(
+        replacement.message.errorMessage,
+        "429 rate limit error; already switched to a fallback model",
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
   it("次候補がない場合は retryable に置換せず user message を送らない", async () => {
     const extension = captureAgentsExtension();
     try {
