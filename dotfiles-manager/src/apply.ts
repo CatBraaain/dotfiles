@@ -213,6 +213,7 @@ function readOneLine(input: Stream | NodeJS.ReadableStream): Promise<string> {
       input.off("data", onData);
       input.off("end", onEnd);
       input.off("error", onEnd);
+      if (input === process.stdin) process.stdin.pause();
       resolveLine(answer);
     };
     const onData = (chunk: string | Buffer) => {
