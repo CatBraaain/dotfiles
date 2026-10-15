@@ -19,33 +19,8 @@ if [ -d "$HOME/.local/bin" ] ; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
-# Mark the session environment as loaded for this startup chain. ~/.bashrc
-# checks this to avoid re-sourcing this file (mutual-source loop guard).
-_DOTFILES_ENV_LOADED=1
-
-export PATH="$HOME/.local/go/bin:$PATH"
-export PATH="$HOME/.local/node/bin:$PATH"
-export PATH="$HOME/go/bin:$PATH"
-export PATH="$HOME/.cargo/bin:$PATH"
-export PATH="$HOME/.local/share/pnpm:$PATH"
-
-if [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
-  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-fi
-export PATH="/home/linuxbrew/.linuxbrew/opt/rustup/bin:$PATH"
-
-export ANDROID_HOME="$HOME/.android-sdk"
-export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-
-# Vite+ bin (https://viteplus.dev)
-[ -f "$HOME/.vite-plus/env" ] && . "$HOME/.vite-plus/env"
-
-# Prefer Bun's global CLIs over stale npm globals in the Homebrew prefix.
-export PATH="$HOME/.bun/bin:$PATH"
-
-# Agent CLIs (e.g. browse).
-export PATH="$HOME/.agents/cli:$PATH"
-
+# Session environment lives in ~/.bashrc (above its interactive guard), so it
+# also applies to non-interactive login shells (e.g. `ssh <host> <command>`).
 # if running bash
 if [ -n "$BASH_VERSION" ]; then
     # include .bashrc if it exists
