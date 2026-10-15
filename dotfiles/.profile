@@ -19,6 +19,10 @@ if [ -d "$HOME/.local/bin" ] ; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
+# Mark the session environment as loaded for this startup chain. ~/.bashrc
+# checks this to avoid re-sourcing this file (mutual-source loop guard).
+_DOTFILES_ENV_LOADED=1
+
 export PATH="$HOME/.local/go/bin:$PATH"
 export PATH="$HOME/.local/node/bin:$PATH"
 export PATH="$HOME/go/bin:$PATH"

@@ -1,3 +1,10 @@
+# Session environment is owned by ~/.profile (read by login shells).
+# Non-login interactive shells (e.g. the VS Code integrated terminal) read only
+# this file, so source it here unless it already ran in this startup chain.
+if [ -z "${_DOTFILES_ENV_LOADED:-}" ] && [ -f ~/.profile ]; then
+  . ~/.profile
+fi
+
 case $- in
   *i*) ;;
   *) return ;;
@@ -9,8 +16,6 @@ esac
 if [ -e /dev/dxg ] && grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease; then
   export GALLIUM_DRIVER="d3d12"
 fi
-
-# Environment variables are set up in ~/.profile (read by non-interactive login shells).
 
 # keep-sorted start
 alias a="pi"
