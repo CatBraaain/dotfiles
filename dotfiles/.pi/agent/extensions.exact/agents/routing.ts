@@ -60,6 +60,33 @@ export function isRateLimitedError(errorMessage: string | undefined): boolean {
   );
 }
 
+export function misattributedHttp429ModelKey(
+  errorMessage: string | undefined,
+  messageModelKey: string,
+  http429ModelKeys: ReadonlySet<string>,
+): string | null {
+  if (
+    !errorMessage ||
+    !isRateLimitedError(errorMessage) ||
+    http429ModelKeys.has(messageModelKey) ||
+    http429ModelKeys.size === 0
+  ) {
+    return null;
+  }
+
+  const matchingKeys = [...http429ModelKeys].filter((key) => {
+    const provider = key.split("/", 1)[0];
+    if (provider === "amazon-bedrock") {
+      return /throttling error|too many tokens per day|throttlingexception/i.test(errorMessage);
+    }
+    if (provider === "zai" || provider === "z-ai") {
+      return /code"\s*:\s*"(1310|1113)"/.test(errorMessage);
+    }
+    return false;
+  });
+  return matchingKeys.length === 1 ? matchingKeys[0]! : null;
+}
+
 export function modelKey(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }

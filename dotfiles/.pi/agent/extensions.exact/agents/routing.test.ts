@@ -7,6 +7,7 @@ import {
   isCoolingDown,
   isManualSelect,
   isRateLimitedError,
+  misattributedHttp429ModelKey,
   parseRetryAfter,
   pickCandidate,
   recordCooldown,
@@ -260,6 +261,38 @@ describe("最終assistantエラーのレート制限判定", () => {
   it("汎用スロットリング表現をレート制限として扱う", () => {
     assert.equal(isRateLimitedError("OpenAI API error: Rate limit reached"), true);
     assert.equal(isRateLimitedError("429 Too Many Requests"), true);
+  });
+});
+
+describe("HTTP 429 error model attribution", () => {
+  const bedrockModelKey = "amazon-bedrock/us.anthropic.claude-sonnet-4-6";
+  const bedrockThrottle = "Throttling error: Too many tokens per day";
+
+  it("attributes inherited Bedrock throttle text to the HTTP 429 model", () => {
+    const sourceModelKey = misattributedHttp429ModelKey(
+      bedrockThrottle,
+      "cursor/composer-2.5:slow",
+      new Set([bedrockModelKey]),
+    );
+    assert.equal(sourceModelKey, bedrockModelKey);
+  });
+
+  it("keeps a model's own HTTP 429 error attributed to that model", () => {
+    const sourceModelKey = misattributedHttp429ModelKey(
+      bedrockThrottle,
+      bedrockModelKey,
+      new Set([bedrockModelKey]),
+    );
+    assert.equal(sourceModelKey, null);
+  });
+
+  it("does not attribute generic usage limits to a previous HTTP 429 model", () => {
+    const sourceModelKey = misattributedHttp429ModelKey(
+      "Codex error: The usage limit has been reached",
+      "zai/glm-5.2",
+      new Set(["commandcode/gpt-5.6-luna"]),
+    );
+    assert.equal(sourceModelKey, null);
   });
 });
 

@@ -28,6 +28,7 @@ import {
   evalWhen,
   isManualSelect,
   isRateLimitedError,
+  misattributedHttp429ModelKey,
   modelKey,
   modelSupportsImages,
   parseRetryAfter,
@@ -985,6 +986,7 @@ export default function agentsExtension(
   // /class で切り替えた class。undefined は currentAgent の既定 class を使う（SPEC「class によるモデル選択」）。
   let currentClass: string | undefined;
   let httpRateLimitAwaitingMessage: { modelKey: string; fallbackSucceeded: boolean } | undefined;
+  const http429ModelKeys = new Set<string>();
 
   const bashExec = bashExecFrom(createLocalBashOperations());
   const runWhen = (when: string | undefined, signal?: AbortSignal) =>
@@ -1095,6 +1097,7 @@ export default function agentsExtension(
   }
 
   pi.on("session_start", async (event, ctx) => {
+    http429ModelKeys.clear();
     if (event.reason === "reload") {
       // 設定を読み込み直す。手動選択状態・実効 class・cooldown は維持し、モデルは変更しない。
       const saved = takeSavedRoutingState();
@@ -1131,6 +1134,7 @@ export default function agentsExtension(
   // ── pre-prompt re-evaluation ────────────────────────────────────────
 
   pi.on("input", async (event, ctx) => {
+    if (event.source !== "extension") http429ModelKeys.clear();
     // 画像添付を親セッションのモデルへ送らない。main / senior は依頼文ごと vision
     // 子セッションへ委譲し、親のターンは handled で止める。報告は通知で返る。
     if (event.images && event.images.length > 0) return routeImageInput(event, ctx);
@@ -1270,10 +1274,6 @@ export default function agentsExtension(
   }
 
   pi.on("after_provider_response", async (event, ctx) => {
-    // SPEC「フォールバック済みターンのエラー判定」: 抑止の有効期間は「429 受信から
-    // 次の HTTPレスポンスまで」。フォールバック先で別のリクエストが飛んだあとは、
-    // 最終 assistant エラーの provider/model はそのリクエストのモデルを表すため、
-    // 抑止を解除して通常判定へ戻す。
     if (event.status !== 429) {
       httpRateLimitAwaitingMessage = undefined;
       return;
@@ -1287,6 +1287,7 @@ export default function agentsExtension(
     if (isZaiProvider(ctx.model.provider)) return;
 
     const rateLimitedModelKey = modelKey(ctx.model);
+    http429ModelKeys.add(rateLimitedModelKey);
     const cooldownMs = parseRetryAfter(event.headers["retry-after"]) ?? DEFAULT_COOLDOWN_MS;
     const fallbackSucceeded = await fallbackAfterRateLimit(rateLimitedModelKey, cooldownMs, ctx);
     httpRateLimitAwaitingMessage = { modelKey: rateLimitedModelKey, fallbackSucceeded };
@@ -1323,6 +1324,12 @@ export default function agentsExtension(
 
     const rateLimitedModelKey = modelKey({ provider: message.provider, id: message.model });
     if (!isRateLimitedError(message.errorMessage)) return;
+    const misattributedModelKey = misattributedHttp429ModelKey(
+      message.errorMessage,
+      rateLimitedModelKey,
+      http429ModelKeys,
+    );
+    if (misattributedModelKey) return { message: makeFallbackAppliedMessage(message) };
 
     const fallbackSucceeded = await fallbackAfterRateLimit(
       rateLimitedModelKey,
