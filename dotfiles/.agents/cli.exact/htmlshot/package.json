@@ -1,0 +1,5 @@
+{
+  "name": "htmlshot-cli",
+  "private": true,
+  "main": "./src/main.ts"
+}
