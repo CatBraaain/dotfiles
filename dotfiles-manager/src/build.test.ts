@@ -1703,7 +1703,7 @@ describe("manager CLI", () => {
     );
     await put(distRoot, "old.txt", "stale\n");
 
-    const result = await runManager("apply");
+    const result = await runManager(["apply", "--yes"]);
 
     assert.equal(result.code, 0, result.stderr);
     assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "new\n");

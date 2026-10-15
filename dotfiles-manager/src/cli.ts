@@ -6,15 +6,22 @@ import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
 import { resolveWsl, type WslConnection } from "./wsl.ts";
 
-const usage = "usage: bun dotfiles-manager <apply|diff|managed>";
+const usage =
+  "usage: bun dotfiles-manager <apply|diff|managed> [--yes] (--yes is for apply only)";
 
 export async function main(
   args: readonly string[],
   root = resolve(import.meta.dir, "../.."),
   homeRoot = homedir(),
 ): Promise<number> {
-  const [command] = args;
-  if (args.length !== 1 || (command !== "apply" && command !== "diff" && command !== "managed"))
+  const yes = args.includes("--yes");
+  const rest = args.filter((argument) => argument !== "--yes");
+  const [command] = rest;
+  if (
+    rest.length !== 1 ||
+    (command !== "apply" && command !== "diff" && command !== "managed") ||
+    (yes && command !== "apply")
+  )
     throw new Error(usage);
 
   const started = performance.now();
@@ -27,7 +34,7 @@ export async function main(
     const distRoot = join(root, "dist");
     const code = await logStage(command, () =>
       command === "apply"
-        ? apply([distRoot, homeRoot])
+        ? apply([distRoot, homeRoot, ...(yes ? ["--yes"] : [])])
         : diff(command === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]),
     );
     logElapsed(`command ${command}`, code === 0 ? "success" : "failure", started);

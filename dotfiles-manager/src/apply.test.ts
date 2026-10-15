@@ -16,11 +16,14 @@ import {
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Stream } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
 import { collectDifferences, type DiffResult } from "./diff.ts";
 import {
   applyDifferences,
   collectDeclarations,
+  confirmApplyStdin,
+  confirmsApply,
   main,
   parseArgs,
   runApplyScripts,
@@ -342,7 +345,7 @@ describe("apply scripts", () => {
   it("runs an apply script produced inside node_modules", async () => {
     await putApplyScript(distRoot, "node_modules/pkg/setup.apply.ts");
 
-    const exitCode = await main([distRoot, homeRoot]);
+    const exitCode = await main([distRoot, homeRoot, "--yes"]);
 
     assert.equal(exitCode, 0);
     assert.equal(
@@ -537,7 +540,7 @@ describe("CLI", () => {
     const declarations = await collectDeclarations(distRoot);
     assert.equal(declarations.applyScripts.length, 1);
 
-    const exitCode = await main([distRoot, homeRoot]);
+    const exitCode = await main([distRoot, homeRoot, "--yes"]);
 
     assert.equal(exitCode, 0);
     assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
@@ -550,7 +553,7 @@ describe("CLI", () => {
     const previousCwd = process.cwd();
     process.chdir(root);
     try {
-      const exitCode = await main(["dist", homeRoot]);
+      const exitCode = await main(["dist", homeRoot, "--yes"]);
       assert.equal(exitCode, 0);
     } finally {
       process.chdir(previousCwd);
@@ -635,7 +638,7 @@ describe("CLI", () => {
     await put(distRoot, "pkg/nested/file.txt", "x\n");
 
     const cli = Bun.spawn(
-      [process.execPath, join(import.meta.dir, "apply.ts"), distRoot, homeRoot],
+      [process.execPath, join(import.meta.dir, "apply.ts"), "--yes", distRoot, homeRoot],
       {
         stdout: "pipe",
         stderr: "pipe",
@@ -659,7 +662,7 @@ describe("CLI", () => {
     await putApplyScript(distRoot, "final.apply.ts");
 
     const cli = Bun.spawn(
-      [process.execPath, join(import.meta.dir, "apply.ts"), distRoot, homeRoot, "--json"],
+      [process.execPath, join(import.meta.dir, "apply.ts"), "--yes", distRoot, homeRoot, "--json"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
@@ -692,5 +695,75 @@ describe("CLI", () => {
       assert.equal(stdout, "");
       assert.notEqual(stderr, "");
     }
+  });
+});
+
+describe("apply confirmation", () => {
+  it("applies when the confirmation accepts", async () => {
+    await put(distRoot, "a.txt", "new\n");
+
+    const exitCode = await main([distRoot, homeRoot], async () => true);
+
+    assert.equal(exitCode, 0);
+    assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
+  });
+
+  it("aborts with exit code 0, no home writes, and no apply scripts when declined", async () => {
+    await put(distRoot, "a.txt", "new\n");
+    await put(homeRoot, "a.txt", "old\n");
+    await putApplyScript(distRoot, "final.apply.ts");
+
+    const exitCode = await main([distRoot, homeRoot], async () => false);
+
+    assert.equal(exitCode, 0);
+    assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "old\n");
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
+  });
+
+  it("skips the confirmation when --yes is given", async () => {
+    await put(distRoot, "a.txt", "new\n");
+
+    const exitCode = await main([distRoot, homeRoot, "--yes"], async () => {
+      throw new Error("confirmation must not run with --yes");
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "new\n");
+  });
+
+  it("aborts with exit code 0 when stdin ends before an answer", async () => {
+    await put(distRoot, "a.txt", "new\n");
+    await put(homeRoot, "a.txt", "old\n");
+
+    const cli = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "apply.ts"), distRoot, homeRoot],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /Apply\? \[y\/N\] /);
+    assert.match(stdout, /apply aborted/);
+    assert.equal(await readFile(join(homeRoot, "a.txt"), "utf8"), "old\n");
+  });
+
+  it("reads the answer from the given stream and treats EOF as a decline", async () => {
+    assert.equal(await confirmApplyStdin(Stream.Readable.from(["y\n"])), true);
+    assert.equal(await confirmApplyStdin(Stream.Readable.from(["  Y \n"])), true);
+    assert.equal(await confirmApplyStdin(Stream.Readable.from(["n\n"])), false);
+    assert.equal(await confirmApplyStdin(Stream.Readable.from([])), false);
+  });
+
+  it("accepts only y answers ignoring case and surrounding whitespace", () => {
+    assert.equal(confirmsApply("y\n"), true);
+    assert.equal(confirmsApply("  Y \n"), true);
+    assert.equal(confirmsApply("yes"), false);
+    assert.equal(confirmsApply("n\n"), false);
+    assert.equal(confirmsApply(""), false);
   });
 });

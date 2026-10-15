@@ -6,9 +6,11 @@
 import * as fsPromises from "node:fs/promises";
 const { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } = fsPromises;
 import { dirname, join, resolve } from "node:path";
+import { Stream } from "node:stream";
 import { expandHomeRoot, positionalArguments } from "./args.ts";
 import { comparesExecutableBits, readSymlinkTarget } from "./compare.ts";
 import { collectDifferences, main as diffMain, type DiffEntry, type DiffResult } from "./diff.ts";
+import { renderDiffs } from "./diff-render.ts";
 import {
   ensureHookDirectory,
   removeEmptyHookDirectories,
@@ -30,7 +32,8 @@ export type Declarations = {
 
 type RenameFile = (source: string, destination: string) => Promise<void>;
 
-const usage = "usage: bun dotfiles-manager/src/apply.ts [--dry-run] <distRoot> <homeRoot> [--json]";
+const usage =
+  "usage: bun dotfiles-manager/src/apply.ts [--dry-run] [--yes] <distRoot> <homeRoot> [--json]";
 
 // ---------------------------------------------------------------- public API
 
@@ -122,25 +125,32 @@ export async function runApplyScripts(
 
 export function parseArgs(argv: readonly string[]): {
   dryRun: boolean;
+  yes: boolean;
   distRoot: string;
   homeRoot: string;
   rest: string[];
 } {
-  const rest = argv.filter((argument) => argument !== "--dry-run");
-  const dryRun = rest.length !== argv.length;
+  const rest = argv.filter((argument) => argument !== "--dry-run" && argument !== "--yes");
+  const dryRun = argv.includes("--dry-run");
+  const yes = argv.includes("--yes");
   const positional = positionalArguments(rest, ["--json"]);
   if (positional.length < 2) throw new Error(usage);
   return {
     dryRun,
+    yes,
     distRoot: positional[0]!,
     homeRoot: expandHomeRoot(positional[1]!),
     rest,
   };
 }
 
-// Lifecycle without the build stage: diff detection → apply → apply
-// scripts. --dry-run renders the diff only (no writes, no apply scripts).
-export async function main(argv: readonly string[]): Promise<number> {
+// Lifecycle without the build stage: diff detection → diff display →
+// confirmation → apply → apply scripts. --dry-run renders the diff only
+// (no writes, no apply scripts); --yes skips the confirmation.
+export async function main(
+  argv: readonly string[],
+  confirmApply: () => Promise<boolean> = confirmApplyStdin,
+): Promise<number> {
   const options = parseArgs(argv);
   if (options.dryRun) return diffMain(options.rest);
   // Absolute so script paths handed to child interpreters resolve against
@@ -155,6 +165,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       `${result.added.length} added, ${result.removedExact.length} surplus (exact), ` +
       `${result.removedIgnored.length} surplus (ignored) (${elapsedSeconds(diffStarted)}s)`,
   );
+  await renderDiffs(result, { distRoot, homeRoot });
+
+  const proceed = options.yes || (await confirmApply());
+  if (!proceed) {
+    writeLine("apply aborted");
+    return 0;
+  }
 
   const applyStarted = performance.now();
   const applied = await applyDifferences(distRoot, homeRoot, result);
@@ -170,6 +187,44 @@ export async function main(argv: readonly string[]): Promise<number> {
     `apply scripts: ${declarations.applyScripts.length} scripts (${elapsedSeconds(scriptsStarted)}s)`,
   );
   return 0;
+}
+
+// ------------------------------------------------------------------ confirmation
+
+export function confirmsApply(answer: string): boolean {
+  return answer.trim().toLowerCase() === "y";
+}
+
+// Writes the prompt, reads one answer line from the input, and treats an
+// input that ends before an answer (pipes, /dev/null) as a decline.
+// Reads the stream by events: Bun's readline/promises leaves a pending
+// question unresolved at end-of-input instead of rejecting it.
+export async function confirmApplyStdin(
+  input: Stream | NodeJS.ReadableStream = process.stdin,
+): Promise<boolean> {
+  process.stdout.write("Apply? [y/N] ");
+  return confirmsApply(await readOneLine(input));
+}
+
+function readOneLine(input: Stream | NodeJS.ReadableStream): Promise<string> {
+  return new Promise((resolveLine) => {
+    let buffer = "";
+    const finish = (answer: string) => {
+      input.off("data", onData);
+      input.off("end", onEnd);
+      input.off("error", onEnd);
+      resolveLine(answer);
+    };
+    const onData = (chunk: string | Buffer) => {
+      buffer += chunk.toString();
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex !== -1) finish(buffer.slice(0, newlineIndex));
+    };
+    const onEnd = () => finish(buffer);
+    input.on("data", onData);
+    input.on("end", onEnd);
+    input.on("error", onEnd);
+  });
 }
 
 // ------------------------------------------------------------------ applying
