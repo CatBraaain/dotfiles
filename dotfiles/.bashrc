@@ -10,28 +10,7 @@ if [ -e /dev/dxg ] && grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease; then
   export GALLIUM_DRIVER="d3d12"
 fi
 
-export PATH="$HOME/.local/bin:$PATH"
-export PATH="$HOME/.local/go/bin:$PATH"
-export PATH="$HOME/.local/node/bin:$PATH"
-export PATH="$HOME/go/bin:$PATH"
-export PATH="$HOME/.cargo/bin:$PATH"
-export PATH="$HOME/.local/share/pnpm:$PATH"
-
-if [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
-  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-fi
-export PATH="/home/linuxbrew/.linuxbrew/opt/rustup/bin:$PATH"
-
-export ANDROID_HOME="$HOME/.android-sdk"
-export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-
-[ -f "$HOME/.vite-plus/env" ] && . "$HOME/.vite-plus/env"
-
-# Prefer Bun's global CLIs over stale npm globals in the Homebrew prefix.
-export PATH="$HOME/.bun/bin:$PATH"
-
-# Agent CLIs (e.g. browse).
-export PATH="$HOME/.agents/cli:$PATH"
+# Environment variables are set up in ~/.profile (read by non-interactive login shells).
 
 # keep-sorted start
 alias a="pi"
