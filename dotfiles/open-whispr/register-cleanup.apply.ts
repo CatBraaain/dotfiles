@@ -221,7 +221,7 @@ export function readPromptFile(promptPath: string): ValidatedPrompt {
 }
 
 export type RegistrationOutcome = {
-  status: "applied" | "unchanged" | "error";
+  status: "applied" | "unchanged" | "skipped" | "error";
   code: "OK" | HookErrorCode;
   promptSha256: string | null;
   detail?: string;
@@ -828,16 +828,20 @@ export async function registerCleanup(options: {
     const paths = resolvePaths(options.platform, options.env);
     const prompt = readPromptFile(paths.promptPath);
     promptSha256 = prompt.sha256Hex;
-    releaseHookLock = await acquireHookLock(
-      paths.profileDir,
-      paths.timeouts.lockWaitMs,
-    );
-    verifyAppIdentity(paths.appDir);
-    if (!isRecognizedProfile(paths.profileDir))
-      throw new HookError(
-        "INVALID_INPUT",
-        `profile is not a recognized app userData directory: ${paths.profileDir}`,
+    const recognizedProfile = isRecognizedProfile(paths.profileDir);
+    if (recognizedProfile)
+      releaseHookLock = await acquireHookLock(
+        paths.profileDir,
+        paths.timeouts.lockWaitMs,
       );
+    verifyAppIdentity(paths.appDir);
+    if (!recognizedProfile)
+      return {
+        status: "skipped",
+        code: "OK",
+        promptSha256,
+        detail: `OpenWhispr userData is not initialized: ${paths.profileDir}; launch and quit OpenWhispr, then run apply again`,
+      };
     const runtimeDir = await ensureShadowRuntime(paths.appDir, paths.platform);
     const readRun = await runHarnessMode({
       mode: "read",
@@ -858,7 +862,11 @@ export async function registerCleanup(options: {
     const currentValue = readRun.outcome.payload.currentValue ?? null;
     const currentSha = readRun.outcome.payload.currentSha256 ?? null;
     if (readRun.outcome.payload.equals === true)
-      return { status: "unchanged", code: "OK", promptSha256: prompt.sha256Hex };
+      return {
+        status: "unchanged",
+        code: "OK",
+        promptSha256: prompt.sha256Hex,
+      };
     const applyRun = await runHarnessMode({
       mode: "apply",
       runtimeDir,

@@ -1,7 +1,16 @@
 import { describe, it, beforeAll, afterAll } from "bun:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +22,8 @@ import {
   clearRecoveryRecord,
   formatStatusLine,
   parseAsarPackageName,
+  registerCleanup,
+  sha256Hex,
   recoveryRecordPath,
   resolvePaths,
   runHarnessMode,
@@ -189,7 +200,7 @@ describe("harness source guards", () => {
 
   it("serves an inert file-protocol document and denies other requests and permissions", () => {
     assert.ok(source.includes('protocol.handle("file"'));
-    assert.ok(source.includes("startsWith(\"file:\")"));
+    assert.ok(source.includes('startsWith("file:")'));
     assert.ok(source.includes("setPermissionRequestHandler"));
     assert.ok(source.includes("callback(false)"));
   });
@@ -212,35 +223,35 @@ describe("harness source guards", () => {
   });
 });
 
-describe("asar package identity", () => {
-  function buildAsarFixture(packageName: string): Buffer {
-    const packageJson = Buffer.from(
-      JSON.stringify({ name: packageName, version: "9.9.9" }),
-      "utf8",
-    );
-    const jsonLength = Buffer.byteLength(
-      JSON.stringify({
-        files: { "package.json": { offset: "0", size: packageJson.length } },
-      }),
-      "utf8",
-    );
-    const padding = (4 - (jsonLength % 4)) % 4;
-    const headerPickleLength = 8 + jsonLength + padding;
-    const header = Buffer.alloc(16 + jsonLength + padding);
-    header.writeUInt32LE(4, 0);
-    header.writeUInt32LE(headerPickleLength, 4);
-    header.writeUInt32LE(headerPickleLength - 4, 8);
-    header.writeUInt32LE(jsonLength, 12);
-    header.write(
-      JSON.stringify({
-        files: { "package.json": { offset: "0", size: packageJson.length } },
-      }),
-      16,
-      "utf8",
-    );
-    return Buffer.concat([header, packageJson]);
-  }
+function buildAsarFixture(packageName: string): Buffer {
+  const packageJson = Buffer.from(
+    JSON.stringify({ name: packageName, version: "9.9.9" }),
+    "utf8",
+  );
+  const jsonLength = Buffer.byteLength(
+    JSON.stringify({
+      files: { "package.json": { offset: "0", size: packageJson.length } },
+    }),
+    "utf8",
+  );
+  const padding = (4 - (jsonLength % 4)) % 4;
+  const headerPickleLength = 8 + jsonLength + padding;
+  const header = Buffer.alloc(16 + jsonLength + padding);
+  header.writeUInt32LE(4, 0);
+  header.writeUInt32LE(headerPickleLength, 4);
+  header.writeUInt32LE(headerPickleLength - 4, 8);
+  header.writeUInt32LE(jsonLength, 12);
+  header.write(
+    JSON.stringify({
+      files: { "package.json": { offset: "0", size: packageJson.length } },
+    }),
+    16,
+    "utf8",
+  );
+  return Buffer.concat([header, packageJson]);
+}
 
+describe("asar package identity", () => {
   it("extracts the package name from an asar archive", () => {
     const asar = buildAsarFixture("open-whispr-fixture");
     assert.equal(parseAsarPackageName(asar), "open-whispr-fixture");
@@ -322,6 +333,224 @@ function parseStatusLine(stdout: string): StatusLine {
     promptSha256: match[3]!,
   };
 }
+
+describe("registration with an uninitialized profile", () => {
+  const fixtureRoots: string[] = [];
+  const promptText = "Remove only fillers. Keep 来週、いや、再来週.\n";
+
+  function createFixture() {
+    const root = mkdtempSync(join(tmpdir(), "openwhispr-uninitialized-"));
+    fixtureRoots.push(root);
+    const appDir = join(root, "app");
+    mkdirSync(join(appDir, "resources"), { recursive: true });
+    writeFileSync(
+      join(appDir, "resources", "app.asar"),
+      buildAsarFixture("open-whispr"),
+    );
+    const platform =
+      process.platform === "win32" ? ("win32" as const) : ("linux" as const);
+    const binaryName =
+      platform === "win32" ? "OpenWhispr.exe" : "open-whispr-app";
+    writeFileSync(join(appDir, binaryName), `unused fixture binary: ${root}`);
+    const profileDir = join(root, "profile");
+    const promptPath = join(root, "cleanup-prompt.txt");
+    writeFileSync(promptPath, promptText);
+    const env = {
+      PATH: process.env.PATH,
+      HOME: root,
+      APPDATA: root,
+      LOCALAPPDATA: root,
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      OPENWHISPR_E2E: "1",
+      OPENWHISPR_E2E_PROMPT: promptPath,
+      OPENWHISPR_E2E_PROFILE: profileDir,
+      OPENWHISPR_E2E_APP_DIR: appDir,
+    };
+    return { root, appDir, profileDir, promptPath, platform, env };
+  }
+
+  function snapshot(root: string) {
+    return readdirSync(root, { recursive: true, encoding: "utf8" })
+      .sort()
+      .map((entry) => {
+        const path = join(root, entry);
+        return [
+          entry,
+          statSync(path).isDirectory()
+            ? null
+            : readFileSync(path).toString("hex"),
+        ];
+      });
+  }
+
+  function runtimeEntries() {
+    return readdirSync(tmpdir())
+      .filter((entry) =>
+        /^(openwhispr-register-runtime-|openwhispr-runtime-|openwhispr-harness-home-)/.test(
+          entry,
+        ),
+      )
+      .sort();
+  }
+
+  afterAll(() => {
+    for (const root of fixtureRoots)
+      rmSync(root, { recursive: true, force: true });
+  });
+
+  for (const profileState of ["missing", "prompt-only"] as const) {
+    it(`skips a ${profileState} profile without creating runtime or changing files`, async () => {
+      const fixture = createFixture();
+      if (profileState === "prompt-only") {
+        mkdirSync(fixture.profileDir);
+        fixture.env.OPENWHISPR_E2E_PROMPT = join(
+          fixture.profileDir,
+          "cleanup-prompt.txt",
+        );
+        writeFileSync(fixture.env.OPENWHISPR_E2E_PROMPT, promptText);
+        writeFileSync(
+          join(fixture.profileDir, ".env"),
+          "preserve-fixture-settings\n",
+        );
+      }
+      const before = snapshot(fixture.root);
+      const runtimesBefore = runtimeEntries();
+      const outcome = await registerCleanup(fixture);
+      assert.equal(outcome.status, "skipped");
+      assert.equal(outcome.code, "OK");
+      assert.equal(outcome.promptSha256, sha256Hex(promptText));
+      assert.match(
+        outcome.detail ?? "",
+        /launch and quit OpenWhispr, then run apply again/,
+      );
+      assert.ok(outcome.detail?.includes(fixture.profileDir));
+      assert.equal(
+        formatStatusLine(outcome),
+        `status=skipped code=OK prompt_sha256=${sha256Hex(promptText)}`,
+      );
+      assert.deepEqual(snapshot(fixture.root), before);
+      assert.deepEqual(runtimeEntries(), runtimesBefore);
+      assert.equal(existsSync(recoveryRecordPath(fixture.profileDir)), false);
+      assert.equal(
+        existsSync(
+          join(
+            tmpdir(),
+            `openwhispr-register-cleanup-${sha256Hex(fixture.profileDir).slice(0, 16)}.lock`,
+          ),
+        ),
+        false,
+      );
+    });
+  }
+
+  it("skips without waiting for or releasing an existing hook lock", async () => {
+    const fixture = createFixture();
+    const release = await acquireHookLock(fixture.profileDir, 300);
+    const lockPath = join(
+      tmpdir(),
+      `openwhispr-register-cleanup-${sha256Hex(fixture.profileDir).slice(0, 16)}.lock`,
+    );
+    const lockBefore = statSync(lockPath);
+    try {
+      const outcome = await registerCleanup(fixture);
+      assert.equal(outcome.status, "skipped");
+      assert.equal(outcome.code, "OK");
+      assert.equal(statSync(lockPath).mtimeMs, lockBefore.mtimeMs);
+    } finally {
+      await release();
+    }
+  });
+
+  for (const invalidPrompt of ["missing", "blank", "nul", "utf8"] as const) {
+    it(`rejects a ${invalidPrompt} prompt before skipping`, async () => {
+      const fixture = createFixture();
+      const invalidBytes = {
+        blank: Buffer.from(" \n"),
+        nul: Buffer.from("a\0b"),
+        utf8: Buffer.from([0xff]),
+      };
+      if (invalidPrompt === "missing") rmSync(fixture.promptPath);
+      else writeFileSync(fixture.promptPath, invalidBytes[invalidPrompt]);
+      rmSync(fixture.appDir, { recursive: true });
+      const before = snapshot(fixture.root);
+      const outcome = await registerCleanup(fixture);
+      assert.equal(outcome.status, "error");
+      assert.equal(outcome.code, "INVALID_INPUT");
+      assert.equal(outcome.promptSha256, null);
+      assert.match(outcome.detail ?? "", /prompt file/);
+      assert.deepEqual(snapshot(fixture.root), before);
+    });
+  }
+
+  for (const invalidApp of ["missing", "malformed", "wrong-name"] as const) {
+    it(`rejects a ${invalidApp} app before skipping`, async () => {
+      const fixture = createFixture();
+      const asarPath = join(fixture.appDir, "resources", "app.asar");
+      if (invalidApp === "missing") rmSync(fixture.appDir, { recursive: true });
+      else
+        writeFileSync(
+          asarPath,
+          invalidApp === "malformed"
+            ? Buffer.from([1, 2, 3])
+            : buildAsarFixture("other-app"),
+        );
+      const before = snapshot(fixture.root);
+      const outcome = await registerCleanup(fixture);
+      assert.equal(outcome.status, "error");
+      assert.equal(outcome.code, "INVALID_INPUT");
+      assert.equal(outcome.promptSha256, sha256Hex(promptText));
+      assert.match(outcome.detail ?? "", /installed app/);
+      assert.deepEqual(snapshot(fixture.root), before);
+    });
+  }
+
+  for (const marker of ["Preferences", "Local Storage"] as const) {
+    it(`does not skip a profile recognized by ${marker}`, async () => {
+      const fixture = createFixture();
+      mkdirSync(fixture.profileDir);
+      if (marker === "Preferences")
+        writeFileSync(join(fixture.profileDir, marker), "{}");
+      else mkdirSync(join(fixture.profileDir, marker));
+      rmSync(
+        join(
+          fixture.appDir,
+          fixture.platform === "linux" ? "open-whispr-app" : "OpenWhispr.exe",
+        ),
+      );
+      const before = snapshot(fixture.root);
+      const outcome = await registerCleanup(fixture);
+      assert.equal(outcome.status, "error");
+      assert.equal(outcome.code, "INVALID_INPUT");
+      assert.match(outcome.detail ?? "", /installed app binary is missing/);
+      assert.deepEqual(snapshot(fixture.root), before);
+    });
+  }
+
+  it("returns CLI exit 0 with a skipped status and actionable detail", async () => {
+    const fixture = createFixture();
+    const before = snapshot(fixture.root);
+    const runtimesBefore = runtimeEntries();
+    const child = Bun.spawn([process.execPath, hookScriptPath], {
+      env: fixture.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    assert.equal(exitCode, 0);
+    assert.deepEqual(parseStatusLine(stdout), {
+      status: "skipped",
+      code: "OK",
+      promptSha256: sha256Hex(promptText),
+    });
+    assert.match(stderr, /launch and quit OpenWhispr, then run apply again/);
+    assert.deepEqual(snapshot(fixture.root), before);
+    assert.deepEqual(runtimeEntries(), runtimesBefore);
+  });
+});
 
 describe("e2e with the installed Electron runtime", () => {
   const e2ePlatform =
@@ -553,6 +782,10 @@ describe("e2e with the installed Electron runtime", () => {
           result.stderr,
         );
         assert.equal(result.exitCode, 3);
+        assert.equal(
+          result.stderr.trim(),
+          "the profile singleton lock is held by another process; OpenWhispr is likely running — quit it and run apply again",
+        );
         assert.ok(
           holdChild?.exitCode === null || holdChild?.exitCode === undefined,
           "helper was stopped",
