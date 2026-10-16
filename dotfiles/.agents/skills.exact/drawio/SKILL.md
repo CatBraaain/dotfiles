@@ -1,6 +1,6 @@
 ---
 name: drawio
-description: draw.ioの図（フローチャート、アーキテクチャ図、ER図、シーケンス図、クラス図、ネットワーク図、モックアップ、ワイヤーフレームなど）を作成・編集・検証・出力するときに使う。既存の.drawio、またはdiagram dataを埋め込んだ.drawio.svg・.drawio.pngの編集にも使う。通常のSVG・PNG画像の編集には使わない。
+description: draw.io 形式（.drawio、diagram data を埋め込んだ .drawio.svg・.drawio.png）の図を作成・編集・検証・出力するときに使う。通常のSVG・PNG画像の編集には使わない。
 ---
 
 # Draw.io
