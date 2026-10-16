@@ -1,7 +1,7 @@
 ---
 name: git
 description: >-
-  git の commit・branch・merge・push・PR 運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contribution ガイドに照合する、OSS への PR の受付可否と適切性を評価する。git コマンド（add・reset・restore・stash・commit・merge・rebase・push 等、index・worktree・branch を変更する操作、および staged/unstaged の確認）を実行する前に必ず読む。「コミットして」「コミットを分けて」「マージして」「push して」「ブランチ切って」「PR 作って」「OSS にコントリビュートしたい」等の明示的な依頼のほか、調査・実装・検証の途中で自発的に git コマンドを実行するときも使う。
+  git の commit・branch・merge・push・PR運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contributionガイドに照合する、OSS への PR の受付可否と適切性を評価する。gitコマンド（add・reset・restore・stash・commit・merge・rebase・push等、index・worktree・branch を変更する操作、および staged/unstaged の確認）を実行する前に必ず読む。「コミットして」「コミットを分けて」「マージして」「pushして」「ブランチ切って」「PR作って」「OSS にコントリビュートしたい」等の明示的な依頼のほか、調査・実装・検証の途中で自発的に gitコマンドを実行するときも使う。
 ---
 
 # Git
@@ -12,23 +12,23 @@ git の commit・branch・push・PR に関する判断規則を所有する。
 
 リポジトリ固有の規約が、常に本標準の一般規則より優先する。
 
-- 適用する: commit の作成・分割、commit メッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS 等）への contribution。
-- 適用しない: コード変更そのものの品質（coding-standard 等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（共有 `~/.agents/AGENTS.md` の「Git Worktree Strategy」が所有）。
+- 適用する: commit の作成・分割、commitメッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS等）への contribution。
+- 適用しない: コード変更そのものの品質（coding-standard等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（共有 `~/.agents/AGENTS.md` の「Git Worktree Strategy」が所有）。
 
 ## Decision Ladder: リポジトリ規約の確認
 
 PR の作成前、および commit・branch・merge の操作前に対象リポジトリの必要な規約が未確認なら、このラダーで特定する。既に確認済みの規約は再調査せず、本標準の一般規則と併せて適用する。
 
-目標: branch 運用・commit 規約・PR 手順を、観測可能な根拠（ドキュメントの該当箇所・履歴）で特定する。
+目標: branch運用・commit規約・PR手順を、観測可能な根拠（ドキュメントの該当箇所・履歴）で特定する。
 
 最初に成立する段で止まる。
 
 1. 条件: ローカルのリポジトリに規約を述べたドキュメントがあり、今回の操作に必要な規約が特定できるか？
-   行動: CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit 規約・PR 手順を読む。
-2. 条件: ドキュメントに規約がなく、同一形式のコミット・branch 名が履歴に繰り返し現れ、慣習が一貫して観測できるか？
-   行動: `git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch 命名・PR 運用の実績を読む。
+   行動: CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit規約・PR手順を読む。
+2. 条件: ドキュメントに規約がなく、同一形式のコミット・branch名が履歴に繰り返し現れ、慣習が一貫して観測できるか？
+   行動: `git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch命名・PR運用の実績を読む。
 3. 条件: 外部リポジトリへの contribution で、ローカルに案内がないか？
-   行動: 公式の contribution guide・issue tracker から、PR 受付可否、issue 先行の要否、CLA/DCO 署名要件、AI 利用の可否と開示要件を確認する。手段の選択は research-strategy に従う。
+   行動: 公式の contribution guide・issue tracker から、PR受付可否、issue先行の要否、CLA/DCO署名要件、AI利用の可否と開示要件を確認する。手段の選択は research-strategy に従う。
 4. 条件: 前段までで規約を特定できないか？
    行動: 本標準の一般規則を適用する。その後も判断が分かれる点は、質問して止まる。
 
@@ -41,18 +41,18 @@ PR の作成前、および commit・branch・merge の操作前に対象リポ�
 1. `git status` と `git diff HEAD` で、ステージ済み・未ステージ・未追跡を含む変更を確認する。
 2. `git branch --show-current` で現在の branch を確認し、branch を移動しない。
 3. 変更がある場合のみ、現在の `HEAD` を `backup/<現在のbranch名>-<yyyymmddhhmmss>` に保存する。`git branch <バックアップbranch名> HEAD` で作成し、バックアップのために branch を移動しない。
-4. 変更を独立して review・revert できる目的または意味の単位へ分ける。`1 commit = 1 論理的変更` とし、分割すると中間の commit が成立しない密接な変更は同じ commit にまとめる。
-5. 各単位の変更内容と既存の commit 履歴を確認して、リポジトリ規約に従うコミットメッセージを決める。
-6. 各単位に必要なファイルだけを明示して stage し、`git diff --cached` で確認してから commit する。意味の異なる変更が混在するときは `git add -p` 等で分割する。
+4. 変更を独立してreview・revert できる目的または意味の単位へ分ける。`1 commit = 1 論理的変更` とし、分割すると中間の commit が成立しない密接な変更は同じcommit にまとめる。
+5. 各単位の変更内容と既存の commit履歴を確認して、リポジトリ規約に従うコミットメッセージを決める。
+6. 各単位に必要なファイルだけを明示してstageし、`git diff --cached` で確認してから commitする。意味の異なる変更が混在するときは `git add -p` 等で分割する。
 7. すべての commit の後に `git status` と `git log -n <作成したcommit数>` を確認する。
 
 ### 分割時のバックアップと一致確認（必須）
 
-add/reset によって分割する場合、確認済みの分割対象を一時 commit にしてから、次の手順で内容の一致を確認する。既存 commit を分割し直す場合は、未コミット変更を一時 commit にしない。
+add/reset によって分割する場合、確認済みの分割対象を一時commit にしてから、次の手順で内容の一致を確認する。既存commit を分割し直す場合は、未コミット変更を一時commit にしない。
 
 **1. 分割前 — バックアップの作成**
 
-WIP commit 前に index 全体を確認する。既に staged の変更に承認済みの分割対象以外が含まれる場合は、index を変更せず停止して user に確認する。`git add` 後も index 全体が承認済みの分割対象だけであることを確認し、一致した場合のみ WIP commit を作成する。
+WIP commit前に index全体を確認する。既に staged の変更に承認済みの分割対象以外が含まれる場合は、index を変更せず停止してuser に確認する。`git add` 後も index全体が承認済みの分割対象だけであることを確認し、一致した場合のみWIP commit を作成する。
 
 ```sh
 git diff --cached                  # 既存の staged 変更を全件確認する
@@ -76,25 +76,25 @@ git diff backup/split-<timestamp> HEAD   # 差分が空であること
 git status                               # 未コミット変更を確認する
 ```
 
-- 差分が空で、分割対象の未コミット変更や分割中に加わった編集がなければ、バックアップ branch を削除する:
+- 差分が空で、分割対象の未コミット変更や分割中に加わった編集がなければ、バックアップbranch を削除する:
 
 ```sh
 git branch -D backup/split-<timestamp>
 ```
 
-- 差分がある、または分割中に加わった編集がある場合は、バックアップ branch・worktree・index を保持して停止する。差分と `git status` を提示し、復旧方法は user に確認する。
+- 差分がある、または分割中に加わった編集がある場合は、バックアップbranch・worktree・index を保持して停止する。差分と `git status` を提示し、復旧方法は user に確認する。
 
 ### コミット作成の境界
 
 - コミットメッセージはリポジトリの規約に従う。規約がない場合は Conventional Commits に従い、`feat`、`fix`、`refactor`、`chore`、`docs`、`style`、`test`、`build`、`ci`、`perf` などから変更の意味に合う `type` を選ぶ。言語は `git log` で確認した履歴で優勢なものを使う。
-- 機密情報、生成物、意図しない変更を commit しない。user が明示していない既存の変更を編集・削除・破棄しない。
-- `git add .` と `git add -A` で無関係な変更をまとめて stage しない。既存 commit の amend、rebase、squash、またはこの節の分割手順以外の reset はしない。
-- 変更がない場合は、バックアップ branch も commit も作成せず、その旨を報告する。
-- 安全に判断できる場合は commit 作成前に確認を求めない。判断できない変更または危険な変更がある場合は、commit せずに停止して確認を求める。
+- 機密情報、生成物、意図しない変更を commitしない。user が明示していない既存の変更を編集・削除・破棄しない。
+- `git add .` と `git add -A` で無関係な変更をまとめてstageしない。既存commit の amend、rebase、squash、またはこの節の分割手順以外の reset はしない。
+- 変更がない場合は、バックアップbranch も commit も作成せず、その旨を報告する。
+- 安全に判断できる場合は commit作成前に確認を求めない。判断できない変更または危険な変更がある場合は、commitせずに停止して確認を求める。
 
 ### コミット作成の出力
 
-作成した commit ごとに、commit hash、commit message、含めた変更の概要を報告する。未コミットの変更が残る場合は理由も報告する。
+作成したcommitごとに、commit hash、commit message、含めた変更の概要を報告する。未コミットの変更が残る場合は理由も報告する。
 
 ## コミットメッセージ
 
@@ -106,15 +106,15 @@ git branch -D backup/split-<timestamp>
 
 ## branch
 
-branch 名・分岐元は、リポジトリの branch strategy に従う。文書化されていないときは、既存 branch の慣習に従う。
+branch名・分岐元は、リポジトリの branch strategy に従う。文書化されていないときは、既存branch の慣習に従う。
 
 ## 実行の境界
 
 - coding agent の変更は、user が staged/unstaged の状態で管理・レビューする。`git add`・`git reset`・`git restore`・`git stash` 等の index または worktree の状態を変更する操作は、user が staging、commit の作成・分割など staging を必要とする操作を明示的に指示（承認を含む）した場合のほか実行しない。user が staged にした変更の解除や、user の未コミット変更の破棄も指示がない限り行わない。
-- user が commit を指示したときは、その時点で staged にある変更もコミットに含めてよい。コミットから除外するのは、user が除外を指示したとき、またはその変更がコミットの意味単位（1 commit = 1 論理的変更）に属さないと判断できるときだけにする。判断に迷うときは確認する。
-- index の状態が予期しないものに見えても、勝手に正さず user に確認する。user または前段の操作が staged にした可能性があり、index の状態自体が user の管理領域である。
+- user が commit を指示したときは、その時点で staged にある変更もコミットに含めてよい。コミットから除外するのは、user が除外を指示したとき、またはその変更がコミットの意味単位（1 commit = 1論理的変更）に属さないと判断できるときだけにする。判断に迷うときは確認する。
+- index の状態が予期しないものに見えても、勝手に正さずuser に確認する。user または前段の操作が staged にした可能性があり、index の状態自体が user の管理領域である。
 - remote への push と PR の作成は、明示的な指示があるときだけ行う。
-- 共有 branch への force push・履歴の書き換えは、user の承認があるまで行わない。
+- 共有branch への force push・履歴の書き換えは、user の承認があるまで行わない。
 
 ## PR の適切性
 
@@ -122,22 +122,22 @@ PR を作る前に、次を評価する。
 
 | 観点 | 確認すること | 根拠の例 |
 | --- | --- | --- |
-| 受付可否 | PR・issue を受け付けているか | archive 状態、contributing guide、maintainer の発言 |
-| 手順 | 要求される手順を満たすか | issue 先行、discussion、CLA/DCO 署名 |
+| 受付可否 | PR・issue を受け付けているか | archive状態、contributing guide、maintainer の発言 |
+| 手順 | 要求される手順を満たすか | issue先行、discussion、CLA/DCO署名 |
 | スコープ | 変更が1目的にまとまっているか | コミット分割と同じ論理単位で分割できるか |
-| 既存案 | 同一変更の PR・issue が既にないか | issue・PR 検索 |
+| 既存案 | 同一変更の PR・issue が既にないか | issue・PR検索 |
 
-## 外部リポジトリへの PR での AI 利用の開示
+## 外部リポジトリへの PR での AI利用の開示
 
 user が所属しないリポジトリへの PR でのみ適用する。所属リポジトリへの PR には付けない。
 
-- PR 本文の末尾に、次の形式の trailer を付ける:
+- PR本文の末尾に、次の形式の trailer を付ける:
 
   ```
   Assisted-by: <provider_name>:<model_name>
   ```
 
-  PR 本文を作成する時点で、`<provider_name>` をモデルの開発・提供元、`<model_name>` を実際に使用したモデルの識別子に置き換える。API の経由先やコーディングエージェントの名前は含めない。
+  PR本文を作成する時点で、`<provider_name>` をモデルの開発・提供元、`<model_name>` を実際に使用したモデルの識別子に置き換える。API の経由先やコーディングエージェントの名前は含めない。
 
 ## 出力
 

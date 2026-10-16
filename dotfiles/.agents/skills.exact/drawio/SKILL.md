@@ -1,6 +1,6 @@
 ---
 name: drawio
-description: draw.io 形式（.drawio、diagram data を埋め込んだ .drawio.svg・.drawio.png）の図を作成・編集・検証・出力するときに使う。通常のSVG・PNG画像の編集には使わない。
+description: draw.io形式（.drawio、diagram data を埋め込んだ .drawio.svg・.drawio.png）の図を作成・編集・検証・出力するときに使う。通常のSVG・PNG画像の編集には使わない。
 ---
 
 # Draw.io
@@ -13,7 +13,7 @@ Draw.io Desktop CLIはELKレイアウトと出力に必要である。`.drawio.s
 
 ## CLIラダー
 
-目標: 今回必要なレイアウトまたは出力を実行できる draw.io Desktop CLI コマンドを1つ特定する。既存の`.drawio`をCLIなしでXML直接編集する場合は、このラダーを実行しない。
+目標: 今回必要なレイアウトまたは出力を実行できるdraw.io Desktop CLIコマンドを1つ特定する。既存の`.drawio`をCLIなしでXML直接編集する場合は、このラダーを実行しない。
 
 最初に成立する段で止まる。
 

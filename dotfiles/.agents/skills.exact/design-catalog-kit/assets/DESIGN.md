@@ -1,4 +1,4 @@
-# design-catalog-kit 共通viewer デザイン正本
+# design-catalog-kit共通viewerデザイン正本
 
 状態: 承認済み。
 

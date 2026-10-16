@@ -1,7 +1,7 @@
 ---
 name: specs
 description: >-
-  SPEC.md・REQUIREMENTS.md・specs/<feature-name>.spec.md 等の spec・requirements 文書の要否・配置・作成・修正の規則。CSDDにおける正本のうち spec・requirements 形式を所有し、skill `csdd` から参照される。spec・requirements ファイルを作成・修正するとき、またはその要否・配置を判断するときに適用する。既存の spec を読んで照合・レビューするだけのときは発火せず、CSDD適合性レビュー・乖離検知・照合は `csdd` が所有する。適用対象か判定できない場合は正本を作成せず、変更の有無を確認する。
+  SPEC.md・REQUIREMENTS.md・specs/<feature-name>.spec.md等の spec・requirements文書の要否・配置・作成・修正の規則。CSDDにおける正本のうちspec・requirements形式を所有し、skill `csdd` から参照される。spec・requirementsファイルを作成・修正するとき、またはその要否・配置を判断するときに適用する。既存の spec を読んで照合・レビューするだけのときは発火せず、CSDD適合性レビュー・乖離検知・照合は `csdd` が所有する。適用対象か判定できない場合は正本を作成せず、変更の有無を確認する。
 ---
 
 # Specs
@@ -37,7 +37,7 @@ spec・requirements を新規作成する提案の有無を、リポジトリが
 1. remote origin があるリポジトリでは、`gh repo view --json isFork,viewerPermission` で判定する。
    - `isFork` が `true`、または `viewerPermission` が `READ` 以下 → 外部リポジトリ。新規作成を提案しない
    - `viewerPermission` が `WRITE`・`MAINTAIN`・`ADMIN` → 自分のプロジェクト。新規作成を提案できる
-2. `gh repo view` が失敗したら（remote なし・非 GitHub・未認証など）、先頭コミットの author email と `git config user.email` を比較する。一致すれば自分のプロジェクト、不一致なら外部リポジトリとして扱う
+2. `gh repo view` が失敗したら（remote なし・非GitHub・未認証など）、先頭コミットの author email と `git config user.email` を比較する。一致すれば自分のプロジェクト、不一致なら外部リポジトリとして扱う
 3. いずれでも判定できない場合（git でない、`user.email` 未設定など）は、必要と判断した場合に理由を添えてプロジェクトへの作成を提案する質問にフォールバックする
 
 - 外部リポジトリと判定した対象に spec・requirements を作成するのは、ユーザーの明示依頼があるときだけである。

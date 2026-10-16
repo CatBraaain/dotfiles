@@ -1,6 +1,6 @@
 # ローマ字表の宣言
 
-対象は、MS-IMEの日本語入力で使うローマ字表の宣言データ（`roma-table.yaml`）である。宣言データはMS-IME用コンパイラ（`msime/SPEC.md`）が読み込み、集約 engine（`roma-table.ts`）でマッピング集合を構成してから、その形式へ反映する。利用者は、このリポジトリでWindows環境のIME設定を管理するユーザーである。
+対象は、MS-IMEの日本語入力で使うローマ字表の宣言データ（`roma-table.yaml`）である。宣言データはMS-IME用コンパイラ（`msime/SPEC.md`）が読み込み、集約engine（`roma-table.ts`）でマッピング集合を構成してから、その形式へ反映する。利用者は、このリポジトリでWindows環境のIME設定を管理するユーザーである。
 
 ## 用語
 

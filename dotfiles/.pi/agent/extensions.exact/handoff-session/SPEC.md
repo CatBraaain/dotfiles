@@ -1,4 +1,4 @@
-# handoff-session 拡張機能 Spec
+# handoff-session拡張機能Spec
 
 この拡張は、作業phaseを終えたagentが次のagentへの自然言語プロンプトを用意し、ユーザーの確認後に完全な新セッションへ移るための `handoff_session` ツールを提供する。対象読者は、phase境界でコンテキストを切り替えるユーザーとagentである。
 

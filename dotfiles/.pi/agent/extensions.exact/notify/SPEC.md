@@ -1,4 +1,4 @@
-# notify 拡張機能 Spec
+# notify拡張機能Spec
 
 エージェントの処理が終わって入力を待つ状態になったとき、ターミナルのネイティブ通知を1回送る。
 
@@ -12,7 +12,7 @@
 
 ## 実行条件（モード）
 
-通知は TUI モード（`ctx.mode` が `"tui"`）で動作しているセッションだけで送る。rpc・json・print モードでは標準出力がプロトコルや結果の出力に使われるため、通知シーケンスの書き出しを行わない。
+通知は TUIモード（`ctx.mode` が `"tui"`）で動作しているセッションだけで送る。rpc・json・printモードでは標準出力がプロトコルや結果の出力に使われるため、通知シーケンスの書き出しを行わない。
 
 ## 通知内容
 
@@ -27,15 +27,15 @@
 
 | 条件 | プロトコル | 対応ターミナル |
 | --- | --- | --- |
-| `WT_SESSION` が設定されている | Windows トースト通知 | Windows Terminal（WSL） |
+| `WT_SESSION` が設定されている | Windowsトースト通知 | Windows Terminal（WSL） |
 | `KITTY_WINDOW_ID` が設定されている、または `TERM_PROGRAM` が `vscode` | OSC 99 | Kitty, VSCode |
 | 上記以外 | OSC 777 | Ghostty, iTerm2, WezTerm, rxvt-unicode |
 
-### Windows トースト通知
+### Windowsトースト通知
 
 `powershell.exe -NoProfile -Command` を実行し、Windows の ToastNotification API でトーストを表示する。トーストの本文には `<本文>` のみが表示され、`<タイトル>` は表示されない。タイトルは Windows の通知元識別（AppId）文字列として使用される。
 
-`powershell.exe` の起動には `execFile` を使う。起動失敗・実行エラー（`powershell.exe` が存在しない等）が発生しても拡張の処理を続行し、pi プロセスをクラッシュさせない。
+`powershell.exe` の起動には `execFile` を使う。起動失敗・実行エラー（`powershell.exe` が存在しない等）が発生しても拡張の処理を続行し、piプロセスをクラッシュさせない。
 
 ### OSC 99（Kitty / VSCode）
 

@@ -1,4 +1,4 @@
-# OpenWhispr クリーンアッププロンプト自動登録 要件
+# OpenWhisprクリーンアッププロンプト自動登録 要件
 
 ## 背景
 
@@ -12,9 +12,9 @@ apply の実行で、フィラーのみを除去するクリーンアッププ�
 
 - 対象OSは Linux と Windows。macOS は対象外
 - `Preferences` または `Local Storage` が存在するディレクトリを認識済みの userData とする
-- 未認識の userData では、プロンプトとインストール済みアプリの識別を検証した後、`status=skipped code=OK` とプロンプトの SHA-256 を返し、終了コード 0 で終わる。英語の detail で OpenWhispr の起動・終了後に再実行するよう案内する。CLI はこの案内を色指定なしの stdout に表示し、stderr は空にする。エラー時の detail は stderr に表示する。hook lock の取得、harness の起動、shadow runtime の生成、登録・storage・既存ファイルへの書き込みは行わない
-- プロンプトの欠損・不正、アプリの未インストール・識別失敗は、userData の認識状態によらず `INVALID_INPUT` エラーとする。認識済み userData での hook lock と入力検証の優先順位は維持する
-- 認識済みの userData で OpenWhispr が起動中のときはフックは何も書き換えず明確なエラー（LOCKED）で終わり、起動状態を変更しない。owner は必要に応じてアプリを終了してから apply する
+- 未認識の userData では、プロンプトとインストール済みアプリの識別を検証した後、`status=skipped code=OK` とプロンプトの SHA-256 を返し、終了コード0 で終わる。英語の detail で OpenWhispr の起動・終了後に再実行するよう案内する。CLI はこの案内を色指定なしの stdout に表示し、stderr は空にする。エラー時の detail は stderr に表示する。hook lock の取得、harness の起動、shadow runtime の生成、登録・storage・既存ファイルへの書き込みは行わない
+- プロンプトの欠損・不正、アプリの未インストール・識別失敗は、userData の認識状態によらず `INVALID_INPUT` エラーとする。認識済みuserData での hook lock と入力検証の優先順位は維持する
+- 認識済みの userData で OpenWhispr が起動中のときはフックは何も書き換えず明確なエラー（LOCKED）で終わり、起動状態を変更しない。owner は必要に応じてアプリを終了してから applyする
 - 登録済みの内容が一致する場合は何も変更しない
 - 変更するのはクリーンアッププロンプトの1キーのみ。provider・model・認証情報・既存の `.env`・アプリの他のデータは変更しない
 - 失敗時は適用前の状態へ復元する
@@ -24,6 +24,6 @@ apply の実行で、フィラーのみを除去するクリーンアッププ�
 ## 受け入れ条件
 
 - 認識済みの userData では、owner が OpenWhispr を終了してから apply を実行した後、OpenWhispr の書き起こしクリーンアップが `cleanup-prompt.txt` の内容で動作する
-- 未認識の userData では、検証に成功するとプロファイルの有無や既存ファイルを変えずに成功 skip し、再実行に必要な案内を表示する
+- 未認識の userData では、検証に成功するとプロファイルの有無や既存ファイルを変えずに成功skipし、再実行に必要な案内を表示する
 - worktree で `bun test` と `OPENWHISPR_E2E=1 bun test` が通る
 - Linux・Windows の隔離実証により、実アプリ・実プロファイルに触れずに動作することを確認済みである

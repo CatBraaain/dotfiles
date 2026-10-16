@@ -2,9 +2,9 @@
 name: research-strategy
 description: >-
   調べる目的ごとに手段と web の可否を切り分ける戦略。調査・情報収集の手段や調べ方を選ぶとき、調べ方の指示を受けたときに使う。
-  OSS の実装・挙動はローカルミラーの実ファイルで（web 禁）、公式情報はドキュメントで、人々の実感・口コミは reddit・技術記事で。
+  OSS の実装・挙動はローカルミラーの実ファイルで（web禁）、公式情報はドキュメントで、人々の実感・口コミは reddit・技術記事で。
   既存アプリやOSSの選定・提案では、採用実績と成熟度を要件適合と併せて評価する。
-  bot 対策サイトからの大量取得は capture-first：最初に成功したページで playwright-cli requests を撮り、API を fetch/curl 再生する。
+  bot対策サイトからの大量取得は capture-first：最初に成功したページで playwright-cli requests を撮り、API を fetch/curl再生する。
 ---
 
 # Research Strategy
@@ -31,7 +31,7 @@ Starsだけで成熟度を断定せず、複数の採用シグナルで評価す
 
 ## ローカルミラー
 
-OSS の実装・挙動は、同じ ref のドキュメントとソースをローカルミラーの Git オブジェクトから確認する。ウェブのドキュメントサイトでは定義、呼び出し元、テスト、CHANGELOG、ドキュメントを一意に往復できない。
+OSS の実装・挙動は、同じref のドキュメントとソースをローカルミラーの Gitオブジェクトから確認する。ウェブのドキュメントサイトでは定義、呼び出し元、テスト、CHANGELOG、ドキュメントを一意に往復できない。
 
 ミラーは URL から `~/mirrors/<host>/<owner>/<repo>` に配置する。ホストで分けることで同名リポジトリの衝突を防ぐ。
 
@@ -50,11 +50,11 @@ OSS の実装・挙動は、同じ ref のドキュメントとソースをロ�
 | OSS の実装・挙動 | ローカルミラーの実ファイル | 禁 | 正確な挙動・根拠 |
 | 公式情報（仕様・非OSS） | 公式ドキュメント | 可 | 仕様・API・保証 |
 | 人々の実感・トラブル | reddit・技術記事・issue | 可 | 落とし穴・比較・実感 |
-| サイトからの大量取得 | ブラウザでキャプチャ → API を fetch/curl 再生 | 可 | 構造化データの安定取得 |
+| サイトからの大量取得 | ブラウザでキャプチャ → API を fetch/curl再生 | 可 | 構造化データの安定取得 |
 
 ## OSS の実装・挙動
 
-実リポジトリを `~/mirrors` にクローン（既存なら fetch）し、選んだ ref のドキュメントもソースも Git に記録された実ファイルの内容を追う。web_fetch / web_search は一切使わない。
+実リポジトリを `~/mirrors` にクローン（既存なら fetch）し、選んだref のドキュメントもソースも Git に記録された実ファイルの内容を追う。web_fetch / web_search は一切使わない。
 
 ### 作業フロー
 
@@ -68,7 +68,7 @@ flowchart LR
 
 ### クローンと ref の選択
 
-`~/mirrors/<host>/<owner>/<repo>` にクローンし、既存なら `origin` の URL が対象リポジトリと一致することを確認してから fetch する。origin が一致しない場合や fetch に失敗した場合は停止し、古い内容を最新として扱わない。
+`~/mirrors/<host>/<owner>/<repo>` にクローンし、既存なら `origin` の URL が対象リポジトリと一致することを確認してから fetchする。origin が一致しない場合や fetch に失敗した場合は停止し、古い内容を最新として扱わない。
 
 ```bash
 DEST=~/mirrors/github.com/owner/repo
@@ -79,11 +79,11 @@ git -C "$DEST" fetch origin --prune --tags
 COMMIT=$(git -C "$DEST" rev-parse --verify "$REF^{commit}")
 ```
 
-依頼に版・branch・commit の指定があればその tag（`refs/tags/<tag>`）、取得済みの remote branch（`refs/remotes/origin/<branch>`）、または commit ID を `REF` とする。指定がなければ `git -C "$DEST" ls-remote --symref origin HEAD` で現行のデフォルト branch を確認し、対応する `refs/remotes/origin/<branch>` を選ぶ。remote HEAD を特定できない場合や ref を取得できない場合は停止する。`COMMIT` に確定した commit ID を以下で使う。`fetch` は作業ツリーを更新しないため、作業ツリーの `HEAD` やファイルを選んだ ref の内容とみなさない。checkout・reset で既存の変更を上書きしない。
+依頼に版・branch・commit の指定があればその tag（`refs/tags/<tag>`）、取得済みの remote branch（`refs/remotes/origin/<branch>`）、または commit ID を `REF` とする。指定がなければ `git -C "$DEST" ls-remote --symref origin HEAD` で現行のデフォルトbranch を確認し、対応する `refs/remotes/origin/<branch>` を選ぶ。remote HEAD を特定できない場合や ref を取得できない場合は停止する。`COMMIT` に確定したcommit ID を以下で使う。`fetch` は作業ツリーを更新しないため、作業ツリーの `HEAD` やファイルを選んだref の内容とみなさない。checkout・reset で既存の変更を上書きしない。
 
 ### ドキュメント
 
-選んだ commit の記録済みファイルを読む。web は使わない。
+選んだcommit の記録済みファイルを読む。web は使わない。
 
 ```bash
 git -C "$DEST" ls-tree -r --name-only "$COMMIT"  # README, CHANGELOG, docs/ 等を探す
@@ -98,14 +98,14 @@ git -C "$DEST" show "$COMMIT:README.md" | nl -ba
 
 ### ソース
 
-同じ commit のファイルを検索し、内容と行番号を確認して実装を追う。
+同じcommit のファイルを検索し、内容と行番号を確認して実装を追う。
 
 ```bash
 git -C "$DEST" grep -n "<function-or-symbol>" "$COMMIT" --
 git -C "$DEST" show "$COMMIT:path/to/source" | nl -ba
 ```
 
-作業ツリーを使うツールしか利用できない場合は、`git -C "$DEST" status --porcelain --untracked-files=all` が空で、`git -C "$DEST" rev-parse HEAD` が選んだ commit と一致するときだけ読む。どちらかを確認できない、または条件を満たさない場合は停止し、checkout・reset・clean でユーザーの変更を消さない。
+作業ツリーを使うツールしか利用できない場合は、`git -C "$DEST" status --porcelain --untracked-files=all` が空で、`git -C "$DEST" rev-parse HEAD` が選んだcommit と一致するときだけ読む。どちらかを確認できない、または条件を満たさない場合は停止し、checkout・reset・clean でユーザーの変更を消さない。
 
 - 定義 → 呼び出し元 → テスト を往復して挙動を確定する。
 - テスト（`test/`, `tests/`, `*_test.*`）は期待挙動の仕様書として使う。
@@ -113,7 +113,7 @@ git -C "$DEST" show "$COMMIT:path/to/source" | nl -ba
 
 ## 公式情報
 
-OSS の実装ではなく仕様・公式の挙動を知りたいとき、またはクローン対象ではないプロプライエタリ・SaaS 等を調べるときは公式ドキュメントを読む。
+OSS の実装ではなく仕様・公式の挙動を知りたいとき、またはクローン対象ではないプロプライエタリ・SaaS等を調べるときは公式ドキュメントを読む。
 
 - 公式ドキュメントサイト・README・リファレンス・仕様書を一次情報にする。
 - web_fetch / web_search を使ってよい。ただし一次ソースに当たる。
@@ -136,21 +136,21 @@ OSS の実装ではなく仕様・公式の挙動を知りたいとき、また�
 
 ## サイトからの大量取得（capture-first）
 
-bot 対策（Akamai 等）のあるサイトをブラウザで開く目的は通信キャプチャである。SPA は内部 API で動いているため、最初に成功したページで必ず `playwright-cli requests` を確認し、目的のデータを返す API を特定する。初回の requests を撮り逃すと、以後は API を逆推測する遠回りになる。
+bot対策（Akamai等）のあるサイトをブラウザで開く目的は通信キャプチャである。SPA は内部API で動いているため、最初に成功したページで必ず `playwright-cli requests` を確認し、目的のデータを返すAPI を特定する。初回の requests を撮り逃すと、以後は API を逆推測する遠回りになる。
 
-大量取得は「API キャプチャ → fetch/curl 再生」を DOM スクレイピングより優先する。API は検索キーワードやページ番号を param に渡して再生でき、1 リクエストで構造化データが得られる。
+大量取得は「APIキャプチャ → fetch/curl再生」を DOMスクレイピングより優先する。API は検索キーワードやページ番号を param に渡して再生でき、1リクエストで構造化データが得られる。
 
-### bot ブロック時の打ち手
+### botブロック時の打ち手
 
-Access Denied 等でブロックされたら、順に試す。
+Access Denied等でブロックされたら、順に試す。
 
 1. `goto` の再試行をしない。ページ遷移が最もスコアリングされる
 2. 同セッション内の in-page fetch（`eval` で `fetch()` を呼ぶ）を試す。遷移だけがブロック対象のケースがある
-3. 待つのは純 sleep の合計 5 分が目安の上限。超えたら打ち切り、取得済みの内容と未達範囲を報告する
+3. 待つのは純sleep の合計5分が目安の上限。超えたら打ち切り、取得済みの内容と未達範囲を報告する
 
 ## 出力
 
-- OSS の実装・挙動: 確認した commit ID、リポジトリ相対のファイルパス・行番号、該当するシンボルを示し、選んだ commit の実コードとドキュメントを根拠に結論を述べる。作業ツリーのパスを、そこに存在しない版の内容へのリンクとして扱わない。
+- OSS の実装・挙動: 確認したcommit ID、リポジトリ相対のファイルパス・行番号、該当するシンボルを示し、選んだcommit の実コードとドキュメントを根拠に結論を述べる。作業ツリーのパスを、そこに存在しない版の内容へのリンクとして扱わない。
 - 公式仕様・プロプライエタリ・SaaS: 一次情報の URL、確認日、分かる場合は対象バージョンと公開・更新日を示す。
 - コミュニティの実感・トラブル: 証言ごとの URL、確認日、分かる場合は投稿日時と対象バージョンを示し、公式仕様や実装の根拠とは区別する。
 

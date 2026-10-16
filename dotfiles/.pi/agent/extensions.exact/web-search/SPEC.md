@@ -1,6 +1,6 @@
-# web-search 拡張機能 Spec
+# web-search拡張機能Spec
 
-pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli.exact/` の `browse` CLI コマンド（spec: `dotfiles/.agents/cli.exact/browse/SPEC.md`。以下 **CLI spec**）が持つ。この拡張は CLI の search / fetch サブコマンドを子プロセスで起動し、tool の入出力への変換のみを行う薄いラッパーである。
+pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli.exact/` の `browse` CLIコマンド（spec: `dotfiles/.agents/cli.exact/browse/SPEC.md`。以下 **CLI spec**）が持つ。この拡張は CLI の search / fetchサブコマンドを子プロセスで起動し、tool の入出力への変換のみを行う薄いラッパーである。
 
 ## ツール一覧
 
@@ -13,30 +13,30 @@ pi に **Web検索** と **URL取得** の2つのツールを追加する。実�
 
 各ツールの execute は、対応するサブコマンドを `bun <browse プロジェクトディレクトリ>` で子プロセス起動し、完了を待つ。
 
-| ツール | CLI 引数 |
+| ツール | CLI引数 |
 | --- | --- |
-| web_search | `search` `<query>`（`--lang <lang>` は lang 指定時のみ）`--json` |
+| web_search | `search` `<query>`（`--lang <lang>` は lang指定時のみ）`--json` |
 | web_fetch | `fetch` `<url>` `--json` |
 
-tool 呼び出しの中断（abort signal）は子プロセスの kill に伝える。
+tool呼び出しの中断（abort signal）は子プロセスの kill に伝える。
 
 | CLI の終了 | tool の結果 |
 | --- | --- |
-| 終了コード 0 | stdout を JSON として解釈し、本文と details へ変換する（§出力変換） |
-| 終了コード 0 以外 | tool エラー。stderr を1行目からそのままエラーメッセージとする |
-| stderr 空 | tool エラー。`<CLI名> exited with code <code>`（シグナル終了時は `terminated by signal`） |
-| spawn 失敗 | tool エラー。`<CLI名>: <原因>` |
-| stdout が JSON でない | tool エラー。`<CLI名>: CLI stdout is not JSON` |
+| 終了コード0 | stdout を JSON として解釈し、本文と details へ変換する（§出力変換） |
+| 終了コード0以外 | toolエラー。stderr を1行目からそのままエラーメッセージとする |
+| stderr空 | toolエラー。`<CLI名> exited with code <code>`（シグナル終了時は `terminated by signal`） |
+| spawn失敗 | toolエラー。`<CLI名>: <原因>` |
+| stdout が JSON でない | toolエラー。`<CLI名>: CLI stdout is not JSON` |
 
-エラー時も TUI の結果行に失敗を表示するため、throw の前に `onUpdate` でエラー details を通知する。
+エラー時も TUI の結果行に失敗を表示するため、throw の前に `onUpdate` でエラーdetails を通知する。
 
 ## 出力変換
 
 ### web_search
 
-stdout の JSON（CLI spec `--json` のフィールド参照）から、本文 Markdown と details を作る。
+stdout の JSON（CLI spec `--json` のフィールド参照）から、本文Markdown と details を作る。
 
-本文は CLI の markdown 出力（CLI spec「markdown 出力の構造」）と同じ形式。1 行目に `**Query:** "<クエリ>" - **Engines:** <engine> - **Took:** <秒>s` を置き、続けて結果ごとに `### <番号>. <タイトル>`、`**<表示URL>** - <type>`、スニペット、`-> <URL>` の順のブロックを置く。欠損フィールドの行は省略し、タイトル欠損は URL、それも無ければ `(no title)` とする。results は CLI が rank 順・上位10件に整形済みのため、そのまま順に番号を振る。
+本文は CLI の markdown出力（CLI spec「markdown出力の構造」）と同じ形式。1行目に `**Query:** "<クエリ>" - **Engines:** <engine> - **Took:** <秒>s` を置き、続けて結果ごとに `### <番号>. <タイトル>`、`**<表示URL>** - <type>`、スニペット、`-> <URL>` の順のブロックを置く。欠損フィールドの行は省略し、タイトル欠損は URL、それも無ければ `(no title)` とする。results は CLI が rank順・上位10件に整形済みのため、そのまま順に番号を振る。
 
 details は `{ engine, tookMs }`。
 
@@ -46,21 +46,21 @@ details は `{ engine, tookMs }`。
 
 ## 検索・フェッチの振る舞いの委譲
 
-backend の順序とフォールバック、challenge / captcha 再試行、タイムアウト、openserp / camoufox 常駐サーバーの起動待ち、同一種類コマンドの直列化（flock による再 spawn を含む）、Reddit / StackOverflow の専用取得経路は、すべて CLI spec に従い CLI が行う。この拡張側では実装しない。
+backend の順序とフォールバック、challenge / captcha再試行、タイムアウト、openserp / camoufox常駐サーバーの起動待ち、同一種類コマンドの直列化（flock による再spawn を含む）、Reddit / StackOverflow の専用取得経路は、すべてCLI spec に従いCLI が行う。この拡張側では実装しない。
 
-環境変数 `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` は子プロセスへ継承され、CLI 側の規則（CLI spec「前提と依存」）で解釈される。
+環境変数 `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` は子プロセスへ継承され、CLI側の規則（CLI spec「前提と依存」）で解釈される。
 
 ## camoufox server の配置
 
-camoufox server は `browse` CLI（`~/.agents/cli/browse`）に内蔵され、`browse server start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI 自身が `browse server start` をバックグラウンド起動し、共通の startup script（`~/.agents/scripts/startup`）も先行起動する。この拡張は server 本体を同梱しない。
+camoufox server は `browse` CLI（`~/.agents/cli/browse`）に内蔵され、`browse server start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI自身が `browse server start` をバックグラウンド起動し、共通の startup script（`~/.agents/scripts/startup`）も先行起動する。この拡張は server本体を同梱しない。
 
 ### camoufox の表示モード（Xvfb headed と x11vnc）
 
-camoufox server の表示モード（Linux 既定の Xvfb `:99` 上の headed と x11vnc による人間への画面引き取り、`CAMOUFOX_HEADLESS`）、server 実行環境の上書き（`CAMOUFOX_EXECUTABLE_PATH`・`CAMOUFOX_PLAYWRIGHT_CORE`）、SIGINT / SIGTERM 終了時の後始末は、CLI spec「camoufox server のモード」節の正本に従う。この拡張は表示モードに独自の振る舞いを持たず、関連する環境変数も特に設定しない。
+camoufox server の表示モード（Linux既定の Xvfb `:99` 上の headed と x11vnc による人間への画面引き取り、`CAMOUFOX_HEADLESS`）、server実行環境の上書き（`CAMOUFOX_EXECUTABLE_PATH`・`CAMOUFOX_PLAYWRIGHT_CORE`）、SIGINT / SIGTERM終了時の後始末は、CLI spec「camoufox server のモード」節の正本に従う。この拡張は表示モードに独自の振る舞いを持たず、関連する環境変数も特に設定しない。
 
-## CLI プロジェクトディレクトリのパス解決
+## CLIプロジェクトディレクトリのパス解決
 
-CLI プロジェクトディレクトリ（`browse/`）は、この拡張のディレクトリから4階層上の `.agents/` 配下で解決する。source tree の `dotfiles/.pi/agent/extensions.exact/web-search/` からは `dotfiles/.agents/cli.exact/`、展開後の `~/.pi/agent/extensions/web-search/` からは `~/.agents/cli/` を使う。
+CLIプロジェクトディレクトリ（`browse/`）は、この拡張のディレクトリから4階層上の `.agents/` 配下で解決する。source tree の `dotfiles/.pi/agent/extensions.exact/web-search/` からは `dotfiles/.agents/cli.exact/`、展開後の `~/.pi/agent/extensions/web-search/` からは `~/.agents/cli/` を使う。
 
 `bun <dir>` で起動し、bun が `browse` ディレクトリの package.json `main` を解決するため、実行ビットには依存しない。
 
@@ -74,7 +74,7 @@ CLI プロジェクトディレクトリ（`browse/`）は、この拡張のデ�
 
 ### 結果行（実行完了時）
 
-成功時は `✓` に続けて成功した engine または backend 名を置く。web_fetch 成功時はタイトルがあるとき ` - "<タイトル>"` を続ける。行末に CLI の実測所要時間を ` (1.2s)` 形式で付ける。
+成功時は `✓` に続けて成功したengine または backend名を置く。web_fetch成功時はタイトルがあるとき ` - "<タイトル>"` を続ける。行末に CLI の実測所要時間を ` (1.2s)` 形式で付ける。
 
 | 状態 | 出力 |
 | --- | --- |
@@ -84,12 +84,12 @@ CLI プロジェクトディレクトリ（`browse/`）は、この拡張のデ�
 | 成功（web_fetch、タイトルなし） | `✓ <backend> (1.2s)` |
 | 失敗 | `✗ <CLI名> - "<エラーメッセージ>"` |
 
-失敗行のエラーメッセージは CLI の stderr（全 backend 失敗の理由に、再試行と camoufox server 手動復旧のヒントが含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
+失敗行のエラーメッセージは CLI の stderr（全backend失敗の理由に、再試行と camoufox server手動復旧のヒントが含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
 
 ## 環境変数
 
 | 変数 | 影響 |
 | --- | --- |
-| `BROWSE_CLI_DIR` | CLI スクリプトのディレクトリ（既定は source tree で `.agents/cli.exact`、展開後は `.agents/cli`） |
-| `CAMOUFOX_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される |
-| `OPENSERP_BASE_URL` | 子プロセスへ継承し、CLI 側で解釈される |
+| `BROWSE_CLI_DIR` | CLIスクリプトのディレクトリ（既定は source tree で `.agents/cli.exact`、展開後は `.agents/cli`） |
+| `CAMOUFOX_BASE_URL` | 子プロセスへ継承し、CLI側で解釈される |
+| `OPENSERP_BASE_URL` | 子プロセスへ継承し、CLI側で解釈される |
