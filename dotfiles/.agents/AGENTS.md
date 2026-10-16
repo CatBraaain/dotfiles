@@ -51,6 +51,16 @@
 
 - ビルド成果物は `dist/` ディレクトリに出力する。ただし cargo の場合はデフォルトの `target/` ディレクトリを使う。
 
+## GUI 表示の抑制
+
+エージェントはコマンド実行時に GUI ウィンドウを表示させない。playwright、chromium、storybook 等のブラウザや GUI を開くツールは headless で動かし、headless ができないものは仮想ディスプレイ上で実行する。
+
+- headless モード・オプションがあるものはそれを使う。playwright-cli は既定 headless なので `--headed` を付けない。playwright test は `--headed` や `headless: false` を指定しない
+- ブラウザの自動オープンは無効化する。storybook dev は `--no-open` を付ける
+- headless が無い・不可能な GUI 起動は `xvfb-run -a <command>` で仮想ディスプレイ上で実行する。`npx playwright show-report`、chromium 等の直起動が該当する
+- ユーザーに内容を見せるときは、URL や生成物のパスを伝えてユーザー自身に開いてもらう
+- 例外: ユーザーが明示的に見せることを求めた場面と、公開手順を定める正本（`browse display show` の VNC 公開など）に従う場面
+
 ## Before Editing
 
 ファイルを編集する前に必ずreadし、対象ファイルの現状を確認する。明示依頼から対象・目的・入力・観測可能な完了条件・変更範囲を確定し、不明なら推測で開始せず確認を返す。会話途中で読んだ内容や以前の read結果を記憶で信用して編集せず、常に最新の read結果を正とする。記憶と現状が乖離している場合は現状に合わせる。
