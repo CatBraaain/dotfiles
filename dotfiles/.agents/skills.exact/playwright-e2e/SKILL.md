@@ -56,7 +56,13 @@ package.json に次の scripts を登録する。対象プロジェクトに E2E
 使う。既存設定で report の出力先を変更している場合は、`show-report` の引数にその
 フォルダを渡す。Ctrl+C でサーバーを終了する。
 
+エージェントが report をサーブするときは、`CLAUDECODE=1` を前置きして自動オープン
+を抑止し、出力の URL をユーザーに伝える (例: `CLAUDECODE=1 bun run review`)。前置き
+は Claude Code 限定ではなく、Playwright が coding agent 環境の検出に使う変数
+(`CLAUDECODE` / `COPILOT_CLI`) の設定である。scripts には前置きを組み込まない。
+ユーザーの手動実行ではブラウザーが開く方がよいためである。
+
 手順:
 
 1. 通常の E2Eテストを実行する。部分確認だけなら `test:review` を使う
-2. `review` で report を開き、`tests/review/` のテストを閲覧する
+2. `review` を `CLAUDECODE=1` 前置きで実行し、出力の URL をユーザーに伝える
