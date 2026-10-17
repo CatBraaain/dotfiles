@@ -5,8 +5,9 @@ import { existsSync } from "node:fs";
 
 // Runs in the hook's dist folder at its final remapped location
 // (spec: SPEC.md §build: ローカルフック).
-export default async function build(): Promise<void> {
+async function main(): Promise<void> {
   if (!existsSync("settings.json")) return;
+
   await $`bunx @biomejs/biome@2.5.14 format --write settings.json \
     --json-formatter-trailing-commas=all \
     --json-parse-allow-comments=true \
@@ -14,3 +15,5 @@ export default async function build(): Promise<void> {
     --indent-style=space \
     --indent-width=2`;
 }
+
+if (import.meta.main) await main();

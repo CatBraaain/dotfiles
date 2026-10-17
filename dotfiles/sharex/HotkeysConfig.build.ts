@@ -6,11 +6,11 @@ const rawJson = JSON as typeof JSON & {
   isRawJSON(value: unknown): boolean;
 };
 
-export default async function ({
-  resolvePaths,
-}: {
-  resolvePaths(path: string): { distPath: string; homePath: string };
-}): Promise<void> {
+async function main(): Promise<void> {
+  const { buildHookContext } = await import(
+    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
+  );
+  const { resolvePaths } = await buildHookContext();
   const { distPath, homePath } = resolvePaths("HotkeysConfig.json");
   if (!existsSync(homePath)) return;
 
@@ -58,13 +58,15 @@ export default async function ({
   }
 
   await writeFile(distPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+  function isObject(value: unknown): value is Record<string, unknown> {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      !rawJson.isRawJSON(value)
+    );
+  }
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    !rawJson.isRawJSON(value)
-  );
-}
+if (import.meta.main) await main();

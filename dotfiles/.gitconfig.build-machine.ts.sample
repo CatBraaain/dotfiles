@@ -7,12 +7,16 @@ name = USERNAME
 email = xxxxxxxxxx+USERNAME@users.noreply.github.com # https://github.com/settings/emails
 `;
 
-export default async function build(context: {
-  resolvePaths(path: string): { distPath: string; homePath: string };
-}): Promise<void> {
-  const { distPath } = context.resolvePaths(".gitconfig");
+async function main(): Promise<void> {
+  const { buildHookContext } = await import(
+    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
+  );
+  const { resolvePaths } = await buildHookContext();
+  const { distPath } = resolvePaths(".gitconfig");
   const existingConfig = await readFile(distPath, "utf8");
   const newline =
     existingConfig === "" || existingConfig.endsWith("\n") ? "" : "\n";
   await writeFile(distPath, existingConfig + newline + configToAppend);
 }
+
+if (import.meta.main) await main();

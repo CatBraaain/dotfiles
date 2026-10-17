@@ -1,10 +1,9 @@
 // Local build hooks (spec: SPEC.md §build: ローカルフック): collect
 // .build.<ext> / .build-machine.<ext> files from dist once, then run each
-// as an independent Bun child process via build-hook-runner.ts.
+// as an independent bun process from a snapshot in its dist folder.
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { WslConnection } from "./wsl.ts";
 import {
   ensureHookDirectory,
   removeEmptyHookDirectories,
@@ -62,7 +61,6 @@ export async function runHooks(
   distDir: string,
   homeRoot: string,
   onHookEvent?: HookEvent,
-  wsl?: WslConnection,
 ): Promise<void> {
   for (const hook of hooks) {
     const relativePath = hookRelativePath(hook);
@@ -82,17 +80,15 @@ export async function runHooks(
 
         const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
         try {
-          const command = [
-            process.execPath,
-            join(import.meta.dir, "build-hook-runner.ts"),
-            resolve(snapshotPath),
-            resolve(distDir),
-            resolve(homeRoot),
-            JSON.stringify(wsl ?? null),
-          ];
           await runChildProcess(
-            command,
+            [process.execPath, resolve(snapshotPath)],
             hookDistDir,
+            {
+              ...process.env,
+              DOTFILES_DIST_DIR: resolve(distDir),
+              DOTFILES_HOME_ROOT: resolve(homeRoot),
+              DOTFILES_MANAGER_SRC: import.meta.dir,
+            },
             relativePath,
             "local build hook",
             onHookEvent ? stdoutState : undefined,
@@ -124,13 +120,14 @@ export async function runHooks(
 async function runChildProcess(
   command: string[],
   cwd: string,
+  env: Record<string, string | undefined>,
   relativePath: string,
   kind: string,
   stdoutState?: { needsNewline: boolean },
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd,
-    env: process.env,
+    env,
     stdin: "ignore",
     stdout: stdoutState ? "pipe" : "inherit",
     stderr: "inherit",

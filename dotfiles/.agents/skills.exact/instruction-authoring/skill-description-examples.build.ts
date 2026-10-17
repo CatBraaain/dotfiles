@@ -12,12 +12,12 @@ import { $ } from "bun";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
-type BuildContext = {
-  syncGithubMirror: (repo: string) => Promise<string>;
-};
-
-export default async function build(context: BuildContext): Promise<void> {
-  const mirror = await context.syncGithubMirror("anthropics/skills");
+async function main(): Promise<void> {
+  const { buildHookContext } = await import(
+    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
+  );
+  const { syncGithubMirror } = await buildHookContext();
+  const mirror = await syncGithubMirror("anthropics/skills");
   const output = join(process.cwd(), "references", "skill-description-examples.md");
   const extractor = join(import.meta.dir, "skill-description-examples.extract.ts");
   try {
@@ -28,3 +28,5 @@ export default async function build(context: BuildContext): Promise<void> {
     await rm(extractor);
   }
 }
+
+if (import.meta.main) await main();

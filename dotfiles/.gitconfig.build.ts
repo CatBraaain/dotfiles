@@ -37,13 +37,16 @@ async function syncMirror(): Promise<void> {
   await writeFile(pullTimeFile, `${Date.now()}\n`);
 }
 
-type BuildContext = { syncGithubMirror?: (repo: string) => Promise<string> };
-
-export default async function build(context: BuildContext = {}): Promise<void> {
+async function main(): Promise<void> {
   if (process.platform === "darwin") return;
+
   let sourceMirror = mirrorDir;
-  if (process.platform === "win32" && context.syncGithubMirror) {
-    sourceMirror = await context.syncGithubMirror(repo);
+  if (process.platform === "win32") {
+    const { buildHookContext } = await import(
+      `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
+    );
+    const { syncGithubMirror } = await buildHookContext();
+    sourceMirror = await syncGithubMirror(repo);
   } else {
     await syncMirror();
   }
@@ -64,3 +67,5 @@ export default async function build(context: BuildContext = {}): Promise<void> {
     appended + (localAliases ? (appended.endsWith("\n") ? "" : "\n") + localAliases : ""),
   );
 }
+
+if (import.meta.main) await main();

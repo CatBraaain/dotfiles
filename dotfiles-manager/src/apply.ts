@@ -14,7 +14,8 @@ import { renderDiffs } from "./diff-render.ts";
 import {
   ensureHookDirectory,
   removeEmptyHookDirectories,
-  resolveHookCommand,
+  removeHookSnapshot,
+  writeHookSnapshot,
 } from "./hook-runner.ts";
 import { isApplyScriptName, mapSegment } from "./path-mapping.ts";
 
@@ -96,28 +97,36 @@ export async function collectDeclarations(distRoot: string): Promise<Declaration
 }
 
 // Runs TypeScript apply hooks (spec §apply スクリプト) after applying. Each
-// runs with its cwd at the script folder's home directory (created if missing).
-// A non-zero exit aborts the remaining hooks.
+// runs as a standalone bun process from a snapshot in its dist folder, with
+// its cwd at the script folder's home directory (created if missing). A
+// non-zero exit aborts the remaining hooks.
 export async function runApplyScripts(
   scripts: ApplyScript[],
   distRoot: string,
   homeRoot: string,
 ): Promise<void> {
   for (const script of scripts) {
+    if (!script.distPath.endsWith(".ts"))
+      throw new Error(`apply hook has unsupported extension: ${script.distPath}`);
     const cwd = join(homeRoot, script.homeFolderRel);
     const scriptDirectory = dirname(join(distRoot, script.distPath));
     const createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
     await mkdir(cwd, { recursive: true });
-
+    const snapshotPath = await writeHookSnapshot(scriptDirectory, script.fileName, script.contents);
     try {
-      const command = resolveHookCommand(script.contents, script.distPath, "apply", cwd);
       await spawnChild(
-        command,
-        scriptDirectory,
-        "ignore",
+        [process.execPath, resolve(snapshotPath)],
+        cwd,
+        {
+          ...process.env,
+          DOTFILES_DIST_DIR: resolve(distRoot),
+          DOTFILES_HOME_ROOT: resolve(homeRoot),
+          DOTFILES_MANAGER_SRC: import.meta.dir,
+        },
         `apply script failed: ${script.distPath}`,
       );
     } finally {
+      await removeHookSnapshot(snapshotPath, distRoot);
       await removeEmptyHookDirectories(createdDirectories);
     }
   }
@@ -350,20 +359,16 @@ function homeFolderOf(folderRel: string): string {
 async function spawnChild(
   command: string[],
   cwd: string,
-  stdin: "ignore" | string,
+  env: Record<string, string | undefined>,
   label: string,
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd,
-    stdin: stdin === "ignore" ? "ignore" : "pipe",
+    env,
+    stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
   });
-  if (stdin !== "ignore") {
-    // stdin: "pipe" is requested for this spawn, so the stream always exists.
-    proc.stdin!.write(stdin);
-    proc.stdin!.end();
-  }
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;

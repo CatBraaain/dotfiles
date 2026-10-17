@@ -14,8 +14,11 @@ import { cp, mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { parse as parseYaml } from "yaml";
 
-export const STORAGE_KEY = "customPrompt.cleanup";
+export const MANAGED_KEYS_FILE = "managed-keys.data.yaml";
+
+export type ManagedStorageTarget = { key: string; value: string };
 
 export type HookErrorCode = "INVALID_INPUT" | "LOCKED" | "APPLY_FAILED";
 
@@ -53,13 +56,24 @@ const hookLockStaleMs = 30 * 60_000;
 
 export type ResolvedPaths = {
   platform: PlatformName;
-  promptPath: string;
+  managedKeysDir: string;
   profileDir: string;
   appDir: string;
   appBinaryName: string;
   timeouts: { harnessMs: number; lockWaitMs: number };
   isE2E: boolean;
 };
+
+function resolveManagedKeysDir(env: PathEnv, isE2E: boolean): string {
+  if (!isE2E) return import.meta.dir;
+  const dir = env.OPENWHISPR_E2E_MANAGED_KEYS ?? "";
+  if (!isAbsolute(dir) || !isAbsoluteTmpPath(dir))
+    throw new HookError(
+      "INVALID_INPUT",
+      "e2e managed keys dir must be an absolute path under tmpdir",
+    );
+  return dir;
+}
 
 function isAbsoluteTmpPath(path: string): boolean {
   const tempRoot = tmpdir();
@@ -83,14 +97,12 @@ function linuxPaths(
   const productionProfileDir = homeDir
     ? join(homeDir, linuxProfileSuffix)
     : null;
-  const productionPromptPath = productionProfileDir
-    ? join(productionProfileDir, "cleanup-prompt.txt")
-    : null;
+  const managedKeysDir = resolveManagedKeysDir(env, isE2E);
   if (!isE2E) {
     if (!homeDir) throw new HookError("INVALID_INPUT", "HOME is not set");
     return {
       platform,
-      promptPath: productionPromptPath!,
+      managedKeysDir,
       profileDir: productionProfileDir!,
       appDir: linuxAppDir,
       appBinaryName: linuxAppBinaryName,
@@ -98,11 +110,8 @@ function linuxPaths(
       isE2E,
     };
   }
-  if (!env.OPENWHISPR_E2E_PROMPT && !productionPromptPath)
-    throw new HookError("INVALID_INPUT", "HOME is not set");
   if (!env.OPENWHISPR_E2E_PROFILE && !productionProfileDir)
     throw new HookError("INVALID_INPUT", "HOME is not set");
-  const e2ePrompt = env.OPENWHISPR_E2E_PROMPT ?? productionPromptPath!;
   const e2eProfile = env.OPENWHISPR_E2E_PROFILE ?? productionProfileDir!;
   const e2eAppDir = env.OPENWHISPR_E2E_APP_DIR ?? linuxAppDir;
   if (!isAbsolute(e2eProfile) || !isAbsoluteTmpPath(e2eProfile))
@@ -110,14 +119,9 @@ function linuxPaths(
       "INVALID_INPUT",
       "e2e profile must be an absolute path under tmpdir",
     );
-  if (!isAbsolute(e2ePrompt) || !isAbsoluteTmpPath(e2ePrompt))
-    throw new HookError(
-      "INVALID_INPUT",
-      "e2e prompt must be an absolute path under tmpdir",
-    );
   return {
     platform,
-    promptPath: e2ePrompt,
+    managedKeysDir,
     profileDir: e2eProfile,
     appDir: e2eAppDir,
     appBinaryName: linuxAppBinaryName,
@@ -141,19 +145,18 @@ function windowsPaths(
     lockWaitMs: defaultHookLockWaitMs,
   };
   const productionProfileDir = join(appData, windowsProfileSuffix);
-  const productionPromptPath = join(productionProfileDir, "cleanup-prompt.txt");
   const productionAppDir = join(localAppData, windowsAppDirSuffix);
+  const managedKeysDir = resolveManagedKeysDir(env, isE2E);
   if (!isE2E)
     return {
       platform,
-      promptPath: productionPromptPath,
+      managedKeysDir,
       profileDir: productionProfileDir,
       appDir: productionAppDir,
       appBinaryName: windowsAppBinaryName,
       timeouts,
       isE2E,
     };
-  const e2ePrompt = env.OPENWHISPR_E2E_PROMPT ?? productionPromptPath;
   const e2eProfile = env.OPENWHISPR_E2E_PROFILE ?? productionProfileDir;
   const e2eAppDir = env.OPENWHISPR_E2E_APP_DIR ?? productionAppDir;
   if (!isAbsolute(e2eProfile) || !isAbsoluteTmpPath(e2eProfile))
@@ -161,14 +164,9 @@ function windowsPaths(
       "INVALID_INPUT",
       "e2e profile must be an absolute path under tmpdir",
     );
-  if (!isAbsolute(e2ePrompt) || !isAbsoluteTmpPath(e2ePrompt))
-    throw new HookError(
-      "INVALID_INPUT",
-      "e2e prompt must be an absolute path under tmpdir",
-    );
   return {
     platform,
-    promptPath: e2ePrompt,
+    managedKeysDir,
     profileDir: e2eProfile,
     appDir: e2eAppDir,
     appBinaryName: windowsAppBinaryName,
@@ -189,41 +187,94 @@ export function sha256Hex(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-export type ValidatedPrompt = { text: string; sha256Hex: string };
-
-export function validatePromptBytes(bytes: Uint8Array): ValidatedPrompt {
-  let text: string;
-  try {
-    text = utf8Decoder.decode(bytes);
-  } catch {
-    throw new HookError("INVALID_INPUT", "prompt file is not valid UTF-8");
+export function validateManagedKeys(
+  raw: unknown,
+): ManagedStorageTarget[] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    throw new HookError(
+      "INVALID_INPUT",
+      "managed keys file must be a mapping with a keys array",
+    );
+  const keys = (raw as { keys?: unknown }).keys;
+  if (!Array.isArray(keys) || keys.length === 0)
+    throw new HookError(
+      "INVALID_INPUT",
+      "managed keys file must list a non-empty keys array",
+    );
+  const declared = new Set<string>();
+  const targets: ManagedStorageTarget[] = [];
+  for (const entry of keys) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      throw new HookError(
+        "INVALID_INPUT",
+        "managed keys entries must be mappings",
+      );
+    const { key, value } = entry as { key?: unknown; value?: unknown };
+    if (typeof key !== "string" || key === "")
+      throw new HookError(
+        "INVALID_INPUT",
+        "managed key must be a non-empty string",
+      );
+    if (declared.has(key))
+      throw new HookError(
+        "INVALID_INPUT",
+        `managed key is duplicated: ${key}`,
+      );
+    declared.add(key);
+    if (typeof value !== "string")
+      throw new HookError(
+        "INVALID_INPUT",
+        `managed key must declare a string value: ${key}`,
+      );
+    if (value.includes("\0"))
+      throw new HookError(
+        "INVALID_INPUT",
+        `managed key value contains NUL: ${key}`,
+      );
+    if (value.trim() === "")
+      throw new HookError(
+        "INVALID_INPUT",
+        `managed key value is blank: ${key}`,
+      );
+    targets.push({ key, value });
   }
-  if (text.includes("\0"))
-    throw new HookError("INVALID_INPUT", "prompt file contains NUL");
-  if (text.trim() === "")
-    throw new HookError("INVALID_INPUT", "prompt file is blank");
-  return { text, sha256Hex: sha256Hex(bytes) };
+  return targets;
 }
 
-export function readPromptFile(promptPath: string): ValidatedPrompt {
-  let bytes: Buffer;
+export function loadManagedKeys(baseDir: string): ManagedStorageTarget[] {
+  const declarationPath = join(baseDir, MANAGED_KEYS_FILE);
+  let text: string;
   try {
-    bytes = readFileSync(promptPath);
+    text = readFileSync(declarationPath, "utf8");
   } catch {
     throw new HookError(
       "INVALID_INPUT",
-      `prompt file is missing: ${promptPath}`,
+      `managed keys file is missing: ${declarationPath}`,
     );
   }
-  return validatePromptBytes(bytes);
+  let raw: unknown;
+  try {
+    raw = parseYaml(text);
+  } catch (error) {
+    if (error instanceof HookError) throw error;
+    throw new HookError(
+      "INVALID_INPUT",
+      `managed keys file is not valid YAML: ${declarationPath}`,
+    );
+  }
+  return validateManagedKeys(raw);
+}
+
+export function managedKeysSha256(targets: ManagedStorageTarget[]): string {
+  return sha256Hex(
+    targets.map((target) => `${target.key}\0${target.value}`).join("\0"),
+  );
 }
 
 export type RegistrationOutcome = {
   status: "applied" | "unchanged" | "skipped" | "error";
   code: "OK" | HookErrorCode;
-  promptSha256: string | null;
+  keysSha256: string | null;
   detail?: string;
 };
 
@@ -231,7 +282,7 @@ export function formatStatusLine(outcome: RegistrationOutcome): string {
   return [
     `status=${outcome.status}`,
     `code=${outcome.code}`,
-    `prompt_sha256=${outcome.promptSha256 ?? "-"}`,
+    `keys_sha256=${outcome.keysSha256 ?? "-"}`,
   ].join(" ");
 }
 
@@ -357,7 +408,7 @@ export function buildHarnessPackageJson(): string {
   return (
     JSON.stringify(
       {
-        name: "open-whispr-cleanup-registration-harness",
+        name: "open-whispr-config-harness",
         version: "1.0.0",
         main: "main.js",
       },
@@ -377,8 +428,9 @@ export function buildHarnessSource(): string {
       "",
       "const profile = process.env.OW_HARNESS_PROFILE;",
       "const mode = process.env.OW_HARNESS_MODE;",
-      'const targetValue = process.env.OW_HARNESS_VALUE || "";',
+      "const targets = JSON.parse(process.env.OW_HARNESS_TARGETS_JSON || \"[]\");",
       `if (!profile || !nodePath.isAbsolute(profile)) process.exit(${harnessExitInvalidArguments});`,
+      "if ((mode === \"read\" || mode === \"apply\") && targets.length === 0) process.exit(90);",
       "",
       'app.setPath("userData", profile);',
       'app.setPath("sessionData", profile);',
@@ -434,35 +486,40 @@ export function buildHarnessSource(): string {
       "    const storage = JSON.parse(await readStorageMap());",
       '    emit({ status: "dump", storage: storage });',
       '  } else if (mode === "read") {',
-      `    const current = await readKey(${JSON.stringify(STORAGE_KEY)});`,
-      "    emit({",
-      '      status: "ok",',
-      "      currentValue: current,",
-      "      currentSha256: current === null ? null : sha256(current),",
-      "      equals: current === targetValue,",
-      "    });",
-      '  } else if (mode === "apply") {',
-      `    const previous = await readKey(${JSON.stringify(STORAGE_KEY)});`,
-      "    if (previous === targetValue) {",
-      '      emit({ status: "unchanged", previousValue: previous, previousSha256: previous === null ? null : sha256(previous) });',
-      "    } else {",
-      `      await setKey(${JSON.stringify(STORAGE_KEY)}, targetValue);`,
-      "      session.defaultSession.flushStorageData();",
-      `      const readback = await readKey(${JSON.stringify(STORAGE_KEY)});`,
-      "      if (readback !== targetValue) {",
-      `        if (previous === null) await removeKey(${JSON.stringify(STORAGE_KEY)});`,
-      `        else await setKey(${JSON.stringify(STORAGE_KEY)}, previous);`,
-      "        session.defaultSession.flushStorageData();",
-      '        emit({ status: "restore-failed", previousValue: previous });',
-      "        app.exit(1);",
-      "        return;",
-      "      }",
-      "      emit({",
-      '        status: "applied",',
-      "        previousValue: previous,",
-      "        previousSha256: previous === null ? null : sha256(previous),",
-      "      });",
+      "    const current = {};",
+      "    for (const target of targets) {",
+      "      const value = await readKey(target.key);",
+      "      current[target.key] = { value: value, sha256: value === null ? null : sha256(value), equals: value === target.value };",
       "    }",
+      '    emit({ status: "ok", current: current });',
+      '  } else if (mode === "apply") {',
+      "    const before = {};",
+      "    for (const target of targets) before[target.key] = await readKey(target.key);",
+      "    const applied = [];",
+      "    for (const target of targets) {",
+      "      if (before[target.key] === target.value) continue;",
+      "      await setKey(target.key, target.value);",
+      "      applied.push(target.key);",
+      "    }",
+      "    session.defaultSession.flushStorageData();",
+      "    const after = {};",
+      "    for (const target of targets) after[target.key] = await readKey(target.key);",
+      "    const restoreFailed = [];",
+      "    for (const target of applied) {",
+      "      const expected = targets.find((candidate) => candidate.key === target);",
+      "      if (after[target] === expected.value) continue;",
+      "      const previous = before[target];",
+      "      if (previous === null) await removeKey(target);",
+      "      else await setKey(target, previous);",
+      "      restoreFailed.push(target);",
+      "    }",
+      "    if (restoreFailed.length > 0) {",
+      "      session.defaultSession.flushStorageData();",
+      '      emit({ status: "restore-failed", before: before, restoreFailed: restoreFailed });',
+      "      app.exit(1);",
+      "      return;",
+      "    }",
+      '    emit({ status: "applied", applied: applied, before: before, after: after });',
       "  } else {",
       `    process.exit(${harnessExitInvalidArguments});`,
       "  }",
@@ -502,9 +559,10 @@ export async function ensureShadowRuntime(
     `openwhispr-register-runtime-${platform}-${binaryHash.slice(0, 16)}-${binaryStat.size}`,
   );
   const manifest = JSON.stringify({
-    version: 1,
+    version: 2,
     sha256: binaryHash,
     size: binaryStat.size,
+    harness: sha256Hex(buildHarnessSource()),
   });
   const manifestPath = join(runtimeDir, ".runtime-manifest.json");
   if (
@@ -552,13 +610,14 @@ export type HarnessMode = "read" | "apply" | "seed" | "dump" | "hold";
 
 export type HarnessPayload = {
   status: string;
-  currentValue?: string | null;
-  currentSha256?: string | null;
-  equals?: boolean;
-  previousValue?: string | null;
-  previousSha256?: string | null;
-  before?: Record<string, string>;
-  after?: Record<string, string>;
+  current?: Record<
+    string,
+    { value: string | null; sha256: string | null; equals: boolean }
+  >;
+  applied?: string[];
+  restoreFailed?: string[];
+  before?: Record<string, string | null>;
+  after?: Record<string, string | null>;
   storage?: Record<string, string>;
 };
 
@@ -594,7 +653,7 @@ export async function runHarnessMode(options: {
   runtimeDir: string;
   profileDir: string;
   platform: PlatformName;
-  value?: string;
+  targets?: ManagedStorageTarget[];
   seedJson?: string;
   allowDump?: boolean;
   holdMs?: number;
@@ -659,7 +718,8 @@ export async function runHarnessMode(options: {
     childEnv.TMP = isolatedTemp;
   }
   if (useSessionDisplay) childEnv.DISPLAY = options.env.DISPLAY!;
-  if (options.value !== undefined) childEnv.OW_HARNESS_VALUE = options.value;
+  if (options.targets !== undefined)
+    childEnv.OW_HARNESS_TARGETS_JSON = JSON.stringify(options.targets);
   if (options.seedJson !== undefined)
     childEnv.OW_HARNESS_SEED_JSON = options.seedJson;
   if (options.allowDump) childEnv.OW_HARNESS_ALLOW_DUMP = "1";
@@ -747,7 +807,7 @@ export async function acquireHookLock(
 ): Promise<() => Promise<void>> {
   const lockPath = join(
     tmpdir(),
-    `openwhispr-register-cleanup-${sha256Hex(profileDir).slice(0, 16)}.lock`,
+    `openwhispr-manage-config-${sha256Hex(profileDir).slice(0, 16)}.lock`,
   );
   const deadline = Date.now() + waitMs;
   for (;;) {
@@ -770,7 +830,7 @@ export async function acquireHookLock(
       if (Date.now() >= deadline)
         throw new HookError(
           "LOCKED",
-          "another cleanup registration run is in progress",
+          "another config registration run is in progress",
         );
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
@@ -783,15 +843,18 @@ export async function acquireHookLock(
 export function recoveryRecordPath(profileDir: string): string {
   return join(
     tmpdir(),
-    `openwhispr-register-cleanup-recovery-${sha256Hex(profileDir).slice(0, 16)}.json`,
+    `openwhispr-manage-config-recovery-${sha256Hex(profileDir).slice(0, 16)}.json`,
   );
 }
 
 export type RecoveryRecord = {
   phase: string;
-  promptSha256: string;
-  previousValue: string | null;
-  previousSha256: string | null;
+  keys: Array<{
+    key: string;
+    previousValue: string | null;
+    previousSha256: string | null;
+  }>;
+  keysSha256: string | null;
   recordedAt: string;
 };
 
@@ -818,16 +881,16 @@ export async function clearRecoveryRecord(profileDir: string): Promise<void> {
 
 // ------------------------------------------------------------- orchestration
 
-export async function registerCleanup(options: {
+export async function manageConfig(options: {
   platform: PlatformName;
   env: PathEnv;
 }): Promise<RegistrationOutcome> {
   let releaseHookLock: (() => Promise<void>) | null = null;
-  let promptSha256: string | null = null;
+  let keysSha256: string | null = null;
   try {
     const paths = resolvePaths(options.platform, options.env);
-    const prompt = readPromptFile(paths.promptPath);
-    promptSha256 = prompt.sha256Hex;
+    const targets = loadManagedKeys(paths.managedKeysDir);
+    keysSha256 = managedKeysSha256(targets);
     const recognizedProfile = isRecognizedProfile(paths.profileDir);
     if (recognizedProfile)
       releaseHookLock = await acquireHookLock(
@@ -839,87 +902,92 @@ export async function registerCleanup(options: {
       return {
         status: "skipped",
         code: "OK",
-        promptSha256,
+        keysSha256,
         detail: `OpenWhispr userData is not initialized: ${paths.profileDir}; launch and quit OpenWhispr, then run apply again`,
       };
     const runtimeDir = await ensureShadowRuntime(paths.appDir, paths.platform);
-    const readRun = await runHarnessMode({
-      mode: "read",
-      runtimeDir,
-      profileDir: paths.profileDir,
-      platform: paths.platform,
-      value: prompt.text,
-      env: options.env,
-      timeoutMs: paths.timeouts.harnessMs,
+    const runStorageMode = async (
+      mode: "read" | "apply",
+    ): Promise<HarnessPayload> => {
+      const run = await runHarnessMode({
+        mode,
+        targets,
+        runtimeDir,
+        profileDir: paths.profileDir,
+        platform: paths.platform,
+        env: options.env,
+        timeoutMs: paths.timeouts.harnessMs,
+      });
+      if (run.outcome.kind === "locked")
+        throw new HookError(
+          "LOCKED",
+          mode === "read"
+            ? "the profile singleton lock is held by another process; OpenWhispr is likely running — quit it and run apply again"
+            : "the profile singleton lock was acquired during registration",
+        );
+      if (run.outcome.kind === "error")
+        throw new HookError(
+          "APPLY_FAILED",
+          mode === "read" ? "storage read failed" : "storage write failed",
+        );
+      return run.outcome.payload;
+    };
+
+    const readPayload = await runStorageMode("read");
+    const currentEntries = targets.map((target) => {
+      const observed = readPayload.current?.[target.key];
+      return {
+        key: target.key,
+        previousValue: observed?.value ?? null,
+        previousSha256: observed?.sha256 ?? null,
+      };
     });
-    if (readRun.outcome.kind === "locked")
-      throw new HookError(
-        "LOCKED",
-        "the profile singleton lock is held by another process; OpenWhispr is likely running — quit it and run apply again",
-      );
-    if (readRun.outcome.kind === "error")
-      throw new HookError("APPLY_FAILED", "storage read failed");
-    const currentValue = readRun.outcome.payload.currentValue ?? null;
-    const currentSha = readRun.outcome.payload.currentSha256 ?? null;
-    if (readRun.outcome.payload.equals === true)
+    const unchanged = targets.every(
+      (target) => readPayload.current?.[target.key]?.equals === true,
+    );
+    if (unchanged)
       return {
         status: "unchanged",
         code: "OK",
-        promptSha256: prompt.sha256Hex,
+        keysSha256,
       };
-    const applyRun = await runHarnessMode({
-      mode: "apply",
-      runtimeDir,
-      profileDir: paths.profileDir,
-      platform: paths.platform,
-      value: prompt.text,
-      env: options.env,
-      timeoutMs: paths.timeouts.harnessMs,
-    });
-    if (applyRun.outcome.kind === "locked")
-      throw new HookError(
-        "LOCKED",
-        "the profile singleton lock was acquired during registration",
-      );
-    if (applyRun.outcome.kind === "error") {
-      const restoredInProcess = applyRun.outcome.stdout.includes(
-        '"status":"restore-failed"',
-      );
-      if (!restoredInProcess)
+    let applyPayload: HarnessPayload;
+    try {
+      applyPayload = await runStorageMode("apply");
+    } catch (error) {
+      if (error instanceof HookError && error.code === "APPLY_FAILED")
         await writeRecoveryRecord(paths.profileDir, {
           phase: "apply",
-          promptSha256: prompt.sha256Hex,
-          previousValue: currentValue,
-          previousSha256: currentSha,
+          keys: currentEntries,
+          keysSha256,
         });
+      throw error;
+    }
+    if (applyPayload.status === "restore-failed") {
+      await writeRecoveryRecord(paths.profileDir, {
+        phase: "apply",
+        keys: currentEntries,
+        keysSha256,
+      });
       throw new HookError("APPLY_FAILED", "storage write failed");
     }
-    const verifyRun = await runHarnessMode({
-      mode: "read",
-      runtimeDir,
-      profileDir: paths.profileDir,
-      platform: paths.platform,
-      value: prompt.text,
-      env: options.env,
-      timeoutMs: paths.timeouts.harnessMs,
-    });
-    if (
-      verifyRun.outcome.kind !== "ok" ||
-      verifyRun.outcome.payload.equals !== true
-    ) {
+    const verifyPayload = await runStorageMode("read");
+    const verified = targets.every(
+      (target) => verifyPayload.current?.[target.key]?.equals === true,
+    );
+    if (!verified) {
       await writeRecoveryRecord(paths.profileDir, {
         phase: "verify",
-        promptSha256: prompt.sha256Hex,
-        previousValue: currentValue,
-        previousSha256: currentSha,
+        keys: currentEntries,
+        keysSha256,
       });
       throw new HookError(
         "APPLY_FAILED",
-        "verified read-back did not match the prompt",
+        "verified read-back did not match the managed values",
       );
     }
     await clearRecoveryRecord(paths.profileDir);
-    return { status: "applied", code: "OK", promptSha256: prompt.sha256Hex };
+    return { status: "applied", code: "OK", keysSha256 };
   } catch (error) {
     const hookError =
       error instanceof HookError
@@ -928,7 +996,7 @@ export async function registerCleanup(options: {
     return {
       status: "error",
       code: hookError.code,
-      promptSha256,
+      keysSha256,
       detail: hookError.message,
     };
   } finally {
@@ -947,13 +1015,13 @@ async function main(): Promise<void> {
     const unsupported: RegistrationOutcome = {
       status: "error",
       code: "INVALID_INPUT",
-      promptSha256: null,
+      keysSha256: null,
       detail: `unsupported platform: ${process.platform}`,
     };
     console.log(formatStatusLine(unsupported));
     process.exit(exitCodeByError.INVALID_INPUT);
   }
-  const outcome = await registerCleanup({ platform, env: process.env });
+  const outcome = await manageConfig({ platform, env: process.env });
   if (outcome.detail && outcome.status !== "error") console.log(outcome.detail);
   console.log(formatStatusLine(outcome));
   if (outcome.detail && outcome.status === "error")

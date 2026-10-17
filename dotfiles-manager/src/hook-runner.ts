@@ -1,25 +1,9 @@
-// Shared hook execution helpers for build and apply hooks: command
-// resolution for child processes and snapshot file management.
+// Snapshot file management for build and apply hooks run as standalone bun
+// processes (spec: SPEC.md §フックシステム).
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-
-export function resolveHookCommand(
-  source: string,
-  displayPath: string,
-  hookType: "build" | "apply",
-  cwdOverride?: string,
-): string[] {
-  if (!displayPath.endsWith(".ts")) {
-    throw new Error(`${hookType} hook has unsupported extension: ${displayPath}`);
-  }
-  const executableSource = source.replace(/^#![^\r\n]*/, "");
-  const body = cwdOverride
-    ? `process.chdir(${JSON.stringify(cwdOverride)});${executableSource}`
-    : executableSource;
-  return [process.execPath, "-e", body];
-}
 
 export async function ensureHookDirectory(directory: string, rootDir: string): Promise<string[]> {
   const createdDirectories: string[] = [];

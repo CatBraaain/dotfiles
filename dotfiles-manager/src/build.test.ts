@@ -161,7 +161,7 @@ describe("run", () => {
       "dotfiles/10-late.build.ts",
       `#!/usr/bin/env bun
 import { appendFile } from "node:fs/promises";
-export default async function () {
+if (import.meta.main) {
   await appendFile("log.txt", "late\\n");
 }
 `,
@@ -171,7 +171,7 @@ export default async function () {
       "dotfiles/02-early.build.ts",
       `#!/usr/bin/env bun
 import { appendFile } from "node:fs/promises";
-export default async function () {
+if (import.meta.main) {
   await appendFile("log.txt", "early\\n");
 }
 `,
@@ -181,7 +181,7 @@ export default async function () {
       "dotfiles/sub/marker.build.ts",
       `#!/usr/bin/env bun
 import { writeFile } from "node:fs/promises";
-export default async function () {
+if (import.meta.main) {
   await writeFile("marker.txt", "ran\\n");
 }
 `,
@@ -202,7 +202,7 @@ export default async function () {
       await put(
         root,
         `dotfiles/${path}`,
-        `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(`${label}\n`)});\n}`,
+        `import { appendFile } from "node:fs/promises";\nif (import.meta.main) {\n  await appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(`${label}\n`)});\n}`,
       );
     }
 
@@ -221,7 +221,7 @@ export default async function () {
     await put(
       root,
       "dotfiles/01-generate.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("02-late.build.ts", 'export default () => Bun.write("ran.txt", "ran");');\n}`,
+      `import { writeFile } from "node:fs/promises";\nif (import.meta.main) {\n  await writeFile("02-late.build.ts", 'if (import.meta.main) await Bun.write("ran.txt", "ran");');\n}`,
     );
 
     await main(root, "linux", homeRoot);
@@ -234,7 +234,7 @@ export default async function () {
       root,
       "dotfiles/nested/02-shared.build.ts",
       `import { appendFile } from "node:fs/promises";
-export default async function () {
+if (import.meta.main) {
   await appendFile("order.txt", "shared\\n");
 }`,
     );
@@ -242,7 +242,7 @@ export default async function () {
       root,
       "dotfiles/nested/01-local.build-machine.ts",
       `import { appendFile } from "node:fs/promises";
-export default async function () {
+if (import.meta.main) {
   await appendFile("order.txt", "machine\\n");
 }`,
     );
@@ -258,12 +258,12 @@ export default async function () {
     await put(
       root,
       "dotfiles/01-prune.build.ts",
-      `import { rm, appendFile } from "node:fs/promises";\nexport default async function () {\n  await rm("doomed", { recursive: true, force: true });\n  await appendFile(${JSON.stringify(orderFile)}, "prune\\n");\n}`,
+      `import { rm, appendFile } from "node:fs/promises";\nif (import.meta.main) {\n  await rm("doomed", { recursive: true, force: true });\n  await appendFile(${JSON.stringify(orderFile)}, "prune\\n");\n}`,
     );
     await put(
       root,
       "dotfiles/doomed/boom.build.ts",
-      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(orderFile)}, "collected\\n");\n}`,
+      `import { appendFile } from "node:fs/promises";\nif (import.meta.main) {\n  await appendFile(${JSON.stringify(orderFile)}, "collected\\n");\n}`,
     );
     await put(root, "dotfiles/doomed/keep.txt", "x\n");
 
@@ -278,12 +278,12 @@ export default async function () {
     await put(
       root,
       "dotfiles/01-prune.build.ts",
-      `import { rm } from "node:fs/promises";\nexport default async function () {\n  await rm("doomed/sub", { recursive: true, force: true });\n}`,
+      `import { rm } from "node:fs/promises";\nif (import.meta.main) {\n  await rm("doomed/sub", { recursive: true, force: true });\n}`,
     );
     await put(
       root,
       "dotfiles/doomed/sub/late.build.ts",
-      `import { appendFile } from "node:fs/promises";\nexport default async function () {\n  await appendFile(${JSON.stringify(orderFile)}, "ran\\n");\n}`,
+      `import { appendFile } from "node:fs/promises";\nif (import.meta.main) {\n  await appendFile(${JSON.stringify(orderFile)}, "ran\\n");\n}`,
     );
     await put(root, "dotfiles/doomed/keep.txt", "keep\n");
 
@@ -299,7 +299,7 @@ export default async function () {
       root,
       "dotfiles/fail.build.ts",
       `#!/usr/bin/env bun
-export default function () {
+if (import.meta.main) {
   throw new Error("boom");
 }
 `,
@@ -318,7 +318,7 @@ export default function () {
       "dotfiles/format.build.ts",
       `import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-export default async function () {
+if (import.meta.main) {
   assert.equal(existsSync("settings.merge.json"), false);
   assert.equal(existsSync("settings.merge-machine.json"), false);
   const completed = await Bun.file("settings.json").json();
@@ -352,7 +352,7 @@ export default async function () {
       "dotfiles/format.build.ts",
       `import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-export default async function () {
+if (import.meta.main) {
   assert.equal(existsSync("app.conf.replace.yaml"), false);
   const completed = await Bun.file("app.conf").text();
   await Bun.write("app.conf", completed.trim().replaceAll(" ", ""));
@@ -414,7 +414,7 @@ export default async function () {
       await put(
         root,
         "dotfiles/marker.build.ts",
-        'export default () => Bun.write("ran.txt", "ran");',
+        'if (import.meta.main) await Bun.write("ran.txt", "ran");',
       );
       const phases: string[] = [];
       const hookEvents: string[] = [];
@@ -444,7 +444,7 @@ export default async function () {
       await put(
         root,
         "dotfiles/generate.build.ts",
-        `export default async function () {
+        `if (import.meta.main) {
   await Bun.write("generated.txt", "generated");
   ${generatesMap ? `await Bun.write("remap.data.md", ${JSON.stringify(map)});` : ""}
 }`,
@@ -774,7 +774,7 @@ replacements:
     await put(
       root,
       "dotfiles/nested/generate.build.ts",
-      `export default async function () {
+      `if (import.meta.main) {
   await Bun.write("external.data.yaml", "repos:\\n  example/generated:\\n    destination: output\\n    entries: [file.txt]\\n");
   await Bun.write("settings.merge.json", '{"late":true}');
   await Bun.write("app.conf.replace.yaml", 'replacements:\\n  - pattern: home\\n    replacement: late\\n');
@@ -820,13 +820,13 @@ replacements:
 
   it("executes only source hook snapshots despite external additions and overwrites", async () => {
     const sourceHook = `import { appendFile } from "node:fs/promises";
-export default async function () {
+if (import.meta.main) {
   const payload = await Bun.file("payload.txt").text();
   await appendFile("snapshot.txt", "source:" + payload);
   await Bun.write("settings.json", JSON.stringify(await Bun.file("settings.json").json()));
   await Bun.write("app.conf", (await Bun.file("app.conf").text()).trim());
 }`;
-    const replacementHook = 'export default () => Bun.write("overwritten-ran.txt", "external");';
+    const replacementHook = 'if (import.meta.main) await Bun.write("overwritten-ran.txt", "external");';
     await put(root, "dotfiles/source.build.ts", sourceHook);
     await put(
       root,
@@ -837,7 +837,7 @@ export default async function () {
     await put(
       homeRoot,
       "mirrors/github.com/example/hooks/added.build.ts",
-      'export default () => Bun.write("added-ran.txt", "external");',
+      'if (import.meta.main) await Bun.write("added-ran.txt", "external");',
     );
     await put(homeRoot, "mirrors/github.com/example/hooks/payload.txt", "external payload\n");
     await put(
@@ -1034,7 +1034,6 @@ co = checkout
       join(import.meta.dir, "../../dotfiles/.gitconfig.build.ts"),
       "utf8",
     );
-    const hookPath = join(root, "dotfiles/.gitconfig.build.ts");
     const sourceConfig = await readFile(join(import.meta.dir, "../../dotfiles/.gitconfig"), "utf8");
     await put(root, "dotfiles/.gitconfig.build.ts", hook);
     await put(
@@ -1050,14 +1049,24 @@ co = checkout
 
     for (const platform of ["win32", "darwin"] as const) {
       await put(root, "dotfiles/.gitconfig", sourceConfig);
+      const platformShim = join(root, "platform-shim.ts");
+      await put(
+        root,
+        "platform-shim.ts",
+        `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });\n`,
+      );
       const proc = Bun.spawn(
-        [
-          process.execPath,
-          "-e",
-          `import build from ${JSON.stringify(hookPath)}; Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} }); await build();`,
-        ],
+        [process.execPath, "--preload", platformShim, join(root, "dotfiles/.gitconfig.build.ts")],
         {
-          env: { ...process.env, HOME: homeRoot, PATH: "", BUILD_FORCE_PULL: "0" },
+          env: {
+            ...process.env,
+            HOME: homeRoot,
+            PATH: "",
+            BUILD_FORCE_PULL: "0",
+            DOTFILES_DIST_DIR: join(root, "dist"),
+            DOTFILES_HOME_ROOT: homeRoot,
+            DOTFILES_MANAGER_SRC: import.meta.dir,
+          },
           stdout: "pipe",
           stderr: "pipe",
         },
@@ -1106,24 +1115,17 @@ co = checkout
       );
       await chmod(fakeGit, 0o755);
 
-      const child = Bun.spawn(
-        [
-          process.execPath,
-          "-e",
-          `import build from ${JSON.stringify(join(root, "dotfiles/.gitconfig.build.ts"))}; await build();`,
-        ],
-        {
-          env: {
-            ...process.env,
-            HOME: homeRoot,
-            PATH: join(root, "bin"),
-            BUILD_FORCE_PULL: force ? "1" : "0",
-            TEST_GIT_FAIL: fail ? "1" : "0",
-          },
-          stdout: "pipe",
-          stderr: "pipe",
+      const child = Bun.spawn([process.execPath, join(root, "dotfiles/.gitconfig.build.ts")], {
+        env: {
+          ...process.env,
+          HOME: homeRoot,
+          PATH: join(root, "bin"),
+          BUILD_FORCE_PULL: force ? "1" : "0",
+          TEST_GIT_FAIL: fail ? "1" : "0",
         },
-      );
+        stdout: "pipe",
+        stderr: "pipe",
+      });
       const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
       assert.equal(code, 0, stderr);
       assert.equal(
@@ -1262,7 +1264,7 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () {\n  await writeFile("hook-cwd.txt", JSON.stringify([process.cwd(), import.meta.dir]));\n}\n`,
+      `import { writeFile } from "node:fs/promises";\nif (import.meta.main) {\n  await writeFile("hook-cwd.txt", JSON.stringify([process.cwd(), import.meta.dir]));\n}\n`,
     );
     await main(root, "linux", homeRoot);
     const hookCwd = JSON.parse(await readFile(join(distRoot, "vscode/hook-cwd.txt"), "utf8"));
@@ -1275,7 +1277,9 @@ describe("local build hooks", () => {
       "dotfiles/paths.build.ts",
       [
         `import { writeFile } from "node:fs/promises";`,
-        `export default async function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {`,
+        `if (import.meta.main) {
+const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
+const context = await buildHookContext();`,
         `  const paths = ["missing.txt", ".agents/config.exact/agents.yaml", "bin/tool.executable", "links/current.symlink"];`,
         `  await writeFile("paths.json", JSON.stringify(paths.map((path) => context.resolvePaths(path))));`,
         `}`,
@@ -1305,7 +1309,9 @@ describe("local build hooks", () => {
       "dotfiles/vscode/paths.build.ts",
       [
         `import { writeFile } from "node:fs/promises";`,
-        `export default async function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {`,
+        `if (import.meta.main) {
+const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
+const context = await buildHookContext();`,
         `  const paths = ["settings.json", "../sibling.txt"].map((path) => context.resolvePaths(path));`,
         `  await writeFile("paths.json", JSON.stringify(paths));`,
         `}`,
@@ -1330,7 +1336,9 @@ describe("local build hooks", () => {
         root,
         "dotfiles/vscode/invalid.build.ts",
         [
-          `export default function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {`,
+          `if (import.meta.main) {
+const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
+const context = await buildHookContext();`,
           `  context.resolvePaths(${JSON.stringify(path)});`,
           `}`,
         ].join("\n"),
@@ -1366,7 +1374,9 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `export default async function (context: { resolvePaths(path: string): { distPath: string; homePath: string } }) {
+      `if (import.meta.main) {
+const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
+const context = await buildHookContext();
   const paths = context.resolvePaths("settings.json");
   const homeContent = await Bun.file(paths.homePath).text();
   await Bun.write("hook-ran.txt", JSON.stringify({ cwd: process.cwd(), paths, homeContent }));
@@ -1399,7 +1409,7 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/01-mutate.build.ts",
-      `export default async function () {
+      `if (import.meta.main) {
   await Bun.write("mutated.txt", "ran");
   process.chdir("..");
   process.env.BUILD_HOOK_ISOLATION = "changed";
@@ -1409,7 +1419,7 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/nested/02-observe.build.ts",
-      `export default async function () {
+      `if (import.meta.main) {
   await Bun.write("state.json", JSON.stringify({
     cwd: process.cwd(),
     environment: process.env.BUILD_HOOK_ISOLATION ?? null,
@@ -1464,7 +1474,7 @@ describe("local build hooks", () => {
     await put(
       root,
       "dotfiles/vscode/format-settings.build.ts",
-      `import { writeFile } from "node:fs/promises";\nexport default async function () { await writeFile("hook-ran.txt", "ran\\n"); }`,
+      `import { writeFile } from "node:fs/promises";\nif (import.meta.main) { await writeFile("hook-ran.txt", "ran\\n"); }`,
     );
 
     await main(root, "darwin", homeRoot, (path, status) => {
@@ -1550,9 +1560,9 @@ describe("manager CLI", () => {
       await put(
         root,
         "dotfiles/nested/01-local.build-machine.ts",
-        "export default function () {};",
+        "if (import.meta.main) {};",
       );
-      await put(root, "dotfiles/nested/02-shared.build.ts", "export default function () {};");
+      await put(root, "dotfiles/nested/02-shared.build.ts", "if (import.meta.main) {};");
       await put(root, "dotfiles/new.txt", "content\n");
 
       const result = await runManager(command);
@@ -1598,7 +1608,7 @@ describe("manager CLI", () => {
   });
 
   it("does not add a blank line when a hook writes no stdout", async () => {
-    await put(root, "dotfiles/quiet.build.ts", "export default function () {};");
+    await put(root, "dotfiles/quiet.build.ts", "if (import.meta.main) {};");
 
     const result = await runManager("managed");
 
@@ -1615,7 +1625,7 @@ describe("manager CLI", () => {
     await put(
       root,
       "dotfiles/output.build.ts",
-      'export default function () { process.stdout.write("hook-output\\n"); }',
+      'if (import.meta.main) { process.stdout.write("hook-output\\n"); }',
     );
 
     const result = await runManager("managed");
@@ -1632,7 +1642,7 @@ describe("manager CLI", () => {
       await put(
         root,
         "dotfiles/output.build.ts",
-        `export default function () { process.stdout.write("hook-output"); ${fails ? 'throw new Error("failed");' : ""} }`,
+        `if (import.meta.main) { process.stdout.write("hook-output"); ${fails ? 'throw new Error("failed");' : ""} }`,
       );
 
       const result = await runManager("managed");
@@ -1676,7 +1686,7 @@ describe("manager CLI", () => {
     await put(
       root,
       "dotfiles/delayed.build.ts",
-      "export default async function () { await new Promise((resolve) => setTimeout(resolve, 150)); }",
+      "if (import.meta.main) { await new Promise((resolve) => setTimeout(resolve, 150)); }",
     );
 
     const result = await runManager("managed");
@@ -1747,12 +1757,12 @@ describe("manager CLI", () => {
     await put(
       root,
       "dotfiles/01-fail.build.ts",
-      'export default function () { process.stderr.write("hook-error\\n"); throw new Error("failed"); }',
+      'if (import.meta.main) { process.stderr.write("hook-error\\n"); throw new Error("failed"); }',
     );
     await put(
       root,
       "dotfiles/02-late.build.ts",
-      'export default () => Bun.write("late.txt", "ran");',
+      'if (import.meta.main) await Bun.write("late.txt", "ran");',
     );
     await put(root, "dotfiles/done.apply.ts", 'await Bun.write("done.txt", "ran");');
 

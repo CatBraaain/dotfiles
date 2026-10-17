@@ -38,7 +38,7 @@ export async function main(
   await timed("externals", onPhase, () => applyExternals(distDir, wsl));
   await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
-  await runHooks(hooks, distDir, homeRoot, onHookEvent, wsl);
+  await runHooks(hooks, distDir, homeRoot, onHookEvent);
 }
 
 async function copyDir(

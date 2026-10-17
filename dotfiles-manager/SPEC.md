@@ -79,12 +79,13 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 `dotfiles/` 以下に、名前が `.build.<拡張子>` または `.build-machine.<拡張子>` で終わる通常ファイルを置くと、同じローカルフックとして扱う。1フォルダに複数置ける。ローカルフックは、外部取得・merge・置換sidecar が完了したdist の内容を観測し、対応するdistフォルダ以下の完成エントリを生成・変更・移動・削除できる。処理済みの merge / replace sidecar は消費済みである。生成物の配置はフック自身が決め、生成したエントリや `remap.data.md` への自動の後段パス変換は行わない。フックが生成したexternal / merge / replace の入力sidecar を同じbuild で処理する構成はサポートしない。
 
-各フックを独立した子プロセスとして実行する。拡張子と runner の規則は §フックシステムに従う。フックは default exportした関数として呼び出され、引数に `context` を受け取る。非同期関数の完了を待ってから次のフックへ進む。フックが変更したプロセスの cwd・環境変数・メモリ状態は、別のフックへ引き継がない。
+各フックを独立した bun プロセスとして直接実行する。拡張子の規則は §フックシステムに従う。フックは `import.meta.main` を判定して `main()` を実行するスクリプトであり、実行が完了してから次のフックへ進む。フックが変更したプロセスの cwd・環境変数・メモリ状態は、別のフックへ引き継がない。
 
 - `cwd`: パス変換後のフック配置に対応するdist内のフォルダ
-- 環境変数: 通常の親プロセス環境をそのまま継承する。追加の環境変数や設定ファイルは提供しない
-- フックは `cwd` のフォルダ以下を生成・変更・移動・削除の対象として使う。Bun実行時の `process.cwd()` はそのフォルダに解決され、`import.meta.dir` から自身の dist内コピーを参照できる
-- `context.syncGithubMirror(repo)`: GitHub の `<owner>/<repo>` mirror を §build: 外部取得 の既定6時間・強制更新・pull失敗規則で同期し、読み取り用の絶対パスを返す。Windows では build と同じmirror同期方法（§build: 外部取得）を使う。GitAliasフックは Windows でこの context を使う
+- 環境変数: §フックシステム のとおり `DOTFILES_DIST_DIR`・`DOTFILES_HOME_ROOT`・`DOTFILES_MANAGER_SRC` を受け取る
+- フックは `cwd` のフォルダ以下を生成・変更・移動・削除の対象として使う。Bun実行時の `process.cwd()` はそのフォルダに解決され、`import.meta.dir` から自身の dist内コピー（実行用スナップショット）を参照できる
+- `buildHookContext()`: `DOTFILES_MANAGER_SRC` から `hook-context.ts` を動的 import して構築した共有コンテキストを返す。`context.distDir` は distルートの絶対パスである
+- `context.syncGithubMirror(repo)`: GitHub の `<owner>/<repo>` mirror を §build: 外部取得 の既定6時間・強制更新・pull失敗規則で同期し、読み取り用の絶対パスを返す。mirror同期方法は §build: 外部取得 と同じくWSL接続の自己解決を含む。GitAliasフックは Windows でこの method を使う
 - `context.resolvePaths(path)`: `path` に `cwd` 相対のファイルパスを渡すと、対応するdist と home の絶対パスを `{ distPath, homePath }` で返す。home側は §差分検知 の対応関係を使い、親ディレクトリの `.exact`、末尾ファイルの `.executable` / `.symlink` を変換する。現在のファイルの有無にかかわらず解決し、ファイル内容の読み書きや symlink の実体追跡は行わない。`..` を含むパスは dist内に解決される場合に使える。絶対パス、dist外に解決されるパス、ファイルを指定しない空パスや末尾が `/`・`.`・`..` のパスはエラーになる。パスの解決はフックの生成・変更・移動・削除の対象範囲を広げない
 
 対応するdistフォルダ以下という生成・変更・移動・削除の範囲はフック作者が守る契約であり、システムはフックの操作先を検証したりサンドボックスで制限したりしない。フック自身は dist へそのまま残り、差分検知と適用の対象外である。
@@ -131,7 +132,7 @@ mirror がなければ shallow cloneし、存在するときは前回の取得�
 
 同じ設定の repo は並列に処理し、失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
 
-ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じGitHub mirror・既定6時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。Windows では manager runner から `context.syncGithubMirror` を使う。この context は WSL が使えるなら §Windows の WSL接続 の mirror を、`wsl.exe` が存在しなければ Windowsローカルmirror を使う。context なしで単独実行した場合は、Windows・Linux ともローカルGit で home直下の mirror を同じ規則で同期する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を includeしない。
+ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じGitHub mirror・既定6時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。Windows では `context.syncGithubMirror` を使い、WSL が使えるなら §Windows の WSL接続 の mirror を、`wsl.exe` が存在しなければ Windowsローカルmirror を使う。Linux ではフック内のローカル同期が home直下の mirror を同じ規則で同期する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を includeしない。
 
 ## build: merge変換
 
@@ -626,7 +627,9 @@ dist の `<name>.executable` ファイルは、home の `<name>` に owner実行
 | build | `*.build.<拡張子>`、`*.build-machine.<拡張子>` | 外部取得・merge・置換sidecar の完了後（§build: ローカルフック のとおり） | なし | dist生成を中断する |
 | apply | `*.apply.<拡張子>`、`*.apply-machine.<拡張子>` | 適用の後（§applyスクリプト のとおり） | なし | 後続の applyスクリプトを実行せず、非0 で終了する |
 
-build / apply のフックは `.ts` ファイルだけをサポートし、Bun で実行する。`.sh`、`.bash`、`.ps1` を含むその他の拡張子は未対応である。shebang の有無や内容は runner の選択に影響しない。未対応拡張子はエラーにし、build ではパス変換後の dist相対パス、apply では dist相対パスをエラーメッセージに含める。
+build / apply のフックは `.ts` ファイルだけをサポートし、Bun で実行する。`.sh`、`.bash`、`.ps1` を含むその他の拡張子は未対応である。shebang の有無や内容は実行に影響しない。未対応拡張子はエラーにし、build ではパス変換後の dist相対パス、apply では dist相対パスをエラーメッセージに含める。
+
+フックは独立した bun プロセスとして直接実行される。実行プロセスには、通常の親プロセス環境に加えて環境変数で `DOTFILES_DIST_DIR`（distルートの絶対パス）、`DOTFILES_HOME_ROOT`（homeルートの絶対パス）、`DOTFILES_MANAGER_SRC`（dotfiles-managerの `src` ディレクトリの絶対パス）を渡す。build / apply のフックが必要とする外部パッケージは、実行時に Bun の auto-install で解決する。auto-install は依存のバージョン固定ができない。
 
 ## applyスクリプト
 
@@ -636,7 +639,7 @@ build / apply のフックは `.ts` ファイルだけをサポートし、Bun �
 | 実行のたび | 実行ディレクトリは、そのファイルの位置（`.exact` を除いた名前）に対応するhomeディレクトリである | 対応するhomeディレクトリを cwd としてスクリプトが動く |
 | 実行が非0 で終了する | 後続の applyスクリプトを実行せず、非0 で終了する |  |
 
-実行対象は適用前に一度収集し、検出時のスクリプト内容を実行する。実行順序は dist相対パス全体の UTF-16コード単位の昇順とする。先行スクリプトが検出済みスクリプトを移動または削除しても、収集時の順序と内容で実行する。スクリプトは元の dist相対パスを基準に読み込み、cwd はそのパスに対応するhomeディレクトリとする。applyスクリプトの実行は適用の後の applyライフサイクルの一部であり、`just diff` では実行しない。
+実行対象は適用前に一度収集し、検出時のスクリプト内容を実行する。実行順序は dist相対パス全体の UTF-16コード単位の昇順とする。先行スクリプトが検出済みスクリプトを移動または削除しても、収集時の順序と内容で実行する。スクリプトは元の dist相対パスを基準に読み込み、cwd はそのパスに対応するhomeディレクトリとする。実行は、検出時の内容のスナップショットを元の distフォルダへ書いて独立した bun プロセスとして直接実行するという形であり、実行プロセスの環境変数は §フックシステム のとおりである。`import.meta.dir` は元の distフォルダのスナップショットを参照する。applyスクリプトの実行は適用の後の applyライフサイクルの一部であり、`just diff` では実行しない。
 
 ## エラーと終了コード
 

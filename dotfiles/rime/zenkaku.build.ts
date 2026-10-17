@@ -410,17 +410,16 @@ async function compile(outputPath: string): Promise<void> {
   await writeFile(join(runtimeDir, "zenkaku_text.lua"), renderText(declaration));
 }
 
-export default async function build(): Promise<void> {
-  await compile(join(hookDir, DICTIONARY_NAME));
-  // The declaration rode along into dist just for this hook; drop it so it
-  // never reaches home.
-  await rm(DECLARATION_PATH);
-}
-
-if (import.meta.main) {
+async function main(): Promise<void> {
   const [flag, value] = process.argv.slice(2) as (string | undefined)[];
   if (flag === undefined) {
     await compile(join(hookDir, DICTIONARY_NAME));
+    const runsAsBuildHook = process.env.DOTFILES_DIST_DIR !== undefined;
+    if (runsAsBuildHook) {
+      // The declaration rode along into dist just for this hook; drop it so it
+      // never reaches home.
+      await rm(DECLARATION_PATH);
+    }
   } else if (flag === "--output" && value !== undefined) {
     await compile(value);
   } else {
@@ -428,3 +427,5 @@ if (import.meta.main) {
     process.exitCode = 1;
   }
 }
+
+if (import.meta.main) await main();
