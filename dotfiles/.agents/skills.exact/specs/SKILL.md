@@ -1,7 +1,7 @@
 ---
 name: specs
 description: >-
-  SPEC.md・REQUIREMENTS.md・specs/<feature-name>.spec.md等の spec・requirements文書の要否・配置・作成・修正の規則。CSDDにおける正本のうちspec・requirements形式を所有し、skill `csdd` から参照される。spec・requirementsファイルを作成・修正するとき、またはその要否・配置を判断するときに適用する。既存の spec を読んで照合・レビューするだけのときは発火せず、CSDD適合性レビュー・乖離検知・照合は `csdd` が所有する。適用対象か判定できない場合は正本を作成せず、変更の有無を確認する。
+  SPEC.md・REQUIREMENTS.md・specs/<feature-name>.spec.md等の spec・requirements文書の要否・配置・作成・修正の規則。CSDDの正本のうちspec・requirements形式を所有し、skill `csdd` から参照される。spec・requirementsファイルを作成・修正するとき、またはその要否・配置を判断するときに適用する。既存の spec を読んで照合・レビューするだけのときは発火せず、CSDD適合性レビュー・乖離検知・照合は `csdd` が所有する。
 ---
 
 # Specs

@@ -1,7 +1,7 @@
 ---
 name: instruction-authoring
 description: >-
-  SKILL.md、AGENTS.md、システムプロンプト、プロンプトテンプレート、通常のプロンプトなど、AI に与える指示テキストの作成・編集・改修・構造リファクタリングや、その指示内容・適用境界の相談・検討に使う品質基準。AI の行動を指示しない人間向け文書、実装コード、静的な設定値だけを変更するときは使わない。
+  SKILL.md、AGENTS.md、システムプロンプト、プロンプトテンプレートなど、AI に与える指示テキストの作成・編集・リファクタリングや、その内容・適用境界の相談に使う品質基準。AI の行動を指示しない人間向け文書、実装コード、静的な設定値だけの変更には使わない。
 ---
 
 # 指示テキストの品質基準
@@ -60,7 +60,10 @@ Decision Ladder は、優先順位が明確な行動を記述するための記�
 ## SKILL.mdについて
 
 - [Agent Skills Spec](https://agentskills.io/specification)に従う。
-- frontmatter の `description` には内容の要約と発火条件を記載する。発火条件は `description` 内で完結させ、本文には書かない。起動後の作業境界は本文に置く。
+- frontmatter の `description` には what（その skill が何をする・どういう規範か）と when（どういうときに発火するか）を書く。what を先に書き、when が what に内包できない限り when を続ける。発火条件は `description` 内で完結させ、本文には書かない。起動後の作業境界は本文に置く。
+- what は機能要約にとどめ、手法・判断軸・適用境界の細目を書かない。それらは本文の仕事である。
+- 否定条件（使わない対象）は、誤発火が現実に起きる排他境界があるときだけ書く。
+- `description`の書き方の正本は実例集 `references/skill-description-examples.md`（公式 skills 全件の description）。description を書く・調整するときはこれを読み、書き方を合わせる。
 
 ### SKILL.md の本文構成
 

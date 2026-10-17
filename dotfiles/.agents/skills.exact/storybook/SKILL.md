@@ -1,7 +1,7 @@
 ---
 name: storybook
 description: >-
-  Storybook の導入・初期化と `.storybook/` 配下の設定を扱うときの規範。onboardingガイド、addon panel、telemetry、What's New通知、デモstories など、不要な UI と通信を非表示・無効化する。「storybook入れて」「storybook をセットアップして」「storybook init」「.storybook/main.ts」「manager.ts」「addon panel を消して」「onboarding を出さないで」等の依頼で使う。stories・decorators・preview.ts の書き方の指導は対象外。
+  Storybook の導入・初期化と `.storybook/` 配下の設定を扱うときの規範。onboardingガイド、addon panel、telemetry、What's New通知、デモstories など、不要な UI と通信を非表示・無効化する。Storybook の導入・セットアップや `.storybook/` 配下の設定変更を依頼されたときに使う。stories・decorators・preview.ts の書き方の指導は対象外。
 ---
 
 # Storybook

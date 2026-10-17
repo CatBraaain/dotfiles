@@ -1,7 +1,7 @@
 ---
 name: git
 description: >-
-  git の commit・branch・merge・push・PR運用の規則。コミットを意味単位に分割する、コミットメッセージの規約と scope を定める、リポジトリの branch strategy・contributionガイドに照合する、OSS への PR の受付可否と適切性を評価する。gitコマンド（add・reset・restore・stash・commit・merge・rebase・push等、index・worktree・branch を変更する操作、および staged/unstaged の確認）を実行する前に必ず読む。「コミットして」「コミットを分けて」「マージして」「pushして」「ブランチ切って」「PR作って」「OSS にコントリビュートしたい」等の明示的な依頼のほか、調査・実装・検証の途中で自発的に gitコマンドを実行するときも使う。
+  git の commit・branch・merge・push・PR運用の規則。コミットの作成と意味単位への分割、コミットメッセージの規約と scope、リポジトリの branch strategy・contributionガイドへの照合、OSS への PR の受付可否と適切性の評価を定める。gitコマンド（add・reset・restore・stash・commit・merge・rebase・push等、index・worktree・branch を変更する操作、および staged/unstaged の確認）を実行する前に必ず読む。「コミット」「マージ」「push」「ブランチ」「PR」「コントリビュート」等の明示的な依頼のほか、調査・実装・検証で自発的に gitコマンドを実行するときも使う。
 ---
 
 # Git

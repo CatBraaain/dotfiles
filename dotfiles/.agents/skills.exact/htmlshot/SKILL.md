@@ -1,6 +1,6 @@
 ---
 name: htmlshot
-description: HTML/CSS で図・図解・図表・フローチャート・アーキテクチャ図・インフォグラフィック・簡易モックアップなどをデザインし、正本HTML を埋め込んだPNG（.html.png）として生成・配布するときに使う。既存の .html.png を編集するとき（extract で正本を取り出して編集し、再shotする）にも使う。drawio を明示された場合、.drawioファイルの操作、markdown文書内にソースを埋め込むmermaid記述、通常の画像編集には使わない。
+description: HTML/CSS で図・図解・図表・フローチャート・アーキテクチャ図・インフォグラフィック・簡易モックアップなどをデザインし、正本HTML を埋め込んだPNG（.html.png）として生成・配布するときに使う。既存の .html.png を編集・再shotするときにも使う。drawio を明示された場合、.drawioファイルの操作、markdown文書内にソースを埋め込むmermaid記述、通常の画像編集には使わない。
 ---
 
 # htmlshot

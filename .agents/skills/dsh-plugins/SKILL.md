@@ -1,10 +1,9 @@
 ---
 name: dsh-plugins
 description: >-
-  dsh（DeepSeek Harness）の plugin / bundle を作成・修正・レビュー・調査するときに使う。
-  dotfiles/.dsh/plugins.exact/ 配下の TS・SPEC.md・cordis.patch.yml・package.json.dsh を扱うとき、
-  dsh の API・型・slot・service・event の仕様を調べるときにも使う。API仕様の正本は
-  ミラー実ファイルであり、このスキルは参照マップとプロジェクト契約の案内役である。
+  dsh（DeepSeek Harness）の plugin / bundle 開発のための参照マップとプロジェクト契約の案内。dsh の
+  plugin、bundle、API・型・slot・service・event の仕様、dotfiles/.dsh/plugins.exact/ 配下の
+  TS・SPEC.md・cordis.patch.yml・package.json.dsh が依頼に現れたときに使う。
 ---
 
 # dsh plugins開発ガイド
