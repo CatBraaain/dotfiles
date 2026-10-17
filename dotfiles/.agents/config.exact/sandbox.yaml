@@ -114,9 +114,16 @@ commands:
       - '^(wipefs|parted|fdisk|sfdisk|sgdisk)(\s|$)'
       - '^(shutdown|reboot|poweroff|halt)(\s|$)'
   - ask:
-      - '^/mnt(?:/|\s|$)'
+      - '(?i:^/mnt(?:/|\s|$))'
   - allow:
-      - '(?i:^/mnt/c/WINDOWS/system32/wsl\.exe(\s|$))'
+      - '(?i:^/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe(\s|$))'
+      - '(?i:^/mnt/c/Windows/System32/reg\.exe (query|compare)(\s|$))'
+      - '(?i:^/mnt/c/Windows/System32/sc\.exe (query|queryex|qc|qdescription|qfailure|qsidtype)(\s|$))'
+      - '(?i:^/mnt/c/Windows/System32/schtasks\.exe /query(\s|$))'
+      - '(?i:^/mnt/c/Windows/System32/wevtutil\.exe (qe|el)(\s|$))'
+      - '(?i:^/mnt/c/Windows/System32/netsh\.exe (\S+ ){0,3}show(\s|$))'
+      - '(?i:^/mnt/c/Windows/System32/ipconfig\.exe( (/all|/allcompartments|/displaydns))*\s*$)'
+      - '(?i:^/mnt/c/Windows/System32/wsl\.exe (--version|--status|-l|--list)( (-v|--verbose|-r|--running|-o|--online))*\s*$)'
   # pi CLI runs gated; segments are trimmed by sandboxed-tools, so a plain
   # `^pi` anchor matches pi at the head of any compound command
   - ask:
