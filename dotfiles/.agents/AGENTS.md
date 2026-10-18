@@ -482,7 +482,7 @@ specの要否・配置はskill `csdd`に従い、このラダーはspec以外の
 
 ### 命名
 
-ファイル名は `{yyyymmdd-hhmmss}-{name}.{type}.md` とする。`name` は対象を表すkebab-case、`type` は次の6種に固定する。
+ファイル名は `{yyyymmdd-hhmmss}-{name}.{type}.md` とする。`name` は対象を表すkebab-case、`type` は次の5種に固定する。
 
 | type | 作成するタスク | 中身 |
 | --- | --- | --- |
@@ -491,7 +491,6 @@ specの要否・配置はskill `csdd`に従い、このラダーはspec以外の
 | `research` | 対象同定・事実収集・比較の調査をするとき | 事実、出典、結論 |
 | `review` | 成果物をレビューするとき | 指摘（場所・種別・重要度・修正案）。レビュー対象は編集しない |
 | `report` | タスクの実行結果を残すとき | 結果、検証、残課題 |
-| `spec` | ユーザーの go/no-go用に新規specを整備するとき | 観測可能な振る舞いと適用範囲 |
 
 ### review のカバレッジ記録
 
