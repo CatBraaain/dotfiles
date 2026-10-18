@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { Container } from "@earendil-works/pi-tui";
 import { stripVTControlCharacters as stripAnsi } from "node:util";
-import agentsExtension, { __spawn, __fs, __resetRoutingState } from "../agents/index.ts";
+import agentsExtension, { __spawn, __resetRoutingState } from "../agents/index.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -302,10 +302,8 @@ describe("real SDK session with a free in-process provider", () => {
 
 async function consumeParentResult(message: AssistantMessage): Promise<any> {
   const originalSpawn = __spawn.current;
-  const originalFs = __fs.current;
   let tool: any;
   try {
-    __fs.current = { mkdirSync: (() => {}) as typeof __fs.current.mkdirSync };
     __spawn.current = (() => {
       const child = new EventEmitter() as any;
       child.stdout = Object.assign(new EventEmitter(), { destroy() {} });
@@ -328,6 +326,7 @@ async function consumeParentResult(message: AssistantMessage): Promise<any> {
         registerTool(definition: any) {
           tool = definition;
         },
+        appendEntry() {},
       } as any,
       {
         config: {
@@ -349,7 +348,6 @@ async function consumeParentResult(message: AssistantMessage): Promise<any> {
     );
   } finally {
     __spawn.current = originalSpawn;
-    __fs.current = originalFs;
     __resetRoutingState();
   }
 }

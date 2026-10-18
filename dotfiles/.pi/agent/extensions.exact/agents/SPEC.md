@@ -299,7 +299,7 @@ UI を持たない環境（`--mode json`、パイプ、SDK、subagent の子セ�
 
 subagentツールは常に利用できる。子セッションを起動できるかは、現在の agent の `subagents` で決まる。
 
-subagentツールは子セッションを起動するとき `--agent <name>` に加えて、子セッションのセッション保存先と表示名（後述）を渡し、モデルと `--class` を指定しない。子セッションの実効class は指定されたagent の既定class から始まり、候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
+subagentツールは子セッションを起動するとき `--agent <name>` に加えて `--no-session` を渡し、モデルと `--class` を指定しない。子セッションの実効class は指定されたagent の既定class から始まり、候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
 
 ### subagentツールの入力
 
@@ -322,17 +322,22 @@ subagentツールで起動した子エージェントには、指定されたage
 
 ### 子セッションのセッション記録
 
-子セッションはエフェメラルにせず、メインセッションと同じ保存ツリーの `subagents/` へ保存する。
-
-`<project-key>` は Pi本体と同じcwdエンコード方式で決める。cwd の先頭の `/` または `\\` を除き、`/`・`\\`・`:` を `-` に置換し、前後を `--` で囲む。
+子セッションはセッションファイルを分けず、実行中のイベントを親セッション内の `custom` entry に統合して記録する。
 
 | 項目 | 振る舞い |
 | --- | --- |
-| 保存先 | `~/.pi/agent/sessions/<project-key>/subagents/`。子セッションの cwdごとに分け、拡張のロード時にディレクトリを用意する |
-| 表示名 | `<agent>: <task の先頭行の先頭 30 文字>`。31文字目以降は `…` に切り詰める。先頭行が空のときは `<agent>` のみとする |
-| 再開 | `pi --session-dir ~/.pi/agent/sessions/<project-key>/subagents -r` で保存済みの子セッションを選んで再開できる |
+| customType | `agents.subagent-log` |
+| 書き込みタイミング | 子プロセス終了後に 1 entry を書く。成功・失敗（abort・stall 含む）に関わらず、そこまでの `events` を保持して書く |
+| `data.agentId` | 呼び出しごとに採番する ID（`sa-` 接頭辞＋連番）。子のセッション ID ではなく呼び出し ID |
+| `data.invocationId` | 親の subagentツール呼び出し ID（pi の toolCallId）。親子の紐付けの正本 |
+| `data.events` | 子の stdout イベントを gh-aw Unified Agent Session 語彙に変換した canonical event の列。`user.message` / `assistant.message` / `assistant.reasoning` / `tool.execution_start` / `tool.execution_complete`。変換対象は既知の pi stdout イベントで、未対応イベントは収集しない。`timestamp` は親がイベントを観測した時刻（ISO 8601） |
+| `data.tokens` / `data.costUsd` | 子の最終 assistant usage を gh-aw 正準名（`input_tokens` 等の snake_case）で記録。usage を観測できなければ省略する |
+| コンテキスト | `custom` entry は LLMコンテキストに参加しない。親のコンテキストに乗るのは subagentツール呼び出しと最終報告（toolResult）のみ |
+| 子の起動引数 | `--no-session` を渡し、子自身のセッション書き込みを止める。`--session-dir`・`--name` は使わない |
 
-分離保存は設計判断である。子の完全ログを親セッションファイルの `custom` entry に統合する案は、`custom` entry が LLMコンテキストに参加しないため技術的には成立する。ただし deja-vu は `~/.pi/agent/sessions` 配下を再帰走査して `.jsonl` を独立セッションとしてインデックスし、その piパーサーが読むのは `session` ヘッダと role が `user` / `assistant` / `toolResult` の `message` entry だけで、`custom` entry は読まれない。統合すると子のログが deja-vu の検索対象から外れるため、子としての再開を使わない前提とファイルサイズの増大を斟酌しても、deja-vu での検索可能性を優先して分離保存を維持する。
+分離保存（`subagents/` 配下への保存）は廃止した。2026-09-05 時点の設計では、deja-vu が `custom` entry を読まないため子ログを deja-vu で検索できるように分離保存を採用していた。検索を自作の正規化トレース（`~/.agents/sessions` 配下、gh-aw Unified Agent Session 語彙）に移行するため deja-vu 依存を解消し、子の単独 resume も使わないため、分離を維持する理由がなくなった。
+
+`data.events` を gh-aw 語彙で保持するのは、正規化ツール（親セッションを `~/.agents/sessions` 配下の canonical トレースへ変換する自作ツール）での展開を「取り出して書き出すだけ」の機械的な処理にするためである。語彙の正本は gh-aw Unified Agent Session Specification であり、採用時版を固定して管理する。
 
 ### 同時実行数の制限
 

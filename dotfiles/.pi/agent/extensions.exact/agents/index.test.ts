@@ -1,14 +1,13 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, win32 } from "node:path";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import agentsExtension, {
   __abortTimer,
-  __fs,
   __resetRoutingState,
   __spawn,
   __spinnerTimers,
@@ -23,10 +22,7 @@ import agentsExtension, {
   initialAgent,
   loadAgentConfig,
   parseAgentConfig,
-  sessionNameFor,
   shouldBlockToolCall,
-  projectKeyFor,
-  subagentSessionDir,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
 import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-format.ts";
@@ -107,7 +103,6 @@ interface CaptureOptions {
   flags?: Record<string, string>;
   findModel?: (provider: string, id: string) => { provider: string; id: string } | undefined;
   setModelSucceeds?: boolean | boolean[];
-  mockFs?: boolean;
   classSelection?: string;
 }
 
@@ -129,6 +124,7 @@ function captureAgentsExtension(
     cwd?: string;
     env?: Record<string, string | undefined>;
   }> = [];
+  const appendedEntries: Array<{ customType: string; data: Record<string, unknown> }> = [];
   const children: FakeChild[] = [];
   let spawnResponder: (child: FakeChild) => void = () => {};
   let agentWidget: any;
@@ -136,15 +132,6 @@ function captureAgentsExtension(
   let registeredTool: CapturedTool | undefined;
 
   const originalSpawn = __spawn.current;
-  const originalFs = __fs.current;
-  const fsCalls: Array<{ op: "mkdir"; dir: string }> = [];
-  if (options.mockFs ?? true) {
-    __fs.current = {
-      mkdirSync: ((dir: string) => {
-        fsCalls.push({ op: "mkdir", dir });
-      }) as typeof __fs.current.mkdirSync,
-    };
-  }
   __spawn.current = ((
     command: string,
     args: string[],
@@ -178,6 +165,9 @@ function captureAgentsExtension(
       },
       getAllTools() {
         return [{ name: "read" }, { name: "bash" }, { name: "subagent" }];
+      },
+      appendEntry(customType: string, data: Record<string, unknown>) {
+        appendedEntries.push({ customType, data });
       },
       setActiveTools(tools: string[]) {
         activeTools.push(tools);
@@ -232,10 +222,9 @@ function captureAgentsExtension(
     registeredFlags,
     sentMessages,
     spawnCalls,
-    fsCalls,
+    appendedEntries,
     restore() {
       __spawn.current = originalSpawn;
-      __fs.current = originalFs;
       __resetRoutingState();
     },
     respondToChild(responder: (child: FakeChild) => void) {
@@ -2545,12 +2534,9 @@ describe("subagent", () => {
         "--mode",
         "json",
         "-p",
+        "--no-session",
         "--agent",
         "worker",
-        "--session-dir",
-        subagentSessionDir("/child"),
-        "--name",
-        "worker: work",
         "Task: work",
       ]);
     } finally {
@@ -2573,11 +2559,7 @@ describe("subagent", () => {
       await extension.sessionStart();
       await extension.executeSubagent({ agent: "worker", task: "work", model: "forbidden" });
       assert.equal(extension.spawnCalls[0]?.cwd, "/parent");
-      const sessionDirIndex = extension.spawnCalls[0]!.args.indexOf("--session-dir");
-      assert.equal(
-        extension.spawnCalls[0]!.args[sessionDirIndex + 1],
-        subagentSessionDir("/parent"),
-      );
+      assert.ok(extension.spawnCalls[0]?.args.includes("--no-session"));
       assert.equal(extension.spawnCalls[0]?.args.includes("--model"), false);
       assert.equal(extension.spawnCalls[0]?.args.includes("--class"), false);
     } finally {
@@ -3749,74 +3731,111 @@ describe("subagent の表示", () => {
 });
 
 describe("子セッションのセッション記録", () => {
-  it("拡張のロード時に子セッションの保存先を用意する", () => {
-    const extension = captureAgentsExtension();
-    try {
-      assert.deepEqual(extension.fsCalls, [{ op: "mkdir", dir: subagentSessionDir() }]);
-    } finally {
-      extension.restore();
-    }
+  it("子セッションは --no-session で起動し保存先指定を行わない", () => {
+    const args = childInvocationArgs("junior", "do the thing");
+    assert.ok(args.includes("--no-session"));
+    assert.ok(!args.includes("--session-dir"));
+    assert.ok(!args.includes("--name"));
+    assert.equal(args.at(-1), "Task: do the thing");
   });
 
-  it("旧保存先の子セッションを移行も削除もしない", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "pi-agent-"));
-    const legacySession = join(agentDir, "subagent-sessions", "legacy.jsonl");
-    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    mkdirSync(join(agentDir, "subagent-sessions"));
-    writeFileSync(legacySession, "legacy session");
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    const extension = captureAgentsExtension({ config }, { mockFs: false });
-    extension.respondToChild(succeedChild);
+  it("子の実行後に親セッションへ custom entry を書き込む", async () => {
+    const extension = captureAgentsExtension();
+    extension.respondToChild((child) => {
+      const lines = [
+        JSON.stringify({ type: "message_end", message: { role: "user", content: "work" } }),
+        JSON.stringify({
+          type: "tool_execution_start",
+          toolCallId: "tc-9",
+          toolName: "bash",
+          args: { command: "echo hi" },
+        }),
+        JSON.stringify({
+          type: "tool_execution_end",
+          toolCallId: "tc-9",
+          toolName: "bash",
+          result: { output: "hi" },
+          isError: false,
+          durationMs: 12,
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            usage: {
+              input: 10,
+              output: 2,
+              cacheRead: 1,
+              cacheWrite: 0,
+              totalTokens: 12,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 },
+            },
+          },
+        }),
+      ];
+      child.stdout.emit("data", Buffer.from(lines.join("\n") + "\n"));
+      child.emit("close", 0);
+    });
     try {
       await extension.sessionStart();
       await extension.executeSubagent({ agent: "worker", task: "work" });
-      assert.ok(existsSync(legacySession));
-      assert.equal(readFileSync(legacySession, "utf8"), "legacy session");
+      assert.equal(extension.appendedEntries.length, 1);
+      const entry = extension.appendedEntries[0]!;
+      assert.equal(entry.customType, "agents.subagent-log");
+      const events = entry.data.events as Array<{ type: string }>;
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["user.message", "tool.execution_start", "tool.execution_complete", "assistant.message"],
+      );
+      assert.deepEqual(entry.data.tokens, {
+        input_tokens: 10,
+        output_tokens: 2,
+        cache_read_input_tokens: 1,
+        cache_creation_input_tokens: 0,
+      });
+      assert.equal(entry.data.costUsd, 0.5);
+      assert.equal(entry.data.invocationId, "call");
+      assert.equal(entry.data.agent, "worker");
+      assert.equal(entry.data.task, "work");
+      assert.equal(entry.data.cwd, "/parent");
     } finally {
       extension.restore();
-      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-      rmSync(agentDir, { recursive: true, force: true });
     }
   });
 
-  it("プロジェクトの cwd を Pi 本体と同じ形式の project-key に変換する", () => {
-    assert.equal(projectKeyFor("/home/user/projects/dotfiles"), "--home-user-projects-dotfiles--");
-  });
-
-  it("Windows の cwd ではドライブ記号と区切り文字を project-key 用に置換する", () => {
-    assert.equal(
-      projectKeyFor("C:\\Users\\user\\projects\\dotfiles", win32.resolve),
-      "--C--Users-user-projects-dotfiles--",
-    );
-  });
-
-  it("表示名は agent 名と task 先頭行の先頭30文字で組み立てる", () => {
-    const name = sessionNameFor("junior", "目的: バローのURL確定\n\n背景: JAN価格DB");
-    assert.equal(name, "junior: 目的: バローのURL確定");
-  });
-
-  it("task の先頭行が31文字を超えるときは30文字で切り詰めて … を付ける", () => {
-    const long = "あ".repeat(50);
-    const name = sessionNameFor("junior", long);
-    const expectedLength = Array.from("junior: ").length + 30 + 1;
-    assert.equal(Array.from(name).length, expectedLength);
-    assert.ok(name.endsWith("…"));
-  });
-
-  it("task の先頭行が空のときは表示名を agent 名のみにする", () => {
-    assert.equal(sessionNameFor("senior", ""), "senior");
-  });
-
-  it("子セッションは --no-session ではなく cwd に対応する保存先へ保存する", () => {
-    const cwd = "/home/user/projects/dotfiles";
-    const args = childInvocationArgs("junior", "do the thing", cwd);
-    assert.ok(!args.includes("--no-session"));
-    const dirIndex = args.indexOf("--session-dir");
-    assert.notEqual(dirIndex, -1);
-    assert.equal(args[dirIndex + 1], subagentSessionDir(cwd));
-    const nameIndex = args.indexOf("--name");
-    assert.equal(args[nameIndex + 1], "junior: do the thing");
-    assert.equal(args.at(-1), "Task: do the thing");
+  it("assistant の thinking ブロックは reasoning チャネルとして分けて記録する", async () => {
+    const extension = captureAgentsExtension();
+    extension.respondToChild((child) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "考え中" },
+                { type: "text", text: "done" },
+              ],
+            },
+          })}\n`,
+        ),
+      );
+      child.emit("close", 0);
+    });
+    try {
+      await extension.sessionStart();
+      await extension.executeSubagent({ agent: "worker", task: "work" });
+      assert.equal(extension.appendedEntries.length, 1);
+      const entry = extension.appendedEntries[0]!;
+      const events = entry.data.events as Array<{ type: string }>;
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["assistant.reasoning", "assistant.message"],
+      );
+    } finally {
+      extension.restore();
+    }
   });
 });

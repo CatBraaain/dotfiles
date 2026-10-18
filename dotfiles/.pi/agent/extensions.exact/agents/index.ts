@@ -1,16 +1,16 @@
 import { spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  ImageContent,
+  Message,
+  Model,
+  Usage,
+} from "@earendil-works/pi-ai";
 import {
   createLocalBashOperations,
   getAgentDir,
@@ -431,6 +431,12 @@ interface ChildAction {
   isError?: boolean;
 }
 
+interface InlineLogEvent {
+  type: string;
+  timestamp: string;
+  data: Record<string, unknown>;
+}
+
 interface ChildRun {
   agent: Agent;
   task: string;
@@ -439,6 +445,7 @@ interface ChildRun {
   exitCode: number;
   messages: Message[];
   actions: ChildAction[];
+  inlineEvents: InlineLogEvent[];
   stderr: string;
   stopReason?: string;
   errorMessage?: string;
@@ -497,57 +504,88 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partialResult: AgentToolResult<AgentToolDetails>) => void;
 
-const SUBAGENT_SESSION_NAME_MAX_CHARS = 30;
+const INLINE_LOG_CUSTOM_TYPE = "agents.subagent-log";
 
-export function projectKeyFor(cwd: string, resolveCwd: (path: string) => string = resolve): string {
-  const resolvedCwd = resolveCwd(cwd);
-  const safePath = resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
-  return `--${safePath}--`;
+export function childInvocationArgs(agent: Agent, task: string): string[] {
+  return ["--mode", "json", "-p", "--no-session", "--agent", agent, `Task: ${task}`];
 }
 
-export function subagentSessionRootDir(): string {
-  return join(getAgentDir(), "sessions");
-}
-
-export function subagentSessionDir(cwd = process.cwd()): string {
-  return join(subagentSessionRootDir(), projectKeyFor(cwd), "subagents");
-}
-
-// セッション一覧での識別用の表示名。agent 名 + task 先頭1行の切り詰め。
-export function sessionNameFor(agent: Agent, task: string): string {
-  const firstLine = (task.split("\n", 1)[0] ?? "").trim();
-  const chars = Array.from(firstLine);
-  const summary =
-    chars.length > SUBAGENT_SESSION_NAME_MAX_CHARS
-      ? `${chars.slice(0, SUBAGENT_SESSION_NAME_MAX_CHARS).join("")}…`
-      : chars.join("");
-  return summary ? `${agent}: ${summary}` : agent;
-}
-
-export function childInvocationArgs(agent: Agent, task: string, cwd = process.cwd()): string[] {
-  return [
-    "--mode",
-    "json",
-    "-p",
-    "--agent",
-    agent,
-    "--session-dir",
-    subagentSessionDir(cwd),
-    "--name",
-    sessionNameFor(agent, task),
-    `Task: ${task}`,
-  ];
-}
-
-// テストが拡張ロード時の fs 操作を差し替えられる出口。本番は node:fs と本ファイルの
-// 実装をそのまま使う。
-export const __fs: {
-  current: {
-    mkdirSync: typeof mkdirSync;
+function messageToCanonicalEvents(message: Message, observedAt: string): InlineLogEvent[] {
+  if (message.role === "user") {
+    const content = typeof message.content === "string" ? message.content : "";
+    if (content === "") return [];
+    return [{ type: "user.message", timestamp: observedAt, data: { content } }];
+  }
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+  const events: InlineLogEvent[] = [];
+  let text = "";
+  let thinking = "";
+  const flush = () => {
+    if (text !== "") {
+      events.push({ type: "assistant.message", timestamp: observedAt, data: { content: text } });
+      text = "";
+    }
+    if (thinking !== "") {
+      events.push({
+        type: "assistant.reasoning",
+        timestamp: observedAt,
+        data: { content: thinking },
+      });
+      thinking = "";
+    }
   };
-} = {
-  current: { mkdirSync },
-};
+  for (const part of message.content) {
+    if (part.type === "text") {
+      text += part.text;
+      flush();
+    } else if (part.type === "thinking") {
+      thinking += part.thinking;
+      flush();
+    }
+  }
+  return events;
+}
+
+function canonicalTokens(usage: Usage): Record<string, number> {
+  return {
+    input_tokens: usage.input,
+    output_tokens: usage.output,
+    cache_read_input_tokens: usage.cacheRead,
+    cache_creation_input_tokens: usage.cacheWrite,
+    ...(typeof usage.reasoning === "number" ? { reasoning_output_tokens: usage.reasoning } : {}),
+  };
+}
+
+function isToolExecutionError(
+  event: { isError?: boolean; result?: { isError?: boolean } | undefined },
+  result: { isError?: boolean } | undefined,
+): boolean {
+  return event.isError === true || result?.isError === true;
+}
+
+function buildSubagentLogData(
+  agentId: string,
+  invocationId: string,
+  params: { agent: string; task: string },
+  result: ChildRun,
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    agentId,
+    invocationId,
+    agent: params.agent,
+    cwd: result.cwd,
+    task: params.task,
+    events: result.inlineEvents,
+  };
+  const usage = result.messages.findLast(
+    (message): message is AssistantMessage => message.role === "assistant",
+  )?.usage;
+  if (usage) {
+    data.tokens = canonicalTokens(usage);
+    data.costUsd = usage.cost.total;
+  }
+  return data;
+}
 
 async function runChild(
   defaultCwd: string,
@@ -558,9 +596,8 @@ async function runChild(
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<ChildRun> {
   // モデルは渡さない。子セッションが指定された agent の class から解決する。
-  // セッションは --no-session にせず隔離先へ保存し、事後調査できるようにする。
   const childCwd = cwd ?? defaultCwd;
-  const args = childInvocationArgs(agent, task, childCwd);
+  const args = childInvocationArgs(agent, task);
   const childResult: ChildRun = {
     agent,
     task,
@@ -569,6 +606,7 @@ async function runChild(
     exitCode: 0,
     messages: [],
     actions: [],
+    inlineEvents: [],
     stderr: "",
   };
   let wasAborted = false;
@@ -646,10 +684,14 @@ async function runChild(
       } catch {
         return;
       }
+      const observedAt = new Date().toISOString();
 
       if (event.type === "message_end" && event.message) {
         const message = event.message as Message;
         childResult.messages.push(message);
+        for (const inlineEvent of messageToCanonicalEvents(message, observedAt)) {
+          childResult.inlineEvents.push(inlineEvent);
+        }
         if (message.role === "assistant") {
           if (!wasStalled) {
             if (message.stopReason) childResult.stopReason = message.stopReason;
@@ -661,11 +703,18 @@ async function runChild(
       if (event.type === "tool_execution_start") {
         activeToolExecutions += 1;
         if (typeof event.toolName === "string") {
+          const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+          const toolArgs = isRecord(event.args) ? event.args : {};
           childResult.actions.push({
-            toolCallId: typeof event.toolCallId === "string" ? event.toolCallId : undefined,
+            toolCallId,
             name: event.toolName,
-            args: isRecord(event.args) ? event.args : {},
+            args: toolArgs,
             startedAt: Date.now(),
+          });
+          childResult.inlineEvents.push({
+            type: "tool.execution_start",
+            timestamp: observedAt,
+            data: { toolCallId, toolName: event.toolName, input: toolArgs },
           });
         }
         throttledEmit.call();
@@ -673,6 +722,7 @@ async function runChild(
       if (event.type === "tool_execution_update") throttledEmit.call();
       if (event.type === "tool_execution_end") {
         activeToolExecutions = Math.max(0, activeToolExecutions - 1);
+        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
         const action = childResult.actions.find(
           (candidate) =>
             candidate.toolCallId !== undefined && candidate.toolCallId === event.toolCallId,
@@ -681,8 +731,19 @@ async function runChild(
           action.endedAt = Date.now();
           const result = isRecord(event.result) ? event.result : undefined;
           action.result = result;
-          action.isError = event.isError === true || result?.isError === true;
+          action.isError = isToolExecutionError(event, result);
         }
+        childResult.inlineEvents.push({
+          type: "tool.execution_complete",
+          timestamp: observedAt,
+          data: {
+            toolCallId,
+            toolName: event.toolName,
+            success: !isToolExecutionError(event, event.result),
+            output: isRecord(event.result) ? event.result : undefined,
+            ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
+          },
+        });
         throttledEmit.call();
       }
       if (event.type === "tool_result_end" && event.message) {
@@ -806,15 +867,10 @@ export default function agentsExtension(
   pi: ExtensionAPI,
   injectedConfig: ConfigLoadResult = loadAgentConfig(),
 ): void {
-  // 子セッションの保存先を用意する。
-  try {
-    __fs.current.mkdirSync(subagentSessionDir(), { recursive: true });
-  } catch {
-    // 保存先が用意できなくても subagent 実行は続ける
-  }
   const loadedConfig = injectedConfig;
   const config = loadedConfig.config;
   let currentAgent = config?.default ?? "invalid";
+  let inlineLogCounter = 0;
 
   pi.registerFlag("agent", { type: "string", description: "Agent for a child session." });
   pi.registerFlag("class", { type: "string", description: "Initial class for the session." });
@@ -830,7 +886,7 @@ export default function agentsExtension(
         Type.String({ description: "Working directory; defaults to the parent cwd" }),
       ),
     }),
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!config)
         return {
           content: [textPart(`Agent configuration error: ${loadedConfig.error}`)],
@@ -863,6 +919,8 @@ export default function agentsExtension(
 
       pendingChildren++;
       startSpinnerTimer();
+      inlineLogCounter += 1;
+      const inlineAgentId = `sa-${inlineLogCounter}`;
       let result: ChildRun;
       try {
         if (!tryAcquireChildSlot()) {
@@ -887,6 +945,10 @@ export default function agentsExtension(
         pendingChildren--;
         stopSpinnerTimerIfIdle();
       }
+      pi.appendEntry(
+        INLINE_LOG_CUSTOM_TYPE,
+        buildSubagentLogData(inlineAgentId, toolCallId, params, result),
+      );
       if (isFailedResult(result)) {
         return {
           content: [textPart(`Child ${result.stopReason || "failed"}: ${getResultOutput(result)}`)],
