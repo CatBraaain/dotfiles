@@ -27,10 +27,21 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 1. 正本HTML を書く。CSS は `<style>` で同一ファイルに完結させ、キャンバス寸法は body で固定する
 2. `<script>` と外部参照（`http:`・`https:`・`//`・`file:`）は検出されると shotが失敗する。同一入力からの同一レンダを保ち、画像の中に実行コードを持ち込まないためである。画像・フォントは `data:` URL で埋め込む
-3. `htmlshot shot NAME.html --width <w> --height <h>` で `NAME.html.png` を生成する。サイズは図に合わせて指定する
+3. `htmlshot shot NAME.html --width <w> --height <h>` で `NAME.html.png` を生成する。サイズは図に合わせて指定し、固定サイズで生成するときは全要素がその寸法に収まることをレイアウトで担保する
 4. `htmlshot verify NAME.html.png` でフォーマットとチェックサムを確認する
 
 `--unsafe` は制約検出を無視して続行するオプションであり、使ったときは警告行を確認すること。通常は使わない。
+
+## 品質確認
+
+`verify` はフォーマットとチェックサムの検査であり、レンダ結果の品質は検証しない。verify ok でも要素の隠蔽やキャンバス外へのはみ出しは残る。品質は `read` で `.html.png` を開く目視確認が実質のゲートであり、観点は次の4点で足りる。
+
+1. 依頼内容の必須要素がすべて描画されていること
+2. 要素の重なり・隠蔽がないこと
+3. キャンバス外へのはみ出し・文字切れがないこと
+4. 線の接続先・端点が明瞭であること
+
+画像読み取り非対応モデルは、`.html.png` を vision agent に読ませてこの観点の観察を報告させる。
 
 ## 編集と再shot
 
@@ -39,6 +50,8 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 3. 同じ `--width`・`--height`・`--scale` で再shotし、既存の `.html.png` を更新する
 
 `checksum mismatch` は PNG が壊れていることを示す。その場合は当該ファイルを正本として扱わず報告する。
+
+生成後の微調整もこのフローで行う。正本を捨てて書き直さず、`extract` で取り出して該当箇所だけ直し、同一サイズで再shotする。
 
 ## ファイル名
 
