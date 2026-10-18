@@ -8,7 +8,7 @@ description: >-
 
 ## 読みやすさの技法
 
-コードを下のカタログの全項目と漏れなく照合する。
+コードを下のカタログの全項目と漏れなく照合する。カタログの項目をレビューに使うときは、指摘に項目ID（例: A1）を添える。
 
 各 after は「合格の一例」であり、唯一の正解ではない。
 
@@ -800,7 +800,7 @@ function formatName(rawName: string) {
 
 読み順・段落・分割を整え、死んだコードと重複を残さない。
 
-#### F1 読み順 (Readable Code0)
+#### F1 読み順 (Readable Code)
 
 ファイルは新聞記事のように、冒頭に主要な流れ、末尾に細部。JavaScript 等は関数の巻き上げで主要な流れを上に置ける。巻き上げがない言語 (Python・PowerShell 等) では、主要な関数を上に定義し、サブ関数をその下へ、実行の呼び出しは最後の行に置く。
 
@@ -1002,22 +1002,26 @@ it("throws on broken repository", () => {
 
 #### G3 失敗メッセージ (Clean Code)
 
-失敗時に input / 実際値 / 期待値が読めるようにする。
+失敗時に input が読めるようにする。実際値・期待値は assertion が diff として表示するため手書きせず、diff に現れない input の文脈だけメッセージに添える。
 
 ##### before
 
 ```ts
-assert.strictEqual(actual, expected);
+for (const input of cases) {
+  assert.strictEqual(normalize(input), expected);
+}
 ```
 
 ##### after
 
 ```ts
-assert.strictEqual(
-  actual,
-  expected,
-  `input: ${JSON.stringify(input)}, actual: ${actual}, expected: ${expected}`,
-);
+for (const input of cases) {
+  assert.strictEqual(
+    normalize(input),
+    expected,
+    `input: ${JSON.stringify(input)}`,
+  );
+}
 ```
 
 ### H 選択と契約
