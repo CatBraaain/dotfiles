@@ -24,8 +24,7 @@ async function updatePi() {
 
 async function startCamoufox() {
   const cli = `${process.env.HOME}/.agents/cli/browse`;
-  const bun = Bun.which("bun");
-  if (!bun || !(await Bun.file(`${cli}/package.json`).exists())) return;
+  if (!(await Bun.file(cli).exists())) return;
 
   const url = new URL(process.env.CAMOUFOX_BASE_URL || "ws://127.0.0.1:9378/camoufox");
   const host = url.hostname.replace(/^\[|\]$/g, "");
@@ -36,7 +35,7 @@ async function startCamoufox() {
   await $`mkdir -p ${logDir}`.quiet();
   const log = openSync(`${logDir}/camoufox-server.log`, "a");
   try {
-    startDetached(bun, [cli, "server", "start"], log);
+    startDetached(cli, ["server", "start"], log);
   } finally {
     closeSync(log);
   }

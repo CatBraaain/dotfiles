@@ -1,6 +1,6 @@
 # htmlshot CLI spec
 
-コマンド `htmlshot` の仕様。サブコマンド `shot` / `extract` / `verify` を持ち、HTML正本をメタデータとして埋め込んだ製本PNG の生成・復元・検証をコマンドラインから実行する。実行は `bun ~/.agents/cli/htmlshot` で行い、bun が package.json の main field を解決するためexec bit も依存のインストールも不要である。
+コマンド `htmlshot` の仕様。サブコマンド `shot` / `extract` / `verify` を持ち、HTML正本をメタデータとして埋め込んだ製本PNG の生成・復元・検証をコマンドラインから実行する。実行は `~/.agents/cli/htmlshot` で行い、apply が owner実行権を付与する単一実行ファイルのため依存のインストールも不要である。
 
 読者はこの spec だけを読んで要件の go/no-go をするユーザーと、実装・テストの担当者。
 

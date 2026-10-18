@@ -110,9 +110,9 @@ export function sessionCwd(exec: Pick<ToolRunContext, "agent">): string {
   return exec.agent?.session.header.cwd ?? process.cwd();
 }
 
-// The CLI project directory; bun resolves its package.json main field, so
-// spawning needs no exec bit (`bun <script>` pattern of the web-search plugin).
-function ticketCliDir(): string {
+// The deployed single-file executable (compiled by cli.build.ts); apply
+// grants the owner exec bit, so spawning needs nothing else on PATH.
+function ticketCliPath(): string {
   return join(homedir(), ".agents", "cli", "ticket");
 }
 
@@ -132,8 +132,8 @@ function spawnTicketCli(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
-      "bun",
-      [ticketCliDir(), ...args],
+      ticketCliPath(),
+      args,
       { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {

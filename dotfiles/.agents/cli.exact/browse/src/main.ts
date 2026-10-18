@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { lockedBrowseArgs } from "./backends";
 import {
   FLOCK_CONFLICT_EXIT_CODE,
@@ -24,11 +24,7 @@ import {
   startCamoufoxServer,
   waitForRestartToFinish,
 } from "./server";
-import { emitJson, fail, usageFail } from "./util";
-
-// The CLI project directory (the parent of src/): the flock re-exec goes
-// through `bun <projectDir>` so bun resolves package.json's main field again.
-const projectDir = dirname(import.meta.dir);
+import { emitJson, fail, selfRunArgv, usageFail } from "./util";
 
 // Cross-process coordination protects the shared Camoufox server. Render
 // capacity is a 4-slot semaphore: a camoufox search/fetch re-executes itself
@@ -84,8 +80,7 @@ function runUnderSlotFlock(
     [
       ...options,
       join(stateDirPath, slotLockFile(slot)),
-      process.execPath,
-      projectDir,
+      ...selfRunArgv,
       ...lockedBrowseArgs(LOCKED_SUBCOMMAND, process.argv.slice(2)),
     ],
     {
@@ -264,8 +259,7 @@ async function restartCommand(): Promise<void> {
     "flock",
     [
       ...chain,
-      process.execPath,
-      projectDir,
+      ...selfRunArgv,
       ...lockedBrowseArgs(LOCKED_SUBCOMMAND, process.argv.slice(2)),
     ],
     { stdio: "inherit", env: process.env },

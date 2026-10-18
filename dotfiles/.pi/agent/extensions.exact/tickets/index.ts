@@ -270,18 +270,18 @@ export type TicketCliRunner = (
   signal?: AbortSignal,
 ) => Promise<string>;
 
-// The CLI project directory; bun resolves its package.json main field, so
-// spawning needs no exec bit and only `bun` on PATH (same pattern as the
-// web-search extension).
-function ticketCliDir(): string {
+// The deployed single-file executable (compiled by cli.build.ts); apply
+// grants the owner exec bit, so spawning needs nothing else on PATH (same
+// pattern as the web-search extension).
+function ticketCliPath(): string {
   return join(homedir(), ".agents", "cli", "ticket");
 }
 
 // Injectable overrides so the real-spawn tests run a stub project dir without
 // depending on the caller's HOME.
 export interface SpawnTicketCliDeps {
-  /** Overrides the CLI project dir; defaults to ticketCliDir(). */
-  cliDir?: string;
+  /** Overrides the CLI executable path; defaults to ticketCliPath(). */
+  cliPath?: string;
   /** Replaces node:child_process.execFile; defaults to the real one. */
   exec?: typeof execFile;
 }
@@ -306,8 +306,8 @@ export function spawnTicketCli(
   const spawn = deps.exec ?? execFile;
   return new Promise((resolve, reject) => {
     spawn(
-      "bun",
-      [deps.cliDir ?? ticketCliDir(), ...args],
+      deps.cliPath ?? ticketCliPath(),
+      args,
       { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
@@ -328,7 +328,7 @@ export function spawnTicketCli(
 // --- extension ---
 
 export interface TicketsExtensionDeps {
-  /** Replaces the CLI runner; defaults to `bun ~/.agents/cli/ticket`. */
+  /** Replaces the CLI runner; defaults to `~/.agents/cli/ticket`. */
   runCli?: TicketCliRunner;
 }
 

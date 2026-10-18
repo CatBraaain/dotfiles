@@ -58,14 +58,14 @@ cordis patch行の `config` で次の 2項目を受け付ける。優先順位�
 
 CLIスクリプトは `~/.agents/cli/browse` で解決する。本plugin の bundle は常に展開先（`~/.dsh/plugins/web-search/`）で動くため、ホームディレクトリ基準の解決を使う（pi拡張と違い、source tree からの相対位置には依存しない）。
 
-環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `~/.agents/cli` の代わりに使う（テスト・開発用。pi拡張のラッパーと同じ規則）。CLIプロジェクトは `bun <script>` として起動し、bun が `browse` ディレクトリの package.json `main` を解決するため、実行ビットには依存しない。
+環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを `~/.agents/cli` の代わりに使う（テスト・開発用。pi拡張のラッパーと同じ規則）。CLI は `~/.agents/cli/browse` の単一実行ファイルとして直接起動し、apply が owner実行権を付与するため実行ビットの追加設定は不要である。
 
 ## 常駐サーバー
 
 サーバーの起動・ヘルスチェック・待ち（15秒上限）は CLI の受け持ちである。本plugin はサーバーを起動しない。
 
 - camoufox server本体は `browse` CLI に内蔵され、`browse server start` サブコマンドが起動する。本plugin は server を起動せず、server本体も同梱しない。pi拡張と同じ単一の server を共有する
-- サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts.exact/startup.spec.md`）が `bun ~/.agents/cli/browse server start` の detached spawn で行うのが受け持ちであり、本plugin も CLI も起動時にこれを行わない
+- サーバーの先行起動（priming）は共通スクリプト `~/.agents/scripts/startup`（`dotfiles/.agents/scripts.exact/startup.spec.md`）が `~/.agents/cli/browse server start` の detached spawn で行うのが受け持ちであり、本plugin も CLI も起動時にこれを行わない
 - camoufox server のログは `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記される（CLI が行う）
 
 ## 同種リクエストの直列化

@@ -155,9 +155,9 @@ export function browseCliDir(env: Record<string, string | undefined> = process.e
   return env.BROWSE_CLI_DIR ?? join(homedir(), ".agents", "cli");
 }
 
-// The CLI project directory; bun resolves its package.json main field, so
-// spawning needs no exec bit (`bun <script>` pattern of the web-search plugin).
-export function browseScript(env: Record<string, string | undefined> = process.env): string {
+// The deployed single-file executable (compiled by cli.build.ts); apply
+// grants the owner exec bit, so spawning needs nothing else on PATH.
+export function browseCli(env: Record<string, string | undefined> = process.env): string {
   return join(browseCliDir(env), "browse");
 }
 
@@ -231,7 +231,7 @@ export async function runWebCli(
   signal?: AbortSignal,
   exec: CliExec = execCli,
 ): Promise<unknown> {
-  const output = await exec("bun", [browseScript(), subcommand, ...args], {
+  const output = await exec(browseCli(), [subcommand, ...args], {
     signal,
     env: buildCliEnv(endpoints),
     maxBuffer: CLI_OUTPUT_MAX_BUFFER,
@@ -372,7 +372,7 @@ function describeJson(json: unknown): string {
 
 // --- local availability check (SPEC §"search provider" available()) ---
 
-export const REQUIRED_BINARIES = ["bun", "openserp", "playwright-cli"] as const;
+export const REQUIRED_BINARIES = ["openserp", "playwright-cli"] as const;
 
 // SPEC §"search provider": camoufox browser executable location (env override,
 // default ~/.cache/camoufox/camoufox-bin).

@@ -13,7 +13,7 @@ description: HTML/CSS で図・図解・図表・フローチャート・アー�
 
 ## CLI
 
-実行は `bun ~/.agents/cli/htmlshot` で行う。`~/.agents/cli/htmlshot` はディレクトリであり、bun が package.json の main を解決するためexec bit も依存のインストールも不要である。
+実行は `~/.agents/cli/htmlshot` で行う。apply が owner実行権を付与する単一実行ファイルであり、依存のインストールも不要である。
 
 ```
 usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>] [--scale <n>] [--unsafe]

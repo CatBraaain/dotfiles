@@ -2,7 +2,7 @@
 
 ## 概要
 
-本plugin は、ticket CLI（`~/.agents/cli/ticket/`。`bun ~/.agents/cli/ticket` として起動し、bun が package.json の `main` を解決する）のラッパーtool 5つを dsh に登録する、pi `tickets` extension の host移植。tool群と CLI・ストアの振る舞いの正本は `dotfiles/.agents/cli.exact/ticket/SPEC.md`（harness中立）であり、本SPEC.md はそれを再定義せず、dsh での実現形（構成・依存・ビルド・結果形式）だけを定める。
+本plugin は、ticket CLI（`~/.agents/cli/ticket`。単一実行ファイルとして直接起動する）のラッパーtool 5つを dsh に登録する、pi `tickets` extension の host移植。tool群と CLI・ストアの振る舞いの正本は `dotfiles/.agents/cli.exact/ticket/SPEC.md`（harness中立）であり、本SPEC.md はそれを再定義せず、dsh での実現形（構成・依存・ビルド・結果形式）だけを定める。
 
 ## 登録するtool
 

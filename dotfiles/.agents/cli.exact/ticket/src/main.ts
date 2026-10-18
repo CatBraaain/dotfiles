@@ -1,7 +1,7 @@
 // ticket CLI — human/agent interface for the markdown ticket store.
 // Spec: dotfiles/.agents/cli.exact/ticket/SPEC.md
-// Started as `bun ~/.agents/cli/ticket` (bun resolves package.json's main
-// field to this file), so no exec bit or dependencies are required.
+// Deployed as a single compiled executable at `~/.agents/cli/ticket`
+// (cli.build.ts), so no runtime dependencies are required.
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";

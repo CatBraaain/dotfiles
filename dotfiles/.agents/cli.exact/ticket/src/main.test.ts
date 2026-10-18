@@ -3,8 +3,8 @@ import { afterEach, describe, it } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-// The CLI project dir; bun resolves package.json's main field inside it (the
-// same entry the deployed `bun ~/.agents/cli/ticket` uses).
+// The CLI project dir (the source tree compiled by cli.build.ts; the same
+// sources that run as the deployed `~/.agents/cli/ticket` executable).
 const CLI_DIR = join(import.meta.dir, "..");
 const homes: string[] = [];
 

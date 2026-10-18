@@ -43,15 +43,10 @@ import {
   WEBSOCKET_HEALTH_TIMEOUT_MS,
 } from "./config";
 import { ensureDisplay, ensureX11vnc, DISPLAY_NUMBER, resolveHeadless } from "./display";
-import { delay } from "./util";
+import { delay, selfRunArgv, selfRunPath } from "./util";
 
 const CAMOUFOX_EXECUTABLE_PATH =
   process.env.CAMOUFOX_EXECUTABLE_PATH ?? join(homedir(), ".cache", "camoufox", "camoufox-bin");
-
-// The CLI project directory (the parent of src/): detached server spawns go
-// through `bun <projectDir>` (bun resolves package.json's main field), and the
-// same string identifies server processes in the pgrep sweep and /proc check.
-const projectDir = dirname(import.meta.dir);
 
 // Spec: camoufox server のヘルスチェックは websocket 接続が成功するかで判定。
 // 1 接続試行は 1 秒で打ち切り（half-open socket 対策）。
@@ -117,7 +112,7 @@ function tryRunRecoveryRestart(): RecoveryRestartOutcome {
     args.push("flock", join(stateDirPath, slotLockFile(slot)));
   }
   // The re-entered `__locked server restart` runs the restart body directly.
-  args.push(process.execPath, projectDir, LOCKED_SUBCOMMAND, "server", "restart");
+  args.push(...selfRunArgv, LOCKED_SUBCOMMAND, "server", "restart");
   const result = spawnSync("flock", args, { stdio: "inherit", env: process.env });
   if (result.error) return "no-flock"; // no flock(1): no parallelism to arbitrate
   return result.status === FLOCK_CONFLICT_EXIT_CODE ? "lost" : "won";
@@ -235,7 +230,7 @@ function spawnBrowseDetached(args: readonly string[]): void {
   }
   try {
     // The child keeps its own dup of the fd, so close ours right away.
-    spawnDetachedServer(process.execPath, [projectDir, ...args], {
+    spawnDetachedServer(selfRunArgv[0]!, [...selfRunArgv.slice(1), ...args], {
       detached: true,
       stdio: ["ignore", logFd, logFd],
       shell: process.platform === "win32",
@@ -484,7 +479,7 @@ function camoufoxServerPids(): number[] {
   ) {
     pids.add(pidFilePid);
   }
-  for (const pattern of [`${projectDir} ${SERVER_SUBCOMMAND}`]) {
+  for (const pattern of [`${selfRunPath} ${SERVER_SUBCOMMAND}`]) {
     const sweep = spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" });
     if (sweep.status !== 0) continue;
     for (const line of sweep.stdout.split("\n")) {
@@ -510,7 +505,7 @@ function looksLikeCamoufoxServer(pid: number): boolean {
     const args = readFileSync(`/proc/${pid}/cmdline`, "utf8")
       .split("\0")
       .filter(Boolean);
-    const scriptPath = realpathSync(projectDir);
+    const scriptPath = realpathSync(selfRunPath);
     const normalizedArgs = args.map((arg) => {
       try {
         return realpathSync(arg);

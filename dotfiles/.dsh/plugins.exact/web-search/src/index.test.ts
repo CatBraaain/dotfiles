@@ -15,7 +15,7 @@ import {
   apply,
   binaryOnPath,
   browseCliDir,
-  browseScript,
+  browseCli,
   buildCliEnv,
   CAMOUFOX_DEFAULT_BASE_URL,
   camoufoxExecutablePath,
@@ -51,7 +51,7 @@ interface RecordedCall {
   options: CliSpawnOptions;
 }
 
-function fakeExec(stdoutByKind: Record<string, string>): { exec: CliExec; calls: RecordedCall[] } {
+function fakeExec(stdoutByCommand: Record<string, string>): { exec: CliExec; calls: RecordedCall[] } {
   const calls: RecordedCall[] = [];
   const exec: CliExec = (command, args, options) => {
     calls.push({ command, args, options });
@@ -61,8 +61,7 @@ function fakeExec(stdoutByKind: Record<string, string>): { exec: CliExec; calls:
         Object.assign(new Error("The operation was aborted"), { name: "AbortError", stderr: "" }),
       );
     }
-    const script = args[0] ?? "";
-    const stdout = stdoutByKind[script];
+    const stdout = stdoutByCommand[command];
     if (stdout === undefined) {
       return Promise.reject(Object.assign(new Error("spawn ENOENT"), { stderr: "" }));
     }
@@ -128,18 +127,18 @@ describe("設定（resolveEndpoints・Config）", () => {
 
 // --- SPEC §"CLI 子プロセス" ---
 
-describe("CLI の起動引数と環境（browseScript・buildCliEnv・execCli 経由の wiring）", () => {
+describe("CLI の起動引数と環境（browseCli・buildCliEnv・execCli 経由の wiring）", () => {
   it("browseCliDir は ~/.agents/cli が既定で、BROWSE_CLI_DIR で上書きできる", () => {
     assert.equal(browseCliDir({}), join(homedir(), ".agents", "cli"));
     assert.equal(browseCliDir({ BROWSE_CLI_DIR: "/opt/web-cli" }), "/opt/web-cli");
   });
 
-  it("browseScript は <dir>/browse を返す（bun が package.json の main を解決する）", () => {
+  it("browseCli は <dir>/browse を返す（apply が実行権を付与する単一実行ファイル）", () => {
     const directory = mkdtempSync(join(tmpdir(), "web-search-cli-"));
     try {
       const plain = join(directory, "browse");
       writeFileSync(plain, "");
-      assert.equal(browseScript({ BROWSE_CLI_DIR: directory }), plain);
+      assert.equal(browseCli({ BROWSE_CLI_DIR: directory }), plain);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -155,10 +154,10 @@ describe("CLI の起動引数と環境（browseScript・buildCliEnv・execCli �
     assert.equal(env.OTHER, "keep");
   });
 
-  it("search は bun <browse> search <query> --json を spawn し、signal と env と maxBuffer を渡す", async () => {
+  it("search は browseCli() search <query> --json を spawn し、signal と env と maxBuffer を渡す", async () => {
     const controller = new AbortController();
     const { exec, calls } = fakeExec({
-      [browseScript()]: searchJson([{ url: "https://a/" }]),
+      [browseCli()]: searchJson([{ url: "https://a/" }]),
     });
     const provider = new CamoufoxOpenserpSearchProvider(
       { camoufoxBaseUrl: "ws://x:1/y", openserpBaseUrl: "http://z:2" },
@@ -168,17 +167,17 @@ describe("CLI の起動引数と環境（browseScript・buildCliEnv・execCli �
     await provider.search({ query: "pi coding agent" }, controller.signal);
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]!.command, "bun");
-    assert.deepEqual(calls[0]!.args, [browseScript(), "search", "pi coding agent", "--json"]);
+    assert.equal(calls[0]!.command, browseCli());
+    assert.deepEqual(calls[0]!.args, ["search", "pi coding agent", "--json"]);
     assert.equal(calls[0]!.options.signal, controller.signal);
     assert.equal(calls[0]!.options.env.CAMOUFOX_BASE_URL, "ws://x:1/y");
     assert.equal(calls[0]!.options.env.OPENSERP_BASE_URL, "http://z:2");
     assert.equal(calls[0]!.options.maxBuffer, CLI_OUTPUT_MAX_BUFFER);
   });
 
-  it("fetch は bun <browse> fetch <url> --json を spawn し、signal と env を渡す", async () => {
+  it("fetch は browseCli() fetch <url> --json を spawn し、signal と env を渡す", async () => {
     const controller = new AbortController();
-    const { exec, calls } = fakeExec({ [browseScript()]: fetchJson() });
+    const { exec, calls } = fakeExec({ [browseCli()]: fetchJson() });
     const provider = new CamoufoxTrafilaturaFetchProvider(
       { camoufoxBaseUrl: "ws://x:1/y", openserpBaseUrl: "http://z:2" },
       { exec },
@@ -187,9 +186,8 @@ describe("CLI の起動引数と環境（browseScript・buildCliEnv・execCli �
     await provider.fetch({ url: "https://example.com/page" }, controller.signal);
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]!.command, "bun");
+    assert.equal(calls[0]!.command, browseCli());
     assert.deepEqual(calls[0]!.args, [
-      browseScript(),
       "fetch",
       "https://example.com/page",
       "--json",
@@ -200,7 +198,7 @@ describe("CLI の起動引数と環境（browseScript・buildCliEnv・execCli �
   });
 
   it("execCli のデフォルト実装は child_process.execFile に command・args・options を渡す（bun 実行で往復する）", async () => {
-    // Real execFile round trip against `bun -e` (bun is a required binary):
+    // Real execFile round trip against `bun -e` (bun runs this test suite):
     // argv and env survive the spawn, and stdout comes back.
     const output = await execCli(
       "bun",
@@ -273,7 +271,7 @@ describe("CLI JSON の sources 変換（toSearchSources）", () => {
 describe("search provider（CamoufoxOpenserpSearchProvider）", () => {
   it("CLI JSON から sources と truncated false を組み立てる（cap は seam の受け持ち）", async () => {
     const { exec } = fakeExec({
-      [browseScript()]: searchJson(
+      [browseCli()]: searchJson(
         Array.from({ length: 12 }, (_, index) => ({ url: `https://example.com/${index + 1}` })),
       ),
     });
@@ -361,7 +359,7 @@ describe("CLI JSON の fetch result 変換（toFetchResult）", () => {
 describe("fetch provider（CamoufoxTrafilaturaFetchProvider）", () => {
   it("CLI JSON の正規化済み url を結果の url に使う", async () => {
     const { exec } = fakeExec({
-      [browseScript()]: fetchJson({
+      [browseCli()]: fetchJson({
         url: "https://www.reddit.com/r/a/comments/id/slug/",
       }),
     });
@@ -377,7 +375,7 @@ describe("fetch provider（CamoufoxTrafilaturaFetchProvider）", () => {
 
   it("成功本文の fallback 行を維持する", async () => {
     const { exec } = fakeExec({
-      [browseScript()]: fetchJson({
+      [browseCli()]: fetchJson({
         fallbacks: [{ backend: "camoufox+trafilatura", error: "render: challenge detected" }],
       }),
     });
@@ -407,15 +405,15 @@ describe("fetch provider（CamoufoxTrafilaturaFetchProvider）", () => {
 // --- SPEC §"available() の前提チェック" ---
 
 describe("available() の前提チェック（hostPrerequisitesMet・binaryOnPath）", () => {
-  it("bun・openserp・playwright-cli と camoufox 実行ファイルが揃ったとき true", () => {
+  it("openserp・playwright-cli と camoufox 実行ファイルが揃ったとき true", () => {
     assert.equal(
       hostPrerequisitesMet({}, { binaryOnPath: () => true, fileExists: () => true }),
       true,
     );
   });
 
-  it("3バイナリのどれかが PATH になければ false", () => {
-    for (const missing of ["bun", "openserp", "playwright-cli"]) {
+  it("2バイナリのどれかが PATH になければ false", () => {
+    for (const missing of ["openserp", "playwright-cli"]) {
       const met = hostPrerequisitesMet(
         {},
         { binaryOnPath: (binaryName) => binaryName !== missing, fileExists: () => true },
@@ -497,7 +495,7 @@ describe("エラー伝播（cliErrorMessage・toWebError・provider 経由）", 
   });
 
   it("stdout が JSON でなければ unparsable output の WebError になる", async () => {
-    const { exec } = fakeExec({ [browseScript()]: "not json" });
+    const { exec } = fakeExec({ [browseCli()]: "not json" });
     const provider = new CamoufoxOpenserpSearchProvider(endpoints, { exec });
 
     await assert.rejects(provider.search({ query: "q" }), (error) => {
@@ -522,7 +520,7 @@ describe("エラー伝播（cliErrorMessage・toWebError・provider 経由）", 
 
   it("abort 済み signal で即座に失敗し、WebError に変換する", async () => {
     const { exec, calls } = fakeExec({
-      [browseScript()]: searchJson([{ url: "https://a/" }]),
+      [browseCli()]: searchJson([{ url: "https://a/" }]),
     });
     const provider = new CamoufoxOpenserpSearchProvider(endpoints, { exec });
     const controller = new AbortController();
