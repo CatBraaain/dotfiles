@@ -1,7 +1,7 @@
 ---
 name: coding-standard
 description: >-
-  コードを読みやすくし、小さく保つための読みやすさの技法カタログ。名前・条件・制御フロー・関数・変数・構成・テスト・選択・コメントの53技法を good/bad 例で収める。コードを書く・変更・レビューする前に必ず読み、適用する。コードを変更・評価しない調査、文書・設定だけの作業には使わない。
+  コードを読みやすくし、小さく保つための読みやすさの技法カタログ。名前・条件・制御フロー・関数・変数・構成・テスト・選択・コメントの54技法を good/bad 例で収める。コードを書く・変更・レビューする前に必ず読み、適用する。コードを変更・評価しない調査、文書・設定だけの作業には使わない。
 ---
 
 # Coding Standard
@@ -489,6 +489,32 @@ const label = count > 1 ? "items" : "item";
 
 const names = users.map((u) => u.name);
 users.forEach((u) => audit.push(`visited-${u.id}`));
+```
+
+#### C5 配列の選別・加工はパイプラインで
+
+`for` 文と `if` で配列を選別・加工すると、意図が制御フローの奥に沈む。`filter` で絞り込み、内容を語る説明変数で受ける。変換は `map`、副作用は `forEach` に振る。パフォーマンスが許す限りこの形が望ましい。
+
+##### before
+
+```ts
+const activeRecipients: string[] = [];
+for (const u of users) {
+  if (u.isActive && !u.banned) {
+    sendMail(u.email);
+    activeRecipients.push(`${u.name} <${u.email}>`);
+  }
+}
+```
+
+##### after
+
+```ts
+const activeUsers = users.filter((u) => u.isActive && !u.banned);
+
+activeUsers.forEach((u) => sendMail(u.email));
+
+const activeRecipients = activeUsers.map((u) => `${u.name} <${u.email}>`);
 ```
 
 ### D 関数と副作用
