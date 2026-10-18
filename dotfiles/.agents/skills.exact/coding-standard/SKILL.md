@@ -1,7 +1,7 @@
 ---
 name: coding-standard
 description: >-
-  コードを読みやすくし、小さく保つための good/bad 例集。名前・条件・制御フロー・関数・変数・構成・テスト・選択・コメントの50例を収める。コードを書く・変更・レビューする前に必ず読み、適用する。コードを変更・評価しない調査、文書・設定だけの作業には使わない。
+  コードを読みやすくし、小さく保つための読みやすさの技法カタログ。名前・条件・制御フロー・関数・変数・構成・テスト・選択・コメントの53技法を good/bad 例で収める。コードを書く・変更・レビューする前に必ず読み、適用する。コードを変更・評価しない調査、文書・設定だけの作業には使わない。
 ---
 
 # Coding Standard
@@ -16,7 +16,7 @@ description: >-
 
 名前は中身・単位・状態・制約を語る。読み手は名前から予測して読む。
 
-#### A1 抽象名 (Readable Code)
+#### A1 抽象名
 
 `data` `info` `value` など中身を言わない名前。入っているものを具体的に言う。
 
@@ -32,7 +32,7 @@ const data = await fetchUser(id);
 const user = await fetchUser(id);
 ```
 
-#### A2 単位が読めない名前 (Readable Code)
+#### A2 単位が読めない名前
 
 `timeout` がミリ秒か秒か分からない。単位を名前に添える。
 
@@ -74,7 +74,7 @@ export function normalize(unsafeUrl: string): URL {
 }
 ```
 
-#### A4 真偽が読めない名前 (Readable Code)
+#### A4 真偽が読めない名前
 
 `flag` は何の真偽か分からない。`is/has/can/should` 接頭辞で振る舞いを語る。
 
@@ -90,7 +90,7 @@ const flag = rows.length === 0;
 const isEmpty = rows.length === 0;
 ```
 
-#### A5 二重否定 (Readable Code)
+#### A5 二重否定
 
 `!isNotFound`（見つかっていない、でない）は読み直しが起きる。肯定形にする。
 
@@ -108,7 +108,7 @@ const isFound = rows.length > 0;
 if (isFound) retry();
 ```
 
-#### A6 範囲の包含が不明な名前 (Readable Code)
+#### A6 範囲の包含が不明な名前
 
 `end` に含めるのか不明。包含境界は `first/last`、上限下限は `max/min`。
 
@@ -128,7 +128,7 @@ function page(items: Item[], last: number) {
 }
 ```
 
-#### A7 意図が一意でない名前 (Readable Code)
+#### A7 意図が一意でない名前
 
 `filter` は残すのか除くのか曖昧。一意な語にする。
 
@@ -144,7 +144,7 @@ const result = users.filter(isDeleted);
 const deletedUsers = users.filter(isDeleted);
 ```
 
-#### A8 一貫しない語彙 (Clean Code)
+#### A8 一貫しない語彙
 
 同じ概念を `user` `member` `customer` と別の語で呼ぶ。同種のものには同じ語彙を使い、違いを名前で比較できるようにする。
 
@@ -220,7 +220,7 @@ const session = getSession(user); // 無いと新規作成される
 const session = getOrCreateSession(user);
 ```
 
-#### A12 発音でき検索できる名前 (Clean Code)
+#### A12 発音でき検索できる名前
 
 発音できない名前は議論と検索（grep）を妨げる。略語は一般に知られているものだけにする。
 
@@ -236,7 +236,7 @@ const u = await db.findUser(id); // 後で `u` で grep しても大量にヒッ
 const user = await db.findUser(id);
 ```
 
-#### A13 冗長な型接頭辞を避ける (Clean Code / Code Complete)
+#### A13 冗長な型接頭辞を避ける
 
 宣言や推論で分かる型を名前に繰り返さない（ハンガリアン記法の乱用を避ける）。
 
@@ -258,7 +258,7 @@ const isActive = user.isActive;
 
 複雑な条件は名前が意味を語る形へ。裸のリテラルと重複した条件を残さない。
 
-#### B1 複雑な条件は変数で受ける (Readable Code)
+#### B1 複雑な条件は変数で受ける
 
 複数条件の意図を `if` に直接書かず、名前が意味を語る変数で受ける。込み入った否定は De Morgan の法則で整理してから受ける。
 
@@ -291,7 +291,7 @@ if (isEligibleForGrant) {
 }
 ```
 
-#### B2 magic number (Refactoring.com / Clean Code / Code Complete)
+#### B2 magic number
 
 裸の数値リテラルは意味が読めない。名前付き定数にする。
 
@@ -312,7 +312,7 @@ if (retryCount > MAX_RETRIES) {
 }
 ```
 
-#### B3 同じ条件の繰り返し (Refactoring.com / Readable Code)
+#### B3 同じ条件の繰り返し
 
 同じ条件式が複数箇所に複製されている。述語関数に括り出す。
 
@@ -345,7 +345,7 @@ function getShippableOrders(orders: Order[]) {
 }
 ```
 
-#### B4 同じ結果の条件をまとめる (Consolidate Conditional Expression / Refactoring.com)
+#### B4 同じ結果の条件をまとめる
 
 同じ結果を返す複数の条件は、1つの条件にまとめる。
 
@@ -368,11 +368,37 @@ if (code === "expired" || code === "invalid") {
 }
 ```
 
+#### B5 magic string・boolean 羅列は enum で意図を語る
+
+裸の文字列・数値や複数の boolean で表した状態は、取り得る値と意味が読めない。enum（union 型）で値の範囲と意図を語る。
+
+##### before
+
+```ts
+function canEdit(role: string, docState: number) {}
+canEdit("admin", 1);
+```
+
+##### after
+
+```ts
+enum Role {
+  Admin,
+  Member,
+}
+enum DocState {
+  Editable,
+  Locked,
+}
+function canEdit(role: Role, docState: DocState) {}
+canEdit(Role.Admin, DocState.Editable);
+```
+
 ### C 制御フロー
 
 ネストは浅く、条件は予測どおりの向きで、副作用を演算子に隠さない。
 
-#### C1 深いネスト (Readable Code)
+#### C1 深いネスト
 
 ネストは深くしない。ガード節・早期 `continue` / `return` で平坦にする。
 
@@ -397,7 +423,7 @@ for (const o of orders) {
 }
 ```
 
-#### C2 条件の向き (Readable Code)
+#### C2 条件の向き
 
 左辺は調べる対象、右辺は定数。読み手の「主語と述語」になる。
 
@@ -417,7 +443,7 @@ while (attempts < maxAttempts) {
 }
 ```
 
-#### C3 末尾条件のループ (Code Complete)
+#### C3 末尾条件のループ
 
 `do/while` は条件が末尾にあり見逃しやすい。先頭条件の形へ。
 
@@ -439,7 +465,7 @@ while (hasMorePages) {
 }
 ```
 
-#### C4 式の中に副作用を隠さない (Readable Code)
+#### C4 式の中に副作用を隠さない
 
 三項演算子・`&&`・`||`・`map` の中に制御や副作用を隠さない。値の決定と変換は、副作用と分ける。
 
@@ -469,7 +495,7 @@ users.forEach((u) => audit.push(`visited-${u.id}`));
 
 関数は一つのことだけ、引数は少なく、名前と振る舞いを一致させる。
 
-#### D1 副作用の混入 (Clean Code)
+#### D1 副作用の混入
 
 関数は「する」か「答える」かの一方。`get` なのに状態を変えない。
 
@@ -494,7 +520,7 @@ function logConfigRead(): void {
 }
 ```
 
-#### D2 長い関数の分割 (Refactoring.com / Clean Code)
+#### D2 長い関数の分割
 
 複数の抽象レベル・目的が1つの関数に混在している。意味のある小関数へ抽出し、本体を手順として読める形にする。
 
@@ -531,7 +557,7 @@ function calcTotal(items: Item[]) {
 }
 ```
 
-#### D3 booleanフラグ引数 (Clean Code)
+#### D3 booleanフラグ引数
 
 フラグ引数は呼び出し側の意味（`true` が何を意味するか）を読めなくする。関数を2つに分ける。
 
@@ -550,7 +576,7 @@ function renderPrimaryButton(label: string) {}
 function renderSecondaryButton(label: string) {}
 ```
 
-#### D4 引数が多すぎる (Clean Code / Refactoring.com)
+#### D4 引数が多すぎる
 
 独立した引数が多い関数は呼び出し側で順序を間違えやすい。意味のあるまとまりへオブジェクト化する。
 
@@ -579,7 +605,7 @@ interface NewUser {
 function createUser(user: NewUser) {}
 ```
 
-#### D5 エラー処理の分離 (Clean Code)
+#### D5 エラー処理の分離
 
 通常処理にエラー分岐を混在させず、エラー処理を本体から分離する。
 
@@ -617,7 +643,7 @@ async function syncAll() {
 }
 ```
 
-#### D6 未使用の変数・引数の削除 (Refactoring.com)
+#### D6 未使用の変数・引数の削除
 
 使用されない引数・変数は保守対象を増やすだけ。定義から取り除く。
 
@@ -645,7 +671,7 @@ function createUser(name: string, email: string) {
 }
 ```
 
-#### D7 例外に文脈を付ける (Clean Code)
+#### D7 例外に文脈を付ける
 
 例外メッセージは原因と対象を含む。`failed` だけでは調査の出発点にならない。
 
@@ -665,11 +691,54 @@ if (!res.ok) {
 }
 ```
 
+#### D8 省略可能引数はデフォルト値で受ける
+
+省略時の値は引数のデフォルト値で宣言し、関数本体に条件を持ち込まない。
+
+##### before
+
+```ts
+function createTimer(timeoutMs?: number) {
+  const ms = timeoutMs ?? 3000;
+  start(ms);
+}
+```
+
+##### after
+
+```ts
+function createTimer(timeoutMs = 3000) {
+  start(timeoutMs);
+}
+```
+
+#### D9 catch を握りつぶさない
+
+捕捉したエラーは観測可能な形へ出す。空の catch は失敗を見えなくし、調査の出発点を失う。
+
+##### before
+
+```ts
+try {
+  await sync();
+} catch {}
+```
+
+##### after
+
+```ts
+try {
+  await sync();
+} catch (error) {
+  console.error("sync failed", error);
+}
+```
+
 ### E 変数
 
 スコープを最小に、再代入を避け、使い回さない。
 
-#### E1 宣言位置 (Readable Code)
+#### E1 宣言位置
 
 宣言は使う直前で。使用箇所から遠い宣言は読み手の保持量を増やす。
 
@@ -693,7 +762,7 @@ const maxRetries = 3;
 const summary = `${totalRows} rows, ${maxRetries} retries`;
 ```
 
-#### E2 スコープを狭める (Readable Code)
+#### E2 スコープを狭める
 
 変数の見える範囲は必要最小限に。広いスコープに置かれた可変変数は、どこで変わるか追えなくなる。
 
@@ -725,7 +794,7 @@ function greet(users: User[]) {
 }
 ```
 
-#### E3 再代入 (Readable Code)
+#### E3 再代入
 
 一度決まった値は変わらない方が追いやすい。再代入を避け、段階に名前を付ける。
 
@@ -745,7 +814,7 @@ const lowered = trimmed.toLowerCase();
 const name = lowered + suffix;
 ```
 
-#### E4 無意味な中間変数 (Readable Code)
+#### E4 無意味な中間変数
 
 値の由来が自明で、名前が何も語らない中間変数は消す。名前が意図を語る説明変数 (B1) は消さない。
 
@@ -762,7 +831,7 @@ return result;
 return computeTotal(items);
 ```
 
-#### E5 変数の使い回し (Code Complete)
+#### E5 変数の使い回し
 
 1つの変数を複数の目的で再利用する。目的ごとに名前と寿命を分ける。関数の引数の再割り当ても同じ。
 
@@ -800,7 +869,7 @@ function formatName(rawName: string) {
 
 読み順・段落・分割を整え、死んだコードと重複を残さない。
 
-#### F1 読み順 (Readable Code)
+#### F1 読み順
 
 ファイルは新聞記事のように、冒頭に主要な流れ、末尾に細部。JavaScript 等は関数の巻き上げで主要な流れを上に置ける。巻き上げがない言語 (Python・PowerShell 等) では、主要な関数を上に定義し、サブ関数をその下へ、実行の呼び出しは最後の行に置く。
 
@@ -854,7 +923,7 @@ const DEFAULTS = {};
 export const registry = buildRegistry();
 ```
 
-#### F3 段落分け (Readable Code)
+#### F3 段落分け
 
 連続した処理を空白行で論理段落に分け、構造を目で追えるようにする。
 
@@ -904,7 +973,7 @@ function main() {
 }
 ```
 
-#### F5 不要な間接化 (Refactoring.com)
+#### F5 不要な間接化
 
 名前が説明を加えないラッパーは保守対象を増やすだけ。呼び出し位置へ展開する。
 
@@ -923,7 +992,7 @@ console.log(getName(user));
 console.log(user.name);
 ```
 
-#### F6 重複の抽出 (Clean Code)
+#### F6 重複の抽出
 
 同じロジックの複製は、1つの名前付き処理へまとめる。
 
@@ -975,7 +1044,7 @@ it("works", () => {});
 it("returns empty when no rows match", () => {});
 ```
 
-#### G2 1テスト1振る舞い (Clean Code)
+#### G2 1テスト1振る舞い
 
 別の振る舞いは別のテストへ。1テストに複数の振る舞いを混ぜない。
 
@@ -1000,7 +1069,7 @@ it("throws on broken repository", () => {
 });
 ```
 
-#### G3 失敗メッセージ (Clean Code)
+#### G3 失敗メッセージ
 
 失敗時に input が読めるようにする。実際値・期待値は assertion が diff として表示するため手書きせず、diff に現れない input の文脈だけメッセージに添える。
 
@@ -1048,7 +1117,7 @@ for (const input of cases) {
 
 使用箇所は標準の `String.prototype.padStart()` に置き換える。
 
-#### H2 賢いワンライナー (Code Complete)
+#### H2 賢いワンライナー
 
 賢いコードより退屈なコードを優先する。演算子優先順位に頼った式は崩す。
 
@@ -1090,7 +1159,7 @@ type Options = {};
 
 書いてよいのは出典付きの1行だけ。上流（ライブラリ、OS、API、言語処理系）のバグ・欠陥や制約を回避する非自明なコードに、理由と出典（issue URL等）を1行で書く。上流が修正されたときに外せる。出典のないコメントは書かない。実装と乖離したコメントは、実装に合わせて直すか消す。「公式サンプルにもコメントがある」「読み手が仕様を知らないかもしれない」は書く理由にならない。サンプルや docs の情報も、名前・構造で語せるならコメントに置かない。
 
-#### I1 意図説明コメント (Readable Code)
+#### I1 意図説明コメント
 
 名前が語っている情報の逐語訳。削除する。
 
@@ -1107,7 +1176,7 @@ const displayName = user.name.toUpperCase();
 const displayName = user.name.toUpperCase();
 ```
 
-#### I2 説明変数で消せるコメント (Readable Code)
+#### I2 説明変数で消せるコメント
 
 コメントの代わりに、条件を名前のある変数へ抽出する。
 
@@ -1129,7 +1198,7 @@ if (canWithdraw) {
 }
 ```
 
-#### I3 出典付きの回避コメント (Readable Code)
+#### I3 出典付きの回避コメント
 
 上流の欠陥・制約の回避は、理由と出典を1行で書いてよい唯一のケース。
 
@@ -1165,7 +1234,7 @@ el.focus();
 el.focus();
 ```
 
-#### I5 乖離したコメント (Clean Code)
+#### I5 乖離したコメント
 
 実装と異なるコメントは無コメントより危険。実装に合わせて直すか、削除する。
 
