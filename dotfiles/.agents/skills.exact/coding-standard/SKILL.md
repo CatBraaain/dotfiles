@@ -1,7 +1,7 @@
 ---
 name: coding-standard
 description: >-
-  コードを読みやすくし、小さく保つための読みやすさの技法カタログ。名前・条件・制御フロー・関数・変数・構成・テスト・選択・コメントの54技法を good/bad 例で収める。コードを書く・変更・レビューする前に必ず読み、適用する。コードを変更・評価しない調査、文書・設定だけの作業には使わない。
+  コードを読みやすくし、小さく保つための読みやすさの技法カタログ。名前・条件・制御フロー・関数・変数・構成・テスト・選択・コメントの55技法を good/bad 例で収める。コードを書く・変更・レビューする前に必ず読み、適用する。コードを変更・評価しない調査、文書・設定だけの作業には使わない。
 ---
 
 # Coding Standard
@@ -758,6 +758,28 @@ try {
 } catch (error) {
   console.error("sync failed", error);
 }
+```
+
+#### D10 const に入れた arrow function
+
+arrow function を `const` に入れて使い回すのは原則禁止。変数に入れる・export する関数は `function` 宣言で定義する。arrow function は `array.map` などに渡す匿名関数としてだけ使う。
+
+##### before
+
+```ts
+const normalizeUrl = (url: string) => url.replace(/\/+$/, "");
+
+const urls = paths.map((p) => normalizeUrl(p));
+```
+
+##### after
+
+```ts
+function normalizeUrl(url: string) {
+  return url.replace(/\/+$/, "");
+}
+
+const urls = paths.map((p) => normalizeUrl(p));
 ```
 
 ### E 変数
