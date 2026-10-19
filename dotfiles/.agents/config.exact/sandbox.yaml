@@ -98,16 +98,20 @@ commands:
       - '^systemctl(\s|$)'
       - '^crontab(\s|$)'
       - '^(chmod|chown) -Rf?(\s|$)'
-  # systemctl: read-only subcommands run without confirmation (last match wins)
+  # systemctl and crontab: read-only subcommands run without confirmation
+  # (last match wins). Leading read-only options (--no-pager, --all, ...)
+  # are accepted before the subcommand.
   - allow:
-      - '^systemctl (status|show|cat|help|get-default|show-environment)(\s|$)'
-      - "^systemctl (list-|is-)"
+      - '^systemctl ((--no-pager|-a|--all|--plain|--user|-l)\s+)*(status|show|cat|help|get-default|show-environment)(\s|$)'
+      - '^systemctl ((--no-pager|-a|--all|--plain|--user|-l)\s+)*(list-|is-)'
+      - '^systemctl --version(\s|$)'
+      - '^crontab -l(\s|$)'
   # sudo -n true: passwordless-sudo probe runs without confirmation (last match wins)
   - allow:
       - '^sudo -n true(\s|$)'
   # power/session control, incl. via systemctl, is denied outright
   - deny:
-      - '^systemctl (reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit)(\s|$)'
+      - '^systemctl ((--no-pager|-a|--all|--plain|--user|-l)\s+)*(reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit)(\s|$)'
   - deny:
       - '^doas(\s|$)'
       - '^(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b'
