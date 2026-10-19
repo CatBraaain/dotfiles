@@ -194,6 +194,63 @@ static void test_main_dictionary_imports_managed_custom_table(void) {
     rime->config_close(&dictionary);
 }
 
+static void test_registered_phrases_are_selectable(void) {
+    static const struct {
+        const char* input;
+        const char* reading;
+        const char* text;
+    } cases[] = {
+        {"ose", "おせ", "お世話になっております。"},
+        {"osewani", "おせわに", "お世話になります。"},
+        {"otu", "おつ", "お疲れ様です。"},
+        {"gokakuninnno", "ごかくにんの", "ご確認のほどよろしくお願いいたします。"},
+        {"bake", "ばけ", "化"},
+        {"honkennni", "ほんけんに", "本件につきまして承知しました。"},
+        {"yoro", "よろ", "よろしくお願いいたします。"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        char description[256];
+        snprintf(description, sizeof(description), "%s must produce the reading %s",
+                 cases[i].input, cases[i].reading);
+        check(preedit_equals(cases[i].reading), description);
+        press(kSpace);
+        press(kSpace);
+        press(kTab);
+
+        RimeCandidateListIterator iterator = {0};
+        int candidate_index = -1;
+        if (rime->candidate_list_begin(session, &iterator)) {
+            int index = 0;
+            while (rime->candidate_list_next(&iterator)) {
+                if (iterator.candidate.text &&
+                    strcmp(iterator.candidate.text, cases[i].text) == 0) {
+                    candidate_index = index;
+                    break;
+                }
+                ++index;
+            }
+            rime->candidate_list_end(&iterator);
+        }
+        snprintf(description, sizeof(description), "%s must expose the exact candidate %s",
+                 cases[i].reading, cases[i].text);
+        check(candidate_index >= 0, description);
+        if (candidate_index < 0) continue;
+
+        press(kUp);
+        for (int index = 0; index < candidate_index; ++index) press(kDown);
+        press(kReturn);
+        char commit[256];
+        snprintf(description, sizeof(description), "%s must commit the selected phrase %s",
+                 cases[i].reading, cases[i].text);
+        Bool committed = take_commit(commit, sizeof(commit));
+        check(committed && strcmp(commit, cases[i].text) == 0, description);
+        if (g_verbose) printf("  registered phrase: %s -> %s\n", cases[i].reading,
+                              committed ? commit : "(no commit)");
+    }
+}
+
 /* SPEC: readings with matching dictionary words expose those candidates.
  * Revised literal substitutions are asserted as readings in
  * test_n_run_preedit and test_n_run_conversion_reading, not as folded words. */
@@ -4326,6 +4383,7 @@ int main(int argc, char* argv[]) {
         test_bunsetsu_filtered_identity,
         test_default_schema_is_kagiroi,
         test_main_dictionary_imports_managed_custom_table,
+        test_registered_phrases_are_selectable,
         test_ascii_punct_disabled_at_session_start,
         test_emoji_option_defaults_off,
         test_n_run_correction,
