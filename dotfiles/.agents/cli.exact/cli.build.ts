@@ -27,7 +27,15 @@ async function compileCli(
   const buildPath = `${cliDir}.compile`;
   const executablePath = `${cliDir}.executable`;
   const compiled = Bun.spawnSync(
-    [process.execPath, "build", "--compile", entryPath, "--outfile", buildPath],
+    [
+      process.execPath,
+      "build",
+      "--compile",
+      "--compile-autoload-package-json",
+      entryPath,
+      "--outfile",
+      buildPath,
+    ],
     { stdout: "inherit", stderr: "inherit" },
   );
   if (compiled.exitCode !== 0) {
