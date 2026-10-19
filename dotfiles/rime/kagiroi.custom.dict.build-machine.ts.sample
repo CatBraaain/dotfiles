@@ -1,14 +1,17 @@
 // @ts-ignore: Bun provides Node built-ins at runtime; this repo has no Node type package.
 import { readFile, writeFile } from "node:fs/promises";
 
-// Rime dictionary rows appended to the tail of kagiroi.custom.dict.yaml.
-// Each line is TSV: phrase<TAB>reading<TAB>weight. The phrase column may
-// carry a "|variant" suffix like existing entries do.
-const dictionaryRows = [
-  "単語|1851 1851\tたんご\t1",
-  "最高|1851 1851\tさいこう\t1",
-  "検証|1851 1851\tけんしょう\t1",
-].join("\n");
+// User dictionary entries appended to the tail of kagiroi.custom.dict.yaml.
+// Each entry is [phrase, reading] and becomes the TSV row
+// `phrase|1851 1851<TAB>reading<TAB>1`, matching existing entries.
+const dictionaryEntries: Array<[string, string]> = [
+  ["単語", "たんご"],
+  ["最高", "さいこう"],
+  ["検証", "けんしょう"],
+];
+const dictionaryRows = dictionaryEntries
+  .map(([phrase, reading]) => `${phrase}|1851 1851\t${reading}\t1`)
+  .join("\n");
 
 async function main(): Promise<void> {
   const { buildHookContext } = await import(
