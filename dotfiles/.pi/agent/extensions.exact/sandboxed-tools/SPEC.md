@@ -73,17 +73,17 @@ Vision入力として扱う画像ファイルは、MIMEタイプが `image/*` �
 | ask_permission（§3・path） | `Yes, allow` / `No, deny (reason next)` |
 | ask_permission（§3・command） | `Allow once` / `Allow in this session` / `No, deny (reason next)` |
 
-コマンドの確認で `Allow in this session` を選ぶと、確認対象のコマンドが一致した設定パターンがセッション内で承認される。承認されたパターンに一致するコマンド（`ask` と `ask_with_reason` の双方）は、セッションの残りの間、確認なしで実行され、実行時に承認ノート（§2.3）を伴う。セッション承認は消費されず、セッション終了で破棄される。設定パターンがない確認（`no matching pattern (default ask)`）では承認対象のパターンがないため、`Allow in this session` を提示しない。選択ダイアログを提供できないUI での `confirm` による代替では、コマンドの承認は `Allow once` 相当として扱う。
+セッション承認のルール同一性にはcommandとargs条件の全体を用いる。コマンドの確認で `Allow in this session` を選ぶと、確認対象のコマンドが一致した設定パターンがセッション内で承認される。承認されたパターンに一致するコマンド（`ask` と `ask_with_reason` の双方）は、セッションの残りの間、確認なしで実行され、実行時に承認ノート（§2.3）を伴う。セッション承認は消費されず、セッション終了で破棄される。設定パターンがない確認（`no matching pattern (default ask)`）では承認対象のパターンがないため、`Allow in this session` を提示しない。選択ダイアログを提供できないUI での `confirm` による代替では、コマンドの承認は `Allow once` 相当として扱う。
 
 `Allow once` の承認は、選択した確認ダイアログ1回に対応する実行だけを許す。bash実行時の `ask` 確認ではその実行のみを通し、`ask_permission`（§3・command）では同じコマンドの次の `bash` 実行を1回だけ確認なしで通し、そのときに承認を消費する。
 
 選択ダイアログの表示行は、問いかけ、確認対象（パスまたはコマンド）、`reason: <理由>` の行（`ask_permission`（§3）のみ）、設定パターンの行の順とする。`confirm` に置き換わる場合、問いかけは確認の質問として表示し、メッセージは確認対象以下の行とする。
 
-選択ダイアログ（および `confirm` に置き換わる場合のメッセージ）には、確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob展開後の絶対パスを、コマンドは設定されたパターンを表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
+選択ダイアログ（および `confirm` に置き換わる場合のメッセージ）には、確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob展開後の絶対パスを、コマンドはcommandとargsを含むルールをJSON形式で表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
 
 `ask_permission`（§3）の確認ダイアログの問いかけは、パスのとき `Allow write access to directory subtree?`、コマンドのとき `Allow command execution?` とし、確認対象に続けてエージェントが指定した要求理由を `reason: <理由>` の行で表示する。
 
-コマンドの確認ダイアログでは、コマンド文字列の中で一致が起こった範囲を反転表示で強調する。強調は黄前景を設定した上で前景と背景を反転するもので、視覚上は一致範囲が黄背景で表示される。強調位置は、判定に使ったセグメントの再構築文字列（クォート除去・先頭語読み飛ばし・両端空白除去済み）をコマンド文字列中の語境界から探すことで決め、見つからないときは一致した範囲のテキストをあらためて語境界から探し、それでも見つからないとき（クォートされたコマンド等）は強調しない。UI がアクセント色を提供しないときと、`NO_COLOR` 環境変数が設定されているときも強調しない。強調範囲の前後の文字列は、強調しない場合と同じダイアログのアクセント色で表示する。
+コマンドの確認ダイアログでは、コマンド文字列の中で一致が起こったtokenを反転表示で強調する。強調は黄前景を設定した上で前景と背景を反転するもので、視覚上は一致範囲が黄背景で表示される。強調位置は、判定に使った実行ファイルtokenと各args条件に一致した引数tokenの元コマンド内の範囲とし、間にある無関係な引数は強調しない。UI がアクセント色を提供しないときと、`NO_COLOR` 環境変数が設定されているときも強調しない。強調範囲の前後の文字列は、強調しない場合と同じダイアログのアクセント色で表示する。
 
 拒否を選択・キャンセルしたとき、拡張は理由入力ダイアログを続けて表示する。入力は任意で、空欄またはキャンセルなら理由なしとして扱う。理由が入力されたときは、拒否のエラーメッセージ（`Access denied by user: <path>` / `Command denied by user: <command>`）に `User reason: <入力>` の行を追記してagent へ返す。
 
@@ -212,7 +212,7 @@ flowchart TD
 
 `bash` コマンドは `sandbox.yaml`（§6）の `commands` からアクションを解決する（走査・未設定の扱いは §3 と同じ）。
 
-複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。
+複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。事前承認の同一性は各セグメントのtoken列で比較し、`cmd "a b"` と `cmd a b` を区別する。
 
 | コマンドのアクション | 結果 |
 | --- | --- |
@@ -248,25 +248,40 @@ network は開放。fs制限の対象外。
 | `credentials` | bash の sandbox に read-only で bindするパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands` | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する |
 
-- `read` / `write` / `commands` は、アクション別の3リストではなく `{action: pattern}` または `{action: [patterns...]}` の要素からなるフラットなリストで書く。`action` は read・write では `allow` / `ask` / `deny` のいずれか、commands では `ask_with_reason` も使える4値のいずれかで、要素ごとに1つだけ宣言する。パターンの記法は read / write が glob（§3）、commands が正規表現である。
+- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` は `{action: rule}` または `{action: [rules...]}` のフラットなリストで、同じaction内のルールはORとする。各要素は1つのactionだけを宣言し、commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
 - 各リストは要素を上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
 - 実値（既定エントリ）は `sandbox.yaml` を参照。
-- `read` / `write` / `commands` のセクションがリストでない、要素がマッピングでない、要素が複数のアクションを宣言する、アクション名が read・write では `allow` / `ask` / `deny` 以外・commands では `allow` / `ask` / `ask_with_reason` / `deny` 以外、パターンが文字列でも文字列のリストでもない場合、`sandbox.yaml` の読み込みは失敗し、全セクションが未設定（= `deny`）として動作する。パターンリスト内の非文字列要素は無視される。
-- `commands` のパターンが正規表現として解釈できないとき、そのパターンのみが無視され（マッチしない）、pi の起動時に無効だったパターンを列挙した警告メッセージを表示する。読み込み自体は成功し、他のセクション・パターンの動作は変わらない。
+- セクションがリストでない、要素がマッピングでない、actionが複数または未知の値の場合、読み込みは失敗し、全セクションが未設定（= `deny`）になる。read・writeの値は文字列または文字列リストで、リスト内の非文字列は無視する。commandsのruleは `command: string` と省略可能な `args: string[]` だけを持つマッピングであり、文字列rule、未知フィールド、command欠落、型の違反、ルールリスト内の不正要素も読み込み失敗になる。
+- `commands` のcommandまたはargsの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。piの起動時メッセージで警告する。
 
 記法の例（`commands`）:
 
 ```yaml
 commands:
-  - { allow: ".*" }
-  - { ask: ['^git push\b', '^gh pr create\b'] }
-  - { ask_with_reason: ['^sudo\b', '^chmod -R\b'] }
-  - { ask: '^systemctl\b' }
-  - { allow: "^systemctl (status|show)" }
-  - { deny: "^systemctl (reboot|poweroff|halt|shutdown)" }
+  - allow: { command: ".*" }
+  - ask:
+      - { command: git, args: [push] }
+      - { command: gh, args: [pr, create] }
+  - ask_with_reason:
+      - { command: sudo }
+      - { command: chmod, args: ["-R"] }
+  - ask: { command: systemctl }
+  - allow: { command: systemctl, args: ["status|show"] }
+  - deny: { command: systemctl, args: ["reboot|poweroff|halt|shutdown"] }
 ```
 
-> パスの glob照合ルール（§3）とコマンド正規表現の評価対象（セグメントの切り方等）は実装で決定する。本spec は「何が設定可能か」のみを規定する。
+### コマンドルールの照合（§6）
+
+command と args の各文字列はJavaScript RegExp sourceであり、実行ファイル名token全体・各引数token全体に照合する。ORは正規表現の `|` で表す。引用符を除去したtoken値を保持し、空文字・引用された空白・引用中の改行も1つのtokenとして扱う。
+
+| 条件 | 一致結果 |
+| --- | --- |
+| commandが実行ファイルtoken全体に一致しない | 不一致 |
+| args省略または空配列 | commandだけで判定 |
+| argsの全パターンがそれぞれ1個以上の引数token全体に一致する | commandとのANDで一致 |
+| argsのいずれかに一致する引数がない | 不一致 |
+
+引数の位置・個数・順序は制約せず、追加引数を許容する。同じtokenが複数のargs条件を満たしてよい。オプション名と値の対応付けは行わない。例えば `{command: systemctl, args: [status]}` は `systemctl start status` にも一致する。コマンドが存在しない空入力・コメントのみの入力は未設定（deny）とする。
 
 ### 6.1 bind とパスの実在保証
 

@@ -8,7 +8,14 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
@@ -244,7 +251,10 @@ describe("§2.1 read（ツール経路）", () => {
       }),
       async ({ tool, runs, dir }) => {
         await assert.rejects(
-          tool("read").execute({ file_path: join(dir, "secret", "k.png") }, execOf(imageAgent())),
+          tool("read").execute(
+            { file_path: join(dir, "secret", "k.png") },
+            execOf(imageAgent()),
+          ),
           /Access denied: /,
         );
         assert.equal(runs.length, 0);
@@ -261,7 +271,10 @@ describe("§2.1 read（ツール経路）", () => {
         respond: pngRespond(join(dir, "img.png")),
       }),
       async ({ tool, runs, dir }) => {
-        const result = await tool("read").execute({ file_path: "img.png" }, execOf(imageAgent()));
+        const result = await tool("read").execute(
+          { file_path: "img.png" },
+          execOf(imageAgent()),
+        );
         // The attachment reference (post-normalization values from the store)
         // is what the tool returns — §2.1 downscale/normalize lives in the
         // attachment service, and the image rides the session's attachments.
@@ -478,7 +491,11 @@ describe("§3 ask_permission（ツール経路）", () => {
       () => ({ configYaml: "" }),
       ({ tool }) => {
         const parameters = tool("ask_permission").parameters;
-        assert.deepEqual(Object.keys(parameters.properties).sort(), ["command", "path", "reason"]);
+        assert.deepEqual(Object.keys(parameters.properties).sort(), [
+          "command",
+          "path",
+          "reason",
+        ]);
         assert.deepEqual(parameters.required, ["reason"]);
         const serialized = JSON.stringify(parameters);
         assert.equal(serialized.includes("anyOf"), false);
@@ -516,7 +533,7 @@ describe("§3 ask_permission（ツール経路）", () => {
     "command の承認は1回限り: 同じ bash 再送が確認なしで走り、承認を消費する",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - { ask_with_reason: '^sudo\\b' }\n",
+        configYaml: "commands:\n  - ask_with_reason:\n      command: sudo\n",
         ui: scriptedUi([{ label: "Yes, allow" }]).ui,
       }),
       async ({ tool, runs }) => {
@@ -642,12 +659,15 @@ describe("§2.3 承認ノート（write/edit/bash の render）", () => {
     "bash は EROFS ヒントの後に承認ノートを追記し、ノートが最終行になる",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - { ask: '^deploy\\b' }\n",
+        configYaml: "commands:\n  - ask:\n      command: deploy\n",
         ui: scriptedUi([{ label: "Yes, allow" }]).ui,
         respond: () =>
           ({
             stdout: { text: "deploy: touching files", truncated: false },
-            stderr: { text: "touch: cannot touch 'x': Read-only file system", truncated: false },
+            stderr: {
+              text: "touch: cannot touch 'x': Read-only file system",
+              truncated: false,
+            },
             exitCode: 1,
             signal: null,
             timedOut: false,
@@ -693,7 +713,7 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
   it(
     "bash の workdir 未指定はセッション cwd、相対指定は cwd 基準、timeoutMs は上限クランプ",
     withToolLayer(
-      () => ({ configYaml: "commands:\n  - { allow: '.*' }\n" }),
+      () => ({ configYaml: "commands:\n  - allow:\n      command: .*\n" }),
       async ({ tool, runs, dir }) => {
         await tool("bash").execute(
           { command: "pwd", description: "print working directory" },
@@ -717,7 +737,7 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
   it(
     "bash は空 command・空 description・不正 timeoutMs を引数検証で拒否する",
     withToolLayer(
-      () => ({ configYaml: "commands:\n  - { allow: '.*' }\n" }),
+      () => ({ configYaml: "commands:\n  - allow:\n      command: .*\n" }),
       async ({ tool }) => {
         await assert.rejects(
           tool("bash").execute({ command: "  ", description: "d" }, execOf()),
@@ -769,7 +789,13 @@ describe("§8 bash の rtk rewrite", () => {
     "認可後に書き換え後 command を runner へ渡す",
     withToolLayer(
       () => ({
-        configYaml: `\ncommands:\n  - allow: '^git status$'\n`,
+        configYaml: `
+commands:
+  - allow:
+      command: git
+      args:
+        - status
+`,
         rtk: { rewrite: () => "rtk git status" },
       }),
       async ({ tool, runs }) => {
@@ -787,7 +813,7 @@ describe("§8 bash の rtk rewrite", () => {
     "rewrite が元 command を返すと元 command をそのまま runner へ渡す",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - allow: '.*'\n",
+        configYaml: "commands:\n  - allow:\n      command: .*\n",
         rtk: { rewrite: (command: string) => command },
       }),
       async ({ tool, runs }) => {
@@ -804,7 +830,8 @@ describe("§8 bash の rtk rewrite", () => {
     "元 command が拒否されたとき rewrite と runner を実行しない",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - allow: '.*'\n  - deny: '^git status$'\n",
+        configYaml:
+          "commands:\n  - allow:\n      command: .*\n  - deny:\n      command: git\n      args:\n        - status\n",
         rtk: {
           rewrite: () => {
             throw new Error("rewrite must not run");
@@ -828,7 +855,8 @@ describe("§8 bash の rtk rewrite", () => {
     "理由必須の元 command は rewrite と runner を実行しない",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - allow: '.*'\n  - ask_with_reason: '^sudo\\b'\n",
+        configYaml:
+          "commands:\n  - allow:\n      command: .*\n  - ask_with_reason:\n      command: sudo\n",
         rtk: {
           rewrite: () => {
             throw new Error("rewrite must not run");
@@ -906,7 +934,10 @@ describe("§2.4 未読みゲート（ツール経路）", () => {
       async ({ tool, runs, dir }) => {
         const target = join(dir, "a.txt");
         await assert.rejects(
-          tool("edit").execute({ file_path: target, old_string: "x", new_string: "y" }, execOf()),
+          tool("edit").execute(
+            { file_path: target, old_string: "x", new_string: "y" },
+            execOf(),
+          ),
           (error: Error) => error.message === NOT_BEEN_READ(target),
         );
         assert.equal(runs.length, 0);
@@ -1065,7 +1096,11 @@ esac
           info: () => {},
         };
         return {
-          configYaml: `\nread:\n  - allow: ${dir}\ncommands:\n  - allow: '.*'\n`,
+          configYaml: `\nread:\n  - allow: ${dir}
+commands:
+  - allow:
+      command: .*
+`,
           ui: scriptedUi([]).ui,
           rtk: {
             rewriter: new RtkRewriter(rtkLogger, { binaryPath: rtkPath, configPath }),

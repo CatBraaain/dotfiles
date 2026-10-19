@@ -114,8 +114,10 @@ function withPluginEnvironment(
       writeConfig(options.configYaml(workDir));
       const tools: CapturedTool[] = [];
       const warnings: string[] = [];
-      const handlers: Record<string, (session: { header: { id?: string; cwd?: string } }) => void> =
-        {};
+      const handlers: Record<
+        string,
+        (session: { header: { id?: string; cwd?: string } }) => void
+      > = {};
       const ctx = {
         logger: () => ({ warn: (message: string) => warnings.push(message) }),
         on: (
@@ -255,7 +257,8 @@ describe("§6 無効 regex の警告（index.ts）", () => {
     "起動時に無効だったコマンドパターンを dsh ログへ警告する",
     withPluginEnvironment(
       {
-        configYaml: () => 'commands:\n  - { allow: ".*" }\n  - { ask: [\'^\', "[unclosed"] }\n',
+        configYaml: () =>
+          'commands:\n  - allow:\n      command: .*\n  - ask:\n      - command: ""\n      - command: "[unclosed"\n',
       },
       async ({ warnings }) => {
         assert.equal(warnings.length, 1);

@@ -78,63 +78,95 @@ credentials:
   - ~/.gnupg
 
 commands:
-  - allow: ".*"
+  - allow: { command: ".*" }
   - ask:
-      # publish-ish action as the 2nd-4th word of any command (npm publish,
-      # wxt submit, bunx --bun wxt publish, just publish, ...)
-      - '^\S+( \S+){0,2} (publish|submit|upload)(\s|$)'
-      - '^gh pr create(\s|$)'
-      - '^git push(\s|$)'
-  # destructive or privileged commands: agent must request approval with a
-  # reason via ask_permission, then re-send the same bash command (SPEC §4)
-  # Commands end with (\s|$), not \b: \b would also match hyphenated
-  # binaries (sudo-rs), while \s alone would miss the bare command without
-  # args. mkfs is the exception: its name takes suffixes (mkfs.ext4).
+      - { command: ".*", args: ["publish|submit|upload"] }
+      - { command: gh, args: [pr, create] }
+      - { command: git, args: [push] }
   - ask_with_reason:
-      # git
-      - '^git (reset --hard|clean -fdx?|replace|update-ref|reflog expire|gc|prune)(\s|$)'
-      # system
-      - '^sudo(\s|$)'
-      - '^systemctl(\s|$)'
-      - '^crontab(\s|$)'
-      - '^(chmod|chown) -Rf?(\s|$)'
-  # systemctl and crontab: read-only subcommands run without confirmation
-  # (last match wins). Leading read-only options (--no-pager, --all, ...)
-  # are accepted before the subcommand.
+      - { command: git, args: [reset, "--hard"] }
+      - {
+          command: git,
+          args: [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"],
+        }
+      - { command: git, args: ["replace|update-ref|gc|prune"] }
+      - { command: git, args: [reflog, expire] }
+      - { command: sudo }
+      - { command: systemctl }
+      - { command: crontab }
+      - { command: "chmod|chown", args: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"] }
   - allow:
-      - '^systemctl ((--no-pager|-a|--all|--plain|--user|-l)\s+)*(status|show|cat|help|get-default|show-environment)(\s|$)'
-      - '^systemctl ((--no-pager|-a|--all|--plain|--user|-l)\s+)*(list-|is-)'
-      - '^systemctl --version(\s|$)'
-      - '^crontab -l(\s|$)'
-  # sudo -n true: passwordless-sudo probe runs without confirmation (last match wins)
+      - {
+          command: systemctl,
+          args: ["status|show|cat|help|get-default|show-environment"],
+        }
+      - { command: systemctl, args: ["(list-|is-).*"] }
+      - { command: systemctl, args: ["--version"] }
+      - { command: crontab, args: ["-l"] }
   - allow:
-      - '^sudo -n true(\s|$)'
-  # power/session control, incl. via systemctl, is denied outright
+      - { command: sudo, args: ["-n", "true"] }
   - deny:
-      - '^systemctl ((--no-pager|-a|--all|--plain|--user|-l)\s+)*(reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit)(\s|$)'
+      - {
+          command: systemctl,
+          args:
+            [
+              "reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit",
+            ],
+        }
   - deny:
-      - '^doas(\s|$)'
-      - '^(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b'
-      - '^(wipefs|parted|fdisk|sfdisk|sgdisk)(\s|$)'
-      - '^(shutdown|reboot|poweroff|halt)(\s|$)'
+      - { command: doas }
+      - {
+          command: '(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b.*',
+        }
+      - { command: "wipefs|parted|fdisk|sfdisk|sgdisk" }
+      - { command: "shutdown|reboot|poweroff|halt" }
   - ask:
-      - '(?i:^/mnt(?:/|\s|$))'
+      - { command: "(?i:/mnt(?:/.*)?)" }
   - allow:
-      - '(?i:^/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe(\s|$))'
-      - '(?i:^/mnt/c/Windows/System32/reg\.exe (query|compare)(\s|$))'
-      - '(?i:^/mnt/c/Windows/System32/sc\.exe (query|queryex|qc|qdescription|qfailure|qsidtype)(\s|$))'
-      - '(?i:^/mnt/c/Windows/System32/schtasks\.exe /query(\s|$))'
-      - '(?i:^/mnt/c/Windows/System32/wevtutil\.exe (qe|el)(\s|$))'
-      - '(?i:^/mnt/c/Windows/System32/netsh\.exe (\S+ ){0,3}show(\s|$))'
-      - '(?i:^/mnt/c/Windows/System32/ipconfig\.exe( (/all|/allcompartments|/displaydns))*\s*$)'
-      - '(?i:^/mnt/c/Windows/System32/wsl\.exe (--version|--status|-l|--list)( (-v|--verbose|-r|--running|-o|--online))*\s*$)'
-  # pi CLI runs gated; segments are trimmed by sandboxed-tools, so a plain
-  # `^pi` anchor matches pi at the head of any compound command
+      - {
+          command: '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)',
+        }
+      - {
+          command: '(?i:/mnt/c/Windows/System32/reg\.exe)',
+          args: ["(?i:query|compare)"],
+        }
+      - {
+          command: '(?i:/mnt/c/Windows/System32/sc\.exe)',
+          args: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"],
+        }
+      - {
+          command: '(?i:/mnt/c/Windows/System32/schtasks\.exe)',
+          args: ["(?i:/query)"],
+        }
+      - {
+          command: '(?i:/mnt/c/Windows/System32/wevtutil\.exe)',
+          args: ["(?i:qe|el)"],
+        }
+      - {
+          command: '(?i:/mnt/c/Windows/System32/netsh\.exe)',
+          args: ["(?i:show)"],
+        }
+      - { command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)' }
+      - {
+          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)',
+          args: ["--version|--status|-l|--list"],
+        }
   - ask:
-      - '^pi(\s|$)'
-  # pi read-only probes run without confirmation (last match wins);
-  # auth (token refresh, secret printing) and config (TUI) stay gated
+      - {
+          command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)',
+          args:
+            ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"],
+        }
+      - {
+          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)',
+          args:
+            [
+              "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
+            ],
+        }
+  - ask:
+      - { command: pi }
   - allow:
-      - '^pi (--help|--version|-h|-v)(\s|$)'
-      - '^pi (--list-models|list)(\s|$)'
-      - '^pi mcp list(\s|$)'
+      - { command: pi, args: ["--help|--version|-h|-v"] }
+      - { command: pi, args: ["--list-models|list"] }
+      - { command: pi, args: [mcp, list] }

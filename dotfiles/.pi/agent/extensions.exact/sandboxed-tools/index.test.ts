@@ -64,7 +64,9 @@ function withSandbox(
   };
 }
 
-function withTempDirectory(test: (directory: string) => Promise<void> | void): () => Promise<void> {
+function withTempDirectory(
+  test: (directory: string) => Promise<void> | void,
+): () => Promise<void> {
   return async () => {
     const directory = mkdtempSync(join(tmpdir(), "sandboxed-tools-test-"));
     try {
@@ -83,7 +85,8 @@ function runGit(cwd: string, args: string[]): void {
 const ACCENT_START = "\u001b[34m";
 
 /** Expected ANSI-wrapped dialog highlight (inverted region) for a matched command span. */
-const highlighted = (text: string): string => `\u001b[7m\u001b[33m${text}\u001b[27m${ACCENT_START}`;
+const highlighted = (text: string): string =>
+  `\u001b[7m\u001b[33m${text}\u001b[27m${ACCENT_START}`;
 
 /** Any highlight SGR: the dialog must contain none of these when highlighting is off. */
 const HIGHLIGHT_ANSI = ["\u001b[7m", "\u001b[33m"];
@@ -121,7 +124,10 @@ const approvingUi = { confirm: async () => true };
 
 /** Compile string-pattern command entries to the regex form used at runtime (§6). */
 const compiled = (
-  entries: { action: "allow" | "ask" | "deny" | "ask_with_reason"; patterns: string[] }[],
+  entries: {
+    action: "allow" | "ask" | "deny" | "ask_with_reason";
+    patterns: { command: string; args?: string[] }[];
+  }[],
 ) => compileCommandRuleEntries(entries).entries;
 
 // 拡張 factory を stub API で読み込み、registerTool されたツールを取り出す
@@ -762,7 +768,12 @@ describe("§3.a パス文字列の解決", () => {
     "${REPOSITORY_NAME} は main worktree の basename へ展開される",
     withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
       const section = expandPathSection(
-        [{ action: "allow", patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")] }],
+        [
+          {
+            action: "allow",
+            patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")],
+          },
+        ],
         linkedWorktreePath,
       );
 
@@ -777,7 +788,12 @@ describe("§3.a パス文字列の解決", () => {
     "${REPOSITORY_NAME} を含むパスは current repository の worktree 置き場配下を許可する",
     withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
       const section = expandPathSection(
-        [{ action: "allow", patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")] }],
+        [
+          {
+            action: "allow",
+            patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")],
+          },
+        ],
         linkedWorktreePath,
       );
 
@@ -795,7 +811,12 @@ describe("§3.a パス文字列の解決", () => {
     "${REPOSITORY_NAME} を含むパスは他リポジトリの worktree 置き場を許可しない",
     withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
       const section = expandPathSection(
-        [{ action: "allow", patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")] }],
+        [
+          {
+            action: "allow",
+            patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")],
+          },
+        ],
         linkedWorktreePath,
       );
 
@@ -824,7 +845,9 @@ describe("§3.a パス文字列の解決", () => {
   it("出荷configは repository 専用の worktrees パスを許可する", () => {
     const config = parseSandboxedToolsConfig(
       readFileSync(
-        sourcePathFromSymlink(new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url)),
+        sourcePathFromSymlink(
+          new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url),
+        ),
         "utf8",
       ),
     );
@@ -838,7 +861,9 @@ describe("§3.a パス文字列の解決", () => {
   it("allows writes to the Lazyweb token directory", () => {
     const config = parseSandboxedToolsConfig(
       readFileSync(
-        sourcePathFromSymlink(new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url)),
+        sourcePathFromSymlink(
+          new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url),
+        ),
         "utf8",
       ),
     );
@@ -853,7 +878,9 @@ describe("§3.a パス文字列の解決", () => {
   it("出荷configは/mntを含むコマンドだけをaskにする", () => {
     const config = parseSandboxedToolsConfig(
       readFileSync(
-        sourcePathFromSymlink(new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url)),
+        sourcePathFromSymlink(
+          new URL("../../config.exact/sandbox.yaml.symlink", import.meta.url),
+        ),
         "utf8",
       ),
     );
@@ -863,10 +890,7 @@ describe("§3.a パス文字列の解決", () => {
 
     assert.equal(resolvePathAction(readSection, "/mnt/c/Users/me/file.txt"), "allow");
     assert.equal(resolvePathAction(writeSection, "/mnt/c/Users/me/file.txt"), "ask");
-    for (const command of [
-      "/mnt/c/Windows/System32/CMD.EXE /c echo ok",
-      "cat /mnt/c/Users/me/file.txt",
-    ]) {
+    for (const command of ["/mnt/c/Windows/System32/CMD.EXE /c echo ok"]) {
       assert.equal(resolveCommandAction(commandEntries, command), "ask", command);
     }
     assert.equal(
@@ -897,7 +921,11 @@ describe("§3.a パス文字列の解決", () => {
     );
     await assert.rejects(
       () =>
-        sandbox.authorizePath("write", join(homedir(), ".pi/agent/config/sandbox.yaml"), context),
+        sandbox.authorizePath(
+          "write",
+          join(homedir(), ".pi/agent/config/sandbox.yaml"),
+          context,
+        ),
       /Access denied|Access requires confirmation/,
     );
   });
@@ -1097,7 +1125,10 @@ describe("§3.b glob パターン", () => {
     withGlobDir((dir) => {
       mkdirSync(join(dir, "uv"));
       mkdirSync(join(dir, "pip"));
-      const section = expandPathSection([{ action: "allow", patterns: [join(dir, "*")] }], "/cwd");
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(dir, "*")] }],
+        "/cwd",
+      );
       assert.equal(resolvePathAction(section, join(dir, "uv")), "allow");
       assert.equal(resolvePathAction(section, join(dir, "pip")), "allow");
     }),
@@ -1107,7 +1138,10 @@ describe("§3.b glob パターン", () => {
     "** は再帰的な既存パスに展開される",
     withGlobDir((dir) => {
       mkdirSync(join(dir, "uv", "nested", "deep"), { recursive: true });
-      const section = expandPathSection([{ action: "allow", patterns: [join(dir, "**")] }], "/cwd");
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [join(dir, "**")] }],
+        "/cwd",
+      );
       assert.equal(resolvePathAction(section, join(dir, "uv", "nested", "deep")), "allow");
     }),
   );
@@ -1317,76 +1351,93 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
   it("コマンド ask は一致したパターンと一致範囲を返す", () => {
     const match = resolveCommandActionMatch(
       compiled([
-        { action: "allow", patterns: [".*"] },
-        { action: "ask", patterns: ["^git push\\b", "^gh pr create\\b"] },
+        { action: "allow", patterns: [{ command: ".*" }] },
+        {
+          action: "ask",
+          patterns: [
+            { command: "git", args: ["push"] },
+            { command: "gh", args: ["pr", "create"] },
+          ],
+        },
       ]),
       "git push -u origin main",
     );
     assert.deepEqual(match, {
       action: "ask",
-      matched: "^git push\\b",
-      matchSpan: { candidate: "git push -u origin main", index: 0, length: 8 },
+      matched: '{"command":"git","args":["push"]}',
+      matchSpan: {
+        ranges: [
+          { index: 0, length: 3 },
+          { index: 4, length: 4 },
+        ],
+      },
     });
   });
 
   it("正規表現の一致範囲を返す", () => {
     const match = resolveCommandActionMatch(
-      compiled([{ action: "ask", patterns: ["^(npm|pnpm) publish\\b"] }]),
+      compiled([{ action: "ask", patterns: [{ command: "(npm|pnpm)", args: ["publish"] }] }]),
       "npm publish",
     );
     assert.deepEqual(match, {
       action: "ask",
-      matched: "^(npm|pnpm) publish\\b",
-      matchSpan: { candidate: "npm publish", index: 0, length: 11 },
+      matched: '{"command":"(npm|pnpm)","args":["publish"]}',
+      matchSpan: {
+        ranges: [
+          { index: 0, length: 3 },
+          { index: 4, length: 7 },
+        ],
+      },
     });
   });
 
   it("前方一致しない正規表現は一致位置を一致範囲として返す", () => {
     const match = resolveCommandActionMatch(
-      compiled([{ action: "ask", patterns: ["^git p"] }]),
+      compiled([{ action: "ask", patterns: [{ command: "git", args: ["p"] }] }]),
       "git push",
     );
-    assert.deepEqual(match, {
-      action: "ask",
-      matched: "^git p",
-      matchSpan: { candidate: "git push", index: 0, length: 5 },
-    });
+    assert.deepEqual(match, { action: "deny" });
   });
 
   it("複合コマンドは ask セグメントの一致パターンを返す", () => {
     const match = resolveCommandActionMatch(
       compiled([
-        { action: "allow", patterns: ["^ls\\b"] },
-        { action: "ask", patterns: ["^git push\\b"] },
+        { action: "allow", patterns: [{ command: "ls" }] },
+        { action: "ask", patterns: [{ command: "git", args: ["push"] }] },
       ]),
       "ls; git push -u origin main",
     );
     assert.deepEqual(match, {
       action: "ask",
-      matched: "^git push\\b",
-      matchSpan: { candidate: "git push -u origin main", index: 0, length: 8 },
+      matched: '{"command":"git","args":["push"]}',
+      matchSpan: {
+        ranges: [
+          { index: 4, length: 3 },
+          { index: 8, length: 4 },
+        ],
+      },
     });
   });
 
   it("後の deny エントリが前のエントリを上書きするとき deny の一致パターンを返す", () => {
     const match = resolveCommandActionMatch(
       compiled([
-        { action: "allow", patterns: [".*"] },
-        { action: "ask", patterns: ["^git push\\b"] },
-        { action: "deny", patterns: ["^sudo\\b"] },
+        { action: "allow", patterns: [{ command: ".*" }] },
+        { action: "ask", patterns: [{ command: "git", args: ["push"] }] },
+        { action: "deny", patterns: [{ command: "sudo" }] },
       ]),
       "sudo git push",
     );
     assert.deepEqual(match, {
       action: "deny",
-      matched: "^sudo\\b",
-      matchSpan: { candidate: "sudo git push", index: 0, length: 4 },
+      matched: '{"command":"sudo","args":[]}',
+      matchSpan: { ranges: [{ index: 0, length: 4 }] },
     });
   });
 
   it("どのパターンにも一致しないコマンドは matched なしの deny", () => {
     const match = resolveCommandActionMatch(
-      compiled([{ action: "allow", patterns: ["^git status\\b"] }]),
+      compiled([{ action: "allow", patterns: [{ command: "git", args: ["status"] }] }]),
       "git push",
     );
     assert.deepEqual(match, { action: "deny" });
@@ -1405,7 +1456,10 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
   });
 
   it("設定に一致しないパスは matched なしの deny", () => {
-    const section = expandPathSection([{ action: "allow", patterns: ["."] }], "/workspace/project");
+    const section = expandPathSection(
+      [{ action: "allow", patterns: ["."] }],
+      "/workspace/project",
+    );
     const match = resolvePathActionMatch(section, "/tmp/file.txt");
     assert.deepEqual(match, { action: "deny" });
   });
@@ -1415,8 +1469,12 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
     withSandbox(
       `
 commands:
-  - {allow: [".*"]}
-  - {ask: ['^git push\\b']}
+  - allow:
+      - command: .*
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -1433,8 +1491,8 @@ commands:
             theme: uiTheme,
           },
         });
-        assert.ok(title.includes("matched: ^git push\\b"), title);
-        assert.ok(title.includes(highlighted("git push")), title);
+        assert.ok(title.includes('matched: {"command":"git","args":["push"]}'), title);
+        assert.ok(title.includes(`${highlighted("git")} ${highlighted("push")}`), title);
       },
     ),
   );
@@ -1444,8 +1502,12 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: [".*"]}
-  - {ask: ['^git push\\b']}
+  - allow:
+      - command: .*
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -1462,7 +1524,10 @@ commands:
             theme: uiTheme,
           },
         });
-        assert.ok(title.includes(`FOO=1 ${highlighted("git push")} origin main`), title);
+        assert.ok(
+          title.includes(`FOO=1 ${`${highlighted("git")} ${highlighted("push")}`} origin main`),
+          title,
+        );
       },
     ),
   );
@@ -1472,8 +1537,12 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: [".*"]}
-  - {ask: ['^git push\\b']}
+  - allow:
+      - command: .*
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -1490,18 +1559,25 @@ commands:
             theme: uiTheme,
           },
         });
-        assert.ok(title.includes(`echo mygit pushx; ${highlighted("git push")}`), title);
+        assert.ok(
+          title.includes(`echo mygit pushx; ${`${highlighted("git")} ${highlighted("push")}`}`),
+          title,
+        );
       },
     ),
   );
 
   it(
-    "一致テキストが語境界で見つかるときは再構築文字列が見つからなくても強調する",
+    "token ranges preserve multiple spaces in highlights",
     withSandbox(
       `
 commands:
-  - {allow: [".*"]}
-  - {ask: ['push\\b']}
+  - allow:
+      - command: .*
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -1518,20 +1594,25 @@ commands:
             theme: uiTheme,
           },
         });
-        // The candidate collapses the double space, so the reassembled string is not
-        // found in the raw command and the fallback searches the matched text alone.
-        assert.ok(title.includes(`git  ${highlighted("push")} origin main`), title);
+        assert.ok(
+          title.includes(`${highlighted("git")}  ${highlighted("push")} origin main`),
+          title,
+        );
       },
     ),
   );
 
   it(
-    "一致範囲がコマンド文字列で見つからないときは強調しない",
+    "quoted matching tokens are highlighted at their original ranges",
     withSandbox(
       `
 commands:
-  - {allow: [".*"]}
-  - {ask: ['^git push\\b']}
+  - allow:
+      - command: .*
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -1548,8 +1629,10 @@ commands:
             theme: uiTheme,
           },
         });
-        assert.ok(title.includes('git "push" origin main'), title);
-        for (const ansi of HIGHLIGHT_ANSI) assert.ok(!title.includes(ansi), title);
+        assert.ok(
+          title.includes(`${highlighted("git")} ${highlighted('"push"')} origin main`),
+          title,
+        );
       },
     ),
   );
@@ -1559,8 +1642,12 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: [".*"]}
-  - {ask: ['^git push\\b']}
+  - allow:
+      - command: .*
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -1587,8 +1674,12 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: [".*"]}
-  - {ask: ['^git push\\b']}
+  - allow:
+      - command: .*
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -1643,7 +1734,10 @@ read:
             },
           },
         );
-        assert.ok(title.includes(`matched: ${join(homedir(), "sandboxed-tools-ask-dir")}`), title);
+        assert.ok(
+          title.includes(`matched: ${join(homedir(), "sandboxed-tools-ask-dir")}`),
+          title,
+        );
       },
     ),
   );
@@ -1678,7 +1772,10 @@ describe("§2.3 承認ノート", () => {
       const dir = mkdtempSync(join(tmpdir(), "sandboxed-tools-approval-"));
       try {
         const configPath = join(dir, "config.yaml");
-        writeFileSync(configPath, typeof configYaml === "function" ? configYaml(dir) : configYaml);
+        writeFileSync(
+          configPath,
+          typeof configYaml === "function" ? configYaml(dir) : configYaml,
+        );
         await test(dir, new Sandbox(dir, configPath));
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -1793,7 +1890,7 @@ describe("§2.3 承認ノート", () => {
   it(
     "allow コマンドは approval なし、ask コマンドの承認は approval を返す",
     withApprovalSandbox(
-      "commands:\n  - {allow: ['^echo\\b']}\n  - {ask: '^git push\\b'}\n",
+      "commands:\n  - allow:\n      - command: echo\n  - ask:\n      command: git\n      args:\n        - push\n",
       async (dir, sandbox) => {
         const context = {
           cwd: dir,
@@ -2280,11 +2377,15 @@ describe("§3 許可要求ツール", () => {
     withAskPermissionSandbox(
       (dir) => `write:\n  - {allow: ${dir}}\n`,
       async (dir, sandbox) => {
-        const outcome = await sandbox.requestWritePermission(join(dir, "sub"), "to start editing", {
-          cwd: dir,
-          hasUI: true,
-          ui: noDialogUi,
-        });
+        const outcome = await sandbox.requestWritePermission(
+          join(dir, "sub"),
+          "to start editing",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: noDialogUi,
+          },
+        );
         assert.deepEqual(outcome, {
           status: "already granted",
           grantedPath: join(dir, "sub"),
@@ -2324,11 +2425,15 @@ describe("§3 許可要求ツール", () => {
             select: async (_title, options) => options[1],
           },
         });
-        const outcome = await sandbox.requestWritePermission(join(dir, "sub"), "to start editing", {
-          cwd: dir,
-          hasUI: true,
-          ui: noDialogUi,
-        });
+        const outcome = await sandbox.requestWritePermission(
+          join(dir, "sub"),
+          "to start editing",
+          {
+            cwd: dir,
+            hasUI: true,
+            ui: noDialogUi,
+          },
+        );
         assert.deepEqual(outcome, {
           status: "already granted",
           grantedPath: join(dir, "sub"),
@@ -2662,7 +2767,11 @@ describe("§3 許可要求ツール", () => {
   });
 
   it("ask_permission ツールの拒否で理由が空欄のときは理由行を付けない", async () => {
-    const deniedDirectory = join(homedir(), "projects", "sandboxed-tools-ask-perm-denied-empty");
+    const deniedDirectory = join(
+      homedir(),
+      "projects",
+      "sandboxed-tools-ask-perm-denied-empty",
+    );
     const result = await captureRegisteredTools()
       .get("ask_permission")
       .execute(
@@ -2754,8 +2863,10 @@ describe("§3 許可要求ツール", () => {
     withAskPermissionSandbox(
       () => `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       async (_dir, sandbox) => {
         let title = "";
@@ -2776,7 +2887,7 @@ commands:
             "Allow command execution?",
             "sudo reboot",
             "reason: to restart the hung service",
-            "matched: ^sudo\\b",
+            'matched: {"command":"sudo","args":[]}',
           ].join("\n"),
         );
       },
@@ -2788,8 +2899,10 @@ commands:
     withAskPermissionSandbox(
       () => `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       async (_dir, sandbox) => {
         const dialogTitles: string[] = [];
@@ -2810,7 +2923,7 @@ commands:
             "Allow command execution?",
             `${highlighted("sudo")} reboot`,
             "reason: to restart the hung service",
-            "matched: ^sudo\\b",
+            'matched: {"command":"sudo","args":[]}',
           ].join("\n"),
         ]);
       },
@@ -2822,8 +2935,10 @@ commands:
     withAskPermissionSandbox(
       () => `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       async (_dir, sandbox) => {
         const outcome = await sandbox.requestCommandPermission(
@@ -2856,7 +2971,8 @@ commands:
     withAskPermissionSandbox(
       () => `
 commands:
-  - {allow: ['^ls\\b']}
+  - allow:
+      - command: ls
 `,
       async (_dir, sandbox) => {
         const outcome = await sandbox.requestCommandPermission("ls -la", "to list files", {
@@ -2874,7 +2990,8 @@ commands:
     withAskPermissionSandbox(
       () => `
 commands:
-  - {deny: ['^sudo\\b']}
+  - deny:
+      - command: sudo
 `,
       async (_dir, sandbox) => {
         await assert.rejects(
@@ -2895,8 +3012,10 @@ commands:
     withAskPermissionSandbox(
       () => `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       async (_dir, sandbox) => {
         const sessionUi = {
@@ -2913,7 +3032,7 @@ commands:
           status: "granted",
           command: "sudo reboot",
           grant: "session",
-          approvedPattern: "^sudo\\b",
+          approvedPattern: '{"command":"sudo","args":[]}',
         });
         // Same-pattern commands other than the approved one pass unconfirmed.
         const approved = await sandbox.authorizeCommand("sudo rm /tmp/f", {
@@ -2938,7 +3057,7 @@ commands:
         assert.deepEqual(outcomeAgain, {
           status: "already granted",
           command: "sudo shutdown -h now",
-          approvedPattern: "^sudo\\b",
+          approvedPattern: '{"command":"sudo","args":[]}',
         });
       },
     ),
@@ -3016,14 +3135,14 @@ commands:
     assert.deepEqual(result.content, [
       {
         type: "text",
-        text: "User approved this command via ask_permission (in this session). Every command matching the pattern ^sudo(\\s|$) now runs via bash without further confirmation for the rest of the session.",
+        text: 'User approved this command via ask_permission (in this session). Every command matching the pattern {"command":"sudo","args":[]} now runs via bash without further confirmation for the rest of the session.',
       },
     ]);
     assert.deepEqual(result.details, {
       status: "granted",
       command: "sudo reboot",
       grant: "session",
-      approvedPattern: "^sudo(\\s|$)",
+      approvedPattern: '{"command":"sudo","args":[]}',
     });
   });
 
@@ -3051,13 +3170,13 @@ commands:
     assert.deepEqual(result.content, [
       {
         type: "text",
-        text: "No approval needed: every command matching the session-approved pattern ^sudo(\\s|$) runs via bash without confirmation.",
+        text: 'No approval needed: every command matching the session-approved pattern {"command":"sudo","args":[]} runs via bash without confirmation.',
       },
     ]);
     assert.deepEqual(result.details, {
       status: "already granted",
       command: "sudo shutdown -h now",
-      approvedPattern: "^sudo(\\s|$)",
+      approvedPattern: '{"command":"sudo","args":[]}',
     });
   });
 
@@ -3106,7 +3225,10 @@ commands:
     const tools = captureRegisteredTools();
     const permissionTool = tools.get("ask_permission");
     assert.match(permissionTool.description, /effective write action is ask or unset/i);
-    assert.match(permissionTool.description, /explicit deny and credentials cannot be granted/i);
+    assert.match(
+      permissionTool.description,
+      /explicit deny and credentials cannot be granted/i,
+    );
     assert.match(permissionTool.description, /before edit-heavy work/i);
     assert.match(permissionTool.description, /worktree/i);
     assert.match(permissionTool.description, /exact rejected command/i);
@@ -3125,7 +3247,10 @@ commands:
     assert.match(permissionTool.promptGuidelines[0], /worktree/i);
     assert.match(permissionTool.promptGuidelines[0], /creation path or parent/);
     assert.match(permissionTool.promptGuidelines[0], /Credentials override listed ancestors/);
-    assert.match(permissionTool.promptGuidelines[0], /last matching rule determines each action/);
+    assert.match(
+      permissionTool.promptGuidelines[0],
+      /last matching rule determines each action/,
+    );
     assert.match(permissionTool.promptGuidelines[1], /Command requires a reason/);
     for (const toolName of ["write", "edit"]) {
       const description = tools.get(toolName).description;
@@ -3171,15 +3296,21 @@ commands:
           `  - {deny: ${JSON.stringify(credentialDescendants.deny)}}`,
           `  - {ask: ${JSON.stringify(overriddenPath)}}`,
           `  - {allow: ${JSON.stringify(overriddenPath)}}`,
-          `credentials: [${[credentialPath, askCredentialPath, denyCredentialPath, credentialRoot]
+          `credentials: [${[
+            credentialPath,
+            askCredentialPath,
+            denyCredentialPath,
+            credentialRoot,
+          ]
             .map((path) => JSON.stringify(path))
             .join(", ")}]`,
-          'commands: [{ask_with_reason: "^sudo"}]',
+          "commands: [{ask_with_reason: {command: sudo}}]",
           "",
         ].join("\n"),
       );
 
-      const guidance = captureRegisteredTools(configPath).get("ask_permission").promptGuidelines[0];
+      const guidance =
+        captureRegisteredTools(configPath).get("ask_permission").promptGuidelines[0];
       const allowSection = guidance.split("\nask:\n")[0] ?? "";
       const askSection = guidance.split("\nask:\n")[1]?.split("\ndeny:\n")[0] ?? "";
       const denySection = guidance.split("\ndeny:\n")[1] ?? "";
@@ -3340,7 +3471,8 @@ describe("§3 ツール引数パスの正規化", () => {
     const readTool = captureRegisteredTools().get("read");
     for (const deniedPath of ["@~/.pi/agent/auth.json", "~/.pi/agent/auth.json"]) {
       await assert.rejects(
-        () => readTool.execute("t", { path: deniedPath }, undefined, undefined, { hasUI: false }),
+        () =>
+          readTool.execute("t", { path: deniedPath }, undefined, undefined, { hasUI: false }),
         /Access denied/,
       );
     }
@@ -3352,8 +3484,8 @@ describe("§4 bash コマンドの実行結果", () => {
     assert.equal(
       resolveCommandAction(
         compiled([
-          { action: "allow", patterns: ["^git status\\b"] },
-          { action: "deny", patterns: ["^sudo\\b"] },
+          { action: "allow", patterns: [{ command: "git", args: ["status"] }] },
+          { action: "deny", patterns: [{ command: "sudo" }] },
         ]),
         "git status --short",
       ),
@@ -3365,8 +3497,8 @@ describe("§4 bash コマンドの実行結果", () => {
     assert.equal(
       resolveCommandAction(
         compiled([
-          { action: "allow", patterns: [".*"] },
-          { action: "deny", patterns: ["^sudo\\b"] },
+          { action: "allow", patterns: [{ command: ".*" }] },
+          { action: "deny", patterns: [{ command: "sudo" }] },
         ]),
         "sudo ls",
       ),
@@ -3376,14 +3508,17 @@ describe("§4 bash コマンドの実行結果", () => {
 
   it("後の allow エントリが前の ask エントリを上書きする（systemctl 3分類）", () => {
     const entries = compiled([
-      { action: "allow", patterns: [".*"] },
-      { action: "ask", patterns: ["^systemctl\\b"] },
-      { action: "allow", patterns: ["^systemctl (status|list-)"] },
+      { action: "allow", patterns: [{ command: ".*" }] },
+      { action: "ask", patterns: [{ command: "systemctl" }] },
+      {
+        action: "allow",
+        patterns: [{ command: "systemctl", args: ["status|list-[\\s\\S]*"] }],
+      },
       {
         action: "deny",
         patterns: [
-          "^systemctl (reboot|poweroff|halt|shutdown)\\b",
-          "^(shutdown|reboot|poweroff|halt)\\b",
+          { command: "systemctl", args: ["(reboot|poweroff|halt|shutdown)"] },
+          { command: "(shutdown|reboot|poweroff|halt)" },
         ],
       },
     ]);
@@ -3399,7 +3534,10 @@ describe("§4 bash コマンドの実行結果", () => {
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3416,7 +3554,8 @@ commands:
           },
         });
         assert.deepEqual(confirmedCommands, [
-          `${highlighted("git push")} origin main\nmatched: ^git push\\b`,
+          `${`${highlighted("git")} ${highlighted("push")}`} origin main
+matched: {"command":"git","args":["push"]}`,
         ]);
       },
     ),
@@ -3427,7 +3566,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3455,7 +3597,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3479,7 +3624,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3515,7 +3663,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3544,7 +3695,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3567,7 +3721,8 @@ commands:
     withSandbox(
       `
 commands:
-  - {deny: ['^sudo\\b']}
+  - deny:
+      - command: sudo
 `,
       "/cwd",
       async (sandbox) => {
@@ -3591,9 +3746,15 @@ commands:
 
   it("複合コマンド内の最も厳しいアクションを適用する", () => {
     const section = compiled([
-      { action: "allow", patterns: [".*"] },
-      { action: "ask", patterns: ["^git push\\b", "^gh pr create\\b"] },
-      { action: "deny", patterns: ["^sudo\\b"] },
+      { action: "allow", patterns: [{ command: ".*" }] },
+      {
+        action: "ask",
+        patterns: [
+          { command: "git", args: ["push"] },
+          { command: "gh", args: ["pr", "create"] },
+        ],
+      },
+      { action: "deny", patterns: [{ command: "sudo" }] },
     ]);
     assert.equal(
       resolveCommandAction(
@@ -3604,7 +3765,10 @@ commands:
     );
     assert.equal(resolveCommandAction(section, "git status\ngit push -u origin main"), "ask");
     assert.equal(resolveCommandAction(section, "gh pr create --repo owner/repo 2>&1"), "ask");
-    assert.equal(resolveCommandAction(section, "cat body.md | gh pr create --body-file -"), "ask");
+    assert.equal(
+      resolveCommandAction(section, "cat body.md | gh pr create --body-file -"),
+      "ask",
+    );
     assert.equal(resolveCommandAction(section, "echo $(git push -u origin main)"), "ask");
     assert.equal(resolveCommandAction(section, "tee >(gh pr create --repo owner/repo)"), "ask");
     assert.equal(
@@ -3616,18 +3780,24 @@ commands:
 
   it("heredoc 本文・コメント・クォート内の文字列をコマンドにしない", () => {
     const section = compiled([
-      { action: "allow", patterns: [".*"] },
-      { action: "ask", patterns: ["^gh pr create\\b"] },
+      { action: "allow", patterns: [{ command: ".*" }] },
+      { action: "ask", patterns: [{ command: "gh", args: ["pr", "create"] }] },
     ]);
     assert.equal(
       resolveCommandAction(section, "cat << 'EOF'\ngh pr create --repo owner/repo\nEOF"),
       "allow",
     );
     assert.equal(
-      resolveCommandAction(section, "cat <<-EOF\ngh pr create --repo owner/repo\nEOF\necho done"),
+      resolveCommandAction(
+        section,
+        "cat <<-EOF\ngh pr create --repo owner/repo\nEOF\necho done",
+      ),
       "allow",
     );
-    assert.equal(resolveCommandAction(section, "echo 'gh pr create --repo owner/repo'"), "allow");
+    assert.equal(
+      resolveCommandAction(section, "echo 'gh pr create --repo owner/repo'"),
+      "allow",
+    );
     assert.equal(
       resolveCommandAction(section, "git status # gh pr create --repo owner/repo"),
       "allow",
@@ -3636,8 +3806,14 @@ commands:
 
   it("env と環境変数代入の後ろにあるコマンドを照合する", () => {
     const section = compiled([
-      { action: "allow", patterns: [".*"] },
-      { action: "ask", patterns: ["^git push\\b", "^gh pr create\\b"] },
+      { action: "allow", patterns: [{ command: ".*" }] },
+      {
+        action: "ask",
+        patterns: [
+          { command: "git", args: ["push"] },
+          { command: "gh", args: ["pr", "create"] },
+        ],
+      },
     ]);
     assert.equal(
       resolveCommandAction(section, "GH_PAGER=cat gh pr create --repo owner/repo"),
@@ -3646,23 +3822,26 @@ commands:
     assert.equal(resolveCommandAction(section, "env git push -u origin main"), "ask");
   });
 
-  it("空コマンドでも allow の全マッチパターンを維持する", () => {
+  it("empty commands have no executable token and default to deny", () => {
     assert.equal(
-      resolveCommandAction(compiled([{ action: "allow", patterns: [".*"] }]), ""),
-      "allow",
+      resolveCommandAction(compiled([{ action: "allow", patterns: [{ command: ".*" }] }]), ""),
+      "deny",
     );
   });
 
   it("ask_with_reason は deny > ask_with_reason > ask > allow の順序を適用する", () => {
     const entries = compiled([
-      { action: "allow", patterns: [".*"] },
-      { action: "ask", patterns: ["^git push\\b"] },
-      { action: "ask_with_reason", patterns: ["^sudo\\b"] },
+      { action: "allow", patterns: [{ command: ".*" }] },
+      { action: "ask", patterns: [{ command: "git", args: ["push"] }] },
+      { action: "ask_with_reason", patterns: [{ command: "sudo" }] },
     ]);
     assert.equal(resolveCommandAction(entries, "sudo reboot"), "ask_with_reason");
     assert.equal(resolveCommandAction(entries, "git push && sudo reboot"), "ask_with_reason");
     assert.equal(resolveCommandAction(entries, "git push"), "ask");
-    const withDeny = [...entries, ...compiled([{ action: "deny", patterns: ["^mkfs\\b"] }])];
+    const withDeny = [
+      ...entries,
+      ...compiled([{ action: "deny", patterns: [{ command: "mkfs" }] }]),
+    ];
     assert.equal(resolveCommandAction(withDeny, "sudo reboot; mkfs /dev/sda"), "deny");
   });
 
@@ -3671,8 +3850,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       "/cwd",
       async (sandbox) => {
@@ -3696,8 +3877,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       "/cwd",
       async (sandbox) => {
@@ -3733,8 +3916,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       "/cwd",
       async (sandbox) => {
@@ -3758,8 +3943,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       "/cwd",
       async (sandbox) => {
@@ -3784,7 +3971,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3806,8 +3996,10 @@ commands:
     withSandbox(
       `
 commands:
-  - {allow: ".*"}
-  - {ask_with_reason: ['^sudo\\b']}
+  - allow:
+      command: .*
+  - ask_with_reason:
+      - command: sudo
 `,
       "/cwd",
       async (sandbox) => {
@@ -3910,7 +4102,10 @@ describe("§2・§4 確認の直列化", () => {
     withSandbox(
       `
 commands:
-  - {ask: ['^git push\\b']}
+  - ask:
+      - command: git
+        args:
+          - push
 `,
       "/cwd",
       async (sandbox) => {
@@ -3926,34 +4121,39 @@ commands:
 });
 
 describe("§6 commands パターンの正規表現評価", () => {
-  it("正規表現は部分一致で評価され、^ と $ で制約する", () => {
+  it("command and args patterns match whole tokens", () => {
     assert.equal(
-      resolveCommandAction(compiled([{ action: "ask", patterns: ["push"] }]), "git push"),
+      resolveCommandAction(
+        compiled([{ action: "ask", patterns: [{ command: "git", args: ["push"] }] }]),
+        "git push",
+      ),
       "ask",
     );
     assert.equal(
-      resolveCommandAction(compiled([{ action: "ask", patterns: ["^push"] }]), "git push"),
+      resolveCommandAction(
+        compiled([{ action: "ask", patterns: [{ command: "push" }] }]),
+        "git push",
+      ),
       "deny",
     );
   });
 
   it("正規表現の量指定子が使え、コマンドパターンのブレース展開はしない", () => {
-    const section = compiled([{ action: "allow", patterns: ["^a{2}$"] }]);
+    const section = compiled([{ action: "allow", patterns: [{ command: "a{2}" }] }]);
     assert.equal(resolveCommandAction(section, "aa"), "allow");
     assert.equal(resolveCommandAction(section, "a{2}"), "deny");
     assert.equal(resolveCommandAction(section, "a2"), "deny");
   });
 
-  it("splitCommandSegments はセグメントの両端の連続空白を削除する", () => {
-    assert.deepEqual(splitCommandSegments("  pi chat  "), ["pi chat"]);
-    // head skip（env）のあとに先頭 word が空白で始まるケースでも trim される
-    assert.deepEqual(splitCommandSegments("env '  pi chat  '"), ["pi chat"]);
+  it("splitCommandSegments preserves token boundaries and quoted whitespace", () => {
+    assert.deepEqual(splitCommandSegments("  pi chat  "), [["pi", "chat"]]);
+    assert.deepEqual(splitCommandSegments("env '  pi chat  '"), [["  pi chat  "]]);
   });
 
   it("セグメント先頭アンカーは引用符内のパイプ+コマンド名に誤マッチしない", () => {
     const section = compiled([
-      { action: "allow", patterns: [".*"] },
-      { action: "ask", patterns: ["^pi(\\s|$)"] },
+      { action: "allow", patterns: [{ command: ".*" }] },
+      { action: "ask", patterns: [{ command: "pi" }] },
     ]);
     assert.equal(resolveCommandAction(section, "rtk grep -n 'a\\|pi b' x.md"), "allow");
     assert.equal(resolveCommandAction(section, "cat x | pi 'sum'"), "ask");
@@ -3962,10 +4162,16 @@ describe("§6 commands パターンの正規表現評価", () => {
 
   it("無効な正規表現パターンだけが無視され、無効パターンとして報告される", () => {
     const { entries, invalidPatterns } = compileCommandRuleEntries([
-      { action: "allow", patterns: ["*"] },
-      { action: "ask", patterns: ["^git push\\b", "[unclosed"] },
+      { action: "allow", patterns: [{ command: "*" }] },
+      {
+        action: "ask",
+        patterns: [{ command: "git", args: ["push"] }, { command: "[unclosed" }],
+      },
     ]);
-    assert.deepEqual(invalidPatterns, ["*", "[unclosed"]);
+    assert.deepEqual(invalidPatterns, [
+      JSON.stringify({ command: "*", args: [] }),
+      JSON.stringify({ command: "[unclosed", args: [] }),
+    ]);
     assert.equal(resolveCommandAction(entries, "git push origin main"), "ask");
   });
 
@@ -3973,13 +4179,18 @@ describe("§6 commands パターンの正規表現評価", () => {
     await withSandbox(
       `
 commands:
-  - {allow: ["*"]}
-  - {allow: ["*"]}
-  - {deny: ['^sudo\\b']}
+  - allow:
+      - command: "*"
+  - allow:
+      - command: "*"
+  - deny:
+      - command: sudo
 `,
       "/cwd",
       async (sandbox) => {
-        assert.deepEqual(sandbox.invalidCommandPatterns, ["*"]);
+        assert.deepEqual(sandbox.invalidCommandPatterns, [
+          JSON.stringify({ command: "*", args: [] }),
+        ]);
         await assert.rejects(
           async () =>
             sandbox.authorizeCommand("sudo ls", {
@@ -3995,15 +4206,18 @@ commands:
 
   it("session_start で無効パターンを warning で列挙する", () => {
     const notifications = runSessionStart(
-      "commands:\n  - {allow: [\"*\"]}\n  - {deny: ['^sudo\\b']}\n",
+      'commands:\n  - allow:\n      - command: "*"\n  - deny:\n      - command: sudo\n',
     );
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0]!.level, "warning");
-    assert.ok(notifications[0]!.message.includes(JSON.stringify("*")), notifications[0]!.message);
+    assert.ok(
+      notifications[0]!.message.includes("command") && notifications[0]!.message.includes("*"),
+      notifications[0]!.message,
+    );
   });
 
   it("無効パターンがなければ session_start で通知しない", () => {
-    const notifications = runSessionStart("commands:\n  - {deny: ['^sudo\\b']}\n");
+    const notifications = runSessionStart("commands:\n  - deny:\n      - command: sudo\n");
     assert.deepEqual(notifications, []);
   });
 });
@@ -4018,8 +4232,12 @@ write:
   - {deny: "**/.env"}
 credentials: ["~/.ssh"]
 commands:
-  - {allow: git status}
-  - {deny: ['^sudo\\b']}
+  - allow:
+      command: git
+      args:
+        - status
+  - deny:
+      - command: sudo
 `);
     assert.deepEqual(config.read, [{ action: "allow", patterns: ["*"] }]);
     assert.deepEqual(config.write, [
@@ -4028,34 +4246,56 @@ commands:
     ]);
     assert.deepEqual(config.credentials, ["~/.ssh"]);
     assert.deepEqual(config.commands, [
-      { action: "allow", patterns: ["git status"] },
-      { action: "deny", patterns: ["^sudo\\b"] },
+      { action: "allow", patterns: [{ command: "git", args: ["status"] }] },
+      { action: "deny", patterns: [{ command: "sudo" }] },
     ]);
   });
 
   it("1 要素に複数パターンを宣言できる", () => {
     const config = parseSandboxedToolsConfig(`
 commands:
-  - {ask: [git push, "gh pr create"]}
+  - ask:
+      - command: git
+        args:
+          - push
+      - command: gh
+        args:
+          - pr
+          - create
 `);
-    assert.deepEqual(config.commands, [{ action: "ask", patterns: ["git push", "gh pr create"] }]);
+    assert.deepEqual(config.commands, [
+      {
+        action: "ask",
+        patterns: [
+          { command: "git", args: ["push"] },
+          { command: "gh", args: ["pr", "create"] },
+        ],
+      },
+    ]);
   });
 
-  it("パターンリスト内の非文字列要素は無視される", () => {
-    const config = parseSandboxedToolsConfig(
-      'commands:\n  - {allow: ["^ls\\\\b", 1, null]}\nread:\n  - {allow: ["*", 2]}\n',
+  it("path pattern lists ignore non-strings and command lists reject invalid rules", () => {
+    assert.throws(() =>
+      parseSandboxedToolsConfig("commands: [{allow: [{command: ls}, 1, null]}]"),
     );
-    assert.deepEqual(config.commands, [{ action: "allow", patterns: ["^ls\\b"] }]);
+    const config = parseSandboxedToolsConfig('read: [{allow: ["*", 2]}]');
     assert.deepEqual(config.read, [{ action: "allow", patterns: ["*"] }]);
   });
 
   it("commands は ask_with_reason を読み込む", () => {
     const config = parseSandboxedToolsConfig(`
 commands:
-  - {ask_with_reason: [sudo, "chmod -R"]}
+  - ask_with_reason:
+      - command: sudo
+      - command: chmod
+        args:
+          - -R
 `);
     assert.deepEqual(config.commands, [
-      { action: "ask_with_reason", patterns: ["sudo", "chmod -R"] },
+      {
+        action: "ask_with_reason",
+        patterns: [{ command: "sudo" }, { command: "chmod", args: ["-R"] }],
+      },
     ]);
   });
 
@@ -4161,7 +4401,10 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir((dir, configPath) => {
       const secretDir = join(dir, "secret-dir");
       mkdirSync(secretDir);
-      writeFileSync(configPath, `read:\n  - {deny: "${secretDir}"}\n  - {allow: "${secretDir}"}\n`);
+      writeFileSync(
+        configPath,
+        `read:\n  - {deny: "${secretDir}"}\n  - {allow: "${secretDir}"}\n`,
+      );
       const args = new Sandbox("/cwd", configPath).buildArgs("fs");
       // The allow entry adds --ro-bind-try first, but the deny-declared mask
       // (--tmpfs) mounts later in bwrap args and therefore hides the content.
@@ -4221,7 +4464,10 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir((dir, configPath) => {
       const protectedFile = join(dir, "protected.txt");
       writeFileSync(protectedFile, "config");
-      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`);
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
+      );
       const args = new Sandbox("/cwd", configPath).buildArgs("bash");
       const writableBindAt = args.indexOf(dir);
       assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 2), [
@@ -4230,7 +4476,10 @@ describe("§6.1 bind とパスの実在保証", () => {
         dir,
       ]);
       const roBindAt = args.indexOf(protectedFile);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", protectedFile]);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
+        "--ro-bind-try",
+        protectedFile,
+      ]);
       assert.ok(roBindAt > writableBindAt, "deny re-bind must mount after the writable bind");
     }),
   );
@@ -4240,7 +4489,10 @@ describe("§6.1 bind とパスの実在保証", () => {
     withSandboxDir((dir, configPath) => {
       const protectedFile = join(dir, "protected.txt");
       writeFileSync(protectedFile, "config");
-      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`);
+      writeFileSync(
+        configPath,
+        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
+      );
       const args = new Sandbox("/cwd", configPath).buildArgs("fs");
       assert.equal(args.includes(protectedFile), false);
     }),
@@ -4262,7 +4514,11 @@ describe("§6.1 bind とパスの実在保証", () => {
         allowedFile,
         allowedFile,
       ]);
-      assert.equal(args.indexOf(allowedFile, bindAt + 2), -1, "no read-only re-bind after allow");
+      assert.equal(
+        args.indexOf(allowedFile, bindAt + 2),
+        -1,
+        "no read-only re-bind after allow",
+      );
     }),
   );
 
@@ -4405,7 +4661,10 @@ describe("§6.1 bind とパスの実在保証", () => {
       const grantBindAt = args.indexOf(dir);
       assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 2), ["--bind-try", dir, dir]);
       const roBindAt = args.indexOf(protectedFile);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", protectedFile]);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
+        "--ro-bind-try",
+        protectedFile,
+      ]);
       assert.ok(roBindAt > grantBindAt, "deny re-bind must mount after the dynamic grant bind");
     }),
   );
@@ -4475,7 +4734,10 @@ describe("§6.1 bind とパスの実在保証", () => {
       assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", dir]);
       const writableBindAt = args.indexOf(dir, roBindAt + 2);
       assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 1), ["--bind-try", dir]);
-      assert.ok(writableBindAt > roBindAt, "writable bind must mount after the cwd read-only bind");
+      assert.ok(
+        writableBindAt > roBindAt,
+        "writable bind must mount after the cwd read-only bind",
+      );
       assert.equal(
         args.indexOf("--ro-bind-try", writableBindAt),
         -1,
@@ -4501,7 +4763,10 @@ describe("§6.1 bind とパスの実在保証", () => {
       const notePath = join(dir, "note.txt");
       const grantBindAt = args.indexOf(notePath);
       assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 1), ["--bind-try", notePath]);
-      assert.ok(grantBindAt > roBindAt, "dynamic grant must mount after the cwd read-only bind");
+      assert.ok(
+        grantBindAt > roBindAt,
+        "dynamic grant must mount after the cwd read-only bind",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -4564,7 +4829,8 @@ describe("§7 bash の stderr 逐次表示", () => {
           "t",
           { command: "simulated slow command" },
           undefined,
-          (partial: any) => updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
+          (partial: any) =>
+            updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
           { hasUI: false },
         );
       assert.deepEqual(
@@ -4645,7 +4911,8 @@ describe("§7 bash の stderr 逐次表示", () => {
               "echo first >&2; sleep 0.3; printf '進' >&2; sleep 0.15; printf '行中\\n' >&2; printf '\\n' >&2; echo done; printf 'tail' >&2",
           },
           undefined,
-          (partial: any) => updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
+          (partial: any) =>
+            updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
           { hasUI: false },
         );
       assert.deepEqual(
@@ -4693,7 +4960,9 @@ describe("§7 bash の stderr 逐次表示", () => {
     assert.equal((fallbackResult.structuredContent as { exit_code: number }).exit_code, 7);
     assert.equal(plainResult.isError, true);
     assert.equal((plainResult.structuredContent as { exit_code: number }).exit_code, 7);
-    const fallbackTextContent = fallbackResult.content.find((content) => content.type === "text");
+    const fallbackTextContent = fallbackResult.content.find(
+      (content) => content.type === "text",
+    );
     const plainTextContent = plainResult.content.find((content) => content.type === "text");
     assert.ok(fallbackTextContent);
     assert.ok(plainTextContent);
@@ -4731,7 +5000,9 @@ describe("§7 WSL の子プロセス PATH", () => {
 
     assert.equal(
       sanitized.PATH,
-      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(delimiter),
+      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(
+        delimiter,
+      ),
     );
     assert.equal(environment.PATH, originalPath);
   });
@@ -4740,7 +5011,10 @@ describe("§7 WSL の子プロセス PATH", () => {
     const environment = { PATH: ["/mnt/c/tools", "/mnt/data/bin", "/usr/bin"].join(delimiter) };
 
     assert.equal(isWslEnvironment(environment, "6.8.0-generic"), false);
-    assert.equal(sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH, environment.PATH);
+    assert.equal(
+      sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH,
+      environment.PATH,
+    );
   });
 
   it("WSL kernel marker でも Windows PATH を除外する", () => {
@@ -4763,7 +5037,11 @@ describe("§7 sandbox 実行の同時数の上限", () => {
    */
   const stubCountingRun = (behavior: (callIndex: number) => Promise<unknown>) => {
     const sandboxPrototype = Sandbox.prototype as unknown as {
-      runSandboxProcess: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
+      runSandboxProcess: (
+        command: string,
+        commandArgs: string[],
+        options: any,
+      ) => Promise<unknown>;
     };
     const originalRun = sandboxPrototype.runSandboxProcess;
     let active = 0;

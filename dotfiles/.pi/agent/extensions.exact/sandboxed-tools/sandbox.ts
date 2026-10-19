@@ -1,5 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,15 +35,13 @@ export type PathApproval = {
   bashWritable?: boolean;
 };
 
-/** Where a command pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
-export type MatchSpan = { candidate: string; index: number; length: number };
+export type MatchSpan = { ranges: { index: number; length: number }[] };
 
 /** Action resolution result together with the pattern that caused it (§2.3). */
 export type PathActionMatch = { action: PathAction; matched?: string };
 export type CommandActionMatch = {
   action: CommandAction;
   matched?: string;
-  /** Where the pattern matched inside its candidate segment, for dialog highlighting (§2.3). */
   matchSpan?: MatchSpan;
 };
 
@@ -76,10 +81,10 @@ export type CommandPermissionRequest =
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
 type PathRuleEntry = { action: PathAction; patterns: string[] };
-export type CommandRuleEntry = { action: CommandAction; patterns: string[] };
+export type CommandRule = { command: string; args?: string[] };
+export type CommandRuleEntry = { action: CommandAction; patterns: CommandRule[] };
 
-/** A command pattern with its configured regex source and compiled form (SPEC §6). */
-export type CompiledCommandPattern = { source: string; regex: RegExp };
+export type CompiledCommandPattern = { source: string; command: RegExp; args: RegExp[] };
 export type CompiledCommandRuleEntry = {
   action: CommandAction;
   patterns: CompiledCommandPattern[];
@@ -154,7 +159,8 @@ type RunOptions = {
 
 type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
 
-type RunToolsResponse = { ok: true; result: AgentToolResult<any> } | { ok: false; error: string };
+type RunToolsResponse =
+  { ok: true; result: AgentToolResult<any> } | { ok: false; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -164,6 +170,35 @@ function asPatterns(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : [];
+}
+
+function parseCommandEntries(value: unknown): CommandRuleEntry[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("commands must be a list of entries");
+  return value.map((element) => {
+    if (!isRecord(element) || Object.keys(element).length !== 1)
+      throw new Error("command entry must declare exactly one action");
+    const action = Object.keys(element)[0] as CommandAction;
+    if (!["allow", "ask", "ask_with_reason", "deny"].includes(action))
+      throw new Error("unknown command action: " + action);
+    const configured = element[action];
+    const rules = Array.isArray(configured) ? configured : [configured];
+    const patterns = rules.map((rule): CommandRule => {
+      if (
+        !isRecord(rule) ||
+        typeof rule.command !== "string" ||
+        Object.keys(rule).some((key) => key !== "command" && key !== "args") ||
+        (rule.args !== undefined &&
+          (!Array.isArray(rule.args) || rule.args.some((arg) => typeof arg !== "string")))
+      )
+        throw new Error("command rule requires command: string and optional args: string[]");
+      return {
+        command: rule.command,
+        ...(rule.args === undefined ? {} : { args: rule.args as string[] }),
+      };
+    });
+    return { action, patterns };
+  });
 }
 
 export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig {
@@ -193,13 +228,12 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
   };
 
   const pathActions = ["allow", "ask", "deny"] as const;
-  const commandActions = [...pathActions, "ask_with_reason"] as const;
 
   return {
     read: parseEntries(parsed.read, pathActions),
     write: parseEntries(parsed.write, pathActions),
     credentials: asPatterns(parsed.credentials),
-    commands: parseEntries(parsed.commands, commandActions),
+    commands: parseCommandEntries(parsed.commands),
   };
 }
 
@@ -272,7 +306,10 @@ export function resolveGitMainWorktreePath(cwd: string): string | undefined {
  * Expand the single-valued ${GIT_MAIN_WORKTREE_PATH} into the main worktree
  * path. Outside a Git repository the entry expands to nothing (§3).
  */
-function expandGitMainWorktreePath(pattern: string, mainWorktree: string | undefined): string[] {
+function expandGitMainWorktreePath(
+  pattern: string,
+  mainWorktree: string | undefined,
+): string[] {
   if (!pattern.includes(GIT_MAIN_WORKTREE_PATH)) return [pattern];
   return mainWorktree === undefined
     ? []
@@ -322,88 +359,130 @@ function resolvePattern(pattern: string, cwd: string): string {
 }
 
 type ShellToken = string | { op?: string; pattern?: string; comment?: string };
+type TokenRange = { index: number; length: number };
+type CommandSegment = { tokens: string[]; ranges: TokenRange[] };
 
-/** Control operators that end one simple command and start the next. */
 const SEGMENT_OPS = new Set([";", "&&", "||", "|", "|&", ";;", "&", "(", ")", "<("]);
-
-/** Leading words that wrap the real command head (`env gh pr create` etc.). */
 const SEGMENT_HEAD_SKIPS = new Set(["{", "}", "env"]);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const SHELL_OPERATOR = /^(?:\|\||&&|;;|\|&|<\(|<<<|>>|>&|<&|[&;()|<>])/;
 
-/**
- * Split a shell command into one candidate per simple command it may run, so
- * that `deny`/`ask` patterns cannot be bypassed by compound commands
- * (`git remote add ...; git push ...`). shell-quote keeps quoting and operator
- * semantics but flattens newlines, so newlines become ";" first. Parentheses
- * also open a segment: subshells, command substitutions, and process
- * substitutions all execute their contents. Heredoc bodies, comments, and
- * empty expansion words are skipped; leading `{`, `}`, `env`, and `VAR=value`
- * words are stripped so patterns match the actual command head. Each segment
- * is trimmed so anchored patterns (`^cmd ...`) never need to account for
- * leading/trailing whitespace.
- *
- * Known blind spots (ADR): backtick substitution, `bash -c`/`eval`/script
- * indirection, and other wrapper prefixes (`nohup`, `timeout`, ...).
- */
-export function splitCommandSegments(command: string): string[] {
-  const segments: string[] = [];
+type ShellChunk = { source: string; index: number; hasQuotedPart?: boolean };
+
+function shellChunks(command: string): ShellChunk[] {
+  const chunks: ShellChunk[] = [];
+  let index = 0;
+  while (index < command.length) {
+    const character = command[index]!;
+    if (character === "\n") {
+      chunks.push({ source: ";", index: index++ });
+      continue;
+    }
+    if (/\s/.test(character)) {
+      index++;
+      continue;
+    }
+    if (character === "#") {
+      const end = command.indexOf("\n", index);
+      index = end === -1 ? command.length : end;
+      continue;
+    }
+    const operator = command.slice(index).match(SHELL_OPERATOR)?.[0];
+    if (operator !== undefined) {
+      chunks.push({ source: operator, index });
+      index += operator.length;
+      continue;
+    }
+    const start = index;
+    let quote: string | undefined;
+    let hasQuotedPart = false;
+    while (index < command.length) {
+      const next = command[index]!;
+      if (next === "\\" && quote !== "'") {
+        index += Math.min(2, command.length - index);
+        continue;
+      }
+      if (quote !== undefined) {
+        if (next === quote) quote = undefined;
+      } else if (next === "'" || next === '"') {
+        quote = next;
+        hasQuotedPart = true;
+      } else if (/\s/.test(next) || SHELL_OPERATOR.test(command.slice(index))) {
+        break;
+      }
+      index++;
+    }
+    chunks.push({ source: command.slice(start, index), index: start, hasQuotedPart });
+  }
+  return chunks;
+}
+
+function parseCommandSegments(command: string): CommandSegment[] {
+  const segments: CommandSegment[] = [];
   let words: string[] = [];
+  let ranges: TokenRange[] = [];
   let consecutiveHeredocOps = 0;
   let expectHeredocDelimiter = false;
   let heredocEnd: string | null = null;
 
-  const flush = () => {
-    while (words.length > 0) {
-      const head = words[0];
-      if (head !== undefined && (SEGMENT_HEAD_SKIPS.has(head) || ENV_ASSIGNMENT.test(head)))
-        words.shift();
-      else break;
+  function flush(): void {
+    while (
+      words.length > 0 &&
+      (SEGMENT_HEAD_SKIPS.has(words[0]!) || ENV_ASSIGNMENT.test(words[0]!))
+    ) {
+      words.shift();
+      ranges.shift();
     }
-    if (words.length > 0) {
-      segments.push(words.join(" ").trim());
-      words = [];
-    }
-  };
+    if (words.length > 0) segments.push({ tokens: words, ranges });
+    words = [];
+    ranges = [];
+  }
 
-  for (const token of parseShell(command.replaceAll("\n", ";")) as ShellToken[]) {
-    if (heredocEnd !== null) {
-      if (typeof token === "string" && token === heredocEnd) heredocEnd = null;
-      continue;
-    }
-    if (typeof token === "string" || token.pattern !== undefined) {
-      const word = typeof token === "string" ? token : token.pattern;
-      if (word === undefined || word === "") continue;
-      if (expectHeredocDelimiter) {
-        heredocEnd = word.replace(/^-+/, "");
-        expectHeredocDelimiter = false;
+  let commented = false;
+  for (const chunk of shellChunks(command)) {
+    if (command[chunk.index] === "\n") commented = false;
+    if (commented) continue;
+    for (const token of parseShell(chunk.source) as ShellToken[]) {
+      if (heredocEnd !== null) {
+        if (typeof token === "string" && token === heredocEnd) heredocEnd = null;
+        continue;
+      }
+      if (typeof token === "string" || token.pattern !== undefined) {
+        const word = typeof token === "string" ? token : token.pattern;
+        if (word === undefined || (word === "" && !chunk.hasQuotedPart)) continue;
+        if (expectHeredocDelimiter) {
+          heredocEnd = word.replace(/^-+/, "");
+          expectHeredocDelimiter = false;
+          continue;
+        }
+        consecutiveHeredocOps = 0;
+        words.push(word);
+        ranges.push({ index: chunk.index, length: chunk.source.length });
+        continue;
+      }
+      if (token.comment !== undefined) {
+        commented = true;
+        continue;
+      }
+      const op = token.op;
+      expectHeredocDelimiter = false;
+      if (op === "<") {
+        consecutiveHeredocOps++;
+        if (consecutiveHeredocOps === 2) expectHeredocDelimiter = true;
         continue;
       }
       consecutiveHeredocOps = 0;
-      words.push(word);
-      continue;
+      if (op !== undefined && SEGMENT_OPS.has(op)) flush();
     }
-    if (token.comment !== undefined) continue;
-    const op = token.op;
-    expectHeredocDelimiter = false;
-    if (op === "<") {
-      consecutiveHeredocOps++;
-      if (consecutiveHeredocOps === 2) expectHeredocDelimiter = true;
-      continue;
-    }
-    consecutiveHeredocOps = 0;
-    if (op !== undefined && SEGMENT_OPS.has(op)) flush();
   }
   flush();
   return segments;
 }
 
-type CommandPatternMatch = { pattern: string; index: number; length: number };
+export function splitCommandSegments(command: string): string[][] {
+  return parseCommandSegments(command).map((segment) => segment.tokens);
+}
 
-/**
- * Compile configured command patterns to regexes (SPEC §6). Patterns that do
- * not compile are dropped (they never match) and reported in `invalidPatterns`
- * so the session start can warn about them.
- */
 export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefined): {
   entries: CompiledCommandRuleEntry[];
   invalidPatterns: string[];
@@ -412,9 +491,18 @@ export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefine
   const invalidPatterns: string[] = [];
   for (const entry of entries ?? []) {
     const patterns: CompiledCommandPattern[] = [];
-    for (const source of entry.patterns) {
+    for (const rule of entry.patterns) {
+      const source = JSON.stringify({ command: rule.command, args: rule.args ?? [] });
       try {
-        patterns.push({ source, regex: new RegExp(source) });
+        new RegExp(rule.command);
+        for (const argument of rule.args ?? []) new RegExp(argument);
+        patterns.push({
+          source,
+          command: new RegExp("^(?:" + rule.command + ")(?![\\s\\S])"),
+          args: (rule.args ?? []).map(
+            (pattern) => new RegExp("^(?:" + pattern + ")(?![\\s\\S])"),
+          ),
+        });
       } catch {
         invalidPatterns.push(source);
       }
@@ -425,13 +513,18 @@ export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefine
 }
 
 function findCommandPattern(
-  patterns: CompiledCommandPattern[] | undefined,
-  candidate: string,
-): CommandPatternMatch | undefined {
-  for (const pattern of patterns ?? []) {
-    const match = pattern.regex.exec(candidate);
-    if (match !== null)
-      return { pattern: pattern.source, index: match.index, length: match[0].length };
+  patterns: CompiledCommandPattern[],
+  candidate: CommandSegment,
+): { pattern: string; ranges: TokenRange[] } | undefined {
+  for (const pattern of patterns) {
+    if (!pattern.command.test(candidate.tokens[0]!)) continue;
+    const args = candidate.tokens.slice(1);
+    if (!pattern.args.every((regex) => args.some((argument) => regex.test(argument)))) continue;
+    const ranges = candidate.ranges.filter(
+      (_, index) =>
+        index === 0 || pattern.args.some((regex) => regex.test(candidate.tokens[index]!)),
+    );
+    return { pattern: pattern.source, ranges };
   }
   return undefined;
 }
@@ -441,32 +534,19 @@ export function resolveCommandActionMatch(
   command: string,
 ): CommandActionMatch {
   if (!entries) return { action: "deny" };
-  const withSpan = (
-    action: CommandAction,
-    match: CommandPatternMatch,
-    candidate: string,
-  ): CommandActionMatch => ({
-    action,
-    matched: match.pattern,
-    matchSpan: { candidate, index: match.index, length: match.length },
-  });
-  // Last match wins (SPEC §6): every matching entry overwrites the resolution,
-  // so a later `{allow: systemctl status}` carves allow out of an earlier
-  // `{ask: systemctl}`. No match at all is unset (deny).
-  const actionFor = (candidate: string): CommandActionMatch => {
+  const results = parseCommandSegments(command).map((candidate): CommandActionMatch => {
     let resolved: CommandActionMatch = { action: "deny" };
     for (const entry of entries) {
       const match = findCommandPattern(entry.patterns, candidate);
-      if (match !== undefined) resolved = withSpan(entry.action, match, candidate);
+      if (match !== undefined)
+        resolved = {
+          action: entry.action,
+          matched: match.pattern,
+          matchSpan: { ranges: match.ranges },
+        };
     }
     return resolved;
-  };
-  // Parse fallback: a command that yields no segments (empty or unparsable)
-  // is checked as the raw string, preserving the pre-split behavior. Trimmed
-  // for the same reason as segments above.
-  const candidates = splitCommandSegments(command);
-  if (candidates.length === 0) candidates.push(command.trim());
-  const results = candidates.map(actionFor);
+  });
   return (
     results.find((result) => result.action === "deny") ??
     results.find((result) => result.action === "ask_with_reason") ??
@@ -622,44 +702,18 @@ function matchedPatternNote(matched: string | undefined): string {
 const MATCH_HIGHLIGHT = "\x1b[7m\x1b[33m";
 const MATCH_HIGHLIGHT_END = "\x1b[27m";
 
-/** Characters that may surround a shell word in the raw command string. */
-const WORD_BOUNDARY = /[\s;&|()<>"'`]/;
-
-function isWordBoundary(character: string | undefined): boolean {
-  return character === undefined || WORD_BOUNDARY.test(character);
-}
-
-/** First occurrence of `text` in `raw` that starts and ends on shell word boundaries. */
-function findWordBoundaryIndex(raw: string, text: string): number {
-  for (let at = raw.indexOf(text); at !== -1; at = raw.indexOf(text, at + 1)) {
-    if (isWordBoundary(raw[at - 1]) && isWordBoundary(raw[at + text.length])) return at;
-  }
-  return -1;
-}
-
-/**
- * Highlight the matched span inside the raw command for the ask dialog (§2.3).
- * The span lives in the reassembled candidate (quotes stripped, head words skipped),
- * so map it back: try the whole candidate first, then the matched text alone.
- * Return the raw command unchanged when neither is found (quoted commands).
- * The span is closed with `MATCH_HIGHLIGHT_END` (leaving the inverted region) and
- * `accentStart` so the dialog accent color continues after it.
- */
 function highlightCommandMatch(raw: string, span: MatchSpan, accentStart: string): string {
-  const candidateAt = findWordBoundaryIndex(raw, span.candidate);
-  const start =
-    candidateAt !== -1
-      ? candidateAt + span.index
-      : findWordBoundaryIndex(raw, span.candidate.slice(span.index, span.index + span.length));
-  if (start === -1) return raw;
-  return (
-    raw.slice(0, start) +
-    MATCH_HIGHLIGHT +
-    raw.slice(start, start + span.length) +
-    MATCH_HIGHLIGHT_END +
-    accentStart +
-    raw.slice(start + span.length)
-  );
+  let highlighted = raw;
+  for (const range of [...span.ranges].sort((left, right) => right.index - left.index)) {
+    highlighted =
+      highlighted.slice(0, range.index) +
+      MATCH_HIGHLIGHT +
+      highlighted.slice(range.index, range.index + range.length) +
+      MATCH_HIGHLIGHT_END +
+      accentStart +
+      highlighted.slice(range.index + range.length);
+  }
+  return highlighted;
 }
 
 function addParentDirectories(args: string[], targetPath: string): void {
@@ -749,7 +803,7 @@ export function sanitizeSandboxEnvironment(
 export class Sandbox {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
   /** One-shot ask_permission approvals, as normalized command segments (§3). */
-  private readonly approvedCommands: string[][] = [];
+  private readonly approvedCommands: string[][][] = [];
   /**
    * Session-approved command patterns (§3): config pattern strings approved
    * via an "Allow in this session" selection. Commands matching one of these
@@ -1238,15 +1292,19 @@ export class Sandbox {
 
   /**
    * Match `command` against the one-shot ask_permission approvals (§3).
-   * Quoting differences normalize away because segments are reassembled
-   * words; partial matches never consume. Consumes the approval on match.
+   * Quoting differences normalize away while token boundaries remain distinct.
+   * Consumes the approval on an exact token-sequence match.
    */
   private consumeApprovedCommand(command: string): boolean {
     const segments = splitCommandSegments(command);
     const index = this.approvedCommands.findIndex(
       (approved) =>
         approved.length === segments.length &&
-        approved.every((segment, i) => segment === segments[i]),
+        approved.every(
+          (segment, i) =>
+            segment.length === segments[i]?.length &&
+            segment.every((token, j) => token === segments[i]?.[j]),
+        ),
     );
     if (index === -1) return false;
     this.approvedCommands.splice(index, 1);
@@ -1263,14 +1321,20 @@ export class Sandbox {
     reason: string,
     context: ToolContext,
   ): Promise<CommandPermissionRequest> {
-    const { action, matched, matchSpan } = resolveCommandActionMatch(this.commandEntries, command);
+    const { action, matched, matchSpan } = resolveCommandActionMatch(
+      this.commandEntries,
+      command,
+    );
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "allow") return { status: "already granted", command };
     if (action === "ask")
-      throw new Error(`Command is confirmed when run via bash; no pre-approval needed: ${command}`);
+      throw new Error(
+        `Command is confirmed when run via bash; no pre-approval needed: ${command}`,
+      );
     if (matched !== undefined && this.isSessionApprovedPattern(matched))
       return { status: "already granted", command, approvedPattern: matched };
-    if (!context.hasUI || !context.ui) throw new Error(`Access requires confirmation: ${command}`);
+    if (!context.hasUI || !context.ui)
+      throw new Error(`Access requires confirmation: ${command}`);
     const ui = context.ui;
     return this.withUiLock(() =>
       this.confirmCommandPermission(command, reason, ui, matched, matchSpan),
@@ -1332,7 +1396,10 @@ export class Sandbox {
    * when it passed without a dialog (config allow). Denial throws.
    */
   authorizeCommand(command: string, context: ToolContext): Promise<boolean> {
-    const { action, matched, matchSpan } = resolveCommandActionMatch(this.commandEntries, command);
+    const { action, matched, matchSpan } = resolveCommandActionMatch(
+      this.commandEntries,
+      command,
+    );
     if (action === "allow") return Promise.resolve(false);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (this.isSessionApprovedPattern(matched)) return Promise.resolve(true);
@@ -1340,7 +1407,8 @@ export class Sandbox {
       if (this.consumeApprovedCommand(command)) return Promise.resolve(true);
       throw new Error(`Command requires a reason: ${command}\n${COMMAND_REASON_HINT}`);
     }
-    if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
+    if (!context.hasUI || !context.ui)
+      throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
     const note = matchedPatternNote(matched);
     const display =
@@ -1412,7 +1480,11 @@ export class Sandbox {
       const environment = sanitizeSandboxEnvironment({ ...process.env, ...options.env });
       const child = spawn(
         "bwrap",
-        [...this.buildArgs(options.mode ?? "fs", options.cwd ?? this.cwd), command, ...commandArgs],
+        [
+          ...this.buildArgs(options.mode ?? "fs", options.cwd ?? this.cwd),
+          command,
+          ...commandArgs,
+        ],
         {
           cwd: this.cwd,
           env: environment,

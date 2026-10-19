@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -174,7 +181,13 @@ async function sandboxSession(
   const configPath = join(directory, "sandbox.yaml");
   writeFileSync(
     configPath,
-    `read:\n  - deny: ${directory}/denied\nwrite:\n  - ask: ${directory}/requested\ncommands:\n  - deny: '^forbidden-command$'\n  - ask_with_reason: '^reason-command$'\n`,
+    `read:\n  - deny: ${directory}/denied\nwrite:\n  - ask: ${directory}/requested
+commands:
+  - deny:
+      command: forbidden-command
+  - ask_with_reason:
+      command: reason-command
+`,
   );
   const settingsManager = SettingsManager.inMemory({ codemode: { mode: "on" } });
   const loader = resourceLoader(directory, settingsManager, [
@@ -353,7 +366,11 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
       }),
       diagnostic: "Access requires confirmation:",
     },
-    { name: "bash", args: () => ({ command: "forbidden-command" }), diagnostic: "Command denied:" },
+    {
+      name: "bash",
+      args: () => ({ command: "forbidden-command" }),
+      diagnostic: "Command denied:",
+    },
     {
       name: "bash",
       args: () => ({ command: "reason-command" }),
@@ -427,7 +444,8 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
           notify: () => {},
         } as unknown as ExtensionUIContext;
         await session.bindExtensions({ uiContext: deniedUI });
-        const requestedTarget = target === "path" ? join(directory, "requested") : "reason-command";
+        const requestedTarget =
+          target === "path" ? join(directory, "requested") : "reason-command";
         const args = { [target]: requestedTarget, reason: "fixture permission reason" };
         const result = await executeScript(
           session,

@@ -83,7 +83,7 @@ dsh のモデル向けfs・bashツール（`read` `write` `edit` `glob` `grep` `
 | write | `File only` / `Directory (subtree)` / `No, deny (reason next)` |
 | ask_permission（§3） | `Yes, allow` / `No, deny (reason next)` |
 
-質問の表示は、問いかけ、確認対象（パスまたはコマンド）、`reason: <理由>` の行（`ask_permission`（§3）のみ）、設定パターンの行の順とする。質問には確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob展開後の絶対パスを、コマンドは設定されたパターンを表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
+コマンドの一致tokenの元文字列範囲を `>>>` / `<<<` で囲み、無関係な引数は囲まない。質問の表示は、問いかけ、確認対象（パスまたはコマンド）、`reason: <理由>` の行（`ask_permission`（§3）のみ）、設定パターンの行の順とする。質問には確認対象に続けて確認の原因となった設定パターンを示す行を表示する。`ask` のパターンに一致したときは `matched: <一致したパターン>`、設定に一致するパターンがなく未設定（= deny）による許可要求のときは `no matching pattern (default ask)` を表示する。パスは glob展開後の絶対パスを、コマンドはcommandとargsを含むルールをJSON形式で表示する。複合コマンドで ask になったときは、ask と判定されたセグメントのパターンを示す。
 
 `ask_permission`（§3）の確認の問いかけは、パスのとき `Allow write access to directory subtree?`、コマンドのとき `Allow command execution?` とし、確認対象に続けてagent が指定した要求理由を `reason: <理由>` の行で表示する。
 
@@ -222,7 +222,7 @@ agent は `ask_permission` ツールで、指定パス配下への `write` 許�
 
 `bash` の `command` は `sandbox.yaml`（§6）の `commands` からアクションを解決する（走査・未設定の扱いは §3 と同じ）。
 
-複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。
+複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。事前承認の同一性は各セグメントのtoken列で比較し、`cmd "a b"` と `cmd a b` を区別する。
 
 | コマンドのアクション | 結果 |
 | --- | --- |
@@ -266,10 +266,10 @@ network は開放。fs制限の対象外。
 | `credentials` | bash の sandbox に read-only で bindするパスパターン。`read` `write` `edit` `glob` `grep` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands` | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する |
 
-- `read` / `write` / `commands` は、アクション別の3リストではなく `{action: pattern}` または `{action: [patterns...]}` の要素からなるフラットなリストで書く。`action` は read・write では `allow` / `ask` / `deny` のいずれか、commands では `ask_with_reason` も使える4値のいずれかで、要素ごとに1つだけ宣言する。パターンの記法は read / write が glob（§3）、commands が正規表現である。
+- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` は `{action: rule}` または `{action: [rules...]}` のフラットなリストで、同じaction内のルールはORとする。各要素は1つのactionだけを宣言し、commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
 - 各リストは要素を上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
-- `read` / `write` / `commands` のセクションがリストでない、要素がマッピングでない、要素が複数のアクションを宣言する、アクション名が read・write では `allow` / `ask` / `deny` 以外・commands では `allow` / `ask` / `ask_with_reason` / `deny` 以外、パターンが文字列でも文字列のリストでもない場合、`sandbox.yaml` の読み込みは失敗し、全セクションが未設定（= `deny`）として動作する。パターンリスト内の非文字列要素は無視される。
-- `commands` のパターンが正規表現として解釈できないとき、そのパターンのみが無視され（マッチしない）、dshホストのログに無効だったパターンを列挙した警告を出す。読み込み自体は成功し、他のセクション・パターンの動作は変わらない。
+- セクションがリストでない、要素がマッピングでない、actionが複数または未知の値の場合、読み込みは失敗し、全セクションが未設定（= `deny`）になる。read・writeの値は文字列または文字列リストで、リスト内の非文字列は無視する。commandsのruleは `command: string` と省略可能な `args: string[]` だけを持つマッピングであり、文字列rule、未知フィールド、command欠落、型の違反、ルールリスト内の不正要素も読み込み失敗になる。
+- `commands` のcommandまたはargsの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。dshのホストログで警告する。
 
 本plugin は読み込み時と各セッションの開始時に `sandbox.yaml` を読み込み、変数展開・glob展開・実在保証（§6.1）をやり直す。
 
@@ -277,15 +277,30 @@ network は開放。fs制限の対象外。
 
 ```yaml
 commands:
-  - { allow: ".*" }
-  - { ask: ['^git push\b', '^gh pr create\b'] }
-  - { ask_with_reason: ['^sudo\b', '^chmod -R\b'] }
-  - { ask: '^systemctl\b' }
-  - { allow: "^systemctl (status|show)" }
-  - { deny: "^systemctl (reboot|poweroff|halt|shutdown)" }
+  - allow: { command: ".*" }
+  - ask:
+      - { command: git, args: [push] }
+      - { command: gh, args: [pr, create] }
+  - ask_with_reason:
+      - { command: sudo }
+      - { command: chmod, args: ["-R"] }
+  - ask: { command: systemctl }
+  - allow: { command: systemctl, args: ["status|show"] }
+  - deny: { command: systemctl, args: ["reboot|poweroff|halt|shutdown"] }
 ```
 
-> パスの glob照合ルール（§3）とコマンド正規表現の評価対象（セグメントの切り方等）は実装で決定する。本spec は「何が設定可能か」のみを規定する。
+### コマンドルールの照合（§6）
+
+command と args の各文字列はJavaScript RegExp sourceであり、実行ファイル名token全体・各引数token全体に照合する。ORは正規表現の `|` で表す。引用符を除去したtoken値を保持し、空文字・引用された空白・引用中の改行も1つのtokenとして扱う。
+
+| 条件 | 一致結果 |
+| --- | --- |
+| commandが実行ファイルtoken全体に一致しない | 不一致 |
+| args省略または空配列 | commandだけで判定 |
+| argsの全パターンがそれぞれ1個以上の引数token全体に一致する | commandとのANDで一致 |
+| argsのいずれかに一致する引数がない | 不一致 |
+
+引数の位置・個数・順序は制約せず、追加引数を許容する。同じtokenが複数のargs条件を満たしてよい。オプション名と値の対応付けは行わない。例えば `{command: systemctl, args: [status]}` は `systemctl start status` にも一致する。コマンドが存在しない空入力・コメントのみの入力は未設定（deny）とする。
 
 ### 6.1 bind とパスの実在保証
 
