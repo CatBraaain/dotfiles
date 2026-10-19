@@ -31,7 +31,7 @@ git -C ~/mirrors/github.com/deepseek-ai/deepseek-harness ls-remote --tags origin
 
 タグ一覧（フィルタせず全件）の中から、現在のバージョンに近いタグを推測して選ぶ:
 
-- 判断材料: CLI のバージョン（`dsh --version`）と、plugin が importするbundle実体のバージョン（`~/.dsh/profiles/web/bun.lock` の `"@deepseek-ai/dsh-*"`）。両者はずれていることがある
+- 判断材料: CLI のバージョン（`dsh --version`）と、plugin が importするbundle実体のバージョン（`~/.dsh/profiles/web/pnpm-lock.yaml` の `@deepseek-ai/dsh-*`）。両者はずれていることがある
 - 完全一致するタグがあればそれを使う。無ければ実行環境に最も近いタグを選ぶ。実行環境より大幅に先のバージョンは避ける
 - 選んだタグを `git fetch --depth=1 origin tag <tag> --no-tags` してcheckoutする。ミラーは shallow clone のため `--depth=1` が必須
 - 適切なタグを判断できないときはユーザーに確認する
@@ -86,7 +86,7 @@ docs は網羅的でない。正確な契約が必要なときは docs より先
 
 - dsh は **webプロファイルのみ**使用する。plugin の追加先も webプロファイル
 - pluginソースは `dotfiles/.dsh/plugins.exact/`。追加・更新は README の「プラグインの追加・更新」
-- エントリは TS で書き `dist/index.js` に build。ビルドは `build.apply.sh` が apply の全ターゲット適用後に一括実行
+- エントリは TS で書き `dist/index.js` に build。ビルドは `build.apply.ts` が apply の全ターゲット適用後に一括実行
 - client half（`src/client/`）を持つplugin の browser bundle は `lib/client.js` をリポジトリにコミットする。`src/client/` を編集したらREADME記載の `bun build` コマンドで再ビルド
 - 依存解決には bun固有の罠がある（transitive依存の hoist遮蔽、pnpm の `.gitignore` 除外）。依存構成を変えるときは README の該当節を読む
 - テスト: `dotfiles/.dsh/plugins.exact/<plugin>/` で `bun test`。TS変更には隣接 `.test.ts` を置く（グローバルAGENTS.md の規約）
@@ -94,7 +94,8 @@ docs は網羅的でない。正確な契約が必要なときは docs より先
 
 ### 実装サンプル
 
-`dotfiles/.dsh/plugins.exact/` に 12 plugin がある。client halfあり7つ、bundle のみ5つ。
+plugin の一覧と構成は `dotfiles/.dsh/plugins.exact/` の実ディレクトリで確認する。
+`src/client/` を持つplugin が client half あり、持たないものが bundle のみである。
 近い機能の plugin を探し、実装と SPEC.md を参照する。
 
 ## レビュー時のテスト
@@ -118,6 +119,6 @@ bun run test:web
 
 1. 新規plugin: `dotfiles/.dsh/README.md` の手順 → `M/docs/user/develop/basic/` で骨格 → 型は `M/packages/util/package-manifest/src/types.ts`
 2. 既存plugin の変更: まず当該 `SPEC.md` を読み、変更後に乖離がないか照合する
-3. 使えるslot / service / event の候補が分からない: `M/docs/subsystems/` の該当ページ、ui-renderer / ui-slots の実装、既存12 plugin の `inject` 一覧
+3. 使えるslot / service / event の候補が分からない: `M/docs/subsystems/` の該当ページ、ui-renderer / ui-slots の実装、`dotfiles/.dsh/plugins.exact/` 配下の既存plugin の `inject` 一覧
 4. 正確な契約が必要: ミラー実装を grepする（docs を信用しきらない）
 5. レビュー・検証を求められたら「レビュー時のテスト」に従いdsh web の起動確認まで行う

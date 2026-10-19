@@ -47,7 +47,9 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 1. `htmlshot extract NAME.html.png` で正本を `NAME.html` に取り出す。checksum検証つきでバイト一致する
 2. 取り出したHTML を編集する
-3. 同じ `--width`・`--height`・`--scale` で再shotし、既存の `.html.png` を更新する
+3. 同じ寸法で再shotし、既存の `.html.png` を更新する
+
+寸法の復元は `htmlshot verify NAME.html.png` の出力 `<pixel width>x<pixel height>` で行う。ピクセル幅・高さをそのまま `--width`・`--height` へ渡し、`--scale` は付けない。ピクセル寸法は `幅×倍率` の積のため verify 出力からは倍率を一意に復元できず（例: 1200px は 1200@1x と 600@2x の両方）、再shotでは既定の 1 に統一する。レンダ倍率を変える意図があるときだけ `--scale` を明示する。
 
 `checksum mismatch` は PNG が壊れていることを示す。その場合は当該ファイルを正本として扱わず報告する。
 
@@ -56,7 +58,3 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 ## ファイル名
 
 ファイル名は内容を表す小文字ハイフン区切りにする。例: `login-flow.html.png`。
-
-## 詳細参照
-
-フォーマット規約（`htmlshot/v1`、iTXt、checksum）の詳細が必要な場合だけ `~/.agents/cli/htmlshot/SPEC.md` を読む。

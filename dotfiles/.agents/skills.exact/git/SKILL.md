@@ -44,11 +44,11 @@ PR の作成前、および commit・branch・merge の操作前に対象リポ�
 4. 変更を独立してreview・revert できる目的または意味の単位へ分ける。`1 commit = 1 論理的変更` とし、分割すると中間の commit が成立しない密接な変更は同じcommit にまとめる。
 5. 各単位の変更内容と既存の commit履歴を確認して、リポジトリ規約に従うコミットメッセージを決める。
 6. 各単位に必要なファイルだけを明示してstageし、`git diff --cached` で確認してから commitする。意味の異なる変更が混在するときは `git add -p` 等で分割する。
-7. すべての commit の後に `git status` と `git log -n <作成したcommit数>` を確認する。
+7. すべての commit の後に `git status` と `git log -n <作成したcommit数>` を確認する。意図どおりでない点があるときはバックアップbranch を残して報告し、なければ手順3のバックアップbranch を `git branch -D` で削除する。
 
 ### 分割時のバックアップと一致確認（必須）
 
-add/reset によって分割する場合、確認済みの分割対象を一時commit にしてから、次の手順で内容の一致を確認する。既存commit を分割し直す場合は、未コミット変更を一時commit にしない。
+`git reset` を使う分割（WIP commit を解いて staged へ戻す分割、既存commit の分割し直し）でこの手順を必須とする。確認済みの分割対象を一時commit にしてから、次の手順で内容の一致を確認する。未コミット変更を `git add`・`git add -p` のみで分ける分割は標準手順6のとおりでよく、WIP commit・バックアップbranch・一致確認を要さず、この手順には該当しない。既存commit を分割し直す場合は、未コミット変更を一時commit にしない。
 
 **1. 分割前 — バックアップの作成**
 
@@ -110,9 +110,9 @@ branch名・分岐元は、リポジトリの branch strategy に従う。文書
 
 ## 実行の境界
 
-- coding agent の変更は、user が staged/unstaged の状態で管理・レビューする。`git add`・`git reset`・`git restore`・`git stash` 等の index または worktree の状態を変更する操作は、user が staging、commit の作成・分割など staging を必要とする操作を明示的に指示（承認を含む）した場合のほか実行しない。user が staged にした変更の解除や、user の未コミット変更の破棄も指示がない限り行わない。
+index と staging の所有権（staging 操作の実行条件、user の staged 変更への非干渉、`git add .`・`git add -A` の禁止、想定外の staging状態の取り扱い）の正本は、共有 `~/.agents/AGENTS.md` の「Git index の所有権」節である。本節はそれを前提に、commit と remote 操作に関するこの skill 固有の差分だけを定める。
+
 - user が commit を指示したときは、その時点で staged にある変更もコミットに含めてよい。コミットから除外するのは、user が除外を指示したとき、またはその変更がコミットの意味単位（1 commit = 1論理的変更）に属さないと判断できるときだけにする。判断に迷うときは確認する。
-- index の状態が予期しないものに見えても、勝手に正さずuser に確認する。user または前段の操作が staged にした可能性があり、index の状態自体が user の管理領域である。
 - remote への push と PR の作成は、明示的な指示があるときだけ行う。
 - 共有branch への force push・履歴の書き換えは、user の承認があるまで行わない。
 

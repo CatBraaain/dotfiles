@@ -103,13 +103,14 @@ status: open
 コード・文書等の変更依頼で問題を見つけたときは、依頼達成に必要か、依頼対象の挙動に直接関係するかで扱いを決める。
 
 - 依頼達成に必要、または依頼対象の挙動に直接関係する問題は、明示された変更範囲内ならその場で修正する
-- 依頼と無関係に偶然発見した問題、または現在の依頼の目的・契約に影響しない独立した問題は、review skill の重要度で「中」以上に相当するときだけ、その場では修正せず別チケットにする。「低」相当の軽微な課題（typo、軽微な lint・format指摘、細かい改善提案など）は起票せず、報告や reviewワークファイルに参考として残す
+- 依頼と無関係に偶然発見した問題、または現在の依頼の目的・契約に影響しない独立した問題は、review skill の重要度で「中」以上に相当するときだけ、その場では修正せず別チケットにする
 - user が後回しを判断した問題（「あとで直して」「今回は置いといて」）は、関連性にかかわらず別チケットにする
 - 現タスクの外で対処すべき懸念（spec乖離、性能懸念、設計上の疑問）は、別チケットにする
+- user が対処不要と判断した問題は、起票しない
 
-関連性や変更範囲の判断が曖昧なときは、user に確認してから決める。起票しないのは、その場で修正する問題、review skill の重要度で「低」相当の軽微な課題、user が対処不要と判断した問題である。
+関連性や変更範囲の判断が曖昧なときは、user に確認してから決める。
 
-レビューのみの依頼では対象を修正せず、依頼対象の指摘を評価・報告する。後続の修正依頼があった場合だけ、変更範囲内の指摘を修正する。レビュー中に偶然見つけた依頼対象外の課題や user が後回しを決めた課題は、review skill の重要度（高・中・低）で起票を切り分ける。
+レビューのみの依頼では対象を修正せず、依頼対象の指摘を評価・報告する。後続の修正依頼があった場合だけ、変更範囲内の指摘を修正する。問題の起票は、review skill の重要度で次の3段階に切り分ける。変更依頼の場面でも、偶然見つけた課題と user が後回しを決めた課題はこの切り分けに従う。
 
 - 高（放置すると目的または契約の達成を妨げる）: レビュー対象の指摘は修正せず報告する。依頼対象外または user が後回しを決めた課題は起票する。変更依頼の範囲内なら修正するため起票せず、範囲外なら起票する
 - 中（放置しても目的または契約は達成されるが対処する価値がある）: レビュー対象の指摘は修正せず報告する。依頼対象外または user が後回しを決めた課題は起票する。変更依頼に直接関係し範囲内なら修正し、無関係なら起票する
@@ -161,14 +162,13 @@ status: open
 
 ## 操作
 
-Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_create` / `ticket_set` / `ticket_edit`）を使う。tool が無いharness では `ticket` CLI（`ticket list` / `ticket show` / `ticket create` / `ticket set` / `ticket edit`）を bash で実行する。いずれも使えない環境では fs tools でストアを直接読み書きする。
+Ticket の操作は ticket tools（`ticket_list` / `ticket_show` / `ticket_create` / `ticket_set` / `ticket_edit`）を使う。tool が無いharness では `ticket` CLI（`ticket list` / `ticket show` / `ticket create` / `ticket set` / `ticket edit`）を bash で実行する。fs tools で直接読み書きするのは、ticket tools と CLI がどちらも使えない環境のときだけである。tool・CLI が使える環境でストアの mdファイルを直接書き換えない。
 
 - 起票は `ticket_create`（CLI: `ticket create '{"title":"Ticket title","body":"Ticket body"}'`）。ID は採番されるため、`title`・`body`・`status`・`after` の引数を分けて渡す。`body` には frontmatter と H1 を含めず、H1 の直後に置く本文だけを渡す。上記のファイルテンプレートは fs tools で直接起票するときだけ使う
 - status・`after` の変更は `ticket_set`（CLI: `ticket set <id> '{"status":"locked"}'`、依存設定なら `ticket set <id> '{"after":"20260918-125653"}'`、解除なら `ticket set <id> '{"after":null}'`）。変更対象を指定したフィールドだけを frontmatter で更新する。未解決の `after` の設定と解除は、status を明示しなければ status と連動する
 - 本文の更新は `ticket_edit`（CLI: `ticket edit <id> '<old>' '<new>'`）。先に `ticket_show` で最新の本文を読み、取得した本文（frontmatter を除きH1 を含む）から短く一度だけ現れる文字列を `old` へ正確にコピーする。一意でなければ周辺文を含める。チャットや別ファイルの文章から `old` を推測しない。`new` は置換後の文字列。0回または複数回の一致なら失敗する
 - 本文追記を要する `closed`・`blocked`・`cancelled` 等の遷移では、`ticket_edit` で必要な記録を追加してから `ticket_set` で status・`after` を変更する。両操作を原子的にまとめるtool / CLI はない。片方が失敗したら再実行を重ねず `ticket_show` で現状を確認してから対処する
 - `after` の不存在・`closed`・`cancelled` 指定や循環は tool・CLI が検証して失敗する。一方、`open` かつ依存未解決は `next` の対象外になるだけで、`set` 自体は許される。着手前には `ticket_show` で status と `after` を確認する
-- CLI と tool の振る舞いの正本は `~/.agents/cli/ticket/SPEC.md` である
 
 fs tools で直接読み書きするときは、本文は必要な箇所だけ編集し、可能な限り既存の内容を維持する。frontmatter も必要に応じて編集してよいが、完全な保護や構造の維持は保証しない。壊れた場合は内容を確認し、修正する。
 
@@ -189,5 +189,3 @@ Ticket の一覧は `ticket_list` を使う。status絞り込みは `status` 引
 ## 対象外
 
 - GitHub Issues等の外部トラッカーの操作はしない
-
-fs tools で直接読み書きするのは、ticket tools と CLI がどちらも使えない環境のときだけである。tool・CLI が使える環境でストアの mdファイルを直接書き換えない（status・`after` の変更は `ticket_set`、本文の変更は `ticket_edit`、起票は `ticket_create` を使う）。

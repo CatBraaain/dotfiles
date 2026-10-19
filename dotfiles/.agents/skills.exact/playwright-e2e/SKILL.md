@@ -1,6 +1,8 @@
 ---
 name: playwright-e2e
-description: Playwright Test で E2Eテストを作成・修正するとき、録画やレビューの仕組みを検討するときに使う。
+description: >-
+  Playwright Test の E2Eテストの書き方の規範と、trace・HTML report による録画・レビュー運用の定め。
+  E2Eテストの作成・修正、E2Eテストの録画・レビュー仕組みの検討時に使う。
 ---
 
 # playwright-e2e

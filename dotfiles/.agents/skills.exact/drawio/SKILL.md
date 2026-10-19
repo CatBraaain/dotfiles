@@ -71,7 +71,7 @@ URL出力、OS別の開き方、透明背景・倍率・サイズなどの詳細
 drawio -x -f xml --layout verticalFlow -o TEMP-layout.drawio TEMP-input.drawio
 ```
 
-細かな制御には`elkLayered`などのELK設定を含むJSON配列を`--layout`へ渡す。配置済みのXML図でエッジだけを直交ルーティングする場合は`--layout libavoid`を使う。flow/treeレイアウトの後には使わない。
+細かな制御には`elkLayered`などのELK設定を含むJSON配列を`--layout`へ渡す。配置済みのXML図でエッジだけを直交ルーティングするときは、`--layout`ではなくエッジの`style`属性に`edgeStyle=orthogonalEdgeStyle`を設定する。
 
 ## 編集と検証
 
