@@ -4,7 +4,11 @@ import { readFile, writeFile } from "node:fs/promises";
 // Rime dictionary rows appended to the tail of kagiroi.custom.dict.yaml.
 // Each line is TSV: phrase<TAB>reading<TAB>weight. The phrase column may
 // carry a "|variant" suffix like existing entries do.
-const dictionaryRows = `単語|1851 1851	たんご	1`;
+const dictionaryRows = [
+  "単語|1851 1851\tたんご\t1",
+  "最高|1851 1851\tさいこう\t1",
+  "検証|1851 1851\tけんしょう\t1",
+].join("\n");
 
 async function main(): Promise<void> {
   const { buildHookContext } = await import(
