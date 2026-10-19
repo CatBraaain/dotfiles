@@ -22,7 +22,6 @@ const extensionsForLinux = [
   "golang.go",
   "grapecity.gc-excelviewer",
   "gurumukhi.selected-lines-count",
-  "hediet.vscode-drawio",
   "ibm.output-colorizer",
   "ionutvmi.reg",
   "jinliming2.vscode-go-template",
