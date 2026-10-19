@@ -14,5 +14,7 @@ keys:
       出力は変換後の書き起こしテキストのみとします。
   - key: notifyMeetingDetection
     value: "false"
+  - key: snippets
+    value: '[{"trigger":". files","replacement":"dotfiles"},{"trigger":".files","replacement":"dotfiles"}]'
   - key: useDictationAgent
     value: "false"

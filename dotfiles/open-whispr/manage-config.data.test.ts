@@ -156,6 +156,7 @@ describe("validateManagedKeys and loadManagedKeys", () => {
     assert.deepEqual(keys.sort(), [
       "customPrompt.cleanup",
       "notifyMeetingDetection",
+      "snippets",
       "useDictationAgent",
     ]);
     assert.match(managedKeysSha256(targets), /^[0-9a-f]{64}$/);
@@ -163,6 +164,17 @@ describe("validateManagedKeys and loadManagedKeys", () => {
       managedKeysSha256(targets),
       managedKeysSha256(loadManagedKeys(import.meta.dir)),
     );
+  });
+
+  it("declares the dot-files pronunciation snippet replacing . files and .files with dotfiles", () => {
+    const targets = loadManagedKeys(import.meta.dir);
+    const entry = targets.find((target) => target.key === "snippets");
+    assert.ok(entry, "snippets entry must exist in the shipped declaration");
+    const snippets = JSON.parse(entry.value) as unknown;
+    assert.deepEqual(snippets, [
+      { trigger: ". files", replacement: "dotfiles" },
+      { trigger: ".files", replacement: "dotfiles" },
+    ]);
   });
 
   it("rejects duplicate keys", () => {
