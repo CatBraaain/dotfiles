@@ -1,0 +1,21 @@
+// @ts-ignore: Bun provides Node built-ins at runtime; this repo has no Node type package.
+import { readFile, writeFile } from "node:fs/promises";
+
+// Rime dictionary rows appended to the tail of kagiroi.custom.dict.yaml.
+// Each line is TSV: phrase<TAB>reading<TAB>weight. The phrase column may
+// carry a "|variant" suffix like existing entries do.
+const dictionaryRows = `単語|1851 1851	たんご	1`;
+
+async function main(): Promise<void> {
+  const { buildHookContext } = await import(
+    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
+  );
+  const { resolvePaths } = await buildHookContext();
+  const { distPath } = resolvePaths("kagiroi.custom.dict.yaml");
+  const existingDict = await readFile(distPath, "utf8");
+  const newline =
+    existingDict === "" || existingDict.endsWith("\n") ? "" : "\n";
+  await writeFile(distPath, existingDict + newline + dictionaryRows + "\n");
+}
+
+if (import.meta.main) await main();
