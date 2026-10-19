@@ -1,7 +1,7 @@
 ---
 name: design-catalog-kit
 description: >-
-  HTMLデザイン案を軸ごとのディレクトリに作り、同梱generatorでindex.html viewerを生成してブラウザーで閲覧・比較する。ページ・コンポーネント・CSSアニメーションのデザイン案カタログ、iframe比較viewer、Replayの作成・更新の依頼で使う。選択案の採用・記録・統合は扱わない。
+  HTMLデザイン案を軸ごとのディレクトリに作り、同梱generatorでindex.html viewerを生成してブラウザーで閲覧・比較する。ページ・コンポーネント・CSSアニメーションのデザイン案カタログ、iframe比較viewer、Replayの作成・更新の依頼に加え、見た目やレイアウトの複数案を出して比べる依頼全般で使う。選択案の採用・記録・統合は扱わない。
 compatibility: Node.js and a browser. No external runtime dependencies.
 ---
 
@@ -17,7 +17,7 @@ compatibility: Node.js and a browser. No external runtime dependencies.
 
 ## カタログを作る
 
-作業用の独立した `dist/` をカタログルートにする。既存プロジェクトのビルド出力、特にdotfiles-managerが使うリポジトリ直下の `dist/` とは分ける。
+作業用の独立した `dist/` をカタログルートにする。既存プロジェクトのビルド出力、特にdotfiles-managerが使うリポジトリ直下の `dist/` とは分ける。カタログルートは `~/.agents/work/<project>/` 以下に置く。プロジェクトリポジトリ内に置く場合はカタログ専用ディレクトリに限り、ビルド出力や他成果物と混ぜない。
 
 ```text
 dist/
@@ -77,7 +77,7 @@ node "$SKILL_DIR/assets/build-viewer.mjs" "$CATALOG_ROOT"
 node "$SKILL_DIR/assets/serve-catalog.mjs" "$CATALOG_ROOT" --port 4173
 ```
 
-生成成功時は生成先 `index.html`、配信開始時は閲覧URLがstdoutに出る。失敗は非ゼロ終了と理由になる。serverは継続稼働し、終了はCtrl+C。既定portは4173、別portを明示できる。
+生成成功時は生成先 `index.html`、配信開始時は閲覧URLがstdoutに出る。失敗は非ゼロ終了と理由になる。serverは継続稼働し、終了はCtrl+C。既定portは4173、別portを明示できる。複数のカタログを同時配信する場合はportを分け、セッション終了までに配信プロセスを停止する。
 
 配信先は `127.0.0.1` に限定する。serverは選択ルート内のファイルを公開するため、専用ルートだけを渡し、公開したくないファイルを混ぜない。生成・配信中に別processで祖先ディレクトリを置換しない。ルート外参照はsymlinkも含め拒否される。
 

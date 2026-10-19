@@ -1,7 +1,7 @@
 ---
 name: storybook
 description: >-
-  Storybook の導入・初期化と `.storybook/` 配下の設定を扱うときの規範。onboardingガイド、addon panel、telemetry、What's New通知、デモstories など、不要な UI と通信を非表示・無効化する。Storybook の導入・セットアップや `.storybook/` 配下の設定変更を依頼されたときに使う。stories・decorators・preview.ts の書き方の指導は対象外。
+  Storybook の導入・初期化と `.storybook/` 配下の設定を扱うときの規範。onboardingガイド、addon panel、telemetry、What's New通知、デモstories など、不要な UI と通信を非表示・無効化する。Storybook の導入・セットアップや `.storybook/` 配下の設定変更を依頼されたときに使う。stories ファイルや decorator など、コンポーネント側の Storybook API の書き方指導は対象外（`.storybook/` 配下の設定ファイルとしての `preview.ts` は対象）。導入の可否・方針の検討にも参照してよい。
 ---
 
 # Storybook
@@ -9,6 +9,8 @@ description: >-
 Storybook 10系を対象に、開発に不要な UI要素と通信を抑えた状態で Storybook を導入・設定するための規範である。Storybook 10未満のプロジェクトには適用しない。Storybook の導入、`.storybook/` 配下の `main.ts` / `manager.ts` の作成・編集をするときは、この規範に沿って設定する。
 
 ## 導入時
+
+まず `package.json` の storybook 依存バージョン等で、対象プロジェクトが Storybook 10系か確認する。10未満なら以下を適用しない。
 
 プロジェクトルートで、既に Storybook 10系がインストールされていればそのローカルCLI を使う。未導入なら `npx storybook@10 init` を使い、10系に限定する。既存の Storybook が 10系以外なら init を実行しない。対話プロンプト "New to Storybook?" には No を選ぶ。No は onboarding addon なしの minimal setup になる。デモstories は No を選んでも生成されるため、「デモstories の除去」を適用する。
 

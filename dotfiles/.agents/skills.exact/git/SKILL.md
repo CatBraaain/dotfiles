@@ -1,7 +1,7 @@
 ---
 name: git
 description: >-
-  git の commit・branch・merge・push・PR運用の規則。コミットの作成と意味単位への分割、コミットメッセージの規約と scope、リポジトリの branch strategy・contributionガイドへの照合、OSS への PR の受付可否と適切性の評価を定める。gitコマンド（add・reset・restore・stash・commit・merge・rebase・push等、index・worktree・branch を変更する操作、および staged/unstaged の確認）を実行する前に必ず読む。「コミット」「マージ」「push」「ブランチ」「PR」「コントリビュート」等の明示的な依頼のほか、調査・実装・検証で自発的に gitコマンドを実行するときも使う。
+  git の commit・branch・merge・push・PR運用の規則。コミットの作成と意味単位への分割、コミットメッセージの規約と scope、リポジトリの branch strategy・contributionガイドへの照合、OSS への PR の受付可否と適切性の評価を定める。「コミット」「マージ」「push」「ブランチ」「PR」「コントリビュート」等の明示的な依頼のほか、調査・実装・検証で自発的に gitコマンド（add・reset・restore・stash・commit・merge・rebase・push等、index・worktree・branch を変更する操作、および staged/unstaged の確認）を実行するときも使う。読み込みは git 操作を含むタスクの開始時に1回でよい。同一セッションで既読なら再読は不要。ただし分割・履歴操作に入る直前には該当節を再確認する。
 ---
 
 # Git
@@ -40,7 +40,7 @@ PR の作成前、および commit・branch・merge の操作前に対象リポ�
 
 1. `git status` と `git diff HEAD` で、ステージ済み・未ステージ・未追跡を含む変更を確認する。
 2. `git branch --show-current` で現在の branch を確認し、branch を移動しない。
-3. 変更がある場合のみ、現在の `HEAD` を `backup/<現在のbranch名>-<yyyymmddhhmmss>` に保存する。`git branch <バックアップbranch名> HEAD` で作成し、バックアップのために branch を移動しない。
+3. 分割、既存 commit の分割し直し、または履歴の書き換えを伴う場合のみ、現在の `HEAD` を `backup/<現在のbranch名>-<yyyymmddhhmmss>` に保存する。`git branch <バックアップbranch名> HEAD` で作成し、バックアップのために branch を移動しない。単発の新規 commit では不要。
 4. 変更を独立してreview・revert できる目的または意味の単位へ分ける。`1 commit = 1 論理的変更` とし、分割すると中間の commit が成立しない密接な変更は同じcommit にまとめる。
 5. 各単位の変更内容と既存の commit履歴を確認して、リポジトリ規約に従うコミットメッセージを決める。
 6. 各単位に必要なファイルだけを明示してstageし、`git diff --cached` で確認してから commitする。意味の異なる変更が混在するときは `git add -p` 等で分割する。

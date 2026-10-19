@@ -1,7 +1,7 @@
 ---
 name: specs
 description: >-
-  SPEC.md・REQUIREMENTS.md・specs/<feature-name>.spec.md等の spec・requirements文書の要否・配置・作成・修正の規則。CSDDの正本のうちspec・requirements形式を所有し、skill `csdd` から参照される。spec・requirementsファイルを作成・修正するとき、またはその要否・配置を判断するときに適用する。既存の spec を読んで照合・レビューするだけのときは発火せず、CSDD適合性レビュー・乖離検知・照合は `csdd` が所有する。
+  SPEC.md・REQUIREMENTS.md・specs/<feature-name>.spec.md等の spec・requirements文書の要否・配置・作成・修正の規則。CSDDの正本のうちspec・requirements形式を所有し、skill `csdd` から参照される。spec・requirementsファイルを新規作成するとき、その要否・配置を判断するとき、既存ファイルの内容を書き換える修正をするときに適用する。パス改名・参照置換などの機械的追従には適用しない。既存の spec を読んで照合・レビューするだけのときは発火せず、CSDD適合性レビュー・乖離検知・照合は `csdd` が所有する。
 ---
 
 # Specs
@@ -46,6 +46,7 @@ spec・requirements を新規作成する提案の有無を、リポジトリが
 ## 配置
 
 - 配置が明示済みならそれに従う。未指定なら、プロジェクトへの配置をユーザーに確認し、回答を待つ。要否と配置の質問は、共有`~/.agents/AGENTS.md`の「Asking Format」に従って可能な限り1回にまとめる。明示済みの指示・承認は再確認しない。
+- 正本はプロジェクト（またはその worktree）へ置く。`~/.agents/work/` 配下へ正本を置かない。
 - 単一機能はプロジェクト直下の`REQUIREMENTS.md`・`SPEC.md`、複数機能は`specs/<feature-name>.requirements.md`・`specs/<feature-name>.spec.md`に置く。`specs/<feature-name>/REQUIREMENTS.md`も許容するが、明示的な指定がない限りフラット配置を優先する。プロジェクト内で両形式を混在させず、既存配置（`spec/<feature-name>.md`等）があれば維持する。機能は実装モジュールではなくユーザーが認識する単位で分ける。
 - 共有リポジトリ（OSS上流など）へは、その規約に合わないファイルを残さない。プロジェクトに置けない場合は、その制約を示して配置またはspecなしで進めるかを確認する。
 
