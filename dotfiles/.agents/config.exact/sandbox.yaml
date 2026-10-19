@@ -128,5 +128,9 @@ commands:
   # `^pi` anchor matches pi at the head of any compound command
   - ask:
       - '^pi(\s|$)'
+  # pi read-only probes run without confirmation (last match wins);
+  # auth (token refresh, secret printing) and config (TUI) stay gated
   - allow:
       - '^pi (--help|--version|-h|-v)(\s|$)'
+      - '^pi (--list-models|list)(\s|$)'
+      - '^pi mcp list(\s|$)'
