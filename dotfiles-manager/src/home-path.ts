@@ -7,7 +7,10 @@ import { mapSegment } from "./path-mapping.ts";
 export function homeRelPath(distRelPath: string): string {
   const segments = distRelPath.split("/");
   return segments
-    .map((segment, index) => mapSegment(segment, index < segments.length - 1).homeName)
+    .map((segment, index) => {
+      const isLastSegment = index === segments.length - 1;
+      return mapSegment(segment, !isLastSegment).homeName;
+    })
     .join("/");
 }
 
@@ -17,26 +20,35 @@ export function resolvePaths(
   homeRoot: string,
   path: string,
 ): { distPath: string; homePath: string } {
-  const lastSegment = path.split(/[\\/]/).at(-1);
-  if (
-    path === "" ||
-    isAbsolute(path) ||
-    !lastSegment ||
-    lastSegment === "." ||
-    lastSegment === ".."
-  ) {
+  if (!isRelativeFilePath(path)) {
     throw new Error(`build hook path must be a relative file path inside dist: ${path}`);
   }
   const distPath = resolve(hookDistDir, path);
   const distRelPath = relative(resolve(distDir), distPath);
-  if (
-    distRelPath === "" ||
-    distRelPath === ".." ||
-    distRelPath.startsWith(`..${sep}`) ||
-    isAbsolute(distRelPath)
-  ) {
+  if (!isInsideDist(distRelPath)) {
     throw new Error(`build hook path must be a relative file path inside dist: ${path}`);
   }
   const homePath = join(resolve(homeRoot), homeRelPath(distRelPath.split(sep).join("/")));
   return { distPath, homePath };
+}
+
+function isRelativeFilePath(path: string): boolean {
+  const lastSegment = path.split(/[\\/]/).at(-1);
+  return (
+    path !== "" &&
+    !isAbsolute(path) &&
+    lastSegment !== undefined &&
+    lastSegment !== "" &&
+    lastSegment !== "." &&
+    lastSegment !== ".."
+  );
+}
+
+function isInsideDist(distRelPath: string): boolean {
+  return (
+    distRelPath !== "" &&
+    distRelPath !== ".." &&
+    !distRelPath.startsWith(`..${sep}`) &&
+    !isAbsolute(distRelPath)
+  );
 }

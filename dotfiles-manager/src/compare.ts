@@ -8,6 +8,10 @@ export function comparesExecutableBits(platform: string): boolean {
   return platform === "linux" || platform === "darwin";
 }
 
+export function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export async function lstatOrNull(path: string): Promise<Stats | null> {
   try {
     return await lstat(path);
@@ -25,7 +29,7 @@ export async function readSymlinkTarget(distAbs: string): Promise<string> {
 }
 
 export async function fileDiffers(distAbs: string, homeAbs: string): Promise<boolean> {
-  return (await compareFiles(distAbs, homeAbs)).differs;
+  return compareFiles(distAbs, homeAbs);
 }
 
 export async function symlinkDiffers(distAbs: string, homeAbs: string): Promise<boolean> {
@@ -53,10 +57,7 @@ export async function entryDiffers(
   );
 }
 
-export async function compareFiles(
-  firstPath: string,
-  secondPath: string,
-): Promise<{ differs: boolean; isText: boolean }> {
+export async function compareFiles(firstPath: string, secondPath: string): Promise<boolean> {
   const [first, second]: [Uint8Array, Uint8Array] = await Promise.all([
     readFile(firstPath),
     readFile(secondPath),
@@ -64,11 +65,8 @@ export async function compareFiles(
   const firstText = decodeText(first);
   const secondText = decodeText(second);
   if (firstText !== null && secondText !== null)
-    return { differs: normalizeText(firstText) !== normalizeText(secondText), isText: true };
-  return {
-    differs: first.length !== second.length || first.some((byte, index) => byte !== second[index]),
-    isText: false,
-  };
+    return normalizeText(firstText) !== normalizeText(secondText);
+  return first.length !== second.length || first.some((byte, index) => byte !== second[index]);
 }
 
 function decodeText(bytes: Uint8Array): string | null {

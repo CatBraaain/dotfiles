@@ -18,104 +18,171 @@ import type { DiffEntry, DiffResult } from "./diff.ts";
 
 type Section = { label: string; paths: string[]; body: string[] };
 
+type DiffOptions = { distRoot: string; homeRoot: string };
+
 export async function renderDiffs(
   result: DiffResult,
-  options: { distRoot: string; homeRoot: string },
+  options: DiffOptions,
 ): Promise<void> {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "diff-render-"));
   try {
-    const display = temporaryRoot;
-    await mkdir(join(display, "a"));
-    await mkdir(join(display, "b"));
-    const addedPaths: string[] = [];
-    const removedPaths: string[] = [];
-    for (const entry of result.added) {
-      const source = distAbsolutePath(entry, options.distRoot);
-      if ((await lstatOrNull(source))?.isDirectory()) continue;
-      addedPaths.push(...(await snapshot(source, join(display, "b"), entry.homePath, true)));
-    }
-    for (const entry of result.removedExact) {
-      const source = join(options.homeRoot, entry.homePath);
-      removedPaths.push(...(await snapshot(source, join(display, "a"), entry.homePath, false)));
-    }
-
-    const renames = await detectRenames(display);
-    const matchedOld = new Set(renames.map((rename) => rename.oldPath));
-    const matchedNew = new Set(renames.map((rename) => rename.newPath));
-    const sections: Section[] = [];
-    for (const entry of result.changed) {
-      await snapshot(
-        join(options.homeRoot, entry.homePath),
-        join(display, "a"),
-        entry.homePath,
-        false,
-      );
-      await snapshot(
-        distAbsolutePath(entry, options.distRoot),
-        join(display, "b"),
-        entry.homePath,
-        true,
-      );
-      const body = patchBody(await contentPatch(display, entry.homePath, entry.homePath));
-      if (body.length > 0) sections.push({ label: "Modified", paths: [entry.homePath], body });
-    }
-    // Type mismatches follow the apply semantics (spec §適用: delete the home
-    // entry and add the dist entry), rendering each side as its own section
-    // like unmatched candidates instead of one concatenated Modified body.
-    for (const entry of result.typeMismatches) {
-      const oldLeaves = await snapshot(
-        join(options.homeRoot, entry.homePath),
-        join(display, "a"),
-        entry.homePath,
-        false,
-      );
-      const newLeaves = await snapshot(
-        distAbsolutePath(entry, options.distRoot),
-        join(display, "b"),
-        entry.homePath,
-        true,
-      );
-      for (const path of oldLeaves) {
-        sections.push({
-          label: "Deleted",
-          paths: [path],
-          body: patchBody(await contentPatch(display, path, null)),
-        });
-      }
-      for (const path of newLeaves) {
-        sections.push({
-          label: "Added",
-          paths: [path],
-          body: patchBody(await contentPatch(display, null, path)),
-        });
-      }
-    }
-    for (const rename of renames) {
-      const body = patchBody(await contentPatch(display, rename.oldPath, rename.newPath));
-      sections.push({ label: "Renamed", paths: [rename.oldPath, rename.newPath], body });
-    }
-    for (const path of addedPaths) {
-      if (!matchedNew.has(path)) {
-        sections.push({
-          label: "Added",
-          paths: [path],
-          body: patchBody(await contentPatch(display, null, path)),
-        });
-      }
-    }
-    for (const path of removedPaths) {
-      if (!matchedOld.has(path)) {
-        sections.push({
-          label: "Deleted",
-          paths: [path],
-          body: patchBody(await contentPatch(display, path, null)),
-        });
-      }
-    }
+    const { addedPaths, removedPaths } = await snapshotSides(result, options, temporaryRoot);
+    const renames = await detectRenames(temporaryRoot);
+    const sections = await buildSections(result, options, temporaryRoot, {
+      addedPaths,
+      removedPaths,
+      renames,
+    });
     if (sections.length > 0) process.stdout.write(renderSections(sections));
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+}
+
+async function snapshotSides(
+  result: DiffResult,
+  options: DiffOptions,
+  display: string,
+): Promise<{ addedPaths: string[]; removedPaths: string[] }> {
+  await mkdir(join(display, "a"));
+  await mkdir(join(display, "b"));
+  const addedPaths: string[] = [];
+  const removedPaths: string[] = [];
+  for (const entry of result.added) {
+    const source = distAbsolutePath(entry, options.distRoot);
+    if ((await lstatOrNull(source))?.isDirectory()) continue;
+    addedPaths.push(...(await snapshot(source, join(display, "b"), entry.homePath, "dist")));
+  }
+  for (const entry of result.removedExact) {
+    const source = join(options.homeRoot, entry.homePath);
+    removedPaths.push(...(await snapshot(source, join(display, "a"), entry.homePath, "home")));
+  }
+  return { addedPaths, removedPaths };
+}
+
+async function buildSections(
+  result: DiffResult,
+  options: DiffOptions,
+  display: string,
+  snapshotOutcome: { addedPaths: string[]; removedPaths: string[]; renames: Rename[] },
+): Promise<Section[]> {
+  const matchedOld = new Set(snapshotOutcome.renames.map((rename) => rename.oldPath));
+  const matchedNew = new Set(snapshotOutcome.renames.map((rename) => rename.newPath));
+  return [
+    ...(await changedSections(result, options, display)),
+    ...(await typeMismatchSections(result, options, display)),
+    ...(await renamedSections(display, snapshotOutcome.renames)),
+    ...(await addedSections(display, snapshotOutcome.addedPaths, matchedNew)),
+    ...(await removedSections(display, snapshotOutcome.removedPaths, matchedOld)),
+  ];
+}
+
+async function changedSections(
+  result: DiffResult,
+  options: DiffOptions,
+  display: string,
+): Promise<Section[]> {
+  const sections: Section[] = [];
+  for (const entry of result.changed) {
+    await snapshot(
+      join(options.homeRoot, entry.homePath),
+      join(display, "a"),
+      entry.homePath,
+      "home",
+    );
+    await snapshot(
+      distAbsolutePath(entry, options.distRoot),
+      join(display, "b"),
+      entry.homePath,
+      "dist",
+    );
+    const body = patchBody(await contentPatch(display, entry.homePath, entry.homePath));
+    if (body.length > 0) sections.push({ label: "Modified", paths: [entry.homePath], body });
+  }
+  return sections;
+}
+
+// Type mismatches follow the apply semantics (spec §適用: delete the home
+// entry and add the dist entry), rendering each side as its own section
+// like unmatched candidates instead of one concatenated Modified body.
+async function typeMismatchSections(
+  result: DiffResult,
+  options: DiffOptions,
+  display: string,
+): Promise<Section[]> {
+  const sections: Section[] = [];
+  for (const entry of result.typeMismatches) {
+    const oldLeaves = await snapshot(
+      join(options.homeRoot, entry.homePath),
+      join(display, "a"),
+      entry.homePath,
+      "home",
+    );
+    const newLeaves = await snapshot(
+      distAbsolutePath(entry, options.distRoot),
+      join(display, "b"),
+      entry.homePath,
+      "dist",
+    );
+    for (const path of oldLeaves) {
+      sections.push({
+        label: "Deleted",
+        paths: [path],
+        body: patchBody(await contentPatch(display, path, null)),
+      });
+    }
+    for (const path of newLeaves) {
+      sections.push({
+        label: "Added",
+        paths: [path],
+        body: patchBody(await contentPatch(display, null, path)),
+      });
+    }
+  }
+  return sections;
+}
+
+async function renamedSections(display: string, renames: Rename[]): Promise<Section[]> {
+  const sections: Section[] = [];
+  for (const rename of renames) {
+    const body = patchBody(await contentPatch(display, rename.oldPath, rename.newPath));
+    sections.push({ label: "Renamed", paths: [rename.oldPath, rename.newPath], body });
+  }
+  return sections;
+}
+
+async function addedSections(
+  display: string,
+  addedPaths: string[],
+  matchedNew: Set<string>,
+): Promise<Section[]> {
+  const sections: Section[] = [];
+  for (const path of addedPaths) {
+    if (matchedNew.has(path)) continue;
+    sections.push({
+      label: "Added",
+      paths: [path],
+      body: patchBody(await contentPatch(display, null, path)),
+    });
+  }
+  return sections;
+}
+
+async function removedSections(
+  display: string,
+  removedPaths: string[],
+  matchedOld: Set<string>,
+): Promise<Section[]> {
+  const sections: Section[] = [];
+  for (const path of removedPaths) {
+    if (matchedOld.has(path)) continue;
+    sections.push({
+      label: "Deleted",
+      paths: [path],
+      body: patchBody(await contentPatch(display, path, null)),
+    });
+  }
+  return sections;
 }
 
 type Rename = { oldPath: string; newPath: string };
@@ -153,9 +220,9 @@ async function contentPatch(
     // mode-only changes still render their old mode / new mode lines. One-sided
     // inputs (additions, deletions) never take this branch, so an empty added
     // entry renders a heading-only section instead of being suppressed.
-    const comparison = await compareFiles(join(root, firstPath), join(root, secondPath));
+    const differs = await compareFiles(join(root, firstPath), join(root, secondPath));
     const sameMode = (firstStat.mode & 0o777) === (secondStat.mode & 0o777);
-    if (!comparison.differs && sameMode) return "";
+    if (!differs && sameMode) return "";
   }
   const flags = ["--no-renames", "--color=never", "--no-prefix"];
   if (firstStat?.isDirectory() || secondStat?.isDirectory()) {
@@ -163,9 +230,9 @@ async function contentPatch(
     await mkdir(join(pairRoot, "a"));
     await mkdir(join(pairRoot, "b"));
     if (oldPath !== null)
-      await snapshot(join(root, firstPath), join(pairRoot, "a"), oldPath, false);
+      await snapshot(join(root, firstPath), join(pairRoot, "a"), oldPath, "home");
     if (newPath !== null)
-      await snapshot(join(root, secondPath), join(pairRoot, "b"), newPath, false);
+      await snapshot(join(root, secondPath), join(pairRoot, "b"), newPath, "home");
     return gitDiff(pairRoot, flags, "a", "b");
   }
   return gitDiff(root, flags, firstPath, secondPath);
@@ -231,22 +298,22 @@ function renderHeading(label: string, paths: string[]): string {
 
 function colorizeBodyLine(line: string, tty: boolean): string {
   if (!tty) return line;
-  if (line.startsWith("@@")) return gray(line, true);
-  if (line.startsWith("+")) return green(line, true);
-  if (line.startsWith("-")) return red(line, true);
+  if (line.startsWith("@@")) return gray(line);
+  if (line.startsWith("+")) return green(line);
+  if (line.startsWith("-")) return red(line);
   return line;
 }
 
-function gray(text: string, tty: boolean): string {
-  return tty ? `\x1b[90m${text}\x1b[m` : text;
+function gray(text: string): string {
+  return `\x1b[90m${text}\x1b[m`;
 }
 
-function green(text: string, tty: boolean): string {
-  return tty ? `\x1b[32m${text}\x1b[m` : text;
+function green(text: string): string {
+  return `\x1b[32m${text}\x1b[m`;
 }
 
-function red(text: string, tty: boolean): string {
-  return tty ? `\x1b[31m${text}\x1b[m` : text;
+function red(text: string): string {
+  return `\x1b[31m${text}\x1b[m`;
 }
 
 // ------------------------------------------------------------ patch parsing
@@ -338,11 +405,13 @@ function inRanges(code: number, ranges: readonly (readonly [number, number])[]):
 
 // --------------------------------------------------------------- snapshots
 
+type SnapshotSide = "dist" | "home";
+
 async function snapshot(
   source: string,
   root: string,
   homePath: string,
-  isDist: boolean,
+  side: SnapshotSide,
 ): Promise<string[]> {
   const stat = await lstatOrNull(source);
   if (!stat) return [];
@@ -353,16 +422,16 @@ async function snapshot(
     const leaves: string[] = [];
     for (const entry of await readdir(source, { withFileTypes: true })) {
       const mapping = mapSegment(entry.name, entry.isDirectory());
-      if (isDist && mapping.isExcluded) continue;
-      const name = isDist ? mapping.homeName : entry.name;
+      if (side === "dist" && mapping.isExcluded) continue;
+      const name = side === "dist" ? mapping.homeName : entry.name;
       leaves.push(
-        ...(await snapshot(join(source, entry.name), root, `${homePath}/${name}`, isDist)),
+        ...(await snapshot(join(source, entry.name), root, `${homePath}/${name}`, side)),
       );
     }
     return leaves;
   }
   const mapping = mapSegment(source.split(/[\\/]/).at(-1)!, false);
-  if (stat.isSymbolicLink() || (isDist && mapping.kind === "symlink")) {
+  if (stat.isSymbolicLink() || (side === "dist" && mapping.kind === "symlink")) {
     await symlink(
       stat.isSymbolicLink() ? await readlink(source) : await readSymlinkTarget(source),
       destination,
@@ -370,7 +439,7 @@ async function snapshot(
   } else if (stat.isFile()) {
     await copyFile(source, destination);
     if (comparesExecutableBits(process.platform)) {
-      const executable = isDist ? mapping.isExecutable : (stat.mode & 0o100) !== 0;
+      const executable = side === "dist" ? mapping.isExecutable : (stat.mode & 0o100) !== 0;
       await chmod(destination, executable ? 0o755 : 0o644);
     }
   } else {

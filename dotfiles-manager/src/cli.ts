@@ -17,12 +17,10 @@ export async function main(
   const yes = args.includes("--yes");
   const rest = args.filter((argument) => argument !== "--yes");
   const [command] = rest;
-  if (
-    rest.length !== 1 ||
-    (command !== "apply" && command !== "diff" && command !== "managed") ||
-    (yes && command !== "apply")
-  )
-    throw new Error(usage);
+  const isSingleArgument = rest.length === 1;
+  const isKnownCommand = command === "apply" || command === "diff" || command === "managed";
+  const isYesAllowed = !yes || command === "apply";
+  if (!isSingleArgument || !isKnownCommand || !isYesAllowed) throw new Error(usage);
 
   const started = performance.now();
   // Resolved once here and shared with build, externals and the GitAlias hook
@@ -49,11 +47,8 @@ async function logBuild(root: string, homeRoot: string, wsl?: WslConnection): Pr
   const started = performance.now();
   console.log("Build started");
   try {
-    await build(
-      root,
-      undefined,
-      homeRoot,
-      (path, status, elapsedSeconds, stdoutNeedsNewline) => {
+    await build(root, undefined, homeRoot, {
+      onHookEvent: (path, status, elapsedSeconds, stdoutNeedsNewline) => {
         if (status === "start") {
           console.log(`  Running ${path}`);
           return;
@@ -63,9 +58,9 @@ async function logBuild(root: string, homeRoot: string, wsl?: WslConnection): Pr
           `  ${status === "success" ? "✓" : "✗"} ${path} (${elapsedSeconds.toFixed(2)}s)`,
         );
       },
-      (phase, elapsedSeconds) => console.log(`  ${phase} (${elapsedSeconds.toFixed(2)}s)`),
-      wsl,
-    );
+      onPhase: (phase, elapsedSeconds) => console.log(`  ${phase} (${elapsedSeconds.toFixed(2)}s)`),
+      connection: wsl,
+    });
     console.log(`Build complete (${elapsedSeconds(started)}s)`);
   } catch (error) {
     console.log(`Build failed (${elapsedSeconds(started)}s)`);

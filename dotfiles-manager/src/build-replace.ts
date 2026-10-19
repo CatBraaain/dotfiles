@@ -17,22 +17,22 @@ export function parseReplaceSidecar(content: string, sidecarPath: string): Repla
   if (!Array.isArray(replacements))
     throw new Error(`replace sidecar must have a replacements array: ${sidecarPath}`);
   return replacements.map((raw, index) => {
-    if (
-      typeof raw !== "object" ||
-      raw === null ||
-      Array.isArray(raw) ||
-      typeof (raw as { pattern?: unknown }).pattern !== "string" ||
-      typeof (raw as { replacement?: unknown }).replacement !== "string"
-    ) {
+    if (!isReplacementEntry(raw))
       throw new Error(
         `replace sidecar entry ${index} must map pattern and replacement to strings: ${sidecarPath}`,
       );
-    }
-    return {
-      pattern: (raw as { pattern: string }).pattern,
-      replacement: (raw as { replacement: string }).replacement,
-    };
+    return { pattern: raw.pattern, replacement: raw.replacement };
   });
+}
+
+function isReplacementEntry(value: unknown): value is Replacement {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { pattern?: unknown }).pattern === "string" &&
+    typeof (value as { replacement?: unknown }).replacement === "string"
+  );
 }
 
 // Replacements apply top to bottom; every match of each pattern is replaced

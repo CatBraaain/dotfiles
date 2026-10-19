@@ -420,13 +420,10 @@ if (import.meta.main) {
       const hookEvents: string[] = [];
 
       await assert.rejects(
-        main(
-          root,
-          "linux",
-          homeRoot,
-          (path, status) => hookEvents.push(`${path}:${status}`),
-          (phase) => phases.push(phase),
-        ),
+        main(root, "linux", homeRoot, {
+          onHookEvent: (path, status) => hookEvents.push(`${path}:${status}`),
+          onPhase: (phase) => phases.push(phase),
+        }),
         error,
       );
 
@@ -1384,7 +1381,9 @@ const context = await buildHookContext();
     );
     const hookEvents: string[] = [];
 
-    await main(root, "linux", homeRoot, (path, status) => hookEvents.push(`${path}:${status}`));
+    await main(root, "linux", homeRoot, {
+      onHookEvent: (path, status) => hookEvents.push(`${path}:${status}`),
+    });
 
     assert.equal(existsSync(join(distRoot, "vscode")), false);
     assert.equal(existsSync(join(distRoot, "staged-vscode")), false);
@@ -1449,8 +1448,10 @@ const context = await buildHookContext();
     await put(root, "dotfiles/vscode/settings.json", '{"editor.fontSize":12}');
     const hookEvents: string[] = [];
 
-    await main(root, "windows", homeRoot, (path, status) => {
-      if (status === "success") hookEvents.push(path);
+    await main(root, "windows", homeRoot, {
+      onHookEvent: (path, status) => {
+        if (status === "success") hookEvents.push(path);
+      },
     });
 
     const movedPath = join(distRoot, "AppData/Roaming/Code/User");
@@ -1477,8 +1478,10 @@ const context = await buildHookContext();
       `import { writeFile } from "node:fs/promises";\nif (import.meta.main) { await writeFile("hook-ran.txt", "ran\\n"); }`,
     );
 
-    await main(root, "darwin", homeRoot, (path, status) => {
-      if (status === "start") hookEvents.push(path);
+    await main(root, "darwin", homeRoot, {
+      onHookEvent: (path, status) => {
+        if (status === "start") hookEvents.push(path);
+      },
     });
 
     assert.deepEqual(hookEvents, []);

@@ -8,7 +8,7 @@ const { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } 
 import { dirname, join, resolve } from "node:path";
 import { Stream } from "node:stream";
 import { expandHomeRoot, positionalArguments } from "./args.ts";
-import { comparesExecutableBits, readSymlinkTarget } from "./compare.ts";
+import { compareCodeUnits, comparesExecutableBits, readSymlinkTarget } from "./compare.ts";
 import { collectDifferences, main as diffMain, type DiffEntry, type DiffResult } from "./diff.ts";
 import { renderDiffs } from "./diff-render.ts";
 import {
@@ -32,6 +32,14 @@ export type Declarations = {
 };
 
 type RenameFile = (source: string, destination: string) => Promise<void>;
+
+type ApplyContext = {
+  distRoot: string;
+  homeRoot: string;
+  platform: string;
+  applied: ApplyResult;
+  renameFile: RenameFile;
+};
 
 const usage =
   "usage: bun dotfiles-manager/src/apply.ts [--dry-run] [--yes] <distRoot> <homeRoot> [--json]";
@@ -68,17 +76,9 @@ export async function applyDifferences(
     ...result.typeMismatches.map((entry) => ({ entry, isChange: false, recurseDirectory: true })),
     ...result.changed.map((entry) => ({ entry, isChange: true, recurseDirectory: false })),
   ].sort((left, right) => compareCodeUnits(left.entry.homePath, right.entry.homePath));
+  const ctx: ApplyContext = { distRoot, homeRoot, platform, applied, renameFile };
   for (const { entry, isChange, recurseDirectory } of entries)
-    await applyEntry(
-      distRoot,
-      homeRoot,
-      entry,
-      isChange,
-      recurseDirectory,
-      platform,
-      applied,
-      renameFile,
-    );
+    await applyEntry(ctx, entry, { isChange, recurseDirectory });
 
   applied.added.sort(compareCodeUnits);
   applied.changed.sort(compareCodeUnits);
@@ -242,18 +242,13 @@ function readOneLine(input: Stream | NodeJS.ReadableStream): Promise<string> {
 let tempCounter = 0;
 
 async function applyEntry(
-  distRoot: string,
-  homeRoot: string,
+  ctx: ApplyContext,
   entry: DiffEntry,
-  isChange: boolean,
-  recurseDirectory: boolean,
-  platform: string,
-  applied: ApplyResult,
-  renameFile: RenameFile,
+  behavior: { isChange: boolean; recurseDirectory: boolean },
 ): Promise<void> {
   if (entry.distPath === null) throw new Error(`entry has no dist path: ${entry.homePath}`);
-  const distAbs = join(distRoot, entry.distPath);
-  const homeAbs = join(homeRoot, entry.homePath);
+  const distAbs = join(ctx.distRoot, entry.distPath);
+  const homeAbs = join(ctx.homeRoot, entry.homePath);
   try {
     await mkdir(dirname(homeAbs), { recursive: true });
     const stat = await lstat(distAbs);
@@ -261,16 +256,7 @@ async function applyEntry(
     if (mapping.kind === "directory") {
       await mkdir(homeAbs, { recursive: true });
       // Added directory children are listed separately; type-mismatch children are not.
-      if (recurseDirectory)
-        await applyTree(
-          distRoot,
-          homeRoot,
-          entry.distPath,
-          entry.homePath,
-          platform,
-          applied,
-          renameFile,
-        );
+      if (behavior.recurseDirectory) await applyTree(ctx, entry.distPath, entry.homePath);
     } else if (mapping.kind === "symlink") {
       // A .symlink entry is a plain file in dist; the target is its content
       // with one trailing newline stripped (spec §.symlink の解釈).
@@ -281,44 +267,31 @@ async function applyEntry(
       // so no half-written state ever appears at the home path.
       const tempPath = `${homeAbs}.apply-tmp-${process.pid}-${tempCounter++}`;
       await copyFile(distAbs, tempPath);
-      if (comparesExecutableBits(platform)) {
+      if (comparesExecutableBits(ctx.platform)) {
         const mode = stat.mode & 0o7777;
         await chmod(tempPath, mapping.isExecutable ? mode | 0o100 : mode & ~0o100);
-      } else if (isChange) {
+      } else if (behavior.isChange) {
         // Preserve the existing mode when replacing content on Windows;
         // copyFile otherwise carries the dist file's executable bit over.
         const previous = await lstat(homeAbs);
         await chmod(tempPath, previous.mode & 0o7777);
       }
-      await renameFile(tempPath, homeAbs);
+      await ctx.renameFile(tempPath, homeAbs);
     }
   } catch (error) {
     throw new Error(`apply failed: ${entry.homePath}: ${messageOf(error)}`);
   }
-  (isChange ? applied.changed : applied.added).push(entry.homePath);
+  (behavior.isChange ? ctx.applied.changed : ctx.applied.added).push(entry.homePath);
 }
 
-async function applyTree(
-  distRoot: string,
-  homeRoot: string,
-  distRel: string,
-  homeRel: string,
-  platform: string,
-  applied: ApplyResult,
-  renameFile: RenameFile,
-): Promise<void> {
-  for (const dirent of await readdir(join(distRoot, distRel), { withFileTypes: true })) {
+async function applyTree(ctx: ApplyContext, distRel: string, homeRel: string): Promise<void> {
+  for (const dirent of await readdir(join(ctx.distRoot, distRel), { withFileTypes: true })) {
     const mapping = mapSegment(dirent.name, dirent.isDirectory());
     if (mapping.isExcluded) continue;
     await applyEntry(
-      distRoot,
-      homeRoot,
+      ctx,
       { homePath: `${homeRel}/${mapping.homeName}`, distPath: `${distRel}/${dirent.name}` },
-      false,
-      true,
-      platform,
-      applied,
-      renameFile,
+      { isChange: false, recurseDirectory: true },
     );
   }
 }
@@ -377,10 +350,6 @@ async function spawnChild(
 }
 
 // -------------------------------------------------------------------- helpers
-
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

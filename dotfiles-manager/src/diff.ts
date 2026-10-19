@@ -5,7 +5,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expandHomeRoot, positionalArguments } from "./args.ts";
-import { entryDiffers, lstatOrNull } from "./compare.ts";
+import { compareCodeUnits, entryDiffers, lstatOrNull } from "./compare.ts";
 import { renderDiffs } from "./diff-render.ts";
 import { mapSegment, type EntryKind } from "./path-mapping.ts";
 import type { Stats } from "node:fs";
@@ -55,7 +55,7 @@ export async function collectDifferences(
     removedExact: [],
     removedIgnored: [],
   };
-  await walk("", "", false, false, { distRoot, homeRoot, platform, result });
+  await walk("", "", { isExactScope: false, scanForSurplus: false }, { distRoot, homeRoot, platform, result });
   for (const entries of Object.values(result))
     entries.sort((a, b) => compareCodeUnits(a.homePath, b.homePath));
   return result;
@@ -131,11 +131,12 @@ type WalkContext = {
   result: DiffResult;
 };
 
+type WalkScope = { isExactScope: boolean; scanForSurplus: boolean };
+
 async function walk(
   distRel: string,
   homeRel: string,
-  isExactScope: boolean,
-  scanForSurplus: boolean,
+  scope: WalkScope,
   ctx: WalkContext,
 ): Promise<void> {
   const distDir = join(ctx.distRoot, distRel);
@@ -172,7 +173,12 @@ async function walk(
       // Exact scope covers only the direct children of a .exact directory
       // (spec §.exact の解釈); it does not propagate into child directories.
       const childIsExactScope = mapping.isExactManaged;
-      await walk(childDistRel, childHomeRel, childIsExactScope, true, ctx);
+      await walk(
+        childDistRel,
+        childHomeRel,
+        { isExactScope: childIsExactScope, scanForSurplus: true },
+        ctx,
+      );
       continue;
     }
 
@@ -185,13 +191,13 @@ async function walk(
 
   // Surplus scan: only below dist-managed directories (never at the home
   // root). Unmanaged top-level home entries are ignored.
-  if (!scanForSurplus) return;
+  if (!scope.scanForSurplus) return;
   for (const homeEntry of await readdir(homeDir, { withFileTypes: true })) {
     if (knownHomeNames.has(homeEntry.name)) continue;
     const surplusRel = homeRel === "" ? homeEntry.name : `${homeRel}/${homeEntry.name}`;
     // A surplus directory is reported as one entry (removed with its subtree
     // on apply), so its contents are not enumerated.
-    ctx.result[isExactScope ? "removedExact" : "removedIgnored"].push({
+    ctx.result[scope.isExactScope ? "removedExact" : "removedIgnored"].push({
       homePath: surplusRel,
       distPath: null,
     });
@@ -217,10 +223,6 @@ function kindOfStat(stat: Stats): EntryKind {
 
 function paths(entry: DiffEntry): string {
   return entry.homePath;
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 if (import.meta.main) {

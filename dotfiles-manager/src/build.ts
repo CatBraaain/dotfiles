@@ -16,15 +16,20 @@ export type Platform = "windows" | "linux" | "darwin";
 export type BuildPhase = "rebuild dist" | "path map" | "externals" | "merge" | "replace";
 export type PhaseEvent = (phase: BuildPhase, elapsedSeconds: number) => void;
 
+type BuildOptions = {
+  onHookEvent?: HookEvent;
+  onPhase?: PhaseEvent;
+  connection?: WslConnection;
+};
+
 export async function main(
   root = process.cwd(),
   platform: Platform = currentPlatform(),
   homeRoot = homedir(),
-  onHookEvent?: HookEvent,
-  onPhase?: PhaseEvent,
-  connection?: WslConnection,
+  options: BuildOptions = {},
 ): Promise<void> {
   assertPlatform(platform);
+  const { onHookEvent, onPhase, connection } = options;
   const wsl = connection ?? (await resolveWsl(root));
   const sourceDir = join(root, "dotfiles");
   const distDir = join(root, "dist");

@@ -13,6 +13,10 @@ export function isApplyScriptName(name: string): boolean {
   return applyScriptNamePattern.test(name);
 }
 
+export function isBuildHookName(name: string): boolean {
+  return buildHookNamePattern.test(name);
+}
+
 export type SegmentMapping = {
   homeName: string;
   kind: EntryKind;
@@ -28,7 +32,7 @@ export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
     name.includes(".data.") ||
     name === "external.data-machine.yaml" ||
-    (!isDirectory && (isApplyScriptName(name) || buildHookNamePattern.test(name)));
+    (!isDirectory && (isApplyScriptName(name) || isBuildHookName(name)));
   if (isExcluded)
     return {
       homeName: name,

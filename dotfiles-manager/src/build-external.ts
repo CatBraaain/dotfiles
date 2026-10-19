@@ -1,5 +1,5 @@
 // Materialize external.data.yaml entries from GitHub mirrors after all path maps.
-import { existsSync, statSync } from "node:fs";
+import { type Dirent, existsSync, statSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -155,13 +155,19 @@ async function syncMirror(
   const before = await readRevision(repo, mirrorDir, context);
   const result = await run(["-C", mirrorDir, "pull", "--ff-only", "--quiet"]);
   if (!result.ok) {
-    await readdir(mirrorDir);
+    await assertMirrorAccessible(mirrorDir);
     console.error(`warning: git pull failed for ${repo}: ${singleLine(result.stderr)}`);
     return { mirrorDir, changed: false };
   }
   const after = await readRevision(repo, mirrorDir, context);
   await markPullAt(mirrorDir);
   return { mirrorDir, changed: before !== after };
+}
+
+// Throws when the mirror directory vanished, so a missing mirror becomes a
+// hard failure instead of a pull warning.
+async function assertMirrorAccessible(mirrorDir: string): Promise<void> {
+  await readdir(mirrorDir);
 }
 
 function isPullDue(
@@ -184,16 +190,25 @@ async function resolveEntryPath(mirrorDir: string, path: string): Promise<string
   return matches[0]!;
 }
 
-async function copySkillTree(sourceDir: string, targetDir: string): Promise<void> {
+async function copyTree(
+  sourceDir: string,
+  targetDir: string,
+  shouldCopy: (entry: Dirent, targetPath: string) => boolean,
+): Promise<void> {
   await mkdir(targetDir, { recursive: true });
   for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (entry.name === ".git") continue;
-
     const sourcePath = join(sourceDir, entry.name);
     const targetPath = join(targetDir, entry.name);
-    if (entry.isDirectory()) await copySkillTree(sourcePath, targetPath);
-    else if (!existsSync(targetPath)) await copyFile(sourcePath, targetPath);
+    if (!shouldCopy(entry, targetPath)) continue;
+    if (entry.isDirectory()) await copyTree(sourcePath, targetPath, shouldCopy);
+    else await copyFile(sourcePath, targetPath);
   }
+}
+
+// Skill trees skip VCS metadata and never overwrite files already present in
+// the destination.
+function shouldCopySkillEntry(entry: Dirent, targetPath: string): boolean {
+  return entry.name !== ".git" && (entry.isDirectory() || !existsSync(targetPath));
 }
 
 async function readLastPullAt(mirrorDir: string): Promise<number | undefined> {
@@ -237,7 +252,7 @@ async function copyRepoEntries(
     const skillDir = entryPath;
     const entryEdits = resolvedEdits.filter(({ filePath }) => isPathInside(skillDir, filePath));
     if (entryEdits.length === 0) {
-      await copySkillTree(skillDir, join(destinationDir, basename(skillDir)));
+      await copyTree(skillDir, join(destinationDir, basename(skillDir)), shouldCopySkillEntry);
       continue;
     }
 
@@ -247,7 +262,7 @@ async function copyRepoEntries(
     await mkdir(stagingParent, { recursive: true });
     const stagingDir = await mkdtemp(join(stagingParent, "external-edit-"));
     try {
-      await copyRawTree(skillDir, stagingDir);
+      await copyTree(skillDir, stagingDir, () => true);
       for (const edit of entryEdits) {
         try {
           await appendEditedFile(join(stagingDir, relative(skillDir, edit.filePath)), edit.text);
@@ -257,7 +272,7 @@ async function copyRepoEntries(
         }
         appliedEditIndexes.add(edit.index);
       }
-      await copySkillTree(stagingDir, join(destinationDir, basename(skillDir)));
+      await copyTree(stagingDir, join(destinationDir, basename(skillDir)), shouldCopySkillEntry);
     } finally {
       await rm(stagingDir, { recursive: true, force: true });
     }
@@ -282,16 +297,6 @@ function resolveEditFile(mirrorDir: string, path: string): string {
 function isPathInside(parentDir: string, candidatePath: string): boolean {
   const childPath = relative(parentDir, candidatePath);
   return childPath !== "" && !childPath.startsWith("..") && !isAbsolute(childPath);
-}
-
-async function copyRawTree(sourceDir: string, targetDir: string): Promise<void> {
-  await mkdir(targetDir, { recursive: true });
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    const sourcePath = join(sourceDir, entry.name);
-    const targetPath = join(targetDir, entry.name);
-    if (entry.isDirectory()) await copyRawTree(sourcePath, targetPath);
-    else await copyFile(sourcePath, targetPath);
-  }
 }
 
 async function appendEditedFile(filePath: string, text: string): Promise<void> {

@@ -4,12 +4,14 @@
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { compareCodeUnits } from "./compare.ts";
 import {
   ensureHookDirectory,
   removeEmptyHookDirectories,
   removeHookSnapshot,
   writeHookSnapshot,
 } from "./hook-runner.ts";
+import { isBuildHookName } from "./path-mapping.ts";
 
 type Hook = { absolutePath: string; relativeParent: string; name: string; contents: string };
 
@@ -20,8 +22,6 @@ export type HookEvent = (
   stdoutNeedsNewline?: boolean,
 ) => void;
 
-const hookNamePattern = /\.build(?:-machine)?\.[^.]+$/;
-
 export async function collectHooks(distDir: string): Promise<Hook[]> {
   const hooks: Hook[] = [];
   async function walk(directory: string, relativeParent: string): Promise<void> {
@@ -29,7 +29,7 @@ export async function collectHooks(distDir: string): Promise<Hook[]> {
       compareCodeUnits(left.name, right.name),
     );
     for (const entry of entries) {
-      if (!entry.isFile() || !hookNamePattern.test(entry.name)) continue;
+      if (!entry.isFile() || !isBuildHookName(entry.name)) continue;
       const entryPath = join(directory, entry.name);
       hooks.push({
         absolutePath: entryPath,
@@ -52,10 +52,6 @@ function hookRelativePath(hook: Hook): string {
   return hook.relativeParent === "" ? hook.name : `${hook.relativeParent}/${hook.name}`;
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 export async function runHooks(
   hooks: Hook[],
   distDir: string,
@@ -63,57 +59,67 @@ export async function runHooks(
   onHookEvent?: HookEvent,
 ): Promise<void> {
   for (const hook of hooks) {
-    const relativePath = hookRelativePath(hook);
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
     // Skip hooks whose folder an earlier hook removed or moved (spec:
     // SPEC.md §build: ローカルフック 検出と順序).
     if (!existsSync(hookDistDir)) continue;
-    const started = performance.now();
-    const stdoutState = { needsNewline: false };
-    onHookEvent?.(relativePath, "start", 0);
-    try {
-      const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
-      try {
-        if (!relativePath.endsWith(".ts"))
-          throw new Error(`build hook has unsupported extension: ${relativePath}`);
+    await runHook(hook, hookDistDir, distDir, homeRoot, onHookEvent);
+  }
+}
 
-        const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
-        try {
-          await runChildProcess(
-            [process.execPath, resolve(snapshotPath)],
-            hookDistDir,
-            {
-              ...process.env,
-              DOTFILES_DIST_DIR: resolve(distDir),
-              DOTFILES_HOME_ROOT: resolve(homeRoot),
-              DOTFILES_MANAGER_SRC: import.meta.dir,
-            },
-            relativePath,
-            "local build hook",
-            onHookEvent ? stdoutState : undefined,
-          );
-        } finally {
-          await removeHookSnapshot(snapshotPath, distDir);
-        }
+async function runHook(
+  hook: Hook,
+  hookDistDir: string,
+  distDir: string,
+  homeRoot: string,
+  onHookEvent?: HookEvent,
+): Promise<void> {
+  const relativePath = hookRelativePath(hook);
+  const started = performance.now();
+  const stdoutState = { needsNewline: false };
+  onHookEvent?.(relativePath, "start", 0);
+  try {
+    const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
+    try {
+      if (!relativePath.endsWith(".ts"))
+        throw new Error(`build hook has unsupported extension: ${relativePath}`);
+
+      const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
+      try {
+        await runChildProcess(
+          [process.execPath, resolve(snapshotPath)],
+          hookDistDir,
+          {
+            ...process.env,
+            DOTFILES_DIST_DIR: resolve(distDir),
+            DOTFILES_HOME_ROOT: resolve(homeRoot),
+            DOTFILES_MANAGER_SRC: import.meta.dir,
+          },
+          relativePath,
+          "local build hook",
+          onHookEvent ? stdoutState : undefined,
+        );
       } finally {
-        await removeEmptyHookDirectories(createdDirectories);
+        await removeHookSnapshot(snapshotPath, distDir);
       }
-      onHookEvent?.(
-        relativePath,
-        "success",
-        (performance.now() - started) / 1000,
-        stdoutState.needsNewline,
-      );
-    } catch (error) {
-      onHookEvent?.(
-        relativePath,
-        "failure",
-        (performance.now() - started) / 1000,
-        stdoutState.needsNewline,
-      );
-      throw error;
+    } finally {
+      await removeEmptyHookDirectories(createdDirectories);
     }
+    onHookEvent?.(
+      relativePath,
+      "success",
+      (performance.now() - started) / 1000,
+      stdoutState.needsNewline,
+    );
+  } catch (error) {
+    onHookEvent?.(
+      relativePath,
+      "failure",
+      (performance.now() - started) / 1000,
+      stdoutState.needsNewline,
+    );
+    throw error;
   }
 }
 

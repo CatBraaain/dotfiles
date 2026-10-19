@@ -9,6 +9,8 @@ import type { Platform } from "./build.ts";
 const mapFileName = "remap.data.md";
 const removeDestination = "-";
 const mapColumns = ["key", "linux", "windows", "macos"] as const;
+// The map targets macOS while the build refers to the platform as darwin.
+const platformColumns = { linux: "linux", windows: "windows", darwin: "macos" } as const;
 type PathMap = { removals: string[]; moves: Array<{ source: string; destination: string }> };
 type PathMapRow = [key: string, linux: string, windows: string, macos: string];
 
@@ -71,12 +73,12 @@ function sameCells(actual: string[], expected: readonly string[]): boolean {
 
 async function loadPathMap(mapFilePath: string, platform: Platform): Promise<PathMap> {
   const rows = parsePathMap(await readFile(mapFilePath, "utf-8"), mapFilePath);
-  const columnIndex = platform === "linux" ? 1 : platform === "windows" ? 2 : 3;
+  const columnIndex = mapColumns.indexOf(platformColumns[platform]);
   const removals: string[] = [];
   const moves: Array<{ source: string; destination: string }> = [];
 
   for (const row of rows) {
-    const destination = row[columnIndex];
+    const destination = row[columnIndex] ?? "";
     if (destination === "") continue;
     if (destination === removeDestination) removals.push(row[0]);
     else moves.push({ source: row[0], destination });

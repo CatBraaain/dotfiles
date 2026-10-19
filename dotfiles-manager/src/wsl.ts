@@ -35,25 +35,9 @@ export async function resolveWsl(sourceRoot: string): Promise<WslConnection | un
     throw new Error(
       "WSL resolution failed: distro, default user, HOME or existing Bun unavailable",
     );
-  const connection = { distro, user, home, bun, guest: "" };
   const guestWindowsPath = join(import.meta.dir, "wsl-guest.ts");
-  const guestDistro = uncDistro(guestWindowsPath);
-  if (guestDistro && guestDistro.toLowerCase() !== distro.toLowerCase())
-    throw new Error("WSL helper and source workspace belong to different distributions");
-  if (guestDistro) {
-    connection.guest = uncGuestPath(guestWindowsPath);
-  } else {
-    const path = await runProcess([
-      ...wslCommand(connection),
-      "wslpath",
-      "-a",
-      "-u",
-      guestWindowsPath,
-    ]);
-    if (!path.ok || !path.stdout.startsWith("/"))
-      throw new Error(`WSL helper path resolution failed: ${path.stderr}`);
-    connection.guest = path.stdout;
-  }
+  const guest = await resolveGuestPath({ distro, user }, guestWindowsPath);
+  const connection: WslConnection = { distro, user, home, bun, guest };
   const ready = await runWsl(connection, [bun, "--version"]);
   if (!ready.ok) throw new Error(`WSL Bun unavailable: ${ready.stderr}`);
   return connection;
@@ -96,6 +80,26 @@ export async function runWsl(
   return result;
 }
 
+async function resolveGuestPath(
+  connection: Pick<WslConnection, "distro" | "user">,
+  guestWindowsPath: string,
+): Promise<string> {
+  const guestDistro = uncDistro(guestWindowsPath);
+  if (guestDistro && guestDistro.toLowerCase() !== connection.distro.toLowerCase())
+    throw new Error("WSL helper and source workspace belong to different distributions");
+  if (guestDistro) return uncGuestPath(guestWindowsPath);
+  const path = await runProcess([
+    ...wslCommand(connection),
+    "wslpath",
+    "-a",
+    "-u",
+    guestWindowsPath,
+  ]);
+  if (!path.ok || !path.stdout.startsWith("/"))
+    throw new Error(`WSL helper path resolution failed: ${path.stderr}`);
+  return path.stdout;
+}
+
 function guestCommand(connection: WslConnection, payload: unknown): string[] {
   return [
     ...wslCommand(connection),
@@ -105,7 +109,7 @@ function guestCommand(connection: WslConnection, payload: unknown): string[] {
   ];
 }
 
-function wslCommand(connection: WslConnection): string[] {
+function wslCommand(connection: Pick<WslConnection, "distro" | "user">): string[] {
   return [
     "wsl.exe",
     "--distribution",

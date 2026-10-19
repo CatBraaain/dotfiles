@@ -7,7 +7,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
 import { parse as parseIni, stringify as stringifyIni } from "js-ini";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import { isMap, isNode, isScalar, parseDocument, visit, type YAMLMap } from "yaml";
+import { isMap, isNode, isScalar, parseDocument, visit, type Document, type YAMLMap } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 import {
   copyYamlNotation,
@@ -103,13 +103,12 @@ async function composeMergeTarget(
 async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
   const targets = new Map<string, MergeTarget>();
   for (const entry of await collectEntries(distDir)) {
-    if (entry.isDirectory || !basename(entry.path).match(sidecarPattern)) continue;
+    const name = basename(entry.path);
+    const match = sidecarPattern.exec(name);
+    if (entry.isDirectory || !match) continue;
 
-    const format = basename(entry.path).match(sidecarPattern)![2] as FileFormat;
-    const outputPath = join(
-      dirname(entry.path),
-      basename(entry.path).replace(sidecarPattern, `.${format}`),
-    );
+    const format = match[2] as FileFormat;
+    const outputPath = join(dirname(entry.path), name.replace(sidecarPattern, `.${format}`));
     const target = targets.get(outputPath) ?? {
       outputPath,
       format,
@@ -139,29 +138,12 @@ async function readLayer(path: string, format: FileFormat): Promise<Layer> {
 }
 
 function parseLayer(content: string, format: FileFormat): Layer {
-  if (format === "toml") {
-    const operations: Operations = new Map();
-    const parsed = parseTomlPairs(parseToml(content), "", operations);
-    return { normal: parsed.normal, operations };
-  }
+  if (format === "toml") return parseTomlLayer(content);
   const document = parseDocument(format === "json" ? stripJsonComments(content) : content, {
     uniqueKeys: false,
   });
   if (document.errors.length > 0) throw document.errors[0];
-  if (format === "json") {
-    visit(document, {
-      Scalar(key, node) {
-        if (
-          key !== "key" &&
-          typeof node.value === "number" &&
-          node.source !== undefined &&
-          jsonNumberPattern.test(node.source)
-        ) {
-          node.value = rawJson.rawJSON(node.source);
-        }
-      },
-    });
-  }
+  if (format === "json") rewriteJsonNumbers(document);
   if (!isMap(document.contents)) {
     const normal = format === "yaml" ? readYamlValue(document.contents) : document.toJSON();
     return { normal: normal ?? {}, operations: new Map() };
@@ -183,6 +165,29 @@ function parseLayer(content: string, format: FileFormat): Layer {
     format === "yaml" ? undefined : jsonContext,
   );
   return { normal, operations };
+}
+
+function parseTomlLayer(content: string): Layer {
+  const operations: Operations = new Map();
+  const parsed = parseTomlPairs(parseToml(content), "", operations);
+  return { normal: parsed.normal, operations };
+}
+
+// Rewrite numeric scalars whose source text matters to rawJSON so JSON number
+// precision survives the layer pipeline.
+function rewriteJsonNumbers(document: Document.Parsed): void {
+  visit(document, {
+    Scalar(key, node) {
+      if (
+        key !== "key" &&
+        typeof node.value === "number" &&
+        node.source !== undefined &&
+        jsonNumberPattern.test(node.source)
+      ) {
+        node.value = rawJson.rawJSON(node.source);
+      }
+    },
+  });
 }
 
 function parseIniLayer(content: string): Layer {
@@ -348,11 +353,7 @@ function parsePairs(
         path,
         operation.op,
         `${mergePathText(path)}.$${operation.op}`,
-        context
-          ? pair.value
-            ? toJS(pair.value, null, context)
-            : undefined
-          : readYamlValue(pair.value),
+        pairValue(pair, context),
       );
       hasOperations = true;
       continue;
@@ -373,18 +374,23 @@ function parsePairs(
       hasOperations ||= child.hasOperations;
       continue;
     }
-    setOwnProperty(
-      normal,
-      key,
-      context
-        ? pair.value
-          ? toJS(pair.value, null, context)
-          : undefined
-        : readYamlValue(pair.value),
-    );
+    setOwnProperty(normal, key, pairValue(pair, context));
   }
   if (!context) rememberYamlNotation(map, normal);
   return { normal, hasOperations };
+}
+
+// Convert one pair value through the context (JSON layers) or keep the
+// node-based value (YAML layers; a missing value becomes undefined).
+function pairValue(
+  pair: YAMLMap.Parsed["items"][number],
+  context: ToJSContext | undefined,
+): unknown {
+  return context
+    ? pair.value
+      ? toJS(pair.value, null, context)
+      : undefined
+    : readYamlValue(pair.value);
 }
 
 // TOML counterpart of parsePairs: split a parsed plain-object layer into
@@ -441,17 +447,8 @@ function registerOperation(
   key: string,
   value: unknown,
 ): void {
-  if (Array.isArray(path)) {
-    const parts = path;
-    path =
-      [...operations.keys()].find(
-        (existing) =>
-          Array.isArray(existing) &&
-          existing.length === parts.length &&
-          existing.every((part, index) => part === parts[index]),
-      ) ?? path;
-  }
-  const pathOperations = operations.get(path) ?? {};
+  const canonicalPath = canonicalizePath(operations, path);
+  const pathOperations = operations.get(canonicalPath) ?? {};
   const previous = pathOperations[op];
   pathOperations[op] = {
     key,
@@ -460,7 +457,22 @@ function registerOperation(
         ? copyYamlNotation([...previous.value, ...value], previous.value, value)
         : value,
   };
-  operations.set(path, pathOperations);
+  operations.set(canonicalPath, pathOperations);
+}
+
+// Structurally equal array paths share one Map key so the same nested target
+// aggregates onto a single operation record.
+function canonicalizePath(operations: Operations, path: MergePath): MergePath {
+  if (!Array.isArray(path)) return path;
+  const parts = path;
+  return (
+    [...operations.keys()].find(
+      (existing) =>
+        Array.isArray(existing) &&
+        existing.length === parts.length &&
+        existing.every((part, index) => part === parts[index]),
+    ) ?? path
+  );
 }
 
 function stripJsonComments(content: string): string {
