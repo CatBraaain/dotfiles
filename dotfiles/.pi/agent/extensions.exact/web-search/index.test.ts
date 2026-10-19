@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -104,20 +104,15 @@ function renderedLines(component: { render(width: number): string[] }, width = 8
 const identityTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
 describe("tool spawning", () => {
-  it("spawns `browse search` with the query and --json via bun", async () => {
+  it("spawns the browse executable directly with search, the query and --json", async () => {
     const cli = fakeCli({ stdout: searchJsonOutput });
     const search = captureTools(cli.deps).get("web_search")!;
 
     await callSearch(search, { query: "pi coding agent" });
 
     assert.equal(cli.calls.length, 1);
-    assert.equal(cli.calls[0]!.command, "bun");
-    assert.deepEqual(cli.calls[0]!.args, [
-      join("/nonexistent-test-cli", "browse"),
-      "search",
-      "pi coding agent",
-      "--json",
-    ]);
+    assert.equal(cli.calls[0]!.command, join("/nonexistent-test-cli", "browse"));
+    assert.deepEqual(cli.calls[0]!.args, ["search", "pi coding agent", "--json"]);
   });
 
   it("passes --lang when the search request has a language hint", async () => {
@@ -126,7 +121,7 @@ describe("tool spawning", () => {
 
     await callSearch(search, { query: "pi", lang: "JA" });
 
-    assert.deepEqual(cli.calls[0]!.args.slice(1), ["search", "pi", "--lang", "JA", "--json"]);
+    assert.deepEqual(cli.calls[0]!.args, ["search", "pi", "--lang", "JA", "--json"]);
   });
 
   it("omits --lang when no language hint is given", async () => {
@@ -145,14 +140,59 @@ describe("tool spawning", () => {
     await callFetch(fetchTool, "https://example.com/");
 
     assert.equal(cli.calls.length, 1);
-    assert.equal(cli.calls[0]!.command, "bun");
-    assert.deepEqual(cli.calls[0]!.args, [
-      join("/nonexistent-test-cli", "browse"),
-      "fetch",
-      "https://example.com/",
-      "--json",
-    ]);
+    assert.equal(cli.calls[0]!.command, join("/nonexistent-test-cli", "browse"));
+    assert.deepEqual(cli.calls[0]!.args, ["fetch", "https://example.com/", "--json"]);
   });
+});
+
+describe("tool execution with a real browse executable", () => {
+  const cases = [
+    {
+      name: "web_search",
+      params: { query: "pi coding agent", lang: "JA" },
+      args: ["search", "pi coding agent", "--lang", "JA", "--json"],
+      output: searchJsonOutput,
+    },
+    {
+      name: "web_fetch",
+      params: { url: "https://example.com/" },
+      args: ["fetch", "https://example.com/", "--json"],
+      output: fetchJsonOutput,
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(`runs ${testCase.name} through an executable path containing spaces`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "web cli-"));
+      const argsFile = join(dir, "args");
+      try {
+        writeFileSync(
+          join(dir, "browse"),
+          `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s' '${testCase.output}'\n`,
+          { mode: 0o755 },
+        );
+        const tool = captureTools({ env: { BROWSE_CLI_DIR: dir } }).get(testCase.name)!;
+
+        const result = await tool.execute(
+          "call",
+          testCase.params,
+          AbortSignal.timeout(5_000),
+          undefined,
+          executionContext,
+        );
+
+        const receivedArgs = readFileSync(argsFile, "utf8").trimEnd().split("\n");
+        assert.deepEqual(receivedArgs, testCase.args);
+        const expectedText =
+          testCase.name === "web_search"
+            ? formatSearchText(JSON.parse(searchJsonOutput))
+            : JSON.parse(fetchJsonOutput).body;
+        assert.equal(textOf(result), expectedText);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe("runWebCli child execution", () => {

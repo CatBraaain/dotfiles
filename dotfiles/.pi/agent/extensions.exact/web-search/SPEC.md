@@ -11,7 +11,7 @@ pi に **Web検索** と **URL取得** の2つのツールを追加する。実�
 
 ## 実行
 
-各ツールの execute は、対応するサブコマンドを `bun <browse プロジェクトディレクトリ>` で子プロセス起動し、完了を待つ。
+各ツールの execute は、コンパイル済みの `browse` 実行ファイルを直接子プロセスとして起動し、対応するサブコマンドの完了を待つ。
 
 | ツール | CLI引数 |
 | --- | --- |
@@ -58,13 +58,11 @@ camoufox server は `browse` CLI（`~/.agents/cli/browse`）に内蔵され、`b
 
 camoufox server の表示モード（Linux既定の Xvfb `:99` 上の headed と x11vnc による人間への画面引き取り、`CAMOUFOX_HEADLESS`）、server実行環境の上書き（`CAMOUFOX_EXECUTABLE_PATH`・`CAMOUFOX_PLAYWRIGHT_CORE`）、SIGINT / SIGTERM終了時の後始末は、CLI spec「camoufox server のモード」節の正本に従う。この拡張は表示モードに独自の振る舞いを持たず、関連する環境変数も特に設定しない。
 
-## CLIプロジェクトディレクトリのパス解決
+## CLI実行ファイルのパス解決
 
-CLIプロジェクトディレクトリ（`browse/`）は、この拡張のディレクトリから4階層上の `.agents/` 配下で解決する。source tree の `dotfiles/.pi/agent/extensions.exact/web-search/` からは `dotfiles/.agents/cli.exact/`、展開後の `~/.pi/agent/extensions/web-search/` からは `~/.agents/cli/` を使う。
+`browse` の配置ディレクトリは、この拡張のディレクトリから4階層上の `.agents/` 配下で解決する。source tree の `dotfiles/.pi/agent/extensions.exact/web-search/` からは `dotfiles/.agents/cli.exact/`、展開後の `~/.pi/agent/extensions/web-search/` からは `~/.agents/cli/` を使う。
 
-`bun <dir>` で起動し、bun が `browse` ディレクトリの package.json `main` を解決するため、実行ビットには依存しない。
-
-環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを配置ごとの既定ディレクトリの代わりに使う（テスト・開発用）。
+環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを配置ごとの既定ディレクトリの代わりに使う（テスト・開発用）。起動対象は常に `<配置ディレクトリ>/browse` の実行可能なコンパイル済みファイルとする。source tree から利用するときも、`BROWSE_CLI_DIR` でその実行ファイルの配置先を指定できる。
 
 ## 表示（TUI）
 
@@ -90,6 +88,6 @@ CLIプロジェクトディレクトリ（`browse/`）は、この拡張のデ�
 
 | 変数 | 影響 |
 | --- | --- |
-| `BROWSE_CLI_DIR` | CLIスクリプトのディレクトリ（既定は source tree で `.agents/cli.exact`、展開後は `.agents/cli`） |
+| `BROWSE_CLI_DIR` | `browse` 実行ファイルの配置ディレクトリ（既定は source tree で `.agents/cli.exact`、展開後は `.agents/cli`） |
 | `CAMOUFOX_BASE_URL` | 子プロセスへ継承し、CLI側で解釈される |
 | `OPENSERP_BASE_URL` | 子プロセスへ継承し、CLI側で解釈される |

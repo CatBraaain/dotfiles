@@ -21,8 +21,6 @@ export function browseCliDir(
   return env.BROWSE_CLI_DIR ?? join(extensionDir, "..", "..", "..", "..", ".agents", cliName);
 }
 
-// The CLI project directory (bun resolves its package.json main field, so
-// spawning needs no exec bit and only `bun` on PATH).
 export function browseScript(env: Record<string, string | undefined> = process.env): string {
   return join(browseCliDir(env), "browse");
 }
@@ -152,10 +150,10 @@ async function runCliJson<T>(
 ): Promise<T> {
   const run = deps.runCli ?? runWebCli;
   const subcommand = kind === "web-search" ? "search" : "fetch";
-  const script = browseScript(deps.env ?? process.env);
+  const executable = browseScript(deps.env ?? process.env);
   let result: WebCliResult;
   try {
-    result = await run("bun", [script, subcommand, ...args], signal);
+    result = await run(executable, [subcommand, ...args], signal);
   } catch (error) {
     throw new Error(`${kind}: ${error instanceof Error ? error.message : String(error)}`);
   }
