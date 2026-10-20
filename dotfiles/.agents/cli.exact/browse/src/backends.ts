@@ -49,7 +49,13 @@ export function isCamoufoxServerCommand(
   scriptPath: string,
   serverSubcommand: string,
 ): boolean {
-  return args[1] === scriptPath && args[2] === serverSubcommand;
+  // Compiled binary: [<executable>, __server]. Source run: [bun, <script>,
+  // __server]. Both must be recognized or the restart sweep rejects every
+  // server pid and `browse server restart` becomes a silent no-op.
+  return (
+    (args[0] === scriptPath && args[1] === serverSubcommand) ||
+    (args[1] === scriptPath && args[2] === serverSubcommand)
+  );
 }
 
 export function lockedBrowseArgs(
