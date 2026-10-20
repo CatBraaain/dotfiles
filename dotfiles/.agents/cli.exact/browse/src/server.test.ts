@@ -1,7 +1,22 @@
 import { describe, it } from "bun:test";
 import { strict as assert } from "node:assert";
 import { RESTART_COOLDOWN_MS } from "./config";
-import { restartInCooldown } from "./server";
+import { openserpServeArgs, restartInCooldown } from "./server";
+
+describe("openserpServeArgs", () => {
+  it("keeps --quiet and adds --log_level error to the serve arguments", () => {
+    assert.deepEqual(openserpServeArgs("127.0.0.1", "7000"), [
+      "serve",
+      "-a",
+      "127.0.0.1",
+      "-p",
+      "7000",
+      "--quiet",
+      "--log_level",
+      "error",
+    ]);
+  });
+});
 
 describe("restartInCooldown", () => {
   const now = 1_000_000;

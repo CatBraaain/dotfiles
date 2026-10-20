@@ -240,9 +240,15 @@ function spawnBrowseDetached(args: readonly string[]): void {
   }
 }
 
+// --quiet keeps logs on stderr only (no logs.txt in the CWD); --log_level
+// error suppresses warn-level logs.
+export function openserpServeArgs(hostname: string, port: string): string[] {
+  return ["serve", "-a", hostname, "-p", port, "--quiet", "--log_level", "error"];
+}
+
 function spawnOpenserpServer(): void {
   const { hostname, port } = new URL(openserpBaseUrl());
-  spawnDetachedServer("openserp", ["serve", "-a", hostname, "-p", port, "--quiet"], {
+  spawnDetachedServer("openserp", openserpServeArgs(hostname, port), {
     detached: true,
     stdio: "ignore",
     shell: process.platform === "win32",
