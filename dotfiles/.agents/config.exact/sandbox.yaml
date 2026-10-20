@@ -105,6 +105,8 @@ commands:
       - { command: crontab, args: ["-l"] }
   - allow:
       - { command: sudo, args: ["-n", "true"] }
+  - allow:
+      - { command: git, args: [worktree, prune] }
   - deny:
       - {
           command: systemctl,
