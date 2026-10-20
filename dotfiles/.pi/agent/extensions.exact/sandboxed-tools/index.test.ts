@@ -464,6 +464,47 @@ read:
       /Access requires confirmation/,
     );
   });
+
+  it(
+    "read deny の glob パターンはセッション中に作成されたパスも拒否する",
+    withSandbox(
+      `
+read:
+  - {allow: "*"}
+  - {deny: ["**/.env"]}
+`,
+      projectRoot,
+      async (sandbox) => {
+        await assert.rejects(
+          () =>
+            sandbox.authorizePath("read", `${projectRoot}/.env`, {
+              cwd: projectRoot,
+            }),
+          /Access denied/,
+        );
+        await sandbox.authorizePath("read", `${projectRoot}/notes.txt`, {
+          cwd: projectRoot,
+        });
+      },
+    ),
+  );
+
+  it(
+    "read deny の glob パターンでも後勝ちの allow が優先される",
+    withSandbox(
+      `
+read:
+  - {deny: ["**/.env"]}
+  - {allow: [/workspace/project/.env]}
+`,
+      projectRoot,
+      async (sandbox) => {
+        await sandbox.authorizePath("read", `${projectRoot}/.env`, {
+          cwd: projectRoot,
+        });
+      },
+    ),
+  );
 });
 
 describe("§2.1 画像ファイル", () => {

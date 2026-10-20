@@ -898,6 +898,37 @@ export class Sandbox {
   }
 
   /**
+   * Read section resolution with dynamic glob matching for deny patterns.
+   * Startup expansion only lists paths that existed at construction (§3), so
+   * a deny pattern matching `.env` at any depth must also test the candidate
+   * path against the compiled glob directly; otherwise a matching file
+   * created during the session would pass. Entries keep config order, so the
+   * resolution stays last-match-wins (§3 アクションの決定).
+   */
+  private readActionMatch(
+    section: ExpandedPathSection,
+    candidatePath: string,
+  ): PathActionMatch {
+    const denyGlobRegexes = actionPatterns(this.config.read, "deny")
+      .flatMap((pattern) =>
+        expandRuntimeVariables(pattern, resolveGitMainWorktreePath(this.cwd)),
+      )
+      .flatMap(expandBraces)
+      .map((expanded) => resolvePattern(expanded, this.cwd))
+      .filter(hasGlob)
+      .map(globToRegExp);
+    let resolved: PathActionMatch = { action: "deny" };
+    for (const [index, entry] of section.entries()) {
+      const matchedPath = entry.paths.find((path) => pathCovers(path, candidatePath));
+      const deniedDynamically =
+        entry.action === "deny" && denyGlobRegexes.some((regex) => regex.test(candidatePath));
+      if (matchedPath !== undefined || deniedDynamically)
+        resolved = { action: entry.action, matched: matchedPath ?? candidatePath };
+    }
+    return resolved;
+  }
+
+  /**
    * Expanded write-section paths split by their final resolved action (§3
    * last-match-wins). `allow`, `ask`, and `deny` expose the same path classes
    * used by fs authorization. `restricted` preserves deny/ask bind ordering
@@ -1100,7 +1131,10 @@ export class Sandbox {
       throw new Error(`Access denied for credential path: ${absolutePath}`);
     }
     const section = operation === "read" ? this.readPaths() : this.writePaths();
-    const { action, matched } = resolvePathActionMatch(section, absolutePath);
+    const { action, matched } =
+      operation === "read"
+        ? this.readActionMatch(section, absolutePath)
+        : resolvePathActionMatch(section, absolutePath);
     if (action === "allow") return undefined;
     if (action === "deny" && matched !== undefined)
       throw new Error(`Access denied: ${absolutePath}`);
