@@ -71,6 +71,7 @@ export type CommandActionMatch = {
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
 type PathRuleEntry = { action: PathAction; patterns: string[] };
+/** Normalized command rule: `command` comes from the family key unless overridden (SPEC §6). */
 export type CommandRule = { command: string; args?: string[] };
 export type CommandRuleEntry = { action: CommandAction; patterns: CommandRule[] };
 
@@ -97,33 +98,50 @@ function asPatterns(value: unknown): string[] {
     : [];
 }
 
-function parseCommandEntries(value: unknown): CommandRuleEntry[] | undefined {
+function parseCommandFamilies(value: unknown): CommandRuleEntry[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new Error("commands must be a list of entries");
-  return value.map((element) => {
-    if (!isRecord(element) || Object.keys(element).length !== 1)
-      throw new Error("command entry must declare exactly one action");
-    const action = Object.keys(element)[0] as CommandAction;
-    if (!["allow", "ask", "ask_with_reason", "deny"].includes(action))
-      throw new Error("unknown command action: " + action);
-    const configured = element[action];
-    const rules = Array.isArray(configured) ? configured : [configured];
-    const patterns = rules.map((rule): CommandRule => {
-      if (
-        !isRecord(rule) ||
-        typeof rule.command !== "string" ||
-        Object.keys(rule).some((key) => key !== "command" && key !== "args") ||
-        (rule.args !== undefined &&
-          (!Array.isArray(rule.args) || rule.args.some((arg) => typeof arg !== "string")))
-      )
-        throw new Error("command rule requires command: string and optional args: string[]");
-      return {
-        command: rule.command,
-        ...(rule.args === undefined ? {} : { args: rule.args as string[] }),
-      };
-    });
-    return { action, patterns };
-  });
+  const entries: CommandRuleEntry[] = [];
+  for (const family of value) {
+    if (!isRecord(family) || Object.keys(family).length !== 1)
+      throw new Error("command family must declare exactly one command pattern");
+    const [pattern, rules] = Object.entries(family)[0]!;
+    if (typeof pattern !== "string")
+      throw new Error("command family key must be a command pattern string");
+    if (!Array.isArray(rules))
+      throw new Error(`command family ${pattern} must map to a list of rule items`);
+    for (const item of rules) {
+      if (!isRecord(item) || Object.keys(item).length !== 1)
+        throw new Error(`command family ${pattern} must declare exactly one action per rule item`);
+      const action = Object.keys(item)[0] as CommandAction;
+      if (!["allow", "ask", "ask_with_reason", "deny"].includes(action))
+        throw new Error("unknown command action: " + action);
+      const configured = item[action];
+      if (Array.isArray(configured) && configured.length === 0)
+        throw new Error(
+          `command family ${pattern} has an empty ${action} rule list; use {} for a rule without constraints`,
+        );
+      const ruleList = Array.isArray(configured) ? configured : [configured];
+      const patterns = ruleList.map((rule): CommandRule => {
+        if (
+          !isRecord(rule) ||
+          Object.keys(rule).some((key) => key !== "command" && key !== "args") ||
+          (rule.command !== undefined && typeof rule.command !== "string") ||
+          (rule.args !== undefined &&
+            (!Array.isArray(rule.args) || rule.args.some((arg) => typeof arg !== "string")))
+        )
+          throw new Error(
+            `command rule in family ${pattern} requires optional command: string and args: string[]`,
+          );
+        return {
+          command: rule.command === undefined ? pattern : (rule.command as string),
+          ...(rule.args === undefined ? {} : { args: rule.args as string[] }),
+        };
+      });
+      entries.push({ action, patterns });
+    }
+  }
+  return entries;
 }
 
 export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig {
@@ -158,7 +176,7 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
     read: parseEntries(parsed.read, pathActions),
     write: parseEntries(parsed.write, pathActions),
     credentials: asPatterns(parsed.credentials),
-    commands: parseCommandEntries(parsed.commands),
+    commands: parseCommandFamilies(parsed.commands),
   };
 }
 

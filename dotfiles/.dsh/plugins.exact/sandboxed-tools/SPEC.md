@@ -266,9 +266,9 @@ network は開放。fs制限の対象外。
 | `credentials` | bash の sandbox に read-only で bindするパスパターン。`read` `write` `edit` `glob` `grep` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands` | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する |
 
-- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` は `{action: rule}` または `{action: [rules...]}` のフラットなリストで、同じaction内のルールはORとする。各要素は1つのactionだけを宣言し、commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
-- 各リストは要素を上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
-- セクションがリストでない、要素がマッピングでない、actionが複数または未知の値の場合、読み込みは失敗し、全セクションが未設定（= `deny`）になる。read・writeの値は文字列または文字列リストで、リスト内の非文字列は無視する。commandsのruleは `command: string` と省略可能な `args: string[]` だけを持つマッピングであり、文字列rule、未知フィールド、command欠落、型の違反、ルールリスト内の不正要素も読み込み失敗になる。
+- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` はコマンドパターンをキーとする単一キーのマッピング（ファミリー）の配列で、キーはコマンドパターン（JavaScript `RegExp`）、値は `default` と `rules` をキーに持つマッピングとする。`rules` はルール項目 `{action: rule}` または `{action: [rules...]}` の配列で、同じaction内のルールはORとする。ルールは `command`（省略可・文字列）と `args`（省略可・文字列リスト）だけを持ち、`command` を省略したルールはキーのパターンでコマンドを判定し、指定した場合はキーではなくそのパターンで判定する（ファミリー内の個別パターン用）。`default` は `rules` のどのルールも一致しなかったコマンドに適用するアクションで、キーのパターンに一致する全コマンドを対象にする。commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
+- `read` / `write` のリスト、`commands` のファミリー配列とルール配列は、いずれも上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。ファミリーの `default` は先頭に置かれた制約なしのルールと等価で、一致するルールがあるときはそのルールが優先する。マッチする要素がなければ未設定（= `deny`）。
+- セクションがリストでない、要素がマッピングでない、actionが複数または未知の値の場合、読み込みは失敗し、全セクションが未設定（= `deny`）になる。read・writeの値は文字列または文字列リストで、リスト内の非文字列は無視する。commandsのファミリーは単一キーのマッピングで、値は `default` と `rules` 以外のキーを持たず、どちらも省略すると読み込み失敗になる。ルールは `command`（省略可）と `args`（省略可）以外のフィールドを持たない。文字列ルール、未知フィールド、型の違反、ルールリスト内の不正要素、空のルールリストも読み込み失敗になる。
 - `commands` のcommandまたはargsの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。dshのホストログで警告する。
 
 本plugin は読み込み時と各セッションの開始時に `sandbox.yaml` を読み込み、変数展開・glob展開・実在保証（§6.1）をやり直す。
@@ -277,16 +277,22 @@ network は開放。fs制限の対象外。
 
 ```yaml
 commands:
-  - allow: { command: ".*" }
-  - ask:
-      - { command: git, args: [push] }
-      - { command: gh, args: [pr, create] }
-  - ask_with_reason:
-      - { command: sudo }
-      - { command: chmod, args: ["-R"] }
-  - ask: { command: systemctl }
-  - allow: { command: systemctl, args: ["status|show"] }
-  - deny: { command: systemctl, args: ["reboot|poweroff|halt|shutdown"] }
+  - ".*":
+      - allow: {}
+      - ask: { args: ["publish|submit|upload"] }
+  - git:
+      - ask: { args: [push] }
+      - ask_with_reason: { args: [reset, "--hard"] }
+      - allow: { args: [worktree, prune] }
+  - doas:
+      - deny: {}
+  - "(?i:/mnt(?:/.*)?)":
+      - ask: {}
+      - allow: { command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)' }
+      - ask:
+          command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
+          args:
+            ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
 ```
 
 ### コマンドルールの照合（§6）

@@ -78,123 +78,102 @@ credentials:
   - ~/.gnupg
 
 commands:
-  - allow: { command: ".*" }
-  - ask:
-      - { command: ".*", args: ["publish|submit|upload"] }
+  # default
+  - ".*":
+      - allow: {}
+      - ask: { args: ["publish|submit|upload"] }
 
   # git
-  - ask:
-      - { command: git, args: [push] }
-  - ask_with_reason:
-      - { command: git, args: [reset, "--hard"] }
-      - {
-          command: git,
-          args: [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"],
-        }
-      - { command: git, args: ["replace|update-ref|gc|prune"] }
-      - { command: git, args: [reflog, expire] }
-  - allow:
-      - { command: git, args: [worktree, prune] }
+  - git:
+      - allow: {}
+      - ask: { args: [push] }
+      - ask_with_reason: { args: [reset, "--hard"] }
+      - ask_with_reason:
+          args: [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"]
+      - ask_with_reason: { args: ["replace|update-ref|gc|prune"] }
+      - ask_with_reason: { args: [reflog, expire] }
+      - allow: { args: [worktree, prune] }
 
   # gh
-  - ask:
-      - { command: gh, args: [pr, create] }
+  - gh:
+      - allow: {}
+      - ask: { args: [pr, create] }
 
   # sudo / doas
-  - ask_with_reason:
-      - { command: sudo }
-  - allow:
-      - { command: sudo, args: ["-n", "true"] }
-  - deny:
-      - { command: doas }
+  - sudo:
+      - ask_with_reason: {}
+      - allow: { args: ["-n", "true"] }
+  - doas:
+      - deny: {}
 
   # systemctl
-  - ask_with_reason:
-      - { command: systemctl }
-  - allow:
-      - {
-          command: systemctl,
-          args: ["status|show|cat|help|get-default|show-environment"],
-        }
-      - { command: systemctl, args: ["(list-|is-).*"] }
-      - { command: systemctl, args: ["--version"] }
-  - deny:
-      - {
-          command: systemctl,
+  - systemctl:
+      - ask_with_reason: {}
+      - allow: { args: ["status|show|cat|help|get-default|show-environment"] }
+      - allow: { args: ["(list-|is-).*"] }
+      - allow: { args: ["--version"] }
+      - deny:
           args:
             [
               "reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit",
-            ],
-        }
+            ]
 
   # crontab
-  - ask_with_reason:
-      - { command: crontab }
-  - allow:
-      - { command: crontab, args: ["-l"] }
+  - crontab:
+      - ask_with_reason: {}
+      - allow: { args: ["-l"] }
 
   # chmod / chown
-  - ask_with_reason:
-      - { command: "chmod|chown", args: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"] }
+  - "chmod|chown":
+      - allow: {}
+      - ask_with_reason: { args: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"] }
 
   # destructive system commands
-  - deny:
-      - {
-          command: '(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b.*',
-        }
-      - { command: "wipefs|parted|fdisk|sfdisk|sgdisk" }
-      - { command: "shutdown|reboot|poweroff|halt" }
+  - '(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b.*':
+      - deny: {}
+  - "wipefs|parted|fdisk|sfdisk|sgdisk":
+      - deny: {}
+  - "shutdown|reboot|poweroff|halt":
+      - deny: {}
 
   # /mnt
-  - ask:
-      - { command: "(?i:/mnt(?:/.*)?)" }
-  - allow:
-      - {
-          command: '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)',
-        }
-      - {
-          command: '(?i:/mnt/c/Windows/System32/reg\.exe)',
-          args: ["(?i:query|compare)"],
-        }
-      - {
-          command: '(?i:/mnt/c/Windows/System32/sc\.exe)',
-          args: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"],
-        }
-      - {
-          command: '(?i:/mnt/c/Windows/System32/schtasks\.exe)',
-          args: ["(?i:/query)"],
-        }
-      - {
-          command: '(?i:/mnt/c/Windows/System32/wevtutil\.exe)',
-          args: ["(?i:qe|el)"],
-        }
-      - {
-          command: '(?i:/mnt/c/Windows/System32/netsh\.exe)',
-          args: ["(?i:show)"],
-        }
-      - { command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)' }
-      - {
-          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)',
-          args: ["--version|--status|-l|--list"],
-        }
-  - ask:
-      - {
-          command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)',
+  - "(?i:/mnt(?:/.*)?)":
+      - ask: {}
+      - allow:
+          command: '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)'
+      - allow:
+          command: '(?i:/mnt/c/Windows/System32/reg\.exe)'
+          args: ["(?i:query|compare)"]
+      - allow:
+          command: '(?i:/mnt/c/Windows/System32/sc\.exe)'
+          args: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"]
+      - allow:
+          command: '(?i:/mnt/c/Windows/System32/schtasks\.exe)'
+          args: ["(?i:/query)"]
+      - allow:
+          command: '(?i:/mnt/c/Windows/System32/wevtutil\.exe)'
+          args: ["(?i:qe|el)"]
+      - allow:
+          command: '(?i:/mnt/c/Windows/System32/netsh\.exe)'
+          args: ["(?i:show)"]
+      - allow: { command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)' }
+      - allow:
+          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
+          args: ["--version|--status|-l|--list"]
+      - ask:
+          command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
           args:
-            ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"],
-        }
-      - {
-          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)',
+            ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
+      - ask:
+          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
           args:
             [
               "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
-            ],
-        }
+            ]
 
   # pi
-  - ask:
-      - { command: pi }
-  - allow:
-      - { command: pi, args: ["--help|--version|-h|-v"] }
-      - { command: pi, args: ["--list-models|list"] }
-      - { command: pi, args: [mcp, list] }
+  - pi:
+      - ask: {}
+      - allow: { args: ["--help|--version|-h|-v"] }
+      - allow: { args: ["--list-models|list"] }
+      - allow: { args: [mcp, list] }

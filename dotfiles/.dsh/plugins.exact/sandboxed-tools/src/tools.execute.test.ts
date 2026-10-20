@@ -533,7 +533,7 @@ describe("§3 ask_permission（ツール経路）", () => {
     "command の承認は1回限り: 同じ bash 再送が確認なしで走り、承認を消費する",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - ask_with_reason:\n      command: sudo\n",
+        configYaml: "commands:\n  - sudo:\n      - ask_with_reason: {}\n",
         ui: scriptedUi([{ label: "Yes, allow" }]).ui,
       }),
       async ({ tool, runs }) => {
@@ -659,7 +659,7 @@ describe("§2.3 承認ノート（write/edit/bash の render）", () => {
     "bash は EROFS ヒントの後に承認ノートを追記し、ノートが最終行になる",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - ask:\n      command: deploy\n",
+        configYaml: "commands:\n  - deploy:\n      - ask: {}\n",
         ui: scriptedUi([{ label: "Yes, allow" }]).ui,
         respond: () =>
           ({
@@ -713,7 +713,7 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
   it(
     "bash の workdir 未指定はセッション cwd、相対指定は cwd 基準、timeoutMs は上限クランプ",
     withToolLayer(
-      () => ({ configYaml: "commands:\n  - allow:\n      command: .*\n" }),
+      () => ({ configYaml: "commands:\n  - \".*\":\n      - allow: {}\n" }),
       async ({ tool, runs, dir }) => {
         await tool("bash").execute(
           { command: "pwd", description: "print working directory" },
@@ -737,7 +737,7 @@ describe("§1・§3・§4 引数パス・workdir・バリデーション", () =>
   it(
     "bash は空 command・空 description・不正 timeoutMs を引数検証で拒否する",
     withToolLayer(
-      () => ({ configYaml: "commands:\n  - allow:\n      command: .*\n" }),
+      () => ({ configYaml: "commands:\n  - \".*\":\n      - allow: {}\n" }),
       async ({ tool }) => {
         await assert.rejects(
           tool("bash").execute({ command: "  ", description: "d" }, execOf()),
@@ -791,10 +791,10 @@ describe("§8 bash の rtk rewrite", () => {
       () => ({
         configYaml: `
 commands:
-  - allow:
-      command: git
-      args:
-        - status
+  - git:
+      - allow:
+          args:
+            - status
 `,
         rtk: { rewrite: () => "rtk git status" },
       }),
@@ -813,7 +813,7 @@ commands:
     "rewrite が元 command を返すと元 command をそのまま runner へ渡す",
     withToolLayer(
       () => ({
-        configYaml: "commands:\n  - allow:\n      command: .*\n",
+        configYaml: "commands:\n  - \".*\":\n      - allow: {}\n",
         rtk: { rewrite: (command: string) => command },
       }),
       async ({ tool, runs }) => {
@@ -831,7 +831,7 @@ commands:
     withToolLayer(
       () => ({
         configYaml:
-          "commands:\n  - allow:\n      command: .*\n  - deny:\n      command: git\n      args:\n        - status\n",
+          "commands:\n  - \".*\":\n      - allow: {}\n  - git:\n      - deny:\n          args:\n            - status\n",
         rtk: {
           rewrite: () => {
             throw new Error("rewrite must not run");
@@ -856,7 +856,7 @@ commands:
     withToolLayer(
       () => ({
         configYaml:
-          "commands:\n  - allow:\n      command: .*\n  - ask_with_reason:\n      command: sudo\n",
+          "commands:\n  - \".*\":\n      - allow: {}\n  - sudo:\n      - ask_with_reason: {}\n",
         rtk: {
           rewrite: () => {
             throw new Error("rewrite must not run");
@@ -1098,8 +1098,8 @@ esac
         return {
           configYaml: `\nread:\n  - allow: ${dir}
 commands:
-  - allow:
-      command: .*
+  - ".*":
+      - allow: {}
 `,
           ui: scriptedUi([]).ui,
           rtk: {

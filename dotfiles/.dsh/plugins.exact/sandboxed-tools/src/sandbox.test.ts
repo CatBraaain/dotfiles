@@ -113,12 +113,12 @@ write:
   - {deny: "**/.env"}
 credentials: ["~/.ssh"]
 commands:
-  - allow:
-      command: git
-      args:
-        - status
-  - deny:
-      - command: sudo
+  - git:
+      - allow:
+          args:
+            - status
+  - sudo:
+      - deny: {}
 `);
     assert.deepEqual(config.read, [{ action: "allow", patterns: ["*"] }]);
     assert.deepEqual(config.write, [
@@ -135,14 +135,15 @@ commands:
   it("1 要素に複数パターンを宣言できる", () => {
     const config = parseSandboxedToolsConfig(`
 commands:
-  - ask:
-      - command: git
-        args:
-          - push
-      - command: gh
-        args:
-          - pr
-          - create
+  - ".*":
+      - ask:
+          - command: git
+            args:
+              - push
+          - command: gh
+            args:
+              - pr
+              - create
 `);
     assert.deepEqual(config.commands, [
       {
@@ -157,7 +158,7 @@ commands:
 
   it("path pattern lists ignore non-strings and command lists reject invalid rules", () => {
     assert.throws(() =>
-      parseSandboxedToolsConfig("commands: [{allow: [{command: ls}, 1, null]}]"),
+      parseSandboxedToolsConfig(`commands:\n  - ls:\n      - allow:\n          - {}\n          - 1\n          - null`),
     );
     const config = parseSandboxedToolsConfig('read: [{allow: ["*", 2]}]');
     assert.deepEqual(config.read, [{ action: "allow", patterns: ["*"] }]);
@@ -166,11 +167,12 @@ commands:
   it("commands は ask_with_reason を読み込む", () => {
     const config = parseSandboxedToolsConfig(`
 commands:
-  - ask_with_reason:
-      - command: sudo
-      - command: chmod
-        args:
-          - -R
+  - ".*":
+      - ask_with_reason:
+          - command: sudo
+          - command: chmod
+            args:
+              - -R
 `);
     assert.deepEqual(config.commands, [
       {
@@ -275,12 +277,11 @@ describe("§6 commands パターンの正規表現評価", () => {
     withSandbox(
       `
 commands:
-  - allow:
-      - command: "*"
-  - allow:
-      - command: "*"
-  - deny:
-      - command: sudo
+  - "*":
+      - allow: {}
+      - allow: {}
+  - sudo:
+      - deny: {}
 `,
       "/cwd",
       (sandbox) => {
@@ -1644,10 +1645,13 @@ describe("§3 requestCommandPermission（ask_permission の command）", () => {
         configPath,
         [
           "commands:",
-          "  - { deny: {command: dangerous} }",
-          "  - { allow: {command: git, args: [status]} }",
-          "  - { ask: {command: git, args: [push]} }",
-          "  - { ask_with_reason: {command: sudo} }",
+          "  - dangerous:",
+          "      - deny: {}",
+          "  - git:",
+          "      - allow: {args: [status]}",
+          "      - ask: {args: [push]}",
+          "  - sudo:",
+          "      - ask_with_reason: {}",
         ].join("\n"),
       );
       const sandbox = new Sandbox(dir, configPath);
@@ -1676,7 +1680,7 @@ describe("§3 requestCommandPermission（ask_permission の command）", () => {
     "ask_with_reason の承認は1回限りの事前承認になり、UI 無しはエラー",
     withTempDirectory(async (dir) => {
       const configPath = join(dir, "sandbox.yaml");
-      writeFileSync(configPath, "commands:\n  - ask_with_reason:\n      command: sudo\n");
+      writeFileSync(configPath, "commands:\n  - sudo:\n      - ask_with_reason: {}\n");
       const sandbox = new Sandbox(dir, configPath);
       await assert.rejects(
         sandbox.requestCommandPermission("sudo reboot", "why", {}),
@@ -1709,7 +1713,7 @@ matched: {"command":"sudo","args":[]}`,
     "拒否は denied と理由を返し、コマンドは差し戻しを受け続ける",
     withTempDirectory(async (dir) => {
       const configPath = join(dir, "sandbox.yaml");
-      writeFileSync(configPath, "commands:\n  - ask_with_reason:\n      command: sudo\n");
+      writeFileSync(configPath, "commands:\n  - sudo:\n      - ask_with_reason: {}\n");
       const sandbox = new Sandbox(dir, configPath);
       const { ui } = scriptedUi([{ label: "No, deny (reason next)" }, { custom: "no sudo" }]);
       const outcome = await sandbox.requestCommandPermission(
@@ -1737,7 +1741,7 @@ describe("§4 authorizeCommand（bash ゲート）", () => {
       const configPath = join(dir, "sandbox.yaml");
       writeFileSync(
         configPath,
-        "commands:\n  - allow:\n      command: ls\n  - ask:\n      command: git\n      args:\n        - push\n",
+        "commands:\n  - ls:\n      - allow: {}\n  - git:\n      - ask:\n          args:\n            - push\n",
       );
       const sandbox = new Sandbox(dir, configPath);
       const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
@@ -1771,7 +1775,7 @@ matched: {"command":"git","args":["push"]}`,
     "ask_with_reason は理由必須の差し戻しで、ask_permission と同じコマンドの再送だけ通す",
     withTempDirectory(async (dir) => {
       const configPath = join(dir, "sandbox.yaml");
-      writeFileSync(configPath, "commands:\n  - ask_with_reason:\n      command: sudo\n");
+      writeFileSync(configPath, "commands:\n  - sudo:\n      - ask_with_reason: {}\n");
       const sandbox = new Sandbox(dir, configPath);
       const { ui } = scriptedUi([{ label: "Yes, allow" }]);
       await sandbox.requestCommandPermission("sudo apt update", "updates", confirmWith(ui));
@@ -2056,7 +2060,7 @@ describe("§2.3 複合コマンド ask の matched 表示", () => {
       const configPath = join(dir, "sandbox.yaml");
       writeFileSync(
         configPath,
-        "commands:\n  - allow:\n      command: .*\n  - ask:\n      command: git\n      args:\n        - push\n",
+        "commands:\n  - \".*\":\n      - allow: {}\n  - git:\n      - ask:\n          args:\n            - push\n",
       );
       const sandbox = new Sandbox(dir, configPath);
       const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);
@@ -2074,7 +2078,7 @@ matched: {"command":"git","args":["push"]}`,
 
 describe("§2.3 コマンド一致範囲の強調表示", () => {
   const allowAllWithAskGitPush =
-    "commands:\n  - allow:\n      command: .*\n  - ask:\n      command: git\n      args:\n        - push\n";
+    "commands:\n  - \".*\":\n      - allow: {}\n  - git:\n      - ask:\n          args:\n            - push\n";
 
   it(
     "ask ダイアログは一致範囲を >>> と <<< で囲む",
@@ -2139,7 +2143,7 @@ matched: {"command":"git","args":["push"]}`,
       const configPath = join(dir, "sandbox.yaml");
       writeFileSync(
         configPath,
-        "commands:\n  - allow:\n      command: .*\n  - ask:\n      command: git\n      args:\n        - push\n",
+        "commands:\n  - \".*\":\n      - allow: {}\n  - git:\n      - ask:\n          args:\n            - push\n",
       );
       const sandbox = new Sandbox(dir, configPath);
       const { ui, questions } = scriptedUi([{ label: "Yes, allow" }]);

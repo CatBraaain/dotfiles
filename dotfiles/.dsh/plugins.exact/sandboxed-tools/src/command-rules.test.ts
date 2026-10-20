@@ -111,7 +111,18 @@ describe("structured whole-token command rules", () => {
 
   it("supports OR lists and last matching entries, then compound strictness", () => {
     const config = parseSandboxedToolsConfig(
-      'commands: [{allow: {command: ".*"}}, {ask: [{command: git, args: [push]}, {command: gh, args: [create]}]}, {allow: {command: git, args: [status]}}, {deny: {command: stop}}]',
+      [
+        "commands:",
+        '  - ".*":',
+        "      - allow: {}",
+        "  - git:",
+        "      - ask: {args: [push]}",
+        "      - allow: {args: [status]}",
+        "  - gh:",
+        "      - ask: {args: [create]}",
+        "  - stop:",
+        "      - deny: {}",
+      ].join("\n"),
     );
     const entries = compileCommandRuleEntries(config.commands).entries;
     assert.equal(resolveCommandAction(entries, "git push status"), "allow");
@@ -120,20 +131,45 @@ describe("structured whole-token command rules", () => {
     assert.equal(resolveCommandAction(entries, "# git push\necho ok"), "allow");
   });
 
-  it("rejects legacy strings and malformed rules instead of dropping AND conditions", () => {
-    for (const rule of [
-      '"git push"',
-      "{args: [push]}",
-      "{command: git, args: push}",
-      "{command: git, args: [push, 1]}",
-      "{command: git, any: []}",
-      "[{command: git}, null]",
+  it("rejects malformed families and rules instead of dropping AND conditions", () => {
+    for (const commands of [
+      "- git:\n      - ask: 'git push'",
+      "- git:\n      - ask:",
+      "- git:\n      - ask: {args: push}",
+      "- git:\n      - ask: {args: [push, 1]}",
+      "- git:\n      - ask: {command: git, any: []}",
+      "- git:\n      - ask: {command: 1}",
+      "- git:\n      - {ask: {}, deny: {}}",
+      "- git:\n      - maybe: []",
+      "- git:\n      - ask: []",
+      "- git: {ask: {}}",
+      "- git: 1",
+      "- {git: [{ask: {}}], gh: [{deny: {}}]}",
     ])
       assert.throws(
-        () =>
-          parseSandboxedToolsConfig('read: [{allow: "*"}]\ncommands: [{allow: ' + rule + "}]"),
-        rule,
+        () => parseSandboxedToolsConfig('read: [{allow: "*"}]\ncommands:\n' + commands),
+        commands,
       );
+  });
+
+  it("expands families in array order and lets a rule-level command override the family pattern", () => {
+    const config = parseSandboxedToolsConfig(
+      [
+        "commands:",
+        '  - ".*":',
+        "      - allow: {}",
+        "  - tool:",
+        "      - ask: {}",
+        "      - allow: {args: [--version]}",
+        "      - deny: {command: 'other-tool', args: [boom]}",
+      ].join("\n"),
+    );
+    const entries = compileCommandRuleEntries(config.commands).entries;
+    assert.equal(resolveCommandAction(entries, "tool"), "ask");
+    assert.equal(resolveCommandAction(entries, "tool --version"), "allow");
+    assert.equal(resolveCommandAction(entries, "other-tool boom"), "deny");
+    assert.equal(resolveCommandAction(entries, "other-tool"), "allow");
+    assert.equal(resolveCommandAction(entries, "other"), "allow");
   });
 
   it("invalid command or arg regex disables the entire affected rule only", () => {
@@ -171,7 +207,7 @@ describe("structured whole-token command rules", () => {
 
 it(
   "once approvals distinguish a quoted single token from two tokens",
-  withSandbox("commands: [{ask_with_reason: {command: tool}}]", async (sandbox) => {
+  withSandbox("commands:\n  - tool:\n      - ask_with_reason: {}", async (sandbox) => {
     const confirm = {
       ui: {
         ask: async (request: { questions: { id: string }[] }) => ({
