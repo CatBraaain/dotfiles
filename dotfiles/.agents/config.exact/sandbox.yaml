@@ -81,7 +81,9 @@ commands:
   - allow: { command: ".*" }
   - ask:
       - { command: ".*", args: ["publish|submit|upload"] }
-      - { command: gh, args: [pr, create] }
+
+  # git
+  - ask:
       - { command: git, args: [push] }
   - ask_with_reason:
       - { command: git, args: [reset, "--hard"] }
@@ -91,10 +93,24 @@ commands:
         }
       - { command: git, args: ["replace|update-ref|gc|prune"] }
       - { command: git, args: [reflog, expire] }
+  - allow:
+      - { command: git, args: [worktree, prune] }
+
+  # gh
+  - ask:
+      - { command: gh, args: [pr, create] }
+
+  # sudo / doas
+  - ask_with_reason:
       - { command: sudo }
+  - allow:
+      - { command: sudo, args: ["-n", "true"] }
+  - deny:
+      - { command: doas }
+
+  # systemctl
+  - ask_with_reason:
       - { command: systemctl }
-      - { command: crontab }
-      - { command: "chmod|chown", args: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"] }
   - allow:
       - {
           command: systemctl,
@@ -102,11 +118,6 @@ commands:
         }
       - { command: systemctl, args: ["(list-|is-).*"] }
       - { command: systemctl, args: ["--version"] }
-      - { command: crontab, args: ["-l"] }
-  - allow:
-      - { command: sudo, args: ["-n", "true"] }
-  - allow:
-      - { command: git, args: [worktree, prune] }
   - deny:
       - {
           command: systemctl,
@@ -115,13 +126,26 @@ commands:
               "reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit",
             ],
         }
+
+  # crontab
+  - ask_with_reason:
+      - { command: crontab }
+  - allow:
+      - { command: crontab, args: ["-l"] }
+
+  # chmod / chown
+  - ask_with_reason:
+      - { command: "chmod|chown", args: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"] }
+
+  # destructive system commands
   - deny:
-      - { command: doas }
       - {
           command: '(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b.*',
         }
       - { command: "wipefs|parted|fdisk|sfdisk|sgdisk" }
       - { command: "shutdown|reboot|poweroff|halt" }
+
+  # /mnt
   - ask:
       - { command: "(?i:/mnt(?:/.*)?)" }
   - allow:
@@ -166,6 +190,8 @@ commands:
               "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
             ],
         }
+
+  # pi
   - ask:
       - { command: pi }
   - allow:
