@@ -1,5 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { assertFormatAndChecksum, loadEnvelope, verifyPng, type Envelope } from "./format";
+import {
+  assertFormatAndChecksum,
+  loadEnvelope,
+  resolveRenderSettings,
+  verifyPng,
+  type Envelope,
+} from "./format";
 
 export function extractEnvelope(png: Buffer): Envelope {
   const envelope = loadEnvelope(png);
@@ -17,7 +23,8 @@ export function extractFile(inputPath: string, output?: string): string {
 
 export function verifyFile(inputPath: string): string {
   const { envelope, pixelWidth, pixelHeight } = verifyPng(readFileSync(inputPath));
-  return `verify: ${inputPath} ok (${pixelWidth}x${pixelHeight}, format ${envelope.format}, html ${Buffer.byteLength(envelope.html, "utf8")} bytes)`;
+  const render = resolveRenderSettings(envelope, pixelWidth, pixelHeight);
+  return `verify: ${inputPath} ok (${render.width}x${render.height}@${render.scale}x, ${pixelWidth}x${pixelHeight} px, format ${envelope.format}, html ${Buffer.byteLength(envelope.html, "utf8")} bytes)`;
 }
 
 function defaultExtractOutput(inputPath: string): string {

@@ -52,6 +52,15 @@ export function loadEnvelope(png: Buffer): Envelope | null {
   return null;
 }
 
+export function resolveRenderSettings(envelope: Envelope, pixelWidth: number, pixelHeight: number): RenderSettings {
+  const { render } = envelope;
+  const isComplete =
+    typeof render?.width === "number" &&
+    typeof render?.height === "number" &&
+    typeof render?.scale === "number";
+  return isComplete ? render : { width: pixelWidth, height: pixelHeight, scale: 1 };
+}
+
 export function verifyPng(png: Buffer): { envelope: Envelope; pixelWidth: number; pixelHeight: number } {
   assertPngSignature(png);
   let sawIend = false;

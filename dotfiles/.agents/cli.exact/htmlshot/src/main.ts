@@ -10,7 +10,7 @@ type Parsed = {
   output?: string;
   width: number;
   height: number;
-  scale: number;
+  scale?: number;
   unsafe: boolean;
 };
 
@@ -56,7 +56,7 @@ export async function run(argv: string[]): Promise<number> {
 const VALUE_OPTIONS = new Set(["-o", "--width", "--height", "--scale"]);
 
 function parseArgs(args: string[]): Parsed {
-  const parsed: Parsed = { positional: [], width: 1200, height: 800, scale: 1, unsafe: false };
+  const parsed: Parsed = { positional: [], width: 1200, height: 800, unsafe: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     const value = (): string => {

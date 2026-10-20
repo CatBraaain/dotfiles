@@ -16,9 +16,14 @@ export type ShotSettings = {
   output?: string;
   width: number;
   height: number;
-  scale: number;
+  scale?: number;
   unsafe: boolean;
 };
+
+const AUTO_SCALE_TARGET_WIDTH_PX = 1920;
+const AUTO_SCALE_TARGET_HEIGHT_PX = 1080;
+const AUTO_SCALE_MIN = 1;
+const AUTO_SCALE_MAX = 3;
 
 const PATH_BROWSERS = ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome"];
 const VIRTUAL_TIME_BUDGET_MILLISECONDS = 5000;
@@ -53,6 +58,13 @@ export function resolveBrowser(): string | null {
   return null;
 }
 
+export function resolveScale(width: number, height: number, requested?: number): number {
+  if (requested !== undefined) return requested;
+  const targetEdgePx = width >= height ? AUTO_SCALE_TARGET_WIDTH_PX : AUTO_SCALE_TARGET_HEIGHT_PX;
+  const autoScale = Math.round(targetEdgePx / Math.max(width, height));
+  return Math.min(AUTO_SCALE_MAX, Math.max(AUTO_SCALE_MIN, autoScale));
+}
+
 export async function shotFile(inputPath: string, settings: ShotSettings): Promise<string> {
   const html = utf8Decoder.decode(readFileSync(inputPath));
   const violations = scanViolations(html);
@@ -62,7 +74,8 @@ export async function shotFile(inputPath: string, settings: ShotSettings): Promi
   }
   const browserPath = resolveBrowser();
   if (browserPath === null) throw new Error("no chromium browser found (set HTMLSHOT_BROWSER)");
-  const render: RenderSettings = { width: settings.width, height: settings.height, scale: settings.scale };
+  const scale = resolveScale(settings.width, settings.height, settings.scale);
+  const render: RenderSettings = { width: settings.width, height: settings.height, scale };
   const bound = insertMetadata(renderPng(browserPath, inputPath, render), buildEnvelope(html, render));
   const outputPath = settings.output ?? defaultBindOutput(inputPath);
   writeFileSync(outputPath, bound);

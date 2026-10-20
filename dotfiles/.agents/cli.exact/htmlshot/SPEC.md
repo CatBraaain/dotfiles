@@ -62,7 +62,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 | ブラウザの決定順 | 環境変数 `HTMLSHOT_BROWSER` → `~/.cache/ms-playwright/chromium-*` のうちバージョン番号が最大の配下の `chrome-linux64/chrome`、無いとき `chrome-linux/chrome` → PATH上の `chromium`・`chromium-browser`・`google-chrome-stable`・`google-chrome` の最初に見つけたもの |
 | 読み込み | 正本の絶対パスの `file://` URL |
 | 起動フラグ | `--headless`、`--screenshot=<一時ファイル>`、`--window-size=<width>,<height>`、`--force-device-scale-factor=<scale>`、`--hide-scrollbars`、`--virtual-time-budget=5000` |
-| 既定のレンダ設定 | width 1200、height 800、scale 1。`--width`・`--height`・`--scale` で変更する |
+| 既定のレンダ設定 | width 1200、height 800。`--scale` を省略したときの scale は、width が height 以上のとき 1920 ÷ width、それ以外のとき 1080 ÷ height を四捨五入し、1〜3 の範囲に制限した値。`--width`・`--height`・`--scale` で変更する |
 | 背景 | Chromium の既定（白）。正本が body等で上書きできる |
 | タイムアウト | レンダ開始から 30秒でプロセスを終了し、非0 で終了する |
 
@@ -88,7 +88,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 `htmlshot verify <input.png>` は extract と同じ走査・検証を行い、HTML を書き出さない。
 
 - PNG としてchunk走査が完了しない（`IEND` が無い等）とき、メタデータ `iTXt` の CRC が不一致のときは非0 で終了する。画像部の chunk の CRC は検査しない。
-- 成功時は stdout に `verify: <input> ok (<pixel width>x<pixel height>, format htmlshot/v1, html <bytes> bytes)` と出す。ピクセルサイズは `IHDR` から得る。
+- 成功時は stdout に `verify: <input> ok (<width>x<height>@<scale>x, <pixel width>x<pixel height> px, format htmlshot/v1, html <bytes> bytes)` と出す。`<width>x<height>@<scale>x` はメタデータ `render` の値であり、再製本の `--width`・`--height`・`--scale` にそのまま渡せる。メタデータに `render` が無い製本では、ピクセルサイズをその寸法、`1` を倍率とする。ピクセルサイズは `IHDR` から得る。
 
 ## 出力と終了コード
 

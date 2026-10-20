@@ -9,6 +9,7 @@ import {
   insertMetadata,
   loadEnvelope,
   metadataChunkOffset,
+  resolveRenderSettings,
   verifyPng,
 } from "./format";
 
@@ -87,5 +88,15 @@ describe("format", () => {
     const crcOffset = offset + 8 + dataLength;
     complete.writeUInt32BE((complete.readUInt32BE(crcOffset) ^ 0xff) >>> 0, crcOffset);
     assert.throws(() => verifyPng(complete), /crc mismatch/);
+  });
+
+  it("resolves render settings recorded in the envelope", () => {
+    assert.deepEqual(resolveRenderSettings(buildEnvelope(SAMPLE_HTML, RENDER), 1280, 768), RENDER);
+  });
+
+  it("falls back to pixel size at scale 1 when envelope has no render", () => {
+    const envelope = buildEnvelope(SAMPLE_HTML, RENDER);
+    delete (envelope as Partial<typeof envelope>).render;
+    assert.deepEqual(resolveRenderSettings(envelope, 1280, 768), { width: 1280, height: 768, scale: 1 });
   });
 });

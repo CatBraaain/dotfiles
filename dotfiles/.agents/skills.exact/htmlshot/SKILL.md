@@ -27,7 +27,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 1. 正本HTML を書く。CSS は `<style>` で同一ファイルに完結させ、キャンバス寸法は body で固定する
 2. `<script>` と外部参照（`http:`・`https:`・`//`・`file:`）は検出されると shotが失敗する。同一入力からの同一レンダを保ち、画像の中に実行コードを持ち込まないためである。画像・フォントは `data:` URL で埋め込む
-3. `htmlshot shot NAME.html --width <w> --height <h>` で `NAME.html.png` を生成する。サイズは図に合わせて指定し、固定サイズで生成するときは全要素がその寸法に収まることをレイアウトで担保する
+3. `htmlshot shot NAME.html --width <w> --height <h>` で `NAME.html.png` を生成する。サイズは図に合わせて指定し、固定サイズで生成するときは全要素がその寸法に収まることをレイアウトで担保する。`--scale` を省略すると FHD に近づく倍率（1〜3）が選ばれ、ピクセル寸法は 指定寸法 × 倍率 になる（横長・正方形は幅 1920px 目標、縦長は高さ 1080px 目標）
 4. `htmlshot verify NAME.html.png` でフォーマットとチェックサムを確認する
 
 `--unsafe` は制約検出を無視して続行するオプションであり、使ったときは警告行を確認すること。通常は使わない。
@@ -49,7 +49,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 2. 取り出したHTML を編集する
 3. 同じ寸法で再shotし、既存の `.html.png` を更新する
 
-寸法の復元は `htmlshot verify NAME.html.png` の出力 `<pixel width>x<pixel height>` で行う。ピクセル幅・高さをそのまま `--width`・`--height` へ渡し、`--scale` は付けない。ピクセル寸法は `幅×倍率` の積のため verify 出力からは倍率を一意に復元できず（例: 1200px は 1200@1x と 600@2x の両方）、再shotでは既定の 1 に統一する。レンダ倍率を変える意図があるときだけ `--scale` を明示する。
+寸法と倍率の復元は `htmlshot verify NAME.html.png` の出力 `<width>x<height>@<scale>x` で行う。width・height・scale をそのまま `--width`・`--height`・`--scale` へ渡す。
 
 `checksum mismatch` は PNG が壊れていることを示す。その場合は当該ファイルを正本として扱わず報告する。
 
