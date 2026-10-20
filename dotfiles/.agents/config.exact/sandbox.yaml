@@ -83,7 +83,6 @@ commands:
       - allow: {}
       - ask: { args: ["publish|submit|upload"] }
 
-  # git
   - git:
       - allow: {}
       - ask: { args: [push] }
@@ -94,19 +93,16 @@ commands:
       - ask_with_reason: { args: [reflog, expire] }
       - allow: { args: [worktree, prune] }
 
-  # gh
   - gh:
       - allow: {}
       - ask: { args: [pr, create] }
 
-  # sudo / doas
   - sudo:
       - ask_with_reason: {}
       - allow: { args: ["-n", "true"] }
   - doas:
       - deny: {}
 
-  # systemctl
   - systemctl:
       - ask_with_reason: {}
       - allow: { args: ["status|show|cat|help|get-default|show-environment"] }
@@ -118,12 +114,10 @@ commands:
               "reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit",
             ]
 
-  # crontab
   - crontab:
       - ask_with_reason: {}
       - allow: { args: ["-l"] }
 
-  # chmod / chown
   - "chmod|chown":
       - allow: {}
       - ask_with_reason: { args: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"] }
@@ -136,42 +130,33 @@ commands:
   - "shutdown|reboot|poweroff|halt":
       - deny: {}
 
-  # /mnt
   - "(?i:/mnt(?:/.*)?)":
       - ask: {}
       - allow:
-          command: '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)'
-      - allow:
-          command: '(?i:/mnt/c/Windows/System32/reg\.exe)'
-          args: ["(?i:query|compare)"]
-      - allow:
-          command: '(?i:/mnt/c/Windows/System32/sc\.exe)'
-          args: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"]
-      - allow:
-          command: '(?i:/mnt/c/Windows/System32/schtasks\.exe)'
-          args: ["(?i:/query)"]
-      - allow:
-          command: '(?i:/mnt/c/Windows/System32/wevtutil\.exe)'
-          args: ["(?i:qe|el)"]
-      - allow:
-          command: '(?i:/mnt/c/Windows/System32/netsh\.exe)'
-          args: ["(?i:show)"]
-      - allow: { command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)' }
-      - allow:
-          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
-          args: ["--version|--status|-l|--list"]
+          - command: '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)'
+          - command: '(?i:/mnt/c/Windows/System32/reg\.exe)'
+            args: ["(?i:query|compare)"]
+          - command: '(?i:/mnt/c/Windows/System32/sc\.exe)'
+            args: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"]
+          - command: '(?i:/mnt/c/Windows/System32/schtasks\.exe)'
+            args: ["(?i:/query)"]
+          - command: '(?i:/mnt/c/Windows/System32/wevtutil\.exe)'
+            args: ["(?i:qe|el)"]
+          - command: '(?i:/mnt/c/Windows/System32/netsh\.exe)'
+            args: ["(?i:show)"]
+          - command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
+          - command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
+            args: ["--version|--status|-l|--list"]
       - ask:
-          command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
-          args:
-            ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
-      - ask:
-          command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
-          args:
-            [
-              "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
-            ]
+          - command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
+            args:
+              ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
+          - command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
+            args:
+              [
+                "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
+              ]
 
-  # pi
   - pi:
       - ask: {}
       - allow: { args: ["--help|--version|-h|-v"] }
