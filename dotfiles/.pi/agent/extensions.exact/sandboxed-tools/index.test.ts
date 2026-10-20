@@ -2472,7 +2472,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "ask_permission のダイアログは問いかけ・理由・設定パターンを行順どおりに表示する",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         let title = "";
         await sandbox.requestWritePermission(
@@ -2532,7 +2532,7 @@ describe("§3 許可要求ツール", () => {
   it(
     "select を提供しない UI では confirm に置き換えて理由行を表示する",
     withAskPermissionSandbox(
-      () => "read: {}\nwrite: {}\n",
+      () => "read: []\nwrite: []\n",
       async (dir, sandbox) => {
         const confirmed: { question: string; message: string }[] = [];
         const outcome = await sandbox.requestWritePermission(
@@ -4025,7 +4025,7 @@ commands:
 
   it(
     "未設定コマンドはブロックされる",
-    withSandbox(``, "/cwd", async (sandbox) => {
+    withSandbox("read: []\n", "/cwd", async (sandbox) => {
       await assert.rejects(async () => {
         await sandbox.authorizeCommand("rm -rf /", { cwd: "/cwd" });
       }, /Command denied/);
@@ -4274,11 +4274,14 @@ commands:
     ]);
   });
 
-  it("path pattern lists ignore non-strings and command lists reject invalid rules", () => {
+  it("path pattern lists and credentials reject non-strings and unknown sections are errors", () => {
+    assert.throws(() => parseSandboxedToolsConfig("commands: [{allow: [{command: ls}, 1, null]}]"));
+    assert.throws(() => parseSandboxedToolsConfig('read: [{allow: ["*", 2]}]'));
+    assert.throws(() => parseSandboxedToolsConfig("credentials: [~/.ssh, 1]\n"));
     assert.throws(() =>
-      parseSandboxedToolsConfig("commands: [{allow: [{command: ls}, 1, null]}]"),
+      parseSandboxedToolsConfig('read: [{allow: "*"}]\ncommand: [{allow: {command: ls}}]\n'),
     );
-    const config = parseSandboxedToolsConfig('read: [{allow: ["*", 2]}]');
+    const config = parseSandboxedToolsConfig('read: [{allow: "*"}]');
     assert.deepEqual(config.read, [{ action: "allow", patterns: ["*"] }]);
   });
 
@@ -4311,19 +4314,27 @@ commands:
     assert.throws(() => parseSandboxedToolsConfig("read:\n  - {allow: 1}\n"));
   });
 
-  it(
-    "記法を満たさない config で構築した Sandbox は全セクション未設定で動作する",
-    withSandbox('read:\n  allow: ["."]\n', "/cwd", async (sandbox) => {
-      await assert.rejects(
-        () => sandbox.authorizePath("read", "/cwd/file.txt", { cwd: "/cwd" }),
-        /Access requires confirmation/,
+  it("記法を満たさない config では Sandbox の構築が失敗する", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "sandboxed-tools-test-"));
+    try {
+      const configPath = join(tempDir, "config.yaml");
+      writeFileSync(configPath, 'read:\n  allow: ["."]\n');
+      assert.throws(
+        () => new Sandbox("/cwd", configPath),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message ===
+            `sandbox.yaml (${configPath}): sandboxed-tools config schema violation: /read must be array`,
       );
-      await assert.rejects(
-        async () => sandbox.authorizeCommand("ls", { cwd: "/cwd" }),
-        /Command denied/,
-      );
-    }),
-  );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("config が存在しなければ Sandbox の構築が失敗する", () => {
+    const configPath = join(tmpdir(), "sandboxed-tools-missing-config", "sandbox.yaml");
+    assert.throws(() => new Sandbox("/cwd", configPath), /ENOENT/);
+  });
 });
 
 describe("§6.1 bind とパスの実在保証", () => {

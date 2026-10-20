@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { parse as parseShell } from "shell-quote";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
+import { Compile } from "typebox/compile";
 
 export type PathAction = "allow" | "deny" | "ask";
 
@@ -162,78 +164,80 @@ type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
 type RunToolsResponse =
   { ok: true; result: AgentToolResult<any> } | { ok: false; error: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+const PathPatternSchema = Type.Union([Type.String(), Type.Array(Type.String())]);
+
+const PathEntrySchema = Type.Object(
+  {
+    allow: Type.Optional(PathPatternSchema),
+    ask: Type.Optional(PathPatternSchema),
+    deny: Type.Optional(PathPatternSchema),
+  },
+  { additionalProperties: false, minProperties: 1, maxProperties: 1 },
+);
+
+const CommandRuleSchema = Type.Object(
+  {
+    command: Type.String(),
+    args: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: false },
+);
+
+const CommandEntrySchema = Type.Object(
+  {
+    allow: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
+    ask: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
+    ask_with_reason: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
+    deny: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
+  },
+  { additionalProperties: false, minProperties: 1, maxProperties: 1 },
+);
+
+const SandboxedToolsConfigSchema = Type.Object(
+  {
+    read: Type.Optional(Type.Array(PathEntrySchema)),
+    write: Type.Optional(Type.Array(PathEntrySchema)),
+    credentials: Type.Optional(Type.Array(Type.String())),
+    commands: Type.Optional(Type.Array(CommandEntrySchema)),
+  },
+  { additionalProperties: false },
+);
+
+const validateConfig = Compile(SandboxedToolsConfigSchema);
+
+function toPathEntry(entry: Static<typeof PathEntrySchema>): PathRuleEntry {
+  const [action, pattern] = Object.entries(entry)[0] as [PathAction, string | string[]];
+  return { action, patterns: typeof pattern === "string" ? [pattern] : pattern };
 }
 
-function asPatterns(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : [];
-}
-
-function parseCommandEntries(value: unknown): CommandRuleEntry[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error("commands must be a list of entries");
-  return value.map((element) => {
-    if (!isRecord(element) || Object.keys(element).length !== 1)
-      throw new Error("command entry must declare exactly one action");
-    const action = Object.keys(element)[0] as CommandAction;
-    if (!["allow", "ask", "ask_with_reason", "deny"].includes(action))
-      throw new Error("unknown command action: " + action);
-    const configured = element[action];
-    const rules = Array.isArray(configured) ? configured : [configured];
-    const patterns = rules.map((rule): CommandRule => {
-      if (
-        !isRecord(rule) ||
-        typeof rule.command !== "string" ||
-        Object.keys(rule).some((key) => key !== "command" && key !== "args") ||
-        (rule.args !== undefined &&
-          (!Array.isArray(rule.args) || rule.args.some((arg) => typeof arg !== "string")))
-      )
-        throw new Error("command rule requires command: string and optional args: string[]");
-      return {
-        command: rule.command,
-        ...(rule.args === undefined ? {} : { args: rule.args as string[] }),
-      };
-    });
-    return { action, patterns };
-  });
+function toCommandEntry(entry: Static<typeof CommandEntrySchema>): CommandRuleEntry {
+  const [action, rule] = Object.entries(entry)[0] as [
+    CommandAction,
+    Static<typeof CommandRuleSchema> | Static<typeof CommandRuleSchema>[],
+  ];
+  const rules = Array.isArray(rule) ? rule : [rule];
+  return {
+    action,
+    patterns: rules.map(({ command, args }) =>
+      args === undefined ? { command } : { command, args },
+    ),
+  };
 }
 
 export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig {
   const parsed = parseYaml(source) as unknown;
-  if (!isRecord(parsed)) throw new Error("sandboxed-tools config must be a mapping");
-
-  const parseEntries = <A extends PathAction | CommandAction>(
-    value: unknown,
-    allowedActions: readonly A[],
-  ): { action: A; patterns: string[] }[] | undefined => {
-    if (value === undefined) return undefined;
-    if (!Array.isArray(value)) throw new Error("rule section must be a list of entries");
-    return value.map((element): { action: A; patterns: string[] } => {
-      if (!isRecord(element)) throw new Error("rule entry must be a mapping");
-      const keys = Object.keys(element);
-      if (keys.length !== 1) throw new Error("rule entry must declare exactly one action");
-      const [action] = keys as [A];
-      if (!allowedActions.includes(action)) throw new Error(`unknown action: ${action}`);
-      const pattern = element[action];
-      if (typeof pattern !== "string" && !Array.isArray(pattern))
-        throw new Error("rule entry pattern must be a string or a list of strings");
-      return {
-        action,
-        patterns: typeof pattern === "string" ? [pattern] : asPatterns(pattern),
-      };
-    });
-  };
-
-  const pathActions = ["allow", "ask", "deny"] as const;
-
+  if (!validateConfig.Check(parsed)) {
+    const details = [...validateConfig.Errors(parsed)]
+      .map((error) => `${error.instancePath || "/"} ${error.message}`)
+      .join("; ");
+    throw new Error(`sandboxed-tools config schema violation: ${details}`);
+  }
+  const config = parsed as Static<typeof SandboxedToolsConfigSchema>;
   return {
-    read: parseEntries(parsed.read, pathActions),
-    write: parseEntries(parsed.write, pathActions),
-    credentials: asPatterns(parsed.credentials),
-    commands: parseCommandEntries(parsed.commands),
+    read: config.read?.map(toPathEntry),
+    write: config.write?.map(toPathEntry),
+    credentials: config.credentials,
+    commands: config.commands?.map(toCommandEntry),
   };
 }
 
@@ -831,8 +835,9 @@ export class Sandbox {
   ) {
     try {
       this.config = parseSandboxedToolsConfig(readFileSync(configPath, "utf8"));
-    } catch {
-      this.config = {};
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`sandbox.yaml (${configPath}): ${message}`);
     }
     const compiledCommands = compileCommandRuleEntries(this.config.commands);
     this.commandEntries = compiledCommands.entries;

@@ -867,9 +867,10 @@ export default function agentsExtension(
   pi: ExtensionAPI,
   injectedConfig: ConfigLoadResult = loadAgentConfig(),
 ): void {
-  const loadedConfig = injectedConfig;
-  const config = loadedConfig.config;
-  let currentAgent = config?.default ?? "invalid";
+  if (injectedConfig.config === undefined)
+    throw new Error(`agents.yaml: ${injectedConfig.error ?? "configuration is invalid"}`);
+  const config = injectedConfig.config;
+  let currentAgent = config.default;
   let inlineLogCounter = 0;
 
   pi.registerFlag("agent", { type: "string", description: "Agent for a child session." });
@@ -887,12 +888,6 @@ export default function agentsExtension(
       ),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      if (!config)
-        return {
-          content: [textPart(`Agent configuration error: ${loadedConfig.error}`)],
-          details: { results: [] },
-          isError: true,
-        };
       if (!params.task)
         return {
           content: [textPart("Invalid parameters. Provide a task.")],
@@ -1021,26 +1016,6 @@ export default function agentsExtension(
     },
   });
 
-  if (!config) {
-    pi.on("session_start", async (_event, ctx) => {
-      if (ctx.hasUI) ctx.ui.notify(`agent configuration error: ${loadedConfig.error}`, "error");
-    });
-    // SPEC「設定の検証」: 設定が無効でも画像添付はモデルへ送らず Vision 入力を作らない
-    // エラーを返す。画像を処理できるかの model capability 判定は有効な設定でのみ行う。
-    pi.on("input", async (event, ctx) => {
-      if (!event.images || event.images.length === 0) return;
-      const message =
-        "image input is not available: the agent configuration is invalid; use vision";
-      if (ctx.hasUI) ctx.ui.notify(message, "error");
-      else {
-        process.stderr.write(`${message}\n`);
-        process.exitCode = 1;
-      }
-      return { action: "handled" };
-    });
-    return;
-  }
-
   // ── model routing state ─────────────────────────────────────────────
   let manual = false; // user picked a model manually -> suspend auto-routing
   let switching = false; // our own setModel is in flight (NOT "manual")
@@ -1072,7 +1047,7 @@ export default function agentsExtension(
   // SPEC「class によるモデル選択」: 実効 class は /class での選択を優先し、未選択なら
   // agent の既定 class を使う。agent の選択とは独立している。
   function effectiveClass(agent: Agent): string | undefined {
-    return currentClass ?? config?.agents[agent]?.class;
+    return currentClass ?? config.agents[agent]?.class;
   }
 
   async function applyClassModel(
@@ -1083,7 +1058,7 @@ export default function agentsExtension(
   ): Promise<string | null> {
     const className = effectiveClass(agent);
     if (!className) return null;
-    let candidates = config?.classes[className] ?? [];
+    let candidates = config.classes[className] ?? [];
     for (;;) {
       const model = await pickCandidate(
         candidates,
@@ -1123,7 +1098,7 @@ export default function agentsExtension(
   }
 
   function applyAgentTools(ctx: ExtensionContext, agent: Agent): void {
-    const agentDefinition = config?.agents[agent];
+    const agentDefinition = config.agents[agent];
     if (!agentDefinition) return;
     // 親セッション自身の active agent も拡張間で共有する。
     process.env.PI_AGENT_NAME = agent;
@@ -1151,7 +1126,6 @@ export default function agentsExtension(
   // SPEC「class によるモデル選択」: 初期 class は --class フラグで決める。未定義の値は
   // warning で通知し、agent の既定 class を使う。
   function resolveInitialClass(ctx: ExtensionContext): string | undefined {
-    if (!config) return undefined;
     const requested = pi.getFlag("class") as string | undefined;
     if (!requested) return undefined;
     if (config.classes[requested]) return requested;
@@ -1219,10 +1193,6 @@ export default function agentsExtension(
     event: { text?: string; images?: ImageContent[]; source?: string },
     ctx: ExtensionContext,
   ): { action: "continue" } | { action: "handled" } {
-    if (!config) {
-      notifyImageUnavailable(ctx);
-      return { action: "handled" };
-    }
     if (ctx.model && modelSupportsImages(ctx.model as { input?: readonly string[] })) {
       return { action: "continue" };
     }

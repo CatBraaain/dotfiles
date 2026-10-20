@@ -1716,22 +1716,8 @@ describe("手動モデル選択", () => {
     }
   });
 
-  it("設定が無効なとき画像添付はモデルへ送らずエラーを返す", async () => {
-    const extension = captureAgentsExtension({ error: "classes are required" });
-    try {
-      await extension.sessionStart();
-      const result = await extension.input("see this", "interactive", [
-        { type: "image", data: "aGk=", mimeType: "image/png" },
-      ]);
-      assert.deepEqual(result, { action: "handled" });
-      assert.ok(
-        extension.notifications.some((message) =>
-          message.includes("agent configuration is invalid"),
-        ),
-      );
-    } finally {
-      extension.restore();
-    }
+  it("設定が無効なときは拡張のロードが失敗する", () => {
+    assert.throws(() => captureAgentsExtension({ error: "classes are required" }), /agents\.yaml: classes are required/);
   });
 
   it("agent 切り替えで手動状態を解除する", async () => {
@@ -3337,15 +3323,8 @@ describe("subagent", () => {
     }
   });
 
-  it("設定エラーを subagent のエラー結果として返す", async () => {
-    const extension = captureAgentsExtension({ error: "invalid config" });
-    try {
-      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
-      assert.equal(result.isError, true);
-      assert.match(result.content[0].text, /invalid config/);
-    } finally {
-      extension.restore();
-    }
+  it("設定エラーでは拡張のロードが失敗する", () => {
+    assert.throws(() => captureAgentsExtension({ error: "invalid config" }), /agents\.yaml: invalid config/);
   });
 
   it("空の task を拒否し、子プロセスを起動しない", async () => {
@@ -3360,14 +3339,8 @@ describe("subagent", () => {
     }
   });
 
-  it("agent の設定エラーを session_start で owner に通知する", async () => {
-    const extension = captureAgentsExtension({ error: "invalid config" });
-    try {
-      await extension.sessionStart();
-      assert.deepEqual(extension.notifications, ["agent configuration error: invalid config"]);
-    } finally {
-      extension.restore();
-    }
+  it("設定エラーでは session_start の登録前にロードが失敗する", () => {
+    assert.throws(() => captureAgentsExtension({ error: "invalid config" }), /agents\.yaml: invalid config/);
   });
 });
 
