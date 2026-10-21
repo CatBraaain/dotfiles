@@ -8,7 +8,9 @@ description: >-
 # playwright-e2e
 
 E2Eテストは、網羅性を確認するためのものと、人が操作を見て判断するためのものに
-分ける。録画とレビューは Playwright内蔵の trace と report で行う。
+分ける。通常の E2Eテストだけで保守に必要な振る舞いをカバーし、review テストに
+カバレッジを依存しない。review テストは人に見せるためだけのものであり、通常実行
+と CI では実行しない。録画とレビューは Playwright内蔵の trace と report で行う。
 
 ## テストの書き方
 
@@ -20,11 +22,22 @@ E2Eテストは、網羅性を確認するためのものと、人が操作を�
   `pressSequentially(text, { delay: 120 })`、クリックは `click({ steps: 15 })`
 - アサーションは通常の `expect()` で書く
 
-通常の E2E実行には review のテストも含める。アサーションで回帰を検知するため、
-網羅性のためのテストとシナリオが重複していても実行する。
+通常実行から `tests/review/` を除外する。config の `testIgnore` に
+`"**/review/**"` を設定する。`testIgnore` は CLI でパスを指定しても適用される
+ため、review を実行するときは `testIgnore` を解除した config を別に用意する。
 
-review用のテストファイルで trace を有効にする。通常実行でも review の trace が
-残るため、閲覧のためにテストを再実行する必要がない。全体の `--trace on` は使わず、
+```ts
+import { defineConfig } from "@playwright/test";
+import base from "./playwright.config";
+
+export default defineConfig({
+  ...base,
+  testIgnore: [],
+});
+```
+
+review用のテストファイルで trace を有効にする。review の実行時に trace が
+残るため、閲覧のためにテストを再実行する必要はない。全体の `--trace on` は使わず、
 他のテストの trace設定は既存の方針を保つ。
 
 ```ts
@@ -45,14 +58,14 @@ package.json に次の scripts を登録する。対象プロジェクトに E2E
 ```json
 {
   "scripts": {
-    "test:review": "playwright test tests/review/",
+    "test:review": "playwright test tests/review/ --config playwright.review.config.ts",
     "review": "playwright show-report --port 0"
   }
 }
 ```
 
-`test:review` は reviewテストだけ確認したいときの部分実行であり、閲覧の必須手順
-ではない。共通report は直近の実行結果で上書きされる。
+`test:review` は reviewテストを実行し、trace と report を残す手順である。
+共通report は直近の実行結果で上書きされる。
 
 `review` は標準の report を開く。`--port 0` により、9323 が使用中なら空きポートを
 使う。既存設定で report の出力先を変更している場合は、`show-report` の引数にその
@@ -66,5 +79,5 @@ package.json に次の scripts を登録する。対象プロジェクトに E2E
 
 手順:
 
-1. 通常の E2Eテストを実行する。部分確認だけなら `test:review` を使う
+1. `test:review` を実行し、review の録画を report に残す
 2. `review` を `CLAUDECODE=1` 前置きで実行し、出力の URL をユーザーに伝える
