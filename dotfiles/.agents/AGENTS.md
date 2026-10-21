@@ -186,6 +186,14 @@ ASD-STE100 は方向性の参考とし、厳格な規格準拠や語彙・語数
 - Before: In the event that the configuration file is absent, the application will utilize the default settings.
 - After: If the configuration file is missing, the application uses the default settings.
 
+## 英語文章の起草フロー
+
+英語の文章（PR・issue・README・docs など）を投稿・作成・編集するときは、デフォルトで次の順で進める。
+
+1. 新規作成・変更する内容を日本語で起草して提出する
+2. user が内容を確認し、承認する
+3. 承認後の内容を英語化して、投稿・編集・反映する
+
 ## Preferred Workflow
 
 求められた成果を基準に、既存ツールによる実行と、仕組みの実装を区別する。
