@@ -12,8 +12,8 @@ import {
   splitCommandSegments,
 } from "./sandbox";
 
-function commandEntries(rule: { command: string; args?: string[] }) {
-  return compileCommandRuleEntries([{ action: "ask", patterns: [rule] }]).entries;
+function commandEntries(pattern: string, args: string[]) {
+  return compileCommandRuleEntries([{ action: "ask", pattern, args }]).entries;
 }
 
 function withSandbox(config: string, test: (sandbox: Sandbox, cwd: string) => Promise<void>) {
@@ -31,7 +31,7 @@ function withSandbox(config: string, test: (sandbox: Sandbox, cwd: string) => Pr
 
 describe("structured whole-token command rules", () => {
   it("groups alternation and requires whole executable and argument tokens", () => {
-    const entries = commandEntries({ command: "git|gh", args: ["push|create"] });
+    const entries = commandEntries("git|gh", ["push|create"]);
     for (const command of ["git push", "gh create"])
       assert.equal(resolveCommandAction(entries, command), "ask", command);
     for (const command of [
@@ -47,34 +47,32 @@ describe("structured whole-token command rules", () => {
   });
 
   it("ANDs all arg patterns at arbitrary positions while allowing extra and shared tokens", () => {
-    const entries = commandEntries({ command: "tool", args: ["a|b", "b|c"] });
+    const entries = commandEntries("tool", ["a|b", "b|c"]);
     assert.equal(resolveCommandAction(entries, "tool extra c a tail"), "ask");
     assert.equal(resolveCommandAction(entries, "tool b"), "ask");
     assert.equal(resolveCommandAction(entries, "tool a"), "deny");
     assert.equal(resolveCommandAction(entries, "other a c"), "deny");
   });
 
-  it("omitted and empty args impose no argument constraints", () => {
-    for (const rule of [{ command: "tool" }, { command: "tool", args: [] }]) {
-      const entries = commandEntries(rule);
-      assert.equal(resolveCommandAction(entries, "tool"), "ask");
-      assert.equal(resolveCommandAction(entries, 'tool extra ""'), "ask");
-    }
+  it("empty args impose no argument constraints", () => {
+    const entries = commandEntries("tool", []);
+    assert.equal(resolveCommandAction(entries, "tool"), "ask");
+    assert.equal(resolveCommandAction(entries, 'tool extra ""'), "ask");
   });
 
   it("retains empty, quoted whitespace and newline tokens without inventing segments", () => {
     assert.deepEqual(splitCommandSegments('tool "" " a b " "a\nb"'), [
       ["tool", "", " a b ", "a\nb"],
     ]);
-    const entries = commandEntries({ command: "tool", args: ["", " a b ", "a\\nb"] });
+    const entries = commandEntries("tool", ["", " a b ", "a\\nb"]);
     assert.equal(resolveCommandAction(entries, 'tool "" " a b " "a\nb"'), "ask");
     assert.equal(resolveCommandAction(entries, 'tool " a b " "a\nb"'), "deny");
   });
 
   it("discards unquoted empty expansions without hiding the executable behind env", () => {
     const entries = compileCommandRuleEntries([
-      { action: "allow", patterns: [{ command: "[\\s\\S]*" }] },
-      { action: "ask", patterns: [{ command: "git", args: ["push"] }] },
+      { action: "allow", pattern: "[\\s\\S]*", args: [] },
+      { action: "ask", pattern: "git", args: ["push"] },
     ]).entries;
     for (const command of [
       "$UNSET_FOR_POLICY_REVIEW git push",
@@ -88,13 +86,13 @@ describe("structured whole-token command rules", () => {
 
   it("does not invent an empty argument from an unquoted expansion", () => {
     const command = "tool $UNSET_FOR_POLICY_REVIEW";
-    const entries = commandEntries({ command: "tool", args: [""] });
+    const entries = commandEntries("tool", [""]);
     assert.deepEqual(splitCommandSegments(command), [["tool"]]);
     assert.equal(resolveCommandAction(entries, command), "deny");
   });
 
   it("preserves quoted empty expansions and explicitly empty executable tokens", () => {
-    const entries = commandEntries({ command: "tool", args: [""] });
+    const entries = commandEntries("tool", [""]);
     for (const command of [
       'tool "$UNSET_FOR_POLICY_REVIEW"',
       "tool ''$UNSET_FOR_POLICY_REVIEW",
@@ -111,7 +109,19 @@ describe("structured whole-token command rules", () => {
 
   it("supports OR lists and last matching entries, then compound strictness", () => {
     const config = parseSandboxedToolsConfig(
-      'commands: [{allow: {command: ".*"}}, {ask: [{command: git, args: [push]}, {command: gh, args: [create]}]}, {allow: {command: git, args: [status]}}, {deny: {command: stop}}]',
+      `commands:
+  - .*:
+      - allow: []
+  - git:
+      - ask:
+          - push
+      - allow:
+          - status
+  - gh:
+      - ask:
+          - create
+  - stop:
+      - deny: []`,
     );
     const entries = compileCommandRuleEntries(config.commands).entries;
     assert.equal(resolveCommandAction(entries, "git push status"), "allow");
@@ -123,7 +133,6 @@ describe("structured whole-token command rules", () => {
   it("rejects legacy strings and malformed rules instead of dropping AND conditions", () => {
     for (const rule of [
       '"git push"',
-      "{args: [push]}",
       "{command: git, args: push}",
       "{command: git, args: [push, 1]}",
       "{command: git, any: []}",
@@ -131,18 +140,21 @@ describe("structured whole-token command rules", () => {
     ])
       assert.throws(
         () =>
-          parseSandboxedToolsConfig('read: [{allow: "*"}]\ncommands: [{allow: ' + rule + "}]"),
+          parseSandboxedToolsConfig(
+            'read: [{allow: "*"}]\ncommands:\n  - git:\n      - allow: ' + rule + "\n",
+          ),
         rule,
       );
   });
 
   it("invalid command or arg regex disables the entire affected rule only", () => {
     for (const rule of [
-      { command: "[unclosed", args: [] },
-      { command: "tool", args: ["good", "[unclosed"] },
+      { pattern: "[unclosed", args: [] },
+      { pattern: "tool", args: ["good", "[unclosed"] },
     ]) {
       const compiled = compileCommandRuleEntries([
-        { action: "allow", patterns: [rule, { command: "other" }] },
+        { action: "allow", ...rule },
+        { action: "allow", pattern: "other", args: [] },
       ]);
       assert.equal(compiled.invalidPatterns.length, 1);
       assert.equal(resolveCommandAction(compiled.entries, "tool good"), "deny");
@@ -153,8 +165,8 @@ describe("structured whole-token command rules", () => {
   it("reports original token ranges rather than a joined substring spanning unrelated args", () => {
     const match = resolveCommandActionMatch(
       compileCommandRuleEntries([
-        { action: "allow", patterns: [{ command: "echo" }] },
-        { action: "ask", patterns: [{ command: "git", args: ["push"] }] },
+        { action: "allow", pattern: "echo", args: [] },
+        { action: "ask", pattern: "git", args: ["push"] },
       ]).entries,
       'echo "git push"; git -C "a b" push',
     );
@@ -171,7 +183,9 @@ describe("structured whole-token command rules", () => {
 
 it(
   "once approvals distinguish a quoted single token from two tokens",
-  withSandbox("commands: [{ask_with_reason: {command: tool}}]", async (sandbox, cwd) => {
+  withSandbox(`commands:
+  - tool:
+      - ask_with_reason: []`, async (sandbox, cwd) => {
     const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
     await sandbox.requestCommandPermission('tool "a b"', "test", context);
     await assert.rejects(
@@ -189,7 +203,12 @@ it(
 it(
   "session rule identity includes every argument condition",
   withSandbox(
-    "commands: [{ask: [{command: tool, args: [one]}, {command: tool, args: [two]}]}]",
+    `commands:
+  - tool:
+      - ask:
+          - one
+      - ask:
+          - two`,
     async (sandbox, cwd) => {
       let prompts = 0;
       const context = {
@@ -222,7 +241,21 @@ it("preserves policy families with intentional unordered allow exceptions", () =
   const compiled = compileCommandRuleEntries(config.commands);
   assert.deepEqual(compiled.invalidPatterns, []);
   const cases = [
-    ["tool extra extra extra publish", "ask"],
+    ["npm publish", "ask"],
+    ["bun publish", "ask"],
+    ["conan upload pkg/1.0", "ask"],
+    ["choco push", "ask"],
+    ["gem push pkg-1.0.0.gem", "ask"],
+    ["docker push registry.example.com/app:1", "ask"],
+    ["flutter pub publish", "ask"],
+    ["mix hex.publish", "ask"],
+    ["mvn deploy", "ask"],
+    ["brew bump-formula-pr", "ask"],
+    ["brew bump-cask-pr", "ask"],
+    ["komac update pkg --version 1.2.3", "ask"],
+    ["komac sync", "allow"],
+    ["komac list-versions pkg", "allow"],
+    ["tool extra extra extra publish", "allow"],
     ['tool "x publish"', "allow"],
     ["git -C /repo push", "ask"],
     ["git --hard reset", "ask_with_reason"],

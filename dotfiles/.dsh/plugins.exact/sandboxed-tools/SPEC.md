@@ -266,10 +266,10 @@ network は開放。fs制限の対象外。
 | `credentials` | bash の sandbox に read-only で bindするパスパターン。`read` `write` `edit` `glob` `grep` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands` | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する |
 
-- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` はコマンドパターンをキーとする単一キーのマッピング（ファミリー）の配列で、キーはコマンドパターン（JavaScript `RegExp`）、値は `default` と `rules` をキーに持つマッピングとする。`rules` はルール項目 `{action: rule}` または `{action: [rules...]}` の配列で、同じaction内のルールはORとする。ルールは `command`（省略可・文字列）と `args`（省略可・文字列リスト）だけを持ち、`command` を省略したルールはキーのパターンでコマンドを判定し、指定した場合はキーではなくそのパターンで判定する（ファミリー内の個別パターン用）。`default` は `rules` のどのルールも一致しなかったコマンドに適用するアクションで、キーのパターンに一致する全コマンドを対象にする。commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
-- `read` / `write` のリスト、`commands` のファミリー配列とルール配列は、いずれも上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。ファミリーの `default` は先頭に置かれた制約なしのルールと等価で、一致するルールがあるときはそのルールが優先する。マッチする要素がなければ未設定（= `deny`）。
-- セクションがリストでない、要素がマッピングでない、actionが複数または未知の値の場合、読み込みは失敗し、全セクションが未設定（= `deny`）になる。read・writeの値は文字列または文字列リストで、リスト内の非文字列は無視する。commandsのファミリーは単一キーのマッピングで、値は `default` と `rules` 以外のキーを持たず、どちらも省略すると読み込み失敗になる。ルールは `command`（省略可）と `args`（省略可）以外のフィールドを持たない。文字列ルール、未知フィールド、型の違反、ルールリスト内の不正要素、空のルールリストも読み込み失敗になる。
-- `commands` のcommandまたはargsの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。dshのホストログで警告する。
+- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` はコマンドパターンをキーとする単一キーのマッピング（ファミリー）の配列で、キーはコマンドパターン（JavaScript `RegExp`）、値はルール項目 `{action: argPatterns}` の配列とする。argPatterns は引数パターン（JavaScript `RegExp`）の文字列リストで、リスト内の全パターンがそれぞれ1個以上の引数token全体に一致し、かつキーが実行ファイルtoken全体に一致するとき一致する（AND）。空リストは引数条件なしで、キーに一致するコマンドすべてに一致する。同じactionを複数のルール項目に分けて並べたときは、どちらか一方が一致すればそのactionとする（OR）。commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
+- `read` / `write` のリスト、`commands` のファミリー配列と各ファミリーのルール配列は、いずれも上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
+- セクションがリストでない、要素がマッピングでない、actionが複数または未知の値の場合、読み込みは失敗し、全セクションが未設定（= `deny`）になる。read・writeの値は文字列または文字列リストで、リスト内の非文字列は無視する。commandsのファミリーは単一キーのマッピングで、値はルール項目の配列とする。ルール項目は単一のactionだけを宣言し、actionの値は引数パターンの文字列リストとする。値がリストでない、リスト内の要素がマッピングでない、ルール項目内に文字列以外がある、actionの値がリストでない、リスト内に文字列以外がある場合も読み込み失敗になる。
+- `commands` のキー（コマンドパターン）または引数パターンの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。dshのホストログで警告する。
 
 本plugin は読み込み時と各セッションの開始時に `sandbox.yaml` を読み込み、変数展開・glob展開・実在保証（§6.1）をやり直す。
 
@@ -278,21 +278,20 @@ network は開放。fs制限の対象外。
 ```yaml
 commands:
   - ".*":
-      - allow: {}
-      - ask: { args: ["publish|submit|upload"] }
+      - allow: []
   - git:
-      - ask: { args: [push] }
-      - ask_with_reason: { args: [reset, "--hard"] }
-      - allow: { args: [worktree, prune] }
+      - ask: [push]
+      - ask_with_reason: [reset, "--hard"]
+      - allow: [worktree, prune]
   - doas:
-      - deny: {}
+      - deny: []
+  - npm|pnpm|yarn|bun|cargo:
+      - ask: [publish]
   - "(?i:/mnt(?:/.*)?)":
-      - ask: {}
-      - allow: { command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)' }
-      - ask:
-          command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
-          args:
-            ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
+      - ask: []
+  - '(?i:/mnt/c/Windows/System32/ipconfig\.exe)':
+      - allow: []
+      - ask: ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
 ```
 
 ### コマンドルールの照合（§6）
@@ -302,11 +301,11 @@ command と args の各文字列はJavaScript RegExp sourceであり、実行フ
 | 条件 | 一致結果 |
 | --- | --- |
 | commandが実行ファイルtoken全体に一致しない | 不一致 |
-| args省略または空配列 | commandだけで判定 |
+| argsが空配列 | commandだけで判定 |
 | argsの全パターンがそれぞれ1個以上の引数token全体に一致する | commandとのANDで一致 |
 | argsのいずれかに一致する引数がない | 不一致 |
 
-引数の位置・個数・順序は制約せず、追加引数を許容する。同じtokenが複数のargs条件を満たしてよい。オプション名と値の対応付けは行わない。例えば `{command: systemctl, args: [status]}` は `systemctl start status` にも一致する。コマンドが存在しない空入力・コメントのみの入力は未設定（deny）とする。
+引数の位置・個数・順序は制約せず、追加引数を許容する。同じtokenが複数のargs条件を満たしてよい。オプション名と値の対応付けは行わない。例えば systemctl ファミリーの `- allow: [status]` は `systemctl start status` にも一致する。コマンドが存在しない空入力・コメントのみの入力は未設定（deny）とする。
 
 ### 6.1 bind とパスの実在保証
 

@@ -183,10 +183,10 @@ async function sandboxSession(
     configPath,
     `read:\n  - deny: ${directory}/denied\nwrite:\n  - ask: ${directory}/requested
 commands:
-  - deny:
-      command: forbidden-command
-  - ask_with_reason:
-      command: reason-command
+  - forbidden-command:
+      - deny: []
+  - reason-command:
+      - ask_with_reason: []
 `,
   );
   const settingsManager = SettingsManager.inMemory({ codemode: { mode: "on" } });

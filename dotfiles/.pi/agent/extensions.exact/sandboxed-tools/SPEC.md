@@ -248,26 +248,29 @@ network は開放。fs制限の対象外。
 | `credentials` | bash の sandbox に read-only で bindするパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands` | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する |
 
-- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` は `{action: rule}` または `{action: [rules...]}` のフラットなリストで、同じaction内のルールはORとする。各要素は1つのactionだけを宣言し、commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
-- 各リストは要素を上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
+- `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` はコマンドパターンをキーとする単一キーのマッピング（ファミリー）の配列とし、キーはコマンドパターン（JavaScript `RegExp`）、値はルール項目 `{action: argPatterns}` の配列とする。argPatterns は引数パターン（JavaScript `RegExp`）の文字列リストで、リスト内の全パターンがそれぞれ1個以上の引数token全体に一致し、かつキーが実行ファイルtoken全体に一致するとき一致する（AND）。空リストは引数条件なしで、キーに一致するコマンドすべてに一致する。同じactionを複数のルール項目に分けて並べたときは、どちらか一方が一致すればそのactionとする（OR）。各ファミリーは単一のコマンドパターンだけを宣言し、commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
+- `read` / `write` のリスト、`commands` のファミリー配列と各ファミリーのルール配列は、いずれも上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
 - 実値（既定エントリ）は `sandbox.yaml` を参照。
 - 設定ファイルが不在・読めない・YAML として不正な場合、または記法（この節の表と例）に適合しない場合、拡張のロードを失敗させる（`sandbox.yaml (<パス>): <理由>` で throw する）。pi は拡張ロードの失敗を起動時の診断に表示する。不正な設定を一部分だけ適用することはない。
-- `commands` のcommandまたはargsの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。piの起動時メッセージで警告する。
+- `commands` のキー（コマンドパターン）または引数パターンの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。piの起動時メッセージで警告する。
 
 記法の例（`commands`）:
 
 ```yaml
 commands:
-  - allow: { command: ".*" }
-  - ask:
-      - { command: git, args: [push] }
-      - { command: gh, args: [pr, create] }
-  - ask_with_reason:
-      - { command: sudo }
-      - { command: chmod, args: ["-R"] }
-  - ask: { command: systemctl }
-  - allow: { command: systemctl, args: ["status|show"] }
-  - deny: { command: systemctl, args: ["reboot|poweroff|halt|shutdown"] }
+  - ".*":
+      - allow: []
+  - git:
+      - ask: [push]
+      - ask_with_reason: [clean, "-[^-]*f[^-]*"]
+      - allow: [worktree, prune]
+  - sudo:
+      - ask_with_reason: []
+      - allow: ["-n", "true"]
+  - doas:
+      - deny: []
+  - npm|pnpm|yarn|bun|cargo:
+      - ask: [publish]
 ```
 
 ### コマンドルールの照合（§6）
@@ -277,11 +280,11 @@ command と args の各文字列はJavaScript RegExp sourceであり、実行フ
 | 条件 | 一致結果 |
 | --- | --- |
 | commandが実行ファイルtoken全体に一致しない | 不一致 |
-| args省略または空配列 | commandだけで判定 |
+| argsが空配列 | commandだけで判定 |
 | argsの全パターンがそれぞれ1個以上の引数token全体に一致する | commandとのANDで一致 |
 | argsのいずれかに一致する引数がない | 不一致 |
 
-引数の位置・個数・順序は制約せず、追加引数を許容する。同じtokenが複数のargs条件を満たしてよい。オプション名と値の対応付けは行わない。例えば `{command: systemctl, args: [status]}` は `systemctl start status` にも一致する。コマンドが存在しない空入力・コメントのみの入力は未設定（deny）とする。
+引数の位置・個数・順序は制約せず、追加引数を許容する。同じtokenが複数のargs条件を満たしてよい。オプション名と値の対応付けは行わない。例えば `- systemctl: - allow: [status]` は `systemctl start status` にも一致する。コマンドが存在しない空入力・コメントのみの入力は未設定（deny）とする。
 
 ### 6.1 bind とパスの実在保証
 

@@ -71,9 +71,8 @@ export type CommandActionMatch = {
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
 type PathRuleEntry = { action: PathAction; patterns: string[] };
-/** Normalized command rule: `command` comes from the family key unless overridden (SPEC §6). */
-export type CommandRule = { command: string; args?: string[] };
-export type CommandRuleEntry = { action: CommandAction; patterns: CommandRule[] };
+/** Normalized command rule: the family key becomes `pattern` (SPEC §6). */
+export type CommandRuleEntry = { action: CommandAction; pattern: string; args: string[] };
 
 export type CompiledCommandPattern = { source: string; command: RegExp; args: RegExp[] };
 export type CompiledCommandRuleEntry = {
@@ -108,37 +107,20 @@ function parseCommandFamilies(value: unknown): CommandRuleEntry[] | undefined {
     const [pattern, rules] = Object.entries(family)[0]!;
     if (typeof pattern !== "string")
       throw new Error("command family key must be a command pattern string");
-    if (!Array.isArray(rules))
-      throw new Error(`command family ${pattern} must map to a list of rule items`);
+    if (!Array.isArray(rules) || rules.length === 0)
+      throw new Error(`command family ${pattern} must map to a non-empty list of rule items`);
     for (const item of rules) {
       if (!isRecord(item) || Object.keys(item).length !== 1)
         throw new Error(`command family ${pattern} must declare exactly one action per rule item`);
       const action = Object.keys(item)[0] as CommandAction;
       if (!["allow", "ask", "ask_with_reason", "deny"].includes(action))
         throw new Error("unknown command action: " + action);
-      const configured = item[action];
-      if (Array.isArray(configured) && configured.length === 0)
+      const args = item[action];
+      if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string"))
         throw new Error(
-          `command family ${pattern} has an empty ${action} rule list; use {} for a rule without constraints`,
+          `command family ${pattern} action ${action} requires a list of arg patterns; use [] for no constraints`,
         );
-      const ruleList = Array.isArray(configured) ? configured : [configured];
-      const patterns = ruleList.map((rule): CommandRule => {
-        if (
-          !isRecord(rule) ||
-          Object.keys(rule).some((key) => key !== "command" && key !== "args") ||
-          (rule.command !== undefined && typeof rule.command !== "string") ||
-          (rule.args !== undefined &&
-            (!Array.isArray(rule.args) || rule.args.some((arg) => typeof arg !== "string")))
-        )
-          throw new Error(
-            `command rule in family ${pattern} requires optional command: string and args: string[]`,
-          );
-        return {
-          command: rule.command === undefined ? pattern : (rule.command as string),
-          ...(rule.args === undefined ? {} : { args: rule.args as string[] }),
-        };
-      });
-      entries.push({ action, patterns });
+      entries.push({ action, pattern, args: args as string[] });
     }
   }
   return entries;
@@ -445,24 +427,25 @@ export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefine
   const compiled: CompiledCommandRuleEntry[] = [];
   const invalidPatterns: string[] = [];
   for (const entry of entries ?? []) {
-    const patterns: CompiledCommandPattern[] = [];
-    for (const rule of entry.patterns) {
-      const source = JSON.stringify({ command: rule.command, args: rule.args ?? [] });
-      try {
-        new RegExp(rule.command);
-        for (const argument of rule.args ?? []) new RegExp(argument);
-        patterns.push({
-          source,
-          command: new RegExp("^(?:" + rule.command + ")(?![\\s\\S])"),
-          args: (rule.args ?? []).map(
-            (pattern) => new RegExp("^(?:" + pattern + ")(?![\\s\\S])"),
-          ),
-        });
-      } catch {
-        invalidPatterns.push(source);
-      }
+    const source = JSON.stringify({ command: entry.pattern, args: entry.args });
+    try {
+      new RegExp(entry.pattern);
+      for (const argument of entry.args) new RegExp(argument);
+      compiled.push({
+        action: entry.action,
+        patterns: [
+          {
+            source,
+            command: new RegExp("^(?:" + entry.pattern + ")(?![\\s\\S])"),
+            args: entry.args.map(
+              (pattern) => new RegExp("^(?:" + pattern + ")(?![\\s\\S])"),
+            ),
+          },
+        ],
+      });
+    } catch {
+      invalidPatterns.push(source);
     }
-    compiled.push({ action: entry.action, patterns });
   }
   return { entries: compiled, invalidPatterns };
 }

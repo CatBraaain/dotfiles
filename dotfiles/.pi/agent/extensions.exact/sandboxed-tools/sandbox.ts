@@ -83,8 +83,7 @@ export type CommandPermissionRequest =
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
 type PathRuleEntry = { action: PathAction; patterns: string[] };
-export type CommandRule = { command: string; args?: string[] };
-export type CommandRuleEntry = { action: CommandAction; patterns: CommandRule[] };
+export type CommandRuleEntry = { action: CommandAction; pattern: string; args: string[] };
 
 export type CompiledCommandPattern = { source: string; command: RegExp; args: RegExp[] };
 export type CompiledCommandRuleEntry = {
@@ -175,30 +174,12 @@ const PathEntrySchema = Type.Object(
   { additionalProperties: false, minProperties: 1, maxProperties: 1 },
 );
 
-const CommandRuleSchema = Type.Object(
-  {
-    command: Type.String(),
-    args: Type.Optional(Type.Array(Type.String())),
-  },
-  { additionalProperties: false },
-);
-
-const CommandEntrySchema = Type.Object(
-  {
-    allow: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
-    ask: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
-    ask_with_reason: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
-    deny: Type.Optional(Type.Union([CommandRuleSchema, Type.Array(CommandRuleSchema)])),
-  },
-  { additionalProperties: false, minProperties: 1, maxProperties: 1 },
-);
-
 const SandboxedToolsConfigSchema = Type.Object(
   {
     read: Type.Optional(Type.Array(PathEntrySchema)),
     write: Type.Optional(Type.Array(PathEntrySchema)),
     credentials: Type.Optional(Type.Array(Type.String())),
-    commands: Type.Optional(Type.Array(CommandEntrySchema)),
+    commands: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
@@ -210,22 +191,44 @@ function toPathEntry(entry: Static<typeof PathEntrySchema>): PathRuleEntry {
   return { action, patterns: typeof pattern === "string" ? [pattern] : pattern };
 }
 
-function toCommandEntry(entry: Static<typeof CommandEntrySchema>): CommandRuleEntry {
-  const [action, rule] = Object.entries(entry)[0] as [
-    CommandAction,
-    Static<typeof CommandRuleSchema> | Static<typeof CommandRuleSchema>[],
-  ];
-  const rules = Array.isArray(rule) ? rule : [rule];
-  return {
-    action,
-    patterns: rules.map(({ command, args }) =>
-      args === undefined ? { command } : { command, args },
-    ),
-  };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseCommandFamilies(value: unknown): CommandRuleEntry[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("commands must be a list of entries");
+  const entries: CommandRuleEntry[] = [];
+  for (const family of value) {
+    if (!isRecord(family) || Object.keys(family).length !== 1)
+      throw new Error("command family must declare exactly one command pattern");
+    const [pattern, rules] = Object.entries(family)[0]!;
+    if (typeof pattern !== "string")
+      throw new Error("command family key must be a command pattern string");
+    if (!Array.isArray(rules) || rules.length === 0)
+      throw new Error(`command family ${pattern} must map to a non-empty list of rule items`);
+    for (const item of rules) {
+      if (!isRecord(item) || Object.keys(item).length !== 1)
+        throw new Error(
+          `command family ${pattern} must declare exactly one action per rule item`,
+        );
+      const action = Object.keys(item)[0] as CommandAction;
+      if (!["allow", "ask", "ask_with_reason", "deny"].includes(action))
+        throw new Error("unknown command action: " + action);
+      const args = item[action];
+      if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string"))
+        throw new Error(
+          `command family ${pattern} action ${action} requires a list of arg patterns; use [] for no constraints`,
+        );
+      entries.push({ action, pattern, args: args as string[] });
+    }
+  }
+  return entries;
 }
 
 export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig {
   const parsed = parseYaml(source) as unknown;
+  if (!isRecord(parsed)) throw new Error("sandboxed-tools config must be a mapping");
   if (!validateConfig.Check(parsed)) {
     const details = [...validateConfig.Errors(parsed)]
       .map((error) => `${error.instancePath || "/"} ${error.message}`)
@@ -237,7 +240,7 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
     read: config.read?.map(toPathEntry),
     write: config.write?.map(toPathEntry),
     credentials: config.credentials,
-    commands: config.commands?.map(toCommandEntry),
+    commands: parseCommandFamilies(parsed.commands),
   };
 }
 
@@ -494,24 +497,25 @@ export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefine
   const compiled: CompiledCommandRuleEntry[] = [];
   const invalidPatterns: string[] = [];
   for (const entry of entries ?? []) {
-    const patterns: CompiledCommandPattern[] = [];
-    for (const rule of entry.patterns) {
-      const source = JSON.stringify({ command: rule.command, args: rule.args ?? [] });
-      try {
-        new RegExp(rule.command);
-        for (const argument of rule.args ?? []) new RegExp(argument);
-        patterns.push({
-          source,
-          command: new RegExp("^(?:" + rule.command + ")(?![\\s\\S])"),
-          args: (rule.args ?? []).map(
-            (pattern) => new RegExp("^(?:" + pattern + ")(?![\\s\\S])"),
-          ),
-        });
-      } catch {
-        invalidPatterns.push(source);
-      }
+    const source = JSON.stringify({ command: entry.pattern, args: entry.args });
+    try {
+      new RegExp(entry.pattern);
+      for (const argument of entry.args) new RegExp(argument);
+      compiled.push({
+        action: entry.action,
+        patterns: [
+          {
+            source,
+            command: new RegExp("^(?:" + entry.pattern + ")(?![\\s\\S])"),
+            args: entry.args.map(
+              (pattern) => new RegExp("^(?:" + pattern + ")(?![\\s\\S])"),
+            ),
+          },
+        ],
+      });
+    } catch {
+      invalidPatterns.push(source);
     }
-    compiled.push({ action: entry.action, patterns });
   }
   return { entries: compiled, invalidPatterns };
 }

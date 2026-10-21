@@ -80,85 +80,101 @@ credentials:
 commands:
   # default
   - ".*":
-      - allow: {}
-      - ask: { args: ["publish|submit|upload"] }
+      - allow: []
+
+  # package manager
+  - npm|pnpm|yarn|bun|deno|uv|poetry|cargo|gradle|vsce|ovsx|opam|flutter:
+      - ask: [publish]
+  - twine|conan|huggingface-cli:
+      - ask: [upload]
+  - docker|choco|gem|pod|nuget|cachix|attic:
+      - ask: [push]
+  - mvn|lein:
+      - ask: [deploy]
+  - mix:
+      - ask: ["hex\\.publish"]
+  - brew:
+      - ask: ["bump-.*-pr|bump-unversioned-casks"]
+  - komac:
+      - ask: []
+      - allow:
+          [
+            "sync|cleanup|list-versions|list|analyse|complete|autocomplete",
+          ]
+      - allow: [token]
 
   - git:
-      - allow: {}
-      - ask: { args: [push] }
-      - ask_with_reason: { args: [reset, "--hard"] }
+      - allow: []
+      - ask: [push]
+      - ask_with_reason: [reset, "--hard"]
       - ask_with_reason:
-          args: [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"]
-      - ask_with_reason: { args: ["replace|update-ref|gc|prune"] }
-      - ask_with_reason: { args: [reflog, expire] }
-      - allow: { args: [worktree, prune] }
+          [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"]
+      - ask_with_reason: ["replace|update-ref|gc|prune"]
+      - ask_with_reason: [reflog, expire]
+      - allow: [worktree, prune]
 
   - gh:
-      - allow: {}
-      - ask: { args: [pr, create] }
+      - allow: []
+      - ask: [pr, create]
 
   - sudo:
-      - ask_with_reason: {}
-      - allow: { args: ["-n", "true"] }
+      - ask_with_reason: []
+      - allow: ["-n", "true"]
   - doas:
-      - deny: {}
+      - deny: []
 
   - systemctl:
-      - ask_with_reason: {}
-      - allow: { args: ["status|show|cat|help|get-default|show-environment"] }
-      - allow: { args: ["(list-|is-).*"] }
-      - allow: { args: ["--version"] }
+      - ask_with_reason: []
+      - allow: ["status|show|cat|help|get-default|show-environment"]
+      - allow: ["(list-|is-).*"]
+      - allow: ["--version"]
       - deny:
-          args:
-            [
-              "reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit",
-            ]
+          [
+            "reboot|poweroff|halt|shutdown|suspend|hibernate|hybrid-sleep|suspend-then-hibernate|kexec|exit",
+          ]
 
   - crontab:
-      - ask_with_reason: {}
-      - allow: { args: ["-l"] }
+      - ask_with_reason: []
+      - allow: ["-l"]
 
   - "chmod|chown":
-      - allow: {}
-      - ask_with_reason: { args: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"] }
+      - allow: []
+      - ask_with_reason: ["-[^-]*R[^-]*", "-[^-]*f[^-]*"]
 
   # destructive system commands
   - '(mkfs|mkfs\.ext2|mkfs\.ext3|mkfs\.ext4|mkfs\.xfs|mkfs\.btrfs|mkfs\.vfat|mkfs\.ntfs|mkfs\.exfat)\b.*':
-      - deny: {}
+      - deny: []
   - "wipefs|parted|fdisk|sfdisk|sgdisk":
-      - deny: {}
+      - deny: []
   - "shutdown|reboot|poweroff|halt":
-      - deny: {}
+      - deny: []
 
   - "(?i:/mnt(?:/.*)?)":
-      - ask: {}
-      - allow:
-          - command: '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)'
-          - command: '(?i:/mnt/c/Windows/System32/reg\.exe)'
-            args: ["(?i:query|compare)"]
-          - command: '(?i:/mnt/c/Windows/System32/sc\.exe)'
-            args: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"]
-          - command: '(?i:/mnt/c/Windows/System32/schtasks\.exe)'
-            args: ["(?i:/query)"]
-          - command: '(?i:/mnt/c/Windows/System32/wevtutil\.exe)'
-            args: ["(?i:qe|el)"]
-          - command: '(?i:/mnt/c/Windows/System32/netsh\.exe)'
-            args: ["(?i:show)"]
-          - command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
-          - command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
-            args: ["--version|--status|-l|--list"]
+      - ask: []
+  - '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)':
+      - allow: []
+  - '(?i:/mnt/c/Windows/System32/ipconfig\.exe)':
+      - allow: []
+      - ask: ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
+  - '(?i:/mnt/c/Windows/System32/reg\.exe)':
+      - allow: ["(?i:query|compare)"]
+  - '(?i:/mnt/c/Windows/System32/sc\.exe)':
+      - allow: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"]
+  - '(?i:/mnt/c/Windows/System32/schtasks\.exe)':
+      - allow: ["(?i:/query)"]
+  - '(?i:/mnt/c/Windows/System32/wevtutil\.exe)':
+      - allow: ["(?i:qe|el)"]
+  - '(?i:/mnt/c/Windows/System32/netsh\.exe)':
+      - allow: ["(?i:show)"]
+  - '(?i:/mnt/c/Windows/System32/wsl\.exe)':
+      - allow: ["--version|--status|-l|--list"]
       - ask:
-          - command: '(?i:/mnt/c/Windows/System32/ipconfig\.exe)'
-            args:
-              ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
-          - command: '(?i:/mnt/c/Windows/System32/wsl\.exe)'
-            args:
-              [
-                "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
-              ]
+          [
+            "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
+          ]
 
   - pi:
-      - ask: {}
-      - allow: { args: ["--help|--version|-h|-v"] }
-      - allow: { args: ["--list-models|list"] }
-      - allow: { args: [mcp, list] }
+      - ask: []
+      - allow: ["--help|--version|-h|-v"]
+      - allow: ["--list-models|list"]
+      - allow: [mcp, list]

@@ -258,7 +258,7 @@ describe("§6 無効 regex の警告（index.ts）", () => {
     withPluginEnvironment(
       {
         configYaml: () =>
-          'commands:\n  - ".*":\n      - allow: {}\n  - "":\n      - ask: {}\n  - "[unclosed":\n      - ask: {}\n',
+          'commands:\n  - ".*":\n      - allow: []\n  - "":\n      - ask: []\n  - "[unclosed":\n      - ask: []\n',
       },
       async ({ warnings }) => {
         assert.equal(warnings.length, 1);
