@@ -485,7 +485,7 @@ describe("UI", () => {
     const { context, widgetCalls } = widgetContext(true, availableWidth);
 
     for (const skillName of [
-      "coding-standard",
+      "readable-coding",
       "diagnosing-bugs",
       "sdd",
       "instruction-authoring",

@@ -50,7 +50,7 @@ describe("shared contract", () => {
 
 describe("skillNameFromCallArguments", () => {
   it("extracts the requested skill name", () => {
-    assert.equal(skillNameFromCallArguments('{"name":"coding-standard"}'), "coding-standard");
+    assert.equal(skillNameFromCallArguments('{"name":"readable-coding"}'), "readable-coding");
   });
 
   it("rejects malformed payloads", () => {

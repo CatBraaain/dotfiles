@@ -1,4 +1,4 @@
-# coding-standard 出典資料
+# readable-coding 出典資料
 
 このフォルダ（`sources.ignore/`）は `dotfiles-manager` の build で dist へコピーされない開発資料。SKILL.md のカタログを開発・調整するときの参照用であり、展開先の `~/.agents/skills/` には配布されない。
 

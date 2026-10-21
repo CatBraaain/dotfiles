@@ -1,10 +1,10 @@
 ---
-name: coding-standard
+name: readable-coding
 description: >-
   コードを読みやすくし、小さく保つための読みやすさの技法カタログ。名前・条件・制御フロー・関数・変数・構成・テスト・選択・コメントの9カテゴリの技法を good/bad 例で収める。コードを書く・変更・レビューする前に必ず読み、適用する。コードを変更・評価しない調査、文書・設定だけの作業には使わない。
 ---
 
-# Coding Standard
+# Readable Coding
 
 ## 適用境界
 
@@ -12,15 +12,15 @@ description: >-
 
 ## 読みやすさの技法
 
-コードを下のカタログの全項目と漏れなく照合する。カタログの項目をレビューに使うときは、指摘に項目ID（例: A1）を添える。
+コードを下のカタログの全項目と漏れなく照合する。カタログの項目をレビューに使うときは、指摘に項目ID（例: Name1）を添える。
 
 各 after は「合格の一例」であり、唯一の正解ではない。
 
-### A 名前
+### Name 名前
 
 名前は中身・単位・状態・制約を語る。読み手は名前から予測して読む。
 
-#### A1 抽象名
+#### Name1 抽象名
 
 `data` `info` `value` など中身を言わない名前。入っているものを具体的に言う。
 
@@ -36,7 +36,7 @@ const data = await fetchUser(id);
 const user = await fetchUser(id);
 ```
 
-#### A2 単位が読めない名前
+#### Name2 単位が読めない名前
 
 `timeout` がミリ秒か秒か分からない。単位を名前に添える。
 
@@ -52,7 +52,7 @@ await sleep(timeout); // timeout = 5000（ミリ秒）
 await sleep(timeoutMs);
 ```
 
-#### A3 検証状態が読めない名前
+#### Name3 検証状態が読めない名前
 
 ユーザー入力（未検証）と検証済みの区別が名前から分からない。安全に関わる区別は名前で分ける。
 
@@ -78,7 +78,7 @@ export function normalize(unsafeUrl: string): URL {
 }
 ```
 
-#### A4 真偽が読めない名前
+#### Name4 真偽が読めない名前
 
 `flag` は何の真偽か分からない。`is/has/can/should` 接頭辞で振る舞いを語る。
 
@@ -94,7 +94,7 @@ const flag = rows.length === 0;
 const isEmpty = rows.length === 0;
 ```
 
-#### A5 二重否定
+#### Name5 二重否定
 
 `!isNotFound`（見つかっていない、でない）は読み直しが起きる。肯定形にする。
 
@@ -112,7 +112,7 @@ const isFound = rows.length > 0;
 if (isFound) retry();
 ```
 
-#### A6 範囲の包含が不明な名前
+#### Name6 範囲の包含が不明な名前
 
 `end` に含めるのか不明。包含境界は `first/last`、上限下限は `max/min`。
 
@@ -132,7 +132,7 @@ function page(items: Item[], last: number) {
 }
 ```
 
-#### A7 意図が一意でない名前
+#### Name7 意図が一意でない名前
 
 `filter` は残すのか除くのか曖昧。一意な語にする。
 
@@ -148,7 +148,7 @@ const result = users.filter(isDeleted);
 const deletedUsers = users.filter(isDeleted);
 ```
 
-#### A8 一貫しない語彙
+#### Name8 一貫しない語彙
 
 同じ概念を `user` `member` `customer` と別の語で呼ぶ。同種のものには同じ語彙を使い、違いを名前で比較できるようにする。
 
@@ -168,7 +168,7 @@ function fetchUser(id: string) {}
 function getUser(id: string) {}
 ```
 
-#### A9 曖昧な動詞
+#### Name9 曖昧な動詞
 
 `check` は「検証して真偽を返す」のか「確認してから操作する」のか動詞から読めない。検証なら `validate`、条件を問うなら `has/is`、行為を直接言う。
 
@@ -190,7 +190,7 @@ function process(user: User) {
 }
 ```
 
-#### A10 出所が読めない取得動詞
+#### Name10 出所が読めない取得動詞
 
 `get/load/fetch` は出所と重さが違う。メモリなら `get`、ストレージなら `load`、ネットワークなら `fetch`、と何をどこから取得するのか動詞から分かるようにする。
 
@@ -208,7 +208,7 @@ const data = getUserDataFromCache();
 const config = fetchConfigFromApi();
 ```
 
-#### A11 副作用が読めない動詞
+#### Name11 副作用が読めない動詞
 
 `get` は副作用のない取得の慣習。取得に伴って作成・書き込みが起きるなら、名前に含める。
 
@@ -224,7 +224,7 @@ const session = getSession(user); // 無いと新規作成される
 const session = getOrCreateSession(user);
 ```
 
-#### A12 発音でき検索できる名前
+#### Name12 発音でき検索できる名前
 
 発音できない名前は議論と検索（grep）を妨げる。略語は一般に知られているものだけにする。
 
@@ -240,7 +240,7 @@ const u = await db.findUser(id); // 後で `u` で grep しても大量にヒッ
 const user = await db.findUser(id);
 ```
 
-#### A13 冗長な型接頭辞を避ける
+#### Name13 冗長な型接頭辞を避ける
 
 宣言や推論で分かる型を名前に繰り返さない（ハンガリアン記法の乱用を避ける）。
 
@@ -258,11 +258,11 @@ const userName = user.name;
 const isActive = user.isActive;
 ```
 
-### B 式と条件
+### Expression 式と条件
 
 複雑な条件は名前が意味を語る形へ。裸のリテラルと重複した条件を残さない。
 
-#### B1 複雑な条件は変数で受ける
+#### Expression1 複雑な条件は変数で受ける
 
 複数条件の意図を `if` に直接書かず、名前が意味を語る変数で受ける。込み入った否定は De Morgan の法則で整理してから受ける。
 
@@ -295,7 +295,7 @@ if (isEligibleForGrant) {
 }
 ```
 
-#### B2 magic number
+#### Expression2 magic number
 
 裸の数値リテラルは意味が読めない。名前付き定数にする。
 
@@ -316,7 +316,7 @@ if (retryCount > MAX_RETRIES) {
 }
 ```
 
-#### B3 同じ条件の繰り返し
+#### Expression3 同じ条件の繰り返し
 
 同じ条件式が複数箇所に複製されている。述語関数に括り出す。
 
@@ -349,7 +349,7 @@ function getShippableOrders(orders: Order[]) {
 }
 ```
 
-#### B4 同じ結果の条件をまとめる
+#### Expression4 同じ結果の条件をまとめる
 
 同じ結果を返す複数の条件は、1つの条件にまとめる。
 
@@ -372,7 +372,7 @@ if (code === "expired" || code === "invalid") {
 }
 ```
 
-#### B5 magic string・boolean 羅列は enum で意図を語る
+#### Expression5 magic string・boolean 羅列は enum で意図を語る
 
 裸の文字列・数値や複数の boolean で表した状態は、取り得る値と意味が読めない。enum（union 型）で値の範囲と意図を語る。
 
@@ -398,11 +398,11 @@ function canEdit(role: Role, docState: DocState) {}
 canEdit(Role.Admin, DocState.Editable);
 ```
 
-### C 制御フロー
+### Flow 制御フロー
 
 ネストは浅く、条件は予測どおりの向きで、副作用を演算子に隠さない。
 
-#### C1 深いネスト
+#### Flow1 深いネスト
 
 ネストは深くしない。ガード節・早期 `continue` / `return` で平坦にする。
 
@@ -427,7 +427,7 @@ for (const o of orders) {
 }
 ```
 
-#### C2 条件の向き
+#### Flow2 条件の向き
 
 左辺は調べる対象、右辺は定数。読み手の「主語と述語」になる。
 
@@ -447,7 +447,7 @@ while (attempts < maxAttempts) {
 }
 ```
 
-#### C3 末尾条件のループ
+#### Flow3 末尾条件のループ
 
 `do/while` は条件が末尾にあり見逃しやすい。先頭条件の形へ。
 
@@ -469,7 +469,7 @@ while (hasMorePages) {
 }
 ```
 
-#### C4 式の中に副作用を隠さない
+#### Flow4 式の中に副作用を隠さない
 
 三項演算子・`&&`・`||`・`map` の中に制御や副作用を隠さない。値の決定と変換は、副作用と分ける。
 
@@ -495,7 +495,7 @@ const names = users.map((u) => u.name);
 users.forEach((u) => audit.push(`visited-${u.id}`));
 ```
 
-#### C5 配列の選別・加工はパイプラインで
+#### Flow5 配列の選別・加工はパイプラインで
 
 `for` 文と `if` で配列を選別・加工すると、意図が制御フローの奥に沈む。`filter` で絞り込み、内容を語る説明変数で受ける。変換は `map`、副作用は `forEach` に振る。パフォーマンスが許す限りこの形が望ましい。
 
@@ -521,11 +521,11 @@ activeUsers.forEach((u) => sendMail(u.email));
 const activeRecipients = activeUsers.map((u) => `${u.name} <${u.email}>`);
 ```
 
-### D 関数と副作用
+### Function 関数と副作用
 
 関数は一つのことだけ、引数は少なく、名前と振る舞いを一致させる。
 
-#### D1 副作用の混入
+#### Function1 副作用の混入
 
 関数は「する」か「答える」かの一方。`get` なのに状態を変えない。
 
@@ -550,7 +550,7 @@ function logConfigRead(): void {
 }
 ```
 
-#### D2 長い関数の分割
+#### Function2 長い関数の分割
 
 複数の抽象レベル・目的が1つの関数に混在している。意味のある小関数へ抽出し、本体を手順として読める形にする。
 
@@ -587,7 +587,7 @@ function calcTotal(items: Item[]) {
 }
 ```
 
-#### D3 booleanフラグ引数
+#### Function3 booleanフラグ引数
 
 フラグ引数は呼び出し側の意味（`true` が何を意味するか）を読めなくする。関数を2つに分ける。
 
@@ -606,7 +606,7 @@ function renderPrimaryButton(label: string) {}
 function renderSecondaryButton(label: string) {}
 ```
 
-#### D4 引数が多すぎる
+#### Function4 引数が多すぎる
 
 独立した引数が多い関数は呼び出し側で順序を間違えやすい。意味のあるまとまりへオブジェクト化する。
 
@@ -635,7 +635,7 @@ interface NewUser {
 function createUser(user: NewUser) {}
 ```
 
-#### D5 エラー処理の分離
+#### Function5 エラー処理の分離
 
 通常処理にエラー分岐を混在させず、エラー処理を本体から分離する。
 
@@ -673,7 +673,7 @@ async function syncAll() {
 }
 ```
 
-#### D6 未使用の変数・引数の削除
+#### Function6 未使用の変数・引数の削除
 
 使用されない引数・変数は保守対象を増やすだけ。定義から取り除く。
 
@@ -701,7 +701,7 @@ function createUser(name: string, email: string) {
 }
 ```
 
-#### D7 例外に文脈を付ける
+#### Function7 例外に文脈を付ける
 
 例外メッセージは原因と対象を含む。`failed` だけでは調査の出発点にならない。
 
@@ -721,7 +721,7 @@ if (!res.ok) {
 }
 ```
 
-#### D8 省略可能引数はデフォルト値で受ける
+#### Function8 省略可能引数はデフォルト値で受ける
 
 省略時の値は引数のデフォルト値で宣言し、関数本体に条件を持ち込まない。
 
@@ -742,7 +742,7 @@ function createTimer(timeoutMs = 3000) {
 }
 ```
 
-#### D9 catch を握りつぶさない
+#### Function9 catch を握りつぶさない
 
 捕捉したエラーは観測可能な形へ出す。空の catch は失敗を見えなくし、調査の出発点を失う。
 
@@ -764,7 +764,7 @@ try {
 }
 ```
 
-#### D10 const に入れた arrow function
+#### Function10 const に入れた arrow function
 
 arrow function を `const` に入れて使い回すのは原則禁止。変数に入れる・export する関数は `function` 宣言で定義する。arrow function は `array.map` などに渡す匿名関数としてだけ使う。
 
@@ -786,11 +786,11 @@ function normalizeUrl(url: string) {
 const urls = paths.map((p) => normalizeUrl(p));
 ```
 
-### E 変数
+### Variable 変数
 
 スコープを最小に、再代入を避け、使い回さない。
 
-#### E1 宣言位置
+#### Variable1 宣言位置
 
 宣言は使う直前で。使用箇所から遠い宣言は読み手の保持量を増やす。
 
@@ -814,7 +814,7 @@ const maxRetries = 3;
 const summary = `${totalRows} rows, ${maxRetries} retries`;
 ```
 
-#### E2 スコープを狭める
+#### Variable2 スコープを狭める
 
 変数の見える範囲は必要最小限に。広いスコープに置かれた可変変数は、どこで変わるか追えなくなる。
 
@@ -846,7 +846,7 @@ function greet(users: User[]) {
 }
 ```
 
-#### E3 再代入
+#### Variable3 再代入
 
 一度決まった値は変わらない方が追いやすい。再代入を避け、段階に名前を付ける。
 
@@ -866,7 +866,7 @@ const lowered = trimmed.toLowerCase();
 const name = lowered + suffix;
 ```
 
-#### E4 無意味な中間変数
+#### Variable4 無意味な中間変数
 
 値の由来が自明で、名前が何も語らない中間変数は消す。名前が意図を語る説明変数 (B1) は消さない。
 
@@ -883,7 +883,7 @@ return result;
 return computeTotal(items);
 ```
 
-#### E5 変数の使い回し
+#### Variable5 変数の使い回し
 
 1つの変数を複数の目的で再利用する。目的ごとに名前と寿命を分ける。関数の引数の再割り当ても同じ。
 
@@ -917,11 +917,11 @@ function formatName(rawName: string) {
 }
 ```
 
-### F 構成と構造
+### Structure 構成と構造
 
 読み順・段落・分割を整え、死んだコードと重複を残さない。
 
-#### F1 読み順
+#### Structure1 読み順
 
 ファイルは新聞記事のように、冒頭に主要な流れ、末尾に細部。JavaScript 等は関数の巻き上げで主要な流れを上に置ける。巻き上げがない言語 (Python・PowerShell 等) では、主要な関数を上に定義し、サブ関数をその下へ、実行の呼び出しは最後の行に置く。
 
@@ -957,7 +957,7 @@ def parse_line(line):
 main()
 ```
 
-#### F2 初期化順
+#### Structure2 初期化順
 
 概要を上に置くより、依存関係と初期化順を優先する。
 
@@ -975,7 +975,7 @@ const DEFAULTS = {};
 export const registry = buildRegistry();
 ```
 
-#### F3 段落分け
+#### Structure3 段落分け
 
 連続した処理を空白行で論理段落に分け、構造を目で追えるようにする。
 
@@ -1001,7 +1001,7 @@ const summary = `${valid.length} ${label}`;
 write(summary);
 ```
 
-#### F4 死んだコード
+#### Structure4 死んだコード
 
 コメントアウトされたコードは読み手の時間を奪う。削除する。必要になったら履歴から戻す。
 
@@ -1025,7 +1025,7 @@ function main() {
 }
 ```
 
-#### F5 不要な間接化
+#### Structure5 不要な間接化
 
 名前が説明を加えないラッパーは保守対象を増やすだけ。呼び出し位置へ展開する。
 
@@ -1044,7 +1044,7 @@ console.log(getName(user));
 console.log(user.name);
 ```
 
-#### F6 重複の抽出
+#### Structure6 重複の抽出
 
 同じロジックの複製は、1つの名前付き処理へまとめる。
 
@@ -1076,11 +1076,11 @@ function importValidRows(table: string, rows: Row[]) {
 }
 ```
 
-### G テスト
+### Test テスト
 
 テストは仕様書。振る舞いを文章で語らせ、1テスト1振る舞い。assert の比較対象は説明変数で受け、「何と何を比べてどうなるか」を読めるようにする。
 
-#### G1 テスト名
+#### Test1 テスト名
 
 テストは仕様書。名前は振る舞いを文章で言う。
 
@@ -1096,7 +1096,7 @@ it("works", () => {});
 it("returns empty when no rows match", () => {});
 ```
 
-#### G2 1テスト1振る舞い
+#### Test2 1テスト1振る舞い
 
 別の振る舞いは別のテストへ。1テストに複数の振る舞いを混ぜない。
 
@@ -1121,7 +1121,7 @@ it("throws on broken repository", () => {
 });
 ```
 
-#### G3 失敗メッセージ
+#### Test3 失敗メッセージ
 
 失敗時に input が読めるようにする。実際値・期待値は assertion が diff として表示するため手書きせず、diff に現れない input の文脈だけメッセージに添える。
 
@@ -1145,13 +1145,13 @@ for (const input of cases) {
 }
 ```
 
-### H 選択と契約
+### Choice 選択と契約
 
 動作要件と安全境界を満たす、保守対象が最も小さいコードを選ぶ。最小化は、明示要求、信頼境界での入力検証、データ損失を防ぐエラーハンドリング、セキュリティ、アクセシビリティの基本に優先しない。
 
 同じ要件を満たせるなら、変更しない・削除する、既存の helper・型・パターンを再利用する、標準ライブラリを使う、プラットフォーム機能を使う、導入済みの依存を使う、必要最小限の固有コードを足す、の順に軽い選択肢を優先する。この優先度は探索順や実装を固定するものではなく、保守対象、既存設計、安全境界を踏まえて選ぶための目安である。
 
-#### H1 不要な依存
+#### Choice1 不要な依存
 
 軽い選択肢を優先する。標準機能で満たせるなら依存を増やさない（新規依存は承認が必要）。
 
@@ -1169,7 +1169,7 @@ for (const input of cases) {
 
 使用箇所は標準の `String.prototype.padStart()` に置き換える。
 
-#### H2 賢いワンライナー
+#### Choice2 賢いワンライナー
 
 賢いコードより退屈なコードを優先する。演算子優先順位に頼った式は崩す。
 
@@ -1188,7 +1188,7 @@ for (const item of items) {
 }
 ```
 
-#### H3 抽象の先取り
+#### Choice3 抽象の先取り
 
 現時点の動作に寄与しない抽象・設定・拡張点は避ける。ただし、明示要求または既存設計との整合のために必要なものは、その理由を優先する。
 
@@ -1205,13 +1205,13 @@ type Options = { format?: "json" | "yaml"; verbose?: boolean };
 type Options = {};
 ```
 
-### I コメント
+### Comment コメント
 
 コメントは書かない。1行でも書きたくなったら順に他の置き場を試す: 名前・構造・型 → 設計記録 → コミットメッセージ。
 
 書いてよいのは出典付きの1行だけ。上流（ライブラリ、OS、API、言語処理系）のバグ・欠陥や制約を回避する非自明なコードに、理由と出典（issue URL等）を1行で書く。上流が修正されたときに外せる。出典のないコメントは書かない。実装と乖離したコメントは、実装に合わせて直すか消す。「公式サンプルにもコメントがある」「読み手が仕様を知らないかもしれない」は書く理由にならない。サンプルや docs の情報も、名前・構造で語せるならコメントに置かない。
 
-#### I1 意図説明コメント
+#### Comment1 意図説明コメント
 
 名前が語っている情報の逐語訳。削除する。
 
@@ -1228,7 +1228,7 @@ const displayName = user.name.toUpperCase();
 const displayName = user.name.toUpperCase();
 ```
 
-#### I2 説明変数で消せるコメント
+#### Comment2 説明変数で消せるコメント
 
 コメントの代わりに、条件を名前のある変数へ抽出する。
 
@@ -1250,7 +1250,7 @@ if (canWithdraw) {
 }
 ```
 
-#### I3 出典付きの回避コメント
+#### Comment3 出典付きの回避コメント
 
 上流の欠陥・制約の回避は、理由と出典を1行で書いてよい唯一のケース。
 
@@ -1269,7 +1269,7 @@ el.focus();
 el.focus();
 ```
 
-#### I4 出典のない回避コメント
+#### Comment4 出典のない回避コメント
 
 同じ内容でも出典がなければ書かない。理由が設計記録に置けるならそちらへ。
 
@@ -1286,7 +1286,7 @@ el.focus();
 el.focus();
 ```
 
-#### I5 乖離したコメント
+#### Comment5 乖離したコメント
 
 実装と異なるコメントは無コメントより危険。実装に合わせて直すか、削除する。
 

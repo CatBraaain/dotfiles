@@ -13,7 +13,7 @@ git の commit・branch・push・PR に関する判断規則を所有する。
 リポジトリ固有の規約が、常に本標準の一般規則より優先する。
 
 - 適用する: commit の作成・分割、commitメッセージの作成、branch の作成・選択、remote への push、PR の作成と適切性評価、外部リポジトリ（OSS等）への contribution。
-- 適用しない: コード変更そのものの品質（coding-standard等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（共有 `~/.agents/AGENTS.md` の「Git Worktree Strategy」が所有）。
+- 適用しない: コード変更そのものの品質（readable-coding等）、調査手段の選択（research-strategy）、worktree の作成・移行・統合・finish・discard・close（共有 `~/.agents/AGENTS.md` の「Git Worktree Strategy」が所有）。
 
 ## Decision Ladder: リポジトリ規約の確認
 
