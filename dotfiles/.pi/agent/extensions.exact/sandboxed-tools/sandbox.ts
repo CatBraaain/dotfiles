@@ -85,6 +85,24 @@ export type CommandPermissionRequest =
 type PathRuleEntry = { action: PathAction; patterns: string[] };
 export type CommandRuleEntry = { action: CommandAction; pattern: string; args: string[] };
 
+/** One `{action: argPatterns}` rule item of a command family (SPEC §6). */
+const CommandRuleItemSchema = Type.Object(
+  {
+    allow: Type.Optional(Type.Array(Type.String())),
+    ask: Type.Optional(Type.Array(Type.String())),
+    ask_with_reason: Type.Optional(Type.Array(Type.String())),
+    deny: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: false, minProperties: 1, maxProperties: 1 },
+);
+
+/** Command family: exactly one command-pattern key mapped to its rule items (SPEC §6). */
+const CommandFamilySchema = Type.Record(
+  Type.String(),
+  Type.Array(CommandRuleItemSchema, { minItems: 1 }),
+  { minProperties: 1, maxProperties: 1 },
+);
+
 export type CompiledCommandPattern = { source: string; command: RegExp; args: RegExp[] };
 export type CompiledCommandRuleEntry = {
   action: CommandAction;
@@ -179,7 +197,7 @@ const SandboxedToolsConfigSchema = Type.Object(
     read: Type.Optional(Type.Array(PathEntrySchema)),
     write: Type.Optional(Type.Array(PathEntrySchema)),
     credentials: Type.Optional(Type.Array(Type.String())),
-    commands: Type.Optional(Type.Unknown()),
+    commands: Type.Optional(Type.Array(CommandFamilySchema)),
   },
   { additionalProperties: false },
 );
@@ -191,44 +209,19 @@ function toPathEntry(entry: Static<typeof PathEntrySchema>): PathRuleEntry {
   return { action, patterns: typeof pattern === "string" ? [pattern] : pattern };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseCommandFamilies(value: unknown): CommandRuleEntry[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error("commands must be a list of entries");
-  const entries: CommandRuleEntry[] = [];
-  for (const family of value) {
-    if (!isRecord(family) || Object.keys(family).length !== 1)
-      throw new Error("command family must declare exactly one command pattern");
-    const [pattern, rules] = Object.entries(family)[0]!;
-    if (typeof pattern !== "string")
-      throw new Error("command family key must be a command pattern string");
-    if (!Array.isArray(rules) || rules.length === 0)
-      throw new Error(`command family ${pattern} must map to a non-empty list of rule items`);
-    for (const item of rules) {
-      if (!isRecord(item) || Object.keys(item).length !== 1)
-        throw new Error(
-          `command family ${pattern} must declare exactly one action per rule item`,
-        );
-      const action = Object.keys(item)[0] as CommandAction;
-      if (!["allow", "ask", "ask_with_reason", "deny"].includes(action))
-        throw new Error("unknown command action: " + action);
-      const args = item[action];
-      if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string"))
-        throw new Error(
-          `command family ${pattern} action ${action} requires a list of arg patterns; use [] for no constraints`,
-        );
-      entries.push({ action, pattern, args: args as string[] });
-    }
-  }
-  return entries;
+function toCommandEntries(family: Static<typeof CommandFamilySchema>): CommandRuleEntry[] {
+  const [pattern, items] = Object.entries(family)[0] as [
+    string,
+    Static<typeof CommandRuleItemSchema>[],
+  ];
+  return items.map((item) => {
+    const [action, args] = Object.entries(item)[0] as [CommandAction, string[]];
+    return { action, pattern, args };
+  });
 }
 
 export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig {
   const parsed = parseYaml(source) as unknown;
-  if (!isRecord(parsed)) throw new Error("sandboxed-tools config must be a mapping");
   if (!validateConfig.Check(parsed)) {
     const details = [...validateConfig.Errors(parsed)]
       .map((error) => `${error.instancePath || "/"} ${error.message}`)
@@ -240,7 +233,7 @@ export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig 
     read: config.read?.map(toPathEntry),
     write: config.write?.map(toPathEntry),
     credentials: config.credentials,
-    commands: parseCommandFamilies(parsed.commands),
+    commands: config.commands?.flatMap(toCommandEntries),
   };
 }
 
