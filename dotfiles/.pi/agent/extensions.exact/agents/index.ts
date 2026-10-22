@@ -1,16 +1,10 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type {
-  Api,
-  AssistantMessage,
-  ImageContent,
-  Message,
-  Model,
-  Usage,
-} from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
 import {
   createLocalBashOperations,
   getAgentDir,
@@ -431,12 +425,6 @@ interface ChildAction {
   isError?: boolean;
 }
 
-interface InlineLogEvent {
-  type: string;
-  timestamp: string;
-  data: Record<string, unknown>;
-}
-
 interface ChildRun {
   agent: Agent;
   task: string;
@@ -445,7 +433,6 @@ interface ChildRun {
   exitCode: number;
   messages: Message[];
   actions: ChildAction[];
-  inlineEvents: InlineLogEvent[];
   stderr: string;
   stopReason?: string;
   errorMessage?: string;
@@ -504,56 +491,32 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partialResult: AgentToolResult<AgentToolDetails>) => void;
 
-const INLINE_LOG_CUSTOM_TYPE = "agents.subagent-log";
+const CHILD_SESSION_CUSTOM_TYPE = "agents.subagent-session";
 
-export function childInvocationArgs(agent: Agent, task: string): string[] {
-  return ["--mode", "json", "-p", "--no-session", "--agent", agent, `Task: ${task}`];
+interface ChildSessionRecorder {
+  invocationId: string;
+  source: "subagent" | "image";
+  appendEntry: ExtensionAPI["appendEntry"];
 }
 
-function messageToCanonicalEvents(message: Message, observedAt: string): InlineLogEvent[] {
-  if (message.role === "user") {
-    const content = typeof message.content === "string" ? message.content : "";
-    if (content === "") return [];
-    return [{ type: "user.message", timestamp: observedAt, data: { content } }];
-  }
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
-  const events: InlineLogEvent[] = [];
-  let text = "";
-  let thinking = "";
-  const flush = () => {
-    if (text !== "") {
-      events.push({ type: "assistant.message", timestamp: observedAt, data: { content: text } });
-      text = "";
-    }
-    if (thinking !== "") {
-      events.push({
-        type: "assistant.reasoning",
-        timestamp: observedAt,
-        data: { content: thinking },
-      });
-      thinking = "";
-    }
-  };
-  for (const part of message.content) {
-    if (part.type === "text") {
-      text += part.text;
-      flush();
-    } else if (part.type === "thinking") {
-      thinking += part.thinking;
-      flush();
-    }
-  }
-  return events;
+export function subagentSessionDir(cwd: string): string {
+  const cwdKey = `--${resolve(cwd)
+    .replace(/^[/\\]/, "")
+    .replace(/[/\\:]/g, "-")}--`;
+  return join(getAgentDir(), "sessions", cwdKey, "subagents");
 }
 
-function canonicalTokens(usage: Usage): Record<string, number> {
-  return {
-    input_tokens: usage.input,
-    output_tokens: usage.output,
-    cache_read_input_tokens: usage.cacheRead,
-    cache_creation_input_tokens: usage.cacheWrite,
-    ...(typeof usage.reasoning === "number" ? { reasoning_output_tokens: usage.reasoning } : {}),
-  };
+export function childInvocationArgs(agent: Agent, task: string, cwd = process.cwd()): string[] {
+  return [
+    "--mode",
+    "json",
+    "-p",
+    "--agent",
+    agent,
+    "--session-dir",
+    subagentSessionDir(cwd),
+    `Task: ${task}`,
+  ];
 }
 
 function isToolExecutionError(
@@ -563,30 +526,6 @@ function isToolExecutionError(
   return event.isError === true || result?.isError === true;
 }
 
-function buildSubagentLogData(
-  agentId: string,
-  invocationId: string,
-  params: { agent: string; task: string },
-  result: ChildRun,
-): Record<string, unknown> {
-  const data: Record<string, unknown> = {
-    agentId,
-    invocationId,
-    agent: params.agent,
-    cwd: result.cwd,
-    task: params.task,
-    events: result.inlineEvents,
-  };
-  const usage = result.messages.findLast(
-    (message): message is AssistantMessage => message.role === "assistant",
-  )?.usage;
-  if (usage) {
-    data.tokens = canonicalTokens(usage);
-    data.costUsd = usage.cost.total;
-  }
-  return data;
-}
-
 async function runChild(
   defaultCwd: string,
   task: string,
@@ -594,10 +533,26 @@ async function runChild(
   cwd: string | undefined,
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
+  recorder: ChildSessionRecorder,
 ): Promise<ChildRun> {
-  // モデルは渡さない。子セッションが指定された agent の class から解決する。
-  const childCwd = cwd ?? defaultCwd;
-  const args = childInvocationArgs(agent, task);
+  const childCwd = resolve(cwd ?? defaultCwd);
+  const args = childInvocationArgs(agent, task, childCwd);
+  const sessionDir = subagentSessionDir(childCwd);
+  let childSession: { sessionId: string; sessionFile: string } | undefined;
+
+  function recordSession(phase: "start" | "end", completion?: Record<string, unknown>): void {
+    recorder.appendEntry(CHILD_SESSION_CUSTOM_TYPE, {
+      invocationId: recorder.invocationId,
+      source: recorder.source,
+      agent,
+      task,
+      cwd: childCwd,
+      sessionDir,
+      ...childSession,
+      phase,
+      ...completion,
+    });
+  }
   const childResult: ChildRun = {
     agent,
     task,
@@ -606,7 +561,6 @@ async function runChild(
     exitCode: 0,
     messages: [],
     actions: [],
-    inlineEvents: [],
     stderr: "",
   };
   let wasAborted = false;
@@ -684,14 +638,25 @@ async function runChild(
       } catch {
         return;
       }
-      const observedAt = new Date().toISOString();
+      if (
+        event.type === "session" &&
+        !childSession &&
+        isNonEmptyString(event.id) &&
+        isNonEmptyString(event.timestamp)
+      ) {
+        childSession = {
+          sessionId: event.id,
+          sessionFile: join(
+            sessionDir,
+            `${event.timestamp.replace(/[:.]/g, "-")}_${event.id}.jsonl`,
+          ),
+        };
+        recordSession("start");
+      }
 
       if (event.type === "message_end" && event.message) {
         const message = event.message as Message;
         childResult.messages.push(message);
-        for (const inlineEvent of messageToCanonicalEvents(message, observedAt)) {
-          childResult.inlineEvents.push(inlineEvent);
-        }
         if (message.role === "assistant") {
           if (!wasStalled) {
             if (message.stopReason) childResult.stopReason = message.stopReason;
@@ -711,18 +676,12 @@ async function runChild(
             args: toolArgs,
             startedAt: Date.now(),
           });
-          childResult.inlineEvents.push({
-            type: "tool.execution_start",
-            timestamp: observedAt,
-            data: { toolCallId, toolName: event.toolName, input: toolArgs },
-          });
         }
         throttledEmit.call();
       }
       if (event.type === "tool_execution_update") throttledEmit.call();
       if (event.type === "tool_execution_end") {
         activeToolExecutions = Math.max(0, activeToolExecutions - 1);
-        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
         const action = childResult.actions.find(
           (candidate) =>
             candidate.toolCallId !== undefined && candidate.toolCallId === event.toolCallId,
@@ -733,17 +692,6 @@ async function runChild(
           action.result = result;
           action.isError = isToolExecutionError(event, result);
         }
-        childResult.inlineEvents.push({
-          type: "tool.execution_complete",
-          timestamp: observedAt,
-          data: {
-            toolCallId,
-            toolName: event.toolName,
-            success: !isToolExecutionError(event, event.result),
-            output: isRecord(event.result) ? event.result : undefined,
-            ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
-          },
-        });
         throttledEmit.call();
       }
       if (event.type === "tool_result_end" && event.message) {
@@ -824,6 +772,9 @@ async function runChild(
 
     if (signal?.aborted) killChild();
     else signal?.addEventListener("abort", killChild, { once: true });
+  }).catch((error: unknown) => {
+    childResult.errorMessage = error instanceof Error ? error.message : String(error);
+    return 1;
   });
 
   childResult.exitCode = exitCode;
@@ -832,6 +783,12 @@ async function runChild(
     childResult.stopReason = "aborted";
     childResult.errorMessage = "Subagent was aborted";
   }
+  recordSession("end", {
+    exitCode: childResult.exitCode,
+    ...(childResult.stopReason ? { stopReason: childResult.stopReason } : {}),
+    ...(childResult.errorMessage ? { errorMessage: childResult.errorMessage } : {}),
+    sessionFileExists: childSession !== undefined && existsSync(childSession.sessionFile),
+  });
   throttledEmit.flush();
   return childResult;
 }
@@ -871,7 +828,6 @@ export default function agentsExtension(
     throw new Error(`agents.yaml: ${injectedConfig.error ?? "configuration is invalid"}`);
   const config = injectedConfig.config;
   let currentAgent = config.default;
-  let inlineLogCounter = 0;
 
   pi.registerFlag("agent", { type: "string", description: "Agent for a child session." });
   pi.registerFlag("class", { type: "string", description: "Initial class for the session." });
@@ -914,8 +870,6 @@ export default function agentsExtension(
 
       pendingChildren++;
       startSpinnerTimer();
-      inlineLogCounter += 1;
-      const inlineAgentId = `sa-${inlineLogCounter}`;
       let result: ChildRun;
       try {
         if (!tryAcquireChildSlot()) {
@@ -932,7 +886,19 @@ export default function agentsExtension(
           }
         }
         try {
-          result = await runChild(ctx.cwd, params.task, params.agent, params.cwd, signal, onUpdate);
+          result = await runChild(
+            ctx.cwd,
+            params.task,
+            params.agent,
+            params.cwd,
+            signal,
+            onUpdate,
+            {
+              invocationId: toolCallId,
+              source: "subagent",
+              appendEntry: pi.appendEntry.bind(pi),
+            },
+          );
         } finally {
           releaseChildSlot();
         }
@@ -940,10 +906,6 @@ export default function agentsExtension(
         pendingChildren--;
         stopSpinnerTimerIfIdle();
       }
-      pi.appendEntry(
-        INLINE_LOG_CUSTOM_TYPE,
-        buildSubagentLogData(inlineAgentId, toolCallId, params, result),
-      );
       if (isFailedResult(result)) {
         return {
           content: [textPart(`Child ${result.stopReason || "failed"}: ${getResultOutput(result)}`)],
@@ -1233,7 +1195,11 @@ export default function agentsExtension(
       `The owner attached ${paths.length} image(s) with the following request. Read each image with read and complete it.` +
       `\n\nRequest:\n${request || "(none)"}\n\nImages:\n${paths.join("\n")}`;
     try {
-      const child = await runChild(ctx.cwd, task, "vision", undefined, ctx.signal, undefined);
+      const child = await runChild(ctx.cwd, task, "vision", undefined, ctx.signal, undefined, {
+        invocationId: randomUUID(),
+        source: "image",
+        appendEntry: pi.appendEntry.bind(pi),
+      });
       if (isFailedResult(child)) {
         const reason = getResultOutput(child);
         const message = `vision delegation failed: ${reason}`;

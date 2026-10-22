@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -19,6 +20,7 @@ import agentsExtension, {
   canDelegate,
   childAgent,
   childInvocationArgs,
+  subagentSessionDir,
   initialAgent,
   loadAgentConfig,
   parseAgentConfig,
@@ -300,8 +302,9 @@ function captureAgentsExtension(
       params: Record<string, unknown>,
       signal?: AbortSignal,
       onUpdate?: (update: any) => void,
+      toolCallId = "call",
     ) {
-      return registeredTool?.execute("call", params, signal, onUpdate, context);
+      return registeredTool?.execute(toolCallId, params, signal, onUpdate, context);
     },
     renderCall(...args: any[]) {
       return registeredTool?.renderCall?.(...args);
@@ -1717,7 +1720,10 @@ describe("手動モデル選択", () => {
   });
 
   it("設定が無効なときは拡張のロードが失敗する", () => {
-    assert.throws(() => captureAgentsExtension({ error: "classes are required" }), /agents\.yaml: classes are required/);
+    assert.throws(
+      () => captureAgentsExtension({ error: "classes are required" }),
+      /agents\.yaml: classes are required/,
+    );
   });
 
   it("agent 切り替えで手動状態を解除する", async () => {
@@ -2520,9 +2526,10 @@ describe("subagent", () => {
         "--mode",
         "json",
         "-p",
-        "--no-session",
         "--agent",
         "worker",
+        "--session-dir",
+        subagentSessionDir("/child"),
         "Task: work",
       ]);
     } finally {
@@ -2545,7 +2552,12 @@ describe("subagent", () => {
       await extension.sessionStart();
       await extension.executeSubagent({ agent: "worker", task: "work", model: "forbidden" });
       assert.equal(extension.spawnCalls[0]?.cwd, "/parent");
-      assert.ok(extension.spawnCalls[0]?.args.includes("--no-session"));
+      assert.equal(extension.spawnCalls[0]?.args.includes("--no-session"), false);
+      const sessionDirIndex = extension.spawnCalls[0]!.args.indexOf("--session-dir");
+      assert.equal(
+        extension.spawnCalls[0]!.args[sessionDirIndex + 1],
+        subagentSessionDir("/parent"),
+      );
       assert.equal(extension.spawnCalls[0]?.args.includes("--model"), false);
       assert.equal(extension.spawnCalls[0]?.args.includes("--class"), false);
     } finally {
@@ -2674,6 +2686,7 @@ describe("subagent", () => {
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /aborted/);
       assert.equal(extension.spawnCalls.length, 2);
+      assert.deepEqual(extension.appendedEntries, []);
 
       succeedChild(extension.children[0]!);
       succeedChild(extension.children[1]!);
@@ -3324,7 +3337,10 @@ describe("subagent", () => {
   });
 
   it("設定エラーでは拡張のロードが失敗する", () => {
-    assert.throws(() => captureAgentsExtension({ error: "invalid config" }), /agents\.yaml: invalid config/);
+    assert.throws(
+      () => captureAgentsExtension({ error: "invalid config" }),
+      /agents\.yaml: invalid config/,
+    );
   });
 
   it("空の task を拒否し、子プロセスを起動しない", async () => {
@@ -3340,7 +3356,10 @@ describe("subagent", () => {
   });
 
   it("設定エラーでは session_start の登録前にロードが失敗する", () => {
-    assert.throws(() => captureAgentsExtension({ error: "invalid config" }), /agents\.yaml: invalid config/);
+    assert.throws(
+      () => captureAgentsExtension({ error: "invalid config" }),
+      /agents\.yaml: invalid config/,
+    );
   });
 });
 
@@ -3703,83 +3722,62 @@ describe("subagent の表示", () => {
   });
 });
 
-describe("子セッションのセッション記録", () => {
-  it("子セッションは --no-session で起動し保存先指定を行わない", () => {
-    const args = childInvocationArgs("junior", "do the thing");
-    assert.ok(args.includes("--no-session"));
-    assert.ok(!args.includes("--session-dir"));
-    assert.ok(!args.includes("--name"));
-    assert.equal(args.at(-1), "Task: do the thing");
+describe("independent child session storage", () => {
+  const header = {
+    type: "session",
+    version: 3,
+    id: "child-id",
+    timestamp: "2026-10-22T08:00:00.123Z",
+    cwd: "/parent",
+  };
+
+  function emitHeader(child: FakeChild): void {
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify(header)}\n`));
+  }
+
+  it("passes only new-session storage and agent arguments", () => {
+    assert.deepEqual(childInvocationArgs("junior", "do the thing", "/project/nested"), [
+      "--mode",
+      "json",
+      "-p",
+      "--agent",
+      "junior",
+      "--session-dir",
+      subagentSessionDir("/project/nested"),
+      "Task: do the thing",
+    ]);
+    assert.ok(
+      subagentSessionDir("/project/nested").endsWith("/sessions/--project-nested--/subagents"),
+    );
+    assert.equal(subagentSessionDir("."), subagentSessionDir(process.cwd()));
   });
 
-  it("子の実行後に親セッションへ custom entry を書き込む", async () => {
+  it("records the header before completion and excludes child history from references", async () => {
     const extension = captureAgentsExtension();
-    extension.respondToChild((child) => {
-      const lines = [
-        JSON.stringify({ type: "message_end", message: { role: "user", content: "work" } }),
-        JSON.stringify({
-          type: "tool_execution_start",
-          toolCallId: "tc-9",
-          toolName: "bash",
-          args: { command: "echo hi" },
-        }),
-        JSON.stringify({
-          type: "tool_execution_end",
-          toolCallId: "tc-9",
-          toolName: "bash",
-          result: { output: "hi" },
-          isError: false,
-          durationMs: 12,
-        }),
-        JSON.stringify({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "done" }],
-            usage: {
-              input: 10,
-              output: 2,
-              cacheRead: 1,
-              cacheWrite: 0,
-              totalTokens: 12,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 },
-            },
-          },
-        }),
-      ];
-      child.stdout.emit("data", Buffer.from(lines.join("\n") + "\n"));
-      child.emit("close", 0);
-    });
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ agent: "worker", task: "work" });
-      assert.equal(extension.appendedEntries.length, 1);
-      const entry = extension.appendedEntries[0]!;
-      assert.equal(entry.customType, "agents.subagent-log");
-      const events = entry.data.events as Array<{ type: string }>;
-      assert.deepEqual(
-        events.map((event) => event.type),
-        ["user.message", "tool.execution_start", "tool.execution_complete", "assistant.message"],
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
+      const child = extension.children[0]!;
+      emitHeader(child);
+      const start = extension.appendedEntries[0]!;
+      const sessionFile = join(
+        subagentSessionDir("/parent"),
+        "2026-10-22T08-00-00-123Z_child-id.jsonl",
       );
-      assert.deepEqual(entry.data.tokens, {
-        input_tokens: 10,
-        output_tokens: 2,
-        cache_read_input_tokens: 1,
-        cache_creation_input_tokens: 0,
+      assert.deepEqual(start, {
+        customType: "agents.subagent-session",
+        data: {
+          invocationId: "call",
+          source: "subagent",
+          agent: "worker",
+          task: "work",
+          cwd: "/parent",
+          sessionDir: subagentSessionDir("/parent"),
+          phase: "start",
+          sessionId: "child-id",
+          sessionFile,
+        },
       });
-      assert.equal(entry.data.costUsd, 0.5);
-      assert.equal(entry.data.invocationId, "call");
-      assert.equal(entry.data.agent, "worker");
-      assert.equal(entry.data.task, "work");
-      assert.equal(entry.data.cwd, "/parent");
-    } finally {
-      extension.restore();
-    }
-  });
-
-  it("assistant の thinking ブロックは reasoning チャネルとして分けて記録する", async () => {
-    const extension = captureAgentsExtension();
-    extension.respondToChild((child) => {
       child.stdout.emit(
         "data",
         Buffer.from(
@@ -3788,27 +3786,275 @@ describe("子セッションのセッション記録", () => {
             message: {
               role: "assistant",
               content: [
-                { type: "thinking", thinking: "考え中" },
+                { type: "thinking", thinking: "private reasoning" },
                 { type: "text", text: "done" },
               ],
+              stopReason: "stop",
             },
           })}\n`,
         ),
       );
       child.emit("close", 0);
+      const result = await execution;
+      assert.equal(result.content[0].text, "done");
+      assert.deepEqual(extension.appendedEntries[1], {
+        customType: start.customType,
+        data: {
+          ...start.data,
+          phase: "end",
+          exitCode: 0,
+          stopReason: "stop",
+          sessionFileExists: false,
+        },
+      });
+      assert.equal(extension.appendedEntries.length, 2);
+      assert.equal(JSON.stringify(extension.appendedEntries).includes("private reasoning"), false);
+      assert.equal("inlineEvents" in result.details.results[0], false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  for (const failure of [
+    "nonzero",
+    "signal",
+    "spawn-error",
+    "empty-output",
+    "assistant-error",
+  ] as const) {
+    it(`records an end reference for ${failure}`, async () => {
+      const extension = captureAgentsExtension();
+      extension.respondToChild((child) => {
+        if (failure !== "spawn-error") emitHeader(child);
+        if (failure === "spawn-error") child.emit("error", new Error("cannot spawn child"));
+        else if (failure === "assistant-error") {
+          child.stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [],
+                  stopReason: "error",
+                  errorMessage: "provider failed",
+                },
+              })}\n`,
+            ),
+          );
+          child.emit("close", 0);
+        } else child.emit("close", failure === "nonzero" ? 2 : failure === "signal" ? null : 0);
+      });
+      try {
+        await extension.sessionStart();
+        const result = await extension.executeSubagent({ agent: "worker", task: "work" });
+        assert.equal(result.isError, true);
+        const end = extension.appendedEntries.at(-1)!.data;
+        assert.equal(end.phase, "end");
+        assert.equal(end.invocationId, "call");
+        assert.equal(end.sessionFileExists, false);
+        assert.equal(
+          end.exitCode,
+          failure === "nonzero" ? 2 : failure === "signal" || failure === "spawn-error" ? 1 : 0,
+        );
+        if (failure === "spawn-error") {
+          assert.equal(extension.appendedEntries.length, 1);
+          assert.equal("sessionId" in end, false);
+          assert.equal("sessionFile" in end, false);
+          assert.equal(end.errorMessage, "cannot spawn child");
+        } else assert.equal(end.sessionId, header.id);
+        if (failure === "signal") assert.equal(end.stopReason, "killed");
+        if (failure === "assistant-error") assert.equal(end.errorMessage, "provider failed");
+      } finally {
+        extension.restore();
+      }
+    });
+  }
+
+  it("records synchronous launch failures without inventing a child session", async () => {
+    const extension = captureAgentsExtension();
+    __spawn.current = (() => {
+      throw new Error("launch failed");
+    }) as typeof __spawn.current;
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
+      assert.equal(result.isError, true);
+      assert.deepEqual(
+        extension.appendedEntries.map((entry) => entry.data.phase),
+        ["end"],
+      );
+      assert.equal(extension.appendedEntries[0]!.data.errorMessage, "launch failed");
+      assert.equal("sessionId" in extension.appendedEntries[0]!.data, false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("keeps the same child identity when an active child is aborted", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const controller = new AbortController();
+      const execution = extension.executeSubagent(
+        { agent: "worker", task: "work" },
+        controller.signal,
+      );
+      emitHeader(extension.children[0]!);
+      controller.abort();
+      const result = await execution;
+      assert.equal(result.isError, true);
+      assert.deepEqual(
+        extension.appendedEntries.map((entry) => entry.data.phase),
+        ["start", "end"],
+      );
+      const end = extension.appendedEntries[1]!.data;
+      assert.equal(end.sessionId, header.id);
+      assert.equal(end.stopReason, "aborted");
+      assert.equal(end.errorMessage, "Subagent was aborted");
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records a stalled child with its acquired session reference", async () => {
+    const extension = captureAgentsExtension();
+    const originalTimers = { ...__abortTimer };
+    let fireStall: (() => void) | undefined;
+    __abortTimer.set = (callback, delayMs) => {
+      if (delayMs === 15 * 60_000) fireStall = callback;
+      return callback as unknown as ReturnType<typeof setTimeout>;
+    };
+    __abortTimer.clear = () => {};
+    try {
+      await extension.sessionStart();
+      const execution = extension.executeSubagent({ agent: "worker", task: "work" });
+      emitHeader(extension.children[0]!);
+      assert.ok(fireStall);
+      fireStall();
+      const result = await execution;
+      assert.equal(result.isError, true);
+      const end = extension.appendedEntries.at(-1)!.data;
+      assert.equal(end.phase, "end");
+      assert.equal(end.sessionId, header.id);
+      assert.equal(end.stopReason, "stalled");
+      assert.equal(end.errorMessage, "Child stalled: no child events for 15 min");
+      assert.equal(end.sessionFileExists, false);
+    } finally {
+      Object.assign(__abortTimer, originalTimers);
+      extension.restore();
+    }
+  });
+
+  it("records automatic vision references and preserves image cleanup and reports", async () => {
+    const extension = captureAgentsExtension();
+    extension.respondToChild((child) => {
+      emitHeader(child);
+      succeedChild(child);
     });
     try {
       await extension.sessionStart();
-      await extension.executeSubagent({ agent: "worker", task: "work" });
-      assert.equal(extension.appendedEntries.length, 1);
-      const entry = extension.appendedEntries[0]!;
-      const events = entry.data.events as Array<{ type: string }>;
-      assert.deepEqual(
-        events.map((event) => event.type),
-        ["assistant.reasoning", "assistant.message"],
+      for (let invocation = 0; invocation < 2; invocation++) {
+        assert.deepEqual(
+          await extension.input("inspect image", "interactive", [
+            { type: "image", data: "aGk=", mimeType: "image/png" },
+          ]),
+          { action: "handled" },
+        );
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      const starts = extension.appendedEntries.filter((entry) => entry.data.phase === "start");
+      const ends = extension.appendedEntries.filter((entry) => entry.data.phase === "end");
+      assert.equal(starts.length, 2);
+      assert.equal(ends.length, 2);
+      assert.notEqual(starts[0]!.data.invocationId, starts[1]!.data.invocationId);
+      for (const start of starts) {
+        assert.equal(start.data.source, "image");
+        assert.equal(start.data.agent, "vision");
+        assert.equal(start.data.sessionDir, subagentSessionDir("/parent"));
+        assert.match(start.data.invocationId as string, /^[0-9a-f-]{36}$/);
+        const end = ends.find((entry) => entry.data.invocationId === start.data.invocationId)!;
+        assert.equal(end.data.sessionId, start.data.sessionId);
+        assert.equal(end.data.sessionFile, start.data.sessionFile);
+        assert.equal(end.data.exitCode, 0);
+        const imagePath = (start.data.task as string).split("\n").at(-1)!;
+        assert.equal(existsSync(imagePath), false);
+      }
+      for (const call of extension.spawnCalls) {
+        assert.equal(call.args.includes("--no-session"), false);
+        assert.equal(
+          call.args[call.args.indexOf("--session-dir") + 1],
+          subagentSessionDir("/parent"),
+        );
+      }
+      assert.equal(
+        extension.notifications.filter((message) => message === "vision: done").length,
+        2,
       );
     } finally {
       extension.restore();
+    }
+  });
+
+  it("uses native pi persistence for parallel runs and new extension instances", async () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "agents-native-sessions-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = temporaryRoot;
+    const savedFiles: string[] = [];
+    try {
+      for (let instance = 0; instance < 2; instance++) {
+        const extension = captureAgentsExtension();
+        try {
+          await extension.sessionStart();
+          const executions = [0, 1].map((index) =>
+            extension.executeSubagent(
+              { agent: "worker", task: "same task", cwd: temporaryRoot },
+              undefined,
+              undefined,
+              `call-${instance}-${index}`,
+            ),
+          );
+          for (const child of [...extension.children].reverse()) {
+            const call = extension.spawnCalls[extension.children.indexOf(child)]!;
+            const sessionDir = call.args[call.args.indexOf("--session-dir") + 1]!;
+            const manager = SessionManager.create(call.cwd!, sessionDir);
+            const sessionFile = manager.getSessionFile()!;
+            assert.equal(existsSync(sessionFile), false);
+            child.stdout.emit("data", Buffer.from(`${JSON.stringify(manager.getHeader())}\n`));
+            assert.equal(extension.appendedEntries.at(-1)!.data.sessionFile, sessionFile);
+            assert.equal(existsSync(sessionFile), false);
+            manager.appendMessage({ role: "user", content: "same task", timestamp: Date.now() });
+            assert.equal(existsSync(sessionFile), true);
+            succeedChild(child);
+            savedFiles.push(sessionFile);
+          }
+          await Promise.all(executions);
+          const starts = extension.appendedEntries.filter((entry) => entry.data.phase === "start");
+          const ends = extension.appendedEntries.filter((entry) => entry.data.phase === "end");
+          assert.equal(starts.length, 2);
+          assert.equal(ends.length, 2);
+          for (const start of starts) {
+            const end = ends.find((entry) => entry.data.invocationId === start.data.invocationId)!;
+            assert.equal(end.data.sessionId, start.data.sessionId);
+            assert.equal(end.data.sessionFile, start.data.sessionFile);
+            assert.equal(end.data.sessionFileExists, true);
+            const records = readFileSync(end.data.sessionFile as string, "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line));
+            assert.equal(records[0].id, end.data.sessionId);
+            assert.equal(records[0].parentSession, undefined);
+            assert.ok(records.some((record) => record.message?.content === "same task"));
+          }
+        } finally {
+          extension.restore();
+        }
+      }
+      assert.equal(new Set(savedFiles).size, 4);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });
 });

@@ -299,7 +299,7 @@ UI を持たない環境（`--mode json`、パイプ、SDK、subagent の子セ�
 
 subagentツールは常に利用できる。子セッションを起動できるかは、現在の agent の `subagents` で決まる。
 
-subagentツールは子セッションを起動するとき `--agent <name>` に加えて `--no-session` を渡し、モデルと `--class` を指定しない。子セッションの実効class は指定されたagent の既定class から始まり、候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
+subagentツールは子セッションを起動するとき `--agent <name>` と保存先の `--session-dir <dir>` を渡し、モデルと `--class` を指定しない。子セッションの実効class は指定されたagent の既定class から始まり、候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
 
 ### subagentツールの入力
 
@@ -322,22 +322,21 @@ subagentツールで起動した子エージェントには、指定されたage
 
 ### 子セッションのセッション記録
 
-子セッションはセッションファイルを分けず、実行中のイベントを親セッション内の `custom` entry に統合して記録する。
+子の履歴の正本は、子pi自身が保存する独立したJSONLファイルである。subagentツールと画像入力の自動vision委譲に同じ保存・参照規則を適用する。
 
 | 項目 | 振る舞い |
 | --- | --- |
-| customType | `agents.subagent-log` |
-| 書き込みタイミング | 子プロセス終了後に 1 entry を書く。成功・失敗（abort・stall 含む）に関わらず、そこまでの `events` を保持して書く |
-| `data.agentId` | 呼び出しごとに採番する ID（`sa-` 接頭辞＋連番）。子のセッション ID ではなく呼び出し ID |
-| `data.invocationId` | 親の subagentツール呼び出し ID（pi の toolCallId）。親子の紐付けの正本 |
-| `data.events` | 子の stdout イベントを gh-aw Unified Agent Session 語彙に変換した canonical event の列。`user.message` / `assistant.message` / `assistant.reasoning` / `tool.execution_start` / `tool.execution_complete`。変換対象は既知の pi stdout イベントで、未対応イベントは収集しない。`timestamp` は親がイベントを観測した時刻（ISO 8601） |
-| `data.tokens` / `data.costUsd` | 子の最終 assistant usage を gh-aw 正準名（`input_tokens` 等の snake_case）で記録。usage を観測できなければ省略する |
-| コンテキスト | `custom` entry は LLMコンテキストに参加しない。親のコンテキストに乗るのは subagentツール呼び出しと最終報告（toolResult）のみ |
-| 子の起動引数 | `--no-session` を渡し、子自身のセッション書き込みを止める。`--session-dir`・`--name` は使わない |
+| 保存先 | `<getAgentDir()>/sessions/<cwd識別子>/subagents/`。実際の子cwdを絶対パスに解決し、先頭の `/` または `\` を除き、残りの `/`・`\`・`:` を `-` に置換して `--` で前後を囲んだものをcwd識別子とする |
+| 子の起動引数 | `--session-dir <保存先>` を指定し、通常の新規セッションとして起動する。`--no-session`・既存セッションを指定する引数は渡さない |
+| 子の識別 | piが生成するUUIDと時刻によるファイル名を使う。同じagent・taskの並行実行や拡張のreloadをまたぐ実行でも独立する |
+| 親の記録 | `customType: agents.subagent-session` の `custom` entry に参照メタデータだけを記録する。全履歴・reasoning・usageの複製は含めない |
+| 共通フィールド | `data.invocationId`・`source`・`agent`・`task`・`cwd`・`sessionDir`・`phase`。`source` は `subagent` または `image`。`invocationId` はsubagentツールのtoolCallId、自動vision委譲では呼び出しごとのUUID |
+| 子header受信時 | `phase: start` を1件記録する。headerの `id` を `sessionId` とし、headerの `timestamp` の `:`・`.` を `-` に置換した値とIDから `<timestamp>_<id>.jsonl` を組み立て `sessionFile` とする。このパスは実ファイル作成前の予定パスであり、存在を保証しない |
+| 子終了時 | 成功・失敗・abort・stallに関わらず `phase: end` を1件記録する。同じ `invocationId` と取得済みの `sessionId`・`sessionFile` を使い、`exitCode`・取得できた `stopReason`・`errorMessage` と、終了時にファイルが存在するかの `sessionFileExists` を含める |
+| header前の失敗 | `end` に保存先を残し、未取得の `sessionId`・`sessionFile` は省略し、`sessionFileExists` は `false` とする。起動していない待機中abortでは参照entryを作らない |
+| コンテキストと最終報告 | 参照の `custom` entry はLLMコンテキストに参加しない。subagentツールの最終報告とUI、画像委譲の報告は既存の経路で返す |
 
-分離保存（`subagents/` 配下への保存）は廃止した。2026-09-05 時点の設計では、deja-vu が `custom` entry を読まないため子ログを deja-vu で検索できるように分離保存を採用していた。検索を自作の正規化トレース（`~/.agents/sessions` 配下、gh-aw Unified Agent Session 語彙）に移行するため deja-vu 依存を解消し、子の単独 resume も使わないため、分離を維持する理由がなくなった。
-
-`data.events` を gh-aw 語彙で保持するのは、正規化ツール（親セッションを `~/.agents/sessions` 配下の canonical トレースへ変換する自作ツール）での展開を「取り出して書き出すだけ」の機械的な処理にするためである。語彙の正本は gh-aw Unified Agent Session Specification であり、採用時版を固定して管理する。
+親が終了記録前に停止しても、保存済みの開始参照と子JSONLは独立して残る。親自身が未保存の場合の耐久性は親の保存状態に従う。子JSONLの作成時機はpiの通常保存に従い、header受信後でも最初の会話メッセージ保存前にはファイルが存在しない場合がある。子headerへの親リンクの追記は行わない。保存済みの `agents.subagent-log` entryを含む過去ログは、そのまま保持する。
 
 ### 同時実行数の制限
 
