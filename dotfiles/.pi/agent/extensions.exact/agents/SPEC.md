@@ -42,17 +42,17 @@ agents:
     systemPrompt: ["...", "..."]
   senior:
     class: middle
-    tools: ["*", "!handoff_session"]
+    tools: ["*", "!replace_context"]
     subagents: [junior, vision]
     systemPrompt: ["...", "..."]
   junior:
     class: low
-    tools: ["*", "!handoff_session"]
+    tools: ["*", "!replace_context"]
     subagents: []
     systemPrompt: ["..."]
   vision:
     class: vision
-    tools: ["*", "!handoff_session"]
+    tools: ["*", "!replace_context"]
     subagents: []
     # tools と systemPrompt は junior と同じ内容。class: vision のみが異なる
     systemPrompt: ["..."]

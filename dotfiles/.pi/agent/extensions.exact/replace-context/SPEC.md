@@ -1,6 +1,6 @@
-# handoff-session拡張機能Spec
+# replace-context拡張機能Spec
 
-この拡張は、同一セッション内で作業phaseのコンテキストを切り替える `handoff_session` ツールを提供する。対象読者は、次のphaseを始めるユーザーとmain agentである。切替前の会話はセッションのraw履歴に残る。
+この拡張は、同一セッション内で作業phaseのコンテキストを切り替える `replace_context` ツールを提供する。対象読者は、次のphaseを始めるユーザーとmain agentである。切替前の会話はセッションのraw履歴に残る。
 
 ## 入力
 
@@ -13,11 +13,11 @@
 
 ## 利用条件
 
-`handoff_session` はmain agentだけが使う。コンテキストをリセットして長い次の作業phaseへ移る場合に限り、収束ループ開始前、またはseniorによるレビュー・実装の完了後に次の長いphaseがある場合に呼び出す。レビュー・実装の完了だけでは呼び出さない。
+`replace_context` はmain agentだけが使う。コンテキストをリセットして長い次の作業phaseへ移る場合に限り、収束ループ開始前、またはseniorによるレビュー・実装の完了後に次の長いphaseがある場合に呼び出す。レビュー・実装の完了だけでは呼び出さない。
 
 `finish wt`・`discard` の承認待ち、user の判断待ち、単なる作業完了報告では呼び出さず、main agent は `Ready` または `Waiting` として通常の質問で終了する。切替後のmain agentは次のphaseを別のseniorへ委譲する。
 
-収束条件を満たしたmain agentは、`handoff_session` を呼び出さずユーザーへ結果を報告する。
+収束条件を満たしたmain agentは、`replace_context` を呼び出さずユーザーへ結果を報告する。
 
 ## コンテキスト切替
 
@@ -37,7 +37,7 @@
 
 通常入力は対話画面またはRPCからのユーザー入力を指し、回数を0へ戻す。拡張が送る合成入力では戻さない。再開・reloadだけでは回数を戻さない。tree移動では移動先branchの回数を使う。保存された回数が不正なら承認を求める。
 
-承認UIは選択式の `Yes, handoff` と `No, stay (reason next)` を使う。選択式UIがなければ確認ダイアログを使う。拒否・選択キャンセル時は任意の理由を入力し、`no(<理由>)` を現在のagentへfollowUp送信する。理由が空または入力キャンセルなら `no()` を送る。拒否では切替も回数加算も行わない。
+承認UIは選択式の `Yes, replace context` と `No, stay (reason next)` を使う。選択式UIがなければ確認ダイアログを使う。拒否・選択キャンセル時は任意の理由を入力し、`no(<理由>)` を現在のagentへfollowUp送信する。理由が空または入力キャンセルなら `no()` を送る。拒否では切替も回数加算も行わない。
 
 ## 切り替えない条件
 

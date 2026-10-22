@@ -19,7 +19,7 @@ import type {
   ToolDefinition,
   TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
-import handoffSessionExtension from "./index";
+import replaceContextExtension from "./index";
 
 function harness(manager = SessionManager.inMemory()) {
   let tool: ToolDefinition;
@@ -36,7 +36,7 @@ function harness(manager = SessionManager.inMemory()) {
     ui: {
       select: async (title: string): Promise<string | undefined> => {
         selections.push(title);
-        return "Yes, handoff";
+        return "Yes, replace context";
       },
       confirm: async () => true,
       input: async () => "",
@@ -45,7 +45,7 @@ function harness(manager = SessionManager.inMemory()) {
       },
     },
   };
-  handoffSessionExtension({
+  replaceContextExtension({
     on(name: string, handler: never) {
       if (name === "input") input = handler;
       if (name === "turn_end") turn = handler;
@@ -72,7 +72,7 @@ function harness(manager = SessionManager.inMemory()) {
     const toolCallId = `call-${manager.getEntries().length}`;
     const toolResult = {
       role: "toolResult" as const,
-      toolName: "handoff_session",
+      toolName: "replace_context",
       toolCallId,
       content: result.content,
       details: result.details as TurnEndEvent["toolResults"][number]["details"],
@@ -82,7 +82,7 @@ function harness(manager = SessionManager.inMemory()) {
     const message = {
       role: "assistant" as const,
       content: [
-        { type: "toolCall" as const, id: toolCallId, name: "handoff_session", arguments: {} },
+        { type: "toolCall" as const, id: toolCallId, name: "replace_context", arguments: {} },
       ],
       api: "anthropic-messages" as const,
       provider: "anthropic",
@@ -161,7 +161,7 @@ async function runtimeHarness() {
       const handoff = requestHandoff;
       requestHandoff = false;
       const block = handoff
-        ? { type: "tool_use", id: `handoff-${requests.length}`, name: "handoff_session", input: {} }
+        ? { type: "tool_use", id: `handoff-${requests.length}`, name: "replace_context", input: {} }
         : { type: "text", text: "" };
       const events = [
         {
@@ -240,13 +240,13 @@ async function runtimeHarness() {
     noContextFiles: true,
     systemPrompt: "Keep this system marker.",
     extensionFactories: [
-      handoffSessionExtension,
+      replaceContextExtension,
       (pi) => {
         pi.on("input", (event) => {
           inputs.push(event);
         });
         pi.on("tool_result", async (event) => {
-          if (event.toolName === "handoff_session") await hooks.duringTool?.(pi);
+          if (event.toolName === "replace_context") await hooks.duringTool?.(pi);
         });
       },
     ],
@@ -264,7 +264,7 @@ async function runtimeHarness() {
     settingsManager,
     sessionManager: manager,
     resourceLoader,
-    tools: ["handoff_session"],
+    tools: ["replace_context"],
   });
   await session.bindExtensions({
     mode: "rpc",
@@ -272,7 +272,7 @@ async function runtimeHarness() {
       ...session.extensionRunner.getUIContext(),
       async select(title) {
         selections.push(title);
-        return hooks.duringSelect ? await hooks.duringSelect() : "Yes, handoff";
+        return hooks.duringSelect ? await hooks.duringSelect() : "Yes, replace context";
       },
       async input() {
         return hooks.duringReason ? await hooks.duringReason() : "";
@@ -352,10 +352,10 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
             assert.match(messages, /new phase marker/);
             assert.doesNotMatch(
               messages,
-              /old user marker|request the phase transition|Handoff requested|tool_result|tool_use/,
+              /old user marker|request the phase transition|Context replacement requested|tool_result|tool_use/,
             );
             assert.match(JSON.stringify(request.system), /Keep this system marker/);
-            assert.ok(request.tools?.some((tool) => tool.name === "handoff_session"));
+            assert.ok(request.tools?.some((tool) => tool.name === "replace_context"));
           }
           assert.ok(
             turnRequests
@@ -374,7 +374,7 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
           );
           const raw = JSON.stringify(h.manager.getEntries());
           assert.match(raw, /old user marker/);
-          assert.match(raw, /Handoff requested/);
+          assert.match(raw, /Context replacement requested/);
           assert.deepEqual(h.errors, []);
           assert.deepEqual(h.notices, []);
         } finally {
@@ -406,8 +406,8 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
 
   for (const stage of ["select", "reason"] as const) {
     for (const source of ["interactive", "rpc"] as const) {
-      for (const choice of ["Yes, handoff", "No, stay (reason next)", undefined]) {
-        if (stage === "reason" && choice === "Yes, handoff") continue;
+      for (const choice of ["Yes, replace context", "No, stay (reason next)", undefined]) {
+        if (stage === "reason" && choice === "Yes, replace context") continue;
         it(`resets on real ${source} input during ${stage} and stops choice ${choice}`, async () => {
           const h = await runtimeHarness();
           try {
@@ -541,7 +541,7 @@ describe("handoff approval cycle", () => {
       h.ctx.ui.input = async () => "  finish tests  ";
       assert.equal(await h.boundary(), undefined);
       assert.deepEqual(h.sent, ["no(finish tests)"]);
-      h.ctx.ui.select = async () => "Yes, handoff";
+      h.ctx.ui.select = async () => "Yes, replace context";
       const next = await h.boundary();
       const compaction = next?.entries?.[0];
       assert.ok(compaction?.type === "compaction");
@@ -578,7 +578,7 @@ describe("handoff boundaries", () => {
           timestamp: 1,
           nestedCalls: {
             complete: true,
-            calls: [{ id: "call", name: "handoff_session", status: "ok", durationMs: 1 }],
+            calls: [{ id: "call", name: "replace_context", status: "ok", durationMs: 1 }],
           },
         },
       ],
@@ -629,7 +629,7 @@ describe("handoff boundaries", () => {
     h.commit(await h.boundary());
     h.ctx.ui.select = async () => {
       h.controller.abort();
-      return "Yes, handoff";
+      return "Yes, replace context";
     };
     assert.equal(await h.boundary(), undefined);
   });
@@ -640,7 +640,7 @@ describe("handoff boundaries", () => {
     h.ctx.ui.select = async () => {
       h.user();
       h.manager.appendMessage({ role: "user", content: "new decision", timestamp: 1 });
-      return "Yes, handoff";
+      return "Yes, replace context";
     };
     assert.equal(await h.boundary(), undefined);
     assert.match(JSON.stringify(h.manager.buildSessionContext().messages), /new decision/);
@@ -660,7 +660,7 @@ describe("handoff boundaries", () => {
     const result = await h.request();
     const request = {
       role: "toolResult" as const,
-      toolName: "handoff_session",
+      toolName: "replace_context",
       toolCallId: "x",
       content: result.content,
       details: result.details as TurnEndEvent["toolResults"][number]["details"],
@@ -684,8 +684,8 @@ describe("handoff boundaries", () => {
 describe("handoff safety while awaiting UI", () => {
   for (const dialog of ["select", "confirm", "reason"] as const) {
     for (const change of ["leaf", "session", "abort"] as const) {
-      for (const choice of ["Yes, handoff", "No, stay (reason next)", undefined]) {
-        if (dialog === "reason" && choice === "Yes, handoff") continue;
+      for (const choice of ["Yes, replace context", "No, stay (reason next)", undefined]) {
+        if (dialog === "reason" && choice === "Yes, replace context") continue;
         it(`stops after ${change} changes during ${dialog} with choice ${choice}`, async () => {
           const h = harness();
           h.commit(await h.boundary());
@@ -712,7 +712,7 @@ describe("handoff safety while awaiting UI", () => {
           };
           if (dialog === "confirm") {
             Object.assign(h.ctx.ui, { select: undefined });
-            h.ctx.ui.confirm = async () => (await decision()) === "Yes, handoff";
+            h.ctx.ui.confirm = async () => (await decision()) === "Yes, replace context";
           } else if (dialog === "select") {
             h.ctx.ui.select = decision;
           } else {
@@ -738,7 +738,7 @@ describe("handoff safety while awaiting UI", () => {
           assert.equal(reasonPrompts, dialog === "reason" ? 1 : 0);
           if (change !== "abort") {
             assert.match(h.notices[0]!, /session changed/);
-            h.ctx.ui.select = async () => "Yes, handoff";
+            h.ctx.ui.select = async () => "Yes, replace context";
             const next = await h.boundary();
             const compaction = next?.entries?.[0];
             assert.ok(compaction?.type === "compaction");
@@ -780,7 +780,7 @@ describe("nested handoff safety", () => {
           calls: [
             {
               id: "call",
-              name: "handoff_session",
+              name: "replace_context",
               status: condition === "error" || condition === "unfinished" ? condition : "ok",
               durationMs: 1,
             },
@@ -790,7 +790,7 @@ describe("nested handoff safety", () => {
       if (condition === "multiple")
         nested.nestedCalls!.calls.push({
           id: "second",
-          name: "handoff_session",
+          name: "replace_context",
           status: "ok",
           durationMs: 1,
         });
@@ -798,7 +798,7 @@ describe("nested handoff safety", () => {
       if (condition === "direct-and-nested")
         results.push({
           ...nested,
-          toolName: "handoff_session",
+          toolName: "replace_context",
           toolCallId: "direct",
           nestedCalls: undefined,
           details: { reason: "done", handoff: "other phase" },
@@ -820,7 +820,7 @@ describe("nested handoff safety", () => {
 
 describe("persisted session context", () => {
   it("keeps raw history and system/tools, excludes old messages, and preserves the counter on resume", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "handoff-session-"));
+    const directory = mkdtempSync(join(tmpdir(), "replace-context-"));
     try {
       const manager = SessionManager.create(directory, directory);
       manager.appendMessage({
@@ -839,7 +839,7 @@ describe("persisted session context", () => {
       assert.match(raw, /old user history/);
       assert.match(raw, /toolResult/);
       const llm = JSON.stringify(convertToLlm(manager.buildSessionContext().messages));
-      assert.doesNotMatch(llm, /old user history|Handoff requested|toolResult/);
+      assert.doesNotMatch(llm, /old user history|Context replacement requested|toolResult/);
       assert.match(llm, /next phase/);
       assert.match(llm, /keep these instructions/);
       assert.match(llm, /read files/);

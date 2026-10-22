@@ -4,7 +4,7 @@ import { Type } from "typebox";
 const STATE_TYPE = "handoff-session-counter";
 const STATE_VERSION = 1;
 const AUTO_HANDOFF_LIMIT = 2;
-const HANDOFF_OPTION = "Yes, handoff";
+const HANDOFF_OPTION = "Yes, replace context";
 const STAY_OPTION = "No, stay (reason next)";
 
 interface HandoffPayload {
@@ -12,7 +12,7 @@ interface HandoffPayload {
   handoff: string;
 }
 
-export default function handoffSessionExtension(pi: ExtensionAPI): void {
+export default function replaceContextExtension(pi: ExtensionAPI): void {
   const pendingRequests = new Map<string, HandoffPayload>();
   pi.on("turn_start", () => {
     pendingRequests.clear();
@@ -24,16 +24,16 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "handoff_session",
-    label: "Handoff Session",
+    name: "replace_context",
+    label: "Replace Context",
     description:
       "Use this tool only when a context reset is needed before a substantial next work phase. " +
       "Do not use it for ordinary completion reports, owner decisions, or finish/discard worktree approval; " +
       "when only approval remains, report Ready or Waiting and ask normally. " +
       "Keep raw history in this session and replace prior model context with handoff, without LLM summarization. " +
-      "The first two handoffs after user input or approval are automatic; the third requires approval.",
+      "The first two context replacements after user input or approval are automatic; the third requires approval.",
     promptGuidelines: [
-      "Use handoff_session only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>).",
+      "Use replace_context only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>).",
     ],
     parameters: Type.Object({
       reason: Type.String({ description: "Why the context reset is needed (non-empty)" }),
@@ -53,7 +53,9 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
       }
       pendingRequests.set(toolCallId, { reason, handoff });
       return {
-        content: [{ type: "text", text: "Handoff requested for the end of this turn." }],
+        content: [
+          { type: "text", text: "Context replacement requested for the end of this turn." },
+        ],
         details: { reason, handoff },
       };
     },
@@ -61,12 +63,12 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
 
   pi.on("turn_end", async (event, ctx) => {
     const directRequests = event.toolResults.filter(
-      (result) => result.toolName === "handoff_session",
+      (result) => result.toolName === "replace_context",
     );
     const nestedRequests = event.toolResults.flatMap((result) =>
       (result.nestedCalls?.calls ?? []).flatMap((call) => {
         const payload = pendingRequests.get(call.id);
-        return call.name === "handoff_session" && call.status === "ok" && payload
+        return call.name === "replace_context" && call.status === "ok" && payload
           ? [{ toolCallId: call.id, details: payload }]
           : [];
       }),
@@ -91,7 +93,7 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
     if (!isHandoffPayload(payload)) return;
     if (!ctx.hasUI) {
       ctx.ui.notify(
-        "handoff-session: interactive UI is unavailable; keeping the current context",
+        "replace-context: interactive UI is unavailable; keeping the current context",
         "error",
       );
       return;
@@ -116,7 +118,7 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
         ctx.sessionManager.getLeafId() !== leafId;
       if (contextChanged) {
         ctx.ui.notify(
-          "handoff-session: session changed while waiting; keeping the current context",
+          "replace-context: session changed while waiting; keeping the current context",
           "warning",
         );
       }
@@ -125,7 +127,7 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
     const count = readCounter(branch);
     const requiresApproval = count >= AUTO_HANDOFF_LIMIT;
     if (requiresApproval) {
-      const title = "Handoff session";
+      const title = "Replace context";
       const message = `Replace the model context in this session?\n\nReason:\n${payload.reason}\n\nPrompt for the next agent:\n${payload.handoff}`;
       try {
         const approved = ctx.ui.select
@@ -140,7 +142,7 @@ export default function handoffSessionExtension(pi: ExtensionAPI): void {
           return;
         }
       } catch (error) {
-        ctx.ui.notify(`handoff-session: confirmation failed (${errorMessage(error)})`, "error");
+        ctx.ui.notify(`replace-context: confirmation failed (${errorMessage(error)})`, "error");
         return;
       }
     }
