@@ -36,6 +36,7 @@
 - brew: coreutils
 - apt: blender
 - apt: ffmpeg
+- brew: fluid-synth
 - brew: gcc
 - brew: git
 - brew: make
@@ -126,6 +127,7 @@
 - apt: chromium
 - flatpak: com.visualstudio.code
 - custom: drawio
+- custom: generaluser-gs
 - custom: openwhispr
 - custom: rustdesk
 - brew-cask: android-commandlinetools
