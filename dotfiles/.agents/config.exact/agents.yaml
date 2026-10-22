@@ -1,5 +1,60 @@
 default: main
 
+_when:
+  # z.ai peak hours are weekdays, 14:00–18:00 (UTC+8) => 06:00-10:00 UTC
+  zaiOffPeak: &zai-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { [ "$d" -le 5 ] && [ "$h" -ge 05 ] && [ "$h" -lt 10 ]; }'
+  # zaiOffPeak: &zai-off-peak "false"
+  # zaiOffPeak: &zai-off-peak "true"
+  # DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC
+  deepseekOffPeak: &deepseek-off-peak 'd=$(date -u +%u); h=$(date -u +%H); ! { { [ "$d" -le 5 ] && [ "$h" -ge 01 ] && [ "$h" -lt 04 ]; } || { [ "$d" -le 5 ] && [ "$h" -ge 06 ] && [ "$h" -lt 10 ]; }; }'
+
+classes:
+  high:
+    - provider: zai
+      model: glm-5.3
+      when: *zai-off-peak
+    # - provider: openai-codex
+    #   model: gpt-6-astra
+    - provider: openai-codex
+      model: gpt-6.1-sol
+    - provider: commandcode
+      model: z-ai/glm-5.3-flash
+    - provider: zai
+      model: glm-5.3-flash
+  middle:
+    - provider: zai
+      model: glm-5.3-flash
+      # model: glm-5.3
+      when: *zai-off-peak
+    # - provider: openai-codex
+    #   model: gpt-6-astra
+    - provider: openai-codex
+      model: gpt-6.1-sol
+    - provider: commandcode
+      model: z-ai/glm-5.3-flash
+    - provider: zai
+      model: glm-5.3-flash
+  low:
+    - provider: openai-codex
+      model: gpt-6-luna
+    - provider: zai
+      model: glm-5.3-flash
+      when: *zai-off-peak
+    - provider: commandcode
+      model: z-ai/glm-5.3-flash
+    - provider: zai
+      model: glm-5.3-flash
+  vision:
+    - provider: openai-codex
+      model: gpt-6-luna
+    - provider: zai
+      model: glm-5.3-flash
+      when: *zai-off-peak
+    - provider: commandcode
+      model: z-ai/glm-5.3-flash
+    - provider: zai
+      model: glm-5.3-flash
+
 _systemPrompts:
   agentOverview: &agent-overview |
     ## Agent 一覧
