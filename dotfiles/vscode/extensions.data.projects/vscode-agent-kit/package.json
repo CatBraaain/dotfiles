@@ -38,6 +38,9 @@
     "screenshot": "bun run build && node scripts/screenshot.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun run build && bun run storybook:build && vitest run",
+    "test:e2e": "bun run build && xvfb-run -a playwright test",
+    "test:review": "bun run build && xvfb-run -a playwright test tests/review/",
+    "review": "playwright show-report dist/playwright-report --port 0",
     "lint": "eslint .",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build"

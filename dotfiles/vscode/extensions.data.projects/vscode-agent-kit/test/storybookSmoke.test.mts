@@ -55,9 +55,7 @@ describe.skipIf(!indexAvailable)("storybook static catalog smoke", () => {
 
   afterAll(async () => {
     await browser?.close();
-    await new Promise<void>((resolve, reject) =>
-      server?.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => server?.close((error) => (error ? reject(error) : resolve())));
   });
 
   it("lists the session stories in the built index", async () => {
@@ -214,8 +212,31 @@ describe.skipIf(!indexAvailable)("storybook static catalog smoke", () => {
       waitUntil: "networkidle",
     });
     await page.waitForSelector(".empty");
-    expect(await page.locator(".empty").textContent()).toBe("No active sessions");
+    expect(await page.locator(".empty").count()).toBe(3);
+    expect(await page.locator(".empty").first().textContent()).toContain("Select All to browse saved sessions.");
+    const historyToggle = page.locator(".group").first().locator('[data-mode="all"]').describe("Show saved sessions");
+    await historyToggle.focus();
+    await historyToggle.press("Enter");
+    await page.waitForSelector(".session-row");
+    expect(await page.locator(".session-row").count()).toBe(2);
+    expect(await page.locator(".indicator.active").count()).toBe(0);
     await page.close();
+  });
+
+  it("shows distinct same-named worktree paths without horizontal overflow at sidebar widths", async () => {
+    for (const width of [320, 720]) {
+      const page = await browser!.newPage({ viewport: { width, height: 640 } });
+      await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
+        waitUntil: "networkidle",
+      });
+      const paths = page.locator(".group-path").describe("Work folder paths");
+      await paths.first().waitFor();
+      expect(await paths.allTextContents()).toContain("/Users/aya/Projects/atlas-dashboard");
+      expect(await paths.allTextContents()).toContain("/Users/aya/Worktrees/atlas-dashboard");
+      const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+      expect(hasOverflow).toBe(false);
+      await page.close();
+    }
   });
 
   it("captures a screenshot of the static output without the extension host", async () => {

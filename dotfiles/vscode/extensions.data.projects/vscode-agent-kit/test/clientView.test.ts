@@ -57,9 +57,7 @@ function sectionsIn(view: ReturnType<typeof viewFor>): ElementDescriptor[] {
 
 /** Text content of an element, concatenated depth-first. */
 function text(node: ElementDescriptor): string {
-  return (node.children ?? [])
-    .map((child) => (typeof child === "string" ? child : text(child)))
-    .join("");
+  return (node.children ?? []).map((child) => (typeof child === "string" ? child : text(child))).join("");
 }
 
 function byClass(elements: ElementDescriptor[], className: string): ElementDescriptor[] {
@@ -73,8 +71,9 @@ describe("sessionListView", () => {
 
     expect(empty.sessions).toHaveLength(1);
     expect(empty.sessions[0].tag).toBe("p");
-    expect(text(empty.sessions[0])).toBe("No active sessions");
-    expect(text(allInactive.sessions[0])).toBe("No active sessions");
+    expect(text(empty.sessions[0])).toBe("No saved sessions");
+    expect(sectionsIn(allInactive)).toHaveLength(1);
+    expect(text(allInactive.sessions[0])).toContain("Select All to browse saved sessions.");
   });
 
   it("renders group headers with the basename, the cwd hint, and per-workspace mode buttons", () => {
@@ -84,7 +83,7 @@ describe("sessionListView", () => {
     const titles = byClass(elementsIn(view), "group-title");
     expect(titles.map(text)).toEqual(["atlas", "beta"]);
     expect(titles.map((title) => title.attrs?.title)).toEqual(["/workspace/atlas", "/workspace/beta"]);
-    expect(byClass(elementsIn(view), "group-path")).toHaveLength(0);
+    expect(byClass(elementsIn(view), "group-path").map(text)).toEqual(["/workspace/atlas", "/workspace/beta"]);
 
     const toggles = byClass(elementsIn(view), "mode-button");
     expect(toggles.map((toggle) => toggle.attrs?.["data-mode"])).toEqual(["active", "all", "active", "all"]);
@@ -96,26 +95,41 @@ describe("sessionListView", () => {
     ]);
   });
 
+  it("distinguishes same-named project and worktree groups by visible full paths", () => {
+    const paths = ["/workspace/atlas", "/worktrees/atlas"];
+    const view = viewFor(
+      modesOf(),
+      paths.map((cwd) => ({ cwd, label: "atlas", sessions: [atlasActive] })),
+    );
+
+    expect(byClass(elementsIn(view), "group-title").map(text)).toEqual(["atlas", "atlas"]);
+    expect(byClass(elementsIn(view), "group-path").map(text)).toEqual(paths);
+  });
+
   it("marks the pressed mode per workspace from the modes map", () => {
     const defaultToggles = byClass(elementsIn(viewFor(modesOf())), "mode-button");
     expect(defaultToggles.map((toggle) => [toggle.attrs?.["data-cwd"], toggle.attrs?.["aria-pressed"]])).toEqual([
       ["/workspace/atlas", "true"],
       ["/workspace/atlas", "false"],
+      ["/workspace/beta", "true"],
+      ["/workspace/beta", "false"],
     ]);
 
     const atlasAllToggles = byClass(elementsIn(viewFor(modesOf({ "/workspace/atlas": "all" }))), "mode-button");
     expect(atlasAllToggles.map((toggle) => [toggle.attrs?.["data-cwd"], toggle.attrs?.["aria-pressed"]])).toEqual([
       ["/workspace/atlas", "false"],
       ["/workspace/atlas", "true"],
+      ["/workspace/beta", "true"],
+      ["/workspace/beta", "false"],
     ]);
   });
 
-  it("shows only active sessions per workspace and hides workspaces without active sessions", () => {
-    expect(sectionsIn(viewFor(modesOf()))).toHaveLength(1);
+  it("keeps history controls visible for workspaces without active sessions", () => {
+    expect(sectionsIn(viewFor(modesOf()))).toHaveLength(2);
     expect(byClass(elementsIn(viewFor(modesOf())), "session-name").map(text)).toEqual(["Atlas active"]);
 
     const allAtlas = viewFor(modesOf({ "/workspace/atlas": "all" }));
-    expect(sectionsIn(allAtlas)).toHaveLength(1);
+    expect(sectionsIn(allAtlas)).toHaveLength(2);
     expect(byClass(elementsIn(allAtlas), "session-name").map(text)).toEqual(["Atlas active", "Atlas old"]);
 
     expect(sectionsIn(viewFor(allModes))).toHaveLength(2);

@@ -3,6 +3,7 @@ import { parseWebviewRequest } from "../src/webview/protocol";
 
 describe("parseWebviewRequest", () => {
   it.each([
+    [{ type: "ready" }, { type: "ready" }],
     [{ type: "refresh" }, { type: "refresh" }],
     [{ type: "newSession" }, { type: "newSession" }],
     [

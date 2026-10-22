@@ -51,14 +51,13 @@ export function sessionListView(
   modes: ReadonlyMap<string, ViewMode>,
   copiedIds: ReadonlySet<string> = new Set(),
 ): SessionListView {
-  const groups = state.groups.flatMap((group) => {
+  const groups = state.groups.map((group) => {
     const mode = modes.get(group.cwd) ?? "active";
     const sessions = mode === "active" ? group.sessions.filter((session) => session.isActive) : group.sessions;
-    // Active mode hides workspaces without active sessions entirely.
-    return mode === "active" && sessions.length === 0 ? [] : [groupDescriptor(group, mode, sessions, copiedIds)];
+    return groupDescriptor(group, mode, sessions, copiedIds);
   });
   return {
-    sessions: groups.length === 0 ? [{ tag: "p", attrs: { class: "empty" }, children: ["No active sessions"] }] : groups,
+    sessions: groups.length === 0 ? [{ tag: "p", attrs: { class: "empty" }, children: ["No saved sessions"] }] : groups,
   };
 }
 
@@ -94,7 +93,16 @@ function groupDescriptor(
           },
         ],
       },
-      ...sessions.map((session) => sessionDescriptor(session, copiedIds)),
+      { tag: "div", attrs: { class: "group-path", title: group.cwd }, children: [group.cwd] },
+      ...(sessions.length === 0
+        ? [
+            {
+              tag: "p",
+              attrs: { class: "empty" },
+              children: ["No active sessions. Select All to browse saved sessions."],
+            },
+          ]
+        : sessions.map((session) => sessionDescriptor(session, copiedIds))),
     ],
   };
 }
@@ -281,6 +289,8 @@ export function initClient(bridge: ClientBridge): () => void {
   const render = (): void => {
     sessionsElement.replaceChildren(...sessionListView(state, modes, copiedIds).sessions.map(createElement));
   };
+
+  bridge.postMessage({ type: "ready" });
 
   return () => {
     document.removeEventListener("click", onDocumentClick);

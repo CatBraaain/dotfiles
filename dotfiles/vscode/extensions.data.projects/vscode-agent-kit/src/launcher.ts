@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
+import { requireWorkDirectory } from "./workTarget";
 import { encodeCwdDirName } from "./paths";
 import { setSessionActive } from "./metadataStore";
 import { summarizeSessionFile } from "./sessionFile";
@@ -30,12 +31,10 @@ export class SessionLauncher implements vscode.Disposable {
 
   constructor(private readonly deps: SessionLauncherDeps) {}
 
-  async start(): Promise<void> {
-    const cwd = resolveLaunchCwd({
-      workspaceFolders: vscode.workspace.workspaceFolders,
-      activeDocumentUri: vscode.window.activeTextEditor?.document.uri,
-      homeDir: homedir(),
-    });
+  async start(sessionCwds: readonly string[] = []): Promise<void> {
+    const selectedCwd = await chooseLaunchCwd(sessionCwds);
+    if (selectedCwd === undefined) return;
+    const cwd = await requireWorkDirectory(selectedCwd);
     const groupDir = join(this.deps.sessionDir, encodeCwdDirName(cwd));
     const known = new Set(await listSessionFileNames(groupDir));
     const terminal = vscode.window.createTerminal({
@@ -83,6 +82,49 @@ export class SessionLauncher implements vscode.Disposable {
       }
     }
   }
+}
+
+async function chooseLaunchCwd(sessionCwds: readonly string[]): Promise<string | undefined> {
+  const defaultCwd = resolveLaunchCwd({
+    workspaceFolders: vscode.workspace.workspaceFolders,
+    activeDocumentUri: vscode.window.activeTextEditor?.document.uri,
+    homeDir: homedir(),
+  });
+  const candidates = [
+    ...new Set(
+      [
+        defaultCwd,
+        ...(vscode.workspace.workspaceFolders ?? [])
+          .filter((folder) => folder.uri.scheme === "file")
+          .map((folder) => folder.uri.fsPath),
+        ...sessionCwds,
+      ]
+        .filter(isAbsolute)
+        .map((cwd) => resolve(cwd)),
+    ),
+  ];
+  const choice = await vscode.window.showQuickPick(
+    [
+      ...candidates.map((cwd) => ({ label: basename(cwd) || cwd, description: cwd, cwd })),
+      { label: "Choose another folder…", description: "Browse for a starting folder", cwd: undefined },
+    ],
+    { title: "Start Pi session in…", matchOnDescription: true },
+  );
+  if (choice === undefined) return;
+  let selectedCwd = choice.cwd;
+  if (selectedCwd === undefined) {
+    const folders = await vscode.window.showOpenDialog({
+      title: "Start Pi session in…",
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      defaultUri: vscode.Uri.file(defaultCwd),
+      openLabel: "Start here",
+    });
+    selectedCwd = folders?.[0]?.fsPath;
+  }
+  if (selectedCwd === undefined) return;
+  return selectedCwd;
 }
 
 function sleep(ms: number): Promise<void> {

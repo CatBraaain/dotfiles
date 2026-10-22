@@ -14,27 +14,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)));
 
-  let startNewSession = (): Promise<void> => Promise.reject(new Error("Session launcher is not ready"));
-  const provider = new SessionWebviewProvider({
-    extensionUri: context.extensionUri.fsPath,
-    sessionDir,
-    metadataPath,
-    registry,
-    startNewSession: () => startNewSession(),
-  });
-  const launcher = new SessionLauncher({
+  const launcher: SessionLauncher = new SessionLauncher({
     sessionDir,
     metadataPath,
     registry,
     onSessionDetected: () => provider.refresh(),
   });
-  startNewSession = () => launcher.start();
+  const provider = new SessionWebviewProvider({
+    extensionUri: context.extensionUri.fsPath,
+    sessionDir,
+    metadataPath,
+    registry,
+    startNewSession: (cwds) => launcher.start(cwds),
+  });
 
-  context.subscriptions.push(
-    launcher,
-    provider,
-    vscode.window.registerWebviewViewProvider(VIEW_ID, provider),
-  );
+  context.subscriptions.push(launcher, provider, vscode.window.registerWebviewViewProvider(VIEW_ID, provider));
 }
 
 export function deactivate(): void {

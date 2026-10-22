@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { activeSessionIds, readMetadataStore, setSessionActive } from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { createSessionTerminal } from "../terminals";
+import { followWorkTarget, requireWorkDirectory } from "../workTarget";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
 import { parseWebviewRequest, type ExtensionMessage } from "./protocol";
@@ -16,13 +17,14 @@ export interface SessionWebviewDeps {
   sessionDir: string;
   metadataPath: string;
   registry: TerminalRegistry;
-  startNewSession: () => Promise<void>;
+  startNewSession: (sessionCwds: readonly string[]) => Promise<void>;
 }
 
 /** Owns the WebviewView and translates its fixed message protocol into extension actions. */
 export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private sessionsById = new Map<string, SessionSummary>();
+  private sessionSelection = Promise.resolve();
 
   constructor(private readonly deps: SessionWebviewDeps) {}
 
@@ -35,14 +37,17 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       localResourceRoots: [clientRoot],
     };
     const scriptUri = webviewView.webview.asWebviewUri(vscode.Uri.joinPath(clientRoot, "webview", "client.js"));
-    webviewView.webview.html = webviewHtml({
-      scriptUri: scriptUri.toString(),
-      nonce: randomBytes(16).toString("base64"),
-    });
     webviewView.onDidDispose(() => {
       if (this.view === webviewView) this.view = undefined;
     });
     webviewView.webview.onDidReceiveMessage((message: unknown) => this.handleMessage(message));
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible && this.view === webviewView) void this.refresh();
+    });
+    webviewView.webview.html = webviewHtml({
+      scriptUri: scriptUri.toString(),
+      nonce: randomBytes(16).toString("base64"),
+    });
     void this.refresh();
   }
 
@@ -77,12 +82,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private async handleMessage(message: unknown): Promise<void> {
     const request = parseWebviewRequest(message);
     if (request === undefined) return;
-    if (request.type === "refresh") {
+    if (request.type === "ready" || request.type === "refresh") {
       await this.refresh();
       return;
     }
     if (request.type === "newSession") {
-      await this.deps.startNewSession();
+      try {
+        await this.deps.startNewSession([...new Set([...this.sessionsById.values()].map((session) => session.cwd))]);
+      } catch (error) {
+        this.postError(`Failed to start Pi session: ${errorMessage(error)}`);
+      }
       return;
     }
     if (request.type === "copySessionId") {
@@ -94,13 +103,15 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "openSession") {
-      await this.openSession(request.sessionId);
+      const editorUri = vscode.window.activeTextEditor?.document.uri;
+      this.sessionSelection = this.sessionSelection.then(() => this.openSession(request.sessionId, editorUri));
+      await this.sessionSelection;
       return;
     }
     await this.archiveSession(request.sessionId);
   }
 
-  private async openSession(sessionId: string): Promise<void> {
+  private async openSession(sessionId: string, editorUri: vscode.Uri | undefined): Promise<void> {
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
@@ -116,9 +127,15 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
-    const terminal = this.deps.registry.get(sessionId) ?? createSessionTerminal(session);
-    this.deps.registry.set(sessionId, terminal);
-    terminal.show();
+    try {
+      await requireWorkDirectory(session.cwd);
+      const terminal = this.deps.registry.get(sessionId) ?? createSessionTerminal(session);
+      this.deps.registry.set(sessionId, terminal);
+      terminal.show();
+    } catch (error) {
+      this.postError(`Failed to open session work folder: ${errorMessage(error)}`);
+      return;
+    }
 
     const result = setSessionActive(this.deps.metadataPath, sessionId, true);
     if (!result.ok) {
@@ -126,6 +143,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     await this.refresh();
+    try {
+      await followWorkTarget(session.cwd, editorUri);
+    } catch (error) {
+      this.postError(`Failed to show session files or changes: ${errorMessage(error)}`);
+    }
   }
 
   private async archiveSession(sessionId: string): Promise<void> {

@@ -1,4 +1,5 @@
 export type WebviewRequest =
+  | { type: "ready" }
   | { type: "refresh" }
   | { type: "newSession" }
   | { type: "openSession"; sessionId: string }
@@ -22,13 +23,11 @@ export interface WebviewState {
   groups: WebviewSessionGroup[];
 }
 
-export type ExtensionMessage =
-  | { type: "sessions"; state: WebviewState }
-  | { type: "error"; message: string };
+export type ExtensionMessage = { type: "sessions"; state: WebviewState } | { type: "error"; message: string };
 
 export function parseWebviewRequest(value: unknown): WebviewRequest | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
-  if (value.type === "refresh" || value.type === "newSession") return { type: value.type };
+  if (value.type === "ready" || value.type === "refresh" || value.type === "newSession") return { type: value.type };
   if (
     (value.type === "openSession" || value.type === "archiveSession" || value.type === "copySessionId") &&
     typeof value.sessionId === "string" &&

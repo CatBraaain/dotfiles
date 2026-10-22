@@ -15,6 +15,7 @@ export const webviewStyles = `
     .group { overflow: hidden; margin-top: 10px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; }
     .group-header { gap: 8px; min-width: 0; padding: 5px 8px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBarSectionHeader-background); }
     .group-title { flex: 1; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .group-path { padding: 5px 8px; color: var(--vscode-descriptionForeground); font-size: 12px; overflow-wrap: anywhere; }
     .group-modes { display: flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; }
     .mode-button { padding: 2px 6px; color: var(--vscode-foreground); background: transparent; font-size: 10px; }
     .mode-button:hover { background: var(--vscode-list-hoverBackground); }

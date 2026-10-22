@@ -22,7 +22,7 @@ export interface DemoBridge {
 
 const ATLAS_CWD = "/Users/aya/Projects/atlas-dashboard";
 const PI_TOOLS_CWD = "/Users/aya/Projects/pi-tools";
-const NOTES_CWD = "/Users/aya/Notes";
+const ATLAS_WORKTREE_CWD = "/Users/aya/Worktrees/atlas-dashboard";
 
 const sampleSessions: SessionSummary[] = [
   {
@@ -55,17 +55,14 @@ const sampleSessions: SessionSummary[] = [
   },
   {
     sessionId: "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94",
-    filePath: `${NOTES_CWD}/20260916_5b6c4a2d.jsonl`,
-    cwd: NOTES_CWD,
+    filePath: `${ATLAS_WORKTREE_CWD}/20260916_5b6c4a2d.jsonl`,
+    cwd: ATLAS_WORKTREE_CWD,
     displayName: "Plan the next release",
     mtimeMs: Date.UTC(2026, 8, 16, 10, 52),
   },
 ];
 
-const ACTIVE_SAMPLE_IDS = new Set([
-  "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
-  "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
-]);
+const ACTIVE_SAMPLE_IDS = new Set(["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72"]);
 
 function cloneStore(sessions: SessionSummary[]): SessionSummary[] {
   return sessions.map((session) => ({ ...session }));
