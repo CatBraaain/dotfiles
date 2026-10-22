@@ -1,6 +1,6 @@
 # web-search拡張機能Spec
 
-pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli.exact/` の `browse` CLIコマンド（spec: `dotfiles/.agents/cli.exact/browse/SPEC.md`。以下 **CLI spec**）が持つ。この拡張は CLI の search / fetchサブコマンドを子プロセスで起動し、tool の入出力への変換のみを行う薄いラッパーである。
+pi に **Web検索** と **URL取得** の2つのツールを追加する。実際の検索・フェッチの振る舞いは `dotfiles/.agents/cli.exact/` の `browse` CLIコマンド（spec: `dotfiles/.agents/cli.exact/browse/SPEC.md`。以下 **CLI spec**）が持つ。この拡張は登録済みbashツール経由で CLI の search / fetchサブコマンドを起動し、tool の入出力への変換のみを行う薄いラッパーである。
 
 ## ツール一覧
 
@@ -11,21 +11,24 @@ pi に **Web検索** と **URL取得** の2つのツールを追加する。実�
 
 ## 実行
 
-各ツールの execute は、コンパイル済みの `browse` 実行ファイルを直接子プロセスとして起動し、対応するサブコマンドの完了を待つ。
+各ツールの execute は実行時contextの `ctx.executeTool("bash", ...)` で現在登録されたbashツールを呼び、コンパイル済みの `browse` 実行ファイルの完了を待つ。実行ファイルパスと全引数をshellの単一引数として安全に引用する。bashのoverride、コマンド承認、sandbox、tool hooks はnested APIに従う。bashを利用できない場合も直接起動へ切り替えない。
 
 | ツール | CLI引数 |
 | --- | --- |
 | web_search | `search` `<query>`（`--lang <lang>` は lang指定時のみ）`--json` |
 | web_fetch | `fetch` `<url>` `--json` |
 
-tool呼び出しの中断（abort signal）は子プロセスの kill に伝える。
+tool呼び出しの中断（abort signal）はnested bashへ伝える。各bash呼び出しの実行時間の上限は300秒とし、プロセス停止は登録bashの契約に従う。stdoutとstderrは分離して回収し、stderrの診断が成功時のJSONに混入しないようにする。
+
+bashの構造化出力が切り詰められた場合は、返された `full_output_path` から同じ登録bash経由で全出力を分割回収して解釈する。回収にも中断・承認・sandbox・tool hooks を適用する。最初の部分出力は回収結果に混ぜず、全体の回収と検証が完了した場合だけ本文とdetailsへ変換する。回収用の出力やBase64表現はツールの本文へ含めない。
 
 | CLI の終了 | tool の結果 |
 | --- | --- |
 | 終了コード0 | stdout を JSON として解釈し、本文と details へ変換する（§出力変換） |
 | 終了コード0以外 | toolエラー。stderr を1行目からそのままエラーメッセージとする |
-| stderr空 | toolエラー。`<CLI名> exited with code <code>`（シグナル終了時は `terminated by signal`） |
-| spawn失敗 | toolエラー。`<CLI名>: <原因>` |
+| 終了コード0以外でstderr空 | toolエラー。`<CLI名> exited with code <code>`。シグナル終了もshellが返す終了コードで表示する |
+| bash失敗・承認拒否・中断・タイムアウト | toolエラー。`<CLI名>: <原因>` |
+| bashの構造化出力が欠落・不正、切り詰め時の保存先が欠落・不正、分割回収の失敗・再切り詰め・不完全な回収、回収フレームが不正 | toolエラー。部分出力を成功として扱わない |
 | stdout が JSON でない | toolエラー。`<CLI名>: CLI stdout is not JSON` |
 
 エラー時も TUI の結果行に失敗を表示するため、throw の前に `onUpdate` でエラーdetails を通知する。

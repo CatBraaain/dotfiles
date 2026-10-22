@@ -1,9 +1,8 @@
 // Thin pi wrapper that adapts tool input and output to the `browse` CLI.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { spawn } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,92 +24,129 @@ export function browseScript(env: Record<string, string | undefined> = process.e
   return join(browseCliDir(env), "browse");
 }
 
-// --- child process execution ---
+// --- registered bash execution ---
 
-export type WebCliResult = { stdout: string; stderr: string; code: number | null };
+export type WebCliResult = { stdout: string; stderr: string; code: number };
 
-export type RunWebCli = (
-  command: string,
-  args: readonly string[],
-  signal?: AbortSignal,
-) => Promise<WebCliResult>;
-
-// Hard ceiling for one browse run. The CLI bounds its own stages, but a wedged
-// stage must not hang the tool call forever. After the deadline (or an abort)
-// the child gets SIGTERM, then SIGKILL: a SIGTERM-ignoring child holding the
-// stdio pipes must not leave this promise unresolved.
 export const WEB_CLI_TIMEOUT_MS = 300_000;
 
-// Output cap per stream in UTF-16 code units (64 MiB worth of chars).
-const MAX_OUTPUT_LENGTH = 64 * 1024 * 1024;
+type WebCliContext = Pick<ExtensionToolContext, "executeTool">;
 
-export type WebCliRunOptions = {
-  /** Overrides WEB_CLI_TIMEOUT_MS (tests use a shorter deadline). */
-  readonly timeoutMs?: number;
-  /** SIGTERM-to-SIGKILL escalation delay (tests use a shorter delay). */
-  readonly killGraceMs?: number;
-};
+function quoteShell(argument: string): string {
+  if (argument.includes("\0")) throw new Error("CLI argument contains a NUL byte");
+  return "'" + argument.replaceAll("'", "'\\''") + "'";
+}
 
 export async function runWebCli(
-  command: string,
+  ctx: WebCliContext,
+  executable: string,
   args: readonly string[],
   signal?: AbortSignal,
-  options: WebCliRunOptions = {},
 ): Promise<WebCliResult> {
-  if (signal?.aborted) {
-    return Promise.reject(new Error(`${command} aborted`));
+  if (signal?.aborted) throw new Error(`${executable} aborted`);
+  const invocation = [executable, ...args].map(quoteShell).join(" ");
+  const command = [
+    "set -o pipefail",
+    "web_cli_tmp=$(mktemp -d /tmp/pi-web-cli.XXXXXXXXXX) || exit",
+    "trap 'rm -rf -- \"$web_cli_tmp\"' EXIT",
+    "web_cli_code=0",
+    `${invocation} >"$web_cli_tmp/stdout" 2>"$web_cli_tmp/stderr" || web_cli_code=$?`,
+    "printf 'PI_WEB_CLI_V1:%s\\n' \"$web_cli_code\"",
+    "base64 <\"$web_cli_tmp/stdout\" | tr -d '\\n' || exit",
+    "printf '\\n'",
+    "base64 <\"$web_cli_tmp/stderr\" | tr -d '\\n' || exit",
+    "printf '\\nPI_WEB_CLI_END\\n'",
+  ].join("\n");
+  const bash = await executeRegisteredBash(ctx, command, signal);
+  const output = bash.truncated
+    ? await recoverBashOutput(ctx, bash.full_output_path, signal)
+    : bash.output;
+  const frame =
+    /^PI_WEB_CLI_V1:(\d+)\n([A-Za-z0-9+/=]*)\n([A-Za-z0-9+/=]*)\nPI_WEB_CLI_END\n$/.exec(output);
+  if (!frame) throw new Error("Registered bash returned an invalid CLI output frame");
+  const code = Number(frame[1]);
+  if (!Number.isInteger(code) || code < 0 || code > 255) {
+    throw new Error("Registered bash returned an invalid CLI exit code");
   }
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    // Cap the accumulation: a wedged child spamming the pipes must not grow
-    // the heap without bound (browse's own output is far below this cap).
-    const capped = (current: string, chunk: Buffer): string =>
-      current.length >= MAX_OUTPUT_LENGTH ? current : current + chunk;
-    child.stdout?.on("data", (chunk) => (stdout = capped(stdout, chunk)));
-    child.stderr?.on("data", (chunk) => (stderr = capped(stderr, chunk)));
+  return { code, stdout: decodeStream(frame[2]!), stderr: decodeStream(frame[3]!) };
+}
 
-    const killChild = (): void => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), options.killGraceMs ?? 5_000).unref();
-    };
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    let settled = false;
-    const finish = (settle: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadlineTimer);
-      signal?.removeEventListener("abort", onAbort);
-      settle();
-    };
+type BashOutput = { output: string; truncated: boolean; full_output_path?: unknown };
 
-    child.on("error", (error) => finish(() => reject(error)));
-    child.on("close", (code) => finish(() => resolve({ stdout, stderr, code })));
-    // Grandchildren inheriting the stdio pipes keep 'close' from firing after
-    // the CLI itself is gone; resolve with the collected output after a short
-    // grace period instead of waiting on them.
-    child.on("exit", (code) => {
-      setTimeout(() => finish(() => resolve({ stdout, stderr, code })), 500).unref();
-    });
+async function executeRegisteredBash(
+  ctx: WebCliContext,
+  command: string,
+  signal?: AbortSignal,
+): Promise<BashOutput> {
+  if (signal?.aborted) throw new Error("Registered bash aborted");
+  const outcome = await ctx.executeTool(
+    "bash",
+    { command, timeout: WEB_CLI_TIMEOUT_MS / 1000 },
+    { signal },
+  );
+  if (signal?.aborted) throw new Error("Registered bash aborted");
+  if (outcome.isError) {
+    throw new Error(resultText(outcome.result) ?? "Registered bash failed");
+  }
+  const bash = outcome.result.structuredContent as
+    | { output?: unknown; truncated?: unknown; exit_code?: unknown; full_output_path?: unknown }
+    | undefined;
+  if (!bash || typeof bash.output !== "string" || typeof bash.truncated !== "boolean") {
+    throw new Error("Registered bash returned invalid structured output");
+  }
+  if (bash.exit_code !== 0) throw new Error(`Registered bash exited with code ${bash.exit_code}`);
+  return {
+    output: bash.output,
+    truncated: bash.truncated,
+    full_output_path: bash.full_output_path,
+  };
+}
 
-    const onAbort = (): void => {
-      killChild();
-      finish(() => reject(new Error(`${command} aborted`)));
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    deadlineTimer = setTimeout(() => {
-      killChild();
-      finish(() =>
-        reject(new Error(`${command} timed out after ${options.timeoutMs ?? WEB_CLI_TIMEOUT_MS}ms`)),
-      );
-    }, options.timeoutMs ?? WEB_CLI_TIMEOUT_MS);
-    deadlineTimer.unref();
-  });
+async function recoverBashOutput(
+  ctx: WebCliContext,
+  path: unknown,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (typeof path !== "string" || !path.startsWith("/") || path.includes("\0")) {
+    throw new Error("Truncated registered bash output has no valid full_output_path");
+  }
+  const quotedPath = quoteShell(path);
+  const sizeResult = await executeRegisteredBash(ctx, `wc -c < ${quotedPath}`, signal);
+  const sizeText = sizeResult.output.trim();
+  const sizeBytes = Number(sizeText);
+  if (
+    sizeResult.truncated ||
+    !/^\d+$/.test(sizeText) ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes <= 0
+  ) {
+    throw new Error("Registered bash returned an invalid full output size");
+  }
+
+  const chunkBytes = 524_288;
+  const chunks: string[] = [];
+  for (let offsetBytes = 0; offsetBytes < sizeBytes; offsetBytes += chunkBytes) {
+    const chunk = await executeRegisteredBash(
+      ctx,
+      `dd if=${quotedPath} bs=${chunkBytes} skip=${offsetBytes / chunkBytes} count=1 status=none`,
+      signal,
+    );
+    const expectedBytes = Math.min(chunkBytes, sizeBytes - offsetBytes);
+    if (chunk.truncated || Buffer.byteLength(chunk.output, "utf8") !== expectedBytes) {
+      throw new Error("Registered bash full output recovery was truncated or incomplete");
+    }
+    chunks.push(chunk.output);
+  }
+  return chunks.join("");
+}
+
+function decodeStream(encoded: string): string {
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.toString("base64") !== encoded) throw new Error("Invalid CLI stream encoding");
+  return bytes.toString("utf8");
 }
 
 export type WebCliDeps = {
-  runCli?: RunWebCli;
   env?: Record<string, string | undefined>;
 };
 
@@ -147,13 +183,13 @@ async function runCliJson<T>(
   args: readonly string[],
   deps: WebCliDeps,
   signal: AbortSignal | undefined,
+  ctx: WebCliContext,
 ): Promise<T> {
-  const run = deps.runCli ?? runWebCli;
   const subcommand = kind === "web-search" ? "search" : "fetch";
   const executable = browseScript(deps.env ?? process.env);
   let result: WebCliResult;
   try {
-    result = await run(executable, [subcommand, ...args], signal);
+    result = await runWebCli(ctx, executable, [subcommand, ...args], signal);
   } catch (error) {
     throw new Error(`${kind}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -281,10 +317,10 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
     label: "Web Search",
     description: "Search the web with a single query.",
     parameters: searchParameters,
-    async execute(_toolCallId, params, signal, onUpdate) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const args = [params.query, ...(params.lang ? ["--lang", params.lang] : []), "--json"];
       try {
-        const json = await runCliJson<SearchCliJson>("web-search", args, deps, signal);
+        const json = await runCliJson<SearchCliJson>("web-search", args, deps, signal, ctx);
         const text = formatSearchText(json);
         return {
           content: [{ type: "text", text }],
@@ -317,13 +353,14 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
     label: "Web Fetch",
     description: "Fetch a single URL as Markdown.",
     parameters: fetchParameters,
-    async execute(_toolCallId, params, signal, onUpdate) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       try {
         const json = await runCliJson<FetchCliJson>(
           "web-fetch",
           [params.url, "--json"],
           deps,
           signal,
+          ctx,
         );
         const details: WebToolDetails = { backend: json.backend, tookMs: json.tookMs };
         if (json.title) details.title = json.title;

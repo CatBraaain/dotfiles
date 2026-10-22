@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
+import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,11 +22,39 @@ type Tool = {
   renderResult: (...args: any[]) => { render(width: number): string[] };
 };
 
-function captureTools(deps?: WebCliDeps): Map<string, Tool> {
+type TestDeps = WebCliDeps & {
+  runCli?: (command: string, args: readonly string[]) => Promise<WebCliResult>;
+};
+
+function captureTools(deps?: TestDeps): Map<string, Tool> {
   const tools = new Map<string, Tool>();
   webSearchExtension(
     {
-      registerTool: (tool: Tool) => tools.set(tool.name, tool),
+      registerTool: (tool: Tool) => {
+        const execute = tool.execute;
+        tool.execute = (...args: any[]) => {
+          const context = deps?.runCli
+            ? {
+                executeTool: async (name: string, input: unknown) => {
+                  assert.equal(name, "bash");
+                  const command = (input as { command: string }).command;
+                  const line = command
+                    .split("\n")
+                    .find((line) => line.startsWith("'/nonexistent-test-cli/browse'"))!;
+                  const tokens = line
+                    .split(" >")[0]!
+                    .split("'")
+                    .filter((_, index) => index % 2 === 1);
+                  const result = await deps.runCli!(tokens[0]!, tokens.slice(1));
+                  return bashOutcome(frameOutput(result.stdout, result.stderr, result.code ?? 1));
+                },
+              }
+            : args[4];
+          args[4] = context;
+          return execute(...args);
+        };
+        tools.set(tool.name, tool);
+      },
     } as never,
     deps,
   );
@@ -34,14 +63,12 @@ function captureTools(deps?: WebCliDeps): Map<string, Tool> {
 
 type RecordedCall = { command: string; args: string[] };
 
-// Records what the tool spawned and replies with a canned CLI result. The
-// BROWSE_CLI_DIR env keeps path resolution away from the real filesystem.
 function fakeCli(output: { code?: number; stdout?: string; stderr?: string }) {
   const calls: RecordedCall[] = [];
-  const runCli = async (command: string, args: readonly string[]): Promise<WebCliResult> => {
+  async function runCli(command: string, args: readonly string[]): Promise<WebCliResult> {
     calls.push({ command, args: [...args] });
     return { stdout: output.stdout ?? "", stderr: output.stderr ?? "", code: output.code ?? 0 };
-  };
+  }
   return { calls, deps: { runCli, env: { BROWSE_CLI_DIR: "/nonexistent-test-cli" } } };
 }
 
@@ -78,7 +105,36 @@ const fetchFallbackJsonOutput = JSON.stringify({
   fallbacks: [{ backend: "camoufox+trafilatura", error: "render: challenge detected" }],
 });
 
-const executionContext = { hasUI: true, ui: { notify: () => {} } };
+function frameOutput(stdout = "", stderr = "", code = 0): string {
+  return [
+    "PI_WEB_CLI_V1:" + code,
+    Buffer.from(stdout).toString("base64"),
+    Buffer.from(stderr).toString("base64"),
+    "PI_WEB_CLI_END",
+    "",
+  ].join("\n");
+}
+const nestedToolCall = { type: "toolCall" as const, id: "nested", name: "bash", arguments: {} };
+
+function bashOutcome(output: string, overrides: Record<string, unknown> = {}) {
+  return {
+    toolCall: nestedToolCall,
+    isError: false,
+    result: {
+      content: [{ type: "text" as const, text: output }],
+      details: {},
+      structuredContent: { output, truncated: false, exit_code: 0, ...overrides },
+    },
+  };
+}
+const bashTool = createBashTool(tmpdir());
+const executionContext = {
+  async executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }) {
+    assert.equal(name, "bash");
+    const result = await bashTool.execute("nested", args as never, options?.signal);
+    return { toolCall: nestedToolCall, result, isError: result.isError ?? false };
+  },
+};
 
 function callSearch(tool: Tool, params: Record<string, string>): Promise<unknown> {
   return tool.execute("call", params, AbortSignal.timeout(5_000), undefined, executionContext);
@@ -103,8 +159,354 @@ function renderedLines(component: { render(width: number): string[] }, width = 8
 
 const identityTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
-describe("tool spawning", () => {
-  it("spawns the browse executable directly with search, the query and --json", async () => {
+describe("registered bash adapter", () => {
+  it("separates stdout, stderr and the CLI exit code", async () => {
+    const result = await runWebCli(executionContext, process.execPath, [
+      "-e",
+      'process.stdout.write("out\\n"); process.stderr.write("err\\n"); process.exit(3);',
+    ]);
+    assert.deepEqual(result, { stdout: "out\n", stderr: "err\n", code: 3 });
+  });
+
+  it("quotes executable paths and arguments without shell expansion", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "web'cli-"));
+    try {
+      const executable = join(dir, "browse");
+      writeFileSync(executable, '#!/bin/sh\nprintf "%s" "$1"\n', { mode: 0o755 });
+      const argument = "'; $(touch /tmp/pi-web-injected); `id`\n$HOME";
+      const result = await runWebCli(executionContext, executable, [argument]);
+      assert.equal(result.stdout, argument);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes the abort signal and timeout to registered bash", async () => {
+    const signal = new AbortController().signal;
+    const ctx = {
+      async executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }) {
+        assert.equal(name, "bash");
+        assert.equal((args as { timeout: number }).timeout, 300);
+        assert.equal(options?.signal, signal);
+        return bashOutcome(frameOutput());
+      },
+    };
+    await runWebCli(ctx, "/browse", [], signal);
+  });
+
+  it("preserves output beyond the model-facing 50KB bash limit", async () => {
+    const body = "x".repeat(100_000);
+    const result = await runWebCli(executionContext, process.execPath, [
+      "-e",
+      'process.stdout.write("x".repeat(100000)); process.stderr.write("diagnostic");',
+    ]);
+    assert.equal(result.stdout, body);
+    assert.equal(result.stderr, "diagnostic");
+  });
+
+  it("recovers actual structured-output truncation without losing a 2MiB stream", async () => {
+    const result = await runWebCli(executionContext, process.execPath, [
+      "-e",
+      'process.stdout.write("x".repeat(2097152)); process.stderr.write("diagnostic");',
+    ]);
+    assert.equal(result.stdout, "x".repeat(2_097_152));
+    assert.equal(result.stderr, "diagnostic");
+  });
+
+  it("makes no recovery calls for complete initial output", async () => {
+    let calls = 0;
+    const ctx = {
+      async executeTool() {
+        calls++;
+        return bashOutcome(frameOutput("complete"));
+      },
+    };
+    assert.equal((await runWebCli(ctx, "/browse", [])).stdout, "complete");
+    assert.equal(calls, 1);
+  });
+
+  it("quotes a full output path containing shell syntax when reading real chunks", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "web-output-"));
+    const path = join(dir, "saved '$(id)' `id` output");
+    const output = frameOutput("x".repeat(600_000));
+    writeFileSync(path, output);
+    let calls = 0;
+    try {
+      const ctx = {
+        async executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }) {
+          calls++;
+          if (calls === 1)
+            return bashOutcome("partial must not be appended", {
+              truncated: true,
+              full_output_path: path,
+            });
+          return executionContext.executeTool(name, args, options);
+        },
+      };
+      assert.equal((await runWebCli(ctx, "/browse", [])).stdout, "x".repeat(600_000));
+      assert.equal(calls, 4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a 2MiB fetch body and details through the same registered bash", async () => {
+    const body = "日本語abcdef".repeat(150_000);
+    const payload = { ...JSON.parse(fetchJsonOutput), body };
+    const output = frameOutput(JSON.stringify(payload));
+    const signal = new AbortController().signal;
+    let calls = 0;
+    let chunkIndex = 0;
+    const ctx = {
+      async executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }) {
+        assert.equal(name, "bash");
+        assert.equal(options?.signal, signal);
+        assert.equal((args as { timeout: number }).timeout, 300);
+        const command = (args as { command: string }).command;
+        calls++;
+        if (calls === 1)
+          return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/saved-output" });
+        if (calls === 2) {
+          assert.equal(command, "wc -c < '/tmp/saved-output'");
+          return bashOutcome(String(output.length) + "\n");
+        }
+        assert.equal(
+          command,
+          `dd if='/tmp/saved-output' bs=524288 skip=${chunkIndex} count=1 status=none`,
+        );
+        const chunk = output.slice(chunkIndex * 524_288, ++chunkIndex * 524_288);
+        return bashOutcome(chunk);
+      },
+    };
+    const tool = captureTools().get("web_fetch")!;
+    const result = await tool.execute("call", { url: payload.url }, signal, undefined, ctx);
+    assert.equal(textOf(result), body);
+    assert.deepEqual(detailsOf(result), {
+      backend: payload.backend,
+      title: payload.title,
+      tookMs: payload.tookMs,
+    });
+    assert.equal(calls, 2 + Math.ceil(output.length / 524_288));
+  });
+
+  for (const path of [undefined, "", "relative", 42, "/tmp/invalid\0path"]) {
+    it(`rejects an invalid full output path: ${JSON.stringify(path)}`, async () => {
+      let calls = 0;
+      const ctx = {
+        async executeTool() {
+          calls++;
+          return bashOutcome("partial", { truncated: true, full_output_path: path });
+        },
+      };
+      await assert.rejects(runWebCli(ctx, "/browse", []), /valid full_output_path/);
+      assert.equal(calls, 1);
+    });
+  }
+
+  for (const streamBytes of [393_192, 393_195]) {
+    it(`finishes recovery near a chunk boundary for ${streamBytes} stream bytes`, async () => {
+      const stdout = "x".repeat(streamBytes);
+      const output = frameOutput(stdout);
+      let calls = 0;
+      const ctx = {
+        async executeTool() {
+          calls++;
+          if (calls === 1)
+            return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/output" });
+          if (calls === 2) return bashOutcome(String(output.length));
+          return bashOutcome(output.slice((calls - 3) * 524_288, (calls - 2) * 524_288));
+        },
+      };
+      assert.equal((await runWebCli(ctx, "/browse", [])).stdout, stdout);
+      assert.equal(calls, 2 + Math.ceil(output.length / 524_288));
+    });
+  }
+
+  for (const testCase of [
+    {
+      name: "recovery denial",
+      recovery: { ...bashOutcome(""), isError: true },
+      error: /Registered bash failed/,
+    },
+    { name: "recovery timeout", recovery: new Error("Bash timed out"), error: /timed out/ },
+    {
+      name: "recovery signal exit",
+      recovery: bashOutcome("", { exit_code: 143 }),
+      error: /code 143/,
+    },
+    {
+      name: "recovery missing structure",
+      recovery: { ...bashOutcome(""), result: { content: [], details: {} } },
+      error: /invalid structured/,
+    },
+    {
+      name: "recovery truncation",
+      recovery: bashOutcome("123", { truncated: true }),
+      error: /invalid full output size/,
+    },
+    {
+      name: "invalid file size",
+      recovery: bashOutcome("not a size"),
+      error: /invalid full output size/,
+    },
+  ]) {
+    it("rejects " + testCase.name, async () => {
+      let calls = 0;
+      const ctx = {
+        async executeTool() {
+          if (++calls === 1)
+            return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/output" });
+          if (testCase.recovery instanceof Error) throw testCase.recovery;
+          return testCase.recovery;
+        },
+      };
+      await assert.rejects(runWebCli(ctx, "/browse", []), testCase.error);
+      assert.equal(calls, 2);
+    });
+  }
+
+  for (const testCase of [
+    { name: "short chunk", chunk: bashOutcome("short"), error: /incomplete/ },
+    {
+      name: "truncated chunk",
+      chunk: bashOutcome(frameOutput(), { truncated: true }),
+      error: /truncated or incomplete/,
+    },
+    {
+      name: "incomplete frame",
+      chunk: bashOutcome("x".repeat(frameOutput().length)),
+      error: /invalid CLI output frame/,
+    },
+  ]) {
+    it("rejects " + testCase.name, async () => {
+      let calls = 0;
+      const ctx = {
+        async executeTool() {
+          calls++;
+          if (calls === 1)
+            return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/output" });
+          if (calls === 2) return bashOutcome(String(frameOutput().length));
+          return testCase.chunk;
+        },
+      };
+      await assert.rejects(runWebCli(ctx, "/browse", []), testCase.error);
+      assert.equal(calls, 3);
+    });
+  }
+
+  it("stops recovery when cancellation arrives after the size read", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const ctx = {
+      async executeTool() {
+        if (++calls === 1)
+          return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/output" });
+        controller.abort();
+        return bashOutcome("123");
+      },
+    };
+    await assert.rejects(runWebCli(ctx, "/browse", [], controller.signal), /aborted/);
+    assert.equal(calls, 2);
+  });
+
+  it("propagates cancellation during registered bash execution", async () => {
+    const signal = AbortSignal.timeout(100);
+    await assert.rejects(
+      runWebCli(executionContext, process.execPath, ["-e", "setTimeout(() => {}, 60000);"], signal),
+      /aborted/,
+    );
+  });
+
+  it("does not call bash for an already aborted signal", async () => {
+    let called = false;
+    const ctx = {
+      async executeTool() {
+        called = true;
+        return bashOutcome(frameOutput());
+      },
+    };
+    await assert.rejects(runWebCli(ctx, "/browse", [], AbortSignal.abort()), /aborted/);
+    assert.equal(called, false);
+  });
+
+  for (const testCase of [
+    {
+      name: "truncated output",
+      outcome: bashOutcome(frameOutput(), { truncated: true }),
+      error: /[Tt]runcated/,
+    },
+    {
+      name: "nonzero bash exit",
+      outcome: bashOutcome(frameOutput(), { exit_code: 7 }),
+      error: /code 7/,
+    },
+    {
+      name: "malformed frame",
+      outcome: bashOutcome("not a frame"),
+      error: /invalid CLI output frame/,
+    },
+    {
+      name: "invalid base64",
+      outcome: bashOutcome("PI_WEB_CLI_V1:0\na\n\nPI_WEB_CLI_END\n"),
+      error: /encoding/,
+    },
+    {
+      name: "missing structured output",
+      outcome: { toolCall: nestedToolCall, isError: false, result: { content: [], details: {} } },
+      error: /invalid structured/,
+    },
+    {
+      name: "tool error",
+      outcome: {
+        toolCall: nestedToolCall,
+        isError: true,
+        result: { content: [{ type: "text" as const, text: "Command denied" }], details: {} },
+      },
+      error: /Command denied/,
+    },
+  ]) {
+    it("rejects " + testCase.name, async () => {
+      const ctx = {
+        async executeTool() {
+          return testCase.outcome;
+        },
+      };
+      await assert.rejects(runWebCli(ctx, "/browse", []), testCase.error);
+    });
+  }
+
+  it("does not launch the CLI when registered bash denies the command", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "web-denied-"));
+    const marker = join(dir, "launched");
+    try {
+      const executable = join(dir, "browse");
+      writeFileSync(executable, "#!/bin/sh\ntouch '" + marker + "'\n", { mode: 0o755 });
+      const ctx = {
+        async executeTool() {
+          return {
+            toolCall: nestedToolCall,
+            isError: true,
+            result: {
+              content: [{ type: "text" as const, text: "Command denied by user" }],
+              details: {},
+            },
+          };
+        },
+      };
+      const tool = captureTools({ env: { BROWSE_CLI_DIR: dir } }).get("web_fetch")!;
+      await assert.rejects(
+        tool.execute("call", { url: "https://example.com" }, undefined, undefined, ctx),
+        /Command denied by user/,
+      );
+      assert.throws(() => readFileSync(marker), /ENOENT/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("registered bash routing", () => {
+  it("routes browse search through registered bash", async () => {
     const cli = fakeCli({ stdout: searchJsonOutput });
     const search = captureTools(cli.deps).get("web_search")!;
 
@@ -149,14 +551,14 @@ describe("tool execution with a real browse executable", () => {
   const cases = [
     {
       name: "web_search",
-      params: { query: "pi coding agent", lang: "JA" },
-      args: ["search", "pi coding agent", "--lang", "JA", "--json"],
+      params: { query: "pi '$(id)' `id`; $HOME", lang: "JA'; $(id)" },
+      args: ["search", "pi '$(id)' `id`; $HOME", "--lang", "JA'; $(id)", "--json"],
       output: searchJsonOutput,
     },
     {
       name: "web_fetch",
-      params: { url: "https://example.com/" },
-      args: ["fetch", "https://example.com/", "--json"],
+      params: { url: "https://example.com/?q='$(id)'`id`;" },
+      args: ["fetch", "https://example.com/?q='$(id)'`id`;", "--json"],
       output: fetchJsonOutput,
     },
   ];
@@ -193,49 +595,6 @@ describe("tool execution with a real browse executable", () => {
       }
     });
   }
-});
-
-describe("runWebCli child execution", () => {
-  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-  it("collects stdout, stderr and the exit code", async () => {
-    const result = await runWebCli(process.execPath, [
-      "-e",
-      'process.stdout.write("out"); process.stderr.write("err"); process.exit(3);',
-    ]);
-    assert.deepEqual(result, { stdout: "out", stderr: "err", code: 3 });
-  });
-
-  it("resolves after the child's exit even when a grandchild keeps the stdio pipes open", async () => {
-    const script = `
-      const { spawn } = await import("node:child_process");
-      spawn(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], { stdio: "inherit" });
-      process.exit(0);`;
-    const result = await runWebCli(process.execPath, ["-e", script]);
-    assert.equal(result.code, 0);
-  });
-
-  it("rejects as soon as the abort signal fires", async () => {
-    const controller = new AbortController();
-    const run = runWebCli(
-      process.execPath,
-      ["-e", 'setTimeout(() => {}, 60_000)'],
-      controller.signal,
-    );
-    await sleep(100);
-    controller.abort();
-    await assert.rejects(run, /aborted/);
-  });
-
-  it("escalates SIGTERM to SIGKILL and rejects when the deadline passes", async () => {
-    const run = runWebCli(
-      process.execPath,
-      ["-e", 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 60_000);'],
-      undefined,
-      { timeoutMs: 100, killGraceMs: 200 },
-    );
-    await assert.rejects(run, /timed out after 100ms/);
-  });
 });
 
 describe("stdout to tool result", () => {

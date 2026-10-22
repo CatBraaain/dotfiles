@@ -17,7 +17,6 @@ pi の bash / read / write / edit を安全に回しつつ、network系は自由
 | **守る** | workspace外への **読み書き** を機械的に制限（bash も read/write/edit も） |
 | **守る** | push / publish等の破壊的・外部公開操作に確認ゲート |
 | **守る** | fs系ツール（read / write / edit / grep / find / ls）経由の秘密ファイル（`~/.ssh`, `~/.aws` 等）の読み出しを、`read.deny` と `credentials` のマスクで制限 |
-| **自由** | web_fetch / web_search（network は開放） |
 | **自由** | bashコマンドの実行自体 |
 | **運用** | セッション中の動的許可拡張（ユーザー主導・エージェントからは不可） |
 
@@ -68,7 +67,6 @@ read / write / edit / bash ── 独自拡張でリプレイス、fs 読み書�
 ```
 
 - **全fsツール**: ツールexecute全体を 1回の bwrap で実行。sandbox内の `bun run-tools.ts <tool>` が pi標準tool definition を呼び出すため、置換・diff・rg・shell等のロジックも sandbox内
-- **web_fetch / web_search**: network系なので fs制限の対象外・そのまま
 
 ---
 
@@ -77,7 +75,7 @@ read / write / edit / bash ── 独自拡張でリプレイス、fs 読み書�
 ```mermaid
 flowchart TD
     subgraph PI["pi プロセス（フェンス外・network 自由）"]
-        API["LLM API / web_fetch / web_search"]
+        API["LLM API"]
         TOOLS["fs ツール (sandboxed-tools)<br/>schema / 認可 / render"]
     end
     TOOLS --> AUTH{"パス・コマンド認可<br/>allow / deny / ask"}
