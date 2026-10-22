@@ -34,6 +34,7 @@
 # System packages
 - brew: bubblewrap
 - brew: coreutils
+- apt: blender
 - apt: ffmpeg
 - brew: gcc
 - brew: git
