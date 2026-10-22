@@ -1,0 +1,5 @@
+{
+  "name": "pi-sessions-cli",
+  "private": true,
+  "main": "./src/main.ts"
+}
