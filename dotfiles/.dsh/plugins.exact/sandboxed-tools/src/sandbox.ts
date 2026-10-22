@@ -173,11 +173,15 @@ function expandBraces(pattern: string): string[] {
   );
 }
 
-function globToRegExp(pattern: string): RegExp {
+function globToRegExp(pattern: string, name: string): RegExp {
   let source = "^";
   for (let index = 0; index < pattern.length; index++) {
     const character = pattern.charAt(index);
-    if (character === "*") {
+    const literalToken = /^\0(?:repo|[0-9a-f]+);/.exec(pattern.slice(index));
+    if (literalToken) {
+      source += restoreRepositoryName(literalToken[0], name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      index += literalToken[0].length - 1;
+    } else if (character === "*") {
       if (pattern[index + 1] === "*") {
         const hasFollowingSlash = pattern[index + 2] === "/";
         source += hasFollowingSlash ? "(?:.*/)?" : ".*";
@@ -191,7 +195,18 @@ function globToRegExp(pattern: string): RegExp {
       const end = pattern.indexOf("]", index + 1);
       if (end === -1) source += "\\[";
       else {
-        source += pattern.slice(index, end + 1);
+        const characterClass = pattern.slice(index, end + 1);
+        source += characterClass.replace(
+          /(\\*)\0(?:repo|[0-9a-f]+);/g,
+          (token, backslashes: string) => {
+            const literal = restoreRepositoryName(token.slice(backslashes.length), name);
+            const escaped = literal
+              .split("")
+              .map((character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
+              .join("");
+            return backslashes.slice(0, backslashes.length - (backslashes.length % 2)) + escaped;
+          },
+        );
         index = end;
       }
     } else {
@@ -230,23 +245,15 @@ export function resolveGitMainWorktreePath(cwd: string): string | undefined {
 
 /**
  * Expand the single-valued ${GIT_MAIN_WORKTREE_PATH} into the main worktree
- * path. Outside a Git repository the entry expands to nothing (§3).
+ * path, falling back to the session cwd outside a Git repository (§3).
  */
 function expandGitMainWorktreePath(
   pattern: string,
   mainWorktree: string | undefined,
+  cwd: string,
 ): string[] {
   if (!pattern.includes(GIT_MAIN_WORKTREE_PATH)) return [pattern];
-  return mainWorktree === undefined
-    ? []
-    : [pattern.replaceAll(GIT_MAIN_WORKTREE_PATH, mainWorktree)];
-}
-
-function expandRepositoryName(pattern: string, mainWorktree: string | undefined): string[] {
-  if (!pattern.includes(REPOSITORY_NAME)) return [pattern];
-  return mainWorktree === undefined
-    ? []
-    : [pattern.replaceAll(REPOSITORY_NAME, basename(mainWorktree))];
+  return [pattern.replaceAll(GIT_MAIN_WORKTREE_PATH, mainWorktree ?? resolve(cwd))];
 }
 
 /**
@@ -263,13 +270,31 @@ export function resolveXdgRuntimeDir(): string {
 
 /**
  * Expand every single-valued runtime variable in a pattern.
- * Git variables expand to nothing outside a Git repository (§3); ${XDG_RUNTIME_DIR}
- * resolves everywhere.
+ * ${GIT_MAIN_WORKTREE_PATH} falls back to the session cwd outside a Git
+ * repository (§3); ${XDG_RUNTIME_DIR} resolves everywhere.
  */
-function expandRuntimeVariables(pattern: string, mainWorktree: string | undefined): string[] {
-  return expandGitMainWorktreePath(pattern, mainWorktree)
-    .flatMap((expanded) => expandRepositoryName(expanded, mainWorktree))
-    .map((expanded) => expanded.replaceAll(XDG_RUNTIME_DIR, resolveXdgRuntimeDir()));
+function expandRuntimeVariables(
+  pattern: string,
+  mainWorktree: string | undefined,
+  cwd: string,
+): string[] {
+  if (pattern.includes(REPOSITORY_NAME) && repositoryName(cwd, mainWorktree) === "") return [];
+  const repositoryMasked = pattern.replaceAll(REPOSITORY_NAME, LITERAL_REPOSITORY_NAME);
+  return expandGitMainWorktreePath(repositoryMasked, mainWorktree, cwd).map((expanded) =>
+    expanded.replaceAll(XDG_RUNTIME_DIR, resolveXdgRuntimeDir()),
+  );
+}
+
+const LITERAL_REPOSITORY_NAME = "\0repo;";
+
+function repositoryName(cwd: string, mainWorktree: string | undefined): string {
+  return basename(mainWorktree ?? resolve(cwd));
+}
+
+function restoreRepositoryName(pattern: string, name: string): string {
+  return pattern.replace(/\0(repo|[0-9a-f]+);/g, (_, token: string) =>
+    token === "repo" ? name : String.fromCodePoint(Number.parseInt(token, 16)),
+  );
 }
 
 function resolvePattern(pattern: string, cwd: string): string {
@@ -279,7 +304,10 @@ function resolvePattern(pattern: string, cwd: string): string {
       : pattern.startsWith("~/")
         ? join(homedir(), pattern.slice(2))
         : pattern;
-  return isAbsolute(homeExpanded) ? resolve(homeExpanded) : resolve(cwd, homeExpanded);
+  const literalCwd = pattern.includes(LITERAL_REPOSITORY_NAME)
+    ? cwd.replace(/[*?[\]{}]/g, (character) => `\0${character.charCodeAt(0).toString(16)};`)
+    : cwd;
+  return isAbsolute(homeExpanded) ? resolve(homeExpanded) : resolve(literalCwd, homeExpanded);
 }
 
 /**
@@ -526,8 +554,8 @@ function actionPatterns(entries: PathRuleEntry[] | undefined, action: PathAction
 // bun's globSync silently drops dotfiles, so expand by walking the static prefix
 // and testing each path with globToRegExp (same semantics as command matching).
 // Walks the whole prefix subtree; add per-segment matching if large trees get slow.
-function expandGlobPattern(absolutePattern: string): string[] {
-  const regexes = expandBraces(absolutePattern).map(globToRegExp);
+function expandGlobPattern(absolutePattern: string, name: string): string[] {
+  const regexes = expandBraces(absolutePattern).map((pattern) => globToRegExp(pattern, name));
   let staticPrefix = "";
   for (const segment of absolutePattern.split("/")) {
     if (hasGlob(segment) || segment.includes("{")) break;
@@ -547,7 +575,7 @@ function expandGlobPattern(absolutePattern: string): string[] {
       if (entry.isDirectory()) walk(path);
     }
   };
-  walk(staticPrefix);
+  walk(restoreRepositoryName(staticPrefix, name));
   return matches;
 }
 
@@ -566,18 +594,20 @@ function expandPathPatterns(
   allowAllPaths = false,
   globCache?: Map<string, string[]>,
 ): string[] {
+  const name = repositoryName(cwd, gitMainWorktreePath);
   return (patterns ?? []).flatMap((pattern) =>
     // The single-valued runtime variables must fan out before the
     // brace expansion below.
-    expandRuntimeVariables(pattern, gitMainWorktreePath).flatMap((variableExpanded) =>
+    expandRuntimeVariables(pattern, gitMainWorktreePath, cwd).flatMap((variableExpanded) =>
       expandBraces(variableExpanded).flatMap((expandedPattern) => {
         if (allowAllPaths && expandedPattern === "*") return ["/**"];
         const resolvedPattern = resolvePattern(expandedPattern, cwd);
-        if (!hasGlob(resolvedPattern)) return [resolvedPattern];
-        let expanded = globCache?.get(resolvedPattern);
+        if (!hasGlob(resolvedPattern)) return [restoreRepositoryName(resolvedPattern, name)];
+        const cacheKey = JSON.stringify([resolvedPattern, name]);
+        let expanded = globCache?.get(cacheKey);
         if (expanded === undefined) {
-          expanded = expandGlobPattern(resolvedPattern);
-          globCache?.set(resolvedPattern, expanded);
+          expanded = expandGlobPattern(resolvedPattern, name);
+          globCache?.set(cacheKey, expanded);
         }
         return expanded;
       }),
@@ -1211,8 +1241,15 @@ export class Sandbox {
     const gitMainWorktreePath = resolveGitMainWorktreePath(this.cwd);
     for (const pattern of actionPatterns(this.config.write, "allow")) {
       if (hasGlob(pattern) || pattern.includes(XDG_RUNTIME_DIR)) continue;
-      for (const expanded of expandRuntimeVariables(pattern, gitMainWorktreePath)) {
-        const path = resolvePattern(expanded, this.cwd);
+      const expandedPatterns = expandRuntimeVariables(pattern, gitMainWorktreePath, this.cwd);
+      const fixedPaths = pattern.includes(REPOSITORY_NAME)
+        ? expandedPatterns.flatMap(expandBraces)
+        : expandedPatterns;
+      for (const expanded of fixedPaths) {
+        const path = restoreRepositoryName(
+          resolvePattern(expanded, this.cwd),
+          repositoryName(this.cwd, gitMainWorktreePath),
+        );
         if (!existsSync(path)) mkdirSync(path, { recursive: true });
       }
     }

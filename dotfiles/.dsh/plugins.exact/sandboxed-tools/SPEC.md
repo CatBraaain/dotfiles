@@ -131,16 +131,18 @@ fs系ツールと `ask_permission` が引数に受け取るパスは、アクシ
 
 | 記述 | 解決先 |
 | --- | --- |
-| `${GIT_MAIN_WORKTREE_PATH}` | cwd を含むGit repository の main worktree の絶対パス |
-| `${REPOSITORY_NAME}` | cwd を含むGit repository のリポジトリ名。main worktree の basename |
+| `${GIT_MAIN_WORKTREE_PATH}` | cwd を含むGit repository の main worktree の絶対パス。Git repository外ではセッション開始cwd の絶対パス |
+| `${REPOSITORY_NAME}` | Git repository内は main worktree の basename、Git repository外はセッション開始cwd の basename |
 | `${XDG_RUNTIME_DIR}` | ユーザーのランタイムディレクトリ（`$XDG_RUNTIME_DIR`、未設定なら `/run/user/<uid>`） |
 | 相対パス（`.` `./...` `../...`） | セッションの cwd を起点 |
 | `~` | ホームディレクトリ |
 | それ以外 | 絶対パス（そのまま） |
 
-3つの変数はいずれもパスエントリ内の任意の位置に記述できる。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` は、セッションcwd が linked worktree でも main worktree（`git worktree list` の最初のエントリ）基準で解決し、アクション判定と bind のそれぞれの機会に解決し直す。Git repository外では、これらの変数を含むエントリはパスを許可・bind・作成しない。
+`${GIT_MAIN_WORKTREE_PATH}` はパスエントリ内の任意の位置に記述できる。セッションcwd が linked worktree でも main worktree（`git worktree list` の最初のエントリ）基準で解決し、アクション判定と bind のそれぞれの機会に解決し直す。Git repository外ではセッション開始cwd へ解決する。
 
-`${REPOSITORY_NAME}` は `~/.agents/worktrees/${REPOSITORY_NAME}` のように記述でき、展開後のパス配下だけが `write` の allow および read-write bind の対象となる。`${XDG_RUNTIME_DIR}` は UID がユーザー・マシンごとに異なるため `/run/user/1000` のような固定パスの代わりに使う。ランタイムディレクトリはセッションマネージャーが管理するため、§6.1 の `mkdir -p` の対象外とし、実在しなければ bindしない。
+`${XDG_RUNTIME_DIR}` もパスエントリ内の任意の位置に記述できる。UID がユーザー・マシンごとに異なるため `/run/user/1000` のような固定パスの代わりに使う。ランタイムディレクトリはセッションマネージャーが管理するため、§6.1 の `mkdir -p` の対象外とし、実在しなければ bindしない。
+
+`${REPOSITORY_NAME}` はパスエントリ内の任意の位置に記述できる。`~/.agents/work/${REPOSITORY_NAME}` と `~/.agents/worktrees/${REPOSITORY_NAME}` は、Git repository内の main・linked worktree から同じ main worktree名の作業フォルダへ解決し、Git repository外では開始ディレクトリ名の作業フォルダへ解決する。名前はリテラルのパス成分として扱い、名前内の `*`・`[...]`・`{a,b}` や変数表記を再展開しない。設定へ直接記述したglob・ブレースは展開する。例えば、開始cwd が `/tmp/{alpha,beta}` の場合、作業フォルダは `~/.agents/work/{alpha,beta}` の1件となる。正規化後のbasename が空のルートディレクトリでは、この変数を含むエントリは許可・bind・作成しない。展開後のパス配下だけが許可・bind対象となる。`write` で `allow` を宣言した固定パスは、セッション開始時に §6.1 の規則で `mkdir -p` される。
 
 ### globパターン
 
@@ -309,7 +311,7 @@ command と args の各文字列はJavaScript RegExp sourceであり、実行フ
 
 ### 6.1 bind とパスの実在保証
 
-`read` / `write` の `allow` アクションのパスは bwrap で bindするため実在が必須。ホワイトリスト方式（§2）なので未bind のパスはサンドボックス内に存在せず、sandbox内のプロセスがキャッシュディレクトリを自前作成できない。よってセッション開始時に dshプロセス本体（フェンス外）が、`write` セクションで `allow` を宣言した要素の固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせずbindする。作成は宣言ベースであり、後続の要素が同じパスを `ask`・`deny` に上書きしていても作成する。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、Git repository内で解決できたとき `mkdir -p` の対象とする（`~/.agents/worktrees/${REPOSITORY_NAME}` のような worktreesディレクトリをこれから作るため）。リポジトリ外では作成しない。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、dsh が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
+`read` / `write` の `allow` アクションのパスは bwrap で bindするため実在が必須。ホワイトリスト方式（§2）なので未bind のパスはサンドボックス内に存在せず、sandbox内のプロセスがキャッシュディレクトリを自前作成できない。よってセッション開始時に dshプロセス本体（フェンス外）が、`write` セクションで `allow` を宣言した要素の固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせずbindする。作成は宣言ベースであり、後続の要素が同じパスを `ask`・`deny` に上書きしていても作成する。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、解決できたときは `mkdir -p` の対象とする（Git repositoryの内外を問わない。`~/.agents/worktrees/${REPOSITORY_NAME}` のような worktree 置き場ディレクトリを作るため）。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーの管理下にあり、dsh が `/run/user/<uid>` を作らない。実在しなければ `--bind-try` がスキップする）。
 
 `write` の動的許可パスも同じ実在保証の対象とし、承認時にフェンス外で作成する（ファイル単体スコープは親ディレクトリの `mkdir -p` と空ファイル作成、ディレクトリスコープは対象ディレクトリの `mkdir -p`）。空ファイル作成は、書き込み可能bind の対象に実在を要するためである。作成した空ファイルへの初回 `write` は §2.4 の読み済み要求の対象外で、作成（`create`）として扱う。実在保証に成功した許可だけを動的許可と bind対象に追加する。作成に失敗した許可要求はエラーを返し、後続のツール呼び出しの動作を変えない。`read` の動的許可でパスは作成しない。
 

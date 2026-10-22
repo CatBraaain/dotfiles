@@ -33,6 +33,7 @@ import {
   parseSandboxedToolsConfig,
   resolveCommandAction,
   resolveCommandActionMatch,
+  resolveGitMainWorktreePath,
   resolvePathAction,
   resolvePathActionMatch,
   splitCommandSegments,
@@ -777,16 +778,16 @@ describe("§3.a パス文字列の解決", () => {
   );
 
   it(
-    "${GIT_MAIN_WORKTREE_PATH} は Git repository 外ではパスを許可しない",
+    "${GIT_MAIN_WORKTREE_PATH} は Git repository 外ではセッション開始cwd へ解決する",
     withTempDirectory((directory) => {
       const section = expandPathSection(
-        [{ action: "allow", patterns: ["${GIT_MAIN_WORKTREE_PATH}-worktrees"] }],
+        [{ action: "allow", patterns: ["${GIT_MAIN_WORKTREE_PATH}"] }],
         directory,
       );
 
       assert.deepEqual(
         section.flatMap((entry) => entry.paths),
-        [],
+        [directory],
       );
     }),
   );
@@ -806,85 +807,19 @@ describe("§3.a パス文字列の解決", () => {
     }),
   );
 
-  it(
-    "${REPOSITORY_NAME} は main worktree の basename へ展開される",
-    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
-      const section = expandPathSection(
-        [
-          {
-            action: "allow",
-            patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")],
-          },
-        ],
-        linkedWorktreePath,
-      );
+  it("resolves ${PROJECT_NAME} as plain text through the generic brace rules", () => {
+    const section = expandPathSection(
+      [{ action: "allow", patterns: ["/work/${PROJECT_NAME}/drafts"] }],
+      "/cwd",
+    );
 
-      assert.deepEqual(
-        section.flatMap((entry) => entry.paths),
-        [join(workspacePath, "worktrees", basename(mainWorktreePath))],
-      );
-    }),
-  );
+    assert.deepEqual(
+      section.flatMap((entry) => entry.paths),
+      ["/work/$PROJECT_NAME/drafts"],
+    );
+  });
 
-  it(
-    "${REPOSITORY_NAME} を含むパスは current repository の worktree 置き場配下を許可する",
-    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
-      const section = expandPathSection(
-        [
-          {
-            action: "allow",
-            patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")],
-          },
-        ],
-        linkedWorktreePath,
-      );
-
-      assert.equal(
-        resolvePathAction(
-          section,
-          join(workspacePath, "worktrees", basename(mainWorktreePath), "topic"),
-        ),
-        "allow",
-      );
-    }),
-  );
-
-  it(
-    "${REPOSITORY_NAME} を含むパスは他リポジトリの worktree 置き場を許可しない",
-    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
-      const section = expandPathSection(
-        [
-          {
-            action: "allow",
-            patterns: [join(workspacePath, "worktrees", "${REPOSITORY_NAME}")],
-          },
-        ],
-        linkedWorktreePath,
-      );
-
-      assert.equal(
-        resolvePathAction(section, join(workspacePath, "worktrees", "other", "topic")),
-        "deny",
-      );
-    }),
-  );
-
-  it(
-    "${REPOSITORY_NAME} を含むパスは Git repository 外ではパスを許可しない",
-    withTempDirectory((directory) => {
-      const section = expandPathSection(
-        [{ action: "allow", patterns: ["~/.agents/worktrees/${REPOSITORY_NAME}"] }],
-        directory,
-      );
-
-      assert.deepEqual(
-        section.flatMap((entry) => entry.paths),
-        [],
-      );
-    }),
-  );
-
-  it("出荷configは repository 専用の worktrees パスを許可する", () => {
+  it("shipped config uses REPOSITORY_NAME for work and worktrees paths", () => {
     const config = parseSandboxedToolsConfig(
       readFileSync(
         sourcePathFromSymlink(
@@ -898,6 +833,9 @@ describe("§3.a パス文字列の解決", () => {
       .flatMap((entry) => entry.patterns);
 
     assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${REPOSITORY_NAME}"), true);
+    assert.equal(writeAllowPatterns?.includes("~/.agents/work/${REPOSITORY_NAME}"), true);
+    assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${PROJECT_NAME}"), false);
+    assert.equal(writeAllowPatterns?.includes("~/.agents/work/${PROJECT_NAME}"), false);
   });
 
   it("allows writes to the Lazyweb token directory", () => {
@@ -973,18 +911,17 @@ describe("§3.a パス文字列の解決", () => {
   });
 
   it(
-    "${REPOSITORY_NAME} を含むパスは Git repository 外で作成も bind もしない",
-    withTempDirectory((directory) => {
+    "${GIT_MAIN_WORKTREE_PATH} は Git repository 外で開始cwd へ解決して書き込みを許可し bind する",
+    withTempDirectory(async (directory) => {
       const configPath = join(directory, "config.yaml");
-      const worktreesDirectory = join(directory, "worktrees", "repository");
-      writeFileSync(
-        configPath,
-        `write:\n  - {allow: "${directory}/worktrees/\${REPOSITORY_NAME}"}\n`,
-      );
+      writeFileSync(configPath, 'write:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}"}\n');
       const sandbox = new Sandbox(directory, configPath);
 
-      assert.equal(existsSync(worktreesDirectory), false);
-      assert.equal(sandbox.buildArgs("fs").includes(worktreesDirectory), false);
+      await sandbox.authorizePath("write", join(directory, "note.md"), { cwd: directory });
+      const args = sandbox.buildArgs("fs");
+      const bindTryIndex = args.indexOf("--bind-try");
+      assert.notEqual(bindTryIndex, -1);
+      assert.equal(args[bindTryIndex + 1], directory);
     }),
   );
 
@@ -1044,13 +981,13 @@ describe("§3.a パス文字列の解決", () => {
   );
 
   it(
-    "${GIT_MAIN_WORKTREE_PATH}-worktrees を含むエントリは Git repository 外では作成しない",
+    "${GIT_MAIN_WORKTREE_PATH}-worktrees を含むエントリは Git repository 外でも作成する",
     withTempDirectory((directory) => {
       const configPath = join(directory, "config.yaml");
       writeFileSync(configPath, 'write:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}-worktrees"}\n');
       new Sandbox(directory, configPath);
 
-      assert.deepEqual(readdirSync(directory), ["config.yaml"]);
+      assert.equal(existsSync(`${directory}-worktrees`), true);
     }),
   );
 
@@ -1148,6 +1085,522 @@ describe("§3.a パス文字列の解決", () => {
         if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
         else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
       }
+    }),
+  );
+});
+
+describe("REPOSITORY_NAME work folder", () => {
+  it(
+    "resolves a non-Git repository name from the normalized session cwd",
+    withTempDirectory((directory) => {
+      const cwd = join(directory, "notes");
+      mkdirSync(cwd);
+      const workPattern = join(directory, "work", "${REPOSITORY_NAME}", "drafts");
+      const section = expandPathSection(
+        [{ action: "allow", patterns: [workPattern] }],
+        join(cwd, "."),
+      );
+      assert.deepEqual(section[0]?.paths, [join(directory, "work", "notes", "drafts")]);
+    }),
+  );
+
+  it(
+    "creates and authorizes both non-Git work folders",
+    withTempDirectory(async (directory) => {
+      const cwd = join(directory, "notes");
+      mkdirSync(cwd);
+      const configPath = join(directory, "config.yaml");
+      const workPath = join(directory, "work", "notes");
+      const worktreesPath = join(directory, "worktrees", "notes");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          write: [
+            {
+              allow: [
+                join(directory, "work", "${REPOSITORY_NAME}"),
+                join(directory, "worktrees", "${REPOSITORY_NAME}"),
+              ],
+            },
+          ],
+        }),
+      );
+      const sandbox = new Sandbox(cwd, configPath);
+      assert.equal(existsSync(workPath), true);
+      assert.equal(existsSync(worktreesPath), true);
+      await sandbox.authorizePath("write", join(workPath, "note.md"), { cwd });
+      await sandbox.authorizePath("write", join(worktreesPath, "note.md"), { cwd });
+      await assert.rejects(
+        () => sandbox.authorizePath("write", join(directory, "work", "other", "note.md"), { cwd }),
+        /Access requires confirmation/,
+      );
+      for (const path of [workPath, worktreesPath]) {
+        for (const mode of ["fs", "bash"] as const) {
+          const args = sandbox.buildArgs(mode);
+          const mountIndex = args.indexOf(path);
+          assert.equal(args[mountIndex - 1], "--bind-try");
+          assert.equal(args[mountIndex + 1], path);
+        }
+      }
+    }),
+  );
+
+  it(
+    "uses one main-named work folder from both main and linked worktrees",
+    withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      const workPath = join(workspacePath, "work", basename(mainWorktreePath));
+      const linkedWorkPath = join(workspacePath, "work", basename(linkedWorktreePath));
+      const worktreesPath = join(workspacePath, "worktrees", basename(mainWorktreePath));
+      const linkedWorktreesPath = join(workspacePath, "worktrees", basename(linkedWorktreePath));
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          write: [
+            {
+              allow: [
+                ".",
+                "${GIT_MAIN_WORKTREE_PATH}",
+                join(workspacePath, "work", "${REPOSITORY_NAME}"),
+                join(workspacePath, "worktrees", "${REPOSITORY_NAME}"),
+              ],
+            },
+          ],
+        }),
+      );
+      for (const cwd of [mainWorktreePath, linkedWorktreePath]) {
+        const sandbox = new Sandbox(cwd, configPath);
+        assert.equal(existsSync(workPath), true);
+        assert.equal(existsSync(worktreesPath), true);
+        assert.equal(existsSync(linkedWorkPath), false);
+        assert.equal(existsSync(linkedWorktreesPath), false);
+        await sandbox.authorizePath("write", join(workPath, "note.md"), { cwd });
+        await sandbox.authorizePath("write", join(worktreesPath, "note.md"), { cwd });
+        for (const otherPath of [linkedWorkPath, linkedWorktreesPath]) {
+          await assert.rejects(
+            () => sandbox.authorizePath("write", join(otherPath, "note.md"), { cwd }),
+            /Access requires confirmation/,
+          );
+        }
+        const args = sandbox.buildArgs("bash");
+        assert.equal(args.includes(workPath), true);
+        assert.equal(args.includes(linkedWorkPath), false);
+        assert.equal(args.includes(worktreesPath), true);
+        assert.equal(args.includes(linkedWorktreesPath), false);
+        assert.equal(args.includes(mainWorktreePath), true);
+        assert.equal(args.includes(cwd), true);
+      }
+    }),
+  );
+
+  it(
+    "keeps last-match-wins for repository work paths",
+    withTempDirectory((directory) => {
+      const workPath = join(directory, "work", basename(directory));
+      const pattern = join(directory, "work", "${REPOSITORY_NAME}");
+      const section = expandPathSection(
+        [
+          { action: "allow", patterns: [pattern] },
+          { action: "ask", patterns: [join(pattern, "ask")] },
+          { action: "deny", patterns: [join(pattern, "denied")] },
+          { action: "allow", patterns: [join(pattern, "denied", "allowed")] },
+        ],
+        directory,
+      );
+      assert.equal(resolvePathAction(section, join(workPath, "note.md")), "allow");
+      assert.equal(resolvePathAction(section, join(workPath, "ask", "note.md")), "ask");
+      assert.equal(resolvePathAction(section, join(workPath, "denied", "note.md")), "deny");
+      assert.equal(
+        resolvePathAction(section, join(workPath, "denied", "allowed", "note.md")),
+        "allow",
+      );
+    }),
+  );
+
+  it(
+    "expands repository names for read rules and keeps credential paths denied",
+    withTempDirectory(async (directory) => {
+      const pattern = join(directory, "work", "${REPOSITORY_NAME}");
+      const workPath = join(directory, "work", basename(directory));
+      const credentialPath = join(workPath, "credential");
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          read: [{ allow: [pattern] }],
+          write: [{ allow: [pattern] }],
+          credentials: [join(pattern, "credential")],
+        }),
+      );
+      const sandbox = new Sandbox(directory, configPath);
+      writeFileSync(credentialPath, "secret");
+      await sandbox.authorizePath("read", join(workPath, "note.md"), { cwd: directory });
+      for (const operation of ["read", "write"] as const)
+        await assert.rejects(
+          () => sandbox.authorizePath(operation, credentialPath, { cwd: directory }),
+          /Access denied for credential path/,
+        );
+    }),
+  );
+  const literalNames = [
+    "*",
+    "notes[1]",
+    "{alpha,beta}",
+    "draft?",
+    "${XDG_RUNTIME_DIR}",
+    "${REPOSITORY_NAME}",
+    "${PROJECT_NAME}",
+    "${GIT_MAIN_WORKTREE_PATH}",
+    "$&",
+    "a\\b",
+  ];
+
+  for (const name of literalNames) {
+    it(
+      `creates and binds only the literal work folder for ${name}`,
+      withTempDirectory(async (directory) => {
+        const cwd = join(directory, name);
+        mkdirSync(cwd);
+        const workRoot = join(directory, "work");
+        const workPath = join(workRoot, name);
+        const otherPaths = ["other", "alpha", "beta", "notes1"].map((other) =>
+          join(workRoot, other),
+        );
+        for (const otherPath of otherPaths) mkdirSync(otherPath, { recursive: true });
+        const configPath = join(directory, "config.yaml");
+        writeFileSync(
+          configPath,
+          JSON.stringify({
+            write: [{ allow: [join(workRoot, "${REPOSITORY_NAME}")] }],
+          }),
+        );
+        const sandbox = new Sandbox(cwd, configPath);
+        assert.equal(existsSync(workPath), true);
+        assert.deepEqual(
+          readdirSync(workRoot).filter(
+            (entry) => !otherPaths.some((other) => other === join(workRoot, entry)),
+          ),
+          [name],
+        );
+        assert.deepEqual(sandbox.getWritePathsByFinalAction().allow, [workPath]);
+        await sandbox.authorizePath("write", join(workPath, "note.md"), { cwd });
+        for (const otherPath of otherPaths) {
+          await assert.rejects(
+            () => sandbox.authorizePath("write", join(otherPath, "note.md"), { cwd }),
+            /Access requires confirmation/,
+          );
+          for (const mode of ["fs", "bash"] as const) {
+            const args = sandbox.buildArgs(mode);
+            assert.equal(args.includes(otherPath), false);
+          }
+        }
+        for (const mode of ["fs", "bash"] as const) {
+          const args = sandbox.buildArgs(mode);
+          const mountIndex = args.indexOf(workPath);
+          assert.equal(args[mountIndex - 1], "--bind-try");
+          assert.equal(args[mountIndex + 1], workPath);
+          assert.equal(
+            args.some((arg) => arg.includes("\0")),
+            false,
+          );
+        }
+      }),
+    );
+
+    it(
+      `keeps read deny and credentials inside the literal project ${name}`,
+      withTempDirectory(async (directory) => {
+        const cwd = join(directory, name);
+        mkdirSync(cwd);
+        const pattern = join(directory, "work", "${REPOSITORY_NAME}");
+        const workPath = join(directory, "work", name);
+        mkdirSync(workPath, { recursive: true });
+        const hiddenPath = join(workPath, "secret.txt");
+        const credentialPath = join(workPath, "credential");
+        writeFileSync(hiddenPath, "hidden");
+        writeFileSync(credentialPath, "credential");
+        const configPath = join(directory, "config.yaml");
+        writeFileSync(
+          configPath,
+          JSON.stringify({
+            read: [{ allow: "*" }, { deny: [join(pattern, "secret.*")] }],
+            write: [{ allow: [pattern] }],
+            credentials: [join(pattern, "credential")],
+          }),
+        );
+        const sandbox = new Sandbox(cwd, configPath);
+        await assert.rejects(
+          () => sandbox.authorizePath("read", hiddenPath, { cwd }),
+          /Access denied/,
+        );
+        for (const operation of ["read", "write"] as const) {
+          await assert.rejects(
+            () => sandbox.authorizePath(operation, credentialPath, { cwd }),
+            /Access denied for credential path/,
+          );
+        }
+        const laterSecret = join(workPath, "secret.later");
+        writeFileSync(laterSecret, "hidden later");
+        await assert.rejects(
+          () => sandbox.authorizePath("read", laterSecret, { cwd }),
+          /Access denied/,
+        );
+        assert.equal(sandbox.buildArgs("fs").includes(hiddenPath), true);
+        assert.equal(sandbox.buildArgs("bash").includes(credentialPath), true);
+      }),
+    );
+  }
+
+  const classCases = [
+    { name: "a", pattern: "[${REPOSITORY_NAME}]", matches: ["a"], misses: ["[a]", "b"] },
+    { name: "*", pattern: "[${REPOSITORY_NAME}]", matches: ["*"], misses: ["[*]", "b"] },
+    { name: "]", pattern: "[${REPOSITORY_NAME}]", matches: ["]"], misses: ["[]]", "b"] },
+    { name: "[", pattern: "[${REPOSITORY_NAME}]", matches: ["["], misses: ["[[]", "b"] },
+    { name: "^", pattern: "[${REPOSITORY_NAME}]", matches: ["^"], misses: ["a", "[^]"] },
+    { name: "-", pattern: "[${REPOSITORY_NAME}]", matches: ["-"], misses: ["b", "[-]"] },
+    { name: "\\", pattern: "[${REPOSITORY_NAME}]", matches: ["\\"], misses: ["b", "[\\]"] },
+    {
+      name: "a-z",
+      pattern: "[${REPOSITORY_NAME}]",
+      matches: ["a", "-", "z"],
+      misses: ["b", "a-z"],
+    },
+    {
+      name: "a]^\\-",
+      pattern: "[${REPOSITORY_NAME}]",
+      matches: ["a", "]", "^", "\\", "-"],
+      misses: ["b", "a]^\\-"],
+    },
+    { name: "ab", pattern: "[${REPOSITORY_NAME}]", matches: ["a", "b"], misses: ["ab", "c"] },
+    { name: "a", pattern: "[^${REPOSITORY_NAME}]", matches: ["b", "^"], misses: ["a", "[a]"] },
+    { name: "a", pattern: "[!${REPOSITORY_NAME}]", matches: ["a", "!"], misses: ["b", "[!a]"] },
+    { name: "c", pattern: "[a-${REPOSITORY_NAME}]", matches: ["a", "b", "c"], misses: ["d", "-"] },
+    { name: "a", pattern: "[${REPOSITORY_NAME}-c]", matches: ["a", "b", "c"], misses: ["d", "-"] },
+    { name: "^", pattern: "[^${REPOSITORY_NAME}]", matches: ["a", "b"], misses: ["^", "[^^]"] },
+    { name: "]", pattern: "[${REPOSITORY_NAME}]]", matches: ["]]"], misses: ["]", "[]]]"] },
+    {
+      name: "a",
+      pattern: "[${REPOSITORY_NAME}${REPOSITORY_NAME}]",
+      matches: ["a"],
+      misses: ["aa", "[aa]"],
+    },
+    { name: "n", pattern: "[\\${REPOSITORY_NAME}]", matches: ["n"], misses: ["\\", "\n"] },
+    { name: "n", pattern: "[\\\\${REPOSITORY_NAME}]", matches: ["n", "\\"], misses: ["a", "\n"] },
+    { name: "a", pattern: "[${REPOSITORY_NAME}", matches: ["[a"], misses: ["a", "[b"] },
+    {
+      name: "a",
+      pattern: "[${REPOSITORY_NAME}]suffix",
+      matches: ["asuffix"],
+      misses: ["[a]suffix", "bsuffix"],
+    },
+  ];
+
+  for (const { name, pattern, matches, misses } of classCases) {
+    it(
+      `selects configured character classes with literal REPOSITORY_NAME ${JSON.stringify({ name, pattern })}`,
+      withTempDirectory(async (directory) => {
+        const cwd = join(directory, "cwd", name);
+        mkdirSync(cwd, { recursive: true });
+        const workRoot = join(directory, "work");
+        const expectedPaths = matches.map((entry) => join(workRoot, entry));
+        const excludedPaths = misses.map((entry) => join(workRoot, entry));
+        for (const path of [...expectedPaths, ...excludedPaths])
+          mkdirSync(path, { recursive: true });
+        const configuredPattern = join(workRoot, pattern);
+        const section = expandPathSection(
+          [{ action: "allow", patterns: [configuredPattern] }],
+          cwd,
+        );
+        assert.deepEqual(section[0]?.paths.slice().sort(), expectedPaths.slice().sort());
+        const configPath = join(directory, "config.yaml");
+        writeFileSync(configPath, JSON.stringify({ write: [{ allow: [configuredPattern] }] }));
+        const sandbox = new Sandbox(cwd, configPath);
+        for (const path of expectedPaths) {
+          await sandbox.authorizePath("write", join(path, "note.md"), { cwd });
+          for (const mode of ["fs", "bash"] as const) {
+            const args = sandbox.buildArgs(mode);
+            assert.equal(args[args.indexOf(path) - 1], "--bind-try");
+          }
+        }
+        for (const path of excludedPaths) {
+          await assert.rejects(
+            () => sandbox.authorizePath("write", join(path, "note.md"), { cwd }),
+            /Access requires confirmation/,
+          );
+          for (const mode of ["fs", "bash"] as const)
+            assert.equal(sandbox.buildArgs(mode).includes(path), false);
+        }
+      }),
+    );
+
+    it(
+      `protects character-class read deny and credentials for REPOSITORY_NAME ${JSON.stringify({ name, pattern })}`,
+      withTempDirectory(async (directory) => {
+        const cwd = join(directory, "cwd", name);
+        mkdirSync(cwd, { recursive: true });
+        const workRoot = join(directory, "work");
+        const expectedPaths = matches.map((entry) => join(workRoot, entry));
+        const excludedPaths = misses.map((entry) => join(workRoot, entry));
+        for (const path of [...expectedPaths, ...excludedPaths]) {
+          mkdirSync(path, { recursive: true });
+          writeFileSync(join(path, "secret"), "hidden");
+          writeFileSync(join(path, "credential"), "credential");
+        }
+        const configuredPattern = join(workRoot, pattern);
+        const configPath = join(directory, "config.yaml");
+        writeFileSync(
+          configPath,
+          JSON.stringify({
+            read: [{ allow: "*" }, { deny: [join(configuredPattern, "secret*")] }],
+            write: [{ allow: [workRoot] }],
+            credentials: [join(configuredPattern, "credential")],
+          }),
+        );
+        const sandbox = new Sandbox(cwd, configPath);
+        for (const path of expectedPaths) {
+          await assert.rejects(
+            () => sandbox.authorizePath("read", join(path, "secret"), { cwd }),
+            /Access denied/,
+          );
+          for (const operation of ["read", "write"] as const) {
+            await assert.rejects(
+              () => sandbox.authorizePath(operation, join(path, "credential"), { cwd }),
+              /Access denied for credential path/,
+            );
+          }
+          const args = sandbox.buildArgs("fs");
+          assert.equal(args.includes(join(path, "secret")), true);
+          assert.equal(args.includes(join(path, "credential")), true);
+          const bashArgs = sandbox.buildArgs("bash");
+          const credentialIndex = bashArgs.indexOf(join(path, "credential"));
+          assert.equal(bashArgs[credentialIndex - 1], "--ro-bind-try");
+          writeFileSync(join(path, "secret.later"), "later");
+          await assert.rejects(
+            () => sandbox.authorizePath("read", join(path, "secret.later"), { cwd }),
+            /Access denied/,
+          );
+        }
+        for (const path of excludedPaths) {
+          await sandbox.authorizePath("read", join(path, "secret"), { cwd });
+          await sandbox.authorizePath("read", join(path, "credential"), { cwd });
+          for (const mode of ["fs", "bash"] as const) {
+            const args = sandbox.buildArgs(mode);
+            assert.equal(args.includes(join(path, "secret")), false);
+            assert.equal(args.includes(join(path, "credential")), false);
+          }
+        }
+      }),
+    );
+  }
+
+  it(
+    "preserves configured glob and brace expansion around literal repository names",
+    withTempDirectory((directory) => {
+      const name = "{alpha,beta}[1]*";
+      const cwd = join(directory, name);
+      mkdirSync(cwd);
+      const workRoot = join(directory, "work");
+      const expectedPaths = ["a", "b"].map((parent) => join(workRoot, parent, name, "drafts"));
+      for (const path of expectedPaths) mkdirSync(path, { recursive: true });
+      mkdirSync(join(workRoot, "a", "alpha1", "drafts"), { recursive: true });
+      const patterns = [
+        join(workRoot, "{a,b}", "${REPOSITORY_NAME}", "*"),
+        join(workRoot, "*", "${REPOSITORY_NAME}", "{drafts,absent}"),
+      ];
+      const section = expandPathSection([{ action: "allow", patterns }], cwd);
+      assert.deepEqual([...new Set(section[0]?.paths)].sort(), expectedPaths.sort());
+    }),
+  );
+
+  it(
+    "keeps a special cwd literal when resolving relative repository patterns",
+    withTempDirectory((directory) => {
+      const name = "*";
+      const cwd = join(directory, name);
+      const otherCwd = join(directory, "other");
+      const workPath = join(cwd, "work", name);
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(join(otherCwd, "work", name), { recursive: true });
+      const patterns = ["work/${REPOSITORY_NAME}", "work/${REPOSITORY_NAME}/*"];
+      const section = expandPathSection([{ action: "allow", patterns }], cwd);
+      assert.deepEqual(section[0]?.paths, [workPath]);
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(
+        configPath,
+        JSON.stringify({ write: [{ allow: ["work/${REPOSITORY_NAME}"] }] }),
+      );
+      const sandbox = new Sandbox(cwd, configPath);
+      assert.equal(existsSync(workPath), true);
+      assert.equal(sandbox.buildArgs("bash").includes(workPath), true);
+      assert.equal(sandbox.buildArgs("bash").includes(join(otherCwd, "work", name)), false);
+    }),
+  );
+
+  it(
+    "creates configured brace branches around a literal repository name",
+    withTempDirectory((directory) => {
+      const name = "{alpha,beta}";
+      const cwd = join(directory, name);
+      mkdirSync(cwd);
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          write: [{ allow: [join(directory, "work", "{a,b}", "${REPOSITORY_NAME}")] }],
+        }),
+      );
+      const sandbox = new Sandbox(cwd, configPath);
+      for (const branch of ["a", "b"]) {
+        const workPath = join(directory, "work", branch, name);
+        assert.equal(existsSync(workPath), true);
+        assert.equal(sandbox.buildArgs("bash").includes(workPath), true);
+        assert.equal(existsSync(join(directory, "work", branch, "alpha")), false);
+        assert.equal(existsSync(join(directory, "work", branch, "beta")), false);
+      }
+      assert.equal(existsSync(join(directory, "work", "{a,b}")), false);
+    }),
+  );
+
+  it(
+    "does not grant the work parent for a root cwd",
+    withTempDirectory((directory) => {
+      const pattern = join(directory, "work", "${REPOSITORY_NAME}");
+      assert.deepEqual(
+        expandPathSection([{ action: "allow", patterns: [pattern] }], "/")[0]?.paths,
+        [],
+      );
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(configPath, JSON.stringify({ write: [{ allow: [pattern] }] }));
+      const sandbox = new Sandbox("/", configPath);
+      assert.equal(existsSync(join(directory, "work")), false);
+      assert.equal(sandbox.buildArgs("bash").includes(join(directory, "work")), false);
+    }),
+  );
+
+  it(
+    "does not treat a literal repository tilde as home expansion",
+    withTempDirectory((directory) => {
+      const cwd = join(directory, "~");
+      mkdirSync(cwd);
+      const section = expandPathSection(
+        [{ action: "allow", patterns: ["${REPOSITORY_NAME}"] }],
+        cwd,
+      );
+      assert.deepEqual(section[0]?.paths, [join(cwd, "~")]);
+    }),
+  );
+
+  it(
+    "lists repository work folders in the final allow guideline",
+    withTempDirectory((directory) => {
+      const configPath = join(directory, "config.yaml");
+      const workPattern = join(directory, "work", "${REPOSITORY_NAME}");
+      writeFileSync(configPath, JSON.stringify({ write: [{ allow: [workPattern] }] }));
+
+      const guidance = captureRegisteredTools(configPath).get("ask_permission").promptGuidelines[0];
+      const mainWorktreePath = resolveGitMainWorktreePath(process.cwd());
+      const expectedWorkPath = join(directory, "work", basename(mainWorktreePath ?? process.cwd()));
+      assert.ok(guidance.includes(JSON.stringify(expectedWorkPath)));
     }),
   );
 });
