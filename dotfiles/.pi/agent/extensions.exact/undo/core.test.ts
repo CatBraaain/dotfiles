@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { extractMessageText, findUndoTarget } from "./core.ts";
 
 type UserContent =
@@ -22,9 +22,9 @@ function entry(
   } as SessionEntry;
 }
 
-/** Branch entries in getBranch() order: leaf first, root last. */
-function branch(...leafToRoot: SessionEntry[]): SessionEntry[] {
-  return leafToRoot;
+/** Branch entries in getBranch() order: root first, leaf last. */
+function branch(...rootToLeaf: SessionEntry[]): SessionEntry[] {
+  return rootToLeaf;
 }
 
 describe("extractMessageText", () => {
@@ -52,10 +52,10 @@ describe("extractMessageText", () => {
 describe("findUndoTarget", () => {
   it("ブランチの末尾から見て最後の user 発言を選ぶ(末尾に assistant があっても)", () => {
     const entries = branch(
-      entry("a2", "u2", "assistant", [{ type: "text", text: "ok" }]),
-      entry("u2", "a1", "user", "やり直したい"),
-      entry("a1", "u1", "assistant", [{ type: "text", text: "hello" }]),
       entry("u1", null, "user", "はじめ"),
+      entry("a1", "u1", "assistant", [{ type: "text", text: "hello" }]),
+      entry("u2", "a1", "user", "やり直したい"),
+      entry("a2", "u2", "assistant", [{ type: "text", text: "ok" }]),
     );
     const target = findUndoTarget(entries);
     assert.equal(target?.entryId, "u2");
@@ -64,8 +64,8 @@ describe("findUndoTarget", () => {
 
   it("連打を想定して、直前の user 発言まで戻った状態のブランチではその前の user 発言を選ぶ", () => {
     const entries = branch(
-      entry("a1", "u1", "assistant", [{ type: "text", text: "hello" }]),
       entry("u1", null, "user", "はじめ"),
+      entry("a1", "u1", "assistant", [{ type: "text", text: "hello" }]),
     );
     const target = findUndoTarget(entries);
     assert.equal(target?.entryId, "u1");
@@ -85,5 +85,25 @@ describe("findUndoTarget", () => {
 
   it("空のブランチでは undefined を返す", () => {
     assert.equal(findUndoTarget(branch()), undefined);
+  });
+
+  it("実 SessionManager の getBranch() 順序(root→leaf)でも最後の user 発言を選ぶ", () => {
+    const manager = SessionManager.inMemory();
+    const userMessage = (text: string, timestamp: number) =>
+      ({ role: "user", content: text, timestamp }) as Parameters<
+        SessionManager["appendMessage"]
+      >[0];
+    manager.appendMessage(userMessage("はじめ", 1));
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+      stopReason: "stop",
+      timestamp: 2,
+    } as Parameters<SessionManager["appendMessage"]>[0];
+    manager.appendMessage(assistantMessage);
+    manager.appendMessage(userMessage("やり直したい", 3));
+
+    const target = findUndoTarget(manager.getBranch());
+    assert.equal(target?.text, "やり直したい");
   });
 });

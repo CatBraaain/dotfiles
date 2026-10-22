@@ -126,10 +126,11 @@ describe("コマンドの登録", () => {
 describe("巻き戻し", () => {
   it("最後の user 発言の entry を summarize:false で navigateTree し、確認ダイアログを表示せず即座に戻す", async () => {
     const capture = captureUndoExtension({
+      // getBranch() returns root first, leaf last.
       branchEntries: [
-        assistantEntry("a2", "u2"),
-        userEntry("u2", "a1", "やり直したい"),
         userEntry("u1", null, "はじめ"),
+        userEntry("u2", "a1", "やり直したい"),
+        assistantEntry("a2", "u2"),
       ],
     });
 
@@ -141,7 +142,7 @@ describe("巻き戻し", () => {
 
   it("取り消した発言のテキストでエディタを置き換える", async () => {
     const capture = captureUndoExtension({
-      branchEntries: [assistantEntry("a2", "u2"), userEntry("u2", "a1", "やり直したい")],
+      branchEntries: [userEntry("u2", "a1", "やり直したい"), assistantEntry("a2", "u2")],
     });
 
     await capture.runUndo();

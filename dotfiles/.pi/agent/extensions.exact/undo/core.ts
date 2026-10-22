@@ -30,11 +30,11 @@ export function extractMessageText(content: string | (TextContent | ImageContent
 
 /**
  * Find the entry /undo reverts to: the last user message on the active branch.
- * `branchEntries` is the branch as returned by getBranch() (leaf first, root last).
+ * `branchEntries` is the branch as returned by getBranch() (root first, leaf last).
  * Returns undefined when the branch has no user message.
  */
 export function findUndoTarget(branchEntries: SessionEntry[]): UndoTarget | undefined {
-  const entry = branchEntries.find(isUserMessageEntry);
+  const entry = branchEntries.findLast(isUserMessageEntry);
   if (!entry) return undefined;
   return { entryId: entry.id, text: extractMessageText(entry.message.content) };
 }
