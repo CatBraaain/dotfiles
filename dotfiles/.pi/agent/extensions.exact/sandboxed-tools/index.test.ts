@@ -133,17 +133,21 @@ const compiled = (
 ) => compileCommandRuleEntries(entries).entries;
 
 // 拡張 factory を stub API で読み込み、registerTool されたツールを取り出す
-const captureRegisteredTools = (configPath?: string): Map<string, any> => {
+function captureRegisteredTools(
+  configPath?: string,
+  handlers?: Map<string, (event: any, context?: any) => unknown>,
+): Map<string, any> {
   const registered = new Map<string, any>();
   sandboxedToolsExtension(
     {
       registerTool: (tool: any) => registered.set(tool.name, tool),
-      on: () => {},
+      on: (event: string, handler: (event: any, context?: any) => unknown) =>
+        handlers?.set(event, handler),
     } as any,
     configPath,
   );
   return registered;
-};
+}
 
 const plainTheme = {
   fg: (_color: string, text: string) => text,
@@ -4041,7 +4045,7 @@ matched: {"command":"git","args":["push"]}`,
           },
         });
         assert.deepEqual(selectionOptions, [
-          ["Allow once", "Allow in this session", "No, deny (reason next)"],
+          ["Allow once", "Allow in this session", "Allow in this turn", "No, deny (reason next)"],
         ]);
       },
     ),
@@ -5736,4 +5740,238 @@ describe("§8 表示", () => {
     const classification = classifyReadPath({ path: "" }, "/cwd");
     assert.equal(classification, undefined);
   });
+});
+
+describe("turn command approvals", () => {
+  const turnConfig = `commands:
+  - git:
+      - ask: [push]
+      - ask: [fetch]
+  - sudo:
+      - ask_with_reason: []
+`;
+  const turnUi = {
+    confirm: async () => false,
+    select: async () => "Allow in this turn",
+  };
+  const noUi = { cwd: "/cwd", hasUI: false };
+
+  for (const route of ["bash", "permission"] as const) {
+    function request(sandbox: Sandbox, context: Parameters<Sandbox["authorizeCommand"]>[1]) {
+      return route === "bash"
+        ? sandbox.authorizeCommand("git push origin main", context)
+        : sandbox.requestCommandPermission("sudo reboot", "restart", context);
+    }
+
+    it(
+      `${route} reuses its pattern until expiry and keeps other patterns gated`,
+      withSandbox(turnConfig, "/cwd", async (sandbox) => {
+        await request(sandbox, { cwd: "/cwd", hasUI: true, ui: turnUi });
+        const command = route === "bash" ? "git push origin develop" : "sudo shutdown";
+        assert.equal(await sandbox.authorizeCommand(command, noUi), true);
+        assert.equal(await sandbox.authorizeCommand(command, noUi), true);
+        await assert.rejects(async () => sandbox.authorizeCommand("git fetch", noUi));
+        sandbox.expireTurnCommandApprovals();
+        await assert.rejects(async () => sandbox.authorizeCommand(command, noUi));
+      }),
+    );
+
+    it(
+      `${route} rejects a turn answer that crosses expiry`,
+      withSandbox(turnConfig, "/cwd", async (sandbox) => {
+        const shown = Promise.withResolvers<void>();
+        const answer = Promise.withResolvers<string>();
+        const pending = request(sandbox, {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async () => {
+              shown.resolve();
+              return answer.promise;
+            },
+          },
+        });
+        await shown.promise;
+        sandbox.expireTurnCommandApprovals();
+        answer.resolve("Allow in this turn");
+        if (route === "bash") await assert.rejects(async () => pending, /Turn approval expired/);
+        else
+          assert.deepEqual(await pending, {
+            status: "denied",
+            command: "sudo reboot",
+            reason: "Turn approval expired. Request approval again.",
+          });
+        await assert.rejects(async () =>
+          sandbox.authorizeCommand(route === "bash" ? "git push" : "sudo reboot", noUi),
+        );
+      }),
+    );
+
+    it(
+      `${route} rejects turn approval after waiting for the UI lock`,
+      withSandbox(turnConfig, "/cwd", async (sandbox) => {
+        const shown = Promise.withResolvers<void>();
+        const answer = Promise.withResolvers<string>();
+        const blocker = sandbox.authorizeCommand("git fetch", {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async () => {
+              shown.resolve();
+              return answer.promise;
+            },
+          },
+        });
+        await shown.promise;
+        const pending = request(sandbox, { cwd: "/cwd", hasUI: true, ui: turnUi });
+        sandbox.expireTurnCommandApprovals();
+        answer.resolve("Allow once");
+        await blocker;
+        if (route === "bash") await assert.rejects(async () => pending, /Turn approval expired/);
+        else assert.equal(((await pending) as { status: string }).status, "denied");
+      }),
+    );
+
+    it(
+      `${route} rechecks approvals granted while waiting for the UI lock`,
+      withSandbox(turnConfig, "/cwd", async (sandbox) => {
+        const shown = Promise.withResolvers<void>();
+        const answer = Promise.withResolvers<string>();
+        let dialogs = 0;
+        const context = {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async () => {
+              dialogs++;
+              shown.resolve();
+              return answer.promise;
+            },
+          },
+        };
+        const first = request(sandbox, context);
+        await shown.promise;
+        const second = request(sandbox, context);
+        answer.resolve("Allow in this turn");
+        await Promise.all([first, second]);
+        assert.equal(dialogs, 1);
+      }),
+    );
+
+    for (const choice of ["Allow once", "Allow in this session"]) {
+      it(
+        `${route} preserves ${choice} answers across user input`,
+        withSandbox(turnConfig, "/cwd", async (sandbox) => {
+          const shown = Promise.withResolvers<void>();
+          const answer = Promise.withResolvers<string>();
+          const pending = request(sandbox, {
+            cwd: "/cwd",
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async () => {
+                shown.resolve();
+                return answer.promise;
+              },
+            },
+          });
+          await shown.promise;
+          sandbox.expireTurnCommandApprovals();
+          answer.resolve(choice);
+          const outcome = await pending;
+          if (route === "bash") assert.equal(outcome, true);
+          else assert.equal((outcome as { status: string }).status, "granted");
+          if (choice === "Allow in this session") {
+            sandbox.expireTurnCommandApprovals();
+            assert.equal(
+              await sandbox.authorizeCommand(route === "bash" ? "git push" : "sudo reboot", noUi),
+              true,
+            );
+          }
+        }),
+      );
+    }
+  }
+
+  it(
+    "keeps multiple turn patterns and session grants independent",
+    withSandbox(turnConfig, "/cwd", async (sandbox) => {
+      await sandbox.authorizeCommand("git push", { cwd: "/cwd", hasUI: true, ui: turnUi });
+      await sandbox.authorizeCommand("git fetch", { cwd: "/cwd", hasUI: true, ui: turnUi });
+      await sandbox.requestCommandPermission("sudo reboot", "restart", {
+        cwd: "/cwd",
+        hasUI: true,
+        ui: { confirm: async () => false, select: async () => "Allow in this session" },
+      });
+      assert.equal(await sandbox.authorizeCommand("git push", noUi), true);
+      assert.equal(await sandbox.authorizeCommand("git fetch", noUi), true);
+      sandbox.expireTurnCommandApprovals();
+      await assert.rejects(async () => sandbox.authorizeCommand("git push", noUi));
+      await assert.rejects(async () => sandbox.authorizeCommand("git fetch", noUi));
+      assert.equal(await sandbox.authorizeCommand("sudo shutdown", noUi), true);
+    }),
+  );
+
+  const expiryEvents = [
+    ["input", { source: "interactive", text: "next" }],
+    ["input", { source: "rpc", text: "next", streamingBehavior: "steer" }],
+    ["input", { source: "extension", text: "next", streamingBehavior: "followUp" }],
+    ["message_start", { message: { role: "user", content: "next" } }],
+    ["session_start", {}],
+    ["session_shutdown", {}],
+  ] as const;
+  for (const [eventName, event] of expiryEvents) {
+    it(
+      `expires through ${eventName} ${JSON.stringify(event)}`,
+      withTempDirectory(async (directory) => {
+        const configPath = join(directory, "sandbox.yaml");
+        writeFileSync(configPath, turnConfig);
+        const handlers = new Map<string, (event: any, context?: any) => unknown>();
+        const execute = captureRegisteredTools(configPath, handlers).get("ask_permission").execute;
+        const params = { command: "sudo reboot", reason: "restart" };
+        const granted = await execute("t", params, undefined, undefined, {
+          cwd: directory,
+          hasUI: true,
+          ui: turnUi,
+        });
+        assert.equal(granted.details.grant, "turn");
+        assert.match(granted.content[0].text, /until the next user message/);
+        const already = await execute("t", params, undefined, undefined, noUi);
+        assert.equal(already.details.grant, "turn");
+        assert.match(already.content[0].text, /turn-approved pattern/);
+        assert.ok(handlers.has(eventName));
+        await handlers.get(eventName)!(event, { ui: { notify() {} } });
+        await assert.rejects(
+          async () => execute("t", params, undefined, undefined, noUi),
+          /Access requires confirmation/,
+        );
+      }),
+    );
+  }
+
+  it(
+    "expires again when queued user input is delivered, but not during tool turns",
+    withTempDirectory(async (directory) => {
+      const configPath = join(directory, "sandbox.yaml");
+      writeFileSync(configPath, turnConfig);
+      const handlers = new Map<string, (event: any, context?: any) => unknown>();
+      const execute = captureRegisteredTools(configPath, handlers).get("ask_permission").execute;
+      const params = { command: "sudo reboot", reason: "restart" };
+      await handlers.get("input")!({ source: "rpc", streamingBehavior: "followUp" });
+      await execute("t", params, undefined, undefined, { cwd: directory, hasUI: true, ui: turnUi });
+      for (const role of ["assistant", "toolResult"])
+        await handlers.get("message_start")!({ message: { role } });
+      handlers.get("turn_start")?.({});
+      handlers.get("turn_end")?.({});
+      assert.equal((await execute("t", params, undefined, undefined, noUi)).details.grant, "turn");
+      await handlers.get("message_start")!({ message: { role: "user" } });
+      await assert.rejects(
+        async () => execute("t", params, undefined, undefined, noUi),
+        /Access requires confirmation/,
+      );
+    }),
+  );
 });

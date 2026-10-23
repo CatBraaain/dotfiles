@@ -67,16 +67,12 @@ export type WritePermissionRequest =
   | { status: "granted"; grantedPath: string; bashWritable: boolean }
   | { status: "denied"; grantedPath: string; reason?: string };
 
-/** ask_permission outcome for `command` (§3). `grant` is the approval scope:
- * "once" approves the exact command for one run (consumed on match),
- * "session" approves the matched config pattern for the rest of the session. */
 export type CommandPermissionRequest =
-  | { status: "already granted"; command: string; approvedPattern?: string }
+  | { status: "already granted"; command: string; approvedPattern?: string; grant?: "turn" }
   | {
       status: "granted";
       command: string;
-      grant: "once" | "session";
-      /** Config pattern approved for the session (grant: "session" only). */
+      grant: "once" | "session" | "turn";
       approvedPattern?: string;
     }
   | { status: "denied"; command: string; reason?: string };
@@ -127,6 +123,8 @@ type ToolUI = {
 const ALLOW_OPTION = "Yes, allow";
 const ALLOW_ONCE_OPTION = "Allow once";
 const ALLOW_SESSION_OPTION = "Allow in this session";
+const ALLOW_TURN_OPTION = "Allow in this turn";
+const EXPIRED_TURN_APPROVAL = "Turn approval expired. Request approval again.";
 const DENY_OPTION = "No, deny (reason next)";
 
 /** Guidance returned with an `ask_with_reason` rejection so the model re-requests via ask_permission (§3・§4). */
@@ -842,6 +840,8 @@ export class Sandbox {
    * consumed and dies with the session.
    */
   private readonly sessionApprovedPatterns: string[] = [];
+  private readonly turnApprovedPatterns = new Set<string>();
+  private turnApprovalGeneration = 0;
   // pi's TUI has a single slot for extension dialogs: a second dialog replaces
   // the first without resolving its promise, deadlocking that tool call.
   // One global queue; split per dialog kind if contention ever matters.
@@ -1396,23 +1396,26 @@ export class Sandbox {
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "allow") return { status: "already granted", command };
     if (action === "ask")
-      throw new Error(
-        `Command is confirmed when run via bash; no pre-approval needed: ${command}`,
-      );
-    if (matched !== undefined && this.isSessionApprovedPattern(matched))
-      return { status: "already granted", command, approvedPattern: matched };
-    if (!context.hasUI || !context.ui)
-      throw new Error(`Access requires confirmation: ${command}`);
+      throw new Error(`Command is confirmed when run via bash; no pre-approval needed: ${command}`);
+    const generation = this.turnApprovalGeneration;
+    const existingApproval = this.commandPatternApproval(command, matched, generation);
+    if (existingApproval) return existingApproval;
+    if (!context.hasUI || !context.ui) throw new Error(`Access requires confirmation: ${command}`);
     const ui = context.ui;
-    return this.withUiLock(() =>
-      this.confirmCommandPermission(command, reason, ui, matched, matchSpan),
-    );
+    return this.withUiLock(async () => {
+      const approval = this.commandPatternApproval(command, matched, generation);
+      return (
+        approval ??
+        this.confirmCommandPermission(command, reason, ui, generation, matched, matchSpan)
+      );
+    });
   }
 
   private async confirmCommandPermission(
     command: string,
     reason: string,
     ui: ToolUI,
+    generation: number,
     matched?: string,
     matchSpan?: MatchSpan,
   ): Promise<CommandPermissionRequest> {
@@ -1428,8 +1431,15 @@ export class Sandbox {
       const selectedOption = await ui.select(`${question}\n${details}`, [
         ALLOW_ONCE_OPTION,
         ALLOW_SESSION_OPTION,
+        ALLOW_TURN_OPTION,
         DENY_OPTION,
       ]);
+      if (selectedOption === ALLOW_TURN_OPTION && matched !== undefined) {
+        if (generation !== this.turnApprovalGeneration)
+          return { status: "denied", command, reason: EXPIRED_TURN_APPROVAL };
+        this.turnApprovedPatterns.add(matched);
+        return { status: "granted", command, grant: "turn", approvedPattern: matched };
+      }
       if (selectedOption === ALLOW_SESSION_OPTION && matched !== undefined) {
         this.sessionApprovedPatterns.push(matched);
         return { status: "granted", command, grant: "session", approvedPattern: matched };
@@ -1449,20 +1459,24 @@ export class Sandbox {
     return { status: "granted", command, grant: "once" };
   }
 
-  /** Whether `matched` is a pattern approved for this session (§3). */
-  private isSessionApprovedPattern(matched: string | undefined): boolean {
-    return matched !== undefined && this.sessionApprovedPatterns.includes(matched);
+  expireTurnCommandApprovals(): void {
+    this.turnApprovedPatterns.clear();
+    this.turnApprovalGeneration++;
   }
 
-  /**
-   * Resolve the command action and, for `ask` and `ask_with_reason`, confirm
-   * with the user unless a session-approved pattern covers the command. For
-   * `ask_with_reason`, consume a one-shot ask_permission approval when the
-   * command matches one (§3), otherwise return the call to the agent with a
-   * guidance hint. Returns true when this call passed through an approval
-   * (dialog, one-shot, or session pattern grant; §2.3 approval note), false
-   * when it passed without a dialog (config allow). Denial throws.
-   */
+  private commandPatternApproval(
+    command: string,
+    matched: string | undefined,
+    generation: number,
+  ): CommandPermissionRequest | undefined {
+    if (matched === undefined) return undefined;
+    if (this.sessionApprovedPatterns.includes(matched))
+      return { status: "already granted", command, approvedPattern: matched };
+    if (generation === this.turnApprovalGeneration && this.turnApprovedPatterns.has(matched))
+      return { status: "already granted", command, approvedPattern: matched, grant: "turn" };
+    return undefined;
+  }
+
   authorizeCommand(command: string, context: ToolContext): Promise<boolean> {
     const { action, matched, matchSpan } = resolveCommandActionMatch(
       this.commandEntries,
@@ -1470,7 +1484,8 @@ export class Sandbox {
     );
     if (action === "allow") return Promise.resolve(false);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
-    if (this.isSessionApprovedPattern(matched)) return Promise.resolve(true);
+    const generation = this.turnApprovalGeneration;
+    if (this.commandPatternApproval(command, matched, generation)) return Promise.resolve(true);
     if (action === "ask_with_reason") {
       if (this.consumeApprovedCommand(command)) return Promise.resolve(true);
       throw new Error(`Command requires a reason: ${command}\n${COMMAND_REASON_HINT}`);
@@ -1484,15 +1499,18 @@ export class Sandbox {
         ? highlightCommandMatch(command, matchSpan, ui.theme.getFgAnsi("accent"))
         : command;
     return this.withUiLock(async () => {
+      if (this.commandPatternApproval(command, matched, generation)) return true;
       if (ui.select) {
-        // "Allow in this session" grants the matched config pattern; with no
-        // pattern (unset default ask) there is nothing to grant, so the
-        // dialog stays at two options.
         const options =
           matched === undefined
             ? [ALLOW_ONCE_OPTION, DENY_OPTION]
-            : [ALLOW_ONCE_OPTION, ALLOW_SESSION_OPTION, DENY_OPTION];
+            : [ALLOW_ONCE_OPTION, ALLOW_SESSION_OPTION, ALLOW_TURN_OPTION, DENY_OPTION];
         const selectedOption = await ui.select(`Allow command?\n${display}\n${note}`, options);
+        if (selectedOption === ALLOW_TURN_OPTION && matched !== undefined) {
+          if (generation !== this.turnApprovalGeneration)
+            throw new Error(`Command denied: ${command}\n${EXPIRED_TURN_APPROVAL}`);
+          this.turnApprovedPatterns.add(matched);
+        }
         if (selectedOption === ALLOW_SESSION_OPTION && matched !== undefined)
           this.sessionApprovedPatterns.push(matched);
         if (selectedOption === undefined || selectedOption === DENY_OPTION)

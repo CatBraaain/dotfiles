@@ -416,7 +416,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     name: "ask_permission",
     label: "ask_permission",
     description:
-      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: request access only when the effective write action is ask or unset and the path is not credentials; explicit deny and credentials cannot be granted. Use it before edit-heavy work on such a path; for a worktree, request its creation path or parent. Once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for the rest of the session.",
+      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: request access only when the effective write action is ask or unset and the path is not credentials; explicit deny and credentials cannot be granted. Use it before edit-heavy work on such a path; for a worktree, request its creation path or parent. Once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for this turn or the rest of the session. Turn approval expires at the next user message.",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
       writePermissionGuideline(sandbox.getWritePathsByFinalAction()),
@@ -434,7 +434,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
       command: Type.Optional(
         Type.String({
           description:
-            'Exact command string that bash rejected with "Command requires a reason". Pass it verbatim; the user can approve it once, or approve its matched config pattern for the rest of the session.',
+            'Exact command string that bash rejected with "Command requires a reason". Pass it verbatim; the user can approve it once, or approve its matched config pattern for this turn or the rest of the session. Turn approval expires at the next user message.',
         }),
       ),
       reason: Type.String({
@@ -461,10 +461,14 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
           outcome.status === "granted"
             ? outcome.grant === "session"
               ? `User approved this command via ask_permission (in this session). Every command matching the pattern ${outcome.approvedPattern} now runs via bash without further confirmation for the rest of the session.`
-              : "User approved this command via ask_permission; re-send the same bash call to run it (one-shot)."
+              : outcome.grant === "turn"
+                ? `User approved this command via ask_permission (in this turn). Every command matching the pattern ${outcome.approvedPattern} now runs via bash without further confirmation until the next user message.`
+                : "User approved this command via ask_permission; re-send the same bash call to run it (one-shot)."
             : outcome.status === "already granted"
               ? outcome.approvedPattern !== undefined
-                ? `No approval needed: every command matching the session-approved pattern ${outcome.approvedPattern} runs via bash without confirmation.`
+                ? outcome.grant === "turn"
+                  ? `No approval needed: every command matching the turn-approved pattern ${outcome.approvedPattern} runs via bash without confirmation until the next user message.`
+                  : `No approval needed: every command matching the session-approved pattern ${outcome.approvedPattern} runs via bash without confirmation.`
                 : `No approval needed: ${outcome.command} is allowed by config.`
               : `User denied this command.` +
                 (outcome.reason === undefined ? "" : `\nUser reason: ${outcome.reason}`);
@@ -482,7 +486,10 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
                 }
               : {}),
             ...(outcome.status === "already granted" && outcome.approvedPattern !== undefined
-              ? { approvedPattern: outcome.approvedPattern }
+              ? {
+                  approvedPattern: outcome.approvedPattern,
+                  ...(outcome.grant === "turn" ? { grant: "turn" } : {}),
+                }
               : {}),
             ...(outcome.status === "denied" && outcome.reason !== undefined
               ? { reason: outcome.reason }
@@ -536,9 +543,16 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     },
   });
 
-  // Warn once at session start about command patterns that failed regex
-  // compilation and are therefore ignored (SPEC §6).
+  pi.on("input", () => {
+    sandbox.expireTurnCommandApprovals();
+    return { action: "continue" };
+  });
+  pi.on("message_start", (event) => {
+    if (event.message.role === "user") sandbox.expireTurnCommandApprovals();
+  });
+  pi.on("session_shutdown", () => sandbox.expireTurnCommandApprovals());
   pi.on("session_start", (_event, ctx) => {
+    sandbox.expireTurnCommandApprovals();
     if (sandbox.invalidCommandPatterns.length === 0) return;
     const patterns = sandbox.invalidCommandPatterns.map((p) => JSON.stringify(p)).join(", ");
     ctx.ui.notify(
