@@ -32,7 +32,7 @@ export interface SystemPromptTemplate {
 export type ListItem = Record<string, string>;
 
 export interface RuntimeVariableInput {
-  /** Harness rendering the prompt; pi here, dsh for the future dsh plugin. */
+  /** Harness rendering the prompt. */
   codingAgent: string;
   /** Tool that reads skill files; omitted when no selected tool can. */
   fileReadTool?: "read" | "bash";

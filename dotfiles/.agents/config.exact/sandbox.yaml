@@ -12,7 +12,6 @@ write:
       - ~/.agents/worktrees/${REPOSITORY_NAME}
       - ~/.agents/work/${REPOSITORY_NAME}
       - ~/.agents/tickets
-      - ~/.dsh
       - ~/.pi
       - ~/.config
       - /tmp
@@ -38,16 +37,14 @@ write:
       - ~/mirrors
   - ask:
       - ~/.agents/config
-      - ~/.dsh/config
       - ~/.pi/agent/config
       - /mnt
 
-# Auth files that bash tools need for authentication but dsh and pi fs tools
+# Auth files that bash tools need for authentication but pi fs tools
 # (read/write/edit/glob/grep/find/ls) must never touch. Bound read-only into the
 # bash sandbox, always denied (and masked) for fs tools. See SPEC §2.2.
 credentials:
   - ~/.pi/agent/auth.json
-  - ~/.dsh/.credentials.yaml
   # package registries
   - ~/.npmrc
   - ~/.bunfig.toml

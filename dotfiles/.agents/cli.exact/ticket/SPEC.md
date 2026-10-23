@@ -1,6 +1,6 @@
 # ticket spec
 
-`ticket` は `~/.agents/tickets/` の Markdown ticket を操作するCLI であり、pi と dsh は同じ5 tool でこの CLI をラップする（末尾の「toolラッパー」）。
+`ticket` は `~/.agents/tickets/` の Markdown ticket を操作するCLI であり、pi は5つの tool でこの CLI をラップする（末尾の「toolラッパー」）。
 
 ## ストアと安全境界
 
@@ -68,7 +68,7 @@ frontmatter、重複field、status、missing after、after cycle を検証する
 
 ## toolラッパー
 
-pi と dsh は、同じ5 tool で `ticket` CLI をラップする。ストア形式、状態遷移、排他、エラーは上の CLI の章が正であり、tool はストアへ直接アクセスしない。
+pi は、5つの tool で `ticket` CLI をラップする。ストア形式、状態遷移、排他、エラーは上の CLI の章が正であり、tool はストアへ直接アクセスしない。
 
 | tool | CLI |
 | --- | --- |
@@ -81,9 +81,8 @@ pi と dsh は、同じ5 tool で `ticket` CLI をラップする。ストア形
 ### 共通
 
 - tool は CLI を `--json` なしで実行し、stdout のテキスト（CLI のテキスト出力）を tool content にそのまま返す。session cwd を渡し、`project` があれば `--project` に渡す
-- read tool の dsh agent-less call は process cwd を CLI cwd にする
 - CLI の非0 exit と実行不能は tool failure として返す。エラーテキストは CLI の stderr（空ならエラーメッセージ）
-- pi は `ticket_create`、`ticket_set`、`ticket_edit` を sequential に dispatchする。dsh の default exclusive dispatch と合わせ、同じassistant response内の write call は model order で実行する
+- pi は `ticket_create`、`ticket_set`、`ticket_edit` を sequential に dispatchし、同じassistant response内の write call は model order で実行する
 - pi の tool content は最大50 KiB または 2,000行。超過すると先頭を返し、上限・全体量・完全本文を CLI で得る旨を marker に含める。truncation時は同じ引数に `--json` を付けてread tool だけ再実行し、`details` に CLI の完全JSON を保持する
 - 各description は対応CLI、引数、selector の完全ID / 一意prefix / `next`、省略時の `next`、project の選択と cwd既定を説明する
 
@@ -105,4 +104,4 @@ pi と dsh は、同じ5 tool で `ticket` CLI をラップする。ストア形
 
 ### `ticket_edit`
 
-引数は任意の `selector: string`、`project: string` と必須の `old: string`、`new: string`。old は空でない。pi は schema、dsh は local validation で、空old を CLI起動前に失敗させる。old と new は `--` の後に literal な位置引数として渡す。成功時は updated ID、status、after、path を返す。
+引数は任意の `selector: string`、`project: string` と必須の `old: string`、`new: string`。old は空でない。pi は schema で、空old を CLI起動前に失敗させる。old と new は `--` の後に literal な位置引数として渡す。成功時は updated ID、status、after、path を返す。

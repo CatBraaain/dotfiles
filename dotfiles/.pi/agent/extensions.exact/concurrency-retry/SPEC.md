@@ -4,7 +4,7 @@
 
 ## 対象
 
-検出は fail-closed である。最終assistantエラーの `errorMessage` に、同時実行を明示する証拠がある場合だけ対象とする。判定は `dsh` の `dotfiles/.dsh/plugins.exact/concurrency-retry` と同じ方針で、プロバイダごとの専用証拠とプロバイダ非依存の共通証拠を使う。
+検出は fail-closed である。最終assistantエラーの `errorMessage` に、同時実行を明示する証拠がある場合だけ対象とする。判定はプロバイダごとの専用証拠とプロバイダ非依存の共通証拠を使う。
 
 | プロバイダ / detector | concurrency と確定する証拠 |
 | --- | --- |

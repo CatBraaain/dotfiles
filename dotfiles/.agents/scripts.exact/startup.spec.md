@@ -1,12 +1,12 @@
 # startup Spec
 
-`~/.agents/scripts/startup` は、harness（pi / dsh）起動時に1回実行される共通の primingスクリプトである。pi と dsh の両方から detached実行されるため、**個々のタスクは二重実行に耐えること**を契約とする。この spec はスクリプトが現在担当するタスクの契約であり、タスクの追加・削除はこの spec とスクリプトの同時更新を要求する。キャッシュ（timestamp file等）の方式はここでは定義しない。タスクごとに必要になったときの実装選択肢である。
+`~/.agents/scripts/startup` は、pi 起動時に1回実行される primingスクリプトである。detached で実行され、二重実行がありうるため、**個々のタスクは二重実行に耐えること**を契約とする。この spec はスクリプトが現在担当するタスクの契約であり、タスクの追加・削除はこの spec とスクリプトの同時更新を要求する。キャッシュ（timestamp file等）の方式はここでは定義しない。タスクごとに必要になったときの実装選択肢である。
 
 ## 実行の前提
 
 | 項目 | 契約 |
 | --- | --- |
-| 呼び出し元 | pi拡張 `startup`、dsh plugin `dotfiles-dsh-startup`（両方detached で呼ぶ） |
+| 呼び出し元 | pi拡張 `startup`（detached で呼ぶ） |
 | 複数回実行 | 許容する。各タスクが自身で冪等性を持つ |
 | 完了待ち | しない。スクリプトは全タスクを fire-and-forget で起動して即座に終了する |
 | 失敗 | スクリプトの失敗が呼び出し元（harness の起動）に影響しない |
@@ -24,9 +24,9 @@
 - camoufox server は health check が失敗したときだけ起動する。server は `browse` CLI に内蔵され、`browse server start` が Linux の Xvfb / x11vnc の維持を行い、出力は `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記する
 - pi update は stamp（`${TMPDIR:-/tmp}/pi-update-stamp`、Unix秒）から 12時間以上経過していて `pi` が PATH にあるときだけ起動する。stamp が無い・読み取れない・非数字のときは throttle なしで起動する（tmp配下なので再起動で消えたときも含む）。stamp は spawn より先に書く（起動後の成否は追跡しない）。`flock` / `pi` が PATH に無い場合はスキップする。`--all` により pi本体とパッケージの両方を更新対象にする（`--extensions` はパッケージのみで pi本体を更新しないため不採用）
 - `~/.agents/cli/browse` が存在しない、`openserp` / `deja` が PATH に無い場合は、そのタスクを黙ってスキップする
-- openserp の host / port は接続先URL の authority から取る（dsh / pi の web-search拡張と同じ解決）
+- openserp の host / port は接続先URL の authority から取る（pi の web-search拡張と同じ解決）
 
 ## スコープ外
 
-- ツール実行時のサーバー起動待ちとタイムアウトは pi / dsh の web-search拡張の受け持ち（このスクリプトは起動待ちをしない）
+- ツール実行時のサーバー起動待ちとタイムアウトは pi の web-search拡張の受け持ち（このスクリプトは起動待ちをしない）
 - タスクの成功・失敗の通知、ログの集約

@@ -6,9 +6,6 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | key | linux | windows | macos |
 | --- | --- | --- | --- |
 | .agents |  | - | - |
-| .dsh |  | - | - |
-| .dsh/test | - | - | - |
-| .dsh/plugins.exact/build.apply.test.ts | - | - | - |
 | .gitconfig.local.sample | - | - | - |
 | .pi |  | - | - |
 | .pi/agent/bun_install.apply.test.ts | - | - | - |

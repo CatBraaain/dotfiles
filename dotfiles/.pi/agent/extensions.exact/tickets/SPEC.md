@@ -17,7 +17,6 @@ extensions.exact/tickets/
 
 - `index.ts` は、tool登録、tool引数から CLI引数へのマッピング（`buildListArgs` / `buildShowArgs` / `buildCreateArgs` / `buildSetArgs` / `buildEditArgs`）、CLI spawn（`spawnTicketCli`、`appendJsonFlag`、runner型 `TicketCliRunner`）、description と promptSnippet の組み立て（`ticketToolDescriptions` / `ticketToolPromptSnippets`）を exportする
 - `index.test.ts` は上記export の検証に限定する。CLI spawn は stub CLI projectディレクトリ（`deps.cliDir` 注入）でのみ検証し、実際の ticket CLI は呼ばない
-- dsh側（`dotfiles/.dsh/plugins.exact/tickets/`）が同名・同引数・同振る舞いの tool を登録する（`ticket/SPEC.md` の「toolラッパー」）
 
 ## 登録tool
 

@@ -414,15 +414,15 @@ tiers:
 
 ```yaml
 # config.merge-machine.yaml
-dsh:
-  profile:
-    "bundles.$replace":
+tiers:
+  high:
+    "$replace":
       - provider: cursor
 ```
 
 ```yaml
 # config.merge-machine.yaml
-"dsh.profile.bundles.$replace":
+"tiers.high.$replace":
   - provider: cursor
 ```
 
@@ -430,13 +430,13 @@ TOML では `$` を含むキー名を quoted key で書く。次の 2つは等�
 
 ```toml
 # config.merge-machine.toml
-[dsh.profile]
-"bundles.$replace" = [{ provider = "cursor" }]
+[tiers.high]
+"$replace" = [{ provider = "cursor" }]
 ```
 
 ```toml
 # config.merge-machine.toml
-dsh.profile."bundles.$replace" = [{ provider = "cursor" }]
+tiers.high."$replace" = [{ provider = "cursor" }]
 ```
 
 ## 差分検知

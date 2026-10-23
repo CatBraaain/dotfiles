@@ -172,7 +172,7 @@ server の実行環境は環境変数で上書きできる:
 | `CAMOUFOX_EXECUTABLE_PATH` | camoufoxブラウザの実行ファイル | `~/.cache/camoufox/camoufox-bin` |
 | `CAMOUFOX_PLAYWRIGHT_CORE` | server が使うplaywright-core | playwright-cli内蔵の playwright-core（PATH上の `playwright-cli` の場所から解決） |
 
-fingerprint生成に使うcamoufox-js は、候補ディレクトリ（`~/.dsh/plugins/web-search`・`~/.pi/agent`）から順に解決する。
+fingerprint生成に使うcamoufox-js は、`~/.pi/agent` 配下から解決する。
 
 server は SIGINT / SIGTERM を受け取ったとき、PIDファイルから自身の PID を清除してbrowser server を closeし、終了コード0 で終わる。Xvfb と x11vnc はこの時点で停止せず、次回の server起動で再利用される。
 

@@ -16,5 +16,4 @@
 
 ## 非目標
 
-- dsh plugin の dependency install・bundle build
 - VS Code拡張同期

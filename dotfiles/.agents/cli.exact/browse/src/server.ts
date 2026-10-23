@@ -274,14 +274,10 @@ function spawnDetachedServer(
 const nodeRequire = createRequire(import.meta.url);
 
 // This script (~/.agents/cli/browse) has no node_modules of its own, so
-// resolve camoufox-js explicitly from the bun-installed roots that may carry
-// it. Either root satisfies the server; which one is installed is a machine
-// detail.
+// resolve camoufox-js explicitly from the bun-installed pi agent root that
+// may carry it.
 function resolveCamoufoxJsUrl(): string {
-  const candidates = [
-    join(homedir(), ".dsh", "plugins", "web-search"),
-    join(homedir(), ".pi", "agent"),
-  ];
+  const candidates = [join(homedir(), ".pi", "agent")];
   for (const dir of candidates) {
     try {
       const resolved = nodeRequire.resolve("camoufox-js/dist/utils.js", { paths: [dir] });

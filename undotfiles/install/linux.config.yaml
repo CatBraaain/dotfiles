@@ -83,7 +83,6 @@ work:
   - brew: shellcheck
   - brew: shfmt
   - brew: watchexec
-  - bun: "@deepseek-ai/dsh@next"
   - bun: "@earendil-works/pi-coding-agent"
   - bun: "@openai/codex"
   - bun: "@playwright/cli"
@@ -93,7 +92,8 @@ work:
   - uv: "mineru[all]"
   - go: github.com/karust/openserp
 
-  # Playwright browser for the dsh web smoke test.
+  # Chromium browser for playwright-cli.
+  # htmlshot also resolves ~/.cache/ms-playwright/chromium-* for its renders.
   - run: "playwright-cli install-browser chrome-for-testing"
 
   # General CLI tools
