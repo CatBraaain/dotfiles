@@ -2,7 +2,7 @@ import { readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { markingPath, readInstallProfile } from "./marking.ts";
+import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
 
 export type Key =
   | "apt"
@@ -21,6 +21,8 @@ export type Entry = { key: Key; value: string };
 export type InstallBatch = { key: BatchableKey; values: readonly string[] } | Entry;
 type State = Map<DeclarativeKey, Map<string, string>>;
 type CustomHandler = () => void | Promise<void>;
+type PersonalOnlyHandler = { isInstalled: () => boolean; remove: () => void };
+export type ProfileEntries = { work: readonly Entry[]; personal: readonly Entry[] };
 
 export interface Runtime {
   execute(command: readonly string[]): void;
@@ -101,6 +103,8 @@ const tmpfilesConfig = "q /tmp 1777 root root 2d";
 const blenderReleaseUrl = "https://download.blender.org/release/";
 const blenderInstallRoot = "/opt";
 const blenderBinPath = "/usr/local/bin/blender";
+const blenderManagedLinkPattern = /^\/opt\/blender-\d+\.\d+\.\d+-linux-x64\/blender$/;
+const blenderManagedDirCommand = `find ${blenderInstallRoot} -maxdepth 1 -type d -regex '.*/blender-[0-9]+\\.[0-9]+\\.[0-9]+-linux-x64'`;
 const blenderLatestArchiveCommand =
   `family=$(curl -fsSL ${blenderReleaseUrl} | grep -oE 'Blender[0-9]+\\.[0-9]+/' | sort -uV | tail -1); ` +
   `curl -fsSL ${blenderReleaseUrl}$family | grep -oE 'blender-[0-9.]+-linux-x64\\.tar\\.xz' | sort -uV | tail -1`;
@@ -108,6 +112,7 @@ const blenderLatestArchiveCommand =
 export class Bootstrap {
   private readonly failures: string[] = [];
   private readonly customHandlers: ReadonlyMap<string, CustomHandler>;
+  private readonly personalOnlyHandlers: ReadonlyMap<string, PersonalOnlyHandler>;
   private flatpakRemotePrepared = false;
 
   constructor(
@@ -116,23 +121,25 @@ export class Bootstrap {
     customHandlers?: ReadonlyMap<string, CustomHandler>,
   ) {
     this.customHandlers = customHandlers ?? this.defaultCustomHandlers();
+    this.personalOnlyHandlers = this.defaultPersonalOnlyHandlers();
   }
 
-  async sync(): Promise<number> {
+  async sync(profile: InstallProfile): Promise<number> {
     const aptValues = this.entries
       .filter((entry) => entry.key === "apt")
       .map((entry) => entry.value);
-    if (aptValues.length > 0) await this.install({ key: "apt", values: aptValues });
+    if (aptValues.length > 0) await this.install({ key: "apt", values: aptValues }, profile);
 
     const entriesWithoutApt = this.entries.filter((entry) => entry.key !== "apt");
-    for (const batch of coalesceEntries(entriesWithoutApt)) await this.install(batch);
+    for (const batch of coalesceEntries(entriesWithoutApt)) await this.install(batch, profile);
 
     const states = this.readStates();
     for (const key of declarativeKeys) this.removeUnused(key, states.get(key));
+    if (profile === "work") this.removePersonalOnlyPackages();
     return this.finish();
   }
 
-  async diff(): Promise<number> {
+  async diff(profile: InstallProfile): Promise<number> {
     const states = this.readStates();
     for (const key of declarativeKeys) {
       const current = states.get(key);
@@ -145,9 +152,11 @@ export class Bootstrap {
     for (const entry of this.entries) {
       if (isDeclarative(entry.key) && !states.has(entry.key)) continue;
       if (entry.key === "custom") {
-        this.runtime.log(`custom: ${entry.value}`);
         if (!this.customHandlers.has(entry.value))
           this.fail(`unknown custom handler: ${entry.value}`);
+        else if (profile === "work" && this.personalOnlyHandlers.has(entry.value))
+          this.fail(`personal-only custom handler in work config: ${entry.value}`);
+        else this.runtime.log(`custom: ${entry.value}`);
         continue;
       }
       if (entry.key === "apt" && isAptInstalled(this.runtime, entry.value)) continue;
@@ -158,6 +167,9 @@ export class Bootstrap {
           : `install / update ${entry.key}: ${entry.value}`,
       );
     }
+    if (profile === "work")
+      for (const [name, handler] of this.personalOnlyHandlers)
+        if (handler.isInstalled()) this.runtime.log(`remove custom: ${name}`);
     return this.finish();
   }
 
@@ -227,10 +239,14 @@ export class Bootstrap {
     });
   }
 
-  private async install(batch: InstallBatch): Promise<void> {
+  private async install(batch: InstallBatch, profile: InstallProfile): Promise<void> {
     if (!isBatch(batch)) {
       const entry = batch;
       if (entry.key === "custom") {
+        if (profile === "work" && this.personalOnlyHandlers.has(entry.value)) {
+          this.fail(`personal-only custom handler in work config: ${entry.value}`);
+          return;
+        }
         const handler = this.customHandlers.get(entry.value);
         if (!handler) {
           this.fail(`unknown custom handler: ${entry.value}`);
@@ -357,6 +373,40 @@ export class Bootstrap {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  }
+
+  private defaultPersonalOnlyHandlers(): ReadonlyMap<string, PersonalOnlyHandler> {
+    return new Map([
+      [
+        "blender",
+        { isInstalled: () => this.isBlenderInstalled(), remove: () => this.removeBlender() },
+      ],
+    ]);
+  }
+
+  private removePersonalOnlyPackages(): void {
+    for (const [name, handler] of this.personalOnlyHandlers)
+      this.attempt(`remove custom ${name}`, () => handler.remove());
+  }
+
+  private isBlenderInstalled(): boolean {
+    if (
+      blenderManagedLinkPattern.test(
+        this.runtime.outputAllowFailure(["readlink", blenderBinPath]),
+      )
+    )
+      return true;
+    return this.runtime.outputAllowFailure(["bash", "-c", blenderManagedDirCommand]) !== "";
+  }
+
+  private removeBlender(): void {
+    const linkTarget = this.runtime.outputAllowFailure(["readlink", blenderBinPath]);
+    if (blenderManagedLinkPattern.test(linkTarget))
+      this.runtime.execute(["sudo", "rm", blenderBinPath]);
+
+    const directories = this.runtime.outputAllowFailure(["bash", "-c", blenderManagedDirCommand]);
+    for (const directory of directories.split("\n").filter(Boolean))
+      this.runtime.execute(["sudo", "rm", "-rf", directory]);
   }
 
   private installAndroidSdk(): void {
@@ -637,19 +687,30 @@ function isBatch(batch: InstallBatch): batch is { key: BatchableKey; values: rea
   return "values" in batch;
 }
 
-export function parseConfig(source: string): Entry[] {
+export function parseConfig(source: string): ProfileEntries {
   const parsed = Bun.YAML.parse(source);
-  if (!Array.isArray(parsed)) throw new Error("config top-level value must be an array");
-  return parsed.map((item, index) => {
-    if (!item || typeof item !== "object" || Array.isArray(item))
-      throw new Error(`config entry ${index + 1} must be a map`);
-    const entries = Object.entries(item);
-    if (entries.length !== 1) throw new Error(`config entry ${index + 1} must have one key`);
-    const [key, value] = entries[0]!;
-    if (!validKeys.has(key as Key) || typeof value !== "string")
-      throw new Error(`invalid config entry ${index + 1}`);
-    return { key: key as Key, value };
-  });
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("config top-level value must be a map with work and personal keys");
+  const profileEntries: { work: Entry[]; personal: Entry[] } = { work: [], personal: [] };
+  for (const [profile, value] of Object.entries(parsed)) {
+    if (profile !== "work" && profile !== "personal")
+      throw new Error(`invalid config top-level key: ${profile}`);
+    if (!Array.isArray(value)) throw new Error(`config ${profile} value must be an array`);
+    profileEntries[profile] = value.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item))
+        throw new Error(`config ${profile} entry ${index + 1} must be a map`);
+      const entries = Object.entries(item);
+      if (entries.length !== 1)
+        throw new Error(`config ${profile} entry ${index + 1} must have one key`);
+      const [key, entryValue] = entries[0]!;
+      if (!validKeys.has(key as Key) || typeof entryValue !== "string")
+        throw new Error(`invalid config ${profile} entry ${index + 1}`);
+      return { key: key as Key, value: entryValue };
+    });
+  }
+  if (profileEntries.work.length === 0 && profileEntries.personal.length === 0)
+    throw new Error("config must define entries under work or personal");
+  return profileEntries;
 }
 
 function desiredNames(entries: readonly Entry[], key: DeclarativeKey): Set<string> {
@@ -783,8 +844,10 @@ export async function run(
       });
       if (auth.exitCode !== 0) return 1;
     }
-    const bootstrap = new Bootstrap(parseConfig(await readConfig()), runtime);
-    return command === "sync" ? await bootstrap.sync() : await bootstrap.diff();
+    const config = parseConfig(await readConfig());
+    const entries = profile === "personal" ? [...config.work, ...config.personal] : config.work;
+    const bootstrap = new Bootstrap(entries, runtime);
+    return command === "sync" ? await bootstrap.sync(profile) : await bootstrap.diff(profile);
   } catch (error) {
     runtime.error(message(error));
     return 1;

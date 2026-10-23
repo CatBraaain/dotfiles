@@ -1,139 +1,142 @@
-# System prerequisites
-- apt: flatpak
-# OpenDesign's Linux native folder picker.
-- apt: zenity
-- apt: fonts-noto-cjk
-# Headless Chromium (Playwright E2E recordings) resolves emoji glyphs via fontconfig.
-- apt: fonts-noto-color-emoji
-# Camoufox/Playwright's Firefox runtime needs libasound.so.2 (ALSA), even headless.
-- apt: libasound2t64
-# Camoufox uses Xvfb for a virtual X display and software-rendered WebGL in headless mode.
-- apt: xvfb
-# x11vnc publishes the headed camoufox display for human handoff (CAPTCHA, login).
-- apt: x11vnc
-# Rime Japanese input: Fcitx 5 frontend and Kagiroi's Lua translator support.
-- apt: fcitx5
-- apt: fcitx5-rime
-- apt: librime-plugin-lua
-# Rime behavior tests: Lua interpreter for the managed Lua unit tests and
-# librime headers for the headless integration harness (just test-rime).
-- apt: lua5.4
-- apt: librime-dev
+work:
+  # System prerequisites
+  - apt: flatpak
+  # OpenDesign's Linux native folder picker.
+  - apt: zenity
+  - apt: fonts-noto-cjk
+  # Headless Chromium (Playwright E2E recordings) resolves emoji glyphs via fontconfig.
+  - apt: fonts-noto-color-emoji
+  # Camoufox/Playwright's Firefox runtime needs libasound.so.2 (ALSA), even headless.
+  - apt: libasound2t64
+  # Camoufox uses Xvfb for a virtual X display and software-rendered WebGL in headless mode.
+  - apt: xvfb
+  # x11vnc publishes the headed camoufox display for human handoff (CAPTCHA, login).
+  - apt: x11vnc
+  # Rime Japanese input: Fcitx 5 frontend and Kagiroi's Lua translator support.
+  - apt: fcitx5
+  - apt: fcitx5-rime
+  - apt: librime-plugin-lua
+  # Rime behavior tests: Lua interpreter for the managed Lua unit tests and
+  # librime headers for the headless integration harness (just test-rime).
+  - apt: lua5.4
+  - apt: librime-dev
 
-# Tauri Linux prerequisites.
-- apt: libwebkit2gtk-4.1-dev
-- apt: build-essential
-- apt: curl
-- apt: wget
-- apt: file
-- apt: libxdo-dev
-- apt: libssl-dev
-- apt: libayatana-appindicator3-dev
-- apt: librsvg2-dev
+  # Tauri Linux prerequisites.
+  - apt: libwebkit2gtk-4.1-dev
+  - apt: build-essential
+  - apt: curl
+  - apt: wget
+  - apt: file
+  - apt: libxdo-dev
+  - apt: libssl-dev
+  - apt: libayatana-appindicator3-dev
+  - apt: librsvg2-dev
 
-# System packages
-- brew: bubblewrap
-- brew: coreutils
-- apt: ffmpeg
-- brew: fluid-synth
-- brew: gcc
-- brew: git
-- brew: make
-- brew: powershell
-- brew: socat
-- brew: tmux
-- brew: unzip
+  # System packages
+  - brew: bubblewrap
+  - brew: coreutils
+  - apt: ffmpeg
+  - brew: fluid-synth
+  - brew: gcc
+  - brew: git
+  - brew: make
+  - brew: powershell
+  - brew: socat
+  - brew: tmux
+  - brew: unzip
 
-# Language runtimes
-- brew: bun
-- brew: node
-- brew: uv
-- brew: gup
-- brew: go
-- brew: openjdk
-- brew: rustup
-- run: "rustup update stable"
+  # Language runtimes
+  - brew: bun
+  - brew: node
+  - brew: uv
+  - brew: gup
+  - brew: go
+  - brew: openjdk
+  - brew: rustup
+  - run: "rustup update stable"
 
-# Rust cross-compile target for Windows (x86_64-pc-windows-gnu).
-- brew: mingw-w64
-- run: "rustup target add x86_64-pc-windows-gnu"
+  # Rust cross-compile target for Windows (x86_64-pc-windows-gnu).
+  - brew: mingw-w64
+  - run: "rustup target add x86_64-pc-windows-gnu"
 
-# Tauri test
-- apt: webkitgtk-webdriver
-- cargo: tauri-driver
+  # Tauri test
+  - apt: webkitgtk-webdriver
+  - cargo: tauri-driver
 
-# Standalone tools
-- bun: vite-plus
+  # Standalone tools
+  - bun: vite-plus
 
-# deja-vu
-- run: "curl -fsSL https://raw.githubusercontent.com/vshulcz/deja-vu/main/install.sh | sh"
+  # deja-vu
+  - run: "curl -fsSL https://raw.githubusercontent.com/vshulcz/deja-vu/main/install.sh | sh"
 
-# LLM-only CLI tools
-- brew: ast-grep
-- brew: code2prompt
-- brew: dasel
-- brew: git-delta
-- brew: hyperfine
-- brew: jq
-- brew: keep-sorted
-- brew: pdfcpu
-- brew: rtk
-- brew: sd
-- brew: shellcheck
-- brew: shfmt
-- brew: watchexec
-- bun: "@deepseek-ai/dsh@next"
-- bun: "@earendil-works/pi-coding-agent"
-- bun: "@openai/codex"
-- bun: "@playwright/cli"
-- bun: cursor-agent
-- bun: officecli
-- uv: "trafilatura[all]"
-- uv: "mineru[all]"
-- go: github.com/karust/openserp
+  # LLM-only CLI tools
+  - brew: ast-grep
+  - brew: code2prompt
+  - brew: dasel
+  - brew: git-delta
+  - brew: hyperfine
+  - brew: jq
+  - brew: keep-sorted
+  - brew: pdfcpu
+  - brew: rtk
+  - brew: sd
+  - brew: shellcheck
+  - brew: shfmt
+  - brew: watchexec
+  - bun: "@deepseek-ai/dsh@next"
+  - bun: "@earendil-works/pi-coding-agent"
+  - bun: "@openai/codex"
+  - bun: "@playwright/cli"
+  - bun: cursor-agent
+  - bun: officecli
+  - uv: "trafilatura[all]"
+  - uv: "mineru[all]"
+  - go: github.com/karust/openserp
 
-# Playwright browser for the dsh web smoke test.
-- run: "playwright-cli install-browser chrome-for-testing"
+  # Playwright browser for the dsh web smoke test.
+  - run: "playwright-cli install-browser chrome-for-testing"
 
-# General CLI tools
-- apt: btop
-- brew: act
-- brew: awscli
-- brew: cargo-binstall
-- brew: erdtree
-- brew: eza
-- brew: fd
-- brew: gh
-- brew: git-cliff
-- brew: gopls
-- brew: just
-- brew: just-lsp
-- brew: mise
-- brew: nixfmt
-- brew: pandoc
-- brew: pnpm
-- brew: ripgrep
-- brew: tokei
-- brew: tree-sitter-cli
-- brew: yq
-- bun: "@typescript/native-preview"
-- bun: prettier
-- bun: prettier-markdown-table
-- uv: harlequin
-- uv: yt-dlp
+  # General CLI tools
+  - apt: btop
+  - brew: act
+  - brew: awscli
+  - brew: cargo-binstall
+  - brew: erdtree
+  - brew: eza
+  - brew: fd
+  - brew: gh
+  - brew: git-cliff
+  - brew: gopls
+  - brew: just
+  - brew: just-lsp
+  - brew: mise
+  - brew: nixfmt
+  - brew: pandoc
+  - brew: pnpm
+  - brew: ripgrep
+  - brew: tokei
+  - brew: tree-sitter-cli
+  - brew: yq
+  - bun: "@typescript/native-preview"
+  - bun: prettier
+  - bun: prettier-markdown-table
+  - uv: harlequin
+  - uv: yt-dlp
 
-# Apps and SDKs
-- apt: chromium
-- flatpak: com.visualstudio.code
-- custom: drawio
-# blender.org official build with CUDA/OptiX support; the apt dfsg build ships without it.
-- custom: blender
-- custom: generaluser-gs
-- custom: openwhispr
-- custom: rustdesk
-- brew-cask: android-commandlinetools
-- custom: android-sdk
-# OpenDesign: source install into ~/mirrors/open-design. The od wrapper in ~/.local/bin shadows /usr/bin/od.
-- custom: opendesign
-# /tmp on disk: mask the systemd tmpfs mount and age /tmp entries out after 2 days.
-- custom: tmp-disk
+  # Apps and SDKs
+  - apt: chromium
+  - flatpak: com.visualstudio.code
+  - custom: drawio
+  - custom: generaluser-gs
+  - custom: openwhispr
+  - custom: rustdesk
+  - brew-cask: android-commandlinetools
+  - custom: android-sdk
+  # OpenDesign: source install into ~/mirrors/open-design. The od wrapper in ~/.local/bin shadows /usr/bin/od.
+  - custom: opendesign
+  # /tmp on disk: mask the systemd tmpfs mount and age /tmp entries out after 2 days.
+  - custom: tmp-disk
+
+personal:
+  # blender.org official build with CUDA/OptiX support; the apt dfsg build ships without it.
+  - custom: blender
