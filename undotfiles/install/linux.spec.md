@@ -16,18 +16,18 @@
 
 設定ファイルは`linux.ts`と同じディレクトリにある`linux.config.yaml`である。トップレベルは配列で、各要素はキーが1つだけのマップとし、その値は1つの文字列とする。`apt`以外の項目では、配列の順序がInstall / Ensure Phaseの実行順序を表す。`apt`項目はこの順序によらず、Install / Ensure Phaseの先頭でまとめて処理する。
 
-| キー | 値 | 管理方式 |
-| --- | --- | --- |
-| `apt` | Debianパッケージ指定 | 存在保証 |
-| `flatpak` | FlatpakアプリID | 存在保証 |
-| `uv` | Pythonパッケージ指定 | 宣言的 |
-| `bun` | npmパッケージ指定 | 宣言的 |
-| `cargo` | Rust binary crateのパッケージ指定 | 宣言的 |
-| `go` | Go toolのパッケージパス | 宣言的 |
-| `brew` | Homebrew Formula名 | 宣言的 |
-| `brew-cask` | Homebrew Cask名 | 宣言的 |
-| `custom` | Custom Handler名 | Handlerによる存在保証 |
-| `run` | シェルコマンド | 毎回実行 |
+| キー        | 値                                | 管理方式              |
+| ----------- | --------------------------------- | --------------------- |
+| `apt`       | Debianパッケージ指定              | 存在保証              |
+| `flatpak`   | FlatpakアプリID                   | 存在保証              |
+| `uv`        | Pythonパッケージ指定              | 宣言的                |
+| `bun`       | npmパッケージ指定                 | 宣言的                |
+| `cargo`     | Rust binary crateのパッケージ指定 | 宣言的                |
+| `go`        | Go toolのパッケージパス           | 宣言的                |
+| `brew`      | Homebrew Formula名                | 宣言的                |
+| `brew-cask` | Homebrew Cask名                   | 宣言的                |
+| `custom`    | Custom Handler名                  | Handlerによる存在保証 |
+| `run`       | シェルコマンド                    | 毎回実行              |
 
 設定の例:
 
@@ -50,7 +50,9 @@
 
 `uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。`cargo`のパッケージ指定はcrates.ioのcrate名または`crate@version`とし、Desired Stateのパッケージ識別子は`@version`より前のcrate名とする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。`brew`の現在状態は`brew leaves`で取得し、他のFormulaの依存先であるFormulaを削除対象に含めない。`cargo`の現在状態は`cargo install --list`で取得する。`go`の現在状態は`gup list --json`で取得する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除を行わず、失敗として記録する。
 
-`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`openwhispr`、`rustdesk`、`generaluser-gs`は目的状態を保証する。
+`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`blender`、`openwhispr`、`rustdesk`、`generaluser-gs`は目的状態を保証する。
+
+`blender`の目的状態は、download.blender.orgの最新安定版releaseのlinux-x64 tarballを`/opt/blender-{version}-linux-x64`（`{version}`は`数字.数字.数字`）へ展開し、`/usr/local/bin/blender`がその中の`blender`実行ファイルへのsymlinkであることとする。同じrelease versionが既に`/opt`に展開済みなら再取得せず、symlinkが目的と異なるときだけ張り直す。releaseの一覧の取得に失敗した場合、またはx86_64以外のLinuxで実行した場合は失敗として記録する。
 
 `openwhispr`の目的状態は、OpenWhisprのx86_64 Linux向け最新GitHub releaseに含まれる`.deb`を導入し、既に同じrelease versionが導入済みなら再導入しないこととする。releaseの取得に失敗した場合、またはx86_64以外のLinuxで実行した場合は失敗として記録する。
 
@@ -79,18 +81,18 @@
 
 最初に設定配列から全`apt`項目を収集し、1つのバッチとして処理する。その後、`apt`項目を除いた設定配列を先頭から末尾へ処理する。`flatpak`、`uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`では、配列上で連続する同じキーの項目を1つのバックエンド操作にまとめる。`custom`と`run`はまとめない。異なるキーが挟まれたあとに再び同じキーが現れた場合は、別のバッチとして処理する。`go install`は同一バッチ内の引数でバージョンsuffixが一致している必要があり、不一致のときはバックエンドが失敗する。宣言的Managerと`run`の各項目は、導入済みかどうかにかかわらず実行する。
 
-| キー | 振る舞い |
-| --- | --- |
-| `apt` | 設定配列中の全パッケージ値から解決したDebianパッケージ名について`dpkg-query -W`で導入済みか確認し、未導入のものだけを1回のinstall操作で導入する。全対象が導入済みなら何もしない。未導入のものがあるときだけ、install操作の前に`sudo apt update`を1回実行する。 |
-| `flatpak` | 各アプリIDについて`flatpak info --user`で導入済みか確認し、未導入のものだけinstall操作を実行する。バッチ内の対象がすべて導入済みなら何もしない。未導入のものがあるときだけ、最初の`flatpak`バッチ処理前に`flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo`を1回実行する。 |
-| `uv` | 指定されたPythonパッケージごとに `uv tool install -q` を実行する。連続する`uv`項目は1つの処理単位にまとめるが、1パッケージずつ実行する。導入済みの already installedメッセージは出ない。 |
-| `bun` | 指定されたnpmパッケージに対して `bun add -g --silent` を実行する。`bun add` の installed要約は出ない。 |
-| `cargo` | 指定されたRust binary crateに対して `cargo install --quiet` を実行する。既定のインストールルートにある導入済みcrateはCargoの判定に従って最新化または維持する。 |
-| `go` | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。 |
-| `brew` | 指定されたFormulaに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet` を実行する。already-installed警告、reinstall案内、Homebrew の環境ヒントと進捗表示は出ない。 |
-| `brew-cask` | 指定されたCaskに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet --cask` を実行する。Not upgrading警告、Homebrew の環境ヒントと進捗表示は出ない。 |
-| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`openwhispr`はGitHub releaseの`.deb`を`sudo apt install -y`で導入する。`rustdesk`もGitHub releaseの`.deb`を同様に導入する。`generaluser-gs`は`mrbumpy409/GeneralUser-GS`の`main`ブランチの`GeneralUser-GS.sf2`を`~/.local/share/soundfonts/`へダウンロードする。名前に対応するHandlerがなければ失敗として記録する。 |
-| `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
+| キー        | 振る舞い                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apt`       | 設定配列中の全パッケージ値から解決したDebianパッケージ名について`dpkg-query -W`で導入済みか確認し、未導入のものだけを1回のinstall操作で導入する。全対象が導入済みなら何もしない。未導入のものがあるときだけ、install操作の前に`sudo apt update`を1回実行する。                                                                                                                                                                                                                                                                                       |
+| `flatpak`   | 各アプリIDについて`flatpak info --user`で導入済みか確認し、未導入のものだけinstall操作を実行する。バッチ内の対象がすべて導入済みなら何もしない。未導入のものがあるときだけ、最初の`flatpak`バッチ処理前に`flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo`を1回実行する。                                                                                                                                                                                                                          |
+| `uv`        | 指定されたPythonパッケージごとに `uv tool install -q` を実行する。連続する`uv`項目は1つの処理単位にまとめるが、1パッケージずつ実行する。導入済みの already installedメッセージは出ない。                                                                                                                                                                                                                                                                                                                                                             |
+| `bun`       | 指定されたnpmパッケージに対して `bun add -g --silent` を実行する。`bun add` の installed要約は出ない。                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `cargo`     | 指定されたRust binary crateに対して `cargo install --quiet` を実行する。既定のインストールルートにある導入済みcrateはCargoの判定に従って最新化または維持する。                                                                                                                                                                                                                                                                                                                                                                                       |
+| `go`        | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `brew`      | 指定されたFormulaに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet` を実行する。already-installed警告、reinstall案内、Homebrew の環境ヒントと進捗表示は出ない。                                                                                                                                                                                                                                                                                                                                                                                 |
+| `brew-cask` | 指定されたCaskに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet --cask` を実行する。Not upgrading警告、Homebrew の環境ヒントと進捗表示は出ない。                                                                                                                                                                                                                                                                                                                                                                                                |
+| `custom`    | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`blender`はdownload.blender.orgの最新安定版linux-x64 tarballを`/opt`へ展開し、`/usr/local/bin/blender`からblender実行ファイルへのsymlinkを保証する。`openwhispr`はGitHub releaseの`.deb`を`sudo apt install -y`で導入する。`rustdesk`もGitHub releaseの`.deb`を同様に導入する。`generaluser-gs`は`mrbumpy409/GeneralUser-GS`の`main`ブランチの`GeneralUser-GS.sf2`を`~/.local/share/soundfonts/`へダウンロードする。名前に対応するHandlerがなければ失敗として記録する。 |
+| `run`       | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ### 2. State Read
 
@@ -100,14 +102,14 @@
 
 各Declarative Managerで、現在のグローバル状態にあり、そのManagerのDesired Stateにない項目を削除する。
 
-| Manager | 削除対象 | 削除の単位 |
-| --- | --- | --- |
-| uv | Desired StateにないPythonパッケージ | uvごとにまとめて処理 |
-| bun | Desired Stateにないグローバルnpmパッケージ | bunごとにまとめて処理 |
-| cargo | Desired StateにないRust binary crate | `cargo uninstall`でcrate群として処理 |
-| go | Desired StateにないGo tool | gupごとにまとめて処理 |
-| brew | Desired StateにないFormula | Formula群として処理 |
-| brew-cask | Desired StateにないCask | Cask群として処理 |
+| Manager   | 削除対象                                   | 削除の単位                           |
+| --------- | ------------------------------------------ | ------------------------------------ |
+| uv        | Desired StateにないPythonパッケージ        | uvごとにまとめて処理                 |
+| bun       | Desired Stateにないグローバルnpmパッケージ | bunごとにまとめて処理                |
+| cargo     | Desired StateにないRust binary crate       | `cargo uninstall`でcrate群として処理 |
+| go        | Desired StateにないGo tool                 | gupごとにまとめて処理                |
+| brew      | Desired StateにないFormula                 | Formula群として処理                  |
+| brew-cask | Desired StateにないCask                    | Cask群として処理                     |
 
 Uninstall Phaseは、設定ファイル内の要素順序に従わない。Managerはキー名のアルファベット順、`brew-cask`、`brew`、`bun`、`cargo`、`go`、`uv`で処理する。`apt`、`flatpak`、`custom`、`run`はこのフェーズで処理しない。
 

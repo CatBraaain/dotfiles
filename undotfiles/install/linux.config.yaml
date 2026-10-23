@@ -34,7 +34,6 @@
 # System packages
 - brew: bubblewrap
 - brew: coreutils
-- apt: blender
 - apt: ffmpeg
 - brew: fluid-synth
 - brew: gcc
@@ -127,6 +126,8 @@
 - apt: chromium
 - flatpak: com.visualstudio.code
 - custom: drawio
+# blender.org official build with CUDA/OptiX support; the apt dfsg build ships without it.
+- custom: blender
 - custom: generaluser-gs
 - custom: openwhispr
 - custom: rustdesk

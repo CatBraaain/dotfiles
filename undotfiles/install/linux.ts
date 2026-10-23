@@ -98,6 +98,13 @@ const tmpMountOverridePath = "/etc/systemd/system/tmp.mount";
 const tmpfilesConfigPath = "/etc/tmpfiles.d/tmp.conf";
 const tmpfilesConfig = "q /tmp 1777 root root 2d";
 
+const blenderReleaseUrl = "https://download.blender.org/release/";
+const blenderInstallRoot = "/opt";
+const blenderBinPath = "/usr/local/bin/blender";
+const blenderLatestArchiveCommand =
+  `family=$(curl -fsSL ${blenderReleaseUrl} | grep -oE 'Blender[0-9]+\\.[0-9]+/' | sort -uV | tail -1); ` +
+  `curl -fsSL ${blenderReleaseUrl}$family | grep -oE 'blender-[0-9.]+-linux-x64\\.tar\\.xz' | sort -uV | tail -1`;
+
 export class Bootstrap {
   private readonly failures: string[] = [];
   private readonly customHandlers: ReadonlyMap<string, CustomHandler>;
@@ -300,6 +307,7 @@ export class Bootstrap {
   private defaultCustomHandlers(): ReadonlyMap<string, CustomHandler> {
     return new Map([
       ["android-sdk", () => this.installAndroidSdk()],
+      ["blender", () => this.installBlender()],
       ["drawio", () => this.installDrawio()],
       ["generaluser-gs", () => this.installGeneralUserGs()],
       ["openwhispr", () => this.installOpenWhispr()],
@@ -307,6 +315,48 @@ export class Bootstrap {
       ["opendesign", () => this.installOpenDesign()],
       ["tmp-disk", () => this.ensureTmpDisk()],
     ]);
+  }
+
+  private async installBlender(): Promise<void> {
+    if (this.runtime.output(["uname", "-m"]) !== "x86_64")
+      throw new Error("Blender linux-x64 tarball supports x86_64 only");
+
+    const archive = this.runtime.output(["bash", "-c", blenderLatestArchiveCommand]);
+    const version = archive.match(/^blender-(\d+\.\d+\.\d+)-linux-x64\.tar\.xz$/)?.[1];
+    if (!version) throw new Error(`unexpected Blender release name: ${archive}`);
+
+    const installDir = join(blenderInstallRoot, `blender-${version}-linux-x64`);
+    const binTarget = join(installDir, "blender");
+    if (this.runtime.succeeds(["test", "-d", installDir])) {
+      if (this.runtime.outputAllowFailure(["readlink", blenderBinPath]) !== binTarget)
+        this.runtime.execute(["sudo", "ln", "-sfn", binTarget, blenderBinPath]);
+      return;
+    }
+
+    const family = version.split(".").slice(0, 2).join(".");
+    const directory = await mkdtemp(join(tmpdir(), "bootstrap-blender-"));
+    try {
+      this.runtime.execute([
+        "curl",
+        "-fL",
+        "--retry",
+        "3",
+        "-o",
+        join(directory, archive),
+        `${blenderReleaseUrl}Blender${family}/${archive}`,
+      ]);
+      this.runtime.execute([
+        "sudo",
+        "tar",
+        "-xJf",
+        join(directory, archive),
+        "-C",
+        blenderInstallRoot,
+      ]);
+      this.runtime.execute(["sudo", "ln", "-sfn", binTarget, blenderBinPath]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 
   private installAndroidSdk(): void {
