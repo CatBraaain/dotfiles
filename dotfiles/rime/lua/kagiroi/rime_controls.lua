@@ -203,8 +203,12 @@ local function keep_display_for_editing(context, env)
         context.input = display
         if env then env.conversion = nil end
     end
-    reset_expansion(context)
-    context:set_option("_kagiroi_hide_candidates", true)
+    if context:get_option("_kagiroi_expand_candidates") then
+        reset_expansion(context)
+    end
+    if not context:get_option("_kagiroi_hide_candidates") then
+        context:set_option("_kagiroi_hide_candidates", true)
+    end
 end
 
 local function prepare_append(context)
