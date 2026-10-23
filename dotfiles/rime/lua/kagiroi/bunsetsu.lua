@@ -328,14 +328,25 @@ local function joined_sentence_entry(clauses)
     return sentence
 end
 
+-- Frequency learning lowers a word's own cost only, so storing the original
+-- connection ids can leave a disfavoured candidate unpromotable; learned
+-- entries use the generic noun ids (dotfiles/rime/SPEC.md, "確定と次入力").
+local function learnable_entry(entry)
+    if not entry then return nil end
+    local stored = DictEntry(entry)
+    stored.text = string.gsub(entry.text, "|%-?%d+ %-?%d+$", "|1851 1851")
+    return stored
+end
+
 function Top.learn(context)
     Top.sync(context)
     local env = session(context)
     for _, clause in ipairs(env.conversion.clauses) do
         local entry = not clause.override and clause.candidates[clause.selected].entry
-        if entry then env.mem:update_userdict(entry, 1, "") end
+        local stored = learnable_entry(entry)
+        if stored then env.mem:update_userdict(stored, 1, "") end
     end
-    local sentence = joined_sentence_entry(env.conversion.clauses)
+    local sentence = learnable_entry(joined_sentence_entry(env.conversion.clauses))
     if sentence then env.mem:update_userdict(sentence, 1, "") end
     env.viterbi:clear()
 end

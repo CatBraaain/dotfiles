@@ -3272,6 +3272,52 @@ static void test_learning_promotes_committed_sentences(void) {
     check(promoted, "the committed sentence must lead the hidden conversion after learning");
 }
 
+/* しか keeps connection ids that lose the lattice on connection costs even
+ * though its own cost is the lowest. Committing it must still promote it
+ * (dotfiles/rime/SPEC.md, "確定と次入力"). */
+static void test_learning_promotes_disfavoured_connection_candidate(void) {
+    RIME_STRUCT(RimeContext, context);
+    char commit[256];
+
+    for (int round = 0; round < 8; ++round) {
+        fresh_session();
+        type_text("sika");
+        press(kSpace);
+        press(kSpace);
+        if (!current_menu(&context)) {
+            check(False, "the sika menu must exist during every learning round");
+            rime->free_context(&context);
+            return;
+        }
+        int highlighted = context.menu.highlighted_candidate_index;
+        int found = -1;
+        for (int i = 0; i < context.menu.num_candidates; ++i) {
+            const char* text = context.menu.candidates[i].text;
+            if (text && strcmp(text, "しか") == 0) found = i;
+        }
+        rime->free_context(&context);
+        check(found >= 0, "every sika learning round must keep しか visible");
+        if (found < 0) return;
+        int steps = (found - highlighted + 10) % 10;
+        for (int i = 0; i < steps; ++i) press(kDown);
+        selected_text(commit, sizeof(commit));
+        check(strcmp(commit, "しか") == 0,
+              "every sika learning round must select しか before committing");
+        if (strcmp(commit, "しか") != 0) return;
+        press(kReturn);
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, "しか") == 0,
+              "every sika learning round must commit しか");
+    }
+
+    fresh_session();
+    type_text("sika");
+    press(kSpace);
+    char preview[128] = "";
+    preview_text(preview, sizeof(preview));
+    check(strcmp(preview, "しか") == 0,
+          "the committed しか must lead the sika conversion after learning");
+}
+
 static void preview_text(char* buffer, size_t size) {
     RIME_STRUCT(RimeContext, context);
     buffer[0] = '\0';
@@ -4375,6 +4421,7 @@ int main(int argc, char* argv[]) {
          * the learned order the baseline comparison depends on. */
         test_learning_promotes_committed_candidate,
         test_learning_promotes_committed_sentences,
+        test_learning_promotes_disfavoured_connection_candidate,
         /* These must also run before any test commits a kyouhakare- sentence:
          * the committed reading's joined entry leads the same reading in a
          * fresh conversion and would shift the baselines below. */
