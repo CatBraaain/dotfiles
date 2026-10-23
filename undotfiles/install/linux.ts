@@ -72,6 +72,8 @@ const openWhisprRepo = "OpenWhispr/openwhispr";
 const openWhisprPackageName = "open-whispr";
 const rustDeskRepo = "rustdesk/rustdesk";
 const rustDeskPackageName = "rustdesk";
+const surgeXtRepo = "surge-synthesizer/releases-xt";
+const surgeXtPackageName = "surge-xt";
 const generalUserGsRepo = "mrbumpy409/GeneralUser-GS";
 const generalUserGsDir = join(homedir(), ".local", "share", "soundfonts");
 const generalUserGsPath = join(generalUserGsDir, "GeneralUser-GS.sf2");
@@ -328,6 +330,7 @@ export class Bootstrap {
       ["generaluser-gs", () => this.installGeneralUserGs()],
       ["openwhispr", () => this.installOpenWhispr()],
       ["rustdesk", () => this.installRustDesk()],
+      ["surge-xt", () => this.installSurgeXt()],
       ["opendesign", () => this.installOpenDesign()],
       ["tmp-disk", () => this.ensureTmpDisk()],
     ]);
@@ -563,6 +566,54 @@ export class Bootstrap {
       ]);
       const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
       if (!file) throw new Error("RustDesk release archive is missing a deb package");
+      this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  private async installSurgeXt(): Promise<void> {
+    if (this.runtime.output(["uname", "-m"]) !== "x86_64")
+      throw new Error("Surge XT Linux release supports x86_64 only");
+
+    const tag = this.runtime.output([
+      "gh",
+      "release",
+      "view",
+      "--repo",
+      surgeXtRepo,
+      "--json",
+      "tagName",
+      "--jq",
+      ".tagName",
+    ]);
+    const version = tag.replace(/^v/, "");
+    if (
+      this.runtime.outputAllowFailure([
+        "dpkg-query",
+        "-W",
+        "-f=${Version}",
+        surgeXtPackageName,
+      ]) === version
+    )
+      return;
+
+    const directory = await mkdtemp(join(tmpdir(), "bootstrap-surge-xt-"));
+    try {
+      this.runtime.execute([
+        "gh",
+        "release",
+        "download",
+        tag,
+        "--repo",
+        surgeXtRepo,
+        "--pattern",
+        `surge-xt-linux-x64-${version}.deb`,
+        "--dir",
+        directory,
+      ]);
+      const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
+      if (!file) throw new Error("Surge XT release archive is missing a deb package");
       this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
     } finally {
       await rm(directory, { recursive: true, force: true });
