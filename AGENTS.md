@@ -17,7 +17,7 @@
 
 データフロー: `dotfiles/` --(dotfiles-manager/src/build.ts)--> `dist/` --(dotfiles-manager/src/apply.ts)--> `~/`
 
-編集はこのワークスペース内のみ。`~/xxx`（ホームディレクトリ配下）をユーザーの許可なく直接書き込み・変更してはいけない。
+編集はこのワークスペース内のみ。`~/xxx`（ホームディレクトリ配下）をユーザーの許可なく直接書き込み・変更してはいけない。この制限は書き込み・変更に適用し、ホームディレクトリ配下のファイルの読み取りは制限しない。
 
 ## `dotfiles/` 内の命名規則
 
@@ -55,9 +55,9 @@
 テストは `bun:test` で書く: `import { describe, it } from "bun:test"`。実行は `cd dotfiles/.pi/agent && bun test`。`bun test` は Bun の auto-install対象外のため、テストが importする依存は配置先パッケージの `package.json` に明示し、インストールで解決しておくこと。
 assertion は自作helper を作らず、`node:assert/strict` を使うこと。読みやすさは説明変数やテスト名で担保し、assertion の再発明では担保しない。
 
-## skill の置き場所
+## skill の編集先と読み込み先
 
-skill はスコープごとに正本を分ける。この規則は skill本文を読む前に適用する。
+skill の編集先はスコープごとに正本を分ける。
 
 - プロジェクト専用skill は、現在の作業対象リポジトリのルート（worktree使用時はその worktree）の `.agents/skills/` に置く。`dotfiles/.agents/skills.exact/` や `~/.agents/skills/` を候補にしない。
 - 共有skill は `dotfiles/.agents/skills.exact/` に置き、build で `~/.agents/skills/` へ展開する。展開先は Agent Skills標準の共通位置であり、pi を含む複数の harness から読める。
@@ -65,7 +65,7 @@ skill はスコープごとに正本を分ける。この規則は skill本文�
 - 外部リポジトリの取り込みは external hook（`dotfiles/external.build.ts` とその隣の `external.data.yaml`）が処理する。skill の取り込みは `dotfiles/.agents/skills.exact/external.data.yaml` に定義し、配置先の `.agents` が `remap.data.md` で削除されるOS では fetch も走らない
 - `dotfiles/.pi/agent/skills.exact/` は pi固有の skill用の予備。通常は空に保ち、`.keep` で空ディレクトリを維持する（`exact` 属性により、展開先でも `.keep` 以外のファイルが無い状態が保たれる）
 
-skill を読む指示は、ファイルパスではなくskill名で書く。ファイルを直接読む必要があるときは、現在のリポジトリまたは worktree のルートの `.agents/skills/<skill名>/SKILL.md` を解決する。`~/.agents/skills/...` や `dotfiles/.agents/skills.exact/...` を読み込み先にしない。
+skill を読む指示は、ファイルパスではなくskill名で書く。skill を利用するときは、利用可能なskill一覧に提示されたパスから読む。編集先の規則を読み込み先の制限として適用しない。
 
 skillフォルダ内の specファイルは skill と同梱のスクリプトの開発・保守用であり、利用者には提示せず、利用手順から参照させない。`SKILL.md` の利用手順は、配布される文書と assets だけで完結させる。
 
