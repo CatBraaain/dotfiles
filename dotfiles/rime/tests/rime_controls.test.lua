@@ -354,9 +354,9 @@ assert(context.input == "", "Enter must end composition")
 press(env, string.byte("k"))
 assert(context:get_option("_kagiroi_hide_candidates"), "the next input must start with candidates hidden")
 
--- Enter learns every dictionary clause and, when all clauses carry
--- entries, the whole reading as one joined entry (dotfiles/rime/SPEC.md,
--- "確定と次入力").
+-- Committing with the candidate list open learns every dictionary clause
+-- and, when all clauses carry entries, the whole reading as one joined
+-- entry (dotfiles/rime/SPEC.md, "確定と次入力").
 env, context = new_environment({
     { text = "下", readings = { ["か"] = true }, phrase = { text = "下|2820 2820", custom_code = "か " } },
     { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
@@ -366,6 +366,7 @@ env.mem = { update_userdict = function(self, entry) table.insert(learned, entry)
 context.input = "か1"
 context:set_option("_kagiroi_hide_candidates", true)
 assert(press(env, 0x20) == kAccepted, "the learning test must start with a hidden conversion")
+assert(press(env, 0x20) == kAccepted, "the learning test must open the candidate list")
 assert(press(env, 0xff0d) == kAccepted, "Enter must commit the conversion")
 assert(context.commits[1] == "下ネ", "Enter must commit the displayed clauses")
 assert(#learned == 3, "Enter must learn both clauses and their join")
@@ -376,6 +377,22 @@ assert(learned[2].text == "ネ|1851 1851" and learned[2].custom_code == "1 ",
 assert(learned[3].text == "下ネ|1851 1851" and learned[3].custom_code == "か1 ",
     "the join must carry the whole reading with the generic noun ids")
 
+-- Committing a hidden conversion learns nothing: only a commit with the
+-- candidate list open records entries (dotfiles/rime/SPEC.md,
+-- "確定と次入力").
+env, context = new_environment({
+    { text = "下", readings = { ["か"] = true }, phrase = { text = "下|2820 2820", custom_code = "か " } },
+    { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
+})
+learned = {}
+env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+context.input = "か1"
+context:set_option("_kagiroi_hide_candidates", true)
+assert(press(env, 0x20) == kAccepted, "the hidden-commit test must start with a hidden conversion")
+assert(press(env, 0xff0d) == kAccepted, "Enter must commit the hidden conversion")
+assert(context.commits[1] == "下ネ", "Enter must commit the displayed clauses")
+assert(#learned == 0, "a hidden conversion commit must learn nothing")
+
 -- A single clause learns only its own entry: the join would duplicate it.
 env, context = new_environment({
     { text = "下", phrase = { text = "下|2820 2820", custom_code = "かな " } },
@@ -384,8 +401,10 @@ learned = {}
 env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
 context.input = "かな"
 context:set_option("_kagiroi_hide_candidates", true)
-assert(press(env, 0x20) == kAccepted and press(env, 0xff0d) == kAccepted,
-    "the single-clause test must convert and commit")
+assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
+    "the single-clause test must convert and open the candidate list")
+assert(press(env, 0xff0d) == kAccepted,
+    "the single-clause test must commit with the list open")
 assert(#learned == 1 and learned[1].text == "下|1851 1851",
     "a single clause must learn only its own entry")
 
@@ -399,8 +418,10 @@ learned = {}
 env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
 context.input = "か1"
 context:set_option("_kagiroi_hide_candidates", true)
-assert(press(env, 0x20) == kAccepted and press(env, 0xff0d) == kAccepted,
-    "the unlearned-clause test must convert and commit")
+assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
+    "the unlearned-clause test must convert and open the candidate list")
+assert(press(env, 0xff0d) == kAccepted,
+    "the unlearned-clause test must commit with the list open")
 assert(#learned == 1 and learned[1].text == "ネ|1851 1851",
     "the clause without an entry must leave the join out and learn the rest only")
 
