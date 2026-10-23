@@ -99,4 +99,4 @@ specs/
 ## 出力
 
 - 完了報告は作成・更新した正本のパス、`Verify: n/n 合格`、各セルフチェックの観点・判定（合格または適用外）・正本内根拠を含める。未実行の確認を合格と報告しない。
-- セルフチェックは、「観測対象」（`../csdd/SKILL.md`）、「requirementsの作成」「specの作成・修正」の各規則と、`../readable-docs/SKILL.md`の「具体性」を個別に確認する。照合は対象に存在する上流に対してだけ行い、存在しない上流との照合は適用外とする。specとrequirementsの両方がある対象は、CSDD適合性レビューのcoverage第1段（`../csdd/SKILL.md`）をセルフチェックでも確認する。
+- セルフチェックは、「観測対象」（`../csdd/SKILL.md`）、「requirementsの作成」「specの作成・修正」の各規則と、`../readable-docs/SKILL.md`の「文書の自己完結」を個別に確認する。照合は対象に存在する上流に対してだけ行い、存在しない上流との照合は適用外とする。specとrequirementsの両方がある対象は、CSDD適合性レビューのcoverage第1段（`../csdd/SKILL.md`）をセルフチェックでも確認する。
