@@ -1,8 +1,16 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
 import {
@@ -436,6 +444,7 @@ interface ChildRun {
   stderr: string;
   stopReason?: string;
   errorMessage?: string;
+  sessionId?: string;
 }
 
 interface AgentToolDetails {
@@ -466,6 +475,10 @@ function isFailedResult(result: ChildRun): boolean {
     result.stopReason === "stalled" ||
     getFinalOutput(result.messages) === ""
   );
+}
+
+function withSessionLine(output: string, result: ChildRun): string {
+  return `${output}${result.sessionId ? `\n\nsession: ${result.sessionId}` : ""}`;
 }
 
 function getResultOutput(result: ChildRun): string {
@@ -506,7 +519,65 @@ export function subagentSessionDir(cwd: string): string {
   return join(getAgentDir(), "sessions", cwdKey, "subagents");
 }
 
-export function childInvocationArgs(agent: Agent, task: string, cwd = process.cwd()): string[] {
+export interface ChildSessionStart {
+  path: string;
+  fork: boolean;
+}
+
+export function resolveChildSession(
+  session: string,
+  cwd: string,
+): { path: string } | { error: string } {
+  const sessionDir = subagentSessionDir(cwd);
+  if (isAbsolute(session)) {
+    const sessionPath = resolve(session);
+    if (sessionPath !== sessionDir && !sessionPath.startsWith(sessionDir + sep)) {
+      return { error: `session file must be inside ${sessionDir}` };
+    }
+    let sessionStat: ReturnType<typeof statSync>;
+    try {
+      sessionStat = statSync(sessionPath);
+    } catch {
+      return { error: `session file not found: ${session}` };
+    }
+    if (!sessionStat.isFile()) {
+      return { error: `session file is not a file: ${session}` };
+    }
+    if (!sessionPath.endsWith(".jsonl")) {
+      return { error: `session file must have the .jsonl extension: ${session}` };
+    }
+    return { path: sessionPath };
+  }
+  if (session.includes("/") || session.includes("\\")) {
+    return { error: `session must be an absolute path or a session ID: ${session}` };
+  }
+  let entries: string[];
+  try {
+    entries = readdirSync(sessionDir);
+  } catch {
+    return { error: `child session directory not found: ${sessionDir}` };
+  }
+  const childSessions = entries
+    .filter((entry) => entry.endsWith(".jsonl"))
+    .map((entry) => ({
+      entry,
+      id: entry.slice(entry.lastIndexOf("_") + 1, -".jsonl".length),
+    }))
+    .filter(({ id }) => id.length > 0);
+  const exact = childSessions.filter(({ id }) => id === session);
+  const candidates =
+    exact.length > 0 ? exact : childSessions.filter(({ id }) => id.startsWith(session));
+  if (candidates.length === 0) return { error: `child session not found: ${session}` };
+  if (candidates.length > 1) return { error: `ambiguous child session ID: ${session}` };
+  return { path: join(sessionDir, candidates[0]!.entry) };
+}
+
+export function childInvocationArgs(
+  agent: Agent,
+  task: string,
+  cwd = process.cwd(),
+  session?: ChildSessionStart,
+): string[] {
   return [
     "--mode",
     "json",
@@ -515,6 +586,11 @@ export function childInvocationArgs(agent: Agent, task: string, cwd = process.cw
     agent,
     "--session-dir",
     subagentSessionDir(cwd),
+    ...(session === undefined
+      ? []
+      : session.fork
+        ? ["--fork", session.path]
+        : ["--session", session.path]),
     `Task: ${task}`,
   ];
 }
@@ -531,13 +607,15 @@ async function runChild(
   task: string,
   agent: Agent,
   cwd: string | undefined,
+  session: ChildSessionStart | undefined,
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
   recorder: ChildSessionRecorder,
 ): Promise<ChildRun> {
   const childCwd = resolve(cwd ?? defaultCwd);
-  const args = childInvocationArgs(agent, task, childCwd);
+  const args = childInvocationArgs(agent, task, childCwd, session);
   const sessionDir = subagentSessionDir(childCwd);
+  const mode = session === undefined ? "new" : session.fork ? "fork" : "resume";
   let childSession: { sessionId: string; sessionFile: string } | undefined;
 
   function recordSession(phase: "start" | "end", completion?: Record<string, unknown>): void {
@@ -548,6 +626,8 @@ async function runChild(
       task,
       cwd: childCwd,
       sessionDir,
+      mode,
+      ...(session === undefined ? {} : { resumedFrom: session.path }),
       ...childSession,
       phase,
       ...completion,
@@ -651,6 +731,7 @@ async function runChild(
             `${event.timestamp.replace(/[:.]/g, "-")}_${event.id}.jsonl`,
           ),
         };
+        childResult.sessionId = event.id;
         recordSession("start");
       }
 
@@ -842,6 +923,18 @@ export default function agentsExtension(
       cwd: Type.Optional(
         Type.String({ description: "Working directory; defaults to the parent cwd" }),
       ),
+      session: Type.Optional(
+        Type.String({
+          description:
+            "Child session ID or absolute session file path to continue. Omit to start a new child session",
+        }),
+      ),
+      fork: Type.Optional(
+        Type.Boolean({
+          description:
+            "Fork the given session into a new child session instead of resuming it. Requires session",
+        }),
+      ),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!params.task)
@@ -867,6 +960,25 @@ export default function agentsExtension(
           isError: true,
         };
       }
+      if (params.fork && !params.session) {
+        return {
+          content: [textPart("Invalid parameters. fork requires a session.")],
+          details: { results: [] },
+          isError: true,
+        };
+      }
+      let session: ChildSessionStart | undefined;
+      if (params.session) {
+        const resolved = resolveChildSession(params.session, resolve(params.cwd ?? ctx.cwd));
+        if ("error" in resolved) {
+          return {
+            content: [textPart(`Cannot delegate: ${resolved.error}`)],
+            details: { results: [] },
+            isError: true,
+          };
+        }
+        session = { path: resolved.path, fork: params.fork === true };
+      }
 
       pendingChildren++;
       startSpinnerTimer();
@@ -891,6 +1003,7 @@ export default function agentsExtension(
             params.task,
             params.agent,
             params.cwd,
+            session,
             signal,
             onUpdate,
             {
@@ -908,18 +1021,33 @@ export default function agentsExtension(
       }
       if (isFailedResult(result)) {
         return {
-          content: [textPart(`Child ${result.stopReason || "failed"}: ${getResultOutput(result)}`)],
+          content: [
+            textPart(
+              withSessionLine(
+                `Child ${result.stopReason || "failed"}: ${getResultOutput(result)}`,
+                result,
+              ),
+            ),
+          ],
           details: { results: [result] },
           isError: true,
         };
       }
       return {
-        content: [textPart(getFinalOutput(result.messages) || "(no output)")],
+        content: [textPart(withSessionLine(getFinalOutput(result.messages) || "(no output)", result))],
         details: { results: [result] },
       };
     },
     renderCall(args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold(`subagent ${args.agent ?? "..."}`)), 0, 0);
+      const sessionLabel =
+        typeof args.session === "string" && args.session.length > 0
+          ? ` (${args.fork ? "fork" : "resume"} ${basename(args.session)})`
+          : "";
+      return new Text(
+        theme.fg("toolTitle", theme.bold(`subagent ${args.agent ?? "..."}${sessionLabel}`)),
+        0,
+        0,
+      );
     },
     renderResult(result, options, theme) {
       const details = result.details as AgentToolDetails | undefined;
@@ -964,6 +1092,11 @@ export default function agentsExtension(
         container.addChild(new Text(theme.fg("muted", "┌─── Output ────"), 0, 0));
         container.addChild(new Markdown(finalOutput.trim(), 0, 0, getMarkdownTheme()));
         container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
+      }
+      if (childResult.sessionId && !options.isPartial) {
+        container.addChild(
+          new Text(theme.fg("muted", `session: ${childResult.sessionId}`), 0, 0),
+        );
       }
       if (childResult.pending) {
         container.addChild({
@@ -1195,7 +1328,7 @@ export default function agentsExtension(
       `The owner attached ${paths.length} image(s) with the following request. Read each image with read and complete it.` +
       `\n\nRequest:\n${request || "(none)"}\n\nImages:\n${paths.join("\n")}`;
     try {
-      const child = await runChild(ctx.cwd, task, "vision", undefined, ctx.signal, undefined, {
+      const child = await runChild(ctx.cwd, task, "vision", undefined, undefined, ctx.signal, undefined, {
         invocationId: randomUUID(),
         source: "image",
         appendEntry: pi.appendEntry.bind(pi),

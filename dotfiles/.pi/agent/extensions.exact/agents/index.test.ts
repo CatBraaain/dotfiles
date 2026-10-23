@@ -20,6 +20,7 @@ import agentsExtension, {
   canDelegate,
   childAgent,
   childInvocationArgs,
+  resolveChildSession,
   subagentSessionDir,
   initialAgent,
   loadAgentConfig,
@@ -3420,6 +3421,54 @@ describe("subagent の表示", () => {
     }
   });
 
+  it("確定結果に session 行を表示し部分表示では出さない", () => {
+    const extension = captureAgentsExtension();
+    const makeDetails = () => ({
+      results: [
+        {
+          agent: "worker",
+          task: "work",
+          cwd: "/child",
+          pending: false,
+          exitCode: 0,
+          sessionId: "child-id",
+          messages: [],
+          actions: [],
+          stderr: "",
+        },
+      ],
+    });
+    try {
+      const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+      const rendered = extension.renderResult({ content: [], details: makeDetails() }, { isPartial: false }, theme) as Container;
+      assert.ok(rendered.render(200).some((line) => line.includes("session: child-id")));
+      const partial = extension.renderResult({ content: [], details: makeDetails() }, { isPartial: true }, theme) as Container;
+      assert.equal(partial.render(200).some((line) => line.includes("session: child-id")), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("呼び出し時に resume・fork 対象のセッションを表示する", () => {
+    const extension = captureAgentsExtension();
+    try {
+      const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+      const resumed = extension.renderCall(
+        { agent: "worker", session: "/sessions/subagents/2026-10-22T08-00-00-123Z_old-id.jsonl" },
+        theme,
+      ) as Text;
+      assert.ok(
+        resumed
+          .render(200)
+          .some((line) => line.includes("subagent worker (resume 2026-10-22T08-00-00-123Z_old-id.jsonl)")),
+      );
+      const forked = extension.renderCall({ agent: "worker", session: "old-id", fork: true }, theme) as Text;
+      assert.ok(forked.render(200).some((line) => line.includes("subagent worker (fork old-id)")));
+    } finally {
+      extension.restore();
+    }
+  });
+
   it("結果を受け取る前のツール呼び出しは結果行を表示しない", () => {
     const extension = captureAgentsExtension();
     const details = {
@@ -3752,6 +3801,45 @@ describe("independent child session storage", () => {
     assert.equal(subagentSessionDir("."), subagentSessionDir(process.cwd()));
   });
 
+  it("passes session continuation arguments for resume and fork", () => {
+    assert.deepEqual(
+      childInvocationArgs("junior", "continue work", "/project/nested", {
+        path: "/sessions/subagents/a_child.jsonl",
+        fork: false,
+      }),
+      [
+        "--mode",
+        "json",
+        "-p",
+        "--agent",
+        "junior",
+        "--session-dir",
+        subagentSessionDir("/project/nested"),
+        "--session",
+        "/sessions/subagents/a_child.jsonl",
+        "Task: continue work",
+      ],
+    );
+    assert.deepEqual(
+      childInvocationArgs("junior", "branch work", "/project/nested", {
+        path: "/sessions/subagents/a_child.jsonl",
+        fork: true,
+      }),
+      [
+        "--mode",
+        "json",
+        "-p",
+        "--agent",
+        "junior",
+        "--session-dir",
+        subagentSessionDir("/project/nested"),
+        "--fork",
+        "/sessions/subagents/a_child.jsonl",
+        "Task: branch work",
+      ],
+    );
+  });
+
   it("records the header before completion and excludes child history from references", async () => {
     const extension = captureAgentsExtension();
     try {
@@ -3773,6 +3861,7 @@ describe("independent child session storage", () => {
           task: "work",
           cwd: "/parent",
           sessionDir: subagentSessionDir("/parent"),
+          mode: "new",
           phase: "start",
           sessionId: "child-id",
           sessionFile,
@@ -3796,7 +3885,7 @@ describe("independent child session storage", () => {
       );
       child.emit("close", 0);
       const result = await execution;
-      assert.equal(result.content[0].text, "done");
+      assert.equal(result.content[0].text, "done\n\nsession: child-id");
       assert.deepEqual(extension.appendedEntries[1], {
         customType: start.customType,
         data: {
@@ -4051,6 +4140,207 @@ describe("independent child session storage", () => {
         }
       }
       assert.equal(new Set(savedFiles).size, 4);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves absolute files, exact IDs and partial IDs inside the subagent directory", () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "agents-resolve-sessions-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = temporaryRoot;
+    try {
+      const sessionDir = subagentSessionDir("/parent");
+      mkdirSync(sessionDir, { recursive: true });
+      const sessionFile = join(sessionDir, "2026-10-22T08-00-00-123Z_id-a.jsonl");
+      writeFileSync(sessionFile, "");
+      assert.deepEqual(resolveChildSession(sessionFile, "/parent"), { path: sessionFile });
+      assert.deepEqual(resolveChildSession("id-a", "/parent"), { path: sessionFile });
+      assert.deepEqual(resolveChildSession("id-", "/parent"), { path: sessionFile });
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects sessions outside the directory, without a match, or ambiguous", () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "agents-resolve-sessions-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = temporaryRoot;
+    try {
+      const sessionDir = subagentSessionDir("/parent");
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, "2026-10-22T08-00-00-123Z_id-a.jsonl"), "");
+      writeFileSync(join(sessionDir, "2026-10-22T08-00-00-123Z_id-b.jsonl"), "");
+
+      assert.ok("error" in resolveChildSession("/elsewhere/session.jsonl", "/parent"));
+      assert.ok("error" in resolveChildSession(join(sessionDir, "missing.jsonl"), "/parent"));
+      assert.ok("error" in resolveChildSession("missing", "/parent"));
+      assert.ok("error" in resolveChildSession("id-", "/parent"));
+      assert.ok("error" in resolveChildSession("nested/path.jsonl", "/parent"));
+      assert.ok("error" in resolveChildSession("id-a", "/other-cwd"));
+
+      mkdirSync(join(sessionDir, "notebook-dir"));
+      assert.ok("error" in resolveChildSession(join(sessionDir, "notebook-dir"), "/parent"));
+      writeFileSync(join(sessionDir, "notes.txt"), "");
+      const notJsonl = resolveChildSession(join(sessionDir, "notes.txt"), "/parent");
+      assert.ok("error" in notJsonl);
+      assert.match(notJsonl.error, /\.jsonl extension/);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects fork without a session and unresolvable sessions before spawning", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      const forkOnly = await extension.executeSubagent({
+        agent: "worker",
+        task: "work",
+        fork: true,
+      });
+      assert.equal(forkOnly.isError, true);
+      assert.match(forkOnly.content[0].text, /fork requires a session/);
+
+      const unknown = await extension.executeSubagent({
+        agent: "worker",
+        task: "work",
+        session: "missing-id",
+      });
+      assert.equal(unknown.isError, true);
+      assert.match(unknown.content[0].text, /child session directory not found/);
+      assert.equal(extension.children.length, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("resumes an existing child session by ID and records the continuation reference", async () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "agents-resume-sessions-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = temporaryRoot;
+    try {
+      const sessionDir = subagentSessionDir("/parent");
+      mkdirSync(sessionDir, { recursive: true });
+      const sessionFile = join(sessionDir, "2026-10-22T08-00-00-123Z_old-id.jsonl");
+      writeFileSync(sessionFile, "");
+      const extension = captureAgentsExtension();
+      try {
+        await extension.sessionStart();
+        const execution = extension.executeSubagent({
+          agent: "worker",
+          task: "continue",
+          session: "old-id",
+        });
+        const spawnCall = extension.spawnCalls[0]!;
+        assert.equal(spawnCall.args[spawnCall.args.indexOf("--session") + 1], sessionFile);
+        const child = extension.children[0]!;
+        emitHeader(child);
+        const start = extension.appendedEntries[0]!;
+        assert.equal(start.data.mode, "resume");
+        assert.equal(start.data.resumedFrom, sessionFile);
+        succeedChild(child);
+        const result = await execution;
+        assert.equal(result.content[0].text, "done\n\nsession: child-id");
+        const end = extension.appendedEntries[1]!;
+        assert.equal(end.data.mode, "resume");
+        assert.equal(end.data.resumedFrom, sessionFile);
+      } finally {
+        extension.restore();
+      }
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("forks an existing child session by path and records the fork reference", async () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "agents-fork-sessions-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = temporaryRoot;
+    try {
+      const sessionDir = subagentSessionDir("/parent");
+      mkdirSync(sessionDir, { recursive: true });
+      const sessionFile = join(sessionDir, "2026-10-22T08-00-00-123Z_old-id.jsonl");
+      writeFileSync(sessionFile, "");
+      const extension = captureAgentsExtension();
+      try {
+        await extension.sessionStart();
+        const execution = extension.executeSubagent({
+          agent: "worker",
+          task: "branch",
+          session: sessionFile,
+          fork: true,
+        });
+        const spawnCall = extension.spawnCalls[0]!;
+        assert.equal(spawnCall.args[spawnCall.args.indexOf("--fork") + 1], sessionFile);
+        const child = extension.children[0]!;
+        emitHeader(child);
+        const start = extension.appendedEntries[0]!;
+        assert.equal(start.data.mode, "fork");
+        assert.equal(start.data.resumedFrom, sessionFile);
+        succeedChild(child);
+        await execution;
+      } finally {
+        extension.restore();
+      }
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("appends the session line to failed reports when the child ID is known", async () => {
+    const extension = captureAgentsExtension();
+    extension.respondToChild((child) => {
+      emitHeader(child);
+      child.emit("close", 2);
+    });
+    try {
+      await extension.sessionStart();
+      const result = await extension.executeSubagent({ agent: "worker", task: "work" });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /\nsession: child-id$/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("resolves the session against the effective child cwd", async () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "agents-resume-cwd-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = temporaryRoot;
+    try {
+      const childSessionDir = subagentSessionDir("/child");
+      mkdirSync(childSessionDir, { recursive: true });
+      const sessionFile = join(childSessionDir, "2026-10-22T08-00-00-123Z_old-id.jsonl");
+      writeFileSync(sessionFile, "");
+      const extension = captureAgentsExtension();
+      try {
+        await extension.sessionStart();
+        const execution = extension.executeSubagent({
+          agent: "worker",
+          task: "continue",
+          cwd: "/child",
+          session: "old-id",
+        });
+        const spawnCall = extension.spawnCalls[0]!;
+        assert.equal(spawnCall.cwd, "/child");
+        assert.equal(spawnCall.args[spawnCall.args.indexOf("--session-dir") + 1], childSessionDir);
+        assert.equal(spawnCall.args[spawnCall.args.indexOf("--session") + 1], sessionFile);
+        succeedChild(extension.children[0]!);
+        await execution;
+      } finally {
+        extension.restore();
+      }
     } finally {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

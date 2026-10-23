@@ -299,15 +299,17 @@ UI を持たない環境（`--mode json`、パイプ、SDK、subagent の子セ�
 
 subagentツールは常に利用できる。子セッションを起動できるかは、現在の agent の `subagents` で決まる。
 
-subagentツールは子セッションを起動するとき `--agent <name>` と保存先の `--session-dir <dir>` を渡し、モデルと `--class` を指定しない。子セッションの実効class は指定されたagent の既定class から始まり、候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
+subagentツールは子セッションを起動するとき `--agent <name>` と保存先の `--session-dir <dir>` を渡し、モデルと `--class` を指定しない。既存の子セッションを引き継ぐときは `--session <path>` を、フォークするときは `--fork <path>` を渡す。子セッションの実効class は指定されたagent の既定class から始まり、候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
 
 ### subagentツールの入力
 
 | パラメータ | 必須 | 内容 |
 | --- | --- | --- |
-| `task` | 必須 | 子エージェントへ渡すタスク |
+| `task` | 必須 | 子エージェントへ渡すタスク。resume・fork時は継続した履歴への追加指示 |
 | `agent` | 必須 | `agents.yaml` に定義された子agent名 |
 | `cwd` | 任意 | 子エージェントの作業ディレクトリ。省略時は親と同じ |
+| `session` | 任意 | 引き継ぐ子セッションのセッションID またはセッションファイルの絶対パス。省略時は新規セッション |
+| `fork` | 任意 | `true` のとき `session` の複製を新しい子セッションとして起動する。`session` の指定が必須 |
 | `model` | 使用不可 | モデルは指定した子agent の既定class から解決される |
 
 subagentツールで起動した子エージェントには、指定されたagent の設定が適用される。子エージェントの `default` は適用されない。子エージェントは自身の `subagents` に従って、さらに subagentツールを実行できる。
@@ -320,6 +322,18 @@ subagentツールで起動した子エージェントには、指定されたage
 | システムプロンプト | 指定された子agent の `systemPrompt` を追記 |
 | さらなるsubagent実行 | 子エージェントの `subagents` で判定 |
 
+### セッションの引継ぎとフォーク
+
+`session` を指定すると、新規セッションの代わりに既存の子セッションを引き継ぐ。`session` と `fork: true` の組み合わせでは、既存セッションを複製した新しい子セッションで起動する。`fork: true` に `session` がない呼び出しは、子を起動せずエラーを返す。
+
+| 項目 | 振る舞い |
+| --- | --- |
+| 解決の対象 | 子の実効cwd（`cwd` パラメータ、省略時は親のcwd）の subagents 保存先配下に限る。配下外のパス・解決できないID は、子を起動せずエラーを返す |
+| 指定子の解決 | 絶対パスは実在の `.jsonl` ファイルとして扱い、配下と存在を確認する。それ以外はセッションID として扱い、保存先内の `<timestamp>_<id>.jsonl` の `id` と照合する。完全一致を優先し、前方一致が1件のときだけ採用する。不在・複数一致はエラー |
+| 子の起動 | 解決済みの絶対パスを `--session <path>`（resume）または `--fork <path>`（fork）で渡す |
+| 履歴と参照 | resume・fork時も `task` は必須で、継続した履歴への追加指示として子に渡す。forkで作られた新しいセッションファイルは、子header受信時の参照記録で追跡する |
+| 並行resumeの競合 | 同じセッションに対する並行resumeは、履歴を混在させ得る。親は排他制御をしない |
+
 ### 子セッションのセッション記録
 
 子の履歴の正本は、子pi自身が保存する独立したJSONLファイルである。subagentツールと画像入力の自動vision委譲に同じ保存・参照規則を適用する。
@@ -327,14 +341,14 @@ subagentツールで起動した子エージェントには、指定されたage
 | 項目 | 振る舞い |
 | --- | --- |
 | 保存先 | `<getAgentDir()>/sessions/<cwd識別子>/subagents/`。実際の子cwdを絶対パスに解決し、先頭の `/` または `\` を除き、残りの `/`・`\`・`:` を `-` に置換して `--` で前後を囲んだものをcwd識別子とする |
-| 子の起動引数 | `--session-dir <保存先>` を指定し、通常の新規セッションとして起動する。`--no-session`・既存セッションを指定する引数は渡さない |
+| 子の起動引数 | `--session-dir <保存先>` を指定し、通常の新規セッションとして起動する。resume・fork時はさらに `--session <path>` または `--fork <path>` を渡す。`--no-session` は渡さない |
 | 子の識別 | piが生成するUUIDと時刻によるファイル名を使う。同じagent・taskの並行実行や拡張のreloadをまたぐ実行でも独立する |
 | 親の記録 | `customType: agents.subagent-session` の `custom` entry に参照メタデータだけを記録する。全履歴・reasoning・usageの複製は含めない |
-| 共通フィールド | `data.invocationId`・`source`・`agent`・`task`・`cwd`・`sessionDir`・`phase`。`source` は `subagent` または `image`。`invocationId` はsubagentツールのtoolCallId、自動vision委譲では呼び出しごとのUUID |
+| 共通フィールド | `data.invocationId`・`source`・`agent`・`task`・`cwd`・`sessionDir`・`mode`・`phase`。`source` は `subagent` または `image`。`mode` は `new`・`resume`・`fork`。resume・fork時は `resumedFrom` に解決済みのセッションファイルパスを含める。`invocationId` はsubagentツールのtoolCallId、自動vision委譲では呼び出しごとのUUID |
 | 子header受信時 | `phase: start` を1件記録する。headerの `id` を `sessionId` とし、headerの `timestamp` の `:`・`.` を `-` に置換した値とIDから `<timestamp>_<id>.jsonl` を組み立て `sessionFile` とする。このパスは実ファイル作成前の予定パスであり、存在を保証しない |
 | 子終了時 | 成功・失敗・abort・stallに関わらず `phase: end` を1件記録する。同じ `invocationId` と取得済みの `sessionId`・`sessionFile` を使い、`exitCode`・取得できた `stopReason`・`errorMessage` と、終了時にファイルが存在するかの `sessionFileExists` を含める |
 | header前の失敗 | `end` に保存先を残し、未取得の `sessionId`・`sessionFile` は省略し、`sessionFileExists` は `false` とする。起動していない待機中abortでは参照entryを作らない |
-| コンテキストと最終報告 | 参照の `custom` entry はLLMコンテキストに参加しない。subagentツールの最終報告とUI、画像委譲の報告は既存の経路で返す |
+| コンテキストと最終報告 | 参照の `custom` entry はLLMコンテキストに参加しない。subagentツールの最終報告は、成功・失敗を問わず子のsessionId を取得できていれば `session: <sessionId>` を末尾に添えて返し、後続の呼び出しがそのID を `session` に指定できるようにする。UIと画像委譲の報告は既存の経路で返す |
 
 親が終了記録前に停止しても、保存済みの開始参照と子JSONLは独立して残る。親自身が未保存の場合の耐久性は親の保存状態に従う。子JSONLの作成時機はpiの通常保存に従い、header受信後でも最初の会話メッセージ保存前にはファイルが存在しない場合がある。子headerへの親リンクの追記は行わない。保存済みの `agents.subagent-log` entryを含む過去ログは、そのまま保持する。
 
@@ -365,6 +379,13 @@ subagent の呼び出し時と実行結果を、次の形式で表示する。�
 subagent <child-agent>
 ```
 
+resume・forkの呼び出しでは、続けて対象のセッションファイル名を表示する。
+
+```text
+subagent <child-agent> (resume <session-id-or-file-name>)
+subagent <child-agent> (fork <session-id-or-file-name>)
+```
+
 ### 実行結果の表示形式
 
 ```text
@@ -379,6 +400,8 @@ subagent <child-agent>
 ┌─── Output ────
 <output>
 └───────────────
+
+session: <sessionId>
 ```
 
 | 項目 | 形式・条件 |
@@ -387,6 +410,7 @@ subagent <child-agent>
 | `task` | subagentツールに渡したタスク全文 |
 | `<actions>` | 子エージェントがツールを利用した場合のみ、受け取った時系列順ですべて表示する |
 | `<output>` | 最終アシスタントテキストが確定した場合のみMarkdown として表示する |
+| `session: <sessionId>` | 子のsessionId を取得できた実行でのみ、Output ブロックの後に1行表示する。部分表示では出さない。最終報告にも同じID を返す |
 | 待機行 | 子エージェントの実行が確定するまでブロックの末尾に表示する（後述） |
 | 更新 | 子からのイベントは毎回受領・記録し、表示は 0.15秒に1回まで間引く。間引き中のイベントは最新の状態に併合する。子の実行確定時には必ず最新状態で更新する |
 
