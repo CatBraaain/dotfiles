@@ -366,7 +366,13 @@ end
 function Top.func(input, seg, env)
     local state = env.conversion
     if not state then
-        if utf8.len(input) then return stock.func(input, seg, env) end
+        if utf8.len(input) then
+            if env.engine.context:get_option("_kagiroi_hide_candidates") then
+                env.mem:finish_session()
+                return
+            end
+            return stock.func(input, seg, env)
+        end
         return
     end
     if not seg:has_tag("bunsetsu_active") then return end
