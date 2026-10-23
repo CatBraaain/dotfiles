@@ -1,4 +1,4 @@
-import type { Decorator, Preview } from "@storybook/html";
+import type { Decorator, Preview } from "@storybook/react";
 import { webviewStyles } from "../src/webview/webviewStyles";
 
 /** Dark-theme fallbacks for the --vscode-* variables the webview styles use;

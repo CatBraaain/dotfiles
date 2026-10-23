@@ -1,8 +1,20 @@
 /**
- * Self-contained webview client (no imports). sessionListView is a pure
- * function that builds the view as an element-descriptor tree; initClient
- * wires that view to the page's fixed markup and a message bridge.
+ * Webview client built on React. sessionListView stays a pure function that
+ * builds the view as an element-descriptor tree; the SessionsApp component
+ * materializes that tree into React elements and wires it to the page's fixed
+ * markup and a message bridge.
  */
+
+import {
+  createElement,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactElement,
+} from "react";
+import { createRoot } from "react-dom/client";
 
 /** Per-workspace display mode: active sessions only, or all sessions. */
 export type ViewMode = "active" | "all";
@@ -217,12 +229,173 @@ function checkIcon(): ElementDescriptor {
   };
 }
 
+/** Click actions the descriptor tree offers; wired by the SessionsApp. */
+interface DescriptorActions {
+  onModeClick(cwd: string, mode: ViewMode): void;
+  onSessionClick(sessionId: string): void;
+  onCopyClick(sessionId: string): void;
+  onArchiveClick(sessionId: string): void;
+}
+
+/** Map descriptor attribute names to React prop names (class -> className). */
+function descriptorProps(descriptor: ElementDescriptor): Record<string, string> {
+  const props: Record<string, string> = {};
+  for (const [name, value] of Object.entries(descriptor.attrs ?? {})) {
+    props[name === "class" ? "className" : name] = value;
+  }
+  return props;
+}
+
+/** Attach the delegated-click behavior of initClient's predecessor to the
+ * descriptor's buttons, mirroring the fixed request protocol. */
+function descriptorOnClick(descriptor: ElementDescriptor, actions: DescriptorActions): (() => void) | undefined {
+  if (descriptor.tag !== "button") return undefined;
+  const attrs = descriptor.attrs ?? {};
+  const mode = attrs["data-mode"];
+  if (mode !== undefined) {
+    const cwd = attrs["data-cwd"];
+    if (cwd !== undefined && (mode === "active" || mode === "all")) return () => actions.onModeClick(cwd, mode);
+    return undefined;
+  }
+  const sessionId = attrs["data-archive"] ?? attrs["data-copy"] ?? attrs["data-session"];
+  if (sessionId === undefined) return undefined;
+  if (attrs["data-archive"] !== undefined) return () => actions.onArchiveClick(sessionId);
+  if (attrs["data-copy"] !== undefined) return () => actions.onCopyClick(sessionId);
+  return () => actions.onSessionClick(sessionId);
+}
+
+/** Materialize a descriptor as a React element (SVG tags included). */
+function descriptorToElement(descriptor: ElementDescriptor, actions: DescriptorActions): ReactElement {
+  const props: Record<string, unknown> = descriptorProps(descriptor);
+  const onClick = descriptorOnClick(descriptor, actions);
+  if (onClick !== undefined) props.onClick = onClick;
+  return createElement(
+    descriptor.tag,
+    props,
+    ...(descriptor.children ?? []).map((child) =>
+      typeof child === "string" ? child : descriptorToElement(child, actions),
+    ),
+  );
+}
+
+/** Bridge data as one immutable snapshot for useSyncExternalStore. */
+interface ClientSnapshot {
+  state: ClientState;
+  statusText: string;
+  statusError: boolean;
+}
+
+/** Latest-value store fed by the bridge; registered synchronously by
+ * initClient so no message is lost before React commits. */
+function createClientStore(): {
+  subscribe(listener: () => void): () => void;
+  getSnapshot(): ClientSnapshot;
+  setSessions(state: ClientState): void;
+  setError(message: string): void;
+} {
+  let snapshot: ClientSnapshot = { state: { groups: [] }, statusText: "", statusError: false };
+  const listeners = new Set<() => void>();
+  const publish = (next: ClientSnapshot): void => {
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getSnapshot: () => snapshot,
+    setSessions: (state) => publish({ state, statusText: "", statusError: false }),
+    setError: (message) => publish({ ...snapshot, statusText: message, statusError: true }),
+  };
+}
+
+interface SessionsAppProps {
+  bridge: ClientBridge;
+  store: ReturnType<typeof createClientStore>;
+  statusElement: HTMLElement;
+}
+
+/** Render the session list into the #sessions root. Mode toggles stay in
+ * client state (no host round-trip); session actions go through the bridge. */
+function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactElement {
+  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const [modes, setModes] = useState(() => new Map<string, ViewMode>());
+  const [copiedIds, setCopiedIds] = useState(() => new Set<string>());
+  const copiedTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  /** Show the copied feedback on the row's copy button for about a second. */
+  const markCopied = useCallback((sessionId: string): void => {
+    setCopiedIds((previous) => {
+      const next = new Set(previous);
+      next.add(sessionId);
+      return next;
+    });
+    clearTimeout(copiedTimers.current.get(sessionId));
+    copiedTimers.current.set(
+      sessionId,
+      setTimeout(() => {
+        copiedTimers.current.delete(sessionId);
+        setCopiedIds((previous) => {
+          const next = new Set(previous);
+          next.delete(sessionId);
+          return next;
+        });
+      }, 1000),
+    );
+  }, []);
+
+  useEffect(() => {
+    statusElement.textContent = snapshot.statusText;
+    statusElement.className = snapshot.statusError ? "error" : "";
+  }, [snapshot, statusElement]);
+
+  useEffect(() => {
+    // The fixed header buttons live outside the React root (#sessions), so
+    // their data-action clicks still arrive through document delegation.
+    const onDocumentClick = (event: Event): void => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const action = target.closest("[data-action]");
+      if (action instanceof HTMLButtonElement) bridge.postMessage({ type: action.dataset.action });
+    };
+    document.addEventListener("click", onDocumentClick);
+    return () => document.removeEventListener("click", onDocumentClick);
+  }, [bridge]);
+
+  useEffect(
+    () => () => {
+      for (const timer of copiedTimers.current.values()) clearTimeout(timer);
+      copiedTimers.current.clear();
+    },
+    [],
+  );
+
+  const actions: DescriptorActions = {
+    onModeClick: (cwd, mode) =>
+      setModes((previous) => {
+        const next = new Map(previous);
+        next.set(cwd, mode);
+        return next;
+      }),
+    onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
+    onCopyClick: (sessionId) => {
+      markCopied(sessionId);
+      bridge.postMessage({ type: "copySessionId", sessionId });
+    },
+    onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
+  };
+
+  const view = sessionListView(snapshot.state, modes, copiedIds);
+  return <>{view.sessions.map((descriptor) => descriptorToElement(descriptor, actions))}</>;
+}
+
 /**
- * Wire click delegation and state rendering to the page's fixed markup.
- * Mode toggles stay in client state (no host round-trip); session actions go
- * through the bridge. Returns a dispose function that removes the
- * document-level click listener; the webview never disposes, the stories
- * catalog disposes on story change.
+ * Mount the React root onto the page's fixed markup. The bridge subscription
+ * is registered synchronously, so messages sent right after initClient (the
+ * stories catalog resets its demo state this way) are never lost. Returns a
+ * dispose function that unmounts the root and clears its timers and listener;
+ * the webview never disposes, the stories catalog disposes on story change.
  */
 export function initClient(bridge: ClientBridge): () => void {
   const sessionsElement = document.querySelector("#sessions");
@@ -231,107 +404,25 @@ export function initClient(bridge: ClientBridge): () => void {
     throw new Error("Sessions webview markup is incomplete.");
   }
 
-  let state: ClientState = { groups: [] };
-  const modes = new Map<string, ViewMode>();
-  const copiedIds = new Set<string>();
-  const copiedTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-  /** Show the copied feedback on the row's copy button for about a second. */
-  const markCopied = (sessionId: string): void => {
-    copiedIds.add(sessionId);
-    render();
-    clearTimeout(copiedTimers.get(sessionId));
-    copiedTimers.set(
-      sessionId,
-      setTimeout(() => {
-        copiedIds.delete(sessionId);
-        copiedTimers.delete(sessionId);
-        render();
-      }, 1000),
-    );
-  };
-
-  const onDocumentClick = (event: Event): void => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const modeButton = target.closest("[data-mode]");
-    if (modeButton !== null) {
-      const cwd = modeButton.getAttribute("data-cwd");
-      const mode = modeButton.getAttribute("data-mode");
-      if (cwd !== null && (mode === "active" || mode === "all")) {
-        modes.set(cwd, mode);
-        render();
-      }
-      return;
-    }
-    const request = webviewRequestFromClick(event);
-    if (request !== undefined) {
-      if (request.type === "copySessionId" && typeof request.sessionId === "string") markCopied(request.sessionId);
-      bridge.postMessage(request);
-    }
-  };
-  document.addEventListener("click", onDocumentClick);
-
+  const store = createClientStore();
   bridge.onMessage((message) => {
     if (!isRecord(message)) return;
     if (message.type === "sessions" && isClientState(message.state)) {
-      state = message.state;
-      statusElement.textContent = "";
-      statusElement.className = "";
-      render();
+      store.setSessions(message.state);
     }
     if (message.type === "error" && typeof message.message === "string") {
-      statusElement.textContent = message.message;
-      statusElement.className = "error";
+      store.setError(message.message);
     }
   });
 
-  const render = (): void => {
-    sessionsElement.replaceChildren(...sessionListView(state, modes, copiedIds).sessions.map(createElement));
-  };
+  const root = createRoot(sessionsElement);
+  root.render(<SessionsApp bridge={bridge} store={store} statusElement={statusElement} />);
 
   bridge.postMessage({ type: "ready" });
 
   return () => {
-    document.removeEventListener("click", onDocumentClick);
-    for (const timer of copiedTimers.values()) clearTimeout(timer);
-    copiedTimers.clear();
-    copiedIds.clear();
+    root.unmount();
   };
-}
-
-/** Map a delegated click to the fixed request protocol (undefined off-controls). */
-function webviewRequestFromClick(event: Event): Record<string, unknown> | undefined {
-  const target = event.target;
-  if (!(target instanceof Element)) return undefined;
-  const action = target.closest("[data-action]");
-  if (action instanceof HTMLButtonElement) return { type: action.dataset.action };
-  const archive = target.closest("[data-archive]");
-  if (archive instanceof HTMLButtonElement) {
-    return { type: "archiveSession", sessionId: archive.dataset.archive };
-  }
-  const copy = target.closest("[data-copy]");
-  if (copy instanceof HTMLButtonElement) {
-    return { type: "copySessionId", sessionId: copy.dataset.copy };
-  }
-  const session = target.closest("[data-session]");
-  if (session instanceof HTMLButtonElement) return { type: "openSession", sessionId: session.dataset.session };
-  return undefined;
-}
-
-/** Materialize a descriptor as a real DOM node (setAttribute/textContent only). */
-function createElement(descriptor: ElementDescriptor | string): Node {
-  if (typeof descriptor === "string") return document.createTextNode(descriptor);
-  const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-  const element =
-    descriptor.tag === "svg" || descriptor.tag === "path"
-      ? document.createElementNS(SVG_NAMESPACE, descriptor.tag)
-      : document.createElement(descriptor.tag);
-  for (const [name, value] of Object.entries(descriptor.attrs ?? {})) {
-    element.setAttribute(name, value);
-  }
-  element.append(...(descriptor.children ?? []).map(createElement));
-  return element;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
