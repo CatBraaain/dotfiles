@@ -4,25 +4,25 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  Sandbox,
+  Guardrail,
   compileCommandRuleEntries,
-  parseSandboxedToolsConfig,
+  parseGuardrailConfig,
   resolveCommandAction,
   resolveCommandActionMatch,
   splitCommandSegments,
-} from "./sandbox";
+} from "./guardrail";
 
 function commandEntries(pattern: string, args: string[]) {
   return compileCommandRuleEntries([{ action: "ask", pattern, args }]).entries;
 }
 
-function withSandbox(config: string, test: (sandbox: Sandbox, cwd: string) => Promise<void>) {
+function withGuardrail(config: string, test: (guardrail: Guardrail, cwd: string) => Promise<void>) {
   return async () => {
     const cwd = mkdtempSync(join(tmpdir(), "structured-command-rules-"));
     try {
-      const path = join(cwd, "sandbox.yaml");
+      const path = join(cwd, "guardrail.yaml");
       writeFileSync(path, config);
-      await test(new Sandbox(cwd, path), cwd);
+      await test(new Guardrail(cwd, path), cwd);
     } finally {
       rmSync(cwd, { force: true, recursive: true });
     }
@@ -108,7 +108,7 @@ describe("structured whole-token command rules", () => {
   });
 
   it("supports OR lists and last matching entries, then compound strictness", () => {
-    const config = parseSandboxedToolsConfig(
+    const config = parseGuardrailConfig(
       `commands:
   - .*:
       - allow: []
@@ -140,7 +140,7 @@ describe("structured whole-token command rules", () => {
     ])
       assert.throws(
         () =>
-          parseSandboxedToolsConfig(
+          parseGuardrailConfig(
             'read: [{allow: "*"}]\ncommands:\n  - git:\n      - allow: ' + rule + "\n",
           ),
         rule,
@@ -183,18 +183,18 @@ describe("structured whole-token command rules", () => {
 
 it(
   "once approvals distinguish a quoted single token from two tokens",
-  withSandbox(`commands:
+  withGuardrail(`commands:
   - tool:
-      - ask_with_reason: []`, async (sandbox, cwd) => {
+      - ask_with_reason: []`, async (guardrail, cwd) => {
     const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
-    await sandbox.requestCommandPermission('tool "a b"', "test", context);
+    await guardrail.requestCommandPermission('tool "a b"', "test", context);
     await assert.rejects(
-      async () => sandbox.authorizeCommand("tool a b", context),
+      async () => guardrail.authorizeCommand("tool a b", context),
       /requires a reason/,
     );
-    assert.equal(await sandbox.authorizeCommand("tool 'a b'", context), true);
+    assert.equal(await guardrail.authorizeCommand("tool 'a b'", context), true);
     await assert.rejects(
-      async () => sandbox.authorizeCommand('tool "a b"', context),
+      async () => guardrail.authorizeCommand('tool "a b"', context),
       /requires a reason/,
     );
   }),
@@ -202,14 +202,14 @@ it(
 
 it(
   "session rule identity includes every argument condition",
-  withSandbox(
+  withGuardrail(
     `commands:
   - tool:
       - ask:
           - one
       - ask:
           - two`,
-    async (sandbox, cwd) => {
+    async (guardrail, cwd) => {
       let prompts = 0;
       const context = {
         cwd,
@@ -222,19 +222,19 @@ it(
           },
         },
       };
-      await sandbox.authorizeCommand("tool one", context);
-      await sandbox.authorizeCommand("tool extra one", context);
+      await guardrail.authorizeCommand("tool one", context);
+      await guardrail.authorizeCommand("tool extra one", context);
       assert.equal(prompts, 1);
-      await sandbox.authorizeCommand("tool two", context);
+      await guardrail.authorizeCommand("tool two", context);
       assert.equal(prompts, 2);
     },
   ),
 );
 
 it("preserves policy families with intentional unordered allow exceptions", () => {
-  const config = parseSandboxedToolsConfig(
+  const config = parseGuardrailConfig(
     readFileSync(
-      new URL("../../../../.agents/config.exact/sandbox.yaml", import.meta.url),
+      new URL("../../../../.agents/config.exact/guardrail.yaml", import.meta.url),
       "utf8",
     ),
   );

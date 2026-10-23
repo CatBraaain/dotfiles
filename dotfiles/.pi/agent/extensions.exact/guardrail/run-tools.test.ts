@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Sandbox } from "./sandbox";
+import { Guardrail } from "./guardrail";
 
 const runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
 const piPackageDir = resolve(
@@ -17,7 +17,7 @@ function runToolsCli(toolName: string, request: unknown) {
   return spawnSync("bun", [runToolsPath, toolName], {
     input: JSON.stringify(request),
     encoding: "utf8",
-    env: { ...process.env, SANDBOXED_TOOLS_PI_PACKAGE_DIR: piPackageDir },
+    env: { ...process.env, GUARDRAIL_PI_PACKAGE_DIR: piPackageDir },
   });
 }
 
@@ -36,14 +36,14 @@ describe("run-tools CLI", () => {
   it(
     "read はファイル内容を ok:true の result で返す",
     withTempDir(async (dir) => {
-      writeFileSync(join(dir, "note.txt"), "hello sandboxed-tools");
+      writeFileSync(join(dir, "note.txt"), "hello guardrail");
       const cliResult = runToolsCli("read", { params: { path: join(dir, "note.txt") } });
       const response = JSON.parse(cliResult.stdout) as {
         ok: boolean;
         result: { content: { type: string; text: string }[] };
       };
       assert.equal(response.ok, true);
-      assert.equal(response.result.content[0]?.text, "hello sandboxed-tools");
+      assert.equal(response.result.content[0]?.text, "hello guardrail");
     }),
   );
 
@@ -173,11 +173,11 @@ describe("run-tools CLI", () => {
   );
 });
 
-describe("Sandbox.runTool（bwrap 統合）", () => {
+describe("Guardrail.runTool（bwrap 統合）", () => {
   it(
     "bwrap 内で write → read のラウンドトリップができる",
     withTempDir(async (dir) => {
-      // Nested user namespaces (e.g. agent bash already inside sandboxed-tools bwrap)
+      // Nested user namespaces (e.g. agent bash already inside guardrail bwrap)
       // cannot create uid maps; probe with a real invocation instead of --version.
       const bwrapProbe = spawnSync("bwrap", ["--", "true"], { encoding: "utf8" });
       if (bwrapProbe.status !== 0) {
@@ -186,13 +186,17 @@ describe("Sandbox.runTool（bwrap 統合）", () => {
       }
       const configPath = join(dir, "config.yaml");
       writeFileSync(configPath, `read:\n  allow: ["${dir}"]\nwrite:\n  allow: ["${dir}"]\n`);
-      const sandbox = new Sandbox(dir, configPath);
-      await sandbox.runTool(
+      const guardrail = new Guardrail(dir, configPath);
+      await guardrail.runTool(
         "write",
         { path: "hello.txt", content: "through bwrap" },
         { mode: "fs" },
       );
-      const readResult = (await sandbox.runTool("read", { path: "hello.txt" }, { mode: "fs" })) as {
+      const readResult = (await guardrail.runTool(
+        "read",
+        { path: "hello.txt" },
+        { mode: "fs" },
+      )) as {
         content: { type: string; text: string }[];
       };
       assert.equal(readResult.content[0]?.text, "through bwrap");
@@ -228,9 +232,9 @@ describe("Sandbox.runTool（bwrap 統合）", () => {
 
       const configPath = join(dir, "config.yaml");
       writeFileSync(configPath, 'read:\n  - {allow: "*"}\n');
-      const sandbox = new Sandbox(dir, configPath);
+      const guardrail = new Guardrail(dir, configPath);
       const nestedCommand = `bwrap ${nestedArgs.slice(0, -1).join(" ")} '${nestedArgs.at(-1)}'`;
-      const result = (await sandbox.runTool(
+      const result = (await guardrail.runTool(
         "bash",
         { command: nestedCommand },
         { mode: "bash" },

@@ -287,7 +287,7 @@ cooldown の破棄・維持は、発生タイミングごとに「モデルの�
 
 `vision` class には画像入力対応モデルだけを置く。`vision` agent は `tools` と `systemPrompt` を `junior` と同じ内容に保つagent であり、`class: vision` のみが異なる。この同一性は設定検証で強制しない運用規約であり、`junior` と異なる `tools`・`systemPrompt` でも設定検証は成功する。`vision` の役割は、画像入力非対応モデルで動くagent から画像の読み取りを委譲される受け皿である。
 
-`read` は画像ファイルを現在のモデルへの Vision入力として返す。現在のモデルの画像入力対応による振る舞いは sandboxed-tools の spec が定める。画像入力非対応モデルで動くagent は、画像の読み取りを `vision` 子agent へ委譲する。画像を OCRテキストへ変換する処理は行わない。
+`read` は画像ファイルを現在のモデルへの Vision入力として返す。現在のモデルの画像入力対応による振る舞いは guardrail の spec が定める。画像入力非対応モデルで動くagent は、画像の読み取りを `vision` 子agent へ委譲する。画像を OCRテキストへ変換する処理は行わない。
 
 手動選択の受け入れは「手動モデル選択」節が定める。いずれの agent も、画像非対応モデルを選択している状態では画像入力を作れない。
 

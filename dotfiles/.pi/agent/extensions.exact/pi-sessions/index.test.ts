@@ -13,7 +13,7 @@ import type {
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { quote, parse } from "shell-quote";
 import piSessionsExtension from "./index";
-import sandboxedToolsExtension from "../sandboxed-tools/index";
+import guardrailExtension from "../guardrail/index";
 
 type Outcome = AgentToolResult;
 type ExecuteTool = (
@@ -462,13 +462,13 @@ describe("pi_sessions sandbox fixture integration", () => {
       const wrapper = join(temp, "wrapper");
       writeFileSync(wrapper, `#!/bin/sh\nHOME=${quote([home])} exec ${quote([fixtureCli])} "$@"\n`);
       chmodSync(wrapper, 0o755);
-      const config = join(temp, "sandbox.yaml");
+      const config = join(temp, "guardrail.yaml");
       writeFileSync(
         config,
         "read:\n  - allow: '*'\nwrite:\n  - allow:\n      - /tmp\ncommands:\n  - .*:\n      - allow: []\n",
       );
       const tools = new Map<string, ToolDefinition>();
-      sandboxedToolsExtension(
+      guardrailExtension(
         {
           registerTool(tool: ToolDefinition) {
             tools.set(tool.name, tool);

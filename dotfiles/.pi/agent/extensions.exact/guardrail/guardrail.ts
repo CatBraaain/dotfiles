@@ -105,7 +105,7 @@ export type CompiledCommandRuleEntry = {
   patterns: CompiledCommandPattern[];
 };
 
-type SandboxedToolsConfig = {
+type GuardrailConfig = {
   read?: PathRuleEntry[];
   write?: PathRuleEntry[];
   credentials?: string[];
@@ -135,7 +135,7 @@ const COMMAND_REASON_HINT =
 const MAX_CONCURRENT_SANDBOX_RUNS = 4;
 
 /**
- * Process-wide semaphore state for SPEC §7: every Sandbox instance in this
+ * Process-wide semaphore state for SPEC §7: every Guardrail instance in this
  * pi process shares one cap, so "1 つの pi プロセス内で最大 4" holds even if
  * the extension ever creates multiple instances. Waiters are woken strictly
  * FIFO by finishing runs.
@@ -190,7 +190,7 @@ const PathEntrySchema = Type.Object(
   { additionalProperties: false, minProperties: 1, maxProperties: 1 },
 );
 
-const SandboxedToolsConfigSchema = Type.Object(
+const GuardrailConfigSchema = Type.Object(
   {
     read: Type.Optional(Type.Array(PathEntrySchema)),
     write: Type.Optional(Type.Array(PathEntrySchema)),
@@ -200,7 +200,7 @@ const SandboxedToolsConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-const validateConfig = Compile(SandboxedToolsConfigSchema);
+const validateConfig = Compile(GuardrailConfigSchema);
 
 function toPathEntry(entry: Static<typeof PathEntrySchema>): PathRuleEntry {
   const [action, pattern] = Object.entries(entry)[0] as [PathAction, string | string[]];
@@ -218,15 +218,15 @@ function toCommandEntries(family: Static<typeof CommandFamilySchema>): CommandRu
   });
 }
 
-export function parseSandboxedToolsConfig(source: string): SandboxedToolsConfig {
+export function parseGuardrailConfig(source: string): GuardrailConfig {
   const parsed = parseYaml(source) as unknown;
   if (!validateConfig.Check(parsed)) {
     const details = [...validateConfig.Errors(parsed)]
       .map((error) => `${error.instancePath || "/"} ${error.message}`)
       .join("; ");
-    throw new Error(`sandboxed-tools config schema violation: ${details}`);
+    throw new Error(`guardrail config schema violation: ${details}`);
   }
-  const config = parsed as Static<typeof SandboxedToolsConfigSchema>;
+  const config = parsed as Static<typeof GuardrailConfigSchema>;
   return {
     read: config.read?.map(toPathEntry),
     write: config.write?.map(toPathEntry),
@@ -775,16 +775,16 @@ function parseRunToolsResponse(execution: RunResult): RunToolsResponse {
   return { ok: false, error: stderrText || exitDetail };
 }
 
-export function defaultSandboxConfigPath(
+export function defaultGuardrailConfigPath(
   agentDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".."),
 ): string {
-  const deployedPath = join(agentDir, "config", "sandbox.yaml");
+  const deployedPath = join(agentDir, "config", "guardrail.yaml");
   if (existsSync(deployedPath)) return deployedPath;
 
-  const sourcePath = join(agentDir, "config.exact", "sandbox.yaml");
+  const sourcePath = join(agentDir, "config.exact", "guardrail.yaml");
   if (existsSync(sourcePath)) return sourcePath;
 
-  return join(agentDir, "..", "..", ".agents", "config.exact", "sandbox.yaml");
+  return join(agentDir, "..", "..", ".agents", "config.exact", "guardrail.yaml");
 }
 
 function readKernelRelease(): string {
@@ -829,7 +829,7 @@ export function sanitizeSandboxEnvironment(
   };
 }
 
-export class Sandbox {
+export class Guardrail {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
   /** One-shot ask_permission approvals, as normalized command segments (§3). */
   private readonly approvedCommands: string[][][] = [];
@@ -846,7 +846,7 @@ export class Sandbox {
   // the first without resolving its promise, deadlocking that tool call.
   // One global queue; split per dialog kind if contention ever matters.
   private uiQueue: Promise<void> = Promise.resolve();
-  private readonly config: SandboxedToolsConfig;
+  private readonly config: GuardrailConfig;
   /** Command entries with patterns compiled to regex once at startup (SPEC §6). */
   private readonly commandEntries: CompiledCommandRuleEntry[];
   /** Configured command patterns that failed regex compilation, deduped in config order (SPEC §6). */
@@ -858,13 +858,13 @@ export class Sandbox {
 
   constructor(
     private readonly cwd: string,
-    configPath = defaultSandboxConfigPath(),
+    configPath = defaultGuardrailConfigPath(),
   ) {
     try {
-      this.config = parseSandboxedToolsConfig(readFileSync(configPath, "utf8"));
+      this.config = parseGuardrailConfig(readFileSync(configPath, "utf8"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`sandbox.yaml (${configPath}): ${message}`);
+      throw new Error(`guardrail.yaml (${configPath}): ${message}`);
     }
     const compiledCommands = compileCommandRuleEntries(this.config.commands);
     this.commandEntries = compiledCommands.entries;
@@ -874,7 +874,7 @@ export class Sandbox {
   }
 
   /**
-   * Expand every configured glob once at Sandbox construction (§3 startup
+   * Expand every configured glob once at Guardrail construction (§3 startup
    * semantics) so later re-expansions reuse the first result and never pick up
    * paths created during the session.
    */
@@ -1541,7 +1541,7 @@ export class Sandbox {
       input: request,
       mode: options.mode,
       signal: options.signal,
-      env: { ...process.env, SANDBOXED_TOOLS_PI_PACKAGE_DIR: this.piPackageDir },
+      env: { ...process.env, GUARDRAIL_PI_PACKAGE_DIR: this.piPackageDir },
       onData: options.onData,
     });
     const response = parseRunToolsResponse(execution);

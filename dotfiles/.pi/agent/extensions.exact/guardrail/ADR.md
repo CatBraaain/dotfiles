@@ -1,4 +1,4 @@
-# ADR: sandboxed-tools — サンドボックス方針
+# ADR: guardrail — サンドボックス方針
 
 |  |  |
 | --- | --- |
@@ -76,11 +76,11 @@ read / write / edit / bash ── 独自拡張でリプレイス、fs 読み書�
 flowchart TD
     subgraph PI["pi プロセス（フェンス外・network 自由）"]
         API["LLM API"]
-        TOOLS["fs ツール (sandboxed-tools)<br/>schema / 認可 / render"]
+        TOOLS["fs ツール (guardrail)<br/>schema / 認可 / render"]
     end
     TOOLS --> AUTH{"パス・コマンド認可<br/>allow / deny / ask"}
     AUTH -- "deny / 拒否" --> BLOCK["ブロック"]
-    AUTH -- "allow / 承認" --> RUNTOOL["Sandbox.runTool<br/>bwrap 1 回（bind は許可リストから）<br/>network: 開放 / /nix: ro-bind"]
+    AUTH -- "allow / 承認" --> RUNTOOL["Guardrail.runTool<br/>bwrap 1 回（bind は許可リストから）<br/>network: 開放 / /nix: ro-bind"]
     RUNTOOL --> CLI["bun run-tools.ts tool"]
     CLI --> DEF["pi 標準 tool definition<br/>fs / fd / rg / shell"]
 ```
@@ -126,7 +126,7 @@ flowchart TD
    - 全fsツールがこのリストを参照(単一ソース・bwrap の bind設定へ展開)
 
 2. 全fsアクセスツールをリプレイス（execute全体を bwrap内run-tools CLI経由）
-   - read / write / edit / grep / find / ls / bash → `Sandbox.runTool` から `bun run-tools.ts <tool>` を 1回の bwrap で実行、pi標準tool definition に委譲
+   - read / write / edit / grep / find / ls / bash → `Guardrail.runTool` から `bun run-tools.ts <tool>` を 1回の bwrap で実行、pi標準tool definition に委譲
 
 3. 動的拡張の承認フロー
    - ユーザー承認で許可リストへパス追加(エージェントからは不可)

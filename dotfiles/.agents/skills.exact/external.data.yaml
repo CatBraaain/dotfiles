@@ -88,7 +88,7 @@ repos:
         - 生きているセッションが突然死んだら、server が hung している可能性がある。
           `browse server restart` で server を再起動してセッションを開き直す
         - server の起動は browse CLI 経由に限る（`browse server start` / `browse server restart`）。
-          Firefox の process sandbox は有効なまま起動する。sandboxed-tools は全 filesystem
+          Firefox の process sandbox は有効なまま起動する。guardrail は全 filesystem
           を read-only bind する場合も新しい `/proc` mount を後から適用し、Firefox と
           GTK の nested `bwrap` helper が必要な user namespace を作れるようにする
 

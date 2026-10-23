@@ -32,7 +32,7 @@ import {
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import sandboxedToolsExtension from "./index.ts";
+import guardrailExtension from "./index.ts";
 
 initTheme("dark", false);
 
@@ -173,12 +173,12 @@ function resultText(result: AgentToolResult<unknown>): string {
     .join("\n");
 }
 
-async function sandboxSession(
+async function guardrailSession(
   directory: string,
   sessions: AgentSession[],
   observer: ExtensionFactory,
 ): Promise<AgentSession> {
-  const configPath = join(directory, "sandbox.yaml");
+  const configPath = join(directory, "guardrail.yaml");
   writeFileSync(
     configPath,
     `read:\n  - deny: ${directory}/denied\nwrite:\n  - ask: ${directory}/requested
@@ -192,7 +192,7 @@ commands:
   const settingsManager = SettingsManager.inMemory({ codemode: { mode: "on" } });
   const loader = resourceLoader(directory, settingsManager, [
     builtinCodemode,
-    { name: "sandboxed-tools", factory: (pi) => sandboxedToolsExtension(pi, configPath) },
+    { name: "guardrail", factory: (pi) => guardrailExtension(pi, configPath) },
     observer,
   ]);
   const session = await createSession(directory, settingsManager, loader, sessions);
@@ -240,9 +240,9 @@ function observeNestedCalls(
 
 describe("codemode resource ownership through the standard loader", () => {
   it(
-    "switches shortened and standard renderers when sandboxed-tools is enabled, disabled, and reloaded",
+    "switches shortened and standard renderers when guardrail is enabled, disabled, and reloaded",
     withTemporarySession(async (directory, sessions) => {
-      const extensionDirectory = join(directory, "agent", "extensions", "sandboxed-tools");
+      const extensionDirectory = join(directory, "agent", "extensions", "guardrail");
       mkdirSync(join(directory, "agent", "extensions"), { recursive: true });
       symlinkSync(import.meta.dir, extensionDirectory, "dir");
       const extensionPath = join(extensionDirectory, "index.ts");
@@ -293,7 +293,7 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
       const calls: ToolCallEvent[] = [];
       const results: ToolResultEvent[] = [];
       const executions: string[] = [];
-      const session = await sandboxSession(
+      const session = await guardrailSession(
         directory,
         sessions,
         observeNestedCalls(calls, results, executions),
@@ -329,7 +329,7 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
       const calls: ToolCallEvent[] = [];
       const results: ToolResultEvent[] = [];
       const executions: string[] = [];
-      const session = await sandboxSession(
+      const session = await guardrailSession(
         directory,
         sessions,
         observeNestedCalls(calls, results, executions),
@@ -391,7 +391,7 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
         const calls: ToolCallEvent[] = [];
         const results: ToolResultEvent[] = [];
         const executions: string[] = [];
-        const session = await sandboxSession(
+        const session = await guardrailSession(
           directory,
           sessions,
           observeNestedCalls(calls, results, executions),
@@ -430,7 +430,7 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
         const results: ToolResultEvent[] = [];
         const executions: string[] = [];
         const prompts: { title: string; options: string[] }[] = [];
-        const session = await sandboxSession(
+        const session = await guardrailSession(
           directory,
           sessions,
           observeNestedCalls(calls, results, executions),

@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { Sandbox, type PathApproval, type ToolSession } from "./sandbox";
+import { Guardrail, type PathApproval, type ToolSession } from "./guardrail";
 import { registerCodemode } from "./codemode.ts";
 import { normalizeToolPath } from "../shared/normalize-path.ts";
 import { modelSupportsImages } from "../shared/image-input.ts";
@@ -88,7 +88,7 @@ function writePermissionGuideline(paths: {
     ...(paths.length > 0 ? paths.map((path) => `- ${JSON.stringify(path)}`) : ["- (none)"]),
   ];
   return [
-    "Effective write paths grouped by final action in sandbox.yaml:",
+    "Effective write paths grouped by final action in guardrail.yaml:",
     ...listPaths("allow", paths.allow),
     ...listPaths("ask", paths.ask),
     ...listPaths("deny", paths.deny),
@@ -205,10 +205,10 @@ function stderrLineUpdater(
   };
 }
 
-export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: string): void {
+export default function guardrailExtension(pi: ExtensionAPI, configPath?: string): void {
   registerCodemode(pi);
   const cwd = process.cwd();
-  const sandbox = new Sandbox(cwd, configPath);
+  const guardrail = new Guardrail(cwd, configPath);
   const readTool = createReadTool(cwd);
   const writeTool = createWriteTool(cwd);
   const editTool = createEditTool(cwd);
@@ -221,8 +221,8 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     ...bashTool,
     description: `${bashTool.description} The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash. Request access with ask_permission only for paths whose effective write action is ask or unset; explicit deny and credentials paths cannot be granted. Respect whether the permission result allows bash writes. Commands rejected with "Command requires a reason" must be re-requested via ask_permission with the same command and a reason; do not rewrite them to bypass the gate.`,
     async execute(id, params, signal, onUpdate, context) {
-      const approved = await sandbox.authorizeCommand(params.command, context);
-      const result = await sandbox.runTool("bash", params, {
+      const approved = await guardrail.authorizeCommand(params.command, context);
+      const result = await guardrail.runTool("bash", params, {
         mode: "bash",
         signal,
         session: sessionFromContext(context),
@@ -302,9 +302,9 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     async (args, signal, context) => {
       const normalized = withNormalizedPath(args) as { path: string };
       const imagePath = resolve(cwd, normalized.path);
-      await sandbox.authorizePath("read", imagePath, context);
+      await guardrail.authorizePath("read", imagePath, context);
       if (!isVisionImageFile(imagePath)) {
-        return sandbox.runTool("read", normalized, { mode: "fs", signal });
+        return guardrail.runTool("read", normalized, { mode: "fs", signal });
       }
       const model = context?.model as
         | { input?: readonly string[]; provider?: string; id?: string }
@@ -330,8 +330,12 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     description: `${writeTool.description} Writing to a path whose effective action is ask or unset prompts the user for permission. Explicit deny and credentials paths are rejected without a prompt. Once approved, the path becomes writable for the rest of the session. Paths resolving to ask in the config stay read-only in the bash sandbox.`,
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
-      const approval = await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
-      const result = await sandbox.runTool("write", normalized, { mode: "fs", signal });
+      const approval = await guardrail.authorizePath(
+        "write",
+        resolve(cwd, normalized.path),
+        context,
+      );
+      const result = await guardrail.runTool("write", normalized, { mode: "fs", signal });
       return approval === undefined ? result : appendNote(result, writeApprovalNote(approval));
     },
     renderCall(args, theme) {
@@ -353,9 +357,13 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     renderShell: "default",
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path: string };
-      await sandbox.authorizePath("read", resolve(cwd, normalized.path), context);
-      const approval = await sandbox.authorizePath("write", resolve(cwd, normalized.path), context);
-      const result = await sandbox.runTool("edit", normalized, { mode: "fs", signal });
+      await guardrail.authorizePath("read", resolve(cwd, normalized.path), context);
+      const approval = await guardrail.authorizePath(
+        "write",
+        resolve(cwd, normalized.path),
+        context,
+      );
+      const result = await guardrail.runTool("edit", normalized, { mode: "fs", signal });
       return approval === undefined ? result : appendNote(result, writeApprovalNote(approval));
     },
     renderCall(args, theme) {
@@ -375,8 +383,8 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     ...grepTool,
     async execute(_id, params, signal, _onUpdate, context) {
       const normalized = withNormalizedPath(params) as { path?: string };
-      await sandbox.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
-      return sandbox.runTool("grep", normalized, { mode: "fs", signal });
+      await guardrail.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
+      return guardrail.runTool("grep", normalized, { mode: "fs", signal });
     },
     renderCall(args, theme) {
       const path = formatPath(String(args.path ?? ""), cwd);
@@ -398,8 +406,8 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     (args) => `${args.pattern} in ${formatPath(String(args.path ?? ""), cwd)}`,
     async (args, signal, context) => {
       const normalized = withNormalizedPath(args) as { path?: string };
-      await sandbox.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
-      return sandbox.runTool("find", normalized, { mode: "fs", signal });
+      await guardrail.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
+      return guardrail.runTool("find", normalized, { mode: "fs", signal });
     },
   );
   registerTextTool(
@@ -408,8 +416,8 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
     (args) => formatPath(String(args.path ?? ""), cwd),
     async (args, signal, context) => {
       const normalized = withNormalizedPath(args) as { path?: string };
-      await sandbox.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
-      return sandbox.runTool("ls", normalized, { mode: "fs", signal });
+      await guardrail.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
+      return guardrail.runTool("ls", normalized, { mode: "fs", signal });
     },
   );
   pi.registerTool({
@@ -419,7 +427,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
       "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: request access only when the effective write action is ask or unset and the path is not credentials; explicit deny and credentials cannot be granted. Use it before edit-heavy work on such a path; for a worktree, request its creation path or parent. Once approved, the subtree becomes writable for the rest of the session (paths resolving to ask in the config stay read-only in the bash sandbox). For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for this turn or the rest of the session. Turn approval expires at the next user message.",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
-      writePermissionGuideline(sandbox.getWritePathsByFinalAction()),
+      writePermissionGuideline(guardrail.getWritePathsByFinalAction()),
       'When bash rejects a command with "Command requires a reason", call ask_permission with that exact command and a reason instead of rewriting the command.',
     ],
     // No Type.Union/anyOf here: some models (e.g. GLM-5.3-Flash) fail to generate
@@ -452,7 +460,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
         );
       }
       if (typeof params.command === "string") {
-        const outcome = await sandbox.requestCommandPermission(
+        const outcome = await guardrail.requestCommandPermission(
           params.command,
           params.reason.trim(),
           context,
@@ -498,7 +506,7 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
         };
       }
       const normalized = withNormalizedPath(params) as { path: string };
-      const outcome = await sandbox.requestWritePermission(
+      const outcome = await guardrail.requestWritePermission(
         resolve(cwd, normalized.path),
         params.reason.trim(),
         context,
@@ -544,20 +552,17 @@ export default function sandboxedToolsExtension(pi: ExtensionAPI, configPath?: s
   });
 
   pi.on("input", () => {
-    sandbox.expireTurnCommandApprovals();
+    guardrail.expireTurnCommandApprovals();
     return { action: "continue" };
   });
   pi.on("message_start", (event) => {
-    if (event.message.role === "user") sandbox.expireTurnCommandApprovals();
+    if (event.message.role === "user") guardrail.expireTurnCommandApprovals();
   });
-  pi.on("session_shutdown", () => sandbox.expireTurnCommandApprovals());
+  pi.on("session_shutdown", () => guardrail.expireTurnCommandApprovals());
   pi.on("session_start", (_event, ctx) => {
-    sandbox.expireTurnCommandApprovals();
-    if (sandbox.invalidCommandPatterns.length === 0) return;
-    const patterns = sandbox.invalidCommandPatterns.map((p) => JSON.stringify(p)).join(", ");
-    ctx.ui.notify(
-      `sandboxed-tools: ignoring invalid command regex patterns: ${patterns}`,
-      "warning",
-    );
+    guardrail.expireTurnCommandApprovals();
+    if (guardrail.invalidCommandPatterns.length === 0) return;
+    const patterns = guardrail.invalidCommandPatterns.map((p) => JSON.stringify(p)).join(", ");
+    ctx.ui.notify(`guardrail: ignoring invalid command regex patterns: ${patterns}`, "warning");
   });
 }

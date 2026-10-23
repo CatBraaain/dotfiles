@@ -364,7 +364,7 @@ export async function runCamoufoxServer(): Promise<void> {
   // Headed on Xvfb must go through X11: with WAYLAND_DISPLAY in the
   // environment (e.g. WSLg), Firefox picks the Wayland backend and shows the
   // window on the real screen regardless of DISPLAY. Keep Firefox's process
-  // sandboxes enabled; sandboxed-tools exposes the procfs needed by nested
+  // sandboxes enabled; guardrail exposes the procfs needed by nested
   // user namespaces.
   launch.env = {
     ...launch.env,
