@@ -482,40 +482,61 @@ describe("apply scripts", () => {
     assert.deepEqual(await readdir(movedDirectory), ["move.apply.ts"]);
   });
 
-  it("rejects unsupported extensions and stops the queue", async () => {
+  it("reports unsupported extensions and keeps running remaining scripts", async () => {
     await put(distRoot, "pkg/bad.apply.sh", "not a TypeScript hook\n");
     await putApplyScript(distRoot, "pkg/good.apply.ts");
     const declarations = await collectDeclarations(distRoot);
 
-    await assert.rejects(
-      runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
-      /apply hook has unsupported extension: pkg\/bad\.apply\.sh/,
-    );
-    assert.equal(existsSync(join(homeRoot, "pkg", "apply-out.txt")), false);
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, ["apply hook has unsupported extension: pkg/bad.apply.sh"]);
+    assert.equal(existsSync(join(homeRoot, "pkg", "apply-out.txt")), true);
   });
 
-  it("stops remaining scripts on a non-zero exit", async () => {
+  it("runs remaining scripts after a non-zero exit and reports the failure", async () => {
     await putApplyScript(distRoot, "fail.apply.ts", "process.exit(3);");
     await putApplyScript(distRoot, "late.apply.ts");
     const declarations = await collectDeclarations(distRoot);
 
-    await assert.rejects(
-      runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
-      /apply script failed: fail\.apply\.ts \(exit code 3\)/,
-    );
-    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, ["apply script failed: fail.apply.ts (exit code 3)"]);
+    assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
+  });
+
+  it("reports a signal-terminated script and keeps running remaining scripts", async () => {
+    await putApplyScript(distRoot, "late.apply.ts");
+    await putApplyScript(distRoot, "sig.apply.ts", 'process.kill(process.pid, "SIGKILL");');
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, ["apply script failed: sig.apply.ts (signal SIGKILL)"]);
+    assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
+  });
+
+  it("reports every failure when several scripts fail", async () => {
+    await putApplyScript(distRoot, "a.fail.apply.ts", "process.exit(5);");
+    await putApplyScript(distRoot, "b.fail.apply.ts", "process.exit(7);");
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, [
+      "apply script failed: a.fail.apply.ts (exit code 5)",
+      "apply script failed: b.fail.apply.ts (exit code 7)",
+    ]);
   });
 });
 
 describe("unsupported apply scripts", () => {
-  it("rejects PowerShell hooks", async () => {
+  it("reports PowerShell hooks as failures", async () => {
     await put(distRoot, "ps/task.apply.ps1", "Set-Content -Value done\n");
     const declarations = await collectDeclarations(distRoot);
 
-    await assert.rejects(
-      runApplyScripts(declarations.applyScripts, distRoot, homeRoot),
-      /apply hook has unsupported extension: ps\/task\.apply\.ps1/,
-    );
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, ["apply hook has unsupported extension: ps/task.apply.ps1"]);
   });
 });
 
@@ -677,6 +698,26 @@ describe("CLI", () => {
     assert.match(stdout, /apply: 1 added, 0 changed, 0 removed \(\d+\.\d{2}s\)\napply scripts: 1 scripts \(\d+\.\d{2}s\)\n$/);
     assert.equal(await readFile(join(homeRoot, "added.txt"), "utf8"), "added\n");
     assert.equal(existsSync(join(homeRoot, "apply-out.txt")), true);
+  });
+
+  it("direct CLI runs remaining scripts after a failure, reports it, and exits non-zero", async () => {
+    await putApplyScript(distRoot, "fail.apply.ts", "process.exit(3);");
+    await putApplyScript(distRoot, "late.apply.ts");
+
+    const cli = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "apply.ts"), "--yes", distRoot, homeRoot],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+
+    assert.equal(exitCode, 1);
+    assert.equal(stderr, "apply script failed: fail.apply.ts (exit code 3)\n");
+    assert.match(stdout, /apply scripts: 2 scripts \(\d+\.\d{2}s\)\n$/);
+    assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
   });
 
   it("direct CLI reports missing arguments and invalid roots on stderr", async () => {

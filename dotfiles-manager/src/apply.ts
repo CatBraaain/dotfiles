@@ -98,16 +98,19 @@ export async function collectDeclarations(distRoot: string): Promise<Declaration
 
 // Runs TypeScript apply hooks (spec §apply スクリプト) after applying. Each
 // runs as a standalone bun process from a snapshot in its dist folder, with
-// its cwd at the script folder's home directory (created if missing). A
-// non-zero exit aborts the remaining hooks.
+// its cwd at the script folder's home directory (created if missing). Failed
+// hooks are collected and returned without stopping later hooks.
 export async function runApplyScripts(
   scripts: ApplyScript[],
   distRoot: string,
   homeRoot: string,
-): Promise<void> {
+): Promise<string[]> {
+  const failures: string[] = [];
   for (const script of scripts) {
-    if (!script.distPath.endsWith(".ts"))
-      throw new Error(`apply hook has unsupported extension: ${script.distPath}`);
+    if (!script.distPath.endsWith(".ts")) {
+      failures.push(`apply hook has unsupported extension: ${script.distPath}`);
+      continue;
+    }
     const cwd = join(homeRoot, script.homeFolderRel);
     const scriptDirectory = dirname(join(distRoot, script.distPath));
     const createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
@@ -125,11 +128,14 @@ export async function runApplyScripts(
         },
         `apply script failed: ${script.distPath}`,
       );
+    } catch (error) {
+      failures.push(messageOf(error));
     } finally {
       await removeHookSnapshot(snapshotPath, distRoot);
       await removeEmptyHookDirectories(createdDirectories);
     }
   }
+  return failures;
 }
 
 export function parseArgs(argv: readonly string[]): {
@@ -191,11 +197,12 @@ export async function main(
 
   const scriptsStarted = performance.now();
   const declarations = await collectDeclarations(distRoot);
-  await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+  const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
   writeLine(
     `apply scripts: ${declarations.applyScripts.length} scripts (${elapsedSeconds(scriptsStarted)}s)`,
   );
-  return 0;
+  for (const failure of failures) console.error(failure);
+  return failures.length === 0 ? 0 : 1;
 }
 
 // ------------------------------------------------------------------ confirmation
