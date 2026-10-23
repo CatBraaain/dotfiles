@@ -40,6 +40,13 @@ import {
   type ModelCandidate,
 } from "./routing.ts";
 import {
+  CLASS_CHANGE_EVENT,
+  requestClassChange,
+  type ClassChangeRequest,
+  type ClassChangeResult,
+  type SelectionSource,
+} from "./class-change.ts";
+import {
   formatToolCall,
   formatToolResultSummary,
   truncateErrorOutput,
@@ -231,6 +238,7 @@ export const __abortTimer: {
 interface SavedRoutingState {
   agent: Agent;
   manual: boolean;
+  selectionSource: SelectionSource;
   class: string | undefined;
   cooldowns: Map<string, number>;
 }
@@ -878,7 +886,7 @@ function registerAgentWidget(
   ctx: ExtensionContext,
   currentAgent: () => Agent,
   currentClass: () => string | undefined,
-  isManual: () => boolean,
+  selectionSource: () => SelectionSource,
 ): void {
   ctx.ui.setWidget(
     "agent",
@@ -889,8 +897,7 @@ function registerAgentWidget(
           const lines = [theme.fg("dim", `🤖 agent: ${currentAgent()}`)];
           const currentClassName = currentClass();
           if (currentClassName) {
-            const manual = isManual() ? " (manual)" : "";
-            lines.push(theme.fg("dim", `💎 class: ${currentClassName}${manual}`));
+            lines.push(theme.fg("dim", `💎 class: ${currentClassName} (${selectionSource()})`));
           }
           return lines;
         },
@@ -1034,7 +1041,9 @@ export default function agentsExtension(
         };
       }
       return {
-        content: [textPart(withSessionLine(getFinalOutput(result.messages) || "(no output)", result))],
+        content: [
+          textPart(withSessionLine(getFinalOutput(result.messages) || "(no output)", result)),
+        ],
         details: { results: [result] },
       };
     },
@@ -1094,9 +1103,7 @@ export default function agentsExtension(
         container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       }
       if (childResult.sessionId && !options.isPartial) {
-        container.addChild(
-          new Text(theme.fg("muted", `session: ${childResult.sessionId}`), 0, 0),
-        );
+        container.addChild(new Text(theme.fg("muted", `session: ${childResult.sessionId}`), 0, 0));
       }
       if (childResult.pending) {
         container.addChild({
@@ -1113,10 +1120,12 @@ export default function agentsExtension(
 
   // ── model routing state ─────────────────────────────────────────────
   let manual = false; // user picked a model manually -> suspend auto-routing
+  let selectionSource: SelectionSource = "auto";
   let switching = false; // our own setModel is in flight (NOT "manual")
   let cooldowns = new Map<string, number>(); // modelKey -> expiry epoch ms
   // /class で切り替えた class。undefined は currentAgent の既定 class を使う（SPEC「class によるモデル選択」）。
   let currentClass: string | undefined;
+  let classChangeQueue: Promise<unknown> = Promise.resolve();
   let httpRateLimitAwaitingMessage: { modelKey: string; fallbackSucceeded: boolean } | undefined;
   const http429ModelKeys = new Set<string>();
   let http429TurnFallbackDone = false;
@@ -1212,7 +1221,7 @@ export default function agentsExtension(
       ctx,
       () => currentAgent,
       () => effectiveClass(currentAgent),
-      () => manual,
+      () => selectionSource,
     );
   }
 
@@ -1239,6 +1248,7 @@ export default function agentsExtension(
           ? saved.agent
           : initialAgent(config, pi.getFlag("agent") as string | undefined);
         manual = saved.manual;
+        selectionSource = saved.selectionSource ?? (saved.manual ? "manual" : "auto");
         // 保存済み class が reload 後の設定に存在しない場合は既定 class へ戻す（agent の default 戻しと同じ扱い）。
         currentClass =
           saved.class !== undefined && config.classes[saved.class] ? saved.class : undefined;
@@ -1249,6 +1259,7 @@ export default function agentsExtension(
     }
 
     manual = false;
+    selectionSource = "auto";
     currentClass = resolveInitialClass(ctx);
     // /new は cooldown をすべて破棄する。セッション切替・分岐（resume/fork）は維持する。
     cooldowns =
@@ -1261,7 +1272,13 @@ export default function agentsExtension(
   });
 
   pi.on("session_shutdown", async () => {
-    saveRoutingState({ agent: currentAgent, manual, class: currentClass, cooldowns });
+    saveRoutingState({
+      agent: currentAgent,
+      manual,
+      selectionSource,
+      class: currentClass,
+      cooldowns,
+    });
   });
 
   // ── pre-prompt re-evaluation ────────────────────────────────────────
@@ -1328,11 +1345,20 @@ export default function agentsExtension(
       `The owner attached ${paths.length} image(s) with the following request. Read each image with read and complete it.` +
       `\n\nRequest:\n${request || "(none)"}\n\nImages:\n${paths.join("\n")}`;
     try {
-      const child = await runChild(ctx.cwd, task, "vision", undefined, undefined, ctx.signal, undefined, {
-        invocationId: randomUUID(),
-        source: "image",
-        appendEntry: pi.appendEntry.bind(pi),
-      });
+      const child = await runChild(
+        ctx.cwd,
+        task,
+        "vision",
+        undefined,
+        undefined,
+        ctx.signal,
+        undefined,
+        {
+          invocationId: randomUUID(),
+          source: "image",
+          appendEntry: pi.appendEntry.bind(pi),
+        },
+      );
       if (isFailedResult(child)) {
         const reason = getResultOutput(child);
         const message = `vision delegation failed: ${reason}`;
@@ -1364,6 +1390,7 @@ export default function agentsExtension(
   pi.on("model_select", async (event) => {
     if (!isManualSelect(event.source, switching)) return;
     manual = true;
+    selectionSource = "manual";
     tuiHandle?.requestRender();
   });
 
@@ -1493,27 +1520,45 @@ export default function agentsExtension(
     if (!applied) notifyNoModel(currentAgent, ctx, "warning");
   }
 
-  // SPEC「設定」の /class: 実効 class を切り替え、手動選択を解除し、切り替え先 class の
-  // 候補を適用する。cooldown は維持する。
-  async function switchClass(className: string, ctx: ExtensionContext): Promise<void> {
+  async function handleClassChange(request: ClassChangeRequest): Promise<ClassChangeResult> {
+    const { class: className, context: ctx, preserveManualSelection, requiredAgent } = request;
+    if (ctx.signal?.aborted) return "ignored";
+    if (requiredAgent !== undefined && currentAgent !== requiredAgent) return "ignored";
+    if (preserveManualSelection && manual) {
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `class change to ${className} ignored: manual model selection is active`,
+          "warning",
+        );
+      }
+      return "ignored";
+    }
+    if (className !== undefined && !config.classes[className]) return "ignored";
+    if (preserveManualSelection && effectiveClass(currentAgent) === className) return "unchanged";
     currentClass = className;
     manual = false;
+    selectionSource = request.source ?? "agent";
     tuiHandle?.requestRender();
     await applyCurrentClass(ctx);
+    return "applied";
   }
+
+  pi.events.on(CLASS_CHANGE_EVENT, (data) => {
+    if (!isRecord(data) || typeof data.respond !== "function" || !isRecord(data.context)) return;
+    if (data.class !== undefined && typeof data.class !== "string") return;
+    const request = data as unknown as ClassChangeRequest;
+    const completion = classChangeQueue.then(() => handleClassChange(request));
+    classChangeQueue = completion.catch(() => {});
+    request.respond(completion);
+  });
 
   for (const agent of Object.keys(config.agents)) {
     pi.registerCommand(`agent:${agent}`, {
       description: `Switch the session agent to ${agent}.`,
       handler: async (args, ctx) => {
         currentAgent = agent;
-        // SPEC「モデルの適用タイミング」: agent 切替は実効 class を既定 class に戻し、
-        // --class フラグは再適用しない。
-        currentClass = undefined;
-        manual = false;
         applyAgentTools(ctx, currentAgent);
-        tuiHandle?.requestRender();
-        await applyCurrentClass(ctx);
+        await requestClassChange(pi.events, { class: undefined, context: ctx, source: "manual" });
         const followUpMessage = args.trim();
         if (followUpMessage) pi.sendUserMessage(followUpMessage);
       },
@@ -1531,14 +1576,14 @@ export default function agentsExtension(
         }
         const selected = await ctx.ui.select("Pick class:", Object.keys(config.classes));
         if (!selected) return;
-        await switchClass(selected, ctx);
+        await requestClassChange(pi.events, { class: selected, context: ctx, source: "manual" });
         return;
       }
       if (!config.classes[name]) {
         ctx.ui.notify(`unknown class: ${name}`, "warning");
         return;
       }
-      await switchClass(name, ctx);
+      await requestClassChange(pi.events, { class: name, context: ctx, source: "manual" });
     },
   });
 }

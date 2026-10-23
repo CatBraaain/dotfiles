@@ -29,6 +29,7 @@ import agentsExtension, {
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
 import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-format.ts";
+import { CLASS_CHANGE_EVENT, requestClassChange } from "./class-change.ts";
 
 const config: AgentConfig = {
   default: "manager",
@@ -107,6 +108,7 @@ interface CaptureOptions {
   findModel?: (provider: string, id: string) => { provider: string; id: string } | undefined;
   setModelSucceeds?: boolean | boolean[];
   classSelection?: string;
+  beforeSetModel?: () => Promise<void>;
 }
 
 function captureAgentsExtension(
@@ -133,6 +135,8 @@ function captureAgentsExtension(
   let agentWidget: any;
   let requestedRenderCount = 0;
   let registeredTool: CapturedTool | undefined;
+  const eventBusHandlers = new Map<string, Array<(data: unknown) => void>>();
+  const classChangeRequests: unknown[] = [];
 
   const originalSpawn = __spawn.current;
   __spawn.current = ((
@@ -178,6 +182,7 @@ function captureAgentsExtension(
       async setModel(model: unknown) {
         const attemptIndex = selectedModels.length;
         selectedModels.push(model);
+        await options.beforeSetModel?.();
         context.model = model as { provider: string; id: string };
         return Array.isArray(options.setModelSucceeds)
           ? (options.setModelSucceeds[attemptIndex] ?? true)
@@ -187,6 +192,22 @@ function captureAgentsExtension(
         sentMessages.push(
           messageOptions === undefined ? { content } : { content, options: messageOptions },
         );
+      },
+      events: {
+        emit(channel: string, data: unknown) {
+          if (channel === CLASS_CHANGE_EVENT) classChangeRequests.push(data);
+          for (const handler of eventBusHandlers.get(channel) ?? []) handler(data);
+        },
+        on(channel: string, handler: (data: unknown) => void) {
+          const list = eventBusHandlers.get(channel) ?? [];
+          eventBusHandlers.set(channel, [...list, handler]);
+          return () => {
+            eventBusHandlers.set(
+              channel,
+              (eventBusHandlers.get(channel) ?? []).filter((registered) => registered !== handler),
+            );
+          };
+        },
       },
     } as never,
     injectedConfig,
@@ -226,6 +247,7 @@ function captureAgentsExtension(
     sentMessages,
     spawnCalls,
     appendedEntries,
+    classChangeRequests,
     restore() {
       __spawn.current = originalSpawn;
       __resetRoutingState();
@@ -238,6 +260,28 @@ function captureAgentsExtension(
     },
     async sessionShutdown() {
       for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
+    },
+    async turnStart() {
+      for (const handler of handlers.get("turn_start") ?? [])
+        await handler({ type: "turn_start", turnIndex: 0, timestamp: 0 }, context);
+    },
+    requestClassChange(className: string) {
+      return requestClassChange(
+        {
+          emit(channel, data) {
+            for (const handler of eventBusHandlers.get(channel) ?? []) handler(data);
+          },
+          on() {
+            return () => {};
+          },
+        },
+        {
+          class: className,
+          context: context as never,
+          preserveManualSelection: true,
+          requiredAgent: "main",
+        },
+      );
     },
     async runCommand(agent: string, args = "") {
       await commands.get(`agent:${agent}`)?.(args, context);
@@ -786,7 +830,7 @@ describe("拡張の接続", () => {
       assert.deepEqual(extension.notificationEvents, [
         { message: "agent model → zai/glm-5.2", level: "info" },
       ]);
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
       assert.deepEqual(extension.activeTools.at(-1), ["read", "bash", "subagent"]);
     } finally {
       extension.restore();
@@ -810,7 +854,7 @@ describe("拡張の接続", () => {
     try {
       assert.deepEqual(extension.registeredFlags, ["agent", "class"]);
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low (auto)"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
@@ -827,7 +871,7 @@ describe("拡張の接続", () => {
         provider: "commandcode",
         id: "gpt-5.6-luna",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low (manual)"]);
       assert.ok(extension.notifications.includes("agent model → commandcode/gpt-5.6-luna"));
     } finally {
       extension.restore();
@@ -1146,7 +1190,7 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart();
       await extension.runClassCommand("low");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1185,7 +1229,7 @@ describe("class 選択", () => {
         message: "unknown class: nope",
         level: "warning",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
       assert.equal(extension.selectedModels.length, modelCountBefore);
     } finally {
       extension.restore();
@@ -1197,7 +1241,7 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart();
       await extension.runClassCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1213,7 +1257,7 @@ describe("class 選択", () => {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
       await extension.runClassCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
       assert.equal(extension.selectedModels.length, modelCountBefore);
       // キャンセルで新たな通知・モデル適用は起きない（notifications は sessionStart の1件のみ）
       assert.deepEqual(extension.notifications, ["agent model → zai/glm-5.2"]);
@@ -1232,7 +1276,7 @@ describe("class 選択", () => {
         message: "usage: /class <class-name>",
         level: "error",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
     } finally {
       extension.restore();
     }
@@ -1242,7 +1286,7 @@ describe("class 選択", () => {
     const extension = captureAgentsExtension({ config }, { flags: { class: "low" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (auto)"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
     } finally {
       extension.restore();
@@ -1256,7 +1300,7 @@ describe("class 選択", () => {
     );
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: middle (auto)"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
     } finally {
       extension.restore();
@@ -1267,7 +1311,7 @@ describe("class 選択", () => {
     const extension = captureAgentsExtension({ config }, { flags: { class: "nope" } });
     try {
       await extension.sessionStart();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "zai", id: "glm-5.2" }]);
       assert.deepEqual(extension.notificationEvents.at(-2), {
         message: "unknown class flag: nope",
@@ -1288,7 +1332,7 @@ describe("class 選択", () => {
         message: "no available model for agent manager: class low",
         level: "warning",
       });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
       assert.deepEqual(extension.context.model, { provider: "external", id: "kept" });
     } finally {
       extension.restore();
@@ -1300,11 +1344,11 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart();
       await extension.runClassCommand("low");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
       await extension.runCommand("chat");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low (manual)"]);
       await extension.runCommand("manager");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
       assert.deepEqual(extension.selectedModels.at(-1), { provider: "zai", id: "glm-5.2" });
     } finally {
       extension.restore();
@@ -1316,9 +1360,9 @@ describe("class 選択", () => {
     try {
       await extension.sessionStart("startup");
       await extension.runClassCommand("middle");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
       await extension.sessionStart("new");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (auto)"]);
       assert.deepEqual(extension.selectedModels.at(-1), {
         provider: "commandcode",
         id: "gpt-5.6-luna",
@@ -1334,7 +1378,7 @@ describe("class 選択", () => {
       await extension.sessionStart("startup");
       await extension.runClassCommand("middle");
       await extension.sessionStart("resume");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (auto)"]);
     } finally {
       extension.restore();
     }
@@ -1350,7 +1394,7 @@ describe("class 選択", () => {
 
       after = captureAgentsExtension({ config }, { flags: { class: "low" } });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
       assert.equal(after.selectedModels.length, 0);
     } finally {
       after?.restore();
@@ -1373,7 +1417,7 @@ describe("class 選択", () => {
       };
       after = captureAgentsExtension({ config: reducedConfig });
       await after.sessionStart("reload");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
     } finally {
       after?.restore();
       before.restore();
@@ -1388,7 +1432,7 @@ describe("class 選択", () => {
       const modelCountBefore = extension.selectedModels.length;
       await extension.input("hello");
       assert.equal(extension.selectedModels.length, modelCountBefore);
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (auto)"]);
     } finally {
       extension.restore();
     }
@@ -1480,7 +1524,7 @@ describe("手動モデル選択", () => {
     try {
       await extension.sessionStart();
       await extension.modelSelect("restore");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
     } finally {
       extension.restore();
     }
@@ -1733,7 +1777,7 @@ describe("手動モデル選択", () => {
       await extension.sessionStart();
       await extension.modelSelect("set");
       await extension.runCommand("chat");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low (manual)"]);
     } finally {
       extension.restore();
     }
@@ -2360,7 +2404,7 @@ describe("セッションライフサイクル", () => {
 
       after = captureAgentsExtension();
       await after.sessionStart("fork");
-      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
     } finally {
       after?.restore();
       before.restore();
@@ -2411,7 +2455,7 @@ describe("セッションライフサイクル", () => {
       await extension.modelSelect("set");
       await extension.sessionShutdown();
       await extension.sessionStart("new");
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle"]);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
     } finally {
       extension.restore();
     }
@@ -3440,10 +3484,21 @@ describe("subagent の表示", () => {
     });
     try {
       const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
-      const rendered = extension.renderResult({ content: [], details: makeDetails() }, { isPartial: false }, theme) as Container;
+      const rendered = extension.renderResult(
+        { content: [], details: makeDetails() },
+        { isPartial: false },
+        theme,
+      ) as Container;
       assert.ok(rendered.render(200).some((line) => line.includes("session: child-id")));
-      const partial = extension.renderResult({ content: [], details: makeDetails() }, { isPartial: true }, theme) as Container;
-      assert.equal(partial.render(200).some((line) => line.includes("session: child-id")), false);
+      const partial = extension.renderResult(
+        { content: [], details: makeDetails() },
+        { isPartial: true },
+        theme,
+      ) as Container;
+      assert.equal(
+        partial.render(200).some((line) => line.includes("session: child-id")),
+        false,
+      );
     } finally {
       extension.restore();
     }
@@ -3460,9 +3515,14 @@ describe("subagent の表示", () => {
       assert.ok(
         resumed
           .render(200)
-          .some((line) => line.includes("subagent worker (resume 2026-10-22T08-00-00-123Z_old-id.jsonl)")),
+          .some((line) =>
+            line.includes("subagent worker (resume 2026-10-22T08-00-00-123Z_old-id.jsonl)"),
+          ),
       );
-      const forked = extension.renderCall({ agent: "worker", session: "old-id", fork: true }, theme) as Text;
+      const forked = extension.renderCall(
+        { agent: "worker", session: "old-id", fork: true },
+        theme,
+      ) as Text;
       assert.ok(forked.render(200).some((line) => line.includes("subagent worker (fork old-id)")));
     } finally {
       extension.restore();
@@ -4345,6 +4405,302 @@ describe("independent child session storage", () => {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("replace_context によるクラス指定", () => {
+  const configWithMain: AgentConfig = {
+    ...config,
+    classes: {
+      ...config.classes,
+      high: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
+    },
+    agents: {
+      ...config.agents,
+      main: {
+        class: "middle",
+        tools: ["*", "!handoff_session"],
+        subagents: ["worker", "vision"],
+        systemPrompt: ["main prompt"],
+      },
+    },
+  };
+
+  it("shows manual command selection without disabling class routing", async () => {
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      { flags: { agent: "main" } },
+    );
+    try {
+      await extension.sessionStart();
+      assert.match(extension.agentWidget()!.join("\n"), /class: middle \(auto\)/);
+      await extension.runClassCommand("high");
+      assert.match(extension.agentWidget()!.join("\n"), /class: high \(manual\)/);
+      extension.context.model = { provider: "external", id: "other" };
+      await extension.input("continue");
+      assert.equal(extension.context.model.id, "gpt-5.6-luna");
+      assert.match(extension.agentWidget()!.join("\n"), /class: high \(manual\)/);
+      await extension.runCommand("worker");
+      assert.match(extension.agentWidget()!.join("\n"), /class: low \(manual\)/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("keeps agent attribution during reevaluation and rate-limit fallback", async () => {
+    const extension = captureAgentsExtension(
+      {
+        config: {
+          ...configWithMain,
+          classes: {
+            ...configWithMain.classes,
+            high: [
+              { provider: "commandcode", model: "gpt-5.6-luna" },
+              { provider: "zai", model: "glm-5.2" },
+            ],
+          },
+        },
+      },
+      { flags: { agent: "main" } },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.requestClassChange("high");
+      assert.match(extension.agentWidget()!.join("\n"), /class: high \(agent\)/);
+      await extension.input("continue");
+      await extension.providerResponse(429);
+      assert.equal(extension.context.model!.id, "glm-5.2");
+      assert.match(extension.agentWidget()!.join("\n"), /class: high \(agent\)/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("does not change attribution for ignored or unchanged requests", async () => {
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      { flags: { agent: "main" } },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.runClassCommand("high");
+      assert.equal(await extension.requestClassChange("high"), "unchanged");
+      assert.equal(await extension.requestClassChange("unknown"), "ignored");
+      assert.match(extension.agentWidget()!.join("\n"), /class: high \(manual\)/);
+      await extension.modelSelect("set");
+      assert.equal(await extension.requestClassChange("low"), "ignored");
+      assert.match(extension.agentWidget()!.join("\n"), /class: high \(manual\)/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  for (const source of ["auto", "manual", "agent"] as const) {
+    it(`preserves ${source} attribution across extension reload`, async () => {
+      const before = captureAgentsExtension(
+        { config: configWithMain },
+        { flags: { agent: "main" } },
+      );
+      let after: ReturnType<typeof captureAgentsExtension> | undefined;
+      try {
+        await before.sessionStart("startup");
+        if (source === "manual") await before.runClassCommand("high");
+        if (source === "agent") await before.requestClassChange("high");
+        await before.sessionShutdown();
+        after = captureAgentsExtension({ config: configWithMain }, { flags: { agent: "main" } });
+        await after.sessionStart("reload");
+        assert.ok(after.agentWidget()!.at(-1)!.endsWith(`(${source})`));
+        assert.equal(after.selectedModels.length, 0);
+      } finally {
+        after?.restore();
+        before.restore();
+      }
+    });
+  }
+
+  for (const reason of ["new", "resume", "fork"]) {
+    it(`resets agent attribution to auto on ${reason}`, async () => {
+      const extension = captureAgentsExtension(
+        { config: configWithMain },
+        { flags: { agent: "main" } },
+      );
+      try {
+        await extension.sessionStart("startup");
+        await extension.requestClassChange("high");
+        await extension.sessionStart(reason);
+        assert.match(extension.agentWidget()!.join("\n"), /class: middle \(auto\)/);
+      } finally {
+        extension.restore();
+      }
+    });
+  }
+
+  it("routes both class commands and agent defaults through the same event", async () => {
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      { flags: { agent: "main" } },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.runClassCommand("low");
+      await extension.runCommand("worker");
+      assert.deepEqual(
+        extension.classChangeRequests.map((request: any) => request.class),
+        ["low", undefined],
+      );
+      assert.match(extension.agentWidget()!.join("\n"), /class: low/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  for (const command of ["class", "agent"] as const) {
+    it(`awaits model application before completing the ${command} command`, async () => {
+      let blockModel = false;
+      const started = Promise.withResolvers<void>();
+      const completion = Promise.withResolvers<void>();
+      const extension = captureAgentsExtension(
+        { config: configWithMain },
+        {
+          flags: { agent: "main" },
+          beforeSetModel: async () => {
+            if (!blockModel) return;
+            started.resolve();
+            await completion.promise;
+          },
+        },
+      );
+      try {
+        await extension.sessionStart();
+        blockModel = true;
+        let finished = false;
+        const change = (
+          command === "class"
+            ? extension.runClassCommand("low")
+            : extension.runCommand("worker", "continue")
+        ).then(() => {
+          finished = true;
+        });
+        await started.promise;
+        assert.equal(finished, false);
+        assert.deepEqual(extension.sentMessages, []);
+        completion.resolve();
+        await change;
+        if (command === "agent")
+          assert.deepEqual(extension.sentMessages, [{ content: "continue" }]);
+      } finally {
+        completion.resolve();
+        extension.restore();
+      }
+    });
+  }
+
+  it("continues handling requests after a failed class application", async () => {
+    let failModel = false;
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      {
+        flags: { agent: "main" },
+        beforeSetModel: async () => {
+          if (failModel) throw new Error("model failed");
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      failModel = true;
+      await assert.rejects(extension.runClassCommand("low"), /model failed/);
+      failModel = false;
+      await extension.runClassCommand("high");
+      assert.match(extension.agentWidget()!.join("\n"), /class: high/);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("applies the requested model before the request completes", async () => {
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      { flags: { agent: "main" } },
+    );
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.selectedModels[0], { provider: "zai", id: "glm-5.2" });
+      await extension.requestClassChange("high");
+      assert.deepEqual(extension.selectedModels.at(-1), {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("1つの指定は1つのターンだけで適用される", async () => {
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      { flags: { agent: "main" } },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.requestClassChange("high");
+      const applied = extension.selectedModels.length;
+      await extension.turnStart();
+      assert.equal(extension.selectedModels.length, applied);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("手動選択中は適用せず warning を出す", async () => {
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      { flags: { agent: "main" } },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.modelSelect("set");
+      const applied = extension.selectedModels.length;
+      await extension.requestClassChange("high");
+      assert.equal(extension.selectedModels.length, applied);
+      assert.match(
+        extension.notifications.at(-1)!,
+        /class change to high ignored: manual model selection is active/,
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("main 以外の agent では適用しない", async () => {
+    const extension = captureAgentsExtension({ config: configWithMain });
+    try {
+      await extension.sessionStart();
+      await extension.requestClassChange("high");
+      assert.equal(extension.selectedModels.length, 1);
+      assert.deepEqual(extension.selectedModels[0], { provider: "zai", id: "glm-5.2" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("現在と同じクラス・未定義のクラス名ではモデルを切り替えない", async () => {
+    const extension = captureAgentsExtension(
+      { config: configWithMain },
+      { flags: { agent: "main", class: "high" } },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.requestClassChange("high");
+      await extension.requestClassChange("ultra");
+      assert.equal(extension.selectedModels.length, 1);
+      assert.deepEqual(extension.selectedModels[0], {
+        provider: "commandcode",
+        id: "gpt-5.6-luna",
+      });
+    } finally {
+      extension.restore();
     }
   });
 });

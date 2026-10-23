@@ -1,5 +1,6 @@
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { requestClassChange } from "../agents/class-change.ts";
 
 const STATE_TYPE = "handoff-session-counter";
 const STATE_VERSION = 1;
@@ -10,6 +11,7 @@ const STAY_OPTION = "No, stay (reason next)";
 interface HandoffPayload {
   reason: string;
   handoff: string;
+  class: string | undefined;
 }
 
 export default function replaceContextExtension(pi: ExtensionAPI): void {
@@ -40,10 +42,25 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
       handoff: Type.String({
         description: "Self-contained prompt for the next work phase (non-empty)",
       }),
+      class: Type.Optional(
+        Type.String({
+          description:
+            'Effective model class for the next phase, such as "high", "middle", or "low". ' +
+            'Use "high" for demanding phases like design, integration, or complex debugging, ' +
+            '"middle" for ordinary work, and "low" for light routine work. ' +
+            "Omit it to keep the current class.",
+        }),
+      ),
     }),
     async execute(toolCallId, params) {
       const reason = typeof params.reason === "string" ? params.reason.trim() : "";
       const handoff = typeof params.handoff === "string" ? params.handoff.trim() : "";
+      const requestedClass =
+        params.class === undefined
+          ? undefined
+          : typeof params.class === "string"
+            ? params.class.trim()
+            : "";
       if (!reason || !handoff) {
         return {
           content: [{ type: "text", text: "Both reason and handoff must be non-empty strings." }],
@@ -51,12 +68,22 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
           details: undefined,
         };
       }
-      pendingRequests.set(toolCallId, { reason, handoff });
+      if (params.class !== undefined && !requestedClass) {
+        return {
+          content: [{ type: "text", text: "class must be a non-empty string when provided." }],
+          isError: true,
+          details: undefined,
+        };
+      }
+      pendingRequests.set(toolCallId, { reason, handoff, class: requestedClass });
       return {
         content: [
           { type: "text", text: "Context replacement requested for the end of this turn." },
         ],
-        details: { reason, handoff },
+        details:
+          requestedClass === undefined
+            ? { reason, handoff }
+            : { reason, handoff, class: requestedClass },
       };
     },
   });
@@ -147,6 +174,21 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
       }
     }
     if (!isCurrentRequest()) return;
+    if (payload.class) {
+      try {
+        await requestClassChange(pi.events, {
+          class: payload.class,
+          context: ctx,
+          source: "agent",
+          preserveManualSelection: true,
+          requiredAgent: "main",
+        });
+      } catch (error) {
+        ctx.ui.notify(`replace-context: class change failed (${errorMessage(error)})`, "error");
+        return;
+      }
+      if (!isCurrentRequest()) return;
+    }
     return {
       entries: [
         ...event.entries,
@@ -206,7 +248,9 @@ function isHandoffPayload(value: unknown): value is HandoffPayload {
     typeof value.reason === "string" &&
     value.reason.trim().length > 0 &&
     typeof value.handoff === "string" &&
-    value.handoff.trim().length > 0
+    value.handoff.trim().length > 0 &&
+    (value.class === undefined ||
+      (typeof value.class === "string" && value.class.trim().length > 0))
   );
 }
 

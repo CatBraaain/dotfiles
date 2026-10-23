@@ -327,6 +327,12 @@ async function consumeParentResult(message: AssistantMessage): Promise<any> {
           tool = definition;
         },
         appendEntry() {},
+        events: {
+          on() {
+            return () => {};
+          },
+          emit() {},
+        },
       } as any,
       {
         config: {

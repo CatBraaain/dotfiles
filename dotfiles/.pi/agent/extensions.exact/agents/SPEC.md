@@ -113,7 +113,27 @@ class はデフォルトフォールバックの候補順序であり、モデ�
 | 候補モデルの適用に失敗した（APIキーがないなど） | その候補を除外して次候補へ進む |
 | class内の全候補が不成立、または全候補で適用に失敗 | 「モデルの適用タイミング」の該当行に従う |
 
-class をまたいだ降格は行わない。
+class をまたいだ降格は行わない。この規則は候補選択の自動評価に適用され、`replace_context` による明示的なクラス指定には適用しない。
+
+## クラス変更イベント
+
+この節は、クラス変更を要求する拡張の実装者向けの契約である。
+
+実行中の明示的なクラス変更は `agents:class-change` の受信処理だけが行う。`/class`・`/agent:<name>` による既定classへの切替も、外部拡張と同じ `requestClassChange(events, options)` を使う。セッション初期化・復元はこの要求経路とは別に行う。候補再評価・429フォールバックはclass自体を変更しない。
+
+イベント契約とヘルパーは `agents/class-change.ts` に置く。要求の入力は次のとおり。
+
+| 入力 | 意味 |
+| --- | --- |
+| `class` | クラス名。`undefined` は現在のagentの既定classへ戻す |
+| `context` | 呼出し元の現在の `ExtensionContext` |
+| `source` | 選択主体の表示。`manual`・`auto`・`agent`。省略時は `agent`。ユーザーのコマンドは `manual` を指定する |
+| `preserveManualSelection` | `true` のとき手動モデル選択を維持し、変更を無視してwarning通知する。同じ実効classへの要求も再適用しない。省略時は手動選択を解除して候補を適用する |
+| `requiredAgent` | 指定時は現在のagentがこの名前の場合だけ適用する |
+
+受信処理は要求を受けた順に処理する。実効class更新・手動選択の扱い・モデル適用・表示更新を担当し、適用処理のPromiseを `respond` で同期的に返す。呼出し元はヘルパーのPromiseをawaitし、モデル適用処理が完了するまで後続処理へ進まない。
+
+結果は `applied`（適用処理完了）、`unchanged`（同じclass）、`ignored`（条件不成立・未定義class・中断済み）、`unavailable`（受信拡張なし）である。候補不成立時の通知とモデル維持は下表に従う。`applied` は適用処理の完了を示し、利用可能なモデルの存在は保証しない。例外は呼出し元へ伝わり、後続要求の処理は継続できる。受信拡張がなければ無期限に待たず `unavailable` を返す。
 
 ## モデルの適用タイミング
 
@@ -126,13 +146,14 @@ class をまたいだ降格は行わない。
 | 各プロンプト送信前（自動状態のとき） | 現在の実効class の候補を再評価し、現在のモデルと異なる候補が成立したら切り替える。全候補が不成立の場合はエラーを通知し、プロンプトを実行しない |
 | `/agent:<name>` | agent を切り替え、手動選択を解除し、実効class を切替先agent の既定class に戻してその候補を適用してから後続メッセージを送信する |
 | `/class [name]` | 実効class を切り替え、手動選択を解除し、切り替え先class の候補を適用する |
+| コンテキスト切替（`replace_context` で `class` 指定あり） | 切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
 | 429受信時 | 「レート制限（429）時のフォールバック」に従う |
 
 モデルの切り替えに成功したら `agent model → <provider>/<model>` を info で通知する。
 
 | 全候補が不成立になる場面 | 結果 |
 | --- | --- |
-| セッション開始・`/new`・セッション切替・分岐・`/agent:<name>`・`/class` | 現在のモデルを維持し、`no available model for agent <name>: class <class-name>` を warning で通知する |
+| セッション開始・`/new`・セッション切替・分岐・`/agent:<name>`・`/class`・クラス変更イベント | 現在のモデルを維持し、`no available model for agent <name>: class <class-name>` を warning で通知する |
 | プロンプト送信前 | `no available model for agent <name>: class <class-name>` を error で通知し、プロンプトを実行しない |
 | 429受信時 | 「レート制限（429）時のフォールバック」に従う |
 
@@ -152,6 +173,7 @@ stateDiagram-v2
 | --- | --- |
 | 自動 | 各プロンプト送信前に実効class の候補を再評価する |
 | 手動 | ユーザーが選んだモデルを使い続ける。プロンプト送信前の再評価を行わない |
+| 手動中のクラス指定（`replace_context` の `class`） | クラスを変更せず、`class change to <class> ignored: manual model selection is active` を warning で通知する |
 
 状態を変える操作とその時の全動作は「モデルの適用タイミング」の表が定め、この図は手動状態の遷移だけを示す。手動状態中の 429フォールバック後も手動状態を維持する。
 
@@ -286,10 +308,18 @@ cooldown の破棄・維持は、発生タイミングごとに「モデルの�
 
 ```text
 🤖 agent: <currentAgent>
-💎 class: <class-name>
+💎 class: <class-name> (<source>)
 ```
 
-class が未選択のときは agent行のみを表示する。手動状態のときは `💎 class: <class-name> (manual)` のように class行の末尾に `(manual)` を付ける。表示のテキスト色はグレーとする。
+class が未選択のときは agent行のみを表示する。class行の末尾には、最後にクラスまたはモデルを選んだ主体を必ず表示する。表示のテキスト色はグレーとする。
+
+| 表示 | 設定するタイミング |
+| --- | --- |
+| `(manual)` | ユーザーの `/model`・`/class`・`/agent:<name>` による選択 |
+| `(auto)` | セッション初期化・新規開始・再開・分岐時の初期選択 |
+| `(agent)` | `replace_context` のクラス指定を適用したとき |
+
+この表示はモデルルーティングの自動・手動状態とは別に管理する。`/class`・`/agent:<name>` の操作後は `(manual)` と表示するが、候補の自動再評価は従来どおり行う。候補再評価・429フォールバックでは表示を変更せず、`/reload` では保存した表示を維持する。無視された要求・同じクラスへの変更なしの要求では表示を変更しない。
 
 ## 通知のない環境
 

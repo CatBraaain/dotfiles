@@ -19,6 +19,12 @@ import type {
   ToolDefinition,
   TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import {
+  CLASS_CHANGE_EVENT,
+  type ClassChangeRequest,
+  type ClassChangeResult,
+} from "../agents/class-change.ts";
+import agentsExtension from "../agents/index.ts";
 import replaceContextExtension from "./index";
 
 function harness(manager = SessionManager.inMemory()) {
@@ -28,6 +34,8 @@ function harness(manager = SessionManager.inMemory()) {
   const sent: string[] = [];
   const notices: string[] = [];
   const selections: string[] = [];
+  const emitted: Array<{ channel: string; data: unknown }> = [];
+  const classChange = { complete: () => Promise.resolve<ClassChangeResult>("applied") };
   const controller = new AbortController();
   const ctx = {
     sessionManager: manager,
@@ -59,6 +67,13 @@ function harness(manager = SessionManager.inMemory()) {
     sendUserMessage(text: string) {
       sent.push(text);
     },
+    events: {
+      emit(channel: string, data: unknown) {
+        const request = data as ClassChangeRequest;
+        emitted.push({ channel, data: { class: request.class, source: request.source } });
+        request.respond(classChange.complete());
+      },
+    },
   } as never);
 
   async function request(
@@ -67,8 +82,11 @@ function harness(manager = SessionManager.inMemory()) {
   ) {
     return tool.execute(toolCallId, params, undefined, undefined, ctx as never);
   }
-  async function boundary(options: Partial<TurnEndEvent> = {}) {
-    const result = await request();
+  async function boundary(
+    options: Partial<TurnEndEvent> = {},
+    requestParams: Record<string, unknown> | undefined = undefined,
+  ) {
+    const result = await request(requestParams);
     const toolCallId = `call-${manager.getEntries().length}`;
     const toolResult = {
       role: "toolResult" as const,
@@ -131,28 +149,44 @@ function harness(manager = SessionManager.inMemory()) {
   function user(source: InputEvent["source"] = "interactive") {
     input({ type: "input", source, text: "continue" });
   }
-  return { manager, ctx, sent, selections, notices, controller, request, boundary, commit, user };
+  return {
+    manager,
+    ctx,
+    sent,
+    selections,
+    notices,
+    emitted,
+    classChange,
+    controller,
+    request,
+    boundary,
+    commit,
+    user,
+  };
 }
 
 interface ProviderRequest {
+  model: string;
   messages: unknown[];
   system?: unknown;
   tools?: { name: string }[];
 }
 
-async function runtimeHarness() {
+async function runtimeHarness(withAgents = false) {
   const directory = mkdtempSync(join(tmpdir(), "handoff-runtime-"));
   const requests: ProviderRequest[] = [];
   const inputs: InputEvent[] = [];
   const selections: string[] = [];
   const notices: string[] = [];
   const errors: unknown[] = [];
+  const classChanges: Array<{ class: string }> = [];
   const hooks: {
     duringTool?: (pi: ExtensionAPI) => Promise<void>;
     duringSelect?: () => Promise<string | undefined>;
     duringReason?: () => Promise<string | undefined>;
   } = {};
   let requestHandoff = false;
+  let requestHandoffClass: string | undefined;
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -183,7 +217,11 @@ async function runtimeHarness() {
           delta: handoff
             ? {
                 type: "input_json_delta",
-                partial_json: JSON.stringify({ reason: "phase done", handoff: "new phase marker" }),
+                partial_json: JSON.stringify({
+                  reason: "phase done",
+                  handoff: "new phase marker",
+                  ...(requestHandoffClass !== undefined ? { class: requestHandoffClass } : {}),
+                }),
               }
             : { type: "text_delta", text: "fake final response" },
         },
@@ -217,17 +255,15 @@ async function runtimeHarness() {
     baseUrl: `http://127.0.0.1:${server.port}`,
     apiKey: "fake-local-key",
     api: "anthropic-messages",
-    models: [
-      {
-        id: "fake-model",
-        name: "Fake model",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 1024,
-      },
-    ],
+    models: ["fake-model", "high-model", "low-model"].map((id) => ({
+      id,
+      name: id,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 1024,
+    })),
   });
   const resourceLoader = new DefaultResourceLoader({
     cwd: directory,
@@ -240,7 +276,35 @@ async function runtimeHarness() {
     noContextFiles: true,
     systemPrompt: "Keep this system marker.",
     extensionFactories: [
+      ...(withAgents
+        ? [
+            (pi: ExtensionAPI) =>
+              agentsExtension(pi, {
+                config: {
+                  default: "main",
+                  classes: {
+                    middle: [{ provider: "handoff-test", model: "fake-model" }],
+                    high: [{ provider: "handoff-test", model: "high-model" }],
+                    low: [{ provider: "handoff-test", model: "low-model" }],
+                  },
+                  agents: {
+                    main: {
+                      class: "middle",
+                      tools: ["replace_context"],
+                      subagents: [],
+                      systemPrompt: [],
+                    },
+                  },
+                },
+              }),
+          ]
+        : []),
       replaceContextExtension,
+      (pi) => {
+        pi.events.on(CLASS_CHANGE_EVENT, (data) => {
+          classChanges.push({ class: (data as ClassChangeRequest).class! });
+        });
+      },
       (pi) => {
         pi.on("input", (event) => {
           inputs.push(event);
@@ -285,8 +349,9 @@ async function runtimeHarness() {
       errors.push(error);
     },
   });
-  async function handoff() {
+  async function handoff(options: { class?: string } = {}) {
     requestHandoff = true;
+    requestHandoffClass = options.class;
     await session.prompt("request the phase transition", { source: "extension" });
   }
   function dispose() {
@@ -302,6 +367,7 @@ async function runtimeHarness() {
     selections,
     notices,
     errors,
+    classChanges,
     hooks,
     handoff,
     dispose,
@@ -309,6 +375,26 @@ async function runtimeHarness() {
 }
 
 describe("real AgentSession delivery with a loopback fake provider", () => {
+  it("uses each requested class for the first continuation with the real agents receiver", async () => {
+    const h = await runtimeHarness(true);
+    try {
+      await h.session.prompt("old user marker");
+      for (const [className, model] of [
+        ["high", "high-model"],
+        ["low", "low-model"],
+        ["middle", "fake-model"],
+      ]) {
+        const before = h.requests.length;
+        await h.handoff({ class: className });
+        assert.equal(h.requests.length, before + 2);
+        assert.equal(h.requests.at(-1)!.model, model);
+        assert.match(JSON.stringify(h.requests.at(-1)!.messages), /new phase marker/);
+      }
+      assert.deepEqual(h.errors, []);
+    } finally {
+      h.dispose();
+    }
+  });
   for (const delivery of ["steer", "followUp"] as const) {
     for (const source of ["interactive", "rpc", "extension"] as const) {
       it(`keeps actual ${delivery} input from ${source} after the handoff boundary`, async () => {
@@ -383,6 +469,21 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
       });
     }
   }
+
+  it("delivers the requested class change through a real turn", async () => {
+    const h = await runtimeHarness();
+    try {
+      await h.session.prompt("old user marker");
+      await h.handoff({ class: "high" });
+      assert.deepEqual(h.classChanges, [{ class: "high" }]);
+      const compactions = h.manager.getEntries().filter((entry) => entry.type === "compaction");
+      assert.equal(compactions.length, 1);
+      assert.deepEqual(h.errors, []);
+      assert.deepEqual(h.notices, []);
+    } finally {
+      h.dispose();
+    }
+  });
 
   it("runs the two automatic handoffs and approval cycle through actual turns", async () => {
     const h = await runtimeHarness();
@@ -561,6 +662,82 @@ describe("handoff approval cycle", () => {
     h.ctx.hasUI = false;
     assert.equal(await h.boundary(), undefined);
     assert.match(h.notices[0]!, /UI is unavailable/);
+  });
+});
+
+describe("handoff class change", () => {
+  it("waits for class application before returning the context boundary", async () => {
+    const h = harness();
+    const started = Promise.withResolvers<void>();
+    const completion = Promise.withResolvers<ClassChangeResult>();
+    h.classChange.complete = () => {
+      started.resolve();
+      return completion.promise;
+    };
+    let finished = false;
+    const boundary = h
+      .boundary({}, { reason: "next", handoff: "next", class: "high" })
+      .then((result) => {
+        finished = true;
+        return result;
+      });
+    await started.promise;
+    assert.equal(finished, false);
+    completion.resolve("applied");
+    assert.equal((await boundary)?.continue, true);
+  });
+
+  it("reports class application errors without replacing the context", async () => {
+    const h = harness();
+    h.classChange.complete = () => Promise.reject(new Error("model failed"));
+    assert.equal(
+      await h.boundary({}, { reason: "next", handoff: "next", class: "high" }),
+      undefined,
+    );
+    assert.match(h.notices.at(-1)!, /class change failed \(model failed\)/);
+  });
+  it("sends the requested class when the boundary applies the handoff", async () => {
+    const h = harness();
+    const result = await h.boundary(
+      {},
+      { reason: "phase done", handoff: "next phase", class: "high" },
+    );
+    assert.equal(result?.continue, true);
+    assert.deepEqual(h.emitted, [
+      { channel: CLASS_CHANGE_EVENT, data: { class: "high", source: "agent" } },
+    ]);
+  });
+
+  it("sends no class change event when the class parameter is omitted", async () => {
+    const h = harness();
+    const result = await h.boundary();
+    assert.equal(result?.continue, true);
+    assert.deepEqual(h.emitted, []);
+  });
+
+  it("sends no class change event when the handoff is denied", async () => {
+    const h = harness();
+    h.commit(await h.boundary());
+    h.commit(await h.boundary());
+    h.ctx.ui.select = async () => "No, stay (reason next)";
+    assert.equal(
+      await h.boundary({}, { reason: "phase done", handoff: "next phase", class: "high" }),
+      undefined,
+    );
+    assert.deepEqual(h.emitted, []);
+  });
+
+  it("rejects a blank class parameter", async () => {
+    const h = harness();
+    const result = await h.request({ reason: "x", handoff: "y", class: "   " });
+    assert.equal(result.isError, true);
+    assert.deepEqual(h.emitted, []);
+  });
+
+  it("trims the class into the stored details", async () => {
+    const h = harness();
+    const result = await h.request({ reason: " done ", handoff: " next ", class: " high " });
+    assert.deepEqual(result.details, { reason: "done", handoff: "next", class: "high" });
   });
 });
 
