@@ -202,7 +202,7 @@ test("会話選択を受け付けた時点のエディタが、対象の変更�
   });
 });
 
-test("単一ルートへの明示的なフォルダ追加が、拡張 host 再起動後の再選択でも成立する", async ({
+test("単一ルートへの明示的なフォルダ追加が、拡張 host 再起動後の再選択でも成立する", { tag: "@single-root" }, async ({
   host,
 }, testInfo) => {
   await test.step("Open an unregistered session without adding its folder", async () => {

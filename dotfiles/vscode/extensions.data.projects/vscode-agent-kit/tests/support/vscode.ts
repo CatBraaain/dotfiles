@@ -411,7 +411,7 @@ export const test = baseTest.extend<{ host: VSCodeFixture }>({
     const host = new VSCodeFixture();
     const tracePath = testInfo.outputPath("electron-trace.zip");
     try {
-      await host.launch(testInfo.title.includes("single-root"));
+      await host.launch(testInfo.tags.includes("@single-root"));
       await use(host);
     } finally {
       if (host.page && !host.page.isClosed())
