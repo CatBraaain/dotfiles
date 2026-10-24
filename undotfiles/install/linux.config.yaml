@@ -66,9 +66,6 @@ work:
   # Standalone tools
   - bun: vite-plus
 
-  # deja-vu
-  - run: "curl -fsSL https://raw.githubusercontent.com/vshulcz/deja-vu/main/install.sh | sh"
-
   # LLM-only CLI tools
   - brew: ast-grep
   - brew: code2prompt

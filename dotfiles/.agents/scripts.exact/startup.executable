@@ -4,13 +4,8 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { connect } from "node:net";
 
-await Promise.allSettled([indexDeja(), updatePi(), startCamoufox(), startOpenserp()]);
+await Promise.allSettled([updatePi(), startCamoufox(), startOpenserp()]);
 process.exit(0);
-
-async function indexDeja() {
-  const deja = Bun.which("deja");
-  if (deja) startDetached(deja, ["index"]);
-}
 
 async function updatePi() {
   const pi = Bun.which("pi");

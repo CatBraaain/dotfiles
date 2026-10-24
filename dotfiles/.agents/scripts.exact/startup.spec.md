@@ -16,14 +16,13 @@
 
 | タスク | health check | 起動コマンド | 二重実行への耐性 |
 | --- | --- | --- | --- |
-| deja index | なし（deja側で freshness判定） | `deja index` | deja自身の flock で直列化、fresh なら no-op |
 | pi update | なし（stamp file で 12時間throttle） | `pi update --all`（nohup で detach） | stamp read前に `flock -n` でロックを取得しスクリプト終了まで保持。throttle判定と stamp更新を直列化する |
 | camoufox server | `${CAMOUFOX_BASE_URL:-ws://127.0.0.1:9378/camoufox}` の authority に対するTCP接続 | `~/.agents/cli/browse server start`（detached） | `browse server start` が冪等（起動済みなら no-op、未起動なら server を起動してready を待つ） |
 | openserp | `GET ${OPENSERP_BASE_URL:-http://127.0.0.1:7000}/ready` が 2xx | `openserp serve -a <host> -p <port> --quiet` | ポート衝突で 2個目は終了（無害） |
 
 - camoufox server は health check が失敗したときだけ起動する。server は `browse` CLI に内蔵され、`browse server start` が Linux の Xvfb / x11vnc の維持を行い、出力は `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記する
 - pi update は stamp（`${TMPDIR:-/tmp}/pi-update-stamp`、Unix秒）から 12時間以上経過していて `pi` が PATH にあるときだけ起動する。stamp が無い・読み取れない・非数字のときは throttle なしで起動する（tmp配下なので再起動で消えたときも含む）。stamp は spawn より先に書く（起動後の成否は追跡しない）。`flock` / `pi` が PATH に無い場合はスキップする。`--all` により pi本体とパッケージの両方を更新対象にする（`--extensions` はパッケージのみで pi本体を更新しないため不採用）
-- `~/.agents/cli/browse` が存在しない、`openserp` / `deja` が PATH に無い場合は、そのタスクを黙ってスキップする
+- `~/.agents/cli/browse` が存在しない、`openserp` が PATH に無い場合は、そのタスクを黙ってスキップする
 - openserp の host / port は接続先URL の authority から取る（pi の web-search拡張と同じ解決）
 
 ## スコープ外

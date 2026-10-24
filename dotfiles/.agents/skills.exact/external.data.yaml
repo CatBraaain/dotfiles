@@ -52,11 +52,6 @@ repos:
       # - skills/minimalist-skill
       # - skills/brutalist-skill
 
-  vshulcz/deja-vu:
-    destination: .
-    entries:
-      - skills/deja-search
-
   microsoft/playwright-cli:
     destination: .
     entries:
