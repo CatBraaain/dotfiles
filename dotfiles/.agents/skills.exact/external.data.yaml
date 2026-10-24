@@ -115,6 +115,9 @@ repos:
       # Only the frontend skill is copied; the next command builds its required assets.
       - [bun, install, --ignore-scripts]
       - [node, packages/omo-codex/plugin/scripts/materialize-shared-upstreams.mjs, --strict]
+      # bun install rewrites bun.lock when the local bun differs from upstream's;
+      # keep the mirror clean or the next git pull aborts on the dirty lockfile.
+      - [git, checkout, --, bun.lock]
 
   RobLe3/cc-blender-skill:
     destination: blender/references
