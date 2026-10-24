@@ -27,6 +27,11 @@ describe("isZaiConcurrencyLimited", () => {
     assert.equal(isZaiConcurrencyLimited(body), true);
   });
 
+  it("matches a single-quoted JSON body carrying code 1305", () => {
+    const body = "{'error':{'code':'1305','message':'The service may be temporarily overloaded'}}";
+    assert.equal(isZaiConcurrencyLimited(body), true);
+  });
+
   it("matches the plain 1302 message text", () => {
     assert.equal(isZaiConcurrencyLimited("Rate limit reached for requests"), true);
   });

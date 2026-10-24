@@ -15,7 +15,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Guardrail, type PathApproval, type ToolSession } from "./guardrail";
 import { registerCodemode } from "./codemode.ts";
-import { normalizeToolPath } from "../shared/normalize-path.ts";
+import { normalizeToolPath } from "./normalize-path.ts";
 import { modelSupportsImages } from "../shared/image-input.ts";
 import {
   ASK_PERMISSION_TARGET_PREVIEW_LIMIT,

@@ -1,6 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import {
+  extractErrorCodes,
+  isZaiConcurrencyEvidence,
+  ZAI_PROVIDER_IDS,
+} from "../shared/zai-concurrency.ts";
 
 export const RETRY_MESSAGE_PREFIX = "provider returned error: ";
 export const FINISH_ERROR_PREFIX = "Provider finish_reason: ";
@@ -22,7 +27,6 @@ export function isUnknownFinishErrorMessage(errorMessage: string): boolean {
 
 // ---- concurrency detection (fail-closed) --------------------------------------
 
-const ZAI_CONCURRENCY_CODES = new Set(["1302", "1305"]);
 // Quota codes are deliberately NOT matched: they recover only at a reset time,
 // so they must keep flowing into the agents extension's rate-limit fallback
 // instead of an unbounded retry loop.
@@ -44,35 +48,15 @@ const ZAI_QUOTA_CODES = new Set([
   "1321",
 ]);
 
-// Extracts the value of a "code" field from a raw JSON body embedded in the
-// error text, e.g. {"error":{"code":"1302","message":"..."}}.
-const CODE_FIELD_PATTERN = /["']code["']\s*:\s*["']?([^"'\s,}]+)["']?/gi;
 const QUOTA_WORDING_PATTERN =
   /\b(?:quota|billing|balance|credit|insufficient_quota|usage[\s-]*(?:limit|window)|(?:monthly|weekly|daily)\s+limit|resets?)\b/i;
 const GENERIC_CONCURRENCY_PATTERN =
   /\b(?:concurrent\s+requests?|concurrency\s+limit|too\s+many\s+concurrent|connection\s+limit\s+reached)\b/i;
-const ZAI_MESSAGE_PATTERNS = [
-  /rate limit reached for requests/i,
-  /temporarily overloaded/i,
-] as const;
-
-function extractCodes(errorMessage: string): Set<string> {
-  const codes = new Set<string>();
-  for (const match of errorMessage.matchAll(CODE_FIELD_PATTERN)) {
-    if (match[1] !== undefined) codes.add(match[1]);
-  }
-  return codes;
-}
 
 function hasQuotaEvidence(errorMessage: string, codes: Set<string>): boolean {
   return (
     [...codes].some((code) => ZAI_QUOTA_CODES.has(code)) || QUOTA_WORDING_PATTERN.test(errorMessage)
   );
-}
-
-function isZaiConcurrencyEvidence(codes: Set<string>, errorMessage: string): boolean {
-  if ([...codes].some((code) => ZAI_CONCURRENCY_CODES.has(code))) return true;
-  return ZAI_MESSAGE_PATTERNS.some((pattern) => pattern.test(errorMessage));
 }
 
 function isGenericConcurrencyEvidence(errorMessage: string): boolean {
@@ -82,10 +66,9 @@ function isGenericConcurrencyEvidence(errorMessage: string): boolean {
 type ConcurrencyDetector = (codes: Set<string>, errorMessage: string) => boolean;
 
 /** Provider rules contain only evidence confirmed for that provider's adapter. */
-const PROVIDER_DETECTORS = new Map<string, ConcurrencyDetector>([
-  ["zai", isZaiConcurrencyEvidence],
-  ["zai-coding-cn", isZaiConcurrencyEvidence],
-]);
+const PROVIDER_DETECTORS = new Map<string, ConcurrencyDetector>(
+  ZAI_PROVIDER_IDS.map((providerId) => [providerId, isZaiConcurrencyEvidence]),
+);
 
 /**
  * True only on explicit concurrency evidence. Quota/billing evidence wins
@@ -94,7 +77,7 @@ const PROVIDER_DETECTORS = new Map<string, ConcurrencyDetector>([
  */
 export function isConcurrencyError(provider: string, errorMessage: string | undefined): boolean {
   if (errorMessage === undefined || errorMessage === "") return false;
-  const codes = extractCodes(errorMessage);
+  const codes = extractErrorCodes(errorMessage);
   if (hasQuotaEvidence(errorMessage, codes)) return false;
   const detector = PROVIDER_DETECTORS.get(provider);
   if (detector) return detector(codes, errorMessage);

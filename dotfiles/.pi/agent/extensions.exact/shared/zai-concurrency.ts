@@ -7,31 +7,44 @@
 // pi-ai surfaces that body text (sometimes as raw JSON) in the final assistant
 // errorMessage, so detection is a wording match on that string.
 //
-// Used by the agents extension, which must NOT route these errors into its
-// model-fallback/cooldown path — Z.AI concurrency is account-wide, so switching
-// models cannot help. The wait-and-retry loop lives in the provider-error-retry
-// extension; this file is only the Z.AI-specific matcher shared with it.
+// Single source of the Z.AI concurrency knowledge (provider IDs, business
+// codes, code-field extraction, wording patterns) for two consumers: the
+// agents extension skips its model-fallback/cooldown path for these errors
+// (Z.AI concurrency is account-wide, so switching models cannot help), and
+// the provider-error-retry extension builds its fail-closed detector on the
+// same evidence.
 
 export const ZAI_PROVIDER_IDS = ["zai", "zai-coding-cn"] as const;
 
-const CONCURRENCY_ERROR_PATTERNS = [
-  // Raw JSON body, e.g. {"error":{"code":"1302","message":"Rate limit reached for requests"}}
-  /code"\s*:\s*"130[25]"/,
-  // Message-only forms (openai SDK APIError text).
+export const ZAI_CONCURRENCY_CODES: ReadonlySet<string> = new Set(["1302", "1305"]);
+
+const ZAI_MESSAGE_PATTERNS = [
   /rate limit reached for requests/i,
   /temporarily overloaded/i,
-];
+] as const;
 
 export function isZaiProvider(provider: string | undefined): boolean {
   return provider !== undefined && (ZAI_PROVIDER_IDS as readonly string[]).includes(provider);
 }
 
-// Quota codes (1113, 1308-1321) are deliberately NOT matched: they recover only
-// at a reset time, so they must keep flowing into the regular rate-limit
-// fallback instead of an unbounded retry loop.
+// Extracts the value of a "code" field from a raw JSON body embedded in the
+// error text, e.g. {"error":{"code":"1302","message":"..."}}.
+const CODE_FIELD_PATTERN = /["']code["']\s*:\s*["']?([^"'\s,}]+)["']?/gi;
+
+export function extractErrorCodes(errorMessage: string): Set<string> {
+  const codes = new Set<string>();
+  for (const match of errorMessage.matchAll(CODE_FIELD_PATTERN)) {
+    if (match[1] !== undefined) codes.add(match[1]);
+  }
+  return codes;
+}
+
+export function isZaiConcurrencyEvidence(codes: Set<string>, errorMessage: string): boolean {
+  if ([...codes].some((code) => ZAI_CONCURRENCY_CODES.has(code))) return true;
+  return ZAI_MESSAGE_PATTERNS.some((pattern) => pattern.test(errorMessage));
+}
+
 export function isZaiConcurrencyLimited(errorMessage: string | undefined): boolean {
-  return (
-    errorMessage !== undefined &&
-    CONCURRENCY_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage))
-  );
+  if (errorMessage === undefined || errorMessage === "") return false;
+  return isZaiConcurrencyEvidence(extractErrorCodes(errorMessage), errorMessage);
 }
