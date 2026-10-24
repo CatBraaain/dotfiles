@@ -1,10 +1,10 @@
-// 入力欄の up/down によるプロンプト履歴ブラウズを無効化する拡張。
+// pi の入力欄エディタを CustomEditor 継承の実装へ差し替える拡張。
 // 詳細は ./SPEC.md。
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { NoPromptHistoryEditor } from "./core.ts";
 
-export default function noEditorHistory(pi: ExtensionAPI): void {
+export default function customEditor(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     ctx.ui.setEditorComponent(

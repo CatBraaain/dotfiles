@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { NoPromptHistoryEditor } from "./core.ts";
-import noEditorHistory from "./index.ts";
+import customEditor from "./index.ts";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -60,7 +60,7 @@ function captureSessionStartHandler(): SessionStartHandler {
       return () => {};
     },
   } as unknown as ExtensionAPI;
-  noEditorHistory(pi);
+  customEditor(pi);
   assert.ok(handler, "session_start handler was not registered");
   return handler;
 }
@@ -134,7 +134,7 @@ describe("NoPromptHistoryEditor", () => {
   });
 });
 
-describe("noEditorHistory extension", () => {
+describe("customEditor extension", () => {
   it("registers a NoPromptHistoryEditor factory on session_start in tui mode", async () => {
     const handler = captureSessionStartHandler();
     const factories: unknown[] = [];
