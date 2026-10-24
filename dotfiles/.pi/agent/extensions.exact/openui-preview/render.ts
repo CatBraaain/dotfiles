@@ -9,7 +9,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createParser,
   isASTNode,
@@ -18,6 +19,8 @@ import {
   type Parser,
 } from "@openuidev/lang-core";
 import { OPUI_STYLES } from "./styles";
+
+const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
 export const SUPPORTED_COMPONENTS = [
   "Stack",
@@ -519,7 +522,7 @@ function buildDocument(body: string): string {
  * Programs using unsupported components, reactive expressions, or queries are
  * rejected with a human-readable error for the guidance card.
  */
-export function renderOpuiLang(source: string, dir: string = import.meta.dir): OpuiRenderResult {
+export function renderOpuiLang(source: string, dir: string = EXTENSION_DIR): OpuiRenderResult {
   const parsed = getParser(dir).parse(source);
 
   if (parsed.root === null) {

@@ -9,9 +9,12 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateSystemPrompt, type LibrarySpec } from "@openuidev/lang-core";
 import { INTERACTIVE_COMPONENTS } from "./display-only";
+
+const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
 const interactiveComponents = new Set<string>(INTERACTIVE_COMPONENTS);
 
@@ -65,7 +68,7 @@ const promptCache = new Map<string, string>();
  * generated from the build-time files (spec.json and prompt-options.json,
  * both produced by spec.build.ts from library.data.ts). Cached per directory.
  */
-export function opuiInstructions(dir: string = import.meta.dir): string {
+export function opuiInstructions(dir: string = EXTENSION_DIR): string {
   const cached = promptCache.get(dir);
   if (cached !== undefined) return cached;
   const library = JSON.parse(readFileSync(join(dir, "spec.json"), "utf8")) as LibrarySpec;
