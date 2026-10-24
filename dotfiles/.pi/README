@@ -40,3 +40,14 @@ build時の共通依存は `bun_install.build.ts` が自動で準備する。生
 ```sh
 cd dotfiles/.pi/agent && bun install && bun test
 ```
+
+## 拡張のランタイム
+
+`extensions.exact/` 配下の拡張は、pi 本体と同じ Node.js で動くことを前提に書く。pi は拡張の `.ts` を jiti で変換して読み込む。Bun 固有の API（`import.meta.dir`、`Bun.*` など）は Node ランタイムに存在しないため、拡張では使わない。`bun test` は Bun で直接実行するため、Bun 固有 API を使ったコードでもテストは通り、pi での実行時に初めて失敗する。モジュール自身のディレクトリなど、Bun 固有 API で取得していた値は、Node でも動く API で取得する:
+
+```ts
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
+```
