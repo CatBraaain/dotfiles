@@ -8,7 +8,7 @@ type SettledHandler = (event: unknown, ctx: { mode: string }) => void;
 type ExecFileCall = { file: string; args: string[] };
 
 const OSC99_START = `\x1b]99;i=1:d=0;Pi\x1b\\`;
-const OSC99_DONE = `\x1b]99;i=1:p=1;Ready for input\x1b\\`;
+const OSC99_DONE = `\x1b]99;i=1:p=body;Ready for input\x1b\\`;
 const OSC777 = `\x1b]777;notify;Pi;Ready for input\x07`;
 
 /** Clears terminal-specific env vars so protocol selection is deterministic. */
@@ -91,7 +91,7 @@ describe("selectProtocol", () => {
 });
 
 describe("notify", () => {
-  it("osc99 は d=0 のタイトル、p=1 の本文を順に書き出す", () => {
+  it("osc99 は d=0 のタイトル、p=body の本文を順に書き出す", () => {
     const outputs: string[] = [];
     notify({
       protocol: "osc99",

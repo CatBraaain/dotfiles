@@ -54,8 +54,8 @@ export function notify(options: NotifyOptions): void {
   }
   if (protocol === "osc99") {
     write(`\x1b]99;i=1:d=0;${title}\x1b\\`);
-    // p=1 marks the notification payload as complete.
-    write(`\x1b]99;i=1:p=1;${body}\x1b\\`);
+    // Kitty and VSCode parse p as a string ("title"/"body"); numeric p values are ignored. See SPEC.md.
+    write(`\x1b]99;i=1:p=body;${body}\x1b\\`);
     return;
   }
   write(`\x1b]777;notify;${title};${body}\x07`);
