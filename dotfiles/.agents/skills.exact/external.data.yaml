@@ -115,3 +115,37 @@ repos:
       # Only the frontend skill is copied; the next command builds its required assets.
       - [bun, install, --ignore-scripts]
       - [node, packages/omo-codex/plugin/scripts/materialize-shared-upstreams.mjs, --strict]
+
+  RobLe3/cc-blender-skill:
+    destination: blender/references
+    entries:
+      - plugin/skills/animation-quality-gate
+      - plugin/skills/atlas-uv-fitting
+      - plugin/skills/blender-animation
+      - plugin/skills/blender-cameras
+      - plugin/skills/blender-export
+      - plugin/skills/blender-lighting
+      - plugin/skills/blender-materials
+      - plugin/skills/blender-modeling
+      - plugin/skills/blender-pro-workflow
+      - plugin/skills/blender-rendering
+      - plugin/skills/blender-skill-harmonizer
+      - plugin/skills/blender-uv-texturing
+      - plugin/skills/closed-surface-uv-coverage
+      - plugin/skills/contour-to-mesh
+      - plugin/skills/fit-repair-optimizer
+      - plugin/skills/landmark-fit-repair
+      - plugin/skills/mascot-logo-reconstruction
+      - plugin/skills/multiview-constraint-solver
+      - plugin/skills/multiview-fit-loop
+      - plugin/skills/orbital-hud-motion
+      - plugin/skills/orthographic-registration
+      - plugin/skills/quality-refinement-autoloop
+      - plugin/skills/reference-analysis-validator
+      - plugin/skills/reference-look-calibration
+      - plugin/skills/reference-to-3d
+      - plugin/skills/source-part-segmentation
+      - plugin/skills/text-to-blender
+      - plugin/skills/texture-driven-mesh-fitting
+      - plugin/skills/texture-state-animation
+      - plugin/skills/wireframe-to-3d
