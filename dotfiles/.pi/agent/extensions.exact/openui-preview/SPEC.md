@@ -19,11 +19,15 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 - 入力はbuildで生成した `spec.json`（58コンポーネントのLibrarySpec）と `prompt-options.json`（examples・additionalRules）。両方とも `spec.build.ts` が `library.data.ts` から生成する
 - `library.data.ts` は正本であり、`@openuidev/react-ui` の `genui-lib` から対話コンポーネント（Button・Form等26種）を除外した `createLibrary` 結果と、`genui-lib/prompt-options` から対話系を示す語を含むexamples・rulesを除外したpromptOptionsをexportする。プロジェクト外部のリポジトリには依存しない（npmライブラリ `@openuidev/react-ui`・`react-lang`・`cli` はビルド時のdevDependencies）
 - `prompt.ts` は対話コンポーネント（同26種）をsignatureから `never` 化・unionから除去し（`displayOnlySignature`）、生成promptの `## Action` セクションと `ActionExpression` の説明行を除去する（`stripInteractivePromptParts`）
-- preambleを差し替え、markdown応答内の ```openui-lang``` fenced blockへの埋め込みを指示する（lang-core既定の「応答全体がコード」前提は使わない）
+- preambleを差し替え、markdown応答内の `openui-lang` fenced blockへの埋め込みを指示する（lang-core既定の「応答全体がコード」前提は使わない）
 
 ## 生成物とbuildの前提
 
-`spec.json` と `prompt-options.json` は `spec.build.ts`（ローカルbuildフック）が `library.data.ts` から生成し、dist経由で拡張フォルダに配置される。生成には `@openuidev/cli`（devDependencies）を使うため、buildの前に `dotfiles/.pi/agent` で `bun install` が必要である（`bun test` と同じ前提）。生成物はgit管理せず、`library.data.ts` を変更したbuildで更新する。
+`spec.json` と `prompt-options.json` は `spec.build.ts`（ローカルbuildフック）が `library.data.ts` から生成し、dist経由で拡張フォルダに配置される。生成物はgit管理せず、buildごとに更新する。事前の手動インストールは不要である。
+
+依存準備は上流の共通フック `bun_install.build.ts` が行う（[共通依存の仕様](../../bun_install.spec.md)）。`spec.build.ts` は準備済みの `.pi/agent/.build-deps/node_modules` にあるCLIとライブラリを利用し、インストールは行わない。
+
+生成用のライブラリ定義は拡張配下の `.build/` で読み込む。`.build/node_modules` から共通依存環境を参照し、CLIとライブラリ定義の読込先を揃える。`.build/` はホームへの展開対象外である。共通依存が未準備の場合は非0で終了し、specを生成しない。
 
 ## 実行条件（モード）
 

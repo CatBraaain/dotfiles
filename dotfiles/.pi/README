@@ -12,8 +12,9 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
     ├── settings.merge.json      # pi 設定（展開先は ~/.pi/agent/settings.json）
     ├── keybindings.json        # pi キーバインド（fullscreen で home/end を altScreen top/bottom からエディタへ戻す）
     ├── package.json            # 拡張のランタイム依存（yaml 等）
+    ├── bun_install.build.ts           # build hook（拡張全体のbuild依存を準備）
     ├── bun_install.apply.ts           # apply hook（manifest/lockfile変更時だけ ~/.pi/agent/ で bun install）
-    ├── bun_install.spec.md            # bun_install.apply.ts の振る舞い仕様
+    ├── bun_install.spec.md            # build・applyでの依存導入仕様
     ├── config.exact/                  # ~/.agents/config/ への symlink
     ├── extensions.exact/       # 自作拡張機能
     ├── prompts.exact/          # プロンプトテンプレート
@@ -30,9 +31,11 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
 cd ~/.pi/agent && bun install
 ```
 
-依存を増やす場合はこの package.json に追加し、再度 install する。
+build時の共通依存は `bun_install.build.ts` が自動で準備する。生成先・導入条件は [依存導入仕様](agent/bun_install.spec.md) を参照する。
 
-`devDependencies` はテスト用: `@types/bun`（`bun:test` の型）と、`@earendil-works/pi-coding-agent` / `@earendil-works/pi-tui`（テスト実行時のモジュール解決用。pi を更新したらバージョンを合わせる）。テストはワークスペース側で実行する:
+依存を増やす場合はこの package.json とlockfileを更新する。
+
+`devDependencies` はbuild・テスト用。OpenUI生成用の `@openuidev/cli`・`react-lang`・`react-ui` に加え、 `@types/bun`（`bun:test` の型）と、`@earendil-works/pi-coding-agent` / `@earendil-works/pi-tui`（テスト実行時のモジュール解決用。pi を更新したらバージョンを合わせる）。テストはワークスペース側で実行する:
 
 ```sh
 cd dotfiles/.pi/agent && bun install && bun test
