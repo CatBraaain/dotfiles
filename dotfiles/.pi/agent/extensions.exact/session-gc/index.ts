@@ -10,7 +10,7 @@ import {
  * Keeps only the most recent sessions per project so that `pi -r` (which parses
  * every listed JSONL in full to build search text) stays fast to load.
  */
-export const KEEP_COUNT = 200;
+export const KEEP_COUNT = 50;
 export const THROTTLE_MS = 24 * 60 * 60 * 1000;
 
 export interface MoveTarget {
