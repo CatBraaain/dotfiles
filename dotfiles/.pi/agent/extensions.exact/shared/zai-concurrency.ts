@@ -9,7 +9,7 @@
 //
 // Used by the agents extension, which must NOT route these errors into its
 // model-fallback/cooldown path — Z.AI concurrency is account-wide, so switching
-// models cannot help. The wait-and-retry loop lives in the concurrency-retry
+// models cannot help. The wait-and-retry loop lives in the provider-error-retry
 // extension; this file is only the Z.AI-specific matcher shared with it.
 
 export const ZAI_PROVIDER_IDS = ["zai", "zai-coding-cn"] as const;

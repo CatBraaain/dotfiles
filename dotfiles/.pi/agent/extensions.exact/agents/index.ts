@@ -1446,7 +1446,7 @@ export default function agentsExtension(
     // Z.AI は 429 の body に同時実行系（1302/1305）と quota 系（1113, 1308-1321）の
     // 両方を返し、HTTP レスポンスだけでは区別できない。z-ai モデルはここで fallback
     // せず、最終 assistant エラーの文言判定（message_end）に任せる。同時実行系は
-    // concurrency-retry 拡張が待機リトライする。
+    // provider-error-retry 拡張が待機リトライする。
     if (isZaiProvider(ctx.model.provider)) return;
     if (http429TurnFallbackDone) return;
 
@@ -1463,7 +1463,7 @@ export default function agentsExtension(
     if (message.role !== "assistant" || message.stopReason !== "error") return;
 
     // z-ai の同時実行系エラー（1302/1305）は別モデルに切り替えても解決しないため
-    // fallback 対象外。concurrency-retry 拡張が待機リトライする。
+    // fallback 対象外。provider-error-retry 拡張が待機リトライする。
     if (isZaiProvider(message.provider) && isZaiConcurrencyLimited(message.errorMessage)) return;
 
     // SPEC「フォールバック済みターンのエラー判定」: HTTP 429 でフォールバック済みの

@@ -1,0 +1,76 @@
+# provider-error-retry
+
+プロバイダのエラーを pi内蔵の自動リトライへ橋渡しする拡張。unknown finish_reason と同時実行制限の2種類のエラーを検出し、いずれも最終assistantエラーの `errorMessage` を再試行可能な形式（`provider returned error: ...`）へ書き換えて、pi本体のリトライ判定に委ねる。1つのassistantエラーに対する書き換えは高々1回である。
+
+## 対象
+
+### unknown finish_reason（即時リトライ）
+
+OpenAI互換プロバイダの中には、標準外の `finish_reason`（`error`、`timeout_reached` 等の任意文字列）を返すものがある。pi はこれを `Error: Provider finish_reason: ${reason}` として扱い、ランが失敗する。リトライ方針は upstream に任せる。
+
+| `errorMessage` の内容 | 本拡張の動作 | その後の再試行 |
+| --- | --- | --- |
+| `Provider finish_reason: ${reason}` で始まり、`${reason}` が `content_filter` / `network_error` 以外の文字列 | `errorMessage` を `provider returned error: ${元のerrorMessage}` に置き換える | pi内蔵の auto-retry による同一モデルの再試行が行われる |
+| `Provider finish_reason: content_filter` | 何もしない | 再試行されない（同じ入力では失敗が繰り返されるため） |
+| `Provider finish_reason: network_error` | 何もしない | 本拡張なしでも内蔵auto-retry が発火する |
+
+再試行の有無・回数・待ち時間は pi の settings.retry（`enabled` / `maxRetries` / `baseDelayMs`）だけが決める。本拡張はエラーをリトライ可能な種別に分類し直すだけで、予算や間隔を独自に制御しない。待機はせず、検出した時点で即座に書き換える。
+
+### concurrency（待機リトライ）
+
+プロバイダの同時実行制限エラーに対して、待機してから再試行を繰り返す。検出は fail-closed である。最終assistantエラーの `errorMessage` に、同時実行を明示する証拠がある場合だけ対象とする。判定はプロバイダごとの専用証拠とプロバイダ非依存の共通証拠を使う。
+
+| プロバイダ / detector | concurrency と確定する証拠 |
+| --- | --- |
+| `zai`、`zai-coding-cn` | code `1302`（"Rate limit reached for requests"）、code `1305`（"The service may be temporarily overloaded"）。生JSONボディの codeフィールドでも文言のみでもよい |
+| その他のプロバイダ | `concurrent request(s)`、`concurrency limit`、`too many concurrent`、`connection limit reached` |
+
+除外規則:
+
+- quota・billing・usage-window の証拠は positive判定より先に除外する。code `1113`・`1308`〜`1321`、`quota`、`billing`、`balance`、`credit`、`insufficient_quota`、usage limit/window、monthly/weekly/daily limit、`reset` が errorMessage に含まれる場合は対象外とする
+- 専用detector を持つプロバイダ（`zai`、`zai-coding-cn`）は専用証拠だけを扱い、共通文言に一致しても対象外とする
+- HTTP 429、`rate limit` 系文言、quota系はそれ単独では concurrency証拠にならず、専用・共通の証拠がなければ対象外として推測しない
+- errorMessage に証拠が現れない同時実行エラー（provider adapter が内部吸収するもの）は対象外である
+
+`agents` 拡張との関係: `zai` / `zai-coding-cn` の同時実行系エラーは `agents` 拡張の model-fallback対象外である（判定は `shared/zai-concurrency.ts` の共有判定）。その他のプロバイダの concurrency証拠文言は rate-limit系の文言を含まないため `agents` 拡張の fallback判定には一致せず、待機リトライだけが動く。ただし HTTP 429 を伴った場合は `agents` 拡張が従来どおり即時fallback を行う（本拡張は reactしない）。
+
+## ターン内リトライ
+
+`message_end` は1つのハンドラで処理し、assistantエラーに対して unknown finish_reason → concurrency の順に判定する。各分岐は判定後に処理を返すため、1つのエラーに対する書き換えは高々1回である。
+
+| 入力 | 操作 | 結果 |
+| --- | --- | --- |
+| unknown finish_reason を検出した | 待機せず書き換える | エラー文言を再試行可能な形式へ置き換え、pi本体が同じリクエストを再試行する |
+| 同時実行エラーを検出した | 待機時間だけ待つ | 待機後にエラー文言を再試行可能な形式へ置き換え、pi本体が同じリクエストを再試行する |
+| 待機中にユーザーが abortした | 待機を中断する | エラー文言を置き換えない。ターンは元のエラーで終了する |
+| 同時実行エラー以外の結果でメッセージが確定した（成功・abort を含む） | — | 連続エラー回数を 0 に戻す |
+| エラーかつ上記のどちらでもない（quota系等） | — | 書き換えず、連続エラー回数は据え置く |
+
+pi本体のリトライ回数上限（`settings.json` の `retry.maxRetries`）に達するとターンはエラー終了する。concurrency の続きは「ターン確定後の再実行」が担う。unknown finish_reason はターン確定後の再実行を行わない（piのリトライ予算で完結する）。
+
+## 待機時間
+
+連続エラー回数 `n` に対し `5s × 2^(n-1)`（上限60s）に ±20% のジッタを加えた値を待つ。連続エラー回数はターンをまたいで引き継ぎ、成功で 0 に戻る。ターン確定後の再実行の待機も同じ回数に数える。unknown finish_reason の検出は回数に影響しない。
+
+直前の HTTP 429 が `Retry-After` ヘッダーを伴った場合、ターン内リトライの待機はヘッダーの値（秒数または HTTP-date、過去の日時は 0）をプロバイダを問わず優先する。ヘッダーは次の 1回の待機で消費する。ターン確定後の再実行の待機には使わない。
+
+## ターン確定後の再実行
+
+ターンが（pi本体のリトライを含めて）完全に終了したとき、最後のエラーが同時実行エラーなら、待機してから同じターンを再実行する。再実行は上限なく繰り返す。
+
+| 状態 | 操作 | 結果 |
+| --- | --- | --- |
+| ターンが同時実行エラーで確定した | 待機時間だけ待つ | `<provider> concurrency limit; retrying in <秒>s (attempt <回数>)` を通知する |
+| 待機完了時点で idle である | — | 非表示のカスタムメッセージでターンを再実行する（ユーザーメッセージの履歴は増えない） |
+| 待機完了時点で idle でない（ユーザーが入力した） | — | 再実行しない |
+| ターンが同時実行エラー以外（abort、他エラー）で確定した | — | 再実行しない |
+| 保留メッセージがある | — | 再実行しない |
+
+## 表示
+
+| 状況 | 表示 |
+| --- | --- |
+| ターン内リトライの待機中 | ステータス領域に `<provider> concurrency limit; retrying in <秒>s (attempt <回数>)` を表示し、待機後に消す |
+| ターン確定後の再実行の待機 | 通知（info）で上記と同文言を出す |
+
+`<provider>` はエラーのプロバイダID（例: `zai`、`openai-codex`）。カスタムメッセージ・ステータスの識別子は `provider-error-retry` である。

@@ -3,11 +3,24 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 
 export const RETRY_MESSAGE_PREFIX = "provider returned error: ";
+export const FINISH_ERROR_PREFIX = "Provider finish_reason: ";
 const RETRY_TRIGGER_CONTENT =
   "The previous request failed with a temporary provider concurrency limit. Continue the interrupted task.";
-const STATUS_KEY = "concurrency-retry";
+const STATUS_KEY = "provider-error-retry";
 
-// ---- detection (fail-closed) -------------------------------------------------
+// ---- unknown finish_reason (immediate retry) ----------------------------------
+
+// mapStopReason() が明示マップする finish_reason。リトライ方針は upstream に任せる。
+const EXPLICIT_FINISH_REASONS = ["content_filter", "network_error"];
+
+/** mapStopReason() marks unknown finish reasons as errors, but retry classification does not retry that message. */
+export function isUnknownFinishErrorMessage(errorMessage: string): boolean {
+  if (!errorMessage.startsWith(FINISH_ERROR_PREFIX)) return false;
+  const reason = errorMessage.slice(FINISH_ERROR_PREFIX.length);
+  return !EXPLICIT_FINISH_REASONS.includes(reason);
+}
+
+// ---- concurrency detection (fail-closed) --------------------------------------
 
 const ZAI_CONCURRENCY_CODES = new Set(["1302", "1305"]);
 // Quota codes are deliberately NOT matched: they recover only at a reset time,
@@ -168,7 +181,7 @@ export const __sleep: {
 } = { current: realSleepMs };
 export const __random: { current: () => number } = { current: Math.random };
 
-export default function concurrencyRetryExtension(pi: ExtensionAPI): void {
+export default function providerErrorRetryExtension(pi: ExtensionAPI): void {
   // Remember the provider's Retry-After so the message_end wait can honor it.
   // pi's agent retry is errorMessage-based and drops headers, so this hook is
   // the only place they are observable. Any provider's 429 counts; the value
@@ -184,6 +197,12 @@ export default function concurrencyRetryExtension(pi: ExtensionAPI): void {
     if (message.stopReason !== "error") {
       consecutiveConcurrencyErrors = 0;
       return;
+    }
+    // Unknown finish reasons retry immediately: pi's built-in retry budget
+    // paces them, so only the classification rewrite is needed. The rewrite
+    // happens at most once per assistant error because each branch returns.
+    if (isUnknownFinishErrorMessage(message.errorMessage ?? "")) {
+      return { message: makeRetryableMessage(message) };
     }
     if (!isConcurrencyError(message.provider, message.errorMessage)) return;
 

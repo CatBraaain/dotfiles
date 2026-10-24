@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "bun:test";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import concurrencyRetryExtension, {
+import providerErrorRetryExtension, {
   __random,
   __resetRetryState,
   __sleep,
+  FINISH_ERROR_PREFIX,
   isConcurrencyError,
+  isUnknownFinishErrorMessage,
   parseRetryAfterMs,
   realSleepMs,
   RETRY_BASE_DELAY_MS,
@@ -49,7 +51,7 @@ function createHarness() {
     },
   };
 
-  concurrencyRetryExtension(pi);
+  providerErrorRetryExtension(pi);
   __sleep.current = async (ms: number) => {
     waitedMs.push(ms);
     return !abortController.signal.aborted;
@@ -90,10 +92,85 @@ function concurrencyError(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function finishErrorMessage(reason: string, overrides: Record<string, unknown> = {}) {
+  return {
+    role: "assistant",
+    stopReason: "error",
+    provider: "test-provider",
+    model: "test-model",
+    errorMessage: `${FINISH_ERROR_PREFIX}${reason}`,
+    ...overrides,
+  };
+}
+
 async function messageEnd(harness: ReturnType<typeof createHarness>, message: unknown) {
   const result = await harness.call("message_end", { type: "message_end", message });
   return result as { message: { errorMessage: string } } | undefined;
 }
+
+describe("isUnknownFinishErrorMessage", () => {
+  it("matches unknown finish reasons", () => {
+    assert.equal(isUnknownFinishErrorMessage(`${FINISH_ERROR_PREFIX}error`), true);
+    assert.equal(isUnknownFinishErrorMessage(`${FINISH_ERROR_PREFIX}timeout_reached`), true);
+  });
+
+  it("does not match explicitly mapped finish reasons", () => {
+    assert.equal(isUnknownFinishErrorMessage(`${FINISH_ERROR_PREFIX}content_filter`), false);
+    assert.equal(isUnknownFinishErrorMessage(`${FINISH_ERROR_PREFIX}network_error`), false);
+  });
+
+  it("does not match finish_reason-unrelated messages", () => {
+    assert.equal(isUnknownFinishErrorMessage("connection refused"), false);
+    assert.equal(isUnknownFinishErrorMessage(""), false);
+  });
+});
+
+describe("unknown finish_reason のエラー", () => {
+  it("即座に retryable な文言へ書き換える（待機なし）", async () => {
+    const harness = createHarness();
+    const replacement = await messageEnd(harness, finishErrorMessage("error"));
+
+    assert.ok(replacement);
+    assert.equal(
+      replacement!.message.errorMessage,
+      `${RETRY_MESSAGE_PREFIX}${FINISH_ERROR_PREFIX}error`,
+    );
+    assert.equal(isRetryableAssistantError(replacement!.message as never), true);
+    assert.deepEqual(harness.waitedMs, []);
+  });
+
+  it("未知の finish_reason 値でも同様に書き換える", async () => {
+    const harness = createHarness();
+    const replacement = await messageEnd(harness, finishErrorMessage("timeout_reached"));
+
+    assert.ok(replacement);
+    assert.match(replacement!.message.errorMessage, /provider returned error/);
+  });
+
+  it("元メッセージは書き換えない（コピーを返す）", async () => {
+    const harness = createHarness();
+    const message = finishErrorMessage("error");
+    await messageEnd(harness, message);
+
+    assert.equal(message.errorMessage, `${FINISH_ERROR_PREFIX}error`);
+  });
+
+  it("content_filter は書き換えない", async () => {
+    const harness = createHarness();
+    const replacement = await messageEnd(harness, finishErrorMessage("content_filter"));
+
+    assert.equal(replacement, undefined);
+    assert.deepEqual(harness.waitedMs, []);
+  });
+
+  it("network_error は書き換えない（内蔵 auto-retry が発火する）", async () => {
+    const harness = createHarness();
+    const replacement = await messageEnd(harness, finishErrorMessage("network_error"));
+
+    assert.equal(replacement, undefined);
+    assert.deepEqual(harness.waitedMs, []);
+  });
+});
 
 describe("isConcurrencyError", () => {
   it("matches Z.AI concurrency codes in a raw JSON body", () => {
@@ -168,11 +245,11 @@ describe("ターン内リトライ", () => {
     assert.deepEqual(harness.waitedMs, [5000]);
     // 待機開始でステータス表示、完了で消える
     assert.deepEqual(harness.statuses[0], {
-      key: "concurrency-retry",
+      key: "provider-error-retry",
       text: "zai concurrency limit; retrying in 5s (attempt 1)",
     });
     assert.deepEqual(harness.statuses.at(-1), {
-      key: "concurrency-retry",
+      key: "provider-error-retry",
       text: undefined,
     });
   });
@@ -198,7 +275,7 @@ describe("ターン内リトライ", () => {
     assert.ok(replacement, "expected a replacement message");
     assert.equal(isRetryableAssistantError(replacement!.message as never), true);
     assert.deepEqual(harness.statuses[0], {
-      key: "concurrency-retry",
+      key: "provider-error-retry",
       text: "openai-codex concurrency limit; retrying in 5s (attempt 1)",
     });
   });
@@ -209,6 +286,16 @@ describe("ターン内リトライ", () => {
     const replacement = await messageEnd(harness, concurrencyError());
 
     assert.equal(replacement, undefined);
+  });
+
+  it("finish_reason エラーは連続回数に影響しない", async () => {
+    const harness = createHarness();
+    await messageEnd(harness, concurrencyError());
+    await messageEnd(harness, concurrencyError());
+    await messageEnd(harness, finishErrorMessage("error"));
+
+    await messageEnd(harness, concurrencyError());
+    assert.deepEqual(harness.waitedMs, [5000, 10000, 20000]);
   });
 
   it("成功メッセージで連続回数がリセットされる", async () => {
@@ -390,7 +477,7 @@ describe("agent_settled での turn 再実行", () => {
       message: { customType: string; display: boolean };
       options: { triggerTurn: boolean };
     };
-    assert.equal(message.customType, "concurrency-retry");
+    assert.equal(message.customType, "provider-error-retry");
     assert.equal(message.display, false);
     assert.equal(options.triggerTurn, true);
   });
