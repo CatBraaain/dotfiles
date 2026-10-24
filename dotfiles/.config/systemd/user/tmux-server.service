@@ -1,0 +1,12 @@
+[Unit]
+Description=tmux server for create_session
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=TMUX_TMPDIR=%t
+ExecStart=/home/linuxbrew/.linuxbrew/bin/tmux new-session -d -s _keeper "sleep infinity"
+ExecStop=/home/linuxbrew/.linuxbrew/bin/tmux kill-server
+
+[Install]
+WantedBy=default.target
