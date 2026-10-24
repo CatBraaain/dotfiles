@@ -120,7 +120,7 @@ local function new_environment(candidates)
     function segment:has_tag(tag)
         return tag == "kagiroi"
     end
-    local context = { options = {}, option_writes = {}, caret_writes = 0,
+    local context = { options = {}, option_writes = {}, caret_writes = 0, input_writes = 0,
         commits = {}, commit_slots = {}, properties = {}, mock_candidates = segment.menu.candidates }
     function context:get_property(name) return self.properties[name] or "" end
     function context:set_property(name, value) self.properties[name] = value end
@@ -208,6 +208,7 @@ local function new_environment(candidates)
             if key == "input" then
                 rawset(table, "_input", value)
                 rawset(table, "_caret_pos", #value)
+                table.input_writes = table.input_writes + 1
                 segment.selected_index = 0
                 table.refreshed = true
                 local state = bunsetsu.state(table)
@@ -713,8 +714,11 @@ assert(#context.commits == 0, "Esc after Henkan must not commit")
 env, context, segment = new_environment()
 context.input = "かな"
 press(env, 0xff23)
+local writes_before = context.input_writes
 local backspace = press(env, 0xff08)
 assert(backspace == kAccepted, "Backspace after Henkan must be consumed")
+assert(context.input_writes == writes_before + 1,
+    "the breaking Backspace must rewrite the input once")
 assert(context.input == "カ", "Backspace after Henkan must remove one katakana character")
 assert(env.conversion == nil and not context:get_option("katakana"),
     "Backspace after Henkan must end conversion and restore the kana mode")
@@ -778,8 +782,11 @@ context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
 press(env, 0x20)
 assert(segment.selected_index == 1, "the reveal must select the second candidate")
+writes_before = context.input_writes
 local shortened_selection = press(env, 0xff08)
 assert(shortened_selection == kAccepted, "Backspace with the menu visible must be consumed")
+assert(context.input_writes == writes_before + 1,
+    "the breaking Backspace with the menu open must rewrite the input once")
 
 assert(context:get_option("_kagiroi_hide_candidates"), "Backspace must hide the list")
 assert(#context.commits == 0, "Backspace must not commit")
@@ -825,8 +832,11 @@ env, context, segment = new_environment()
 context.input = "か"
 context:set_option("_kagiroi_hide_candidates", true)
 press(env, 0x20)
+writes_before = context.input_writes
 local converted_backspace = press(env, 0xff08)
 assert(converted_backspace == kAccepted, "Backspace after the first Space must be consumed")
+assert(context.input_writes == writes_before + 1,
+    "the breaking Backspace after conversion must rewrite the input once")
 assert(context.input == "か", "Backspace after the first Space must delete from the inline candidate")
 assert(env.conversion == nil, "Backspace must leave the inline conversion")
 assert(context:get_option("_kagiroi_hide_candidates"), "Backspace must hide the list")

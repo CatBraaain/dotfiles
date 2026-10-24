@@ -1911,6 +1911,32 @@ static void test_ascii_mode_passes_half_width_keys(void) {
           "ASCII input must preserve romaji-like text without Japanese substitutions");
 }
 
+static void test_capital_c_k_inputs_edit_and_commit_verbatim(void) {
+    static const char* const cases[] = {"C", "Cc", "K", "Kk"};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        const char* text = cases[i];
+        char shortened[3] = {text[0], 0};
+        const char* remaining = text[1] ? shortened : text;
+        char description[128], commit[256];
+        fresh_session();
+        press_shift(text[0]);
+        if (text[1]) press(text[1]);
+        snprintf(description, sizeof(description), "%s must stay in the preedit", text);
+        check(preedit_equals(text), description);
+        if (text[1]) {
+            press(kBackSpace);
+            snprintf(description, sizeof(description),
+                     "Backspace on %s must delete the typed suffix", text);
+            check(preedit_equals(shortened), description);
+        }
+        press(kReturn);
+        snprintf(description, sizeof(description),
+                 "Enter after Backspace on %s must commit %s", text, remaining);
+        check(take_commit(commit, sizeof(commit)) && strcmp(commit, remaining) == 0,
+              description);
+    }
+}
+
 /* SPEC: Shift+letter switches to the unconfirmed ascii input mode from
  * every Japanese state, restoring the reading first during conversion and
  * appending the half-width uppercase letter to it (dotfiles/rime/SPEC.md). */
@@ -4459,6 +4485,7 @@ int main(int argc, char* argv[]) {
         test_minus_equal_commit_and_restart,
         test_shift_letter_switches_ascii_mode,
         test_ascii_mode_passes_half_width_keys,
+        test_capital_c_k_inputs_edit_and_commit_verbatim,
         test_ascii_variants_candidates,
         test_henkan_promotes_katakana,
         test_henkan_space_enter_chain,

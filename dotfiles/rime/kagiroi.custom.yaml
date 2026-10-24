@@ -18,6 +18,8 @@ patch:
   # Character-type candidates for segments without a reading: the original
   # text plus its width and case forms (dotfiles/rime/SPEC.md, "変換").
   "engine/translators/@next": lua_translator@*kagiroi/char_variants
+  "recognizer/patterns/moran": null
+  "recognizer/patterns/mungyeong": null
   # Keypad digits, full-width alphanumerics and appended symbols join the
   # alphabet so the abc segmentor keeps each appended run in one segment
   # instead of raw byte fragments (dotfiles/rime/SPEC.md, "変換").

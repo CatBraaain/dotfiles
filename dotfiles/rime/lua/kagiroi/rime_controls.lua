@@ -289,9 +289,21 @@ local function finish_deletion(context)
 end
 
 local function delete_last_character(context, env)
-    keep_display_for_editing(context, env)
-    local last_character = utf8.offset(context.input, -1)
-    context.input = last_character and context.input:sub(1, last_character - 1) or ""
+    local base = context.input
+    local conversion = bunsetsu.state(context)
+    if conversion then
+        base = bunsetsu.display(context)
+        bunsetsu.clear(context)
+        if env then env.conversion = nil end
+    end
+    if context:get_option("_kagiroi_expand_candidates") then
+        reset_expansion(context)
+    end
+    if not context:get_option("_kagiroi_hide_candidates") then
+        context:set_option("_kagiroi_hide_candidates", true)
+    end
+    local last_character = utf8.offset(base, -1)
+    context.input = last_character and base:sub(1, last_character - 1) or ""
     finish_deletion(context)
 end
 
