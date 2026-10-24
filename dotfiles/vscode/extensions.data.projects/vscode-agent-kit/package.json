@@ -41,6 +41,7 @@
     "test:e2e": "bun run build && xvfb-run -a playwright test",
     "test:review": "bun run build && xvfb-run -a playwright test tests/review/",
     "review": "playwright show-report dist/playwright-report --port 0",
+    "vsix": "bun run build && bunx @vscode/vsce package --allow-missing-repository --no-dependencies && code --install-extension pi-sessions-0.1.0.vsix --force",
     "lint": "eslint .",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build"

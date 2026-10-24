@@ -1,0 +1,24 @@
+# Keep the VSIX to runtime files only: package.json, dist/, dist-webview/, media/.
+.vscode/**
+src/**
+test/**
+tests/**
+stories/**
+.storybook/**
+storybook-static/**
+.screenshots/**
+designs/**
+scripts/**
+dist/playwright-report/**
+dist/test-results/**
+node_modules/**
+bun.lock
+tsconfig.json
+tsconfig.build.json
+vite.config.ts
+vitest.config.ts
+eslint.config.mjs
+playwright.config.ts
+SPEC.md
+REQUIREMENTS.md
+tasks.todo
