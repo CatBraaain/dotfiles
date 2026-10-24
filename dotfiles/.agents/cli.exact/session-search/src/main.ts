@@ -11,9 +11,9 @@ import {
   type SessionFilters,
 } from "./sessions";
 
-const USAGE = `usage: pi-sessions search <query> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>] [--role <user|assistant>]
-       pi-sessions list [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>]
-       pi-sessions show <id> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--offset <n>] [--limit <n>] [--query <text>] [--role <user|assistant>]`;
+const USAGE = `usage: session-search search <query> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>] [--role <user|assistant>]
+       session-search list [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>]
+       session-search show <id> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--offset <n>] [--limit <n>] [--query <text>] [--role <user|assistant>]`;
 
 const SUBCOMMANDS = new Set(["search", "list", "show"]);
 const VALUE_OPTIONS = new Set([
@@ -57,13 +57,13 @@ export async function run(
     options = parseArgs(args);
     validateCommandOptions(subcommand, options);
   } catch (error) {
-    console.error(`pi-sessions: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`session-search: ${error instanceof Error ? error.message : String(error)}`);
     console.error(USAGE);
     return 1;
   }
   const dateError = validateDates(options);
   if (dateError !== null) {
-    console.error(`pi-sessions: ${dateError}`);
+    console.error(`session-search: ${dateError}`);
     console.error(USAGE);
     return 1;
   }
@@ -75,7 +75,7 @@ export async function run(
   try {
     return await dispatch(subcommand, options, env);
   } catch (error) {
-    console.error(`pi-sessions: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`session-search: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 }
@@ -151,12 +151,12 @@ async function runShowCommand(
   const files = listSessionFiles(root, filters);
   const resolution = resolveSessionById(files, options.positional[0]!);
   if (resolution.status === "notFound") {
-    console.error(`pi-sessions: no session matches id: ${options.positional[0]}`);
+    console.error(`session-search: no session matches id: ${options.positional[0]}`);
     return 1;
   }
   if (resolution.status === "ambiguous") {
     console.error(
-      `pi-sessions: ambiguous id: ${options.positional[0]} (${resolution.candidates.length} sessions)`,
+      `session-search: ambiguous id: ${options.positional[0]} (${resolution.candidates.length} sessions)`,
     );
     for (const candidate of resolution.candidates.slice(0, AMBIGUOUS_CANDIDATE_LIMIT)) {
       console.error(

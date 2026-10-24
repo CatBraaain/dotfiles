@@ -1,15 +1,15 @@
-# pi_sessions仕様
+# session_search仕様
 
 ## 対象と目的
 
-pi_sessions は、pi の LLM に pi-sessions CLI（`dotfiles/.agents/cli.exact/pi-sessions/` の展開先 `~/.agents/cli/pi-sessions`）を tool として利用させるpi extension である。1つの tool `pi_sessions` を `pi.registerTool` で登録する。`action` にCLIのサブコマンド `search` / `list` / `show` を指定する。
+session_search は、pi の LLM に session-search CLI（`dotfiles/.agents/cli.exact/session-search/` の展開先 `~/.agents/cli/session-search`）を tool として利用させるpi extension である。1つの tool `session_search` を `pi.registerTool` で登録する。`action` にCLIのサブコマンド `search` / `list` / `show` を指定する。
 
-CLIとその各サブコマンドの引数・出力・終了コードの正本は `dotfiles/.agents/cli.exact/pi-sessions/SPEC.md` である。この仕様は本extension の構成・tool入出力・CLI依存のみを定め、CLIの振る舞いを再定義しない。
+CLIとその各サブコマンドの引数・出力・終了コードの正本は `dotfiles/.agents/cli.exact/session-search/SPEC.md` である。この仕様は本extension の構成・tool入出力・CLI依存のみを定め、CLIの振る舞いを再定義しない。
 
 ## 構成
 
 ```text
-extensions.exact/pi-sessions/
+extensions.exact/session-search/
 ├── index.ts        # extension 本体
 ├── index.test.ts   # bun:test によるテスト
 └── SPEC.md         # 本ファイル
@@ -22,13 +22,13 @@ extensions.exact/pi-sessions/
 
 | tool | 対応CLI操作 | tool引数 |
 | --- | --- | --- |
-| `pi_sessions` | `search` / `list` / `show` | `action`（必須）/ `query`（`search` で必須）/ `id`（`show` で必須）/ `project`・`since`・`until`・`limit`・`offset`・`role`（任意。意味と適用対象はCLIの正本に従う） |
+| `session_search` | `search` / `list` / `show` | `action`（必須）/ `query`（`search` で必須）/ `id`（`show` で必須）/ `project`・`since`・`until`・`limit`・`offset`・`role`（任意。意味と適用対象はCLIの正本に従う） |
 
 操作と不整合な引数（`list` への `query`、`role` の未定義値など）はCLIを実行せず拒否する。NULを含む値も拒否する。
 
 ## CLI実行
 
-実行先はホームの `.agents/cli/pi-sessions` に固定し、常に `--json` を付ける。cwdは呼出し時のpiセッションcwd（`ctx.cwd`）とし、明示された `project` は変換せずCLIへ渡す。cwd・固定CLIパス・各引数値は既存のshell quotingで安全に構成し、`ctx.executeTool("bash", …)` で実行する。shell構文としての入力解釈・自由なコマンド・直接spawn・共有sandboxの変更は行わない。CLI不在時の自動build・install・代替実行も行わない。既存bashツールの許可判定・sandbox・中断・出力上限はそのまま適用される。
+実行先はホームの `.agents/cli/session-search` に固定し、常に `--json` を付ける。cwdは呼出し時のpiセッションcwd（`ctx.cwd`）とし、明示された `project` は変換せずCLIへ渡す。cwd・固定CLIパス・各引数値は既存のshell quotingで安全に構成し、`ctx.executeTool("bash", …)` で実行する。shell構文としての入力解釈・自由なコマンド・直接spawn・共有sandboxの変更は行わない。CLI不在時の自動build・install・代替実行も行わない。既存bashツールの許可判定・sandbox・中断・出力上限はそのまま適用される。
 
 tool結果の`status` は3値である。
 

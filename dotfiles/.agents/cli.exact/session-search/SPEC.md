@@ -1,6 +1,6 @@
-# pi-sessions CLI spec
+# session-search CLI spec
 
-コマンド `pi-sessions` の仕様。pi(コーディングエージェント)が書き出すセッションログを検索・一覧・閲覧する CLI であり、サブコマンド `search` / `list` / `show` を持つ。
+コマンド `session-search` の仕様。pi(コーディングエージェント)が書き出すセッションログを検索・一覧・閲覧する CLI であり、サブコマンド `search` / `list` / `show` を持つ。
 
 読者はこの spec だけを読んで要件の go/no-go をするユーザーと、実装・テストの担当者。
 
@@ -10,9 +10,9 @@
 usage:
 
 ```
-usage: pi-sessions search <query> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>] [--role <user|assistant>]
-       pi-sessions list [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>]
-       pi-sessions show <id> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--offset <n>] [--limit <n>] [--query <text>] [--role <user|assistant>]
+usage: session-search search <query> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>] [--role <user|assistant>]
+       session-search list [--json] [--project <pattern>] [--since <date>] [--until <date>] [--limit <n>]
+       session-search show <id> [--json] [--project <pattern>] [--since <date>] [--until <date>] [--offset <n>] [--limit <n>] [--query <text>] [--role <user|assistant>]
 ```
 
 ## 対象ファイル
@@ -45,7 +45,7 @@ usage: pi-sessions search <query> [--json] [--project <pattern>] [--since <date>
 
 ## search
 
-`pi-sessions search <query>` は、絞り込み後のファイル集合に対して ripgrep(`rg`)を spawn して全文検索する。`agents.subagent-log` の子ログを含む custom 行も自然にヒットする。
+`session-search search <query>` は、絞り込み後のファイル集合に対して ripgrep(`rg`)を spawn して全文検索する。`agents.subagent-log` の子ログを含む custom 行も自然にヒットする。
 
 - 人間可読: ヒットごとに `id(8桁)・プロジェクトディレクトリ・entryType・時刻・行番号` の見出し行と、その行から抽出したテキストの抜粋(改行は空白に崩し 200 字で切り詰め)を 2 行で出す。
 - テキスト抽出は entry 単位で行う。assistant は text ブロックを優先し、無ければ thinking ブロックを使う。system メッセージは `content` が空のため `sections` の値を結合したテキストを使う。
@@ -60,7 +60,7 @@ usage: pi-sessions search <query> [--json] [--project <pattern>] [--since <date>
 
 ## list
 
-`pi-sessions list` はセッション一覧を更新時刻(mtime)降順で出す。1 行に `id(8桁)`・プロジェクトディレクトリ・`updated`(`YYYY-MM-DD HH:MM:SS`)・サイズ(`B` / `K` / `M` / `G`)・タイトルを並べる。
+`session-search list` はセッション一覧を更新時刻(mtime)降順で出す。1 行に `id(8桁)`・プロジェクトディレクトリ・`updated`(`YYYY-MM-DD HH:MM:SS`)・サイズ(`B` / `K` / `M` / `G`)・タイトルを並べる。
 
 - タイトルは先頭 user メッセージのテキストを 1 行に崩し 80 字で切り詰めたもの。先頭 user メッセージが無いセッションのタイトルは空文字列である。
 - `--json`: `{"id","project","path","started","updated","sizeBytes","title"}` を 1 件 1 行で出す。`started` はファイル名タイムスタンプの ISO 形式、`updated` は mtime の ISO 形式である。
@@ -68,7 +68,7 @@ usage: pi-sessions search <query> [--json] [--project <pattern>] [--since <date>
 
 ## show
 
-`pi-sessions show <id>` は1セッションを閲覧する。`<id>` はセッションid（uuid）の前方一致で、0件ならエラー、複数候補ならエラーと候補一覧（最大20件）を出す。
+`session-search show <id>` は1セッションを閲覧する。`<id>` はセッションid（uuid）の前方一致で、0件ならエラー、複数候補ならエラーと候補一覧（最大20件）を出す。
 
 ### 閲覧レコード
 
@@ -122,6 +122,6 @@ sessionヘッダー・systemメッセージ・モデル変更・上表にないc
 
 ## テスト
 
-- テストは `src/*.test.ts` とし、`import { describe, it } from "bun:test"` で書き、assertion は `node:assert/strict` を使う。実行は `cd dotfiles/.agents/cli.exact/pi-sessions && bun test` である。
+- テストは `src/*.test.ts` とし、`import { describe, it } from "bun:test"` で書き、assertion は `node:assert/strict` を使う。実行は `cd dotfiles/.agents/cli.exact/session-search && bun test` である。
 - 対象: entry のパースとテキスト抽出、ファイル名パース・日付フィルタ・プロジェクトフィルタ・id 解決、`rg` 検索(一時ディレクトリの fixture と実 `rg`)、人間可読・JSON の出力フォーマット、CLI 引数と終了コード(fixture ホームでの E2E)。
 - 実データでの動作確認は手動実行とする。

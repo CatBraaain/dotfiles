@@ -82,14 +82,14 @@ function commandArguments(command: string): string[] {
   const tokens = parse(command);
   assert.deepEqual(tokens.slice(0, 2), ["cd", "--"]);
   assert.deepEqual(tokens[3], { op: "&&" });
-  assert.equal(tokens[4], join(homedir(), ".agents", "cli", "pi-sessions"));
+  assert.equal(tokens[4], join(homedir(), ".agents", "cli", "session-search"));
   return tokens.slice(5) as string[];
 }
 
-describe("pi_sessions CLI boundary", () => {
+describe("session_search CLI boundary", () => {
   it("registers one tool and declares its nested bash dependency and untrusted logs", () => {
     const tool = captureTool();
-    assert.equal(tool.name, "pi_sessions");
+    assert.equal(tool.name, "session_search");
     assert.deepEqual(
       (
         tool as ToolDefinition & { reachesTools(input: Record<string, unknown>): string[] }
@@ -213,7 +213,7 @@ describe("pi_sessions CLI boundary", () => {
   });
 
   it("quotes query, id, project and cwd as literal shell arguments", async () => {
-    const temp = mkdtempSync(join(tmpdir(), "pi-sessions-quote-"));
+    const temp = mkdtempSync(join(tmpdir(), "session-search-quote-"));
     try {
       const marker = join(temp, "injected");
       const unsafe = `x ' " ; $(touch ${marker}) \`touch ${marker}\`\n$HOME & | > * ?`;
@@ -225,7 +225,7 @@ describe("pi_sessions CLI boundary", () => {
         { cwd },
       );
       const command = (calls[0]!.args as { command: string }).command;
-      const fixedCli = quote([join(homedir(), ".agents", "cli", "pi-sessions")]);
+      const fixedCli = quote([join(homedir(), ".agents", "cli", "session-search")]);
       const echoArgv = quote([
         process.execPath,
         "-e",
@@ -427,9 +427,9 @@ describe("pi_sessions CLI boundary", () => {
   });
 });
 
-describe("pi_sessions sandbox fixture integration", () => {
+describe("session_search sandbox fixture integration", () => {
   it("runs all registered actions through the existing sandboxed bash into a compiled fixture CLI", async () => {
-    const temp = mkdtempSync(join(tmpdir(), "pi-sessions-integration-"));
+    const temp = mkdtempSync(join(tmpdir(), "session-search-integration-"));
     try {
       const cwd = join(temp, "project 'space'");
       mkdirSync(cwd);
@@ -453,9 +453,9 @@ describe("pi_sessions sandbox fixture integration", () => {
       );
       const cliSource = resolve(
         import.meta.dir,
-        "../../../../.agents/cli.exact/pi-sessions/src/main.ts",
+        "../../../../.agents/cli.exact/session-search/src/main.ts",
       );
-      const fixtureCli = join(temp, "dist", "pi-sessions");
+      const fixtureCli = join(temp, "dist", "session-search");
       execFileSync(process.execPath, ["build", "--compile", cliSource, "--outfile", fixtureCli], {
         stdio: "pipe",
       });
@@ -483,7 +483,7 @@ describe("pi_sessions sandbox fixture integration", () => {
         nestedCalls++;
         assert.equal(name, "bash");
         const command = (args as { command: string }).command.replace(
-          quote([join(homedir(), ".agents", "cli", "pi-sessions")]),
+          quote([join(homedir(), ".agents", "cli", "session-search")]),
           quote([wrapper]),
         );
         return (await bash.execute("integration/bash", { command }, options?.signal, undefined, {

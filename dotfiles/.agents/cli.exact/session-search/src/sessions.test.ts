@@ -15,7 +15,7 @@ import {
 const tempRoots: string[] = [];
 
 function createSessionTree(): string {
-  const root = mkdtempSync(join(tmpdir(), "pi-sessions-test-"));
+  const root = mkdtempSync(join(tmpdir(), "session-search-test-"));
   tempRoots.push(root);
   return root;
 }
@@ -118,7 +118,7 @@ describe("listSessionFiles", () => {
     );
     writeSession(
       root,
-      "--home-username-projects-deja--",
+      "--home-username-projects-playground--",
       "2026-10-01T00-00-00-000Z_00000000-0000-0000-0000-000000000002.jsonl",
       [],
     );

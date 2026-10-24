@@ -9,7 +9,7 @@ import { parseRgOutputLine, RgUnavailableError, runSearch } from "./search";
 const tempRoots: string[] = [];
 
 function createSessionTree(): string {
-  const root = mkdtempSync(join(tmpdir(), "pi-sessions-search-"));
+  const root = mkdtempSync(join(tmpdir(), "session-search-search-"));
   tempRoots.push(root);
   return root;
 }
@@ -58,7 +58,7 @@ describe("runSearch", () => {
   });
 
   it("returns an empty list without spawning rg when there are no files", async () => {
-    assert.deepEqual(await runSearch([], "query", { rgCommand: "pi-sessions-missing-rg" }), []);
+    assert.deepEqual(await runSearch([], "query", { rgCommand: "session-search-missing-rg" }), []);
   });
 
   it("stops rg early once the limit is reached", async () => {
@@ -84,7 +84,7 @@ describe("runSearch", () => {
     const files = listSessionFiles(root);
 
     await assert.rejects(
-      () => runSearch(files, "query", { rgCommand: "pi-sessions-missing-rg" }),
+      () => runSearch(files, "query", { rgCommand: "session-search-missing-rg" }),
       RgUnavailableError,
     );
   });

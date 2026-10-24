@@ -1,5 +1,5 @@
 {
-  "name": "pi-sessions-cli",
+  "name": "session-search-cli",
   "private": true,
   "main": "./src/main.ts"
 }

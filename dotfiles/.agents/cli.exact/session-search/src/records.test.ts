@@ -292,7 +292,7 @@ describe("selectReadingPage", () => {
 
 describe("loadReadingPage", () => {
   it("keeps parent and repeated agent invocations at their saved positions", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-sessions-records-"));
+    const root = mkdtempSync(join(tmpdir(), "session-search-records-"));
     roots.push(root);
     const path = join(root, "session.jsonl");
     writeFileSync(

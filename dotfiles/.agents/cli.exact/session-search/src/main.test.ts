@@ -8,7 +8,7 @@ import { run } from "./main";
 const tempHomes: string[] = [];
 
 function createFixtureHome(): { homeDir: string; cwd: string } {
-  const homeDir = mkdtempSync(join(tmpdir(), "pi-sessions-home-"));
+  const homeDir = mkdtempSync(join(tmpdir(), "session-search-home-"));
   tempHomes.push(homeDir);
   const projectDir = join(homeDir, ".pi", "agent", "sessions", "--home-username-projects-demo--");
   mkdirSync(projectDir, { recursive: true });
@@ -271,7 +271,7 @@ describe("reading and role options", () => {
         };
         try {
           assert.equal(await run(["show", "01a15c51", option, value], env), 1);
-          assert.match(errors.join("\n"), /usage: pi-sessions/);
+          assert.match(errors.join("\n"), /usage: session-search/);
         } finally {
           console.error = originalError;
         }
@@ -327,7 +327,7 @@ describe("reading and role options", () => {
     );
     assert.equal(result.exitCode, 1);
     assert.equal(result.stdout.toString(), "");
-    assert.match(result.stderr.toString(), /usage: pi-sessions/);
+    assert.match(result.stderr.toString(), /usage: session-search/);
   });
 });
 
