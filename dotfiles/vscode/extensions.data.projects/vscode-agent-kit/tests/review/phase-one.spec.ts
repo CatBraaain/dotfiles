@@ -8,7 +8,7 @@ test.use({ trace: "on" });
 const SCM_EVIDENCE_SCOPE =
   "A/B evidence covers visible repositories with Graph Auto only. Hidden repositories, fixed Graph selection and active repository pin remain unmet and were not executed in this run. Owner decision is pending (G1). This note does not resolve G1 or the real assistant response gap (G3).";
 
-test("same-name main/worktree folders remain distinct and All exposes zero-active history", async ({
+test("同名の本体・worktree フォルダを見分け、active 0 件の作業先の履歴を All モードで開ける", async ({
   host,
 }, testInfo) => {
   await test.step("Read the full paths of the two project folders", async () => {
@@ -51,7 +51,7 @@ test("same-name main/worktree folders remain distinct and All exposes zero-activ
   });
 });
 
-test("A/B selection reuses real Pi terminals and follows the native diff and SCM repository", async ({
+test("A/B の会話選択で実 Pi の Terminal を再利用し、ネイティブ diff と SCM 対象へ追従する", async ({
   host,
 }, testInfo) => {
   testInfo.annotations.push({
@@ -152,11 +152,11 @@ test("A/B selection reuses real Pi terminals and follows the native diff and SCM
   }
 });
 
-test("SCM hidden repositories, fixed Graph and active repository pin remain unmet: not executed, owner decision pending", async () => {
+test("SCM の非表示リポジトリ・固定 Graph・active pin は未達: 未実行、決定待ち", async () => {
   test.skip(true, SCM_EVIDENCE_SCOPE);
 });
 
-test("SCM to Sessions round trips preserve the list without Refresh", async ({
+test("SCM から Sessions へ戻っても、Refresh なしで一覧を復元する", async ({
   host,
 }, testInfo) => {
   for (const key of ["B", "A", "B", "A"]) {
@@ -176,7 +176,7 @@ test("SCM to Sessions round trips preserve the list without Refresh", async ({
   }
 });
 
-test("the editor at selection acceptance determines the changed file", async ({
+test("会話選択を受け付けた時点のエディタが、対象の変更ファイルを決める", async ({
   host,
 }, testInfo) => {
   await test.step("Open the worktree preferred file in the native editor", async () => {
@@ -202,7 +202,7 @@ test("the editor at selection acceptance determines the changed file", async ({
   });
 });
 
-test("single-root explicit folder addition survives extension host restart and reselection", async ({
+test("単一ルートへの明示的なフォルダ追加が、拡張 host 再起動後の再選択でも成立する", async ({
   host,
 }, testInfo) => {
   await test.step("Open an unregistered session without adding its folder", async () => {
@@ -250,7 +250,7 @@ test("single-root explicit folder addition survives extension host restart and r
   });
 });
 
-test("New session offers full-path candidates and safely handles cancel, missing cwd and another folder", async ({
+test("New Session がフルパス候補を出し、キャンセル・無効な開始先・別フォルダ選択を安全に扱う", async ({
   host,
 }, testInfo) => {
   await test.step("Inspect the native start candidates and cancel", async () => {
@@ -343,7 +343,7 @@ test("New session offers full-path candidates and safely handles cancel, missing
   });
 });
 
-test("missing cwd and deleted sessions fail safely while Git and original headers remain intact", async ({
+test("存在しない cwd・削除済みセッションファイルの選択を安全に扱い、セッション原本と Git を変更しない", async ({
   host,
 }, testInfo) => {
   await test.step("Select a missing work folder and keep terminals and metadata unchanged", async () => {
@@ -394,7 +394,7 @@ test("missing cwd and deleted sessions fail safely while Git and original header
   });
 });
 
-test("real Pi first assistant response creates a detected active session", async () => {
+test("実 Pi の最初の assistant 応答による新規セッションの検出と active 付与", async () => {
   test.skip(
     true,
     "No model credentials or provider are configured in the isolated fixture. Synthetic JSONL detection is not evidence of a real Pi assistant response.",
