@@ -2,7 +2,7 @@
 
 この拡張は、pi の入力欄エディタを `CustomEditor` を継承した独自実装へ差し替える。キー割り当てで変えられないエディタの組み込み挙動を上書きするカスタマイズの受け皿であり、個々のカスタマイズはエディタ実装として `core.ts` に置く。対象読者は、pi標準エディタの組み込み挙動を部分的に変えたいユーザーである。
 
-`index.ts` は tuiモードの `session_start` で、`core.ts` のエディタ実装を `setEditorComponent` に登録する。
+`index.ts` は tuiモードの `session_start` で、`core.ts` の `NoTabCompletionWhenEmptyEditor` を `setEditorComponent` に登録する。
 
 この拡張が提供するエディタ実装は次のとおりである。
 
@@ -26,3 +26,27 @@ pi の入力欄で up / downキーによって送信済みプロンプトが読�
 - 無効化するのは入力欄（エディタ）内の up / down履歴ブラウズのみである。
 - submit、autocomplete、undo、kill-ring など pi標準のエディタ機能は変更しない。
 - keybindings の既定割り当ては変更しない。履歴ブラウズを別キーで使いたい場合は `tui.editor.historyPrevious` / `tui.editor.historyNext` に割り当てる（本エディタの対象外）。
+
+## NoTabCompletionWhenEmptyEditor
+
+入力欄が未入力のときに tabキーによって補完が起動される挙動を無効化するエディタである。`NoPromptHistoryEditor` を継承するため、up / down履歴ブラウズの無効化も含む。
+
+仕組み: pi本体は tab押下時、`/` 直後（空白を含まない）なら slashコマンド・スキル名の補完を、それ以外ならファイルパス補完を強制発火する。この強制発火のときだけ `AutocompleteProvider` の `shouldTriggerFileCompletion` の戻り値が参照される。そこでこのエディタは、登録されたproviderをラップし、入力欄が空（pi本体の空判定と同じ「単一の空行」）のときだけ常に `false` を返す。テキストがあるときは元の判定へ委譲するため、tab補完はpi標準どおり動く。providerの `getSuggestions`・`applyCompletion`・`triggerCharacters` もそのまま委譲する。
+
+### 振る舞い
+
+| 開始時の状態 | 操作 | 結果 |
+| --- | --- | --- |
+| 未入力（空） | tab を押す | 補完は起動しない。テキスト・カーソル位置とも変化しない |
+| テキストを入力中（例: `src/f`） | tab を押す | ファイルパス補完が起動する（pi標準の挙動を維持） |
+| 1行目が `/` で始まり空白を含まない（例: `/sk`） | tab を押す | slashコマンド・スキル名の補完が起動する（pi標準の挙動を維持） |
+| slashコマンド・スキル名の補完リストを表示中 | tab を押す | 選択中の候補で確定する（pi標準の挙動を維持） |
+| `@` や `/` の入力で補完リストが自然発火している | （操作なし） | リストは表示される。`@` からのファイル・ディレクトリ補完もpi標準どおり動く |
+
+### 適用範囲
+
+- 無効化するのは未入力時の tabによる補完の「起動」のみである。
+- テキスト入力中の tabによるファイルパス補完はpi標準どおり動く。
+- 補完リスト表示中の tab確定、`/` 直後のslashコマンド・スキル名補完、`@`・`#` トリガーの自然発火、enter での確定は変更しない。
+- model selector・session selector など、エディタ以外の画面で tabが担う scope切り替えには影響しない。
+- keybindings の既定割り当ては変更しない。`tui.input.tab` はそのまま残るため、tabを別機能へ割り当てたい場合は本エディタの対象外で、keybindingsで設定する。
