@@ -6,7 +6,6 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { quote } from "shell-quote";
 import { Type, type Static } from "typebox";
 
@@ -54,24 +53,6 @@ export default function piSessionsExtension(pi: ExtensionAPI): void {
       const command = `cd -- ${quote([ctx.cwd])} && ${quote([join(homedir(), ".agents", "cli", "session-search"), ...argv])}`;
       const bash = await ctx.executeTool("bash", { command }, { signal });
       return cliResult(input.action, bash, signal);
-    },
-    renderCall(input, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold(`session_search ${input.action ?? ""}`)), 0, 0);
-    },
-    renderResult(result, { expanded, isPartial }, theme, context) {
-      const text = result.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n");
-      const status =
-        (result.structuredContent as { status?: string } | undefined)?.status ??
-        (context.isError ? "error" : "complete");
-      const summary = isPartial ? "Running..." : `session_search: ${status}`;
-      return new Text(
-        theme.fg(context.isError ? "error" : "toolOutput", expanded ? text : summary),
-        0,
-        0,
-      );
     },
   };
   pi.registerTool(tool);

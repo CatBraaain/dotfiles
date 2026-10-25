@@ -69,23 +69,7 @@ camoufox server の表示モード（Linux既定の Xvfb `:99` 上の headed と
 
 ## 表示（TUI）
 
-### コール行（実行開始時）
-
-ツール名に続けて入力を記載：`web_search - "<クエリ>"`（`lang` 指定時は末尾に ` [lang=<lang>]`）/ `web_fetch - "<URL>"`。
-
-### 結果行（実行完了時）
-
-成功時は `✓` に続けて成功したengine または backend名を置く。web_fetch成功時はタイトルがあるとき ` - "<タイトル>"` を続ける。行末に CLI の実測所要時間を ` (1.2s)` 形式で付ける。
-
-| 状態 | 出力 |
-| --- | --- |
-| 成功（web_search） | `✓ <engine> (1.2s)` |
-| 成功（web_fetch、タイトルあり） | `✓ <backend> - "<タイトル>" (1.2s)` |
-| 成功（web_fetch、fallbackあり） | `✓ <backend> [- "<タイトル>"] (fallback: <backend>: <error>; ...) (1.2s)` |
-| 成功（web_fetch、タイトルなし） | `✓ <backend> (1.2s)` |
-| 失敗 | `✗ <CLI名> - "<エラーメッセージ>"` |
-
-失敗行のエラーメッセージは CLI の stderr（全backend失敗の理由に、再試行と camoufox server手動復旧のヒントが含まれることがある。CLI spec「共通の振る舞い」）をそのまま引用する。CLI の JSON に試行（attempts）一覧が無いため、バックエンド試行を1行ずつ列挙する表示は行わない。
+ツールの表示（コール行・結果行）は tool-renderer 拡張が単一で担う。表示仕様の正本は `../tool-renderer/SPEC.md` を参照。本拡張は `details` と本文の生成だけを行い、失敗時も `onUpdate` でエラーdetails を通知して結果行に失敗を表示できるようにする。
 
 ## 環境変数
 

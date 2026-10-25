@@ -28,16 +28,7 @@
 
 ## ツール行の描画
 
-対話画面で `replace_context` の呼出しは、pi が圧縮時に表示するcompactionメッセージと同じ1箱の構成で表示する。上からラベル行・空行・状態行の順に並べる。箱の背景はテーマの `customMessageBg`、パディングは左右1・上下1、ラベルはテーマの `customMessageLabel` で太字の `[compaction]` とする。
-
-| 状態 | 状態行 |
-| --- | --- |
-| ツール実行中 | `Requesting context replacement...` |
-| 呼出し成功・折りたたみ | `Context will be replaced at end of turn (`＋展開キー＋` to expand)` |
-| 呼出し成功・展開 | 折りたたみ文を見出しに、`Reason` と `Handoff` の見出し付きで `reason` と `handoff` をMarkdown表示 |
-| ツールエラー | ツールが返したエラーメッセージ |
-
-状態行の本文はテーマの `customMessageText`、展開キーはテーマの `dim` で `app.tools.expand` に割り当てられたキーを表示する。既定の展開キーは `ctrl+o` である。
+`replace_context` のツール行の表示は tool-renderer 拡張が担う。表示仕様の正本は `../tool-renderer/SPEC.md` を参照。
 
 ## コンテキスト切替
 

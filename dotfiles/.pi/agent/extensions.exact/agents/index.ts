@@ -16,13 +16,14 @@ import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earen
 import {
   createLocalBashOperations,
   getAgentDir,
-  getMarkdownTheme,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { SPINNER_INTERVAL_MS, spinnerFrame } from "../titlebar/index.ts";
+import { SPINNER_INTERVAL_MS } from "../titlebar/index.ts";
+import { spinnerTimers as __spinnerTimers } from "../shared/spinner-timers.ts";
+export { spinnerTimers as __spinnerTimers } from "../shared/spinner-timers.ts";
+
 import { parse as parseYaml } from "yaml";
 import {
   bashExecFrom,
@@ -46,13 +47,7 @@ import {
   type ClassChangeResult,
   type SelectionSource,
 } from "./class-change.ts";
-import {
-  formatToolCall,
-  formatToolResultSummary,
-  truncateErrorOutput,
-  type ToolResultLike,
-  type ToolTheme,
-} from "../shared/tool-format.ts";
+import { truncateErrorOutput } from "../shared/tool-text.ts";
 import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
 
 export type Agent = string;
@@ -305,16 +300,6 @@ function saveAttachedImages(images: ImageContent[]): Array<{ path: string; clean
 const RATE_LIMIT_FALLBACK_APPLIED_MESSAGE =
   "429 rate limit error; already switched to a fallback model";
 
-export const __spinnerTimers: {
-  set: (callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>;
-  clear: (timer: ReturnType<typeof setInterval>) => void;
-  now: () => number;
-} = {
-  set: (callback, intervalMs) => setInterval(callback, intervalMs),
-  clear: (timer) => clearInterval(timer),
-  now: () => Date.now(),
-};
-
 // テストが onUpdate のスロットリング用タイマーを差し替える出口。本番は標準の
 // setTimeout / Date.now を使う。
 export const __updateTimers: {
@@ -431,6 +416,11 @@ function stopSpinnerTimerIfIdle(): void {
   }
 }
 
+type ToolResultLike = {
+  content?: { type: string; text?: string }[];
+  details?: unknown;
+};
+
 interface ChildAction {
   toolCallId?: string;
   name: string;
@@ -455,7 +445,7 @@ interface ChildRun {
   sessionId?: string;
 }
 
-interface AgentToolDetails {
+export interface AgentToolDetails {
   results: ChildRun[];
 }
 
@@ -1046,75 +1036,6 @@ export default function agentsExtension(
         ],
         details: { results: [result] },
       };
-    },
-    renderCall(args, theme) {
-      const sessionLabel =
-        typeof args.session === "string" && args.session.length > 0
-          ? ` (${args.fork ? "fork" : "resume"} ${basename(args.session)})`
-          : "";
-      return new Text(
-        theme.fg("toolTitle", theme.bold(`subagent ${args.agent ?? "..."}${sessionLabel}`)),
-        0,
-        0,
-      );
-    },
-    renderResult(result, options, theme) {
-      const details = result.details as AgentToolDetails | undefined;
-      const childResult = details?.results[0];
-      if (!childResult) {
-        const fallback = result.content[0];
-        return new Text(fallback?.type === "text" ? fallback.text : "(no output)", 0, 0);
-      }
-
-      const actions = childResult.actions;
-      const finalOutput = getFinalOutput(childResult.messages);
-      const childCwd = childResult.cwd ?? process.cwd();
-      const toolTheme: ToolTheme = { fg: theme.fg.bind(theme), bold: theme.bold.bind(theme) };
-      const container = new Container();
-      container.addChild(new Text(theme.fg("muted", "┌─── Task ──────"), 0, 0));
-      container.addChild(new Text(theme.fg("text", childResult.task), 0, 0));
-      container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
-      if (actions.length > 0) {
-        container.addChild(new Text(theme.fg("muted", "┌─── Actions ───"), 0, 0));
-        for (const action of actions) {
-          const callText = formatToolCall(action.name, action.args, childCwd, toolTheme);
-          container.addChild(new Text(`${theme.fg("muted", "→ ")}${callText}`, 0, 0));
-          const durationMs =
-            action.startedAt !== undefined && action.endedAt !== undefined
-              ? action.endedAt - action.startedAt
-              : undefined;
-          const summary =
-            action.result !== undefined
-              ? formatToolResultSummary(
-                  action.name,
-                  action.args,
-                  action.result,
-                  { isError: action.isError, durationMs },
-                  toolTheme,
-                )
-              : undefined;
-          if (summary !== undefined) container.addChild(new Text(`  ${summary}`, 0, 0));
-        }
-        container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
-      }
-      if (finalOutput && !options.isPartial) {
-        container.addChild(new Text(theme.fg("muted", "┌─── Output ────"), 0, 0));
-        container.addChild(new Markdown(finalOutput.trim(), 0, 0, getMarkdownTheme()));
-        container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
-      }
-      if (childResult.sessionId && !options.isPartial) {
-        container.addChild(new Text(theme.fg("muted", `session: ${childResult.sessionId}`), 0, 0));
-      }
-      if (childResult.pending) {
-        container.addChild({
-          render: () =>
-            childResult.pending
-              ? [theme.fg("muted", `${spinnerFrame(__spinnerTimers.now())} ${childResult.agent}`)]
-              : [],
-          invalidate: () => {},
-        });
-      }
-      return container;
     },
   });
 

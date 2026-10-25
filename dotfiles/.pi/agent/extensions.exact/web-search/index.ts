@@ -1,10 +1,17 @@
 // Thin pi wrapper that adapts tool input and output to the `browse` CLI.
 
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+export type WebToolDetails = {
+  engine?: string;
+  backend?: string;
+  title?: string;
+  tookMs?: number;
+  fallback?: string;
+  error?: string;
+};
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -235,66 +242,10 @@ export function formatSearchText(json: SearchCliJson): string {
   return [metaLine, ...blocks].join("\n\n");
 }
 
-export type WebToolDetails = {
-  engine?: string;
-  backend?: string;
-  title?: string;
-  tookMs?: number;
-  fallback?: string;
-  error?: string;
-};
-
-// --- TUI rendering ---
-
-// pi may render a result whose details only arrived through onUpdate (e.g.
-// the error path throws before a final result), so mirror the last seen
-// details into the render state. Thrown tool results have an empty details
-// object, which must not replace the error details from onUpdate.
-type WebRenderState = { details?: WebToolDetails };
-
-function detailsForRender(
-  result: { details?: unknown },
-  state?: WebRenderState,
-): WebToolDetails | undefined {
-  const details = result.details as WebToolDetails | undefined;
-  const hasDetails = details !== undefined && Object.keys(details).length > 0;
-  if (hasDetails && state) state.details = details;
-  return hasDetails ? details : state?.details;
-}
-
 function resultText(result: {
   content?: ReadonlyArray<{ type: string; text?: string }>;
 }): string | undefined {
   return result.content?.find((block) => block.type === "text")?.text?.trim() || undefined;
-}
-
-function tookSuffix(tookMs: number | undefined): string {
-  return typeof tookMs === "number" ? ` (${(tookMs / 1000).toFixed(1)}s)` : "";
-}
-
-function fallbackSuffix(fallback: string | undefined): string {
-  return fallback ? ` (fallback: ${fallback})` : "";
-}
-
-// Spec (SPEC.md §表示): `✓ <engine/backend> [- "<title>"] (1.2s)` on success,
-// `✗ <cli> - "<message>"` on failure.
-function successLine(name: string, details: WebToolDetails): string {
-  const title = details.title ? ` - "${details.title}"` : "";
-  return `✓ ${name}${title}${fallbackSuffix(details.fallback)}${tookSuffix(details.tookMs)}`;
-}
-
-function errorLine(kind: "web-search" | "web-fetch", message: string): string {
-  return `✗ ${kind} - "${message}"`;
-}
-
-function failureLine(
-  kind: "web-search" | "web-fetch",
-  result: { content?: ReadonlyArray<{ type: string; text?: string }> },
-  details: WebToolDetails | undefined,
-  isError: boolean,
-): string | undefined {
-  if (!isError && !details?.error) return undefined;
-  return errorLine(kind, details?.error ?? resultText(result) ?? "Error");
 }
 
 function errorMessage(error: unknown): string {
@@ -331,21 +282,6 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
         throw error;
       }
     },
-    renderCall(args, theme) {
-      const langSuffix = args.lang ? ` [lang=${args.lang}]` : "";
-      return new Text(
-        theme.fg("toolTitle", theme.bold(`web_search - "${args.query ?? ""}"${langSuffix}`)),
-        0,
-        0,
-      );
-    },
-    renderResult(result, _options, _theme, context) {
-      const details = detailsForRender(result, context?.state as WebRenderState | undefined);
-      const failure = failureLine("web-search", result, details, context?.isError ?? false);
-      if (failure) return new Text(failure, 0, 0);
-      if (!details) return new Text("", 0, 0);
-      return new Text(successLine(details.engine ?? "", details), 0, 0);
-    },
   });
 
   pi.registerTool({
@@ -374,16 +310,6 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
         onUpdate?.({ content: [], details: { error: errorMessage(error) } });
         throw error;
       }
-    },
-    renderCall(args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold(`web_fetch - "${args.url ?? ""}"`)), 0, 0);
-    },
-    renderResult(result, _options, _theme, context) {
-      const details = detailsForRender(result, context?.state as WebRenderState | undefined);
-      const failure = failureLine("web-fetch", result, details, context?.isError ?? false);
-      if (failure) return new Text(failure, 0, 0);
-      if (!details) return new Text("", 0, 0);
-      return new Text(successLine(details.backend ?? "", details), 0, 0);
     },
   });
 }

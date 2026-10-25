@@ -5,10 +5,9 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { quote } from "shell-quote";
 import { Type, type Static } from "typebox";
-import { resultText, truncateText } from "../shared/tool-format.ts";
+import { resultText, truncateText } from "../shared/tool-text.ts";
 
 export const TMUX_SESSION_NAME = "pi";
 export const TMUX_KEEPER_SESSION_NAME = "_keeper";
@@ -239,26 +238,6 @@ export default function createSessionExtension(
       });
       const bash = await ctx.executeTool("bash", { command }, { signal });
       return sessionResult(bash, windowName);
-    },
-    renderCall(input, theme) {
-      const preview = input.name?.trim() || input.initialRequest;
-      return new Text(
-        theme.fg("toolTitle", theme.bold(`create_detached_session ${truncateText(preview, 40)}`)),
-        0,
-        0,
-      );
-    },
-    renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
-      const text = resultText(result);
-      const status =
-        (result.structuredContent as { status?: string } | undefined)?.status ??
-        (context.isError ? "error" : "created");
-      const summary = isPartial ? "Running..." : `create_detached_session: ${status}`;
-      return new Text(
-        theme.fg(context.isError ? "error" : "toolOutput", expanded ? text : summary),
-        0,
-        0,
-      );
     },
   };
   pi.registerTool(tool);

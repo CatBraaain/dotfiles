@@ -240,7 +240,7 @@ function observeNestedCalls(
 
 describe("codemode resource ownership through the standard loader", () => {
   it(
-    "switches shortened and standard renderers when guardrail is enabled, disabled, and reloaded",
+    "keeps standard codemode rendering while ownership switches when guardrail is enabled, disabled, and reloaded",
     withTemporarySession(async (directory, sessions) => {
       const extensionDirectory = join(directory, "agent", "extensions", "guardrail");
       mkdirSync(join(directory, "agent", "extensions"), { recursive: true });
@@ -272,14 +272,12 @@ describe("codemode resource ownership through the standard loader", () => {
         assert.equal(definition.exposure, "model-only");
         session.setActiveToolsByName(["codemode"]);
         assert.ok(session.getActiveToolNames().includes("codemode"));
+        // Shortening moved to the tool-renderer extension (resolver-based, pi
+        // 1.4+). Under the pinned runner without it, codemode always renders
+        // with the standard renderer regardless of guardrail ownership.
         const lines = renderLines(definition, result);
-        if (enabled) {
-          assert.equal(lines[0], "1.2s");
-          assert.doesNotMatch(lines.join("\n"), /read file/);
-        } else {
-          assert.match(lines.join("\n"), /read file/);
-          assert.doesNotMatch(lines.join("\n"), /^1\.2s/m);
-        }
+        assert.match(lines.join("\n"), /read file/);
+        assert.doesNotMatch(lines.join("\n"), /^1\.2s/m);
         assert.match(lines.join("\n"), /body/);
       }
     }),

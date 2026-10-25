@@ -1,3 +1,4 @@
+import { COMMAND_PREVIEW_LIMIT, truncateText } from "../shared/tool-text.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
@@ -14,17 +15,18 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import guardrailExtension, {
+  isVisionImageFile,
+  writeApprovalNote,
+} from "./index";
+import {
   ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
-  COMMAND_PREVIEW_LIMIT,
   classifyReadPath,
   countMatchLines,
   countResultLines,
   formatDuration,
   formatSize,
-  isVisionImageFile,
-  truncateText,
-  writeApprovalNote,
-} from "./index";
+  renderersOf,
+} from "../tool-renderer/index.ts";
 import {
   Guardrail,
   compileCommandRuleEntries,
@@ -188,8 +190,7 @@ const runSessionStart = (configYaml: string): { message: string; level: string }
 };
 
 function renderToolCall(toolName: string, args: Record<string, unknown>): string {
-  const tool = captureRegisteredTools().get(toolName);
-  return tool.renderCall(args, plainTheme).render(200).join("\n").trimEnd();
+  return renderersOf(toolName)!.renderCall!(args, plainTheme, undefined).render(200).join("\n").trimEnd();
 }
 
 describe("§1 ツールごとの扱い", () => {
@@ -3807,7 +3808,6 @@ commands:
   );
 
   it("ask_permission のコール行とサマリー表示", () => {
-    const tool = captureRegisteredTools().get("ask_permission");
     const call = renderToolCall("ask_permission", { path: join(process.cwd(), "work") });
     assert.equal(call, "ask_permission ./work");
     const commandCall = renderToolCall("ask_permission", { command: "sudo reboot" });
@@ -3823,8 +3823,8 @@ commands:
       `ask_permission ${truncateText(`./${longPath}`, ASK_PERMISSION_TARGET_PREVIEW_LIMIT)}`,
     );
     const summary = (status: string) =>
-      tool
-        .renderResult(
+      renderersOf("ask_permission")!
+        .renderResult!(
           { content: [{ type: "text", text: status }], details: { status } },
           { isPartial: false },
           plainTheme,
@@ -3836,8 +3836,8 @@ commands:
     assert.equal(summary("granted"), "granted");
     assert.equal(summary("denied"), "denied");
     assert.equal(summary("already granted"), "already granted");
-    const summaryWithReason = tool
-      .renderResult(
+    const summaryWithReason = renderersOf("ask_permission")!
+      .renderResult!(
         {
           content: [{ type: "text", text: "denied" }],
           details: { status: "denied", reason: "not now" },
@@ -5261,10 +5261,9 @@ describe("§7 bash の stderr 逐次表示", () => {
   });
 
   it("実行中の表示は直近の stderr 行、無ければ Running... になる", () => {
-    const bashTool = captureRegisteredTools().get("bash");
     const renderPartial = (result: unknown): string =>
-      bashTool
-        .renderResult(result, { isPartial: true }, plainTheme, {})
+      renderersOf("bash")!
+        .renderResult!(result, { isPartial: true }, plainTheme, {})
         .render(200)
         .join("\\n")
         .trimEnd();
@@ -5597,9 +5596,8 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
 describe("§8 表示", () => {
   it("read の成功サマリーは画像のとき image input、エラーは先頭3行", () => {
-    const tool = captureRegisteredTools().get("read");
-    const summary = tool
-      .renderResult(
+    const summary = renderersOf("read")!
+      .renderResult!(
         { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },
         { isPartial: false },
         plainTheme,
@@ -5613,8 +5611,8 @@ describe("§8 表示", () => {
     const errorResult = {
       content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4\n" }],
     };
-    const renderedError = tool
-      .renderResult(errorResult, { isPartial: false }, plainTheme, {
+    const renderedError = renderersOf("read")!
+      .renderResult!(errorResult, { isPartial: false }, plainTheme, {
         isError: true,
         args: {},
       })
@@ -5658,9 +5656,8 @@ describe("§8 表示", () => {
       "read",
       "write",
     ]) {
-      const tool = captureRegisteredTools().get(toolName);
-      const renderedError = tool
-        .renderResult(errorResult, { isPartial: false }, plainTheme, {
+      const renderedError = renderersOf(toolName)!
+        .renderResult!(errorResult, { isPartial: false }, plainTheme, {
           isError: true,
           args: {},
         })
@@ -5676,9 +5673,8 @@ describe("§8 表示", () => {
       content: [{ type: "text", text: "line 1\nline 2\nline 3\n" }],
     };
 
-    const tool = captureRegisteredTools().get("read");
-    const renderedError = tool
-      .renderResult(errorResult, { isPartial: false }, plainTheme, {
+    const renderedError = renderersOf("read")!
+      .renderResult!(errorResult, { isPartial: false }, plainTheme, {
         isError: true,
         args: {},
       })

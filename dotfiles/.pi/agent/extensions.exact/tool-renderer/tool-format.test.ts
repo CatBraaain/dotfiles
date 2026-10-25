@@ -1,20 +1,22 @@
+import {
+  COMMAND_PREVIEW_LIMIT,
+  ERROR_OUTPUT_PREVIEW_LIMIT,
+  resultText,
+  truncateErrorOutput,
+} from "../shared/tool-text.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { homedir } from "node:os";
 import {
   ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
   CALL_PREVIEW_LIMIT,
-  COMMAND_PREVIEW_LIMIT,
   DENIED_REASON_PREVIEW_LIMIT,
-  ERROR_OUTPUT_PREVIEW_LIMIT,
   formatFallbackCall,
   formatPath,
   formatToolCall,
   formatToolResultSummary,
-  resultText,
-  truncateErrorOutput,
   type ToolTheme,
-} from "./tool-format.ts";
+} from "./index.ts";
 
 const plainTheme: ToolTheme = {
   fg: (_color, text) => text,

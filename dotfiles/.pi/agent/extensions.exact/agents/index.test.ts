@@ -28,7 +28,8 @@ import agentsExtension, {
   shouldBlockToolCall,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
-import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-format.ts";
+import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-text.ts";
+import { renderersOf } from "../tool-renderer/index.ts";
 import { CLASS_CHANGE_EVENT, requestClassChange } from "./class-change.ts";
 
 const config: AgentConfig = {
@@ -352,10 +353,10 @@ function captureAgentsExtension(
       return registeredTool?.execute(toolCallId, params, signal, onUpdate, context);
     },
     renderCall(...args: any[]) {
-      return registeredTool?.renderCall?.(...args);
+      return renderersOf("subagent")?.renderCall?.(...(args as [any, any, any]));
     },
     renderResult(...args: any[]) {
-      return registeredTool?.renderResult?.(...args);
+      return renderersOf("subagent")?.renderResult?.(...(args as [any, any, any, any]));
     },
   };
 }

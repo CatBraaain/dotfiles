@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderersOf } from "../tool-renderer/index.ts";
 import webSearchExtension, {
   browseCliDir,
   browseScript,
@@ -830,7 +831,7 @@ describe("formatSearchText", () => {
 
 describe("web_search rendering", () => {
   it("renders the call line with the query and optional lang suffix", () => {
-    const search = captureTools().get("web_search")!;
+    const search = renderersOf("web_search") as unknown as Tool;
     assert.equal(
       renderedLines(search.renderCall({ query: "pi coding agent" }, identityTheme))[0],
       'web_search - "pi coding agent"',
@@ -842,7 +843,7 @@ describe("web_search rendering", () => {
   });
 
   it("renders a success line with the engine and took seconds", () => {
-    const search = captureTools().get("web_search")!;
+    const search = renderersOf("web_search") as unknown as Tool;
     const result = {
       content: [{ type: "text", text: "body" }],
       details: { engine: "google", tookMs: 2100 },
@@ -853,7 +854,7 @@ describe("web_search rendering", () => {
   });
 
   it("renders the stderr message when pi replaces the final details with an empty object", () => {
-    const search = captureTools().get("web_search")!;
+    const search = renderersOf("web_search") as unknown as Tool;
     const state = { details: { error: "All web search backends failed: boom" } };
     const result = { content: [{ type: "text", text: "boom" }], details: {} };
 
@@ -863,7 +864,7 @@ describe("web_search rendering", () => {
   });
 
   it("renders the error content when the render state is unavailable", () => {
-    const search = captureTools().get("web_search")!;
+    const search = renderersOf("web_search") as unknown as Tool;
     const result = {
       content: [{ type: "text", text: "web-search: spawn bun ENOENT" }],
       details: {},
@@ -878,7 +879,7 @@ describe("web_search rendering", () => {
 
 describe("web_fetch rendering", () => {
   it("renders the call line with the url", () => {
-    const fetchTool = captureTools().get("web_fetch")!;
+    const fetchTool = renderersOf("web_fetch") as unknown as Tool;
     assert.equal(
       renderedLines(fetchTool.renderCall({ url: "https://example.com/" }, identityTheme))[0],
       'web_fetch - "https://example.com/"',
@@ -886,7 +887,7 @@ describe("web_fetch rendering", () => {
   });
 
   it("renders a success line with backend, quoted title and took seconds", () => {
-    const fetchTool = captureTools().get("web_fetch")!;
+    const fetchTool = renderersOf("web_fetch") as unknown as Tool;
     const result = {
       content: [{ type: "text", text: "body" }],
       details: { backend: "Reddit", title: "A post", tookMs: 1200 },
@@ -897,7 +898,7 @@ describe("web_fetch rendering", () => {
   });
 
   it("renders fallback failures in the successful line", () => {
-    const fetchTool = captureTools().get("web_fetch")!;
+    const fetchTool = renderersOf("web_fetch") as unknown as Tool;
     const result = {
       content: [{ type: "text", text: "body" }],
       details: {
@@ -913,7 +914,7 @@ describe("web_fetch rendering", () => {
   });
 
   it("omits the title part when the fetch has no title", () => {
-    const fetchTool = captureTools().get("web_fetch")!;
+    const fetchTool = renderersOf("web_fetch") as unknown as Tool;
     const result = {
       content: [{ type: "text", text: "body" }],
       details: { backend: "camoufox+trafilatura", tookMs: 1200 },
@@ -924,7 +925,7 @@ describe("web_fetch rendering", () => {
   });
 
   it("renders fallback details without a title", () => {
-    const fetchTool = captureTools().get("web_fetch")!;
+    const fetchTool = renderersOf("web_fetch") as unknown as Tool;
     const result = {
       content: [{ type: "text", text: "body" }],
       details: {
@@ -939,7 +940,7 @@ describe("web_fetch rendering", () => {
   });
 
   it("renders the stderr message when pi replaces the final details with an empty object", () => {
-    const fetchTool = captureTools().get("web_fetch")!;
+    const fetchTool = renderersOf("web_fetch") as unknown as Tool;
     const state = { details: { error: "Unable to fetch Reddit post abc123" } };
     const result = { content: [{ type: "text", text: "request failed" }], details: {} };
 
@@ -949,7 +950,7 @@ describe("web_fetch rendering", () => {
   });
 
   it("renders the error content when the render state is unavailable", () => {
-    const fetchTool = captureTools().get("web_fetch")!;
+    const fetchTool = renderersOf("web_fetch") as unknown as Tool;
     const result = {
       content: [{ type: "text", text: "web-fetch exited with code 1" }],
       details: {},

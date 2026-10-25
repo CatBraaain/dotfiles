@@ -11,57 +11,11 @@ import {
   createReadTool,
   createWriteTool,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Guardrail, type PathApproval, type ToolSession } from "./guardrail";
 import { registerCodemode } from "./codemode.ts";
 import { normalizeToolPath } from "./normalize-path.ts";
 import { modelSupportsImages } from "../shared/image-input.ts";
-import {
-  ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
-  formatBashCall,
-  formatNamedCall,
-  formatPath,
-  formatReadCall,
-  formatToolResultSummary,
-  resultText,
-  truncateText,
-} from "../shared/tool-format.ts";
-
-export {
-  ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
-  COMMAND_PREVIEW_LIMIT,
-  classifyReadPath,
-  countMatchLines,
-  countResultLines,
-  formatDuration,
-  formatSize,
-  truncateText,
-} from "../shared/tool-format.ts";
-
-const ERROR_PREVIEW_LINE_LIMIT = 3;
-
-function renderToolError(result: any, theme: any): Text {
-  const errorLines = resultText(result).split(/\r?\n/);
-  if (errorLines.at(-1) === "") errorLines.pop();
-  const preview = errorLines.slice(0, ERROR_PREVIEW_LINE_LIMIT).join("\n");
-  const hasMoreLines = errorLines.length > ERROR_PREVIEW_LINE_LIMIT;
-  const displayText = hasMoreLines ? `${preview}\n…` : preview;
-  return new Text(theme.fg("error", displayText), 0, 0);
-}
-
-function renderTextToolResult(
-  result: any,
-  options: { expanded: boolean; isPartial: boolean },
-  theme: any,
-  context: any,
-  name: string,
-): Text {
-  if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-  if (context.isError) return renderToolError(result, theme);
-  const summary = formatToolResultSummary(name, context.args ?? {}, result, {}, theme);
-  return new Text(summary ?? "", 0, 0);
-}
 
 function sessionFromContext(context: any): ToolSession {
   return {
@@ -233,60 +187,20 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
         ? appendNote(appendErofsHint(result), COMMAND_APPROVAL_NOTE)
         : appendErofsHint(result);
     },
-    renderCall(args, theme, context) {
-      if (context.state && context.executionStarted && context.state.startedAt === undefined)
-        context.state.startedAt = Date.now();
-      return new Text(formatBashCall(args.command, theme), 0, 0);
-    },
-    renderResult(result, options, theme, context) {
-      if (options.isPartial) {
-        // While running, show the latest streamed stderr line as progress;
-        // until the first line arrives this stays "Running..." (SPEC §7・§8).
-        const progressLine = resultText(result);
-        return new Text(
-          theme.fg("warning", progressLine === "" ? "Running..." : progressLine),
-          0,
-          0,
-        );
-      }
-      if (context.isError) return renderToolError(result, theme);
-      const state = context.state;
-      const durationMs =
-        state?.startedAt !== undefined
-          ? (state.endedAt ?? Date.now()) - state.startedAt
-          : undefined;
-      return new Text(
-        formatToolResultSummary("bash", {}, result, { durationMs }, theme) ?? "",
-        0,
-        0,
-      );
-    },
   });
 
   const registerTextTool = (
     tool: any,
-    name: string,
-    getCall: (args: any) => string,
     run: (
       args: any,
       signal: AbortSignal | undefined,
       context: any,
     ) => Promise<AgentToolResult<any>>,
-    renderOptions?: { renderCall?: (args: any, theme: any) => Text },
   ) => {
     pi.registerTool({
       ...tool,
       async execute(_id, params, signal, _onUpdate, context) {
         return run(params, signal, context);
-      },
-      renderCall(args: any, theme: any) {
-        return (
-          renderOptions?.renderCall?.(args, theme) ??
-          new Text(formatNamedCall(name, getCall(args), theme), 0, 0)
-        );
-      },
-      renderResult(result: any, options: any, theme: any, context: any) {
-        return renderTextToolResult(result, options, theme, context, name);
       },
     });
   };
@@ -297,8 +211,6 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
         `${readTool.description} Image files are returned as Vision input when the current model supports image input. ` +
         `A model without image input gets an error that directs delegation to the vision agent instead.`,
     },
-    "read",
-    (args) => args.path,
     async (args, signal, context) => {
       const normalized = withNormalizedPath(args) as { path: string };
       const imagePath = resolve(cwd, normalized.path);
@@ -323,7 +235,6 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
         details: {},
       };
     },
-    { renderCall: (args, theme) => new Text(formatReadCall(args, cwd, theme), 0, 0) },
   );
   pi.registerTool({
     ...writeTool,
@@ -337,18 +248,6 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
       );
       const result = await guardrail.runTool("write", normalized, { mode: "fs", signal });
       return approval === undefined ? result : appendNote(result, writeApprovalNote(approval));
-    },
-    renderCall(args, theme) {
-      return new Text(formatNamedCall("write", formatPath(args.path, cwd), theme), 0, 0);
-    },
-    renderResult(result, options, theme, context) {
-      if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return renderToolError(result, theme);
-      return new Text(
-        formatToolResultSummary("write", context.args ?? {}, result, {}, theme) ?? "",
-        0,
-        0,
-      );
     },
   });
   pi.registerTool({
@@ -366,18 +265,6 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
       const result = await guardrail.runTool("edit", normalized, { mode: "fs", signal });
       return approval === undefined ? result : appendNote(result, writeApprovalNote(approval));
     },
-    renderCall(args, theme) {
-      return new Text(formatNamedCall("edit", formatPath(args.path, cwd), theme), 0, 0);
-    },
-    renderResult(result, options, theme, context) {
-      if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return renderToolError(result, theme);
-      return new Text(
-        formatToolResultSummary("edit", context.args ?? {}, result, {}, theme) ?? "",
-        0,
-        0,
-      );
-    },
   });
   pi.registerTool({
     ...grepTool,
@@ -386,24 +273,9 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
       await guardrail.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
       return guardrail.runTool("grep", normalized, { mode: "fs", signal });
     },
-    renderCall(args, theme) {
-      const path = formatPath(String(args.path ?? ""), cwd);
-      return new Text(formatNamedCall("grep", `${args.pattern} in ${path}`, theme), 0, 0);
-    },
-    renderResult(result, options, theme, context) {
-      if (options.isPartial) return new Text(theme.fg("warning", "Running..."), 0, 0);
-      if (context.isError) return renderToolError(result, theme);
-      return new Text(
-        formatToolResultSummary("grep", context.args ?? {}, result, {}, theme) ?? "",
-        0,
-        0,
-      );
-    },
   });
   registerTextTool(
     findTool,
-    "find",
-    (args) => `${args.pattern} in ${formatPath(String(args.path ?? ""), cwd)}`,
     async (args, signal, context) => {
       const normalized = withNormalizedPath(args) as { path?: string };
       await guardrail.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
@@ -412,8 +284,6 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
   );
   registerTextTool(
     lsTool,
-    "ls",
-    (args) => formatPath(String(args.path ?? ""), cwd),
     async (args, signal, context) => {
       const normalized = withNormalizedPath(args) as { path?: string };
       await guardrail.authorizePath("read", resolve(cwd, normalized.path ?? "."), context);
@@ -535,19 +405,6 @@ export default function guardrailExtension(pi: ExtensionAPI, configPath?: string
             : {}),
         },
       };
-    },
-    renderCall(args: any, theme: any) {
-      const target =
-        typeof args.command === "string"
-          ? truncateText(args.command, ASK_PERMISSION_TARGET_PREVIEW_LIMIT)
-          : truncateText(
-              formatPath(String(args.path ?? ""), cwd),
-              ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
-            );
-      return new Text(formatNamedCall("ask_permission", target, theme), 0, 0);
-    },
-    renderResult(result: any, options: any, theme: any, context: any) {
-      return renderTextToolResult(result, options, theme, context, "ask_permission");
     },
   });
 

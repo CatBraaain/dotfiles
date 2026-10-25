@@ -15,7 +15,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { registerCodemode, withCodemodeResultRenderer } from "./codemode.ts";
+import { registerCodemode } from "./codemode.ts";
+import { codemodeRenderers } from "../tool-renderer/index.ts";
 
 type CodemodeDefinition = ToolDefinition<
   Type.TObject<{ code: Type.TString }>,
@@ -95,7 +96,14 @@ function renderLines(component: Component, width = 200): string[] {
 }
 
 function renderResult(
-  definition: CodemodeDefinition,
+  definition: {
+    renderResult?: (
+      result: CodemodeResult,
+      options: ToolRenderResultOptions,
+      theme: Theme,
+      context: ToolRenderContext,
+    ) => Component;
+  },
   result: CodemodeResult,
   options: ToolRenderResultOptions = collapsed,
   context: ToolRenderContext = renderContext(),
@@ -105,19 +113,12 @@ function renderResult(
 }
 
 const standard = standardDefinition();
-const shortened = withCodemodeResultRenderer(standard);
+const shortened = codemodeRenderers(() => standard)!;
 
 describe("codemode registration", () => {
-  it("keeps every standard field except renderResult by reference or value", () => {
-    assert.deepEqual(Reflect.ownKeys(shortened), Reflect.ownKeys(standard));
-    for (const key of Reflect.ownKeys(standard)) {
-      if (key === "renderResult") continue;
-      assert.strictEqual(Reflect.get(shortened, key), Reflect.get(standard, key), String(key));
-    }
+  it("keeps renderCall by reference and wraps only renderResult", () => {
+    assert.strictEqual(shortened.renderCall, standard.renderCall);
     assert.notStrictEqual(shortened.renderResult, standard.renderResult);
-    assert.equal(shortened.defaultActive, false);
-    assert.equal(shortened.exposure, "model-only");
-    assert.equal(shortened.parameters.properties.code.type, "string");
   });
 
   it("registers once per factory invocation and retains the public schema and call renderer", () => {
@@ -382,14 +383,14 @@ describe("codemode result display", () => {
     Object.freeze(result);
     let received: CodemodeResult | undefined;
     let receivedContext: ToolRenderContext | undefined;
-    const observed = withCodemodeResultRenderer({
+    const observed = codemodeRenderers(() => ({
       ...standard,
       renderResult(view, options, theme, context) {
         received = view;
         receivedContext = context;
         return standard.renderResult!(view, options, theme, context);
       },
-    });
+    }))!;
     const context = renderContext({ lastComponent: new Container() });
     renderResult(observed, result, collapsed, context);
     assert.notStrictEqual(received, result);

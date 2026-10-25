@@ -28,6 +28,7 @@ import {
 import agentsExtension from "../agents/index.ts";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import replaceContextExtension from "./index";
+import { renderersOf } from "../tool-renderer/index.ts";
 
 function harness(manager = SessionManager.inMemory()) {
   let tool: ToolDefinition;
@@ -1080,7 +1081,11 @@ describe("tool rendering", () => {
   }
 
   function toolBlock(h: ReturnType<typeof harness>, state: Record<string, unknown>) {
-    return h.tool().renderCall!({}, plainTheme as never, renderContext(state));
+    return renderersOf("replace_context")!.renderCall!({}, plainTheme as never, renderContext(state));
+  }
+
+  function renderers() {
+    return renderersOf("replace_context")!;
   }
 
   it("renders the label and a requesting line while the call is pending", () => {
@@ -1094,8 +1099,7 @@ describe("tool rendering", () => {
     const h = harness();
     const state = {};
     const block = toolBlock(h, state);
-    const result = h
-      .tool()
+    const result = renderers()
       .renderResult!(okResult(), { expanded: false, isPartial: false }, plainTheme as never, renderContext(state));
     const combined = `${renderedText(block)}\n${renderedText(result)}`;
     assert.match(combined, /Context will be replaced at end of turn \(ctrl\+o to expand\)/);
@@ -1105,8 +1109,7 @@ describe("tool rendering", () => {
     const h = harness();
     const state = {};
     const block = toolBlock(h, state);
-    const result = h
-      .tool()
+    const result = renderers()
       .renderResult!(okResult(), { expanded: false, isPartial: false }, plainTheme as never, renderContext(state));
     const combined = `${renderedText(block)}\n${renderedText(result)}`;
     assert.equal(combined.split("[compaction]").length - 1, 1);
@@ -1116,7 +1119,7 @@ describe("tool rendering", () => {
     const h = harness();
     const state = {};
     const block = toolBlock(h, state);
-    h.tool().renderResult!(okResult(), { expanded: true, isPartial: false }, plainTheme as never, renderContext(state));
+    renderers().renderResult!(okResult(), { expanded: true, isPartial: false }, plainTheme as never, renderContext(state));
     const expanded = renderedText(block);
     assert.match(expanded, /Reason/);
     assert.match(expanded, /phase done/);
@@ -1128,7 +1131,7 @@ describe("tool rendering", () => {
     const h = harness();
     const state = {};
     const block = toolBlock(h, state);
-    h.tool().renderResult!(
+    renderers().renderResult!(
       {
         content: [{ type: "text" as const, text: "Both reason and handoff must be non-empty strings." }],
         details: undefined,
