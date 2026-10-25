@@ -1,4 +1,10 @@
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+  getMarkdownTheme,
+  type ExtensionAPI,
+  type SessionEntry,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Box, Container, getKeybindings, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { requestClassChange } from "../agents/class-change.ts";
 
@@ -7,6 +13,10 @@ const STATE_VERSION = 1;
 const AUTO_HANDOFF_LIMIT = 2;
 const HANDOFF_OPTION = "Yes, replace context";
 const STAY_OPTION = "No, stay (reason next)";
+const TOOL_LABEL = "[compaction]";
+const PENDING_TEXT = "Requesting context replacement...";
+const COLLAPSED_TEXT = "Context will be replaced at end of turn";
+const EXPAND_KEYBINDING = "app.tools.expand";
 
 interface HandoffPayload {
   reason: string;
@@ -52,6 +62,34 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
         }),
       ),
     }),
+    renderShell: "self",
+    renderCall(_args, theme, context) {
+      const box = stateBox(theme, context.state);
+      box.clear();
+      addLabel(box, theme);
+      box.addChild(new Spacer(1));
+      box.addChild(new Text(theme.fg("dim", PENDING_TEXT), 0, 0));
+      return box;
+    },
+    renderResult(result, { expanded }, theme, context) {
+      const tracked = context.state.box as Box | undefined;
+      const box = tracked ?? stateBox(theme, context.state);
+      box.clear();
+      addLabel(box, theme);
+      box.addChild(new Spacer(1));
+      if (context.isError || !isHandoffPayload(result.details)) {
+        box.addChild(new Text(theme.fg("error", firstTextContent(result.content)), 0, 0));
+      } else if (expanded) {
+        box.addChild(
+          new Markdown(replaceContextDetailsMarkdown(result.details), 0, 0, getMarkdownTheme(), {
+            color: (text: string) => theme.fg("customMessageText", text),
+          }),
+        );
+      } else {
+        box.addChild(new Text(collapsedResultLine(theme), 0, 0));
+      }
+      return tracked ? new Container() : box;
+    },
     async execute(toolCallId, params) {
       const reason = typeof params.reason === "string" ? params.reason.trim() : "";
       const handoff = typeof params.handoff === "string" ? params.handoff.trim() : "";
@@ -256,4 +294,56 @@ function isHandoffPayload(value: unknown): value is HandoffPayload {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function stateBox(theme: Theme, state: { box?: Box }): Box {
+  state.box ??= replaceContextBox(theme);
+  return state.box;
+}
+
+function replaceContextBox(theme: Theme): Box {
+  return new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+}
+
+function addLabel(box: Box, theme: Theme): void {
+  box.addChild(new Text(theme.fg("customMessageLabel", `\x1b[1m${TOOL_LABEL}\x1b[22m`), 0, 0));
+}
+
+function collapsedResultLine(theme: Theme): string {
+  return (
+    theme.fg("customMessageText", `${COLLAPSED_TEXT} (`) +
+    theme.fg("dim", expandKeyText()) +
+    theme.fg("customMessageText", " to expand)")
+  );
+}
+
+function replaceContextDetailsMarkdown(payload: HandoffPayload): string {
+  return [
+    `**${COLLAPSED_TEXT}**`,
+    "",
+    "**Reason**",
+    "",
+    payload.reason,
+    "",
+    "**Handoff**",
+    "",
+    payload.handoff,
+  ].join("\n");
+}
+
+function expandKeyText(): string {
+  const altKeyName = process.platform === "darwin" ? "option" : "alt";
+  return getKeybindings()
+    .getKeys(EXPAND_KEYBINDING)
+    .map((key) =>
+      key
+        .split("+")
+        .map((part) => (part.toLowerCase() === "alt" ? altKeyName : part))
+        .join("+"),
+    )
+    .join("/");
+}
+
+function firstTextContent(content: Array<{ type: string; text?: string }>): string {
+  return content.find((block) => block.type === "text")?.text ?? "";
 }

@@ -8,6 +8,7 @@ import {
   convertToLlm,
   createAgentSession,
   DefaultResourceLoader,
+  initTheme,
   ModelRuntime,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -25,6 +26,7 @@ import {
   type ClassChangeResult,
 } from "../agents/class-change.ts";
 import agentsExtension from "../agents/index.ts";
+import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import replaceContextExtension from "./index";
 
 function harness(manager = SessionManager.inMemory()) {
@@ -162,6 +164,7 @@ function harness(manager = SessionManager.inMemory()) {
     boundary,
     commit,
     user,
+    tool: () => tool,
   };
 }
 
@@ -1028,5 +1031,112 @@ describe("persisted session context", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("tool rendering", () => {
+  initTheme("dark", false);
+  setKeybindings(
+    new KeybindingsManager({
+      ...TUI_KEYBINDINGS,
+      "app.tools.expand": { defaultKeys: "ctrl+o" },
+    }),
+  );
+
+  const plainTheme = {
+    bg: (_key: string, text: string) => text,
+    fg: (_key: string, text: string) => text,
+  };
+
+  function renderContext(state: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+    return {
+      args: {},
+      toolCallId: "call",
+      invalidate: () => {},
+      lastComponent: undefined,
+      state,
+      cwd: "/tmp",
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      isError: false,
+      ...overrides,
+    } as never;
+  }
+
+  function okResult() {
+    return {
+      content: [
+        { type: "text" as const, text: "Context replacement requested for the end of this turn." },
+      ],
+      details: { reason: "phase done", handoff: "next phase" },
+    } as never;
+  }
+
+  function renderedText(component: { render(width: number): string[] }): string {
+    return component.render(80).join("\n");
+  }
+
+  function toolBlock(h: ReturnType<typeof harness>, state: Record<string, unknown>) {
+    return h.tool().renderCall!({}, plainTheme as never, renderContext(state));
+  }
+
+  it("renders the label and a requesting line while the call is pending", () => {
+    const h = harness();
+    const pending = renderedText(toolBlock(h, {}));
+    assert.match(pending, /\[compaction\]/);
+    assert.match(pending, /Requesting context replacement\.\.\./);
+  });
+
+  it("renders the collapsed one-line result in the same block as the label", () => {
+    const h = harness();
+    const state = {};
+    const block = toolBlock(h, state);
+    const result = h
+      .tool()
+      .renderResult!(okResult(), { expanded: false, isPartial: false }, plainTheme as never, renderContext(state));
+    const combined = `${renderedText(block)}\n${renderedText(result)}`;
+    assert.match(combined, /Context will be replaced at end of turn \(ctrl\+o to expand\)/);
+  });
+
+  it("renders the label once across the call and result components", () => {
+    const h = harness();
+    const state = {};
+    const block = toolBlock(h, state);
+    const result = h
+      .tool()
+      .renderResult!(okResult(), { expanded: false, isPartial: false }, plainTheme as never, renderContext(state));
+    const combined = `${renderedText(block)}\n${renderedText(result)}`;
+    assert.equal(combined.split("[compaction]").length - 1, 1);
+  });
+
+  it("renders reason and handoff as markdown when expanded", () => {
+    const h = harness();
+    const state = {};
+    const block = toolBlock(h, state);
+    h.tool().renderResult!(okResult(), { expanded: true, isPartial: false }, plainTheme as never, renderContext(state));
+    const expanded = renderedText(block);
+    assert.match(expanded, /Reason/);
+    assert.match(expanded, /phase done/);
+    assert.match(expanded, /Handoff/);
+    assert.match(expanded, /next phase/);
+  });
+
+  it("renders the tool error message on error results", () => {
+    const h = harness();
+    const state = {};
+    const block = toolBlock(h, state);
+    h.tool().renderResult!(
+      {
+        content: [{ type: "text" as const, text: "Both reason and handoff must be non-empty strings." }],
+        details: undefined,
+      } as never,
+      { expanded: false, isPartial: false },
+      plainTheme as never,
+      renderContext(state, { isError: true }),
+    );
+    assert.match(renderedText(block), /Both reason and handoff must be non-empty strings\./);
   });
 });
