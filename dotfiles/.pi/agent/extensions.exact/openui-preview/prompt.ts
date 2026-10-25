@@ -65,8 +65,8 @@ const promptCache = new Map<string, string>();
 
 /**
  * The display-only openui-lang instructions for the system prompt section,
- * generated from the build-time files (spec.json and prompt-options.json,
- * both produced by spec.build.ts from library.data.ts). Cached per directory.
+ * generated from the generated data files (spec.json and prompt-options.json,
+ * both produced by spec.apply.ts from library.data.ts). Cached per directory.
  */
 export function opuiInstructions(dir: string = EXTENSION_DIR): string {
   const cached = promptCache.get(dir);

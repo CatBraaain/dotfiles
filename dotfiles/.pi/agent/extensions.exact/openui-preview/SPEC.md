@@ -16,18 +16,26 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 
 `before_agent_start` で `event.systemPromptOptions.sections["openui-lang"]` に、openui-langのdisplay-only指示を設定する。指示は `prompt.ts` が生成する:
 
-- 入力はbuildで生成した `spec.json`（58コンポーネントのLibrarySpec）と `prompt-options.json`（examples・additionalRules）。両方とも `spec.build.ts` が `library.data.ts` から生成する
-- `library.data.ts` は正本であり、`@openuidev/react-ui` の `genui-lib` から対話コンポーネント（Button・Form等26種）を除外した `createLibrary` 結果と、`genui-lib/prompt-options` から対話系を示す語を含むexamples・rulesを除外したpromptOptionsをexportする。プロジェクト外部のリポジトリには依存しない（npmライブラリ `@openuidev/react-ui`・`react-lang`・`cli` はビルド時のdevDependencies）
+- 入力はapplyで生成した `spec.json`（58コンポーネントのLibrarySpec）と `prompt-options.json`（examples・additionalRules）。両方とも `spec.apply.ts` が `library.data.ts` から生成する
+- `library.data.ts` は正本であり、`@openuidev/react-ui` の `genui-lib` から対話コンポーネント（Button・Form等26種）を除外した `createLibrary` 結果と、`genui-lib/prompt-options` から対話系を示す語を含むexamples・rulesを除外したpromptOptionsをexportする。プロジェクト外部のリポジトリには依存しない（npmライブラリ `@openuidev/react-ui`・`react-lang`・`cli` はspec生成用のdevDependencies）
 - `prompt.ts` は対話コンポーネント（同26種）をsignatureから `never` 化・unionから除去し（`displayOnlySignature`）、生成promptの `## Action` セクションと `ActionExpression` の説明行を除去する（`stripInteractivePromptParts`）
 - preambleを差し替え、markdown応答内の `openui-lang` fenced blockへの埋め込みを指示する（lang-core既定の「応答全体がコード」前提は使わない）
 
-## 生成物とbuildの前提
+## 生成物とapplyの前提
 
-`spec.json` と `prompt-options.json` は `spec.build.ts`（ローカルbuildフック）が `library.data.ts` から生成し、dist経由で拡張フォルダに配置される。生成物はgit管理せず、buildごとに更新する。事前の手動インストールは不要である。
+`spec.json` と `prompt-options.json` は `spec.apply.ts`（applyフック）が `library.data.ts` から生成し、ホームの拡張フォルダに配置する。生成物はgit管理せず、apply時に更新する。事前の手動インストールは不要である。
 
-依存準備は上流の共通フック `bun_install.build.ts` が行う（[共通依存の仕様](../../bun_install.spec.md)）。`spec.build.ts` は準備済みの `.pi/agent/.build-deps/node_modules` にあるCLIとライブラリを利用し、インストールは行わない。
+`library.data.ts` は `.data.` 予約名のため差分検知・適用の対象外であり、ホームには展開されない。applyフックはスナップショット実行位置（dist側の拡張フォルダ）から `library.data.ts` と `display-only.ts` を読み、ホーム側の一時ディレクトリ `.spec-gen/` にコピーしてから読み込む。これで親を遡って `~/.pi/agent/node_modules` の依存を解決できる。`.spec-gen/` は使用後に削除する。
 
-生成用のライブラリ定義は拡張配下の `.build/` で読み込む。`.build/node_modules` から共通依存環境を参照し、CLIとライブラリ定義の読込先を揃える。`.build/` はホームへの展開対象外である。共通依存が未準備の場合は非0で終了し、specを生成しない。
+依存は `bun_install.apply.ts` が導入した `~/.pi/agent/node_modules` を利用する。applyフックは dist相対パス順で実行され、`bun_install.apply.ts` が拡張フォルダのフックより先に走る（[依存導入仕様](../../bun_install.spec.md)）。
+
+| 状態 | 操作 | 結果 |
+| --- | --- | --- |
+| `library.data.ts`・`display-only.ts`・`bun.lock` の内容ハッシュが記録と一致し、生成物が両方存在する | applyフックを実行 | 生成を省略する |
+| ハッシュが記録と異なる、または記録・生成物のどちらかが欠けている | applyフックを実行 | CLIでspecとprompt optionsを再生成し、成功後に記録（`spec-gen-stamp`）を更新する |
+| CLIが見つからない・生成が失敗する | applyフックを実行 | 非0で終了し、記録は更新しない。既存の生成物はそのまま残る |
+
+`library.data.ts`・`display-only.ts`・`bun.lock` は dist側のファイルを読む。生成物と `spec-gen-stamp` はホームの拡張フォルダ配下の管理対象外ファイルである。
 
 ## 実行条件（モード）
 

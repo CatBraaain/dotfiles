@@ -1,11 +1,12 @@
 /**
- * Build-time definition of the display-only openui-lang library.
+ * Definition of the display-only openui-lang library, kept out of the home
+ * tree by its `.data.` name.
  *
- * This file is the canonical source of `spec.json`: the build hook
- * (spec.build.ts) feeds it to the `openui` CLI, which serializes the library
+ * This file is the canonical source of `spec.json`: the apply hook
+ * (spec.apply.ts) feeds it to the `openui` CLI, which serializes the library
  * (signatures, groups, JSON schema) next to the extension. Runtime code only
- * reads the generated files, so neither the extension nor the build depends
- * on any project outside this repository.
+ * reads the generated files, so neither the extension nor the apply hook
+ * depends on any project outside this repository.
  *
  * Structure mirrors @openuidev/react-ui's genui-lib: filter out the
  * interactive (input / submit) components and every prompt material that
