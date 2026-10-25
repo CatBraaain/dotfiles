@@ -7,8 +7,8 @@ import {
   resolveAuth,
   type AuthOptions,
 } from "./auth";
-import { renderProviderState } from "./format";
-import { toJsonProviderState } from "./json";
+import { renderUsageTable } from "./format";
+import { summarizeProviderUsage } from "./summary";
 import { queryProviders } from "./query";
 import type { ProviderUsageState, UsageProviderAdapter } from "./types";
 import { errorMessage, redactUsageError } from "./util";
@@ -84,10 +84,9 @@ export async function run(argv: string[], env: RunEnv = {}): Promise<number> {
           ? "current"
           : "configured",
     });
-    const render = env.renderProviderState ?? renderProviderState;
     const output = options.json
-      ? JSON.stringify(states.map(toJsonProviderState), null, 2)
-      : states.map(render).join("\n\n");
+      ? JSON.stringify(states.map(summarizeProviderUsage), null, 2)
+      : renderUsageTable(states, env.renderProviderState);
     if (output) stdout(output);
     return states.length > 0 && states.every((state) => state.status !== "ready") ? 1 : 0;
   } catch (error) {

@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type RunEnv } from "./main";
-import type { JsonProviderUsageState } from "./json";
-import type { ProviderUsageState, UsageProviderAdapter } from "./types";
+import type { UsageSummary } from "./summary";
+import type { UsageProviderAdapter } from "./types";
 
 interface Fixture {
   env: RunEnv;
@@ -83,26 +83,44 @@ describe("run", () => {
     await withCli(async ({ env, calls, stdout, stderr }) => {
       assert.equal(await run([], env), 0);
       assert.deepEqual(calls, ["first", "current"]);
-      assert.deepEqual(stdout, ["current: ready\n\nfirst: ready\n\nexpired: auth-unavailable"]);
+      assert.deepEqual(stdout, [
+        "                  short   long\ncurrent: ready\nfirst: ready\nexpired: auth-unavailable",
+      ]);
       assert.deepEqual(stderr, []);
     });
   });
 
-  it("prints a pretty JSON array of states instead of invoking the renderer", async () => {
+  it("prints missing cells and returns 1 when the normal display query fails", async () => {
+    await withCli(async ({ env, stdout, stderr }) => {
+      env.renderProviderState = undefined;
+      env.adapters = env.adapters!.map((adapter) => ({
+        ...adapter,
+        async query() {
+          throw new Error("first-secret 50% remaining");
+        },
+      }));
+      assert.equal(await run(["first"], env), 1);
+      const expected = [
+        `${"".padEnd("Provider first".length)}  short   long`,
+        "Provider first      —      —",
+      ].join("\n");
+      assert.deepEqual(stdout, [expected]);
+      assert.deepEqual(stderr, []);
+    });
+  });
+
+  it("prints only provider and nullable remaining percentages instead of invoking the renderer", async () => {
     await withCli(async ({ env, stdout }) => {
       env.renderProviderState = () => {
         throw new Error("JSON must not render human blocks");
       };
       assert.equal(await run(["--json"], env), 0);
-      const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
-      assert.deepEqual(
-        states.map((state) => [state.providerId, state.displayState, state.status]),
-        [
-          ["current", "current", "ready"],
-          ["first", "configured", "ready"],
-          ["expired", "configured", "auth-unavailable"],
-        ],
-      );
+      const states = JSON.parse(stdout[0]!) as UsageSummary[];
+      assert.deepEqual(states, [
+        { provider: "current", short: null, long: null },
+        { provider: "first", short: null, long: null },
+        { provider: "expired", short: null, long: null },
+      ]);
       assert.equal(stdout[0], JSON.stringify(states, null, 2));
       assert.doesNotMatch(stdout[0]!, /first-secret|current-secret|refresh-secret/);
     });
@@ -112,14 +130,12 @@ describe("run", () => {
     await withCli(async ({ env, calls, stdout }) => {
       assert.equal(await run(["missing", "--json"], env), 1);
       assert.deepEqual(calls, []);
-      const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
+      const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(states, [
         {
-          providerId: "missing",
-          providerName: "Provider missing",
-          displayState: "configured",
-          status: "auth-unavailable",
-          message: "No authentication configured.",
+          provider: "missing",
+          short: null,
+          long: null,
         },
       ]);
     });
@@ -129,21 +145,20 @@ describe("run", () => {
     await withCli(async ({ env, calls, stdout }) => {
       assert.equal(await run(["current", "missing", "first", "first", "--json"], env), 0);
       assert.deepEqual(calls, ["first", "current"]);
-      const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
+      const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(
-        states.map((state) => state.providerId),
+        states.map((state) => state.provider),
         ["current", "first", "missing"],
       );
     });
   });
 
-  it("includes an expired OAuth message when the provider is forced", async () => {
+  it("returns null percentages for forced expired OAuth without extra JSON fields", async () => {
     await withCli(async ({ env, calls, stdout }) => {
       assert.equal(await run(["expired", "--json"], env), 1);
       assert.deepEqual(calls, []);
-      const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
-      assert.equal(states[0]?.status, "auth-unavailable");
-      if (states[0]?.status === "auth-unavailable") assert.match(states[0].message, /expired/);
+      const states = JSON.parse(stdout[0]!) as UsageSummary[];
+      assert.deepEqual(states, [{ provider: "expired", short: null, long: null }]);
     });
   });
 
@@ -156,8 +171,8 @@ describe("run", () => {
         },
       }));
       assert.equal(await run(["first", "--json"], env), 1);
-      const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
-      assert.equal(states[0]?.status, "query-failed");
+      const states = JSON.parse(stdout[0]!) as UsageSummary[];
+      assert.deepEqual(states, [{ provider: "first", short: null, long: null }]);
       assert.doesNotMatch(stdout[0]!, /first-secret/);
       assert.deepEqual(stderr, []);
     });
@@ -176,11 +191,12 @@ describe("run", () => {
           : adapter,
       );
       assert.equal(await run(["--json"], env), 0);
-      const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
-      assert.deepEqual(
-        states.map((state) => state.status),
-        ["ready", "query-failed", "auth-unavailable"],
-      );
+      const states = JSON.parse(stdout[0]!) as UsageSummary[];
+      assert.deepEqual(states, [
+        { provider: "current", short: null, long: null },
+        { provider: "first", short: null, long: null },
+        { provider: "expired", short: null, long: null },
+      ]);
     });
   });
 
@@ -300,9 +316,8 @@ describe("run", () => {
       globalThis.fetch = Object.assign(fakeFetch, { preconnect: originalFetch.preconnect });
       try {
         assert.equal(await run(["--json"], env), 0);
-        const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
-        assert.equal(states[0]?.providerId, "zai");
-        assert.equal(states[0]?.displayState, "current");
+        const states = JSON.parse(stdout[0]!) as UsageSummary[];
+        assert.deepEqual(states, [{ provider: "zai", short: null, long: 80 }]);
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -323,9 +338,9 @@ describe("stored auth to fixed endpoint integration", () => {
       credential: { ...oauth, accountId: "fixture-account" },
       urls: ["https://chatgpt.com/backend-api/wham/usage"],
       authorization: "Bearer fixture-access",
-      longIds: ["codex:secondary"],
-      shortIds: ["codex:primary"],
-      humanLabels: ["5h limit:", "Weekly limit:"],
+      short: 80,
+      long: 70,
+      humanRow: "Codex      80%    70%",
       payloads: [
         {
           rate_limit: {
@@ -344,9 +359,9 @@ describe("stored auth to fixed endpoint integration", () => {
         "https://api.z.ai/api/biz/subscription/list",
       ],
       authorization: "fixture-access",
-      longIds: ["weekly"],
-      shortIds: ["five-hour"],
-      humanLabels: ["5h window:", "Weekly window:", "MCP monthly allowance:"],
+      short: 80,
+      long: 70,
+      humanRow: "Z.AI       80%    70%",
       payloads: [
         {
           data: {
@@ -370,9 +385,9 @@ describe("stored auth to fixed endpoint integration", () => {
         "https://api.commandcode.ai/alpha/usage/summary",
       ],
       authorization: "Bearer fixture-access",
-      longIds: ["monthly"],
-      shortIds: ["weekly"],
-      humanLabels: ["Five-hour window:", "Weekly window:", "Monthly credits:"],
+      short: 90,
+      long: 98,
+      humanRow: "Command    90%    98%",
       payloads: [
         { user: { userName: "tester" } },
         {
@@ -415,24 +430,19 @@ describe("stored auth to fixed endpoint integration", () => {
             assert.equal(request.headers.get("Authorization"), fixture.authorization);
           if (fixture.id === "openai-codex")
             assert.equal(requests[0]?.headers.get("ChatGPT-Account-Id"), "fixture-account");
-          const states = JSON.parse(stdout[0]!) as JsonProviderUsageState[];
-          const state = states[0];
-          assert.equal(state?.status, "ready");
-          if (state?.status !== "ready") assert.fail("Expected ready state");
-          assert.deepEqual(
-            state.report.long.map((bucket) => bucket.id),
-            fixture.longIds,
-          );
-          assert.deepEqual(
-            state.report.short.map((bucket) => bucket.id),
-            fixture.shortIds,
-          );
-          assert.equal(Object.hasOwn(state.report, "buckets"), false);
+          const states = JSON.parse(stdout[0]!) as UsageSummary[];
+          assert.deepEqual(states, [
+            {
+              provider: fixture.id,
+              short: fixture.short,
+              long: fixture.long,
+            },
+          ]);
           assert.doesNotMatch(stdout[0]!, /fixture-access|fixture-refresh|fixture-account/);
           stdout.length = 0;
           requests.length = 0;
           assert.equal(await run([fixture.id], env), 0);
-          for (const label of fixture.humanLabels) assert.ok(stdout[0]!.includes(label), label);
+          assert.equal(stdout[0], `         short   long\n${fixture.humanRow}`);
           assert.doesNotMatch(stdout[0]!, /fixture-access|fixture-refresh|fixture-account/);
         } finally {
           globalThis.fetch = originalFetch;
@@ -468,10 +478,8 @@ describe("stored auth to fixed endpoint integration", () => {
           try {
             assert.equal(await run(["--json"], env), 1);
             assert.equal(calls, 0);
-            const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
-            assert.equal(states[0]?.status, "auth-unavailable");
-            if (states[0]?.status !== "auth-unavailable") assert.fail("Expected unavailable auth");
-            assert.match(states[0].message, fixture.message);
+            const states = JSON.parse(stdout[0]!) as UsageSummary[];
+            assert.deepEqual(states, [{ provider: fixture.id, short: null, long: null }]);
           } finally {
             globalThis.fetch = originalFetch;
           }
@@ -519,13 +527,9 @@ describe("stored auth to fixed endpoint integration", () => {
           assert.equal(await run([...argv, "--json"], env), 0);
           assert.ok(authorizations.length > 0);
           assert.ok(authorizations.every((value) => value === "Bearer " + key));
-          const states = JSON.parse(stdout[0]!) as ProviderUsageState[];
+          const states = JSON.parse(stdout[0]!) as UsageSummary[];
           assert.equal(states.length, 1);
-          assert.equal(states[0]?.providerId, "command-code");
-          assert.equal(states[0]?.displayState, "current");
-          assert.equal(states[0]?.status, "ready");
-          if (states[0]?.status === "ready")
-            assert.equal(states[0].report.providerId, "command-code");
+          assert.deepEqual(states[0], { provider: "command-code", short: null, long: null });
         }
         await writeFile(
           join(agentDir, "auth.json"),
