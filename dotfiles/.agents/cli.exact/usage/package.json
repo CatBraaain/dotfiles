@@ -1,0 +1,5 @@
+{
+  "name": "usage-cli",
+  "private": true,
+  "main": "./src/main.ts"
+}
