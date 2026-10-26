@@ -4,8 +4,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type RunEnv } from "./main";
-import type { UsageSummary } from "./summary";
+import type { summarizeProviderUsageJson } from "./summary";
 import type { UsageProviderAdapter } from "./types";
+
+type UsageSummary = ReturnType<typeof summarizeProviderUsageJson>;
 
 interface Fixture {
   env: RunEnv;
@@ -84,7 +86,7 @@ describe("run", () => {
       assert.equal(await run([], env), 0);
       assert.deepEqual(calls, ["first", "current"]);
       assert.deepEqual(stdout, [
-        "                  short   long\ncurrent: ready\nfirst: ready\nexpired: auth-unavailable",
+        "                  short  shortResetsAt   long  longResetsAt\ncurrent: ready\nfirst: ready\nexpired: auth-unavailable",
       ]);
       assert.deepEqual(stderr, []);
     });
@@ -101,15 +103,15 @@ describe("run", () => {
       }));
       assert.equal(await run(["first"], env), 1);
       const expected = [
-        `${"".padEnd("Provider first".length)}  short   long`,
-        "Provider first      —      —",
+        `${"".padEnd("Provider first".length)}  short  shortResetsAt   long  longResetsAt`,
+        "Provider first      —              —      —             —",
       ].join("\n");
       assert.deepEqual(stdout, [expected]);
       assert.deepEqual(stderr, []);
     });
   });
 
-  it("prints only provider and nullable remaining percentages instead of invoking the renderer", async () => {
+  it("prints provider, nullable remaining percentages and reset times instead of invoking the renderer", async () => {
     await withCli(async ({ env, stdout }) => {
       env.renderProviderState = () => {
         throw new Error("JSON must not render human blocks");
@@ -117,9 +119,9 @@ describe("run", () => {
       assert.equal(await run(["--json"], env), 0);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(states, [
-        { provider: "current", short: null, long: null },
-        { provider: "first", short: null, long: null },
-        { provider: "expired", short: null, long: null },
+        { provider: "current", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        { provider: "first", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        { provider: "expired", short: null, shortResetsAt: null, long: null, longResetsAt: null },
       ]);
       assert.equal(stdout[0], JSON.stringify(states, null, 2));
       assert.doesNotMatch(stdout[0]!, /first-secret|current-secret|refresh-secret/);
@@ -135,7 +137,9 @@ describe("run", () => {
         {
           provider: "missing",
           short: null,
+          shortResetsAt: null,
           long: null,
+          longResetsAt: null,
         },
       ]);
     });
@@ -158,7 +162,9 @@ describe("run", () => {
       assert.equal(await run(["expired", "--json"], env), 1);
       assert.deepEqual(calls, []);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
-      assert.deepEqual(states, [{ provider: "expired", short: null, long: null }]);
+      assert.deepEqual(states, [
+        { provider: "expired", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+      ]);
     });
   });
 
@@ -172,7 +178,9 @@ describe("run", () => {
       }));
       assert.equal(await run(["first", "--json"], env), 1);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
-      assert.deepEqual(states, [{ provider: "first", short: null, long: null }]);
+      assert.deepEqual(states, [
+        { provider: "first", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+      ]);
       assert.doesNotMatch(stdout[0]!, /first-secret/);
       assert.deepEqual(stderr, []);
     });
@@ -193,9 +201,9 @@ describe("run", () => {
       assert.equal(await run(["--json"], env), 0);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(states, [
-        { provider: "current", short: null, long: null },
-        { provider: "first", short: null, long: null },
-        { provider: "expired", short: null, long: null },
+        { provider: "current", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        { provider: "first", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        { provider: "expired", short: null, shortResetsAt: null, long: null, longResetsAt: null },
       ]);
     });
   });
@@ -317,7 +325,9 @@ describe("run", () => {
       try {
         assert.equal(await run(["--json"], env), 0);
         const states = JSON.parse(stdout[0]!) as UsageSummary[];
-        assert.deepEqual(states, [{ provider: "zai", short: null, long: 80 }]);
+        assert.deepEqual(states, [
+          { provider: "zai", short: null, shortResetsAt: null, long: 80, longResetsAt: null },
+        ]);
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -326,6 +336,8 @@ describe("run", () => {
 });
 
 describe("stored auth to fixed endpoint integration", () => {
+  const shortResetsAt = new Date(2026, 0, 2, 3, 4).getTime() / 1000;
+  const longResetsAt = new Date(2026, 11, 31, 23, 59).getTime() / 1000;
   const oauth = {
     type: "oauth",
     access: "fixture-access",
@@ -340,12 +352,20 @@ describe("stored auth to fixed endpoint integration", () => {
       authorization: "Bearer fixture-access",
       short: 80,
       long: 70,
-      humanRow: "Codex      80%    70%",
+      humanRow: "Codex      80%    01/02 03:04    70%   12/31 23:59",
       payloads: [
         {
           rate_limit: {
-            primary_window: { used_percent: 20, limit_window_seconds: 18000 },
-            secondary_window: { used_percent: 30, limit_window_seconds: 604800 },
+            primary_window: {
+              used_percent: 20,
+              limit_window_seconds: 18000,
+              reset_at: shortResetsAt,
+            },
+            secondary_window: {
+              used_percent: 30,
+              limit_window_seconds: 604800,
+              reset_at: longResetsAt,
+            },
           },
           plan_type: "fixture-access",
         },
@@ -361,13 +381,18 @@ describe("stored auth to fixed endpoint integration", () => {
       authorization: "fixture-access",
       short: 80,
       long: 70,
-      humanRow: "Z.AI       80%    70%",
+      humanRow: "Z.AI       80%    01/02 03:04    70%   12/31 23:59",
       payloads: [
         {
           data: {
             limits: [
-              { type: "TOKENS_LIMIT", unit: 3, percentage: 20 },
-              { type: "TOKENS_LIMIT", unit: 6, percentage: 30 },
+              {
+                type: "TOKENS_LIMIT",
+                unit: 3,
+                percentage: 20,
+                nextResetTime: shortResetsAt * 1000,
+              },
+              { type: "TOKENS_LIMIT", unit: 6, percentage: 30, nextResetTime: longResetsAt * 1000 },
               { type: "TIME_LIMIT", currentValue: 2, usage: 100 },
             ],
           },
@@ -387,14 +412,14 @@ describe("stored auth to fixed endpoint integration", () => {
       authorization: "Bearer fixture-access",
       short: 90,
       long: 98,
-      humanRow: "Command    90%    98%",
+      humanRow: "Command    90%    01/02 03:04    98%   12/31 23:59",
       payloads: [
         { user: { userName: "tester" } },
         {
           credits: { monthlyCredits: 10 },
           windowLimits: {
-            fiveHour: { used: 1, cap: 10 },
-            weekly: { used: 2, cap: 100 },
+            fiveHour: { used: 1, cap: 10, resetAt: shortResetsAt * 1000 },
+            weekly: { used: 2, cap: 100, resetAt: longResetsAt * 1000 },
           },
         },
         { data: {} },
@@ -435,14 +460,23 @@ describe("stored auth to fixed endpoint integration", () => {
             {
               provider: fixture.id,
               short: fixture.short,
+              shortResetsAt: states[0]?.shortResetsAt,
               long: fixture.long,
+              longResetsAt: states[0]?.longResetsAt,
             },
           ]);
+          assert.equal(Date.parse(states[0]!.shortResetsAt!), shortResetsAt * 1000);
+          assert.equal(Date.parse(states[0]!.longResetsAt!), longResetsAt * 1000);
+          assert.match(states[0]!.shortResetsAt!, /^2026-01-02T03:04:00[+-][0-9]{2}:[0-9]{2}$/u);
+          assert.match(states[0]!.longResetsAt!, /^2026-12-31T23:59:00[+-][0-9]{2}:[0-9]{2}$/u);
           assert.doesNotMatch(stdout[0]!, /fixture-access|fixture-refresh|fixture-account/);
           stdout.length = 0;
           requests.length = 0;
           assert.equal(await run([fixture.id], env), 0);
-          assert.equal(stdout[0], `         short   long\n${fixture.humanRow}`);
+          assert.equal(
+            stdout[0],
+            `         short  shortResetsAt   long  longResetsAt\n${fixture.humanRow}`,
+          );
           assert.doesNotMatch(stdout[0]!, /fixture-access|fixture-refresh|fixture-account/);
         } finally {
           globalThis.fetch = originalFetch;
@@ -479,7 +513,15 @@ describe("stored auth to fixed endpoint integration", () => {
             assert.equal(await run(["--json"], env), 1);
             assert.equal(calls, 0);
             const states = JSON.parse(stdout[0]!) as UsageSummary[];
-            assert.deepEqual(states, [{ provider: fixture.id, short: null, long: null }]);
+            assert.deepEqual(states, [
+              {
+                provider: fixture.id,
+                short: null,
+                shortResetsAt: null,
+                long: null,
+                longResetsAt: null,
+              },
+            ]);
           } finally {
             globalThis.fetch = originalFetch;
           }
@@ -529,7 +571,13 @@ describe("stored auth to fixed endpoint integration", () => {
           assert.ok(authorizations.every((value) => value === "Bearer " + key));
           const states = JSON.parse(stdout[0]!) as UsageSummary[];
           assert.equal(states.length, 1);
-          assert.deepEqual(states[0], { provider: "command-code", short: null, long: null });
+          assert.deepEqual(states[0], {
+            provider: "command-code",
+            short: null,
+            shortResetsAt: null,
+            long: null,
+            longResetsAt: null,
+          });
         }
         await writeFile(
           join(agentDir, "auth.json"),

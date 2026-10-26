@@ -1,9 +1,14 @@
 import type { ProviderUsageState, UsageBucket, UsageReport } from "./types";
 
+const MILLISECONDS_PER_SECOND = 1000;
+const MINUTES_PER_HOUR = 60;
+
 export interface UsageSummary {
   provider: string;
   short: number | null;
+  shortResetsAt: number | null;
   long: number | null;
+  longResetsAt: number | null;
 }
 
 export function summarizeProviderUsage(state: ProviderUsageState): UsageSummary {
@@ -11,8 +16,46 @@ export function summarizeProviderUsage(state: ProviderUsageState): UsageSummary 
   return {
     provider: state.providerId,
     short: roundedRemaining(windows?.short),
+    shortResetsAt: resetTime(windows?.short),
     long: roundedRemaining(windows?.long),
+    longResetsAt: resetTime(windows?.long),
   };
+}
+
+export function summarizeProviderUsageJson(state: ProviderUsageState) {
+  const summary = summarizeProviderUsage(state);
+  return {
+    ...summary,
+    shortResetsAt: formatLocalDateTime(summary.shortResetsAt),
+    longResetsAt: formatLocalDateTime(summary.longResetsAt),
+  };
+}
+
+function formatLocalDateTime(seconds: number | null): string | null {
+  if (seconds === null) return null;
+  const date = new Date(seconds * MILLISECONDS_PER_SECOND);
+  if (!Number.isFinite(date.getTime())) return null;
+  const year = String(date.getFullYear()).padStart(4, "0");
+  const [month, day, hour, minute, second] = [
+    date.getMonth() + 1,
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+  ].map((part) => String(part).padStart(2, "0"));
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / MINUTES_PER_HOUR)).padStart(
+    2,
+    "0",
+  );
+  const offsetRemainder = String(Math.abs(offsetMinutes) % MINUTES_PER_HOUR).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}${sign}${offsetHours}:${offsetRemainder}`;
+}
+
+function resetTime(bucket: UsageBucket | undefined): number | null {
+  const resetsAt = bucket?.resetsAt;
+  return resetsAt !== undefined && Number.isFinite(resetsAt) ? resetsAt : null;
 }
 
 function roundedRemaining(bucket: UsageBucket | undefined): number | null {

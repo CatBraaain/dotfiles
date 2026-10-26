@@ -30,6 +30,8 @@ providerごとに用途を保持し、異なる枠・通貨の数値を合算し
 
 Command Code・Z.AIは、必須応答を取得できても補足応答に失敗する場合がある。取得できた通常の利用制限枠から残量率を返す。
 
+Command Codeのrolling枠の `resetAt` が数値の0、または数字文字列として0を表す場合、リセット日時は未知として扱う。残量率は取得できた利用量と上限から求める。
+
 ## 認証と既定provider判定
 
 `$HOME/.pi/agent/auth.json` と `$HOME/.pi/agent/settings.json` を読み取る。HOMEがない環境ではOSのhomeを使う。ファイルの不在は空の設定として扱い、読み取り不能・不正JSON・object以外の内容はコマンドの失敗となる。
@@ -65,31 +67,45 @@ Z.AIは保存認証がない場合に `ZAI_API_KEY` を使う。Codex・Command 
 
 ## 出力
 
-人間可読出力は、先頭行を `short`・`long` のヘッダとし、providerごとに表示名・short残量率・long残量率を1行で並べる。表示名は対応provider表に従う。残量率は0〜100%の整数に丸めた `%` 付き数値で、タイトル・バー・時刻・プラン・認証状態・notesは付けない。
+人間可読出力は、先頭行を `short`・`shortResetsAt`・`long`・`longResetsAt` のヘッダとし、providerごとに表示名と各値を同じ順序の独立した整列列で1行に並べる。表示名は対応provider表に従う。残量率は0〜100%の整数に丸めた `%` 付き数値とする。リセット日時は各残量率と同じ枠の値を使い、実行環境のローカルタイムゾーンで `MM/DD HH:mm` と表示する。不明な日時・対象枠がない日時・失敗したproviderの日時は `—` とする。選択されたlongの残量率が不明でも、日時が既知なら表示する。タイトル・バー・プラン・認証状態・notesは付けない。
 
 通常表示とJSON照会の対象は、正の有限数値の `windowMinutes` がある通常の利用制限枠である。Command Codeの月次credits（`monthly`）とZ.AIのMCP月次枠（`mcp-monthly`）は除く。longは期間が最長の1枠、shortはlong以外で消費率が最小（残量率が最大）の1枠とする。同順位では取得結果の先頭の枠を選ぶ。期間や残量率をリセット時刻・枠の位置から推測しない。
 
-残量率はpercent枠では `remaining`、他の単位では正の有限数値の `limit` に対する `remaining` の割合から求める。`remaining` が有限数値でなければ、有限数値の `used` から残量を求める。残量率が不明な枠はshort候補から除く。対象枠がないセル・選択されたlongの残量率が不明なセル・失敗したproviderの両セルは `—` とする。
+残量率はpercent枠では `remaining`、他の単位では正の有限数値の `limit` に対する `remaining` の割合から求める。`remaining` が有限数値でなければ、有限数値の `used` から残量を求める。残量率が不明な枠はshort候補から除く。対象枠がないセル・選択されたlongの残量率が不明なセル・失敗したproviderの両残量率セルは `—` とする。
 
 ```text
-         short   long
-Codex      80%    70%
-Command    90%    98%
-Z.AI         —    60%
+         short  shortResetsAt   long  longResetsAt
+Codex      80%    06/17 18:00    70%   06/20 09:00
+Command    90%              —    98%             —
+Z.AI         —              —    60%   06/21 00:00
 ```
 
-JSON照会結果は、各要素に次の3フィールドだけを持つ配列である。枠選択・残量計算・整数への丸めは通常表示と同じとし、`%` を付けず数値で返す。通常表示で `—` になる値は `null` とする。成功・認証不可・取得失敗のいずれも同じフィールド構成とする。
+JSON照会結果は、各要素に次の5フィールドだけを持つ配列である。枠選択・残量計算・整数への丸めは通常表示と同じとし、`%` を付けず数値で返す。リセット日時は各残量率と同じ枠の日時を、実行環境のローカルタイムゾーンで秒までの `YYYY-MM-DDTHH:mm:ss±HH:mm` 文字列として返す。時差はその日時に適用されるUTC offsetを使い、夏時間を反映する。UTC環境の時差は `+00:00` とする。小数秒は出力しない。対象枠がない値・不明な値は `null` とする。成功・認証不可・取得失敗のいずれも同じフィールド構成とする。
 
 | フィールド | 内容 |
 | --- | --- |
 | `provider` | 既存のprovider ID（`openai-codex`・`command-code`・`zai`） |
 | `short` | shortの整数残量率、または `null` |
+| `shortResetsAt` | shortのローカル日時・時差付き文字列、または `null` |
 | `long` | longの整数残量率、または `null` |
+| `longResetsAt` | longのローカル日時・時差付き文字列、または `null` |
 
 ```json
 [
-  { "provider": "openai-codex", "short": 80, "long": 70 },
-  { "provider": "command-code", "short": null, "long": null }
+  {
+    "provider": "openai-codex",
+    "short": 80,
+    "shortResetsAt": "2026-06-17T18:00:00+09:00",
+    "long": 70,
+    "longResetsAt": "2026-06-20T09:00:00+09:00"
+  },
+  {
+    "provider": "command-code",
+    "short": null,
+    "shortResetsAt": null,
+    "long": null,
+    "longResetsAt": null
+  }
 ]
 ```
 

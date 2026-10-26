@@ -73,6 +73,31 @@ describe("subscription windows", () => {
     assert.ok(report.notes?.includes("Command Code plan details were unavailable."));
   });
 
+  for (const resetAt of [1793511054, "1793511054", 1793511054000, "1793511054000"]) {
+    it("normalizes positive Command Code reset seconds and milliseconds: " + resetAt, () => {
+      const report = normalizeCommandCodeUsagePayload(
+        {
+          account: { user: { userName: "tester" } },
+          credits: {
+            windowLimits: {
+              fiveHour: { used: 1, cap: 3, resetAt },
+              weekly: { used: 2, cap: 6, resetAt },
+            },
+          },
+        },
+        capturedAt,
+      );
+      assert.deepEqual(
+        report.buckets.map((bucket) => bucket.resetsAt),
+        [1793511054, 1793511054],
+      );
+      assert.deepEqual(
+        report.buckets.map((bucket) => bucket.remaining),
+        [2, 4],
+      );
+    });
+  }
+
   it("normalizes Z.AI percent and count windows without creating missing quotas", () => {
     const report = normalizeZaiQuotaPayload(
       "zai",

@@ -30,7 +30,7 @@ function readyState(buckets: UsageBucket[], providerId = "openai-codex"): Provid
 }
 
 describe("renderUsageTable", () => {
-  it("renders only provider names and remaining percentages under one header", () => {
+  it("renders provider names, remaining percentages and reset columns under one header", () => {
     const buckets = [percentBucket("session", 300, 20), percentBucket("week", 10_080, 30)];
     const states = [
       readyState(buckets),
@@ -39,12 +39,30 @@ describe("renderUsageTable", () => {
     ];
     const output = renderUsageTable(states);
     const expected = [
-      "         short   long",
-      "Codex      80%    70%",
-      "Command    80%    70%",
-      "Z.AI       80%    70%",
+      "         short  shortResetsAt   long  longResetsAt",
+      "Codex      80%              —    70%             —",
+      "Command    80%              —    70%             —",
+      "Z.AI       80%              —    70%             —",
     ].join("\n");
     assert.equal(output, expected);
+  });
+
+  it("aligns known local reset dates and missing values in separate columns", () => {
+    const shortResetsAt = new Date(2026, 0, 2, 3, 4, 59).getTime() / 1000;
+    const longResetsAt = new Date(2026, 11, 31, 23, 59).getTime() / 1000;
+    const states = [
+      readyState([
+        { ...percentBucket("short", 300, 20), resetsAt: shortResetsAt },
+        { ...percentBucket("long", 10_080, 30), resetsAt: longResetsAt },
+      ]),
+      readyState([percentBucket("only", 300, 100)], "command-code"),
+    ];
+    const expected = [
+      "         short  shortResetsAt   long  longResetsAt",
+      "Codex      80%    01/02 03:04    70%   12/31 23:59",
+      "Command      —              —     0%             —",
+    ].join("\n");
+    assert.equal(renderUsageTable(states), expected);
   });
 
   it("returns an empty string when there are no providers", () => {
@@ -59,7 +77,7 @@ describe("renderProviderState", () => {
       percentBucket("ten-days", 14_400, 25),
       percentBucket("two-hours", 120, 10),
     ]);
-    assert.equal(renderProviderState(state), "Codex      90%    75%");
+    assert.equal(renderProviderState(state), "Codex      90%              —    75%             —");
   });
 
   it("includes normal Command rolling windows and excludes monthly credits", () => {
@@ -94,7 +112,7 @@ describe("renderProviderState", () => {
       ],
       "command-code",
     );
-    assert.equal(renderProviderState(state), "Command    80%    60%");
+    assert.equal(renderProviderState(state), "Command    80%              —    60%             —");
   });
 
   it("converts count quotas to percentages and excludes MCP monthly allowances", () => {
@@ -121,20 +139,23 @@ describe("renderProviderState", () => {
       ],
       "zai",
     );
-    assert.equal(renderProviderState(state), "Z.AI       90%    80%");
+    assert.equal(renderProviderState(state), "Z.AI       90%              —    80%             —");
   });
 
   it("puts the only eligible window in long", () => {
     assert.equal(
       renderProviderState(readyState([percentBucket("day", 1_440, 25)])),
-      "Codex        —    75%",
+      "Codex        —              —    75%             —",
     );
   });
 
   it("uses input order to break tied durations and rates without mutating buckets", () => {
     const buckets = [percentBucket("first", 1_440, 20), percentBucket("second", 1_440, 10)];
     const before = structuredClone(buckets);
-    assert.equal(renderProviderState(readyState(buckets)), "Codex      90%    80%");
+    assert.equal(
+      renderProviderState(readyState(buckets)),
+      "Codex      90%              —    80%             —",
+    );
     assert.deepEqual(buckets, before);
   });
 
@@ -144,7 +165,7 @@ describe("renderProviderState", () => {
       percentBucket("invalid", Number.NaN, 20),
       percentBucket("zero", 0, 20),
     ]);
-    assert.equal(renderProviderState(state), "Codex        —      —");
+    assert.equal(renderProviderState(state), "Codex        —              —      —             —");
   });
 
   it("shows unknown long without substituting a shorter known window", () => {
@@ -152,7 +173,7 @@ describe("renderProviderState", () => {
       { id: "week", label: "Week", unit: "count", windowMinutes: 10_080 },
       percentBucket("day", 1_440, 20),
     ]);
-    assert.equal(renderProviderState(state), "Codex      80%      —");
+    assert.equal(renderProviderState(state), "Codex      80%              —      —             —");
   });
 
   it("does not interpret unknown or zero-limit quantities as remaining capacity", () => {
@@ -160,7 +181,7 @@ describe("renderProviderState", () => {
       { id: "day", label: "Day", unit: "usd", remaining: 0, limit: 0, windowMinutes: 1_440 },
       { id: "hour", label: "Hour", unit: "percent", remaining: Number.NaN, windowMinutes: 60 },
     ]);
-    assert.equal(renderProviderState(state), "Codex        —      —");
+    assert.equal(renderProviderState(state), "Codex        —              —      —             —");
   });
 
   it("derives missing remaining values from usage and rounds the resulting percentage", () => {
@@ -168,12 +189,20 @@ describe("renderProviderState", () => {
       { id: "day", label: "Day", unit: "count", used: 1, limit: 3, windowMinutes: 1_440 },
       { id: "hour", label: "Hour", unit: "percent", used: 20.4, windowMinutes: 60 },
     ]);
-    assert.equal(renderProviderState(state), "Codex      80%    67%");
+    assert.equal(renderProviderState(state), "Codex      80%              —    67%             —");
+  });
+
+  it("renders a known reset time even when the long percentage is unknown", () => {
+    const resetsAt = new Date(2026, 0, 2, 3, 4).getTime() / 1000;
+    const state = readyState([
+      { id: "long", label: "Long", unit: "count", windowMinutes: 1440, resetsAt },
+    ]);
+    assert.equal(renderProviderState(state), "Codex        —              —      —   01/02 03:04");
   });
 
   it("keeps exhausted quotas distinct from missing data", () => {
     const state = readyState([percentBucket("day", 1_440, 100)]);
-    assert.equal(renderProviderState(state), "Codex        —     0%");
+    assert.equal(renderProviderState(state), "Codex        —              —     0%             —");
   });
 
   for (const status of ["unsupported", "auth-unavailable", "query-failed"] as const) {
@@ -185,7 +214,10 @@ describe("renderProviderState", () => {
         status,
         message: "Test reason.",
       };
-      assert.equal(renderProviderState(state), "Codex        —      —");
+      assert.equal(
+        renderProviderState(state),
+        "Codex        —              —      —             —",
+      );
     });
   }
 });

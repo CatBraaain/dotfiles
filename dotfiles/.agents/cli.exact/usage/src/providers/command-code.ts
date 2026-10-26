@@ -238,7 +238,7 @@ function asMillisecondEpochSeconds(value: unknown): number | undefined {
       : typeof value === "string" && /^\d+$/u.test(value.trim())
         ? Number(value.trim())
         : undefined;
-  if (raw === undefined || raw < 0) return undefined;
+  if (raw === undefined || raw <= 0) return undefined;
   return Math.floor(raw >= MILLISECOND_EPOCH_FLOOR ? raw / 1000 : raw);
 }
 
