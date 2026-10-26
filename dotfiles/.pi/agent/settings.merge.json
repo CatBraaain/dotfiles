@@ -36,5 +36,5 @@
     "openrouter/**/*:free"
   ],
   "extensions": ["-builtin:codemode"],
-  "packages": ["npm:@narumitw/pi-stamp", "npm:@narumitw/pi-usage"]
+  "packages": ["npm:@narumitw/pi-stamp"]
 }
