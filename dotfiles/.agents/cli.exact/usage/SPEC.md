@@ -69,7 +69,7 @@ Z.AIは保存認証がない場合に `ZAI_API_KEY` を使う。Codex・Command 
 
 人間可読出力は、先頭行を `short`・`shortResetsAt`・`long`・`longResetsAt` のヘッダとし、providerごとに表示名と各値を同じ順序の独立した整列列で1行に並べる。表示名は対応provider表に従う。残量率は0〜100%の整数に丸めた `%` 付き数値とする。リセット日時は各残量率と同じ枠の値を使い、実行環境のローカルタイムゾーンで `MM/DD HH:mm` と表示する。不明な日時・対象枠がない日時・失敗したproviderの日時は `—` とする。選択されたlongの残量率が不明でも、日時が既知なら表示する。タイトル・バー・プラン・認証状態・notesは付けない。
 
-通常表示とJSON照会の対象は、正の有限数値の `windowMinutes` がある通常の利用制限枠である。Command Codeの月次credits（`monthly`）とZ.AIのMCP月次枠（`mcp-monthly`）は除く。longは期間が最長の1枠、shortはlong以外で消費率が最小（残量率が最大）の1枠とする。同順位では取得結果の先頭の枠を選ぶ。期間や残量率をリセット時刻・枠の位置から推測しない。
+通常表示とJSON照会の対象は、正の有限数値の `windowMinutes` がある利用制限枠である。Command Codeの月次credits（`monthly`）も対象に含め、その期間は30日として扱う。Z.AIのMCP月次枠（`mcp-monthly`）は対象から除く。longは期間が最長の1枠とする。shortはlong以外の1枠とする。Command Codeでは、shortは残量率が最小の枠とする。Command Code以外では、shortは消費率が最小（残量率が最大）の枠とする。同順位では取得結果の先頭の枠を選ぶ。期間や残量率をリセット時刻・枠の位置から推測しない。
 
 残量率はpercent枠では `remaining`、他の単位では正の有限数値の `limit` に対する `remaining` の割合から求める。`remaining` が有限数値でなければ、有限数値の `used` から残量を求める。残量率が不明な枠はshort候補から除く。対象枠がないセル・選択されたlongの残量率が不明なセル・失敗したproviderの両残量率セルは `—` とする。
 

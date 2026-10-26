@@ -65,19 +65,22 @@ function roundedRemaining(bucket: UsageBucket | undefined): number | null {
 
 function selectWindows(report: UsageReport): { long?: UsageBucket; short?: UsageBucket } {
   const windows = report.buckets.filter((bucket) => {
-    const isSupplementary =
-      (report.providerId === "command-code" && bucket.id === "monthly") ||
-      (report.providerId === "zai" && bucket.id === "mcp-monthly");
+    const isSupplementary = report.providerId === "zai" && bucket.id === "mcp-monthly";
     return !isSupplementary && isPositiveFinite(bucket.windowMinutes);
   });
   const [long] = windows.toSorted((left, right) => right.windowMinutes! - left.windowMinutes!);
+  const shortPrefersLowestRemaining = report.providerId === "command-code";
   const [short] = windows
     .filter((bucket) => bucket !== long)
     .flatMap((bucket) => {
       const remaining = remainingPercent(bucket);
       return remaining === undefined ? [] : [{ bucket, remaining }];
     })
-    .toSorted((left, right) => right.remaining - left.remaining);
+    .toSorted((left, right) =>
+      shortPrefersLowestRemaining
+        ? left.remaining - right.remaining
+        : right.remaining - left.remaining,
+    );
   return { long, short: short?.bucket };
 }
 

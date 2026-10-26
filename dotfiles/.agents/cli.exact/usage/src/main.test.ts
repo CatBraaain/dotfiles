@@ -411,8 +411,8 @@ describe("stored auth to fixed endpoint integration", () => {
       ],
       authorization: "Bearer fixture-access",
       short: 90,
-      long: 98,
-      humanRow: "Command    90%    01/02 03:04    98%   12/31 23:59",
+      long: 83,
+      humanRow: "Command    90%    01/02 03:04    83%   12/31 23:59",
       payloads: [
         { user: { userName: "tester" } },
         {
@@ -422,7 +422,7 @@ describe("stored auth to fixed endpoint integration", () => {
             weekly: { used: 2, cap: 100, resetAt: longResetsAt * 1000 },
           },
         },
-        { data: {} },
+        { data: { currentPeriodEnd: new Date(longResetsAt * 1000).toISOString() } },
         { totalCost: 2 },
       ],
     },

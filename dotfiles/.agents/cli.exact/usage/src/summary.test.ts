@@ -170,7 +170,7 @@ describe("JSON remaining summary", () => {
     });
   });
 
-  it("includes Command Code rolling windows and excludes monthly credits", () => {
+  it("includes Command Code monthly credits and picks the lowest remaining rate as short", () => {
     const report = normalizeCommandCodeUsagePayload(
       {
         account: { user: { userName: "fixture" } },
@@ -186,8 +186,32 @@ describe("JSON remaining summary", () => {
       provider: "command-code",
       short: 90,
       shortResetsAt: null,
-      long: 98,
+      long: 83,
       longResetsAt: null,
+    });
+  });
+
+  it("uses the billing period end as the Command Code long window reset", () => {
+    const report = normalizeCommandCodeUsagePayload(
+      {
+        account: { user: { userName: "fixture" } },
+        credits: {
+          credits: { monthlyCredits: 10 },
+          windowLimits: { fiveHour: { used: 1, cap: 10 } },
+        },
+        subscription: {
+          data: { planId: "individual-pro", currentPeriodEnd: "2026-07-01T00:00:00Z" },
+        },
+        usage: { totalCost: 2 },
+      },
+      1000,
+    );
+    assert.deepEqual(summarizeProviderUsage(ready(report)), {
+      provider: "command-code",
+      short: 90,
+      shortResetsAt: null,
+      long: 83,
+      longResetsAt: Date.parse("2026-07-01T00:00:00Z") / 1000,
     });
   });
 
@@ -289,21 +313,29 @@ describe("JSON remaining summary", () => {
     });
   });
 
-  for (const [providerId, id] of [
-    ["command-code", "monthly"],
-    ["zai", "mcp-monthly"],
-  ]) {
-    it("excludes " + providerId + " " + id + " even with an explicit duration", () => {
-      const state = ready(fixture([bucket(id!, 999999), bucket("plan", 300, 70)], providerId));
-      assert.deepEqual(summarizeProviderUsage(state), {
-        provider: providerId,
-        short: null,
-        shortResetsAt: null,
-        long: 70,
-        longResetsAt: null,
-      });
+  it("excludes zai mcp-monthly even with an explicit duration", () => {
+    const state = ready(fixture([bucket("mcp-monthly", 999_999), bucket("plan", 300, 70)], "zai"));
+    assert.deepEqual(summarizeProviderUsage(state), {
+      provider: "zai",
+      short: null,
+      shortResetsAt: null,
+      long: 70,
+      longResetsAt: null,
     });
-  }
+  });
+
+  it("ranks Command Code monthly by duration like any other window", () => {
+    const state = ready(
+      fixture([bucket("monthly", 43_200), bucket("plan", 300, 70)], "command-code"),
+    );
+    assert.deepEqual(summarizeProviderUsage(state), {
+      provider: "command-code",
+      short: 70,
+      shortResetsAt: null,
+      long: 80,
+      longResetsAt: null,
+    });
+  });
 
   it("uses null for unavailable percentages rather than substituting shorter long windows", () => {
     const state = ready(

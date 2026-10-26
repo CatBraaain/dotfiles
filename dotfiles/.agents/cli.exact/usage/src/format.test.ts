@@ -80,7 +80,7 @@ describe("renderProviderState", () => {
     assert.equal(renderProviderState(state), "Codex      90%              —    75%             —");
   });
 
-  it("includes normal Command rolling windows and excludes monthly credits", () => {
+  it("ranks Command monthly credits as the long window by duration", () => {
     const state = readyState(
       [
         {
@@ -112,7 +112,7 @@ describe("renderProviderState", () => {
       ],
       "command-code",
     );
-    assert.equal(renderProviderState(state), "Command    80%              —    60%             —");
+    assert.equal(renderProviderState(state), "Command    60%              —   100%             —");
   });
 
   it("converts count quotas to percentages and excludes MCP monthly allowances", () => {

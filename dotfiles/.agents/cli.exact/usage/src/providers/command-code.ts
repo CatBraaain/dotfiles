@@ -9,6 +9,7 @@ import type {
 
 const FIVE_HOUR_WINDOW_MINUTES = 300;
 const WEEKLY_WINDOW_MINUTES = 10_080;
+const MONTHLY_WINDOW_MINUTES = 43_200;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/u;
 const MILLISECOND_EPOCH_FLOOR = 1e12;
 const WINDOWS = [
@@ -71,6 +72,7 @@ export function normalizeCommandCodeUsagePayload(
         limit: pool,
         unit: "usd",
         period: "billing-period",
+        windowMinutes: MONTHLY_WINDOW_MINUTES,
         ...(monthlyReset !== undefined ? { resetsAt: monthlyReset } : {}),
       });
     }
