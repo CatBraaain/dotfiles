@@ -43,8 +43,6 @@ import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SystemMessage } from "@earendil-works/pi-ai";
 import type {
-  BeforeAgentStartEvent,
-  ContextWithSystemEvent,
   ExtensionAPI,
   ExtensionContext,
   NormalizedBuildSystemPromptOptions,
@@ -76,13 +74,14 @@ interface RunPromptState {
 /** The parts of a run's state the section assembly needs. */
 export type TemplateRunState = Pick<RunPromptState, "template" | "model" | "provider">;
 
-let runState: RunPromptState | undefined;
-
-/** Canonical template loaded at `session_start`; undefined when unused. */
-let customTemplate: SystemPromptTemplate | undefined;
-
 /** Canonical template file location in the deployed home. */
-const TEMPLATE_PATH = join(homedir(), ".agents", "SYSTEM_PROMPT.yaml");
+const DEFAULT_TEMPLATE_PATH = () => join(homedir(), ".agents", "SYSTEM_PROMPT.yaml");
+
+/** Injection points for tests; production callers omit them. */
+export interface SystemPromptExtensionOptions {
+  /** Canonical template file lookup. Defaults to the deployed ~/.agents/SYSTEM_PROMPT.yaml. */
+  templatePath?: () => string;
+}
 
 /** Sections this extension builds from the run's structured prompt options. */
 const KNOWN_SECTIONS = new Set([
@@ -112,12 +111,20 @@ export interface FoldedSystemState {
   readonly activeToolNames: readonly string[];
 }
 
-export default function systemPromptExtension(pi: ExtensionAPI): void {
+export default function systemPromptExtension(
+  pi: ExtensionAPI,
+  { templatePath = DEFAULT_TEMPLATE_PATH }: SystemPromptExtensionOptions = {},
+): void {
+  // Run and template state lives in the factory closure, so independent
+  // instances never share it.
+  let runState: RunPromptState | undefined;
+  let customTemplate: SystemPromptTemplate | undefined;
+
   pi.on("session_start", (_event, ctx) => {
     // A new session invalidates the previous run's prompt options.
     runState = undefined;
     // Reload the canonical template so edits land on the next session.
-    customTemplate = loadSystemPromptTemplate(ctx);
+    customTemplate = loadSystemPromptTemplate(ctx, templatePath());
     // Show the collapsed prompt indicator; the full viewer never opens
     // automatically, only through the triggers registered below.
     setPromptIndicator(ctx);
@@ -136,49 +143,40 @@ export default function systemPromptExtension(pi: ExtensionAPI): void {
       void showSystemPromptViewer(ctx).catch(() => {});
     },
   });
-  pi.on("before_agent_start", onBeforeAgentStart);
-  pi.on("context_with_system", onContextWithSystem);
-}
-
-function onBeforeAgentStart(
-  event: BeforeAgentStartEvent,
-  ctx?: ExtensionContext,
-): { systemPrompt: string } | undefined {
-  const options = event.systemPromptOptions;
-  const forced = options.forceSystemPrompt;
-  runState = {
-    options,
-    forced: forced !== undefined,
-    template: customTemplate,
-    model: ctx?.model?.id,
-    provider: ctx?.model?.provider,
-  };
-  if (forced === undefined) return undefined;
-  const own = buildOwnPrompt({ ...options, forceSystemPrompt: undefined }, runState);
-  return forced.startsWith(own) ? { systemPrompt: own + forced.slice(own.length) } : undefined;
-}
-
-async function onContextWithSystem(
-  event: ContextWithSystemEvent,
-): Promise<{ messages: AgentMessage[] } | undefined> {
-  const state = runState;
-  // Without run state there is no structured input to build from, and in a
-  // forced run the request head is replaced by the forced-prompt projection
-  // after this handler, so replacing it here would be discarded anyway.
-  if (state === undefined || state.forced) return undefined;
-  const head = event.messages[0];
-  if (head?.role !== "system") return undefined;
-  const folded = foldSystemMessages(event.messages);
-  const content = assembleHeadContent(
-    folded,
-    systemContentText(head.content),
-    state.options,
-    state,
-  );
-  const messages = event.messages.map((message, index) =>
-    index === 0 ? { ...head, content, sections: undefined } : message,
-  );
-  return { messages };
+  pi.on("before_agent_start", (event, ctx) => {
+    const options = event.systemPromptOptions;
+    const forced = options.forceSystemPrompt;
+    runState = {
+      options,
+      forced: forced !== undefined,
+      template: customTemplate,
+      model: ctx?.model?.id,
+      provider: ctx?.model?.provider,
+    };
+    if (forced === undefined) return undefined;
+    const own = buildOwnPrompt({ ...options, forceSystemPrompt: undefined }, runState);
+    return forced.startsWith(own) ? { systemPrompt: own + forced.slice(own.length) } : undefined;
+  });
+  pi.on("context_with_system", async (event) => {
+    const state = runState;
+    // Without run state there is no structured input to build from, and in a
+    // forced run the request head is replaced by the forced-prompt projection
+    // after this handler, so replacing it here would be discarded anyway.
+    if (state === undefined || state.forced) return undefined;
+    const head = event.messages[0];
+    if (head?.role !== "system") return undefined;
+    const folded = foldSystemMessages(event.messages);
+    const content = assembleHeadContent(
+      folded,
+      systemContentText(head.content),
+      state.options,
+      state,
+    );
+    const messages = event.messages.map((message, index) =>
+      index === 0 ? { ...head, content, sections: undefined } : message,
+    );
+    return { messages };
+  });
 }
 
 /** Replay every system message into the current section texts and tool set. */
@@ -384,20 +382,20 @@ function buildOwnPrompt(
  * any parse or schema error ignores the whole file with a warning, keeping
  * the session on Pi's standard build.
  */
-function loadSystemPromptTemplate(ctx: ExtensionContext): SystemPromptTemplate | undefined {
+function loadSystemPromptTemplate(
+  ctx: ExtensionContext,
+  path: string,
+): SystemPromptTemplate | undefined {
   let raw: string;
   try {
-    raw = readFileSync(TEMPLATE_PATH, "utf8");
+    raw = readFileSync(path, "utf8");
   } catch {
     return undefined;
   }
   try {
     return parseSystemPromptTemplate(raw);
   } catch (error) {
-    warn(
-      ctx,
-      `Ignoring ${TEMPLATE_PATH}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    warn(ctx, `Ignoring ${path}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
 }

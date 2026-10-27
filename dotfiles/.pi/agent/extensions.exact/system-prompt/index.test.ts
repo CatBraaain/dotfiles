@@ -61,23 +61,32 @@ interface CapturedRegistration {
 
 /** Capture the handlers, shortcuts, and commands the factory registers. */
 function captureRegistration(): CapturedRegistration {
+  // Run-level tests pin the baseline (template-free) prompt behavior. The
+  // deployed ~/.agents/SYSTEM_PROMPT.yaml owns every required section and
+  // wins over mid-run patches and custom overrides by design, so every test
+  // instance reads from a path where no template exists. Template-active
+  // behavior is covered by the fixture-based describes below.
+  const templatePath = () => "/system-prompt-tests/no-template/SYSTEM_PROMPT.yaml";
   const handlers = new Map<string, Handler[]>();
   const shortcuts: ShortcutRegistration[] = [];
   const commands: CommandRegistration[] = [];
-  systemPromptExtension({
-    on(event: string, handler: Handler) {
-      const list = handlers.get(event) ?? [];
-      list.push(handler);
-      handlers.set(event, list);
-      return () => {};
-    },
-    registerShortcut(key: string, options: ShortcutRegistration["options"]) {
-      shortcuts.push({ key, options });
-    },
-    registerCommand(name: string, options: CommandRegistration["options"]) {
-      commands.push({ name, options });
-    },
-  } as never);
+  systemPromptExtension(
+    {
+      on(event: string, handler: Handler) {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+        return () => {};
+      },
+      registerShortcut(key: string, options: ShortcutRegistration["options"]) {
+        shortcuts.push({ key, options });
+      },
+      registerCommand(name: string, options: CommandRegistration["options"]) {
+        commands.push({ name, options });
+      },
+    } as never,
+    { templatePath },
+  );
   return { handlers, shortcuts, commands };
 }
 
