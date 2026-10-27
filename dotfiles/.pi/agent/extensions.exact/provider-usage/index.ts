@@ -57,8 +57,9 @@ export function formatRelativeTime(resetsAt: string, now: number): string {
   const minutes = remainingMinutes % 60;
   const hours = Math.floor(remainingMinutes / 60) % 24;
   const days = Math.floor(remainingMinutes / (60 * 24));
-  if (days > 0) return hours > 0 ? `${days}d${hours}h` : `${days}d`;
-  return hours > 0 ? `${hours}h${minutes}m` : `${minutes}m`;
+  const paddedMinutes = String(minutes).padStart(2, "0");
+  if (days > 0) return `${days}d${String(hours).padStart(2, "0")}h${paddedMinutes}m`;
+  return hours > 0 ? `${hours}h${paddedMinutes}m` : `${minutes}m`;
 }
 
 function formatWindow(
