@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +31,8 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 const WINDOW_LABELS = ["short", "long"] as const;
+const PERCENT_WIDTH = "100%".length;
+const RESET_SEPARATOR = " ↻ ";
 
 const UNAVAILABLE_MESSAGE = "usage-cli unavailable";
 
@@ -67,22 +69,62 @@ function formatWindow(
   percent: number | null,
   resetsAt: string | null,
   now: number,
+  resetWidth: number,
 ): string {
-  if (percent === null) return `${label} —`;
-  const countdown = resetsAt === null ? "" : ` ↻ ${formatRelativeTime(resetsAt, now)}`;
-  return `${label} ${percent}%${countdown}`;
+  const remaining = (percent === null ? "—" : `${percent}%`).padStart(PERCENT_WIDTH);
+  const countdownWidth = resetWidth > 0 ? RESET_SEPARATOR.length + resetWidth : 0;
+  const countdown =
+    percent === null || resetsAt === null
+      ? " ".repeat(countdownWidth)
+      : `${RESET_SEPARATOR}${formatRelativeTime(resetsAt, now).padStart(resetWidth)}`;
+  return `${label} ${remaining}${countdown}`;
 }
 
-export function formatUsageLine(entry: UsageEntry, now: number): string {
+export function formatUsageLine(
+  entry: UsageEntry,
+  now: number,
+  columnWidths = { provider: 0, shortReset: 0, longReset: 0 },
+): string {
   const provider = PROVIDER_LABELS[entry.provider] ?? entry.provider;
-  const short = formatWindow("short", entry.short, entry.shortResetsAt, now);
-  const long = formatWindow("long", entry.long, entry.longResetsAt, now);
-  return `${provider} ${short} · ${long}`;
+  const providerPadding = " ".repeat(Math.max(0, columnWidths.provider - visibleWidth(provider)));
+  const short = formatWindow(
+    "short",
+    entry.short,
+    entry.shortResetsAt,
+    now,
+    columnWidths.shortReset,
+  );
+  const long = formatWindow("long", entry.long, entry.longResetsAt, now, columnWidths.longReset);
+  return `${provider}${providerPadding} | ${short} | ${long}`.trimEnd();
 }
 
 export function buildUsageWidgetLines(entries: UsageEntry[], now: number): string[] | undefined {
   if (entries.length === 0) return undefined;
-  return entries.map((entry) => formatUsageLine(entry, now));
+  const providerWidth = Math.max(
+    ...entries.map((entry) => visibleWidth(PROVIDER_LABELS[entry.provider] ?? entry.provider)),
+  );
+  const columnWidths = {
+    provider: providerWidth,
+    shortReset: resetColumnWidth(entries, "short", now),
+    longReset: resetColumnWidth(entries, "long", now),
+  };
+  return entries.map((entry) => formatUsageLine(entry, now, columnWidths));
+}
+
+function resetColumnWidth(
+  entries: UsageEntry[],
+  label: (typeof WINDOW_LABELS)[number],
+  now: number,
+): number {
+  return Math.max(
+    0,
+    ...entries.map((entry) => {
+      const resetsAt = entry[`${label}ResetsAt`];
+      return entry[label] === null || resetsAt === null
+        ? 0
+        : formatRelativeTime(resetsAt, now).length;
+    }),
+  );
 }
 
 async function fetchUsageEntries(): Promise<UsageEntry[]> {

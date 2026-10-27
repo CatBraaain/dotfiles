@@ -70,17 +70,17 @@ describe("formatRelativeTime", () => {
 describe("formatUsageLine", () => {
   it("renders both windows with percentages and reset countdowns", () => {
     const line = formatUsageLine(entryWith({}), NOW);
-    assert.equal(line, "zai short 88% ↻ 2h30m · long 98% ↻ 7d00h00m");
+    assert.equal(line, "zai | short  88% ↻ 2h30m | long  98% ↻ 7d00h00m");
   });
 
   it("renders an em dash for a window without a percentage", () => {
     const line = formatUsageLine(entryWith({ short: null, shortResetsAt: null }), NOW);
-    assert.equal(line, "zai short — · long 98% ↻ 7d00h00m");
+    assert.equal(line, "zai | short    — | long  98% ↻ 7d00h00m");
   });
 
   it("omits the countdown when the reset time is missing", () => {
     const line = formatUsageLine(entryWith({ longResetsAt: null }), NOW);
-    assert.equal(line, "zai short 88% ↻ 2h30m · long 98%");
+    assert.equal(line, "zai | short  88% ↻ 2h30m | long  98%");
   });
 
   it("maps known provider ids to short labels", () => {
@@ -101,6 +101,95 @@ describe("buildUsageWidgetLines", () => {
       NOW,
     );
     assert.equal(lines?.length, 2);
+  });
+
+  it("aligns providers, percentages, resets, and pipe separators across all rows", () => {
+    const lines = buildUsageWidgetLines(
+      [
+        entryWith({
+          provider: "openai-codex",
+          short: null,
+          shortResetsAt: null,
+          long: 76,
+          longResetsAt: minutesLater(5 * 24 * 60 + 19 * 60),
+        }),
+        entryWith({
+          provider: "command-code",
+          short: 100,
+          shortResetsAt: minutesLater(5 * 24 * 60 + 20 * 60),
+          long: 100,
+          longResetsAt: minutesLater(28 * 24 * 60 + 13 * 60),
+        }),
+        entryWith({
+          short: 0,
+          shortResetsAt: minutesLater(4),
+          long: 64,
+          longResetsAt: minutesLater(5 * 24 * 60 + 14 * 60),
+        }),
+      ],
+      NOW,
+    );
+    assert.deepEqual(lines, [
+      "codex   | short    —            | long  76% ↻  5d19h00m",
+      "command | short 100% ↻ 5d20h00m | long 100% ↻ 28d13h00m",
+      "zai     | short   0% ↻       4m | long  64% ↻  5d14h00m",
+    ]);
+  });
+
+  it("reserves reset columns for missing timestamps and percentages", () => {
+    const lines = buildUsageWidgetLines(
+      [
+        entryWith({ shortResetsAt: null, long: null }),
+        entryWith({ provider: "openai-codex", longResetsAt: minutesLater(4) }),
+      ],
+      NOW,
+    );
+    assert.deepEqual(lines, [
+      "zai   | short  88%         | long    —",
+      "codex | short  88% ↻ 2h30m | long  98% ↻ 4m",
+    ]);
+  });
+
+  it("omits reset column spacing when every reset is missing", () => {
+    const lines = buildUsageWidgetLines(
+      [
+        entryWith({ short: null, shortResetsAt: null, longResetsAt: null }),
+        entryWith({ provider: "command-code", shortResetsAt: null, longResetsAt: null }),
+      ],
+      NOW,
+    );
+    assert.deepEqual(lines, [
+      "zai     | short    — | long  98%",
+      "command | short  88% | long  98%",
+    ]);
+  });
+
+  it("sizes the provider column using unknown labels and visible terminal widths", () => {
+    const lines = buildUsageWidgetLines(
+      [
+        entryWith({ provider: "openrouter", shortResetsAt: null, longResetsAt: null }),
+        entryWith({ provider: "ＡＰＩ", shortResetsAt: null, longResetsAt: null }),
+      ],
+      NOW,
+    );
+    assert.deepEqual(lines, [
+      "openrouter | short  88% | long  98%",
+      "ＡＰＩ     | short  88% | long  98%",
+    ]);
+  });
+
+  it("aligns invalid and expired reset times with valid countdowns", () => {
+    const lines = buildUsageWidgetLines(
+      [
+        entryWith({ shortResetsAt: "not-a-date", longResetsAt: minutesLater(-1) }),
+        entryWith({ shortResetsAt: minutesLater(65), longResetsAt: minutesLater(60) }),
+      ],
+      NOW,
+    );
+    assert.deepEqual(lines, [
+      "zai | short  88% ↻     ? | long  98% ↻    0m",
+      "zai | short  88% ↻ 1h05m | long  98% ↻ 1h00m",
+    ]);
   });
 
   it("returns undefined for no providers", () => {
