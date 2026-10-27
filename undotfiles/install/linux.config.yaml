@@ -125,6 +125,7 @@ work:
   - flatpak: com.visualstudio.code
   - custom: drawio
   - custom: generaluser-gs
+  - custom: musescore
   - custom: openwhispr
   - custom: rustdesk
   - custom: surge-xt

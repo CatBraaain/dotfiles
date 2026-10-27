@@ -1,20 +1,11 @@
 import { readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
 
 export type Key =
-  | "apt"
-  | "flatpak"
-  | "uv"
-  | "bun"
-  | "cargo"
-  | "go"
-  | "brew"
-  | "brew-cask"
-  | "custom"
-  | "run";
+  "apt" | "flatpak" | "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask" | "custom" | "run";
 type DeclarativeKey = "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask";
 type BatchableKey = "apt" | "flatpak" | "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
@@ -74,6 +65,15 @@ const rustDeskRepo = "rustdesk/rustdesk";
 const rustDeskPackageName = "rustdesk";
 const surgeXtRepo = "surge-synthesizer/releases-xt";
 const surgeXtPackageName = "surge-xt";
+const museScoreRepo = "musescore/MuseScore";
+const museScoreTag = "v4.7.6";
+const museScoreAppImage = "MuseScore-Studio-4.7.6.261022093-x86_64.AppImage";
+const museScoreChecksums = "checksums.sha256.txt";
+const museScoreInstallDir = "/opt/musescore-4.7.6-x86_64";
+const museScoreAppRun = join(museScoreInstallDir, "AppRun");
+const museScoreBinPath = "/usr/local/bin/musescore";
+const museScoreWrapper = ["#!/usr/bin/env bash", `exec "${museScoreAppRun}" "$@"`, ""].join("\n");
+const museScoreWrapperHash = new Bun.CryptoHasher("sha256").update(museScoreWrapper).digest("hex");
 const generalUserGsRepo = "mrbumpy409/GeneralUser-GS";
 const generalUserGsDir = join(homedir(), ".local", "share", "soundfonts");
 const generalUserGsPath = join(generalUserGsDir, "GeneralUser-GS.sf2");
@@ -328,6 +328,7 @@ export class Bootstrap {
       ["blender", () => this.installBlender()],
       ["drawio", () => this.installDrawio()],
       ["generaluser-gs", () => this.installGeneralUserGs()],
+      ["musescore", () => this.installMuseScore()],
       ["openwhispr", () => this.installOpenWhispr()],
       ["rustdesk", () => this.installRustDesk()],
       ["surge-xt", () => this.installSurgeXt()],
@@ -394,9 +395,7 @@ export class Bootstrap {
 
   private isBlenderInstalled(): boolean {
     if (
-      blenderManagedLinkPattern.test(
-        this.runtime.outputAllowFailure(["readlink", blenderBinPath]),
-      )
+      blenderManagedLinkPattern.test(this.runtime.outputAllowFailure(["readlink", blenderBinPath]))
     )
       return true;
     return this.runtime.outputAllowFailure(["bash", "-c", blenderManagedDirCommand]) !== "";
@@ -589,12 +588,8 @@ export class Bootstrap {
     ]);
     const version = tag.replace(/^v/, "");
     if (
-      this.runtime.outputAllowFailure([
-        "dpkg-query",
-        "-W",
-        "-f=${Version}",
-        surgeXtPackageName,
-      ]) === version
+      this.runtime.outputAllowFailure(["dpkg-query", "-W", "-f=${Version}", surgeXtPackageName]) ===
+      version
     )
       return;
 
@@ -620,6 +615,111 @@ export class Bootstrap {
     }
   }
 
+  private async installMuseScore(): Promise<void> {
+    if (this.runtime.output(["uname", "-m"]) !== "x86_64")
+      throw new Error("MuseScore AppImage supports x86_64 only");
+
+    if (this.runtime.succeeds(["test", "-L", museScoreBinPath]))
+      throw new Error(`refusing to replace unmanaged MuseScore path: ${museScoreBinPath}`);
+    const wrapperExists = this.runtime.succeeds(["test", "-e", museScoreBinPath]);
+    if (
+      wrapperExists &&
+      (!this.runtime.succeeds(["test", "-f", museScoreBinPath]) ||
+        this.runtime.output(["sha256sum", museScoreBinPath]).split(/\s+/, 1)[0] !==
+          museScoreWrapperHash)
+    )
+      throw new Error(`refusing to replace unmanaged MuseScore path: ${museScoreBinPath}`);
+
+    if (this.runtime.succeeds(["test", "-L", museScoreInstallDir]))
+      throw new Error(`refusing to replace MuseScore symlink: ${museScoreInstallDir}`);
+    const installed =
+      this.runtime.succeeds(["test", "-d", museScoreInstallDir]) &&
+      this.runtime.succeeds(["test", "-f", museScoreAppRun]) &&
+      this.runtime.succeeds(["test", "-x", museScoreAppRun]);
+    if (!installed && this.runtime.succeeds(["test", "-e", museScoreInstallDir]))
+      throw new Error(`refusing to replace incomplete MuseScore directory: ${museScoreInstallDir}`);
+
+    if (installed && wrapperExists) {
+      if (!this.runtime.succeeds(["test", "-x", museScoreBinPath]))
+        this.runtime.execute(["sudo", "chmod", "+x", museScoreBinPath]);
+      return;
+    }
+
+    const directory = await mkdtemp(join(tmpdir(), "bootstrap-musescore-"));
+    try {
+      if (!installed) this.downloadMuseScore(directory);
+      if (!wrapperExists) {
+        const wrapperPath = join(directory, "musescore");
+        await Bun.write(wrapperPath, museScoreWrapper);
+        this.runtime.execute(["sudo", "mkdir", "-p", "/usr/local/bin"]);
+        this.runtime.execute(["sudo", "install", "-m", "755", wrapperPath, museScoreBinPath]);
+      } else if (!this.runtime.succeeds(["test", "-x", museScoreBinPath])) {
+        this.runtime.execute(["sudo", "chmod", "+x", museScoreBinPath]);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  private downloadMuseScore(directory: string): void {
+    this.runtime.execute([
+      "gh",
+      "release",
+      "download",
+      museScoreTag,
+      "--repo",
+      museScoreRepo,
+      "--pattern",
+      museScoreAppImage,
+      "--pattern",
+      museScoreChecksums,
+      "--dir",
+      directory,
+    ]);
+    const checksums = this.runtime.output(["cat", join(directory, museScoreChecksums)]);
+    const matchingLines = checksums
+      .split(/\r?\n/)
+      .map((line) => line.match(/^(\S+) [ *](.*)$/))
+      .filter((match) => match?.[2] === museScoreAppImage);
+    const checksum = matchingLines[0]?.[1];
+    if (matchingLines.length !== 1 || !checksum || !/^[a-fA-F0-9]{64}$/.test(checksum))
+      throw new Error(`MuseScore checksum entry is missing or invalid: ${museScoreAppImage}`);
+    const appImagePath = join(directory, museScoreAppImage);
+    const actualChecksum = this.runtime.output(["sha256sum", appImagePath]).split(/\s+/, 1)[0];
+    if (actualChecksum !== checksum.toLowerCase())
+      throw new Error(`MuseScore checksum mismatch: ${museScoreAppImage}`);
+
+    this.runtime.execute(["chmod", "+x", appImagePath]);
+    this.runtime.execute([
+      "bash",
+      "-c",
+      'cd "$1" && "$2" --appimage-extract',
+      "musescore-extract",
+      directory,
+      appImagePath,
+    ]);
+    const extractedDir = join(directory, "squashfs-root");
+    if (
+      !this.runtime.succeeds(["test", "-f", join(extractedDir, "AppRun")]) ||
+      !this.runtime.succeeds(["test", "-x", join(extractedDir, "AppRun")])
+    )
+      throw new Error("MuseScore AppImage is missing an executable AppRun");
+
+    const stagingDir = join("/opt", `.${basename(directory)}`);
+    this.runtime.execute(["sudo", "mkdir", stagingDir]);
+    try {
+      this.runtime.execute(["sudo", "cp", "-a", `${extractedDir}/.`, stagingDir]);
+      this.runtime.execute(["sudo", "chown", "-hR", "root:root", stagingDir]);
+      this.runtime.execute(["sudo", "mv", "-T", "-n", stagingDir, museScoreInstallDir]);
+      if (this.runtime.succeeds(["test", "-e", stagingDir]))
+        throw new Error(
+          `MuseScore install path appeared during installation: ${museScoreInstallDir}`,
+        );
+    } finally {
+      this.runtime.execute(["sudo", "rm", "-rf", stagingDir]);
+    }
+  }
+
   private installGeneralUserGs(): void {
     const remoteBlobSha = this.runtime.output([
       "gh",
@@ -628,11 +728,7 @@ export class Bootstrap {
       "--jq",
       ".sha",
     ]);
-    const localBlobSha = this.runtime.outputAllowFailure([
-      "git",
-      "hash-object",
-      generalUserGsPath,
-    ]);
+    const localBlobSha = this.runtime.outputAllowFailure(["git", "hash-object", generalUserGsPath]);
     if (localBlobSha === remoteBlobSha) return;
 
     this.runtime.execute(["mkdir", "-p", generalUserGsDir]);
