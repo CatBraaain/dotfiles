@@ -124,11 +124,8 @@ work:
   - apt: chromium
   - flatpak: com.visualstudio.code
   - custom: drawio
-  - custom: generaluser-gs
-  - custom: musescore
   - custom: openwhispr
   - custom: rustdesk
-  - custom: surge-xt
   - brew-cask: android-commandlinetools
   - custom: android-sdk
   # OpenDesign: source install into ~/mirrors/open-design. The od wrapper in ~/.local/bin shadows /usr/bin/od.
@@ -139,3 +136,6 @@ work:
 personal:
   # blender.org official build with CUDA/OptiX support; the apt dfsg build ships without it.
   - custom: blender
+  - custom: generaluser-gs
+  - custom: musescore
+  - custom: surge-xt

@@ -67,7 +67,7 @@
 
 `generaluser-gs`の目的状態は、`~/.local/share/soundfonts/GeneralUser-GS.sf2`が`mrbumpy409/GeneralUser-GS`の`main`ブランチの同名ファイルと同一内容（git blob hash一致）であることとする。既に同一内容なら再取得しない。ダウンロード後のblob hashが一致しない場合は失敗として記録する。
 
-`musescore`は全マシン共通の`work`配列に置くCustom Handlerとする。目的状態は、公式GitHub release `musescore/MuseScore`の`v4.7.6`にある`MuseScore-Studio-4.7.6.261022093-x86_64.AppImage`をFUSE不要の方式で展開した内容が`/opt/musescore-4.7.6-x86_64/`にあり、`/usr/local/bin/musescore`が、その中の`AppRun`を絶対パスで呼び出して引数をそのまま渡す実行可能なwrapperであることとする。メニュー登録と既定のファイル関連付けは変更しない。wrapperの内容は次の2行と末尾の改行に完全一致するものとする。
+`musescore`は個人用の`personal`配列に置くCustom Handlerとする。目的状態は、公式GitHub release `musescore/MuseScore`の`v4.7.6`にある`MuseScore-Studio-4.7.6.261022093-x86_64.AppImage`をFUSE不要の方式で展開した内容が`/opt/musescore-4.7.6-x86_64/`にあり、`/usr/local/bin/musescore`が、その中の`AppRun`を絶対パスで呼び出して引数をそのまま渡す実行可能なwrapperであることとする。メニュー登録と既定のファイル関連付けは変更しない。wrapperの内容は次の2行と末尾の改行に完全一致するものとする。
 
 ```bash
 #!/usr/bin/env bash
