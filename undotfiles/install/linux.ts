@@ -5,7 +5,16 @@ import { basename, join } from "node:path";
 import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
 
 export type Key =
-  "apt" | "flatpak" | "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask" | "custom" | "run";
+  | "apt"
+  | "flatpak"
+  | "uv"
+  | "bun"
+  | "cargo"
+  | "go"
+  | "brew"
+  | "brew-cask"
+  | "custom"
+  | "run";
 type DeclarativeKey = "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask";
 type BatchableKey = "apt" | "flatpak" | "uv" | "bun" | "cargo" | "go" | "brew" | "brew-cask";
 export type Entry = { key: Key; value: string };
@@ -632,11 +641,32 @@ export class Bootstrap {
 
     if (this.runtime.succeeds(["test", "-L", museScoreInstallDir]))
       throw new Error(`refusing to replace MuseScore symlink: ${museScoreInstallDir}`);
+    const installExists = this.runtime.succeeds(["test", "-e", museScoreInstallDir]);
+    if (installExists && wrapperExists) {
+      const trustedInstallation = this.runtime.succeeds([
+        "sudo",
+        "bash",
+        "-euc",
+        'test -d "$1" && test ! -L "$1" && test ! -L "$1/AppRun" && ' +
+          'test -f "$1/AppRun" && test -x "$1/AppRun" && ' +
+          'private=$(find -P "$1" -maxdepth 0 ! -perm /011 -print) && ' +
+          'unsafe=$(find -P "$1" \\( ! -user root -o ! -group root -o ' +
+          "\\( -type d -a -perm /022 \\) -o " +
+          "\\( ! -type d -a ! -type f -a ! -type l \\) \\) -print -quit) && " +
+          'test -z "$unsafe" && { test -n "$private" || ' +
+          '{ writable=$(find -P "$1" -type f -perm /022 -print -quit) && test -z "$writable"; }; }',
+        "musescore-validate",
+        museScoreInstallDir,
+      ]);
+      if (!trustedInstallation)
+        throw new Error(`refusing to repair untrusted MuseScore directory: ${museScoreInstallDir}`);
+      this.ensureMuseScorePermissions(museScoreInstallDir);
+    }
     const installed =
       this.runtime.succeeds(["test", "-d", museScoreInstallDir]) &&
       this.runtime.succeeds(["test", "-f", museScoreAppRun]) &&
       this.runtime.succeeds(["test", "-x", museScoreAppRun]);
-    if (!installed && this.runtime.succeeds(["test", "-e", museScoreInstallDir]))
+    if (!installed && installExists)
       throw new Error(`refusing to replace incomplete MuseScore directory: ${museScoreInstallDir}`);
 
     if (installed && wrapperExists) {
@@ -706,18 +736,45 @@ export class Bootstrap {
       throw new Error("MuseScore AppImage is missing an executable AppRun");
 
     const stagingDir = join("/opt", `.${basename(directory)}`);
-    this.runtime.execute(["sudo", "mkdir", stagingDir]);
+    const payloadDir = join(stagingDir, "payload");
+    this.runtime.execute(["sudo", "mkdir", "-m", "700", stagingDir]);
     try {
-      this.runtime.execute(["sudo", "cp", "-a", `${extractedDir}/.`, stagingDir]);
-      this.runtime.execute(["sudo", "chown", "-hR", "root:root", stagingDir]);
-      this.runtime.execute(["sudo", "mv", "-T", "-n", stagingDir, museScoreInstallDir]);
-      if (this.runtime.succeeds(["test", "-e", stagingDir]))
+      this.runtime.execute(["sudo", "cp", "-a", extractedDir, payloadDir]);
+      this.runtime.execute(["sudo", "chown", "-hR", "root:root", payloadDir]);
+      this.ensureMuseScorePermissions(payloadDir);
+      this.runtime.execute(["sudo", "mv", "-T", "-n", payloadDir, museScoreInstallDir]);
+      if (this.runtime.succeeds(["sudo", "test", "-e", payloadDir]))
         throw new Error(
           `MuseScore install path appeared during installation: ${museScoreInstallDir}`,
         );
     } finally {
       this.runtime.execute(["sudo", "rm", "-rf", stagingDir]);
     }
+  }
+
+  private ensureMuseScorePermissions(directory: string): void {
+    this.runtime.execute(["sudo", "chmod", "go-rwx", directory]);
+    this.runtime.execute([
+      "sudo",
+      "find",
+      "-P",
+      directory,
+      "-mindepth",
+      "1",
+      "(",
+      "-type",
+      "d",
+      "-o",
+      "-type",
+      "f",
+      ")",
+      "-exec",
+      "chmod",
+      "a+rX,go-w",
+      "{}",
+      "+",
+    ]);
+    this.runtime.execute(["sudo", "chmod", "a+rX,go-w", directory]);
   }
 
   private installGeneralUserGs(): void {
