@@ -13,26 +13,33 @@
 ```yaml
 default: main
 
+settings:
+  zai:
+    - multiply: zai.urgency
+    - cron: "* 6-9 * * 1-5"
+      multiply: 0
+  deepseek:
+    - cron: "* 1-3 * * 1-5"
+      multiply: 0
+
 classes:
   high:
-    - provider: <provider>
-      model: <model>
-      # 時間帯で候補の有効/無効を切り替える例（終了コード 0 のとき有効）
-      when: "<bash command>"
-    - provider: <provider>
-      model: <model>
+    - model: <provider>/<model>
+    # usage スコアリングでの静的な重み。省略時は 1
+    - model: <provider>/<model>
+      weight: 1
+    # この候補だけで使うルール配列（後述）。provider設定を置き換える
+    - model: <provider>/<model>
+      settings:
+        - multiply: <provider>.urgency
   middle:
-    - provider: <provider>
-      model: <model>
-    - provider: <provider>
-      model: <model>
+    - model: <provider>/<model>
+    - model: <provider>/<model>
   low:
-    - provider: <provider>
-      model: <model>
+    - model: <provider>/<model>
   vision:
     # 画像入力をサポートするモデルだけを置く
-    - provider: <provider>
-      model: <model>
+    - model: <provider>/<model>
 
 agents:
   main:
@@ -64,8 +71,10 @@ agents:
 | `default` | 新規セッションと保存済みセッションで開始するagent |
 | `agents.<name>` | agent の定義 |
 | `classes.<name>` | class のモデル候補の配列。配列の先頭から fallback順序として評価する |
-| 候補の `provider` / `model` | 候補のモデル |
-| 候補の `when` | bashコマンド。終了コード `0` のときだけ候補が有効になる。省略・空文字なら常に有効。5秒でタイムアウトし、タイムアウト・失敗時は無効 |
+| 候補の `model` | 候補のモデル。`<provider>/<model>` 形式の文字列で、最初の `/` で provider と model に分割する（`commandcode/z-ai/glm-5.3-flash` なら provider が `commandcode`、model が `z-ai/glm-5.3-flash`）。model 部分には `<LATEST>` トークンを含められる（後述） |
+| 候補の `weight` | usage スコアリング（後述）での静的な重み。正の有限数。省略時は `1` |
+| 候補の `settings` | この候補だけで使うルール配列（後述）。指定した場合はその provider の設定を丸ごと置き換える。省略時は provider設定を使う |
+| `settings` | providerごとのルール配列（後述）。省略可。候補から参照されない provider の定義も許可する |
 | `class` | agent の既定class。必須 |
 | `tools` | pi標準ツールと拡張機能の allowlist。指定したツールを実行し、未指定のツールを拒否してセッションを継続する。`["*"]` はすべてのツール、`[]` はツールなしを許可する。`"!<tool-name>"` は `"*"` を含んでもそのツールを除外する。`["*", "!<tool-name>"]` は有効である。 |
 | `subagents` | subagentツールでの起動を許可する子agent の一覧。定義済みの agent が一覧に含まれる場合は起動し、含まれない場合や一覧が空の場合は起動せずセッションを継続する |
@@ -84,7 +93,11 @@ agents:
 - agent の `class` がない、文字列でない
 - agent が `classes` に定義されていないclass を参照している
 - `classes` がない・オブジェクトでない、class の値が配列でない
-- 候補の `provider` か `model` がない・文字列でない、`when` が文字列でない
+- 候補が `model` / `weight` / `settings` 以外のキーを持つ
+- 候補の `model` がない・文字列でない・最初の `/` で空にならない provider と model に分割できない、`weight` が正の有限数でない、`settings` が配列でない
+- `settings` がオブジェクトでない、provider のルールが配列でない、ルールがオブジェクトでない
+- ルールが `cron` / `multiply` 以外のキーを持つ、`multiply` が非負の有限数でも `<provider>.urgency` 形式でもない
+- ルールの `cron` が文字列でない、5フィールドの標準構文として不正（フィールド数が違う・値がフィールド範囲外・範囲の下限が上限より大きい・名前やマクロを含む）
 - `tools`・`subagents`・`systemPrompt` が配列でない、要素が文字列でない
 - `tools` の否定指定が `!` だけ、または `"*"` 以外の同じツール名を許可と否定の両方で指定する
 - `vision` がない、または `class` が `vision` でない
@@ -95,7 +108,7 @@ agents:
 
 ## class によるモデル選択
 
-class はデフォルトフォールバックの候補順序であり、モデルの種類による制限はしない。class の候補配列を先頭から順に評価し、最初に成立した候補を選ぶ。
+class はモデル候補の配列であり、モデルの種類による制限はしない。ハードフィルタを通った候補をusageスコア順に並べ、先頭から順に適用する。
 
 モデル候補の選択に使うclass（実効class）は、`/class` で切り替えたclass を優先し、切り替えていないときは agent の `class` を既定値とする。実効class は agent の選択とは独立であり、画像入力対応を含むモデルの種類による制限をしない。
 
@@ -103,10 +116,12 @@ class はデフォルトフォールバックの候補順序であり、モデ�
 
 | 候補の状態 | 扱い |
 | --- | --- |
+| 候補の `<LATEST>` が解決できない（レジストリに一致する版がない） | その解決から除外して次へ。次の解決で再試行する |
 | モデルがモデルレジストリに存在しない | 除外して次へ |
 | cooldown待機中（後述） | 除外して次へ |
-| `when` が終了コード `0` を返さない | 除外して次へ |
-| 上記いずれにも該当しない | その候補を選ぶ |
+| 上記いずれにも該当しない | 生存候補とする |
+
+解決1回につき `<LATEST>` の解決とハードフィルタを1回評価し、生存候補が複数なら「usage スコアリングによる候補の並べ替え」の順序を1回だけ取得する。生存候補が1件、または並べ替えに失敗した場合は設定の配列順を使う。候補の適用に失敗しても同じ配列の次へ進み、再照会・再ソートはしない。次のプロンプトや429による別の解決では再評価する。
 
 | 状態 | 結果 |
 | --- | --- |
@@ -114,6 +129,106 @@ class はデフォルトフォールバックの候補順序であり、モデ�
 | class内の全候補が不成立、または全候補で適用に失敗 | 「モデルの適用タイミング」の該当行に従う |
 
 class をまたいだ降格は行わない。この規則は候補選択の自動評価に適用され、`replace_context` による明示的なクラス指定には適用しない。
+
+## usage スコアリングによる候補の並べ替え
+
+class のハードフィルタを通った生存候補を固定の `model-route score` に渡し、スコア順に並べ替える。CLIの入出力とキャッシュの仕様は `dotfiles/.agents/cli.exact/model-route/SPEC.md` を参照する。CLIは provider の利用残量・リセット時刻・期間から計算した正規化urgency を含む事実を入力順で返すだけであり、policy の解釈・並べ替えは拡張が担う。モデルへのリクエストと、レート制限・cooldown の管理も拡張が担う。
+
+拡張は候補の `provider` と `model`（`<LATEST>` 解決済み）だけをCLIに送る。解決1回につき各候補のスコアを1回だけ計算し、降順に安定ソートする。同点は設定の配列順を維持し、CLIの出力順は順序の判断に使わない。同一 provider/model の重複候補も、それぞれの `weight` と `settings` で独立にスコア付けする。
+
+スコアの計算式は「settings ルール（provider設定・cron・名前空間multiply）」が定める。スコアが0の候補も削除せず、並べ替えだけで順位が下がるだけとする。
+
+| 項目 | 挙動 |
+| --- | --- |
+| キャッシュ更新 | CLIに任せる。解決処理とは別の予熱は行わない |
+| 候補の並べ替え | 生存候補が複数のときだけ `model-route score` を実行する。1件なら実行しない |
+| CLI 不在（終了コード 127）・出力不正 | セッション内でスコアリングを無効化し、以後は配列順で選ぶ |
+| CLI実行失敗・タイムアウト | その解決だけ設定の配列順で選び、無効化はしない。CLI実行の上限は25秒 |
+| CLIのstderr診断 | stdoutのJSONと分離し、有効な配列の適用を妨げない |
+| 適用に失敗した候補 | 取得した同じ配列の次候補へ進む。再照会はしない |
+| 手動選択中 | 自動並べ替えは行わない（既存の自動選択停止の規定に従う） |
+
+スコアリングは候補の選択順序だけを変え、cooldown・レート制限時のフォールバックの挙動は変更しない。
+
+## settings ルール（provider設定・cron・名前空間multiply）
+
+ルールは「倍率」であり、候補のスコアは次の形になる。暗黙の倍率はなく、ルールとして書いたときだけ掛かる。
+
+```text
+score = (weight ?? 1) × 有効ルールの multiply₁ × multiply₂ × …
+```
+
+ルールの適用対象は3段階で決まる。候補の `settings` がある場合はそれを使い、その provider の `settings.<provider>` 設定は使わない（継承・マージではない置換）。候補の `settings` がなく provider設定がある場合は provider設定を使う。どちらもない場合はルールなし（×1）である。
+
+```yaml
+settings:
+  zai:
+    - multiply: zai.urgency
+    - cron: "* 6-9 * * 1-5"
+      multiply: 0
+  deepseek:
+    - cron: "* 1-3 * * 1-5"
+      multiply: 0
+
+classes:
+  high:
+    - model: zai/glm-5.3
+    - model: zai/glm-5.3-flash
+      settings:
+        - multiply: zai.urgency
+```
+
+ルールは2種類である。どちらも `multiply` は非負の有限数（0・0.5・1.5 などを許す）、または `<provider>.urgency` 形式の名前空間参照である。
+
+| ルール | 有効条件 | multiply |
+| --- | --- | --- |
+| `{multiply: <値>}` | 常に有効 | 数値はそのまま、名前空間参照は該当providerのurgency |
+| `{cron: <式>, multiply: <値>}` | 現在時刻（UTC）が cron 式にマッチする間だけ有効 | 同上 |
+
+### 名前空間multiply
+
+`<provider>.urgency` は、最後の `.` で provider 部分と field 部分に分割し、field は `urgency` のみを認める（それ以外は設定エラー）。値は、その解決のCLI事実から作った provider→urgency マップで解決する。自分の provider（`zai.urgency` を zai 候補に使う自己参照）も、別 provider（cross-provider参照）も同じマップから引く。該当する provider の候補がその解決にない、または urgency が不明（usage 不明・リセット済み）のときは 1 を掛ける。provider 名はCLIへ送った文字列そのもので照合し、CLI内部の provider alias とは無関係である。
+
+### cron 式
+
+標準の5フィールド構文（分 時 日 月 曜日）で、UTC の現在時刻で評価する。分・時・日・月・曜日の全フィールドがマッチする瞬間のみルールが有効である。各フィールドで使える項目は次のとおり。名前（`JAN`・`SUN`）とマクロ（`@daily`）は拒否する。
+
+| 項目 | 意味 |
+| --- | --- |
+| `*` | フィールドの全範囲 |
+| 数値 | その値だけ |
+| `a-b` | a 以上 b 以下の範囲（両端を含む） |
+| `a,b,c` | リスト。各要素は上記のいずれか |
+| `*/n` | フィールド最小値から n Step ごと |
+| `a-b/n` | a から b まで n Step ごと |
+
+| フィールド | 範囲 |
+| --- | --- |
+| 分 | 0〜59 |
+| 時 | 0〜23 |
+| 日 | 1〜31 |
+| 月 | 1〜12 |
+| 曜日 | 0〜7（7 は 0 と同じ日曜） |
+
+範囲の下限が上限より大きい式、フィールド範囲外の値、フィールド数が5でない式は設定エラーである。曜日の 0 と 7 の同値扱い以外に特殊規則は作らない（日と曜日の OR 合成などもしない）。
+
+| 項目 | 挙動 |
+| --- | --- |
+| 複数のルール | すべて評価し、有効なルールの `multiply` を乗算する |
+| cron非マッチのルール | そのルールは無効（×1） |
+| ルールなし | 補正なし（×1）。候補は重みだけのスコアになる |
+| 名前空間参照・urgency 不明 | 1 を掛ける。候補は保持する |
+| 候補・ルールの未知キー、負や無限の `multiply`、不正な cron 式 | 設定検証で失敗させる |
+| 候補から参照されない provider の設定 | 許可する |
+| スコア0の候補 | 削除せず、並べ替えだけで順位が下がる |
+
+## <LATEST> トークンの解決
+
+候補の model 部分には `<LATEST>` トークンを含められる（`zai/glm-<LATEST>`、`openai-codex/gpt-<LATEST>-sol` など）。トークンはルーティング時（候補のハードフィルタの前）に解決し、解決1回につき1回だけ行う。解決済みの候補はそのまま既存の候補フロー（レジストリ検索・cooldown・スコアリング）を通る。
+
+解決は、テンプレートの `<LATEST>` を `\d+(?:\.\d+)*` に置いた正規表現で、同providerのレジストリ全chatモデルの id に完全一致照合し、捕まえた版文字列を比較して最大のものを採用。版の比較は `.` 区切りの数値セグメント比較（数値として比較）で、全セグメントが等しい場合はセグメント数が多い方を大きいとする（`5.3.1` > `5.3`、`5.10` > `5.9`）。
+
+一致する版が1件もない候補は、その解決では利用不可として除外する（レジストリに存在しない候補と同じ扱い）。次の解決で再試行するため、レジストリが更新されれば使えるようになる。
 
 ## クラス変更イベント
 

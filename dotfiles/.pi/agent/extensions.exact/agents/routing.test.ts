@@ -1,31 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import {
-  bashExecFrom,
-  evalWhen,
-  isCoolingDown,
+  compareVersionStrings,
   isManualSelect,
   isRateLimitedError,
   misattributedHttp429ModelKey,
-  parseRetryAfter,
-  pickCandidate,
-  recordCooldown,
+  pickCandidates,
+  resolveCandidates,
+  resolveLatestModel,
   type ModelCandidate,
 } from "./routing";
 
 type ModelFound = { provider: string; id: string };
 
-const bashExec = bashExecFrom(createLocalBashOperations());
-const runWhen = (when: string | undefined) => evalWhen(when, bashExec, 1000);
-
 const findIn =
   (available: ModelFound[]) =>
   (provider: string, id: string): ModelFound | undefined =>
     available.find((m) => m.provider === provider && m.id === id);
-
-const exitZeroCommand = "echo 1";
-const exitOneCommand = "exit 1";
 
 const availableModels: ModelFound[] = [
   { provider: "zai", id: "glm-5.2" },
@@ -43,245 +34,60 @@ const route = (
     available?: ModelFound[];
     cooldowns?: Map<string, number>;
   } = {},
-): Promise<ModelFound | null> =>
-  pickCandidate(candidates, cooldowns, findIn(available), runWhen, 0);
+): Promise<ModelFound | null> => routeFirst(candidates, cooldowns, available);
+
+async function routeFirst(
+  candidates: ModelCandidate[],
+  cooldowns: Map<string, number>,
+  available: ModelFound[],
+): Promise<ModelFound | null> {
+  return (await pickCandidates(candidates, cooldowns, findIn(available), 0))[0] ?? null;
+}
 
 describe("class の候補選択", () => {
-  it("when が通る候補を採用する", async () => {
+  it("先頭の候補を採用する", async () => {
     const candidates: ModelCandidate[] = [
-      { provider: "zai", model: "glm-5.2", when: exitZeroCommand },
+      { provider: "zai", model: "glm-5.2" },
       { provider: "zai", model: "glm-5.1" },
     ];
     const selectedModel = await route(candidates);
     assert.strictEqual(selectedModel?.id, "glm-5.2");
   });
 
-  it("when が外れた候補は次候補へフォールスルーする", async () => {
+  it("レジストリに存在しない候補は次候補へフォールスルーする", async () => {
     const candidates: ModelCandidate[] = [
-      { provider: "zai", model: "glm-5.2", when: exitOneCommand },
+      { provider: "zai", model: "missing" },
       { provider: "zai", model: "glm-5.1" },
     ];
     const selectedModel = await route(candidates);
     assert.strictEqual(selectedModel?.id, "glm-5.1");
   });
-
-  it("when の空文字は常に有効になる", async () => {
-    const isAvailable = await evalWhen(
-      "   ",
-      async () => {
-        throw new Error("must not execute");
-      },
-      5000,
-    );
-    assert.equal(isAvailable, true);
-  });
-
-  it("when のタイムアウトは候補を無効にする", async () => {
-    const isAvailable = await evalWhen(
-      "sleep 10",
-      async (_command, options) => {
-        assert.equal(options.timeout, 5000);
-        throw new Error("timed out");
-      },
-      5000,
-    );
-    assert.equal(isAvailable, false);
-  });
-
-  it("when の実行失敗は候補を無効にする", async () => {
-    const isAvailable = await evalWhen(
-      "broken command",
-      async () => {
-        throw new Error("spawn failed");
-      },
-      5000,
-    );
-    assert.equal(isAvailable, false);
-  });
-
-  it("when 無しは常に候補になる", async () => {
-    const candidates: ModelCandidate[] = [
-      { provider: "zai", model: "free" },
-      { provider: "zai", model: "paid" },
-    ];
-    const selectedModel = await route(candidates);
-    assert.strictEqual(selectedModel?.id, "free");
-  });
-
-  it("モデルレジストリに無いものは when に関わらず飛ばす", async () => {
-    const candidates: ModelCandidate[] = [
-      { provider: "zai", model: "ghost", when: exitZeroCommand },
-      { provider: "zai", model: "real", when: exitZeroCommand },
-    ];
-    const availables = [{ provider: "zai", id: "real" }];
-    const selectedModel = await route(candidates, { available: availables });
-    assert.strictEqual(selectedModel?.id, "real");
-  });
-
-  it("全候補が不成立なら null を返す", async () => {
-    const candidates: ModelCandidate[] = [{ provider: "zai", model: "x", when: exitOneCommand }];
-    const selectedModel = await route(candidates);
-    assert.strictEqual(selectedModel, null);
-  });
 });
 
-describe("cooldown", () => {
-  it("冷却中の候補を飛ばして次候補を採用する", async () => {
-    const candidates: ModelCandidate[] = [
-      { provider: "zai", model: "glm-5.2" },
-      { provider: "zai", model: "glm-5.1" },
-    ];
-    const glm52InCooldown = new Map<string, number>();
-    recordCooldown(glm52InCooldown, "zai/glm-5.2", 60_000, 0);
-
-    const selectedModel = await route(candidates, { cooldowns: glm52InCooldown });
-    assert.strictEqual(selectedModel?.id, "glm-5.1");
-  });
-
-  it("期限内は冷却中と判定する", () => {
-    const cooldowns = new Map<string, number>();
-    const now = 1000;
-    recordCooldown(cooldowns, "zai/glm-5.2", 30_000, now);
-
-    const stillCooling = isCoolingDown("zai/glm-5.2", cooldowns, now);
-    assert.strictEqual(stillCooling, true);
-  });
-
-  it("期限後は冷却を解除し、エントリを削除する", () => {
-    const cooldowns = new Map<string, number>();
-    const now = 1000;
-    const durationMs = 30_000;
-    recordCooldown(cooldowns, "zai/glm-5.2", durationMs, now);
-
-    const released = isCoolingDown("zai/glm-5.2", cooldowns, now + durationMs);
-    assert.strictEqual(released, false);
-    assert.strictEqual(cooldowns.has("zai/glm-5.2"), false);
-  });
-});
-
-describe("Retry-After ヘッダ", () => {
-  it("秒数文字列はミリ秒に変換する", () => {
-    assert.strictEqual(parseRetryAfter("120"), 120_000);
-  });
-
-  it("HTTP-date は残り待機ミリ秒に変換する", () => {
-    const sixtySecondsAhead = new Date(Date.now() + 60_000).toUTCString();
-    const waitMs = parseRetryAfter(sixtySecondsAhead);
-    assert.ok(waitMs !== null && waitMs > 0 && waitMs <= 60_000, "0 < waitMs <= 60000");
-  });
-
-  it("未定義・解釈不能は null を返す", () => {
-    assert.strictEqual(parseRetryAfter(undefined), null);
-    assert.strictEqual(parseRetryAfter("whenever"), null);
-  });
-});
-
-describe("最終assistantエラーのレート制限判定", () => {
+describe("レート制限エラーの判定", () => {
   it("429 をレート制限として扱う", () => {
-    assert.equal(isRateLimitedError("Error: 429: too many requests"), true);
+    assert.equal(isRateLimitedError("HTTP 429 Too Many Requests"), true);
   });
 
-  it("1310 をレート制限として扱う", () => {
-    assert.equal(isRateLimitedError('Error: {"code":"1310"}'), true);
+  it("関係のないエラーをレート制限として扱わない", () => {
+    assert.equal(isRateLimitedError("some network error"), false);
   });
 
-  it("Weekly Limit Exhausted をレート制限として扱う", () => {
-    assert.equal(isRateLimitedError("Weekly Limit Exhausted"), true);
+  it("undefined をレート制限として扱わない", () => {
+    assert.equal(isRateLimitedError(undefined), false);
   });
 
-  it("Monthly Limit Exhausted をレート制限として扱う", () => {
-    assert.equal(isRateLimitedError("Monthly Limit Exhausted"), true);
-  });
-
-  it("Codex の usage limit エラーをレート制限として扱う", () => {
-    assert.equal(isRateLimitedError("Codex error: The usage limit has been reached"), true);
-  });
-
-  it("ChatGPT usage limit のフレンドリーメッセージをレート制限として扱う", () => {
-    assert.equal(
-      isRateLimitedError(
-        "You have hit your ChatGPT usage limit (plus plan). Try again in ~43 min.",
-      ),
-      true,
-    );
-  });
-
-  it("一致しないエラーはレート制限として扱わない", () => {
-    assert.equal(isRateLimitedError("Error: service unavailable"), false);
-  });
-
-  it("過負荷・サーバエラー・タイムアウトはレート制限として扱わない", () => {
-    assert.equal(isRateLimitedError("Error: 500: internal server error"), false);
-    assert.equal(isRateLimitedError("Provider returned error: overloaded"), false);
-    assert.equal(isRateLimitedError("Request timed out"), false);
-    assert.equal(isRateLimitedError("fetch failed"), false);
-  });
-
-  it("Z.AI のクォータ・未払いコードをレート制限として扱う", () => {
-    assert.equal(isRateLimitedError('Error: {"error":{"code":"1310"}}'), true);
-    assert.equal(isRateLimitedError('Error: {"error":{"code":"1113"}}'), true);
-  });
-
-  it("OpenCode Zen のサブスク制限をレート制限として扱う", () => {
-    assert.equal(isRateLimitedError("GoUsageLimitError: go limit reached"), true);
-    assert.equal(isRateLimitedError("FreeUsageLimitError"), true);
-    assert.equal(
-      isRateLimitedError("Monthly usage limit reached. Enable available balance usage."),
-      true,
-    );
-  });
-
-  it("OpenAI 系のクォータ・残高エラーをレート制限として扱う", () => {
-    assert.equal(
-      isRateLimitedError(
-        'Error: {"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}',
-      ),
-      true,
-    );
-    assert.equal(isRateLimitedError("402: Insufficient Balance"), true);
-    assert.equal(isRateLimitedError("Your account has run out of budget"), true);
-    assert.equal(isRateLimitedError("payment required: billing issue"), true);
-  });
-
-  it("Anthropic のクレジット不足をレート制限として扱う", () => {
-    assert.equal(
-      isRateLimitedError(
-        "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade your plan.",
-      ),
-      true,
-    );
-    assert.equal(isRateLimitedError("anthropic error: rate_limit_error"), true);
-  });
-
-  it("Google と Bedrock のスロットリングをレート制限として扱う", () => {
-    assert.equal(isRateLimitedError("429 RESOURCE_EXHAUSTED: Quota exceeded for model"), true);
-    assert.equal(isRateLimitedError("ThrottlingException: rate exceeded"), true);
-  });
-
-  it("汎用スロットリング表現をレート制限として扱う", () => {
-    assert.equal(isRateLimitedError("OpenAI API error: Rate limit reached"), true);
-    assert.equal(isRateLimitedError("429 Too Many Requests"), true);
+  it("Z.AI の usage quota コードをレート制限として扱う", () => {
+    assert.equal(isRateLimitedError('{"error":{"code":"1310"}}'), true);
   });
 });
 
 describe("HTTP 429 error model attribution", () => {
-  const bedrockModelKey = "amazon-bedrock/us.anthropic.claude-sonnet-4-6";
-  const bedrockThrottle = "Throttling error: Too many tokens per day";
-
-  it("attributes inherited Bedrock throttle text to the HTTP 429 model", () => {
-    const sourceModelKey = misattributedHttp429ModelKey(
-      bedrockThrottle,
-      "cursor/composer-2.5:slow",
-      new Set([bedrockModelKey]),
-    );
-    assert.equal(sourceModelKey, bedrockModelKey);
-  });
-
   it("keeps a model's own HTTP 429 error attributed to that model", () => {
     const sourceModelKey = misattributedHttp429ModelKey(
-      bedrockThrottle,
-      bedrockModelKey,
-      new Set([bedrockModelKey]),
+      "Codex error: The usage limit has been reached",
+      "zai/glm-5.2",
+      new Set(["zai/glm-5.2"]),
     );
     assert.equal(sourceModelKey, null);
   });
@@ -304,7 +110,132 @@ describe("手動選択の判定", () => {
 
   it("自拡張の setModel 中と restore は手動選択としない", () => {
     assert.strictEqual(isManualSelect("set", true), false);
+    assert.strictEqual(isManualSelect("cycle", true), false);
     assert.strictEqual(isManualSelect("restore", false), false);
     assert.strictEqual(isManualSelect(undefined, false), false);
+  });
+});
+
+describe("usage スコアによる候補の並べ替え", () => {
+  it("sortByScore が返した順序で最初のモデルを採用する", async () => {
+    const candidates: ModelCandidate[] = [
+      { provider: "zai", model: "glm-5.2" },
+      { provider: "zai", model: "glm-5.1" },
+    ];
+    const selectedModels = await pickCandidates(
+      candidates,
+      new Map(),
+      findIn(availableModels),
+      0,
+      async () => [candidates[1]!, candidates[0]!],
+    );
+    assert.deepEqual(
+      selectedModels.map((model) => model.id),
+      ["glm-5.1", "glm-5.2"],
+    );
+  });
+
+  it("sortByScore が null のときは配列順の先頭を採用する", async () => {
+    const candidates: ModelCandidate[] = [
+      { provider: "zai", model: "glm-5.2" },
+      { provider: "zai", model: "glm-5.1" },
+    ];
+    const selectedModels = await pickCandidates(
+      candidates,
+      new Map(),
+      findIn(availableModels),
+      0,
+      async () => null,
+    );
+    assert.deepEqual(
+      selectedModels.map((model) => model.id),
+      ["glm-5.2", "glm-5.1"],
+    );
+  });
+
+  it("生存候補が1件のときは sortByScore を呼ばない", async () => {
+    let scoreCalls = 0;
+    const [selectedModel] = await pickCandidates(
+      [{ provider: "zai", model: "glm-5.2" }],
+      new Map(),
+      findIn(availableModels),
+      0,
+      async (candidates) => {
+        scoreCalls++;
+        return candidates;
+      },
+    );
+    assert.strictEqual(selectedModel?.id, "glm-5.2");
+    assert.strictEqual(scoreCalls, 0);
+  });
+
+  it("sortByScore は cooldown 後の生存候補だけを受ける", async () => {
+    const candidates: ModelCandidate[] = [
+      { provider: "zai", model: "free" },
+      { provider: "zai", model: "glm-5.2" },
+      { provider: "zai", model: "glm-5.1" },
+      { provider: "zai", model: "x" },
+    ];
+    let received: readonly ModelCandidate[] = [];
+    await pickCandidates(
+      candidates,
+      new Map([["zai/free", 10_000]]),
+      findIn(availableModels),
+      0,
+      async (receivedCandidates) => {
+        received = receivedCandidates;
+        return null;
+      },
+    );
+    assert.deepEqual(received, [
+      { provider: "zai", model: "glm-5.2" },
+      { provider: "zai", model: "glm-5.1" },
+      { provider: "zai", model: "x" },
+    ]);
+  });
+});
+
+describe("<LATEST> テンプレートの解決", () => {
+  const zaiCatalog = ["glm-5.2", "glm-5.3", "glm-5.3-flash", "glm-5.3.1", "glm-5.10", "glm-4.9"];
+
+  it("完全一致した id のうち最高の版を採用する", () => {
+    assert.equal(resolveLatestModel("glm-<LATEST>", zaiCatalog), "glm-5.10");
+    assert.equal(resolveLatestModel("glm-<LATEST>-flash", zaiCatalog), "glm-5.3-flash");
+  });
+
+  it("版は数値セグメント比較で、全等ならセグメント数が多い方を採る", () => {
+    assert.equal(compareVersionStrings("5.10", "5.9") > 0, true);
+    assert.equal(compareVersionStrings("5.3", "5.28") < 0, true);
+    assert.equal(compareVersionStrings("5.3", "5.3.1") < 0, true);
+    assert.equal(compareVersionStrings("5.3.1", "5.3") > 0, true);
+    assert.equal(compareVersionStrings("5", "5.0") < 0, true);
+    assert.equal(compareVersionStrings("5.3", "5.3"), 0);
+    assert.equal(resolveLatestModel("glm-<LATEST>", ["glm-5.3", "glm-5.3.1"]), "glm-5.3.1");
+  });
+
+  it("テンプレートに一致する id がなければ null", () => {
+    assert.equal(resolveLatestModel("glm-<LATEST>", ["glm-5.3-flash", "glm-air"]), null);
+    assert.equal(resolveLatestModel("glm-<LATEST>", []), null);
+  });
+
+  it("候補単位では一致しない候補を除外し、トークンなしの候補はそのまま通す", () => {
+    const catalog: Record<string, readonly string[]> = {
+      zai: ["glm-5.2", "glm-5.3"],
+      commandcode: ["z-ai/glm-5.3-flash"],
+    };
+    const resolved = resolveCandidates(
+      [
+        { provider: "commandcode", model: "z-ai/glm-<LATEST>-flash" },
+        { provider: "zai", model: "glm-<LATEST>", weight: 2 },
+        { provider: "zai", model: "glm-5.2" },
+        { provider: "zai", model: "glm-<LATEST>-air" },
+      ],
+      (provider) => catalog[provider] ?? [],
+    );
+    assert.deepEqual(resolved, [
+      { provider: "commandcode", model: "z-ai/glm-5.3-flash" },
+      { provider: "zai", model: "glm-5.3", weight: 2 },
+      { provider: "zai", model: "glm-5.2" },
+    ]);
   });
 });

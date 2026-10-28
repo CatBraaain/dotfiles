@@ -14,7 +14,6 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
 import {
-  createLocalBashOperations,
   getAgentDir,
   type ExtensionAPI,
   type ExtensionContext,
@@ -26,20 +25,20 @@ export { spinnerTimers as __spinnerTimers } from "../shared/spinner-timers.ts";
 
 import { parse as parseYaml } from "yaml";
 import {
-  bashExecFrom,
   DEFAULT_COOLDOWN_MS,
-  evalWhen,
   isManualSelect,
   isRateLimitedError,
   misattributedHttp429ModelKey,
   modelKey,
   modelSupportsImages,
   parseRetryAfter,
-  pickCandidate,
+  pickCandidates,
   recordCooldown,
-  WHEN_TIMEOUT_MS,
+  resolveCandidates,
   type ModelCandidate,
+  type SettingsRule,
 } from "./routing.ts";
+import { cronMatches, parseCronExpression } from "./cron.ts";
 import {
   CLASS_CHANGE_EVENT,
   requestClassChange,
@@ -49,6 +48,7 @@ import {
 } from "./class-change.ts";
 import { truncateErrorOutput } from "../shared/tool-text.ts";
 import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
+import { runModelRoute } from "./model-route.ts";
 
 export type Agent = string;
 
@@ -61,6 +61,7 @@ export interface AgentDefinition {
 
 export interface AgentConfig {
   default: Agent;
+  settings?: Record<string, readonly SettingsRule[]>;
   classes: Record<string, readonly ModelCandidate[]>;
   agents: Record<Agent, AgentDefinition>;
 }
@@ -78,20 +79,94 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+const NAMESPACE_MULTIPLY = /^(.+)\.urgency$/;
+
+function isSettingsMultiply(value: unknown): value is number | string {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0;
+  return typeof value === "string" && NAMESPACE_MULTIPLY.test(value);
+}
+
+function parseSettingsRules(raw: unknown, context: string): readonly SettingsRule[] | string {
+  if (!Array.isArray(raw)) return `${context} must be an array of rules`;
+  const rules: SettingsRule[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) return `${context} rule must be an object`;
+    for (const key of Object.keys(entry)) {
+      if (key !== "cron" && key !== "multiply") {
+        return `${context} rule has an unknown key: ${key}`;
+      }
+    }
+    const { cron, multiply } = entry;
+    if (!isSettingsMultiply(multiply)) {
+      return `${context} rule has an invalid multiply`;
+    }
+    let schedule: ReturnType<typeof parseCronExpression> | undefined;
+    if (cron !== undefined) {
+      if (typeof cron !== "string") {
+        return `${context} rule has an invalid cron expression`;
+      }
+      try {
+        schedule = parseCronExpression(cron);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return `${context} rule has an invalid cron expression: ${reason}`;
+      }
+    }
+    if (typeof multiply === "string") {
+      const provider = NAMESPACE_MULTIPLY.exec(multiply)![1]!;
+      rules.push({
+        ...(schedule === undefined ? {} : { cron: schedule }),
+        multiply: { provider },
+      });
+      continue;
+    }
+    rules.push({
+      ...(schedule === undefined ? {} : { cron: schedule }),
+      multiply,
+    });
+  }
+  return rules;
+}
+
 // class の候補配列 1 件分を検証する。不正ならエラーメッセージを返す。
 function parseCandidates(raw: unknown, className: string): ModelCandidate[] | string {
   if (!Array.isArray(raw)) return `class ${className} must be an array of candidates`;
   const candidates: ModelCandidate[] = [];
   for (const entry of raw) {
     if (!isRecord(entry)) return `class ${className} candidate must be an object`;
-    const { provider, model, when } = entry;
-    if (!isNonEmptyString(provider) || !isNonEmptyString(model)) {
-      return `class ${className} candidate needs provider and model strings`;
+    for (const key of Object.keys(entry)) {
+      if (key !== "model" && key !== "weight" && key !== "settings") {
+        return `class ${className} candidate has an unknown key: ${key}`;
+      }
     }
-    if (when !== undefined && typeof when !== "string") {
-      return `class ${className} candidate has an invalid when`;
+    const { model, weight, settings } = entry;
+    if (!isNonEmptyString(model)) {
+      return `class ${className} candidate needs a model string`;
     }
-    candidates.push(when === undefined ? { provider, model } : { provider, model, when });
+    const separator = model.indexOf("/");
+    const provider = model.slice(0, separator);
+    const modelName = model.slice(separator + 1);
+    if (separator === -1 || provider === "" || modelName === "") {
+      return `class ${className} candidate model must be <provider>/<model>: ${model}`;
+    }
+    if (
+      weight !== undefined &&
+      (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0)
+    ) {
+      return `class ${className} candidate has an invalid weight`;
+    }
+    let rules: readonly SettingsRule[] | undefined;
+    if (settings !== undefined) {
+      const parsed = parseSettingsRules(settings, `class ${className} candidate settings`);
+      if (typeof parsed === "string") return parsed;
+      rules = parsed;
+    }
+    candidates.push({
+      provider,
+      model: modelName,
+      ...(weight === undefined ? {} : { weight }),
+      ...(rules === undefined ? {} : { settings: rules }),
+    });
   }
   return candidates;
 }
@@ -103,6 +178,18 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
       return { error: "default and agents are required" };
     }
     if (!isRecord(document.classes)) return { error: "classes are required" };
+
+    const settings: Record<string, readonly SettingsRule[]> = {};
+    if (document.settings !== undefined) {
+      if (!isRecord(document.settings)) {
+        return { error: "settings must be an object of provider -> rules" };
+      }
+      for (const [providerName, rawRules] of Object.entries(document.settings)) {
+        const rules = parseSettingsRules(rawRules, `settings.${providerName}`);
+        if (typeof rules === "string") return { error: rules };
+        settings[providerName] = rules;
+      }
+    }
 
     const classes: Record<string, readonly ModelCandidate[]> = {};
     for (const [className, rawCandidates] of Object.entries(document.classes)) {
@@ -167,10 +254,61 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
       }
     }
 
-    return { config: { default: document.default, classes, agents } };
+    return {
+      config: {
+        default: document.default,
+        ...(Object.keys(settings).length === 0 ? {} : { settings }),
+        classes,
+        agents,
+      },
+    };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export interface RouteFacts {
+  urgency: number | null;
+  remaining: number | null;
+}
+
+export function parseRouteFacts(
+  stdout: string,
+  candidates: readonly ModelCandidate[],
+): RouteFacts[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length !== candidates.length) return null;
+  const facts: RouteFacts[] = [];
+  for (const [index, entry] of parsed.entries()) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const { provider, model, urgency, usageState } = entry as Record<string, unknown>;
+    const candidate = candidates[index]!;
+    if (provider !== candidate.provider || model !== candidate.model) return null;
+    if (urgency !== null && (typeof urgency !== "number" || !Number.isFinite(urgency))) {
+      return null;
+    }
+    const remaining = readRouteRemaining(usageState);
+    if (remaining === undefined) return null;
+    facts.push({ urgency, remaining });
+  }
+  return facts;
+}
+
+function readRouteRemaining(usageState: unknown): number | null | undefined {
+  if (usageState === null) return null;
+  if (
+    typeof usageState === "object" &&
+    typeof (usageState as Record<string, unknown>).remaining === "number" &&
+    Number.isFinite((usageState as Record<string, unknown>).remaining)
+  ) {
+    return (usageState as Record<string, unknown>).remaining as number;
+  }
+  return undefined;
 }
 
 export function agentConfigPath(agentDir = getAgentDir()): string {
@@ -901,6 +1039,7 @@ function registerAgentWidget(
 export default function agentsExtension(
   pi: ExtensionAPI,
   injectedConfig: ConfigLoadResult = loadAgentConfig(),
+  executeRoute: typeof runModelRoute = runModelRoute,
 ): void {
   if (injectedConfig.config === undefined)
     throw new Error(`agents.yaml: ${injectedConfig.error ?? "configuration is invalid"}`);
@@ -1051,9 +1190,61 @@ export default function agentsExtension(
   const http429ModelKeys = new Set<string>();
   let http429TurnFallbackDone = false;
 
-  const bashExec = bashExecFrom(createLocalBashOperations());
-  const runWhen = (when: string | undefined, signal?: AbortSignal) =>
-    evalWhen(when, bashExec, WHEN_TIMEOUT_MS, signal);
+  let routingUsageDisabled = false;
+
+  async function routeCandidates(
+    candidates: readonly ModelCandidate[],
+    signal?: AbortSignal,
+  ): Promise<readonly ModelCandidate[] | null> {
+    if (routingUsageDisabled) return null;
+    try {
+      const { exitCode, stdout } = await executeRoute(candidates, signal);
+      if (exitCode === 127) {
+        routingUsageDisabled = true;
+        return null;
+      }
+      if (exitCode !== 0) return null;
+      const facts = parseRouteFacts(stdout, candidates);
+      if (facts === null) {
+        routingUsageDisabled = true;
+        return null;
+      }
+      const now = new Date();
+      const providerUrgency = new Map<string, number | null>();
+      candidates.forEach((candidate, index) => {
+        if (!providerUrgency.has(candidate.provider)) {
+          providerUrgency.set(candidate.provider, facts[index]!.urgency);
+        }
+      });
+      return candidates
+        .map((candidate) => ({
+          candidate,
+          score: scoreCandidate(candidate, providerUrgency, now),
+        }))
+        .sort((a, b) => b.score - a.score)
+        .map(({ candidate }) => candidate);
+    } catch {
+      return null;
+    }
+  }
+
+  function scoreCandidate(
+    candidate: ModelCandidate,
+    providerUrgency: ReadonlyMap<string, number | null>,
+    now: Date,
+  ): number {
+    let score = candidate.weight ?? 1;
+    const rules = candidate.settings ?? config.settings?.[candidate.provider] ?? [];
+    for (const rule of rules) {
+      if (rule.cron !== undefined && !cronMatches(rule.cron, now)) continue;
+      if (typeof rule.multiply === "number") {
+        score *= rule.multiply;
+      } else {
+        score *= providerUrgency.get(rule.multiply.provider) ?? 1;
+      }
+    }
+    return score;
+  }
 
   async function switchTo(model: Model<Api>): Promise<boolean> {
     switching = true;
@@ -1064,13 +1255,6 @@ export default function agentsExtension(
     }
   }
 
-  // class の候補を先頭から適用する。レジストリ不在・cooldown・when 不成立の候補は
-  // pickCandidate が飛ばし、適用に失敗した候補（API キー欠如等）は除外
-  // して次候補へ進む。現在のモデルと同じ候補なら切り替えない。全候補不成立なら null。
-  // notifySwitch を false にすると切替時の `agent model →` 通知を省く（429 フォールバックは
-  // 「レート制限時のフォールバック」節の通知が専らを定めるため）。
-  // SPEC「class によるモデル選択」: 実効 class は /class での選択を優先し、未選択なら
-  // agent の既定 class を使う。agent の選択とは独立している。
   function effectiveClass(agent: Agent): string | undefined {
     return currentClass ?? config.agents[agent]?.class;
   }
@@ -1083,16 +1267,18 @@ export default function agentsExtension(
   ): Promise<string | null> {
     const className = effectiveClass(agent);
     if (!className) return null;
-    let candidates = config.classes[className] ?? [];
-    for (;;) {
-      const model = await pickCandidate(
-        candidates,
-        cooldowns,
-        (provider, id) => ctx.modelRegistry.find(provider, id),
-        (when) => runWhen(when, signal),
-        Date.now(),
-      );
-      if (!model) return null;
+    const candidates = resolveCandidates(config.classes[className] ?? [], (provider) =>
+      ctx.modelRegistry.getModelsOfType("chat", provider).map((model) => model.id),
+    );
+    const models = await pickCandidates(
+      candidates,
+      cooldowns,
+      (provider, id) => ctx.modelRegistry.find(provider, id),
+      Date.now(),
+      (survivors) => routeCandidates(survivors, signal),
+    );
+    for (const model of models) {
+      if (signal?.aborted) return null;
       if (ctx.model && ctx.model.provider === model.provider && ctx.model.id === model.id) {
         return modelKey(model);
       }
@@ -1101,11 +1287,8 @@ export default function agentsExtension(
           ctx.ui.notify(`agent model → ${model.provider}/${model.id}`, "info");
         return modelKey(model);
       }
-      const failed = model;
-      candidates = candidates.filter(
-        (candidate) => !(candidate.provider === failed.provider && candidate.model === failed.id),
-      );
     }
+    return null;
   }
 
   function notifyNoModel(agent: Agent, ctx: ExtensionContext, level: "warning" | "error"): void {
@@ -1180,6 +1363,7 @@ export default function agentsExtension(
     }
 
     manual = false;
+    routingUsageDisabled = false;
     selectionSource = "auto";
     currentClass = resolveInitialClass(ctx);
     // /new は cooldown をすべて破棄する。セッション切替・分岐（resume/fork）は維持する。

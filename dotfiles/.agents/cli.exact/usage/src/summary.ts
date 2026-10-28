@@ -26,6 +26,8 @@ export function summarizeProviderUsageJson(state: ProviderUsageState) {
   const summary = summarizeProviderUsage(state);
   return {
     ...summary,
+    longWindowMinutes:
+      state.status === "ready" ? (selectWindows(state.report).long?.windowMinutes ?? null) : null,
     shortResetsAt: formatLocalDateTime(summary.shortResetsAt),
     longResetsAt: formatLocalDateTime(summary.longResetsAt),
   };

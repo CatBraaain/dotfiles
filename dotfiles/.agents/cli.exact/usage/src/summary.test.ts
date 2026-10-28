@@ -60,6 +60,7 @@ describe("JSON local reset date times", () => {
           ]),
         );
         assert.deepEqual(summarizeProviderUsageJson(state), {
+          longWindowMinutes: 10080,
           provider: "openai-codex",
           short: 80,
           shortResetsAt: fixtureCase.short,
@@ -82,6 +83,7 @@ describe("JSON local reset date times", () => {
         ]),
       );
       assert.deepEqual(summarizeProviderUsageJson(state), {
+        longWindowMinutes: 10080,
         provider: "openai-codex",
         short: 80,
         shortResetsAt: null,
@@ -124,6 +126,7 @@ describe("JSON local reset date times", () => {
         );
         const state = ready(report);
         assert.deepEqual(summarizeProviderUsageJson(state), {
+          longWindowMinutes: 10080,
           provider: "command-code",
           short: 100,
           shortResetsAt: null,
@@ -139,8 +142,28 @@ describe("JSON local reset date times", () => {
   }
 });
 
+describe("JSON duration facts", () => {
+  it("exports the same selected long duration without changing table cells", () => {
+    for (const windowMinutes of [300, 10080, 43200]) {
+      const state = ready(fixture([bucket("long", windowMinutes, 50)]));
+      assert.equal(summarizeProviderUsageJson(state).longWindowMinutes, windowMinutes);
+      assert.equal(
+        renderProviderState(state),
+        "Codex        —              —    50%             —",
+      );
+    }
+  });
+
+  it("does not infer a duration for unknown or failed windows", () => {
+    assert.equal(
+      summarizeProviderUsageJson(ready(fixture([bucket("weekly")]))).longWindowMinutes,
+      null,
+    );
+  });
+});
+
 describe("JSON remaining summary", () => {
-  it("returns exactly five fields with the canonical provider ID and numeric percentages", () => {
+  it("returns the internal table summary fields with the canonical provider ID and numeric percentages", () => {
     const state = ready(fixture([bucket("short", 300), bucket("long", 10_080, 70)]));
     assert.deepEqual(summarizeProviderUsage(state), {
       provider: "openai-codex",

@@ -3,16 +3,25 @@
 // extension. Every routing decision lives in these dependency-injected pure
 // functions so tests need neither the pi runtime nor bash.
 
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { type CronSchedule } from "./cron.ts";
+
+export interface NamespaceUrgencyMultiply {
+  readonly provider: string;
+}
+
+export interface SettingsRule {
+  readonly cron?: CronSchedule;
+  readonly multiply: number | NamespaceUrgencyMultiply;
+}
 
 export interface ModelCandidate {
-  provider: string;
-  model: string;
-  when?: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly weight?: number;
+  readonly settings?: readonly SettingsRule[];
 }
 
 export const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000;
-export const WHEN_TIMEOUT_MS = 5_000;
 
 // Errors treated as rate/usage limits. The HTTP 429 path in after_provider_response
 // is provider-independent (raw status code), so these text patterns only matter for
@@ -125,68 +134,95 @@ export function recordCooldown(
   cooldowns.set(key, now + ms);
 }
 
-// The first candidate (top-to-bottom) whose model exists in the registry, is
-// not cooling down, and whose `when` passes. find + evalWhen + now are injected
-// so this needs neither pi nor bash to test.
-export async function pickCandidate<M extends { provider: string; id: string }>(
+export const LATEST_TOKEN = "<LATEST>";
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Compare "."-separated numeric version strings segment by segment. When all
+// common segments are equal, the string with more segments is greater.
+export function compareVersionStrings(left: string, right: string): number {
+  const leftSegments = left.split(".").map(Number);
+  const rightSegments = right.split(".").map(Number);
+  const commonLength = Math.min(leftSegments.length, rightSegments.length);
+  for (let index = 0; index < commonLength; index++) {
+    const difference = leftSegments[index]! - rightSegments[index]!;
+    if (difference !== 0) return difference;
+  }
+  return leftSegments.length - rightSegments.length;
+}
+
+// Resolve a model template containing <LATEST> against concrete registry
+// ids. The token becomes (\d+(?:\.\d+)*), the pattern must match a whole
+// id, and the id with the greatest captured version wins. Returns null when
+// nothing matches, leaving the candidate unavailable for this resolution.
+export function resolveLatestModel(template: string, modelIds: readonly string[]): string | null {
+  const pattern = new RegExp(
+    `^${escapeRegExp(template).replaceAll(LATEST_TOKEN, "(\\d+(?:\\.\\d+)*)")}$`,
+  );
+  let best: { id: string; version: string } | null = null;
+  for (const id of modelIds) {
+    const match = pattern.exec(id);
+    if (match === null) continue;
+    const version = match[1] ?? "";
+    if (best === null || compareVersionStrings(version, best.version) > 0) {
+      best = { id, version };
+    }
+  }
+  return best?.id ?? null;
+}
+
+// Resolve <LATEST> templates once per routing resolution. Candidates whose
+// token matches no registry model are dropped for this resolution and
+// retried on the next one.
+export function resolveCandidates(
+  candidates: readonly ModelCandidate[],
+  listChatModelIds: (provider: string) => readonly string[],
+): ModelCandidate[] {
+  const resolved: ModelCandidate[] = [];
+  for (const candidate of candidates) {
+    if (!candidate.model.includes(LATEST_TOKEN)) {
+      resolved.push(candidate);
+      continue;
+    }
+    const model = resolveLatestModel(candidate.model, listChatModelIds(candidate.provider));
+    if (model === null) continue;
+    resolved.push({ ...candidate, model });
+  }
+  return resolved;
+}
+
+export async function pickCandidates<M extends { provider: string; id: string }>(
   candidates: readonly ModelCandidate[],
   cooldowns: Map<string, number>,
   find: (provider: string, id: string) => M | undefined,
-  evalWhen: (when: string | undefined) => Promise<boolean>,
   now: number,
-): Promise<M | null> {
-  for (const candidate of candidates) {
-    const model = find(candidate.provider, candidate.model);
-    if (!model) continue;
-    if (isCoolingDown(modelKey(model), cooldowns, now)) continue;
-    if (!(await evalWhen(candidate.when))) continue;
-    return model;
-  }
-  return null;
+  sortByScore?: (
+    candidates: readonly ModelCandidate[],
+  ) => Promise<readonly ModelCandidate[] | null>,
+): Promise<M[]> {
+  const evaluated = await Promise.all(
+    candidates.map(async (candidate) => {
+      const model = find(candidate.provider, candidate.model);
+      if (!model) return null;
+      if (isCoolingDown(modelKey(model), cooldowns, now)) return null;
+      return candidate;
+    }),
+  );
+  const survivors = evaluated.filter(
+    (candidate): candidate is ModelCandidate => candidate !== null,
+  );
+  const ordered =
+    survivors.length > 1 && sortByScore ? ((await sortByScore(survivors)) ?? survivors) : survivors;
+  return ordered
+    .map((candidate) => find(candidate.provider, candidate.model))
+    .filter((model): model is M => model !== undefined);
 }
 
 // pi-ai models declare their input modalities as ("text" | "image")[]. A
 // model supports image input exactly when "image" is present.
 export { modelSupportsImages } from "../shared/image-input.ts";
-
-// `when` コマンドの実行器。bashExecFrom(createLocalBashOperations()) が pi の
-// local shell backend（pi.exec の実体）に繋いだ本物の実装で、テストも同じ道を通る。
-export interface WhenExec {
-  (
-    command: string,
-    opts: { timeout?: number; signal?: AbortSignal },
-  ): Promise<{
-    exitCode: number | null;
-  }>;
-}
-
-// pi の BashOperations を WhenExec に適合させる。onData は破棄、cwd は固定
-// （when コマンドは cwd 非依存のものだけ使う前提）。
-export function bashExecFrom(ops: BashOperations, cwd = process.cwd()): WhenExec {
-  return (command, opts) =>
-    ops.exec(command, cwd, {
-      onData: () => {},
-      timeout: opts.timeout,
-      signal: opts.signal,
-    });
-}
-
-// `when` runs through pi's local shell. Omitted/blank -> always true; exit 0
-// -> true; any non-zero exit, timeout, or failure -> false.
-export async function evalWhen(
-  when: string | undefined,
-  exec: WhenExec,
-  timeoutMs: number,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  if (!when || when.trim() === "") return true;
-  try {
-    const { exitCode } = await exec(when, { timeout: timeoutMs, signal });
-    return exitCode === 0;
-  } catch {
-    return false;
-  }
-}
 
 // A model_select event suspends auto-routing only when it is a genuine user
 // pick — not our own setModel in flight (switching), nor a session restore.

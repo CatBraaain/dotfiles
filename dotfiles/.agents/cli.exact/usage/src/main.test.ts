@@ -119,9 +119,30 @@ describe("run", () => {
       assert.equal(await run(["--json"], env), 0);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(states, [
-        { provider: "current", short: null, shortResetsAt: null, long: null, longResetsAt: null },
-        { provider: "first", short: null, shortResetsAt: null, long: null, longResetsAt: null },
-        { provider: "expired", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        {
+          provider: "current",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
+        {
+          provider: "first",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
+        {
+          provider: "expired",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
       ]);
       assert.equal(stdout[0], JSON.stringify(states, null, 2));
       assert.doesNotMatch(stdout[0]!, /first-secret|current-secret|refresh-secret/);
@@ -140,6 +161,7 @@ describe("run", () => {
           shortResetsAt: null,
           long: null,
           longResetsAt: null,
+          longWindowMinutes: null,
         },
       ]);
     });
@@ -163,7 +185,14 @@ describe("run", () => {
       assert.deepEqual(calls, []);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(states, [
-        { provider: "expired", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        {
+          provider: "expired",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
       ]);
     });
   });
@@ -179,7 +208,14 @@ describe("run", () => {
       assert.equal(await run(["first", "--json"], env), 1);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(states, [
-        { provider: "first", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        {
+          provider: "first",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
       ]);
       assert.doesNotMatch(stdout[0]!, /first-secret/);
       assert.deepEqual(stderr, []);
@@ -201,9 +237,30 @@ describe("run", () => {
       assert.equal(await run(["--json"], env), 0);
       const states = JSON.parse(stdout[0]!) as UsageSummary[];
       assert.deepEqual(states, [
-        { provider: "current", short: null, shortResetsAt: null, long: null, longResetsAt: null },
-        { provider: "first", short: null, shortResetsAt: null, long: null, longResetsAt: null },
-        { provider: "expired", short: null, shortResetsAt: null, long: null, longResetsAt: null },
+        {
+          provider: "current",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
+        {
+          provider: "first",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
+        {
+          provider: "expired",
+          short: null,
+          shortResetsAt: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
       ]);
     });
   });
@@ -326,7 +383,14 @@ describe("run", () => {
         assert.equal(await run(["--json"], env), 0);
         const states = JSON.parse(stdout[0]!) as UsageSummary[];
         assert.deepEqual(states, [
-          { provider: "zai", short: null, shortResetsAt: null, long: 80, longResetsAt: null },
+          {
+            provider: "zai",
+            short: null,
+            shortResetsAt: null,
+            long: 80,
+            longResetsAt: null,
+            longWindowMinutes: 300,
+          },
         ]);
       } finally {
         globalThis.fetch = originalFetch;
@@ -462,6 +526,7 @@ describe("stored auth to fixed endpoint integration", () => {
               short: fixture.short,
               shortResetsAt: states[0]?.shortResetsAt,
               long: fixture.long,
+              longWindowMinutes: fixture.id === "command-code" ? 43200 : 10080,
               longResetsAt: states[0]?.longResetsAt,
             },
           ]);
@@ -520,6 +585,7 @@ describe("stored auth to fixed endpoint integration", () => {
                 shortResetsAt: null,
                 long: null,
                 longResetsAt: null,
+                longWindowMinutes: null,
               },
             ]);
           } finally {
@@ -577,6 +643,7 @@ describe("stored auth to fixed endpoint integration", () => {
             shortResetsAt: null,
             long: null,
             longResetsAt: null,
+            longWindowMinutes: null,
           });
         }
         await writeFile(
