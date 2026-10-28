@@ -1,0 +1,5 @@
+{
+  "name": "pi-cache-stats-cli",
+  "private": true,
+  "main": "./src/main.ts"
+}
