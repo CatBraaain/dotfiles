@@ -36,7 +36,6 @@ work:
   - brew: bubblewrap
   - brew: coreutils
   - apt: ffmpeg
-  - brew: fluid-synth
   - brew: gcc
   - brew: git
   - brew: make
@@ -136,6 +135,5 @@ work:
 personal:
   # blender.org official build with CUDA/OptiX support; the apt dfsg build ships without it.
   - custom: blender
-  - custom: generaluser-gs
   - custom: musescore
   - custom: surge-xt

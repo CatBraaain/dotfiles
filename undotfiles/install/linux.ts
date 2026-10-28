@@ -83,10 +83,6 @@ const museScoreAppRun = join(museScoreInstallDir, "AppRun");
 const museScoreBinPath = "/usr/local/bin/musescore";
 const museScoreWrapper = ["#!/usr/bin/env bash", `exec "${museScoreAppRun}" "$@"`, ""].join("\n");
 const museScoreWrapperHash = new Bun.CryptoHasher("sha256").update(museScoreWrapper).digest("hex");
-const generalUserGsRepo = "mrbumpy409/GeneralUser-GS";
-const generalUserGsDir = join(homedir(), ".local", "share", "soundfonts");
-const generalUserGsPath = join(generalUserGsDir, "GeneralUser-GS.sf2");
-const generalUserGsUrl = `https://raw.githubusercontent.com/${generalUserGsRepo}/main/GeneralUser-GS.sf2`;
 export const openDesignDaemonEntry = join(openDesignDir, "apps", "daemon", "dist", "cli.js");
 export const openDesignWebEntry = join(openDesignDir, "apps", "web", "out", "index.html");
 const openDesignBinDir = join(homedir(), ".local", "bin");
@@ -336,7 +332,6 @@ export class Bootstrap {
       ["android-sdk", () => this.installAndroidSdk()],
       ["blender", () => this.installBlender()],
       ["drawio", () => this.installDrawio()],
-      ["generaluser-gs", () => this.installGeneralUserGs()],
       ["musescore", () => this.installMuseScore()],
       ["openwhispr", () => this.installOpenWhispr()],
       ["rustdesk", () => this.installRustDesk()],
@@ -775,31 +770,6 @@ export class Bootstrap {
       "+",
     ]);
     this.runtime.execute(["sudo", "chmod", "a+rX,go-w", directory]);
-  }
-
-  private installGeneralUserGs(): void {
-    const remoteBlobSha = this.runtime.output([
-      "gh",
-      "api",
-      `repos/${generalUserGsRepo}/contents/GeneralUser-GS.sf2`,
-      "--jq",
-      ".sha",
-    ]);
-    const localBlobSha = this.runtime.outputAllowFailure(["git", "hash-object", generalUserGsPath]);
-    if (localBlobSha === remoteBlobSha) return;
-
-    this.runtime.execute(["mkdir", "-p", generalUserGsDir]);
-    this.runtime.execute([
-      "curl",
-      "-fL",
-      "--retry",
-      "3",
-      "-o",
-      generalUserGsPath,
-      generalUserGsUrl,
-    ]);
-    if (this.runtime.output(["git", "hash-object", generalUserGsPath]) !== remoteBlobSha)
-      throw new Error("downloaded GeneralUser-GS.sf2 does not match the upstream blob");
   }
 
   private installOpenDesign(): void {

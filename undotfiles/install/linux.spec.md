@@ -55,7 +55,7 @@
 
 `uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。`cargo`のパッケージ指定はcrates.ioのcrate名または`crate@version`とし、Desired Stateのパッケージ識別子は`@version`より前のcrate名とする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。`brew`の現在状態は`brew leaves`で取得し、他のFormulaの依存先であるFormulaを削除対象に含めない。`cargo`の現在状態は`cargo install --list`で取得する。`go`の現在状態は`gup list --json`で取得する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除を行わず、失敗として記録する。
 
-`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`blender`、`musescore`、`openwhispr`、`rustdesk`、`surge-xt`、`generaluser-gs`は目的状態を保証する。
+`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`blender`、`musescore`、`openwhispr`、`rustdesk`、`surge-xt`は目的状態を保証する。
 
 `blender`の目的状態は、download.blender.orgの最新安定版releaseのlinux-x64 tarballを`/opt/blender-{version}-linux-x64`（`{version}`は`数字.数字.数字`）へ展開し、`/usr/local/bin/blender`がその中の`blender`実行ファイルへのsymlinkであることとする。同じrelease versionが既に`/opt`に展開済みなら再取得せず、symlinkが目的と異なるときだけ張り直す。workプロファイルでの削除対象は、`/usr/local/bin/blender`のsymlink先が`/opt/blender-{version}-linux-x64/blender`に一致するときのsymlinkと、`/opt`直下で`blender-{version}-linux-x64`に一致するディレクトリであり、それ以外のblender関連パスは管理外として削除しない。releaseの一覧の取得に失敗した場合、またはx86_64以外のLinuxで実行した場合は失敗として記録する。
 
@@ -64,8 +64,6 @@
 `rustdesk`の目的状態は、RustDeskのx86_64 Linux向け最新GitHub releaseに含まれる`.deb`（`rustdesk-{version}-x86_64.deb`）を導入し、既に同じrelease versionが導入済みなら再導入しないこととする。releaseの取得に失敗した場合、またはx86_64以外のLinuxで実行した場合は失敗として記録する。
 
 `surge-xt`の目的状態は、Surge XTのx86_64 Linux向け最新GitHub release（`surge-synthesizer/releases-xt`）に含まれる`.deb`（`surge-xt-linux-x64-{version}.deb`）を導入し、既に同じrelease versionが導入済みなら再導入しないこととする。releaseの取得に失敗した場合、またはx86_64以外のLinuxで実行した場合は失敗として記録する。
-
-`generaluser-gs`の目的状態は、`~/.local/share/soundfonts/GeneralUser-GS.sf2`が`mrbumpy409/GeneralUser-GS`の`main`ブランチの同名ファイルと同一内容（git blob hash一致）であることとする。既に同一内容なら再取得しない。ダウンロード後のblob hashが一致しない場合は失敗として記録する。
 
 `musescore`は個人用の`personal`配列に置くCustom Handlerとする。目的状態は、公式GitHub release `musescore/MuseScore`の`v4.7.6`にある`MuseScore-Studio-4.7.6.261022093-x86_64.AppImage`をFUSE不要の方式で展開した内容が`/opt/musescore-4.7.6-x86_64/`にあり、`/usr/local/bin/musescore`が、その中の`AppRun`を絶対パスで呼び出して引数をそのまま渡す実行可能なwrapperであることとする。メニュー登録と既定のファイル関連付けは変更しない。wrapperの内容は次の2行と末尾の改行に完全一致するものとする。
 
@@ -122,7 +120,7 @@ exec "/opt/musescore-4.7.6-x86_64/AppRun" "$@"
 | `go` | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。 |
 | `brew` | 指定されたFormulaに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet` を実行する。already-installed警告、reinstall案内、Homebrew の環境ヒントと進捗表示は出ない。 |
 | `brew-cask` | 指定されたCaskに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet --cask` を実行する。Not upgrading警告、Homebrew の環境ヒントと進捗表示は出ない。 |
-| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`blender`はPersonal-only Handlerであり、workプロファイルでは実行せず（Personal-only Handlerの節）、personalプロファイルではdownload.blender.orgの最新安定版linux-x64 tarballを`/opt`へ展開し、`/usr/local/bin/blender`からblender実行ファイルへのsymlinkを保証する。`openwhispr`はGitHub releaseの`.deb`を`sudo apt install -y`で導入する。`rustdesk`と`surge-xt`もGitHub releaseの`.deb`を同様に導入する。`generaluser-gs`は`mrbumpy409/GeneralUser-GS`の`main`ブランチの`GeneralUser-GS.sf2`を`~/.local/share/soundfonts/`へダウンロードする。名前に対応するHandlerがなければ失敗として記録する。 |
+| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`blender`はPersonal-only Handlerであり、workプロファイルでは実行せず（Personal-only Handlerの節）、personalプロファイルではdownload.blender.orgの最新安定版linux-x64 tarballを`/opt`へ展開し、`/usr/local/bin/blender`からblender実行ファイルへのsymlinkを保証する。`openwhispr`はGitHub releaseの`.deb`を`sudo apt install -y`で導入する。`rustdesk`と`surge-xt`もGitHub releaseの`.deb`を同様に導入する。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
 
 ### 2. State Read
