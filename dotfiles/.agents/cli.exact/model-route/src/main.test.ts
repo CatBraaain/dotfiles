@@ -601,6 +601,20 @@ describe("run", () => {
     assert.match(warnings[0]!, /cache save failed/);
   });
 
+  it("対話TTYの stdin では待たずに exit 2 で usage を出す", async () => {
+    let output = "";
+    const exitCode = await run(["score"], {
+      ...envBase(tempCache()),
+      isStdinTTY: () => true,
+      stdout: () => {},
+      stderr: (text) => {
+        output += text;
+      },
+    });
+    assert.equal(exitCode, 2);
+    assert.match(output, /usage: model-route/);
+  });
+
   it("不明なコマンドは exit 2 で usage を出す", async () => {
     let output = "";
     const exitCode = await run([], {

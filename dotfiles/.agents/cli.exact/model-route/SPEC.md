@@ -8,7 +8,7 @@
 
 | 入力 | 結果 |
 | --- | --- |
-| `model-route score [<file>]` | file（省略時は標準入力）の候補JSONへurgencyと利用状況を加え、入力順のJSON配列で出す |
+| `model-route score [<file>]` | file（省略時は標準入力、標準入力が端末の場合は使い方を表示して終了コード `2`）の候補JSONへurgencyと利用状況を加え、入力順のJSON配列で出す |
 | 不明なコマンド・不明なフラグ | stderrに `model-route:` 付きの理由と使用方法を出す。照会しない |
 
 ## 入出力

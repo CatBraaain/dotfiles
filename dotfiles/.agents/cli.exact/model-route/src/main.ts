@@ -9,6 +9,7 @@ export interface RunEnv {
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
   now?: () => number;
+  isStdinTTY?: () => boolean;
   queryUsage?: typeof queryUsage;
   loadSnapshot?: typeof loadSnapshot;
   saveSnapshot?: typeof saveSnapshot;
@@ -32,6 +33,11 @@ export async function run(argv: string[], env: RunEnv = {}): Promise<number> {
 
   let candidates: CandidateInput[];
   try {
+    if (file === undefined && (env.isStdinTTY ?? (() => process.stdin.isTTY === true))()) {
+      stderr("model-route: refusing to read a terminal as input");
+      stderr(USAGE);
+      return 2;
+    }
     candidates = parseCandidatesInput(readInput(file));
   } catch (error) {
     stderr(`model-route: ${errorMessage(error)}`);
