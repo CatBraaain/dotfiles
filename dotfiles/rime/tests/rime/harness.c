@@ -1445,15 +1445,30 @@ static void test_page_cycling_selects_heads(void) {
     press(kSpace);
     press(kSpace);
     press(kTab);
-    char choices[512][256];
+    char first_head[256] = {0};
+    char third_collapsed_head[256] = {0};
+    char last_collapsed_head[256] = {0};
+    char last_expanded_head[256] = {0};
     int total = 0;
     RimeCandidateListIterator iterator = {0};
     if (!rime->candidate_list_begin(session, &iterator)) {
         check(False, "the complete candidate iterator must be available");
         return;
     }
-    while (total < 512 && rime->candidate_list_next(&iterator)) {
-        snprintf(choices[total++], sizeof(choices[0]), "%s", iterator.candidate.text);
+    while (rime->candidate_list_next(&iterator)) {
+        if (total == 0) {
+            snprintf(first_head, sizeof(first_head), "%s", iterator.candidate.text);
+        }
+        if (total == 20) {
+            snprintf(third_collapsed_head, sizeof(third_collapsed_head), "%s", iterator.candidate.text);
+        }
+        if (total % 10 == 0) {
+            snprintf(last_collapsed_head, sizeof(last_collapsed_head), "%s", iterator.candidate.text);
+        }
+        if (total % 30 == 0) {
+            snprintf(last_expanded_head, sizeof(last_expanded_head), "%s", iterator.candidate.text);
+        }
+        ++total;
     }
     rime->candidate_list_end(&iterator);
     check(total > 30, "ka must hold more than one expanded page");
@@ -1478,7 +1493,7 @@ static void test_page_cycling_selects_heads(void) {
     }
     check(context.menu.highlighted_candidate_index == 0 &&
               context.menu.candidates[0].text &&
-              strcmp(context.menu.candidates[0].text, choices[last_collapsed * 10]) == 0,
+              strcmp(context.menu.candidates[0].text, last_collapsed_head) == 0,
           "collapsed PageUp before the first window must wrap to the last window's head");
     check(context.menu.num_candidates == total - last_collapsed * 10,
           "the last collapsed window must hold only the remaining candidates");
@@ -1490,7 +1505,7 @@ static void test_page_cycling_selects_heads(void) {
     }
     check(context.menu.highlighted_candidate_index == 0 &&
               context.menu.candidates[0].text &&
-              strcmp(context.menu.candidates[0].text, choices[0]) == 0,
+              strcmp(context.menu.candidates[0].text, first_head) == 0,
           "collapsed PageDown past the last window must wrap to the first head");
     rime->free_context(&context);
     press(kPageDown);
@@ -1501,7 +1516,7 @@ static void test_page_cycling_selects_heads(void) {
     }
     check(context.menu.highlighted_candidate_index == 0 &&
               context.menu.candidates[0].text &&
-              strcmp(context.menu.candidates[0].text, choices[20]) == 0,
+              strcmp(context.menu.candidates[0].text, third_collapsed_head) == 0,
           "collapsed PageDown must advance by ten and select the window head");
     check(context.menu.candidates[0].comment &&
               strstr(context.menu.candidates[0].comment, "Page 3"),
@@ -1517,7 +1532,7 @@ static void test_page_cycling_selects_heads(void) {
     }
     check(context.menu.page_no == last_expanded && context.menu.highlighted_candidate_index == 0 &&
               context.menu.candidates[0].text &&
-              strcmp(context.menu.candidates[0].text, choices[last_expanded * 30]) == 0,
+              strcmp(context.menu.candidates[0].text, last_expanded_head) == 0,
           "expanded PageUp before the first page must wrap to the last page's head");
     rime->free_context(&context);
     press(kPageDown);
@@ -1527,7 +1542,7 @@ static void test_page_cycling_selects_heads(void) {
     }
     check(context.menu.page_no == 0 && context.menu.highlighted_candidate_index == 0 &&
               context.menu.candidates[0].text &&
-              strcmp(context.menu.candidates[0].text, choices[0]) == 0,
+              strcmp(context.menu.candidates[0].text, first_head) == 0,
           "expanded PageDown past the last page must wrap to the first page's head");
     rime->free_context(&context);
 
@@ -3922,6 +3937,74 @@ static void test_filtered_candidate_count_and_pages(void) {
     check(strcmp(selected, choices[0]) == 0, "PageUp must return to the first final-filter page");
 }
 
+/* Index of a candidate text in the active clause's full expanded list, or
+ * -1 when absent. The iterator spans every page of the final order. */
+static int full_list_index_of(const char* text) {
+    RimeCandidateListIterator iterator = {0};
+    int index = -1, total = 0;
+    if (!rime->candidate_list_begin(session, &iterator)) return -1;
+    while (rime->candidate_list_next(&iterator)) {
+        if (index < 0 && strcmp(iterator.candidate.text, text) == 0) index = total;
+        ++total;
+    }
+    rime->candidate_list_end(&iterator);
+    return index;
+}
+
+static void test_bunsetsu_deep_candidates_stay_contextual(void) {
+    static const char* const deep_texts[] = { "徼は", "郷は", "矯は" };
+    fresh_session();
+    type_text("kyouhakare-");
+    press(kSpace);
+    press(kRight);
+    press(kSpace);
+    press(kEscape);
+    press(kLeft);
+    press(kSpace);
+    press(kTab);
+    int before[3];
+    int kaori_before = full_list_index_of("馨は");
+    int today_leaf_before = full_list_index_of("今日葉");
+    check(kaori_before >= 0 && today_leaf_before >= 0 && today_leaf_before < kaori_before,
+          "with neighbor left id 2416, 今日葉 (15530) must precede 馨は (16483)");
+    for (int i = 0; i < 3; ++i) {
+        before[i] = full_list_index_of(deep_texts[i]);
+        check(before[i] > 30,
+              "the deep stock texts must sit beyond the first page before the neighbor switch");
+        check(kaori_before >= 0 && before[i] > kaori_before,
+              "with neighbor left id 2416, 馨は (16483) must precede each deep stock text (17594)");
+    }
+    press(kEscape);
+    press(kRight);
+    press(kSpace);
+    press(kEscape);
+    press(kLeft);
+    press(kSpace);
+    press(kTab);
+    int kaori_after = full_list_index_of("馨は");
+    int today_leaf_after = full_list_index_of("今日葉");
+    check(kaori_after >= 0 && today_leaf_after >= 0 && kaori_after < today_leaf_after,
+          "with neighbor left id 1899, 馨は (14387) must precede 今日葉 (14668), reversing the relation");
+    for (int i = 0; i < 3; ++i) {
+        int after = full_list_index_of(deep_texts[i]);
+        check(after >= 0 && after < before[i],
+              "switching the right neighbor must lift the deep contextual texts");
+        check(kaori_after >= 0 && after > kaori_after && after > today_leaf_after,
+              "with neighbor left id 1899, 馨は (14387) and 今日葉 (14668) must precede each deep text (15498)");
+    }
+    fresh_session();
+    type_text("kou");
+    press(kSpace);
+    press(kSpace);
+    press(kTab);
+    int clam = full_list_index_of("蛤");
+    int unscored = full_list_index_of("勾");
+    check(clam > 30,
+          "the dictionary-backed 蛤 must remain available beyond the first page for こう");
+    check(unscored > clam,
+          "the scored 蛤 route outside the upstream beam must precede the unscorable 勾 block");
+}
+
 static void test_bunsetsu_selection_and_preview(void) {
     fresh_session();
     type_text("kyouhakare-");
@@ -4023,10 +4106,10 @@ static void test_bunsetsu_selection_and_preview(void) {
 }
 
 static void test_bunsetsu_resize_and_retained_choices(void) {
-    char left_first[256], right_first[256], shrunk_first[256], kare_first[256];
+    const char* contextual_left_first = "今日は過";
+    const char* contextual_right_first = "レー";
+    char shrunk_first[256], kare_first[256];
     char third[256], expected[1024], commit[1024];
-    normal_first("きょうはか", left_first, sizeof(left_first));
-    normal_first("れー", right_first, sizeof(right_first));
     normal_first("きょうは", shrunk_first, sizeof(shrunk_first));
     normal_first("かれー", kare_first, sizeof(kare_first));
     fresh_session();
@@ -4050,16 +4133,33 @@ static void test_bunsetsu_resize_and_retained_choices(void) {
     press(kLeft);
     press(kLeft);
     press_shift(kRight);
-    snprintf(expected, sizeof(expected), "%s%s%s", left_first, right_first, third);
+    snprintf(expected, sizeof(expected), "%s%s%s", contextual_left_first, contextual_right_first, third);
     check(menu_hidden() && preview_equals(expected),
           "a hidden resize must reset both affected sides and retain the unrelated choice");
     press(kSpace);
     check(active_reading_equals("きょうはか"),
           "the reopened list must expose the extended reading boundary");
+    RIME_STRUCT(RimeContext, context);
+    check(current_menu(&context), __func__);
+    check(context.menu.num_candidates > 0 &&
+              strcmp(context.menu.candidates[0].text, contextual_left_first) == 0,
+          __func__);
+    rime->free_context(&context);
+    press(kUp);
+    check(preview_equals(expected), __func__);
     press(kEscape);
     press(kRight);
+    press(kSpace);
+    check(active_reading_equals("れー"), __func__);
+    check(current_menu(&context), __func__);
+    check(context.menu.num_candidates > 0 &&
+              strcmp(context.menu.candidates[0].text, contextual_right_first) == 0,
+          __func__);
+    rime->free_context(&context);
+    press(kUp);
+    check(preview_equals(expected), __func__);
+    press(kEscape);
     press(kRight);
-    RIME_STRUCT(RimeContext, context);
     if (current_menu(&context)) {
         const char* preedit = context.composition.preedit;
         int start = context.composition.sel_start;
@@ -4289,9 +4389,9 @@ static void test_bunsetsu_henkan_exception_and_expansion(void) {
 }
 
 static void test_bunsetsu_hidden_resize_and_hiragana(void) {
-    char first[256], next[256], expected[1024], commit[1024];
-    normal_first("きょうはか", first, sizeof(first));
-    normal_first("れー", next, sizeof(next));
+    const char* contextual_left_first = "今日は過";
+    const char* contextual_right_first = "レー";
+    char expected[1024], commit[1024];
     fresh_session();
     type_text("kyouhakare-12");
     press(kSpace);
@@ -4302,12 +4402,31 @@ static void test_bunsetsu_hidden_resize_and_hiragana(void) {
     press(kLeft);
     press(kLeft);
     press_shift(kRight);
-    snprintf(expected, sizeof(expected), "%s%s12", first, next);
+    snprintf(expected, sizeof(expected), "%s%s12", contextual_left_first, contextual_right_first);
     check(menu_hidden() && preview_equals(expected),
           "hidden resizing must reset both sides and retain the third clause's choice");
     press(kSpace);
     check(active_reading_equals("きょうはか"),
           "the reopened hidden resize must expose the extended reading boundary");
+    RIME_STRUCT(RimeContext, context);
+    check(current_menu(&context), __func__);
+    check(context.menu.num_candidates > 0 &&
+              strcmp(context.menu.candidates[0].text, contextual_left_first) == 0,
+          __func__);
+    rime->free_context(&context);
+    press(kUp);
+    check(preview_equals(expected), __func__);
+    press(kEscape);
+    press(kRight);
+    press(kSpace);
+    check(active_reading_equals("れー"), __func__);
+    check(current_menu(&context), __func__);
+    check(context.menu.num_candidates > 0 &&
+              strcmp(context.menu.candidates[0].text, contextual_right_first) == 0,
+          __func__);
+    rime->free_context(&context);
+    press(kUp);
+    check(preview_equals(expected), __func__);
     check(!take_commit(commit, sizeof(commit)), "hidden resizing must not commit any clause");
 
     fresh_session();
@@ -4453,6 +4572,7 @@ int main(int argc, char* argv[]) {
          * fresh conversion and would shift the baselines below. */
         test_bunsetsu_hidden_resize_and_hiragana,
         test_bunsetsu_contexts_keep_separate_choices,
+        test_bunsetsu_deep_candidates_stay_contextual,
         test_bunsetsu_filtered_identity,
         test_default_schema_is_kagiroi,
         test_main_dictionary_imports_managed_custom_table,
