@@ -18,6 +18,7 @@ write:
       - /tmp
       - ${XDG_RUNTIME_DIR}
       - ~/.npm
+      - ~/.electron-gyp
       - ~/.bun/install/cache
       - ~/.bun/install/global
       - ~/.local/share/pnpm/store
