@@ -152,9 +152,15 @@ function removeUsageWidget(ctx: ExtensionContext): void {
   ctx.ui.setWidget(USAGE_WIDGET_KEY, undefined, { placement: USAGE_WIDGET_PLACEMENT });
 }
 
-async function refreshUsageWidget(ctx: ExtensionContext): Promise<void> {
+async function refreshUsageWidget(
+  ctx: ExtensionContext,
+  fetchEntries: () => Promise<UsageEntry[]>,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return;
   try {
-    const entries = await fetchUsageEntries();
+    const entries = await fetchEntries();
+    if (signal.aborted) return;
     const lines = buildUsageWidgetLines(entries, Date.now());
     if (lines === undefined) {
       removeUsageWidget(ctx);
@@ -162,17 +168,36 @@ async function refreshUsageWidget(ctx: ExtensionContext): Promise<void> {
     }
     setUsageWidget(ctx, lines);
   } catch {
+    if (signal.aborted) return;
     setUsageWidget(ctx, [UNAVAILABLE_MESSAGE]);
   }
 }
 
-export default function providerUsageExtension(pi: ExtensionAPI): void {
+export default function providerUsageExtension(
+  pi: ExtensionAPI,
+  fetchEntries: () => Promise<UsageEntry[]> = fetchUsageEntries,
+): void {
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let refreshController: AbortController | undefined;
+
+  function stopRefreshing(): void {
+    refreshController?.abort();
+    refreshController = undefined;
+    if (refreshTimer !== undefined) clearInterval(refreshTimer);
+    refreshTimer = undefined;
+  }
 
   pi.on("session_start", (event, ctx) => {
     if (event.reason !== "startup" && event.reason !== "reload") return;
-    if (refreshTimer !== undefined) clearInterval(refreshTimer);
-    void refreshUsageWidget(ctx);
-    refreshTimer = setInterval(() => void refreshUsageWidget(ctx), REFRESH_INTERVAL_MS);
+    stopRefreshing();
+    const controller = new AbortController();
+    refreshController = controller;
+    void refreshUsageWidget(ctx, fetchEntries, controller.signal);
+    refreshTimer = setInterval(
+      () => void refreshUsageWidget(ctx, fetchEntries, controller.signal),
+      REFRESH_INTERVAL_MS,
+    );
   });
+
+  pi.on("session_shutdown", stopRefreshing);
 }

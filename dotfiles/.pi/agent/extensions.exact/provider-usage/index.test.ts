@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
-import {
+import { describe, it, spyOn } from "bun:test";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import providerUsageExtension, {
   buildUsageWidgetLines,
   formatRelativeTime,
   formatUsageLine,
@@ -234,5 +235,222 @@ describe("parseUsageJson", () => {
 
   it("returns no entries when the root is not an array", () => {
     assert.deepEqual(parseUsageJson("{}"), []);
+  });
+});
+
+function createLifecycleHarness() {
+  const timers = new Map<ReturnType<typeof setInterval>, () => void>();
+  const timerDelays: (number | undefined)[] = [];
+  function scheduleInterval(callback: () => void, delay?: number) {
+    timerDelays.push(delay);
+    const timer = {} as ReturnType<typeof setInterval>;
+    timers.set(timer, callback as () => void);
+    return timer;
+  }
+  const setTimer = spyOn(globalThis, "setInterval").mockImplementation(
+    scheduleInterval as typeof setInterval,
+  );
+  const clearTimer = spyOn(globalThis, "clearInterval").mockImplementation((timer) => {
+    timers.delete(timer as ReturnType<typeof setInterval>);
+  });
+
+  function createRuntime() {
+    const handlers = new Map<string, (event: { reason: string }, ctx: ExtensionContext) => void>();
+    const requests: PromiseWithResolvers<UsageEntry[]>[] = [];
+    const widgets: unknown[][] = [];
+    let isStale = false;
+    let contextReads = 0;
+    const ctx = {
+      get hasUI() {
+        contextReads++;
+        assert.equal(isStale, false, "Stopped runtime must not read its old context");
+        return true;
+      },
+      ui: {
+        setWidget(...args: unknown[]) {
+          widgets.push(args);
+        },
+      },
+    } as unknown as ExtensionContext;
+    const pi = {
+      on(name: string, handler: (event: { reason: string }, ctx: ExtensionContext) => void) {
+        handlers.set(name, handler);
+      },
+    } as unknown as ExtensionAPI;
+
+    function fetchEntries() {
+      const request = Promise.withResolvers<UsageEntry[]>();
+      requests.push(request);
+      return request.promise;
+    }
+    providerUsageExtension(pi, fetchEntries);
+
+    return {
+      requests,
+      widgets,
+      get contextReads() {
+        return contextReads;
+      },
+      start(reason = "startup") {
+        handlers.get("session_start")?.({ reason }, ctx);
+      },
+      shutdown(reason = "reload") {
+        handlers.get("session_shutdown")?.({ reason }, ctx);
+        isStale = true;
+      },
+    };
+  }
+
+  return {
+    timers,
+    timerDelays,
+    createRuntime,
+    restore() {
+      setTimer.mockRestore();
+      clearTimer.mockRestore();
+    },
+  };
+}
+
+async function drainRefresh(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+describe("provider usage lifecycle", () => {
+  for (const reason of ["startup", "reload"]) {
+    it(`refreshes immediately and every five minutes after ${reason}`, async () => {
+      const harness = createLifecycleHarness();
+      try {
+        const runtime = harness.createRuntime();
+        runtime.start(reason);
+        assert.equal(runtime.requests.length, 1);
+        assert.equal(harness.timers.size, 1);
+        assert.deepEqual(harness.timerDelays, [5 * 60 * 1000]);
+        runtime.requests[0]!.resolve([entryWith({})]);
+        await drainRefresh();
+        assert.equal(runtime.widgets.length, 1);
+        for (const callback of harness.timers.values()) callback();
+        assert.equal(runtime.requests.length, 2);
+        runtime.requests[1]!.resolve([entryWith({})]);
+        await drainRefresh();
+        assert.equal(runtime.widgets.length, 2);
+        runtime.shutdown();
+      } finally {
+        harness.restore();
+      }
+    });
+  }
+
+  it("keeps the unavailable message for an active runtime fetch failure", async () => {
+    const harness = createLifecycleHarness();
+    try {
+      const runtime = harness.createRuntime();
+      runtime.start();
+      runtime.requests[0]!.reject(new Error("Fixture fetch failed"));
+      await drainRefresh();
+      assert.equal(runtime.contextReads, 1);
+      assert.equal(runtime.widgets.length, 1);
+      const widget = runtime.widgets[0]![1] as (
+        ui: unknown,
+        theme: { fg: (color: string, text: string) => string },
+      ) => { render: (width: number) => string[] };
+      const component = widget(undefined, { fg: (_color, text) => text });
+      assert.deepEqual(component.render(80), ["usage-cli unavailable"]);
+      runtime.shutdown();
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it("removes the widget when an active runtime receives no providers", async () => {
+    const harness = createLifecycleHarness();
+    try {
+      const runtime = harness.createRuntime();
+      runtime.start();
+      runtime.requests[0]!.resolve([]);
+      await drainRefresh();
+      assert.equal(runtime.widgets.length, 1);
+      assert.equal(runtime.widgets[0]![1], undefined);
+      runtime.shutdown();
+    } finally {
+      harness.restore();
+    }
+  });
+
+  for (const reason of ["new", "resume", "fork"]) {
+    it(`keeps usage fetching disabled after ${reason}`, () => {
+      const harness = createLifecycleHarness();
+      try {
+        const runtime = harness.createRuntime();
+        runtime.start(reason);
+        assert.equal(runtime.requests.length, 0);
+        assert.equal(harness.timers.size, 0);
+      } finally {
+        harness.restore();
+      }
+    });
+  }
+
+  for (const reason of ["quit", "reload", "new", "resume", "fork"]) {
+    for (const outcome of ["entries", "empty", "error"]) {
+      it(`discards pending ${outcome} without reading the context after ${reason}`, async () => {
+        const harness = createLifecycleHarness();
+        try {
+          const runtime = harness.createRuntime();
+          runtime.start();
+          runtime.shutdown(reason);
+          const request = runtime.requests[0]!;
+          if (outcome === "error") request.reject(new Error("Fixture fetch failed"));
+          else request.resolve(outcome === "empty" ? [] : [entryWith({})]);
+          await drainRefresh();
+          assert.equal(runtime.contextReads, 0);
+          assert.equal(runtime.widgets.length, 0);
+          assert.equal(harness.timers.size, 0);
+        } finally {
+          harness.restore();
+        }
+      });
+    }
+  }
+
+  it("stops timers idempotently and ignores a previously queued timer callback", async () => {
+    const harness = createLifecycleHarness();
+    try {
+      const runtime = harness.createRuntime();
+      runtime.start();
+      const callback = [...harness.timers.values()][0]!;
+      runtime.shutdown();
+      runtime.shutdown();
+      callback();
+      assert.equal(runtime.requests.length, 1);
+      assert.equal(harness.timers.size, 0);
+      runtime.requests[0]!.resolve([entryWith({})]);
+      await drainRefresh();
+      assert.equal(runtime.contextReads, 0);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it("preserves the new runtime widget when an old runtime request completes", async () => {
+    const harness = createLifecycleHarness();
+    try {
+      const oldRuntime = harness.createRuntime();
+      oldRuntime.start();
+      oldRuntime.shutdown();
+      const newRuntime = harness.createRuntime();
+      newRuntime.start("reload");
+      newRuntime.requests[0]!.resolve([entryWith({})]);
+      await drainRefresh();
+      oldRuntime.requests[0]!.resolve([]);
+      await drainRefresh();
+      assert.equal(oldRuntime.contextReads, 0);
+      assert.equal(oldRuntime.widgets.length, 0);
+      assert.equal(newRuntime.widgets.length, 1);
+      assert.equal(harness.timers.size, 1);
+      newRuntime.shutdown();
+    } finally {
+      harness.restore();
+    }
   });
 });
