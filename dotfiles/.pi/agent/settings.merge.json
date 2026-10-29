@@ -1,6 +1,6 @@
 // https://pi.dev/docs/latest/settings
 {
-  "theme": "dark",
+  "theme": "purple-dark",
   "tuiMode": "fullscreen",
   "fullscreenWheelScrollLines": 5,
   "defaultThinkingLevel": "max",
