@@ -8,25 +8,24 @@ import { join } from "node:path";
 
 async function main(): Promise<void> {
   const distCliDir = process.cwd();
-  for (const entry of await readdir(distCliDir, { withFileTypes: true })) {
-    const cliDir = join(distCliDir, entry.name);
-    const entryPath = join(cliDir, "src/main.ts");
-    if (!entry.isDirectory() || !existsSync(entryPath)) continue;
-    await compileCli(entry.name, entryPath, cliDir);
-  }
+  const entries = await readdir(distCliDir, { withFileTypes: true });
+  await Promise.all(
+    entries.map(async (entry) => {
+      const cliDir = join(distCliDir, entry.name);
+      const entryPath = join(cliDir, "src/main.ts");
+      if (!entry.isDirectory() || !existsSync(entryPath)) return;
+      await compileCli(entry.name, entryPath, cliDir);
+    }),
+  );
 }
 
-async function compileCli(
-  name: string,
-  entryPath: string,
-  cliDir: string,
-): Promise<void> {
+async function compileCli(name: string, entryPath: string, cliDir: string): Promise<void> {
   // The executable carries .executable so apply grants the owner exec bit
   // (spec §.executable の解釈); the --outfile must not collide with the source
   // folder, so build beside it and swap after removing the folder.
   const buildPath = `${cliDir}.compile`;
   const executablePath = `${cliDir}.executable`;
-  const compiled = Bun.spawnSync(
+  const compiled = Bun.spawn(
     [
       process.execPath,
       "build",
@@ -38,9 +37,10 @@ async function compileCli(
     ],
     { stdout: "inherit", stderr: "inherit" },
   );
-  if (compiled.exitCode !== 0) {
+  const exitCode = await compiled.exited;
+  if (exitCode !== 0) {
     await rm(buildPath, { force: true });
-    throw new Error(`bun build --compile failed for ${name} (exit code ${compiled.exitCode})`);
+    throw new Error(`bun build --compile failed for ${name} (exit code ${exitCode})`);
   }
   await rm(cliDir, { recursive: true });
   await rename(buildPath, executablePath);
