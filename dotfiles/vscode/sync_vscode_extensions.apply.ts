@@ -8,7 +8,6 @@ const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
 const extensionsForLinux = [
   "alefragnani.bookmarks",
   "apaya.webm-player",
-  "awalsh128.keep-sorted",
   "bierner.markdown-yaml-preamble",
   "bpruitt-goddard.mermaid-markdown-syntax-highlighting",
   "catbraaain.auto-fix-venv",
