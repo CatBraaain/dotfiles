@@ -154,7 +154,7 @@ export function normalizeCommandCodeUsagePayload(
   }
 
   return {
-    providerId: "command-code",
+    providerId: "commandcode",
     providerName: "Command Code",
     capturedAt,
     source: "command-code-alpha-usage",

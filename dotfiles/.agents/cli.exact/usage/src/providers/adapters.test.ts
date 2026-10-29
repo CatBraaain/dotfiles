@@ -13,7 +13,7 @@ describe("adapter registry", () => {
   it("contains exactly the three supported providers", () => {
     assert.deepEqual(
       ADAPTERS.map((adapter) => adapter.id),
-      ["openai-codex", "command-code", "zai"],
+      ["openai-codex", "commandcode", "zai"],
     );
     assert.equal(adapterForProvider("unsupported"), undefined);
   });
@@ -66,7 +66,7 @@ describe("fixed provider transports", () => {
     }
     globalThis.fetch = Object.assign(fakeFetch, { preconnect: originalFetch.preconnect });
     try {
-      const report = await adapterForProvider("command-code")!.query(
+      const report = await adapterForProvider("commandcode")!.query(
         auth,
         new AbortController().signal,
         1000,

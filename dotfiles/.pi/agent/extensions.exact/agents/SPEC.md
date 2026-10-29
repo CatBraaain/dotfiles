@@ -132,18 +132,19 @@ class をまたいだ降格は行わない。この規則は候補選択の自�
 
 ## usage スコアリングによる候補の並べ替え
 
-class のハードフィルタを通った生存候補を固定の `model-route score` に渡し、スコア順に並べ替える。CLIの入出力とキャッシュの仕様は `dotfiles/.agents/cli.exact/model-route/SPEC.md` を参照する。CLIは provider の利用残量・リセット時刻・期間から計算した正規化urgency を含む事実を入力順で返すだけであり、policy の解釈・並べ替えは拡張が担う。モデルへのリクエストと、レート制限・cooldown の管理も拡張が担う。
+class のハードフィルタを通った生存候補を、固定の `usage --json` が返すproviderごとのurgencyに従ってスコア順に並べ替える。usageの入出力とurgency計算は `dotfiles/.agents/cli.exact/usage/SPEC.md` に従う。policy の解釈・並べ替え、モデルへのリクエスト、レート制限・cooldown の管理は拡張が担う。
 
-拡張は候補の `provider` と `model`（`<LATEST>` 解決済み）だけをCLIに送る。解決1回につき各候補のスコアを1回だけ計算し、降順に安定ソートする。同点は設定の配列順を維持し、CLIの出力順は順序の判断に使わない。同一 provider/model の重複候補も、それぞれの `weight` と `settings` で独立にスコア付けする。
+拡張はNode対応プロセスAPIで固定プログラム名 `usage` と固定引数 `["--json"]` を直接起動し、候補や設定ファイルを渡さない。解決1回につき各候補のスコアを1回だけ計算し、降順に安定ソートする。同点は設定の配列順を維持し、CLIの出力順は順序の判断に使わない。同一 provider/model の重複候補も、それぞれの `weight` と `settings` で独立にスコア付けする。
 
 スコアの計算式は「settings ルール（provider設定・cron・名前空間multiply）」が定める。スコアが0の候補も削除せず、並べ替えだけで順位が下がるだけとする。
 
 | 項目 | 挙動 |
 | --- | --- |
-| キャッシュ更新 | CLIに任せる。解決処理とは別の予熱は行わない |
-| 候補の並べ替え | 生存候補が複数のときだけ `model-route score` を実行する。1件なら実行しない |
-| CLI 不在（終了コード 127）・出力不正 | セッション内でスコアリングを無効化し、以後は配列順で選ぶ |
-| CLI実行失敗・タイムアウト | その解決だけ設定の配列順で選び、無効化はしない。CLI実行の上限は25秒 |
+| 利用状況の取得 | 毎回照会し、キャッシュや別の予熱は行わない |
+| 候補の並べ替え | 生存候補が複数のときだけ `usage --json` を実行する。1件なら実行しない |
+| CLI 不在（起動時のENOENT・終了コード127）・出力不正 | セッション内でスコアリングを無効化し、以後は配列順で選ぶ |
+| 全provider照会失敗（終了コード1） | 全providerのurgencyを不明として、数値weight・multiplyによる採点を続ける |
+| その他のCLI実行失敗・中断・タイムアウト | その解決だけ設定の配列順で選び、無効化はしない。CLI実行の上限は25秒 |
 | CLIのstderr診断 | stdoutのJSONと分離し、有効な配列の適用を妨げない |
 | 適用に失敗した候補 | 取得した同じ配列の次候補へ進む。再照会はしない |
 | 手動選択中 | 自動並べ替えは行わない（既存の自動選択停止の規定に従う） |
@@ -187,7 +188,9 @@ classes:
 
 ### 名前空間multiply
 
-`<provider>.urgency` は、最後の `.` で provider 部分と field 部分に分割し、field は `urgency` のみを認める（それ以外は設定エラー）。値は、その解決のCLI事実から作った provider→urgency マップで解決する。自分の provider（`zai.urgency` を zai 候補に使う自己参照）も、別 provider（cross-provider参照）も同じマップから引く。該当する provider の候補がその解決にない、または urgency が不明（usage 不明・リセット済み）のときは 1 を掛ける。provider 名はCLIへ送った文字列そのもので照合し、CLI内部の provider alias とは無関係である。
+`<provider>.urgency` は、最後の `.` で provider 部分と field 部分に分割し、field は `urgency` のみを認める（それ以外は設定エラー）。provider 部分は usage JSON の `provider` と完全一致で照合し、その行の `urgency` を倍率に使う。参照先providerの候補の有無には依存せず、自己参照と別provider参照を同じように扱う。参照するprovider名は設定の `multiply` で指定する。
+
+JSON全体が配列でない、各行の `provider` が非空文字列でない、または `urgency` が有限数値でも `null` でもない場合は出力不正とする。参照先のprovider行がない、または `urgency` が `null` のときは 1 を掛ける。数値の 0 は倍率0として扱う。どちらの場合も候補を保持する。
 
 ### cron 式
 

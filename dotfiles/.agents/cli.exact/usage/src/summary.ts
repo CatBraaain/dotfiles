@@ -1,3 +1,4 @@
+import { urgencyOf } from "./urgency";
 import type { ProviderUsageState, UsageBucket, UsageReport } from "./types";
 
 const MILLISECONDS_PER_SECOND = 1000;
@@ -22,14 +23,21 @@ export function summarizeProviderUsage(state: ProviderUsageState): UsageSummary 
   };
 }
 
-export function summarizeProviderUsageJson(state: ProviderUsageState) {
+export function summarizeProviderUsageJson(state: ProviderUsageState, nowMs = Date.now()) {
   const summary = summarizeProviderUsage(state);
-  return {
+  const row = {
     ...summary,
     longWindowMinutes:
       state.status === "ready" ? (selectWindows(state.report).long?.windowMinutes ?? null) : null,
     shortResetsAt: formatLocalDateTime(summary.shortResetsAt),
     longResetsAt: formatLocalDateTime(summary.longResetsAt),
+  };
+  return {
+    ...row,
+    urgency: urgencyOf(
+      { remaining: row.long, resetsAt: row.longResetsAt, windowMinutes: row.longWindowMinutes },
+      nowMs,
+    ),
   };
 }
 
@@ -71,7 +79,7 @@ function selectWindows(report: UsageReport): { long?: UsageBucket; short?: Usage
     return !isSupplementary && isPositiveFinite(bucket.windowMinutes);
   });
   const [long] = windows.toSorted((left, right) => right.windowMinutes! - left.windowMinutes!);
-  const shortPrefersLowestRemaining = report.providerId === "command-code";
+  const shortPrefersLowestRemaining = report.providerId === "commandcode";
   const [short] = windows
     .filter((bucket) => bucket !== long)
     .flatMap((bucket) => {

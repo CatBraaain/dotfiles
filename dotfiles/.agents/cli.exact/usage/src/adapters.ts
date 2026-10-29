@@ -44,7 +44,7 @@ export const ADAPTERS: readonly UsageProviderAdapter[] = [
     },
   },
   {
-    id: "command-code",
+    id: "commandcode",
     displayName: "Command Code",
     semantics: {
       kind: "consumer-subscription",

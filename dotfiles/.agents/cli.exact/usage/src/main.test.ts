@@ -126,6 +126,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
         {
           provider: "first",
@@ -134,6 +135,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
         {
           provider: "expired",
@@ -142,6 +144,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
       ]);
       assert.equal(stdout[0], JSON.stringify(states, null, 2));
@@ -162,6 +165,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
       ]);
     });
@@ -192,6 +196,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
       ]);
     });
@@ -215,6 +220,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
       ]);
       assert.doesNotMatch(stdout[0]!, /first-secret/);
@@ -244,6 +250,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
         {
           provider: "first",
@@ -252,6 +259,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
         {
           provider: "expired",
@@ -260,6 +268,7 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
+          urgency: null,
         },
       ]);
     });
@@ -390,6 +399,7 @@ describe("run", () => {
             long: 80,
             longResetsAt: null,
             longWindowMinutes: 300,
+            urgency: null,
           },
         ]);
       } finally {
@@ -465,7 +475,7 @@ describe("stored auth to fixed endpoint integration", () => {
       ],
     },
     {
-      id: "command-code",
+      id: "commandcode",
       credential: { type: "api_key", key: "fixture-access" },
       urls: [
         "https://api.commandcode.ai/alpha/whoami",
@@ -526,7 +536,10 @@ describe("stored auth to fixed endpoint integration", () => {
               short: fixture.short,
               shortResetsAt: states[0]?.shortResetsAt,
               long: fixture.long,
-              longWindowMinutes: fixture.id === "command-code" ? 43200 : 10080,
+              longWindowMinutes: fixture.id === "commandcode" ? 43200 : 10080,
+              urgency:
+                ((fixture.long / 100) * (fixture.id === "commandcode" ? 43200 : 10080)) /
+                ((longResetsAt * 1000 - 1000) / 60000),
               longResetsAt: states[0]?.longResetsAt,
             },
           ]);
@@ -586,6 +599,7 @@ describe("stored auth to fixed endpoint integration", () => {
                 long: null,
                 longResetsAt: null,
                 longWindowMinutes: null,
+                urgency: null,
               },
             ]);
           } finally {
@@ -601,13 +615,13 @@ describe("stored auth to fixed endpoint integration", () => {
       await writeFile(
         join(agentDir, "auth.json"),
         JSON.stringify({
-          commandcode: { type: "api_key", key: "alias-secret" },
-          "command-code": { type: "api_key", key: "canonical-secret" },
+          "command-code": { type: "api_key", key: "alias-secret" },
+          commandcode: { type: "api_key", key: "canonical-secret" },
         }),
       );
       await writeFile(
         join(agentDir, "settings.json"),
-        JSON.stringify({ defaultProvider: "commandcode" }),
+        JSON.stringify({ defaultProvider: "command-code" }),
       );
       env.adapters = undefined;
       const originalFetch = globalThis.fetch;
@@ -625,31 +639,32 @@ describe("stored auth to fixed endpoint integration", () => {
       try {
         for (const [argv, key] of [
           [[], "canonical-secret"],
-          [["commandcode"], "alias-secret"],
-          [["command-code"], "canonical-secret"],
-          [["commandcode", "command-code"], "canonical-secret"],
+          [["command-code"], "alias-secret"],
+          [["commandcode"], "canonical-secret"],
           [["command-code", "commandcode"], "canonical-secret"],
+          [["commandcode", "command-code"], "canonical-secret"],
         ] as const) {
           stdout.length = 0;
           authorizations.length = 0;
           assert.equal(await run([...argv, "--json"], env), 0);
-          assert.ok(authorizations.length > 0);
+          assert.equal(authorizations.length, 4);
           assert.ok(authorizations.every((value) => value === "Bearer " + key));
           const states = JSON.parse(stdout[0]!) as UsageSummary[];
           assert.equal(states.length, 1);
           assert.deepEqual(states[0], {
-            provider: "command-code",
+            provider: "commandcode",
             short: null,
             shortResetsAt: null,
             long: null,
             longResetsAt: null,
             longWindowMinutes: null,
+            urgency: null,
           });
         }
         await writeFile(
           join(agentDir, "auth.json"),
           JSON.stringify({
-            commandcode: { type: "api_key", key: "alias-secret" },
+            "command-code": { type: "api_key", key: "alias-secret" },
           }),
         );
         stdout.length = 0;
@@ -672,13 +687,13 @@ describe("supported provider boundary", () => {
       const rows = JSON.parse(stdout[0]!) as Array<{ id: string }>;
       assert.deepEqual(
         rows.map((row) => row.id),
-        ["openai-codex", "command-code", "zai"],
+        ["openai-codex", "commandcode", "zai"],
       );
       stdout.length = 0;
       assert.equal(await run(["list"], env), 0);
       assert.deepEqual(
         stdout[0]!.split("\n").map((line) => line.split("\t")[0]),
-        ["openai-codex", "command-code", "zai"],
+        ["openai-codex", "commandcode", "zai"],
       );
     });
   });
@@ -716,5 +731,161 @@ describe("supported provider boundary", () => {
       );
       assert.match(stderr[0]!, /unknown provider/);
     });
+  }
+});
+
+describe("urgency output clock", () => {
+  it("uses one clock after every query and queries again on the next run", async () => {
+    await withCli(async ({ env, stdout }) => {
+      let now = 1000;
+      let queries = 0;
+      env.now = () => now;
+      env.adapters = env.adapters!.map((adapter) => ({
+        ...adapter,
+        async query(...args) {
+          const report = await adapter.query(...args);
+          queries++;
+          now = 3_601_000;
+          return {
+            ...report,
+            capturedAt: 1000,
+            buckets: [
+              {
+                id: "long",
+                label: "Long",
+                unit: "percent" as const,
+                remaining: 50,
+                windowMinutes: 300,
+                resetsAt: 10_801,
+              },
+            ],
+          };
+        },
+      }));
+      assert.equal(await run(["first", "--json"], env), 0);
+      assert.equal(JSON.parse(stdout[0]!)[0].urgency, 1.25);
+      assert.equal(await run(["first", "--json"], env), 0);
+      assert.equal(queries, 2);
+    });
+  });
+});
+
+describe("Command Code ID compatibility", () => {
+  for (const defaultProvider of ["commandcode", "command-code"]) {
+    for (const storedId of ["commandcode", "command-code"]) {
+      it(
+        "keeps the canonical display state for default " +
+          defaultProvider +
+          " and storage " +
+          storedId,
+        async () => {
+          await withCli(async ({ env, agentDir, stdout }) => {
+            await writeFile(
+              join(agentDir, "auth.json"),
+              JSON.stringify({
+                [storedId]: { type: "api_key", key: "fixture-key" },
+              }),
+            );
+            await writeFile(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider }));
+            let queries = 0;
+            env.adapters = [
+              {
+                id: "commandcode",
+                displayName: "Command Code",
+                semantics: { kind: "consumer-subscription", label: "Fixture" },
+                async query() {
+                  queries += 1;
+                  return {
+                    providerId: "commandcode",
+                    providerName: "Command Code",
+                    capturedAt: 1000,
+                    source: "fixture",
+                    semantics: { kind: "consumer-subscription", label: "Fixture" },
+                    buckets: [],
+                    metrics: [],
+                  };
+                },
+              },
+            ];
+            env.renderProviderState = (state) => state.providerId + ": " + state.displayState;
+            for (const argv of [
+              [],
+              ["commandcode"],
+              ["command-code"],
+              ["commandcode", "command-code"],
+              ["command-code", "commandcode"],
+            ]) {
+              stdout.length = 0;
+              queries = 0;
+              assert.equal(await run(argv, env), 0);
+              assert.equal(queries, 1);
+              assert.match(stdout[0]!, /commandcode: current/);
+            }
+            stdout.length = 0;
+            assert.equal(await run(["list", "--json"], env), 0);
+            const rows = JSON.parse(stdout[0]!);
+            assert.equal(rows[0].id, "commandcode");
+            assert.equal(rows[0].authenticated, true);
+          });
+        },
+      );
+    }
+  }
+});
+
+describe("Command Code unavailable authentication", () => {
+  for (const credential of [
+    null,
+    { type: "oauth", access: "expired", refresh: "refresh", expires: 1000 },
+  ]) {
+    it(
+      "keeps canonical-first failures in JSON and list without fallback: " +
+        JSON.stringify(credential),
+      async () => {
+        await withCli(async ({ env, agentDir, stdout }) => {
+          await writeFile(
+            join(agentDir, "auth.json"),
+            JSON.stringify({
+              commandcode: credential,
+              "command-code": { type: "api_key", key: "valid-legacy-key" },
+            }),
+          );
+          env.adapters = undefined;
+          const originalFetch = globalThis.fetch;
+          let requests = 0;
+          async function unexpectedFetch(): Promise<Response> {
+            requests += 1;
+            throw new Error("Unexpected network request");
+          }
+          globalThis.fetch = Object.assign(unexpectedFetch, {
+            preconnect: originalFetch.preconnect,
+          });
+          try {
+            for (const argv of [
+              [],
+              ["commandcode"],
+              ["commandcode", "command-code"],
+              ["command-code", "commandcode"],
+            ]) {
+              stdout.length = 0;
+              assert.equal(await run([...argv, "--json"], env), 1);
+              const rows = JSON.parse(stdout[0]!);
+              assert.equal(rows.length, 1);
+              assert.equal(rows[0].provider, "commandcode");
+              assert.equal(rows[0].urgency, null);
+            }
+            stdout.length = 0;
+            assert.equal(await run(["list", "--json"], env), 0);
+            const rows = JSON.parse(stdout[0]!);
+            const command = rows.find((row: { id: string }) => row.id === "commandcode");
+            assert.equal(command.authenticated, false);
+            assert.equal(command.authType, null);
+            assert.equal(requests, 0);
+          } finally {
+            globalThis.fetch = originalFetch;
+          }
+        });
+      },
+    );
   }
 });

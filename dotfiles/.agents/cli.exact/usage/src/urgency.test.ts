@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { isCandidateInput, urgencyOf, type UsageState } from "./score";
+import { urgencyOf, type UsageState } from "./urgency";
 
 const NOW = Date.parse("2026-06-17T12:00:00+09:00");
 const MINUTE_MS = 60_000;
 
 function state(
-  remaining: number,
+  remaining: number | null,
   remainingMinutes: number,
   windowMinutes: number | null,
 ): UsageState {
@@ -42,7 +42,7 @@ describe("urgencyOf", () => {
     assert.equal(urgencyOf(state(80, 100, minutes), NOW), null);
   });
 
-  it.each([-1, 101, NaN, Infinity])("returns null for invalid remaining: %s", (remaining) => {
+  it.each([null, -1, 101, NaN, Infinity])("returns null for invalid remaining: %s", (remaining) => {
     assert.equal(urgencyOf(state(remaining, 100, 300), NOW), null);
   });
 
@@ -52,18 +52,11 @@ describe("urgencyOf", () => {
   });
 });
 
-describe("isCandidateInput", () => {
-  it("accepts only nonempty provider and model identifiers", () => {
-    assert.equal(isCandidateInput({ provider: "z", model: "m" }), true);
-    for (const input of [null, [], {}, { provider: "z" }, { provider: "", model: "m" }]) {
-      assert.equal(isCandidateInput(input), false);
-    }
+describe("invalid urgency clocks", () => {
+  it.each([NaN, Infinity, -Infinity])("returns null for now %s", (now) => {
+    assert.equal(urgencyOf(state(80, 100, 300), now), null);
   });
-
-  it("does not interpret policy fields", () => {
-    assert.equal(
-      isCandidateInput({ provider: "z", model: "m", weight: -1, adjust: "invalid", score: 100 }),
-      true,
-    );
+  it("returns null for an unknown reset", () => {
+    assert.equal(urgencyOf({ remaining: 0, windowMinutes: 300, resetsAt: null }, NOW), null);
   });
 });

@@ -251,24 +251,60 @@ describe("provider credential constraints", () => {
     }
   });
 
-  it("uses the requested alias credential and otherwise prefers canonical storage", () => {
+  it("uses the explicitly requested credential and accepts either stored ID", () => {
     const loaded = context({
       credentials: {
-        commandcode: { type: "api_key", key: "alias-key" },
-        "command-code": { type: "api_key", key: "canonical-key" },
+        commandcode: { type: "api_key", key: "canonical-key" },
+        "command-code": { type: "api_key", key: "legacy-key" },
       },
     });
     for (const [id, key] of [
-      ["commandcode", "alias-key"],
-      ["command-code", "canonical-key"],
+      ["commandcode", "canonical-key"],
+      ["command-code", "legacy-key"],
     ] as const) {
       const result = resolveAuth(id, loaded);
       assert.equal(result.status, "resolved");
       if (result.status === "resolved") assert.equal(result.auth.apiKey, key);
     }
-    delete loaded.credentials["command-code"];
-    const fallback = resolveAuth("command-code", loaded);
-    assert.equal(fallback.status, "resolved");
-    if (fallback.status === "resolved") assert.equal(fallback.auth.apiKey, "alias-key");
+    for (const storedId of ["commandcode", "command-code"]) {
+      for (const requestedId of ["commandcode", "command-code"]) {
+        const result = resolveAuth(
+          requestedId,
+          context({ credentials: { [storedId]: { type: "api_key", key: "only-key" } } }),
+        );
+        assert.equal(result.status, "resolved");
+        if (result.status === "resolved") assert.equal(result.auth.apiKey, "only-key");
+      }
+    }
   });
+});
+
+describe("Command Code credential failure boundaries", () => {
+  for (const requestedId of ["commandcode", "command-code"]) {
+    for (const credential of [
+      null,
+      { type: "api_key", key: "!echo secret" },
+      { type: "oauth", access: "expired", refresh: "refresh", expires: NOW_MS },
+    ]) {
+      it(
+        "does not fall back from an unavailable requested credential: " +
+          requestedId +
+          " " +
+          JSON.stringify(credential),
+        () => {
+          const otherId = requestedId === "commandcode" ? "command-code" : "commandcode";
+          const result = resolveAuth(
+            requestedId,
+            context({
+              credentials: {
+                [requestedId]: credential,
+                [otherId]: { type: "api_key", key: "valid-other-key" },
+              },
+            }),
+          );
+          assert.equal(result.status, "unavailable");
+        },
+      );
+    }
+  }
 });

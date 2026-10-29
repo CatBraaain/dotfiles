@@ -1,14 +1,6 @@
 import { EventEmitter } from "node:events";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { SessionManager, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +8,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
-import { quote } from "shell-quote";
 import agentsExtension, {
   __abortTimer,
   __resetRoutingState,
@@ -35,7 +26,7 @@ import agentsExtension, {
   initialAgent,
   loadAgentConfig,
   parseAgentConfig,
-  parseRouteFacts,
+  parseProviderUrgency,
   shouldBlockToolCall,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
@@ -43,7 +34,8 @@ import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-text.ts";
 import { renderersOf } from "../tool-renderer/index.ts";
 import { CLASS_CHANGE_EVENT, requestClassChange } from "./class-change.ts";
 import { parseCronExpression } from "./cron.ts";
-import { runModelRoute } from "./model-route.ts";
+import { runUsage } from "./usage.ts";
+import { parseUsageJson } from "../provider-usage/index.ts";
 import type { ModelCandidate } from "./routing.ts";
 
 const config: AgentConfig = {
@@ -125,7 +117,7 @@ interface CaptureOptions {
   setModelSucceeds?: boolean | boolean[];
   classSelection?: string;
   beforeSetModel?: () => Promise<void>;
-  executeRoute?: typeof runModelRoute;
+  executeUsage?: typeof runUsage;
   signal?: AbortSignal;
 }
 
@@ -229,7 +221,7 @@ function captureAgentsExtension(
       },
     } as never,
     injectedConfig,
-    options.executeRoute ?? (async () => ({ exitCode: 127, stdout: "" })),
+    options.executeUsage ?? (async () => ({ exitCode: 127, stdout: "" })),
   );
 
   const ui = {
@@ -4950,121 +4942,54 @@ agents:
   });
 });
 
-describe("parseRouteFacts", () => {
-  const candidates = [
-    { provider: "zai", model: "glm-5.2" },
-    { provider: "zai", model: "glm-5.1" },
-  ];
-
-  it("reads urgency and remaining per candidate in input order", () => {
-    const facts = parseRouteFacts(
+describe("parseProviderUrgency", () => {
+  it("keeps exact usage provider names without restricting them to candidates", () => {
+    const result = parseProviderUrgency(
       JSON.stringify([
-        {
-          provider: "zai",
-          model: "glm-5.2",
-          urgency: 1.5,
-          usageState: {
-            remaining: 40,
-            resetsAt: "2026-10-28T00:00:00Z",
-            windowMinutes: 120,
-            source: "fresh",
-          },
-        },
-        { provider: "zai", model: "glm-5.1", urgency: null, usageState: null },
+        { provider: "command-code", urgency: 2 },
+        { provider: "commandcode", urgency: 0.5 },
+        { provider: "zai", urgency: 0 },
+        { provider: "openai-codex", urgency: 5 },
+        { provider: "other", urgency: 100 },
       ]),
-      candidates,
     );
-    assert.deepEqual(facts, [
-      { urgency: 1.5, remaining: 40 },
-      { urgency: null, remaining: null },
-    ]);
-  });
-
-  it("keeps duplicate provider/model candidates as separate entries", () => {
-    const duplicates = [
-      { provider: "zai", model: "flash", weight: 2 },
-      { provider: "zai", model: "flash" },
-    ];
-    const facts = parseRouteFacts(
-      JSON.stringify([
-        { provider: "zai", model: "flash", urgency: 2, usageState: null },
-        { provider: "zai", model: "flash", urgency: 0.5, usageState: null },
+    assert.deepEqual(
+      result,
+      new Map([
+        ["command-code", 2],
+        ["commandcode", 0.5],
+        ["zai", 0],
+        ["openai-codex", 5],
+        ["other", 100],
       ]),
-      duplicates,
-    );
-    assert.deepEqual(facts, [
-      { urgency: 2, remaining: null },
-      { urgency: 0.5, remaining: null },
-    ]);
-  });
-
-  it("不正 JSON は null", () => {
-    assert.equal(parseRouteFacts("not json", candidates), null);
-  });
-
-  it("rejects output that is not an array of the same length as the input", () => {
-    for (const output of [
-      {},
-      { candidates },
-      candidates[0],
-      null,
-      "model",
-      1,
-      [candidates[0]],
-      [...candidates, candidates[0]],
-    ]) {
-      assert.equal(parseRouteFacts(JSON.stringify(output), candidates), null);
-    }
-  });
-
-  it("accepts an empty result for empty input", () => {
-    assert.deepEqual(parseRouteFacts("[]", []), []);
-  });
-
-  it("provider と model が入力順の候補と一致しない要素は null", () => {
-    const swapped = parseRouteFacts(
-      JSON.stringify([
-        { provider: "zai", model: "glm-5.1", urgency: null, usageState: null },
-        { provider: "zai", model: "glm-5.2", urgency: null, usageState: null },
-      ]),
-      candidates,
-    );
-    assert.equal(swapped, null);
-    assert.equal(
-      parseRouteFacts(
-        JSON.stringify([{ provider: 1, model: "m", urgency: null, usageState: null }]),
-        [candidates[0]!],
-      ),
-      null,
     );
   });
 
-  it("urgency が number でも null でもない要素は null", () => {
-    for (const urgency of ["high", false, { value: 1 }]) {
-      assert.equal(
-        parseRouteFacts(
-          JSON.stringify([{ provider: "zai", model: "glm-5.2", urgency, usageState: null }]),
-          [candidates[0]!],
-        ),
-        null,
-      );
-    }
+  it("keeps absent and null provider facts unknown", () => {
+    assert.deepEqual(
+      parseProviderUrgency('[{"provider":"zai","urgency":null}]'),
+      new Map([["zai", null]]),
+    );
+    assert.deepEqual(parseProviderUrgency("[]"), new Map());
   });
 
-  it("usageState が null でも remaining を持つオブジェクトでもない要素は null", () => {
-    for (const usageState of ["fresh", 1, {}, { remaining: "40" }]) {
-      assert.equal(
-        parseRouteFacts(
-          JSON.stringify([{ provider: "zai", model: "glm-5.2", urgency: 1, usageState }]),
-          [candidates[0]!],
-        ),
-        null,
-      );
-    }
+  it.each([
+    "not json",
+    "null",
+    "{}",
+    "[null]",
+    "[[]]",
+    '[{"provider":"","urgency":1}]',
+    '[{"provider":1,"urgency":1}]',
+    '[{"provider":"zai"}]',
+    '[{"provider":"zai","urgency":"high"}]',
+    '[{"provider":"zai","urgency":1e400}]',
+  ])("rejects malformed provider JSON: %s", (stdout) => {
+    assert.equal(parseProviderUrgency(stdout), null);
   });
 });
 
-describe("model-route scoring and ordering", () => {
+describe("usage scoring and ordering", () => {
   const baseCandidates: ModelCandidate[] = ["a", "u", "b", "d"].map((provider) => ({
     provider,
     model: "m",
@@ -5087,32 +5012,30 @@ describe("model-route scoring and ordering", () => {
   }
 
   it("orders by score from CLI facts, not by the CLI output order, and iterates the same array after a failure", async () => {
-    const calls: string[][] = [];
+    let calls = 0;
     const extension = captureAgentsExtension(
       { config: routedConfig },
       {
         setModelSucceeds: [false, true, true],
-        async executeRoute(input) {
-          calls.push(input.map(({ provider }) => provider));
+        async executeUsage() {
+          calls++;
           return {
             exitCode: 0,
             stdout:
-              calls.length === 1
-                ? routeOutput([0.1, 0.4, 0.3, 0.2])
-                : routeOutput([0.9, 0.2, 0.1, 0.3]),
+              calls === 1 ? routeOutput([0.1, 0.4, 0.3, 0.2]) : routeOutput([0.9, 0.2, 0.1, 0.3]),
           };
         },
       },
     );
     try {
       await extension.sessionStart();
-      assert.deepEqual(calls, [["a", "u", "b", "d"]]);
+      assert.equal(calls, 1);
       assert.deepEqual(extension.selectedModels, [
         { provider: "u", id: "m" },
         { provider: "b", id: "m" },
       ]);
       await extension.input("next");
-      assert.equal(calls.length, 2);
+      assert.equal(calls, 2);
       assert.deepEqual(extension.selectedModels[2], { provider: "a", id: "m" });
     } finally {
       extension.restore();
@@ -5125,7 +5048,7 @@ describe("model-route scoring and ordering", () => {
       { config: routedConfig },
       {
         setModelSucceeds: false,
-        async executeRoute() {
+        async executeUsage() {
           calls++;
           return { exitCode: 0, stdout: routeOutput([0.1, 0.4, 0.3, 0.2]) };
         },
@@ -5148,7 +5071,7 @@ describe("model-route scoring and ordering", () => {
       { config: routedConfig },
       {
         setModelSucceeds: false,
-        async executeRoute() {
+        async executeUsage() {
           return { exitCode: 0, stdout: routeOutput([1, 1, 1, 1]) };
         },
       },
@@ -5169,7 +5092,7 @@ describe("model-route scoring and ordering", () => {
       { config: routedConfig },
       {
         setModelSucceeds: false,
-        async executeRoute() {
+        async executeUsage() {
           return { exitCode: 0, stdout: routeOutput([null, null, null, null]) };
         },
       },
@@ -5209,11 +5132,11 @@ describe("model-route scoring and ordering", () => {
       { config: duplicateConfig },
       {
         setModelSucceeds: false,
-        async executeRoute(input) {
+        async executeUsage() {
           return {
             exitCode: 0,
             stdout: JSON.stringify(
-              input.map((candidate) => ({
+              duplicates.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
                 urgency: 1,
@@ -5273,11 +5196,11 @@ describe("model-route scoring and ordering", () => {
       { config: scheduledConfig },
       {
         setModelSucceeds: false,
-        async executeRoute(input) {
+        async executeUsage() {
           return {
             exitCode: 0,
             stdout: JSON.stringify(
-              input.map((candidate, index) => ({
+              scheduled.map((candidate, index) => ({
                 provider: candidate.provider,
                 model: candidate.model,
                 urgency: index === 2 ? 2 : 1,
@@ -5291,7 +5214,6 @@ describe("model-route scoring and ordering", () => {
     try {
       await extension.sessionStart();
       // cmd: 1 × 2 = 2, zai glm-5.2: 1 × 1 (cron inactive) = 1,
-      // codex: 0.5 × 1 (commandcode は候補に無く不明) × 1.5 = 0.75,
       // zai glm-5.3: 常時有効な cron で 0 になるが候補からは削除しない。
       assert.deepEqual(
         extension.selectedModels.map((model) => (model as { provider: string; id: string }).id),
@@ -5318,11 +5240,11 @@ describe("model-route scoring and ordering", () => {
       { config: replacementConfig },
       {
         setModelSucceeds: false,
-        async executeRoute(input) {
+        async executeUsage() {
           return {
             exitCode: 0,
             stdout: JSON.stringify(
-              input.map((candidate) => ({
+              replacementConfig.classes.middle!.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
                 urgency: 1,
@@ -5361,11 +5283,11 @@ describe("model-route scoring and ordering", () => {
       { config: emptySettingsConfig },
       {
         setModelSucceeds: false,
-        async executeRoute(input) {
+        async executeUsage() {
           return {
             exitCode: 0,
             stdout: JSON.stringify(
-              input.map((candidate) => ({
+              emptySettingsConfig.classes.middle!.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
                 urgency: 4,
@@ -5408,11 +5330,11 @@ describe("model-route scoring and ordering", () => {
       { config: namespacedConfig },
       {
         setModelSucceeds: false,
-        async executeRoute(input) {
+        async executeUsage() {
           return {
             exitCode: 0,
             stdout: JSON.stringify(
-              input.map((candidate) => ({
+              namespaced.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
                 urgency: candidate.provider === "zai" ? 3 : 1,
@@ -5449,7 +5371,7 @@ describe("model-route scoring and ordering", () => {
       const extension = captureAgentsExtension(
         { config: routedConfig },
         {
-          async executeRoute() {
+          async executeUsage() {
             calls++;
             return { exitCode, stdout };
           },
@@ -5474,7 +5396,7 @@ describe("model-route scoring and ordering", () => {
     const extension = captureAgentsExtension(
       { config: routedConfig },
       {
-        async executeRoute() {
+        async executeUsage() {
           calls++;
           return calls === 1
             ? { exitCode, stdout }
@@ -5504,11 +5426,11 @@ describe("model-route scoring and ordering", () => {
       const extension = captureAgentsExtension(
         { config: routedConfig },
         {
-          async executeRoute() {
+          async executeUsage() {
             calls++;
             if (calls === 1) {
               if (failure === "timeout") throw new Error("timed out");
-              return { exitCode: 1, stdout: "" };
+              return { exitCode: 2, stdout: "" };
             }
             return { exitCode: 0, stdout: routeOutput([0.1, 0.2, 0.3, 0.4]) };
           },
@@ -5528,6 +5450,158 @@ describe("model-route scoring and ordering", () => {
       }
     },
   );
+});
+
+describe("provider urgency routing boundaries", () => {
+  it("uses one for null or missing references and preserves zero in selection order", async () => {
+    const candidates: ModelCandidate[] = [
+      { provider: "a", model: "zero", weight: 100, settings: [{ multiply: { provider: "zero" } }] },
+      {
+        provider: "a",
+        model: "null",
+        weight: 3,
+        settings: [{ multiply: { provider: "unknown" } }],
+      },
+      {
+        provider: "a",
+        model: "missing",
+        weight: 2,
+        settings: [{ multiply: { provider: "absent" } }],
+      },
+      { provider: "a", model: "plain" },
+    ];
+    const policy: AgentConfig = {
+      ...config,
+      classes: { ...config.classes, middle: candidates },
+    };
+    const extension = captureAgentsExtension(
+      { config: policy },
+      {
+        setModelSucceeds: false,
+        async executeUsage() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              { provider: "zero", urgency: 0 },
+              { provider: "unknown", urgency: null },
+              { provider: "Absent", urgency: 100 },
+            ]),
+          };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.selectedModels, [
+        { provider: "a", id: "null" },
+        { provider: "a", id: "missing" },
+        { provider: "a", id: "plain" },
+        { provider: "a", id: "zero" },
+      ]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it.each([0, 1])(
+    "keeps numeric multipliers active with unknown facts at exit %s",
+    async (exitCode) => {
+      const policy: AgentConfig = {
+        ...config,
+        classes: {
+          ...config.classes,
+          middle: [
+            {
+              provider: "a",
+              model: "m",
+              weight: 3,
+              settings: [{ multiply: 0.5 }, { multiply: { provider: "a" } }],
+            },
+            { provider: "b", model: "m", weight: 1, settings: [{ multiply: 2 }] },
+          ],
+        },
+      };
+      let calls = 0;
+      const extension = captureAgentsExtension(
+        { config: policy },
+        {
+          setModelSucceeds: false,
+          async executeUsage() {
+            calls++;
+            return {
+              exitCode,
+              stdout: exitCode === 1 ? "not json" : '[{"provider":"a","urgency":null}]',
+            };
+          },
+        },
+      );
+      try {
+        await extension.sessionStart();
+        assert.deepEqual(extension.selectedModels, [
+          { provider: "b", id: "m" },
+          { provider: "a", id: "m" },
+        ]);
+        await extension.input("next");
+        assert.equal(calls, 2);
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+  it("applies explicit urgency once with exact names and noncandidate provider references", async () => {
+    const policy: AgentConfig = {
+      ...config,
+      classes: {
+        ...config.classes,
+        middle: [
+          {
+            provider: "commandcode",
+            model: "m",
+            weight: 1,
+            settings: [{ multiply: { provider: "commandcode" } }],
+          },
+          { provider: "zai", model: "plain", weight: 3 },
+          {
+            provider: "zai",
+            model: "outside",
+            weight: 2,
+            settings: [{ multiply: { provider: "other" } }],
+          },
+          {
+            provider: "zai",
+            model: "canonical",
+            weight: 1.5,
+            settings: [{ multiply: { provider: "command-code" } }],
+          },
+        ],
+      },
+    };
+    const extension = captureAgentsExtension(
+      { config: policy },
+      {
+        setModelSucceeds: false,
+        async executeUsage() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              { provider: "command-code", urgency: 2.5 },
+              { provider: "zai", urgency: 10 },
+              { provider: "other", urgency: 100 },
+            ]),
+          };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(
+        extension.selectedModels.map((model) => (model as { id: string }).id),
+        ["outside", "canonical", "plain", "m"],
+      );
+    } finally {
+      extension.restore();
+    }
+  });
 });
 
 describe("<LATEST> モデルの解決", () => {
@@ -5578,16 +5652,11 @@ describe("<LATEST> モデルの解決", () => {
   });
 });
 
-describe("shipped agents.yaml through the real model-route CLI", () => {
+describe("shipped agents.yaml through the usage fixture CLI", () => {
   it("parses the shipped configuration, resolves <LATEST>, and orders candidates by the observed policy", async () => {
     const directory = mkdtempSync(join(tmpdir(), "route-shipped-test-"));
-    const executable = join(directory, "model-route");
     const usage = join(directory, "usage");
-    const cacheRoot = join(directory, "cache");
     const counter = join(directory, "usage-count");
-    const source = fileURLToPath(
-      new URL("../../../../.agents/cli.exact/model-route/src/main.ts", import.meta.url),
-    );
     const shippedPath = fileURLToPath(
       new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
     );
@@ -5596,26 +5665,29 @@ describe("shipped agents.yaml through the real model-route CLI", () => {
     assert.ok(parsed.config);
     assert.equal(parsed.config.settings?.zai?.length, 2);
     assert.equal(parsed.config.settings?.deepseek?.length, 2);
+    assert.deepEqual(parsed.config.settings?.commandcode, [
+      { multiply: { provider: "commandcode" } },
+    ]);
 
-    const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
     const rows = [
-      { provider: "zai", long: 2, longResetsAt: resetsAt, longWindowMinutes: 60 },
-      { provider: "openai-codex", long: 50, longResetsAt: resetsAt, longWindowMinutes: 60 },
-      { provider: "commandcode", long: 30, longResetsAt: resetsAt, longWindowMinutes: 60 },
+      { provider: "zai", urgency: 0.02 },
+      { provider: "openai-codex", urgency: 0.5 },
+      { provider: "commandcode", urgency: 0.3 },
     ];
-    writeFileSync(
-      executable,
-      `#!/usr/bin/env bash\nexec ${quote([process.execPath, source])} "$@"\n`,
-    );
+    const previousPath = process.env.PATH;
     writeFileSync(
       usage,
-      `#!/usr/bin/env bash\nprintf 'query\\n' >> ${quote([counter])}\nprintf '%s\\n' ${quote([JSON.stringify(rows)])}\n`,
+      `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+if (JSON.stringify(process.argv.slice(2)) !== '["--json"]') process.exit(2);
+appendFileSync(${JSON.stringify(counter)}, "query\\n");
+console.error("fixture warning");
+console.log(${JSON.stringify(JSON.stringify(rows))});
+`,
+      { mode: 0o700 },
     );
-    chmodSync(executable, 0o700);
-    chmodSync(usage, 0o700);
-    mkdirSync(cacheRoot);
+    process.env.PATH = `${directory}:${previousPath ?? ""}`;
 
-    const operations = createLocalBashOperations();
     const extension = captureAgentsExtension(
       { config: parsed.config },
       {
@@ -5629,20 +5701,7 @@ describe("shipped agents.yaml through the real model-route CLI", () => {
           { provider: "openai-codex", id: "gpt-6-luna" },
           { provider: "commandcode", id: "z-ai/glm-5.3-flash" },
         ],
-        async executeRoute(candidates, signal) {
-          return runModelRoute(candidates, signal, {
-            async exec(command, cwd, options) {
-              return operations.exec(command, cwd, {
-                ...options,
-                env: {
-                  ...process.env,
-                  PATH: `${directory}:${process.env.PATH ?? ""}`,
-                  XDG_CACHE_HOME: cacheRoot,
-                },
-              });
-            },
-          });
-        },
+        executeUsage: runUsage,
       },
     );
     const appliedModelKeys = () =>
@@ -5672,7 +5731,30 @@ describe("shipped agents.yaml through the real model-route CLI", () => {
       assert.deepEqual(highApplied.slice(2).sort(), ["zai/glm-5.3", "zai/glm-5.3-flash"]);
     } finally {
       extension.restore();
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("provider-usage compatibility", () => {
+  it("accepts urgency without changing widget fields", () => {
+    const entries = parseUsageJson(
+      JSON.stringify([
+        {
+          provider: "zai",
+          short: 20,
+          shortResetsAt: null,
+          long: 50,
+          longResetsAt: "2026-11-01T00:00:00Z",
+          longWindowMinutes: 10080,
+          urgency: 1.5,
+        },
+      ]),
+    );
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.long, 50);
+    assert.equal(entries[0]?.short, 20);
   });
 });

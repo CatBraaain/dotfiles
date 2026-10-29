@@ -20,7 +20,7 @@
 
 ## 列配置
 
-取得したプロバイダーを入力順に1行ずつ表示し、プロバイダー名・`short`枠・`long`枠を `|` で区切る。既知のプロバイダー名は `openai-codex` を `codex`、`command-code` を `command`、`zai` を `zai` と表示し、それ以外は元の名前を使う。
+取得したプロバイダーを入力順に1行ずつ表示し、プロバイダー名・`short`枠・`long`枠を `|` で区切る。既知のプロバイダー名は `openai-codex` を `codex`、`commandcode` を `command`、`zai` を `zai` と表示し、それ以外は元の名前を使う。
 
 | 列 | 配置と幅 |
 | --- | --- |

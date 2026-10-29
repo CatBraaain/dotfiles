@@ -59,7 +59,8 @@ describe("JSON local reset date times", () => {
             },
           ]),
         );
-        assert.deepEqual(summarizeProviderUsageJson(state), {
+        assert.deepEqual(summarizeProviderUsageJson(state, Date.parse("2030-01-01T00:00:00Z")), {
+          urgency: null,
           longWindowMinutes: 10080,
           provider: "openai-codex",
           short: 80,
@@ -83,6 +84,7 @@ describe("JSON local reset date times", () => {
         ]),
       );
       assert.deepEqual(summarizeProviderUsageJson(state), {
+        urgency: null,
         longWindowMinutes: 10080,
         provider: "openai-codex",
         short: 80,
@@ -126,8 +128,9 @@ describe("JSON local reset date times", () => {
         );
         const state = ready(report);
         assert.deepEqual(summarizeProviderUsageJson(state), {
+          urgency: null,
           longWindowMinutes: 10080,
-          provider: "command-code",
+          provider: "commandcode",
           short: 100,
           shortResetsAt: null,
           long: 100,
@@ -206,7 +209,7 @@ describe("JSON remaining summary", () => {
       1000,
     );
     assert.deepEqual(summarizeProviderUsage(ready(report)), {
-      provider: "command-code",
+      provider: "commandcode",
       short: 90,
       shortResetsAt: null,
       long: 83,
@@ -230,7 +233,7 @@ describe("JSON remaining summary", () => {
       1000,
     );
     assert.deepEqual(summarizeProviderUsage(ready(report)), {
-      provider: "command-code",
+      provider: "commandcode",
       short: 90,
       shortResetsAt: null,
       long: 83,
@@ -349,10 +352,10 @@ describe("JSON remaining summary", () => {
 
   it("ranks Command Code monthly by duration like any other window", () => {
     const state = ready(
-      fixture([bucket("monthly", 43_200), bucket("plan", 300, 70)], "command-code"),
+      fixture([bucket("monthly", 43_200), bucket("plan", 300, 70)], "commandcode"),
     );
     assert.deepEqual(summarizeProviderUsage(state), {
-      provider: "command-code",
+      provider: "commandcode",
       short: 70,
       shortResetsAt: null,
       long: 80,
@@ -488,4 +491,29 @@ describe("JSON remaining summary", () => {
       assert.deepEqual(tableCells, [expectedCells[0], "—", expectedCells[1], "—"]);
     });
   }
+});
+
+describe("JSON urgency", () => {
+  const now = Date.parse("2026-06-17T00:00:00Z");
+  it("uses rounded long and second-precision reset rather than raw bucket values or capturedAt", () => {
+    const state = ready(
+      fixture([
+        { ...bucket("short", 300, 99), resetsAt: (now + 60_000) / 1000 },
+        { ...bucket("long", 10080, 66.5), resetsAt: (now + 120 * 60_000 + 999) / 1000 },
+      ]),
+    );
+    const row = summarizeProviderUsageJson(state, now);
+    assert.equal(row.long, 67);
+    assert.equal(row.urgency, (0.67 * 10080) / 120);
+  });
+  it.each([0, 50])("preserves valid remaining %s", (remaining) => {
+    const state = ready(
+      fixture([{ ...bucket("long", 300, remaining), resetsAt: (now + 60_000) / 1000 }]),
+    );
+    assert.equal(summarizeProviderUsageJson(state, now).urgency, (remaining / 100) * 5);
+  });
+  it("treats a reset in the current second as expired", () => {
+    const state = ready(fixture([{ ...bucket("long", 300), resetsAt: (now + 999) / 1000 }]));
+    assert.equal(summarizeProviderUsageJson(state, now).urgency, null);
+  });
 });

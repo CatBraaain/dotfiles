@@ -48,7 +48,7 @@ import {
 } from "./class-change.ts";
 import { truncateErrorOutput } from "../shared/tool-text.ts";
 import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
-import { runModelRoute } from "./model-route.ts";
+import { runUsage } from "./usage.ts";
 
 export type Agent = string;
 
@@ -267,48 +267,22 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
   }
 }
 
-export interface RouteFacts {
-  urgency: number | null;
-  remaining: number | null;
-}
-
-export function parseRouteFacts(
-  stdout: string,
-  candidates: readonly ModelCandidate[],
-): RouteFacts[] | null {
+export function parseProviderUrgency(stdout: string): Map<string, number | null> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
     return null;
   }
-  if (!Array.isArray(parsed) || parsed.length !== candidates.length) return null;
-  const facts: RouteFacts[] = [];
-  for (const [index, entry] of parsed.entries()) {
-    if (typeof entry !== "object" || entry === null) return null;
-    const { provider, model, urgency, usageState } = entry as Record<string, unknown>;
-    const candidate = candidates[index]!;
-    if (provider !== candidate.provider || model !== candidate.model) return null;
-    if (urgency !== null && (typeof urgency !== "number" || !Number.isFinite(urgency))) {
-      return null;
-    }
-    const remaining = readRouteRemaining(usageState);
-    if (remaining === undefined) return null;
-    facts.push({ urgency, remaining });
+  if (!Array.isArray(parsed)) return null;
+  const rows = new Map<string, number | null>();
+  for (const row of parsed) {
+    if (!isRecord(row) || !isNonEmptyString(row.provider)) return null;
+    const { provider, urgency } = row;
+    if (urgency !== null && (typeof urgency !== "number" || !Number.isFinite(urgency))) return null;
+    rows.set(provider, urgency);
   }
-  return facts;
-}
-
-function readRouteRemaining(usageState: unknown): number | null | undefined {
-  if (usageState === null) return null;
-  if (
-    typeof usageState === "object" &&
-    typeof (usageState as Record<string, unknown>).remaining === "number" &&
-    Number.isFinite((usageState as Record<string, unknown>).remaining)
-  ) {
-    return (usageState as Record<string, unknown>).remaining as number;
-  }
-  return undefined;
+  return rows;
 }
 
 export function agentConfigPath(agentDir = getAgentDir()): string {
@@ -1039,7 +1013,7 @@ function registerAgentWidget(
 export default function agentsExtension(
   pi: ExtensionAPI,
   injectedConfig: ConfigLoadResult = loadAgentConfig(),
-  executeRoute: typeof runModelRoute = runModelRoute,
+  executeUsage: typeof runUsage = runUsage,
 ): void {
   if (injectedConfig.config === undefined)
     throw new Error(`agents.yaml: ${injectedConfig.error ?? "configuration is invalid"}`);
@@ -1198,24 +1172,19 @@ export default function agentsExtension(
   ): Promise<readonly ModelCandidate[] | null> {
     if (routingUsageDisabled) return null;
     try {
-      const { exitCode, stdout } = await executeRoute(candidates, signal);
+      const { exitCode, stdout } = await executeUsage(signal);
       if (exitCode === 127) {
         routingUsageDisabled = true;
         return null;
       }
-      if (exitCode !== 0) return null;
-      const facts = parseRouteFacts(stdout, candidates);
-      if (facts === null) {
+      if (exitCode !== 0 && exitCode !== 1) return null;
+      const providerUrgency =
+        exitCode === 1 ? new Map<string, number | null>() : parseProviderUrgency(stdout);
+      if (providerUrgency === null) {
         routingUsageDisabled = true;
         return null;
       }
       const now = new Date();
-      const providerUrgency = new Map<string, number | null>();
-      candidates.forEach((candidate, index) => {
-        if (!providerUrgency.has(candidate.provider)) {
-          providerUrgency.set(candidate.provider, facts[index]!.urgency);
-        }
-      });
       return candidates
         .map((candidate) => ({
           candidate,

@@ -25,7 +25,7 @@ providerごとに用途を保持し、異なる枠・通貨の数値を合算し
 | ID | 表示名 |
 | --- | --- |
 | `openai-codex` | Codex |
-| `command-code` | Command |
+| `commandcode` | Command |
 | `zai` | Z.AI |
 
 Command Code・Z.AIは、必須応答を取得できても補足応答に失敗する場合がある。取得できた通常の利用制限枠から残量率を返す。
@@ -36,7 +36,7 @@ Command Codeのrolling枠の `resetAt` が数値の0、または数字文字列�
 
 `$HOME/.pi/agent/auth.json` と `$HOME/.pi/agent/settings.json` を読み取る。HOMEがない環境ではOSのhomeを使う。ファイルの不在は空の設定として扱い、読み取り不能・不正JSON・object以外の内容はコマンドの失敗となる。
 
-保存認証はprovider IDをキーとするobjectで、環境変数より優先する。保存認証が不正・期限切れの場合も、別の環境認証へ黙って切り替えない。
+保存認証はprovider IDをキーとするobjectで、環境変数より優先する。保存認証が不正・期限切れの場合も、別の保存認証や環境認証へ黙って切り替えない。
 
 | 保存形式 | 挙動 |
 | --- | --- |
@@ -56,14 +56,14 @@ Z.AIは保存認証がない場合に `ZAI_API_KEY` を使う。Codex・Command 
 
 ### Command Codeの別名
 
-`commandcode` は `command-code` の別名。入力・保存認証・既定provider判定で受け付け、出力IDは `command-code` に統一する。
+`command-code` は `commandcode` の別名。入力・保存認証・既定provider判定で受け付け、出力IDは `commandcode` に統一する。
 
 | 条件 | 使用する保存認証 |
 | --- | --- |
 | 片方のIDだけを保存 | 保存された方 |
-| 両方を保存、引数なし・list・canonical指定 | `command-code` |
-| 両方を保存、`commandcode` だけを明示指定 | `commandcode` |
-| 両方のIDを明示指定 | `command-code`。照会は1回 |
+| 両方を保存、引数なし・list・canonical指定 | `commandcode` |
+| 両方を保存、`command-code` だけを明示指定 | `command-code` |
+| 両方のIDを明示指定 | `commandcode`。照会は1回 |
 
 ## 出力
 
@@ -80,16 +80,17 @@ Command    90%              —    98%             —
 Z.AI         —              —    60%   06/21 00:00
 ```
 
-JSON照会結果は、各要素に次の6フィールドだけを持つ配列である。枠選択・残量計算・整数への丸めは通常表示と同じとし、`%` を付けず数値で返す。リセット日時は各残量率と同じ枠の日時を、実行環境のローカルタイムゾーンで秒までの `YYYY-MM-DDTHH:mm:ss±HH:mm` 文字列として返す。時差はその日時に適用されるUTC offsetを使い、夏時間を反映する。UTC環境の時差は `+00:00` とする。小数秒は出力しない。対象枠がない値・不明な値は `null` とする。成功・認証不可・取得失敗のいずれも同じフィールド構成とする。
+JSON照会結果は、各要素に次の7フィールドだけを持つ配列である。枠選択・残量計算・整数への丸めは通常表示と同じとし、`%` を付けず数値で返す。リセット日時は各残量率と同じ枠の日時を、実行環境のローカルタイムゾーンで秒までの `YYYY-MM-DDTHH:mm:ss±HH:mm` 文字列として返す。時差はその日時に適用されるUTC offsetを使い、夏時間を反映する。UTC環境の時差は `+00:00` とする。小数秒は出力しない。対象枠がない値・不明な値は `null` とする。成功・認証不可・取得失敗のいずれも同じフィールド構成とする。
 
 | フィールド | 内容 |
 | --- | --- |
-| `provider` | 既存のprovider ID（`openai-codex`・`command-code`・`zai`） |
+| `provider` | 既存のprovider ID（`openai-codex`・`commandcode`・`zai`） |
 | `short` | shortの整数残量率、または `null` |
 | `shortResetsAt` | shortのローカル日時・時差付き文字列、または `null` |
 | `long` | longの整数残量率、または `null` |
 | `longResetsAt` | longのローカル日時・時差付き文字列、または `null` |
 | `longWindowMinutes` | 選択されたlong枠と同じ枠の正の有限な全期間（分単位）、または `null` |
+| `urgency` | long枠の残量とリセットまでの時間から計算する正規化値、または `null` |
 
 ```json
 [
@@ -99,18 +100,36 @@ JSON照会結果は、各要素に次の6フィールドだけを持つ配列で
     "shortResetsAt": "2026-06-17T18:00:00+09:00",
     "long": 70,
     "longResetsAt": "2026-06-20T09:00:00+09:00",
-    "longWindowMinutes": 10080
+    "longWindowMinutes": 10080,
+    "urgency": 1.8
   },
   {
-    "provider": "command-code",
+    "provider": "commandcode",
     "short": null,
     "shortResetsAt": null,
     "long": null,
     "longResetsAt": null,
-    "longWindowMinutes": null
+    "longWindowMinutes": null,
+    "urgency": null
   }
 ]
 ```
+
+### urgency
+
+`urgency = (long / 100) × longWindowMinutes / max((resetMs - nowMs) / 60000, 60)` とする。`long` はJSONへ出す整数丸め済みの残量率、`resetMs` はJSONへ出す秒精度の `longResetsAt` をepochミリ秒へ変換した値、`nowMs` は全provider照会後、結果を出力する時点の現在時刻である。値が大きいほど、残量と全期間に対してリセットが近い状態を表す。
+
+| 入力の状態 | urgency |
+| --- | --- |
+| 全期間の半分が残り、残量50% | `1` |
+| 全期間の半分が残り、残量90% | `1.8` |
+| リセットまで1時間未満 | 分母を60分として計算 |
+| 有効な期間・未来のリセット日時があり、残量0 | `0` |
+| 残量不明、期間不明・非正・非有限、リセット済み・不正日時、不正な現在時刻 | `null` |
+
+期間をproviderやリセット日時から推測しない。通常のtable表示は上記の列構成を使う。
+
+### JSON一覧
 
 JSON一覧の各行は `id`・`displayName`・`semantics`・`authenticated`・`authType` を含む。`authenticated` はローカルで認証情報を解決できたことだけを表し、API受理の証明ではない。認証不可の `authType` は `null` となる。
 

@@ -4,7 +4,7 @@ import { sanitizeDisplayText } from "./util";
 
 const PROVIDER_NAMES: Readonly<Record<string, string>> = {
   "openai-codex": "Codex",
-  "command-code": "Command",
+  commandcode: "Command",
   zai: "Z.AI",
 };
 const MIN_NAME_WIDTH = 7;

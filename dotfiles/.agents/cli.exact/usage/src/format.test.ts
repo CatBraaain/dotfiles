@@ -34,7 +34,7 @@ describe("renderUsageTable", () => {
     const buckets = [percentBucket("session", 300, 20), percentBucket("week", 10_080, 30)];
     const states = [
       readyState(buckets),
-      readyState(buckets, "command-code"),
+      readyState(buckets, "commandcode"),
       readyState(buckets, "zai"),
     ];
     const output = renderUsageTable(states);
@@ -55,7 +55,7 @@ describe("renderUsageTable", () => {
         { ...percentBucket("short", 300, 20), resetsAt: shortResetsAt },
         { ...percentBucket("long", 10_080, 30), resetsAt: longResetsAt },
       ]),
-      readyState([percentBucket("only", 300, 100)], "command-code"),
+      readyState([percentBucket("only", 300, 100)], "commandcode"),
     ];
     const expected = [
       "         short  shortResetsAt   long  longResetsAt",
@@ -110,7 +110,7 @@ describe("renderProviderState", () => {
           windowMinutes: 43_200,
         },
       ],
-      "command-code",
+      "commandcode",
     );
     assert.equal(renderProviderState(state), "Command    60%              —   100%             —");
   });

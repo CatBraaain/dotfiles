@@ -26,7 +26,7 @@ export type UsageEntry = Static<typeof usageEntrySchema>;
 
 const PROVIDER_LABELS: Record<string, string> = {
   "openai-codex": "codex",
-  "command-code": "command",
+  commandcode: "command",
   zai: "zai",
 };
 

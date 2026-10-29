@@ -41,7 +41,7 @@ export async function loadAuthContext(options: AuthOptions = {}): Promise<AuthCo
 }
 
 export function canonicalProviderId(providerId: string): string {
-  return providerId === "commandcode" ? "command-code" : providerId;
+  return providerId === "command-code" ? "commandcode" : providerId;
 }
 
 function credentialIds(providerId: string): string[] {

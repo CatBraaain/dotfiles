@@ -115,7 +115,7 @@ describe("buildUsageWidgetLines", () => {
           longResetsAt: minutesLater(5 * 24 * 60 + 19 * 60),
         }),
         entryWith({
-          provider: "command-code",
+          provider: "commandcode",
           short: 100,
           shortResetsAt: minutesLater(5 * 24 * 60 + 20 * 60),
           long: 100,
@@ -155,7 +155,7 @@ describe("buildUsageWidgetLines", () => {
     const lines = buildUsageWidgetLines(
       [
         entryWith({ short: null, shortResetsAt: null, longResetsAt: null }),
-        entryWith({ provider: "command-code", shortResetsAt: null, longResetsAt: null }),
+        entryWith({ provider: "commandcode", shortResetsAt: null, longResetsAt: null }),
       ],
       NOW,
     );
