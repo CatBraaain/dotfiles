@@ -1,6 +1,8 @@
-# guardrail — 仕様書
+# tools / guardrails — 仕様書
 
-pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）を置き換え、**パスの読み書きを `allow` / `deny` / `ask` で、bashコマンドを `allow` / `deny` / `ask` / `ask_with_reason` で制限**しつつ、network系は自由に使う拡張機能。
+pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）の利用と保守に向けた仕様書。パスの読み書きを `allow` / `deny` / `ask` で、bashコマンドを `allow` / `deny` / `ask` / `ask_with_reason` で制限し、network は開放する。
+
+ツール定義は tools、認可・承認状態・実行は guardrails が提供する。tools は guardrails の公開APIを直接呼び、結果のPromiseを返す。起動時に設定が不正な場合の扱いは §6、停止・再読み込み時の扱いは §7 に従う。
 
 ---
 
@@ -117,7 +119,7 @@ Vision入力として扱う画像ファイルは、MIMEタイプが `image/*` �
 
 ### ツール引数パスの正規化（authorize前）
 
-fs系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission` が引数に受け取るパスは、アクション判定（authorize）の前に共有ヘルパーで正規化する。fs系ツールでは、承認（§2.3 のダイアログ・許可要求）と実行（§7 の run-tools へ渡すパス）は同一の正規化結果を用い、審査したパスと実行するパスを一致させる。
+fs系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission` が引数に受け取るパスは、アクション判定（authorize）の前に guardrails が正規化する。fs系ツールでは、承認（§2.3 のダイアログ・許可要求）と実行（§7 の run-tools へ渡すパス）は同一の正規化結果を用い、審査したパスと実行するパスを一致させる。
 
 | 引数の記述 | 正規化 |
 | --- | --- |
@@ -126,7 +128,7 @@ fs系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission`
 
 ### パス文字列の解決
 
-`guardrail.yaml` の `read` / `write` の要素のパターンと `credentials` のエントリは以下の規則で絶対パスに解決する。`read` / `write` はそれぞれの設定でアクション判定を行い、`read` / `write` と `credentials` は bwrap の bind対象（§6.1）とする。
+`guardrails.yaml` の `read` / `write` の要素のパターンと `credentials` のエントリは以下の規則で絶対パスに解決する。`read` / `write` はそれぞれの設定でアクション判定を行い、`read` / `write` と `credentials` は bwrap の bind対象（§6.1）とする。
 
 | 記述 | 解決先 |
 | --- | --- |
@@ -162,7 +164,7 @@ glob は起動時に既存パスへ展開する。展開はパターンの固定
 
 ### アクションの決定
 
-`guardrail.yaml`（§6）の `read` / `write` のリストを上から順に走査し、パスがマッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定し、マッチする要素がなければ未設定（= `deny`）。
+`guardrails.yaml`（§6）の `read` / `write` のリストを上から順に走査し、パスがマッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定し、マッチする要素がなければ未設定（= `deny`）。
 
 ### 動的拡張のライフサイクル
 
@@ -205,7 +207,7 @@ flowchart TD
 
 ダイアログでの承認は `write` の動的許可（ディレクトリスコープ）と同じ効果を持つ: `path` 配下がセッション内で書き込み可になり、bind対象に追加され、実在保証は §6.1 に従う。bash経由で書き込み可能になるのは `path` の確定アクション（§3）が未設定のときだけで、`ask` に確定したパスは fsツールでのみ書き込み可になり、bash からは書けない（§6.1）。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは `path` 配下がセッション内で書き込み可能になったことと、bash経由で書けるかどうか（§2.3 の承認ノートと同じ区分）を伝える。拒否はエラーではなく、以降の `write` / `edit` は従来どおり個別に確認される。
 
-`ask_permission` の説明文と promptGuidelines には、編集を伴う作業の着手前に作業場所（worktree作成先やその親ディレクトリ）の書き込み許可をユーザーへ要求するために使う旨と、bash が理由必須でコマンドを差し戻したときにそのコマンドと理由を添えて承認を求めるために使う旨を含める。promptGuidelines は、セッション開始時の `guardrail.yaml` から writeパスを展開し、通常の認可と同じ後勝ち判定で最終アクションごとに `allow` / `ask` / `deny` のパスを分類して列挙する。credentials により遮断されるパスは列挙せず、credentials は列挙された祖先パスより優先する。モデルには、最終アクションが `allow` なら許可要求不要、`ask` なら許可要求可能だが bash からは書けない、明示 `deny` は許可要求不可であることを示す。パスに一致するwriteルールがない場合は一覧に出ず、credentials に遮断されない限り許可要求できる。判定はパスの具体性ではなく最後にマッチしたルールで決まる。`commands` の設定値と `credentials` のパスは列挙しない。編集を伴う作業の前に許可を要求するときは対象（worktree の場合は作成先または親）を指定する。bash が `Read-only file system` で拒否した場合は、要求可能なパスに限り `ask_permission` を使い、ツール結果が示すbash書き込み可否を守る。bash で拒否された書き込みを別コマンドへ書き換えて再試行しない。
+`ask_permission` の説明文と promptGuidelines には、編集を伴う作業の着手前に作業場所（worktree作成先やその親ディレクトリ）の書き込み許可をユーザーへ要求するために使う旨と、bash が理由必須でコマンドを差し戻したときにそのコマンドと理由を添えて承認を求めるために使う旨を含める。promptGuidelines は、セッション開始時の `guardrails.yaml` から writeパスを展開し、通常の認可と同じ後勝ち判定で最終アクションごとに `allow` / `ask` / `deny` のパスを分類して列挙する。credentials により遮断されるパスは列挙せず、credentials は列挙された祖先パスより優先する。モデルには、最終アクションが `allow` なら許可要求不要、`ask` なら許可要求可能だが bash からは書けない、明示 `deny` は許可要求不可であることを示す。パスに一致するwriteルールがない場合は一覧に出ず、credentials に遮断されない限り許可要求できる。判定はパスの具体性ではなく最後にマッチしたルールで決まる。`commands` の設定値と `credentials` のパスは列挙しない。編集を伴う作業の前に許可を要求するときは対象（worktree の場合は作成先または親）を指定する。bash が `Read-only file system` で拒否した場合は、要求可能なパスに限り `ask_permission` を使い、ツール結果が示すbash書き込み可否を守る。bash で拒否された書き込みを別コマンドへ書き換えて再試行しない。
 
 `command` の確認ダイアログと承認範囲は §2.3 に従う。`Allow once` の承認は1回限りの実行承認で、コマンドはその場では実行されない。承認後、エージェントが `bash` で同じコマンド（引用の付け方の違いを除く）を再送すると、確認なしで実行され、承認は消費される。コマンドの一部分だけが一致する別のコマンドには使えない。§2.3 の有効なパターン承認が確認対象に一致するとき、`ask_permission` の再リクエストは確認ダイアログなしで許可済みを返す。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは承認の単位を区別して伝える: `Allow once` では同じコマンドを bash で再送すれば実行できること、パターン承認では承認されたパターンと §2.3 に定める有効期間を示す。拒否はエラーではなく、以降の当該コマンドの `bash` は `ask_with_reason` の差し戻し（§4）を引き続き受ける。
 
@@ -221,7 +223,7 @@ flowchart TD
 
 ## 4. bashコマンドの実行結果
 
-`bash` コマンドは `guardrail.yaml`（§6）の `commands` からアクションを解決する（走査・未設定の扱いは §3 と同じ）。
+`bash` コマンドは `guardrails.yaml`（§6）の `commands` からアクションを解決する（走査・未設定の扱いは §3 と同じ）。
 
 複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。事前承認の同一性は各セグメントのtoken列で比較し、`cmd "a b"` と `cmd a b` を区別する。
 
@@ -247,9 +249,9 @@ network は開放。fs制限の対象外。
 
 ---
 
-## 6. 設定（`guardrail.yaml`）
+## 6. 設定（`guardrails.yaml`）
 
-ユーザーが `dotfiles/.agents/config.exact/guardrail.yaml` で制御する（実行時は pi の設定ディレクトリから symlinkする）。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash専用パスは `credentials` で指定する。
+ユーザーが `dotfiles/.agents/config.exact/guardrails.yaml` で制御する（実行時は pi の設定ディレクトリから symlinkする）。通常のパスは `allow` / `deny` / `ask` の3アクション、コマンドは `ask_with_reason` を加えた4アクションで指定し、bash専用パスは `credentials` で指定する。
 
 | 項目 | 意味 |
 | --- | --- |
@@ -260,8 +262,8 @@ network は開放。fs制限の対象外。
 
 - `read` / `write` は `{action: pattern}` または `{action: [patterns...]}` のフラットなリストで、pattern はパスglob（§3）。`commands` はコマンドパターンをキーとする単一キーのマッピング（ファミリー）の配列とし、キーはコマンドパターン（JavaScript `RegExp`）、値はルール項目 `{action: argPatterns}` の配列とする。argPatterns は引数パターン（JavaScript `RegExp`）の文字列リストで、リスト内の全パターンがそれぞれ1個以上の引数token全体に一致し、かつキーが実行ファイルtoken全体に一致するとき一致する（AND）。空リストは引数条件なしで、キーに一致するコマンドすべてに一致する。同じactionを複数のルール項目に分けて並べたときは、どちらか一方が一致すればそのactionとする（OR）。各ファミリーは単一のコマンドパターンだけを宣言し、commands は `allow` / `ask` / `ask_with_reason` / `deny`、read・write は `allow` / `ask` / `deny` を受理する。
 - `read` / `write` のリスト、`commands` のファミリー配列と各ファミリーのルール配列は、いずれも上から順に走査し、マッチした要素のアクションで解決結果を上書きする（後勝ち）。最後にマッチした要素のアクションが確定アクションになる。マッチする要素がなければ未設定（= `deny`）。
-- 実値（既定エントリ）は `guardrail.yaml` を参照。
-- 設定ファイルが不在・読めない・YAML として不正な場合、または記法（この節の表と例）に適合しない場合、拡張のロードを失敗させる（`guardrail.yaml (<パス>): <理由>` で throw する）。pi は拡張ロードの失敗を起動時の診断に表示する。不正な設定を一部分だけ適用することはない。
+- 実値（既定エントリ）は `guardrails.yaml` を参照。
+- 設定ファイルが不在・読めない・YAML として不正な場合、または記法（この節の表と例）に適合しない場合、guardrails の初期化を失敗させる（`guardrails.yaml (<パス>): <理由>`）。tools は起動時にその理由を通知し、置き換え対象の7ツールをすべて同じ理由で実行不可にする。標準ツールへのフォールバックや、不正な設定の部分適用は行わない。
 - `commands` のキー（コマンドパターン）または引数パターンの正規表現が不正な場合、そのルール全体を無効にし、無効だったルールを警告に列挙する。他ルールとパス設定は有効なままとする。piの起動時メッセージで警告する。
 
 記法の例（`commands`）:
@@ -321,11 +323,12 @@ bashコマンドの sandbox ではこのマスクを行わない。`credentials`
 
 ## 7. run-tools CLI によるfs IO
 
-本拡張は pi の標準tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時、対象の最終アクションが `ask` または未設定の場合だけ `ask_permission` で許可要求できること、明示 `deny` と credentials は要求不可であること、許可結果が bash書き込み不可を示す場合は fsツールを使うことを、理由必須ゲート（`ask_with_reason`）で差し戻されたときは元のコマンドと理由で `ask_permission` に要求することを追記する。`write` / `edit` には、最終アクションが `ask` または未設定のパスは許可確認の対象になり、承認後にセッション内で書き込み可能になること、明示 `deny` と credentials は許可ダイアログを出さず拒否すること（`ask` に確定したパスは bash からは書けない。§6.1）を追記する。認可（§2〜§4）を通ったfsツール呼び出しは、ツールごとに 1回の bwrap起動で execute全体を実行する。sandbox内では `bun run-tools.ts <tool-name>` が pi標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
+本拡張は pi の標準tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時、対象の最終アクションが `ask` または未設定の場合だけ `ask_permission` で許可要求できること、明示 `deny` と credentials は要求不可であること、許可結果が bash書き込み不可を示す場合は fsツールを使うことを、理由必須ゲート（`ask_with_reason`）で差し戻されたときは元のコマンドと理由で `ask_permission` に要求することを追記する。`write` / `edit` には、最終アクションが `ask` または未設定のパスは許可確認の対象になり、承認後にセッション内で書き込み可能になること、明示 `deny` と credentials は許可ダイアログを出さず拒否すること（`ask` に確定したパスは bash からは書けない。§6.1）を追記する。guardrails が要求ごとに認可（§2〜§4）し、認可済みのテキストfsツール・bash呼び出しを1回の bwrap起動で実行する。画像readは§2.1に従い、認可後にguardrailsが画像入力を返す。sandbox内では `bun run-tools.ts <tool-name>` が pi標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
 
 | ツール | 実行 |
 | --- | --- |
-| `read` `write` `edit` `grep` `find` `ls` `bash` | sandbox内で `bun run-tools.ts <tool-name>` → pi標準tool definition の execute |
+| テキスト `read` / `write` / `edit` / `grep` / `find` / `ls` / `bash` | sandbox内で `bun run-tools.ts <tool-name>` → pi標準tool definition の execute |
+| 画像 `read` | 認可後に §2.1 の画像入力を返す |
 | `ask_permission` | 許可要求（§3・§4） |
 
 bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾にヒント文を追記する。ヒント文はコマンドを書き換えて再試行しないことを伝え、対象の最終アクションが `ask` または未設定で credentials に遮断されない場合にだけ `ask_permission` で許可要求できることを示す。明示 `deny` は許可できない。許可結果が bash書き込み不可を示した場合は fsツールを使う。
@@ -335,6 +338,10 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 - 標準tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob結果整形、rg実行、shell実行と timeout）は本拡張で再実装しない。
 - `edit` は pi標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
 - ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で onUpdate として送出し、実行中の進捗表示に使う（描画は tool-renderer SPEC §bash）。stdout は run-tools CLI の JSON envelope に使うため、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
+
+ツール実行で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後・実行枠待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記の bwrap停止に従う。
+
+停止済みの公開APIを呼び出すと、`guardrails API is no longer active` で拒否される。再読み込み後は新しい認可状態を使い、前の動的許可・コマンド承認を持ち越さない。`ask_permission` と各ツールの実行は同じ有効期間と承認状態を使う。
 
 ### sandbox実行の同時数の上限
 

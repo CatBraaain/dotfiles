@@ -13,7 +13,8 @@ import type {
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { quote, parse } from "shell-quote";
 import piSessionsExtension from "./index";
-import guardrailExtension from "../guardrail/index";
+
+import toolsExtension from "../tools/index";
 
 type Outcome = AgentToolResult;
 type ExecuteTool = (
@@ -462,21 +463,19 @@ describe("session_search sandbox fixture integration", () => {
       const wrapper = join(temp, "wrapper");
       writeFileSync(wrapper, `#!/bin/sh\nHOME=${quote([home])} exec ${quote([fixtureCli])} "$@"\n`);
       chmodSync(wrapper, 0o755);
-      const config = join(temp, "guardrail.yaml");
+      const config = join(temp, "guardrails.yaml");
       writeFileSync(
         config,
         "read:\n  - allow: '*'\nwrite:\n  - allow:\n      - /tmp\ncommands:\n  - .*:\n      - allow: []\n",
       );
       const tools = new Map<string, ToolDefinition>();
-      guardrailExtension(
-        {
-          registerTool(tool: ToolDefinition) {
-            tools.set(tool.name, tool);
-          },
-          on() {},
-        } as unknown as ExtensionAPI,
-        config,
-      );
+      const api = {
+        registerTool(tool: ToolDefinition) {
+          tools.set(tool.name, tool);
+        },
+        on() {},
+      } as unknown as ExtensionAPI;
+      toolsExtension(api, config);
       const bash = tools.get("bash")!;
       let nestedCalls = 0;
       const executeTool: ExecuteTool = async (name, args, options) => {

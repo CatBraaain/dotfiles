@@ -1,12 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -32,7 +25,8 @@ import {
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import guardrailExtension from "./index.ts";
+
+import toolsExtension from "./index.ts";
 
 initTheme("dark", false);
 
@@ -178,7 +172,7 @@ async function guardrailSession(
   sessions: AgentSession[],
   observer: ExtensionFactory,
 ): Promise<AgentSession> {
-  const configPath = join(directory, "guardrail.yaml");
+  const configPath = join(directory, "guardrails.yaml");
   writeFileSync(
     configPath,
     `read:\n  - deny: ${directory}/denied\nwrite:\n  - ask: ${directory}/requested
@@ -192,8 +186,8 @@ commands:
   const settingsManager = SettingsManager.inMemory({ codemode: { mode: "on" } });
   const loader = resourceLoader(directory, settingsManager, [
     builtinCodemode,
-    { name: "guardrail", factory: (pi) => guardrailExtension(pi, configPath) },
     observer,
+    { name: "tools", factory: (pi) => toolsExtension(pi, configPath) },
   ]);
   const session = await createSession(directory, settingsManager, loader, sessions);
   session.setActiveToolsByName([
@@ -242,9 +236,19 @@ describe("codemode resource ownership through the standard loader", () => {
   it(
     "keeps standard codemode rendering while ownership switches when guardrail is enabled, disabled, and reloaded",
     withTemporarySession(async (directory, sessions) => {
-      const extensionDirectory = join(directory, "agent", "extensions", "guardrail");
+      const extensionDirectory = join(directory, "agent", "extensions", "tools");
       mkdirSync(join(directory, "agent", "extensions"), { recursive: true });
       symlinkSync(import.meta.dir, extensionDirectory, "dir");
+      symlinkSync(
+        join(import.meta.dir, "..", "guardrails"),
+        join(directory, "agent", "extensions", "guardrails"),
+        "dir",
+      );
+      symlinkSync(
+        join(import.meta.dir, "..", "shared"),
+        join(directory, "agent", "extensions", "shared"),
+        "dir",
+      );
       const extensionPath = join(extensionDirectory, "index.ts");
       const settingsManager = SettingsManager.inMemory({ codemode: { mode: "on" } });
       const loader = resourceLoader(directory, settingsManager);
@@ -266,6 +270,13 @@ describe("codemode resource ownership through the standard loader", () => {
           .getExtensions()
           .extensions.filter((extension) => extension.tools.has("codemode"));
         assert.equal(owners.length, 1);
+        assert.equal(owners[0]!.tools.has("ask_permission"), enabled);
+        assert.equal(
+          loader
+            .getExtensions()
+            .extensions.some((extension) => extension.path.includes("/guardrails/")),
+          false,
+        );
         assert.equal(owners[0]!.path, enabled ? extensionPath : "builtin:codemode");
         const definition = session.getToolDefinition("codemode")!;
         assert.equal(definition.defaultActive, false);
@@ -285,6 +296,35 @@ describe("codemode resource ownership through the standard loader", () => {
 });
 
 describe("codemode nested AgentSession pipeline without a model request", () => {
+  it(
+    "recreates one authorization state on each SDK reload",
+    withTemporarySession(async (directory, sessions) => {
+      const session = await guardrailSession(directory, sessions, observeNestedCalls([], [], []));
+      let prompts = 0;
+      await session.bindExtensions({
+        uiContext: {
+          select: async (_title: string, options: string[]) => {
+            prompts++;
+            return options[0];
+          },
+          notify() {},
+        } as unknown as ExtensionUIContext,
+      });
+      const target = join(directory, "requested");
+      const script = `text(await tools.ask_permission(${JSON.stringify({ path: target, reason: "reload lifetime" })}));`;
+      for (let generation = 0; generation < 3; generation++) {
+        if (generation > 0) await session.reload();
+        const granted = await executeScript(session, script);
+        assert.match(resultText(granted), /User approved write access/);
+        const cached = await executeScript(session, script);
+        assert.match(resultText(cached), /Already granted/);
+        assert.equal(prompts, generation + 1);
+        const names = session.agent.state.tools.map((tool) => tool.name);
+        assert.equal(names.length, new Set(names).size);
+      }
+    }),
+  );
+
   it(
     "runs before and after hooks with parent IDs and returns the after-hook content to the script",
     withTemporarySession(async (directory, sessions) => {
@@ -401,10 +441,10 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
         );
         assert.equal(result.isError, undefined);
         assert.equal(calls.length, 1);
-        assert.equal(results.length, 1);
         assert.equal(calls[0]!.toolName, scenario.name);
         assert.deepEqual(calls[0]!.input, args);
         assert.equal(calls[0]!.parentToolCallId, "script");
+        assert.equal(results.length, 1);
         assert.equal(results[0]!.parentToolCallId, "script");
         assert.equal(results[0]!.toolCallId, calls[0]!.toolCallId);
         assert.equal(results[0]!.isError, true);
@@ -442,8 +482,7 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
           notify: () => {},
         } as unknown as ExtensionUIContext;
         await session.bindExtensions({ uiContext: deniedUI });
-        const requestedTarget =
-          target === "path" ? join(directory, "requested") : "reason-command";
+        const requestedTarget = target === "path" ? join(directory, "requested") : "reason-command";
         const args = { [target]: requestedTarget, reason: "fixture permission reason" };
         const result = await executeScript(
           session,

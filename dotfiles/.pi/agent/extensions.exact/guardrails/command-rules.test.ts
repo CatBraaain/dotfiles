@@ -3,14 +3,14 @@ import { describe, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Guardrail } from "./guardrail.ts";
 import {
-  Guardrail,
   compileCommandRuleEntries,
   parseGuardrailConfig,
   resolveCommandAction,
   resolveCommandActionMatch,
   splitCommandSegments,
-} from "./guardrail";
+} from "./config.ts";
 
 function commandEntries(pattern: string, args: string[]) {
   return compileCommandRuleEntries([{ action: "ask", pattern, args }]).entries;
@@ -20,7 +20,7 @@ function withGuardrail(config: string, test: (guardrail: Guardrail, cwd: string)
   return async () => {
     const cwd = mkdtempSync(join(tmpdir(), "structured-command-rules-"));
     try {
-      const path = join(cwd, "guardrail.yaml");
+      const path = join(cwd, "guardrails.yaml");
       writeFileSync(path, config);
       await test(new Guardrail(cwd, path), cwd);
     } finally {
@@ -183,21 +183,24 @@ describe("structured whole-token command rules", () => {
 
 it(
   "once approvals distinguish a quoted single token from two tokens",
-  withGuardrail(`commands:
+  withGuardrail(
+    `commands:
   - tool:
-      - ask_with_reason: []`, async (guardrail, cwd) => {
-    const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
-    await guardrail.requestCommandPermission('tool "a b"', "test", context);
-    await assert.rejects(
-      async () => guardrail.authorizeCommand("tool a b", context),
-      /requires a reason/,
-    );
-    assert.equal(await guardrail.authorizeCommand("tool 'a b'", context), true);
-    await assert.rejects(
-      async () => guardrail.authorizeCommand('tool "a b"', context),
-      /requires a reason/,
-    );
-  }),
+      - ask_with_reason: []`,
+    async (guardrail, cwd) => {
+      const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
+      await guardrail.requestCommandPermission('tool "a b"', "test", context);
+      await assert.rejects(
+        async () => guardrail.authorizeCommand("tool a b", context),
+        /requires a reason/,
+      );
+      assert.equal(await guardrail.authorizeCommand("tool 'a b'", context), true);
+      await assert.rejects(
+        async () => guardrail.authorizeCommand('tool "a b"', context),
+        /requires a reason/,
+      );
+    },
+  ),
 );
 
 it(
@@ -234,7 +237,7 @@ it(
 it("preserves policy families with intentional unordered allow exceptions", () => {
   const config = parseGuardrailConfig(
     readFileSync(
-      new URL("../../../../.agents/config.exact/guardrail.yaml", import.meta.url),
+      new URL("../../../../.agents/config.exact/guardrails.yaml", import.meta.url),
       "utf8",
     ),
   );

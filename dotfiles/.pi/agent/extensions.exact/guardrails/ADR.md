@@ -1,4 +1,4 @@
-# ADR: guardrail — サンドボックス方針
+# ADR: tools / guardrails — サンドボックス方針
 
 |  |  |
 | --- | --- |
@@ -76,11 +76,11 @@ read / write / edit / bash ── 独自拡張でリプレイス、fs 読み書�
 flowchart TD
     subgraph PI["pi プロセス（フェンス外・network 自由）"]
         API["LLM API"]
-        TOOLS["fs ツール (guardrail)<br/>schema / 認可 / render"]
+        TOOLS["fs ツール (tools)<br/>schema / 公開API呼び出し"]
     end
     TOOLS --> AUTH{"パス・コマンド認可<br/>allow / deny / ask"}
     AUTH -- "deny / 拒否" --> BLOCK["ブロック"]
-    AUTH -- "allow / 承認" --> RUNTOOL["Guardrail.runTool<br/>bwrap 1 回（bind は許可リストから）<br/>network: 開放 / /nix: ro-bind"]
+    AUTH -- "allow / 承認" --> RUNTOOL["guardrails / SandboxRunner.runTool<br/>bwrap 1 回（bind は許可リストから）<br/>network: 開放 / /nix: ro-bind"]
     RUNTOOL --> CLI["bun run-tools.ts tool"]
     CLI --> DEF["pi 標準 tool definition<br/>fs / fd / rg / shell"]
 ```
@@ -106,6 +106,32 @@ flowchart TD
 
 ---
 
+## 拡張の分離（2026-10-29）
+
+責務を分離し、tools → guardrails 公開API の一方向依存とする。依存をイベント名や応答callbackで隠すより、型付きの通常の呼び出しで表す。
+
+| 所有者 | 責務 |
+| --- | --- |
+| `tools/index.ts` | 標準7ツールのschema・説明文・結果表示用定義、codemode登録、公開APIの初期化と呼び出し |
+| `guardrails/api.ts` | 公開factoryと型、認可・実行API、ask_permission登録、lifecycle登録 |
+| guardrails内部モジュール | パス正規化、設定パース、ダイアログと承認状態、bind構築、隔離実行、画像read、進捗通知、承認ノート |
+
+### 公開APIと初期化
+
+公開窓口は `createGuardrailsAPI(pi, configPath?)`。戻り値の `execute(request)` はツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け、最終結果のPromiseを返す。失敗はPromiseのrejectionとなる。toolsはこの公開窓口だけをimportし、GuardrailやSandboxRunnerなどの内部には依存しない。
+
+1. toolsのfactoryが公開factoryを1回呼び、GuardrailとSandboxRunnerを各1個生成する。設定・glob cache・動的許可はそのGuardrailだけが所有する。
+2. 公開factoryがask_permissionとlifecycleを登録し、同じ認可状態を使うexecuteを返す。toolsは返されたAPIを7ツールへ配線する。
+3. guardrailsに独立したauto-load用index.tsは置かない。SDK上の登録元はtoolsであり、toolsを無効化するとask_permissionも登録されない。ロード順依存、共有singleton、イベント要求・応答、grantsファイルは不要となる。
+4. session_shutdownでAPIを無効化し、古いexecuteとask_permissionへの新規呼び出しを拒否する。reload時はtoolsのfactoryを再実行し、新しい状態を作る。factory外にAPIやpi/contextを保持しない。
+5. 設定不正時もtoolsの安全なwrapperを登録し、全実行を初期化エラーで拒否する。初期化例外によってwrapperが登録されず、標準ツールが残る状態を避ける。起動時には原因を通知する。
+
+画像readの認可後host処理、認可と隔離実行の順序、キャンセル、進捗通知は維持する。SandboxRunnerは同じ所有者からbind構築関数を受け取り、設定や動的許可を再読込しない。プロセス境界に渡すのは既存run-toolsのJSON要求だけである。
+
+依存そのものをなくす必要がないため、イベント契約と受領callbackは採用しない。設定名は `guardrails.yaml` に統一する。
+
+---
+
 ## コマンド照合の改訂（2026-08-27）
 
 `git remote add ...; ... && git push ...` のように複合コマンドの後続へ ask対象を置くと、文字列先頭だけの照合を迂回できた。そこで [shell-quote](https://www.npmjs.com/package/shell-quote) 1.10.0（依存0・純JS）でトークン化し、各コマンドセグメントを既存パターンに照合する方式へ変更する。
@@ -126,7 +152,7 @@ flowchart TD
    - 全fsツールがこのリストを参照(単一ソース・bwrap の bind設定へ展開)
 
 2. 全fsアクセスツールをリプレイス（execute全体を bwrap内run-tools CLI経由）
-   - read / write / edit / grep / find / ls / bash → `Guardrail.runTool` から `bun run-tools.ts <tool>` を 1回の bwrap で実行、pi標準tool definition に委譲
+   - read / write / edit / grep / find / ls / bash → `SandboxRunner.runTool` から `bun run-tools.ts <tool>` を 1回の bwrap で実行、pi標準tool definition に委譲
 
 3. 動的拡張の承認フロー
    - ユーザー承認で許可リストへパス追加(エージェントからは不可)

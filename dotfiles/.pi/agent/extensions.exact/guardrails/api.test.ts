@@ -14,10 +14,12 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import guardrailExtension, {
-  isVisionImageFile,
-  writeApprovalNote,
-} from "./index";
+import toolsExtension from "../tools/index";
+import { isVisionImageFile } from "./execute.ts";
+import { SandboxRunner } from "./sandbox-runner.ts";
+import { createGuardrailsAPI } from "./api.ts";
+import { Guardrail, writeApprovalNote } from "./guardrail.ts";
+
 import {
   ASK_PERMISSION_TARGET_PREVIEW_LIMIT,
   classifyReadPath,
@@ -28,7 +30,6 @@ import {
   renderersOf,
 } from "../tool-renderer/index.ts";
 import {
-  Guardrail,
   compileCommandRuleEntries,
   defaultGuardrailConfigPath,
   expandPathSection,
@@ -41,7 +42,7 @@ import {
   splitCommandSegments,
   isWslEnvironment,
   sanitizeSandboxEnvironment,
-} from "./guardrail";
+} from "./config.ts";
 import { startStderrTeeReceiver } from "./run-tools";
 
 function sourcePathFromSymlink(symlinkPath: URL): URL {
@@ -67,9 +68,25 @@ function withGuardrail(
   };
 }
 
-function withTempDirectory(
-  test: (directory: string) => Promise<void> | void,
+function withSandboxRunner(
+  configYaml: string,
+  cwd: string,
+  test: (runner: SandboxRunner) => Promise<void> | void,
 ): () => Promise<void> {
+  return async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "guardrail-test-"));
+    try {
+      const configPath = join(tempDir, "config.yaml");
+      writeFileSync(configPath, configYaml);
+      const policy = new Guardrail(cwd, configPath);
+      await test(new SandboxRunner(cwd, (mode, commandCwd) => policy.buildArgs(mode, commandCwd)));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  };
+}
+
+function withTempDirectory(test: (directory: string) => Promise<void> | void): () => Promise<void> {
   return async () => {
     const directory = mkdtempSync(join(tmpdir(), "guardrail-test-"));
     try {
@@ -88,8 +105,7 @@ function runGit(cwd: string, args: string[]): void {
 const ACCENT_START = "\u001b[34m";
 
 /** Expected ANSI-wrapped dialog highlight (inverted region) for a matched command span. */
-const highlighted = (text: string): string =>
-  `\u001b[7m\u001b[33m${text}\u001b[27m${ACCENT_START}`;
+const highlighted = (text: string): string => `\u001b[7m\u001b[33m${text}\u001b[27m${ACCENT_START}`;
 
 /** Any highlight SGR: the dialog must contain none of these when highlighting is off. */
 const HIGHLIGHT_ANSI = ["\u001b[7m", "\u001b[33m"];
@@ -134,22 +150,41 @@ const compiled = (
   }[],
 ) => compileCommandRuleEntries(entries).entries;
 
-// 拡張 factory を stub API で読み込み、registerTool されたツールを取り出す
+// 拡張 factory を stub API で読み込み、registerTool されたツールとイベントハンドラを取り出す
 function captureRegisteredTools(
   configPath?: string,
   handlers?: Map<string, (event: any, context?: any) => unknown>,
 ): Map<string, any> {
   const registered = new Map<string, any>();
-  guardrailExtension(
-    {
-      registerTool: (tool: any) => registered.set(tool.name, tool),
-      on: (event: string, handler: (event: any, context?: any) => unknown) =>
-        handlers?.set(event, handler),
-    } as any,
-    configPath,
-  );
+  const on = (event: string, handler: (event: any, context?: any) => unknown) =>
+    handlers?.set(event, handler);
+  const api = {
+    registerTool: (tool: any) => registered.set(tool.name, tool),
+    on,
+  } as any;
+  toolsExtension(api, configPath);
   return registered;
 }
+
+async function runGuardedCall(
+  tools: Map<string, any>,
+  handlers: Map<string, (event: any, context?: any) => unknown>,
+  toolName: string,
+  params: Record<string, unknown>,
+  context?: any,
+): Promise<{ blocked?: boolean; reason?: string; result?: any }> {
+  const toolCallId = `test-${toolName}-${runGuardedCall.nextId++}`;
+  void handlers;
+  try {
+    const result = await tools
+      .get(toolName)
+      .execute(toolCallId, params, undefined, undefined, context);
+    return { result };
+  } catch (error) {
+    return { blocked: true, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+runGuardedCall.nextId = 1;
 
 const plainTheme = {
   fg: (_color: string, text: string) => text,
@@ -166,7 +201,7 @@ const runSessionStart = (configYaml: string): { message: string; level: string }
     const configPath = join(tempDir, "config.yaml");
     writeFileSync(configPath, configYaml);
     const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
-    guardrailExtension(
+    createGuardrailsAPI(
       {
         registerTool: () => {},
         on: (event: string, handler: (event: unknown, ctx: unknown) => void) =>
@@ -190,7 +225,10 @@ const runSessionStart = (configYaml: string): { message: string; level: string }
 };
 
 function renderToolCall(toolName: string, args: Record<string, unknown>): string {
-  return renderersOf(toolName)!.renderCall!(args, plainTheme, undefined).render(200).join("\n").trimEnd();
+  return renderersOf(toolName)!.renderCall!(args, plainTheme, undefined)
+    .render(200)
+    .join("\n")
+    .trimEnd();
 }
 
 describe("§1 ツールごとの扱い", () => {
@@ -449,27 +487,33 @@ read:
   );
 
   it("edit は read.deny パスを read チェックで拒否する", async () => {
-    const editTool = captureRegisteredTools().get("edit");
+    const handlers = new Map();
+    const editTool = captureRegisteredTools(undefined, handlers).get("edit");
     const deniedFilePath = join(homedir(), ".pi/agent/auth.json");
-    await assert.rejects(
-      () =>
-        editTool.execute("t", { path: deniedFilePath, edits: [] }, undefined, undefined, {
-          hasUI: false,
-        }),
-      /Access denied/,
+    const outcome = await runGuardedCall(
+      new Map([["edit", editTool]]),
+      handlers,
+      "edit",
+      { path: deniedFilePath, edits: [] },
+      { hasUI: false },
     );
+    assert.equal(outcome.blocked, true);
+    assert.match(outcome.reason ?? "", /Access denied/);
   });
 
   it("edit は read 許可後も write チェックで止まる", async () => {
-    const editTool = captureRegisteredTools().get("edit");
+    const handlers = new Map();
+    const editTool = captureRegisteredTools(undefined, handlers).get("edit");
     const homeNotePath = join(homedir(), "guardrail-edit-write-gate.txt");
-    await assert.rejects(
-      () =>
-        editTool.execute("t", { path: homeNotePath, edits: [] }, undefined, undefined, {
-          hasUI: false,
-        }),
-      /Access requires confirmation/,
+    const outcome = await runGuardedCall(
+      new Map([["edit", editTool]]),
+      handlers,
+      "edit",
+      { path: homeNotePath, edits: [] },
+      { hasUI: false },
     );
+    assert.equal(outcome.blocked, true);
+    assert.match(outcome.reason ?? "", /Access requires confirmation/);
   });
 
   it(
@@ -551,12 +595,12 @@ describe("§2.1 画像ファイル", () => {
       const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>';
       const svgPath = join(directory, "icon.svg");
       writeFileSync(svgPath, svg);
-      const originalRunTool = Guardrail.prototype.runTool;
+      const originalRunTool = SandboxRunner.prototype.runTool;
       let didRunRead = false;
-      Guardrail.prototype.runTool = (async (toolName) => {
+      SandboxRunner.prototype.runTool = (async (toolName) => {
         didRunRead = toolName === "read";
         return { content: [{ type: "text", text: svg }], details: {} };
-      }) as Guardrail["runTool"];
+      }) as SandboxRunner["runTool"];
 
       try {
         const result = await captureRegisteredTools()
@@ -574,7 +618,7 @@ describe("§2.1 画像ファイル", () => {
           false,
         );
       } finally {
-        Guardrail.prototype.runTool = originalRunTool;
+        SandboxRunner.prototype.runTool = originalRunTool;
       }
     }),
   );
@@ -582,39 +626,37 @@ describe("§2.1 画像ファイル", () => {
   it(
     "許可されない画像パスへの read は §2 どおり拒否する",
     withTempDirectory(async () => {
-      const readTool = captureRegisteredTools().get("read");
-      await assert.rejects(
-        () =>
-          readTool.execute(
-            "t",
-            { path: join(homedir(), ".pi/agent/auth.json") },
-            undefined,
-            undefined,
-            { hasUI: false },
-          ),
-        /Access denied/,
+      const handlers = new Map();
+      const readTool = captureRegisteredTools(undefined, handlers).get("read");
+      const outcome = await runGuardedCall(
+        new Map([["read", readTool]]),
+        handlers,
+        "read",
+        { path: join(homedir(), ".pi/agent/auth.json") },
+        { hasUI: false },
       );
+      assert.equal(outcome.blocked, true);
+      assert.match(outcome.reason ?? "", /Access denied/);
     }),
   );
 
   it(
     "画像入力対応モデルの read も許可されないパスは §2 どおり拒否する",
     withTempDirectory(async () => {
-      const readTool = captureRegisteredTools().get("read");
-      await assert.rejects(
-        () =>
-          readTool.execute(
-            "t",
-            { path: join(homedir(), ".pi/agent/auth.json") },
-            undefined,
-            undefined,
-            {
-              hasUI: false,
-              model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
-            },
-          ),
-        /Access denied/,
+      const handlers = new Map();
+      const readTool = captureRegisteredTools(undefined, handlers).get("read");
+      const outcome = await runGuardedCall(
+        new Map([["read", readTool]]),
+        handlers,
+        "read",
+        { path: join(homedir(), ".pi/agent/auth.json") },
+        {
+          hasUI: false,
+          model: { provider: "zai", id: "glm-5.3-flash", input: ["text", "image"] },
+        },
       );
+      assert.equal(outcome.blocked, true);
+      assert.match(outcome.reason ?? "", /Access denied/);
     }),
   );
 
@@ -828,7 +870,7 @@ describe("§3.a パス文字列の解決", () => {
     const config = parseGuardrailConfig(
       readFileSync(
         sourcePathFromSymlink(
-          new URL("../../config.exact/guardrail.yaml.symlink", import.meta.url),
+          new URL("../../config.exact/guardrails.yaml.symlink", import.meta.url),
         ),
         "utf8",
       ),
@@ -847,7 +889,7 @@ describe("§3.a パス文字列の解決", () => {
     const config = parseGuardrailConfig(
       readFileSync(
         sourcePathFromSymlink(
-          new URL("../../config.exact/guardrail.yaml.symlink", import.meta.url),
+          new URL("../../config.exact/guardrails.yaml.symlink", import.meta.url),
         ),
         "utf8",
       ),
@@ -864,7 +906,7 @@ describe("§3.a パス文字列の解決", () => {
     const config = parseGuardrailConfig(
       readFileSync(
         sourcePathFromSymlink(
-          new URL("../../config.exact/guardrail.yaml.symlink", import.meta.url),
+          new URL("../../config.exact/guardrails.yaml.symlink", import.meta.url),
         ),
         "utf8",
       ),
@@ -885,10 +927,10 @@ describe("§3.a パス文字列の解決", () => {
     assert.equal(resolveCommandAction(commandEntries, "printf '%s\\n' ok"), "allow");
   });
 
-  it("展開後は config ディレクトリの guardrail.yaml を既定設定にする", () => {
+  it("展開後は config ディレクトリの guardrails.yaml を既定設定にする", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "guardrail-default-config-"));
     try {
-      const configPath = join(agentDir, "config", "guardrail.yaml");
+      const configPath = join(agentDir, "config", "guardrails.yaml");
       mkdirSync(join(agentDir, "config"));
       writeFileSync(configPath, "");
       assert.equal(defaultGuardrailConfigPath(agentDir), configPath);
@@ -908,7 +950,7 @@ describe("§3.a パス文字列の解決", () => {
       () =>
         guardrail.authorizePath(
           "write",
-          join(homedir(), ".pi/agent/config/guardrail.yaml"),
+          join(homedir(), ".pi/agent/config/guardrails.yaml"),
           context,
         ),
       /Access denied|Access requires confirmation/,
@@ -1136,7 +1178,8 @@ describe("REPOSITORY_NAME work folder", () => {
       await guardrail.authorizePath("write", join(workPath, "note.md"), { cwd });
       await guardrail.authorizePath("write", join(worktreesPath, "note.md"), { cwd });
       await assert.rejects(
-        () => guardrail.authorizePath("write", join(directory, "work", "other", "note.md"), { cwd }),
+        () =>
+          guardrail.authorizePath("write", join(directory, "work", "other", "note.md"), { cwd }),
         /Access requires confirmation/,
       );
       for (const path of [workPath, worktreesPath]) {
@@ -1625,10 +1668,7 @@ describe("§3.b glob パターン", () => {
     withGlobDir((dir) => {
       mkdirSync(join(dir, "uv"));
       mkdirSync(join(dir, "pip"));
-      const section = expandPathSection(
-        [{ action: "allow", patterns: [join(dir, "*")] }],
-        "/cwd",
-      );
+      const section = expandPathSection([{ action: "allow", patterns: [join(dir, "*")] }], "/cwd");
       assert.equal(resolvePathAction(section, join(dir, "uv")), "allow");
       assert.equal(resolvePathAction(section, join(dir, "pip")), "allow");
     }),
@@ -1638,10 +1678,7 @@ describe("§3.b glob パターン", () => {
     "** は再帰的な既存パスに展開される",
     withGlobDir((dir) => {
       mkdirSync(join(dir, "uv", "nested", "deep"), { recursive: true });
-      const section = expandPathSection(
-        [{ action: "allow", patterns: [join(dir, "**")] }],
-        "/cwd",
-      );
+      const section = expandPathSection([{ action: "allow", patterns: [join(dir, "**")] }], "/cwd");
       assert.equal(resolvePathAction(section, join(dir, "uv", "nested", "deep")), "allow");
     }),
   );
@@ -1951,10 +1988,7 @@ describe("§2.3 確認ダイアログの一致パターン表示", () => {
   });
 
   it("設定に一致しないパスは matched なしの deny", () => {
-    const section = expandPathSection(
-      [{ action: "allow", patterns: ["."] }],
-      "/workspace/project",
-    );
+    const section = expandPathSection([{ action: "allow", patterns: ["."] }], "/workspace/project");
     const match = resolvePathActionMatch(section, "/tmp/file.txt");
     assert.deepEqual(match, { action: "deny" });
   });
@@ -2193,25 +2227,18 @@ read:
       "/cwd",
       async (guardrail) => {
         let title = "";
-        await guardrail.authorizePath(
-          "read",
-          join(homedir(), "guardrail-ask-dir", "file.txt"),
-          {
-            cwd: "/cwd",
-            hasUI: true,
-            ui: {
-              confirm: async () => true,
-              select: async (dialogTitle) => {
-                title = dialogTitle;
-                return "Yes, allow";
-              },
+        await guardrail.authorizePath("read", join(homedir(), "guardrail-ask-dir", "file.txt"), {
+          cwd: "/cwd",
+          hasUI: true,
+          ui: {
+            confirm: async () => true,
+            select: async (dialogTitle) => {
+              title = dialogTitle;
+              return "Yes, allow";
             },
           },
-        );
-        assert.ok(
-          title.includes(`matched: ${join(homedir(), "guardrail-ask-dir")}`),
-          title,
-        );
+        });
+        assert.ok(title.includes(`matched: ${join(homedir(), "guardrail-ask-dir")}`), title);
       },
     ),
   );
@@ -2246,10 +2273,7 @@ describe("§2.3 承認ノート", () => {
       const dir = mkdtempSync(join(tmpdir(), "guardrail-approval-"));
       try {
         const configPath = join(dir, "config.yaml");
-        writeFileSync(
-          configPath,
-          typeof configYaml === "function" ? configYaml(dir) : configYaml,
-        );
+        writeFileSync(configPath, typeof configYaml === "function" ? configYaml(dir) : configYaml);
         await test(dir, new Guardrail(dir, configPath));
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -2262,7 +2286,7 @@ describe("§2.3 承認ノート", () => {
       ok: true,
       result: { content: [{ type: "text", text: resultText }] },
     });
-    const guardrailPrototype = Guardrail.prototype as unknown as {
+    const guardrailPrototype = SandboxRunner.prototype as unknown as {
       run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
     };
     const originalRun = guardrailPrototype.run;
@@ -2419,12 +2443,13 @@ describe("§2.3 承認ノート", () => {
     const filePath = join(homedir(), "projects", "guardrail-note-probe.txt");
     const restore = stubGuardrailRun(`Successfully wrote 10 bytes to ${filePath}`);
     try {
-      const writeTool = captureRegisteredTools().get("write");
-      const first = await writeTool.execute(
-        "t",
+      const handlers = new Map();
+      const writeTool = captureRegisteredTools(undefined, handlers).get("write");
+      const first = await runGuardedCall(
+        new Map([["write", writeTool]]),
+        handlers,
+        "write",
         { path: filePath, content: "x" },
-        undefined,
-        undefined,
         {
           cwd: process.cwd(),
           hasUI: true,
@@ -2433,23 +2458,23 @@ describe("§2.3 承認ノート", () => {
             select: async (_title: string, options: string[]) => options[1],
           },
         },
-      );
+      ).then((o) => o.result);
       assert.deepEqual(resultTexts(first), [
         `Successfully wrote 10 bytes to ${filePath}`,
         `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
       ]);
-      const second = await writeTool.execute(
-        "t",
+      const second = await runGuardedCall(
+        new Map([["write", writeTool]]),
+        handlers,
+        "write",
         { path: filePath, content: "x" },
-        undefined,
-        undefined,
         {
           cwd: process.cwd(),
           hasUI: true,
           // A dialog here would throw: the directory grant must suppress it, and no note is appended.
           ui: { confirm: async () => false, select: async () => "No, deny (reason next)" },
         },
-      );
+      ).then((o) => o.result);
       assert.deepEqual(resultTexts(second), [`Successfully wrote 10 bytes to ${filePath}`]);
     } finally {
       restore();
@@ -2460,16 +2485,22 @@ describe("§2.3 承認ノート", () => {
     const filePath = join(homedir(), "projects", "guardrail-note-dir.txt");
     const restore = stubGuardrailRun(`Successfully wrote 10 bytes to ${filePath}`);
     try {
-      const result = await captureRegisteredTools()
-        .get("write")
-        .execute("t", { path: filePath, content: "x" }, undefined, undefined, {
+      const handlers = new Map();
+      const writeTool = captureRegisteredTools(undefined, handlers).get("write");
+      const result = await runGuardedCall(
+        new Map([["write", writeTool]]),
+        handlers,
+        "write",
+        { path: filePath, content: "x" },
+        {
           cwd: process.cwd(),
           hasUI: true,
           ui: {
             confirm: async () => false,
             select: async (_title: string, options: string[]) => options[1],
           },
-        });
+        },
+      ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), [
         `Successfully wrote 10 bytes to ${filePath}`,
         `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
@@ -2483,16 +2514,22 @@ describe("§2.3 承認ノート", () => {
     const filePath = join(homedir(), "projects", "guardrail-note-edit.txt");
     const restore = stubGuardrailRun(`Successfully replaced 1 block(s) in ${filePath}.`);
     try {
-      const result = await captureRegisteredTools()
-        .get("edit")
-        .execute("t", { path: filePath, edits: [] }, undefined, undefined, {
+      const handlers = new Map();
+      const editTool = captureRegisteredTools(undefined, handlers).get("edit");
+      const result = await runGuardedCall(
+        new Map([["edit", editTool]]),
+        handlers,
+        "edit",
+        { path: filePath, edits: [] },
+        {
           cwd: process.cwd(),
           hasUI: true,
           ui: {
             confirm: async () => false,
             select: async (_title: string, options: string[]) => options[1],
           },
-        });
+        },
+      ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), [
         `Successfully replaced 1 block(s) in ${filePath}.`,
         `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
@@ -2505,16 +2542,22 @@ describe("§2.3 承認ノート", () => {
   it("bash の ask 承認で結果末尾に承認ノートが付く", async () => {
     const restore = stubGuardrailRun("1 file changed, 2 insertions(+)");
     try {
-      const result = await captureRegisteredTools()
-        .get("bash")
-        .execute("t", { command: "git push origin main" }, undefined, undefined, {
+      const handlers = new Map();
+      const bashTool = captureRegisteredTools(undefined, handlers).get("bash");
+      const result = await runGuardedCall(
+        new Map([["bash", bashTool]]),
+        handlers,
+        "bash",
+        { command: "git push origin main" },
+        {
           cwd: process.cwd(),
           hasUI: true,
           ui: {
             confirm: async () => false,
             select: async (_title: string, options: string[]) => options[0],
           },
-        });
+        },
+      ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), [
         "1 file changed, 2 insertions(+)",
         "User approved this command via confirmation.",
@@ -2527,16 +2570,22 @@ describe("§2.3 承認ノート", () => {
   it("bash の EROFS ではヒント文の後に承認ノートが最終行に来る", async () => {
     const restore = stubGuardrailRun("touch: cannot touch '/outside/x': Read-only file system");
     try {
-      const result = await captureRegisteredTools()
-        .get("bash")
-        .execute("t", { command: "git push origin main" }, undefined, undefined, {
+      const handlers = new Map();
+      const bashTool = captureRegisteredTools(undefined, handlers).get("bash");
+      const result = await runGuardedCall(
+        new Map([["bash", bashTool]]),
+        handlers,
+        "bash",
+        { command: "git push origin main" },
+        {
           cwd: process.cwd(),
           hasUI: true,
           ui: {
             confirm: async () => false,
             select: async (_title: string, options: string[]) => options[0],
           },
-        });
+        },
+      ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), [
         "touch: cannot touch '/outside/x': Read-only file system",
         "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. If the result says bash writes are unavailable, use fs tools instead.",
@@ -2551,13 +2600,19 @@ describe("§2.3 承認ノート", () => {
     const filePath = join(process.cwd(), "guardrail-note-noappend.txt");
     const restore = stubGuardrailRun("file body");
     try {
-      const result = await captureRegisteredTools()
-        .get("read")
-        .execute("t", { path: filePath }, undefined, undefined, {
+      const handlers = new Map();
+      const readTool = captureRegisteredTools(undefined, handlers).get("read");
+      const result = await runGuardedCall(
+        new Map([["read", readTool]]),
+        handlers,
+        "read",
+        { path: filePath },
+        {
           cwd: process.cwd(),
           hasUI: true,
           ui: { confirm: async () => true },
-        });
+        },
+      ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), ["file body"]);
     } finally {
       restore();
@@ -3246,11 +3301,7 @@ describe("§3 許可要求ツール", () => {
   });
 
   it("ask_permission ツールの拒否で理由が空欄のときは理由行を付けない", async () => {
-    const deniedDirectory = join(
-      homedir(),
-      "projects",
-      "guardrail-ask-perm-denied-empty",
-    );
+    const deniedDirectory = join(homedir(), "projects", "guardrail-ask-perm-denied-empty");
     const result = await captureRegisteredTools()
       .get("ask_permission")
       .execute(
@@ -3694,10 +3745,7 @@ commands:
     const tools = captureRegisteredTools();
     const permissionTool = tools.get("ask_permission");
     assert.match(permissionTool.description, /effective write action is ask or unset/i);
-    assert.match(
-      permissionTool.description,
-      /explicit deny and credentials cannot be granted/i,
-    );
+    assert.match(permissionTool.description, /explicit deny and credentials cannot be granted/i);
     assert.match(permissionTool.description, /before edit-heavy work/i);
     assert.match(permissionTool.description, /worktree/i);
     assert.match(permissionTool.description, /exact rejected command/i);
@@ -3716,10 +3764,7 @@ commands:
     assert.match(permissionTool.promptGuidelines[0], /worktree/i);
     assert.match(permissionTool.promptGuidelines[0], /creation path or parent/);
     assert.match(permissionTool.promptGuidelines[0], /Credentials override listed ancestors/);
-    assert.match(
-      permissionTool.promptGuidelines[0],
-      /last matching rule determines each action/,
-    );
+    assert.match(permissionTool.promptGuidelines[0], /last matching rule determines each action/);
     assert.match(permissionTool.promptGuidelines[1], /Command requires a reason/);
     for (const toolName of ["write", "edit"]) {
       const description = tools.get(toolName).description;
@@ -3748,7 +3793,7 @@ commands:
         ask: join(credentialRoot, "ask"),
         deny: join(credentialRoot, "deny"),
       };
-      const configPath = join(directory, "guardrail.yaml");
+      const configPath = join(directory, "guardrails.yaml");
       writeFileSync(
         configPath,
         [
@@ -3765,12 +3810,7 @@ commands:
           `  - {deny: ${JSON.stringify(credentialDescendants.deny)}}`,
           `  - {ask: ${JSON.stringify(overriddenPath)}}`,
           `  - {allow: ${JSON.stringify(overriddenPath)}}`,
-          `credentials: [${[
-            credentialPath,
-            askCredentialPath,
-            denyCredentialPath,
-            credentialRoot,
-          ]
+          `credentials: [${[credentialPath, askCredentialPath, denyCredentialPath, credentialRoot]
             .map((path) => JSON.stringify(path))
             .join(", ")}]`,
           `commands:
@@ -3780,8 +3820,7 @@ commands:
         ].join("\n"),
       );
 
-      const guidance =
-        captureRegisteredTools(configPath).get("ask_permission").promptGuidelines[0];
+      const guidance = captureRegisteredTools(configPath).get("ask_permission").promptGuidelines[0];
       const allowSection = guidance.split("\nask:\n")[0] ?? "";
       const askSection = guidance.split("\nask:\n")[1]?.split("\ndeny:\n")[0] ?? "";
       const denySection = guidance.split("\ndeny:\n")[1] ?? "";
@@ -3823,29 +3862,27 @@ commands:
       `ask_permission ${truncateText(`./${longPath}`, ASK_PERMISSION_TARGET_PREVIEW_LIMIT)}`,
     );
     const summary = (status: string) =>
-      renderersOf("ask_permission")!
-        .renderResult!(
-          { content: [{ type: "text", text: status }], details: { status } },
-          { isPartial: false },
-          plainTheme,
-          { isError: false, args: {} },
-        )
+      renderersOf("ask_permission")!.renderResult!(
+        { content: [{ type: "text", text: status }], details: { status } },
+        { isPartial: false },
+        plainTheme,
+        { isError: false, args: {} },
+      )
         .render(200)
         .join("\n")
         .trimEnd();
     assert.equal(summary("granted"), "granted");
     assert.equal(summary("denied"), "denied");
     assert.equal(summary("already granted"), "already granted");
-    const summaryWithReason = renderersOf("ask_permission")!
-      .renderResult!(
-        {
-          content: [{ type: "text", text: "denied" }],
-          details: { status: "denied", reason: "not now" },
-        },
-        { isPartial: false },
-        plainTheme,
-        { isError: false, args: {} },
-      )
+    const summaryWithReason = renderersOf("ask_permission")!.renderResult!(
+      {
+        content: [{ type: "text", text: "denied" }],
+        details: { status: "denied", reason: "not now" },
+      },
+      { isPartial: false },
+      plainTheme,
+      { isError: false, args: {} },
+    )
       .render(200)
       .join("\n")
       .trimEnd();
@@ -3858,16 +3895,17 @@ describe("§3 ツール引数パスの正規化", () => {
     const authorized: { operation: string; path: string }[] = [];
     const runToolCalls: { toolName: string; params: any }[] = [];
     const originalAuthorizePath = Guardrail.prototype.authorizePath;
-    const originalRunTool = Guardrail.prototype.runTool;
+    const originalRunTool = SandboxRunner.prototype.runTool;
     Guardrail.prototype.authorizePath = async function (operation, path) {
       authorized.push({ operation, path });
     };
-    Guardrail.prototype.runTool = async function (toolName, params, _options) {
+    SandboxRunner.prototype.runTool = async function (toolName, params, _options) {
       runToolCalls.push({ toolName, params });
       return { content: [{ type: "text", text: "stub" }], details: undefined };
     };
     try {
-      const tools = captureRegisteredTools();
+      const handlers = new Map();
+      const tools = captureRegisteredTools(undefined, handlers);
       const cases: {
         toolName: string;
         params: Record<string, unknown>;
@@ -3917,9 +3955,9 @@ describe("§3 ツール引数パスの正規化", () => {
       for (const testCase of cases) {
         authorized.length = 0;
         runToolCalls.length = 0;
-        await tools
-          .get(testCase.toolName)
-          .execute("t", testCase.params, undefined, undefined, { hasUI: false });
+        await runGuardedCall(tools, handlers, testCase.toolName, testCase.params, {
+          hasUI: false,
+        });
         assert.equal(runToolCalls.length, 1, testCase.toolName);
         assert.equal(runToolCalls[0]!.toolName, testCase.toolName);
         assert.equal(
@@ -3933,18 +3971,23 @@ describe("§3 ツール引数パスの正規化", () => {
       }
     } finally {
       Guardrail.prototype.authorizePath = originalAuthorizePath;
-      Guardrail.prototype.runTool = originalRunTool;
+      SandboxRunner.prototype.runTool = originalRunTool;
     }
   });
 
   it("正規化により ~ 付き引数は deny エントリに照合されブロックされる", async () => {
-    const readTool = captureRegisteredTools().get("read");
     for (const deniedPath of ["@~/.pi/agent/auth.json", "~/.pi/agent/auth.json"]) {
-      await assert.rejects(
-        () =>
-          readTool.execute("t", { path: deniedPath }, undefined, undefined, { hasUI: false }),
-        /Access denied/,
+      const handlers = new Map();
+      const readTool = captureRegisteredTools(undefined, handlers).get("read");
+      const outcome = await runGuardedCall(
+        new Map([["read", readTool]]),
+        handlers,
+        "read",
+        { path: deniedPath },
+        { hasUI: false },
       );
+      assert.equal(outcome.blocked, true, deniedPath);
+      assert.match(outcome.reason ?? "", /Access denied/);
     }
   });
 });
@@ -3982,7 +4025,8 @@ describe("§4 bash コマンドの実行結果", () => {
       { action: "ask", pattern: "systemctl", args: [] },
       {
         action: "allow",
-        pattern: "systemctl", args: ["status|list-[\\s\\S]*"],
+        pattern: "systemctl",
+        args: ["status|list-[\\s\\S]*"],
       },
       { action: "deny", pattern: "systemctl", args: ["(reboot|poweroff|halt|shutdown)"] },
       { action: "deny", pattern: "(shutdown|reboot|poweroff|halt)", args: [] },
@@ -4205,10 +4249,7 @@ matched: {"command":"git","args":["push"]}`,
     );
     assert.equal(resolveCommandAction(section, "git status\ngit push -u origin main"), "ask");
     assert.equal(resolveCommandAction(section, "gh pr create --repo owner/repo 2>&1"), "ask");
-    assert.equal(
-      resolveCommandAction(section, "cat body.md | gh pr create --body-file -"),
-      "ask",
-    );
+    assert.equal(resolveCommandAction(section, "cat body.md | gh pr create --body-file -"), "ask");
     assert.equal(resolveCommandAction(section, "echo $(git push -u origin main)"), "ask");
     assert.equal(resolveCommandAction(section, "tee >(gh pr create --repo owner/repo)"), "ask");
     assert.equal(
@@ -4228,16 +4269,10 @@ matched: {"command":"git","args":["push"]}`,
       "allow",
     );
     assert.equal(
-      resolveCommandAction(
-        section,
-        "cat <<-EOF\ngh pr create --repo owner/repo\nEOF\necho done",
-      ),
+      resolveCommandAction(section, "cat <<-EOF\ngh pr create --repo owner/repo\nEOF\necho done"),
       "allow",
     );
-    assert.equal(
-      resolveCommandAction(section, "echo 'gh pr create --repo owner/repo'"),
-      "allow",
-    );
+    assert.equal(resolveCommandAction(section, "echo 'gh pr create --repo owner/repo'"), "allow");
     assert.equal(
       resolveCommandAction(section, "git status # gh pr create --repo owner/repo"),
       "allow",
@@ -4273,10 +4308,7 @@ matched: {"command":"git","args":["push"]}`,
     assert.equal(resolveCommandAction(entries, "sudo reboot"), "ask_with_reason");
     assert.equal(resolveCommandAction(entries, "git push && sudo reboot"), "ask_with_reason");
     assert.equal(resolveCommandAction(entries, "git push"), "ask");
-    const withDeny = [
-      ...entries,
-      ...compiled([{ action: "deny", pattern: "mkfs", args: [] }]),
-    ];
+    const withDeny = [...entries, ...compiled([{ action: "deny", pattern: "mkfs", args: [] }])];
     assert.equal(resolveCommandAction(withDeny, "sudo reboot; mkfs /dev/sda"), "deny");
   });
 
@@ -4549,10 +4581,7 @@ describe("§6 commands パターンの正規表現評価", () => {
       "ask",
     );
     assert.equal(
-      resolveCommandAction(
-        compiled([{ action: "ask", pattern: "push", args: [] }]),
-        "git push",
-      ),
+      resolveCommandAction(compiled([{ action: "ask", pattern: "push", args: [] }]), "git push"),
       "deny",
     );
   });
@@ -4726,7 +4755,7 @@ commands:
         (error: unknown) =>
           error instanceof Error &&
           error.message ===
-            `guardrail.yaml (${configPath}): guardrail config schema violation: /read must be array`,
+            `guardrails.yaml (${configPath}): guardrail config schema violation: /read must be array`,
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -4734,7 +4763,7 @@ commands:
   });
 
   it("config が存在しなければ Guardrail の構築が失敗する", () => {
-    const configPath = join(tmpdir(), "guardrail-missing-config", "guardrail.yaml");
+    const configPath = join(tmpdir(), "guardrail-missing-config", "guardrails.yaml");
     assert.throws(() => new Guardrail("/cwd", configPath), /ENOENT/);
   });
 });
@@ -4814,10 +4843,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     withGuardrailDir((dir, configPath) => {
       const secretDir = join(dir, "secret-dir");
       mkdirSync(secretDir);
-      writeFileSync(
-        configPath,
-        `read:\n  - {deny: "${secretDir}"}\n  - {allow: "${secretDir}"}\n`,
-      );
+      writeFileSync(configPath, `read:\n  - {deny: "${secretDir}"}\n  - {allow: "${secretDir}"}\n`);
       const args = new Guardrail("/cwd", configPath).buildArgs("fs");
       // The allow entry adds --ro-bind-try first, but the deny-declared mask
       // (--tmpfs) mounts later in bwrap args and therefore hides the content.
@@ -4877,10 +4903,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     withGuardrailDir((dir, configPath) => {
       const protectedFile = join(dir, "protected.txt");
       writeFileSync(protectedFile, "config");
-      writeFileSync(
-        configPath,
-        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
-      );
+      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`);
       const args = new Guardrail("/cwd", configPath).buildArgs("bash");
       const writableBindAt = args.indexOf(dir);
       assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 2), [
@@ -4889,10 +4912,7 @@ describe("§6.1 bind とパスの実在保証", () => {
         dir,
       ]);
       const roBindAt = args.indexOf(protectedFile);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
-        "--ro-bind-try",
-        protectedFile,
-      ]);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", protectedFile]);
       assert.ok(roBindAt > writableBindAt, "deny re-bind must mount after the writable bind");
     }),
   );
@@ -4902,10 +4922,7 @@ describe("§6.1 bind とパスの実在保証", () => {
     withGuardrailDir((dir, configPath) => {
       const protectedFile = join(dir, "protected.txt");
       writeFileSync(protectedFile, "config");
-      writeFileSync(
-        configPath,
-        `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`,
-      );
+      writeFileSync(configPath, `write:\n  - {allow: "${dir}"}\n  - {deny: "${protectedFile}"}\n`);
       const args = new Guardrail("/cwd", configPath).buildArgs("fs");
       assert.equal(args.includes(protectedFile), false);
     }),
@@ -4927,11 +4944,7 @@ describe("§6.1 bind とパスの実在保証", () => {
         allowedFile,
         allowedFile,
       ]);
-      assert.equal(
-        args.indexOf(allowedFile, bindAt + 2),
-        -1,
-        "no read-only re-bind after allow",
-      );
+      assert.equal(args.indexOf(allowedFile, bindAt + 2), -1, "no read-only re-bind after allow");
     }),
   );
 
@@ -5074,10 +5087,7 @@ describe("§6.1 bind とパスの実在保証", () => {
       const grantBindAt = args.indexOf(dir);
       assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 2), ["--bind-try", dir, dir]);
       const roBindAt = args.indexOf(protectedFile);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), [
-        "--ro-bind-try",
-        protectedFile,
-      ]);
+      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", protectedFile]);
       assert.ok(roBindAt > grantBindAt, "deny re-bind must mount after the dynamic grant bind");
     }),
   );
@@ -5147,10 +5157,7 @@ describe("§6.1 bind とパスの実在保証", () => {
       assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", dir]);
       const writableBindAt = args.indexOf(dir, roBindAt + 2);
       assert.deepEqual(args.slice(writableBindAt - 1, writableBindAt + 1), ["--bind-try", dir]);
-      assert.ok(
-        writableBindAt > roBindAt,
-        "writable bind must mount after the cwd read-only bind",
-      );
+      assert.ok(writableBindAt > roBindAt, "writable bind must mount after the cwd read-only bind");
       assert.equal(
         args.indexOf("--ro-bind-try", writableBindAt),
         -1,
@@ -5176,10 +5183,7 @@ describe("§6.1 bind とパスの実在保証", () => {
       const notePath = join(dir, "note.txt");
       const grantBindAt = args.indexOf(notePath);
       assert.deepEqual(args.slice(grantBindAt - 1, grantBindAt + 1), ["--bind-try", notePath]);
-      assert.ok(
-        grantBindAt > roBindAt,
-        "dynamic grant must mount after the cwd read-only bind",
-      );
+      assert.ok(grantBindAt > roBindAt, "dynamic grant must mount after the cwd read-only bind");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5207,7 +5211,7 @@ describe("§7 bash の stderr 逐次表示", () => {
       "echo two >&2",
       `printf '%s\\n' '${envelope}'`,
     ].join("; ");
-    const guardrailPrototype = Guardrail.prototype as unknown as {
+    const guardrailPrototype = SandboxRunner.prototype as unknown as {
       run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
     };
     const originalRun = guardrailPrototype.run;
@@ -5242,8 +5246,7 @@ describe("§7 bash の stderr 逐次表示", () => {
           "t",
           { command: "simulated slow command" },
           undefined,
-          (partial: any) =>
-            updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
+          (partial: any) => updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
           { hasUI: false },
         );
       assert.deepEqual(
@@ -5262,8 +5265,7 @@ describe("§7 bash の stderr 逐次表示", () => {
 
   it("実行中の表示は直近の stderr 行、無ければ Running... になる", () => {
     const renderPartial = (result: unknown): string =>
-      renderersOf("bash")!
-        .renderResult!(result, { isPartial: true }, plainTheme, {})
+      renderersOf("bash")!.renderResult!(result, { isPartial: true }, plainTheme, {})
         .render(200)
         .join("\\n")
         .trimEnd();
@@ -5278,7 +5280,7 @@ describe("§7 bash の stderr 逐次表示", () => {
     // run-tools the real pi bash definition runs the command with the stderr
     // tee commandPrefix, so the command's stderr reaches this process's
     // stderr only through the new forwarding path.
-    const guardrailPrototype = Guardrail.prototype as unknown as {
+    const guardrailPrototype = SandboxRunner.prototype as unknown as {
       run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
     };
     const originalRun = guardrailPrototype.run;
@@ -5323,8 +5325,7 @@ describe("§7 bash の stderr 逐次表示", () => {
               "echo first >&2; sleep 0.3; printf '進' >&2; sleep 0.15; printf '行中\\n' >&2; printf '\\n' >&2; echo done; printf 'tail' >&2",
           },
           undefined,
-          (partial: any) =>
-            updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
+          (partial: any) => updates.push({ text: partial.content[0]?.text ?? "", at: Date.now() }),
           { hasUI: false },
         );
       assert.deepEqual(
@@ -5372,9 +5373,7 @@ describe("§7 bash の stderr 逐次表示", () => {
     assert.equal((fallbackResult.structuredContent as { exit_code: number }).exit_code, 7);
     assert.equal(plainResult.isError, true);
     assert.equal((plainResult.structuredContent as { exit_code: number }).exit_code, 7);
-    const fallbackTextContent = fallbackResult.content.find(
-      (content) => content.type === "text",
-    );
+    const fallbackTextContent = fallbackResult.content.find((content) => content.type === "text");
     const plainTextContent = plainResult.content.find((content) => content.type === "text");
     assert.ok(fallbackTextContent);
     assert.ok(plainTextContent);
@@ -5412,9 +5411,7 @@ describe("§7 WSL の子プロセス PATH", () => {
 
     assert.equal(
       sanitized.PATH,
-      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(
-        delimiter,
-      ),
+      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(delimiter),
     );
     assert.equal(environment.PATH, originalPath);
   });
@@ -5423,10 +5420,7 @@ describe("§7 WSL の子プロセス PATH", () => {
     const environment = { PATH: ["/mnt/c/tools", "/mnt/data/bin", "/usr/bin"].join(delimiter) };
 
     assert.equal(isWslEnvironment(environment, "6.8.0-generic"), false);
-    assert.equal(
-      sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH,
-      environment.PATH,
-    );
+    assert.equal(sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH, environment.PATH);
   });
 
   it("WSL kernel marker でも Windows PATH を除外する", () => {
@@ -5448,12 +5442,8 @@ describe("§7 sandbox 実行の同時数の上限", () => {
    * outcome to `behavior` per call index.
    */
   const stubCountingRun = (behavior: (callIndex: number) => Promise<unknown>) => {
-    const guardrailPrototype = Guardrail.prototype as unknown as {
-      runSandboxProcess: (
-        command: string,
-        commandArgs: string[],
-        options: any,
-      ) => Promise<unknown>;
+    const guardrailPrototype = SandboxRunner.prototype as unknown as {
+      runSandboxProcess: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
     };
     const originalRun = guardrailPrototype.runSandboxProcess;
     let active = 0;
@@ -5489,7 +5479,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "並行 runTool の同時 sandbox 実行は最大4で、開始順に実行され全呼び出しが完了する",
-    withGuardrail("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
+    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
       const stub = stubCountingRun(async () => {
         await delay(60);
         return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
@@ -5513,7 +5503,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "sandbox 実行が失敗しても待機中の呼び出しが開始される",
-    withGuardrail("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
+    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
       const stub = stubCountingRun((index) =>
         index === 0
           ? Promise.reject(new Error("boom"))
@@ -5541,7 +5531,7 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "続く2度目の並行バッチでも同時実行は最大4を維持する",
-    withGuardrail("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
+    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
       const stub = stubCountingRun(async () => {
         await delay(50);
         return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
@@ -5570,8 +5560,11 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
   it(
     "Guardrail インスタンスが違っても同時実行はプロセス全体で最大4",
-    withGuardrail("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
-      const other = new Guardrail(process.cwd());
+    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
+      const policy = new Guardrail(process.cwd());
+      const other = new SandboxRunner(process.cwd(), (mode, commandCwd) =>
+        policy.buildArgs(mode, commandCwd),
+      );
       const stub = stubCountingRun(async () => {
         await delay(50);
         return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
@@ -5596,13 +5589,12 @@ describe("§7 sandbox 実行の同時数の上限", () => {
 
 describe("§8 表示", () => {
   it("read の成功サマリーは画像のとき image input、エラーは先頭3行", () => {
-    const summary = renderersOf("read")!
-      .renderResult!(
-        { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },
-        { isPartial: false },
-        plainTheme,
-        { isError: false, args: {} },
-      )
+    const summary = renderersOf("read")!.renderResult!(
+      { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },
+      { isPartial: false },
+      plainTheme,
+      { isError: false, args: {} },
+    )
       .render(200)
       .join("\n")
       .trimEnd();
@@ -5611,11 +5603,15 @@ describe("§8 表示", () => {
     const errorResult = {
       content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4\n" }],
     };
-    const renderedError = renderersOf("read")!
-      .renderResult!(errorResult, { isPartial: false }, plainTheme, {
+    const renderedError = renderersOf("read")!.renderResult!(
+      errorResult,
+      { isPartial: false },
+      plainTheme,
+      {
         isError: true,
         args: {},
-      })
+      },
+    )
       .render(200)
       .map((line: string) => line.trimEnd())
       .join("\n");
@@ -5656,11 +5652,15 @@ describe("§8 表示", () => {
       "read",
       "write",
     ]) {
-      const renderedError = renderersOf(toolName)!
-        .renderResult!(errorResult, { isPartial: false }, plainTheme, {
+      const renderedError = renderersOf(toolName)!.renderResult!(
+        errorResult,
+        { isPartial: false },
+        plainTheme,
+        {
           isError: true,
           args: {},
-        })
+        },
+      )
         .render(200)
         .map((line: string) => line.trimEnd())
         .join("\n");
@@ -5673,11 +5673,15 @@ describe("§8 表示", () => {
       content: [{ type: "text", text: "line 1\nline 2\nline 3\n" }],
     };
 
-    const renderedError = renderersOf("read")!
-      .renderResult!(errorResult, { isPartial: false }, plainTheme, {
+    const renderedError = renderersOf("read")!.renderResult!(
+      errorResult,
+      { isPartial: false },
+      plainTheme,
+      {
         isError: true,
         args: {},
-      })
+      },
+    )
       .render(200)
       .map((line: string) => line.trimEnd())
       .join("\n");
@@ -5923,7 +5927,7 @@ describe("turn command approvals", () => {
     it(
       `expires through ${eventName} ${JSON.stringify(event)}`,
       withTempDirectory(async (directory) => {
-        const configPath = join(directory, "guardrail.yaml");
+        const configPath = join(directory, "guardrails.yaml");
         writeFileSync(configPath, turnConfig);
         const handlers = new Map<string, (event: any, context?: any) => unknown>();
         const execute = captureRegisteredTools(configPath, handlers).get("ask_permission").execute;
@@ -5940,9 +5944,13 @@ describe("turn command approvals", () => {
         assert.match(already.content[0].text, /turn-approved pattern/);
         assert.ok(handlers.has(eventName));
         await handlers.get(eventName)!(event, { ui: { notify() {} } });
+        const expectedError =
+          eventName === "session_shutdown"
+            ? /API is no longer active/
+            : /Access requires confirmation/;
         await assert.rejects(
           async () => execute("t", params, undefined, undefined, noUi),
-          /Access requires confirmation/,
+          expectedError,
         );
       }),
     );
@@ -5951,7 +5959,7 @@ describe("turn command approvals", () => {
   it(
     "expires again when queued user input is delivered, but not during tool turns",
     withTempDirectory(async (directory) => {
-      const configPath = join(directory, "guardrail.yaml");
+      const configPath = join(directory, "guardrails.yaml");
       writeFileSync(configPath, turnConfig);
       const handlers = new Map<string, (event: any, context?: any) => unknown>();
       const execute = captureRegisteredTools(configPath, handlers).get("ask_permission").execute;

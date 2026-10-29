@@ -15,3 +15,15 @@ export function normalizeToolPath(path: string): string {
   if (withoutAtPrefix.startsWith("~/")) return join(homedir(), withoutAtPrefix.slice(2));
   return withoutAtPrefix;
 }
+
+/**
+ * Apply SPEC §3 path normalization to a tool-call `path` argument and return
+ * params carrying the normalized path, so authorize and run-tools receive the
+ * identical value (the reviewed path is the executed path). Params without a
+ * usable path string are returned unchanged.
+ */
+export function withNormalizedPath(params: { path?: unknown }): { path?: unknown } {
+  if (typeof params.path !== "string" || params.path === "") return params;
+  const normalized = normalizeToolPath(params.path);
+  return normalized === params.path ? params : { ...params, path: normalized };
+}

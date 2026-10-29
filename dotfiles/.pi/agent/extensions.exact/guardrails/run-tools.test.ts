@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Guardrail } from "./guardrail";
+import { SandboxRunner } from "./sandbox-runner.ts";
+import { Guardrail } from "./guardrail.ts";
 
 const runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
 const piPackageDir = resolve(
@@ -173,20 +174,16 @@ describe("run-tools CLI", () => {
   );
 });
 
-describe("Guardrail.runTool（bwrap 統合）", () => {
+describe("SandboxRunner.runTool（bwrap 統合）", () => {
   it(
     "bwrap 内で write → read のラウンドトリップができる",
     withTempDir(async (dir) => {
-      // Nested user namespaces (e.g. agent bash already inside guardrail bwrap)
-      // cannot create uid maps; probe with a real invocation instead of --version.
-      const bwrapProbe = spawnSync("bwrap", ["--", "true"], { encoding: "utf8" });
-      if (bwrapProbe.status !== 0) {
-        console.log("bwrap unusable in this environment, skipping bwrap integration test");
-        return;
-      }
       const configPath = join(dir, "config.yaml");
-      writeFileSync(configPath, `read:\n  allow: ["${dir}"]\nwrite:\n  allow: ["${dir}"]\n`);
-      const guardrail = new Guardrail(dir, configPath);
+      writeFileSync(configPath, `read:\n  - allow: "*"\nwrite:\n  - allow: "${dir}"\n`);
+      const policy = new Guardrail(dir, configPath);
+      const guardrail = new SandboxRunner(dir, (mode, commandCwd) =>
+        policy.buildArgs(mode, commandCwd),
+      );
       await guardrail.runTool(
         "write",
         { path: "hello.txt", content: "through bwrap" },
@@ -232,7 +229,10 @@ describe("Guardrail.runTool（bwrap 統合）", () => {
 
       const configPath = join(dir, "config.yaml");
       writeFileSync(configPath, 'read:\n  - {allow: "*"}\n');
-      const guardrail = new Guardrail(dir, configPath);
+      const policy = new Guardrail(dir, configPath);
+      const guardrail = new SandboxRunner(dir, (mode, commandCwd) =>
+        policy.buildArgs(mode, commandCwd),
+      );
       const nestedCommand = `bwrap ${nestedArgs.slice(0, -1).join(" ")} '${nestedArgs.at(-1)}'`;
       const result = (await guardrail.runTool(
         "bash",

@@ -108,4 +108,4 @@ export TMUX_TMPDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 ## guardrail との二重確認
 
-`create_detached_session` のbash実行は guardrail のコマンド判定も受ける。標準の `guardrail.yaml` ではtmuxコマンドはデフォルトルール（`.*` allow）で許可されるため、通常は本拡張の確認だけが表示される。ユーザーが `guardrail.yaml` のコマンドルールを変更し、tmuxコマンドが確認対象になった場合は、本拡張の承認に加えてguardrailの確認ダイアログが表示される。この二重確認は緩和・迂回せず、そのまま残す。
+`create_detached_session` のbash実行は guardrail のコマンド判定も受ける。標準の `guardrails.yaml` ではtmuxコマンドはデフォルトルール（`.*` allow）で許可されるため、通常は本拡張の確認だけが表示される。ユーザーが `guardrails.yaml` のコマンドルールを変更し、tmuxコマンドが確認対象になった場合は、本拡張の承認に加えてguardrailの確認ダイアログが表示される。この二重確認は緩和・迂回せず、そのまま残す。
