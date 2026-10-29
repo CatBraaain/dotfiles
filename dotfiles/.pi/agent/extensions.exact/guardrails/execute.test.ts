@@ -18,12 +18,16 @@ describe("guarded execution boundary", () => {
       const dialog = Promise.withResolvers<boolean>();
       const shown = Promise.withResolvers<void>();
       let executions = 0;
-      runner.runTool = async () => {
+      runner.runTool = async (_name, params, options) => {
         executions++;
+        assert.deepEqual(options.executor, { entrypoint: join(directory, "fixture.ts") });
+        assert.equal(options.mode, "fs");
+        assert.deepEqual(params, { path: join(directory, "input.txt") });
         return { content: [], details: {} };
       };
       const request = {
         toolName: "read",
+        executor: { entrypoint: join(directory, "fixture.ts") },
         params: { path: join(directory, "input.txt") },
         context: {
           hasUI: true,
@@ -46,7 +50,7 @@ describe("guarded execution boundary", () => {
     }
   });
 
-  it("does not execute after a cancellation while approval is pending", async () => {
+  it("does not execute a supplied executor after cancellation while approval is pending", async () => {
     const directory = mkdtempSync(join(tmpdir(), "guarded-abort-"));
     try {
       const config = join(directory, "config.yaml");
@@ -64,6 +68,7 @@ describe("guarded execution boundary", () => {
       const request = {
         toolName: "read",
         params: { path: join(directory, "input.txt") },
+        executor: { entrypoint: join(directory, "fixture.ts") },
         signal: controller.signal,
         context: {
           hasUI: true,
@@ -80,6 +85,34 @@ describe("guarded execution boundary", () => {
       controller.abort(new Error("cancelled in dialog"));
       dialog.resolve(true);
       await assert.rejects(pending, /cancelled in dialog/);
+      assert.equal(executions, 0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not start a supplied executor after approval is denied", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "guarded-denied-"));
+    try {
+      const config = join(directory, "config.yaml");
+      writeFileSync(config, `read:\n  - ask: ${directory}\n`);
+      const guardrail = new Guardrail(directory, config);
+      const runner = new SandboxRunner(directory, (mode) => guardrail.buildArgs(mode));
+      let executions = 0;
+      runner.runTool = async () => {
+        executions++;
+        return { content: [], details: {} };
+      };
+      const request = {
+        toolName: "read",
+        params: { path: join(directory, "input.txt") },
+        executor: { entrypoint: join(directory, "fixture.ts") },
+        context: { hasUI: true, ui: { confirm: async () => false } },
+      } as unknown as GuardedToolRequest;
+      await assert.rejects(
+        executeGuardedTool(guardrail, runner, directory, request),
+        /Access denied by user/,
+      );
       assert.equal(executions, 0);
     } finally {
       rmSync(directory, { recursive: true, force: true });

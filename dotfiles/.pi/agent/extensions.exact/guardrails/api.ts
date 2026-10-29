@@ -186,3 +186,4 @@ export type GuardrailsAPI = {
 };
 
 export type { GuardedToolRequest } from "./execute.ts";
+export { normalizeToolPath } from "./normalize-path.ts";

@@ -1,3 +1,5 @@
+import { basename, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   createBashTool,
@@ -8,7 +10,7 @@ import {
   createReadTool,
   createWriteTool,
 } from "@earendil-works/pi-coding-agent";
-import { createGuardrailsAPI, type GuardrailsAPI } from "../guardrails/api.ts";
+import { createGuardrailsAPI, normalizeToolPath, type GuardrailsAPI } from "../guardrails/api.ts";
 import { registerCodemode } from "./codemode.ts";
 
 export default function toolsExtension(pi: ExtensionAPI, configPath?: string): void {
@@ -24,21 +26,30 @@ export default function toolsExtension(pi: ExtensionAPI, configPath?: string): v
     createLsTool(cwd),
     createBashTool(cwd),
   ];
-  for (const definition of definitions) registerGuardedTool(pi, definition, guardrails);
+  for (const definition of definitions) registerGuardedTool(pi, definition, guardrails, cwd);
 }
 
 function registerGuardedTool(
   pi: ExtensionAPI,
   definition: ToolDefinition,
   guardrails: GuardrailsAPI,
+  cwd: string,
 ): void {
   pi.registerTool({
     ...definition,
     description: definition.description + (TOOL_GUIDANCE[definition.name] ?? ""),
     ...(definition.name === "edit" ? { renderShell: "default" as const } : {}),
     async execute(id, params, signal, onUpdate, context) {
+      const path = (params as { path?: unknown }).path;
+      const executor =
+        definition.name === "read" &&
+        typeof path === "string" &&
+        basename(resolve(cwd, normalizeToolPath(path))) === "SKILL.md"
+          ? { entrypoint: fileURLToPath(new URL("./full-read.ts", import.meta.url)) }
+          : undefined;
       return guardrails.execute({
         id,
+        executor,
         toolName: definition.name,
         params: params as Record<string, unknown>,
         signal,

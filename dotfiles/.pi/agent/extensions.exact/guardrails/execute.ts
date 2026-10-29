@@ -36,6 +36,7 @@ export async function executeGuardedTool(
       ? readImage(resolve(cwd, params.path as string), context)
       : await runner.runTool(toolName as ToolName, params, {
           mode: toolName === "bash" ? "bash" : "fs",
+          executor: request.executor,
           signal,
           session: toolName === "bash" ? sessionFromContext(context) : undefined,
           onData: toolName === "bash" && onUpdate ? stderrLineUpdater(onUpdate) : undefined,
@@ -79,6 +80,7 @@ export type GuardedToolRequest = {
   id: string;
   toolName: string;
   params: Record<string, unknown>;
+  executor?: { entrypoint: string };
   signal?: AbortSignal;
   onUpdate?: (result: AgentToolResult<unknown>) => void;
   context: ExtensionToolContext;

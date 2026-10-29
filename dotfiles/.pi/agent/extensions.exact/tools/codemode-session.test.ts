@@ -297,6 +297,33 @@ describe("codemode resource ownership through the standard loader", () => {
 
 describe("codemode nested AgentSession pipeline without a model request", () => {
   it(
+    "returns the complete SKILL.md as a string through the real nested read",
+    withTemporarySession(async (directory, sessions) => {
+      const configPath = join(directory, "guardrails.yaml");
+      writeFileSync(configPath, 'read:\n  - allow: "*"\n');
+      const path = join(directory, "SKILL.md");
+      const body = "日本語\r\n".repeat(12000);
+      writeFileSync(path, body);
+      const settings = SettingsManager.inMemory({ codemode: { mode: "on" } });
+      const loader = resourceLoader(directory, settings, [
+        builtinCodemode,
+        { name: "tools", factory: (pi) => toolsExtension(pi, configPath) },
+      ]);
+      const session = await createSession(directory, settings, loader, sessions);
+      session.setActiveToolsByName(["read", "codemode"]);
+      const result = await executeScript(
+        session,
+        `const body = await tools.read(${JSON.stringify({ path, offset: 99999, limit: 1 })}); text({isString: typeof body === "string", length: body.length, exact: body === ${JSON.stringify(body)}});`,
+      );
+      assert.equal(result.isError, undefined);
+      assert.match(resultText(result), /"isString":true/);
+      assert.match(resultText(result), new RegExp(`"length":${body.length}`));
+      assert.match(resultText(result), /"exact":true/);
+      assert.equal(result.details.calls[0]!.status, "ok");
+    }),
+  );
+
+  it(
     "recreates one authorization state on each SDK reload",
     withTemporarySession(async (directory, sessions) => {
       const session = await guardrailSession(directory, sessions, observeNestedCalls([], [], []));

@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { describe, it } from "bun:test";
 import type {
   AgentToolResult,
@@ -151,6 +160,248 @@ describe("tools with the guardrails public API", () => {
     }),
   );
 
+  for (const options of [{}, { offset: 2 }, { limit: 1 }, { offset: 99999, limit: 0 }]) {
+    it(
+      `returns only the complete SKILL.md text for options ${JSON.stringify(options)}`,
+      withFixture(async ({ tools, context, directory }) => {
+        const path = join(directory, "SKILL.md");
+        const body = "\uFEFF# Skill\r\n\r\n日本語 text\r\n";
+        writeFileSync(path, body);
+        const result = await tools
+          .get("read")!
+          .execute("skill", { path, ...options }, undefined, undefined, context);
+        assert.deepEqual(result.content, [{ type: "text", text: body }]);
+        assert.equal(result.structuredContent, body);
+        assert.equal(result.details, undefined);
+        assert.deepEqual(Object.keys(result).sort(), ["content", "structuredContent"]);
+      }),
+    );
+  }
+
+  for (const [name, body] of [
+    ["over 2000 lines", "line\n".repeat(2001)],
+    ["over 50 KiB", "日本語 text\n".repeat(6000)],
+    ["one line over 50 KiB", "あ".repeat(18000)],
+    ["empty", ""],
+    ["without a final newline", "first\nlast"],
+  ]) {
+    it(
+      `returns the exact SKILL.md body when ${name}`,
+      withFixture(async ({ tools, context, directory }) => {
+        const path = join(directory, "SKILL.md");
+        writeFileSync(path, body!);
+        const result = await tools
+          .get("read")!
+          .execute("skill-size", { path, offset: 2, limit: 1 }, undefined, undefined, context);
+        assert.deepEqual(result.content, [{ type: "text", text: body }]);
+        assert.equal(result.structuredContent, body);
+        assert.equal(result.details, undefined);
+      }),
+    );
+  }
+
+  it(
+    "recognizes normalized absolute, relative, at-prefixed, and home paths",
+    withFixture(async ({ tools, context, directory }) => {
+      const path = join(directory, "SKILL.md");
+      const body = "first\nlast\n";
+      writeFileSync(path, body);
+      const paths = [
+        path,
+        `@${path}`,
+        relative(process.cwd(), path),
+        `${directory}/unused/../SKILL.md`,
+        `~/${relative(homedir(), path)}`,
+        `@~/${relative(homedir(), path)}`,
+      ];
+      for (const input of paths) {
+        const result = await tools
+          .get("read")!
+          .execute(
+            "skill-path",
+            { path: input, offset: 2, limit: 1 },
+            undefined,
+            undefined,
+            context,
+          );
+        assert.deepEqual(result.content, [{ type: "text", text: body }], input);
+        assert.equal(result.structuredContent, body, input);
+      }
+    }),
+  );
+
+  it(
+    "uses the requested filename rather than a symlink target name",
+    withFixture(async ({ tools, context, directory }) => {
+      const body = "first\nlast";
+      const target = join(directory, "reference.md");
+      writeFileSync(target, body);
+      const skill = join(directory, "SKILL.md");
+      symlinkSync(target, skill);
+      const full = await tools
+        .get("read")!
+        .execute("skill-link", { path: skill, offset: 2, limit: 1 }, undefined, undefined, context);
+      assert.deepEqual(full.content, [{ type: "text", text: body }]);
+      const alias = join(directory, "alias.md");
+      symlinkSync(skill, alias);
+      const partial = await tools
+        .get("read")!
+        .execute("alias-link", { path: alias, offset: 2, limit: 1 }, undefined, undefined, context);
+      assert.deepEqual(partial.content, [{ type: "text", text: "last" }]);
+    }),
+  );
+
+  for (const name of ["reference.md", "skill.md", "SKILL.md.txt"]) {
+    it(
+      `preserves standard partial reads for ${name}`,
+      withFixture(async ({ tools, context, directory }) => {
+        const path = join(directory, name);
+        writeFileSync(path, "first\nlast");
+        const result = await tools.get("read")!.execute(
+          "partial",
+          {
+            path,
+            offset: 2,
+            limit: 1,
+            readMode: "full",
+            executor: { entrypoint: "/missing.ts" },
+            entrypoint: "/missing.ts",
+          },
+          undefined,
+          undefined,
+          context,
+        );
+        assert.deepEqual(result.content, [{ type: "text", text: "last" }]);
+        assert.equal(result.details, undefined);
+      }),
+    );
+  }
+
+  for (const body of ["line\n".repeat(2001), "a".repeat(52000)]) {
+    it(
+      `preserves standard truncation for a reference file of ${body.length} characters`,
+      withFixture(async ({ tools, context, directory }) => {
+        const path = join(directory, "reference.md");
+        writeFileSync(path, body);
+        const result = await tools
+          .get("read")!
+          .execute("truncated", { path }, undefined, undefined, context);
+        assert.notDeepEqual(result.content, [{ type: "text", text: body }]);
+        assert.equal(
+          (result.details as { truncation: { truncated: boolean } }).truncation.truncated,
+          true,
+        );
+      }),
+    );
+  }
+
+  for (const denied of ["denied", "credential"]) {
+    it(
+      `rejects a SKILL.md read under ${denied}`,
+      withFixture(async ({ tools, context, directory }) => {
+        mkdirSync(join(directory, denied));
+        const path = join(directory, denied, "SKILL.md");
+        writeFileSync(path, "never disclose");
+        await assert.rejects(
+          tools
+            .get("read")!
+            .execute("denied-skill", { path, offset: 2, limit: 1 }, undefined, undefined, context),
+          /Access denied(?::| for credential path:)/,
+        );
+      }),
+    );
+  }
+
+  it(
+    "keeps sandbox masks on a full read through an allowed symlink",
+    withFixture(async ({ tools, context, directory }) => {
+      const target = join(directory, "denied");
+      writeFileSync(target, "never disclose");
+      const path = join(directory, "SKILL.md");
+      symlinkSync(target, path);
+      await assert.rejects(
+        tools.get("read")!.execute("masked-skill", { path }, undefined, undefined, context),
+        /EACCES|ENOENT/,
+      );
+    }),
+  );
+
+  it(
+    "does not read SKILL.md when already cancelled",
+    withFixture(async ({ tools, context, directory }) => {
+      const controller = new AbortController();
+      controller.abort(new Error("cancelled skill"));
+      await assert.rejects(
+        tools
+          .get("read")!
+          .execute(
+            "cancel-skill",
+            { path: join(directory, "SKILL.md") },
+            controller.signal,
+            undefined,
+            context,
+          ),
+        /cancelled skill/,
+      );
+    }),
+  );
+
+  it(
+    "cancels a full read after the real sandbox opens the file",
+    withFixture(async ({ tools, context, directory }) => {
+      const path = join(directory, "SKILL.md");
+      assert.equal(spawnSync("mkfifo", [path]).status, 0);
+      const controller = new AbortController();
+      const pending = tools
+        .get("read")!
+        .execute("running-skill", { path }, controller.signal, undefined, context);
+      const writer = spawn("sh", [
+        "-c",
+        'exec 3>"$1"; printf connected; cat >/dev/null',
+        "writer",
+        path,
+      ]);
+      const connected = new Promise<void>((resolveConnected, rejectConnected) => {
+        writer.stdout.once("data", () => resolveConnected());
+        writer.once("error", rejectConnected);
+      });
+      try {
+        await Promise.race([
+          connected,
+          pending.then(() => {
+            throw new Error("full read ended before cancellation");
+          }),
+        ]);
+        controller.abort();
+        await assert.rejects(pending, /aborted/);
+      } finally {
+        controller.abort();
+        writer.kill("SIGKILL");
+      }
+    }),
+  );
+
+  it(
+    "keeps image reads ahead of the Tools worker even with a SKILL.md filename",
+    withFixture(async ({ tools, context, directory }) => {
+      const path = join(directory, "SKILL.md");
+      const image = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+        "base64",
+      );
+      writeFileSync(path, image);
+      const result = await tools
+        .get("read")!
+        .execute("image-skill", { path, offset: 2, limit: 1 }, undefined, undefined, {
+          ...context,
+          model: { input: ["text", "image"] },
+        } as ExtensionToolContext);
+      assert.deepEqual(result.content, [
+        { type: "image", data: image.toString("base64"), mimeType: "image/png" },
+      ]);
+    }),
+  );
+
   it("keeps every overridden tool unavailable when configuration initialization fails", async () => {
     const directory = mkdtempSync(join(tmpdir(), "guardrails-invalid-"));
     try {
@@ -192,6 +443,42 @@ describe("tools with the guardrails public API", () => {
     }
   });
 
+  it(
+    "does not adopt model executor fields for SKILL.md",
+    withFixture(async ({ tools, context, directory }) => {
+      const path = join(directory, "SKILL.md");
+      const body = "first\nlast";
+      writeFileSync(path, body);
+      const result = await tools.get("read")!.execute(
+        "injection",
+        {
+          path,
+          offset: 2,
+          limit: 1,
+          executor: { entrypoint: "/missing.ts" },
+          entrypoint: "/missing.ts",
+          readMode: "standard",
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.deepEqual(result.content, [{ type: "text", text: body }]);
+      assert.equal(result.structuredContent, body);
+    }),
+  );
+
+  it("keeps Guardrails independent of Tools workers and full-read policy", () => {
+    const directory = new URL("../guardrails/", import.meta.url);
+    const implementations = readdirSync(directory).filter(
+      (name) => name.endsWith(".ts") && !name.endsWith(".test.ts"),
+    );
+    for (const name of implementations) {
+      const source = readFileSync(new URL(name, directory), "utf8");
+      assert.doesNotMatch(source, /readMode|SKILL\.md|full-read|from ["']\.\.\/tools\//, name);
+    }
+  });
+
   it("depends only on the guardrails public entry and has no execution event contract", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     assert.match(source, /from "\.\.\/guardrails\/api\.ts"/);
@@ -207,7 +494,7 @@ function withFixture(test: (fixture: Fixture) => Promise<void>): () => Promise<v
       const config = join(directory, "config.yaml");
       writeFileSync(
         config,
-        `read:\n  - allow: "*"\n  - deny: "${directory}/denied"\ncommands:\n  - .*:\n      - allow: []\n`,
+        `read:\n  - allow: "*"\n  - deny: "${directory}/denied"\ncredentials:\n  - "${directory}/credential"\ncommands:\n  - .*:\n      - allow: []\n`,
       );
       const tools = new Map<string, ToolDefinition>();
       const registered: string[] = [];

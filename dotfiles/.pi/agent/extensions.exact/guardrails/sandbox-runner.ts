@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { type ToolName, type ToolSession, sanitizeSandboxEnvironment } from "./config.ts";
@@ -32,13 +32,27 @@ export class SandboxRunner {
     params: unknown,
     options: {
       mode: SandboxMode;
+      executor?: { entrypoint: string };
       signal?: AbortSignal;
       session?: ToolSession;
       onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
     },
   ): Promise<AgentToolResult<any>> {
-    const request = JSON.stringify({ toolCallId: "cli", params, session: options.session });
-    const execution = await this.run("bun", [this.runToolsPath, toolName], {
+    const entrypoint = options.executor?.entrypoint ?? this.runToolsPath;
+    if (
+      options.executor !== undefined &&
+      (typeof options.executor.entrypoint !== "string" ||
+        !isAbsolute(options.executor.entrypoint) ||
+        options.executor.entrypoint.includes("\0"))
+    ) {
+      throw new Error("Executor entrypoint must be an absolute file path");
+    }
+    const request = JSON.stringify({
+      toolCallId: "cli",
+      params,
+      session: options.session,
+    });
+    const execution = await this.run("bun", [entrypoint, toolName], {
       input: request,
       mode: options.mode,
       signal: options.signal,
@@ -140,7 +154,7 @@ function parseRunToolsResponse(execution: RunResult): RunToolsResponse {
       result?: AgentToolResult<any>;
       error?: string;
     };
-    if (parsed.ok === true && parsed.result !== undefined)
+    if (execution.exitCode === 0 && parsed.ok === true && parsed.result !== undefined)
       return { ok: true, result: parsed.result };
     if (parsed.ok === false && typeof parsed.error === "string")
       return { ok: false, error: parsed.error };

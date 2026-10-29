@@ -1,8 +1,8 @@
-# tools / guardrails — 仕様書
+# Guardrails — 仕様書
 
 pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）の利用と保守に向けた仕様書。パスの読み書きを `allow` / `deny` / `ask` で、bashコマンドを `allow` / `deny` / `ask` / `ask_with_reason` で制限し、network は開放する。
 
-ツール定義は tools、認可・承認状態・実行は guardrails が提供する。tools は guardrails の公開APIを直接呼び、結果のPromiseを返す。起動時に設定が不正な場合の扱いは §6、停止・再読み込み時の扱いは §7 に従う。
+認可・承認状態・隔離実行を公開APIで提供する。呼び出し元へ結果のPromiseを返す。起動時に設定が不正な場合の扱いは §6、停止・再読み込み時の扱いは §7 に従う。
 
 ---
 
@@ -38,12 +38,12 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 Vision入力として扱う画像ファイルは、MIMEタイプが `image/*` のファイルである。MIMEタイプを判定できないときだけ、拡張子を補助的に使う。`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`、`.tiff`、`.tif` は画像ファイルとして扱う。`image/svg+xml` は例外であり、SVG は通常のテキストファイルとして扱う。
 
-`read` は画像を OCR・画像解析テキストへ変換しない。画像ファイルに対する `read` は、パスのアクセス制御（§2・§3）を通った後に、現在のモデルが画像入力対応（`Model.input` が `"image"` を含む）である場合だけ、画像を Vision入力として現在のモデルへ返す。このとき `offset` / `limit` は適用しない。現在のモデルが画像非対応の場合、および現在のモデルの情報を取得できない場合は、パスを開かずVision入力を作らず、画像の読み取りを `vision` 子agent へ委譲することを促すエラーを返す。エラー文言には、委譲先の agent名、子agent が `read` で画像を読み観察結果をテキストで報告すること、子agent を起動できない場合に依頼元へ画像読み取りの必要性を報告することを含める。文言の正本は実装が持つ。画像以外のファイルは既存の `read` の振る舞いを維持する。画像は `read` を実行したagent のツール結果と子セッションの記録にだけ含め、親agent には含めない。画像を処理できないagent から子agent への振り分けは agents の spec が定める。
+`read` は画像を OCR・画像解析テキストへ変換しない。画像ファイルに対する `read` は、パスのアクセス制御（§2・§3）を通った後に、現在のモデルが画像入力対応（`Model.input` が `"image"` を含む）である場合だけ、画像を Vision入力として現在のモデルへ返す。このとき `offset` / `limit` は適用しない。現在のモデルが画像非対応の場合、および現在のモデルの情報を取得できない場合は、パスを開かずVision入力を作らず、画像の読み取りを `vision` 子agent へ委譲することを促すエラーを返す。エラー文言には、委譲先の agent名、子agent が `read` で画像を読み観察結果をテキストで報告すること、子agent を起動できない場合に依頼元へ画像読み取りの必要性を報告することを含める。文言の正本は実装が持つ。画像以外のファイルは §7 の実行契約に従う。画像は `read` を実行したagent のツール結果と子セッションの記録にだけ含め、親agent には含めない。画像を処理できないagent から子agent への振り分けは agents の spec が定める。
 
 | 操作・状態 | 結果 |
 | --- | --- |
 | `read` に SVGパスを渡す | SVG のテキストを返し、Vision入力を作らない |
-| `read` に画像でないパスを渡す | 既存の `read` の結果を返す |
+| `read` に画像でないパスを渡す | §7 の実行契約の結果を返す |
 | `read` に許可されない画像パスを渡す | §2 のとおり拒否する |
 | `read` に許可された画像パスを渡し、現在のモデルが画像入力対応 | 画像を Vision入力として返す |
 | `read` に許可された画像パスを渡し、現在のモデルが画像入力非対応（モデル情報を取得できない場合を含む） | Vision入力を作らず、`vision` 子agent への委譲を促すエラーを返す |
@@ -323,19 +323,24 @@ bashコマンドの sandbox ではこのマスクを行わない。`credentials`
 
 ## 7. run-tools CLI によるfs IO
 
-本拡張は pi の標準tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時、対象の最終アクションが `ask` または未設定の場合だけ `ask_permission` で許可要求できること、明示 `deny` と credentials は要求不可であること、許可結果が bash書き込み不可を示す場合は fsツールを使うことを、理由必須ゲート（`ask_with_reason`）で差し戻されたときは元のコマンドと理由で `ask_permission` に要求することを追記する。`write` / `edit` には、最終アクションが `ask` または未設定のパスは許可確認の対象になり、承認後にセッション内で書き込み可能になること、明示 `deny` と credentials は許可ダイアログを出さず拒否すること（`ask` に確定したパスは bash からは書けない。§6.1）を追記する。guardrails が要求ごとに認可（§2〜§4）し、認可済みのテキストfsツール・bash呼び出しを1回の bwrap起動で実行する。画像readは§2.1に従い、認可後にguardrailsが画像入力を返す。sandbox内では `bun run-tools.ts <tool-name>` が pi標準の tool definition を呼び出し、標準の fs・fd・rg・shell を使う。
+公開APIの `execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しを1回の bwrap起動で実行する。画像readは§2.1を先に適用する。
 
-| ツール | 実行 |
+呼び出し元の信頼されたコードは、モデル向け引数 `params` とは別に、内部専用の `executor?: { entrypoint: string }` を渡せる。entrypointは絶対ファイルパスとし、相対パス・不正な値を拒否する。descriptorで指定できるのはentrypointだけであり、shell・環境変数・bind・sandbox modeを指定できない。認可対象とfs/bashのmodeはツール名と正規化後の引数で決まる。
+
+| 要求・状態 | 実行結果 |
 | --- | --- |
-| テキスト `read` / `write` / `edit` / `grep` / `find` / `ls` / `bash` | sandbox内で `bun run-tools.ts <tool-name>` → pi標準tool definition の execute |
-| 画像 `read` | 認可後に §2.1 の画像入力を返す |
+| descriptorなし | sandbox内で `bun run-tools.ts <tool-name>` → pi標準tool definitionのexecute |
+| descriptorあり、認可済みの非画像処理 | 同じsandbox内で `bun <entrypoint> <tool-name>` を実行 |
+| 画像read | descriptorより先に§2.1の画像入力を返す |
+| 認可拒否・承認前 | executorを起動しない |
+| entrypoint不在・sandbox内で不可視・worker失敗・不正な応答 | 呼び出しを失敗させる。host実行・標準executorへのfallbackやbind拡大は行わない |
 | `ask_permission` | 許可要求（§3・§4） |
 
 bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾にヒント文を追記する。ヒント文はコマンドを書き換えて再試行しないことを伝え、対象の最終アクションが `ask` または未設定で credentials に遮断されない場合にだけ `ask_permission` で許可要求できることを示す。明示 `deny` は許可できない。許可結果が bash書き込み不可を示した場合は fsツールを使う。
 
-- **入力**: stdin に tool callパラメータの JSON を渡す。bash は `PI_*` 環境変数用のセッション情報も受け取る。
-- **出力**: stdout に tool result の JSON（`ok: true` なら `result`、`ok: false` なら `error`）。失敗時は非0 で終了する。
-- 標準tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob結果整形、rg実行、shell実行と timeout）は本拡張で再実装しない。
+- **入力**: argvにtoolName、stdinに `toolCallId`・正規化後の `params`・必要な `session` 情報のJSONを渡す。entrypointは内部descriptorから選び、paramsから採用しない。
+- **出力**: stdout にJSON envelope（`{ ok: true, result }` または `{ ok: false, error }`）を返す。成功時は終了コード0とし、失敗時は非0で終了する。Guardrailsはenvelopeを検査して結果またはエラーを伝達し、workerの成功結果を組み立てない。
+- 既定executorでは、標準tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob結果整形、rg実行、shell実行と timeout）は本拡張で再実装しない。
 - `edit` は pi標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
 - ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で onUpdate として送出し、実行中の進捗表示に使う（描画は tool-renderer SPEC §bash）。stdout は run-tools CLI の JSON envelope に使うため、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
 
@@ -345,7 +350,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 
 ### sandbox実行の同時数の上限
 
-本拡張のツール呼び出しのうち、1つの piプロセス内で同時に実行されるsandboxプロセス（bwrap起動）は最大4つである。subagent など別プロセスで動く本拡張は、それぞれのプロセスでこの上限を持つ。1回の agent応答に含まれる複数のツール呼び出しが並行して実行されるとき、上限を超えた呼び出しは、実行中の sandbox の終了で空いた枠から開始順に始まる。待機の有無は各ツール呼び出しの実行内容と結果を変えない。
+既定executorと差替えexecutorは同じ実行枠を共有する。1つの piプロセス内で同時に実行されるsandboxプロセス（bwrap起動）は最大4つである。subagent など別プロセスで動く本拡張は、それぞれのプロセスでこの上限を持つ。1回の agent応答に含まれる複数のツール呼び出しが並行して実行されるとき、上限を超えた呼び出しは、実行中の sandbox の終了で空いた枠から開始順に始まる。待機の有無は各ツール呼び出しの実行内容と結果を変えない。
 
 ### bwrap起動
 
@@ -354,7 +359,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 1. `--die-with-parent` を設定する。`read.allow` に `"*"` が含まれる場合は `/` を read-only bindしてから、新しいprocfs を `--proc /proc` でマウントする。新しい `/dev` は `--dev /dev` でマウントする。procfs は root bind より後にマウントし、nested user namespace に必要な書き込みを可能にする。bash では、GPU用デバイス `/dev/dxg` と `/dev/dri` をそれぞれ `--dev-bind-try /dev/dxg /dev/dxg` と `--dev-bind-try /dev/dri /dev/dri` で追加公開する。`--dev-bind-try` は対象が存在しない環境では無視される。
 2. 設定済みの allowパスを `--bind-try`、read-onlyパスと credentials を `--ro-bind-try` で bindする。`write` の書き込み可能bind は後勝ちで `allow` に確定したパスのみとし、bash では `deny`・`ask` に確定したパスのうち書き込み可能bind と同一・配下にあるものを、それらより後に `--ro-bind-try` で bindし直す（§6.1）。
 3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bindする。piパッケージ自体は `/nix` 配下のため追加の bind不要。
-4. sandbox内で `bun run-tools.ts <tool-name>` を実行し、network namespace は分離しない。ホストで user namespace が利用可能な場合、sandbox内のプロセスは nested user namespace を作成でき、Firefox のプロセスsandbox や GTK の nested `bwrap` helper が起動できる。
+4. sandbox内で選択されたentrypointをbunで実行し、network namespace は分離しない。ホストで user namespace が利用可能な場合、sandbox内のプロセスは nested user namespace を作成でき、Firefox のプロセスsandbox や GTK の nested `bwrap` helper が起動できる。
 5. abort は bwrapごと child process を停止する。bash の timeout は sandbox内の tool definition が処理する。
 
 ### 7.1 WSL の child process環境
