@@ -66,7 +66,7 @@ skill の編集先はスコープごとに正本を分ける。
 - プロジェクト専用skill は、現在の作業対象リポジトリのルート（worktree使用時はその worktree）の `.agents/skills/` に置く。`dotfiles/.agents/skills.exact/` や `~/.agents/skills/` を候補にしない。
 - 共有skill は `dotfiles/.agents/skills.exact/` に置き、build で `~/.agents/skills/` へ展開する。展開先は Agent Skills標準の共通位置であり、pi を含む複数の harness から読める。
 
-- 外部リポジトリの取り込みは external hook（`dotfiles/external.build.ts` とその隣の `external.data.yaml`）が処理する。skill の取り込みは `dotfiles/.agents/skills.exact/external.data.yaml` に定義し、配置先の `.agents` が `remap.data.md` で削除されるOS では fetch も走らない
+- 外部リポジトリの取り込みは `dotfiles-manager/SPEC.md` の「build: 外部取得」に従う。`external.data.yaml` は `dotfiles/` 以下の各フォルダに置ける。`remap.data.md` で削除されたフォルダ内の取得定義は処理しない。
 - `dotfiles/.pi/agent/skills.exact/` は pi固有の skill用の予備。通常は空に保ち、`.keep` で空ディレクトリを維持する（`exact` 属性により、展開先でも `.keep` 以外のファイルが無い状態が保たれる）
 
 skill を読む指示は、ファイルパスではなくskill名で書く。skill を利用するときは、利用可能なskill一覧に提示されたパスから読む。編集先の規則を読み込み先の制限として適用しない。
