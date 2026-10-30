@@ -34,13 +34,7 @@ Starsだけで成熟度を断定せず、複数の採用シグナルで評価す
 
 OSS の実装・挙動は、同じref のドキュメントとソースをローカルミラーの Gitオブジェクトから確認する。ウェブのドキュメントサイトでは定義、呼び出し元、テスト、CHANGELOG、ドキュメントを一意に往復できない。
 
-ミラーは URL から `~/mirrors/<host>/<owner>/<repo>` に配置する。ホストで分けることで同名リポジトリの衝突を防ぐ。
-
-```
-~/mirrors/<host>/<owner>/<repo>
-# 例: ~/mirrors/github.com/tiangolo/fastapi
-#     ~/mirrors/gitlab.com/gitlab-org/gitlab
-```
+調査用ミラーは共有一時キャッシュとして、共通の `/tmp/mirrors/<repo>`（例: `/tmp/mirrors/fastapi`）に置く。
 
 ## 手段の選択
 
@@ -55,34 +49,32 @@ OSS の実装・挙動は、同じref のドキュメントとソースをロー
 
 ## OSS の実装・挙動
 
-実リポジトリを `~/mirrors` にクローン（既存なら fetch）し、選んだref のドキュメントもソースも Git に記録された実ファイルの内容を追う。web_fetch / web_search は一切使わない。
+共通パスのキャッシュを確認して取得または再利用し、ドキュメントもソースも Git に記録された実ファイルの内容を追う。web_fetch / web_search は一切使わない。
 
-PR・issue・CHANGELOG の探索もミラーの `git log --all --grep` / `git grep` を先に試し、見つからないときだけ GitHub web 検索に fallback する。この fallback に限り、前段の web 使用禁止の例外とする。
+PR・issue・CHANGELOG の探索もミラーの `git log --all --grep` / `git grep` を先に試し、見つからないときだけ GitHub web 検索に fallback する。この fallback に限り、前段の web 使用禁止の例外とする。shallow cloneの履歴検索はローカルに保持している範囲だけが対象であり、非検出を上流の全履歴に存在しない根拠にしない。保持範囲外の履歴が必要な場合は、ミラーの追跡branchを変えず、対応方法をユーザーに確認する。
 
-### 作業フロー
-
-```mermaid
-flowchart LR
-  CL["クローン / fetch<br/>~/mirrors/host/owner/repo"] --> REF["ref を選び commit を確定"]
-  REF --> DOC["同じ commit の文書<br/>README · CHANGELOG · docs/"]
-  DOC --> SRC["同じ commit のソース<br/>定義→呼び出し→テスト"]
-  SRC --> OUT["出力<br/>commit · ファイル:行 で根拠"]
-```
-
-### クローンと ref の選択
-
-`~/mirrors/<host>/<owner>/<repo>` にクローンし、既存なら `origin` の URL が対象リポジトリと一致することを確認してから fetchする。origin が一致しない場合や fetch に失敗した場合は停止し、古い内容を最新として扱わない。
+### ミラーの取得・再利用
 
 ```bash
-DEST=~/mirrors/github.com/owner/repo
+DEST=/tmp/mirrors/repo
 URL=https://github.com/owner/repo.git
-git clone "$URL" "$DEST"  # まだ無いとき
-git -C "$DEST" remote get-url origin  # 既存なら $URL に一致するか
-git -C "$DEST" fetch origin --prune --tags
-COMMIT=$(git -C "$DEST" rev-parse --verify "$REF^{commit}")
 ```
 
-依頼に版・branch・commit の指定があればその tag（`refs/tags/<tag>`）、取得済みの remote branch（`refs/remotes/origin/<branch>`）、または commit ID を `REF` とする。指定がなければ `git -C "$DEST" ls-remote --symref origin HEAD` で現行のデフォルトbranch を確認し、対応する `refs/remotes/origin/<branch>` を選ぶ。remote HEAD を特定できない場合や ref を取得できない場合は停止する。`COMMIT` に確定したcommit ID を以下で使う。`fetch` は作業ツリーを更新しないため、作業ツリーの `HEAD` やファイルを選んだref の内容とみなさない。checkout・reset で既存の変更を上書きしない。
+`BRANCH` は依頼で指定されたbranch名とする。`refs/heads/<branch>`・`refs/remotes/origin/<branch>` 指定もbranch名に読み替える。指定がなければ `git ls-remote --symref "$URL" HEAD` でデフォルトbranchを確認し、その名前を使う。
+
+1. 未作成：`DEST` が存在しない場合だけ、`git clone --depth 1 --single-branch --no-tags --branch "$BRANCH" "$URL" "$DEST"` で取得する。
+2. 再利用：既存なら `git -C "$DEST" remote get-url origin` を `URL` と照合し、一致するキャッシュだけを使う。同名別URL・非Git・不明な既存データを上書きしない。
+3. 更新：上流の最新状態が必要な場合だけ、追跡branchで `git -C "$DEST" pull --ff-only` を使う。更新せず再利用するHEADを上流最新とは扱わない。
+
+既存キャッシュの現在のbranch・upstreamが `BRANCH`・`origin/<branch>` と一致することを確認する。不一致・detached HEAD・進行中のGit操作・不明な状態があれば停止する。ローカル変更・固有commit・未追跡/ignoredファイルがあれば更新を停止し、上書き・破棄しない。無理にcheckout・reset・cleanで直さない。
+
+同時のGitオブジェクト読み取りは許容する。作成・更新の重複や作業ツリー利用との競合を避け、安全を確認できなければ書き込まない。利用中のキャッシュを削除せず、セッション終了時にも削除しない。一時領域への配置だけで容量の自動回収が保証されるとは考えない。
+
+再利用またはclone・pull成功後のHEADを次で固定し、以降は `COMMIT` のGitオブジェクトから調査する。clone・pullした場合は取得したupstreamのcommitとの一致と作業ツリーがクリーンであることも確認する。操作・確認に失敗したら停止し、古い内容を最新として扱わない。
+
+```bash
+COMMIT=$(git -C "$DEST" rev-parse --verify 'HEAD^{commit}')
+```
 
 ### ドキュメント
 
