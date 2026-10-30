@@ -2,9 +2,9 @@
 
 ## 概要
 
-セッションは **agent** を実行する。agent は利用できるツール、依頼できる子agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本拡張は agent定義の管理と選択を行い、`/agent:<name>` コマンド・`--agent` フラグ・subagentツールの `agent` パラメータを提供する。class は `/class` コマンドと `--class` フラグで agent と独立に選択できる。
+セッションは **agent** を実行する。agent は利用できるツール、依頼できる子agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本拡張は agent定義の管理と選択を行い、`/agent:<name>` コマンド・`--agent` フラグ・subagentツールの `agent` パラメータを提供する。class は `/class` コマンドと `--class` フラグで agent と独立に選択できる。mode は class名ごとのモデル候補テーブルを選ぶ単位であり、`/mode` コマンドと `--max` フラグで切り替えられる。
 
-モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `agents.yaml` で class と agent を管理し、`/agent:<agent>` で実行するagent を、`/class` でモデル候補の順序を切り替えられる。
+モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `agents.yaml` で mode・class・agent を管理し、`/agent:<agent>` で実行するagent を、`/class` で class を、`/mode` でモデル候補テーブルを切り替えられる。
 
 ## 設定
 
@@ -12,6 +12,7 @@
 
 ```yaml
 default: main
+defaultMode: standard
 
 settings:
   zai:
@@ -22,33 +23,44 @@ settings:
     - cron: "* 1-3 * * 1-5"
       multiply: 0
 
-classes:
-  high:
-    - model: <provider>/<model>
-    # usage スコアリングでの静的な重み。省略時は 1
-    - model: <provider>/<model>
-      weight: 1
-    # この候補だけで使うルール配列（後述）。provider設定を置き換える
-    - model: <provider>/<model>
-      settings:
-        - multiply: <provider>.urgency
-  middle:
-    - model: <provider>/<model>
-    - model: <provider>/<model>
-  low:
-    - model: <provider>/<model>
-  vision:
-    # 画像入力をサポートするモデルだけを置く
-    - model: <provider>/<model>
+modes:
+  standard:
+    high:
+      - model: <provider>/<model>
+      # usage スコアリングでの静的な重み。省略時は 1
+      - model: <provider>/<model>
+        weight: 1
+      # この候補だけで使うルール配列（後述）。provider設定を置き換える
+      - model: <provider>/<model>
+        settings:
+          - multiply: <provider>.urgency
+    middle:
+      - model: <provider>/<model>
+      - model: <provider>/<model>
+    low:
+      - model: <provider>/<model>
+    vision:
+      # 画像入力をサポートするモデルだけを置く
+      - model: <provider>/<model>
+
+  max:
+    high:
+      - model: openai-codex/gpt-<LATEST>-astra
+    middle:
+      - model: openai-codex/gpt-<LATEST>-astra
+    low:
+      - model: openai-codex/gpt-<LATEST>-sol
+    vision:
+      - model: <provider>/<model>
 
 agents:
   main:
-    class: high
+    class: middle
     tools: ["*"]
     subagents: [senior, junior, vision]
     systemPrompt: ["...", "..."]
   senior:
-    class: middle
+    class: high
     tools: ["*", "!replace_context"]
     subagents: [junior, vision]
     systemPrompt: ["...", "..."]
@@ -70,7 +82,8 @@ agents:
 | 設定ファイル | 起動時に検証する。有効な場合は agent を利用でき、不正な場合はエラーを通知する（後述） |
 | `default` | 新規セッションと保存済みセッションで開始するagent |
 | `agents.<name>` | agent の定義 |
-| `classes.<name>` | class のモデル候補の配列。配列の先頭から fallback順序として評価する |
+| `defaultMode` | 初期mode の既定値。定義済みのmode名を指定する。配布設定は `standard` |
+| `modes.<mode>.<class>` | modeごとの完全なclassテーブル。値はモデル候補の配列で、配列の先頭から fallback順序として評価する。mode名・class名はいずれも設定で定める文字列 |
 | 候補の `model` | 候補のモデル。`<provider>/<model>` 形式の文字列で、最初の `/` で provider と model に分割する（`commandcode/z-ai/glm-5.3-flash` なら provider が `commandcode`、model が `z-ai/glm-5.3-flash`）。model 部分には `<LATEST>` トークンを含められる（後述） |
 | 候補の `weight` | usage スコアリング（後述）での静的な重み。正の有限数。省略時は `1` |
 | 候補の `settings` | この候補だけで使うルール配列（後述）。指定した場合はその provider の設定を丸ごと置き換える。省略時は provider設定を使う |
@@ -82,6 +95,8 @@ agents:
 | `/agent:<name> [message]` | 指定したagent を即時に有効にする。モデルは切替先agent の既定class の候補を適用し、ツール・agent表示も切り替える。`message` を続けた場合は agent切り替え完了後にそのテキスト（前後の空白を除く）をユーザーメッセージとして送信し、切替先agent の設定で直ちにターンを開始する。`message` を省略した場合は切り替えのみ行う |
 | `/class [name]` | 実効class（後述）を `name` に切り替え、手動選択を解除し、切り替え先class の候補を適用する。`name` を省略した場合は選択UI で class を選ぶ。選択UI をキャンセルした場合は何も変更しない。UI を持たない環境で `name` を省略すると usageエラーを通知して何も変更しない。表示は「通知のない環境」の規定に従う。未定義の `name` は warning で通知し、何も変更しない。cooldown は維持する |
 | `--class <name>` フラグ | 初期class（後述）を指定する。実効class はセッション開始・`/new`・セッション切替・分岐でこの class に初期化される。未定義の値は warning で通知し、無視する。`--agent` と独立であり併用できる |
+| `/mode [name]` | 実効mode（後述）を `name` に切り替える。agent と実効class は維持し、手動モデル選択を解除して同じclassの候補を適用する。同じmodeの再指定でも再適用する。省略時は設定順のmode名を選択UIへ渡し、キャンセル時は無変更。UIなしの省略は usageエラー、未定義名は warning とし、いずれも無変更。cooldown は維持する |
+| `--max` フラグ | booleanフラグ。初期mode に `max` を指定する。`--agent`・`--class` と独立して併用できる |
 
 ## 設定の検証
 
@@ -91,8 +106,11 @@ agents:
 - `default` か `agents` がない、型が違う
 - `agents` の各定義がオブジェクトでない
 - agent の `class` がない、文字列でない
-- agent が `classes` に定義されていないclass を参照している
-- `classes` がない・オブジェクトでない、class の値が配列でない
+- `defaultMode` がない・非空文字列でない、または `modes` に定義されていない
+- `modes` がない・オブジェクトでない、各modeがオブジェクトでない
+- 各modeのclass名集合が `defaultMode` のclass名集合と異なる（欠落・余分なclassがある）
+- agent がmodeテーブルに定義されていないclass を参照している
+- class の値が配列でない
 - 候補が `model` / `weight` / `settings` 以外のキーを持つ
 - 候補の `model` がない・文字列でない・最初の `/` で空にならない provider と model に分割できない、`weight` が正の有限数でない、`settings` が配列でない
 - `settings` がオブジェクトでない、provider のルールが配列でない、ルールがオブジェクトでない
@@ -105,6 +123,22 @@ agents:
 - junior の `subagents` が `vision` を含む
 - `default` が未定義の agent を指している
 - `subagents` が未定義の agent を含む
+
+## mode の選択
+
+モデル候補の取得には実効mode の `modes.<mode>.<実効class>` だけを使う。全modeが同じclass名集合を持ち、候補・順序・重み・settings はmodeごとに指定する。`vision` も同じ規則に従う。配布設定の `max` は high/middle に Astra、low に Sol を置き、vision は standard と同じ候補から始める。
+
+初期mode は次の優先順で決める。セッション開始・`/new`・セッション切替・分岐では、この初期modeへ戻す。
+
+| 優先順 | 入力 | 結果 |
+| --- | --- | --- |
+| 1 | `--max` が true、かつ `max` が定義済み | `max` |
+| 2 | 内部環境変数 `PI_AGENT_MODE` が定義済みmode名 | そのmode |
+| 3 | 上記以外 | `defaultMode` |
+
+`--max` に対応する `max` が未定義の場合は warning で通知し、その指定を無視して次の優先順へ進む。未定義の継承modeも無視する。pi本体の `--mode text/json/rpc` は出力形式の指定であり、agent のmodeとは独立して扱う。
+
+mode変更とクラス変更イベントは受信順に適用し、それぞれモデル適用完了を待つ。mode切替はagent の tools・subagents・systemPrompt を維持する。mode の適用処理が完了したら `agent mode → <name>` を info で通知する。
 
 ## class によるモデル選択
 
@@ -128,7 +162,7 @@ class はモデル候補の配列であり、モデルの種類による制限�
 | 候補モデルの適用に失敗した（APIキーがないなど） | その候補を除外して次候補へ進む |
 | class内の全候補が不成立、または全候補で適用に失敗 | 「モデルの適用タイミング」の該当行に従う |
 
-class をまたいだ降格は行わない。この規則は候補選択の自動評価に適用され、`replace_context` による明示的なクラス指定には適用しない。
+mode・class をまたいだ降格は行わない。この規則は候補選択の自動評価に適用され、`replace_context` による明示的なクラス指定には適用しない。
 
 ## usage スコアリングによる候補の並べ替え
 
@@ -171,12 +205,14 @@ settings:
     - cron: "* 1-3 * * 1-5"
       multiply: 0
 
-classes:
-  high:
-    - model: zai/glm-5.3
-    - model: zai/glm-5.3-flash
-      settings:
-        - multiply: zai.urgency
+defaultMode: standard
+modes:
+  standard:
+    high:
+      - model: zai/glm-5.3
+      - model: zai/glm-5.3-flash
+        settings:
+          - multiply: zai.urgency
 ```
 
 ルールは2種類である。どちらも `multiply` は非負の有限数（0・0.5・1.5 などを許す）、または `<provider>.urgency` 形式の名前空間参照である。
@@ -275,21 +311,22 @@ JSON全体が配列でない、各行の `provider` が非空文字列でない�
 
 | タイミング | 動作 |
 | --- | --- |
-| セッション開始 | 初期agent（`--agent` フラグで指定された定義済みの agent、指定なしまたは未定義なら `default`）の初期class の候補を適用する |
-| `/new` | 手動選択を解除し、cooldown をすべて破棄し、初期class の候補を適用する |
-| セッション切替・分岐（`/resume`・`/fork`） | 手動選択を解除し、実効class を初期class に戻し、その候補を適用する |
-| `/reload` | 設定を読み込み直す。手動選択状態・実効class・cooldown は維持する。保存済みagent・class が reload後の設定に存在しない場合は、agent は初期agent へ、class は agent の既定class へ戻す |
-| 各プロンプト送信前（自動状態のとき） | 現在の実効class の候補を再評価し、「自動選択モデルの60分維持」に従って維持または切替を行う。全候補が不成立の場合はエラーを通知し、プロンプトを実行しない |
-| `/agent:<name>` | agent を切り替え、手動選択を解除し、実効class を切替先agent の既定class に戻してその候補を適用してから後続メッセージを送信する |
-| `/class [name]` | 実効class を切り替え、手動選択を解除し、切り替え先class の候補を適用する |
-| コンテキスト切替（`replace_context` で `class` 指定あり） | 切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
+| セッション開始 | 初期agent（`--agent` フラグで指定された定義済みの agent、指定なしまたは未定義なら `default`）の初期mode・初期class の候補を適用する |
+| `/new` | 手動選択を解除し、cooldown をすべて破棄し、初期mode・初期class の候補を適用する |
+| セッション切替・分岐（`/resume`・`/fork`） | 手動選択を解除し、実効mode・実効class を初期mode・初期class に戻し、その候補を適用する |
+| `/reload` | 設定を読み込み直す。手動選択状態・選択主体表示・実効mode・実効class・cooldown・現在のモデルは維持し、モデルの再適用は行わない。保存済みagent・mode・class が reload後の設定に存在しない場合は、agent は初期agent へ、mode は `defaultMode` へ、class は agent の既定class へ戻す |
+| 各プロンプト送信前（自動状態のとき） | 現在の実効mode・実効class の候補を再評価し、「自動選択モデルの60分維持」に従って維持または切替を行う。全候補が不成立の場合はエラーを通知し、プロンプトを実行しない |
+| `/agent:<name>` | 実効mode を維持してagent を切り替え、手動選択を解除し、実効class を切替先agent の既定class に戻してその候補を適用してから後続メッセージを送信する |
+| `/class [name]` | 実効mode を維持して実効class を切り替え、手動選択を解除し、切り替え先class の候補を適用する |
+| `/mode [name]` | 実効mode を切り替え、手動選択を解除し、同じ実効class の候補を適用して完了を通知する |
+| コンテキスト切替（`replace_context` で `class` 指定あり） | 実効mode を維持し、切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
 | 429受信時 | 「レート制限（429）時のフォールバック」に従う |
 
 モデルの切り替えに成功したら `agent model → <provider>/<model>` を info で通知する。
 
 | 全候補が不成立になる場面 | 結果 |
 | --- | --- |
-| セッション開始・`/new`・セッション切替・分岐・`/agent:<name>`・`/class`・クラス変更イベント | 現在のモデルを維持し、`no available model for agent <name>: class <class-name>` を warning で通知する |
+| セッション開始・`/new`・セッション切替・分岐・`/agent:<name>`・`/class`・`/mode`・クラス変更イベント | 現在のモデルを維持し、`no available model for agent <name>: class <class-name>` を warning で通知する |
 | プロンプト送信前 | `no available model for agent <name>: class <class-name>` を error で通知し、プロンプトを実行しない |
 | 429受信時 | 「レート制限（429）時のフォールバック」に従う |
 
@@ -303,6 +340,7 @@ stateDiagram-v2
     手動 --> 自動: /new・セッション切替・分岐
     手動 --> 自動: /agent で agent 切替
     手動 --> 自動: /class で class 切替
+    手動 --> 自動: /mode で mode 切替
 ```
 
 | 状態 | 振る舞い |
@@ -415,6 +453,8 @@ HTTP 429 を受けてフォールバックした直後から、次のいずれ�
 | 待機期間中のモデルが候補になる | 除外して次候補を探す |
 | 待機期間の終了 | そのモデルを再び候補にする |
 
+cooldown は provider/model を単位にmode間で共有する。同じモデルの待機状態はmode切替でも維持する。
+
 cooldown の破棄・維持は、発生タイミングごとに「モデルの適用タイミング」の表が定める。
 
 ## 画像入力を使うagent
@@ -440,22 +480,22 @@ cooldown の破棄・維持は、発生タイミングごとに「モデルの�
 
 ## Agent表示
 
-セッション開始時と agent・class の切り替え時に、現在の agent と実効class を表示する。
+セッション開始時と agent・class・mode の切り替え時に、現在の agent と実効class を表示する。
 
 ```text
 🤖 agent: <currentAgent>
 💎 class: <class-name> (<source>)
 ```
 
-class が未選択のときは agent行のみを表示する。class行の末尾には、最後にクラスまたはモデルを選んだ主体を必ず表示する。表示のテキスト色はグレーとする。
+class が未選択のときは agent行のみを表示する。class行の末尾には、最後に mode・class・モデルを選んだ主体を必ず表示する。表示のテキスト色はグレーとする。
 
 | 表示 | 設定するタイミング |
 | --- | --- |
-| `(manual)` | ユーザーの `/model`・`/class`・`/agent:<name>` による選択 |
+| `(manual)` | ユーザーの `/model`・`/class`・`/mode`・`/agent:<name>` による選択 |
 | `(auto)` | セッション初期化・新規開始・再開・分岐時の初期選択 |
 | `(agent)` | `replace_context` のクラス指定を適用したとき |
 
-この表示はモデルルーティングの自動・手動状態とは別に管理する。`/class`・`/agent:<name>` の操作後は `(manual)` と表示するが、候補の自動再評価は従来どおり行う。候補再評価・429フォールバックでは表示を変更せず、`/reload` では保存した表示を維持する。無視された要求・同じクラスへの変更なしの要求では表示を変更しない。
+この表示はモデルルーティングの自動・手動状態とは別に管理する。`/class`・`/mode`・`/agent:<name>` の操作後は `(manual)` と表示するが、候補の自動再評価は従来どおり行う。候補再評価・429フォールバックでは表示を変更せず、`/reload` では保存した表示を維持する。無視された要求・同じクラスへの変更なしの要求では表示を変更しない。
 
 ## 通知のない環境
 
@@ -465,7 +505,7 @@ UI を持たない環境（`--mode json`、パイプ、SDK、subagent の子セ�
 
 subagentツールは常に利用できる。子セッションを起動できるかは、現在の agent の `subagents` で決まる。
 
-subagentツールは子セッションを起動するとき `--agent <name>` と保存先の `--session-dir <dir>` を渡し、モデルと `--class` を指定しない。既存の子セッションを引き継ぐときは `--session <path>` を、フォークするときは `--fork <path>` を渡す。子セッションの実効class は指定されたagent の既定class から始まり、候補を選んで適用する。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
+subagentツールは子セッションを起動するとき `--agent <name>` と保存先の `--session-dir <dir>` を渡し、モデルと `--class` を指定しない。既存の子セッションを引き継ぐときは `--session <path>` を、フォークするときは `--fork <path>` を渡す。親は呼出し開始時の実効mode を、slot待機より前に捕捉し、子の環境変数 `PI_AGENT_MODE` へ渡す。新規・resume・forkと自動vision委譲に同じ継承を適用する。子セッションは継承modeと指定agent の既定class から候補を選んで適用する。起動済みの子へ親の後続mode変更は配信しない。子セッションでもこの spec のモデルルーティング（自動選択、429フォールバック）が同じように働く。
 
 ### subagentツールの入力
 
@@ -483,7 +523,8 @@ subagentツールで起動した子エージェントには、指定されたage
 | 設定 | 子セッションへの適用 |
 | --- | --- |
 | スキル自動発見 | 親と同じルール |
-| モデル | 指定された子agent の既定class から、子セッションが解決する |
+| mode | 呼出し開始時の親の実効mode |
+| モデル | 継承modeと指定された子agent の既定class から、子セッションが解決する |
 | ツール | 指定された子agent の `tools` |
 | システムプロンプト | 指定された子agent の `systemPrompt` を追記 |
 | さらなるsubagent実行 | 子エージェントの `subagents` で判定 |

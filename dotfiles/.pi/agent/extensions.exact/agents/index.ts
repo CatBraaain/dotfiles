@@ -63,7 +63,8 @@ export interface AgentDefinition {
 export interface AgentConfig {
   default: Agent;
   settings?: Record<string, readonly SettingsRule[]>;
-  classes: Record<string, readonly ModelCandidate[]>;
+  defaultMode: string;
+  modes: Record<string, Record<string, readonly ModelCandidate[]>>;
   agents: Record<Agent, AgentDefinition>;
 }
 
@@ -129,7 +130,6 @@ function parseSettingsRules(raw: unknown, context: string): readonly SettingsRul
   return rules;
 }
 
-// class の候補配列 1 件分を検証する。不正ならエラーメッセージを返す。
 function parseCandidates(raw: unknown, className: string): ModelCandidate[] | string {
   if (!Array.isArray(raw)) return `class ${className} must be an array of candidates`;
   const candidates: ModelCandidate[] = [];
@@ -178,7 +178,11 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
     if (!isRecord(document) || !isNonEmptyString(document.default) || !isRecord(document.agents)) {
       return { error: "default and agents are required" };
     }
-    if (!isRecord(document.classes)) return { error: "classes are required" };
+    if (!isNonEmptyString(document.defaultMode)) return { error: "defaultMode is required" };
+    if (!isRecord(document.modes)) return { error: "modes are required" };
+    if (!Object.hasOwn(document.modes, document.defaultMode)) {
+      return { error: `default mode ${document.defaultMode} is not defined` };
+    }
 
     const settings: Record<string, readonly SettingsRule[]> = {};
     if (document.settings !== undefined) {
@@ -192,11 +196,30 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
       }
     }
 
-    const classes: Record<string, readonly ModelCandidate[]> = {};
-    for (const [className, rawCandidates] of Object.entries(document.classes)) {
-      const candidates = parseCandidates(rawCandidates, className);
-      if (typeof candidates === "string") return { error: candidates };
-      classes[className] = candidates;
+    const modeEntries: Array<[string, Record<string, readonly ModelCandidate[]>]> = [];
+    for (const [modeName, rawClasses] of Object.entries(document.modes)) {
+      if (!isRecord(rawClasses)) return { error: `mode ${modeName} must be an object of classes` };
+      const classEntries: Array<[string, readonly ModelCandidate[]]> = [];
+      for (const [className, rawCandidates] of Object.entries(rawClasses)) {
+        const candidates = parseCandidates(rawCandidates, className);
+        if (typeof candidates === "string") return { error: `mode ${modeName} ${candidates}` };
+        classEntries.push([className, candidates]);
+      }
+      modeEntries.push([modeName, Object.fromEntries(classEntries)]);
+    }
+    const modes = Object.fromEntries(modeEntries);
+    const classes = modes[document.defaultMode]!;
+    const classNames = Object.keys(classes);
+    for (const [modeName, table] of Object.entries(modes)) {
+      const names = Object.keys(table);
+      if (
+        names.length !== classNames.length ||
+        names.some((name) => !Object.hasOwn(classes, name))
+      ) {
+        return {
+          error: `mode ${modeName} must define the same classes as mode ${document.defaultMode}`,
+        };
+      }
     }
 
     const agents: Record<Agent, AgentDefinition> = {};
@@ -204,7 +227,7 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
       if (!isRecord(rawDefinition)) return { error: `agent ${name} must be an object` };
       const { class: className, tools, subagents, systemPrompt } = rawDefinition;
       if (!isNonEmptyString(className)) return { error: `agent ${name} has an invalid class` };
-      if (!(className in classes))
+      if (!Object.hasOwn(classes, className))
         return { error: `agent ${name} references undefined class ${className}` };
       if (!Array.isArray(tools) || !tools.every((tool) => typeof tool === "string")) {
         return { error: `agent ${name} has invalid tools` };
@@ -259,7 +282,8 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
       config: {
         default: document.default,
         ...(Object.keys(settings).length === 0 ? {} : { settings }),
-        classes,
+        defaultMode: document.defaultMode,
+        modes,
         agents,
       },
     };
@@ -347,6 +371,7 @@ interface SavedRoutingState {
   agent: Agent;
   manual: boolean;
   selectionSource: SelectionSource;
+  mode: string;
   class: string | undefined;
   cooldowns: Map<string, number>;
   lastModelCalls: Map<string, number>;
@@ -718,6 +743,7 @@ async function runChild(
   defaultCwd: string,
   task: string,
   agent: Agent,
+  agentMode: string,
   cwd: string | undefined,
   session: ChildSessionStart | undefined,
   signal: AbortSignal | undefined,
@@ -778,7 +804,7 @@ async function runChild(
       stdio: ["ignore", "pipe", "pipe"],
       // 子セッションの拡張が active agent を知るため。
       // pi の ExtensionContext に agent フィールドはないため、環境変数で伝える。
-      env: { ...process.env, PI_AGENT_NAME: agent },
+      env: { ...process.env, PI_AGENT_NAME: agent, PI_AGENT_MODE: agentMode },
     });
     let buffer = "";
     let settled = false;
@@ -1021,9 +1047,12 @@ export default function agentsExtension(
     throw new Error(`agents.yaml: ${injectedConfig.error ?? "configuration is invalid"}`);
   const config = injectedConfig.config;
   let currentAgent = config.default;
+  let currentMode = config.defaultMode;
+  const inheritedMode = process.env.PI_AGENT_MODE;
 
   pi.registerFlag("agent", { type: "string", description: "Agent for a child session." });
   pi.registerFlag("class", { type: "string", description: "Initial class for the session." });
+  pi.registerFlag("max", { type: "boolean", description: "Use max agent mode." });
 
   pi.registerTool({
     name: "subagent",
@@ -1049,6 +1078,7 @@ export default function agentsExtension(
       ),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const agentMode = currentMode;
       if (!params.task)
         return {
           content: [textPart("Invalid parameters. Provide a task.")],
@@ -1114,6 +1144,7 @@ export default function agentsExtension(
             ctx.cwd,
             params.task,
             params.agent,
+            agentMode,
             params.cwd,
             session,
             signal,
@@ -1161,7 +1192,7 @@ export default function agentsExtension(
   let cooldowns = new Map<string, number>(); // modelKey -> expiry epoch ms
   // /class で切り替えた class。undefined は currentAgent の既定 class を使う（SPEC「class によるモデル選択」）。
   let currentClass: string | undefined;
-  let classChangeQueue: Promise<unknown> = Promise.resolve();
+  let routingChangeQueue: Promise<unknown> = Promise.resolve();
   let httpRateLimitAwaitingMessage: { modelKey: string; fallbackSucceeded: boolean } | undefined;
   const http429ModelKeys = new Set<string>();
   let http429TurnFallbackDone = false;
@@ -1220,7 +1251,7 @@ export default function agentsExtension(
     const { signal, notifySwitch = true, reason } = options;
     const className = effectiveClass(agent);
     if (!className) return null;
-    const candidates = resolveCandidates(config.classes[className] ?? [], (provider) =>
+    const candidates = resolveCandidates(config.modes[currentMode]![className] ?? [], (provider) =>
       ctx.modelRegistry.getModelsOfType("chat", provider).map((model) => model.id),
     );
     const models = await pickCandidates(
@@ -1299,7 +1330,7 @@ export default function agentsExtension(
   function resolveInitialClass(ctx: ExtensionContext): string | undefined {
     const requested = pi.getFlag("class") as string | undefined;
     if (!requested) return undefined;
-    if (config.classes[requested]) return requested;
+    if (Object.hasOwn(config.modes[currentMode]!, requested)) return requested;
     if (ctx.hasUI) ctx.ui.notify(`unknown class flag: ${requested}`, "warning");
     return undefined;
   }
@@ -1326,6 +1357,16 @@ export default function agentsExtension(
     restoreModelCalls(ctx);
   });
 
+  function resolveInitialMode(ctx: ExtensionContext): string {
+    if (pi.getFlag("max") === true) {
+      if (Object.hasOwn(config.modes, "max")) return "max";
+      if (ctx.hasUI) ctx.ui.notify("unknown mode flag: max", "warning");
+    }
+    return inheritedMode !== undefined && Object.hasOwn(config.modes, inheritedMode)
+      ? inheritedMode
+      : config.defaultMode;
+  }
+
   pi.on("session_start", async (event, ctx) => {
     http429ModelKeys.clear();
     http429TurnFallbackDone = false;
@@ -1336,11 +1377,14 @@ export default function agentsExtension(
         currentAgent = config.agents[saved.agent]
           ? saved.agent
           : initialAgent(config, pi.getFlag("agent") as string | undefined);
+        currentMode = Object.hasOwn(config.modes, saved.mode) ? saved.mode : config.defaultMode;
         manual = saved.manual;
         selectionSource = saved.selectionSource ?? (saved.manual ? "manual" : "auto");
         // 保存済み class が reload 後の設定に存在しない場合は既定 class へ戻す（agent の default 戻しと同じ扱い）。
         currentClass =
-          saved.class !== undefined && config.classes[saved.class] ? saved.class : undefined;
+          saved.class !== undefined && Object.hasOwn(config.modes[currentMode]!, saved.class)
+            ? saved.class
+            : undefined;
         cooldowns = saved.cooldowns;
         lastModelCalls = saved.lastModelCalls ?? new Map();
       }
@@ -1352,6 +1396,7 @@ export default function agentsExtension(
     restoreModelCalls(ctx);
     routingUsageDisabled = false;
     selectionSource = "auto";
+    currentMode = resolveInitialMode(ctx);
     currentClass = resolveInitialClass(ctx);
     // /new は cooldown をすべて破棄する。セッション切替・分岐（resume/fork）は維持する。
     cooldowns =
@@ -1368,6 +1413,7 @@ export default function agentsExtension(
       agent: currentAgent,
       manual,
       selectionSource,
+      mode: currentMode,
       class: currentClass,
       cooldowns,
       lastModelCalls,
@@ -1438,6 +1484,7 @@ export default function agentsExtension(
     event: { text?: string; images?: ImageContent[] },
     ctx: ExtensionContext,
   ): Promise<void> {
+    const agentMode = currentMode;
     const saved = saveAttachedImages(event.images ?? []);
     const paths = saved.map((file) => file.path);
     const request = (event.text ?? "").trim();
@@ -1449,6 +1496,7 @@ export default function agentsExtension(
         ctx.cwd,
         task,
         "vision",
+        agentMode,
         undefined,
         undefined,
         ctx.signal,
@@ -1636,7 +1684,8 @@ export default function agentsExtension(
       }
       return "ignored";
     }
-    if (className !== undefined && !config.classes[className]) return "ignored";
+    if (className !== undefined && !Object.hasOwn(config.modes[currentMode]!, className))
+      return "ignored";
     if (preserveManualSelection && effectiveClass(currentAgent) === className) return "unchanged";
     currentClass = className;
     manual = false;
@@ -1646,13 +1695,17 @@ export default function agentsExtension(
     return "applied";
   }
 
+  function enqueueRoutingChange<T>(change: () => Promise<T>): Promise<T> {
+    const completion = routingChangeQueue.then(change);
+    routingChangeQueue = completion.catch(() => {});
+    return completion;
+  }
+
   pi.events.on(CLASS_CHANGE_EVENT, (data) => {
     if (!isRecord(data) || typeof data.respond !== "function" || !isRecord(data.context)) return;
     if (data.class !== undefined && typeof data.class !== "string") return;
     const request = data as unknown as ClassChangeRequest;
-    const completion = classChangeQueue.then(() => handleClassChange(request));
-    classChangeQueue = completion.catch(() => {});
-    request.respond(completion);
+    request.respond(enqueueRoutingChange(() => handleClassChange(request)));
   });
 
   for (const agent of Object.keys(config.agents)) {
@@ -1677,16 +1730,48 @@ export default function agentsExtension(
           ctx.ui.notify("usage: /class <class-name>", "error");
           return;
         }
-        const selected = await ctx.ui.select("Pick class:", Object.keys(config.classes));
+        const selected = await ctx.ui.select(
+          "Pick class:",
+          Object.keys(config.modes[currentMode]!),
+        );
         if (!selected) return;
         await requestClassChange(pi.events, { class: selected, context: ctx, source: "manual" });
         return;
       }
-      if (!config.classes[name]) {
+      if (!Object.hasOwn(config.modes[currentMode]!, name)) {
         ctx.ui.notify(`unknown class: ${name}`, "warning");
         return;
       }
       await requestClassChange(pi.events, { class: name, context: ctx, source: "manual" });
+    },
+  });
+
+  pi.registerCommand("mode", {
+    description: "Switch the effective agent mode.",
+    handler: async (args, ctx) => {
+      let name = args.trim();
+      if (!name) {
+        if (!ctx.hasUI) {
+          ctx.ui.notify("usage: /mode <mode-name>", "error");
+          return;
+        }
+        const selected = await ctx.ui.select("Pick mode:", Object.keys(config.modes));
+        if (!selected) return;
+        name = selected;
+      }
+      if (!Object.hasOwn(config.modes, name)) {
+        ctx.ui.notify(`unknown mode: ${name}`, "warning");
+        return;
+      }
+      await enqueueRoutingChange(async () => {
+        if (ctx.signal?.aborted) return;
+        currentMode = name;
+        manual = false;
+        selectionSource = "manual";
+        tuiHandle?.requestRender();
+        await applyCurrentClass(ctx);
+        if (ctx.hasUI) ctx.ui.notify(`agent mode → ${currentMode}`, "info");
+      });
     },
   });
 }

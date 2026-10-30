@@ -1,4 +1,5 @@
 default: main
+defaultMode: standard
 
 settings:
   zai:
@@ -15,38 +16,50 @@ settings:
     - cron: "* 6-9 * * 1-5"
       multiply: 0
 
-classes:
-  high:
-    - model: zai/glm-<LATEST>
-    # - model: openai-codex/gpt-<LATEST>-astra
-    - model: openai-codex/gpt-<LATEST>-sol
-    - model: commandcode/z-ai/glm-<LATEST>-flash
-    - model: zai/glm-<LATEST>-flash
-      settings:
-        - multiply: zai.urgency
-  middle:
-    - model: zai/glm-<LATEST>-flash
-    # - model: openai-codex/gpt-<LATEST>-astra
-    - model: openai-codex/gpt-<LATEST>-sol
-    - model: commandcode/z-ai/glm-<LATEST>-flash
-    - model: zai/glm-<LATEST>-flash
-      settings:
-        - multiply: zai.urgency
-  low:
-    - model: openai-codex/gpt-6-luna
-    - model: zai/glm-<LATEST>-flash
-    # - model: openai-codex/gpt-<LATEST>-astra
-    - model: commandcode/z-ai/glm-<LATEST>-flash
-    - model: zai/glm-<LATEST>-flash
-      settings:
-        - multiply: zai.urgency
-  vision:
-    - model: openai-codex/gpt-6-luna
-    - model: zai/glm-<LATEST>-flash
-    - model: commandcode/z-ai/glm-<LATEST>-flash
-    - model: zai/glm-<LATEST>-flash
-      settings:
-        - multiply: zai.urgency
+modes:
+  standard:
+    high:
+      - model: zai/glm-<LATEST>
+      - model: openai-codex/gpt-<LATEST>-sol
+      - model: commandcode/z-ai/glm-<LATEST>-flash
+      - model: zai/glm-<LATEST>-flash
+        settings:
+          - multiply: zai.urgency
+    middle:
+      - model: zai/glm-<LATEST>-flash
+      - model: openai-codex/gpt-<LATEST>-sol
+      - model: commandcode/z-ai/glm-<LATEST>-flash
+      - model: zai/glm-<LATEST>-flash
+        settings:
+          - multiply: zai.urgency
+    low:
+      - model: openai-codex/gpt-6-luna
+      - model: zai/glm-<LATEST>-flash
+      - model: commandcode/z-ai/glm-<LATEST>-flash
+      - model: zai/glm-<LATEST>-flash
+        settings:
+          - multiply: zai.urgency
+    vision:
+      - model: openai-codex/gpt-<LATEST>-luna
+      - model: zai/glm-<LATEST>-flash
+      - model: commandcode/z-ai/glm-<LATEST>-flash
+      - model: zai/glm-<LATEST>-flash
+        settings:
+          - multiply: zai.urgency
+
+  max:
+    high:
+      - model: openai-codex/gpt-<LATEST>-astra
+      - model: zai/glm-<LATEST>
+    middle:
+      - model: openai-codex/gpt-<LATEST>-astra
+      - model: zai/glm-<LATEST>
+    low:
+      - model: openai-codex/gpt-<LATEST>-sol
+      - model: zai/glm-<LATEST>
+    vision:
+      - model: openai-codex/gpt-<LATEST>-sol
+      - model: zai/glm-<LATEST>-flash
 
 _systemPrompts:
   agentOverview: &agent-overview |

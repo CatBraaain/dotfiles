@@ -259,7 +259,14 @@ async function runtimeHarness(withAgents = false) {
     baseUrl: `http://127.0.0.1:${server.port}`,
     apiKey: "fake-local-key",
     api: "anthropic-messages",
-    models: ["fake-model", "high-model", "low-model"].map((id) => ({
+    models: [
+      "fake-model",
+      "high-model",
+      "low-model",
+      "max-middle-model",
+      "max-high-model",
+      "max-low-model",
+    ].map((id) => ({
       id,
       name: id,
       reasoning: false,
@@ -286,10 +293,18 @@ async function runtimeHarness(withAgents = false) {
               agentsExtension(pi, {
                 config: {
                   default: "main",
-                  classes: {
-                    middle: [{ provider: "handoff-test", model: "fake-model" }],
-                    high: [{ provider: "handoff-test", model: "high-model" }],
-                    low: [{ provider: "handoff-test", model: "low-model" }],
+                  defaultMode: "standard",
+                  modes: {
+                    standard: {
+                      middle: [{ provider: "handoff-test", model: "fake-model" }],
+                      high: [{ provider: "handoff-test", model: "high-model" }],
+                      low: [{ provider: "handoff-test", model: "low-model" }],
+                    },
+                    max: {
+                      middle: [{ provider: "handoff-test", model: "max-middle-model" }],
+                      high: [{ provider: "handoff-test", model: "max-high-model" }],
+                      low: [{ provider: "handoff-test", model: "max-low-model" }],
+                    },
                   },
                   agents: {
                     main: {
@@ -379,6 +394,28 @@ async function runtimeHarness(withAgents = false) {
 }
 
 describe("real AgentSession delivery with a loopback fake provider", () => {
+  it("preserves max mode for the first continuation after each class handoff", async () => {
+    const h = await runtimeHarness(true);
+    try {
+      await h.session.prompt("/mode max");
+      assert.equal(h.session.model?.id, "max-middle-model");
+      for (const [className, model] of [
+        ["high", "max-high-model"],
+        ["low", "max-low-model"],
+        ["middle", "max-middle-model"],
+      ]) {
+        const before = h.requests.length;
+        await h.handoff({ class: className });
+        assert.equal(h.requests.length, before + 2);
+        assert.equal(h.requests.at(-1)!.model, model);
+        assert.match(JSON.stringify(h.requests.at(-1)!.messages), /new phase marker/);
+      }
+      assert.deepEqual(h.errors, []);
+    } finally {
+      h.dispose();
+    }
+  });
+
   it("uses each requested class for the first continuation with the real agents receiver", async () => {
     const h = await runtimeHarness(true);
     try {
@@ -1081,7 +1118,11 @@ describe("tool rendering", () => {
   }
 
   function toolBlock(h: ReturnType<typeof harness>, state: Record<string, unknown>) {
-    return renderersOf("replace_context")!.renderCall!({}, plainTheme as never, renderContext(state));
+    return renderersOf("replace_context")!.renderCall!(
+      {},
+      plainTheme as never,
+      renderContext(state),
+    );
   }
 
   function renderers() {
@@ -1099,8 +1140,12 @@ describe("tool rendering", () => {
     const h = harness();
     const state = {};
     const block = toolBlock(h, state);
-    const result = renderers()
-      .renderResult!(okResult(), { expanded: false, isPartial: false }, plainTheme as never, renderContext(state));
+    const result = renderers().renderResult!(
+      okResult(),
+      { expanded: false, isPartial: false },
+      plainTheme as never,
+      renderContext(state),
+    );
     const combined = `${renderedText(block)}\n${renderedText(result)}`;
     assert.match(combined, /Context will be replaced at end of turn \(ctrl\+o to expand\)/);
   });
@@ -1109,8 +1154,12 @@ describe("tool rendering", () => {
     const h = harness();
     const state = {};
     const block = toolBlock(h, state);
-    const result = renderers()
-      .renderResult!(okResult(), { expanded: false, isPartial: false }, plainTheme as never, renderContext(state));
+    const result = renderers().renderResult!(
+      okResult(),
+      { expanded: false, isPartial: false },
+      plainTheme as never,
+      renderContext(state),
+    );
     const combined = `${renderedText(block)}\n${renderedText(result)}`;
     assert.equal(combined.split("[compaction]").length - 1, 1);
   });
@@ -1119,7 +1168,12 @@ describe("tool rendering", () => {
     const h = harness();
     const state = {};
     const block = toolBlock(h, state);
-    renderers().renderResult!(okResult(), { expanded: true, isPartial: false }, plainTheme as never, renderContext(state));
+    renderers().renderResult!(
+      okResult(),
+      { expanded: true, isPartial: false },
+      plainTheme as never,
+      renderContext(state),
+    );
     const expanded = renderedText(block);
     assert.match(expanded, /Reason/);
     assert.match(expanded, /phase done/);
@@ -1133,7 +1187,9 @@ describe("tool rendering", () => {
     const block = toolBlock(h, state);
     renderers().renderResult!(
       {
-        content: [{ type: "text" as const, text: "Both reason and handoff must be non-empty strings." }],
+        content: [
+          { type: "text" as const, text: "Both reason and handoff must be non-empty strings." },
+        ],
         details: undefined,
       } as never,
       { expanded: false, isPartial: false },

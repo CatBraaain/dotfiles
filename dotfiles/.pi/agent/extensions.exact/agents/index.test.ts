@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { describe, it, spyOn } from "bun:test";
+import { stringify as stringifyYaml } from "yaml";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import agentsExtension, {
@@ -40,13 +41,16 @@ import type { ModelCandidate } from "./routing.ts";
 
 const config: AgentConfig = {
   default: "manager",
-  classes: {
-    middle: [
-      { provider: "zai", model: "glm-5.2" },
-      { provider: "commandcode", model: "gpt-5.6-luna" },
-    ],
-    low: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
-    vision: [{ provider: "zai", model: "glm-5.3-flash" }],
+  defaultMode: "standard",
+  modes: {
+    standard: {
+      middle: [
+        { provider: "zai", model: "glm-5.2" },
+        { provider: "commandcode", model: "gpt-5.6-luna" },
+      ],
+      low: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
+      vision: [{ provider: "zai", model: "glm-5.3-flash" }],
+    },
   },
   agents: {
     manager: {
@@ -69,6 +73,32 @@ const config: AgentConfig = {
       subagents: [],
       systemPrompt: ["visual prompt"],
     },
+  },
+};
+
+const modeConfig: AgentConfig = {
+  ...config,
+  modes: {
+    standard: {
+      ...config.modes.standard!,
+      high: [{ provider: "standard", model: "high" }],
+    },
+    max: {
+      high: [{ provider: "openai-codex", model: "astra" }],
+      middle: [{ provider: "openai-codex", model: "astra" }],
+      low: [{ provider: "openai-codex", model: "sol" }],
+      vision: [{ provider: "max-vision", model: "image" }],
+    },
+    batch: {
+      high: [{ provider: "batch", model: "high" }],
+      middle: [{ provider: "batch", model: "middle" }],
+      low: [{ provider: "batch", model: "low" }],
+      vision: [{ provider: "batch", model: "image" }],
+    },
+  },
+  agents: {
+    ...config.agents,
+    main: { ...config.agents.manager!, tools: ["*"], subagents: ["worker", "vision"] },
   },
 };
 
@@ -111,7 +141,9 @@ function succeedChild(child: FakeChild): void {
 }
 
 interface CaptureOptions {
-  flags?: Record<string, string>;
+  flags?: Record<string, string | boolean | undefined>;
+  inheritedMode?: string;
+  modeSelection?: string;
   findModel?: (provider: string, id: string) => { provider: string; id: string } | undefined;
   models?: Array<{ provider: string; id: string }>;
   setModelSucceeds?: boolean | boolean[];
@@ -133,6 +165,8 @@ function captureAgentsExtension(
   const activeTools: string[][] = [];
   const selectedModels: unknown[] = [];
   const registeredFlags: string[] = [];
+  const registeredFlagDefinitions = new Map<string, { type: string }>();
+  const selections: Array<{ title: string; items: string[] }> = [];
   const sentMessages: Array<{ content: string; options?: unknown }> = [];
   const spawnCalls: Array<{
     command: string;
@@ -162,68 +196,79 @@ function captureAgentsExtension(
     return child;
   }) as unknown as typeof __spawn.current;
 
-  agentsExtension(
-    {
-      on(event: string, handler: Handler) {
-        const eventHandlers = handlers.get(event) ?? [];
-        eventHandlers.push(handler);
-        handlers.set(event, eventHandlers);
-      },
-      registerCommand(name: string, definition: { handler: Handler }) {
-        commands.set(name, definition.handler);
-      },
-      registerFlag(name: string) {
-        registeredFlags.push(name);
-      },
-      registerTool(tool: CapturedTool) {
-        registeredTool = tool;
-      },
-      getFlag(name: string) {
-        return options.flags?.[name];
-      },
-      getAllTools() {
-        return [{ name: "read" }, { name: "bash" }, { name: "subagent" }];
-      },
-      appendEntry(customType: string, data: Record<string, unknown>) {
-        appendedEntries.push({ customType, data });
-      },
-      setActiveTools(tools: string[]) {
-        activeTools.push(tools);
-      },
-      async setModel(model: unknown) {
-        const attemptIndex = selectedModels.length;
-        selectedModels.push(model);
-        await options.beforeSetModel?.();
-        context.model = model as { provider: string; id: string };
-        return Array.isArray(options.setModelSucceeds)
-          ? (options.setModelSucceeds[attemptIndex] ?? true)
-          : (options.setModelSucceeds ?? true);
-      },
-      sendUserMessage(content: string, messageOptions?: unknown) {
-        sentMessages.push(
-          messageOptions === undefined ? { content } : { content, options: messageOptions },
-        );
-      },
-      events: {
-        emit(channel: string, data: unknown) {
-          if (channel === CLASS_CHANGE_EVENT) classChangeRequests.push(data);
-          for (const handler of eventBusHandlers.get(channel) ?? []) handler(data);
+  const previousInheritedMode = process.env.PI_AGENT_MODE;
+  if (options.inheritedMode === undefined) delete process.env.PI_AGENT_MODE;
+  else process.env.PI_AGENT_MODE = options.inheritedMode;
+  try {
+    agentsExtension(
+      {
+        on(event: string, handler: Handler) {
+          const eventHandlers = handlers.get(event) ?? [];
+          eventHandlers.push(handler);
+          handlers.set(event, eventHandlers);
         },
-        on(channel: string, handler: (data: unknown) => void) {
-          const list = eventBusHandlers.get(channel) ?? [];
-          eventBusHandlers.set(channel, [...list, handler]);
-          return () => {
-            eventBusHandlers.set(
-              channel,
-              (eventBusHandlers.get(channel) ?? []).filter((registered) => registered !== handler),
-            );
-          };
+        registerCommand(name: string, definition: { handler: Handler }) {
+          commands.set(name, definition.handler);
         },
-      },
-    } as never,
-    injectedConfig,
-    options.executeUsage ?? (async () => ({ exitCode: 127, stdout: "" })),
-  );
+        registerFlag(name: string, definition: { type: string }) {
+          registeredFlags.push(name);
+          registeredFlagDefinitions.set(name, definition);
+        },
+        registerTool(tool: CapturedTool) {
+          registeredTool = tool;
+        },
+        getFlag(name: string) {
+          return options.flags?.[name];
+        },
+        getAllTools() {
+          return [{ name: "read" }, { name: "bash" }, { name: "subagent" }];
+        },
+        appendEntry(customType: string, data: Record<string, unknown>) {
+          appendedEntries.push({ customType, data });
+        },
+        setActiveTools(tools: string[]) {
+          activeTools.push(tools);
+        },
+        async setModel(model: unknown) {
+          const attemptIndex = selectedModels.length;
+          selectedModels.push(model);
+          await options.beforeSetModel?.();
+          context.model = model as { provider: string; id: string };
+          return Array.isArray(options.setModelSucceeds)
+            ? (options.setModelSucceeds[attemptIndex] ?? true)
+            : (options.setModelSucceeds ?? true);
+        },
+        sendUserMessage(content: string, messageOptions?: unknown) {
+          sentMessages.push(
+            messageOptions === undefined ? { content } : { content, options: messageOptions },
+          );
+        },
+        events: {
+          emit(channel: string, data: unknown) {
+            if (channel === CLASS_CHANGE_EVENT) classChangeRequests.push(data);
+            for (const handler of eventBusHandlers.get(channel) ?? []) handler(data);
+          },
+          on(channel: string, handler: (data: unknown) => void) {
+            const list = eventBusHandlers.get(channel) ?? [];
+            eventBusHandlers.set(channel, [...list, handler]);
+            return () => {
+              eventBusHandlers.set(
+                channel,
+                (eventBusHandlers.get(channel) ?? []).filter(
+                  (registered) => registered !== handler,
+                ),
+              );
+            };
+          },
+        },
+      } as never,
+      injectedConfig,
+      options.executeUsage ?? (async () => ({ exitCode: 127, stdout: "" })),
+    );
+  } finally {
+    if (previousInheritedMode === undefined) delete process.env.PI_AGENT_MODE;
+    else process.env.PI_AGENT_MODE = previousInheritedMode;
+  }
 
   const ui = {
     setWidget(_key: string, widget: unknown) {
@@ -233,8 +278,9 @@ function captureAgentsExtension(
       notifications.push(message);
       notificationEvents.push({ message, level });
     },
-    async select(_title: string, _items: string[]) {
-      return options.classSelection;
+    async select(title: string, items: string[]) {
+      selections.push({ title, items });
+      return title === "Pick mode:" ? options.modeSelection : options.classSelection;
     },
   };
   const context = {
@@ -260,6 +306,8 @@ function captureAgentsExtension(
     activeTools,
     selectedModels,
     registeredFlags,
+    registeredFlagDefinitions,
+    selections,
     sentMessages,
     spawnCalls,
     appendedEntries,
@@ -310,6 +358,9 @@ function captureAgentsExtension(
     },
     async runClassCommand(args = "") {
       await commands.get("class")?.(args, context);
+    },
+    async runModeCommand(args = "") {
+      await commands.get("mode")?.(args, context);
     },
     async input(
       text: string,
@@ -398,10 +449,12 @@ describe("設定", () => {
 
   it("YAML を class つき agent 設定として読み込む", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle:
-    - model: zai/glm-5.2
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle:
+        - model: zai/glm-5.2
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager:
     class: middle
@@ -414,16 +467,20 @@ agents:
     subagents: []
     systemPrompt: []`);
     assert.equal(result.config?.default, "manager");
-    assert.deepEqual(result.config?.classes.middle, [{ provider: "zai", model: "glm-5.2" }]);
+    assert.deepEqual(result.config?.modes.standard?.middle, [
+      { provider: "zai", model: "glm-5.2" },
+    ]);
     assert.equal(result.config?.agents.manager?.class, "middle");
     assert.deepEqual(result.config?.agents.manager?.tools, ["read"]);
   });
 
   it("YAML アンカーで共有した prompt 要素を配列として読み込む", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 _common: &common shared
 agents:
   manager:
@@ -448,9 +505,11 @@ agents:
       writeFileSync(
         configPath,
         `default: manager
-classes:
-  middle: []
-  vision: []
+defaultMode: standard
+modes:
+  standard:
+      middle: []
+      vision: []
 agents:
   manager:
     class: middle
@@ -493,21 +552,27 @@ agents:
   it("default が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: 123
 agents: {}
-classes: {}`);
+defaultMode: standard
+modes:
+  standard: {}`);
     assert.match(result.error ?? "", /default and agents are required/);
   });
 
   it("agents がオブジェクトでない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
 agents: []
-classes: {}`);
+defaultMode: standard
+modes:
+  standard: {}`);
     assert.match(result.error ?? "", /default and agents are required/);
   });
 
   it("class の候補要素がオブジェクトでない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [invalid]
+defaultMode: standard
+modes:
+  standard:
+      middle: [invalid]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /candidate must be an object/);
@@ -515,8 +580,10 @@ agents:
 
   it("agent 定義がオブジェクトでない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: []
+defaultMode: standard
+modes:
+  standard:
+      middle: []
 agents:
   manager: invalid`);
     assert.match(result.error ?? "", /agent manager must be an object/);
@@ -524,8 +591,10 @@ agents:
 
   it("tools の要素が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: []
+defaultMode: standard
+modes:
+  standard:
+      middle: []
 agents:
   manager: {class: middle, tools: [123], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid tools/);
@@ -533,8 +602,10 @@ agents:
 
   it("subagents の要素が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: []
+defaultMode: standard
+modes:
+  standard:
+      middle: []
 agents:
   manager: {class: middle, tools: [], subagents: [123], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid subagents/);
@@ -542,8 +613,10 @@ agents:
 
   it("systemPrompt の要素が文字列でない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: []
+defaultMode: standard
+modes:
+  standard:
+      middle: []
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: [123]}`);
     assert.match(result.error ?? "", /invalid systemPrompt/);
@@ -551,9 +624,11 @@ agents:
 
   it("複数の systemPrompt 要素を順序どおりに読み込み、agent 間で共有する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 _common: &common shared
 agents:
   manager:
@@ -575,17 +650,20 @@ agents:
     assert.deepEqual(result.config?.agents.worker?.systemPrompt, ["shared", "worker-only"]);
   });
 
-  it("classes がない設定を拒否する", () => {
+  it("rejects a missing modes table", () => {
     const result = parseAgentConfig(`default: manager
+defaultMode: standard
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
-    assert.match(result.error ?? "", /classes are required/);
+    assert.match(result.error ?? "", /modes are required/);
   });
 
   it("class が配列でないものを拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: {provider: zai}
+defaultMode: standard
+modes:
+  standard:
+      middle: {provider: zai}
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must be an array/);
@@ -593,9 +671,11 @@ agents:
 
   it("/ のない model 持つ候補を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle:
-    - model: glm-5.2
+defaultMode: standard
+modes:
+  standard:
+      middle:
+        - model: glm-5.2
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must be <provider>\/<model>/);
@@ -604,8 +684,10 @@ agents:
   it("空の provider か model になる候補を拒否する", () => {
     for (const model of ["/glm-5.2", "zai/", "/"]) {
       const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: ${JSON.stringify(model)}}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: ${JSON.stringify(model)}}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
       assert.match(result.error ?? "", /must be <provider>\/<model>/, `model: ${model}`);
@@ -615,8 +697,10 @@ agents:
   it("未知キーを持つ候補を拒否する", () => {
     for (const key of ["provider", "adjust", "unknownKey"]) {
       const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2, ${key}: x}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2, ${key}: x}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
       assert.match(result.error ?? "", new RegExp(`candidate has an unknown key: ${key}`), key);
@@ -625,8 +709,10 @@ agents:
 
   it("agent の class がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
 agents:
   manager: {tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /invalid class/);
@@ -634,8 +720,10 @@ agents:
 
   it("未定義の class を参照する agent を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
 agents:
   manager: {class: high, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /undefined class high/);
@@ -643,8 +731,10 @@ agents:
 
   it("配列でない systemPrompt を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
 agents:
   manager:
     class: middle
@@ -656,16 +746,20 @@ agents:
 
   it("未定義の default agent を拒否する", () => {
     const result = parseAgentConfig(`default: missing
-classes:
-  middle: [{model: zai/glm-5.2}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
 agents: {}`);
     assert.match(result.error ?? "", /not defined/);
   });
 
   it("未定義の委譲先を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
 agents:
   manager:
     class: middle
@@ -677,8 +771,10 @@ agents:
 
   it("廃止した profiles キーを agent 定義として受け入れない", () => {
     const result = parseAgentConfig(`default: main
-classes:
-  high: []
+defaultMode: standard
+modes:
+  standard:
+      high: []
 profiles:
   main: {class: high, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /default and agents are required/);
@@ -686,8 +782,10 @@ profiles:
 
   it("vision がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /vision agent is required/);
@@ -695,8 +793,10 @@ agents:
 
   it("vision が vision class を参照しない設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: middle, tools: ["*"], subagents: [], systemPrompt: []}`);
@@ -705,9 +805,11 @@ agents:
 
   it("main と senior の subagents に vision がない設定を拒否する", () => {
     const result = parseAgentConfig(`default: main
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   main: {class: middle, tools: ["*", "!replace_context"], subagents: [], systemPrompt: []}
   senior: {class: middle, tools: ["*", "!replace_context"], subagents: [vision], systemPrompt: []}
@@ -718,9 +820,11 @@ agents:
 
   it("junior が vision を委譲先に持つ設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: ["*", "!replace_context"], subagents: [vision], systemPrompt: []}
   senior: {class: middle, tools: ["*", "!replace_context"], subagents: [vision], systemPrompt: []}
@@ -731,9 +835,11 @@ agents:
 
   it("vision が vision class で受け入れられる", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: ["*"], subagents: [vision], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
@@ -742,9 +848,11 @@ agents:
 
   it("vision と junior の tools・systemPrompt が異なっても設定検証を通す", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: ["*"], subagents: [vision], systemPrompt: []}
   junior: {class: middle, tools: [bash], subagents: [], systemPrompt: [junior prompt]}
@@ -754,9 +862,11 @@ agents:
 
   it("否定指定が ! 単体の設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: ["!"], subagents: [vision], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
@@ -765,13 +875,120 @@ agents:
 
   it("同じツールを許可と否定の両方で指定する設定を拒否する", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [read, "!read", "*"], subagents: [vision], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /both allows and negates tool read/);
+  });
+});
+
+describe("mode configuration", () => {
+  const table = { analysis: [{ model: "test/reasoner", weight: 2, settings: [] }], vision: [] };
+  const document = {
+    default: "manager",
+    defaultMode: "custom",
+    modes: { custom: table, max: { analysis: [], vision: [{ model: "test/image" }] } },
+    agents: {
+      manager: { class: "analysis", tools: [], subagents: [], systemPrompt: [] },
+      vision: { class: "vision", tools: [], subagents: [], systemPrompt: [] },
+    },
+  };
+
+  it("parses complete tables with generic mode and class names", () => {
+    const result = parseAgentConfig(stringifyYaml(document));
+    assert.equal(result.error, undefined);
+    assert.equal(result.config?.defaultMode, "custom");
+    assert.deepEqual(result.config?.modes.custom?.analysis, [
+      { provider: "test", model: "reasoner", weight: 2, settings: [] },
+    ]);
+    assert.deepEqual(result.config?.modes.max?.analysis, []);
+    assert.deepEqual(result.config?.modes.max?.vision, [{ provider: "test", model: "image" }]);
+  });
+
+  it.each([
+    {
+      name: "missing defaultMode",
+      patch: { defaultMode: undefined },
+      expected: /defaultMode is required/,
+    },
+    { name: "empty defaultMode", patch: { defaultMode: "" }, expected: /defaultMode is required/ },
+    {
+      name: "non-string defaultMode",
+      patch: { defaultMode: 1 },
+      expected: /defaultMode is required/,
+    },
+    {
+      name: "unknown defaultMode",
+      patch: { defaultMode: "missing" },
+      expected: /default mode missing is not defined/,
+    },
+    { name: "missing modes", patch: { modes: undefined }, expected: /modes are required/ },
+    { name: "non-object modes", patch: { modes: [] }, expected: /modes are required/ },
+    {
+      name: "non-object mode",
+      patch: { modes: { custom: [] } },
+      expected: /mode custom must be an object/,
+    },
+    {
+      name: "missing class",
+      patch: { modes: { custom: table, max: { vision: [] } } },
+      expected: /mode max must define the same classes as mode custom/,
+    },
+    {
+      name: "extra class",
+      patch: { modes: { custom: table, max: { ...table, extra: [] } } },
+      expected: /mode max must define the same classes as mode custom/,
+    },
+    {
+      name: "non-array class",
+      patch: { modes: { custom: table, max: { analysis: {}, vision: [] } } },
+      expected: /mode max class analysis must be an array/,
+    },
+    {
+      name: "invalid candidate in another mode",
+      patch: { modes: { custom: table, max: { analysis: [{ model: 123 }], vision: [] } } },
+      expected: /mode max class analysis candidate needs a model string/,
+    },
+  ])("rejects $name", ({ patch, expected }) => {
+    const result = parseAgentConfig(stringifyYaml({ ...document, ...patch }));
+    assert.equal(result.config, undefined);
+    assert.match(result.error ?? "", expected);
+  });
+
+  it("rejects the old classes-only schema", () => {
+    const result = parseAgentConfig(
+      stringifyYaml({
+        default: document.default,
+        classes: table,
+        agents: document.agents,
+      }),
+    );
+    assert.equal(result.config, undefined);
+    assert.match(result.error ?? "", /defaultMode is required/);
+  });
+
+  it("supports object-prototype names as configured mode and class names", () => {
+    const result = parseAgentConfig(
+      stringifyYaml({
+        ...document,
+        defaultMode: "constructor",
+        modes: {
+          constructor: { constructor: [], vision: [] },
+          custom: { constructor: [], vision: [] },
+        },
+        agents: {
+          ...document.agents,
+          manager: { ...document.agents.manager, class: "constructor" },
+        },
+      }),
+    );
+    assert.equal(result.error, undefined);
+    assert.deepEqual(result.config?.modes.constructor?.constructor, []);
   });
 });
 
@@ -886,7 +1103,7 @@ describe("拡張の接続", () => {
   it("--agent フラグの agent で開始する", async () => {
     const extension = captureAgentsExtension({ config }, { flags: { agent: "chat" } });
     try {
-      assert.deepEqual(extension.registeredFlags, ["agent", "class"]);
+      assert.deepEqual(extension.registeredFlags, ["agent", "class", "max"]);
       await extension.sessionStart();
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: chat", "💎 class: low (auto)"]);
       assert.deepEqual(extension.selectedModels, [{ provider: "commandcode", id: "gpt-5.6-luna" }]);
@@ -1078,9 +1295,12 @@ describe("class によるモデルルーティング", () => {
   it("class の候補が不成立でも別 class へ降格せず現在のモデルを維持する", async () => {
     const noDowngradeConfig: AgentConfig = {
       default: "highProfile",
-      classes: {
-        high: [{ provider: "zai", model: "high-model" }],
-        low: [{ provider: "zai", model: "low-model" }],
+      defaultMode: "standard",
+      modes: {
+        standard: {
+          high: [{ provider: "zai", model: "high-model" }],
+          low: [{ provider: "zai", model: "low-model" }],
+        },
       },
       agents: { highProfile: { class: "high", tools: [], subagents: [], systemPrompt: [] } },
     };
@@ -1212,6 +1432,667 @@ describe("class によるモデルルーティング", () => {
         { provider: "zai", id: "glm-5.3-flash", input: ["text"] },
       ]);
       assert.ok(!extension.notifications.some((message) => message.includes("no available model")));
+    } finally {
+      extension.restore();
+    }
+  });
+});
+
+describe("mode selection", () => {
+  it("registers only the boolean max flag and the mode command", () => {
+    const extension = captureAgentsExtension({ config: modeConfig });
+    try {
+      assert.deepEqual(extension.registeredFlags, ["agent", "class", "max"]);
+      assert.equal(extension.registeredFlagDefinitions.get("max")?.type, "boolean");
+      assert.ok(extension.commands.has("mode"));
+      assert.equal(extension.registeredFlags.includes("mode"), false);
+      assert.equal(extension.registeredFlags.includes("agent-mode"), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it.each([
+    { name: "default", flags: {}, inheritedMode: undefined, provider: "zai", id: "glm-5.2" },
+    {
+      name: "max flag",
+      flags: { max: true },
+      inheritedMode: undefined,
+      provider: "openai-codex",
+      id: "astra",
+    },
+    {
+      name: "max over inheritance",
+      flags: { max: true },
+      inheritedMode: "batch",
+      provider: "openai-codex",
+      id: "astra",
+    },
+    {
+      name: "named inheritance",
+      flags: {},
+      inheritedMode: "batch",
+      provider: "batch",
+      id: "middle",
+    },
+    {
+      name: "false max flag",
+      flags: { max: false },
+      inheritedMode: "batch",
+      provider: "batch",
+      id: "middle",
+    },
+    {
+      name: "invalid inheritance",
+      flags: {},
+      inheritedMode: "missing",
+      provider: "zai",
+      id: "glm-5.2",
+    },
+  ])("selects the initial mode using $name", async ({ flags, inheritedMode, provider, id }) => {
+    const extension = captureAgentsExtension({ config: modeConfig }, { flags, inheritedMode });
+    try {
+      await extension.sessionStart("startup");
+      assert.deepEqual(extension.context.model, { provider, id });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("uses a configured named default mode", async () => {
+    const extension = captureAgentsExtension({ config: { ...modeConfig, defaultMode: "batch" } });
+    try {
+      await extension.sessionStart("startup");
+      assert.deepEqual(extension.context.model, { provider: "batch", id: "middle" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("ignores an unavailable max flag and then uses valid inheritance", async () => {
+    const extension = captureAgentsExtension(
+      {
+        config: {
+          ...modeConfig,
+          modes: { standard: modeConfig.modes.standard!, batch: modeConfig.modes.batch! },
+        },
+      },
+      { flags: { max: true }, inheritedMode: "batch" },
+    );
+    try {
+      await extension.sessionStart("startup");
+      assert.deepEqual(extension.context.model, { provider: "batch", id: "middle" });
+      assert.deepEqual(extension.notificationEvents[0], {
+        message: "unknown mode flag: max",
+        level: "warning",
+      });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("selects agent, class, and mode flags independently", async () => {
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      {
+        flags: { agent: "worker", class: "high", max: true },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "astra" });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: worker", "💎 class: high (auto)"]);
+      assert.deepEqual(extension.activeTools.at(-1), ["bash", "subagent"]);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("preserves the agent, class, tools, and prompt when switching modes", async () => {
+    const extension = captureAgentsExtension({ config: modeConfig });
+    try {
+      await extension.sessionStart("startup");
+      await extension.runClassCommand("low");
+      const tools = extension.activeTools.slice();
+      const prompt = await extension.beforeAgentStart("base");
+      await extension.runModeCommand(" max ");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "sol" });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
+      assert.deepEqual(extension.activeTools, tools);
+      assert.deepEqual(await extension.beforeAgentStart("base"), prompt);
+      assert.equal(extension.notifications.at(-1), "agent mode → max");
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("clears manual selection even when the current mode is selected again", async () => {
+    const extension = captureAgentsExtension({ config: modeConfig }, { flags: { max: true } });
+    try {
+      await extension.sessionStart("startup");
+      await extension.modelSelect("set");
+      extension.context.model = { provider: "external", id: "manual" };
+      await extension.runModeCommand("max");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "astra" });
+      extension.context.model = { provider: "external", id: "after-command" };
+      await extension.input("next");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "astra" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("selects a mode from the existing UI in configuration order", async () => {
+    const extension = captureAgentsExtension({ config: modeConfig }, { modeSelection: "batch" });
+    try {
+      await extension.sessionStart("startup");
+      await extension.runModeCommand();
+      assert.deepEqual(extension.selections, [
+        { title: "Pick mode:", items: ["standard", "max", "batch"] },
+      ]);
+      assert.deepEqual(extension.context.model, { provider: "batch", id: "middle" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it.each(["unknown", "cancel", "non-ui"])(
+    "preserves routing and manual selection for %s input",
+    async (kind) => {
+      const extension = captureAgentsExtension({ config: modeConfig });
+      try {
+        await extension.sessionStart("startup");
+        await extension.modelSelect("set");
+        extension.context.model = { provider: "external", id: "manual" };
+        const beforeModels = extension.selectedModels.slice();
+        const beforeNotices = extension.notifications.slice();
+        if (kind === "non-ui") extension.context.hasUI = false;
+        await extension.runModeCommand(kind === "unknown" ? "missing" : "");
+        await extension.input("manual stays active");
+        assert.deepEqual(extension.context.model, { provider: "external", id: "manual" });
+        assert.deepEqual(extension.selectedModels, beforeModels);
+        assert.deepEqual(extension.agentWidget(), [
+          "🤖 agent: manager",
+          "💎 class: middle (manual)",
+        ]);
+        if (kind === "unknown")
+          assert.deepEqual(extension.notificationEvents.at(-1), {
+            message: "unknown mode: missing",
+            level: "warning",
+          });
+        if (kind === "cancel") assert.deepEqual(extension.notifications, beforeNotices);
+        if (kind === "non-ui")
+          assert.deepEqual(extension.notificationEvents.at(-1), {
+            message: "usage: /mode <mode-name>",
+            level: "error",
+          });
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+
+  it("notifies mode completion when the selected model does not change", async () => {
+    const extension = captureAgentsExtension({
+      config: {
+        ...modeConfig,
+        modes: { ...modeConfig.modes, max: modeConfig.modes.standard! },
+      },
+    });
+    try {
+      await extension.sessionStart("startup");
+      const count = extension.selectedModels.length;
+      await extension.runModeCommand("max");
+      assert.equal(extension.selectedModels.length, count);
+      assert.equal(extension.notifications.at(-1), "agent mode → max");
+      assert.equal(extension.agentWidget().length, 2);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("awaits mode application and serializes it with class changes", async () => {
+    let block = false;
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      {
+        async beforeSetModel() {
+          if (!block) return;
+          block = false;
+          started.resolve();
+          await release.promise;
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      block = true;
+      let completed = false;
+      const mode = extension.runModeCommand("max").then(() => {
+        completed = true;
+      });
+      await started.promise;
+      const classChange = extension.runClassCommand("low");
+      assert.equal(completed, false);
+      assert.equal(extension.notifications.includes("agent mode → max"), false);
+      release.resolve();
+      await Promise.all([mode, classChange]);
+      assert.deepEqual(extension.selectedModels.slice(-2), [
+        { provider: "openai-codex", id: "astra" },
+        { provider: "openai-codex", id: "sol" },
+      ]);
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "sol" });
+    } finally {
+      release.resolve();
+      extension.restore();
+    }
+  });
+
+  it("preserves mode while switching agents and applies the model before follow-up", async () => {
+    const extension = captureAgentsExtension({ config: modeConfig });
+    try {
+      await extension.sessionStart("startup");
+      await extension.runModeCommand("max");
+      await extension.runCommand("worker", "continue work");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "sol" });
+      assert.deepEqual(extension.sentMessages, [{ content: "continue work" }]);
+      await extension.runCommand("manager");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "astra" });
+      await extension.runClassCommand("vision");
+      assert.deepEqual(extension.context.model, { provider: "max-vision", id: "image" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("preserves mode for the replace-context class event", async () => {
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      { flags: { agent: "main", max: true } },
+    );
+    try {
+      await extension.sessionStart("startup");
+      assert.equal(await extension.requestClassChange("low"), "applied");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "sol" });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: main", "💎 class: low (agent)"]);
+    } finally {
+      extension.restore();
+    }
+  });
+});
+
+describe("mode lifecycle", () => {
+  for (const reason of ["startup", "new", "resume", "fork"]) {
+    for (const [options, expected] of [
+      [{}, { provider: "zai", id: "glm-5.2" }],
+      [{ flags: { max: true } }, { provider: "openai-codex", id: "astra" }],
+      [{ inheritedMode: "batch" }, { provider: "batch", id: "middle" }],
+    ] as const) {
+      it(`resets mode to the initial selection on ${reason}: ${expected.provider}`, async () => {
+        const before = captureAgentsExtension({ config: modeConfig }, options);
+        let after: ReturnType<typeof captureAgentsExtension> | undefined;
+        try {
+          await before.sessionStart("startup");
+          await before.runModeCommand(expected.provider === "batch" ? "max" : "batch");
+          await before.modelSelect("set");
+          await before.sessionShutdown();
+          after = captureAgentsExtension({ config: modeConfig }, options);
+          await after.sessionStart(reason);
+          assert.deepEqual(after.context.model, expected);
+          assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
+          after.context.model = { provider: "external", id: "other" };
+          await after.input("automatic routing is active");
+          assert.deepEqual(after.context.model, expected);
+        } finally {
+          after?.restore();
+          before.restore();
+        }
+      });
+    }
+  }
+
+  it("restores mode, class, manual state, and cooldown without applying a model on reload", async () => {
+    const before = captureAgentsExtension({ config: modeConfig });
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
+    try {
+      await before.sessionStart("startup");
+      await before.runModeCommand("max");
+      await before.runClassCommand("low");
+      await before.providerResponse(429, { "retry-after": "3600" });
+      await before.modelSelect("set");
+      await before.sessionShutdown();
+      after = captureAgentsExtension({ config: modeConfig }, { inheritedMode: "batch" });
+      after.context.model = { provider: "external", id: "manual" };
+      await after.sessionStart("reload");
+      assert.deepEqual(after.selectedModels, []);
+      assert.deepEqual(after.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
+      await after.input("keep the manual model");
+      assert.deepEqual(after.context.model, { provider: "external", id: "manual" });
+      await after.runModeCommand("max");
+      assert.deepEqual(after.selectedModels, []);
+      assert.ok(after.notifications.includes("no available model for agent manager: class low"));
+      await after.runModeCommand("standard");
+      assert.deepEqual(after.context.model, { provider: "commandcode", id: "gpt-5.6-luna" });
+    } finally {
+      after?.restore();
+      before.restore();
+    }
+  });
+
+  it("uses defaultMode when the saved mode disappears on reload", async () => {
+    const before = captureAgentsExtension({ config: modeConfig });
+    let after: ReturnType<typeof captureAgentsExtension> | undefined;
+    try {
+      await before.sessionStart("startup");
+      await before.runModeCommand("max");
+      await before.sessionShutdown();
+      after = captureAgentsExtension(
+        {
+          config: {
+            ...modeConfig,
+            defaultMode: "batch",
+            modes: { standard: modeConfig.modes.standard!, batch: modeConfig.modes.batch! },
+          },
+        },
+        { flags: { max: true }, inheritedMode: "standard" },
+      );
+      after.context.model = before.context.model;
+      await after.sessionStart("reload");
+      assert.deepEqual(after.selectedModels, []);
+      await after.input("route with the new default");
+      assert.deepEqual(after.context.model, { provider: "batch", id: "middle" });
+    } finally {
+      after?.restore();
+      before.restore();
+    }
+  });
+});
+
+describe("mode routing boundaries", () => {
+  it("shares a model cooldown across modes", async () => {
+    const extension = captureAgentsExtension({
+      config: {
+        ...modeConfig,
+        modes: {
+          ...modeConfig.modes,
+          max: {
+            ...modeConfig.modes.max!,
+            middle: [
+              { provider: "zai", model: "glm-5.2" },
+              { provider: "openai-codex", model: "astra" },
+            ],
+          },
+        },
+      },
+    });
+    try {
+      await extension.sessionStart("startup");
+      await extension.messageEnd({
+        role: "assistant",
+        provider: "zai",
+        model: "glm-5.2",
+        stopReason: "error",
+        errorMessage: "usage limit reached",
+      });
+      await extension.runModeCommand("max");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "astra" });
+      await extension.runModeCommand("standard");
+      assert.deepEqual(extension.context.model, { provider: "commandcode", id: "gpt-5.6-luna" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it.each(["missing", "failed", "cooldown"])(
+    "does not fall back to another mode or class after %s candidates",
+    async (failure) => {
+      const extension = captureAgentsExtension(
+        { config: modeConfig },
+        {
+          flags: { max: true },
+          findModel: (provider, id) =>
+            failure === "missing" && provider === "openai-codex" ? undefined : { provider, id },
+          setModelSucceeds: failure !== "failed",
+        },
+      );
+      try {
+        extension.context.model = { provider: "external", id: "kept" };
+        await extension.sessionStart("startup");
+        if (failure === "cooldown")
+          await extension.providerResponse(429, { "retry-after": "3600" });
+        extension.context.model = { provider: "external", id: "kept" };
+        const result = await extension.input("no cross-mode fallback");
+        assert.deepEqual(result, { action: "handled" });
+        assert.ok(
+          extension.selectedModels.every(
+            (model) => (model as { provider: string }).provider === "openai-codex",
+          ),
+        );
+        assert.deepEqual(extension.notificationEvents.at(-1), {
+          message: "no available model for agent manager: class middle",
+          level: "error",
+        });
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+
+  it("reports unavailable max candidates to stderr in a non-UI prompt", async () => {
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      { flags: { max: true }, findModel: () => undefined },
+    );
+    const previousExitCode = process.exitCode;
+    const previousWrite = process.stderr.write;
+    let stderr = "";
+    process.stderr.write = ((chunk: string) => {
+      stderr += chunk;
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      extension.context.hasUI = false;
+      await extension.sessionStart("startup");
+      assert.deepEqual(await extension.input("cannot run"), { action: "handled" });
+      assert.match(stderr, /no available model for agent manager: class middle/);
+      assert.equal(process.exitCode, 1);
+      assert.deepEqual(extension.notifications, []);
+    } finally {
+      process.stderr.write = previousWrite;
+      process.exitCode = previousExitCode;
+      extension.restore();
+    }
+  });
+
+  it("uses LATEST and usage scoring only within the selected mode and class", async () => {
+    let queries = 0;
+    const extension = captureAgentsExtension(
+      {
+        config: {
+          ...modeConfig,
+          modes: {
+            ...modeConfig.modes,
+            max: {
+              ...modeConfig.modes.max!,
+              middle: [
+                {
+                  provider: "openai-codex",
+                  model: "gpt-<LATEST>-astra",
+                  settings: [{ multiply: { provider: "openai-codex" } }],
+                },
+                {
+                  provider: "fallback",
+                  model: "local",
+                  settings: [{ multiply: { provider: "fallback" } }],
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        flags: { max: true },
+        models: [
+          { provider: "openai-codex", id: "gpt-6.1-astra" },
+          { provider: "openai-codex", id: "gpt-6.2-astra" },
+        ],
+        async executeUsage() {
+          queries++;
+          return {
+            exitCode: 0,
+            stdout: '[{"provider":"openai-codex","urgency":2},{"provider":"fallback","urgency":1}]',
+          };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "gpt-6.2-astra" });
+      assert.equal(queries, 1);
+      await extension.providerResponse(429);
+      assert.deepEqual(extension.context.model, { provider: "fallback", id: "local" });
+      assert.equal(queries, 1);
+      await extension.providerResponse(429);
+      assert.deepEqual(extension.context.model, { provider: "fallback", id: "local" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("does not query usage for a single max candidate", async () => {
+    let queries = 0;
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      {
+        flags: { max: true },
+        async executeUsage() {
+          queries++;
+          return { exitCode: 0, stdout: "[]" };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      await extension.runClassCommand("low");
+      await extension.input("next");
+      assert.equal(queries, 0);
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "sol" });
+    } finally {
+      extension.restore();
+    }
+  });
+});
+
+describe("mode inheritance", () => {
+  it.each(["new", "resume", "fork"])(
+    "passes named mode through the child environment for %s",
+    async (kind) => {
+      const directory = mkdtempSync(join(tmpdir(), "agent-mode-child-"));
+      const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = directory;
+      const extension = captureAgentsExtension({ config: modeConfig });
+      extension.respondToChild(succeedChild);
+      try {
+        const sessionDir = subagentSessionDir("/parent");
+        mkdirSync(sessionDir, { recursive: true });
+        const sessionFile = join(sessionDir, "2026-10-22T08-00-00-123Z_previous.jsonl");
+        writeFileSync(sessionFile, "");
+        await extension.sessionStart("startup");
+        await extension.runModeCommand("batch");
+        await extension.runClassCommand("high");
+        await extension.executeSubagent({
+          agent: "worker",
+          task: "work",
+          ...(kind === "new" ? {} : { session: sessionFile, fork: kind === "fork" }),
+        });
+        const spawn = extension.spawnCalls[0]!;
+        assert.equal(spawn.env?.PI_AGENT_MODE, "batch");
+        assert.equal(spawn.env?.PI_AGENT_NAME, "worker");
+        assert.equal(spawn.args[spawn.args.indexOf("--mode") + 1], "json");
+        assert.equal(spawn.args.includes("--max"), false);
+        assert.equal(spawn.args.includes("--agent-mode"), false);
+        assert.equal(spawn.args.includes("--class"), false);
+        assert.equal(spawn.args.includes("--model"), false);
+        if (kind !== "new")
+          assert.equal(
+            spawn.args[spawn.args.indexOf(kind === "fork" ? "--fork" : "--session") + 1],
+            sessionFile,
+          );
+        const child = captureAgentsExtension(
+          { config: modeConfig },
+          { flags: { agent: "worker" }, inheritedMode: spawn.env?.PI_AGENT_MODE },
+        );
+        try {
+          await child.sessionStart("startup");
+          assert.deepEqual(child.context.model, { provider: "batch", id: "low" });
+          assert.deepEqual(child.agentWidget(), ["🤖 agent: worker", "💎 class: low (auto)"]);
+        } finally {
+          child.restore();
+        }
+      } finally {
+        extension.restore();
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("captures mode before waiting for a child slot", async () => {
+    const extension = captureAgentsExtension({ config: modeConfig });
+    const executions: Array<Promise<unknown>> = [];
+    try {
+      await extension.sessionStart("startup");
+      executions.push(extension.executeSubagent({ agent: "worker", task: "first" }));
+      executions.push(extension.executeSubagent({ agent: "worker", task: "second" }));
+      executions.push(extension.executeSubagent({ agent: "worker", task: "waiting" }));
+      assert.equal(extension.spawnCalls.length, 2);
+      await extension.runModeCommand("max");
+      assert.deepEqual(
+        extension.spawnCalls.map((call) => call.env?.PI_AGENT_MODE),
+        ["standard", "standard"],
+      );
+      succeedChild(extension.children[0]!);
+      await executions[0];
+      assert.equal(extension.spawnCalls[2]?.env?.PI_AGENT_MODE, "standard");
+      succeedChild(extension.children[1]!);
+      succeedChild(extension.children[2]!);
+      await Promise.all(executions);
+      extension.respondToChild(succeedChild);
+      await extension.executeSubagent({ agent: "worker", task: "after mode change" });
+      assert.equal(extension.spawnCalls[3]?.env?.PI_AGENT_MODE, "max");
+    } finally {
+      for (const child of extension.children) succeedChild(child);
+      await Promise.allSettled(executions);
+      extension.restore();
+    }
+  });
+
+  it("passes the effective mode to automatic vision delegation", async () => {
+    const extension = captureAgentsExtension({ config: modeConfig });
+    extension.respondToChild(succeedChild);
+    try {
+      await extension.sessionStart("startup");
+      await extension.runModeCommand("max");
+      const result = await extension.input("inspect the attachment", "interactive", [
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      ]);
+      assert.deepEqual(result, { action: "handled" });
+      assert.equal(extension.spawnCalls[0]?.env?.PI_AGENT_MODE, "max");
+      assert.equal(extension.spawnCalls[0]?.env?.PI_AGENT_NAME, "vision");
+      await new Promise((resolve) => setImmediate(resolve));
+      const vision = captureAgentsExtension(
+        { config: modeConfig },
+        { flags: { agent: "vision" }, inheritedMode: extension.spawnCalls[0]?.env?.PI_AGENT_MODE },
+      );
+      try {
+        await vision.sessionStart("startup");
+        assert.deepEqual(vision.context.model, { provider: "max-vision", id: "image" });
+      } finally {
+        vision.restore();
+      }
     } finally {
       extension.restore();
     }
@@ -1446,7 +2327,13 @@ describe("class 選択", () => {
 
       const reducedConfig: AgentConfig = {
         default: "manager",
-        classes: { middle: config.classes.middle!, vision: config.classes.vision! },
+        defaultMode: "standard",
+        modes: {
+          standard: {
+            middle: config.modes.standard!.middle!,
+            vision: config.modes.standard!.vision!,
+          },
+        },
         agents: { manager: config.agents.manager! },
       };
       after = captureAgentsExtension({ config: reducedConfig });
@@ -1475,12 +2362,15 @@ describe("class 選択", () => {
   it("429 のフォールバックは実効 class 内の次候補へ切り替える", async () => {
     const twoCandidateLow: AgentConfig = {
       ...config,
-      classes: {
-        ...config.classes,
-        low: [
-          { provider: "commandcode", model: "gpt-5.6-luna" },
-          { provider: "zai", model: "glm-5.2" },
-        ],
+      defaultMode: "standard",
+      modes: {
+        standard: {
+          ...config.modes.standard!,
+          low: [
+            { provider: "commandcode", model: "gpt-5.6-luna" },
+            { provider: "zai", model: "glm-5.2" },
+          ],
+        },
       },
     };
     const extension = captureAgentsExtension(
@@ -1975,12 +2865,15 @@ describe("レート制限（429）時のフォールバック", () => {
   it("3候補では最大2回だけ再試行し、user message の履歴を増やさない", async () => {
     const threeCandidateConfig: AgentConfig = {
       default: "manager",
-      classes: {
-        middle: [
-          { provider: "zai", model: "first" },
-          { provider: "zai", model: "second" },
-          { provider: "zai", model: "third" },
-        ],
+      defaultMode: "standard",
+      modes: {
+        standard: {
+          middle: [
+            { provider: "zai", model: "first" },
+            { provider: "zai", model: "second" },
+            { provider: "zai", model: "third" },
+          ],
+        },
       },
       agents: { manager: { class: "middle", tools: [], subagents: [], systemPrompt: [] } },
     };
@@ -2068,12 +2961,15 @@ describe("レート制限（429）時のフォールバック", () => {
   describe("same-turn later HTTP 429 suppression", () => {
     const http429Config: AgentConfig = {
       default: "main",
-      classes: {
-        middle: [
-          { provider: "amazon-bedrock", model: "global.anthropic.claude-opus-4-6-v1" },
-          { provider: "cursor", model: "composer-2.5:slow" },
-          { provider: "openai-codex", model: "gpt-6-luna" },
-        ],
+      defaultMode: "standard",
+      modes: {
+        standard: {
+          middle: [
+            { provider: "amazon-bedrock", model: "global.anthropic.claude-opus-4-6-v1" },
+            { provider: "cursor", model: "composer-2.5:slow" },
+            { provider: "openai-codex", model: "gpt-6-luna" },
+          ],
+        },
       },
       agents: { main: { class: "middle", tools: [], subagents: [], systemPrompt: [] } },
     };
@@ -2410,7 +3306,8 @@ describe("セッションライフサイクル", () => {
     let after: ReturnType<typeof captureAgentsExtension> | undefined;
     const changedConfig: AgentConfig = {
       default: "manager",
-      classes: { middle: config.classes.middle! },
+      defaultMode: "standard",
+      modes: { standard: { middle: config.modes.standard!.middle! } },
       agents: { manager: config.agents.manager! },
     };
     try {
@@ -4446,9 +5343,12 @@ describe("independent child session storage", () => {
 describe("replace_context によるクラス指定", () => {
   const configWithMain: AgentConfig = {
     ...config,
-    classes: {
-      ...config.classes,
-      high: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
+    defaultMode: "standard",
+    modes: {
+      standard: {
+        ...config.modes.standard!,
+        high: [{ provider: "commandcode", model: "gpt-5.6-luna" }],
+      },
     },
     agents: {
       ...config.agents,
@@ -4487,12 +5387,15 @@ describe("replace_context によるクラス指定", () => {
       {
         config: {
           ...configWithMain,
-          classes: {
-            ...configWithMain.classes,
-            high: [
-              { provider: "commandcode", model: "gpt-5.6-luna" },
-              { provider: "zai", model: "glm-5.2" },
-            ],
+          defaultMode: "standard",
+          modes: {
+            standard: {
+              ...configWithMain.modes.standard!,
+              high: [
+                { provider: "commandcode", model: "gpt-5.6-luna" },
+                { provider: "zai", model: "glm-5.2" },
+              ],
+            },
           },
         },
       },
@@ -4742,9 +5645,11 @@ describe("replace_context によるクラス指定", () => {
 describe("settings ルールの設定", () => {
   it("loads candidate settings without routing configuration", () => {
     const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager:
     class: middle
@@ -4766,17 +5671,19 @@ agents:
 settings:
   zai:
     - multiply: zai.urgency
-classes:
-  middle:
-    - {model: zai/glm-5.2, weight: 2}
-    - {model: commandcode/flash}
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle:
+        - {model: zai/glm-5.2, weight: 2}
+        - {model: commandcode/flash}
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
     assert.equal(result.error, undefined);
     assert.ok(result.config);
-    assert.deepEqual(result.config.classes.middle, [
+    assert.deepEqual(result.config.modes.standard!.middle, [
       { provider: "zai", model: "glm-5.2", weight: 2 },
       { provider: "commandcode", model: "flash" },
     ]);
@@ -4785,9 +5692,11 @@ agents:
   it("rejects a candidate weight that is not a positive finite number", () => {
     for (const weight of [0, -1, JSON.stringify("x")]) {
       const result = parseAgentConfig(`default: manager
-classes:
-  middle: [{model: zai/glm-5.2, weight: ${weight}}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2, weight: ${weight}}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
@@ -4804,9 +5713,11 @@ settings:
       multiply: 0
   openai-codex:
     - multiply: openai-codex.urgency
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
@@ -4827,9 +5738,11 @@ settings:
   deepseek:
     - cron: "* 1-3 * * 1-5"
       multiply: 0
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
@@ -4843,18 +5756,20 @@ agents:
 settings:
   zai:
     - multiply: 0
-classes:
-  middle:
-    - model: zai/glm-5.2
-      settings:
-        - multiply: zai.urgency
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle:
+        - model: zai/glm-5.2
+          settings:
+            - multiply: zai.urgency
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
     assert.equal(result.error, undefined);
     assert.ok(result.config);
-    assert.deepEqual(result.config.classes.middle?.[0]?.settings, [
+    assert.deepEqual(result.config.modes.standard!.middle?.[0]?.settings, [
       { multiply: { provider: "zai" } },
     ]);
   });
@@ -4865,7 +5780,7 @@ agents:
       `settings:\n  zai:\n    - multiply: 1\n      unknownKey: 1`,
     ]) {
       const result = parseAgentConfig(
-        `default: manager\n${source}\nclasses:\n  middle: [{model: zai/glm-5.2}]\n  vision: [{model: zai/glm-5.3-flash}]\nagents:\n  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}\n  vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`,
+        `default: manager\n${source}\ndefaultMode: standard\nmodes:\n  standard:\n      middle: [{model: zai/glm-5.2}]\n      vision: [{model: zai/glm-5.3-flash}]\nagents:\n  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}\n  vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`,
       );
       assert.match(result.error ?? "", /rule has an unknown key/);
     }
@@ -4877,9 +5792,11 @@ agents:
 settings:
   zai:
     - multiply: ${JSON.stringify(multiply)}
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
@@ -4892,9 +5809,11 @@ agents:
 settings:
   a.b:
     - multiply: a.b.urgency
-classes:
-  middle: [{model: a.b/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: a.b/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
@@ -4905,19 +5824,33 @@ agents:
   });
 
   it("rejects a non-array settings section and candidate settings", () => {
-    for (const source of [
-      "settings:\n  zai: 123",
-      "settings: 123",
-      "classes:\n  middle:\n    - model: zai/glm-5.2\n      settings: 123",
-    ]) {
-      const result = parseAgentConfig(`default: manager
-${source}
-${source.startsWith("classes:") ? "" : "classes:\n  middle: [{model: zai/glm-5.2}]"}
-  vision: [{model: zai/glm-5.3-flash}]
-agents:
-  manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
-  vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
-      assert.ok(result.error, source);
+    const cases: Array<{ settings?: unknown; candidateSettings?: unknown; expected: RegExp }> = [
+      { settings: { zai: 123 }, expected: /settings\.zai must be an array/ },
+      { settings: 123, expected: /settings must be an object/ },
+      {
+        candidateSettings: 123,
+        expected: /mode standard class middle candidate settings must be an array/,
+      },
+    ];
+    for (const { settings, candidateSettings, expected } of cases) {
+      const result = parseAgentConfig(
+        stringifyYaml({
+          default: "manager",
+          defaultMode: "standard",
+          settings,
+          modes: {
+            standard: {
+              middle: [{ model: "zai/glm-5.2", settings: candidateSettings }],
+              vision: [],
+            },
+          },
+          agents: {
+            manager: { class: "middle", tools: [], subagents: [], systemPrompt: [] },
+            vision: { class: "vision", tools: [], subagents: [], systemPrompt: [] },
+          },
+        }),
+      );
+      assert.match(result.error ?? "", expected);
     }
   });
 
@@ -4928,9 +5861,11 @@ settings:
   zai:
     - cron: ${JSON.stringify(cron)}
       multiply: 0
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
@@ -4944,9 +5879,11 @@ settings:
   zai:
     - cron: 123
       multiply: 0
-classes:
-  middle: [{model: zai/glm-5.2}]
-  vision: [{model: zai/glm-5.3-flash}]
+defaultMode: standard
+modes:
+  standard:
+      middle: [{model: zai/glm-5.2}]
+      vision: [{model: zai/glm-5.3-flash}]
 agents:
   manager: {class: middle, tools: [], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: [], subagents: [], systemPrompt: []}`);
@@ -5009,7 +5946,8 @@ describe("usage scoring and ordering", () => {
   }));
   const routedConfig: AgentConfig = {
     ...config,
-    classes: { ...config.classes, middle: baseCandidates },
+    defaultMode: "standard",
+    modes: { standard: { ...config.modes.standard!, middle: baseCandidates } },
   };
 
   function routeOutput(urgencies: Array<number | null>): string {
@@ -5138,7 +6076,8 @@ describe("usage scoring and ordering", () => {
     ];
     const duplicateConfig: AgentConfig = {
       ...config,
-      classes: { ...config.classes, middle: duplicates },
+      defaultMode: "standard",
+      modes: { standard: { ...config.modes.standard!, middle: duplicates } },
     };
     const extension = captureAgentsExtension(
       { config: duplicateConfig },
@@ -5202,7 +6141,8 @@ describe("usage scoring and ordering", () => {
     ];
     const scheduledConfig: AgentConfig = {
       ...config,
-      classes: { ...config.classes, middle: scheduled },
+      defaultMode: "standard",
+      modes: { standard: { ...config.modes.standard!, middle: scheduled } },
     };
     const extension = captureAgentsExtension(
       { config: scheduledConfig },
@@ -5238,12 +6178,15 @@ describe("usage scoring and ordering", () => {
     const replacementConfig: AgentConfig = {
       ...config,
       settings: { zai: [{ multiply: 0 }] },
-      classes: {
-        ...config.classes,
-        middle: [
-          { provider: "zai", model: "b" },
-          { provider: "zai", model: "a", settings: [{ multiply: 2 }] },
-        ],
+      defaultMode: "standard",
+      modes: {
+        standard: {
+          ...config.modes.standard!,
+          middle: [
+            { provider: "zai", model: "b" },
+            { provider: "zai", model: "a", settings: [{ multiply: 2 }] },
+          ],
+        },
       },
     };
     const extension = captureAgentsExtension(
@@ -5254,7 +6197,7 @@ describe("usage scoring and ordering", () => {
           return {
             exitCode: 0,
             stdout: JSON.stringify(
-              replacementConfig.classes.middle!.map((candidate) => ({
+              replacementConfig.modes.standard!.middle!.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
                 urgency: 1,
@@ -5280,12 +6223,15 @@ describe("usage scoring and ordering", () => {
     const emptySettingsConfig: AgentConfig = {
       ...config,
       settings: { zai: [{ multiply: { provider: "zai" } }] },
-      classes: {
-        ...config.classes,
-        middle: [
-          { provider: "zai", model: "a", settings: [] },
-          { provider: "zai", model: "b" },
-        ],
+      defaultMode: "standard",
+      modes: {
+        standard: {
+          ...config.modes.standard!,
+          middle: [
+            { provider: "zai", model: "a", settings: [] },
+            { provider: "zai", model: "b" },
+          ],
+        },
       },
     };
     const extension = captureAgentsExtension(
@@ -5296,7 +6242,7 @@ describe("usage scoring and ordering", () => {
           return {
             exitCode: 0,
             stdout: JSON.stringify(
-              emptySettingsConfig.classes.middle!.map((candidate) => ({
+              emptySettingsConfig.modes.standard!.middle!.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
                 urgency: 4,
@@ -5333,7 +6279,8 @@ describe("usage scoring and ordering", () => {
     ];
     const namespacedConfig: AgentConfig = {
       ...config,
-      classes: { ...config.classes, middle: namespaced },
+      defaultMode: "standard",
+      modes: { standard: { ...config.modes.standard!, middle: namespaced } },
     };
     const extension = captureAgentsExtension(
       { config: namespacedConfig },
@@ -5470,7 +6417,10 @@ describe("automatic model retention", () => {
   ];
   const policy: AgentConfig = {
     ...config,
-    classes: { ...config.classes, middle: candidates },
+    modes: {
+      ...config.modes,
+      [config.defaultMode]: { ...config.modes[config.defaultMode], middle: candidates },
+    },
   };
 
   it.each([59, 60, 61])("reevaluates after %s idle minutes", async (idleMinutes) => {
@@ -5560,17 +6510,20 @@ describe("automatic model retention", () => {
     const clock = spyOn(Date, "now").mockImplementation(() => now);
     const peakPolicy: AgentConfig = {
       ...policy,
-      classes: {
-        ...policy.classes,
-        middle: [
-          {
-            provider: "a",
-            model: "m",
-            weight: 2,
-            settings: [{ cron: parseCronExpression("* 6 * * *"), multiply: 0 }],
-          },
-          { provider: "b", model: "m" },
-        ],
+      modes: {
+        ...policy.modes,
+        [policy.defaultMode]: {
+          ...policy.modes[policy.defaultMode],
+          middle: [
+            {
+              provider: "a",
+              model: "m",
+              weight: 2,
+              settings: [{ cron: parseCronExpression("* 6 * * *"), multiply: 0 }],
+            },
+            { provider: "b", model: "m" },
+          ],
+        },
       },
     };
     const extension = captureAgentsExtension({ config: peakPolicy });
@@ -5894,16 +6847,19 @@ describe("zero-score input gates", () => {
     async (failure) => {
       const policy: AgentConfig = {
         ...config,
-        classes: {
-          ...config.classes,
-          middle: [
-            { provider: "a", model: "numeric", settings: [{ multiply: 0 }] },
-            {
-              provider: "a",
-              model: "scheduled",
-              settings: [{ cron: parseCronExpression("* * * * *"), multiply: 0 }],
-            },
-          ],
+        modes: {
+          ...config.modes,
+          [config.defaultMode]: {
+            ...config.modes[config.defaultMode],
+            middle: [
+              { provider: "a", model: "numeric", settings: [{ multiply: 0 }] },
+              {
+                provider: "a",
+                model: "scheduled",
+                settings: [{ cron: parseCronExpression("* * * * *"), multiply: 0 }],
+              },
+            ],
+          },
         },
       };
       let calls = 0;
@@ -5951,9 +6907,12 @@ describe("zero-score input gates", () => {
     async (source) => {
       const policy: AgentConfig = {
         ...config,
-        classes: {
-          ...config.classes,
-          middle: [{ provider: "a", model: "m", settings: [{ multiply: 0 }] }],
+        modes: {
+          ...config.modes,
+          [config.defaultMode]: {
+            ...config.modes[config.defaultMode],
+            middle: [{ provider: "a", model: "m", settings: [{ multiply: 0 }] }],
+          },
         },
       };
       let calls = 0;
@@ -6008,7 +6967,8 @@ describe("provider urgency routing boundaries", () => {
     ];
     const policy: AgentConfig = {
       ...config,
-      classes: { ...config.classes, middle: candidates },
+      defaultMode: "standard",
+      modes: { standard: { ...config.modes.standard!, middle: candidates } },
     };
     const extension = captureAgentsExtension(
       { config: policy },
@@ -6043,17 +7003,20 @@ describe("provider urgency routing boundaries", () => {
     async (exitCode) => {
       const policy: AgentConfig = {
         ...config,
-        classes: {
-          ...config.classes,
-          middle: [
-            {
-              provider: "a",
-              model: "m",
-              weight: 3,
-              settings: [{ multiply: 0.5 }, { multiply: { provider: "a" } }],
-            },
-            { provider: "b", model: "m", weight: 1, settings: [{ multiply: 2 }] },
-          ],
+        defaultMode: "standard",
+        modes: {
+          standard: {
+            ...config.modes.standard!,
+            middle: [
+              {
+                provider: "a",
+                model: "m",
+                weight: 3,
+                settings: [{ multiply: 0.5 }, { multiply: { provider: "a" } }],
+              },
+              { provider: "b", model: "m", weight: 1, settings: [{ multiply: 2 }] },
+            ],
+          },
         },
       };
       let calls = 0;
@@ -6086,29 +7049,32 @@ describe("provider urgency routing boundaries", () => {
   it("applies explicit urgency once with exact names and noncandidate provider references", async () => {
     const policy: AgentConfig = {
       ...config,
-      classes: {
-        ...config.classes,
-        middle: [
-          {
-            provider: "commandcode",
-            model: "m",
-            weight: 1,
-            settings: [{ multiply: { provider: "commandcode" } }],
-          },
-          { provider: "zai", model: "plain", weight: 3 },
-          {
-            provider: "zai",
-            model: "outside",
-            weight: 2,
-            settings: [{ multiply: { provider: "other" } }],
-          },
-          {
-            provider: "zai",
-            model: "canonical",
-            weight: 1.5,
-            settings: [{ multiply: { provider: "command-code" } }],
-          },
-        ],
+      defaultMode: "standard",
+      modes: {
+        standard: {
+          ...config.modes.standard!,
+          middle: [
+            {
+              provider: "commandcode",
+              model: "m",
+              weight: 1,
+              settings: [{ multiply: { provider: "commandcode" } }],
+            },
+            { provider: "zai", model: "plain", weight: 3 },
+            {
+              provider: "zai",
+              model: "outside",
+              weight: 2,
+              settings: [{ multiply: { provider: "other" } }],
+            },
+            {
+              provider: "zai",
+              model: "canonical",
+              weight: 1.5,
+              settings: [{ multiply: { provider: "command-code" } }],
+            },
+          ],
+        },
       },
     };
     const extension = captureAgentsExtension(
@@ -6142,12 +7108,15 @@ describe("provider urgency routing boundaries", () => {
 describe("<LATEST> モデルの解決", () => {
   const latestBase: AgentConfig = {
     ...config,
-    classes: {
-      ...config.classes,
-      middle: [
-        { provider: "zai", model: "glm-<LATEST>" },
-        { provider: "commandcode", model: "gpt-5.6-luna" },
-      ],
+    defaultMode: "standard",
+    modes: {
+      standard: {
+        ...config.modes.standard!,
+        middle: [
+          { provider: "zai", model: "glm-<LATEST>" },
+          { provider: "commandcode", model: "gpt-5.6-luna" },
+        ],
+      },
     },
   };
 
@@ -6188,6 +7157,86 @@ describe("<LATEST> モデルの解決", () => {
 });
 
 describe("shipped agents.yaml through the usage fixture CLI", () => {
+  it("preserves the complete standard candidate table and configures the max roles", () => {
+    const source = readFileSync(
+      new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
+      "utf8",
+    );
+    const result = parseAgentConfig(source);
+    assert.equal(result.error, undefined);
+    assert.ok(result.config);
+    const shipped = result.config;
+    const flash = { provider: "zai", model: "glm-<LATEST>-flash" };
+    const sol = { provider: "openai-codex", model: "gpt-<LATEST>-sol" };
+    const luna = { provider: "openai-codex", model: "gpt-6-luna" };
+    const commandcode = { provider: "commandcode", model: "z-ai/glm-<LATEST>-flash" };
+    const weightedFlash = { ...flash, settings: [{ multiply: { provider: "zai" } }] };
+    assert.equal(shipped.defaultMode, "standard");
+    assert.deepEqual(shipped.modes.standard, {
+      high: [{ provider: "zai", model: "glm-<LATEST>" }, sol, commandcode, weightedFlash],
+      middle: [flash, sol, commandcode, weightedFlash],
+      low: [luna, flash, commandcode, weightedFlash],
+      vision: [luna, flash, commandcode, weightedFlash],
+    });
+    assert.deepEqual(shipped.modes.max, {
+      high: [{ provider: "openai-codex", model: "gpt-<LATEST>-astra" }],
+      middle: [{ provider: "openai-codex", model: "gpt-<LATEST>-astra" }],
+      low: [sol],
+      vision: shipped.modes.standard!.vision,
+    });
+    assert.deepEqual(
+      Object.fromEntries(
+        Object.entries(shipped.agents).map(([name, agent]) => [name, agent.class]),
+      ),
+      {
+        main: "middle",
+        senior: "high",
+        junior: "low",
+        vision: "vision",
+        chat: "middle",
+      },
+    );
+    assert.deepEqual(shipped.agents.vision?.tools, shipped.agents.junior?.tools);
+    assert.deepEqual(shipped.agents.vision?.systemPrompt, shipped.agents.junior?.systemPrompt);
+  });
+
+  it.each([
+    { agent: "main", model: "gpt-6.2-astra" },
+    { agent: "senior", model: "gpt-6.2-astra" },
+    { agent: "junior", model: "gpt-6.2-sol" },
+    { agent: "chat", model: "gpt-6.2-astra" },
+  ])("routes shipped max $agent to $model without usage queries", async ({ agent, model }) => {
+    const result = parseAgentConfig(
+      readFileSync(
+        new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
+        "utf8",
+      ),
+    );
+    assert.ok(result.config);
+    let queries = 0;
+    const extension = captureAgentsExtension(
+      { config: result.config },
+      {
+        flags: { agent, max: true },
+        models: ["gpt-6.1-astra", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.2-sol"].map((id) => ({
+          provider: "openai-codex",
+          id,
+        })),
+        async executeUsage() {
+          queries++;
+          return { exitCode: 0, stdout: "[]" };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: model });
+      assert.equal(queries, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
   it("parses the shipped configuration, resolves <LATEST>, and orders candidates by the observed policy", async () => {
     const directory = mkdtempSync(join(tmpdir(), "route-shipped-test-"));
     const usage = join(directory, "usage");

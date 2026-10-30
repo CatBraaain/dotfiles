@@ -337,7 +337,8 @@ async function consumeParentResult(message: AssistantMessage): Promise<any> {
       {
         config: {
           default: "parent",
-          classes: { free: [] },
+          defaultMode: "standard",
+          modes: { standard: { free: [] } },
           agents: {
             parent: { class: "free", tools: ["*"], subagents: ["child"], systemPrompt: [] },
             child: { class: "free", tools: [], subagents: [], systemPrompt: [] },
