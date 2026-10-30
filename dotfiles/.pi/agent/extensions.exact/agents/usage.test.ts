@@ -4,9 +4,45 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
-import { runUsage } from "./usage.ts";
+import { runUsage, scoreCandidates } from "./usage.ts";
+import { parseCronExpression } from "./cron.ts";
 
 type Callback = (error: Error | null, stdout: string, stderr: string) => void;
+
+describe("candidate scores", () => {
+  const now = new Date("2026-10-30T06:00:00Z");
+
+  it("excludes a single candidate with a numeric zero", () => {
+    const selected = scoreCandidates(
+      [{ provider: "a", model: "m", settings: [{ multiply: 0 }] }],
+      new Map(),
+      {},
+      now,
+    );
+    assert.deepEqual(selected, []);
+  });
+
+  it("applies scheduled zero without usage facts", () => {
+    const selected = scoreCandidates(
+      [{ provider: "a", model: "m" }],
+      new Map(),
+      { a: [{ cron: parseCronExpression("* 6-9 * * 1-5"), multiply: 0 }] },
+      now,
+    );
+    assert.deepEqual(selected, []);
+  });
+
+  it("keeps an independently enabled duplicate with replacement settings", () => {
+    const enabled = { provider: "a", model: "m", settings: [] };
+    const selected = scoreCandidates(
+      [{ provider: "a", model: "m" }, enabled],
+      new Map(),
+      { a: [{ multiply: 0 }] },
+      now,
+    );
+    assert.deepEqual(selected, [enabled]);
+  });
+});
 
 describe("usage execution", () => {
   it("uses only the fixed CLI and arguments with signal and timeout", async () => {

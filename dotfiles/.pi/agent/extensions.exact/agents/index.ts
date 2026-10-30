@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
 import {
   getAgentDir,
@@ -28,6 +28,7 @@ import {
   DEFAULT_COOLDOWN_MS,
   isManualSelect,
   isRateLimitedError,
+  isRecentModelCall,
   misattributedHttp429ModelKey,
   modelKey,
   modelSupportsImages,
@@ -38,7 +39,7 @@ import {
   type ModelCandidate,
   type SettingsRule,
 } from "./routing.ts";
-import { cronMatches, parseCronExpression } from "./cron.ts";
+import { parseCronExpression } from "./cron.ts";
 import {
   CLASS_CHANGE_EVENT,
   requestClassChange,
@@ -48,7 +49,7 @@ import {
 } from "./class-change.ts";
 import { truncateErrorOutput } from "../shared/tool-text.ts";
 import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
-import { runUsage } from "./usage.ts";
+import { runUsage, scoreCandidates } from "./usage.ts";
 
 export type Agent = string;
 
@@ -348,6 +349,7 @@ interface SavedRoutingState {
   selectionSource: SelectionSource;
   class: string | undefined;
   cooldowns: Map<string, number>;
+  lastModelCalls: Map<string, number>;
 }
 
 const ROUTING_STATE_KEY = "__piAgentRoutingState";
@@ -1164,55 +1166,33 @@ export default function agentsExtension(
   const http429ModelKeys = new Set<string>();
   let http429TurnFallbackDone = false;
 
+  let lastModelCalls = new Map<string, number>();
   let routingUsageDisabled = false;
 
   async function routeCandidates(
     candidates: readonly ModelCandidate[],
     signal?: AbortSignal,
-  ): Promise<readonly ModelCandidate[] | null> {
-    if (routingUsageDisabled) return null;
-    try {
-      const { exitCode, stdout } = await executeUsage(signal);
-      if (exitCode === 127) {
-        routingUsageDisabled = true;
-        return null;
-      }
-      if (exitCode !== 0 && exitCode !== 1) return null;
-      const providerUrgency =
-        exitCode === 1 ? new Map<string, number | null>() : parseProviderUrgency(stdout);
-      if (providerUrgency === null) {
-        routingUsageDisabled = true;
-        return null;
-      }
-      const now = new Date();
-      return candidates
-        .map((candidate) => ({
-          candidate,
-          score: scoreCandidate(candidate, providerUrgency, now),
-        }))
-        .sort((a, b) => b.score - a.score)
-        .map(({ candidate }) => candidate);
-    } catch {
-      return null;
-    }
-  }
-
-  function scoreCandidate(
-    candidate: ModelCandidate,
-    providerUrgency: ReadonlyMap<string, number | null>,
-    now: Date,
-  ): number {
-    let score = candidate.weight ?? 1;
-    const rules = candidate.settings ?? config.settings?.[candidate.provider] ?? [];
-    for (const rule of rules) {
-      if (rule.cron !== undefined && !cronMatches(rule.cron, now)) continue;
-      if (typeof rule.multiply === "number") {
-        score *= rule.multiply;
-      } else {
-        score *= providerUrgency.get(rule.multiply.provider) ?? 1;
+  ): Promise<readonly ModelCandidate[]> {
+    let providerUrgency: ReadonlyMap<string, number | null> = new Map();
+    if (!routingUsageDisabled && candidates.length > 1) {
+      try {
+        const { exitCode, stdout } = await executeUsage(signal);
+        if (exitCode === 127) routingUsageDisabled = true;
+        if (exitCode === 0) {
+          const parsed = parseProviderUrgency(stdout);
+          if (parsed === null) routingUsageDisabled = true;
+          else providerUrgency = parsed;
+        }
+      } catch {
+        providerUrgency = new Map();
       }
     }
-    return score;
+    return scoreCandidates(
+      candidates,
+      providerUrgency,
+      config.settings ?? {},
+      new Date(Date.now()),
+    );
   }
 
   async function switchTo(model: Model<Api>): Promise<boolean> {
@@ -1231,9 +1211,13 @@ export default function agentsExtension(
   async function applyClassModel(
     agent: Agent,
     ctx: ExtensionContext,
-    signal?: AbortSignal,
-    notifySwitch = true,
+    options: {
+      signal?: AbortSignal;
+      notifySwitch?: boolean;
+      reason?: "input" | "extension-input";
+    } = {},
   ): Promise<string | null> {
+    const { signal, notifySwitch = true, reason } = options;
     const className = effectiveClass(agent);
     if (!className) return null;
     const candidates = resolveCandidates(config.classes[className] ?? [], (provider) =>
@@ -1246,6 +1230,16 @@ export default function agentsExtension(
       Date.now(),
       (survivors) => routeCandidates(survivors, signal),
     );
+    if (signal?.aborted) return null;
+    const currentModelKey = ctx.model ? modelKey(ctx.model) : undefined;
+    const retainCurrent =
+      reason === "extension-input" ||
+      (reason === "input" &&
+        currentModelKey !== undefined &&
+        isRecentModelCall(lastModelCalls.get(currentModelKey), Date.now()));
+    if (retainCurrent && models.some((model) => modelKey(model) === currentModelKey)) {
+      return currentModelKey!;
+    }
     for (const model of models) {
       if (signal?.aborted) return null;
       if (ctx.model && ctx.model.provider === model.provider && ctx.model.id === model.id) {
@@ -1310,6 +1304,28 @@ export default function agentsExtension(
     return undefined;
   }
 
+  function restoreModelCalls(ctx: ExtensionContext): void {
+    lastModelCalls = new Map();
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === "message") recordModelCall(entry.message);
+    }
+  }
+
+  function recordModelCall(message: AgentMessage): void {
+    if (
+      message.role !== "assistant" ||
+      message.stopReason === "error" ||
+      message.stopReason === "aborted"
+    )
+      return;
+    const { provider, model, timestamp } = message;
+    lastModelCalls.set(modelKey({ provider, id: model }), timestamp);
+  }
+
+  pi.on("session_tree", async (_event, ctx) => {
+    restoreModelCalls(ctx);
+  });
+
   pi.on("session_start", async (event, ctx) => {
     http429ModelKeys.clear();
     http429TurnFallbackDone = false;
@@ -1326,12 +1342,14 @@ export default function agentsExtension(
         currentClass =
           saved.class !== undefined && config.classes[saved.class] ? saved.class : undefined;
         cooldowns = saved.cooldowns;
+        lastModelCalls = saved.lastModelCalls ?? new Map();
       }
       applyAgentTools(ctx, currentAgent);
       return;
     }
 
     manual = false;
+    restoreModelCalls(ctx);
     routingUsageDisabled = false;
     selectionSource = "auto";
     currentClass = resolveInitialClass(ctx);
@@ -1352,7 +1370,12 @@ export default function agentsExtension(
       selectionSource,
       class: currentClass,
       cooldowns,
+      lastModelCalls,
     });
+  });
+
+  pi.on("message_start", async (event) => {
+    recordModelCall(event.message);
   });
 
   // ── pre-prompt re-evaluation ────────────────────────────────────────
@@ -1362,14 +1385,17 @@ export default function agentsExtension(
       http429ModelKeys.clear();
       http429TurnFallbackDone = false;
     }
-    // 画像添付を親セッションのモデルへ送らない。main / senior は依頼文ごと vision
-    // 子セッションへ委譲し、親のターンは handled で止める。報告は通知で返る。
+    if (!manual) {
+      const applied = await applyClassModel(currentAgent, ctx, {
+        signal: ctx.signal,
+        reason: event.source === "extension" ? "extension-input" : "input",
+      });
+      if (!applied) {
+        notifyNoModel(currentAgent, ctx, "error");
+        return { action: "handled" };
+      }
+    }
     if (event.images && event.images.length > 0) return routeImageInput(event, ctx);
-    if (event.source === "extension" || manual) return;
-    const applied = await applyClassModel(currentAgent, ctx, ctx.signal);
-    if (applied) return;
-    notifyNoModel(currentAgent, ctx, "error");
-    return { action: "handled" };
   });
 
   // SPEC「画像入力を使う agent」: チャット貼り付けと CLI @file の画像の振り分け。
@@ -1477,7 +1503,10 @@ export default function agentsExtension(
   ): Promise<boolean> {
     recordCooldown(cooldowns, rateLimitedModelKey, cooldownMs, Date.now());
 
-    const switchedTo = await applyClassModel(currentAgent, ctx, ctx.signal, false);
+    const switchedTo = await applyClassModel(currentAgent, ctx, {
+      signal: ctx.signal,
+      notifySwitch: false,
+    });
     if (switchedTo) {
       if (ctx.hasUI)
         ctx.ui.notify(

@@ -22,6 +22,11 @@ export interface ModelCandidate {
 }
 
 export const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000;
+export const MODEL_RETENTION_MS = 60 * 60 * 1000;
+
+export function isRecentModelCall(lastCallAt: number | undefined, now: number): boolean {
+  return lastCallAt !== undefined && now - lastCallAt >= 0 && now - lastCallAt < MODEL_RETENTION_MS;
+}
 
 // Errors treated as rate/usage limits. The HTTP 429 path in after_provider_response
 // is provider-independent (raw status code), so these text patterns only matter for
@@ -214,7 +219,7 @@ export async function pickCandidates<M extends { provider: string; id: string }>
     (candidate): candidate is ModelCandidate => candidate !== null,
   );
   const ordered =
-    survivors.length > 1 && sortByScore ? ((await sortByScore(survivors)) ?? survivors) : survivors;
+    survivors.length > 0 && sortByScore ? ((await sortByScore(survivors)) ?? survivors) : survivors;
   return ordered
     .map((candidate) => find(candidate.provider, candidate.model))
     .filter((model): model is M => model !== undefined);

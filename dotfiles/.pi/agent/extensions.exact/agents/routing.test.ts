@@ -4,6 +4,8 @@ import {
   compareVersionStrings,
   isManualSelect,
   isRateLimitedError,
+  isRecentModelCall,
+  MODEL_RETENTION_MS,
   misattributedHttp429ModelKey,
   pickCandidates,
   resolveCandidates,
@@ -153,7 +155,7 @@ describe("usage スコアによる候補の並べ替え", () => {
     );
   });
 
-  it("生存候補が1件のときは sortByScore を呼ばない", async () => {
+  it("scores a single survivor so zero can be excluded", async () => {
     let scoreCalls = 0;
     const [selectedModel] = await pickCandidates(
       [{ provider: "zai", model: "glm-5.2" }],
@@ -166,7 +168,7 @@ describe("usage スコアによる候補の並べ替え", () => {
       },
     );
     assert.strictEqual(selectedModel?.id, "glm-5.2");
-    assert.strictEqual(scoreCalls, 0);
+    assert.strictEqual(scoreCalls, 1);
   });
 
   it("sortByScore は cooldown 後の生存候補だけを受ける", async () => {
@@ -192,6 +194,31 @@ describe("usage スコアによる候補の並べ替え", () => {
       { provider: "zai", model: "glm-5.1" },
       { provider: "zai", model: "x" },
     ]);
+  });
+});
+
+describe("recent model calls", () => {
+  it.each([
+    { elapsed: MODEL_RETENTION_MS - 1, expected: true },
+    { elapsed: MODEL_RETENTION_MS, expected: false },
+    { elapsed: MODEL_RETENTION_MS + 1, expected: false },
+  ])("retains a call after $elapsed milliseconds: $expected", ({ elapsed, expected }) => {
+    assert.equal(isRecentModelCall(0, elapsed), expected);
+  });
+
+  it("does not retain a model that has not been called", () => {
+    assert.equal(isRecentModelCall(undefined, 0), false);
+  });
+
+  it("excludes a zero-scored single candidate", async () => {
+    const selected = await pickCandidates(
+      [{ provider: "zai", model: "glm-5.2" }],
+      new Map(),
+      findIn(availableModels),
+      0,
+      async () => [],
+    );
+    assert.deepEqual(selected, []);
   });
 });
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { describe, it, spyOn } from "bun:test";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import agentsExtension, {
@@ -118,6 +118,7 @@ interface CaptureOptions {
   classSelection?: string;
   beforeSetModel?: () => Promise<void>;
   executeUsage?: typeof runUsage;
+  branch?: ReturnType<SessionManager["getBranch"]>;
   signal?: AbortSignal;
 }
 
@@ -238,6 +239,7 @@ function captureAgentsExtension(
   };
   const context = {
     cwd: "/parent",
+    sessionManager: { getBranch: () => options.branch ?? [] },
     signal: options.signal,
     hasUI: true,
     ui,
@@ -271,6 +273,12 @@ function captureAgentsExtension(
     },
     async sessionStart(reason?: string) {
       for (const handler of handlers.get("session_start") ?? []) await handler({ reason }, context);
+    },
+    async sessionTree(branch: ReturnType<SessionManager["getBranch"]>) {
+      const oldLeafId = options.branch?.at(-1)?.id ?? null;
+      options.branch = branch;
+      const event = { type: "session_tree", oldLeafId, newLeafId: branch.at(-1)?.id ?? null };
+      for (const handler of handlers.get("session_tree") ?? []) await handler(event, context);
     },
     async sessionShutdown() {
       for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
@@ -325,6 +333,10 @@ function captureAgentsExtension(
     async providerResponse(status: number, headers: Record<string, string> = {}) {
       for (const handler of handlers.get("after_provider_response") ?? [])
         await handler({ status, headers }, context);
+    },
+    async messageStart(message: unknown) {
+      for (const handler of handlers.get("message_start") ?? [])
+        await handler({ message }, context);
     },
     async messageEnd(message: unknown): Promise<any> {
       let result: any;
@@ -1115,11 +1127,11 @@ describe("class によるモデルルーティング", () => {
     }
   });
 
-  it("拡張からのメッセージ（agent 切替 follow-up）は再評価しない", async () => {
+  it("keeps an eligible model for extension follow-up input", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
-      extension.context.model = { provider: "zai", id: "other" };
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
       const modelCountBefore = extension.selectedModels.length;
       await extension.input("hello", "extension");
       assert.equal(extension.selectedModels.length, modelCountBefore);
@@ -5161,7 +5173,7 @@ describe("usage scoring and ordering", () => {
     }
   });
 
-  it("keeps zero-score candidates and applies cron and namespace multipliers from CLI facts", async () => {
+  it("excludes zero-score candidates and applies cron and namespace multipliers from CLI facts", async () => {
     // "0 0 31 2 *" (Feb 31) never matches, so its rule stays inactive.
     const scheduled: ModelCandidate[] = [
       {
@@ -5213,11 +5225,9 @@ describe("usage scoring and ordering", () => {
     );
     try {
       await extension.sessionStart();
-      // cmd: 1 × 2 = 2, zai glm-5.2: 1 × 1 (cron inactive) = 1,
-      // zai glm-5.3: 常時有効な cron で 0 になるが候補からは削除しない。
       assert.deepEqual(
         extension.selectedModels.map((model) => (model as { provider: string; id: string }).id),
-        ["flash", "glm-5.2", "luna", "glm-5.3"],
+        ["flash", "glm-5.2", "luna"],
       );
     } finally {
       extension.restore();
@@ -5257,10 +5267,9 @@ describe("usage scoring and ordering", () => {
     );
     try {
       await extension.sessionStart();
-      // b は provider 設定の multiply 0、a は settings で置換して 2。マージなら a も 0 になる。
       assert.deepEqual(
         extension.selectedModels.map((model) => (model as { provider: string; id: string }).id),
-        ["a", "b"],
+        ["a"],
       );
     } finally {
       extension.restore();
@@ -5452,8 +5461,535 @@ describe("usage scoring and ordering", () => {
   );
 });
 
+describe("automatic model retention", () => {
+  const minute = 60_000;
+  const start = Date.UTC(2026, 9, 30, 5, 59);
+  const candidates: ModelCandidate[] = [
+    { provider: "a", model: "m", settings: [{ multiply: { provider: "a" } }] },
+    { provider: "b", model: "m", settings: [{ multiply: { provider: "b" } }] },
+  ];
+  const policy: AgentConfig = {
+    ...config,
+    classes: { ...config.classes, middle: candidates },
+  };
+
+  it.each([59, 60, 61])("reevaluates after %s idle minutes", async (idleMinutes) => {
+    let now = start;
+    let preferB = false;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const extension = captureAgentsExtension(
+      { config: policy },
+      {
+        async executeUsage() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              { provider: "a", urgency: preferB ? 1 : 2 },
+              { provider: "b", urgency: preferB ? 2 : 1 },
+            ]),
+          };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.messageStart({
+        role: "assistant",
+        provider: "a",
+        model: "m",
+        timestamp: now,
+      });
+      preferB = true;
+      now += idleMinutes * minute;
+      await extension.input("next");
+      assert.equal(extension.context.model?.provider, idleMinutes < 60 ? "a" : "b");
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
+
+  it("renews retention on each assistant call, not on selection", async () => {
+    let now = start;
+    let preferB = false;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const extension = captureAgentsExtension(
+      { config: policy },
+      {
+        async executeUsage() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              { provider: "a", urgency: preferB ? 1 : 2 },
+              { provider: "b", urgency: preferB ? 2 : 1 },
+            ]),
+          };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.messageStart({
+        role: "assistant",
+        provider: "a",
+        model: "m",
+        timestamp: now,
+      });
+      now += 50 * minute;
+      await extension.messageStart({
+        role: "assistant",
+        provider: "a",
+        model: "m",
+        timestamp: now,
+      });
+      preferB = true;
+      now += 50 * minute;
+      await extension.input("next");
+      assert.equal(extension.context.model?.provider, "a");
+      now += 10 * minute;
+      await extension.input("no intervening call");
+      assert.equal(extension.context.model?.provider, "b");
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
+
+  it("switches on peak zero even within retention", async () => {
+    let now = start;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const peakPolicy: AgentConfig = {
+      ...policy,
+      classes: {
+        ...policy.classes,
+        middle: [
+          {
+            provider: "a",
+            model: "m",
+            weight: 2,
+            settings: [{ cron: parseCronExpression("* 6 * * *"), multiply: 0 }],
+          },
+          { provider: "b", model: "m" },
+        ],
+      },
+    };
+    const extension = captureAgentsExtension({ config: peakPolicy });
+    try {
+      await extension.sessionStart();
+      await extension.messageStart({
+        role: "assistant",
+        provider: "a",
+        model: "m",
+        timestamp: now,
+      });
+      now += minute;
+      await extension.input("peak");
+      assert.equal(extension.context.model?.provider, "b");
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
+
+  it.each(["class", "agent", "429"])("does not prevent an explicit %s change", async (change) => {
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart();
+      await extension.messageStart({
+        role: "assistant",
+        provider: "zai",
+        model: "glm-5.2",
+        timestamp: start,
+      });
+      if (change === "class") await extension.runClassCommand("low");
+      if (change === "agent") await extension.runCommand("worker");
+      if (change === "429") {
+        await extension.messageEnd({
+          role: "assistant",
+          provider: "zai",
+          model: "glm-5.2",
+          stopReason: "error",
+          errorMessage: "429 rate limit",
+        });
+      }
+      assert.equal(extension.context.model?.provider, "commandcode");
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
+
+  it.each(["startup", "resume", "fork"])(
+    "restores active-branch call times on %s",
+    async (reason) => {
+      const clock = spyOn(Date, "now").mockReturnValue(start);
+      const manager = SessionManager.inMemory("/parent");
+      manager.appendMessage({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "commandcode",
+        model: "gpt-5.6-luna",
+        content: [],
+        stopReason: "stop",
+        timestamp: start,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      });
+      let available = false;
+      const extension = captureAgentsExtension(
+        { config },
+        {
+          branch: manager.getBranch(),
+          findModel(provider, id) {
+            return provider === "zai" && !available ? undefined : { provider, id };
+          },
+        },
+      );
+      try {
+        await extension.sessionStart(reason);
+        available = true;
+        await extension.input("next");
+        assert.equal(extension.context.model?.provider, "commandcode");
+      } finally {
+        clock.mockRestore();
+        extension.restore();
+      }
+    },
+  );
+
+  it.each([false, true])("retains fallback B only after a real B response: %s", async (calledB) => {
+    let now = start;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const extension = captureAgentsExtension(
+      { config: policy },
+      {
+        async executeUsage() {
+          return {
+            exitCode: 0,
+            stdout: '[{"provider":"a","urgency":2},{"provider":"b","urgency":1}]',
+          };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      await extension.messageStart({
+        role: "assistant",
+        provider: "a",
+        model: "m",
+        timestamp: now,
+        stopReason: "pending",
+      });
+      await extension.providerResponse(429);
+      assert.equal(extension.context.model?.provider, "b");
+      const synthetic = {
+        role: "assistant",
+        provider: "b",
+        model: "m",
+        timestamp: now,
+        stopReason: "error",
+        errorMessage: "429 rate limit",
+      };
+      await extension.messageStart(synthetic);
+      await extension.messageEnd(synthetic);
+      if (calledB) {
+        await extension.messageStart({
+          role: "assistant",
+          provider: "b",
+          model: "m",
+          timestamp: now,
+          stopReason: "pending",
+        });
+      }
+      now += 31 * minute;
+      await extension.input("after A cooldown");
+      assert.equal(extension.context.model?.provider, calledB ? "b" : "a");
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
+
+  it("retains a completed response without provider-specific hooks or partial events", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    let preferB = false;
+    const extension = captureAgentsExtension(
+      { config: policy },
+      {
+        async executeUsage() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              { provider: "a", urgency: preferB ? 1 : 2 },
+              { provider: "b", urgency: preferB ? 2 : 1 },
+            ]),
+          };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      const message = {
+        role: "assistant",
+        provider: "a",
+        model: "m",
+        timestamp: start,
+        stopReason: "stop",
+      };
+      await extension.messageStart(message);
+      await extension.messageEnd(message);
+      preferB = true;
+      await extension.input("next");
+      assert.equal(extension.context.model?.provider, "a");
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
+
+  it("ignores synthetic errors when restoring call times", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    const manager = SessionManager.inMemory("/parent");
+    manager.appendMessage({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "commandcode",
+      model: "gpt-5.6-luna",
+      content: [{ type: "text", text: "" }],
+      stopReason: "error",
+      errorMessage: "429 rate limit",
+      timestamp: start,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    let available = false;
+    const extension = captureAgentsExtension(
+      { config },
+      {
+        branch: manager.getBranch(),
+        findModel(provider, id) {
+          return provider === "zai" && !available ? undefined : { provider, id };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("resume");
+      available = true;
+      await extension.input("next");
+      assert.equal(extension.context.model?.provider, "zai");
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
+
+  it.each(["old", "recent"])(
+    "rebuilds call times after session_tree to %s",
+    async (destination) => {
+      const now = start + 61 * minute;
+      const clock = spyOn(Date, "now").mockReturnValue(now);
+      const manager = SessionManager.inMemory("/parent");
+      function appendCall(timestamp: number) {
+        manager.appendMessage({
+          role: "assistant",
+          api: "openai-completions",
+          provider: "a",
+          model: "m",
+          content: [],
+          stopReason: "stop",
+          timestamp,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
+      }
+      appendCall(start);
+      const oldLeaf = manager.getLeafId()!;
+      appendCall(now);
+      const recentLeaf = manager.getLeafId()!;
+      manager.branch(destination === "old" ? recentLeaf : oldLeaf);
+      let preferB = false;
+      const extension = captureAgentsExtension(
+        { config: policy },
+        {
+          branch: manager.getBranch(),
+          async executeUsage() {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify([
+                { provider: "a", urgency: preferB ? 1 : 2 },
+                { provider: "b", urgency: preferB ? 2 : 1 },
+              ]),
+            };
+          },
+        },
+      );
+      try {
+        await extension.sessionStart();
+        manager.branch(destination === "old" ? oldLeaf : recentLeaf);
+        await extension.sessionTree(manager.getBranch());
+        preferB = true;
+        await extension.input("after navigation");
+        assert.equal(extension.context.model?.provider, destination === "old" ? "b" : "a");
+      } finally {
+        clock.mockRestore();
+        extension.restore();
+      }
+    },
+  );
+
+  it("preserves call times across reload", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    const before = captureAgentsExtension();
+    const after = captureAgentsExtension(
+      { config },
+      {
+        async executeUsage() {
+          return { exitCode: 0, stdout: "[]" };
+        },
+      },
+    );
+    try {
+      await before.sessionStart();
+      await before.messageStart({
+        role: "assistant",
+        provider: "commandcode",
+        model: "gpt-5.6-luna",
+        timestamp: start,
+      });
+      await before.sessionShutdown();
+      after.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await after.sessionStart("reload");
+      await after.input("next");
+      assert.equal(after.context.model.provider, "commandcode");
+    } finally {
+      clock.mockRestore();
+      before.restore();
+      after.restore();
+    }
+  });
+});
+
+describe("zero-score input gates", () => {
+  it.each(["missing", "invalid", "nonzero", "timeout", "providers failed"])(
+    "keeps known zero candidates excluded after %s usage failure",
+    async (failure) => {
+      const policy: AgentConfig = {
+        ...config,
+        classes: {
+          ...config.classes,
+          middle: [
+            { provider: "a", model: "numeric", settings: [{ multiply: 0 }] },
+            {
+              provider: "a",
+              model: "scheduled",
+              settings: [{ cron: parseCronExpression("* * * * *"), multiply: 0 }],
+            },
+          ],
+        },
+      };
+      let calls = 0;
+      const extension = captureAgentsExtension(
+        { config: policy },
+        {
+          async executeUsage() {
+            calls++;
+            if (failure === "timeout") throw new Error("timeout");
+            return {
+              exitCode:
+                failure === "missing"
+                  ? 127
+                  : failure === "invalid"
+                    ? 0
+                    : failure === "providers failed"
+                      ? 1
+                      : 2,
+              stdout: "invalid",
+            };
+          },
+        },
+      );
+      try {
+        await extension.sessionStart();
+        extension.context.model = { provider: "a", id: "numeric" };
+        await extension.messageStart({
+          role: "assistant",
+          provider: "a",
+          model: "numeric",
+          timestamp: Date.now(),
+        });
+        assert.deepEqual(await extension.input("next"), { action: "handled" });
+        assert.deepEqual(await extension.input("again"), { action: "handled" });
+        assert.deepEqual(extension.selectedModels, []);
+        assert.equal(calls, failure === "missing" || failure === "invalid" ? 1 : 3);
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+
+  it.each(["interactive", "extension", "image"])(
+    "blocks a single zero candidate for %s without querying usage",
+    async (source) => {
+      const policy: AgentConfig = {
+        ...config,
+        classes: {
+          ...config.classes,
+          middle: [{ provider: "a", model: "m", settings: [{ multiply: 0 }] }],
+        },
+      };
+      let calls = 0;
+      const extension = captureAgentsExtension(
+        { config: policy },
+        {
+          async executeUsage() {
+            calls++;
+            return { exitCode: 0, stdout: "[]" };
+          },
+        },
+      );
+      try {
+        await extension.sessionStart();
+        extension.context.model = {
+          provider: "a",
+          id: "m",
+          input: ["image"],
+        } as typeof extension.context.model;
+        const result = await extension.input(
+          "next",
+          source === "extension" ? "extension" : "interactive",
+          source === "image" ? [{ type: "image", data: "AA==", mimeType: "image/png" }] : undefined,
+        );
+        assert.deepEqual(result, { action: "handled" });
+        assert.deepEqual(extension.selectedModels, []);
+        assert.equal(calls, 0);
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+});
+
 describe("provider urgency routing boundaries", () => {
-  it("uses one for null or missing references and preserves zero in selection order", async () => {
+  it("uses one for null or missing references and excludes zero", async () => {
     const candidates: ModelCandidate[] = [
       { provider: "a", model: "zero", weight: 100, settings: [{ multiply: { provider: "zero" } }] },
       {
@@ -5496,7 +6032,6 @@ describe("provider urgency routing boundaries", () => {
         { provider: "a", id: "null" },
         { provider: "a", id: "missing" },
         { provider: "a", id: "plain" },
-        { provider: "a", id: "zero" },
       ]);
     } finally {
       extension.restore();
