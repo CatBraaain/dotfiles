@@ -1,6 +1,16 @@
 import { describe, it, beforeEach, afterEach } from "bun:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -802,29 +812,242 @@ async function gitOnlyEnvironment() {
 
 async function runGitOnlyDiff(extraEnv: Record<string, string> = {}) {
   const environment = await gitOnlyEnvironment();
+  const tracePath = join(root, "git-trace");
   const cli = Bun.spawn([process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...environment, ...extraEnv },
+    env: { ...environment, GIT_TRACE: tracePath, ...extraEnv },
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(cli.stdout).text(),
     new Response(cli.stderr).text(),
     cli.exited,
   ]);
-  return { stdout, stderr, exitCode };
+  const traceFile = Bun.file(tracePath);
+  const gitTrace = (await traceFile.exists()) ? await traceFile.text() : "";
+  return { stdout, stderr, exitCode, gitTrace };
 }
 
-describe("Git rename display", () => {
+describe("diff display preparation", () => {
+  for (const ignoredSurplus of [false, true]) {
+    it(`skips temporary storage and Git with no displayed differences (ignored surplus: ${ignoredSurplus})`, async () => {
+      await put(distRoot, "conf/same.txt", "same\n");
+      await put(homeRoot, "conf/same.txt", "same\n");
+      if (ignoredSurplus) await put(homeRoot, "conf/ignored.txt", "ignored\n");
+      const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+
+      const actual = await runGitOnlyDiff({ TMPDIR: blockedTemporaryRoot });
+
+      assert.deepEqual(actual, { stdout: "", stderr: "", exitCode: 0, gitTrace: "" });
+    });
+  }
+
+  for (const emptySide of ["added", "removed"] as const) {
+    it(`skips rename detection when the ${emptySide} snapshot has no leaves`, async () => {
+      await mkdir(join(distRoot, "conf.exact"));
+      await mkdir(join(homeRoot, "conf"));
+      if (emptySide === "added") {
+        await mkdir(join(distRoot, "conf.exact/empty"));
+        await put(homeRoot, "conf/old.txt", "old\n");
+      } else {
+        await mkdir(join(homeRoot, "conf/empty"));
+        await put(distRoot, "conf.exact/new.txt", "new\n");
+      }
+      const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+      const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({
+        TMPDIR: blockedTemporaryRoot,
+      });
+
+      assert.equal(exitCode, 0);
+      assert.equal(stderr, "");
+      const expectedHeading =
+        emptySide === "added" ? "Deleted: conf/old.txt" : "Added: conf/new.txt";
+      const headings = stdout.split("\n").filter((line) => /^(Added|Deleted|Renamed): /.test(line));
+      assert.deepEqual(headings, [expectedHeading]);
+      assert.match(stdout, emptySide === "added" ? /^-old$/m : /^\+new$/m);
+      assert.equal(gitTrace, "");
+    });
+  }
+});
+
+describe("direct diff inputs", () => {
+  for (const scenario of ["modified", "added", "deleted"] as const) {
+    it(`compares original ordinary ${scenario} files without temporary storage`, async () => {
+      await mkdir(join(distRoot, "conf.exact"));
+      const homePath = "conf/a name.txt";
+      const distPath = "conf.exact/a name.txt";
+      if (scenario !== "added") await put(homeRoot, homePath, "old\n");
+      if (scenario !== "deleted") await put(distRoot, distPath, "new\n");
+      const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+      const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({
+        TMPDIR: blockedTemporaryRoot,
+      });
+
+      assert.equal(exitCode, 0);
+      assert.equal(stderr, "");
+      const label = { modified: "Modified", added: "Added", deleted: "Deleted" }[scenario];
+      assert.equal(stdout.includes(`${label}: ${homePath}\n`), true);
+      if (scenario !== "added") {
+        assert.match(stdout, /^-old$/m);
+        assert.equal(await readFile(join(homeRoot, homePath), "utf8"), "old\n");
+      }
+      if (scenario !== "deleted") {
+        assert.match(stdout, /^\+new$/m);
+        assert.equal(await readFile(join(distRoot, distPath), "utf8"), "new\n");
+      }
+      assert.doesNotMatch(stdout, /\.exact|diff-render-/);
+      assert.equal(stdout.includes(root), false);
+      assert.equal(gitTrace, "");
+    });
+  }
+
+  it("renders empty additions and raw line endings directly", async () => {
+    await put(distRoot, "empty.txt", "");
+    await put(homeRoot, "changed.txt", "old");
+    await put(distRoot, "changed.txt", "new\r\n");
+    await put(homeRoot, "equal.txt", "same");
+    await put(distRoot, "equal.txt", "same\r\n");
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({
+      TMPDIR: blockedTemporaryRoot,
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^Modified: changed\.txt$/m);
+    assert.equal(stdout.includes("+new\r\n"), true);
+    assert.match(stdout, /No newline at end of file/);
+    const heading = "Added: empty.txt";
+    const fence = "─".repeat(heading.length);
+    assert.equal(stdout.endsWith(`${fence}\n${heading}\n${fence}\n`), true);
+    assert.doesNotMatch(stdout, /equal\.txt/);
+    assert.doesNotMatch(gitTrace, /diff-render-/);
+  });
+
+  for (const scenario of ["modified", "added", "deleted"] as const) {
+    it(`keeps mapped binary notices for direct ${scenario} files`, async () => {
+      await mkdir(join(distRoot, "conf.exact"));
+      const homePath = "conf/asset.bin";
+      if (scenario !== "added") await put(homeRoot, homePath, new Uint8Array([0, 1]));
+      if (scenario !== "deleted")
+        await put(distRoot, "conf.exact/asset.bin", new Uint8Array([0, 2]));
+      const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+      const { stdout, stderr, exitCode } = await runGitOnlyDiff({ TMPDIR: blockedTemporaryRoot });
+
+      assert.equal(exitCode, 0);
+      assert.equal(stderr, "");
+      const emptyInput = process.platform === "win32" ? "NUL" : "/dev/null";
+      const oldName = scenario === "added" ? emptyInput : `a/${homePath}`;
+      const newName = scenario === "deleted" ? emptyInput : `b/${homePath}`;
+      assert.equal(stdout.includes(`Binary files ${oldName} and ${newName} differ\n`), true);
+      assert.equal(stdout.includes(root), false);
+      assert.doesNotMatch(stdout, /\.exact|diff-render-/);
+    });
+  }
+
+  it("keeps Git quoting in mapped binary notices for special paths", async () => {
+    const name = 'asset\t"\\$&\né日本.bin';
+    const homePath = `conf/${name}`;
+    await put(homeRoot, homePath, new Uint8Array([0, 1]));
+    await put(distRoot, `conf.exact/${name}`, new Uint8Array([0, 2]));
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff({ TMPDIR: blockedTemporaryRoot });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const quotedName = 'asset\\t\\"\\\\$&\\né日本.bin';
+    assert.equal(
+      stdout.includes(`Binary files "a/conf/${quotedName}" and "b/conf/${quotedName}" differ\n`),
+      true,
+    );
+    assert.equal(stdout.includes(root), false);
+    assert.doesNotMatch(stdout, /\.exact|diff-render-/);
+  });
+
+  it("uses original executable files when their modes already match the virtual modes", async () => {
+    await put(homeRoot, "tool", "same\n");
+    await putExecutable(distRoot, "tool.executable", "same\n");
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({
+      TMPDIR: blockedTemporaryRoot,
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^old mode 100644$/m);
+    assert.match(stdout, /^new mode 100755$/m);
+    assert.equal(await readFile(join(distRoot, "tool.executable"), "utf8"), "same\n");
+    assert.equal(gitTrace, "");
+  });
+
+  it("isolates virtual modes and symlink targets without copying ordinary changes", async () => {
+    await put(homeRoot, "plain.txt", "old\n");
+    await put(distRoot, "plain.txt", "new\n");
+    await put(homeRoot, "tool", "same\n");
+    await put(distRoot, "tool.executable", "same\n");
+    await putSymlink(homeRoot, "link", "old-target");
+    await put(distRoot, "link.symlink", "new-target\n");
+    const toolPath = join(distRoot, "tool.executable");
+    const initialMode = (await lstat(toolPath)).mode;
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({
+      TMPDIR: blockedTemporaryRoot,
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^Modified: link$/m);
+    assert.match(stdout, /^Modified: plain\.txt$/m);
+    assert.match(stdout, /^Modified: tool$/m);
+    assert.match(stdout, /^old mode 100644$/m);
+    assert.match(stdout, /^new mode 100755$/m);
+    assert.match(stdout, /-old-target/);
+    assert.match(stdout, /\+new-target/);
+    assert.equal(await readFile(join(homeRoot, "plain.txt"), "utf8"), "old\n");
+    assert.equal(await readFile(join(distRoot, "plain.txt"), "utf8"), "new\n");
+    assert.equal((await lstat(toolPath)).mode, initialMode);
+    assert.equal(await readFile(toolPath, "utf8"), "same\n");
+    assert.equal(await readFile(join(distRoot, "link.symlink"), "utf8"), "new-target\n");
+    assert.equal(await readlink(join(homeRoot, "link")), "old-target");
+    assert.equal(stdout.includes(root), false);
+    assert.doesNotMatch(stdout, /\.symlink|\.executable|diff-render-/);
+    assert.equal(gitTrace, "");
+  });
+
+  it("keeps ordinary changes direct while pairing rename candidates in-process", async () => {
+    await put(homeRoot, "plain.txt", "old\n");
+    await put(distRoot, "plain.txt", "new\n");
+    await put(homeRoot, "conf/old.txt", "first\nsecond\nthird\nfourth\nfifth\n");
+    await put(distRoot, "conf.exact/new.txt", "first\nsecond\nCHANGED\nfourth\nfifth\n");
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({
+      TMPDIR: blockedTemporaryRoot,
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^Modified: plain\.txt$/m);
+    assert.match(stdout, /^-old$/m);
+    assert.match(stdout, /^\+new$/m);
+    assert.match(stdout, /^Renamed: conf\/old\.txt → conf\/new\.txt$/m);
+    assert.match(stdout, /^-third$/m);
+    assert.match(stdout, /^\+CHANGED$/m);
+    assert.equal(stdout.includes(root), false);
+    assert.equal(gitTrace, "");
+  });
+});
+
+describe("rename display", () => {
   const original = "first\nsecond\nthird\nfourth\nfifth\n";
 
   it("shows a rename with mapped home paths and its mode-only change", async () => {
     await put(homeRoot, "conf/old.txt", original);
     await put(distRoot, "conf.exact/new.txt.executable", original);
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
+    assert.equal(gitTrace, "");
     assert.match(stdout, /^Renamed: conf\/old\.txt → conf\/new\.txt$/m);
     assert.match(stdout, /old mode 100644/);
     assert.match(stdout, /new mode 100755/);
@@ -1001,20 +1224,95 @@ describe("Git rename display", () => {
     assert.match(stdout, /-old/);
   });
 
-  it("does not propagate Git error exit codes", async () => {
-    await put(distRoot, "a.txt", "content\n");
+  it("ignores a broken Git on PATH and renders the diff in-process", async () => {
+    await put(homeRoot, "a.txt", "old\n");
+    await put(distRoot, "a.txt", "new\n");
     const binDir = join(root, "failed-git");
     const fakeGit = await put(
       binDir,
       "git",
-      `#!${process.execPath}\nif (!process.argv.includes("--name-status")) console.log("git-output-before-error");\nprocess.exit(42);\n`,
+      `#!${process.execPath}\nconsole.log("git-output-before-error");\nprocess.exit(42);\n`,
     );
     await chmod(fakeGit, 0o755);
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff({ PATH: binDir });
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({ PATH: binDir });
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
-    assert.match(stdout, /git-output-before-error/);
+    assert.match(stdout, /^Modified: a\.txt$/m);
+    assert.match(stdout, /^-old$/m);
+    assert.match(stdout, /^\+new$/m);
+    assert.doesNotMatch(stdout, /git-output-before-error/);
+    assert.equal(gitTrace, "");
+  });
+
+  it("pairs edited renames at the 50% threshold and breaks ties by path order", async () => {
+    const lines = (count: number, prefix: string) =>
+      Array.from({ length: count }, (_, index) => `${prefix}${index + 1}`).join("\n") + "\n";
+    await put(homeRoot, "conf/at.txt", lines(10, "l"));
+    await put(homeRoot, "conf/low.txt", lines(10, "l"));
+    await put(distRoot, "conf.exact/half.txt", lines(5, "l") + lines(5, "n"));
+    await put(distRoot, "conf.exact/weak.txt", lines(4, "l") + lines(6, "n"));
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^Renamed: conf\/at\.txt → conf\/half\.txt$/m);
+    assert.match(stdout, /^@@ -3,8 \+3,8 @@$/m);
+    assert.match(stdout, /^-l6$/m);
+    assert.match(stdout, /^\+n1$/m);
+    assert.match(stdout, /^Added: conf\/weak\.txt$/m);
+    assert.match(stdout, /^Deleted: conf\/low\.txt$/m);
+    assert.doesNotMatch(stdout, /weak\.txt → /);
+  });
+
+  it("counts duplicate lines up to the smaller occurrence count on each side", async () => {
+    await put(homeRoot, "conf/pairable.txt", "dup\ndup\nkeep\nkeep\n");
+    await put(distRoot, "conf.exact/matched.txt", "dup\ndup\nother\n");
+    await put(homeRoot, "conf/short.txt", "dup\nkeep\nkeep\nkeep\n");
+    await put(distRoot, "conf.exact/extra.txt", "dup\nother\nother\nother\nother\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.match(stdout, /^Renamed: conf\/pairable\.txt → conf\/matched\.txt$/m);
+    assert.match(stdout, /^Added: conf\/extra\.txt$/m);
+    assert.match(stdout, /^Deleted: conf\/short\.txt$/m);
+  });
+
+  it("prefers an identical copy over a similar edit when both can pair", async () => {
+    const tenLines = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
+    await put(homeRoot, "conf/orig.txt", tenLines);
+    await put(distRoot, "conf.exact/copy.txt", tenLines);
+    await put(distRoot, "conf.exact/edited.txt", tenLines.replace("six", "SIX"));
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const renameHeading = "Renamed: conf/orig.txt → conf/copy.txt";
+    const fence = "─".repeat(renameHeading.length);
+    assert.equal(stdout.includes(`${fence}\n${renameHeading}\n${fence}\n`), true);
+    assert.match(stdout, /^Added: conf\/edited\.txt$/m);
+    assert.match(stdout, /^\+SIX$/m);
+    assert.doesNotMatch(stdout, /orig\.txt → conf\/edited\.txt/);
+  });
+
+  it("pairs identical candidates one-to-one in UTF-16 path order", async () => {
+    const content = "shared\ncontent\n";
+    await put(homeRoot, "conf/b.txt", content);
+    await put(homeRoot, "conf/a.txt", content);
+    await put(distRoot, "conf.exact/y.txt", content);
+    await put(distRoot, "conf.exact/x.txt", content);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const renames = stdout.split("\n").filter((line) => line.startsWith("Renamed: "));
+    assert.deepEqual(renames, [
+      "Renamed: conf/a.txt → conf/x.txt",
+      "Renamed: conf/b.txt → conf/y.txt",
+    ]);
+    assert.equal(stdout.includes("Added"), false);
+    assert.equal(stdout.includes("Deleted"), false);
   });
 });
 
@@ -1022,10 +1320,11 @@ describe("diff display contract", () => {
   it("renders the SPEC Modified example byte-for-byte", async () => {
     await put(homeRoot, ".agents/config/agents.yaml", "agents:\n  model: old-model\n  enabled: true\n");
     await put(distRoot, ".agents/config/agents.yaml", "agents:\n  model: new-model\n  enabled: true\n");
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
+    assert.equal(gitTrace, "");
     const heading = "Modified: .agents/config/agents.yaml";
     const fence = "─".repeat(heading.length);
     assert.equal(
@@ -1082,10 +1381,11 @@ describe("diff display contract", () => {
     await put(distRoot, "dir.exact/keep.txt", "same\n");
     await put(homeRoot, "dir/keep.txt", "same\n");
     await put(homeRoot, "dir/legacy.txt", "mode=legacy\nenabled=true\n");
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
+    assert.equal(gitTrace, "");
     assert.match(stdout, /^Deleted: dir\/legacy\.txt$/m);
     assert.match(stdout, /@@ -1,2 \+0,0 @@/);
     assert.match(stdout, /^-mode=legacy$/m);
@@ -1095,10 +1395,11 @@ describe("diff display contract", () => {
   it("renders a non-rename mode-only change with old mode and new mode lines", async () => {
     await putExecutable(distRoot, "tool.executable", "#!/bin/sh\n");
     await put(homeRoot, "tool", "#!/bin/sh\n");
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
+    assert.equal(gitTrace, "");
     assert.match(stdout, /^Modified: tool$/m);
     assert.match(stdout, /^old mode 100644$/m);
     assert.match(stdout, /^new mode 100755$/m);
@@ -1123,10 +1424,11 @@ describe("diff display contract", () => {
 
   it("renders an empty added file as a heading-only Added section", async () => {
     await put(distRoot, "empty.txt", "");
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
+    assert.equal(gitTrace, "");
     const heading = "Added: empty.txt";
     const fence = "─".repeat(heading.length);
     assert.equal(stdout, `${fence}\n${heading}\n${fence}\n`);
@@ -1136,7 +1438,8 @@ describe("diff display contract", () => {
     await put(homeRoot, "entry", "old-file\n");
     await put(distRoot, "entry.exact/keep.txt", "visible\n");
     await put(distRoot, "entry.exact/private.data.txt", "secret\n");
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff({ TMPDIR: blockedTemporaryRoot });
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
@@ -1151,14 +1454,203 @@ describe("diff display contract", () => {
   it("renders a symlink type mismatch as Deleted and Added sections", async () => {
     await put(distRoot, "slink", "file-content\n");
     await putSymlink(homeRoot, "slink", "old-target");
-    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff({
+      TMPDIR: blockedTemporaryRoot,
+    });
 
     assert.equal(exitCode, 0);
     assert.equal(stderr, "");
+    assert.equal(gitTrace, "");
     assert.match(stdout, /^Deleted: slink$/m);
     assert.match(stdout, /^-old-target$/m);
     assert.match(stdout, /^Added: slink$/m);
     assert.match(stdout, /^\+file-content$/m);
     assert.doesNotMatch(stdout, /^Modified: slink$/m);
+  });
+
+  it("splits hunks for changes separated by more than six context lines", async () => {
+    const oldText = Array.from({ length: 12 }, (_, index) => `l${index + 1}`).join("\n") + "\n";
+    const newText = oldText.replace("l2\n", "X2\n").replace("l11\n", "Y11\n");
+    await put(homeRoot, "h.txt", oldText);
+    await put(distRoot, "h.txt", newText);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const heading = "Modified: h.txt";
+    const fence = "─".repeat(heading.length);
+    assert.equal(
+      stdout,
+      `${fence}\n${heading}\n${fence}\n\n` +
+        "@@ -1,5 +1,5 @@\n l1\n-l2\n+X2\n l3\n l4\n l5\n" +
+        "@@ -8,5 +8,5 @@\n l8\n l9\n l10\n-l11\n+Y11\n l12\n",
+    );
+  });
+
+  it("merges hunks whose contexts touch and restores both inputs from the body", async () => {
+    const oldText = Array.from({ length: 11 }, (_, index) => `l${index + 1}`).join("\n") + "\n";
+    const newText = oldText.replace("l2\n", "X2\n").replace("l9\n", "Y9\n");
+    await put(homeRoot, "h.txt", oldText);
+    await put(distRoot, "h.txt", newText);
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const heading = "Modified: h.txt";
+    const fence = "─".repeat(heading.length);
+    const body =
+      "@@ -1,11 +1,11 @@\n l1\n-l2\n+X2\n l3\n l4\n l5\n l6\n l7\n l8\n-l9\n+Y9\n l10\n l11\n";
+    assert.equal(stdout, `${fence}\n${heading}\n${fence}\n\n${body}`);
+
+    let restoredOld = "";
+    let restoredNew = "";
+    for (const line of body.split("\n").slice(1)) {
+      if (line.startsWith("-") || line.startsWith(" ")) restoredOld += `${line.slice(1)}\n`;
+      if (line.startsWith("+") || line.startsWith(" ")) restoredNew += `${line.slice(1)}\n`;
+    }
+    assert.equal(restoredOld, oldText);
+    assert.equal(restoredNew, newText);
+  });
+
+  it("keeps first and last line changes with their newline markers", async () => {
+    await put(homeRoot, "h.txt", "a\nb\nc\n");
+    await put(distRoot, "h.txt", "A\nb\nC");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const heading = "Modified: h.txt";
+    const fence = "─".repeat(heading.length);
+    assert.equal(
+      stdout,
+      `${fence}\n${heading}\n${fence}\n\n` +
+        "@@ -1,3 +1,3 @@\n-a\n+A\n b\n-c\n+C\n\\ No newline at end of file\n",
+    );
+  });
+
+  it("keeps empty and repeated lines inside hunks", async () => {
+    await put(homeRoot, "h.txt", "\nx\n\nx\n");
+    await put(distRoot, "h.txt", "\nx\ny\n");
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const heading = "Modified: h.txt";
+    const fence = "─".repeat(heading.length);
+    assert.equal(
+      stdout,
+      `${fence}\n${heading}\n${fence}\n\n` + "@@ -1,4 +1,3 @@\n \n x\n-\n-x\n+y\n",
+    );
+  });
+
+  for (const reverse of [false, true]) {
+    it(`preserves distinct invalid bytes with identical replacement text (reverse: ${reverse})`, async () => {
+      const oldBytes = new Uint8Array([reverse ? 0x81 : 0x80]);
+      const newBytes = new Uint8Array([reverse ? 0x80 : 0x81]);
+      await put(homeRoot, "raw.txt", oldBytes);
+      await put(distRoot, "raw.txt", newBytes);
+      const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
+
+      assert.equal(exitCode, 0);
+      assert.equal(stderr, "");
+      assert.equal(gitTrace, "");
+      const heading = "Modified: raw.txt";
+      const fence = "─".repeat(heading.length);
+      assert.equal(
+        stdout,
+        `${fence}\n${heading}\n${fence}\n\n@@ -1 +1 @@\n` +
+          "-�\n\\ No newline at end of file\n+�\n\\ No newline at end of file\n",
+      );
+      assert.deepEqual(await readFile(join(homeRoot, "raw.txt")), Buffer.from(oldBytes));
+      assert.deepEqual(await readFile(join(distRoot, "raw.txt")), Buffer.from(newBytes));
+    });
+
+    it(`preserves final LF differences on otherwise equal lines (reverse: ${reverse})`, async () => {
+      const oldText = reverse ? "old\nsame" : "old\nsame\n";
+      const newText = reverse ? "new\nsame\n" : "new\nsame";
+      await put(homeRoot, "raw.txt", oldText);
+      await put(distRoot, "raw.txt", newText);
+      const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+      assert.equal(exitCode, 0);
+      assert.equal(stderr, "");
+      assert.match(stdout, /^@@ -1,2 \+1,2 @@$/m);
+      assert.match(stdout, /^-same$/m);
+      assert.match(stdout, /^\+same$/m);
+      assert.doesNotMatch(stdout, /^ same$/m);
+      assert.equal((stdout.match(/No newline at end of file/g) ?? []).length, 1);
+      const lineWithoutLf = reverse ? "-same" : "+same";
+      assert.equal(stdout.includes(`${lineWithoutLf}\n\\ No newline at end of file\n`), true);
+    });
+
+    it(`preserves BOM in changed input lines (reverse: ${reverse})`, async () => {
+      await put(homeRoot, "raw.txt", `${reverse ? "" : "\uFEFF"}old\nsame\n`);
+      await put(distRoot, "raw.txt", `${reverse ? "\uFEFF" : ""}new\nsame\n`);
+      const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+      assert.equal(exitCode, 0);
+      assert.equal(stderr, "");
+      const heading = "Modified: raw.txt";
+      const fence = "─".repeat(heading.length);
+      assert.equal(
+        stdout,
+        `${fence}\n${heading}\n${fence}\n\n@@ -1,2 +1,2 @@\n` +
+          `-${reverse ? "" : "\uFEFF"}old\n+${reverse ? "\uFEFF" : ""}new\n same\n`,
+      );
+    });
+  }
+
+  it("preserves invalid-byte changes without replacing their unchanged context", async () => {
+    await put(homeRoot, "raw.txt", new Uint8Array([0x80, 0x0a, 0x78, 0x0a]));
+    await put(distRoot, "raw.txt", new Uint8Array([0x81, 0x0a, 0x78, 0x0a]));
+    const { stdout, stderr, exitCode } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.equal(stdout.endsWith("@@ -1,2 +1,2 @@\n-�\n+�\n x\n"), true);
+    assert.doesNotMatch(stdout, /Binary files|No newline at end of file/);
+  });
+
+  it("renders every classification without Git on PATH or a writable TMPDIR", async () => {
+    await put(homeRoot, "plain.txt", "old\n");
+    await put(distRoot, "plain.txt", "new\n");
+    await put(homeRoot, "tool", "#!/bin/sh\n");
+    await put(distRoot, "tool.executable", "#!/bin/sh\n");
+    await put(homeRoot, "conf/old.txt", "first\nsecond\nthird\nfourth\nfifth\n");
+    await put(distRoot, "conf.exact/new.txt", "first\nsecond\nCHANGED\nfourth\nfifth\n");
+    await put(distRoot, "new.bin", new Uint8Array([0, 1]));
+    await putSymlink(homeRoot, "conf/gone-link", "old-target");
+    const blockedTemporaryRoot = await put(root, "blocked-tmp", "not a directory\n");
+    const emptyBin = join(root, "empty-bin");
+    await mkdir(emptyBin);
+    const cli = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "diff.ts"), distRoot, homeRoot],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, PATH: emptyBin, TMPDIR: blockedTemporaryRoot },
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    const headings = stdout
+      .split("\n")
+      .filter((line) => /^(Modified|Renamed|Added|Deleted): /.test(line));
+    assert.deepEqual(headings.slice(0, 2).sort(), ["Modified: plain.txt", "Modified: tool"]);
+    assert.deepEqual(headings.slice(2), [
+      "Renamed: conf/old.txt → conf/new.txt",
+      "Added: new.bin",
+      "Deleted: conf/gone-link",
+    ]);
+    assert.match(stdout, /Binary files \/dev\/null and b\/new\.bin differ/);
+    assert.match(stdout, /^-old-target$/m);
+    assert.equal(stdout.includes(root), false);
   });
 });
