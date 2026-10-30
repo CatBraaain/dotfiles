@@ -6,10 +6,13 @@ settings:
     - multiply: zai.urgency
     - cron: "* 6-9 * * 1-5"
       multiply: 0
+    - multiply: 1
   openai-codex:
     - multiply: openai-codex.urgency
+    - multiply: 1
   commandcode:
     - multiply: commandcode.urgency
+    - multiply: 0.1
   deepseek:
     - cron: "* 1-3 * * 1-5"
       multiply: 0
