@@ -20,22 +20,22 @@ export interface DemoBridge {
   onMessage(callback: (message: unknown) => void): void;
 }
 
-const ATLAS_CWD = "/Users/aya/Projects/atlas-dashboard";
-const PI_TOOLS_CWD = "/Users/aya/Projects/pi-tools";
-const ATLAS_WORKTREE_CWD = "/Users/aya/Worktrees/atlas-dashboard";
+const PROJECT_CWD = "~/projects/vscode-pi-sessions";
+const PI_TOOLS_CWD = "~/projects/pi-tools";
+const PROJECT_WORKTREE_CWD = "~/.agents/worktrees/vscode-pi-sessions";
 
 const sampleSessions: SessionSummary[] = [
   {
     sessionId: "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
-    filePath: `${ATLAS_CWD}/20260919_1f0e6f9a.jsonl`,
-    cwd: ATLAS_CWD,
+    filePath: `${PROJECT_CWD}/20260919_1f0e6f9a.jsonl`,
+    cwd: PROJECT_CWD,
     displayName: "Polish the session sidebar",
     mtimeMs: Date.UTC(2026, 8, 19, 9, 42),
   },
   {
     sessionId: "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61",
-    filePath: `${ATLAS_CWD}/20260919_2c9d7e1b.jsonl`,
-    cwd: ATLAS_CWD,
+    filePath: `${PROJECT_CWD}/20260919_2c9d7e1b.jsonl`,
+    cwd: PROJECT_CWD,
     displayName: "Review keyboard navigation",
     mtimeMs: Date.UTC(2026, 8, 19, 8, 16),
   },
@@ -55,8 +55,8 @@ const sampleSessions: SessionSummary[] = [
   },
   {
     sessionId: "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94",
-    filePath: `${ATLAS_WORKTREE_CWD}/20260916_5b6c4a2d.jsonl`,
-    cwd: ATLAS_WORKTREE_CWD,
+    filePath: `${PROJECT_WORKTREE_CWD}/20260916_5b6c4a2d.jsonl`,
+    cwd: PROJECT_WORKTREE_CWD,
     displayName: "Plan the next release",
     mtimeMs: Date.UTC(2026, 8, 16, 10, 52),
   },
@@ -102,7 +102,7 @@ export function createDemoBridge(): {
       const session: SessionSummary = {
         sessionId: crypto.randomUUID(),
         filePath: "",
-        cwd: store[0]?.cwd ?? ATLAS_CWD,
+        cwd: store[0]?.cwd ?? PROJECT_CWD,
         displayName: "New Pi session",
         mtimeMs: Date.now(),
       };

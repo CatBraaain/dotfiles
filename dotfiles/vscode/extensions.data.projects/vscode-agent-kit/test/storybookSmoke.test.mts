@@ -263,8 +263,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       });
       const paths = page.locator(".group-path").describe("Work folder paths");
       await paths.first().waitFor();
-      expect(await paths.allTextContents()).toContain("/Users/aya/Projects/atlas-dashboard");
-      expect(await paths.allTextContents()).toContain("/Users/aya/Worktrees/atlas-dashboard");
+      expect(await paths.allTextContents()).toContain("~/projects/vscode-pi-sessions");
+      expect(await paths.allTextContents()).toContain("~/.agents/worktrees/vscode-pi-sessions");
       const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
       expect(hasOverflow).toBe(false);
       await page.close();

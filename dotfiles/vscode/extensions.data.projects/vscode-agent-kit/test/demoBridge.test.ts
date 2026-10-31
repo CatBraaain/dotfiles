@@ -44,8 +44,8 @@ const sampleActiveIds = [
   "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
   "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
 ];
-const atlasActiveId = sampleActiveIds[0];
-const atlasInactiveId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
+const projectActiveId = sampleActiveIds[0];
+const projectInactiveId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 
 describe("createDemoBridge", () => {
   it("sends every session with active marks", () => {
@@ -61,11 +61,11 @@ describe("createDemoBridge", () => {
   it("clears only the active mark on archive", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({ type: "archiveSession", sessionId: atlasActiveId });
+    bridge.postMessage({ type: "archiveSession", sessionId: projectActiveId });
 
     const state = last();
-    expect(sessionIds(state)).toContain(atlasActiveId);
-    const archived = state.groups.flatMap((group) => group.sessions).find((session) => session.sessionId === atlasActiveId);
+    expect(sessionIds(state)).toContain(projectActiveId);
+    const archived = state.groups.flatMap((group) => group.sessions).find((session) => session.sessionId === projectActiveId);
     expect(archived?.isActive).toBe(false);
     const stillActive = state.groups
       .flatMap((group) => group.sessions)
@@ -78,7 +78,7 @@ describe("createDemoBridge", () => {
     postSessions();
     const before = states.length;
 
-    bridge.postMessage({ type: "openSession", sessionId: atlasInactiveId });
+    bridge.postMessage({ type: "openSession", sessionId: projectInactiveId });
 
     expect(states.length).toBe(before);
   });
@@ -90,9 +90,9 @@ describe("createDemoBridge", () => {
     postSessions();
     const before = states.length;
 
-    bridge.postMessage({ type: "copySessionId", sessionId: atlasActiveId });
+    bridge.postMessage({ type: "copySessionId", sessionId: projectActiveId });
 
-    expect(writeText).toHaveBeenCalledWith(atlasActiveId);
+    expect(writeText).toHaveBeenCalledWith(projectActiveId);
     expect(states.length).toBe(before);
   });
 
