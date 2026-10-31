@@ -1,6 +1,22 @@
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type {
+  BoundaryResult,
+  ExtensionAPI,
+  ExtensionContext,
+  SessionEntry,
+  TurnEndEvent,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { requestClassChange } from "../agents/class-change.ts";
+import {
+  createReplacement,
+  REPLACEMENT_STATE,
+  replacementCommitDraft,
+  pendingProjection,
+  projectPendingMessages,
+  replacementEdits,
+  type ReplacementProjection,
+} from "./projection.ts";
+import { installProviderGates, type ProviderGates } from "./provider-gate.ts";
 
 const STATE_TYPE = "handoff-session-counter";
 const STATE_VERSION = 1;
@@ -16,8 +32,33 @@ export interface HandoffPayload {
 
 export default function replaceContextExtension(pi: ExtensionAPI): void {
   const pendingRequests = new Map<string, HandoffPayload>();
-  pi.on("turn_start", () => {
+  let currentContext: ExtensionContext;
+  let gates: ProviderGates | undefined;
+  pi.on("session_start", (_event, ctx) => {
+    currentContext = ctx;
+    gates?.close();
+    gates = installProviderGates(pi, () => currentContext);
+  });
+  pi.on("session_shutdown", () => {
+    gates?.close();
+    gates = undefined;
+  });
+  pi.on("turn_start", (_event, ctx) => {
+    currentContext = ctx;
+    gates?.ensure();
     pendingRequests.clear();
+  });
+  pi.on("context", (event, ctx) => {
+    currentContext = ctx;
+    gates?.ensure();
+    return { messages: projectPendingMessages(event.messages, ctx.sessionManager) };
+  });
+  pi.on("cache_warming_decision", () => {
+    if (gates?.isBusy()) return { action: "stop" };
+  });
+  pi.on("agent_before_settle", (event, ctx) => {
+    const pending = pendingProjection(ctx.sessionManager, event.context.contextEntries);
+    if (pending.drafts.length) return { entries: [...event.entries, ...pending.drafts] };
   });
   pi.on("input", (event) => {
     if (event.source !== "extension") {
@@ -89,6 +130,22 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("turn_end", async (event, ctx) => {
+    const pending = pendingProjection(
+      ctx.sessionManager,
+      event.context.contextEntries.length ? event.context.contextEntries : undefined,
+    );
+    const result = await applyManualHandoff(event, ctx, pending);
+    return (
+      result ??
+      (pending.drafts.length ? { entries: [...event.entries, ...pending.drafts] } : undefined)
+    );
+  });
+
+  async function applyManualHandoff(
+    event: TurnEndEvent,
+    ctx: ExtensionContext,
+    pending: ReplacementProjection,
+  ): Promise<BoundaryResult | undefined> {
     const directRequests = event.toolResults.filter(
       (result) => result.toolName === "replace_context",
     );
@@ -128,13 +185,15 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
 
     const branch = ctx.sessionManager.getBranch();
     const requestId = `${event.messageEntryId}:${requests[0]?.toolCallId}`;
-    const alreadyApplied = branch.some(
-      (entry) =>
-        entry.type === "compaction" &&
-        isRecord(entry.details) &&
-        entry.details.type === STATE_TYPE &&
-        entry.details.requestId === requestId,
-    );
+    const alreadyApplied = branch.some((entry) => {
+      const state =
+        entry.type === "custom" && entry.customType === STATE_TYPE
+          ? entry.data
+          : entry.type === "compaction"
+            ? entry.details
+            : undefined;
+      return isRecord(state) && state.type === STATE_TYPE && state.requestId === requestId;
+    });
     if (alreadyApplied) return;
     const leafId = ctx.sessionManager.getLeafId();
     const sessionId = ctx.sessionManager.getSessionId();
@@ -189,22 +248,48 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
       }
       if (!isCurrentRequest()) return;
     }
-    return {
-      entries: [
-        ...event.entries,
-        {
-          type: "compaction",
-          summary: payload.handoff,
-          firstKeptEntryId: null,
-          details: {
-            ...counterState(requiresApproval ? 0 : count + 1),
-            requestId,
+    try {
+      const targets = new Set(
+        pending.entries
+          .filter((entry) => ctx.sessionManager.getEntry(entry.sourceEntry.id))
+          .map((entry) => entry.sourceEntry.id),
+      );
+      const replacement = createReplacement(
+        ctx.sessionManager,
+        pending.entries,
+        targets,
+        payload.handoff,
+      );
+      return {
+        entries: [
+          ...event.entries,
+          ...pending.drafts,
+          { type: "custom", customType: REPLACEMENT_STATE, data: replacement },
+          ...replacementEdits(replacement),
+          ...(replacement.anchorId === null
+            ? [
+                {
+                  type: "custom_message" as const,
+                  customType: "replace-context-handoff",
+                  content: replacement.content,
+                  display: false,
+                },
+              ]
+            : []),
+          replacementCommitDraft(replacement),
+          {
+            type: "custom",
+            customType: STATE_TYPE,
+            data: { ...counterState(requiresApproval ? 0 : count + 1), requestId },
           },
-        },
-      ],
-      continue: true,
-    };
-  });
+        ],
+        continue: true,
+      };
+    } catch (error) {
+      ctx.ui.notify(`replace-context: replacement failed (${errorMessage(error)})`, "error");
+      return;
+    }
+  }
 }
 
 function counterState(count: number) {

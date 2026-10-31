@@ -15,6 +15,7 @@
     "skipPrompt": true
   },
   "compaction": {
+    "enabled": false,
     "keepRecentTokens": 50000 // default: 20000
   },
   // default: 300000. Raise so a silent (>5 min) thinking phase on junior-class

@@ -11,8 +11,10 @@
     "yaml": "2.9.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.0",
-    "@earendil-works/pi-tui": "1.0.0",
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@openuidev/cli": "0.4.1",
     "@openuidev/react-lang": "0.3.0",
     "@openuidev/react-ui": "0.16.3",

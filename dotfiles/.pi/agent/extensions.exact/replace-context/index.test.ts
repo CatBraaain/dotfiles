@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  InMemoryModelsStore,
+  type Api,
+  type Credential,
+  type Model,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
+import { type SessionEntry, type CustomEntry } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
@@ -28,7 +39,19 @@ import {
 import agentsExtension from "../agents/index.ts";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import replaceContextExtension from "./index";
+import { projectPendingMessages } from "./projection.ts";
 import { renderersOf } from "../tool-renderer/index.ts";
+
+function isHandoffEntry(
+  entry: SessionEntry,
+): entry is CustomEntry<{ count: number; requestId: string }> {
+  return (
+    entry.type === "custom" &&
+    entry.customType === "handoff-session-counter" &&
+    !!entry.data &&
+    typeof (entry.data as { requestId?: unknown }).requestId === "string"
+  );
+}
 
 function harness(manager = SessionManager.inMemory()) {
   let tool: ToolDefinition;
@@ -89,6 +112,8 @@ function harness(manager = SessionManager.inMemory()) {
     options: Partial<TurnEndEvent> = {},
     requestParams: Record<string, unknown> | undefined = undefined,
   ) {
+    if (manager.getEntries().length === 0)
+      manager.appendMessage({ role: "user", content: "initial phase", timestamp: Date.now() });
     const result = await request(requestParams);
     const toolCallId = `call-${manager.getEntries().length}`;
     const toolResult = {
@@ -147,6 +172,15 @@ function harness(manager = SessionManager.inMemory()) {
       if (entry.type === "compaction")
         manager.appendCompaction(entry.summary, entry.firstKeptEntryId, 0, entry.details, true);
       if (entry.type === "custom") manager.appendCustomEntry(entry.customType, entry.data);
+      if (entry.type === "custom_message")
+        manager.appendCustomMessageEntry(
+          entry.customType,
+          entry.content,
+          entry.display,
+          entry.details,
+        );
+      if (entry.type === "context_edit")
+        manager.appendContextEdit(entry.targetId, entry.replacement);
     }
   }
   function user(source: InputEvent["source"] = "interactive") {
@@ -178,6 +212,7 @@ interface ProviderRequest {
 
 async function runtimeHarness(withAgents = false) {
   const directory = mkdtempSync(join(tmpdir(), "handoff-runtime-"));
+  mkdirSync(join(directory, ".git"));
   const requests: ProviderRequest[] = [];
   const inputs: InputEvent[] = [];
   const selections: string[] = [];
@@ -191,91 +226,105 @@ async function runtimeHarness(withAgents = false) {
   } = {};
   let requestHandoff = false;
   let requestHandoffClass: string | undefined;
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
-      requests.push((await request.json()) as ProviderRequest);
-      const handoff = requestHandoff;
-      requestHandoff = false;
-      const block = handoff
-        ? { type: "tool_use", id: `handoff-${requests.length}`, name: "replace_context", input: {} }
-        : { type: "text", text: "" };
-      const events = [
-        {
-          type: "message_start",
-          message: {
-            id: `msg-${requests.length}`,
-            type: "message",
-            role: "assistant",
-            model: "fake-model",
-            content: [],
-            stop_reason: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
-          },
-        },
-        { type: "content_block_start", index: 0, content_block: block },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: handoff
-            ? {
-                type: "input_json_delta",
-                partial_json: JSON.stringify({
-                  reason: "phase done",
-                  handoff: "new phase marker",
-                  ...(requestHandoffClass !== undefined ? { class: requestHandoffClass } : {}),
-                }),
-              }
-            : { type: "text_delta", text: "fake final response" },
-        },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: handoff ? "tool_use" : "end_turn", stop_sequence: null },
-          usage: { output_tokens: 1 },
-        },
-        { type: "message_stop" },
-      ];
-      const body = events
-        .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-        .join("");
-      return new Response(body, { headers: { "content-type": "text/event-stream" } });
-    },
-  });
+  function fakeStream(model: Model<Api>, context: TranscriptContext) {
+    requests.push({
+      model: model.id,
+      messages: context.messages,
+      system: getCurrentSystemPrompt(context.messages),
+      tools: getCurrentTools(context.messages),
+    });
+    const handoff = requestHandoff;
+    requestHandoff = false;
+    const output = createAssistantMessageEventStream();
+    const message = {
+      role: "assistant" as const,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      content: handoff
+        ? [
+            {
+              type: "toolCall" as const,
+              id: `handoff-${requests.length}`,
+              name: "replace_context",
+              arguments: {
+                reason: "phase done",
+                handoff: "new phase marker",
+                ...(requestHandoffClass !== undefined ? { class: requestHandoffClass } : {}),
+              },
+            },
+          ]
+        : [{ type: "text" as const, text: "fake final response" }],
+      stopReason: handoff ? ("toolUse" as const) : ("stop" as const),
+      timestamp: Date.now(),
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    queueMicrotask(() => {
+      output.push({ type: "start", partial: message });
+      output.push({ type: "done", reason: handoff ? "toolUse" : "stop", message });
+      output.end();
+    });
+    return output;
+  }
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },
     retry: { enabled: false },
     cacheWarming: "off",
   });
   const modelRuntime = await ModelRuntime.create({
-    authPath: join(directory, "auth.json"),
+    credentials: memoryCredentials(),
+    modelsStore: new InMemoryModelsStore(),
     modelsPath: null,
-    modelsStorePath: join(directory, "models-cache.json"),
     refreshOnCreate: false,
     allowModelNetwork: false,
   });
-  modelRuntime.registerProvider("handoff-test", {
-    baseUrl: `http://127.0.0.1:${server.port}`,
-    apiKey: "fake-local-key",
-    api: "anthropic-messages",
-    models: [
-      "fake-model",
-      "high-model",
-      "low-model",
-      "max-middle-model",
-      "max-high-model",
-      "max-low-model",
-    ].map((id) => ({
-      id,
-      name: id,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 1024,
-    })),
+  modelRuntime.registerNativeProvider({
+    id: "handoff-test",
+    name: "Memory fake",
+    baseUrl: "https://fake.invalid",
+    auth: {
+      apiKey: {
+        name: "Fake",
+        async check() {
+          return { type: "api_key", source: "test" };
+        },
+        async resolve() {
+          return { auth: { apiKey: "fake-key" }, source: "test" };
+        },
+      },
+    },
+    stream: fakeStream,
+    streamSimple: fakeStream,
+    getModels() {
+      return [
+        "fake-model",
+        "high-model",
+        "low-model",
+        "max-middle-model",
+        "max-high-model",
+        "max-low-model",
+      ].map((id) => ({
+        id,
+        provider: "handoff-test",
+        api: "anthropic-messages",
+        baseUrl: "https://fake.invalid",
+        name: id,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 1024,
+      }));
+    },
   });
+  await modelRuntime.refresh({ allowNetwork: false });
   const resourceLoader = new DefaultResourceLoader({
     cwd: directory,
     agentDir: directory,
@@ -375,7 +424,6 @@ async function runtimeHarness(withAgents = false) {
   }
   function dispose() {
     session.dispose();
-    server.stop(true);
     rmSync(directory, { recursive: true, force: true });
   }
   return {
@@ -393,7 +441,7 @@ async function runtimeHarness(withAgents = false) {
   };
 }
 
-describe("real AgentSession delivery with a loopback fake provider", () => {
+describe("real AgentSession delivery with a memory fake provider", () => {
   it("preserves max mode for the first continuation after each class handoff", async () => {
     const h = await runtimeHarness(true);
     try {
@@ -493,10 +541,10 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
           assert.deepEqual(h.session.getFollowUpMessages(), []);
           assert.equal(h.inputs.find((event) => event.text === queuedText)?.source, source);
           assert.equal(h.selections.length, source === "extension" ? 1 : 0);
-          const compactions = h.manager.getEntries().filter((entry) => entry.type === "compaction");
+          const compactions = h.manager.getEntries().filter(isHandoffEntry);
           assert.equal(compactions.length, 1);
           assert.equal(
-            (compactions[0]!.details as { count: number }).count,
+            (compactions[0]!.data as { count: number }).count,
             source === "extension" ? 0 : 1,
           );
           const raw = JSON.stringify(h.manager.getEntries());
@@ -517,7 +565,7 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
       await h.session.prompt("old user marker");
       await h.handoff({ class: "high" });
       assert.deepEqual(h.classChanges, [{ class: "high" }]);
-      const compactions = h.manager.getEntries().filter((entry) => entry.type === "compaction");
+      const compactions = h.manager.getEntries().filter(isHandoffEntry);
       assert.equal(compactions.length, 1);
       assert.deepEqual(h.errors, []);
       assert.deepEqual(h.notices, []);
@@ -534,9 +582,9 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
         const start = h.requests.length;
         await h.handoff();
         assert.equal(h.requests.length - start, 2);
-        const compactions = h.manager.getEntries().filter((entry) => entry.type === "compaction");
+        const compactions = h.manager.getEntries().filter(isHandoffEntry);
         assert.equal(compactions.length, index + 1);
-        assert.equal((compactions.at(-1)!.details as { count: number }).count, count);
+        assert.equal((compactions.at(-1)!.data as { count: number }).count, count);
         assert.equal(h.selections.length, index < 2 ? 0 : 1);
       }
       assert.deepEqual(h.errors, []);
@@ -574,18 +622,15 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
               return "obsolete reason";
             };
             await h.handoff();
-            assert.equal(
-              h.manager.getEntries().filter((entry) => entry.type === "compaction").length,
-              0,
-            );
+            assert.equal(h.manager.getEntries().filter(isHandoffEntry).length, 0);
             assert.match(JSON.stringify(h.requests.at(-1)!.messages), /new user decision/);
             assert.doesNotMatch(JSON.stringify(h.requests), /no\(/);
             assert.match(h.notices[0]!, /session changed/);
             h.hooks.duringSelect = undefined;
             await h.handoff();
-            const compaction = h.manager.getEntries().find((entry) => entry.type === "compaction");
-            assert.ok(compaction?.type === "compaction");
-            assert.equal((compaction.details as { count: number }).count, 1);
+            const compaction = h.manager.getEntries().find(isHandoffEntry);
+            assert.ok(compaction?.type === "custom");
+            assert.equal((compaction.data as { count: number }).count, 1);
             assert.equal(h.selections.length, 1);
             assert.deepEqual(h.errors, []);
           } finally {
@@ -685,9 +730,11 @@ describe("handoff approval cycle", () => {
       assert.deepEqual(h.sent, ["no(finish tests)"]);
       h.ctx.ui.select = async () => "Yes, replace context";
       const next = await h.boundary();
-      const compaction = next?.entries?.[0];
-      assert.ok(compaction?.type === "compaction");
-      assert.equal((compaction.details as { count: number }).count, 0);
+      const compaction = next?.entries?.find(
+        (entry) => entry.type === "custom" && entry.customType === "handoff-session-counter",
+      );
+      assert.ok(compaction?.type === "custom");
+      assert.equal((compaction.data as { count: number }).count, 0);
     });
   }
   it("uses confirm when select is unavailable and sends no() for an empty reason", async () => {
@@ -908,9 +955,7 @@ describe("handoff safety while awaiting UI", () => {
           const h = harness();
           h.commit(await h.boundary());
           h.commit(await h.boundary());
-          const originalCompactions = h.manager
-            .getEntries()
-            .filter((entry) => entry.type === "compaction");
+          const originalCompactions = h.manager.getEntries().filter(isHandoffEntry);
           const counterLeaf = h.manager.getLeafId()!;
           const waiting = Promise.withResolvers<void>();
           const response = Promise.withResolvers<void>();
@@ -958,14 +1003,13 @@ describe("handoff safety while awaiting UI", () => {
             assert.match(h.notices[0]!, /session changed/);
             h.ctx.ui.select = async () => "Yes, replace context";
             const next = await h.boundary();
-            const compaction = next?.entries?.[0];
-            assert.ok(compaction?.type === "compaction");
-            assert.equal((compaction.details as { count: number }).count, 0);
-          } else {
-            assert.deepEqual(
-              h.manager.getEntries().filter((entry) => entry.type === "compaction"),
-              originalCompactions,
+            const compaction = next?.entries?.find(
+              (entry) => entry.type === "custom" && entry.customType === "handoff-session-counter",
             );
+            assert.ok(compaction?.type === "custom");
+            assert.equal((compaction.data as { count: number }).count, 0);
+          } else {
+            assert.deepEqual(h.manager.getEntries().filter(isHandoffEntry), originalCompactions);
           }
         });
       }
@@ -984,7 +1028,7 @@ describe("nested handoff safety", () => {
     it(`keeps context and counter for ${condition} nested calls`, async () => {
       const h = harness();
       h.commit(await h.boundary());
-      const before = h.manager.getEntries().filter((entry) => entry.type === "compaction");
+      const before = h.manager.getEntries().filter(isHandoffEntry);
       await h.request(undefined, "second");
       const nested: TurnEndEvent["toolResults"][number] = {
         role: "toolResult",
@@ -1022,21 +1066,49 @@ describe("nested handoff safety", () => {
           details: { reason: "done", handoff: "other phase" },
         });
       assert.equal(await h.boundary({ toolResults: results }), undefined);
-      assert.deepEqual(
-        h.manager.getEntries().filter((entry) => entry.type === "compaction"),
-        before,
-      );
+      assert.deepEqual(h.manager.getEntries().filter(isHandoffEntry), before);
       assert.deepEqual(h.sent, []);
       const next = await h.boundary();
-      const compaction = next?.entries?.[0];
-      assert.ok(compaction?.type === "compaction");
-      assert.equal((compaction.details as { count: number }).count, 2);
+      const compaction = next?.entries?.find(
+        (entry) => entry.type === "custom" && entry.customType === "handoff-session-counter",
+      );
+      assert.ok(compaction?.type === "custom");
+      assert.equal((compaction.data as { count: number }).count, 2);
       assert.deepEqual(h.selections, []);
     });
   }
 });
 
 describe("persisted session context", () => {
+  it("replaces a prior immutable summary without a raw user anchor or a new compaction", async () => {
+    const manager = SessionManager.inMemory();
+    manager.appendMessage({ role: "system", content: "KEEP SYSTEM", timestamp: 1 });
+    manager.appendMessage({ role: "user", content: "old raw text", timestamp: 2 });
+    const legacyId = manager.appendCompaction("LEGACY SUMMARY", null, 1);
+    const legacy = structuredClone(manager.getEntry(legacyId));
+    const h = harness(manager);
+    const boundary = await h.boundary({}, { reason: "next", handoff: "  EXACT HANDOFF  " });
+    assert.equal(boundary?.continue, true);
+    h.commit(boundary);
+    const model = convertToLlm(
+      projectPendingMessages(manager.buildSessionProjection().messages, manager),
+    );
+    assert.match(JSON.stringify(model), /EXACT HANDOFF/);
+    assert.doesNotMatch(
+      JSON.stringify(model),
+      /LEGACY SUMMARY|old raw text|Context replacement requested/,
+    );
+    assert.match(JSON.stringify(model), /KEEP SYSTEM/);
+    assert.deepEqual(manager.getEntry(legacyId), legacy);
+    assert.equal(manager.getBranch().filter((entry) => entry.type === "compaction").length, 1);
+    assert.equal(
+      manager.getBranch().filter((entry) => entry.type === "custom_message" && !entry.display)
+        .length,
+      1,
+    );
+    assert.deepEqual(h.notices, []);
+  });
+
   it("keeps raw history and system/tools, excludes old messages, and preserves the counter on resume", async () => {
     const directory = mkdtempSync(join(tmpdir(), "replace-context-"));
     try {
@@ -1199,3 +1271,29 @@ describe("tool rendering", () => {
     assert.match(renderedText(block), /Both reason and handoff must be non-empty strings\./);
   });
 });
+
+function memoryCredentials() {
+  const values = new Map<string, Credential>();
+  return {
+    async read(id: string) {
+      return values.get(id);
+    },
+    async list() {
+      return [...values].map(([providerId, credential]) => ({ providerId, type: credential.type }));
+    },
+    async modify(
+      id: string,
+      update: (
+        value: Credential | undefined,
+      ) => Credential | undefined | Promise<Credential | undefined>,
+    ) {
+      const value = await update(values.get(id));
+      if (value) values.set(id, value);
+      else values.delete(id);
+      return value;
+    },
+    async delete(id: string) {
+      values.delete(id);
+    },
+  };
+}

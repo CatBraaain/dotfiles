@@ -7,6 +7,7 @@ import {
 import { Models, type Provider as ModelsDevSdkProvider } from "@opencode-ai/models";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { registerProviderUpdate } from "../replace-context/provider-update.ts";
 import {
   SYNC_PROVIDERS,
   authHeaders,
@@ -99,7 +100,7 @@ function applyCachedModels(
       modelsDevProvider: cachedModels.modelsDev?.providers[provider.modelsDevId ?? ""],
       baseUrl,
     });
-    registerModels(pi, provider, models);
+    registerModels(pi, ctx, provider, models);
   }
 }
 
@@ -245,7 +246,7 @@ async function synchronize(
         modelsDevProvider: modelsDevProviders?.[endpointResult.provider.modelsDevId ?? ""],
         baseUrl: endpointResult.baseUrl,
       });
-      registerModels(pi, endpointResult.provider, models);
+      registerModels(pi, ctx, endpointResult.provider, models);
       const existingIds = new Set(providerExistingModels.map((model) => model.id));
       const newCount = endpointResult.models.filter((model) => !existingIds.has(model.id)).length;
       providerResults.push({
@@ -413,8 +414,13 @@ async function writeCache(nextCache: ModelSyncCache): Promise<void> {
   }
 }
 
-function registerModels(pi: ExtensionAPI, provider: SyncProvider, models: ModelDefinition[]): void {
-  pi.registerProvider(provider.id, {
+export function registerModels(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  provider: SyncProvider,
+  models: ModelDefinition[],
+): void {
+  registerProviderUpdate(pi, ctx, provider.id, {
     models: models as NonNullable<ProviderConfig["models"]>,
   });
 }
