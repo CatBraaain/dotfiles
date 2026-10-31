@@ -2,9 +2,9 @@
 
 ## 概要
 
-セッションは **agent** を実行する。agent は利用できるツール、依頼できる子agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本拡張は agent定義の管理と選択を行い、`/agent:<name>` コマンド・`--agent` フラグ・subagentツールの `agent` パラメータを提供する。class は `/class` コマンドと `--class` フラグで agent と独立に選択できる。mode は class名ごとのモデル候補テーブルを選ぶ単位であり、`/mode` コマンドと `--max` フラグで切り替えられる。
+セッションは **agent** を実行する。agent は利用できるツール、依頼できる子agent、システムプロンプトを持ち、モデル候補の順序（class）の既定値を持つ実行主体である。本拡張は agent定義の管理と選択を行い、`/agent:<name>` コマンド・`--agent` フラグ・subagentツールの `agent` パラメータを提供する。class は `/class:<name>` コマンドと `--class` フラグで agent と独立に選択できる。mode は class名ごとのモデル候補テーブルを選ぶ単位であり、`/mode:<name>` コマンドと `--max` フラグで切り替えられる。
 
-モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `agents.yaml` で mode・class・agent を管理し、`/agent:<agent>` で実行するagent を、`/class` で class を、`/mode` でモデル候補テーブルを切り替えられる。
+モデルの自動選択と切り替えはこの拡張だけが行う。ユーザーは `agents.yaml` で mode・class・agent を管理し、`/agent:<agent>` で実行するagent を、`/class:<name>` で class を、`/mode:<name>` でモデル候補テーブルを切り替えられる。
 
 ## 設定
 
@@ -93,10 +93,12 @@ agents:
 | `subagents` | subagentツールでの起動を許可する子agent の一覧。定義済みの agent が一覧に含まれる場合は起動し、含まれない場合や一覧が空の場合は起動せずセッションを継続する |
 | `systemPrompt` | 次回のエージェント実行時に、配列要素を記載順で結合して追記するagent固有のシステムプロンプト。YAML のアンカーとエイリアスで複数agent間で要素を共有できる |
 | `/agent:<name> [message]` | 指定したagent を即時に有効にする。モデルは切替先agent の既定class の候補を適用し、ツール・agent表示も切り替える。`message` を続けた場合は agent切り替え完了後にそのテキスト（前後の空白を除く）をユーザーメッセージとして送信し、切替先agent の設定で直ちにターンを開始する。`message` を省略した場合は切り替えのみ行う |
-| `/class [name]` | 実効class（後述）を `name` に切り替え、手動選択を解除し、切り替え先class の候補を適用する。`name` を省略した場合は選択UI で class を選ぶ。選択UI をキャンセルした場合は何も変更しない。UI を持たない環境で `name` を省略すると usageエラーを通知して何も変更しない。表示は「通知のない環境」の規定に従う。未定義の `name` は warning で通知し、何も変更しない。cooldown は維持する |
+| `/class:<name>` | 設定された各class名で利用できる。切り替えは「モデルの適用タイミング」に従う |
 | `--class <name>` フラグ | 初期class（後述）を指定する。実効class はセッション開始・`/new`・セッション切替・分岐でこの class に初期化される。未定義の値は warning で通知し、無視する。`--agent` と独立であり併用できる |
-| `/mode [name]` | 実効mode（後述）を `name` に切り替える。agent と実効class は維持し、手動モデル選択を解除して同じclassの候補を適用する。同じmodeの再指定でも再適用する。省略時は設定順のmode名を選択UIへ渡し、キャンセル時は無変更。UIなしの省略は usageエラー、未定義名は warning とし、いずれも無変更。cooldown は維持する |
+| `/mode:<name>` | 設定された各mode名で利用できる。切り替えは「モデルの適用タイミング」に従う |
 | `--max` フラグ | booleanフラグ。初期mode に `max` を指定する。`--agent`・`--class` と独立して併用できる |
+
+`/agent:<name>`・`/class:<name>`・`/mode:<name>` は pi標準のコマンド名補完に現れる。`/class`・`/mode` の入力でそれぞれ設定名付きのコマンドを探せる。配布設定では `/max` の入力でも `/mode:max` が候補に現れ、その候補を選択して `/mode:max` として実行する。
 
 ## 設定の検証
 
@@ -144,7 +146,7 @@ mode変更とクラス変更イベントは受信順に適用し、それぞれ�
 
 class はモデル候補の配列であり、モデルの種類による制限はしない。ハードフィルタを通った候補をusageスコア順に並べ、先頭から順に適用する。
 
-モデル候補の選択に使うclass（実効class）は、`/class` で切り替えたclass を優先し、切り替えていないときは agent の `class` を既定値とする。実効class は agent の選択とは独立であり、画像入力対応を含むモデルの種類による制限をしない。
+モデル候補の選択に使うclass（実効class）は、`/class:<name>` で切り替えたclass を優先し、切り替えていないときは agent の `class` を既定値とする。実効class は agent の選択とは独立であり、画像入力対応を含むモデルの種類による制限をしない。
 
 セッション開始・`/new`・セッション切替・分岐のタイミングでは、`--class` フラグで有効な class が指定されていれば実効class はその class になり、指定がなければ初期agent の既定class になる。これを初期class と呼ぶ。
 
@@ -273,7 +275,7 @@ JSON全体が配列でない、各行の `provider` が非空文字列でない�
 
 この節は、クラス変更を要求する拡張の実装者向けの契約である。
 
-実行中の明示的なクラス変更は `agents:class-change` の受信処理だけが行う。`/class`・`/agent:<name>` による既定classへの切替も、外部拡張と同じ `requestClassChange(events, options)` を使う。セッション初期化・復元はこの要求経路とは別に行う。候補再評価・429フォールバックはclass自体を変更しない。
+実行中の明示的なクラス変更は `agents:class-change` の受信処理だけが行う。`/class:<name>`・`/agent:<name>` による既定classへの切替も、外部拡張と同じ `requestClassChange(events, options)` を使う。セッション初期化・復元はこの要求経路とは別に行う。候補再評価・429フォールバックはclass自体を変更しない。
 
 イベント契約とヘルパーは `agents/class-change.ts` に置く。要求の入力は次のとおり。
 
@@ -317,8 +319,8 @@ JSON全体が配列でない、各行の `provider` が非空文字列でない�
 | `/reload` | 設定を読み込み直す。手動選択状態・選択主体表示・実効mode・実効class・cooldown・現在のモデルは維持し、モデルの再適用は行わない。保存済みagent・mode・class が reload後の設定に存在しない場合は、agent は初期agent へ、mode は `defaultMode` へ、class は agent の既定class へ戻す |
 | 各プロンプト送信前（自動状態のとき） | 現在の実効mode・実効class の候補を再評価し、「自動選択モデルの60分維持」に従って維持または切替を行う。全候補が不成立の場合はエラーを通知し、プロンプトを実行しない |
 | `/agent:<name>` | 実効mode を維持してagent を切り替え、手動選択を解除し、実効class を切替先agent の既定class に戻してその候補を適用してから後続メッセージを送信する |
-| `/class [name]` | 実効mode を維持して実効class を切り替え、手動選択を解除し、切り替え先class の候補を適用する |
-| `/mode [name]` | 実効mode を切り替え、手動選択を解除し、同じ実効class の候補を適用して完了を通知する |
+| `/class:<name>` | agent・実効mode・cooldown を維持して実効class を `name` に切り替え、手動モデル選択を解除し、切り替え先class の候補を適用する |
+| `/mode:<name>` | agent・実効class・cooldown を維持して実効mode を `name` に切り替え、手動モデル選択を解除し、同じ実効class の候補を適用して完了を通知する。同じmodeの再指定でも再適用する |
 | コンテキスト切替（`replace_context` で `class` 指定あり） | 実効mode を維持し、切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
 | 429受信時 | 「レート制限（429）時のフォールバック」に従う |
 
@@ -326,7 +328,7 @@ JSON全体が配列でない、各行の `provider` が非空文字列でない�
 
 | 全候補が不成立になる場面 | 結果 |
 | --- | --- |
-| セッション開始・`/new`・セッション切替・分岐・`/agent:<name>`・`/class`・`/mode`・クラス変更イベント | 現在のモデルを維持し、`no available model for agent <name>: class <class-name>` を warning で通知する |
+| セッション開始・`/new`・セッション切替・分岐・`/agent:<name>`・`/class:<name>`・`/mode:<name>`・クラス変更イベント | 現在のモデルを維持し、`no available model for agent <name>: class <class-name>` を warning で通知する |
 | プロンプト送信前 | `no available model for agent <name>: class <class-name>` を error で通知し、プロンプトを実行しない |
 | 429受信時 | 「レート制限（429）時のフォールバック」に従う |
 
@@ -339,8 +341,8 @@ stateDiagram-v2
     自動 --> 手動: ユーザーが /model で選択
     手動 --> 自動: /new・セッション切替・分岐
     手動 --> 自動: /agent で agent 切替
-    手動 --> 自動: /class で class 切替
-    手動 --> 自動: /mode で mode 切替
+    手動 --> 自動: /class:name で class 切替
+    手動 --> 自動: /mode:name で mode 切替
 ```
 
 | 状態 | 振る舞い |
@@ -491,11 +493,11 @@ class が未選択のときは agent行のみを表示する。class行の末尾
 
 | 表示 | 設定するタイミング |
 | --- | --- |
-| `(manual)` | ユーザーの `/model`・`/class`・`/mode`・`/agent:<name>` による選択 |
+| `(manual)` | ユーザーの `/model`・`/class:<name>`・`/mode:<name>`・`/agent:<name>` による選択 |
 | `(auto)` | セッション初期化・新規開始・再開・分岐時の初期選択 |
 | `(agent)` | `replace_context` のクラス指定を適用したとき |
 
-この表示はモデルルーティングの自動・手動状態とは別に管理する。`/class`・`/mode`・`/agent:<name>` の操作後は `(manual)` と表示するが、候補の自動再評価は従来どおり行う。候補再評価・429フォールバックでは表示を変更せず、`/reload` では保存した表示を維持する。無視された要求・同じクラスへの変更なしの要求では表示を変更しない。
+この表示はモデルルーティングの自動・手動状態とは別に管理する。`/class:<name>`・`/mode:<name>`・`/agent:<name>` の操作後は `(manual)` と表示するが、候補の自動再評価は従来どおり行う。候補再評価・429フォールバックでは表示を変更せず、`/reload` では保存した表示を維持する。無視された要求・同じクラスへの変更なしの要求では表示を変更しない。
 
 ## 通知のない環境
 

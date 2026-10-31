@@ -397,7 +397,7 @@ describe("real AgentSession delivery with a loopback fake provider", () => {
   it("preserves max mode for the first continuation after each class handoff", async () => {
     const h = await runtimeHarness(true);
     try {
-      await h.session.prompt("/mode max");
+      await h.session.prompt("/mode:max");
       assert.equal(h.session.model?.id, "max-middle-model");
       for (const [className, model] of [
         ["high", "max-high-model"],

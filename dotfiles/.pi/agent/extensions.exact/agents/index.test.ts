@@ -1,13 +1,13 @@
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { describe, it, spyOn } from "bun:test";
 import { stringify as stringifyYaml } from "yaml";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { CombinedAutocompleteProvider, Container, Text } from "@earendil-works/pi-tui";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import agentsExtension, {
   __abortTimer,
@@ -143,11 +143,9 @@ function succeedChild(child: FakeChild): void {
 interface CaptureOptions {
   flags?: Record<string, string | boolean | undefined>;
   inheritedMode?: string;
-  modeSelection?: string;
   findModel?: (provider: string, id: string) => { provider: string; id: string } | undefined;
   models?: Array<{ provider: string; id: string }>;
   setModelSucceeds?: boolean | boolean[];
-  classSelection?: string;
   beforeSetModel?: () => Promise<void>;
   executeUsage?: typeof runUsage;
   branch?: ReturnType<SessionManager["getBranch"]>;
@@ -160,13 +158,13 @@ function captureAgentsExtension(
 ) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, Handler>();
+  const commandDefinitions = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
   const notifications: string[] = [];
   const notificationEvents: Array<{ message: string; level: string }> = [];
   const activeTools: string[][] = [];
   const selectedModels: unknown[] = [];
   const registeredFlags: string[] = [];
   const registeredFlagDefinitions = new Map<string, { type: string }>();
-  const selections: Array<{ title: string; items: string[] }> = [];
   const sentMessages: Array<{ content: string; options?: unknown }> = [];
   const spawnCalls: Array<{
     command: string;
@@ -207,8 +205,9 @@ function captureAgentsExtension(
           eventHandlers.push(handler);
           handlers.set(event, eventHandlers);
         },
-        registerCommand(name: string, definition: { handler: Handler }) {
+        registerCommand(name: string, definition: Parameters<ExtensionAPI["registerCommand"]>[1]) {
           commands.set(name, definition.handler);
+          commandDefinitions.set(name, definition);
         },
         registerFlag(name: string, definition: { type: string }) {
           registeredFlags.push(name);
@@ -278,10 +277,6 @@ function captureAgentsExtension(
       notifications.push(message);
       notificationEvents.push({ message, level });
     },
-    async select(title: string, items: string[]) {
-      selections.push({ title, items });
-      return title === "Pick mode:" ? options.modeSelection : options.classSelection;
-    },
   };
   const context = {
     cwd: "/parent",
@@ -300,6 +295,7 @@ function captureAgentsExtension(
   return {
     children,
     commands,
+    commandDefinitions,
     context,
     notifications,
     notificationEvents,
@@ -307,7 +303,6 @@ function captureAgentsExtension(
     selectedModels,
     registeredFlags,
     registeredFlagDefinitions,
-    selections,
     sentMessages,
     spawnCalls,
     appendedEntries,
@@ -356,11 +351,11 @@ function captureAgentsExtension(
     async runCommand(agent: string, args = "") {
       await commands.get(`agent:${agent}`)?.(args, context);
     },
-    async runClassCommand(args = "") {
-      await commands.get("class")?.(args, context);
+    async runClassCommand(className: string) {
+      await commands.get(`class:${className}`)!("", context);
     },
-    async runModeCommand(args = "") {
-      await commands.get("mode")?.(args, context);
+    async runModeCommand(modeName: string) {
+      await commands.get(`mode:${modeName}`)!("", context);
     },
     async input(
       text: string,
@@ -1438,13 +1433,231 @@ describe("class によるモデルルーティング", () => {
   });
 });
 
+describe("configured slash commands", () => {
+  it("registers configured names without hardcoded aliases or argument completions", () => {
+    const customConfig: AgentConfig = {
+      ...config,
+      defaultMode: "custom",
+      modes: {
+        custom: { analysis: [], vision: [] },
+        nightly: { analysis: [], vision: [] },
+      },
+      agents: {
+        manager: { ...config.agents.manager!, class: "analysis", subagents: ["vision"] },
+        vision: config.agents.vision!,
+      },
+    };
+    const extension = captureAgentsExtension({ config: customConfig });
+    try {
+      const registeredNames = [...extension.commands.keys()].sort();
+      assert.deepEqual(registeredNames, [
+        "agent:manager",
+        "agent:vision",
+        "class:analysis",
+        "class:vision",
+        "mode:custom",
+        "mode:nightly",
+      ]);
+      assert.ok(
+        [...extension.commandDefinitions.values()].every(
+          (definition) => definition.getArgumentCompletions === undefined,
+        ),
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it.each([
+    { input: "/mode", names: ["mode:standard", "mode:max", "mode:batch"] },
+    { input: "/max", names: ["mode:max"] },
+    { input: "/class", names: ["class:high", "class:middle", "class:low", "class:vision"] },
+    { input: "/agent", names: ["agent:manager", "agent:worker", "agent:vision"] },
+  ])(
+    "discovers registered names through native completion for $input",
+    async ({ input, names }) => {
+      const extension = captureAgentsExtension({ config: modeConfig });
+      try {
+        const commands = [...extension.commandDefinitions].map(([name, definition]) => ({
+          name,
+          ...definition,
+        }));
+        const autocomplete = new CombinedAutocompleteProvider(commands, extension.context.cwd);
+        const suggestions = await autocomplete.getSuggestions([input], 0, input.length, {
+          signal: new AbortController().signal,
+        });
+        assert.ok(suggestions);
+        const suggestedNames = suggestions.items.map((item) => item.value);
+        assert.equal(suggestedNames.includes("class"), false);
+        assert.equal(suggestedNames.includes("mode"), false);
+        for (const name of names) assert.ok(suggestedNames.includes(name), `command: ${name}`);
+        if (input === "/max") {
+          const selected = suggestions.items.find((item) => item.value === "mode:max")!;
+          const completed = autocomplete.applyCompletion(
+            [input],
+            0,
+            input.length,
+            selected,
+            suggestions.prefix,
+          );
+          assert.deepEqual(completed.lines, ["/mode:max "]);
+          assert.equal(extension.commands.has("max"), false);
+          assert.equal(extension.commands.has("standard"), false);
+        }
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+
+  it.each([
+    { name: "high", model: { provider: "openai-codex", id: "astra" } },
+    { name: "low", model: { provider: "openai-codex", id: "sol" } },
+    { name: "vision", model: { provider: "max-vision", id: "image" } },
+  ])("applies /class:$name while retaining the agent and mode", async ({ name, model }) => {
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      { flags: { agent: "worker", max: true } },
+    );
+    try {
+      await extension.sessionStart("startup");
+      const tools = extension.activeTools.slice();
+      const prompt = await extension.beforeAgentStart("base");
+      await extension.modelSelect("set");
+      extension.context.model = { provider: "external", id: "manual" };
+      await extension.commands.get(`class:${name}`)!("", extension.context);
+      assert.deepEqual(extension.context.model, model);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: worker", `💎 class: ${name} (manual)`]);
+      assert.deepEqual(extension.activeTools, tools);
+      assert.deepEqual(await extension.beforeAgentStart("base"), prompt);
+      assert.deepEqual(extension.sentMessages, []);
+      assert.deepEqual(
+        extension.classChangeRequests.map((request: any) => request.class),
+        [name],
+      );
+      extension.context.model = { provider: "external", id: "after-command" };
+      await extension.input("automatic routing resumes");
+      assert.deepEqual(extension.context.model, model);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it.each([
+    { name: "standard", model: { provider: "standard", id: "high" } },
+    { name: "max", model: { provider: "openai-codex", id: "astra" } },
+    { name: "batch", model: { provider: "batch", id: "high" } },
+  ])("applies /mode:$name while retaining the agent and class", async ({ name, model }) => {
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      { flags: { agent: "worker", class: "high", max: true } },
+    );
+    try {
+      await extension.sessionStart("startup");
+      const tools = extension.activeTools.slice();
+      const prompt = await extension.beforeAgentStart("base");
+      await extension.modelSelect("set");
+      extension.context.model = { provider: "external", id: "manual" };
+      await extension.commands.get(`mode:${name}`)!("", extension.context);
+      assert.deepEqual(extension.context.model, model);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: worker", "💎 class: high (manual)"]);
+      assert.deepEqual(extension.activeTools, tools);
+      assert.deepEqual(await extension.beforeAgentStart("base"), prompt);
+      assert.deepEqual(extension.sentMessages, []);
+      assert.equal(extension.notifications.at(-1), `agent mode → ${name}`);
+      extension.context.model = { provider: "external", id: "after-command" };
+      await extension.input("automatic routing resumes");
+      assert.deepEqual(extension.context.model, model);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it.each(["class:middle", "mode:standard"])("preserves cooldowns through /%s", async (name) => {
+    const extension = captureAgentsExtension({ config: modeConfig });
+    try {
+      await extension.sessionStart("startup");
+      await extension.messageEnd({
+        role: "assistant",
+        provider: "zai",
+        model: "glm-5.2",
+        stopReason: "error",
+        errorMessage: "usage limit reached",
+      });
+      await extension.modelSelect("set");
+      extension.context.model = { provider: "external", id: "manual" };
+      await extension.commands.get(name)!("", extension.context);
+      assert.deepEqual(extension.context.model, { provider: "commandcode", id: "gpt-5.6-luna" });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("awaits named mode and class changes in the shared routing queue", async () => {
+    let block = false;
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      {
+        async beforeSetModel() {
+          if (!block) return;
+          block = false;
+          started.resolve();
+          await release.promise;
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      block = true;
+      let completed = false;
+      const mode = extension.commands.get("mode:max")!("", extension.context).then(() => {
+        completed = true;
+      });
+      await started.promise;
+      const classChange = extension.commands.get("class:low")!("", extension.context);
+      assert.equal(completed, false);
+      assert.equal(extension.notifications.includes("agent mode → max"), false);
+      release.resolve();
+      await Promise.all([mode, classChange]);
+      assert.deepEqual(extension.selectedModels.slice(-2), [
+        { provider: "openai-codex", id: "astra" },
+        { provider: "openai-codex", id: "sol" },
+      ]);
+    } finally {
+      release.resolve();
+      extension.restore();
+    }
+  });
+
+  it.each(["class:low", "mode:max"])("ignores /%s after cancellation", async (name) => {
+    const controller = new AbortController();
+    const extension = captureAgentsExtension({ config: modeConfig }, { signal: controller.signal });
+    try {
+      await extension.sessionStart("startup");
+      const selectedModels = extension.selectedModels.slice();
+      const notifications = extension.notifications.slice();
+      controller.abort();
+      await extension.commands.get(name)!("", extension.context);
+      assert.deepEqual(extension.selectedModels, selectedModels);
+      assert.deepEqual(extension.notifications, notifications);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
+    } finally {
+      extension.restore();
+    }
+  });
+});
+
 describe("mode selection", () => {
-  it("registers only the boolean max flag and the mode command", () => {
+  it("registers startup flags and configured mode commands", () => {
     const extension = captureAgentsExtension({ config: modeConfig });
     try {
       assert.deepEqual(extension.registeredFlags, ["agent", "class", "max"]);
       assert.equal(extension.registeredFlagDefinitions.get("max")?.type, "boolean");
-      assert.ok(extension.commands.has("mode"));
+      assert.equal(extension.commands.has("mode"), false);
+      assert.equal(extension.commands.has("mode:missing"), false);
+      assert.equal(extension.commands.has("mode:max"), true);
       assert.equal(extension.registeredFlags.includes("mode"), false);
       assert.equal(extension.registeredFlags.includes("agent-mode"), false);
     } finally {
@@ -1555,7 +1768,7 @@ describe("mode selection", () => {
       await extension.runClassCommand("low");
       const tools = extension.activeTools.slice();
       const prompt = await extension.beforeAgentStart("base");
-      await extension.runModeCommand(" max ");
+      await extension.runModeCommand("max");
       assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "sol" });
       assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
       assert.deepEqual(extension.activeTools, tools);
@@ -1582,55 +1795,25 @@ describe("mode selection", () => {
     }
   });
 
-  it("selects a mode from the existing UI in configuration order", async () => {
-    const extension = captureAgentsExtension({ config: modeConfig }, { modeSelection: "batch" });
+  it.each([
+    { name: "standard", model: { provider: "zai", id: "glm-5.2" } },
+    { name: "max", model: { provider: "openai-codex", id: "astra" } },
+    { name: "batch", model: { provider: "batch", id: "middle" } },
+  ])("selects /mode:$name without a UI", async ({ name, model }) => {
+    const extension = captureAgentsExtension({ config: modeConfig });
     try {
+      extension.context.hasUI = false;
       await extension.sessionStart("startup");
-      await extension.runModeCommand();
-      assert.deepEqual(extension.selections, [
-        { title: "Pick mode:", items: ["standard", "max", "batch"] },
-      ]);
-      assert.deepEqual(extension.context.model, { provider: "batch", id: "middle" });
+      await extension.modelSelect("set");
+      extension.context.model = { provider: "external", id: "manual" };
+      await extension.runModeCommand(name);
+      assert.deepEqual(extension.context.model, model);
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (manual)"]);
+      assert.deepEqual(extension.notifications, []);
     } finally {
       extension.restore();
     }
   });
-
-  it.each(["unknown", "cancel", "non-ui"])(
-    "preserves routing and manual selection for %s input",
-    async (kind) => {
-      const extension = captureAgentsExtension({ config: modeConfig });
-      try {
-        await extension.sessionStart("startup");
-        await extension.modelSelect("set");
-        extension.context.model = { provider: "external", id: "manual" };
-        const beforeModels = extension.selectedModels.slice();
-        const beforeNotices = extension.notifications.slice();
-        if (kind === "non-ui") extension.context.hasUI = false;
-        await extension.runModeCommand(kind === "unknown" ? "missing" : "");
-        await extension.input("manual stays active");
-        assert.deepEqual(extension.context.model, { provider: "external", id: "manual" });
-        assert.deepEqual(extension.selectedModels, beforeModels);
-        assert.deepEqual(extension.agentWidget(), [
-          "🤖 agent: manager",
-          "💎 class: middle (manual)",
-        ]);
-        if (kind === "unknown")
-          assert.deepEqual(extension.notificationEvents.at(-1), {
-            message: "unknown mode: missing",
-            level: "warning",
-          });
-        if (kind === "cancel") assert.deepEqual(extension.notifications, beforeNotices);
-        if (kind === "non-ui")
-          assert.deepEqual(extension.notificationEvents.at(-1), {
-            message: "usage: /mode <mode-name>",
-            level: "error",
-          });
-      } finally {
-        extension.restore();
-      }
-    },
-  );
 
   it("notifies mode completion when the selected model does not change", async () => {
     const extension = captureAgentsExtension({
@@ -2100,7 +2283,7 @@ describe("mode inheritance", () => {
 });
 
 describe("class 選択", () => {
-  it("/class <name> で実効 class を切り替え、モデルと表示を切り替える", async () => {
+  it("switches the effective class, model, and widget through /class:low", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
@@ -2116,7 +2299,7 @@ describe("class 選択", () => {
     }
   });
 
-  it("/class で手動選択を解除する", async () => {
+  it("releases manual model selection through /class:low", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();
@@ -2134,64 +2317,29 @@ describe("class 選択", () => {
     }
   });
 
-  it("/class に未定義の名前は warning で無視する", async () => {
+  it("registers only configured class commands", () => {
     const extension = captureAgentsExtension();
     try {
-      await extension.sessionStart();
-      const modelCountBefore = extension.selectedModels.length;
-      await extension.runClassCommand("nope");
-      assert.deepEqual(extension.notificationEvents.at(-1), {
-        message: "unknown class: nope",
-        level: "warning",
-      });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
-      assert.equal(extension.selectedModels.length, modelCountBefore);
+      assert.equal(extension.commands.has("class"), false);
+      assert.equal(extension.commands.has("class:nope"), false);
+      const classCommands = [...extension.commands.keys()].filter((name) =>
+        name.startsWith("class:"),
+      );
+      assert.deepEqual(classCommands, ["class:middle", "class:low", "class:vision"]);
     } finally {
       extension.restore();
     }
   });
 
-  it("/class の引数なしは選択 UI で class を選ぶ", async () => {
-    const extension = captureAgentsExtension({ config }, { classSelection: "low" });
-    try {
-      await extension.sessionStart();
-      await extension.runClassCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
-      assert.deepEqual(extension.selectedModels.at(-1), {
-        provider: "commandcode",
-        id: "gpt-5.6-luna",
-      });
-    } finally {
-      extension.restore();
-    }
-  });
-
-  it("/class の選択 UI をキャンセルしたら何も変更しない", async () => {
-    const extension = captureAgentsExtension({ config }, { classSelection: undefined });
-    try {
-      await extension.sessionStart();
-      const modelCountBefore = extension.selectedModels.length;
-      await extension.runClassCommand();
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
-      assert.equal(extension.selectedModels.length, modelCountBefore);
-      // キャンセルで新たな通知・モデル適用は起きない（notifications は sessionStart の1件のみ）
-      assert.deepEqual(extension.notifications, ["agent model → zai/glm-5.2"]);
-    } finally {
-      extension.restore();
-    }
-  });
-
-  it("UI のない環境で /class の引数を省略するとエラーを通知して変更しない", async () => {
+  it("selects /class:low without a UI", async () => {
     const extension = captureAgentsExtension();
     try {
-      await extension.sessionStart();
       extension.context.hasUI = false;
-      await extension.runClassCommand();
-      assert.deepEqual(extension.notificationEvents.at(-1), {
-        message: "usage: /class <class-name>",
-        level: "error",
-      });
-      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: middle (auto)"]);
+      await extension.sessionStart();
+      await extension.runClassCommand("low");
+      assert.deepEqual(extension.context.model, { provider: "commandcode", id: "gpt-5.6-luna" });
+      assert.deepEqual(extension.agentWidget(), ["🤖 agent: manager", "💎 class: low (manual)"]);
+      assert.deepEqual(extension.notifications, []);
     } finally {
       extension.restore();
     }
@@ -2237,7 +2385,7 @@ describe("class 選択", () => {
     }
   });
 
-  it("/class で全候補が不成立なら現在のモデルを維持し warning を通知する", async () => {
+  it("preserves the model and warns when /class:low has no available candidate", async () => {
     const extension = captureAgentsExtension({ config }, { findModel: () => undefined });
     try {
       extension.context.model = { provider: "external", id: "kept" };
@@ -2397,7 +2545,7 @@ describe("class 選択", () => {
     }
   });
 
-  it("/class の切り替えは cooldown を維持する", async () => {
+  it("preserves cooldowns when switching named classes", async () => {
     const extension = captureAgentsExtension();
     try {
       await extension.sessionStart();

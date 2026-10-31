@@ -1721,57 +1721,29 @@ export default function agentsExtension(
     });
   }
 
-  pi.registerCommand("class", {
-    description: "Switch the effective class.",
-    handler: async (args, ctx) => {
-      const name = args.trim();
-      if (!name) {
-        if (!ctx.hasUI) {
-          ctx.ui.notify("usage: /class <class-name>", "error");
-          return;
-        }
-        const selected = await ctx.ui.select(
-          "Pick class:",
-          Object.keys(config.modes[currentMode]!),
-        );
-        if (!selected) return;
-        await requestClassChange(pi.events, { class: selected, context: ctx, source: "manual" });
-        return;
-      }
-      if (!Object.hasOwn(config.modes[currentMode]!, name)) {
-        ctx.ui.notify(`unknown class: ${name}`, "warning");
-        return;
-      }
-      await requestClassChange(pi.events, { class: name, context: ctx, source: "manual" });
-    },
-  });
+  for (const className of Object.keys(config.modes[config.defaultMode]!)) {
+    pi.registerCommand(`class:${className}`, {
+      description: `Switch the effective class to ${className}.`,
+      handler: async (_args, ctx) => {
+        await requestClassChange(pi.events, { class: className, context: ctx, source: "manual" });
+      },
+    });
+  }
 
-  pi.registerCommand("mode", {
-    description: "Switch the effective agent mode.",
-    handler: async (args, ctx) => {
-      let name = args.trim();
-      if (!name) {
-        if (!ctx.hasUI) {
-          ctx.ui.notify("usage: /mode <mode-name>", "error");
-          return;
-        }
-        const selected = await ctx.ui.select("Pick mode:", Object.keys(config.modes));
-        if (!selected) return;
-        name = selected;
-      }
-      if (!Object.hasOwn(config.modes, name)) {
-        ctx.ui.notify(`unknown mode: ${name}`, "warning");
-        return;
-      }
-      await enqueueRoutingChange(async () => {
-        if (ctx.signal?.aborted) return;
-        currentMode = name;
-        manual = false;
-        selectionSource = "manual";
-        tuiHandle?.requestRender();
-        await applyCurrentClass(ctx);
-        if (ctx.hasUI) ctx.ui.notify(`agent mode → ${currentMode}`, "info");
-      });
-    },
-  });
+  for (const mode of Object.keys(config.modes)) {
+    pi.registerCommand(`mode:${mode}`, {
+      description: `Switch the effective agent mode to ${mode}.`,
+      handler: async (_args, ctx) => {
+        await enqueueRoutingChange(async () => {
+          if (ctx.signal?.aborted) return;
+          currentMode = mode;
+          manual = false;
+          selectionSource = "manual";
+          tuiHandle?.requestRender();
+          await applyCurrentClass(ctx);
+          if (ctx.hasUI) ctx.ui.notify(`agent mode → ${currentMode}`, "info");
+        });
+      },
+    });
+  }
 }
