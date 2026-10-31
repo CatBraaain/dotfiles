@@ -1,8 +1,8 @@
-// Smoke test for the built static catalog (npm run storybook:build): the
+// Smoke test for the built static catalog (`bun run storybook:build`): the
 // storybook-static output must serve standalone and render the spec's states
-// without the extension host. Skipped when the static build is absent (run
-// `npm test`, which builds it first).
-import { existsSync } from "node:fs";
+// without the extension host. Skipped when the static build is absent or
+// stale (`bun run test`, which rebuilds it first).
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,7 +10,7 @@ import { extname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const staticDir = join(process.cwd(), "storybook-static");
-const indexAvailable = existsSync(join(staticDir, "index.json"));
+const indexFile = join(staticDir, "index.json");
 
 const mime: Record<string, string> = {
   ".html": "text/html",
@@ -21,7 +21,39 @@ const mime: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-describe.skipIf(!indexAvailable)("storybook static catalog smoke", () => {
+// A stale static build renders old DOM and silently fails selector waits, so
+// skip unless the catalog is newer than its inputs (stories, webview sources,
+// Storybook config).
+function newestMtimeMs(dir: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    const mtimeMs =
+      entry.isDirectory() && !entry.isSymbolicLink()
+        ? newestMtimeMs(entryPath)
+        : statSync(entryPath).mtimeMs;
+    if (mtimeMs > newest) newest = mtimeMs;
+  }
+  return newest;
+}
+
+const staticBuildFresh =
+  existsSync(indexFile) &&
+  ["stories", "src", ".storybook"].every((inputDir) => {
+    const inputPath = join(process.cwd(), inputDir);
+    return (
+      existsSync(inputPath) &&
+      statSync(indexFile).mtimeMs >= newestMtimeMs(inputPath)
+    );
+  });
+
+if (!staticBuildFresh) {
+  console.warn(
+    "Skipping storybook static catalog smoke: storybook-static is missing or older than its inputs. Run `bun run test` to rebuild it first.",
+  );
+}
+
+describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   let server: ReturnType<typeof createServer> | undefined;
   let baseUrl = "";
   let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined;
