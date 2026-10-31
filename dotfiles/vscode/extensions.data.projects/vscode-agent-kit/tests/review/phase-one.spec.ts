@@ -8,22 +8,17 @@ test.use({ trace: "on" });
 const SCM_EVIDENCE_SCOPE =
   "A/B evidence covers visible repositories with Graph Auto only. Hidden repositories, fixed Graph selection and active repository pin remain unmet and were not executed in this run. Owner decision is pending (G1). This note does not resolve G1 or the real assistant response gap (G3).";
 
-test("同名の本体・worktree フォルダを見分け、active 0 件の作業先の履歴を All モードで開ける", async ({
+test("同名の本体・worktree フォルダを見分け、未アーカイブ 0 件の作業先の履歴を All モードで開ける", async ({
   host,
 }, testInfo) => {
   await test.step("Read the full paths of the two project folders", async () => {
     const frame = await host.sessionFrame();
+    await expect(frame.getByText(host.sessions.A.cwd, { exact: true })).toBeVisible();
+    await expect(frame.getByText(host.sessions.B.cwd, { exact: true })).toBeVisible();
     await expect(
-      frame.getByText(host.sessions.A.cwd, { exact: true }),
-    ).toBeVisible();
-    await expect(
-      frame.getByText(host.sessions.B.cwd, { exact: true }),
-    ).toBeVisible();
-    await expect(
-      frame.getByText(
-        "No active sessions. Select All to browse saved sessions.",
-        { exact: true },
-      ),
+      frame.getByText("No unarchived sessions. Select All to browse saved sessions.", {
+        exact: true,
+      }),
     ).toBeVisible();
     await testInfo.attach("Distinct work folders", {
       body: await host.page.screenshot(),
@@ -35,14 +30,9 @@ test("同名の本体・worktree フォルダを見分け、active 0 件の作�
     const group = frame
       .locator("section.group")
       .filter({ has: frame.getByText(host.sessions.B.cwd, { exact: true }) });
-    await group
-      .locator('[data-mode="all"]')
-      .describe("Worktree history")
-      .click({ steps: 15 });
+    await group.locator('[data-mode="all"]').describe("Worktree history").click({ steps: 15 });
     await expect(
-      frame
-        .locator(`[data-session="${host.sessions.B.id}"]`)
-        .describe("Saved inactive B session"),
+      frame.locator(`[data-session="${host.sessions.B.id}"]`).describe("Saved inactive B session"),
     ).toBeVisible();
     await testInfo.attach("Inactive history", {
       body: await host.page.screenshot(),
@@ -78,9 +68,8 @@ test("A/B の会話選択で実 Pi の Terminal を再利用し、ネイティ�
           () =>
             host
               .snapshot()
-              .repositories.find(
-                (repository) => repository.root === host.sessions[key].cwd,
-              )?.selected,
+              .repositories.find((repository) => repository.root === host.sessions[key].cwd)
+              ?.selected,
         )
         .toBe(true);
       await expect(
@@ -102,15 +91,9 @@ test("A/B の会話選択で実 Pi の Terminal を再利用し、ネイティ�
     });
     await test.step(`Check the real ${key} Pi process cwd and PID reuse`, async () => {
       await expect
-        .poll(() =>
-          host
-            .piProcesses()
-            .some((process) => process.cwd === host.sessions[key].cwd),
-        )
+        .poll(() => host.piProcesses().some((process) => process.cwd === host.sessions[key].cwd))
         .toBe(true);
-      const pi = host
-        .piProcesses()
-        .find((process) => process.cwd === host.sessions[key].cwd)!;
+      const pi = host.piProcesses().find((process) => process.cwd === host.sessions[key].cwd)!;
       const priorPid = firstPids.get(key);
       if (priorPid !== undefined) expect(pi.pid).toBe(priorPid);
       else firstPids.set(key, pi.pid);
@@ -132,22 +115,16 @@ test("A/B の会話選択で実 Pi の Terminal を再利用し、ネイティ�
       await terminalInput.pressSequentially("/session", { delay: 120 });
       await terminalInput.press("Enter");
       await expect
-        .poll(async () =>
-          (await host.page.locator("body").innerText()).replace(/\s/g, ""),
-        )
+        .poll(async () => (await host.page.locator("body").innerText()).replace(/\s/g, ""))
         .toContain(host.sessions[key].session);
       await testInfo.attach(`${key} Pi session info`, {
         body: await host.page.screenshot(),
         contentType: "image/png",
       });
       expect(
-        readFileSync(host.sessions[key].session, "utf8").startsWith(
-          host.sessions[key].original,
-        ),
+        readFileSync(host.sessions[key].session, "utf8").startsWith(host.sessions[key].original),
       ).toBe(true);
-      expect(host.gitState(host.sessions[key].cwd)).toBe(
-        host.gitBefore[host.sessions[key].cwd],
-      );
+      expect(host.gitState(host.sessions[key].cwd)).toBe(host.gitBefore[host.sessions[key].cwd]);
     });
   }
 });
@@ -156,18 +133,14 @@ test("SCM の非表示リポジトリ・固定 Graph・active pin は未達: 未
   test.skip(true, SCM_EVIDENCE_SCOPE);
 });
 
-test("SCM から Sessions へ戻っても、Refresh なしで一覧を復元する", async ({
-  host,
-}, testInfo) => {
+test("SCM から Sessions へ戻っても、Refresh なしで一覧を復元する", async ({ host }, testInfo) => {
   for (const key of ["B", "A", "B", "A"]) {
     await test.step(`Return from SCM and select ${key} without Refresh`, async () => {
       await host.selectSession(key);
       await host.expectDiff(key);
       const frame = await host.sessionFrame();
       await expect(frame.locator("section.group")).toHaveCount(4);
-      await expect(
-        frame.getByText(host.sessions.B.cwd, { exact: true }),
-      ).toBeVisible();
+      await expect(frame.getByText(host.sessions.B.cwd, { exact: true })).toBeVisible();
       await testInfo.attach(`${key} list restored`, {
         body: await host.page.screenshot(),
         contentType: "image/png",
@@ -202,53 +175,52 @@ test("会話選択を受け付けた時点のエディタが、対象の変更�
   });
 });
 
-test("単一ルートへの明示的なフォルダ追加が、拡張 host 再起動後の再選択でも成立する", { tag: "@single-root" }, async ({
-  host,
-}, testInfo) => {
-  await test.step("Open an unregistered session without adding its folder", async () => {
-    await host.selectSession("External");
-    await expect(
-      host.page
+test(
+  "単一ルートへの明示的なフォルダ追加が、拡張 host 再起動後の再選択でも成立する",
+  { tag: "@single-root" },
+  async ({ host }, testInfo) => {
+    await test.step("Open an unregistered session without adding its folder", async () => {
+      await host.selectSession("External");
+      await expect(
+        host.page
+          .getByRole("button", { name: "Add folder to workspace", exact: true })
+          .describe("Explicit add-folder action"),
+      ).toBeVisible();
+      expect(host.snapshot().folders).toEqual([host.sessions.A.cwd]);
+      await testInfo.attach("Explicit consent required", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+    });
+    const previousHostPid = host.snapshot().hostPid;
+    await test.step("Explicitly add the folder and observe a new extension host", async () => {
+      await host.page
         .getByRole("button", { name: "Add folder to workspace", exact: true })
-        .describe("Explicit add-folder action"),
-    ).toBeVisible();
-    expect(host.snapshot().folders).toEqual([host.sessions.A.cwd]);
-    await testInfo.attach("Explicit consent required", {
-      body: await host.page.screenshot(),
-      contentType: "image/png",
+        .click({ steps: 15 });
+      await expect.poll(() => host.snapshot().folders).toContain(host.sessions.External.cwd);
+      await expect
+        .poll(() => host.snapshot().hostPid, { timeout: 30_000 })
+        .not.toBe(previousHostPid);
     });
-  });
-  const previousHostPid = host.snapshot().hostPid;
-  await test.step("Explicitly add the folder and observe a new extension host", async () => {
-    await host.page
-      .getByRole("button", { name: "Add folder to workspace", exact: true })
-      .click({ steps: 15 });
-    await expect
-      .poll(() => host.snapshot().folders)
-      .toContain(host.sessions.External.cwd);
-    await expect
-      .poll(() => host.snapshot().hostPid, { timeout: 30_000 })
-      .not.toBe(previousHostPid);
-  });
-  await test.step("Reselect the session after the host restart", async () => {
-    await host.selectSession("External");
-    await host.expectDiff("External");
-    await expect
-      .poll(
-        () =>
-          host
-            .snapshot()
-            .repositories.find(
-              (repository) => repository.root === host.sessions.External.cwd,
-            )?.selected,
-      )
-      .toBe(true);
-    await testInfo.attach("Reselected after restart", {
-      body: await host.page.screenshot(),
-      contentType: "image/png",
+    await test.step("Reselect the session after the host restart", async () => {
+      await host.selectSession("External");
+      await host.expectDiff("External");
+      await expect
+        .poll(
+          () =>
+            host
+              .snapshot()
+              .repositories.find((repository) => repository.root === host.sessions.External.cwd)
+              ?.selected,
+        )
+        .toBe(true);
+      await testInfo.attach("Reselected after restart", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
     });
-  });
-});
+  },
+);
 
 test("New Session がフルパス候補を出し、キャンセル・無効な開始先・別フォルダ選択を安全に扱う", async ({
   host,
@@ -256,14 +228,10 @@ test("New Session がフルパス候補を出し、キャンセル・無効な�
   await test.step("Inspect the native start candidates and cancel", async () => {
     await openNew(host);
     await expect(
-      host.page
-        .locator(".quick-input-list")
-        .getByText(host.sessions.A.cwd, { exact: true }),
+      host.page.locator(".quick-input-list").getByText(host.sessions.A.cwd, { exact: true }),
     ).toBeVisible();
     await expect(
-      host.page
-        .locator(".quick-input-list")
-        .getByText(host.sessions.B.cwd, { exact: true }),
+      host.page.locator(".quick-input-list").getByText(host.sessions.B.cwd, { exact: true }),
     ).toBeVisible();
     await testInfo.attach("Start candidates", {
       body: await host.page.screenshot(),
@@ -299,12 +267,8 @@ test("New Session がフルパス候補を出し、キャンセル・無効な�
   });
   await test.step("Choose another folder and start real unauthenticated Pi there", async () => {
     await openNew(host);
-    await host.page
-      .getByText("Choose another folder…", { exact: true })
-      .click({ steps: 15 });
-    const input = host.page
-      .locator(".quick-input-widget input")
-      .describe("Another folder path");
+    await host.page.getByText("Choose another folder…", { exact: true }).click({ steps: 15 });
+    const input = host.page.locator(".quick-input-widget input").describe("Another folder path");
     await input.press("Control+a");
     await input.pressSequentially(join(host.directory, "other") + "/", {
       delay: 120,
@@ -312,9 +276,7 @@ test("New Session がフルパス候補を出し、キャンセル・無効な�
     await host.page.keyboard.press("Enter");
     await expect
       .poll(() =>
-        host
-          .piProcesses()
-          .some((process) => process.cwd === join(host.directory, "other")),
+        host.piProcesses().some((process) => process.cwd === join(host.directory, "other")),
       )
       .toBe(true);
     await testInfo.attach("Pi started in another folder", {
@@ -330,11 +292,7 @@ test("New Session がフルパス候補を出し、キャンセル・無効な�
       .describe("Worktree start candidate")
       .click({ steps: 15 });
     await expect
-      .poll(() =>
-        host
-          .piProcesses()
-          .some((process) => process.cwd === host.sessions.B.cwd),
-      )
+      .poll(() => host.piProcesses().some((process) => process.cwd === host.sessions.B.cwd))
       .toBe(true);
     await testInfo.attach("Pi started in selected worktree", {
       body: await host.page.screenshot(),
@@ -347,10 +305,7 @@ test("存在しない cwd・削除済みセッションファイルの選択を�
   host,
 }, testInfo) => {
   await test.step("Select a missing work folder and keep terminals and metadata unchanged", async () => {
-    const metadata = readFileSync(
-      join(host.directory, "agent/session-metadata.json"),
-      "utf8",
-    );
+    const metadata = readFileSync(join(host.directory, "agent/session-metadata.json"), "utf8");
     await host.selectSession("Missing");
     await expect(
       host.page
@@ -359,9 +314,9 @@ test("存在しない cwd・削除済みセッションファイルの選択を�
         .first(),
     ).toBeVisible();
     expect(host.snapshot().terminals).toHaveLength(0);
-    expect(
-      readFileSync(join(host.directory, "agent/session-metadata.json"), "utf8"),
-    ).toBe(metadata);
+    expect(readFileSync(join(host.directory, "agent/session-metadata.json"), "utf8")).toBe(
+      metadata,
+    );
   });
   await test.step("Delete only the dummy session after listing it and select the stale row", async () => {
     const frame = await host.sessionFrame();
@@ -386,8 +341,7 @@ test("存在しない cwd・削除済みセッションファイルの選択を�
   });
   await test.step("Compare dummy original files, Git index and worktree contents", async () => {
     for (const [key, session] of Object.entries(host.sessions)) {
-      if (key !== "Deleted")
-        expect(readFileSync(session.session, "utf8")).toBe(session.original);
+      if (key !== "Deleted") expect(readFileSync(session.session, "utf8")).toBe(session.original);
     }
     for (const [cwd, original] of Object.entries(host.gitBefore))
       expect(host.gitState(cwd)).toBe(original);

@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDemoBridge, type DemoBridgeRequest, type DemoState } from "../stories/demoBridge";
 
+interface DemoSession {
+  sessionId: string;
+  displayName: string;
+  isArchived: boolean;
+  isLocked: boolean;
+}
+
 interface CapturedState {
-  groups: { cwd: string; sessions: { sessionId: string; displayName: string; isActive: boolean }[] }[];
+  groups: { cwd: string; sessions: DemoSession[] }[];
 }
 
 interface DemoBridgeHandle {
@@ -32,45 +39,66 @@ function setup() {
   };
 }
 
+function sessions(state: CapturedState): DemoSession[] {
+  return state.groups.flatMap((group) => group.sessions);
+}
+
 function sessionIds(state: CapturedState): string[] {
-  return state.groups.flatMap((group) => group.sessions.map((session) => session.sessionId));
+  return sessions(state).map((session) => session.sessionId);
 }
 
-function activeSessions(state: CapturedState): { sessionId: string; isActive: boolean }[] {
-  return state.groups.flatMap((group) => group.sessions).filter((session) => session.isActive);
-}
-
-const sampleActiveIds = [
-  "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
-  "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
-];
-const projectActiveId = sampleActiveIds[0];
-const projectInactiveId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
+const projectCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
+const projectArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
+const piToolsCurrentId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";
+const piToolsLockedId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
+const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
 
 describe("createDemoBridge", () => {
-  it("sends every session with active marks", () => {
+  it("sends every session with archive and lock marks", () => {
     const { postSessions, last } = setup();
 
     postSessions();
 
-    const state = last();
-    expect(sessionIds(state)).toHaveLength(5);
-    expect(activeSessions(state).map((session) => session.sessionId)).toEqual(sampleActiveIds);
+    expect(sessionIds(last())).toHaveLength(5);
+    expect(
+      sessions(last()).map((session) => [session.sessionId, session.isArchived, session.isLocked]),
+    ).toEqual([
+      [projectCurrentId, false, false],
+      [projectArchivedId, true, false],
+      [piToolsCurrentId, false, false],
+      [piToolsLockedId, false, true],
+      [worktreeId, false, false],
+    ]);
   });
 
-  it("clears only the active mark on archive", () => {
+  it("archives only the requested sessions and skips locked ones", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({ type: "archiveSession", sessionId: projectActiveId });
+    bridge.postMessage({ type: "archiveSessions", sessionIds: [projectCurrentId, piToolsLockedId] });
 
     const state = last();
-    expect(sessionIds(state)).toContain(projectActiveId);
-    const archived = state.groups.flatMap((group) => group.sessions).find((session) => session.sessionId === projectActiveId);
-    expect(archived?.isActive).toBe(false);
-    const stillActive = state.groups
-      .flatMap((group) => group.sessions)
-      .find((session) => session.sessionId === sampleActiveIds[1]);
-    expect(stillActive?.isActive).toBe(true);
+    expect(sessionIds(state)).toContain(projectCurrentId);
+    const archived = sessions(state).find((session) => session.sessionId === projectCurrentId);
+    expect(archived?.isArchived).toBe(true);
+    const locked = sessions(state).find((session) => session.sessionId === piToolsLockedId);
+    expect(locked?.isArchived).toBe(false);
+    expect(locked?.isLocked).toBe(true);
+    const untouched = sessions(state).find((session) => session.sessionId === piToolsCurrentId);
+    expect(untouched?.isArchived).toBe(false);
+  });
+
+  it("toggles the lock and unlocks again", () => {
+    const { bridge, last } = setup();
+
+    bridge.postMessage({ type: "setSessionLock", sessionId: projectCurrentId, locked: true });
+    expect(sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked).toBe(
+      true,
+    );
+
+    bridge.postMessage({ type: "setSessionLock", sessionId: projectCurrentId, locked: false });
+    expect(sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked).toBe(
+      false,
+    );
   });
 
   it("ignores openSession requests", () => {
@@ -78,7 +106,7 @@ describe("createDemoBridge", () => {
     postSessions();
     const before = states.length;
 
-    bridge.postMessage({ type: "openSession", sessionId: projectInactiveId });
+    bridge.postMessage({ type: "openSession", sessionId: projectArchivedId });
 
     expect(states.length).toBe(before);
   });
@@ -90,9 +118,9 @@ describe("createDemoBridge", () => {
     postSessions();
     const before = states.length;
 
-    bridge.postMessage({ type: "copySessionId", sessionId: projectActiveId });
+    bridge.postMessage({ type: "copySessionId", sessionId: projectCurrentId });
 
-    expect(writeText).toHaveBeenCalledWith(projectActiveId);
+    expect(writeText).toHaveBeenCalledWith(projectCurrentId);
     expect(states.length).toBe(before);
   });
 
@@ -100,10 +128,14 @@ describe("createDemoBridge", () => {
     const { reset, last } = setup();
 
     reset("sample");
-    expect(activeSessions(last()).map((session) => session.sessionId)).toEqual(sampleActiveIds);
+    expect(
+      sessions(last())
+        .filter((session) => session.isArchived)
+        .map((session) => session.sessionId),
+    ).toEqual([projectArchivedId]);
 
     reset("empty");
-    expect(activeSessions(last())).toEqual([]);
+    expect(sessions(last()).every((session) => session.isArchived)).toBe(true);
     expect(sessionIds(last())).toHaveLength(5);
   });
 
@@ -115,17 +147,18 @@ describe("createDemoBridge", () => {
     bridge.postMessage({ type: "refresh" });
 
     expect(states.length).toBe(before + 1);
-    expect(activeSessions(states.at(-1) as CapturedState).map((session) => session.sessionId)).toEqual(sampleActiveIds);
+    expect(
+      sessions(states.at(-1) as CapturedState).filter((session) => session.isArchived),
+    ).toHaveLength(1);
   });
 
-  it("adds an active row on newSession", () => {
+  it("adds an unarchived row on newSession", () => {
     const { bridge, last } = setup();
 
     bridge.postMessage({ type: "newSession" });
 
-    const rows = last().groups.flatMap((group) => group.sessions);
-    expect(rows.filter((session) => session.isActive)).toHaveLength(3);
-    const added = rows.find((session) => session.displayName === "New Pi session");
-    expect(added?.isActive).toBe(true);
+    const added = sessions(last()).find((session) => session.displayName === "New Pi session");
+    expect(added?.isArchived).toBe(false);
+    expect(added?.isLocked).toBe(false);
   });
 });

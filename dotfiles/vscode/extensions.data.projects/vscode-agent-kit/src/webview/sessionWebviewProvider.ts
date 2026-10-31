@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { activeSessionIds, readMetadataStore, setSessionActive } from "../metadataStore";
+import {
+  archivedSessionIds,
+  archiveSessions,
+  lockedSessionIds,
+  readMetadataStore,
+  setSessionActive,
+  setSessionLocked,
+} from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { createSessionTerminal } from "../terminals";
 import { followWorkTarget, requireWorkDirectory } from "../workTarget";
@@ -36,7 +43,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       enableScripts: true,
       localResourceRoots: [clientRoot],
     };
-    const scriptUri = webviewView.webview.asWebviewUri(vscode.Uri.joinPath(clientRoot, "webview", "client.js"));
+    const scriptUri = webviewView.webview.asWebviewUri(
+      vscode.Uri.joinPath(clientRoot, "webview", "client.js"),
+    );
     webviewView.onDidDispose(() => {
       if (this.view === webviewView) this.view = undefined;
     });
@@ -71,11 +80,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
-    const activeIds = metadata.status === "ok" ? activeSessionIds(metadata.data) : new Set<string>();
+    const archivedIds =
+      metadata.status === "ok" ? archivedSessionIds(metadata.data) : new Set<string>();
+    const lockedIds =
+      metadata.status === "ok" ? lockedSessionIds(metadata.data) : new Set<string>();
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.post({
       type: "sessions",
-      state: { groups: sessionViewGroups(sessions, activeIds) },
+      state: { groups: sessionViewGroups(sessions, archivedIds, lockedIds) },
     });
   }
 
@@ -88,7 +100,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     if (request.type === "newSession") {
       try {
-        await this.deps.startNewSession([...new Set([...this.sessionsById.values()].map((session) => session.cwd))]);
+        await this.deps.startNewSession([
+          ...new Set([...this.sessionsById.values()].map((session) => session.cwd)),
+        ]);
       } catch (error) {
         this.postError(`Failed to start Pi session: ${errorMessage(error)}`);
       }
@@ -104,11 +118,40 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     if (request.type === "openSession") {
       const editorUri = vscode.window.activeTextEditor?.document.uri;
-      this.sessionSelection = this.sessionSelection.then(() => this.openSession(request.sessionId, editorUri));
+      this.sessionSelection = this.sessionSelection.then(() =>
+        this.openSession(request.sessionId, editorUri),
+      );
       await this.sessionSelection;
       return;
     }
-    await this.archiveSession(request.sessionId);
+    if (request.type === "setSessionLock") {
+      if (!this.sessionsById.has(request.sessionId)) {
+        this.postError(`Session not found: ${request.sessionId}`);
+        return;
+      }
+      const result = setSessionLocked(this.deps.metadataPath, request.sessionId, request.locked);
+      if (!result.ok) {
+        this.postError(result.message);
+        return;
+      }
+      await this.refresh();
+      return;
+    }
+    if (request.type === "archiveSessions") {
+      const sessionIds = [...new Set(request.sessionIds)];
+      const unknown = sessionIds.find((sessionId) => !this.sessionsById.has(sessionId));
+      if (unknown !== undefined) {
+        this.postError(`Session not found: ${unknown}`);
+        return;
+      }
+      const result = archiveSessions(this.deps.metadataPath, sessionIds);
+      if (!result.ok) {
+        this.postError(result.message);
+        return;
+      }
+      await this.refresh();
+      return;
+    }
   }
 
   private async openSession(sessionId: string, editorUri: vscode.Uri | undefined): Promise<void> {
@@ -148,19 +191,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     } catch (error) {
       this.postError(`Failed to show session files or changes: ${errorMessage(error)}`);
     }
-  }
-
-  private async archiveSession(sessionId: string): Promise<void> {
-    if (!this.sessionsById.has(sessionId)) {
-      this.postError(`Session not found: ${sessionId}`);
-      return;
-    }
-    const result = setSessionActive(this.deps.metadataPath, sessionId, false);
-    if (!result.ok) {
-      this.postError(result.message);
-      return;
-    }
-    await this.refresh();
   }
 
   private post(message: ExtensionMessage): void {

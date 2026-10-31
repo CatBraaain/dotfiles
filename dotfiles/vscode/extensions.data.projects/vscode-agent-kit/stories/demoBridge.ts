@@ -8,10 +8,18 @@ import { sessionViewGroups } from "../src/webview/sessionViewData";
 /** Demo state a story starts from (SPEC.md「静的プレビュー」表 1 行目). */
 export type DemoState = "sample" | "empty";
 
+/** Per-session demo metadata: explicit archive and archive-protection lock. */
+interface DemoEntry {
+  archived: boolean;
+  locked: boolean;
+}
+
 /** Request from the webview client, same protocol as the extension host side. */
 export interface DemoBridgeRequest {
   type: string;
   sessionId?: string;
+  sessionIds?: string[];
+  locked?: boolean;
 }
 
 /** Bridge shape the webview client consumes (ClientBridge-compatible). */
@@ -62,7 +70,14 @@ const sampleSessions: SessionSummary[] = [
   },
 ];
 
-const ACTIVE_SAMPLE_IDS = new Set(["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72"]);
+const UNARCHIVED: DemoEntry = { archived: false, locked: false };
+const SAMPLE_METADATA = new Map<string, DemoEntry>([
+  ["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", UNARCHIVED],
+  ["2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", { archived: true, locked: false }],
+  ["3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72", UNARCHIVED],
+  ["4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83", { archived: false, locked: true }],
+  ["5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94", UNARCHIVED],
+]);
 
 function cloneStore(sessions: SessionSummary[]): SessionSummary[] {
   return sessions.map((session) => ({ ...session }));
@@ -76,11 +91,24 @@ export function createDemoBridge(): {
 } {
   let listener: (message: { type?: string; state?: unknown }) => void = () => {};
   let store: SessionSummary[] = cloneStore(sampleSessions);
-  let activeIds = new Set(ACTIVE_SAMPLE_IDS);
+  let metadata = new Map<string, DemoEntry>(SAMPLE_METADATA);
 
   function postSessions(): void {
-    // Same projection as the provider's: every session with active marks.
-    listener({ type: "sessions", state: { groups: sessionViewGroups(store, activeIds) } });
+    // Same projection as the provider's: every session with archive and lock marks.
+    const archivedIds = new Set(
+      [...metadata].filter(([, entry]) => entry.archived).map(([sessionId]) => sessionId),
+    );
+    const lockedIds = new Set(
+      [...metadata].filter(([, entry]) => entry.locked).map(([sessionId]) => sessionId),
+    );
+    listener({
+      type: "sessions",
+      state: { groups: sessionViewGroups(store, archivedIds, lockedIds) },
+    });
+  }
+
+  function entryOf(sessionId: string): DemoEntry {
+    return metadata.get(sessionId) ?? UNARCHIVED;
   }
 
   function handleRequest(request: DemoBridgeRequest): void {
@@ -93,8 +121,23 @@ export function createDemoBridge(): {
       void navigator.clipboard?.writeText(request.sessionId);
       return;
     }
-    if (request.type === "archiveSession" && typeof request.sessionId === "string") {
-      activeIds.delete(request.sessionId);
+    if (
+      request.type === "setSessionLock" &&
+      typeof request.sessionId === "string" &&
+      typeof request.locked === "boolean"
+    ) {
+      const entry = entryOf(request.sessionId);
+      metadata.set(request.sessionId, { ...entry, locked: request.locked });
+      postSessions();
+      return;
+    }
+    if (request.type === "archiveSessions" && Array.isArray(request.sessionIds)) {
+      for (const sessionId of request.sessionIds) {
+        if (typeof sessionId !== "string") continue;
+        const entry = entryOf(sessionId);
+        if (entry.locked) continue; // the same host-side lock guard as the provider
+        metadata.set(sessionId, { ...entry, archived: true });
+      }
       postSessions();
       return;
     }
@@ -107,7 +150,7 @@ export function createDemoBridge(): {
         mtimeMs: Date.now(),
       };
       store = [session, ...store];
-      activeIds = new Set([...activeIds, session.sessionId]);
+      metadata.set(session.sessionId, UNARCHIVED);
       postSessions();
     }
     // openSession and unknown requests are ignored: nothing to open in the catalog.
@@ -116,7 +159,12 @@ export function createDemoBridge(): {
   /** Reset to a demo state. */
   function reset(demoState: DemoState): void {
     store = cloneStore(sampleSessions);
-    activeIds = demoState === "sample" ? new Set(ACTIVE_SAMPLE_IDS) : new Set();
+    metadata = new Map(
+      [...SAMPLE_METADATA].map(([sessionId, entry]) => [
+        sessionId,
+        demoState === "sample" ? { ...entry } : { ...entry, archived: true },
+      ]),
+    );
     postSessions();
   }
 

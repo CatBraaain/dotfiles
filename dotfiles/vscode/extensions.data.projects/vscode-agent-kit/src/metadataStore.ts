@@ -13,9 +13,13 @@ import { errorMessage, isRecord } from "./guards";
  * {
  *   "version": 1,
  *   "sessions": {
- *     "<session-id>": { "active": true }
+ *     "<session-id>": { "active": false, "locked": true }
  *   }
  * }
+ *
+ * `active: false` marks a session as archived (explicit archive only; a
+ * missing entry or flag means unarchived). `locked: true` protects a session
+ * from being archived until it is unlocked.
  *
  * Unknown top-level keys and unknown per-session attributes are preserved on
  * rewrite. Concurrent writers follow last-write-wins semantics (each write is
@@ -61,7 +65,10 @@ export function readMetadataStore(path: string): MetadataReadResult {
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    return { status: "error", message: `${basename(path)} is not valid JSON: ${errorMessage(error)}` };
+    return {
+      status: "error",
+      message: `${basename(path)} is not valid JSON: ${errorMessage(error)}`,
+    };
   }
   if (!isRecord(parsed)) {
     return { status: "error", message: `${basename(path)} must contain a JSON object` };
@@ -96,14 +103,18 @@ export function writeMetadataStore(path: string, data: MetadataStoreData): void 
 }
 
 /**
- * Read-modify-write a single session's `active` flag.
- * - Missing file: create the store fresh (version 1).
- * - Unreadable/unparseable file or write failure: nothing is written,
- *   `{ ok: false }` is returned so the caller can surface the error.
- * - The entry itself, its other attributes, other sessions, and unknown
- *   top-level keys are all preserved.
+ * Read-modify-write session entries. `update` mutates the given `sessions`
+ * map and returns whether anything changed; when it returns false no write
+ * happens. Missing file: create the store fresh (version 1).
+ * Unreadable/unparseable file or write failure: nothing is written,
+ * `{ ok: false }` is returned so the caller can surface the error.
+ * Unknown attributes, other sessions, and unknown top-level keys are
+ * preserved.
  */
-export function setSessionActive(path: string, sessionId: string, active: boolean): MetadataUpdateResult {
+function updateSessions(
+  path: string,
+  update: (sessions: Record<string, SessionMetadata>) => boolean,
+): MetadataUpdateResult {
   const read = readMetadataStore(path);
   if (read.status === "error") {
     return { ok: false, message: read.message };
@@ -111,7 +122,9 @@ export function setSessionActive(path: string, sessionId: string, active: boolea
   const base: MetadataStoreData =
     read.status === "ok" ? structuredClone(read.data) : { version: 1, sessions: {} };
   const sessions: Record<string, SessionMetadata> = { ...base.sessions };
-  sessions[sessionId] = { ...sessions[sessionId], active };
+  if (!update(sessions)) {
+    return { ok: true, data: read.status === "ok" ? read.data : base };
+  }
   const next: MetadataStoreData = { ...base, sessions };
   if (next.version === undefined) {
     next.version = 1;
@@ -124,11 +137,68 @@ export function setSessionActive(path: string, sessionId: string, active: boolea
   return { ok: true, data: next };
 }
 
-/** Session IDs whose `active` attribute is truthy (missing/falsy = inactive). */
-export function activeSessionIds(data: MetadataStoreData | undefined): Set<string> {
+/**
+ * Read-modify-write a single session's `active` flag (true = unarchived,
+ * used when a session is opened or detected as new).
+ */
+export function setSessionActive(
+  path: string,
+  sessionId: string,
+  active: boolean,
+): MetadataUpdateResult {
+  return updateSessions(path, (sessions) => {
+    sessions[sessionId] = { ...sessions[sessionId], active };
+    return true;
+  });
+}
+
+/** Read-modify-write a single session's `locked` flag (archive protection). */
+export function setSessionLocked(
+  path: string,
+  sessionId: string,
+  locked: boolean,
+): MetadataUpdateResult {
+  return updateSessions(path, (sessions) => {
+    sessions[sessionId] = { ...sessions[sessionId], locked };
+    return true;
+  });
+}
+
+/**
+ * Archive the given sessions in one metadata write. Each session is checked
+ * against the freshly read store: locked sessions are skipped, so a stale UI
+ * or a direct message cannot archive them. Returns without writing when every
+ * requested session is locked.
+ */
+export function archiveSessions(path: string, sessionIds: readonly string[]): MetadataUpdateResult {
+  return updateSessions(path, (sessions) => {
+    let archivedAny = false;
+    for (const sessionId of sessionIds) {
+      const entry = sessions[sessionId];
+      if (isRecord(entry) && entry.locked) continue;
+      sessions[sessionId] = { ...entry, active: false };
+      archivedAny = true;
+    }
+    return archivedAny;
+  });
+}
+
+/** Session IDs whose `active` attribute is explicitly false (missing/truthy = unarchived). */
+export function archivedSessionIds(data: MetadataStoreData | undefined): Set<string> {
   const ids = new Set<string>();
   for (const [id, entry] of Object.entries(data?.sessions ?? {})) {
-    if (isRecord(entry) && entry.active) {
+    if (isRecord(entry) && entry.active === false) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/** Session IDs whose `locked` attribute is truthy. */
+export function lockedSessionIds(data: MetadataStoreData | undefined): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, entry] of Object.entries(data?.sessions ?? {})) {
+    if (isRecord(entry) && entry.locked) {
       ids.add(id);
     }
   }

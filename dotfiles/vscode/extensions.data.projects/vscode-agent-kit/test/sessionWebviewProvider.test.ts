@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readMetadataStore, setSessionActive } from "../src/metadataStore";
+import { readMetadataStore, setSessionActive, setSessionLocked } from "../src/metadataStore";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
@@ -42,6 +42,7 @@ vi.mock("vscode", () => ({
 
 const activeSessionId = "00000000-0000-4000-8000-000000000001";
 const inactiveSessionId = "00000000-0000-4000-8000-000000000002";
+const unknownSessionId = "00000000-0000-4000-8000-000000000099";
 let root: string;
 
 beforeEach(async () => {
@@ -97,7 +98,9 @@ function createView() {
   };
 }
 
-function createProvider(deps: Partial<ConstructorParameters<typeof SessionWebviewProvider>[0]> = {}) {
+function createProvider(
+  deps: Partial<ConstructorParameters<typeof SessionWebviewProvider>[0]> = {},
+) {
   const metadataPath = deps.metadataPath ?? join(root, "session-metadata.json");
   const provider = new SessionWebviewProvider({
     extensionUri: root,
@@ -127,45 +130,177 @@ describe("SessionWebviewProvider", () => {
     expect(html).toContain(`src="vscode-webview://test${root}/dist-webview/webview/client.js"`);
   });
 
-  it("sends every session with active marks and refreshes after archiving", async () => {
+  it("sends unregistered sessions as unarchived and archived ones from metadata, then archives on request", async () => {
     const sessionDir = join(root, "sessions");
-    const activePath = await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    await writeJsonl(join(sessionDir, "project"), "inactive.jsonl", [header({ id: inactiveSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "second.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
     const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
+    expect(setSessionActive(metadataPath, inactiveSessionId, false).ok).toBe(true);
 
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(2);
-    await webview.receive({ type: "setMode", mode: "all" });
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(2);
+    const sentSessions = () =>
+      webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
+        sessionId: string;
+        isArchived: boolean;
+      }[];
+    expect(
+      sentSessions()
+        .map((session) => [session.sessionId, session.isArchived])
+        .sort(([a], [b]) => (a < b ? -1 : 1)),
+    ).toEqual([
+      [activeSessionId, false],
+      [inactiveSessionId, true],
+    ]);
 
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
+
     const metadata = readMetadataStore(metadataPath);
-    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(false);
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isActive).toBe(false);
-    await expect(rm(activePath)).resolves.toBeUndefined();
+    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(
+      false,
+    );
+    expect(
+      sentSessions().find((session) => session.sessionId === activeSessionId)?.isArchived,
+    ).toBe(true);
+  });
+
+  it("archives a requested batch in one write, skipping locked sessions", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    await writeJsonl(join(sessionDir, "project"), "second.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(setSessionLocked(metadataPath, activeSessionId, true).ok).toBe(true);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    await webview.receive({
+      type: "archiveSessions",
+      sessionIds: [activeSessionId, inactiveSessionId],
+    });
+
+    const metadata = readMetadataStore(metadataPath);
+    if (metadata.status !== "ok") throw new Error("expected ok metadata");
+    expect(metadata.data.sessions?.[activeSessionId]).toEqual({ locked: true });
+    expect(metadata.data.sessions?.[inactiveSessionId]).toEqual({ active: false });
+    const sentSessions = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
+      sessionId: string;
+      isArchived: boolean;
+      isLocked: boolean;
+    }[];
+    expect(sentSessions.find((session) => session.sessionId === activeSessionId)).toMatchObject({
+      isArchived: false,
+      isLocked: true,
+    });
+  });
+
+  it("rejects an archive batch with an unknown session id without writing", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    await webview.receive({
+      type: "archiveSessions",
+      sessionIds: [activeSessionId, unknownSessionId],
+    });
+
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      `Session not found: ${unknownSessionId}`,
+    );
+    expect(readMetadataStore(metadataPath).status).toBe("empty");
+  });
+
+  it("persists lock and unlock requests and refreshes the marks", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: true });
+
+    const metadata = readMetadataStore(metadataPath);
+    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].locked).toBe(true);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isLocked).toBe(
+      true,
+    );
+
+    await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: false });
+
+    const unlocked = readMetadataStore(metadataPath);
+    expect(unlocked.status === "ok" && unlocked.data.sessions?.[activeSessionId].locked).toBe(
+      false,
+    );
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isLocked).toBe(
+      false,
+    );
+  });
+
+  it("shows an error and keeps the list when the lock write fails", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    const sessionsCalls = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
+
+    await writeFile(metadataPath, "{ invalid", "utf8");
+    await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: true });
+
+    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
+      /^session-metadata\.json is not valid JSON: /,
+    );
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(sessionsCalls);
   });
 
   it("reflects disk changes on refresh without automatic updates", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const { provider } = createProvider({ sessionDir });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await vi.waitFor(() => {
       expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(true);
     });
-    const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+    const sessionsCalls = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(1);
 
-    await writeJsonl(join(sessionDir, "project"), "second.jsonl", [header({ id: inactiveSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "second.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
     // No file watcher: the displayed list stays as-is until Refresh arrives.
-    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(sessionsCalls);
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(sessionsCalls);
 
     await webview.receive({ type: "refresh" });
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(2);
@@ -173,7 +308,9 @@ describe("SessionWebviewProvider", () => {
 
   it("resends sessions after the recreated client announces it is ready", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const { provider } = createProvider({ sessionDir });
     const firstView = createView();
     provider.resolveWebviewView(firstView.view as never);
@@ -189,7 +326,10 @@ describe("SessionWebviewProvider", () => {
       type: "sessions",
       state: {
         groups: [
-          expect.objectContaining({ cwd: root, sessions: [expect.objectContaining({ sessionId: activeSessionId })] }),
+          expect.objectContaining({
+            cwd: root,
+            sessions: [expect.objectContaining({ sessionId: activeSessionId })],
+          }),
         ],
       },
     });
@@ -197,7 +337,9 @@ describe("SessionWebviewProvider", () => {
 
   it("restores the list after SCM hides the view without requiring Refresh", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const { provider } = createProvider({ sessionDir });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -217,7 +359,9 @@ describe("SessionWebviewProvider", () => {
 
   it("restores active sessions from disk in a new provider after workspace reload", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const original = createProvider({ sessionDir });
     expect(setSessionActive(original.metadataPath, activeSessionId, true).ok).toBe(true);
     original.provider.dispose();
@@ -231,15 +375,42 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toEqual([
-      expect.objectContaining({ sessionId: activeSessionId, isActive: true }),
+      expect.objectContaining({ sessionId: activeSessionId, isArchived: false }),
     ]);
     expect(terminal.show).toHaveBeenCalledTimes(1);
     expect(followWorkTarget).toHaveBeenCalledWith(root, undefined);
   });
 
+  it("restores an archived session to unarchived when it is opened", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
+    vscodeMocks.createTerminal.mockReturnValue(terminal);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(setSessionActive(metadataPath, activeSessionId, false).ok).toBe(true);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+      true,
+    );
+
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+
+    const metadata = readMetadataStore(metadataPath);
+    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(true);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+      false,
+    );
+  });
+
   it("opens the selected editor change even when Terminal.show clears the active editor", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const first = { fsPath: join(root, "first.ts") };
     const selected = { fsPath: join(root, "selected.ts") };
     vscodeMocks.activeTextEditor = { document: { uri: selected } };
@@ -310,7 +481,9 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
     expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(`Session file no longer exists: ${activeSessionId}`);
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      `Session file no longer exists: ${activeSessionId}`,
+    );
   });
 
   it("starts a new session only when the fixed protocol requests it", async () => {
@@ -328,7 +501,9 @@ describe("SessionWebviewProvider", () => {
   it("passes saved cwd candidates to the new-session picker", async () => {
     const startNewSession = vi.fn().mockResolvedValue(undefined);
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "old.jsonl", [header({ id: inactiveSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "old.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
     const { provider } = createProvider({ sessionDir, startNewSession });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -345,18 +520,26 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    const sessionsBefore = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+    const sessionsBefore = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
 
     await webview.receive({ type: "newSession" });
 
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith("Failed to start Pi session: Work folder missing");
-    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(sessionsBefore);
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      "Failed to start Pi session: Work folder missing",
+    );
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(sessionsBefore);
   });
 
   it("does not open a terminal or mark active when the session cwd is missing", async () => {
     const sessionDir = join(root, "sessions");
     const cwd = join(root, "missing");
-    await writeJsonl(join(sessionDir, "project"), "old.jsonl", [header({ id: inactiveSessionId, cwd })]);
+    await writeJsonl(join(sessionDir, "project"), "old.jsonl", [
+      header({ id: inactiveSessionId, cwd }),
+    ]);
     const { provider, metadataPath } = createProvider({ sessionDir });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -374,7 +557,9 @@ describe("SessionWebviewProvider", () => {
 
   it("keeps the opened terminal and active mark when native navigation fails", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "old.jsonl", [header({ id: inactiveSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "old.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
     const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     vi.mocked(followWorkTarget).mockRejectedValueOnce(new Error("Git disabled"));
@@ -386,15 +571,23 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
 
     const metadata = readMetadataStore(metadataPath);
-    expect(metadata.status === "ok" && metadata.data.sessions?.[inactiveSessionId].active).toBe(true);
+    expect(metadata.status === "ok" && metadata.data.sessions?.[inactiveSessionId].active).toBe(
+      true,
+    );
     expect(terminal.show).toHaveBeenCalledTimes(1);
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith("Failed to show session files or changes: Git disabled");
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      "Failed to show session files or changes: Git disabled",
+    );
   });
 
   it("processes overlapping conversation selections in arrival order", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [header({ id: activeSessionId, cwd: root })]);
-    await writeJsonl(join(sessionDir, "project"), "second.jsonl", [header({ id: inactiveSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    await writeJsonl(join(sessionDir, "project"), "second.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
     const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     let finishNavigation: () => void = () => {};
@@ -427,12 +620,16 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+    const sessionsCalls = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
 
     await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
 
     expect(vscodeMocks.clipboardWriteText).toHaveBeenCalledWith(activeSessionId);
-    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(sessionsCalls);
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(sessionsCalls);
   });
 
   it("shows an error and keeps the list when the clipboard write fails", async () => {
@@ -440,14 +637,18 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+    const sessionsCalls = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
     vscodeMocks.clipboardWriteText.mockRejectedValueOnce(new Error("denied"));
 
     await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
 
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith("Failed to copy session ID: denied");
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "error")).toBe(true);
-    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(sessionsCalls);
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(sessionsCalls);
   });
 
   it("shows an error and sends no list when the session directory is unreadable", async () => {
@@ -459,15 +660,22 @@ describe("SessionWebviewProvider", () => {
 
     await provider.refresh();
 
-    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(/^Failed to read Pi sessions: /);
+    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
+      /^Failed to read Pi sessions: /,
+    );
     const lastCall = webview.postMessage.mock.calls.at(-1)?.[0];
-    expect(lastCall).toEqual({ type: "error", message: expect.stringMatching(/^Failed to read Pi sessions: /) });
+    expect(lastCall).toEqual({
+      type: "error",
+      message: expect.stringMatching(/^Failed to read Pi sessions: /),
+    });
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
   });
 
   it("shows an error and sends no list when the metadata store is invalid", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "active.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const metadataPath = join(root, "session-metadata.json");
     await writeFile(metadataPath, "{ invalid", "utf8");
     const { provider } = createProvider({ sessionDir, metadataPath });
@@ -476,27 +684,39 @@ describe("SessionWebviewProvider", () => {
 
     await provider.refresh();
 
-    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(/^session-metadata\.json is not valid JSON: /);
+    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
+      /^session-metadata\.json is not valid JSON: /,
+    );
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
   });
 
   it("shows an error and keeps the list when an archive write fails", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "active.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const { provider, metadataPath } = createProvider({ sessionDir });
     expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    const sessionsCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions").length;
+    const sessionsCalls = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
 
     await writeFile(metadataPath, "{ invalid", "utf8");
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
 
-    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(/^session-metadata\.json is not valid JSON: /);
-    const errorCalls = webview.postMessage.mock.calls.filter((call) => call[0].type === "error").length;
+    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
+      /^session-metadata\.json is not valid JSON: /,
+    );
+    const errorCalls = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "error",
+    ).length;
     expect(errorCalls).toBe(1);
-    expect(webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions")).toHaveLength(sessionsCalls);
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(sessionsCalls);
   });
 
   it("notifies when postMessage reports the webview was not updated", async () => {
@@ -507,7 +727,9 @@ describe("SessionWebviewProvider", () => {
 
     await provider.refresh();
     await vi.waitFor(() => {
-      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith("Failed to update the Sessions view.");
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        "Failed to update the Sessions view.",
+      );
     });
   });
 
@@ -519,13 +741,17 @@ describe("SessionWebviewProvider", () => {
 
     await provider.refresh();
     await vi.waitFor(() => {
-      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith("Failed to update the Sessions view.");
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        "Failed to update the Sessions view.",
+      );
     });
   });
 
   it("keeps the terminal alive after archiving its session", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, "project"), "active.jsonl", [header({ id: activeSessionId, cwd: root })]);
+    await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
     const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     const registry = new TerminalRegistry();
@@ -536,9 +762,15 @@ describe("SessionWebviewProvider", () => {
     await provider.refresh();
 
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
 
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isActive).toBe(false);
+    const sentSessions = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
+      sessionId: string;
+      isArchived: boolean;
+    }[];
+    expect(sentSessions.find((session) => session.sessionId === activeSessionId)?.isArchived).toBe(
+      true,
+    );
     expect(registry.get(activeSessionId)).toBe(terminal);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
   });

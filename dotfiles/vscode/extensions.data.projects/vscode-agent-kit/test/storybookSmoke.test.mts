@@ -21,6 +21,12 @@ const mime: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
+// Sample session ids from stories/demoBridge.ts.
+const atlasCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
+const atlasArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
+const piToolsLockedId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
+const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
+
 // A stale static build renders old DOM and silently fails selector waits, so
 // skip unless the catalog is newer than its inputs (stories, webview sources,
 // Storybook config).
@@ -41,10 +47,7 @@ const staticBuildFresh =
   existsSync(indexFile) &&
   ["stories", "src", ".storybook"].every((inputDir) => {
     const inputPath = join(process.cwd(), inputDir);
-    return (
-      existsSync(inputPath) &&
-      statSync(indexFile).mtimeMs >= newestMtimeMs(inputPath)
-    );
+    return existsSync(inputPath) && statSync(indexFile).mtimeMs >= newestMtimeMs(inputPath);
   });
 
 if (!staticBuildFresh) {
@@ -87,8 +90,272 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
   afterAll(async () => {
     await browser?.close();
-    await new Promise<void>((resolve, reject) => server?.close((error) => (error ? reject(error) : resolve())));
+    await new Promise<void>((resolve, reject) =>
+      server?.close((error) => (error ? reject(error) : resolve())),
+    );
   });
+
+  async function openStory(path: string, viewport?: { width: number; height: number }) {
+    const page = await browser!.newPage(viewport ? { viewport } : undefined);
+    await page.goto(`${baseUrl}/iframe.html?path=/story/${path}`, { waitUntil: "networkidle" });
+    await page.waitForSelector(".session-row");
+    return page;
+  }
+
+  async function installBridgeMessageRecorder(
+    page: Awaited<ReturnType<typeof openStory>>,
+  ): Promise<void> {
+    await page.evaluate(() => {
+      type Fiber = {
+        child: Fiber | null;
+        memoizedProps: unknown;
+        sibling: Fiber | null;
+      };
+      type ClientBridge = { postMessage(message: unknown): void };
+      type TestWindow = Window & { __bridgeMessages?: unknown[] };
+
+      const sessionsRoot = document.querySelector("#sessions");
+      if (!(sessionsRoot instanceof HTMLElement)) {
+        throw new Error("Sessions root is missing.");
+      }
+      const rootKey = Object.keys(sessionsRoot).find((key) => key.startsWith("__reactContainer$"));
+      if (rootKey === undefined) throw new Error("React root is missing.");
+
+      const containerRoot = Reflect.get(sessionsRoot, rootKey) as {
+        stateNode?: { current?: Fiber | null };
+      };
+      const pendingFibers: Fiber[] = [];
+      const currentRoot = containerRoot.stateNode?.current;
+      if (currentRoot?.child) pendingFibers.push(currentRoot.child);
+
+      const bridgeMessages: unknown[] = [];
+      (window as TestWindow).__bridgeMessages = bridgeMessages;
+      while (pendingFibers.length > 0) {
+        const fiber = pendingFibers.pop()!;
+        const props = fiber.memoizedProps;
+        if (typeof props === "object" && props !== null && "bridge" in props) {
+          const bridge = props.bridge as ClientBridge | undefined;
+          if (bridge !== undefined && typeof bridge.postMessage === "function") {
+            const originalPostMessage = bridge.postMessage.bind(bridge);
+            bridge.postMessage = (message) => {
+              bridgeMessages.push(message);
+              originalPostMessage(message);
+            };
+            return;
+          }
+        }
+        if (fiber.child !== null) pendingFibers.push(fiber.child);
+        if (fiber.sibling !== null) pendingFibers.push(fiber.sibling);
+      }
+      throw new Error("Mounted webview bridge is missing.");
+    });
+  }
+
+  async function clearBridgeMessages(page: Awaited<ReturnType<typeof openStory>>): Promise<void> {
+    await page.evaluate(() => {
+      const messages = (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages;
+      if (messages === undefined) throw new Error("Bridge message recorder is not installed.");
+      messages.length = 0;
+    });
+  }
+
+  async function openSessionMessages(page: Awaited<ReturnType<typeof openStory>>) {
+    return page.evaluate(() => {
+      const messages = (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages;
+      if (messages === undefined) throw new Error("Bridge message recorder is not installed.");
+      return messages.filter(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "openSession",
+      );
+    });
+  }
+
+  async function clickTimestamp(
+    page: Awaited<ReturnType<typeof openStory>>,
+    sessionId: string,
+    modifier?: "Control" | "Meta" | "Shift",
+  ): Promise<void> {
+    const timestamp = page
+      .locator(".session-row")
+      .filter({ has: page.locator(`[data-session="${sessionId}"]`) })
+      .locator(".session-timestamp");
+    await timestamp.scrollIntoViewIfNeeded();
+    const box = await timestamp.boundingBox();
+    if (box === null) throw new Error("Timestamp is not visible.");
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const hitSession = await page.evaluate(
+      ({ x, y }) =>
+        document.elementFromPoint(x, y)?.closest("[data-session]")?.getAttribute("data-session"),
+      { x, y },
+    );
+    expect(hitSession).toBe(sessionId);
+    if (modifier !== undefined) await page.keyboard.down(modifier);
+    try {
+      await page.mouse.click(x, y);
+    } finally {
+      if (modifier !== undefined) await page.keyboard.up(modifier);
+    }
+  }
+
+  it.each([320, 720])(
+    "selects from timestamp coordinates for all four click paths at %ipx",
+    async (width) => {
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
+      await installBridgeMessageRecorder(page);
+
+      await clickTimestamp(page, atlasCurrentId, "Control");
+      expect(await page.locator(".session-row.selected").count()).toBe(1);
+      expect(await openSessionMessages(page)).toEqual([]);
+
+      await clickTimestamp(page, piToolsLockedId, "Meta");
+      expect(await page.locator(".session-row.selected").count()).toBe(2);
+      expect(await openSessionMessages(page)).toEqual([]);
+
+      await clickTimestamp(page, worktreeId, "Shift");
+      expect(
+        await page
+          .locator(".session-row.selected [data-session]")
+          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("data-session"))),
+      ).toEqual([piToolsLockedId, worktreeId]);
+      expect(await openSessionMessages(page)).toEqual([]);
+
+      await clickTimestamp(page, atlasCurrentId);
+      expect(await page.locator(".session-row.selected").count()).toBe(1);
+      expect(await openSessionMessages(page)).toEqual([
+        { type: "openSession", sessionId: atlasCurrentId },
+      ]);
+
+      await clearBridgeMessages(page);
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: { writeText: async () => {} },
+        });
+      });
+      await page.click(`[data-copy="${atlasCurrentId}"]`);
+      await page.click(`[data-lock="${atlasCurrentId}"]`);
+      await page.click(`[data-archive="${worktreeId}"]`);
+      expect(await openSessionMessages(page)).toEqual([]);
+      expect(
+        await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
+      ).toBe(atlasCurrentId);
+      console.log(
+        JSON.stringify({
+          check: "timestamp-clicks",
+          width,
+          paths: ["Control", "Meta", "Shift", "plain"],
+          modifierOpenMessages: 0,
+          plainOpenMessages: 1,
+          controlOpenMessages: 0,
+        }),
+      );
+      await page.close();
+    },
+  );
+
+  it.each([
+    { theme: "dark", width: 320 },
+    { theme: "dark", width: 720 },
+    { theme: "light", width: 320 },
+    { theme: "light", width: 720 },
+  ])(
+    "keeps row text and enabled controls readable in $theme at $width px",
+    async ({ theme, width }) => {
+      const page = await openStory("sessions-sidebar--workspace-all-mode", { width, height: 640 });
+      await page.waitForSelector(".session-row.archived");
+      if (theme === "light") {
+        await page.addStyleTag({
+          content: `:root {
+        --vscode-foreground: #333333;
+        --vscode-sideBar-background: #f8f8f8;
+        --vscode-descriptionForeground: #616161;
+        --vscode-list-hoverBackground: #e8e8e8;
+        --vscode-toolbar-hoverBackground: #e8e8e8;
+        --vscode-list-inactiveSelectionBackground: #e4e6f1;
+        --vscode-list-inactiveSelectionForeground: #333333;
+        --vscode-disabledForeground: #a5a5a5;
+      }`,
+        });
+      }
+
+      for (const state of ["default", "selected", "selected-hover", "foreground-fallback"]) {
+        if (state === "selected") {
+          await page.click(`[data-session="${atlasCurrentId}"]`, {
+            modifiers: ["Control"],
+            position: { x: 12, y: 12 },
+          });
+          await page.click(`[data-session="${atlasArchivedId}"]`, {
+            modifiers: ["Control"],
+            position: { x: 12, y: 12 },
+          });
+          await page.mouse.move(0, 639);
+        }
+        if (state === "selected-hover") {
+          await page
+            .locator(`[data-session="${atlasArchivedId}"]`)
+            .hover({ position: { x: 12, y: 12 } });
+        }
+        if (state === "foreground-fallback") {
+          await page.addStyleTag({
+            content: ":root { --vscode-list-inactiveSelectionForeground: initial; }",
+          });
+          await page.mouse.move(0, 639);
+        }
+        const samples = await page.evaluate(() => {
+          function luminance(color: string): number {
+            const channels = (color.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+            const linear = channels.map((channel) => {
+              const value = channel / 255;
+              return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+            });
+            return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+          }
+          function contrast(foreground: string, background: string): number {
+            const a = luminance(foreground);
+            const b = luminance(background);
+            return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+          }
+          return Array.from(document.querySelectorAll(".session-row")).flatMap((row) => {
+            const button = row.querySelector(".session-button")!;
+            const buttonBackground = getComputedStyle(button).backgroundColor;
+            const background =
+              buttonBackground === "rgba(0, 0, 0, 0)"
+                ? getComputedStyle(document.body).backgroundColor
+                : buttonBackground;
+            return Array.from(
+              row.querySelectorAll(
+                ".session-name, .session-timestamp, .copy, .lock, .archive:not(:disabled)",
+              ),
+            ).map((element) => {
+              const style = getComputedStyle(element);
+              const paintedBackground =
+                style.backgroundColor === "rgba(0, 0, 0, 0)" ? background : style.backgroundColor;
+              return {
+                row: row.className,
+                target: element.className,
+                foreground: style.color,
+                background: paintedBackground,
+                minimum: element.matches(".session-name, .session-timestamp") ? 4.5 : 3,
+                ratio: contrast(style.color, paintedBackground),
+              };
+            });
+          });
+        });
+        for (const sample of samples) {
+          expect(
+            sample.ratio,
+            JSON.stringify({ theme, width, state, ...sample }),
+          ).toBeGreaterThanOrEqual(sample.minimum);
+        }
+        console.log(JSON.stringify({ check: "row-contrast", theme, width, state, samples }));
+      }
+      await page.close();
+    },
+  );
 
   it("lists the session stories in the built index", async () => {
     const index = (await (await fetch(`${baseUrl}/index.json`)).json()) as {
@@ -105,19 +372,16 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   });
 
   it("renders the sample story and operates the workspace mode toggle, copy, and archive", async () => {
-    const page = await browser!.newPage();
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
-      waitUntil: "networkidle",
-    });
-    await page.waitForSelector(".session-row");
-    expect(await page.locator(".session-row").count()).toBe(2);
-    expect(await page.locator(".indicator.active").count()).toBe(2);
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    expect(await page.locator(".session-row").count()).toBe(4);
 
     await page.click('.group [data-mode="all"]');
-    await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 3);
-    expect(await page.locator(".indicator.active").count()).toBe(2);
-    // The other workspace keeps its own Active mode (per-workspace independence).
-    expect(await page.locator(".group").nth(1).locator(".session-row").count()).toBe(1);
+    await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 5);
+    expect(
+      await page.locator(`.session-row.archived [data-session="${atlasArchivedId}"]`).count(),
+    ).toBe(1);
+    // The other workspaces keep their own Unarchived mode (per-workspace independence).
+    expect(await page.locator(".group").nth(1).locator(".session-row").count()).toBe(2);
 
     const copy = page.locator(".session-row [data-copy]").first();
     const copySessionId = await copy.getAttribute("data-copy");
@@ -142,29 +406,118 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.waitForTimeout(250);
     expect(await page.locator(".copy.copied").count()).toBe(0);
 
-    await page.click(".session-row [data-archive]");
-    await page.waitForFunction(() => document.querySelectorAll(".indicator.active").length === 1);
-    expect(await page.locator(".session-row").count()).toBe(3);
+    await page.click(`[data-archive="${atlasCurrentId}"]`);
+    await page.waitForFunction(
+      (id) => document.querySelector(`.session-row.archived [data-session="${id}"]`) !== null,
+      atlasCurrentId,
+    );
+    // The archived row stays visible in All mode; it disappears from the default view.
+    expect(await page.locator(".session-row").count()).toBe(5);
 
-    // Modes are not persisted: a fresh client starts every workspace in Active.
+    // Modes are not persisted: a fresh client starts every workspace in Unarchived.
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
-    expect(await page.locator(".session-row").count()).toBe(2);
-    expect(await page.locator(".indicator.active").count()).toBe(2);
+    expect(await page.locator(".session-row").count()).toBe(4);
     await page.close();
   });
 
-  it("renders rows spanning the full row width with timestamp, copy, and archive overlays", async () => {
-    const page = await browser!.newPage({ viewport: { width: 320, height: 640 } });
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
-      waitUntil: "networkidle",
-    });
-    await page.waitForSelector(".session-row");
+  it("locks a row to disable Archive and unlocks it again", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+
+    const lockedArchive = page.locator(`[data-archive="${piToolsLockedId}"]`);
+    const lock = page.locator(`[data-lock="${piToolsLockedId}"]`);
+    expect(await lockedArchive.isDisabled()).toBe(true);
+    expect(await lock.getAttribute("aria-pressed")).toBe("true");
+
+    await lock.click();
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`[data-lock="${id}"]`)?.getAttribute("aria-pressed") === "false",
+      piToolsLockedId,
+    );
+    expect(await lockedArchive.isDisabled()).toBe(false);
+
+    await lock.click();
+    await page.waitForFunction(
+      (id) =>
+        document.querySelector(`[data-lock="${id}"]`)?.getAttribute("aria-pressed") === "true",
+      piToolsLockedId,
+    );
+    expect(await lockedArchive.isDisabled()).toBe(true);
+    await page.close();
+  });
+
+  it("selects with Ctrl, Meta, and Shift without opening terminals, and archives the selection in one action", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+
+    await page.click(`[data-session="${atlasCurrentId}"]`, { modifiers: ["Control"] });
+    expect(await openSessionMessages(page)).toEqual([]);
+    await page.click(`[data-session="${piToolsLockedId}"]`, { modifiers: ["Control"] });
+    expect(await page.locator(".session-row.selected").count()).toBe(2);
+    expect(await openSessionMessages(page)).toEqual([]);
+
+    await page.click(`[data-session="${worktreeId}"]`, { modifiers: ["Meta"] });
+    expect(await page.locator(".session-row.selected").count()).toBe(3);
+    expect(await openSessionMessages(page)).toEqual([]);
+
+    await clearBridgeMessages(page);
+    await page.click(`[data-session="${atlasCurrentId}"]`);
+    expect(await page.locator(".session-row.selected").count()).toBe(1);
+    expect(await openSessionMessages(page)).toEqual([
+      { type: "openSession", sessionId: atlasCurrentId },
+    ]);
+
+    await clearBridgeMessages(page);
+    await page.click(`[data-session="${worktreeId}"]`, { modifiers: ["Shift"] });
+    await page.waitForFunction(
+      () => document.querySelectorAll(".session-row.selected").length === 4,
+    );
+    expect(await page.locator(".session-row.selected").count()).toBe(4);
+    expect(await openSessionMessages(page)).toEqual([]);
+
+    await page.click(`[data-archive="${atlasCurrentId}"]`);
+    await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 1);
+    expect(await page.locator(`[data-session="${piToolsLockedId}"]`).count()).toBe(1);
+    expect(await page.locator(`[data-session="${atlasCurrentId}"]`).count()).toBe(0);
+    await page.close();
+  });
+
+  it("selects all visible unarchived unlocked rows with Ctrl+A focused on the list", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+
+    await page.locator(`[data-session="${atlasCurrentId}"]`).focus();
+    await page.keyboard.press("Control+a");
+    expect(await page.locator(".session-row.selected").count()).toBe(3);
+
+    // The archived row stays unselected until it is visible in All mode.
+    await page.click('.group [data-mode="all"]', { modifiers: ["Control"] });
+    expect(await page.locator(".session-row.archived.selected").count()).toBe(0);
+    await page.close();
+  });
+
+  it("archives a single row through its own Archive when it is not selected", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+
+    await page.click(`[data-session="${piToolsLockedId}"]`, { modifiers: ["Control"] });
+    await page.click(`[data-archive="${worktreeId}"]`);
+
+    await page.waitForFunction(
+      (gone) => !document.querySelector(`[data-session="${gone}"]`),
+      worktreeId,
+    );
+    expect(await page.locator(`[data-session="${piToolsLockedId}"]`).count()).toBe(1);
+    await page.close();
+  });
+
+  it("renders rows spanning the full row width with timestamp, copy, lock, and archive overlays", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 640 });
     const boxes = await page.evaluate(() => {
       const row = document.querySelector(".session-row")!.getBoundingClientRect();
       const button = document.querySelector(".session-button")!.getBoundingClientRect();
       const timestamp = document.querySelector(".session-timestamp")!.getBoundingClientRect();
       const copy = document.querySelector(".copy")!.getBoundingClientRect();
+      const lock = document.querySelector(".lock")!.getBoundingClientRect();
       const archive = document.querySelector(".archive")!.getBoundingClientRect();
       return {
         rowWidth: row.width,
@@ -177,8 +530,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         timestampTop: timestamp.top,
         timestampBottom: timestamp.bottom,
         copyRight: copy.right,
-        copyTop: copy.top,
-        copyBottom: copy.bottom,
+        lockRight: lock.right,
+        lockTop: lock.top,
+        lockBottom: lock.bottom,
         archiveRight: archive.right,
         archiveTop: archive.top,
         archiveBottom: archive.bottom,
@@ -187,14 +541,16 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     // The session button is the full-area click target: its box spans the row.
     expect(boxes.buttonWidth).toBeCloseTo(boxes.rowWidth, 1);
     expect(boxes.buttonRight).toBeCloseTo(boxes.rowRight, 1);
-    // The timestamp, copy, and archive controls overlay the row from left to right.
+    // The timestamp, copy, lock, and archive controls overlay the row from left to right.
     expect(boxes.timestampRight).toBeLessThan(boxes.copyRight);
-    expect(boxes.copyRight).toBeLessThanOrEqual(boxes.archiveRight);
-    expect(boxes.rowRight - boxes.timestampRight).toBeCloseTo(56, 1);
-    expect(boxes.rowRight - boxes.copyRight).toBeCloseTo(30, 1);
+    expect(boxes.copyRight).toBeLessThan(boxes.lockRight);
+    expect(boxes.lockRight).toBeLessThanOrEqual(boxes.archiveRight);
+    expect(boxes.rowRight - boxes.timestampRight).toBeCloseTo(82, 1);
+    expect(boxes.rowRight - boxes.copyRight).toBeCloseTo(56, 1);
+    expect(boxes.rowRight - boxes.lockRight).toBeCloseTo(30, 1);
     for (const overlay of [
       [boxes.timestampTop, boxes.timestampBottom],
-      [boxes.copyTop, boxes.copyBottom],
+      [boxes.lockTop, boxes.lockBottom],
       [boxes.archiveTop, boxes.archiveBottom],
     ]) {
       expect(overlay[0]).toBeGreaterThanOrEqual(boxes.rowTop);
@@ -205,13 +561,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   });
 
   it("keeps the copied feedback when the preview clipboard write fails", async () => {
-    const page = await browser!.newPage();
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
-      waitUntil: "networkidle",
-    });
-    await page.waitForSelector(".session-row");
+    const page = await openStory("sessions-sidebar--sample-sessions");
     await page.evaluate(() => {
-      window.addEventListener("unhandledrejection", (event) => event.preventDefault(), { once: true });
+      window.addEventListener("unhandledrejection", (event) => event.preventDefault(), {
+        once: true,
+      });
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
         value: { writeText: async () => Promise.reject(new Error("denied")) },
@@ -229,12 +583,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   });
 
   it("renders the wide preview width", async () => {
-    const page = await browser!.newPage({ viewport: { width: 720, height: 640 } });
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
-      waitUntil: "networkidle",
-    });
-    await page.waitForSelector(".session-row");
-    expect(await page.locator(".session-row").count()).toBe(2);
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 720, height: 640 });
+    expect(await page.locator(".session-row").count()).toBe(4);
     await page.close();
   });
 
@@ -245,38 +595,39 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     });
     await page.waitForSelector(".empty");
     expect(await page.locator(".empty").count()).toBe(3);
-    expect(await page.locator(".empty").first().textContent()).toContain("Select All to browse saved sessions.");
-    const historyToggle = page.locator(".group").first().locator('[data-mode="all"]').describe("Show saved sessions");
+    expect(await page.locator(".empty").first().textContent()).toContain(
+      "Select All to browse saved sessions.",
+    );
+    const historyToggle = page
+      .locator(".group")
+      .first()
+      .locator('[data-mode="all"]')
+      .describe("Show saved sessions");
     await historyToggle.focus();
     await historyToggle.press("Enter");
     await page.waitForSelector(".session-row");
     expect(await page.locator(".session-row").count()).toBe(2);
-    expect(await page.locator(".indicator.active").count()).toBe(0);
+    expect(await page.locator(".session-row.archived").count()).toBe(2);
     await page.close();
   });
 
   it("shows distinct same-named worktree paths without horizontal overflow at sidebar widths", async () => {
     for (const width of [320, 720]) {
-      const page = await browser!.newPage({ viewport: { width, height: 640 } });
-      await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
-        waitUntil: "networkidle",
-      });
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
       const paths = page.locator(".group-path").describe("Work folder paths");
       await paths.first().waitFor();
       expect(await paths.allTextContents()).toContain("~/projects/vscode-pi-sessions");
       expect(await paths.allTextContents()).toContain("~/.agents/worktrees/vscode-pi-sessions");
-      const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+      const hasOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > window.innerWidth,
+      );
       expect(hasOverflow).toBe(false);
       await page.close();
     }
   });
 
   it("captures a screenshot of the static output without the extension host", async () => {
-    const page = await browser!.newPage({ viewport: { width: 320, height: 640 } });
-    await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--sample-sessions`, {
-      waitUntil: "networkidle",
-    });
-    await page.waitForSelector(".session-row");
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 640 });
     const path = join(tmpdir(), `pi-sessions-storybook-smoke-${process.pid}.png`);
     await page.screenshot({ path });
     const screenshot = await stat(path);

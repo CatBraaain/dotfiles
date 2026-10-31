@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  activeSessionIds,
+  archivedSessionIds,
+  archiveSessions,
+  lockedSessionIds,
   readMetadataStore,
   setSessionActive,
+  setSessionLocked,
   writeMetadataStore,
   type MetadataStoreData,
 } from "../src/metadataStore";
@@ -138,15 +141,140 @@ describe("writeMetadataStore", () => {
   });
 });
 
-describe("activeSessionIds", () => {
-  it("collects only sessions whose active attribute is truthy", () => {
-    const data = JSON.parse(
-      '{"sessions": {"a": {"active": true}, "b": {"active": false}, "c": {}, "d": 3}}',
-    ) as MetadataStoreData;
-    expect(activeSessionIds(data)).toEqual(new Set(["a"]));
+describe("setSessionLocked", () => {
+  it("persists the lock while keeping the entry's other attributes", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, sessions: { s1: { active: true, pinned: true } } }),
+      "utf8",
+    );
+
+    const result = setSessionLocked(path, "s1", true);
+
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    expect(parsed.sessions.s1).toEqual({ active: true, pinned: true, locked: true });
   });
 
-  it("treats missing metadata as no active sessions", () => {
-    expect(activeSessionIds(undefined)).toEqual(new Set());
+  it("unlocks by setting locked to false", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, sessions: { s1: { active: false, locked: true } } }),
+      "utf8",
+    );
+
+    expect(setSessionLocked(path, "s1", false).ok).toBe(true);
+
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    expect(parsed.sessions.s1).toEqual({ active: false, locked: false });
+  });
+
+  it("does not write and reports an error when the file is corrupt", () => {
+    writeFileSync(path, "{oops", "utf8");
+
+    const result = setSessionLocked(path, "s1", true);
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
+  });
+});
+
+describe("archiveSessions", () => {
+  it("archives every requested session in one write", () => {
+    setSessionActive(path, "a", true);
+
+    const result = archiveSessions(path, ["a", "b"]);
+
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    expect(parsed.sessions).toEqual({ a: { active: false }, b: { active: false } });
+  });
+
+  it("skips locked sessions and archives the rest", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        sessions: { locked1: { locked: true }, locked2: { active: true, locked: true }, open: {} },
+      }),
+      "utf8",
+    );
+
+    const result = archiveSessions(path, ["locked1", "locked2", "open"]);
+
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    expect(parsed.sessions.locked1).toEqual({ locked: true });
+    expect(parsed.sessions.locked2).toEqual({ active: true, locked: true });
+    expect(parsed.sessions.open).toEqual({ active: false });
+  });
+
+  it("writes nothing when every requested session is locked", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, sessions: { s1: { locked: true } } }), "utf8");
+    const before = readFileSync(path, "utf8");
+
+    const result = archiveSessions(path, ["s1"]);
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("does not write and reports an error when the file is corrupt", () => {
+    writeFileSync(path, "{oops", "utf8");
+
+    const result = archiveSessions(path, ["s1"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/JSON/);
+    expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
+  });
+
+  it("fails on the write path: reports the error, keeps the previous content, and leaves no temp files", () => {
+    const original = JSON.stringify({ version: 1, sessions: { s1: { active: true } } });
+    writeFileSync(path, original, "utf8");
+    chmodSync(dir, 0o500); // a read-only store directory makes the tmp-file write inside writeMetadataStore fail
+    try {
+      const result = archiveSessions(path, ["s1"]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toMatch(/Failed to write/);
+    } finally {
+      chmodSync(dir, 0o700); // restore before afterEach cleanup removes the directory
+    }
+    expect(readFileSync(path, "utf8")).toBe(original); // the previous content is untouched
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("archives 1000 synthetic sessions in a single write", () => {
+    const ids = Array.from({ length: 1000 }, (_, index) => `s-${index}`);
+
+    const result = archiveSessions(path, ids);
+
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    const archived = Object.values(parsed.sessions as Record<string, { active?: boolean }>).filter(
+      (entry) => entry.active === false,
+    );
+    expect(archived).toHaveLength(1000);
+  });
+});
+
+describe("archivedSessionIds and lockedSessionIds", () => {
+  it("collects only sessions whose active attribute is explicitly false", () => {
+    const data = JSON.parse(
+      '{"sessions": {"a": {"active": false}, "b": {"active": true}, "c": {}, "d": 3}}',
+    ) as MetadataStoreData;
+    expect(archivedSessionIds(data)).toEqual(new Set(["a"]));
+  });
+
+  it("collects only sessions whose locked attribute is truthy", () => {
+    const data = JSON.parse(
+      '{"sessions": {"a": {"locked": true}, "b": {"locked": false}, "c": {}, "d": 3}}',
+    ) as MetadataStoreData;
+    expect(lockedSessionIds(data)).toEqual(new Set(["a"]));
+  });
+
+  it("treats missing metadata as no archived and no locked sessions", () => {
+    expect(archivedSessionIds(undefined)).toEqual(new Set());
+    expect(lockedSessionIds(undefined)).toEqual(new Set());
   });
 });

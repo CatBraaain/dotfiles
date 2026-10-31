@@ -5,7 +5,8 @@ import type { WebviewSessionGroup } from "./protocol";
 /** Convert scanned sessions into display-only data: every session of every cwd group. */
 export function sessionViewGroups(
   sessions: SessionSummary[],
-  activeSessionIds: ReadonlySet<string>,
+  archivedIds: ReadonlySet<string>,
+  lockedIds: ReadonlySet<string>,
 ): WebviewSessionGroup[] {
   return groupSessions(sessions).map((group) => ({
     cwd: group.cwd,
@@ -14,7 +15,8 @@ export function sessionViewGroups(
       sessionId: session.sessionId,
       displayName: session.displayName,
       mtimeMs: session.mtimeMs,
-      isActive: activeSessionIds.has(session.sessionId),
+      isArchived: archivedIds.has(session.sessionId),
+      isLocked: lockedIds.has(session.sessionId),
     })),
   }));
 }

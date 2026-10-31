@@ -69,15 +69,24 @@ function SessionStoryView({ demoState, toggleAllWorkspace }: SessionStoryViewPro
 
 /** Story that mounts the session view from the demo state in its parameters,
  * so the story-to-state mapping is verifiable without a DOM. */
-function storyFromDemoState(name: string, demoState: DemoState, options: StoryOptions = {}): SessionsStory {
+function storyFromDemoState(
+  name: string,
+  demoState: DemoState,
+  options: StoryOptions = {},
+): SessionsStory {
   return {
     name,
     parameters: { demoState, ...options },
-    render: () => <SessionStoryView demoState={demoState} toggleAllWorkspace={options.toggleAllWorkspace} />,
+    render: () => (
+      <SessionStoryView demoState={demoState} toggleAllWorkspace={options.toggleAllWorkspace} />
+    ),
   };
 }
 
-export const SampleSessions: SessionsStory = storyFromDemoState("Sample — active workspaces", "sample");
+export const SampleSessions: SessionsStory = storyFromDemoState(
+  "Sample — active workspaces",
+  "sample",
+);
 
 export const WorkspaceAllMode: SessionsStory = storyFromDemoState(
   "Sample — one workspace in All mode",
@@ -85,4 +94,7 @@ export const WorkspaceAllMode: SessionsStory = storyFromDemoState(
   { toggleAllWorkspace: true },
 );
 
-export const EmptySessions: SessionsStory = storyFromDemoState("Sample — no active sessions", "empty");
+export const EmptySessions: SessionsStory = storyFromDemoState(
+  "Sample — no unarchived sessions",
+  "empty",
+);

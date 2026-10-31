@@ -18,6 +18,10 @@ const vscodeThemeFallbacks = `
     --vscode-descriptionForeground: #9d9d9d;
     --vscode-editor-font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --vscode-list-hoverBackground: #2a2d2e;
+    --vscode-toolbar-hoverBackground: #2a2d2e;
+    --vscode-list-inactiveSelectionBackground: #37373d;
+    --vscode-list-inactiveSelectionForeground: #cccccc;
+    --vscode-disabledForeground: rgba(204, 204, 204, 0.6);
     --vscode-testing-iconPassed: #73c991;
     --vscode-errorForeground: #f48771;
   }

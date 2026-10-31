@@ -22,17 +22,23 @@ export const webviewStyles = `
     .mode-button[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
     .session-row { position: relative; min-width: 0; }
     .session-row + .session-row { border-top: 1px solid var(--vscode-widget-border); }
-    .session-button { display: grid; box-sizing: border-box; grid-template-columns: 8px minmax(0, 1fr); width: 100%; gap: 7px; min-width: 0; padding: 5px calc(40% + 56px) 5px 8px; border-radius: 0; color: var(--vscode-foreground); background: transparent; text-align: left; }
+    .session-row.selected .session-button { background: var(--vscode-list-inactiveSelectionBackground); }
+    .session-button { display: block; box-sizing: border-box; width: 100%; min-width: 0; padding: 6px calc(40% + 80px) 6px 8px; border-radius: 0; color: var(--vscode-foreground); background: transparent; text-align: left; }
     .session-button:hover { background: var(--vscode-list-hoverBackground); }
+    .session-row.selected .session-button:hover { background: var(--vscode-list-hoverBackground); }
+    .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
+    .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
     .session-name { display: block; overflow: hidden; min-width: 0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .session-timestamp { position: absolute; top: 50%; right: 56px; overflow: hidden; max-width: 40%; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-    .indicator { width: 6px; height: 6px; margin-top: 4px; border: 1px solid var(--vscode-descriptionForeground); border-radius: 50%; }
-    .indicator.active { border-color: var(--vscode-testing-iconPassed); background: var(--vscode-testing-iconPassed); }
-    .copy { position: absolute; top: 50%; right: 30px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
+    .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 82px; overflow: hidden; max-width: 40%; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .copy { position: absolute; top: 50%; right: 56px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
     .copy:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
     .copy.copied { color: var(--vscode-testing-iconPassed); }
+    .lock { position: absolute; top: 50%; right: 30px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
+    .lock:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .lock[aria-pressed="true"] { color: var(--vscode-foreground); }
     .archive { position: absolute; top: 50%; right: 4px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
     .archive:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .archive:disabled, .archive:disabled:hover { color: var(--vscode-disabledForeground); background: transparent; cursor: default; }
     .empty, #status { color: var(--vscode-descriptionForeground); font-size: 12px; }
     .empty { padding: 24px 8px; text-align: center; }
     #status { min-height: 16px; margin: 8px 0 0; }
