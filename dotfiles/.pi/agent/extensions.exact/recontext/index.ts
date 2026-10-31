@@ -21,7 +21,7 @@ import { installProviderGates, type ProviderGates } from "./provider-gate.ts";
 const STATE_TYPE = "handoff-session-counter";
 const STATE_VERSION = 1;
 const AUTO_HANDOFF_LIMIT = 2;
-const HANDOFF_OPTION = "Yes, replace context";
+const HANDOFF_OPTION = "Yes, recontext";
 const STAY_OPTION = "No, stay (reason next)";
 
 export interface HandoffPayload {
@@ -30,7 +30,7 @@ export interface HandoffPayload {
   class: string | undefined;
 }
 
-export default function replaceContextExtension(pi: ExtensionAPI): void {
+export default function recontextExtension(pi: ExtensionAPI): void {
   const pendingRequests = new Map<string, HandoffPayload>();
   let currentContext: ExtensionContext;
   let gates: ProviderGates | undefined;
@@ -67,8 +67,8 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "replace_context",
-    label: "Replace Context",
+    name: "recontext",
+    label: "Recontext",
     description:
       "Use this tool only when a context reset is needed before a substantial next work phase. " +
       "Do not use it for ordinary completion reports, owner decisions, or finish/discard worktree approval; " +
@@ -76,7 +76,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
       "Keep raw history in this session and replace prior model context with handoff, without LLM summarization. " +
       "The first two context replacements after user input or approval are automatic; the third requires approval.",
     promptGuidelines: [
-      "Use replace_context only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>).",
+      "Use recontext only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>).",
     ],
     parameters: Type.Object({
       reason: Type.String({ description: "Why the context reset is needed (non-empty)" }),
@@ -147,12 +147,12 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
     pending: ReplacementProjection,
   ): Promise<BoundaryResult | undefined> {
     const directRequests = event.toolResults.filter(
-      (result) => result.toolName === "replace_context",
+      (result) => result.toolName === "recontext",
     );
     const nestedRequests = event.toolResults.flatMap((result) =>
       (result.nestedCalls?.calls ?? []).flatMap((call) => {
         const payload = pendingRequests.get(call.id);
-        return call.name === "replace_context" && call.status === "ok" && payload
+        return call.name === "recontext" && call.status === "ok" && payload
           ? [{ toolCallId: call.id, details: payload }]
           : [];
       }),
@@ -177,7 +177,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
     if (!isHandoffPayload(payload)) return;
     if (!ctx.hasUI) {
       ctx.ui.notify(
-        "replace-context: interactive UI is unavailable; keeping the current context",
+        "recontext: interactive UI is unavailable; keeping the current context",
         "error",
       );
       return;
@@ -204,7 +204,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
         ctx.sessionManager.getLeafId() !== leafId;
       if (contextChanged) {
         ctx.ui.notify(
-          "replace-context: session changed while waiting; keeping the current context",
+          "recontext: session changed while waiting; keeping the current context",
           "warning",
         );
       }
@@ -213,7 +213,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
     const count = readCounter(branch);
     const requiresApproval = count >= AUTO_HANDOFF_LIMIT;
     if (requiresApproval) {
-      const title = "Replace context";
+      const title = "Recontext";
       const message = `Replace the model context in this session?\n\nReason:\n${payload.reason}\n\nPrompt for the next agent:\n${payload.handoff}`;
       try {
         const approved = ctx.ui.select
@@ -228,7 +228,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
           return;
         }
       } catch (error) {
-        ctx.ui.notify(`replace-context: confirmation failed (${errorMessage(error)})`, "error");
+        ctx.ui.notify(`recontext: confirmation failed (${errorMessage(error)})`, "error");
         return;
       }
     }
@@ -243,7 +243,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
           requiredAgent: "main",
         });
       } catch (error) {
-        ctx.ui.notify(`replace-context: class change failed (${errorMessage(error)})`, "error");
+        ctx.ui.notify(`recontext: class change failed (${errorMessage(error)})`, "error");
         return;
       }
       if (!isCurrentRequest()) return;
@@ -270,7 +270,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
             ? [
                 {
                   type: "custom_message" as const,
-                  customType: "replace-context-handoff",
+                  customType: "recontext-handoff",
                   content: replacement.content,
                   display: false,
                 },
@@ -286,7 +286,7 @@ export default function replaceContextExtension(pi: ExtensionAPI): void {
         continue: true,
       };
     } catch (error) {
-      ctx.ui.notify(`replace-context: replacement failed (${errorMessage(error)})`, "error");
+      ctx.ui.notify(`recontext: replacement failed (${errorMessage(error)})`, "error");
       return;
     }
   }

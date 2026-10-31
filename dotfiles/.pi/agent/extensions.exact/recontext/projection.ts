@@ -14,8 +14,8 @@ import { Value } from "typebox/value";
 
 export type ProjectionManager = ExtensionContext["sessionManager"];
 
-export const REPLACEMENT_STATE = "replace-context-projection";
-const REPLACEMENT_COMMITTED = "replace-context-committed";
+export const REPLACEMENT_STATE = "recontext-projection";
+const REPLACEMENT_COMMITTED = "recontext-committed";
 const STATE_VERSION = 1;
 
 const replacementSchema = Type.Object({

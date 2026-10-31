@@ -3,8 +3,8 @@ import { describe, it } from "bun:test";
 import { convertToLlm, type ProviderConfig } from "@earendil-works/pi-coding-agent";
 import { registerModels } from "./index.ts";
 import { SYNC_PROVIDERS, type ModelDefinition } from "./core.ts";
-import { fakeProvider, gateFixture, seedConversation } from "../replace-context/test-fixture.ts";
-import { registerProviderUpdate } from "../replace-context/provider-update.ts";
+import { fakeProvider, gateFixture, seedConversation } from "../recontext/test-fixture.ts";
+import { registerProviderUpdate } from "../recontext/provider-update.ts";
 
 async function fixture() {
   const h = await gateFixture();

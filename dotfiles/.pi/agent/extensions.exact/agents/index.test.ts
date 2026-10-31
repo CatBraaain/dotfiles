@@ -55,7 +55,7 @@ const config: AgentConfig = {
   agents: {
     manager: {
       class: "middle",
-      tools: ["*", "!replace_context"],
+      tools: ["*", "!recontext"],
       subagents: ["worker", "vision"],
       systemPrompt: ["ファイル操作は禁止"],
     },
@@ -508,7 +508,7 @@ modes:
 agents:
   manager:
     class: middle
-    tools: ["!replace_context"]
+    tools: ["!recontext"]
     subagents: [vision]
     systemPrompt: []
   vision:
@@ -806,9 +806,9 @@ modes:
       middle: [{model: zai/glm-5.2}]
       vision: [{model: zai/glm-5.3-flash}]
 agents:
-  main: {class: middle, tools: ["*", "!replace_context"], subagents: [], systemPrompt: []}
-  senior: {class: middle, tools: ["*", "!replace_context"], subagents: [vision], systemPrompt: []}
-  junior: {class: middle, tools: ["*", "!replace_context"], subagents: [], systemPrompt: []}
+  main: {class: middle, tools: ["*", "!recontext"], subagents: [], systemPrompt: []}
+  senior: {class: middle, tools: ["*", "!recontext"], subagents: [vision], systemPrompt: []}
+  junior: {class: middle, tools: ["*", "!recontext"], subagents: [], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /must delegate to vision/);
   });
@@ -821,9 +821,9 @@ modes:
       middle: [{model: zai/glm-5.2}]
       vision: [{model: zai/glm-5.3-flash}]
 agents:
-  manager: {class: middle, tools: ["*", "!replace_context"], subagents: [vision], systemPrompt: []}
-  senior: {class: middle, tools: ["*", "!replace_context"], subagents: [vision], systemPrompt: []}
-  junior: {class: middle, tools: ["*", "!replace_context"], subagents: [vision], systemPrompt: []}
+  manager: {class: middle, tools: ["*", "!recontext"], subagents: [vision], systemPrompt: []}
+  senior: {class: middle, tools: ["*", "!recontext"], subagents: [vision], systemPrompt: []}
+  junior: {class: middle, tools: ["*", "!recontext"], subagents: [vision], systemPrompt: []}
   vision: {class: vision, tools: ["*"], subagents: [], systemPrompt: []}`);
     assert.match(result.error ?? "", /junior must not delegate to vision/);
   });
@@ -851,7 +851,7 @@ modes:
 agents:
   manager: {class: middle, tools: ["*"], subagents: [vision], systemPrompt: []}
   junior: {class: middle, tools: [bash], subagents: [], systemPrompt: [junior prompt]}
-  vision: {class: vision, tools: ["*", "!replace_context"], subagents: [], systemPrompt: [vision prompt]}`);
+  vision: {class: vision, tools: ["*", "!recontext"], subagents: [], systemPrompt: [vision prompt]}`);
     assert.equal(result.error, undefined);
   });
 
@@ -1014,7 +1014,7 @@ describe("ツール許可", () => {
   });
 
   it("!<tool> はワイルドカードがあってもそのツールを拒否する", () => {
-    assert.equal(shouldBlockToolCall("manager", "replace_context", config), true);
+    assert.equal(shouldBlockToolCall("manager", "recontext", config), true);
     assert.equal(isToolAllowed("manager", "future_tool", config), true);
   });
 });
@@ -1389,7 +1389,7 @@ describe("class によるモデルルーティング", () => {
             ...config.agents,
             main: {
               class: "middle",
-              tools: ["*", "!replace_context"],
+              tools: ["*", "!recontext"],
               subagents: ["worker", "vision"],
               systemPrompt: [],
             },
@@ -1890,7 +1890,7 @@ describe("mode selection", () => {
     }
   });
 
-  it("preserves mode for the replace-context class event", async () => {
+  it("preserves mode for the recontext class event", async () => {
     const extension = captureAgentsExtension(
       { config: modeConfig },
       { flags: { agent: "main", max: true } },
@@ -2612,7 +2612,7 @@ describe("手動モデル選択", () => {
             ...config.agents,
             main: {
               class: "middle",
-              tools: ["*", "!replace_context"],
+              tools: ["*", "!recontext"],
               subagents: ["worker", "vision"],
               systemPrompt: [],
             },
@@ -2797,7 +2797,7 @@ describe("手動モデル選択", () => {
       ...config,
       agents: {
         ...config.agents,
-        junior: { class: "low", tools: ["*", "!replace_context"], subagents: [], systemPrompt: [] },
+        junior: { class: "low", tools: ["*", "!recontext"], subagents: [], systemPrompt: [] },
       },
     };
     const junior = captureAgentsExtension({ config: juniorConfig });
@@ -5488,7 +5488,7 @@ describe("independent child session storage", () => {
   });
 });
 
-describe("replace_context によるクラス指定", () => {
+describe("recontext によるクラス指定", () => {
   const configWithMain: AgentConfig = {
     ...config,
     defaultMode: "standard",

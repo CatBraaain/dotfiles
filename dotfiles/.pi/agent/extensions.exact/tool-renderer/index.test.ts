@@ -23,7 +23,7 @@ const KNOWN_TOOLS = [
   "web_search",
   "web_fetch",
   "subagent",
-  "replace_context",
+  "recontext",
   "session_search",
   "create_detached_session",
 ];

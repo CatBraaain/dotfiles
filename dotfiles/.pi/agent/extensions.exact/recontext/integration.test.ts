@@ -11,7 +11,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import replaceContextExtension from "./index.ts";
+import recontextExtension from "./index.ts";
 import { fakeProvider, memoryRuntime, seedConversation } from "./test-fixture.ts";
 import { REPLACEMENT_STATE } from "./projection.ts";
 
@@ -96,7 +96,7 @@ async function fixture(options: FixtureOptions = {}) {
     systemPrompt: "Effective system instructions.",
     extensionFactories: [
       (pi) => {
-        if (enabled) replaceContextExtension(pi);
+        if (enabled) recontextExtension(pi);
       },
       (pi) => {
         api = pi;
@@ -189,7 +189,7 @@ async function fixture(options: FixtureOptions = {}) {
         notices.push(message);
       },
       async select() {
-        return "Yes, replace context";
+        return "Yes, recontext";
       },
     },
     onError(error) {

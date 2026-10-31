@@ -38,7 +38,7 @@ import {
 } from "../agents/class-change.ts";
 import agentsExtension from "../agents/index.ts";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
-import replaceContextExtension from "./index";
+import recontextExtension from "./index";
 import { projectPendingMessages } from "./projection.ts";
 import { renderersOf } from "../tool-renderer/index.ts";
 
@@ -70,7 +70,7 @@ function harness(manager = SessionManager.inMemory()) {
     ui: {
       select: async (title: string): Promise<string | undefined> => {
         selections.push(title);
-        return "Yes, replace context";
+        return "Yes, recontext";
       },
       confirm: async () => true,
       input: async () => "",
@@ -79,7 +79,7 @@ function harness(manager = SessionManager.inMemory()) {
       },
     },
   };
-  replaceContextExtension({
+  recontextExtension({
     on(name: string, handler: never) {
       if (name === "input") input = handler;
       if (name === "turn_end") turn = handler;
@@ -118,7 +118,7 @@ function harness(manager = SessionManager.inMemory()) {
     const toolCallId = `call-${manager.getEntries().length}`;
     const toolResult = {
       role: "toolResult" as const,
-      toolName: "replace_context",
+      toolName: "recontext",
       toolCallId,
       content: result.content,
       details: result.details as TurnEndEvent["toolResults"][number]["details"],
@@ -128,7 +128,7 @@ function harness(manager = SessionManager.inMemory()) {
     const message = {
       role: "assistant" as const,
       content: [
-        { type: "toolCall" as const, id: toolCallId, name: "replace_context", arguments: {} },
+        { type: "toolCall" as const, id: toolCallId, name: "recontext", arguments: {} },
       ],
       api: "anthropic-messages" as const,
       provider: "anthropic",
@@ -246,7 +246,7 @@ async function runtimeHarness(withAgents = false) {
             {
               type: "toolCall" as const,
               id: `handoff-${requests.length}`,
-              name: "replace_context",
+              name: "recontext",
               arguments: {
                 reason: "phase done",
                 handoff: "new phase marker",
@@ -358,7 +358,7 @@ async function runtimeHarness(withAgents = false) {
                   agents: {
                     main: {
                       class: "middle",
-                      tools: ["replace_context"],
+                      tools: ["recontext"],
                       subagents: [],
                       systemPrompt: [],
                     },
@@ -367,7 +367,7 @@ async function runtimeHarness(withAgents = false) {
               }),
           ]
         : []),
-      replaceContextExtension,
+      recontextExtension,
       (pi) => {
         pi.events.on(CLASS_CHANGE_EVENT, (data) => {
           classChanges.push({ class: (data as ClassChangeRequest).class! });
@@ -378,7 +378,7 @@ async function runtimeHarness(withAgents = false) {
           inputs.push(event);
         });
         pi.on("tool_result", async (event) => {
-          if (event.toolName === "replace_context") await hooks.duringTool?.(pi);
+          if (event.toolName === "recontext") await hooks.duringTool?.(pi);
         });
       },
     ],
@@ -396,7 +396,7 @@ async function runtimeHarness(withAgents = false) {
     settingsManager,
     sessionManager: manager,
     resourceLoader,
-    tools: ["replace_context"],
+    tools: ["recontext"],
   });
   await session.bindExtensions({
     mode: "rpc",
@@ -404,7 +404,7 @@ async function runtimeHarness(withAgents = false) {
       ...session.extensionRunner.getUIContext(),
       async select(title) {
         selections.push(title);
-        return hooks.duringSelect ? await hooks.duringSelect() : "Yes, replace context";
+        return hooks.duringSelect ? await hooks.duringSelect() : "Yes, recontext";
       },
       async input() {
         return hooks.duringReason ? await hooks.duringReason() : "";
@@ -530,7 +530,7 @@ describe("real AgentSession delivery with a memory fake provider", () => {
               /old user marker|request the phase transition|Context replacement requested|tool_result|tool_use/,
             );
             assert.match(JSON.stringify(request.system), /Keep this system marker/);
-            assert.ok(request.tools?.some((tool) => tool.name === "replace_context"));
+            assert.ok(request.tools?.some((tool) => tool.name === "recontext"));
           }
           assert.ok(
             turnRequests
@@ -596,8 +596,8 @@ describe("real AgentSession delivery with a memory fake provider", () => {
 
   for (const stage of ["select", "reason"] as const) {
     for (const source of ["interactive", "rpc"] as const) {
-      for (const choice of ["Yes, replace context", "No, stay (reason next)", undefined]) {
-        if (stage === "reason" && choice === "Yes, replace context") continue;
+      for (const choice of ["Yes, recontext", "No, stay (reason next)", undefined]) {
+        if (stage === "reason" && choice === "Yes, recontext") continue;
         it(`resets on real ${source} input during ${stage} and stops choice ${choice}`, async () => {
           const h = await runtimeHarness();
           try {
@@ -728,7 +728,7 @@ describe("handoff approval cycle", () => {
       h.ctx.ui.input = async () => "  finish tests  ";
       assert.equal(await h.boundary(), undefined);
       assert.deepEqual(h.sent, ["no(finish tests)"]);
-      h.ctx.ui.select = async () => "Yes, replace context";
+      h.ctx.ui.select = async () => "Yes, recontext";
       const next = await h.boundary();
       const compaction = next?.entries?.find(
         (entry) => entry.type === "custom" && entry.customType === "handoff-session-counter",
@@ -843,7 +843,7 @@ describe("handoff boundaries", () => {
           timestamp: 1,
           nestedCalls: {
             complete: true,
-            calls: [{ id: "call", name: "replace_context", status: "ok", durationMs: 1 }],
+            calls: [{ id: "call", name: "recontext", status: "ok", durationMs: 1 }],
           },
         },
       ],
@@ -894,7 +894,7 @@ describe("handoff boundaries", () => {
     h.commit(await h.boundary());
     h.ctx.ui.select = async () => {
       h.controller.abort();
-      return "Yes, replace context";
+      return "Yes, recontext";
     };
     assert.equal(await h.boundary(), undefined);
   });
@@ -905,7 +905,7 @@ describe("handoff boundaries", () => {
     h.ctx.ui.select = async () => {
       h.user();
       h.manager.appendMessage({ role: "user", content: "new decision", timestamp: 1 });
-      return "Yes, replace context";
+      return "Yes, recontext";
     };
     assert.equal(await h.boundary(), undefined);
     assert.match(JSON.stringify(h.manager.buildSessionContext().messages), /new decision/);
@@ -925,7 +925,7 @@ describe("handoff boundaries", () => {
     const result = await h.request();
     const request = {
       role: "toolResult" as const,
-      toolName: "replace_context",
+      toolName: "recontext",
       toolCallId: "x",
       content: result.content,
       details: result.details as TurnEndEvent["toolResults"][number]["details"],
@@ -949,8 +949,8 @@ describe("handoff boundaries", () => {
 describe("handoff safety while awaiting UI", () => {
   for (const dialog of ["select", "confirm", "reason"] as const) {
     for (const change of ["leaf", "session", "abort"] as const) {
-      for (const choice of ["Yes, replace context", "No, stay (reason next)", undefined]) {
-        if (dialog === "reason" && choice === "Yes, replace context") continue;
+      for (const choice of ["Yes, recontext", "No, stay (reason next)", undefined]) {
+        if (dialog === "reason" && choice === "Yes, recontext") continue;
         it(`stops after ${change} changes during ${dialog} with choice ${choice}`, async () => {
           const h = harness();
           h.commit(await h.boundary());
@@ -975,7 +975,7 @@ describe("handoff safety while awaiting UI", () => {
           };
           if (dialog === "confirm") {
             Object.assign(h.ctx.ui, { select: undefined });
-            h.ctx.ui.confirm = async () => (await decision()) === "Yes, replace context";
+            h.ctx.ui.confirm = async () => (await decision()) === "Yes, recontext";
           } else if (dialog === "select") {
             h.ctx.ui.select = decision;
           } else {
@@ -1001,7 +1001,7 @@ describe("handoff safety while awaiting UI", () => {
           assert.equal(reasonPrompts, dialog === "reason" ? 1 : 0);
           if (change !== "abort") {
             assert.match(h.notices[0]!, /session changed/);
-            h.ctx.ui.select = async () => "Yes, replace context";
+            h.ctx.ui.select = async () => "Yes, recontext";
             const next = await h.boundary();
             const compaction = next?.entries?.find(
               (entry) => entry.type === "custom" && entry.customType === "handoff-session-counter",
@@ -1042,7 +1042,7 @@ describe("nested handoff safety", () => {
           calls: [
             {
               id: "call",
-              name: "replace_context",
+              name: "recontext",
               status: condition === "error" || condition === "unfinished" ? condition : "ok",
               durationMs: 1,
             },
@@ -1052,7 +1052,7 @@ describe("nested handoff safety", () => {
       if (condition === "multiple")
         nested.nestedCalls!.calls.push({
           id: "second",
-          name: "replace_context",
+          name: "recontext",
           status: "ok",
           durationMs: 1,
         });
@@ -1060,7 +1060,7 @@ describe("nested handoff safety", () => {
       if (condition === "direct-and-nested")
         results.push({
           ...nested,
-          toolName: "replace_context",
+          toolName: "recontext",
           toolCallId: "direct",
           nestedCalls: undefined,
           details: { reason: "done", handoff: "other phase" },
@@ -1110,7 +1110,7 @@ describe("persisted session context", () => {
   });
 
   it("keeps raw history and system/tools, excludes old messages, and preserves the counter on resume", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "replace-context-"));
+    const directory = mkdtempSync(join(tmpdir(), "recontext-"));
     try {
       const manager = SessionManager.create(directory, directory);
       manager.appendMessage({
@@ -1190,7 +1190,7 @@ describe("tool rendering", () => {
   }
 
   function toolBlock(h: ReturnType<typeof harness>, state: Record<string, unknown>) {
-    return renderersOf("replace_context")!.renderCall!(
+    return renderersOf("recontext")!.renderCall!(
       {},
       plainTheme as never,
       renderContext(state),
@@ -1198,7 +1198,7 @@ describe("tool rendering", () => {
   }
 
   function renderers() {
-    return renderersOf("replace_context")!;
+    return renderersOf("recontext")!;
   }
 
   it("renders the label and a requesting line while the call is pending", () => {

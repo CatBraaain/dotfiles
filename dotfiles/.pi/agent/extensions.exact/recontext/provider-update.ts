@@ -4,7 +4,7 @@ import type {
   ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
 
-export const PROVIDER_UPDATE_EVENT = "replace-context:provider-update";
+export const PROVIDER_UPDATE_EVENT = "recontext:provider-update";
 
 export interface ProviderUpdate {
   registry: ExtensionContext["modelRegistry"];

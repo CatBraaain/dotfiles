@@ -5,7 +5,7 @@ pi のツール呼び出しの表示（コール行と結果行）を1つの拡�
 ## 仕組み
 
 - `pi.registerToolRenderer` で resolver を1本登録し、ツール名ごとの `renderCall` / `renderResult` を返す。
-- 対象ツール: `bash` `read` `write` `edit` `grep` `find` `ls` `ask_permission` `codemode` `web_search` `web_fetch` `subagent` `replace_context` `session_search` `create_detached_session`。
+- 対象ツール: `bash` `read` `write` `edit` `grep` `find` `ls` `ask_permission` `codemode` `web_search` `web_fetch` `subagent` `recontext` `session_search` `create_detached_session`。
 - 登録にないツール名は `next()` に委譲する。描画は残りの resolver → 登録済みツール自身の renderer → pi既定の順で解決されるため、本拡張が未知のツールの表示を壊さない。
 - 描画は結果の `details` と content から宣言的に行う。`tool_execution_*` イベントを描画のトリガーにしない。スクロールバックや HTML export の再描画でも同じ出力になる。
 - 描画実装と resolver API の互換型は `index.ts` に置く。テキスト表示は共通の描画手順を使い、ツールごとの差をコール行・結果行の定義で表す。main agent と subagent の Actions は同じコール行・成功サマリーの整形処理を使う。
@@ -189,9 +189,9 @@ subagent の呼び出しを受け付けた直後から子エージェントの�
 
 両ツールの結果行は、エラーのとき `error` 色、成功のとき `toolOutput` 色で表示する。
 
-## replace_context
+## recontext
 
-対話画面で `replace_context` の呼出しは、pi が圧縮時に表示するcompactionメッセージと同じ1箱の構成で表示する。上からラベル行・空行・状態行の順に並べる。箱の背景はテーマの `customMessageBg`、パディングは左右1・上下1、ラベルはテーマの `customMessageLabel` で太字の `[compaction]` とする。
+対話画面で `recontext` の呼出しは、pi が圧縮時に表示するcompactionメッセージと同じ1箱の構成で表示する。上からラベル行・空行・状態行の順に並べる。箱の背景はテーマの `customMessageBg`、パディングは左右1・上下1、ラベルはテーマの `customMessageLabel` で太字の `[compaction]` とする。
 
 | 状態 | 状態行 |
 | --- | --- |

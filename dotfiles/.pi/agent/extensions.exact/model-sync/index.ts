@@ -7,7 +7,7 @@ import {
 import { Models, type Provider as ModelsDevSdkProvider } from "@opencode-ai/models";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { registerProviderUpdate } from "../replace-context/provider-update.ts";
+import { registerProviderUpdate } from "../recontext/provider-update.ts";
 import {
   SYNC_PROVIDERS,
   authHeaders,

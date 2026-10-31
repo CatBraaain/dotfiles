@@ -61,17 +61,17 @@ agents:
     systemPrompt: ["...", "..."]
   senior:
     class: high
-    tools: ["*", "!replace_context"]
+    tools: ["*", "!recontext"]
     subagents: [junior, vision]
     systemPrompt: ["...", "..."]
   junior:
     class: low
-    tools: ["*", "!replace_context"]
+    tools: ["*", "!recontext"]
     subagents: []
     systemPrompt: ["..."]
   vision:
     class: vision
-    tools: ["*", "!replace_context"]
+    tools: ["*", "!recontext"]
     subagents: []
     # tools と systemPrompt は junior と同じ内容。class: vision のみが異なる
     systemPrompt: ["..."]
@@ -164,7 +164,7 @@ class はモデル候補の配列であり、モデルの種類による制限�
 | 候補モデルの適用に失敗した（APIキーがないなど） | その候補を除外して次候補へ進む |
 | class内の全候補が不成立、または全候補で適用に失敗 | 「モデルの適用タイミング」の該当行に従う |
 
-mode・class をまたいだ降格は行わない。この規則は候補選択の自動評価に適用され、`replace_context` による明示的なクラス指定には適用しない。
+mode・class をまたいだ降格は行わない。この規則は候補選択の自動評価に適用され、`recontext` による明示的なクラス指定には適用しない。
 
 ## usage スコアリングによる候補の並べ替え
 
@@ -321,7 +321,7 @@ JSON全体が配列でない、各行の `provider` が非空文字列でない�
 | `/agent:<name>` | 実効mode を維持してagent を切り替え、手動選択を解除し、実効class を切替先agent の既定class に戻してその候補を適用してから後続メッセージを送信する |
 | `/class:<name>` | agent・実効mode・cooldown を維持して実効class を `name` に切り替え、手動モデル選択を解除し、切り替え先class の候補を適用する |
 | `/mode:<name>` | agent・実効class・cooldown を維持して実効mode を `name` に切り替え、手動モデル選択を解除し、同じ実効class の候補を適用して完了を通知する。同じmodeの再指定でも再適用する |
-| コンテキスト切替（`replace_context` で `class` 指定あり） | 実効mode を維持し、切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
+| コンテキスト切替（`recontext` で `class` 指定あり） | 実効mode を維持し、切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
 | 429受信時 | 「レート制限（429）時のフォールバック」に従う |
 
 モデルの切り替えに成功したら `agent model → <provider>/<model>` を info で通知する。
@@ -349,7 +349,7 @@ stateDiagram-v2
 | --- | --- |
 | 自動 | 各プロンプト送信前に実効class の候補を再評価する |
 | 手動 | ユーザーが選んだモデルを使い続ける。プロンプト送信前の再評価を行わない |
-| 手動中のクラス指定（`replace_context` の `class`） | クラスを変更せず、`class change to <class> ignored: manual model selection is active` を warning で通知する |
+| 手動中のクラス指定（`recontext` の `class`） | クラスを変更せず、`class change to <class> ignored: manual model selection is active` を warning で通知する |
 
 状態を変える操作とその時の全動作は「モデルの適用タイミング」の表が定め、この図は手動状態の遷移だけを示す。手動状態中の 429フォールバック後も手動状態を維持する。
 
@@ -495,7 +495,7 @@ class が未選択のときは agent行のみを表示する。class行の末尾
 | --- | --- |
 | `(manual)` | ユーザーの `/model`・`/class:<name>`・`/mode:<name>`・`/agent:<name>` による選択 |
 | `(auto)` | セッション初期化・新規開始・再開・分岐時の初期選択 |
-| `(agent)` | `replace_context` のクラス指定を適用したとき |
+| `(agent)` | `recontext` のクラス指定を適用したとき |
 
 この表示はモデルルーティングの自動・手動状態とは別に管理する。`/class:<name>`・`/mode:<name>`・`/agent:<name>` の操作後は `(manual)` と表示するが、候補の自動再評価は従来どおり行う。候補再評価・429フォールバックでは表示を変更せず、`/reload` では保存した表示を維持する。無視された要求・同じクラスへの変更なしの要求では表示を変更しない。
 

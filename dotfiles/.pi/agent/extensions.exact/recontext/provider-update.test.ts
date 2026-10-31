@@ -24,7 +24,7 @@ function fixture() {
 }
 
 describe("provider update handoff", () => {
-  it("uses ordinary registration when replace-context has no listener", () => {
+  it("uses ordinary registration when recontext has no listener", () => {
     const h = fixture();
     registerProviderUpdate(h.pi, h.ctx, "fake", { models: [] });
     assert.deepEqual(h.calls, ["fake"]);

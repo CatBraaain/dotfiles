@@ -50,7 +50,7 @@ interface SessionQueue {
   owners: number;
 }
 
-const QUEUES_KEY = Symbol.for("dotfiles.replace-context.session-queues.v1");
+const QUEUES_KEY = Symbol.for("dotfiles.recontext.session-queues.v1");
 const shared = globalThis as typeof globalThis & { [QUEUES_KEY]?: Map<string, SessionQueue> };
 const sessionQueues = (shared[QUEUES_KEY] ??= new Map<string, SessionQueue>());
 const requestScope = new AsyncLocalStorage<SessionQueue>();
@@ -340,7 +340,7 @@ function failedMessage(
     content: [],
     timestamp: Date.now(),
     stopReason,
-    errorMessage: `replace-context: ${error instanceof Error ? error.message : String(error)}`,
+    errorMessage: `recontext: ${error instanceof Error ? error.message : String(error)}`,
     usage: {
       input: 0,
       output: 0,

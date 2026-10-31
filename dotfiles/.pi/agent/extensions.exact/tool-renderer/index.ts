@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentToolDetails } from "../agents/index.ts";
 import type { WebToolDetails } from "../web-search/index.ts";
-import { isHandoffPayload, type HandoffPayload } from "../replace-context/index.ts";
+import { isHandoffPayload, type HandoffPayload } from "../recontext/index.ts";
 import { spinnerFrame } from "../titlebar/index.ts";
 import { spinnerTimers } from "../shared/spinner-timers.ts";
 import {
@@ -126,7 +126,7 @@ const REGISTRY: Record<string, RendererEntry> = {
   ),
   codemode: codemodeRenderers,
   subagent: subagentRenderers(),
-  replace_context: replaceContextRenderers(),
+  recontext: recontextRenderers(),
 };
 
 export function renderersOf(
@@ -546,7 +546,7 @@ function getFinalOutput(messages: any[]): string {
   return "";
 }
 
-function replaceContextRenderers(): ToolRenderers {
+function recontextRenderers(): ToolRenderers {
   return {
     renderShell: "self",
     renderCall(_args: any, theme: any, context: any) {
@@ -567,7 +567,7 @@ function replaceContextRenderers(): ToolRenderers {
         box.addChild(new Text(theme.fg("error", firstTextContent(result.content)), 0, 0));
       } else if (expanded) {
         box.addChild(
-          new Markdown(replaceContextDetailsMarkdown(result.details), 0, 0, getMarkdownTheme(), {
+          new Markdown(recontextDetailsMarkdown(result.details), 0, 0, getMarkdownTheme(), {
             color: (text: string) => theme.fg("customMessageText", text),
           }),
         );
@@ -580,11 +580,11 @@ function replaceContextRenderers(): ToolRenderers {
 }
 
 function stateBox(theme: any, state: { box?: Box }): Box {
-  state.box ??= replaceContextBox(theme);
+  state.box ??= recontextBox(theme);
   return state.box;
 }
 
-function replaceContextBox(theme: any): Box {
+function recontextBox(theme: any): Box {
   return new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 }
 
@@ -600,7 +600,7 @@ function collapsedResultLine(theme: any): string {
   );
 }
 
-function replaceContextDetailsMarkdown(payload: HandoffPayload): string {
+function recontextDetailsMarkdown(payload: HandoffPayload): string {
   return [
     `**${COLLAPSED_TEXT}**`,
     "",
