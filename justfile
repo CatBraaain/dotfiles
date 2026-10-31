@@ -20,6 +20,10 @@ install:
 install *args:
   bun undotfiles/install/windows.ts {{args}}
 
+format:
+  oxfmt . "!**/*.md"
+  prettier --write --plugin ~/.bun/install/global/node_modules/prettier-markdown-table/index.js "**/*.md"
+
 apply:
   bun dotfiles-manager apply
 

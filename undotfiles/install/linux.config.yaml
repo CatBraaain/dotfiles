@@ -113,6 +113,7 @@ work:
   - brew: tree-sitter-cli
   - brew: yq
   - bun: "@typescript/native-preview"
+  - bun: oxfmt
   - bun: prettier
   - bun: prettier-markdown-table
   - uv: harlequin
