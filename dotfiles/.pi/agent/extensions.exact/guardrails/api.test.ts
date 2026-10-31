@@ -3540,7 +3540,7 @@ commands:
       async (_dir, guardrail) => {
         const sessionUi = {
           confirm: async () => false,
-          select: async (_title: string, options: string[]) => options[1],
+          select: async (_title: string, options: string[]) => options[2],
           input: async () => "",
         };
         const outcome = await guardrail.requestCommandPermission(
@@ -3647,7 +3647,7 @@ commands:
           hasUI: true,
           ui: {
             confirm: async () => false,
-            select: async (_title: string, options: string[]) => options[1],
+            select: async (_title: string, options: string[]) => options[2],
             input: async () => "",
           },
         },
@@ -3670,7 +3670,7 @@ commands:
     const execute = captureRegisteredTools().get("ask_permission").execute;
     const sessionUi = {
       confirm: async () => false,
-      select: async (_title: string, options: string[]) => options[1],
+      select: async (_title: string, options: string[]) => options[2],
       input: async () => "",
     };
     await execute(
@@ -4089,7 +4089,7 @@ matched: {"command":"git","args":["push"]}`,
           },
         });
         assert.deepEqual(selectionOptions, [
-          ["Allow once", "Allow in this session", "Allow in this turn", "No, deny (reason next)"],
+          ["Allow once", "Allow in this turn", "Allow in this session", "No, deny (reason next)"],
         ]);
       },
     ),
@@ -4133,7 +4133,7 @@ matched: {"command":"git","args":["push"]}`,
           hasUI: true,
           ui: {
             confirm: async () => false,
-            select: async (_title, options) => options[1],
+            select: async (_title, options) => options[2],
           },
         });
         assert.equal(approved, true);

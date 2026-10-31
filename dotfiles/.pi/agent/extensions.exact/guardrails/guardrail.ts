@@ -77,8 +77,8 @@ export type ToolContext = {
 
 const ALLOW_OPTION = "Yes, allow";
 const ALLOW_ONCE_OPTION = "Allow once";
-const ALLOW_SESSION_OPTION = "Allow in this session";
 const ALLOW_TURN_OPTION = "Allow in this turn";
+const ALLOW_SESSION_OPTION = "Allow in this session";
 const EXPIRED_TURN_APPROVAL = "Turn approval expired. Request approval again.";
 const DENY_OPTION = "No, deny (reason next)";
 
@@ -458,8 +458,8 @@ export class Guardrail {
     if (ui.select) {
       const selectedOption = await ui.select(`${question}\n${details}`, [
         ALLOW_ONCE_OPTION,
-        ALLOW_SESSION_OPTION,
         ALLOW_TURN_OPTION,
+        ALLOW_SESSION_OPTION,
         DENY_OPTION,
       ]);
       if (selectedOption === ALLOW_TURN_OPTION && matched !== undefined) {
@@ -528,7 +528,7 @@ export class Guardrail {
         const options =
           matched === undefined
             ? [ALLOW_ONCE_OPTION, DENY_OPTION]
-            : [ALLOW_ONCE_OPTION, ALLOW_SESSION_OPTION, ALLOW_TURN_OPTION, DENY_OPTION];
+            : [ALLOW_ONCE_OPTION, ALLOW_TURN_OPTION, ALLOW_SESSION_OPTION, DENY_OPTION];
         const selectedOption = await ui.select(`Allow command?\n${display}\n${note}`, options);
         if (selectedOption === ALLOW_TURN_OPTION && matched !== undefined) {
           if (generation !== this.turnApprovalGeneration)

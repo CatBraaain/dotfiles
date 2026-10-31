@@ -16,8 +16,8 @@ const MAIN_AGENT_NAME = "main";
 const REQUEST_PREVIEW_LIMIT = 80;
 
 const ALLOW_ONCE_OPTION = "Allow once";
-const ALLOW_SESSION_OPTION = "Allow in this session";
 const ALLOW_TURN_OPTION = "Allow in this turn";
+const ALLOW_SESSION_OPTION = "Allow in this session";
 const DENY_OPTION = "No, deny (reason next)";
 const EXPIRED_TURN_APPROVAL = "Turn approval expired. Request approval again.";
 const SERVER_UNAVAILABLE_MESSAGE = `tmux server is not running: keeper session "${TMUX_KEEPER_SESSION_NAME}" not found. Start the tmux-server systemd user service (systemctl --user enable --now tmux-server.service).`;
@@ -177,8 +177,8 @@ export default function createSessionExtension(
     if (ui.select) {
       const selected = await ui.select(`${question}\n${details}`, [
         ALLOW_ONCE_OPTION,
-        ALLOW_SESSION_OPTION,
         ALLOW_TURN_OPTION,
+        ALLOW_SESSION_OPTION,
         DENY_OPTION,
       ]);
       if (selected === ALLOW_TURN_OPTION) {

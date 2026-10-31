@@ -69,9 +69,9 @@ Vision入力として扱う画像ファイルは、MIMEタイプが `image/*` �
 | read | `Yes, allow` / `No, deny (reason next)` |
 | write | `File only` / `Directory (subtree)` / `No, deny (reason next)` |
 | commands（`ask`・設定パターンなし） | `Allow once` / `No, deny (reason next)` |
-| commands（`ask`・設定パターンあり） | `Allow once` / `Allow in this session` / `Allow in this turn` / `No, deny (reason next)` |
+| commands（`ask`・設定パターンあり） | `Allow once` / `Allow in this turn` / `Allow in this session` / `No, deny (reason next)` |
 | ask_permission（§3・path） | `Yes, allow` / `No, deny (reason next)` |
-| ask_permission（§3・command） | `Allow once` / `Allow in this session` / `Allow in this turn` / `No, deny (reason next)` |
+| ask_permission（§3・command） | `Allow once` / `Allow in this turn` / `Allow in this session` / `No, deny (reason next)` |
 
 セッション承認のルール同一性にはcommandとargs条件の全体を用いる。コマンドの確認で `Allow in this session` を選ぶと、確認対象のコマンドが一致した設定パターンがセッション内で承認される。承認されたパターンに一致するコマンド（`ask` と `ask_with_reason` の双方）は、セッションの残りの間、確認なしで実行され、実行時に承認ノート（§2.3）を伴う。セッション承認は消費されず、セッション終了で破棄される。設定パターンがない確認（`no matching pattern (default ask)`）では承認対象のパターンがないため、`Allow in this session` を提示しない。選択ダイアログを提供できないUI での `confirm` による代替では、コマンドの承認は `Allow once` 相当として扱う。
 

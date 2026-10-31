@@ -30,8 +30,8 @@
 | 選択肢 | 効果 |
 | --- | --- |
 | `Allow once` | その呼び出しだけを許可する。次の呼び出しは再度確認する |
-| `Allow in this session` | このセッションの残りの間、確認を省略する |
 | `Allow in this turn` | 次のユーザーメッセージを受け付けるまでの間、確認を省略する |
+| `Allow in this session` | このセッションの残りの間、確認を省略する |
 | `No, deny (reason next)` | 実行しない。続けて任意の理由を入力できる |
 
 - 承認の単位はツール全体であり、`initialRequest`・`cwd`・`name` の内容によらない。有効なsession・turn承認がある間は、入力が変わっても再確認しない。
