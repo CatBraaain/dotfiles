@@ -84,10 +84,9 @@ export async function run(argv: string[], env: RunEnv = {}): Promise<number> {
           ? "current"
           : "configured",
     });
-    const nowMs = (env.now ?? Date.now)();
     const output = options.json
       ? JSON.stringify(
-          states.map((state) => summarizeProviderUsageJson(state, nowMs)),
+          states.map((state) => summarizeProviderUsageJson(state)),
           null,
           2,
         )

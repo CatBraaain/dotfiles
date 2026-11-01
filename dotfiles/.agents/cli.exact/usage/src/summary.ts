@@ -1,4 +1,3 @@
-import { urgencyOf } from "./urgency";
 import type { ProviderUsageState, UsageBucket, UsageReport } from "./types";
 
 const MILLISECONDS_PER_SECOND = 1000;
@@ -23,21 +22,14 @@ export function summarizeProviderUsage(state: ProviderUsageState): UsageSummary 
   };
 }
 
-export function summarizeProviderUsageJson(state: ProviderUsageState, nowMs = Date.now()) {
+export function summarizeProviderUsageJson(state: ProviderUsageState) {
   const summary = summarizeProviderUsage(state);
-  const row = {
+  return {
     ...summary,
     longWindowMinutes:
       state.status === "ready" ? (selectWindows(state.report).long?.windowMinutes ?? null) : null,
     shortResetsAt: formatLocalDateTime(summary.shortResetsAt),
     longResetsAt: formatLocalDateTime(summary.longResetsAt),
-  };
-  return {
-    ...row,
-    urgency: urgencyOf(
-      { remaining: row.long, resetsAt: row.longResetsAt, windowMinutes: row.longWindowMinutes },
-      nowMs,
-    ),
   };
 }
 

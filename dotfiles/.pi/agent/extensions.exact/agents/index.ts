@@ -49,7 +49,7 @@ import {
 } from "./class-change.ts";
 import { truncateErrorOutput } from "../shared/tool-text.ts";
 import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
-import { runUsage, scoreCandidates } from "./usage.ts";
+import { parseUsageFacts, runUsage, scoreCandidates, type ProviderUsageFacts } from "./usage.ts";
 
 export type Agent = string;
 
@@ -292,22 +292,37 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
   }
 }
 
-export function parseProviderUrgency(stdout: string): Map<string, number | null> | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
+export function parseProviderUrgency(
+  stdout: string,
+  nowMs: number,
+): Map<string, number | null> | null {
+  const facts = parseUsageFacts(stdout);
+  if (facts === null) return null;
+  const urgencies = new Map<string, number | null>();
+  for (const [provider, fact] of facts) urgencies.set(provider, urgencyOfFact(fact, nowMs));
+  return urgencies;
+}
+
+const USAGE_MINUTE_MS = 60_000;
+const MIN_USAGE_REMAINING_MINUTES = 60;
+
+export function urgencyOfFact(
+  { long, longResetsAt, longWindowMinutes }: ProviderUsageFacts,
+  nowMs: number,
+): number | null {
+  if (long === null || longResetsAt === null || !Number.isFinite(nowMs)) return null;
+  if (longWindowMinutes === null || !Number.isFinite(longWindowMinutes) || longWindowMinutes <= 0)
     return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  const rows = new Map<string, number | null>();
-  for (const row of parsed) {
-    if (!isRecord(row) || !isNonEmptyString(row.provider)) return null;
-    const { provider, urgency } = row;
-    if (urgency !== null && (typeof urgency !== "number" || !Number.isFinite(urgency))) return null;
-    rows.set(provider, urgency);
-  }
-  return rows;
+  const resetMs = Date.parse(longResetsAt);
+  if (!Number.isFinite(resetMs) || resetMs <= nowMs) return null;
+  const remainingMinutes = Math.max(
+    (resetMs - nowMs) / USAGE_MINUTE_MS,
+    MIN_USAGE_REMAINING_MINUTES,
+  );
+  const resetRate = remainingMinutes / longWindowMinutes;
+  if (!Number.isFinite(resetRate)) return null;
+  const urgency = long / 100 / (resetRate * resetRate);
+  return Number.isFinite(urgency) ? urgency : null;
 }
 
 export function agentConfigPath(agentDir = getAgentDir()): string {
@@ -1204,25 +1219,27 @@ export default function agentsExtension(
     candidates: readonly ModelCandidate[],
     signal?: AbortSignal,
   ): Promise<readonly ModelCandidate[]> {
-    let providerUrgency: ReadonlyMap<string, number | null> = new Map();
+    let usageStdout: string | undefined;
     if (!routingUsageDisabled && candidates.length > 1) {
       try {
         const { exitCode, stdout } = await executeUsage(signal);
         if (exitCode === 127) routingUsageDisabled = true;
-        if (exitCode === 0) {
-          const parsed = parseProviderUrgency(stdout);
-          if (parsed === null) routingUsageDisabled = true;
-          else providerUrgency = parsed;
-        }
+        if (exitCode === 0) usageStdout = stdout;
       } catch {
-        providerUrgency = new Map();
+        usageStdout = undefined;
       }
     }
+    const nowMs = Date.now();
+    const providerUrgency =
+      usageStdout === undefined
+        ? new Map<string, number | null>()
+        : parseProviderUrgency(usageStdout, nowMs);
+    if (providerUrgency === null) routingUsageDisabled = true;
     return scoreCandidates(
       candidates,
-      providerUrgency,
+      providerUrgency ?? new Map(),
       config.settings ?? {},
-      new Date(Date.now()),
+      new Date(nowMs),
     );
   }
 

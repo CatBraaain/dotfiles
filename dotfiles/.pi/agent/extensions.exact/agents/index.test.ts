@@ -28,6 +28,7 @@ import agentsExtension, {
   loadAgentConfig,
   parseAgentConfig,
   parseProviderUrgency,
+  urgencyOfFact,
   shouldBlockToolCall,
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
@@ -38,6 +39,27 @@ import { parseCronExpression } from "./cron.ts";
 import { runUsage } from "./usage.ts";
 import { parseUsageJson } from "../provider-usage/index.ts";
 import type { ModelCandidate } from "./routing.ts";
+
+function usageFixture(
+  rows: Array<{ provider: string; long: number | null; remainingFraction: number | null }>,
+  nowMs = Date.now(),
+): string {
+  const longWindowMinutes = 10080;
+  const windowMs = longWindowMinutes * 60_000;
+  return JSON.stringify(
+    rows.map(({ provider, long, remainingFraction }) => ({
+      provider,
+      short: null,
+      shortResetsAt: null,
+      long,
+      longResetsAt:
+        remainingFraction === null
+          ? null
+          : new Date(nowMs + remainingFraction * windowMs).toISOString(),
+      longWindowMinutes,
+    })),
+  );
+}
 
 const config: AgentConfig = {
   default: "manager",
@@ -2125,7 +2147,10 @@ describe("mode routing boundaries", () => {
           queries++;
           return {
             exitCode: 0,
-            stdout: '[{"provider":"openai-codex","urgency":2},{"provider":"fallback","urgency":1}]',
+            stdout: usageFixture([
+              { provider: "openai-codex", long: 50, remainingFraction: 0.5 },
+              { provider: "fallback", long: 100, remainingFraction: 1 },
+            ]),
           };
         },
       },
@@ -6040,34 +6065,44 @@ agents:
 });
 
 describe("parseProviderUrgency", () => {
-  it("keeps exact usage provider names without restricting them to candidates", () => {
-    const result = parseProviderUrgency(
-      JSON.stringify([
-        { provider: "command-code", urgency: 2 },
-        { provider: "commandcode", urgency: 0.5 },
-        { provider: "zai", urgency: 0 },
-        { provider: "openai-codex", urgency: 5 },
-        { provider: "other", urgency: 100 },
-      ]),
+  const nowMs = Date.parse("2026-06-17T00:00:00Z");
+
+  it("keeps exact provider names and calculates the quadratic urgency", () => {
+    const stdout = usageFixture(
+      [
+        { provider: "command-code", long: 50, remainingFraction: 0.5 },
+        { provider: "commandcode", long: 50, remainingFraction: 1 },
+        { provider: "zai", long: 0, remainingFraction: 0.5 },
+        { provider: "openai-codex", long: 100, remainingFraction: 0.5 },
+        { provider: "other", long: 100, remainingFraction: 0.25 },
+      ],
+      nowMs,
     );
     assert.deepEqual(
-      result,
+      parseProviderUrgency(stdout, nowMs),
       new Map([
         ["command-code", 2],
         ["commandcode", 0.5],
         ["zai", 0],
-        ["openai-codex", 5],
-        ["other", 100],
+        ["openai-codex", 4],
+        ["other", 16],
       ]),
     );
   });
 
-  it("keeps absent and null provider facts unknown", () => {
-    assert.deepEqual(
-      parseProviderUrgency('[{"provider":"zai","urgency":null}]'),
-      new Map([["zai", null]]),
-    );
-    assert.deepEqual(parseProviderUrgency("[]"), new Map());
+  it.each([
+    { long: null, longResetsAt: "2026-06-17T12:00:00Z", longWindowMinutes: 300 },
+    { long: 50, longResetsAt: null, longWindowMinutes: 300 },
+    { long: 50, longResetsAt: "2026-06-17T12:00:00Z", longWindowMinutes: null },
+    { long: 50, longResetsAt: "2026-06-17T00:00:00Z", longWindowMinutes: 300 },
+    { long: 1e308, longResetsAt: "2026-06-17T01:00:00Z", longWindowMinutes: 1e6 },
+  ])("keeps unavailable urgency unknown for %j", (facts) => {
+    const stdout = JSON.stringify([{ provider: "zai", ...facts }]);
+    assert.deepEqual(parseProviderUrgency(stdout, nowMs), new Map([["zai", null]]));
+  });
+
+  it("keeps absent provider facts unknown", () => {
+    assert.deepEqual(parseProviderUrgency("[]", nowMs), new Map());
   });
 
   it.each([
@@ -6076,14 +6111,93 @@ describe("parseProviderUrgency", () => {
     "{}",
     "[null]",
     "[[]]",
-    '[{"provider":"","urgency":1}]',
-    '[{"provider":1,"urgency":1}]',
     '[{"provider":"zai"}]',
-    '[{"provider":"zai","urgency":"high"}]',
-    '[{"provider":"zai","urgency":1e400}]',
+    '[{"provider":"zai","long":50,"longResetsAt":"badZ","longWindowMinutes":300}]',
+    '[{"provider":"zai","long":50,"longResetsAt":null,"longWindowMinutes":0}]',
   ])("rejects malformed provider JSON: %s", (stdout) => {
-    assert.equal(parseProviderUrgency(stdout), null);
+    assert.equal(parseProviderUrgency(stdout, nowMs), null);
   });
+});
+
+describe("urgencyOfFact", () => {
+  const nowMs = Date.parse("2026-06-17T00:00:00Z");
+  const minuteMs = 60_000;
+  const resetAt = new Date(nowMs + 150 * minuteMs).toISOString();
+  const facts = { long: 50, longResetsAt: resetAt, longWindowMinutes: 300 };
+
+  it.each([
+    { long: 50, remainingMinutes: 150, expected: 2 },
+    { long: 90, remainingMinutes: 150, expected: 3.6 },
+    { long: 50, remainingMinutes: 75, expected: 8 },
+    { long: 50, remainingMinutes: 300, expected: 0.5 },
+    { long: 0, remainingMinutes: 150, expected: 0 },
+  ])(
+    "returns $expected for $long percent and $remainingMinutes remaining minutes",
+    ({ long, remainingMinutes, expected }) => {
+      const longResetsAt = new Date(nowMs + remainingMinutes * minuteMs).toISOString();
+      assert.equal(urgencyOfFact({ ...facts, long, longResetsAt }, nowMs), expected);
+    },
+  );
+
+  it.each([300, 10080, 43200])("uses the supplied %s-minute window", (longWindowMinutes) => {
+    const longResetsAt = new Date(nowMs + (longWindowMinutes / 2) * minuteMs).toISOString();
+    assert.equal(urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes }, nowMs), 2);
+  });
+
+  it.each([1, 6, 59, 60])("clamps %s remaining minutes to one hour", (minutes) => {
+    const longResetsAt = new Date(nowMs + minutes * minuteMs).toISOString();
+    assert.equal(urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes: 240 }, nowMs), 8);
+  });
+
+  it("allows a reset rate above one for a window shorter than one hour", () => {
+    const longResetsAt = new Date(nowMs + minuteMs).toISOString();
+    assert.equal(urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes: 30 }, nowMs), 0.125);
+  });
+
+  it("uses only the supplied scoring clock", () => {
+    const clock = spyOn(Date, "now").mockImplementation(() => {
+      throw new Error("Unexpected clock read");
+    });
+    try {
+      assert.equal(urgencyOfFact(facts, nowMs), 2);
+      assert.equal(urgencyOfFact(facts, nowMs + 75 * minuteMs), 8);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([0, -1])("returns unknown for a reset %s ms from scoring", (deltaMs) => {
+    const longResetsAt = new Date(nowMs + deltaMs).toISOString();
+    assert.equal(urgencyOfFact({ ...facts, longResetsAt }, nowMs), null);
+  });
+
+  it.each([
+    { long: null },
+    { longResetsAt: null },
+    { longResetsAt: "badZ" },
+    { long: NaN },
+    { long: Infinity },
+  ])("returns unknown for invalid facts %j", (overrides) => {
+    assert.equal(urgencyOfFact({ ...facts, ...overrides }, nowMs), null);
+  });
+
+  it.each([null, 0, -1, NaN, Infinity, -Infinity])(
+    "returns unknown for duration %s",
+    (longWindowMinutes) => {
+      assert.equal(urgencyOfFact({ ...facts, longWindowMinutes }, nowMs), null);
+    },
+  );
+
+  it.each([NaN, Infinity, -Infinity])("returns unknown for clock %s", (clock) => {
+    assert.equal(urgencyOfFact(facts, clock), null);
+  });
+
+  it.each([Number.MIN_VALUE, Number.MAX_VALUE])(
+    "returns unknown for a non-finite computation at duration %s",
+    (longWindowMinutes) => {
+      assert.equal(urgencyOfFact({ ...facts, longWindowMinutes }, nowMs), null);
+    },
+  );
 });
 
 describe("usage scoring and ordering", () => {
@@ -6099,15 +6213,49 @@ describe("usage scoring and ordering", () => {
   };
 
   function routeOutput(urgencies: Array<number | null>): string {
-    return JSON.stringify(
-      baseCandidates.map((candidate, index) => ({
-        provider: candidate.provider,
-        model: candidate.model,
-        urgency: urgencies[index] ?? null,
-        usageState: null,
-      })),
+    return usageFixture(
+      baseCandidates.map((candidate, index) => {
+        const urgency = urgencies[index] ?? null;
+        return {
+          provider: candidate.provider,
+          model: candidate.model,
+          long: urgency === null ? null : Math.round(urgency * 100),
+          remainingFraction: urgency === null ? null : 1,
+          usageState: null,
+        };
+      }),
     );
   }
+
+  it("takes the scoring clock after the CLI has finished", async () => {
+    let nowMs = Date.parse("2026-06-17T00:00:00Z");
+    const clock = spyOn(Date, "now").mockImplementation(() => nowMs);
+    const extension = captureAgentsExtension(
+      { config: routedConfig },
+      {
+        async executeUsage() {
+          const stdout = usageFixture(
+            [
+              { provider: "a", long: 50, remainingFraction: 60 / 10080 },
+              { provider: "u", long: 100, remainingFraction: 0.5 },
+              { provider: "b", long: 0, remainingFraction: 1 },
+              { provider: "d", long: 0, remainingFraction: 1 },
+            ],
+            nowMs,
+          );
+          nowMs += 120 * 60_000;
+          return { exitCode: 0, stdout };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      assert.deepEqual(extension.selectedModels, [{ provider: "u", id: "m" }]);
+    } finally {
+      clock.mockRestore();
+      extension.restore();
+    }
+  });
 
   it("orders by score from CLI facts, not by the CLI output order, and iterates the same array after a failure", async () => {
     let calls = 0;
@@ -6234,11 +6382,12 @@ describe("usage scoring and ordering", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify(
+            stdout: usageFixture(
               duplicates.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
-                urgency: 1,
+                long: 100,
+                remainingFraction: 1,
                 usageState: null,
               })),
             ),
@@ -6299,11 +6448,12 @@ describe("usage scoring and ordering", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify(
+            stdout: usageFixture(
               scheduled.map((candidate, index) => ({
                 provider: candidate.provider,
                 model: candidate.model,
-                urgency: index === 2 ? 2 : 1,
+                long: index === 2 ? 50 : 100,
+                remainingFraction: index === 2 ? 0.5 : 1,
                 usageState: null,
               })),
             ),
@@ -6344,11 +6494,12 @@ describe("usage scoring and ordering", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify(
+            stdout: usageFixture(
               replacementConfig.modes.standard!.middle!.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
-                urgency: 1,
+                long: 100,
+                remainingFraction: 1,
                 usageState: null,
               })),
             ),
@@ -6389,11 +6540,12 @@ describe("usage scoring and ordering", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify(
+            stdout: usageFixture(
               emptySettingsConfig.modes.standard!.middle!.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
-                urgency: 4,
+                long: 100,
+                remainingFraction: 0.5,
                 usageState: null,
               })),
             ),
@@ -6437,11 +6589,12 @@ describe("usage scoring and ordering", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify(
+            stdout: usageFixture(
               namespaced.map((candidate) => ({
                 provider: candidate.provider,
                 model: candidate.model,
-                urgency: candidate.provider === "zai" ? 3 : 1,
+                long: candidate.provider === "zai" ? 75 : 100,
+                remainingFraction: candidate.provider === "zai" ? 0.5 : 1,
                 usageState: null,
               })),
             ),
@@ -6581,9 +6734,9 @@ describe("automatic model retention", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify([
-              { provider: "a", urgency: preferB ? 1 : 2 },
-              { provider: "b", urgency: preferB ? 2 : 1 },
+            stdout: usageFixture([
+              { provider: "a", long: preferB ? 100 : 50, remainingFraction: preferB ? 1 : 0.5 },
+              { provider: "b", long: preferB ? 50 : 100, remainingFraction: preferB ? 0.5 : 1 },
             ]),
           };
         },
@@ -6617,9 +6770,9 @@ describe("automatic model retention", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify([
-              { provider: "a", urgency: preferB ? 1 : 2 },
-              { provider: "b", urgency: preferB ? 2 : 1 },
+            stdout: usageFixture([
+              { provider: "a", long: preferB ? 100 : 50, remainingFraction: preferB ? 1 : 0.5 },
+              { provider: "b", long: preferB ? 50 : 100, remainingFraction: preferB ? 0.5 : 1 },
             ]),
           };
         },
@@ -6774,7 +6927,10 @@ describe("automatic model retention", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: '[{"provider":"a","urgency":2},{"provider":"b","urgency":1}]',
+            stdout: usageFixture([
+              { provider: "a", long: 50, remainingFraction: 0.5 },
+              { provider: "b", long: 100, remainingFraction: 1 },
+            ]),
           };
         },
       },
@@ -6827,9 +6983,9 @@ describe("automatic model retention", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify([
-              { provider: "a", urgency: preferB ? 1 : 2 },
-              { provider: "b", urgency: preferB ? 2 : 1 },
+            stdout: usageFixture([
+              { provider: "a", long: preferB ? 100 : 50, remainingFraction: preferB ? 1 : 0.5 },
+              { provider: "b", long: preferB ? 50 : 100, remainingFraction: preferB ? 0.5 : 1 },
             ]),
           };
         },
@@ -6935,9 +7091,9 @@ describe("automatic model retention", () => {
           async executeUsage() {
             return {
               exitCode: 0,
-              stdout: JSON.stringify([
-                { provider: "a", urgency: preferB ? 1 : 2 },
-                { provider: "b", urgency: preferB ? 2 : 1 },
+              stdout: usageFixture([
+                { provider: "a", long: preferB ? 100 : 50, remainingFraction: preferB ? 1 : 0.5 },
+                { provider: "b", long: preferB ? 50 : 100, remainingFraction: preferB ? 0.5 : 1 },
               ]),
             };
           },
@@ -7125,10 +7281,10 @@ describe("provider urgency routing boundaries", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify([
-              { provider: "zero", urgency: 0 },
-              { provider: "unknown", urgency: null },
-              { provider: "Absent", urgency: 100 },
+            stdout: usageFixture([
+              { provider: "zero", long: 0, remainingFraction: 1 },
+              { provider: "unknown", long: 50, remainingFraction: null },
+              { provider: "Absent", long: 100, remainingFraction: 1 },
             ]),
           };
         },
@@ -7176,7 +7332,10 @@ describe("provider urgency routing boundaries", () => {
             calls++;
             return {
               exitCode,
-              stdout: exitCode === 1 ? "not json" : '[{"provider":"a","urgency":null}]',
+              stdout:
+                exitCode === 1
+                  ? "not json"
+                  : usageFixture([{ provider: "a", long: 50, remainingFraction: null }]),
             };
           },
         },
@@ -7232,10 +7391,10 @@ describe("provider urgency routing boundaries", () => {
         async executeUsage() {
           return {
             exitCode: 0,
-            stdout: JSON.stringify([
-              { provider: "command-code", urgency: 2.5 },
-              { provider: "zai", urgency: 10 },
-              { provider: "other", urgency: 100 },
+            stdout: usageFixture([
+              { provider: "command-code", long: 60, remainingFraction: 0.5 },
+              { provider: "zai", long: 40, remainingFraction: 1 },
+              { provider: "other", long: 50, remainingFraction: 0.5 },
             ]),
           };
         },
@@ -7401,11 +7560,11 @@ describe("shipped agents.yaml through the usage fixture CLI", () => {
       { multiply: { provider: "commandcode" } },
     ]);
 
-    const rows = [
-      { provider: "zai", urgency: 0.02 },
-      { provider: "openai-codex", urgency: 0.5 },
-      { provider: "commandcode", urgency: 0.3 },
-    ];
+    const usageJson = usageFixture([
+      { provider: "zai", long: 2, remainingFraction: 1 },
+      { provider: "openai-codex", long: 50, remainingFraction: 1 },
+      { provider: "commandcode", long: 30, remainingFraction: 1 },
+    ]);
     const previousPath = process.env.PATH;
     writeFileSync(
       usage,
@@ -7414,7 +7573,7 @@ import { appendFileSync } from "node:fs";
 if (JSON.stringify(process.argv.slice(2)) !== '["--json"]') process.exit(2);
 appendFileSync(${JSON.stringify(counter)}, "query\\n");
 console.error("fixture warning");
-console.log(${JSON.stringify(JSON.stringify(rows))});
+console.log(${JSON.stringify(usageJson)});
 `,
       { mode: 0o700 },
     );
@@ -7471,7 +7630,7 @@ console.log(${JSON.stringify(JSON.stringify(rows))});
 });
 
 describe("provider-usage compatibility", () => {
-  it("accepts urgency without changing widget fields", () => {
+  it("accepts six CLI fields without changing widget fields", () => {
     const entries = parseUsageJson(
       JSON.stringify([
         {
@@ -7481,7 +7640,6 @@ describe("provider-usage compatibility", () => {
           long: 50,
           longResetsAt: "2026-11-01T00:00:00Z",
           longWindowMinutes: 10080,
-          urgency: 1.5,
         },
       ]),
     );

@@ -59,8 +59,7 @@ describe("JSON local reset date times", () => {
             },
           ]),
         );
-        assert.deepEqual(summarizeProviderUsageJson(state, Date.parse("2030-01-01T00:00:00Z")), {
-          urgency: null,
+        assert.deepEqual(summarizeProviderUsageJson(state), {
           longWindowMinutes: 10080,
           provider: "openai-codex",
           short: 80,
@@ -84,7 +83,6 @@ describe("JSON local reset date times", () => {
         ]),
       );
       assert.deepEqual(summarizeProviderUsageJson(state), {
-        urgency: null,
         longWindowMinutes: 10080,
         provider: "openai-codex",
         short: 80,
@@ -128,7 +126,6 @@ describe("JSON local reset date times", () => {
         );
         const state = ready(report);
         assert.deepEqual(summarizeProviderUsageJson(state), {
-          urgency: null,
           longWindowMinutes: 10080,
           provider: "commandcode",
           short: 100,
@@ -493,27 +490,29 @@ describe("JSON remaining summary", () => {
   }
 });
 
-describe("JSON urgency", () => {
-  const now = Date.parse("2026-06-17T00:00:00Z");
-  it("uses rounded long and second-precision reset rather than raw bucket values or capturedAt", () => {
-    const state = ready(
-      fixture([
-        { ...bucket("short", 300, 99), resetsAt: (now + 60_000) / 1000 },
-        { ...bucket("long", 10080, 66.5), resetsAt: (now + 120 * 60_000 + 999) / 1000 },
-      ]),
-    );
-    const row = summarizeProviderUsageJson(state, now);
+describe("JSON long window facts", () => {
+  it("exports six fields with a rounded remaining rate and second-precision reset", () => {
+    const resetMs = Date.parse("2026-06-17T02:00:00.999Z");
+    const state = ready(fixture([{ ...bucket("long", 10080, 66.5), resetsAt: resetMs / 1000 }]));
+    const row = summarizeProviderUsageJson(state);
+    assert.deepEqual(Object.keys(row), [
+      "provider",
+      "short",
+      "shortResetsAt",
+      "long",
+      "longResetsAt",
+      "longWindowMinutes",
+    ]);
     assert.equal(row.long, 67);
-    assert.equal(row.urgency, (0.67 * 10080) / 120);
+    assert.equal(row.longWindowMinutes, 10080);
+    assert.equal(Date.parse(row.longResetsAt!), resetMs - 999);
   });
-  it.each([0, 50])("preserves valid remaining %s", (remaining) => {
-    const state = ready(
-      fixture([{ ...bucket("long", 300, remaining), resetsAt: (now + 60_000) / 1000 }]),
-    );
-    assert.equal(summarizeProviderUsageJson(state, now).urgency, (remaining / 100) * 5);
-  });
-  it("treats a reset in the current second as expired", () => {
-    const state = ready(fixture([{ ...bucket("long", 300), resetsAt: (now + 999) / 1000 }]));
-    assert.equal(summarizeProviderUsageJson(state, now).urgency, null);
+
+  it("preserves past reset facts for consumers", () => {
+    const resetMs = Date.parse("2000-01-01T00:00:00Z");
+    const state = ready(fixture([{ ...bucket("long", 300), resetsAt: resetMs / 1000 }]));
+    const row = summarizeProviderUsageJson(state);
+    assert.equal(Date.parse(row.longResetsAt!), resetMs);
+    assert.equal(row.longWindowMinutes, 300);
   });
 });

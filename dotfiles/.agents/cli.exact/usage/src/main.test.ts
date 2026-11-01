@@ -126,7 +126,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
         {
           provider: "first",
@@ -135,7 +134,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
         {
           provider: "expired",
@@ -144,7 +142,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
       ]);
       assert.equal(stdout[0], JSON.stringify(states, null, 2));
@@ -165,7 +162,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
       ]);
     });
@@ -196,7 +192,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
       ]);
     });
@@ -220,7 +215,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
       ]);
       assert.doesNotMatch(stdout[0]!, /first-secret/);
@@ -250,7 +244,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
         {
           provider: "first",
@@ -259,7 +252,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
         {
           provider: "expired",
@@ -268,7 +260,6 @@ describe("run", () => {
           long: null,
           longResetsAt: null,
           longWindowMinutes: null,
-          urgency: null,
         },
       ]);
     });
@@ -399,7 +390,6 @@ describe("run", () => {
             long: 80,
             longResetsAt: null,
             longWindowMinutes: 300,
-            urgency: null,
           },
         ]);
       } finally {
@@ -537,9 +527,6 @@ describe("stored auth to fixed endpoint integration", () => {
               shortResetsAt: states[0]?.shortResetsAt,
               long: fixture.long,
               longWindowMinutes: fixture.id === "commandcode" ? 43200 : 10080,
-              urgency:
-                ((fixture.long / 100) * (fixture.id === "commandcode" ? 43200 : 10080)) /
-                ((longResetsAt * 1000 - 1000) / 60000),
               longResetsAt: states[0]?.longResetsAt,
             },
           ]);
@@ -599,7 +586,6 @@ describe("stored auth to fixed endpoint integration", () => {
                 long: null,
                 longResetsAt: null,
                 longWindowMinutes: null,
-                urgency: null,
               },
             ]);
           } finally {
@@ -658,7 +644,6 @@ describe("stored auth to fixed endpoint integration", () => {
             long: null,
             longResetsAt: null,
             longWindowMinutes: null,
-            urgency: null,
           });
         }
         await writeFile(
@@ -734,8 +719,8 @@ describe("supported provider boundary", () => {
   }
 });
 
-describe("urgency output clock", () => {
-  it("uses one clock after every query and queries again on the next run", async () => {
+describe("JSON window facts across queries", () => {
+  it("exports six facts without time calculations and queries again on the next run", async () => {
     await withCli(async ({ env, stdout }) => {
       let now = 1000;
       let queries = 0;
@@ -763,7 +748,18 @@ describe("urgency output clock", () => {
         },
       }));
       assert.equal(await run(["first", "--json"], env), 0);
-      assert.equal(JSON.parse(stdout[0]!)[0].urgency, 1.25);
+      const row = JSON.parse(stdout[0]!)[0];
+      assert.deepEqual(Object.keys(row), [
+        "provider",
+        "short",
+        "shortResetsAt",
+        "long",
+        "longResetsAt",
+        "longWindowMinutes",
+      ]);
+      assert.equal(row.long, 50);
+      assert.equal(row.longWindowMinutes, 300);
+      assert.equal(Date.parse(row.longResetsAt), 10_801_000);
       assert.equal(await run(["first", "--json"], env), 0);
       assert.equal(queries, 2);
     });
@@ -872,7 +868,7 @@ describe("Command Code unavailable authentication", () => {
               const rows = JSON.parse(stdout[0]!);
               assert.equal(rows.length, 1);
               assert.equal(rows[0].provider, "commandcode");
-              assert.equal(rows[0].urgency, null);
+              assert.equal(rows[0].longWindowMinutes, null);
             }
             stdout.length = 0;
             assert.equal(await run(["list", "--json"], env), 0);

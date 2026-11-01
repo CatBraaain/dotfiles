@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
-import { runUsage, scoreCandidates } from "./usage.ts";
+import { runUsage, scoreCandidates, parseUsageFacts, type ProviderUsageFacts } from "./usage.ts";
 import { parseCronExpression } from "./cron.ts";
 
 type Callback = (error: Error | null, stdout: string, stderr: string) => void;
@@ -41,6 +41,75 @@ describe("candidate scores", () => {
       now,
     );
     assert.deepEqual(selected, [enabled]);
+  });
+});
+
+describe("usage facts parsing", () => {
+  const resetAt = "2026-06-17T12:00:00+09:00";
+
+  it("keeps the reset instant and window duration per provider", () => {
+    const facts = parseUsageFacts(
+      JSON.stringify([
+        { provider: "zai", long: 50, longResetsAt: resetAt, longWindowMinutes: 300 },
+        { provider: "commandcode", long: null, longResetsAt: null, longWindowMinutes: null },
+      ]),
+    );
+    const expected: Array<[string, ProviderUsageFacts]> = [
+      ["zai", { long: 50, longResetsAt: resetAt, longWindowMinutes: 300 }],
+      ["commandcode", { long: null, longResetsAt: null, longWindowMinutes: null }],
+    ];
+    assert.deepEqual(facts, new Map(expected));
+  });
+
+  it.each(["2026-06-17T03:00:00Z", "2026-06-16T23:00:00-04:00", resetAt])(
+    "accepts the explicit timezone offset in %s",
+    (longResetsAt) => {
+      const row = { provider: "zai", long: 50, longResetsAt, longWindowMinutes: 300 };
+      const facts = parseUsageFacts(JSON.stringify([row]));
+      assert.deepEqual(facts?.get("zai"), { long: 50, longResetsAt, longWindowMinutes: 300 });
+    },
+  );
+
+  it("keeps a parseable expired reset as a valid fact", () => {
+    const longResetsAt = "2000-01-01T00:00:00Z";
+    const facts = parseUsageFacts(
+      JSON.stringify([{ provider: "zai", long: 50, longResetsAt, longWindowMinutes: 300 }]),
+    );
+    assert.equal(facts?.get("zai")?.longResetsAt, longResetsAt);
+  });
+
+  it.each([null, 0, -1, "300", "Infinity"])(
+    "rejects a missing or invalid duration %s",
+    (duration) => {
+      const row = { provider: "zai", long: 50, longResetsAt: resetAt, longWindowMinutes: duration };
+      if (duration === null) delete (row as { longWindowMinutes?: unknown }).longWindowMinutes;
+      assert.equal(parseUsageFacts(JSON.stringify([row])), null);
+    },
+  );
+
+  it.each(["bad", "badZ", "2026-99-17T03:00:00Z", "2026-06-17T03:00:00", "2026-06-17"])(
+    "rejects a non-offset or unparseable reset %s",
+    (longResetsAt) => {
+      const row = { provider: "zai", long: 50, longResetsAt, longWindowMinutes: 300 };
+      assert.equal(parseUsageFacts(JSON.stringify([row])), null);
+    },
+  );
+
+  it.each([
+    "not json",
+    "null",
+    "{}",
+    "[null]",
+    "[[]]",
+    '[{"provider":"","long":50,"longResetsAt":null,"longWindowMinutes":300}]',
+    '[{"provider":"zai","long":"70","longResetsAt":null,"longWindowMinutes":300}]',
+    '[{"provider":"zai","long":50,"longResetsAt":12,"longWindowMinutes":300}]',
+    '[{"provider":"zai","long":50,"longWindowMinutes":300}]',
+    '[{"provider":"zai","long":50,"longResetsAt":null,"longWindowMinutes":1e400}]',
+    '[{"provider":"zai","long":50,"longResetsAt":null,"longWindowMinutes":-1e400}]',
+    '[{"provider":"zai","long":1e400,"longResetsAt":null,"longWindowMinutes":300}]',
+  ])("rejects malformed CLI output: %s", (stdout) => {
+    assert.equal(parseUsageFacts(stdout), null);
   });
 });
 
