@@ -51,9 +51,7 @@ describe("parseTwitterListUrl", () => {
 
 describe("parseFxTwitterResponse", () => {
   it("unwraps the tweet", () => {
-    const tweet = parseFxTwitterResponse(
-      JSON.stringify({ code: 200, tweet: { text: "hi" } }),
-    );
+    const tweet = parseFxTwitterResponse(JSON.stringify({ code: 200, tweet: { text: "hi" } }));
     assert.equal(tweet.text, "hi");
   });
 

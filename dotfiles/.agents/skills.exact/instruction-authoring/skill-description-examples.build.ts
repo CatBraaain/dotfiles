@@ -13,9 +13,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 async function main(): Promise<void> {
-  const { buildHookContext } = await import(
-    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
-  );
+  const { buildHookContext } = await import(`${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`);
   const { syncGithubMirror } = await buildHookContext();
   const mirror = await syncGithubMirror("anthropics/skills");
   const output = join(process.cwd(), "references", "skill-description-examples.md");

@@ -1318,8 +1318,16 @@ describe("rename display", () => {
 
 describe("diff display contract", () => {
   it("renders the SPEC Modified example byte-for-byte", async () => {
-    await put(homeRoot, ".agents/config/agents.yaml", "agents:\n  model: old-model\n  enabled: true\n");
-    await put(distRoot, ".agents/config/agents.yaml", "agents:\n  model: new-model\n  enabled: true\n");
+    await put(
+      homeRoot,
+      ".agents/config/agents.yaml",
+      "agents:\n  model: old-model\n  enabled: true\n",
+    );
+    await put(
+      distRoot,
+      ".agents/config/agents.yaml",
+      "agents:\n  model: new-model\n  enabled: true\n",
+    );
     const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
 
     assert.equal(exitCode, 0);

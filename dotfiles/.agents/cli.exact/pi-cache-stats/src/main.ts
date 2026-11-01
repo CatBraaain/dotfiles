@@ -70,7 +70,8 @@ export function run(argv: readonly string[], env: RunEnv = {}): number {
     const files = listSessionFiles(options);
     if (files.paths.length === 0) throw new Error("no session files matched the given filters");
     const { pairs, compactionSkips } = collectPairsFromFiles(files.paths, options.model);
-    if (pairs.length === 0) throw new Error("no consecutive same-model response pairs found in the matched sessions");
+    if (pairs.length === 0)
+      throw new Error("no consecutive same-model response pairs found in the matched sessions");
     if (options.csv !== undefined) writeFileSync(options.csv, pairsToCsv(pairs));
     stdout(renderReport(files, pairs, compactionSkips, options));
     return 0;
@@ -111,7 +112,8 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
 function parsePositiveInt(raw: string | undefined, optionName: string): number | null {
   if (raw === undefined) return null;
   const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) throw new Error(`${optionName} must be a positive integer: ${raw}`);
+  if (!Number.isInteger(value) || value <= 0)
+    throw new Error(`${optionName} must be a positive integer: ${raw}`);
   return value;
 }
 
@@ -189,7 +191,10 @@ function renderReport(
     "hit rate = cacheRead / (input + cacheRead), averaged per gap-to-previous-response bucket",
     "",
     "per provider (all models merged):",
-    renderTable(aggregate(pairs, options.binEdgesMin, (pair) => pair.provider), options.binEdgesMin),
+    renderTable(
+      aggregate(pairs, options.binEdgesMin, (pair) => pair.provider),
+      options.binEdgesMin,
+    ),
     "",
     renderModelTable(pairs, options),
   ];
@@ -198,7 +203,11 @@ function renderReport(
 }
 
 function renderModelTable(pairs: readonly Pair[], options: CliOptions): string {
-  const modelTable = aggregate(pairs, options.binEdgesMin, (pair) => `${pair.provider}/${pair.model}`);
+  const modelTable = aggregate(
+    pairs,
+    options.binEdgesMin,
+    (pair) => `${pair.provider}/${pair.model}`,
+  );
   const topKeys = keysByCountDesc(modelTable.pairCountByKey).slice(0, options.top);
   const limitedTable = {
     hitRatesByKey: new Map(topKeys.map((key) => [key, modelTable.hitRatesByKey.get(key) ?? []])),

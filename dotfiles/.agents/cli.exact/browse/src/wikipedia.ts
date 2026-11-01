@@ -42,17 +42,12 @@ interface ExtractsResponse {
   };
 }
 
-export function renderWikipediaMarkdown(
-  title: string,
-  permalink: string,
-  extract: string,
-): string {
-  const paragraphs = extract.split(/\n\n+/).map((part) => part.trim()).filter(Boolean);
-  const lines = [
-    `# ${title}`,
-    "",
-    `- URL: ${permalink}`,
-  ];
+export function renderWikipediaMarkdown(title: string, permalink: string, extract: string): string {
+  const paragraphs = extract
+    .split(/\n\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const lines = [`# ${title}`, "", `- URL: ${permalink}`];
   if (paragraphs[0]) lines.push(`- Summary: ${paragraphs[0]}`);
   lines.push("", "## Article", "", extract.trim());
   return lines.join("\n").trim();

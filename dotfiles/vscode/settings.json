@@ -213,7 +213,7 @@
     },
     {
       "command": "oxfmt --stdin-filepath \"${file}\"",
-      "languages": ["yaml","json","jsonc"]
+      "languages": ["yaml", "json", "jsonc"]
     }
   ],
   "debug.inlineValues": "on",

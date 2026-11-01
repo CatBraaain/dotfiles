@@ -29,7 +29,9 @@ const parameters = Type.Object({
     description: "Initial request the new main-agent session executes immediately.",
   }),
   cwd: Type.Optional(
-    Type.String({ description: "Working directory of the new session; defaults to the current cwd." }),
+    Type.String({
+      description: "Working directory of the new session; defaults to the current cwd.",
+    }),
   ),
   name: Type.Optional(
     Type.String({ description: "tmux window name; defaults to an automatic name (main-HHMMSS)." }),
@@ -117,7 +119,11 @@ function sessionResult(
     | undefined;
   const text = resultText(bash);
   const details = { bash };
-  if (outcome.isError || bash.isError || (envelope?.exit_code !== undefined && envelope.exit_code !== 0)) {
+  if (
+    outcome.isError ||
+    bash.isError ||
+    (envelope?.exit_code !== undefined && envelope.exit_code !== 0)
+  ) {
     const error =
       envelope?.exit_code === SERVER_UNAVAILABLE_EXIT_CODE
         ? SERVER_UNAVAILABLE_MESSAGE
@@ -229,8 +235,7 @@ export default function createSessionExtension(
       }
 
       const windowName = input.name?.trim() || autoWindowName(now());
-      const sessionCwd =
-        input.cwd === undefined ? resolve(ctx.cwd) : resolve(ctx.cwd, input.cwd);
+      const sessionCwd = input.cwd === undefined ? resolve(ctx.cwd) : resolve(ctx.cwd, input.cwd);
       const command = buildTmuxCommand({
         initialRequest: input.initialRequest,
         cwd: sessionCwd,

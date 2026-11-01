@@ -823,7 +823,8 @@ if (import.meta.main) {
   await Bun.write("settings.json", JSON.stringify(await Bun.file("settings.json").json()));
   await Bun.write("app.conf", (await Bun.file("app.conf").text()).trim());
 }`;
-    const replacementHook = 'if (import.meta.main) await Bun.write("overwritten-ran.txt", "external");';
+    const replacementHook =
+      'if (import.meta.main) await Bun.write("overwritten-ran.txt", "external");';
     await put(root, "dotfiles/source.build.ts", sourceHook);
     await put(
       root,
@@ -1560,11 +1561,7 @@ process.stderr.write("\\n__LOG_TIMES__" + JSON.stringify(logTimes));`;
 describe("manager CLI", () => {
   for (const command of ["apply", "diff", "managed"]) {
     it(`logs each stage and build hook in order for ${command}`, async () => {
-      await put(
-        root,
-        "dotfiles/nested/01-local.build-machine.ts",
-        "if (import.meta.main) {};",
-      );
+      await put(root, "dotfiles/nested/01-local.build-machine.ts", "if (import.meta.main) {};");
       await put(root, "dotfiles/nested/02-shared.build.ts", "if (import.meta.main) {};");
       await put(root, "dotfiles/new.txt", "content\n");
 

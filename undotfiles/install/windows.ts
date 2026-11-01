@@ -120,14 +120,19 @@ function installWingetPackages(profile: Profile): void {
   const unmanaged = isPersonal
     ? [...unmanagedPackages, ...unmanagedPersonalPackages]
     : unmanagedPackages;
-  const managed = isPersonal
-    ? [...managedPackages, ...managedPersonalPackages]
-    : managedPackages;
+  const managed = isPersonal ? [...managedPackages, ...managedPersonalPackages] : managedPackages;
   // Individual winget failures are logged but do not abort the rest of the
   // bootstrap, matching the previous PowerShell behavior.
   runAllowingFailure([
-    "winget", "install", "AutoHotkey.AutoHotkey",
-    "--silent", "--version", "1.1.37.02", "--no-upgrade", "--source", "winget",
+    "winget",
+    "install",
+    "AutoHotkey.AutoHotkey",
+    "--silent",
+    "--version",
+    "1.1.37.02",
+    "--no-upgrade",
+    "--source",
+    "winget",
   ]);
   runAllowingFailure(["winget", "install", ...unmanaged, "--no-upgrade", "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managed, "--source", "winget"]);
@@ -140,8 +145,7 @@ const rustDeskRepo = "rustdesk/rustdesk";
 // installed from the GitHub release msi instead. The installed version is
 // looked up from the registry so upgrades replace the previous msi install.
 async function installRustDesk(): Promise<void> {
-  if (process.arch !== "x64")
-    throw new Error("the RustDesk Windows installer supports x64 only");
+  if (process.arch !== "x64") throw new Error("the RustDesk Windows installer supports x64 only");
   const tag = output([
     "gh",
     "release",
@@ -228,18 +232,23 @@ async function resolveProfile(arguments_: readonly string[]): Promise<Profile> {
 
 function isElevated(): boolean {
   // `gsudo status IsElevated` exits with 0 when elevated, 1 otherwise.
-  const status = Bun.spawnSync(["gsudo", "status", "IsElevated"], { stdout: "ignore", stderr: "ignore" });
+  const status = Bun.spawnSync(["gsudo", "status", "IsElevated"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
   return status.exitCode === 0;
 }
 
 function run(command: readonly string[]): void {
   const exitCode = runInheritingIO(command);
-  if (exitCode !== 0) throw new Error(`command failed with exit code ${exitCode}: ${command.join(" ")}`);
+  if (exitCode !== 0)
+    throw new Error(`command failed with exit code ${exitCode}: ${command.join(" ")}`);
 }
 
 function runAllowingFailure(command: readonly string[]): void {
   const exitCode = runInheritingIO(command);
-  if (exitCode !== 0) console.error(`command failed with exit code ${exitCode}: ${command.join(" ")}`);
+  if (exitCode !== 0)
+    console.error(`command failed with exit code ${exitCode}: ${command.join(" ")}`);
 }
 
 function runInheritingIO(command: readonly string[]): number | null {
@@ -254,8 +263,7 @@ function localAppData(): string {
 
 function output(command: readonly string[]): string {
   const result = Bun.spawnSync([...command], { stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0)
-    throw new Error(result.stderr.toString().trim() || command.join(" "));
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim() || command.join(" "));
   return result.stdout.toString().trim();
 }
 

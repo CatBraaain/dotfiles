@@ -15,14 +15,24 @@ type ApprovalUI = {
   input?(title: string, placeholder?: string): Promise<string | undefined>;
 };
 
-type ExecuteTool = (name: string, args: unknown) => Promise<{
+type ExecuteTool = (
+  name: string,
+  args: unknown,
+) => Promise<{
   isError: boolean;
-  result: { content: { type: string; text: string }[]; isError: boolean; structuredContent: unknown };
+  result: {
+    content: { type: string; text: string }[];
+    isError: boolean;
+    structuredContent: unknown;
+  };
 }>;
 
 type CapturedHandlers = Map<string, (event: any, context?: any) => unknown>;
 
-function captureTool(handlers?: CapturedHandlers, now = () => new Date("2026-10-24T10:30:45")): any {
+function captureTool(
+  handlers?: CapturedHandlers,
+  now = () => new Date("2026-10-24T10:30:45"),
+): any {
   const tools: any[] = [];
   createSessionExtension(
     {
@@ -49,7 +59,11 @@ function bashOutcome(exitCode = 0, output = "") {
 
 type UiCalls = { selectTitles: string[]; confirmCount: number; inputTitles: string[] };
 
-function approvalUi(answer: { select?: string | Promise<string>; confirm?: boolean; input?: string }): {
+function approvalUi(answer: {
+  select?: string | Promise<string>;
+  confirm?: boolean;
+  input?: string;
+}): {
   ui: ApprovalUI;
   calls: UiCalls;
 } {
@@ -90,7 +104,10 @@ const recordingExecutor = (): { executeTool: ExecuteTool; commands: string[] } =
   };
 };
 
-function withAgentName(name: string | undefined, test: () => Promise<void> | void): () => Promise<void> {
+function withAgentName(
+  name: string | undefined,
+  test: () => Promise<void> | void,
+): () => Promise<void> {
   return async () => {
     const previous = process.env.PI_AGENT_NAME;
     if (name === undefined) delete process.env.PI_AGENT_NAME;
@@ -175,7 +192,7 @@ describe("tmux コマンドの構築", () => {
   });
 
   it("引用文字とコマンド置換を含む初期依頼が、展開されずに1引数として残る", () => {
-    const initialRequest = "it's $(x) \"z\"";
+    const initialRequest = 'it\'s $(x) "z"';
     const command = buildTmuxCommand({ initialRequest, cwd: "/dir with space", name: "w" });
     const windowLine = command.split("\n").find((line) => line.includes("new-window"))!;
     const bashArgument = parse(windowLine).at(-1) as string;
@@ -185,7 +202,7 @@ describe("tmux コマンドの構築", () => {
 
   it("バッククォートを含む初期依頼もシェルとして妥当な1コマンドになる", () => {
     const command = buildTmuxCommand({
-      initialRequest: "it's $(x) `y` \"z\"",
+      initialRequest: 'it\'s $(x) `y` "z"',
       cwd: "/dir with space",
       name: "w",
     });
@@ -481,8 +498,7 @@ describe("実行", () => {
   it("tmux コマンドの失敗をエラーとして返す", async () => {
     const tool = captureTool();
     const { ui } = approvalUi({ select: "Allow once" });
-    const executeTool: ExecuteTool = async () =>
-      bashOutcome(1, "tmux: unknown command");
+    const executeTool: ExecuteTool = async () => bashOutcome(1, "tmux: unknown command");
     const result = await tool.execute(
       "t",
       request,

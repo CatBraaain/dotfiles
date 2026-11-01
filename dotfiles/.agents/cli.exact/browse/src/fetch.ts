@@ -20,19 +20,10 @@ import {
   REDDIT_TIMEOUT_MS,
   STACKOVERFLOW_TIMEOUT_MS,
 } from "./config";
-import {
-  fetchArxivMarkdown,
-  parseArxivUrl,
-} from "./arxiv";
-import {
-  fetchGitHubMarkdown,
-  parseGitHubUrl,
-} from "./github";
+import { fetchArxivMarkdown, parseArxivUrl } from "./arxiv";
+import { fetchGitHubMarkdown, parseGitHubUrl } from "./github";
 import { htmlFragmentToMarkdown, unescapeEntities } from "./html";
-import {
-  fetchHackerNewsMarkdown,
-  parseHackerNewsUrl,
-} from "./hackernews";
+import { fetchHackerNewsMarkdown, parseHackerNewsUrl } from "./hackernews";
 import { fetchFeedMarkdown } from "./rss";
 import {
   parseRedditAtom,
@@ -52,19 +43,9 @@ import {
   type StackOverflowQuestion,
   type StackOverflowQuestionUrl,
 } from "./stackoverflow";
-import {
-  fetchTweetViaFxTwitter,
-  parseTweetUrl,
-  parseTwitterListUrl,
-} from "./twitter";
-import {
-  fetchTweetViaTwikit,
-  fetchTwitterListViaTwikit,
-} from "./twitter-auth";
-import {
-  fetchWikipediaMarkdown,
-  parseWikipediaUrl,
-} from "./wikipedia";
+import { fetchTweetViaFxTwitter, parseTweetUrl, parseTwitterListUrl } from "./twitter";
+import { fetchTweetViaTwikit, fetchTwitterListViaTwikit } from "./twitter-auth";
+import { fetchWikipediaMarkdown, parseWikipediaUrl } from "./wikipedia";
 import { fetchYouTubeMarkdown, parseYouTubeUrl } from "./youtube";
 import { delay, runWithStdin } from "./util";
 
@@ -165,7 +146,6 @@ export async function fetchOne(url: string): Promise<FetchOutcome> {
     fallbacks,
   };
 }
-
 
 async function camoufoxFetch(url: string): Promise<string> {
   const html = await camoufoxRender(url, camoufoxSessionKey(CAMOUFOX_FETCH_SESSION_KEY));
@@ -324,5 +304,3 @@ async function fetchStackOverflowMarkdown(rawUrl: string): Promise<string> {
   }
   return renderStackOverflowMarkdown(url, apiResult, feed);
 }
-
-

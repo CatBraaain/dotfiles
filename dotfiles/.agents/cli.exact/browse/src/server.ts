@@ -2,12 +2,7 @@
 // process itself (Xvfb/x11vnc wiring and playwright-core launch), pid file
 // bookkeeping and `server restart` targeting. The openserp server bootstrap
 // lives here too, since it follows the same detached-spawn + health-poll shape.
-import {
-  spawn,
-  spawnSync,
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import {
   closeSync,
   mkdirSync,
@@ -145,10 +140,7 @@ export function serverStartedAtMs(): number | undefined {
   }
 }
 
-export function restartInCooldown(
-  startedAtMs: number | undefined,
-  nowMs: number,
-): boolean {
+export function restartInCooldown(startedAtMs: number | undefined, nowMs: number): boolean {
   return startedAtMs !== undefined && nowMs - startedAtMs < RESTART_COOLDOWN_MS;
 }
 
@@ -159,10 +151,13 @@ export function restartInCooldown(
 // server restart` or a render-recovery restart holds the lock. Crashes cannot
 // wedge this: the kernel releases the flock, unlike a flag file.
 export function restartInFlight(): boolean {
-  const probe = spawnSync(
-    "flock",
-    ["-n", "-E", String(FLOCK_CONFLICT_EXIT_CODE), join(stateDir(), RESTART_LOCK_FILE), "true"],
-  );
+  const probe = spawnSync("flock", [
+    "-n",
+    "-E",
+    String(FLOCK_CONFLICT_EXIT_CODE),
+    join(stateDir(), RESTART_LOCK_FILE),
+    "true",
+  ]);
   if (probe.error) return false; // no flock(1): no restart queue to yield to
   return probe.status === FLOCK_CONFLICT_EXIT_CODE;
 }
@@ -172,10 +167,12 @@ export function restartInFlight(): boolean {
 // lock on timeout is fine: the caller re-probes restartInFlight() and yields
 // again while a restart is still in flight.
 export function waitForRestartToFinish(timeoutMs = SERVER_WAIT_TIMEOUT_MS): void {
-  const result = spawnSync(
-    "flock",
-    ["-w", String(Math.ceil(timeoutMs / 1000)), join(stateDir(), RESTART_LOCK_FILE), "true"],
-  );
+  const result = spawnSync("flock", [
+    "-w",
+    String(Math.ceil(timeoutMs / 1000)),
+    join(stateDir(), RESTART_LOCK_FILE),
+    "true",
+  ]);
   if (result.error) return; // no flock(1): nothing to wait for
 }
 
@@ -486,11 +483,7 @@ function camoufoxServerPids(): number[] {
     if (sweep.status !== 0) continue;
     for (const line of sweep.stdout.split("\n")) {
       const pid = Number.parseInt(line, 10);
-      if (
-        Number.isInteger(pid) &&
-        pid !== process.pid &&
-        looksLikeCamoufoxServer(pid)
-      ) {
+      if (Number.isInteger(pid) && pid !== process.pid && looksLikeCamoufoxServer(pid)) {
         pids.add(pid);
       }
     }
@@ -504,9 +497,7 @@ function camoufoxServerPids(): number[] {
 function looksLikeCamoufoxServer(pid: number): boolean {
   if (process.platform !== "linux") return processAlive(pid);
   try {
-    const args = readFileSync(`/proc/${pid}/cmdline`, "utf8")
-      .split("\0")
-      .filter(Boolean);
+    const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
     const scriptPath = realpathSync(selfRunPath);
     const normalizedArgs = args.map((arg) => {
       try {
@@ -520,5 +511,3 @@ function looksLikeCamoufoxServer(pid: number): boolean {
     return false;
   }
 }
-
-

@@ -12,15 +12,11 @@ export const isCompiledBinary = import.meta.path.startsWith("/$bunfs/root/");
 // The path naming this CLI in child command lines and process sweeps: the
 // project directory that bun re-runs from source, or the executable itself
 // when compiled.
-export const selfRunPath = isCompiledBinary
-  ? process.execPath
-  : dirname(import.meta.dir);
+export const selfRunPath = isCompiledBinary ? process.execPath : dirname(import.meta.dir);
 
 // Spawn argv to run this CLI again: `bun <selfRunPath>` from source, or the
 // compiled executable alone when compiled.
-export const selfRunArgv = isCompiledBinary
-  ? [process.execPath]
-  : [process.execPath, selfRunPath];
+export const selfRunArgv = isCompiledBinary ? [process.execPath] : [process.execPath, selfRunPath];
 
 export function fail(message: string): never {
   console.error(message);
@@ -35,7 +31,6 @@ export function usageFail(usage: string): never {
 export function emitJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
-
 
 export function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -78,5 +73,3 @@ export async function responseDetail(response: Response): Promise<string> {
     ? body.message
     : `${response.status} ${response.statusText}`;
 }
-
-

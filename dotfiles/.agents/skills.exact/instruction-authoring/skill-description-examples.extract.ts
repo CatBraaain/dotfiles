@@ -27,7 +27,10 @@ if (mirror === undefined || output === undefined) {
     const description = String(matter(text).data.description ?? "").trim();
     if (description.length === 0) continue;
     const quoted = description.includes("\n")
-      ? description.split("\n").map((line) => (line.length > 0 ? `> ${line}` : ">")).join("\n")
+      ? description
+          .split("\n")
+          .map((line) => (line.length > 0 ? `> ${line}` : ">"))
+          .join("\n")
       : `> ${description}`;
     sections.push(
       `- [\`${name}\`](https://github.com/anthropics/skills/tree/main/skills/${name})\n\n${quoted}`,

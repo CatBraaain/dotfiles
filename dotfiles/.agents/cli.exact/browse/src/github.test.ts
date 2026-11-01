@@ -21,7 +21,10 @@ describe("parseGitHubUrl", () => {
       permalink: "https://github.com/owner/repo/issues/12",
     });
     assert.equal(parseGitHubUrl("https://github.com/owner/repo/pull/34")?.kind, "pull");
-    assert.equal(parseGitHubUrl("https://github.com/owner/repo/discussions/56")?.kind, "discussion");
+    assert.equal(
+      parseGitHubUrl("https://github.com/owner/repo/discussions/56")?.kind,
+      "discussion",
+    );
   });
 
   it("rejects nested code paths and garbage numbers", () => {

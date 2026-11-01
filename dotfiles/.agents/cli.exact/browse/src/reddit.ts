@@ -167,4 +167,3 @@ export function renderRedditMarkdown(
   }
   return lines.join("\n").trim();
 }
-

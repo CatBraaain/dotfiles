@@ -5,11 +5,7 @@
 // wrapper (twifork) for tweets, user timelines and search.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  parseRunCodeResult,
-  runPlaywrightCli,
-  syncPlaywrightCliConfig,
-} from "./camoufox";
+import { parseRunCodeResult, runPlaywrightCli, syncPlaywrightCliConfig } from "./camoufox";
 import {
   LOGIN_POLL_INTERVAL_MS,
   LOGIN_WAIT_TIMEOUT_MS,
@@ -50,9 +46,7 @@ export async function loginTwitter(): Promise<void> {
         "VNC access is open. If you don't see a browser window, connect a VNC client to 127.0.0.1:5900.",
       );
     } else {
-      console.error(
-        "Could not open VNC access; use the local browser window if one is visible.",
-      );
+      console.error("Could not open VNC access; use the local browser window if one is visible.");
     }
     console.error(
       `Waiting for you to log in to x.com in the camoufox browser (Ctrl+C to abort, ${LOGIN_WAIT_TIMEOUT_MS / 60_000} min timeout).`,
@@ -82,9 +76,7 @@ async function pollForAuthCookies(session: string): Promise<LoginCookie[]> {
     if (list.some((cookie) => cookie?.name === "auth_token")) return list;
     await delay(LOGIN_POLL_INTERVAL_MS);
   }
-  throw new Error(
-    `timed out waiting for x.com login (${LOGIN_WAIT_TIMEOUT_MS / 60_000} min)`,
-  );
+  throw new Error(`timed out waiting for x.com login (${LOGIN_WAIT_TIMEOUT_MS / 60_000} min)`);
 }
 
 export function twitterCookiePath(): string {
@@ -135,11 +127,7 @@ function assertTwitterCookies(): void {
 // The wrapper ships under scripts/ next to package.json (the CLI project
 // directory); bun resolves the CLI entry the same way for the deployed
 // ~/.agents/cli/browse.
-const twikitClientScript = join(
-  dirname(import.meta.dir),
-  "scripts",
-  "twikit_client.py",
-);
+const twikitClientScript = join(dirname(import.meta.dir), "scripts", "twikit_client.py");
 
 async function runTwikitClient(args: string[]): Promise<string> {
   return runWithStdin(

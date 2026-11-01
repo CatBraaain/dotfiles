@@ -45,7 +45,9 @@ export interface StackOverflowFeedEntry {
   link: string;
 }
 
-export function parseStackOverflowQuestionUrl(rawUrl: string): StackOverflowQuestionUrl | undefined {
+export function parseStackOverflowQuestionUrl(
+  rawUrl: string,
+): StackOverflowQuestionUrl | undefined {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -129,4 +131,3 @@ export function renderStackOverflowMarkdown(
   }
   return lines.join("\n").trim();
 }
-

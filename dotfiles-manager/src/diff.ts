@@ -55,7 +55,12 @@ export async function collectDifferences(
     removedExact: [],
     removedIgnored: [],
   };
-  await walk("", "", { isExactScope: false, scanForSurplus: false }, { distRoot, homeRoot, platform, result });
+  await walk(
+    "",
+    "",
+    { isExactScope: false, scanForSurplus: false },
+    { distRoot, homeRoot, platform, result },
+  );
   for (const entries of Object.values(result))
     entries.sort((a, b) => compareCodeUnits(a.homePath, b.homePath));
   return result;

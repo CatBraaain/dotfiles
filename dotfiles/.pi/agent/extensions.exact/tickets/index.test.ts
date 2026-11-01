@@ -67,11 +67,7 @@ function exec(tool: CapturedTool, params: Record<string, unknown>): Promise<Tool
 // Fake CLI runner resolving with `resolved` and recording every call. A
 // function form answers per call, keyed by the CLI args — used to branch the
 // truncation refetch (--json) from the ordinary text run.
-function fakeRunner(
-  resolved:
-    | string
-    | ((args: string[]) => string),
-): TicketsExtensionDeps & {
+function fakeRunner(resolved: string | ((args: string[]) => string)): TicketsExtensionDeps & {
   calls: Array<{ args: string[]; cwd: string }>;
 } {
   const calls: Array<{ args: string[]; cwd: string }> = [];
@@ -463,7 +459,10 @@ describe("tool execute (SPEC: content is the CLI text output; truncation refetch
   it("ticket_list returns the CLI stdout as content without details", async () => {
     const fake = fakeRunner(LIST_TEXT);
     const result = await exec(findTool(captureTools(fake), "ticket_list"), {});
-    assert.deepEqual(fake.calls.map((call) => call.args), [["list"]]);
+    assert.deepEqual(
+      fake.calls.map((call) => call.args),
+      [["list"]],
+    );
     assert.deepEqual(result.content, [{ type: "text", text: LIST_TEXT }]);
     assert.equal(result.details, undefined);
   });
@@ -478,7 +477,10 @@ describe("tool execute (SPEC: content is the CLI text output; truncation refetch
   it("ticket_show returns the CLI stdout as content without details", async () => {
     const fake = fakeRunner(SHOW_TEXT);
     const result = await exec(findTool(captureTools(fake), "ticket_show"), { selector: "a" });
-    assert.deepEqual(fake.calls.map((call) => call.args), [["show", "a"]]);
+    assert.deepEqual(
+      fake.calls.map((call) => call.args),
+      [["show", "a"]],
+    );
     assert.deepEqual(result.content, [{ type: "text", text: SHOW_TEXT }]);
     assert.equal(result.details, undefined);
   });
@@ -552,7 +554,10 @@ describe("tool execute (SPEC: content is the CLI text output; truncation refetch
     for (const [name, params, args] of cases) {
       const fake = fakeRunner(UPDATED_TEXT);
       const result = await exec(findTool(captureTools(fake), name), params);
-      assert.deepEqual(fake.calls.map((call) => call.args), [args]);
+      assert.deepEqual(
+        fake.calls.map((call) => call.args),
+        [args],
+      );
       assert.deepEqual(result.content, [{ type: "text", text: UPDATED_TEXT }]);
       assert.equal(result.details, undefined);
     }

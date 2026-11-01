@@ -13,11 +13,7 @@ import {
   formatSkillsForPrompt,
   normalizeBuildSystemPromptOptions,
 } from "./builder.ts";
-import {
-  DEFAULT_SKILLS_LIST,
-  buildRuntimeVariables,
-  renderListSection,
-} from "./template.ts";
+import { DEFAULT_SKILLS_LIST, buildRuntimeVariables, renderListSection } from "./template.ts";
 
 const piPackageRootUrl = new URL("../", import.meta.resolve("@earendil-works/pi-coding-agent"));
 const oracle = await import(new URL("dist/core/system-prompt.js", piPackageRootUrl).href);
@@ -244,7 +240,7 @@ describe("normalizeBuildSystemPromptOptions port", () => {
 describe("default skills template", () => {
   const skills = [
     skill({ name: "coding", description: "Coding standards for this repo" }),
-    skill({ name: "review", description: 'a & b "c" <d> \'e\'' }),
+    skill({ name: "review", description: "a & b \"c\" <d> 'e'" }),
   ];
 
   function renderItem(s: Skill) {

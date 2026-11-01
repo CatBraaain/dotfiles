@@ -93,7 +93,7 @@ describe("renderOpuiLang", () => {
   it("renders EntityList rows with header and footer", () => {
     const source = [
       "root = Stack([list])",
-      "list = EntityList([r1, r2], \"default\", h, f)",
+      'list = EntityList([r1, r2], "default", h, f)',
       'h = { left: "Metric", right: "Value" }',
       'r1 = { left: "Latency", right: "42ms", rightVariant: "text" }',
       'r2 = { left: "Errors", right: "0", rightVariant: "number" }',
@@ -119,8 +119,8 @@ describe("renderOpuiLang", () => {
   it("rejects unsupported components with their names", () => {
     const source = [
       "root = Stack([tabs, pie])",
-      "tabs = Tabs([TabItem(\"a\", \"A\", [TextContent(\"x\")])])",
-      "pie = PieChart([\"a\"], [1])",
+      'tabs = Tabs([TabItem("a", "A", [TextContent("x")])])',
+      'pie = PieChart(["a"], [1])',
     ].join("\n");
     const result = render(source);
     assert.equal(result.ok, false);
@@ -139,11 +139,9 @@ describe("renderOpuiLang", () => {
   });
 
   it("rejects reactive expressions", () => {
-    const source = [
-      "root = Stack([c])",
-      'c = Callout("info", "T", "D", $vis)',
-      "$vis = true",
-    ].join("\n");
+    const source = ["root = Stack([c])", 'c = Callout("info", "T", "D", $vis)', "$vis = true"].join(
+      "\n",
+    );
     const result = render(source);
     assert.equal(result.ok, false);
     if (result.ok) return;
@@ -151,11 +149,9 @@ describe("renderOpuiLang", () => {
   });
 
   it("rejects Query statements", () => {
-    const source = [
-      "root = Stack([t])",
-      "t = TextContent(q.data)",
-      'q = Query("tool", {})',
-    ].join("\n");
+    const source = ["root = Stack([t])", "t = TextContent(q.data)", 'q = Query("tool", {})'].join(
+      "\n",
+    );
     const result = render(source);
     assert.equal(result.ok, false);
     if (result.ok) return;
@@ -196,7 +192,7 @@ describe("renderOpuiLang", () => {
       "root = Stack([c, s, u])",
       'c = Card([ch], "card", "row", "l")',
       'ch = CardHeader("Title", "Subtitle")',
-      "s = Separator(\"vertical\")",
+      's = Separator("vertical")',
       'u = Stack([t], "column", "s")',
       't = Tag("beta")',
     ].join("\n");

@@ -42,8 +42,12 @@ export function parseArxivAtom(xml: string): ArxivArticle | undefined {
   const entryMatch = /<entry\b[^>]*>([\s\S]*?)<\/entry>/.exec(xml);
   if (!entryMatch) return undefined;
   const entry = entryMatch[1] ?? "";
-  const title = unescapeEntities(atomText(entry, "title") ?? "").replaceAll(/\s+/g, " ").trim();
-  const abstract = unescapeEntities(atomText(entry, "summary") ?? "").replaceAll(/\s+/g, " ").trim();
+  const title = unescapeEntities(atomText(entry, "title") ?? "")
+    .replaceAll(/\s+/g, " ")
+    .trim();
+  const abstract = unescapeEntities(atomText(entry, "summary") ?? "")
+    .replaceAll(/\s+/g, " ")
+    .trim();
   if (!title && !abstract) return undefined;
   const authors: string[] = [];
   for (const match of entry.matchAll(/<author\b[^>]*>([\s\S]*?)<\/author>/g)) {

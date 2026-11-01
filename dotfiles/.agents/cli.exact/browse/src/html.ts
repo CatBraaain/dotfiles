@@ -55,4 +55,3 @@ export function atomText(entryXml: string, tag: string): string | undefined {
   const match = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`).exec(entryXml);
   return match?.[1]?.trim() || undefined;
 }
-

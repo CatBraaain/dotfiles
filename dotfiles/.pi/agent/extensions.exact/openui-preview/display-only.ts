@@ -39,11 +39,7 @@ export const INTERACTIVE_COMPONENTS = [
 ] as const;
 
 /** Text markers of the excluded components (group notes, examples, rules). */
-export const INTERACTIVE_HINTS = [
-  ...INTERACTIVE_COMPONENTS,
-  "@Reset",
-  "Action(",
-];
+export const INTERACTIVE_HINTS = [...INTERACTIVE_COMPONENTS, "@Reset", "Action("];
 
 export const mentionsInteractive = (text: string) =>
   INTERACTIVE_HINTS.some((hint) => text.includes(hint));

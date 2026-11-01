@@ -14,10 +14,7 @@
  */
 
 import { createLibrary, type Library } from "@openuidev/react-lang";
-import {
-  openuiComponentGroups,
-  openuiLibrary,
-} from "@openuidev/react-ui/genui-lib";
+import { openuiComponentGroups, openuiLibrary } from "@openuidev/react-ui/genui-lib";
 import { openuiPromptOptions } from "@openuidev/react-ui/genui-lib/prompt-options";
 import { INTERACTIVE_COMPONENTS, mentionsInteractive } from "./display-only";
 
@@ -38,13 +35,9 @@ export const displayLibrary: Library = createLibrary({
 });
 
 export const displayPromptOptions = {
-  examples: (openuiPromptOptions.examples ?? []).filter(
-    (example) => !mentionsInteractive(example),
-  ),
+  examples: (openuiPromptOptions.examples ?? []).filter((example) => !mentionsInteractive(example)),
   additionalRules: [
-    ...(openuiPromptOptions.additionalRules ?? []).filter(
-      (rule) => !mentionsInteractive(rule),
-    ),
+    ...(openuiPromptOptions.additionalRules ?? []).filter((rule) => !mentionsInteractive(rule)),
     "Use existing components (Tabs, Accordion) before inventing ternary show/hide patterns",
   ],
 };

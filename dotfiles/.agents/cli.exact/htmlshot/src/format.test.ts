@@ -97,6 +97,10 @@ describe("format", () => {
   it("falls back to pixel size at scale 1 when envelope has no render", () => {
     const envelope = buildEnvelope(SAMPLE_HTML, RENDER);
     delete (envelope as Partial<typeof envelope>).render;
-    assert.deepEqual(resolveRenderSettings(envelope, 1280, 768), { width: 1280, height: 768, scale: 1 });
+    assert.deepEqual(resolveRenderSettings(envelope, 1280, 768), {
+      width: 1280,
+      height: 768,
+      scale: 1,
+    });
   });
 });

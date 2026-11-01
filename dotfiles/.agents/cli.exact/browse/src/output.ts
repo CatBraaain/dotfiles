@@ -103,5 +103,3 @@ export function fetchJson(url: string, outcome: FetchOutcome): Record<string, un
     ...(outcome.fallbacks.length > 0 ? { fallbacks: outcome.fallbacks } : {}),
   };
 }
-
-

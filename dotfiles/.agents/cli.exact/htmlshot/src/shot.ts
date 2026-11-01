@@ -34,7 +34,8 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 export function resolveBrowser(): string | null {
   const envBrowser = process.env.HTMLSHOT_BROWSER;
   if (envBrowser !== undefined) {
-    if (!existsSync(envBrowser)) throw new Error(`HTMLSHOT_BROWSER points to a missing file: ${envBrowser}`);
+    if (!existsSync(envBrowser))
+      throw new Error(`HTMLSHOT_BROWSER points to a missing file: ${envBrowser}`);
     return envBrowser;
   }
   const playwrightDir = join(homedir(), ".cache", "ms-playwright");
@@ -76,7 +77,10 @@ export async function shotFile(inputPath: string, settings: ShotSettings): Promi
   if (browserPath === null) throw new Error("no chromium browser found (set HTMLSHOT_BROWSER)");
   const scale = resolveScale(settings.width, settings.height, settings.scale);
   const render: RenderSettings = { width: settings.width, height: settings.height, scale };
-  const bound = insertMetadata(renderPng(browserPath, inputPath, render), buildEnvelope(html, render));
+  const bound = insertMetadata(
+    renderPng(browserPath, inputPath, render),
+    buildEnvelope(html, render),
+  );
   const outputPath = settings.output ?? defaultBindOutput(inputPath);
   writeFileSync(outputPath, bound);
   return `shot: ${outputPath} (${render.width}x${render.height}@${render.scale}x, html ${Buffer.byteLength(html, "utf8")} bytes)`;

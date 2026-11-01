@@ -138,7 +138,12 @@ function renderComments(comments: readonly GhComment[]): string[] {
   if (comments.length > 0) {
     lines.push("", `## Comments (${comments.length} retrieved)`, "");
     for (const [index, comment] of comments.entries()) {
-      lines.push(`### ${index + 1}. ${comment.user?.login ?? "unknown"}`, "", comment.body?.trim() || "(no comment body)", "");
+      lines.push(
+        `### ${index + 1}. ${comment.user?.login ?? "unknown"}`,
+        "",
+        comment.body?.trim() || "(no comment body)",
+        "",
+      );
     }
   }
   return lines;
@@ -153,7 +158,12 @@ function renderIssueMarkdown(issue: GhIssue, comments: readonly GhComment[]): st
     `- State: ${issue.state ?? "unknown"}`,
   ];
   if (issue.labels?.length) {
-    lines.push(`- Labels: ${issue.labels.map((label) => label.name).filter(Boolean).join(", ")}`);
+    lines.push(
+      `- Labels: ${issue.labels
+        .map((label) => label.name)
+        .filter(Boolean)
+        .join(", ")}`,
+    );
   }
   lines.push("", "## Body", "", issue.body?.trim() || "(no body)");
   lines.push(...renderComments(comments));

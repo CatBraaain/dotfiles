@@ -140,9 +140,7 @@ export async function shotHtml(
 
 function assistantText(content: string | Array<{ type: string; text?: string }>): string {
   if (typeof content === "string") return content;
-  return content
-    .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
-    .join("\n");
+  return content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 }
 
 async function previewBlock(
@@ -178,8 +176,8 @@ async function previewBlock(
     content: result.ok ? "openui preview" : "openui preview failed",
     display: true,
     details: result.ok
-      ? { kind: "image", pngPath: result.pngPath } satisfies PreviewDetails
-      : { kind: "error", message: result.error } satisfies PreviewDetails,
+      ? ({ kind: "image", pngPath: result.pngPath } satisfies PreviewDetails)
+      : ({ kind: "error", message: result.error } satisfies PreviewDetails),
   });
 }
 
@@ -220,7 +218,9 @@ export function renderPreview(
 
 export default function openuiPreviewExtension(
   pi: ExtensionAPI,
-  overrides?: Partial<Pick<ExtensionDeps, "outDir" | "htmlshotPath" | "execFile" | "enqueue" | "generatedDir">>,
+  overrides?: Partial<
+    Pick<ExtensionDeps, "outDir" | "htmlshotPath" | "execFile" | "enqueue" | "generatedDir">
+  >,
 ): void {
   const home = process.env.HOME ?? "";
   const deps: ExtensionDeps = {
@@ -256,9 +256,7 @@ export default function openuiPreviewExtension(
     for (const [index, block] of blocks.entries()) {
       deps
         .enqueue(() =>
-          mkdir(deps.outDir, { recursive: true }).then(() =>
-            previewBlock(pi, deps, block, index),
-          ),
+          mkdir(deps.outDir, { recursive: true }).then(() => previewBlock(pi, deps, block, index)),
         )
         .catch(() => {});
     }

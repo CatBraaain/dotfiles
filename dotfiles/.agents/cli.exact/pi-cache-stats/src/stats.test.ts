@@ -18,8 +18,20 @@ const BASE_EPOCH_MS = Date.parse("2026-10-01T00:00:00Z");
 describe("collectSessionPairs", () => {
   it("pairs consecutive same-model responses with gap minutes and hit rate", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 0, input: 100, cacheRead: 0 }),
-      assistantEntry("b", "a", { provider: "zai", model: "glm", offsetMinutes: 2, input: 30, cacheRead: 70 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 100,
+        cacheRead: 0,
+      }),
+      assistantEntry("b", "a", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 2,
+        input: 30,
+        cacheRead: 70,
+      }),
     ];
     const { pairs, compactionSkips } = collectSessionPairs(entries, "session-a", undefined);
     assert.equal(pairs.length, 1);
@@ -31,9 +43,27 @@ describe("collectSessionPairs", () => {
 
   it("does not pair across a different-model response", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 0, input: 100, cacheRead: 0 }),
-      assistantEntry("x", "a", { provider: "other", model: "m", offsetMinutes: 1, input: 10, cacheRead: 0 }),
-      assistantEntry("b", "x", { provider: "zai", model: "glm", offsetMinutes: 4, input: 10, cacheRead: 10 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 100,
+        cacheRead: 0,
+      }),
+      assistantEntry("x", "a", {
+        provider: "other",
+        model: "m",
+        offsetMinutes: 1,
+        input: 10,
+        cacheRead: 0,
+      }),
+      assistantEntry("b", "x", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 4,
+        input: 10,
+        cacheRead: 10,
+      }),
     ];
     const { pairs } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 0);
@@ -41,9 +71,27 @@ describe("collectSessionPairs", () => {
 
   it("pairs across a filtered-out response when a model pattern is given", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 0, input: 100, cacheRead: 0 }),
-      assistantEntry("x", "a", { provider: "other", model: "m", offsetMinutes: 1, input: 10, cacheRead: 0 }),
-      assistantEntry("b", "x", { provider: "zai", model: "glm", offsetMinutes: 4, input: 20, cacheRead: 80 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 100,
+        cacheRead: 0,
+      }),
+      assistantEntry("x", "a", {
+        provider: "other",
+        model: "m",
+        offsetMinutes: 1,
+        input: 10,
+        cacheRead: 0,
+      }),
+      assistantEntry("b", "x", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 4,
+        input: 20,
+        cacheRead: 80,
+      }),
     ];
     const { pairs } = collectSessionPairs(entries, "s", "zai");
     assert.equal(pairs.length, 1);
@@ -52,9 +100,21 @@ describe("collectSessionPairs", () => {
 
   it("counts a same-model pair split by compaction as skipped", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 0, input: 100, cacheRead: 0 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 100,
+        cacheRead: 0,
+      }),
       compactionEntry("c", "a"),
-      assistantEntry("b", "c", { provider: "zai", model: "glm", offsetMinutes: 2, input: 10, cacheRead: 10 }),
+      assistantEntry("b", "c", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 2,
+        input: 10,
+        cacheRead: 10,
+      }),
     ];
     const { pairs, compactionSkips } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 0);
@@ -63,9 +123,27 @@ describe("collectSessionPairs", () => {
 
   it("follows parentId and pairs only the active branch", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 0, input: 100, cacheRead: 0 }),
-      assistantEntry("b1", "a", { provider: "zai", model: "glm", offsetMinutes: 5, input: 10, cacheRead: 10 }),
-      assistantEntry("b2", "a", { provider: "zai", model: "glm", offsetMinutes: 10, input: 10, cacheRead: 10 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 100,
+        cacheRead: 0,
+      }),
+      assistantEntry("b1", "a", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 5,
+        input: 10,
+        cacheRead: 10,
+      }),
+      assistantEntry("b2", "a", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 10,
+        input: 10,
+        cacheRead: 10,
+      }),
     ];
     const { pairs } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 1);
@@ -74,8 +152,20 @@ describe("collectSessionPairs", () => {
 
   it("excludes pairs whose gap is negative", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 5, input: 100, cacheRead: 0 }),
-      assistantEntry("b", "a", { provider: "zai", model: "glm", offsetMinutes: 0, input: 10, cacheRead: 10 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 5,
+        input: 100,
+        cacheRead: 0,
+      }),
+      assistantEntry("b", "a", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 10,
+        cacheRead: 10,
+      }),
     ];
     const { pairs } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 0);
@@ -83,8 +173,20 @@ describe("collectSessionPairs", () => {
 
   it("excludes pairs whose input and cacheRead are both zero", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 0, input: 100, cacheRead: 0 }),
-      assistantEntry("b", "a", { provider: "zai", model: "glm", offsetMinutes: 2, input: 0, cacheRead: 0 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 100,
+        cacheRead: 0,
+      }),
+      assistantEntry("b", "a", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 2,
+        input: 0,
+        cacheRead: 0,
+      }),
     ];
     const { pairs } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 0);
@@ -92,9 +194,27 @@ describe("collectSessionPairs", () => {
 
   it("ignores entries that are not assistant messages", () => {
     const entries = [
-      assistantEntry("a", null, { provider: "zai", model: "glm", offsetMinutes: 0, input: 100, cacheRead: 0 }),
-      { id: "u", parentId: "a", type: "message", timestamp: isoMinutes(1), message: { role: "user", content: "hi" } },
-      assistantEntry("b", "u", { provider: "zai", model: "glm", offsetMinutes: 2, input: 10, cacheRead: 10 }),
+      assistantEntry("a", null, {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 0,
+        input: 100,
+        cacheRead: 0,
+      }),
+      {
+        id: "u",
+        parentId: "a",
+        type: "message",
+        timestamp: isoMinutes(1),
+        message: { role: "user", content: "hi" },
+      },
+      assistantEntry("b", "u", {
+        provider: "zai",
+        model: "glm",
+        offsetMinutes: 2,
+        input: 10,
+        cacheRead: 10,
+      }),
     ];
     const { pairs } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 1);
@@ -104,12 +224,23 @@ describe("collectSessionPairs", () => {
 
 describe("parseAssistantEntry", () => {
   it("returns null when provider is missing", () => {
-    const entry = assistantEntry("a", null, { provider: "", model: "glm", offsetMinutes: 0, input: 1, cacheRead: 1 });
+    const entry = assistantEntry("a", null, {
+      provider: "",
+      model: "glm",
+      offsetMinutes: 0,
+      input: 1,
+      cacheRead: 1,
+    });
     assert.equal(parseAssistantEntry(entry), null);
   });
 
   it("returns null when the timestamp is not a date", () => {
-    const entry = messageEntry("a", null, { role: "assistant", provider: "zai", model: "glm" }, "not-a-date");
+    const entry = messageEntry(
+      "a",
+      null,
+      { role: "assistant", provider: "zai", model: "glm" },
+      "not-a-date",
+    );
     assert.equal(parseAssistantEntry(entry), null);
   });
 });
@@ -179,7 +310,13 @@ describe("keysByCountDesc", () => {
 function assistantEntry(
   id: string,
   parentId: string | null,
-  options: { provider: string; model: string; offsetMinutes: number; input: number; cacheRead: number },
+  options: {
+    provider: string;
+    model: string;
+    offsetMinutes: number;
+    input: number;
+    cacheRead: number;
+  },
 ): SessionEntry {
   return messageEntry(
     id,
@@ -198,7 +335,12 @@ function compactionEntry(id: string, parentId: string | null): SessionEntry {
   return { id, parentId, type: "compaction", timestamp: isoMinutes(0) };
 }
 
-function messageEntry(id: string, parentId: string | null, message: unknown, timestampIso: string): SessionEntry {
+function messageEntry(
+  id: string,
+  parentId: string | null,
+  message: unknown,
+  timestampIso: string,
+): SessionEntry {
   return { id, parentId, type: "message", timestamp: timestampIso, message };
 }
 

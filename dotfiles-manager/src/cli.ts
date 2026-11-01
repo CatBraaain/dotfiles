@@ -6,8 +6,7 @@ import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
 import { resolveWsl, type WslConnection } from "./wsl.ts";
 
-const usage =
-  "usage: bun dotfiles-manager <apply|diff|managed> [--yes] (--yes is for apply only)";
+const usage = "usage: bun dotfiles-manager <apply|diff|managed> [--yes] (--yes is for apply only)";
 
 export async function main(
   args: readonly string[],

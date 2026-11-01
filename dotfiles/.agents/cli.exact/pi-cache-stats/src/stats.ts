@@ -122,13 +122,20 @@ export function entryEpochMs(entry: SessionEntry): number | null {
   return Number.isNaN(epochMs) ? null : epochMs;
 }
 
-export function matchesModelFilter(candidate: AssistantCandidate, modelPattern: string | undefined): boolean {
+export function matchesModelFilter(
+  candidate: AssistantCandidate,
+  modelPattern: string | undefined,
+): boolean {
   if (modelPattern === undefined || modelPattern === "") return true;
   const modelKey = `${candidate.provider}/${candidate.model}`;
   return modelKey.toLowerCase().includes(modelPattern.toLowerCase());
 }
 
-export function buildPair(candidate: AssistantCandidate, previous: AssistantCandidate, sessionName: string): Pair {
+export function buildPair(
+  candidate: AssistantCandidate,
+  previous: AssistantCandidate,
+  sessionName: string,
+): Pair {
   const gapMinutes = (candidate.epochMs - previous.epochMs) / MS_PER_MINUTE;
   const denominator = candidate.inputTokens + candidate.cacheReadTokens;
   return {
@@ -201,7 +208,9 @@ export function formatMinutes(minutes: number): string {
 }
 
 export function keysByCountDesc(pairCountByKey: ReadonlyMap<string, number>): string[] {
-  return [...pairCountByKey.keys()].sort((a, b) => (pairCountByKey.get(b) ?? 0) - (pairCountByKey.get(a) ?? 0));
+  return [...pairCountByKey.keys()].sort(
+    (a, b) => (pairCountByKey.get(b) ?? 0) - (pairCountByKey.get(a) ?? 0),
+  );
 }
 
 export function parseBinEdgesMin(raw: string | undefined): number[] {
@@ -209,7 +218,8 @@ export function parseBinEdgesMin(raw: string | undefined): number[] {
   const edges = raw.split(",").map((part) => Number(part));
   const hasNonPositiveEdge = edges.some((edge) => !(edge > 0));
   const isNonAscending = edges.some((edge, index) => index > 0 && edge <= edges[index - 1]);
-  if (hasNonPositiveEdge || isNonAscending) throw new Error(`--bins must be positive and ascending: ${raw}`);
+  if (hasNonPositiveEdge || isNonAscending)
+    throw new Error(`--bins must be positive and ascending: ${raw}`);
   return edges;
 }
 

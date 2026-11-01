@@ -25,9 +25,11 @@ describe("renderHackerNewsMarkdown", () => {
         points: 42,
         url: "https://example.com",
         children: [
-          { author: "bob", text: "<p>top comment</p>", children: [
-            { author: "carol", text: "reply", children: [] },
-          ] },
+          {
+            author: "bob",
+            text: "<p>top comment</p>",
+            children: [{ author: "carol", text: "reply", children: [] }],
+          },
         ],
       },
       "https://news.ycombinator.com/item?id=42424242",

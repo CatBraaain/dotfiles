@@ -35,10 +35,7 @@ import {
 const hookScriptPath = join(import.meta.dir, "manage-config.apply.ts");
 
 function expectHookError(run: () => unknown, code: string): void {
-  assert.throws(
-    run,
-    (error: unknown) => error instanceof HookError && error.code === code,
-  );
+  assert.throws(run, (error: unknown) => error instanceof HookError && error.code === code);
 }
 
 describe("resolvePaths", () => {
@@ -60,18 +57,12 @@ describe("resolvePaths", () => {
     const expectedProfile = join(join(tmpdir(), "appdata"), "open-whispr");
     assert.equal(paths.profileDir, expectedProfile);
     assert.equal(paths.managedKeysDir, import.meta.dir);
-    assert.equal(
-      paths.appDir,
-      join(join(tmpdir(), "localappdata"), "Programs", "OpenWhispr"),
-    );
+    assert.equal(paths.appDir, join(join(tmpdir(), "localappdata"), "Programs", "OpenWhispr"));
     assert.equal(paths.appBinaryName, "OpenWhispr.exe");
   });
 
   it("rejects Windows without APPDATA", () => {
-    expectHookError(
-      () => resolvePaths("win32", { LOCALAPPDATA: "/x" }),
-      "INVALID_INPUT",
-    );
+    expectHookError(() => resolvePaths("win32", { LOCALAPPDATA: "/x" }), "INVALID_INPUT");
   });
 
   it("rejects Linux without HOME", () => {
@@ -79,10 +70,7 @@ describe("resolvePaths", () => {
   });
 
   it("rejects unsupported platforms", () => {
-    expectHookError(
-      () => resolvePaths("darwin", { HOME: "/home/example" }),
-      "INVALID_INPUT",
-    );
+    expectHookError(() => resolvePaths("darwin", { HOME: "/home/example" }), "INVALID_INPUT");
   });
 
   it("honors e2e overrides only for paths under tmpdir", () => {
@@ -160,10 +148,7 @@ describe("validateManagedKeys and loadManagedKeys", () => {
       "useDictationAgent",
     ]);
     assert.match(managedKeysSha256(targets), /^[0-9a-f]{64}$/);
-    assert.equal(
-      managedKeysSha256(targets),
-      managedKeysSha256(loadManagedKeys(import.meta.dir)),
-    );
+    assert.equal(managedKeysSha256(targets), managedKeysSha256(loadManagedKeys(import.meta.dir)));
   });
 
   it("declares the dot-files pronunciation snippet replacing . files and .files with dotfiles", () => {
@@ -181,7 +166,10 @@ describe("validateManagedKeys and loadManagedKeys", () => {
     expectHookError(
       () =>
         validateManagedKeys({
-          keys: [{ key: "a", value: "1" }, { key: "a", value: "2" }],
+          keys: [
+            { key: "a", value: "1" },
+            { key: "a", value: "2" },
+          ],
         }),
       "INVALID_INPUT",
     );
@@ -195,17 +183,11 @@ describe("validateManagedKeys and loadManagedKeys", () => {
   });
 
   it("rejects empty keys arrays", () => {
-    expectHookError(
-      () => validateManagedKeys({ keys: [] }),
-      "INVALID_INPUT",
-    );
+    expectHookError(() => validateManagedKeys({ keys: [] }), "INVALID_INPUT");
   });
 
   it("rejects an invalid YAML declaration", () => {
-    const root = writeDeclaration(
-      mkdtempSync(join(tmpdir(), "openwhispr-keys-")),
-      "keys: [broken",
-    );
+    const root = writeDeclaration(mkdtempSync(join(tmpdir(), "openwhispr-keys-")), "keys: [broken");
     expectHookError(() => loadManagedKeys(root), "INVALID_INPUT");
   });
 });
@@ -268,10 +250,7 @@ describe("harness source guards", () => {
   it("writes only targets passed via environment and restores failed keys", () => {
     assert.ok(source.includes("OW_HARNESS_TARGETS_JSON"));
     assert.ok(source.includes("restore-failed"));
-    assert.equal(
-      buildHarnessPackageJson().includes("open-whispr-config-harness"),
-      true,
-    );
+    assert.equal(buildHarnessPackageJson().includes("open-whispr-config-harness"), true);
   });
 
   it("reads and writes every declared target key", () => {
@@ -282,10 +261,7 @@ describe("harness source guards", () => {
 });
 
 function buildAsarFixture(packageName: string): Buffer {
-  const packageJson = Buffer.from(
-    JSON.stringify({ name: packageName, version: "9.9.9" }),
-    "utf8",
-  );
+  const packageJson = Buffer.from(JSON.stringify({ name: packageName, version: "9.9.9" }), "utf8");
   const jsonLength = Buffer.byteLength(
     JSON.stringify({
       files: { "package.json": { offset: "0", size: packageJson.length } },
@@ -316,10 +292,7 @@ describe("asar package identity", () => {
   });
 
   it("rejects malformed asar bytes", () => {
-    expectHookError(
-      () => parseAsarPackageName(Buffer.from([1, 2, 3])),
-      "INVALID_INPUT",
-    );
+    expectHookError(() => parseAsarPackageName(Buffer.from([1, 2, 3])), "INVALID_INPUT");
   });
 
   it("rejects an asar without a package.json entry", () => {
@@ -330,10 +303,7 @@ describe("asar package identity", () => {
     header.writeUInt32LE(4 + json.length, 8);
     header.writeUInt32LE(json.length, 12);
     header.write(JSON.stringify({ files: {} }), 16, "utf8");
-    expectHookError(
-      () => parseAsarPackageName(Buffer.concat([header, json])),
-      "INVALID_INPUT",
-    );
+    expectHookError(() => parseAsarPackageName(Buffer.concat([header, json])), "INVALID_INPUT");
   });
 });
 
@@ -344,8 +314,7 @@ describe("hook lock and recovery record", () => {
     try {
       await assert.rejects(
         acquireHookLock(profileDir, 300),
-        (error: unknown) =>
-          error instanceof HookError && error.code === "LOCKED",
+        (error: unknown) => error instanceof HookError && error.code === "LOCKED",
       );
     } finally {
       await release();
@@ -355,13 +324,9 @@ describe("hook lock and recovery record", () => {
   });
 
   it("writes and clears a recovery record", async () => {
-    const profileDir = join(
-      tmpdir(),
-      `openwhispr-recovery-fixture-${Date.now()}`,
-    );
+    const profileDir = join(tmpdir(), `openwhispr-recovery-fixture-${Date.now()}`);
     await (async () => {
-      const { writeRecoveryRecord } =
-        await import("./manage-config.apply.ts");
+      const { writeRecoveryRecord } = await import("./manage-config.apply.ts");
       await writeRecoveryRecord(profileDir, {
         phase: "verify",
         keys: [
@@ -404,9 +369,9 @@ describe("config registration with an uninitialized profile", () => {
     "  - key: customPrompt.cleanup",
     "    value: |",
     "      Remove only fillers. Keep 来週、いや、再来週.",
-    '  - key: notifyMeetingDetection',
+    "  - key: notifyMeetingDetection",
     '    value: "false"',
-    '  - key: useDictationAgent',
+    "  - key: useDictationAgent",
     '    value: "false"',
     "",
   ].join("\n");
@@ -416,14 +381,9 @@ describe("config registration with an uninitialized profile", () => {
     fixtureRoots.push(root);
     const appDir = join(root, "app");
     mkdirSync(join(appDir, "resources"), { recursive: true });
-    writeFileSync(
-      join(appDir, "resources", "app.asar"),
-      buildAsarFixture("open-whispr"),
-    );
-    const platform =
-      process.platform === "win32" ? ("win32" as const) : ("linux" as const);
-    const binaryName =
-      platform === "win32" ? "OpenWhispr.exe" : "open-whispr-app";
+    writeFileSync(join(appDir, "resources", "app.asar"), buildAsarFixture("open-whispr"));
+    const platform = process.platform === "win32" ? ("win32" as const) : ("linux" as const);
+    const binaryName = platform === "win32" ? "OpenWhispr.exe" : "open-whispr-app";
     writeFileSync(join(appDir, binaryName), `unused fixture binary: ${root}`);
     const profileDir = join(root, "profile");
     const keysDir = join(root, "keys");
@@ -448,28 +408,20 @@ describe("config registration with an uninitialized profile", () => {
       .sort()
       .map((entry) => {
         const path = join(root, entry);
-        return [
-          entry,
-          statSync(path).isDirectory()
-            ? null
-            : readFileSync(path).toString("hex"),
-        ];
+        return [entry, statSync(path).isDirectory() ? null : readFileSync(path).toString("hex")];
       });
   }
 
   function runtimeEntries() {
     return readdirSync(tmpdir())
       .filter((entry) =>
-        /^(openwhispr-register-runtime-|openwhispr-runtime-|openwhispr-harness-home-)/.test(
-          entry,
-        ),
+        /^(openwhispr-register-runtime-|openwhispr-runtime-|openwhispr-harness-home-)/.test(entry),
       )
       .sort();
   }
 
   afterAll(() => {
-    for (const root of fixtureRoots)
-      rmSync(root, { recursive: true, force: true });
+    for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true });
   });
 
   for (const profileState of ["missing", "unrecognized-files"] as const) {
@@ -477,24 +429,16 @@ describe("config registration with an uninitialized profile", () => {
       const fixture = createFixture();
       if (profileState === "unrecognized-files") {
         mkdirSync(fixture.profileDir);
-        writeFileSync(
-          join(fixture.profileDir, ".env"),
-          "preserve-fixture-settings\n",
-        );
+        writeFileSync(join(fixture.profileDir, ".env"), "preserve-fixture-settings\n");
       }
       const before = snapshot(fixture.root);
       const runtimesBefore = runtimeEntries();
-      const expectedKeysSha256 = managedKeysSha256(
-        loadManagedKeys(fixture.keysDir),
-      );
+      const expectedKeysSha256 = managedKeysSha256(loadManagedKeys(fixture.keysDir));
       const outcome = await manageConfig(fixture);
       assert.equal(outcome.status, "skipped");
       assert.equal(outcome.code, "OK");
       assert.equal(outcome.keysSha256, expectedKeysSha256);
-      assert.match(
-        outcome.detail ?? "",
-        /launch and quit OpenWhispr, then run apply again/,
-      );
+      assert.match(outcome.detail ?? "", /launch and quit OpenWhispr, then run apply again/);
       assert.ok(outcome.detail?.includes(fixture.profileDir));
       assert.equal(
         formatStatusLine(outcome),
@@ -533,12 +477,7 @@ describe("config registration with an uninitialized profile", () => {
     }
   });
 
-  for (const invalidDeclaration of [
-    "missing",
-    "blank-value",
-    "nul-value",
-    "badyaml",
-  ] as const) {
+  for (const invalidDeclaration of ["missing", "blank-value", "nul-value", "badyaml"] as const) {
     it(`rejects a ${invalidDeclaration} managed keys file before skipping`, async () => {
       const fixture = createFixture();
       const invalidYaml: Record<string, string> = {
@@ -546,8 +485,7 @@ describe("config registration with an uninitialized profile", () => {
         "nul-value": 'keys:\n  - key: "a"\n    value: "a\\0b"\n',
         badyaml: "keys: [broken",
       };
-      if (invalidDeclaration === "missing")
-        rmSync(join(fixture.keysDir, MANAGED_KEYS_FILE));
+      if (invalidDeclaration === "missing") rmSync(join(fixture.keysDir, MANAGED_KEYS_FILE));
       else
         writeFileSync(
           join(fixture.keysDir, MANAGED_KEYS_FILE),
@@ -573,18 +511,13 @@ describe("config registration with an uninitialized profile", () => {
       else
         writeFileSync(
           asarPath,
-          invalidApp === "malformed"
-            ? Buffer.from([1, 2, 3])
-            : buildAsarFixture("other-app"),
+          invalidApp === "malformed" ? Buffer.from([1, 2, 3]) : buildAsarFixture("other-app"),
         );
       const before = snapshot(fixture.root);
       const outcome = await manageConfig(fixture);
       assert.equal(outcome.status, "error");
       assert.equal(outcome.code, "INVALID_INPUT");
-      assert.equal(
-        outcome.keysSha256,
-        managedKeysSha256(loadManagedKeys(fixture.keysDir)),
-      );
+      assert.equal(outcome.keysSha256, managedKeysSha256(loadManagedKeys(fixture.keysDir)));
       assert.match(outcome.detail ?? "", /installed app/);
       assert.deepEqual(snapshot(fixture.root), before);
     });
@@ -594,14 +527,10 @@ describe("config registration with an uninitialized profile", () => {
     it(`does not skip a profile recognized by ${marker}`, async () => {
       const fixture = createFixture();
       mkdirSync(fixture.profileDir);
-      if (marker === "Preferences")
-        writeFileSync(join(fixture.profileDir, marker), "{}");
+      if (marker === "Preferences") writeFileSync(join(fixture.profileDir, marker), "{}");
       else mkdirSync(join(fixture.profileDir, marker));
       rmSync(
-        join(
-          fixture.appDir,
-          fixture.platform === "linux" ? "open-whispr-app" : "OpenWhispr.exe",
-        ),
+        join(fixture.appDir, fixture.platform === "linux" ? "open-whispr-app" : "OpenWhispr.exe"),
       );
       const before = snapshot(fixture.root);
       const outcome = await manageConfig(fixture);
@@ -663,8 +592,7 @@ describe("config registration with an uninitialized profile", () => {
 });
 
 describe("e2e with the installed Electron runtime", () => {
-  const e2ePlatform =
-    process.platform === "win32" ? ("win32" as const) : ("linux" as const);
+  const e2ePlatform = process.platform === "win32" ? ("win32" as const) : ("linux" as const);
   const e2eAppDir =
     e2ePlatform === "win32"
       ? join(process.env.LOCALAPPDATA ?? "", "Programs", "OpenWhispr")
@@ -678,9 +606,9 @@ describe("e2e with the installed Electron runtime", () => {
     "    value: |",
     '      Remove only unambiguous fillers: "uh", "um", "えー", "えーと".',
     "      Keep 来週、いや、再来週 and code: `x = 1`.",
-    '  - key: notifyMeetingDetection',
+    "  - key: notifyMeetingDetection",
     '    value: "false"',
-    '  - key: useDictationAgent',
+    "  - key: useDictationAgent",
     '    value: "false"',
     "",
   ].join("\n");
@@ -703,9 +631,7 @@ describe("e2e with the installed Electron runtime", () => {
     return env;
   };
 
-  const hookEnv = (
-    overrides: Record<string, string>,
-  ): Record<string, string> => ({
+  const hookEnv = (overrides: Record<string, string>): Record<string, string> => ({
     PATH: process.env.PATH ?? "",
     HOME: "/tmp",
     OPENWHISPR_E2E: "1",
@@ -721,9 +647,7 @@ describe("e2e with the installed Electron runtime", () => {
     ...overrides,
   });
 
-  const hookOverrides = (
-    extra: Record<string, string>,
-  ): Record<string, string> => ({
+  const hookOverrides = (extra: Record<string, string>): Record<string, string> => ({
     OPENWHISPR_E2E_APP_DIR: e2eAppDir,
     ...extra,
   });
@@ -735,17 +659,9 @@ describe("e2e with the installed Electron runtime", () => {
       const child = spawn("bun", [hookScriptPath], { env: hookEnv(overrides) });
       let stdout = "";
       let stderr = "";
-      child.stdout.on(
-        "data",
-        (chunk: Buffer) => (stdout += chunk.toString("utf8")),
-      );
-      child.stderr.on(
-        "data",
-        (chunk: Buffer) => (stderr += chunk.toString("utf8")),
-      );
-      child.on("error", (error) =>
-        resolve({ exitCode: null, stdout, stderr: String(error) }),
-      );
+      child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+      child.on("error", (error) => resolve({ exitCode: null, stdout, stderr: String(error) }));
       child.on("close", (exitCode) => resolve({ exitCode, stdout, stderr }));
     });
   }
@@ -804,11 +720,7 @@ describe("e2e with the installed Electron runtime", () => {
       }),
       timeoutMs: 60_000,
     });
-    assert.equal(
-      run.outcome.kind,
-      "ok",
-      `seed run failed: ${JSON.stringify(run.outcome)}`,
-    );
+    assert.equal(run.outcome.kind, "ok", `seed run failed: ${JSON.stringify(run.outcome)}`);
   }
 
   async function dumpStorage(): Promise<Record<string, string>> {
@@ -821,11 +733,7 @@ describe("e2e with the installed Electron runtime", () => {
       allowDump: true,
       timeoutMs: 60_000,
     });
-    assert.equal(
-      run.outcome.kind,
-      "ok",
-      `dump run failed: ${JSON.stringify(run.outcome)}`,
-    );
+    assert.equal(run.outcome.kind, "ok", `dump run failed: ${JSON.stringify(run.outcome)}`);
     return run.outcome.kind === "ok" ? (run.outcome.payload.storage ?? {}) : {};
   }
 
@@ -857,11 +765,7 @@ describe("e2e with the installed Electron runtime", () => {
         }),
       );
       const status = parseStatusLine(result.stdout);
-      assert.deepEqual(
-        [status.status, status.code],
-        ["applied", "OK"],
-        result.stderr,
-      );
+      assert.deepEqual([status.status, status.code], ["applied", "OK"], result.stderr);
       assert.equal(result.exitCode, 0);
       const storage = await dumpStorage();
       assert.equal(storage["customPrompt.cleanup"], promptText);
@@ -883,11 +787,7 @@ describe("e2e with the installed Electron runtime", () => {
         }),
       );
       const status = parseStatusLine(result.stdout);
-      assert.deepEqual(
-        [status.status, status.code],
-        ["unchanged", "OK"],
-        result.stderr,
-      );
+      assert.deepEqual([status.status, status.code], ["unchanged", "OK"], result.stderr);
       assert.equal(result.exitCode, 0);
     },
     120_000,
@@ -906,11 +806,7 @@ describe("e2e with the installed Electron runtime", () => {
           }),
         );
         const status = parseStatusLine(result.stdout);
-        assert.deepEqual(
-          [status.status, status.code],
-          ["error", "LOCKED"],
-          result.stderr,
-        );
+        assert.deepEqual([status.status, status.code], ["error", "LOCKED"], result.stderr);
         assert.equal(result.exitCode, 3);
         assert.equal(
           result.stderr.trim(),
@@ -942,11 +838,7 @@ describe("e2e with the installed Electron runtime", () => {
     async () => {
       const brokenKeysDir = join(e2eRoot, "broken-keys");
       mkdirSync(brokenKeysDir, { recursive: true });
-      writeFileSync(
-        join(brokenKeysDir, MANAGED_KEYS_FILE),
-        "keys: [broken",
-        "utf8",
-      );
+      writeFileSync(join(brokenKeysDir, MANAGED_KEYS_FILE), "keys: [broken", "utf8");
       const result = await runHookScript(
         hookOverrides({
           OPENWHISPR_E2E_MANAGED_KEYS: brokenKeysDir,
@@ -954,11 +846,7 @@ describe("e2e with the installed Electron runtime", () => {
         }),
       );
       const status = parseStatusLine(result.stdout);
-      assert.deepEqual(
-        [status.status, status.code],
-        ["error", "INVALID_INPUT"],
-        result.stderr,
-      );
+      assert.deepEqual([status.status, status.code], ["error", "INVALID_INPUT"], result.stderr);
       assert.equal(result.exitCode, 2);
     },
     120_000,

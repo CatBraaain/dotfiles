@@ -221,7 +221,10 @@ export const ticketToolDescriptions = {
     "and defaults to the project resolved from the session cwd.",
 } as const;
 
-function truncateTicketOutput(text: string, recoveryHint: string): { text: string; truncated: boolean } {
+function truncateTicketOutput(
+  text: string,
+  recoveryHint: string,
+): { text: string; truncated: boolean } {
   const truncation = truncateHead(text, {
     maxBytes: DEFAULT_MAX_BYTES,
     maxLines: DEFAULT_MAX_LINES,

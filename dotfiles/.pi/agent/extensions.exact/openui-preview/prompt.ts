@@ -51,8 +51,6 @@ function stripInteractivePromptParts(prompt: string): string {
     .join("\n");
 }
 
-
-
 /** Name of the system prompt section this extension contributes. */
 export const PROMPT_SECTION_NAME = "openui-lang";
 

@@ -17,11 +17,7 @@ import {
   SERVER_WAIT_TIMEOUT_MS,
   stateDir,
 } from "./config";
-import {
-  ensureCamoufoxServer,
-  camoufoxServerHealthy,
-  recoverCamoufoxServer,
-} from "./server";
+import { ensureCamoufoxServer, camoufoxServerHealthy, recoverCamoufoxServer } from "./server";
 
 export async function camoufoxRender(url: string, sessionKey: string): Promise<string> {
   await ensureCamoufoxServer(AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));

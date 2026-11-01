@@ -17,7 +17,8 @@ describe("parseWikipediaUrl", () => {
 
   it("normalizes the permalink", () => {
     assert.equal(
-      parseWikipediaUrl("https://ja.wikipedia.org/wiki/%E3%82%A8%E3%83%94%E3%83%83%E3%82%AF")?.permalink,
+      parseWikipediaUrl("https://ja.wikipedia.org/wiki/%E3%82%A8%E3%83%94%E3%83%83%E3%82%AF")
+        ?.permalink,
       "https://ja.wikipedia.org/wiki/%E3%82%A8%E3%83%94%E3%83%83%E3%82%AF",
     );
   });

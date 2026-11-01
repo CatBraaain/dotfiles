@@ -115,10 +115,7 @@ export function formatDuration(seconds: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
-export function renderYouTubeMarkdown(
-  info: YtDlpInfo,
-  transcript: string | undefined,
-): string {
+export function renderYouTubeMarkdown(info: YtDlpInfo, transcript: string | undefined): string {
   const lines = [
     `# ${info.title || "YouTube video"}`,
     "",
@@ -152,9 +149,7 @@ async function runYtDlp(args: string[]): Promise<string> {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
-      throw new Error(
-        `yt-dlp failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new Error(`yt-dlp failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     return run("uvx", ["yt-dlp@latest"]).catch((uvxError: unknown) => {
       throw new Error(
@@ -167,12 +162,7 @@ async function runYtDlp(args: string[]): Promise<string> {
 // Spec: yt-dlp でメタデータと字幕 URL（手動字幕を優先し自動字幕にフォールバック）
 // を取得し、字幕 VTT を plain text 化して description とともに出力する。
 export async function fetchYouTubeMarkdown(rawUrl: string): Promise<string> {
-  const output = await runYtDlp([
-    "--dump-single-json",
-    "--no-warnings",
-    "--no-playlist",
-    rawUrl,
-  ]);
+  const output = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", rawUrl]);
 
   let info: YtDlpInfo;
   try {
@@ -181,8 +171,7 @@ export async function fetchYouTubeMarkdown(rawUrl: string): Promise<string> {
     throw new Error("yt-dlp returned no JSON metadata");
   }
 
-  const subtitleUrl =
-    pickSubtitleUrl(info.subtitles) ?? pickSubtitleUrl(info.automatic_captions);
+  const subtitleUrl = pickSubtitleUrl(info.subtitles) ?? pickSubtitleUrl(info.automatic_captions);
   let transcript: string | undefined;
   if (subtitleUrl) {
     const response = await fetch(subtitleUrl, {

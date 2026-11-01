@@ -96,18 +96,14 @@ commands:
       - ask: ["bump-.*-pr|bump-unversioned-casks"]
   - komac:
       - ask: []
-      - allow:
-          [
-            "sync|cleanup|list-versions|list|analyse|complete|autocomplete",
-          ]
+      - allow: ["sync|cleanup|list-versions|list|analyse|complete|autocomplete"]
       - allow: [token]
 
   - git:
       - allow: []
       - ask: [push]
       - ask_with_reason: [reset, "--hard"]
-      - ask_with_reason:
-          [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"]
+      - ask_with_reason: [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"]
       - ask_with_reason: ["replace|update-ref|gc|prune"]
       - ask_with_reason: [reflog, expire]
       - allow: [worktree, prune]

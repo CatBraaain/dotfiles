@@ -24,8 +24,8 @@ export async function buildHookContext(): Promise<HookContext> {
     distDir,
     resolvePaths: (path: string) => resolvePaths(process.cwd(), distDir, homeRoot, path),
     syncGithubMirror: (repo: string) =>
-      import(resolve(hookEnv("DOTFILES_MANAGER_SRC"), "build-external.ts")).then(
-        (external) => external.syncGithubMirror(repo),
+      import(resolve(hookEnv("DOTFILES_MANAGER_SRC"), "build-external.ts")).then((external) =>
+        external.syncGithubMirror(repo),
       ),
   };
 }

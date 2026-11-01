@@ -67,9 +67,7 @@ function getParser(dir: string): Parser {
 
 function isElementNode(value: unknown): value is ElementNode {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { type?: unknown }).type === "element"
+    typeof value === "object" && value !== null && (value as { type?: unknown }).type === "element"
   );
 }
 
@@ -271,10 +269,7 @@ function renderTextContent(node: ElementNode): string {
 
 const TEXT_SIZES = new Set(["xs", "sm", "md", "lg"]);
 
-function textBlock(
-  node: ElementNode,
-  options: { heavy: boolean },
-): string {
+function textBlock(node: ElementNode, options: { heavy: boolean }): string {
   const value = propString(node, "value") ?? "";
   const subtext = propString(node, "subtext");
   const variant = propString(node, "variant") === "number" ? "number" : "text";
@@ -433,9 +428,7 @@ function renderCell(value: unknown): string {
 }
 
 function renderTable(node: ElementNode): string {
-  const columns = Array.isArray(node.props.columns)
-    ? node.props.columns.filter(isElementNode)
-    : [];
+  const columns = Array.isArray(node.props.columns) ? node.props.columns.filter(isElementNode) : [];
   const colDefs = columns.map((column) => ({
     label: propString(column, "label") ?? "",
     data: Array.isArray(column.props.data) ? column.props.data : [],
@@ -533,7 +526,10 @@ export function renderOpuiLang(source: string, dir: string = EXTENSION_DIR): Opu
   }
   const unknown = parsed.meta.errors.find((error) => error.code === "unknown-component");
   if (unknown) {
-    return { ok: false, error: `component "${unknown.component}" is not in the display-only library` };
+    return {
+      ok: false,
+      error: `component "${unknown.component}" is not in the display-only library`,
+    };
   }
   const validation = parsed.meta.errors[0];
   if (validation) {
@@ -543,7 +539,10 @@ export function renderOpuiLang(source: string, dir: string = EXTENSION_DIR): Opu
     return { ok: false, error: "Query()/Mutation() have no data source in this preview" };
   }
   if (containsDynamicProps(parsed.root)) {
-    return { ok: false, error: "reactive expressions ($variables, bindings) are not supported in this preview" };
+    return {
+      ok: false,
+      error: "reactive expressions ($variables, bindings) are not supported in this preview",
+    };
   }
 
   const unsupported = new Set<string>();

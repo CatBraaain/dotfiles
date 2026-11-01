@@ -56,7 +56,10 @@ describe("pickSubtitleUrl", () => {
 
   it("returns undefined without usable tracks", () => {
     assert.equal(pickSubtitleUrl(undefined), undefined);
-    assert.equal(pickSubtitleUrl({ fr: [{ url: "https://example.com/fr.vtt", ext: "vtt" }] }), undefined);
+    assert.equal(
+      pickSubtitleUrl({ fr: [{ url: "https://example.com/fr.vtt", ext: "vtt" }] }),
+      undefined,
+    );
   });
 });
 

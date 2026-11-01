@@ -39,7 +39,11 @@ export function insertMetadata(png: Buffer, envelope: Envelope): Buffer {
     break;
   }
   if (iendOffset === null) throw new Error("truncated png (no IEND)");
-  return Buffer.concat([png.subarray(0, iendOffset), itxtChunk(envelope), png.subarray(iendOffset)]);
+  return Buffer.concat([
+    png.subarray(0, iendOffset),
+    itxtChunk(envelope),
+    png.subarray(iendOffset),
+  ]);
 }
 
 export function loadEnvelope(png: Buffer): Envelope | null {
@@ -52,7 +56,11 @@ export function loadEnvelope(png: Buffer): Envelope | null {
   return null;
 }
 
-export function resolveRenderSettings(envelope: Envelope, pixelWidth: number, pixelHeight: number): RenderSettings {
+export function resolveRenderSettings(
+  envelope: Envelope,
+  pixelWidth: number,
+  pixelHeight: number,
+): RenderSettings {
   const { render } = envelope;
   const isComplete =
     typeof render?.width === "number" &&
@@ -61,7 +69,11 @@ export function resolveRenderSettings(envelope: Envelope, pixelWidth: number, pi
   return isComplete ? render : { width: pixelWidth, height: pixelHeight, scale: 1 };
 }
 
-export function verifyPng(png: Buffer): { envelope: Envelope; pixelWidth: number; pixelHeight: number } {
+export function verifyPng(png: Buffer): {
+  envelope: Envelope;
+  pixelWidth: number;
+  pixelHeight: number;
+} {
   assertPngSignature(png);
   let sawIend = false;
   let metadataChunk: WalkedChunk | null = null;
@@ -72,7 +84,8 @@ export function verifyPng(png: Buffer): { envelope: Envelope; pixelWidth: number
       pixelWidth = chunk.data.readUInt32BE(0);
       pixelHeight = chunk.data.readUInt32BE(4);
     }
-    if (chunk.type === "iTXt" && !metadataChunk && readCString(chunk.data, 0).text === KEYWORD) metadataChunk = chunk;
+    if (chunk.type === "iTXt" && !metadataChunk && readCString(chunk.data, 0).text === KEYWORD)
+      metadataChunk = chunk;
     if (chunk.type === "IEND") {
       sawIend = true;
       break;
@@ -109,7 +122,11 @@ export function chunkBytes(type: string, data: Buffer): Buffer {
 
 function itxtChunk(envelope: Envelope): Buffer {
   const compressed = deflateSync(Buffer.from(JSON.stringify(envelope), "utf8"));
-  const data = Buffer.concat([Buffer.from(KEYWORD, "latin1"), Buffer.from([0, 1, 0, 0, 0]), compressed]);
+  const data = Buffer.concat([
+    Buffer.from(KEYWORD, "latin1"),
+    Buffer.from([0, 1, 0, 0, 0]),
+    compressed,
+  ]);
   return chunkBytes("iTXt", data);
 }
 
@@ -136,7 +153,9 @@ function* walkChunks(png: Buffer): Generator<WalkedChunk> {
     if (offset + 12 + length > png.length) return;
     const type = png.toString("latin1", offset + 4, offset + 8);
     const data = png.subarray(offset + 8, offset + 8 + length);
-    const crcOk = png.readUInt32BE(offset + 8 + length) === crc32(png.subarray(offset + 4, offset + 8 + length));
+    const crcOk =
+      png.readUInt32BE(offset + 8 + length) ===
+      crc32(png.subarray(offset + 4, offset + 8 + length));
     yield { offset, type, data, crcOk };
     if (type === "IEND") return;
     offset += 12 + length;
@@ -150,7 +169,8 @@ function readCString(data: Buffer, start: number): { text: string; end: number }
 }
 
 function assertPngSignature(png: Buffer): void {
-  if (png.length < 8 || !png.subarray(0, 8).equals(PNG_SIGNATURE)) throw new Error("not a PNG image");
+  if (png.length < 8 || !png.subarray(0, 8).equals(PNG_SIGNATURE))
+    throw new Error("not a PNG image");
 }
 
 function sha256Hex(text: string): string {

@@ -146,9 +146,7 @@ export default function recontextExtension(pi: ExtensionAPI): void {
     ctx: ExtensionContext,
     pending: ReplacementProjection,
   ): Promise<BoundaryResult | undefined> {
-    const directRequests = event.toolResults.filter(
-      (result) => result.toolName === "recontext",
-    );
+    const directRequests = event.toolResults.filter((result) => result.toolName === "recontext");
     const nestedRequests = event.toolResults.flatMap((result) =>
       (result.nestedCalls?.calls ?? []).flatMap((call) => {
         const payload = pendingRequests.get(call.id);

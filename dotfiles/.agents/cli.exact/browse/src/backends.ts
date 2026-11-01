@@ -5,10 +5,7 @@
 type CamoufoxFailureKind = "challenge" | "recoverable-render" | "other";
 
 function classifyCamoufoxFailure(message: string): CamoufoxFailureKind {
-  if (
-    message === "parse: captcha detected" ||
-    message === "render: challenge detected"
-  ) {
+  if (message === "parse: captcha detected" || message === "render: challenge detected") {
     return "challenge";
   }
   if (
@@ -21,9 +18,7 @@ function classifyCamoufoxFailure(message: string): CamoufoxFailureKind {
 }
 
 export function camoufoxFailureKind(error: unknown): CamoufoxFailureKind {
-  return classifyCamoufoxFailure(
-    error instanceof Error ? error.message : String(error),
-  );
+  return classifyCamoufoxFailure(error instanceof Error ? error.message : String(error));
 }
 
 interface CamoufoxRetryDecision {
@@ -58,10 +53,7 @@ export function isCamoufoxServerCommand(
   );
 }
 
-export function lockedBrowseArgs(
-  lockedSubcommand: string,
-  args: readonly string[],
-): string[] {
+export function lockedBrowseArgs(lockedSubcommand: string, args: readonly string[]): string[] {
   return [lockedSubcommand, ...args];
 }
 
@@ -113,17 +105,12 @@ export async function prepareCamoufoxRetry(
   return { shouldRetry: true, consumesRecoveryBudget: true };
 }
 
-type RetryHook = (
-  error: unknown,
-  recoveryRetries: number,
-) => Promise<RetryPreparation>;
+type RetryHook = (error: unknown, recoveryRetries: number) => Promise<RetryPreparation>;
 
 function renderAbortHint(attempts: readonly Attempt[]): string {
   const renderAborted = attempts.some(
     (attempt) =>
-      !attempt.ok &&
-      attempt.error.startsWith("render:") &&
-      /aborted/i.test(attempt.error),
+      !attempt.ok && attempt.error.startsWith("render:") && /aborted/i.test(attempt.error),
   );
   return renderAborted
     ? `\nHint: automatic render recovery did not resolve the failure. Render aborts are often transient, so retry the same call before concluding the service is down. If it fails again, run \`~/.agents/cli/browse server restart\` and retry.`
@@ -195,10 +182,7 @@ export async function tryRecoveryBackends<T>(
           attempts.push({
             backend: `${name} recovery`,
             ok: false,
-            error:
-              recoveryError instanceof Error
-                ? recoveryError.message
-                : String(recoveryError),
+            error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
           });
           break;
         }
@@ -218,4 +202,3 @@ export function recoveryAttemptDuration(attempts: readonly Attempt[]): number {
   const last = attempts.at(-1);
   return last?.ok ? (last.durationMs ?? 0) : 0;
 }
-

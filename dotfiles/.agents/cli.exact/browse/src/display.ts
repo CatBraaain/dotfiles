@@ -139,5 +139,3 @@ export async function ensureX11vnc(): Promise<void> {
   console.log("[camoufox-server] starting x11vnc (connection denied until -R nodeny)");
   spawnDetachedLog("x11vnc", x11vncArgs(), join(stateDir(), "x11vnc.log"));
 }
-
-

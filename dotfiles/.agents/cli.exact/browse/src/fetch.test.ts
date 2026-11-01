@@ -9,7 +9,10 @@ describe("fetchRoute", () => {
   });
 
   it("routes StackOverflow question permalinks to the camoufox-free path", () => {
-    assert.equal(fetchRoute("https://stackoverflow.com/questions/12345678/question-title"), "stackoverflow");
+    assert.equal(
+      fetchRoute("https://stackoverflow.com/questions/12345678/question-title"),
+      "stackoverflow",
+    );
     assert.equal(fetchRoute("https://stackoverflow.com/questions/12345678"), "stackoverflow");
   });
 

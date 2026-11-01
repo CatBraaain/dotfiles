@@ -125,7 +125,10 @@ describe("cli", () => {
       writeFileSync(htmlPath, html);
       const bind = runCli(["shot", htmlPath, "--width", "320", "--height", "200", "--scale", "1"]);
       assert.equal(bind.exitCode, 0, bind.stderr.toString());
-      assert.match(bind.stdout.toString(), /shot: .*sample\.html\.png \(320x200@1x, html \d+ bytes\)/);
+      assert.match(
+        bind.stdout.toString(),
+        /shot: .*sample\.html\.png \(320x200@1x, html \d+ bytes\)/,
+      );
       const boundPng = readFileSync(join(dir, "sample.html.png"));
       assert.ok(boundPng.subarray(0, 8).equals(PNG_SIGNATURE));
       const extract = runCli(["extract", join(dir, "sample.html.png")]);
@@ -140,12 +143,16 @@ describe("cli", () => {
     if (resolveBrowser() === null) return;
     const dir = mkdtempSync(join(tmpdir(), "htmlshot-cli-"));
     try {
-      const html = "<!doctype html><meta charset='utf-8'><body style='margin:0;background:#fff'></body>";
+      const html =
+        "<!doctype html><meta charset='utf-8'><body style='margin:0;background:#fff'></body>";
       const htmlPath = join(dir, "sample.html");
       writeFileSync(htmlPath, html);
       const bind = runCli(["shot", htmlPath, "--width", "320", "--height", "200"]);
       assert.equal(bind.exitCode, 0, bind.stderr.toString());
-      assert.match(bind.stdout.toString(), /shot: .*sample\.html\.png \(320x200@3x, html \d+ bytes\)/);
+      assert.match(
+        bind.stdout.toString(),
+        /shot: .*sample\.html\.png \(320x200@3x, html \d+ bytes\)/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

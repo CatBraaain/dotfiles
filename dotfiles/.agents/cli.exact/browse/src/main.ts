@@ -163,8 +163,7 @@ function isAbsoluteUrl(raw: string): boolean {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const [subcommand, ...rest] =
-    args[0] === LOCKED_SUBCOMMAND ? args.slice(1) : args;
+  const [subcommand, ...rest] = args[0] === LOCKED_SUBCOMMAND ? args.slice(1) : args;
   switch (subcommand) {
     case "search":
       await searchCommand(rest);
@@ -257,11 +256,7 @@ async function restartCommand(): Promise<void> {
   }
   const result = spawnSync(
     "flock",
-    [
-      ...chain,
-      ...selfRunArgv,
-      ...lockedBrowseArgs(LOCKED_SUBCOMMAND, process.argv.slice(2)),
-    ],
+    [...chain, ...selfRunArgv, ...lockedBrowseArgs(LOCKED_SUBCOMMAND, process.argv.slice(2))],
     { stdio: "inherit", env: process.env },
   );
   if (result.error) return restartCamoufoxServer(); // no flock(1): nothing to drain
@@ -273,4 +268,3 @@ if (import.meta.main) {
     fail(error instanceof Error ? error.message : String(error));
   });
 }
-

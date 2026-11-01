@@ -3,10 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="Browse all local design options by axis."
-    />
+    <meta name="description" content="Browse all local design options by axis." />
     <title>Design catalog</title>
     <style>
       :root {
@@ -23,8 +20,7 @@
         --current: #e9eaef;
         --focus: #2563eb;
         --soft-ring: rgba(64, 66, 74, 0.1);
-        --shadow-card:
-          0 1px 2px rgba(64, 66, 74, 0.05), 0 10px 28px rgba(64, 66, 74, 0.08);
+        --shadow-card: 0 1px 2px rgba(64, 66, 74, 0.05), 0 10px 28px rgba(64, 66, 74, 0.08);
         --space-1: 4px;
         --space-2: 8px;
         --space-3: 12px;
@@ -48,8 +44,7 @@
           --current: #303338;
           --focus: #93c5fd;
           --soft-ring: rgba(0, 0, 0, 0.32);
-          --shadow-card:
-            0 1px 2px rgba(0, 0, 0, 0.26), 0 12px 32px rgba(0, 0, 0, 0.36);
+          --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.26), 0 12px 32px rgba(0, 0, 0, 0.36);
         }
       }
       * {
@@ -267,9 +262,7 @@
     </script>
     <script>
       "use strict";
-      const catalog = JSON.parse(
-        document.getElementById("catalog-data").textContent,
-      );
+      const catalog = JSON.parse(document.getElementById("catalog-data").textContent);
       const byId = (id) => document.getElementById(id);
 
       document.title = catalog.title;
@@ -282,14 +275,8 @@
         const heading = element("h2", "axis-heading");
         heading.id = headingId;
         const headingText = element("span", "", axis.label);
-        heading.append(
-          element("span", "axis-index", String(axisIndex + 1)),
-          headingText,
-        );
-        info.append(
-          heading,
-          element("p", "axis-description", axis.description),
-        );
+        heading.append(element("span", "axis-index", String(axisIndex + 1)), headingText);
+        info.append(heading, element("p", "axis-description", axis.description));
         const options = element("div", "options");
         options.tabIndex = 0;
         options.setAttribute("role", "group");
@@ -297,11 +284,9 @@
         options.addEventListener("keydown", (event) => {
           const paging = Math.round(options.clientWidth * 0.8);
           if (event.key === "ArrowRight") options.scrollBy({ left: paging });
-          else if (event.key === "ArrowLeft")
-            options.scrollBy({ left: -paging });
+          else if (event.key === "ArrowLeft") options.scrollBy({ left: -paging });
           else if (event.key === "Home") options.scrollTo({ left: 0 });
-          else if (event.key === "End")
-            options.scrollTo({ left: options.scrollWidth });
+          else if (event.key === "End") options.scrollTo({ left: options.scrollWidth });
           else return;
           event.preventDefault();
         });
@@ -324,10 +309,7 @@
             element("span", "option-label", option.label),
           );
           labelRow.append(optionHeading, replay);
-          caption.append(
-            labelRow,
-            element("p", "option-description", option.description),
-          );
+          caption.append(labelRow, element("p", "option-description", option.description));
           shell.append(createFrame(option, name));
           figure.append(caption, shell);
           options.append(figure);

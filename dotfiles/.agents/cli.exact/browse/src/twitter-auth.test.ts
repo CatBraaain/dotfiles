@@ -28,10 +28,9 @@ describe("renderTwikitTweetMarkdown", () => {
 
 describe("renderTwitterTweets", () => {
   it("renders a user header when user info is present", () => {
-    const markdown = renderTwitterTweets(
-      { title: "Alice (@alice)", url: "https://x.com/alice" },
-      [{ text: "tweet", author: "Alice", screenName: "alice" }],
-    );
+    const markdown = renderTwitterTweets({ title: "Alice (@alice)", url: "https://x.com/alice" }, [
+      { text: "tweet", author: "Alice", screenName: "alice" },
+    ]);
     assert.match(markdown, /^# Alice \(@alice\)/);
     assert.match(markdown, /## Tweets \(1 retrieved\)/);
     assert.match(markdown, /### 1\. Alice \(@alice\)/);

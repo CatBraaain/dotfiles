@@ -28,7 +28,10 @@ describe("parseArxivUrl", () => {
   });
 
   it("parses old-style category ids", () => {
-    assert.equal(parseArxivUrl("https://www.arxiv.org/abs/math.GT/0309136")?.arxivId, "math.GT/0309136");
+    assert.equal(
+      parseArxivUrl("https://www.arxiv.org/abs/math.GT/0309136")?.arxivId,
+      "math.GT/0309136",
+    );
   });
 
   it("rejects other paths", () => {

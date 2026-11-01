@@ -15,7 +15,7 @@ describe("scan", () => {
     const html = [
       "<noscript>fallback</noscript>",
       "<img src='data:image/png;base64,AAA'>",
-      "<div style=\"background:url(data:image/svg+xml;utf8,%3Csvg/%3E)\"></div>",
+      '<div style="background:url(data:image/svg+xml;utf8,%3Csvg/%3E)"></div>',
     ].join("\n");
     assert.equal(scanViolations(html).length, 0);
   });
@@ -24,7 +24,7 @@ describe("scan", () => {
     const html = [
       "<img src='https://cdn.example/x.png'>",
       "<a href='//example.com/y'>link</a>",
-      "<img srcset=\"https://a.example/z 1x, local.png 2x\">",
+      '<img srcset="https://a.example/z 1x, local.png 2x">',
       "<style>a{background:url(http://b.example/w.png)}</style>",
       "<style>@import '//c.example/s.css';</style>",
       "<img src='file:///etc/passwd'>",

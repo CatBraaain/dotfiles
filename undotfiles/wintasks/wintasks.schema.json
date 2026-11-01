@@ -14,22 +14,13 @@
               "type": "object",
               "properties": {
                 "type": {
-                  "enum": [
-                    "cron",
-                    "startup",
-                    "boot",
-                    "once",
-                    "now"
-                  ]
+                  "enum": ["cron", "startup", "boot", "once", "now"]
                 },
                 "value": {
                   "type": "string"
                 }
               },
-              "required": [
-                "type",
-                "value"
-              ],
+              "required": ["type", "value"],
               "additionalProperties": false
             }
           },
@@ -37,22 +28,13 @@
             "type": "object",
             "properties": {
               "type": {
-                "enum": [
-                  "cron",
-                  "startup",
-                  "boot",
-                  "once",
-                  "now"
-                ]
+                "enum": ["cron", "startup", "boot", "once", "now"]
               },
               "value": {
                 "type": "string"
               }
             },
-            "required": [
-              "type",
-              "value"
-            ],
+            "required": ["type", "value"],
             "additionalProperties": false
           }
         ]
@@ -68,21 +50,13 @@
                   "type": "string"
                 },
                 "args": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": ["string", "null"]
                 },
                 "working_directory": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": ["string", "null"]
                 }
               },
-              "required": [
-                "command"
-              ],
+              "required": ["command"],
               "additionalProperties": false
             }
           },
@@ -93,52 +67,31 @@
                 "type": "string"
               },
               "args": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": ["string", "null"]
               },
               "working_directory": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": ["string", "null"]
               }
             },
-            "required": [
-              "command"
-            ],
+            "required": ["command"],
             "additionalProperties": false
           }
         ]
       },
       "setting": {
-        "type": [
-          "object",
-          "null"
-        ],
+        "type": ["object", "null"],
         "properties": {
           "run_as": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": ["boolean", "null"]
           },
           "logon_type": {
-            "enum": [
-              "s4u",
-              "interactive_token",
-              null
-            ]
+            "enum": ["s4u", "interactive_token", null]
           }
         },
         "additionalProperties": false
       }
     },
-    "required": [
-      "trigger",
-      "action"
-    ],
+    "required": ["trigger", "action"],
     "additionalProperties": false
   }
 }

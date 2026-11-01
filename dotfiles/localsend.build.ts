@@ -8,9 +8,7 @@ const settingsPaths = [
 const jsonTokens = /"(?:\\.|[^"\\])*"|[ \t\r\n]+/g;
 
 async function main(): Promise<void> {
-  const { buildHookContext } = await import(
-    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
-  );
+  const { buildHookContext } = await import(`${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`);
   const { resolvePaths } = await buildHookContext();
   for (const settingsPath of settingsPaths) {
     const { distPath } = resolvePaths(settingsPath);

@@ -18,9 +18,7 @@ export function parseTweetUrl(rawUrl: string): TweetUrl | undefined {
     return undefined;
   }
   if (!isTwitterHost(url.hostname)) return undefined;
-  const match = /^\/([A-Za-z0-9_]{1,20})\/status(?:es)?\/(\d+)(?:\/|$)/.exec(
-    url.pathname,
-  );
+  const match = /^\/([A-Za-z0-9_]{1,20})\/status(?:es)?\/(\d+)(?:\/|$)/.exec(url.pathname);
   if (!match) return undefined;
   const tweetId = match[2]!;
   return { tweetId, permalink: `https://x.com/${match[1]}/status/${tweetId}` };

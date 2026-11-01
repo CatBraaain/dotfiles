@@ -77,26 +77,16 @@ function resolveManagedKeysDir(env: PathEnv, isE2E: boolean): string {
 
 function isAbsoluteTmpPath(path: string): boolean {
   const tempRoot = tmpdir();
-  return (
-    path === tempRoot ||
-    path.startsWith(tempRoot + "/") ||
-    path.startsWith(tempRoot + "\\")
-  );
+  return path === tempRoot || path.startsWith(tempRoot + "/") || path.startsWith(tempRoot + "\\");
 }
 
-function linuxPaths(
-  platform: PlatformName,
-  env: PathEnv,
-  isE2E: boolean,
-): ResolvedPaths {
+function linuxPaths(platform: PlatformName, env: PathEnv, isE2E: boolean): ResolvedPaths {
   const timeouts = {
     harnessMs: defaultHarnessTimeoutMs,
     lockWaitMs: defaultHookLockWaitMs,
   };
   const homeDir = env.HOME ?? "";
-  const productionProfileDir = homeDir
-    ? join(homeDir, linuxProfileSuffix)
-    : null;
+  const productionProfileDir = homeDir ? join(homeDir, linuxProfileSuffix) : null;
   const managedKeysDir = resolveManagedKeysDir(env, isE2E);
   if (!isE2E) {
     if (!homeDir) throw new HookError("INVALID_INPUT", "HOME is not set");
@@ -115,10 +105,7 @@ function linuxPaths(
   const e2eProfile = env.OPENWHISPR_E2E_PROFILE ?? productionProfileDir!;
   const e2eAppDir = env.OPENWHISPR_E2E_APP_DIR ?? linuxAppDir;
   if (!isAbsolute(e2eProfile) || !isAbsoluteTmpPath(e2eProfile))
-    throw new HookError(
-      "INVALID_INPUT",
-      "e2e profile must be an absolute path under tmpdir",
-    );
+    throw new HookError("INVALID_INPUT", "e2e profile must be an absolute path under tmpdir");
   return {
     platform,
     managedKeysDir,
@@ -130,16 +117,11 @@ function linuxPaths(
   };
 }
 
-function windowsPaths(
-  platform: PlatformName,
-  env: PathEnv,
-  isE2E: boolean,
-): ResolvedPaths {
+function windowsPaths(platform: PlatformName, env: PathEnv, isE2E: boolean): ResolvedPaths {
   const appData = env.APPDATA ?? "";
   if (!appData) throw new HookError("INVALID_INPUT", "APPDATA is not set");
   const localAppData = env.LOCALAPPDATA ?? "";
-  if (!localAppData)
-    throw new HookError("INVALID_INPUT", "LOCALAPPDATA is not set");
+  if (!localAppData) throw new HookError("INVALID_INPUT", "LOCALAPPDATA is not set");
   const timeouts = {
     harnessMs: defaultHarnessTimeoutMs,
     lockWaitMs: defaultHookLockWaitMs,
@@ -160,10 +142,7 @@ function windowsPaths(
   const e2eProfile = env.OPENWHISPR_E2E_PROFILE ?? productionProfileDir;
   const e2eAppDir = env.OPENWHISPR_E2E_APP_DIR ?? productionAppDir;
   if (!isAbsolute(e2eProfile) || !isAbsoluteTmpPath(e2eProfile))
-    throw new HookError(
-      "INVALID_INPUT",
-      "e2e profile must be an absolute path under tmpdir",
-    );
+    throw new HookError("INVALID_INPUT", "e2e profile must be an absolute path under tmpdir");
   return {
     platform,
     managedKeysDir,
@@ -176,10 +155,8 @@ function windowsPaths(
 }
 
 export function resolvePaths(platform: string, env: PathEnv): ResolvedPaths {
-  if (platform === "linux")
-    return linuxPaths("linux", env, env.OPENWHISPR_E2E === "1");
-  if (platform === "win32")
-    return windowsPaths("win32", env, env.OPENWHISPR_E2E === "1");
+  if (platform === "linux") return linuxPaths("linux", env, env.OPENWHISPR_E2E === "1");
+  if (platform === "win32") return windowsPaths("win32", env, env.OPENWHISPR_E2E === "1");
   throw new HookError("INVALID_INPUT", `unsupported platform: ${platform}`);
 }
 
@@ -187,55 +164,29 @@ export function sha256Hex(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-export function validateManagedKeys(
-  raw: unknown,
-): ManagedStorageTarget[] {
+export function validateManagedKeys(raw: unknown): ManagedStorageTarget[] {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
-    throw new HookError(
-      "INVALID_INPUT",
-      "managed keys file must be a mapping with a keys array",
-    );
+    throw new HookError("INVALID_INPUT", "managed keys file must be a mapping with a keys array");
   const keys = (raw as { keys?: unknown }).keys;
   if (!Array.isArray(keys) || keys.length === 0)
-    throw new HookError(
-      "INVALID_INPUT",
-      "managed keys file must list a non-empty keys array",
-    );
+    throw new HookError("INVALID_INPUT", "managed keys file must list a non-empty keys array");
   const declared = new Set<string>();
   const targets: ManagedStorageTarget[] = [];
   for (const entry of keys) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry))
-      throw new HookError(
-        "INVALID_INPUT",
-        "managed keys entries must be mappings",
-      );
+      throw new HookError("INVALID_INPUT", "managed keys entries must be mappings");
     const { key, value } = entry as { key?: unknown; value?: unknown };
     if (typeof key !== "string" || key === "")
-      throw new HookError(
-        "INVALID_INPUT",
-        "managed key must be a non-empty string",
-      );
+      throw new HookError("INVALID_INPUT", "managed key must be a non-empty string");
     if (declared.has(key))
-      throw new HookError(
-        "INVALID_INPUT",
-        `managed key is duplicated: ${key}`,
-      );
+      throw new HookError("INVALID_INPUT", `managed key is duplicated: ${key}`);
     declared.add(key);
     if (typeof value !== "string")
-      throw new HookError(
-        "INVALID_INPUT",
-        `managed key must declare a string value: ${key}`,
-      );
+      throw new HookError("INVALID_INPUT", `managed key must declare a string value: ${key}`);
     if (value.includes("\0"))
-      throw new HookError(
-        "INVALID_INPUT",
-        `managed key value contains NUL: ${key}`,
-      );
+      throw new HookError("INVALID_INPUT", `managed key value contains NUL: ${key}`);
     if (value.trim() === "")
-      throw new HookError(
-        "INVALID_INPUT",
-        `managed key value is blank: ${key}`,
-      );
+      throw new HookError("INVALID_INPUT", `managed key value is blank: ${key}`);
     targets.push({ key, value });
   }
   return targets;
@@ -247,28 +198,20 @@ export function loadManagedKeys(baseDir: string): ManagedStorageTarget[] {
   try {
     text = readFileSync(declarationPath, "utf8");
   } catch {
-    throw new HookError(
-      "INVALID_INPUT",
-      `managed keys file is missing: ${declarationPath}`,
-    );
+    throw new HookError("INVALID_INPUT", `managed keys file is missing: ${declarationPath}`);
   }
   let raw: unknown;
   try {
     raw = parseYaml(text);
   } catch (error) {
     if (error instanceof HookError) throw error;
-    throw new HookError(
-      "INVALID_INPUT",
-      `managed keys file is not valid YAML: ${declarationPath}`,
-    );
+    throw new HookError("INVALID_INPUT", `managed keys file is not valid YAML: ${declarationPath}`);
   }
   return validateManagedKeys(raw);
 }
 
 export function managedKeysSha256(targets: ManagedStorageTarget[]): string {
-  return sha256Hex(
-    targets.map((target) => `${target.key}\0${target.value}`).join("\0"),
-  );
+  return sha256Hex(targets.map((target) => `${target.key}\0${target.value}`).join("\0"));
 }
 
 export type RegistrationOutcome = {
@@ -298,11 +241,7 @@ function readUInt32LE(bytes: Uint8Array, offset: number): number {
 }
 
 export function parseAsarPackageName(asarBytes: Uint8Array): string {
-  const fail = () =>
-    new HookError(
-      "INVALID_INPUT",
-      "installed app.asar has an unexpected format",
-    );
+  const fail = () => new HookError("INVALID_INPUT", "installed app.asar has an unexpected format");
   if (asarBytes.length < 16 || readUInt32LE(asarBytes, 0) !== 4) throw fail();
   const headerPickleLength = readUInt32LE(asarBytes, 4);
   const headerPayloadLength = readUInt32LE(asarBytes, 8);
@@ -311,23 +250,16 @@ export function parseAsarPackageName(asarBytes: Uint8Array): string {
   if (16 + jsonLength > asarBytes.length) throw fail();
   let header: { files?: Record<string, { offset?: string; size?: number }> };
   try {
-    header = JSON.parse(
-      new TextDecoder().decode(asarBytes.subarray(16, 16 + jsonLength)),
-    );
+    header = JSON.parse(new TextDecoder().decode(asarBytes.subarray(16, 16 + jsonLength)));
   } catch {
     throw fail();
   }
   const packageEntry = header.files?.["package.json"];
-  if (packageEntry?.offset === undefined || packageEntry.size === undefined)
-    throw fail();
+  if (packageEntry?.offset === undefined || packageEntry.size === undefined) throw fail();
   const dataStart = 8 + headerPickleLength;
   const packageStart = dataStart + Number(packageEntry.offset);
   const packageEnd = packageStart + packageEntry.size;
-  if (
-    packageStart < dataStart ||
-    packageEnd > asarBytes.length ||
-    packageEnd < packageStart
-  )
+  if (packageStart < dataStart || packageEnd > asarBytes.length || packageEnd < packageStart)
     throw fail();
   try {
     const packageJson = JSON.parse(
@@ -347,10 +279,7 @@ export function verifyAppIdentity(appDir: string): void {
   try {
     asarBytes = readFileSync(asarPath);
   } catch {
-    throw new HookError(
-      "INVALID_INPUT",
-      `installed app package is missing: ${asarPath}`,
-    );
+    throw new HookError("INVALID_INPUT", `installed app package is missing: ${asarPath}`);
   }
   const packageName = parseAsarPackageName(asarBytes);
   if (packageName !== expectedAsarPackageName)
@@ -364,8 +293,7 @@ export function isRecognizedProfile(profileDir: string): boolean {
   try {
     if (statSync(profileDir).isDirectory())
       return (
-        existsSync(join(profileDir, "Preferences")) ||
-        existsSync(join(profileDir, "Local Storage"))
+        existsSync(join(profileDir, "Preferences")) || existsSync(join(profileDir, "Local Storage"))
       );
   } catch {
     return false;
@@ -381,10 +309,7 @@ async function runCommandDefault(
   return await new Promise((resolve) => {
     const child = spawn(command[0]!, command.slice(1), { windowsHide: true });
     let stdout = "";
-    child.stdout.on(
-      "data",
-      (chunk: Buffer) => (stdout += chunk.toString("utf8")),
-    );
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
     child.on("error", () => resolve({ exitCode: null, stdout }));
     child.on("close", (exitCode) => resolve({ exitCode, stdout }));
   });
@@ -393,8 +318,7 @@ async function runCommandDefault(
 const executablePathCache = new Map<string, string | null>();
 
 async function findExecutable(name: string): Promise<string | null> {
-  if (executablePathCache.has(name))
-    return executablePathCache.get(name) ?? null;
+  if (executablePathCache.has(name)) return executablePathCache.get(name) ?? null;
   const which = process.platform === "win32" ? "where" : "which";
   const { stdout } = await runCommandDefault([which, name]);
   const resolved = stdout.trim().split("\n")[0]?.trim() || null;
@@ -428,9 +352,9 @@ export function buildHarnessSource(): string {
       "",
       "const profile = process.env.OW_HARNESS_PROFILE;",
       "const mode = process.env.OW_HARNESS_MODE;",
-      "const targets = JSON.parse(process.env.OW_HARNESS_TARGETS_JSON || \"[]\");",
+      'const targets = JSON.parse(process.env.OW_HARNESS_TARGETS_JSON || "[]");',
       `if (!profile || !nodePath.isAbsolute(profile)) process.exit(${harnessExitInvalidArguments});`,
-      "if ((mode === \"read\" || mode === \"apply\") && targets.length === 0) process.exit(90);",
+      'if ((mode === "read" || mode === "apply") && targets.length === 0) process.exit(90);',
       "",
       'app.setPath("userData", profile);',
       'app.setPath("sessionData", profile);',
@@ -536,22 +460,15 @@ function isUninstallerEntry(name: string): boolean {
   return /^uninstall/i.test(name);
 }
 
-export async function ensureShadowRuntime(
-  appDir: string,
-  platform: PlatformName,
-): Promise<string> {
-  const appBinaryName =
-    platform === "linux" ? linuxAppBinaryName : windowsAppBinaryName;
+export async function ensureShadowRuntime(appDir: string, platform: PlatformName): Promise<string> {
+  const appBinaryName = platform === "linux" ? linuxAppBinaryName : windowsAppBinaryName;
   const electronBinaryName = platform === "linux" ? "electron" : "electron.exe";
   const sourceBinary = join(appDir, appBinaryName);
   let binaryStat;
   try {
     binaryStat = statSync(sourceBinary);
   } catch {
-    throw new HookError(
-      "INVALID_INPUT",
-      `installed app binary is missing: ${sourceBinary}`,
-    );
+    throw new HookError("INVALID_INPUT", `installed app binary is missing: ${sourceBinary}`);
   }
   const binaryHash = sha256Hex(readFileSync(sourceBinary));
   const runtimeDir = join(
@@ -580,19 +497,14 @@ export async function ensureShadowRuntime(
       if (platform === "linux" && entry.name === "open-whispr") continue;
       const source = join(appDir, entry.name);
       const destination = join(stagingDir, entry.name);
-      if (entry.isDirectory())
-        await cp(source, destination, { recursive: true });
+      if (entry.isDirectory()) await cp(source, destination, { recursive: true });
       else await cp(source, destination);
     }
     copyFileSync(sourceBinary, join(stagingDir, electronBinaryName));
-    if (platform === "linux")
-      chmodSync(join(stagingDir, electronBinaryName), 0o755);
+    if (platform === "linux") chmodSync(join(stagingDir, electronBinaryName), 0o755);
     const appOverlayDir = join(stagingDir, "resources", "app");
     await mkdir(appOverlayDir, { recursive: true });
-    await writeFile(
-      join(appOverlayDir, "package.json"),
-      buildHarnessPackageJson(),
-    );
+    await writeFile(join(appOverlayDir, "package.json"), buildHarnessPackageJson());
     await writeFile(join(appOverlayDir, "main.js"), buildHarnessSource());
     await writeFile(join(stagingDir, ".runtime-manifest.json"), manifest);
     await rm(runtimeDir, { recursive: true, force: true });
@@ -610,10 +522,7 @@ export type HarnessMode = "read" | "apply" | "seed" | "dump" | "hold";
 
 export type HarnessPayload = {
   status: string;
-  current?: Record<
-    string,
-    { value: string | null; sha256: string | null; equals: boolean }
-  >;
+  current?: Record<string, { value: string | null; sha256: string | null; equals: boolean }>;
   applied?: string[];
   restoreFailed?: string[];
   before?: Record<string, string | null>;
@@ -661,16 +570,11 @@ export async function runHarnessMode(options: {
   timeoutMs?: number;
   keepAlive?: boolean;
 }): Promise<HarnessRun> {
-  const electronName =
-    options.platform === "linux" ? "electron" : "electron.exe";
+  const electronName = options.platform === "linux" ? "electron" : "electron.exe";
   const electronPath = join(options.runtimeDir, electronName);
   const electronArgs =
     options.platform === "linux"
-      ? [
-          "--disable-gpu",
-          "--disable-setuid-sandbox",
-          `--user-data-dir=${options.profileDir}`,
-        ]
+      ? ["--disable-gpu", "--disable-setuid-sandbox", `--user-data-dir=${options.profileDir}`]
       : ["--disable-gpu", `--user-data-dir=${options.profileDir}`];
   let command: string[] = [electronPath, ...electronArgs];
   let useSessionDisplay = false;
@@ -679,9 +583,7 @@ export async function runHarnessMode(options: {
     const xvfbRunPath = await findExecutable("xvfb-run");
     if (xvfbRunPath) {
       command = [
-        ...(unsharePath
-          ? [unsharePath, "--user", "--map-current-user", "--net"]
-          : []),
+        ...(unsharePath ? [unsharePath, "--user", "--map-current-user", "--net"] : []),
         xvfbRunPath,
         "-a",
         "--server-args=-screen 0 800x600x24 -nolisten tcp",
@@ -697,9 +599,7 @@ export async function runHarnessMode(options: {
       );
     }
   }
-  const isolatedHome = await mkdtemp(
-    join(tmpdir(), "openwhispr-harness-home-"),
-  );
+  const isolatedHome = await mkdtemp(join(tmpdir(), "openwhispr-harness-home-"));
   const childEnv: Record<string, string> = {
     PATH: options.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     HOME: isolatedHome,
@@ -720,11 +620,9 @@ export async function runHarnessMode(options: {
   if (useSessionDisplay) childEnv.DISPLAY = options.env.DISPLAY!;
   if (options.targets !== undefined)
     childEnv.OW_HARNESS_TARGETS_JSON = JSON.stringify(options.targets);
-  if (options.seedJson !== undefined)
-    childEnv.OW_HARNESS_SEED_JSON = options.seedJson;
+  if (options.seedJson !== undefined) childEnv.OW_HARNESS_SEED_JSON = options.seedJson;
   if (options.allowDump) childEnv.OW_HARNESS_ALLOW_DUMP = "1";
-  if (options.holdMs !== undefined)
-    childEnv.OW_HARNESS_HOLD_MS = String(options.holdMs);
+  if (options.holdMs !== undefined) childEnv.OW_HARNESS_HOLD_MS = String(options.holdMs);
 
   const child = spawn(command[0]!, command.slice(1), {
     env: childEnv,
@@ -732,15 +630,9 @@ export async function runHarnessMode(options: {
     detached: options.platform === "linux",
   });
   let stdout = "";
-  child.stdout?.on(
-    "data",
-    (chunk: Buffer) => (stdout += chunk.toString("utf8")),
-  );
+  child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
   let stderr = "";
-  child.stderr?.on(
-    "data",
-    (chunk: Buffer) => (stderr += chunk.toString("utf8")),
-  );
+  child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -828,10 +720,7 @@ export async function acquireHookLock(
         continue;
       }
       if (Date.now() >= deadline)
-        throw new HookError(
-          "LOCKED",
-          "another config registration run is in progress",
-        );
+        throw new HookError("LOCKED", "another config registration run is in progress");
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
@@ -866,13 +755,9 @@ export async function writeRecoveryRecord(
     ...record,
     recordedAt: new Date().toISOString(),
   };
-  await writeFile(
-    recoveryRecordPath(profileDir),
-    JSON.stringify(fullRecord, null, 2) + "\n",
-    {
-      mode: 0o600,
-    },
-  );
+  await writeFile(recoveryRecordPath(profileDir), JSON.stringify(fullRecord, null, 2) + "\n", {
+    mode: 0o600,
+  });
 }
 
 export async function clearRecoveryRecord(profileDir: string): Promise<void> {
@@ -893,10 +778,7 @@ export async function manageConfig(options: {
     keysSha256 = managedKeysSha256(targets);
     const recognizedProfile = isRecognizedProfile(paths.profileDir);
     if (recognizedProfile)
-      releaseHookLock = await acquireHookLock(
-        paths.profileDir,
-        paths.timeouts.lockWaitMs,
-      );
+      releaseHookLock = await acquireHookLock(paths.profileDir, paths.timeouts.lockWaitMs);
     verifyAppIdentity(paths.appDir);
     if (!recognizedProfile)
       return {
@@ -906,9 +788,7 @@ export async function manageConfig(options: {
         detail: `OpenWhispr userData is not initialized: ${paths.profileDir}; launch and quit OpenWhispr, then run apply again`,
       };
     const runtimeDir = await ensureShadowRuntime(paths.appDir, paths.platform);
-    const runStorageMode = async (
-      mode: "read" | "apply",
-    ): Promise<HarnessPayload> => {
+    const runStorageMode = async (mode: "read" | "apply"): Promise<HarnessPayload> => {
       const run = await runHarnessMode({
         mode,
         targets,
@@ -942,9 +822,7 @@ export async function manageConfig(options: {
         previousSha256: observed?.sha256 ?? null,
       };
     });
-    const unchanged = targets.every(
-      (target) => readPayload.current?.[target.key]?.equals === true,
-    );
+    const unchanged = targets.every((target) => readPayload.current?.[target.key]?.equals === true);
     if (unchanged)
       return {
         status: "unchanged",
@@ -981,18 +859,13 @@ export async function manageConfig(options: {
         keys: currentEntries,
         keysSha256,
       });
-      throw new HookError(
-        "APPLY_FAILED",
-        "verified read-back did not match the managed values",
-      );
+      throw new HookError("APPLY_FAILED", "verified read-back did not match the managed values");
     }
     await clearRecoveryRecord(paths.profileDir);
     return { status: "applied", code: "OK", keysSha256 };
   } catch (error) {
     const hookError =
-      error instanceof HookError
-        ? error
-        : new HookError("APPLY_FAILED", String(error));
+      error instanceof HookError ? error : new HookError("APPLY_FAILED", String(error));
     return {
       status: "error",
       code: hookError.code,
@@ -1006,11 +879,7 @@ export async function manageConfig(options: {
 
 async function main(): Promise<void> {
   const platform: PlatformName | null =
-    process.platform === "win32"
-      ? "win32"
-      : process.platform === "linux"
-        ? "linux"
-        : null;
+    process.platform === "win32" ? "win32" : process.platform === "linux" ? "linux" : null;
   if (!platform) {
     const unsupported: RegistrationOutcome = {
       status: "error",
@@ -1024,10 +893,8 @@ async function main(): Promise<void> {
   const outcome = await manageConfig({ platform, env: process.env });
   if (outcome.detail && outcome.status !== "error") console.log(outcome.detail);
   console.log(formatStatusLine(outcome));
-  if (outcome.detail && outcome.status === "error")
-    console.error(outcome.detail);
-  if (outcome.status === "error")
-    process.exit(exitCodeByError[outcome.code as HookErrorCode]);
+  if (outcome.detail && outcome.status === "error") console.error(outcome.detail);
+  if (outcome.status === "error") process.exit(exitCodeByError[outcome.code as HookErrorCode]);
 }
 
 if (import.meta.main) await main();

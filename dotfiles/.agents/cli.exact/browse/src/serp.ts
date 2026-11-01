@@ -118,4 +118,3 @@ export function parseOpenserpResponse(body: string): OpenserpSearchResult[] {
   if (results.length === 0) throw new Error("parse: empty response");
   return results;
 }
-

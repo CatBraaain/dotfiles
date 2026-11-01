@@ -28,14 +28,12 @@ const PROMPT_FIXTURE_SPEC = {
   root: "Stack",
   components: {
     Stack: {
-      signature:
-        "Stack(children: any[], direction?: \"row\" | \"column\") — Flex container",
+      signature: 'Stack(children: any[], direction?: "row" | "column") — Flex container',
     },
     TextContent: { signature: "TextContent(text: string) — Text block" },
     Tabs: { signature: "Tabs(items: TabItem[]) — Tabbed container" },
     TabItem: {
-      signature:
-        "TabItem(value: string, trigger: string, content: any[]) — Tab",
+      signature: "TabItem(value: string, trigger: string, content: any[]) — Tab",
     },
   },
   schema: {
@@ -102,7 +100,7 @@ afterAll(() => {
 
 describe("extractOpuiLangBlocks", () => {
   it("extracts a single closed block", () => {
-    const text = ["before", "```openui-lang", 'root = Stack([])', "```", "after"].join("\n");
+    const text = ["before", "```openui-lang", "root = Stack([])", "```", "after"].join("\n");
     const blocks = extractOpuiLangBlocks(text);
     assert.equal(blocks.length, 1);
     assert.equal(blocks[0]?.source, "root = Stack([])");
@@ -159,13 +157,7 @@ describe("extractOpuiLangBlocks", () => {
 
 describe("stripOpuiLangBlocks", () => {
   it("removes closed blocks and keeps surrounding text", () => {
-    const text = [
-      "before",
-      "```openui-lang",
-      "root = Stack([])",
-      "```",
-      "after",
-    ].join("\n");
+    const text = ["before", "```openui-lang", "root = Stack([])", "```", "after"].join("\n");
     assert.equal(stripOpuiLangBlocks(text), "before\nafter");
   });
 
@@ -286,7 +278,9 @@ describe("renderPreview", () => {
 interface MockPi {
   registerMessageRenderer: (type: string) => void;
   on: (event: string, handler: (event: unknown, ctx: unknown) => void) => () => void;
-  registerMarkdownTransformer: (transformer: (markdown: string, context: unknown) => string) => void;
+  registerMarkdownTransformer: (
+    transformer: (markdown: string, context: unknown) => string,
+  ) => void;
   sendMessage: (message: unknown) => Promise<void>;
 }
 
@@ -328,7 +322,11 @@ function captureFrom(
     sent: [],
     handlers: new Map(),
   };
-  extension(mockPi(captured), { outDir: workDir, htmlshotPath: "/bin/htmlshot", ...extraOverrides });
+  extension(mockPi(captured), {
+    outDir: workDir,
+    htmlshotPath: "/bin/htmlshot",
+    ...extraOverrides,
+  });
   return captured;
 }
 
@@ -341,7 +339,9 @@ const shootingExecFile: ExecFileFn = (_file, args, callback) => {
 describe("extension wiring", () => {
   it("registers renderer, markdown transformer, and both handlers", async () => {
     const { default: openuiPreviewExtension } = await import("./index");
-    const captured = captureFrom(openuiPreviewExtension as unknown as (pi: MockPi, overrides?: unknown) => void);
+    const captured = captureFrom(
+      openuiPreviewExtension as unknown as (pi: MockPi, overrides?: unknown) => void,
+    );
     assert.deepEqual(captured.registeredTypes, [OPENUI_CUSTOM_TYPE]);
     assert.deepEqual(captured.registeredEvents, ["before_agent_start", "message_end"]);
     assert.equal(captured.transformers.length, 1);
@@ -379,7 +379,11 @@ describe("extension wiring", () => {
       markdown,
     );
     assert.equal(
-      transform(markdown, { messageType: "assistant-thinking", isStreaming: false, availableWidth: 80 }),
+      transform(markdown, {
+        messageType: "assistant-thinking",
+        isStreaming: false,
+        availableWidth: 80,
+      }),
       markdown,
     );
   });
@@ -394,20 +398,17 @@ describe("extension wiring", () => {
       handlers: new Map(),
     };
     const errors: unknown[] = [];
-    openuiPreviewExtension(
-      mockPi(captured) as never,
-      {
-        outDir: workDir,
-        htmlshotPath: "/bin/htmlshot",
-        execFile: shootingExecFile,
-        generatedDir: promptFixtureDir,
-        enqueue: <T,>(task: () => Promise<T>): Promise<T> =>
-          task().catch((error: unknown) => {
-            errors.push(error);
-            throw error;
-          }),
-      },
-    );
+    openuiPreviewExtension(mockPi(captured) as never, {
+      outDir: workDir,
+      htmlshotPath: "/bin/htmlshot",
+      execFile: shootingExecFile,
+      generatedDir: promptFixtureDir,
+      enqueue: <T>(task: () => Promise<T>): Promise<T> =>
+        task().catch((error: unknown) => {
+          errors.push(error);
+          throw error;
+        }),
+    });
 
     captured.handlers.get("message_end")?.(
       {
@@ -439,7 +440,10 @@ describe("extension wiring", () => {
       sent: [],
       handlers: new Map(),
     };
-    openuiPreviewExtension(mockPi(captured) as never, { outDir: workDir, htmlshotPath: "/bin/true" });
+    openuiPreviewExtension(mockPi(captured) as never, {
+      outDir: workDir,
+      htmlshotPath: "/bin/true",
+    });
 
     captured.handlers.get("message_end")?.(
       {
@@ -463,7 +467,10 @@ describe("extension wiring", () => {
       sent: [],
       handlers: new Map(),
     };
-    openuiPreviewExtension(mockPi(captured) as never, { outDir: workDir, htmlshotPath: "/bin/true" });
+    openuiPreviewExtension(mockPi(captured) as never, {
+      outDir: workDir,
+      htmlshotPath: "/bin/true",
+    });
 
     captured.handlers.get("message_end")?.(
       {
@@ -490,7 +497,11 @@ describe("extension wiring", () => {
       sent: [],
       handlers: new Map(),
     };
-    openuiPreviewExtension(mockPi(captured) as never, { outDir: workDir, htmlshotPath: "/bin/htmlshot", generatedDir: promptFixtureDir });
+    openuiPreviewExtension(mockPi(captured) as never, {
+      outDir: workDir,
+      htmlshotPath: "/bin/htmlshot",
+      generatedDir: promptFixtureDir,
+    });
 
     const dsl = 'root = Stack([Tabs([TabItem("a", "A", [TextContent("x")])])])';
     captured.handlers.get("message_end")?.(

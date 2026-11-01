@@ -78,7 +78,8 @@ function parseArgs(args: string[]): Parsed {
 
 function positiveInt(option: string, raw: string): number {
   const number = Number(raw);
-  if (!Number.isInteger(number) || number <= 0) throw new Error(`${option} must be a positive integer: ${raw}`);
+  if (!Number.isInteger(number) || number <= 0)
+    throw new Error(`${option} must be a positive integer: ${raw}`);
   return number;
 }
 

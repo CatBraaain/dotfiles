@@ -8,9 +8,7 @@ export function isInstallProfile(value: string): value is InstallProfile {
   return value === "personal" || value === "work";
 }
 
-export async function readInstallProfile(
-  readText: () => Promise<string>,
-): Promise<InstallProfile> {
+export async function readInstallProfile(readText: () => Promise<string>): Promise<InstallProfile> {
   let text: string;
   try {
     text = await readText();

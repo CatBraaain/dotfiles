@@ -58,9 +58,7 @@ describe("opuiInstructions", () => {
     assert.ok(cardLine, "Card signature should be present");
     assert.ok(!cardLine.includes("Buttons"));
     assert.ok(!cardLine.includes("Form"));
-    const compositeLine = prompt
-      .split("\n")
-      .find((line) => line.startsWith("CompositeCardItem("));
+    const compositeLine = prompt.split("\n").find((line) => line.startsWith("CompositeCardItem("));
     assert.ok(compositeLine, "CompositeCardItem signature should be present");
     assert.ok(compositeLine.includes("button?: never"));
   });

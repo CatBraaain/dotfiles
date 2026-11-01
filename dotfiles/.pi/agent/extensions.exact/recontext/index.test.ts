@@ -127,9 +127,7 @@ function harness(manager = SessionManager.inMemory()) {
     };
     const message = {
       role: "assistant" as const,
-      content: [
-        { type: "toolCall" as const, id: toolCallId, name: "recontext", arguments: {} },
-      ],
+      content: [{ type: "toolCall" as const, id: toolCallId, name: "recontext", arguments: {} }],
       api: "anthropic-messages" as const,
       provider: "anthropic",
       model: "test",
@@ -1190,11 +1188,7 @@ describe("tool rendering", () => {
   }
 
   function toolBlock(h: ReturnType<typeof harness>, state: Record<string, unknown>) {
-    return renderersOf("recontext")!.renderCall!(
-      {},
-      plainTheme as never,
-      renderContext(state),
-    );
+    return renderersOf("recontext")!.renderCall!({}, plainTheme as never, renderContext(state));
   }
 
   function renderers() {
