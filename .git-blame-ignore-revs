@@ -9,3 +9,6 @@
 # style: apply oxfmt and prettier defaults to all sources
 a4a558aca28df9cb8f1b7e23f8917c1f8666d474
 
+# style: apply standalone oxfmt and prettier defaults to all sources
+5ff53f0bbd14069472bbdb479a211b7e793fcc85
+
