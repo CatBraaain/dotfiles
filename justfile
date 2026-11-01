@@ -21,7 +21,7 @@ install *args:
   bun undotfiles/install/windows.ts {{args}}
 
 format:
-  oxfmt . "!**/*.md"
+  ~/.bun/install/global/node_modules/oxfmt/bin/oxfmt . "!**/*.md"
   prettier --write --plugin ~/.bun/install/global/node_modules/prettier-markdown-table/index.js "**/*.md"
 
 apply:
