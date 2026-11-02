@@ -21,6 +21,7 @@ write:
       - ~/.electron-gyp
       - ~/.bun/install/cache
       - ~/.bun/install/global
+      - ~/.local/share/gmap-db
       - ~/.local/share/pnpm/store
       - ~/.local/share/uv
       - ~/.local/state/hyperframes
