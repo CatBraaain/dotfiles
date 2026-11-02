@@ -112,7 +112,7 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 削除を表の行順に行ってから移動を表の行順に行う。削除の照合では `.exact` ディレクトリの末尾を取り除いたパスと祖先の各パスを照合し、ファイル名の末尾は変換しない。移動先は絶対パスを指定できず、glob key に移動先を指定できない。列・区切り・行が不正な場合、key が空欄または重複する場合は build を異常終了する。`remap.data.md` は dist に残るが、差分検知と適用の対象外である。
 
-たとえば Windows の `vscode` を `AppData/Roaming/Code/User` へ移す場合、`vscode/format-settings.build.ts` は移動先の `dist/AppData/Roaming/Code/User` で実行され、整形済みの `settings.json` が同じフォルダに現れる。macOS で `vscode` を削除する場合、その配下のフックは dist に存在しないため実行されない。先行フックが別のフックの配置フォルダを削除・移動した場合のスキップ規則は §build: ローカルフック に従う。
+たとえば Windows の `vscode` を `AppData/Roaming/Code/User` へ移す場合、その配下に配置されたローカルフックは移動先の `dist/AppData/Roaming/Code/User` で実行される。macOS で `vscode` を削除する場合、その配下のフックは dist に存在しないため実行されない。先行フックが別のフックの配置フォルダを削除・移動した場合のスキップ規則は §build: ローカルフック に従う。
 
 ## Windows の WSL接続
 

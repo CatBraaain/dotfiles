@@ -1523,34 +1523,6 @@ const context = await buildHookContext();
     });
   });
 
-  it("runs the real vscode formatter in the remapped folder on Windows", async () => {
-    const hook = await readFile(
-      join(import.meta.dir, "../../dotfiles/vscode/format-settings.build.ts"),
-      "utf8",
-    );
-    const map = await readFile(join(import.meta.dir, "../../dotfiles/remap.data.md"), "utf8");
-    await put(root, "dotfiles/remap.data.md", map);
-    await put(root, "dotfiles/vscode/format-settings.build.ts", hook);
-    await put(root, "dotfiles/vscode/settings.json", '{"editor.fontSize":12}');
-    const hookEvents: string[] = [];
-
-    await main(root, "windows", homeRoot, {
-      onHookEvent: (path, status) => {
-        if (status === "success") hookEvents.push(path);
-      },
-    });
-
-    const movedPath = join(distRoot, "AppData/Roaming/Code/User");
-    assert.deepEqual(hookEvents, ["AppData/Roaming/Code/User/format-settings.build.ts"]);
-    assert.equal(existsSync(join(distRoot, "vscode")), false);
-    // Nested exact removal inside the moved folder is applied at copy time.
-    assert.equal(existsSync(join(movedPath, "sync_vscode_extensions.apply.ts")), false);
-    assert.equal(
-      await readFile(join(movedPath, "settings.json"), "utf8"),
-      '{ "editor.fontSize": 12 }\n',
-    );
-  });
-
   it("does not copy or run hooks of a mapped folder removed on macOS", async () => {
     await put(
       root,

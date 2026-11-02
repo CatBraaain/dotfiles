@@ -422,6 +422,7 @@
   "gitlens.defaultDateFormat": "YYYY/MM/DD HH:mm:ss",
   "gitlens.defaultDateShortFormat": "YY/MM/DD",
   "gitlens.defaultTimeFormat": "HH:mm:ss",
+  "gitlens.gitCommands.skipConfirmations": ["fetch:command", "stash-push:command", "push:command"],
   "gitlens.graph.layout": "editor",
   "gitlens.hovers.currentLine.over": "line",
   "gitlens.hovers.enabled": false,
