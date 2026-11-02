@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { parse as parseIni } from "js-ini";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { applyReplacements, applyReplaceSidecars, parseReplaceSidecar } from "./build-replace.ts";
@@ -330,7 +331,7 @@ if (import.meta.main) {
 
     assert.equal(
       await readFile(join(distRoot, "settings.json"), "utf8"),
-      '{"home":true,"value":"machine","plain":true,"shared":true,"machine":true}',
+      '{"plain":true,"value":"machine","shared":true,"machine":true}',
     );
     assert.equal(
       await readFile(join(homeRoot, "settings.json"), "utf8"),
@@ -455,7 +456,7 @@ if (import.meta.main) {
     });
   }
 
-  it("composes merge sidecars over the current home content", async () => {
+  it("composes merge sidecars over the plain base without home content", async () => {
     await put(
       homeRoot,
       "kit/settings.json",
@@ -464,7 +465,7 @@ if (import.meta.main) {
     await put(
       root,
       "dotfiles/kit/settings.json",
-      JSON.stringify({ mode: "plain", plainOnly: true }),
+      JSON.stringify({ mode: "plain", plainOnly: true, extra: ["plain"] }),
     );
     await put(
       root,
@@ -476,9 +477,8 @@ if (import.meta.main) {
 
     assert.deepEqual(JSON.parse(await readFile(join(distRoot, "kit/settings.json"), "utf8")), {
       mode: "plain",
-      keep: true,
       plainOnly: true,
-      extra: ["home", "merged"],
+      extra: ["plain", "merged"],
     });
     assert.equal(existsSync(join(distRoot, "kit/settings.merge.json")), false);
   });
@@ -505,9 +505,21 @@ if (import.meta.main) {
           .join(""),
       parse: parseToml,
     },
+    {
+      format: "ini",
+      serialize: (values: Record<string, string>) =>
+        Object.entries(values)
+          .map(([key, value]) => `${key}=${value}\n`)
+          .join(""),
+      parse: parseIni,
+    },
   ]) {
     it(`composes a standalone ${format} machine merge layer over home`, async () => {
-      await put(homeRoot, `kit/settings.${format}`, serialize({ mode: "home" }));
+      await put(
+        homeRoot,
+        `kit/settings.${format}`,
+        serialize({ mode: "home", homeOnly: "present" }),
+      );
       await put(
         root,
         `dotfiles/kit/settings.merge-machine.${format}`,
@@ -516,63 +528,136 @@ if (import.meta.main) {
 
       await main(root, "linux", homeRoot);
 
-      assert.equal(
-        parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8")).mode,
-        "machine",
-      );
+      const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
+      assert.deepEqual({ ...output }, { mode: "machine", homeOnly: "present" });
       assert.equal(existsSync(join(distRoot, `kit/settings.merge-machine.${format}`)), false);
     });
 
-    it(`applies ${format} home, plain base, shared merge, then machine merge`, async () => {
-      await put(
-        homeRoot,
-        `kit/settings.${format}`,
-        serialize({ home: "present", homeVsPlain: "home" }),
-      );
-      await put(
-        root,
-        `dotfiles/kit/settings.${format}`,
-        serialize({
-          plain: "present",
-          homeVsPlain: "plain",
-          plainVsShared: "plain",
-        }),
-      );
-      await put(
-        root,
-        `dotfiles/kit/settings.merge.${format}`,
-        serialize({
+    for (const hasBase of [false, true]) {
+      it(`applies ${format} sidecars in priority order over ${hasBase ? "plain base without home" : "home without plain base"}`, async () => {
+        await put(
+          homeRoot,
+          `kit/settings.${format}`,
+          serialize({ homeOnly: "present", baseVsShared: "home" }),
+        );
+        if (hasBase) {
+          await put(
+            root,
+            `dotfiles/kit/settings.${format}`,
+            serialize({ plainOnly: "present", baseVsShared: "plain" }),
+          );
+        }
+        await put(
+          root,
+          `dotfiles/kit/settings.merge.${format}`,
+          serialize({
+            shared: "present",
+            baseVsShared: "shared",
+            sharedVsExisting: "shared",
+          }),
+        );
+        await put(
+          root,
+          `dotfiles/kit/settings.merge-existing.${format}`,
+          serialize({
+            existing: "present",
+            sharedVsExisting: "existing",
+            existingVsMachine: "existing",
+          }),
+        );
+        await put(
+          root,
+          `dotfiles/kit/settings.merge-machine.${format}`,
+          serialize({
+            machine: "present",
+            existingVsMachine: "machine",
+            machineVsExistingMachine: "machine",
+          }),
+        );
+        await put(
+          root,
+          `dotfiles/kit/settings.merge-existing-machine.${format}`,
+          serialize({
+            existingMachine: "present",
+            machineVsExistingMachine: "existing-machine",
+          }),
+        );
+
+        await main(root, "linux", homeRoot);
+
+        const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
+        const expected = {
+          ...(hasBase ? { plainOnly: "present" } : { homeOnly: "present" }),
           shared: "present",
-          plainVsShared: "shared",
-          sharedVsMachine: "shared",
-        }),
-      );
-      await put(
-        root,
-        `dotfiles/kit/settings.merge-machine.${format}`,
-        serialize({
+          existing: "present",
           machine: "present",
-          sharedVsMachine: "machine",
-        }),
-      );
+          existingMachine: "present",
+          baseVsShared: "shared",
+          sharedVsExisting: "existing",
+          existingVsMachine: "machine",
+          machineVsExistingMachine: "existing-machine",
+        };
+        assert.deepEqual({ ...output }, expected);
+        for (const suffix of [
+          "merge",
+          "merge-existing",
+          "merge-machine",
+          "merge-existing-machine",
+        ]) {
+          assert.equal(existsSync(join(distRoot, `kit/settings.${suffix}.${format}`)), false);
+        }
+      });
+
+      it(`skips malformed ${format} conditional sidecars without home ${hasBase ? "and preserves plain base" : "or output"}`, async () => {
+        const plainContent = serialize({ plainOnly: "present" });
+        if (hasBase) await put(root, `dotfiles/kit/settings.${format}`, plainContent);
+        await put(root, `dotfiles/kit/settings.merge-existing.${format}`, "[");
+        await put(root, `dotfiles/kit/settings.merge-existing-machine.${format}`, "[");
+
+        await main(root, "linux", homeRoot);
+
+        const outputPath = join(distRoot, `kit/settings.${format}`);
+        assert.equal(existsSync(outputPath), hasBase);
+        if (hasBase) assert.equal(await readFile(outputPath, "utf8"), plainContent);
+        assert.equal(existsSync(join(distRoot, `kit/settings.merge-existing.${format}`)), false);
+        assert.equal(
+          existsSync(join(distRoot, `kit/settings.merge-existing-machine.${format}`)),
+          false,
+        );
+      });
+    }
+
+    it(`ignores malformed ${format} home content when a plain base exists`, async () => {
+      await put(homeRoot, `kit/settings.${format}`, "[");
+      await put(root, `dotfiles/kit/settings.${format}`, serialize({ plainOnly: "present" }));
+      await put(root, `dotfiles/kit/settings.merge.${format}`, serialize({ shared: "present" }));
 
       await main(root, "linux", homeRoot);
 
       const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
-      assert.deepEqual(
-        { ...output },
-        {
-          home: "present",
-          plain: "present",
-          shared: "present",
-          machine: "present",
-          homeVsPlain: "plain",
-          plainVsShared: "shared",
-          sharedVsMachine: "machine",
-        },
-      );
-      assert.equal(existsSync(join(distRoot, `kit/settings.merge.${format}`)), false);
-      assert.equal(existsSync(join(distRoot, `kit/settings.merge-machine.${format}`)), false);
+      assert.deepEqual({ ...output }, { plainOnly: "present", shared: "present" });
+      assert.equal(await readFile(join(homeRoot, `kit/settings.${format}`), "utf8"), "[");
+    });
+
+    it(`uses an empty ${format} plain base instead of home content`, async () => {
+      await put(homeRoot, `kit/settings.${format}`, serialize({ homeOnly: "present" }));
+      await put(root, `dotfiles/kit/settings.${format}`, "");
+      await put(root, `dotfiles/kit/settings.merge.${format}`, serialize({ shared: "present" }));
+
+      await main(root, "linux", homeRoot);
+
+      const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
+      assert.deepEqual({ ...output }, { shared: "present" });
+    });
+
+    it(`copies a standalone ${format} plain base without changing its content`, async () => {
+      const plainContent = `\n${serialize({ plainOnly: "present" })}\n`;
+      await put(homeRoot, `kit/settings.${format}`, "[");
+      await put(root, `dotfiles/kit/settings.${format}`, plainContent);
+
+      await main(root, "linux", homeRoot);
+
+      assert.equal(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"), plainContent);
     });
 
     it(`does not recognize ${format} .machine as a merge sidecar`, async () => {

@@ -85,8 +85,8 @@ async function composeMergeTarget(
     .filter((path) => existsSync(path));
 
   if (sidecars.length > 0) {
-    const layers: Layer[] = [await readLayer(homePath, target.format)];
-    if (hasBase) layers.push(await readLayer(target.outputPath, target.format));
+    const basePath = hasBase ? target.outputPath : homePath;
+    const layers: Layer[] = [await readLayer(basePath, target.format)];
     for (const sidecar of sidecars) layers.push(await readLayer(sidecar, target.format));
 
     let value: unknown = {};

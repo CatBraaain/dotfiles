@@ -136,7 +136,7 @@ mirror がなければ shallow cloneし、存在するときは前回の取得�
 
 ## build: merge変換
 
-JSON/YAML/TOML/INI の設定ファイルを、home現状とリポジトリ側レイヤーから build時に合成し、dist へ完成形を書き出す。
+JSON/YAML/TOML/INI の設定ファイルを、plain base または home現状を基底に sidecar から build時に合成し、dist へ完成形を書き出す。
 
 ### 入力ファイルの種類
 
@@ -179,16 +179,22 @@ sidecar名から出力ファイル名への対応（4形式共通）:
 | 存在する（空ファイルを含む） | 存在する条件付きsidecar をパースし、合成に採用する |
 | 存在しない | 条件付きsidecar をパースせず、合成に採用しない。不正な内容でもエラーにしない |
 
-合成するターゲットでは、存在し、採用するレイヤーだけを次の順で合成する。合成の起点は `{}`（JSON・TOML・INI。YAMLパース結果が null/undefined のときも `{}` 扱い）。
+採用するsidecar があるターゲットでは、次の条件で基底を1つ選ぶ。
+
+| plain base | 基底 |
+| --- | --- |
+| 存在する（空ファイルを含む） | 同ディレクトリの `<name>.{json,yaml,toml,ini}`。home内容は合成に含めず、不正でもエラーにしない |
+| 存在しない | 上記の homeパス。home対象ファイルが存在しないときは `{}` |
+
+合成の起点は `{}` とし、選択した基底と採用するsidecar を次の順で適用する。空ファイルおよび YAMLパース結果が null/undefined のレイヤーは `{}` として扱う。
 
 | 順 | レイヤー | ソース |
 | --- | --- | --- |
-| 1 | home | 上記の homeパス。ファイルが存在しない・空のとき `{}` |
-| 2 | plain base | 同ディレクトリの `<name>.{json,yaml,toml,ini}`（sidecar ではない本体） |
-| 3 | merge | `<name>.merge.{json,yaml,toml,ini}` |
-| 4 | merge-existing | `<name>.merge-existing.{json,yaml,toml,ini}` |
-| 5 | merge-machine | `<name>.merge-machine.{json,yaml,toml,ini}` |
-| 6 | merge-existing-machine | `<name>.merge-existing-machine.{json,yaml,toml,ini}` |
+| 1 | 基底 | 上表で選択した plain base または home |
+| 2 | merge | `<name>.merge.{json,yaml,toml,ini}` |
+| 3 | merge-existing | `<name>.merge-existing.{json,yaml,toml,ini}` |
+| 4 | merge-machine | `<name>.merge-machine.{json,yaml,toml,ini}` |
+| 5 | merge-existing-machine | `<name>.merge-existing-machine.{json,yaml,toml,ini}` |
 
 後段レイヤーほど優先される。各レイヤーへの適用は §パッチ適用 に従う。
 
@@ -203,13 +209,18 @@ mergeターゲットごとに:
 
 `.agents/config.exact/agents.yaml` + `agents.merge-machine.yaml`（共有merge なし）:
 
-1. 合成: home → plain base（`agents.yaml`）→ merge-machine
+1. 合成: plain base（`agents.yaml`）→ merge-machine
 2. 出力: `dist/.agents/config.exact/agents.yaml`。sidecar は削除され、plain base は完成形で上書きされる
 
 `foo.json` と4種類の sidecar が揃い、home に `foo.json` が存在する場合:
 
-1. 合成: home → plain base → merge → merge-existing → merge-machine → merge-existing-machine
+1. 合成: plain base → merge → merge-existing → merge-machine → merge-existing-machine
 2. 出力: `foo.json`。全sidecar は削除され、plain base は完成形で上書きされる
+
+plain base がなく、`foo.merge.json` と home の `foo.json` が存在する場合:
+
+1. 合成: home → merge
+2. 出力: `foo.json`。sidecar は削除される
 
 ## build: 置換sidecar
 
