@@ -80,6 +80,14 @@ test(
     for (const [index, key] of selections.entries()) {
       const isLastSelection = index === selections.length - 1;
       await test.step(`Select ${key} and open its Pi terminal`, async () => {
+        const frame = await host.sessionFrame();
+        const expectedGroupName = key === "A" ? "project-a" : "project-b";
+        await expect(
+          frame
+            .getByTitle(host.sessions[key].cwd, { exact: true })
+            .locator(".group-title")
+            .describe(`${key} work folder name`),
+        ).toHaveText(expectedGroupName);
         await host.selectSession(key);
       });
       await test.step(`Check the real ${key} Pi process cwd and PID reuse`, async () => {

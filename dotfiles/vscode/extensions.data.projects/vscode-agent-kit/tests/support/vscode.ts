@@ -57,7 +57,7 @@ export class VSCodeFixture {
   page!: Page;
   private traceStarted = false;
 
-  constructor() {
+  constructor(private readonly projectDirectories = { A: "project", B: "worktree/project" }) {
     this.prepareRepositories();
     this.prepareSessions();
     this.prepareHost();
@@ -332,7 +332,7 @@ export class VSCodeFixture {
 
   private prepareRepositories(): void {
     mkdirSync(join(this.directory, "home"), { recursive: true });
-    const main = join(this.directory, "project");
+    const main = join(this.directory, this.projectDirectories.A);
     mkdirSync(main);
     this.git(main, ["init", "-b", "fixture-a"]);
     write(join(main, "same.txt"), "BASE\n");
@@ -357,7 +357,7 @@ export class VSCodeFixture {
     ]);
     this.git(main, ["update-ref", "refs/heads/fixture-a", commit]);
     this.git(main, ["read-tree", commit]);
-    const worktree = join(this.directory, "worktree/project");
+    const worktree = join(this.directory, this.projectDirectories.B);
     this.git(main, ["worktree", "add", "-b", "fixture-b", worktree]);
     const external = join(this.directory, "external");
     this.git(main, ["worktree", "add", "-b", "fixture-external", external]);
@@ -380,11 +380,11 @@ export class VSCodeFixture {
       sessions: {} as Record<string, { active: boolean; sentinel: string }>,
     };
     const cwds = {
-      A: "project",
+      A: this.projectDirectories.A,
       External: "external",
       Missing: "missing",
-      Deleted: "project",
-      B: "worktree/project",
+      Deleted: this.projectDirectories.A,
+      B: this.projectDirectories.B,
     };
     for (const [key, relativeCwd] of Object.entries(cwds)) {
       const id = randomUUID();
@@ -485,7 +485,12 @@ function write(path: string, content: string): void {
 export const test = baseTest.extend<{ host: VSCodeFixture }>({
   host: async ({ playwright }, use, testInfo) => {
     void playwright;
-    const host = new VSCodeFixture();
+    const projectDirectories = testInfo.annotations.some(
+      ({ type, description }) => type === "spec" && description === "E2E-2",
+    )
+      ? { A: "project-a", B: "worktree/project-b" }
+      : undefined;
+    const host = new VSCodeFixture(projectDirectories);
     const tracePath = testInfo.outputPath("electron-trace.zip");
     try {
       await host.launch(testInfo.tags.includes("@single-root"));
