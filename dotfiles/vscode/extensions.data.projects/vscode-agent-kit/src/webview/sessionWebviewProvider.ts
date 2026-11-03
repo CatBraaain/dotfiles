@@ -9,7 +9,6 @@ import {
   setSessionLocked,
 } from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
-import { createSessionTerminal } from "../terminals";
 import { followWorkTarget, requireWorkDirectory } from "../workTarget";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
@@ -31,7 +30,6 @@ export interface SessionWebviewDeps {
 export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private sessionsById = new Map<string, SessionSummary>();
-  private sessionSelection = Promise.resolve();
 
   constructor(private readonly deps: SessionWebviewDeps) {}
 
@@ -118,10 +116,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     if (request.type === "openSession") {
       const editorUri = vscode.window.activeTextEditor?.document.uri;
-      this.sessionSelection = this.sessionSelection.then(() =>
-        this.openSession(request.sessionId, editorUri),
-      );
-      await this.sessionSelection;
+      await this.deps.registry.run(() => this.openSession(request.sessionId, editorUri));
       return;
     }
     if (request.type === "setSessionLock") {
@@ -170,19 +165,25 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
+    let terminal: vscode.Terminal;
     try {
       await requireWorkDirectory(session.cwd);
-      const terminal = this.deps.registry.get(sessionId) ?? createSessionTerminal(session);
-      this.deps.registry.set(sessionId, terminal);
-      terminal.show();
+      ({ terminal } = await this.deps.registry.open({
+        sessionId,
+        cwd: session.cwd,
+        args: ["--session", session.filePath],
+      }));
     } catch (error) {
-      this.postError(`Failed to open session work folder: ${errorMessage(error)}`);
+      this.postError(
+        `Failed to open session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
+      );
       return;
     }
 
     const result = setSessionActive(this.deps.metadataPath, sessionId, true);
     if (!result.ok) {
       this.postError(result.message);
+      terminal.show();
       return;
     }
     await this.refresh();
@@ -190,6 +191,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await followWorkTarget(session.cwd, editorUri);
     } catch (error) {
       this.postError(`Failed to show session files or changes: ${errorMessage(error)}`);
+    } finally {
+      terminal.show();
     }
   }
 

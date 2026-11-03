@@ -1,10 +1,6 @@
-import {
-  _electron as electron,
-  expect,
-  test as baseTest,
-} from "playwright/test";
+import { _electron as electron, expect, test as baseTest } from "playwright/test";
 import type { ElectronApplication, Frame, Page } from "playwright/test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -12,19 +8,19 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
+import { tmuxSocketName } from "../../src/tmux";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const root = resolve(__dirname, "../..");
 const executablePath =
   process.env.PI_REVIEW_VSCODE ??
-  join(
-    homedir(),
-    ".cache/pi-sessions-screenshots/vscode-1.138.0/VSCode-linux-x64/code",
-  );
+  join(homedir(), ".cache/pi-sessions-screenshots/vscode-1.138.0/VSCode-linux-x64/code");
 
 interface SessionFixture {
   id: string;
@@ -37,10 +33,11 @@ export interface Snapshot {
   hostPid: number;
   folders: string[];
   activeEditor?: string;
-  terminals: { name: string; pid: number; exit?: unknown }[];
+  terminals: { name: string; pid: number; exit?: unknown; owned: boolean }[];
   tabs: {
     label: string;
     active: boolean;
+    terminal: boolean;
     uri?: string;
     original?: string;
     modified?: string;
@@ -49,7 +46,11 @@ export interface Snapshot {
 }
 
 export class VSCodeFixture {
-  readonly directory = mkdtempSync(join(tmpdir(), "pi-sessions-review-"));
+  readonly directory = fixtureDirectory();
+  readonly tmuxSocket = tmuxSocketName(
+    join(this.directory, "agent"),
+    join(this.directory, "agent/sessions"),
+  );
   readonly sessions: Record<string, SessionFixture> = {};
   readonly gitBefore: Record<string, string> = {};
   app!: ElectronApplication;
@@ -73,6 +74,7 @@ export class VSCodeFixture {
       USER: "fixture",
       LANG: "en_US.UTF-8",
       TERM: "xterm-256color",
+      TMUX_TMPDIR: process.env.TMUX_TMPDIR ?? "/tmp",
       DISPLAY: process.env.DISPLAY ?? "",
       XAUTHORITY: process.env.XAUTHORITY ?? "",
       XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "",
@@ -95,15 +97,11 @@ export class VSCodeFixture {
         "--skip-release-notes",
         "--new-window",
         "--window-size=1600,1000",
-        singleRoot
-          ? this.sessions.A.cwd
-          : join(this.directory, "fixture.code-workspace"),
+        singleRoot ? this.sessions.A.cwd : join(this.directory, "fixture.code-workspace"),
       ],
       timeout: 30_000,
     });
-    await this.app
-      .context()
-      .tracing.start({ screenshots: true, snapshots: true, sources: true });
+    await this.app.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
     this.traceStarted = true;
     this.page = await this.app.firstWindow();
     await this.page.locator(".monaco-workbench").waitFor();
@@ -114,12 +112,14 @@ export class VSCodeFixture {
   }
 
   async close(tracePath: string): Promise<void> {
-    if (!this.app) return;
     try {
-      if (this.traceStarted)
-        await this.app.context().tracing.stop({ path: tracePath });
+      if (this.app && this.traceStarted) await this.app.context().tracing.stop({ path: tracePath });
     } finally {
-      await this.app.close();
+      try {
+        if (this.app) await this.app.close();
+      } finally {
+        this.tmux(["kill-server"]);
+      }
     }
   }
 
@@ -139,9 +139,7 @@ export class VSCodeFixture {
   async command(title: string): Promise<void> {
     await this.page.keyboard.press("Escape");
     await this.page.keyboard.press("Control+Shift+P");
-    const input = this.page
-      .locator(".quick-input-widget input")
-      .describe("Command Palette");
+    const input = this.page.locator(".quick-input-widget input").describe("Command Palette");
     await input.pressSequentially(title, { delay: 120 });
     await this.page.keyboard.press("Enter");
   }
@@ -151,14 +149,14 @@ export class VSCodeFixture {
     await expect
       .poll(async () => {
         for (const frame of this.page.frames()) {
-          if (await frame.locator(".group-path").count()) return true;
+          if (await frame.locator(".group-header").count()) return true;
         }
         return false;
       })
       .toBe(true);
     const frames = this.page.frames();
     for (const frame of frames) {
-      if (await frame.locator(".group-path").count()) return frame;
+      if (await frame.locator(".group-header").count()) return frame;
     }
     throw new Error("Sessions webview did not become ready");
   }
@@ -168,20 +166,49 @@ export class VSCodeFixture {
     const session = this.sessions[key];
     const group = frame
       .locator("section.group")
-      .filter({ has: frame.getByText(session.cwd, { exact: true }) })
+      .filter({ has: frame.getByTitle(session.cwd, { exact: true }) })
       .describe(`${key} work folder`);
-    const row = frame
-      .locator(`[data-session="${session.id}"]`)
-      .describe(`${key} saved session`);
+    const row = frame.locator(`[data-session="${session.id}"]`).describe(`${key} saved session`);
     if (!(await row.count()))
-      await group
-        .locator('[data-mode="all"]')
-        .describe("All saved sessions")
-        .click({ steps: 15 });
-    await row
-      .locator(".session-name")
-      .describe(`${key} session name`)
-      .click({ steps: 15 });
+      await group.locator('[data-mode="all"]').describe("All saved sessions").click({ steps: 15 });
+    await row.locator(".session-name").describe(`${key} session name`).click({ steps: 15 });
+  }
+
+  async expectPiVisible(cwd?: string): Promise<void> {
+    if (cwd !== undefined) {
+      await expect
+        .poll(() => {
+          const targets = this.tmux(["list-clients", "-F", "#{session_name}"]).trim().split("\n");
+          return this.piProcesses().some(
+            (entry) => entry.cwd === cwd && targets.includes(entry.target),
+          );
+        })
+        .toBe(true);
+    }
+    await expect
+      .poll(() => this.snapshot().tabs.some((tab) => tab.terminal && tab.active))
+      .toBe(true);
+    const input = this.page
+      .getByRole("textbox", { name: /^Terminal [0-9]+/ })
+      .describe("Shared Pi TUI input");
+    await expect(input).toBeVisible();
+    await expect(input).toBeFocused();
+    await expect
+      .poll(() => this.snapshot().terminals.filter((terminal) => terminal.owned))
+      .toHaveLength(1);
+    await expect.poll(() => this.snapshot().tabs.filter((tab) => tab.terminal)).toHaveLength(1);
+  }
+
+  async closePiDisplay(): Promise<void> {
+    await this.page
+      .getByRole("tab", { name: "Pi", exact: true })
+      .getByRole("button", { name: "Close (Ctrl+W)", exact: true })
+      .describe("Close only the shared Pi display")
+      .click();
+    await expect
+      .poll(() => this.snapshot().terminals.filter((terminal) => terminal.owned))
+      .toHaveLength(0);
+    await expect.poll(() => this.snapshot().tabs.filter((tab) => tab.terminal)).toHaveLength(0);
   }
 
   async expectDiff(key: string, name = "same.txt"): Promise<void> {
@@ -190,53 +217,107 @@ export class VSCodeFixture {
       .poll(
         () =>
           this.snapshot().tabs.some(
-            (tab) =>
-              tab.active &&
-              tab.modified === `file://${expectedPath}` &&
-              tab.original?.startsWith("git:"),
+            (tab) => tab.modified === `file://${expectedPath}` && tab.original?.startsWith("git:"),
           ),
         { timeout: 15_000 },
       )
       .toBe(true);
+    const index = this.snapshot().tabs.findIndex(
+      (tab) => tab.modified === `file://${expectedPath}`,
+    );
+    await this.page
+      .locator(".editor-group-container .tabs-container .tab")
+      .nth(index)
+      .describe(`Prepared ${key} diff tab`)
+      .click();
     await expect
-      .poll(() => this.snapshot().activeEditor)
-      .toBe(`file://${expectedPath}`);
+      .poll(() =>
+        this.snapshot().tabs.some(
+          (tab) =>
+            tab.active &&
+            tab.modified === `file://${expectedPath}` &&
+            tab.original?.startsWith("git:"),
+        ),
+      )
+      .toBe(true);
+    await expect.poll(() => this.snapshot().activeEditor).toBe(`file://${expectedPath}`);
   }
 
-  piProcesses(): { pid: number; cwd: string; command: string }[] {
-    const processes = execFileSync("ps", ["-eo", "pid=,ppid=,args="], {
-      encoding: "utf8",
-    })
+  piProcesses(): { pid: number; cwd: string; command: string; target: string }[] {
+    const panes = this.tmux([
+      "list-panes",
+      "-a",
+      "-F",
+      "#{session_name}\t#{pane_pid}\t#{pane_dead}",
+    ])
       .trim()
       .split("\n")
+      .filter(Boolean)
       .map((line) => {
-        const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
-        return match
-          ? {
-              pid: Number(match[1]),
-              parent: Number(match[2]),
-              command: match[3],
-            }
-          : undefined;
+        const [target, pid, dead] = line.split("\t");
+        return { target, pid: Number(pid), dead: dead === "1" };
       })
-      .filter((entry) => entry !== undefined);
-    const descendants = new Set(
-      this.snapshot().terminals.map((terminal) => terminal.pid),
-    );
-    for (let depth = 0; depth < 8; depth++) {
-      for (const entry of processes) {
-        if (descendants.has(entry.parent)) descendants.add(entry.pid);
+      .filter((pane) => !pane.dead);
+    if (panes.length === 0) return [];
+    const processes = execFileSync("ps", ["-eo", "pid=,ppid=,comm=,args="], { encoding: "utf8" })
+      .trim()
+      .split("\n")
+      .flatMap((line) => {
+        const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+        return match
+          ? [
+              {
+                pid: Number(match[1]),
+                parent: Number(match[2]),
+                executable: match[3],
+                command: match[4],
+              },
+            ]
+          : [];
+      });
+    return panes.flatMap((pane) => {
+      const descendants = new Set([pane.pid]);
+      let previousSize = 0;
+      while (previousSize !== descendants.size) {
+        previousSize = descendants.size;
+        for (const entry of processes)
+          if (descendants.has(entry.parent)) descendants.add(entry.pid);
       }
-    }
-    return processes
-      .filter(
-        (entry) => descendants.has(entry.pid) && /\bpi\b/.test(entry.command),
-      )
-      .map((entry) => ({
-        pid: entry.pid,
-        command: entry.command,
-        cwd: readlinkSync(`/proc/${entry.pid}/cwd`),
-      }));
+      return processes
+        .filter(
+          (entry) =>
+            descendants.has(entry.pid) &&
+            (entry.executable === "pi" ||
+              (/^(node|bun)$/.test(entry.executable) &&
+                /(?:^|\s|\/)pi(?:\s|$)|pi-coding-agent\/.*cli/.test(entry.command))),
+        )
+        .flatMap((entry) => {
+          try {
+            return [
+              {
+                pid: entry.pid,
+                cwd: readlinkSync(`/proc/${entry.pid}/cwd`),
+                command: entry.command,
+                target: pane.target,
+              },
+            ];
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+            throw error;
+          }
+        });
+    });
+  }
+
+  tmux(args: string[]): string {
+    const result = spawnSync("tmux", ["-L", this.tmuxSocket, "-f", "/dev/null", ...args], {
+      encoding: "utf8",
+    });
+    if (result.error) throw result.error;
+    if (result.status === 0) return result.stdout;
+    if (/no server running|error connecting to .*No such file or directory/.test(result.stderr))
+      return "";
+    throw new Error(`Fixture tmux ${args.join(" ")} failed: ${result.stderr}`);
   }
 
   gitState(cwd: string): string {
@@ -300,10 +381,10 @@ export class VSCodeFixture {
     };
     const cwds = {
       A: "project",
-      B: "worktree/project",
       External: "external",
       Missing: "missing",
       Deleted: "project",
+      B: "worktree/project",
     };
     for (const [key, relativeCwd] of Object.entries(cwds)) {
       const id = randomUUID();
@@ -332,14 +413,10 @@ export class VSCodeFixture {
       this.sessions[key] = { id, cwd, session, original };
       metadata.sessions[id] = { active: key !== "B", sentinel: "preserved" };
     }
-    write(
-      join(this.directory, "agent/session-metadata.json"),
-      JSON.stringify(metadata),
-    );
-    write(
-      join(this.directory, "fixtures.json"),
-      JSON.stringify(this.sessions, null, 2),
-    );
+    const newestBTime = new Date(statSync(this.sessions.B.session).mtimeMs + 1000);
+    utimesSync(this.sessions.B.session, newestBTime, newestBTime);
+    write(join(this.directory, "agent/session-metadata.json"), JSON.stringify(metadata));
+    write(join(this.directory, "fixtures.json"), JSON.stringify(this.sessions, null, 2));
   }
 
   private prepareHost(): void {
@@ -359,10 +436,7 @@ export class VSCodeFixture {
       "terminal.integrated.defaultProfile.linux": "fixture",
       "terminal.integrated.shellIntegration.enabled": false,
     };
-    write(
-      join(this.directory, "userdata/User/settings.json"),
-      JSON.stringify(settings),
-    );
+    write(join(this.directory, "userdata/User/settings.json"), JSON.stringify(settings));
     write(
       join(this.directory, "fixture.code-workspace"),
       JSON.stringify({
@@ -381,10 +455,7 @@ export class VSCodeFixture {
         activationEvents: ["onStartupFinished"],
       }),
     );
-    copyFileSync(
-      join(root, "tests/support/probe.cjs"),
-      join(probe, "index.cjs"),
-    );
+    copyFileSync(join(root, "tests/support/probe.cjs"), join(probe, "index.cjs"));
   }
 
   private git(cwd: string, args: string[], input?: string): string {
@@ -398,6 +469,12 @@ export class VSCodeFixture {
       },
     }).trim();
   }
+}
+
+function fixtureDirectory(): string {
+  const parent = "/tmp/work/vscode-pi-sessions/tmux-runtime";
+  mkdirSync(parent, { recursive: true });
+  return mkdtempSync(join(parent, "fixture-"));
 }
 
 function write(path: string, content: string): void {
@@ -414,11 +491,6 @@ export const test = baseTest.extend<{ host: VSCodeFixture }>({
       await host.launch(testInfo.tags.includes("@single-root"));
       await use(host);
     } finally {
-      if (host.page && !host.page.isClosed())
-        await testInfo.attach("VS Code final screen", {
-          body: await host.page.screenshot(),
-          contentType: "image/png",
-        });
       await testInfo.attach("fixture and public API observation", {
         body: JSON.stringify(
           {

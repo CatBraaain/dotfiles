@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { SessionLauncher } from "./launcher";
 import { metadataStorePath, resolveAgentDir, resolveSessionDir } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
+import { editorTerminals } from "./terminals";
+import { TmuxRuntimeStore, tmuxSocketName } from "./tmux";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -10,9 +12,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const agentDir = resolveAgentDir(process.env, homeDir);
   const sessionDir = resolveSessionDir(process.env, homeDir);
   const metadataPath = metadataStorePath(agentDir);
-  const registry = new TerminalRegistry();
+  const tmux = new TmuxRuntimeStore(tmuxSocketName(agentDir, sessionDir));
+  const registry = new TerminalRegistry(tmux, editorTerminals(tmux));
 
-  context.subscriptions.push(vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)));
+  context.subscriptions.push(
+    vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
+  );
 
   const launcher: SessionLauncher = new SessionLauncher({
     sessionDir,
@@ -28,7 +33,13 @@ export function activate(context: vscode.ExtensionContext): void {
     startNewSession: (cwds) => launcher.start(cwds),
   });
 
-  context.subscriptions.push(launcher, provider, vscode.window.registerWebviewViewProvider(VIEW_ID, provider));
+  context.subscriptions.push(
+    launcher,
+    provider,
+    vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
 }
 
 export function deactivate(): void {

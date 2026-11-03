@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readMetadataStore, setSessionActive, setSessionLocked } from "../src/metadataStore";
 import { TerminalRegistry } from "../src/terminalRegistry";
+import { editorTerminals } from "../src/terminals";
+import { fakeRuntimes } from "./runtimeFixtures";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
 import { followWorkTarget } from "../src/workTarget";
@@ -13,6 +15,7 @@ vi.mock("../src/workTarget", async (importOriginal) => ({
 }));
 
 const vscodeMocks = vi.hoisted(() => ({
+  terminals: [],
   createTerminal: vi.fn(),
   showErrorMessage: vi.fn(),
   clipboardWriteText: vi.fn(),
@@ -98,6 +101,11 @@ function createView() {
   };
 }
 
+function createRegistry() {
+  const { store } = fakeRuntimes();
+  return new TerminalRegistry(store, editorTerminals(store));
+}
+
 function createProvider(
   deps: Partial<ConstructorParameters<typeof SessionWebviewProvider>[0]> = {},
 ) {
@@ -105,7 +113,7 @@ function createProvider(
   const provider = new SessionWebviewProvider({
     extensionUri: root,
     sessionDir: join(root, "sessions"),
-    registry: new TerminalRegistry(),
+    registry: createRegistry(),
     startNewSession: async () => {},
     ...deps,
     metadataPath,
@@ -263,6 +271,11 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
+    await vi.waitFor(() =>
+      expect(
+        webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+      ).toHaveLength(2),
+    );
     const sessionsCalls = webview.postMessage.mock.calls.filter(
       (call) => call[0].type === "sessions",
     ).length;
@@ -368,7 +381,12 @@ describe("SessionWebviewProvider", () => {
     const restored = createProvider({ sessionDir });
     const webview = createView();
     restored.provider.resolveWebviewView(webview.view as never);
-    const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
+    const terminal = {
+      exitStatus: undefined,
+      processId: Promise.resolve(123),
+      sendText: vi.fn(),
+      show: vi.fn(),
+    };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
 
     await webview.receive({ type: "ready" });
@@ -386,7 +404,12 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
+    const terminal = {
+      exitStatus: undefined,
+      processId: Promise.resolve(123),
+      sendText: vi.fn(),
+      show: vi.fn(),
+    };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     const { provider, metadataPath } = createProvider({ sessionDir });
     expect(setSessionActive(metadataPath, activeSessionId, false).ok).toBe(true);
@@ -415,6 +438,7 @@ describe("SessionWebviewProvider", () => {
     const selected = { fsPath: join(root, "selected.ts") };
     vscodeMocks.activeTextEditor = { document: { uri: selected } };
     vscodeMocks.createTerminal.mockReturnValue({
+      processId: Promise.resolve(123),
       sendText: vi.fn(),
       show: () => {
         vscodeMocks.activeTextEditor = undefined;
@@ -443,9 +467,15 @@ describe("SessionWebviewProvider", () => {
     const filePath = await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
+    const terminal = {
+      exitStatus: undefined,
+      processId: Promise.resolve(123),
+      sendText: vi.fn(),
+      show: vi.fn(),
+    };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
-    const { provider, metadataPath } = createProvider({ sessionDir });
+    const registry = createRegistry();
+    const { provider, metadataPath } = createProvider({ sessionDir, registry });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -454,12 +484,20 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
-    expect(vscodeMocks.createTerminal).toHaveBeenCalledWith({
-      name: "Untitled",
-      cwd: { fsPath: root },
-      location: 1,
+    expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Pi",
+        cwd: { fsPath: root },
+        location: 1,
+        shellPath: "tmux",
+      }),
+    );
+    expect(terminal.sendText).not.toHaveBeenCalled();
+    expect(registry.runtimes.ensure).toHaveBeenCalledWith({
+      sessionId: activeSessionId,
+      cwd: root,
+      args: ["--session", filePath],
     });
-    expect(terminal.sendText).toHaveBeenCalledWith(`pi --session "${filePath}"`, true);
     expect(terminal.show).toHaveBeenCalledTimes(2);
     expect(followWorkTarget).toHaveBeenCalledTimes(2);
     expect(followWorkTarget).toHaveBeenLastCalledWith(root, undefined);
@@ -550,7 +588,7 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
     expect(readMetadataStore(metadataPath).status).toBe("empty");
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to open session work folder:"),
+      expect.stringContaining(`Failed to open session ${inactiveSessionId} in ${cwd}:`),
     );
     expect(followWorkTarget).not.toHaveBeenCalled();
   });
@@ -560,7 +598,12 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "old.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
-    const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
+    const terminal = {
+      exitStatus: undefined,
+      processId: Promise.resolve(123),
+      sendText: vi.fn(),
+      show: vi.fn(),
+    };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     vi.mocked(followWorkTarget).mockRejectedValueOnce(new Error("Git disabled"));
     const { provider, metadataPath } = createProvider({ sessionDir });
@@ -588,7 +631,12 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "second.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
-    const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
+    const terminal = {
+      exitStatus: undefined,
+      processId: Promise.resolve(123),
+      sendText: vi.fn(),
+      show: vi.fn(),
+    };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     let finishNavigation: () => void = () => {};
     const navigating = new Promise<void>((resolve) => {
@@ -607,13 +655,49 @@ describe("SessionWebviewProvider", () => {
     const second = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     vscodeMocks.activeTextEditor = undefined;
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
+    expect(terminal.show).not.toHaveBeenCalled();
     finishNavigation();
     await Promise.all([first, second]);
 
-    expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(2);
+    expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
     expect(followWorkTarget).toHaveBeenCalledTimes(2);
     expect(followWorkTarget).toHaveBeenLastCalledWith(root, secondEditorUri);
+    expect(terminal.show).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["ensure", "switchClient"] as const)(
+    "keeps archived metadata unchanged when tmux %s fails",
+    async (method) => {
+      const sessionDir = join(root, "sessions");
+      await writeJsonl(join(sessionDir, "project"), "saved.jsonl", [
+        header({ id: inactiveSessionId, cwd: root }),
+      ]);
+      const { store, mocks } = fakeRuntimes();
+      const registry = new TerminalRegistry(store, editorTerminals(store));
+      const terminal = { processId: Promise.resolve(123), show: vi.fn(), dispose: vi.fn() };
+      vscodeMocks.createTerminal.mockReturnValue(terminal);
+      const { provider, metadataPath } = createProvider({ sessionDir, registry });
+      setSessionActive(metadataPath, inactiveSessionId, false);
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await provider.refresh();
+      const before = await readFile(metadataPath, "utf8");
+      mocks[method].mockRejectedValueOnce(new Error("tmux permission denied"));
+
+      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+
+      expect(await readFile(metadataPath, "utf8")).toBe(before);
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining(inactiveSessionId),
+      );
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining(root));
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("tmux permission denied"),
+      );
+      expect(followWorkTarget).not.toHaveBeenCalled();
+      expect(terminal.show).not.toHaveBeenCalled();
+    },
+  );
 
   it("copies the session ID to the clipboard on copySessionId", async () => {
     const { provider } = createProvider();
@@ -752,9 +836,14 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "active.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const terminal = { exitStatus: undefined, sendText: vi.fn(), show: vi.fn() };
+    const terminal = {
+      exitStatus: undefined,
+      processId: Promise.resolve(123),
+      sendText: vi.fn(),
+      show: vi.fn(),
+    };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
-    const registry = new TerminalRegistry();
+    const registry = createRegistry();
     const { provider, metadataPath } = createProvider({ sessionDir, registry });
     expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
     const webview = createView();
@@ -771,7 +860,13 @@ describe("SessionWebviewProvider", () => {
     expect(sentSessions.find((session) => session.sessionId === activeSessionId)?.isArchived).toBe(
       true,
     );
-    expect(registry.get(activeSessionId)).toBe(terminal);
+    expect(
+      await registry.runtimes.isAlive({
+        sessionId: activeSessionId,
+        cwd: root,
+        target: `pi-${activeSessionId}`,
+      }),
+    ).toBe(true);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
   });
 });

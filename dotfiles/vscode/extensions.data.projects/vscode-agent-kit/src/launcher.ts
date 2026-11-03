@@ -1,20 +1,15 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { errorMessage } from "./guards";
+import type { PiRuntime } from "./tmux";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { requireWorkDirectory } from "./workTarget";
 import { encodeCwdDirName } from "./paths";
 import { setSessionActive } from "./metadataStore";
 import { summarizeSessionFile } from "./sessionFile";
-import { isLaunchedSession, listSessionFileNames, newSessionCandidates, resolveLaunchCwd } from "./newSession";
+import { listSessionFileNames, resolveLaunchCwd } from "./newSession";
 import type { TerminalRegistry } from "./terminalRegistry";
-
-/**
- * "New Session" flow: launch `pi` in a fresh editor terminal at the launch cwd,
- * then poll that cwd's session group directory until pi writes the new session
- * file. On detection: map the terminal to the new session id, mark it active,
- * and reload the tree. The launch-cwd and detection decisions live in
- * ./newSession (VS Code API free, unit tested there).
- */
 
 const POLL_INTERVAL_MS = 2_000;
 const POLL_TIMEOUT_MS = 30 * 60 * 1_000;
@@ -28,23 +23,31 @@ export interface SessionLauncherDeps {
 
 export class SessionLauncher implements vscode.Disposable {
   private disposed = false;
+  private readonly pendingSessionIds = new Map<string, string>();
 
   constructor(private readonly deps: SessionLauncherDeps) {}
 
   async start(sessionCwds: readonly string[] = []): Promise<void> {
-    const selectedCwd = await chooseLaunchCwd(sessionCwds);
-    if (selectedCwd === undefined) return;
-    const cwd = await requireWorkDirectory(selectedCwd);
-    const groupDir = join(this.deps.sessionDir, encodeCwdDirName(cwd));
-    const known = new Set(await listSessionFileNames(groupDir));
-    const terminal = vscode.window.createTerminal({
-      name: "pi",
-      cwd: vscode.Uri.file(cwd),
-      location: vscode.TerminalLocation.Editor,
+    await this.deps.registry.run(async () => {
+      const selectedCwd = await chooseLaunchCwd(sessionCwds);
+      if (selectedCwd === undefined || this.disposed) return;
+      const cwd = await requireWorkDirectory(selectedCwd);
+      const groupDir = join(this.deps.sessionDir, encodeCwdDirName(cwd));
+      const sessionId = this.pendingSessionIds.get(cwd) ?? randomUUID();
+      this.pendingSessionIds.set(cwd, sessionId);
+      const { runtime, terminal } = await this.deps.registry.open({
+        sessionId,
+        cwd,
+        args: ["--session-id", sessionId, "--session-dir", groupDir],
+      });
+      terminal.show();
+      this.pendingSessionIds.delete(cwd);
+      void this.waitForNewSession(runtime, groupDir, Date.now()).catch((error) => {
+        void vscode.window.showErrorMessage(
+          `Failed to detect Pi session ${sessionId}: ${errorMessage(error)}`,
+        );
+      });
     });
-    terminal.sendText("pi", true);
-    terminal.show();
-    void this.waitForNewSession(terminal, cwd, groupDir, known, Date.now());
   }
 
   dispose(): void {
@@ -52,27 +55,21 @@ export class SessionLauncher implements vscode.Disposable {
   }
 
   private async waitForNewSession(
-    terminal: vscode.Terminal,
-    cwd: string,
+    runtime: PiRuntime,
     groupDir: string,
-    known: Set<string>,
     launchedAt: number,
   ): Promise<void> {
     while (!this.disposed && Date.now() - launchedAt < POLL_TIMEOUT_MS) {
       await sleep(POLL_INTERVAL_MS);
       if (this.disposed) return;
-      if (terminal.exitStatus !== undefined) return; // pi exited without creating a session
-      const candidates = await newSessionCandidates(groupDir, known);
-      for (const filePath of candidates) {
-        const info = await summarizeSessionFile(filePath);
-        if (info === null) continue;
-        const launched = isLaunchedSession(info.header, {
-          cwd,
-          launchedAtMs: launchedAt,
-          isClaimed: (id) => this.deps.registry.has(id),
-        });
-        if (!launched) continue;
-        this.deps.registry.set(info.header.id, terminal);
+      if (!(await this.deps.registry.runtimes.isAlive(runtime))) return;
+      const candidates = (await listSessionFileNames(groupDir)).filter((name) =>
+        name.endsWith(`_${runtime.sessionId}.jsonl`),
+      );
+      for (const name of candidates) {
+        const info = await summarizeSessionFile(join(groupDir, name));
+        if (info?.header.id !== runtime.sessionId || resolve(info.header.cwd) !== runtime.cwd)
+          continue;
         const result = setSessionActive(this.deps.metadataPath, info.header.id, true);
         if (!result.ok) {
           void vscode.window.showErrorMessage(result.message);
@@ -106,7 +103,11 @@ async function chooseLaunchCwd(sessionCwds: readonly string[]): Promise<string |
   const choice = await vscode.window.showQuickPick(
     [
       ...candidates.map((cwd) => ({ label: basename(cwd) || cwd, description: cwd, cwd })),
-      { label: "Choose another folder…", description: "Browse for a starting folder", cwd: undefined },
+      {
+        label: "Choose another folder…",
+        description: "Browse for a starting folder",
+        cwd: undefined,
+      },
     ],
     { title: "Start Pi session in…", matchOnDescription: true },
   );

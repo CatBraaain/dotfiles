@@ -9,19 +9,17 @@ exports.activate = function activate(context) {
     busy = true;
     try {
       const extension = vscode.extensions.getExtension("vscode.git");
-      const git = extension
-        ? (await extension.activate()).getAPI(1)
-        : undefined;
+      const git = extension ? (await extension.activate()).getAPI(1) : undefined;
       const snapshot = {
         hostPid: process.pid,
-        folders: vscode.workspace.workspaceFolders?.map(
-          (folder) => folder.uri.fsPath,
-        ),
+        folders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath),
         terminals: await Promise.all(
           vscode.window.terminals.map(async (terminal) => ({
             name: terminal.name,
             pid: await terminal.processId,
             exit: terminal.exitStatus,
+            owned: terminal.creationOptions.env?.PI_SESSIONS_DISPLAY_SOCKET !== undefined,
+            options: terminal.creationOptions,
           })),
         ),
         activeEditor: vscode.window.activeTextEditor?.document.uri.toString(),
@@ -29,6 +27,7 @@ exports.activate = function activate(context) {
           group.tabs.map((tab) => ({
             label: tab.label,
             active: tab.isActive,
+            terminal: tab.input instanceof vscode.TabInputTerminal,
             uri: tab.input?.uri?.toString(),
             original: tab.input?.original?.toString(),
             modified: tab.input?.modified?.toString(),
@@ -43,10 +42,7 @@ exports.activate = function activate(context) {
       fs.writeFileSync(`${target}.tmp`, JSON.stringify(snapshot));
       fs.renameSync(`${target}.tmp`, target);
     } catch (error) {
-      fs.writeFileSync(
-        path.join(process.env.PI_REVIEW_BASE, "probe-error.txt"),
-        String(error),
-      );
+      fs.writeFileSync(path.join(process.env.PI_REVIEW_BASE, "probe-error.txt"), String(error));
     } finally {
       busy = false;
     }

@@ -24,6 +24,7 @@ const mime: Record<string, string> = {
 // Sample session ids from stories/demoBridge.ts.
 const atlasCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
 const atlasArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
+const piToolsPlainId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";
 const piToolsLockedId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
 
@@ -100,6 +101,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.goto(`${baseUrl}/iframe.html?path=/story/${path}`, { waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
     return page;
+  }
+
+  async function pauseStoryClock(page: Awaited<ReturnType<typeof openStory>>): Promise<void> {
+    await page.clock.install();
+    await page.clock.pauseAt(Date.now() + 60_000);
   }
 
   async function installBridgeMessageRecorder(
@@ -386,6 +392,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const copy = page.locator(".session-row [data-copy]").first();
     const copySessionId = await copy.getAttribute("data-copy");
     expect(copySessionId).not.toBeNull();
+    await pauseStoryClock(page);
     await page.evaluate(() => {
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
@@ -401,10 +408,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator("body").getAttribute("data-copied-session-id")).toBe(copySessionId);
     await page.waitForSelector(".copy.copied");
     expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.waitForTimeout(900);
+    await page.clock.runFor(900);
     expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.waitForTimeout(250);
-    expect(await page.locator(".copy.copied").count()).toBe(0);
+    await page.clock.runFor(100);
+    await expect.poll(() => page.locator(".copy.copied").count()).toBe(0);
+    await page.clock.resume();
 
     await page.click(`[data-archive="${atlasCurrentId}"]`);
     await page.waitForFunction(
@@ -510,16 +518,20 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("renders rows spanning the full row width with timestamp, copy, lock, and archive overlays", async () => {
+  it("renders 32px full-width rows with mono dates, status dots, and 24px ghost overlays", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 640 });
     const boxes = await page.evaluate(() => {
-      const row = document.querySelector(".session-row")!.getBoundingClientRect();
-      const button = document.querySelector(".session-button")!.getBoundingClientRect();
-      const timestamp = document.querySelector(".session-timestamp")!.getBoundingClientRect();
-      const copy = document.querySelector(".copy")!.getBoundingClientRect();
-      const lock = document.querySelector(".lock")!.getBoundingClientRect();
-      const archive = document.querySelector(".archive")!.getBoundingClientRect();
+      const rowElement = document.querySelector(".session-row")!;
+      const row = rowElement.getBoundingClientRect();
+      const button = rowElement.querySelector(".session-button")!.getBoundingClientRect();
+      const timestampElement = rowElement.querySelector(".session-timestamp")!;
+      const timestamp = timestampElement.getBoundingClientRect();
+      const dot = rowElement.querySelector(".session-status")!.getBoundingClientRect();
+      const copy = rowElement.querySelector(".copy")!.getBoundingClientRect();
+      const lock = rowElement.querySelector(".lock")!.getBoundingClientRect();
+      const archive = rowElement.querySelector(".archive")!.getBoundingClientRect();
       return {
+        rowHeight: row.height,
         rowWidth: row.width,
         buttonWidth: button.width,
         buttonRight: button.right,
@@ -529,6 +541,10 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         timestampRight: timestamp.right,
         timestampTop: timestamp.top,
         timestampBottom: timestamp.bottom,
+        timestampFont: getComputedStyle(timestampElement).fontFamily,
+        timestampSize: getComputedStyle(timestampElement).fontSize,
+        dotWidth: dot.width,
+        dotHeight: dot.height,
         copyRight: copy.right,
         lockRight: lock.right,
         lockTop: lock.top,
@@ -536,18 +552,38 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         archiveRight: archive.right,
         archiveTop: archive.top,
         archiveBottom: archive.bottom,
+        controls: Array.from(rowElement.querySelectorAll(".copy, .lock, .archive")).map(
+          (control) => {
+            const box = control.getBoundingClientRect();
+            const icon = control.querySelector("svg")!.getBoundingClientRect();
+            return {
+              width: box.width,
+              height: box.height,
+              iconWidth: icon.width,
+              iconHeight: icon.height,
+            };
+          },
+        ),
       };
     });
-    // The session button is the full-area click target: its box spans the row.
+    expect(boxes.rowHeight).toBe(32);
+    expect(boxes.dotWidth).toBe(10);
+    expect(boxes.dotHeight).toBe(10);
+    expect(boxes.timestampFont).toContain("mono");
+    expect(boxes.timestampSize).toBe("10px");
+    expect(boxes.controls).toEqual([
+      { width: 24, height: 24, iconWidth: 12, iconHeight: 12 },
+      { width: 24, height: 24, iconWidth: 12, iconHeight: 12 },
+      { width: 24, height: 24, iconWidth: 12, iconHeight: 12 },
+    ]);
     expect(boxes.buttonWidth).toBeCloseTo(boxes.rowWidth, 1);
     expect(boxes.buttonRight).toBeCloseTo(boxes.rowRight, 1);
-    // The timestamp, copy, lock, and archive controls overlay the row from left to right.
     expect(boxes.timestampRight).toBeLessThan(boxes.copyRight);
     expect(boxes.copyRight).toBeLessThan(boxes.lockRight);
     expect(boxes.lockRight).toBeLessThanOrEqual(boxes.archiveRight);
-    expect(boxes.rowRight - boxes.timestampRight).toBeCloseTo(82, 1);
-    expect(boxes.rowRight - boxes.copyRight).toBeCloseTo(56, 1);
-    expect(boxes.rowRight - boxes.lockRight).toBeCloseTo(30, 1);
+    expect(boxes.rowRight - boxes.timestampRight).toBeCloseTo(84, 1);
+    expect(boxes.rowRight - boxes.copyRight).toBeCloseTo(52, 1);
+    expect(boxes.rowRight - boxes.lockRight).toBeCloseTo(28, 1);
     for (const overlay of [
       [boxes.timestampTop, boxes.timestampBottom],
       [boxes.lockTop, boxes.lockBottom],
@@ -557,6 +593,23 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       expect(overlay[1]).toBeLessThanOrEqual(boxes.rowBottom);
     }
     expect(boxes.rowRight - boxes.archiveRight).toBeLessThanOrEqual(8);
+    await page.locator(".session-button").first().focus();
+    await page.keyboard.press("Tab");
+    const focusedCopy = await page
+      .locator(".copy")
+      .first()
+      .evaluate((control) => ({
+        focused: control === document.activeElement,
+        focusVisible: control.matches(":focus-visible"),
+        outlineWidth: getComputedStyle(control).outlineWidth,
+        radius: getComputedStyle(control).borderRadius,
+      }));
+    expect(focusedCopy).toEqual({
+      focused: true,
+      focusVisible: true,
+      outlineWidth: "2px",
+      radius: "9.6px",
+    });
     await page.close();
   });
 
@@ -572,13 +625,109 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       });
     });
 
+    await pauseStoryClock(page);
     await page.locator(".session-row [data-copy]").first().click();
     await page.waitForSelector(".copy.copied");
     expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.waitForTimeout(900);
+    await page.clock.runFor(900);
     expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.waitForTimeout(250);
-    expect(await page.locator(".copy.copied").count()).toBe(0);
+    await page.clock.runFor(100);
+    await expect.poll(() => page.locator(".copy.copied").count()).toBe(0);
+    await page.clock.resume();
+    await page.close();
+  });
+
+  it("collapses groups from chevrons and names while modes and refresh preserve the state", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const group = page.locator(".group").first();
+    const chevron = group.locator(".group-chevron").describe("Project group chevron");
+    const name = group.locator(".group-title").describe("Project group name");
+    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+
+    await chevron.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    expect(await group.locator(".session-row").count()).toBe(0);
+    expect(await chevron.locator("path").getAttribute("d")).toBe("m9 18 6-6-6-6");
+    await name.click();
+    await expect.poll(() => group.locator(".session-row").count()).toBe(1);
+    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+
+    await name.focus();
+    await page.keyboard.press("Space");
+    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    await group.locator('[data-mode="all"]').click();
+    await expect
+      .poll(() => group.locator('[data-mode="all"]').getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(await chevron.getAttribute("aria-expanded")).toBe("false");
+    expect(await group.locator(".session-row").count()).toBe(0);
+    for (let index = 0; index < 2; index++) await page.locator('[data-action="refresh"]').click();
+    expect(await chevron.getAttribute("aria-expanded")).toBe("false");
+    expect(await group.locator('[data-mode="all"]').getAttribute("aria-pressed")).toBe("true");
+    await name.click();
+    await expect.poll(() => group.locator(".session-row").count()).toBe(2);
+    expect(await openSessionMessages(page)).toEqual([]);
+
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(".session-row");
+    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+    expect(await group.locator('[data-mode="unarchived"]').getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(await group.locator(".session-row").count()).toBe(1);
+    await page.close();
+  });
+
+  it("retains hidden selections while excluding collapsed rows from bulk archive", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const group = page.locator(".group").first();
+    const chevron = group.locator(".group-chevron");
+    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+    await page.locator(`[data-session="${atlasCurrentId}"]`).click({ modifiers: ["Control"] });
+    await page.locator(`[data-session="${worktreeId}"]`).click({ modifiers: ["Control"] });
+    expect(await page.locator(".session-row.selected").count()).toBe(2);
+
+    await chevron.click();
+    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    expect(await page.locator(".session-row.selected").count()).toBe(1);
+    await group.locator(".group-title").click();
+    await expect.poll(() => page.locator(".session-row.selected").count()).toBe(2);
+    await chevron.click();
+    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    await page.locator(`[data-archive="${worktreeId}"]`).click();
+    await expect.poll(() => page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
+    expect(await chevron.getAttribute("aria-expanded")).toBe("false");
+    await group.locator(".group-title").click();
+    await expect
+      .poll(() => page.locator(`.session-row.selected [data-session="${atlasCurrentId}"]`).count())
+      .toBe(1);
+    expect(await openSessionMessages(page)).toEqual([]);
+    await page.close();
+  });
+
+  it.each(["Control", "Meta"])("excludes collapsed group rows from %s+A", async (modifier) => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    const group = page.locator(".group").first();
+    const chevron = group.locator(".group-chevron");
+    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+    await chevron.click();
+    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    await page.locator(`[data-session="${worktreeId}"]`).focus();
+    await page.keyboard.press(`${modifier}+a`);
+    await expect.poll(() => page.locator(".session-row.selected").count()).toBe(2);
+    expect(
+      await page
+        .locator(".session-row.selected [data-session]")
+        .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("data-session"))),
+    ).toEqual([piToolsPlainId, worktreeId]);
+    await group.locator(".group-title").click();
+    await expect.poll(() => group.locator(".session-row").count()).toBe(1);
+    expect(
+      await page.locator(`.session-row.selected [data-session="${atlasCurrentId}"]`).count(),
+    ).toBe(0);
     await page.close();
   });
 
@@ -588,16 +737,16 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("renders the empty state from the static output", async () => {
+  it("keeps empty Unarchived group headings and modes without guidance text", async () => {
     const page = await browser!.newPage();
     await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--empty-sessions`, {
       waitUntil: "networkidle",
     });
-    await page.waitForSelector(".empty");
-    expect(await page.locator(".empty").count()).toBe(3);
-    expect(await page.locator(".empty").first().textContent()).toContain(
-      "Select All to browse saved sessions.",
-    );
+    await page.waitForSelector(".group-header");
+    expect(await page.locator(".group-header").count()).toBe(3);
+    expect(await page.locator(".mode-button").count()).toBe(6);
+    expect(await page.locator(".session-row").count()).toBe(0);
+    expect(await page.locator(".empty").count()).toBe(0);
     const historyToggle = page
       .locator(".group")
       .first()
@@ -611,13 +760,16 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("shows distinct same-named worktree paths without horizontal overflow at sidebar widths", async () => {
+  it("shows distinct same-named worktree heading hints without horizontal overflow at sidebar widths", async () => {
     for (const width of [320, 720]) {
       const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
-      const paths = page.locator(".group-path").describe("Work folder paths");
-      await paths.first().waitFor();
-      expect(await paths.allTextContents()).toContain("~/projects/vscode-pi-sessions");
-      expect(await paths.allTextContents()).toContain("~/.agents/worktrees/vscode-pi-sessions");
+      const headings = page.locator(".group-header").describe("Work folder heading hints");
+      const hints = await headings.evaluateAll((headers) =>
+        headers.map((header) => header.getAttribute("title")),
+      );
+      expect(hints).toContain("~/projects/vscode-pi-sessions");
+      expect(hints).toContain("~/.agents/worktrees/vscode-pi-sessions");
+      expect(await page.locator(".group-path").count()).toBe(0);
       const hasOverflow = await page.evaluate(
         () => document.documentElement.scrollWidth > window.innerWidth,
       );

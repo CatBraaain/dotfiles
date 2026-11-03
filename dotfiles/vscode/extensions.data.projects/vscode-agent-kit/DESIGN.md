@@ -1,0 +1,46 @@
+# Agent Sessions webview design
+
+Agent Sessions サイドバー Webview の見た目の正本。対象は Webview の行・見出し・操作の寸法と色で、操作と保存の振る舞いは [SPEC.md](SPEC.md) が定める。読者はこの Webview の見た目を変更する実装者。値の実装先は `src/webview/webviewStyles.ts` で、stories カタログが同じスタイルを共有する。
+
+色は VS Code のテーマ変数だけを使い、固定色の palette と追加フォントは持たない。階層と部品構成の参照元は agent-open-ui のデザイン（`~/projects/agent-open-ui/DESIGN.md`）で、この文書はそれをテーマ変数へ対応させた値を定める。
+
+## トークン
+
+| 用途 | 値 |
+| --- | --- |
+| 背景・本文 | `sideBar-background`・`foreground` |
+| 補助文字（日時・操作・chevron） | `descriptionForeground` |
+| hover 面 | `list-hoverBackground` |
+| 選択面・選択文字 | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
+| 境界（モード切替の枠） | `widget-border` の 50% 混色 |
+| focus | `focusBorder` の 2px ring（offset -2px） |
+| 基準角丸 | 9.6px（行・操作・モード切替の枠で共用） |
+
+## レイアウト
+
+| 対象 | 値 |
+| --- | --- |
+| 全体の余白 | 12px。グループ間も 12px |
+| ヘッダー | 高さ24px、下余白12px。見出し13px・600 |
+| グループ見出し | 高さ24px、要素間4px。見出し名14px・600・20px行で省略表示 |
+| セッション行 | 高さ32px、左インデント12px、見出し直後の行は上余白4px |
+
+## 部品
+
+| 部品 | 定義 |
+| --- | --- |
+| chevron | 24px 四方の領域に12px の SVG。補助文字色。展開で下向き、折りたたみで右向きに示す。開閉の操作と状態は SPEC「Webview の表示」に従う |
+| モード切替 | 枠は境界トークン・角丸9.6px・余白1px・間隔2px。ボタンは高さ20px・余白左右6px・10px 文字。押下中のボタンは選択面・選択文字 |
+| 状態の印 | 直径10px の円。未アーカイブは `testing-iconPassed` の塗り、ロック中は `editorWarning-foreground`、アーカイブ済みは補助文字色の枠の中抜き |
+| 表示名 | 13px・20px 行・省略表示 |
+| 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端の操作の左に右寄せで5文字分 |
+| 行の操作（Copy・Lock・Archive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から 4px 間隔で並べ、行の右端に重ねる。コピー済みは `testing-iconPassed`、無効な Archive は `disabledForeground` |
+
+## 状態
+
+| 状態 | 表示 |
+| --- | --- |
+| 行の hover | hover 面 |
+| 行の選択 | 選択面。選択中の表示名・日時は選択文字色 |
+| アーカイブ済みの行 | 表示名・日時を補助文字色にする |
+| 空の一覧・状態表示 | 補助文字色・12px。空の案内は余白24px の中央寄せ |

@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Current Playwright E2E results and screenshots for Pi Sessions."
+    />
+    <title>Pi Sessions E2E gallery</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --ground: #fafafa;
+        --surface: #f0f0f0;
+        --ink: #202020;
+        --muted: #595959;
+        --link: #204e8a;
+        --error: #a31d2a;
+        --focus: #204e8a;
+        --border: #8885;
+        --gap: 8px;
+        --pad: 24px;
+        --body: 14px;
+        --label: 12px;
+        --case: 13px;
+        --title: 18px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ground: #171717;
+          --surface: #252525;
+          --ink: #ededed;
+          --muted: #b4b4b4;
+          --link: #aacbfa;
+          --error: #ffabb5;
+          --focus: #aacbfa;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: var(--ground);
+        color: var(--ink);
+        font:
+          var(--body)/1.5 system-ui,
+          sans-serif;
+        scrollbar-color: var(--muted) var(--ground);
+        scrollbar-width: thin;
+      }
+      body {
+        background: var(--ground);
+        max-inline-size: 1400px;
+        margin: 0 auto;
+        padding: var(--pad);
+        overflow-wrap: anywhere;
+      }
+      ::selection {
+        background: var(--ink);
+        color: var(--ground);
+      }
+      h1 {
+        font-size: var(--title);
+        margin: 0 0 var(--gap);
+      }
+      h2 {
+        font-size: var(--case);
+        margin: 0 0 var(--gap);
+      }
+      p {
+        margin: 0 0 var(--gap);
+      }
+      .clip {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      a {
+        color: var(--link);
+      }
+      a:focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 4px;
+      }
+      header {
+        margin-block-end: 28px;
+      }
+      .case {
+        margin-block: 28px;
+      }
+      .table {
+        display: grid;
+        grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
+        gap: var(--gap);
+        align-items: start;
+      }
+      .cell {
+        min-inline-size: 0;
+      }
+      .label {
+        display: block;
+        font-size: var(--label);
+        color: var(--muted);
+        margin-block-end: 4px;
+      }
+      .image-link {
+        display: block;
+        min-block-size: 44px;
+      }
+      .cell img {
+        display: block;
+        inline-size: 100%;
+        block-size: auto;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--surface);
+      }
+      .image-link:hover img {
+        border-color: var(--link);
+      }
+      .image-link:active img {
+        border-color: var(--ink);
+      }
+      .cell.failed img {
+        border-color: var(--error);
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .error {
+        color: var(--error);
+        font-family: inherit;
+      }
+      #run-summary {
+        color: var(--muted);
+        font-size: var(--case);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      @media (max-width: 800px) {
+        .table {
+          grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+        }
+      }
+      @media (max-width: 600px) {
+        :root {
+          --pad: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="gallery-view">
+      <header>
+        <h1>Pi Sessions E2E gallery</h1>
+        <div id="run-details" hidden>
+          <p id="run-summary"></p>
+          <div id="run-errors"></div>
+        </div>
+      </header>
+      <main id="cases">
+        <p id="no-results">
+          No E2E results yet. Run <code>bun run test:e2e</code>, then reopen this file.
+        </p>
+        <noscript>Enable JavaScript to display E2E results.</noscript>
+      </main>
+    </div>
+    <script src="./dist/e2e-gallery/results.js"></script>
+    <script>
+      const run = globalThis.E2E_GALLERY_RUN;
+      if (run) renderGallery(run);
+
+      function renderGallery(run) {
+        const imageCount = collectImages(run.tests).filter((entry) => entry.image.url).length;
+        document.getElementById("run-details").hidden = false;
+        const summary = document.getElementById("run-summary");
+        summary.title = run.started;
+        summary.append(
+          element("strong", "", `Run: ${run.status}`),
+          " · ",
+          element("time", "", formatLocalTimestamp(run.started)),
+          ` · ${imageCount} images`,
+        );
+        document.getElementById("run-errors").append(...run.errors.map(renderError));
+        const sections = run.cases.map((specCase) =>
+          renderCase(
+            specCase,
+            run.tests.filter((test) => test.specId === specCase.id),
+          ),
+        );
+        const unmapped = run.tests.filter(
+          (test) => !run.cases.some((entry) => entry.id === test.specId),
+        );
+        if (unmapped.length) sections.push(renderCase({ title: "No SPEC reference" }, unmapped));
+        document.getElementById("cases").replaceChildren(...sections);
+      }
+
+      function formatLocalTimestamp(iso) {
+        const started = new Date(iso);
+        const year = String(started.getFullYear()).padStart(4, "0");
+        const monthDay = [started.getMonth() + 1, started.getDate()]
+          .map((part) => String(part).padStart(2, "0"))
+          .join("-");
+        const time = [started.getHours(), started.getMinutes()]
+          .map((part) => String(part).padStart(2, "0"))
+          .join(":");
+        return `${year}-${monthDay} ${time}`;
+      }
+
+      function renderCase(specCase, tests) {
+        const title = [specCase.id, specCase.title].filter(Boolean).join(" ");
+        const heading = element("h2", "clip", title);
+        heading.title = title;
+        const section = element("section", "case", heading);
+        if (specCase.id) section.id = specCase.id;
+        const attempts = tests.flatMap((test) => test.attempts);
+        const firstError = attempts.flatMap((attempt) => attempt.errors).find(Boolean);
+        if (firstError) section.append(renderError(firstError));
+        else if (attempts.some(isFailed)) section.append(element("p", "error", "失敗"));
+
+        const entries = collectImages(tests);
+        if (!entries.some((entry) => entry.image.url)) {
+          const wasRun = attempts.some(
+            (attempt) => !["Not run", "skipped"].includes(attempt.status),
+          );
+          section.append(element("p", "muted", wasRun ? "画像なし" : "未実行"));
+          return section;
+        }
+        const table = element("div", "table", ...entries.map(renderImage));
+        table.style.setProperty("--columns", String(entries.length));
+        section.append(table);
+        return section;
+      }
+
+      function collectImages(tests) {
+        return tests.flatMap((test) =>
+          test.attempts.flatMap((attempt) =>
+            attempt.steps.flatMap((step) =>
+              step.images.map((image) => ({ test, attempt, step, image })),
+            ),
+          ),
+        );
+      }
+
+      function renderImage({ test, attempt, step, image }) {
+        const failed =
+          isFailed(attempt) || ["Failed", "Interrupted"].includes(step.status) || image.error;
+        const label = element("span", "label clip", image.name);
+        label.title = image.name;
+        const cell = element("div", failed ? "cell failed" : "cell", label);
+        cell.title = `${test.project || "Default project"}, repeat ${test.repeat}, retry ${attempt.retry}, worker ${attempt.worker}, parallel ${attempt.parallel}: ${attempt.status}`;
+        if (!image.url) {
+          cell.append(element("p", "muted", "画像なし"));
+          return cell;
+        }
+        const url = new URL(`./dist/e2e-gallery/${image.url}`, document.baseURI).href;
+        const original = element("a", "image-link");
+        original.setAttribute("href", url);
+        original.setAttribute("target", "_blank");
+        original.setAttribute("rel", "noopener");
+        original.setAttribute("aria-label", `${image.name} — 原寸`);
+        const preview = element("img", "");
+        preview.setAttribute("src", url);
+        preview.setAttribute("alt", image.name);
+        preview.setAttribute("loading", "lazy");
+        if (image.width && image.height) {
+          preview.setAttribute("width", image.width);
+          preview.setAttribute("height", image.height);
+        }
+        original.append(preview);
+        cell.append(original);
+        return cell;
+      }
+
+      function isFailed(attempt) {
+        return ["failed", "timedOut", "interrupted"].includes(attempt.status);
+      }
+
+      function renderError(error) {
+        const message = error.split(/\r?\n/)[0];
+        const paragraph = element("p", "error clip", message);
+        paragraph.title = message;
+        return paragraph;
+      }
+
+      function element(tagName, className, ...children) {
+        const node = document.createElement(tagName);
+        node.className = className;
+        node.append(...children);
+        return node;
+      }
+    </script>
+  </body>
+</html>

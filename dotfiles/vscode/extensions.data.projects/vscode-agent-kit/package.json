@@ -1,46 +1,21 @@
 {
   "name": "pi-sessions",
   "displayName": "Pi Sessions",
-  "description": "Browse Pi (pi-coding-agent) sessions in the sidebar and open them in editor terminals.",
   "version": "0.1.0",
-  "publisher": "pi-sessions",
-  "license": "UNLICENSED",
   "private": true,
-  "engines": {
-    "vscode": "^1.85.0"
-  },
+  "description": "Browse Pi (pi-coding-agent) sessions in the sidebar and open them in editor terminals.",
   "categories": [
     "Other"
   ],
+  "license": "UNLICENSED",
+  "publisher": "pi-sessions",
   "main": "./dist/extension.js",
-  "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "piSessionViews",
-          "title": "Agent Sessions",
-          "icon": "media/agent-sessions.svg"
-        }
-      ]
-    },
-    "views": {
-      "piSessionViews": [
-        {
-          "id": "piSessions.sessions",
-          "name": "Sessions",
-          "type": "webview"
-        }
-      ]
-    }
-  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && vp build",
     "screenshot": "bun run build && node scripts/screenshot.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun run build && bun run storybook:build && vitest run",
     "test:e2e": "bun run build && xvfb-run -a playwright test",
-    "test:review": "bun run build && xvfb-run -a playwright test tests/review/",
-    "review": "playwright show-report dist/playwright-report --port 0",
     "vsix": "bun run build && bunx @vscode/vsce package --allow-missing-repository --no-dependencies && code --install-extension pi-sessions-0.1.0.vsix --force",
     "lint": "eslint .",
     "storybook": "storybook dev -p 6006",
@@ -61,6 +36,29 @@
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.0.0",
     "vitest": "^3.0.0"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "piSessionViews",
+          "title": "Agent Sessions",
+          "icon": "media/agent-sessions.svg"
+        }
+      ]
+    },
+    "views": {
+      "piSessionViews": [
+        {
+          "id": "piSessions.sessions",
+          "name": "Sessions",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  "engines": {
+    "vscode": "^1.85.0"
   },
   "trustedDependencies": [
     "esbuild"

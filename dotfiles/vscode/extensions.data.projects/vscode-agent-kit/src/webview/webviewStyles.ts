@@ -1,43 +1,50 @@
 /** Styles for the sessions webview; shared as-is by the stories catalog. */
 export const webviewStyles = `
-    :root { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+    :root { --session-radius: 9.6px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
-    button { font: inherit; }
-    button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-    #app { padding: 10px; }
-    header, .session-row, .group-header { display: flex; align-items: center; }
-    header { justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-    h1 { margin: 0; font-size: 13px; font-weight: 600; }
+    button { box-sizing: border-box; border: 1px solid transparent; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; font: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+    button:hover { background: var(--vscode-list-hoverBackground); }
+    svg { flex: none; pointer-events: none; }
+    #app { padding: 12px; }
+    header, .group-header { display: flex; align-items: center; }
+    header { justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 12px; }
+    h1 { margin: 0; font-size: 13px; font-weight: 600; line-height: 24px; }
     .header-actions { display: flex; gap: 4px; }
-    button { border: 1px solid transparent; border-radius: 3px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); cursor: pointer; }
-    button:hover { background: var(--vscode-button-hoverBackground); }
-    .icon-button { min-width: 26px; padding: 3px 6px; }
-    .group { overflow: hidden; margin-top: 10px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; }
-    .group-header { gap: 8px; min-width: 0; padding: 5px 8px; border-bottom: 1px solid var(--vscode-widget-border); background: var(--vscode-sideBarSectionHeader-background); }
-    .group-title { flex: 1; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-    .group-path { padding: 5px 8px; color: var(--vscode-descriptionForeground); font-size: 12px; overflow-wrap: anywhere; }
-    .group-modes { display: flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; }
-    .mode-button { padding: 2px 6px; color: var(--vscode-foreground); background: transparent; font-size: 10px; }
-    .mode-button:hover { background: var(--vscode-list-hoverBackground); }
-    .mode-button[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
-    .session-row { position: relative; min-width: 0; }
-    .session-row + .session-row { border-top: 1px solid var(--vscode-widget-border); }
-    .session-row.selected .session-button { background: var(--vscode-list-inactiveSelectionBackground); }
-    .session-button { display: block; box-sizing: border-box; width: 100%; min-width: 0; padding: 6px calc(40% + 80px) 6px 8px; border-radius: 0; color: var(--vscode-foreground); background: transparent; text-align: left; }
+    .icon-button { min-width: 24px; height: 24px; padding: 0 8px; color: var(--vscode-descriptionForeground); }
+    .icon-button:hover { color: var(--vscode-foreground); }
+    .icon-button[data-action="refresh"] { width: 24px; padding: 0; }
+    .group { min-width: 0; }
+    .group + .group { margin-top: 12px; }
+    .group-header { gap: 4px; min-width: 0; min-height: 24px; }
+    .group-chevron { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-descriptionForeground); }
+    .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .group-modes { display: flex; flex: none; gap: 2px; padding: 1px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: var(--session-radius); }
+    .mode-button { height: 20px; padding: 0 6px; border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 18px; }
+    .mode-button:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .mode-button[aria-pressed="true"] { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); background: var(--vscode-list-inactiveSelectionBackground); }
+    .session-row { position: relative; min-width: 0; height: 32px; margin-left: 12px; border-radius: var(--session-radius); }
+    .group-header + .session-row { margin-top: 4px; }
+    .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(84px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
     .session-button:hover { background: var(--vscode-list-hoverBackground); }
-    .session-row.selected .session-button:hover { background: var(--vscode-list-hoverBackground); }
+    .session-row.selected .session-button, .session-row.selected .session-button:hover { background: var(--vscode-list-inactiveSelectionBackground); }
+    .session-row.selected:focus-within .session-button { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
+    .session-status { box-sizing: border-box; flex: none; width: 10px; height: 10px; border: 1px solid transparent; border-radius: 50%; background: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
+    .session-status[data-locked="true"] { background: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
+    .session-status[data-archived="true"] { border-color: var(--vscode-descriptionForeground); background: transparent; }
+    .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+    .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 84px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
+    .copy, .lock, .archive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
+    .copy svg, .lock svg, .archive svg, .group-chevron svg { width: 12px; height: 12px; }
+    .copy { right: 52px; }
+    .lock { right: 28px; }
+    .archive { right: 4px; }
+    .copy:hover, .lock:hover, .archive:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .copy.copied { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
+    .lock[aria-pressed="true"] { color: var(--vscode-foreground); }
     .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
     .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
-    .session-name { display: block; overflow: hidden; min-width: 0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 82px; overflow: hidden; max-width: 40%; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-    .copy { position: absolute; top: 50%; right: 56px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .copy:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
-    .copy.copied { color: var(--vscode-testing-iconPassed); }
-    .lock { position: absolute; top: 50%; right: 30px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .lock:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
-    .lock[aria-pressed="true"] { color: var(--vscode-foreground); }
-    .archive { position: absolute; top: 50%; right: 4px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .archive:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .session-row.selected:focus-within .session-name, .session-row.selected:focus-within .session-timestamp { color: var(--vscode-list-activeSelectionForeground, var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground))); }
     .archive:disabled, .archive:disabled:hover { color: var(--vscode-disabledForeground); background: transparent; cursor: default; }
     .empty, #status { color: var(--vscode-descriptionForeground); font-size: 12px; }
     .empty { padding: 24px 8px; text-align: center; }
