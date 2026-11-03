@@ -32,7 +32,7 @@ test-rime:
     #!/usr/bin/env bash
     set -euo pipefail
     cd dotfiles/rime
-    generated="$(mktemp -d /tmp/dotfiles-rime-unit.XXXXXX)"
+    generated="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-rime-unit.XXXXXX")"
     trap 'rm -rf "$generated"' EXIT
     bun zenkaku.build.ts --output "$generated/kagiroi_dotfiles_zenkaku.dict.yaml"
     lua5.4 tests/candidate_gate.test.lua lua/kagiroi/candidate_gate.lua

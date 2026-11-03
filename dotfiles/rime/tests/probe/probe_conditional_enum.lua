@@ -91,8 +91,8 @@ local real_matrix = {
 
 -- Build one mocked engine around a fresh real viterbi on a synthetic
 -- dictionary, so every clause operation goes through the actual lattice.
-local function new_engine(dictionary, matrix, readings, expand_emoji, boundary)
-    local synth_env = synth.new_env(dictionary, nil, matrix)
+local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, userdict)
+    local synth_env = synth.new_env(dictionary, userdict, matrix)
     local viterbi = viterbi_module.new(synth_env)
     package.loaded["kagiroi/segmenter"] = nil
     package.loaded["kagiroi/kagiroi_translator"] = nil
@@ -510,7 +510,7 @@ do
     -- the contextual order must lift it to the head of the whole list.
     local dict = {
         { surface = "ちば", candidate = "千葉", left_id = 1926, right_id = 1926, cost = 1545 },
-        { surface = "から", candidate = "から", left_id = 368, right_id = 368, cost = 0 },
+        { surface = "から", candidate = "柄", left_id = 368, right_id = 368, cost = 0 },
         { surface = "から", candidate = "空", left_id = 1851, right_id = 1851, cost = 5511 },
         { surface = "とうきょう", candidate = "東京", left_id = 1927, right_id = 1927, cost = 0 },
         { surface = "とうきょう", candidate = "トウキョウ", left_id = 500, right_id = 500, cost = 3000 },
@@ -1103,7 +1103,7 @@ do
     -- route, no matter how deep it sits.
     local dict = {
         { surface = "ちば", candidate = "千葉", left_id = 1926, right_id = 1926, cost = 1545 },
-        { surface = "から", candidate = "から", left_id = 368, right_id = 368, cost = 0 },
+        { surface = "から", candidate = "柄", left_id = 368, right_id = 368, cost = 0 },
         { surface = "から", candidate = "空", left_id = 1851, right_id = 1851, cost = 5511 },
         { surface = "とうきょう", candidate = "東京", left_id = 1927, right_id = 1927, cost = 0 },
         { surface = "とうきょう", candidate = "トウキョウ", left_id = 500, right_id = 500, cost = 3000 },
@@ -1144,12 +1144,12 @@ do
                 phrase = { text = text .. "|" .. left_id .. " " .. right_id, custom_code = "ちばから " },
             }
         end
-        stock_row("千葉から", 1926, 368)
-        for index = 1, 45 do stock_row("埋" .. index .. "から", 1926, 368) end
+        stock_row("千葉柄", 1926, 368)
+        for index = 1, 45 do stock_row("埋" .. index .. "柄", 1926, 368) end
         for index = 1, 30 do stock_row("千葉場" .. index .. "良", 1926, 222) end
         stock_row("千葉空", 1926, 1851)
-        stock_texts = { "千葉から" }
-        for index = 1, 45 do stock_texts[#stock_texts + 1] = "埋" .. index .. "から" end
+        stock_texts = { "千葉柄" }
+        for index = 1, 45 do stock_texts[#stock_texts + 1] = "埋" .. index .. "柄" end
         for index = 1, 30 do stock_texts[#stock_texts + 1] = "千葉場" .. index .. "良" end
         stock_texts[#stock_texts + 1] = "千葉空"
     end
@@ -1211,16 +1211,16 @@ end
 
 print("== 12. a same-text id pair beyond the discovery head still materializes and can win")
 do
-    -- The 千葉から text has three same-text routes: 368 (the stock row's
+    -- The 千葉柄 text has three same-text routes: 368 (the stock row's
     -- pair), 330 and 777. The 777 route's key lands beyond the enumeration
     -- head cap over the 40 filler composites, so only a per-pair search
     -- keeps it ranked: under the third neighborhood it must own the text's
     -- display position.
     local dict = {
         { surface = "ちば", candidate = "千葉", left_id = 1926, right_id = 1926, cost = 1545 },
-        { surface = "から", candidate = "から", left_id = 368, right_id = 368, cost = 0 },
-        { surface = "から", candidate = "から", left_id = 330, right_id = 330, cost = 4000 },
-        { surface = "から", candidate = "から", left_id = 777, right_id = 777, cost = 7000 },
+        { surface = "から", candidate = "柄", left_id = 368, right_id = 368, cost = 0 },
+        { surface = "から", candidate = "柄", left_id = 330, right_id = 330, cost = 4000 },
+        { surface = "から", candidate = "柄", left_id = 777, right_id = 777, cost = 7000 },
         { surface = "から", candidate = "空", left_id = 1851, right_id = 1851, cost = 5511 },
         { surface = "ち", candidate = "知", left_id = 1851, right_id = 1851, cost = 6000 },
         { surface = "とうきょう", candidate = "東京", left_id = 1927, right_id = 1927, cost = 0 },
@@ -1260,7 +1260,7 @@ do
         },
     }
     readings["ちばから"] = {
-        { text = "千葉から", phrase = { text = "千葉から|1926 368", custom_code = "ちばから " } },
+        { text = "千葉柄", phrase = { text = "千葉柄|1926 368", custom_code = "ちばから " } },
     }
     local bunsetsu, context, viterbi = new_engine(dict, matrix, readings)
     bunsetsu.start(context, "ちばからとうきょう")
@@ -1270,13 +1270,13 @@ do
     viterbi:analyze("ちばから")
     local route_own_rows = {}
     for _, choice in ipairs(clause1.unfiltered) do
-        if choice.text == "千葉から" and choice.own ~= nil then
+        if choice.text == "千葉柄" and choice.own ~= nil then
             route_own_rows[choice.left_id .. " " .. choice.right_id] = choice.own
         end
     end
     for _, ids in ipairs({ "1926 368", "1926 330", "1926 777" }) do
         check(route_own_rows[ids] ~= nil,
-            "the route 1926-" .. ids:sub(-3) .. " of 千葉から is materialized and scored (own "
+            "the route 1926-" .. ids:sub(-3) .. " of 千葉柄 is materialized and scored (own "
                 .. tostring(route_own_rows[ids]) .. ")")
     end
 
@@ -1298,9 +1298,9 @@ do
         state.active = 1
         bunsetsu.render(context)
         viterbi:analyze("ちばから")
-        local first_row = text_first_row(clause1, "千葉から")
+        local first_row = text_first_row(clause1, "千葉柄")
         check(first_row and first_row.left_id .. " " .. first_row.right_id == switch_spec.first,
-            switch_spec.label .. ": the text から displays its best route pair ("
+            switch_spec.label .. ": the text 柄 displays its best route pair ("
                 .. tostring(first_row and first_row.left_id .. " " .. first_row.right_id) .. ")")
         local reference = reference_paths(viterbi, "ちばから", matrix,
             { at_start = true, at_end = false, prev_right_id = 0, next_left_id = switch_spec.next_left_id })
@@ -1937,6 +1937,429 @@ do
             operation .. ": returning from an unscored boundary restores the best source identities")
         check_final_single_node_scores(state, dict, matrix, {}, operation .. " restored")
     end
+end
+
+print("== 24. dictionary query counts reuse source-tagged cache entries and follow invalidation")
+do
+    local dictionary = {
+        { surface = "きょうは", candidate = "今日は", left_id = 1851, right_id = 1851, cost = 1 },
+        { surface = "かれー", candidate = "カレー", left_id = 1851, right_id = 1851, cost = 1 },
+    }
+    local matrix = {
+        ["0 1851"] = 0, ["-10 1851"] = 0, ["1851 0"] = 0,
+        ["1851 -20"] = 0, ["1851 1851"] = 0,
+    }
+    local readings = {}
+    for _, row in ipairs(dictionary) do
+        readings[row.surface] = { { text = row.candidate,
+            phrase = { text = row.candidate .. "|1851 1851", custom_code = row.surface .. " " } } }
+    end
+    local userdict = {}
+    local bunsetsu, context, viterbi = new_engine(dictionary, matrix, readings, false, nil, userdict)
+    local query_dict, query_userdict = viterbi.query_dict, viterbi.query_userdict
+    local counts = { dict = 0, user = 0 }
+    viterbi.query_dict = function(input)
+        counts.dict = counts.dict + 1
+        return query_dict(input)
+    end
+    viterbi.query_userdict = function(input)
+        counts.user = counts.user + 1
+        return query_userdict(input)
+    end
+    local reading = string.rep("きょうはかれー", 3)
+    for round = 1, 3 do
+        counts.dict, counts.user = 0, 0
+        bunsetsu.start(context, reading)
+        print(string.format("  queries round %d: dict=%d user=%d", round, counts.dict, counts.user))
+        local expected = round == 1 and 126 or 0
+        check(counts.dict == expected and counts.user == expected,
+            "conversion " .. round .. " queries each distinct reading once, then reuses the cache")
+        check(bunsetsu.display(context) == string.rep("今日はカレー", 3),
+            "cache reuse keeps the full converted preview")
+        bunsetsu.clear(context)
+    end
+    bunsetsu.start(context, reading)
+    context.translator_env.mem.update_userdict = function(_, entry)
+        local candidate, left_id, right_id = entry.text:match("^(.*)|(-?%d+) (-?%d+)$")
+        userdict[#userdict + 1] = {
+            surface = entry.custom_code:match("^(.*) $"), candidate = candidate,
+            left_id = tonumber(left_id), right_id = tonumber(right_id), commit_count = 1,
+        }
+    end
+    bunsetsu.learn(context)
+    counts.dict, counts.user = 0, 0
+    bunsetsu.start(context, reading)
+    print(string.format("  queries after learning: dict=%d user=%d", counts.dict, counts.user))
+    check(counts.dict == 126 and counts.user == 126,
+        "learning invalidates the same cache used by both source tagging and ranking")
+    local learned = 0
+    for lex in viterbi:_lookup("きょうは") do
+        if lex.learned then learned = learned + 1 end
+    end
+    check(learned > 0, "reloaded user entries retain their source tag inside the lookup cache")
+    for index = #userdict, 1, -1 do table.remove(userdict, index) end
+    viterbi:clear()
+    counts.dict, counts.user = 0, 0
+    bunsetsu.start(context, reading)
+    print(string.format("  queries after deletion: dict=%d user=%d", counts.dict, counts.user))
+    check(counts.dict == 126 and counts.user == 126,
+        "deletion invalidation also refreshes source-tagged ranking entries")
+    local stale = false
+    for lex in viterbi:_lookup("きょうは") do
+        if lex.learned then stale = true end
+    end
+    check(not stale, "deleted learning does not survive in a separate ranking cache")
+end
+
+local function fixed_kana_fixture(userdict, boundary)
+    local dictionary = {
+        { surface = "しか", candidate = "歯科", left_id = 1851, right_id = 1851, cost = 10 },
+        { surface = "しか", candidate = "しか", left_id = 368, right_id = 368, cost = 50000 },
+        { surface = "から", candidate = "空", left_id = 1851, right_id = 1851, cost = 10 },
+        { surface = "から", candidate = "から", left_id = 368, right_id = 368, cost = 50000 },
+        { surface = "とうきょう", candidate = "東京", left_id = 1927, right_id = 1927, cost = 10 },
+        { surface = "とうきょう", candidate = "東亰", left_id = 1927, right_id = 1927, cost = 20 },
+        { surface = "ちば", candidate = "千葉", left_id = 1926, right_id = 1926, cost = 10 },
+        { surface = "これ", candidate = "これ", left_id = 1000, right_id = 1000, cost = 10 },
+        { surface = "ない", candidate = "無い", left_id = 1851, right_id = 1851, cost = 10 },
+        { surface = "ない", candidate = "ない", left_id = 330, right_id = 330, cost = 50000 },
+        { surface = "へ", candidate = "辺", left_id = 1851, right_id = 1851, cost = 10 },
+        { surface = "へ", candidate = "へ", left_id = 375, right_id = 375, cost = 50000 },
+        { surface = "さかな", candidate = "魚", left_id = 1851, right_id = 1851, cost = 2500 },
+        { surface = "さかな", candidate = "さかな", left_id = 1851, right_id = 1851, cost = 4000 },
+        { surface = "かれー", candidate = "カレー", left_id = 1851, right_id = 1851, cost = 2500 },
+        { surface = "かれー", candidate = "かれー", left_id = 1851, right_id = 1851, cost = 4000 },
+    }
+    local matrix, readings = {}, {}
+    for _, right_id in ipairs({ 0, -10, 1851, 1926, 1927, 1000, 368, 330, 375 }) do
+        for _, left_id in ipairs({ 0, -20, 1851, 1926, 1927, 1000, 368, 330, 375 }) do
+            matrix[right_id .. " " .. left_id] = 0
+        end
+    end
+    for _, row in ipairs(dictionary) do
+        readings[row.surface] = readings[row.surface] or {}
+        readings[row.surface][#readings[row.surface] + 1] = { text = row.candidate,
+            phrase = { text = row.candidate .. "|" .. row.left_id .. " " .. row.right_id,
+                custom_code = row.surface .. " " } }
+    end
+    local bunsetsu, context, viterbi = new_engine(dictionary, matrix, readings, false, boundary, userdict)
+    return bunsetsu, context, viterbi, dictionary, matrix, readings
+end
+
+print("== 25. grammar kana is fixed at every position independently of costs, learning and clause count")
+do
+    local userdict = {
+        { surface = "から", candidate = "空", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "からとうきょう", candidate = "空東京", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "ちばから", candidate = "千葉空", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "これしかない", candidate = "此歯科無い", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "しか", candidate = "しか", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+    }
+    local cases = {
+        { "しか", "歯科", 0 }, { "から", "空", 0 },
+        { "からとうきょう", "から東京", 1 }, { "ちばから", "千葉から", 1 },
+        { "これしかない", "これしかない", 2 }, { "からから", "からから", 2 },
+        { "へとうきょう", "へ東京", 1 }, { "とうきょうへ", "東京へ", 1 },
+    }
+    for _, learned in ipairs({ {}, userdict }) do
+        for _, separate in ipairs({ false, true }) do
+            local bunsetsu, context = fixed_kana_fixture(learned, function() return separate end)
+            for _, case in ipairs(cases) do
+                bunsetsu.start(context, case[1])
+                local state = bunsetsu.state(context)
+                local label = case[1] .. " learned=" .. #learned .. " separate=" .. tostring(separate)
+                check(bunsetsu.display(context) == case[2], label .. ": fixed kana outranks even a 50000-cost route")
+                check(#state.grammar_spans == case[3], label .. ": grammar ranges come from ordinary dictionary words")
+                if not separate then check(#state.clauses == 1, label .. ": one clause can contain multiple words") end
+            end
+            bunsetsu.start(context, "からとうきょう")
+            check(#bunsetsu.state(context).clauses == (separate and 2 or 1),
+                "a highly learned joined spelling cannot change ordinary-dictionary clause boundaries")
+        end
+    end
+end
+
+print("== 26. old all-hiragana learning is ignored without changing stored rows or unrelated viterbi instances")
+do
+    local userdict = {
+        { surface = "さかな", candidate = "うお", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "さかなとうきょう", candidate = "さかなとうきょう", commit_count = 1000000 },
+        { surface = "かれー", candidate = "かれー", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+    }
+    local bunsetsu, context, viterbi, dictionary, matrix = fixed_kana_fixture(userdict, function() return false end)
+    for _, case in ipairs({ { "さかな", "魚" }, { "さかなとうきょう", "魚東京" }, { "かれー", "カレー" } }) do
+        bunsetsu.start(context, case[1])
+        check(bunsetsu.display(context) == case[2], case[1] .. ": all-hiragana learning has no ranking effect")
+        local learned = false
+        for lex in viterbi:_lookup(case[1]) do if lex.learned then learned = true end end
+        check(not learned, case[1] .. ": ignored rows do not reach the shared lookup cache or upstream lattice")
+    end
+    check(#userdict == 3 and userdict[1].candidate == "うお" and userdict[1].commit_count == 1000000,
+        "ignoring existing learning leaves every stored row and frequency intact")
+    local unrelated = viterbi_module.new(synth.new_env(dictionary, userdict, matrix))
+    unrelated:analyze("さかな")
+    check(unrelated:best_n()().candidate == "うお", "the userdict wrapper does not modify another viterbi instance")
+end
+
+print("== 27. all-hiragana choices are not saved, while kanji, katakana and mixed learning remain usable")
+do
+    local userdict = {
+        { surface = "さかな", candidate = "肴", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "かれー", candidate = "カリィ", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "さかなとうきょう", candidate = "肴とうきょう", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+    }
+    local bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
+    for _, case in ipairs({ { "さかな", "肴" }, { "かれー", "カリィ" }, { "さかなとうきょう", "肴とうきょう" } }) do
+        bunsetsu.start(context, case[1])
+        check(bunsetsu.display(context) == case[2], case[1] .. ": non-hiragana learning still leads ordinary ranking")
+    end
+    local saved = {}
+    context.translator_env.mem.update_userdict = function(_, entry) saved[#saved + 1] = DictEntry(entry) end
+    for _, reading in ipairs({ "しか", "かれー", "これしかない" }) do
+        bunsetsu.start(context, reading)
+        local clause = bunsetsu.state(context).clauses[1]
+        local found = false
+        for index, choice in ipairs(clause.candidates) do
+            if choice.text == reading then
+                bunsetsu.select(context, index - clause.selected)
+                found = true
+                break
+            end
+        end
+        check(found, reading .. ": an all-hiragana dictionary choice remains manually selectable")
+        bunsetsu.learn(context)
+        check(#saved == 0, reading .. ": learning saves no all-hiragana clause or sentence")
+    end
+    bunsetsu.start(context, "からとうきょう")
+    bunsetsu.learn(context)
+    check(#saved == 1 and saved[1].text == "から東京|1851 1851", "a mixed clause is still learned with generic noun ids")
+    saved = {}
+    bunsetsu, context = fixed_kana_fixture({}, function() return true end)
+    context.translator_env.mem.update_userdict = function(_, entry) saved[#saved + 1] = DictEntry(entry) end
+    bunsetsu.start(context, "これしかない")
+    bunsetsu.learn(context)
+    check(#saved == 0, "an entirely hiragana multi-clause sentence saves neither its clauses nor its joined reading")
+    bunsetsu.start(context, "からとうきょう")
+    bunsetsu.learn(context)
+    check(#saved == 2 and saved[1].text == "東京|1851 1851" and saved[2].text == "から東京|1851 1851",
+        "mixed sentence learning keeps its kanji clause and joined reading but excludes its hiragana clause")
+end
+
+print("== 28. manual kanji choices survive neighbor reranking and fixed ranges follow edited boundaries")
+do
+    local bunsetsu, context = fixed_kana_fixture({}, function() return true end)
+    context:set_option("_kagiroi_hide_candidates", true)
+    bunsetsu.start(context, "からとうきょうへ")
+    local state = bunsetsu.state(context)
+    local first = state.clauses[1]
+    local found = false
+    for index, choice in ipairs(first.candidates) do
+        if choice.text == "空" then
+            bunsetsu.select(context, index - first.selected)
+            found = true
+            break
+        end
+    end
+    check(found and bunsetsu.display(context) == "空東京へ", "a fixed kana first does not remove manual kanji alternatives")
+    state.active = 2
+    bunsetsu.select(context, 1)
+    check(first.candidates[first.selected].text == "空" and first.candidates[1].text == "から",
+        "a neighbor change keeps the manually chosen kanji even while the kana candidate remains first")
+    bunsetsu.start(context, "ちばからとうきょう")
+    state = bunsetsu.state(context)
+    for _ = 1, 2 do bunsetsu.resize(context, 1) end
+    check(#state.clauses == 2 and state.clauses[1].reading == "ちばから"
+        and bunsetsu.display(context) == "千葉から東京", "merging a particle into its previous clause preserves its fixed kana range")
+    for _ = 1, 5 do bunsetsu.resize(context, 1) end
+    check(#state.clauses == 1 and bunsetsu.display(context) == "千葉から東京",
+        "merging every word into one clause does not turn multi-word conversion into standalone conversion")
+    bunsetsu.resize(context, -1)
+    check(#state.clauses == 2 and #state.grammar_spans == 1,
+        "shrinking a merged clause keeps the original word plan rather than reclassifying from learned entries")
+end
+
+print("== 29. learned subwords cannot reclassify an ordinary single word as grammar-bearing input")
+do
+    local userdict = {
+        { surface = "さか", candidate = "酒", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+        { surface = "な", candidate = "名", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+    }
+    local bunsetsu, context, viterbi, dictionary = fixed_kana_fixture(userdict, function() return true end)
+    dictionary[#dictionary + 1] = { surface = "さか", candidate = "坂", left_id = 1851, right_id = 1851, cost = 3000 }
+    dictionary[#dictionary + 1] = { surface = "な", candidate = "な", left_id = 368, right_id = 368, cost = 3000 }
+    local best_n = viterbi.best_n
+    viterbi:analyze("さかな")
+    check(viterbi:best_n()().candidate == "酒名", "the upstream learned lattice prefers two subwords before classification")
+    bunsetsu.start(context, "さかな")
+    local state = bunsetsu.state(context)
+    check(#state.clauses == 1 and #state.grammar_spans == 0,
+        "ordinary dictionary classification still sees one word and enables no grammar preference")
+    check(viterbi.best_n == best_n and viterbi:best_n()().candidate == "酒名",
+        "classification and fixed ranking do not replace or contaminate the generic best_n implementation")
+end
+
+print("== 30. fixed-kana discovery retains ordinary kanji alternatives beyond its preferred head")
+do
+    local bunsetsu, context, _, dictionary = fixed_kana_fixture({}, function() return false end)
+    for index = 1, 40 do
+        dictionary[#dictionary + 1] = { surface = "ちば", candidate = "埋" .. index,
+            left_id = 1926, right_id = 1926, cost = 100 + index }
+    end
+    bunsetsu.start(context, "ちばから")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.candidates[1].text == "千葉から", "the preferred discovery head keeps the fixed particle")
+    local kanji_index
+    for index, choice in ipairs(clause.candidates) do
+        if choice.text == "埋1空" then kanji_index = index break end
+    end
+    check(kanji_index and kanji_index > 30,
+        "ordinary cost discovery preserves kanji alternatives outside the fixed-kana discovery head")
+    if kanji_index then
+        bunsetsu.select(context, kanji_index - clause.selected)
+        check(bunsetsu.display(context) == "埋1空", "a deep kanji alternative remains manually selectable")
+    end
+end
+
+print("== 31. equal-cost word plans use the shorter first word independently of learning")
+do
+    for _, learned in ipairs({ {}, {
+        { surface = "かれー", candidate = "カリィ", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+    } }) do
+        local bunsetsu, context, _, dictionary = fixed_kana_fixture(learned, function() return false end)
+        dictionary[#dictionary + 1] = { surface = "か", candidate = "蚊", left_id = 1851, right_id = 1851, cost = 1000 }
+        dictionary[#dictionary + 1] = { surface = "か", candidate = "か", left_id = 368, right_id = 368, cost = 50000 }
+        dictionary[#dictionary + 1] = { surface = "れー", candidate = "玲", left_id = 1851, right_id = 1851, cost = 1500 }
+        bunsetsu.start(context, "かれー")
+        local state = bunsetsu.state(context)
+        check(#state.grammar_spans == 1 and state.grammar_spans[1].start == 1 and state.grammar_spans[1]._end == 1,
+            "the 1000+1500 two-word plan wins its tie with the 2500-cost whole word")
+        check(bunsetsu.display(context) == "かれー", "learning cannot change the tied word plan or override its fixed kana")
+    end
+end
+
+print("== 32. fixed kana remains first beside unscorable roman and alphabetic clauses")
+do
+    for _, case in ipairs({
+        { "からk", "からk" }, { "qから", "qから" }, { "からAとうきょう", "からA東京" },
+        { "qからk", "qからk" }, { "からとうきょうk", "から東京k" }, { "とうきょうkから", "東京kから" },
+    }) do
+        local bunsetsu, context = fixed_kana_fixture({}, function() return true end)
+        context:set_option("_kagiroi_hide_candidates", true)
+        bunsetsu.start(context, case[1])
+        local state = bunsetsu.state(context)
+        check(bunsetsu.display(context) == case[2], case[1] .. ": fixed kana does not need adjacent connection ids")
+        local grammar_index
+        for index, clause in ipairs(state.clauses) do
+            if clause.reading == "から" then grammar_index = index break end
+        end
+        state.active = grammar_index
+        context:set_option("_kagiroi_hide_candidates", false)
+        bunsetsu.render(context)
+        local clause = state.clauses[grammar_index]
+        check(clause.candidates[1].text == "から", case[1] .. ": opening the list keeps the fixed first")
+        local found = false
+        for index, choice in ipairs(clause.candidates) do
+            if choice.text == "空" then
+                bunsetsu.select(context, index - clause.selected)
+                found = true
+                break
+            end
+        end
+        bunsetsu.render(context)
+        check(found and clause.candidates[clause.selected].text == "空" and clause.candidates[1].text == "から",
+            case[1] .. ": an explicit kanji choice is preserved independently of the fixed first")
+    end
+    local bunsetsu, context = fixed_kana_fixture({}, function() return true end)
+    bunsetsu.start(context, "からk")
+    bunsetsu.resize(context, 1)
+    check(#bunsetsu.state(context).clauses == 1 and bunsetsu.display(context) == "からk",
+        "absorbing an unscorable clause keeps the fixed kana")
+    bunsetsu.resize(context, -1)
+    check(#bunsetsu.state(context).clauses == 2 and bunsetsu.display(context) == "からk",
+        "restoring the boundary keeps fixed kana beside the id-less clause")
+    local _, readings
+    bunsetsu, context, _, _, _, readings = fixed_kana_fixture({}, function() return true end)
+    readings["から"][#readings["から"] + 1] = { text = "未採点1" }
+    readings["から"][#readings["から"] + 1] = { text = "未採点2" }
+    bunsetsu.start(context, "からq")
+    local retained = {}
+    for _, choice in ipairs(bunsetsu.state(context).clauses[1].candidates) do
+        if choice.text:find("未採点", 1, true) then retained[#retained + 1] = choice.text end
+    end
+    check(table.concat(retained, "|") == "未採点1|未採点2", "unscored alternatives keep their original relative order")
+    bunsetsu, context, _, _, _, readings = fixed_kana_fixture({}, function() return true end)
+    readings["さかな"][1], readings["さかな"][2] = readings["さかな"][2], readings["さかな"][1]
+    bunsetsu.start(context, "さかなq")
+    check(bunsetsu.display(context) == "さかなq", "without fixed grammar or connection ids, ordinary order is not fabricated")
+end
+
+print("== 33. mixed learning preserves fixed kana and arbitrary nonempty spelling regions")
+do
+    local cases = {
+        { "からとうきょう", "から東亰", "から東亰", true },
+        { "とうきょうから", "東亰から", "東亰から", true },
+        { "ちばからとうきょう", "千葉から東亰", "千葉から東亰", true },
+        { "からとうきょうから", "から東亰から", "から東亰から", true },
+        { "からからとうきょう", "からから東亰", "からから東亰", true },
+        { "からとうきょう", "から獏", "から獏", true },
+        { "とうきょうから", "獏から", "獏から", true },
+        { "ちばからとうきょう", "千葉から獏", "千葉から獏", true },
+        { "ちばからとうきょう", "獏から東亰", "獏から東亰", true },
+        { "からとうきょうから", "から獏から", "から獏から", true },
+        { "ちばからとうきょう", "獏から麒麟", "獏から麒麟", true },
+        { "とうきょうから", "東きょうから", "東きょうから", true },
+        { "からとうきょう", "から東きょう", "から東きょう", true },
+        { "ちばからとうきょう", "千ばから東京", "千ばから東京", true },
+        { "からとうきょうから", "から東きょうから", "から東きょうから", true },
+        { "とうきょうから", "東京獏から", "東京獏から", true },
+        { "とうきょうから", "東から", "東から", true },
+        { "とうきょうから", "🗼きょうから", "🗼きょうから", true },
+        { "からとうきょうへ", "から東きょうへ", "から東きょうへ", true },
+        { "からとうきょうへ", "へ東京から", "から東京へ", false },
+        { "ちばからとうきょう", "から東きょう", "千葉から東京", false },
+        { "ちばからとうきょう", "千ばから", "千葉から東京", false },
+        { "からとうきょうから", "から獏", "から東京から", false },
+        { "からからとうきょう", "から獏", "からから東京", false },
+        { "からとうきょう", "空東亰", "から東京", false },
+        { "からとうきょう", "東亰から", "から東京", false },
+        { "とうきょうから", "から東亰", "東京から", false },
+        { "ちばからとうきょう", "千葉東から亰", "千葉東から亰", true },
+        { "からとうきょうから", "からから東亰", "から東京から", false },
+    }
+    for _, case in ipairs(cases) do
+        local userdict = { { surface = case[1], candidate = case[2], left_id = 1851, right_id = 1851,
+            commit_count = 1000000 } }
+        local bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
+        bunsetsu.start(context, case[1])
+        local clause = bunsetsu.state(context).clauses[1]
+        check(bunsetsu.display(context) == case[3], case[1] .. " -> " .. case[2] .. ": learning obeys the fixed positions")
+        local learned
+        for _, choice in ipairs(clause.unfiltered) do
+            if choice.text == case[2] and choice.left_id == 1851 and choice.right_id == 1851 and choice.own == 500 then
+                learned = choice
+                break
+            end
+        end
+        check(learned and ((learned.grammar_misses == 0) == case[4]),
+            case[2] .. ": the learned route itself has the correct protection score")
+    end
+    local userdict = { { surface = "からとうきょう", candidate = "から東亰", left_id = 1851, right_id = 1851,
+        commit_count = 1000000 } }
+    local bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
+    bunsetsu.start(context, "ちばからとうきょう")
+    check(bunsetsu.display(context) == "千葉から東亰", "a learned mixed subrange is aligned at its actual reading offset")
+    local _, dictionary
+    bunsetsu, context, _, dictionary = fixed_kana_fixture({}, function() return false end)
+    dictionary[#dictionary + 1] = { surface = "からとうきょうから", candidate = "からから",
+        left_id = 1851, right_id = 1851, cost = 500000 }
+    bunsetsu.start(context, "からとうきょうから")
+    check(bunsetsu.display(context) == "から東京から", "a nonprotected reading region requires nonempty candidate text")
+    local empty_middle
+    for _, choice in ipairs(bunsetsu.state(context).clauses[1].unfiltered) do
+        if choice.text == "からから" then empty_middle = choice break end
+    end
+    check(empty_middle and empty_middle.grammar_misses > 0,
+        "two protected occurrences cannot absorb an empty nonprotected middle region")
 end
 
 print(string.format("probe4: %d checks, %d failures", checks, failures))

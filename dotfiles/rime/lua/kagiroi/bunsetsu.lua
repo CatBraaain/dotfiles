@@ -7,8 +7,23 @@ local variants = require("kagiroi/char_variants")
 local segmenter_loaded, segmenter = pcall(require, "kagiroi/segmenter")
 
 local kContextualDiscoveryLimit = 30
+local kFirstGrammarId = 29
+local kLastGrammarId = 433
+
+local function is_hiragana(text)
+    for _, codepoint in utf8.codes(text) do
+        if (codepoint < 0x3040 or codepoint > 0x309f) and codepoint ~= 0x30fc then return false end
+    end
+    return text ~= ""
+end
+
+local function rank_is_better(misses, cost, other_misses, other_cost)
+    if misses ~= other_misses then return misses < other_misses end
+    return cost < other_cost
+end
 
 local function path_precedes(a, b)
+    if a.grammar_misses ~= b.grammar_misses then return a.grammar_misses < b.grammar_misses end
     if a.score ~= b.score then return a.score < b.score end
     if a.node._end ~= b.node._end then return a.node._end > b.node._end end
     return a.sequence < b.sequence
@@ -46,6 +61,20 @@ end
 function Top.init(env)
     stock = stock or require("kagiroi/kagiroi_translator")
     stock.init(env)
+    local query_userdict = env.viterbi.query_userdict
+    if query_userdict then
+        env.viterbi.query_userdict = function(input)
+            local entries = query_userdict(input)
+            return function()
+                for lex in entries do
+                    if not is_hiragana(lex.candidate) then
+                        lex.learned = true
+                        return lex
+                    end
+                end
+            end
+        end
+    end
     next_session = next_session + 1
     env.session_id = tostring(next_session)
     env.engine.context:set_property("_kagiroi_bunsetsu_session", env.session_id)
@@ -189,7 +218,24 @@ local function starting_nodes(viterbi, length)
     return starting
 end
 
-local function dictionary_nodes(viterbi, reading)
+local function is_grammar_id(id)
+    return id >= kFirstGrammarId and id <= kLastGrammarId
+end
+
+local function lexicon_entries(env, surface)
+    local entries, has_grammar = {}, false
+    for lex in env.viterbi:_lookup(surface) do
+        entries[#entries + 1] = lex
+        if not lex.learned and lex.candidate == surface
+            and is_grammar_id(lex.left_id) and is_grammar_id(lex.right_id) then
+            has_grammar = true
+        end
+    end
+    return entries, has_grammar
+end
+
+local function dictionary_nodes(env, reading)
+    local viterbi = env.viterbi
     local length = utf8.len(reading)
     if type(viterbi._lookup) ~= "function" then return starting_nodes(viterbi, length) end
     local offsets = {}
@@ -200,11 +246,13 @@ local function dictionary_nodes(viterbi, reading)
         local nodes = {}
         for last = first, length do
             local surface = reading:sub(offsets[first], offsets[last + 1] - 1)
-            for lex in viterbi:_lookup(surface) do
+            local entries, has_grammar = lexicon_entries(env, surface)
+            for _, lex in ipairs(entries) do
                 nodes[#nodes + 1] = {
-                    start = first, _end = last,
+                    start = first, _end = last, surface = surface,
                     candidate = lex.candidate, left_id = lex.left_id, right_id = lex.right_id,
-                    wcost = lex.cost,
+                    wcost = lex.cost, learned = lex.learned, has_grammar = has_grammar,
+                    grammar_misses = 0,
                 }
             end
         end
@@ -213,66 +261,188 @@ local function dictionary_nodes(viterbi, reading)
     return starting
 end
 
-local function completion_costs(starting, length, env, context)
-    local remaining = {}
+local function grammar_spans_within(spans, first, length)
+    local clipped = {}
+    for _, span in ipairs(spans or {}) do
+        local start = math.max(first, span.start)
+        local last = math.min(first + length - 1, span._end)
+        if start <= last then clipped[#clipped + 1] = { start = start - first + 1, _end = last - first + 1 } end
+    end
+    return clipped
+end
+
+local function spelling_parts(node, spans)
+    local parts, position = {}, node.start
+    for _, span in ipairs(spans or {}) do
+        local first, last = math.max(node.start, span.start), math.min(node._end, span._end)
+        if first <= last then
+            if position < first then parts[#parts + 1] = { wildcard = true } end
+            local first_byte = utf8.offset(node.surface, first - node.start + 1)
+            local after_byte = utf8.offset(node.surface, last - node.start + 2) or #node.surface + 1
+            parts[#parts + 1] = { literal = node.surface:sub(first_byte, after_byte - 1) }
+            position = last + 1
+        end
+    end
+    if position <= node._end then parts[#parts + 1] = { wildcard = true } end
+    return parts
+end
+
+local function spelling_preserves_grammar(node, spans)
+    local offsets = {}
+    for offset in utf8.codes(node.candidate) do offsets[#offsets + 1] = offset end
+    offsets[#offsets + 1] = #node.candidate + 1
+    local positions = { [1] = true }
+    for _, part in ipairs(spelling_parts(node, spans)) do
+        local next_positions = {}
+        if part.wildcard then
+            local first
+            for position in pairs(positions) do first = math.min(first or position, position) end
+            if first then
+                for _, after in ipairs(offsets) do
+                    if after > first then next_positions[after] = true end
+                end
+            end
+        else
+            for position in pairs(positions) do
+                if node.candidate:sub(position, position + #part.literal - 1) == part.literal then
+                    next_positions[position + #part.literal] = true
+                end
+            end
+        end
+        positions = next_positions
+    end
+    return positions[#node.candidate + 1] == true
+end
+
+local function apply_grammar_priority(starting, spans)
+    starting.has_grammar_priority = spans and #spans > 0
+    for _, nodes in ipairs(starting) do
+        for _, node in ipairs(nodes) do
+            node.grammar_misses = 0
+            if node.candidate ~= node.surface then
+                for _, span in ipairs(spans or {}) do
+                    local overlap = math.min(node._end, span._end) - math.max(node.start, span.start) + 1
+                    node.grammar_misses = node.grammar_misses + math.max(0, overlap)
+                end
+                if node.grammar_misses > 0 and spelling_preserves_grammar(node, spans) then
+                    node.grammar_misses = 0
+                end
+            end
+        end
+    end
+end
+
+local function grammar_priority(node)
+    return node.grammar_misses or 0
+end
+
+local function ordinary_priority()
+    return 0
+end
+
+local function completion_costs(starting, length, env, context, priority)
+    priority = priority or grammar_priority
+    local remaining, remaining_misses = {}, {}
     for position = length, 1, -1 do
         for _, node in ipairs(starting[position] or {}) do
             if node._end == length then
                 remaining[node] = right_boundary_term(env, context, node.right_id)
+                remaining_misses[node] = 0
             else
-                local best
+                local best, best_misses
                 for _, successor in ipairs(starting[node._end + 1] or {}) do
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     local tail = remaining[successor]
                     if conn and tail then
                         local cost = conn + successor.wcost + tail
-                        if not best or cost < best then best = cost end
+                        local misses = priority(successor) + remaining_misses[successor]
+                        if not best or rank_is_better(misses, cost, best_misses, best) then
+                            best, best_misses = cost, misses
+                        end
                     end
                 end
-                remaining[node] = best
+                remaining[node], remaining_misses[node] = best, best_misses
             end
         end
     end
-    return remaining
+    return remaining, remaining_misses
 end
 
-local function contextual_path_enum(reading, env, context, stock_texts, starting)
+local function ranked_path(reading, env, context)
     local length = utf8.len(reading)
+    local starting = dictionary_nodes(env, reading)
+    for position, nodes in ipairs(starting) do
+        local normal = {}
+        for _, node in ipairs(nodes) do
+            if not node.learned then normal[#normal + 1] = node end
+        end
+        starting[position] = normal
+    end
     local remaining = completion_costs(starting, length, env, context)
+    local path, current, best = {}, nil, math.huge
+    for _, node in ipairs(starting[1] or {}) do
+        local left = left_boundary_term(env, context, node.left_id)
+        local tail = remaining[node]
+        if left and tail and left + node.wcost + tail < best then
+            current, best = node, left + node.wcost + tail
+        end
+    end
+    while current do
+        path[#path + 1] = current
+        if current._end == length then return path end
+        local successor, cheapest = nil, math.huge
+        for _, node in ipairs(starting[current._end + 1] or {}) do
+            local conn = matrix_cost(env, current.right_id, node.left_id)
+            local tail = remaining[node]
+            if conn and tail and conn + node.wcost + tail < cheapest then
+                successor, cheapest = node, conn + node.wcost + tail
+            end
+        end
+        current = successor
+    end
+    return nil
+end
+
+local function ranked_path_enum(reading, env, context, stock_texts, starting, priority)
+    local length = utf8.len(reading)
+    local remaining, remaining_misses = completion_costs(starting, length, env, context, priority)
     local heap, cheapest_prefix = {}, {}
     local sequence = 0
-    local function offer(node, text, first_left, own, left_term)
+    local function offer(node, text, first_left, own, left_term, own_misses)
         local tail = remaining[node]
         if not tail then return end
         local prefixes = cheapest_prefix[node] or {}
         cheapest_prefix[node] = prefixes
         local key = text .. "|" .. first_left
         local previous = prefixes[key]
-        if previous and previous <= own then return end
-        prefixes[key] = own
+        if previous and not rank_is_better(own_misses, own, previous.misses, previous.own) then return end
+        local prefix = { own = own, misses = own_misses }
+        prefixes[key] = prefix
         sequence = sequence + 1
         heap_push(heap, {
             sequence = sequence,
             node = node, text = text, first_left_id = first_left,
-            own = own, left_term = left_term, key = key,
+            own = own, left_term = left_term, key = key, prefix = prefix,
             score = left_term + own + tail,
+            own_misses = own_misses, grammar_misses = own_misses + remaining_misses[node],
         })
     end
     for _, node in ipairs(starting[1] or {}) do
         local term = left_boundary_term(env, context, node.left_id)
-        if term then offer(node, node.candidate, node.left_id, node.wcost, term) end
+        if term then offer(node, node.candidate, node.left_id, node.wcost, term, priority(node)) end
     end
     local results, seen = {}, {}
     while heap[1] and #results < kContextualDiscoveryLimit do
         local path = heap_pop(heap)
         local node = path.node
-        if cheapest_prefix[node][path.key] == path.own then
+        if cheapest_prefix[node][path.key] == path.prefix then
             if node._end == length then
                 if not stock_texts[path.text] and not seen[path.text] then
                     seen[path.text] = true
                     results[#results + 1] = {
                         text = path.text, left_id = path.first_left_id,
                         right_id = node.right_id, own = path.own, score = path.score,
+                        grammar_misses = path.own_misses,
                     }
                 end
             else
@@ -280,7 +450,8 @@ local function contextual_path_enum(reading, env, context, stock_texts, starting
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     if conn then
                         offer(successor, path.text .. successor.candidate, path.first_left_id,
-                            path.own + conn + successor.wcost, path.left_term)
+                            path.own + conn + successor.wcost, path.left_term,
+                            path.own_misses + priority(successor))
                     end
                 end
             end
@@ -289,13 +460,23 @@ local function contextual_path_enum(reading, env, context, stock_texts, starting
     return results
 end
 
+local function contextual_path_enum(reading, env, context, stock_texts, starting)
+    local paths = ranked_path_enum(reading, env, context, stock_texts, starting, grammar_priority)
+    if starting.has_grammar_priority then
+        for _, path in ipairs(ranked_path_enum(reading, env, context, stock_texts, starting, ordinary_priority)) do
+            paths[#paths + 1] = path
+        end
+    end
+    return paths
+end
+
 local function apply_enumerated_paths(candidates, reading, enumerated)
     for _, item in ipairs(enumerated) do
         local matched = false
         for _, choice in ipairs(candidates) do
             if choice.text == item.text and choice.left_id == item.left_id
                 and choice.right_id == item.right_id then
-                choice.own = item.own
+                choice.own, choice.grammar_misses = item.own, item.grammar_misses
                 matched = true
                 break
             end
@@ -312,6 +493,7 @@ local function apply_enumerated_paths(candidates, reading, enumerated)
                 left_id = item.left_id,
                 right_id = item.right_id,
                 own = item.own,
+                grammar_misses = item.grammar_misses,
             }
         end
     end
@@ -336,14 +518,15 @@ local function text_route_pairs(starting, length, text, matrix_cost)
                             own, first_left = node.wcost, node.left_id
                         end
                         if own then
+                            local misses = (incoming.grammar_misses or 0) + (node.grammar_misses or 0)
                             local next_offset = from + #node.candidate - 1
                             if node._end == length then
                                 if next_offset == #text then
                                     local key = first_left .. " " .. node.right_id
                                     local current = pairs_by_key[key]
-                                    if not current or own < current.own then
-                                        pairs_by_key[key] =
-                                            { left_id = first_left, right_id = node.right_id, own = own }
+                                    if not current or rank_is_better(misses, own, current.grammar_misses, current.own) then
+                                        pairs_by_key[key] = { left_id = first_left, right_id = node.right_id,
+                                            own = own, grammar_misses = misses }
                                     end
                                 end
                             else
@@ -353,13 +536,15 @@ local function text_route_pairs(starting, length, text, matrix_cost)
                                 local key = first_left .. " " .. next_offset
                                 local existing = node_states[key]
                                 if existing then
-                                    if own < existing.own then existing.own = own end
+                                    if rank_is_better(misses, own, existing.grammar_misses, existing.own) then
+                                        existing.own, existing.grammar_misses = own, misses
+                                    end
                                 else
                                     local state = {
                                         node = node,
                                         first_left = first_left,
                                         offset = next_offset,
-                                        own = own,
+                                        own = own, grammar_misses = misses,
                                     }
                                     bucket[#bucket + 1] = state
                                     node_states[key] = state
@@ -407,7 +592,7 @@ local function attach_pair_routes(candidates, reading, env, starting, route_cach
             local matched = false
             for _, choice in ipairs(rows) do
                 if choice.left_id == route.left_id and choice.right_id == route.right_id then
-                    choice.own = route.own
+                    choice.own, choice.grammar_misses = route.own, route.grammar_misses
                     matched = true
                     break
                 end
@@ -424,6 +609,7 @@ local function attach_pair_routes(candidates, reading, env, starting, route_cach
                     left_id = route.left_id,
                     right_id = route.right_id,
                     own = route.own,
+                    grammar_misses = route.grammar_misses,
                 }
                 candidates[#candidates + 1] = rows[#rows]
             end
@@ -435,7 +621,8 @@ local function attach_contextual_costs(candidates, reading, env, context)
     local stock_texts = {}
     for _, choice in ipairs(candidates) do stock_texts[choice.text] = true end
     candidates.stock_texts = stock_texts
-    local starting = dictionary_nodes(env.viterbi, reading)
+    local starting = dictionary_nodes(env, reading)
+    apply_grammar_priority(starting, context and context.grammar_spans)
     local route_cache = {}
     attach_pair_routes(candidates, reading, env, starting, route_cache)
     context = context or { at_start = true, at_end = true }
@@ -456,7 +643,7 @@ end
 local function reorder_contextual(clause, env, context)
     local key = context_key(context)
     clause.discovered_contexts = clause.discovered_contexts or {}
-    if not clause.discovered_contexts[key] then
+    if context and not clause.discovered_contexts[key] then
         local enumerated = contextual_path_enum(clause.reading, env, context, clause.stock_texts, clause.starting)
         apply_enumerated_paths(clause.unfiltered, clause.reading, enumerated)
         attach_pair_routes(clause.unfiltered, clause.reading, env, clause.starting, clause.route_cache)
@@ -468,24 +655,39 @@ local function reorder_contextual(clause, env, context)
             clause.next_order = (clause.next_order or 0) + 1
             choice.order = clause.next_order
         end
-        local score = contextual_score(choice, env, context)
+        local score = context and contextual_score(choice, env, context)
         if score then
             scored[#scored + 1] = { choice = choice, score = score, position = choice.order }
         else
             unscored[#unscored + 1] = choice
         end
     end
-    if #scored == 0 then return end
+    if #scored == 0 and not clause.starting.has_grammar_priority then return end
     local preserve_filtered_choice = clause.candidates ~= clause.unfiltered
     local chosen = clause.candidates[clause.selected]
     local chosen_entry_text = chosen.entry and chosen.entry.text
     table.sort(scored, function(a, b)
+        local a_misses, b_misses = a.choice.grammar_misses or 0, b.choice.grammar_misses or 0
+        if a_misses ~= b_misses then return a_misses < b_misses end
         if a.score ~= b.score then return a.score < b.score end
         return a.position < b.position
     end)
     local reordered = {}
     for _, item in ipairs(scored) do reordered[#reordered + 1] = item.choice end
     for _, choice in ipairs(unscored) do reordered[#reordered + 1] = choice end
+    if clause.starting.has_grammar_priority then
+        local prioritized = {}
+        for position, choice in ipairs(reordered) do
+            prioritized[#prioritized + 1] = { choice = choice, position = position }
+        end
+        table.sort(prioritized, function(a, b)
+            local a_misses, b_misses = a.choice.grammar_misses or math.huge, b.choice.grammar_misses or math.huge
+            if a_misses ~= b_misses then return a_misses < b_misses end
+            return a.position < b.position
+        end)
+        reordered = {}
+        for _, item in ipairs(prioritized) do reordered[#reordered + 1] = item.choice end
+    end
     clause.unfiltered = reordered
     clause.filtered = nil
     if preserve_filtered_choice then return end
@@ -580,9 +782,11 @@ local function best_path_nodes(viterbi)
     return path
 end
 
-local function split_via_path(reading, env)
+local function split_via_path(reading, env, context)
     if not segmenter_loaded then return nil end
-    local path = best_path_nodes(env.viterbi)
+    local path
+    if env.viterbi.query_dict then path = ranked_path(reading, env, context)
+    else path = best_path_nodes(env.viterbi) end
     if not path or #path == 0 then return nil end
     local specs = {}
     local covered = 0
@@ -599,16 +803,19 @@ local function split_via_path(reading, env)
     if #current > 0 or covered ~= #reading then return nil end
     local mapped = {}
     for _, group in ipairs(specs) do
-        local surfaces, texts = {}, {}
-        for i, node in ipairs(group) do
-            surfaces[#surfaces + 1] = node.surface
+        local texts, offset = {}, 1
+        local spec = { left_id = group[1].left_id, words = {}, reading = "" }
+        mapped[#mapped + 1] = spec
+        for _, node in ipairs(group) do
             texts[#texts + 1] = node.candidate
-            if i == 1 then mapped[#mapped + 1] = { left_id = node.left_id } end
-            local spec = mapped[#mapped]
-            spec.reading = (spec.reading or "") .. node.surface
-            spec.text = table.concat(texts)
+            local length = utf8.len(node.surface)
+            spec.words[#spec.words + 1] = { start = offset, _end = offset + length - 1,
+                has_grammar = node.has_grammar }
+            offset = offset + length
+            spec.reading = spec.reading .. node.surface
             spec.right_id = node.right_id
         end
+        spec.text = table.concat(texts)
     end
     return mapped
 end
@@ -674,7 +881,7 @@ local function settle_contextual(context, state, env)
         local select_first = state.first_choices and state.first_choices[index]
         local before_left, before_right = selected_ids(clause)
         if not clause.filtered or clause.ranked_context ~= key then
-            if score_context then reorder_contextual(clause, env, score_context) end
+            if state.contextual and clause.own_attached then reorder_contextual(clause, env, score_context) end
             collect_filtered(context, state, index)
             clause.ranked_context = key
         end
@@ -687,7 +894,7 @@ local function settle_contextual(context, state, env)
 end
 
 local function split(reading, env)
-    local clauses = {}
+    local specs, clauses, grammar_spans = {}, {}, {}
     local contextual = false
     local position = 1
     while position <= #reading do
@@ -701,51 +908,71 @@ local function split(reading, env)
         if kana then
             env.viterbi:analyze(remaining)
             if viterbi_supports_context(env) then
-                local mapped = split_via_path(remaining, env)
+                local mapped = split_via_path(remaining, env, {
+                    at_start = position == 1, at_end = run_end > #reading,
+                    prev_right_id = 0, next_left_id = 0,
+                })
                 if mapped then
                     contextual = true
-                    for index, spec in ipairs(mapped) do
-                        local context = {
-                            at_start = #clauses == 0 and index == 1,
-                            at_end = index == #mapped,
-                            prev_right_id = 0,
-                            next_left_id = mapped[index + 1] and mapped[index + 1].left_id or 0,
-                        }
-                        if index > 1 then context.prev_right_id = mapped[index - 1].right_id end
-                        clauses[#clauses + 1] = new_clause(spec.reading, env, context, spec)
-                    end
-                    position = run_end
+                    for _, spec in ipairs(mapped) do specs[#specs + 1] = spec end
                     goto continue_run
                 end
             end
         end
         while remaining ~= "" do
             local prefix = remaining
-            if kana then
+            if kana and not viterbi_supports_context(env) then
                 env.viterbi:analyze(remaining)
                 local lex = env.viterbi:best_n_prefix()()
                 if lex and lex.surface ~= "" then prefix = lex.surface end
             end
-            clauses[#clauses + 1] = new_clause(prefix, env)
+            specs[#specs + 1] = { reading = prefix }
             remaining = remaining:sub(#prefix + 1)
         end
         ::continue_run::
         position = run_end
     end
-    return clauses, contextual
+    local word_count = 0
+    for _, spec in ipairs(specs) do word_count = word_count + (spec.words and #spec.words or 1) end
+    local offset = 1
+    if word_count > 1 then
+        for _, spec in ipairs(specs) do
+            for _, word in ipairs(spec.words or {}) do
+                if word.has_grammar then
+                    grammar_spans[#grammar_spans + 1] = {
+                        start = offset + word.start - 1, _end = offset + word._end - 1,
+                    }
+                end
+            end
+            offset = offset + utf8.len(spec.reading)
+        end
+    end
+    offset = 1
+    for index, spec in ipairs(specs) do
+        local length = utf8.len(spec.reading)
+        local context = {
+            at_start = index == 1, at_end = index == #specs,
+            prev_right_id = specs[index - 1] and specs[index - 1].right_id or 0,
+            next_left_id = specs[index + 1] and specs[index + 1].left_id or 0,
+            grammar_spans = grammar_spans_within(grammar_spans, offset, length),
+        }
+        clauses[#clauses + 1] = new_clause(spec.reading, env, context, spec.left_id and spec or nil)
+        offset = offset + length
+    end
+    return clauses, contextual, grammar_spans
 end
 
 function Top.start(context, reading, katakana)
     local env = session(context)
-    local clauses, contextual
+    local clauses, contextual, grammar_spans
     if katakana then
         clauses = { new_clause(reading, env) }
     else
-        clauses, contextual = split(reading, env)
+        clauses, contextual, grammar_spans = split(reading, env)
     end
     if katakana then clauses[1].override = katakana end
     env.conversion = { reading = reading, clauses = clauses, active = 1,
-        henkan = katakana ~= nil, contextual = contextual }
+        henkan = katakana ~= nil, contextual = contextual, grammar_spans = grammar_spans }
     if contextual then
         env.conversion.first_choices = {}
         for index in ipairs(clauses) do env.conversion.first_choices[index] = true end
@@ -846,11 +1073,25 @@ function Top.resize(context, direction)
         right_reading = right_reading:sub(second)
     end
     local env = session(context)
-    state.clauses[index] = new_clause(left_reading, env)
+    local first = 1
+    for previous = 1, index - 1 do first = first + utf8.len(state.clauses[previous].reading) end
+    local left_length = utf8.len(left_reading)
+    local left_context = {
+        at_start = index == 1,
+        at_end = index == #state.clauses or (index + 1 == #state.clauses and right_reading == ""),
+        prev_right_id = 0, next_left_id = 0,
+        grammar_spans = grammar_spans_within(state.grammar_spans, first, left_length),
+    }
+    state.clauses[index] = new_clause(left_reading, env, left_context)
     local right_reshaped = right_reading ~= ""
+    local right_context = {
+        at_start = false, at_end = index + 1 >= #state.clauses,
+        prev_right_id = 0, next_left_id = 0,
+        grammar_spans = grammar_spans_within(state.grammar_spans, first + left_length, utf8.len(right_reading)),
+    }
     if right_reading == "" then table.remove(state.clauses, index + 1)
-    elseif right then state.clauses[index + 1] = new_clause(right_reading, env)
-    else table.insert(state.clauses, index + 1, new_clause(right_reading, env)) end
+    elseif right then state.clauses[index + 1] = new_clause(right_reading, env, right_context)
+    else table.insert(state.clauses, index + 1, new_clause(right_reading, env, right_context)) end
     state.henkan = false
     state.first_choices = { [index] = true }
     if right_reshaped then state.first_choices[index + 1] = true end
@@ -930,6 +1171,8 @@ end
 -- entries use the generic noun ids (dotfiles/rime/SPEC.md, "確定と次入力").
 local function learnable_entry(entry)
     if not entry then return nil end
+    local text = entry.text:match("^(.*)|%-?%d+ %-?%d+$") or entry.text
+    if is_hiragana(text) then return nil end
     local stored = DictEntry(entry)
     stored.text = string.gsub(entry.text, "|%-?%d+ %-?%d+$", "|1851 1851")
     return stored

@@ -632,6 +632,8 @@ static void preview_text(char* buffer, size_t size);
 static Bool preview_equals(const char* expected);
 static Bool menu_hidden(void);
 static void selected_text(char* buffer, size_t size);
+static Bool active_reading_equals(const char* expected);
+static int full_list_index_of(const char* text);
 
 static void test_zenkaku_hankaku_keeps_composition(void) {
     char commit[256];
@@ -3313,50 +3315,152 @@ static void test_learning_promotes_committed_sentences(void) {
     check(promoted, "the committed sentence must lead the hidden conversion after learning");
 }
 
-/* しか keeps connection ids that lose the lattice on connection costs even
- * though its own cost is the lowest. Committing it must still promote it
- * (dotfiles/rime/SPEC.md, "確定と次入力"). */
-static void test_learning_promotes_disfavoured_connection_candidate(void) {
-    RIME_STRUCT(RimeContext, context);
-    char commit[256];
-
-    for (int round = 0; round < 8; ++round) {
+static void check_contextual_first_conversions(void) {
+    static const struct { const char* input; const char* text; } conversions[] = {
+        {"sika", "歯科"}, {"kara", "空"},
+        {"karatoukyou", "から東京"}, {"tibakara", "千葉から"},
+        {"koresikanai", "これしかない"}, {"sakana", "魚"}, {"sakanaga", "魚が"},
+    };
+    for (size_t i = 0; i < sizeof(conversions) / sizeof(conversions[0]); ++i) {
         fresh_session();
-        type_text("sika");
+        type_text(conversions[i].input);
         press(kSpace);
-        press(kSpace);
-        if (!current_menu(&context)) {
-            check(False, "the sika menu must exist during every learning round");
-            rime->free_context(&context);
-            return;
-        }
-        int highlighted = context.menu.highlighted_candidate_index;
-        int found = -1;
-        for (int i = 0; i < context.menu.num_candidates; ++i) {
-            const char* text = context.menu.candidates[i].text;
-            if (text && strcmp(text, "しか") == 0) found = i;
-        }
-        rime->free_context(&context);
-        check(found >= 0, "every sika learning round must keep しか visible");
-        if (found < 0) return;
-        int steps = (found - highlighted + 10) % 10;
-        for (int i = 0; i < steps; ++i) press(kDown);
-        selected_text(commit, sizeof(commit));
-        check(strcmp(commit, "しか") == 0,
-              "every sika learning round must select しか before committing");
-        if (strcmp(commit, "しか") != 0) return;
-        press(kReturn);
-        check(take_commit(commit, sizeof(commit)) && strcmp(commit, "しか") == 0,
-              "every sika learning round must commit しか");
+        char description[256];
+        snprintf(description, sizeof(description), "%s must use the contextual first with stored learning",
+                 conversions[i].input);
+        check(menu_hidden() && preview_equals(conversions[i].text), description);
     }
+}
+
+static void test_fixed_grammar_kana_and_hiragana_learning(void) {
+    static const struct {
+        const char* input;
+        const char* text;
+        int rounds;
+        const char* isolated_first;
+    } learned[] = {
+        {"sika", "しか", 8, "歯科"}, {"kara", "空", 8, NULL}, {"sakana", "さかな", 32, "魚"},
+    };
+    char commit[256], description[256];
+    for (size_t word = 0; word < sizeof(learned) / sizeof(learned[0]); ++word) {
+        for (int round = 0; round < learned[word].rounds; ++round) {
+            fresh_session();
+            type_text(learned[word].input);
+            press(kSpace);
+            if (learned[word].isolated_first) {
+                snprintf(description, sizeof(description), "%s round %d must keep its isolated first",
+                         learned[word].input, round);
+                check(preview_equals(learned[word].isolated_first), description);
+            }
+            press(kSpace);
+            RIME_STRUCT(RimeContext, context);
+            if (!current_menu(&context)) {
+                check(False, "every contextual learning round must expose a menu");
+                rime->free_context(&context);
+                return;
+            }
+            int highlighted = context.menu.highlighted_candidate_index;
+            int count = context.menu.num_candidates;
+            int found = -1;
+            for (int i = 0; i < count; ++i) {
+                const char* text = context.menu.candidates[i].text;
+                if (text && strcmp(text, learned[word].text) == 0) found = i;
+            }
+            rime->free_context(&context);
+            snprintf(description, sizeof(description), "%s round %d must retain the learned choice",
+                     learned[word].input, round);
+            check(found >= 0, description);
+            if (found < 0) return;
+            int steps = (found - highlighted + count) % count;
+            for (int i = 0; i < steps; ++i) press(kDown);
+            selected_text(commit, sizeof(commit));
+            check(strcmp(commit, learned[word].text) == 0,
+                  "every contextual learning round must select the intended choice");
+            press(kReturn);
+            check(take_commit(commit, sizeof(commit)) && strcmp(commit, learned[word].text) == 0,
+                  "every contextual learning round must commit the intended choice");
+        }
+    }
+
+    check_contextual_first_conversions();
 
     fresh_session();
     type_text("sika");
     press(kSpace);
-    char preview[128] = "";
-    preview_text(preview, sizeof(preview));
-    check(strcmp(preview, "しか") == 0,
-          "the committed しか must lead the sika conversion after learning");
+    press(kSpace);
+    selected_text(commit, sizeof(commit));
+    check(strcmp(commit, "しか") == 0, "hiragana must remain manually selectable in isolation");
+
+    fresh_session();
+    type_text("karatoukyou");
+    press(kSpace);
+    for (int i = 0; i < 5; ++i) press_shift(kRight);
+    check(preview_equals("から東京"), "merging all clauses must retain the leading particle preference");
+    press(kSpace);
+    check(active_reading_equals("からとうきょう"),
+          "the particle preference must also apply when multiple words share one clause");
+
+    fresh_session();
+    type_text("koresikanai");
+    press(kSpace);
+    for (int i = 0; i < 2; ++i) press_shift(kRight);
+    check(preview_equals("これしかない"), "one clause must keep its internal particle and final kana");
+    press(kSpace);
+    check(active_reading_equals("これしかない"), "one clause must not be treated as a single word");
+
+    fresh_session();
+    type_text("kaita");
+    press(kSpace);
+    check(preview_equals("かいた"), "same-reading grammar candidates must use fixed kana without interpreting the verb");
+
+    fresh_session();
+    type_text("sakanaga");
+    press(kSpace);
+    check(preview_equals("魚が"), "stored hiragana noun learning must be ignored inside a clause");
+
+    static const struct { const char* input; const char* text; } fallback_cases[] = {
+        {"karak", "からk"}, {"qkara", "qから"}, {"karaqtoukyou", "からq東京"},
+        {"qkarak", "qからk"}, {"karatoukyouk", "から東京k"},
+    };
+    for (size_t i = 0; i < sizeof(fallback_cases) / sizeof(fallback_cases[0]); ++i) {
+        fresh_session();
+        type_text(fallback_cases[i].input);
+        press(kSpace);
+        check(menu_hidden() && preview_equals(fallback_cases[i].text),
+              "fixed kana must remain first beside unfinished roman or alphabetic input");
+        press(kSpace);
+        check(!menu_hidden(), "the candidate list must still open beside an id-less clause");
+    }
+    fresh_session();
+    type_text("karak");
+    press(kSpace);
+    press(kSpace);
+    press(kTab);
+    int target = full_list_index_of("空");
+    check(target >= 0, "the complete fallback-adjacent list must retain the kanji alternative");
+    RIME_STRUCT(RimeContext, fallback_context);
+    if (target >= 0 && current_menu(&fallback_context)) {
+        int current = fallback_context.menu.page_no * fallback_context.menu.page_size
+            + fallback_context.menu.highlighted_candidate_index;
+        rime->free_context(&fallback_context);
+        while (current < target) { press(kDown); ++current; }
+        while (current > target) { press(kUp); --current; }
+    }
+    check(preview_equals("空k"), "a kanji alternative beside unfinished input must remain selectable");
+    press(kEscape);
+    check(preview_equals("空k"), "closing the list must retain the explicit kanji choice beside unfinished input");
+    press_shift(kRight);
+    check(preview_equals("からk"), "absorbing unfinished input must keep the fixed kana range");
+    press_shift(kLeft);
+    check(preview_equals("からk"), "restoring the boundary must keep fixed kana beside the id-less clause");
+}
+
+static void test_contextual_learning_survives_engine_restart(void) {
+    rime->destroy_session(session);
+    session = 0;
+    rime->finalize();
+    rime->initialize(NULL);
+    check_contextual_first_conversions();
 }
 
 static void preview_text(char* buffer, size_t size) {
@@ -3965,14 +4069,14 @@ static void test_bunsetsu_deep_candidates_stay_contextual(void) {
     int before[3];
     int kaori_before = full_list_index_of("馨は");
     int today_leaf_before = full_list_index_of("今日葉");
-    check(kaori_before >= 0 && today_leaf_before >= 0 && today_leaf_before < kaori_before,
-          "with neighbor left id 2416, 今日葉 (15530) must precede 馨は (16483)");
+    check(kaori_before >= 0 && today_leaf_before > kaori_before,
+          "the fixed particle spelling in 馨は must precede 今日葉 despite its higher connection cost");
     for (int i = 0; i < 3; ++i) {
         before[i] = full_list_index_of(deep_texts[i]);
-        check(before[i] > 30,
-              "the deep stock texts must sit beyond the first page before the neighbor switch");
+        check(before[i] >= 0 && before[i] < today_leaf_before,
+              "every stock text with the fixed particle must remain ahead of 今日葉");
         check(kaori_before >= 0 && before[i] > kaori_before,
-              "with neighbor left id 2416, 馨は (16483) must precede each deep stock text (17594)");
+              "normal connection costs still order candidates that preserve the same fixed particle");
     }
     press(kEscape);
     press(kRight);
@@ -3983,14 +4087,14 @@ static void test_bunsetsu_deep_candidates_stay_contextual(void) {
     press(kTab);
     int kaori_after = full_list_index_of("馨は");
     int today_leaf_after = full_list_index_of("今日葉");
-    check(kaori_after >= 0 && today_leaf_after >= 0 && kaori_after < today_leaf_after,
-          "with neighbor left id 1899, 馨は (14387) must precede 今日葉 (14668), reversing the relation");
+    check(kaori_after >= 0 && today_leaf_after > kaori_after,
+          "the fixed particle must keep 馨は ahead of 今日葉 after the neighbor changes");
     for (int i = 0; i < 3; ++i) {
         int after = full_list_index_of(deep_texts[i]);
-        check(after >= 0 && after < before[i],
-              "switching the right neighbor must lift the deep contextual texts");
-        check(kaori_after >= 0 && after > kaori_after && after > today_leaf_after,
-              "with neighbor left id 1899, 馨は (14387) and 今日葉 (14668) must precede each deep text (15498)");
+        check(after >= 0 && after < today_leaf_after,
+              "switching the right neighbor must retain every stock text with the fixed particle");
+        check(kaori_after >= 0 && after > kaori_after,
+              "normal connection costs still order the fixed-particle candidates after a neighbor change");
     }
     fresh_session();
     type_text("kou");
@@ -4566,7 +4670,7 @@ int main(int argc, char* argv[]) {
          * the learned order the baseline comparison depends on. */
         test_learning_promotes_committed_candidate,
         test_learning_promotes_committed_sentences,
-        test_learning_promotes_disfavoured_connection_candidate,
+        test_fixed_grammar_kana_and_hiragana_learning,
         /* These must also run before any test commits a kyouhakare- sentence:
          * the committed reading's joined entry leads the same reading in a
          * fresh conversion and would shift the baselines below. */
@@ -4643,6 +4747,7 @@ int main(int argc, char* argv[]) {
         test_off_reservation_and_fixed_text,
         test_retained_list_transitions,
         test_reading_candidates_include_kanji,
+        test_contextual_learning_survives_engine_restart,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
         tests[i]();
