@@ -1,6 +1,15 @@
 # Kagiroi日本語入力
 
-Windows の Weasel と Linux の fcitx5-rime で共通に使うRimeユーザー設定の仕様である。Kagiroi のスキーマ・辞書・Luaプラグインが利用可能な環境を前提とし、利用者と実装・検証担当者が「今の状態でキーを押した結果」を読むために定める。設定ファイルは dotfiles で管理する。
+Windows の Weasel と Linux の fcitx5-rime で共通に使うRimeユーザー設定の仕様である。Kagiroi のスキーマ・辞書・Luaプラグインが利用可能な環境を前提とし、利用者と実装・検証担当者が「今の状態でキーを押した結果」を読むために定める。
+
+独自拡張の主な対象と参照先は次のとおり。
+
+- 入力・編集: [共通の文字対応](#共通の文字対応)と[操作の細則](#操作の細則)。独自ローマ字・入力後補正、確定・削除・取消・キー割当。
+- モード切替: [IME OFF の操作](#ime-off-の操作)と[半角切替と OFF予約](#半角切替と-off予約)。半角未確定入力、OFF予約、[大文字連続後の復帰](#大文字連続後のローマ字入力への切替)。
+- 変換: [文節と境界変更](#文節と境界変更)。文節操作、接続を使う候補順位、助詞・助動詞のかな優先。
+- 候補: [候補一覧の見た目](#候補一覧の見た目)と[変換候補と学習](#変換候補と学習)。一覧の開閉・展開、[候補の循環](#候補選択の循環)・学習、登録語句。
+
+用語と状態の前提は次のとおり。
 
 - 日本語入力と半角英数入力は IME ON。半角英数入力も未確定文字列を編集する。IME OFF は半角文字をアプリへ直接入力し、未確定文字列を作らない。
 - 読みはローマ字入力から得たかな等の文字列、語は通常辞書と連接評価で読みを区切る単位、文節は変換・選択する連続した読みの区間。1文節に複数語を含む場合がある。`|` は文節境界、対象文節は今操作している文節を表す。語数と画面上の文節数は一致するとは限らない。
@@ -28,9 +37,9 @@ Windows の Weasel と Linux の fcitx5-rime で共通に使うRimeユーザー�
 
 ## キーと状態の操作表
 
-この表は IME ON の5状態におけるキー操作を示す。各セルは主な動作と遷移先を示し、条件による分岐や保持する内容はリンク先の細則に定める。文字追加など状態を変えない操作は、遷移先を省く。文字追加には[文字追加](#文字追加)、予約には[OFF予約の解除と保持](#off-予約の解除と保持)の共通処理を適用する。
+この表は IME ON の5状態におけるキー操作を示す。各セルは主な動作と遷移先を示し、条件による分岐や保持する内容はリンク先の細則に定める。文字追加など状態を変えない操作は、遷移先を省く。文字追加には[文字追加](#文字追加)、予約には[OFF予約の解除と保持](#off予約の解除と保持)の共通処理を適用する。
 
-- Rime に届くキーのうち、IME ON / OFF の切替キーは `Muhenkan` / `Zenkaku_Hankaku` のみ。OFF予約後の移行は[OFF予約の解除と保持](#off-予約の解除と保持)に従う。
+- Rime に届くキーのうち、IME ON / OFF の切替キーは `Muhenkan` / `Zenkaku_Hankaku` のみ。OFF予約後の移行は[OFF予約の解除と保持](#off予約の解除と保持)に従う。
 - 「状態を保持」は、モード・予約・未確定文字列・一覧の開閉/展開/選択をすべて保持することを表す。
 - 「未規定」は、この仕様で個別のキー×状態の動作を定めていないことを表す。表にないキー×状態の組合せも未規定であり、無操作とは区別する。
 - `-` は無操作を表す。
@@ -187,7 +196,7 @@ IME OFF で非修飾の `Zenkaku_Hankaku` press の後、続く `ka` は `か` �
 
 ### ローマ字の対応
 
-ローマ字からかなへの対応の正本も同じ `dotfiles/rime/zenkaku.data.yaml` の宣言であり、宣言の内容はこの仕様に繰り返さない。`dotfiles/rime/zenkaku.build.ts` が build時に宣言から `kagiroi_dotfiles_zenkaku.dict.yaml` と実行時データの `lua/kagiroi/zenkaku_rules.lua`・`lua/kagiroi/zenkaku_text.lua` を生成し、リポジトリには置かない。辞書本体のレコード行（`かな\tローマ字\t1` の行）は Unicodeコードポイント順にソートして出力する。宣言の編集の仕方によらず出力行順を決定的に保つためであり、宣言の並び順は出力に反映されない。宣言は MS-IME用の宣言（`undotfiles/ime/roma-table.yaml`）から独立しており、両者の一致は保証しない。Kagiroi標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。宣言と Kagiroi標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
+ローマ字からかなへの対応の正本も同じ `dotfiles/rime/zenkaku.data.yaml` の宣言であり、宣言の内容はこの仕様に繰り返さない。`dotfiles/rime/zenkaku.build.ts` が build時に宣言から `kagiroi_dotfiles_zenkaku.dict.yaml` と実行時データの `lua/kagiroi/zenkaku_rules.lua`・`lua/kagiroi/zenkaku_text.lua` を生成する。辞書本体のレコード行（`かな\tローマ字\t1` の行）は Unicodeコードポイント順にソートして出力する。宣言の編集の仕方によらず出力行順を決定的に保つためであり、宣言の並び順は出力に反映されない。宣言は MS-IME用の宣言（`undotfiles/ime/roma-table.yaml`）から独立しており、両者の一致は保証しない。Kagiroi標準の `kagiroi_romaji` 辞書は `import_tables` で取り込まず、`speller/algebra` の派生綴り（`ti` → `chi` など）も無効にする。宣言と Kagiroi標準の綴り衝突は宣言側のかなで置き換わる（`wi` は `うぃ`、`tha` は `ちゃ`、`va` は `ヴぁ`、`lka` は `ヵ` など）。
 
 未確定文字列のうち、末尾から連続する英字列だけをローマ字として扱う。ローマ字列の末尾から宣言に一致する最長の綴りをかなへ変換し、一致しなかった先頭の英字は原文のまま表示する。
 
@@ -362,10 +371,6 @@ Rime の選択スキーマは Kagiroi とする。ローマ字入力は Kagiroi�
 - Windows / Weasel: `%APPDATA%/Rime`
 - Linux / fcitx5-rime: `~/.local/share/fcitx5/rime`
 
-dotfiles は共通の `default.custom.yaml`、`kagiroi.custom.yaml`、`kagiroi_romaji.custom.yaml`、宣言 `zenkaku.data.yaml` と生成スクリプト `zenkaku.build.ts`、条件付き変換・入力後補正と共通キー・候補操作の Lua、Weasel固有の `weasel.custom.yaml`、Linux固有の fcitx5設定 `fcitx5/config` と `fcitx5/conf/rime.conf` を管理する。条件付き変換（`conditionals`）と入力後補正（`postroma`）の対応は `zenkaku.data.yaml` に宣言し、実行時の対応データも build時に生成する。`fcitx5/conf/rime.conf` は、Linux の fcitx5-rime のアプリ内未確定表示を制御する設定として `~/.config/fcitx5/conf/rime.conf` へ配置する。Linux の fcitx5 では、`fcitx5/config` が `Muhenkan` を入力メソッドの無効化に割り当てる。fcitx5 が入力メソッドを無効化している間はキーが Rime に渡らず、fcitx5 の標準トリガーで戻る。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
+`fcitx5/conf/rime.conf` は、Linux の fcitx5-rime のアプリ内未確定表示を制御する設定として `~/.config/fcitx5/conf/rime.conf` へ配置する。Linux の fcitx5 では、`fcitx5/config` が `Muhenkan` を入力メソッドの無効化に割り当てる。fcitx5 が入力メソッドを無効化している間はキーが Rime に渡らず、fcitx5 の標準トリガーで戻る。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
 
 Windows の Weasel では入力状態の通知とトレイアイコンを表示しない。候補パネルは日本語字形の `Yu Gothic UI` で描画する。CJK統合漢字の字形はフォントが決めるため、中国語フォントのままだと確定テキストと候補で字形がずれる。fcitx5 の候補ウィンドウも同じ理由で `fcitx5/conf/classicui.conf` が日本語字形の `Noto Sans CJK JP` を使う。
-
-## 開発と検証
-
-変更はこの SPEC、対応する自動テスト、実装の順に同期する。対応の変更は `zenkaku.data.yaml` の宣言に対して行い、辞書と実行時データは `zenkaku.build.ts` が build時に生成する。完了判定は `just test-rime` の成功とし、Windows の Weasel と Linux の fcitx5-rime での実機確認を要しない。
