@@ -61,9 +61,9 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 | --- | --- |
 | ブラウザの決定順 | 環境変数 `HTMLSHOT_BROWSER` → `~/.cache/ms-playwright/chromium-*` のうちバージョン番号が最大の配下の `chrome-linux64/chrome`、無いとき `chrome-linux/chrome` → PATH上の `chromium`・`chromium-browser`・`google-chrome-stable`・`google-chrome` の最初に見つけたもの |
 | 読み込み | 正本の絶対パスの `file://` URL |
-| 起動フラグ | `--headless`、`--screenshot=<一時ファイル>`、`--window-size=<width>,<height>`、`--force-device-scale-factor=<scale>`、`--hide-scrollbars`、`--virtual-time-budget=5000` |
+| 起動フラグ | `--headless`、`--screenshot=<一時ファイル>`、`--window-size=<width>,<height>`、`--force-device-scale-factor=<scale>`、`--default-background-color=00000000`、`--hide-scrollbars`、`--virtual-time-budget=5000` |
 | 既定のレンダ設定 | width 1200、height 800。`--scale` を省略したときの scale は、width が height 以上のとき 1920 ÷ width、それ以外のとき 1080 ÷ height を四捨五入し、1〜3 の範囲に制限した値。`--width`・`--height`・`--scale` で変更する |
-| 背景 | Chromium の既定（白）。正本が body等で上書きできる |
+| 背景 | 既定は透明。HTML/CSS で背景未指定または `transparent` の領域は alpha 0、`white` は白で alpha 255、その他の色は指定どおりに描画する。半透明の描画要素のアルファ値も保持する |
 | タイムアウト | レンダ開始から 30秒でプロセスを終了し、非0 で終了する |
 
 - レンダで得たPNG の `IEND` 直前に `iTXt` を挿入し、出力先へ書き出す。他の chunk は変更しない。
@@ -98,7 +98,8 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 ## 決定性
 
-- 同一の正本・レンダ設定・Chromiumバージョン・フォント環境では、shot は同じピクセルの製本を生成することを意図とする。フォント環境や Chromium のバージョンが異なる再製本ではピクセルが変わることがある。
+- 静的で自己完結した同一の正本を、同一の寸法・倍率・Chromiumバージョン・フォント環境で shotした場合、RGBA画素が一致する。extract後の正本と verify出力の寸法・倍率で再shotする場合も同じである。フォント環境や Chromium のバージョンが異なる再製本では画素が変わることがある。
+- 白を既定背景として撮影された既存の製本も extract・verifyできる。その正本に背景指定がなければ、再shot時の背景は透明になる。白背景を再現するときは、正本HTML の CSS で白を指定する。
 - round-trip のバイト一致を保証するのは HTML についてのみであり、PNGバイト列全体の一致は保証しない。
 
 ## 前提と依存

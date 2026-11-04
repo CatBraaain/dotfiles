@@ -13,7 +13,7 @@ description: HTML/CSS で図・図解・図表・フローチャート・シー�
 
 ## CLI
 
-実行は `~/.agents/cli/htmlshot` で行う。apply が owner実行権を付与する単一実行ファイルであり、依存のインストールも不要である。
+実行は `~/.agents/cli/htmlshot` で行う。単一実行ファイルであり、依存のインストールも不要である。
 
 ```
 usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>] [--scale <n>] [--unsafe]
@@ -28,7 +28,9 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 1. 正本HTML を書く。CSS は `<style>` で同一ファイルに完結させ、キャンバス寸法は body で固定する
 2. `<script>` と外部参照（`http:`・`https:`・`//`・`file:`）は検出されると shotが失敗する。同一入力からの同一レンダを保ち、画像の中に実行コードを持ち込まないためである。画像・フォントは `data:` URL で埋め込む
 3. `htmlshot shot NAME.html --width <w> --height <h>` で `NAME.html.png` を生成する。サイズは図に合わせて指定し、固定サイズで生成するときは全要素がその寸法に収まることをレイアウトで担保する。`--scale` を省略すると FHD に近づく倍率（1〜3）が選ばれ、ピクセル寸法は 指定寸法 × 倍率 になる（横長・正方形は幅 1920px 目標、縦長は高さ 1080px 目標）
-4. `htmlshot verify NAME.html.png` でフォーマットとチェックサムを確認する
+4. `htmlshot verify NAME.html.png` でフォーマットとチェックサム、寸法・倍率を確認する
+
+撮影時の既定背景は透明であり、背景未指定または `background: transparent` の領域は透過する。白背景が必要なら CSS に `body { background: #fff; }` を書く。他の色も CSS で指定する。半透明の描画要素もそのまま保持されるため、背景は HTML/CSS だけで制御できる。
 
 `--unsafe` は制約検出を無視して続行するオプションであり、使ったときは警告行を確認すること。通常は使わない。
 
@@ -47,9 +49,11 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 1. `htmlshot extract NAME.html.png` で正本を `NAME.html` に取り出す。checksum検証つきでバイト一致する
 2. 取り出したHTML を編集する
-3. 同じ寸法で再shotし、既存の `.html.png` を更新する
+3. 同じ寸法・倍率で再shotし、既存の `.html.png` を更新する
 
-寸法と倍率の復元は `htmlshot verify NAME.html.png` の出力 `<width>x<height>@<scale>x` で行う。width・height・scale をそのまま `--width`・`--height`・`--scale` へ渡す。
+寸法と倍率の復元は `htmlshot verify NAME.html.png` の出力 `<width>x<height>@<scale>x` で行う。width・height・scale をそのまま `htmlshot shot NAME.html --width <width> --height <height> --scale <scale>` へ渡す。静的で自己完結した同一HTML を、同じ寸法・倍率・Chromium・フォント環境で再shotした場合、RGBA画素は一致する。
+
+白を既定背景として撮影した既存PNG から背景未指定のHTML を取り出して再shotすると、背景は透明になる。白背景が必要なら、取り出したHTML の CSS に白を指定する。
 
 `checksum mismatch` は PNG が壊れていることを示す。その場合は当該ファイルを正本として扱わず報告する。
 

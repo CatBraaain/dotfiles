@@ -28,6 +28,7 @@ const AUTO_SCALE_MAX = 3;
 const PATH_BROWSERS = ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome"];
 const VIRTUAL_TIME_BUDGET_MILLISECONDS = 5000;
 const RENDER_TIMEOUT_MILLISECONDS = 30000;
+const TRANSPARENT_BACKGROUND_COLOR = "00000000";
 
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
@@ -97,6 +98,7 @@ function renderPng(browserPath: string, htmlPath: string, render: RenderSettings
         `--screenshot=${screenshotPath}`,
         `--window-size=${render.width},${render.height}`,
         `--force-device-scale-factor=${render.scale}`,
+        `--default-background-color=${TRANSPARENT_BACKGROUND_COLOR}`,
         "--hide-scrollbars",
         `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MILLISECONDS}`,
         pathToFileURL(htmlPath).href,
