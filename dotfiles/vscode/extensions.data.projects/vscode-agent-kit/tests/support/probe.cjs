@@ -8,8 +8,6 @@ exports.activate = function activate(context) {
     if (busy) return;
     busy = true;
     try {
-      const extension = vscode.extensions.getExtension("vscode.git");
-      const git = extension ? (await extension.activate()).getAPI(1) : undefined;
       const snapshot = {
         hostPid: process.pid,
         folders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath),
@@ -33,10 +31,6 @@ exports.activate = function activate(context) {
             modified: tab.input?.modified?.toString(),
           })),
         ),
-        repositories: git?.repositories.map((repository) => ({
-          root: repository.rootUri.fsPath,
-          selected: repository.ui.selected,
-        })),
       };
       const target = path.join(process.env.PI_REVIEW_BASE, "snapshot.json");
       fs.writeFileSync(`${target}.tmp`, JSON.stringify(snapshot));

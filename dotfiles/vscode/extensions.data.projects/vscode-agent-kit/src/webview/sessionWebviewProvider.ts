@@ -9,7 +9,7 @@ import {
   setSessionLocked,
 } from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
-import { followWorkTarget, requireWorkDirectory } from "../workTarget";
+import { requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
 import { parseWebviewRequest, type ExtensionMessage } from "./protocol";
@@ -115,8 +115,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "openSession") {
-      const editorUri = vscode.window.activeTextEditor?.document.uri;
-      await this.deps.registry.run(() => this.openSession(request.sessionId, editorUri));
+      await this.deps.registry.run(() => this.openSession(request.sessionId));
       return;
     }
     if (request.type === "setSessionLock") {
@@ -149,7 +148,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
   }
 
-  private async openSession(sessionId: string, editorUri: vscode.Uri | undefined): Promise<void> {
+  private async openSession(sessionId: string): Promise<void> {
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
@@ -187,13 +186,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     await this.refresh();
-    try {
-      await followWorkTarget(session.cwd, editorUri);
-    } catch (error) {
-      this.postError(`Failed to show session files or changes: ${errorMessage(error)}`);
-    } finally {
-      terminal.show();
-    }
+    terminal.show();
   }
 
   private post(message: ExtensionMessage): void {

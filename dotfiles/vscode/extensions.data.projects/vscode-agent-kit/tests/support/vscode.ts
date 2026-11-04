@@ -42,7 +42,6 @@ export interface Snapshot {
     original?: string;
     modified?: string;
   }[];
-  repositories: { root: string; selected: boolean }[];
 }
 
 export class VSCodeFixture {
@@ -56,8 +55,9 @@ export class VSCodeFixture {
   app!: ElectronApplication;
   page!: Page;
   private traceStarted = false;
+  private readonly projectDirectories = { A: "project-a", B: "worktree/project-b" };
 
-  constructor(private readonly projectDirectories = { A: "project", B: "worktree/project" }) {
+  constructor() {
     this.prepareRepositories();
     this.prepareSessions();
     this.prepareHost();
@@ -106,9 +106,6 @@ export class VSCodeFixture {
     this.page = await this.app.firstWindow();
     await this.page.locator(".monaco-workbench").waitFor();
     await expect.poll(() => this.snapshot().hostPid).toBeGreaterThan(0);
-    await expect
-      .poll(() => this.snapshot().repositories.length, { timeout: 30_000 })
-      .toBeGreaterThan(0);
   }
 
   async close(tracePath: string): Promise<void> {
@@ -131,21 +128,15 @@ export class VSCodeFixture {
         folders: [],
         terminals: [],
         tabs: [],
-        repositories: [],
       };
     return JSON.parse(readFileSync(file, "utf8")) as Snapshot;
   }
 
-  async command(title: string): Promise<void> {
-    await this.page.keyboard.press("Escape");
-    await this.page.keyboard.press("Control+Shift+P");
-    const input = this.page.locator(".quick-input-widget input").describe("Command Palette");
-    await input.pressSequentially(title, { delay: 120 });
-    await this.page.keyboard.press("Enter");
-  }
-
   async sessionFrame(): Promise<Frame> {
-    await this.command("View: Show Agent Sessions");
+    const tab = this.page
+      .getByRole("tab", { name: "Agent Sessions", exact: true })
+      .describe("Sessions sidebar");
+    if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
     await expect
       .poll(async () => {
         for (const frame of this.page.frames()) {
@@ -209,38 +200,6 @@ export class VSCodeFixture {
       .poll(() => this.snapshot().terminals.filter((terminal) => terminal.owned))
       .toHaveLength(0);
     await expect.poll(() => this.snapshot().tabs.filter((tab) => tab.terminal)).toHaveLength(0);
-  }
-
-  async expectDiff(key: string, name = "same.txt"): Promise<void> {
-    const expectedPath = join(this.sessions[key].cwd, name);
-    await expect
-      .poll(
-        () =>
-          this.snapshot().tabs.some(
-            (tab) => tab.modified === `file://${expectedPath}` && tab.original?.startsWith("git:"),
-          ),
-        { timeout: 15_000 },
-      )
-      .toBe(true);
-    const index = this.snapshot().tabs.findIndex(
-      (tab) => tab.modified === `file://${expectedPath}`,
-    );
-    await this.page
-      .locator(".editor-group-container .tabs-container .tab")
-      .nth(index)
-      .describe(`Prepared ${key} diff tab`)
-      .click();
-    await expect
-      .poll(() =>
-        this.snapshot().tabs.some(
-          (tab) =>
-            tab.active &&
-            tab.modified === `file://${expectedPath}` &&
-            tab.original?.startsWith("git:"),
-        ),
-      )
-      .toBe(true);
-    await expect.poll(() => this.snapshot().activeEditor).toBe(`file://${expectedPath}`);
   }
 
   piProcesses(): { pid: number; cwd: string; command: string; target: string }[] {
@@ -485,15 +444,24 @@ function write(path: string, content: string): void {
 export const test = baseTest.extend<{ host: VSCodeFixture }>({
   host: async ({ playwright }, use, testInfo) => {
     void playwright;
-    const projectDirectories = testInfo.annotations.some(
-      ({ type, description }) => type === "spec" && description === "E2E-2",
-    )
-      ? { A: "project-a", B: "worktree/project-b" }
-      : undefined;
-    const host = new VSCodeFixture(projectDirectories);
+    const host = new VSCodeFixture();
     const tracePath = testInfo.outputPath("electron-trace.zip");
     try {
       await host.launch(testInfo.tags.includes("@single-root"));
+      await test.step("Check the A/B work folder paths and names", async () => {
+        const frame = await host.sessionFrame();
+        for (const key of ["A", "B"]) {
+          const expectedName = key === "A" ? "project-a" : "project-b";
+          const relativeDirectory = key === "A" ? expectedName : join("worktree", expectedName);
+          expect(host.sessions[key].cwd).toBe(join(host.directory, relativeDirectory));
+          await expect(
+            frame
+              .getByTitle(host.sessions[key].cwd, { exact: true })
+              .locator(".group-title")
+              .describe(`${key} work folder name`),
+          ).toHaveText(expectedName);
+        }
+      });
       await use(host);
     } finally {
       await testInfo.attach("fixture and public API observation", {

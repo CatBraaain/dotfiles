@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { errorMessage } from "./guards";
 import type { PiRuntime } from "./tmux";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { requireWorkDirectory } from "./workTarget";
+import { requireWorkDirectory } from "./workDirectory";
 import { encodeCwdDirName } from "./paths";
 import { setSessionActive } from "./metadataStore";
 import { summarizeSessionFile } from "./sessionFile";

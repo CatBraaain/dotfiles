@@ -5,14 +5,11 @@ import type { VSCodeFixture } from "../support/vscode";
 
 test.use({ trace: "on" });
 
-const SCM_EVIDENCE_SCOPE =
-  "A/B evidence covers visible repositories with Graph Auto only. Hidden repositories, fixed Graph selection and active repository pin remain unmet and were not executed in this run. Owner decision is pending (G1). This note does not resolve G1 or the real assistant response gap (G3).";
-
 test(
-  "同名の本体・worktree フォルダを見分け、未アーカイブ 0 件の作業先の履歴を All モードで開ける",
+  "Shows saved history with All when a work folder has no unarchived sessions",
   { annotation: { type: "spec", description: "E2E-1" } },
   async ({ host }, testInfo) => {
-    await test.step("Read the work folder hints and inspect the empty Unarchived group", async () => {
+    await test.step("Inspect the work folder groups and the empty B Unarchived group", async () => {
       const frame = await host.sessionFrame();
       for (const key of ["A", "B"]) {
         const group = frame
@@ -22,7 +19,9 @@ test(
         const heading = group.locator(".group-header").describe(`${key} work folder heading`);
         await expect(heading).toBeVisible();
         await expect(heading).toHaveAttribute("title", host.sessions[key].cwd);
-        await expect(heading.locator(".group-title")).toHaveText("project");
+        await expect(heading.locator(".group-title")).toHaveText(
+          key === "A" ? "project-a" : "project-b",
+        );
         await expect(group.getByRole("button", { name: "Unarchived", exact: true })).toBeVisible();
         await expect(group.getByRole("button", { name: "All", exact: true })).toBeVisible();
         await expect(frame.getByText(host.sessions[key].cwd, { exact: true })).toHaveCount(0);
@@ -58,9 +57,9 @@ test(
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) });
       await group.locator('[data-mode="all"]').describe("Worktree history").click({ steps: 15 });
       await expect(
-        frame
+        group
           .locator(`[data-session="${host.sessions.B.id}"]`)
-          .describe("Saved inactive B session"),
+          .describe("Saved inactive B session in its work folder"),
       ).toBeVisible();
       await testInfo.attach("All（履歴）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("all.png") }),
@@ -71,7 +70,7 @@ test(
 );
 
 test(
-  "A/B の会話切替と表示タブの開閉後も、生存する実 Pi へ再接続する",
+  "Switches between A/B conversations",
   { annotation: { type: "spec", description: "E2E-2" } },
   async ({ host }, testInfo) => {
     const firstPids = new Map<string, number>();
@@ -80,14 +79,6 @@ test(
     for (const [index, key] of selections.entries()) {
       const isLastSelection = index === selections.length - 1;
       await test.step(`Select ${key} and open its Pi terminal`, async () => {
-        const frame = await host.sessionFrame();
-        const expectedGroupName = key === "A" ? "project-a" : "project-b";
-        await expect(
-          frame
-            .getByTitle(host.sessions[key].cwd, { exact: true })
-            .locator(".group-title")
-            .describe(`${key} work folder name`),
-        ).toHaveText(expectedGroupName);
         await host.selectSession(key);
       });
       await test.step(`Check the real ${key} Pi process cwd and PID reuse`, async () => {
@@ -107,7 +98,7 @@ test(
           contentType: "application/json",
         });
       });
-      await test.step(`Read ${key} original session path and ID in the real Pi TUI`, async () => {
+      await test.step(`Check ${key} saved session identity and normal Pi TUI`, async () => {
         await host.expectPiVisible(host.sessions[key].cwd);
         const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
         displayPids.add(displayPid);
@@ -115,11 +106,33 @@ test(
         const terminalInput = host.page
           .getByRole("textbox", { name: /Terminal [0-9]+, Pi/ })
           .describe("Shared Pi command input");
-        await terminalInput.pressSequentially("/session", { delay: 120 });
-        await terminalInput.press("Enter");
-        await expect
-          .poll(async () => (await host.page.locator("body").innerText()).replace(/\s/g, ""))
-          .toContain(host.sessions[key].session);
+        const runtime = host.piProcesses().find((entry) => entry.cwd === host.sessions[key].cwd)!;
+        const startCommand = host
+          .tmux(["display-message", "-p", "-t", runtime.target, "#{pane_start_command}"])
+          .trim();
+        expect(startCommand).toBe(`pi --session ${host.sessions[key].session}`);
+        const sessionPath = startCommand.slice("pi --session ".length);
+        const sessionHeader = JSON.parse(readFileSync(sessionPath, "utf8").split("\n")[0]);
+        expect(sessionHeader).toMatchObject({
+          type: "session",
+          id: host.sessions[key].id,
+          cwd: runtime.cwd,
+        });
+        await testInfo.attach(`${key} saved session identity`, {
+          body: JSON.stringify({
+            ...runtime,
+            startCommand,
+            processArgs: readFileSync(`/proc/${runtime.pid}/cmdline`, "utf8")
+              .split("\0")
+              .filter(Boolean),
+            sessionPath,
+            sessionHeader,
+          }),
+          contentType: "application/json",
+        });
+        const terminalScreen = host.page.locator(".terminal.xterm").describe("Real Pi TUI");
+        await expect(terminalScreen).toContainText(host.sessions[key].cwd);
+        await expect(terminalScreen).toContainText(`• Fixture ${key}`);
         if (index === selections.length - 2 || isLastSelection) {
           const displayTarget = host.tmux(["list-clients", "-F", "#{session_name}"]).trim();
           const frame = await host.sessionFrame();
@@ -137,7 +150,7 @@ test(
               .locator(`[data-session="${host.sessions[key].id}"]`)
               .describe(`${key} selected before capturing its Pi TUI`),
           ).toBeVisible();
-          await host.page.mouse.move(800, 80);
+          await frame.locator("h1").describe("Neutral Sessions heading").hover();
           await expect
             .poll(() =>
               host
@@ -154,14 +167,37 @@ test(
                 .map(({ label, active }) => ({ label, active })),
             )
             .toEqual([{ label: "Pi", active: true }]);
-          await expect(terminalInput).toBeVisible();
-          await expect
-            .poll(async () => (await host.page.locator("body").innerText()).replace(/\s/g, ""))
-            .toContain(host.sessions[key].session);
+          await expect(terminalInput).toBeFocused();
+          await expect(terminalScreen).toContainText(host.sessions[key].cwd);
+          await expect(terminalScreen).toContainText(`• Fixture ${key}`);
           expect(host.tmux(["list-clients", "-F", "#{session_name}"]).trim()).toBe(displayTarget);
           expect(
             host.piProcesses().filter((entry) => entry.target === displayTarget),
           ).toMatchObject([{ pid: firstPids.get(key), cwd: host.sessions[key].cwd }]);
+          const otherKey = key === "A" ? "B" : "A";
+          await expect(
+            frame
+              .locator(`[data-session="${host.sessions[otherKey].id}"]`)
+              .describe("Other conversation remains visible"),
+          ).toBeVisible();
+          await expect(
+            frame
+              .locator(".session-row:not(.selected) .session-button:hover")
+              .describe("Hovered non-selected conversations"),
+          ).toHaveCount(0);
+          await expect
+            .poll(() =>
+              frame
+                .locator(".session-row:not(.selected) .session-button")
+                .evaluateAll((buttons) =>
+                  buttons
+                    .map((button) => getComputedStyle(button).backgroundColor)
+                    .filter((color) => color !== "rgba(0, 0, 0, 0)"),
+                ),
+            )
+            .toEqual([]);
+          await expect(terminalInput).toHaveValue("");
+          await expect(terminalScreen).not.toContainText("Session Info");
           await testInfo.attach(`${key} の Pi TUI`, {
             body: await host.page.screenshot({ path: testInfo.outputPath(`${key}-pi-tui.png`) }),
             contentType: "image/png",
@@ -211,67 +247,6 @@ test(
 );
 
 test(
-  "会話の選択ごとに、その作業先の変更の diff と SCM へ切り替わる",
-  { annotation: { type: "spec", description: "E2E-10" } },
-  async ({ host }, testInfo) => {
-    testInfo.annotations.push({
-      type: "SCM coverage limitation",
-      description: SCM_EVIDENCE_SCOPE,
-    });
-    await testInfo.attach("SCM evidence scope and unmet conditions", {
-      body: SCM_EVIDENCE_SCOPE,
-      contentType: "text/plain",
-    });
-    for (const key of ["A", "B"]) {
-      await test.step(`Select ${key} and wait for its native diff`, async () => {
-        await host.selectSession(key);
-        await host.expectPiVisible(host.sessions[key].cwd);
-        await host.expectDiff(key);
-      });
-      await test.step(`Observe ${key} SCM focus without changing settings`, async () => {
-        await expect
-          .poll(
-            () =>
-              host
-                .snapshot()
-                .repositories.find((repository) => repository.root === host.sessions[key].cwd)
-                ?.selected,
-          )
-          .toBe(true);
-        await expect(
-          host.page
-            .locator(".statusbar-item")
-            .filter({ hasText: key === "A" ? "fixture-a" : "fixture-b" })
-            .first()
-            .describe("Native branch indicator"),
-        ).toBeVisible();
-        await expect(
-          host.page
-            .getByRole("toolbar", { name: "Graph actions", exact: true })
-            .getByRole("button", {
-              name: key === "A" ? "fixture-a" : "fixture-b",
-              exact: true,
-            })
-            .describe("Built-in Graph branch"),
-        ).toBeVisible();
-        await testInfo.attach(`${key} の diff`, {
-          body: await host.page.screenshot(),
-          contentType: "image/png",
-        });
-      });
-    }
-  },
-);
-
-test(
-  "SCM の非表示リポジトリ・固定 Graph・active pin は未達: 未実行、決定待ち",
-  { annotation: { type: "spec", description: "E2E-8" } },
-  async () => {
-    test.skip(true, SCM_EVIDENCE_SCOPE);
-  },
-);
-
-test(
   "SCM から Sessions へ戻っても、Refresh なしで一覧を復元する",
   { annotation: { type: "spec", description: "E2E-3" } },
   async ({ host }, testInfo) => {
@@ -280,7 +255,12 @@ test(
       const isFinalRestore = index === selections.length - 1;
       await test.step(`Return from SCM and select ${key} without Refresh`, async () => {
         await host.selectSession(key);
-        await host.expectDiff(key);
+        await host.expectPiVisible(host.sessions[key].cwd);
+        const scm = host.page
+          .getByRole("tab", { name: /Source Control/ })
+          .describe("Source Control sidebar");
+        await scm.click();
+        await expect(scm).toHaveAttribute("aria-selected", "true");
         if (isFinalRestore)
           await testInfo.attach("SCM 表示中", {
             body: await host.page.screenshot(),
@@ -304,73 +284,34 @@ test(
 );
 
 test(
-  "会話選択を受け付けた時点のエディタが、対象の変更ファイルを決める",
-  { annotation: { type: "spec", description: "E2E-4" } },
-  async ({ host }, testInfo) => {
-    await test.step("Open the worktree preferred file in the native editor", async () => {
-      await host.page.keyboard.press("Control+p");
-      await host.page
-        .locator(".quick-input-widget input")
-        .describe("Quick Open file path")
-        .pressSequentially(join(host.sessions.B.cwd, "z-preferred.txt"), {
-          delay: 120,
-        });
-      await host.page.keyboard.press("Enter");
-      await expect
-        .poll(() => host.snapshot().activeEditor)
-        .toBe(`file://${join(host.sessions.B.cwd, "z-preferred.txt")}`);
-      await testInfo.attach("選択時のエディタ", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-    });
-    await test.step("Select B and wait for that file's active diff", async () => {
-      await host.selectSession("B");
-      await host.expectPiVisible(host.sessions.B.cwd);
-      await host.expectDiff("B", "z-preferred.txt");
-      await testInfo.attach("選択後の diff", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-    });
-  },
-);
-
-test(
-  "単一ルートへの明示的なフォルダ追加が、拡張 host 再起動後の再選択でも成立する",
+  "Opens an unregistered cwd and reconnects to its Pi without adding a workspace folder",
   {
     tag: "@single-root",
     annotation: { type: "spec", description: "E2E-5" },
   },
   async ({ host }, testInfo) => {
-    await test.step("Open an unregistered session without adding its folder", async () => {
+    const folders = host.snapshot().folders;
+    const editorTabs = host.snapshot().tabs.filter((tab) => !tab.terminal);
+    const addFolder = host.page
+      .getByRole("button", { name: "Add folder to workspace", exact: true })
+      .describe("Workspace folder notification action");
+    await test.step("Open the unregistered session directly in Pi", async () => {
       await host.selectSession("External");
-      await expect(
-        host.page
-          .getByRole("button", { name: "Add folder to workspace", exact: true })
-          .describe("Explicit add-folder action"),
-      ).toBeVisible();
-      expect(host.snapshot().folders).toEqual([host.sessions.A.cwd]);
       await host.expectPiVisible(host.sessions.External.cwd);
-      await testInfo.attach("同意要求", {
+      await expect(addFolder).toHaveCount(0);
+      expect(host.snapshot().folders).toEqual(folders);
+      expect(host.snapshot().tabs.filter((tab) => !tab.terminal)).toEqual(editorTabs);
+      await testInfo.attach("未登録 cwd の Pi TUI", {
         body: await host.page.screenshot(),
         contentType: "image/png",
       });
     });
-    const previousHostPid = host.snapshot().hostPid;
     const previousPiPid = host
       .piProcesses()
       .find((entry) => entry.cwd === host.sessions.External.cwd)!.pid;
-    await test.step("Explicitly add the folder and observe a new extension host", async () => {
-      await host.page
-        .getByRole("button", { name: "Add folder to workspace", exact: true })
-        .click({ steps: 15 });
-      await expect.poll(() => host.snapshot().folders).toContain(host.sessions.External.cwd);
-      await expect
-        .poll(() => host.snapshot().hostPid, { timeout: 30_000 })
-        .not.toBe(previousHostPid);
-    });
-    await test.step("Reselect the session after the host restart", async () => {
+    await test.step("Switch conversations and return to the same unregistered Pi", async () => {
+      await host.selectSession("A");
+      await host.expectPiVisible(host.sessions.A.cwd);
       await host.selectSession("External");
       await host.expectPiVisible(host.sessions.External.cwd);
       const processes = host
@@ -378,17 +319,10 @@ test(
         .filter((entry) => entry.cwd === host.sessions.External.cwd);
       expect(processes).toHaveLength(1);
       expect(processes[0].pid).toBe(previousPiPid);
-      await host.expectDiff("External");
-      await expect
-        .poll(
-          () =>
-            host
-              .snapshot()
-              .repositories.find((repository) => repository.root === host.sessions.External.cwd)
-              ?.selected,
-        )
-        .toBe(true);
-      await testInfo.attach("再起動後の再選択", {
+      await expect(addFolder).toHaveCount(0);
+      expect(host.snapshot().folders).toEqual(folders);
+      expect(host.snapshot().tabs.filter((tab) => !tab.terminal)).toEqual(editorTabs);
+      await testInfo.attach("再選択後の Pi TUI", {
         body: await host.page.screenshot(),
         contentType: "image/png",
       });
@@ -408,6 +342,14 @@ test(
       await expect(
         host.page.locator(".quick-input-list").getByText(host.sessions.B.cwd, { exact: true }),
       ).toBeVisible();
+      for (const name of ["project-a", "project-b"]) {
+        await expect(
+          host.page
+            .locator(".quick-input-list")
+            .getByText(name, { exact: true })
+            .describe(`${name} start candidate label`),
+        ).toBeVisible();
+      }
       await testInfo.attach("候補一覧", {
         body: await host.page.screenshot(),
         contentType: "image/png",
