@@ -115,6 +115,10 @@ export default function systemPromptExtension(
   pi: ExtensionAPI,
   { templatePath = DEFAULT_TEMPLATE_PATH }: SystemPromptExtensionOptions = {},
 ): void {
+  process.env.PI_README_PATH = getReadmePath();
+  process.env.PI_DOCS_PATH = getDocsPath();
+  process.env.PI_EXAMPLES_PATH = getExamplesPath();
+
   // Run and template state lives in the factory closure, so independent
   // instances never share it.
   let runState: RunPromptState | undefined;
@@ -228,6 +232,7 @@ export function assembleHeadContent(
       continue;
     }
     const ownText = own[name];
+    if (name === "docs" && run?.template !== undefined && ownText === undefined) continue;
     if (ownText === undefined) {
       parts.push(piText);
       continue;
@@ -330,6 +335,9 @@ function buildOwnSections(
   const sections = buildSystemPromptSections(options);
   const template = run?.template;
   if (template === undefined) return sections;
+  if (template.sections.docs === undefined && !isOwnedByOtherExtension("docs", options)) {
+    delete sections.docs;
+  }
   const fileReadTool = options.selectedTools.includes("read")
     ? ("read" as const)
     : options.selectedTools.includes("bash")

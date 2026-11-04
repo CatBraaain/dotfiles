@@ -59,7 +59,6 @@ export const REQUIRED_SECTION_NAMES = [
   "preamble",
   "tools",
   "rules",
-  "docs",
   "skills",
   "cwd",
   "project_context",

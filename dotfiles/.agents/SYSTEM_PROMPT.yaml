@@ -1,13 +1,9 @@
 # Canonical system prompt template (deployed to ~/.agents/SYSTEM_PROMPT.yaml).
 #
-# This file is the single source of the standard system prompt: every
-# required section is defined here and nothing falls back to hidden
-# defaults. The definitions below reproduce Pi's standard build
-# byte-identically, so customizing starts by editing this file.
-#
-# A missing required section (preamble, tools, rules, docs, skills, cwd,
-# project_context), a schema error, or an unknown {{VAR}} disables the whole
-# file: pi warns and runs its standard build.
+# Required sections: preamble, tools, rules, skills, cwd, project_context.
+# docs is optional; omitting it omits its text and tags.
+# A missing required section, a schema error, or an unknown {{VAR}} disables
+# the whole file: pi warns and runs its standard build.
 #
 # Syntax:
 #   {{VAR}}            variable substitution.
@@ -53,15 +49,6 @@ sections:
 
   rules:
     each: "- {{rule}}"
-
-  docs: |-
-    Pi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):
-    - Main documentation: {{README_PATH}}
-    - Additional docs: {{DOCS_PATH}}
-    - Examples: {{EXAMPLES_PATH}} (extensions, custom tools, SDK)
-    - When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
-    - When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)
-    - Before implementing harness changes, read the relevant docs and examples in full, following related cross-references.
 
   project_context:
     pre: "Project-specific instructions and guidelines:"

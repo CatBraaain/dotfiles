@@ -28,7 +28,6 @@ const DEFAULT_SECTION_LINES = [
   '  preamble: "Hello {{CODING_AGENT}}"',
   "  tools: T",
   "  rules: R",
-  "  docs: D",
   "  cwd: C",
   "  project_context: PC",
   "  skills:",
@@ -95,18 +94,41 @@ describe("parseSystemPromptTemplate", () => {
     );
   });
 
-  it("rejects a missing required section and names it", () => {
-    const withoutDocs = DEFAULT_SECTION_LINES.filter((line) => !line.startsWith("  docs:"));
-    assert.throws(
-      () => parseSystemPromptTemplate(fullYaml(withoutDocs)),
-      /missing required section: docs/,
-    );
-    const withoutPreamble = DEFAULT_SECTION_LINES.filter((line) => !line.startsWith("  preamble:"));
-    assert.throws(
-      () => parseSystemPromptTemplate(fullYaml(withoutPreamble)),
-      /missing required section: preamble/,
-    );
+  it("accepts an omitted docs section", () => {
+    const parsed = parseSystemPromptTemplate(fullYaml());
+    assert.equal(Object.hasOwn(parsed.sections, "docs"), false);
   });
+
+  for (const docs of ["Custom documentation", ""]) {
+    it(`accepts a docs string: ${JSON.stringify(docs)}`, () => {
+      const parsed = parseSystemPromptTemplate(
+        fullYaml([...DEFAULT_SECTION_LINES, `  docs: ${JSON.stringify(docs)}`]),
+      );
+      assert.equal(parsed.sections.docs, docs);
+    });
+  }
+
+  for (const docs of ["3", "true", "false", "null", "[]", "[text]", "{}", "{each: text}"]) {
+    it(`rejects a non-string docs value: ${docs}`, () => {
+      assert.throws(
+        () => parseSystemPromptTemplate(fullYaml([...DEFAULT_SECTION_LINES, `  docs: ${docs}`])),
+        /section docs/,
+      );
+    });
+  }
+
+  const requiredNames = ["preamble", "tools", "rules", "skills", "cwd", "project_context"];
+  for (const missing of requiredNames) {
+    it(`rejects a missing required section: ${missing}`, () => {
+      const sectionLines = requiredNames
+        .filter((name) => name !== missing)
+        .map((name) => `  ${name}: text`);
+      assert.throws(
+        () => parseSystemPromptTemplate(fullYaml(sectionLines)),
+        new RegExp(`missing required section: ${missing}`),
+      );
+    });
+  }
 
   it("rejects an empty or comment-only document as missing sections", () => {
     assert.throws(() => parseSystemPromptTemplate(""), /missing required section: preamble/);

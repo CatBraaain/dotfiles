@@ -11,19 +11,23 @@
 //   nothing.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it } from "bun:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SystemMessage, Tool } from "@earendil-works/pi-ai";
 import {
   ExtensionRunner,
+  getDocsPath,
+  getExamplesPath,
+  getReadmePath,
   type BuildSystemPromptOptions,
   type Extension,
   type NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import YAML from "yaml";
 import systemPromptExtension, {
   assembleHeadContent,
   foldSystemMessages,
@@ -39,6 +43,22 @@ import { parseSystemPromptTemplate, type SystemPromptTemplate } from "./template
 
 const piPackageRootUrl = new URL("../", import.meta.resolve("@earendil-works/pi-coding-agent"));
 const oracle = await import(new URL("dist/core/system-prompt.js", piPackageRootUrl).href);
+
+const documentationPathNames = ["PI_README_PATH", "PI_DOCS_PATH", "PI_EXAMPLES_PATH"] as const;
+let originalEnvironment: Record<string, string | undefined> = {};
+
+beforeEach(() => {
+  originalEnvironment = Object.fromEntries(
+    [...documentationPathNames, "PI_PACKAGE_DIR"].map((name) => [name, process.env[name]]),
+  );
+});
+
+afterEach(() => {
+  for (const [name, value] of Object.entries(originalEnvironment)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -60,13 +80,14 @@ interface CapturedRegistration {
 }
 
 /** Capture the handlers, shortcuts, and commands the factory registers. */
-function captureRegistration(): CapturedRegistration {
+function captureRegistration(
+  templatePath = () => "/system-prompt-tests/no-template/SYSTEM_PROMPT.yaml",
+): CapturedRegistration {
   // Run-level tests pin the baseline (template-free) prompt behavior. The
   // deployed ~/.agents/SYSTEM_PROMPT.yaml owns every required section and
   // wins over mid-run patches and custom overrides by design, so every test
   // instance reads from a path where no template exists. Template-active
   // behavior is covered by the fixture-based describes below.
-  const templatePath = () => "/system-prompt-tests/no-template/SYSTEM_PROMPT.yaml";
   const handlers = new Map<string, Handler[]>();
   const shortcuts: ShortcutRegistration[] = [];
   const commands: CommandRegistration[] = [];
@@ -129,8 +150,8 @@ interface LoadedExtension {
   handlers: Map<string, Handler[]>;
 }
 
-function loadSystemPromptExtension(): LoadedExtension {
-  const handlers = captureHandlers();
+function loadSystemPromptExtension(templatePath?: () => string): LoadedExtension {
+  const handlers = captureRegistration(templatePath).handlers;
   return { extension: extensionFrom("system-prompt", handlers), handlers };
 }
 
@@ -237,6 +258,82 @@ function transcriptFor(options: BuildSystemPromptOptions): AgentMessage[] {
     { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 2 },
   ];
 }
+
+describe("documentation asset environment", () => {
+  it("publishes host paths before template loading and before any run", () => {
+    documentationPathNames.forEach((name) => {
+      delete process.env[name];
+    });
+
+    captureRegistration(() => {
+      throw new Error("Template lookup must wait for session_start");
+    });
+
+    const actualPaths = documentationPathNames.map((name) => process.env[name]);
+    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
+    assert.deepEqual(actualPaths, expectedPaths);
+  });
+
+  it("overwrites inherited asset paths with host API paths", () => {
+    documentationPathNames.forEach((name) => {
+      process.env[name] = "/inherited/stale/path";
+    });
+
+    captureRegistration();
+
+    const actualPaths = documentationPathNames.map((name) => process.env[name]);
+    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
+    assert.deepEqual(actualPaths, expectedPaths);
+  });
+
+  it("reads current host paths again on every factory invocation", () => {
+    captureRegistration();
+    process.env.PI_PACKAGE_DIR = join(getDocsPath(), "reloaded pi package");
+    documentationPathNames.forEach((name) => {
+      process.env[name] = "/changed/after/initialization";
+    });
+
+    captureRegistration();
+
+    const actualPaths = documentationPathNames.map((name) => process.env[name]);
+    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
+    assert.deepEqual(actualPaths, expectedPaths);
+  });
+
+  it("respects PI_PACKAGE_DIR without requiring the assets to exist", () => {
+    const tempRoot = "/tmp/work/dotfiles";
+    mkdirSync(tempRoot, { recursive: true });
+    const directory = mkdtempSync(join(tempRoot, "system-prompt-assets-"));
+    const packageDirectory = join(directory, "missing pi package");
+    try {
+      process.env.PI_PACKAGE_DIR = packageDirectory;
+
+      captureRegistration();
+
+      const actualPaths = documentationPathNames.map((name) => process.env[name]);
+      const expectedPaths = [
+        join(packageDirectory, "README.md"),
+        join(packageDirectory, "docs"),
+        join(packageDirectory, "examples"),
+      ];
+      assert.deepEqual(actualPaths, expectedPaths);
+      assert.equal(process.env.PI_PACKAGE_DIR, packageDirectory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the host API defaults for an empty PI_PACKAGE_DIR", () => {
+    process.env.PI_PACKAGE_DIR = "";
+
+    captureRegistration();
+
+    const actualPaths = documentationPathNames.map((name) => process.env[name]);
+    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
+    assert.deepEqual(actualPaths, expectedPaths);
+    assert.equal(process.env.PI_PACKAGE_DIR, "");
+  });
+});
 
 describe("non-forced runs on the installed ExtensionRunner", () => {
   it("replaces the head with a byte-identical build and forces nothing", async () => {
@@ -727,7 +824,7 @@ describe("canonical template file", () => {
     return parseSystemPromptTemplate(readFileSync(canonicalPath, "utf8"));
   }
 
-  it("reproduces the installed Pi's build byte-identically", () => {
+  it("renders the canonical wording without docs across the standard option sets", () => {
     const template = canonicalTemplate();
     const optionSets: BuildSystemPromptOptions[] = [
       richOptions(),
@@ -766,7 +863,24 @@ describe("canonical template file", () => {
         options,
         { template },
       );
-      assert.equal(assembled, oracle.buildSystemPrompt(options));
+      const expectedSections: Record<string, string> = {
+        ...oracle.buildSystemPromptSections(options),
+        preamble:
+          "You are a coding assistant running inside pi, a coding agent harness. Help users inspect files, run commands, and modify code.",
+      };
+      delete expectedSections.docs;
+      expectedSections.tools = expectedSections.tools!.replace(
+        "In addition to the tools above, you may have access to other custom tools depending on the project.",
+        "Additional tools may be available.",
+      );
+      if (expectedSections.skills !== undefined) {
+        expectedSections.skills = expectedSections.skills.replace(
+          "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+          "Resolve relative paths against the skill's directory (parent of SKILL.md). Use absolute paths in tool calls.",
+        );
+      }
+      assert.equal(assembled, Object.values(expectedSections).join("\n\n"));
+      assert.doesNotMatch(assembled, /<\/?docs>/);
     }
   });
 
@@ -786,8 +900,14 @@ describe("canonical template file", () => {
     });
     assert.match(
       assembled,
-      /<tools>\n- read: Read files\n- edit: Edit files\n- bash: Execute commands\n\nIn addition to the tools above/,
+      /<tools>\n- read: Read files\n- edit: Edit files\n- bash: Execute commands\n\nAdditional tools may be available\./,
     );
+  });
+
+  it("defines the six required sections without a docs section", () => {
+    const names = Object.keys(canonicalTemplate().sections).sort();
+    const expectedNames = ["preamble", "tools", "rules", "skills", "cwd", "project_context"].sort();
+    assert.deepEqual(names, expectedNames);
   });
 
   it("drops template-owned project_context when no context files exist", () => {
@@ -795,6 +915,152 @@ describe("canonical template file", () => {
     const folded = foldSystemMessages(transcriptFor(options));
     const assembled = assembleHeadContent(folded, "", options, { template: canonicalTemplate() });
     assert.equal(assembled.includes("<project_context>"), false);
+  });
+});
+
+describe("optional docs in a loaded canonical template", () => {
+  const sections = {
+    preamble: "Canonical preamble",
+    tools: "Canonical tools",
+    rules: "Canonical rules",
+    skills: "Canonical skills",
+    cwd: "{{CWD}}",
+    project_context: "Canonical context",
+  };
+  const withoutDocs = YAML.stringify({ sections });
+
+  async function withTemplateFile(
+    raw: string | undefined,
+    check: (loaded: LoadedExtension, warnings: string[]) => Promise<void>,
+  ): Promise<void> {
+    const tempRoot = "/tmp/work/dotfiles";
+    mkdirSync(tempRoot, { recursive: true });
+    const directory = mkdtempSync(join(tempRoot, "system-prompt-"));
+    const path = join(directory, "SYSTEM_PROMPT.yaml");
+    try {
+      if (raw !== undefined) writeFileSync(path, raw);
+      const loaded = loadSystemPromptExtension(() => path);
+      const warnings: string[] = [];
+      const { ctx } = sessionStartCtx("print");
+      await dispatchSessionStart(loaded, {
+        ...ctx,
+        hasUI: true,
+        ui: { ...ctx.ui, notify: (message: string) => warnings.push(message) },
+      });
+      await check(loaded, warnings);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  async function renderTemplateRun(
+    loaded: LoadedExtension,
+    options: NormalizedBuildSystemPromptOptions,
+    messages = transcriptFor(options),
+  ): Promise<SystemMessage> {
+    await loaded.handlers.get("before_agent_start")![0]!({ systemPromptOptions: options }, {});
+    const result = (await loaded.handlers.get("context_with_system")![0]!({ messages }, {})) as {
+      messages: AgentMessage[];
+    };
+    return result.messages[0] as SystemMessage;
+  }
+
+  it("omits standard docs text and tags without warning or fallback", async () => {
+    await withTemplateFile(withoutDocs, async (loaded, warnings) => {
+      const head = await renderTemplateRun(loaded, richOptions());
+      assert.match(head.content as string, /^Canonical preamble/);
+      assert.doesNotMatch(head.content as string, /<\/?docs>|Pi documentation/);
+      assert.deepEqual(warnings, []);
+    });
+  });
+
+  for (const docs of ["Custom documentation", ""]) {
+    it(`renders an explicit docs string including empty tags: ${JSON.stringify(docs)}`, async () => {
+      await withTemplateFile(
+        YAML.stringify({ sections: { ...sections, docs } }),
+        async (loaded) => {
+          const options = { ...richOptions(), sections: { docs: "Other extension docs" } };
+          const head = await renderTemplateRun(loaded, options);
+          const expectedDocs = `<docs>\n${docs}\n</docs>`;
+          assert.ok((head.content as string).includes(expectedDocs));
+          assert.doesNotMatch(head.content as string, /Other extension docs|Pi documentation/);
+        },
+      );
+    });
+  }
+
+  it("keeps sections and addenda owned by other extensions when docs is omitted", async () => {
+    await withTemplateFile(withoutDocs, async (loaded) => {
+      const options = {
+        ...richOptions(),
+        sections: { docs: "Other extension docs", extra_guidance: "Extra guidance" },
+      };
+      const messages: AgentMessage[] = [
+        ...transcriptFor(options),
+        {
+          role: "system",
+          content: "",
+          sections: { mcp_servers: "<mcp_servers>\nconnected\n</mcp_servers>" },
+          timestamp: 3,
+        },
+      ];
+      const head = await renderTemplateRun(loaded, options, messages);
+      assert.match(head.content as string, /<docs>\nOther extension docs\n<\/docs>/);
+      assert.match(head.content as string, /<extra_guidance>\nExtra guidance\n<\/extra_guidance>/);
+      assert.match(head.content as string, /<mcp_servers>\nconnected\n<\/mcp_servers>/);
+      assert.match(head.content as string, /<addendum>\nStanding addendum\.\n<\/addendum>/);
+    });
+  });
+
+  const { tools: _tools, ...missingTools } = sections;
+  const fallbackCases = [
+    { name: "missing template", raw: undefined },
+    { name: "invalid YAML", raw: "sections: [" },
+    { name: "invalid docs type", raw: YAML.stringify({ sections: { ...sections, docs: false } }) },
+    { name: "missing required section", raw: YAML.stringify({ sections: missingTools }) },
+  ];
+  for (const { name, raw } of fallbackCases) {
+    it(`keeps the standard fallback including docs for a ${name}`, async () => {
+      await withTemplateFile(raw, async (loaded, warnings) => {
+        const options = richOptions();
+        const head = await renderTemplateRun(loaded, options);
+        assert.equal(head.content, buildSystemPrompt(options));
+        assert.match(head.content as string, /<docs>\nPi documentation/);
+        assert.equal(warnings.length, raw === undefined ? 0 : 1);
+        if (raw !== undefined) assert.match(warnings[0]!, /^Ignoring .*SYSTEM_PROMPT\.yaml:/);
+      });
+    });
+  }
+
+  it("keeps a matching forced prefix without docs and preserves the full suffix", async () => {
+    await withTemplateFile(withoutDocs, async (loaded) => {
+      const options = richOptions();
+      const own = assembleHeadContent(foldSystemMessages(transcriptFor(options)), "", options, {
+        template: parseSystemPromptTemplate(withoutDocs),
+      });
+      const suffix = "\n\n<docs>\nOther extension suffix\n</docs>";
+      const forced = own + suffix;
+      const result = await loaded.handlers.get("before_agent_start")![0]!(
+        { systemPromptOptions: { ...options, forceSystemPrompt: forced } },
+        {},
+      );
+      assert.doesNotMatch(own, /<\/?docs>|Pi documentation/);
+      assert.deepEqual(result, { systemPrompt: forced });
+    });
+  });
+
+  it("leaves a mismatching forced standard prompt including docs untouched", async () => {
+    await withTemplateFile(withoutDocs, async (loaded) => {
+      const forced = buildSystemPrompt(richOptions()) + "\n\nOther extension suffix";
+      const options = { ...richOptions(), forceSystemPrompt: forced };
+      const result = await loaded.handlers.get("before_agent_start")![0]!(
+        { systemPromptOptions: options },
+        {},
+      );
+      assert.equal(result, undefined);
+      assert.equal(options.forceSystemPrompt, forced);
+      assert.match(options.forceSystemPrompt, /<docs>\nPi documentation/);
+    });
   });
 });
 
