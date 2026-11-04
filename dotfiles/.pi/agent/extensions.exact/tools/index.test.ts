@@ -231,6 +231,36 @@ describe("tools with the guardrails public API", () => {
   );
 
   it(
+    "reads the complete SKILL.md through environment variable paths",
+    withFixture(async ({ tools, context, directory }) => {
+      const variableName = "GUARDRAIL_TEST_SKILL_PATH";
+      const previousPath = process.env[variableName];
+      const path = join(directory, "SKILL.md");
+      const body = "first\nlast\n";
+      writeFileSync(path, body);
+      try {
+        process.env[variableName] = path;
+        for (const input of [`$${variableName}`, `\${${variableName}}`, `@\${${variableName}}`]) {
+          const result = await tools
+            .get("read")!
+            .execute(
+              "skill-env",
+              { path: input, offset: 2, limit: 1 },
+              undefined,
+              undefined,
+              context,
+            );
+          assert.deepEqual(result.content, [{ type: "text", text: body }], input);
+          assert.equal(result.structuredContent, body, input);
+        }
+      } finally {
+        if (previousPath === undefined) delete process.env[variableName];
+        else process.env[variableName] = previousPath;
+      }
+    }),
+  );
+
+  it(
     "uses the requested filename rather than a symlink target name",
     withFixture(async ({ tools, context, directory }) => {
       const body = "first\nlast";

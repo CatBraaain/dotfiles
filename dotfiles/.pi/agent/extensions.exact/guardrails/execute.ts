@@ -18,13 +18,17 @@ export async function executeGuardedTool(
   const { toolName, signal, context, onUpdate } = request;
   if (!SUPPORTED_TOOLS.has(toolName)) throw new Error(`Unsupported guarded tool: ${toolName}`);
   const normalized = withNormalizedPath(request.params);
-  const params = normalized as Record<string, unknown>;
+  const params = (
+    toolName === "bash"
+      ? normalized
+      : { ...normalized, path: resolve(cwd, (normalized.path as string | undefined) ?? ".") }
+  ) as Record<string, unknown>;
   let approval: PathApproval | undefined;
   let commandApproved = false;
   if (toolName === "bash") {
     commandApproved = await guardrail.authorizeCommand(params.command as string, context);
   } else {
-    const path = resolve(cwd, (params.path as string | undefined) ?? ".");
+    const path = params.path as string;
     if (toolName !== "write") await guardrail.authorizePath("read", path, context);
     if (toolName === "write" || toolName === "edit") {
       approval = await guardrail.authorizePath("write", path, context);

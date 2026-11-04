@@ -1,6 +1,6 @@
 import { COMMAND_PREVIEW_LIMIT, truncateText } from "../shared/tool-text.ts";
 import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -13,9 +13,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import toolsExtension from "../tools/index";
-import { isVisionImageFile } from "./execute.ts";
+import { executeGuardedTool, isVisionImageFile } from "./execute.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { createGuardrailsAPI } from "./api.ts";
 import { Guardrail, writeApprovalNote } from "./guardrail.ts";
@@ -3989,6 +3989,329 @@ describe("§3 ツール引数パスの正規化", () => {
       assert.equal(outcome.blocked, true, deniedPath);
       assert.match(outcome.reason ?? "", /Access denied/);
     }
+  });
+});
+
+describe("tool path environment expansion", () => {
+  const variableName = "GUARDRAIL_TEST_TOOL_PATH";
+  const references = [`$${variableName}`, `\${${variableName}}`];
+  const fsCases = [
+    ["read", {}],
+    ["write", { content: "fixture" }],
+    ["edit", { edits: [] }],
+    ["grep", { pattern: "needle" }],
+    ["find", { pattern: "*.txt" }],
+    ["ls", {}],
+  ] as const;
+  const pathCases = [...fsCases, ["ask_permission", { reason: "fixture" }] as const];
+  const originalAuthorize = Guardrail.prototype.authorizePath;
+  const originalRequest = Guardrail.prototype.requestWritePermission;
+  const originalRun = SandboxRunner.prototype.runTool;
+  let previousPath: string | undefined;
+  let directory: string;
+  let tools: Map<string, any>;
+  const handlers = new Map<string, (event: any, context?: any) => unknown>();
+
+  beforeEach(() => {
+    previousPath = process.env[variableName];
+    const tempRoot = "/tmp/work/dotfiles";
+    mkdirSync(tempRoot, { recursive: true });
+    directory = mkdtempSync(join(tempRoot, "tool-path-env-"));
+    const config = join(directory, "config.yaml");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        read: [{ allow: directory }, { deny: join(directory, "denied") }],
+        write: [
+          { allow: directory },
+          { ask: join(directory, "ask") },
+          { deny: join(directory, "denied") },
+        ],
+        commands: [{ ".*": [{ allow: [] }] }],
+      }),
+    );
+    tools = captureRegisteredTools(config, handlers);
+  });
+
+  afterEach(() => {
+    Guardrail.prototype.authorizePath = originalAuthorize;
+    Guardrail.prototype.requestWritePermission = originalRequest;
+    SandboxRunner.prototype.runTool = originalRun;
+    if (previousPath === undefined) delete process.env[variableName];
+    else process.env[variableName] = previousPath;
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  for (const [toolName, extraParams] of fsCases) {
+    it(`shares expanded authorization and execution paths for ${toolName}`, async () => {
+      const target = join(directory, "note.txt");
+      const authorized: { operation: string; path: string }[] = [];
+      const executed: string[] = [];
+      Guardrail.prototype.authorizePath = async function (operation, path, context) {
+        authorized.push({ operation, path });
+        return originalAuthorize.call(this, operation, path, context);
+      };
+      SandboxRunner.prototype.runTool = async (_name, params) => {
+        executed.push((params as { path: string }).path);
+        return { content: [], details: {} };
+      };
+      const expectedOperations =
+        toolName === "write" ? ["write"] : toolName === "edit" ? ["read", "write"] : ["read"];
+      for (const value of [target, relative(process.cwd(), target)]) {
+        process.env[variableName] = value;
+        for (const reference of references) {
+          authorized.length = 0;
+          executed.length = 0;
+          const outcome = await runGuardedCall(
+            tools,
+            handlers,
+            toolName,
+            {
+              ...extraParams,
+              path: reference,
+            },
+            { hasUI: false },
+          );
+          assert.equal(outcome.blocked, undefined, outcome.reason ?? "Unexpected block");
+          assert.deepEqual(
+            authorized,
+            expectedOperations.map((operation) => ({ operation, path: target })),
+          );
+          assert.deepEqual(executed, [target]);
+        }
+      }
+    });
+  }
+
+  for (const prefix of ["@", "@~/"]) {
+    it(`keeps ${prefix} values literal through real backend reads and writes`, async () => {
+      const previousHome = process.env.HOME;
+      const cwd = join(directory, "cwd");
+      const home = join(directory, "home");
+      mkdirSync(cwd);
+      mkdirSync(home);
+      process.env.HOME = home;
+      try {
+        const decoy =
+          prefix === "@" ? join(directory, "denied", "note.txt") : join(home, "note.txt");
+        mkdirSync(dirname(decoy), { recursive: true });
+        writeFileSync(decoy, "other fixture");
+        const value = prefix === "@" ? `@${decoy}` : "@~/note.txt";
+        const target = resolve(cwd, value);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, "literal fixture");
+        process.env[variableName] = value;
+        const config = join(directory, "backend.yaml");
+        writeFileSync(
+          config,
+          JSON.stringify({
+            read: [{ allow: "*" }, { deny: decoy }],
+            write: [{ allow: directory }, { deny: decoy }],
+          }),
+        );
+        const guardrail = new Guardrail(cwd, config);
+        const runner = new SandboxRunner(cwd, (mode) => guardrail.buildArgs(mode));
+        const authorized: { operation: string; path: string }[] = [];
+        const executed: string[] = [];
+        Guardrail.prototype.authorizePath = async function (operation, path, context) {
+          authorized.push({ operation, path });
+          return originalAuthorize.call(this, operation, path, context);
+        };
+        runner.runTool = async (toolName, params, options) => {
+          executed.push((params as { path: string }).path);
+          return originalRun.call(runner, toolName, params, options);
+        };
+        const context = { hasUI: false } as ExtensionToolContext;
+        const result = await executeGuardedTool(guardrail, runner, cwd, {
+          id: "literal-read",
+          toolName: "read",
+          params: { path: `\${${variableName}}` },
+          context,
+        });
+        assert.deepEqual(result.content, [{ type: "text", text: "literal fixture" }]);
+        await executeGuardedTool(guardrail, runner, cwd, {
+          id: "literal-write",
+          toolName: "write",
+          params: { path: `\${${variableName}}`, content: "updated fixture" },
+          context,
+        });
+        assert.equal(readFileSync(target, "utf8"), "updated fixture");
+        assert.equal(readFileSync(decoy, "utf8"), "other fixture");
+        assert.deepEqual(authorized, [
+          { operation: "read", path: target },
+          { operation: "write", path: target },
+        ]);
+        assert.deepEqual(executed, [target, target]);
+        const denyConfig = join(directory, "deny-backend.yaml");
+        writeFileSync(denyConfig, JSON.stringify({ read: [{ allow: "*" }, { deny: target }] }));
+        const denyingGuardrail = new Guardrail(cwd, denyConfig);
+        await assert.rejects(
+          executeGuardedTool(denyingGuardrail, runner, cwd, {
+            id: "literal-deny",
+            toolName: "read",
+            params: { path: `\${${variableName}}` },
+            context,
+          }),
+          /Access denied:/,
+        );
+        assert.deepEqual(executed, [target, target]);
+      } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+      }
+    });
+  }
+
+  it("keeps the authorized path when the environment changes during authorization", async () => {
+    const target = join(directory, "note.txt");
+    process.env[variableName] = target;
+    Guardrail.prototype.authorizePath = async function (operation, path, context) {
+      const approval = await originalAuthorize.call(this, operation, path, context);
+      process.env[variableName] = join(directory, "denied");
+      return approval;
+    };
+    const executed: string[] = [];
+    SandboxRunner.prototype.runTool = async (_name, params) => {
+      executed.push((params as { path: string }).path);
+      return { content: [], details: {} };
+    };
+    const outcome = await runGuardedCall(
+      tools,
+      handlers,
+      "write",
+      {
+        path: `$${variableName}`,
+        content: "fixture",
+      },
+      { hasUI: false },
+    );
+    assert.equal(outcome.blocked, undefined, outcome.reason ?? "Unexpected block");
+    assert.deepEqual(executed, [target]);
+  });
+
+  for (const [toolName, extraParams] of pathCases) {
+    for (const value of [undefined, ""]) {
+      it(`stops ${toolName} before authorization or execution for ${JSON.stringify(value)} values`, async () => {
+        if (value === undefined) delete process.env[variableName];
+        else process.env[variableName] = value;
+        const calls: string[] = [];
+        Guardrail.prototype.authorizePath = async () => {
+          calls.push("authorize");
+        };
+        Guardrail.prototype.requestWritePermission = async (path) => {
+          calls.push("request");
+          return { status: "denied", grantedPath: path };
+        };
+        SandboxRunner.prototype.runTool = async () => {
+          calls.push("execute");
+          return { content: [], details: {} };
+        };
+        for (const reference of references) {
+          const outcome = await runGuardedCall(
+            tools,
+            handlers,
+            toolName,
+            {
+              ...extraParams,
+              path: `${reference}/note.txt`,
+            },
+            { hasUI: false },
+          );
+          assert.equal(outcome.blocked, true);
+          assert.match(
+            outcome.reason ?? "",
+            /environment variable GUARDRAIL_TEST_TOOL_PATH is undefined or empty/,
+          );
+          assert.deepEqual(calls, []);
+        }
+      });
+    }
+
+    it(`applies deny rules to the expanded path for ${toolName}`, async () => {
+      const target = join(directory, "denied", "note.txt");
+      process.env[variableName] = target;
+      let executions = 0;
+      SandboxRunner.prototype.runTool = async () => {
+        executions++;
+        return { content: [], details: {} };
+      };
+      for (const reference of references) {
+        const outcome = await runGuardedCall(
+          tools,
+          handlers,
+          toolName,
+          {
+            ...extraParams,
+            path: reference,
+          },
+          { hasUI: false },
+        );
+        assert.equal(outcome.blocked, true);
+        assert.match(outcome.reason ?? "", /Access denied:/);
+        assert.ok(outcome.reason?.includes(target));
+      }
+      assert.equal(executions, 0);
+    });
+  }
+
+  for (const toolName of ["write", "ask_permission"]) {
+    it(`shows the expanded path in ${toolName} approval`, async () => {
+      const target = join(directory, "ask", "note.txt");
+      process.env[variableName] = target;
+      const prompts: string[] = [];
+      const executed: string[] = [];
+      const requested: string[] = [];
+      Guardrail.prototype.requestWritePermission = async function (path, reason, context) {
+        requested.push(path);
+        return originalRequest.call(this, path, reason, context);
+      };
+      SandboxRunner.prototype.runTool = async (_name, params) => {
+        executed.push((params as { path: string }).path);
+        return { content: [], details: {} };
+      };
+      const outcome = await runGuardedCall(
+        tools,
+        handlers,
+        toolName,
+        {
+          path: `\${${variableName}}`,
+          content: "fixture",
+          reason: "fixture",
+        },
+        {
+          hasUI: true,
+          ui: {
+            confirm: async (_title: string, message: string) => {
+              prompts.push(message);
+              return true;
+            },
+          },
+        },
+      );
+      assert.equal(outcome.blocked, undefined, outcome.reason ?? "Unexpected block");
+      assert.equal(prompts.length, 1);
+      assert.ok(prompts[0]?.includes(target));
+      assert.equal(prompts[0]?.includes(variableName), false);
+      if (toolName === "write") assert.deepEqual(executed, [target]);
+      else {
+        assert.deepEqual(requested, [target]);
+        assert.equal(outcome.result.details.grantedPath, target);
+        assert.deepEqual(executed, []);
+      }
+    });
+  }
+
+  it("leaves bash command environment references for the shell", async () => {
+    delete process.env[variableName];
+    const command = `printf '%s' "$${variableName}"`;
+    const executed: unknown[] = [];
+    SandboxRunner.prototype.runTool = async (_name, params) => {
+      executed.push(params);
+      return { content: [], details: {} };
+    };
+    const outcome = await runGuardedCall(tools, handlers, "bash", { command }, { hasUI: false });
+    assert.equal(outcome.blocked, undefined, outcome.reason ?? "Unexpected block");
+    assert.deepEqual(executed, [{ command }]);
   });
 });
 
