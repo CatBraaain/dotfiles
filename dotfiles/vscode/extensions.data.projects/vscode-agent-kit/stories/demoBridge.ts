@@ -165,6 +165,11 @@ export function createDemoBridge(): {
       postSessions();
       return;
     }
+    if (request.type === "unregisterWorkspace" && typeof request.cwd === "string") {
+      registeredCwds = registeredCwds.filter((cwd) => cwd !== request.cwd);
+      postSessions();
+      return;
+    }
     // openSession and unknown requests are ignored: nothing to open in the catalog.
   }
 

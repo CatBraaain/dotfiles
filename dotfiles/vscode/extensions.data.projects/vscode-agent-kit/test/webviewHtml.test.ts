@@ -19,7 +19,7 @@ describe("webviewHtml", () => {
   it("includes the CSS from webviewStyles", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain('.mode-button[aria-pressed="true"]');
+    expect(html).toContain('.mode-toggle button[aria-pressed="true"]');
     expect(html).toContain(".archive {");
     expect(html).toContain('.lock[aria-pressed="true"]');
     expect(html).toContain(".session-row.selected .session-button");
@@ -61,16 +61,29 @@ describe("webviewHtml", () => {
     expect(html).toContain("New workspace");
   });
 
+  it("keeps the unregister confirmation dialog markup hidden by default", () => {
+    const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
+
+    expect(html).toContain('<div id="unregister-dialog" hidden>');
+    expect(html).toContain('id="unregister-dialog-cwd"');
+    expect(html).toContain('data-action="cancelUnregister"');
+    expect(html).toContain('data-action="confirmUnregister"');
+    expect(html).toContain("Sessions stay on disk.");
+  });
+
   it("drops the header New session action in favor of the per-group plus button", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
     expect(html).not.toContain('data-action="newSession"');
   });
 
-  it("leaves the workspace mode toggles to the dynamically rendered groups", () => {
+  it("keeps the shared mode toggle in the fixed header markup", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).not.toContain("data-mode=");
-    expect(html).not.toContain("mode-switch");
+    expect(html).toContain('class="mode-toggle"');
+    expect(html).toContain('data-mode="unarchived"');
+    expect(html).toContain('data-mode="all"');
+    expect(html).toContain('aria-label="Display mode"');
+    expect(html).not.toContain("group-modes");
   });
 });

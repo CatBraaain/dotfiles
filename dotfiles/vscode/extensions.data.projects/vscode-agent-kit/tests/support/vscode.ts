@@ -165,13 +165,12 @@ export class VSCodeFixture {
   async selectSession(key: string): Promise<void> {
     const frame = await this.sessionFrame();
     const session = this.sessions[key];
-    const group = frame
-      .locator("section.group")
-      .filter({ has: frame.getByTitle(session.cwd, { exact: true }) })
-      .describe(`${key} work folder`);
     const row = frame.locator(`[data-session="${session.id}"]`).describe(`${key} saved session`);
     if (!(await row.count()))
-      await group.locator('[data-mode="all"]').describe("All saved sessions").click({ steps: 15 });
+      await frame
+        .locator('#app header [data-mode="all"]')
+        .describe("All saved sessions")
+        .click({ steps: 15 });
     await row.locator(".session-name").describe(`${key} session name`).click({ steps: 15 });
   }
 

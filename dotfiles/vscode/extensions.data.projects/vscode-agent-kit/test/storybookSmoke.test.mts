@@ -271,7 +271,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   ])(
     "keeps row text and enabled controls readable in $theme at $width px",
     async ({ theme, width }) => {
-      const page = await openStory("sessions-sidebar--workspace-all-mode", { width, height: 640 });
+      const page = await openStory("sessions-sidebar--all-mode", { width, height: 640 });
       await page.waitForSelector(".session-row.archived");
       if (theme === "light") {
         await page.addStyleTag({
@@ -370,23 +370,25 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const ids = Object.keys(index.entries);
     for (const id of [
       "sessions-sidebar--sample-sessions",
-      "sessions-sidebar--workspace-all-mode",
+      "sessions-sidebar--all-mode",
       "sessions-sidebar--empty-sessions",
     ]) {
       expect(ids, `story ${id} missing from index.json`).toContain(id);
     }
   });
 
-  it("renders the sample story and operates the workspace mode toggle, copy, and archive", async () => {
+  it("renders the sample story and operates the shared header mode toggle, copy, and archive", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     expect(await page.locator(".session-row").count()).toBe(4);
 
-    await page.click('.group [data-mode="all"]');
+    await page.click('#app header [data-mode="all"]');
     await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 5);
     expect(
       await page.locator(`.session-row.archived [data-session="${atlasArchivedId}"]`).count(),
     ).toBe(1);
-    // The other workspaces keep their own Unarchived mode (per-workspace independence).
+    // The shared mode applies to every workspace group at once: the project
+    // group gains its archived row while the others keep theirs.
+    expect(await page.locator(".group").first().locator(".session-row").count()).toBe(2);
     expect(await page.locator(".group").nth(1).locator(".session-row").count()).toBe(2);
 
     const copy = page.locator(".session-row [data-copy]").first();
@@ -499,7 +501,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator(".session-row.selected").count()).toBe(3);
 
     // The archived row stays unselected until it is visible in All mode.
-    await page.click('.group [data-mode="all"]', { modifiers: ["Control"] });
+    await page.click('#app header [data-mode="all"]', { modifiers: ["Control"] });
     expect(await page.locator(".session-row.archived.selected").count()).toBe(0);
     await page.close();
   });
@@ -637,7 +639,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("collapses groups from chevrons and names while modes and refresh preserve the state", async () => {
+  it("collapses groups from chevrons and names while the mode and refresh preserve the state", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
     const group = page.locator(".group").first();
@@ -657,15 +659,17 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await name.focus();
     await page.keyboard.press("Space");
     await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
-    await group.locator('[data-mode="all"]').click();
+    await page.click('#app header [data-mode="all"]');
     await expect
-      .poll(() => group.locator('[data-mode="all"]').getAttribute("aria-pressed"))
+      .poll(() => page.locator('#app header [data-mode="all"]').getAttribute("aria-pressed"))
       .toBe("true");
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
     expect(await group.locator(".session-row").count()).toBe(0);
     for (let index = 0; index < 2; index++) await page.locator('[data-action="refresh"]').click();
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
-    expect(await group.locator('[data-mode="all"]').getAttribute("aria-pressed")).toBe("true");
+    expect(await page.locator('#app header [data-mode="all"]').getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     await name.click();
     await expect.poll(() => group.locator(".session-row").count()).toBe(2);
     expect(await openSessionMessages(page)).toEqual([]);
@@ -673,9 +677,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
-    expect(await group.locator('[data-mode="unarchived"]').getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect(
+      await page.locator('#app header [data-mode="unarchived"]').getAttribute("aria-pressed"),
+    ).toBe("true");
     expect(await group.locator(".session-row").count()).toBe(1);
     await page.close();
   });
@@ -747,6 +751,44 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
+  it("offers Unregister only on the registered workspace and removes its group", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const agenda = page.locator(".group").filter({ hasText: "agenda" });
+    const project = page.locator(".group").first();
+
+    expect(await agenda.locator(".group-unregister").count()).toBe(1);
+    expect(await agenda.locator(".group-unregister").getAttribute("aria-label")).toBe(
+      "Unregister workspace agenda",
+    );
+    expect(await project.locator(".group-unregister").count()).toBe(0);
+
+    // The button stays hidden until the header is hovered or focused.
+    await agenda.locator(".group-header").hover();
+    await agenda.locator(".group-unregister").click();
+    const dialog = page.locator("#unregister-dialog");
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+    expect(await page.locator("#unregister-dialog-cwd").textContent()).toBe("~/projects/agenda");
+    await page.locator('[data-action="cancelUnregister"]').click();
+    await expect.poll(() => dialog.isHidden()).toBe(true);
+    expect(await page.locator(".group").filter({ hasText: "agenda" }).count()).toBe(1);
+
+    await agenda.locator(".group-header").hover();
+    await agenda.locator(".group-unregister").click();
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await page.locator('[data-action="confirmUnregister"]').click();
+    await expect.poll(() => page.locator(".group").filter({ hasText: "agenda" }).count()).toBe(0);
+    expect(
+      await page.evaluate(() => {
+        const messages = (window as Window & { __bridgeMessages?: { type?: string }[] })
+          .__bridgeMessages;
+        if (messages === undefined) throw new Error("Bridge message recorder is not installed.");
+        return messages.filter((message) => message.type === "unregisterWorkspace");
+      }),
+    ).toEqual([{ type: "unregisterWorkspace", cwd: "~/projects/agenda" }]);
+    await page.close();
+  });
+
   it("retains hidden selections while excluding collapsed rows from bulk archive", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
@@ -812,19 +854,18 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.waitForSelector(".group-header");
     // Three session cwds plus the registered-only workspace (sample data).
     expect(await page.locator(".group-header").count()).toBe(4);
-    expect(await page.locator(".mode-button").count()).toBe(8);
+    expect(await page.locator(".mode-button").count()).toBe(0);
     expect(await page.locator(".session-row").count()).toBe(0);
     expect(await page.locator(".empty").count()).toBe(0);
     const historyToggle = page
-      .locator(".group")
-      .first()
-      .locator('[data-mode="all"]')
+      .locator('#app header [data-mode="all"]')
       .describe("Show saved sessions");
     await historyToggle.focus();
     await historyToggle.press("Enter");
     await page.waitForSelector(".session-row");
-    expect(await page.locator(".session-row").count()).toBe(2);
-    expect(await page.locator(".session-row.archived").count()).toBe(2);
+    // The shared All mode lists every workspace's archived sessions at once.
+    expect(await page.locator(".session-row").count()).toBe(5);
+    expect(await page.locator(".session-row.archived").count()).toBe(5);
     await page.close();
   });
 

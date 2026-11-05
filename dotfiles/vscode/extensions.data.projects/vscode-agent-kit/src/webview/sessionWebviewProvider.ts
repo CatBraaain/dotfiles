@@ -10,6 +10,7 @@ import {
   registerWorkspace,
   setSessionActive,
   setSessionLocked,
+  unregisterWorkspace,
 } from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { requireWorkDirectory } from "../workDirectory";
@@ -113,6 +114,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.addWorkspace(request.path);
       return;
     }
+    if (request.type === "unregisterWorkspace") {
+      await this.unregisterWorkspace(request.cwd);
+      return;
+    }
     if (request.type === "copySessionId") {
       try {
         await vscode.env.clipboard.writeText(request.sessionId);
@@ -182,6 +187,18 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         this.postError(result.message);
         return;
       }
+    }
+    await this.refresh();
+  }
+
+  /** Drop the workspace registration. The webview asks for confirmation
+   * before sending the request; sessions in that cwd keep their group and a
+   * sessionless registration disappears. */
+  private async unregisterWorkspace(cwd: string): Promise<void> {
+    const result = unregisterWorkspace(this.deps.metadataPath, cwd);
+    if (!result.ok) {
+      this.postError(result.message);
+      return;
     }
     await this.refresh();
   }

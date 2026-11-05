@@ -18,20 +18,20 @@ type SessionsStory = StoryObj;
 
 /** Story parameters beyond the demo state, mapped 1:1 into mount options. */
 interface StoryOptions {
-  /** Toggle the first workspace's mode to All after mounting. */
-  toggleAllWorkspace?: boolean;
+  /** Switch the shared header toggle to All after mounting. */
+  toggleAll?: boolean;
 }
 
 interface SessionStoryViewProps {
   demoState: DemoState;
-  toggleAllWorkspace?: boolean;
+  toggleAll?: boolean;
 }
 
 /** Mount the fixed webview markup and run the real client against the demo
  * bridge. The effect cleanup disposes the client on story change: initClient
  * adds a document-level click listener and stories share one canvas iframe
  * across navigation. */
-function SessionStoryView({ demoState, toggleAllWorkspace }: SessionStoryViewProps) {
+function SessionStoryView({ demoState, toggleAll }: SessionStoryViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -48,9 +48,9 @@ function SessionStoryView({ demoState, toggleAllWorkspace }: SessionStoryViewPro
     // React renders #sessions asynchronously; wait for the mode button to
     // exist before clicking it, and stop retrying once the story unmounts.
     let frame = 0;
-    if (toggleAllWorkspace === true) {
+    if (toggleAll === true) {
       const clickModeToggle = (): void => {
-        const toggle = mount.querySelector<HTMLElement>('.group [data-mode="all"]');
+        const toggle = mount.querySelector<HTMLElement>('#app header [data-mode="all"]');
         if (toggle !== null) toggle.click();
         else frame = requestAnimationFrame(clickModeToggle);
       };
@@ -62,7 +62,7 @@ function SessionStoryView({ demoState, toggleAllWorkspace }: SessionStoryViewPro
       dispose();
       mount.remove();
     };
-  }, [demoState, toggleAllWorkspace]);
+  }, [demoState, toggleAll]);
 
   return <div ref={hostRef} />;
 }
@@ -77,9 +77,7 @@ function storyFromDemoState(
   return {
     name,
     parameters: { demoState, ...options },
-    render: () => (
-      <SessionStoryView demoState={demoState} toggleAllWorkspace={options.toggleAllWorkspace} />
-    ),
+    render: () => <SessionStoryView demoState={demoState} toggleAll={options.toggleAll} />,
   };
 }
 
@@ -88,11 +86,9 @@ export const SampleSessions: SessionsStory = storyFromDemoState(
   "sample",
 );
 
-export const WorkspaceAllMode: SessionsStory = storyFromDemoState(
-  "Sample — one workspace in All mode",
-  "sample",
-  { toggleAllWorkspace: true },
-);
+export const AllMode: SessionsStory = storyFromDemoState("Sample — shared All mode", "sample", {
+  toggleAll: true,
+});
 
 export const EmptySessions: SessionsStory = storyFromDemoState(
   "Sample — no unarchived sessions",

@@ -15,13 +15,11 @@ export function cwdLabel(cwd: string): string {
   return parts[parts.length - 1] || trimmed;
 }
 
-/**
- * Grouping key for same-directory cwds. Trailing separators only: the
+/** Grouping key for same-directory cwds. Trailing separators only: the
  * registered workspace cwds are already resolved paths (the extension host
  * normalizes them), and this module also runs in the browser stories where
- * node:path is unavailable.
- */
-function cwdGroupKey(cwd: string): string {
+ * node:path is unavailable. */
+export function cwdGroupKey(cwd: string): string {
   return cwd.replace(/[\\/]+$/, "");
 }
 

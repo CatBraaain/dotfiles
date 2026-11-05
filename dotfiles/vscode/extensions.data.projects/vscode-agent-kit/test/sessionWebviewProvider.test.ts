@@ -624,8 +624,48 @@ describe("SessionWebviewProvider", () => {
     const lastSessions = webview.postMessage.mock.calls
       .map((call) => call[0])
       .filter((message: { type?: string }) => message.type === "sessions")
-      .at(-1) as { state?: { groups?: { cwd: string }[] } };
-    expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([folder]);
+      .at(-1) as { state?: { groups?: { cwd: string; registered: boolean }[] } };
+    expect(lastSessions.state?.groups?.map((group) => [group.cwd, group.registered])).toEqual([
+      [folder, true],
+    ]);
+  });
+
+  it("unregisters a requested workspace and drops its empty group", async () => {
+    const folder = join(root, "registered");
+    const { provider, metadataPath } = createProvider({});
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await registerWorkspace(metadataPath, folder, 1_000);
+    await provider.refresh();
+
+    await webview.receive({ type: "unregisterWorkspace", cwd: folder });
+
+    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      workspaces?: Record<string, unknown>;
+    };
+    expect(parsed.workspaces).toEqual({});
+    const lastSessions = webview.postMessage.mock.calls
+      .map((call) => call[0])
+      .filter((message: { type?: string }) => message.type === "sessions")
+      .at(-1) as { state?: { groups?: unknown[] } };
+    expect(lastSessions.state?.groups).toEqual([]);
+  });
+
+  it("answers an unregister for an unregistered cwd with the unchanged list", async () => {
+    const { provider, metadataPath } = createProvider({});
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    const sessionsBefore = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
+
+    await webview.receive({ type: "unregisterWorkspace", cwd: join(root, "unregistered") });
+
+    await expect(readFile(metadataPath, "utf8")).rejects.toThrow(); // no store was created
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(sessionsBefore + 1); // the refreshed list still goes out
   });
 
   it("does not open a terminal or mark active when the session cwd is missing", async () => {

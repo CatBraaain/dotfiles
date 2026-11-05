@@ -12,11 +12,25 @@ export interface WebviewHtmlOptions {
 export const webviewAppMarkup = `<main id="app">
     <header>
       <h1>Sessions</h1>
+      <div class="mode-toggle" role="group" aria-label="Display mode">
+        <button type="button" data-mode="unarchived" aria-pressed="true">Unarchived</button>
+        <button type="button" data-mode="all" aria-pressed="false">All</button>
+      </div>
       <div class="header-actions">
         <button class="icon-button" type="button" data-action="refresh" aria-label="Refresh sessions">↻</button>
       </div>
     </header>
     <section id="sessions" aria-live="polite"></section>
+    <div id="unregister-dialog" hidden>
+      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="unregister-dialog-title">
+        <h2 id="unregister-dialog-title">Unregister workspace</h2>
+        <p>Remove <span id="unregister-dialog-cwd"></span> from the list? Sessions stay on disk.</p>
+        <div class="dialog-actions">
+          <button class="dialog-button secondary" type="button" data-action="cancelUnregister">Cancel</button>
+          <button class="dialog-button primary" type="button" data-action="confirmUnregister">Unregister</button>
+        </div>
+      </div>
+    </div>
     <footer class="footer">
       <button class="new-workspace" type="button" data-action="toggleWorkspaceForm" aria-expanded="false">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 10v6"></path><path d="M9 13h6"></path><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>

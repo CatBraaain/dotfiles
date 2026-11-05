@@ -4,7 +4,7 @@ import * as stories from "../stories/sessions.stories";
 /** Spec table row (静的プレビュー「データ」) mapped to the story export names. */
 const storyParameters = {
   SampleSessions: { demoState: "sample" },
-  WorkspaceAllMode: { demoState: "sample", toggleAllWorkspace: true },
+  AllMode: { demoState: "sample", toggleAll: true },
   EmptySessions: { demoState: "empty" },
 } as const;
 

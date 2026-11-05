@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   archivedSessionIds,
@@ -8,6 +8,7 @@ import {
   readMetadataStore,
   registeredWorkspaceCwds,
   registerWorkspace,
+  unregisterWorkspace,
   setSessionActive,
   setSessionLocked,
   writeMetadataStore,
@@ -319,6 +320,52 @@ describe("registerWorkspace", () => {
     writeFileSync(path, "not json");
 
     const result = registerWorkspace(path, "/home/user/project", 1_000);
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe("not json");
+  });
+});
+
+describe("unregisterWorkspace", () => {
+  it("removes the registration whose key resolves to the cwd", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        sessions: { a: { active: false } },
+        workspaces: { "/home/user/a": { addedAtMs: 1 }, "/home/user/b": { addedAtMs: 2 } },
+      }),
+    );
+
+    const result = unregisterWorkspace(path, "/home/user/b/");
+
+    expect(result).toEqual({ ok: true, removed: true });
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as MetadataStoreData;
+    expect(Object.keys(parsed.workspaces ?? {})).toEqual(["/home/user/a"]);
+    expect(parsed.sessions).toEqual({ a: { active: false } });
+  });
+
+  it("keeps the file untouched when no registration points at the cwd", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, workspaces: { "/home/user/a": {} } }));
+    const original = readFileSync(path, "utf8");
+
+    const result = unregisterWorkspace(path, "/home/user/other");
+
+    expect(result).toEqual({ ok: true, removed: false });
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+
+  it("keeps a missing store missing when unregistering", () => {
+    const result = unregisterWorkspace(path, "/home/user/a");
+
+    expect(result).toEqual({ ok: true, removed: false });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("reports a store read error without writing", () => {
+    writeFileSync(path, "not json");
+
+    const result = unregisterWorkspace(path, "/home/user/a");
 
     expect(result.ok).toBe(false);
     expect(readFileSync(path, "utf8")).toBe("not json");

@@ -1,4 +1,4 @@
-import { groupSessions } from "../grouping";
+import { cwdGroupKey, groupSessions } from "../grouping";
 import type { SessionSummary } from "../sessionStore";
 import type { WebviewSessionGroup } from "./protocol";
 
@@ -10,9 +10,11 @@ export function sessionViewGroups(
   archivedIds: ReadonlySet<string>,
   lockedIds: ReadonlySet<string>,
 ): WebviewSessionGroup[] {
+  const registeredKeys = new Set(registeredCwds.map((cwd) => cwdGroupKey(cwd)));
   return groupSessions(sessions, registeredCwds).map((group) => ({
     cwd: group.cwd,
     label: group.label,
+    registered: registeredKeys.has(cwdGroupKey(group.cwd)),
     sessions: group.sessions.map((session) => ({
       sessionId: session.sessionId,
       displayName: session.displayName,

@@ -9,7 +9,11 @@ export const webviewStyles = `
     #app { padding: 12px; }
     header, .group-header { display: flex; align-items: center; }
     header { justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 12px; }
-    h1 { margin: 0; font-size: 13px; font-weight: 600; line-height: 24px; }
+    h1 { flex: 1; overflow: hidden; margin: 0; font-size: 13px; font-weight: 600; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
+    .mode-toggle { display: flex; flex: none; gap: 2px; padding: 1px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: var(--session-radius); }
+    .mode-toggle button { height: 20px; padding: 0 6px; border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 18px; }
+    .mode-toggle button:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .mode-toggle button[aria-pressed="true"] { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); background: var(--vscode-list-inactiveSelectionBackground); }
     .header-actions { display: flex; gap: 4px; }
     .icon-button { min-width: 24px; height: 24px; padding: 0 8px; color: var(--vscode-descriptionForeground); }
     .icon-button:hover { color: var(--vscode-foreground); }
@@ -31,12 +35,11 @@ export const webviewStyles = `
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }
-    .group-chevron, .group-new-session { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
+    .group-chevron, .group-new-session, .group-unregister { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
     .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-    .group-modes { display: flex; flex: none; gap: 2px; padding: 1px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: var(--session-radius); }
-    .mode-button { height: 20px; padding: 0 6px; border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 18px; }
-    .mode-button:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
-    .mode-button[aria-pressed="true"] { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); background: var(--vscode-list-inactiveSelectionBackground); }
+    .group-unregister { color: var(--vscode-descriptionForeground); visibility: hidden; }
+    .group-unregister:hover { color: var(--vscode-foreground); }
+    .group-header:hover .group-unregister, .group-header:focus-within .group-unregister { visibility: visible; }
     .session-row { position: relative; min-width: 0; height: 32px; margin-left: 12px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
     .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(84px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
@@ -49,7 +52,7 @@ export const webviewStyles = `
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
     .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 84px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
     .copy, .lock, .archive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .copy svg, .lock svg, .archive svg, .group-chevron svg, .group-new-session svg { width: 12px; height: 12px; }
+    .copy svg, .lock svg, .archive svg, .group-chevron svg, .group-new-session svg, .group-unregister svg { width: 12px; height: 12px; }
     .copy { right: 52px; }
     .lock { right: 28px; }
     .archive { right: 4px; }
@@ -60,6 +63,18 @@ export const webviewStyles = `
     .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
     .session-row.selected:focus-within .session-name, .session-row.selected:focus-within .session-timestamp { color: var(--vscode-list-activeSelectionForeground, var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground))); }
     .archive:disabled, .archive:disabled:hover { color: var(--vscode-disabledForeground); background: transparent; cursor: default; }
+    #unregister-dialog { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.4); }
+    #unregister-dialog[hidden] { display: none; }
+    .dialog { display: flex; flex-direction: column; gap: 8px; width: min(240px, calc(100% - 32px)); padding: 12px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: 9.6px; background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)); }
+    .dialog h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--vscode-foreground); }
+    .dialog p { margin: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--vscode-descriptionForeground); }
+    .dialog p span { color: var(--vscode-foreground); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .dialog-button { height: 26px; padding: 0 12px; border: 1px solid transparent; border-radius: 4px; font-size: 12px; cursor: pointer; }
+    .dialog-button.primary { color: var(--vscode-button-foreground, #ffffff); background: var(--vscode-button-background, #0e639c); }
+    .dialog-button.primary:hover { background: var(--vscode-button-hoverBackground, #11589c); }
+    .dialog-button.secondary { color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); background: var(--vscode-button-secondaryBackground, #3a3d41); }
+    .dialog-button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
     .empty, #status { color: var(--vscode-descriptionForeground); font-size: 12px; }
     .empty { padding: 24px 8px; text-align: center; }
     #status { min-height: 16px; margin: 8px 0 0; }

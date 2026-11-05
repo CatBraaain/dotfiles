@@ -3,6 +3,7 @@ export type WebviewRequest =
   | { type: "refresh" }
   | { type: "newSession"; cwd: string }
   | { type: "addWorkspace"; path: string }
+  | { type: "unregisterWorkspace"; cwd: string }
   | { type: "openSession"; sessionId: string }
   | { type: "archiveSessions"; sessionIds: string[] }
   | { type: "setSessionLock"; sessionId: string; locked: boolean }
@@ -19,6 +20,8 @@ export interface WebviewSession {
 export interface WebviewSessionGroup {
   cwd: string;
   label: string;
+  /** True when the cwd comes from a registered workspace (New Workspace). */
+  registered: boolean;
   sessions: WebviewSession[];
 }
 
@@ -38,6 +41,9 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   }
   if (value.type === "addWorkspace" && isNonEmptyPath(value.path)) {
     return { type: "addWorkspace", path: value.path };
+  }
+  if (value.type === "unregisterWorkspace" && isNonEmptyPath(value.cwd)) {
+    return { type: "unregisterWorkspace", cwd: value.cwd };
   }
   if (
     (value.type === "openSession" ||

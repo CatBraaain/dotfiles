@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test } from "../support/vscode";
+import { expect, test, type VSCodeFixture } from "../support/vscode";
 
 test.use({ trace: "on" });
 
@@ -21,8 +21,7 @@ test(
         await expect(heading.locator(".group-title")).toHaveText(
           key === "A" ? "project-a" : "project-b",
         );
-        await expect(group.getByRole("button", { name: "Unarchived", exact: true })).toBeVisible();
-        await expect(group.getByRole("button", { name: "All", exact: true })).toBeVisible();
+        await expect(group.locator(".mode-button")).toHaveCount(0);
         await expect(frame.getByText(host.sessions[key].cwd, { exact: true })).toHaveCount(0);
       }
       const emptyGroup = frame
@@ -32,6 +31,10 @@ test(
       await expect(emptyGroup.locator(".session-row")).toHaveCount(0);
       await expect(emptyGroup.locator(".empty")).toHaveCount(0);
       await expect(frame.locator(".group-path")).toHaveCount(0);
+      await expect(frame.locator('#app header [data-mode="unarchived"]')).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
       await expect(
         frame.getByText("No unarchived sessions. Select All to browse saved sessions.", {
           exact: true,
@@ -42,19 +45,15 @@ test(
         contentType: "image/png",
       });
     });
-    await test.step("Choose All in the inactive worktree group", async () => {
+    await test.step("Choose All in the shared header toggle", async () => {
       const frame = await host.sessionFrame();
-      await expect(
-        frame
-          .locator("section.group")
-          .first()
-          .locator(".group-header")
-          .describe("Top session group heading"),
-      ).toHaveAttribute("title", host.sessions.B.cwd);
       const group = frame
         .locator("section.group")
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) });
-      await group.locator('[data-mode="all"]').describe("Worktree history").click({ steps: 15 });
+      await frame
+        .locator('#app header [data-mode="all"]')
+        .describe("Shared All toggle")
+        .click({ steps: 15 });
       await expect(
         group
           .locator(`[data-session="${host.sessions.B.id}"]`)
@@ -376,7 +375,7 @@ test(
 );
 
 test(
-  "New Workspace がフルパスを受け付け、キャンセルと無効なパスを安全に扱い、その cwd で Pi を起動できる",
+  "New Workspace で入力したフルパスのワークスペースを登録できる",
   { annotation: { type: "spec", description: "E2E-6" } },
   async ({ host }, testInfo) => {
     const folder = join(host.directory, "registered");
@@ -395,18 +394,31 @@ test(
         contentType: "image/png",
       });
     });
-    await test.step("Cancel the New workspace form without changing the list", async () => {
+    await test.step("Add the work folder and see its group in the list", async () => {
       const frame = await host.sessionFrame();
-      const groupsBefore = await frame.locator("section.group").count();
+      await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
       await frame
-        .locator('[data-action="cancelWorkspaceForm"]')
-        .describe("Cancel adding the workspace")
+        .locator('[data-action="addWorkspace"]')
+        .describe("Add workspace button")
         .click({ steps: 15 });
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      await expect(group).toBeVisible();
       await expect(frame.locator("#workspace-form")).not.toBeVisible();
-      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
-      expect(host.snapshot().terminals).toHaveLength(0);
-      expect(host.piProcesses()).toHaveLength(0);
+      await testInfo.attach("ワークスペース追加後", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
     });
+  },
+);
+
+test(
+  "New Workspace のキャンセルと無効なパスを安全に扱える",
+  { annotation: { type: "spec", description: "E2E-12" } },
+  async ({ host }) => {
     await test.step("Reject a missing workspace path with a safe error", async () => {
       const frame = await host.sessionFrame();
       const groupsBefore = await frame.locator("section.group").count();
@@ -434,25 +446,29 @@ test(
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
     });
-    await test.step("Add the work folder and see its group in the list", async () => {
+    await test.step("Cancel the New workspace form without changing the list", async () => {
       const frame = await host.sessionFrame();
-      await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
+      const groupsBefore = await frame.locator("section.group").count();
       await frame
-        .locator('[data-action="addWorkspace"]')
-        .describe("Add workspace button")
+        .locator('[data-action="cancelWorkspaceForm"]')
+        .describe("Cancel adding the workspace")
         .click({ steps: 15 });
-      const group = frame
-        .locator("section.group")
-        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
-        .describe("Registered work folder group");
-      await expect(group).toBeVisible();
       await expect(frame.locator("#workspace-form")).not.toBeVisible();
-      await testInfo.attach("ワークスペース追加後", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
+      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
+      expect(host.snapshot().terminals).toHaveLength(0);
+      expect(host.piProcesses()).toHaveLength(0);
     });
-    await test.step("Start Pi from the registered group plus button", async () => {
+  },
+);
+
+test(
+  "登録済みワークスペースの New session で、その cwd で新しい Pi を起動できる",
+  { annotation: { type: "spec", description: "E2E-10" } },
+  async ({ host }, testInfo) => {
+    const folder = join(host.directory, "registered");
+    await registerWorkFolder(host, folder);
+
+    await test.step("Launch Pi from the registered group plus button", async () => {
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
@@ -466,6 +482,57 @@ test(
         .poll(() => host.piProcesses().some((process) => process.cwd === folder))
         .toBe(true);
       await host.expectPiVisible(folder);
+      await testInfo.attach("登録 cwd で起動", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+    });
+  },
+);
+
+test(
+  "ワークスペース登録解除が確認を挟み、起動中の Pi を残して登録だけを外す",
+  { annotation: { type: "spec", description: "E2E-11" } },
+  async ({ host }) => {
+    const folder = join(host.directory, "registered");
+    await registerWorkFolder(host, folder);
+
+    await test.step("Keep the registration when the confirmation is cancelled", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      await group.locator(".group-header").hover();
+      await group
+        .locator(".group-unregister")
+        .describe("Registered group Unregister button")
+        .click({ steps: 15 });
+      await frame.getByRole("button", { name: "Cancel", exact: true }).click({ steps: 15 });
+      await expect(group).toBeVisible();
+    });
+    await test.step("Unregister after confirmation while Pi keeps running", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      await group
+        .locator(".group-new-session")
+        .describe("Registered group New session button")
+        .click({ steps: 15 });
+      await expect
+        .poll(() => host.piProcesses().some((process) => process.cwd === folder))
+        .toBe(true);
+
+      await group.locator(".group-header").hover();
+      await group.locator(".group-unregister").click({ steps: 15 });
+      await frame
+        .getByRole("button", { name: "Unregister", exact: true })
+        .describe("Confirm unregistering")
+        .click({ steps: 15 });
+      await expect(group).toHaveCount(0);
+      expect(host.piProcesses().some((process) => process.cwd === folder)).toBe(true); // unregistering never stops Pi
     });
   },
 );
@@ -535,3 +602,23 @@ test(
     );
   },
 );
+
+/** Register a real folder through the New workspace form and wait for its group. */
+async function registerWorkFolder(host: VSCodeFixture, folder: string): Promise<void> {
+  mkdirSync(folder, { recursive: true });
+  const frame = await host.sessionFrame();
+  await frame
+    .locator('[data-action="toggleWorkspaceForm"]')
+    .describe("New workspace footer button")
+    .click({ steps: 15 });
+  await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
+  await frame.locator('[data-action="addWorkspace"]').describe("Add workspace button").click({
+    steps: 15,
+  });
+  await expect(
+    frame
+      .locator("section.group")
+      .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+      .describe("Registered work folder group"),
+  ).toBeVisible();
+}

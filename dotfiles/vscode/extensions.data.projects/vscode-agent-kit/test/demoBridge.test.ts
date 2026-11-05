@@ -9,7 +9,7 @@ interface DemoSession {
 }
 
 interface CapturedState {
-  groups: { cwd: string; sessions: DemoSession[] }[];
+  groups: { cwd: string; registered: boolean; sessions: DemoSession[] }[];
 }
 
 interface DemoBridgeHandle {
@@ -185,6 +185,25 @@ describe("createDemoBridge", () => {
 
     const added = last().groups.find((group) => group.cwd === "~/projects/brand-new");
     expect(added?.sessions).toEqual([]);
+  });
+
+  it("removes a registered-only group on unregisterWorkspace", () => {
+    const { bridge, last } = setup();
+
+    bridge.postMessage({ type: "unregisterWorkspace", cwd: "~/projects/agenda" });
+
+    expect(last().groups.some((group) => group.cwd === "~/projects/agenda")).toBe(false);
+  });
+
+  it("keeps sessions of a registered workspace after unregisterWorkspace", () => {
+    const { bridge, last } = setup();
+    bridge.postMessage({ type: "addWorkspace", path: "~/projects/vscode-pi-sessions" });
+
+    bridge.postMessage({ type: "unregisterWorkspace", cwd: "~/projects/vscode-pi-sessions" });
+
+    const group = last().groups.find((group) => group.cwd === "~/projects/vscode-pi-sessions");
+    expect(group?.sessions.length).toBeGreaterThan(0);
+    expect(group?.registered).toBe(false);
   });
 
   it("does not duplicate a group added twice on addWorkspace", () => {

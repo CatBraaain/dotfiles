@@ -256,3 +256,38 @@ export function registerWorkspace(
 export function registeredWorkspaceCwds(data: MetadataStoreData | undefined): string[] {
   return Object.keys(data?.workspaces ?? {});
 }
+
+export type UnregisterWorkspaceResult =
+  | { ok: true; removed: boolean }
+  | { ok: false; message: string };
+
+/**
+ * Remove a workspace registration whose key resolves to the given cwd. No
+ * write happens when no registered entry points at the directory.
+ */
+export function unregisterWorkspace(path: string, cwd: string): UnregisterWorkspaceResult {
+  const read = readMetadataStore(path);
+  if (read.status === "error") {
+    return { ok: false, message: read.message };
+  }
+  if (read.status !== "ok") {
+    return { ok: true, removed: false };
+  }
+  const resolvedCwd = resolve(cwd);
+  const registeredKey = Object.keys(read.data.workspaces ?? {}).find(
+    (key) => resolve(key) === resolvedCwd,
+  );
+  if (registeredKey === undefined) {
+    return { ok: true, removed: false };
+  }
+  const base: MetadataStoreData = structuredClone(read.data);
+  const workspaces: Record<string, WorkspaceMetadata> = { ...base.workspaces };
+  delete workspaces[registeredKey];
+  const next: MetadataStoreData = { ...base, workspaces };
+  try {
+    writeMetadataStore(path, next);
+  } catch (error) {
+    return { ok: false, message: `Failed to write ${basename(path)}: ${errorMessage(error)}` };
+  }
+  return { ok: true, removed: true };
+}

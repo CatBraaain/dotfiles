@@ -31,6 +31,8 @@ export interface ClientSession {
 export interface ClientSessionGroup {
   cwd: string;
   label: string;
+  /** True when the cwd comes from a registered workspace (New Workspace). */
+  registered: boolean;
   sessions: ClientSession[];
 }
 
@@ -57,15 +59,14 @@ export interface ClientBridge {
   onMessage(callback: (message: unknown) => void): void;
 }
 
-/** Sessions shown in display order (groups in order, rows in order) for the given modes. */
+/** Sessions shown in display order (groups in order, rows in order) for the
+ * shared display mode. */
 export function visibleSessions(
   state: ClientState,
-  modes: ReadonlyMap<string, ViewMode>,
+  mode: ViewMode,
   collapsedCwds: ReadonlySet<string> = new Set(),
 ): ClientSession[] {
-  return state.groups.flatMap((group) =>
-    visibleGroupSessions(group, modes.get(group.cwd) ?? "unarchived", collapsedCwds),
-  );
+  return state.groups.flatMap((group) => visibleGroupSessions(group, mode, collapsedCwds));
 }
 
 function visibleGroupSessions(
@@ -159,19 +160,18 @@ export function selectAllIds(visible: readonly ClientSession[]): string[] {
     .map((session) => session.sessionId);
 }
 
-/** Pure view for a state, per-workspace modes, copied session IDs, and selected rows: mode
- * toggles, session rows, empty state. */
+/** Pure view for a state, the shared display mode, copied session IDs, and
+ * selected rows: session rows, empty state. */
 export function sessionListView(
   state: ClientState,
-  modes: ReadonlyMap<string, ViewMode>,
+  mode: ViewMode,
   copiedIds: ReadonlySet<string> = new Set(),
   selectedIds: ReadonlySet<string> = new Set(),
   collapsedCwds: ReadonlySet<string> = new Set(),
 ): SessionListView {
-  const groups = state.groups.map((group) => {
-    const mode = modes.get(group.cwd) ?? "unarchived";
-    return groupDescriptor(group, mode, copiedIds, selectedIds, collapsedCwds);
-  });
+  const groups = state.groups.map((group) =>
+    groupDescriptor(group, mode, copiedIds, selectedIds, collapsedCwds),
+  );
   return {
     sessions:
       groups.length === 0
@@ -218,6 +218,21 @@ function groupDescriptor(
             },
             children: [group.label],
           },
+          ...(group.registered
+            ? [
+                {
+                  tag: "button",
+                  attrs: {
+                    class: "group-unregister",
+                    type: "button",
+                    "data-unregister": group.cwd,
+                    title: "Unregister workspace",
+                    "aria-label": `Unregister workspace ${group.label}`,
+                  },
+                  children: [minusIcon()],
+                } satisfies ElementDescriptor,
+              ]
+            : []),
           {
             tag: "button",
             attrs: {
@@ -228,25 +243,6 @@ function groupDescriptor(
               "aria-label": `New session in ${group.label}`,
             },
             children: [plusIcon()],
-          },
-          {
-            tag: "div",
-            attrs: {
-              class: "group-modes",
-              role: "group",
-              "aria-label": `${group.label} display mode`,
-            },
-            children: (["unarchived", "all"] as const).map((candidate) => ({
-              tag: "button",
-              attrs: {
-                class: "mode-button",
-                type: "button",
-                "data-mode": candidate,
-                "data-cwd": group.cwd,
-                "aria-pressed": String(candidate === mode),
-              },
-              children: [candidate === "unarchived" ? "Unarchived" : "All"],
-            })),
           },
         ],
       },
@@ -368,6 +364,10 @@ function chevronIcon(direction: "down" | "right"): ElementDescriptor {
   return strokeIcon([{ tag: "path", attrs: { d: path } }]);
 }
 
+function minusIcon(): ElementDescriptor {
+  return strokeIcon([{ tag: "path", attrs: { d: "M5 12h14" } }]);
+}
+
 function plusIcon(): ElementDescriptor {
   return strokeIcon([
     { tag: "path", attrs: { d: "M5 12h14" } },
@@ -429,9 +429,9 @@ function strokeIcon(children: ElementDescriptor[]): ElementDescriptor {
 
 /** Click actions the descriptor tree offers; wired by the SessionsApp. */
 interface DescriptorActions {
-  onModeClick(cwd: string, mode: ViewMode): void;
   onGroupToggle(cwd: string): void;
   onNewSessionClick(cwd: string): void;
+  onUnregisterClick(cwd: string): void;
   onSessionClick(
     sessionId: string,
     event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
@@ -471,17 +471,12 @@ function descriptorOnClick(
 ): ((event: ClickModifiers) => void) | undefined {
   if (descriptor.tag !== "button") return undefined;
   const attrs = descriptor.attrs ?? {};
-  const mode = attrs["data-mode"];
-  if (mode !== undefined) {
-    const cwd = attrs["data-cwd"];
-    if (cwd !== undefined && (mode === "unarchived" || mode === "all"))
-      return () => actions.onModeClick(cwd, mode);
-    return undefined;
-  }
   const groupCwd = attrs["data-toggle-group"];
   if (groupCwd !== undefined) return () => actions.onGroupToggle(groupCwd);
   const newSessionCwd = attrs["data-new-session"];
   if (newSessionCwd !== undefined) return () => actions.onNewSessionClick(newSessionCwd);
+  const unregisterCwd = attrs["data-unregister"];
+  if (unregisterCwd !== undefined) return () => actions.onUnregisterClick(unregisterCwd);
   const sessionId =
     attrs["data-archive"] ?? attrs["data-lock"] ?? attrs["data-copy"] ?? attrs["data-session"];
   if (sessionId === undefined) return undefined;
@@ -511,9 +506,12 @@ function descriptorToElement(
   );
 }
 
-/** Bridge data as one immutable snapshot for useSyncExternalStore. */
+/** Bridge data as one immutable snapshot for useSyncExternalStore. The shared
+ * display mode lives here so the fixed header toggle (outside the React root)
+ * and the rendered list read and write the same value. */
 interface ClientSnapshot {
   state: ClientState;
+  mode: ViewMode;
   statusText: string;
   statusError: boolean;
 }
@@ -524,9 +522,15 @@ function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
   setSessions(state: ClientState): void;
+  setMode(mode: ViewMode): void;
   setError(message: string): void;
 } {
-  let snapshot: ClientSnapshot = { state: { groups: [] }, statusText: "", statusError: false };
+  let snapshot: ClientSnapshot = {
+    state: { groups: [] },
+    mode: "unarchived",
+    statusText: "",
+    statusError: false,
+  };
   const listeners = new Set<() => void>();
   const publish = (next: ClientSnapshot): void => {
     snapshot = next;
@@ -538,7 +542,8 @@ function createClientStore(): {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => snapshot,
-    setSessions: (state) => publish({ state, statusText: "", statusError: false }),
+    setSessions: (state) => publish({ ...snapshot, state, statusText: "", statusError: false }),
+    setMode: (mode) => publish({ ...snapshot, mode }),
     setError: (message) => publish({ ...snapshot, statusText: message, statusError: true }),
   };
 }
@@ -548,26 +553,27 @@ interface SessionsAppProps {
   store: ReturnType<typeof createClientStore>;
   statusElement: HTMLElement;
   sessionsElement: HTMLElement;
+  openUnregisterDialog: (cwd: string) => void;
 }
 
-/** Render the session list into the #sessions root. Mode toggles and row
- * selection stay in client state (no host round-trip); session actions go
- * through the bridge. */
+/** Render the session list into the #sessions root. The shared display mode
+ * and row selection stay in client state (no host round-trip); session actions
+ * go through the bridge. */
 function SessionsApp({
   bridge,
   store,
   statusElement,
   sessionsElement,
+  openUnregisterDialog,
 }: SessionsAppProps): ReactElement {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  const [modes, setModes] = useState(() => new Map<string, ViewMode>());
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [copiedIds, setCopiedIds] = useState(() => new Set<string>());
   const anchorRef = useRef<string | undefined>(undefined);
   const copiedTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
-  const visible = visibleSessions(snapshot.state, modes, collapsedCwds);
+  const visible = visibleSessions(snapshot.state, snapshot.mode, collapsedCwds);
 
   /** Keep selection and its anchor pointing at sessions that still exist. */
   useEffect(() => {
@@ -596,11 +602,13 @@ function SessionsApp({
         return;
       }
       event.preventDefault();
-      setSelection(new Set(selectAllIds(visibleSessions(snapshot.state, modes, collapsedCwds))));
+      setSelection(
+        new Set(selectAllIds(visibleSessions(snapshot.state, snapshot.mode, collapsedCwds))),
+      );
     };
     sessionsElement.addEventListener("keydown", onKeyDown);
     return () => sessionsElement.removeEventListener("keydown", onKeyDown);
-  }, [snapshot.state, modes, collapsedCwds, sessionsElement]);
+  }, [snapshot, collapsedCwds, sessionsElement]);
 
   /** Show the copied feedback on the row's copy button for about a second. */
   const markCopied = useCallback((sessionId: string): void => {
@@ -637,12 +645,6 @@ function SessionsApp({
   );
 
   const actions: DescriptorActions = {
-    onModeClick: (cwd, mode) =>
-      setModes((previous) => {
-        const next = new Map(previous);
-        next.set(cwd, mode);
-        return next;
-      }),
     onGroupToggle: (cwd) =>
       setCollapsedCwds((previous) => {
         const next = new Set(previous);
@@ -651,6 +653,7 @@ function SessionsApp({
         return next;
       }),
     onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
+    onUnregisterClick: (cwd) => openUnregisterDialog(cwd),
     onSessionClick: (sessionId, event) => {
       const update = nextSelectionFromClick(
         { sessionId, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey },
@@ -675,7 +678,7 @@ function SessionsApp({
     },
   };
 
-  const view = sessionListView(snapshot.state, modes, copiedIds, selection, collapsedCwds);
+  const view = sessionListView(snapshot.state, snapshot.mode, copiedIds, selection, collapsedCwds);
   return <>{view.sessions.map((descriptor) => descriptorToElement(descriptor, actions))}</>;
 }
 
@@ -692,17 +695,48 @@ export function initClient(bridge: ClientBridge): () => void {
   const formElement = document.querySelector("#workspace-form");
   const pathInput = document.querySelector("#workspace-path");
   const newWorkspaceButton = document.querySelector('[data-action="toggleWorkspaceForm"]');
+  const modeButtons = new Map(
+    (["unarchived", "all"] as const).map((mode) => {
+      const button = document.querySelector(`#app header [data-mode="${mode}"]`);
+      return [mode, button];
+    }),
+  );
   if (
     !(sessionsElement instanceof HTMLElement) ||
     !(statusElement instanceof HTMLElement) ||
     !(formElement instanceof HTMLElement) ||
     !(pathInput instanceof HTMLInputElement) ||
-    !(newWorkspaceButton instanceof HTMLElement)
+    !(newWorkspaceButton instanceof HTMLElement) ||
+    [...modeButtons.values()].every((button) => button instanceof HTMLButtonElement) === false
   ) {
     throw new Error("Sessions webview markup is incomplete.");
   }
+  const headerModeButton = (mode: ViewMode): HTMLButtonElement =>
+    modeButtons.get(mode) as HTMLButtonElement;
 
   const store = createClientStore();
+  const dialogElement = document.querySelector("#unregister-dialog");
+  const dialogCwd = document.querySelector("#unregister-dialog-cwd");
+  const cancelUnregisterButton = document.querySelector('[data-action="cancelUnregister"]');
+  if (
+    !(dialogElement instanceof HTMLElement) ||
+    !(dialogCwd instanceof HTMLElement) ||
+    !(cancelUnregisterButton instanceof HTMLButtonElement)
+  ) {
+    throw new Error("Sessions webview markup is incomplete.");
+  }
+  /** Unregister asks for confirmation in the webview before contacting the host. */
+  let pendingUnregisterCwd: string | undefined = undefined;
+  const closeUnregisterDialog = (): void => {
+    pendingUnregisterCwd = undefined;
+    dialogElement.hidden = true;
+  };
+  const openUnregisterDialog = (cwd: string): void => {
+    pendingUnregisterCwd = cwd;
+    dialogCwd.textContent = cwd;
+    dialogElement.hidden = false;
+    cancelUnregisterButton.focus();
+  };
   // The host closes the form by replying to an Add with a refreshed list; an
   // invalid path answers with an error instead, so the form stays open.
   let pendingAddWorkspace = false;
@@ -723,12 +757,27 @@ export function initClient(bridge: ClientBridge): () => void {
     }
   });
 
+  /** Reflect the shared mode on the fixed header buttons (outside the React root). */
+  const selectHeaderMode = (mode: ViewMode): void => {
+    store.setMode(mode);
+    for (const candidate of modeButtons.keys()) {
+      headerModeButton(candidate).setAttribute("aria-pressed", String(candidate === mode));
+    }
+  };
+
   // The header, workspace form, and footer live outside the React root
-  // (#sessions), so their data-action clicks arrive through document
-  // delegation. Form actions stay local; Refresh goes through the bridge.
+  // (#sessions), so their data-action and data-mode clicks arrive through
+  // document delegation. Mode and form actions stay local; Refresh goes
+  // through the bridge.
   const onDocumentClick = (event: Event): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    const modeTarget = target.closest("[data-mode]");
+    if (modeTarget instanceof HTMLButtonElement) {
+      const mode = modeTarget.dataset.mode;
+      if (mode === "unarchived" || mode === "all") selectHeaderMode(mode);
+      return;
+    }
     const action = target.closest("[data-action]");
     if (!(action instanceof HTMLButtonElement)) return;
     const actionType = action.dataset.action ?? "";
@@ -743,6 +792,16 @@ export function initClient(bridge: ClientBridge): () => void {
       closeWorkspaceForm();
       return;
     }
+    if (actionType === "cancelUnregister") {
+      closeUnregisterDialog();
+      return;
+    }
+    if (actionType === "confirmUnregister") {
+      const cwd = pendingUnregisterCwd;
+      closeUnregisterDialog();
+      if (cwd !== undefined) bridge.postMessage({ type: "unregisterWorkspace", cwd });
+      return;
+    }
     if (actionType === "addWorkspace") {
       const path = pathInput.value.trim();
       if (path === "") return;
@@ -753,6 +812,10 @@ export function initClient(bridge: ClientBridge): () => void {
     bridge.postMessage({ type: actionType });
   };
   document.addEventListener("click", onDocumentClick);
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" && !dialogElement.hidden) closeUnregisterDialog();
+  };
+  document.addEventListener("keydown", onKeyDown);
 
   const root = createRoot(sessionsElement);
   root.render(
@@ -761,6 +824,7 @@ export function initClient(bridge: ClientBridge): () => void {
       store={store}
       statusElement={statusElement}
       sessionsElement={sessionsElement}
+      openUnregisterDialog={openUnregisterDialog}
     />,
   );
 
@@ -768,6 +832,7 @@ export function initClient(bridge: ClientBridge): () => void {
 
   return () => {
     document.removeEventListener("click", onDocumentClick);
+    document.removeEventListener("keydown", onKeyDown);
     root.unmount();
   };
 }

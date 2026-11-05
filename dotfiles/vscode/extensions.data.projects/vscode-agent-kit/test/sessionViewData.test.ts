@@ -61,6 +61,15 @@ describe("sessionViewGroups", () => {
     expect(groups[2].label).toBe("empty");
   });
 
+  it("marks exactly the registered workspace groups", () => {
+    const groups = sessionViewGroups(sessions, ["/workspace/alpha"], new Set(), new Set());
+
+    expect(groups.map((group) => [group.cwd, group.registered])).toEqual([
+      ["/workspace/beta", false],
+      ["/workspace/alpha", true],
+    ]);
+  });
+
   it("does not duplicate a registered workspace that already has session groups", () => {
     const groups = sessionViewGroups(sessions, ["/workspace/alpha"], new Set(), new Set());
 

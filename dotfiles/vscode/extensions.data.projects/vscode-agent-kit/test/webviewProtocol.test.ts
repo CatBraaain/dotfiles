@@ -17,6 +17,10 @@ describe("parseWebviewRequest", () => {
       { type: "addWorkspace", path: "/home/user/project" },
     ],
     [
+      { type: "unregisterWorkspace", cwd: "/home/user/project" },
+      { type: "unregisterWorkspace", cwd: "/home/user/project" },
+    ],
+    [
       { type: "openSession", sessionId },
       { type: "openSession", sessionId },
     ],
@@ -69,6 +73,10 @@ describe("parseWebviewRequest", () => {
     { type: "addWorkspace", path: "" },
     { type: "addWorkspace", path: "   " },
     { type: "addWorkspace", path: 7 },
+    { type: "unregisterWorkspace" },
+    { type: "unregisterWorkspace", cwd: "" },
+    { type: "unregisterWorkspace", cwd: "  " },
+    { type: "unregisterWorkspace", cwd: 9 },
     { type: "shell", command: "rm -rf /" },
   ])("rejects unsupported input %#", (value) => {
     expect(parseWebviewRequest(value)).toBeUndefined();
