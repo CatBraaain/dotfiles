@@ -1,28 +1,21 @@
-// @ts-ignore: Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { readFile, writeFile } from "node:fs/promises";
-
-// User dictionary entries appended to the tail of kagiroi.custom.dict.yaml.
-// Each entry is [phrase, reading] and becomes the TSV row
-// `phrase|1851 1851<TAB>reading<TAB>1`, matching existing entries.
-const dictionaryEntries: Array<[string, string]> = [
-  ["単語", "たんご"],
-  ["最高", "さいこう"],
-  ["検証", "けんしょう"],
-];
-const dictionaryRows = dictionaryEntries
-  .map(([phrase, reading]) => `${phrase}|1851 1851\t${reading}\t1`)
-  .join("\n");
-
 async function main(): Promise<void> {
   const { buildHookContext } = await import(
     `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
   );
-  const { resolvePaths } = await buildHookContext();
-  const { distPath } = resolvePaths("kagiroi.custom.dict.yaml");
-  const existingDict = await readFile(distPath, "utf8");
-  const newline =
-    existingDict === "" || existingDict.endsWith("\n") ? "" : "\n";
-  await writeFile(distPath, existingDict + newline + dictionaryRows + "\n");
+  const { transform } = await buildHookContext();
+
+  // User dictionary entries. Each entry is [phrase, reading] and becomes the
+  // TSV row `phrase|1851 1851<TAB>reading<TAB>1`, matching existing entries.
+  const dictionaryEntries: Array<[string, string]> = [
+    ["単語", "たんご"],
+    ["最高", "さいこう"],
+    ["検証", "けんしょう"],
+  ];
+  const dictionaryRows = dictionaryEntries
+    .map(([phrase, reading]) => `${phrase}|1851 1851\t${reading}\t1`)
+    .join("\n");
+
+  await transform("kagiroi.custom.dict.yaml", (content: string) => `${content}${dictionaryRows}\n`);
 }
 
 if (import.meta.main) await main();
