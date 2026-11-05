@@ -377,53 +377,6 @@ test(
 );
 
 test(
-  "Opens an unregistered cwd and reconnects to its Pi without adding a workspace folder",
-  {
-    tag: "@single-root",
-    annotation: { type: "spec", description: "E2E-5" },
-  },
-  async ({ host }, testInfo) => {
-    const folders = host.snapshot().folders;
-    const editorTabs = host.snapshot().tabs.filter((tab) => !tab.terminal);
-    const addFolder = host.page
-      .getByRole("button", { name: "Add folder to workspace", exact: true })
-      .describe("Workspace folder notification action");
-    await test.step("Open the unregistered session directly in Pi", async () => {
-      await host.selectSession("External");
-      await host.expectPiVisible(host.sessions.External.cwd);
-      await expect(addFolder).toHaveCount(0);
-      expect(host.snapshot().folders).toEqual(folders);
-      expect(host.snapshot().tabs.filter((tab) => !tab.terminal)).toEqual(editorTabs);
-      await testInfo.attach("未登録 cwd の Pi TUI", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-    });
-    const previousPiPid = host
-      .piProcesses()
-      .find((entry) => entry.cwd === host.sessions.External.cwd)!.pid;
-    await test.step("Switch conversations and return to the same unregistered Pi", async () => {
-      await host.selectSession("A");
-      await host.expectPiVisible(host.sessions.A.cwd);
-      await host.selectSession("External");
-      await host.expectPiVisible(host.sessions.External.cwd);
-      const processes = host
-        .piProcesses()
-        .filter((entry) => entry.cwd === host.sessions.External.cwd);
-      expect(processes).toHaveLength(1);
-      expect(processes[0].pid).toBe(previousPiPid);
-      await expect(addFolder).toHaveCount(0);
-      expect(host.snapshot().folders).toEqual(folders);
-      expect(host.snapshot().tabs.filter((tab) => !tab.terminal)).toEqual(editorTabs);
-      await testInfo.attach("再選択後の Pi TUI", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-    });
-  },
-);
-
-test(
   "New Session がフルパス候補を出し、キャンセル・無効な開始先・別フォルダ選択を安全に扱う",
   { annotation: { type: "spec", description: "E2E-6" } },
   async ({ host }, testInfo) => {

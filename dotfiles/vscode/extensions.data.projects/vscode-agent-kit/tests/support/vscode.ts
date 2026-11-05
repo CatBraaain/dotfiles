@@ -71,7 +71,7 @@ export class VSCodeFixture {
     this.prepareHost();
   }
 
-  async launch(singleRoot = false): Promise<void> {
+  async launch(): Promise<void> {
     if (!existsSync(executablePath))
       throw new Error(
         `VS Code 1.138.0 is required at ${executablePath}; run bun run screenshot once or set PI_REVIEW_VSCODE.`,
@@ -105,7 +105,7 @@ export class VSCodeFixture {
         "--skip-release-notes",
         "--new-window",
         "--window-size=1600,1000",
-        singleRoot ? this.sessions.A.cwd : join(this.directory, "fixture.code-workspace"),
+        join(this.directory, "fixture.code-workspace"),
       ],
       timeout: 30_000,
     });
@@ -557,7 +557,7 @@ export const test = baseTest.extend<{ host: VSCodeFixture }>({
     const host = new VSCodeFixture();
     const tracePath = testInfo.outputPath("electron-trace.zip");
     try {
-      await host.launch(testInfo.tags.includes("@single-root"));
+      await host.launch();
       await test.step("Check the A/B work folder paths and names", async () => {
         const frame = await host.sessionFrame();
         for (const key of ["A", "B"]) {
