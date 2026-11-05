@@ -1,22 +1,13 @@
-// @ts-ignore: Bun provides Node built-ins at runtime; this repo has no Node type package.
-import { readFile, writeFile } from "node:fs/promises";
-
-const configToAppend = `
-[user]
-name = USERNAME
-email = xxxxxxxxxx+USERNAME@users.noreply.github.com # https://github.com/settings/emails
-`;
-
 async function main(): Promise<void> {
   const { buildHookContext } = await import(
     `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
   );
-  const { resolvePaths } = await buildHookContext();
-  const { distPath } = resolvePaths(".gitconfig");
-  const existingConfig = await readFile(distPath, "utf8");
-  const newline =
-    existingConfig === "" || existingConfig.endsWith("\n") ? "" : "\n";
-  await writeFile(distPath, existingConfig + newline + configToAppend);
+  const { transform } = await buildHookContext();
+  await transform(".gitconfig", (content: string) => `${content}
+[user]
+name = USERNAME
+email = xxxxxxxxxx+USERNAME@users.noreply.github.com # https://github.com/settings/emails
+`);
 }
 
 if (import.meta.main) await main();

@@ -1343,6 +1343,46 @@ describe("applyReplacements", () => {
 });
 
 describe("local build hooks", () => {
+  it("runs a transform hook that rewrites a dist file's content with normalized trailing newline", async () => {
+    await put(root, "dotfiles/app.conf", "mode=dev");
+    await put(
+      root,
+      "dotfiles/app.conf.build.ts",
+      [
+        `if (import.meta.main) {`,
+        `  const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");`,
+        `  const { transform } = await buildHookContext();`,
+        `  await transform("app.conf", (content: string) => content + "mode=prod\\n");`,
+        `}`,
+      ].join("\n"),
+    );
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(
+      await readFile(join(distRoot, "app.conf"), "utf8"),
+      "mode=dev\nmode=prod\n",
+    );
+  });
+
+  it("skips transform when the dist-side target does not exist", async () => {
+    await put(
+      root,
+      "dotfiles/minify.build.ts",
+      [
+        `if (import.meta.main) {`,
+        `  const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");`,
+        `  const { transform } = await buildHookContext();`,
+        `  await transform("missing.json", (content: string) => content);`,
+        `}`,
+      ].join("\n"),
+    );
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(existsSync(join(distRoot, "missing.json")), false);
+  });
+
   it("runs a TypeScript hook in its dist folder without requiring a shebang", async () => {
     await put(
       root,

@@ -87,6 +87,7 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 - `buildHookContext()`: `DOTFILES_MANAGER_SRC` から `hook-context.ts` を動的 import して構築した共有コンテキストを返す。`context.distDir` は distルートの絶対パスである
 - `context.syncGithubMirror(repo)`: GitHub の `<owner>/<repo>` mirror を §build: 外部取得 の既定6時間・強制更新・pull失敗規則で同期し、読み取り用の絶対パスを返す。mirror同期方法は §build: 外部取得 と同じくWSL接続の自己解決を含む。GitAliasフックは Windows でこの method を使う
 - `context.resolvePaths(path)`: `path` に `cwd` 相対のファイルパスを渡すと、対応するdist と home の絶対パスを `{ distPath, homePath }` で返す。home側は §差分検知 の対応関係を使い、親ディレクトリの `.exact`、末尾ファイルの `.executable` / `.symlink` を変換する。現在のファイルの有無にかかわらず解決し、ファイル内容の読み書きや symlink の実体追跡は行わない。`..` を含むパスは dist内に解決される場合に使える。絶対パス、dist外に解決されるパス、ファイルを指定しない空パスや末尾が `/`・`.`・`..` のパスはエラーになる。パスの解決はフックの生成・変更・移動・削除の対象範囲を広げない
+- `context.transform(path, edit)`: `context.resolvePaths(path)` の `distPath` で解決される dist側ファイルの内容を読み、`edit` の返り値を書き戻す。`edit` は読み込んだ内容の文字列を受け取り、変換後の文字列を返す。読み込みと書き込みの両方で、内容が空文字列でないとき末尾の改行は1つに正規化される。dist側ファイルが存在しないときは何もせず、`edit` は呼ばれない。書き込みはフックの生成・変更の対象範囲に含まれる
 
 対応するdistフォルダ以下という生成・変更・移動・削除の範囲はフック作者が守る契約であり、システムはフックの操作先を検証したりサンドボックスで制限したりしない。フック自身は dist へそのまま残り、差分検知と適用の対象外である。
 
