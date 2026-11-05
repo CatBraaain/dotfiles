@@ -22,7 +22,6 @@ export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
     },
     create(runtime) {
       return vscode.window.createTerminal({
-        name: "Pi",
         cwd: vscode.Uri.file(runtime.cwd),
         location: vscode.TerminalLocation.Editor,
         shellPath: tmux.executable,

@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { tmuxSocketName } from "../../src/tmux";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const root = resolve(__dirname, "../..");
@@ -31,9 +31,17 @@ interface SessionFixture {
 
 export interface Snapshot {
   hostPid: number;
+  maxOwnedDisplays: number;
+  maxTerminalTabs: number;
   folders: string[];
   activeEditor?: string;
-  terminals: { name: string; pid: number; exit?: unknown; owned: boolean }[];
+  terminals: {
+    name: string;
+    pid: number;
+    exit?: unknown;
+    owned: boolean;
+    options?: { name?: string };
+  }[];
   tabs: {
     label: string;
     active: boolean;
@@ -125,6 +133,8 @@ export class VSCodeFixture {
     if (!existsSync(file))
       return {
         hostPid: 0,
+        maxOwnedDisplays: 0,
+        maxTerminalTabs: 0,
         folders: [],
         terminals: [],
         tabs: [],
@@ -188,11 +198,105 @@ export class VSCodeFixture {
       .poll(() => this.snapshot().terminals.filter((terminal) => terminal.owned))
       .toHaveLength(1);
     await expect.poll(() => this.snapshot().tabs.filter((tab) => tab.terminal)).toHaveLength(1);
+    expect(this.snapshot().maxOwnedDisplays).toBe(1);
+    expect(this.snapshot().maxTerminalTabs).toBe(1);
+  }
+
+  async expectNativeDisplay(key: string): Promise<string> {
+    const { cwd } = this.sessions[key];
+    await expect.poll(() => this.sessionRuntime(key)).toBeDefined();
+    const runtime = this.sessionRuntime(key)!;
+    await this.expectPiVisible(cwd);
+    await expect
+      .poll(() => {
+        const display = this.snapshot().terminals.find((terminal) => terminal.owned);
+        return this.tmux(["list-clients", "-F", "#{client_pid}\t#{session_name}"])
+          .trim()
+          .split("\n")
+          .includes(`${display?.pid}\t${runtime.target}`);
+      })
+      .toBe(true);
+    await expect
+      .poll(() =>
+        this.tmux(["display-message", "-p", "-t", runtime.target, "#{pane_title}"]).trim(),
+      )
+      .toContain(`Fixture ${key}`);
+    const paneTitle = this.tmux([
+      "display-message",
+      "-p",
+      "-t",
+      runtime.target,
+      "#{pane_title}",
+    ]).trim();
+    await expect
+      .poll(() =>
+        this.snapshot()
+          .terminals.filter((terminal) => terminal.owned)
+          .map(({ name }) => name),
+      )
+      .toEqual([paneTitle]);
+    await expect
+      .poll(() =>
+        this.snapshot()
+          .tabs.filter((tab) => tab.terminal)
+          .map(({ label, active }) => ({ label, active })),
+      )
+      .toEqual([{ label: paneTitle, active: true }]);
+    const tab = this.page.locator(".tabs-container [role=tab]").describe("Native Pi display tab");
+    await expect(tab.locator(".label-name")).toHaveText(paneTitle);
+    await expect(tab.locator(".label-description")).toHaveText(basename(cwd));
+    const display = this.snapshot().terminals.find((terminal) => terminal.owned)!;
+    expect(readlinkSync(`/proc/${display.pid}/cwd`)).toBe(cwd);
+    return paneTitle;
+  }
+
+  sessionRuntime(key: string) {
+    const { cwd, session } = this.sessions[key];
+    return this.piProcesses().find(
+      (entry) =>
+        entry.cwd === cwd &&
+        this.tmux(["display-message", "-p", "-t", entry.target, "#{pane_start_command}"]).trim() ===
+          `pi --session ${session}`,
+    );
+  }
+
+  async restartExtensionHost(): Promise<void> {
+    const previousPid = this.snapshot().hostPid;
+    await this.page.keyboard.press("F1");
+    const command = this.page.locator(".quick-input-widget input").describe("Command palette");
+    await command.fill(">Developer: Restart Extension Host");
+    await command.press("Enter");
+    await expect.poll(() => this.snapshot().hostPid).not.toBe(previousPid);
+  }
+
+  async openLegacyDisplay(key: string): Promise<void> {
+    const runtime = this.sessionRuntime(key)!;
+    await this.closePiDisplay();
+    write(
+      join(this.directory, "legacy-display.json"),
+      JSON.stringify({ socketName: this.tmuxSocket, target: runtime.target, cwd: runtime.cwd }),
+    );
+    await this.page.keyboard.press("F1");
+    const command = this.page
+      .locator(".quick-input-widget input")
+      .describe("Legacy display fixture command");
+    await command.fill(">Fixture: Open Legacy Pi Display");
+    await command.press("Enter");
+    await this.expectPiVisible(runtime.cwd);
+    await expect
+      .poll(() =>
+        this.snapshot()
+          .terminals.filter((terminal) => terminal.owned)
+          .map((terminal) => terminal.options?.name),
+      )
+      .toEqual(["Pi"]);
+    await expect(this.page.locator(".tabs-container [role=tab] .label-name")).toHaveText("Pi");
   }
 
   async closePiDisplay(): Promise<void> {
+    const label = this.snapshot().tabs.find((tab) => tab.terminal && tab.active)!.label;
     await this.page
-      .getByRole("tab", { name: "Pi", exact: true })
+      .getByRole("tab", { name: label, exact: true })
       .getByRole("button", { name: "Close (Ctrl+W)", exact: true })
       .describe("Close only the shared Pi display")
       .click();
@@ -394,6 +498,7 @@ export class VSCodeFixture {
       },
       "terminal.integrated.defaultProfile.linux": "fixture",
       "terminal.integrated.shellIntegration.enabled": false,
+      "terminal.integrated.tabs.title": "${sequence}",
     };
     write(join(this.directory, "userdata/User/settings.json"), JSON.stringify(settings));
     write(
@@ -412,6 +517,11 @@ export class VSCodeFixture {
         engines: { vscode: "^1.85.0" },
         main: "index.cjs",
         activationEvents: ["onStartupFinished"],
+        contributes: {
+          commands: [
+            { command: "fixture.openLegacyDisplay", title: "Fixture: Open Legacy Pi Display" },
+          ],
+        },
       }),
     );
     copyFileSync(join(root, "tests/support/probe.cjs"), join(probe, "index.cjs"));

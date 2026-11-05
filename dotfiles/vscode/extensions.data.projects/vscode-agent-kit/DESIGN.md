@@ -1,8 +1,8 @@
-# Agent Sessions webview design
+# Agent Sessions design
 
-Agent Sessions サイドバー Webview の見た目の正本。対象は Webview の行・見出し・操作の寸法と色で、操作と保存の振る舞いは [SPEC.md](SPEC.md) が定める。読者はこの Webview の見た目を変更する実装者。値の実装先は `src/webview/webviewStyles.ts` で、stories カタログが同じスタイルを共有する。
+Agent Sessions サイドバー Webview と E2E gallery の見た目の正本。Webview の対象は行・見出し・操作の寸法と色で、操作と保存の振る舞いは [SPEC.md](SPEC.md) が定める。読者はこれらの見た目を変更する実装者。Webview の値の実装先は `src/webview/webviewStyles.ts` で、stories カタログが同じスタイルを共有する。
 
-色は VS Code のテーマ変数だけを使い、固定色の palette と追加フォントは持たない。階層と部品構成の参照元は agent-open-ui のデザイン（`~/projects/agent-open-ui/DESIGN.md`）で、この文書はそれをテーマ変数へ対応させた値を定める。
+Webview の色は VS Code のテーマ変数だけを使い、固定色の palette と追加フォントは持たない。階層と部品構成の参照元は agent-open-ui のデザイン（`~/projects/agent-open-ui/DESIGN.md`）で、この文書はそれをテーマ変数へ対応させた値を定める。
 
 ## トークン
 
@@ -44,3 +44,15 @@ Agent Sessions サイドバー Webview の見た目の正本。対象は Webview
 | 行の選択 | 選択面。選択中の表示名・日時は選択文字色 |
 | アーカイブ済みの行 | 表示名・日時を補助文字色にする |
 | 空の一覧・状態表示 | 補助文字色・12px。空の案内は余白24px の中央寄せ |
+
+## E2E gallery
+
+`e2e-gallery.html` は、開発者が走行要約、ケース見出し、比較画像の順に結果を確認するビューアー。主操作は画像の原寸表示。画像・添付名・原寸リンク・ケース見出し・合否・日時・枚数・エラー・未実行と画像なしの表示を保持する。列数の設定や新しい操作は設けず、色・文字・余白は既存 HTML の値を使う。
+
+Layout: E2E gallery — 比較画像の縮小を抑えた折り返し → ram-grid の列数制限版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/grid-repetition/ram-grid.md)）; scroll owner: `html`; anti-patterns: 画像数だけ列を増やす配置、横スクロール、表示順の入れ替え。
+
+| 対象 | 配置 |
+| --- | --- |
+| ケースの画像 | 画面幅800px超では画像数に応じて1列または2列。3枚目以降は元の順序で次行へ折り返す |
+| 狭幅の画像 | 画面幅800px以下では1列 |
+| 1枚だけの画像 | ケースの表示幅いっぱいに配置する |

@@ -448,6 +448,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: activeSessionId, cwd: root }),
     ]);
     const terminal = {
+      creationOptions: { cwd: { fsPath: root } },
       exitStatus: undefined,
       processId: Promise.resolve(123),
       sendText: vi.fn(),
@@ -466,7 +467,6 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: "Pi",
         cwd: { fsPath: root },
         location: 1,
         shellPath: "tmux",
@@ -579,6 +579,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: inactiveSessionId, cwd: root }),
     ]);
     const terminal = {
+      creationOptions: { cwd: { fsPath: root } },
       exitStatus: undefined,
       processId: Promise.resolve(123),
       sendText: vi.fn(),
@@ -625,6 +626,7 @@ describe("SessionWebviewProvider", () => {
       const { store, mocks } = fakeRuntimes();
       const registry = new TerminalRegistry(store, editorTerminals(store));
       const terminal = { processId: Promise.resolve(123), show: vi.fn(), dispose: vi.fn() };
+      terminal.dispose.mockImplementation(() => registry.onTerminalClosed(terminal as never));
       vscodeMocks.createTerminal.mockReturnValue(terminal);
       const { provider, metadataPath } = createProvider({ sessionDir, registry });
       setSessionActive(metadataPath, inactiveSessionId, false);

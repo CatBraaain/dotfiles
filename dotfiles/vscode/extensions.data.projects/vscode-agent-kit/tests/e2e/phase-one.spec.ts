@@ -70,11 +70,10 @@ test(
 );
 
 test(
-  "Switches between A/B conversations",
+  "Switches between A/B conversations with Pi-notified titles",
   { annotation: { type: "spec", description: "E2E-2" } },
   async ({ host }, testInfo) => {
     const firstPids = new Map<string, number>();
-    const displayPids = new Set<number>();
     const selections = ["A", "B", "A", "B"];
     for (const [index, key] of selections.entries()) {
       const isLastSelection = index === selections.length - 1;
@@ -99,12 +98,10 @@ test(
         });
       });
       await test.step(`Check ${key} saved session identity and normal Pi TUI`, async () => {
-        await host.expectPiVisible(host.sessions[key].cwd);
+        const title = await host.expectNativeDisplay(key);
         const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
-        displayPids.add(displayPid);
-        expect(displayPids.size).toBe(1);
         const terminalInput = host.page
-          .getByRole("textbox", { name: /Terminal [0-9]+, Pi/ })
+          .getByRole("textbox", { name: /^Terminal [0-9]+/ })
           .describe("Shared Pi command input");
         const runtime = host.piProcesses().find((entry) => entry.cwd === host.sessions[key].cwd)!;
         const startCommand = host
@@ -122,6 +119,10 @@ test(
           body: JSON.stringify({
             ...runtime,
             startCommand,
+            paneTitle: host
+              .tmux(["display-message", "-p", "-t", runtime.target, "#{pane_title}"])
+              .trim(),
+            nativeTitle: title,
             processArgs: readFileSync(`/proc/${runtime.pid}/cmdline`, "utf8")
               .split("\0")
               .filter(Boolean),
@@ -158,7 +159,7 @@ test(
                 .terminals.filter((terminal) => terminal.owned)
                 .map(({ name, pid }) => ({ name, pid })),
             )
-            .toEqual([{ name: "Pi", pid: displayPid }]);
+            .toEqual([{ name: title, pid: displayPid }]);
           await expect
             .poll(() =>
               host
@@ -166,7 +167,7 @@ test(
                 .tabs.filter((tab) => tab.terminal)
                 .map(({ label, active }) => ({ label, active })),
             )
-            .toEqual([{ label: "Pi", active: true }]);
+            .toEqual([{ label: title, active: true }]);
           await expect(terminalInput).toBeFocused();
           await expect(terminalScreen).toContainText(host.sessions[key].cwd);
           await expect(terminalScreen).toContainText(`• Fixture ${key}`);
@@ -218,25 +219,128 @@ test(
           .sort(),
       ).toEqual([...firstPids.values()].sort());
       await host.selectSession("A");
-      await host.expectPiVisible(host.sessions.A.cwd);
+      await host.expectNativeDisplay("A");
       expect(host.piProcesses().find((entry) => entry.cwd === host.sessions.A.cwd)?.pid).toBe(
         firstPids.get("A"),
       );
       await host.selectSession("B");
-      await host.expectPiVisible(host.sessions.B.cwd);
+      await host.expectNativeDisplay("B");
       expect(host.piProcesses().find((entry) => entry.cwd === host.sessions.B.cwd)?.pid).toBe(
         firstPids.get("B"),
       );
     });
+    await test.step("Switch same-cwd conversations without replacing the display or their Pi processes", async () => {
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
+      await host.selectSession("Deleted");
+      await host.expectNativeDisplay("Deleted");
+      const pids = host
+        .piProcesses()
+        .map((entry) => entry.pid)
+        .sort();
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      expect(host.snapshot().terminals.find((terminal) => terminal.owned)!.pid).toBe(displayPid);
+      expect(
+        host
+          .piProcesses()
+          .map((entry) => entry.pid)
+          .sort(),
+      ).toEqual(pids);
+      for (const [key, pid] of firstPids)
+        expect(
+          host
+            .piProcesses()
+            .some((entry) => entry.cwd === host.sessions[key].cwd && entry.pid === pid),
+        ).toBe(true);
+    });
+    await test.step("Rediscover existing Pi and restore native title forwarding after extension host restart", async () => {
+      const pids = host
+        .piProcesses()
+        .map((entry) => entry.pid)
+        .sort();
+      const runtime = host.piProcesses().find((entry) => entry.pid === firstPids.get("A"))!;
+      host.tmux(["set-option", "-t", runtime.target, "set-titles", "off"]);
+      await host.restartExtensionHost();
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      expect(host.tmux(["show-options", "-v", "-t", runtime.target, "set-titles"]).trim()).toBe(
+        "on",
+      );
+      expect(
+        host.tmux(["show-options", "-v", "-t", runtime.target, "set-titles-string"]).trim(),
+      ).toBe("#{pane_title}");
+      expect(
+        host
+          .piProcesses()
+          .map((entry) => entry.pid)
+          .sort(),
+      ).toEqual(pids);
+      await host.selectSession("B");
+      await host.expectNativeDisplay("B");
+      expect(
+        host
+          .piProcesses()
+          .map((entry) => entry.pid)
+          .sort(),
+      ).toEqual(pids);
+    });
+    await test.step("Replace a restored legacy fixed-name tab in the same cwd without restarting Pi", async () => {
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      const pids = host
+        .piProcesses()
+        .map((entry) => entry.pid)
+        .sort();
+      await host.openLegacyDisplay("A");
+      const legacy = host.snapshot();
+      const legacyDisplay = legacy.terminals.find((terminal) => terminal.owned)!;
+      await host.restartExtensionHost();
+      await expect
+        .poll(() =>
+          host
+            .snapshot()
+            .terminals.filter((terminal) => terminal.owned)
+            .map(({ pid, name }) => ({ pid, name })),
+        )
+        .toEqual([{ pid: legacyDisplay.pid, name: "Pi" }]);
+      const restored = host.snapshot();
+
+      await host.selectSession("A");
+      const title = await host.expectNativeDisplay("A");
+      const migrated = host.snapshot();
+      const display = migrated.terminals.find((terminal) => terminal.owned)!;
+      expect(display.pid).not.toBe(legacyDisplay.pid);
+      expect(display.options).not.toHaveProperty("name");
+      expect(
+        host
+          .piProcesses()
+          .map((entry) => entry.pid)
+          .sort(),
+      ).toEqual(pids);
+      await testInfo.attach("Legacy display migration", {
+        body: JSON.stringify({ title, pids, legacy, restored, migrated }),
+        contentType: "application/json",
+      });
+      await host.selectSession("B");
+      await host.expectNativeDisplay("B");
+      expect(
+        host
+          .piProcesses()
+          .map((entry) => entry.pid)
+          .sort(),
+      ).toEqual(pids);
+    });
     await test.step("Restart only an exited selected Pi from its saved session", async () => {
-      const runtime = host.piProcesses().find((entry) => entry.cwd === host.sessions.A.cwd)!;
+      const runtime = host.piProcesses().find((entry) => entry.pid === firstPids.get("A"))!;
       process.kill(runtime.pid, "SIGTERM");
       await expect
-        .poll(() => host.piProcesses().some((entry) => entry.cwd === host.sessions.A.cwd))
+        .poll(() => host.piProcesses().some((entry) => entry.pid === runtime.pid))
         .toBe(false);
       await host.selectSession("A");
-      await host.expectPiVisible(host.sessions.A.cwd);
-      const restarted = host.piProcesses().filter((entry) => entry.cwd === host.sessions.A.cwd);
+      await host.expectNativeDisplay("A");
+      const restarted = host.piProcesses().filter((entry) => entry.target === runtime.target);
       expect(restarted).toHaveLength(1);
       expect(restarted[0].pid).not.toBe(firstPids.get("A"));
       expect(host.piProcesses().find((entry) => entry.cwd === host.sessions.B.cwd)?.pid).toBe(

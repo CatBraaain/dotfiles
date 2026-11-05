@@ -7,6 +7,8 @@ import { errorMessage } from "./guards";
 export class TerminalRegistry {
   private display: vscode.Terminal | undefined;
   private pending = Promise.resolve();
+  private readonly closeWaiters = new Map<vscode.Terminal, () => void>();
+  private readonly closed = new WeakSet<vscode.Terminal>();
 
   constructor(
     readonly runtimes: TmuxRuntimeStore,
@@ -34,24 +36,44 @@ export class TerminalRegistry {
 
   onTerminalClosed(closed: vscode.Terminal): void {
     if (this.display === closed) this.display = undefined;
+    this.closed.add(closed);
+    this.closeWaiters.get(closed)?.();
   }
 
   private async connect(runtime: PiRuntime): Promise<vscode.Terminal> {
-    const existing = this.display?.exitStatus === undefined ? this.display : undefined;
-    const restored = existing ?? this.terminals.find();
+    let restored = this.display ?? this.terminals.find();
+    if (restored !== undefined) {
+      const options = restored.creationOptions;
+      const cwd = "cwd" in options ? options.cwd : undefined;
+      const displayCwd = typeof cwd === "string" ? cwd : cwd?.fsPath;
+      const hasLegacyTitle = options.name === "Pi" && restored.name === "Pi";
+      if (restored.exitStatus !== undefined || displayCwd !== runtime.cwd || hasLegacyTitle) {
+        await this.closeDisplay(restored);
+        restored = undefined;
+      }
+    }
     const terminal = restored ?? this.terminals.create(runtime);
     this.display = terminal;
     try {
       const client = await this.waitForClient(terminal, runtime);
       if (client.target !== runtime.target) await this.runtimes.switchClient(client, runtime);
     } catch (error) {
-      if (restored === undefined) {
-        terminal.dispose();
-        this.onTerminalClosed(terminal);
-      }
+      if (restored === undefined) await this.closeDisplay(terminal);
       throw error;
     }
     return terminal;
+  }
+
+  private async closeDisplay(terminal: vscode.Terminal): Promise<void> {
+    if (this.closed.has(terminal)) return;
+    try {
+      await new Promise<void>((resolve) => {
+        this.closeWaiters.set(terminal, resolve);
+        terminal.dispose();
+      });
+    } finally {
+      this.closeWaiters.delete(terminal);
+    }
   }
 
   private async waitForClient(terminal: vscode.Terminal, runtime: PiRuntime) {

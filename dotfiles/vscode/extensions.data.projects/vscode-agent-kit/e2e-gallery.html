@@ -142,7 +142,7 @@
       }
       @media (max-width: 800px) {
         .table {
-          grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+          grid-template-columns: 1fr;
         }
       }
       @media (max-width: 600px) {
@@ -230,7 +230,7 @@
           return section;
         }
         const table = element("div", "table", ...entries.map(renderImage));
-        table.style.setProperty("--columns", String(entries.length));
+        table.style.setProperty("--columns", String(Math.min(entries.length, 2)));
         section.append(table);
         return section;
       }

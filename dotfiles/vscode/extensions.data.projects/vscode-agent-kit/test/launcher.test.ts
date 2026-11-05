@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as vscode from "vscode";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionLauncher } from "../src/launcher";
@@ -42,11 +43,18 @@ beforeEach(async () => {
   mocks.workspaceFolders = [{ uri: { scheme: "file", fsPath: root } }];
   mocks.showQuickPick.mockResolvedValue(undefined);
   mocks.showOpenDialog.mockResolvedValue(undefined);
-  mocks.createTerminal.mockReturnValue({
-    processId: Promise.resolve(123),
-    show: vi.fn(),
-    dispose: vi.fn(),
-    exitStatus: undefined,
+  mocks.createTerminal.mockImplementation((creationOptions: vscode.TerminalOptions) => {
+    const terminal = {
+      creationOptions,
+      processId: Promise.resolve(123),
+      show: vi.fn(),
+      dispose: vi.fn(),
+      exitStatus: undefined,
+    };
+    terminal.dispose.mockImplementation(() =>
+      registry.onTerminalClosed(terminal as unknown as vscode.Terminal),
+    );
+    return terminal;
   });
   runtimes = fakeRuntimes();
   registry = new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store));
@@ -97,7 +105,7 @@ describe("SessionLauncher starting folder selection", () => {
     await launcher.start([cwd]);
 
     expect(mocks.createTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "Pi", cwd: { fsPath: cwd }, location: 1 }),
+      expect.objectContaining({ cwd: { fsPath: cwd }, location: 1 }),
     );
     expect(runtimes.mocks.ensure).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -219,7 +227,7 @@ describe("SessionLauncher starting folder selection", () => {
     expect(runtimes.live.get(failedId)).toBe(failedRuntime);
     expect(runtimes.live.size).toBe(2);
     expect(runtimes.client.target).toBe(failedRuntime?.target);
-    expect(mocks.createTerminal).toHaveBeenCalledTimes(2);
+    expect(mocks.createTerminal).toHaveBeenCalledTimes(3);
   });
 
   it("reuses a failed launch when another New Session request is already queued", async () => {

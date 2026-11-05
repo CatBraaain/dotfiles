@@ -465,6 +465,71 @@ describe("E2E gallery reporter", () => {
       expect(await page.locator("body").innerText()).not.toContain("Hidden");
     });
 
+    it.each([1, 2, 3, 5])(
+      "limits %i images to two columns and stacks them at narrow widths",
+      async (imageCount) => {
+        const originalTest = caseTests(run.results, "E2E-1")[0];
+        const originalAttempt = originalTest.attempts[0];
+        const originalStep = originalAttempt.steps[0];
+        const images = Array.from({ length: imageCount }, (_, index) => ({
+          ...originalStep.images[0],
+          name: `Image ${index + 1}`,
+          url: `assets/image-${index + 1}.png`,
+        }));
+        const directory = writeViewerFixture({
+          ...run.results,
+          tests: [
+            {
+              ...originalTest,
+              attempts: [
+                {
+                  ...originalAttempt,
+                  steps: [{ ...originalStep, images }],
+                },
+              ],
+            },
+          ],
+        });
+        await page.goto(pathToFileURL(join(directory, "e2e-gallery.html")).href);
+
+        for (const width of [320, 390, 600, 768, 800, 801, 1440, 2560]) {
+          await page.setViewportSize({ width, height: 900 });
+          const table = page.locator("#E2E-1 .table");
+          const layout = await table.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return {
+              columns: style.gridTemplateColumns.split(" ").length,
+              width: node.getBoundingClientRect().width,
+              gap: parseFloat(style.columnGap),
+              cells: Array.from(node.querySelectorAll(".cell"), (cell) => {
+                const bounds = cell.getBoundingClientRect();
+                return { top: bounds.top, width: bounds.width };
+              }),
+            };
+          });
+          const expectedColumns = width <= 800 ? 1 : Math.min(imageCount, 2);
+          expect(layout.columns, `${width}px`).toBe(expectedColumns);
+          expect(layout.cells).toHaveLength(imageCount);
+          const rows = [...new Set(layout.cells.map((cell) => cell.top))];
+          const rowSizes = rows.map(
+            (top) => layout.cells.filter((cell) => cell.top === top).length,
+          );
+          const expectedRowSizes = Array.from(
+            { length: Math.ceil(imageCount / expectedColumns) },
+            (_, index) => Math.min(expectedColumns, imageCount - index * expectedColumns),
+          );
+          expect(rowSizes, `${width}px`).toEqual(expectedRowSizes);
+          const expectedCellWidth =
+            (layout.width - layout.gap * (expectedColumns - 1)) / expectedColumns;
+          for (const cell of layout.cells) expect(cell.width).toBeCloseTo(expectedCellWidth, 1);
+          const overflow = await page.evaluate(
+            () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          );
+          expect(overflow, `${width}px`).toBe(false);
+        }
+      },
+    );
+
     it("instructs the user to run E2E when no result data exists", async () => {
       const directory = mkdtempSync(join(scratchRoot, "e2e-gallery-empty-"));
       copyFileSync(join(root, "e2e-gallery.html"), join(directory, "e2e-gallery.html"));

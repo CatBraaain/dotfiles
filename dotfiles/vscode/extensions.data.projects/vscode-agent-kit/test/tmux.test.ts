@@ -110,6 +110,44 @@ describe("TmuxRuntimeStore", () => {
     expect(execute.mock.calls.filter(([, args]) => args[4] === "new-session")).toHaveLength(1);
   });
 
+  it("forwards raw pane titles on new and rediscovered runtimes in its isolated server", async () => {
+    const { store, execute } = setup();
+    const launch = { sessionId: "A", cwd: "/a", args: ["--session", "/a.jsonl"] };
+    const runtime = await store.ensure(launch);
+    const titleCommands = [
+      "set-option",
+      "-t",
+      runtime.target,
+      "set-titles",
+      "on",
+      ";",
+      "set-option",
+      "-t",
+      runtime.target,
+      "set-titles-string",
+      "#{pane_title}",
+    ];
+    expect(execute).toHaveBeenLastCalledWith("tmux", [
+      "-L",
+      "test-socket",
+      "-f",
+      "/dev/null",
+      ...titleCommands,
+    ]);
+
+    execute.mockClear();
+    const restored = new TmuxRuntimeStore("test-socket", execute);
+    expect(await restored.ensure(launch)).toEqual(runtime);
+    expect(execute.mock.calls.some(([, args]) => args[4] === "new-session")).toBe(false);
+    expect(execute).toHaveBeenLastCalledWith("tmux", [
+      "-L",
+      "test-socket",
+      "-f",
+      "/dev/null",
+      ...titleCommands,
+    ]);
+  });
+
   it("restarts only a selected exited runtime and preserves the other runtime", async () => {
     const { store, execute, panes } = setup();
     const a = { sessionId: "A", cwd: "/a", args: ["--session", "/a.jsonl"] };

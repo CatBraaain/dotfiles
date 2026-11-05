@@ -42,31 +42,36 @@ export class TmuxRuntimeStore {
 
   async ensure(launch: PiLaunch): Promise<PiRuntime> {
     const runtime = this.runtime(launch.sessionId, launch.cwd);
-    if (await this.isAlive(runtime)) return runtime;
-    try {
-      await this.command(
-        [
-          "new-session",
-          "-d",
-          "-s",
-          runtime.target,
-          "-c",
-          launch.cwd,
-          ...this.launchEnvironment(),
-          "pi",
-          ...launch.args,
-        ],
-        ["set-option", "-t", runtime.target, "status", "off"],
-        ["set-option", "-s", "extended-keys", "on"],
-        ["set-option", "-t", runtime.target, "prefix", "None"],
-      );
-    } catch (error) {
-      if (!/duplicate session/.test(errorMessage(error)) || !(await this.isAlive(runtime)))
-        throw error;
-    }
     if (!(await this.isAlive(runtime))) {
-      throw new Error(`Pi exited while starting session ${launch.sessionId} in ${launch.cwd}`);
+      try {
+        await this.command(
+          [
+            "new-session",
+            "-d",
+            "-s",
+            runtime.target,
+            "-c",
+            launch.cwd,
+            ...this.launchEnvironment(),
+            "pi",
+            ...launch.args,
+          ],
+          ["set-option", "-t", runtime.target, "status", "off"],
+          ["set-option", "-s", "extended-keys", "on"],
+          ["set-option", "-t", runtime.target, "prefix", "None"],
+        );
+      } catch (error) {
+        if (!/duplicate session/.test(errorMessage(error)) || !(await this.isAlive(runtime)))
+          throw error;
+      }
+      if (!(await this.isAlive(runtime))) {
+        throw new Error(`Pi exited while starting session ${launch.sessionId} in ${launch.cwd}`);
+      }
     }
+    await this.command(
+      ["set-option", "-t", runtime.target, "set-titles", "on"],
+      ["set-option", "-t", runtime.target, "set-titles-string", "#{pane_title}"],
+    );
     return runtime;
   }
 
