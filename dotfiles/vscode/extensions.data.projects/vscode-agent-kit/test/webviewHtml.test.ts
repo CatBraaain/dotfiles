@@ -45,10 +45,26 @@ describe("webviewHtml", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
     expect(html).toContain("<h1>Sessions</h1>");
-    expect(html).toContain('data-action="newSession"');
     expect(html).toContain('data-action="refresh"');
     expect(html).toContain('<section id="sessions"');
     expect(html).toContain('<p id="status"');
+  });
+
+  it("keeps the New workspace form and footer markup for the client script", () => {
+    const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
+
+    expect(html).toContain('<div id="workspace-form" hidden>');
+    expect(html).toContain('<input id="workspace-path" type="text" placeholder="/absolute/path"');
+    expect(html).toContain('data-action="addWorkspace"');
+    expect(html).toContain('data-action="cancelWorkspaceForm"');
+    expect(html).toContain('data-action="toggleWorkspaceForm"');
+    expect(html).toContain("New workspace");
+  });
+
+  it("drops the header New session action in favor of the per-group plus button", () => {
+    const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
+
+    expect(html).not.toContain('data-action="newSession"');
   });
 
   it("leaves the workspace mode toggles to the dynamically rendered groups", () => {

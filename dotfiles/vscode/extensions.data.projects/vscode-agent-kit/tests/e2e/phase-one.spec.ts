@@ -1,7 +1,6 @@
-import { readFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "../support/vscode";
-import type { VSCodeFixture } from "../support/vscode";
 
 test.use({ trace: "on" });
 
@@ -377,39 +376,51 @@ test(
 );
 
 test(
-  "New Session がフルパス候補を出し、キャンセル・無効な開始先・別フォルダ選択を安全に扱う",
+  "New Workspace がフルパスを受け付け、キャンセルと無効なパスを安全に扱い、その cwd で Pi を起動できる",
   { annotation: { type: "spec", description: "E2E-6" } },
   async ({ host }, testInfo) => {
-    await test.step("Inspect the native start candidates and cancel", async () => {
-      await openNew(host);
-      await expect(
-        host.page.locator(".quick-input-list").getByText(host.sessions.A.cwd, { exact: true }),
-      ).toBeVisible();
-      await expect(
-        host.page.locator(".quick-input-list").getByText(host.sessions.B.cwd, { exact: true }),
-      ).toBeVisible();
-      for (const name of ["project-a", "project-b"]) {
-        await expect(
-          host.page
-            .locator(".quick-input-list")
-            .getByText(name, { exact: true })
-            .describe(`${name} start candidate label`),
-        ).toBeVisible();
-      }
-      await testInfo.attach("候補一覧", {
+    const folder = join(host.directory, "registered");
+    mkdirSync(folder, { recursive: true });
+
+    await test.step("Open the New workspace form and fill a work folder path", async () => {
+      const frame = await host.sessionFrame();
+      await frame
+        .locator('[data-action="toggleWorkspaceForm"]')
+        .describe("New workspace footer button")
+        .click({ steps: 15 });
+      await expect(frame.locator("#workspace-form").describe("Workspace path form")).toBeVisible();
+      await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
+      await testInfo.attach("フォーム入力", {
         body: await host.page.screenshot(),
         contentType: "image/png",
       });
-      await host.page.keyboard.press("Escape");
+    });
+    await test.step("Cancel the New workspace form without changing the list", async () => {
+      const frame = await host.sessionFrame();
+      const groupsBefore = await frame.locator("section.group").count();
+      await frame
+        .locator('[data-action="cancelWorkspaceForm"]')
+        .describe("Cancel adding the workspace")
+        .click({ steps: 15 });
+      await expect(frame.locator("#workspace-form")).not.toBeVisible();
+      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
     });
-    await test.step("Choose a missing start folder and observe a safe error", async () => {
-      await openNew(host);
-      await host.page
-        .locator(".quick-input-list")
-        .getByText(host.sessions.Missing.cwd, { exact: true })
-        .describe("Missing start candidate")
+    await test.step("Reject a missing workspace path with a safe error", async () => {
+      const frame = await host.sessionFrame();
+      const groupsBefore = await frame.locator("section.group").count();
+      await frame
+        .locator('[data-action="toggleWorkspaceForm"]')
+        .describe("New workspace footer button")
+        .click({ steps: 15 });
+      await frame
+        .locator("#workspace-path")
+        .describe("Workspace path input")
+        .fill(host.sessions.Missing.cwd);
+      await frame
+        .locator('[data-action="addWorkspace"]')
+        .describe("Add workspace button")
         .click({ steps: 15 });
       await expect(
         host.page
@@ -417,52 +428,44 @@ test(
           .filter({ hasText: host.sessions.Missing.cwd })
           .first(),
       ).toBeVisible();
+      await expect(frame.locator("#workspace-form")).toBeVisible();
+      await expect(frame.locator("#workspace-path")).toHaveValue(host.sessions.Missing.cwd);
+      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
     });
-    await test.step("Open another-folder selection and cancel it", async () => {
-      await openNew(host);
-      await host.page
-        .getByText("Choose another folder…", { exact: true })
-        .describe("Browse another start folder")
+    await test.step("Add the work folder and see its group in the list", async () => {
+      const frame = await host.sessionFrame();
+      await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
+      await frame
+        .locator('[data-action="addWorkspace"]')
+        .describe("Add workspace button")
         .click({ steps: 15 });
-      await expect(host.page.locator(".quick-input-widget input")).toBeVisible();
-      await host.page.keyboard.press("Escape");
-      expect(host.snapshot().terminals).toHaveLength(0);
-      expect(host.piProcesses()).toHaveLength(0);
-    });
-    await test.step("Choose another folder and start real unauthenticated Pi there", async () => {
-      await openNew(host);
-      await host.page.getByText("Choose another folder…", { exact: true }).click({ steps: 15 });
-      const input = host.page.locator(".quick-input-widget input").describe("Another folder path");
-      await input.press("Control+a");
-      await input.pressSequentially(join(host.directory, "other") + "/", {
-        delay: 120,
-      });
-      await host.page.keyboard.press("Enter");
-      await expect
-        .poll(() =>
-          host.piProcesses().some((process) => process.cwd === join(host.directory, "other")),
-        )
-        .toBe(true);
-      await host.expectPiVisible(join(host.directory, "other"));
-      await testInfo.attach("別フォルダで起動", {
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      await expect(group).toBeVisible();
+      await expect(frame.locator("#workspace-form")).not.toBeVisible();
+      await testInfo.attach("ワークスペース追加後", {
         body: await host.page.screenshot(),
         contentType: "image/png",
       });
     });
-    await test.step("Choose the worktree candidate and share the same display for another Pi", async () => {
-      await openNew(host);
-      await host.page
-        .locator(".quick-input-list")
-        .getByText(host.sessions.B.cwd, { exact: true })
-        .describe("Worktree start candidate")
+    await test.step("Start Pi from the registered group plus button", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      await group
+        .locator(".group-new-session")
+        .describe("Registered group New session button")
         .click({ steps: 15 });
       await expect
-        .poll(() => host.piProcesses().some((process) => process.cwd === host.sessions.B.cwd))
+        .poll(() => host.piProcesses().some((process) => process.cwd === folder))
         .toBe(true);
-      await host.expectPiVisible(host.sessions.B.cwd);
-      expect(host.piProcesses()).toHaveLength(2);
+      await host.expectPiVisible(folder);
     });
   },
 );
@@ -532,12 +535,3 @@ test(
     );
   },
 );
-
-async function openNew(host: VSCodeFixture): Promise<void> {
-  const frame = await host.sessionFrame();
-  await frame
-    .getByRole("button", { name: "New session", exact: true })
-    .describe("Start a new Pi session")
-    .click({ steps: 15 });
-  await expect(host.page.locator(".quick-input-widget input")).toBeVisible();
-}

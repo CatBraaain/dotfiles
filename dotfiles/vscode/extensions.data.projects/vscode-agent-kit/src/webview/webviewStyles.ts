@@ -14,10 +14,24 @@ export const webviewStyles = `
     .icon-button { min-width: 24px; height: 24px; padding: 0 8px; color: var(--vscode-descriptionForeground); }
     .icon-button:hover { color: var(--vscode-foreground); }
     .icon-button[data-action="refresh"] { width: 24px; padding: 0; }
+    .footer { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); }
+    .new-workspace { display: inline-flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 10px; border-radius: var(--session-radius); color: var(--vscode-foreground); font-size: 13px; font-weight: 500; text-align: left; }
+    .new-workspace[aria-expanded="true"] { background: var(--vscode-list-hoverBackground); }
+    .new-workspace svg { flex: none; width: 16px; height: 16px; }
+    #workspace-form { display: flex; flex-direction: column; gap: 8px; }
+    #workspace-form[hidden] { display: none; }
+    #workspace-path { height: 32px; padding: 0 8px; border: 1px solid var(--vscode-input-border, color-mix(in srgb, var(--vscode-widget-border) 50%, transparent)); border-radius: var(--session-radius); background: var(--vscode-input-background); color: var(--vscode-input-foreground, var(--vscode-foreground)); font: inherit; font-size: 13px; }
+    #workspace-path:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+    #workspace-path::placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
+    .form-actions { display: flex; gap: 8px; }
+    .form-button { height: 32px; padding: 0 10px; border-radius: var(--session-radius); color: var(--vscode-foreground); font-size: 13px; font-weight: 500; }
+    .form-button[data-action="addWorkspace"] { border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); }
+    .form-button[data-action="cancelWorkspaceForm"] { color: var(--vscode-descriptionForeground); }
+    .form-button[data-action="cancelWorkspaceForm"]:hover { background: transparent; color: var(--vscode-foreground); }
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }
-    .group-chevron { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-descriptionForeground); }
+    .group-chevron, .group-new-session { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
     .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
     .group-modes { display: flex; flex: none; gap: 2px; padding: 1px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: var(--session-radius); }
     .mode-button { height: 20px; padding: 0 6px; border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 18px; }
@@ -35,7 +49,7 @@ export const webviewStyles = `
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
     .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 84px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
     .copy, .lock, .archive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .copy svg, .lock svg, .archive svg, .group-chevron svg { width: 12px; height: 12px; }
+    .copy svg, .lock svg, .archive svg, .group-chevron svg, .group-new-session svg { width: 12px; height: 12px; }
     .copy { right: 52px; }
     .lock { right: 28px; }
     .archive { right: 4px; }

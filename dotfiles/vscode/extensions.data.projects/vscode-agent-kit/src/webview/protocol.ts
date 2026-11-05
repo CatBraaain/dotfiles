@@ -1,7 +1,8 @@
 export type WebviewRequest =
   | { type: "ready" }
   | { type: "refresh" }
-  | { type: "newSession" }
+  | { type: "newSession"; cwd: string }
+  | { type: "addWorkspace"; path: string }
   | { type: "openSession"; sessionId: string }
   | { type: "archiveSessions"; sessionIds: string[] }
   | { type: "setSessionLock"; sessionId: string; locked: boolean }
@@ -31,8 +32,13 @@ export type ExtensionMessage =
 
 export function parseWebviewRequest(value: unknown): WebviewRequest | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
-  if (value.type === "ready" || value.type === "refresh" || value.type === "newSession")
-    return { type: value.type };
+  if (value.type === "ready" || value.type === "refresh") return { type: value.type };
+  if (value.type === "newSession" && isNonEmptyPath(value.cwd)) {
+    return { type: "newSession", cwd: value.cwd };
+  }
+  if (value.type === "addWorkspace" && isNonEmptyPath(value.path)) {
+    return { type: "addWorkspace", path: value.path };
+  }
   if (
     (value.type === "openSession" ||
       value.type === "copySessionId" ||
@@ -59,6 +65,11 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
 
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Path arguments must arrive trimmed and non-empty; the webview trims input values. */
+function isNonEmptyPath(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
 
 function isSessionId(value: unknown): value is string {
   return typeof value === "string" && SESSION_ID_PATTERN.test(value);

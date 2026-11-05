@@ -680,6 +680,73 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
+  it("adds a row to the requested group from its New session button", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const group = page.locator(".group").first();
+    const plus = group.locator(".group-new-session").describe("Project group New session button");
+    expect(await plus.getAttribute("aria-label")).toBe("New session in vscode-pi-sessions");
+    const rowsBefore = await group.locator(".session-row").count();
+
+    await plus.click();
+
+    await expect.poll(() => group.locator(".session-row").count()).toBe(rowsBefore + 1);
+    const added = group.locator(".session-row", { hasText: "New Pi session" });
+    await added.waitFor();
+    expect(
+      await page.evaluate(() => {
+        const messages = (window as Window & { __bridgeMessages?: { type?: string }[] })
+          .__bridgeMessages;
+        if (messages === undefined) throw new Error("Bridge message recorder is not installed.");
+        return messages.filter((message) => message.type === "newSession");
+      }),
+    ).toEqual([{ type: "newSession", cwd: "~/projects/vscode-pi-sessions" }]);
+    await page.close();
+  });
+
+  it("opens the New workspace form and registers a sessionless group with Add", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const toggle = page.locator('[data-action="toggleWorkspaceForm"]');
+    const form = page.locator("#workspace-form");
+    const input = page.locator("#workspace-path");
+    const groupCountBefore = await page.locator(".group").count();
+
+    await toggle.click();
+    expect(await form.isVisible()).toBe(true);
+    expect(await input.inputValue()).toBe("");
+
+    await page.locator('[data-action="cancelWorkspaceForm"]').click();
+    expect(await form.isVisible()).toBe(false);
+    expect(await page.locator(".group").count()).toBe(groupCountBefore);
+
+    await toggle.click();
+    await input.fill("~/projects/brand-new");
+    await page.locator('[data-action="addWorkspace"]').click();
+    const added = page.locator(".group").filter({ hasText: "brand-new" });
+    await expect.poll(() => page.locator(".group").count()).toBe(groupCountBefore + 1);
+    expect(await added.locator(".session-row").count()).toBe(0);
+    expect(await form.isVisible()).toBe(false); // closed by the refreshed list
+    expect(
+      await page.evaluate(() => {
+        const messages = (window as Window & { __bridgeMessages?: { type?: string }[] })
+          .__bridgeMessages;
+        if (messages === undefined) throw new Error("Bridge message recorder is not installed.");
+        return messages.filter((message) => message.type === "addWorkspace");
+      }),
+    ).toEqual([{ type: "addWorkspace", path: "~/projects/brand-new" }]);
+    await page.close();
+  });
+
+  it("shows the registered-only workspace as an empty group", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    const agenda = page.locator(".group").filter({ hasText: "agenda" });
+
+    await expect.poll(() => agenda.locator(".group-title").textContent()).toBe("agenda");
+    expect(await agenda.locator(".session-row").count()).toBe(0);
+    await page.close();
+  });
+
   it("retains hidden selections while excluding collapsed rows from bulk archive", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
@@ -743,8 +810,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       waitUntil: "networkidle",
     });
     await page.waitForSelector(".group-header");
-    expect(await page.locator(".group-header").count()).toBe(3);
-    expect(await page.locator(".mode-button").count()).toBe(6);
+    // Three session cwds plus the registered-only workspace (sample data).
+    expect(await page.locator(".group-header").count()).toBe(4);
+    expect(await page.locator(".mode-button").count()).toBe(8);
     expect(await page.locator(".session-row").count()).toBe(0);
     expect(await page.locator(".empty").count()).toBe(0);
     const historyToggle = page

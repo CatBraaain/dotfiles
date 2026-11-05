@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { cwdLabel, groupSessions } from "../src/grouping";
 import type { SessionSummary } from "../src/sessionStore";
 
-function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, "sessionId" | "cwd" | "mtimeMs">): SessionSummary {
+function session(
+  overrides: Partial<SessionSummary> & Pick<SessionSummary, "sessionId" | "cwd" | "mtimeMs">,
+): SessionSummary {
   return {
     filePath: `/sessions/x/${overrides.sessionId}.jsonl`,
     displayName: `name-${overrides.sessionId}`,
@@ -62,5 +64,33 @@ describe("groupSessions", () => {
     ]);
     expect(groups.map((g) => g.cwd)).toEqual(["/a", "/b"]);
     expect(groups[0].sessions.map((s) => s.sessionId)).toEqual(["a", "b"]);
+  });
+
+  it("appends a sessionless group for every registered workspace cwd", () => {
+    const groups = groupSessions(
+      [session({ sessionId: "a", cwd: "/a", mtimeMs: 1 })],
+      ["/registered/empty"],
+    );
+
+    expect(groups.map((group) => [group.cwd, group.label, group.sessions])).toEqual([
+      ["/a", "a", [expect.objectContaining({ sessionId: "a" })]],
+      ["/registered/empty", "empty", []],
+    ]);
+  });
+
+  it("merges a registered cwd into its session group by trailing separator", () => {
+    const groups = groupSessions(
+      [session({ sessionId: "a", cwd: "/a/project", mtimeMs: 1 })],
+      ["/a/project/"],
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].cwd).toBe("/a/project");
+  });
+
+  it("keeps the registered cwd spelling for a group without sessions", () => {
+    const groups = groupSessions([], ["/registered/first"]);
+
+    expect(groups.map((group) => group.cwd)).toEqual(["/registered/first"]);
   });
 });

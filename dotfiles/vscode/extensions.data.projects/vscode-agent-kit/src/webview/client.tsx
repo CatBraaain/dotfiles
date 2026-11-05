@@ -219,6 +219,17 @@ function groupDescriptor(
             children: [group.label],
           },
           {
+            tag: "button",
+            attrs: {
+              class: "group-new-session",
+              type: "button",
+              "data-new-session": group.cwd,
+              title: "New session",
+              "aria-label": `New session in ${group.label}`,
+            },
+            children: [plusIcon()],
+          },
+          {
             tag: "div",
             attrs: {
               class: "group-modes",
@@ -357,6 +368,13 @@ function chevronIcon(direction: "down" | "right"): ElementDescriptor {
   return strokeIcon([{ tag: "path", attrs: { d: path } }]);
 }
 
+function plusIcon(): ElementDescriptor {
+  return strokeIcon([
+    { tag: "path", attrs: { d: "M5 12h14" } },
+    { tag: "path", attrs: { d: "M12 5v14" } },
+  ]);
+}
+
 function archiveIcon(): ElementDescriptor {
   return strokeIcon([
     { tag: "rect", attrs: { width: "20", height: "5", x: "2", y: "3", rx: "1" } },
@@ -413,6 +431,7 @@ function strokeIcon(children: ElementDescriptor[]): ElementDescriptor {
 interface DescriptorActions {
   onModeClick(cwd: string, mode: ViewMode): void;
   onGroupToggle(cwd: string): void;
+  onNewSessionClick(cwd: string): void;
   onSessionClick(
     sessionId: string,
     event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
@@ -461,6 +480,8 @@ function descriptorOnClick(
   }
   const groupCwd = attrs["data-toggle-group"];
   if (groupCwd !== undefined) return () => actions.onGroupToggle(groupCwd);
+  const newSessionCwd = attrs["data-new-session"];
+  if (newSessionCwd !== undefined) return () => actions.onNewSessionClick(newSessionCwd);
   const sessionId =
     attrs["data-archive"] ?? attrs["data-lock"] ?? attrs["data-copy"] ?? attrs["data-session"];
   if (sessionId === undefined) return undefined;
@@ -607,19 +628,6 @@ function SessionsApp({
     statusElement.className = snapshot.statusError ? "error" : "";
   }, [snapshot, statusElement]);
 
-  useEffect(() => {
-    // The fixed header buttons live outside the React root (#sessions), so
-    // their data-action clicks still arrive through document delegation.
-    const onDocumentClick = (event: Event): void => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const action = target.closest("[data-action]");
-      if (action instanceof HTMLButtonElement) bridge.postMessage({ type: action.dataset.action });
-    };
-    document.addEventListener("click", onDocumentClick);
-    return () => document.removeEventListener("click", onDocumentClick);
-  }, [bridge]);
-
   useEffect(
     () => () => {
       for (const timer of copiedTimers.current.values()) clearTimeout(timer);
@@ -642,6 +650,7 @@ function SessionsApp({
         else next.add(cwd);
         return next;
       }),
+    onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
     onSessionClick: (sessionId, event) => {
       const update = nextSelectionFromClick(
         { sessionId, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey },
@@ -680,20 +689,70 @@ function SessionsApp({
 export function initClient(bridge: ClientBridge): () => void {
   const sessionsElement = document.querySelector("#sessions");
   const statusElement = document.querySelector("#status");
-  if (!(sessionsElement instanceof HTMLElement) || !(statusElement instanceof HTMLElement)) {
+  const formElement = document.querySelector("#workspace-form");
+  const pathInput = document.querySelector("#workspace-path");
+  const newWorkspaceButton = document.querySelector('[data-action="toggleWorkspaceForm"]');
+  if (
+    !(sessionsElement instanceof HTMLElement) ||
+    !(statusElement instanceof HTMLElement) ||
+    !(formElement instanceof HTMLElement) ||
+    !(pathInput instanceof HTMLInputElement) ||
+    !(newWorkspaceButton instanceof HTMLElement)
+  ) {
     throw new Error("Sessions webview markup is incomplete.");
   }
 
   const store = createClientStore();
+  // The host closes the form by replying to an Add with a refreshed list; an
+  // invalid path answers with an error instead, so the form stays open.
+  let pendingAddWorkspace = false;
+  const closeWorkspaceForm = (): void => {
+    formElement.hidden = true;
+    pathInput.value = "";
+    newWorkspaceButton.setAttribute("aria-expanded", "false");
+    pendingAddWorkspace = false;
+  };
   bridge.onMessage((message) => {
     if (!isRecord(message)) return;
     if (message.type === "sessions" && isClientState(message.state)) {
       store.setSessions(message.state);
+      if (pendingAddWorkspace) closeWorkspaceForm();
     }
     if (message.type === "error" && typeof message.message === "string") {
       store.setError(message.message);
     }
   });
+
+  // The header, workspace form, and footer live outside the React root
+  // (#sessions), so their data-action clicks arrive through document
+  // delegation. Form actions stay local; Refresh goes through the bridge.
+  const onDocumentClick = (event: Event): void => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const action = target.closest("[data-action]");
+    if (!(action instanceof HTMLButtonElement)) return;
+    const actionType = action.dataset.action ?? "";
+    if (actionType === "toggleWorkspaceForm") {
+      formElement.hidden = !formElement.hidden;
+      pathInput.value = "";
+      newWorkspaceButton.setAttribute("aria-expanded", String(!formElement.hidden));
+      if (!formElement.hidden) pathInput.focus();
+      return;
+    }
+    if (actionType === "cancelWorkspaceForm") {
+      closeWorkspaceForm();
+      return;
+    }
+    if (actionType === "addWorkspace") {
+      const path = pathInput.value.trim();
+      if (path === "") return;
+      pendingAddWorkspace = true;
+      bridge.postMessage({ type: "addWorkspace", path });
+      return;
+    }
+    bridge.postMessage({ type: actionType });
+  };
+  document.addEventListener("click", onDocumentClick);
 
   const root = createRoot(sessionsElement);
   root.render(
@@ -708,6 +767,7 @@ export function initClient(bridge: ClientBridge): () => void {
   bridge.postMessage({ type: "ready" });
 
   return () => {
+    document.removeEventListener("click", onDocumentClick);
     root.unmount();
   };
 }

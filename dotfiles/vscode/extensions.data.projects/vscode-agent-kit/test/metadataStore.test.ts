@@ -6,6 +6,8 @@ import {
   archiveSessions,
   lockedSessionIds,
   readMetadataStore,
+  registeredWorkspaceCwds,
+  registerWorkspace,
   setSessionActive,
   setSessionLocked,
   writeMetadataStore,
@@ -276,5 +278,80 @@ describe("archivedSessionIds and lockedSessionIds", () => {
   it("treats missing metadata as no archived and no locked sessions", () => {
     expect(archivedSessionIds(undefined)).toEqual(new Set());
     expect(lockedSessionIds(undefined)).toEqual(new Set());
+  });
+});
+
+describe("registerWorkspace", () => {
+  it("creates the store with the resolved workspace path and added time", () => {
+    const result = registerWorkspace(path, "/home/user/project", 1_000);
+
+    expect(result).toEqual({ ok: true, added: true });
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as MetadataStoreData;
+    expect(parsed.workspaces).toEqual({ "/home/user/project": { addedAtMs: 1_000 } });
+    expect(parsed.version).toBe(1);
+  });
+
+  it("resolves the stored key and keeps existing sessions and keys", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, sessions: { a: { active: false } } }));
+
+    const result = registerWorkspace(path, "/home/user/project/", 2_000);
+
+    expect(result).toEqual({ ok: true, added: true });
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as MetadataStoreData;
+    expect(parsed.sessions).toEqual({ a: { active: false } });
+    expect(Object.keys(parsed.workspaces ?? {})).toEqual(["/home/user/project"]);
+  });
+
+  it("keeps an existing entry for the same directory without rewriting", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, workspaces: { "/home/user/project": { addedAtMs: 1_000 } } }),
+    );
+    const original = readFileSync(path, "utf8");
+
+    const result = registerWorkspace(path, "/home/user/project/", 9_000);
+
+    expect(result).toEqual({ ok: true, added: false });
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+
+  it("reports a store read error without writing", () => {
+    writeFileSync(path, "not json");
+
+    const result = registerWorkspace(path, "/home/user/project", 1_000);
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe("not json");
+  });
+});
+
+describe("registeredWorkspaceCwds", () => {
+  it("lists registered workspace cwds in registration order", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        workspaces: { "/a": { addedAtMs: 1 }, "/b": { addedAtMs: 2 } },
+      }),
+    );
+    const read = readMetadataStore(path);
+
+    expect(registeredWorkspaceCwds(read.status === "ok" ? read.data : undefined)).toEqual([
+      "/a",
+      "/b",
+    ]);
+  });
+
+  it("treats missing metadata as no registered workspaces", () => {
+    expect(registeredWorkspaceCwds(undefined)).toEqual([]);
+  });
+
+  it("rejects a store whose workspaces is not an object", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, workspaces: ["/a"] }));
+
+    const read = readMetadataStore(path);
+
+    expect(read).toMatchObject({ status: "error" });
+    expect(read.status === "error" ? read.message : "").toContain("workspaces");
   });
 });

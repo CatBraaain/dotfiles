@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionDir,
     metadataPath,
     registry,
-    startNewSession: (cwds) => launcher.start(cwds),
+    startNewSession: (cwd) => launcher.start(cwd),
   });
 
   context.subscriptions.push(

@@ -8,7 +8,14 @@ describe("parseWebviewRequest", () => {
   it.each([
     [{ type: "ready" }, { type: "ready" }],
     [{ type: "refresh" }, { type: "refresh" }],
-    [{ type: "newSession" }, { type: "newSession" }],
+    [
+      { type: "newSession", cwd: "/home/user/project" },
+      { type: "newSession", cwd: "/home/user/project" },
+    ],
+    [
+      { type: "addWorkspace", path: "/home/user/project" },
+      { type: "addWorkspace", path: "/home/user/project" },
+    ],
     [
       { type: "openSession", sessionId },
       { type: "openSession", sessionId },
@@ -54,6 +61,14 @@ describe("parseWebviewRequest", () => {
     { type: "setSessionLock", sessionId },
     { type: "setSessionLock", sessionId, locked: "true" },
     { type: "setSessionLock", sessionId, locked: 1 },
+    { type: "newSession" },
+    { type: "newSession", cwd: "" },
+    { type: "newSession", cwd: "   " },
+    { type: "newSession", cwd: 3 },
+    { type: "addWorkspace" },
+    { type: "addWorkspace", path: "" },
+    { type: "addWorkspace", path: "   " },
+    { type: "addWorkspace", path: 7 },
     { type: "shell", command: "rm -rf /" },
   ])("rejects unsupported input %#", (value) => {
     expect(parseWebviewRequest(value)).toBeUndefined();

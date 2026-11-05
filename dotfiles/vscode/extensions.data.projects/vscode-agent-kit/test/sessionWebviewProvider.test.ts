@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readMetadataStore, setSessionActive, setSessionLocked } from "../src/metadataStore";
+import {
+  readMetadataStore,
+  registerWorkspace,
+  setSessionActive,
+  setSessionLocked,
+} from "../src/metadataStore";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
@@ -508,13 +513,14 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
 
-    await webview.receive({ type: "newSession" });
+    await webview.receive({ type: "newSession", cwd: root });
     await webview.receive({ type: "shell", command: "pi" });
 
     expect(startNewSession).toHaveBeenCalledTimes(1);
+    expect(startNewSession).toHaveBeenCalledWith(root);
   });
 
-  it("passes saved cwd candidates to the new-session picker", async () => {
+  it("launches the requested group cwd for the new session", async () => {
     const startNewSession = vi.fn().mockResolvedValue(undefined);
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, "project"), "old.jsonl", [
@@ -525,9 +531,9 @@ describe("SessionWebviewProvider", () => {
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
-    await webview.receive({ type: "newSession" });
+    await webview.receive({ type: "newSession", cwd: root });
 
-    expect(startNewSession).toHaveBeenCalledWith([root]);
+    expect(startNewSession).toHaveBeenCalledWith(root);
   });
 
   it("displays a launch error without changing the list", async () => {
@@ -540,14 +546,86 @@ describe("SessionWebviewProvider", () => {
       (call) => call[0].type === "sessions",
     ).length;
 
-    await webview.receive({ type: "newSession" });
+    await webview.receive({ type: "newSession", cwd: root });
 
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      "Failed to start Pi session: Work folder missing",
+      `Failed to start Pi session in ${root}: Work folder missing`,
     );
     expect(
       webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
     ).toHaveLength(sessionsBefore);
+  });
+
+  it("registers a valid workspace folder and shows its empty group", async () => {
+    const folder = join(root, "registered");
+    await mkdir(folder, { recursive: true });
+    const { provider, metadataPath } = createProvider({});
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+
+    await webview.receive({ type: "addWorkspace", path: folder });
+
+    const lastSessions = webview.postMessage.mock.calls
+      .map((call) => call[0])
+      .filter((message: { type?: string }) => message.type === "sessions")
+      .at(-1) as { state?: { groups?: { cwd: string }[] } };
+    expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([folder]);
+    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      workspaces?: Record<string, unknown>;
+    };
+    expect(Object.keys(parsed.workspaces ?? {})).toEqual([folder]);
+  });
+
+  it("shows an error and keeps the store when the workspace path is invalid", async () => {
+    const missing = join(root, "missing");
+    const { provider, metadataPath } = createProvider({});
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+
+    await webview.receive({ type: "addWorkspace", path: missing });
+
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining(missing));
+    await expect(readFile(metadataPath, "utf8")).rejects.toThrow();
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(1); // only the initial ready refresh
+  });
+
+  it("does not rewrite the store for a workspace that is already listed", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "old.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    const writesBefore = webview.postMessage.mock.calls.filter(
+      (call) => call[0].type === "sessions",
+    ).length;
+
+    await webview.receive({ type: "addWorkspace", path: `${root}/` });
+
+    await expect(readFile(metadataPath, "utf8")).rejects.toThrow(); // the store was never written
+    expect(
+      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
+    ).toHaveLength(writesBefore + 1); // the refreshed list closes the form
+  });
+
+  it("keeps a registered sessionless workspace in the refreshed list", async () => {
+    const folder = join(root, "registered");
+    const { provider, metadataPath } = createProvider({});
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await registerWorkspace(metadataPath, folder, 1_000);
+
+    await provider.refresh();
+
+    const lastSessions = webview.postMessage.mock.calls
+      .map((call) => call[0])
+      .filter((message: { type?: string }) => message.type === "sessions")
+      .at(-1) as { state?: { groups?: { cwd: string }[] } };
+    expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([folder]);
   });
 
   it("does not open a terminal or mark active when the session cwd is missing", async () => {

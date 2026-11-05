@@ -194,6 +194,27 @@ describe("sessionListView", () => {
     ]);
   });
 
+  it("renders a per-group New session button carrying its workspace cwd", () => {
+    const view = viewFor(allModes);
+    const buttons = byClass(elementsIn(view), "group-new-session");
+
+    expect(buttons).toHaveLength(2);
+    expect(buttons.map((button) => button.attrs?.type)).toEqual(["button", "button"]);
+    expect(buttons.map((button) => button.attrs?.["data-new-session"])).toEqual([
+      "/workspace/atlas",
+      "/workspace/beta",
+    ]);
+    expect(buttons.map((button) => button.attrs?.title)).toEqual(["New session", "New session"]);
+    expect(buttons.map((button) => button.attrs?.["aria-label"])).toEqual([
+      "New session in atlas",
+      "New session in beta",
+    ]);
+    for (const button of buttons) {
+      const path = collectElements(button).find((element) => element.tag === "path");
+      expect(path?.attrs?.d).toBe("M5 12h14");
+    }
+  });
+
   it("opens groups by default with keyboard-operable chevron and name buttons", () => {
     const elements = elementsIn(viewFor(allModes));
     const paths = ["/workspace/atlas", "/workspace/beta"];

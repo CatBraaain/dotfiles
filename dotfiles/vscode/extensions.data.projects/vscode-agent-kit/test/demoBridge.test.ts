@@ -74,7 +74,10 @@ describe("createDemoBridge", () => {
   it("archives only the requested sessions and skips locked ones", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({ type: "archiveSessions", sessionIds: [projectCurrentId, piToolsLockedId] });
+    bridge.postMessage({
+      type: "archiveSessions",
+      sessionIds: [projectCurrentId, piToolsLockedId],
+    });
 
     const state = last();
     expect(sessionIds(state)).toContain(projectCurrentId);
@@ -91,14 +94,14 @@ describe("createDemoBridge", () => {
     const { bridge, last } = setup();
 
     bridge.postMessage({ type: "setSessionLock", sessionId: projectCurrentId, locked: true });
-    expect(sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked).toBe(
-      true,
-    );
+    expect(
+      sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked,
+    ).toBe(true);
 
     bridge.postMessage({ type: "setSessionLock", sessionId: projectCurrentId, locked: false });
-    expect(sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked).toBe(
-      false,
-    );
+    expect(
+      sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked,
+    ).toBe(false);
   });
 
   it("ignores openSession requests", () => {
@@ -152,13 +155,45 @@ describe("createDemoBridge", () => {
     ).toHaveLength(1);
   });
 
-  it("adds an unarchived row on newSession", () => {
+  it("adds an unarchived row to the requested group on newSession", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({ type: "newSession" });
+    bridge.postMessage({ type: "newSession", cwd: "~/projects/pi-tools" });
 
     const added = sessions(last()).find((session) => session.displayName === "New Pi session");
     expect(added?.isArchived).toBe(false);
     expect(added?.isLocked).toBe(false);
+    const piToolsGroup = last().groups.find((group) => group.cwd === "~/projects/pi-tools");
+    expect(piToolsGroup?.sessions.some((session) => session.displayName === "New Pi session")).toBe(
+      true,
+    );
+  });
+
+  it("shows a sessionless group for the registered-only workspace", () => {
+    const { postSessions, last } = setup();
+
+    postSessions();
+
+    const registeredOnly = last().groups.find((group) => group.cwd === "~/projects/agenda");
+    expect(registeredOnly?.sessions).toEqual([]);
+  });
+
+  it("adds a group without sessions on addWorkspace", () => {
+    const { bridge, last } = setup();
+
+    bridge.postMessage({ type: "addWorkspace", path: "~/projects/brand-new" });
+
+    const added = last().groups.find((group) => group.cwd === "~/projects/brand-new");
+    expect(added?.sessions).toEqual([]);
+  });
+
+  it("does not duplicate a group added twice on addWorkspace", () => {
+    const { bridge, last } = setup();
+
+    bridge.postMessage({ type: "addWorkspace", path: "~/projects/brand-new" });
+    bridge.postMessage({ type: "addWorkspace", path: "~/projects/brand-new" });
+
+    const groups = last().groups.filter((group) => group.cwd === "~/projects/brand-new");
+    expect(groups).toHaveLength(1);
   });
 });

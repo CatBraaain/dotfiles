@@ -20,6 +20,8 @@ export interface DemoBridgeRequest {
   sessionId?: string;
   sessionIds?: string[];
   locked?: boolean;
+  cwd?: string;
+  path?: string;
 }
 
 /** Bridge shape the webview client consumes (ClientBridge-compatible). */
@@ -31,6 +33,7 @@ export interface DemoBridge {
 const PROJECT_CWD = "~/projects/vscode-pi-sessions";
 const PI_TOOLS_CWD = "~/projects/pi-tools";
 const PROJECT_WORKTREE_CWD = "~/.agents/worktrees/vscode-pi-sessions";
+const REGISTERED_ONLY_CWD = "~/projects/agenda";
 
 const sampleSessions: SessionSummary[] = [
   {
@@ -92,6 +95,7 @@ export function createDemoBridge(): {
   let listener: (message: { type?: string; state?: unknown }) => void = () => {};
   let store: SessionSummary[] = cloneStore(sampleSessions);
   let metadata = new Map<string, DemoEntry>(SAMPLE_METADATA);
+  let registeredCwds: string[] = [REGISTERED_ONLY_CWD];
 
   function postSessions(): void {
     // Same projection as the provider's: every session with archive and lock marks.
@@ -103,7 +107,7 @@ export function createDemoBridge(): {
     );
     listener({
       type: "sessions",
-      state: { groups: sessionViewGroups(store, archivedIds, lockedIds) },
+      state: { groups: sessionViewGroups(store, registeredCwds, archivedIds, lockedIds) },
     });
   }
 
@@ -141,17 +145,25 @@ export function createDemoBridge(): {
       postSessions();
       return;
     }
-    if (request.type === "newSession") {
+    if (request.type === "newSession" && typeof request.cwd === "string") {
       const session: SessionSummary = {
         sessionId: crypto.randomUUID(),
         filePath: "",
-        cwd: store[0]?.cwd ?? PROJECT_CWD,
+        cwd: request.cwd,
         displayName: "New Pi session",
         mtimeMs: Date.now(),
       };
       store = [session, ...store];
       metadata.set(session.sessionId, UNARCHIVED);
       postSessions();
+      return;
+    }
+    if (request.type === "addWorkspace" && typeof request.path === "string") {
+      // The catalog validates no real folder: an empty-cwd group appears as is.
+      if (!registeredCwds.includes(request.path))
+        registeredCwds = [...registeredCwds, request.path];
+      postSessions();
+      return;
     }
     // openSession and unknown requests are ignored: nothing to open in the catalog.
   }
@@ -165,6 +177,7 @@ export function createDemoBridge(): {
         demoState === "sample" ? { ...entry } : { ...entry, archived: true },
       ]),
     );
+    registeredCwds = [REGISTERED_ONLY_CWD];
     postSessions();
   }
 

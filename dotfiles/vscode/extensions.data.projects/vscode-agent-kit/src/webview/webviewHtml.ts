@@ -7,16 +7,29 @@ export interface WebviewHtmlOptions {
   nonce: string;
 }
 
-/** Fixed view markup inside <body>; the stories catalog renders the same tree. */
+/** Fixed view markup inside <body>; the stories catalog renders the same tree.
+ * The workspace form sits below the New workspace button and starts hidden. */
 export const webviewAppMarkup = `<main id="app">
     <header>
       <h1>Sessions</h1>
       <div class="header-actions">
-        <button class="icon-button" type="button" data-action="newSession">New session</button>
         <button class="icon-button" type="button" data-action="refresh" aria-label="Refresh sessions">↻</button>
       </div>
     </header>
     <section id="sessions" aria-live="polite"></section>
+    <footer class="footer">
+      <button class="new-workspace" type="button" data-action="toggleWorkspaceForm" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 10v6"></path><path d="M9 13h6"></path><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>
+        New workspace
+      </button>
+      <div id="workspace-form" hidden>
+        <input id="workspace-path" type="text" placeholder="/absolute/path" aria-label="Workspace path" autocomplete="off" spellcheck="false">
+        <div class="form-actions">
+          <button class="form-button" type="button" data-action="addWorkspace">Add</button>
+          <button class="form-button" type="button" data-action="cancelWorkspaceForm">Cancel</button>
+        </div>
+      </div>
+    </footer>
     <p id="status" role="status" aria-live="polite"></p>
   </main>`;
 

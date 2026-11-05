@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
+import { resolve } from "node:path";
 import {
   archivedSessionIds,
   archiveSessions,
   lockedSessionIds,
   readMetadataStore,
+  registeredWorkspaceCwds,
+  registerWorkspace,
   setSessionActive,
   setSessionLocked,
 } from "../metadataStore";
@@ -23,7 +26,7 @@ export interface SessionWebviewDeps {
   sessionDir: string;
   metadataPath: string;
   registry: TerminalRegistry;
-  startNewSession: (sessionCwds: readonly string[]) => Promise<void>;
+  startNewSession: (cwd: string) => Promise<void>;
 }
 
 /** Owns the WebviewView and translates its fixed message protocol into extension actions. */
@@ -83,9 +86,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const lockedIds =
       metadata.status === "ok" ? lockedSessionIds(metadata.data) : new Set<string>();
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
+    const metadataCwds = metadata.status === "ok" ? registeredWorkspaceCwds(metadata.data) : [];
     this.post({
       type: "sessions",
-      state: { groups: sessionViewGroups(sessions, archivedIds, lockedIds) },
+      state: { groups: sessionViewGroups(sessions, metadataCwds, archivedIds, lockedIds) },
     });
   }
 
@@ -98,12 +102,15 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     if (request.type === "newSession") {
       try {
-        await this.deps.startNewSession([
-          ...new Set([...this.sessionsById.values()].map((session) => session.cwd)),
-        ]);
+        await requireWorkDirectory(request.cwd);
+        await this.deps.startNewSession(request.cwd);
       } catch (error) {
-        this.postError(`Failed to start Pi session: ${errorMessage(error)}`);
+        this.postError(`Failed to start Pi session in ${request.cwd}: ${errorMessage(error)}`);
       }
+      return;
+    }
+    if (request.type === "addWorkspace") {
+      await this.addWorkspace(request.path);
       return;
     }
     if (request.type === "copySessionId") {
@@ -146,6 +153,37 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.refresh();
       return;
     }
+  }
+
+  /** Register a workspace folder in the metadata store, then show the list.
+   * Invalid paths answer with an error and leave the store unchanged; a cwd
+   * already present in the list only closes the webview's form (via the
+   * refreshed list message). */
+  private async addWorkspace(path: string): Promise<void> {
+    try {
+      await requireWorkDirectory(path);
+    } catch (error) {
+      this.postError(`Invalid workspace path: ${errorMessage(error)}`);
+      return;
+    }
+    const knownCwds = [...new Set([...this.sessionsById.values()].map((session) => session.cwd))];
+    const metadata = readMetadataStore(this.deps.metadataPath);
+    if (metadata.status === "error") {
+      this.postError(metadata.message);
+      return;
+    }
+    const alreadyListed =
+      registeredWorkspaceCwds(metadata.status === "ok" ? metadata.data : undefined).includes(
+        path,
+      ) || knownCwds.some((cwd) => resolve(cwd) === resolve(path));
+    if (!alreadyListed) {
+      const result = registerWorkspace(this.deps.metadataPath, path, Date.now());
+      if (!result.ok) {
+        this.postError(result.message);
+        return;
+      }
+    }
+    await this.refresh();
   }
 
   private async openSession(sessionId: string): Promise<void> {

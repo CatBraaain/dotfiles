@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { errorMessage, isRecord } from "./guards";
 
@@ -32,10 +32,17 @@ export interface SessionMetadata {
   [key: string]: unknown;
 }
 
+/** Registered workspace entry (New Workspace action). Unknown attributes are preserved. */
+export interface WorkspaceMetadata {
+  addedAtMs?: number;
+  [key: string]: unknown;
+}
+
 /** Whole metadata store document. Unknown top-level keys are preserved. */
 export interface MetadataStoreData {
   version?: number;
   sessions?: Record<string, SessionMetadata>;
+  workspaces?: Record<string, WorkspaceMetadata>;
   [key: string]: unknown;
 }
 
@@ -75,6 +82,9 @@ export function readMetadataStore(path: string): MetadataReadResult {
   }
   if (parsed.sessions !== undefined && !isRecord(parsed.sessions)) {
     return { status: "error", message: `${basename(path)}: "sessions" must be a JSON object` };
+  }
+  if (parsed.workspaces !== undefined && !isRecord(parsed.workspaces)) {
+    return { status: "error", message: `${basename(path)}: "workspaces" must be a JSON object` };
   }
   return { status: "ok", data: parsed };
 }
@@ -203,4 +213,46 @@ export function lockedSessionIds(data: MetadataStoreData | undefined): Set<strin
     }
   }
   return ids;
+}
+
+export type RegisterWorkspaceResult = { ok: true; added: boolean } | { ok: false; message: string };
+
+/**
+ * Register a workspace cwd in the metadata store. The key is the resolved
+ * absolute path; an existing entry pointing at the same directory is kept as
+ * is (no rewrite). Missing file: create the store fresh (version 1).
+ */
+export function registerWorkspace(
+  path: string,
+  cwd: string,
+  addedAtMs: number,
+): RegisterWorkspaceResult {
+  const read = readMetadataStore(path);
+  if (read.status === "error") {
+    return { ok: false, message: read.message };
+  }
+  const base: MetadataStoreData =
+    read.status === "ok" ? structuredClone(read.data) : { version: 1 };
+  const workspaces: Record<string, WorkspaceMetadata> = { ...base.workspaces };
+  const resolvedCwd = resolve(cwd);
+  const isRegistered = Object.keys(workspaces).some((key) => resolve(key) === resolvedCwd);
+  if (isRegistered) {
+    return { ok: true, added: false };
+  }
+  workspaces[resolvedCwd] = { addedAtMs };
+  const next: MetadataStoreData = { ...base, workspaces };
+  if (next.version === undefined) {
+    next.version = 1;
+  }
+  try {
+    writeMetadataStore(path, next);
+  } catch (error) {
+    return { ok: false, message: `Failed to write ${basename(path)}: ${errorMessage(error)}` };
+  }
+  return { ok: true, added: true };
+}
+
+/** Registered workspace cwds (resolved absolute paths), in registration order. */
+export function registeredWorkspaceCwds(data: MetadataStoreData | undefined): string[] {
+  return Object.keys(data?.workspaces ?? {});
 }

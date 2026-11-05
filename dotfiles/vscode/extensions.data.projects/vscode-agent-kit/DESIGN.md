@@ -9,10 +9,11 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 用途 | 値 |
 | --- | --- |
 | 背景・本文 | `sideBar-background`・`foreground` |
-| 補助文字（日時・操作・chevron） | `descriptionForeground` |
+| 補助文字（日時・行の操作） | `descriptionForeground` |
 | hover 面 | `list-hoverBackground` |
 | 選択面・選択文字 | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
-| 境界（モード切替の枠） | `widget-border` の 50% 混色 |
+| 境界（モード切替の枠・フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
+| 入力（ワークスペース フォーム） | 背景 `input-background`・文字 `input-foreground`・境界 `input-border`、placeholder は `input-placeholderForeground` |
 | focus | `focusBorder` の 2px ring（offset -2px） |
 | 基準角丸 | 9.6px（行・操作・モード切替の枠で共用） |
 
@@ -22,6 +23,8 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | --- | --- |
 | 全体の余白 | 12px。グループ間も 12px |
 | ヘッダー | 高さ24px、下余白12px。見出し13px・600 |
+| フッター | 一覧の下。上境界線（境界トークン）と 12px 余白で区切る。グループ間も 12px で区切るのと同じ寸法 |
+| フォーム（開いたとき） | New workspace の下、間隔8px |
 | グループ見出し | 高さ24px、要素間4px。見出し名14px・600・20px行で省略表示 |
 | セッション行 | 高さ32px、左インデント12px、見出し直後の行は上余白4px |
 
@@ -29,7 +32,10 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 
 | 部品 | 定義 |
 | --- | --- |
-| chevron | 24px 四方の領域に12px の SVG。補助文字色。展開で下向き、折りたたみで右向きに示す。開閉の操作と状態は SPEC「Webview の表示」に従う |
+| chevron | 24px 四方の領域に12px の SVG、本文色。展開で下向き、折りたたみで右向きに示す。hover は hover 面。開閉の操作と状態は SPEC「Webview の表示」に従う |
+| グループ見出しの New session | chevron と同じ 24px 四方の ghost 操作、本文色。12px の plus SVG、hover は hover 面。ホバーのヒントは `New session` |
+| フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。16px の folder-plus SVG と 13px・500 ラベル、本文色、hover は hover 面。フォームを開いている間は `aria-expanded` を示し hover 面を敷く。構造の参照元は agent-open-ui の `SidebarFooter` |
+| ワークスペース フォーム | New workspace の下に開く。要素間8px。入力は高さ32px・角丸9.6px・入力トークン・13px 文字、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。`Add` は高さ32px・境界付きの本文色操作、`Cancel` は境界なしの補助文字色で hover は本文色。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
 | モード切替 | 枠は境界トークン・角丸9.6px・余白1px・間隔2px。ボタンは高さ20px・余白左右6px・10px 文字。押下中のボタンは選択面・選択文字 |
 | 状態の印 | 直径10px の円。未アーカイブは `testing-iconPassed` の塗り、ロック中は `editorWarning-foreground`、アーカイブ済みは補助文字色の枠の中抜き |
 | 表示名 | 13px・20px 行・省略表示 |

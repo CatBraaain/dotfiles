@@ -11,23 +11,15 @@ import { readMetadataStore } from "../src/metadataStore";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
 
 const mocks = vi.hoisted(() => ({
-  showQuickPick: vi.fn(),
-  showOpenDialog: vi.fn(),
   terminals: [],
   createTerminal: vi.fn(),
   showErrorMessage: vi.fn(),
-  workspaceFolders: [] as { uri: { scheme: string; fsPath: string } }[],
 }));
 
 vi.mock("vscode", () => ({
   Uri: { file: (fsPath: string) => ({ fsPath }) },
   TerminalLocation: { Editor: 1 },
   window: mocks,
-  workspace: {
-    get workspaceFolders() {
-      return mocks.workspaceFolders;
-    },
-  },
 }));
 
 let root: string;
@@ -40,9 +32,6 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   root = await tempDir("pi-launcher-test-");
-  mocks.workspaceFolders = [{ uri: { scheme: "file", fsPath: root } }];
-  mocks.showQuickPick.mockResolvedValue(undefined);
-  mocks.showOpenDialog.mockResolvedValue(undefined);
   mocks.createTerminal.mockImplementation((creationOptions: vscode.TerminalOptions) => {
     const terminal = {
       creationOptions,
@@ -74,35 +63,12 @@ afterEach(async () => {
   await cleanup(root);
 });
 
-describe("SessionLauncher starting folder selection", () => {
-  it("shows distinct full paths for same-named workspaces and history", async () => {
-    const history = join(root, "history", "project");
-    mocks.workspaceFolders.push({
-      uri: { scheme: "file", fsPath: join(root, "current", "project") },
-    });
-
-    await launcher.start([history, history, "relative-history"]);
-
-    const [choices, options] = mocks.showQuickPick.mock.calls[0];
-    expect(choices.map((choice: { cwd?: string }) => choice.cwd)).toEqual([
-      root,
-      join(root, "current", "project"),
-      history,
-      undefined,
-    ]);
-    expect(choices[1].label).toBe("project");
-    expect(choices[2].label).toBe("project");
-    expect(choices[1].description).not.toBe(choices[2].description);
-    expect(options).toMatchObject({ title: "Start Pi session in…", matchOnDescription: true });
-    expect(mocks.createTerminal).not.toHaveBeenCalled();
-  });
-
-  it("starts Pi in the explicitly selected directory, not the first workspace", async () => {
+describe("SessionLauncher launch cwd", () => {
+  it("launches Pi in the requested directory", async () => {
     const cwd = join(root, "selected");
     await mkdir(cwd);
-    mocks.showQuickPick.mockResolvedValue({ cwd });
 
-    await launcher.start([cwd]);
+    await launcher.start(cwd);
 
     expect(mocks.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: { fsPath: cwd }, location: 1 }),
@@ -122,37 +88,18 @@ describe("SessionLauncher starting folder selection", () => {
     expect(terminal.show).toHaveBeenCalledTimes(1);
   });
 
-  it("starts in a directory selected from the native folder dialog", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: undefined });
-    mocks.showOpenDialog.mockResolvedValue([{ fsPath: root }]);
+  it("resolves the requested directory spelling before launching", async () => {
+    await launcher.start(`${root}/.`);
+    const requestedCwd = runtimes.mocks.ensure.mock.calls[0][0].cwd;
 
-    await launcher.start();
-
-    expect(mocks.showOpenDialog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        canSelectFiles: false,
-        canSelectFolders: true,
-        canSelectMany: false,
-      }),
-    );
+    expect(requestedCwd).toBe(root);
     expect(mocks.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: { fsPath: root } }),
     );
   });
 
-  it("does not start Pi when the folder dialog is cancelled", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: undefined });
-
-    await launcher.start();
-
-    expect(mocks.createTerminal).not.toHaveBeenCalled();
-    expect(runtimes.mocks.ensure).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing chosen directory before creating a terminal", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: join(root, "missing") });
-
-    await expect(launcher.start()).rejects.toThrow();
+  it("rejects a missing launch directory before creating a terminal", async () => {
+    await expect(launcher.start(join(root, "missing"))).rejects.toThrow();
     expect(mocks.createTerminal).not.toHaveBeenCalled();
     expect(runtimes.mocks.ensure).not.toHaveBeenCalled();
   });
@@ -163,10 +110,9 @@ describe("SessionLauncher starting folder selection", () => {
       const metadataPath = join(root, "metadata.json");
       const originalMetadata = JSON.stringify({ version: 1, sentinel: "preserved", sessions: {} });
       await writeFile(metadataPath, originalMetadata);
-      mocks.showQuickPick.mockResolvedValue({ cwd: root });
       runtimes.mocks[method].mockRejectedValueOnce(new Error("display connection failed"));
 
-      await expect(launcher.start()).rejects.toThrow("display connection failed");
+      await expect(launcher.start(root)).rejects.toThrow("display connection failed");
 
       const failedId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
       const failedRuntime = runtimes.live.get(failedId);
@@ -177,7 +123,7 @@ describe("SessionLauncher starting folder selection", () => {
       expect(onSessionDetected).not.toHaveBeenCalled();
       expect(await readFile(metadataPath, "utf8")).toBe(originalMetadata);
 
-      await launcher.start();
+      await launcher.start(root);
 
       const retriedId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
       expect(retriedId).toBe(failedId);
@@ -189,7 +135,7 @@ describe("SessionLauncher starting folder selection", () => {
       const metadata = readMetadataStore(metadataPath);
       expect(metadata.status === "ok" && metadata.data.sessions?.[failedId].active).toBe(true);
 
-      await launcher.start();
+      await launcher.start(root);
 
       const nextId = runtimes.mocks.ensure.mock.calls[2][0].sessionId;
       expect(nextId).not.toBe(failedId);
@@ -197,31 +143,23 @@ describe("SessionLauncher starting folder selection", () => {
     },
   );
 
-  it("retains a failed launch across cancellation, an invalid cwd and another starting folder", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: root });
+  it("retains a failed launch across an invalid cwd and another starting folder", async () => {
     runtimes.mocks.clients.mockRejectedValueOnce(new Error("display connection failed"));
-    await expect(launcher.start()).rejects.toThrow("display connection failed");
+    await expect(launcher.start(root)).rejects.toThrow("display connection failed");
     const failedId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
     const failedRuntime = runtimes.live.get(failedId);
 
-    mocks.showQuickPick.mockResolvedValueOnce(undefined);
-    await launcher.start();
-    mocks.showQuickPick.mockResolvedValueOnce({ cwd: undefined });
-    await launcher.start();
-    mocks.showQuickPick.mockResolvedValueOnce({ cwd: join(root, "missing") });
-    await expect(launcher.start()).rejects.toThrow();
+    await expect(launcher.start(join(root, "missing"))).rejects.toThrow();
     expect(runtimes.mocks.ensure).toHaveBeenCalledTimes(1);
     expect(readMetadataStore(join(root, "metadata.json")).status).toBe("empty");
 
     const otherCwd = join(root, "other");
     await mkdir(otherCwd);
-    mocks.showQuickPick.mockResolvedValueOnce({ cwd: otherCwd });
-    await launcher.start();
+    await launcher.start(otherCwd);
     const otherId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
     expect(otherId).not.toBe(failedId);
 
-    mocks.showQuickPick.mockResolvedValueOnce({ cwd: join(root, ".") });
-    await launcher.start();
+    await launcher.start(root);
 
     expect(runtimes.mocks.ensure.mock.calls[2][0].sessionId).toBe(failedId);
     expect(runtimes.live.get(failedId)).toBe(failedRuntime);
@@ -231,10 +169,9 @@ describe("SessionLauncher starting folder selection", () => {
   });
 
   it("reuses a failed launch when another New Session request is already queued", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: root });
     runtimes.mocks.clients.mockRejectedValueOnce(new Error("display connection failed"));
 
-    const results = await Promise.allSettled([launcher.start(), launcher.start()]);
+    const results = await Promise.allSettled([launcher.start(root), launcher.start(root)]);
 
     expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
     const [failedId, retriedId] = runtimes.mocks.ensure.mock.calls.map(
@@ -248,15 +185,14 @@ describe("SessionLauncher starting folder selection", () => {
     const metadataPath = join(root, "metadata.json");
     const invalidMetadata = "{ invalid";
     await writeFile(metadataPath, invalidMetadata);
-    mocks.showQuickPick.mockResolvedValue({ cwd: root });
     runtimes.mocks.clients.mockRejectedValueOnce(new Error("display connection failed"));
-    await expect(launcher.start()).rejects.toThrow("display connection failed");
+    await expect(launcher.start(root)).rejects.toThrow("display connection failed");
     const sessionId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
     await writeJsonl(join(root, "sessions", encodeCwdDirName(root)), `new_${sessionId}.jsonl`, [
       header({ id: sessionId, cwd: root }),
     ]);
 
-    await launcher.start();
+    await launcher.start(root);
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => expect(mocks.showErrorMessage).toHaveBeenCalled());
 
@@ -265,8 +201,7 @@ describe("SessionLauncher starting folder selection", () => {
   });
 
   it("associates overlapping new sessions by their own Pi IDs and shares the display", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: root });
-    await Promise.all([launcher.start(), launcher.start()]);
+    await Promise.all([launcher.start(root), launcher.start(root)]);
     const [firstId, secondId] = runtimes.mocks.ensure.mock.calls.map(
       ([request]) => request.sessionId,
     );
@@ -291,8 +226,7 @@ describe("SessionLauncher starting folder selection", () => {
   });
 
   it("does not associate a launched ID with a mismatched header or cwd", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: root });
-    await launcher.start();
+    await launcher.start(root);
     const sessionId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
     const groupDir = join(root, "sessions", encodeCwdDirName(root));
     await writeJsonl(groupDir, `new_${sessionId}.jsonl`, [header({ id: "other", cwd: root })]);
@@ -307,8 +241,7 @@ describe("SessionLauncher starting folder selection", () => {
   });
 
   it("detects only the launched runtime ID even when its display is closed", async () => {
-    mocks.showQuickPick.mockResolvedValue({ cwd: root });
-    await launcher.start();
+    await launcher.start(root);
     const sessionId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
     registry.onTerminalClosed(mocks.createTerminal.mock.results[0].value);
     await writeJsonl(join(root, "sessions", encodeCwdDirName(root)), `new_${sessionId}.jsonl`, [

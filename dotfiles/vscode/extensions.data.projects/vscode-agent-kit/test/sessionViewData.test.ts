@@ -20,7 +20,7 @@ describe("sessionViewGroups", () => {
   ];
 
   it("sends every session of every group with archive and lock marks", () => {
-    const groups = sessionViewGroups(sessions, new Set(["older"]), new Set(["active"]));
+    const groups = sessionViewGroups(sessions, [], new Set(["older"]), new Set(["active"]));
 
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/beta", "/workspace/alpha"]);
     expect(
@@ -35,7 +35,7 @@ describe("sessionViewGroups", () => {
   });
 
   it("treats sessions without metadata as unarchived and unlocked", () => {
-    const groups = sessionViewGroups(sessions, new Set(), new Set());
+    const groups = sessionViewGroups(sessions, [], new Set(), new Set());
 
     expect(
       groups.every((group) =>
@@ -44,12 +44,35 @@ describe("sessionViewGroups", () => {
     ).toBe(true);
   });
 
+  it("appends sessionless groups for registered workspaces after session groups", () => {
+    const groups = sessionViewGroups(sessions, ["/workspace/empty"], new Set(), new Set());
+
+    expect(groups.map((group) => [group.cwd, group.sessions])).toEqual([
+      ["/workspace/beta", [expect.objectContaining({ sessionId: "newest" })]],
+      [
+        "/workspace/alpha",
+        [
+          expect.objectContaining({ sessionId: "active" }),
+          expect.objectContaining({ sessionId: "older" }),
+        ],
+      ],
+      ["/workspace/empty", []],
+    ]);
+    expect(groups[2].label).toBe("empty");
+  });
+
+  it("does not duplicate a registered workspace that already has session groups", () => {
+    const groups = sessionViewGroups(sessions, ["/workspace/alpha"], new Set(), new Set());
+
+    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/beta", "/workspace/alpha"]);
+  });
+
   it("carries 1000 synthetic sessions as list data", () => {
     const synthetic = Array.from({ length: 1000 }, (_, index) =>
       session(`s-${index}`, `/workspace/ws-${index % 10}`, index),
     );
 
-    const groups = sessionViewGroups(synthetic, new Set(["s-0"]), new Set());
+    const groups = sessionViewGroups(synthetic, [], new Set(["s-0"]), new Set());
 
     expect(groups).toHaveLength(10);
     expect(groups.flatMap((group) => group.sessions)).toHaveLength(1000);
