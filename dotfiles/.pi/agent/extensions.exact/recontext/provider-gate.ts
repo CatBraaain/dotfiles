@@ -33,12 +33,14 @@ import { PROVIDER_UPDATE_EVENT, type ProviderUpdate } from "./provider-update.ts
 
 interface Registration {
   wrapper: Provider;
+  base: Provider;
+  ready: boolean;
   native: Provider | undefined;
   legacy: ProviderConfig | undefined;
 }
 
 export interface ProviderGates {
-  ensure(): void;
+  ensure(): Promise<void>;
   close(): void;
   isBusy(): boolean;
 }
@@ -73,38 +75,105 @@ export function installProviderGates(
   queue.owners++;
   sessionQueues.set(sessionId, queue);
   let closed = false;
+  let active = false;
+  let preparation: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+  let failure: { error: unknown } | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const unsubscribe = pi.events.on(PROVIDER_UPDATE_EVENT, (value) => {
     const update = value as ProviderUpdate;
     if (closed || update.registry !== registry || update.handled) return;
     update.handled = true;
     try {
-      restore(update.providerId);
-      try {
-        update.register();
-      } finally {
-        install(update.providerId);
+      if (!active) update.register();
+      else {
+        restore(update.providerId);
+        try {
+          update.register();
+        } finally {
+          install(update.providerId);
+        }
       }
+      failure = undefined;
     } catch (error) {
+      failPreparation(error);
       update.error = error;
     }
   });
 
-  function ensure(): void {
-    if (closed) return;
+  function pendingProviders(): string[] {
     const providers = new Set([
       ...registry.getAll().map((model) => model.provider),
       ...registry.getRegisteredProviderIds(),
     ]);
-    for (const providerId of providers) install(providerId);
+    return [...providers].filter((providerId) => {
+      const registration = registrations.get(providerId);
+      const native = registry.getRegisteredNativeProvider(providerId);
+      return (
+        (!registration?.ready || native !== registration.wrapper) &&
+        Boolean(native ?? registry.getProvider(providerId))
+      );
+    });
+  }
+
+  function ensure(): Promise<void> {
+    if (closed) return Promise.reject(new Error("Provider preparation owner is closed"));
+    if (failure) return Promise.reject(failure.error);
+    if (preparation) return preparation.promise;
+    let pending: string[] = [];
+    if (active) {
+      try {
+        pending = pendingProviders();
+      } catch (error) {
+        failPreparation(error);
+        return Promise.reject(error);
+      }
+      if (!pending.length) return Promise.resolve();
+    }
+    active = true;
+    const completion = Promise.withResolvers<void>();
+    preparation = completion;
+    function step(): void {
+      timer = undefined;
+      if (closed) return;
+      try {
+        if (!pending.length) pending = pendingProviders();
+        const providerId = pending.shift();
+        if (providerId !== undefined) install(providerId);
+        if (!pending.length) pending = pendingProviders();
+        if (pending.length) timer = setTimeout(step, 0);
+        else {
+          preparation = undefined;
+          completion.resolve();
+        }
+      } catch (error) {
+        failPreparation(error);
+      }
+    }
+    timer = setTimeout(step, 0);
+    return completion.promise;
+  }
+
+  function failPreparation(error: unknown): void {
+    failure = { error };
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    preparation?.reject(error);
+    preparation = undefined;
+  }
+
+  function assertPreparationHealthy(): void {
+    if (failure) throw failure.error;
   }
 
   function install(providerId: string): void {
     const previous = registrations.get(providerId);
-    if (previous && registry.getRegisteredNativeProvider(providerId) === previous.wrapper) return;
-    const native = registry.getRegisteredNativeProvider(providerId);
-    const base = native ?? registry.getProvider(providerId);
+    const current = registry.getRegisteredNativeProvider(providerId);
+    if (previous?.ready && current === previous.wrapper) return;
+    const ownsCurrent = previous !== undefined && current === previous.wrapper;
+    const native = ownsCurrent ? previous.native : current;
+    const base = ownsCurrent ? previous.base : (native ?? registry.getProvider(providerId));
     if (!base) return;
-    const legacy = registry.getRegisteredProviderConfig(providerId);
+    const legacy = ownsCurrent ? previous.legacy : registry.getRegisteredProviderConfig(providerId);
     function stream<T extends Api>(
       model: Model<T>,
       context: TranscriptContext,
@@ -127,8 +196,10 @@ export function installProviderGates(
         return typeof member === "function" ? member.bind(target) : member;
       },
     });
+    const registration = { wrapper, base, native, legacy, ready: false };
+    registrations.set(providerId, registration);
     registry.registerProvider(wrapper);
-    registrations.set(providerId, { wrapper, native, legacy });
+    registration.ready = true;
   }
 
   function restore(providerId: string): void {
@@ -180,7 +251,9 @@ export function installProviderGates(
         );
         if (closed || lifetime.signal.aborted || options.signal?.aborted)
           throw new Error("The request was cancelled before dispatch");
+        assertPreparationHealthy();
         const prepared = await prepare(base, model, context, options, simple, lease);
+        assertPreparationHealthy();
         if (closed || options.signal?.aborted)
           throw new Error("The request was cancelled before normal dispatch");
         delegated = true;
@@ -307,11 +380,18 @@ export function installProviderGates(
   function close(): void {
     if (closed) return;
     closed = true;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    preparation?.reject(new Error("Provider preparation owner is closed"));
+    preparation = undefined;
     lifetime.abort();
     unsubscribe();
-    for (const providerId of registrations.keys()) restore(providerId);
-    queue.owners--;
-    releaseQueue();
+    try {
+      for (const providerId of registrations.keys()) restore(providerId);
+    } finally {
+      queue.owners--;
+      releaseQueue();
+    }
   }
 
   function releaseQueue(): void {
@@ -323,7 +403,6 @@ export function installProviderGates(
     return queue.active > 0;
   }
 
-  ensure();
   return { ensure, close, isBusy };
 }
 

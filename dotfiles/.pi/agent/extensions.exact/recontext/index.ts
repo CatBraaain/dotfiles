@@ -23,6 +23,7 @@ const STATE_VERSION = 1;
 const AUTO_HANDOFF_LIMIT = 2;
 const HANDOFF_OPTION = "Yes, recontext";
 const STAY_OPTION = "No, stay (reason next)";
+const PREPARATION_WIDGET = "recontext-preparation";
 
 export interface HandoffPayload {
   reason: string;
@@ -34,27 +35,64 @@ export default function recontextExtension(pi: ExtensionAPI): void {
   const pendingRequests = new Map<string, HandoffPayload>();
   let currentContext: ExtensionContext;
   let gates: ProviderGates | undefined;
+  let widgetOwner: ProviderGates | undefined;
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;
     gates?.close();
     gates = installProviderGates(pi, () => currentContext);
   });
-  pi.on("session_shutdown", () => {
-    gates?.close();
+  pi.on("session_shutdown", (_event, ctx) => {
+    const owner = gates;
     gates = undefined;
+    if (owner) clearPreparationWidget(owner, ctx);
+    owner?.close();
   });
-  pi.on("turn_start", (_event, ctx) => {
-    currentContext = ctx;
-    gates?.ensure();
+  pi.on("resources_discover", (_event, ctx) => {
+    const owner = gates;
+    if (!owner) return;
+    let started = false;
+    function prepareInBackground(): void {
+      if (!owner || started || gates !== owner) return;
+      started = true;
+      void owner.ensure().then(
+        () => clearPreparationWidget(owner, ctx),
+        (error) => {
+          if (gates !== owner) return;
+          clearPreparationWidget(owner, ctx);
+          ctx.ui.notify(`recontext: ${errorMessage(error)}`, "error");
+        },
+      );
+    }
+    if (ctx.mode === "tui") {
+      widgetOwner = owner;
+      ctx.ui.setWidget(PREPARATION_WIDGET, () => ({
+        render() {
+          prepareInBackground();
+          return [];
+        },
+        invalidate() {},
+      }));
+    } else prepareInBackground();
+  });
+  pi.on("before_agent_start", async (_event, ctx) => {
+    await ensureGates(ctx);
+  });
+  pi.on("session_before_compact", async (_event, ctx) => {
+    if (!(await ensureGates(ctx))) return { cancel: true };
+  });
+  pi.on("session_before_tree", async (_event, ctx) => {
+    if (!(await ensureGates(ctx))) return { cancel: true };
+  });
+  pi.on("turn_start", async (_event, ctx) => {
+    await ensureGates(ctx);
     pendingRequests.clear();
   });
-  pi.on("context", (event, ctx) => {
-    currentContext = ctx;
-    gates?.ensure();
+  pi.on("context", async (event, ctx) => {
+    if (!(await ensureGates(ctx))) return;
     return { messages: projectPendingMessages(event.messages, ctx.sessionManager) };
   });
-  pi.on("cache_warming_decision", () => {
-    if (gates?.isBusy()) return { action: "stop" };
+  pi.on("cache_warming_decision", async (_event, ctx) => {
+    if (!(await ensureGates(ctx)) || gates?.isBusy()) return { action: "stop" };
   });
   pi.on("agent_before_settle", (event, ctx) => {
     const pending = pendingProjection(ctx.sessionManager, event.context.contextEntries);
@@ -140,6 +178,28 @@ export default function recontextExtension(pi: ExtensionAPI): void {
       (pending.drafts.length ? { entries: [...event.entries, ...pending.drafts] } : undefined)
     );
   });
+
+  function clearPreparationWidget(owner: ProviderGates, ctx: ExtensionContext): void {
+    if (widgetOwner !== owner) return;
+    widgetOwner = undefined;
+    ctx.ui.setWidget(PREPARATION_WIDGET, undefined);
+  }
+
+  async function ensureGates(ctx: ExtensionContext): Promise<boolean> {
+    currentContext = ctx;
+    const owner = gates;
+    try {
+      if (!owner) throw new Error("Provider preparation owner is closed");
+      await owner.ensure();
+      return true;
+    } catch (error) {
+      ctx.abort();
+      ctx.ui.notify(`recontext: ${errorMessage(error)}`, "error");
+      return false;
+    } finally {
+      if (owner) clearPreparationWidget(owner, ctx);
+    }
+  }
 
   async function applyManualHandoff(
     event: TurnEndEvent,

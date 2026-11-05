@@ -488,6 +488,7 @@ describe("session serialization and provider ownership", () => {
       assert.equal(h.gates.isBusy(), true);
       h.gates.close();
       reloaded = installProviderGates(h.pi, () => h.ctx);
+      await reloaded.ensure();
       assert.equal((await send(h)).stopReason, "aborted");
       assert.deepEqual(
         h.state.requests.map((request) => request.kind),
@@ -535,8 +536,8 @@ describe("session serialization and provider ownership", () => {
     const h = await gateFixture();
     try {
       seedConversation(h.manager, 12_500);
-      h.gates.ensure();
-      h.gates.ensure();
+      await h.gates.ensure();
+      await h.gates.ensure();
       assert.equal((await send(h)).stopReason, "stop");
       assert.deepEqual(
         h.state.requests.map((request) => request.kind),
@@ -603,6 +604,7 @@ describe("session serialization and provider ownership", () => {
     h.gates.close();
     assert.strictEqual(h.registry.getRegisteredNativeProvider(h.provider.id), h.provider);
     const reloaded = installProviderGates(h.pi, () => h.ctx);
+    await reloaded.ensure();
     try {
       seedConversation(h.manager, 12_500);
       assert.equal((await send(h)).stopReason, "stop");

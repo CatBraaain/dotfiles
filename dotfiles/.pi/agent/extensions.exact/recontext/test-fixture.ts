@@ -257,7 +257,10 @@ export async function memoryRuntime() {
   });
 }
 
-export async function gateFixture(overrides: Partial<Model<Api>> = {}) {
+export async function gateFixture(
+  overrides: Partial<Model<Api>> = {},
+  options: { deferPreparation?: boolean } = {},
+) {
   const runtime = await memoryRuntime();
   const fake = fakeProvider(undefined, overrides);
   runtime.registerNativeProvider(fake.provider);
@@ -287,6 +290,7 @@ export async function gateFixture(overrides: Partial<Model<Api>> = {}) {
     },
   } as unknown as ExtensionAPI;
   const gates = installProviderGates(pi, () => ctx);
+  if (!options.deferPreparation) await gates.ensure();
   const model = runtime.getModel(fake.provider.id, "physical")!;
   return { ...fake, runtime, registry, manager, pi, ctx, gates, model, notices, controller };
 }
