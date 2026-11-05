@@ -10,7 +10,7 @@ import type {
   TestResult,
   TestStep,
 } from "playwright/types/testReporter";
-import { parseSpecCases, serializeGalleryRun } from "./e2eGallery";
+import { parseGalleryCases, serializeGalleryRun } from "./e2eGallery";
 import type {
   GalleryAttempt,
   GalleryImage,
@@ -30,6 +30,7 @@ type Attachment = TestResult["attachments"][number];
 
 export default class E2eGalleryReporter implements Reporter {
   private outputDir = "";
+  private excludedCaseIds = new Set<string>();
   private tests: TestCase[] = [];
   private run: GalleryRun | undefined;
   private readonly attempts = new Map<TestResult, GalleryAttempt>();
@@ -48,6 +49,8 @@ export default class E2eGalleryReporter implements Reporter {
       rmSync(this.outputDir, { recursive: true, force: true });
       mkdirSync(this.outputDir, { recursive: true });
       const source = readFileSync(join(root, "SPEC.md"), "utf8");
+      const { cases, excludedIds } = parseGalleryCases(source);
+      this.excludedCaseIds = new Set(excludedIds);
       this.tests = suite.allTests();
       this.run = {
         started: new Date().toISOString(),
@@ -55,7 +58,7 @@ export default class E2eGalleryReporter implements Reporter {
         environment: `${process.platform} / ${process.arch}`,
         errors: this.errors,
         tests: [],
-        cases: parseSpecCases(source),
+        cases,
       };
       this.writeResults();
     } catch (error) {
@@ -101,21 +104,23 @@ export default class E2eGalleryReporter implements Reporter {
 
   private writeResults(): void {
     if (!this.run) return;
-    this.run.tests = this.tests.map((test): GalleryTest => {
-      const attempts = test.results.flatMap((result) => {
-        const attempt = this.attempts.get(result);
-        return attempt ? [attempt] : [];
-      });
-      const hasRun = attempts.some((attempt) => attempt.status !== "Not run");
-      return {
-        specId: test.annotations.find((annotation) => annotation.type === "spec")?.description,
-        title: test.titlePath().filter(Boolean).join(" > "),
-        project: test.parent.project()?.name ?? "",
-        repeat: test.repeatEachIndex,
-        outcome: hasRun ? outcomeLabel(test) : "Not run",
-        attempts,
-      };
-    });
+    this.run.tests = this.tests
+      .map((test): GalleryTest => {
+        const attempts = test.results.flatMap((result) => {
+          const attempt = this.attempts.get(result);
+          return attempt ? [attempt] : [];
+        });
+        const hasRun = attempts.some((attempt) => attempt.status !== "Not run");
+        return {
+          specId: test.annotations.find((annotation) => annotation.type === "spec")?.description,
+          title: test.titlePath().filter(Boolean).join(" > "),
+          project: test.parent.project()?.name ?? "",
+          repeat: test.repeatEachIndex,
+          outcome: hasRun ? outcomeLabel(test) : "Not run",
+          attempts,
+        };
+      })
+      .filter((test) => test.specId === undefined || !this.excludedCaseIds.has(test.specId));
     const target = join(this.outputDir, "results.js");
     writeFileSync(`${target}.tmp`, serializeGalleryRun(this.run));
     renameSync(`${target}.tmp`, target);

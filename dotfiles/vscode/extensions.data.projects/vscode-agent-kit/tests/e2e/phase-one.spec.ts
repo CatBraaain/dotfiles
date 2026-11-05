@@ -353,10 +353,9 @@ test(
 test(
   "SCM から Sessions へ戻っても、Refresh なしで一覧を復元する",
   { annotation: { type: "spec", description: "E2E-3" } },
-  async ({ host }, testInfo) => {
+  async ({ host }) => {
     const selections = ["B", "A", "B", "A"];
-    for (const [index, key] of selections.entries()) {
-      const isFinalRestore = index === selections.length - 1;
+    for (const key of selections) {
       await test.step(`Return from SCM and select ${key} without Refresh`, async () => {
         await host.selectSession(key);
         await host.expectPiVisible(host.sessions[key].cwd);
@@ -365,11 +364,6 @@ test(
           .describe("Source Control sidebar");
         await scm.click();
         await expect(scm).toHaveAttribute("aria-selected", "true");
-        if (isFinalRestore)
-          await testInfo.attach("SCM 表示中", {
-            body: await host.page.screenshot(),
-            contentType: "image/png",
-          });
         const frame = await host.sessionFrame();
         await expect(frame.locator("section.group")).toHaveCount(4);
         await expect(
@@ -377,11 +371,6 @@ test(
             .getByTitle(host.sessions.B.cwd, { exact: true })
             .describe("Restored B work folder heading"),
         ).toBeVisible();
-        if (isFinalRestore)
-          await testInfo.attach("Sessions 復元後", {
-            body: await host.page.screenshot(),
-            contentType: "image/png",
-          });
       });
     }
   },

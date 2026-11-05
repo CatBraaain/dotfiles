@@ -14,7 +14,7 @@ import { runInNewContext } from "node:vm";
 import { chromium } from "playwright";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { parseSpecCases, serializeGalleryRun } from "../tests/support/e2eGallery";
+import { parseGalleryCases, serializeGalleryRun } from "../tests/support/e2eGallery";
 import type { GalleryRun, GalleryTest } from "../tests/support/e2eGallery";
 
 const root = resolve(import.meta.dirname, "..");
@@ -164,18 +164,17 @@ describe("E2E gallery reporter", () => {
   }, 30_000);
 
   it("exports the current canonical SPEC cases in their declared order", () => {
-    const cases = parseSpecCases(specSource);
-    expect(cases).toHaveLength(7);
+    const { cases, excludedIds } = parseGalleryCases(specSource);
+    expect(cases).toHaveLength(5);
     expect(run.results.cases).toEqual(cases);
-    expect(run.results.cases.map((entry) => entry.id)).toEqual([
+    expect(cases.map((entry) => entry.id)).toEqual([
       "E2E-1",
       "E2E-2",
-      "E2E-3",
       "E2E-5",
       "E2E-6",
       "E2E-7",
-      "E2E-9",
     ]);
+    expect(excludedIds).toEqual(["E2E-3", "E2E-9"]);
     expect(run.script).not.toContain("specSource");
     expect(run.script).not.toContain(specSource.split("\n")[0]);
   });
@@ -186,17 +185,15 @@ describe("E2E gallery reporter", () => {
     expect(readFileSync(join(root, "e2e-gallery.html"), "utf8")).toBe(viewerSource);
   });
 
-  it("keeps failed, skipped, unselected and successful-without-image cases distinct", () => {
+  it("keeps failed, skipped and excluded cases distinct", () => {
     expect(run.status).toBe(1);
     expect(run.results.status).toBe("failed");
     expect(caseTests(run.results, "E2E-2")[0].outcome).toBe("Skipped");
-    const withoutImages = caseTests(run.results, "E2E-3")[0];
-    expect(withoutImages.outcome).toBe("Passed");
-    expect(withoutImages.attempts[0].steps[0].images).toEqual([]);
+    expect(caseTests(run.results, "E2E-3")).toEqual([]);
+    expect(caseTests(run.results, "E2E-9")).toEqual([]);
     expect(caseTests(run.results, "E2E-7")[0].attempts[0].errors.join("\n")).toContain(
       "Expected fixture failure <script>",
     );
-    expect(caseTests(run.results, "E2E-9")).toEqual([]);
   });
 
   it("maps images to their nested and repeated test steps, not their attachment names", () => {
@@ -331,7 +328,7 @@ describe("E2E gallery reporter", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(pathToFileURL(join(run.directory, "e2e-gallery.html")).href);
-      expect(await page.locator("section.case[id]").count()).toBe(7);
+      expect(await page.locator("section.case[id]").count()).toBe(5);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(run.results.cases.map((entry) => entry.id));
@@ -360,10 +357,10 @@ describe("E2E gallery reporter", () => {
       expect(visibleText).not.toContain("retry screenshots");
       expect(visibleText).not.toContain("alpha: Flaky");
       expect(await page.locator("#E2E-2").textContent()).toContain("未実行");
-      expect(await page.locator("#E2E-3").textContent()).toContain("画像なし");
+      expect(await page.locator("#E2E-3").count()).toBe(0);
       expect(await page.locator("#E2E-6").textContent()).toContain("画像なし");
       expect(await page.locator("#E2E-6 .image-link").count()).toBe(0);
-      expect(await page.locator("#E2E-9").textContent()).toContain("未実行");
+      expect(await page.locator("#E2E-9").count()).toBe(0);
       expect(await page.locator("#E2E-1 img").first().getAttribute("alt")).toBe(
         "same <script> image",
       );
@@ -397,7 +394,7 @@ describe("E2E gallery reporter", () => {
     });
 
     it("lays out comparison images in canonical case order", async () => {
-      const comparisonCases = run.results.cases.slice(0, 6);
+      const comparisonCases = run.results.cases;
       const tests: GalleryTest[] = comparisonCases.map((specCase) => ({
         specId: specCase.id,
         title: "Hidden test name",
@@ -438,7 +435,7 @@ describe("E2E gallery reporter", () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(pathToFileURL(join(directory, "e2e-gallery.html")).href);
       const summary = page.locator("#run-summary");
-      expect(await summary.textContent()).toBe("Run: passed · 2026-01-02 09:04 · 12 images");
+      expect(await summary.textContent()).toBe("Run: passed · 2026-01-02 09:04 · 10 images");
       expect(await summary.getAttribute("title")).toBe(results.started);
       expect(
         await summary.evaluate((node) => {
@@ -446,8 +443,8 @@ describe("E2E gallery reporter", () => {
           return [style.whiteSpace, style.overflow, style.textOverflow];
         }),
       ).toEqual(["nowrap", "hidden", "ellipsis"]);
-      expect(await page.locator(".table").count()).toBe(6);
-      expect(await page.locator(".cell img").count()).toBe(12);
+      expect(await page.locator(".table").count()).toBe(5);
+      expect(await page.locator(".cell img").count()).toBe(10);
       for (const specCase of comparisonCases) {
         const table = page.locator(`#${specCase.id} .table`);
         expect(await table.locator(".cell").count()).toBe(2);
@@ -461,7 +458,7 @@ describe("E2E gallery reporter", () => {
           ),
         ).toBe(2);
       }
-      expect(await page.locator("#E2E-9").textContent()).toContain("未実行");
+      expect(await page.locator("#E2E-9").count()).toBe(0);
       expect(await page.locator("body").innerText()).not.toContain("Hidden");
     });
 
@@ -544,21 +541,32 @@ describe("E2E gallery reporter", () => {
 
 describe("SPEC source handling", () => {
   it("reads escaped separators and the capture column without separate case definitions", () => {
-    const cases = parseSpecCases(
+    const { cases } = parseGalleryCases(
       "## テストケース\n| E2E-1 | A \\| B | Expected | One final screenshot | E2E |\n### Next",
     );
     expect(cases[0]).toEqual({ id: "E2E-1", title: "A | B" });
   });
 
+  it("excludes cases whose capture column declares no screenshots", () => {
+    const { cases, excludedIds } = parseGalleryCases(
+      "## テストケース\n| E2E-1 | Shot case | Expected | One screenshot | E2E |\n| E2E-2 | Plain none | Expected | なし | E2E |\n| E2E-3 | Not run | Expected | なし（未実行） | E2E |",
+    );
+    expect(cases.map((entry) => entry.id)).toEqual(["E2E-1"]);
+    expect(excludedIds).toEqual(["E2E-2", "E2E-3"]);
+  });
+
   it("rejects a missing or ambiguous canonical case table", () => {
-    expect(() => parseSpecCases("# Missing")).toThrow("no E2E cases");
+    expect(() => parseGalleryCases("# Missing")).toThrow("no gallery cases");
     expect(() =>
-      parseSpecCases(
+      parseGalleryCases(
         "## テストケース\n| E2E-1 | A | B | Shot | E2E |\n| E2E-1 | C | D | Shot | E2E |",
       ),
     ).toThrow("Duplicate");
-    expect(() => parseSpecCases("## テストケース\n| E2E-1 | A | B | E2E |")).toThrow(
+    expect(() => parseGalleryCases("## テストケース\n| E2E-1 | A | B | E2E |")).toThrow(
       "Invalid SPEC test case",
+    );
+    expect(() => parseGalleryCases("## テストケース\n| E2E-1 | A | B | なし | E2E |")).toThrow(
+      "no gallery cases",
     );
   });
 

@@ -47,9 +47,16 @@ export interface GalleryRun {
   cases: SpecCase[];
 }
 
-export function parseSpecCases(source: string): SpecCase[] {
+export interface GalleryCases {
+  cases: SpecCase[];
+  excludedIds: string[];
+}
+
+export function parseGalleryCases(source: string): GalleryCases {
   const lines = source.split(/\r?\n/);
   const cases: SpecCase[] = [];
+  const excludedIds: string[] = [];
+  const seenIds = new Set<string>();
   let inCases = false;
   for (const [index, line] of lines.entries()) {
     if (line === "## テストケース") {
@@ -62,12 +69,16 @@ export function parseSpecCases(source: string): SpecCase[] {
     if (!/^E2E-\d+$/.test(cells[0])) continue;
     if (cells.length !== 5 || !cells[1] || !cells[2])
       throw new Error(`Invalid SPEC test case at line ${index + 1}`);
-    if (cases.some((entry) => entry.id === cells[0]))
-      throw new Error(`Duplicate SPEC test case: ${cells[0]}`);
+    if (seenIds.has(cells[0])) throw new Error(`Duplicate SPEC test case: ${cells[0]}`);
+    seenIds.add(cells[0]);
+    if (cells[3].startsWith("なし")) {
+      excludedIds.push(cells[0]);
+      continue;
+    }
     cases.push({ id: cells[0], title: cells[1] });
   }
-  if (!cases.length) throw new Error("SPEC.md has no E2E cases in its test case table");
-  return cases;
+  if (!cases.length) throw new Error("SPEC.md has no gallery cases in its test case table");
+  return { cases, excludedIds };
 }
 
 export function serializeGalleryRun(run: GalleryRun): string {
