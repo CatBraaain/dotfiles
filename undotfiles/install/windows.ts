@@ -94,6 +94,7 @@ const managedDevPackages: readonly string[] = [
   "gerardog.gsudo", // windows
   "CatBraaain.runx", // windows
   "CatBraaain.winconfig", // windows
+  "CatBraaain.wintasks", // windows
   // keep-sorted end
 ];
 
