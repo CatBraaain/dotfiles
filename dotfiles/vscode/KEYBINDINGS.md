@@ -41,7 +41,7 @@
 | `ctrl+k ctrl+shift+l` | その他 | 言語を自動検出 |
 | `ctrl+n` | ファイル・エクスプローラ | 新規ファイルを作る |
 | `ctrl+shift+n` | ファイル・エクスプローラ | 新規フォルダを作る（エクスプローラ上） |
-| `ctrl+p` | Markdown | プレビューを開く |
+| `ctrl+p` | Markdown・HTML | プレビューを開く（HTML は Live Preview を同一カラムのタブで開く） |
 | `ctrl+q` | エディタ | 行コメントを切替 |
 | `ctrl+shift+q` | エディタ | ブロックコメントを切替 |
 | `ctrl+r` | その他 | Code Runner で実行 |

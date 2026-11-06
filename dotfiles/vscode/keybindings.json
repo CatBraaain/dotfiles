@@ -920,6 +920,17 @@
     "command": "markdown.showPreview"
   },
   {
+    "key": "ctrl+p",
+    "command": "runCommands",
+    "args": {
+      "commands": [
+        "livePreview.start.internalPreview.atFile",
+        "workbench.action.moveEditorToFirstGroup"
+      ]
+    },
+    "when": "editorLangId == html"
+  },
+  {
     "key": "ctrl+pagedown",
     "command": "-workbench.action.nextEditor"
   },
