@@ -956,7 +956,9 @@ describe("SessionWebviewProvider", () => {
     expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
-    await provider.refresh();
+    await vi.waitFor(() => {
+      expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(true);
+    });
     const sessionsCalls = webview.postMessage.mock.calls.filter(
       (call) => call[0].type === "sessions",
     ).length;
