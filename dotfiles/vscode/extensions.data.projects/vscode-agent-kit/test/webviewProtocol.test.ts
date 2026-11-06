@@ -3,6 +3,8 @@ import { parseWebviewRequest } from "../src/webview/protocol";
 
 const sessionId = "00000000-0000-4000-8000-000000000001";
 const otherSessionId = "00000000-0000-4000-8000-000000000002";
+const uuidV7SessionId = "01933d1e-3b7a-7bb2-a5d1-c27f6a857d13";
+const customSessionId = "spec-d5-549bc7eb-1e89-4eb1-ab9d-16ff3be54fe7";
 
 describe("parseWebviewRequest", () => {
   it.each([
@@ -23,6 +25,18 @@ describe("parseWebviewRequest", () => {
     [
       { type: "openSession", sessionId },
       { type: "openSession", sessionId },
+    ],
+    [
+      { type: "openSession", sessionId: uuidV7SessionId },
+      { type: "openSession", sessionId: uuidV7SessionId },
+    ],
+    [
+      { type: "openSession", sessionId: "session-1" },
+      { type: "openSession", sessionId: "session-1" },
+    ],
+    [
+      { type: "archiveSessions", sessionIds: [customSessionId] },
+      { type: "archiveSessions", sessionIds: [customSessionId] },
     ],
     [
       { type: "archiveSessions", sessionIds: [sessionId] },
@@ -56,11 +70,13 @@ describe("parseWebviewRequest", () => {
     { type: "setMode", mode: "all" },
     { type: "openSession" },
     { type: "openSession", sessionId: 1 },
-    { type: "openSession", sessionId: "session-1" },
+    { type: "openSession", sessionId: "" },
+    { type: "openSession", sessionId: "session 1" },
+    { type: "openSession", sessionId: "-leading-dash" },
     { type: "openSession", sessionId: "/arbitrary/path" },
     { type: "archiveSessions" },
     { type: "archiveSessions", sessionIds: [] },
-    { type: "archiveSessions", sessionIds: [sessionId, "session-1"] },
+    { type: "archiveSessions", sessionIds: [sessionId, "trailing_dot."] },
     { type: "archiveSessions", sessionIds: [sessionId, 3] },
     { type: "setSessionLock", sessionId },
     { type: "setSessionLock", sessionId, locked: "true" },

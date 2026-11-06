@@ -69,8 +69,8 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   return undefined;
 }
 
-const SESSION_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Pi session id shape per pi's assertValidSessionId (UUID by default, custom ids allowed)
+const SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 /** Path arguments must arrive trimmed and non-empty; the webview trims input values. */
 function isNonEmptyPath(value: unknown): value is string {

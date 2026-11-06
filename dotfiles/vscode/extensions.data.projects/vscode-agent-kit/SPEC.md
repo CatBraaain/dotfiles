@@ -5,7 +5,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 ## 用語
 
 - セッションファイル: Pi が会話を保存する JSONL ファイル。場所と形式は Pi のドキュメント（[sessions](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/sessions.md) / [session format](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/session-format.md)）に従う。
-- セッション ID: セッションファイルのヘッダーが持つ UUID。ファイル名は `<timestamp>_<session-id>.jsonl` で、ファイル名の末尾セグメントと一致する。
+- セッション ID: セッションファイルのヘッダーが持つ ID。既定は UUID で、Pi の SDK や `--session-id` によるカスタム ID もある（Pi のドキュメントに従う）。ファイル名は `<timestamp>_<session-id>.jsonl` で、ファイル名の末尾セグメントと一致する。
 - メタデータストア: セッションごとの状態（アーカイブ・ロック）と、New Workspace アクションで登録したワークスペースを保存する JSON ファイル。
 - アーカイブ済みセッション: メタデータストアで `active` が `false` のセッション。既定の表示対象から除外される。
 - ロック中セッション: メタデータストアで `locked` が真のセッション。ロックを解除するまでアーカイブされない。
