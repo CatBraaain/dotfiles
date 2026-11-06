@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { summarizeSessionFile, parseSessionHeader, displayNameFromScan, createNameScan, foldSessionEntryLine } from "../src/sessionFile";
+import {
+  summarizeSessionFile,
+  parseSessionHeader,
+  displayNameFromScan,
+  createNameScan,
+  foldSessionEntryLine,
+} from "../src/sessionFile";
 import { cleanup, header, messageEntry, sessionInfoEntry, tempDir, writeJsonl } from "./fixtures";
 
 let dir: string;
@@ -15,9 +21,15 @@ afterEach(async () => {
 describe("parseSessionHeader", () => {
   it("extracts id and cwd from the session header", () => {
     const parsed = parseSessionHeader(
-      JSON.stringify(header({ id: "uuid-1", cwd: "/home/user/project", timestamp: "2024-12-03T14:00:00.000Z" })),
+      JSON.stringify(
+        header({ id: "uuid-1", cwd: "/home/user/project", timestamp: "2024-12-03T14:00:00.000Z" }),
+      ),
     );
-    expect(parsed).toEqual({ id: "uuid-1", cwd: "/home/user/project", timestamp: "2024-12-03T14:00:00.000Z" });
+    expect(parsed).toEqual({
+      id: "uuid-1",
+      cwd: "/home/user/project",
+      timestamp: "2024-12-03T14:00:00.000Z",
+    });
   });
 
   it("rejects non-session first lines", () => {
@@ -87,7 +99,11 @@ describe("summarizeSessionFile", () => {
   it("joins text blocks of array content", async () => {
     const filePath = await writeJsonl(dir, "blocks.jsonl", [
       header(),
-      messageEntry("user", [{ type: "text", text: "Part one" }, { type: "image", data: "..." }, { type: "text", text: "Part two" }]),
+      messageEntry("user", [
+        { type: "text", text: "Part one" },
+        { type: "image", data: "..." },
+        { type: "text", text: "Part two" },
+      ]),
     ]);
     const info = await summarizeSessionFile(filePath);
     expect(info?.displayName).toBe("Part one Part two");
@@ -108,20 +124,33 @@ describe("summarizeSessionFile", () => {
       header(),
       messageEntry("assistant", [{ type: "text", text: "Hello!" }]),
       messageEntry("toolResult", [{ type: "text", text: "output" }]),
-      { type: "message", id: "e9", parentId: null, timestamp: "2024-12-03T14:00:01.000Z", message: { role: "bashExecution", command: "ls" } },
+      {
+        type: "message",
+        id: "e9",
+        parentId: null,
+        timestamp: "2024-12-03T14:00:01.000Z",
+        message: { role: "bashExecution", command: "ls" },
+      },
     ]);
     const info = await summarizeSessionFile(filePath);
     expect(info?.displayName).toBe("Untitled");
   });
 
   it("skips unparseable mid-file lines and still reads later entries", async () => {
-    const filePath = await writeJsonl(dir, "broken.jsonl", [header(), "{broken json", sessionInfoEntry("Named after break")]);
+    const filePath = await writeJsonl(dir, "broken.jsonl", [
+      header(),
+      "{broken json",
+      sessionInfoEntry("Named after break"),
+    ]);
     const info = await summarizeSessionFile(filePath);
     expect(info?.displayName).toBe("Named after break");
   });
 
   it("keeps unicode display names intact", async () => {
-    const filePath = await writeJsonl(dir, "unicode.jsonl", [header(), sessionInfoEntry("日本語セッション名")]);
+    const filePath = await writeJsonl(dir, "unicode.jsonl", [
+      header(),
+      sessionInfoEntry("日本語セッション名"),
+    ]);
     const info = await summarizeSessionFile(filePath);
     expect(info?.displayName).toBe("日本語セッション名");
   });
@@ -155,14 +184,20 @@ describe("multi-chunk scanning (files larger than the 4 MiB scan chunk)", () => 
 
   it("extracts a session_info line larger than one chunk", async () => {
     const giant = sessionInfoEntry("Big line name", { details: "x".repeat(5_000_000) });
-    const filePath = await writeJsonl(dir, "giant-line.jsonl", [header({ id: "big-2", cwd: "/b" }), giant]);
+    const filePath = await writeJsonl(dir, "giant-line.jsonl", [
+      header({ id: "big-2", cwd: "/b" }),
+      giant,
+    ]);
     const info = await summarizeSessionFile(filePath);
     expect(info?.displayName).toBe("Big line name");
   });
 
   it("skips false-positive needles inside assistant content and uses the real first user message", async () => {
     const falseHit = messageEntry("assistant", [
-      { type: "text", text: `quoted payload {"role":"user"} inside a string ${"y".repeat(chunkBytes)}` },
+      {
+        type: "text",
+        text: `quoted payload {"role":"user"} inside a string ${"y".repeat(chunkBytes)}`,
+      },
     ]);
     const filePath = await writeJsonl(dir, "false-hit.jsonl", [
       header({ id: "big-3", cwd: "/b" }),

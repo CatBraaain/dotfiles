@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
 import type * as vscode from "vscode";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -25,7 +26,7 @@ vi.mock("vscode", () => ({
 let root: string;
 let launcher: SessionLauncher;
 let registry: TerminalRegistry;
-let onSessionDetected: ReturnType<typeof vi.fn>;
+let onSessionDetected: Mock<(sessionId: string) => void>;
 let runtimes: ReturnType<typeof fakeRuntimes>;
 
 beforeEach(async () => {

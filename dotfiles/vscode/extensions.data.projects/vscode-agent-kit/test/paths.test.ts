@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
-import { encodeCwdDirName, metadataStorePath, resolveAgentDir, resolveSessionDir } from "../src/paths";
+import {
+  encodeCwdDirName,
+  metadataStorePath,
+  resolveAgentDir,
+  resolveSessionDir,
+} from "../src/paths";
 
 describe("directory resolution", () => {
   it("defaults to ~/.pi/agent and <agentDir>/sessions", () => {

@@ -16,7 +16,9 @@ export async function cleanup(dir: string): Promise<void> {
 export async function writeJsonl(dir: string, name: string, lines: unknown[]): Promise<string> {
   await mkdir(dir, { recursive: true });
   const filePath = join(dir, name);
-  const body = lines.map((line) => (typeof line === "string" ? line : JSON.stringify(line))).join("\n");
+  const body = lines
+    .map((line) => (typeof line === "string" ? line : JSON.stringify(line)))
+    .join("\n");
   await writeFile(filePath, `${body}\n`, "utf8");
   return filePath;
 }
@@ -34,7 +36,11 @@ export function header(overrides: Record<string, unknown> = {}): Record<string, 
 }
 
 /** A message entry line with overrides. */
-export function messageEntry(role: string, content: unknown, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+export function messageEntry(
+  role: string,
+  content: unknown,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     type: "message",
     id: "e1",
@@ -46,7 +52,10 @@ export function messageEntry(role: string, content: unknown, overrides: Record<s
 }
 
 /** A session_info entry line with overrides. */
-export function sessionInfoEntry(name: unknown, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+export function sessionInfoEntry(
+  name: unknown,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     type: "session_info",
     id: "e2",

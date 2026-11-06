@@ -85,7 +85,11 @@ export async function listSessions(sessionDir: string): Promise<SessionSummary[]
 
   const infos = await mapWithConcurrency(candidates, SCAN_CONCURRENCY, async (candidate) => {
     const cached = summaryCache.get(candidate.filePath);
-    if (cached !== undefined && cached.mtimeMs === candidate.mtimeMs && cached.size === candidate.size) {
+    if (
+      cached !== undefined &&
+      cached.mtimeMs === candidate.mtimeMs &&
+      cached.size === candidate.size
+    ) {
       return cached.info;
     }
     const info = await summarizeSessionFile(candidate.filePath);
@@ -122,7 +126,11 @@ function pruneCache(candidates: { filePath: string }[]): void {
   }
 }
 
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {

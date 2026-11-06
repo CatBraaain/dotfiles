@@ -35,8 +35,12 @@ describe("listSessions", () => {
   });
 
   it("lists sessions from every cwd group directory", async () => {
-    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [header({ id: "id1", cwd: "/home/a" })]);
-    await writeJsonl(groupDir("--home-b--"), "t2_id2.jsonl", [header({ id: "id2", cwd: "/home/b" })]);
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
+    await writeJsonl(groupDir("--home-b--"), "t2_id2.jsonl", [
+      header({ id: "id2", cwd: "/home/b" }),
+    ]);
     const sessions = await listSessions(root);
     expect(new Set(sessions.map((s) => s.sessionId))).toEqual(new Set(["id1", "id2"]));
   });
@@ -54,35 +58,49 @@ describe("listSessions", () => {
 
   it("ignores non-jsonl files and jsonl files outside a cwd group", async () => {
     await writeJsonl(groupDir("--home-a--"), "notes.txt", [header({ id: "x" })]);
-    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [header({ id: "id1", cwd: "/home/a" })]);
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
     await writeJsonl(root, "loose.jsonl", [header({ id: "loose", cwd: "/home/a" })]);
     const sessions = await listSessions(root);
     expect(sessions.map((s) => s.sessionId)).toEqual(["id1"]);
   });
 
   it("does not recurse: nested directories and subagents/ are excluded", async () => {
-    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [header({ id: "id1", cwd: "/home/a" })]);
-    await writeJsonl(groupDir("--home-a--/subagents"), "t2_sub.jsonl", [header({ id: "sub", cwd: "/home/a" })]);
-    await writeJsonl(groupDir("--home-a--/nested"), "t3_deep.jsonl", [header({ id: "deep", cwd: "/home/a" })]);
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
+    await writeJsonl(groupDir("--home-a--/subagents"), "t2_sub.jsonl", [
+      header({ id: "sub", cwd: "/home/a" }),
+    ]);
+    await writeJsonl(groupDir("--home-a--/nested"), "t3_deep.jsonl", [
+      header({ id: "deep", cwd: "/home/a" }),
+    ]);
     const sessions = await listSessions(root);
     expect(sessions.map((s) => s.sessionId)).toEqual(["id1"]);
   });
 
   it("ignores a root-level subagents directory", async () => {
-    await writeJsonl(join(root, "subagents"), "t4_root-sub.jsonl", [header({ id: "root-sub", cwd: "/home/a" })]);
+    await writeJsonl(join(root, "subagents"), "t4_root-sub.jsonl", [
+      header({ id: "root-sub", cwd: "/home/a" }),
+    ]);
     expect(await listSessions(root)).toEqual([]);
   });
 
   it("skips files whose first line is not a valid session header", async () => {
     await writeJsonl(groupDir("--home-a--"), "t1_bad.jsonl", [messageEntry("user", "hi")]);
     await writeJsonl(groupDir("--home-a--"), "t2_empty.jsonl", []);
-    await writeJsonl(groupDir("--home-a--"), "t3_good.jsonl", [header({ id: "good", cwd: "/home/a" })]);
+    await writeJsonl(groupDir("--home-a--"), "t3_good.jsonl", [
+      header({ id: "good", cwd: "/home/a" }),
+    ]);
     const sessions = await listSessions(root);
     expect(sessions.map((s) => s.sessionId)).toEqual(["good"]);
   });
 
   it("uses the file mtime as the updated time", async () => {
-    const filePath = await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [header({ id: "id1", cwd: "/home/a" })]);
+    const filePath = await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
     const mtime = new Date(1_700_000_000_000);
     await utimes(filePath, mtime, mtime);
     const sessions = await listSessions(root);
@@ -101,7 +119,10 @@ describe("listSessions", () => {
 
   it("re-reads a session file after it changes (summary cache invalidation)", async () => {
     const dir = groupDir("--home-a--");
-    await writeJsonl(dir, "t1_id1.jsonl", [header({ id: "id1", cwd: "/home/a" }), messageEntry("user", "first")]);
+    await writeJsonl(dir, "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+      messageEntry("user", "first"),
+    ]);
     expect((await listSessions(root))[0].displayName).toBe("first");
     // pi appends to the file; size and mtime change, so the cached summary must be invalidated
     await writeJsonl(dir, "t1_id1.jsonl", [
@@ -113,7 +134,9 @@ describe("listSessions", () => {
   });
 
   it("does not modify session files while listing (read-only access)", async () => {
-    const filePath = await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [header({ id: "id1", cwd: "/home/a" })]);
+    const filePath = await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
     const before = await readFile(filePath);
     await listSessions(root);
     const after = await readFile(filePath);

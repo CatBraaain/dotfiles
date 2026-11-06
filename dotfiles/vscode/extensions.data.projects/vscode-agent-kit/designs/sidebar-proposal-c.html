@@ -1,259 +1,1093 @@
 <!doctype html>
 <html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>案C — コンテキストメニュー型</title>
-<style>
-  :root {
-    --bg: #181818; --fg: #cccccc; --desc: #8b8b8b; --hover: #2a2d2e;
-    --sel: #37373d; --sel-fg: #e7e7e7; --border: #303031;
-    --input-bg: #313131; --input-border: #3c3c3c; --focus: #007fd4;
-    --passed: #73c991; --warning: #cca700; --radius: 9.6px;
-    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 24px; background: #101010; color: #ccc; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
-  .page-header { max-width: 1240px; margin: 0 auto 20px; }
-  .page-header h1 { margin: 0 0 4px; font-size: 16px; color: #eee; }
-  .page-header p { margin: 0; color: #9d9d9d; font-size: 12px; }
-  .stage { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
-  .panel { margin: 0; }
-  .panel figcaption { margin-top: 8px; color: #9d9d9d; font-size: 11px; text-align: center; max-width: 280px; }
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>案C — コンテキストメニュー型</title>
+    <style>
+      :root {
+        --bg: #181818;
+        --fg: #cccccc;
+        --desc: #8b8b8b;
+        --hover: #2a2d2e;
+        --sel: #37373d;
+        --sel-fg: #e7e7e7;
+        --border: #303031;
+        --input-bg: #313131;
+        --input-border: #3c3c3c;
+        --focus: #007fd4;
+        --passed: #73c991;
+        --warning: #cca700;
+        --radius: 9.6px;
+        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #101010;
+        color: #ccc;
+        font:
+          13px/1.4 "Segoe UI",
+          system-ui,
+          sans-serif;
+      }
+      .page-header {
+        max-width: 1240px;
+        margin: 0 auto 20px;
+      }
+      .page-header h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+        color: #eee;
+      }
+      .page-header p {
+        margin: 0;
+        color: #9d9d9d;
+        font-size: 12px;
+      }
+      .stage {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: flex-start;
+      }
+      .panel {
+        margin: 0;
+      }
+      .panel figcaption {
+        margin-top: 8px;
+        color: #9d9d9d;
+        font-size: 11px;
+        text-align: center;
+        max-width: 280px;
+      }
 
-  .sidebar { position: relative; display: flex; flex-direction: column; width: 280px; height: 640px; padding: 12px; background: var(--bg); border-radius: 8px; box-shadow: 0 0 0 1px #000; overflow: hidden; }
+      .sidebar {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        width: 280px;
+        height: 640px;
+        padding: 12px;
+        background: var(--bg);
+        border-radius: 8px;
+        box-shadow: 0 0 0 1px #000;
+        overflow: hidden;
+      }
 
-  .app-header { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-bottom: 12px; }
-  .app-header h2 { flex: 1; margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); line-height: 24px; white-space: nowrap; }
+      .app-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 24px;
+        margin-bottom: 12px;
+      }
+      .app-header h2 {
+        flex: 1;
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--fg);
+        line-height: 24px;
+        white-space: nowrap;
+      }
 
-  .mode-toggle { display: flex; gap: 2px; padding: 1px; border: 1px solid var(--border); border-radius: var(--radius); }
-  .mode-toggle button { height: 20px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--desc); font-size: 10px; line-height: 18px; cursor: pointer; }
-  .mode-toggle button.on { color: var(--sel-fg); background: var(--sel); }
+      .mode-toggle {
+        display: flex;
+        gap: 2px;
+        padding: 1px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+      .mode-toggle button {
+        height: 20px;
+        padding: 0 6px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--desc);
+        font-size: 10px;
+        line-height: 18px;
+        cursor: pointer;
+      }
+      .mode-toggle button.on {
+        color: var(--sel-fg);
+        background: var(--sel);
+      }
 
-  .list { flex: 1; min-height: 0; overflow: hidden; }
-  .group + .group { margin-top: 12px; }
-  .group-header { display: flex; align-items: center; gap: 4px; min-height: 24px; }
-  .group-header.hovered { background: var(--hover); border-radius: var(--radius); }
-  .group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--fg); line-height: 20px; }
+      .list {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .group + .group {
+        margin-top: 12px;
+      }
+      .group-header {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 24px;
+      }
+      .group-header.hovered {
+        background: var(--hover);
+        border-radius: var(--radius);
+      }
+      .group-title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--fg);
+        line-height: 20px;
+      }
 
-  .icon-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg); cursor: pointer; }
-  .icon-btn:hover { background: var(--hover); }
-  .icon-btn svg { width: 12px; height: 12px; }
+      .icon-btn {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border: 0;
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--fg);
+        cursor: pointer;
+      }
+      .icon-btn:hover {
+        background: var(--hover);
+      }
+      .icon-btn svg {
+        width: 12px;
+        height: 12px;
+      }
 
-  .row { position: relative; height: 32px; margin-left: 12px; margin-top: 4px; border-radius: var(--radius); }
-  .row-main { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 calc(84px + 5ch + 8px) 0 8px; border: 0; border-radius: var(--radius); background: transparent; cursor: pointer; }
-  .row-main:hover { background: var(--hover); }
-  .dot { flex: none; width: 10px; height: 10px; border: 1px solid transparent; border-radius: 50%; background: var(--passed); }
-  .dot.locked { background: var(--warning); }
-  .dot.archived { border-color: var(--desc); background: transparent; }
-  .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--fg); line-height: 20px; text-align: left; }
-  .row.archived .name { color: var(--desc); }
-  .ts { position: absolute; top: 50%; right: 84px; transform: translateY(-50%); color: var(--desc); font-family: var(--mono); font-size: 10px; line-height: 20px; }
-  .row .icon-btn { position: absolute; top: 50%; transform: translateY(-50%); color: var(--desc); }
-  .row .icon-btn:hover { color: var(--fg); }
-  .copy { right: 52px; } .lockb { right: 28px; } .archiveb { right: 4px; }
+      .row {
+        position: relative;
+        height: 32px;
+        margin-left: 12px;
+        margin-top: 4px;
+        border-radius: var(--radius);
+      }
+      .row-main {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        height: 32px;
+        padding: 0 calc(84px + 5ch + 8px) 0 8px;
+        border: 0;
+        border-radius: var(--radius);
+        background: transparent;
+        cursor: pointer;
+      }
+      .row-main:hover {
+        background: var(--hover);
+      }
+      .dot {
+        flex: none;
+        width: 10px;
+        height: 10px;
+        border: 1px solid transparent;
+        border-radius: 50%;
+        background: var(--passed);
+      }
+      .dot.locked {
+        background: var(--warning);
+      }
+      .dot.archived {
+        border-color: var(--desc);
+        background: transparent;
+      }
+      .name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        color: var(--fg);
+        line-height: 20px;
+        text-align: left;
+      }
+      .row.archived .name {
+        color: var(--desc);
+      }
+      .ts {
+        position: absolute;
+        top: 50%;
+        right: 84px;
+        transform: translateY(-50%);
+        color: var(--desc);
+        font-family: var(--mono);
+        font-size: 10px;
+        line-height: 20px;
+      }
+      .row .icon-btn {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--desc);
+      }
+      .row .icon-btn:hover {
+        color: var(--fg);
+      }
+      .copy {
+        right: 52px;
+      }
+      .lockb {
+        right: 28px;
+      }
+      .archiveb {
+        right: 4px;
+      }
 
-  .footer { display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
-  .new-workspace { display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg); font-size: 13px; font-weight: 500; text-align: left; cursor: pointer; }
-  .new-workspace:hover { background: var(--hover); }
-  .new-workspace.open { background: var(--hover); }
-  .new-workspace svg { width: 16px; height: 16px; }
+      .footer {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: auto;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+      }
+      .new-workspace {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        height: 32px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 500;
+        text-align: left;
+        cursor: pointer;
+      }
+      .new-workspace:hover {
+        background: var(--hover);
+      }
+      .new-workspace.open {
+        background: var(--hover);
+      }
+      .new-workspace svg {
+        width: 16px;
+        height: 16px;
+      }
 
-  .workspace-form { display: flex; flex-direction: column; gap: 8px; }
-  .workspace-form input { height: 32px; padding: 0 8px; border: 1px solid var(--input-border); border-radius: var(--radius); background: var(--input-bg); color: var(--fg); font: inherit; }
-  .workspace-form input:focus { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .form-actions { display: flex; gap: 8px; }
-  .add-btn { height: 32px; padding: 0 10px; border: 1px solid var(--input-border); border-radius: var(--radius); background: transparent; color: var(--fg); font-size: 13px; cursor: pointer; }
-  .add-btn:hover { background: var(--hover); }
-  .cancel-btn { height: 32px; padding: 0 10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--desc); font-size: 13px; cursor: pointer; }
-  .cancel-btn:hover { color: var(--fg); }
+      .workspace-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .workspace-form input {
+        height: 32px;
+        padding: 0 8px;
+        border: 1px solid var(--input-border);
+        border-radius: var(--radius);
+        background: var(--input-bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      .workspace-form input:focus {
+        outline: 2px solid var(--focus);
+        outline-offset: -2px;
+      }
+      .form-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .add-btn {
+        height: 32px;
+        padding: 0 10px;
+        border: 1px solid var(--input-border);
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--fg);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .add-btn:hover {
+        background: var(--hover);
+      }
+      .cancel-btn {
+        height: 32px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--desc);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .cancel-btn:hover {
+        color: var(--fg);
+      }
 
-  .menu { position: absolute; top: 148px; left: 24px; z-index: 6; min-width: 190px; padding: 4px; background: #1f1f1f; border: 1px solid #454545; border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
-  .menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--fg); font-size: 12px; text-align: left; cursor: pointer; }
-  .menu button:hover { background: var(--hover); }
-  .menu button svg { width: 12px; height: 12px; color: var(--desc); }
+      .menu {
+        position: absolute;
+        top: 148px;
+        left: 24px;
+        z-index: 6;
+        min-width: 190px;
+        padding: 4px;
+        background: #1f1f1f;
+        border: 1px solid #454545;
+        border-radius: 6px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      }
+      .menu button {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        height: 26px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--fg);
+        font-size: 12px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .menu button:hover {
+        background: var(--hover);
+      }
+      .menu button svg {
+        width: 12px;
+        height: 12px;
+        color: var(--desc);
+      }
 
-  .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: center; justify-content: center; }
-  .dialog { width: 244px; padding: 12px; background: #1f1f1f; border: 1px solid #454545; border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
-  .dialog h3 { margin: 0 0 8px; font-size: 13px; color: var(--fg); }
-  .dialog p { margin: 0 0 12px; font-size: 12px; color: #b8b8b8; }
-  .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
-  .btn-primary { height: 26px; padding: 0 12px; border: 0; border-radius: 4px; background: #0e639c; color: #fff; font-size: 12px; cursor: pointer; }
-  .btn-secondary { height: 26px; padding: 0 12px; border: 1px solid #454545; border-radius: 4px; background: transparent; color: var(--fg); font-size: 12px; cursor: pointer; }
-</style>
-</head>
-<body>
-<header class="page-header">
-  <h1>案C — コンテキストメニュー型</h1>
-  <p>共有トグル: ヘッダー内（案Aと同じ）／ 登録解除: 見出しの右クリックメニュー ／ 確認: ダイアログあり</p>
-</header>
-<main class="stage">
+      .scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .dialog {
+        width: 244px;
+        padding: 12px;
+        background: #1f1f1f;
+        border: 1px solid #454545;
+        border-radius: 6px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      }
+      .dialog h3 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: var(--fg);
+      }
+      .dialog p {
+        margin: 0 0 12px;
+        font-size: 12px;
+        color: #b8b8b8;
+      }
+      .dialog .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .btn-primary {
+        height: 26px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 4px;
+        background: #0e639c;
+        color: #fff;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .btn-secondary {
+        height: 26px;
+        padding: 0 12px;
+        border: 1px solid #454545;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--fg);
+        font-size: 12px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>案C — コンテキストメニュー型</h1>
+      <p>
+        共有トグル: ヘッダー内（案Aと同じ）／ 登録解除: 見出しの右クリックメニュー ／ 確認:
+        ダイアログあり
+      </p>
+    </header>
+    <main class="stage">
+      <figure class="panel">
+        <aside class="sidebar">
+          <div class="app-header">
+            <h2>Sessions</h2>
+            <div class="mode-toggle" role="group" aria-label="Display mode">
+              <button class="on">Unarchived</button><button>All</button>
+            </div>
+            <button class="icon-btn" aria-label="Refresh sessions">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
+          </div>
+          <div class="list">
+            <section class="group">
+              <div class="group-header" title="/home/username/projects/vscode-pi-sessions">
+                <button class="icon-btn" aria-label="Collapse vscode-pi-sessions">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <span class="group-title">vscode-pi-sessions</span>
+                <button class="icon-btn" aria-label="New session">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="M12 5v14" />
+                  </svg>
+                </button>
+              </div>
+              <div class="row">
+                <button class="row-main">
+                  <span class="dot"></span><span class="name">Polish the session sidebar</span>
+                </button>
+                <span class="ts">10:42</span>
+                <button class="icon-btn copy" aria-label="Copy session ID">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="14" height="14" x="8" y="8" rx="2" />
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                  </svg>
+                </button>
+                <button class="icon-btn lockb" aria-label="Lock">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="18" height="11" x="3" y="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </button>
+                <button class="icon-btn archiveb" aria-label="Archive">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="20" height="5" x="2" y="3" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <path d="M10 12h4" />
+                  </svg>
+                </button>
+              </div>
+            </section>
+            <section class="group">
+              <div class="group-header" title="/home/username/projects/pi-tools">
+                <button class="icon-btn" aria-label="Collapse pi-tools">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <span class="group-title">pi-tools</span>
+                <button class="icon-btn" aria-label="New session">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="M12 5v14" />
+                  </svg>
+                </button>
+              </div>
+              <div class="row">
+                <button class="row-main">
+                  <span class="dot"></span><span class="name">Add session metadata tests</span>
+                </button>
+                <span class="ts">10/18</span>
+                <button class="icon-btn copy" aria-label="Copy session ID">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="14" height="14" x="8" y="8" rx="2" />
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                  </svg>
+                </button>
+                <button class="icon-btn lockb" aria-label="Lock">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="18" height="11" x="3" y="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </button>
+                <button class="icon-btn archiveb" aria-label="Archive">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="20" height="5" x="2" y="3" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <path d="M10 12h4" />
+                  </svg>
+                </button>
+              </div>
+              <div class="row">
+                <button class="row-main">
+                  <span class="dot locked"></span><span class="name">Untitled</span>
+                </button>
+                <span class="ts">10/17</span>
+                <button class="icon-btn copy" aria-label="Copy session ID">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="14" height="14" x="8" y="8" rx="2" />
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                  </svg>
+                </button>
+                <button class="icon-btn lockb" aria-label="Unlock">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="18" height="11" x="3" y="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+                  </svg>
+                </button>
+                <button class="icon-btn archiveb" aria-label="Archive">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="20" height="5" x="2" y="3" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <path d="M10 12h4" />
+                  </svg>
+                </button>
+              </div>
+            </section>
+            <section class="group">
+              <div class="group-header" title="/home/username/.agents/worktrees/vscode-pi-sessions">
+                <button class="icon-btn" aria-label="Collapse vscode-pi-sessions">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <span class="group-title">vscode-pi-sessions</span>
+                <button class="icon-btn" aria-label="New session">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="M12 5v14" />
+                  </svg>
+                </button>
+              </div>
+              <div class="row">
+                <button class="row-main">
+                  <span class="dot"></span><span class="name">Plan the next release</span>
+                </button>
+                <span class="ts">10/16</span>
+                <button class="icon-btn copy" aria-label="Copy session ID">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="14" height="14" x="8" y="8" rx="2" />
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                  </svg>
+                </button>
+                <button class="icon-btn lockb" aria-label="Lock">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="18" height="11" x="3" y="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </button>
+                <button class="icon-btn archiveb" aria-label="Archive">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="20" height="5" x="2" y="3" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <path d="M10 12h4" />
+                  </svg>
+                </button>
+              </div>
+            </section>
+            <section class="group">
+              <div class="group-header" title="/home/username/projects/agenda">
+                <button class="icon-btn" aria-label="Collapse agenda">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <span class="group-title">agenda</span>
+                <button class="icon-btn" aria-label="New session">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="M12 5v14" />
+                  </svg>
+                </button>
+              </div>
+            </section>
+          </div>
+          <footer class="footer">
+            <button class="new-workspace">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M12 10v6" />
+                <path d="M9 13h6" />
+                <path
+                  d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                /></svg
+              >New workspace
+            </button>
+          </footer>
+        </aside>
+        <figcaption>1. 通常表示 — 解除ボタンは無く、見出しの幅を広く使える</figcaption>
+      </figure>
 
-  <figure class="panel">
-    <aside class="sidebar">
-      <div class="app-header">
-        <h2>Sessions</h2>
-        <div class="mode-toggle" role="group" aria-label="Display mode">
-          <button class="on">Unarchived</button><button>All</button>
-        </div>
-        <button class="icon-btn" aria-label="Refresh sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
-      </div>
-      <div class="list">
-        <section class="group">
-          <div class="group-header" title="/home/username/projects/vscode-pi-sessions">
-            <button class="icon-btn" aria-label="Collapse vscode-pi-sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
-            <span class="group-title">vscode-pi-sessions</span>
-            <button class="icon-btn" aria-label="New session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+      <figure class="panel">
+        <aside class="sidebar">
+          <div class="app-header">
+            <h2>Sessions</h2>
+            <div class="mode-toggle" role="group" aria-label="Display mode">
+              <button class="on">Unarchived</button><button>All</button>
+            </div>
+            <button class="icon-btn" aria-label="Refresh sessions">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
           </div>
-          <div class="row">
-            <button class="row-main"><span class="dot"></span><span class="name">Polish the session sidebar</span></button>
-            <span class="ts">10:42</span>
-            <button class="icon-btn copy" aria-label="Copy session ID"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-            <button class="icon-btn lockb" aria-label="Lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
-            <button class="icon-btn archiveb" aria-label="Archive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
+          <div class="list">
+            <section class="group">
+              <div class="group-header" title="/home/username/projects/vscode-pi-sessions">
+                <button class="icon-btn" aria-label="Collapse vscode-pi-sessions">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <span class="group-title">vscode-pi-sessions</span>
+                <button class="icon-btn" aria-label="New session">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="M12 5v14" />
+                  </svg>
+                </button>
+              </div>
+              <div class="row">
+                <button class="row-main">
+                  <span class="dot"></span><span class="name">Polish the session sidebar</span>
+                </button>
+                <span class="ts">10:42</span>
+                <button class="icon-btn copy" aria-label="Copy session ID">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="14" height="14" x="8" y="8" rx="2" />
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                  </svg>
+                </button>
+                <button class="icon-btn lockb" aria-label="Lock">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="18" height="11" x="3" y="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </button>
+                <button class="icon-btn archiveb" aria-label="Archive">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="20" height="5" x="2" y="3" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <path d="M10 12h4" />
+                  </svg>
+                </button>
+              </div>
+            </section>
+            <section class="group">
+              <div class="group-header hovered" title="/home/username/projects/agenda">
+                <button class="icon-btn" aria-label="Collapse agenda">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <span class="group-title">agenda</span>
+                <button class="icon-btn" aria-label="New session">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="M12 5v14" />
+                  </svg>
+                </button>
+              </div>
+              <div class="menu" role="menu">
+                <button role="menuitem">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" /></svg
+                  >Unregister workspace
+                </button>
+              </div>
+            </section>
           </div>
-        </section>
-        <section class="group">
-          <div class="group-header" title="/home/username/projects/pi-tools">
-            <button class="icon-btn" aria-label="Collapse pi-tools"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
-            <span class="group-title">pi-tools</span>
-            <button class="icon-btn" aria-label="New session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+          <footer class="footer">
+            <button class="new-workspace">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M12 10v6" />
+                <path d="M9 13h6" />
+                <path
+                  d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                /></svg
+              >New workspace
+            </button>
+          </footer>
+          <div class="scrim">
+            <div class="dialog" role="dialog" aria-label="Unregister workspace">
+              <h3>Unregister workspace</h3>
+              <p>Remove /home/username/projects/agenda from the list? Sessions stay on disk.</p>
+              <div class="actions">
+                <button class="btn-secondary">Cancel</button>
+                <button class="btn-primary">Unregister</button>
+              </div>
+            </div>
           </div>
-          <div class="row">
-            <button class="row-main"><span class="dot"></span><span class="name">Add session metadata tests</span></button>
-            <span class="ts">10/18</span>
-            <button class="icon-btn copy" aria-label="Copy session ID"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-            <button class="icon-btn lockb" aria-label="Lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
-            <button class="icon-btn archiveb" aria-label="Archive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
-          </div>
-          <div class="row">
-            <button class="row-main"><span class="dot locked"></span><span class="name">Untitled</span></button>
-            <span class="ts">10/17</span>
-            <button class="icon-btn copy" aria-label="Copy session ID"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-            <button class="icon-btn lockb" aria-label="Unlock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg></button>
-            <button class="icon-btn archiveb" aria-label="Archive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
-          </div>
-        </section>
-        <section class="group">
-          <div class="group-header" title="/home/username/.agents/worktrees/vscode-pi-sessions">
-            <button class="icon-btn" aria-label="Collapse vscode-pi-sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
-            <span class="group-title">vscode-pi-sessions</span>
-            <button class="icon-btn" aria-label="New session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
-          </div>
-          <div class="row">
-            <button class="row-main"><span class="dot"></span><span class="name">Plan the next release</span></button>
-            <span class="ts">10/16</span>
-            <button class="icon-btn copy" aria-label="Copy session ID"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-            <button class="icon-btn lockb" aria-label="Lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
-            <button class="icon-btn archiveb" aria-label="Archive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
-          </div>
-        </section>
-        <section class="group">
-          <div class="group-header" title="/home/username/projects/agenda">
-            <button class="icon-btn" aria-label="Collapse agenda"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
-            <span class="group-title">agenda</span>
-            <button class="icon-btn" aria-label="New session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
-          </div>
-        </section>
-      </div>
-      <footer class="footer">
-        <button class="new-workspace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>New workspace</button>
-      </footer>
-    </aside>
-    <figcaption>1. 通常表示 — 解除ボタンは無く、見出しの幅を広く使える</figcaption>
-  </figure>
+        </aside>
+        <figcaption>2. 解除 — 見出しの右クリックでメニュー、項目を選ぶと確認ダイアログ</figcaption>
+      </figure>
 
-  <figure class="panel">
-    <aside class="sidebar">
-      <div class="app-header">
-        <h2>Sessions</h2>
-        <div class="mode-toggle" role="group" aria-label="Display mode">
-          <button class="on">Unarchived</button><button>All</button>
-        </div>
-        <button class="icon-btn" aria-label="Refresh sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
-      </div>
-      <div class="list">
-        <section class="group">
-          <div class="group-header" title="/home/username/projects/vscode-pi-sessions">
-            <button class="icon-btn" aria-label="Collapse vscode-pi-sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
-            <span class="group-title">vscode-pi-sessions</span>
-            <button class="icon-btn" aria-label="New session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+      <figure class="panel">
+        <aside class="sidebar">
+          <div class="app-header">
+            <h2>Sessions</h2>
+            <div class="mode-toggle" role="group" aria-label="Display mode">
+              <button class="on">Unarchived</button><button>All</button>
+            </div>
+            <button class="icon-btn" aria-label="Refresh sessions">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
           </div>
-          <div class="row">
-            <button class="row-main"><span class="dot"></span><span class="name">Polish the session sidebar</span></button>
-            <span class="ts">10:42</span>
-            <button class="icon-btn copy" aria-label="Copy session ID"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-            <button class="icon-btn lockb" aria-label="Lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
-            <button class="icon-btn archiveb" aria-label="Archive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
+          <div class="list">
+            <section class="group">
+              <div class="group-header" title="/home/username/projects/vscode-pi-sessions">
+                <button class="icon-btn" aria-label="Collapse vscode-pi-sessions">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <span class="group-title">vscode-pi-sessions</span>
+                <button class="icon-btn" aria-label="New session">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="M12 5v14" />
+                  </svg>
+                </button>
+              </div>
+              <div class="row">
+                <button class="row-main">
+                  <span class="dot"></span><span class="name">Polish the session sidebar</span>
+                </button>
+                <span class="ts">10:42</span>
+                <button class="icon-btn copy" aria-label="Copy session ID">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="14" height="14" x="8" y="8" rx="2" />
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                  </svg>
+                </button>
+                <button class="icon-btn lockb" aria-label="Lock">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="18" height="11" x="3" y="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </button>
+                <button class="icon-btn archiveb" aria-label="Archive">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect width="20" height="5" x="2" y="3" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <path d="M10 12h4" />
+                  </svg>
+                </button>
+              </div>
+            </section>
           </div>
-        </section>
-        <section class="group">
-          <div class="group-header hovered" title="/home/username/projects/agenda">
-            <button class="icon-btn" aria-label="Collapse agenda"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
-            <span class="group-title">agenda</span>
-            <button class="icon-btn" aria-label="New session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
-          </div>
-          <div class="menu" role="menu">
-            <button role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>Unregister workspace</button>
-          </div>
-        </section>
-      </div>
-      <footer class="footer">
-        <button class="new-workspace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>New workspace</button>
-      </footer>
-      <div class="scrim">
-        <div class="dialog" role="dialog" aria-label="Unregister workspace">
-          <h3>Unregister workspace</h3>
-          <p>Remove /home/username/projects/agenda from the list? Sessions stay on disk.</p>
-          <div class="actions">
-            <button class="btn-secondary">Cancel</button>
-            <button class="btn-primary">Unregister</button>
-          </div>
-        </div>
-      </div>
-    </aside>
-    <figcaption>2. 解除 — 見出しの右クリックでメニュー、項目を選ぶと確認ダイアログ</figcaption>
-  </figure>
-
-  <figure class="panel">
-    <aside class="sidebar">
-      <div class="app-header">
-        <h2>Sessions</h2>
-        <div class="mode-toggle" role="group" aria-label="Display mode">
-          <button class="on">Unarchived</button><button>All</button>
-        </div>
-        <button class="icon-btn" aria-label="Refresh sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
-      </div>
-      <div class="list">
-        <section class="group">
-          <div class="group-header" title="/home/username/projects/vscode-pi-sessions">
-            <button class="icon-btn" aria-label="Collapse vscode-pi-sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
-            <span class="group-title">vscode-pi-sessions</span>
-            <button class="icon-btn" aria-label="New session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
-          </div>
-          <div class="row">
-            <button class="row-main"><span class="dot"></span><span class="name">Polish the session sidebar</span></button>
-            <span class="ts">10:42</span>
-            <button class="icon-btn copy" aria-label="Copy session ID"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-            <button class="icon-btn lockb" aria-label="Lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
-            <button class="icon-btn archiveb" aria-label="Archive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
-          </div>
-        </section>
-      </div>
-      <footer class="footer">
-        <button class="new-workspace open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>New workspace</button>
-        <div class="workspace-form">
-          <input type="text" value="/home/username/projects/new-project" aria-label="Workspace path">
-          <div class="form-actions">
-            <button class="add-btn">Add</button>
-            <button class="cancel-btn">Cancel</button>
-          </div>
-        </div>
-      </footer>
-    </aside>
-    <figcaption>3. New workspace — ボタンの下にフォームが開く</figcaption>
-  </figure>
-
-  </main>
-</body>
+          <footer class="footer">
+            <button class="new-workspace open">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M12 10v6" />
+                <path d="M9 13h6" />
+                <path
+                  d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                /></svg
+              >New workspace
+            </button>
+            <div class="workspace-form">
+              <input
+                type="text"
+                value="/home/username/projects/new-project"
+                aria-label="Workspace path"
+              />
+              <div class="form-actions">
+                <button class="add-btn">Add</button>
+                <button class="cancel-btn">Cancel</button>
+              </div>
+            </div>
+          </footer>
+        </aside>
+        <figcaption>3. New workspace — ボタンの下にフォームが開く</figcaption>
+      </figure>
+    </main>
+  </body>
 </html>

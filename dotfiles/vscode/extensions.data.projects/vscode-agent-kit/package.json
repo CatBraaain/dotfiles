@@ -9,33 +9,30 @@
   ],
   "license": "UNLICENSED",
   "publisher": "pi-sessions",
-  "main": "./dist/extension.js",
+  "main": "./dist/extension.cjs",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && vp build",
-    "screenshot": "bun run build && node scripts/screenshot.mjs",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "bun run build && bun run storybook:build && vitest run",
+    "build": "vp pack && vp build",
+    "fix": "vp check --fix && prettier --plugin=prettier-markdown-table --parser markdown --write \"**/*.md\"",
+    "setup": "node scripts/setup.mjs",
+    "test": "bun run build && bun run storybook:build && vp test",
     "test:e2e": "bun run build && xvfb-run -a playwright test",
     "vsix": "bun run build && bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies && code --install-extension pi-sessions-0.1.0.vsix --force",
-    "lint": "eslint .",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build"
   },
   "devDependencies": {
-    "@eslint/js": "^9.0.0",
     "@storybook/react-vite": "^10.6.3",
     "@types/node": "^24.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/vscode": "^1.85.0",
-    "eslint": "^9.0.0",
     "playwright": "^1.63.0",
+    "prettier": "^3.9.10",
+    "prettier-markdown-table": "^1.0.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "storybook": "^10.6.0",
-    "typescript": "^5.5.0",
-    "typescript-eslint": "^8.0.0",
-    "vitest": "^3.0.0"
+    "vite-plus": "^1.5.0"
   },
   "contributes": {
     "viewsContainers": {

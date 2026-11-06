@@ -31,7 +31,7 @@ test(
       await expect(emptyGroup.locator(".session-row")).toHaveCount(0);
       await expect(emptyGroup.locator(".empty")).toHaveCount(0);
       await expect(frame.locator(".group-path")).toHaveCount(0);
-      await expect(frame.locator('#app header [data-mode-toggle]')).toHaveAttribute(
+      await expect(frame.locator("#app header [data-mode-toggle]")).toHaveAttribute(
         "data-mode",
         "unarchived",
       );
@@ -51,7 +51,7 @@ test(
         .locator("section.group")
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) });
       await frame
-        .locator('#app header [data-mode-toggle]')
+        .locator("#app header [data-mode-toggle]")
         .describe("Shared All toggle")
         .click({ steps: 15 });
       await expect(

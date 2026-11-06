@@ -171,7 +171,10 @@ async function scanFirstUserText(handle: FileHandle, size: number): Promise<stri
 }
 
 /** Backward scan: name of the latest session_info entry (pi semantics: empty name clears). */
-async function scanLatestSessionInfoName(handle: FileHandle, size: number): Promise<string | undefined> {
+async function scanLatestSessionInfoName(
+  handle: FileHandle,
+  size: number,
+): Promise<string | undefined> {
   const overlap = SESSION_INFO_NEEDLE.length - 1;
   let head: Buffer = Buffer.alloc(0); // first `overlap` bytes of the already-read (later) region
   let readEnd = size;
@@ -209,7 +212,11 @@ interface ExtractedLine {
  * Read the full line containing the byte at `position`, with targeted reads in
  * both directions. Never accumulates chunks, so multi-megabyte lines stay linear.
  */
-async function readLineContaining(handle: FileHandle, size: number, position: number): Promise<ExtractedLine> {
+async function readLineContaining(
+  handle: FileHandle,
+  size: number,
+  position: number,
+): Promise<ExtractedLine> {
   let startAbs = 0;
   let scanEnd = position;
   while (scanEnd > 0) {

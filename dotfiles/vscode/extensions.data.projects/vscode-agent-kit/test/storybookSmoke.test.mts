@@ -381,7 +381,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     expect(await page.locator(".session-row").count()).toBe(4);
 
-    await page.click('#app header [data-mode-toggle]');
+    await page.click("#app header [data-mode-toggle]");
     await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 5);
     expect(
       await page.locator(`.session-row.archived [data-session="${atlasArchivedId}"]`).count(),
@@ -501,7 +501,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator(".session-row.selected").count()).toBe(3);
 
     // The archived row stays unselected until it is visible in All mode.
-    await page.click('#app header [data-mode-toggle]', { modifiers: ["Control"] });
+    await page.click("#app header [data-mode-toggle]", { modifiers: ["Control"] });
     expect(await page.locator(".session-row.archived.selected").count()).toBe(0);
     await page.close();
   });
@@ -659,15 +659,15 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await name.focus();
     await page.keyboard.press("Space");
     await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
-    await page.click('#app header [data-mode-toggle]');
+    await page.click("#app header [data-mode-toggle]");
     await expect
-      .poll(() => page.locator('#app header [data-mode-toggle]').getAttribute("data-mode"))
+      .poll(() => page.locator("#app header [data-mode-toggle]").getAttribute("data-mode"))
       .toBe("all");
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
     expect(await group.locator(".session-row").count()).toBe(0);
     for (let index = 0; index < 2; index++) await page.locator('[data-action="refresh"]').click();
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
-    expect(await page.locator('#app header [data-mode-toggle]').getAttribute("data-mode")).toBe(
+    expect(await page.locator("#app header [data-mode-toggle]").getAttribute("data-mode")).toBe(
       "all",
     );
     await name.click();
@@ -677,9 +677,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      await page.locator('#app header [data-mode-toggle]').getAttribute("data-mode"),
-    ).toBe("unarchived");
+    expect(await page.locator("#app header [data-mode-toggle]").getAttribute("data-mode")).toBe(
+      "unarchived",
+    );
     expect(await group.locator(".session-row").count()).toBe(1);
     await page.close();
   });
@@ -858,7 +858,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator(".session-row").count()).toBe(0);
     expect(await page.locator(".empty").count()).toBe(0);
     const historyToggle = page
-      .locator('#app header [data-mode-toggle]')
+      .locator("#app header [data-mode-toggle]")
       .describe("Show saved sessions");
     await historyToggle.focus();
     await historyToggle.press("Enter");

@@ -74,7 +74,7 @@ export class VSCodeFixture {
   async launch(): Promise<void> {
     if (!existsSync(executablePath))
       throw new Error(
-        `VS Code 1.138.0 is required at ${executablePath}; run bun run screenshot once or set PI_REVIEW_VSCODE.`,
+        `VS Code 1.138.0 is required at ${executablePath}; run bun run setup once or set PI_REVIEW_VSCODE.`,
       );
     const env = {
       PATH: process.env.PATH ?? "",
@@ -167,7 +167,7 @@ export class VSCodeFixture {
     const session = this.sessions[key];
     const row = frame.locator(`[data-session="${session.id}"]`).describe(`${key} saved session`);
     const modeToggle = frame
-      .locator('#app header [data-mode-toggle]')
+      .locator("#app header [data-mode-toggle]")
       .describe("Shared All toggle");
     if ((await modeToggle.getAttribute("data-mode")) === "unarchived")
       await modeToggle.click({ steps: 15 });
