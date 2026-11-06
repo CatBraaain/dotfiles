@@ -62,6 +62,44 @@ describe("TmuxRuntimeStore", () => {
     expect(formatCalls[0].slice(-4)).toEqual(["set-option", "-s", "extended-keys-format", "csi-u"]);
   });
 
+  it("binds S-Enter on the dedicated server to send the CSI-u Shift+Enter sequence", async () => {
+    const { store, execute } = setup();
+    await store.ensure({ sessionId: "A", cwd: "/project", args: [] });
+
+    const binds = execute.mock.calls
+      .map(([, args]) => args)
+      .filter((args) => args[4] === "bind-key");
+    expect(binds).toHaveLength(1);
+    expect(binds[0]).toEqual([
+      "-L",
+      "test-socket",
+      "-f",
+      "/dev/null",
+      "bind-key",
+      "-n",
+      "S-Enter",
+      "send-keys",
+      "-H",
+      "1b",
+      "5b",
+      "31",
+      "33",
+      "3b",
+      "32",
+      "75",
+    ]);
+  });
+
+  it("still starts pi when tmux cannot bind or send the Shift+Enter sequence", async () => {
+    const { store, execute } = setup((args) => {
+      if (args[4] === "bind-key") throw new Error("unknown key: S-Enter");
+    });
+
+    const runtime = await store.ensure({ sessionId: "A", cwd: "/project", args: [] });
+    expect(runtime.sessionId).toBe("A");
+    expect(execute.mock.calls.map(([, args]) => args[4])).toContain("bind-key");
+  });
+
   it("still starts pi when the tmux server does not know extended-keys-format", async () => {
     const { store, execute } = setup((args) => {
       if (args[4] === "set-option" && args.includes("extended-keys-format"))

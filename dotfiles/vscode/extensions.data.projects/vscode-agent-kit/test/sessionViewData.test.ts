@@ -18,9 +18,10 @@ describe("sessionViewGroups", () => {
     session("newest", "/workspace/beta", 300),
     session("active", "/workspace/alpha", 200),
   ];
+  const registered = ["/workspace/alpha", "/workspace/beta"];
 
-  it("sends every session of every group with archive and lock marks", () => {
-    const groups = sessionViewGroups(sessions, [], new Set(["older"]), new Set(["active"]));
+  it("sends every session of every registered group with archive and lock marks", () => {
+    const groups = sessionViewGroups(sessions, registered, new Set(["older"]), new Set(["active"]));
 
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha", "/workspace/beta"]);
     expect(
@@ -35,7 +36,7 @@ describe("sessionViewGroups", () => {
   });
 
   it("treats sessions without metadata as unarchived and unlocked", () => {
-    const groups = sessionViewGroups(sessions, [], new Set(), new Set());
+    const groups = sessionViewGroups(sessions, registered, new Set(), new Set());
 
     expect(
       groups.every((group) =>
@@ -45,7 +46,12 @@ describe("sessionViewGroups", () => {
   });
 
   it("merges sessionless groups into the label ordering", () => {
-    const groups = sessionViewGroups(sessions, ["/workspace/empty"], new Set(), new Set());
+    const groups = sessionViewGroups(
+      sessions,
+      [...registered, "/workspace/empty"],
+      new Set(),
+      new Set(),
+    );
 
     expect(groups.map((group) => [group.cwd, group.sessions])).toEqual([
       [
@@ -61,27 +67,27 @@ describe("sessionViewGroups", () => {
     expect(groups[2].label).toBe("empty");
   });
 
-  it("marks exactly the registered workspace groups", () => {
+  it("drops the groups of workspaces that are not registered", () => {
     const groups = sessionViewGroups(sessions, ["/workspace/alpha"], new Set(), new Set());
 
-    expect(groups.map((group) => [group.cwd, group.registered])).toEqual([
-      ["/workspace/alpha", true],
-      ["/workspace/beta", false],
-    ]);
+    // The list is a whitelist: /workspace/beta has a session but no registration.
+    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha"]);
+    expect(groups.every((group) => group.registered)).toBe(true);
   });
 
   it("does not duplicate a registered workspace that already has session groups", () => {
     const groups = sessionViewGroups(sessions, ["/workspace/alpha"], new Set(), new Set());
 
-    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha", "/workspace/beta"]);
+    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha"]);
   });
 
   it("carries 1000 synthetic sessions as list data", () => {
     const synthetic = Array.from({ length: 1000 }, (_, index) =>
       session(`s-${index}`, `/workspace/ws-${index % 10}`, index),
     );
+    const syntheticCwds = Array.from({ length: 10 }, (_, index) => `/workspace/ws-${index}`);
 
-    const groups = sessionViewGroups(synthetic, [], new Set(["s-0"]), new Set());
+    const groups = sessionViewGroups(synthetic, syntheticCwds, new Set(["s-0"]), new Set());
 
     expect(groups).toHaveLength(10);
     expect(groups.flatMap((group) => group.sessions)).toHaveLength(1000);

@@ -65,6 +65,7 @@ export class TmuxRuntimeStore {
           throw error;
       }
       await this.enableCsiUExtendedKeysFormat();
+      await this.bindShiftEnterForwarding();
       if (!(await this.isAlive(runtime))) {
         throw new Error(`Pi exited while starting session ${launch.sessionId} in ${launch.cwd}`);
       }
@@ -82,6 +83,34 @@ export class TmuxRuntimeStore {
       await this.command(["set-option", "-s", "extended-keys-format", "csi-u"]);
     } catch (error) {
       if (!/invalid option|unknown option/.test(errorMessage(error))) throw error;
+    }
+  }
+
+  /** Forward Shift+Enter to the pane as the CSI-u sequence, so pi can tell it
+   * apart from Enter. The outer terminal never reports Shift+Enter: VS Code
+   * sends Enter without modifier info, and tmux drops the modifier on the way
+   * to the pane. Instead, the extension keybinding sends the CSI-u sequence
+   * itself; tmux reports it as an S-Enter key event, and this bind passes the
+   * same sequence through to the pane. Skipping the bind on older tmux
+   * versions (no hex send-keys, no S-Enter key name) is harmless. */
+  private async bindShiftEnterForwarding(): Promise<void> {
+    try {
+      await this.command([
+        "bind-key",
+        "-n",
+        "S-Enter",
+        "send-keys",
+        "-H",
+        "1b",
+        "5b",
+        "31",
+        "33",
+        "3b",
+        "32",
+        "75",
+      ]);
+    } catch {
+      // Skip the bind on tmux versions that cannot bind or send the sequence.
     }
   }
 

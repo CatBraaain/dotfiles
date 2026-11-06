@@ -388,8 +388,15 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ).toBe(1);
     // The shared mode applies to every workspace group at once: the project
     // group gains its archived row while the others keep theirs.
-    expect(await page.locator(".group").first().locator(".session-row").count()).toBe(2);
-    expect(await page.locator(".group").nth(1).locator(".session-row").count()).toBe(2);
+    const groupByTitle = (title: string) =>
+      page.locator(".group").filter({ has: page.locator(`.group-header[title="${title}"]`) });
+    expect(await groupByTitle("~/projects/pi-tools").locator(".session-row").count()).toBe(2);
+    expect(
+      await groupByTitle("~/.agents/worktrees/vscode-pi-sessions").locator(".session-row").count(),
+    ).toBe(1);
+    expect(
+      await groupByTitle("~/projects/vscode-pi-sessions").locator(".session-row").count(),
+    ).toBe(2);
 
     const copy = page.locator(".session-row [data-copy]").first();
     const copySessionId = await copy.getAttribute("data-copy");
@@ -479,7 +486,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ]);
 
     await clearBridgeMessages(page);
-    await page.click(`[data-session="${worktreeId}"]`, { modifiers: ["Shift"] });
+    // The anchor is the plain-clicked row; the Shift click selects the whole
+    // visible range up to the first row without opening anything.
+    await page.click(`[data-session="${piToolsPlainId}"]`, { modifiers: ["Shift"] });
     await page.waitForFunction(
       () => document.querySelectorAll(".session-row.selected").length === 4,
     );
@@ -642,7 +651,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   it("collapses groups from chevrons and names while the mode and refresh preserve the state", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
-    const group = page.locator(".group").first();
+    const group = page
+      .locator(".group")
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
     const chevron = group.locator(".group-chevron").describe("Project group chevron");
     const name = group.locator(".group-title").describe("Project group name");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
@@ -687,7 +698,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   it("adds a row to the requested group from its New session button", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
-    const group = page.locator(".group").first();
+    const group = page
+      .locator(".group")
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
     const plus = group.locator(".group-new-session").describe("Project group New session button");
     expect(await plus.getAttribute("aria-label")).toBe("New session in vscode-pi-sessions");
     const rowsBefore = await group.locator(".session-row").count();
@@ -751,17 +764,21 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("offers Unregister only on the registered workspace and removes its group", async () => {
+  it("offers Unregister on every visible group and removes its group", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
     const agenda = page.locator(".group").filter({ hasText: "agenda" });
-    const project = page.locator(".group").first();
+    const project = page
+      .locator(".group")
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
 
+    // The whitelist list shows registered workspaces only, so every visible
+    // group offers Unregister.
     expect(await agenda.locator(".group-unregister").count()).toBe(1);
     expect(await agenda.locator(".group-unregister").getAttribute("aria-label")).toBe(
       "Unregister workspace agenda",
     );
-    expect(await project.locator(".group-unregister").count()).toBe(0);
+    expect(await project.locator(".group-unregister").count()).toBe(1);
 
     // The button stays hidden until the header is hovered or focused.
     await agenda.locator(".group-header").hover();
@@ -792,7 +809,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   it("retains hidden selections while excluding collapsed rows from bulk archive", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
-    const group = page.locator(".group").first();
+    const group = page
+      .locator(".group")
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
     const chevron = group.locator(".group-chevron");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
     await page.locator(`[data-session="${atlasCurrentId}"]`).click({ modifiers: ["Control"] });
@@ -819,7 +838,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
   it.each(["Control", "Meta"])("excludes collapsed group rows from %s+A", async (modifier) => {
     const page = await openStory("sessions-sidebar--sample-sessions");
-    const group = page.locator(".group").first();
+    const group = page
+      .locator(".group")
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
     const chevron = group.locator(".group-chevron");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
     await chevron.click();

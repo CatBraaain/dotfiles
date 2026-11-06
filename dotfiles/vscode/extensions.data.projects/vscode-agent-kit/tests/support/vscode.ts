@@ -440,6 +440,7 @@ export class VSCodeFixture {
       version: 1,
       sentinel: "preserved",
       sessions: {} as Record<string, { active: boolean; sentinel: string }>,
+      workspaces: {} as Record<string, { addedAtMs: number }>,
     };
     const cwds = {
       A: this.projectDirectories.A,
@@ -474,6 +475,12 @@ export class VSCodeFixture {
       write(session, original);
       this.sessions[key] = { id, cwd, session, original };
       metadata.sessions[id] = { active: key !== "B", sentinel: "preserved" };
+    }
+    // The sidebar lists registered workspaces only, so the fixture work folders
+    // must be registered or their groups stay hidden. The "missing" cwd of the
+    // Missing fixture stays unregistered on purpose.
+    for (const folder of [this.projectDirectories.A, this.projectDirectories.B, "external"]) {
+      metadata.workspaces[join(this.directory, folder)] = { addedAtMs: 0 };
     }
     const newestBTime = new Date(statSync(this.sessions.B.session).mtimeMs + 1000);
     utimesSync(this.sessions.B.session, newestBTime, newestBTime);

@@ -140,6 +140,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: inactiveSessionId, cwd: root }),
     ]);
     const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     expect(setSessionActive(metadataPath, inactiveSessionId, false).ok).toBe(true);
 
     const webview = createView();
@@ -180,6 +181,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: inactiveSessionId, cwd: root }),
     ]);
     const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     expect(setSessionLocked(metadataPath, activeSessionId, true).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -232,6 +234,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: activeSessionId, cwd: root }),
     ]);
     const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -289,7 +292,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider } = createProvider({ sessionDir });
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await vi.waitFor(() => {
@@ -317,7 +321,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider } = createProvider({ sessionDir });
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     const firstView = createView();
     provider.resolveWebviewView(firstView.view as never);
     await provider.refresh();
@@ -346,7 +351,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider } = createProvider({ sessionDir });
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -369,9 +375,11 @@ describe("SessionWebviewProvider", () => {
       header({ id: activeSessionId, cwd: root }),
     ]);
     const original = createProvider({ sessionDir });
+    expect(registerWorkspace(original.metadataPath, root, 0).ok).toBe(true);
     expect(setSessionActive(original.metadataPath, activeSessionId, true).ok).toBe(true);
     original.provider.dispose();
     const restored = createProvider({ sessionDir });
+    expect(registerWorkspace(restored.metadataPath, root, 0).ok).toBe(true);
     const webview = createView();
     restored.provider.resolveWebviewView(webview.view as never);
     const terminal = {
@@ -404,6 +412,7 @@ describe("SessionWebviewProvider", () => {
     };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     expect(setSessionActive(metadataPath, activeSessionId, false).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -591,12 +600,35 @@ describe("SessionWebviewProvider", () => {
     ).toHaveLength(1); // only the initial ready refresh
   });
 
-  it("does not rewrite the store for a workspace that is already listed", async () => {
+  it("registers a workspace whose cwd already has sessions", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, "project"), "old.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
     const { provider, metadataPath } = createProvider({ sessionDir });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([]); // the cwd is not registered yet, so its group is hidden
+
+    await webview.receive({ type: "addWorkspace", path: `${root}/` });
+
+    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      workspaces?: Record<string, unknown>;
+    };
+    expect(Object.keys(parsed.workspaces ?? {})).toHaveLength(1); // the store was written
+    const lastSessions = webview.postMessage.mock.calls
+      .map((call) => call[0])
+      .filter((message: { type?: string }) => message.type === "sessions")
+      .at(-1) as { state?: { groups?: { cwd: string; registered: boolean }[] } };
+    expect(lastSessions.state?.groups).toEqual([
+      expect.objectContaining({ cwd: root, registered: true }),
+    ]);
+  });
+
+  it("does not rewrite the store for an already registered workspace", async () => {
+    const { provider, metadataPath } = createProvider({});
+    expect(registerWorkspace(metadataPath, root, 1_000).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -606,7 +638,10 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "addWorkspace", path: `${root}/` });
 
-    await expect(readFile(metadataPath, "utf8")).rejects.toThrow(); // the store was never written
+    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      workspaces?: Record<string, { addedAtMs: number }>;
+    };
+    expect(parsed.workspaces?.[root]).toEqual({ addedAtMs: 1_000 }); // never rewritten
     expect(
       webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
     ).toHaveLength(writesBefore + 1); // the refreshed list closes the form
@@ -914,6 +949,7 @@ describe("SessionWebviewProvider", () => {
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     const registry = createRegistry();
     const { provider, metadataPath } = createProvider({ sessionDir, registry });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
     expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);

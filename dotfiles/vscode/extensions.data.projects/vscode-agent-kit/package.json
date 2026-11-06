@@ -52,7 +52,17 @@
           "type": "webview"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {
+          "text": "\u001b[13;2u"
+        },
+        "key": "shift+enter",
+        "when": "terminalFocus"
+      }
+    ]
   },
   "engines": {
     "vscode": "^1.85.0"

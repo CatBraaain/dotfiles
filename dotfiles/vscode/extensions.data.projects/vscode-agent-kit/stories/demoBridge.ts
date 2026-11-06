@@ -95,7 +95,15 @@ export function createDemoBridge(): {
   let listener: (message: { type?: string; state?: unknown }) => void = () => {};
   let store: SessionSummary[] = cloneStore(sampleSessions);
   let metadata = new Map<string, DemoEntry>(SAMPLE_METADATA);
-  let registeredCwds: string[] = [REGISTERED_ONLY_CWD];
+  // The list shows registered workspaces only. The worktree cwd and the
+  // project share one basename, which the heading hint must distinguish; the
+  // agenda workspace has no sessions and still keeps its empty group.
+  let registeredCwds: string[] = [
+    PROJECT_CWD,
+    PI_TOOLS_CWD,
+    PROJECT_WORKTREE_CWD,
+    REGISTERED_ONLY_CWD,
+  ];
 
   function postSessions(): void {
     // Same projection as the provider's: every session with archive and lock marks.
@@ -182,7 +190,7 @@ export function createDemoBridge(): {
         demoState === "sample" ? { ...entry } : { ...entry, archived: true },
       ]),
     );
-    registeredCwds = [REGISTERED_ONLY_CWD];
+    registeredCwds = [PROJECT_CWD, PI_TOOLS_CWD, PROJECT_WORKTREE_CWD, REGISTERED_ONLY_CWD];
     postSessions();
   }
 

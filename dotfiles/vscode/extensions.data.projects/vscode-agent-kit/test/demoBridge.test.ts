@@ -195,15 +195,17 @@ describe("createDemoBridge", () => {
     expect(last().groups.some((group) => group.cwd === "~/projects/agenda")).toBe(false);
   });
 
-  it("keeps sessions of a registered workspace after unregisterWorkspace", () => {
+  it("removes a group with sessions after unregisterWorkspace", () => {
     const { bridge, last } = setup();
     bridge.postMessage({ type: "addWorkspace", path: "~/projects/vscode-pi-sessions" });
+    expect(last().groups.some((group) => group.cwd === "~/projects/vscode-pi-sessions")).toBe(true);
 
     bridge.postMessage({ type: "unregisterWorkspace", cwd: "~/projects/vscode-pi-sessions" });
 
-    const group = last().groups.find((group) => group.cwd === "~/projects/vscode-pi-sessions");
-    expect(group?.sessions.length).toBeGreaterThan(0);
-    expect(group?.registered).toBe(false);
+    // Registered workspaces are the whitelist: unregistered cwds disappear.
+    expect(last().groups.some((group) => group.cwd === "~/projects/vscode-pi-sessions")).toBe(
+      false,
+    );
   });
 
   it("does not duplicate a group added twice on addWorkspace", () => {

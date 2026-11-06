@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
 import {
   archivedSessionIds,
   archiveSessions,
@@ -162,8 +161,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   /** Register a workspace folder in the metadata store, then show the list.
    * Invalid paths answer with an error and leave the store unchanged; a cwd
-   * already present in the list only closes the webview's form (via the
-   * refreshed list message). */
+   * already registered only closes the webview's form (via the refreshed list
+   * message). */
   private async addWorkspace(path: string): Promise<void> {
     try {
       await requireWorkDirectory(path);
@@ -171,16 +170,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(`Invalid workspace path: ${errorMessage(error)}`);
       return;
     }
-    const knownCwds = [...new Set([...this.sessionsById.values()].map((session) => session.cwd))];
     const metadata = readMetadataStore(this.deps.metadataPath);
     if (metadata.status === "error") {
       this.postError(metadata.message);
       return;
     }
-    const alreadyListed =
-      registeredWorkspaceCwds(metadata.status === "ok" ? metadata.data : undefined).includes(
-        path,
-      ) || knownCwds.some((cwd) => resolve(cwd) === resolve(path));
+    const alreadyListed = registeredWorkspaceCwds(
+      metadata.status === "ok" ? metadata.data : undefined,
+    ).includes(path);
     if (!alreadyListed) {
       const result = registerWorkspace(this.deps.metadataPath, path, Date.now());
       if (!result.ok) {
@@ -192,8 +189,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   /** Drop the workspace registration. The webview asks for confirmation
-   * before sending the request; sessions in that cwd keep their group and a
-   * sessionless registration disappears. */
+   * before sending the request; the group disappears from the list (registered
+   * workspaces are the whitelist) and a sessionless registration too. */
   private async unregisterWorkspace(cwd: string): Promise<void> {
     const result = unregisterWorkspace(this.deps.metadataPath, cwd);
     if (!result.ok) {

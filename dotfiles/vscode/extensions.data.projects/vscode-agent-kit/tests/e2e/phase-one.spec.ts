@@ -363,7 +363,7 @@ test(
         await scm.click();
         await expect(scm).toHaveAttribute("aria-selected", "true");
         const frame = await host.sessionFrame();
-        await expect(frame.locator("section.group")).toHaveCount(4);
+        await expect(frame.locator("section.group")).toHaveCount(3);
         await expect(
           frame
             .getByTitle(host.sessions.B.cwd, { exact: true })
@@ -538,23 +538,16 @@ test(
 );
 
 test(
-  "存在しない cwd・削除済みセッションファイルの選択を安全に扱い、セッション原本と Git を変更しない",
+  "セッションのある未登録 cwd を一覧に載せず、削除済みセッションファイルの選択を安全に扱う",
   { annotation: { type: "spec", description: "E2E-7" } },
   async ({ host }) => {
-    await test.step("Select a missing work folder and keep terminals and metadata unchanged", async () => {
-      const metadata = readFileSync(join(host.directory, "agent/session-metadata.json"), "utf8");
-      await host.selectSession("Missing");
-      await expect(
-        host.page
-          .locator(".notification-list-item-message")
-          .filter({ hasText: host.sessions.Missing.cwd })
-          .first(),
-      ).toBeVisible();
+    await test.step("Keep sessions of unregistered work folders out of the list", async () => {
+      const frame = await host.sessionFrame();
+      // The Missing fixture has a saved session but no workspace registration,
+      // so the whitelist list must not show its row at all.
+      await expect(frame.locator(`[data-session="${host.sessions.Missing.id}"]`)).toHaveCount(0);
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
-      expect(readFileSync(join(host.directory, "agent/session-metadata.json"), "utf8")).toBe(
-        metadata,
-      );
     });
     await test.step("Delete only the dummy session after listing it and select the stale row", async () => {
       const frame = await host.sessionFrame();
