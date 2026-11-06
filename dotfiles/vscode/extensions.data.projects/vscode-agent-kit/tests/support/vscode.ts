@@ -166,11 +166,11 @@ export class VSCodeFixture {
     const frame = await this.sessionFrame();
     const session = this.sessions[key];
     const row = frame.locator(`[data-session="${session.id}"]`).describe(`${key} saved session`);
-    if (!(await row.count()))
-      await frame
-        .locator('#app header [data-mode="all"]')
-        .describe("All saved sessions")
-        .click({ steps: 15 });
+    const modeToggle = frame
+      .locator('#app header [data-mode-toggle]')
+      .describe("Shared All toggle");
+    if ((await modeToggle.getAttribute("data-mode")) === "unarchived")
+      await modeToggle.click({ steps: 15 });
     await row.locator(".session-name").describe(`${key} session name`).click({ steps: 15 });
   }
 

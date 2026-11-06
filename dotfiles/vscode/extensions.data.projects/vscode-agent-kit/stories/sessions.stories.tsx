@@ -50,7 +50,7 @@ function SessionStoryView({ demoState, toggleAll }: SessionStoryViewProps) {
     let frame = 0;
     if (toggleAll === true) {
       const clickModeToggle = (): void => {
-        const toggle = mount.querySelector<HTMLElement>('#app header [data-mode="all"]');
+        const toggle = mount.querySelector<HTMLElement>('#app header [data-mode-toggle]');
         if (toggle !== null) toggle.click();
         else frame = requestAnimationFrame(clickModeToggle);
       };

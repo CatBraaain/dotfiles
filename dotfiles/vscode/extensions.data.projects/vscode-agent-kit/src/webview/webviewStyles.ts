@@ -10,10 +10,11 @@ export const webviewStyles = `
     header, .group-header { display: flex; align-items: center; }
     header { justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 12px; }
     h1 { flex: 1; overflow: hidden; margin: 0; font-size: 13px; font-weight: 600; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
-    .mode-toggle { display: flex; flex: none; gap: 2px; padding: 1px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: var(--session-radius); }
-    .mode-toggle button { height: 20px; padding: 0 6px; border-radius: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 18px; }
+    .mode-toggle { display: flex; flex: none; padding: 1px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: var(--session-radius); }
+    .mode-toggle button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; border-radius: 8px; color: var(--vscode-descriptionForeground); }
     .mode-toggle button:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
-    .mode-toggle button[aria-pressed="true"] { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); background: var(--vscode-list-inactiveSelectionBackground); }
+    .mode-toggle svg { width: 16px; height: 16px; }
+    .mode-toggle svg[hidden] { display: none; }
     .header-actions { display: flex; gap: 4px; }
     .icon-button { min-width: 24px; height: 24px; padding: 0 8px; color: var(--vscode-descriptionForeground); }
     .icon-button:hover { color: var(--vscode-foreground); }

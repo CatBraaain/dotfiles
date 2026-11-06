@@ -695,24 +695,22 @@ export function initClient(bridge: ClientBridge): () => void {
   const formElement = document.querySelector("#workspace-form");
   const pathInput = document.querySelector("#workspace-path");
   const newWorkspaceButton = document.querySelector('[data-action="toggleWorkspaceForm"]');
-  const modeButtons = new Map(
-    (["unarchived", "all"] as const).map((mode) => {
-      const button = document.querySelector(`#app header [data-mode="${mode}"]`);
-      return [mode, button];
-    }),
-  );
+  const modeToggle = document.querySelector("#app header [data-mode-toggle]");
   if (
     !(sessionsElement instanceof HTMLElement) ||
     !(statusElement instanceof HTMLElement) ||
     !(formElement instanceof HTMLElement) ||
     !(pathInput instanceof HTMLInputElement) ||
     !(newWorkspaceButton instanceof HTMLElement) ||
-    [...modeButtons.values()].every((button) => button instanceof HTMLButtonElement) === false
+    !(modeToggle instanceof HTMLButtonElement)
   ) {
     throw new Error("Sessions webview markup is incomplete.");
   }
-  const headerModeButton = (mode: ViewMode): HTMLButtonElement =>
-    modeButtons.get(mode) as HTMLButtonElement;
+  /** Toggle label describing what clicking switches to, per current mode. */
+  const modeToggleLabel: Record<ViewMode, string> = {
+    unarchived: "Show all sessions",
+    all: "Show unarchived sessions",
+  };
 
   const store = createClientStore();
   const dialogElement = document.querySelector("#unregister-dialog");
@@ -757,12 +755,16 @@ export function initClient(bridge: ClientBridge): () => void {
     }
   });
 
-  /** Reflect the shared mode on the fixed header buttons (outside the React root). */
+  /** Reflect the shared mode on the fixed header toggle (outside the React root). */
   const selectHeaderMode = (mode: ViewMode): void => {
     store.setMode(mode);
-    for (const candidate of modeButtons.keys()) {
-      headerModeButton(candidate).setAttribute("aria-pressed", String(candidate === mode));
+    modeToggle.dataset.mode = mode;
+    for (const candidate of ["unarchived", "all"] as const) {
+      const icon = modeToggle.querySelector(`[data-mode-icon="${candidate}"]`);
+      if (icon !== null) icon.toggleAttribute("hidden", candidate !== mode);
     }
+    modeToggle.title = modeToggleLabel[mode];
+    modeToggle.setAttribute("aria-label", modeToggleLabel[mode]);
   };
 
   // The header, workspace form, and footer live outside the React root
@@ -772,10 +774,9 @@ export function initClient(bridge: ClientBridge): () => void {
   const onDocumentClick = (event: Event): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const modeTarget = target.closest("[data-mode]");
+    const modeTarget = target.closest("[data-mode-toggle]");
     if (modeTarget instanceof HTMLButtonElement) {
-      const mode = modeTarget.dataset.mode;
-      if (mode === "unarchived" || mode === "all") selectHeaderMode(mode);
+      selectHeaderMode(modeTarget.dataset.mode === "unarchived" ? "all" : "unarchived");
       return;
     }
     const action = target.closest("[data-action]");
