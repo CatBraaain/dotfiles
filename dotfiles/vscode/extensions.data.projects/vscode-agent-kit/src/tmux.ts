@@ -64,6 +64,7 @@ export class TmuxRuntimeStore {
         if (!/duplicate session/.test(errorMessage(error)) || !(await this.isAlive(runtime)))
           throw error;
       }
+      await this.enableCsiUExtendedKeysFormat();
       if (!(await this.isAlive(runtime))) {
         throw new Error(`Pi exited while starting session ${launch.sessionId} in ${launch.cwd}`);
       }
@@ -73,6 +74,15 @@ export class TmuxRuntimeStore {
       ["set-option", "-t", runtime.target, "set-titles-string", "#{pane_title}"],
     );
     return runtime;
+  }
+
+  private async enableCsiUExtendedKeysFormat(): Promise<void> {
+    // tmux lacks extended-keys-format before 3.5; pi still reads the xterm format there
+    try {
+      await this.command(["set-option", "-s", "extended-keys-format", "csi-u"]);
+    } catch (error) {
+      if (!/invalid option|unknown option/.test(errorMessage(error))) throw error;
+    }
   }
 
   async isAlive(runtime: PiRuntime): Promise<boolean> {

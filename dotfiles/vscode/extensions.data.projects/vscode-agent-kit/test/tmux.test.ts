@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { TmuxRuntimeStore, tmuxSocketName } from "../src/tmux";
 
-function setup() {
+function setup(onCommand?: (args: string[]) => Promise<void> | void) {
   const panes = new Map<string, number>();
   const execute = vi.fn(async (_executable: string, args: string[]) => {
+    await onCommand?.(args);
     const command = args[4];
     if (command === "list-panes")
       return [...panes].map(([name, dead]) => `${name}\t${dead}\n`).join("");
@@ -48,6 +49,42 @@ describe("TmuxRuntimeStore", () => {
     expect(starts[0][1]).toContain("pi");
     expect(starts[0][1].join(" ")).toContain("set-option -s extended-keys on");
     expect(starts[0][1].slice(-2)).toEqual(["prefix", "None"]);
+  });
+
+  it("requests the csi-u extended-keys format that pi reads best", async () => {
+    const { store, execute } = setup();
+    await store.ensure({ sessionId: "A", cwd: "/project", args: [] });
+
+    const formatCalls = execute.mock.calls
+      .map(([, args]) => args)
+      .filter((args) => args[4] === "set-option" && args.includes("extended-keys-format"));
+    expect(formatCalls).toHaveLength(1);
+    expect(formatCalls[0].slice(-4)).toEqual(["set-option", "-s", "extended-keys-format", "csi-u"]);
+  });
+
+  it("still starts pi when the tmux server does not know extended-keys-format", async () => {
+    const { store, execute } = setup((args) => {
+      if (args[4] === "set-option" && args.includes("extended-keys-format"))
+        throw new Error("invalid option: extended-keys-format");
+    });
+
+    const runtime = await store.ensure({ sessionId: "A", cwd: "/project", args: [] });
+    expect(runtime.sessionId).toBe("A");
+    expect(runtime.target).toMatch(/^pi-/);
+    expect(execute.mock.calls.map(([, args]) => args.join(" "))).toContain(
+      "-L test-socket -f /dev/null set-option -s extended-keys-format csi-u",
+    );
+  });
+
+  it("still fails loudly when the tmux server rejects the format for another reason", async () => {
+    const { store } = setup((args) => {
+      if (args[4] === "set-option" && args.includes("extended-keys-format"))
+        throw new Error("no server running on test-socket");
+    });
+
+    await expect(store.ensure({ sessionId: "A", cwd: "/project", args: [] })).rejects.toThrow(
+      /no server running/,
+    );
   });
 
   it.each([
