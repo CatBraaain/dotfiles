@@ -540,7 +540,7 @@ test(
 test(
   "存在しない cwd・削除済みセッションファイルの選択を安全に扱い、セッション原本と Git を変更しない",
   { annotation: { type: "spec", description: "E2E-7" } },
-  async ({ host }, testInfo) => {
+  async ({ host }) => {
     await test.step("Select a missing work folder and keep terminals and metadata unchanged", async () => {
       const metadata = readFileSync(join(host.directory, "agent/session-metadata.json"), "utf8");
       await host.selectSession("Missing");
@@ -550,10 +550,6 @@ test(
           .filter({ hasText: host.sessions.Missing.cwd })
           .first(),
       ).toBeVisible();
-      await testInfo.attach("不在 cwd のエラー", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
       expect(readFileSync(join(host.directory, "agent/session-metadata.json"), "utf8")).toBe(
@@ -577,10 +573,6 @@ test(
       ).toBeVisible();
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
-      await testInfo.attach("削除済みのエラー", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
     });
     await test.step("Compare dummy original files, Git index and worktree contents", async () => {
       for (const [key, session] of Object.entries(host.sessions)) {

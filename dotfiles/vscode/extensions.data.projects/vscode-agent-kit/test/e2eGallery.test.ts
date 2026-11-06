@@ -142,13 +142,13 @@ test.skip("skipped case", { annotation: { type: "spec", description: "E2E-2" } }
 test("no image", { annotation: { type: "spec", description: "E2E-3" } }, async () => {
   await test.step("Check without image", async () => { expect(1).toBe(1); });
 });
-test("failure with image", { annotation: { type: "spec", description: "E2E-7" } }, async ({}, info) => {
+test("failure with image", { annotation: { type: "spec", description: "E2E-10" } }, async ({}, info) => {
   await test.step("Failed step", async () => {
     await info.attach("failure image", { body: png, contentType: "image/png" });
     throw new Error("Expected fixture failure <script>");
   });
 });
-test("outside a step", { annotation: { type: "spec", description: "E2E-7" } }, async ({}, info) => {
+test("outside a step", { annotation: { type: "spec", description: "E2E-10" } }, async ({}, info) => {
   await info.attach("outside image", { body: png, contentType: "image/png" });
 });
 test("missing asset", { annotation: { type: "spec", description: "E2E-6" } }, async ({}, info) => {
@@ -165,10 +165,10 @@ describe("E2E gallery reporter", () => {
 
   it("exports the current canonical SPEC cases in their declared order", () => {
     const { cases, excludedIds } = parseGalleryCases(specSource);
-    expect(cases).toHaveLength(5);
+    expect(cases).toHaveLength(4);
     expect(run.results.cases).toEqual(cases);
-    expect(cases.map((entry) => entry.id)).toEqual(["E2E-1", "E2E-2", "E2E-6", "E2E-7", "E2E-10"]);
-    expect(excludedIds).toEqual(["E2E-3", "E2E-9", "E2E-11", "E2E-12"]);
+    expect(cases.map((entry) => entry.id)).toEqual(["E2E-1", "E2E-2", "E2E-6", "E2E-10"]);
+    expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-11", "E2E-12"]);
     expect(run.script).not.toContain("specSource");
     expect(run.script).not.toContain(specSource.split("\n")[0]);
   });
@@ -184,8 +184,9 @@ describe("E2E gallery reporter", () => {
     expect(run.results.status).toBe("failed");
     expect(caseTests(run.results, "E2E-2")[0].outcome).toBe("Skipped");
     expect(caseTests(run.results, "E2E-3")).toEqual([]);
+    expect(caseTests(run.results, "E2E-7")).toEqual([]);
     expect(caseTests(run.results, "E2E-9")).toEqual([]);
-    expect(caseTests(run.results, "E2E-7")[0].attempts[0].errors.join("\n")).toContain(
+    expect(caseTests(run.results, "E2E-10")[0].attempts[0].errors.join("\n")).toContain(
       "Expected fixture failure <script>",
     );
   });
@@ -322,7 +323,7 @@ describe("E2E gallery reporter", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(pathToFileURL(join(run.directory, "e2e-gallery.html")).href);
-      expect(await page.locator("section.case[id]").count()).toBe(5);
+      expect(await page.locator("section.case[id]").count()).toBe(4);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(run.results.cases.map((entry) => entry.id));
@@ -354,21 +355,22 @@ describe("E2E gallery reporter", () => {
       expect(await page.locator("#E2E-3").count()).toBe(0);
       expect(await page.locator("#E2E-6").textContent()).toContain("画像なし");
       expect(await page.locator("#E2E-6 .image-link").count()).toBe(0);
+      expect(await page.locator("#E2E-7").count()).toBe(0);
       expect(await page.locator("#E2E-9").count()).toBe(0);
       expect(await page.locator("#E2E-1 img").first().getAttribute("alt")).toBe(
         "same <script> image",
       );
       expect(await page.locator("script").count()).toBe(2);
 
-      const failureMessage = caseTests(run.results, "E2E-7")[0].attempts[0].errors[0];
-      const error = page.locator("#E2E-7 > p.error");
+      const failureMessage = caseTests(run.results, "E2E-10")[0].attempts[0].errors[0];
+      const error = page.locator("#E2E-10 > p.error");
       expect(await error.count()).toBe(1);
       expect(await error.textContent()).toBe(failureMessage.split("\n")[0]);
       const errorColor = await error.evaluate((node) => getComputedStyle(node).color);
-      expect(await page.locator("#E2E-7 .cell.failed img").count()).toBe(8);
+      expect(await page.locator("#E2E-10 .cell.failed img").count()).toBe(8);
       expect(
         await page
-          .locator("#E2E-7 .cell.failed img")
+          .locator("#E2E-10 .cell.failed img")
           .first()
           .evaluate((node) => getComputedStyle(node).borderColor),
       ).toBe(errorColor);
@@ -429,7 +431,7 @@ describe("E2E gallery reporter", () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(pathToFileURL(join(directory, "e2e-gallery.html")).href);
       const summary = page.locator("#run-summary");
-      expect(await summary.textContent()).toBe("Run: passed · 2026-01-02 09:04 · 10 images");
+      expect(await summary.textContent()).toBe("Run: passed · 2026-01-02 09:04 · 8 images");
       expect(await summary.getAttribute("title")).toBe(results.started);
       expect(
         await summary.evaluate((node) => {
@@ -437,8 +439,8 @@ describe("E2E gallery reporter", () => {
           return [style.whiteSpace, style.overflow, style.textOverflow];
         }),
       ).toEqual(["nowrap", "hidden", "ellipsis"]);
-      expect(await page.locator(".table").count()).toBe(5);
-      expect(await page.locator(".cell img").count()).toBe(10);
+      expect(await page.locator(".table").count()).toBe(4);
+      expect(await page.locator(".cell img").count()).toBe(8);
       for (const specCase of comparisonCases) {
         const table = page.locator(`#${specCase.id} .table`);
         expect(await table.locator(".cell").count()).toBe(2);
