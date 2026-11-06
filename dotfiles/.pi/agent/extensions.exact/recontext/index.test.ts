@@ -482,6 +482,27 @@ describe("real AgentSession delivery with a memory fake provider", () => {
       h.dispose();
     }
   });
+
+  it("commits the replacement after its own class change instead of cancelling it", async () => {
+    const h = await runtimeHarness(true);
+    try {
+      await h.session.prompt("old user marker");
+      await h.handoff({ class: "high" });
+      const committed = h.manager.getEntries().filter(isHandoffEntry);
+      assert.equal(committed.length, 1);
+      assert.equal((committed[0]!.data as { count: number }).count, 1);
+      assert.ok(h.manager.getEntries().some((entry) => entry.type === "context_edit"));
+      const continuation = JSON.stringify(h.requests.at(-1)!.messages);
+      assert.doesNotMatch(continuation, /old user marker/);
+      assert.match(continuation, /new phase marker/);
+      assert.ok(
+        !h.notices.some((message) => message.includes("session changed while waiting")),
+      );
+      assert.deepEqual(h.errors, []);
+    } finally {
+      h.dispose();
+    }
+  });
   for (const delivery of ["steer", "followUp"] as const) {
     for (const source of ["interactive", "rpc", "extension"] as const) {
       it(`keeps actual ${delivery} input from ${source} after the handoff boundary`, async () => {
