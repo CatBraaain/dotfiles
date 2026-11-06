@@ -53,6 +53,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await cleanup(root);
 });
 
@@ -583,6 +584,74 @@ describe("SessionWebviewProvider", () => {
       workspaces?: Record<string, unknown>;
     };
     expect(Object.keys(parsed.workspaces ?? {})).toEqual([folder]);
+  });
+
+  it("registers the expanded absolute path from a tilde input", async () => {
+    const path = "~/registered/./";
+    vi.stubEnv("HOME", root);
+    const folder = join(root, "registered");
+    await mkdir(folder);
+    const { provider, metadataPath } = createProvider();
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    await webview.receive({ type: "addWorkspace", path });
+
+    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      workspaces: Record<string, unknown>;
+    };
+    expect(Object.keys(parsed.workspaces)).toEqual([folder]);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([
+      expect.objectContaining({ cwd: folder, registered: true }),
+    ]);
+  });
+
+  it("keeps an existing registration unchanged when adding a tilde input", async () => {
+    const path = "~/registered/./";
+    vi.stubEnv("HOME", root);
+    const folder = join(root, "registered");
+    await mkdir(folder);
+    const { provider, metadataPath } = createProvider();
+    expect(registerWorkspace(metadataPath, folder, 1_000).ok).toBe(true);
+    const original = await readFile(metadataPath, "utf8");
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    await webview.receive({ type: "addWorkspace", path });
+
+    expect(await readFile(metadataPath, "utf8")).toBe(original);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([
+      expect.objectContaining({ cwd: folder, registered: true }),
+    ]);
+  });
+
+  it("starts a tilde-registered workspace with a literal dollar-sign name", async () => {
+    const folder = join(root, "space $PI_SESSIONS_TEST_CHILD");
+    await mkdir(folder);
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("PI_SESSIONS_TEST_CHILD", "other");
+    const startNewSession = vi.fn().mockResolvedValue(undefined);
+    const { provider, metadataPath } = createProvider({ startNewSession });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    await webview.receive({
+      type: "addWorkspace",
+      path: "~/space $PI_SESSIONS_TEST_CHILD",
+    });
+    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      workspaces: Record<string, unknown>;
+    };
+    const [storedCwd] = Object.keys(parsed.workspaces);
+    expect(storedCwd).toBe(folder);
+
+    await webview.receive({ type: "newSession", cwd: storedCwd });
+
+    expect(startNewSession).toHaveBeenCalledWith(folder);
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
   });
 
   it("shows an error and keeps the store when the workspace path is invalid", async () => {

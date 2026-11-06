@@ -12,7 +12,7 @@ import {
   unregisterWorkspace,
 } from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
-import { requireWorkDirectory } from "../workDirectory";
+import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
 import { parseWebviewRequest, type ExtensionMessage } from "./protocol";
@@ -164,8 +164,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
    * already registered only closes the webview's form (via the refreshed list
    * message). */
   private async addWorkspace(path: string): Promise<void> {
+    let directory: string;
     try {
-      await requireWorkDirectory(path);
+      directory = await requireWorkDirectory(expandWorkDirectoryInput(path));
     } catch (error) {
       this.postError(`Invalid workspace path: ${errorMessage(error)}`);
       return;
@@ -177,9 +178,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     const alreadyListed = registeredWorkspaceCwds(
       metadata.status === "ok" ? metadata.data : undefined,
-    ).includes(path);
+    ).includes(directory);
     if (!alreadyListed) {
-      const result = registerWorkspace(this.deps.metadataPath, path, Date.now());
+      const result = registerWorkspace(this.deps.metadataPath, directory, Date.now());
       if (!result.ok) {
         this.postError(result.message);
         return;
