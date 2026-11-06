@@ -63,11 +63,11 @@ describe("createDemoBridge", () => {
     expect(
       sessions(last()).map((session) => [session.sessionId, session.isArchived, session.isLocked]),
     ).toEqual([
-      [projectCurrentId, false, false],
-      [projectArchivedId, true, false],
       [piToolsCurrentId, false, false],
       [piToolsLockedId, false, true],
       [worktreeId, false, false],
+      [projectCurrentId, false, false],
+      [projectArchivedId, true, false],
     ]);
   });
 

@@ -34,17 +34,25 @@ describe("groupSessions", () => {
       session({ sessionId: "a", cwd: "/home/user/project-a", mtimeMs: 1 }),
       session({ sessionId: "b", cwd: "/home/user/project-b", mtimeMs: 2 }),
     ]);
-    expect(groups.map((g) => g.label)).toEqual(["project-b", "project-a"]);
-    expect(groups.map((g) => g.cwd)).toEqual(["/home/user/project-b", "/home/user/project-a"]);
+    expect(groups.map((g) => g.label)).toEqual(["project-a", "project-b"]);
+    expect(groups.map((g) => g.cwd)).toEqual(["/home/user/project-a", "/home/user/project-b"]);
   });
 
-  it("orders groups by their newest session mtime, descending", () => {
+  it("orders groups by label, ascending, case-insensitive", () => {
     const groups = groupSessions([
-      session({ sessionId: "old-a", cwd: "/a", mtimeMs: 10 }),
-      session({ sessionId: "new-a", cwd: "/a", mtimeMs: 300 }),
-      session({ sessionId: "mid-b", cwd: "/b", mtimeMs: 100 }),
+      session({ sessionId: "z", cwd: "/home/user/Zeta", mtimeMs: 100 }),
+      session({ sessionId: "m", cwd: "/home/user/midway", mtimeMs: 300 }),
+      session({ sessionId: "a", cwd: "/home/user/Alpha", mtimeMs: 10 }),
     ]);
-    expect(groups.map((g) => g.cwd)).toEqual(["/a", "/b"]); // /a newest is 300 > /b 100
+    expect(groups.map((g) => g.label)).toEqual(["Alpha", "midway", "Zeta"]);
+  });
+
+  it("breaks equal labels deterministically (group cwd ascending)", () => {
+    const groups = groupSessions([
+      session({ sessionId: "s", cwd: "/x/second/name", mtimeMs: 100 }),
+      session({ sessionId: "t", cwd: "/a/first/name", mtimeMs: 100 }),
+    ]);
+    expect(groups.map((g) => g.cwd)).toEqual(["/a/first/name", "/x/second/name"]);
   });
 
   it("orders sessions within a group by mtime, descending", () => {
@@ -56,13 +64,11 @@ describe("groupSessions", () => {
     expect(groups[0].sessions.map((s) => s.sessionId)).toEqual(["s2", "s1", "s3"]);
   });
 
-  it("breaks mtime ties deterministically (session id, group cwd ascending)", () => {
+  it("breaks mtime ties deterministically (session id ascending)", () => {
     const groups = groupSessions([
       session({ sessionId: "b", cwd: "/a", mtimeMs: 100 }),
       session({ sessionId: "a", cwd: "/a", mtimeMs: 100 }),
-      session({ sessionId: "z", cwd: "/b", mtimeMs: 100 }),
     ]);
-    expect(groups.map((g) => g.cwd)).toEqual(["/a", "/b"]);
     expect(groups[0].sessions.map((s) => s.sessionId)).toEqual(["a", "b"]);
   });
 
@@ -76,6 +82,15 @@ describe("groupSessions", () => {
       ["/a", "a", [expect.objectContaining({ sessionId: "a" })]],
       ["/registered/empty", "empty", []],
     ]);
+  });
+
+  it("merges sessionless groups into the label ordering", () => {
+    const groups = groupSessions(
+      [session({ sessionId: "z", cwd: "/home/user/zebra", mtimeMs: 1 })],
+      ["/home/user/alpha"],
+    );
+
+    expect(groups.map((g) => g.label)).toEqual(["alpha", "zebra"]);
   });
 
   it("merges a registered cwd into its session group by trailing separator", () => {

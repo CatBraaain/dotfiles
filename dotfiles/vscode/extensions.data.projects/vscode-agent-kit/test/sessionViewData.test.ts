@@ -22,16 +22,16 @@ describe("sessionViewGroups", () => {
   it("sends every session of every group with archive and lock marks", () => {
     const groups = sessionViewGroups(sessions, [], new Set(["older"]), new Set(["active"]));
 
-    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/beta", "/workspace/alpha"]);
+    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha", "/workspace/beta"]);
     expect(
       groups[0].sessions.map((item) => [item.sessionId, item.isArchived, item.isLocked]),
-    ).toEqual([["newest", false, false]]);
-    expect(
-      groups[1].sessions.map((item) => [item.sessionId, item.isArchived, item.isLocked]),
     ).toEqual([
       ["active", false, true],
       ["older", true, false],
     ]);
+    expect(
+      groups[1].sessions.map((item) => [item.sessionId, item.isArchived, item.isLocked]),
+    ).toEqual([["newest", false, false]]);
   });
 
   it("treats sessions without metadata as unarchived and unlocked", () => {
@@ -44,11 +44,10 @@ describe("sessionViewGroups", () => {
     ).toBe(true);
   });
 
-  it("appends sessionless groups for registered workspaces after session groups", () => {
+  it("merges sessionless groups into the label ordering", () => {
     const groups = sessionViewGroups(sessions, ["/workspace/empty"], new Set(), new Set());
 
     expect(groups.map((group) => [group.cwd, group.sessions])).toEqual([
-      ["/workspace/beta", [expect.objectContaining({ sessionId: "newest" })]],
       [
         "/workspace/alpha",
         [
@@ -56,6 +55,7 @@ describe("sessionViewGroups", () => {
           expect.objectContaining({ sessionId: "older" }),
         ],
       ],
+      ["/workspace/beta", [expect.objectContaining({ sessionId: "newest" })]],
       ["/workspace/empty", []],
     ]);
     expect(groups[2].label).toBe("empty");
@@ -65,15 +65,15 @@ describe("sessionViewGroups", () => {
     const groups = sessionViewGroups(sessions, ["/workspace/alpha"], new Set(), new Set());
 
     expect(groups.map((group) => [group.cwd, group.registered])).toEqual([
-      ["/workspace/beta", false],
       ["/workspace/alpha", true],
+      ["/workspace/beta", false],
     ]);
   });
 
   it("does not duplicate a registered workspace that already has session groups", () => {
     const groups = sessionViewGroups(sessions, ["/workspace/alpha"], new Set(), new Set());
 
-    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/beta", "/workspace/alpha"]);
+    expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha", "/workspace/beta"]);
   });
 
   it("carries 1000 synthetic sessions as list data", () => {
@@ -85,6 +85,6 @@ describe("sessionViewGroups", () => {
 
     expect(groups).toHaveLength(10);
     expect(groups.flatMap((group) => group.sessions)).toHaveLength(1000);
-    expect(groups[0].sessions.every((item) => item.isArchived === false)).toBe(true);
+    expect(groups.at(-1)?.sessions.every((item) => item.isArchived === false)).toBe(true);
   });
 });

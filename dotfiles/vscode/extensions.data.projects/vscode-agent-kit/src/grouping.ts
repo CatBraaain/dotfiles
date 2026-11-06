@@ -1,6 +1,6 @@
 import type { SessionSummary } from "./sessionStore";
 
-/** A cwd group of sessions, sorted by mtime (newest first). */
+/** A cwd group of sessions. Groups sort by label, sessions by mtime (newest first). */
 export interface SessionGroup {
   cwd: string;
   label: string;
@@ -34,10 +34,10 @@ interface GroupAccumulator {
  * workspace cwd.
  * - Same-directory cwds that only differ in trailing separators are one group;
  *   the group keeps the display cwd of its first source.
- * - Groups are ordered by their newest session mtime, descending; groups
- *   without sessions go last. Sessions within a group are ordered by mtime,
- *   descending.
- * Ties break deterministically (sessionId / cwd ascending).
+ * - Groups are ordered by their label (cwd basename), ascending,
+ *   case-insensitive; sessionless groups share the same ordering. Sessions
+ *   within a group are ordered by mtime, descending.
+ * Ties break deterministically (label spelling / cwd ascending).
  */
 export function groupSessions(
   sessions: SessionSummary[],
@@ -68,10 +68,12 @@ export function groupSessions(
       sessions: accumulator.sessions,
     });
   }
-  groups.sort((a, b) => {
-    const newest = (group: SessionGroup) => group.sessions[0]?.mtimeMs ?? Number.NEGATIVE_INFINITY;
-    return newest(b) - newest(a) || compareString(a.cwd, b.cwd);
-  });
+  groups.sort(
+    (a, b) =>
+      compareString(a.label.toLowerCase(), b.label.toLowerCase()) ||
+      compareString(a.label, b.label) ||
+      compareString(a.cwd, b.cwd),
+  );
   return groups;
 }
 
