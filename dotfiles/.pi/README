@@ -14,6 +14,8 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
     ├── package.json            # 拡張のランタイム依存（yaml 等）
     ├── bun_install.apply.ts           # apply hook（manifest/lockfile変更時だけ ~/.pi/agent/ で bun install）
     ├── bun_install.spec.md            # 依存導入仕様
+    ├── npm_packages.apply.ts          # apply hook（settings.json の packages に無い npm 依存を ~/.pi/agent/npm/ から uninstall）
+    ├── npm_packages.requirements.md   # npm 依存整理の要件
     ├── config.exact/                  # ~/.agents/config/ への symlink
     ├── extensions.exact/       # 自作拡張機能
     ├── prompts.exact/          # プロンプトテンプレート

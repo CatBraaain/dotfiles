@@ -9,12 +9,12 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | .config |  | - | - |
 | .gitconfig.local.sample | - | - | - |
 | .pi |  | - | - |
-| .pi/agent/bun_install.apply.test.ts | - | - | - |
-| .pi/agent/extensions/*/index.test.ts | - | - | - |
 | .playwright |  | - | - |
 | .wslconfig | - |  | - |
 | **/\*.sample | - | - | - |
 | **/\*.spec.md | - | - | - |
+| **/\*.requirements.md | - | - | - |
+| **/\*.test.ts | - | - | - |
 | **/SPEC.md | - | - | - |
 | **/REQUIREMENTS.md | - | - | - |
 | **/node_modules | - | - | - |
