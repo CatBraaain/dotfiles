@@ -41,7 +41,7 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 状態の印 | 直径10px の円。未アーカイブは `testing-iconPassed` の塗り、ロック中は `editorWarning-foreground`、アーカイブ済みは補助文字色の枠の中抜き |
 | 表示名 | 13px・20px 行・省略表示 |
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端の操作の左に右寄せで5文字分 |
-| 行の操作（Copy・Lock・Archive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から 4px 間隔で並べ、行の右端に重ねる。コピー済みは `testing-iconPassed`、無効な Archive は `disabledForeground` |
+| 行の操作（Copy・Lock・Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から 4px 間隔で並べ、行の右端に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す。コピー済みは `testing-iconPassed`、無効な Archive は `disabledForeground` |
 | 確認ダイアログ（Unregister） | Webview 内のモーダル。scrim は黒40%、面は `editorWidget-background`・境界トークン・角丸9.6px・余白12px・要素間8px。見出し13px・600、本文12px・補助文字色で cwd だけ本文色、cwd は折返し。操作は高さ26px・角丸4pxで、`Unregister` は `button-background` / `button-foreground`、`Cancel` は `button-secondary-*`。Cancel に初期フォーカスし、Escape で閉じる |
 
 ## 状態

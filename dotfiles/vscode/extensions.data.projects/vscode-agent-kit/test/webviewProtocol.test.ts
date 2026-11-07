@@ -47,6 +47,14 @@ describe("parseWebviewRequest", () => {
       { type: "archiveSessions", sessionIds: [sessionId, otherSessionId] },
     ],
     [
+      { type: "unarchiveSessions", sessionIds: [sessionId] },
+      { type: "unarchiveSessions", sessionIds: [sessionId] },
+    ],
+    [
+      { type: "unarchiveSessions", sessionIds: [sessionId, otherSessionId] },
+      { type: "unarchiveSessions", sessionIds: [sessionId, otherSessionId] },
+    ],
+    [
       { type: "setSessionLock", sessionId, locked: true },
       { type: "setSessionLock", sessionId, locked: true },
     ],
@@ -78,6 +86,9 @@ describe("parseWebviewRequest", () => {
     { type: "archiveSessions", sessionIds: [] },
     { type: "archiveSessions", sessionIds: [sessionId, "trailing_dot."] },
     { type: "archiveSessions", sessionIds: [sessionId, 3] },
+    { type: "unarchiveSessions" },
+    { type: "unarchiveSessions", sessionIds: [] },
+    { type: "unarchiveSessions", sessionIds: [sessionId, 3] },
     { type: "setSessionLock", sessionId },
     { type: "setSessionLock", sessionId, locked: "true" },
     { type: "setSessionLock", sessionId, locked: 1 },

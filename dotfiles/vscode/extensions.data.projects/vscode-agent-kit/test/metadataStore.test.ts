@@ -10,6 +10,7 @@ import {
   registerWorkspace,
   unregisterWorkspace,
   setSessionActive,
+  unarchiveSessions,
   setSessionLocked,
   writeMetadataStore,
   type MetadataStoreData,
@@ -258,6 +259,53 @@ describe("archiveSessions", () => {
       (entry) => entry.active === false,
     );
     expect(archived).toHaveLength(1000);
+  });
+});
+
+describe("unarchiveSessions", () => {
+  it("unarchives every requested session in one write, keeping other attributes", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        sessions: { a: { active: false }, b: { active: false, locked: true }, open: {} },
+      }),
+      "utf8",
+    );
+
+    const result = unarchiveSessions(path, ["a", "b"]);
+
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    expect(parsed.sessions).toEqual({
+      a: { active: true },
+      b: { active: true, locked: true },
+      open: {},
+    });
+  });
+
+  it("writes nothing when nothing is requested", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, sessions: { s1: { active: false } } }),
+      "utf8",
+    );
+    const before = readFileSync(path, "utf8");
+
+    const result = unarchiveSessions(path, []);
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("does not write and reports an error when the file is corrupt", () => {
+    writeFileSync(path, "{oops", "utf8");
+
+    const result = unarchiveSessions(path, ["s1"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/JSON/);
+    expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
   });
 });
 

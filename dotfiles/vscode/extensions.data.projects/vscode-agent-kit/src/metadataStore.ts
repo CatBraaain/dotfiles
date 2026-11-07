@@ -193,6 +193,25 @@ export function archiveSessions(path: string, sessionIds: readonly string[]): Me
   });
 }
 
+/**
+ * Unarchive the given sessions in one metadata write, restoring them to the
+ * default list. Locking protects only against archiving, so locked sessions
+ * unarchive as well.
+ */
+export function unarchiveSessions(
+  path: string,
+  sessionIds: readonly string[],
+): MetadataUpdateResult {
+  return updateSessions(path, (sessions) => {
+    let changedAny = false;
+    for (const sessionId of sessionIds) {
+      sessions[sessionId] = { ...sessions[sessionId], active: true };
+      changedAny = true;
+    }
+    return changedAny;
+  });
+}
+
 /** Session IDs whose `active` attribute is explicitly false (missing/truthy = unarchived). */
 export function archivedSessionIds(data: MetadataStoreData | undefined): Set<string> {
   const ids = new Set<string>();

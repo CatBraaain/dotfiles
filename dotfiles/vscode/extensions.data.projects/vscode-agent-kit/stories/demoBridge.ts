@@ -153,6 +153,14 @@ export function createDemoBridge(): {
       postSessions();
       return;
     }
+    if (request.type === "unarchiveSessions" && Array.isArray(request.sessionIds)) {
+      for (const sessionId of request.sessionIds) {
+        if (typeof sessionId !== "string") continue;
+        metadata.set(sessionId, { ...entryOf(sessionId), archived: false });
+      }
+      postSessions();
+      return;
+    }
     if (request.type === "newSession" && typeof request.cwd === "string") {
       const session: SessionSummary = {
         sessionId: crypto.randomUUID(),

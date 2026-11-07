@@ -153,6 +153,18 @@ export function archiveTargetIds(
     .map((session) => session.sessionId);
 }
 
+/** IDs to unarchive when the Unarchive action runs on one row: the visible selected archived sessions when the row is selected, otherwise just that row. */
+export function unarchiveTargetIds(
+  clickedSessionId: string,
+  selection: ReadonlySet<string>,
+  visible: readonly ClientSession[],
+): string[] {
+  if (!selection.has(clickedSessionId)) return [clickedSessionId];
+  return visible
+    .filter((session) => session.isArchived && selection.has(session.sessionId))
+    .map((session) => session.sessionId);
+}
+
 /** IDs a select-all picks up: visible unarchived unlocked sessions, across cwd groups. */
 export function selectAllIds(visible: readonly ClientSession[]): string[] {
   return visible
@@ -295,7 +307,9 @@ function sessionDescriptor(
       },
       copyDescriptor(session.sessionId, copiedIds.has(session.sessionId)),
       lockDescriptor(session.sessionId, session.isLocked),
-      ...(session.isArchived ? [] : [archiveDescriptor(session.sessionId, session.isLocked)]),
+      ...(session.isArchived
+        ? [unarchiveDescriptor(session.sessionId)]
+        : [archiveDescriptor(session.sessionId, session.isLocked)]),
     ],
   };
 }
@@ -359,6 +373,21 @@ function archiveDescriptor(sessionId: string, disabled: boolean): ElementDescrip
   };
 }
 
+/** Overlay button at the row's right edge that restores the archived session to the default list. */
+function unarchiveDescriptor(sessionId: string): ElementDescriptor {
+  return {
+    tag: "button",
+    attrs: {
+      class: "unarchive",
+      type: "button",
+      "data-unarchive": sessionId,
+      title: "Unarchive",
+      "aria-label": "Unarchive",
+    },
+    children: [unarchiveIcon()],
+  };
+}
+
 function chevronIcon(direction: "down" | "right"): ElementDescriptor {
   const path = direction === "down" ? "m6 9 6 6 6-6" : "m9 18 6-6-6-6";
   return strokeIcon([{ tag: "path", attrs: { d: path } }]);
@@ -380,6 +409,15 @@ function archiveIcon(): ElementDescriptor {
     { tag: "rect", attrs: { width: "20", height: "5", x: "2", y: "3", rx: "1" } },
     { tag: "path", attrs: { d: "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" } },
     { tag: "path", attrs: { d: "M10 12h4" } },
+  ]);
+}
+
+function unarchiveIcon(): ElementDescriptor {
+  return strokeIcon([
+    { tag: "rect", attrs: { width: "20", height: "5", x: "2", y: "3", rx: "1" } },
+    { tag: "path", attrs: { d: "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" } },
+    { tag: "path", attrs: { d: "M12 16v-6" } },
+    { tag: "path", attrs: { d: "m9 13 3-3 3 3" } },
   ]);
 }
 
@@ -439,6 +477,7 @@ interface DescriptorActions {
   onCopyClick(sessionId: string): void;
   onLockClick(sessionId: string, nextLocked: boolean): void;
   onArchiveClick(sessionId: string): void;
+  onUnarchiveClick(sessionId: string): void;
 }
 
 /** Map descriptor attribute names to React prop names (class -> className, disabled string -> true). */
@@ -478,9 +517,14 @@ function descriptorOnClick(
   const unregisterCwd = attrs["data-unregister"];
   if (unregisterCwd !== undefined) return () => actions.onUnregisterClick(unregisterCwd);
   const sessionId =
-    attrs["data-archive"] ?? attrs["data-lock"] ?? attrs["data-copy"] ?? attrs["data-session"];
+    attrs["data-archive"] ??
+    attrs["data-unarchive"] ??
+    attrs["data-lock"] ??
+    attrs["data-copy"] ??
+    attrs["data-session"];
   if (sessionId === undefined) return undefined;
   if (attrs["data-archive"] !== undefined) return () => actions.onArchiveClick(sessionId);
+  if (attrs["data-unarchive"] !== undefined) return () => actions.onUnarchiveClick(sessionId);
   if (attrs["data-lock"] !== undefined) {
     const locked = attrs["aria-pressed"] === "true";
     return () => actions.onLockClick(sessionId, !locked);
@@ -675,6 +719,11 @@ function SessionsApp({
       const sessionIds = archiveTargetIds(sessionId, selection, visible);
       if (sessionIds.length === 0) return;
       bridge.postMessage({ type: "archiveSessions", sessionIds });
+    },
+    onUnarchiveClick: (sessionId) => {
+      const sessionIds = unarchiveTargetIds(sessionId, selection, visible);
+      if (sessionIds.length === 0) return;
+      bridge.postMessage({ type: "unarchiveSessions", sessionIds });
     },
   };
 

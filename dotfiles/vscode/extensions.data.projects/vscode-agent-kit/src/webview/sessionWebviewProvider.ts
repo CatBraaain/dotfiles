@@ -7,8 +7,8 @@ import {
   readMetadataStore,
   registeredWorkspaceCwds,
   registerWorkspace,
-  setSessionActive,
   setSessionLocked,
+  unarchiveSessions,
   unregisterWorkspace,
 } from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
@@ -143,20 +143,34 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "archiveSessions") {
-      const sessionIds = [...new Set(request.sessionIds)];
-      const unknown = sessionIds.find((sessionId) => !this.sessionsById.has(sessionId));
-      if (unknown !== undefined) {
-        this.postError(`Session not found: ${unknown}`);
-        return;
-      }
-      const result = archiveSessions(this.deps.metadataPath, sessionIds);
-      if (!result.ok) {
-        this.postError(result.message);
-        return;
-      }
-      await this.refresh();
+      await this.updateKnownSessions(request.sessionIds, archiveSessions);
       return;
     }
+    if (request.type === "unarchiveSessions") {
+      await this.updateKnownSessions(request.sessionIds, unarchiveSessions);
+      return;
+    }
+  }
+
+  /** Run a known-ids archive/unarchive batch: validate the session ids,
+   * update the metadata store in one write, then refresh. Unknown ids answer
+   * with an error and leave the store unchanged. */
+  private async updateKnownSessions(
+    sessionIds: readonly string[],
+    update: typeof archiveSessions,
+  ): Promise<void> {
+    const uniqueIds = [...new Set(sessionIds)];
+    const unknown = uniqueIds.find((sessionId) => !this.sessionsById.has(sessionId));
+    if (unknown !== undefined) {
+      this.postError(`Session not found: ${unknown}`);
+      return;
+    }
+    const result = update(this.deps.metadataPath, uniqueIds);
+    if (!result.ok) {
+      this.postError(result.message);
+      return;
+    }
+    await this.refresh();
   }
 
   /** Register a workspace folder in the metadata store, then show the list.
@@ -232,13 +246,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
-    const result = setSessionActive(this.deps.metadataPath, sessionId, true);
-    if (!result.ok) {
-      this.postError(result.message);
-      terminal.show();
-      return;
-    }
-    await this.refresh();
     terminal.show();
   }
 

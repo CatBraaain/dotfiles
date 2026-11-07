@@ -334,7 +334,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
                 : buttonBackground;
             return Array.from(
               row.querySelectorAll(
-                ".session-name, .session-timestamp, .copy, .lock, .archive:not(:disabled)",
+                ".session-name, .session-timestamp, .copy, .lock, .archive:not(:disabled), .unarchive",
               ),
             ).map((element) => {
               const style = getComputedStyle(element);
@@ -430,6 +430,15 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     );
     // The archived row stays visible in All mode; it disappears from the default view.
     expect(await page.locator(".session-row").count()).toBe(5);
+
+    // Archived rows carry an Unarchive overlay; clicking it is the only way back.
+    expect(await page.locator(".session-row.archived [data-unarchive]").count()).toBe(2);
+    await page.click(`[data-unarchive="${atlasArchivedId}"]`);
+    await page.waitForFunction(
+      (id) => document.querySelector(`.session-row:not(.archived) [data-session="${id}"]`) !== null,
+      atlasArchivedId,
+    );
+    expect(await page.locator(".session-row.archived").count()).toBe(1);
 
     // Modes are not persisted: a fresh client starts every workspace in Unarchived.
     await page.reload({ waitUntil: "networkidle" });

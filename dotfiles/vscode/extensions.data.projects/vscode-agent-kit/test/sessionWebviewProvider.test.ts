@@ -400,7 +400,7 @@ describe("SessionWebviewProvider", () => {
     expect(terminal.show).toHaveBeenCalledTimes(1);
   });
 
-  it("restores an archived session to unarchived when it is opened", async () => {
+  it("keeps an archived session archived when it is opened", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
@@ -425,10 +425,59 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
     const metadata = readMetadataStore(metadataPath);
-    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(true);
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(
       false,
     );
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+      true,
+    );
+    expect(terminal.show).toHaveBeenCalledTimes(1);
+  });
+
+  it("unarchives requested archived sessions and refreshes the list", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    expect(setSessionActive(metadataPath, activeSessionId, false).ok).toBe(true);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+      true,
+    );
+
+    await webview.receive({ type: "unarchiveSessions", sessionIds: [activeSessionId] });
+
+    const metadata = readMetadataStore(metadataPath);
+    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(true);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0]).toMatchObject({
+      sessionId: activeSessionId,
+      isArchived: false,
+    });
+  });
+
+  it("rejects an unarchive batch with an unknown session id without writing", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, "project"), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, metadataPath } = createProvider({ sessionDir });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    await webview.receive({
+      type: "unarchiveSessions",
+      sessionIds: [activeSessionId, unknownSessionId],
+    });
+
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      `Session not found: ${unknownSessionId}`,
+    );
+    expect(readMetadataStore(metadataPath).status).toBe("empty");
   });
 
   it("opens an unregistered cwd directly in Pi without workbench side effects", async () => {
@@ -494,8 +543,7 @@ describe("SessionWebviewProvider", () => {
       args: ["--session", filePath],
     });
     expect(terminal.show).toHaveBeenCalledTimes(2);
-    const metadata = readMetadataStore(metadataPath);
-    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].active).toBe(true);
+    expect(readMetadataStore(metadataPath).status).toBe("empty");
   });
 
   it("does not open a terminal when the selected session file disappeared", async () => {

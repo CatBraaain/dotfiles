@@ -90,6 +90,21 @@ describe("createDemoBridge", () => {
     expect(untouched?.isArchived).toBe(false);
   });
 
+  it("unarchives only the requested archived sessions", () => {
+    const { bridge, last } = setup();
+
+    bridge.postMessage({
+      type: "unarchiveSessions",
+      sessionIds: [projectArchivedId, projectCurrentId],
+    });
+
+    const state = last();
+    const unarchived = sessions(state).find((session) => session.sessionId === projectArchivedId);
+    expect(unarchived?.isArchived).toBe(false);
+    const alreadyOpen = sessions(state).find((session) => session.sessionId === projectCurrentId);
+    expect(alreadyOpen?.isArchived).toBe(false);
+  });
+
   it("toggles the lock and unlocks again", () => {
     const { bridge, last } = setup();
 

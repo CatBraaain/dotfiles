@@ -6,6 +6,7 @@ export type WebviewRequest =
   | { type: "unregisterWorkspace"; cwd: string }
   | { type: "openSession"; sessionId: string }
   | { type: "archiveSessions"; sessionIds: string[] }
+  | { type: "unarchiveSessions"; sessionIds: string[] }
   | { type: "setSessionLock"; sessionId: string; locked: boolean }
   | { type: "copySessionId"; sessionId: string };
 
@@ -59,12 +60,12 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
     return { type: value.type, sessionId: value.sessionId };
   }
   if (
-    value.type === "archiveSessions" &&
+    (value.type === "archiveSessions" || value.type === "unarchiveSessions") &&
     Array.isArray(value.sessionIds) &&
     value.sessionIds.length > 0 &&
     value.sessionIds.every(isSessionId)
   ) {
-    return { type: "archiveSessions", sessionIds: value.sessionIds };
+    return { type: value.type, sessionIds: value.sessionIds };
   }
   return undefined;
 }

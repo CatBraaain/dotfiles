@@ -20,7 +20,7 @@ describe("webviewHtml", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
     expect(html).toContain(".mode-toggle svg[hidden] { display: none; }");
-    expect(html).toContain(".archive {");
+    expect(html).toContain(".archive, .unarchive {");
     expect(html).toContain('.lock[aria-pressed="true"]');
     expect(html).toContain(".session-row.selected .session-button");
     expect(html).toContain("#status.error");

@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import type { Frame } from "playwright/test";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
 
 test.use({ trace: "on" });
@@ -585,6 +586,69 @@ test(
       true,
       "No model credentials or provider are configured in the isolated fixture. Synthetic JSONL detection is not evidence of a real Pi assistant response.",
     );
+  },
+);
+
+test(
+  "Archive ボタンでアーカイブし、Unarchive ボタンで未アーカイブに戻せる",
+  { annotation: { type: "spec", description: "E2E-13" } },
+  async ({ host }, testInfo) => {
+    const metadataPath = join(host.directory, "agent/session-metadata.json");
+    const entryOf = (id: string): { active?: boolean; sentinel?: string } => {
+      const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as {
+        sessions: Record<string, { active?: boolean; sentinel?: string }>;
+      };
+      return metadata.sessions[id];
+    };
+    const rowIn = (frame: Frame, id: string) =>
+      frame
+        .locator(".session-row")
+        .filter({ has: frame.locator(`[data-session="${id}"]`) })
+        .describe("Session row");
+    const aId = host.sessions.A.id;
+
+    await test.step("Archive the A row with its Archive button and view it in All mode", async () => {
+      const frame = await host.sessionFrame();
+      await rowIn(frame, aId)
+        .locator(`[data-archive="${aId}"]`)
+        .describe("A row Archive button")
+        .click({ steps: 15 });
+      await expect(rowIn(frame, aId)).toHaveCount(0);
+      expect(entryOf(aId)).toMatchObject({ active: false, sentinel: "preserved" });
+      await frame
+        .locator("#app header [data-mode-toggle]")
+        .describe("Shared All toggle")
+        .click({ steps: 15 });
+      const row = rowIn(frame, aId);
+      await expect(row).toHaveClass(/archived/);
+      await expect(row.locator(`[data-unarchive="${aId}"]`)).toBeVisible();
+      await testInfo.attach("Archive 後（アーカイブ済み行）", {
+        body: await host.page.screenshot({ path: testInfo.outputPath("archived.png") }),
+        contentType: "image/png",
+      });
+    });
+    await test.step("Unarchive the row and see it back in the default list", async () => {
+      const frame = await host.sessionFrame();
+      await rowIn(frame, aId)
+        .locator(`[data-unarchive="${aId}"]`)
+        .describe("Archived A row Unarchive button")
+        .click({ steps: 15 });
+      const row = rowIn(frame, aId);
+      await expect(row).not.toHaveClass(/archived/);
+      await expect(row.locator(`[data-archive="${aId}"]`)).toBeVisible();
+      expect(entryOf(aId)).toMatchObject({ active: true, sentinel: "preserved" });
+      await testInfo.attach("Unarchive 後（未アーカイブ）", {
+        body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
+        contentType: "image/png",
+      });
+      await frame
+        .locator("#app header [data-mode-toggle]")
+        .describe("Shared Unarchived toggle")
+        .click({ steps: 15 });
+      await expect(
+        frame.locator(`[data-session="${aId}"]`).describe("A session back in the default view"),
+      ).toBeVisible();
+    });
   },
 );
 

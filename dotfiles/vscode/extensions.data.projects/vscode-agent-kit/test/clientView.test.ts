@@ -5,6 +5,7 @@ import {
   nextSelectionFromClick,
   selectAllIds,
   sessionListView,
+  unarchiveTargetIds,
   visibleSessions,
   type ClientSession,
   type ClientState,
@@ -343,7 +344,7 @@ describe("sessionListView", () => {
     }
   });
 
-  it("orders each row as button, timestamp, copy, lock, and the archive overlay last", () => {
+  it("orders each row as button, timestamp, copy, lock, and the archive or unarchive overlay last", () => {
     const rowClasses = (row: ElementDescriptor): (string | undefined)[] =>
       (row.children ?? [])
         .filter((child): child is ElementDescriptor => typeof child !== "string")
@@ -357,7 +358,13 @@ describe("sessionListView", () => {
       "lock",
       "archive",
     ]);
-    expect(rowClasses(rows[1])).toEqual(["session-button", "session-timestamp", "copy", "lock"]);
+    expect(rowClasses(rows[1])).toEqual([
+      "session-button",
+      "session-timestamp",
+      "copy",
+      "lock",
+      "unarchive",
+    ]);
   });
 
   it("renders the Copy overlay on every row with the Copy session ID hint", () => {
@@ -426,6 +433,18 @@ describe("sessionListView", () => {
     ]);
   });
 
+  it("renders the Unarchive overlay on archived rows instead of Archive", () => {
+    const elements = elementsIn(viewFor("all"));
+    const unarchives = byClass(elements, "unarchive");
+
+    expect(unarchives.map((unarchive) => unarchive.attrs?.["data-unarchive"])).toEqual([
+      atlasArchived.sessionId,
+    ]);
+    expect(
+      unarchives.map((unarchive) => [unarchive.attrs?.disabled, unarchive.attrs?.title]),
+    ).toEqual([[undefined, "Unarchive"]]);
+  });
+
   it("marks selected and archived rows with row classes", () => {
     const rows = byClass(
       elementsIn(viewFor("all", groups, new Set(), new Set([betaPlain.sessionId]))),
@@ -448,6 +467,7 @@ describe("sessionListView", () => {
         "data-toggle-group",
         "data-session",
         "data-archive",
+        "data-unarchive",
         "data-lock",
         "data-copy",
       ].some((name) => element.attrs?.[name] !== undefined),
@@ -621,6 +641,46 @@ describe("archiveTargetIds", () => {
     const selection = new Set([betaLocked.sessionId, atlasArchived.sessionId]);
 
     expect(archiveTargetIds(betaLocked.sessionId, selection, visible)).toEqual([]);
+  });
+});
+
+describe("unarchiveTargetIds", () => {
+  it("excludes selected rows in collapsed groups from a visible bulk action", () => {
+    const visible = visibleSessions({ groups }, "all", new Set(["/workspace/atlas"]));
+    const selection = new Set([
+      atlasUnarchived.sessionId,
+      atlasArchived.sessionId,
+      betaLocked.sessionId,
+      betaPlain.sessionId,
+    ]);
+
+    expect(unarchiveTargetIds(betaPlain.sessionId, selection, visible)).toEqual([]);
+  });
+
+  it("unarchives just the clicked row when it is not selected", () => {
+    expect(
+      unarchiveTargetIds(
+        atlasArchived.sessionId,
+        new Set(),
+        visibleSessions({ groups } as ClientState, "all"),
+      ),
+    ).toEqual([atlasArchived.sessionId]);
+  });
+
+  it("unarchives the visible selected archived rows when the clicked row is selected", () => {
+    const visible = visibleSessions({ groups } as ClientState, "all");
+    const selection = new Set([atlasArchived.sessionId, betaPlain.sessionId]);
+
+    expect(unarchiveTargetIds(atlasArchived.sessionId, selection, visible)).toEqual([
+      atlasArchived.sessionId,
+    ]);
+  });
+
+  it("never unarchives rows hidden by the current display mode", () => {
+    const visible = visibleSessions({ groups } as ClientState, "unarchived");
+    const selection = new Set([atlasArchived.sessionId]);
+
+    expect(unarchiveTargetIds(atlasArchived.sessionId, selection, visible)).toEqual([]);
   });
 });
 

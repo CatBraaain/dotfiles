@@ -52,12 +52,12 @@ export const webviewStyles = `
     .session-status[data-archived="true"] { border-color: var(--vscode-descriptionForeground); background: transparent; }
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
     .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 84px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
-    .copy, .lock, .archive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .copy svg, .lock svg, .archive svg, .group-chevron svg, .group-new-session svg, .group-unregister svg { width: 12px; height: 12px; }
+    .copy, .lock, .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
+    .copy svg, .lock svg, .archive svg, .unarchive svg, .group-chevron svg, .group-new-session svg, .group-unregister svg { width: 12px; height: 12px; }
     .copy { right: 52px; }
     .lock { right: 28px; }
-    .archive { right: 4px; }
-    .copy:hover, .lock:hover, .archive:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .archive, .unarchive { right: 4px; }
+    .copy:hover, .lock:hover, .archive:hover, .unarchive:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
     .copy.copied { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
     .lock[aria-pressed="true"] { color: var(--vscode-foreground); }
     .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
