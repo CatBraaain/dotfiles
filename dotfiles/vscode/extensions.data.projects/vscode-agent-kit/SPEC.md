@@ -267,6 +267,8 @@ Pi は tmux 内で会話ごとに保持し、表示用 Terminal の開閉と稼�
 
 拡張の専用 tmux サーバーでは、Pi が修飾キー付きキー（Shift+Enter など）を区別できるよう `extended-keys` を on にし、その報告形式を `csi-u` に設定する。形式の設定は `extended-keys-format` オプションを持つ tmux でのみ行い、持たない tmux では Pi を通常どおり起動する。
 
+拡張の専用 tmux サーバーでは、Pi TUI が Ctrl+クリック・ドラッグをマウス操作として受け取れるよう、root テーブルの Ctrl 付きマウスバインド（tmux 3.8 が既定で持つ Ctrl+ドラッグでの floating pane 作成など）を解除する。バインドが残っていると tmux は該当イベントを pane へ転送せず消費する。解除は対象キーを持たない tmux でもそのまま行い、Pi を通常どおり起動する。
+
 VS Code の Terminal は修飾キー付き Enter を報告しないため、tmux を介した Pi では Shift+Enter が通常の Enter と区別できない。そこでこの拡張機能は、Terminal へフォーカスがあるときの `Shift+Enter` を `sendSequence` で CSI-u 形式（`ESC [ 13 ; 2 u`）の送信に束ねる。tmux はこのシーケンスを `S-Enter` キーイベントとして受け、専用サーバーではそれを同じ CSI-u シーケンスで pane へ転送する bind を設定する。bind の設定は hex 形式の `send-keys` や `S-Enter` キー名を持たない tmux では行わず、Pi を通常どおり起動する。tmux を介さない環境でも、Pi TUI は CSI-u シーケンスを Shift+Enter として認識する。
 
 | 条件・操作 | 動作 |

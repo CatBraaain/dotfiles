@@ -48,7 +48,24 @@ describe("TmuxRuntimeStore", () => {
     expect(starts[0][1]).toContain("/sessions/a; file.jsonl");
     expect(starts[0][1]).toContain("pi");
     expect(starts[0][1].join(" ")).toContain("set-option -s extended-keys on");
-    expect(starts[0][1].slice(-2)).toEqual(["prefix", "None"]);
+    expect(starts[0][1].join(" ")).toContain("prefix None");
+  });
+
+  it("unbinds the tmux 3.8 root Ctrl mouse bindings so pi receives Ctrl+drag", async () => {
+    const { store, execute } = setup();
+    await store.ensure({ sessionId: "A", cwd: "/project", args: [] });
+
+    const starts = execute.mock.calls.filter(([, args]) => args[4] === "new-session");
+    expect(starts).toHaveLength(1);
+    const startArgs = starts[0][1];
+    const unbindCommands = startArgs.flatMap((argument, index) =>
+      argument === "unbind-key" ? [startArgs.slice(index, index + 4)] : [],
+    );
+    expect(unbindCommands).toEqual([
+      ["unbind-key", "-T", "root", "MouseDown1Control7"],
+      ["unbind-key", "-T", "root", "MouseDown1Control8"],
+      ["unbind-key", "-T", "root", "MouseDown1Control9"],
+    ]);
   });
 
   it("requests the csi-u extended-keys format that pi reads best", async () => {
@@ -144,7 +161,7 @@ describe("TmuxRuntimeStore", () => {
     expect(args[args.indexOf("-c") + 1]).toBe(`/project/${escaped}`);
     const piIndex = args.indexOf("pi");
     expect(args.slice(piIndex + 1, piIndex + 4)).toEqual(["--session", escaped, ";"]);
-    expect(args.filter((argument) => argument === ";")).toHaveLength(3);
+    expect(args.filter((argument) => argument === ";")).toHaveLength(6);
   });
 
   it.each(["PATH", "HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"])(
@@ -158,7 +175,7 @@ describe("TmuxRuntimeStore", () => {
         const starts = execute.mock.calls.filter(([, args]) => args[4] === "new-session");
         expect(starts).toHaveLength(1);
         expect(starts[0][1]).toContain(`${key}=/fixture\\\\;`);
-        expect(starts[0][1].filter((argument) => argument === ";")).toHaveLength(3);
+        expect(starts[0][1].filter((argument) => argument === ";")).toHaveLength(6);
       } finally {
         vi.unstubAllEnvs();
       }

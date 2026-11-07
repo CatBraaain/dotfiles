@@ -59,6 +59,13 @@ export class TmuxRuntimeStore {
           ["set-option", "-t", runtime.target, "status", "off"],
           ["set-option", "-s", "extended-keys", "on"],
           ["set-option", "-t", runtime.target, "prefix", "None"],
+          // tmux 3.8 turns the mouse option on by default and adds root-table
+          // Ctrl bindings for floating panes. Those bindings swallow Ctrl+drag
+          // before it reaches the pane, so unbind them to let pi track the
+          // mouse. unbind-key is idempotent on tmux versions without them.
+          ["unbind-key", "-T", "root", "MouseDown1Control7"],
+          ["unbind-key", "-T", "root", "MouseDown1Control8"],
+          ["unbind-key", "-T", "root", "MouseDown1Control9"],
         );
       } catch (error) {
         if (!/duplicate session/.test(errorMessage(error)) || !(await this.isAlive(runtime)))
