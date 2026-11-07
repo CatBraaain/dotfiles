@@ -49,7 +49,7 @@ session-state は、自セッションの実行フェーズを自セッション
 
 ```json
 {
-  "workspaces": {
+  "active-workspaces": {
     "<workspace path>": {
       "active-sessions": {
         "<session id>": { "lock": false, "state": "running" }
@@ -62,22 +62,26 @@ session-state は、自セッションの実行フェーズを自セッション
 | 項目 | 契約 |
 | --- | --- |
 | ストアのパス | pi の agent directory（環境変数 `PI_CODING_AGENT_DIR`。未設定時は `~/.pi/agent`）配下の `session-state.json` |
-| workspace のキー | 自セッションの作業ディレクトリの絶対パス |
+| workspace のキー | workspace の絶対パス。この拡張は自セッションの作業ディレクトリを使う |
+| workspace の登録 | `session-state.json` の `active-workspaces` が登録の唯一の正本。key の存在が、vscode-pi-sessions の既定の一覧に表示する workspace の登録を表す |
+| 登録の操作 | vscode-pi-sessions の `New Workspace` は workspace エントリを作成し、`Unregister` はエントリを削除する |
+| 空の workspace | `active-sessions` が空でも、workspace エントリが存在すれば登録として有効 |
 | `active-sessions` | workspace エントリ直下の map。key はセッション ID。載っているセッションが既定の一覧に載るセッションで、載っていないセッションはアーカイブ済み |
 | entry | `lock` と `state` を持ち、未知の属性を保持する |
 | `lock` | `true` のときアーカイブから保護される。省略時は `false`。この拡張は `lock` を書き換えず、`lock: true` の entry の削除を拒否する |
 | `state` | `running`・`waiting-approval`・`waiting-user` の3値。省略時はフェーズ情報なし |
 | 更新の方式 | ファイルを読み、自 workspace エントリの自セッション entry のみを変更して書き戻す |
-| entry の作成 | 自 workspace のエントリか `active-sessions` が無い、またはオブジェクトでないときは、作成・置き換える |
+| entry の作成 | この拡張は、自セッション entry の作成時に、自 workspace のエントリか `active-sessions` が無い、またはオブジェクトでないときは、作成・置き換える。pi を起動した cwd は、この作成により自動登録される |
+| 登録解除後の再登録 | 稼働中のセッションがある cwd を vscode-pi-sessions で登録解除しても、次のプロンプト送信でこの拡張が workspace エントリを作成し直し、再登録する |
 | 新規作成 | ファイルが無いときは空のストアとして作成する |
 | 保持 | 自セッション entry の自分が更新しないフィールド、自 workspace エントリの未知の属性、他の workspace エントリ、未知の root キーを保持する |
-| 不正なストア | JSON として読めない、ルートまたは `workspaces` がオブジェクトでない、workspace エントリの `active-sessions` が配列（旧形式）の、いずれかのときは、書き換えずに失敗として扱う |
+| 不正なストア | JSON として読めない、ルートまたは `active-workspaces` がオブジェクトでない、ルートに旧 `workspaces` オブジェクトがある（`active-workspaces` と併存する場合を含む）、workspace エントリの `active-sessions` が配列（旧形式）の、いずれかのときは、書き換えずに失敗として扱う |
 | 原子性 | 一時ファイルへ書き出してから rename で置き換える |
 | 逐次実行 | 複数の更新は直列に実行する |
 
 ## 検証要件
 
-- ストアの解釈と更新は純粋関数として切り出し、unit テスト（`bun test`）で検証する。対象は、store の parse（旧形式の拒否を含む）、`active-sessions` への entry 追加・削除、ロック判定、workspace エントリと `active-sessions` の作成、未知フィールドの保持、追加済み・ロック中・削除済みの判定、`state` の読み取り・設定（同一 `state` の書き込み skip を含む）・除去、serialize とする。
+- ストアの解釈と更新は純粋関数として切り出し、unit テスト（`bun test`）で検証する。対象は、store の parse（旧 `workspaces` オブジェクトと旧 `active-sessions` 配列の拒否を含む）、`active-sessions` への entry 追加・削除、ロック判定、workspace エントリと `active-sessions` の作成、未知フィールドの保持、追加済み・ロック中・削除済みの判定、`state` の読み取り・設定（同一 `state` の書き込み skip を含む）・除去、serialize とする。
 - `active-sessions` から外れたセッションを再開してメッセージを送り、自セッションの entry が `active-sessions` に戻り、vscode-pi-sessions の一覧が次の refresh で既定ビューに戻ることを確認する。
 - `/archive` では自セッションの entry が `active-sessions` から外れ、一覧から消えることを確認する。
 - `/unarchive` では自セッションの entry が `active-sessions` に戻ることを確認する。

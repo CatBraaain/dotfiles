@@ -22,7 +22,7 @@ export interface WorkspaceEntry {
 }
 
 export interface SessionStateStore {
-  workspaces: Record<string, WorkspaceEntry>;
+  "active-workspaces": Record<string, WorkspaceEntry>;
   [key: string]: unknown;
 }
 
@@ -148,8 +148,9 @@ export function parseStore(raw: string): StoreParseResult {
     return { valid: false };
   }
   if (!isRecord(parsed)) return { valid: false };
-  if (!isRecord(parsed.workspaces)) return { valid: false };
-  if (hasLegacySessionsList(parsed.workspaces)) return { valid: false };
+  if (isRecord(parsed.workspaces)) return { valid: false };
+  if (!isRecord(parsed["active-workspaces"])) return { valid: false };
+  if (hasLegacySessionsList(parsed["active-workspaces"])) return { valid: false };
   return { valid: true, store: parsed as SessionStateStore };
 }
 
@@ -263,20 +264,20 @@ function storeWithOwnWorkspaceEntry(
   workspacePath: string,
 ): { store: SessionStateStore; entry: WorkspaceEntry } {
   const base = clonedStore(store);
-  const entry = base.workspaces[workspacePath];
+  const entry = base["active-workspaces"][workspacePath];
   if (isRecord(entry)) {
     return { store: base, entry };
   }
   const freshEntry: WorkspaceEntry = {};
-  const workspaces = { ...base.workspaces, [workspacePath]: freshEntry };
-  return { store: { ...base, workspaces }, entry: freshEntry };
+  const activeWorkspaces = { ...base["active-workspaces"], [workspacePath]: freshEntry };
+  return { store: { ...base, "active-workspaces": activeWorkspaces }, entry: freshEntry };
 }
 
 function ownWorkspaceEntry(
   store: SessionStateStore | undefined,
   workspacePath: string,
 ): WorkspaceEntry | undefined {
-  const entry = store?.workspaces[workspacePath];
+  const entry = store?.["active-workspaces"][workspacePath];
   return isRecord(entry) ? entry : undefined;
 }
 
@@ -289,7 +290,7 @@ function ownActiveSessionsMap(entry: WorkspaceEntry): Record<string, SessionEntr
 }
 
 function clonedStore(store: SessionStateStore | undefined): SessionStateStore {
-  return store === undefined ? { workspaces: {} } : structuredClone(store);
+  return store === undefined ? { "active-workspaces": {} } : structuredClone(store);
 }
 
 function isSessionState(value: unknown): value is SessionState {
