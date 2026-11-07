@@ -201,29 +201,65 @@ describe("SessionLauncher launch cwd", () => {
     expect(runtimes.live.size).toBe(1);
   });
 
-  it("associates overlapping new sessions by their own Pi IDs and shares the display", async () => {
-    await Promise.all([launcher.start(root), launcher.start(root)]);
+  it("reuses the pending launch in the same cwd instead of starting another Pi", async () => {
+    await launcher.start(root);
+    const firstId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
+
+    await launcher.start(root);
+
+    const secondId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
+    expect(secondId).toBe(firstId);
+    expect(runtimes.live.size).toBe(1);
+    expect(mocks.createTerminal).toHaveBeenCalledTimes(1);
+
+    const groupDir = join(root, "sessions", encodeCwdDirName(root));
+    await writeJsonl(groupDir, `new_${firstId}.jsonl`, [header({ id: firstId, cwd: root })]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(firstId));
+
+    await launcher.start(root);
+
+    const thirdId = runtimes.mocks.ensure.mock.calls[2][0].sessionId;
+    expect(thirdId).not.toBe(firstId);
+  });
+
+  it("starts a new Pi after the pending Pi exits", async () => {
+    await launcher.start(root);
+    const firstId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
+    runtimes.live.delete(firstId);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await launcher.start(root);
+
+    const nextId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
+    expect(nextId).not.toBe(firstId);
+    expect(runtimes.live.size).toBe(1);
+  });
+
+  it("associates overlapping new sessions by their own Pi IDs", async () => {
+    const otherCwd = join(root, "other");
+    await mkdir(otherCwd);
+    await Promise.all([launcher.start(root), launcher.start(otherCwd)]);
     const [firstId, secondId] = runtimes.mocks.ensure.mock.calls.map(
       ([request]) => request.sessionId,
     );
     expect(firstId).not.toBe(secondId);
     const groupDir = join(root, "sessions", encodeCwdDirName(root));
-    await writeJsonl(groupDir, `new_${secondId}.jsonl`, [header({ id: secondId, cwd: root })]);
+    const otherDir = join(root, "sessions", encodeCwdDirName(otherCwd));
+    await writeJsonl(groupDir, `new_${firstId}.jsonl`, [header({ id: firstId, cwd: root })]);
+    await writeJsonl(otherDir, `new_${secondId}.jsonl`, [header({ id: secondId, cwd: otherCwd })]);
     await writeJsonl(groupDir, "external_other.jsonl", [header({ id: "other", cwd: root })]);
 
     await vi.advanceTimersByTimeAsync(2_000);
-    await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledTimes(2));
+    expect(onSessionDetected).toHaveBeenCalledWith(firstId);
     expect(onSessionDetected).toHaveBeenCalledWith(secondId);
 
-    await writeJsonl(groupDir, `new_${firstId}.jsonl`, [header({ id: firstId, cwd: root })]);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledTimes(2));
-    expect(onSessionDetected).toHaveBeenLastCalledWith(firstId);
     await registry.run(() =>
       registry.open({ sessionId: firstId, cwd: root, args: ["--session", "/saved.jsonl"] }),
     );
     expect(runtimes.live.size).toBe(2);
-    expect(mocks.createTerminal).toHaveBeenCalledTimes(1);
   });
 
   it("does not associate a launched ID with a mismatched header or cwd", async () => {
