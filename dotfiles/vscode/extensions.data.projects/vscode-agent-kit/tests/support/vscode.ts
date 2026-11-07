@@ -145,7 +145,7 @@ export class VSCodeFixture {
 
   async sessionFrame(): Promise<Frame> {
     const tab = this.page
-      .getByRole("tab", { name: "Agent Sessions", exact: true })
+      .getByRole("tab", { name: "Pi Sessions", exact: true })
       .describe("Sessions sidebar");
     if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
     await expect

@@ -1,0 +1,6 @@
+<svg width="24" height="24" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Official pi.dev logo geometry, rendered monochrome for the VS Code activity bar -->
+  <path fill="#ffffff" d="M165.29 165.29H517.36V400H400V282.65H165.29Z"/>
+  <path fill="#ffffff" d="M165.29 282.65H282.65V400H400V517.36H282.65V634.72H165.29Z"/>
+  <path fill="#ffffff" d="M517.36 400H634.72V634.72H517.36Z"/>
+</svg>

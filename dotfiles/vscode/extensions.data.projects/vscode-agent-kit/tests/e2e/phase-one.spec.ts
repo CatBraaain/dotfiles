@@ -138,7 +138,7 @@ test(
           const frame = await host.sessionFrame();
           await expect(
             host.page
-              .getByRole("tab", { name: "Agent Sessions", exact: true })
+              .getByRole("tab", { name: "Pi Sessions", exact: true })
               .describe("Active Sessions sidebar"),
           ).toHaveAttribute("aria-selected", "true");
           const selectedRow = frame

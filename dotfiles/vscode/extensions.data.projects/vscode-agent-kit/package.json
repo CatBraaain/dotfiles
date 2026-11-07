@@ -39,8 +39,8 @@
       "activitybar": [
         {
           "id": "piSessionViews",
-          "title": "Agent Sessions",
-          "icon": "media/agent-sessions.svg"
+          "title": "Pi Sessions",
+          "icon": "media/pi-sessions.svg"
         }
       ]
     },

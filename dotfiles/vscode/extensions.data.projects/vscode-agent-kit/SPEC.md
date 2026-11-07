@@ -113,7 +113,7 @@ Pi のセッション関連ファイルのうち、拡張機能が書き換え�
 
 ## サイドバービュー
 
-Activity Bar に view container `Agent Sessions` を追加し、その中に拡張機能が管理する Webview view を表示する。VS Code 標準の TreeView は使わない。Webview は VS Code のテーマ色を使い、サイドバー幅に合わせて再配置される。セッションのファイル内容とメタデータストアの値は Webview に渡す表示用データだけに変換し、Webview からファイルシステムを直接操作しない。
+Activity Bar に view container `Pi Sessions` を追加し、その中に拡張機能が管理する Webview view を表示する。VS Code 標準の TreeView は使わない。Webview は VS Code のテーマ色を使い、サイドバー幅に合わせて再配置される。セッションのファイル内容とメタデータストアの値は Webview に渡す表示用データだけに変換し、Webview からファイルシステムを直接操作しない。
 
 ### Webview の表示
 
