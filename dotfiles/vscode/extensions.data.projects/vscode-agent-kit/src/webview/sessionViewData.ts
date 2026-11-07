@@ -28,7 +28,7 @@ export function sessionViewGroups(
       sessions: group.sessions.map((session) => ({
         sessionId: session.sessionId,
         displayName: session.displayName,
-        mtimeMs: session.mtimeMs,
+        updatedAtMs: session.updatedAtMs,
         isArchived: view.archivedIds.has(session.sessionId),
         isLocked: view.lockedIds.has(session.sessionId),
         state: view.phases.get(session.sessionId),

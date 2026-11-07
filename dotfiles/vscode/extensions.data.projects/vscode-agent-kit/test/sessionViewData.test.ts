@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../src/sessionStore";
 import { sessionViewGroups } from "../src/webview/sessionViewData";
 
-function session(sessionId: string, cwd: string, mtimeMs: number): SessionSummary {
+function session(sessionId: string, cwd: string, updatedAtMs: number | null): SessionSummary {
   return {
     sessionId,
     filePath: `/sessions/${sessionId}.jsonl`,
     cwd,
     displayName: `Session ${sessionId}`,
-    mtimeMs,
+    updatedAtMs,
   };
 }
 
@@ -43,6 +43,23 @@ describe("sessionViewGroups", () => {
     expect(
       groups[1].sessions.map((item) => [item.sessionId, item.isArchived, item.isLocked]),
     ).toEqual([["newest", false, false]]);
+  });
+
+  it("carries the same update times used for sorting, including unknown dates", () => {
+    const groups = sessionViewGroups(
+      [
+        session("undated", "/workspace/alpha", null),
+        session("older", "/workspace/alpha", 100),
+        session("newer", "/workspace/alpha", 200),
+      ],
+      view(),
+    );
+
+    expect(groups[0].sessions.map((item) => [item.sessionId, item.updatedAtMs])).toEqual([
+      ["newer", 200],
+      ["older", 100],
+      ["undated", null],
+    ]);
   });
 
   it("treats sessions without metadata as unarchived and unlocked", () => {

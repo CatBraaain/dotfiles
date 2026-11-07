@@ -10,7 +10,6 @@ import { encodeCwdDirName } from "./paths";
  * - Only *.jsonl files directly inside a cwd group directory are listed
  *   (no recursion, which excludes <group>/subagents/**).
  * - Session id and cwd come from each file's header line, not the directory name.
- * - Updated time is the file mtime.
  * - With `options.cwds`, only the cwd group directories of these workspace
  *   cwds (encoded with encodeCwdDirName) are read; unregistered groups are
  *   not scanned. Without it, every cwd group directory is scanned.
@@ -27,7 +26,7 @@ export interface SessionSummary {
   filePath: string;
   cwd: string;
   displayName: string;
-  mtimeMs: number;
+  updatedAtMs: number | null;
 }
 
 /** Whether a scanned session file still exists and is a regular file. */
@@ -130,7 +129,7 @@ export async function listSessions(
       filePath: candidates[i].filePath,
       cwd: info.header.cwd,
       displayName: info.displayName,
-      mtimeMs: candidates[i].mtimeMs,
+      updatedAtMs: info.updatedAtMs,
     });
   }
   return summaries;

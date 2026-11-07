@@ -12,28 +12,28 @@ import {
 const atlasUnarchived: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000001",
   displayName: "Atlas current",
-  mtimeMs: new Date(1970, 0, 1, 0, 0, 4).getTime(),
+  updatedAtMs: new Date(1970, 0, 1, 0, 0, 4).getTime(),
   isArchived: false,
   isLocked: false,
 };
 const atlasArchived: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000002",
   displayName: "Atlas archived",
-  mtimeMs: new Date(1970, 0, 1, 0, 0, 3).getTime(),
+  updatedAtMs: new Date(1970, 0, 1, 0, 0, 3).getTime(),
   isArchived: true,
   isLocked: false,
 };
 const betaLocked: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000003",
   displayName: "Beta locked",
-  mtimeMs: new Date(1970, 0, 1, 0, 0, 2).getTime(),
+  updatedAtMs: new Date(1970, 0, 1, 0, 0, 2).getTime(),
   isArchived: false,
   isLocked: true,
 };
 const betaPlain: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000004",
   displayName: "Beta plain",
-  mtimeMs: new Date(1970, 0, 1, 0, 0, 1).getTime(),
+  updatedAtMs: new Date(1970, 0, 1, 0, 0, 1).getTime(),
   isArchived: false,
   isLocked: false,
 };
@@ -94,6 +94,10 @@ function byClass(elements: ElementDescriptor[], className: string): ElementDescr
 }
 
 describe("formatSessionTimestamp", () => {
+  it("leaves unknown timestamps blank", () => {
+    expect(formatSessionTimestamp(null)).toBe("");
+  });
+
   it.each([
     {
       name: "zero-pads hours and minutes on the same local day",
@@ -320,6 +324,20 @@ describe("sessionListView", () => {
       expect(buttons[index].attrs?.title).toContain(session.sessionId);
       expect(timestamps[index]).toBe("01/01");
     }
+  });
+
+  it("keeps an unknown-date session visible with a blank timestamp", () => {
+    const view = viewFor("all", [
+      {
+        cwd: "/workspace/atlas",
+        label: "atlas",
+        sessions: [{ ...atlasUnarchived, updatedAtMs: null }],
+      },
+    ]);
+    const elements = elementsIn(view);
+
+    expect(byClass(elements, "session-name").map(text)).toEqual(["Atlas current"]);
+    expect(byClass(elements, "session-timestamp").map(text)).toEqual([""]);
   });
 
   it("shows archive and lock state in decorative dots without changing row names", () => {

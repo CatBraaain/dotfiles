@@ -16,7 +16,7 @@ export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
 export interface WebviewSession {
   sessionId: string;
   displayName: string;
-  mtimeMs: number;
+  updatedAtMs: number | null;
   isArchived: boolean;
   isLocked: boolean;
   /** Live execution phase; undefined when the phase is unknown. */

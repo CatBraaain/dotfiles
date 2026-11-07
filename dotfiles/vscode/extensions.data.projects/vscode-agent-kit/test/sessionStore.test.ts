@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chmodSync } from "node:fs";
-import { readFile, utimes } from "node:fs/promises";
+import { appendFile, readFile, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { listSessions, sessionFileExists } from "../src/sessionStore";
+import { groupSessions } from "../src/grouping";
 import { cleanup, header, messageEntry, sessionInfoEntry, tempDir, writeJsonl } from "./fixtures";
 
 let root: string;
@@ -97,14 +98,100 @@ describe("listSessions", () => {
     expect(sessions.map((s) => s.sessionId)).toEqual(["good"]);
   });
 
-  it("uses the file mtime as the updated time", async () => {
-    const filePath = await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
-      header({ id: "id1", cwd: "/home/a" }),
+  it("keeps update times and ordering when only mtime changes", async () => {
+    const olderTimestamp = "2024-12-04T14:00:00.000Z";
+    const newerTimestamp = "2024-12-05T14:00:00.000Z";
+    const olderPath = await writeJsonl(groupDir("--home-a--"), "older.jsonl", [
+      header({ id: "older", cwd: "/home/a" }),
+      messageEntry("user", "older", { timestamp: olderTimestamp }),
     ]);
-    const mtime = new Date(1_700_000_000_000);
-    await utimes(filePath, mtime, mtime);
-    const sessions = await listSessions(root);
-    expect(sessions[0].mtimeMs).toBe(1_700_000_000_000);
+    const newerPath = await writeJsonl(groupDir("--home-a--"), "newer.jsonl", [
+      header({ id: "newer", cwd: "/home/a" }),
+      messageEntry("assistant", [], { timestamp: newerTimestamp }),
+    ]);
+    await utimes(olderPath, 1_700_000_100, 1_700_000_100);
+    await utimes(newerPath, 1_700_000_000, 1_700_000_000);
+    const expected = [
+      ["newer", Date.parse(newerTimestamp)],
+      ["older", Date.parse(olderTimestamp)],
+    ];
+    const before = groupSessions(await listSessions(root))[0].sessions;
+    expect(before.map((session) => [session.sessionId, session.updatedAtMs])).toEqual(expected);
+
+    await utimes(olderPath, 1_800_000_000, 1_800_000_000);
+
+    const after = groupSessions(await listSessions(root))[0].sessions;
+    expect(after.map((session) => [session.sessionId, session.updatedAtMs])).toEqual(expected);
+  });
+
+  it.each([
+    "thinking_level_change",
+    "model_change",
+    "session_info",
+    "custom",
+    "custom_message",
+    "branch_summary",
+  ])("keeps update times and ordering after appending %s metadata", async (type) => {
+    const timestamp = "2024-12-04T14:00:00.000Z";
+    const filePath = await writeJsonl(groupDir("--home-a--"), "older.jsonl", [
+      header({ id: "older", cwd: "/home/a" }),
+      messageEntry("user", "older", { timestamp }),
+    ]);
+    await writeJsonl(groupDir("--home-a--"), "newer.jsonl", [
+      header({ id: "newer", cwd: "/home/a", timestamp: "2024-12-05T14:00:00.000Z" }),
+    ]);
+    const before = groupSessions(await listSessions(root))[0].sessions.map((session) => [
+      session.sessionId,
+      session.updatedAtMs,
+    ]);
+    expect(before).toEqual([
+      ["newer", Date.parse("2024-12-05T14:00:00.000Z")],
+      ["older", Date.parse(timestamp)],
+    ]);
+
+    await appendFile(
+      filePath,
+      JSON.stringify({ type, name: "Renamed", timestamp: "2030-01-01T00:00:00.000Z" }) + "\n",
+    );
+
+    const after = groupSessions(await listSessions(root))[0].sessions.map((session) => [
+      session.sessionId,
+      session.updatedAtMs,
+    ]);
+    expect(after).toEqual(before);
+  });
+
+  it.each(["message", "compaction"])(
+    "refreshes the cached timestamp after appending %s activity",
+    async (type) => {
+      const filePath = await writeJsonl(groupDir("--home-a--"), "cached.jsonl", [
+        header({ id: "cached", cwd: "/home/a" }),
+      ]);
+      expect((await listSessions(root))[0].updatedAtMs).toBe(
+        Date.parse("2024-12-03T14:00:00.000Z"),
+      );
+      const { atime, mtime } = await stat(filePath);
+      const timestamp = "2024-12-05T14:00:00.000Z";
+
+      await appendFile(
+        filePath,
+        JSON.stringify(messageEntry("toolResult", [], { type, timestamp })) + "\n",
+      );
+      await utimes(filePath, atime, mtime);
+
+      expect((await listSessions(root))[0].updatedAtMs).toBe(Date.parse(timestamp));
+    },
+  );
+
+  it("keeps sessions with unknown timestamps in the list", async () => {
+    await writeJsonl(groupDir("--home-a--"), "unknown.jsonl", [
+      header({ id: "unknown", cwd: "/home/a", timestamp: undefined }),
+      messageEntry("user", "No valid date", { timestamp: "invalid" }),
+    ]);
+
+    expect(await listSessions(root)).toMatchObject([
+      { sessionId: "unknown", displayName: "No valid date", updatedAtMs: null },
+    ]);
   });
 
   it("resolves the display name through the session_info rule", async () => {

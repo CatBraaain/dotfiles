@@ -26,7 +26,7 @@ export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
 export interface ClientSession {
   sessionId: string;
   displayName: string;
-  mtimeMs: number;
+  updatedAtMs: number | null;
   isArchived: boolean;
   isLocked: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
@@ -217,7 +217,7 @@ function sessionDescriptor(
       {
         tag: "span",
         attrs: { class: "session-timestamp" },
-        children: [formatSessionTimestamp(session.mtimeMs)],
+        children: [formatSessionTimestamp(session.updatedAtMs)],
       },
       copyDescriptor(session.sessionId, copiedIds.has(session.sessionId)),
       lockDescriptor(session.sessionId, session.isLocked),
@@ -236,8 +236,9 @@ function phaseLabel(state: SessionPhase | undefined): string | undefined {
   return undefined;
 }
 
-export function formatSessionTimestamp(mtimeMs: number, now = new Date()): string {
-  const updatedAt = new Date(mtimeMs);
+export function formatSessionTimestamp(updatedAtMs: number | null, now = new Date()): string {
+  if (updatedAtMs === null) return "";
+  const updatedAt = new Date(updatedAtMs);
   const isToday =
     updatedAt.getFullYear() === now.getFullYear() &&
     updatedAt.getMonth() === now.getMonth() &&

@@ -34,6 +34,7 @@ export interface SessionHeaderInfo {
 export interface SessionSummaryInfo {
   header: SessionHeaderInfo;
   displayName: string;
+  updatedAtMs: number | null;
 }
 
 /** Max length of the first-user-message fallback display name (in code points). */
@@ -44,6 +45,7 @@ const CHUNK_BYTES = 4 * 1024 * 1024;
 const LINE_STEP_BYTES = 64 * 1024;
 const SESSION_INFO_NEEDLE = Buffer.from('"type":"session_info"', "utf8");
 const ROLE_USER_NEEDLE = Buffer.from('"role":"user"', "utf8");
+const ACTIVITY_NEEDLES = [Buffer.from('"message"', "utf8"), Buffer.from('"compaction"', "utf8")];
 
 /** Parse the first line of a session file; null when it is not a valid session header. */
 export function parseSessionHeader(line: string): SessionHeaderInfo | null {
@@ -112,15 +114,25 @@ export async function summarizeSessionFile(filePath: string): Promise<SessionSum
     const header = await readHeader(handle, size);
     if (header === null) return null;
     const scan = createNameScan();
-    // Both scans read at explicit positions on the same handle, which is safe
-    // to do concurrently and lets each direction stop as early as possible.
-    const [latestSessionInfoName, firstUserText] = await Promise.all([
-      scanLatestSessionInfoName(handle, size),
+    const [latestSessionInfo, firstUserText, latestActivity] = await Promise.all([
+      scanLatestEntry(
+        handle,
+        size,
+        [SESSION_INFO_NEEDLE],
+        (entry) => entry.type === "session_info",
+      ),
       scanFirstUserText(handle, size),
+      scanLatestEntry(handle, size, ACTIVITY_NEEDLES, isTimestampedActivity),
     ]);
-    scan.latestSessionInfoName = latestSessionInfoName;
+    scan.latestSessionInfoName =
+      latestSessionInfo === undefined ? undefined : sessionInfoName(latestSessionInfo);
     scan.firstUserText = firstUserText;
-    return { header, displayName: displayNameFromScan(scan) };
+    return {
+      header,
+      displayName: displayNameFromScan(scan),
+      updatedAtMs:
+        parseTimestampMs(latestActivity?.timestamp) ?? parseTimestampMs(header.timestamp),
+    };
   } finally {
     await handle.close();
   }
@@ -170,12 +182,13 @@ async function scanFirstUserText(handle: FileHandle, size: number): Promise<stri
   return undefined;
 }
 
-/** Backward scan: name of the latest session_info entry (pi semantics: empty name clears). */
-async function scanLatestSessionInfoName(
+async function scanLatestEntry(
   handle: FileHandle,
   size: number,
-): Promise<string | undefined> {
-  const overlap = SESSION_INFO_NEEDLE.length - 1;
+  needles: readonly Buffer[],
+  matches: (entry: Record<string, unknown>) => boolean,
+): Promise<Record<string, unknown> | undefined> {
+  const overlap = Math.max(...needles.map((needle) => needle.length)) - 1;
   let head: Buffer = Buffer.alloc(0); // first `overlap` bytes of the already-read (later) region
   let readEnd = size;
   while (readEnd > 0) {
@@ -186,16 +199,14 @@ async function scanLatestSessionInfoName(
     const window: Buffer = Buffer.concat([chunk, head]); // the chunk followed by its continuation
     // Only matches starting inside this chunk are new; the head was searched
     // together with the chunk that contains it.
-    let match = window.lastIndexOf(SESSION_INFO_NEEDLE, chunk.length - 1);
-    while (match !== -1) {
+    let searchBefore = chunk.length - 1;
+    while (searchBefore >= 0) {
+      const match = Math.max(...needles.map((needle) => window.lastIndexOf(needle, searchBefore)));
+      if (match === -1) break;
       const line = await readLineContaining(handle, size, chunkStart + match);
       const entry = tryParseRecord(line.text);
-      if (entry !== null && entry.type === "session_info") {
-        return sessionInfoName(entry);
-      }
-      // Continue with any match that starts before this candidate's line.
-      const limit = line.startAbs - 1 - chunkStart;
-      match = match > 0 && limit >= 0 ? window.lastIndexOf(SESSION_INFO_NEEDLE, limit) : -1;
+      if (entry !== null && matches(entry)) return entry;
+      searchBefore = line.startAbs - 1 - chunkStart;
     }
     head = window.subarray(0, Math.min(overlap, window.length));
   }
@@ -266,6 +277,19 @@ function tryParseRecord(line: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function isTimestampedActivity(entry: Record<string, unknown>): boolean {
+  return (
+    (entry.type === "message" || entry.type === "compaction") &&
+    parseTimestampMs(entry.timestamp) !== null
+  );
+}
+
+function parseTimestampMs(timestamp: unknown): number | null {
+  if (typeof timestamp !== "string") return null;
+  const milliseconds = Date.parse(timestamp);
+  return Number.isFinite(milliseconds) ? milliseconds : null;
 }
 
 function sessionInfoName(entry: Record<string, unknown>): string | undefined {

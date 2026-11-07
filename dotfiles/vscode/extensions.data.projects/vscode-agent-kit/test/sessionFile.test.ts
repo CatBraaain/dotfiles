@@ -156,8 +156,140 @@ describe("summarizeSessionFile", () => {
   });
 });
 
+describe("session activity timestamps", () => {
+  it.each(["user", "assistant", "toolResult", "bashExecution", "custom"])(
+    "uses the outer entry timestamp of a %s message",
+    async (role) => {
+      const timestamp = "2024-12-05T16:00:00.000Z";
+      const filePath = await writeJsonl(dir, "message-time.jsonl", [
+        header(),
+        messageEntry(role, [], { timestamp }),
+      ]);
+
+      expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+    },
+  );
+
+  it("uses the physically last activity timestamp rather than the greatest date", async () => {
+    const timestamp = "2024-12-04T09:00:00.000Z";
+    const filePath = await writeJsonl(dir, "last-activity.jsonl", [
+      header({ timestamp: "2024-12-09T00:00:00.000Z" }),
+      messageEntry("user", "first", { timestamp: "2024-12-08T00:00:00.000Z" }),
+      { type: "compaction", timestamp: "2024-12-07T00:00:00.000Z", summary: "Summary" },
+      messageEntry("toolResult", [], { timestamp }),
+      sessionInfoEntry("Later metadata", { timestamp: "2024-12-10T00:00:00.000Z" }),
+    ]);
+
+    expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+  });
+
+  it("counts compaction as activity even without messages", async () => {
+    const timestamp = "2024-12-05T17:00:00.000Z";
+    const filePath = await writeJsonl(dir, "compaction-time.jsonl", [
+      header({ timestamp: undefined }),
+      { type: "compaction", timestamp, summary: "Summary" },
+    ]);
+
+    expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+  });
+
+  it.each(["message", "compaction"])(
+    "skips broken lines and invalid later %s timestamps",
+    async (type) => {
+      const timestamp = "2024-12-05T18:00:00.000Z";
+      const filePath = await writeJsonl(dir, "broken-time.jsonl", [
+        header(),
+        messageEntry("assistant", [], { timestamp }),
+        "{broken json",
+        { type, timestamp: "not-a-date" },
+        { type, timestamp: null },
+        { type, timestamp: 42 },
+        { type },
+        { type: "custom", timestamp: "2030-01-01T00:00:00.000Z", nested: { type } },
+        '{"type":"message","timestamp":"2031-01-01T00:00:00.000Z"',
+      ]);
+
+      expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+    },
+  );
+
+  it.each([
+    { name: "header only", entries: [] },
+    {
+      name: "metadata and invalid activity",
+      entries: [
+        sessionInfoEntry("Metadata only"),
+        { type: "model_change", timestamp: "2030-01-01T00:00:00.000Z" },
+        { type: "message", timestamp: "not-a-date" },
+        { type: "compaction" },
+      ],
+    },
+  ])("uses the header timestamp when no valid activity exists: $name", async ({ entries }) => {
+    const timestamp = "2024-12-03T14:00:00.000Z";
+    const filePath = await writeJsonl(dir, "header-time.jsonl", [
+      header({ timestamp }),
+      ...entries,
+    ]);
+
+    expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+  });
+
+  it.each([undefined, null, 42, "", "not-a-date"])(
+    "keeps an unknown date when both activity and header timestamps are invalid: %j",
+    async (timestamp) => {
+      const filePath = await writeJsonl(dir, "unknown-time.jsonl", [
+        header({ timestamp }),
+        messageEntry("user", "Still listed", { timestamp: "not-a-date" }),
+        { type: "compaction", timestamp: null },
+        sessionInfoEntry("Still named", { timestamp: "2030-01-01T00:00:00.000Z" }),
+      ]);
+      const info = await summarizeSessionFile(filePath);
+
+      expect(info).toMatchObject({ displayName: "Still named", updatedAtMs: null });
+    },
+  );
+
+  it("keeps the Unix epoch as a valid activity timestamp", async () => {
+    const filePath = await writeJsonl(dir, "epoch-time.jsonl", [
+      header(),
+      messageEntry("assistant", [], { timestamp: "1970-01-01T00:00:00.000Z" }),
+    ]);
+
+    expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(0);
+  });
+
+  it("reads activity entries with JSON whitespace", async () => {
+    const timestamp = "2024-12-05T19:00:00.000Z";
+    const filePath = await writeJsonl(dir, "spaced-time.jsonl", [
+      header(),
+      `{ "type" : "compaction", "timestamp" : "${timestamp}" }`,
+    ]);
+
+    expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+  });
+});
+
 describe("multi-chunk scanning (files larger than the 4 MiB scan chunk)", () => {
   const chunkBytes = 4 * 1024 * 1024;
+
+  it.each(["message", "compaction"])(
+    "finds a valid %s timestamp before a large metadata tail",
+    async (type) => {
+      const timestamp = "2024-12-05T20:00:00.000Z";
+      const filePath = await writeJsonl(dir, "large-tail-time.jsonl", [
+        header(),
+        { type, timestamp, content: "x".repeat(chunkBytes + 100) },
+        {
+          type: "custom",
+          timestamp: "2030-01-01T00:00:00.000Z",
+          data: "x".repeat(chunkBytes + 100),
+        },
+        { type, timestamp: "invalid" },
+      ]);
+
+      expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+    },
+  );
 
   it("finds the latest session_info beyond chunk boundaries", async () => {
     const bigAssistantLine = {
