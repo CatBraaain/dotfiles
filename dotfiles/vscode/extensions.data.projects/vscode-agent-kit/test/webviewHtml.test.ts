@@ -55,8 +55,6 @@ describe("webviewHtml", () => {
 
     expect(html).toContain('<div id="workspace-form" hidden>');
     expect(html).toContain('<input id="workspace-path" type="text" placeholder="/absolute/path"');
-    expect(html).toContain('data-action="addWorkspace"');
-    expect(html).toContain('data-action="cancelWorkspaceForm"');
     expect(html).toContain('data-action="toggleWorkspaceForm"');
     expect(html).toContain("New workspace");
   });

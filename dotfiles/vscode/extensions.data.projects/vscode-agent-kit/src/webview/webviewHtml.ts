@@ -39,11 +39,7 @@ export const webviewAppMarkup = `<main id="app">
         New workspace
       </button>
       <div id="workspace-form" hidden>
-        <input id="workspace-path" type="text" placeholder="/absolute/path" aria-label="Workspace path" autocomplete="off" spellcheck="false">
-        <div class="form-actions">
-          <button class="form-button" type="button" data-action="addWorkspace">Add</button>
-          <button class="form-button" type="button" data-action="cancelWorkspaceForm">Cancel</button>
-        </div>
+        <input id="workspace-path" type="text" placeholder="/absolute/path" aria-label="Workspace path (Enter to add, Escape to close)" autocomplete="off" spellcheck="false">
       </div>
     </footer>
     <p id="status" role="status" aria-live="polite"></p>

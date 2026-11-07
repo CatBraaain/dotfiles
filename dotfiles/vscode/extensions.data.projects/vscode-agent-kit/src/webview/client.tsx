@@ -692,10 +692,6 @@ export function initClient(bridge: ClientBridge): () => void {
       if (!formElement.hidden) pathInput.focus();
       return;
     }
-    if (actionType === "cancelWorkspaceForm") {
-      closeWorkspaceForm();
-      return;
-    }
     if (actionType === "cancelUnregister") {
       closeUnregisterDialog();
       return;
@@ -706,18 +702,25 @@ export function initClient(bridge: ClientBridge): () => void {
       if (cwd !== undefined) bridge.postMessage({ type: "unregisterWorkspace", cwd });
       return;
     }
-    if (actionType === "addWorkspace") {
-      const path = pathInput.value.trim();
-      if (path === "") return;
-      pendingAddWorkspace = true;
-      bridge.postMessage({ type: "addWorkspace", path });
-      return;
-    }
     bridge.postMessage({ type: actionType });
   };
   document.addEventListener("click", onDocumentClick);
+  // Enter in the path input adds the workspace; an empty or IME-composing
+  // input is ignored. Escape closes the form without sending anything.
+  const onPathInputKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    const path = pathInput.value.trim();
+    if (path === "") return;
+    pendingAddWorkspace = true;
+    bridge.postMessage({ type: "addWorkspace", path });
+  };
+  pathInput.addEventListener("keydown", onPathInputKeyDown);
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === "Escape" && !dialogElement.hidden) closeUnregisterDialog();
+    if (event.key === "Escape" && !dialogElement.hidden) {
+      closeUnregisterDialog();
+      return;
+    }
+    if (event.key === "Escape" && !formElement.hidden) closeWorkspaceForm();
   };
   document.addEventListener("keydown", onKeyDown);
 
@@ -737,6 +740,7 @@ export function initClient(bridge: ClientBridge): () => void {
   return () => {
     document.removeEventListener("click", onDocumentClick);
     document.removeEventListener("keydown", onKeyDown);
+    pathInput.removeEventListener("keydown", onPathInputKeyDown);
     root.unmount();
   };
 }

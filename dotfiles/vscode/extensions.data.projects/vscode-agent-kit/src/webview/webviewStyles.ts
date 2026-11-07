@@ -28,11 +28,6 @@ export const webviewStyles = `
     #workspace-path { height: 32px; padding: 0 8px; border: 1px solid var(--vscode-input-border, color-mix(in srgb, var(--vscode-widget-border) 50%, transparent)); border-radius: var(--session-radius); background: var(--vscode-input-background); color: var(--vscode-input-foreground, var(--vscode-foreground)); font: inherit; font-size: 13px; }
     #workspace-path:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
     #workspace-path::placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
-    .form-actions { display: flex; gap: 8px; }
-    .form-button { height: 32px; padding: 0 10px; border-radius: var(--session-radius); color: var(--vscode-foreground); font-size: 13px; font-weight: 500; }
-    .form-button[data-action="addWorkspace"] { border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); }
-    .form-button[data-action="cancelWorkspaceForm"] { color: var(--vscode-descriptionForeground); }
-    .form-button[data-action="cancelWorkspaceForm"]:hover { background: transparent; color: var(--vscode-foreground); }
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }

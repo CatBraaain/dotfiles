@@ -395,13 +395,9 @@ test(
         contentType: "image/png",
       });
     });
-    await test.step("Add the work folder and see its group in the list", async () => {
+    await test.step("Add the work folder with Enter and see its group in the list", async () => {
       const frame = await host.sessionFrame();
-      await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
-      await frame
-        .locator('[data-action="addWorkspace"]')
-        .describe("Add workspace button")
-        .click({ steps: 15 });
+      await frame.locator("#workspace-path").describe("Workspace path input").press("Enter");
       const group = frame
         .locator("section.group")
         .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
@@ -427,14 +423,9 @@ test(
         .locator('[data-action="toggleWorkspaceForm"]')
         .describe("New workspace footer button")
         .click({ steps: 15 });
-      await frame
-        .locator("#workspace-path")
-        .describe("Workspace path input")
-        .fill(host.sessions.Missing.cwd);
-      await frame
-        .locator('[data-action="addWorkspace"]')
-        .describe("Add workspace button")
-        .click({ steps: 15 });
+      const pathInput = frame.locator("#workspace-path").describe("Workspace path input");
+      await pathInput.fill(host.sessions.Missing.cwd);
+      await pathInput.press("Enter");
       await expect(
         host.page
           .locator(".notification-list-item-message")
@@ -447,13 +438,10 @@ test(
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
     });
-    await test.step("Cancel the New workspace form without changing the list", async () => {
+    await test.step("Cancel the New workspace form with Escape without changing the list", async () => {
       const frame = await host.sessionFrame();
       const groupsBefore = await frame.locator("section.group").count();
-      await frame
-        .locator('[data-action="cancelWorkspaceForm"]')
-        .describe("Cancel adding the workspace")
-        .click({ steps: 15 });
+      await frame.locator("#workspace-path").describe("Workspace path input").press("Escape");
       await expect(frame.locator("#workspace-form")).not.toBeVisible();
       expect(await frame.locator("section.group").count()).toBe(groupsBefore);
       expect(host.snapshot().terminals).toHaveLength(0);
@@ -667,10 +655,9 @@ async function registerWorkFolder(host: VSCodeFixture, folder: string): Promise<
     .locator('[data-action="toggleWorkspaceForm"]')
     .describe("New workspace footer button")
     .click({ steps: 15 });
-  await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
-  await frame.locator('[data-action="addWorkspace"]').describe("Add workspace button").click({
-    steps: 15,
-  });
+  const pathInput = frame.locator("#workspace-path").describe("Workspace path input");
+  await pathInput.fill(folder);
+  await pathInput.press("Enter");
   await expect(
     frame
       .locator("section.group")

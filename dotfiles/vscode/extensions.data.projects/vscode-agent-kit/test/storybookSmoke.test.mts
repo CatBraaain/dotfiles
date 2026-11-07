@@ -721,7 +721,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("opens the New workspace form and registers a sessionless group with Add", async () => {
+  it("adds the workspace on Enter and closes the form on Escape", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
     const toggle = page.locator('[data-action="toggleWorkspaceForm"]');
@@ -733,13 +733,13 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await form.isVisible()).toBe(true);
     expect(await input.inputValue()).toBe("");
 
-    await page.locator('[data-action="cancelWorkspaceForm"]').click();
+    await input.press("Escape");
     expect(await form.isVisible()).toBe(false);
     expect(await page.locator(".group").count()).toBe(groupCountBefore);
 
     await toggle.click();
     await input.fill("~/projects/brand-new");
-    await page.locator('[data-action="addWorkspace"]').click();
+    await input.press("Enter");
     const added = page.locator(".group").filter({ hasText: "brand-new" });
     await expect.poll(() => page.locator(".group").count()).toBe(groupCountBefore + 1);
     expect(await added.locator(".session-row").count()).toBe(0);
