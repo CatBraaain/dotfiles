@@ -1584,14 +1584,6 @@
     "when": "editorTextFocus && !findInputFocussed && !isCompositeNotebook && !jupyter.ownsSelection && !notebookEditorFocused && !replaceInputFocussed && editorLangId == 'python'"
   },
   {
-    "key": "shift+enter",
-    "command": "workbench.action.terminal.sendSequence",
-    "args": {
-      "text": "\u001b\r"
-    },
-    "when": "terminalFocus"
-  },
-  {
     "key": "shift+escape",
     "command": "-cancelSelection",
     "when": "editorHasSelection && textInputFocus"
