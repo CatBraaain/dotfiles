@@ -124,6 +124,20 @@ describe("TerminalRegistry", () => {
     expect(displays.create).toHaveBeenCalledTimes(2);
   });
 
+  it("tracks the displayed session and clears it when the display terminal closes", async () => {
+    const { registry, terminal } = setup();
+    expect(registry.displayedSessionId).toBeUndefined();
+
+    await registry.open(launch("A"));
+    expect(registry.displayedSessionId).toBe("A");
+
+    await registry.open(launch("B"));
+    expect(registry.displayedSessionId).toBe("B");
+
+    registry.onTerminalClosed(terminal);
+    expect(registry.displayedSessionId).toBeUndefined();
+  });
+
   it("replaces an exited display without restarting its live Pi", async () => {
     const { registry, terminal, displays, live } = setup();
     await registry.open(launch("A"));

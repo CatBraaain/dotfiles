@@ -18,7 +18,6 @@ interface DemoEntry {
 export interface DemoBridgeRequest {
   type: string;
   sessionId?: string;
-  sessionIds?: string[];
   locked?: boolean;
   cwd?: string;
   path?: string;
@@ -74,6 +73,10 @@ const sampleSessions: SessionSummary[] = [
 ];
 
 const UNARCHIVED: DemoEntry = { archived: false, locked: false };
+
+/** Demo displayed session: the catalog marks this row as the one the shared
+ * terminal shows (openSession is ignored, so the mark never moves). */
+const DISPLAYED_SESSION_ID = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
 const SAMPLE_METADATA = new Map<string, DemoEntry>([
   ["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", UNARCHIVED],
   ["2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", { archived: true, locked: false }],
@@ -122,6 +125,7 @@ export function createDemoBridge(): {
           archivedIds,
           lockedIds,
         }),
+        displayedSessionId: DISPLAYED_SESSION_ID,
       },
     });
   }
@@ -150,21 +154,15 @@ export function createDemoBridge(): {
       postSessions();
       return;
     }
-    if (request.type === "archiveSessions" && Array.isArray(request.sessionIds)) {
-      for (const sessionId of request.sessionIds) {
-        if (typeof sessionId !== "string") continue;
-        const entry = entryOf(sessionId);
-        if (entry.locked) continue; // the same host-side lock guard as the provider
-        metadata.set(sessionId, { ...entry, archived: true });
-      }
+    if (request.type === "archiveSession" && typeof request.sessionId === "string") {
+      const entry = entryOf(request.sessionId);
+      // The same host-side lock guard as the provider.
+      if (!entry.locked) metadata.set(request.sessionId, { ...entry, archived: true });
       postSessions();
       return;
     }
-    if (request.type === "unarchiveSessions" && Array.isArray(request.sessionIds)) {
-      for (const sessionId of request.sessionIds) {
-        if (typeof sessionId !== "string") continue;
-        metadata.set(sessionId, { ...entryOf(sessionId), archived: false });
-      }
+    if (request.type === "unarchiveSession" && typeof request.sessionId === "string") {
+      metadata.set(request.sessionId, { ...entryOf(request.sessionId), archived: false });
       postSessions();
       return;
     }

@@ -10,6 +10,7 @@ interface DemoSession {
 
 interface CapturedState {
   groups: { cwd: string; registered: boolean; sessions: DemoSession[] }[];
+  displayedSessionId?: string;
 }
 
 interface DemoBridgeHandle {
@@ -54,7 +55,7 @@ const piToolsLockedId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
 
 describe("createDemoBridge", () => {
-  it("sends every session with archive and lock marks", () => {
+  it("sends every session with archive and lock marks and the displayed session", () => {
     const { postSessions, last } = setup();
 
     postSessions();
@@ -69,34 +70,30 @@ describe("createDemoBridge", () => {
       [projectCurrentId, false, false],
       [projectArchivedId, true, false],
     ]);
+    expect(last().displayedSessionId).toBe(projectCurrentId);
   });
 
-  it("archives only the requested sessions and skips locked ones", () => {
+  it("archives the requested session and skips a locked one", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({
-      type: "archiveSessions",
-      sessionIds: [projectCurrentId, piToolsLockedId],
-    });
+    bridge.postMessage({ type: "archiveSession", sessionId: piToolsLockedId });
+    const locked = sessions(last()).find((session) => session.sessionId === piToolsLockedId);
+    expect(locked?.isArchived).toBe(false);
+    expect(locked?.isLocked).toBe(true);
 
+    bridge.postMessage({ type: "archiveSession", sessionId: projectCurrentId });
     const state = last();
     expect(sessionIds(state)).toContain(projectCurrentId);
     const archived = sessions(state).find((session) => session.sessionId === projectCurrentId);
     expect(archived?.isArchived).toBe(true);
-    const locked = sessions(state).find((session) => session.sessionId === piToolsLockedId);
-    expect(locked?.isArchived).toBe(false);
-    expect(locked?.isLocked).toBe(true);
     const untouched = sessions(state).find((session) => session.sessionId === piToolsCurrentId);
     expect(untouched?.isArchived).toBe(false);
   });
 
-  it("unarchives only the requested archived sessions", () => {
+  it("unarchives the requested archived session", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({
-      type: "unarchiveSessions",
-      sessionIds: [projectArchivedId, projectCurrentId],
-    });
+    bridge.postMessage({ type: "unarchiveSession", sessionId: projectArchivedId });
 
     const state = last();
     const unarchived = sessions(state).find((session) => session.sessionId === projectArchivedId);

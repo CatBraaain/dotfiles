@@ -208,32 +208,46 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   }
 
   it.each([320, 720])(
-    "selects from timestamp coordinates for all four click paths at %ipx",
+    "treats timestamp clicks with modifiers like plain clicks at %ipx",
     async (width) => {
       const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
       await installBridgeMessageRecorder(page);
 
       await clickTimestamp(page, atlasCurrentId, "Control");
-      expect(await page.locator(".session-row.selected").count()).toBe(1);
-      expect(await openSessionMessages(page)).toEqual([]);
-
-      await clickTimestamp(page, piToolsLockedId, "Meta");
-      expect(await page.locator(".session-row.selected").count()).toBe(2);
-      expect(await openSessionMessages(page)).toEqual([]);
-
-      await clickTimestamp(page, worktreeId, "Shift");
-      expect(
-        await page
-          .locator(".session-row.selected [data-session]")
-          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("data-session"))),
-      ).toEqual([piToolsLockedId, worktreeId]);
-      expect(await openSessionMessages(page)).toEqual([]);
-
-      await clickTimestamp(page, atlasCurrentId);
-      expect(await page.locator(".session-row.selected").count()).toBe(1);
       expect(await openSessionMessages(page)).toEqual([
         { type: "openSession", sessionId: atlasCurrentId },
       ]);
+
+      await clearBridgeMessages(page);
+      await clickTimestamp(page, piToolsLockedId, "Meta");
+      expect(await openSessionMessages(page)).toEqual([
+        { type: "openSession", sessionId: piToolsLockedId },
+      ]);
+
+      await clearBridgeMessages(page);
+      await clickTimestamp(page, worktreeId, "Shift");
+      expect(await openSessionMessages(page)).toEqual([
+        { type: "openSession", sessionId: worktreeId },
+      ]);
+
+      await clearBridgeMessages(page);
+      await clickTimestamp(page, atlasCurrentId);
+      expect(await openSessionMessages(page)).toEqual([
+        { type: "openSession", sessionId: atlasCurrentId },
+      ]);
+      // The catalog has no terminal, so the displayed mark never moves.
+      expect(await page.locator(".session-row.selected").count()).toBe(1);
+      expect(
+        await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
+      ).toBe(atlasCurrentId);
+      console.log(
+        JSON.stringify({
+          check: "timestamp-clicks",
+          width,
+          paths: ["Control", "Meta", "Shift", "plain"],
+          openMessagesPerPath: 1,
+        }),
+      );
 
       await clearBridgeMessages(page);
       await page.evaluate(() => {
@@ -249,16 +263,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       expect(
         await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
       ).toBe(atlasCurrentId);
-      console.log(
-        JSON.stringify({
-          check: "timestamp-clicks",
-          width,
-          paths: ["Control", "Meta", "Shift", "plain"],
-          modifierOpenMessages: 0,
-          plainOpenMessages: 1,
-          controlOpenMessages: 0,
-        }),
-      );
       await page.close();
     },
   );
@@ -288,21 +292,13 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         });
       }
 
-      for (const state of ["default", "selected", "selected-hover", "foreground-fallback"]) {
-        if (state === "selected") {
-          await page.click(`[data-session="${atlasCurrentId}"]`, {
-            modifiers: ["Control"],
-            position: { x: 12, y: 12 },
-          });
-          await page.click(`[data-session="${atlasArchivedId}"]`, {
-            modifiers: ["Control"],
-            position: { x: 12, y: 12 },
-          });
-          await page.mouse.move(0, 639);
-        }
+      for (const state of ["default", "selected-hover", "foreground-fallback"]) {
+        // The catalog marks the displayed session (atlasCurrentId) as the
+        // selected row in every state; the states differ only in hover and
+        // fallback styling.
         if (state === "selected-hover") {
           await page
-            .locator(`[data-session="${atlasArchivedId}"]`)
+            .locator(`[data-session="${atlasCurrentId}"]`)
             .hover({ position: { x: 12, y: 12 } });
         }
         if (state === "foreground-fallback") {
@@ -473,61 +469,56 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("selects with Ctrl, Meta, and Shift without opening terminals, and archives the selection in one action", async () => {
+  it("treats modifier clicks like plain clicks and archives a single row", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
 
     await page.click(`[data-session="${atlasCurrentId}"]`, { modifiers: ["Control"] });
-    expect(await openSessionMessages(page)).toEqual([]);
-    await page.click(`[data-session="${piToolsLockedId}"]`, { modifiers: ["Control"] });
-    expect(await page.locator(".session-row.selected").count()).toBe(2);
-    expect(await openSessionMessages(page)).toEqual([]);
-
-    await page.click(`[data-session="${worktreeId}"]`, { modifiers: ["Meta"] });
-    expect(await page.locator(".session-row.selected").count()).toBe(3);
-    expect(await openSessionMessages(page)).toEqual([]);
-
-    await clearBridgeMessages(page);
-    await page.click(`[data-session="${atlasCurrentId}"]`);
-    expect(await page.locator(".session-row.selected").count()).toBe(1);
     expect(await openSessionMessages(page)).toEqual([
       { type: "openSession", sessionId: atlasCurrentId },
     ]);
+    expect(await page.locator(".session-row.selected").count()).toBe(1);
 
     await clearBridgeMessages(page);
-    // The anchor is the plain-clicked row; the Shift click selects the whole
-    // visible range up to the first row without opening anything.
-    await page.click(`[data-session="${piToolsPlainId}"]`, { modifiers: ["Shift"] });
-    await page.waitForFunction(
-      () => document.querySelectorAll(".session-row.selected").length === 4,
-    );
-    expect(await page.locator(".session-row.selected").count()).toBe(4);
-    expect(await openSessionMessages(page)).toEqual([]);
+    await page.click(`[data-session="${worktreeId}"]`, { modifiers: ["Meta"] });
+    expect(await openSessionMessages(page)).toEqual([
+      { type: "openSession", sessionId: worktreeId },
+    ]);
 
-    await page.click(`[data-archive="${atlasCurrentId}"]`);
-    await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 1);
+    await clearBridgeMessages(page);
+    await page.click(`[data-session="${piToolsPlainId}"]`, { modifiers: ["Shift"] });
+    expect(await openSessionMessages(page)).toEqual([
+      { type: "openSession", sessionId: piToolsPlainId },
+    ]);
+    // The catalog has no terminal, so the displayed mark never moves.
+    expect(await page.locator(".session-row.selected").count()).toBe(1);
+    expect(
+      await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
+    ).toBe(atlasCurrentId);
+
+    await page.click(`[data-archive="${worktreeId}"]`);
+    await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 3);
     expect(await page.locator(`[data-session="${piToolsLockedId}"]`).count()).toBe(1);
-    expect(await page.locator(`[data-session="${atlasCurrentId}"]`).count()).toBe(0);
+    expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
     await page.close();
   });
 
-  it("selects all visible unarchived unlocked rows with Ctrl+A focused on the list", async () => {
+  it("keeps only the displayed session selected with Ctrl+A focused on the list", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
 
     await page.locator(`[data-session="${atlasCurrentId}"]`).focus();
     await page.keyboard.press("Control+a");
-    expect(await page.locator(".session-row.selected").count()).toBe(3);
+    // Ctrl+A no longer selects rows: the displayed session alone carries the mark.
+    expect(await page.locator(".session-row.selected").count()).toBe(1);
 
-    // The archived row stays unselected until it is visible in All mode.
     await page.click("#app header [data-mode-toggle]", { modifiers: ["Control"] });
     expect(await page.locator(".session-row.archived.selected").count()).toBe(0);
     await page.close();
   });
 
-  it("archives a single row through its own Archive when it is not selected", async () => {
+  it("archives a single row through its own Archive regardless of the displayed session", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
 
-    await page.click(`[data-session="${piToolsLockedId}"]`, { modifiers: ["Control"] });
     await page.click(`[data-archive="${worktreeId}"]`);
 
     await page.waitForFunction(
@@ -815,7 +806,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("retains hidden selections while excluding collapsed rows from bulk archive", async () => {
+  it("keeps the displayed session's mark across collapsing and archiving other rows", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
     const group = page
@@ -823,15 +814,15 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
     const chevron = group.locator(".group-chevron");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
-    await page.locator(`[data-session="${atlasCurrentId}"]`).click({ modifiers: ["Control"] });
-    await page.locator(`[data-session="${worktreeId}"]`).click({ modifiers: ["Control"] });
-    expect(await page.locator(".session-row.selected").count()).toBe(2);
+    // The displayed session's row is the only selected row.
+    expect(await page.locator(".session-row.selected").count()).toBe(1);
 
     await chevron.click();
     await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
-    expect(await page.locator(".session-row.selected").count()).toBe(1);
+    // Collapsing the displayed session's group hides the only selected row.
+    expect(await page.locator(".session-row.selected").count()).toBe(0);
     await group.locator(".group-title").click();
-    await expect.poll(() => page.locator(".session-row.selected").count()).toBe(2);
+    await expect.poll(() => page.locator(".session-row.selected").count()).toBe(1);
     await chevron.click();
     await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
     await page.locator(`[data-archive="${worktreeId}"]`).click();
@@ -842,31 +833,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       .poll(() => page.locator(`.session-row.selected [data-session="${atlasCurrentId}"]`).count())
       .toBe(1);
     expect(await openSessionMessages(page)).toEqual([]);
-    await page.close();
-  });
-
-  it.each(["Control", "Meta"])("excludes collapsed group rows from %s+A", async (modifier) => {
-    const page = await openStory("sessions-sidebar--sample-sessions");
-    const group = page
-      .locator(".group")
-      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
-    const chevron = group.locator(".group-chevron");
-    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
-    await chevron.click();
-    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
-    await page.locator(`[data-session="${worktreeId}"]`).focus();
-    await page.keyboard.press(`${modifier}+a`);
-    await expect.poll(() => page.locator(".session-row.selected").count()).toBe(2);
-    expect(
-      await page
-        .locator(".session-row.selected [data-session]")
-        .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("data-session"))),
-    ).toEqual([piToolsPlainId, worktreeId]);
-    await group.locator(".group-title").click();
-    await expect.poll(() => group.locator(".session-row").count()).toBe(1);
-    expect(
-      await page.locator(`.session-row.selected [data-session="${atlasCurrentId}"]`).count(),
-    ).toBe(0);
     await page.close();
   });
 

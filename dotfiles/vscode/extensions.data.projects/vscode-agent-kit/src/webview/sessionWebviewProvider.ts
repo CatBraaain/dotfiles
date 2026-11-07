@@ -123,6 +123,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
           archivedIds,
           lockedIds,
         }),
+        displayedSessionId: this.deps.registry.displayedSessionId,
       },
     });
   }
@@ -192,55 +193,46 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "setSessionLock") {
-      await this.updateKnownSessions(request.sessionId, (refs) =>
-        setSessionLocks(
-          this.deps.statePath,
-          refs.map((ref) => ({ ...ref, locked: request.locked })),
-        ),
+      await this.updateKnownSession(request.sessionId, (ref) =>
+        setSessionLocks(this.deps.statePath, [{ ...ref, locked: request.locked }]),
       );
       return;
     }
-    if (request.type === "archiveSessions") {
-      // Archive snapshots each session's current display name, so the batch is
-      // built from the scanned summaries before the store update runs.
-      await this.updateKnownSessions(request.sessionIds, (refs) =>
-        archiveSessions(
-          this.deps.statePath,
-          refs.map(({ sessionId, cwd }): ArchiveEntry => ({
+    if (request.type === "archiveSession") {
+      // Archive snapshots the session's current display name from the scanned
+      // summary before the store update runs.
+      await this.updateKnownSession(request.sessionId, ({ sessionId, cwd }) =>
+        archiveSessions(this.deps.statePath, [
+          {
             sessionId,
             cwd,
             displayName: this.sessionsById.get(sessionId)?.displayName ?? "Untitled",
-          })),
-        ),
+          },
+        ]),
       );
       return;
     }
-    if (request.type === "unarchiveSessions") {
-      await this.updateKnownSessions(request.sessionIds, (refs) =>
-        unarchiveSessions(this.deps.statePath, refs),
+    if (request.type === "unarchiveSession") {
+      await this.updateKnownSession(request.sessionId, (ref) =>
+        unarchiveSessions(this.deps.statePath, [ref]),
       );
       return;
     }
   }
 
-  /** Run a known-ids store update: validate the session ids, apply the update
-   * in one write, then refresh. Unknown ids answer with an error and leave
-   * the store unchanged. */
-  private async updateKnownSessions(
-    sessionId: string | readonly string[],
-    update: (refs: readonly SessionRef[]) => SessionStateUpdateResult,
+  /** Run a single session's store update: validate the session id, apply the
+   * update in one write, then refresh. An unknown id answers with an error
+   * and leaves the store unchanged. */
+  private async updateKnownSession(
+    sessionId: string,
+    update: (ref: SessionRef) => SessionStateUpdateResult,
   ): Promise<void> {
-    const uniqueIds = [...new Set(typeof sessionId === "string" ? [sessionId] : [...sessionId])];
-    const unknown = uniqueIds.find((id) => !this.sessionsById.has(id));
-    if (unknown !== undefined) {
-      this.postError(`Session not found: ${unknown}`);
+    const session = this.sessionsById.get(sessionId);
+    if (session === undefined) {
+      this.postError(`Session not found: ${sessionId}`);
       return;
     }
-    const refs: SessionRef[] = uniqueIds.map((id) => ({
-      sessionId: id,
-      cwd: this.sessionsById.get(id)!.cwd,
-    }));
-    const result = update(refs);
+    const result = update({ sessionId, cwd: session.cwd });
     if (!result.ok) {
       this.postError(result.message);
       return;
@@ -353,6 +345,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     terminal.show();
+    // Re-send the list so the webview's selection display follows the
+    // session the shared terminal now shows.
+    await this.refresh();
   }
 
   private post(message: ExtensionMessage): void {

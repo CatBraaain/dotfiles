@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  archiveTargetIds,
   formatSessionTimestamp,
-  nextSelectionFromClick,
-  selectAllIds,
   sessionListView,
-  unarchiveTargetIds,
   visibleSessions,
   type ClientSession,
   type ClientState,
@@ -65,14 +61,14 @@ function viewFor(
   mode: ViewMode,
   stateGroups = groups,
   copiedIds: ReadonlySet<string> = new Set(),
-  selectedIds: ReadonlySet<string> = new Set(),
+  displayedSessionId: string | undefined = undefined,
   collapsedCwds: ReadonlySet<string> = new Set(),
 ) {
   return sessionListView(
     { groups: stateGroups } as ClientState,
     mode,
     copiedIds,
-    selectedIds,
+    displayedSessionId,
     collapsedCwds,
   );
 }
@@ -246,7 +242,7 @@ describe("sessionListView", () => {
   });
 
   it("keeps headings but omits rows in collapsed groups", () => {
-    const view = viewFor("all", groups, new Set(), new Set(), new Set(["/workspace/atlas"]));
+    const view = viewFor("all", groups, new Set(), undefined, new Set(["/workspace/atlas"]));
     const elements = elementsIn(view);
 
     expect(sectionsIn(view)).toHaveLength(2);
@@ -260,16 +256,20 @@ describe("sessionListView", () => {
     ).toEqual(["m9 18 6-6-6-6", "m6 9 6 6 6-6"]);
   });
 
-  it("restores selected rows after a collapsed group is expanded", () => {
-    const selection = new Set([atlasUnarchived.sessionId]);
-    const closed = viewFor("all", groups, new Set(), selection, new Set(["/workspace/atlas"]));
-    const opened = viewFor("all", groups, new Set(), selection);
+  it("hides the displayed session's selected mark only while its group is collapsed", () => {
+    const closed = viewFor(
+      "all",
+      groups,
+      new Set(),
+      atlasUnarchived.sessionId,
+      new Set(["/workspace/atlas"]),
+    );
+    const opened = viewFor("all", groups, new Set(), atlasUnarchived.sessionId);
 
     expect(byClass(elementsIn(closed), "selected")).toHaveLength(0);
     const selectedRows = byClass(elementsIn(opened), "selected");
     expect(selectedRows).toHaveLength(1);
     expect(text(selectedRows[0])).toContain("Atlas current");
-    expect([...selection]).toEqual([atlasUnarchived.sessionId]);
   });
 
   it("distinguishes same-named project and worktree groups by heading hints", () => {
@@ -491,9 +491,9 @@ describe("sessionListView", () => {
     ).toEqual([[undefined, "Unarchive"]]);
   });
 
-  it("marks selected and archived rows with row classes", () => {
+  it("marks the displayed session's row with the selected class", () => {
     const rows = byClass(
-      elementsIn(viewFor("all", groups, new Set(), new Set([betaPlain.sessionId]))),
+      elementsIn(viewFor("all", groups, new Set(), betaPlain.sessionId)),
       "session-row",
     );
 
@@ -503,6 +503,16 @@ describe("sessionListView", () => {
       "session-row",
       "session-row selected",
     ]);
+  });
+
+  it("marks no row when the terminal shows no session", () => {
+    expect(byClass(elementsIn(viewFor("all")), "selected")).toHaveLength(0);
+    expect(
+      byClass(
+        elementsIn(viewFor("unarchived", groups, new Set(), atlasArchived.sessionId)),
+        "selected",
+      ),
+    ).toHaveLength(0);
   });
 
   it("uses native buttons for every interactive element", () => {
@@ -552,194 +562,6 @@ describe("visibleSessions", () => {
       atlasUnarchived.sessionId,
       atlasArchived.sessionId,
       betaLocked.sessionId,
-      betaPlain.sessionId,
-    ]);
-  });
-});
-
-describe("nextSelectionFromClick", () => {
-  const visibleIds = [atlasUnarchived.sessionId, betaLocked.sessionId, betaPlain.sessionId];
-  const emptySelection = new Set<string>();
-
-  it("replaces the selection with the clicked row and opens it on a plain click", () => {
-    const update = nextSelectionFromClick(
-      { sessionId: betaPlain.sessionId, shiftKey: false, ctrlKey: false, metaKey: false },
-      emptySelection,
-      visibleIds,
-      undefined,
-    );
-
-    expect(update.selection).toEqual(new Set([betaPlain.sessionId]));
-    expect(update.anchor).toBe(betaPlain.sessionId);
-    expect(update.opensSession).toBe(true);
-  });
-
-  it("toggles one row without opening on a Ctrl click", () => {
-    const selected = new Set([atlasUnarchived.sessionId]);
-
-    const added = nextSelectionFromClick(
-      { sessionId: betaPlain.sessionId, shiftKey: false, ctrlKey: true, metaKey: false },
-      selected,
-      visibleIds,
-      atlasUnarchived.sessionId,
-    );
-    expect(added.selection).toEqual(new Set([atlasUnarchived.sessionId, betaPlain.sessionId]));
-    expect(added.opensSession).toBe(false);
-
-    const removed = nextSelectionFromClick(
-      { sessionId: atlasUnarchived.sessionId, shiftKey: false, ctrlKey: false, metaKey: true },
-      added.selection,
-      visibleIds,
-      atlasUnarchived.sessionId,
-    );
-    expect(removed.selection).toEqual(new Set([betaPlain.sessionId]));
-    expect(removed.opensSession).toBe(false);
-  });
-
-  it("selects the anchor-to-clicked range in display order across cwd groups on a Shift click", () => {
-    const update = nextSelectionFromClick(
-      { sessionId: betaPlain.sessionId, shiftKey: true, ctrlKey: false, metaKey: false },
-      emptySelection,
-      visibleIds,
-      atlasUnarchived.sessionId,
-    );
-
-    expect(update.selection).toEqual(new Set(visibleIds));
-    expect(update.anchor).toBe(atlasUnarchived.sessionId);
-    expect(update.opensSession).toBe(false);
-  });
-
-  it("selects a backwards range up to the anchor", () => {
-    const update = nextSelectionFromClick(
-      { sessionId: atlasUnarchived.sessionId, shiftKey: true, ctrlKey: false, metaKey: false },
-      emptySelection,
-      visibleIds,
-      betaPlain.sessionId,
-    );
-
-    expect(update.selection).toEqual(new Set(visibleIds));
-    expect(update.anchor).toBe(betaPlain.sessionId);
-  });
-
-  it("falls back to the clicked row alone when the anchor is no longer visible", () => {
-    const update = nextSelectionFromClick(
-      { sessionId: betaPlain.sessionId, shiftKey: true, ctrlKey: false, metaKey: false },
-      emptySelection,
-      visibleIds,
-      "00000000-0000-4000-8000-000000000009",
-    );
-
-    expect(update.selection).toEqual(new Set([betaPlain.sessionId]));
-    expect(update.anchor).toBe(betaPlain.sessionId);
-    expect(update.opensSession).toBe(false);
-  });
-});
-
-describe("archiveTargetIds", () => {
-  it("excludes selected rows in collapsed groups from a visible bulk action", () => {
-    const visible = visibleSessions({ groups }, "all", new Set(["/workspace/atlas"]));
-    const selection = new Set([
-      atlasUnarchived.sessionId,
-      atlasArchived.sessionId,
-      betaLocked.sessionId,
-      betaPlain.sessionId,
-    ]);
-
-    expect(archiveTargetIds(betaPlain.sessionId, selection, visible)).toEqual([
-      betaPlain.sessionId,
-    ]);
-  });
-
-  it("archives just the clicked row when it is not selected", () => {
-    expect(
-      archiveTargetIds(
-        betaPlain.sessionId,
-        new Set(),
-        visibleSessions({ groups } as ClientState, "all"),
-      ),
-    ).toEqual([betaPlain.sessionId]);
-  });
-
-  it("archives the visible selected unarchived unlocked rows when the clicked row is selected", () => {
-    const visible = visibleSessions({ groups } as ClientState, "all");
-    const selection = new Set([
-      atlasUnarchived.sessionId,
-      atlasArchived.sessionId,
-      betaLocked.sessionId,
-    ]);
-
-    expect(archiveTargetIds(atlasUnarchived.sessionId, selection, visible)).toEqual([
-      atlasUnarchived.sessionId,
-    ]);
-  });
-
-  it("never archives rows hidden by the current display mode", () => {
-    const visible = visibleSessions({ groups } as ClientState, "unarchived");
-    const selection = new Set([atlasUnarchived.sessionId, atlasArchived.sessionId]);
-
-    expect(archiveTargetIds(atlasUnarchived.sessionId, selection, visible)).toEqual([
-      atlasUnarchived.sessionId,
-    ]);
-  });
-
-  it("returns no target when every selected visible row is locked or archived", () => {
-    const visible = visibleSessions({ groups } as ClientState, "all");
-    const selection = new Set([betaLocked.sessionId, atlasArchived.sessionId]);
-
-    expect(archiveTargetIds(betaLocked.sessionId, selection, visible)).toEqual([]);
-  });
-});
-
-describe("unarchiveTargetIds", () => {
-  it("excludes selected rows in collapsed groups from a visible bulk action", () => {
-    const visible = visibleSessions({ groups }, "all", new Set(["/workspace/atlas"]));
-    const selection = new Set([
-      atlasUnarchived.sessionId,
-      atlasArchived.sessionId,
-      betaLocked.sessionId,
-      betaPlain.sessionId,
-    ]);
-
-    expect(unarchiveTargetIds(betaPlain.sessionId, selection, visible)).toEqual([]);
-  });
-
-  it("unarchives just the clicked row when it is not selected", () => {
-    expect(
-      unarchiveTargetIds(
-        atlasArchived.sessionId,
-        new Set(),
-        visibleSessions({ groups } as ClientState, "all"),
-      ),
-    ).toEqual([atlasArchived.sessionId]);
-  });
-
-  it("unarchives the visible selected archived rows when the clicked row is selected", () => {
-    const visible = visibleSessions({ groups } as ClientState, "all");
-    const selection = new Set([atlasArchived.sessionId, betaPlain.sessionId]);
-
-    expect(unarchiveTargetIds(atlasArchived.sessionId, selection, visible)).toEqual([
-      atlasArchived.sessionId,
-    ]);
-  });
-
-  it("never unarchives rows hidden by the current display mode", () => {
-    const visible = visibleSessions({ groups } as ClientState, "unarchived");
-    const selection = new Set([atlasArchived.sessionId]);
-
-    expect(unarchiveTargetIds(atlasArchived.sessionId, selection, visible)).toEqual([]);
-  });
-});
-
-describe("selectAllIds", () => {
-  it("excludes rows in collapsed groups from the select-all input", () => {
-    const visible = visibleSessions({ groups }, "all", new Set(["/workspace/atlas"]));
-
-    expect(selectAllIds(visible)).toEqual([betaPlain.sessionId]);
-  });
-
-  it("selects the visible unarchived unlocked rows across cwd groups", () => {
-    expect(selectAllIds(visibleSessions({ groups } as ClientState, "all"))).toEqual([
-      atlasUnarchived.sessionId,
       betaPlain.sessionId,
     ]);
   });

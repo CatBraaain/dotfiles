@@ -11,7 +11,7 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 背景・本文 | `sideBar-background`・`foreground` |
 | 補助文字（日時・行の操作） | `descriptionForeground` |
 | hover 面 | `list-hoverBackground` |
-| 選択面・選択文字 | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
+| 選択面・選択文字（表示中セッションの行） | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
 | 境界（モード切替の枠・フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
 | 入力（ワークスペース フォーム） | 背景 `input-background`・文字 `input-foreground`・境界 `input-border`、placeholder は `input-placeholderForeground` |
 | focus | `focusBorder` の 2px ring（offset -2px） |

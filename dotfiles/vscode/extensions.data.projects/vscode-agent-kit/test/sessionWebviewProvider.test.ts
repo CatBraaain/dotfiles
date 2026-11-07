@@ -185,7 +185,7 @@ describe("SessionWebviewProvider", () => {
       [inactiveSessionId, true],
     ]);
 
-    await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
 
     const store = readStore(statePath);
     // archiving removes the whitelist entry and stores the display name as the snapshot
@@ -196,7 +196,7 @@ describe("SessionWebviewProvider", () => {
     ).toBe(true);
   });
 
-  it("archives a requested batch in one write, skipping locked sessions", async () => {
+  it("keeps a locked session active when its archive is requested", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
@@ -213,14 +213,11 @@ describe("SessionWebviewProvider", () => {
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
-    await webview.receive({
-      type: "archiveSessions",
-      sessionIds: [activeSessionId, inactiveSessionId],
-    });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
 
     const store = readStore(statePath);
     expect(lockedSessionIds(store).has(activeSessionId)).toBe(true);
-    expect(activeSessionIds(store).has(inactiveSessionId)).toBe(false);
+    expect(activeSessionIds(store).has(activeSessionId)).toBe(true);
     const sentSessions = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
       sessionId: string;
       isArchived: boolean;
@@ -232,7 +229,7 @@ describe("SessionWebviewProvider", () => {
     });
   });
 
-  it("rejects an archive batch with an unknown session id without writing", async () => {
+  it("rejects an archive request for an unknown session id without writing", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
@@ -243,15 +240,12 @@ describe("SessionWebviewProvider", () => {
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
-    await webview.receive({
-      type: "archiveSessions",
-      sessionIds: [activeSessionId, unknownSessionId],
-    });
+    await webview.receive({ type: "archiveSession", sessionId: unknownSessionId });
 
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       `Session not found: ${unknownSessionId}`,
     );
-    // the failed batch wrote nothing: the whitelist keeps its previous content
+    // the failed request wrote nothing: the whitelist keeps its previous content
     const store = readStore(statePath);
     expect(registeredWorkspaceCwds(store)).toEqual([root]);
     expect(activeSessionIds(store)).toEqual(new Set([activeSessionId]));
@@ -530,7 +524,37 @@ describe("SessionWebviewProvider", () => {
     expect(terminal.show).toHaveBeenCalledTimes(1);
   });
 
-  it("unarchives requested archived sessions and refreshes the list", async () => {
+  it("follows the shared terminal's displayed session in the sent state", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const terminal = {
+      exitStatus: undefined,
+      processId: Promise.resolve(123),
+      sendText: vi.fn(),
+      show: vi.fn(),
+    };
+    vscodeMocks.createTerminal.mockReturnValue(terminal);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    // before any open the shared terminal shows no session
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBeUndefined();
+
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+
+    // opening re-sends the list with the displayed session so the selection follows
+    expect(terminal.show).toHaveBeenCalledTimes(1);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
+      activeSessionId,
+    );
+  });
+
+  it("unarchives a requested archived session and refreshes the list", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
@@ -549,7 +573,7 @@ describe("SessionWebviewProvider", () => {
       true,
     );
 
-    await webview.receive({ type: "unarchiveSessions", sessionIds: [activeSessionId] });
+    await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
 
     const store = readStore(statePath);
     // unarchiving drops the display-name snapshot so the next scan re-reads it
@@ -561,7 +585,7 @@ describe("SessionWebviewProvider", () => {
     });
   });
 
-  it("rejects an unarchive batch with an unknown session id without writing", async () => {
+  it("rejects an unarchive request for an unknown session id without writing", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
@@ -572,15 +596,12 @@ describe("SessionWebviewProvider", () => {
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
-    await webview.receive({
-      type: "unarchiveSessions",
-      sessionIds: [activeSessionId, unknownSessionId],
-    });
+    await webview.receive({ type: "unarchiveSession", sessionId: unknownSessionId });
 
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       `Session not found: ${unknownSessionId}`,
     );
-    // the failed batch wrote nothing: the whitelist keeps its previous content
+    // the failed request wrote nothing: the whitelist keeps its previous content
     const store = readStore(statePath);
     expect(registeredWorkspaceCwds(store)).toEqual([root]);
     expect(activeSessionIds(store)).toEqual(new Set([activeSessionId]));
@@ -1172,7 +1193,7 @@ describe("SessionWebviewProvider", () => {
     ).length;
 
     await writeFile(statePath, "{ invalid", "utf8");
-    await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
 
     expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
       /^session-state\.json is not valid JSON: /,
@@ -1234,7 +1255,7 @@ describe("SessionWebviewProvider", () => {
     await provider.refresh();
 
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
 
     const sentSessions = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
       sessionId: string;

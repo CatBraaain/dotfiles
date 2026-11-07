@@ -38,9 +38,12 @@ export interface ClientSessionGroup {
   sessions: ClientSession[];
 }
 
-/** State sent by the extension host: every session of every workspace group. */
+/** State sent by the extension host: every session of every workspace
+ * group, plus the session its shared display terminal currently shows. */
 export interface ClientState {
   groups: ClientSessionGroup[];
+  /** Session the shared display terminal shows; undefined when it shows none. */
+  displayedSessionId?: string;
 }
 
 /** Element descriptor: tag plus optional attributes and children (text allowed). */
@@ -83,110 +86,18 @@ function visibleGroupSessions(
     : group.sessions;
 }
 
-/** Modifier keys of a session-row click, as far as selection is concerned. */
-export interface SelectionClick {
-  sessionId: string;
-  shiftKey: boolean;
-  ctrlKey: boolean;
-  metaKey: boolean;
-}
-
-/** Result of applying a selection click: the next selection, its anchor row, and whether the row also opens. */
-export interface SelectionUpdate {
-  selection: ReadonlySet<string>;
-  anchor: string | undefined;
-  opensSession: boolean;
-}
-
-/**
- * Native-style row selection:
- * - plain click: single selection and open the session;
- * - Ctrl/Cmd click: toggle one row without opening;
- * - Shift click: replace the selection with the anchor-to-clicked range in
- *   display order (across cwd groups) without opening.
- */
-export function nextSelectionFromClick(
-  click: SelectionClick,
-  selection: ReadonlySet<string>,
-  visibleIds: readonly string[],
-  anchor: string | undefined,
-): SelectionUpdate {
-  if (click.shiftKey) {
-    const anchorId = anchor ?? click.sessionId;
-    const anchorIndex = visibleIds.indexOf(anchorId);
-    const clickedIndex = visibleIds.indexOf(click.sessionId);
-    if (anchorIndex === -1 || clickedIndex === -1) {
-      return {
-        selection: new Set([click.sessionId]),
-        anchor: click.sessionId,
-        opensSession: false,
-      };
-    }
-    const [first, last] =
-      anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
-    return {
-      selection: new Set(visibleIds.slice(first, last + 1)),
-      anchor: anchorId,
-      opensSession: false,
-    };
-  }
-  if (click.ctrlKey || click.metaKey) {
-    const next = new Set(selection);
-    if (next.has(click.sessionId)) {
-      next.delete(click.sessionId);
-    } else {
-      next.add(click.sessionId);
-    }
-    return { selection: next, anchor: click.sessionId, opensSession: false };
-  }
-  return { selection: new Set([click.sessionId]), anchor: click.sessionId, opensSession: true };
-}
-
-/** IDs to archive when the Archive action runs on one row: the visible selected unarchived unlocked sessions when the row is selected, otherwise just that row. */
-export function archiveTargetIds(
-  clickedSessionId: string,
-  selection: ReadonlySet<string>,
-  visible: readonly ClientSession[],
-): string[] {
-  if (!selection.has(clickedSessionId)) return [clickedSessionId];
-  return visible
-    .filter(
-      (session) => !session.isArchived && !session.isLocked && selection.has(session.sessionId),
-    )
-    .map((session) => session.sessionId);
-}
-
-/** IDs to unarchive when the Unarchive action runs on one row: the visible selected archived sessions when the row is selected, otherwise just that row. */
-export function unarchiveTargetIds(
-  clickedSessionId: string,
-  selection: ReadonlySet<string>,
-  visible: readonly ClientSession[],
-): string[] {
-  if (!selection.has(clickedSessionId)) return [clickedSessionId];
-  return visible
-    .filter((session) => session.isArchived && selection.has(session.sessionId))
-    .map((session) => session.sessionId);
-}
-
-/** IDs a select-all picks up: visible unarchived unlocked sessions, across cwd groups. */
-export function selectAllIds(visible: readonly ClientSession[]): string[] {
-  return visible
-    .filter((session) => !session.isArchived && !session.isLocked)
-    .map((session) => session.sessionId);
-}
-
 /** Pure view for a state, the shared display mode, copied session IDs, and
- * selected rows: session rows, empty state. */
+ * the displayed session: session rows, empty state. */
 export function sessionListView(
   state: ClientState,
   mode: ViewMode,
   copiedIds: ReadonlySet<string> = new Set(),
-  selectedIds: ReadonlySet<string> = new Set(),
+  displayedSessionId: string | undefined = undefined,
   collapsedCwds: ReadonlySet<string> = new Set(),
 ): SessionListView {
   const groups = state.groups
     .filter((group) => mode === "all" || group.workspaceActive)
-    .map((group) => groupDescriptor(group, mode, copiedIds, selectedIds, collapsedCwds));
+    .map((group) => groupDescriptor(group, mode, copiedIds, displayedSessionId, collapsedCwds));
   return {
     sessions:
       groups.length === 0
@@ -199,7 +110,7 @@ function groupDescriptor(
   group: ClientSessionGroup,
   mode: ViewMode,
   copiedIds: ReadonlySet<string>,
-  selectedIds: ReadonlySet<string>,
+  displayedSessionId: string | undefined,
   collapsedCwds: ReadonlySet<string>,
 ): ElementDescriptor {
   const isExpanded = !collapsedCwds.has(group.cwd);
@@ -261,7 +172,7 @@ function groupDescriptor(
           },
         ],
       },
-      ...sessions.map((session) => sessionDescriptor(session, copiedIds, selectedIds)),
+      ...sessions.map((session) => sessionDescriptor(session, copiedIds, displayedSessionId)),
     ],
   };
 }
@@ -269,11 +180,11 @@ function groupDescriptor(
 function sessionDescriptor(
   session: ClientSession,
   copiedIds: ReadonlySet<string>,
-  selectedIds: ReadonlySet<string>,
+  displayedSessionId: string | undefined,
 ): ElementDescriptor {
   const rowClass = [
     "session-row",
-    selectedIds.has(session.sessionId) ? "selected" : "",
+    session.sessionId === displayedSessionId ? "selected" : "",
     session.isArchived ? "archived" : "",
   ]
     .filter((className) => className !== "")
@@ -473,10 +384,7 @@ interface DescriptorActions {
   onGroupToggle(cwd: string): void;
   onNewSessionClick(cwd: string): void;
   onUnregisterClick(cwd: string): void;
-  onSessionClick(
-    sessionId: string,
-    event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
-  ): void;
+  onSessionClick(sessionId: string): void;
   onCopyClick(sessionId: string): void;
   onLockClick(sessionId: string, nextLocked: boolean): void;
   onArchiveClick(sessionId: string): void;
@@ -498,19 +406,12 @@ function descriptorProps(descriptor: ElementDescriptor): Record<string, unknown>
   return props;
 }
 
-/** Modifier keys a row click carries, as far as selection is concerned. */
-interface ClickModifiers {
-  shiftKey: boolean;
-  ctrlKey: boolean;
-  metaKey: boolean;
-}
-
 /** Attach the delegated-click behavior of initClient's predecessor to the
  * descriptor's buttons, mirroring the fixed request protocol. */
 function descriptorOnClick(
   descriptor: ElementDescriptor,
   actions: DescriptorActions,
-): ((event: ClickModifiers) => void) | undefined {
+): (() => void) | undefined {
   if (descriptor.tag !== "button") return undefined;
   const attrs = descriptor.attrs ?? {};
   const groupCwd = attrs["data-toggle-group"];
@@ -533,7 +434,7 @@ function descriptorOnClick(
     return () => actions.onLockClick(sessionId, !locked);
   }
   if (attrs["data-copy"] !== undefined) return () => actions.onCopyClick(sessionId);
-  return (event) => actions.onSessionClick(sessionId, event);
+  return () => actions.onSessionClick(sessionId);
 }
 
 /** Materialize a descriptor as a React element (SVG tags included). */
@@ -604,8 +505,9 @@ interface SessionsAppProps {
 }
 
 /** Render the session list into the #sessions root. The shared display mode
- * and row selection stay in client state (no host round-trip); session actions
- * go through the bridge. */
+ * stays in client state (no host round-trip); the row selection display
+ * follows the state's displayedSessionId, which the host owns; session
+ * actions go through the bridge. */
 function SessionsApp({
   bridge,
   store,
@@ -615,47 +517,8 @@ function SessionsApp({
 }: SessionsAppProps): ReactElement {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
-  const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [copiedIds, setCopiedIds] = useState(() => new Set<string>());
-  const anchorRef = useRef<string | undefined>(undefined);
   const copiedTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-
-  const visible = visibleSessions(snapshot.state, snapshot.mode, collapsedCwds);
-
-  /** Keep selection and its anchor pointing at sessions that still exist. */
-  useEffect(() => {
-    const knownIds = new Set(
-      snapshot.state.groups.flatMap((group) => group.sessions.map((session) => session.sessionId)),
-    );
-    setSelection((previous) => {
-      const next = new Set([...previous].filter((sessionId) => knownIds.has(sessionId)));
-      return next.size === previous.size ? previous : next;
-    });
-    if (anchorRef.current !== undefined && !knownIds.has(anchorRef.current)) {
-      anchorRef.current = undefined;
-    }
-  }, [snapshot.state]);
-
-  /** Select-all while the list itself has focus; never touch inputs elsewhere. */
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey && !event.metaKey) return;
-      if (event.key.toLowerCase() !== "a") return;
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setSelection(
-        new Set(selectAllIds(visibleSessions(snapshot.state, snapshot.mode, collapsedCwds))),
-      );
-    };
-    sessionsElement.addEventListener("keydown", onKeyDown);
-    return () => sessionsElement.removeEventListener("keydown", onKeyDown);
-  }, [snapshot, collapsedCwds, sessionsElement]);
 
   /** Show the copied feedback on the row's copy button for about a second. */
   const markCopied = useCallback((sessionId: string): void => {
@@ -701,36 +564,24 @@ function SessionsApp({
       }),
     onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
     onUnregisterClick: (cwd) => openUnregisterDialog(cwd),
-    onSessionClick: (sessionId, event) => {
-      const update = nextSelectionFromClick(
-        { sessionId, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey },
-        selection,
-        visible.map((session) => session.sessionId),
-        anchorRef.current,
-      );
-      setSelection(update.selection);
-      anchorRef.current = update.anchor;
-      if (update.opensSession) bridge.postMessage({ type: "openSession", sessionId });
-    },
+    onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
     onCopyClick: (sessionId) => {
       markCopied(sessionId);
       bridge.postMessage({ type: "copySessionId", sessionId });
     },
     onLockClick: (sessionId, nextLocked) =>
       bridge.postMessage({ type: "setSessionLock", sessionId, locked: nextLocked }),
-    onArchiveClick: (sessionId) => {
-      const sessionIds = archiveTargetIds(sessionId, selection, visible);
-      if (sessionIds.length === 0) return;
-      bridge.postMessage({ type: "archiveSessions", sessionIds });
-    },
-    onUnarchiveClick: (sessionId) => {
-      const sessionIds = unarchiveTargetIds(sessionId, selection, visible);
-      if (sessionIds.length === 0) return;
-      bridge.postMessage({ type: "unarchiveSessions", sessionIds });
-    },
+    onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
+    onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),
   };
 
-  const view = sessionListView(snapshot.state, snapshot.mode, copiedIds, selection, collapsedCwds);
+  const view = sessionListView(
+    snapshot.state,
+    snapshot.mode,
+    copiedIds,
+    snapshot.state.displayedSessionId,
+    collapsedCwds,
+  );
   return <>{view.sessions.map((descriptor) => descriptorToElement(descriptor, actions))}</>;
 }
 

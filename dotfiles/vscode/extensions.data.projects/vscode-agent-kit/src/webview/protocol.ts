@@ -5,8 +5,8 @@ export type WebviewRequest =
   | { type: "addWorkspace"; path: string }
   | { type: "unregisterWorkspace"; cwd: string }
   | { type: "openSession"; sessionId: string }
-  | { type: "archiveSessions"; sessionIds: string[] }
-  | { type: "unarchiveSessions"; sessionIds: string[] }
+  | { type: "archiveSession"; sessionId: string }
+  | { type: "unarchiveSession"; sessionId: string }
   | { type: "setSessionLock"; sessionId: string; locked: boolean }
   | { type: "copySessionId"; sessionId: string };
 
@@ -30,6 +30,8 @@ export interface WebviewSessionGroup {
 
 export interface WebviewState {
   groups: WebviewSessionGroup[];
+  /** Session the shared display terminal currently shows; undefined when it shows none. */
+  displayedSessionId?: string;
 }
 
 export type ExtensionMessage =
@@ -51,6 +53,8 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   if (
     (value.type === "openSession" ||
       value.type === "copySessionId" ||
+      value.type === "archiveSession" ||
+      value.type === "unarchiveSession" ||
       value.type === "setSessionLock") &&
     isSessionId(value.sessionId)
   ) {
@@ -60,14 +64,6 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
         : undefined;
     }
     return { type: value.type, sessionId: value.sessionId };
-  }
-  if (
-    (value.type === "archiveSessions" || value.type === "unarchiveSessions") &&
-    Array.isArray(value.sessionIds) &&
-    value.sessionIds.length > 0 &&
-    value.sessionIds.every(isSessionId)
-  ) {
-    return { type: value.type, sessionIds: value.sessionIds };
   }
   return undefined;
 }

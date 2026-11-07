@@ -6,6 +6,7 @@ import { errorMessage } from "./guards";
 
 export class TerminalRegistry {
   private display: vscode.Terminal | undefined;
+  private displayedSession: string | undefined;
   private pending = Promise.resolve();
   private readonly closeWaiters = new Map<vscode.Terminal, () => void>();
   private readonly closed = new WeakSet<vscode.Terminal>();
@@ -14,6 +15,11 @@ export class TerminalRegistry {
     readonly runtimes: TmuxRuntimeStore,
     private readonly terminals: DisplayTerminals,
   ) {}
+
+  /** Session the shared display terminal currently shows; undefined while it shows none. */
+  get displayedSessionId(): string | undefined {
+    return this.displayedSession;
+  }
 
   run<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.pending.then(operation);
@@ -35,7 +41,10 @@ export class TerminalRegistry {
   }
 
   onTerminalClosed(closed: vscode.Terminal): void {
-    if (this.display === closed) this.display = undefined;
+    if (this.display === closed) {
+      this.display = undefined;
+      this.displayedSession = undefined;
+    }
     this.closed.add(closed);
     this.closeWaiters.get(closed)?.();
   }
@@ -61,6 +70,7 @@ export class TerminalRegistry {
       if (restored === undefined) await this.closeDisplay(terminal);
       throw error;
     }
+    this.displayedSession = runtime.sessionId;
     return terminal;
   }
 
