@@ -2,41 +2,46 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import {
   archiveSession,
+  clearSessionState,
+  getSessionState,
   parseStore,
   serializeStore,
+  setSessionState,
   unarchiveSession,
   type SessionStateStore,
 } from "./index.ts";
 
 describe("parseStore", () => {
-  it("version 2 と workspaces を持つ文書を有効な store として読む", () => {
+  it("workspaces を持つ文書を有効な store として読む", () => {
     const raw = JSON.stringify({
-      version: 2,
       workspaces: {
-        "/tmp": { active: true, "active-sessions": ["s1"], "locked-sessions": ["s2"] },
+        "/tmp": {
+          "active-sessions": { s1: { lock: false, state: "running" } },
+          pinned: true,
+        },
       },
     });
     const parsed = parseStore(raw);
     assert.ok(parsed.valid);
     assert.deepEqual(parsed.store, {
-      version: 2,
       workspaces: {
-        "/tmp": { active: true, "active-sessions": ["s1"], "locked-sessions": ["s2"] },
+        "/tmp": {
+          "active-sessions": { s1: { lock: false, state: "running" } },
+          pinned: true,
+        },
       },
     });
   });
 
   it("未知の root キーと workspace エントリの未知フィールドを保ったまま読む", () => {
     const raw = JSON.stringify({
-      version: 2,
-      workspaces: { "/tmp": { "active-sessions": ["s1"], pinned: true } },
+      workspaces: { "/tmp": { "active-sessions": { s1: { lock: false } }, pinned: true } },
       tags: ["a"],
     });
     const parsed = parseStore(raw);
     assert.ok(parsed.valid);
     assert.deepEqual(parsed.store, {
-      version: 2,
-      workspaces: { "/tmp": { "active-sessions": ["s1"], pinned: true } },
+      workspaces: { "/tmp": { "active-sessions": { s1: { lock: false } }, pinned: true } },
       tags: ["a"],
     });
   });
@@ -54,55 +59,41 @@ describe("parseStore", () => {
   });
 
   it("workspaces がオブジェクトでない内容は無効", () => {
-    assert.equal(parseStore('{"version":2,"workspaces":[]}').valid, false);
-    assert.equal(parseStore('{"version":2,"workspaces":"x"}').valid, false);
-    assert.equal(parseStore('{"version":2,"workspaces":3}').valid, false);
+    assert.equal(parseStore('{"workspaces":[]}').valid, false);
+    assert.equal(parseStore('{"workspaces":"x"}').valid, false);
+    assert.equal(parseStore('{"workspaces":3}').valid, false);
   });
 
   it("workspaces が無い内容は無効", () => {
-    assert.equal(parseStore('{"version":2}').valid, false);
+    assert.equal(parseStore("{}").valid, false);
   });
 
-  it("version が 2 以外の内容は無効", () => {
-    assert.equal(
-      parseStore('{"version":1,"workspaces":{}}').valid,
-      false,
-    );
-    assert.equal(
-      parseStore('{"version":3,"workspaces":{}}').valid,
-      false,
-    );
-    assert.equal(parseStore('{"version":"2","workspaces":{}}').valid, false);
-  });
-
-  it("version が無い内容は無効", () => {
-    assert.equal(parseStore('{"workspaces":{}}').valid, false);
+  it("active-sessions が配列の workspace エントリを持つ旧形式は無効", () => {
+    assert.equal(parseStore('{"workspaces":{"/w":{"active-sessions":["s1"]}}}').valid, false);
+    assert.equal(parseStore('{"workspaces":{"/w":{"active-sessions":[]},"/x":{}}}').valid, false);
   });
 });
 
 describe("unarchiveSession", () => {
-  it("store が無いとき version 2 の新規 store に自ワークスペースのエントリを作る", () => {
+  it("store が無いとき新規 store に自ワークスペースの entry を作る", () => {
     assert.deepEqual(unarchiveSession(undefined, "/w", "s1"), {
       status: "written",
       store: {
-        version: 2,
-        workspaces: { "/w": { "active-sessions": ["s1"] } },
+        workspaces: { "/w": { "active-sessions": { s1: { lock: false } } } },
       },
     });
   });
 
   it("自ワークスペースのエントリが無いときは作成し、他のワークスペースを保つ", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/other": { "active-sessions": ["s2"] } },
+      workspaces: { "/other": { "active-sessions": { s2: { lock: false } } } },
     };
     assert.deepEqual(unarchiveSession(store, "/w", "s1"), {
       status: "written",
       store: {
-        version: 2,
         workspaces: {
-          "/other": { "active-sessions": ["s2"] },
-          "/w": { "active-sessions": ["s1"] },
+          "/other": { "active-sessions": { s2: { lock: false } } },
+          "/w": { "active-sessions": { s1: { lock: false } } },
         },
       },
     });
@@ -110,28 +101,25 @@ describe("unarchiveSession", () => {
 
   it("active-sessions に既に載っているときは書き込まない", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/w": { "active-sessions": ["s1"] } },
+      workspaces: {
+        "/w": { "active-sessions": { s1: { lock: true, state: "running" } } },
+      },
     };
     assert.deepEqual(unarchiveSession(store, "/w", "s1"), { status: "skipped" });
   });
 
-  it("active-sessions へ追加し、active・locked-sessions・未知フィールドを保つ", () => {
+  it("entry を追加し、active-sessions の他セッションと workspace エントリの未知フィールドを保つ", () => {
     const store: SessionStateStore = {
-      version: 2,
       workspaces: {
-        "/w": { active: false, "active-sessions": ["s2"], "locked-sessions": ["s3"], pinned: true },
+        "/w": { "active-sessions": { s2: { lock: true } }, pinned: true },
       },
     };
     assert.deepEqual(unarchiveSession(store, "/w", "s1"), {
       status: "written",
       store: {
-        version: 2,
         workspaces: {
           "/w": {
-            active: false,
-            "active-sessions": ["s2", "s1"],
-            "locked-sessions": ["s3"],
+            "active-sessions": { s2: { lock: true }, s1: { lock: false } },
             pinned: true,
           },
         },
@@ -139,55 +127,49 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("locked-sessions に載っていても active-sessions へ追加する", () => {
+  it("active-sessions が無い workspace エントリに active-sessions を作る", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/w": { "locked-sessions": ["s1"] } },
+      workspaces: { "/w": { pinned: true } },
     };
     assert.deepEqual(unarchiveSession(store, "/w", "s1"), {
       status: "written",
       store: {
-        version: 2,
-        workspaces: { "/w": { "locked-sessions": ["s1"], "active-sessions": ["s1"] } },
+        workspaces: { "/w": { pinned: true, "active-sessions": { s1: { lock: false } } } },
+      },
+    });
+  });
+
+  it("active-sessions がオブジェクトでないときは新しい map で書く", () => {
+    const parsed = parseStore('{"workspaces":{"/w":{"active-sessions":"garbage"}}}');
+    assert.ok(parsed.valid);
+    assert.deepEqual(unarchiveSession(parsed.store, "/w", "s1"), {
+      status: "written",
+      store: {
+        workspaces: { "/w": { "active-sessions": { s1: { lock: false } } } },
       },
     });
   });
 
   it("自ワークスペースのエントリがオブジェクトでないときは置き換える", () => {
-    const parsed = parseStore('{"version":2,"workspaces":{"/w":"garbage"}}');
+    const parsed = parseStore('{"workspaces":{"/w":"garbage"}}');
     assert.ok(parsed.valid);
     assert.deepEqual(unarchiveSession(parsed.store, "/w", "s1"), {
       status: "written",
       store: {
-        version: 2,
-        workspaces: { "/w": { "active-sessions": ["s1"] } },
-      },
-    });
-  });
-
-  it("active-sessions が配列でないときは新しい配列で書く", () => {
-    const parsed = parseStore('{"version":2,"workspaces":{"/w":{"active-sessions":"garbage"}}}');
-    assert.ok(parsed.valid);
-    assert.deepEqual(unarchiveSession(parsed.store, "/w", "s1"), {
-      status: "written",
-      store: {
-        version: 2,
-        workspaces: { "/w": { "active-sessions": ["s1"] } },
+        workspaces: { "/w": { "active-sessions": { s1: { lock: false } } } },
       },
     });
   });
 
   it("未知の root キーを保つ", () => {
     const store: SessionStateStore = {
-      version: 2,
       workspaces: {},
       tags: ["a"],
     };
     assert.deepEqual(unarchiveSession(store, "/w", "s1"), {
       status: "written",
       store: {
-        version: 2,
-        workspaces: { "/w": { "active-sessions": ["s1"] } },
+        workspaces: { "/w": { "active-sessions": { s1: { lock: false } } } },
         tags: ["a"],
       },
     });
@@ -195,8 +177,7 @@ describe("unarchiveSession", () => {
 
   it("入力の store を変更しない", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/w": { "active-sessions": ["s2"], "locked-sessions": ["s3"] } },
+      workspaces: { "/w": { "active-sessions": { s2: { lock: false }, s3: { lock: true } } } },
     };
     const snapshot = structuredClone(store);
     unarchiveSession(store, "/w", "s1");
@@ -205,55 +186,22 @@ describe("unarchiveSession", () => {
 });
 
 describe("archiveSession", () => {
-  it("locked-sessions に載っているセッションは locked を返す", () => {
+  it("lock が true のセッションは locked を返す", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/w": { "active-sessions": ["s1"], "locked-sessions": ["s1"] } },
+      workspaces: { "/w": { "active-sessions": { s1: { lock: true } } } },
     };
     assert.deepEqual(archiveSession(store, "/w", "s1"), { status: "locked" });
-  });
-
-  it("active-sessions に載っていなくても locked-sessions に載っていれば locked を返す", () => {
-    const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/w": { "locked-sessions": ["s1"] } },
-    };
-    assert.deepEqual(archiveSession(store, "/w", "s1"), { status: "locked" });
-  });
-
-  it("active-sessions から自セッションを削除し、他の属性を保つ", () => {
-    const store: SessionStateStore = {
-      version: 2,
-      workspaces: {
-        "/w": { active: true, "active-sessions": ["s1", "s2"], "locked-sessions": ["s3"], pinned: true },
-      },
-    };
-    assert.deepEqual(archiveSession(store, "/w", "s1"), {
-      status: "written",
-      store: {
-        version: 2,
-        workspaces: {
-          "/w": {
-            active: true,
-            "active-sessions": ["s2"],
-            "locked-sessions": ["s3"],
-            pinned: true,
-          },
-        },
-      },
-    });
   });
 
   it("active-sessions に載っていなければ書き込まない", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/w": { "active-sessions": ["s2"] } },
+      workspaces: { "/w": { "active-sessions": { s2: { lock: false } } } },
     };
     assert.deepEqual(archiveSession(store, "/w", "s1"), { status: "skipped" });
   });
 
   it("自ワークスペースのエントリが無いときは書き込まない", () => {
-    const store: SessionStateStore = { version: 2, workspaces: {} };
+    const store: SessionStateStore = { workspaces: {} };
     assert.deepEqual(archiveSession(store, "/w", "s1"), { status: "skipped" });
   });
 
@@ -261,25 +209,60 @@ describe("archiveSession", () => {
     assert.deepEqual(archiveSession(undefined, "/w", "s1"), { status: "skipped" });
   });
 
-  it("active-sessions が配列でないときは書き込まない", () => {
-    const parsed = parseStore('{"version":2,"workspaces":{"/w":{"active-sessions":"garbage"}}}');
+  it("active-sessions がオブジェクトでないときは書き込まない", () => {
+    const parsed = parseStore('{"workspaces":{"/w":{"active-sessions":"garbage"}}}');
     assert.ok(parsed.valid);
     assert.deepEqual(archiveSession(parsed.store, "/w", "s1"), { status: "skipped" });
   });
 
+  it("自セッションの entry を削除し、他のセッションと属性を保つ", () => {
+    const store: SessionStateStore = {
+      workspaces: {
+        "/w": {
+          "active-sessions": {
+            s1: { lock: false, state: "running" },
+            s2: { lock: true },
+          },
+          pinned: true,
+        },
+      },
+    };
+    assert.deepEqual(archiveSession(store, "/w", "s1"), {
+      status: "written",
+      store: {
+        workspaces: {
+          "/w": { "active-sessions": { s2: { lock: true } }, pinned: true },
+        },
+      },
+    });
+  });
+
+  it("削除後も空の active-sessions map を残す", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s1: { lock: false } } } },
+    };
+    assert.deepEqual(archiveSession(store, "/w", "s1"), {
+      status: "written",
+      store: {
+        workspaces: { "/w": { "active-sessions": {} } },
+      },
+    });
+  });
+
   it("他のワークスペースと未知の root キーを保つ", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/other": { "active-sessions": ["s2"] }, "/w": { "active-sessions": ["s1"] } },
+      workspaces: {
+        "/other": { "active-sessions": { s2: { lock: false } } },
+        "/w": { "active-sessions": { s1: { lock: false } } },
+      },
       tags: ["a"],
     };
     assert.deepEqual(archiveSession(store, "/w", "s1"), {
       status: "written",
       store: {
-        version: 2,
         workspaces: {
-          "/other": { "active-sessions": ["s2"] },
-          "/w": { "active-sessions": [] },
+          "/other": { "active-sessions": { s2: { lock: false } } },
+          "/w": { "active-sessions": {} },
         },
         tags: ["a"],
       },
@@ -288,8 +271,9 @@ describe("archiveSession", () => {
 
   it("入力の store を変更しない", () => {
     const store: SessionStateStore = {
-      version: 2,
-      workspaces: { "/w": { "active-sessions": ["s1", "s2"], "locked-sessions": ["s3"] } },
+      workspaces: {
+        "/w": { "active-sessions": { s1: { lock: false }, s2: { lock: true } } },
+      },
     };
     const snapshot = structuredClone(store);
     archiveSession(store, "/w", "s1");
@@ -297,17 +281,238 @@ describe("archiveSession", () => {
   });
 });
 
+describe("setSessionState", () => {
+  it("store が無いとき新規 store に自セッションの entry を作る", () => {
+    assert.deepEqual(setSessionState(undefined, "/w", "s1", "waiting-user"), {
+      status: "written",
+      store: {
+        workspaces: { "/w": { "active-sessions": { s1: { state: "waiting-user" } } } },
+      },
+    });
+  });
+
+  it("同じ state が既に設定されているときは書き込まない", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s1: { state: "running" } } } },
+    };
+    assert.deepEqual(setSessionState(store, "/w", "s1", "running"), { status: "skipped" });
+  });
+
+  it("state を更新し、entry の lock と他セッションの entry を保つ", () => {
+    const store: SessionStateStore = {
+      workspaces: {
+        "/w": {
+          "active-sessions": {
+            s1: { lock: true, state: "waiting-user" },
+            s2: { state: "running" },
+          },
+        },
+      },
+    };
+    assert.deepEqual(setSessionState(store, "/w", "s1", "running"), {
+      status: "written",
+      store: {
+        workspaces: {
+          "/w": {
+            "active-sessions": {
+              s1: { lock: true, state: "running" },
+              s2: { state: "running" },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("workspace エントリの未知フィールドを保つ", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { pinned: true } },
+    };
+    assert.deepEqual(setSessionState(store, "/w", "s1", "waiting-approval"), {
+      status: "written",
+      store: {
+        workspaces: {
+          "/w": {
+            pinned: true,
+            "active-sessions": { s1: { state: "waiting-approval" } },
+          },
+        },
+      },
+    });
+  });
+
+  it("active-sessions がオブジェクトでないときは置き換える", () => {
+    const parsed = parseStore('{"workspaces":{"/w":{"active-sessions":"garbage"}}}');
+    assert.ok(parsed.valid);
+    assert.deepEqual(setSessionState(parsed.store, "/w", "s1", "running"), {
+      status: "written",
+      store: {
+        workspaces: { "/w": { "active-sessions": { s1: { state: "running" } } } },
+      },
+    });
+  });
+
+  it("entry がオブジェクトでないときは新しい entry で書く", () => {
+    const parsed = parseStore('{"workspaces":{"/w":{"active-sessions":{"s1":"garbage"}}}}');
+    assert.ok(parsed.valid);
+    assert.deepEqual(setSessionState(parsed.store, "/w", "s1", "running"), {
+      status: "written",
+      store: {
+        workspaces: { "/w": { "active-sessions": { s1: { state: "running" } } } },
+      },
+    });
+  });
+
+  it("未知の root キーを保つ", () => {
+    const store: SessionStateStore = { workspaces: {}, tags: ["a"] };
+    assert.deepEqual(setSessionState(store, "/w", "s1", "waiting-user"), {
+      status: "written",
+      store: {
+        workspaces: { "/w": { "active-sessions": { s1: { state: "waiting-user" } } } },
+        tags: ["a"],
+      },
+    });
+  });
+
+  it("入力の store を変更しない", () => {
+    const store: SessionStateStore = {
+      workspaces: {
+        "/w": { "active-sessions": { s1: { lock: true, state: "waiting-user" } } },
+      },
+    };
+    const snapshot = structuredClone(store);
+    setSessionState(store, "/w", "s1", "running");
+    assert.deepEqual(store, snapshot);
+  });
+});
+
+describe("getSessionState", () => {
+  it("自セッションの state を返す", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s1: { state: "running" } } } },
+    };
+    assert.equal(getSessionState(store, "/w", "s1"), "running");
+  });
+
+  it("store が無いときは undefined を返す", () => {
+    assert.equal(getSessionState(undefined, "/w", "s1"), undefined);
+  });
+
+  it("workspace のエントリが無いときは undefined を返す", () => {
+    const store: SessionStateStore = { workspaces: {} };
+    assert.equal(getSessionState(store, "/w", "s1"), undefined);
+  });
+
+  it("active-sessions が無いときは undefined を返す", () => {
+    const store: SessionStateStore = { workspaces: { "/w": { pinned: true } } };
+    assert.equal(getSessionState(store, "/w", "s1"), undefined);
+  });
+
+  it("他セッションの entry は返さない", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s2: { state: "running" } } } },
+    };
+    assert.equal(getSessionState(store, "/w", "s1"), undefined);
+  });
+
+  it("state が3値でない entry は undefined を返す", () => {
+    const parsed = parseStore('{"workspaces":{"/w":{"active-sessions":{"s1":{"state":"idle"}}}}}');
+    assert.ok(parsed.valid);
+    assert.equal(getSessionState(parsed.store, "/w", "s1"), undefined);
+  });
+
+  it("entry がオブジェクトでないときは undefined を返す", () => {
+    const parsed = parseStore('{"workspaces":{"/w":{"active-sessions":{"s1":"garbage"}}}}');
+    assert.ok(parsed.valid);
+    assert.equal(getSessionState(parsed.store, "/w", "s1"), undefined);
+  });
+});
+
+describe("clearSessionState", () => {
+  it("自セッションの entry から state を除き、lock と他セッションを保つ", () => {
+    const store: SessionStateStore = {
+      workspaces: {
+        "/w": {
+          "active-sessions": {
+            s1: { lock: true, state: "running" },
+            s2: { state: "running" },
+          },
+        },
+      },
+    };
+    assert.deepEqual(clearSessionState(store, "/w", "s1"), {
+      status: "written",
+      store: {
+        workspaces: {
+          "/w": { "active-sessions": { s1: { lock: true }, s2: { state: "running" } } },
+        },
+      },
+    });
+  });
+
+  it("state が無いときは書き込まない", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s1: { lock: false } } } },
+    };
+    assert.deepEqual(clearSessionState(store, "/w", "s1"), { status: "skipped" });
+  });
+
+  it("active-sessions に載っていないときは書き込まない", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s2: { state: "running" } } } },
+    };
+    assert.deepEqual(clearSessionState(store, "/w", "s1"), { status: "skipped" });
+  });
+
+  it("store が無いときも書き込まない", () => {
+    assert.deepEqual(clearSessionState(undefined, "/w", "s1"), { status: "skipped" });
+  });
+
+  it("workspace のエントリが無いときは書き込まない", () => {
+    const store: SessionStateStore = { workspaces: {} };
+    assert.deepEqual(clearSessionState(store, "/w", "s1"), { status: "skipped" });
+  });
+
+  it("active-sessions がオブジェクトでないときは書き込まない", () => {
+    const parsed = parseStore('{"workspaces":{"/w":{"active-sessions":"garbage"}}}');
+    assert.ok(parsed.valid);
+    assert.deepEqual(clearSessionState(parsed.store, "/w", "s1"), { status: "skipped" });
+  });
+
+  it("workspaces と未知の root キーを保つ", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s1: { state: "waiting-approval" } } } },
+      tags: ["a"],
+    };
+    assert.deepEqual(clearSessionState(store, "/w", "s1"), {
+      status: "written",
+      store: {
+        workspaces: { "/w": { "active-sessions": { s1: {} } } },
+        tags: ["a"],
+      },
+    });
+  });
+
+  it("入力の store を変更しない", () => {
+    const store: SessionStateStore = {
+      workspaces: { "/w": { "active-sessions": { s1: { state: "running" } } } },
+    };
+    const snapshot = structuredClone(store);
+    clearSessionState(store, "/w", "s1");
+    assert.deepEqual(store, snapshot);
+  });
+});
+
 describe("serializeStore", () => {
   it("2 スペースの pretty JSON と末尾改行で書き出す", () => {
     const store: SessionStateStore = {
-      version: 2,
       workspaces: {
-        "/w": { active: true, "active-sessions": ["s1"], "locked-sessions": [] },
+        "/w": { "active-sessions": { s1: { lock: false } } },
       },
     };
     assert.equal(
       serializeStore(store),
-      '{\n  "version": 2,\n  "workspaces": {\n    "/w": {\n      "active": true,\n      "active-sessions": [\n        "s1"\n      ],\n      "locked-sessions": []\n    }\n  }\n}\n',
+      '{\n  "workspaces": {\n    "/w": {\n      "active-sessions": {\n        "s1": {\n          "lock": false\n        }\n      }\n    }\n  }\n}\n',
     );
   });
 });
