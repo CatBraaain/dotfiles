@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import {
   encodeCwdDirName,
-  metadataStorePath,
   sessionStatePath,
   resolveAgentDir,
   resolveSessionDir,
@@ -34,10 +33,6 @@ describe("directory resolution", () => {
 
   it("places the session state store at <agentDir>/session-state.json", () => {
     expect(sessionStatePath("/custom/agent")).toBe("/custom/agent/session-state.json");
-  });
-
-  it("places the legacy metadata store at <agentDir>/session-metadata.json", () => {
-    expect(metadataStorePath("/custom/agent")).toBe("/custom/agent/session-metadata.json");
   });
 });
 

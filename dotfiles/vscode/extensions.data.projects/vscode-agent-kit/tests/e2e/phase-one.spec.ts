@@ -585,10 +585,10 @@ test(
     const aIsListed = (): boolean => {
       const store = JSON.parse(readFileSync(statePath, "utf8")) as {
         sentinel?: string;
-        workspaces: Record<string, { "active-sessions"?: string[] }>;
+        "active-workspaces": Record<string, { "active-sessions"?: Record<string, unknown> }>;
       };
-      const entry = store.workspaces[host.sessions.A.cwd] ?? {};
-      return (entry["active-sessions"] ?? []).includes(aId);
+      const entry = store["active-workspaces"][host.sessions.A.cwd] ?? {};
+      return Object.hasOwn(entry["active-sessions"] ?? {}, aId);
     };
     const aId = host.sessions.A.id;
     const rowIn = (frame: Frame, id: string) =>

@@ -438,13 +438,10 @@ export class VSCodeFixture {
 
   private prepareSessions(): void {
     const store = {
-      version: 2,
       sentinel: "preserved",
-      workspaces: {} as Record<string, Record<string, unknown>>,
-      "registered-workspaces": [] as string[],
+      "active-workspaces": {} as Record<string, { "active-sessions"?: Record<string, unknown> }>,
     };
     const activeByCwd = new Map<string, string[]>();
-    const archivedNames = new Map<string, Record<string, string>>();
     const cwds = {
       A: this.projectDirectories.A,
       External: "external",
@@ -478,29 +475,24 @@ export class VSCodeFixture {
       );
       write(session, original);
       this.sessions[key] = { id, cwd, session, original };
-      if (key === "B") {
-        // B starts archived: off the whitelist with a display-name snapshot.
-        const names = archivedNames.get(cwd) ?? {};
-        names[id] = `Fixture ${key}`;
-        archivedNames.set(cwd, names);
-      } else {
+      if (key !== "B") {
+        // B starts archived: absent from the active-sessions map. Every other
+        // fixture session is a member of its workspace.
         const active = activeByCwd.get(cwd) ?? [];
         active.push(id);
         activeByCwd.set(cwd, active);
       }
     }
-    // The sidebar lists registered workspaces only, so the fixture work folders
-    // must be registered or their groups stay hidden. The "missing" cwd of the
-    // Missing fixture stays unregistered on purpose.
+    // The sidebar lists registered workspaces only (the extension's own
+    // settings), so the fixture work folders must be registered or their
+    // groups stay hidden. The "missing" cwd of the Missing fixture stays
+    // unregistered on purpose.
     for (const folder of [this.projectDirectories.A, this.projectDirectories.B, "external"]) {
       const cwd = join(this.directory, folder);
-      store["registered-workspaces"].push(cwd);
-      const entry: Record<string, unknown> = {
-        "active-sessions": activeByCwd.get(cwd) ?? [],
-      };
-      const names = archivedNames.get(cwd);
-      if (names !== undefined) entry["archived-names"] = names;
-      store.workspaces[cwd] = entry;
+      const active = activeByCwd.get(cwd) ?? [];
+      const activeSessions: Record<string, unknown> = {};
+      for (const id of active) activeSessions[id] = { lock: false };
+      store["active-workspaces"][cwd] = { "active-sessions": activeSessions };
     }
     const newestBTime = new Date(statSync(this.sessions.B.session).mtimeMs + 1000);
     utimesSync(this.sessions.B.session, newestBTime, newestBTime);

@@ -5,7 +5,7 @@ import type { PiRuntime } from "./tmux";
 import { join, resolve } from "node:path";
 import { requireWorkDirectory } from "./workDirectory";
 import { encodeCwdDirName } from "./paths";
-import { addActiveSession } from "./metadataStore";
+import { addActiveSession } from "./sessionStateStore";
 import { summarizeSessionFile } from "./sessionFile";
 import { listSessionFileNames } from "./newSession";
 import type { TerminalRegistry } from "./terminalRegistry";

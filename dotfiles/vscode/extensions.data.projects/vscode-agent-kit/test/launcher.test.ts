@@ -8,7 +8,7 @@ import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { encodeCwdDirName } from "../src/paths";
-import { activeSessionIds, readSessionStateStore } from "../src/metadataStore";
+import { activeSessionIds, readSessionStateStore } from "../src/sessionStateStore";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
 
 const mocks = vi.hoisted(() => ({
@@ -109,7 +109,7 @@ describe("SessionLauncher launch cwd", () => {
     "retries a failed %s connection with the same Pi before starting another new session",
     async (method) => {
       const statePath = join(root, "session-state.json");
-      const originalStore = JSON.stringify({ version: 2, sentinel: "preserved", workspaces: {} });
+      const originalStore = JSON.stringify({ sentinel: "preserved", "active-workspaces": {} });
       await writeFile(statePath, originalStore);
       runtimes.mocks[method].mockRejectedValueOnce(new Error("display connection failed"));
 

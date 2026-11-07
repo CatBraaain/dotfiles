@@ -1,28 +1,19 @@
 import * as vscode from "vscode";
-import { basename } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   activeSessionIds,
-  archivedSessionNames,
   archiveSessions,
-  hiddenWorkspaceCwds,
-  legacyArchivedSessionNames,
-  legacyRegisteredWorkspaceCwds,
   lockedSessionIds,
-  migrateLegacyStore,
-  readLegacyMetadataStore,
   readSessionStateStore,
-  registeredWorkspaceCwds,
   registerWorkspace,
+  registeredWorkspaceCwds,
   setSessionLocks,
   unarchiveSessions,
   unregisterWorkspace,
-  type ArchiveEntry,
   type SessionRef,
   type SessionStateUpdateResult,
-} from "../metadataStore";
+} from "../sessionStateStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
-import { cwdGroupKey } from "../grouping";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
@@ -35,10 +26,8 @@ export const VIEW_ID = "piSessions.sessions";
 export interface SessionWebviewDeps {
   extensionUri: string;
   sessionDir: string;
-  /** Session state store (v2, shared with the pi extension). */
+  /** Session state store, shared with the pi extension `session-state`. */
   statePath: string;
-  /** v1 metadata store, only read for the one-time migration. */
-  legacyMetadataPath: string;
   registry: TerminalRegistry;
   startNewSession: (cwd: string) => Promise<void>;
 }
@@ -80,11 +69,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   /** Re-read the session state store and the registered groups' session
-   * files, then send display-only data to the webview. Inactive sessions
-   * with a display-name snapshot skip reading their session file's body. */
+   * files, then send display-only data to the webview. */
   async refresh(): Promise<void> {
-    await this.migrateLegacyStoreIfNeeded();
-
     const store = readSessionStateStore(this.deps.statePath);
     if (store.status === "error") {
       this.postError(store.message);
@@ -93,23 +79,18 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const data = store.status === "ok" ? store.data : undefined;
     const activeIds = activeSessionIds(data);
     const lockedIds = lockedSessionIds(data);
-    const snapshotNames = archivedSessionNames(data);
-    const stateCwds = registeredWorkspaceCwds(data);
-    const hiddenCwds = hiddenWorkspaceCwds(data);
+    const registeredCwds = registeredWorkspaceCwds(data);
 
     let sessions: SessionSummary[];
     try {
-      sessions = await listSessions(this.deps.sessionDir, {
-        cwds: stateCwds,
-        archivedNames: snapshotNames,
-      });
+      sessions = await listSessions(this.deps.sessionDir, { cwds: registeredCwds });
     } catch (error) {
       this.postError(`Failed to read Pi sessions: ${errorMessage(error)}`);
       return;
     }
 
-    // Whitelist semantics: a scanned session the active lists do not mention
-    // is inactive (archived) and only visible in the All view.
+    // Whitelist semantics: a scanned session the active map does not list is
+    // inactive (archived) and only visible in the All view.
     const archivedIds = new Set(
       sessions.map((session) => session.sessionId).filter((id) => !activeIds.has(id)),
     );
@@ -118,42 +99,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       type: "sessions",
       state: {
         groups: sessionViewGroups(sessions, {
-          registeredCwds: stateCwds,
-          hiddenWorkspaceCwds: hiddenCwds,
+          registeredCwds,
           archivedIds,
           lockedIds,
         }),
         displayedSessionId: this.deps.registry.displayedSessionId,
       },
     });
-  }
-
-  /** One-time migration of the v1 metadata store into the session state
-   * store. Best effort: a failed migration surfaces an error but never blocks
-   * the list; the marker in the migrated store keeps it one-shot. */
-  private async migrateLegacyStoreIfNeeded(): Promise<void> {
-    const store = readSessionStateStore(this.deps.statePath);
-    if (store.status === "error") return;
-    if (store.status === "ok" && store.data["migrated-v1"] === true) return;
-    const legacy = readLegacyMetadataStore(this.deps.legacyMetadataPath);
-    if (legacy.status !== "ok") return;
-
-    const legacyData = legacy.data;
-    const cwds = legacyRegisteredWorkspaceCwds(legacyData);
-    const archivedNames = legacyArchivedSessionNames(legacyData);
-    let summaries: SessionSummary[];
-    try {
-      summaries = await listSessions(this.deps.sessionDir, { cwds, archivedNames });
-    } catch (error) {
-      this.postError(
-        `Failed to scan sessions for the ${basename(this.deps.legacyMetadataPath)} migration: ${errorMessage(error)}`,
-      );
-      return;
-    }
-    const result = migrateLegacyStore(this.deps.statePath, legacyData, summaries);
-    if (!result.ok) {
-      this.postError(result.message);
-    }
   }
 
   private async handleMessage(message: unknown): Promise<void> {
@@ -177,7 +129,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "unregisterWorkspace") {
-      await this.unregisterWorkspace(request.cwd);
+      this.unregisterWorkspace(request.cwd);
+      await this.refresh();
       return;
     }
     if (request.type === "copySessionId") {
@@ -199,16 +152,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "archiveSession") {
-      // Archive snapshots the session's current display name from the scanned
-      // summary before the store update runs.
-      await this.updateKnownSession(request.sessionId, ({ sessionId, cwd }) =>
-        archiveSessions(this.deps.statePath, [
-          {
-            sessionId,
-            cwd,
-            displayName: this.sessionsById.get(sessionId)?.displayName ?? "Untitled",
-          },
-        ]),
+      await this.updateKnownSession(request.sessionId, (ref) =>
+        archiveSessions(this.deps.statePath, [ref]),
       );
       return;
     }
@@ -240,12 +185,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     await this.refresh();
   }
 
-  /** Register a workspace folder in the session state store, then show the
-   * list. Invalid paths answer with an error and leave the store unchanged; a
-   * cwd already registered only closes the webview's form (via the refreshed
-   * list message). A new registration archives the workspace's existing
-   * sessions (with a display-name snapshot each) so the list starts clean and
-   * future scans skip their bodies. */
+  /** Register a workspace folder: create its store entry when the cwd has
+   * none, then show the list. Invalid paths answer with an error and leave
+   * the store unchanged; an already registered cwd only closes the webview's
+   * form (via the refreshed list message). */
   private async addWorkspace(path: string): Promise<void> {
     let directory: string;
     try {
@@ -254,63 +197,24 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(`Invalid workspace path: ${errorMessage(error)}`);
       return;
     }
-    const store = readSessionStateStore(this.deps.statePath);
-    if (store.status === "error") {
-      this.postError(store.message);
+    const result = registerWorkspace(this.deps.statePath, directory);
+    if (!result.ok) {
+      this.postError(result.message);
       return;
-    }
-    const alreadyListed = registeredWorkspaceCwds(
-      store.status === "ok" ? store.data : undefined,
-    ).includes(directory);
-    if (!alreadyListed) {
-      const result = registerWorkspace(this.deps.statePath, directory);
-      if (!result.ok) {
-        this.postError(result.message);
-        return;
-      }
-      await this.archiveExistingSessions(directory);
     }
     await this.refresh();
   }
 
-  /** Archive every session whose header cwd belongs to the given workspace
-   * cwd, snapshotting each display name in one store write. Scan or write
-   * errors are surfaced but never undo the registration. */
-  private async archiveExistingSessions(cwd: string): Promise<void> {
-    let sessions: SessionSummary[];
-    try {
-      sessions = await listSessions(this.deps.sessionDir, { cwds: [cwd] });
-    } catch (error) {
-      this.postError(`Failed to read Pi sessions: ${errorMessage(error)}`);
-      return;
-    }
-    const key = cwdGroupKey(cwd);
-    const entries: ArchiveEntry[] = sessions
-      .filter((session) => cwdGroupKey(session.cwd) === key)
-      .map((session) => ({
-        sessionId: session.sessionId,
-        cwd: session.cwd,
-        displayName: session.displayName,
-      }));
-    if (entries.length === 0) return;
-    const result = archiveSessions(this.deps.statePath, entries);
-    if (!result.ok) {
-      this.postError(result.message);
-    }
-  }
-
-  /** Drop the workspace registration. The webview asks for confirmation
-   * before sending the request; the group disappears from the list (registered
-   * workspaces are the whitelist) and a sessionless registration too. The
-   * workspace entry and its membership lists stay on disk, so registering the
-   * cwd again restores the previous groups. */
-  private async unregisterWorkspace(cwd: string): Promise<void> {
+  /** Drop the workspace registration: delete its store entry together with
+   * its session memberships. The webview asks for confirmation before sending
+   * the request; the group disappears from the list and a sessionless
+   * registration too. A Pi still running in the cwd recreates the entry on
+   * its next sent message. */
+  private unregisterWorkspace(cwd: string): void {
     const result = unregisterWorkspace(this.deps.statePath, cwd);
     if (!result.ok) {
       this.postError(result.message);
-      return;
     }
-    await this.refresh();
   }
 
   private async openSession(sessionId: string): Promise<void> {

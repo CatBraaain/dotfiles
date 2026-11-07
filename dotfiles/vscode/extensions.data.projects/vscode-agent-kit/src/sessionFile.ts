@@ -103,23 +103,14 @@ export function displayNameFromScan(scan: SessionNameScan): string {
  * Summarize one session file: header (id/cwd/timestamp) and display name.
  * Returns null when the file is empty or its first non-empty line is not a
  * valid session header (the file is then not a Pi session).
- *
- * `archivedNames` maps session ids to their archived display-name snapshots.
- * When the header id has a snapshot, the snapshot decides the display name and
- * both name scans are skipped (the file body is never read past the header).
  */
-export async function summarizeSessionFile(
-  filePath: string,
-  archivedNames?: ReadonlyMap<string, string>,
-): Promise<SessionSummaryInfo | null> {
+export async function summarizeSessionFile(filePath: string): Promise<SessionSummaryInfo | null> {
   const handle = await open(filePath, "r");
   try {
     const { size } = await handle.stat();
     if (size === 0) return null;
     const header = await readHeader(handle, size);
     if (header === null) return null;
-    const snapshot = archivedNames?.get(header.id);
-    if (snapshot !== undefined) return { header, displayName: snapshot };
     const scan = createNameScan();
     // Both scans read at explicit positions on the same handle, which is safe
     // to do concurrently and lets each direction stop as early as possible.

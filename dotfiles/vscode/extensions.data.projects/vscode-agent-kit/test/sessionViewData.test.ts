@@ -21,7 +21,6 @@ describe("sessionViewGroups", () => {
   const registered = ["/workspace/alpha", "/workspace/beta"];
   const view = (overrides: Partial<Parameters<typeof sessionViewGroups>[1]> = {}) => ({
     registeredCwds: registered,
-    hiddenWorkspaceCwds: new Set<string>(),
     archivedIds: new Set<string>(),
     lockedIds: new Set<string>(),
     ...overrides,
@@ -80,25 +79,12 @@ describe("sessionViewGroups", () => {
 
     // The list is a whitelist: /workspace/beta has a session but no registration.
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha"]);
-    expect(groups.every((group) => group.registered)).toBe(true);
   });
 
   it("does not duplicate a registered workspace that already has session groups", () => {
     const groups = sessionViewGroups(sessions, view({ registeredCwds: ["/workspace/alpha"] }));
 
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha"]);
-  });
-
-  it("carries the workspace view toggle as workspaceActive", () => {
-    const groups = sessionViewGroups(
-      sessions,
-      view({ hiddenWorkspaceCwds: new Set(["/workspace/beta"]) }),
-    );
-
-    expect(groups.map((group) => [group.cwd, group.workspaceActive])).toEqual([
-      ["/workspace/alpha", true],
-      ["/workspace/beta", false],
-    ]);
   });
 
   it("carries 1000 synthetic sessions as list data", () => {

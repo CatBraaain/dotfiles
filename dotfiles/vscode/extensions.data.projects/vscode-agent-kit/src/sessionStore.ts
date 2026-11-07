@@ -14,15 +14,11 @@ import { encodeCwdDirName } from "./paths";
  * - With `options.cwds`, only the cwd group directories of these workspace
  *   cwds (encoded with encodeCwdDirName) are read; unregistered groups are
  *   not scanned. Without it, every cwd group directory is scanned.
- * - With `options.archivedNames` (archived display-name snapshots keyed by
- *   session id), matching files skip the display-name scan and use the
- *   snapshot as their display name.
  *
  * Scans run with bounded concurrency and summaries are cached per file keyed
- * by (mtime, size) plus whether the display name came from a snapshot, so
- * unchanged files are not re-read on repeated refreshes. Appends by pi always
- * change size and mtime, so cache staleness is not possible for the
- * append-only session files.
+ * by (mtime, size), so unchanged files are not re-read on repeated refreshes.
+ * Appends by pi always change size and mtime, so cache staleness is not
+ * possible for the append-only session files.
  */
 
 /** One Pi session as listed by the extension. */
@@ -49,16 +45,12 @@ const SCAN_CONCURRENCY = 16;
 export interface ListSessionsOptions {
   /** Scan only the cwd group directories these workspace cwds map to. */
   cwds?: readonly string[];
-  /** Archived display-name snapshots (session id -> display name). */
-  archivedNames?: ReadonlyMap<string, string>;
 }
 
 interface CacheEntry {
   mtimeMs: number;
   size: number;
   info: SessionSummaryInfo;
-  /** Whether `info.displayName` came from an archived-name snapshot. */
-  fromSnapshot: boolean;
 }
 
 const summaryCache = new Map<string, CacheEntry>();
@@ -68,11 +60,8 @@ export async function listSessions(
   sessionDir: string,
   options?: ListSessionsOptions,
 ): Promise<SessionSummary[]> {
-  // Scoped scans only read the groups of the given cwds; group names are
-  // precomputed once. Undefined means unscoped: every group is scanned.
   const groupDirs =
     options?.cwds === undefined ? undefined : new Set(options.cwds.map(encodeCwdDirName));
-  const archivedNames = options?.archivedNames;
 
   let groups;
   try {
@@ -117,20 +106,16 @@ export async function listSessions(
     if (
       cached !== undefined &&
       cached.mtimeMs === candidate.mtimeMs &&
-      cached.size === candidate.size &&
-      // Re-summarize when the snapshot state flipped (archive/unarchive), so
-      // the display name switches between snapshot and file-derived value.
-      cached.fromSnapshot === (archivedNames?.has(cached.info.header.id) ?? false)
+      cached.size === candidate.size
     ) {
       return cached.info;
     }
-    const info = await summarizeSessionFile(candidate.filePath, archivedNames);
+    const info = await summarizeSessionFile(candidate.filePath);
     if (info !== null) {
       summaryCache.set(candidate.filePath, {
         mtimeMs: candidate.mtimeMs,
         size: candidate.size,
         info,
-        fromSnapshot: archivedNames?.has(info.header.id) ?? false,
       });
     }
     return info;

@@ -31,10 +31,6 @@ export interface ClientSession {
 export interface ClientSessionGroup {
   cwd: string;
   label: string;
-  /** True when the cwd comes from a registered workspace (New Workspace). */
-  registered: boolean;
-  /** Workspace entry's view toggle: false hides the group in the default view. */
-  workspaceActive: boolean;
   sessions: ClientSession[];
 }
 
@@ -80,7 +76,6 @@ function visibleGroupSessions(
   collapsedCwds: ReadonlySet<string>,
 ): ClientSession[] {
   if (collapsedCwds.has(group.cwd)) return [];
-  if (mode === "unarchived" && !group.workspaceActive) return [];
   return mode === "unarchived"
     ? group.sessions.filter((session) => !session.isArchived)
     : group.sessions;
@@ -95,9 +90,9 @@ export function sessionListView(
   displayedSessionId: string | undefined = undefined,
   collapsedCwds: ReadonlySet<string> = new Set(),
 ): SessionListView {
-  const groups = state.groups
-    .filter((group) => mode === "all" || group.workspaceActive)
-    .map((group) => groupDescriptor(group, mode, copiedIds, displayedSessionId, collapsedCwds));
+  const groups = state.groups.map((group) =>
+    groupDescriptor(group, mode, copiedIds, displayedSessionId, collapsedCwds),
+  );
   return {
     sessions:
       groups.length === 0
@@ -144,21 +139,17 @@ function groupDescriptor(
             },
             children: [group.label],
           },
-          ...(group.registered
-            ? [
-                {
-                  tag: "button",
-                  attrs: {
-                    class: "group-unregister",
-                    type: "button",
-                    "data-unregister": group.cwd,
-                    title: "Unregister workspace",
-                    "aria-label": `Unregister workspace ${group.label}`,
-                  },
-                  children: [minusIcon()],
-                } satisfies ElementDescriptor,
-              ]
-            : []),
+          {
+            tag: "button",
+            attrs: {
+              class: "group-unregister",
+              type: "button",
+              "data-unregister": group.cwd,
+              title: "Unregister workspace",
+              "aria-label": `Unregister workspace ${group.label}`,
+            },
+            children: [minusIcon()],
+          },
           {
             tag: "button",
             attrs: {
@@ -189,6 +180,7 @@ function sessionDescriptor(
   ]
     .filter((className) => className !== "")
     .join(" ");
+  const title = [session.displayName, session.sessionId].join("\n");
   return {
     tag: "div",
     attrs: { class: rowClass },
@@ -199,7 +191,7 @@ function sessionDescriptor(
           class: "session-button",
           type: "button",
           "data-session": session.sessionId,
-          title: `${session.displayName}\n${session.sessionId}`,
+          title,
         },
         children: [
           {
@@ -500,7 +492,6 @@ interface SessionsAppProps {
   bridge: ClientBridge;
   store: ReturnType<typeof createClientStore>;
   statusElement: HTMLElement;
-  sessionsElement: HTMLElement;
   openUnregisterDialog: (cwd: string) => void;
 }
 
@@ -512,7 +503,6 @@ function SessionsApp({
   bridge,
   store,
   statusElement,
-  sessionsElement,
   openUnregisterDialog,
 }: SessionsAppProps): ReactElement {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -730,7 +720,6 @@ export function initClient(bridge: ClientBridge): () => void {
       bridge={bridge}
       store={store}
       statusElement={statusElement}
-      sessionsElement={sessionsElement}
       openUnregisterDialog={openUnregisterDialog}
     />,
   );

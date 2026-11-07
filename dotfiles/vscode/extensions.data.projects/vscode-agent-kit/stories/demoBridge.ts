@@ -121,7 +121,6 @@ export function createDemoBridge(): {
       state: {
         groups: sessionViewGroups(store, {
           registeredCwds,
-          hiddenWorkspaceCwds: new Set(),
           archivedIds,
           lockedIds,
         }),

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { SessionLauncher } from "./launcher";
-import { metadataStorePath, resolveAgentDir, resolveSessionDir, sessionStatePath } from "./paths";
+import { resolveAgentDir, resolveSessionDir, sessionStatePath } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
 import { editorTerminals } from "./terminals";
 import { TmuxRuntimeStore, tmuxSocketName } from "./tmux";
@@ -12,7 +12,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const agentDir = resolveAgentDir(process.env, homeDir);
   const sessionDir = resolveSessionDir(process.env, homeDir);
   const statePath = sessionStatePath(agentDir);
-  const legacyMetadataPath = metadataStorePath(agentDir);
   const tmux = new TmuxRuntimeStore(tmuxSocketName(agentDir, sessionDir));
   const registry = new TerminalRegistry(tmux, editorTerminals(tmux));
 
@@ -30,7 +29,6 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionUri: context.extensionUri.fsPath,
     sessionDir,
     statePath,
-    legacyMetadataPath,
     registry,
     startNewSession: (cwd) => launcher.start(cwd),
   });
