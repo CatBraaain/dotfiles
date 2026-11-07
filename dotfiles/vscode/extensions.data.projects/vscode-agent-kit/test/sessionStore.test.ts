@@ -155,3 +155,84 @@ describe("listSessions", () => {
     }
   });
 });
+
+describe("listSessions scoped scans", () => {
+  it("scans only the cwd groups the given workspace cwds map to", async () => {
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
+    await writeJsonl(groupDir("--home-b--"), "t2_id2.jsonl", [
+      header({ id: "id2", cwd: "/home/b" }),
+    ]);
+    const sessions = await listSessions(root, { cwds: ["/home/b"] });
+    expect(sessions.map((s) => s.sessionId)).toEqual(["id2"]);
+  });
+
+  it("returns an empty list for an empty cwd list", async () => {
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
+    expect(await listSessions(root, { cwds: [] })).toEqual([]);
+  });
+
+  it("still lists all groups after a scoped scan kept other groups in the cache", async () => {
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+    ]);
+    await writeJsonl(groupDir("--home-b--"), "t2_id2.jsonl", [
+      header({ id: "id2", cwd: "/home/b" }),
+    ]);
+    expect((await listSessions(root, { cwds: ["/home/b"] })).map((s) => s.sessionId)).toEqual([
+      "id2",
+    ]);
+    expect((await listSessions(root)).map((s) => s.sessionId)).toEqual(["id1", "id2"]);
+  });
+});
+
+describe("listSessions archived display-name snapshots", () => {
+  it("uses the snapshot as the display name without reading the file body", async () => {
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+      messageEntry("user", "first"),
+      sessionInfoEntry("Renamed"),
+    ]);
+    const sessions = await listSessions(root, {
+      archivedNames: new Map([["id1", "Snapshot name"]]),
+    });
+    expect(sessions[0].displayName).toBe("Snapshot name");
+  });
+
+  it("re-reads the name from the file when the snapshot disappears and reuses it when it returns", async () => {
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+      messageEntry("user", "first"),
+      sessionInfoEntry("Renamed"),
+    ]);
+    const names = new Map([["id1", "Snapshot name"]]);
+    expect((await listSessions(root, { archivedNames: names }))[0].displayName).toBe(
+      "Snapshot name",
+    );
+    expect((await listSessions(root))[0].displayName).toBe("Renamed"); // unarchived: from the file
+    expect((await listSessions(root, { archivedNames: names }))[0].displayName).toBe(
+      "Snapshot name",
+    ); // archived again: snapshot decides
+  });
+
+  it("scans files without a snapshot normally while skipping snapshot files", async () => {
+    await writeJsonl(groupDir("--home-a--"), "t1_id1.jsonl", [
+      header({ id: "id1", cwd: "/home/a" }),
+      messageEntry("user", "plain work"),
+    ]);
+    await writeJsonl(groupDir("--home-a--"), "t2_id2.jsonl", [
+      header({ id: "id2", cwd: "/home/a" }),
+      sessionInfoEntry("Named two"),
+    ]);
+    const sessions = await listSessions(root, {
+      archivedNames: new Map([["id2", "Archived two"]]),
+    });
+    expect(sessions.map((s) => [s.sessionId, s.displayName])).toEqual([
+      ["id1", "plain work"],
+      ["id2", "Archived two"],
+    ]);
+  });
+});

@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { tmuxSocketName } from "../../src/tmux";
+import { encodeCwdDirName } from "../../src/paths";
 import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -469,7 +470,8 @@ export class VSCodeFixture {
       const session = join(
         this.directory,
         "agent/sessions",
-        key,
+        // pi stores each session inside the cwd group directory its header cwd maps to
+        encodeCwdDirName(cwd),
         `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`,
       );
       write(session, original);

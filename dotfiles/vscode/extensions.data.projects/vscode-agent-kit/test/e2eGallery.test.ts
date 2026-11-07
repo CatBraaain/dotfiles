@@ -165,9 +165,9 @@ describe("E2E gallery reporter", () => {
 
   it("exports the current canonical SPEC cases in their declared order", () => {
     const { cases, excludedIds } = parseGalleryCases(specSource);
-    expect(cases).toHaveLength(4);
+    expect(cases).toHaveLength(5);
     expect(run.results.cases).toEqual(cases);
-    expect(cases.map((entry) => entry.id)).toEqual(["E2E-1", "E2E-2", "E2E-6", "E2E-10"]);
+    expect(cases.map((entry) => entry.id)).toEqual(["E2E-1", "E2E-2", "E2E-6", "E2E-10", "E2E-13"]);
     expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-11", "E2E-12"]);
     expect(run.script).not.toContain("specSource");
     expect(run.script).not.toContain(specSource.split("\n")[0]);
@@ -323,7 +323,7 @@ describe("E2E gallery reporter", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(pathToFileURL(join(run.directory, "e2e-gallery.html")).href);
-      expect(await page.locator("section.case[id]").count()).toBe(4);
+      expect(await page.locator("section.case[id]").count()).toBe(5);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(run.results.cases.map((entry) => entry.id));
@@ -431,7 +431,7 @@ describe("E2E gallery reporter", () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(pathToFileURL(join(directory, "e2e-gallery.html")).href);
       const summary = page.locator("#run-summary");
-      expect(await summary.textContent()).toBe("Run: passed · 2026-01-02 09:04 · 8 images");
+      expect(await summary.textContent()).toBe("Run: passed · 2026-01-02 09:04 · 10 images");
       expect(await summary.getAttribute("title")).toBe(results.started);
       expect(
         await summary.evaluate((node) => {
@@ -439,8 +439,8 @@ describe("E2E gallery reporter", () => {
           return [style.whiteSpace, style.overflow, style.textOverflow];
         }),
       ).toEqual(["nowrap", "hidden", "ellipsis"]);
-      expect(await page.locator(".table").count()).toBe(4);
-      expect(await page.locator(".cell img").count()).toBe(8);
+      expect(await page.locator(".table").count()).toBe(5);
+      expect(await page.locator(".cell img").count()).toBe(10);
       for (const specCase of comparisonCases) {
         const table = page.locator(`#${specCase.id} .table`);
         expect(await table.locator(".cell").count()).toBe(2);

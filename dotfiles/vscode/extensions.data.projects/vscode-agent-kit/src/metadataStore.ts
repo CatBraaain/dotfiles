@@ -149,7 +149,9 @@ function updateSessions(
 
 /**
  * Read-modify-write a single session's `active` flag (true = unarchived,
- * used when a session is opened or detected as new).
+ * used when a session is opened or detected as new). Unarchiving removes the
+ * archived display-name snapshot (`name`), so the next scan re-reads it from
+ * the session file.
  */
 export function setSessionActive(
   path: string,
@@ -157,7 +159,9 @@ export function setSessionActive(
   active: boolean,
 ): MetadataUpdateResult {
   return updateSessions(path, (sessions) => {
-    sessions[sessionId] = { ...sessions[sessionId], active };
+    const entry: SessionMetadata = { ...sessions[sessionId], active };
+    if (active) delete entry.name;
+    sessions[sessionId] = entry;
     return true;
   });
 }
@@ -174,19 +178,29 @@ export function setSessionLocked(
   });
 }
 
+/** One archive target: the session and its display name to snapshot. */
+export interface ArchiveEntry {
+  sessionId: string;
+  displayName: string;
+}
+
 /**
- * Archive the given sessions in one metadata write. Each session is checked
+ * Archive the given sessions in one metadata write, snapshotting each
+ * session's current display name as its `name`. Each session is checked
  * against the freshly read store: locked sessions are skipped, so a stale UI
  * or a direct message cannot archive them. Returns without writing when every
  * requested session is locked.
  */
-export function archiveSessions(path: string, sessionIds: readonly string[]): MetadataUpdateResult {
+export function archiveSessions(
+  path: string,
+  entries: readonly ArchiveEntry[],
+): MetadataUpdateResult {
   return updateSessions(path, (sessions) => {
     let archivedAny = false;
-    for (const sessionId of sessionIds) {
-      const entry = sessions[sessionId];
-      if (isRecord(entry) && entry.locked) continue;
-      sessions[sessionId] = { ...entry, active: false };
+    for (const entry of entries) {
+      const current = sessions[entry.sessionId];
+      if (isRecord(current) && current.locked) continue;
+      sessions[entry.sessionId] = { ...current, active: false, name: entry.displayName };
       archivedAny = true;
     }
     return archivedAny;
@@ -195,8 +209,9 @@ export function archiveSessions(path: string, sessionIds: readonly string[]): Me
 
 /**
  * Unarchive the given sessions in one metadata write, restoring them to the
- * default list. Locking protects only against archiving, so locked sessions
- * unarchive as well.
+ * default list. Unarchiving removes the archived display-name snapshot
+ * (`name`), so the next scan re-reads it from the session file. Locking
+ * protects only against archiving, so locked sessions unarchive as well.
  */
 export function unarchiveSessions(
   path: string,
@@ -205,7 +220,9 @@ export function unarchiveSessions(
   return updateSessions(path, (sessions) => {
     let changedAny = false;
     for (const sessionId of sessionIds) {
-      sessions[sessionId] = { ...sessions[sessionId], active: true };
+      const entry: SessionMetadata = { ...sessions[sessionId], active: true };
+      delete entry.name;
+      sessions[sessionId] = entry;
       changedAny = true;
     }
     return changedAny;
@@ -221,6 +238,20 @@ export function archivedSessionIds(data: MetadataStoreData | undefined): Set<str
     }
   }
   return ids;
+}
+
+/**
+ * Archived display-name snapshots (`name`), keyed by session id. Snapshots
+ * let scans skip reading a session file's body for its display name.
+ */
+export function archivedSessionNames(data: MetadataStoreData | undefined): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const [id, entry] of Object.entries(data?.sessions ?? {})) {
+    if (isRecord(entry) && entry.active === false && typeof entry.name === "string") {
+      names.set(id, entry.name);
+    }
+  }
+  return names;
 }
 
 /** Session IDs whose `locked` attribute is truthy. */

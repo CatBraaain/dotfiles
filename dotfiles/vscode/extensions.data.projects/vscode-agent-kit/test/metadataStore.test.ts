@@ -3,6 +3,7 @@ import { chmodSync, existsSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import {
   archivedSessionIds,
+  archivedSessionNames,
   archiveSessions,
   lockedSessionIds,
   readMetadataStore,
@@ -111,6 +112,23 @@ describe("setSessionActive", () => {
     expect(parsed.sessions).toEqual({ a: { active: true }, b: { active: true } });
   });
 
+  it("unarchiving removes the archived display-name snapshot and keeps other attributes", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        sessions: { s1: { active: false, name: "Old", pinned: true } },
+      }),
+      "utf8",
+    );
+
+    const result = setSessionActive(path, "s1", true);
+
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    expect(parsed.sessions.s1).toEqual({ active: true, pinned: true });
+  });
+
   it("does not write and reports an error when the file is corrupt", () => {
     writeFileSync(path, "{oops", "utf8");
     const result = setSessionActive(path, "s1", true);
@@ -184,14 +202,20 @@ describe("setSessionLocked", () => {
 });
 
 describe("archiveSessions", () => {
-  it("archives every requested session in one write", () => {
+  it("archives every requested session in one write and snapshots the display names", () => {
     setSessionActive(path, "a", true);
 
-    const result = archiveSessions(path, ["a", "b"]);
+    const result = archiveSessions(path, [
+      { sessionId: "a", displayName: "First" },
+      { sessionId: "b", displayName: "Second" },
+    ]);
 
     expect(result.ok).toBe(true);
     const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions).toEqual({ a: { active: false }, b: { active: false } });
+    expect(parsed.sessions).toEqual({
+      a: { active: false, name: "First" },
+      b: { active: false, name: "Second" },
+    });
   });
 
   it("skips locked sessions and archives the rest", () => {
@@ -204,20 +228,24 @@ describe("archiveSessions", () => {
       "utf8",
     );
 
-    const result = archiveSessions(path, ["locked1", "locked2", "open"]);
+    const result = archiveSessions(path, [
+      { sessionId: "locked1", displayName: "A" },
+      { sessionId: "locked2", displayName: "B" },
+      { sessionId: "open", displayName: "Open" },
+    ]);
 
     expect(result.ok).toBe(true);
     const parsed = JSON.parse(readFileSync(path, "utf8"));
     expect(parsed.sessions.locked1).toEqual({ locked: true });
     expect(parsed.sessions.locked2).toEqual({ active: true, locked: true });
-    expect(parsed.sessions.open).toEqual({ active: false });
+    expect(parsed.sessions.open).toEqual({ active: false, name: "Open" });
   });
 
   it("writes nothing when every requested session is locked", () => {
     writeFileSync(path, JSON.stringify({ version: 1, sessions: { s1: { locked: true } } }), "utf8");
     const before = readFileSync(path, "utf8");
 
-    const result = archiveSessions(path, ["s1"]);
+    const result = archiveSessions(path, [{ sessionId: "s1", displayName: "A" }]);
 
     expect(result.ok).toBe(true);
     expect(readFileSync(path, "utf8")).toBe(before);
@@ -226,7 +254,7 @@ describe("archiveSessions", () => {
   it("does not write and reports an error when the file is corrupt", () => {
     writeFileSync(path, "{oops", "utf8");
 
-    const result = archiveSessions(path, ["s1"]);
+    const result = archiveSessions(path, [{ sessionId: "s1", displayName: "A" }]);
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toMatch(/JSON/);
@@ -238,7 +266,7 @@ describe("archiveSessions", () => {
     writeFileSync(path, original, "utf8");
     chmodSync(dir, 0o500); // a read-only store directory makes the tmp-file write inside writeMetadataStore fail
     try {
-      const result = archiveSessions(path, ["s1"]);
+      const result = archiveSessions(path, [{ sessionId: "s1", displayName: "A" }]);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.message).toMatch(/Failed to write/);
     } finally {
@@ -251,7 +279,10 @@ describe("archiveSessions", () => {
   it("archives 1000 synthetic sessions in a single write", () => {
     const ids = Array.from({ length: 1000 }, (_, index) => `s-${index}`);
 
-    const result = archiveSessions(path, ids);
+    const result = archiveSessions(
+      path,
+      ids.map((id) => ({ sessionId: id, displayName: id })),
+    );
 
     expect(result.ok).toBe(true);
     const parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -263,23 +294,30 @@ describe("archiveSessions", () => {
 });
 
 describe("unarchiveSessions", () => {
-  it("unarchives every requested session in one write, keeping other attributes", () => {
+  it("unarchives every requested session in one write, keeping other attributes and dropping the snapshot", () => {
     writeFileSync(
       path,
       JSON.stringify({
         version: 1,
-        sessions: { a: { active: false }, b: { active: false, locked: true }, open: {} },
+        sessions: {
+          a: { active: false },
+          b: { active: false, locked: true },
+          c: { active: false, name: "Old", pinned: true },
+          open: {},
+        },
       }),
       "utf8",
     );
 
-    const result = unarchiveSessions(path, ["a", "b"]);
+    const result = unarchiveSessions(path, ["a", "b", "c"]);
 
     expect(result.ok).toBe(true);
     const parsed = JSON.parse(readFileSync(path, "utf8"));
     expect(parsed.sessions).toEqual({
       a: { active: true },
       b: { active: true, locked: true },
+      // unarchiving drops the display-name snapshot and keeps other attributes
+      c: { active: true, pinned: true },
       open: {},
     });
   });
@@ -327,6 +365,19 @@ describe("archivedSessionIds and lockedSessionIds", () => {
   it("treats missing metadata as no archived and no locked sessions", () => {
     expect(archivedSessionIds(undefined)).toEqual(new Set());
     expect(lockedSessionIds(undefined)).toEqual(new Set());
+  });
+});
+
+describe("archivedSessionNames", () => {
+  it("collects display-name snapshots of archived sessions only", () => {
+    const data = JSON.parse(
+      '{"sessions": {"a": {"active": false, "name": "Old"}, "b": {"active": false}, "c": {"active": true, "name": "Live"}, "d": 3}}',
+    ) as MetadataStoreData;
+    expect(archivedSessionNames(data)).toEqual(new Map([["a", "Old"]]));
+  });
+
+  it("treats missing metadata as no snapshots", () => {
+    expect(archivedSessionNames(undefined)).toEqual(new Map());
   });
 });
 

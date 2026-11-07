@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import {
   archivedSessionIds,
+  archivedSessionNames,
   archiveSessions,
   lockedSessionIds,
   readMetadataStore,
@@ -10,8 +11,11 @@ import {
   setSessionLocked,
   unarchiveSessions,
   unregisterWorkspace,
+  type ArchiveEntry,
+  type MetadataUpdateResult,
 } from "../metadataStore";
 import { listSessions, sessionFileExists, type SessionSummary } from "../sessionStore";
+import { cwdGroupKey } from "../grouping";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
@@ -65,28 +69,33 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.view = undefined;
   }
 
-  /** Re-read sessions and metadata, then send display-only data to the webview. */
+  /** Re-read sessions and metadata, then send display-only data to the webview.
+   * Scans only the registered workspaces' cwd groups; archived sessions with a
+   * display-name snapshot skip reading their session file's body. */
   async refresh(): Promise<void> {
-    let sessions: SessionSummary[];
-    try {
-      sessions = await listSessions(this.deps.sessionDir);
-    } catch (error) {
-      this.postError(`Failed to read Pi sessions: ${errorMessage(error)}`);
-      return;
-    }
-
     const metadata = readMetadataStore(this.deps.metadataPath);
     if (metadata.status === "error") {
       this.postError(metadata.message);
       return;
     }
+    const data = metadata.status === "ok" ? metadata.data : undefined;
+    const archivedIds = archivedSessionIds(data);
+    const lockedIds = lockedSessionIds(data);
+    const archivedNames = archivedSessionNames(data);
+    const metadataCwds = registeredWorkspaceCwds(data);
 
-    const archivedIds =
-      metadata.status === "ok" ? archivedSessionIds(metadata.data) : new Set<string>();
-    const lockedIds =
-      metadata.status === "ok" ? lockedSessionIds(metadata.data) : new Set<string>();
+    let sessions: SessionSummary[];
+    try {
+      sessions = await listSessions(this.deps.sessionDir, {
+        cwds: metadataCwds,
+        archivedNames,
+      });
+    } catch (error) {
+      this.postError(`Failed to read Pi sessions: ${errorMessage(error)}`);
+      return;
+    }
+
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
-    const metadataCwds = metadata.status === "ok" ? registeredWorkspaceCwds(metadata.data) : [];
     this.post({
       type: "sessions",
       state: { groups: sessionViewGroups(sessions, metadataCwds, archivedIds, lockedIds) },
@@ -143,7 +152,17 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "archiveSessions") {
-      await this.updateKnownSessions(request.sessionIds, archiveSessions);
+      // Archive snapshots each session's current display name, so the batch is
+      // built from the scanned summaries before the metadata update runs.
+      await this.updateKnownSessions(request.sessionIds, (path, ids) =>
+        archiveSessions(
+          path,
+          ids.map((sessionId) => ({
+            sessionId,
+            displayName: this.sessionsById.get(sessionId)?.displayName ?? "Untitled",
+          })),
+        ),
+      );
       return;
     }
     if (request.type === "unarchiveSessions") {
@@ -157,7 +176,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
    * with an error and leave the store unchanged. */
   private async updateKnownSessions(
     sessionIds: readonly string[],
-    update: typeof archiveSessions,
+    update: (path: string, sessionIds: readonly string[]) => MetadataUpdateResult,
   ): Promise<void> {
     const uniqueIds = [...new Set(sessionIds)];
     const unknown = uniqueIds.find((sessionId) => !this.sessionsById.has(sessionId));
@@ -176,7 +195,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   /** Register a workspace folder in the metadata store, then show the list.
    * Invalid paths answer with an error and leave the store unchanged; a cwd
    * already registered only closes the webview's form (via the refreshed list
-   * message). */
+   * message). A new registration archives the workspace's existing sessions
+   * (with a display-name snapshot each) so the list starts clean and future
+   * scans skip their bodies. */
   private async addWorkspace(path: string): Promise<void> {
     let directory: string;
     try {
@@ -199,8 +220,31 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         this.postError(result.message);
         return;
       }
+      await this.archiveExistingSessions(directory);
     }
     await this.refresh();
+  }
+
+  /** Archive every session whose header cwd belongs to the given workspace
+   * cwd, snapshotting each display name in one metadata write. Scan or write
+   * errors are surfaced but never undo the registration. */
+  private async archiveExistingSessions(cwd: string): Promise<void> {
+    let sessions: SessionSummary[];
+    try {
+      sessions = await listSessions(this.deps.sessionDir, { cwds: [cwd] });
+    } catch (error) {
+      this.postError(`Failed to read Pi sessions: ${errorMessage(error)}`);
+      return;
+    }
+    const key = cwdGroupKey(cwd);
+    const entries: ArchiveEntry[] = sessions
+      .filter((session) => cwdGroupKey(session.cwd) === key)
+      .map((session) => ({ sessionId: session.sessionId, displayName: session.displayName }));
+    if (entries.length === 0) return;
+    const result = archiveSessions(this.deps.metadataPath, entries);
+    if (!result.ok) {
+      this.postError(result.message);
+    }
   }
 
   /** Drop the workspace registration. The webview asks for confirmation
