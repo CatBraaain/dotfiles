@@ -10,12 +10,17 @@ export type WebviewRequest =
   | { type: "setSessionLock"; sessionId: string; locked: boolean }
   | { type: "copySessionId"; sessionId: string };
 
+/** Live execution phase of a session, mirrored from the session state store. */
+export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
+
 export interface WebviewSession {
   sessionId: string;
   displayName: string;
   mtimeMs: number;
   isArchived: boolean;
   isLocked: boolean;
+  /** Live execution phase; undefined when the phase is unknown. */
+  state?: SessionPhase;
 }
 
 export interface WebviewSessionGroup {

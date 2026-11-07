@@ -126,6 +126,25 @@ export class TmuxRuntimeStore {
     return panes.split("\n").some((line) => line === `${runtime.target}\t0`);
   }
 
+  /** Subset of `sessionIds` whose Pi tmux session still has a live pane.
+   * Returns null when tmux cannot be queried; callers then treat every
+   * session's phase as unknown instead of trusting stale store entries. */
+  async aliveSessionIds(sessionIds: readonly string[]): Promise<Set<string> | null> {
+    let panes: string;
+    try {
+      panes = await this.query(["list-panes", "-a", "-F", "#{session_name}\t#{pane_dead}"]);
+    } catch {
+      return null;
+    }
+    const aliveTargets = new Set(
+      panes
+        .split("\n")
+        .filter((line) => line.endsWith("\t0"))
+        .map((line) => line.slice(0, -"\t0".length)),
+    );
+    return new Set(sessionIds.filter((sessionId) => aliveTargets.has(runtimeTarget(sessionId))));
+  }
+
   async clients(): Promise<TmuxClient[]> {
     const clients = await this.query([
       "list-clients",
@@ -147,7 +166,7 @@ export class TmuxRuntimeStore {
   }
 
   private runtime(sessionId: string, cwd: string): PiRuntime {
-    return { sessionId, cwd, target: `pi-${digest(sessionId)}` };
+    return { sessionId, cwd, target: runtimeTarget(sessionId) };
   }
 
   private launchEnvironment(): string[] {
@@ -187,6 +206,11 @@ export class TmuxRuntimeStore {
 
 function escapeTmuxArgument(argument: string): string {
   return argument.endsWith(";") ? `${argument.slice(0, -1)}\\;` : argument;
+}
+
+/** tmux session name this extension gives a Pi session id. */
+function runtimeTarget(sessionId: string): string {
+  return `pi-${digest(sessionId)}`;
 }
 
 function digest(input: string): string {

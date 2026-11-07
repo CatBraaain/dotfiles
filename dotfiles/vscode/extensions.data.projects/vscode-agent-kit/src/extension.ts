@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { SessionLauncher } from "./launcher";
 import { resolveAgentDir, resolveSessionDir, sessionStatePath } from "./paths";
@@ -33,9 +34,18 @@ export function activate(context: vscode.ExtensionContext): void {
     startNewSession: (cwd) => launcher.start(cwd),
   });
 
+  // The pi extension `session-state` rewrites the store on every sent
+  // message and phase change; watching it keeps the list live.
+  const stateWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(dirname(statePath)), basename(statePath)),
+  );
+  stateWatcher.onDidChange(() => void provider.refresh());
+  stateWatcher.onDidCreate(() => void provider.refresh());
+
   context.subscriptions.push(
     launcher,
     provider,
+    stateWatcher,
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),

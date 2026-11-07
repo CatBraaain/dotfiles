@@ -7,6 +7,7 @@ import {
   addActiveSession,
   archiveSessions,
   lockedSessionIds,
+  mutateSessionStateStore,
   readSessionStateStore,
   registerWorkspace,
   registeredWorkspaceCwds,
@@ -303,6 +304,106 @@ describe("SessionWebviewProvider", () => {
     expect(
       webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
     ).toHaveLength(sessionsCalls);
+  });
+
+  it("sends the live phase of a session whose tmux pane exists", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { store, live } = fakeRuntimes();
+    const registry = new TerminalRegistry(store, editorTerminals(store));
+    live.set(activeSessionId, {
+      sessionId: activeSessionId,
+      cwd: root,
+      target: `pi-${activeSessionId}`,
+    });
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
+    expect(
+      mutateSessionStateStore(statePath, (store) => {
+        const entry = store["active-workspaces"][root]?.["active-sessions"]?.[activeSessionId];
+        if (entry === undefined) throw new Error("session entry missing");
+        entry.state = "running";
+        return true;
+      }).ok,
+    ).toBe(true);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+
+    await provider.refresh();
+
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].state).toBe(
+      "running",
+    );
+  });
+
+  it("drops the phase of a session whose tmux pane is gone (stale sweep)", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { store } = fakeRuntimes();
+    const registry = new TerminalRegistry(store, editorTerminals(store)); // no live pane
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
+    expect(
+      mutateSessionStateStore(statePath, (store) => {
+        const entry = store["active-workspaces"][root]?.["active-sessions"]?.[activeSessionId];
+        if (entry === undefined) throw new Error("session entry missing");
+        entry.state = "running";
+        return true;
+      }).ok,
+    ).toBe(true);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+
+    await provider.refresh();
+
+    // the stale `running` entry stays on disk but the list shows no phase
+    expect(
+      webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].state,
+    ).toBeUndefined();
+    expect(
+      readStore(statePath)["active-workspaces"][root]?.["active-sessions"]?.[activeSessionId],
+    ).toEqual({
+      lock: false,
+      state: "running",
+    });
+  });
+
+  it("sends no phase when the tmux query fails", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { store, mocks, live } = fakeRuntimes();
+    const registry = new TerminalRegistry(store, editorTerminals(store));
+    live.set(activeSessionId, {
+      sessionId: activeSessionId,
+      cwd: root,
+      target: `pi-${activeSessionId}`,
+    });
+    mocks.aliveSessionIds.mockResolvedValue(null);
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
+    expect(
+      mutateSessionStateStore(statePath, (store) => {
+        const entry = store["active-workspaces"][root]?.["active-sessions"]?.[activeSessionId];
+        if (entry === undefined) throw new Error("session entry missing");
+        entry.state = "waiting-user";
+        return true;
+      }).ok,
+    ).toBe(true);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+
+    await provider.refresh();
+
+    expect(
+      webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].state,
+    ).toBeUndefined();
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
   });
 
   it("reflects disk changes on refresh without automatic updates", async () => {

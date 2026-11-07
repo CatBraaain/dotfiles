@@ -3,15 +3,18 @@
 // store; openSession is ignored (terminals do not exist in the catalog).
 
 import type { SessionSummary } from "../src/sessionStore";
+import type { SessionPhase } from "../src/webview/protocol";
 import { sessionViewGroups } from "../src/webview/sessionViewData";
 
 /** Demo state a story starts from (SPEC.md「静的プレビュー」表 1 行目). */
 export type DemoState = "sample" | "empty";
 
-/** Per-session demo metadata: explicit archive and archive-protection lock. */
+/** Per-session demo metadata: explicit archive, archive-protection lock, and
+ * live phase. */
 interface DemoEntry {
   archived: boolean;
   locked: boolean;
+  state?: SessionPhase;
 }
 
 /** Request from the webview client, same protocol as the extension host side. */
@@ -78,9 +81,12 @@ const UNARCHIVED: DemoEntry = { archived: false, locked: false };
  * terminal shows (openSession is ignored, so the mark never moves). */
 const DISPLAYED_SESSION_ID = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
 const SAMPLE_METADATA = new Map<string, DemoEntry>([
-  ["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", UNARCHIVED],
+  ["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", { archived: false, locked: false, state: "running" }],
   ["2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", { archived: true, locked: false }],
-  ["3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72", UNARCHIVED],
+  [
+    "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
+    { archived: false, locked: false, state: "waiting-user" },
+  ],
   ["4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83", { archived: false, locked: true }],
   ["5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94", UNARCHIVED],
 ]);
@@ -109,12 +115,18 @@ export function createDemoBridge(): {
   ];
 
   function postSessions(): void {
-    // Same projection as the provider's: every session with archive and lock marks.
+    // Same projection as the provider's: every session with archive, lock,
+    // and live-phase marks.
     const archivedIds = new Set(
       [...metadata].filter(([, entry]) => entry.archived).map(([sessionId]) => sessionId),
     );
     const lockedIds = new Set(
       [...metadata].filter(([, entry]) => entry.locked).map(([sessionId]) => sessionId),
+    );
+    const phases = new Map(
+      [...metadata]
+        .filter(([, entry]) => entry.state !== undefined)
+        .map(([sessionId, entry]) => [sessionId, entry.state as SessionPhase]),
     );
     listener({
       type: "sessions",
@@ -123,6 +135,7 @@ export function createDemoBridge(): {
           registeredCwds,
           archivedIds,
           lockedIds,
+          phases,
         }),
         displayedSessionId: DISPLAYED_SESSION_ID,
       },

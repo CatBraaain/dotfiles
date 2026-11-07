@@ -23,6 +23,7 @@ describe("sessionViewGroups", () => {
     registeredCwds: registered,
     archivedIds: new Set<string>(),
     lockedIds: new Set<string>(),
+    phases: new Map<string, "running" | "waiting-approval" | "waiting-user">(),
     ...overrides,
   });
 
@@ -85,6 +86,18 @@ describe("sessionViewGroups", () => {
     const groups = sessionViewGroups(sessions, view({ registeredCwds: ["/workspace/alpha"] }));
 
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha"]);
+  });
+
+  it("carries the live phase of sessions that have one", () => {
+    const groups = sessionViewGroups(sessions, view({ phases: new Map([["active", "running"]]) }));
+
+    expect(
+      groups.flatMap((group) => group.sessions).map((item) => [item.sessionId, item.state]),
+    ).toEqual([
+      ["active", "running"],
+      ["older", undefined],
+      ["newest", undefined],
+    ]);
   });
 
   it("carries 1000 synthetic sessions as list data", () => {

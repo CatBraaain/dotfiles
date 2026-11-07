@@ -254,6 +254,30 @@ describe("TmuxRuntimeStore", () => {
     expect(execute.mock.calls.filter(([, args]) => args[4] === "new-session")).toHaveLength(3);
   });
 
+  it("aliveSessionIds keeps sessions with a live pane and drops dead or unknown ones", async () => {
+    const { store, panes } = setup();
+    await store.ensure({ sessionId: "A", cwd: "/a", args: [] });
+    const runtimeB = await store.ensure({ sessionId: "B", cwd: "/b", args: [] });
+    panes.set(runtimeB.target, 1); // B's pane died but its session lingers
+
+    const alive = await store.aliveSessionIds(["A", "B", "C"]);
+
+    expect(alive).toEqual(new Set(["A"]));
+  });
+
+  it("aliveSessionIds returns an empty set when no tmux server is running", async () => {
+    const { store } = setup();
+
+    await expect(store.aliveSessionIds(["A"])).resolves.toEqual(new Set());
+  });
+
+  it("aliveSessionIds returns null when the tmux query fails", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("spawn tmux ENOENT"));
+    const store = new TmuxRuntimeStore("test-socket", execute);
+
+    await expect(store.aliveSessionIds(["A"])).resolves.toBeNull();
+  });
+
   it("switches the explicitly selected client without detaching other clients", async () => {
     const { store, execute } = setup();
     const clients = await store.clients();

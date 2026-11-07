@@ -19,6 +19,9 @@ import { createRoot } from "react-dom/client";
 /** Per-workspace display mode: unarchived sessions only, or all sessions. */
 export type ViewMode = "unarchived" | "all";
 
+/** Live execution phase of a session, mirrored from the session state store. */
+export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
+
 /** Display-only session data (the extension sends WebviewState-shaped values). */
 export interface ClientSession {
   sessionId: string;
@@ -26,6 +29,8 @@ export interface ClientSession {
   mtimeMs: number;
   isArchived: boolean;
   isLocked: boolean;
+  /** Live execution phase; undefined when the phase is unknown. */
+  state?: SessionPhase;
 }
 
 export interface ClientSessionGroup {
@@ -180,7 +185,9 @@ function sessionDescriptor(
   ]
     .filter((className) => className !== "")
     .join(" ");
-  const title = [session.displayName, session.sessionId].join("\n");
+  const title = [session.displayName, session.sessionId, phaseLabel(session.state)]
+    .filter((line) => line !== undefined)
+    .join("\n");
   return {
     tag: "div",
     attrs: { class: rowClass },
@@ -200,6 +207,7 @@ function sessionDescriptor(
               class: "session-status",
               "data-archived": String(session.isArchived),
               "data-locked": String(session.isLocked),
+              ...(session.state === undefined ? {} : { "data-state": session.state }),
               "aria-hidden": "true",
             },
           },
@@ -218,6 +226,14 @@ function sessionDescriptor(
         : [archiveDescriptor(session.sessionId, session.isLocked)]),
     ],
   };
+}
+
+/** Human-readable phase line for the session row tooltip. */
+function phaseLabel(state: SessionPhase | undefined): string | undefined {
+  if (state === "running") return "Running";
+  if (state === "waiting-approval") return "Waiting for approval";
+  if (state === "waiting-user") return "Waiting for user";
+  return undefined;
 }
 
 export function formatSessionTimestamp(mtimeMs: number, now = new Date()): string {

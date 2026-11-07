@@ -1,14 +1,15 @@
 import { cwdGroupKey, groupSessions } from "../grouping";
 import type { SessionSummary } from "../sessionStore";
-import type { WebviewSessionGroup } from "./protocol";
+import type { SessionPhase, WebviewSessionGroup } from "./protocol";
 
 /** Store-derived state the view projects: the registered workspace cwds
- * (the `active-workspaces` keys) whose groups the list shows, the active
- * whitelist, and the locked set. */
+ * (the `workspaces` keys) whose groups the list shows, the active whitelist,
+ * the locked set, and the live phases of running sessions. */
 export interface SessionViewInput {
   registeredCwds: readonly string[];
   archivedIds: ReadonlySet<string>;
   lockedIds: ReadonlySet<string>;
+  phases: ReadonlyMap<string, SessionPhase>;
 }
 
 /** Convert scanned sessions into display-only data: only groups of registered
@@ -30,6 +31,7 @@ export function sessionViewGroups(
         mtimeMs: session.mtimeMs,
         isArchived: view.archivedIds.has(session.sessionId),
         isLocked: view.lockedIds.has(session.sessionId),
+        state: view.phases.get(session.sessionId),
       })),
     }));
 }

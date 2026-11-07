@@ -7,9 +7,11 @@ import {
   readSessionStateStore,
   registerWorkspace,
   registeredWorkspaceCwds,
+  sessionPhases,
   setSessionLocks,
   unarchiveSessions,
   unregisterWorkspace,
+  type SessionPhase,
   type SessionRef,
   type SessionStateUpdateResult,
 } from "../sessionStateStore";
@@ -94,6 +96,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const archivedIds = new Set(
       sessions.map((session) => session.sessionId).filter((id) => !activeIds.has(id)),
     );
+    const phases = await this.livePhases(sessionPhases(data));
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.post({
       type: "sessions",
@@ -102,10 +105,28 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
           registeredCwds,
           archivedIds,
           lockedIds,
+          phases,
         }),
         displayedSessionId: this.deps.registry.displayedSessionId,
       },
     });
+  }
+
+  /** Drop the phases of sessions whose Pi tmux session has no live pane
+   * (stale entries left behind by abnormally terminated Pi; the entries
+   * themselves stay in the store). When tmux cannot be queried, no phase is
+   * shown. */
+  private async livePhases(
+    storePhases: ReadonlyMap<string, SessionPhase>,
+  ): Promise<Map<string, SessionPhase>> {
+    const phases = new Map<string, SessionPhase>();
+    if (storePhases.size === 0) return phases;
+    const aliveIds = await this.deps.registry.runtimes.aliveSessionIds([...storePhases.keys()]);
+    if (aliveIds === null) return phases;
+    for (const [sessionId, phase] of storePhases) {
+      if (aliveIds.has(sessionId)) phases.set(sessionId, phase);
+    }
+    return phases;
   }
 
   private async handleMessage(message: unknown): Promise<void> {

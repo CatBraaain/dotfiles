@@ -18,6 +18,10 @@ export function fakeRuntimes() {
       return runtime;
     }),
     isAlive: vi.fn(async (runtime: PiRuntime) => live.has(runtime.sessionId)),
+    aliveSessionIds: vi.fn(
+      async (sessionIds: readonly string[]): Promise<Set<string> | null> =>
+        new Set(sessionIds.filter((sessionId) => live.has(sessionId))),
+    ),
     clients: vi.fn(async () => [client]),
     switchClient: vi.fn(async (_client: TmuxClient, runtime: PiRuntime) => {
       client.target = runtime.target;
