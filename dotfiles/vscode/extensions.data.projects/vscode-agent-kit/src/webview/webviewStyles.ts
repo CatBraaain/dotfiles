@@ -6,7 +6,7 @@ export const webviewStyles = `
     button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
     button:hover { background: var(--vscode-list-hoverBackground); }
     svg { flex: none; pointer-events: none; }
-    #app { padding: 12px; }
+    #app { display: flex; flex-direction: column; min-height: calc(100vh - 24px); padding: 12px; }
     header, .group-header { display: flex; align-items: center; }
     header { justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 12px; }
     h1 { flex: 1; overflow: hidden; margin: 0; font-size: 13px; font-weight: 600; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
@@ -19,7 +19,8 @@ export const webviewStyles = `
     .icon-button { min-width: 24px; height: 24px; padding: 0 8px; color: var(--vscode-descriptionForeground); }
     .icon-button:hover { color: var(--vscode-foreground); }
     .icon-button[data-action="refresh"] { width: 24px; padding: 0; }
-    .footer { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); }
+    #sessions { margin-bottom: 12px; }
+    .footer { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); background: var(--vscode-sideBar-background); }
     .new-workspace { display: inline-flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 10px; border-radius: var(--session-radius); color: var(--vscode-foreground); font-size: 13px; font-weight: 500; text-align: left; }
     .new-workspace[aria-expanded="true"] { background: var(--vscode-list-hoverBackground); }
     .new-workspace svg { flex: none; width: 16px; height: 16px; }
