@@ -47,10 +47,19 @@ const groups = [
     cwd: "/workspace/atlas",
     label: "atlas",
     registered: true,
+    workspaceActive: true,
     sessions: [atlasUnarchived, atlasArchived],
   },
-  { cwd: "/workspace/beta", label: "beta", registered: false, sessions: [betaLocked, betaPlain] },
+  {
+    cwd: "/workspace/beta",
+    label: "beta",
+    registered: false,
+    workspaceActive: true,
+    sessions: [betaLocked, betaPlain],
+  },
 ];
+
+const hiddenGroups = [...groups.slice(0, 1), { ...groups[1], workspaceActive: false }];
 
 function viewFor(
   mode: ViewMode,
@@ -147,7 +156,13 @@ describe("sessionListView", () => {
   it("renders the empty state when no workspace is visible", () => {
     const empty = viewFor("unarchived", []);
     const allArchived = viewFor("unarchived", [
-      { cwd: "/workspace/beta", label: "beta", registered: false, sessions: [atlasArchived] },
+      {
+        cwd: "/workspace/beta",
+        label: "beta",
+        registered: false,
+        workspaceActive: true,
+        sessions: [atlasArchived],
+      },
     ]);
 
     expect(empty.sessions).toHaveLength(1);
@@ -261,7 +276,13 @@ describe("sessionListView", () => {
     const paths = ["/workspace/atlas", "/worktrees/atlas"];
     const view = viewFor(
       "unarchived",
-      paths.map((cwd) => ({ cwd, label: "atlas", registered: false, sessions: [atlasUnarchived] })),
+      paths.map((cwd) => ({
+        cwd,
+        label: "atlas",
+        registered: false,
+        workspaceActive: true,
+        sessions: [atlasUnarchived],
+      })),
     );
 
     expect(byClass(elementsIn(view), "group-title").map(text)).toEqual(["atlas", "atlas"]);
@@ -271,6 +292,31 @@ describe("sessionListView", () => {
     expect(byClass(elementsIn(view), "group-path")).toHaveLength(0);
     for (const [index, path] of paths.entries())
       expect(text(view.sessions[index])).not.toContain(path);
+  });
+
+  it("hides a workspace toggled off from the default view but keeps it in All", () => {
+    const unarchived = visibleSessions({ groups: hiddenGroups } as ClientState, "unarchived");
+    expect(unarchived.map((session) => session.sessionId)).toEqual([atlasUnarchived.sessionId]);
+
+    const all = visibleSessions({ groups: hiddenGroups } as ClientState, "all");
+    expect(all.map((session) => session.sessionId)).toEqual([
+      atlasUnarchived.sessionId,
+      atlasArchived.sessionId,
+      betaLocked.sessionId,
+      betaPlain.sessionId,
+    ]);
+  });
+
+  it("drops a toggled-off group's heading in the default view and keeps it in All", () => {
+    const unarchivedView = sessionListView({ groups: hiddenGroups } as ClientState, "unarchived");
+    expect(
+      byClass(elementsIn(unarchivedView), "group-header").map((header) => header.attrs?.title),
+    ).toEqual(["/workspace/atlas"]);
+
+    const allView = sessionListView({ groups: hiddenGroups } as ClientState, "all");
+    expect(
+      byClass(elementsIn(allView), "group-header").map((header) => header.attrs?.title),
+    ).toEqual(["/workspace/atlas", "/workspace/beta"]);
   });
 
   it("shows unarchived sessions by default and archived ones in All mode", () => {

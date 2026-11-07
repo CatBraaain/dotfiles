@@ -5,7 +5,7 @@ import type { PiRuntime } from "./tmux";
 import { join, resolve } from "node:path";
 import { requireWorkDirectory } from "./workDirectory";
 import { encodeCwdDirName } from "./paths";
-import { setSessionActive } from "./metadataStore";
+import { addActiveSession } from "./metadataStore";
 import { summarizeSessionFile } from "./sessionFile";
 import { listSessionFileNames } from "./newSession";
 import type { TerminalRegistry } from "./terminalRegistry";
@@ -15,7 +15,7 @@ const POLL_TIMEOUT_MS = 30 * 60 * 1_000;
 
 export interface SessionLauncherDeps {
   sessionDir: string;
-  metadataPath: string;
+  statePath: string;
   registry: TerminalRegistry;
   onSessionDetected: (sessionId: string) => void | Promise<void>;
 }
@@ -69,7 +69,7 @@ export class SessionLauncher implements vscode.Disposable {
         const info = await summarizeSessionFile(join(groupDir, name));
         if (info?.header.id !== runtime.sessionId || resolve(info.header.cwd) !== runtime.cwd)
           continue;
-        const result = setSessionActive(this.deps.metadataPath, info.header.id, true);
+        const result = addActiveSession(this.deps.statePath, runtime.cwd, info.header.id);
         if (!result.ok) {
           void vscode.window.showErrorMessage(result.message);
         }

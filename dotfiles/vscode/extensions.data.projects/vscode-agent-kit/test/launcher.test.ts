@@ -8,7 +8,7 @@ import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { encodeCwdDirName } from "../src/paths";
-import { readMetadataStore } from "../src/metadataStore";
+import { activeSessionIds, readSessionStateStore } from "../src/metadataStore";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
 
 const mocks = vi.hoisted(() => ({
@@ -51,7 +51,7 @@ beforeEach(async () => {
   onSessionDetected = vi.fn();
   launcher = new SessionLauncher({
     sessionDir: join(root, "sessions"),
-    metadataPath: join(root, "metadata.json"),
+    statePath: join(root, "session-state.json"),
     registry,
     onSessionDetected,
   });
@@ -108,9 +108,9 @@ describe("SessionLauncher launch cwd", () => {
   it.each(["clients", "switchClient"] as const)(
     "retries a failed %s connection with the same Pi before starting another new session",
     async (method) => {
-      const metadataPath = join(root, "metadata.json");
-      const originalMetadata = JSON.stringify({ version: 1, sentinel: "preserved", sessions: {} });
-      await writeFile(metadataPath, originalMetadata);
+      const statePath = join(root, "session-state.json");
+      const originalStore = JSON.stringify({ version: 2, sentinel: "preserved", workspaces: {} });
+      await writeFile(statePath, originalStore);
       runtimes.mocks[method].mockRejectedValueOnce(new Error("display connection failed"));
 
       await expect(launcher.start(root)).rejects.toThrow("display connection failed");
@@ -122,7 +122,7 @@ describe("SessionLauncher launch cwd", () => {
       await writeJsonl(groupDir, `new_${failedId}.jsonl`, [header({ id: failedId, cwd: root })]);
       await vi.advanceTimersByTimeAsync(2_000);
       expect(onSessionDetected).not.toHaveBeenCalled();
-      expect(await readFile(metadataPath, "utf8")).toBe(originalMetadata);
+      expect(await readFile(statePath, "utf8")).toBe(originalStore);
 
       await launcher.start(root);
 
@@ -133,8 +133,8 @@ describe("SessionLauncher launch cwd", () => {
       expect(mocks.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(failedId));
-      const metadata = readMetadataStore(metadataPath);
-      expect(metadata.status === "ok" && metadata.data.sessions?.[failedId].active).toBe(true);
+      const store = readSessionStateStore(statePath);
+      expect(store.status === "ok" && activeSessionIds(store.data).has(failedId)).toBe(true);
 
       await launcher.start(root);
 
@@ -152,7 +152,7 @@ describe("SessionLauncher launch cwd", () => {
 
     await expect(launcher.start(join(root, "missing"))).rejects.toThrow();
     expect(runtimes.mocks.ensure).toHaveBeenCalledTimes(1);
-    expect(readMetadataStore(join(root, "metadata.json")).status).toBe("empty");
+    expect(readSessionStateStore(join(root, "session-state.json")).status).toBe("empty");
 
     const otherCwd = join(root, "other");
     await mkdir(otherCwd);
@@ -183,9 +183,9 @@ describe("SessionLauncher launch cwd", () => {
   });
 
   it("keeps invalid metadata unchanged after reconnecting a failed new session", async () => {
-    const metadataPath = join(root, "metadata.json");
-    const invalidMetadata = "{ invalid";
-    await writeFile(metadataPath, invalidMetadata);
+    const statePath = join(root, "session-state.json");
+    const invalidStore = "{ invalid";
+    await writeFile(statePath, invalidStore);
     runtimes.mocks.clients.mockRejectedValueOnce(new Error("display connection failed"));
     await expect(launcher.start(root)).rejects.toThrow("display connection failed");
     const sessionId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
@@ -197,7 +197,7 @@ describe("SessionLauncher launch cwd", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => expect(mocks.showErrorMessage).toHaveBeenCalled());
 
-    expect(await readFile(metadataPath, "utf8")).toBe(invalidMetadata);
+    expect(await readFile(statePath, "utf8")).toBe(invalidStore);
     expect(runtimes.live.size).toBe(1);
   });
 
@@ -238,7 +238,7 @@ describe("SessionLauncher launch cwd", () => {
     ]);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(onSessionDetected).not.toHaveBeenCalled();
-    expect(readMetadataStore(join(root, "metadata.json")).status).toBe("empty");
+    expect(readSessionStateStore(join(root, "session-state.json")).status).toBe("empty");
   });
 
   it("detects only the launched runtime ID even when its display is closed", async () => {
@@ -253,7 +253,7 @@ describe("SessionLauncher launch cwd", () => {
     await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(sessionId));
 
     expect(runtimes.live.has(sessionId)).toBe(true);
-    const metadata = readMetadataStore(join(root, "metadata.json"));
-    expect(metadata.status === "ok" && metadata.data.sessions?.[sessionId].active).toBe(true);
+    const store = readSessionStateStore(join(root, "session-state.json"));
+    expect(store.status === "ok" && activeSessionIds(store.data).has(sessionId)).toBe(true);
   });
 });

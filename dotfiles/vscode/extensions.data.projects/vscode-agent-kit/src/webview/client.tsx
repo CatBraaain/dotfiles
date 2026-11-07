@@ -33,6 +33,8 @@ export interface ClientSessionGroup {
   label: string;
   /** True when the cwd comes from a registered workspace (New Workspace). */
   registered: boolean;
+  /** Workspace entry's view toggle: false hides the group in the default view. */
+  workspaceActive: boolean;
   sessions: ClientSession[];
 }
 
@@ -75,6 +77,7 @@ function visibleGroupSessions(
   collapsedCwds: ReadonlySet<string>,
 ): ClientSession[] {
   if (collapsedCwds.has(group.cwd)) return [];
+  if (mode === "unarchived" && !group.workspaceActive) return [];
   return mode === "unarchived"
     ? group.sessions.filter((session) => !session.isArchived)
     : group.sessions;
@@ -181,9 +184,9 @@ export function sessionListView(
   selectedIds: ReadonlySet<string> = new Set(),
   collapsedCwds: ReadonlySet<string> = new Set(),
 ): SessionListView {
-  const groups = state.groups.map((group) =>
-    groupDescriptor(group, mode, copiedIds, selectedIds, collapsedCwds),
-  );
+  const groups = state.groups
+    .filter((group) => mode === "all" || group.workspaceActive)
+    .map((group) => groupDescriptor(group, mode, copiedIds, selectedIds, collapsedCwds));
   return {
     sessions:
       groups.length === 0

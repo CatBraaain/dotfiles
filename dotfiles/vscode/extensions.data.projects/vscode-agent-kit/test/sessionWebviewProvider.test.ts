@@ -2,11 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  activeSessionIds,
+  addActiveSession,
+  archivedSessionNames,
   archiveSessions,
-  readMetadataStore,
+  lockedSessionIds,
+  mutateSessionStateStore,
+  readSessionStateStore,
+  registeredWorkspaceCwds,
   registerWorkspace,
-  setSessionActive,
-  setSessionLocked,
+  setSessionLocks,
+  type SessionStateStoreData,
 } from "../src/metadataStore";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
@@ -105,16 +111,32 @@ function createRegistry() {
 function createProvider(
   deps: Partial<ConstructorParameters<typeof SessionWebviewProvider>[0]> = {},
 ) {
-  const metadataPath = deps.metadataPath ?? join(root, "session-metadata.json");
+  const statePath = deps.statePath ?? join(root, "session-state.json");
   const provider = new SessionWebviewProvider({
     extensionUri: root,
     sessionDir: join(root, "sessions"),
+    legacyMetadataPath: join(root, "session-metadata.json"),
     registry: createRegistry(),
     startNewSession: async () => {},
     ...deps,
-    metadataPath,
+    statePath,
   } as ConstructorParameters<typeof SessionWebviewProvider>[0]);
-  return { provider, metadataPath };
+  return { provider, statePath };
+}
+
+/** Set up the store: register the cwd and mark the given sessions active.
+ * Sessions left out are inactive (archived) and only visible in All mode. */
+function setUpStore(statePath: string, cwd: string, activeIds: readonly string[]): void {
+  expect(registerWorkspace(statePath, cwd).ok).toBe(true);
+  for (const sessionId of activeIds) {
+    expect(addActiveSession(statePath, cwd, sessionId).ok).toBe(true);
+  }
+}
+
+function readStore(statePath: string): SessionStateStoreData {
+  const read = readSessionStateStore(statePath);
+  if (read.status !== "ok") throw new Error(`expected ok, got ${read.status}`);
+  return read.data;
 }
 
 describe("SessionWebviewProvider", () => {
@@ -142,9 +164,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "second.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
-    expect(setSessionActive(metadataPath, inactiveSessionId, false).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
 
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -166,13 +187,10 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
 
-    const metadata = readMetadataStore(metadataPath);
-    if (metadata.status !== "ok") throw new Error("expected ok metadata");
-    // archiving stores the current display name as the snapshot
-    expect(metadata.data.sessions?.[activeSessionId]).toEqual({
-      active: false,
-      name: "Untitled",
-    });
+    const store = readStore(statePath);
+    // archiving removes the whitelist entry and stores the display name as the snapshot
+    expect(activeSessionIds(store).has(activeSessionId)).toBe(false);
+    expect(archivedSessionNames(store).get(activeSessionId)).toBe("Untitled");
     expect(
       sentSessions().find((session) => session.sessionId === activeSessionId)?.isArchived,
     ).toBe(true);
@@ -186,9 +204,11 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "second.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
-    expect(setSessionLocked(metadataPath, activeSessionId, true).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId, inactiveSessionId]);
+    expect(
+      setSessionLocks(statePath, [{ sessionId: activeSessionId, cwd: root, locked: true }]).ok,
+    ).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -198,10 +218,9 @@ describe("SessionWebviewProvider", () => {
       sessionIds: [activeSessionId, inactiveSessionId],
     });
 
-    const metadata = readMetadataStore(metadataPath);
-    if (metadata.status !== "ok") throw new Error("expected ok metadata");
-    expect(metadata.data.sessions?.[activeSessionId]).toEqual({ locked: true });
-    expect(metadata.data.sessions?.[inactiveSessionId]).toMatchObject({ active: false });
+    const store = readStore(statePath);
+    expect(lockedSessionIds(store).has(activeSessionId)).toBe(true);
+    expect(activeSessionIds(store).has(inactiveSessionId)).toBe(false);
     const sentSessions = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
       sessionId: string;
       isArchived: boolean;
@@ -218,8 +237,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -232,9 +251,10 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       `Session not found: ${unknownSessionId}`,
     );
-    const metadata = readMetadataStore(metadataPath);
-    const sessions = metadata.status === "ok" ? metadata.data.sessions : undefined;
-    expect(sessions).toBeUndefined(); // no archive write happened
+    // the failed batch wrote nothing: the whitelist keeps its previous content
+    const store = readStore(statePath);
+    expect(registeredWorkspaceCwds(store)).toEqual([root]);
+    expect(activeSessionIds(store)).toEqual(new Set([activeSessionId]));
   });
 
   it("persists lock and unlock requests and refreshes the marks", async () => {
@@ -242,26 +262,24 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
     await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: true });
 
-    const metadata = readMetadataStore(metadataPath);
-    expect(metadata.status === "ok" && metadata.data.sessions?.[activeSessionId].locked).toBe(true);
+    const store = readStore(statePath);
+    expect(lockedSessionIds(store).has(activeSessionId)).toBe(true);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isLocked).toBe(
       true,
     );
 
     await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: false });
 
-    const unlocked = readMetadataStore(metadataPath);
-    expect(unlocked.status === "ok" && unlocked.data.sessions?.[activeSessionId].locked).toBe(
-      false,
-    );
+    const unlocked = readStore(statePath);
+    expect(lockedSessionIds(unlocked).has(activeSessionId)).toBe(false);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isLocked).toBe(
       false,
     );
@@ -272,8 +290,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -286,15 +304,81 @@ describe("SessionWebviewProvider", () => {
       (call) => call[0].type === "sessions",
     ).length;
 
-    await writeFile(metadataPath, "{ invalid", "utf8");
+    await writeFile(statePath, "{ invalid", "utf8");
     await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: true });
 
     expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
-      /^session-metadata\.json is not valid JSON: /,
+      /^session-state\.json is not valid JSON: /,
     );
     expect(
       webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
     ).toHaveLength(sessionsCalls);
+  });
+
+  it("migrates the v1 metadata store into the session state store on first refresh", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "visible.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "archived.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
+    const legacyMetadataPath = join(root, "session-metadata.json");
+    await writeFile(
+      legacyMetadataPath,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          [activeSessionId]: { active: true },
+          [inactiveSessionId]: { active: false, name: "Archived display name" },
+        },
+        workspaces: { [root]: { addedAtMs: 1 } },
+      }),
+      "utf8",
+    );
+    const { provider, statePath } = createProvider({ sessionDir, legacyMetadataPath });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    const store = readStore(statePath);
+    expect(store["migrated-v1"]).toBe(true);
+    expect(registeredWorkspaceCwds(store)).toEqual([root]);
+    expect(activeSessionIds(store)).toEqual(new Set([activeSessionId]));
+    expect(archivedSessionNames(store).get(inactiveSessionId)).toBe("Archived display name");
+    const groups = webview.postMessage.mock.calls.at(-1)?.[0].state.groups as {
+      cwd: string;
+      workspaceActive: boolean;
+      sessions: { sessionId: string; isArchived: boolean }[];
+    }[];
+    expect(groups.map((group) => [group.cwd, group.workspaceActive])).toEqual([[root, true]]);
+    // rows sort by mtime, newest first: the archived file was written last
+    expect(groups[0].sessions.map((session) => [session.sessionId, session.isArchived])).toEqual([
+      [inactiveSessionId, true],
+      [activeSessionId, false],
+    ]);
+  });
+
+  it("carries the workspace view toggle into the group payload", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
+    await mutateSessionStateStore(statePath, (store) => {
+      store.workspaces[root] = { ...store.workspaces[root], active: false };
+      return true;
+    });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+
+    const groups = webview.postMessage.mock.calls.at(-1)?.[0].state.groups as {
+      cwd: string;
+      workspaceActive: boolean;
+    }[];
+    expect(groups.map((group) => [group.cwd, group.workspaceActive])).toEqual([[root, false]]);
   });
 
   it("reflects disk changes on refresh without automatic updates", async () => {
@@ -302,8 +386,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await vi.waitFor(() => {
@@ -331,8 +415,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const firstView = createView();
     provider.resolveWebviewView(firstView.view as never);
     await provider.refresh();
@@ -361,8 +445,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -385,11 +469,9 @@ describe("SessionWebviewProvider", () => {
       header({ id: activeSessionId, cwd: root }),
     ]);
     const original = createProvider({ sessionDir });
-    expect(registerWorkspace(original.metadataPath, root, 0).ok).toBe(true);
-    expect(setSessionActive(original.metadataPath, activeSessionId, true).ok).toBe(true);
+    setUpStore(original.statePath, root, [activeSessionId]);
     original.provider.dispose();
     const restored = createProvider({ sessionDir });
-    expect(registerWorkspace(restored.metadataPath, root, 0).ok).toBe(true);
     const webview = createView();
     restored.provider.resolveWebviewView(webview.view as never);
     const terminal = {
@@ -421,10 +503,12 @@ describe("SessionWebviewProvider", () => {
       show: vi.fn(),
     };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     expect(
-      archiveSessions(metadataPath, [{ sessionId: activeSessionId, displayName: "Old name" }]).ok,
+      archiveSessions(statePath, [
+        { sessionId: activeSessionId, cwd: root, displayName: "Old name" },
+      ]).ok,
     ).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -435,13 +519,11 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
-    const metadata = readMetadataStore(metadataPath);
-    // opening does not unarchive: both the flag and the snapshot stay untouched
-    if (metadata.status !== "ok") throw new Error("expected ok metadata");
-    expect(metadata.data.sessions?.[activeSessionId]).toEqual({
-      active: false,
-      name: "Old name",
-    });
+    const store = readStore(statePath);
+    // opening does not unarchive: the session stays out of the whitelist and
+    // its display-name snapshot stays untouched
+    expect(activeSessionIds(store).has(activeSessionId)).toBe(false);
+    expect(archivedSessionNames(store).get(activeSessionId)).toBe("Old name");
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
       true,
     );
@@ -453,10 +535,12 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     expect(
-      archiveSessions(metadataPath, [{ sessionId: activeSessionId, displayName: "Old name" }]).ok,
+      archiveSessions(statePath, [
+        { sessionId: activeSessionId, cwd: root, displayName: "Old name" },
+      ]).ok,
     ).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
@@ -467,10 +551,10 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "unarchiveSessions", sessionIds: [activeSessionId] });
 
-    const metadata = readMetadataStore(metadataPath);
+    const store = readStore(statePath);
     // unarchiving drops the display-name snapshot so the next scan re-reads it
-    if (metadata.status !== "ok") throw new Error("expected ok metadata");
-    expect(metadata.data.sessions?.[activeSessionId]).toEqual({ active: true });
+    expect(activeSessionIds(store).has(activeSessionId)).toBe(true);
+    expect(archivedSessionNames(store).has(activeSessionId)).toBe(false);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0]).toMatchObject({
       sessionId: activeSessionId,
       isArchived: false,
@@ -482,8 +566,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -496,9 +580,10 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       `Session not found: ${unknownSessionId}`,
     );
-    const metadata = readMetadataStore(metadataPath);
-    const sessions = metadata.status === "ok" ? metadata.data.sessions : undefined;
-    expect(sessions).toBeUndefined(); // no unarchive write happened
+    // the failed batch wrote nothing: the whitelist keeps its previous content
+    const store = readStore(statePath);
+    expect(registeredWorkspaceCwds(store)).toEqual([root]);
+    expect(activeSessionIds(store)).toEqual(new Set([activeSessionId]));
   });
 
   it("opens an unregistered cwd directly in Pi without workbench side effects", async () => {
@@ -508,8 +593,8 @@ describe("SessionWebviewProvider", () => {
     ]);
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -542,8 +627,8 @@ describe("SessionWebviewProvider", () => {
     };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     const registry = createRegistry();
-    const { provider, metadataPath } = createProvider({ sessionDir, registry });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -566,10 +651,10 @@ describe("SessionWebviewProvider", () => {
       args: ["--session", filePath],
     });
     expect(terminal.show).toHaveBeenCalledTimes(2);
-    // opening does not archive or unarchive: no session metadata is written
-    const metadata = readMetadataStore(metadataPath);
-    const sessions = metadata.status === "ok" ? metadata.data.sessions : undefined;
-    expect(sessions).toBeUndefined();
+    // opening does not archive or unarchive: the store is unchanged
+    const store = readStore(statePath);
+    expect(registeredWorkspaceCwds(store)).toEqual([root]);
+    expect(activeSessionIds(store)).toEqual(new Set([activeSessionId]));
   });
 
   it("does not open a terminal when the selected session file disappeared", async () => {
@@ -577,8 +662,8 @@ describe("SessionWebviewProvider", () => {
     const filePath = await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "active.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -644,7 +729,7 @@ describe("SessionWebviewProvider", () => {
   it("registers a valid workspace folder and shows its empty group", async () => {
     const folder = join(root, "registered");
     await mkdir(folder, { recursive: true });
-    const { provider, metadataPath } = createProvider({});
+    const { provider, statePath } = createProvider({});
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
 
@@ -655,10 +740,10 @@ describe("SessionWebviewProvider", () => {
       .filter((message: { type?: string }) => message.type === "sessions")
       .at(-1) as { state?: { groups?: { cwd: string }[] } };
     expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([folder]);
-    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
-      workspaces?: Record<string, unknown>;
+    const parsed = JSON.parse(await readFile(statePath, "utf8")) as {
+      "registered-workspaces"?: string[];
     };
-    expect(Object.keys(parsed.workspaces ?? {})).toEqual([folder]);
+    expect(parsed["registered-workspaces"]).toEqual([folder]);
   });
 
   it("registers the expanded absolute path from a tilde input", async () => {
@@ -666,17 +751,17 @@ describe("SessionWebviewProvider", () => {
     vi.stubEnv("HOME", root);
     const folder = join(root, "registered");
     await mkdir(folder);
-    const { provider, metadataPath } = createProvider();
+    const { provider, statePath } = createProvider();
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
     await webview.receive({ type: "addWorkspace", path });
 
-    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
-      workspaces: Record<string, unknown>;
+    const parsed = JSON.parse(await readFile(statePath, "utf8")) as {
+      "registered-workspaces": string[];
     };
-    expect(Object.keys(parsed.workspaces)).toEqual([folder]);
+    expect(parsed["registered-workspaces"]).toEqual([folder]);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([
       expect.objectContaining({ cwd: folder, registered: true }),
     ]);
@@ -687,16 +772,16 @@ describe("SessionWebviewProvider", () => {
     vi.stubEnv("HOME", root);
     const folder = join(root, "registered");
     await mkdir(folder);
-    const { provider, metadataPath } = createProvider();
-    expect(registerWorkspace(metadataPath, folder, 1_000).ok).toBe(true);
-    const original = await readFile(metadataPath, "utf8");
+    const { provider, statePath } = createProvider();
+    expect(registerWorkspace(statePath, folder).ok).toBe(true);
+    const original = await readFile(statePath, "utf8");
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
     await webview.receive({ type: "addWorkspace", path });
 
-    expect(await readFile(metadataPath, "utf8")).toBe(original);
+    expect(await readFile(statePath, "utf8")).toBe(original);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([
       expect.objectContaining({ cwd: folder, registered: true }),
     ]);
@@ -708,7 +793,7 @@ describe("SessionWebviewProvider", () => {
     vi.stubEnv("HOME", root);
     vi.stubEnv("PI_SESSIONS_TEST_CHILD", "other");
     const startNewSession = vi.fn().mockResolvedValue(undefined);
-    const { provider, metadataPath } = createProvider({ startNewSession });
+    const { provider, statePath } = createProvider({ startNewSession });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -717,10 +802,10 @@ describe("SessionWebviewProvider", () => {
       type: "addWorkspace",
       path: "~/space $PI_SESSIONS_TEST_CHILD",
     });
-    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
-      workspaces: Record<string, unknown>;
+    const parsed = JSON.parse(await readFile(statePath, "utf8")) as {
+      "registered-workspaces": string[];
     };
-    const [storedCwd] = Object.keys(parsed.workspaces);
+    const [storedCwd] = parsed["registered-workspaces"];
     expect(storedCwd).toBe(folder);
 
     await webview.receive({ type: "newSession", cwd: storedCwd });
@@ -731,14 +816,14 @@ describe("SessionWebviewProvider", () => {
 
   it("shows an error and keeps the store when the workspace path is invalid", async () => {
     const missing = join(root, "missing");
-    const { provider, metadataPath } = createProvider({});
+    const { provider, statePath } = createProvider({});
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
 
     await webview.receive({ type: "addWorkspace", path: missing });
 
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining(missing));
-    await expect(readFile(metadataPath, "utf8")).rejects.toThrow();
+    await expect(readFile(statePath, "utf8")).rejects.toThrow();
     expect(
       webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
     ).toHaveLength(1); // only the initial ready refresh
@@ -749,7 +834,7 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "old.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
+    const { provider, statePath } = createProvider({ sessionDir });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -757,13 +842,12 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "addWorkspace", path: `${root}/` });
 
-    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
-      workspaces?: Record<string, unknown>;
-      sessions?: Record<string, { active?: boolean; name?: string }>;
-    };
-    expect(Object.keys(parsed.workspaces ?? {})).toHaveLength(1); // the store was written
+    const parsed = JSON.parse(await readFile(statePath, "utf8")) as SessionStateStoreData;
+    expect(parsed["registered-workspaces"]).toHaveLength(1); // the store was written
     // the fresh registration archives the workspace's existing sessions with a snapshot
-    expect(parsed.sessions?.[inactiveSessionId]).toEqual({ active: false, name: "Untitled" });
+    expect(parsed.workspaces[root]).toEqual({
+      "archived-names": { [inactiveSessionId]: "Untitled" },
+    });
     const lastSessions = webview.postMessage.mock.calls
       .map((call) => call[0])
       .filter((message: { type?: string }) => message.type === "sessions")
@@ -789,36 +873,34 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(otherCwd)), "theirs.jsonl", [
       header({ id: inactiveSessionId, cwd: otherCwd }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
+    const { provider, statePath } = createProvider({ sessionDir });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
 
     await webview.receive({ type: "addWorkspace", path: root });
 
-    const metadata = readMetadataStore(metadataPath);
-    if (metadata.status !== "ok") throw new Error("expected ok metadata");
-    expect(metadata.data.sessions?.[activeSessionId]).toMatchObject({ active: false });
-    expect(metadata.data.sessions?.[inactiveSessionId]).toBeUndefined(); // other cwd: untouched
+    const store = readStore(statePath);
+    expect(activeSessionIds(store).has(activeSessionId)).toBe(false);
+    expect(archivedSessionNames(store).get(activeSessionId)).toBe("Untitled");
+    expect(registeredWorkspaceCwds(store)).toEqual([root]); // other cwd: untouched
   });
 
   it("does not archive sessions again when adding an already registered workspace", async () => {
-    const { provider, metadataPath } = createProvider({});
-    expect(registerWorkspace(metadataPath, root, 1_000).ok).toBe(true);
+    const { provider, statePath } = createProvider({});
+    expect(registerWorkspace(statePath, root).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
     await webview.receive({ type: "addWorkspace", path: `${root}/` });
 
-    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
-      sessions?: Record<string, unknown>;
-    };
-    expect(parsed.sessions).toBeUndefined(); // no archive on re-add
+    const parsed = JSON.parse(await readFile(statePath, "utf8")) as SessionStateStoreData;
+    expect(parsed.workspaces).toEqual({}); // no archive on re-add
   });
 
   it("does not rewrite the store for an already registered workspace", async () => {
-    const { provider, metadataPath } = createProvider({});
-    expect(registerWorkspace(metadataPath, root, 1_000).ok).toBe(true);
+    const { provider, statePath } = createProvider({});
+    expect(registerWorkspace(statePath, root).ok).toBe(true);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -828,10 +910,8 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "addWorkspace", path: `${root}/` });
 
-    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
-      workspaces?: Record<string, { addedAtMs: number }>;
-    };
-    expect(parsed.workspaces?.[root]).toEqual({ addedAtMs: 1_000 }); // never rewritten
+    const parsed = JSON.parse(await readFile(statePath, "utf8")) as SessionStateStoreData;
+    expect(parsed["registered-workspaces"]).toEqual([root]); // never rewritten
     expect(
       webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
     ).toHaveLength(writesBefore + 1); // the refreshed list closes the form
@@ -839,10 +919,10 @@ describe("SessionWebviewProvider", () => {
 
   it("keeps a registered sessionless workspace in the refreshed list", async () => {
     const folder = join(root, "registered");
-    const { provider, metadataPath } = createProvider({});
+    const { provider, statePath } = createProvider({});
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
-    await registerWorkspace(metadataPath, folder, 1_000);
+    await registerWorkspace(statePath, folder);
 
     await provider.refresh();
 
@@ -857,18 +937,16 @@ describe("SessionWebviewProvider", () => {
 
   it("unregisters a requested workspace and drops its empty group", async () => {
     const folder = join(root, "registered");
-    const { provider, metadataPath } = createProvider({});
+    const { provider, statePath } = createProvider({});
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
-    await registerWorkspace(metadataPath, folder, 1_000);
+    await registerWorkspace(statePath, folder);
     await provider.refresh();
 
     await webview.receive({ type: "unregisterWorkspace", cwd: folder });
 
-    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as {
-      workspaces?: Record<string, unknown>;
-    };
-    expect(parsed.workspaces).toEqual({});
+    const parsed = JSON.parse(await readFile(statePath, "utf8")) as SessionStateStoreData;
+    expect(parsed["registered-workspaces"]).toEqual([]);
     const lastSessions = webview.postMessage.mock.calls
       .map((call) => call[0])
       .filter((message: { type?: string }) => message.type === "sessions")
@@ -877,7 +955,7 @@ describe("SessionWebviewProvider", () => {
   });
 
   it("answers an unregister for an unregistered cwd with the unchanged list", async () => {
-    const { provider, metadataPath } = createProvider({});
+    const { provider, statePath } = createProvider({});
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -887,7 +965,7 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "unregisterWorkspace", cwd: join(root, "unregistered") });
 
-    await expect(readFile(metadataPath, "utf8")).rejects.toThrow(); // no store was created
+    await expect(readFile(statePath, "utf8")).rejects.toThrow(); // no store was created
     expect(
       webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
     ).toHaveLength(sessionsBefore + 1); // the refreshed list still goes out
@@ -899,8 +977,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "old.jsonl", [
       header({ id: inactiveSessionId, cwd }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -908,9 +986,9 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
 
     expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
-    const metadata = readMetadataStore(metadataPath);
-    const sessions = metadata.status === "ok" ? metadata.data.sessions : undefined;
-    expect(sessions).toBeUndefined();
+    const store = readStore(statePath);
+    expect(activeSessionIds(store).has(inactiveSessionId)).toBe(false);
+    expect(Object.keys(store.workspaces)).toEqual([root]);
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       expect.stringContaining(`Failed to open session ${inactiveSessionId} in ${cwd}:`),
     );
@@ -942,8 +1020,8 @@ describe("SessionWebviewProvider", () => {
       await opening;
       return { sessionId: launch.sessionId, cwd: launch.cwd, target: `pi-${launch.sessionId}` };
     });
-    const { provider, metadataPath } = createProvider({ sessionDir, registry });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
@@ -975,18 +1053,22 @@ describe("SessionWebviewProvider", () => {
       const terminal = { processId: Promise.resolve(123), show: vi.fn(), dispose: vi.fn() };
       terminal.dispose.mockImplementation(() => registry.onTerminalClosed(terminal as never));
       vscodeMocks.createTerminal.mockReturnValue(terminal);
-      const { provider, metadataPath } = createProvider({ sessionDir, registry });
-      expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
-      setSessionActive(metadataPath, inactiveSessionId, false);
+      const { provider, statePath } = createProvider({ sessionDir, registry });
+      setUpStore(statePath, root, [activeSessionId]);
+      expect(
+        archiveSessions(statePath, [
+          { sessionId: inactiveSessionId, cwd: root, displayName: "Saved" },
+        ]).ok,
+      ).toBe(true);
       const webview = createView();
       provider.resolveWebviewView(webview.view as never);
       await provider.refresh();
-      const before = await readFile(metadataPath, "utf8");
+      const before = await readFile(statePath, "utf8");
       mocks[method].mockRejectedValueOnce(new Error("tmux permission denied"));
 
       await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
 
-      expect(await readFile(metadataPath, "utf8")).toBe(before);
+      expect(await readFile(statePath, "utf8")).toBe(before);
       expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining(inactiveSessionId),
       );
@@ -1059,16 +1141,16 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "active.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const metadataPath = join(root, "session-metadata.json");
-    await writeFile(metadataPath, "{ invalid", "utf8");
-    const { provider } = createProvider({ sessionDir, metadataPath });
+    const statePath = join(root, "session-state.json");
+    await writeFile(statePath, "{ invalid", "utf8");
+    const { provider } = createProvider({ sessionDir, statePath });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
 
     await provider.refresh();
 
     expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
-      /^session-metadata\.json is not valid JSON: /,
+      /^session-state\.json is not valid JSON: /,
     );
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
   });
@@ -1078,9 +1160,8 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "active.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { provider, metadataPath } = createProvider({ sessionDir });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
-    expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await vi.waitFor(() => {
@@ -1090,11 +1171,11 @@ describe("SessionWebviewProvider", () => {
       (call) => call[0].type === "sessions",
     ).length;
 
-    await writeFile(metadataPath, "{ invalid", "utf8");
+    await writeFile(statePath, "{ invalid", "utf8");
     await webview.receive({ type: "archiveSessions", sessionIds: [activeSessionId] });
 
     expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
-      /^session-metadata\.json is not valid JSON: /,
+      /^session-state\.json is not valid JSON: /,
     );
     const errorCalls = webview.postMessage.mock.calls.filter(
       (call) => call[0].type === "error",
@@ -1146,9 +1227,8 @@ describe("SessionWebviewProvider", () => {
     };
     vscodeMocks.createTerminal.mockReturnValue(terminal);
     const registry = createRegistry();
-    const { provider, metadataPath } = createProvider({ sessionDir, registry });
-    expect(registerWorkspace(metadataPath, root, 0).ok).toBe(true);
-    expect(setSessionActive(metadataPath, activeSessionId, true).ok).toBe(true);
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();

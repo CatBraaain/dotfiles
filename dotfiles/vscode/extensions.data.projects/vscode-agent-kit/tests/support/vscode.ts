@@ -437,12 +437,14 @@ export class VSCodeFixture {
   }
 
   private prepareSessions(): void {
-    const metadata = {
-      version: 1,
+    const store = {
+      version: 2,
       sentinel: "preserved",
-      sessions: {} as Record<string, { active: boolean; sentinel: string }>,
-      workspaces: {} as Record<string, { addedAtMs: number }>,
+      workspaces: {} as Record<string, Record<string, unknown>>,
+      "registered-workspaces": [] as string[],
     };
+    const activeByCwd = new Map<string, string[]>();
+    const archivedNames = new Map<string, Record<string, string>>();
     const cwds = {
       A: this.projectDirectories.A,
       External: "external",
@@ -476,17 +478,33 @@ export class VSCodeFixture {
       );
       write(session, original);
       this.sessions[key] = { id, cwd, session, original };
-      metadata.sessions[id] = { active: key !== "B", sentinel: "preserved" };
+      if (key === "B") {
+        // B starts archived: off the whitelist with a display-name snapshot.
+        const names = archivedNames.get(cwd) ?? {};
+        names[id] = `Fixture ${key}`;
+        archivedNames.set(cwd, names);
+      } else {
+        const active = activeByCwd.get(cwd) ?? [];
+        active.push(id);
+        activeByCwd.set(cwd, active);
+      }
     }
     // The sidebar lists registered workspaces only, so the fixture work folders
     // must be registered or their groups stay hidden. The "missing" cwd of the
     // Missing fixture stays unregistered on purpose.
     for (const folder of [this.projectDirectories.A, this.projectDirectories.B, "external"]) {
-      metadata.workspaces[join(this.directory, folder)] = { addedAtMs: 0 };
+      const cwd = join(this.directory, folder);
+      store["registered-workspaces"].push(cwd);
+      const entry: Record<string, unknown> = {
+        "active-sessions": activeByCwd.get(cwd) ?? [],
+      };
+      const names = archivedNames.get(cwd);
+      if (names !== undefined) entry["archived-names"] = names;
+      store.workspaces[cwd] = entry;
     }
     const newestBTime = new Date(statSync(this.sessions.B.session).mtimeMs + 1000);
     utimesSync(this.sessions.B.session, newestBTime, newestBTime);
-    write(join(this.directory, "agent/session-metadata.json"), JSON.stringify(metadata));
+    write(join(this.directory, "agent/session-state.json"), JSON.stringify(store));
     write(join(this.directory, "fixtures.json"), JSON.stringify(this.sessions, null, 2));
   }
 

@@ -593,20 +593,21 @@ test(
   "Archive ボタンでアーカイブし、Unarchive ボタンで未アーカイブに戻せる",
   { annotation: { type: "spec", description: "E2E-13" } },
   async ({ host }, testInfo) => {
-    const metadataPath = join(host.directory, "agent/session-metadata.json");
-    const entryOf = (id: string): { active?: boolean; sentinel?: string } => {
-      const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as {
-        sessions: Record<string, { active?: boolean; sentinel?: string }>;
+    const statePath = join(host.directory, "agent/session-state.json");
+    const aIsListed = (): boolean => {
+      const store = JSON.parse(readFileSync(statePath, "utf8")) as {
+        sentinel?: string;
+        workspaces: Record<string, { "active-sessions"?: string[] }>;
       };
-      return metadata.sessions[id];
+      const entry = store.workspaces[host.sessions.A.cwd] ?? {};
+      return (entry["active-sessions"] ?? []).includes(aId);
     };
+    const aId = host.sessions.A.id;
     const rowIn = (frame: Frame, id: string) =>
       frame
         .locator(".session-row")
         .filter({ has: frame.locator(`[data-session="${id}"]`) })
         .describe("Session row");
-    const aId = host.sessions.A.id;
-
     await test.step("Archive the A row with its Archive button and view it in All mode", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
@@ -614,7 +615,10 @@ test(
         .describe("A row Archive button")
         .click({ steps: 15 });
       await expect(rowIn(frame, aId)).toHaveCount(0);
-      expect(entryOf(aId)).toMatchObject({ active: false, sentinel: "preserved" });
+      expect(aIsListed()).toBe(false);
+      expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
+        "preserved",
+      );
       await frame
         .locator("#app header [data-mode-toggle]")
         .describe("Shared All toggle")
@@ -636,7 +640,10 @@ test(
       const row = rowIn(frame, aId);
       await expect(row).not.toHaveClass(/archived/);
       await expect(row.locator(`[data-archive="${aId}"]`)).toBeVisible();
-      expect(entryOf(aId)).toMatchObject({ active: true, sentinel: "preserved" });
+      expect(aIsListed()).toBe(true);
+      expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
+        "preserved",
+      );
       await testInfo.attach("Unarchive 後（未アーカイブ）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
         contentType: "image/png",

@@ -20,7 +20,15 @@ export function resolveSessionDir(env: PiPathEnv, homeDir: string): string {
   return env.PI_CODING_AGENT_SESSION_DIR || join(resolveAgentDir(env, homeDir), "sessions");
 }
 
-/** Path of this extension's metadata store inside the agent directory. */
+/** Path of the session state store inside the agent directory. The store is
+ * shared with the pi extension `session-state`, which writes it on every
+ * sent message. */
+export function sessionStatePath(agentDir: string): string {
+  return join(agentDir, "session-state.json");
+}
+
+/** Path of the v1 metadata store. Only read for the one-time migration into
+ * the session state store; never written. */
 export function metadataStorePath(agentDir: string): string {
   return join(agentDir, "session-metadata.json");
 }

@@ -2,271 +2,147 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chmodSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  archivedSessionIds,
+  activeSessionIds,
+  addActiveSession,
   archivedSessionNames,
   archiveSessions,
+  buildV1Migration,
+  hiddenWorkspaceCwds,
   lockedSessionIds,
-  readMetadataStore,
+  migrateLegacyStore,
+  mutateSessionStateStore,
+  parseSessionStateStore,
+  readLegacyMetadataStore,
+  readSessionStateStore,
   registeredWorkspaceCwds,
   registerWorkspace,
-  unregisterWorkspace,
-  setSessionActive,
   unarchiveSessions,
-  setSessionLocked,
-  writeMetadataStore,
-  type MetadataStoreData,
+  unregisterWorkspace,
+  setSessionLocks,
+  type LegacyMetadataStoreData,
+  type SessionStateStoreData,
 } from "../src/metadataStore";
+import type { SessionSummary } from "../src/sessionStore";
 import { cleanup, tempDir } from "./fixtures";
 
 let dir: string;
 let path: string;
 
 beforeEach(async () => {
-  dir = await tempDir("pi-metadata-test-");
-  path = join(dir, "session-metadata.json");
+  dir = await tempDir("pi-session-state-test-");
+  path = join(dir, "session-state.json");
 });
 
 afterEach(async () => {
   await cleanup(dir);
 });
 
-function readWritten(): MetadataStoreData {
-  const read = readMetadataStore(path);
+function readWritten(): SessionStateStoreData {
+  const read = readSessionStateStore(path);
   if (read.status !== "ok") throw new Error(`expected ok, got ${read.status}`);
   return read.data;
 }
 
-describe("readMetadataStore", () => {
+function summary(sessionId: string, cwd: string): SessionSummary {
+  return {
+    sessionId,
+    filePath: join(cwd, `${sessionId}.jsonl`),
+    cwd,
+    displayName: `Session ${sessionId}`,
+    mtimeMs: 0,
+  };
+}
+
+describe("parseSessionStateStore", () => {
   it("returns empty for a missing file", () => {
-    expect(readMetadataStore(path)).toEqual({ status: "empty" });
+    expect(readSessionStateStore(path)).toEqual({ status: "empty" });
   });
 
-  it("reads a valid store", () => {
-    writeFileSync(path, JSON.stringify({ version: 1, sessions: { s1: { active: true } } }), "utf8");
-    const read = readMetadataStore(path);
+  it("reads a valid v2 store with unknown keys and fields", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 2,
+        workspaces: { "/w": { "active-sessions": ["s1"], pinned: true } },
+        tags: ["a"],
+      }),
+      "utf8",
+    );
+    const read = readSessionStateStore(path);
     expect(read.status).toBe("ok");
     if (read.status === "ok") {
-      expect(read.data.sessions?.s1).toEqual({ active: true });
+      expect(read.data.workspaces["/w"]["active-sessions"]).toEqual(["s1"]);
+      expect(read.data.tags).toEqual(["a"]);
     }
   });
 
   it("returns error for unparseable JSON", () => {
     writeFileSync(path, "{not json", "utf8");
-    const read = readMetadataStore(path);
+    const read = readSessionStateStore(path);
     expect(read.status).toBe("error");
     if (read.status === "error") expect(read.message).toMatch(/JSON/);
   });
 
-  it("returns error when the root is not an object", () => {
-    writeFileSync(path, "[1,2]", "utf8");
-    expect(readMetadataStore(path).status).toBe("error");
+  it.each([
+    ['{"version":1,"workspaces":{}}', "version 1"],
+    ['{"version":3,"workspaces":{}}', "version 3"],
+    ['{"version":"2","workspaces":{}}', "a version string"],
+    ['{"workspaces":{}}', "no version"],
+    ['{"version":2}', "no workspaces"],
+    ['{"version":2,"workspaces":[]}', "a workspaces array"],
+    ["[]", "a JSON array"],
+    ["42", "a JSON number"],
+  ])("returns error when the store has %s", (raw) => {
+    writeFileSync(path, raw, "utf8");
+    const read = readSessionStateStore(path);
+    expect(read.status).toBe("error");
+    if (read.status === "error") expect(read.message).toMatch(/not a valid session-state store/);
   });
 
-  it("returns error when sessions is not an object", () => {
-    writeFileSync(path, JSON.stringify({ version: 1, sessions: 3 }), "utf8");
-    expect(readMetadataStore(path).status).toBe("error");
-  });
-});
-
-describe("setSessionActive", () => {
-  it("creates the store on first write with version 1", () => {
-    const result = setSessionActive(path, "s1", true);
-    expect(result.ok).toBe(true);
-    const data = readWritten();
-    expect(data.version).toBe(1);
-    expect(data.sessions?.s1).toEqual({ active: true });
-  });
-
-  it("adds version 1 when an existing store lacked it", () => {
-    writeFileSync(path, JSON.stringify({ sessions: { x: { active: true } } }), "utf8");
-    setSessionActive(path, "y", true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.version).toBe(1);
-  });
-
-  it("deactivating keeps the entry, its other attributes, other sessions, and unknown top-level keys", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({
-        version: 1,
-        meta: { lastClient: "cli" },
-        sessions: {
-          s1: { pinned: true, tags: ["a", "b"], active: true },
-          s2: { active: false },
-        },
-      }),
-      "utf8",
-    );
-    const result = setSessionActive(path, "s1", false);
-    expect(result.ok).toBe(true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.meta).toEqual({ lastClient: "cli" });
-    expect(parsed.sessions.s1).toEqual({ pinned: true, tags: ["a", "b"], active: false });
-    expect(parsed.sessions.s2).toEqual({ active: false });
-  });
-
-  it("sequential updates follow last-write-wins and keep all sessions", () => {
-    setSessionActive(path, "a", true);
-    setSessionActive(path, "b", true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions).toEqual({ a: { active: true }, b: { active: true } });
-  });
-
-  it("unarchiving removes the archived display-name snapshot and keeps other attributes", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({
-        version: 1,
-        sessions: { s1: { active: false, name: "Old", pinned: true } },
-      }),
-      "utf8",
-    );
-
-    const result = setSessionActive(path, "s1", true);
-
-    expect(result.ok).toBe(true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions.s1).toEqual({ active: true, pinned: true });
-  });
-
-  it("does not write and reports an error when the file is corrupt", () => {
-    writeFileSync(path, "{oops", "utf8");
-    const result = setSessionActive(path, "s1", true);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toMatch(/JSON/);
-    expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
-  });
-
-  it("fails on the write path: reports the error, keeps the previous content, and leaves no temp files", () => {
-    const original = JSON.stringify({ version: 1, sessions: { s1: { active: false } } });
-    writeFileSync(path, original, "utf8");
-    chmodSync(dir, 0o500); // a read-only store directory makes the tmp-file write inside writeMetadataStore fail
-    try {
-      const result = setSessionActive(path, "s2", true);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.message).toMatch(/Failed to write/); // the write step failed, not the read
-    } finally {
-      chmodSync(dir, 0o700); // restore before afterEach cleanup removes the directory
-    }
-    expect(readFileSync(path, "utf8")).toBe(original); // the previous content is untouched
-    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  it("reports a read failure as an error", () => {
+    writeFileSync(path, "{}", "utf8");
+    const read = readSessionStateStore(join(path, "nested.json")); // reading under a file fails
+    expect(read.status).toBe("error");
   });
 });
 
-describe("writeMetadataStore", () => {
-  it("replaces the previous content atomically and leaves no temp files", () => {
-    writeMetadataStore(path, { version: 1, sessions: { a: { active: true } } });
-    writeMetadataStore(path, { version: 1, sessions: { a: { active: false } } });
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions.a).toEqual({ active: false });
-    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-  });
-});
-
-describe("setSessionLocked", () => {
-  it("persists the lock while keeping the entry's other attributes", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({ version: 1, sessions: { s1: { active: true, pinned: true } } }),
-      "utf8",
-    );
-
-    const result = setSessionLocked(path, "s1", true);
+describe("mutateSessionStateStore", () => {
+  it("creates a fresh v2 store when the file is missing", () => {
+    const result = mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = { "active-sessions": ["s1"] };
+      return true;
+    });
 
     expect(result.ok).toBe(true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions.s1).toEqual({ active: true, pinned: true, locked: true });
-  });
-
-  it("unlocks by setting locked to false", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({ version: 1, sessions: { s1: { active: false, locked: true } } }),
-      "utf8",
-    );
-
-    expect(setSessionLocked(path, "s1", false).ok).toBe(true);
-
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions.s1).toEqual({ active: false, locked: false });
-  });
-
-  it("does not write and reports an error when the file is corrupt", () => {
-    writeFileSync(path, "{oops", "utf8");
-
-    const result = setSessionLocked(path, "s1", true);
-
-    expect(result.ok).toBe(false);
-    expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
-  });
-});
-
-describe("archiveSessions", () => {
-  it("archives every requested session in one write and snapshots the display names", () => {
-    setSessionActive(path, "a", true);
-
-    const result = archiveSessions(path, [
-      { sessionId: "a", displayName: "First" },
-      { sessionId: "b", displayName: "Second" },
-    ]);
-
-    expect(result.ok).toBe(true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions).toEqual({
-      a: { active: false, name: "First" },
-      b: { active: false, name: "Second" },
+    expect(readWritten()).toEqual({
+      version: 2,
+      workspaces: { "/w": { "active-sessions": ["s1"] } },
     });
   });
 
-  it("skips locked sessions and archives the rest", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({
-        version: 1,
-        sessions: { locked1: { locked: true }, locked2: { active: true, locked: true }, open: {} },
-      }),
-      "utf8",
-    );
-
-    const result = archiveSessions(path, [
-      { sessionId: "locked1", displayName: "A" },
-      { sessionId: "locked2", displayName: "B" },
-      { sessionId: "open", displayName: "Open" },
-    ]);
+  it("writes nothing when the update reports no change", () => {
+    const result = mutateSessionStateStore(path, () => false);
 
     expect(result.ok).toBe(true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions.locked1).toEqual({ locked: true });
-    expect(parsed.sessions.locked2).toEqual({ active: true, locked: true });
-    expect(parsed.sessions.open).toEqual({ active: false, name: "Open" });
-  });
-
-  it("writes nothing when every requested session is locked", () => {
-    writeFileSync(path, JSON.stringify({ version: 1, sessions: { s1: { locked: true } } }), "utf8");
-    const before = readFileSync(path, "utf8");
-
-    const result = archiveSessions(path, [{ sessionId: "s1", displayName: "A" }]);
-
-    expect(result.ok).toBe(true);
-    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(existsSync(path)).toBe(false);
   });
 
   it("does not write and reports an error when the file is corrupt", () => {
     writeFileSync(path, "{oops", "utf8");
 
-    const result = archiveSessions(path, [{ sessionId: "s1", displayName: "A" }]);
+    const result = mutateSessionStateStore(path, () => true);
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toMatch(/JSON/);
+    if (!result.ok) expect(result.message).toMatch(/not valid JSON/);
     expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
   });
 
   it("fails on the write path: reports the error, keeps the previous content, and leaves no temp files", () => {
-    const original = JSON.stringify({ version: 1, sessions: { s1: { active: true } } });
+    const original = JSON.stringify({ version: 2, workspaces: {} });
     writeFileSync(path, original, "utf8");
-    chmodSync(dir, 0o500); // a read-only store directory makes the tmp-file write inside writeMetadataStore fail
+    chmodSync(dir, 0o500); // a read-only store directory makes the temp-file write fail
     try {
-      const result = archiveSessions(path, [{ sessionId: "s1", displayName: "A" }]);
+      const result = mutateSessionStateStore(path, () => true);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.message).toMatch(/Failed to write/);
     } finally {
@@ -275,62 +151,231 @@ describe("archiveSessions", () => {
     expect(readFileSync(path, "utf8")).toBe(original); // the previous content is untouched
     expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
+});
 
-  it("archives 1000 synthetic sessions in a single write", () => {
-    const ids = Array.from({ length: 1000 }, (_, index) => `s-${index}`);
+describe("registration", () => {
+  it("registerWorkspace creates the store and the registered list", () => {
+    const result = registerWorkspace(path, "/home/user/project");
 
-    const result = archiveSessions(
-      path,
-      ids.map((id) => ({ sessionId: id, displayName: id })),
-    );
+    expect(result).toEqual({ ok: true, added: true });
+    const data = readWritten();
+    expect(registeredWorkspaceCwds(data)).toEqual(["/home/user/project"]);
+  });
+
+  it("registerWorkspace resolves the cwd and rejects an already registered directory", () => {
+    registerWorkspace(path, "/home/user/project");
+
+    const result = registerWorkspace(path, "/home/user/project/./");
+
+    expect(result).toEqual({ ok: true, added: false });
+    expect(registeredWorkspaceCwds(readWritten())).toEqual(["/home/user/project"]);
+  });
+
+  it("registerWorkspace keeps the workspace entry so registering again restores the group", () => {
+    registerWorkspace(path, "/w");
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = { "active-sessions": ["s1"] };
+      return true;
+    });
+
+    unregisterWorkspace(path, "/w");
+    const result = registerWorkspace(path, "/w");
+
+    expect(result).toEqual({ ok: true, added: true });
+    expect(readWritten().workspaces["/w"]["active-sessions"]).toEqual(["s1"]);
+  });
+
+  it("unregisterWorkspace removes the registration but keeps the workspace entry", () => {
+    registerWorkspace(path, "/w");
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = { "active-sessions": ["s1"] };
+      return true;
+    });
+
+    const result = unregisterWorkspace(path, "/w");
+
+    expect(result).toEqual({ ok: true, removed: true });
+    const data = readWritten();
+    expect(registeredWorkspaceCwds(data)).toEqual([]);
+    expect(data.workspaces["/w"]["active-sessions"]).toEqual(["s1"]);
+  });
+
+  it("unregisterWorkspace writes nothing when the cwd is not registered", () => {
+    const result = unregisterWorkspace(path, "/w");
+
+    expect(result).toEqual({ ok: true, removed: false });
+    expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("membership queries", () => {
+  const data: SessionStateStoreData = {
+    version: 2,
+    workspaces: {
+      "/w": {
+        "active-sessions": ["a1", "a2"],
+        "locked-sessions": ["l1"],
+        "archived-names": { x1: "Archived x1", bad: 123 },
+      },
+      "/off": { active: false, "active-sessions": ["a3"] },
+    },
+  } as unknown as SessionStateStoreData;
+
+  it("collects active ids across workspaces", () => {
+    expect(activeSessionIds(data)).toEqual(new Set(["a1", "a2", "a3"]));
+  });
+
+  it("collects locked ids across workspaces", () => {
+    expect(lockedSessionIds(data)).toEqual(new Set(["l1"]));
+  });
+
+  it("collects string display-name snapshots across workspaces", () => {
+    expect(archivedSessionNames(data)).toEqual(new Map([["x1", "Archived x1"]]));
+  });
+  it("collects the workspace cwds toggled off for the default view", () => {
+    expect(hiddenWorkspaceCwds(data)).toEqual(new Set(["/off"]));
+  });
+
+  it("treats a missing store as empty state", () => {
+    expect(activeSessionIds(undefined)).toEqual(new Set());
+    expect(lockedSessionIds(undefined)).toEqual(new Set());
+    expect(archivedSessionNames(undefined)).toEqual(new Map());
+    expect(hiddenWorkspaceCwds(undefined)).toEqual(new Set());
+    expect(registeredWorkspaceCwds(undefined)).toEqual([]);
+  });
+});
+
+describe("addActiveSession", () => {
+  it("creates the workspace entry and lists the session", () => {
+    const result = addActiveSession(path, "/w", "s1");
 
     expect(result.ok).toBe(true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    const archived = Object.values(parsed.sessions as Record<string, { active?: boolean }>).filter(
-      (entry) => entry.active === false,
-    );
-    expect(archived).toHaveLength(1000);
+    expect(readWritten()).toEqual({
+      version: 2,
+      workspaces: { "/w": { "active-sessions": ["s1"] } },
+    });
+  });
+
+  it("appends to the listed sessions and keeps unknown fields", () => {
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = { "active-sessions": ["s2"], pinned: true };
+      return true;
+    });
+
+    addActiveSession(path, "/w", "s1");
+
+    expect(readWritten().workspaces["/w"]).toEqual({
+      "active-sessions": ["s2", "s1"],
+      pinned: true,
+    });
+  });
+
+  it("writes nothing when the session is already listed", () => {
+    addActiveSession(path, "/w", "s1");
+    const before = readFileSync(path, "utf8");
+
+    const result = addActiveSession(path, "/w", "s1");
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+});
+
+describe("archiveSessions", () => {
+  it("removes the sessions from active-sessions and snapshots their display names", () => {
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = { "active-sessions": ["s1", "s2"] };
+      return true;
+    });
+
+    const result = archiveSessions(path, [
+      { sessionId: "s1", cwd: "/w", displayName: "Archived s1" },
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(readWritten().workspaces["/w"]).toEqual({
+      "active-sessions": ["s2"],
+      "archived-names": { s1: "Archived s1" },
+    });
+  });
+
+  it("skips locked sessions and archives the rest", () => {
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = {
+        "active-sessions": ["locked1", "locked2", "open"],
+        "locked-sessions": ["locked1", "locked2"],
+      };
+      return true;
+    });
+
+    const result = archiveSessions(path, [
+      { sessionId: "locked1", cwd: "/w", displayName: "Locked 1" },
+      { sessionId: "locked2", cwd: "/w", displayName: "Locked 2" },
+      { sessionId: "open", cwd: "/w", displayName: "Open" },
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(readWritten().workspaces["/w"]).toEqual({
+      "active-sessions": ["locked1", "locked2"],
+      "locked-sessions": ["locked1", "locked2"],
+      "archived-names": { open: "Open" },
+    });
+  });
+
+  it("keeps the snapshot fresh for an already inactive session", () => {
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = { "archived-names": { s1: "Old name" } };
+      return true;
+    });
+
+    archiveSessions(path, [{ sessionId: "s1", cwd: "/w", displayName: "New name" }]);
+
+    expect(readWritten().workspaces["/w"]["archived-names"]).toEqual({ s1: "New name" });
+  });
+
+  it("does not write and reports an error when the file is corrupt", () => {
+    writeFileSync(path, "{oops", "utf8");
+
+    const result = archiveSessions(path, [{ sessionId: "s1", cwd: "/w", displayName: "n" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/not valid JSON/);
+    expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
   });
 });
 
 describe("unarchiveSessions", () => {
-  it("unarchives every requested session in one write, keeping other attributes and dropping the snapshot", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({
-        version: 1,
-        sessions: {
-          a: { active: false },
-          b: { active: false, locked: true },
-          c: { active: false, name: "Old", pinned: true },
-          open: {},
-        },
-      }),
-      "utf8",
-    );
+  it("adds the sessions to active-sessions, keeping other attributes", () => {
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = {
+        "active-sessions": ["s2"],
+        "locked-sessions": ["s1"],
+        "archived-names": { s1: "Archived s1" },
+      };
+      return true;
+    });
 
-    const result = unarchiveSessions(path, ["a", "b", "c"]);
+    const result = unarchiveSessions(path, [{ sessionId: "s1", cwd: "/w" }]);
 
     expect(result.ok).toBe(true);
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    expect(parsed.sessions).toEqual({
-      a: { active: true },
-      b: { active: true, locked: true },
-      // unarchiving drops the display-name snapshot and keeps other attributes
-      c: { active: true, pinned: true },
-      open: {},
+    expect(readWritten().workspaces["/w"]).toEqual({
+      "active-sessions": ["s2", "s1"],
+      "locked-sessions": ["s1"],
     });
   });
 
-  it("writes nothing when nothing is requested", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({ version: 1, sessions: { s1: { active: false } } }),
-      "utf8",
-    );
+  it("creates the workspace entry when missing", () => {
+    const result = unarchiveSessions(path, [{ sessionId: "s1", cwd: "/w" }]);
+
+    expect(result.ok).toBe(true);
+    expect(readWritten().workspaces["/w"]["active-sessions"]).toEqual(["s1"]);
+  });
+
+  it("writes nothing when nothing changes", () => {
+    addActiveSession(path, "/w", "s1");
     const before = readFileSync(path, "utf8");
 
-    const result = unarchiveSessions(path, []);
+    const result = unarchiveSessions(path, [{ sessionId: "s1", cwd: "/w" }]);
 
     expect(result.ok).toBe(true);
     expect(readFileSync(path, "utf8")).toBe(before);
@@ -339,165 +384,162 @@ describe("unarchiveSessions", () => {
   it("does not write and reports an error when the file is corrupt", () => {
     writeFileSync(path, "{oops", "utf8");
 
-    const result = unarchiveSessions(path, ["s1"]);
+    const result = unarchiveSessions(path, [{ sessionId: "s1", cwd: "/w" }]);
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toMatch(/JSON/);
+    if (!result.ok) expect(result.message).toMatch(/not valid JSON/);
     expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
   });
 });
 
-describe("archivedSessionIds and lockedSessionIds", () => {
-  it("collects only sessions whose active attribute is explicitly false", () => {
-    const data = JSON.parse(
-      '{"sessions": {"a": {"active": false}, "b": {"active": true}, "c": {}, "d": 3}}',
-    ) as MetadataStoreData;
-    expect(archivedSessionIds(data)).toEqual(new Set(["a"]));
-  });
+describe("setSessionLocks", () => {
+  it("adds and removes locks in one write, keeping other attributes", () => {
+    mutateSessionStateStore(path, (store) => {
+      store.workspaces["/w"] = { "active-sessions": ["s1", "s2"], "locked-sessions": ["s3"] };
+      return true;
+    });
 
-  it("collects only sessions whose locked attribute is truthy", () => {
-    const data = JSON.parse(
-      '{"sessions": {"a": {"locked": true}, "b": {"locked": false}, "c": {}, "d": 3}}',
-    ) as MetadataStoreData;
-    expect(lockedSessionIds(data)).toEqual(new Set(["a"]));
-  });
-
-  it("treats missing metadata as no archived and no locked sessions", () => {
-    expect(archivedSessionIds(undefined)).toEqual(new Set());
-    expect(lockedSessionIds(undefined)).toEqual(new Set());
-  });
-});
-
-describe("archivedSessionNames", () => {
-  it("collects display-name snapshots of archived sessions only", () => {
-    const data = JSON.parse(
-      '{"sessions": {"a": {"active": false, "name": "Old"}, "b": {"active": false}, "c": {"active": true, "name": "Live"}, "d": 3}}',
-    ) as MetadataStoreData;
-    expect(archivedSessionNames(data)).toEqual(new Map([["a", "Old"]]));
-  });
-
-  it("treats missing metadata as no snapshots", () => {
-    expect(archivedSessionNames(undefined)).toEqual(new Map());
-  });
-});
-
-describe("registerWorkspace", () => {
-  it("creates the store with the resolved workspace path and added time", () => {
-    const result = registerWorkspace(path, "/home/user/project", 1_000);
-
-    expect(result).toEqual({ ok: true, added: true });
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as MetadataStoreData;
-    expect(parsed.workspaces).toEqual({ "/home/user/project": { addedAtMs: 1_000 } });
-    expect(parsed.version).toBe(1);
-  });
-
-  it("resolves the stored key and keeps existing sessions and keys", () => {
-    writeFileSync(path, JSON.stringify({ version: 1, sessions: { a: { active: false } } }));
-
-    const result = registerWorkspace(path, "/home/user/project/", 2_000);
-
-    expect(result).toEqual({ ok: true, added: true });
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as MetadataStoreData;
-    expect(parsed.sessions).toEqual({ a: { active: false } });
-    expect(Object.keys(parsed.workspaces ?? {})).toEqual(["/home/user/project"]);
-  });
-
-  it("keeps an existing entry for the same directory without rewriting", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({ version: 1, workspaces: { "/home/user/project": { addedAtMs: 1_000 } } }),
-    );
-    const original = readFileSync(path, "utf8");
-
-    const result = registerWorkspace(path, "/home/user/project/", 9_000);
-
-    expect(result).toEqual({ ok: true, added: false });
-    expect(readFileSync(path, "utf8")).toBe(original);
-  });
-
-  it("reports a store read error without writing", () => {
-    writeFileSync(path, "not json");
-
-    const result = registerWorkspace(path, "/home/user/project", 1_000);
-
-    expect(result.ok).toBe(false);
-    expect(readFileSync(path, "utf8")).toBe("not json");
-  });
-});
-
-describe("unregisterWorkspace", () => {
-  it("removes the registration whose key resolves to the cwd", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({
-        version: 1,
-        sessions: { a: { active: false } },
-        workspaces: { "/home/user/a": { addedAtMs: 1 }, "/home/user/b": { addedAtMs: 2 } },
-      }),
-    );
-
-    const result = unregisterWorkspace(path, "/home/user/b/");
-
-    expect(result).toEqual({ ok: true, removed: true });
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as MetadataStoreData;
-    expect(Object.keys(parsed.workspaces ?? {})).toEqual(["/home/user/a"]);
-    expect(parsed.sessions).toEqual({ a: { active: false } });
-  });
-
-  it("keeps the file untouched when no registration points at the cwd", () => {
-    writeFileSync(path, JSON.stringify({ version: 1, workspaces: { "/home/user/a": {} } }));
-    const original = readFileSync(path, "utf8");
-
-    const result = unregisterWorkspace(path, "/home/user/other");
-
-    expect(result).toEqual({ ok: true, removed: false });
-    expect(readFileSync(path, "utf8")).toBe(original);
-  });
-
-  it("keeps a missing store missing when unregistering", () => {
-    const result = unregisterWorkspace(path, "/home/user/a");
-
-    expect(result).toEqual({ ok: true, removed: false });
-    expect(existsSync(path)).toBe(false);
-  });
-
-  it("reports a store read error without writing", () => {
-    writeFileSync(path, "not json");
-
-    const result = unregisterWorkspace(path, "/home/user/a");
-
-    expect(result.ok).toBe(false);
-    expect(readFileSync(path, "utf8")).toBe("not json");
-  });
-});
-
-describe("registeredWorkspaceCwds", () => {
-  it("lists registered workspace cwds in registration order", () => {
-    writeFileSync(
-      path,
-      JSON.stringify({
-        version: 1,
-        workspaces: { "/a": { addedAtMs: 1 }, "/b": { addedAtMs: 2 } },
-      }),
-    );
-    const read = readMetadataStore(path);
-
-    expect(registeredWorkspaceCwds(read.status === "ok" ? read.data : undefined)).toEqual([
-      "/a",
-      "/b",
+    const result = setSessionLocks(path, [
+      { sessionId: "s1", cwd: "/w", locked: true },
+      { sessionId: "s2", cwd: "/w", locked: false },
+      { sessionId: "s3", cwd: "/w", locked: false },
     ]);
+
+    expect(result.ok).toBe(true);
+    expect(readWritten().workspaces["/w"]).toEqual({
+      "active-sessions": ["s1", "s2"],
+      "locked-sessions": ["s1"],
+    });
   });
 
-  it("treats missing metadata as no registered workspaces", () => {
-    expect(registeredWorkspaceCwds(undefined)).toEqual([]);
+  it("writes nothing when the lock states already match", () => {
+    addActiveSession(path, "/w", "s1");
+    const before = readFileSync(path, "utf8");
+
+    const result = setSessionLocks(path, [{ sessionId: "s1", cwd: "/w", locked: false }]);
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(before);
   });
 
-  it("rejects a store whose workspaces is not an object", () => {
-    writeFileSync(path, JSON.stringify({ version: 1, workspaces: ["/a"] }));
+  it("does not write and reports an error when the file is corrupt", () => {
+    writeFileSync(path, "{oops", "utf8");
 
-    const read = readMetadataStore(path);
+    const result = setSessionLocks(path, [{ sessionId: "s1", cwd: "/w", locked: true }]);
 
-    expect(read).toMatchObject({ status: "error" });
-    expect(read.status === "error" ? read.message : "").toContain("workspaces");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/not valid JSON/);
+    expect(readFileSync(path, "utf8")).toBe("{oops"); // untouched
+  });
+});
+
+describe("readLegacyMetadataStore", () => {
+  it("returns empty for a missing file", () => {
+    expect(readLegacyMetadataStore(path)).toEqual({ status: "empty" });
+  });
+
+  it("reads a v1 document as unknown data", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, sessions: { s1: { active: false } } }),
+      "utf8",
+    );
+    const read = readLegacyMetadataStore(path);
+    expect(read.status).toBe("ok");
+    if (read.status === "ok") expect(read.data.sessions?.s1).toEqual({ active: false });
+  });
+
+  it("returns error for unparseable JSON", () => {
+    writeFileSync(path, "{oops", "utf8");
+    const read = readLegacyMetadataStore(path);
+    expect(read.status).toBe("error");
+    if (read.status === "error") expect(read.message).toMatch(/JSON/);
+  });
+});
+
+const legacy: LegacyMetadataStoreData = {
+  version: 1,
+  sessions: {
+    visible: { active: true },
+    neverTouched: {},
+    archived: { active: false, name: "Archived display name" },
+    lockedAndArchived: { active: false, locked: true },
+    lockedVisible: { active: true, locked: true },
+    otherCwd: { active: true },
+  },
+  workspaces: { "/w": { addedAtMs: 1 } },
+};
+
+describe("migrateLegacyStore", () => {
+  it("builds the v2 store: visible sessions join active-sessions, archived ones become snapshots", () => {
+    const summaries = [
+      summary("visible", "/w"),
+      summary("neverTouched", "/w"),
+      summary("archived", "/w"),
+      summary("lockedAndArchived", "/w"),
+      summary("lockedVisible", "/w"),
+      summary("otherCwd", "/other"), // an unregistered cwd: never migrated
+    ];
+
+    const result = migrateLegacyStore(path, legacy, summaries);
+
+    expect(result.ok).toBe(true);
+    const data = readWritten();
+    expect(data["migrated-v1"]).toBe(true);
+    expect(data["registered-workspaces"]).toEqual(["/w"]);
+    expect(data.workspaces["/w"]).toEqual({
+      "active-sessions": ["visible", "neverTouched", "lockedVisible"],
+      "locked-sessions": ["lockedAndArchived", "lockedVisible"],
+      "archived-names": {
+        archived: "Archived display name",
+        lockedAndArchived: "Session lockedAndArchived",
+      },
+    });
+    expect(data.workspaces["/other"]).toBeUndefined();
+  });
+
+  it("merges into an existing store without dropping pi-extension state", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 2,
+        workspaces: { "/w": { "active-sessions": ["piSession"] } },
+        tags: ["a"],
+      }),
+      "utf8",
+    );
+
+    const result = migrateLegacyStore(path, legacy, [
+      summary("visible", "/w"),
+      summary("archived", "/w"),
+    ]);
+
+    expect(result.ok).toBe(true);
+    const data = readWritten();
+    expect(data.tags).toEqual(["a"]);
+    expect(data.workspaces["/w"]["active-sessions"]).toEqual(["piSession", "visible"]);
+    expect(data.workspaces["/w"]["archived-names"]).toEqual({
+      archived: "Archived display name",
+    });
+  });
+
+  it("runs once: the marker skips later migrations", () => {
+    migrateLegacyStore(path, legacy, [summary("visible", "/w")]);
+    const afterFirst = readFileSync(path, "utf8");
+
+    const result = migrateLegacyStore(path, legacy, []);
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(afterFirst);
+    expect(JSON.parse(afterFirst)["migrated-v1"]).toBe(true);
+  });
+});
+
+describe("buildV1Migration", () => {
+  it("does not mutate its inputs", () => {
+    const existing: SessionStateStoreData = { version: 2, workspaces: {} };
+    buildV1Migration(legacy, existing, [summary("visible", "/w")]);
+
+    expect(existing).toEqual({ version: 2, workspaces: {} });
   });
 });

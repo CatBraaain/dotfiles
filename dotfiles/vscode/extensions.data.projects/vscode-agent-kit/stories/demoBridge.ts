@@ -115,7 +115,14 @@ export function createDemoBridge(): {
     );
     listener({
       type: "sessions",
-      state: { groups: sessionViewGroups(store, registeredCwds, archivedIds, lockedIds) },
+      state: {
+        groups: sessionViewGroups(store, {
+          registeredCwds,
+          hiddenWorkspaceCwds: new Set(),
+          archivedIds,
+          lockedIds,
+        }),
+      },
     });
   }
 

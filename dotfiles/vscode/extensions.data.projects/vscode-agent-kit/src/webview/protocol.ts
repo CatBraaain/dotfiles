@@ -23,6 +23,8 @@ export interface WebviewSessionGroup {
   label: string;
   /** True when the cwd comes from a registered workspace (New Workspace). */
   registered: boolean;
+  /** Workspace entry's view toggle: false hides the group in the default view. */
+  workspaceActive: boolean;
   sessions: WebviewSession[];
 }
 
