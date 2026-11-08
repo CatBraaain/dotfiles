@@ -16,6 +16,8 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 境界（フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
 | 入力（ワークスペース フォーム） | 背景 `input-background`・文字 `input-foreground`・境界 `input-border`、placeholder は `input-placeholderForeground` |
 | focus | `focusBorder` の 2px ring（offset -2px） |
+| コンテキストメニュー | 背景 `menu-background`（代替 `sideBar-background`）・文字 `menu-foreground`（代替 `foreground`）・境界 `menu-border`（代替 `widget-border`） |
+| メニュー項目の hover・focus | 背景 `menu-selectionBackground`（代替 `list-hoverBackground`）・文字 `menu-selectionForeground`（代替 `foreground`）。focus は focus トークンの ring |
 | 基準角丸 | 9.6px（行・操作で共用） |
 | スクロールつまみ | 通常 `scrollbarSlider-background`、hover `scrollbarSlider-hoverBackground`、ドラッグ `scrollbarSlider-activeBackground`。未定義時は `descriptionForeground` |
 | スクロールバーの消灯待ち | 最後のスクロールから800ms。表示状態の切替とつまみの追従は即時 |
@@ -25,6 +27,8 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 Layout: ワークスペース見出し — 左の開閉と名前、右の補助操作を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
 
 Layout: セッション一覧 — スクロールバーを既存の余白へ重ねる → imposter の右端固定配置（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: バー専用の幅予約、一覧だけの別スクロール領域、ヘッダー・フッターのフロー変更。
+
+Layout: ワークスペースのコンテキストメニュー — 一覧を押し下げず起動位置に操作を重ねる → imposter の viewport 内固定配置版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: 一覧幅・行位置の変化、viewport 外へのはみ出し、メニュー内の追加スクロール領域。
 
 | 対象 | 値 |
 | --- | --- |
@@ -46,10 +50,10 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 | --- | --- |
 | chevron | 24px 四方の領域に12px の SVG、本文色。展開で下向き、折りたたみで右向きに示す。hover は hover 面。開閉の操作と状態は SPEC「Webview の表示」に従う |
 | グループ見出しの New session | chevron と同じ 24px 四方の ghost 操作、本文色。12px の plus SVG、hover は hover 面。ホバーのヒントは `New session` |
-| グループ見出しの Unregister | New session と同じ 24px 四方の ghost 操作。12px の minus SVG、補助文字色、hover は本文色と hover 面。常時表示する。登録済みワークスペースのグループだけに置く。ホバーのヒントは `Unregister workspace` |
+| グループ見出しのコンテキストメニュー | `Unregister workspace` のテキスト項目1つを持つ。固定配置で一覧に重ね、viewport 端から4px以上内側に収める。最小幅160px・最大幅は viewport 幅から8pxを除いた幅。内側余白4px、境界1px、角丸は基準角丸。メニューの色はコンテキストメニュートークン。項目は全幅・高さ32px以上・左右余白8px・13px文字・基準角丸で、長い文字は折り返す。hover・focus はメニュー項目トークン。表示層はスクロールバーより上に置く。操作は SPEC「ワークスペース登録解除」に従う |
 | フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。16px の folder-plus SVG と 13px・500 ラベル、本文色、hover は hover 面。フォームを開いている間は `aria-expanded` を示し hover 面を敷く。構造の参照元は agent-open-ui の `SidebarFooter` |
 | ワークスペース フォーム | New workspace の下に開く。要素間8px。入力は高さ32px・角丸9.6px・入力トークン・13px 文字、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。`Add` は高さ32px・境界付きの本文色操作、`Cancel` は境界なしの補助文字色で hover は本文色。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
-| グループ見出しのモード切替 | 見出し名の右、Unregister の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。未アーカイブ表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
+| グループ見出しのモード切替 | 見出し名の右、New session の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。未アーカイブ表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
 | 状態アイコンのスロット | 全行で12px 四方の固定領域。アイコンを中央に置き、表示名との間隔は8px。空の場合も幅を保持する |
 | spinner・ベル・一時停止マーク | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。一時停止マークは2本の縦線（`M9 4v16`・`M15 4v16`）。色は状態アイコントークンに従う |
 | 表示名 | 13px・20px 行・省略表示 |
@@ -59,6 +63,8 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。既存の見出し・モード切替・Refresh・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
 
 ## Motion & Interaction
+
+コンテキストメニューは [beui.dev の context-menu](https://beui.dev/r/context-menu/raw) の起動元・項目フォーカス・viewport 内への位置調整を参照する。開閉と位置調整は即時とし、アニメーションは加えない。
 
 spinner は中心を軸に1秒・linear・無限反復で1回転する。回転は `transform` のみで行い、行やスロットの寸法を変えない。`prefers-reduced-motion` での表示は SPEC「実行フェーズの表示」に従う。
 

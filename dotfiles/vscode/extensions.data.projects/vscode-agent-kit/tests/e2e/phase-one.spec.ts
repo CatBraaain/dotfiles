@@ -495,39 +495,80 @@ test(
 );
 
 test(
-  "Unregisters directly while keeping Pi running and saved conversations unchanged",
+  "Unregisters a workspace from the list",
   { annotation: { type: "spec", description: "E2E-11" } },
-  async ({ host }) => {
+  async ({ host }, testInfo) => {
     const folder = join(host.directory, "registered");
     await registerWorkFolder(host, folder);
 
-    await test.step("Unregister directly while the same Pi keeps running", async () => {
+    await test.step("Open and dismiss workspace actions from the keyboard", async () => {
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
         .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
         .describe("Registered work folder group");
-      await group
-        .locator(".group-new-session")
-        .describe("Registered group New session button")
-        .click({ steps: 15 });
-      await expect
-        .poll(() => host.piProcesses().some((process) => process.cwd === folder))
-        .toBe(true);
-      const initialPi = host.piProcesses().find((process) => process.cwd === folder);
-      if (initialPi === undefined) throw new Error("Registered workspace Pi is missing.");
+      const title = group.locator(".group-title").describe("Workspace menu keyboard trigger");
+      const menu = frame.getByRole("menu").describe("Workspace context menu");
+      const unregister = menu
+        .getByRole("menuitem", { name: "Unregister workspace", exact: true })
+        .describe("Workspace Unregister menu item");
 
-      await group.locator(".group-header").hover();
+      for (const key of ["Shift+F10", "ContextMenu"]) {
+        await title.focus();
+        await title.press(key);
+        await expect(menu).toBeVisible();
+        await expect(unregister).toBeFocused();
+        await unregister.press("Escape");
+        await expect(menu).toBeHidden();
+        await expect(title).toBeFocused();
+        await expect(group).toHaveCount(1);
+      }
+    });
+
+    await test.step("Unregister a workspace from the list", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      await expect(
+        group.locator("[data-mode-toggle]").describe("Registered workspace mode toggle"),
+      ).toBeVisible();
+      await expect(
+        group.locator(".group-new-session").describe("Registered group New session button"),
+      ).toBeVisible();
+      await expect(group.locator(".group-unregister")).toHaveCount(0);
       await group
-        .locator(".group-unregister")
-        .describe("Registered group Unregister button")
-        .click({ steps: 15 });
+        .locator(".group-header")
+        .describe("Registered group context menu trigger")
+        .click({ button: "right" });
+      const menu = frame.getByRole("menu").describe("Workspace context menu");
+      const unregister = menu
+        .getByRole("menuitem", { name: "Unregister workspace", exact: true })
+        .describe("Workspace Unregister menu item");
+      await expect(menu).toBeVisible();
+      await expect(unregister).toBeVisible();
+      await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
+      await testInfo.attach("Unregister menu", {
+        body: await host.page.screenshot({ path: testInfo.outputPath("unregister-menu.png") }),
+        contentType: "image/png",
+      });
+      await expect(menu).toBeVisible();
+      await expect(unregister).toBeVisible();
+      await unregister.click({ steps: 15 });
       await expect(frame.getByRole("dialog").describe("No Unregister confirmation")).toBeHidden();
       await expect(group).toHaveCount(0);
-      expect(host.piProcesses().find((process) => process.pid === initialPi.pid)?.cwd).toBe(folder);
+      await expect(menu).toBeHidden();
       for (const session of Object.values(host.sessions)) {
         expect(readFileSync(session.session, "utf8")).toBe(session.original);
       }
+      await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
+      await testInfo.attach("Workspace unregistered", {
+        body: await host.page.screenshot({
+          path: testInfo.outputPath("workspace-unregistered.png"),
+        }),
+        contentType: "image/png",
+      });
     });
   },
 );

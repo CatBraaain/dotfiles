@@ -8,6 +8,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ClientState } from "../src/webview/client";
 
 const staticDir = join(process.cwd(), "storybook-static");
 const indexFile = join(staticDir, "index.json");
@@ -121,7 +122,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         sibling: Fiber | null;
       };
       type ClientBridge = { postMessage(message: unknown): void };
-      type TestWindow = Window & { __bridgeMessages?: unknown[] };
+      type TestWindow = Window & {
+        __bridgeMessages?: unknown[];
+        __removeWorkspace?: (cwd: string) => void;
+        __reverseWorkspaces?: () => void;
+      };
 
       const sessionsRoot = document.querySelector("#sessions");
       if (!(sessionsRoot instanceof HTMLElement)) {
@@ -145,6 +150,23 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         if (typeof props === "object" && props !== null && "bridge" in props) {
           const bridge = props.bridge as ClientBridge | undefined;
           if (bridge !== undefined && typeof bridge.postMessage === "function") {
+            if ("store" in props) {
+              const store = props.store as {
+                getSnapshot(): { state: ClientState };
+                setSessions(state: ClientState): void;
+              };
+              (window as TestWindow).__reverseWorkspaces = () => {
+                const { state } = store.getSnapshot();
+                store.setSessions({ ...state, groups: [...state.groups].reverse() });
+              };
+              (window as TestWindow).__removeWorkspace = (cwd) => {
+                const { state } = store.getSnapshot();
+                store.setSessions({
+                  ...state,
+                  groups: state.groups.filter((group) => group.cwd !== cwd),
+                });
+              };
+            }
             const originalPostMessage = bridge.postMessage.bind(bridge);
             bridge.postMessage = (message) => {
               bridgeMessages.push(message);
@@ -1076,73 +1098,95 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it.each([320, 720])(
-    "keeps every workspace Unregister button visible at %ipx without header hover or focus",
-    async (width) => {
+  it.each([
+    { theme: "dark", width: 320 },
+    { theme: "light", width: 320 },
+    { theme: "dark", width: 720 },
+    { theme: "light", width: 720 },
+  ])(
+    "keeps workspace menus inside the viewport in $theme at $width px",
+    async ({ theme, width }) => {
       const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
-      const groups = page.locator(".group").describe("Workspace groups");
-      const groupCount = await groups.count();
-      const emptyWorkspace = groups.filter({
-        has: page.locator('.group-header[title="~/projects/agenda"]'),
-      });
-
-      expect(groupCount).toBeGreaterThan(0);
-      expect(await emptyWorkspace.count()).toBe(1);
-      expect(await emptyWorkspace.locator(".session-row").count()).toBe(0);
-      expect(await page.locator(".session-row").count()).toBeGreaterThan(0);
-
-      async function movePointerOutsideAndBlurFocus() {
-        await page.mouse.move(0, 0);
-        await page.evaluate(() => {
-          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      if (theme === "light") {
+        await page.addStyleTag({
+          content: `:root {
+        --vscode-foreground: #333333;
+        --vscode-sideBar-background: #f8f8f8;
+        --vscode-list-hoverBackground: #e8e8e8;
+      }`,
         });
+      }
+      await installBridgeMessageRecorder(page);
+      const groups = page.locator(".group").describe("Workspace groups");
+      const firstHeader = groups.first().locator(".group-header");
+      const before = await firstHeader.boundingBox();
+      const documentSize = await page.evaluate(() => ({
+        width: document.documentElement.scrollWidth,
+        height: document.documentElement.scrollHeight,
+        top: window.scrollY,
+      }));
+      expect(await page.locator(".group-unregister").count()).toBe(0);
+      expect(await groups.locator(".group-mode-toggle").count()).toBe(await groups.count());
+      expect(await groups.locator(".group-new-session").count()).toBe(await groups.count());
+
+      for (const header of await groups.locator(".group-header").all()) {
+        await header.locator(".group-title").press("Enter");
+        expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("false");
+        await header.click({ button: "right" });
+        await expect.poll(() => page.getByRole("menuitem").count()).toBe(1);
         expect(
-          await page.evaluate(
-            () =>
-              document.activeElement === document.body &&
-              document.elementFromPoint(0, 0)?.closest(".group-header") === null,
-          ),
+          await page.getByRole("menuitem").evaluate((item) => item === document.activeElement),
         ).toBe(true);
+        await page.keyboard.press("Escape");
+        expect(
+          await header
+            .locator(".group-title")
+            .evaluate((title) => title === document.activeElement),
+        ).toBe(true);
+        await header.locator(".group-title").press("Space");
+        expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
       }
 
-      async function expectUnregisterButtonsVisibleAndSized() {
-        const unregisterButtons = groups
-          .locator(".group-unregister")
-          .describe("Workspace Unregister buttons");
-        expect(await unregisterButtons.count()).toBe(groupCount);
-        for (let index = 0; index < groupCount; index += 1) {
-          const unregister = unregisterButtons.nth(index);
-          expect(await unregister.isVisible()).toBe(true);
-          const bounds = await unregister.boundingBox();
-          expect(bounds?.width).toBe(24);
-          expect(bounds?.height).toBe(24);
-        }
+      for (const point of [
+        { x: 1, y: 1 },
+        { x: width - 1, y: 639 },
+      ]) {
+        await firstHeader.dispatchEvent("contextmenu", { clientX: point.x, clientY: point.y });
+        const menu = page.getByRole("menu").describe("Workspace context menu");
+        const bounds = await menu.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(4);
+        expect(bounds!.y).toBeGreaterThanOrEqual(4);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width - 4);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(636);
+        expect((await page.getByRole("menuitem").boundingBox())!.height).toBeGreaterThanOrEqual(32);
+        expect(await firstHeader.boundingBox()).toEqual(before);
+        expect(
+          await page.evaluate(() => ({
+            width: document.documentElement.scrollWidth,
+            height: document.documentElement.scrollHeight,
+            top: window.scrollY,
+          })),
+        ).toEqual(documentSize);
+        await page.keyboard.press("Escape");
       }
-
-      await movePointerOutsideAndBlurFocus();
-      await expectUnregisterButtonsVisibleAndSized();
-
-      for (let index = 0; index < groupCount; index += 1) {
-        const chevron = groups.nth(index).locator(".group-chevron");
-        expect(await chevron.getAttribute("aria-expanded")).toBe("true");
-        await chevron.click();
-        await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
-      }
-
-      await movePointerOutsideAndBlurFocus();
-      await expectUnregisterButtonsVisibleAndSized();
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([]);
       await page.close();
     },
   );
 
   it.each([
-    ["click", "~/projects/agenda", 0],
-    ["Enter", "~/projects/agenda", 0],
-    ["click", "~/projects/vscode-pi-sessions", 1],
-    ["Enter", "~/projects/vscode-pi-sessions", 1],
+    ["click", "~/projects/agenda", 0, "pointer"],
+    ["Enter", "~/projects/agenda", 0, "Shift+F10"],
+    ["Space", "~/projects/vscode-pi-sessions", 1, "ContextMenu"],
+    ["click", "~/.agents/worktrees/vscode-pi-sessions", 1, "pointer"],
   ] as const)(
     "unregisters directly once with %s for %s without confirmation",
-    async (activation, cwd, sessionCount) => {
+    async (activation, cwd, sessionCount, invocation) => {
       const page = await openStory("sessions-sidebar--sample-sessions", {
         width: 320,
         height: 640,
@@ -1150,18 +1194,19 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       await installBridgeMessageRecorder(page);
       const groups = page.locator(".group");
       const group = groups.filter({ has: page.locator(`.group-header[title="${cwd}"]`) });
-      const unregister = group.locator(".group-unregister");
       const groupCountBefore = await groups.count();
-
-      expect(await page.locator(".group-unregister").count()).toBe(groupCountBefore);
       expect(await group.locator(".session-row").count()).toBe(sessionCount);
-      expect(await unregister.getAttribute("aria-label")).toBe(
-        `Unregister workspace ${cwd.split("/").at(-1)}`,
-      );
-      expect(await unregister.isVisible()).toBe(true);
+      if (invocation === "pointer") await group.locator(".group-header").click({ button: "right" });
+      else await group.locator(".group-title").press(invocation);
+      const unregister = page
+        .getByRole("menuitem", { name: "Unregister workspace", exact: true })
+        .describe("Workspace Unregister menu item");
+      expect(await unregister.evaluate((item) => item === document.activeElement)).toBe(true);
       if (activation === "click") await unregister.click();
       else await unregister.press(activation);
 
+      expect(await page.getByRole("menu").count()).toBe(0);
+      expect(await page.getByRole("dialog").count()).toBe(0);
       expect(await page.locator("#confirmation-dialog").isHidden()).toBe(true);
       expect(
         await page.evaluate(
@@ -1171,6 +1216,170 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       await expect.poll(() => group.count()).toBe(0);
       expect(await groups.count()).toBe(groupCountBefore - 1);
       expect(await openSessionMessages(page)).toEqual([]);
+      await page.close();
+    },
+  );
+
+  it.each(["Escape", "Tab", "Shift+Tab", "pointer", "scroll", "resize", "blur"])(
+    "dismisses workspace menus with %s without sending a request",
+    async (dismissal) => {
+      const page = await openStory("sessions-sidebar--sample-sessions");
+      await installBridgeMessageRecorder(page);
+      const header = page.locator('.group-header[title="~/projects/agenda"]');
+      const trigger = header.locator(".group-mode-toggle");
+      await trigger.press("Shift+F10");
+      await expect.poll(() => page.getByRole("menu").count()).toBe(1);
+      if (dismissal === "pointer") await page.mouse.click(0, 0);
+      else if (dismissal === "scroll")
+        await page.evaluate(() => window.dispatchEvent(new Event("scroll")));
+      else if (dismissal === "resize") await page.setViewportSize({ width: 720, height: 600 });
+      else if (dismissal === "blur")
+        await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      else await page.keyboard.press(dismissal);
+      await expect.poll(() => page.getByRole("menu").count()).toBe(0);
+      if (dismissal === "Escape")
+        expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
+      if (dismissal === "Tab")
+        expect(
+          await header
+            .locator(".group-new-session")
+            .evaluate((item) => item === document.activeElement),
+        ).toBe(true);
+      if (dismissal === "Shift+Tab")
+        expect(
+          await header.locator(".group-title").evaluate((item) => item === document.activeElement),
+        ).toBe(true);
+      expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
+      expect(await trigger.getAttribute("data-mode")).toBe("unarchived");
+      expect(
+        await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
+      ).toBe(atlasCurrentId);
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([]);
+      await page.close();
+    },
+  );
+
+  it("replaces the menu target when another same-named workspace opens its menu", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    await page
+      .locator('.group-header[title="~/projects/vscode-pi-sessions"]')
+      .click({ button: "right" });
+    await page
+      .locator('.group-header[title="~/.agents/worktrees/vscode-pi-sessions"]')
+      .click({ button: "right" });
+    expect(await page.getByRole("menu").count()).toBe(1);
+    await page.getByRole("menuitem").press("Enter");
+    expect(
+      await page.evaluate(
+        () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+      ),
+    ).toEqual([{ type: "unregisterWorkspace", cwd: "~/.agents/worktrees/vscode-pi-sessions" }]);
+    expect(await page.locator('.group-header[title="~/projects/vscode-pi-sessions"]').count()).toBe(
+      1,
+    );
+    await page.close();
+  });
+
+  it.each([
+    ["~/projects/vscode-pi-sessions", "remove preceding", "Escape"],
+    ["~/projects/vscode-pi-sessions", "remove preceding", "Tab"],
+    ["~/.agents/worktrees/vscode-pi-sessions", "remove preceding", "Escape"],
+    ["~/.agents/worktrees/vscode-pi-sessions", "remove preceding", "Tab"],
+    ["~/projects/vscode-pi-sessions", "reverse", "Escape"],
+    ["~/projects/vscode-pi-sessions", "reverse", "Tab"],
+    ["~/.agents/worktrees/vscode-pi-sessions", "reverse", "Escape"],
+    ["~/.agents/worktrees/vscode-pi-sessions", "reverse", "Tab"],
+  ] as const)("preserves menu origin for %s after %s with %s", async (cwd, update, dismissal) => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const header = page.locator(`.group-header[title="${cwd}"]`);
+    await header.locator(".group-mode-toggle").press("Shift+F10");
+    await expect.poll(() => page.getByRole("menu").count()).toBe(1);
+    const lastCwd = await page.locator(".group-header").last().getAttribute("title");
+    await page.evaluate((update) => {
+      const testWindow = window as Window & {
+        __removeWorkspace?: (cwd: string) => void;
+        __reverseWorkspaces?: () => void;
+      };
+      if (update === "remove preceding") testWindow.__removeWorkspace!("~/projects/agenda");
+      else testWindow.__reverseWorkspaces!();
+    }, update);
+    if (update === "remove preceding") {
+      await expect
+        .poll(() => page.locator('.group-header[title="~/projects/agenda"]').count())
+        .toBe(0);
+    } else {
+      await expect
+        .poll(() => page.locator(".group-header").first().getAttribute("title"))
+        .toBe(lastCwd);
+    }
+    expect(await page.getByRole("menu").count()).toBe(1);
+    await page.keyboard.press(dismissal);
+    const expectedControl = header.locator(
+      dismissal === "Escape" ? ".group-mode-toggle" : ".group-new-session",
+    );
+    expect(await expectedControl.evaluate((item) => item === document.activeElement)).toBe(true);
+    expect(await page.getByRole("menu").count()).toBe(0);
+    expect(
+      await page.evaluate(
+        () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+      ),
+    ).toEqual([]);
+    await page.close();
+  });
+
+  it("closes a workspace menu when its target disappears from incoming state", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const cwd = "~/projects/agenda";
+    await page.locator(`.group-header[title="${cwd}"]`).click({ button: "right" });
+    await expect.poll(() => page.getByRole("menu").count()).toBe(1);
+    await page.evaluate((cwd) => {
+      const removeWorkspace = (window as Window & { __removeWorkspace?: (cwd: string) => void })
+        .__removeWorkspace;
+      if (removeWorkspace === undefined) throw new Error("Workspace updater is missing.");
+      removeWorkspace(cwd);
+    }, cwd);
+    await expect.poll(() => page.getByRole("menu").count()).toBe(0);
+    expect(await page.locator(`.group-header[title="${cwd}"]`).count()).toBe(0);
+    expect(
+      await page.evaluate(
+        () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+      ),
+    ).toEqual([]);
+    await page.close();
+  });
+
+  it.each([".group-chevron", ".group-title", ".group-mode-toggle", ".group-new-session"])(
+    "opens a workspace menu from %s without activating the header control",
+    async (selector) => {
+      const page = await openStory("sessions-sidebar--sample-sessions");
+      await installBridgeMessageRecorder(page);
+      const header = page.locator('.group-header[title="~/projects/vscode-pi-sessions"]');
+      const trigger = header.locator(selector);
+      for (const shortcut of ["Shift+F10", "ContextMenu"]) {
+        await trigger.press(shortcut);
+        await expect.poll(() => page.getByRole("menuitem").count()).toBe(1);
+        expect(
+          await page.getByRole("menuitem").evaluate((item) => item === document.activeElement),
+        ).toBe(true);
+        await page.keyboard.press("Escape");
+        expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
+        expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
+        expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe(
+          "unarchived",
+        );
+      }
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([]);
       await page.close();
     },
   );

@@ -28,12 +28,13 @@ describe("webviewHtml", () => {
     expect(html).toContain("#status.error");
   });
 
-  it("keeps workspace Unregister controls visible without hover or focus", () => {
+  it("styles the workspace context menu without permanent Unregister controls", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain(".group-unregister { color: var(--vscode-descriptionForeground); }");
-    expect(html).not.toContain(".group-header:hover .group-unregister");
-    expect(html).not.toContain(".group-header:focus-within .group-unregister");
+    expect(html).toContain(".workspace-menu { position: fixed; z-index: 2;");
+    expect(html).toContain("var(--vscode-menu-background, var(--vscode-sideBar-background))");
+    expect(html).toContain(".workspace-menu button:focus");
+    expect(html).not.toContain(".group-unregister");
   });
 
   it("uses readable row colors without intercepting timestamp clicks", () => {

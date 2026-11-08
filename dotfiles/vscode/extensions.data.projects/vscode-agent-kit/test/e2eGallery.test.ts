@@ -154,6 +154,12 @@ test("outside a step", { annotation: { type: "spec", description: "E2E-10" } }, 
 test("missing asset", { annotation: { type: "spec", description: "E2E-6" } }, async ({}, info) => {
   info.attachments.push({ name: "deleted image", path: info.outputPath("missing.png"), contentType: "image/png" });
 });
+test("workspace actions", { annotation: { type: "spec", description: "E2E-11" } }, async ({}, info) => {
+  await test.step("Unregister a workspace from the list", async () => {
+    await info.attach("Unregister menu", { body: png, contentType: "image/png" });
+    await info.attach("Workspace unregistered", { body: png, contentType: "image/png" });
+  });
+});
 `;
 
 describe("E2E gallery reporter", () => {
@@ -165,18 +171,19 @@ describe("E2E gallery reporter", () => {
 
   it("exports the current canonical SPEC cases in their declared order", () => {
     const { cases, excludedIds } = parseGalleryCases(specSource);
-    expect(cases).toHaveLength(7);
+    expect(cases).toHaveLength(8);
     expect(run.results.cases).toEqual(cases);
     expect(cases.map((entry) => entry.id)).toEqual([
       "E2E-1",
       "E2E-2",
       "E2E-6",
       "E2E-10",
+      "E2E-11",
       "E2E-13",
       "E2E-14",
       "E2E-15",
     ]);
-    expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-11", "E2E-12"]);
+    expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-12"]);
     expect(run.script).not.toContain("specSource");
     expect(run.script).not.toContain(specSource.split("\n")[0]);
   });
@@ -214,7 +221,7 @@ describe("E2E gallery reporter", () => {
 
   it("never overwrites project, repeat, retry or parallel-worker images", () => {
     const urls = imageUrls(run.results);
-    expect(urls).toHaveLength(36);
+    expect(urls).toHaveLength(44);
     expect(new Set(urls).size).toBe(urls.length);
     const retried = caseTests(run.results, "E2E-1");
     expect(new Set(retried.map((test) => test.project))).toEqual(new Set(["alpha", "beta"]));
@@ -228,6 +235,20 @@ describe("E2E gallery reporter", () => {
       expect(readFileSync(join(run.gallery, url))).toEqual(Buffer.from(png, "base64"));
     }
     expect(retried[0].attempts[0].steps[1].images[0]).toMatchObject({ width: 1, height: 1 });
+  });
+
+  it("keeps workspace captures in order within the unregister step", () => {
+    const steps = caseTests(run.results, "E2E-11").flatMap((test) =>
+      test.attempts.flatMap((attempt) => attempt.steps),
+    );
+    expect(steps).toHaveLength(4);
+    for (const step of steps) {
+      expect(step.title).toBe("Unregister a workspace from the list");
+      expect(step.images.map((image) => image.name)).toEqual([
+        "Unregister menu",
+        "Workspace unregistered",
+      ]);
+    }
   });
 
   it("marks missing files as unavailable instead of publishing broken image links", () => {
@@ -331,7 +352,7 @@ describe("E2E gallery reporter", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(pathToFileURL(join(run.directory, "e2e-gallery.html")).href);
-      expect(await page.locator("section.case[id]").count()).toBe(7);
+      expect(await page.locator("section.case[id]").count()).toBe(8);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(run.results.cases.map((entry) => entry.id));
@@ -351,6 +372,9 @@ describe("E2E gallery reporter", () => {
         ),
       );
       expect(await page.locator("#E2E-1 .cell .label").allTextContents()).toEqual(labels);
+      expect(await page.locator("#E2E-11 .cell .label").allTextContents()).toEqual(
+        Array.from({ length: 4 }, () => ["Unregister menu", "Workspace unregistered"]).flat(),
+      );
       expect(await page.locator("#E2E-1 .cell").first().getAttribute("title")).toContain(
         "retry 0, worker",
       );
@@ -445,8 +469,8 @@ describe("E2E gallery reporter", () => {
       expect(visibleText).not.toContain("2026-01-02");
       expect(visibleText).not.toContain(" images");
       expect(await page.locator("#run-errors").innerText()).toBe("Runner error first line");
-      expect(await page.locator(".table").count()).toBe(7);
-      expect(await page.locator(".cell img").count()).toBe(14);
+      expect(await page.locator(".table").count()).toBe(8);
+      expect(await page.locator(".cell img").count()).toBe(16);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(comparisonCases.map((entry) => entry.id));

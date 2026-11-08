@@ -36,13 +36,14 @@ export const webviewStyles = `
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }
-    .group-chevron, .group-new-session, .group-unregister, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
+    .group-chevron, .group-new-session, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
     .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
     .group-mode-toggle { color: var(--vscode-descriptionForeground); }
     .group-mode-toggle:hover { color: var(--vscode-foreground); }
     .group-mode-toggle svg { width: 16px; height: 16px; }
-    .group-unregister { color: var(--vscode-descriptionForeground); }
-    .group-unregister:hover { color: var(--vscode-foreground); }
+    .workspace-menu { position: fixed; z-index: 2; box-sizing: border-box; width: max-content; min-width: min(160px, calc(100vw - 8px)); max-width: calc(100vw - 8px); padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: var(--session-radius); color: var(--vscode-menu-foreground, var(--vscode-foreground)); background: var(--vscode-menu-background, var(--vscode-sideBar-background)); }
+    .workspace-menu button { display: block; width: 100%; min-height: 32px; padding: 0 8px; color: inherit; font-size: 13px; text-align: left; overflow-wrap: anywhere; }
+    .workspace-menu button:hover, .workspace-menu button:focus { color: var(--vscode-menu-selectionForeground, var(--vscode-foreground)); background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
     .session-row { position: relative; min-width: 0; height: 32px; margin-left: 12px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
     .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
@@ -58,7 +59,7 @@ export const webviewStyles = `
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
     .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 36px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
     .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .archive svg, .unarchive svg, .group-chevron svg, .group-new-session svg, .group-unregister svg { width: 12px; height: 12px; }
+    .archive svg, .unarchive svg, .group-chevron svg, .group-new-session svg { width: 12px; height: 12px; }
     .archive, .unarchive { right: 4px; }
     .archive:hover, .unarchive:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
     .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }

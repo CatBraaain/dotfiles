@@ -243,21 +243,38 @@ describe("sessionListView", () => {
     ).toEqual(["unarchived", "all"]);
   });
 
-  it("renders an Unregister button on every workspace group", () => {
-    const view = viewFor("all");
-    const buttons = byClass(elementsIn(view), "group-unregister");
+  it("keys same-named workspace groups by cwd across removal and reordering", () => {
+    const groups = [
+      { cwd: "/workspace/atlas", label: "atlas", sessions: [] },
+      { cwd: "/worktrees/atlas", label: "atlas", sessions: [] },
+    ];
+    const initial = sessionListView({ groups });
+    const reordered = sessionListView({ groups: [...groups].reverse() });
+    const removed = sessionListView({ groups: groups.slice(1) });
 
-    expect(buttons.map((button) => button.attrs?.["data-unregister"])).toEqual([
+    expect(initial.sessions.map((group) => group.key)).toEqual([
+      "/workspace/atlas",
+      "/worktrees/atlas",
+    ]);
+    expect(reordered.sessions.map((group) => group.key)).toEqual([
+      "/worktrees/atlas",
+      "/workspace/atlas",
+    ]);
+    expect(removed.sessions.map((group) => group.key)).toEqual(["/worktrees/atlas"]);
+    expect(initial.sessions.every((group) => group.attrs?.key === undefined)).toBe(true);
+  });
+
+  it("offers the workspace menu on each header without a permanent Unregister button", () => {
+    const view = viewFor("all");
+    const headers = byClass(elementsIn(view), "group-header");
+
+    expect(headers.map((header) => header.attrs?.["data-workspace-menu"])).toEqual([
       "/workspace/atlas",
       "/workspace/beta",
     ]);
-    expect(buttons[0].attrs).toMatchObject({
-      type: "button",
-      title: "Unregister workspace",
-      "aria-label": "Unregister workspace atlas",
-    });
-    const path = collectElements(buttons[0]).find((element) => element.tag === "path");
-    expect(path?.attrs?.d).toBe("M5 12h14");
+    expect(byClass(elementsIn(view), "group-unregister")).toHaveLength(0);
+    expect(byClass(elementsIn(view), "group-mode-toggle")).toHaveLength(2);
+    expect(byClass(elementsIn(view), "group-new-session")).toHaveLength(2);
   });
 
   it("renders a per-group New session button carrying its workspace cwd", () => {

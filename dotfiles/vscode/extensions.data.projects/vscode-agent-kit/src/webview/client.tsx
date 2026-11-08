@@ -5,7 +5,17 @@
  * markup and a message bridge.
  */
 
-import { createElement, useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
+import {
+  createElement,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { initDocumentScrollbar } from "./documentScrollbar";
 
@@ -45,6 +55,7 @@ export interface ClientState {
 /** Element descriptor: tag plus optional attributes and children (text allowed). */
 export interface ElementDescriptor {
   tag: string;
+  key?: string;
   attrs?: Record<string, string>;
   children?: (ElementDescriptor | string)[];
 }
@@ -107,11 +118,12 @@ function groupDescriptor(
   const sessions = visibleGroupSessions(group, mode, collapsedCwds);
   return {
     tag: "section",
+    key: group.cwd,
     attrs: { class: "group" },
     children: [
       {
         tag: "div",
-        attrs: { class: "group-header", title: group.cwd },
+        attrs: { class: "group-header", title: group.cwd, "data-workspace-menu": group.cwd },
         children: [
           {
             tag: "button",
@@ -135,17 +147,6 @@ function groupDescriptor(
             children: [group.label],
           },
           modeToggleDescriptor(group.cwd, mode),
-          {
-            tag: "button",
-            attrs: {
-              class: "group-unregister",
-              type: "button",
-              "data-unregister": group.cwd,
-              title: "Unregister workspace",
-              "aria-label": `Unregister workspace ${group.label}`,
-            },
-            children: [minusIcon()],
-          },
           {
             tag: "button",
             attrs: {
@@ -341,10 +342,6 @@ function chevronIcon(direction: "down" | "right"): ElementDescriptor {
   return strokeIcon([{ tag: "path", attrs: { d: path } }]);
 }
 
-function minusIcon(): ElementDescriptor {
-  return strokeIcon([{ tag: "path", attrs: { d: "M5 12h14" } }]);
-}
-
 function plusIcon(): ElementDescriptor {
   return strokeIcon([
     { tag: "path", attrs: { d: "M5 12h14" } },
@@ -393,7 +390,7 @@ interface DescriptorActions {
   onGroupToggle(cwd: string): void;
   onModeToggle(cwd: string): void;
   onNewSessionClick(cwd: string): void;
-  onUnregisterClick(cwd: string): void;
+  onWorkspaceMenuOpen(menu: WorkspaceMenuState): void;
   onSessionClick(sessionId: string): void;
   onArchiveClick(sessionId: string): void;
   onUnarchiveClick(sessionId: string): void;
@@ -401,7 +398,7 @@ interface DescriptorActions {
 
 /** Map descriptor attribute names to React prop names (class -> className). */
 function descriptorProps(descriptor: ElementDescriptor): Record<string, unknown> {
-  const props: Record<string, unknown> = {};
+  const props: Record<string, unknown> = { key: descriptor.key };
   for (const [name, value] of Object.entries(descriptor.attrs ?? {})) {
     if (name === "class") {
       props.className = value;
@@ -426,8 +423,6 @@ function descriptorOnClick(
   if (groupCwd !== undefined) return () => actions.onGroupToggle(groupCwd);
   const newSessionCwd = attrs["data-new-session"];
   if (newSessionCwd !== undefined) return () => actions.onNewSessionClick(newSessionCwd);
-  const unregisterCwd = attrs["data-unregister"];
-  if (unregisterCwd !== undefined) return () => actions.onUnregisterClick(unregisterCwd);
   const sessionId = attrs["data-archive"] ?? attrs["data-unarchive"] ?? attrs["data-session"];
   if (sessionId === undefined) return undefined;
   if (attrs["data-archive"] !== undefined) return () => actions.onArchiveClick(sessionId);
@@ -443,12 +438,104 @@ function descriptorToElement(
   const props: Record<string, unknown> = descriptorProps(descriptor);
   const onClick = descriptorOnClick(descriptor, actions);
   if (onClick !== undefined) props.onClick = onClick;
+  const menuCwd = descriptor.attrs?.["data-workspace-menu"];
+  if (menuCwd !== undefined) {
+    props.onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      const trigger = event.currentTarget.querySelector<HTMLElement>(".group-title");
+      if (trigger !== null) {
+        actions.onWorkspaceMenuOpen({ cwd: menuCwd, x: event.clientX, y: event.clientY, trigger });
+      }
+    };
+    props.onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+      if (!(event.target instanceof HTMLElement)) return;
+      event.preventDefault();
+      const trigger = event.target;
+      const rect = trigger.getBoundingClientRect();
+      actions.onWorkspaceMenuOpen({ cwd: menuCwd, x: rect.left, y: rect.bottom, trigger });
+    };
+  }
   return createElement(
     descriptor.tag,
     props,
     ...(descriptor.children ?? []).map((child) =>
       typeof child === "string" ? child : descriptorToElement(child, actions),
     ),
+  );
+}
+
+interface WorkspaceMenuState {
+  cwd: string;
+  x: number;
+  y: number;
+  trigger: HTMLElement;
+}
+
+function WorkspaceMenu({
+  menu,
+  onClose,
+  onUnregister,
+}: {
+  menu: WorkspaceMenuState;
+  onClose: () => void;
+  onUnregister: (cwd: string) => void;
+}): ReactElement {
+  const menuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = menuRef.current;
+    if (element === null) return;
+    const rect = element.getBoundingClientRect();
+    const viewportPadding = 4;
+    element.style.left = `${Math.max(viewportPadding, Math.min(menu.x, window.innerWidth - rect.width - viewportPadding))}px`;
+    element.style.top = `${Math.max(viewportPadding, Math.min(menu.y, window.innerHeight - rect.height - viewportPadding))}px`;
+    element.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+  }, [menu]);
+
+  useEffect(() => {
+    function onPointerDown(event: PointerEvent): void {
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) onClose();
+    }
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("resize", onClose);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("resize", onClose);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+
+  function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "Escape" && event.key !== "Tab") return;
+    if (event.key === "Escape") event.preventDefault();
+    event.stopPropagation();
+    menu.trigger.focus({ preventScroll: true });
+    onClose();
+  }
+
+  return (
+    <div
+      ref={menuRef}
+      className="workspace-menu"
+      role="menu"
+      aria-label="Workspace actions"
+      style={{ left: menu.x, top: menu.y }}
+      onKeyDown={onKeyDown}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onClose();
+          onUnregister(menu.cwd);
+        }}
+      >
+        Unregister workspace
+      </button>
+    </div>
   );
 }
 
@@ -507,6 +594,11 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [modes, setModes] = useState<ReadonlyMap<string, ViewMode>>(() => new Map());
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(null);
+  const hasMenuWorkspace = snapshot.state.groups.some((group) => group.cwd === workspaceMenu?.cwd);
+  useEffect(() => {
+    if (!hasMenuWorkspace) setWorkspaceMenu(null);
+  }, [hasMenuWorkspace]);
   useEffect(() => {
     const loadingText =
       snapshot.loadStatus === "loading" && snapshot.state.groups.length > 0
@@ -533,7 +625,7 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
         return next;
       }),
     onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
-    onUnregisterClick: (cwd) => bridge.postMessage({ type: "unregisterWorkspace", cwd }),
+    onWorkspaceMenuOpen: setWorkspaceMenu,
     onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
     onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
     onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),
@@ -546,7 +638,18 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
     collapsedCwds,
     snapshot.loadStatus,
   );
-  return <>{view.sessions.map((descriptor) => descriptorToElement(descriptor, actions))}</>;
+  return (
+    <>
+      {view.sessions.map((descriptor) => descriptorToElement(descriptor, actions))}
+      {workspaceMenu !== null && hasMenuWorkspace && (
+        <WorkspaceMenu
+          menu={workspaceMenu}
+          onClose={() => setWorkspaceMenu(null)}
+          onUnregister={(cwd) => bridge.postMessage({ type: "unregisterWorkspace", cwd })}
+        />
+      )}
+    </>
+  );
 }
 
 /**
