@@ -22,27 +22,21 @@ describe("sessionViewGroups", () => {
   const view = (overrides: Partial<Parameters<typeof sessionViewGroups>[1]> = {}) => ({
     registeredCwds: registered,
     archivedIds: new Set<string>(),
-    lockedIds: new Set<string>(),
     phases: new Map<string, "running" | "waiting-approval" | "waiting-user">(),
     ...overrides,
   });
 
-  it("sends every session of every registered group with archive and lock marks", () => {
-    const groups = sessionViewGroups(
-      sessions,
-      view({ archivedIds: new Set(["older"]), lockedIds: new Set(["active"]) }),
-    );
+  it("sends every session of every registered group with archive marks", () => {
+    const groups = sessionViewGroups(sessions, view({ archivedIds: new Set(["older"]) }));
 
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha", "/workspace/beta"]);
-    expect(
-      groups[0].sessions.map((item) => [item.sessionId, item.isArchived, item.isLocked]),
-    ).toEqual([
-      ["active", false, true],
-      ["older", true, false],
+    expect(groups[0].sessions.map((item) => [item.sessionId, item.isArchived])).toEqual([
+      ["active", false],
+      ["older", true],
     ]);
-    expect(
-      groups[1].sessions.map((item) => [item.sessionId, item.isArchived, item.isLocked]),
-    ).toEqual([["newest", false, false]]);
+    expect(groups[1].sessions.map((item) => [item.sessionId, item.isArchived])).toEqual([
+      ["newest", false],
+    ]);
   });
 
   it("carries the same update times used for sorting, including unknown dates", () => {
@@ -62,14 +56,12 @@ describe("sessionViewGroups", () => {
     ]);
   });
 
-  it("treats sessions without metadata as unarchived and unlocked", () => {
+  it("treats sessions without metadata as unarchived", () => {
     const groups = sessionViewGroups(sessions, view());
 
-    expect(
-      groups.every((group) =>
-        group.sessions.every((item) => item.isArchived === false && item.isLocked === false),
-      ),
-    ).toBe(true);
+    expect(groups.every((group) => group.sessions.every((item) => item.isArchived === false))).toBe(
+      true,
+    );
   });
 
   it("merges sessionless groups into the label ordering", () => {

@@ -14,28 +14,24 @@ const atlasUnarchived: ClientSession = {
   displayName: "Atlas current",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 4).getTime(),
   isArchived: false,
-  isLocked: false,
 };
 const atlasArchived: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000002",
   displayName: "Atlas archived",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 3).getTime(),
   isArchived: true,
-  isLocked: false,
 };
-const betaLocked: ClientSession = {
+const betaOther: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000003",
-  displayName: "Beta locked",
+  displayName: "Beta other",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 2).getTime(),
   isArchived: false,
-  isLocked: true,
 };
 const betaPlain: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000004",
   displayName: "Beta plain",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 1).getTime(),
   isArchived: false,
-  isLocked: false,
 };
 
 const groups = [
@@ -47,21 +43,19 @@ const groups = [
   {
     cwd: "/workspace/beta",
     label: "beta",
-    sessions: [betaLocked, betaPlain],
+    sessions: [betaOther, betaPlain],
   },
 ];
 
 function viewFor(
   mode: ViewMode,
   stateGroups = groups,
-  copiedIds: ReadonlySet<string> = new Set(),
   displayedSessionId: string | undefined = undefined,
   collapsedCwds: ReadonlySet<string> = new Set(),
 ) {
   return sessionListView(
     { groups: stateGroups } as ClientState,
     mode,
-    copiedIds,
     displayedSessionId,
     collapsedCwds,
   );
@@ -240,11 +234,11 @@ describe("sessionListView", () => {
   });
 
   it("keeps headings but omits rows in collapsed groups", () => {
-    const view = viewFor("all", groups, new Set(), undefined, new Set(["/workspace/atlas"]));
+    const view = viewFor("all", groups, undefined, new Set(["/workspace/atlas"]));
     const elements = elementsIn(view);
 
     expect(sectionsIn(view)).toHaveLength(2);
-    expect(byClass(elements, "session-name").map(text)).toEqual(["Beta locked", "Beta plain"]);
+    expect(byClass(elements, "session-name").map(text)).toEqual(["Beta other", "Beta plain"]);
     const chevrons = byClass(elements, "group-chevron");
     expect(chevrons.map((chevron) => chevron.attrs?.["aria-expanded"])).toEqual(["false", "true"]);
     expect(
@@ -255,14 +249,8 @@ describe("sessionListView", () => {
   });
 
   it("hides the displayed session's selected mark only while its group is collapsed", () => {
-    const closed = viewFor(
-      "all",
-      groups,
-      new Set(),
-      atlasUnarchived.sessionId,
-      new Set(["/workspace/atlas"]),
-    );
-    const opened = viewFor("all", groups, new Set(), atlasUnarchived.sessionId);
+    const closed = viewFor("all", groups, atlasUnarchived.sessionId, new Set(["/workspace/atlas"]));
+    const opened = viewFor("all", groups, atlasUnarchived.sessionId);
 
     expect(byClass(elementsIn(closed), "selected")).toHaveLength(0);
     const selectedRows = byClass(elementsIn(opened), "selected");
@@ -296,14 +284,14 @@ describe("sessionListView", () => {
     expect(sectionsIn(viewFor("unarchived"))).toHaveLength(2);
     expect(byClass(elementsIn(viewFor("unarchived")), "session-name").map(text)).toEqual([
       "Atlas current",
-      "Beta locked",
+      "Beta other",
       "Beta plain",
     ]);
 
     expect(byClass(elementsIn(viewFor("all")), "session-name").map(text)).toEqual([
       "Atlas current",
       "Atlas archived",
-      "Beta locked",
+      "Beta other",
       "Beta plain",
     ]);
   });
@@ -318,7 +306,7 @@ describe("sessionListView", () => {
     for (const [index, session] of [
       atlasUnarchived,
       atlasArchived,
-      betaLocked,
+      betaOther,
       betaPlain,
     ].entries()) {
       expect(buttons[index].attrs?.title).toContain(session.sessionId);
@@ -340,21 +328,22 @@ describe("sessionListView", () => {
     expect(byClass(elements, "session-timestamp").map(text)).toEqual([""]);
   });
 
-  it("shows archive and lock state in decorative dots without changing row names", () => {
+  it("shows archive state in decorative dots without changing row names", () => {
     const elements = elementsIn(viewFor("all"));
     const dots = byClass(elements, "session-status");
 
-    expect(dots.map((dot) => [dot.attrs?.["data-archived"], dot.attrs?.["data-locked"]])).toEqual([
-      ["false", "false"],
-      ["true", "false"],
-      ["false", "true"],
-      ["false", "false"],
+    expect(dots.map((dot) => dot.attrs?.["data-archived"])).toEqual([
+      "false",
+      "true",
+      "false",
+      "false",
     ]);
+    for (const dot of dots) expect(dot.attrs?.["data-locked"]).toBeUndefined();
     for (const dot of dots) expect(dot.attrs?.["aria-hidden"]).toBe("true");
     expect(byClass(elements, "session-button").map(text)).toEqual([
       "Atlas current",
       "Atlas archived",
-      "Beta locked",
+      "Beta other",
       "Beta plain",
     ]);
   });
@@ -377,91 +366,36 @@ describe("sessionListView", () => {
     }
   });
 
-  it("orders each row as button, timestamp, copy, lock, and the archive or unarchive overlay last", () => {
+  it("orders each row as button, timestamp, and the archive or unarchive overlay last", () => {
     const rowClasses = (row: ElementDescriptor): (string | undefined)[] =>
       (row.children ?? [])
         .filter((child): child is ElementDescriptor => typeof child !== "string")
         .map((child) => child.attrs?.class ?? "");
 
     const rows = byClass(elementsIn(viewFor("all")), "session-row");
-    expect(rowClasses(rows[0])).toEqual([
-      "session-button",
-      "session-timestamp",
-      "copy",
-      "lock",
-      "archive",
-    ]);
-    expect(rowClasses(rows[1])).toEqual([
-      "session-button",
-      "session-timestamp",
-      "copy",
-      "lock",
-      "unarchive",
-    ]);
+    expect(rowClasses(rows[0])).toEqual(["session-button", "session-timestamp", "archive"]);
+    expect(rowClasses(rows[1])).toEqual(["session-button", "session-timestamp", "unarchive"]);
   });
 
-  it("renders the Copy overlay on every row with the Copy session ID hint", () => {
-    const copies = byClass(elementsIn(viewFor("all")), "copy");
-
-    expect(copies.map((copy) => copy.attrs?.["data-copy"])).toEqual([
-      atlasUnarchived.sessionId,
-      atlasArchived.sessionId,
-      betaLocked.sessionId,
-      betaPlain.sessionId,
-    ]);
-    for (const copy of copies) {
-      expect(copy.attrs?.title).toBe("Copy session ID");
-      expect(copy.attrs?.["aria-label"]).toBe("Copy session ID");
-      expect(copy.attrs?.type).toBe("button");
-    }
+  it("omits copy and lock controls from every row", () => {
+    const elements = elementsIn(viewFor("all"));
+    for (const className of ["copy", "lock"]) expect(byClass(elements, className)).toEqual([]);
+    expect(elements.some((element) => element.attrs?.["data-copy"] !== undefined)).toBe(false);
+    expect(elements.some((element) => element.attrs?.["data-lock"] !== undefined)).toBe(false);
   });
 
-  it("shows the check mark on the copy button of the copied session ID", () => {
-    const copies = byClass(
-      elementsIn(viewFor("all", groups, new Set([atlasUnarchived.sessionId]))),
-      "copy",
-    );
-
-    expect(copies[0].attrs?.class).toBe("copy copied");
-    expect(copies[0].attrs?.title).toBe("Copied");
-    expect(copies[0].attrs?.["aria-label"]).toBe("Copied");
-    const icon = (copies[0].children ?? []).filter(
-      (child): child is ElementDescriptor => typeof child !== "string",
-    );
-    expect(icon[0].tag).toBe("svg");
-    expect(copies[1].attrs?.class).toBe("copy");
-    expect(copies[1].attrs?.title).toBe("Copy session ID");
-  });
-
-  it("renders the Lock overlay on every row with pressed state and hint per lock state", () => {
-    const locks = byClass(elementsIn(viewFor("all")), "lock");
-
-    expect(locks.map((lock) => lock.attrs?.["data-lock"])).toEqual([
-      atlasUnarchived.sessionId,
-      atlasArchived.sessionId,
-      betaLocked.sessionId,
-      betaPlain.sessionId,
-    ]);
-    expect(locks.map((lock) => [lock.attrs?.["aria-pressed"], lock.attrs?.title])).toEqual([
-      ["false", "Lock"],
-      ["false", "Lock"],
-      ["true", "Unlock"],
-      ["false", "Lock"],
-    ]);
-  });
-
-  it("renders the Archive overlay on unarchived rows, disabled while locked", () => {
+  it("renders an enabled Archive overlay on every unarchived row", () => {
     const elements = elementsIn(viewFor("all"));
     const archives = byClass(elements, "archive");
 
     expect(archives.map((archive) => archive.attrs?.["data-archive"])).toEqual([
       atlasUnarchived.sessionId,
-      betaLocked.sessionId,
+      betaOther.sessionId,
       betaPlain.sessionId,
     ]);
     expect(archives.map((archive) => [archive.attrs?.disabled, archive.attrs?.title])).toEqual([
       [undefined, "Archive"],
-      ["disabled", "Archive (locked)"],
+      [undefined, "Archive"],
       [undefined, "Archive"],
     ]);
   });
@@ -479,10 +413,7 @@ describe("sessionListView", () => {
   });
 
   it("marks the displayed session's row with the selected class", () => {
-    const rows = byClass(
-      elementsIn(viewFor("all", groups, new Set(), betaPlain.sessionId)),
-      "session-row",
-    );
+    const rows = byClass(elementsIn(viewFor("all", groups, betaPlain.sessionId)), "session-row");
 
     expect(rows.map((row) => row.attrs?.class)).toEqual([
       "session-row",
@@ -495,10 +426,7 @@ describe("sessionListView", () => {
   it("marks no row when the terminal shows no session", () => {
     expect(byClass(elementsIn(viewFor("all")), "selected")).toHaveLength(0);
     expect(
-      byClass(
-        elementsIn(viewFor("unarchived", groups, new Set(), atlasArchived.sessionId)),
-        "selected",
-      ),
+      byClass(elementsIn(viewFor("unarchived", groups, atlasArchived.sessionId)), "selected"),
     ).toHaveLength(0);
   });
 
@@ -511,8 +439,6 @@ describe("sessionListView", () => {
         "data-session",
         "data-archive",
         "data-unarchive",
-        "data-lock",
-        "data-copy",
       ].some((name) => element.attrs?.[name] !== undefined),
     );
     expect(interactive.length).toBeGreaterThan(0);
@@ -529,7 +455,7 @@ describe("visibleSessions", () => {
       visibleSessions({ groups }, "unarchived", new Set(["/workspace/atlas"])).map(
         (session) => session.sessionId,
       ),
-    ).toEqual([betaLocked.sessionId, betaPlain.sessionId]);
+    ).toEqual([betaOther.sessionId, betaPlain.sessionId]);
     expect(
       visibleSessions({ groups }, "all", new Set(["/workspace/beta"])).map(
         (session) => session.sessionId,
@@ -542,13 +468,13 @@ describe("visibleSessions", () => {
 
     expect(visibleSessions(state, "unarchived").map((session) => session.sessionId)).toEqual([
       atlasUnarchived.sessionId,
-      betaLocked.sessionId,
+      betaOther.sessionId,
       betaPlain.sessionId,
     ]);
     expect(visibleSessions(state, "all").map((session) => session.sessionId)).toEqual([
       atlasUnarchived.sessionId,
       atlasArchived.sessionId,
-      betaLocked.sessionId,
+      betaOther.sessionId,
       betaPlain.sessionId,
     ]);
   });

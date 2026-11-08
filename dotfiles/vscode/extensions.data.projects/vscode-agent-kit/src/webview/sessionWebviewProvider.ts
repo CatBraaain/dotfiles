@@ -3,12 +3,10 @@ import { randomBytes } from "node:crypto";
 import {
   activeSessionIds,
   archiveSessions,
-  lockedSessionIds,
   readSessionStateStore,
   registerWorkspace,
   registeredWorkspaceCwds,
   sessionPhases,
-  setSessionLocks,
   unarchiveSessions,
   unregisterWorkspace,
   type SessionPhase,
@@ -80,7 +78,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     const data = store.status === "ok" ? store.data : undefined;
     const activeIds = activeSessionIds(data);
-    const lockedIds = lockedSessionIds(data);
     const registeredCwds = registeredWorkspaceCwds(data);
 
     let sessions: SessionSummary[];
@@ -104,7 +101,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         groups: sessionViewGroups(sessions, {
           registeredCwds,
           archivedIds,
-          lockedIds,
           phases,
         }),
         displayedSessionId: this.deps.registry.displayedSessionId,
@@ -154,22 +150,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.refresh();
       return;
     }
-    if (request.type === "copySessionId") {
-      try {
-        await vscode.env.clipboard.writeText(request.sessionId);
-      } catch (error) {
-        this.postError(`Failed to copy session ID: ${errorMessage(error)}`);
-      }
-      return;
-    }
     if (request.type === "openSession") {
       await this.deps.registry.run(() => this.openSession(request.sessionId));
-      return;
-    }
-    if (request.type === "setSessionLock") {
-      await this.updateKnownSession(request.sessionId, (ref) =>
-        setSessionLocks(this.deps.statePath, [{ ...ref, locked: request.locked }]),
-      );
       return;
     }
     if (request.type === "archiveSession") {

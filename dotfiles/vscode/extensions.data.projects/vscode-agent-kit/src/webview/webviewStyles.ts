@@ -39,30 +39,24 @@ export const webviewStyles = `
     .group-header:hover .group-unregister, .group-header:focus-within .group-unregister { visibility: visible; }
     .session-row { position: relative; min-width: 0; height: 32px; margin-left: 12px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
-    .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(84px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
+    .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
     .session-button:hover { background: var(--vscode-list-hoverBackground); }
     .session-row.selected .session-button, .session-row.selected .session-button:hover { background: var(--vscode-list-inactiveSelectionBackground); }
     .session-row.selected:focus-within .session-button { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
     .session-status { box-sizing: border-box; flex: none; width: 10px; height: 10px; border: 1px solid transparent; border-radius: 50%; background: var(--vscode-descriptionForeground); }
-    .session-status[data-locked="true"] { background: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
     .session-status[data-state="running"] { background: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
     .session-status[data-state="waiting-approval"] { background: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
     .session-status[data-state="waiting-user"] { background: var(--vscode-charts-blue, var(--vscode-testing-iconQueued, var(--vscode-descriptionForeground))); }
     .session-status[data-archived="true"] { border-color: var(--vscode-descriptionForeground); background: transparent; }
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
-    .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 84px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
-    .copy, .lock, .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .copy svg, .lock svg, .archive svg, .unarchive svg, .group-chevron svg, .group-new-session svg, .group-unregister svg { width: 12px; height: 12px; }
-    .copy { right: 52px; }
-    .lock { right: 28px; }
+    .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 36px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
+    .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
+    .archive svg, .unarchive svg, .group-chevron svg, .group-new-session svg, .group-unregister svg { width: 12px; height: 12px; }
     .archive, .unarchive { right: 4px; }
-    .copy:hover, .lock:hover, .archive:hover, .unarchive:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
-    .copy.copied { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
-    .lock[aria-pressed="true"] { color: var(--vscode-foreground); }
+    .archive:hover, .unarchive:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
     .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
     .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
     .session-row.selected:focus-within .session-name, .session-row.selected:focus-within .session-timestamp { color: var(--vscode-list-activeSelectionForeground, var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground))); }
-    .archive:disabled, .archive:disabled:hover { color: var(--vscode-disabledForeground); background: transparent; cursor: default; }
     #unregister-dialog { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.4); }
     #unregister-dialog[hidden] { display: none; }
     .dialog { display: flex; flex-direction: column; gap: 8px; width: min(240px, calc(100% - 32px)); padding: 12px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: 9.6px; background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)); }

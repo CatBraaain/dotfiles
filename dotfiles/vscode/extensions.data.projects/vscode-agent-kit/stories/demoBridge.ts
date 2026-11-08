@@ -9,11 +9,9 @@ import { sessionViewGroups } from "../src/webview/sessionViewData";
 /** Demo state a story starts from (SPEC.md「静的プレビュー」表 1 行目). */
 export type DemoState = "sample" | "empty";
 
-/** Per-session demo metadata: explicit archive, archive-protection lock, and
- * live phase. */
+/** Per-session demo metadata: explicit archive and live phase. */
 interface DemoEntry {
   archived: boolean;
-  locked: boolean;
   state?: SessionPhase;
 }
 
@@ -21,7 +19,6 @@ interface DemoEntry {
 export interface DemoBridgeRequest {
   type: string;
   sessionId?: string;
-  locked?: boolean;
   cwd?: string;
   path?: string;
 }
@@ -75,19 +72,16 @@ const sampleSessions: SessionSummary[] = [
   },
 ];
 
-const UNARCHIVED: DemoEntry = { archived: false, locked: false };
+const UNARCHIVED: DemoEntry = { archived: false };
 
 /** Demo displayed session: the catalog marks this row as the one the shared
  * terminal shows (openSession is ignored, so the mark never moves). */
 const DISPLAYED_SESSION_ID = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
 const SAMPLE_METADATA = new Map<string, DemoEntry>([
-  ["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", { archived: false, locked: false, state: "running" }],
-  ["2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", { archived: true, locked: false }],
-  [
-    "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72",
-    { archived: false, locked: false, state: "waiting-user" },
-  ],
-  ["4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83", { archived: false, locked: true }],
+  ["1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10", { archived: false, state: "running" }],
+  ["2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", { archived: true }],
+  ["3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72", { archived: false, state: "waiting-user" }],
+  ["4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83", UNARCHIVED],
   ["5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94", UNARCHIVED],
 ]);
 
@@ -115,13 +109,8 @@ export function createDemoBridge(): {
   ];
 
   function postSessions(): void {
-    // Same projection as the provider's: every session with archive, lock,
-    // and live-phase marks.
     const archivedIds = new Set(
       [...metadata].filter(([, entry]) => entry.archived).map(([sessionId]) => sessionId),
-    );
-    const lockedIds = new Set(
-      [...metadata].filter(([, entry]) => entry.locked).map(([sessionId]) => sessionId),
     );
     const phases = new Map(
       [...metadata]
@@ -134,7 +123,6 @@ export function createDemoBridge(): {
         groups: sessionViewGroups(store, {
           registeredCwds,
           archivedIds,
-          lockedIds,
           phases,
         }),
         displayedSessionId: DISPLAYED_SESSION_ID,
@@ -151,25 +139,9 @@ export function createDemoBridge(): {
       postSessions();
       return;
     }
-    if (request.type === "copySessionId" && typeof request.sessionId === "string") {
-      // The catalog runs in a browser: copy directly through the Clipboard API.
-      void navigator.clipboard?.writeText(request.sessionId);
-      return;
-    }
-    if (
-      request.type === "setSessionLock" &&
-      typeof request.sessionId === "string" &&
-      typeof request.locked === "boolean"
-    ) {
-      const entry = entryOf(request.sessionId);
-      metadata.set(request.sessionId, { ...entry, locked: request.locked });
-      postSessions();
-      return;
-    }
     if (request.type === "archiveSession" && typeof request.sessionId === "string") {
       const entry = entryOf(request.sessionId);
-      // The same host-side lock guard as the provider.
-      if (!entry.locked) metadata.set(request.sessionId, { ...entry, archived: true });
+      metadata.set(request.sessionId, { ...entry, archived: true });
       postSessions();
       return;
     }

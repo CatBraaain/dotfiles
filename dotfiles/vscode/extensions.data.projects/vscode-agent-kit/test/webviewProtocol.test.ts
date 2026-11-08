@@ -50,18 +50,6 @@ describe("parseWebviewRequest", () => {
       { type: "unarchiveSession", sessionId: otherSessionId },
       { type: "unarchiveSession", sessionId: otherSessionId },
     ],
-    [
-      { type: "setSessionLock", sessionId, locked: true },
-      { type: "setSessionLock", sessionId, locked: true },
-    ],
-    [
-      { type: "setSessionLock", sessionId, locked: false },
-      { type: "setSessionLock", sessionId, locked: false },
-    ],
-    [
-      { type: "copySessionId", sessionId },
-      { type: "copySessionId", sessionId },
-    ],
   ])("accepts supported request %#", (value, expected) => {
     expect(parseWebviewRequest(value)).toEqual(expected);
   });
@@ -91,6 +79,9 @@ describe("parseWebviewRequest", () => {
     { type: "unarchiveSession", sessionId: 3 },
     { type: "unarchiveSession", sessionId: "session 1" },
     { type: "unarchiveSession", sessionIds: [sessionId] },
+    { type: "copySessionId", sessionId },
+    { type: "setSessionLock", sessionId, locked: true },
+    { type: "setSessionLock", sessionId, locked: false },
     { type: "setSessionLock", sessionId },
     { type: "setSessionLock", sessionId, locked: "true" },
     { type: "setSessionLock", sessionId, locked: 1 },

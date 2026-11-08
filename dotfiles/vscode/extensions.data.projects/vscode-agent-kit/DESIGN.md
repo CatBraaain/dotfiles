@@ -38,10 +38,10 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。16px の folder-plus SVG と 13px・500 ラベル、本文色、hover は hover 面。フォームを開いている間は `aria-expanded` を示し hover 面を敷く。構造の参照元は agent-open-ui の `SidebarFooter` |
 | ワークスペース フォーム | New workspace の下に開く。要素間8px。入力は高さ32px・角丸9.6px・入力トークン・13px 文字、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。`Add` は高さ32px・境界付きの本文色操作、`Cancel` は境界なしの補助文字色で hover は本文色。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
 | モード切替（ヘッダー） | 全ワークスペース共通。枠は境界トークン・角丸9.6px・余白1px・間隔2px。ボタンは高さ20px・余白左右6px・10px 文字。押下中のボタンは選択面・選択文字 |
-| 状態の印 | 直径10px の円。実行フェーズのあるセッションはフェーズの色の塗り（`running` は `testing-iconPassed`、`waiting-approval` は `editorWarning-foreground`、`waiting-user` は `charts-blue`、代替 `testing-iconQueued`）、フェーズ情報のない未アーカイブは `descriptionForeground` の塗り、ロック中は `editorWarning-foreground`、アーカイブ済みは補助文字色の枠の中抜き |
+| 状態の印 | 直径10px の円。実行フェーズのあるセッションはフェーズの色の塗り（`running` は `testing-iconPassed`、`waiting-approval` は `editorWarning-foreground`、`waiting-user` は `charts-blue`、代替 `testing-iconQueued`）、フェーズ情報のない未アーカイブは `descriptionForeground` の塗り、アーカイブ済みは補助文字色の枠の中抜き |
 | 表示名 | 13px・20px 行・省略表示 |
-| 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端の操作の左に右寄せで5文字分 |
-| 行の操作（Copy・Lock・Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から 4px 間隔で並べ、行の右端に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す。コピー済みは `testing-iconPassed`、無効な Archive は `disabledForeground` |
+| 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せで5文字分。行内では右側に `36px + 5ch + 8px` を予約する |
+| 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す |
 | 確認ダイアログ（Unregister） | Webview 内のモーダル。scrim は黒40%、面は `editorWidget-background`・境界トークン・角丸9.6px・余白12px・要素間8px。見出し13px・600、本文12px・補助文字色で cwd だけ本文色、cwd は折返し。操作は高さ26px・角丸4pxで、`Unregister` は `button-background` / `button-foreground`、`Cancel` は `button-secondary-*`。Cancel に初期フォーカスし、Escape で閉じる |
 
 ## 状態

@@ -6,12 +6,10 @@ import {
   activeSessionIds,
   addActiveSession,
   archiveSessions,
-  lockedSessionIds,
   mutateSessionStateStore,
   readSessionStateStore,
   registerWorkspace,
   registeredWorkspaceCwds,
-  setSessionLocks,
   type SessionStateStoreData,
 } from "../src/sessionStateStore";
 import { TerminalRegistry } from "../src/terminalRegistry";
@@ -194,37 +192,69 @@ describe("SessionWebviewProvider", () => {
     ).toBe(true);
   });
 
-  it("keeps a locked session active when its archive is requested", async () => {
+  it("archives legacy locked sessions and removes unrelated legacy locks", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "second.jsonl", [
-      header({ id: inactiveSessionId, cwd: root }),
-    ]);
     const { provider, statePath } = createProvider({ sessionDir });
-    setUpStore(statePath, root, [activeSessionId, inactiveSessionId]);
-    expect(
-      setSessionLocks(statePath, [{ sessionId: activeSessionId, cwd: root, locked: true }]).ok,
-    ).toBe(true);
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        "active-workspaces": {
+          [root]: {
+            "active-sessions": {
+              [activeSessionId]: { lock: true },
+              [inactiveSessionId]: { lock: true, state: "running", note: "keep" },
+            },
+          },
+        },
+        tags: ["keep"],
+      }),
+    );
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
+    const row = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0];
+    expect(row.isArchived).toBe(false);
+    expect(row).not.toHaveProperty("isLocked");
 
     await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
 
-    const store = readStore(statePath);
-    expect(lockedSessionIds(store).has(activeSessionId)).toBe(true);
-    expect(activeSessionIds(store).has(activeSessionId)).toBe(true);
-    const sentSessions = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
-      sessionId: string;
-      isArchived: boolean;
-      isLocked: boolean;
-    }[];
-    expect(sentSessions.find((session) => session.sessionId === activeSessionId)).toMatchObject({
-      isArchived: false,
-      isLocked: true,
+    expect(readStore(statePath)).toEqual({
+      "active-workspaces": {
+        [root]: {
+          "active-sessions": {
+            [inactiveSessionId]: { state: "running", note: "keep" },
+          },
+        },
+      },
+      tags: ["keep"],
     });
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+      true,
+    );
+  });
+
+  it("keeps legacy attributes unchanged when only refreshing the list", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, statePath } = createProvider({ sessionDir });
+    const original = JSON.stringify({
+      "active-workspaces": {
+        [root]: {
+          "active-sessions": { [activeSessionId]: { lock: true, state: "running", note: "keep" } },
+        },
+      },
+    });
+    await writeFile(statePath, original);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    await webview.receive({ type: "refresh" });
+    expect(await readFile(statePath, "utf8")).toBe(original);
   });
 
   it("rejects an archive request for an unknown session id without writing", async () => {
@@ -246,64 +276,6 @@ describe("SessionWebviewProvider", () => {
     // the failed request wrote nothing: the settings and the store keep their previous content
     expect(registeredWorkspaceCwds(readStore(statePath))).toEqual([root]);
     expect(activeSessionIds(readStore(statePath))).toEqual(new Set([activeSessionId]));
-  });
-
-  it("persists lock and unlock requests and refreshes the marks", async () => {
-    const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
-      header({ id: activeSessionId, cwd: root }),
-    ]);
-    const { provider, statePath } = createProvider({ sessionDir });
-    setUpStore(statePath, root, [activeSessionId]);
-    const webview = createView();
-    provider.resolveWebviewView(webview.view as never);
-    await provider.refresh();
-
-    await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: true });
-
-    const store = readStore(statePath);
-    expect(lockedSessionIds(store).has(activeSessionId)).toBe(true);
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isLocked).toBe(
-      true,
-    );
-
-    await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: false });
-
-    const unlocked = readStore(statePath);
-    expect(lockedSessionIds(unlocked).has(activeSessionId)).toBe(false);
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isLocked).toBe(
-      false,
-    );
-  });
-
-  it("shows an error and keeps the list when the lock write fails", async () => {
-    const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
-      header({ id: activeSessionId, cwd: root }),
-    ]);
-    const { provider, statePath } = createProvider({ sessionDir });
-    setUpStore(statePath, root, [activeSessionId]);
-    const webview = createView();
-    provider.resolveWebviewView(webview.view as never);
-    await provider.refresh();
-    await vi.waitFor(() =>
-      expect(
-        webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
-      ).toHaveLength(2),
-    );
-    const sessionsCalls = webview.postMessage.mock.calls.filter(
-      (call) => call[0].type === "sessions",
-    ).length;
-
-    await writeFile(statePath, "{ invalid", "utf8");
-    await webview.receive({ type: "setSessionLock", sessionId: activeSessionId, locked: true });
-
-    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
-      /^session-state\.json is not valid JSON: /,
-    );
-    expect(
-      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
-    ).toHaveLength(sessionsCalls);
   });
 
   it("sends the live phase of a session whose tmux pane exists", async () => {
@@ -367,7 +339,6 @@ describe("SessionWebviewProvider", () => {
     expect(
       readStore(statePath)["active-workspaces"][root]?.["active-sessions"]?.[activeSessionId],
     ).toEqual({
-      lock: false,
       state: "running",
     });
   });
@@ -597,13 +568,10 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
 
     const store = readStore(statePath);
-    // unarchiving recreates the entry with lock false
     expect(activeSessionIds(store).has(activeSessionId)).toBe(true);
     expect(
       readStore(statePath)["active-workspaces"][root]?.["active-sessions"]?.[activeSessionId],
-    ).toEqual({
-      lock: false,
-    });
+    ).toEqual({});
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0]).toMatchObject({
       sessionId: activeSessionId,
       isArchived: false,
@@ -913,10 +881,10 @@ describe("SessionWebviewProvider", () => {
 
     const store = readStore(statePath);
     expect(store["active-workspaces"][root]).toEqual({
-      "active-sessions": { [activeSessionId]: { lock: false } }, // members survive
+      "active-sessions": { [activeSessionId]: {} }, // members survive
     });
     expect(store["active-workspaces"][otherCwd]).toEqual({
-      "active-sessions": { [inactiveSessionId]: { lock: false } }, // other cwd: untouched
+      "active-sessions": { [inactiveSessionId]: {} }, // other cwd: untouched
     });
     expect(registeredWorkspaceCwds(store)).toEqual([root, otherCwd]);
   });
@@ -1097,40 +1065,26 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
-  it("copies the session ID to the clipboard on copySessionId", async () => {
-    const { provider } = createProvider();
+  it.each([
+    { type: "copySessionId", sessionId: activeSessionId },
+    { type: "setSessionLock", sessionId: activeSessionId, locked: true },
+    { type: "setSessionLock", sessionId: activeSessionId, locked: false },
+  ])("ignores removed $type requests without effects", async (request) => {
+    const { provider, statePath } = createProvider();
+    setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    const sessionsCalls = webview.postMessage.mock.calls.filter(
-      (call) => call[0].type === "sessions",
-    ).length;
+    const before = await readFile(statePath, "utf8");
+    const messagesBefore = webview.postMessage.mock.calls.length;
 
-    await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
+    await webview.receive(request);
 
-    expect(vscodeMocks.clipboardWriteText).toHaveBeenCalledWith(activeSessionId);
-    expect(
-      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
-    ).toHaveLength(sessionsCalls);
-  });
-
-  it("shows an error and keeps the list when the clipboard write fails", async () => {
-    const { provider } = createProvider();
-    const webview = createView();
-    provider.resolveWebviewView(webview.view as never);
-    await provider.refresh();
-    const sessionsCalls = webview.postMessage.mock.calls.filter(
-      (call) => call[0].type === "sessions",
-    ).length;
-    vscodeMocks.clipboardWriteText.mockRejectedValueOnce(new Error("denied"));
-
-    await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
-
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith("Failed to copy session ID: denied");
-    expect(webview.postMessage.mock.calls.some((call) => call[0].type === "error")).toBe(true);
-    expect(
-      webview.postMessage.mock.calls.filter((call) => call[0].type === "sessions"),
-    ).toHaveLength(sessionsCalls);
+    expect(await readFile(statePath, "utf8")).toBe(before);
+    expect(webview.postMessage).toHaveBeenCalledTimes(messagesBefore);
+    expect(vscodeMocks.clipboardWriteText).not.toHaveBeenCalled();
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
   });
 
   it("shows an error and sends no list when the session directory is unreadable", async () => {

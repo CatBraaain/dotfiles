@@ -5,7 +5,6 @@ interface DemoSession {
   sessionId: string;
   displayName: string;
   isArchived: boolean;
-  isLocked: boolean;
 }
 
 interface CapturedState {
@@ -51,35 +50,28 @@ function sessionIds(state: CapturedState): string[] {
 const projectCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
 const projectArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 const piToolsCurrentId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";
-const piToolsLockedId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
+const piToolsOtherId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
 
 describe("createDemoBridge", () => {
-  it("sends every session with archive and lock marks and the displayed session", () => {
+  it("sends every session with archive marks and the displayed session", () => {
     const { postSessions, last } = setup();
 
     postSessions();
 
     expect(sessionIds(last())).toHaveLength(5);
-    expect(
-      sessions(last()).map((session) => [session.sessionId, session.isArchived, session.isLocked]),
-    ).toEqual([
-      [piToolsCurrentId, false, false],
-      [piToolsLockedId, false, true],
-      [worktreeId, false, false],
-      [projectCurrentId, false, false],
-      [projectArchivedId, true, false],
+    expect(sessions(last()).map((session) => [session.sessionId, session.isArchived])).toEqual([
+      [piToolsCurrentId, false],
+      [piToolsOtherId, false],
+      [worktreeId, false],
+      [projectCurrentId, false],
+      [projectArchivedId, true],
     ]);
     expect(last().displayedSessionId).toBe(projectCurrentId);
   });
 
-  it("archives the requested session and skips a locked one", () => {
+  it("archives the requested session", () => {
     const { bridge, last } = setup();
-
-    bridge.postMessage({ type: "archiveSession", sessionId: piToolsLockedId });
-    const locked = sessions(last()).find((session) => session.sessionId === piToolsLockedId);
-    expect(locked?.isArchived).toBe(false);
-    expect(locked?.isLocked).toBe(true);
 
     bridge.postMessage({ type: "archiveSession", sessionId: projectCurrentId });
     const state = last();
@@ -102,31 +94,20 @@ describe("createDemoBridge", () => {
     expect(alreadyOpen?.isArchived).toBe(false);
   });
 
-  it("toggles the lock and unlocks again", () => {
-    const { bridge, last } = setup();
-
-    bridge.postMessage({ type: "setSessionLock", sessionId: projectCurrentId, locked: true });
-    expect(
-      sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked,
-    ).toBe(true);
-
-    bridge.postMessage({ type: "setSessionLock", sessionId: projectCurrentId, locked: false });
-    expect(
-      sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isLocked,
-    ).toBe(false);
-  });
-
-  it("ignores openSession requests", () => {
+  it.each([
+    { type: "openSession", sessionId: projectArchivedId },
+    { type: "setSessionLock", sessionId: projectCurrentId, locked: true },
+  ])("ignores unsupported $type requests", (request) => {
     const { bridge, postSessions, states } = setup();
     postSessions();
     const before = states.length;
 
-    bridge.postMessage({ type: "openSession", sessionId: projectArchivedId });
+    bridge.postMessage(request);
 
     expect(states.length).toBe(before);
   });
 
-  it("copies the session ID through the clipboard on copySessionId", () => {
+  it("ignores the removed copySessionId request without using the clipboard", () => {
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     const { bridge, postSessions, states } = setup();
@@ -135,7 +116,7 @@ describe("createDemoBridge", () => {
 
     bridge.postMessage({ type: "copySessionId", sessionId: projectCurrentId });
 
-    expect(writeText).toHaveBeenCalledWith(projectCurrentId);
+    expect(writeText).not.toHaveBeenCalled();
     expect(states.length).toBe(before);
   });
 
@@ -174,7 +155,6 @@ describe("createDemoBridge", () => {
 
     const added = sessions(last()).find((session) => session.displayName === "New Pi session");
     expect(added?.isArchived).toBe(false);
-    expect(added?.isLocked).toBe(false);
     const piToolsGroup = last().groups.find((group) => group.cwd === "~/projects/pi-tools");
     expect(piToolsGroup?.sessions.some((session) => session.displayName === "New Pi session")).toBe(
       true,

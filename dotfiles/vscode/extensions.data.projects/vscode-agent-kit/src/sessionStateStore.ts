@@ -14,7 +14,7 @@ import { errorMessage, isRecord } from "./guards";
  *   "active-workspaces": {
  *     "/absolute/path": {
  *       "active-sessions": {
- *         "<session-id>": { "lock": false, "state": "running" }
+ *         "<session-id>": { "state": "running" }
  *       }
  *     }
  *   }
@@ -28,13 +28,11 @@ import { errorMessage, isRecord } from "./guards";
  *   whenever Pi runs in a new cwd, so such cwds register themselves.
  * - `active-sessions` is keyed by session id; entries with a non-object value
  *   do not count as members.
- * - An entry's `lock` (default false) protects it from being archived; this
- *   extension is the only writer of `lock`. An entry's `state` is the live
- *   execution phase written by the pi extension.
+ * - An entry's `state` is the live execution phase written by the pi extension.
  * - The pre-map formats are invalid and never rewritten: a workspace entry's
  *   `active-sessions` being an array, or a root `workspaces` object.
- * - Unknown root keys, unknown workspace fields, and unknown entry fields
- *   are preserved on rewrite.
+ * - Session entries lose their `lock` fields on rewrite. Other fields,
+ *   workspace fields, and root keys are preserved.
  * - Concurrent writers (pi processes and this extension) follow
  *   last-write-wins semantics: each write is a full-file atomic replace
  *   (temp file + rename), with no locking.
@@ -49,8 +47,6 @@ export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
 
 /** Per-session entry in a workspace's `active-sessions` map. */
 export interface ActiveSessionEntry {
-  /** Archive protection; missing means false. */
-  lock?: boolean;
   /** Live execution phase; missing means no phase information. */
   state?: SessionPhase;
   [key: string]: unknown;
@@ -164,8 +160,7 @@ function freshSessionStateStore(): SessionStateStoreData {
  * store and returns whether anything changed; when it returns false no write
  * happens. Missing file: create the store fresh. Unreadable or unparseable
  * file and write failures write nothing and return `{ ok: false }` so the
- * caller can surface the error. Unknown keys and fields are preserved
- * (updates run on a structured clone).
+ * caller can surface the error. Updates run on a structured clone.
  */
 export function mutateSessionStateStore(
   path: string,
@@ -180,6 +175,7 @@ export function mutateSessionStateStore(
   if (!update(base)) {
     return { ok: true, data: read.status === "ok" ? read.data : base };
   }
+  for (const { sessionEntry } of sessionEntries(base)) delete sessionEntry.lock;
   try {
     writeSessionStateStore(path, base);
   } catch (error) {
@@ -246,15 +242,6 @@ export function activeSessionIds(data: SessionStateStoreData | undefined): Set<s
   return ids;
 }
 
-/** Session ids whose entry is protected from archiving (`lock: true`). */
-export function lockedSessionIds(data: SessionStateStoreData | undefined): Set<string> {
-  const ids = new Set<string>();
-  for (const entry of sessionEntries(data)) {
-    if (entry.sessionEntry.lock === true) ids.add(entry.sessionId);
-  }
-  return ids;
-}
-
 /** Live execution phases keyed by session id; entries without a valid
  * `state` are omitted. */
 export function sessionPhases(data: SessionStateStoreData | undefined): Map<string, SessionPhase> {
@@ -290,13 +277,6 @@ function* sessionEntries(data: SessionStateStoreData | undefined): Generator<Lis
 export interface SessionRef {
   sessionId: string;
   cwd: string;
-}
-
-/** One lock target: the session, its workspace cwd, and the next lock state. */
-export interface LockEntry {
-  sessionId: string;
-  cwd: string;
-  locked: boolean;
 }
 
 /** The session's entry in its workspace's `active-sessions` map, or undefined
@@ -338,8 +318,7 @@ function activeSessionsMapOf(entry: WorkspaceStateEntry): Record<string, ActiveS
 
 /**
  * Archive the given sessions in one store write: delete each entry from its
- * workspace's `active-sessions` map. Locked entries are skipped, so a stale
- * UI cannot archive them; sessions that are not members are left alone.
+ * workspace's `active-sessions` map. Sessions that are not members are left alone.
  */
 export function archiveSessions(
   path: string,
@@ -349,7 +328,7 @@ export function archiveSessions(
     let changedAny = false;
     for (const ref of refs) {
       const listed = listedSessionEntry(store, ref.cwd, ref.sessionId);
-      if (listed === undefined || listed.lock === true) continue;
+      if (listed === undefined) continue;
       const workspaceEntry = workspaceEntryOf(store["active-workspaces"], ref.cwd);
       delete activeSessionsMapOf(workspaceEntry)[ref.sessionId];
       changedAny = true;
@@ -360,8 +339,7 @@ export function archiveSessions(
 
 /**
  * Unarchive the given sessions in one store write: create each missing entry
- * as `{ "lock": false }` (pi-extension parity). Entries that already exist
- * are left untouched, so their `lock`, `state`, and unknown fields survive.
+ * as `{}`. Existing entries keep their `state` and unknown fields.
  */
 export function unarchiveSessions(
   path: string,
@@ -372,48 +350,18 @@ export function unarchiveSessions(
     for (const ref of refs) {
       if (listedSessionEntry(store, ref.cwd, ref.sessionId) !== undefined) continue;
       const workspaceEntry = workspaceEntryOf(store["active-workspaces"], ref.cwd);
-      activeSessionsMapOf(workspaceEntry)[ref.sessionId] = { lock: false };
+      activeSessionsMapOf(workspaceEntry)[ref.sessionId] = {};
       changedAny = true;
     }
     return changedAny;
   });
 }
 
-/** Add one session to its workspace's `active-sessions` map (pi-extension
- * parity with a sent message: create the entry as `{ "lock": false }` when
- * missing, otherwise write nothing). */
+/** Add one session to its workspace's `active-sessions` map when missing. */
 export function addActiveSession(
   path: string,
   workspaceCwd: string,
   sessionId: string,
 ): SessionStateUpdateResult {
   return unarchiveSessions(path, [{ sessionId, cwd: workspaceCwd }]);
-}
-
-/**
- * Add or remove the sessions' archive protection in one store write. Locking
- * a session that is not a member creates its entry with `lock: true`, which
- * also makes the session active; unlocking a non-member changes nothing.
- */
-export function setSessionLocks(
-  path: string,
-  entries: readonly LockEntry[],
-): SessionStateUpdateResult {
-  return mutateSessionStateStore(path, (store) => {
-    let changedAny = false;
-    for (const entry of entries) {
-      const listed = listedSessionEntry(store, entry.cwd, entry.sessionId);
-      if (listed === undefined) {
-        if (!entry.locked) continue;
-        const workspaceEntry = workspaceEntryOf(store["active-workspaces"], entry.cwd);
-        activeSessionsMapOf(workspaceEntry)[entry.sessionId] = { lock: true };
-        changedAny = true;
-        continue;
-      }
-      if ((listed.lock === true) === entry.locked) continue;
-      listed.lock = entry.locked;
-      changedAny = true;
-    }
-    return changedAny;
-  });
 }

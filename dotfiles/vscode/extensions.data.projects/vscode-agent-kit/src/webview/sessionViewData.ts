@@ -4,11 +4,10 @@ import type { SessionPhase, WebviewSessionGroup } from "./protocol";
 
 /** Store-derived state the view projects: the registered workspace cwds
  * (the `workspaces` keys) whose groups the list shows, the active whitelist,
- * the locked set, and the live phases of running sessions. */
+ * and the live phases of running sessions. */
 export interface SessionViewInput {
   registeredCwds: readonly string[];
   archivedIds: ReadonlySet<string>;
-  lockedIds: ReadonlySet<string>;
   phases: ReadonlyMap<string, SessionPhase>;
 }
 
@@ -30,7 +29,6 @@ export function sessionViewGroups(
         displayName: session.displayName,
         updatedAtMs: session.updatedAtMs,
         isArchived: view.archivedIds.has(session.sessionId),
-        isLocked: view.lockedIds.has(session.sessionId),
         state: view.phases.get(session.sessionId),
       })),
     }));

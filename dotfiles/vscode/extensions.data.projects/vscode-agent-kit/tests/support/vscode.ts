@@ -491,7 +491,7 @@ export class VSCodeFixture {
       const cwd = join(this.directory, folder);
       const active = activeByCwd.get(cwd) ?? [];
       const activeSessions: Record<string, unknown> = {};
-      for (const id of active) activeSessions[id] = { lock: false };
+      for (const id of active) activeSessions[id] = {};
       store["active-workspaces"][cwd] = { "active-sessions": activeSessions };
     }
     const newestBTime = new Date(statSync(this.sessions.B.session).mtimeMs + 1000);

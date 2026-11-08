@@ -21,7 +21,9 @@ describe("webviewHtml", () => {
 
     expect(html).toContain(".mode-toggle svg[hidden] { display: none; }");
     expect(html).toContain(".archive, .unarchive {");
-    expect(html).toContain('.lock[aria-pressed="true"]');
+    expect(html).not.toContain(".copy");
+    expect(html).not.toContain(".lock");
+    expect(html).not.toContain("data-locked");
     expect(html).toContain(".session-row.selected .session-button");
     expect(html).toContain("#status.error");
   });
@@ -36,9 +38,9 @@ describe("webviewHtml", () => {
       ".session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }",
     );
     expect(html).toContain(".session-timestamp { pointer-events: none;");
-    expect(html).toContain(
-      ".archive:disabled, .archive:disabled:hover { color: var(--vscode-disabledForeground);",
-    );
+    expect(html).not.toContain(".archive:disabled");
+    expect(html).toContain("padding: 0 calc(36px + 5ch + 8px) 0 8px;");
+    expect(html).toContain("right: 36px;");
   });
 
   it("keeps the fixed controls markup the client script wires up", () => {

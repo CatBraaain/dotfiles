@@ -25,7 +25,7 @@ const mime: Record<string, string> = {
 const atlasCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
 const atlasArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 const piToolsPlainId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";
-const piToolsLockedId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
+const piToolsOtherId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
 
 // A stale static build renders old DOM and silently fails selector waits, so
@@ -101,11 +101,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.goto(`${baseUrl}/iframe.html?path=/story/${path}`, { waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
     return page;
-  }
-
-  async function pauseStoryClock(page: Awaited<ReturnType<typeof openStory>>): Promise<void> {
-    await page.clock.install();
-    await page.clock.pauseAt(Date.now() + 60_000);
   }
 
   async function installBridgeMessageRecorder(
@@ -219,9 +214,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       ]);
 
       await clearBridgeMessages(page);
-      await clickTimestamp(page, piToolsLockedId, "Meta");
+      await clickTimestamp(page, piToolsOtherId, "Meta");
       expect(await openSessionMessages(page)).toEqual([
-        { type: "openSession", sessionId: piToolsLockedId },
+        { type: "openSession", sessionId: piToolsOtherId },
       ]);
 
       await clearBridgeMessages(page);
@@ -250,15 +245,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       );
 
       await clearBridgeMessages(page);
-      await page.evaluate(() => {
-        Object.defineProperty(navigator, "clipboard", {
-          configurable: true,
-          value: { writeText: async () => {} },
-        });
-      });
-      await page.click(`[data-copy="${atlasCurrentId}"]`);
-      await page.click(`[data-lock="${atlasCurrentId}"]`);
       await page.click(`[data-archive="${worktreeId}"]`);
+      await page.click("#app header [data-mode-toggle]");
+      await page.locator(`[data-unarchive="${worktreeId}"]`).click();
       expect(await openSessionMessages(page)).toEqual([]);
       expect(
         await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
@@ -329,9 +318,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
                 ? getComputedStyle(document.body).backgroundColor
                 : buttonBackground;
             return Array.from(
-              row.querySelectorAll(
-                ".session-name, .session-timestamp, .copy, .lock, .archive:not(:disabled), .unarchive",
-              ),
+              row.querySelectorAll(".session-name, .session-timestamp, .archive, .unarchive"),
             ).map((element) => {
               const style = getComputedStyle(element);
               const paintedBackground =
@@ -373,7 +360,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     }
   });
 
-  it("renders the sample story and operates the shared header mode toggle, copy, and archive", async () => {
+  it("renders the sample story and operates the shared header mode toggle and archive", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     expect(await page.locator(".session-row").count()).toBe(4);
 
@@ -393,31 +380,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(
       await groupByTitle("~/projects/vscode-pi-sessions").locator(".session-row").count(),
     ).toBe(2);
-
-    const copy = page.locator(".session-row [data-copy]").first();
-    const copySessionId = await copy.getAttribute("data-copy");
-    expect(copySessionId).not.toBeNull();
-    await pauseStoryClock(page);
-    await page.evaluate(() => {
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          writeText: (text: string) => {
-            document.body.dataset.copiedSessionId = text;
-            return Promise.resolve();
-          },
-        },
-      });
-    });
-    await copy.click();
-    expect(await page.locator("body").getAttribute("data-copied-session-id")).toBe(copySessionId);
-    await page.waitForSelector(".copy.copied");
-    expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.clock.runFor(900);
-    expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.clock.runFor(100);
-    await expect.poll(() => page.locator(".copy.copied").count()).toBe(0);
-    await page.clock.resume();
 
     await page.click(`[data-archive="${atlasCurrentId}"]`);
     await page.waitForFunction(
@@ -443,29 +405,26 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("locks a row to disable Archive and unlocks it again", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions");
-
-    const lockedArchive = page.locator(`[data-archive="${piToolsLockedId}"]`);
-    const lock = page.locator(`[data-lock="${piToolsLockedId}"]`);
-    expect(await lockedArchive.isDisabled()).toBe(true);
-    expect(await lock.getAttribute("aria-pressed")).toBe("true");
-
-    await lock.click();
-    await page.waitForFunction(
-      (id) =>
-        document.querySelector(`[data-lock="${id}"]`)?.getAttribute("aria-pressed") === "false",
-      piToolsLockedId,
-    );
-    expect(await lockedArchive.isDisabled()).toBe(false);
-
-    await lock.click();
-    await page.waitForFunction(
-      (id) =>
-        document.querySelector(`[data-lock="${id}"]`)?.getAttribute("aria-pressed") === "true",
-      piToolsLockedId,
-    );
-    expect(await lockedArchive.isDisabled()).toBe(true);
+  it("offers one enabled row action and keeps IDs in the row hints", async () => {
+    const page = await openStory("sessions-sidebar--all-mode");
+    await page.waitForSelector(".session-row.archived");
+    expect(await page.locator("[data-copy], [data-lock], [data-locked]").count()).toBe(0);
+    const rows = page.locator(".session-row");
+    for (const row of await rows.all()) {
+      const button = row.locator(".session-button");
+      const id = await button.getAttribute("data-session");
+      expect(await button.getAttribute("title")).toContain(id);
+      const action = row.locator("[data-archive], [data-unarchive]");
+      expect(await action.count()).toBe(1);
+      expect(await action.isEnabled()).toBe(true);
+    }
+    await installBridgeMessageRecorder(page);
+    const archive = page.locator('[data-archive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]');
+    await archive.focus();
+    await page.keyboard.press("Enter");
+    await page.locator('[data-unarchive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]').waitFor();
+    expect(await openSessionMessages(page)).toEqual([]);
+    expect(await page.locator(".session-row.selected").count()).toBe(1);
     await page.close();
   });
 
@@ -498,7 +457,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
     await page.click(`[data-archive="${worktreeId}"]`);
     await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 3);
-    expect(await page.locator(`[data-session="${piToolsLockedId}"]`).count()).toBe(1);
+    expect(await page.locator(`[data-session="${piToolsOtherId}"]`).count()).toBe(1);
     expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
     await page.close();
   });
@@ -525,7 +484,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       (gone) => !document.querySelector(`[data-session="${gone}"]`),
       worktreeId,
     );
-    expect(await page.locator(`[data-session="${piToolsLockedId}"]`).count()).toBe(1);
+    expect(await page.locator(`[data-session="${piToolsOtherId}"]`).count()).toBe(1);
     await page.close();
   });
 
@@ -538,8 +497,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const timestampElement = rowElement.querySelector(".session-timestamp")!;
       const timestamp = timestampElement.getBoundingClientRect();
       const dot = rowElement.querySelector(".session-status")!.getBoundingClientRect();
-      const copy = rowElement.querySelector(".copy")!.getBoundingClientRect();
-      const lock = rowElement.querySelector(".lock")!.getBoundingClientRect();
       const archive = rowElement.querySelector(".archive")!.getBoundingClientRect();
       return {
         rowHeight: row.height,
@@ -556,25 +513,19 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         timestampSize: getComputedStyle(timestampElement).fontSize,
         dotWidth: dot.width,
         dotHeight: dot.height,
-        copyRight: copy.right,
-        lockRight: lock.right,
-        lockTop: lock.top,
-        lockBottom: lock.bottom,
         archiveRight: archive.right,
         archiveTop: archive.top,
         archiveBottom: archive.bottom,
-        controls: Array.from(rowElement.querySelectorAll(".copy, .lock, .archive")).map(
-          (control) => {
-            const box = control.getBoundingClientRect();
-            const icon = control.querySelector("svg")!.getBoundingClientRect();
-            return {
-              width: box.width,
-              height: box.height,
-              iconWidth: icon.width,
-              iconHeight: icon.height,
-            };
-          },
-        ),
+        controls: Array.from(rowElement.querySelectorAll(".archive")).map((control) => {
+          const box = control.getBoundingClientRect();
+          const icon = control.querySelector("svg")!.getBoundingClientRect();
+          return {
+            width: box.width,
+            height: box.height,
+            iconWidth: icon.width,
+            iconHeight: icon.height,
+          };
+        }),
       };
     });
     expect(boxes.rowHeight).toBe(32);
@@ -582,22 +533,13 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(boxes.dotHeight).toBe(10);
     expect(boxes.timestampFont).toContain("mono");
     expect(boxes.timestampSize).toBe("10px");
-    expect(boxes.controls).toEqual([
-      { width: 24, height: 24, iconWidth: 12, iconHeight: 12 },
-      { width: 24, height: 24, iconWidth: 12, iconHeight: 12 },
-      { width: 24, height: 24, iconWidth: 12, iconHeight: 12 },
-    ]);
+    expect(boxes.controls).toEqual([{ width: 24, height: 24, iconWidth: 12, iconHeight: 12 }]);
     expect(boxes.buttonWidth).toBeCloseTo(boxes.rowWidth, 1);
     expect(boxes.buttonRight).toBeCloseTo(boxes.rowRight, 1);
-    expect(boxes.timestampRight).toBeLessThan(boxes.copyRight);
-    expect(boxes.copyRight).toBeLessThan(boxes.lockRight);
-    expect(boxes.lockRight).toBeLessThanOrEqual(boxes.archiveRight);
-    expect(boxes.rowRight - boxes.timestampRight).toBeCloseTo(84, 1);
-    expect(boxes.rowRight - boxes.copyRight).toBeCloseTo(52, 1);
-    expect(boxes.rowRight - boxes.lockRight).toBeCloseTo(28, 1);
+    expect(boxes.timestampRight).toBeLessThan(boxes.archiveRight);
+    expect(boxes.rowRight - boxes.timestampRight).toBeCloseTo(36, 1);
     for (const overlay of [
       [boxes.timestampTop, boxes.timestampBottom],
-      [boxes.lockTop, boxes.lockBottom],
       [boxes.archiveTop, boxes.archiveBottom],
     ]) {
       expect(overlay[0]).toBeGreaterThanOrEqual(boxes.rowTop);
@@ -606,8 +548,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(boxes.rowRight - boxes.archiveRight).toBeLessThanOrEqual(8);
     await page.locator(".session-button").first().focus();
     await page.keyboard.press("Tab");
-    const focusedCopy = await page
-      .locator(".copy")
+    const focusedArchive = await page
+      .locator(".archive")
       .first()
       .evaluate((control) => ({
         focused: control === document.activeElement,
@@ -615,36 +557,12 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         outlineWidth: getComputedStyle(control).outlineWidth,
         radius: getComputedStyle(control).borderRadius,
       }));
-    expect(focusedCopy).toEqual({
+    expect(focusedArchive).toEqual({
       focused: true,
       focusVisible: true,
       outlineWidth: "2px",
       radius: "9.6px",
     });
-    await page.close();
-  });
-
-  it("keeps the copied feedback when the preview clipboard write fails", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions");
-    await page.evaluate(() => {
-      window.addEventListener("unhandledrejection", (event) => event.preventDefault(), {
-        once: true,
-      });
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { writeText: async () => Promise.reject(new Error("denied")) },
-      });
-    });
-
-    await pauseStoryClock(page);
-    await page.locator(".session-row [data-copy]").first().click();
-    await page.waitForSelector(".copy.copied");
-    expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.clock.runFor(900);
-    expect(await page.locator(".copy.copied").count()).toBe(1);
-    await page.clock.runFor(100);
-    await expect.poll(() => page.locator(".copy.copied").count()).toBe(0);
-    await page.clock.resume();
     await page.close();
   });
 

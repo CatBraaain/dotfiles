@@ -6,9 +6,7 @@ export type WebviewRequest =
   | { type: "unregisterWorkspace"; cwd: string }
   | { type: "openSession"; sessionId: string }
   | { type: "archiveSession"; sessionId: string }
-  | { type: "unarchiveSession"; sessionId: string }
-  | { type: "setSessionLock"; sessionId: string; locked: boolean }
-  | { type: "copySessionId"; sessionId: string };
+  | { type: "unarchiveSession"; sessionId: string };
 
 /** Live execution phase of a session, mirrored from the session state store. */
 export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
@@ -18,7 +16,6 @@ export interface WebviewSession {
   displayName: string;
   updatedAtMs: number | null;
   isArchived: boolean;
-  isLocked: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
 }
@@ -53,17 +50,10 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   }
   if (
     (value.type === "openSession" ||
-      value.type === "copySessionId" ||
       value.type === "archiveSession" ||
-      value.type === "unarchiveSession" ||
-      value.type === "setSessionLock") &&
+      value.type === "unarchiveSession") &&
     isSessionId(value.sessionId)
   ) {
-    if (value.type === "setSessionLock") {
-      return typeof value.locked === "boolean"
-        ? { type: "setSessionLock", sessionId: value.sessionId, locked: value.locked }
-        : undefined;
-    }
     return { type: value.type, sessionId: value.sessionId };
   }
   return undefined;
