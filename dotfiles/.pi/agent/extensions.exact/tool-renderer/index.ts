@@ -7,6 +7,7 @@ import {
   getKeybindings,
   Markdown,
   Spacer,
+  stripTerminalSequences,
   Text,
   type Component,
 } from "@earendil-works/pi-tui";
@@ -21,6 +22,8 @@ import {
   truncateText,
   type ToolResultLike,
 } from "../shared/tool-text.ts";
+
+import { installToolRowFolding, type ToolRowState } from "./tool-rows.ts";
 
 export type ToolTheme = Pick<Theme, "fg" | "bold">;
 export type ToolRenderers = {
@@ -58,7 +61,7 @@ const WEB_DISPLAYS = {
 } as const;
 const SESSION_DISPLAYS = {
   session_search: { successStatus: "complete", text: allTextContent },
-  create_detached_session: { successStatus: "created", text: resultText },
+  create_detached_session: { successStatus: "created", text: allTextContent },
 };
 
 const REGISTRY: Record<string, RendererEntry> = {
@@ -88,13 +91,15 @@ const REGISTRY: Record<string, RendererEntry> = {
       name,
       textRenderers({
         call(args, theme) {
-          const input = name === "web_search" ? args.query : args.url;
-          const langSuffix = name === "web_search" && args.lang ? ` [lang=${args.lang}]` : "";
-          return titleLine(`${name} - "${input ?? ""}"${langSuffix}`, theme);
+          return formatWebCall(name, args, theme);
         },
-        result(result, _options, _theme, context) {
+        result(result, options, theme, context) {
           const details = detailsForRender(result, context?.state);
           const failure = failureLine(display.kind, result, details, context?.isError ?? false);
+          if (options.expanded) {
+            const text = allTextContent(result) || failure || "";
+            return theme.fg(failure ? "error" : "toolOutput", text);
+          }
           if (failure) return failure;
           return details ? successLine(details[display.source] ?? "", details) : "";
         },
@@ -106,11 +111,7 @@ const REGISTRY: Record<string, RendererEntry> = {
       name,
       textRenderers({
         call(args, theme) {
-          const preview =
-            name === "session_search"
-              ? (args.action ?? "")
-              : truncateText(args.name?.trim() || args.initialRequest, SESSION_PREVIEW_LIMIT);
-          return titleLine(`${name} ${preview}`, theme);
+          return formatSessionCall(name, args, theme);
         },
         result(result, { expanded, isPartial }, theme, context) {
           const status =
@@ -143,6 +144,102 @@ export default function (pi: ExtensionAPI) {
     registerToolRenderer?: (resolver: ToolRendererResolver) => void;
   };
   registerable.registerToolRenderer?.((toolName, next) => renderersOf(toolName, next));
+  let dispose: (() => void) | undefined;
+  pi.on?.("session_start", (_event, ctx) => {
+    dispose?.();
+    dispose = undefined;
+    if (ctx.mode === "tui") {
+      dispose = installToolRowFolding((row) => formatCollapsedToolRow(row, ctx.ui.theme));
+    }
+  });
+  pi.on?.("session_shutdown", () => {
+    dispose?.();
+    dispose = undefined;
+  });
+}
+
+export function formatCollapsedToolRow(row: ToolRowState, theme: Theme): string {
+  const args = row.args ?? {};
+  const call = formatRowCall(row.toolName, args, row.cwd, theme);
+  const summary = formatRowSummary(row, theme);
+  return summary ? `${call} — ${summary}` : call;
+}
+
+function formatRowCall(name: string, args: Record<string, any>, cwd: string, theme: Theme): string {
+  if (Object.hasOwn(WEB_DISPLAYS, name)) return formatWebCall(name, args, theme);
+  if (Object.hasOwn(SESSION_DISPLAYS, name)) return formatSessionCall(name, args, theme);
+  if (name === "subagent") return formatSubagentCall(args, theme);
+  if (name === "recontext") return titleLine(TOOL_LABEL, theme);
+  return formatToolCall(name, args, cwd, theme);
+}
+
+function formatRowSummary(row: ToolRowState, theme: Theme): string {
+  const { toolName, result } = row;
+  if (!result || row.isPartial) {
+    const progress = toolName === "bash" ? singleLine(resultText(result ?? {})) : "";
+    return theme.fg("warning", progress || "Running...");
+  }
+  if (Object.hasOwn(WEB_DISPLAYS, toolName)) {
+    const display = WEB_DISPLAYS[toolName as keyof typeof WEB_DISPLAYS];
+    const details = detailsForRender(result, row.rendererState);
+    return (
+      failureLine(display.kind, result, details, result.isError) ??
+      (details ? successLine(details[display.source] ?? "", details) : "done")
+    );
+  }
+  if (result.isError) {
+    return theme.fg("error", singleLine(allTextContent(result)) || "Error");
+  }
+  if (Object.hasOwn(SESSION_DISPLAYS, toolName)) {
+    const display = SESSION_DISPLAYS[toolName as keyof typeof SESSION_DISPLAYS];
+    return `${toolName}: ${result.details?.status ?? display.successStatus}`;
+  }
+  if (toolName === "recontext") return COLLAPSED_TEXT;
+  if (toolName === "codemode" || toolName === "subagent") {
+    const durationMs =
+      toolName === "codemode" ? completedDurationMs(result.content[0]) : result.durationMs;
+    const status = durationMs === undefined ? "done" : formatDuration(durationMs);
+    const failedCall = result.details?.calls?.some(
+      (call: { status: string }) => call.status !== "ok",
+    );
+    return failedCall ? theme.fg("error", `${status} (failed calls)`) : status;
+  }
+  const summary = formatToolResultSummary(
+    toolName,
+    row.args ?? {},
+    result,
+    { durationMs: result.durationMs },
+    theme,
+  );
+  return summary ?? (singleLine(allTextContent(result)) || "done");
+}
+
+function singleLine(text: string): string {
+  return stripTerminalSequences(text).replace(/\s+/g, " ").trim();
+}
+
+function formatWebCall(name: string, args: Record<string, any>, theme: ToolTheme): string {
+  const input = name === "web_search" ? args.query : args.url;
+  const langSuffix = name === "web_search" && args.lang ? ` [lang=${args.lang}]` : "";
+  return titleLine(`${name} - "${input ?? ""}"${langSuffix}`, theme);
+}
+
+function formatSessionCall(name: string, args: Record<string, unknown>, theme: ToolTheme): string {
+  const sessionName = typeof args.name === "string" ? args.name.trim() : "";
+  const initialRequest = typeof args.initialRequest === "string" ? args.initialRequest : "";
+  const preview =
+    name === "session_search"
+      ? (args.action ?? "")
+      : truncateText(sessionName || initialRequest, SESSION_PREVIEW_LIMIT);
+  return titleLine(`${name} ${preview}`, theme);
+}
+
+function formatSubagentCall(args: Record<string, any>, theme: ToolTheme): string {
+  const sessionLabel =
+    typeof args.session === "string" && args.session.length > 0
+      ? ` (${args.fork ? "fork" : "resume"} ${basename(args.session)})`
+      : "";
+  return titleLine(`subagent ${args.agent ?? "..."}${sessionLabel}`, theme);
 }
 
 function textRenderers(display: TextDisplay): ToolRenderers {
@@ -174,6 +271,14 @@ function formatFsResult(
   theme: any,
   context: any,
 ): string {
+  if (options.expanded) {
+    if (context.isError) return theme.fg("error", allTextContent(result));
+    if (name === "write") return theme.fg("toolOutput", context.args?.content ?? "");
+    if (name === "edit") {
+      return theme.fg("toolOutput", result.details?.diff ?? allTextContent(result));
+    }
+    return theme.fg("toolOutput", allTextContent(result));
+  }
   if (options.isPartial) {
     const progress = name === "bash" ? resultText(result) : "";
     return theme.fg("warning", progress === "" ? "Running..." : progress);
@@ -181,9 +286,10 @@ function formatFsResult(
   if (context.isError) return formatToolError(result, theme);
   const state = context.state;
   const durationMs =
-    name === "bash" && state?.startedAt !== undefined
+    context.durationMs ??
+    (name === "bash" && state?.startedAt !== undefined
       ? (state.endedAt ?? Date.now()) - state.startedAt
-      : undefined;
+      : undefined);
   return formatToolResultSummary(name, context.args ?? {}, result, { durationMs }, theme) ?? "";
 }
 
@@ -464,15 +570,7 @@ function completedDurationMs(
 function subagentRenderers(): ToolRenderers {
   return {
     renderCall(args: any, theme: any) {
-      const sessionLabel =
-        typeof args.session === "string" && args.session.length > 0
-          ? ` (${args.fork ? "fork" : "resume"} ${basename(args.session)})`
-          : "";
-      return new Text(
-        theme.fg("toolTitle", theme.bold(`subagent ${args.agent ?? "..."}${sessionLabel}`)),
-        0,
-        0,
-      );
+      return new Text(formatSubagentCall(args, theme), 0, 0);
     },
     renderResult(result: any, options: any, theme: any) {
       const details = result.details as AgentToolDetails | undefined;

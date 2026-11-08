@@ -198,7 +198,7 @@ describe("shared text renderers", () => {
   });
 
   for (const name of ["session_search", "create_detached_session"]) {
-    it(`keeps the expanded text policy for ${name}`, () => {
+    it(`shows every text block when ${name} is expanded`, () => {
       const result = {
         content: [
           { type: "text", text: "first" },
@@ -211,7 +211,7 @@ describe("shared text renderers", () => {
         plainTheme,
         { isError: false },
       );
-      const expected = name === "session_search" ? "first\nsecond" : "first";
+      const expected = "first\nsecond";
       assert.equal(
         component
           .render(120)
