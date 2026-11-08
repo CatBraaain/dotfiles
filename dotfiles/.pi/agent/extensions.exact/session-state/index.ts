@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   getAgentDir,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { subagentSessionDir } from "../agents/index.ts";
 
 export type SessionState = "running" | "waiting-approval" | "waiting-user";
 
@@ -58,6 +59,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   let isAgentRunActive = false;
 
   function scheduleStateWrite(state: SessionState, ctx: ExtensionContext): void {
+    if (isSubagentSession(ctx)) return;
     const storePath = sessionStateStorePath();
     const workspacePath = ctx.sessionManager.getCwd();
     const sessionId = ctx.sessionManager.getSessionId();
@@ -67,6 +69,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   }
 
   function scheduleStateClear(ctx: ExtensionContext): void {
+    if (isSubagentSession(ctx)) return;
     const storePath = sessionStateStorePath();
     const workspacePath = ctx.sessionManager.getCwd();
     const sessionId = ctx.sessionManager.getSessionId();
@@ -76,6 +79,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   }
 
   pi.on("input", (_event, ctx) => {
+    if (isSubagentSession(ctx)) return;
     const storePath = sessionStateStorePath();
     const workspacePath = ctx.sessionManager.getCwd();
     const sessionId = ctx.sessionManager.getSessionId();
@@ -85,6 +89,8 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    if (isSubagentSession(ctx)) return;
+    registerArchiveCommands();
     isAgentRunActive = false;
     scheduleStateWrite("waiting-user", ctx);
   });
@@ -113,31 +119,40 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     scheduleStateClear(ctx);
   });
 
-  pi.registerCommand("archive", {
-    description: "Archive this session: remove it from the workspace's active sessions.",
-    handler: async (_args, ctx: ExtensionCommandContext) => {
-      const storePath = sessionStateStorePath();
-      const workspacePath = ctx.sessionManager.getCwd();
-      const sessionId = ctx.sessionManager.getSessionId();
-      const outcome = await enqueueWrite(() =>
-        archiveSessionOnDisk(storePath, workspacePath, sessionId),
-      );
-      notifyArchiveOutcome(ctx, storePath, outcome);
-    },
-  });
+  function registerArchiveCommands(): void {
+    pi.registerCommand("archive", {
+      description: "Archive this session: remove it from the workspace's active sessions.",
+      handler: async (_args, ctx: ExtensionCommandContext) => {
+        const storePath = sessionStateStorePath();
+        const workspacePath = ctx.sessionManager.getCwd();
+        const sessionId = ctx.sessionManager.getSessionId();
+        const outcome = await enqueueWrite(() =>
+          archiveSessionOnDisk(storePath, workspacePath, sessionId),
+        );
+        notifyArchiveOutcome(ctx, storePath, outcome);
+      },
+    });
 
-  pi.registerCommand("unarchive", {
-    description: "Unarchive this session: add it back to the workspace's active sessions.",
-    handler: async (_args, ctx: ExtensionCommandContext) => {
-      const storePath = sessionStateStorePath();
-      const workspacePath = ctx.sessionManager.getCwd();
-      const sessionId = ctx.sessionManager.getSessionId();
-      const outcome = await enqueueWrite(() =>
-        unarchiveSessionOnDisk(storePath, workspacePath, sessionId),
-      );
-      notifyUnarchiveOutcome(ctx, storePath, outcome);
-    },
-  });
+    pi.registerCommand("unarchive", {
+      description: "Unarchive this session: add it back to the workspace's active sessions.",
+      handler: async (_args, ctx: ExtensionCommandContext) => {
+        const storePath = sessionStateStorePath();
+        const workspacePath = ctx.sessionManager.getCwd();
+        const sessionId = ctx.sessionManager.getSessionId();
+        const outcome = await enqueueWrite(() =>
+          unarchiveSessionOnDisk(storePath, workspacePath, sessionId),
+        );
+        notifyUnarchiveOutcome(ctx, storePath, outcome);
+      },
+    });
+  }
+}
+
+function isSubagentSession(ctx: ExtensionContext): boolean {
+  return (
+    resolve(ctx.sessionManager.getSessionDir()) ===
+    resolve(subagentSessionDir(ctx.sessionManager.getCwd()))
+  );
 }
 
 export function parseStore(raw: string): StoreParseResult {

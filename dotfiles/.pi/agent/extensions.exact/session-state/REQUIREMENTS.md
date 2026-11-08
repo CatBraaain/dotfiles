@@ -14,6 +14,10 @@ vscode-pi-sessions は、各セッションの実行フェーズ（agent ター�
 
 この文書でいう自セッションは、この拡張が動作している pi の現在のセッションを指す。自ワークスペースは、自セッションの作業ディレクトリを指す。
 
+この文書のストア更新とコマンド提供は、subagent として起動されていないトップレベルセッションに適用する。subagent は、subagentツールまたは画像入力の自動vision委譲が起動する子セッションを指し、新規・resume・fork を含む。agent名・役割は親子の判定条件にしない。これにより、子セッションをセッション一覧や実行フェーズ表示へ混在させない。
+
+subagent では、自動アーカイブ解除・実行フェーズ更新・終了時の `state` 除去を行わず、`session-state.json` を作成・変更しない。この拡張の `/archive`・`/unarchive` も提供しない。既にストアに保存されている子セッションの entry はそのまま保持する。
+
 | 操作 | トリガー | `active-sessions` の更新 | `lock` への扱い | 通知 |
 | --- | --- | --- | --- | --- |
 | 自動アーカイブ解除 | プロンプトの送信（`input` イベント） | 自セッションの entry を作成する。既に載っていれば書き込まない | entry が無いときは `lock: false` で作成し、載っていれば参照しない・変更しない | 失敗のみ |
@@ -81,6 +85,7 @@ session-state は、自セッションの実行フェーズを自セッション
 
 ## 検証要件
 
+- subagent の新規・resume・fork と画像入力の自動vision委譲では、起動・入力・実行フェーズ遷移・終了を通じてストアが不変であること（ファイルが無い場合は作成されないことを含む）と、`/archive`・`/unarchive` が提供されないことを unit テストで検証する。トップレベルセッションには、agent名・役割によらず以下の更新とコマンドが適用されることも検証する。
 - ストアの解釈と更新は純粋関数として切り出し、unit テスト（`bun test`）で検証する。対象は、store の parse（旧 `workspaces` オブジェクトと旧 `active-sessions` 配列の拒否を含む）、`active-sessions` への entry 追加・削除、ロック判定、workspace エントリと `active-sessions` の作成、未知フィールドの保持、追加済み・ロック中・削除済みの判定、`state` の読み取り・設定（同一 `state` の書き込み skip を含む）・除去、serialize とする。
 - `active-sessions` から外れたセッションを再開してメッセージを送り、自セッションの entry が `active-sessions` に戻り、vscode-pi-sessions の一覧が次の refresh で既定ビューに戻ることを確認する。
 - `/archive` では自セッションの entry が `active-sessions` から外れ、一覧から消えることを確認する。

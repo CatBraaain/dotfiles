@@ -1,6 +1,24 @@
 import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
 import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import * as fs from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { describe, it, spyOn } from "bun:test";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { childInvocationArgs, subagentSessionDir } from "../agents/index.ts";
+import sessionStateExtension, {
   archiveSession,
   clearSessionState,
   getSessionState,
@@ -10,6 +28,235 @@ import {
   unarchiveSession,
   type SessionStateStore,
 } from "./index.ts";
+
+const STORE_UPDATE_TIMEOUT_MS = 1_000;
+
+type EventHandler = (event: { type: string; reason?: string }, ctx: ExtensionContext) => unknown;
+type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
+
+interface SessionHarness {
+  storePath: string;
+  workspacePath: string;
+  sessionId: string;
+  commands: Map<string, Command>;
+  storeReads: ReturnType<typeof spyOn<typeof fs, "readFile">>;
+  emit(type: string): Promise<void>;
+  command(name: string): Promise<void>;
+}
+
+async function withSessionHarness(
+  options: { agent: string; mode?: "new" | "resume" | "fork" | "vision"; customDir?: boolean },
+  test: (harness: SessionHarness) => Promise<void>,
+): Promise<void> {
+  const tempRoot = "/tmp/work/dotfiles/skip-subagent-session-state";
+  mkdirSync(tempRoot, { recursive: true });
+  const agentDir = mkdtempSync(join(tempRoot, "unit-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousAgentName = process.env.PI_AGENT_NAME;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.PI_AGENT_NAME = options.agent;
+  const workspacePath = join(agentDir, "workspace: child");
+  const sessionId = "current-session";
+  const childDir = subagentSessionDir(workspacePath);
+  const childSession =
+    options.mode === "resume" || options.mode === "fork"
+      ? { path: join(childDir, "existing-session.jsonl"), fork: options.mode === "fork" }
+      : undefined;
+  const args = childInvocationArgs(options.agent, "test task", workspacePath, childSession);
+  const sessionDir =
+    options.mode === undefined
+      ? options.customDir
+        ? join(agentDir, "custom", "subagents")
+        : dirname(childDir)
+      : `${args[args.indexOf("--session-dir") + 1]}/../subagents/`;
+  const handlers = new Map<string, EventHandler[]>();
+  const commands = new Map<string, Command>();
+  const ctx = {
+    hasUI: true,
+    ui: { notify() {} },
+    sessionManager: {
+      getCwd: () => workspacePath,
+      getSessionId: () => sessionId,
+      getSessionDir: () => sessionDir,
+      getHeader: () => ({ parentSession: "/ordinary/top-level-parent.jsonl" }),
+    },
+  } as unknown as ExtensionCommandContext;
+  const pi = {
+    on(type: string, handler: EventHandler) {
+      const registered = handlers.get(type) ?? [];
+      registered.push(handler);
+      handlers.set(type, registered);
+    },
+    registerCommand(name: string, command: Command) {
+      commands.set(name, command);
+    },
+    getFlag: () => options.agent,
+  } as unknown as ExtensionAPI;
+  const storeReads = spyOn(fs, "readFile");
+  sessionStateExtension(pi);
+  const harness: SessionHarness = {
+    storePath: join(agentDir, "session-state.json"),
+    workspacePath,
+    sessionId,
+    commands,
+    storeReads,
+    async emit(type) {
+      for (const handler of handlers.get(type) ?? []) {
+        await handler(
+          { type, reason: options.mode === "vision" ? "startup" : (options.mode ?? "startup") },
+          ctx,
+        );
+      }
+    },
+    async command(name) {
+      const command = commands.get(name);
+      assert.ok(command, `command: ${name}`);
+      await command.handler("", ctx);
+    },
+  };
+  try {
+    await test(harness);
+  } finally {
+    if (commands.has("unarchive")) await harness.command("unarchive");
+    storeReads.mockRestore();
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+    else process.env.PI_AGENT_NAME = previousAgentName;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+}
+
+const lifecycleEvents = [
+  "session_start",
+  "input",
+  "agent_start",
+  "ui_prompt_start",
+  "ui_prompt_end",
+  "agent_settled",
+  "ui_prompt_end",
+  "session_shutdown",
+];
+
+describe("sessionStateExtension in child sessions", () => {
+  for (const mode of ["new", "resume", "fork", "vision"] as const) {
+    const agent = mode === "vision" ? "vision" : "main";
+
+    it(`does not create a store during the ${mode} child lifecycle`, async () => {
+      await withSessionHarness({ agent, mode }, async (harness) => {
+        for (const event of lifecycleEvents) {
+          await harness.emit(event);
+          assert.equal(harness.storeReads.mock.calls.length, 0, `event: ${event}`);
+          assert.equal(existsSync(harness.storePath), false, `event: ${event}`);
+        }
+      });
+    });
+
+    it(`preserves existing entries and store bytes during the ${mode} child lifecycle`, async () => {
+      await withSessionHarness({ agent, mode }, async (harness) => {
+        const original = JSON.stringify({
+          "active-workspaces": {
+            [harness.workspacePath]: {
+              "active-sessions": {
+                [harness.sessionId]: { lock: true, state: "running", custom: "keep" },
+                other: { lock: false, state: "waiting-user" },
+              },
+              pinned: true,
+            },
+          },
+          custom: ["keep"],
+        });
+        writeFileSync(harness.storePath, original);
+        const before = statSync(harness.storePath, { bigint: true });
+        for (const event of lifecycleEvents) {
+          await harness.emit(event);
+          assert.equal(harness.storeReads.mock.calls.length, 0, `event: ${event}`);
+          assert.equal(readFileSync(harness.storePath, "utf8"), original, `event: ${event}`);
+          const after = statSync(harness.storePath, { bigint: true });
+          assert.deepEqual(
+            [after.ino, after.mtimeNs],
+            [before.ino, before.mtimeNs],
+            `event: ${event}`,
+          );
+        }
+      });
+    });
+
+    it(`does not provide archive commands in the ${mode} child`, async () => {
+      await withSessionHarness({ agent, mode }, async (harness) => {
+        await harness.emit("session_start");
+        assert.deepEqual([...harness.commands.keys()], []);
+      });
+    });
+  }
+});
+
+describe("sessionStateExtension in top-level sessions", () => {
+  for (const agent of ["main", "senior", "junior", "vision", "chat"]) {
+    it(`preserves phase updates for a top-level ${agent} session with a parent header`, async () => {
+      await withSessionHarness({ agent, customDir: agent === "vision" }, async (harness) => {
+        const phases = [
+          ["session_start", "waiting-user"],
+          ["agent_start", "running"],
+          ["ui_prompt_start", "waiting-approval"],
+          ["ui_prompt_end", "running"],
+          ["agent_settled", "waiting-user"],
+          ["ui_prompt_end", "waiting-user"],
+          ["agent_end", "waiting-user"],
+          ["session_shutdown", undefined],
+        ] as const;
+        for (const [event, expectedState] of phases) {
+          await harness.emit(event);
+          await harness.command("unarchive");
+          const store = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
+          assert.equal(
+            getSessionState(store, harness.workspacePath, harness.sessionId),
+            expectedState,
+            `event: ${event}`,
+          );
+        }
+      });
+    });
+
+    it(`preserves commands and automatic unarchive for a top-level ${agent} session`, async () => {
+      await withSessionHarness({ agent }, async (harness) => {
+        await harness.emit("session_start");
+        assert.deepEqual([...harness.commands.keys()].sort(), ["archive", "unarchive"]);
+        await harness.command("archive");
+        const archived = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
+        assert.equal(
+          archived["active-workspaces"][harness.workspacePath]?.["active-sessions"]?.[
+            harness.sessionId
+          ],
+          undefined,
+        );
+        await harness.emit("input");
+        const deadline = Date.now() + STORE_UPDATE_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          const current = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
+          if (
+            current["active-workspaces"][harness.workspacePath]?.["active-sessions"]?.[
+              harness.sessionId
+            ]
+          )
+            break;
+          await setImmediate();
+        }
+        const active = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
+        assert.deepEqual(
+          active["active-workspaces"][harness.workspacePath]?.["active-sessions"]?.[
+            harness.sessionId
+          ],
+          { lock: false },
+        );
+        await harness.command("archive");
+        await harness.command("unarchive");
+        const unarchived = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
+        assert.deepEqual(unarchived, active);
+      });
+    });
+  }
+});
 
 describe("parseStore", () => {
   it("reads a document with active-workspaces as a valid store", () => {
