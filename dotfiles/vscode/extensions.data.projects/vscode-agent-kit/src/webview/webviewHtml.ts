@@ -13,7 +13,7 @@ export const webviewAppMarkup = `<main id="app">
     <header>
       <h1>Sessions</h1>
       <div class="header-actions">
-        <button class="icon-button" type="button" data-action="refresh" aria-label="Refresh sessions">↻</button>
+        <button class="icon-button" type="button" data-action="refresh" aria-label="Refresh sessions" title="Refresh session list">↻</button>
       </div>
     </header>
     <section id="sessions" aria-live="polite"></section>

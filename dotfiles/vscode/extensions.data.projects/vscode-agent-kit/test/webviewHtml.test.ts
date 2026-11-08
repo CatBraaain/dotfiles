@@ -60,6 +60,14 @@ describe("webviewHtml", () => {
     expect(html).toContain('<p id="status"');
   });
 
+  it("describes the refresh button as a session list update", () => {
+    const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
+
+    expect(html).toContain(
+      'data-action="refresh" aria-label="Refresh sessions" title="Refresh session list"',
+    );
+  });
+
   it("keeps the New workspace form and footer markup for the client script", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
