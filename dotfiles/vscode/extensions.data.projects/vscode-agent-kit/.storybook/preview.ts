@@ -23,6 +23,7 @@ const vscodeThemeFallbacks = `
     --vscode-list-inactiveSelectionForeground: #cccccc;
     --vscode-disabledForeground: rgba(204, 204, 204, 0.6);
     --vscode-testing-iconPassed: #73c991;
+    --vscode-editorWarning-foreground: #cca700;
     --vscode-errorForeground: #f48771;
   }
 `;

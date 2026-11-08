@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Frame } from "playwright/test";
+import type { SessionStateStoreData } from "../../src/sessionStateStore";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
 
 test.use({ trace: "on" });
@@ -695,6 +696,16 @@ test(
       const row = rowIn(frame, aId);
       await expect(row).toHaveClass(/archived/);
       await expect(row.locator(`[data-unarchive="${aId}"]`)).toBeVisible();
+      const status = row.locator(".session-status").describe("Archived A empty status slot");
+      await expect(status.locator("*")).toHaveCount(0);
+      await expect(status).not.toHaveAttribute("data-state");
+      await expect(status).toHaveCSS("width", "12px");
+      await expect(row.locator(".session-button")).not.toHaveAttribute("title", /Waiting for user/);
+      await expect(row.locator(".session-name")).toHaveCSS(
+        "color",
+        await status.evaluate((element) => getComputedStyle(element).color),
+      );
+      await frame.locator("h1").describe("Neutral Sessions heading").hover();
       await testInfo.attach("Archive 後（アーカイブ済み行）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("archived.png") }),
         contentType: "image/png",
@@ -709,6 +720,11 @@ test(
       const row = rowIn(frame, aId);
       await expect(row).not.toHaveClass(/archived/);
       await expect(row.locator(`[data-archive="${aId}"]`)).toBeVisible();
+      const status = row.locator(".session-status").describe("Restored A empty status slot");
+      await expect(status.locator("*")).toHaveCount(0);
+      await expect(status).not.toHaveAttribute("data-state");
+      await expect(status).toHaveCSS("width", "12px");
+      await expect(status).toHaveCSS("height", "12px");
       expect(aIsListed()).toBe(true);
       expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
       expect(existsSync(`/proc/${initialA.pid}`)).toBe(false);
@@ -782,6 +798,110 @@ test(
       );
       expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
       expect(host.tmux(["list-sessions", "-F", "#{session_name}"])).toContain("ordinary-fixture");
+    });
+  },
+);
+
+test(
+  "Shows execution phase changes for live unarchived sessions",
+  {
+    annotation: [
+      { type: "spec", description: "E2E-14" },
+      { type: "spec-section", description: "SPEC.md: execution phase display" },
+    ],
+  },
+  async ({ host }, testInfo) => {
+    const statePath = join(host.directory, "agent/session-state.json");
+    const phases = [
+      { key: "A", state: "running", label: "Running" },
+      { key: "Deleted", state: "waiting-approval", label: "Waiting for approval" },
+      { key: "External", state: "waiting-user", label: "Waiting for user" },
+    ] as const;
+    await test.step("Open three existing conversations in live panes", async () => {
+      for (const { key } of phases) {
+        await host.selectSession(key);
+        await host.expectNativeDisplay(key);
+      }
+      const frame = await host.sessionFrame();
+      await frame
+        .locator("#app header [data-mode-toggle]")
+        .describe("Shared Unarchived toggle")
+        .click({ steps: 15 });
+    });
+
+    async function expectPhase(key: string, { state, label }: (typeof phases)[number]) {
+      expect(host.sessionRuntime(key)).toBeDefined();
+      const frame = await host.sessionFrame();
+      const row = frame
+        .locator(".session-row")
+        .filter({ has: frame.locator(`[data-session="${host.sessions[key].id}"]`) })
+        .describe(`Live ${key} session row`);
+      const status = row.locator(".session-status").describe(`${key} ${state} status slot`);
+      await expect(row).toBeVisible();
+      await expect(row).not.toHaveClass(/archived/);
+      await expect(status).toHaveAttribute("data-state", state);
+      await expect(status).toHaveCSS("width", "12px");
+      await expect(status).toHaveCSS("height", "12px");
+      await expect(row.locator(".session-button")).toHaveAttribute("title", new RegExp(label));
+      if (state === "waiting-user") {
+        await expect(status.locator("*")).toHaveCount(0);
+        return;
+      }
+      const icon = status.locator("svg").describe(`${key} ${state} icon`);
+      await expect(icon).toBeVisible();
+      await expect(icon).toHaveAttribute("fill", "none");
+      await expect(icon).toHaveAttribute("stroke", "currentColor");
+      if (state === "running") {
+        await expect(icon.locator("path")).toHaveAttribute("d", "M21 12a9 9 0 1 1-6.219-8.56");
+        await expect(icon).toHaveCSS("animation-name", "session-spin");
+        await host.page.emulateMedia({ reducedMotion: "reduce" });
+        await expect(icon).toHaveCSS("animation-name", "none");
+        await host.page.emulateMedia({ reducedMotion: "no-preference" });
+        await expect(icon).toHaveCSS("animation-name", "session-spin");
+      } else {
+        await expect(icon.locator("path")).toHaveCount(2);
+        await expect(icon.locator("path").first()).toHaveAttribute(
+          "d",
+          "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9",
+        );
+      }
+    }
+
+    for (const phase of phases) {
+      await test.step(`Show ${phase.state} for live A (SPEC execution phase display)`, async () => {
+        const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
+        store["active-workspaces"][host.sessions.A.cwd]["active-sessions"]![
+          host.sessions.A.id
+        ].state = phase.state;
+        writeFileSync(statePath, JSON.stringify(store));
+        await expectPhase("A", phase);
+      });
+    }
+
+    await test.step("Show all three phases in the session list without a conversation display", async () => {
+      await host.closePiDisplay();
+      const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
+      for (const phase of phases) {
+        const { cwd, id } = host.sessions[phase.key];
+        store["active-workspaces"][cwd]["active-sessions"]![id].state = phase.state;
+      }
+      writeFileSync(statePath, JSON.stringify(store));
+      const frame = await host.sessionFrame();
+      await expect(
+        frame.locator("#app header [data-mode-toggle]").describe("Shared Unarchived mode"),
+      ).toHaveAttribute("data-mode", "unarchived");
+      for (const phase of phases) await expectPhase(phase.key, phase);
+      await expect(
+        frame.locator(".session-status[data-state]").describe("Three live execution phases"),
+      ).toHaveCount(3);
+      await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
+      await frame.locator("h1").describe("Neutral Sessions heading").hover();
+      await testInfo.attach("running / waiting-approval / waiting-user", {
+        body: await host.page.screenshot({
+          path: testInfo.outputPath("session-list-phases.png"),
+        }),
+        contentType: "image/png",
+      });
     });
   },
 );

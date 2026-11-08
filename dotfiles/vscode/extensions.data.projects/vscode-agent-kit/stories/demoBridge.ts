@@ -82,7 +82,7 @@ const SAMPLE_METADATA = new Map<string, DemoEntry>([
   ["2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61", { archived: true }],
   ["3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72", { archived: false, state: "waiting-user" }],
   ["4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83", UNARCHIVED],
-  ["5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94", UNARCHIVED],
+  ["5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94", { archived: false, state: "waiting-approval" }],
 ]);
 
 function cloneStore(sessions: SessionSummary[]): SessionSummary[] {

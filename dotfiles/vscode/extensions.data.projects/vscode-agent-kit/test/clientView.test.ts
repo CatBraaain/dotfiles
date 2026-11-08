@@ -328,18 +328,21 @@ describe("sessionListView", () => {
     expect(byClass(elements, "session-timestamp").map(text)).toEqual([""]);
   });
 
-  it("shows archive state in decorative dots without changing row names", () => {
+  it("keeps phase-absent status slots empty regardless of archive without changing row names", () => {
     const elements = elementsIn(viewFor("all"));
-    const dots = byClass(elements, "session-status");
+    const slots = byClass(elements, "session-status");
 
-    expect(dots.map((dot) => dot.attrs?.["data-archived"])).toEqual([
+    expect(slots.map((slot) => slot.attrs?.["data-archived"])).toEqual([
       "false",
       "true",
       "false",
       "false",
     ]);
-    for (const dot of dots) expect(dot.attrs?.["data-locked"]).toBeUndefined();
-    for (const dot of dots) expect(dot.attrs?.["aria-hidden"]).toBe("true");
+    for (const slot of slots) {
+      expect(slot.attrs?.["data-locked"]).toBeUndefined();
+      expect(slot.attrs?.["aria-hidden"]).toBe("true");
+      expect(slot.children).toEqual([]);
+    }
     expect(byClass(elements, "session-button").map(text)).toEqual([
       "Atlas current",
       "Atlas archived",
@@ -347,6 +350,62 @@ describe("sessionListView", () => {
       "Beta plain",
     ]);
   });
+
+  it.each([
+    {
+      state: "running",
+      label: "Running",
+      paths: ["M21 12a9 9 0 1 1-6.219-8.56"],
+    },
+    {
+      state: "waiting-approval",
+      label: "Waiting for approval",
+      paths: ["M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9", "M10 21a2 2 0 0 0 4 0"],
+    },
+    { state: "waiting-user", label: "Waiting for user", paths: [] },
+  ] as const)(
+    "maps $state to its icon and tooltip",
+    ({ state, label, paths }) => {
+      const elements = elementsIn(
+        viewFor("all", [
+          { ...groups[0], sessions: [{ ...atlasUnarchived, state }] },
+        ]),
+      );
+      const slot = byClass(elements, "session-status")[0];
+      const statusElements = collectElements(slot);
+      const statusPaths = statusElements.filter((element) => element.tag === "path");
+
+      expect(slot.attrs?.["data-state"]).toBe(state);
+      expect(slot.attrs?.["aria-hidden"]).toBe("true");
+      expect(statusPaths.map((path) => path.attrs?.d)).toEqual(paths);
+      expect(slot.children).toHaveLength(paths.length === 0 ? 0 : 1);
+      expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+        `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\n${label}`,
+      );
+      expect(byClass(elements, "archive")[0].attrs?.disabled).toBeUndefined();
+      for (const icon of statusElements.filter((element) => element.tag === "svg")) {
+        expect(icon.attrs).toMatchObject({
+          width: "12",
+          height: "12",
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: "2",
+        });
+      }
+      if (state === "waiting-user") expect(slot.children).toEqual([]);
+    },
+  );
+
+  it.each([undefined, "running", "waiting-approval", "waiting-user"] as const)(
+    "keeps archived status slots empty with phase %s",
+    (state) => {
+      const elements = elementsIn(
+        viewFor("all", [{ ...groups[0], sessions: [{ ...atlasArchived, state }] }]),
+      );
+      expect(byClass(elements, "session-status")[0].children).toEqual([]);
+      expect(byClass(elements, "unarchive")).toHaveLength(1);
+    },
+  );
 
   it("uses 12px currentColor stroke icons for the row controls and chevrons", () => {
     const icons = elementsIn(viewFor("all")).filter((element) => element.tag === "svg");

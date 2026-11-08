@@ -9,7 +9,8 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 用途 | 値 |
 | --- | --- |
 | 背景・本文 | `sideBar-background`・`foreground` |
-| 補助文字（日時・行の操作） | `descriptionForeground` |
+| 補助文字（日時・行の操作・アーカイブ済みの表示名） | `descriptionForeground` |
+| 状態アイコン | spinner は `testing-iconPassed`、ベルは `editorWarning-foreground`（いずれも代替 `descriptionForeground`） |
 | hover 面 | `list-hoverBackground` |
 | 選択面・選択文字（表示中セッションの行） | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
 | 境界（モード切替の枠・フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
@@ -37,6 +38,8 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 
 ## 部品
 
+セッション一覧の主操作は会話の選択・再開。情報の優先順は表示名、実行フェーズ、更新日時。表示名・日時・フェーズのヒント・選択表示・右端の Archive / Unarchive を保持する。左端の状態アイコンは既存の線画 SVG を使い、状態との対応は SPEC「実行フェーズの表示」に従う。追加のバッジや説明行は設けない。
+
 | 部品 | 定義 |
 | --- | --- |
 | chevron | 24px 四方の領域に12px の SVG、本文色。展開で下向き、折りたたみで右向きに示す。hover は hover 面。開閉の操作と状態は SPEC「Webview の表示」に従う |
@@ -45,7 +48,8 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 | フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。16px の folder-plus SVG と 13px・500 ラベル、本文色、hover は hover 面。フォームを開いている間は `aria-expanded` を示し hover 面を敷く。構造の参照元は agent-open-ui の `SidebarFooter` |
 | ワークスペース フォーム | New workspace の下に開く。要素間8px。入力は高さ32px・角丸9.6px・入力トークン・13px 文字、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。`Add` は高さ32px・境界付きの本文色操作、`Cancel` は境界なしの補助文字色で hover は本文色。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
 | モード切替（ヘッダー） | 全ワークスペース共通。枠は境界トークン・角丸9.6px・余白1px・間隔2px。ボタンは高さ20px・余白左右6px・10px 文字。押下中のボタンは選択面・選択文字 |
-| 状態の印 | 直径10px の円。実行フェーズのあるセッションはフェーズの色の塗り（`running` は `testing-iconPassed`、`waiting-approval` は `editorWarning-foreground`、`waiting-user` は `charts-blue`、代替 `testing-iconQueued`）、フェーズ情報のない未アーカイブは `descriptionForeground` の塗り、アーカイブ済みは補助文字色の枠の中抜き |
+| 状態アイコンのスロット | 全行で12px 四方の固定領域。アイコンを中央に置き、表示名との間隔は8px。空の場合も幅を保持する |
+| spinner・ベル | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。色は状態アイコントークンに従う |
 | 表示名 | 13px・20px 行・省略表示 |
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せで5文字分。行内では右側に `36px + 5ch + 8px` を予約する |
 | 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す |
@@ -54,6 +58,10 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 確認の主操作は対象への `Archive` または `Unregister`。情報の優先順は対象、操作の影響、確定・キャンセル。既存の Unregister 部品を共用し、対象識別と警告以外の補助装飾は加えない。確認内容とキーボード操作は SPEC「アーカイブ・未アーカイブアクション」「ワークスペース登録解除」に従う。
 
 セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。既存の見出し・モード切替・Refresh・行操作・New workspace・フォーム・確認ダイアログを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
+
+## Motion & Interaction
+
+spinner は中心を軸に1秒・linear・無限反復で1回転する。回転は `transform` のみで行い、行やスロットの寸法を変えない。`prefers-reduced-motion` での表示は SPEC「実行フェーズの表示」に従う。
 
 ## 状態
 

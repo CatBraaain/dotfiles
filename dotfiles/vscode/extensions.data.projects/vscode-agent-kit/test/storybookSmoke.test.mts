@@ -840,7 +840,116 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("renders 32px full-width rows with mono dates, status dots, and 24px ghost overlays", async () => {
+  it("shows the approval bell and keeps icon-free rows aligned at sidebar widths", async () => {
+    for (const width of [320, 720]) {
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 900 });
+      await page.locator("[data-mode]").click();
+      const statuses = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".session-row")).map((row) => {
+          const button = row.querySelector(".session-button")!;
+          const slot = row.querySelector(".session-status")!;
+          const icon = slot.querySelector("svg");
+          const name = row.querySelector(".session-name")!;
+          const timestamp = row.querySelector(".session-timestamp")!;
+          return {
+            phase: slot.getAttribute("data-state"),
+            archived: slot.getAttribute("data-archived"),
+            childCount: slot.childElementCount,
+            slotWidth: slot.getBoundingClientRect().width,
+            slotHeight: slot.getBoundingClientRect().height,
+            nameLeft: name.getBoundingClientRect().left,
+            color: getComputedStyle(slot).color,
+            nameColor: getComputedStyle(name).color,
+            timestampColor: getComputedStyle(timestamp).color,
+            paths: Array.from(slot.querySelectorAll("path")).map((path) => path.getAttribute("d")),
+            iconWidth: icon?.getBoundingClientRect().width,
+            iconHeight: icon?.getBoundingClientRect().height,
+            fill: icon === null ? undefined : getComputedStyle(icon).fill,
+            title: button.getAttribute("title"),
+          };
+        }),
+      );
+      expect(statuses.map((status) => [status.slotWidth, status.slotHeight])).toEqual(
+        statuses.map(() => [12, 12]),
+      );
+      expect(new Set(statuses.map((status) => status.nameLeft)).size).toBe(1);
+      const approval = statuses.find((status) => status.phase === "waiting-approval")!;
+      expect(approval.paths).toEqual([
+        "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9",
+        "M10 21a2 2 0 0 0 4 0",
+      ]);
+      expect(approval.color).toBe("rgb(204, 167, 0)");
+      expect([approval.iconWidth, approval.iconHeight, approval.fill]).toEqual([12, 12, "none"]);
+      expect(approval.title).toContain("Waiting for approval");
+      const waitingUser = statuses.find((status) => status.phase === "waiting-user")!;
+      expect(waitingUser.childCount).toBe(0);
+      expect(waitingUser.title).toContain("Waiting for user");
+      const archived = statuses.find((status) => status.archived === "true")!;
+      expect(archived.childCount).toBe(0);
+      expect(archived.nameColor).toBe("rgb(157, 157, 157)");
+      expect(archived.timestampColor).toBe(archived.nameColor);
+      const phaseAbsent = statuses.find(
+        (status) => status.phase === null && status.archived === "false",
+      )!;
+      expect(phaseAbsent.childCount).toBe(0);
+      await page.locator(`[data-unarchive="${atlasArchivedId}"]`).click();
+      await page.locator(`[data-archive="${atlasArchivedId}"]`).waitFor();
+      const restoredStatus = await page
+        .locator(`[data-session="${atlasArchivedId}"] .session-status`)
+        .evaluate((slot) => ({
+          archived: slot.getAttribute("data-archived"),
+          phase: slot.getAttribute("data-state"),
+          childCount: slot.childElementCount,
+          slotWidth: slot.getBoundingClientRect().width,
+        }));
+      expect(restoredStatus).toEqual({
+        archived: "false",
+        phase: null,
+        childCount: 0,
+        slotWidth: 12,
+      });
+      await page.close();
+    }
+  });
+
+  it("rotates the running spinner and keeps it stationary with reduced motion", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    const spinner = page.locator('.session-status[data-state="running"] svg');
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const moving = await spinner.evaluate((icon) => {
+      const style = getComputedStyle(icon);
+      return {
+        name: style.animationName,
+        duration: style.animationDuration,
+        timing: style.animationTimingFunction,
+        iterations: style.animationIterationCount,
+        color: style.color,
+        paths: Array.from(icon.querySelectorAll("path")).map((path) => path.getAttribute("d")),
+      };
+    });
+    expect(moving).toEqual({
+      name: "session-spin",
+      duration: "1s",
+      timing: "linear",
+      iterations: "infinite",
+      color: "rgb(115, 201, 145)",
+      paths: ["M21 12a9 9 0 1 1-6.219-8.56"],
+    });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const stationary = await spinner.evaluate((icon) => ({
+      animation: getComputedStyle(icon).animationName,
+      transform: getComputedStyle(icon).transform,
+      width: icon.getBoundingClientRect().width,
+      height: icon.getBoundingClientRect().height,
+    }));
+    expect(stationary).toEqual({ animation: "none", transform: "none", width: 12, height: 12 });
+    expect(
+      await page.locator(`[data-session="${atlasCurrentId}"]`).getAttribute("title"),
+    ).toContain("Running");
+    await page.close();
+  });
+
+  it("renders 32px full-width rows with mono dates, status slots, and 24px ghost overlays", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 640 });
     const boxes = await page.evaluate(() => {
       const rowElement = document.querySelector(".session-row")!;
@@ -881,8 +990,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       };
     });
     expect(boxes.rowHeight).toBe(32);
-    expect(boxes.dotWidth).toBe(10);
-    expect(boxes.dotHeight).toBe(10);
+    expect(boxes.dotWidth).toBe(12);
+    expect(boxes.dotHeight).toBe(12);
     expect(boxes.timestampFont).toContain("mono");
     expect(boxes.timestampSize).toBe("10px");
     expect(boxes.controls).toEqual([{ width: 24, height: 24, iconWidth: 12, iconHeight: 12 }]);

@@ -165,9 +165,16 @@ describe("E2E gallery reporter", () => {
 
   it("exports the current canonical SPEC cases in their declared order", () => {
     const { cases, excludedIds } = parseGalleryCases(specSource);
-    expect(cases).toHaveLength(5);
+    expect(cases).toHaveLength(6);
     expect(run.results.cases).toEqual(cases);
-    expect(cases.map((entry) => entry.id)).toEqual(["E2E-1", "E2E-2", "E2E-6", "E2E-10", "E2E-13"]);
+    expect(cases.map((entry) => entry.id)).toEqual([
+      "E2E-1",
+      "E2E-2",
+      "E2E-6",
+      "E2E-10",
+      "E2E-13",
+      "E2E-14",
+    ]);
     expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-11", "E2E-12"]);
     expect(run.script).not.toContain("specSource");
     expect(run.script).not.toContain(specSource.split("\n")[0]);
@@ -323,7 +330,7 @@ describe("E2E gallery reporter", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(pathToFileURL(join(run.directory, "e2e-gallery.html")).href);
-      expect(await page.locator("section.case[id]").count()).toBe(5);
+      expect(await page.locator("section.case[id]").count()).toBe(6);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(run.results.cases.map((entry) => entry.id));
@@ -391,6 +398,7 @@ describe("E2E gallery reporter", () => {
 
     it("lays out comparison images in canonical case order", async () => {
       const comparisonCases = run.results.cases;
+      const singleImageCases = new Set(["E2E-10", "E2E-14"]);
       const tests: GalleryTest[] = comparisonCases.map((specCase) => ({
         specId: specCase.id,
         title: "Hidden test name",
@@ -405,18 +413,21 @@ describe("E2E gallery reporter", () => {
             status: "passed",
             errors: [],
             annotations: [],
-            steps: Array.from({ length: 2 }, (_, imageIndex) => ({
-              title: `Hidden step ${imageIndex + 1}`,
-              status: "Completed",
-              images: [
-                {
-                  name: `Comparison ${imageIndex + 1}`,
-                  url: `assets/${specCase.id}/image-${imageIndex + 1}.png`,
-                  width: 1,
-                  height: 1,
-                },
-              ],
-            })),
+            steps: Array.from(
+              { length: singleImageCases.has(specCase.id) ? 1 : 2 },
+              (_, imageIndex) => ({
+                title: `Hidden step ${imageIndex + 1}`,
+                status: "Completed",
+                images: [
+                  {
+                    name: `Comparison ${imageIndex + 1}`,
+                    url: `assets/${specCase.id}/image-${imageIndex + 1}.png`,
+                    width: 1,
+                    height: 1,
+                  },
+                ],
+              }),
+            ),
           },
         ],
       }));
@@ -439,20 +450,20 @@ describe("E2E gallery reporter", () => {
           return [style.whiteSpace, style.overflow, style.textOverflow];
         }),
       ).toEqual(["nowrap", "hidden", "ellipsis"]);
-      expect(await page.locator(".table").count()).toBe(5);
+      expect(await page.locator(".table").count()).toBe(6);
       expect(await page.locator(".cell img").count()).toBe(10);
       for (const specCase of comparisonCases) {
+        const imageCount = singleImageCases.has(specCase.id) ? 1 : 2;
         const table = page.locator(`#${specCase.id} .table`);
-        expect(await table.locator(".cell").count()).toBe(2);
-        expect(await table.locator(".label").allTextContents()).toEqual([
-          "Comparison 1",
-          "Comparison 2",
-        ]);
+        expect(await table.locator(".cell").count()).toBe(imageCount);
+        expect(await table.locator(".label").allTextContents()).toEqual(
+          Array.from({ length: imageCount }, (_, index) => `Comparison ${index + 1}`),
+        );
         expect(
           await table.evaluate(
             (node) => getComputedStyle(node).gridTemplateColumns.split(" ").length,
           ),
-        ).toBe(2);
+        ).toBe(imageCount);
       }
       expect(await page.locator("#E2E-9").count()).toBe(0);
       expect(await page.locator("body").innerText()).not.toContain("Hidden");

@@ -197,6 +197,7 @@ function sessionDescriptor(
               ...(session.state === undefined ? {} : { "data-state": session.state }),
               "aria-hidden": "true",
             },
+            children: sessionStatusIcons(session),
           },
           { tag: "span", attrs: { class: "session-name" }, children: [session.displayName] },
         ],
@@ -211,6 +212,22 @@ function sessionDescriptor(
         : archiveDescriptor(session.sessionId),
     ],
   };
+}
+
+function sessionStatusIcons(session: ClientSession): ElementDescriptor[] {
+  if (session.isArchived) return [];
+  if (session.state === "running") {
+    return [strokeIcon([{ tag: "path", attrs: { d: "M21 12a9 9 0 1 1-6.219-8.56" } }])];
+  }
+  if (session.state === "waiting-approval") {
+    return [
+      strokeIcon([
+        { tag: "path", attrs: { d: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" } },
+        { tag: "path", attrs: { d: "M10 21a2 2 0 0 0 4 0" } },
+      ]),
+    ];
+  }
+  return [];
 }
 
 /** Human-readable phase line for the session row tooltip. */

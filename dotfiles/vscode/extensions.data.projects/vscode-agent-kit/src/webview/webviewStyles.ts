@@ -52,11 +52,12 @@ export const webviewStyles = `
     .session-button:hover { background: var(--vscode-list-hoverBackground); }
     .session-row.selected .session-button, .session-row.selected .session-button:hover { background: var(--vscode-list-inactiveSelectionBackground); }
     .session-row.selected:focus-within .session-button { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
-    .session-status { box-sizing: border-box; flex: none; width: 10px; height: 10px; border: 1px solid transparent; border-radius: 50%; background: var(--vscode-descriptionForeground); }
-    .session-status[data-state="running"] { background: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
-    .session-status[data-state="waiting-approval"] { background: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
-    .session-status[data-state="waiting-user"] { background: var(--vscode-charts-blue, var(--vscode-testing-iconQueued, var(--vscode-descriptionForeground))); }
-    .session-status[data-archived="true"] { border-color: var(--vscode-descriptionForeground); background: transparent; }
+    .session-status { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--vscode-descriptionForeground); }
+    .session-status[data-state="running"] { color: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
+    .session-status[data-state="waiting-approval"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
+    .session-status[data-state="running"] svg { animation: session-spin 1s linear infinite; }
+    @keyframes session-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] svg { animation: none; } }
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
     .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 36px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
     .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
