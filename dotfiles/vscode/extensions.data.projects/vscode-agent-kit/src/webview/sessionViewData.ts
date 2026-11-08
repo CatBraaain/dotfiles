@@ -9,6 +9,7 @@ export interface SessionViewInput {
   registeredCwds: readonly string[];
   archivedIds: ReadonlySet<string>;
   phases: ReadonlyMap<string, SessionPhase>;
+  unreadIds?: ReadonlySet<string>;
 }
 
 /** Convert scanned sessions into display-only data: only groups of registered
@@ -30,6 +31,7 @@ export function sessionViewGroups(
         updatedAtMs: session.updatedAtMs,
         isArchived: view.archivedIds.has(session.sessionId),
         state: view.phases.get(session.sessionId),
+        hasUnread: view.unreadIds?.has(session.sessionId) ?? false,
       })),
     }));
 }

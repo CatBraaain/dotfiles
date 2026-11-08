@@ -51,7 +51,7 @@ export const webviewStyles = `
     .session-row.selected:focus-within .session-button { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
     .session-status { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--vscode-descriptionForeground); }
     .session-status[data-state="running"] { color: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
-    .session-status[data-state="waiting-approval"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
+    .session-status[data-state="waiting-approval"], .session-status[data-unread="true"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
     .session-status[data-state="running"] svg { animation: session-spin 1s linear infinite; }
     @keyframes session-spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] svg { animation: none; } }

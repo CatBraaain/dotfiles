@@ -10,7 +10,7 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | --- | --- |
 | 背景・本文 | `sideBar-background`・`foreground` |
 | 補助文字（日時・行の操作・アーカイブ済みの表示名） | `descriptionForeground` |
-| 状態アイコン | spinner は `testing-iconPassed`、ベルは `editorWarning-foreground`（いずれも代替 `descriptionForeground`） |
+| 状態アイコン | spinner は `testing-iconPassed`、ベル・一時停止マークは `editorWarning-foreground`（いずれも代替 `descriptionForeground`） |
 | hover 面 | `list-hoverBackground` |
 | 選択面・選択文字（表示中セッションの行） | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
 | 境界（フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
@@ -51,7 +51,7 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 | ワークスペース フォーム | New workspace の下に開く。要素間8px。入力は高さ32px・角丸9.6px・入力トークン・13px 文字、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。`Add` は高さ32px・境界付きの本文色操作、`Cancel` は境界なしの補助文字色で hover は本文色。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
 | グループ見出しのモード切替 | 見出し名の右、Unregister の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。未アーカイブ表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
 | 状態アイコンのスロット | 全行で12px 四方の固定領域。アイコンを中央に置き、表示名との間隔は8px。空の場合も幅を保持する |
-| spinner・ベル | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。色は状態アイコントークンに従う |
+| spinner・ベル・一時停止マーク | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。一時停止マークは2本の縦線（`M9 4v16`・`M15 4v16`）。色は状態アイコントークンに従う |
 | 表示名 | 13px・20px 行・省略表示 |
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せで5文字分。行内では右側に `36px + 5ch + 8px` を予約する |
 | 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す |

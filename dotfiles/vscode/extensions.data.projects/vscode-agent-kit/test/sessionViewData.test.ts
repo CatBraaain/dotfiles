@@ -109,6 +109,29 @@ describe("sessionViewGroups", () => {
     ]);
   });
 
+  it("carries unread independently from the execution phase", () => {
+    const groups = sessionViewGroups(
+      sessions,
+      view({
+        phases: new Map([
+          ["active", "waiting-user"],
+          ["older", "waiting-user"],
+        ]),
+        unreadIds: new Set(["active"]),
+      }),
+    );
+
+    expect(
+      groups
+        .flatMap((group) => group.sessions)
+        .map((item) => [item.sessionId, item.state, item.hasUnread]),
+    ).toEqual([
+      ["active", "waiting-user", true],
+      ["older", "waiting-user", false],
+      ["newest", undefined, false],
+    ]);
+  });
+
   it("carries 1000 synthetic sessions as list data", () => {
     const synthetic = Array.from({ length: 1000 }, (_, index) =>
       session(`s-${index}`, `/workspace/ws-${index % 10}`, index),

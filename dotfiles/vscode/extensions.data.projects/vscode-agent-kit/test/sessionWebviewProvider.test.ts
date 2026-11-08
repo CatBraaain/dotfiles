@@ -17,6 +17,7 @@ import { editorTerminals } from "../src/terminals";
 import { encodeCwdDirName } from "../src/paths";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
+import type { SessionPhase, WebviewState } from "../src/webview/protocol";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
 const vscodeMocks = vi.hoisted(() => ({
   terminals: [],
@@ -159,6 +160,70 @@ async function archiveFixture() {
   provider.resolveWebviewView(webview.view as never);
   await provider.refresh();
   return { ...runtimes, registry, terminal, provider, statePath, webview, filePath };
+}
+
+async function unreadFixture() {
+  const fixture = await archiveFixture();
+  for (const sessionId of [activeSessionId, inactiveSessionId]) {
+    fixture.live.set(sessionId, { sessionId, cwd: root, target: `pi-${sessionId}` });
+  }
+
+  async function setPhase(
+    phase: SessionPhase | undefined,
+    sessionId = activeSessionId,
+  ): Promise<void> {
+    expect(
+      mutateSessionStateStore(fixture.statePath, (store) => {
+        const entry = store["active-workspaces"][root]?.["active-sessions"]?.[sessionId];
+        if (entry === undefined) throw new Error("session entry missing");
+        if (phase === undefined) delete entry.state;
+        else entry.state = phase;
+        return true;
+      }).ok,
+    ).toBe(true);
+    await fixture.provider.refresh();
+  }
+
+  function sentState(webview = fixture.webview): WebviewState {
+    const message = webview.postMessage.mock.calls
+      .map((call) => call[0])
+      .reverse()
+      .find((message) => message.type === "sessions") as
+      | { type: string; state?: WebviewState }
+      | undefined;
+    if (message?.state === undefined) throw new Error("no session state was sent");
+    return message.state;
+  }
+
+  function row(sessionId = activeSessionId) {
+    const session = sentState()
+      .groups.flatMap((group) => group.sessions)
+      .find((item) => item.sessionId === sessionId);
+    if (session === undefined) throw new Error(`session row missing: ${sessionId}`);
+    return session;
+  }
+
+  function holdRuntimeQuery() {
+    let release: ((ids: Set<string>) => void) | undefined;
+    let signalStarted: (() => void) | undefined;
+    const response = new Promise<Set<string>>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    fixture.mocks.aliveSessionIds.mockImplementationOnce(() => {
+      signalStarted!();
+      return response;
+    });
+    function finish() {
+      release!(new Set(fixture.live.keys()));
+    }
+    return { started, finish };
+  }
+
+  await setPhase("waiting-user");
+  return { ...fixture, setPhase, sentState, row, holdRuntimeQuery };
 }
 
 describe("SessionWebviewProvider", () => {
@@ -400,6 +465,284 @@ describe("SessionWebviewProvider", () => {
       webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].state,
     ).toBeUndefined();
     expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  describe("unread completion", () => {
+    it("treats an initially idle session as read", async () => {
+      const { row } = await unreadFixture();
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+    });
+
+    it("marks a background run complete once and preserves unread across refreshes", async () => {
+      const { provider, setPhase, row, statePath, filePath } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      const savedState = await readFile(statePath, "utf8");
+      const savedSession = await readFile(filePath, "utf8");
+
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      await provider.refresh();
+      expect(row().hasUnread).toBe(true);
+      expect(await readFile(statePath, "utf8")).toBe(savedState);
+      expect(await readFile(filePath, "utf8")).toBe(savedSession);
+    });
+
+    it("does not infer a completed run from approval alone", async () => {
+      const { setPhase, row } = await unreadFixture();
+      await setPhase("waiting-approval");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(false);
+    });
+
+    it("remembers the observed run through its approval phase", async () => {
+      const { setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-approval");
+      expect(row()).toMatchObject({ state: "waiting-approval", hasUnread: false });
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+    });
+
+    it("clears the previous completion when a new run starts", async () => {
+      const { setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+      await setPhase("running");
+      expect(row()).toMatchObject({ state: "running", hasUnread: false });
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+    });
+
+    it("marks the session read when opening it and keeps it read after switching away", async () => {
+      const { webview, setPhase, row, sentState } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(sentState().displayedSessionId).toBe(activeSessionId);
+      expect(row().hasUnread).toBe(false);
+
+      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      expect(sentState().displayedSessionId).toBe(inactiveSessionId);
+      expect(row().hasUnread).toBe(false);
+    });
+
+    it("treats completion in the displayed terminal as read even when the list is hidden", async () => {
+      const { provider, webview, registry, terminal, setPhase, row } = await unreadFixture();
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      webview.setVisible(false);
+      await setPhase("running");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(false);
+
+      registry.onTerminalClosed(terminal as never);
+      await provider.refresh();
+      expect(row().hasUnread).toBe(false);
+    });
+
+    it("does not acknowledge a completion when opening the session fails", async () => {
+      const { mocks, webview, setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      mocks.ensure.mockRejectedValueOnce(new Error("cannot attach"));
+
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("cannot attach"),
+      );
+      expect(row().hasUnread).toBe(true);
+    });
+
+    it("keeps completion tracking and unread when the webview is recreated", async () => {
+      const { provider, setPhase, sentState } = await unreadFixture();
+      await setPhase("running");
+      const replacement = createView();
+      provider.resolveWebviewView(replacement.view as never);
+      await replacement.receive({ type: "ready" });
+      await setPhase("waiting-user");
+      expect(
+        sentState(replacement).groups[0].sessions.find(
+          (session) => session.sessionId === activeSessionId,
+        )?.hasUnread,
+      ).toBe(true);
+
+      const nextView = createView();
+      provider.resolveWebviewView(nextView.view as never);
+      await nextView.receive({ type: "ready" });
+      expect(
+        sentState(nextView).groups[0].sessions.find(
+          (session) => session.sessionId === activeSessionId,
+        )?.hasUnread,
+      ).toBe(true);
+    });
+
+    it("starts read after recreating the extension provider over the same saved state", async () => {
+      const { provider, statePath, store, setPhase, row, sentState } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+      provider.dispose();
+
+      const { provider: replacement } = createProvider({
+        statePath,
+        registry: new TerminalRegistry(store, editorTerminals(store)),
+      });
+      const replacementView = createView();
+      replacement.resolveWebviewView(replacementView.view as never);
+      await replacementView.receive({ type: "ready" });
+      expect(
+        sentState(replacementView).groups[0].sessions.find(
+          (session) => session.sessionId === activeSessionId,
+        )?.hasUnread,
+      ).toBe(false);
+    });
+
+    it("keeps a completion read when its snapshot was captured before switching displays", async () => {
+      const { provider, webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await setPhase("running");
+      const held = holdRuntimeQuery();
+      const completion = setPhase("waiting-user");
+      await held.started;
+
+      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      held.finish();
+      await completion;
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+      await provider.refresh();
+      expect(row().hasUnread).toBe(false);
+    });
+
+    it("does not let a delayed read completion clear a newer background completion", async () => {
+      const { webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await setPhase("running");
+      const held = holdRuntimeQuery();
+      const oldCompletion = setPhase("waiting-user");
+      await held.started;
+
+      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      await setPhase("running");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+      held.finish();
+      await oldCompletion;
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+    });
+
+    it("does not let a delayed background completion undo a successful open acknowledgement", async () => {
+      const { webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
+      await setPhase("running");
+      const held = holdRuntimeQuery();
+      const completion = setPhase("waiting-user");
+      await held.started;
+
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      held.finish();
+      await completion;
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+    });
+
+    it("preserves unread through a transient tmux query failure until recovery", async () => {
+      const { provider, mocks, setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+
+      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+      await provider.refresh();
+      expect(row()).toMatchObject({ state: undefined, hasUnread: true });
+      await provider.refresh();
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+    });
+
+    it("preserves an observed run when its completion cannot yet be checked against tmux", async () => {
+      const { provider, mocks, setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+      await setPhase("waiting-user");
+      expect(row().state).toBeUndefined();
+
+      await provider.refresh();
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+    });
+
+    it.each(["missing-phase", "dead-pane"] as const)(
+      "forgets a run and unread after %s rather than notifying again",
+      async (reason) => {
+        const { provider, live, setPhase, row } = await unreadFixture();
+        await setPhase("running");
+        await setPhase("waiting-user");
+        expect(row().hasUnread).toBe(true);
+
+        if (reason === "missing-phase") await setPhase(undefined);
+        if (reason === "dead-pane") {
+          live.delete(activeSessionId);
+          await provider.refresh();
+        }
+        expect(row()).toMatchObject({ state: undefined, hasUnread: false });
+
+        live.set(activeSessionId, {
+          sessionId: activeSessionId,
+          cwd: root,
+          target: `pi-${activeSessionId}`,
+        });
+        await setPhase("waiting-user");
+        expect(row().hasUnread).toBe(false);
+      },
+    );
+
+    it("forgets unread and observed runs when archiving a session", async () => {
+      const { webview, setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(true);
+
+      await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+      expect(row()).toMatchObject({ isArchived: true, hasUnread: false });
+      await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+      await setPhase("waiting-user");
+      expect(row().hasUnread).toBe(false);
+    });
+
+    it("drops unread when a saved session disappears from the list", async () => {
+      const { provider, filePath, setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      await setPhase("waiting-user");
+      const savedSession = await readFile(filePath, "utf8");
+      await rm(filePath);
+      await provider.refresh();
+
+      await writeFile(filePath, savedSession);
+      await provider.refresh();
+      expect(row().hasUnread).toBe(false);
+    });
+
+    it("ignores a stale refresh that finishes after a newer completion snapshot", async () => {
+      const { provider, mocks, setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      let finishStale: ((ids: Set<string>) => void) | undefined;
+      mocks.aliveSessionIds.mockImplementationOnce(
+        () =>
+          new Promise<Set<string>>((resolve) => {
+            finishStale = resolve;
+          }),
+      );
+      const stale = provider.refresh();
+      await vi.waitFor(() => {
+        expect(finishStale).toBeDefined();
+      });
+      await setPhase("waiting-user");
+      finishStale!(new Set([activeSessionId]));
+      await stale;
+
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      await provider.refresh();
+      expect(row().hasUnread).toBe(true);
+    });
   });
 
   it("reflects disk changes on refresh without automatic updates", async () => {

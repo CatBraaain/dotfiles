@@ -18,6 +18,7 @@ export interface WebviewSession {
   isArchived: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
+  hasUnread?: boolean;
 }
 
 export interface WebviewSessionGroup {

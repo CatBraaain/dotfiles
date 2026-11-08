@@ -23,6 +23,7 @@ export interface ClientSession {
   isArchived: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
+  hasUnread?: boolean;
 }
 
 export interface ClientSessionGroup {
@@ -210,7 +211,14 @@ function sessionDescriptor(
   ]
     .filter((className) => className !== "")
     .join(" ");
-  const title = [session.displayName, session.sessionId, phaseLabel(session.state)]
+  const title = [
+    session.displayName,
+    session.sessionId,
+    phaseLabel(session.state),
+    session.state === "waiting-user" && session.hasUnread && !session.isArchived
+      ? "Unread"
+      : undefined,
+  ]
     .filter((line) => line !== undefined)
     .join("\n");
   return {
@@ -231,6 +239,7 @@ function sessionDescriptor(
             attrs: {
               class: "session-status",
               "data-archived": String(session.isArchived),
+              "data-unread": String(session.hasUnread === true && !session.isArchived),
               ...(session.state === undefined ? {} : { "data-state": session.state }),
               "aria-hidden": "true",
             },
@@ -257,6 +266,14 @@ function sessionStatusIcons(session: ClientSession): ElementDescriptor[] {
     return [strokeIcon([{ tag: "path", attrs: { d: "M21 12a9 9 0 1 1-6.219-8.56" } }])];
   }
   if (session.state === "waiting-approval") {
+    return [
+      strokeIcon([
+        { tag: "path", attrs: { d: "M9 4v16" } },
+        { tag: "path", attrs: { d: "M15 4v16" } },
+      ]),
+    ];
+  }
+  if (session.state === "waiting-user" && session.hasUnread) {
     return [
       strokeIcon([
         { tag: "path", attrs: { d: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" } },

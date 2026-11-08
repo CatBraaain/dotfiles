@@ -780,7 +780,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("shows the approval bell and keeps icon-free rows aligned at sidebar widths", async () => {
+  it("shows the approval pause and keeps icon-free rows aligned at sidebar widths", async () => {
     for (const width of [320, 720]) {
       const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 900 });
       await page.locator(projectModeSelector).click();
@@ -814,10 +814,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       );
       expect(new Set(statuses.map((status) => status.nameLeft)).size).toBe(1);
       const approval = statuses.find((status) => status.phase === "waiting-approval")!;
-      expect(approval.paths).toEqual([
-        "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9",
-        "M10 21a2 2 0 0 0 4 0",
-      ]);
+      expect(approval.paths).toEqual(["M9 4v16", "M15 4v16"]);
       expect(approval.color).toBe("rgb(204, 167, 0)");
       expect([approval.iconWidth, approval.iconHeight, approval.fill]).toEqual([12, 12, "none"]);
       expect(approval.title).toContain("Waiting for approval");

@@ -420,48 +420,72 @@ describe("sessionListView", () => {
   it.each([
     {
       state: "running",
+      hasUnread: false,
       label: "Running",
       paths: ["M21 12a9 9 0 1 1-6.219-8.56"],
     },
     {
       state: "waiting-approval",
+      hasUnread: false,
       label: "Waiting for approval",
+      paths: ["M9 4v16", "M15 4v16"],
+    },
+    { state: "waiting-user", hasUnread: false, label: "Waiting for user", paths: [] },
+    {
+      state: "waiting-user",
+      hasUnread: true,
+      label: "Waiting for user",
       paths: ["M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9", "M10 21a2 2 0 0 0 4 0"],
     },
-    { state: "waiting-user", label: "Waiting for user", paths: [] },
-  ] as const)("maps $state to its icon and tooltip", ({ state, label, paths }) => {
-    const elements = elementsIn(
-      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, state }] }]),
-    );
-    const slot = byClass(elements, "session-status")[0];
-    const statusElements = collectElements(slot);
-    const statusPaths = statusElements.filter((element) => element.tag === "path");
+  ] as const)(
+    "maps $state with unread=$hasUnread to its icon and tooltip",
+    ({ state, hasUnread, label, paths }) => {
+      const elements = elementsIn(
+        viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, state, hasUnread }] }]),
+      );
+      const slot = byClass(elements, "session-status")[0];
+      const statusElements = collectElements(slot);
+      const statusPaths = statusElements.filter((element) => element.tag === "path");
 
-    expect(slot.attrs?.["data-state"]).toBe(state);
-    expect(slot.attrs?.["aria-hidden"]).toBe("true");
-    expect(statusPaths.map((path) => path.attrs?.d)).toEqual(paths);
-    expect(slot.children).toHaveLength(paths.length === 0 ? 0 : 1);
-    expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
-      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\n${label}`,
+      expect(slot.attrs?.["data-state"]).toBe(state);
+      expect(slot.attrs?.["data-unread"]).toBe(String(hasUnread));
+      expect(slot.attrs?.["aria-hidden"]).toBe("true");
+      expect(statusPaths.map((path) => path.attrs?.d)).toEqual(paths);
+      expect(slot.children).toHaveLength(paths.length === 0 ? 0 : 1);
+      expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+        `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\n${label}${hasUnread ? "\nUnread" : ""}`,
+      );
+      expect(byClass(elements, "archive")[0].attrs?.disabled).toBeUndefined();
+      for (const icon of statusElements.filter((element) => element.tag === "svg")) {
+        expect(icon.attrs).toMatchObject({
+          width: "12",
+          height: "12",
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: "2",
+        });
+      }
+      if (paths.length === 0) expect(slot.children).toEqual([]);
+    },
+  );
+
+  it("hides unread icons and hints while the execution phase is unknown", () => {
+    const elements = elementsIn(
+      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, hasUnread: true }] }]),
     );
-    expect(byClass(elements, "archive")[0].attrs?.disabled).toBeUndefined();
-    for (const icon of statusElements.filter((element) => element.tag === "svg")) {
-      expect(icon.attrs).toMatchObject({
-        width: "12",
-        height: "12",
-        fill: "none",
-        stroke: "currentColor",
-        strokeWidth: "2",
-      });
-    }
-    if (state === "waiting-user") expect(slot.children).toEqual([]);
+    expect(byClass(elements, "session-status")[0].children).toEqual([]);
+    expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}`,
+    );
   });
 
   it.each([undefined, "running", "waiting-approval", "waiting-user"] as const)(
     "keeps archived status slots empty with phase %s",
     (state) => {
       const elements = elementsIn(
-        viewFor("all", [{ ...groups[0], sessions: [{ ...atlasArchived, state }] }]),
+        viewFor("all", [
+          { ...groups[0], sessions: [{ ...atlasArchived, state, hasUnread: true }] },
+        ]),
       );
       expect(byClass(elements, "session-status")[0].children).toEqual([]);
       expect(byClass(elements, "unarchive")).toHaveLength(1);

@@ -1,5 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { Frame } from "playwright/test";
 import type { SessionStateStoreData } from "../../src/sessionStateStore";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
@@ -765,12 +773,52 @@ test(
   },
   async ({ host }, testInfo) => {
     const statePath = join(host.directory, "agent/session-state.json");
+    const workspaceCwd = host.sessions.A.cwd;
     const phases = [
-      { key: "A", state: "running", label: "Running" },
-      { key: "Deleted", state: "waiting-approval", label: "Waiting for approval" },
-      { key: "External", state: "waiting-user", label: "Waiting for user" },
+      { key: "A", state: "running", label: "Running", name: "Running" },
+      {
+        key: "Deleted",
+        state: "waiting-approval",
+        label: "Waiting for approval",
+        name: "Approval",
+      },
+      { key: "External", state: "waiting-user", label: "Waiting for user", name: "Unread" },
+      { key: "B", state: "waiting-user", label: "Waiting for user", name: "Standby" },
     ] as const;
-    await test.step("Open three existing conversations in live panes", async () => {
+    await test.step("Prepare four conversations in one workspace in update order", async () => {
+      const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
+      const activeSessions = store["active-workspaces"][workspaceCwd]["active-sessions"]!;
+      const sessionDirectory = dirname(host.sessions.A.session);
+      for (const [index, { key }] of phases.entries()) {
+        const fixture = host.sessions[key];
+        const entries = fixture.original
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        entries[0].cwd = workspaceCwd;
+        entries[0].timestamp = new Date(Date.UTC(2026, 9, 22, 4 - index)).toISOString();
+        const original = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+        const session = join(sessionDirectory, basename(fixture.session));
+        writeFileSync(session, original);
+        if (session !== fixture.session) unlinkSync(fixture.session);
+        host.sessions[key] = { ...fixture, cwd: workspaceCwd, session, original };
+        activeSessions[fixture.id] = {};
+      }
+      store["active-workspaces"] = { [workspaceCwd]: { "active-sessions": activeSessions } };
+      writeFileSync(statePath, JSON.stringify(store));
+      const frame = await host.sessionFrame();
+      await frame
+        .locator('[data-action="refresh"]')
+        .describe("Refresh the single workspace")
+        .click();
+      await expect(
+        frame.locator("section.group").describe("Only the shared workspace"),
+      ).toHaveCount(1);
+      await expect(
+        frame.locator(".session-row").describe("Four prepared conversations"),
+      ).toHaveCount(4);
+    });
+    await test.step("Open four existing conversations in live panes", async () => {
       for (const { key } of phases) {
         await host.selectSession(key);
         await host.expectNativeDisplay(key);
@@ -783,7 +831,10 @@ test(
       }
     });
 
-    async function expectPhase(key: string, { state, label }: (typeof phases)[number]) {
+    async function expectPhase(
+      key: string,
+      { state, label, hasUnread = false }: (typeof phases)[number] & { hasUnread?: boolean },
+    ) {
       expect(host.sessionRuntime(key)).toBeDefined();
       const frame = await host.sessionFrame();
       const row = frame
@@ -794,11 +845,15 @@ test(
       await expect(row).toBeVisible();
       await expect(row).not.toHaveClass(/archived/);
       await expect(status).toHaveAttribute("data-state", state);
+      await expect(status).toHaveAttribute("data-unread", String(hasUnread));
       await expect(status).toHaveCSS("width", "12px");
       await expect(status).toHaveCSS("height", "12px");
       await expect(row.locator(".session-button")).toHaveAttribute("title", new RegExp(label));
-      if (state === "waiting-user") {
-        await expect(status.locator("*")).toHaveCount(0);
+      if (hasUnread)
+        await expect(row.locator(".session-button")).toHaveAttribute("title", /Unread/);
+      else await expect(row.locator(".session-button")).not.toHaveAttribute("title", /Unread/);
+      if (state === "waiting-user" && !hasUnread) {
+        await expect(status.locator("svg").describe(`${key} has no status icon`)).toHaveCount(0);
         return;
       }
       const icon = status.locator("svg").describe(`${key} ${state} icon`);
@@ -814,47 +869,104 @@ test(
         await expect(icon).toHaveCSS("animation-name", "session-spin");
       } else {
         await expect(icon.locator("path")).toHaveCount(2);
-        await expect(icon.locator("path").first()).toHaveAttribute(
-          "d",
-          "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9",
-        );
+        const expectedPaths =
+          state === "waiting-approval"
+            ? ["M9 4v16", "M15 4v16"]
+            : ["M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9", "M10 21a2 2 0 0 0 4 0"];
+        for (const [index, path] of expectedPaths.entries()) {
+          await expect(icon.locator("path").nth(index)).toHaveAttribute("d", path);
+        }
+        await expect(icon).toHaveCSS("animation-name", "none");
       }
     }
 
-    for (const phase of phases) {
+    for (const phase of phases.slice(0, 3)) {
       await test.step(`Show ${phase.state} for live A (SPEC execution phase display)`, async () => {
         const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
         store["active-workspaces"][host.sessions.A.cwd]["active-sessions"]![
           host.sessions.A.id
         ].state = phase.state;
         writeFileSync(statePath, JSON.stringify(store));
-        await expectPhase("A", phase);
+        await expectPhase("A", { ...phase, hasUnread: phase.state === "waiting-user" });
       });
     }
 
-    await test.step("Show all three phases in the session list without a conversation display", async () => {
+    async function openLiveSession(key: string) {
+      const frame = await host.sessionFrame();
+      await frame
+        .locator(`[data-session="${host.sessions[key].id}"] .session-name`)
+        .describe(`${key} live session name`)
+        .click({ steps: 15 });
+      await host.expectNativeDisplay(key);
+    }
+
+    await test.step("Open the unread completion and clear its bell", async () => {
+      await openLiveSession("A");
+      await expectPhase("A", phases[2]);
+      await openLiveSession("External");
+      await expectPhase("A", phases[2]);
+    });
+
+    await test.step("Complete a displayed run as read and keep it read after switching away", async () => {
+      await openLiveSession("A");
+      for (const phase of [phases[0], phases[2]]) {
+        const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
+        store["active-workspaces"][host.sessions.A.cwd]["active-sessions"]![
+          host.sessions.A.id
+        ].state = phase.state;
+        writeFileSync(statePath, JSON.stringify(store));
+        await expectPhase("A", phase);
+      }
+      await openLiveSession("External");
+      await expectPhase("A", phases[2]);
+    });
+
+    await test.step("Show running, approval, unread, and read standby in one workspace without a conversation display", async () => {
       await host.closePiDisplay();
       const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
+      const unreadSession = host.sessions.External;
+      store["active-workspaces"][unreadSession.cwd]["active-sessions"]![unreadSession.id].state =
+        "running";
+      writeFileSync(statePath, JSON.stringify(store));
+      await expectPhase("External", phases[0]);
       for (const phase of phases) {
-        const { cwd, id } = host.sessions[phase.key];
+        const { cwd, id, session } = host.sessions[phase.key];
+        expect(cwd).toBe(workspaceCwd);
         store["active-workspaces"][cwd]["active-sessions"]![id].state = phase.state;
+        appendFileSync(
+          session,
+          JSON.stringify({
+            type: "session_info",
+            id: randomUUID().slice(0, 8),
+            parentId: null,
+            timestamp: new Date().toISOString(),
+            name: phase.name,
+          }) + "\n",
+        );
       }
       writeFileSync(statePath, JSON.stringify(store));
       const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .describe("Shared workspace with all four states");
+      await expect(group).toHaveCount(1);
+      await expect(group.locator(".group-header")).toHaveAttribute("title", workspaceCwd);
+      await expect(group.locator("[data-mode-toggle]")).toHaveAttribute("data-mode", "unarchived");
+      await expect(group.locator(".session-name").describe("States in update order")).toHaveText(
+        phases.map((phase) => phase.name),
+      );
       for (const phase of phases) {
+        await expectPhase(phase.key, { ...phase, hasUnread: phase.key === "External" });
         await expect(
-          frame
-            .locator(`[data-mode-toggle="${host.sessions[phase.key].cwd}"]`)
-            .describe(`${phase.key} workspace Unarchived mode`),
-        ).toHaveAttribute("data-mode", "unarchived");
+          group.locator(`[data-session="${host.sessions[phase.key].id}"]`),
+        ).toBeVisible();
       }
-      for (const phase of phases) await expectPhase(phase.key, phase);
       await expect(
-        frame.locator(".session-status[data-state]").describe("Three live execution phases"),
-      ).toHaveCount(3);
+        group.locator(".session-status[data-state]").describe("Four live states in the same group"),
+      ).toHaveCount(4);
       await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
       await frame.locator("h1").describe("Neutral Sessions heading").hover();
-      await testInfo.attach("running / waiting-approval / waiting-user", {
+      await testInfo.attach("running / waiting-approval / unread completion / read standby", {
         body: await host.page.screenshot({
           path: testInfo.outputPath("session-list-phases.png"),
         }),
