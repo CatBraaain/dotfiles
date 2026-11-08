@@ -9,13 +9,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import * as fs from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { describe, it, spyOn } from "bun:test";
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
+import { afterEach, beforeEach, describe, it, spyOn } from "bun:test";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  type ExtensionEvent,
+  type RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
 import { childInvocationArgs, subagentSessionDir } from "../agents/index.ts";
 import sessionStateExtension, {
@@ -836,3 +840,529 @@ describe("serializeStore", () => {
     );
   });
 });
+
+const progressEvents = [
+  "session_before_compact",
+  "session_compact",
+  "session_compact_failed",
+  "context",
+  "context_with_system",
+  "before_provider_request",
+  "before_provider_headers",
+  "after_provider_response",
+  "provider_stream_event",
+  "before_agent_start",
+  "agent_end",
+  "agent_before_settle",
+  "turn_start",
+  "turn_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "tool_call",
+  "tool_result",
+] as const satisfies readonly ExtensionEvent["type"][];
+
+const unchangedEvents = [
+  "project_trust",
+  "resources_discover",
+  "session_info_changed",
+  "mcp_servers_change",
+  "model_select",
+  "thinking_level_select",
+  "session_before_switch",
+  "session_before_fork",
+  "session_before_tree",
+  "session_tree",
+  "cache_warming_decision",
+  "user_bash",
+  "input",
+] as const satisfies readonly ExtensionEvent["type"][];
+
+describe("sessionStateExtension events", () => {
+  let fixture: Awaited<ReturnType<typeof createExtensionFixture>>;
+
+  beforeEach(async () => {
+    fixture = await createExtensionFixture();
+    assert.equal(getAgentDir(), fixture.agentDir);
+  });
+
+  afterEach(async () => {
+    await fixture.close();
+  });
+
+  for (const eventName of progressEvents) {
+    for (const externalState of ["waiting-user", undefined] as const) {
+      const overwrite = externalState ?? "removed state";
+      it(`restores running after ${overwrite} on ${eventName}`, async () => {
+        fixture.emit("agent_start");
+        await fixture.flush();
+
+        const externalStore = await fixture.readStore();
+        const entry = externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!;
+        entry.lock = true;
+        if (externalState === undefined) delete entry.state;
+        else entry.state = externalState;
+        await fixture.writeStore(externalStore);
+
+        assert.deepEqual(fixture.emit(eventName), [undefined]);
+        await fixture.flush();
+
+        const expectedStore = structuredClone(externalStore);
+        expectedStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "running";
+        assert.deepEqual(await fixture.readStore(), expectedStore);
+      });
+    }
+
+    it(`does not write ${eventName} outside a run`, async () => {
+      const before = await stat(fixture.storePath);
+      fixture.emit(eventName, { reason: "manual" });
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "waiting-user");
+      assert.equal((await stat(fixture.storePath)).ino, before.ino);
+    });
+  }
+
+  for (const eventName of unchangedEvents) {
+    it(`does not update state on ${eventName} during a run`, async () => {
+      fixture.emit("agent_start");
+      await fixture.flush();
+      const externalStore = await fixture.readStore();
+      externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
+      await fixture.writeStore(externalStore);
+      const before = await stat(fixture.storePath);
+
+      fixture.emit(eventName);
+      await fixture.flush();
+
+      assert.deepEqual(await fixture.readStore(), externalStore);
+      assert.equal((await stat(fixture.storePath)).ino, before.ino);
+    });
+  }
+
+  it("checks consecutive message, tool, and provider updates without throttling", async () => {
+    fixture.emit("agent_start");
+    await fixture.flush();
+    for (const eventName of [
+      "message_update",
+      "message_update",
+      "tool_execution_update",
+      "tool_execution_update",
+      "provider_stream_event",
+      "provider_stream_event",
+    ] as const) {
+      const externalStore = await fixture.readStore();
+      externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
+      await fixture.writeStore(externalStore);
+      fixture.emit(eventName);
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "running", eventName);
+    }
+  });
+
+  it("creates a missing entry on the next progress event", async () => {
+    fixture.emit("agent_start");
+    await fixture.flush();
+    const externalStore = await fixture.readStore();
+    delete externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1;
+    await fixture.writeStore(externalStore);
+
+    fixture.emit("context");
+    await fixture.flush();
+
+    const expectedStore = structuredClone(externalStore);
+    expectedStore["active-workspaces"]["/w"]!["active-sessions"]!.s1 = { state: "running" };
+    assert.deepEqual(await fixture.readStore(), expectedStore);
+  });
+
+  it("leaves context, provider, and boundary payloads unchanged", async () => {
+    fixture.emit("agent_start");
+    await fixture.flush();
+    const fields = {
+      messages: [{ role: "user", content: "keep", timestamp: 0 }],
+      payload: { model: "keep" },
+      headers: { authorization: "keep" },
+      data: { delta: "keep" },
+      entries: [],
+      continue: true,
+    };
+    const snapshot = structuredClone(fields);
+    for (const eventName of [
+      "context",
+      "context_with_system",
+      "before_provider_request",
+      "before_provider_headers",
+      "after_provider_response",
+      "provider_stream_event",
+      "turn_end",
+      "agent_before_settle",
+    ] as const) {
+      assert.deepEqual(fixture.emit(eventName, fields), [undefined]);
+    }
+    await fixture.flush();
+    assert.deepEqual(fields, snapshot);
+  });
+
+  it("keeps approval waiting through progress and repeated agent starts", async () => {
+    fixture.emit("agent_start");
+    fixture.emit("ui_prompt_start", { reason: "ui_prompt", kind: "confirm" });
+    await fixture.flush();
+    const before = await stat(fixture.storePath);
+
+    for (const eventName of [...progressEvents, "agent_start"] as const) {
+      fixture.emit(eventName);
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "waiting-approval", eventName);
+      assert.equal((await stat(fixture.storePath)).ino, before.ino, eventName);
+    }
+    fixture.emit("ui_prompt_end");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "running");
+  });
+
+  it("clears approval waiting before rechecking the latest state", async () => {
+    fixture.emit("agent_start");
+    fixture.emit("ui_prompt_start");
+    await fixture.flush();
+    const externalStore = await fixture.readStore();
+    externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
+    await fixture.writeStore(externalStore);
+
+    fixture.emit("message_update");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "waiting-user");
+
+    fixture.emit("ui_prompt_end");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "running");
+  });
+
+  it("does not write after a prompt ends outside a run", async () => {
+    fixture.emit("ui_prompt_start");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "waiting-approval");
+    const before = await stat(fixture.storePath);
+
+    fixture.emit("ui_prompt_end");
+    fixture.emit("before_agent_start");
+    await fixture.flush();
+
+    assert.equal(await fixture.readState(), "waiting-approval");
+    assert.equal((await stat(fixture.storePath)).ino, before.ino);
+
+    fixture.emit("agent_start");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "running");
+  });
+
+  for (const aborted of [false, true]) {
+    it(`keeps the run active until agent_settled with aborted=${aborted}`, async () => {
+      fixture.emit("agent_start");
+      await fixture.flush();
+      for (const eventName of [
+        "agent_end",
+        "agent_before_settle",
+        "session_compact_failed",
+      ] as const) {
+        fixture.emit(eventName, { aborted: true, reason: "overflow", willRetry: true });
+        await fixture.flush();
+        const externalStore = await fixture.readStore();
+        externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
+        await fixture.writeStore(externalStore);
+        fixture.emit("message_update");
+        await fixture.flush();
+        assert.equal(await fixture.readState(), "running", eventName);
+      }
+
+      fixture.emit("agent_settled", { aborted });
+      await fixture.flush();
+      const before = await stat(fixture.storePath);
+      for (const eventName of progressEvents) fixture.emit(eventName);
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "waiting-user");
+      assert.equal((await stat(fixture.storePath)).ino, before.ino);
+    });
+  }
+
+  it("includes rejected, aborted, and invalid-argument tool results as progress", async () => {
+    fixture.emit("agent_start");
+    await fixture.flush();
+    for (const message of ["Rejected", "Aborted", "Invalid arguments"]) {
+      const externalStore = await fixture.readStore();
+      delete externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state;
+      await fixture.writeStore(externalStore);
+      fixture.emit("tool_execution_end", {
+        isError: true,
+        result: { content: [{ type: "text", text: message }], details: {} },
+      });
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "running", message);
+    }
+  });
+
+  for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
+    it(`resets run and approval tracking on session_start with reason=${reason}`, async () => {
+      fixture.emit("agent_start");
+      fixture.emit("ui_prompt_start");
+      fixture.emit("session_start", { reason });
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "waiting-user");
+      const before = await stat(fixture.storePath);
+      for (const eventName of progressEvents) fixture.emit(eventName);
+      await fixture.flush();
+      assert.equal((await stat(fixture.storePath)).ino, before.ino);
+
+      fixture.emit("agent_start");
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "running");
+    });
+  }
+
+  it("clears state and resets both spans on shutdown", async () => {
+    fixture.emit("agent_start");
+    fixture.emit("ui_prompt_start");
+    await fixture.flush();
+    const expectedStore = await fixture.readStore();
+    delete expectedStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state;
+
+    fixture.emit("session_shutdown");
+    await fixture.flush();
+    assert.deepEqual(await fixture.readStore(), expectedStore);
+    const before = await stat(fixture.storePath);
+    for (const eventName of progressEvents) fixture.emit(eventName);
+    await fixture.flush();
+    assert.equal((await stat(fixture.storePath)).ino, before.ino);
+
+    fixture.emit("agent_start");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "running");
+  });
+
+  it("skips shutdown writes when state or the store is absent", async () => {
+    const store = await fixture.readStore();
+    delete store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state;
+    await fixture.writeStore(store);
+    const before = await stat(fixture.storePath);
+    fixture.emit("session_shutdown");
+    await fixture.flush();
+    assert.equal((await stat(fixture.storePath)).ino, before.ino);
+
+    await rm(fixture.storePath);
+    fixture.emit("session_shutdown");
+    await fixture.flush();
+    await assert.rejects(stat(fixture.storePath), { code: "ENOENT" });
+  });
+
+  it("does not rewrite an already running store", async () => {
+    fixture.emit("agent_start");
+    await fixture.flush();
+    const before = await stat(fixture.storePath);
+    fixture.emit("agent_start");
+    fixture.emit("ui_prompt_end");
+    for (const eventName of progressEvents) fixture.emit(eventName);
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "running");
+    assert.equal((await stat(fixture.storePath)).ino, before.ino);
+  });
+
+  it("keeps queued progress behind approval, settlement, and shutdown boundaries", async () => {
+    fixture.emit("agent_start");
+    fixture.emit("message_update");
+    fixture.emit("ui_prompt_start");
+    fixture.emit("provider_stream_event");
+    fixture.emit("agent_start");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "waiting-approval");
+
+    fixture.emit("ui_prompt_end");
+    fixture.emit("tool_execution_update");
+    fixture.emit("agent_settled", { aborted: true });
+    fixture.emit("message_update");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "waiting-user");
+
+    fixture.emit("agent_start");
+    fixture.emit("provider_stream_event");
+    fixture.emit("session_shutdown");
+    fixture.emit("tool_execution_end");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), undefined);
+  });
+
+  it("unarchives input without assigning a phase", async () => {
+    await fixture.command("archive");
+    fixture.emit("input", { text: "continue", source: "interactive" });
+    await fixture.flush();
+    const store = await fixture.readStore();
+    assert.deepEqual(store["active-workspaces"]["/w"]!["active-sessions"]!.s1, { lock: false });
+  });
+
+  it("keeps archive lock protection and explicit unarchive behavior", async () => {
+    const store = await fixture.readStore();
+    store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.lock = true;
+    await fixture.writeStore(store);
+    await fixture.command("archive");
+    assert.deepEqual(await fixture.readStore(), store);
+    assert.match(fixture.notifications.at(-1)!.message, /locked/);
+
+    store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.lock = false;
+    await fixture.writeStore(store);
+    await fixture.command("archive");
+    await fixture.command("unarchive");
+    const restored = await fixture.readStore();
+    assert.deepEqual(restored["active-workspaces"]["/w"]!["active-sessions"]!.s1, { lock: false });
+  });
+
+  it("reports a progress write failure without blocking and recovers on the next event", async () => {
+    fixture.emit("agent_start");
+    await fixture.flush();
+    const store = await fixture.readStore();
+    store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
+    await fixture.writeStore(store);
+    await chmod(fixture.agentDir, 0o500);
+    try {
+      assert.deepEqual(fixture.emit("provider_stream_event"), [undefined]);
+      await fixture.flush();
+      assert.equal(await fixture.readState(), "waiting-user");
+      assert.equal(fixture.notifications.at(-1)!.level, "warning");
+      assert.match(fixture.notifications.at(-1)!.message, /cannot update session-state.json/);
+    } finally {
+      await chmod(fixture.agentDir, 0o700);
+    }
+
+    fixture.emit("provider_stream_event");
+    await fixture.flush();
+    assert.equal(await fixture.readState(), "running");
+  });
+
+  it("does not overwrite an invalid store during progress", async () => {
+    fixture.emit("agent_start");
+    await fixture.flush();
+    await writeFile(fixture.storePath, "{broken", "utf8");
+    assert.deepEqual(fixture.emit("message_update"), [undefined]);
+    await fixture.flush();
+    assert.equal(await readFile(fixture.storePath, "utf8"), "{broken");
+    assert.equal(fixture.notifications.at(-1)!.level, "warning");
+    assert.match(fixture.notifications.at(-1)!.message, /not a valid session-state store/);
+  });
+});
+
+type TestEventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
+
+async function createExtensionFixture() {
+  await mkdir("/tmp/work/dotfiles", { recursive: true });
+  const agentDir = await mkdtemp("/tmp/work/dotfiles/session-state-events-");
+  const storePath = join(agentDir, "session-state.json");
+  const initialStore: SessionStateStore = {
+    "active-workspaces": {
+      "/w": {
+        "active-sessions": {
+          s1: { lock: false, state: "waiting-user", label: "keep" },
+          s2: { lock: true, state: "running" },
+        },
+        pinned: true,
+      },
+      "/other": { "active-sessions": { s3: { lock: true } }, label: "other" },
+    },
+    tags: ["keep"],
+  };
+  await writeFile(storePath, JSON.stringify(initialStore), "utf8");
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  const handlers = new Map<ExtensionEvent["type"], TestEventHandler[]>();
+  const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
+  const notifications: { message: string; level: string | undefined }[] = [];
+  const context = {
+    hasUI: true,
+    sessionManager: {
+      getCwd() {
+        return "/w";
+      },
+      getSessionId() {
+        return "s1";
+      },
+      getSessionDir() {
+        return join(agentDir, "sessions", "--w--");
+      },
+    },
+    ui: {
+      notify(message: string, level?: string) {
+        notifications.push({ message, level });
+      },
+    },
+  } as unknown as ExtensionCommandContext;
+  const barrierContext = {
+    ...context,
+    sessionManager: {
+      ...context.sessionManager,
+      getSessionId() {
+        return "queue-barrier";
+      },
+    },
+    ui: { notify() {} },
+  } as unknown as ExtensionCommandContext;
+
+  sessionStateExtension({
+    on(name: ExtensionEvent["type"], handler: TestEventHandler) {
+      const registered = handlers.get(name) ?? [];
+      registered.push(handler);
+      handlers.set(name, registered);
+      return function unsubscribe() {
+        handlers.set(
+          name,
+          registered.filter((candidate) => candidate !== handler),
+        );
+      };
+    },
+    registerCommand(name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) {
+      commands.set(name, command);
+    },
+  } as unknown as ExtensionAPI);
+
+  async function flush() {
+    await commands.get("archive")!.handler("", barrierContext);
+  }
+
+  async function readStore(): Promise<SessionStateStore> {
+    return JSON.parse(await readFile(storePath, "utf8"));
+  }
+
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({ type: "session_start", reason: "startup" }, context);
+  }
+  await flush();
+
+  return {
+    agentDir,
+    storePath,
+    notifications,
+    emit(type: ExtensionEvent["type"], fields: Record<string, unknown> = {}) {
+      const event = { type, ...fields } as ExtensionEvent;
+      return (handlers.get(type) ?? []).map((handler) => handler(event, context));
+    },
+    async command(name: string) {
+      await commands.get(name)!.handler("", context);
+    },
+    flush,
+    readStore,
+    async readState() {
+      return getSessionState(await readStore(), "/w", "s1");
+    },
+    async writeStore(store: SessionStateStore) {
+      await writeFile(storePath, JSON.stringify(store), "utf8");
+    },
+    async close() {
+      try {
+        await flush();
+      } finally {
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+        await rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  };
+}

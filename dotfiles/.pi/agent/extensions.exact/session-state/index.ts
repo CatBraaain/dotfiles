@@ -57,6 +57,13 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   }
 
   let isAgentRunActive = false;
+  let isWaitingForApproval = false;
+
+  function recheckRunning(_event: unknown, ctx: ExtensionContext): void {
+    if (isAgentRunActive && !isWaitingForApproval) {
+      scheduleStateWrite("running", ctx);
+    }
+  }
 
   function scheduleStateWrite(state: SessionState, ctx: ExtensionContext): void {
     if (isSubagentSession(ctx)) return;
@@ -92,22 +99,23 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     if (isSubagentSession(ctx)) return;
     registerArchiveCommands();
     isAgentRunActive = false;
+    isWaitingForApproval = false;
     scheduleStateWrite("waiting-user", ctx);
   });
 
-  pi.on("agent_start", (_event, ctx) => {
+  pi.on("agent_start", (event, ctx) => {
     isAgentRunActive = true;
-    scheduleStateWrite("running", ctx);
+    recheckRunning(event, ctx);
   });
 
   pi.on("ui_prompt_start", (_event, ctx) => {
+    isWaitingForApproval = true;
     scheduleStateWrite("waiting-approval", ctx);
   });
 
-  pi.on("ui_prompt_end", (_event, ctx) => {
-    if (isAgentRunActive) {
-      scheduleStateWrite("running", ctx);
-    }
+  pi.on("ui_prompt_end", (event, ctx) => {
+    isWaitingForApproval = false;
+    recheckRunning(event, ctx);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
@@ -116,8 +124,33 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    isAgentRunActive = false;
+    isWaitingForApproval = false;
     scheduleStateClear(ctx);
   });
+
+  pi.on("session_before_compact", recheckRunning);
+  pi.on("session_compact", recheckRunning);
+  pi.on("session_compact_failed", recheckRunning);
+  pi.on("context", recheckRunning);
+  pi.on("context_with_system", recheckRunning);
+  pi.on("before_provider_request", recheckRunning);
+  pi.on("before_provider_headers", recheckRunning);
+  pi.on("after_provider_response", recheckRunning);
+  pi.on("provider_stream_event", recheckRunning);
+  pi.on("before_agent_start", recheckRunning);
+  pi.on("agent_end", recheckRunning);
+  pi.on("agent_before_settle", recheckRunning);
+  pi.on("turn_start", recheckRunning);
+  pi.on("turn_end", recheckRunning);
+  pi.on("message_start", recheckRunning);
+  pi.on("message_update", recheckRunning);
+  pi.on("message_end", recheckRunning);
+  pi.on("tool_execution_start", recheckRunning);
+  pi.on("tool_execution_update", recheckRunning);
+  pi.on("tool_execution_end", recheckRunning);
+  pi.on("tool_call", recheckRunning);
+  pi.on("tool_result", recheckRunning);
 
   function registerArchiveCommands(): void {
     pi.registerCommand("archive", {

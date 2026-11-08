@@ -31,21 +31,11 @@ subagent では、自動アーカイブ解除・実行フェーズ更新・終�
 
 ## 実行フェーズの書き出し
 
-session-state は、自セッションの実行フェーズを自セッションの entry の `state` として書き出す。書き手はこの拡張だけで、読み手（vscode-pi-sessions）がウォッチして表示する。更新は自セッションの entry に対する read-modify-write である。
+自セッションの実行フェーズをメタデータストアへ書き出し、読み手（vscode-pi-sessions）が実行中・承認待ち・user 待ちを表示できるようにする。
 
-| トリガー | `state` への反映 |
-| --- | --- |
-| `session_start`（起動・新規・resume・fork・reload） | 自セッションの entry に `waiting-user` を書く。既に `waiting-user` なら書き込まない |
-| `agent_start`（agent run の開始） | `running` に更新する。既に `running` なら書き込まない |
-| `ui_prompt_start`（拡張 UI プロンプトの表示） | `waiting-approval` に更新する |
-| `ui_prompt_end`（プロンプトが閉じたとき） | agent run 継続中なら `running` に戻す。継続していなければ書き込まない |
-| `agent_settled`（agent run の確定停止） | `waiting-user` に更新する。既に `waiting-user` なら書き込まない |
-| `session_shutdown`（終了・セッション切替・reload） | 自セッションの entry から `state` を除去する。無ければ書き込まない |
+同じセッションを開いた別プロセスの初期化や終了でフェーズ情報が上書きされても、実行側の次の実行進展で稼働表示を回復する。承認 UI 待ちの表示は、並行処理の進展でも保持する。
 
-- entry が無いときは `state` の書き込みで entry を作成する。作成・更新の際、entry の `lock` と未知の属性は保つ。
-- `agent_end` はリトライやキュー継続で再発火するため、遷移のトリガーには使わない。
-- 書き込みに失敗しても、pi の動作を止めない。失敗は警告で通知する。
-- 異常終了で `state` が残留したときの掃除は読み手側の責務であり、この拡張は `session_shutdown` での除去だけを行う。`pid` は書かない。
+イベントごとの状態更新と書き込みの振る舞いは、[実行フェーズ仕様](SPEC.md) で定める。
 
 ## メタデータストアの契約
 
