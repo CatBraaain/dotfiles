@@ -63,7 +63,12 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined;
 
   function launchBrowser() {
-    return import("playwright").then(({ chromium }) => chromium.launch());
+    return import("playwright").then(({ chromium }) =>
+      chromium.launch({
+        ignoreDefaultArgs: ["--hide-scrollbars"],
+        args: ["--disable-features=OverlayScrollbar,FluentOverlayScrollbar"],
+      }),
+    );
   }
 
   beforeAll(async () => {
@@ -201,6 +206,273 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       if (modifier !== undefined) await page.keyboard.up(modifier);
     }
   }
+
+  it.each([320, 390, 720])(
+    "keeps row bounds unchanged when mode switching adds document overflow at %ipx",
+    async (width) => {
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 440 });
+      const row = page.locator(".session-row").first();
+      async function rowBounds() {
+        return row.evaluate((element) => {
+          const { left, right, width } = element.getBoundingClientRect();
+          return { left, right, width };
+        });
+      }
+      const before = await rowBounds();
+      expect(before).toEqual({ left: 24, right: width - 12, width: width - 36 });
+      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(440);
+      await page.click("[data-mode-toggle]");
+      await page.waitForSelector(".session-row.archived");
+      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBeGreaterThan(
+        440,
+      );
+      expect(await rowBounds()).toEqual(before);
+      await page.click("[data-mode-toggle]");
+      await expect.poll(() => page.locator(".session-row").count()).toBe(4);
+      expect(await rowBounds()).toEqual(before);
+      expect(
+        await page.locator("header").evaluate((element) => getComputedStyle(element).position),
+      ).toBe("static");
+      expect(
+        await page.locator(".footer").evaluate((element) => getComputedStyle(element).position),
+      ).toBe("sticky");
+      await page.close();
+    },
+  );
+
+  it("updates the overlay for mode, group, data, form, and viewport height changes", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 440 });
+    const track = page.getByRole("scrollbar", { includeHidden: true });
+    await expect.poll(() => track.isHidden()).toBe(true);
+    await page.click("[data-mode-toggle]");
+    await expect.poll(() => track.isVisible()).toBe(true);
+    const originalHeight = await page
+      .locator(".session-scrollbar-thumb")
+      .evaluate((element) => element.getBoundingClientRect().height);
+    await page.locator(".group-chevron").nth(1).click();
+    await expect.poll(() => track.isHidden()).toBe(true);
+    await page.locator(".group-chevron").nth(1).click();
+    await expect.poll(() => track.isVisible()).toBe(true);
+    await page.locator(".group-new-session").first().click();
+    await expect
+      .poll(() =>
+        page
+          .locator(".session-scrollbar-thumb")
+          .evaluate((element) => element.getBoundingClientRect().height),
+      )
+      .toBeLessThan(originalHeight);
+    const beforeForm = await track.getAttribute("aria-valuemax");
+    await page.locator(".new-workspace").click();
+    await expect.poll(() => track.getAttribute("aria-valuemax")).not.toBe(beforeForm);
+    await page.locator("#workspace-path").press("Escape");
+    await expect.poll(() => track.getAttribute("aria-valuemax")).toBe(beforeForm);
+    await page.setViewportSize({ width: 320, height: 1000 });
+    await expect.poll(() => track.isHidden()).toBe(true);
+    await page.setViewportSize({ width: 320, height: 180 });
+    await expect.poll(() => track.isVisible()).toBe(true);
+    await expect
+      .poll(async () => Number(await track.getAttribute("aria-valuemax")))
+      .toBeGreaterThan(180);
+    await page.close();
+  });
+
+  it("shows the overlay on hover and scroll, and retains it during drag or keyboard focus", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
+    const track = page.getByRole("scrollbar");
+    async function opacity() {
+      return track.evaluate((element) => getComputedStyle(element).opacity);
+    }
+    await page.mouse.move(-10, -10);
+    await expect.poll(opacity).toBe("0");
+    await page.locator(".session-row").first().hover();
+    await expect.poll(opacity).toBe("1");
+    await page.mouse.move(-10, -10);
+    await expect.poll(opacity).toBe("0");
+    await page.evaluate(() => window.scrollBy(0, 40));
+    await expect.poll(opacity).toBe("1");
+    await expect.poll(opacity).toBe("0");
+    await page.keyboard.press("Tab");
+    await track.focus();
+    await expect.poll(opacity).toBe("1");
+    expect(
+      await track.evaluate((element) => ({
+        visible: element.matches(":focus-visible"),
+        outline: getComputedStyle(element).outlineWidth,
+      })),
+    ).toEqual({ visible: true, outline: "2px" });
+    await page.keyboard.press("Tab");
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const thumb = await page.locator(".session-scrollbar-thumb").boundingBox();
+    if (thumb === null) throw new Error("Scroll thumb is missing.");
+    await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(-10, 90);
+    await expect.poll(() => track.getAttribute("data-dragging")).toBe("true");
+    await expect.poll(opacity).toBe("1");
+    await page.mouse.up();
+    await expect.poll(() => track.getAttribute("data-dragging")).toBeNull();
+    await page.close();
+  });
+
+  it("scrolls the document by thumb drag, track click, and wheel input", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
+    const track = page.getByRole("scrollbar");
+    async function scrollTop() {
+      return page.evaluate(() => document.scrollingElement!.scrollTop);
+    }
+    const thumb = await page.locator(".session-scrollbar-thumb").boundingBox();
+    if (thumb === null) throw new Error("Scroll thumb is missing.");
+    await page.mouse.move(thumb.x + 4, thumb.y + thumb.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(thumb.x + 4, 160, { steps: 5 });
+    await page.mouse.up();
+    await expect.poll(scrollTop).toBeGreaterThan(150);
+    const maximum = Number(await track.getAttribute("aria-valuemax"));
+    await track.click({ position: { x: 1, y: 1 } });
+    await expect.poll(scrollTop).toBe(0);
+    await track.click({ position: { x: 1, y: 179 } });
+    await expect.poll(scrollTop).toBe(maximum);
+    await page.mouse.move(100, 90);
+    await page.mouse.wheel(0, -100);
+    await expect.poll(scrollTop).toBeLessThan(maximum);
+    expect(
+      await page.evaluate(() => getComputedStyle(document.querySelector("#sessions")!).overflowY),
+    ).toBe("visible");
+    await page.close();
+  });
+
+  it("preserves native document keyboard scrolling outside the overlay", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
+    await page.locator(".session-button").first().focus();
+    expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
+    await page.keyboard.press("PageDown");
+    await expect
+      .poll(() => page.evaluate(() => document.scrollingElement!.scrollTop))
+      .toBeGreaterThan(0);
+    await page.close();
+  });
+
+  it("exposes scroll bounds and keyboard controls and cancels a captured drag", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
+    const track = page.getByRole("scrollbar", { name: "Sessions scroll position" });
+    await track.focus();
+    expect(await track.getAttribute("aria-controls")).toBe("app");
+    expect(await track.getAttribute("aria-orientation")).toBe("vertical");
+    expect(await track.getAttribute("aria-valuemin")).toBe("0");
+    await track.press("End");
+    await expect
+      .poll(async () => Number(await track.getAttribute("aria-valuenow")))
+      .toBe(Number(await track.getAttribute("aria-valuemax")));
+    await track.press("PageUp");
+    await track.press("Home");
+    await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("0");
+    await track.press("ArrowDown");
+    await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("40");
+    await track.press("ArrowUp");
+    await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("0");
+    await track.press("PageDown");
+    await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("180");
+    await track.press("Home");
+    await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("0");
+    const thumb = await page.locator(".session-scrollbar-thumb").boundingBox();
+    if (thumb === null) throw new Error("Scroll thumb is missing.");
+    await page.mouse.move(thumb.x + 4, thumb.y + thumb.height / 2);
+    await page.mouse.down();
+    await page.setViewportSize({ width: 320, height: 160 });
+    await page.mouse.move(thumb.x + 4, 150);
+    await expect
+      .poll(() => page.evaluate(() => document.scrollingElement!.scrollTop))
+      .toBeGreaterThan(0);
+    await track.dispatchEvent("pointercancel", { pointerId: 1 });
+    await expect.poll(() => track.getAttribute("data-dragging")).toBeNull();
+    await page.mouse.up();
+    await page.close();
+  });
+
+  it("blocks overlay focus and End scrolling during unregister confirmation", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
+    const track = page.locator(".session-scrollbar");
+    await page.locator(".group-header").first().hover();
+    await page.locator(".group-unregister").first().click();
+    await page.getByRole("dialog").waitFor({ state: "visible" });
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    for (let step = 0; step < 3; step++) await page.keyboard.press("Tab");
+    const scrollbarFocused = await track.evaluate((element) => element === document.activeElement);
+    await track.dispatchEvent("keydown", { key: "End" });
+    console.log(
+      JSON.stringify({
+        check: "unregister-overlay-End",
+        scrollbarFocused,
+        scrollBefore,
+        scrollAfter: await page.evaluate(() => window.scrollY),
+      }),
+    );
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    expect(scrollbarFocused).toBe(false);
+    expect(await track.isHidden()).toBe(true);
+    await track.evaluate((element) => (element as HTMLElement).focus());
+    expect(await track.evaluate((element) => element === document.activeElement)).toBe(false);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(() => track.isVisible()).toBe(true);
+    await track.focus();
+    await track.press("End");
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    await page.close();
+  });
+
+  it("suppresses the overlay through a renamed modal wrapper and restores it when closed", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
+    const track = page.locator(".session-scrollbar");
+    const dialog = page.getByRole("dialog", { includeHidden: true });
+    await dialog.evaluate((element) => {
+      element.parentElement!.id = "confirmation-dialog";
+    });
+    await expect.poll(() => track.isVisible()).toBe(true);
+    await page.locator(".group-header").first().hover();
+    await page.locator(".group-unregister").first().click();
+    await page.getByRole("dialog").waitFor({ state: "visible" });
+    await expect.poll(() => track.isHidden()).toBe(true);
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    await track.dispatchEvent("keydown", { key: "End" });
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(() => dialog.isHidden()).toBe(true);
+    await expect.poll(() => track.isVisible()).toBe(true);
+    await track.focus();
+    expect(await track.evaluate((element) => element === document.activeElement)).toBe(true);
+    await page.close();
+  });
+
+  it("ends scrollbar dragging and blocks pointer input while unregister confirmation is open", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
+    const track = page.locator(".session-scrollbar");
+    const thumb = await page.locator(".session-scrollbar-thumb").boundingBox();
+    if (thumb === null) throw new Error("Scroll thumb is missing.");
+    await page.mouse.move(thumb.x + 4, thumb.y + thumb.height / 2);
+    await page.mouse.down();
+    await expect.poll(() => track.getAttribute("data-dragging")).toBe("true");
+    await page
+      .locator(".group-unregister")
+      .first()
+      .evaluate((element) => (element as HTMLElement).click());
+    await expect.poll(() => track.getAttribute("data-dragging")).toBeNull();
+    expect(await track.evaluate((element) => element.hasPointerCapture(1))).toBe(false);
+    expect(await track.isHidden()).toBe(true);
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    await page.mouse.move(316, 150);
+    await page.mouse.up();
+    await page.mouse.click(316, 90);
+    await track.dispatchEvent("pointerdown", {
+      pointerId: 1,
+      isPrimary: true,
+      button: 0,
+      clientY: 150,
+    });
+    await track.dispatchEvent("pointermove", { pointerId: 1, isPrimary: true, clientY: 170 });
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    expect(await track.getAttribute("data-dragging")).toBeNull();
+    await page.close();
+  });
 
   it.each([320, 720])(
     "treats timestamp clicks with modifiers like plain clicks at %ipx",

@@ -2,6 +2,15 @@
 export const webviewStyles = `
     :root { --session-radius: 9.6px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
+    html.session-overlay-scrollbars { scrollbar-width: none; }
+    html.session-overlay-scrollbars::-webkit-scrollbar { display: none; }
+    .session-scrollbar { position: fixed; top: 0; right: 0; bottom: 0; z-index: 1; width: 12px; opacity: 0; touch-action: none; user-select: none; }
+    .session-scrollbar[hidden] { display: none; }
+    body:hover .session-scrollbar, .session-scrollbar[data-scrolling], .session-scrollbar[data-dragging], .session-scrollbar:focus-visible { opacity: 1; }
+    .session-scrollbar:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+    .session-scrollbar-thumb { position: absolute; top: 0; right: 2px; width: 8px; border-radius: 4px; background: var(--vscode-scrollbarSlider-background, var(--vscode-descriptionForeground)); }
+    .session-scrollbar:hover .session-scrollbar-thumb { background: var(--vscode-scrollbarSlider-hoverBackground, var(--vscode-descriptionForeground)); }
+    .session-scrollbar[data-dragging] .session-scrollbar-thumb { background: var(--vscode-scrollbarSlider-activeBackground, var(--vscode-descriptionForeground)); }
     button { box-sizing: border-box; border: 1px solid transparent; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; font: inherit; cursor: pointer; }
     button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
     button:hover { background: var(--vscode-list-hoverBackground); }

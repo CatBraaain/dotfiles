@@ -7,6 +7,7 @@
 
 import { createElement, useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
+import { initDocumentScrollbar } from "./documentScrollbar";
 
 /** Per-workspace display mode: unarchived sessions only, or all sessions. */
 export type ViewMode = "unarchived" | "all";
@@ -661,9 +662,11 @@ export function initClient(bridge: ClientBridge): () => void {
     />,
   );
 
+  const disposeScrollbar = initDocumentScrollbar();
   bridge.postMessage({ type: "ready" });
 
   return () => {
+    disposeScrollbar();
     document.removeEventListener("click", onDocumentClick);
     document.removeEventListener("keydown", onKeyDown);
     pathInput.removeEventListener("keydown", onPathInputKeyDown);

@@ -16,8 +16,12 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 入力（ワークスペース フォーム） | 背景 `input-background`・文字 `input-foreground`・境界 `input-border`、placeholder は `input-placeholderForeground` |
 | focus | `focusBorder` の 2px ring（offset -2px） |
 | 基準角丸 | 9.6px（行・操作・モード切替の枠で共用） |
+| スクロールつまみ | 通常 `scrollbarSlider-background`、hover `scrollbarSlider-hoverBackground`、ドラッグ `scrollbarSlider-activeBackground`。未定義時は `descriptionForeground` |
+| スクロールバーの消灯待ち | 最後のスクロールから800ms。表示状態の切替とつまみの追従は即時 |
 
 ## レイアウト
+
+Layout: セッション一覧 — スクロールバーを既存の余白へ重ねる → imposter の右端固定配置（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: バー専用の幅予約、一覧だけの別スクロール領域、ヘッダー・フッターのフロー変更。
 
 | 対象 | 値 |
 | --- | --- |
@@ -27,6 +31,9 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | フォーム（開いたとき） | New workspace の下、間隔8px |
 | グループ見出し | 高さ24px、要素間4px。見出し名14px・600・20px行で省略表示 |
 | セッション行 | 高さ32px、左インデント12px、見出し直後の行は上余白4px |
+| オーバーレイスクロールバー | viewport の右端に幅12pxの透明なトラックを重ねる。つまみは幅8px・右余白2px・角丸4px。高さは表示範囲の比率に合わせ、最小24px・最大トラック高。バーの有無によらず左右12pxの全体余白と行幅を保つ |
+
+トラックの操作幅12pxは [WCAG 2.5.8](https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html) の24px条件を満たさない。
 
 ## 部品
 
@@ -46,6 +53,8 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 
 確認の主操作は対象への `Archive` または `Unregister`。情報の優先順は対象、操作の影響、確定・キャンセル。既存の Unregister 部品を共用し、対象識別と警告以外の補助装飾は加えない。確認内容とキーボード操作は SPEC「アーカイブ・未アーカイブアクション」「ワークスペース登録解除」に従う。
 
+セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。既存の見出し・モード切替・Refresh・行操作・New workspace・フォーム・確認ダイアログを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
+
 ## 状態
 
 | 状態 | 表示 |
@@ -54,6 +63,7 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 行の選択 | 選択面。選択中の表示名・日時は選択文字色 |
 | アーカイブ済みの行 | 表示名・日時を補助文字色にする |
 | 空の一覧・状態表示 | 補助文字色・12px。空の案内は余白24px の中央寄せ |
+| スクロールバーの表示 | document に縦 overflow があるとき、Webview へのホバー・スクロール中・つまみのドラッグ中・バーのキーボードフォーカス中だけ表示する。キーボードフォーカスには focus トークンの ring を出す。確認ダイアログの表示中はバーを隠す |
 
 ## E2E gallery
 
