@@ -17,7 +17,7 @@ import { listSessions, sessionFileExists, type SessionSummary } from "../session
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
-import { parseWebviewRequest, type ExtensionMessage } from "./protocol";
+import { parseWebviewRequest, type ExtensionMessage, type WebviewState } from "./protocol";
 import { sessionViewGroups } from "./sessionViewData";
 import { webviewHtml } from "./webviewHtml";
 
@@ -36,6 +36,7 @@ export interface SessionWebviewDeps {
 export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private sessionsById = new Map<string, SessionSummary>();
+  private state: WebviewState | undefined;
 
   constructor(private readonly deps: SessionWebviewDeps) {}
 
@@ -95,16 +96,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     );
     const phases = await this.livePhases(sessionPhases(data));
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
-    this.post({
-      type: "sessions",
-      state: {
-        groups: sessionViewGroups(sessions, {
-          registeredCwds,
-          archivedIds,
-          phases,
-        }),
-        displayedSessionId: this.deps.registry.displayedSessionId,
-      },
+    this.postState({
+      groups: sessionViewGroups(sessions, {
+        registeredCwds,
+        archivedIds,
+        phases,
+      }),
+      displayedSessionId: this.deps.registry.displayedSessionId,
     });
   }
 
@@ -155,17 +153,64 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "archiveSession") {
-      await this.updateKnownSession(request.sessionId, (ref) =>
-        archiveSessions(this.deps.statePath, [ref]),
-      );
+      await this.deps.registry.run(() => this.archiveSession(request.sessionId));
       return;
     }
     if (request.type === "unarchiveSession") {
-      await this.updateKnownSession(request.sessionId, (ref) =>
-        unarchiveSessions(this.deps.statePath, [ref]),
+      await this.deps.registry.run(() =>
+        this.updateKnownSession(request.sessionId, (ref) =>
+          unarchiveSessions(this.deps.statePath, [ref]),
+        ),
       );
       return;
     }
+  }
+
+  private async archiveSession(sessionId: string): Promise<void> {
+    const session = this.sessionsById.get(sessionId);
+    if (session === undefined) {
+      this.postError(`Session not found: ${sessionId}`);
+      return;
+    }
+    const store = readSessionStateStore(this.deps.statePath);
+    if (store.status === "error") {
+      this.postError(store.message);
+      return;
+    }
+    try {
+      await this.deps.registry.stop(sessionId);
+    } catch (error) {
+      this.postError(
+        `Failed to stop Pi session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
+      );
+      return;
+    }
+
+    if (this.state !== undefined) {
+      this.postState({
+        ...this.state,
+        groups: this.state.groups.map((group) => ({
+          ...group,
+          sessions: group.sessions.map((row) =>
+            row.sessionId === sessionId ? { ...row, state: undefined } : row,
+          ),
+        })),
+        displayedSessionId: this.deps.registry.displayedSessionId,
+      });
+    }
+    const result = archiveSessions(this.deps.statePath, [{ sessionId, cwd: session.cwd }]);
+    if (!result.ok) {
+      this.postError(
+        `Pi session ${sessionId} stopped, but failed to save archive: ${result.message}`,
+      );
+      return;
+    }
+    await this.refresh();
+  }
+
+  private postState(state: WebviewState): void {
+    this.state = state;
+    this.post({ type: "sessions", state });
   }
 
   /** Run a single session's store update: validate the session id, apply the

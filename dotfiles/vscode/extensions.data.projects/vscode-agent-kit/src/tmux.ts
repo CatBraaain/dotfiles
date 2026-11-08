@@ -121,6 +121,22 @@ export class TmuxRuntimeStore {
     }
   }
 
+  async stop(sessionId: string): Promise<string> {
+    const target = runtimeTarget(sessionId);
+    try {
+      await this.command(["kill-session", "-t", `=${target}`]);
+    } catch (error) {
+      if (
+        !/no server running|error connecting to .*No such file or directory|can't find session:/.test(
+          errorMessage(error),
+        )
+      ) {
+        throw error;
+      }
+    }
+    return target;
+  }
+
   async isAlive(runtime: PiRuntime): Promise<boolean> {
     const panes = await this.query(["list-panes", "-a", "-F", "#{session_name}\t#{pane_dead}"]);
     return panes.split("\n").some((line) => line === `${runtime.target}\t0`);

@@ -61,14 +61,16 @@ describe("webviewHtml", () => {
     expect(html).toContain("New workspace");
   });
 
-  it("keeps the unregister confirmation dialog markup hidden by default", () => {
+  it("keeps the shared confirmation dialog hidden with an accessible name and description", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain('<div id="unregister-dialog" hidden>');
-    expect(html).toContain('id="unregister-dialog-cwd"');
-    expect(html).toContain('data-action="cancelUnregister"');
-    expect(html).toContain('data-action="confirmUnregister"');
-    expect(html).toContain("Sessions stay on disk.");
+    expect(html).toContain('<div id="confirmation-dialog" hidden>');
+    expect(html).toContain('aria-labelledby="confirmation-dialog-title"');
+    expect(html).toContain(
+      'aria-describedby="confirmation-dialog-target confirmation-dialog-description"',
+    );
+    expect(html).toContain('data-action="cancelConfirmation"');
+    expect(html).toContain('data-action="confirmConfirmation"');
   });
 
   it("drops the header New session action in favor of the per-group plus button", () => {

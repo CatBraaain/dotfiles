@@ -276,6 +276,70 @@ describe("TerminalRegistry", () => {
     expect(displays.create).toHaveBeenCalledTimes(2);
   });
 
+  it("closes the stopped conversation display and clears its selection", async () => {
+    const { registry, mocks, live, terminal } = setup();
+    await registry.open(launch("A"));
+    await registry.stop("A");
+    expect(mocks.stop).toHaveBeenCalledWith("A");
+    expect(live.has("A")).toBe(false);
+    expect(terminal.dispose).toHaveBeenCalledTimes(1);
+    expect(registry.displayedSessionId).toBeUndefined();
+  });
+
+  it("stops another conversation without changing the current display", async () => {
+    const { registry, live, terminal } = setup();
+    await registry.open(launch("A"));
+    await registry.open(launch("B"));
+    await registry.stop("A");
+    expect([...live.keys()]).toEqual(["B"]);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(registry.displayedSessionId).toBe("B");
+  });
+
+  it("closes a restored display only when its client showed the stopped target", async () => {
+    const existing = displayTerminal();
+    const { registry, client } = setup(existing);
+    client.target = "pi-A";
+    await registry.stop("A");
+    expect(existing.dispose).toHaveBeenCalledTimes(1);
+    expect(registry.displayedSessionId).toBeUndefined();
+  });
+
+  it("preserves a restored display attached to another target", async () => {
+    const existing = displayTerminal();
+    const { registry, client } = setup(existing);
+    client.target = "pi-B";
+    await registry.stop("A");
+    expect(existing.dispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps the display and permits retry after a runtime stop failure", async () => {
+    const { registry, mocks, terminal, live } = setup();
+    await registry.open(launch("A"));
+    mocks.stop.mockRejectedValueOnce(new Error("stop denied"));
+    await expect(registry.run(() => registry.stop("A"))).rejects.toThrow("stop denied");
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(registry.displayedSessionId).toBe("A");
+    expect(live.has("A")).toBe(true);
+    await registry.run(() => registry.stop("A"));
+    expect(live.has("A")).toBe(false);
+  });
+
+  it("waits for the archived display to close before reopening the saved conversation", async () => {
+    const { registry, mocks, terminal, displays } = setup();
+    await registry.run(() => registry.open(launch("A")));
+    vi.mocked(terminal.dispose).mockImplementation(() => {});
+    const stopped = registry.run(() => registry.stop("A"));
+    const reopened = registry.run(() => registry.open(launch("A")));
+    await vi.waitFor(() => expect(terminal.dispose).toHaveBeenCalledTimes(1));
+    expect(mocks.ensure).toHaveBeenCalledTimes(1);
+    registry.onTerminalClosed(terminal);
+    await stopped;
+    await reopened;
+    expect(displays.create).toHaveBeenCalledTimes(2);
+    expect(registry.displayedSessionId).toBe("A");
+  });
+
   it("serializes a new runtime and saved-session selection through the same queue", async () => {
     const { registry, mocks, displays } = setup(undefined, "/other");
     await Promise.all([

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -134,6 +134,31 @@ function readStore(statePath: string): SessionStateStoreData {
   const read = readSessionStateStore(statePath);
   if (read.status !== "ok") throw new Error(`expected ok, got ${read.status}`);
   return read.data;
+}
+
+async function archiveFixture() {
+  const sessionDir = join(root, "sessions");
+  const filePath = await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "active.jsonl", [
+    header({ id: activeSessionId, cwd: root }),
+  ]);
+  await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "other.jsonl", [
+    header({ id: inactiveSessionId, cwd: root }),
+  ]);
+  const runtimes = fakeRuntimes();
+  const registry = new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store));
+  const terminal = {
+    creationOptions: { cwd: root },
+    processId: Promise.resolve(123),
+    show: vi.fn(),
+    dispose: vi.fn(() => registry.onTerminalClosed(terminal as never)),
+  };
+  vscodeMocks.createTerminal.mockReturnValue(terminal);
+  const { provider, statePath } = createProvider({ sessionDir, registry });
+  setUpStore(statePath, root, [activeSessionId, inactiveSessionId]);
+  const webview = createView();
+  provider.resolveWebviewView(webview.view as never);
+  await provider.refresh();
+  return { ...runtimes, registry, terminal, provider, statePath, webview, filePath };
 }
 
 describe("SessionWebviewProvider", () => {
@@ -1185,42 +1210,139 @@ describe("SessionWebviewProvider", () => {
     });
   });
 
-  it("keeps the terminal alive after archiving its session", async () => {
-    const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "active.jsonl", [
-      header({ id: activeSessionId, cwd: root }),
-    ]);
-    const terminal = {
-      exitStatus: undefined,
-      processId: Promise.resolve(123),
-      sendText: vi.fn(),
-      show: vi.fn(),
-    };
-    vscodeMocks.createTerminal.mockReturnValue(terminal);
-    const registry = createRegistry();
-    const { provider, statePath } = createProvider({ sessionDir, registry });
-    setUpStore(statePath, root, [activeSessionId]);
-    const webview = createView();
-    provider.resolveWebviewView(webview.view as never);
-    await provider.refresh();
-
+  it("stops the confirmed conversation before removing membership and retains its source", async () => {
+    const { webview, statePath, registry, terminal, live, mocks, filePath } =
+      await archiveFixture();
+    const source = await readFile(filePath, "utf8");
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await mocks.ensure({ sessionId: inactiveSessionId, cwd: root, args: [] });
+    const otherRuntime = live.get(inactiveSessionId);
+    const stop = mocks.stop.getMockImplementation()!;
+    mocks.stop.mockImplementationOnce(async (sessionId) => {
+      expect(activeSessionIds(readStore(statePath)).has(sessionId)).toBe(true);
+      return stop(sessionId);
+    });
 
-    const sentSessions = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
-      sessionId: string;
-      isArchived: boolean;
-    }[];
-    expect(sentSessions.find((session) => session.sessionId === activeSessionId)?.isArchived).toBe(
-      true,
+    await webview.receive({
+      type: "archiveSession",
+      sessionId: activeSessionId,
+      target: "arbitrary",
+      pid: 1,
+    });
+
+    expect(mocks.stop).toHaveBeenCalledWith(activeSessionId);
+    expect(live.has(activeSessionId)).toBe(false);
+    expect(live.get(inactiveSessionId)).toBe(otherRuntime);
+    expect(activeSessionIds(readStore(statePath))).toEqual(new Set([inactiveSessionId]));
+    expect(terminal.dispose).toHaveBeenCalledTimes(1);
+    expect(registry.displayedSessionId).toBeUndefined();
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBeUndefined();
+    expect(await readFile(filePath, "utf8")).toBe(source);
+
+    const startsBefore = mocks.ensure.mock.calls.length;
+    await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+    expect(mocks.ensure).toHaveBeenCalledTimes(startsBefore);
+    expect(live.has(activeSessionId)).toBe(false);
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(mocks.ensure).toHaveBeenLastCalledWith({
+      sessionId: activeSessionId,
+      cwd: root,
+      args: ["--session", filePath],
+    });
+  });
+
+  it("archives a background conversation while preserving another display and selection", async () => {
+    const { webview, terminal, registry, live } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    const otherRuntime = live.get(inactiveSessionId);
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    expect(live.has(activeSessionId)).toBe(false);
+    expect(live.get(inactiveSessionId)).toBe(otherRuntime);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(registry.displayedSessionId).toBe(inactiveSessionId);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
+      inactiveSessionId,
     );
-    expect(
-      await registry.runtimes.isAlive({
-        sessionId: activeSessionId,
-        cwd: root,
-        target: `pi-${activeSessionId}`,
-      }),
-    ).toBe(true);
-    expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves membership and display unchanged when runtime stop fails", async () => {
+    const { webview, statePath, mocks, terminal, registry } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    const before = await readFile(statePath, "utf8");
+    mocks.stop.mockRejectedValueOnce(new Error("stop denied"));
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    expect(await readFile(statePath, "utf8")).toBe(before);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(registry.displayedSessionId).toBe(activeSessionId);
+    expect(vscodeMocks.showErrorMessage).toHaveBeenLastCalledWith(
+      expect.stringMatching(/Failed to stop Pi session .*stop denied/),
+    );
+  });
+
+  it("keeps the stopped display cleared and reports a later archive write failure", async () => {
+    const { webview, statePath, mocks, live, registry } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    const before = await readFile(statePath, "utf8");
+    const stop = mocks.stop.getMockImplementation()!;
+    mocks.stop.mockImplementationOnce(async (sessionId) => {
+      const target = await stop(sessionId);
+      await chmod(root, 0o500);
+      return target;
+    });
+    try {
+      await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+      expect(await readFile(statePath, "utf8")).toBe(before);
+      expect(live.has(activeSessionId)).toBe(false);
+      expect(registry.displayedSessionId).toBeUndefined();
+      const lastState = webview.postMessage.mock.calls
+        .filter(([message]) => message.type === "sessions")
+        .at(-1)?.[0].state;
+      expect(lastState.displayedSessionId).toBeUndefined();
+      expect(
+        lastState.groups[0].sessions.find(
+          (session: { sessionId: string }) => session.sessionId === activeSessionId,
+        ).isArchived,
+      ).toBe(false);
+      expect(vscodeMocks.showErrorMessage).toHaveBeenLastCalledWith(
+        expect.stringMatching(/stopped, but failed to save archive: .*EACCES/),
+      );
+    } finally {
+      await chmod(root, 0o700);
+    }
+  });
+
+  it("does not stop a runtime for an unknown session or an unreadable state store", async () => {
+    const { webview, statePath, mocks } = await archiveFixture();
+    const before = await readFile(statePath, "utf8");
+    await webview.receive({ type: "archiveSession", sessionId: unknownSessionId });
+    expect(await readFile(statePath, "utf8")).toBe(before);
+    await writeFile(statePath, "{ invalid", "utf8");
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes archive and a later All open without forbidding archived runtimes", async () => {
+    const { webview, statePath, mocks, live } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    let release!: () => void;
+    const pendingStop = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stop = mocks.stop.getMockImplementation()!;
+    mocks.stop.mockImplementationOnce(async (sessionId) => {
+      await pendingStop;
+      return stop(sessionId);
+    });
+    const archived = webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    const opened = webview.receive({ type: "openSession", sessionId: activeSessionId });
+    await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalledTimes(1));
+    expect(mocks.ensure).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([archived, opened]);
+    expect(activeSessionIds(readStore(statePath)).has(activeSessionId)).toBe(false);
+    expect(live.has(activeSessionId)).toBe(true);
+    expect(mocks.ensure).toHaveBeenCalledTimes(2);
   });
 });

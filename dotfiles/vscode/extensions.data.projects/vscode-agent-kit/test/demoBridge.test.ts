@@ -5,6 +5,7 @@ interface DemoSession {
   sessionId: string;
   displayName: string;
   isArchived: boolean;
+  state?: string;
 }
 
 interface CapturedState {
@@ -78,8 +79,21 @@ describe("createDemoBridge", () => {
     expect(sessionIds(state)).toContain(projectCurrentId);
     const archived = sessions(state).find((session) => session.sessionId === projectCurrentId);
     expect(archived?.isArchived).toBe(true);
+    expect(archived?.state).toBeUndefined();
+    expect(state.displayedSessionId).toBeUndefined();
     const untouched = sessions(state).find((session) => session.sessionId === piToolsCurrentId);
     expect(untouched?.isArchived).toBe(false);
+  });
+
+  it("keeps another displayed session when archiving and never restores a stopped phase", () => {
+    const { bridge, last } = setup();
+    bridge.postMessage({ type: "archiveSession", sessionId: piToolsCurrentId });
+    expect(last().displayedSessionId).toBe(projectCurrentId);
+    bridge.postMessage({ type: "unarchiveSession", sessionId: piToolsCurrentId });
+    const restored = sessions(last()).find((session) => session.sessionId === piToolsCurrentId);
+    expect(restored?.isArchived).toBe(false);
+    expect(restored?.state).toBeUndefined();
+    expect(last().displayedSessionId).toBe(projectCurrentId);
   });
 
   it("unarchives the requested archived session", () => {

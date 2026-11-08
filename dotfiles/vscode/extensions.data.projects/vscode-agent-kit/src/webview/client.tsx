@@ -423,6 +423,7 @@ interface SessionsAppProps {
   store: ReturnType<typeof createClientStore>;
   statusElement: HTMLElement;
   openUnregisterDialog: (cwd: string) => void;
+  openArchiveDialog: (sessionId: string) => void;
 }
 
 /** Render the session list into the #sessions root. The shared display mode
@@ -434,6 +435,7 @@ function SessionsApp({
   store,
   statusElement,
   openUnregisterDialog,
+  openArchiveDialog,
 }: SessionsAppProps): ReactElement {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -453,7 +455,7 @@ function SessionsApp({
     onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
     onUnregisterClick: (cwd) => openUnregisterDialog(cwd),
     onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
-    onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
+    onArchiveClick: (sessionId) => openArchiveDialog(sessionId),
     onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),
   };
 
@@ -497,28 +499,63 @@ export function initClient(bridge: ClientBridge): () => void {
   };
 
   const store = createClientStore();
-  const dialogElement = document.querySelector("#unregister-dialog");
-  const dialogCwd = document.querySelector("#unregister-dialog-cwd");
-  const cancelUnregisterButton = document.querySelector('[data-action="cancelUnregister"]');
-  if (
-    !(dialogElement instanceof HTMLElement) ||
-    !(dialogCwd instanceof HTMLElement) ||
-    !(cancelUnregisterButton instanceof HTMLButtonElement)
-  ) {
-    throw new Error("Sessions webview markup is incomplete.");
-  }
-  /** Unregister asks for confirmation in the webview before contacting the host. */
-  let pendingUnregisterCwd: string | undefined = undefined;
-  const closeUnregisterDialog = (): void => {
-    pendingUnregisterCwd = undefined;
+  const dialogElement = requireElement("#confirmation-dialog", HTMLElement);
+  const dialogTitle = requireElement("#confirmation-dialog-title", HTMLElement);
+  const dialogTarget = requireElement("#confirmation-dialog-target span", HTMLElement);
+  const dialogDescription = requireElement("#confirmation-dialog-description", HTMLElement);
+  const cancelButton = requireElement('[data-action="cancelConfirmation"]', HTMLButtonElement);
+  const confirmButton = requireElement('[data-action="confirmConfirmation"]', HTMLButtonElement);
+  let pendingConfirmation:
+    | { type: "unregisterWorkspace"; cwd: string }
+    | { type: "archiveSession"; sessionId: string }
+    | undefined;
+  let confirmationOrigin: HTMLElement | undefined;
+  function closeConfirmationDialog(): void {
+    pendingConfirmation = undefined;
     dialogElement.hidden = true;
-  };
-  const openUnregisterDialog = (cwd: string): void => {
-    pendingUnregisterCwd = cwd;
-    dialogCwd.textContent = cwd;
+    confirmationOrigin?.focus();
+    confirmationOrigin = undefined;
+  }
+  function openConfirmationDialog(
+    title: string,
+    target: string,
+    description: string,
+    action: string,
+  ): void {
+    confirmationOrigin =
+      document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    dialogTitle.textContent = title;
+    dialogTarget.textContent = target;
+    dialogDescription.textContent = description;
+    confirmButton.textContent = action;
     dialogElement.hidden = false;
-    cancelUnregisterButton.focus();
-  };
+    cancelButton.focus();
+  }
+  function openUnregisterDialog(cwd: string): void {
+    pendingConfirmation = { type: "unregisterWorkspace", cwd };
+    openConfirmationDialog(
+      "Unregister workspace",
+      cwd,
+      "Remove this workspace from the list? Sessions stay on disk.",
+      "Unregister",
+    );
+  }
+  function openArchiveDialog(sessionId: string): void {
+    const group = store
+      .getSnapshot()
+      .state.groups.find((candidate) =>
+        candidate.sessions.some((session) => session.sessionId === sessionId),
+      );
+    const session = group?.sessions.find((candidate) => candidate.sessionId === sessionId);
+    if (group === undefined || session === undefined) return;
+    pendingConfirmation = { type: "archiveSession", sessionId };
+    openConfirmationDialog(
+      "Archive session",
+      `${session.displayName} · ${sessionId} · ${group.cwd}`,
+      "Running work will be interrupted. Unsent input may be lost. The saved conversation stays on disk.",
+      "Archive",
+    );
+  }
   // The host closes the form by replying to an Add with a refreshed list; an
   // invalid path answers with an error instead, so the form stays open.
   let pendingAddWorkspace = false;
@@ -558,6 +595,7 @@ export function initClient(bridge: ClientBridge): () => void {
   const onDocumentClick = (event: Event): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    if (!dialogElement.hidden && !dialogElement.contains(target)) return;
     const modeTarget = target.closest("[data-mode-toggle]");
     if (modeTarget instanceof HTMLButtonElement) {
       selectHeaderMode(modeTarget.dataset.mode === "unarchived" ? "all" : "unarchived");
@@ -573,14 +611,14 @@ export function initClient(bridge: ClientBridge): () => void {
       if (!formElement.hidden) pathInput.focus();
       return;
     }
-    if (actionType === "cancelUnregister") {
-      closeUnregisterDialog();
+    if (actionType === "cancelConfirmation") {
+      closeConfirmationDialog();
       return;
     }
-    if (actionType === "confirmUnregister") {
-      const cwd = pendingUnregisterCwd;
-      closeUnregisterDialog();
-      if (cwd !== undefined) bridge.postMessage({ type: "unregisterWorkspace", cwd });
+    if (actionType === "confirmConfirmation") {
+      const request = pendingConfirmation;
+      closeConfirmationDialog();
+      if (request !== undefined) bridge.postMessage(request);
       return;
     }
     bridge.postMessage({ type: actionType });
@@ -597,8 +635,15 @@ export function initClient(bridge: ClientBridge): () => void {
   };
   pathInput.addEventListener("keydown", onPathInputKeyDown);
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === "Escape" && !dialogElement.hidden) {
-      closeUnregisterDialog();
+    if (!dialogElement.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeConfirmationDialog();
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        if (document.activeElement === cancelButton) confirmButton.focus();
+        else cancelButton.focus();
+      }
       return;
     }
     if (event.key === "Escape" && !formElement.hidden) closeWorkspaceForm();
@@ -612,6 +657,7 @@ export function initClient(bridge: ClientBridge): () => void {
       store={store}
       statusElement={statusElement}
       openUnregisterDialog={openUnregisterDialog}
+      openArchiveDialog={openArchiveDialog}
     />,
   );
 
@@ -623,6 +669,13 @@ export function initClient(bridge: ClientBridge): () => void {
     pathInput.removeEventListener("keydown", onPathInputKeyDown);
     root.unmount();
   };
+}
+
+function requireElement<T extends Element>(selector: string, constructor: new () => T): T {
+  const element = document.querySelector(selector);
+  if (!(element instanceof constructor))
+    throw new Error(`Sessions webview markup is missing ${selector}.`);
+  return element;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

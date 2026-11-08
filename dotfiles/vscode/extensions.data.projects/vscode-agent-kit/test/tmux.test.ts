@@ -14,6 +14,11 @@ function setup(onCommand?: (args: string[]) => Promise<void> | void) {
       panes.set(target, 0);
       return "";
     }
+    if (command === "kill-session") {
+      const target = args[args.indexOf("-t") + 1].slice(1);
+      if (!panes.delete(target)) throw new Error(`can't find session: ${target}`);
+      return "";
+    }
     if (command === "list-clients") return "123\t/dev/pts/1\tpi-A\n456\t/dev/pts/2\tpi-B\n";
     return "";
   });
@@ -253,6 +258,47 @@ describe("TmuxRuntimeStore", () => {
     expect(await store.isAlive(runtimeB)).toBe(true);
     expect(execute.mock.calls.filter(([, args]) => args[4] === "new-session")).toHaveLength(3);
   });
+
+  it("stops only the exact conversation target in its dedicated socket", async () => {
+    const { store, execute, panes } = setup();
+    const a = await store.ensure({ sessionId: "A", cwd: "/a", args: [] });
+    const b = await store.ensure({ sessionId: "B", cwd: "/b", args: [] });
+    panes.set("ordinary-session", 0);
+
+    await store.stop("A");
+
+    expect(execute).toHaveBeenLastCalledWith("tmux", [
+      "-L",
+      "test-socket",
+      "-f",
+      "/dev/null",
+      "kill-session",
+      "-t",
+      `=${a.target}`,
+    ]);
+    expect([...panes.keys()]).toEqual([b.target, "ordinary-session"]);
+    expect(execute.mock.calls.some(([, args]) => args.includes("kill-server"))).toBe(false);
+  });
+
+  it.each([
+    "can't find session: pi-missing",
+    "no server running on test-socket",
+    "error connecting to /tmp/tmux-x/test-socket (No such file or directory)",
+  ])("accepts an already absent runtime: %s", async (message) => {
+    const execute = vi.fn().mockRejectedValue(new Error(message));
+    const store = new TmuxRuntimeStore("test-socket", execute);
+    await expect(store.stop("A")).resolves.toMatch(/^pi-[a-f0-9]{24}$/);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["permission denied", "spawn tmux ENOENT"])(
+    "reports a stop failure: %s",
+    async (message) => {
+      const execute = vi.fn().mockRejectedValue(new Error(message));
+      const store = new TmuxRuntimeStore("test-socket", execute);
+      await expect(store.stop("A")).rejects.toThrow(message);
+    },
+  );
 
   it("aliveSessionIds keeps sessions with a live pane and drops dead or unknown ones", async () => {
     const { store, panes } = setup();

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Frame } from "playwright/test";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
@@ -578,7 +578,7 @@ test(
 );
 
 test(
-  "Archive ボタンでアーカイブし、Unarchive ボタンで未アーカイブに戻せる",
+  "Confirms Archive, stops only its Pi and resumes the saved conversation after Unarchive",
   { annotation: { type: "spec", description: "E2E-13" } },
   async ({ host }, testInfo) => {
     const statePath = join(host.directory, "agent/session-state.json");
@@ -596,13 +596,94 @@ test(
         .locator(".session-row")
         .filter({ has: frame.locator(`[data-session="${id}"]`) })
         .describe("Session row");
-    await test.step("Archive the A row with its Archive button and view it in All mode", async () => {
+    let initialA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
+    let initialB!: ReturnType<VSCodeFixture["piProcesses"]>[number];
+    let sourceA = "";
+    let sourceB = "";
+    await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
+      await host.selectSession("B");
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      initialA = host.piProcesses().find((entry) => entry.cwd === host.sessions.A.cwd)!;
+      initialB = host.piProcesses().find((entry) => entry.cwd === host.sessions.B.cwd)!;
+      expect(initialA).toBeDefined();
+      expect(initialB).toBeDefined();
+      sourceA = readFileSync(host.sessions.A.session, "utf8");
+      sourceB = readFileSync(host.sessions.B.session, "utf8");
+      host.tmux(["new-session", "-d", "-s", "ordinary-fixture", "sleep", "120"]);
+      const frame = await host.sessionFrame();
+      const toggle = frame
+        .locator("#app header [data-mode-toggle]")
+        .describe("Shared display mode");
+      if ((await toggle.getAttribute("data-mode")) === "all") await toggle.click();
+    });
+    await test.step("Cancel Archive with Escape and Cancel without touching runtimes, state or selection", async () => {
+      const frame = await host.sessionFrame();
+      const before = readFileSync(statePath, "utf8");
+      const archive = rowIn(frame, aId)
+        .locator(`[data-archive="${aId}"]`)
+        .describe("A Archive confirmation trigger");
+      const dialog = frame
+        .getByRole("dialog", { name: "Archive session" })
+        .describe("Archive warning");
+      const cancel = dialog
+        .getByRole("button", { name: "Cancel", exact: true })
+        .describe("Cancel Archive");
+      for (const method of ["Escape", "Cancel"]) {
+        await archive.click();
+        await expect(dialog).toContainText(aId);
+        await expect(dialog).toContainText(host.sessions.A.cwd);
+        await expect(dialog).toContainText(
+          "Running work will be interrupted. Unsent input may be lost.",
+        );
+        await expect(cancel).toBeFocused();
+        if (method === "Escape") await cancel.press("Escape");
+        else await cancel.click();
+        await expect(dialog).toBeHidden();
+        await expect(archive).toBeFocused();
+        expect(readFileSync(statePath, "utf8")).toBe(before);
+        expect(host.piProcesses().find((entry) => entry.target === initialA.target)?.pid).toBe(
+          initialA.pid,
+        );
+        expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
+          initialB.pid,
+        );
+        await expect(
+          frame
+            .locator(`.session-row.selected [data-session="${aId}"]`)
+            .describe("A still displayed"),
+        ).toBeVisible();
+      }
+    });
+    await test.step("Confirm Archive, stop only A and view its saved row in All", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
         .locator(`[data-archive="${aId}"]`)
         .describe("A row Archive button")
         .click({ steps: 15 });
+      await frame
+        .getByRole("dialog", { name: "Archive session" })
+        .getByRole("button", { name: "Archive", exact: true })
+        .describe("Confirm Archive A")
+        .click();
       await expect(rowIn(frame, aId)).toHaveCount(0);
+      await expect.poll(() => existsSync(`/proc/${initialA.pid}`)).toBe(false);
+      expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
+      expect(
+        host.tmux(["list-sessions", "-F", "#{session_name}"]).trim().split("\n"),
+      ).not.toContain(initialA.target);
+      expect(host.tmux(["list-sessions", "-F", "#{session_name}"])).toContain("ordinary-fixture");
+      expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
+        initialB.pid,
+      );
+      await expect
+        .poll(() => host.snapshot().terminals.filter((terminal) => terminal.owned))
+        .toHaveLength(0);
+      await expect(
+        frame.locator(".session-row.selected").describe("Cleared archive selection"),
+      ).toHaveCount(0);
+      expect(readFileSync(host.sessions.A.session, "utf8")).toBe(sourceA);
+      expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect(aIsListed()).toBe(false);
       expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
         "preserved",
@@ -629,6 +710,11 @@ test(
       await expect(row).not.toHaveClass(/archived/);
       await expect(row.locator(`[data-archive="${aId}"]`)).toBeVisible();
       expect(aIsListed()).toBe(true);
+      expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
+      expect(existsSync(`/proc/${initialA.pid}`)).toBe(false);
+      expect(host.snapshot().terminals.filter((terminal) => terminal.owned)).toHaveLength(0);
+      expect(readFileSync(host.sessions.A.session, "utf8")).toBe(sourceA);
+      expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
         "preserved",
       );
@@ -643,6 +729,59 @@ test(
       await expect(
         frame.locator(`[data-session="${aId}"]`).describe("A session back in the default view"),
       ).toBeVisible();
+    });
+    await test.step("Reopen the same saved conversation in a new Pi while retaining saved history and B", async () => {
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      const resumed = host.piProcesses().find((entry) => entry.target === initialA.target)!;
+      expect(resumed.pid).not.toBe(initialA.pid);
+      expect(
+        host.tmux(["display-message", "-p", "-t", resumed.target, "#{pane_start_command}"]).trim(),
+      ).toBe(`pi --session ${host.sessions.A.session}`);
+      expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
+        initialB.pid,
+      );
+      expect(readFileSync(host.sessions.A.session, "utf8").startsWith(sourceA)).toBe(true);
+      expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
+      for (const [cwd, before] of Object.entries(host.gitBefore))
+        expect(host.gitState(cwd)).toBe(before);
+      await testInfo.attach("Archive runtime and resume evidence", {
+        body: JSON.stringify({
+          initialA,
+          initialB,
+          resumed,
+          processes: host.piProcesses(),
+          terminals: host.snapshot().terminals,
+        }),
+        contentType: "application/json",
+      });
+    });
+    await test.step("Archive background A while keeping B displayed with its original PID", async () => {
+      await host.selectSession("B");
+      await host.expectNativeDisplay("B");
+      const frame = await host.sessionFrame();
+      const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
+      await rowIn(frame, aId)
+        .locator(`[data-archive="${aId}"]`)
+        .describe("Background A Archive")
+        .click();
+      await frame
+        .getByRole("dialog", { name: "Archive session" })
+        .getByRole("button", { name: "Archive", exact: true })
+        .describe("Confirm background Archive")
+        .click();
+      await expect(rowIn(frame, aId)).toHaveClass(/archived/);
+      await expect(
+        frame
+          .locator(`.session-row.selected [data-session="${host.sessions.B.id}"]`)
+          .describe("B remains displayed"),
+      ).toBeVisible();
+      expect(host.snapshot().terminals.find((terminal) => terminal.owned)?.pid).toBe(displayPid);
+      expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
+        initialB.pid,
+      );
+      expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
+      expect(host.tmux(["list-sessions", "-F", "#{session_name}"])).toContain("ordinary-fixture");
     });
   },
 );

@@ -17,6 +17,10 @@ export function fakeRuntimes() {
       live.set(launch.sessionId, runtime);
       return runtime;
     }),
+    stop: vi.fn(async (sessionId: string) => {
+      live.delete(sessionId);
+      return `pi-${sessionId}`;
+    }),
     isAlive: vi.fn(async (runtime: PiRuntime) => live.has(runtime.sessionId)),
     aliveSessionIds: vi.fn(
       async (sessionIds: readonly string[]): Promise<Set<string> | null> =>

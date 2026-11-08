@@ -40,6 +40,23 @@ export class TerminalRegistry {
     }
   }
 
+  async stop(sessionId: string): Promise<void> {
+    const display = this.display ?? this.terminals.find();
+    const displayedSession = this.displayedSession;
+    const displayPid =
+      display !== undefined && displayedSession === undefined ? await display.processId : undefined;
+    const restoredTarget =
+      displayPid === undefined
+        ? undefined
+        : (await this.runtimes.clients()).find((client) => client.pid === displayPid)?.target;
+    const target = await this.runtimes.stop(sessionId);
+    if (display !== undefined && (displayedSession === sessionId || restoredTarget === target)) {
+      await this.closeDisplay(display);
+      this.display = undefined;
+      this.displayedSession = undefined;
+    }
+  }
+
   onTerminalClosed(closed: vscode.Terminal): void {
     if (this.display === closed) {
       this.display = undefined;

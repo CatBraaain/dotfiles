@@ -246,6 +246,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
       await clearBridgeMessages(page);
       await page.click(`[data-archive="${worktreeId}"]`);
+      await page.locator('[data-action="confirmConfirmation"]').click();
       await page.click("#app header [data-mode-toggle]");
       await page.locator(`[data-unarchive="${worktreeId}"]`).click();
       expect(await openSessionMessages(page)).toEqual([]);
@@ -382,6 +383,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ).toBe(2);
 
     await page.click(`[data-archive="${atlasCurrentId}"]`);
+    await page.locator('[data-action="confirmConfirmation"]').click();
     await page.waitForFunction(
       (id) => document.querySelector(`.session-row.archived [data-session="${id}"]`) !== null,
       atlasCurrentId,
@@ -405,6 +407,81 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
+  it.each([320, 720])(
+    "confirms Archive with target, safe focus, cancel, Escape and keyboard at %ipx",
+    async (width) => {
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
+      await installBridgeMessageRecorder(page);
+      const archive = page.locator(`[data-archive="${atlasCurrentId}"]`);
+      const dialog = page.getByRole("dialog", { name: "Archive session" });
+      const cancel = page.locator('[data-action="cancelConfirmation"]');
+      const confirm = page.locator('[data-action="confirmConfirmation"]');
+      await archive.focus();
+      await archive.press("Enter");
+      await expect.poll(() => dialog.isVisible()).toBe(true);
+      expect(await page.locator("#confirmation-dialog-target").textContent()).toContain(
+        atlasCurrentId,
+      );
+      expect(await page.locator("#confirmation-dialog-target").textContent()).toContain(
+        "Polish the session sidebar",
+      );
+      expect(await page.locator("#confirmation-dialog-target").textContent()).toContain(
+        "~/projects/vscode-pi-sessions",
+      );
+      expect(await page.locator("#confirmation-dialog-description").textContent()).toBe(
+        "Running work will be interrupted. Unsent input may be lost. The saved conversation stays on disk.",
+      );
+      expect(await cancel.evaluate((button) => document.activeElement === button)).toBe(true);
+      expect(await cancel.evaluate((button) => getComputedStyle(button).outlineWidth)).toBe("2px");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => dialog.isHidden()).toBe(true);
+      expect(await archive.evaluate((button) => document.activeElement === button)).toBe(true);
+
+      await archive.press("Enter");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => dialog.isHidden()).toBe(true);
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([]);
+      expect(await page.locator(".session-row.selected").count()).toBe(1);
+      expect(await page.locator(`[data-session="${atlasCurrentId}"]`).count()).toBe(1);
+
+      await archive.press("Enter");
+      await page.keyboard.press("Shift+Tab");
+      expect(await confirm.evaluate((button) => document.activeElement === button)).toBe(true);
+      await page.keyboard.press("Tab");
+      expect(await cancel.evaluate((button) => document.activeElement === button)).toBe(true);
+      await page.keyboard.press("Tab");
+      expect(await confirm.evaluate((button) => document.activeElement === button)).toBe(true);
+      const layout = await dialog.evaluate((element) => ({
+        width: element.getBoundingClientRect().width,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        buttons: Array.from(element.querySelectorAll("button")).map((button) => ({
+          width: button.getBoundingClientRect().width,
+          height: button.getBoundingClientRect().height,
+        })),
+      }));
+      expect(layout.overflow).toBe(false);
+      expect(layout.width).toBeLessThan(width);
+      for (const button of layout.buttons) {
+        expect(button.width).toBeGreaterThanOrEqual(24);
+        expect(button.height).toBeGreaterThanOrEqual(24);
+      }
+      await page.keyboard.press("Enter");
+      await expect.poll(() => page.locator(`[data-session="${atlasCurrentId}"]`).count()).toBe(0);
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([{ type: "archiveSession", sessionId: atlasCurrentId }]);
+      expect(await page.locator(".session-row.selected").count()).toBe(0);
+      expect(await openSessionMessages(page)).toEqual([]);
+      await page.close();
+    },
+  );
+
   it("offers one enabled row action and keeps IDs in the row hints", async () => {
     const page = await openStory("sessions-sidebar--all-mode");
     await page.waitForSelector(".session-row.archived");
@@ -422,6 +499,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const archive = page.locator('[data-archive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]');
     await archive.focus();
     await page.keyboard.press("Enter");
+    await page.locator('[data-action="confirmConfirmation"]').click();
     await page.locator('[data-unarchive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]').waitFor();
     expect(await openSessionMessages(page)).toEqual([]);
     expect(await page.locator(".session-row.selected").count()).toBe(1);
@@ -456,6 +534,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ).toBe(atlasCurrentId);
 
     await page.click(`[data-archive="${worktreeId}"]`);
+    await page.locator('[data-action="confirmConfirmation"]').click();
     await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 3);
     expect(await page.locator(`[data-session="${piToolsOtherId}"]`).count()).toBe(1);
     expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
@@ -479,6 +558,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
 
     await page.click(`[data-archive="${worktreeId}"]`);
+    await page.locator('[data-action="confirmConfirmation"]').click();
 
     await page.waitForFunction(
       (gone) => !document.querySelector(`[data-session="${gone}"]`),
@@ -701,17 +781,19 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     // The button stays hidden until the header is hovered or focused.
     await agenda.locator(".group-header").hover();
     await agenda.locator(".group-unregister").click();
-    const dialog = page.locator("#unregister-dialog");
+    const dialog = page.locator("#confirmation-dialog");
     await expect.poll(() => dialog.isVisible()).toBe(true);
-    expect(await page.locator("#unregister-dialog-cwd").textContent()).toBe("~/projects/agenda");
-    await page.locator('[data-action="cancelUnregister"]').click();
+    expect(await page.locator("#confirmation-dialog-target").textContent()).toBe(
+      "~/projects/agenda",
+    );
+    await page.locator('[data-action="cancelConfirmation"]').click();
     await expect.poll(() => dialog.isHidden()).toBe(true);
     expect(await page.locator(".group").filter({ hasText: "agenda" }).count()).toBe(1);
 
     await agenda.locator(".group-header").hover();
     await agenda.locator(".group-unregister").click();
     await expect.poll(() => dialog.isVisible()).toBe(true);
-    await page.locator('[data-action="confirmUnregister"]').click();
+    await page.locator('[data-action="confirmConfirmation"]').click();
     await expect.poll(() => page.locator(".group").filter({ hasText: "agenda" }).count()).toBe(0);
     expect(
       await page.evaluate(() => {
@@ -744,6 +826,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await chevron.click();
     await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
     await page.locator(`[data-archive="${worktreeId}"]`).click();
+    await page.locator('[data-action="confirmConfirmation"]').click();
     await expect.poll(() => page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
     await group.locator(".group-title").click();

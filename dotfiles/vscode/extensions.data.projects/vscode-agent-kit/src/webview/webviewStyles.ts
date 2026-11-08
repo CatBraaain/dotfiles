@@ -57,8 +57,8 @@ export const webviewStyles = `
     .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
     .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
     .session-row.selected:focus-within .session-name, .session-row.selected:focus-within .session-timestamp { color: var(--vscode-list-activeSelectionForeground, var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground))); }
-    #unregister-dialog { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.4); }
-    #unregister-dialog[hidden] { display: none; }
+    #confirmation-dialog { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.4); }
+    #confirmation-dialog[hidden] { display: none; }
     .dialog { display: flex; flex-direction: column; gap: 8px; width: min(240px, calc(100% - 32px)); padding: 12px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: 9.6px; background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)); }
     .dialog h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--vscode-foreground); }
     .dialog p { margin: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--vscode-descriptionForeground); }

@@ -98,6 +98,7 @@ export function createDemoBridge(): {
   let listener: (message: { type?: string; state?: unknown }) => void = () => {};
   let store: SessionSummary[] = cloneStore(sampleSessions);
   let metadata = new Map<string, DemoEntry>(SAMPLE_METADATA);
+  let displayedSessionId: string | undefined = DISPLAYED_SESSION_ID;
   // The list shows registered workspaces only. The worktree cwd and the
   // project share one basename, which the heading hint must distinguish; the
   // agenda workspace has no sessions and still keeps its empty group.
@@ -125,7 +126,7 @@ export function createDemoBridge(): {
           archivedIds,
           phases,
         }),
-        displayedSessionId: DISPLAYED_SESSION_ID,
+        displayedSessionId,
       },
     });
   }
@@ -140,8 +141,8 @@ export function createDemoBridge(): {
       return;
     }
     if (request.type === "archiveSession" && typeof request.sessionId === "string") {
-      const entry = entryOf(request.sessionId);
-      metadata.set(request.sessionId, { ...entry, archived: true });
+      metadata.set(request.sessionId, { archived: true });
+      if (displayedSessionId === request.sessionId) displayedSessionId = undefined;
       postSessions();
       return;
     }
@@ -181,6 +182,7 @@ export function createDemoBridge(): {
   /** Reset to a demo state. */
   function reset(demoState: DemoState): void {
     store = cloneStore(sampleSessions);
+    displayedSessionId = DISPLAYED_SESSION_ID;
     metadata = new Map(
       [...SAMPLE_METADATA].map(([sessionId, entry]) => [
         sessionId,

@@ -23,13 +23,14 @@ export const webviewAppMarkup = `<main id="app">
       </div>
     </header>
     <section id="sessions" aria-live="polite"></section>
-    <div id="unregister-dialog" hidden>
-      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="unregister-dialog-title">
-        <h2 id="unregister-dialog-title">Unregister workspace</h2>
-        <p>Remove <span id="unregister-dialog-cwd"></span> from the list? Sessions stay on disk.</p>
+    <div id="confirmation-dialog" hidden>
+      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirmation-dialog-title" aria-describedby="confirmation-dialog-target confirmation-dialog-description">
+        <h2 id="confirmation-dialog-title"></h2>
+        <p id="confirmation-dialog-target"><span></span></p>
+        <p id="confirmation-dialog-description"></p>
         <div class="dialog-actions">
-          <button class="dialog-button secondary" type="button" data-action="cancelUnregister">Cancel</button>
-          <button class="dialog-button primary" type="button" data-action="confirmUnregister">Unregister</button>
+          <button class="dialog-button secondary" type="button" data-action="cancelConfirmation">Cancel</button>
+          <button class="dialog-button primary" type="button" data-action="confirmConfirmation"></button>
         </div>
       </div>
     </div>
