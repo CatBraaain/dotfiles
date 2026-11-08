@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
+import { errorMessage } from "./guards";
 import { SessionLauncher } from "./launcher";
 import { resolveAgentDir, resolveSessionDir, sessionStatePath } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
@@ -18,6 +19,18 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
+    vscode.commands.registerCommand("piSessions.reapplyTmuxSettings", async () => {
+      try {
+        const count = await tmux.reapplySettings();
+        void vscode.window.showInformationMessage(
+          count === 0 ? "No tmux sessions to update." : "tmux settings reapplied.",
+        );
+      } catch (error) {
+        void vscode.window.showErrorMessage(
+          `Failed to reapply tmux settings: ${errorMessage(error)}`,
+        );
+      }
+    }),
   );
 
   const launcher: SessionLauncher = new SessionLauncher({

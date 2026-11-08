@@ -56,16 +56,7 @@ export class TmuxRuntimeStore {
             "pi",
             ...launch.args,
           ],
-          ["set-option", "-t", runtime.target, "status", "off"],
-          ["set-option", "-s", "extended-keys", "on"],
-          ["set-option", "-t", runtime.target, "prefix", "None"],
-          // tmux 3.8 turns the mouse option on by default and adds root-table
-          // Ctrl bindings for floating panes. Those bindings swallow Ctrl+drag
-          // before it reaches the pane, so unbind them to let pi track the
-          // mouse. unbind-key is idempotent on tmux versions without them.
-          ["unbind-key", "-T", "root", "MouseDown1Control7"],
-          ["unbind-key", "-T", "root", "MouseDown1Control8"],
-          ["unbind-key", "-T", "root", "MouseDown1Control9"],
+          ...this.settingsCommands([runtime.target]),
         );
       } catch (error) {
         if (!/duplicate session/.test(errorMessage(error)) || !(await this.isAlive(runtime)))
@@ -77,11 +68,41 @@ export class TmuxRuntimeStore {
         throw new Error(`Pi exited while starting session ${launch.sessionId} in ${launch.cwd}`);
       }
     }
-    await this.command(
-      ["set-option", "-t", runtime.target, "set-titles", "on"],
-      ["set-option", "-t", runtime.target, "set-titles-string", "#{pane_title}"],
-    );
+    const [titleCommand, ...titleCommands] = this.titleCommands(runtime.target);
+    await this.command(titleCommand, ...titleCommands);
     return runtime;
+  }
+
+  async reapplySettings(): Promise<number> {
+    const sessions = await this.query(["list-sessions", "-F", "#{session_name}"]);
+    const targets = sessions.split("\n").filter((name) => /^pi-[a-f0-9]{24}$/.test(name));
+    if (targets.length === 0) return 0;
+
+    const [firstCommand, ...commands] = this.settingsCommands(targets);
+    await this.command(firstCommand, ...commands);
+    await this.enableCsiUExtendedKeysFormat();
+    await this.bindShiftEnterForwarding();
+    return targets.length;
+  }
+
+  private settingsCommands(targets: readonly string[]): string[][] {
+    return [
+      ...targets.flatMap((target) => [
+        ["set-option", "-t", target, "status", "off"],
+        ["set-option", "-t", target, "prefix", "None"],
+        ...this.titleCommands(target),
+      ]),
+      ["set-option", "-s", "extended-keys", "on"],
+      ["unbind-key", "-T", "root", "C-MouseDrag1Pane"],
+      ["unbind-key", "-T", "root", "C-MouseDrag1Empty"],
+    ];
+  }
+
+  private titleCommands(target: string): string[][] {
+    return [
+      ["set-option", "-t", target, "set-titles", "on"],
+      ["set-option", "-t", target, "set-titles-string", "#{pane_title}"],
+    ];
   }
 
   private async enableCsiUExtendedKeysFormat(): Promise<void> {
@@ -93,13 +114,6 @@ export class TmuxRuntimeStore {
     }
   }
 
-  /** Forward Shift+Enter to the pane as the CSI-u sequence, so pi can tell it
-   * apart from Enter. The outer terminal never reports Shift+Enter: VS Code
-   * sends Enter without modifier info, and tmux drops the modifier on the way
-   * to the pane. Instead, the extension keybinding sends the CSI-u sequence
-   * itself; tmux reports it as an S-Enter key event, and this bind passes the
-   * same sequence through to the pane. Skipping the bind on older tmux
-   * versions (no hex send-keys, no S-Enter key name) is harmless. */
   private async bindShiftEnterForwarding(): Promise<void> {
     try {
       await this.command([
@@ -116,8 +130,13 @@ export class TmuxRuntimeStore {
         "32",
         "75",
       ]);
-    } catch {
-      // Skip the bind on tmux versions that cannot bind or send the sequence.
+    } catch (error) {
+      if (
+        !/unknown key: S-Enter|(?:unknown|invalid) (?:flag|option)[: ]+-?H\b/.test(
+          errorMessage(error),
+        )
+      )
+        throw error;
     }
   }
 

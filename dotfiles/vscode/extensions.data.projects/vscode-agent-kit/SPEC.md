@@ -30,6 +30,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | E2E-13 | Archive で対象 Pi を終了し、Unarchive と再選択で保存済み会話を再開できる | アーカイブ・未アーカイブアクションどおりの直接実行、対象だけの終了、原本保持、非起動の復帰と再開 | Archive 後（アーカイブ済み行）／Unarchive 後（未アーカイブ） | 保存 E2E |
 | E2E-14 | 未アーカイブの生存セッションで実行フェーズの変化を表示できる | [実行フェーズの表示](#実行フェーズの表示)どおりのアイコン・ヒント・スロットと reduced-motion 表示 | running / waiting-approval / waiting-user | 保存 E2E |
 | E2E-15 | 一覧の取得状態に応じて、取得中・既存一覧・成功空・取得エラーを区別できる | [一覧の取得状態](#一覧の取得状態)どおりの案内・一覧保持・エラー表示 | 初回loading／一覧保持refreshing／成功空／取得error | 保存 E2E（実Webviewへの入力制御） |
+| E2E-16 | 専用tmuxの設定をコマンドから反復適用する | [tmux設定の再適用](#tmux設定の再適用)どおりの通知、全管理セッションへの反映、通常マウス設定・セッション・pane・Piプロセスの維持 | なし | 保存 E2E |
 
 保存 E2E 以外の振る舞いは、unit がセッション状態ストア・セッション読み取り・表示名・グルーピング・Webview の描画・グループの開閉・行の選択表示（共有 Terminal の表示先への追従）・メッセージプロトコル・アーカイブ・実行フェーズ表示・Terminal 対応付け・New Session と New Workspace の各契約を検証し、Storybook 静的カタログの smoke が Webview の表示と操作を検証する。各契約の詳細は後続の定義節に従う。
 
@@ -353,7 +354,7 @@ Pi は tmux 内で会話ごとに保持し、表示用 Terminal の開閉と稼�
 
 拡張の専用 tmux サーバーでは、Pi が修飾キー付きキー（Shift+Enter など）を区別できるよう `extended-keys` を on にし、その報告形式を `csi-u` に設定する。形式の設定は `extended-keys-format` オプションを持つ tmux でのみ行い、持たない tmux では Pi を通常どおり起動する。
 
-拡張の専用 tmux サーバーでは、Pi TUI が Ctrl+クリック・ドラッグをマウス操作として受け取れるよう、root テーブルの Ctrl 付きマウスバインド（tmux 3.8 が既定で持つ Ctrl+ドラッグでの floating pane 作成など）を解除する。バインドが残っていると tmux は該当イベントを pane へ転送せず消費する。解除は対象キーを持たない tmux でもそのまま行い、Pi を通常どおり起動する。
+拡張の専用 tmux サーバーでは、Ctrl+左ドラッグによる floating pane 作成を無効にするため、root テーブルの `C-MouseDrag1Pane` と `C-MouseDrag1Empty` だけを解除する。通常のクリック・ドラッグ選択・ホイールの割り当てと、マウス機能の有効状態は維持する。対象キーの割り当てがない場合も、同じ設定を適用できる。
 
 VS Code の Terminal は修飾キー付き Enter を報告しないため、tmux を介した Pi では Shift+Enter が通常の Enter と区別できない。そこでこの拡張機能は、Terminal へフォーカスがあるときの `Shift+Enter` を `sendSequence` で CSI-u 形式（`ESC [ 13 ; 2 u`）の送信に束ねる。tmux はこのシーケンスを `S-Enter` キーイベントとして受け、専用サーバーではそれを同じ CSI-u シーケンスで pane へ転送する bind を設定する。bind の設定は hex 形式の `send-keys` や `S-Enter` キー名を持たない tmux では行わず、Pi を通常どおり起動する。tmux を介さない環境でも、Pi TUI は CSI-u シーケンスを Shift+Enter として認識する。
 
@@ -373,6 +374,19 @@ VS Code の Terminal は修飾キー付き Enter を報告しないため、tmux
 `pi --session` による再開は既存のセッションファイルへの追記として行われ、新しいセッションファイルは作られない。
 
 アーカイブ済みのセッション（All モードにのみ現れるセッション）を選択して開いた場合も、上の表と同じ Pi 起動・再接続の動作になり、開くだけではセッション状態ストアの active 状態を変えない。アーカイブ済みのセッションは、行の `Unarchive` 操作でのみ未アーカイブに戻って既定の一覧に現れる。
+
+### tmux設定の再適用
+
+利用者はコマンドパレットの `Pi Sessions: Reapply tmux Settings`（`piSessions.reapplyTmuxSettings`）から、拡張の専用tmuxへ設定を再適用できる。接続先は拡張が現在使用する agent・セッションディレクトリに対応する専用サーバーであり、ソケット名・パスの入力は不要である。
+
+| 条件・操作 | 動作 |
+| --- | --- |
+| 専用サーバーに管理セッションがある状態でコマンドを実行 | 一覧の表示対象やアーカイブ状態にかかわらず、既存の全管理セッションに新規起動時と同じ設定を適用する。ステータスバー非表示、prefixなし、paneタイトルの転送、および上記の修飾キー・マウス割り当てを反映する |
+| 設定を正常に適用 | `tmux settings reapplied.` と通知する |
+| 専用サーバーが未起動、または管理セッションがない | `No tmux sessions to update.` と通知し、サーバー・セッション・Piを新規作成しない |
+| 接続や設定の適用に失敗 | `Failed to reapply tmux settings` と失敗内容をエラー通知する。上記の旧版tmuxで利用できない報告形式・Shift+Enter割り当ては、その互換動作に従う |
+| コマンドを繰り返し実行 | 同じ設定を反映し、稼働中のサーバー・セッション・pane・Piプロセスと通常のマウス設定を維持する |
+| 修正版拡張のロード後にコマンドを実行 | 保持中のtmuxへその場で設定を反映する。通常の再接続や `Developer: Reload Window` では、既存のstatus・prefix・修飾キー・マウス割り当てを維持する |
 
 ### VS Code 再起動
 

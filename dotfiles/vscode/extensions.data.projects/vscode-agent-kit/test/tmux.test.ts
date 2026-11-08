@@ -6,6 +6,7 @@ function setup(onCommand?: (args: string[]) => Promise<void> | void) {
   const execute = vi.fn(async (_executable: string, args: string[]) => {
     await onCommand?.(args);
     const command = args[4];
+    if (command === "list-sessions") return [...panes.keys()].join("\n");
     if (command === "list-panes")
       return [...panes].map(([name, dead]) => `${name}\t${dead}\n`).join("");
     if (command === "new-session") {
@@ -56,7 +57,7 @@ describe("TmuxRuntimeStore", () => {
     expect(starts[0][1].join(" ")).toContain("prefix None");
   });
 
-  it("unbinds the tmux 3.8 root Ctrl mouse bindings so pi receives Ctrl+drag", async () => {
+  it("unbinds only the two Ctrl left-drag pane creation bindings", async () => {
     const { store, execute } = setup();
     await store.ensure({ sessionId: "A", cwd: "/project", args: [] });
 
@@ -67,9 +68,8 @@ describe("TmuxRuntimeStore", () => {
       argument === "unbind-key" ? [startArgs.slice(index, index + 4)] : [],
     );
     expect(unbindCommands).toEqual([
-      ["unbind-key", "-T", "root", "MouseDown1Control7"],
-      ["unbind-key", "-T", "root", "MouseDown1Control8"],
-      ["unbind-key", "-T", "root", "MouseDown1Control9"],
+      ["unbind-key", "-T", "root", "C-MouseDrag1Pane"],
+      ["unbind-key", "-T", "root", "C-MouseDrag1Empty"],
     ]);
   });
 
@@ -166,7 +166,7 @@ describe("TmuxRuntimeStore", () => {
     expect(args[args.indexOf("-c") + 1]).toBe(`/project/${escaped}`);
     const piIndex = args.indexOf("pi");
     expect(args.slice(piIndex + 1, piIndex + 4)).toEqual(["--session", escaped, ";"]);
-    expect(args.filter((argument) => argument === ";")).toHaveLength(6);
+    expect(args.filter((argument) => argument === ";")).toHaveLength(7);
   });
 
   it.each(["PATH", "HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"])(
@@ -180,7 +180,7 @@ describe("TmuxRuntimeStore", () => {
         const starts = execute.mock.calls.filter(([, args]) => args[4] === "new-session");
         expect(starts).toHaveLength(1);
         expect(starts[0][1]).toContain(`${key}=/fixture\\\\;`);
-        expect(starts[0][1].filter((argument) => argument === ";")).toHaveLength(6);
+        expect(starts[0][1].filter((argument) => argument === ";")).toHaveLength(7);
       } finally {
         vi.unstubAllEnvs();
       }
@@ -257,6 +257,144 @@ describe("TmuxRuntimeStore", () => {
     await store.ensure(a);
     expect(await store.isAlive(runtimeB)).toBe(true);
     expect(execute.mock.calls.filter(([, args]) => args[4] === "new-session")).toHaveLength(3);
+  });
+
+  it("reapplies the startup settings to every actual managed session with a fresh store", async () => {
+    const { store, execute, panes } = setup();
+    const a = await store.ensure({ sessionId: "A", cwd: "/a", args: [] });
+    const b = await store.ensure({ sessionId: "B", cwd: "/b", args: [] });
+    panes.set("ordinary-session", 0);
+    panes.set("pi-not-managed", 0);
+    const originalPanes = [...panes];
+    execute.mockClear();
+    const restored = new TmuxRuntimeStore("test-socket", execute);
+
+    await expect(restored.reapplySettings()).resolves.toBe(2);
+    await expect(restored.reapplySettings()).resolves.toBe(2);
+
+    const settings = execute.mock.calls.filter(([, args]) => args[4] === "set-option");
+    for (const [, args] of settings.filter(([, args]) => args.includes("status"))) {
+      for (const target of [a.target, b.target]) {
+        expect(args.join(" ")).toContain(`set-option -t ${target} status off`);
+        expect(args.join(" ")).toContain(`set-option -t ${target} prefix None`);
+        expect(args.join(" ")).toContain(`set-option -t ${target} set-titles on`);
+        expect(args.join(" ")).toContain(`set-option -t ${target} set-titles-string #{pane_title}`);
+      }
+      expect(args.join(" ")).toContain("set-option -s extended-keys on");
+      expect(args.join(" ")).toContain("unbind-key -T root C-MouseDrag1Pane");
+      expect(args.join(" ")).toContain("unbind-key -T root C-MouseDrag1Empty");
+      expect(args).not.toContain("ordinary-session");
+      expect(args).not.toContain("pi-not-managed");
+      expect(args).not.toContain("mouse");
+    }
+    expect(settings.filter(([, args]) => args.includes("status"))).toHaveLength(2);
+    expect(execute.mock.calls.filter(([, args]) => args[4] === "bind-key")).toHaveLength(2);
+    expect(
+      execute.mock.calls.every(([, args]) => !args.some((arg) => /^(new-|kill-)/.test(arg))),
+    ).toBe(true);
+    expect([...panes]).toEqual(originalPanes);
+  });
+
+  it("uses exactly the same settings commands for startup and explicit reapplication", async () => {
+    const { store, execute } = setup();
+    await store.ensure({ sessionId: "A", cwd: "/a", args: [] });
+    const startup = execute.mock.calls.find(([, args]) => args[4] === "new-session")![1];
+    const startupSettings = startup.slice(startup.indexOf(";") + 1);
+    execute.mockClear();
+
+    await store.reapplySettings();
+
+    const reapplied = execute.mock.calls.find(([, args]) => args.includes("status"))![1];
+    expect(reapplied.slice(4)).toEqual(startupSettings);
+  });
+
+  it("does not automatically reapply startup settings when reconnecting", async () => {
+    const { store, execute } = setup();
+    const launch = { sessionId: "A", cwd: "/a", args: [] };
+    await store.ensure(launch);
+    execute.mockClear();
+
+    await new TmuxRuntimeStore("test-socket", execute).ensure(launch);
+
+    expect(execute.mock.calls.map(([, args]) => args[4])).toEqual(["list-panes", "set-option"]);
+    expect(execute.mock.calls[1][1]).not.toContain("status");
+    expect(execute.mock.calls[1][1]).not.toContain("unbind-key");
+  });
+
+  it.each([{ targets: [] }, { targets: ["ordinary-session", "pi-not-managed"] }])(
+    "reports no targets without creating anything: $targets",
+    async ({ targets }) => {
+      const { store, execute, panes } = setup();
+      for (const target of targets) panes.set(target, 0);
+
+      await expect(store.reapplySettings()).resolves.toBe(0);
+
+      expect(execute).toHaveBeenCalledExactlyOnceWith("tmux", [
+        "-L",
+        "test-socket",
+        "-f",
+        "/dev/null",
+        "list-sessions",
+        "-F",
+        "#{session_name}",
+      ]);
+    },
+  );
+
+  it.each([
+    "no server running on test-socket",
+    "error connecting to /tmp/tmux-x/test-socket (No such file or directory)",
+  ])("reports no targets for an absent server: %s", async (message) => {
+    const execute = vi.fn().mockRejectedValue(new Error(message));
+    await expect(new TmuxRuntimeStore("test-socket", execute).reapplySettings()).resolves.toBe(0);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["permission denied", "spawn tmux ENOENT", "tmux query timed out"])(
+    "reports a session discovery failure: %s",
+    async (message) => {
+      const execute = vi.fn().mockRejectedValue(new Error(message));
+      await expect(new TmuxRuntimeStore("test-socket", execute).reapplySettings()).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it.each(["status", "extended-keys-format", "bind-key"])(
+    "reports a failed reapplication of %s instead of claiming success",
+    async (operation) => {
+      const { store, execute } = setup();
+      await store.ensure({ sessionId: "A", cwd: "/a", args: [] });
+      execute.mockImplementation(async (_executable, args) => {
+        if (args[4] === "list-sessions") return `pi-${"a".repeat(24)}`;
+        if (args.includes(operation)) throw new Error("connection lost");
+        return "";
+      });
+
+      await expect(store.reapplySettings()).rejects.toThrow("connection lost");
+    },
+  );
+
+  it.each(["unknown key: S-Enter", "command send-keys: unknown flag -H"])(
+    "preserves older tmux compatibility during reapplication: %s",
+    async (message) => {
+      const { store } = setup((args) => {
+        if (args[4] === "bind-key") throw new Error(message);
+        if (args.includes("extended-keys-format"))
+          throw new Error("invalid option: extended-keys-format");
+      });
+      await store.ensure({ sessionId: "A", cwd: "/a", args: [] });
+      await expect(store.reapplySettings()).resolves.toBe(1);
+    },
+  );
+
+  it("reports a real Shift+Enter binding failure during startup", async () => {
+    const { store } = setup((args) => {
+      if (args[4] === "bind-key") throw new Error("permission denied");
+    });
+    await expect(store.ensure({ sessionId: "A", cwd: "/a", args: [] })).rejects.toThrow(
+      "permission denied",
+    );
   });
 
   it("stops only the exact conversation target in its dedicated socket", async () => {

@@ -35,6 +35,13 @@
     "vite-plus": "^1.5.0"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "piSessions.reapplyTmuxSettings",
+        "category": "Pi Sessions",
+        "title": "Reapply tmux Settings"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
