@@ -12,6 +12,8 @@ import { initDocumentScrollbar } from "./documentScrollbar";
 /** Per-workspace display mode: unarchived sessions only, or all sessions. */
 export type ViewMode = "unarchived" | "all";
 
+type SessionLoadStatus = "loading" | "loaded" | "error";
+
 /** Live execution phase of a session, mirrored from the session state store. */
 export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
 
@@ -84,16 +86,15 @@ export function sessionListView(
   modes: ReadonlyMap<string, ViewMode> = new Map(),
   displayedSessionId: string | undefined = undefined,
   collapsedCwds: ReadonlySet<string> = new Set(),
+  loadStatus: SessionLoadStatus = "loaded",
 ): SessionListView {
   const groups = state.groups.map((group) =>
     groupDescriptor(group, modes.get(group.cwd) ?? "unarchived", displayedSessionId, collapsedCwds),
   );
-  return {
-    sessions:
-      groups.length === 0
-        ? [{ tag: "p", attrs: { class: "empty" }, children: ["No saved sessions"] }]
-        : groups,
-  };
+  if (groups.length > 0) return { sessions: groups };
+  if (loadStatus === "error") return { sessions: [] };
+  const emptyText = loadStatus === "loading" ? "Loading sessions…" : "No saved sessions";
+  return { sessions: [{ tag: "p", attrs: { class: "empty" }, children: [emptyText] }] };
 }
 
 function groupDescriptor(
@@ -453,8 +454,8 @@ function descriptorToElement(
 
 interface ClientSnapshot {
   state: ClientState;
-  statusText: string;
-  statusError: boolean;
+  loadStatus: SessionLoadStatus;
+  errorMessage: string;
 }
 
 /** Latest-value store fed by the bridge; registered synchronously by
@@ -462,13 +463,15 @@ interface ClientSnapshot {
 function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
+  setLoading(): void;
   setSessions(state: ClientState): void;
   setError(message: string): void;
+  setSessionsError(message: string): void;
 } {
   let snapshot: ClientSnapshot = {
     state: { groups: [] },
-    statusText: "",
-    statusError: false,
+    loadStatus: "loading",
+    errorMessage: "",
   };
   const listeners = new Set<() => void>();
   const publish = (next: ClientSnapshot): void => {
@@ -481,8 +484,16 @@ function createClientStore(): {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => snapshot,
-    setSessions: (state) => publish({ ...snapshot, state, statusText: "", statusError: false }),
-    setError: (message) => publish({ ...snapshot, statusText: message, statusError: true }),
+    setLoading: () =>
+      publish({
+        ...snapshot,
+        loadStatus: "loading",
+        errorMessage: "",
+      }),
+    setSessions: (state) => publish({ state, loadStatus: "loaded", errorMessage: "" }),
+    setError: (message) => publish({ ...snapshot, errorMessage: message }),
+    setSessionsError: (message) =>
+      publish({ ...snapshot, loadStatus: "error", errorMessage: message }),
   };
 }
 
@@ -497,8 +508,14 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
   const [modes, setModes] = useState<ReadonlyMap<string, ViewMode>>(() => new Map());
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
   useEffect(() => {
-    statusElement.textContent = snapshot.statusText;
-    statusElement.className = snapshot.statusError ? "error" : "";
+    const loadingText =
+      snapshot.loadStatus === "loading" && snapshot.state.groups.length > 0
+        ? "Refreshing sessions…"
+        : "";
+    statusElement.textContent = [loadingText, snapshot.errorMessage]
+      .filter((text) => text !== "")
+      .join("\n");
+    statusElement.className = snapshot.errorMessage === "" ? "" : "error";
   }, [snapshot, statusElement]);
 
   const actions: DescriptorActions = {
@@ -527,6 +544,7 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
     modes,
     snapshot.state.displayedSessionId,
     collapsedCwds,
+    snapshot.loadStatus,
   );
   return <>{view.sessions.map((descriptor) => descriptorToElement(descriptor, actions))}</>;
 }
@@ -565,12 +583,16 @@ export function initClient(bridge: ClientBridge): () => void {
   };
   bridge.onMessage((message) => {
     if (!isRecord(message)) return;
+    if (message.type === "loading") store.setLoading();
     if (message.type === "sessions" && isClientState(message.state)) {
       store.setSessions(message.state);
       if (pendingAddWorkspace) closeWorkspaceForm();
     }
     if (message.type === "error" && typeof message.message === "string") {
       store.setError(message.message);
+    }
+    if (message.type === "sessionsError" && typeof message.message === "string") {
+      store.setSessionsError(message.message);
     }
   });
 
@@ -587,6 +609,7 @@ export function initClient(bridge: ClientBridge): () => void {
       if (!formElement.hidden) pathInput.focus();
       return;
     }
+    if (actionType === "refresh") store.setLoading();
     bridge.postMessage({ type: actionType });
   };
   document.addEventListener("click", onDocumentClick);

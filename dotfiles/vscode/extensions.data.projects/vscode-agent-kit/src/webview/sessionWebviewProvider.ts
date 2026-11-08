@@ -79,9 +79,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
    * files, then send display-only data to the webview. */
   async refresh(): Promise<void> {
     const version = ++this.refreshVersion;
+    this.post({ type: "loading" });
     const store = readSessionStateStore(this.deps.statePath);
     if (store.status === "error") {
-      this.postError(store.message);
+      this.postError(store.message, "sessionsError");
       return;
     }
     const data = store.status === "ok" ? store.data : undefined;
@@ -101,7 +102,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     try {
       sessions = await listSessions(this.deps.sessionDir, { cwds: registeredCwds });
     } catch (error) {
-      this.postError(`Failed to read Pi sessions: ${errorMessage(error)}`);
+      if (version === this.refreshVersion) {
+        this.postError(`Failed to read Pi sessions: ${errorMessage(error)}`, "sessionsError");
+      }
       return;
     }
 
@@ -369,8 +372,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     );
   }
 
-  private postError(message: string): void {
+  private postError(message: string, type: "error" | "sessionsError" = "error"): void {
     void vscode.window.showErrorMessage(message);
-    this.post({ type: "error", message });
+    this.post({ type, message });
   }
 }

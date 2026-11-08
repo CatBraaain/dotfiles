@@ -34,7 +34,9 @@ export interface WebviewState {
 }
 
 export type ExtensionMessage =
+  | { type: "loading" }
   | { type: "sessions"; state: WebviewState }
+  | { type: "sessionsError"; message: string }
   | { type: "error"; message: string };
 
 export function parseWebviewRequest(value: unknown): WebviewRequest | undefined {

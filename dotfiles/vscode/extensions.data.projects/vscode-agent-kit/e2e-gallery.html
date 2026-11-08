@@ -132,14 +132,6 @@
         color: var(--error);
         font-family: inherit;
       }
-      #run-summary {
-        color: var(--muted);
-        font-size: var(--case);
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
       @media (max-width: 800px) {
         .table {
           grid-template-columns: 1fr;
@@ -156,10 +148,7 @@
     <div id="gallery-view">
       <header>
         <h1>Pi Sessions E2E gallery</h1>
-        <div id="run-details" hidden>
-          <p id="run-summary"></p>
-          <div id="run-errors"></div>
-        </div>
+        <div id="run-errors"></div>
       </header>
       <main id="cases">
         <p id="no-results">
@@ -174,16 +163,6 @@
       if (run) renderGallery(run);
 
       function renderGallery(run) {
-        const imageCount = collectImages(run.tests).filter((entry) => entry.image.url).length;
-        document.getElementById("run-details").hidden = false;
-        const summary = document.getElementById("run-summary");
-        summary.title = run.started;
-        summary.append(
-          element("strong", "", `Run: ${run.status}`),
-          " · ",
-          element("time", "", formatLocalTimestamp(run.started)),
-          ` · ${imageCount} images`,
-        );
         document.getElementById("run-errors").append(...run.errors.map(renderError));
         const sections = run.cases.map((specCase) =>
           renderCase(
@@ -196,18 +175,6 @@
         );
         if (unmapped.length) sections.push(renderCase({ title: "No SPEC reference" }, unmapped));
         document.getElementById("cases").replaceChildren(...sections);
-      }
-
-      function formatLocalTimestamp(iso) {
-        const started = new Date(iso);
-        const year = String(started.getFullYear()).padStart(4, "0");
-        const monthDay = [started.getMonth() + 1, started.getDate()]
-          .map((part) => String(part).padStart(2, "0"))
-          .join("-");
-        const time = [started.getHours(), started.getMinutes()]
-          .map((part) => String(part).padStart(2, "0"))
-          .join(":");
-        return `${year}-${monthDay} ${time}`;
       }
 
       function renderCase(specCase, tests) {

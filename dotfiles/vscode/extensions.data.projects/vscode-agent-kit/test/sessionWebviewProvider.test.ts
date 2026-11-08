@@ -226,7 +226,161 @@ async function unreadFixture() {
   return { ...fixture, setPhase, sentState, row, holdRuntimeQuery };
 }
 
+async function loadingFixture() {
+  const sessionDir = join(root, "sessions");
+  await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+    header({ id: activeSessionId, cwd: root }),
+  ]);
+  const { store, mocks } = fakeRuntimes();
+  const registry = new TerminalRegistry(store, editorTerminals(store));
+  const { provider, statePath } = createProvider({ sessionDir, registry });
+  expect(
+    mutateSessionStateStore(statePath, (data) => {
+      data["active-workspaces"][root] = {
+        "active-sessions": { [activeSessionId]: { state: "running" } },
+      };
+      return true;
+    }).ok,
+  ).toBe(true);
+  const webview = createView();
+  provider.resolveWebviewView(webview.view as never);
+  await vi.waitFor(() =>
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessions",
+      state: expect.any(Object),
+    }),
+  );
+  webview.postMessage.mockClear();
+  mocks.aliveSessionIds.mockClear();
+  return { provider, statePath, webview, mocks };
+}
+
 describe("SessionWebviewProvider", () => {
+  it("announces loading before asynchronous refresh work finishes", async () => {
+    const { provider, webview, mocks } = await loadingFixture();
+    let finish!: (ids: Set<string>) => void;
+    const pending = new Promise<Set<string>>((resolve) => {
+      finish = resolve;
+    });
+    mocks.aliveSessionIds.mockReturnValueOnce(pending);
+
+    const refreshing = provider.refresh();
+    try {
+      await vi.waitFor(() => expect(mocks.aliveSessionIds).toHaveBeenCalledOnce());
+      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual(["loading"]);
+    } finally {
+      finish(new Set([activeSessionId]));
+      await refreshing;
+    }
+    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+      "loading",
+      "sessions",
+    ]);
+  });
+
+  it("reports operation errors separately while a list refresh is pending", async () => {
+    const { provider, webview, mocks } = await loadingFixture();
+    let finish!: (ids: Set<string>) => void;
+    mocks.aliveSessionIds.mockReturnValueOnce(
+      new Promise<Set<string>>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const refreshing = provider.refresh();
+    try {
+      await vi.waitFor(() => expect(mocks.aliveSessionIds).toHaveBeenCalledOnce());
+      await webview.receive({ type: "addWorkspace", path: "relative" });
+      expect(webview.postMessage).toHaveBeenLastCalledWith({
+        type: "error",
+        message: expect.stringMatching(/^Invalid workspace path: /),
+      });
+      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+        "loading",
+        "error",
+      ]);
+    } finally {
+      finish(new Set([activeSessionId]));
+      await refreshing;
+    }
+    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+      "loading",
+      "error",
+      "sessions",
+    ]);
+  });
+
+  it("keeps loading until the newest overlapping refresh finishes", async () => {
+    const { provider, webview, mocks } = await loadingFixture();
+    const completions: ((ids: Set<string>) => void)[] = [];
+    mocks.aliveSessionIds.mockImplementation(
+      () =>
+        new Promise<Set<string>>((resolve) => {
+          completions.push(resolve);
+        }),
+    );
+    const firstRefresh = provider.refresh();
+    let secondRefresh: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(completions).toHaveLength(1));
+      secondRefresh = provider.refresh();
+      await vi.waitFor(() => expect(completions).toHaveLength(2));
+      completions[0](new Set());
+      await firstRefresh;
+      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+        "loading",
+        "loading",
+      ]);
+    } finally {
+      for (const finish of completions) finish(new Set([activeSessionId]));
+      await Promise.all([firstRefresh, secondRefresh]);
+    }
+    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+      "loading",
+      "loading",
+      "sessions",
+    ]);
+  });
+
+  it("keeps the latest refresh error when an older refresh succeeds later", async () => {
+    const { provider, statePath, webview, mocks } = await loadingFixture();
+    let finish!: (ids: Set<string>) => void;
+    mocks.aliveSessionIds.mockReturnValueOnce(
+      new Promise<Set<string>>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const refreshing = provider.refresh();
+    try {
+      await vi.waitFor(() => expect(mocks.aliveSessionIds).toHaveBeenCalledOnce());
+      await writeFile(statePath, "invalid json");
+      await provider.refresh();
+    } finally {
+      finish(new Set([activeSessionId]));
+      await refreshing;
+    }
+    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+      "loading",
+      "loading",
+      "sessionsError",
+    ]);
+  });
+
+  it("ends loading with an error when the session state store cannot be read", async () => {
+    const { provider, statePath } = createProvider();
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    await writeFile(statePath, "invalid json");
+    webview.postMessage.mockClear();
+
+    await webview.receive({ type: "refresh" });
+
+    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+      "loading",
+      "sessionsError",
+    ]);
+  });
+
   it("serves the client module from dist-webview with a random base64 nonce", async () => {
     const { provider } = createProvider();
     const webview = createView();
@@ -1469,7 +1623,7 @@ describe("SessionWebviewProvider", () => {
     );
     const lastCall = webview.postMessage.mock.calls.at(-1)?.[0];
     expect(lastCall).toEqual({
-      type: "error",
+      type: "sessionsError",
       message: expect.stringMatching(/^Failed to read Pi sessions: /),
     });
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
