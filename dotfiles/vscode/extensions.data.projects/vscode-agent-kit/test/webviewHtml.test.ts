@@ -61,16 +61,14 @@ describe("webviewHtml", () => {
     expect(html).toContain("New workspace");
   });
 
-  it("keeps the shared confirmation dialog hidden with an accessible name and description", () => {
+  it("omits the confirmation dialog markup and styles", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain('<div id="confirmation-dialog" hidden>');
-    expect(html).toContain('aria-labelledby="confirmation-dialog-title"');
-    expect(html).toContain(
-      'aria-describedby="confirmation-dialog-target confirmation-dialog-description"',
-    );
-    expect(html).toContain('data-action="cancelConfirmation"');
-    expect(html).toContain('data-action="confirmConfirmation"');
+    expect(html).not.toContain("confirmation-dialog");
+    expect(html).not.toContain('role="dialog"');
+    expect(html).not.toContain('data-action="cancelConfirmation"');
+    expect(html).not.toContain('data-action="confirmConfirmation"');
+    expect(html).not.toContain(".dialog");
   });
 
   it("drops the header New session action in favor of the per-group plus button", () => {

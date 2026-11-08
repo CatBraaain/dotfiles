@@ -389,91 +389,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("blocks overlay focus and End scrolling during unregister confirmation", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
-    const track = page.locator(".session-scrollbar");
-    await page.locator(".group-header").first().hover();
-    await page.locator(".group-unregister").first().click();
-    await page.getByRole("dialog").waitFor({ state: "visible" });
-    const scrollBefore = await page.evaluate(() => window.scrollY);
-    for (let step = 0; step < 3; step++) await page.keyboard.press("Tab");
-    const scrollbarFocused = await track.evaluate((element) => element === document.activeElement);
-    await track.dispatchEvent("keydown", { key: "End" });
-    console.log(
-      JSON.stringify({
-        check: "unregister-overlay-End",
-        scrollbarFocused,
-        scrollBefore,
-        scrollAfter: await page.evaluate(() => window.scrollY),
-      }),
-    );
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scrollBefore);
-    expect(scrollbarFocused).toBe(false);
-    expect(await track.isHidden()).toBe(true);
-    await track.evaluate((element) => (element as HTMLElement).focus());
-    expect(await track.evaluate((element) => element === document.activeElement)).toBe(false);
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect.poll(() => track.isVisible()).toBe(true);
-    await track.focus();
-    await track.press("End");
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-    await page.close();
-  });
-
-  it("suppresses the overlay through a renamed modal wrapper and restores it when closed", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
-    const track = page.locator(".session-scrollbar");
-    const dialog = page.getByRole("dialog", { includeHidden: true });
-    await dialog.evaluate((element) => {
-      element.parentElement!.id = "confirmation-dialog";
-    });
-    await expect.poll(() => track.isVisible()).toBe(true);
-    await page.locator(".group-header").first().hover();
-    await page.locator(".group-unregister").first().click();
-    await page.getByRole("dialog").waitFor({ state: "visible" });
-    await expect.poll(() => track.isHidden()).toBe(true);
-    const scrollBefore = await page.evaluate(() => window.scrollY);
-    await track.dispatchEvent("keydown", { key: "End" });
-    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect.poll(() => dialog.isHidden()).toBe(true);
-    await expect.poll(() => track.isVisible()).toBe(true);
-    await track.focus();
-    expect(await track.evaluate((element) => element === document.activeElement)).toBe(true);
-    await page.close();
-  });
-
-  it("ends scrollbar dragging and blocks pointer input while unregister confirmation is open", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
-    const track = page.locator(".session-scrollbar");
-    const thumb = await page.locator(".session-scrollbar-thumb").boundingBox();
-    if (thumb === null) throw new Error("Scroll thumb is missing.");
-    await page.mouse.move(thumb.x + 4, thumb.y + thumb.height / 2);
-    await page.mouse.down();
-    await expect.poll(() => track.getAttribute("data-dragging")).toBe("true");
-    await page
-      .locator(".group-unregister")
-      .first()
-      .evaluate((element) => (element as HTMLElement).click());
-    await expect.poll(() => track.getAttribute("data-dragging")).toBeNull();
-    expect(await track.evaluate((element) => element.hasPointerCapture(1))).toBe(false);
-    expect(await track.isHidden()).toBe(true);
-    const scrollBefore = await page.evaluate(() => window.scrollY);
-    await page.mouse.move(316, 150);
-    await page.mouse.up();
-    await page.mouse.click(316, 90);
-    await track.dispatchEvent("pointerdown", {
-      pointerId: 1,
-      isPrimary: true,
-      button: 0,
-      clientY: 150,
-    });
-    await track.dispatchEvent("pointermove", { pointerId: 1, isPrimary: true, clientY: 170 });
-    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
-    expect(await track.getAttribute("data-dragging")).toBeNull();
-    await page.close();
-  });
-
   it.each([320, 720])(
     "treats timestamp clicks with modifiers like plain clicks at %ipx",
     async (width) => {
@@ -518,7 +433,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
       await clearBridgeMessages(page);
       await page.click(`[data-archive="${worktreeId}"]`);
-      await page.locator('[data-action="confirmConfirmation"]').click();
       await page.click("#app header [data-mode-toggle]");
       await page.locator(`[data-unarchive="${worktreeId}"]`).click();
       expect(await openSessionMessages(page)).toEqual([]);
@@ -655,7 +569,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ).toBe(2);
 
     await page.click(`[data-archive="${atlasCurrentId}"]`);
-    await page.locator('[data-action="confirmConfirmation"]').click();
     await page.waitForFunction(
       (id) => document.querySelector(`.session-row.archived [data-session="${id}"]`) !== null,
       atlasCurrentId,
@@ -679,69 +592,21 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it.each([320, 720])(
-    "confirms Archive with target, safe focus, cancel, Escape and keyboard at %ipx",
-    async (width) => {
+  it.each([
+    ["click", 320],
+    ["Enter", 320],
+    ["click", 720],
+    ["Enter", 720],
+  ] as const)(
+    "archives directly once with %s at %ipx without confirmation",
+    async (activation, width) => {
       const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
       await installBridgeMessageRecorder(page);
       const archive = page.locator(`[data-archive="${atlasCurrentId}"]`);
-      const dialog = page.getByRole("dialog", { name: "Archive session" });
-      const cancel = page.locator('[data-action="cancelConfirmation"]');
-      const confirm = page.locator('[data-action="confirmConfirmation"]');
-      await archive.focus();
-      await archive.press("Enter");
-      await expect.poll(() => dialog.isVisible()).toBe(true);
-      expect(await page.locator("#confirmation-dialog-target").textContent()).toContain(
-        atlasCurrentId,
-      );
-      expect(await page.locator("#confirmation-dialog-target").textContent()).toContain(
-        "Polish the session sidebar",
-      );
-      expect(await page.locator("#confirmation-dialog-target").textContent()).toContain(
-        "~/projects/vscode-pi-sessions",
-      );
-      expect(await page.locator("#confirmation-dialog-description").textContent()).toBe(
-        "Running work will be interrupted. Unsent input may be lost. The saved conversation stays on disk.",
-      );
-      expect(await cancel.evaluate((button) => document.activeElement === button)).toBe(true);
-      expect(await cancel.evaluate((button) => getComputedStyle(button).outlineWidth)).toBe("2px");
-      await page.keyboard.press("Enter");
-      await expect.poll(() => dialog.isHidden()).toBe(true);
-      expect(await archive.evaluate((button) => document.activeElement === button)).toBe(true);
+      if (activation === "click") await archive.click();
+      else await archive.press(activation);
 
-      await archive.press("Enter");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => dialog.isHidden()).toBe(true);
-      expect(
-        await page.evaluate(
-          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
-        ),
-      ).toEqual([]);
-      expect(await page.locator(".session-row.selected").count()).toBe(1);
-      expect(await page.locator(`[data-session="${atlasCurrentId}"]`).count()).toBe(1);
-
-      await archive.press("Enter");
-      await page.keyboard.press("Shift+Tab");
-      expect(await confirm.evaluate((button) => document.activeElement === button)).toBe(true);
-      await page.keyboard.press("Tab");
-      expect(await cancel.evaluate((button) => document.activeElement === button)).toBe(true);
-      await page.keyboard.press("Tab");
-      expect(await confirm.evaluate((button) => document.activeElement === button)).toBe(true);
-      const layout = await dialog.evaluate((element) => ({
-        width: element.getBoundingClientRect().width,
-        overflow: document.documentElement.scrollWidth > innerWidth,
-        buttons: Array.from(element.querySelectorAll("button")).map((button) => ({
-          width: button.getBoundingClientRect().width,
-          height: button.getBoundingClientRect().height,
-        })),
-      }));
-      expect(layout.overflow).toBe(false);
-      expect(layout.width).toBeLessThan(width);
-      for (const button of layout.buttons) {
-        expect(button.width).toBeGreaterThanOrEqual(24);
-        expect(button.height).toBeGreaterThanOrEqual(24);
-      }
-      await page.keyboard.press("Enter");
+      expect(await page.locator("#confirmation-dialog").isHidden()).toBe(true);
       await expect.poll(() => page.locator(`[data-session="${atlasCurrentId}"]`).count()).toBe(0);
       expect(
         await page.evaluate(
@@ -771,7 +636,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const archive = page.locator('[data-archive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]');
     await archive.focus();
     await page.keyboard.press("Enter");
-    await page.locator('[data-action="confirmConfirmation"]').click();
     await page.locator('[data-unarchive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]').waitFor();
     expect(await openSessionMessages(page)).toEqual([]);
     expect(await page.locator(".session-row.selected").count()).toBe(1);
@@ -806,7 +670,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ).toBe(atlasCurrentId);
 
     await page.click(`[data-archive="${worktreeId}"]`);
-    await page.locator('[data-action="confirmConfirmation"]').click();
     await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 3);
     expect(await page.locator(`[data-session="${piToolsOtherId}"]`).count()).toBe(1);
     expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
@@ -830,7 +693,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
 
     await page.click(`[data-archive="${worktreeId}"]`);
-    await page.locator('[data-action="confirmConfirmation"]').click();
 
     await page.waitForFunction(
       (gone) => !document.querySelector(`[data-session="${gone}"]`),
@@ -1143,49 +1005,45 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("offers Unregister on every visible group and removes its group", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions");
-    await installBridgeMessageRecorder(page);
-    const agenda = page.locator(".group").filter({ hasText: "agenda" });
-    const project = page
-      .locator(".group")
-      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
+  it.each([
+    ["click", "~/projects/agenda", 0],
+    ["Enter", "~/projects/agenda", 0],
+    ["click", "~/projects/vscode-pi-sessions", 1],
+    ["Enter", "~/projects/vscode-pi-sessions", 1],
+  ] as const)(
+    "unregisters directly once with %s for %s without confirmation",
+    async (activation, cwd, sessionCount) => {
+      const page = await openStory("sessions-sidebar--sample-sessions", {
+        width: 320,
+        height: 640,
+      });
+      await installBridgeMessageRecorder(page);
+      const groups = page.locator(".group");
+      const group = groups.filter({ has: page.locator(`.group-header[title="${cwd}"]`) });
+      const unregister = group.locator(".group-unregister");
+      const groupCountBefore = await groups.count();
 
-    // The whitelist list shows registered workspaces only, so every visible
-    // group offers Unregister.
-    expect(await agenda.locator(".group-unregister").count()).toBe(1);
-    expect(await agenda.locator(".group-unregister").getAttribute("aria-label")).toBe(
-      "Unregister workspace agenda",
-    );
-    expect(await project.locator(".group-unregister").count()).toBe(1);
+      expect(await page.locator(".group-unregister").count()).toBe(groupCountBefore);
+      expect(await group.locator(".session-row").count()).toBe(sessionCount);
+      expect(await unregister.getAttribute("aria-label")).toBe(
+        `Unregister workspace ${cwd.split("/").at(-1)}`,
+      );
+      await group.locator(".group-header").hover();
+      if (activation === "click") await unregister.click();
+      else await unregister.press(activation);
 
-    // The button stays hidden until the header is hovered or focused.
-    await agenda.locator(".group-header").hover();
-    await agenda.locator(".group-unregister").click();
-    const dialog = page.locator("#confirmation-dialog");
-    await expect.poll(() => dialog.isVisible()).toBe(true);
-    expect(await page.locator("#confirmation-dialog-target").textContent()).toBe(
-      "~/projects/agenda",
-    );
-    await page.locator('[data-action="cancelConfirmation"]').click();
-    await expect.poll(() => dialog.isHidden()).toBe(true);
-    expect(await page.locator(".group").filter({ hasText: "agenda" }).count()).toBe(1);
-
-    await agenda.locator(".group-header").hover();
-    await agenda.locator(".group-unregister").click();
-    await expect.poll(() => dialog.isVisible()).toBe(true);
-    await page.locator('[data-action="confirmConfirmation"]').click();
-    await expect.poll(() => page.locator(".group").filter({ hasText: "agenda" }).count()).toBe(0);
-    expect(
-      await page.evaluate(() => {
-        const messages = (window as Window & { __bridgeMessages?: { type?: string }[] })
-          .__bridgeMessages;
-        if (messages === undefined) throw new Error("Bridge message recorder is not installed.");
-        return messages.filter((message) => message.type === "unregisterWorkspace");
-      }),
-    ).toEqual([{ type: "unregisterWorkspace", cwd: "~/projects/agenda" }]);
-    await page.close();
-  });
+      expect(await page.locator("#confirmation-dialog").isHidden()).toBe(true);
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([{ type: "unregisterWorkspace", cwd }]);
+      await expect.poll(() => group.count()).toBe(0);
+      expect(await groups.count()).toBe(groupCountBefore - 1);
+      expect(await openSessionMessages(page)).toEqual([]);
+      await page.close();
+    },
+  );
 
   it("keeps the displayed session's mark across collapsing and archiving other rows", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
@@ -1207,7 +1065,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await chevron.click();
     await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
     await page.locator(`[data-archive="${worktreeId}"]`).click();
-    await page.locator('[data-action="confirmConfirmation"]').click();
     await expect.poll(() => page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
     await group.locator(".group-title").click();

@@ -440,21 +440,13 @@ interface SessionsAppProps {
   bridge: ClientBridge;
   store: ReturnType<typeof createClientStore>;
   statusElement: HTMLElement;
-  openUnregisterDialog: (cwd: string) => void;
-  openArchiveDialog: (sessionId: string) => void;
 }
 
 /** Render the session list into the #sessions root. The shared display mode
  * stays in client state (no host round-trip); the row selection display
  * follows the state's displayedSessionId, which the host owns; session
  * actions go through the bridge. */
-function SessionsApp({
-  bridge,
-  store,
-  statusElement,
-  openUnregisterDialog,
-  openArchiveDialog,
-}: SessionsAppProps): ReactElement {
+function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactElement {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
   useEffect(() => {
@@ -471,9 +463,9 @@ function SessionsApp({
         return next;
       }),
     onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
-    onUnregisterClick: (cwd) => openUnregisterDialog(cwd),
+    onUnregisterClick: (cwd) => bridge.postMessage({ type: "unregisterWorkspace", cwd }),
     onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
-    onArchiveClick: (sessionId) => openArchiveDialog(sessionId),
+    onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
     onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),
   };
 
@@ -517,63 +509,6 @@ export function initClient(bridge: ClientBridge): () => void {
   };
 
   const store = createClientStore();
-  const dialogElement = requireElement("#confirmation-dialog", HTMLElement);
-  const dialogTitle = requireElement("#confirmation-dialog-title", HTMLElement);
-  const dialogTarget = requireElement("#confirmation-dialog-target span", HTMLElement);
-  const dialogDescription = requireElement("#confirmation-dialog-description", HTMLElement);
-  const cancelButton = requireElement('[data-action="cancelConfirmation"]', HTMLButtonElement);
-  const confirmButton = requireElement('[data-action="confirmConfirmation"]', HTMLButtonElement);
-  let pendingConfirmation:
-    | { type: "unregisterWorkspace"; cwd: string }
-    | { type: "archiveSession"; sessionId: string }
-    | undefined;
-  let confirmationOrigin: HTMLElement | undefined;
-  function closeConfirmationDialog(): void {
-    pendingConfirmation = undefined;
-    dialogElement.hidden = true;
-    confirmationOrigin?.focus();
-    confirmationOrigin = undefined;
-  }
-  function openConfirmationDialog(
-    title: string,
-    target: string,
-    description: string,
-    action: string,
-  ): void {
-    confirmationOrigin =
-      document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    dialogTitle.textContent = title;
-    dialogTarget.textContent = target;
-    dialogDescription.textContent = description;
-    confirmButton.textContent = action;
-    dialogElement.hidden = false;
-    cancelButton.focus();
-  }
-  function openUnregisterDialog(cwd: string): void {
-    pendingConfirmation = { type: "unregisterWorkspace", cwd };
-    openConfirmationDialog(
-      "Unregister workspace",
-      cwd,
-      "Remove this workspace from the list? Sessions stay on disk.",
-      "Unregister",
-    );
-  }
-  function openArchiveDialog(sessionId: string): void {
-    const group = store
-      .getSnapshot()
-      .state.groups.find((candidate) =>
-        candidate.sessions.some((session) => session.sessionId === sessionId),
-      );
-    const session = group?.sessions.find((candidate) => candidate.sessionId === sessionId);
-    if (group === undefined || session === undefined) return;
-    pendingConfirmation = { type: "archiveSession", sessionId };
-    openConfirmationDialog(
-      "Archive session",
-      `${session.displayName} · ${sessionId} · ${group.cwd}`,
-      "Running work will be interrupted. Unsent input may be lost. The saved conversation stays on disk.",
-      "Archive",
-    );
-  }
   // The host closes the form by replying to an Add with a refreshed list; an
   // invalid path answers with an error instead, so the form stays open.
   let pendingAddWorkspace = false;
@@ -613,7 +548,6 @@ export function initClient(bridge: ClientBridge): () => void {
   const onDocumentClick = (event: Event): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    if (!dialogElement.hidden && !dialogElement.contains(target)) return;
     const modeTarget = target.closest("[data-mode-toggle]");
     if (modeTarget instanceof HTMLButtonElement) {
       selectHeaderMode(modeTarget.dataset.mode === "unarchived" ? "all" : "unarchived");
@@ -627,16 +561,6 @@ export function initClient(bridge: ClientBridge): () => void {
       pathInput.value = "";
       newWorkspaceButton.setAttribute("aria-expanded", String(!formElement.hidden));
       if (!formElement.hidden) pathInput.focus();
-      return;
-    }
-    if (actionType === "cancelConfirmation") {
-      closeConfirmationDialog();
-      return;
-    }
-    if (actionType === "confirmConfirmation") {
-      const request = pendingConfirmation;
-      closeConfirmationDialog();
-      if (request !== undefined) bridge.postMessage(request);
       return;
     }
     bridge.postMessage({ type: actionType });
@@ -653,31 +577,12 @@ export function initClient(bridge: ClientBridge): () => void {
   };
   pathInput.addEventListener("keydown", onPathInputKeyDown);
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (!dialogElement.hidden) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeConfirmationDialog();
-      } else if (event.key === "Tab") {
-        event.preventDefault();
-        if (document.activeElement === cancelButton) confirmButton.focus();
-        else cancelButton.focus();
-      }
-      return;
-    }
     if (event.key === "Escape" && !formElement.hidden) closeWorkspaceForm();
   };
   document.addEventListener("keydown", onKeyDown);
 
   const root = createRoot(sessionsElement);
-  root.render(
-    <SessionsApp
-      bridge={bridge}
-      store={store}
-      statusElement={statusElement}
-      openUnregisterDialog={openUnregisterDialog}
-      openArchiveDialog={openArchiveDialog}
-    />,
-  );
+  root.render(<SessionsApp bridge={bridge} store={store} statusElement={statusElement} />);
 
   const disposeScrollbar = initDocumentScrollbar();
   bridge.postMessage({ type: "ready" });
@@ -689,13 +594,6 @@ export function initClient(bridge: ClientBridge): () => void {
     pathInput.removeEventListener("keydown", onPathInputKeyDown);
     root.unmount();
   };
-}
-
-function requireElement<T extends Element>(selector: string, constructor: new () => T): T {
-  const element = document.querySelector(selector);
-  if (!(element instanceof constructor))
-    throw new Error(`Sessions webview markup is missing ${selector}.`);
-  return element;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

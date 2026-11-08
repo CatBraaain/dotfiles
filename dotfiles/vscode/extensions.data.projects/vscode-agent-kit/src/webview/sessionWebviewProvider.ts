@@ -253,11 +253,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     await this.refresh();
   }
 
-  /** Drop the workspace registration: delete its store entry together with
-   * its session memberships. The webview asks for confirmation before sending
-   * the request; the group disappears from the list and a sessionless
-   * registration too. A Pi still running in the cwd recreates the entry on
-   * its next sent message. */
   private unregisterWorkspace(cwd: string): void {
     const result = unregisterWorkspace(this.deps.statePath, cwd);
     if (!result.ok) {

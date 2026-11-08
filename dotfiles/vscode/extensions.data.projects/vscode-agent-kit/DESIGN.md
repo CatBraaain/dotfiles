@@ -53,11 +53,8 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 | 表示名 | 13px・20px 行・省略表示 |
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せで5文字分。行内では右側に `36px + 5ch + 8px` を予約する |
 | 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す |
-| 確認ダイアログ（Unregister・Archive） | 共通の Webview 内モーダル。scrim は黒40%、面は `editorWidget-background`・境界トークン・角丸9.6px・余白12px・要素間8px。見出し13px・600、対象（Unregister は cwd、Archive は表示名・セッション ID・cwd）は本文色、説明は12px・補助文字色。対象と説明は折返し。操作は高さ26px・角丸4pxで、`Unregister` または `Archive` は `button-background` / `button-foreground`、`Cancel` は `button-secondary-*`。フォーカスは共通の focus トークン |
 
-確認の主操作は対象への `Archive` または `Unregister`。情報の優先順は対象、操作の影響、確定・キャンセル。既存の Unregister 部品を共用し、対象識別と警告以外の補助装飾は加えない。確認内容とキーボード操作は SPEC「アーカイブ・未アーカイブアクション」「ワークスペース登録解除」に従う。
-
-セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。既存の見出し・モード切替・Refresh・行操作・New workspace・フォーム・確認ダイアログを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
+セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。既存の見出し・モード切替・Refresh・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
 
 ## Motion & Interaction
 
@@ -71,7 +68,7 @@ spinner は中心を軸に1秒・linear・無限反復で1回転する。回転�
 | 行の選択 | 選択面。選択中の表示名・日時は選択文字色 |
 | アーカイブ済みの行 | 表示名・日時を補助文字色にする |
 | 空の一覧・状態表示 | 補助文字色・12px。空の案内は余白24px の中央寄せ |
-| スクロールバーの表示 | document に縦 overflow があるとき、Webview へのホバー・スクロール中・つまみのドラッグ中・バーのキーボードフォーカス中だけ表示する。キーボードフォーカスには focus トークンの ring を出す。確認ダイアログの表示中はバーを隠す |
+| スクロールバーの表示 | document に縦 overflow があるとき、Webview へのホバー・スクロール中・つまみのドラッグ中・バーのキーボードフォーカス中だけ表示する。キーボードフォーカスには focus トークンの ring を出す |
 
 ## E2E gallery
 

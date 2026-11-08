@@ -28,17 +28,6 @@ export function initDocumentScrollbar(): () => void {
   let idleTimer = 0;
   let drag: { pointerId: number; grabFraction: number } | undefined;
 
-  function isDialogOpen() {
-    return Array.from(
-      app!.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]'),
-    ).some(
-      (dialog) =>
-        dialog.closest("[hidden]") === null &&
-        dialog.getClientRects().length > 0 &&
-        getComputedStyle(dialog).visibility === "visible",
-    );
-  }
-
   function metrics() {
     const trackHeight = document.documentElement.clientHeight;
     const scrollHeight = scrollingElement!.scrollHeight;
@@ -53,7 +42,7 @@ export function initDocumentScrollbar(): () => void {
   function update() {
     frame = 0;
     const { scrollRange, thumbHeight, travel } = metrics();
-    track.hidden = scrollRange === 0 || isDialogOpen();
+    track.hidden = scrollRange === 0;
     track.setAttribute("aria-valuemax", String(scrollRange));
     const scrollTop = Math.max(0, Math.min(scrollRange, scrollingElement!.scrollTop));
     track.setAttribute("aria-valuenow", String(Math.round(scrollTop)));
@@ -83,10 +72,6 @@ export function initDocumentScrollbar(): () => void {
   }
 
   function onPointerDown(event: PointerEvent) {
-    if (isDialogOpen()) {
-      event.preventDefault();
-      return;
-    }
     if (!event.isPrimary || event.button !== 0 || drag !== undefined) return;
     event.preventDefault();
     track.focus({ preventScroll: true });
@@ -121,10 +106,6 @@ export function initDocumentScrollbar(): () => void {
   }
 
   function onKeyDown(event: KeyboardEvent) {
-    if (isDialogOpen()) {
-      event.preventDefault();
-      return;
-    }
     const { scrollRange } = metrics();
     const pageStep = document.documentElement.clientHeight;
     const destinations: Record<string, number> = {
@@ -144,13 +125,7 @@ export function initDocumentScrollbar(): () => void {
 
   const resizeObserver = new ResizeObserver(scheduleUpdate);
   resizeObserver.observe(app);
-  const mutationObserver = new MutationObserver(() => {
-    if (isDialogOpen()) {
-      track.hidden = true;
-      endDrag();
-    }
-    scheduleUpdate();
-  });
+  const mutationObserver = new MutationObserver(scheduleUpdate);
   mutationObserver.observe(app, {
     attributes: true,
     childList: true,

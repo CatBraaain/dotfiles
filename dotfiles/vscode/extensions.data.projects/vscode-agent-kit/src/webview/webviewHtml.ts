@@ -23,17 +23,6 @@ export const webviewAppMarkup = `<main id="app">
       </div>
     </header>
     <section id="sessions" aria-live="polite"></section>
-    <div id="confirmation-dialog" hidden>
-      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirmation-dialog-title" aria-describedby="confirmation-dialog-target confirmation-dialog-description">
-        <h2 id="confirmation-dialog-title"></h2>
-        <p id="confirmation-dialog-target"><span></span></p>
-        <p id="confirmation-dialog-description"></p>
-        <div class="dialog-actions">
-          <button class="dialog-button secondary" type="button" data-action="cancelConfirmation">Cancel</button>
-          <button class="dialog-button primary" type="button" data-action="confirmConfirmation"></button>
-        </div>
-      </div>
-    </div>
     <footer class="footer">
       <button class="new-workspace" type="button" data-action="toggleWorkspaceForm" aria-expanded="false">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 10v6"></path><path d="M9 13h6"></path><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>

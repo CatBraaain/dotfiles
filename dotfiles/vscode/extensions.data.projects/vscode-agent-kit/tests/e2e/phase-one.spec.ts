@@ -481,27 +481,13 @@ test(
 );
 
 test(
-  "ワークスペース登録解除が確認を挟み、起動中の Pi を残して登録だけを外す",
+  "Unregisters directly while keeping Pi running and saved conversations unchanged",
   { annotation: { type: "spec", description: "E2E-11" } },
   async ({ host }) => {
     const folder = join(host.directory, "registered");
     await registerWorkFolder(host, folder);
 
-    await test.step("Keep the registration when the confirmation is cancelled", async () => {
-      const frame = await host.sessionFrame();
-      const group = frame
-        .locator("section.group")
-        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
-        .describe("Registered work folder group");
-      await group.locator(".group-header").hover();
-      await group
-        .locator(".group-unregister")
-        .describe("Registered group Unregister button")
-        .click({ steps: 15 });
-      await frame.getByRole("button", { name: "Cancel", exact: true }).click({ steps: 15 });
-      await expect(group).toBeVisible();
-    });
-    await test.step("Unregister after confirmation while Pi keeps running", async () => {
+    await test.step("Unregister directly while the same Pi keeps running", async () => {
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
@@ -514,15 +500,20 @@ test(
       await expect
         .poll(() => host.piProcesses().some((process) => process.cwd === folder))
         .toBe(true);
+      const initialPi = host.piProcesses().find((process) => process.cwd === folder);
+      if (initialPi === undefined) throw new Error("Registered workspace Pi is missing.");
 
       await group.locator(".group-header").hover();
-      await group.locator(".group-unregister").click({ steps: 15 });
-      await frame
-        .getByRole("button", { name: "Unregister", exact: true })
-        .describe("Confirm unregistering")
+      await group
+        .locator(".group-unregister")
+        .describe("Registered group Unregister button")
         .click({ steps: 15 });
+      await expect(frame.getByRole("dialog").describe("No Unregister confirmation")).toBeHidden();
       await expect(group).toHaveCount(0);
-      expect(host.piProcesses().some((process) => process.cwd === folder)).toBe(true); // unregistering never stops Pi
+      expect(host.piProcesses().find((process) => process.pid === initialPi.pid)?.cwd).toBe(folder);
+      for (const session of Object.values(host.sessions)) {
+        expect(readFileSync(session.session, "utf8")).toBe(session.original);
+      }
     });
   },
 );
@@ -579,7 +570,7 @@ test(
 );
 
 test(
-  "Confirms Archive, stops only its Pi and resumes the saved conversation after Unarchive",
+  "Archives directly, stops only its Pi and resumes the saved conversation after Unarchive",
   { annotation: { type: "spec", description: "E2E-13" } },
   async ({ host }, testInfo) => {
     const statePath = join(host.directory, "agent/session-state.json");
@@ -618,55 +609,13 @@ test(
         .describe("Shared display mode");
       if ((await toggle.getAttribute("data-mode")) === "all") await toggle.click();
     });
-    await test.step("Cancel Archive with Escape and Cancel without touching runtimes, state or selection", async () => {
-      const frame = await host.sessionFrame();
-      const before = readFileSync(statePath, "utf8");
-      const archive = rowIn(frame, aId)
-        .locator(`[data-archive="${aId}"]`)
-        .describe("A Archive confirmation trigger");
-      const dialog = frame
-        .getByRole("dialog", { name: "Archive session" })
-        .describe("Archive warning");
-      const cancel = dialog
-        .getByRole("button", { name: "Cancel", exact: true })
-        .describe("Cancel Archive");
-      for (const method of ["Escape", "Cancel"]) {
-        await archive.click();
-        await expect(dialog).toContainText(aId);
-        await expect(dialog).toContainText(host.sessions.A.cwd);
-        await expect(dialog).toContainText(
-          "Running work will be interrupted. Unsent input may be lost.",
-        );
-        await expect(cancel).toBeFocused();
-        if (method === "Escape") await cancel.press("Escape");
-        else await cancel.click();
-        await expect(dialog).toBeHidden();
-        await expect(archive).toBeFocused();
-        expect(readFileSync(statePath, "utf8")).toBe(before);
-        expect(host.piProcesses().find((entry) => entry.target === initialA.target)?.pid).toBe(
-          initialA.pid,
-        );
-        expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
-          initialB.pid,
-        );
-        await expect(
-          frame
-            .locator(`.session-row.selected [data-session="${aId}"]`)
-            .describe("A still displayed"),
-        ).toBeVisible();
-      }
-    });
-    await test.step("Confirm Archive, stop only A and view its saved row in All", async () => {
+    await test.step("Archive directly, stop only A and view its saved row in All", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
         .locator(`[data-archive="${aId}"]`)
         .describe("A row Archive button")
         .click({ steps: 15 });
-      await frame
-        .getByRole("dialog", { name: "Archive session" })
-        .getByRole("button", { name: "Archive", exact: true })
-        .describe("Confirm Archive A")
-        .click();
+      await expect(frame.getByRole("dialog").describe("No Archive confirmation")).toBeHidden();
       await expect(rowIn(frame, aId)).toHaveCount(0);
       await expect.poll(() => existsSync(`/proc/${initialA.pid}`)).toBe(false);
       expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
@@ -781,11 +730,9 @@ test(
         .locator(`[data-archive="${aId}"]`)
         .describe("Background A Archive")
         .click();
-      await frame
-        .getByRole("dialog", { name: "Archive session" })
-        .getByRole("button", { name: "Archive", exact: true })
-        .describe("Confirm background Archive")
-        .click();
+      await expect(
+        frame.getByRole("dialog").describe("No background Archive confirmation"),
+      ).toBeHidden();
       await expect(rowIn(frame, aId)).toHaveClass(/archived/);
       await expect(
         frame

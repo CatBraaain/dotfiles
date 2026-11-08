@@ -67,18 +67,6 @@ export const webviewStyles = `
     .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
     .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
     .session-row.selected:focus-within .session-name, .session-row.selected:focus-within .session-timestamp { color: var(--vscode-list-activeSelectionForeground, var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground))); }
-    #confirmation-dialog { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.4); }
-    #confirmation-dialog[hidden] { display: none; }
-    .dialog { display: flex; flex-direction: column; gap: 8px; width: min(240px, calc(100% - 32px)); padding: 12px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: 9.6px; background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)); }
-    .dialog h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--vscode-foreground); }
-    .dialog p { margin: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--vscode-descriptionForeground); }
-    .dialog p span { color: var(--vscode-foreground); }
-    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
-    .dialog-button { height: 26px; padding: 0 12px; border: 1px solid transparent; border-radius: 4px; font-size: 12px; cursor: pointer; }
-    .dialog-button.primary { color: var(--vscode-button-foreground, #ffffff); background: var(--vscode-button-background, #0e639c); }
-    .dialog-button.primary:hover { background: var(--vscode-button-hoverBackground, #11589c); }
-    .dialog-button.secondary { color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); background: var(--vscode-button-secondaryBackground, #3a3d41); }
-    .dialog-button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
     .empty, #status { color: var(--vscode-descriptionForeground); font-size: 12px; }
     .empty { padding: 24px 8px; text-align: center; }
     #status { min-height: 16px; margin: 8px 0 0; }
