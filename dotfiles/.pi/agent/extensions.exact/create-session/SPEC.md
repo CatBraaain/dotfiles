@@ -1,6 +1,6 @@
 # create-session拡張機能Spec
 
-`create_detached_session` ツールで、ユーザーが対話を引き継ぐ独立した標準mainセッションをtmuxウィンドウとして作成し、初期依頼を即実行する。作成先は標準設定・標準権限のmainであり、呼び出し元セッションとの会話継続・結果待ち・成果回収は行わない。対象読者は、この拡張とtmux-serverユニットを保守・変更する人である。
+`create_detached_session` ツールで、ユーザーが対話を引き継ぐ独立した標準mainセッションをtmuxウィンドウとして作成し、初期依頼を即実行する。作成先は標準設定・標準権限のmainであり、呼び出し元セッションとの会話継続・結果待ち・成果回収は行わない。対象読者は、この拡張を保守・変更する人である。専用管理先への統合に関する上位要件は [tmux-handoff の要件](../tmux-handoff/REQUIREMENTS.md) に従う。
 
 ## ツールの入力
 
@@ -58,53 +58,26 @@ session承認も同じ置換・reloadで失効する。履歴からはどちら�
 
 ## tmuxの構成
 
-`create_detached_session` は、承認後に登録済みのbashツールを1回だけ呼び、tmuxコマンドを1つ実行する。bashツールの権限確認・sandbox・中断・出力上限をそのまま適用し、本拡張はbashの新規生成やプロセス直起動を行わない。
+`create_detached_session` は、承認後に呼び出し時点で登録されているbashツールを1回だけ呼ぶ。bashツールの権限確認・sandbox・中断・出力上限をそのまま適用する。承認の拒否・キャンセル・中断では、作成コマンドを実行しない。
 
-| 項目 | 値 |
+通常の対話起動と同じ専用サーバーを利用する。専用管理先・設定・接続record・サービスの契約は [tmux-handoff のSpec](../tmux-handoff/SPEC.md) に従う。サーバーが未起動でも必要時に自動起動し、通常tmux のソケット・設定・稼働状態へ作用しない。`TMUX`・`TMUX_TMPDIR` によって作成先を変更しない。
+
+| 条件 | 作成結果 |
 | --- | --- |
-| tmuxセッション名 | `pi`（固定・1セッション） |
-| キープアライブ用セッション | `_keeper`（tmux-serverユニットが作る。本拡張は作らない） |
-| `TMUX_TMPDIR` | `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}`（全tmux呼び出しに前置する） |
-| サーバー確認 | `tmux has-session -t _keeper`。失敗時は終了コード94で中断する |
-| ウィンドウ追加 | `pi` セッションがあれば `tmux new-window -d -t pi: -n <name>` |
-| セッション作成 | `pi` セッションがなければ `tmux new-session -d -s pi -n <name>`（既存サーバーに追加） |
+| 専用サーバーに名前が正確に `pi` のセッションがある | そのセッションに `<name>` のウィンドウを追加する |
+| そのセッションがない | `pi` セッションを作り、最初のウィンドウ名を `<name>` とする |
+| 作成が成功 | `created` とウィンドウ名を返し、本文で `pi:<name>` と専用ソケットへの接続コマンドを示す |
+| bashが拒否・失敗、またはtmuxコマンドが非0で終了 | `error` とエラー内容を返す |
 
-`_keeper` セッションが存在しない場合、tmuxサーバーは常駐構成でないと判断し、作成せずに失敗する（fail-closed）。エラーメッセージには tmux-server systemdユーザーサービスの開始（`systemctl --user enable --now tmux-server.service`）を案内する。ユーザーが手動で起動したtmuxサーバー（`_keeper` を持たない）も同じ理由で対象外である。
-
-成功時のツール結果には、作成したウィンドウ `pi:<name>` と、`tmux attach -t pi` による参加方法を返す。
+作成はdetachedで行う。呼び出し元や他の端末への自動attach・画面表示は行わない。接続recordは新しいpi の起動時に公開され、親のrecordは維持される。成功結果は作成コマンドの完了を示し、初期依頼の完了は待たない。
 
 ## ウィンドウで実行するコマンド
 
-ウィンドウでは `bash -lc` を使い、`cd -- <cwd> && pi --agent main -- <initialRequest>` を1つの引用付き引数として実行する。`--` は初期依頼が `-` で始まる場合に備える。
+新しいウィンドウはlogin shellでPATHを読み込み、指定cwdで `pi --agent main -- <initialRequest>` を実行する。`--` 境界により、初期依頼が `-` で始まっても依頼の文字列として渡す。cwd・初期依頼の空白・引用符・改行を保持する。
 
-`bash -lc` を使う理由は、ユーザーのPATHを引き継ぐためである。`~/.profile` は `~/.bashrc` をsourceし、`~/.bashrc` のPATH設定（linuxbrew・bun・`~/.agents/cli` 等）は対話ガードより前にあるため、非対話のlogin shellでも適用される。新しい `pi` はこのPATH上で解決され、標準の設定探索（`~/.pi/agent/`・プロジェクト設定）で起動する。
+新しいpi はPATH上で解決され、標準の設定探索（`~/.pi/agent/`・プロジェクト設定）で起動する。親pi の会話情報と引き渡しマーカーを除き、新しいPTYの `TERM`・`TMUX`・`TMUX_PANE` を保持する。専用管理先のruntimeディレクトリを使い、paneの起動PIDとpi のPIDを一致させる。
 
-新しいmainセッションは、呼び出し元の履歴・許可・承認を一切引き継がない。ウィンドウのプロセスはtmuxサーバーの子プロセスとして動き、呼び出し元のpiプロセスやsandboxの寿命と無関係に存続する。
-
-## tmux-serverユニット
-
-`dotfiles/.config/systemd/user/tmux-server.service`（展開先 `~/.config/systemd/user/tmux-server.service`、Linuxのみ展開）がtmuxサーバーを常駐させる。
-
-| 項目 | 値 |
-| --- | --- |
-| サービスタイプ | `oneshot` + `RemainAfterExit=yes` |
-| `TMUX_TMPDIR` | `%t`（`$XDG_RUNTIME_DIR`、既定 `/run/user/<uid>`） |
-| `ExecStart` | `/home/linuxbrew/.linuxbrew/bin/tmux new-session -d -s _keeper "sleep infinity"` |
-| `ExecStop` | `/home/linuxbrew/.linuxbrew/bin/tmux kill-server` |
-
-`sleep infinity` を実行する `_keeper` セッションが、tmuxサーバーを存続させる。`ExecStop` の `kill-server` は `pi` セッションを含む全セッションを終了させるため、サービスの停止は実行中のmainセッションも終了させる。ソケットは `TMUX_TMPDIR` 配下（`/run/user/<uid>`）に置かれ、systemdのランタイムディレクトリとしてセッションの生存期間中は掃除されない。
-
-本拡張はユニットの導入・起動を行わない。導入は保守者が `systemctl --user daemon-reload` と `systemctl --user enable --now tmux-server.service` で行う。
-
-## ~/.bashrc の TMUX_TMPDIR
-
-`dotfiles/.bashrc` は、tmuxのソケットディレクトリを次のexportで共有する。
-
-```sh
-export TMUX_TMPDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-```
-
-対話ガードより前に置き、login shell・非対話シェルの両方で適用する。これにより、ユーザーが `tmux attach -t pi` で参加するときも、`create_detached_session` とtmux-serverユニットと同じソケットを参照する。
+新しいmainセッションは、呼び出し元の履歴・許可・承認を引き継がず、親の保存会話を再開・forkしない。初期依頼は新しいmainで1回だけ開始する。ウィンドウはtmuxサーバーの配下で動き、呼び出し元のpiプロセスやsandboxの寿命と無関係に存続する。接続クライアントの切断後も同じpiプロセス・pane・PTYで処理を継続する。
 
 ## guardrail との二重確認
 

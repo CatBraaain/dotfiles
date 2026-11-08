@@ -1,12 +1,14 @@
 [Unit]
-Description=tmux server for create_session
+Description=Dedicated tmux server for pi
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-Environment=TMUX_TMPDIR=%t
-ExecStart=/home/linuxbrew/.linuxbrew/bin/tmux new-session -d -s _keeper "sleep infinity"
-ExecStop=/home/linuxbrew/.linuxbrew/bin/tmux kill-server
+RuntimeDirectory=pi-tmux
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/home/linuxbrew/.linuxbrew/bin/tmux -S %t/pi-tmux/server.sock -f %h/.pi/agent/extensions/tmux-handoff/tmux.conf start-server
+ExecStop=/home/linuxbrew/.linuxbrew/bin/tmux -S %t/pi-tmux/server.sock kill-server
 
 [Install]
 WantedBy=default.target

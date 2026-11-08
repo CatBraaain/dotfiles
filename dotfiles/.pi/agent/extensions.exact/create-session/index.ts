@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -8,10 +8,15 @@ import type {
 import { quote } from "shell-quote";
 import { Type, type Static } from "typebox";
 import { resultText, truncateText } from "../shared/tool-text.ts";
+import {
+  attachCommand,
+  getTmuxPaths,
+  PARENT_PI_ENV_KEYS,
+  tmuxArgs,
+  type TmuxPaths,
+} from "../tmux-handoff/shared.ts";
 
 export const TMUX_SESSION_NAME = "pi";
-export const TMUX_KEEPER_SESSION_NAME = "_keeper";
-const SERVER_UNAVAILABLE_EXIT_CODE = 94;
 const MAIN_AGENT_NAME = "main";
 const REQUEST_PREVIEW_LIMIT = 80;
 
@@ -20,10 +25,6 @@ const ALLOW_TURN_OPTION = "Allow in this turn";
 const ALLOW_SESSION_OPTION = "Allow in this session";
 const DENY_OPTION = "No, deny (reason next)";
 const EXPIRED_TURN_APPROVAL = "Turn approval expired. Request approval again.";
-const SERVER_UNAVAILABLE_MESSAGE = `tmux server is not running: keeper session "${TMUX_KEEPER_SESSION_NAME}" not found. Start the tmux-server systemd user service (systemctl --user enable --now tmux-server.service).`;
-
-const TMUX_TMPDIR_ASSIGNMENT = 'TMUX_TMPDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"';
-
 const parameters = Type.Object({
   initialRequest: Type.String({
     description: "Initial request the new main-agent session executes immediately.",
@@ -47,10 +48,19 @@ const outputSchema = Type.Object({
   error: Type.Optional(Type.String()),
 });
 
+type ApprovalDialogOptions = { signal?: AbortSignal };
 type ApprovalUI = {
-  confirm(title: string, message: string): Promise<boolean>;
-  select?(title: string, options: string[]): Promise<string | undefined>;
-  input?(title: string, placeholder?: string): Promise<string | undefined>;
+  confirm(title: string, message: string, options?: ApprovalDialogOptions): Promise<boolean>;
+  select?(
+    title: string,
+    options: string[],
+    dialogOptions?: ApprovalDialogOptions,
+  ): Promise<string | undefined>;
+  input?(
+    title: string,
+    placeholder?: string,
+    options?: ApprovalDialogOptions,
+  ): Promise<string | undefined>;
 };
 
 export type CreateSessionOptions = { now?: () => Date };
@@ -76,27 +86,41 @@ export function autoWindowName(now: Date): string {
   return `main-${twoDigits(now.getHours())}${twoDigits(now.getMinutes())}${twoDigits(now.getSeconds())}`;
 }
 
-export function buildTmuxCommand(input: {
-  initialRequest: string;
-  cwd: string;
-  name: string;
-}): string {
-  const piScript = `cd -- ${quote([input.cwd])} && ${quote([
-    "pi",
-    "--agent",
-    MAIN_AGENT_NAME,
-    "--",
-    input.initialRequest,
-  ])}`;
-  const windowCommand = `bash -lc ${quote([piScript])}`;
-  const windowName = quote([input.name]);
+export function buildTmuxCommand(
+  input: { initialRequest: string; cwd: string; name: string },
+  paths: TmuxPaths = getTmuxPaths(),
+): string {
+  const piScript = [
+    `unset ${PARENT_PI_ENV_KEYS.join(" ")}`,
+    `export XDG_RUNTIME_DIR=${quote([dirname(paths.directory)])}`,
+    `cd -- ${quote([input.cwd])} && exec ${quote([
+      "pi",
+      "--agent",
+      MAIN_AGENT_NAME,
+      "--",
+      input.initialRequest,
+    ])}`,
+  ].join("\n");
+  const windowArgs = ["-n", input.name, "--", "bash", "-lc", piScript];
+  const hasSession = quote([
+    "tmux",
+    ...tmuxArgs(paths, ["has-session", "-t", `=${TMUX_SESSION_NAME}`]),
+  ]);
+  const newWindow = quote([
+    "tmux",
+    ...tmuxArgs(paths, ["new-window", "-d", "-t", `=${TMUX_SESSION_NAME}:`, ...windowArgs]),
+  ]);
+  const newSession = quote([
+    "tmux",
+    ...tmuxArgs(paths, ["new-session", "-d", "-s", TMUX_SESSION_NAME, ...windowArgs]),
+  ]);
   return [
-    `${TMUX_TMPDIR_ASSIGNMENT} tmux has-session -t ${TMUX_KEEPER_SESSION_NAME} 2>/dev/null || exit ${SERVER_UNAVAILABLE_EXIT_CODE}`,
-    `if ${TMUX_TMPDIR_ASSIGNMENT} tmux has-session -t ${TMUX_SESSION_NAME} 2>/dev/null; then`,
-    `  ${TMUX_TMPDIR_ASSIGNMENT} tmux new-window -d -t ${TMUX_SESSION_NAME}: -n ${windowName} -- ${windowCommand}`,
-    `else`,
-    `  ${TMUX_TMPDIR_ASSIGNMENT} tmux new-session -d -s ${TMUX_SESSION_NAME} -n ${windowName} -- ${windowCommand}`,
-    `fi`,
+    `${quote(["mkdir", "-p", "-m", "700", "--", paths.directory])} || exit`,
+    `if ${hasSession} 2>/dev/null; then`,
+    `  ${newWindow}`,
+    "else",
+    `  ${newSession}`,
+    "fi",
   ].join("\n");
 }
 
@@ -112,6 +136,7 @@ function deniedResult(message: string) {
 function sessionResult(
   outcome: BashOutcome,
   windowName: string,
+  paths: TmuxPaths,
 ): AgentToolResult<{ bash: BashOutcome["result"] }> {
   const bash = outcome.result;
   const envelope = bash.structuredContent as
@@ -124,10 +149,7 @@ function sessionResult(
     bash.isError ||
     (envelope?.exit_code !== undefined && envelope.exit_code !== 0)
   ) {
-    const error =
-      envelope?.exit_code === SERVER_UNAVAILABLE_EXIT_CODE
-        ? SERVER_UNAVAILABLE_MESSAGE
-        : `create_detached_session tmux command failed:\n${text}`;
+    const error = `create_detached_session tmux command failed:\n${text}`;
     return {
       content: [{ type: "text", text: error }],
       details,
@@ -135,7 +157,11 @@ function sessionResult(
       structuredContent: { status: "error", window: windowName, error },
     };
   }
-  const message = `Created tmux window "${TMUX_SESSION_NAME}:${windowName}" running an independent main-agent session.\nAttach with: tmux attach -t ${TMUX_SESSION_NAME}`;
+  const reconnect = attachCommand({
+    socketPath: paths.socketPath,
+    tmuxSessionId: `=${TMUX_SESSION_NAME}`,
+  });
+  const message = `Created tmux window "${TMUX_SESSION_NAME}:${windowName}" running an independent main-agent session.\nAttach with: ${reconnect}`;
   return {
     content: [{ type: "text", text: message }],
     details,
@@ -170,6 +196,7 @@ export default function createSessionExtension(
   async function requestApproval(
     context: ExtensionToolContext,
     input: CreateSessionInput,
+    signal: AbortSignal | undefined,
   ): Promise<ApprovalDecision> {
     const ui = context.ui as ApprovalUI;
     const details = [
@@ -181,12 +208,12 @@ export default function createSessionExtension(
     const question = "Allow creating a new main-agent session?";
     const generation = turnGeneration;
     if (ui.select) {
-      const selected = await ui.select(`${question}\n${details}`, [
-        ALLOW_ONCE_OPTION,
-        ALLOW_TURN_OPTION,
-        ALLOW_SESSION_OPTION,
-        DENY_OPTION,
-      ]);
+      const selected = await ui.select(
+        `${question}\n${details}`,
+        [ALLOW_ONCE_OPTION, ALLOW_TURN_OPTION, ALLOW_SESSION_OPTION, DENY_OPTION],
+        { signal },
+      );
+      signal?.throwIfAborted();
       if (selected === ALLOW_TURN_OPTION) {
         if (generation !== turnGeneration) return { denied: EXPIRED_TURN_APPROVAL };
         turnApproved = true;
@@ -197,10 +224,15 @@ export default function createSessionExtension(
         return { grant: "session" };
       }
       if (selected === ALLOW_ONCE_OPTION) return { grant: "once" };
-    } else if (await ui.confirm(question, details)) {
-      return { grant: "once" };
+    } else {
+      const confirmed = await ui.confirm(question, details, { signal });
+      signal?.throwIfAborted();
+      if (confirmed) return { grant: "once" };
     }
-    const reason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
+    const reason = (
+      await ui.input?.("Denied. Optional reason for the agent:", undefined, { signal })
+    )?.trim();
+    signal?.throwIfAborted();
     return {
       denied: reason
         ? `create_detached_session denied by user: ${reason}`
@@ -212,7 +244,7 @@ export default function createSessionExtension(
     name: "create_detached_session",
     label: "Create Detached Session",
     description:
-      "Create a detached, independent main-agent pi session in a tmux window and start it with an initial request. Returns only the session information; the tool does not wait for, converse with, or collect results. The user takes over the session via tmux attach. Requires interactive approval and the tmux-server systemd user service.",
+      "Create a detached, independent main-agent pi session in a tmux window and start it with an initial request. Returns only the session information; the tool does not wait for, converse with, or collect results. The user takes over the session via tmux attach. Requires interactive approval.",
     parameters,
     outputSchema,
     reachesTools() {
@@ -230,19 +262,20 @@ export default function createSessionExtension(
       if (!sessionApproved && !turnApproved) {
         if (!ctx.hasUI || !ctx.ui)
           throw new Error("create_detached_session requires interactive approval");
-        const decision = await requestApproval(ctx, input);
+        const decision = await requestApproval(ctx, input, signal);
         if ("denied" in decision) return deniedResult(decision.denied);
       }
 
+      signal?.throwIfAborted();
       const windowName = input.name?.trim() || autoWindowName(now());
       const sessionCwd = input.cwd === undefined ? resolve(ctx.cwd) : resolve(ctx.cwd, input.cwd);
-      const command = buildTmuxCommand({
-        initialRequest: input.initialRequest,
-        cwd: sessionCwd,
-        name: windowName,
-      });
+      const paths = getTmuxPaths();
+      const command = buildTmuxCommand(
+        { initialRequest: input.initialRequest, cwd: sessionCwd, name: windowName },
+        paths,
+      );
       const bash = await ctx.executeTool("bash", { command }, { signal });
-      return sessionResult(bash, windowName);
+      return sessionResult(bash, windowName, paths);
     },
   };
   pi.registerTool(tool);

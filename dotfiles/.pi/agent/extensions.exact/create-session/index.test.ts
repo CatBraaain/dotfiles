@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import { parse } from "shell-quote";
+import { attachCommand, getTmuxPaths, PARENT_PI_ENV_KEYS } from "../tmux-handoff/shared.ts";
 import createSessionExtension, {
   autoWindowName,
   buildTmuxCommand,
@@ -161,54 +162,107 @@ describe("ウィンドウ名の自動採番", () => {
   });
 });
 
-describe("tmux コマンドの構築", () => {
-  it("keeper 確認・new-window・new-session フォールバックを1コマンドにまとめる", () => {
-    const command = buildTmuxCommand({ initialRequest: "fix it", cwd: "/repo", name: "main-1030" });
-    const lines = command.split("\n");
-    assert.equal(lines.length, 6);
-    assert.match(lines[0]!, /tmux has-session -t _keeper/);
-    assert.match(lines[0]!, /\|\| exit 94/);
-    assert.match(lines[1]!, /tmux has-session -t pi/);
-    assert.match(lines[2]!, /tmux new-window -d -t pi: -n main-1030 -- bash -lc /);
-    assert.match(lines[3]!, /^else$/);
-    assert.match(lines[4]!, /tmux new-session -d -s pi -n main-1030 -- bash -lc /);
-    assert.match(lines[5]!, /^fi$/);
-  });
-
-  it("全 tmux 呼び出しに TMUX_TMPDIR を前置する", () => {
-    const command = buildTmuxCommand({ initialRequest: "x", cwd: "/r", name: "w" });
-    const tmuxLines = command.split("\n").filter((line) => line.includes("tmux "));
-    assert.equal(tmuxLines.length, 4);
-    for (const line of tmuxLines)
-      assert.match(line, /TMUX_TMPDIR="\$\{XDG_RUNTIME_DIR:-\/run\/user\/\$\(id -u\)\}" tmux/);
-  });
-
-  it("初期依頼を1つの引用付き引数として pi に渡す", () => {
-    const command = buildTmuxCommand({ initialRequest: "fix it", cwd: "/repo", name: "w" });
-    assert.ok(
-      command.includes(`bash -lc "cd -- /repo && pi --agent main -- 'fix it'"`),
-      `window command is a single quoted word: ${command}`,
+describe("dedicated tmux commands", () => {
+  it("uses shared socket and config paths for every tmux operation", () => {
+    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
+    const command = buildTmuxCommand(
+      { initialRequest: "fix it", cwd: "/repo", name: "main-1030" },
+      paths,
     );
+    const tokens = parse(command);
+    const tmuxIndices = tokens.flatMap((token, index) => (token === "tmux" ? [index] : []));
+    assert.equal(tmuxIndices.length, 3);
+    for (const index of tmuxIndices)
+      assert.deepEqual(tokens.slice(index + 1, index + 5), [
+        "-S",
+        paths.socketPath,
+        "-f",
+        paths.configPath,
+      ]);
+    assert.equal(command.includes("TMUX_TMPDIR"), false);
+    assert.equal(command.includes("_keeper"), false);
   });
 
-  it("引用文字とコマンド置換を含む初期依頼が、展開されずに1引数として残る", () => {
-    const initialRequest = 'it\'s $(x) "z"';
-    const command = buildTmuxCommand({ initialRequest, cwd: "/dir with space", name: "w" });
-    const windowLine = command.split("\n").find((line) => line.includes("new-window"))!;
-    const bashArgument = parse(windowLine).at(-1) as string;
-    const piArguments = parse(bashArgument).filter((token) => typeof token === "string");
-    assert.equal(piArguments.at(-1), initialRequest);
+  it("creates a detached session or a detached window in the exact pi session", () => {
+    const command = buildTmuxCommand({ initialRequest: "x", cwd: "/r", name: "w" });
+    const tokens = parse(command);
+    const sessionIndex = tokens.indexOf("new-session");
+    const windowIndex = tokens.indexOf("new-window");
+    const probeIndex = tokens.indexOf("has-session");
+    assert.deepEqual(tokens.slice(probeIndex + 1, probeIndex + 3), ["-t", "=pi"]);
+    assert.deepEqual(tokens.slice(sessionIndex + 1, sessionIndex + 6), [
+      "-d",
+      "-s",
+      "pi",
+      "-n",
+      "w",
+    ]);
+    assert.deepEqual(tokens.slice(windowIndex + 1, windowIndex + 6), [
+      "-d",
+      "-t",
+      "=pi:",
+      "-n",
+      "w",
+    ]);
+    assert.equal(tokens.includes("attach-session"), false);
+    assert.equal(tokens.includes("switch-client"), false);
+    assert.match(command, /^mkdir -p -m 700 -- /);
   });
 
-  it("バッククォートを含む初期依頼もシェルとして妥当な1コマンドになる", () => {
-    const command = buildTmuxCommand({
-      initialRequest: 'it\'s $(x) `y` "z"',
-      cwd: "/dir with space",
-      name: "w",
+  it("removes parent pi state without replacing the new PTY environment", () => {
+    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
+    const command = buildTmuxCommand({ initialRequest: "x", cwd: "/r", name: "w" }, paths);
+    const tokens = parse(command);
+    const script = tokens[tokens.indexOf("bash") + 2] as string;
+    const paneTokens = parse(script);
+    const unsetIndex = paneTokens.indexOf("unset");
+    assert.deepEqual(paneTokens.slice(unsetIndex + 1, unsetIndex + 1 + PARENT_PI_ENV_KEYS.length), [
+      ...PARENT_PI_ENV_KEYS,
+    ]);
+    assert.ok(paneTokens.includes("XDG_RUNTIME_DIR=/isolated runtime"));
+    assert.equal(script.includes("unset TMUX"), false);
+    assert.equal(script.includes("unset TERM"), false);
+    assert.deepEqual(paneTokens.slice(paneTokens.indexOf("exec")), [
+      "exec",
+      "pi",
+      "--agent",
+      "main",
+      "--",
+      "x",
+    ]);
+  });
+
+  for (const initialRequest of [
+    "fix it",
+    'it\'s $(x) `y` "z"',
+    "--session option-like\nnext line",
+  ]) {
+    it(`preserves a literal request argument: ${JSON.stringify(initialRequest)}`, () => {
+      const cwd = "/dir with space/quote's\nnext line";
+      const command = buildTmuxCommand({ initialRequest, cwd, name: "w" });
+      const outer = spawnSync("bash", [
+        "-c",
+        [
+          "mkdir() { :; }",
+          'tmux() { if [ "$5" = has-session ]; then return 1; fi; printf \'%s\\0\' "$@"; }',
+          command,
+        ].join("\n"),
+      ]);
+      assert.equal(outer.status, 0, String(outer.stderr));
+      const tmuxArguments = outer.stdout.toString().split("\0").slice(0, -1);
+      const script = tmuxArguments.at(-1)!;
+      const paneTokens = parse(script);
+      assert.deepEqual(
+        paneTokens.slice(paneTokens.indexOf("cd") + 1, paneTokens.indexOf("cd") + 3),
+        ["--", cwd],
+      );
+      const piCommand = script.slice(script.indexOf("exec ") + "exec ".length);
+      const expanded = spawnSync("bash", ["-c", `set -- ${piCommand}\nprintf '%s\\0' "$@"`]);
+      assert.equal(expanded.status, 0, String(expanded.stderr));
+      const piArguments = expanded.stdout.toString().split("\0").slice(0, -1);
+      assert.deepEqual(piArguments, ["pi", "--agent", "main", "--", initialRequest]);
     });
-    const syntax = spawnSync("bash", ["-n", "-c", command]);
-    assert.equal(syntax.status, 0, `bash -n failed: ${syntax.stderr}`);
-  });
+  }
 });
 
 describe("ツールの登録", () => {
@@ -320,6 +374,94 @@ describe("承認", () => {
       /requires interactive approval/,
     );
     assert.equal(executor.commands.length, 0);
+  });
+});
+
+describe("interrupted approval", () => {
+  for (const answer of ["Allow once", "Allow in this turn", "Allow in this session"]) {
+    it(`does not execute or retain approval after aborting ${answer}`, async () => {
+      const tool = captureTool();
+      const controller = new AbortController();
+      const pendingAnswer = Promise.withResolvers<string>();
+      const { ui, calls } = approvalUi({ select: pendingAnswer.promise });
+      const executor = recordingExecutor();
+      const context = mockContext(ui, executor.executeTool);
+      const pending = tool.execute("t", request, controller.signal, undefined, context);
+      controller.abort();
+      pendingAnswer.resolve(answer);
+      await assert.rejects(pending, { name: "AbortError" });
+      assert.equal(executor.commands.length, 0);
+      await tool.execute("t", request, undefined, undefined, context);
+      assert.equal(calls.selectTitles.length, 2);
+      assert.equal(executor.commands.length, 1);
+    });
+  }
+
+  it("does not call bash when aborted between approval and execution", async () => {
+    const tool = captureTool();
+    const controller = new AbortController();
+    const executor = recordingExecutor();
+    const ui: ApprovalUI = {
+      async confirm() {
+        return false;
+      },
+      async select() {
+        queueMicrotask(() => queueMicrotask(() => controller.abort()));
+        return "Allow once";
+      },
+    };
+    await assert.rejects(
+      tool.execute(
+        "t",
+        request,
+        controller.signal,
+        undefined,
+        mockContext(ui, executor.executeTool),
+      ),
+      { name: "AbortError" },
+    );
+    assert.equal(executor.commands.length, 0);
+  });
+
+  it("does not show approval or execute when already aborted", async () => {
+    const tool = captureTool();
+    const controller = new AbortController();
+    controller.abort();
+    const { ui, calls } = approvalUi({ select: "Allow once" });
+    const executor = recordingExecutor();
+    await assert.rejects(
+      tool.execute(
+        "t",
+        request,
+        controller.signal,
+        undefined,
+        mockContext(ui, executor.executeTool),
+      ),
+      { name: "AbortError" },
+    );
+    assert.equal(calls.selectTitles.length, 0);
+    assert.equal(executor.commands.length, 0);
+  });
+
+  it("passes cancellation to the approval dialog and registered bash", async () => {
+    const tool = captureTool();
+    const controller = new AbortController();
+    const signals: unknown[] = [];
+    const context = mockContext(
+      {
+        confirm: async () => false,
+        select: async (_title: string, _options: string[], options?: { signal?: AbortSignal }) => {
+          signals.push(options?.signal);
+          return "Allow once";
+        },
+      } as ApprovalUI,
+      async (_name: string, _args: unknown, options?: { signal?: AbortSignal }) => {
+        signals.push(options?.signal);
+        return bashOutcome();
+      },
+    );
+    await tool.execute("t", request, controller.signal, undefined, context);
+    assert.deepEqual(signals, [controller.signal, controller.signal]);
   });
 });
 
@@ -439,11 +581,15 @@ describe("実行", () => {
       mockContext(ui, executor.executeTool),
     );
     assert.equal(executor.commands.length, 1);
-    assert.match(executor.commands[0]!, /tmux has-session -t _keeper/);
+    assert.ok(executor.commands[0]!.includes(getTmuxPaths().socketPath));
     assert.match(executor.commands[0]!, /pi --agent main/);
     assert.equal(result.structuredContent.status, "created");
     assert.equal(result.structuredContent.window, "main-1");
-    assert.match(result.content[0].text, /tmux attach -t pi/);
+    const reconnect = attachCommand({
+      socketPath: getTmuxPaths().socketPath,
+      tmuxSessionId: "=pi",
+    });
+    assert.ok(result.content[0].text.includes(reconnect));
   });
 
   it("cwd 省略時は ctx.cwd を使い、name 省略時は自動採番する", async () => {
@@ -478,10 +624,10 @@ describe("実行", () => {
     );
   });
 
-  it("keeper がいない終了コード94をサーバー未起動の案内に変える", async () => {
+  it("reports command errors without requiring a prestarted service", async () => {
     const tool = captureTool();
     const { ui } = approvalUi({ select: "Allow once" });
-    const executeTool: ExecuteTool = async () => bashOutcome(94, "no server");
+    const executeTool: ExecuteTool = async () => bashOutcome(94, "tmux failed");
     const result = await tool.execute(
       "t",
       request,
@@ -491,8 +637,19 @@ describe("実行", () => {
     );
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, "error");
-    assert.match(result.content[0].text, /tmux server is not running/);
-    assert.match(result.content[0].text, /systemctl --user enable --now tmux-server/);
+    assert.match(result.content[0].text, /tmux command failed/);
+    assert.equal(result.content[0].text.includes("systemctl"), false);
+  });
+
+  it("uses the bash registered in each execution context", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ select: "Allow in this session" });
+    const first = recordingExecutor();
+    const second = recordingExecutor();
+    await tool.execute("t", request, undefined, undefined, mockContext(ui, first.executeTool));
+    await tool.execute("t", request, undefined, undefined, mockContext(ui, second.executeTool));
+    assert.equal(first.commands.length, 1);
+    assert.equal(second.commands.length, 1);
   });
 
   it("tmux コマンドの失敗をエラーとして返す", async () => {
