@@ -55,7 +55,7 @@ function viewFor(
 ) {
   return sessionListView(
     { groups: stateGroups } as ClientState,
-    mode,
+    new Map(stateGroups.map((group) => [group.cwd, mode])),
     displayedSessionId,
     collapsedCwds,
   );
@@ -157,7 +157,7 @@ describe("sessionListView", () => {
     expect(sectionsIn(allArchived)).toHaveLength(1);
     expect(allArchived.sessions[0].children).toHaveLength(1);
     expect(byClass(elementsIn(allArchived), "group-header")).toHaveLength(1);
-    expect(byClass(elementsIn(allArchived), "mode-button")).toHaveLength(0);
+    expect(byClass(elementsIn(allArchived), "group-mode-toggle")).toHaveLength(1);
     expect(byClass(elementsIn(allArchived), "session-row")).toHaveLength(0);
     expect(byClass(elementsIn(allArchived), "empty")).toHaveLength(0);
   });
@@ -174,7 +174,73 @@ describe("sessionListView", () => {
       "/workspace/beta",
     ]);
     expect(byClass(elementsIn(view), "group-path")).toHaveLength(0);
-    expect(byClass(elementsIn(view), "mode-button")).toHaveLength(0);
+    expect(byClass(elementsIn(view), "group-mode-toggle")).toHaveLength(2);
+  });
+
+  it("renders a mode button with its cwd and mode on empty, archived, and collapsed groups", () => {
+    const stateGroups = [
+      { cwd: "/workspace/empty", label: "empty", sessions: [] },
+      { cwd: "/workspace/archived", label: "archived", sessions: [atlasArchived] },
+    ];
+    const view = sessionListView(
+      { groups: stateGroups },
+      new Map([["/workspace/archived", "all"]]),
+      undefined,
+      new Set(["/workspace/archived"]),
+    );
+    const buttons = byClass(elementsIn(view), "group-mode-toggle");
+
+    expect(buttons.map((button) => button.attrs)).toEqual([
+      {
+        class: "group-mode-toggle",
+        type: "button",
+        "data-mode-toggle": "/workspace/empty",
+        "data-mode": "unarchived",
+        title: "Show all sessions",
+        "aria-label": "Show all sessions",
+      },
+      {
+        class: "group-mode-toggle",
+        type: "button",
+        "data-mode-toggle": "/workspace/archived",
+        "data-mode": "all",
+        title: "Show unarchived sessions",
+        "aria-label": "Show unarchived sessions",
+      },
+    ]);
+    expect(buttons.map((button) => collectElements(button)[1].attrs)).toEqual([
+      expect.objectContaining({
+        width: "16",
+        height: "16",
+        fill: "currentColor",
+        "data-mode-icon": "unarchived",
+      }),
+      expect.objectContaining({
+        width: "16",
+        height: "16",
+        fill: "currentColor",
+        "data-mode-icon": "all",
+      }),
+    ]);
+    expect(byClass(elementsIn(view), "session-row")).toHaveLength(0);
+  });
+
+  it("filters modes by cwd rather than the shared basename or group position", () => {
+    const stateGroups = [
+      { cwd: "/workspace/atlas", label: "atlas", sessions: [atlasArchived] },
+      { cwd: "/worktrees/atlas", label: "atlas", sessions: [{ ...betaOther, isArchived: true }] },
+    ];
+    const modes = new Map<string, ViewMode>([["/worktrees/atlas", "all"]]);
+    const initial = sessionListView({ groups: stateGroups });
+    const view = sessionListView({ groups: stateGroups }, modes);
+    const reordered = sessionListView({ groups: [...stateGroups].reverse() }, modes);
+
+    expect(byClass(elementsIn(initial), "session-row")).toHaveLength(0);
+    expect(byClass(elementsIn(view), "session-name").map(text)).toEqual(["Beta other"]);
+    expect(byClass(elementsIn(reordered), "session-name").map(text)).toEqual(["Beta other"]);
+    expect(
+      byClass(elementsIn(view), "group-mode-toggle").map((button) => button.attrs?.["data-mode"]),
+    ).toEqual(["unarchived", "all"]);
   });
 
   it("renders an Unregister button on every workspace group", () => {
@@ -363,38 +429,33 @@ describe("sessionListView", () => {
       paths: ["M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9", "M10 21a2 2 0 0 0 4 0"],
     },
     { state: "waiting-user", label: "Waiting for user", paths: [] },
-  ] as const)(
-    "maps $state to its icon and tooltip",
-    ({ state, label, paths }) => {
-      const elements = elementsIn(
-        viewFor("all", [
-          { ...groups[0], sessions: [{ ...atlasUnarchived, state }] },
-        ]),
-      );
-      const slot = byClass(elements, "session-status")[0];
-      const statusElements = collectElements(slot);
-      const statusPaths = statusElements.filter((element) => element.tag === "path");
+  ] as const)("maps $state to its icon and tooltip", ({ state, label, paths }) => {
+    const elements = elementsIn(
+      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, state }] }]),
+    );
+    const slot = byClass(elements, "session-status")[0];
+    const statusElements = collectElements(slot);
+    const statusPaths = statusElements.filter((element) => element.tag === "path");
 
-      expect(slot.attrs?.["data-state"]).toBe(state);
-      expect(slot.attrs?.["aria-hidden"]).toBe("true");
-      expect(statusPaths.map((path) => path.attrs?.d)).toEqual(paths);
-      expect(slot.children).toHaveLength(paths.length === 0 ? 0 : 1);
-      expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
-        `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\n${label}`,
-      );
-      expect(byClass(elements, "archive")[0].attrs?.disabled).toBeUndefined();
-      for (const icon of statusElements.filter((element) => element.tag === "svg")) {
-        expect(icon.attrs).toMatchObject({
-          width: "12",
-          height: "12",
-          fill: "none",
-          stroke: "currentColor",
-          strokeWidth: "2",
-        });
-      }
-      if (state === "waiting-user") expect(slot.children).toEqual([]);
-    },
-  );
+    expect(slot.attrs?.["data-state"]).toBe(state);
+    expect(slot.attrs?.["aria-hidden"]).toBe("true");
+    expect(statusPaths.map((path) => path.attrs?.d)).toEqual(paths);
+    expect(slot.children).toHaveLength(paths.length === 0 ? 0 : 1);
+    expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\n${label}`,
+    );
+    expect(byClass(elements, "archive")[0].attrs?.disabled).toBeUndefined();
+    for (const icon of statusElements.filter((element) => element.tag === "svg")) {
+      expect(icon.attrs).toMatchObject({
+        width: "12",
+        height: "12",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: "2",
+      });
+    }
+    if (state === "waiting-user") expect(slot.children).toEqual([]);
+  });
 
   it.each([undefined, "running", "waiting-approval", "waiting-user"] as const)(
     "keeps archived status slots empty with phase %s",
@@ -408,7 +469,9 @@ describe("sessionListView", () => {
   );
 
   it("uses 12px currentColor stroke icons for the row controls and chevrons", () => {
-    const icons = elementsIn(viewFor("all")).filter((element) => element.tag === "svg");
+    const icons = elementsIn(viewFor("all")).filter(
+      (element) => element.tag === "svg" && element.attrs?.["data-mode-icon"] === undefined,
+    );
 
     expect(icons.length).toBeGreaterThan(0);
     for (const icon of icons) {
@@ -509,28 +572,34 @@ describe("sessionListView", () => {
 });
 
 describe("visibleSessions", () => {
-  it("combines collapsed groups with the shared mode filter", () => {
+  it("combines collapsed groups with the per-workspace mode filters", () => {
     expect(
-      visibleSessions({ groups }, "unarchived", new Set(["/workspace/atlas"])).map(
+      visibleSessions({ groups }, new Map(), new Set(["/workspace/atlas"])).map(
         (session) => session.sessionId,
       ),
     ).toEqual([betaOther.sessionId, betaPlain.sessionId]);
     expect(
-      visibleSessions({ groups }, "all", new Set(["/workspace/beta"])).map(
-        (session) => session.sessionId,
-      ),
+      visibleSessions(
+        { groups },
+        new Map([["/workspace/atlas", "all"]]),
+        new Set(["/workspace/beta"]),
+      ).map((session) => session.sessionId),
     ).toEqual([atlasUnarchived.sessionId, atlasArchived.sessionId]);
   });
 
   it("flattens the display order across groups with the mode filter applied", () => {
     const state = { groups } as ClientState;
 
-    expect(visibleSessions(state, "unarchived").map((session) => session.sessionId)).toEqual([
+    expect(visibleSessions(state).map((session) => session.sessionId)).toEqual([
       atlasUnarchived.sessionId,
       betaOther.sessionId,
       betaPlain.sessionId,
     ]);
-    expect(visibleSessions(state, "all").map((session) => session.sessionId)).toEqual([
+    expect(
+      visibleSessions(state, new Map([["/workspace/atlas", "all"]])).map(
+        (session) => session.sessionId,
+      ),
+    ).toEqual([
       atlasUnarchived.sessionId,
       atlasArchived.sessionId,
       betaOther.sessionId,

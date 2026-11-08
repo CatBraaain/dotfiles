@@ -4,7 +4,7 @@ import * as stories from "../stories/sessions.stories";
 /** Spec table row (静的プレビュー「データ」) mapped to the story export names. */
 const storyParameters = {
   SampleSessions: { demoState: "sample" },
-  AllMode: { demoState: "sample", toggleAll: true },
+  AllMode: { demoState: "sample", allModeCwd: "~/projects/vscode-pi-sessions" },
   EmptySessions: { demoState: "empty" },
 } as const;
 

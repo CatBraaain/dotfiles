@@ -19,13 +19,21 @@ describe("webviewHtml", () => {
   it("includes the CSS from webviewStyles", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain(".mode-toggle svg[hidden] { display: none; }");
+    expect(html).toContain(".group-mode-toggle svg { width: 16px; height: 16px; }");
     expect(html).toContain(".archive, .unarchive {");
     expect(html).not.toContain(".copy");
     expect(html).not.toContain(".lock");
     expect(html).not.toContain("data-locked");
     expect(html).toContain(".session-row.selected .session-button");
     expect(html).toContain("#status.error");
+  });
+
+  it("keeps workspace Unregister controls visible without hover or focus", () => {
+    const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
+
+    expect(html).toContain(".group-unregister { color: var(--vscode-descriptionForeground); }");
+    expect(html).not.toContain(".group-header:hover .group-unregister");
+    expect(html).not.toContain(".group-header:focus-within .group-unregister");
   });
 
   it("uses readable row colors without intercepting timestamp clicks", () => {
@@ -77,14 +85,11 @@ describe("webviewHtml", () => {
     expect(html).not.toContain('data-action="newSession"');
   });
 
-  it("keeps the shared mode toggle in the fixed header markup", () => {
+  it("keeps mode toggles out of the fixed header markup", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain('class="mode-toggle"');
-    expect(html).toContain('data-mode-toggle data-mode="unarchived"');
-    expect(html).toContain('data-mode-icon="unarchived"');
-    expect(html).toContain('data-mode-icon="all"');
-    expect(html).toContain('aria-label="Show all sessions"');
-    expect(html).not.toContain("group-modes");
+    expect(html).not.toContain('class="mode-toggle"');
+    expect(html).not.toContain("data-mode-toggle");
+    expect(html).not.toContain("data-mode-icon");
   });
 });

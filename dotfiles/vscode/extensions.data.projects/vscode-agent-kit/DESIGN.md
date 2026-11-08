@@ -13,14 +13,16 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 状態アイコン | spinner は `testing-iconPassed`、ベルは `editorWarning-foreground`（いずれも代替 `descriptionForeground`） |
 | hover 面 | `list-hoverBackground` |
 | 選択面・選択文字（表示中セッションの行） | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
-| 境界（モード切替の枠・フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
+| 境界（フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
 | 入力（ワークスペース フォーム） | 背景 `input-background`・文字 `input-foreground`・境界 `input-border`、placeholder は `input-placeholderForeground` |
 | focus | `focusBorder` の 2px ring（offset -2px） |
-| 基準角丸 | 9.6px（行・操作・モード切替の枠で共用） |
+| 基準角丸 | 9.6px（行・操作で共用） |
 | スクロールつまみ | 通常 `scrollbarSlider-background`、hover `scrollbarSlider-hoverBackground`、ドラッグ `scrollbarSlider-activeBackground`。未定義時は `descriptionForeground` |
 | スクロールバーの消灯待ち | 最後のスクロールから800ms。表示状態の切替とつまみの追従は即時 |
 
 ## レイアウト
+
+Layout: ワークスペース見出し — 左の開閉と名前、右の補助操作を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
 
 Layout: セッション一覧 — スクロールバーを既存の余白へ重ねる → imposter の右端固定配置（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: バー専用の幅予約、一覧だけの別スクロール領域、ヘッダー・フッターのフロー変更。
 
@@ -44,10 +46,10 @@ Layout: セッション一覧 — スクロールバーを既存の余白へ重�
 | --- | --- |
 | chevron | 24px 四方の領域に12px の SVG、本文色。展開で下向き、折りたたみで右向きに示す。hover は hover 面。開閉の操作と状態は SPEC「Webview の表示」に従う |
 | グループ見出しの New session | chevron と同じ 24px 四方の ghost 操作、本文色。12px の plus SVG、hover は hover 面。ホバーのヒントは `New session` |
-| グループ見出しの Unregister | New session と同じ 24px 四方の ghost 操作。12px の minus SVG、補助文字色、hover は本文色と hover 面。見出しへのホバーとキーボードフォーカスの間だけ表示し、それ以外では隠す（タイトル幅を保つ）。登録済みワークスペースのグループだけに置く。ホバーのヒントは `Unregister workspace` |
+| グループ見出しの Unregister | New session と同じ 24px 四方の ghost 操作。12px の minus SVG、補助文字色、hover は本文色と hover 面。常時表示する。登録済みワークスペースのグループだけに置く。ホバーのヒントは `Unregister workspace` |
 | フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。16px の folder-plus SVG と 13px・500 ラベル、本文色、hover は hover 面。フォームを開いている間は `aria-expanded` を示し hover 面を敷く。構造の参照元は agent-open-ui の `SidebarFooter` |
 | ワークスペース フォーム | New workspace の下に開く。要素間8px。入力は高さ32px・角丸9.6px・入力トークン・13px 文字、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。`Add` は高さ32px・境界付きの本文色操作、`Cancel` は境界なしの補助文字色で hover は本文色。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
-| モード切替（ヘッダー） | 全ワークスペース共通。枠は境界トークン・角丸9.6px・余白1px・間隔2px。ボタンは高さ20px・余白左右6px・10px 文字。押下中のボタンは選択面・選択文字 |
+| グループ見出しのモード切替 | 見出し名の右、Unregister の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。未アーカイブ表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
 | 状態アイコンのスロット | 全行で12px 四方の固定領域。アイコンを中央に置き、表示名との間隔は8px。空の場合も幅を保持する |
 | spinner・ベル | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。色は状態アイコントークンに従う |
 | 表示名 | 13px・20px 行・省略表示 |

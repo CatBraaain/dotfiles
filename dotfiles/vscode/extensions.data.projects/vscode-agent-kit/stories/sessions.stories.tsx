@@ -18,20 +18,19 @@ type SessionsStory = StoryObj;
 
 /** Story parameters beyond the demo state, mapped 1:1 into mount options. */
 interface StoryOptions {
-  /** Switch the shared header toggle to All after mounting. */
-  toggleAll?: boolean;
+  allModeCwd?: string;
 }
 
 interface SessionStoryViewProps {
   demoState: DemoState;
-  toggleAll?: boolean;
+  allModeCwd?: string;
 }
 
 /** Mount the fixed webview markup and run the real client against the demo
  * bridge. The effect cleanup disposes the client on story change: initClient
  * adds a document-level click listener and stories share one canvas iframe
  * across navigation. */
-function SessionStoryView({ demoState, toggleAll }: SessionStoryViewProps) {
+function SessionStoryView({ demoState, allModeCwd }: SessionStoryViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,15 +44,13 @@ function SessionStoryView({ demoState, toggleAll }: SessionStoryViewProps) {
     // React commits, so the sessions message is never lost.
     reset(demoState);
 
-    // React renders #sessions asynchronously; wait for the mode button to
-    // exist before clicking it, and stop retrying once the story unmounts.
     let frame = 0;
-    if (toggleAll === true) {
-      const clickModeToggle = (): void => {
-        const toggle = mount.querySelector<HTMLElement>("#app header [data-mode-toggle]");
+    if (allModeCwd !== undefined) {
+      function clickModeToggle(): void {
+        const toggle = mount.querySelector<HTMLElement>(`[data-mode-toggle="${allModeCwd}"]`);
         if (toggle !== null) toggle.click();
         else frame = requestAnimationFrame(clickModeToggle);
-      };
+      }
       frame = requestAnimationFrame(clickModeToggle);
     }
 
@@ -62,7 +59,7 @@ function SessionStoryView({ demoState, toggleAll }: SessionStoryViewProps) {
       dispose();
       mount.remove();
     };
-  }, [demoState, toggleAll]);
+  }, [demoState, allModeCwd]);
 
   return <div ref={hostRef} />;
 }
@@ -77,7 +74,7 @@ function storyFromDemoState(
   return {
     name,
     parameters: { demoState, ...options },
-    render: () => <SessionStoryView demoState={demoState} toggleAll={options.toggleAll} />,
+    render: () => <SessionStoryView demoState={demoState} allModeCwd={options.allModeCwd} />,
   };
 }
 
@@ -86,8 +83,8 @@ export const SampleSessions: SessionsStory = storyFromDemoState(
   "sample",
 );
 
-export const AllMode: SessionsStory = storyFromDemoState("Sample — shared All mode", "sample", {
-  toggleAll: true,
+export const AllMode: SessionsStory = storyFromDemoState("Sample — workspace All mode", "sample", {
+  allModeCwd: "~/projects/vscode-pi-sessions",
 });
 
 export const EmptySessions: SessionsStory = storyFromDemoState(

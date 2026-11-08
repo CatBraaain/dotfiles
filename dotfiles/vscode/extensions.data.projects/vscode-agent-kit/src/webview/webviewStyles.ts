@@ -19,11 +19,6 @@ export const webviewStyles = `
     header, .group-header { display: flex; align-items: center; }
     header { justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 12px; }
     h1 { flex: 1; overflow: hidden; margin: 0; font-size: 13px; font-weight: 600; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
-    .mode-toggle { display: flex; flex: none; padding: 1px; border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); border-radius: var(--session-radius); }
-    .mode-toggle button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; border-radius: 8px; color: var(--vscode-descriptionForeground); }
-    .mode-toggle button:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
-    .mode-toggle svg { width: 16px; height: 16px; }
-    .mode-toggle svg[hidden] { display: none; }
     .header-actions { display: flex; gap: 4px; }
     .icon-button { min-width: 24px; height: 24px; padding: 0 8px; color: var(--vscode-descriptionForeground); }
     .icon-button:hover { color: var(--vscode-foreground); }
@@ -41,11 +36,13 @@ export const webviewStyles = `
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }
-    .group-chevron, .group-new-session, .group-unregister { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
+    .group-chevron, .group-new-session, .group-unregister, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
     .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-    .group-unregister { color: var(--vscode-descriptionForeground); visibility: hidden; }
+    .group-mode-toggle { color: var(--vscode-descriptionForeground); }
+    .group-mode-toggle:hover { color: var(--vscode-foreground); }
+    .group-mode-toggle svg { width: 16px; height: 16px; }
+    .group-unregister { color: var(--vscode-descriptionForeground); }
     .group-unregister:hover { color: var(--vscode-foreground); }
-    .group-header:hover .group-unregister, .group-header:focus-within .group-unregister { visibility: visible; }
     .session-row { position: relative; min-width: 0; height: 32px; margin-left: 12px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
     .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }

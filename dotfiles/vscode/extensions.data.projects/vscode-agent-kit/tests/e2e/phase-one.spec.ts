@@ -7,7 +7,7 @@ import { expect, test, type VSCodeFixture } from "../support/vscode";
 test.use({ trace: "on" });
 
 test(
-  "Shows saved history with All when a work folder has no unarchived sessions",
+  "Shows saved history with workspace All when a work folder has no unarchived sessions",
   { annotation: { type: "spec", description: "E2E-1" } },
   async ({ host }, testInfo) => {
     await test.step("Inspect the work folder groups and the empty B Unarchived group", async () => {
@@ -23,7 +23,10 @@ test(
         await expect(heading.locator(".group-title")).toHaveText(
           key === "A" ? "project-a" : "project-b",
         );
-        await expect(group.locator(".mode-button")).toHaveCount(0);
+        const toggle = heading.locator("[data-mode-toggle]").describe(`${key} workspace mode`);
+        await expect(toggle).toBeVisible();
+        await expect(toggle).toHaveAttribute("data-mode-toggle", host.sessions[key].cwd);
+        await expect(toggle).toHaveAttribute("data-mode", "unarchived");
         await expect(frame.getByText(host.sessions[key].cwd, { exact: true })).toHaveCount(0);
       }
       const emptyGroup = frame
@@ -33,10 +36,7 @@ test(
       await expect(emptyGroup.locator(".session-row")).toHaveCount(0);
       await expect(emptyGroup.locator(".empty")).toHaveCount(0);
       await expect(frame.locator(".group-path")).toHaveCount(0);
-      await expect(frame.locator("#app header [data-mode-toggle]")).toHaveAttribute(
-        "data-mode",
-        "unarchived",
-      );
+      await expect(frame.locator("#app header [data-mode-toggle]")).toHaveCount(0);
       await expect(
         frame.getByText("No unarchived sessions. Select All to browse saved sessions.", {
           exact: true,
@@ -47,15 +47,21 @@ test(
         contentType: "image/png",
       });
     });
-    await test.step("Choose All in the shared header toggle", async () => {
+    await test.step("Choose All for B while A stays Unarchived", async () => {
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) });
-      await frame
-        .locator("#app header [data-mode-toggle]")
-        .describe("Shared All toggle")
+      await group
+        .locator("[data-mode-toggle]")
+        .describe("B workspace All toggle")
         .click({ steps: 15 });
+      await expect(frame.locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)).toHaveAttribute(
+        "data-mode",
+        "unarchived",
+      );
+      await frame.locator('[data-action="refresh"]').describe("Refresh sessions").click();
+      await expect(group.locator("[data-mode-toggle]")).toHaveAttribute("data-mode", "all");
       await expect(
         group
           .locator(`[data-session="${host.sessions.B.id}"]`)
@@ -605,8 +611,8 @@ test(
       host.tmux(["new-session", "-d", "-s", "ordinary-fixture", "sleep", "120"]);
       const frame = await host.sessionFrame();
       const toggle = frame
-        .locator("#app header [data-mode-toggle]")
-        .describe("Shared display mode");
+        .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
+        .describe("A workspace display mode");
       if ((await toggle.getAttribute("data-mode")) === "all") await toggle.click();
     });
     await test.step("Archive directly, stop only A and view its saved row in All", async () => {
@@ -639,8 +645,8 @@ test(
         "preserved",
       );
       await frame
-        .locator("#app header [data-mode-toggle]")
-        .describe("Shared All toggle")
+        .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
+        .describe("A workspace All toggle")
         .click({ steps: 15 });
       const row = rowIn(frame, aId);
       await expect(row).toHaveClass(/archived/);
@@ -688,8 +694,8 @@ test(
         contentType: "image/png",
       });
       await frame
-        .locator("#app header [data-mode-toggle]")
-        .describe("Shared Unarchived toggle")
+        .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
+        .describe("A workspace Unarchived toggle")
         .click({ steps: 15 });
       await expect(
         frame.locator(`[data-session="${aId}"]`).describe("A session back in the default view"),
@@ -770,10 +776,11 @@ test(
         await host.expectNativeDisplay(key);
       }
       const frame = await host.sessionFrame();
-      await frame
-        .locator("#app header [data-mode-toggle]")
-        .describe("Shared Unarchived toggle")
-        .click({ steps: 15 });
+      for (const toggle of await frame.locator(".group-header [data-mode-toggle]").all()) {
+        if ((await toggle.getAttribute("data-mode")) === "all") {
+          await toggle.describe("Workspace Unarchived toggle").click({ steps: 15 });
+        }
+      }
     });
 
     async function expectPhase(key: string, { state, label }: (typeof phases)[number]) {
@@ -834,9 +841,13 @@ test(
       }
       writeFileSync(statePath, JSON.stringify(store));
       const frame = await host.sessionFrame();
-      await expect(
-        frame.locator("#app header [data-mode-toggle]").describe("Shared Unarchived mode"),
-      ).toHaveAttribute("data-mode", "unarchived");
+      for (const phase of phases) {
+        await expect(
+          frame
+            .locator(`[data-mode-toggle="${host.sessions[phase.key].cwd}"]`)
+            .describe(`${phase.key} workspace Unarchived mode`),
+        ).toHaveAttribute("data-mode", "unarchived");
+      }
       for (const phase of phases) await expectPhase(phase.key, phase);
       await expect(
         frame.locator(".session-status[data-state]").describe("Three live execution phases"),
