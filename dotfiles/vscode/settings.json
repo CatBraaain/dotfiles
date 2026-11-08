@@ -612,6 +612,7 @@
   "workbench.secondarySideBar.defaultVisibility": "hidden",
   "workbench.settings.editor": "json",
   "workbench.startupEditor": "none",
+  "workbench.tips.enabled": false,
   "yaml.disableSchemaDetection": [
     "**/.github/workflows/*.yml",
     "**/.github/workflows/*.yaml",
