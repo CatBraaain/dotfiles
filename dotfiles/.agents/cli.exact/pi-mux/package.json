@@ -1,5 +1,5 @@
 {
-  "name": "pimux-cli",
+  "name": "pi-mux-cli",
   "private": true,
   "main": "./src/main.ts"
 }

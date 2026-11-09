@@ -20,7 +20,7 @@ import { quote } from "shell-quote";
 type Outcome = { out: string; err: string; code: number };
 type Pane = { id: string; file: string; cwd: string; pid: number; pane: string; session: string };
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
-const CLI = resolve(EXTENSION_DIR, "../../../../.agents/cli.exact/pimux/src/main.ts");
+const CLI = resolve(EXTENSION_DIR, "../../../../.agents/cli.exact/pi-mux/src/main.ts");
 const TIMEOUT_MS = 60_000;
 
 async function fixture(test: (f: Awaited<ReturnType<typeof createFixture>>) => Promise<void>) {
@@ -38,7 +38,7 @@ async function fixture(test: (f: Awaited<ReturnType<typeof createFixture>>) => P
 async function createFixture() {
   const parent = "/tmp/work/dotfiles";
   mkdirSync(parent, { recursive: true });
-  const root = mkdtempSync(join(parent, "pimux-regression-"));
+  const root = mkdtempSync(join(parent, "pi-mux-regression-"));
   const agent = join(root, "agent");
   const runtime = join(root, "runtime");
   const bin = join(root, "bin");
@@ -274,7 +274,7 @@ function processEnvironment(pid: number): string[] {
   return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
 }
 
-describe("pimux CLI boundaries", () => {
+describe("pi-mux CLI boundaries", () => {
   it(
     "keeps concurrent new and open attached across a saved reservation rename",
     async () => {

@@ -36,8 +36,8 @@ function context(mode = "tui") {
 
 async function withManagedEnvironment(test: () => Promise<void>): Promise<void> {
   const updates = {
-    XDG_RUNTIME_DIR: "/tmp/work/dotfiles/pimux-unit",
-    TMUX: "/tmp/work/dotfiles/pimux-unit/pi-tmux/server.sock,123,0",
+    XDG_RUNTIME_DIR: "/tmp/work/dotfiles/pi-mux-unit",
+    TMUX: "/tmp/work/dotfiles/pi-mux-unit/pi-tmux/server.sock,123,0",
     TMUX_PANE: "%3",
     PI_TMUX_SESSION_ID: "fixed-id",
   };
@@ -55,7 +55,7 @@ async function withManagedEnvironment(test: () => Promise<void>): Promise<void> 
 
 function managedPaneOutput(): string {
   return [
-    "/tmp/work/dotfiles/pimux-unit/pi-tmux/server.sock",
+    "/tmp/work/dotfiles/pi-mux-unit/pi-tmux/server.sock",
     "123",
     "%3",
     readlinkSync("/proc/self/fd/0"),
@@ -82,7 +82,7 @@ describe("fixed conversation identity", () => {
       const result = await handlers.get("session_before_switch")!({ reason }, ctx);
       assert.deepEqual(result, { cancel: true });
       assert.equal(notifications[0]?.type, "error");
-      assert.match(notifications[0]!.text, /pimux open/);
+      assert.match(notifications[0]!.text, /pi-mux open/);
     });
   }
 

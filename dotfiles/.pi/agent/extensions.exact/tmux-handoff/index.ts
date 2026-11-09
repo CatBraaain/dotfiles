@@ -6,7 +6,7 @@ const TMUX_TIMEOUT_MS = 5_000;
 
 export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | undefined {
   if (ctx.mode !== "tui") return;
-  ctx.ui.notify("Conversation ID is fixed. Use pimux new or pimux open <session-id>.", "error");
+  ctx.ui.notify("Conversation ID is fixed. Use pi-mux new or pi-mux open <session-id>.", "error");
   return { cancel: true };
 }
 
@@ -21,10 +21,10 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
       const expectedId = process.env.PI_TMUX_SESSION_ID;
       const id = ctx.sessionManager.getSessionId();
       if (expectedId && (!pane || id !== expectedId))
-        throw new Error("pimux session identity or pane does not match the requested session");
+        throw new Error("pi-mux session identity or pane does not match the requested session");
       if (!pane) return;
       const file = ctx.sessionManager.getSessionFile();
-      if (!file) throw new Error("pimux requires a persistent session");
+      if (!file) throw new Error("pi-mux requires a persistent session");
       const metadata = Buffer.from(
         JSON.stringify({ id, file: resolve(file), cwd: ctx.cwd, pid: process.pid }),
       ).toString("base64");
@@ -34,10 +34,10 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
         { timeout: TMUX_TIMEOUT_MS },
       );
       if (result.code !== 0 || result.killed || ("truncated" in result && result.truncated))
-        throw new Error(`Cannot publish pimux session: ${result.stderr.trim()}`);
+        throw new Error(`Cannot publish pi-mux session: ${result.stderr.trim()}`);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`pimux: ${reason}\n`);
+      process.stderr.write(`pi-mux: ${reason}\n`);
       ctx.ui.notify(reason, "error");
       process.exitCode = 1;
       ctx.shutdown();

@@ -66,7 +66,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     );
     return await client.exited;
   } catch (error) {
-    console.error(`pimux: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`pi-mux: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 }
@@ -79,7 +79,7 @@ export function parseOperation(argv: string[]): Operation {
     /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i.test(argv[1]!)
   )
     return { kind: "open", id: argv[1]! };
-  throw new Error("usage: pimux [new | open <session-id>]");
+  throw new Error("usage: pi-mux [new | open <session-id>]");
 }
 
 function configuration() {
@@ -90,7 +90,7 @@ function configuration() {
   const extension = join(agentDir, "extensions", "tmux-handoff", "index.ts");
   const tmuxConfig = join(agentDir, "extensions", "tmux-handoff", "tmux.conf");
   if (!existsSync(extension) || !existsSync(tmuxConfig))
-    throw new Error(`Missing pimux extension or tmux configuration in ${agentDir}`);
+    throw new Error(`Missing pi-mux extension or tmux configuration in ${agentDir}`);
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>

@@ -41,7 +41,7 @@ if [ -e /dev/dxg ] && grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease; then
 fi
 
 # keep-sorted start
-alias a="pimux"
+alias a="pi-mux"
 alias ac="pi -c"
 alias ah="pi --class high"
 alias aj="pi --agent junior"

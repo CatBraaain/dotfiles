@@ -55,7 +55,7 @@ export async function inspectManagedPane(
     { timeout: TMUX_TIMEOUT_MS },
   );
   if (result.code !== 0 || result.killed || ("truncated" in result && result.truncated))
-    throw new Error(`Cannot verify pimux pane: ${result.stderr.trim()}`);
+    throw new Error(`Cannot verify pi-mux pane: ${result.stderr.trim()}`);
   const [actualSocket, actualServer, pane, tty, pid] = result.stdout.trimEnd().split("\t");
   const verified =
     actualSocket === paths.socketPath &&
