@@ -1,102 +1,46 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import {
-  getPackageDir,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import {
-  consumeStartup,
-  ensureTmuxDirectories,
-  findExecutable,
-  getTmuxPaths,
-  handoff,
-  inspectManagedPane,
-  pidStartTime,
-  publishConnection,
-  removeProvisionalSession,
-} from "./shared.ts";
+import { resolve } from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getTmuxPaths, inspectManagedPane, tmuxArgs } from "./shared.ts";
 
-export function isInteractiveCli(ctx: Pick<ExtensionContext, "mode">): boolean {
-  if (ctx.mode !== "tui" || !process.stdin.isTTY || !process.stdout.isTTY || !process.argv[1])
-    return false;
-  const packageDir = getPackageDir();
-  const metadata = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
-  return realpathSync(process.argv[1]) === realpathSync(join(packageDir, metadata.bin.pi));
+const TMUX_TIMEOUT_MS = 5_000;
+
+export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | undefined {
+  if (ctx.mode !== "tui") return;
+  ctx.ui.notify("Conversation ID is fixed. Use pimux new or pimux open <session-id>.", "error");
+  return { cancel: true };
 }
 
-export default function tmuxHandoffExtension(pi: ExtensionAPI): void {
-  let recordPath: string | undefined;
-  let exitCleanup: (() => void) | undefined;
-
-  function removeRecord(): void {
-    if (recordPath) rmSync(recordPath, { force: true });
-    recordPath = undefined;
-    if (exitCleanup) process.off("exit", exitCleanup);
-    exitCleanup = undefined;
-  }
-
-  pi.on("session_start", async (event, ctx) => {
+export default function fixedSessionExtension(pi: ExtensionAPI): void {
+  pi.on("session_before_switch", (_event, ctx) => rejectSessionChange(ctx));
+  pi.on("session_before_fork", (_event, ctx) => rejectSessionChange(ctx));
+  pi.on("session_start", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
     try {
-      if (!isInteractiveCli(ctx)) return;
       const paths = getTmuxPaths();
-      const isDedicatedSocket = process.env.TMUX?.startsWith(paths.socketPath + ",");
-      if (event.reason !== "startup" && !isDedicatedSocket) return;
-      const tmux = findExecutable("tmux");
-      const pane = await inspectManagedPane(pi.exec, paths, tmux);
-      if (process.env.PI_TMUX_HANDOFF && !pane)
-        throw new Error("Handoff marker does not match the live tmux pane");
-      if (pane) {
-        ensureTmuxDirectories(paths);
-        const startup = consumeStartup(paths, ctx.sessionManager.getSessionId());
-        if (startup) ctx.ui.setEditorText(startup.editorText);
-        recordPath = publishConnection(paths, {
-          version: 1,
-          instanceId: startup?.instanceId ?? randomUUID(),
-          sessionId: ctx.sessionManager.getSessionId(),
-          sessionFile: ctx.sessionManager.getSessionFile() ?? null,
-          ...pane,
-          pidStartTime: pidStartTime(),
-        });
-        exitCleanup = removeRecord;
-        process.once("exit", exitCleanup);
-        if (startup?.provisionalSessionFile) {
-          const path = startup.provisionalSessionFile;
-          const sessionId = startup.sessionId;
-          process.once("exit", () => {
-            try {
-              removeProvisionalSession(path, sessionId);
-            } catch {
-              process.stderr.write("tmux-handoff: provisional session cleanup failed\n");
-            }
-          });
-        }
-        return;
-      }
-      if (event.reason !== "startup") return;
-      await ctx.ui.custom<never>(async (tui) => {
-        tui.stop();
-        try {
-          if (typeof process.execve !== "function") throw new Error("Node.js execve is required");
-          ensureTmuxDirectories(paths);
-          return await handoff(pi, ctx, paths, tmux);
-        } catch (error) {
-          process.stderr.write(
-            `tmux-handoff: ${error instanceof Error ? error.message : "handoff failed"}\n`,
-          );
-          process.exit(1);
-        }
-      });
+      const pane = await inspectManagedPane(pi.exec, paths);
+      const expectedId = process.env.PI_TMUX_SESSION_ID;
+      const id = ctx.sessionManager.getSessionId();
+      if (expectedId && (!pane || id !== expectedId))
+        throw new Error("pimux session identity or pane does not match the requested session");
+      if (!pane) return;
+      const file = ctx.sessionManager.getSessionFile();
+      if (!file) throw new Error("pimux requires a persistent session");
+      const metadata = Buffer.from(
+        JSON.stringify({ id, file: resolve(file), cwd: ctx.cwd, pid: process.pid }),
+      ).toString("base64");
+      const result = await pi.exec(
+        "tmux",
+        tmuxArgs(paths, ["set-option", "-p", "-t", pane, "@pi-tmux-session", metadata]),
+        { timeout: TMUX_TIMEOUT_MS },
+      );
+      if (result.code !== 0 || result.killed || ("truncated" in result && result.truncated))
+        throw new Error(`Cannot publish pimux session: ${result.stderr.trim()}`);
     } catch (error) {
-      await ctx.ui.custom<never>((tui) => {
-        tui.stop();
-        process.stderr.write(
-          `tmux-handoff: ${error instanceof Error ? error.message : "startup failed"}\n`,
-        );
-        process.exit(1);
-      });
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`pimux: ${reason}\n`);
+      ctx.ui.notify(reason, "error");
+      process.exitCode = 1;
+      ctx.shutdown();
     }
   });
-  pi.on("session_shutdown", removeRecord);
 }
