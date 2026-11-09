@@ -117,9 +117,9 @@ local bos = { type = "bos" }
 local full_lattice = {
     [0] = { bos },
     [2] = {
-        { candidate = "赤", left_id = 100, right_id = 100, start = 1, _end = 2,
+        { candidate = "赤", surface = "あか", left_id = 100, right_id = 100, start = 1, _end = 2,
             wcost = 1000, type = "lex" },
-        { candidate = "赤", left_id = 300, right_id = 300, start = 1, _end = 2,
+        { candidate = "赤", surface = "あか", left_id = 300, right_id = 300, start = 1, _end = 2,
             wcost = 500, type = "lex" },
         path_nodes[1],
     },
@@ -128,30 +128,40 @@ local full_lattice = {
 }
 local lattices = {
     ["あかとりさかな"] = full_lattice,
+    ["とりさ"] = {
+        [0] = { bos },
+        [3] = { { surface = "とりさ", candidate = "鳥舎", left_id = 200, right_id = 400,
+            start = 1, _end = 3, wcost = 100 } },
+    },
+    ["かな"] = {
+        [0] = { bos },
+        [2] = { { surface = "かな", candidate = "金", left_id = 400, right_id = 400,
+            start = 1, _end = 2, wcost = 100 } },
+    },
     ["あか"] = {
         [0] = { bos },
         [2] = {
-            { candidate = "赤", left_id = 100, right_id = 100, start = 1, _end = 2,
+            { candidate = "赤", surface = "あか", left_id = 100, right_id = 100, start = 1, _end = 2,
                 wcost = 1000, type = "lex" },
-            { candidate = "赤", left_id = 300, right_id = 300, start = 1, _end = 2,
+            { candidate = "赤", surface = "あか", left_id = 300, right_id = 300, start = 1, _end = 2,
                 wcost = 500, type = "lex" },
         },
     },
     ["とり"] = {
         [0] = { bos },
         [2] = {
-            { candidate = "鳥", left_id = 200, right_id = 200, start = 1, _end = 2,
+            { candidate = "鳥", surface = "とり", left_id = 200, right_id = 200, start = 1, _end = 2,
                 wcost = 0, type = "lex" },
-            { candidate = "取り", left_id = 210, right_id = 210, start = 1, _end = 2,
+            { candidate = "取り", surface = "とり", left_id = 210, right_id = 210, start = 1, _end = 2,
                 wcost = 125, type = "lex" },
         },
     },
     ["さかな"] = {
         [0] = { bos },
         [3] = {
-            { candidate = "魚", left_id = 400, right_id = 400, start = 1, _end = 3,
+            { candidate = "魚", surface = "さかな", left_id = 400, right_id = 400, start = 1, _end = 3,
                 wcost = 125, type = "lex" },
-            { candidate = "肴", left_id = 410, right_id = 410, start = 1, _end = 3,
+            { candidate = "肴", surface = "さかな", left_id = 410, right_id = 410, start = 1, _end = 3,
                 wcost = 215, type = "lex" },
         },
     },
@@ -382,7 +392,7 @@ check(bunsetsu.display(context) == "赤鳥舎金", "the display joins the regene
 check(display_before_resize == "赤取り魚" and bunsetsu.display(context) == "赤鳥舎金",
     "only the two adjacent clauses changed their texts")
 
-print("== 5. learning keeps the generic noun id normalization")
+print("== 5. learning records generic ids plus the selected word route")
 bunsetsu.learn(context)
 local stored = env.userdict_writes
 for _, write in ipairs(stored) do
@@ -390,14 +400,17 @@ for _, write in ipairs(stored) do
 end
 local all_normalized = true
 for _, write in ipairs(stored) do
-    if not string.find(write.text, "|1851 1851$", 1, false) then all_normalized = false end
+    if not string.find(write.text, "|1851 1851\tp2", 1, false) then all_normalized = false end
 end
-check(all_normalized, "every learned entry carries the 1851 1851 ids")
-local joined = false
+check(all_normalized, "every learned entry carries the generic ids and the route marker")
+local joined
 for _, write in ipairs(stored) do
-    if write.custom_code == "あかとりさかな " then joined = true end
+    if write.custom_code == "あかとりさかな " then joined = write end
 end
-check(joined, "the joined whole-reading entry is learned")
+check(joined and joined.text == "赤鳥舎金|1851 1851\tp2:s あか,赤,300,300;とりさ,鳥舎,200,400;かな,金,400,400",
+    "the joined whole-reading entry carries the full word route")
+check(stored[1].text == "赤|1851 1851\tp2:c あか,赤,300,300",
+    "a clause history records the route of its own reading")
 
 print(string.format("probe3: %d checks, %d failures", checks, failures))
 os.exit(failures == 0 and 0 or 1)

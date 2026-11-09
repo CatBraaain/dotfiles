@@ -44,7 +44,7 @@ function M.new_env(dictionary, userdict, matrix)
         for _, row in ipairs(userdict) do
             if row.surface == surface then
                 user_entries[#user_entries + 1] = {
-                    text = row.left_id and dict_entry_text(row) or row.candidate,
+                    text = row.text or (row.left_id and dict_entry_text(row) or row.candidate),
                     custom_code = surface .. " ",
                     commit_count = row.commit_count or 1,
                 }

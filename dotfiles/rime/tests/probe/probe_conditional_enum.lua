@@ -1980,10 +1980,8 @@ do
     end
     bunsetsu.start(context, reading)
     context.translator_env.mem.update_userdict = function(_, entry)
-        local candidate, left_id, right_id = entry.text:match("^(.*)|(-?%d+) (-?%d+)$")
         userdict[#userdict + 1] = {
-            surface = entry.custom_code:match("^(.*) $"), candidate = candidate,
-            left_id = tonumber(left_id), right_id = tonumber(right_id), commit_count = 1,
+            surface = entry.custom_code:match("^(.*) $"), text = entry.text, commit_count = 1,
         }
     end
     bunsetsu.learn(context)
@@ -2046,320 +2044,560 @@ local function fixed_kana_fixture(userdict, boundary)
     return bunsetsu, context, viterbi, dictionary, matrix, readings
 end
 
-print("== 25. grammar kana is fixed at every position independently of costs, learning and clause count")
+local function record_learning(bunsetsu, context, userdict)
+    context.translator_env.mem.update_userdict = function(_, entry)
+        for _, row in ipairs(userdict) do
+            if row.text == entry.text then
+                row.commit_count = row.commit_count + 1
+                return
+            end
+        end
+        userdict[#userdict + 1] = {
+            surface = entry.custom_code:match("^(.*) $"),
+            text = entry.text,
+            commit_count = 1,
+        }
+    end
+    bunsetsu.learn(context)
+end
+
+local function route_row(clause, text, left_id, right_id)
+    for _, choice in ipairs(clause.unfiltered) do
+        if choice.text == text and choice.left_id == left_id and choice.right_id == right_id then
+            return choice
+        end
+    end
+    return nil
+end
+
+local function select_clause_text(bunsetsu, context, index, text)
+    local state = bunsetsu.state(context)
+    state.active = index
+    local clause = state.clauses[index]
+    for position, choice in ipairs(clause.candidates) do
+        if choice.text == text then
+            bunsetsu.select(context, position - clause.selected)
+            return true
+        end
+    end
+    return false
+end
+
+local function pos_matrix(ids, overrides)
+    local matrix = {}
+    local lefts, rights = { 0, -20 }, { 0, -10 }
+    for _, id in ipairs(ids) do
+        lefts[#lefts + 1] = id
+        rights[#rights + 1] = id
+    end
+    for _, right_id in ipairs(rights) do
+        for _, left_id in ipairs(lefts) do
+            matrix[right_id .. " " .. left_id] = 0
+        end
+    end
+    for key, value in pairs(overrides or {}) do matrix[key] = value end
+    return matrix
+end
+
+local function pos_engine(dictionary, matrix, userdict, boundary)
+    local readings = {}
+    for _, row in ipairs(dictionary) do
+        readings[row.surface] = readings[row.surface] or {}
+        readings[row.surface][#readings[row.surface] + 1] = { text = row.candidate,
+            phrase = { text = row.candidate .. "|" .. row.left_id .. " " .. row.right_id,
+                custom_code = row.surface .. " " } }
+    end
+    return new_engine(dictionary, matrix, readings, false, boundary, userdict)
+end
+
+print("== 25. unlearned ranking follows dictionary and connection order without kana forcing")
 do
-    local userdict = {
+    local cases = {
+        { "しか", "歯科" }, { "から", "空" }, { "ない", "無い" },
+        { "からとうきょう", "空東京" }, { "からから", "空空" },
+        { "へとうきょう", "辺東京" }, { "とうきょうへ", "東京辺" },
+    }
+    for _, learned in ipairs({ {}, {
         { surface = "から", candidate = "空", left_id = 1851, right_id = 1851, commit_count = 1000000 },
         { surface = "からとうきょう", candidate = "空東京", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-        { surface = "ちばから", candidate = "千葉空", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-        { surface = "これしかない", candidate = "此歯科無い", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-        { surface = "しか", candidate = "しか", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-    }
-    local cases = {
-        { "しか", "歯科", 0 }, { "から", "空", 0 },
-        { "からとうきょう", "から東京", 1 }, { "ちばから", "千葉から", 1 },
-        { "これしかない", "これしかない", 2 }, { "からから", "からから", 2 },
-        { "へとうきょう", "へ東京", 1 }, { "とうきょうへ", "東京へ", 1 },
-    }
-    for _, learned in ipairs({ {}, userdict }) do
-        for _, separate in ipairs({ false, true }) do
-            local bunsetsu, context = fixed_kana_fixture(learned, function() return separate end)
-            for _, case in ipairs(cases) do
-                bunsetsu.start(context, case[1])
-                local state = bunsetsu.state(context)
-                local label = case[1] .. " learned=" .. #learned .. " separate=" .. tostring(separate)
-                check(bunsetsu.display(context) == case[2], label .. ": fixed kana outranks even a 50000-cost route")
-                check(#state.grammar_spans == case[3], label .. ": grammar ranges come from ordinary dictionary words")
-                if not separate then check(#state.clauses == 1, label .. ": one clause can contain multiple words") end
-            end
-            bunsetsu.start(context, "からとうきょう")
-            check(#bunsetsu.state(context).clauses == (separate and 2 or 1),
-                "a highly learned joined spelling cannot change ordinary-dictionary clause boundaries")
-        end
-    end
-end
-
-print("== 26. old all-hiragana learning is ignored without changing stored rows or unrelated viterbi instances")
-do
-    local userdict = {
-        { surface = "さかな", candidate = "うお", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-        { surface = "さかなとうきょう", candidate = "さかなとうきょう", commit_count = 1000000 },
-        { surface = "かれー", candidate = "かれー", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-    }
-    local bunsetsu, context, viterbi, dictionary, matrix = fixed_kana_fixture(userdict, function() return false end)
-    for _, case in ipairs({ { "さかな", "魚" }, { "さかなとうきょう", "魚東京" }, { "かれー", "カレー" } }) do
-        bunsetsu.start(context, case[1])
-        check(bunsetsu.display(context) == case[2], case[1] .. ": all-hiragana learning has no ranking effect")
-        local learned = false
-        for lex in viterbi:_lookup(case[1]) do if lex.learned then learned = true end end
-        check(not learned, case[1] .. ": ignored rows do not reach the shared lookup cache or upstream lattice")
-    end
-    check(#userdict == 3 and userdict[1].candidate == "うお" and userdict[1].commit_count == 1000000,
-        "ignoring existing learning leaves every stored row and frequency intact")
-    local unrelated = viterbi_module.new(synth.new_env(dictionary, userdict, matrix))
-    unrelated:analyze("さかな")
-    check(unrelated:best_n()().candidate == "うお", "the userdict wrapper does not modify another viterbi instance")
-end
-
-print("== 27. all-hiragana choices are not saved, while kanji, katakana and mixed learning remain usable")
-do
-    local userdict = {
-        { surface = "さかな", candidate = "肴", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-        { surface = "かれー", candidate = "カリィ", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-        { surface = "さかなとうきょう", candidate = "肴とうきょう", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-    }
-    local bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
-    for _, case in ipairs({ { "さかな", "肴" }, { "かれー", "カリィ" }, { "さかなとうきょう", "肴とうきょう" } }) do
-        bunsetsu.start(context, case[1])
-        check(bunsetsu.display(context) == case[2], case[1] .. ": non-hiragana learning still leads ordinary ranking")
-    end
-    local saved = {}
-    context.translator_env.mem.update_userdict = function(_, entry) saved[#saved + 1] = DictEntry(entry) end
-    for _, reading in ipairs({ "しか", "かれー", "これしかない" }) do
-        bunsetsu.start(context, reading)
-        local clause = bunsetsu.state(context).clauses[1]
-        local found = false
-        for index, choice in ipairs(clause.candidates) do
-            if choice.text == reading then
-                bunsetsu.select(context, index - clause.selected)
-                found = true
-                break
-            end
-        end
-        check(found, reading .. ": an all-hiragana dictionary choice remains manually selectable")
-        bunsetsu.learn(context)
-        check(#saved == 0, reading .. ": learning saves no all-hiragana clause or sentence")
-    end
-    bunsetsu.start(context, "からとうきょう")
-    bunsetsu.learn(context)
-    check(#saved == 1 and saved[1].text == "から東京|1851 1851", "a mixed clause is still learned with generic noun ids")
-    saved = {}
-    bunsetsu, context = fixed_kana_fixture({}, function() return true end)
-    context.translator_env.mem.update_userdict = function(_, entry) saved[#saved + 1] = DictEntry(entry) end
-    bunsetsu.start(context, "これしかない")
-    bunsetsu.learn(context)
-    check(#saved == 0, "an entirely hiragana multi-clause sentence saves neither its clauses nor its joined reading")
-    bunsetsu.start(context, "からとうきょう")
-    bunsetsu.learn(context)
-    check(#saved == 2 and saved[1].text == "東京|1851 1851" and saved[2].text == "から東京|1851 1851",
-        "mixed sentence learning keeps its kanji clause and joined reading but excludes its hiragana clause")
-end
-
-print("== 28. manual kanji choices survive neighbor reranking and fixed ranges follow edited boundaries")
-do
-    local bunsetsu, context = fixed_kana_fixture({}, function() return true end)
-    context:set_option("_kagiroi_hide_candidates", true)
-    bunsetsu.start(context, "からとうきょうへ")
-    local state = bunsetsu.state(context)
-    local first = state.clauses[1]
-    local found = false
-    for index, choice in ipairs(first.candidates) do
-        if choice.text == "空" then
-            bunsetsu.select(context, index - first.selected)
-            found = true
-            break
-        end
-    end
-    check(found and bunsetsu.display(context) == "空東京へ", "a fixed kana first does not remove manual kanji alternatives")
-    state.active = 2
-    bunsetsu.select(context, 1)
-    check(first.candidates[first.selected].text == "空" and first.candidates[1].text == "から",
-        "a neighbor change keeps the manually chosen kanji even while the kana candidate remains first")
-    bunsetsu.start(context, "ちばからとうきょう")
-    state = bunsetsu.state(context)
-    for _ = 1, 2 do bunsetsu.resize(context, 1) end
-    check(#state.clauses == 2 and state.clauses[1].reading == "ちばから"
-        and bunsetsu.display(context) == "千葉から東京", "merging a particle into its previous clause preserves its fixed kana range")
-    for _ = 1, 5 do bunsetsu.resize(context, 1) end
-    check(#state.clauses == 1 and bunsetsu.display(context) == "千葉から東京",
-        "merging every word into one clause does not turn multi-word conversion into standalone conversion")
-    bunsetsu.resize(context, -1)
-    check(#state.clauses == 2 and #state.grammar_spans == 1,
-        "shrinking a merged clause keeps the original word plan rather than reclassifying from learned entries")
-end
-
-print("== 29. learned subwords cannot reclassify an ordinary single word as grammar-bearing input")
-do
-    local userdict = {
-        { surface = "さか", candidate = "酒", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-        { surface = "な", candidate = "名", left_id = 1851, right_id = 1851, commit_count = 1000000 },
-    }
-    local bunsetsu, context, viterbi, dictionary = fixed_kana_fixture(userdict, function() return true end)
-    dictionary[#dictionary + 1] = { surface = "さか", candidate = "坂", left_id = 1851, right_id = 1851, cost = 3000 }
-    dictionary[#dictionary + 1] = { surface = "な", candidate = "な", left_id = 368, right_id = 368, cost = 3000 }
-    local best_n = viterbi.best_n
-    viterbi:analyze("さかな")
-    check(viterbi:best_n()().candidate == "酒名", "the upstream learned lattice prefers two subwords before classification")
-    bunsetsu.start(context, "さかな")
-    local state = bunsetsu.state(context)
-    check(#state.clauses == 1 and #state.grammar_spans == 0,
-        "ordinary dictionary classification still sees one word and enables no grammar preference")
-    check(viterbi.best_n == best_n and viterbi:best_n()().candidate == "酒名",
-        "classification and fixed ranking do not replace or contaminate the generic best_n implementation")
-end
-
-print("== 30. fixed-kana discovery retains ordinary kanji alternatives beyond its preferred head")
-do
-    local bunsetsu, context, _, dictionary = fixed_kana_fixture({}, function() return false end)
-    for index = 1, 40 do
-        dictionary[#dictionary + 1] = { surface = "ちば", candidate = "埋" .. index,
-            left_id = 1926, right_id = 1926, cost = 100 + index }
-    end
-    bunsetsu.start(context, "ちばから")
-    local clause = bunsetsu.state(context).clauses[1]
-    check(clause.candidates[1].text == "千葉から", "the preferred discovery head keeps the fixed particle")
-    local kanji_index
-    for index, choice in ipairs(clause.candidates) do
-        if choice.text == "埋1空" then kanji_index = index break end
-    end
-    check(kanji_index and kanji_index > 30,
-        "ordinary cost discovery preserves kanji alternatives outside the fixed-kana discovery head")
-    if kanji_index then
-        bunsetsu.select(context, kanji_index - clause.selected)
-        check(bunsetsu.display(context) == "埋1空", "a deep kanji alternative remains manually selectable")
-    end
-end
-
-print("== 31. equal-cost word plans use the shorter first word independently of learning")
-do
-    for _, learned in ipairs({ {}, {
-        { surface = "かれー", candidate = "カリィ", left_id = 1851, right_id = 1851, commit_count = 1000000 },
     } }) do
-        local bunsetsu, context, _, dictionary = fixed_kana_fixture(learned, function() return false end)
-        dictionary[#dictionary + 1] = { surface = "か", candidate = "蚊", left_id = 1851, right_id = 1851, cost = 1000 }
-        dictionary[#dictionary + 1] = { surface = "か", candidate = "か", left_id = 368, right_id = 368, cost = 50000 }
-        dictionary[#dictionary + 1] = { surface = "れー", candidate = "玲", left_id = 1851, right_id = 1851, cost = 1500 }
-        bunsetsu.start(context, "かれー")
-        local state = bunsetsu.state(context)
-        check(#state.grammar_spans == 1 and state.grammar_spans[1].start == 1 and state.grammar_spans[1]._end == 1,
-            "the 1000+1500 two-word plan wins its tie with the 2500-cost whole word")
-        check(bunsetsu.display(context) == "かれー", "learning cannot change the tied word plan or override its fixed kana")
+        local bunsetsu, context = fixed_kana_fixture(learned, function() return false end)
+        for _, case in ipairs(cases) do
+            bunsetsu.start(context, case[1])
+            check(bunsetsu.display(context) == case[2],
+                case[1] .. ": dictionary and connection order decides without kana forcing")
+        end
+        bunsetsu.start(context, "からとうきょう")
+        check(#bunsetsu.state(context).clauses == 1,
+            "a highly learned joined spelling cannot change ordinary-dictionary clause boundaries")
     end
+    local bunsetsu, context = fixed_kana_fixture({
+        { surface = "これしかない", candidate = "これしかない", left_id = 1851, right_id = 1851, commit_count = 1000000 },
+    }, function() return false end)
+    bunsetsu.start(context, "これしかない")
+    check(bunsetsu.display(context) == "これしかない",
+        "a legacy all-hiragana record promotes its text as an unspecified history")
 end
 
-print("== 32. fixed kana remains first beside unscorable roman and alphabetic clauses")
+print("== 26. kana choices are saved as route histories and later referenced")
 do
-    for _, case in ipairs({
-        { "からk", "からk" }, { "qから", "qから" }, { "からAとうきょう", "からA東京" },
-        { "qからk", "qからk" }, { "からとうきょうk", "から東京k" }, { "とうきょうkから", "東京kから" },
-    }) do
-        local bunsetsu, context = fixed_kana_fixture({}, function() return true end)
-        context:set_option("_kagiroi_hide_candidates", true)
-        bunsetsu.start(context, case[1])
-        local state = bunsetsu.state(context)
-        check(bunsetsu.display(context) == case[2], case[1] .. ": fixed kana does not need adjacent connection ids")
-        local grammar_index
-        for index, clause in ipairs(state.clauses) do
-            if clause.reading == "から" then grammar_index = index break end
-        end
-        state.active = grammar_index
-        context:set_option("_kagiroi_hide_candidates", false)
-        bunsetsu.render(context)
-        local clause = state.clauses[grammar_index]
-        check(clause.candidates[1].text == "から", case[1] .. ": opening the list keeps the fixed first")
-        local found = false
-        for index, choice in ipairs(clause.candidates) do
-            if choice.text == "空" then
-                bunsetsu.select(context, index - clause.selected)
-                found = true
-                break
-            end
-        end
-        bunsetsu.render(context)
-        check(found and clause.candidates[clause.selected].text == "空" and clause.candidates[1].text == "から",
-            case[1] .. ": an explicit kanji choice is preserved independently of the fixed first")
+    local dictionary = {
+        { surface = "しか", candidate = "歯科", left_id = 1851, right_id = 1851, cost = 100 },
+        { surface = "しか", candidate = "しか", left_id = 368, right_id = 368, cost = 3000 },
+        { surface = "ない", candidate = "内", left_id = 1954, right_id = 1954, cost = 100 },
+        { surface = "ない", candidate = "ない", left_id = 330, right_id = 330, cost = 3000 },
+    }
+    local matrix = pos_matrix({ 1851, 368, 1954, 330 }, {
+        ["0 368"] = 8000, ["-10 368"] = 800,
+    })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, nil)
+    bunsetsu.start(context, "しか")
+    check(bunsetsu.display(context) == "歯科", "the kana candidate loses on dictionary order before learning")
+    for _ = 1, 24 do
+        bunsetsu.start(context, "しか")
+        check(select_clause_text(bunsetsu, context, 1, "しか"), "the kana candidate stays selectable")
+        record_learning(bunsetsu, context, userdict)
     end
-    local bunsetsu, context = fixed_kana_fixture({}, function() return true end)
-    bunsetsu.start(context, "からk")
+    check(#userdict == 1 and userdict[1].commit_count == 24
+        and userdict[1].text == "しか|1851 1851\tp2:c しか,しか,368,368",
+        "twenty-four kana commits grow one route-recorded history")
+    bunsetsu.start(context, "しか")
+    check(bunsetsu.display(context) == "しか", "the learned kana route leads its own reading")
+    bunsetsu.start(context, "ない")
+    check(bunsetsu.display(context) == "内", "an unrelated same-shape reading keeps its dictionary order")
+end
+
+print("== 27. same-text routes with different word ids keep separate histories")
+do
+    local dictionary = {
+        { surface = "ない", candidate = "内", left_id = 1954, right_id = 1954, cost = 100 },
+        { surface = "ない", candidate = "内", left_id = 1923, right_id = 1923, cost = 100 },
+        { surface = "で", candidate = "で", left_id = 370, right_id = 370, cost = 100 },
+        { surface = "たべ", candidate = "食べ", left_id = 694, right_id = 694, cost = 100 },
+    }
+    local boundary = function(right_id, left_id)
+        if right_id == 694 and (left_id == 1954 or left_id == 1923) then return true end
+        if (right_id == 1954 or right_id == 1923) and left_id == 370 then return false end
+        return true
+    end
+    local matrix = pos_matrix({ 1954, 1923, 370, 694 }, {
+        ["1954 370"] = 100, ["1923 370"] = 400,
+        ["694 1954"] = 5000, ["694 1923"] = 0,
+    })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, boundary)
+    bunsetsu.start(context, "ないで")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(bunsetsu.display(context) == "内で", "the cheaper 1954 route leads before learning")
+    local favored = route_row(clause, "内で", 1954, 370)
+    local disfavoured = route_row(clause, "内で", 1923, 370)
+    check(favored and favored.own == 300 and favored.history_discount == nil,
+        "the 1954 route keeps its raw own cost before learning")
+    check(disfavoured and disfavoured.own == 600,
+        "the 1923 route keeps its raw own cost before learning")
+
+    bunsetsu.start(context, "たべないで")
+    check(bunsetsu.display(context) == "食べ内で",
+        "a verb context makes the 1923 route the winner")
+    check(select_clause_text(bunsetsu, context, 2, "内で"), "the clause winner stays selectable")
+    record_learning(bunsetsu, context, userdict)
+    check(#userdict == 3
+        and userdict[1].text == "食べ|1851 1851\tp2:c たべ,食べ,694,694"
+        and userdict[2].text == "内で|1851 1851\tp2:c ない,内,1923,1923;で,で,370,370"
+        and userdict[3].text == "食べ内で|1851 1851\tp2:s たべ,食べ,694,694;ない,内,1923,1923;で,で,370,370",
+        "learning records each clause and the join with their selected word routes")
+
+    bunsetsu.start(context, "ないで")
+    clause = bunsetsu.state(context).clauses[1]
+    local learned = route_row(clause, "内で", 1923, 370)
+    favored = route_row(clause, "内で", 1954, 370)
+    check(learned and learned.history_discount ~= nil and bunsetsu.display(context) == "内で",
+        "the learned 1923 route now leads the standalone reading with its own ids")
+    check(learned.left_id == 1923 and learned.right_id == 370,
+        "the learned route keeps its original boundary ids instead of a generic reclassification")
+    check(favored and favored.own == 300 and favored.history_discount == nil,
+        "the untouched 1954 route keeps its exact previous evaluation")
+end
+
+print("== 28. mid-route word differences keep separate histories")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 500, right_id = 500, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 501, right_id = 501, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 502, right_id = 502, cost = 120 },
+        { surface = "う", candidate = "宇", left_id = 503, right_id = 503, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 504, right_id = 504, cost = 100 },
+        { surface = "え", candidate = "絵", left_id = 600, right_id = 600, cost = 100 },
+    }
+    local boundary = function(right_id, left_id)
+        if right_id == 500 then return false end
+        if (right_id == 501 or right_id == 502) and (left_id == 503 or left_id == 504) then return false end
+        return true
+    end
+    local matrix = pos_matrix({ 500, 501, 502, 503, 504, 600 }, {
+        ["503 600"] = 5000, ["501 504"] = 10000, ["502 503"] = 10000,
+    })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, boundary)
+    bunsetsu.start(context, "あいう")
+    local clause = bunsetsu.state(context).clauses[1]
+    local plain = route_row(clause, "亜伊宇", 500, 503)
+    check(plain and plain.own == 300 and bunsetsu.display(context) == "亜伊宇",
+        "the 501-then-503 route leads before learning")
+
+    bunsetsu.start(context, "あいうえ")
+    check(bunsetsu.display(context) == "亜伊宇絵",
+        "a following clause makes the 504-final route the winner")
+    check(select_clause_text(bunsetsu, context, 1, "亜伊宇"), "the clause winner stays selectable")
+    record_learning(bunsetsu, context, userdict)
+    check(#userdict == 3
+        and userdict[1].text == "亜伊宇|1851 1851\tp2:c あ,亜,500,500;い,伊,502,502;う,宇,504,504",
+        "learning stores the middle word id inside the route")
+
+    bunsetsu.start(context, "あいう")
+    clause = bunsetsu.state(context).clauses[1]
+    local learned = route_row(clause, "亜伊宇", 500, 504)
+    plain = route_row(clause, "亜伊宇", 500, 503)
+    check(learned and learned.history_discount ~= nil and bunsetsu.display(context) == "亜伊宇",
+        "the learned 504 route now leads the standalone reading")
+    check(learned.route_words[2].left_id == 502,
+        "the deduped winner row preserves the learned middle word")
+    check(plain and plain.own == 300 and plain.history_discount == nil,
+        "the route sharing the final id but a different middle word keeps its previous evaluation")
+end
+
+print("== 29. one-word and multi-word histories over the same text stay separate")
+do
+    local dictionary = {
+        { surface = "ない", candidate = "内", left_id = 1954, right_id = 1954, cost = 100 },
+        { surface = "ない", candidate = "内", left_id = 1923, right_id = 1923, cost = 100 },
+        { surface = "で", candidate = "で", left_id = 370, right_id = 370, cost = 100 },
+        { surface = "たべ", candidate = "食べ", left_id = 694, right_id = 694, cost = 100 },
+        { surface = "ないで", candidate = "内で", left_id = 1500, right_id = 1500, cost = 50 },
+    }
+    local boundary = function(right_id, left_id)
+        if right_id == 694 then return true end
+        if (right_id == 1954 or right_id == 1923) and left_id == 370 then return false end
+        return true
+    end
+    local matrix = pos_matrix({ 1954, 1923, 370, 694, 1500 }, {
+        ["1954 370"] = 100, ["1923 370"] = 400,
+        ["694 1954"] = 0, ["694 1923"] = 100, ["694 1500"] = 50000,
+    })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, boundary)
+    bunsetsu.start(context, "ないで")
+    check(bunsetsu.display(context) == "内で", "the one-word route leads before learning")
+    check(select_clause_text(bunsetsu, context, 1, "内で"), "the one-word winner stays selectable")
+    record_learning(bunsetsu, context, userdict)
+    check(userdict[1].text == "内で|1851 1851\tp2:c ないで,内で,1500,1500",
+        "the one-word history records its single-word route")
+
+    bunsetsu.start(context, "たべないで")
+    check(bunsetsu.display(context) == "食べ内で", "the verb context makes the multi-word route win")
+    check(select_clause_text(bunsetsu, context, 2, "内で"), "the multi-word winner stays selectable")
+    record_learning(bunsetsu, context, userdict)
+    local multi = nil
+    for _, row in ipairs(userdict) do
+        if row.surface == "ないで" and row.text:find("内,1954", 1, true) then multi = row end
+    end
+    check(multi and multi.commit_count == 1,
+        "the multi-word history is stored apart from the one-word history")
+
+    bunsetsu.start(context, "ないで")
+    local clause = bunsetsu.state(context).clauses[1]
+    local single = route_row(clause, "内で", 1500, 1500)
+    local routed = route_row(clause, "内で", 1954, 370)
+    check(single and single.history_discount ~= nil and routed and routed.history_discount ~= nil,
+        "both histories apply to their own routes only")
+    check(single.own == 50 and routed.own == 300,
+        "neither history rewrites the other route's own cost")
+    check(bunsetsu.display(context) == "内で" and clause.candidates[clause.selected].left_id == 1500,
+        "the cheaper one-word route still leads with equal counts")
+
+    for _ = 1, 4 do
+        bunsetsu.start(context, "たべないで")
+        check(select_clause_text(bunsetsu, context, 2, "内で"), "the multi-word winner stays selectable")
+        record_learning(bunsetsu, context, userdict)
+    end
+    bunsetsu.start(context, "ないで")
+    clause = bunsetsu.state(context).clauses[1]
+    check(clause.candidates[clause.selected].left_id == 1954,
+        "more multi-word commits flip the lead to the multi-word route alone")
+    single = route_row(clause, "内で", 1500, 1500)
+    check(single and single.own == 50 and single.history_discount ~= nil,
+        "the one-word history keeps its own discount while losing the lead")
+end
+
+print("== 30. relearning a deduped winner grows the same route history")
+do
+    local dictionary = {
+        { surface = "ない", candidate = "内", left_id = 1954, right_id = 1954, cost = 100 },
+        { surface = "ない", candidate = "内", left_id = 1923, right_id = 1923, cost = 100 },
+        { surface = "で", candidate = "で", left_id = 370, right_id = 370, cost = 100 },
+    }
+    local boundary = function(right_id, left_id)
+        if (right_id == 1954 or right_id == 1923) and left_id == 370 then return false end
+        return true
+    end
+    local matrix = pos_matrix({ 1954, 1923, 370 }, {
+        ["1954 370"] = 100, ["1923 370"] = 400,
+    })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, boundary)
+    bunsetsu.start(context, "ないで")
+    check(select_clause_text(bunsetsu, context, 1, "内で"), "the winner stays selectable")
+    record_learning(bunsetsu, context, userdict)
+    bunsetsu.start(context, "ないで")
+    check(select_clause_text(bunsetsu, context, 1, "内で"), "the learned winner stays selectable")
+    record_learning(bunsetsu, context, userdict)
+    check(#userdict == 1 and userdict[1].commit_count == 2
+        and userdict[1].text == "内で|1851 1851\tp2:c ない,内,1954,1954;で,で,370,370",
+        "two commits over the deduped winner grow one and the same route history")
+end
+
+print("== 31. legacy records are referenced without rewriting the stored rows")
+do
+    local dictionary = {
+        { surface = "ない", candidate = "内", left_id = 1954, right_id = 1954, cost = 100 },
+        { surface = "ない", candidate = "内", left_id = 1923, right_id = 1923, cost = 100 },
+        { surface = "ない", candidate = "ない", left_id = 330, right_id = 330, cost = 3000 },
+    }
+    local matrix = pos_matrix({ 1954, 1923, 330 }, {
+        ["0 330"] = 8000, ["-10 330"] = 800, ["0 1923"] = 200,
+    })
+    local userdict = {
+        { surface = "ない", candidate = "内", left_id = 1851, right_id = 1851, commit_count = 50 },
+    }
+    local bunsetsu, context, viterbi = pos_engine(dictionary, matrix, userdict, nil)
+    bunsetsu.start(context, "ない")
+    check(bunsetsu.display(context) == "内",
+        "a legacy suffix-less record promotes its text as an unspecified history")
+    check(select_clause_text(bunsetsu, context, 1, "内"), "the legacy-promoted winner stays selectable")
+    record_learning(bunsetsu, context, userdict)
+    check(#userdict == 2 and userdict[1].candidate == "内"
+        and userdict[1].left_id == 1851 and userdict[1].right_id == 1851
+        and userdict[1].commit_count == 50,
+        "the legacy row keeps its stored text and frequency")
+    check(userdict[2].text == "内|1851 1851\tp2:c ない,内,1954,1954" and userdict[2].commit_count == 1,
+        "the new commit grows a separate route-recorded history")
+    bunsetsu.start(context, "ない")
+    check(bunsetsu.display(context) == "内",
+        "both coexisting histories keep the text promoted")
+    local unrelated = viterbi_module.new(synth.new_env(dictionary, userdict, matrix))
+    check(unrelated.query_userdict ~= viterbi.query_userdict,
+        "the route-aware reader does not modify another viterbi instance")
+end
+
+print("== 32. identical endpoints do not transfer a middle-word history")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 500, right_id = 500, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 501, right_id = 501, cost = 1000 },
+        { surface = "い", candidate = "伊", left_id = 502, right_id = 502, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 503, right_id = 503, cost = 100 },
+    }
+    local matrix = pos_matrix({ 500, 501, 502, 503 })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, function() return false end)
+    bunsetsu.start(context, "あいう")
+    record_learning(bunsetsu, context, userdict)
+    local saved = userdict[1].text
+    check(saved == "亜伊宇|1851 1851\tp2:c あ,亜,500,500;い,伊,502,502;う,宇,503,503",
+        "training records the middle id with shared outer ids")
+    dictionary[2].cost = 10
+    bunsetsu, context = pos_engine(dictionary, matrix, userdict, function() return false end)
+    bunsetsu.start(context, "あいう")
+    local clause = bunsetsu.state(context).clauses[1]
+    local winner = clause.candidates[clause.selected]
+    check(winner.route_words[2].left_id == 502,
+        "the learned middle path beats a cheaper path with identical endpoints")
+    record_learning(bunsetsu, context, userdict)
+    check(#userdict == 1 and userdict[1].text == saved and userdict[1].commit_count == 2,
+        "filter dedup and relearning retain the middle path")
+    table.remove(dictionary, 3)
+    bunsetsu, context = pos_engine(dictionary, matrix, userdict, function() return false end)
+    bunsetsu.start(context, "あいう")
+    clause = bunsetsu.state(context).clauses[1]
+    winner = route_row(clause, "亜伊宇", 500, 503)
+    check(winner.own == 210 and winner.history_discount == nil
+        and winner.route_words[2].left_id == 501,
+        "removing the learned middle word leaves the other path unmodified")
+end
+
+print("== 33. subword learning changes only its original word ids")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 500, right_id = 500, cost = 5000 },
+        { surface = "あ", candidate = "亜", left_id = 501, right_id = 501, cost = 5000 },
+        { surface = "い", candidate = "伊", left_id = 503, right_id = 503, cost = 100 },
+        { surface = "あい", candidate = "愛", left_id = 504, right_id = 504, cost = 1000 },
+    }
+    local matrix = pos_matrix({ 500, 501, 503, 504 })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, function() return false end)
+    bunsetsu.start(context, "あ")
+    record_learning(bunsetsu, context, userdict)
+    bunsetsu.start(context, "あい")
+    local clause = bunsetsu.state(context).clauses[1]
+    local learned = route_row(clause, "亜伊", 500, 503)
+    local other = route_row(clause, "亜伊", 501, 503)
+    check(learned and learned.own == 600 and other and other.own == 5100,
+        "only the learned subword id receives the own-cost reduction")
+    check(bunsetsu.display(context) == "亜伊",
+        "the matching subword history can improve the enclosing candidate")
+end
+
+print("== 34. clause and joined-sentence counters remain separate")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 500, right_id = 500, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 501, right_id = 501, cost = 100 },
+    }
+    local matrix = pos_matrix({ 500, 501 })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, function() return true end)
+    bunsetsu.start(context, "あい")
+    record_learning(bunsetsu, context, userdict)
+    check(#userdict == 3 and userdict[3].text ==
+        "亜伊|1851 1851\tp2:s あ,亜,500,500;い,伊,501,501",
+        "a two-clause commit stores its joined sentence separately")
+    bunsetsu.start(context, "あい")
+    check(#bunsetsu.state(context).clauses == 2,
+        "typed learning keeps the ordinary initial clause boundaries")
     bunsetsu.resize(context, 1)
-    check(#bunsetsu.state(context).clauses == 1 and bunsetsu.display(context) == "からk",
-        "absorbing an unscorable clause keeps the fixed kana")
-    bunsetsu.resize(context, -1)
-    check(#bunsetsu.state(context).clauses == 2 and bunsetsu.display(context) == "からk",
-        "restoring the boundary keeps fixed kana beside the id-less clause")
-    local _, readings
-    bunsetsu, context, _, _, _, readings = fixed_kana_fixture({}, function() return true end)
-    readings["から"][#readings["から"] + 1] = { text = "未採点1" }
-    readings["から"][#readings["から"] + 1] = { text = "未採点2" }
-    bunsetsu.start(context, "からq")
-    local retained = {}
-    for _, choice in ipairs(bunsetsu.state(context).clauses[1].candidates) do
-        if choice.text:find("未採点", 1, true) then retained[#retained + 1] = choice.text end
-    end
-    check(table.concat(retained, "|") == "未採点1|未採点2", "unscored alternatives keep their original relative order")
-    bunsetsu, context, _, _, _, readings = fixed_kana_fixture({}, function() return true end)
-    readings["さかな"][1], readings["さかな"][2] = readings["さかな"][2], readings["さかな"][1]
-    bunsetsu.start(context, "さかなq")
-    check(bunsetsu.display(context) == "さかなq", "without fixed grammar or connection ids, ordinary order is not fabricated")
+    record_learning(bunsetsu, context, userdict)
+    check(#userdict == 4 and userdict[3].commit_count == 1
+        and userdict[4].text == "亜伊|1851 1851\tp2:c あ,亜,500,500;い,伊,501,501",
+        "a merged clause over the same word path has a different counter")
 end
 
-print("== 33. mixed learning preserves fixed kana and arbitrary nonempty spelling regions")
+print("== 35. long-vowel kana histories survive a new engine")
 do
+    local userdict = {}
+    local bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
+    bunsetsu.start(context, "かれー")
+    check(select_clause_text(bunsetsu, context, 1, "かれー"),
+        "a long-vowel kana dictionary candidate is selectable")
+    record_learning(bunsetsu, context, userdict)
+    check(userdict[1].text == "かれー|1851 1851\tp2:c かれー,かれー,1851,1851",
+        "the long-vowel kana candidate stores its original word identity")
+    bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
+    bunsetsu.start(context, "かれー")
+    check(bunsetsu.display(context) == "かれー",
+        "a new engine restores the saved long-vowel kana history")
+end
+
+print("== 36. auxiliary learning does not change a same-text noun path")
+do
+    local dictionary = {
+        { surface = "ない", candidate = "ない", left_id = 213, right_id = 213, cost = 100 },
+        { surface = "ない", candidate = "ない", left_id = 1954, right_id = 1954, cost = 5000 },
+    }
+    local matrix = pos_matrix({ 213, 1954 })
+    local userdict = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, userdict, nil)
+    bunsetsu.start(context, "ない")
+    record_learning(bunsetsu, context, userdict)
+    bunsetsu.start(context, "ない")
+    local clause = bunsetsu.state(context).clauses[1]
+    local auxiliary = route_row(clause, "ない", 213, 213)
+    local noun = route_row(clause, "ない", 1954, 1954)
+    check(auxiliary.history_discount ~= nil and noun.own == 5000 and noun.history_discount == nil,
+        "the auxiliary counter changes only the auxiliary evaluation")
+    table.remove(dictionary, 1)
+    bunsetsu, context = pos_engine(dictionary, matrix, userdict, nil)
+    bunsetsu.start(context, "ない")
+    noun = route_row(bunsetsu.state(context).clauses[1], "ない", 1954, 1954)
+    check(noun.own == 5000 and noun.history_discount == nil,
+        "a noun-only context cannot reuse the auxiliary history as a generic node")
+    clause = bunsetsu.state(context).clauses[1]
+    check(clause.candidates[clause.selected].left_id == 1954,
+        "the deduped noun-only winner retains the noun identity")
+end
+
+print("== 37. legacy histories promote matching partial intervals without assigning word ids")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 500, right_id = 500, cost = 5000 },
+        { surface = "あ", candidate = "阿", left_id = 501, right_id = 501, cost = 1000 },
+        { surface = "い", candidate = "伊", left_id = 503, right_id = 503, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 504, right_id = 504, cost = 100 },
+    }
+    local matrix = pos_matrix({ 500, 501, 503, 504, 1851 })
     local cases = {
-        { "からとうきょう", "から東亰", "から東亰", true },
-        { "とうきょうから", "東亰から", "東亰から", true },
-        { "ちばからとうきょう", "千葉から東亰", "千葉から東亰", true },
-        { "からとうきょうから", "から東亰から", "から東亰から", true },
-        { "からからとうきょう", "からから東亰", "からから東亰", true },
-        { "からとうきょう", "から獏", "から獏", true },
-        { "とうきょうから", "獏から", "獏から", true },
-        { "ちばからとうきょう", "千葉から獏", "千葉から獏", true },
-        { "ちばからとうきょう", "獏から東亰", "獏から東亰", true },
-        { "からとうきょうから", "から獏から", "から獏から", true },
-        { "ちばからとうきょう", "獏から麒麟", "獏から麒麟", true },
-        { "とうきょうから", "東きょうから", "東きょうから", true },
-        { "からとうきょう", "から東きょう", "から東きょう", true },
-        { "ちばからとうきょう", "千ばから東京", "千ばから東京", true },
-        { "からとうきょうから", "から東きょうから", "から東きょうから", true },
-        { "とうきょうから", "東京獏から", "東京獏から", true },
-        { "とうきょうから", "東から", "東から", true },
-        { "とうきょうから", "🗼きょうから", "🗼きょうから", true },
-        { "からとうきょうへ", "から東きょうへ", "から東きょうへ", true },
-        { "からとうきょうへ", "へ東京から", "から東京へ", false },
-        { "ちばからとうきょう", "から東きょう", "千葉から東京", false },
-        { "ちばからとうきょう", "千ばから", "千葉から東京", false },
-        { "からとうきょうから", "から獏", "から東京から", false },
-        { "からからとうきょう", "から獏", "からから東京", false },
-        { "からとうきょう", "空東亰", "から東京", false },
-        { "からとうきょう", "東亰から", "から東京", false },
-        { "とうきょうから", "から東亰", "東京から", false },
-        { "ちばからとうきょう", "千葉東から亰", "千葉東から亰", true },
-        { "からとうきょうから", "からから東亰", "から東京から", false },
+        { surface = "あ", candidate = "亜", readings = {
+            { "あ", "亜" }, { "あい", "亜伊" }, { "いあ", "伊亜" }, { "いあう", "伊亜宇" },
+        } },
+        { surface = "あい", candidate = "亜伊", readings = {
+            { "あい", "亜伊" }, { "あいう", "亜伊宇" },
+            { "うあい", "宇亜伊" }, { "うあいう", "宇亜伊宇" },
+        } },
     }
     for _, case in ipairs(cases) do
-        local userdict = { { surface = case[1], candidate = case[2], left_id = 1851, right_id = 1851,
-            commit_count = 1000000 } }
-        local bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
-        bunsetsu.start(context, case[1])
-        local clause = bunsetsu.state(context).clauses[1]
-        check(bunsetsu.display(context) == case[3], case[1] .. " -> " .. case[2] .. ": learning obeys the fixed positions")
-        local learned
-        for _, choice in ipairs(clause.unfiltered) do
-            if choice.text == case[2] and choice.left_id == 1851 and choice.right_id == 1851 and choice.own == 500 then
-                learned = choice
-                break
-            end
+        local legacy = { surface = case.surface, candidate = case.candidate,
+            left_id = 1851, right_id = 1851, commit_count = 1000000 }
+        local userdict = { legacy }
+        local bunsetsu, context = pos_engine(dictionary, matrix, userdict, function(right_id, left_id)
+            return right_id == 500 and left_id == 503
+        end)
+        for _, reading in ipairs(case.readings) do
+            bunsetsu.start(context, reading[1])
+            check(bunsetsu.display(context) == reading[2],
+                case.surface .. " legacy history promotes its matching interval in " .. reading[1])
+            local clauses = bunsetsu.state(context).clauses
+            local winner = clauses[1].candidates[clauses[1].selected]
+            check(#clauses == 1 and winner.left_id ~= 1851 and winner.right_id ~= 1851,
+                "partial legacy evaluation retains dictionary route ids and clause boundaries")
         end
-        check(learned and ((learned.grammar_misses == 0) == case[4]),
-            case[2] .. ": the learned route itself has the correct protection score")
+        record_learning(bunsetsu, context, userdict)
+        check(#userdict == 2 and legacy.commit_count == 1000000
+            and legacy.text == nil and legacy.left_id == 1851 and legacy.right_id == 1851,
+            "relearning leaves the legacy record unchanged")
+        local expected = case.surface == "あ"
+            and "伊亜宇|1851 1851\tp2:c い,伊,503,503;あ,亜,500,500;う,宇,504,504"
+            or "宇亜伊宇|1851 1851\tp2:c う,宇,504,504;あ,亜,500,500;い,伊,503,503;う,宇,504,504"
+        check(userdict[2].text == expected,
+            "relearning records the actual dictionary words rather than a synthetic legacy word")
     end
-    local userdict = { { surface = "からとうきょう", candidate = "から東亰", left_id = 1851, right_id = 1851,
-        commit_count = 1000000 } }
-    local bunsetsu, context = fixed_kana_fixture(userdict, function() return false end)
-    bunsetsu.start(context, "ちばからとうきょう")
-    check(bunsetsu.display(context) == "千葉から東亰", "a learned mixed subrange is aligned at its actual reading offset")
-    local _, dictionary
-    bunsetsu, context, _, dictionary = fixed_kana_fixture({}, function() return false end)
-    dictionary[#dictionary + 1] = { surface = "からとうきょうから", candidate = "からから",
-        left_id = 1851, right_id = 1851, cost = 500000 }
-    bunsetsu.start(context, "からとうきょうから")
-    check(bunsetsu.display(context) == "から東京から", "a nonprotected reading region requires nonempty candidate text")
-    local empty_middle
-    for _, choice in ipairs(bunsetsu.state(context).clauses[1].unfiltered) do
-        if choice.text == "からから" then empty_middle = choice break end
+end
+
+print("== 38. malformed route histories are ignored without becoming unspecified histories")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 500, right_id = 500, cost = 5000 },
+        { surface = "あ", candidate = "阿", left_id = 501, right_id = 501, cost = 1000 },
+    }
+    local matrix = pos_matrix({ 500, 501, 1851 })
+    local suffixes = {
+        "\tp2:c %FF,亜,500,500", "\tp2:c あ,%FF,500,500",
+        "\tp2:c い,亜,500,500", "\tp2:c あ,阿,500,500",
+        "\tp2:c あ,亜,500,500;", "\tp2:c ;あ,亜,500,500",
+        "\tp2:c あ,亜,500,500;;あ,亜,500,500",
+        "\tp2:c ,亜,500,500", "\tp2:c あ,,500,500",
+        "\tp2:c %GG,亜,500,500", "\tp2:c bogus", "\tp2:c ",
+        "\tp2:x あ,亜,500,500", "\tp2:c あ,亜," .. string.rep("9", 400) .. ",500",
+    }
+    for _, suffix in ipairs(suffixes) do
+        local malformed = { surface = "あ", text = "亜|1851 1851" .. suffix, commit_count = 1000000 }
+        local userdict = { malformed,
+            { surface = "あ", text = "阿|1851 1851\tp2:c あ,阿,501,501", commit_count = 1 },
+        }
+        local ok, result = pcall(function()
+            local bunsetsu, context = pos_engine(dictionary, matrix, userdict, nil)
+            bunsetsu.start(context, "あ")
+            local clause = bunsetsu.state(context).clauses[1]
+            local rejected = route_row(clause, "亜", 500, 500)
+            local accepted = route_row(clause, "阿", 501, 501)
+            return bunsetsu.display(context) == "阿"
+                and rejected.history_discount == nil and accepted.history_discount == 10000
+        end)
+        check(ok and result, "invalid route is skipped and the following valid history remains readable: " .. suffix)
+        check(#userdict == 2 and malformed.text == "亜|1851 1851" .. suffix
+            and malformed.commit_count == 1000000,
+            "ignoring a malformed history does not rewrite its stored row")
     end
-    check(empty_middle and empty_middle.grammar_misses > 0,
-        "two protected occurrences cannot absorb an empty nonprotected middle region")
 end
 
 print(string.format("probe4: %d checks, %d failures", checks, failures))

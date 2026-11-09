@@ -371,11 +371,11 @@ assert(press(env, 0x20) == kAccepted, "the learning test must open the candidate
 assert(press(env, 0xff0d) == kAccepted, "Enter must commit the conversion")
 assert(context.commits[1] == "下ネ", "Enter must commit the displayed clauses")
 assert(#learned == 3, "Enter must learn both clauses and their join")
-assert(learned[1].text == "下|1851 1851" and learned[1].custom_code == "か ",
+assert(learned[1].text == "下|1851 1851\tp2:c" and learned[1].custom_code == "か ",
     "each clause must learn its own entry first")
-assert(learned[2].text == "ネ|1851 1851" and learned[2].custom_code == "1 ",
+assert(learned[2].text == "ネ|1851 1851\tp2:c" and learned[2].custom_code == "1 ",
     "the second clause must follow the first")
-assert(learned[3].text == "下ネ|1851 1851" and learned[3].custom_code == "か1 ",
+assert(learned[3].text == "下ネ|1851 1851\tp2:s" and learned[3].custom_code == "か1 ",
     "the join must carry the whole reading with the generic noun ids")
 
 -- Committing a hidden conversion learns nothing: only a commit with the
@@ -406,7 +406,7 @@ assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
     "the single-clause test must convert and open the candidate list")
 assert(press(env, 0xff0d) == kAccepted,
     "the single-clause test must commit with the list open")
-assert(#learned == 1 and learned[1].text == "下|1851 1851",
+assert(#learned == 1 and learned[1].text == "下|1851 1851\tp2:c",
     "a single clause must learn only its own entry")
 
 -- A clause without a dictionary entry keeps the whole reading unlearned:
@@ -423,7 +423,7 @@ assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
     "the unlearned-clause test must convert and open the candidate list")
 assert(press(env, 0xff0d) == kAccepted,
     "the unlearned-clause test must commit with the list open")
-assert(#learned == 1 and learned[1].text == "ネ|1851 1851",
+assert(#learned == 1 and learned[1].text == "ネ|1851 1851\tp2:c",
     "the clause without an entry must leave the join out and learn the rest only")
 
 -- Tab expands without moving the selection; a second Tab does nothing and
