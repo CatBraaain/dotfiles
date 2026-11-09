@@ -3,7 +3,7 @@
   "theme": "purple-dark",
   "tuiMode": "fullscreen",
   "fullscreenWheelScrollLines": 5,
-  "defaultThinkingLevel": "max",
+  "defaultThinkingLevel": "high",
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
   "quietStartup": false,
